@@ -152,13 +152,12 @@ type StateDB struct {
 	// never touches stateObjects/dirtyObjects), so there is no exec/worker race.
 	dirtyObjects map[tcommon.Address]struct{}
 
-	// accountCommitPlans owns the address ordering, stable plan records, pointer
-	// view, and storage composite-key arena used by one block's commit planning.
-	// The sync path reuses one StateDB across a range, so retaining bounded
-	// capacity here removes four otherwise per-block allocations. Commit errors
-	// discard the key arena because successfully staged map keys may still borrow
-	// its bytes; the structural slices are safe to reuse after their pointers are
-	// cleared.
+	// accountCommitPlans owns the address ordering, stable plan records, and
+	// pointer view used by one block's commit planning. The sync path reuses one
+	// StateDB across a range, so retaining bounded capacity here removes three
+	// otherwise per-block allocations. The storage composite-key arena is
+	// intentionally excluded: successful commits may transfer borrowed key bytes
+	// into the unsolidified blockbuffer, so those bytes must remain immutable.
 	accountCommitPlans accountCommitPlanWorkspace
 
 	// kvEntryArena owns immutable value/pre-image chunks for the current block's
@@ -3006,21 +3005,17 @@ type accountCommitPlan struct {
 
 // Keep normal block-sized commit-planning workspaces on the range-reused
 // StateDB, but do not pin an anomalously large block forever. A TRON block is
-// capped at 2 MB; these bounds cover the observed live-sync workload with room
+// capped at 2 MB; this bound covers the observed live-sync workload with room
 // to spare while limiting retained scratch to well below that size.
-const (
-	maxRetainedAccountCommitPlans     = 4096
-	maxRetainedAccountStorageKeyArena = 1 << 20
-)
+const maxRetainedAccountCommitPlans = 4096
 
 type accountCommitPlanWorkspace struct {
-	addrs           []tcommon.Address
-	planStorage     []accountCommitPlan
-	plans           []*accountCommitPlan
-	storageKeyArena []byte
+	addrs       []tcommon.Address
+	planStorage []accountCommitPlan
+	plans       []*accountCommitPlan
 }
 
-func (s *StateDB) releaseAccountCommitPlans(plans []*accountCommitPlan, retainStorageKeyArena bool) {
+func (s *StateDB) releaseAccountCommitPlans(plans []*accountCommitPlan) {
 	releaseAccountKVCommitPlans(plans)
 
 	w := &s.accountCommitPlans
@@ -3040,11 +3035,6 @@ func (s *StateDB) releaseAccountCommitPlans(plans []*accountCommitPlan, retainSt
 		w.plans = nil
 	} else {
 		w.plans = w.plans[:0]
-	}
-	if !retainStorageKeyArena || cap(w.storageKeyArena) > maxRetainedAccountStorageKeyArena {
-		w.storageKeyArena = nil
-	} else {
-		w.storageKeyArena = w.storageKeyArena[:0]
 	}
 }
 
@@ -3081,11 +3071,10 @@ func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
 	for _, addr := range w.addrs {
 		storageCompositeBytes += len(s.stateObjects[addr].dirtyStorage) * (2 + tcommon.HashLength)
 	}
-	if cap(w.storageKeyArena) < storageCompositeBytes {
-		w.storageKeyArena = make([]byte, 0, storageCompositeBytes)
-	} else {
-		w.storageKeyArena = w.storageKeyArena[:0]
-	}
+	// Map keys and OwnedWriter calls may lend slices backed by this arena to the
+	// unsolidified blockbuffer. Allocate one immutable arena per commit; retaining
+	// and overwriting it on the next block would corrupt those borrowed keys.
+	storageKeyArena := make([]byte, 0, storageCompositeBytes)
 	if cap(w.planStorage) < len(w.addrs) {
 		w.planStorage = make([]accountCommitPlan, len(w.addrs))
 	} else {
@@ -3101,11 +3090,8 @@ func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
 	for i, addr := range w.addrs {
 		plan := &w.planStorage[i]
 		w.plans[i] = plan
-		if err := s.prepareAccountCommitPlanWithArena(addr, s.stateObjects[addr], plan, &w.storageKeyArena); err != nil {
-			// Storage staging may already have installed zero-copy map keys backed
-			// by storageKeyArena. Release prepared KV plans and structural pointers,
-			// but drop that arena rather than overwriting its live bytes on retry.
-			s.releaseAccountCommitPlans(w.plans[:i+1], false)
+		if err := s.prepareAccountCommitPlanWithArena(addr, s.stateObjects[addr], plan, &storageKeyArena); err != nil {
+			s.releaseAccountCommitPlans(w.plans[:i+1])
 			return nil, err
 		}
 	}
@@ -3555,10 +3541,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	if err != nil {
 		return tcommon.Hash{}, stats, err
 	}
-	commitPlansFinalized := false
-	defer func() {
-		s.releaseAccountCommitPlans(plans, commitPlansFinalized)
-	}()
+	defer s.releaseAccountCommitPlans(plans)
 	stats.Accounts = len(plans)
 	stats.Mutations = summarizeCommitMutations(plans)
 	commitmentTouchCapacity := 0
@@ -3685,10 +3668,6 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	// dirtySet back-pointer valid for the next block. No object is marked dirty
 	// between dirtyAccountCommitPlans and here, so nothing is lost.
 	clear(s.dirtyObjects)
-	// finalizeAccountCommitPlan has detached every kvDirty map that may borrow
-	// storageKeyArena, so its bytes are now safe to reuse even if a later
-	// commitment-fold step fails.
-	commitPlansFinalized = true
 	mark(&stats.Finalize)
 
 	touchBatch, err := commitmentState.latestUpdateBatchFromTouches()

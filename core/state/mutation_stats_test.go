@@ -28,7 +28,7 @@ func BenchmarkDirtyAccountCommitPlansWorkspace(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	sdb.releaseAccountCommitPlans(plans, true)
+	sdb.releaseAccountCommitPlans(plans)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -38,7 +38,7 @@ func BenchmarkDirtyAccountCommitPlansWorkspace(b *testing.B) {
 			b.Fatal(err)
 		}
 		dirtyAccountCommitPlansBenchmarkSink = len(plans)
-		sdb.releaseAccountCommitPlans(plans, true)
+		sdb.releaseAccountCommitPlans(plans)
 	}
 }
 

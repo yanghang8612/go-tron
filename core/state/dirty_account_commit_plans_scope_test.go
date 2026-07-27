@@ -214,13 +214,12 @@ func TestDirtyAccountCommitPlansWorkspaceReusedAfterCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := &sdb.accountCommitPlans
-	if cap(w.addrs) == 0 || cap(w.planStorage) == 0 || cap(w.plans) == 0 || cap(w.storageKeyArena) == 0 {
-		t.Fatalf("commit workspace was not retained: addrs=%d storage=%d plans=%d keys=%d", cap(w.addrs), cap(w.planStorage), cap(w.plans), cap(w.storageKeyArena))
+	if cap(w.addrs) == 0 || cap(w.planStorage) == 0 || cap(w.plans) == 0 {
+		t.Fatalf("commit workspace was not retained: addrs=%d storage=%d plans=%d", cap(w.addrs), cap(w.planStorage), cap(w.plans))
 	}
 	addrBase := &w.addrs[:1][0]
 	storageBase := &w.planStorage[:1][0]
 	plansBase := &w.plans[:1][0]
-	keysBase := &w.storageKeyArena[:1][0]
 
 	sdb.SetState(addr, tcommon.Hash{0x02}, tcommon.Hash{0x22})
 	if _, err := sdb.Commit(); err != nil {
@@ -235,12 +234,9 @@ func TestDirtyAccountCommitPlansWorkspaceReusedAfterCommit(t *testing.T) {
 	if got := &w.plans[:1][0]; got != plansBase {
 		t.Fatal("plan pointer workspace backing array was not reused")
 	}
-	if got := &w.storageKeyArena[:1][0]; got != keysBase {
-		t.Fatal("storage-key arena backing array was not reused")
-	}
 }
 
-func TestDirtyAccountCommitPlansErrorDropsBorrowedStorageArena(t *testing.T) {
+func TestDirtyAccountCommitPlansErrorRetryPreservesStagedStorage(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x32)
 	key := tcommon.Hash{0x01}
@@ -253,13 +249,9 @@ func TestDirtyAccountCommitPlansErrorDropsBorrowedStorageArena(t *testing.T) {
 	if _, err := sdb.dirtyAccountCommitPlans(); err == nil {
 		t.Fatal("malformed composite key unexpectedly prepared")
 	}
-	if sdb.accountCommitPlans.storageKeyArena != nil {
-		t.Fatal("failed preparation retained an arena still borrowed by kvDirty keys")
-	}
-
 	// Removing only the malformed entry and retrying must preserve the storage
-	// key staged before the failure; overwriting its old arena would corrupt the
-	// map and make this commit or subsequent read fail.
+	// key staged before the failure; its immutable arena stays reachable through
+	// the map key until the retry finalizes it.
 	delete(obj.kvDirty, "x")
 	root, err := sdb.Commit()
 	if err != nil {
