@@ -222,7 +222,7 @@ func (bc *BlockChain) commitAsync(
 		blockData:         blockData,
 		captured:          captured,
 		layer:             hN,
-		dynProps:          dynProps.Copy(),
+		dynProps:          bc.copyDynPropsForCommit(dynProps),
 		cycleRewards:      bc.cycleRewards.Snapshot(),
 		txInfos:           txInfos,
 		txInfoBatch:       plan.txInfoBatch,
@@ -377,7 +377,7 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 	// Publish the new head, then the DP snapshot, in that order.
 	bc.currentBlock.Store(job.block)
 	bc.lastInsertNano.Store(time.Now().UnixNano())
-	bc.storeDynPropsCache(job.dynProps)
+	bc.storeReusableDynPropsCache(job.dynProps)
 
 	// Fire maintenance hooks before block hooks so the SRL PBFT message precedes
 	// the block PREPREPARE (java-tron MaintenanceManager.applyBlock ordering).

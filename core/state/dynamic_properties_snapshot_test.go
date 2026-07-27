@@ -211,6 +211,40 @@ func TestDynamicPropertiesCopyIsIndependentAndLazilyMutable(t *testing.T) {
 	}
 }
 
+func TestDynamicPropertiesCopyIntoReusesAndClearsDestination(t *testing.T) {
+	source := NewDynamicProperties()
+	source.Set("copy_into", 7)
+	source.SetString("copy_into_string", "seven")
+	dst := NewDynamicProperties()
+	dst.Set("stale", 1)
+	dst.SetString("stale_string", "old")
+	dst.Snapshot()
+
+	got := source.CopyInto(dst)
+	if got != dst {
+		t.Fatal("CopyInto replaced destination")
+	}
+	if got.props == nil || got.stringProps == nil || len(got.journal) != 0 || len(got.snapshots) != 0 {
+		t.Fatalf("reused snapshot not reset: %+v", got)
+	}
+	if _, ok := got.Get("stale"); ok {
+		t.Fatal("CopyInto retained stale integer property")
+	}
+	if _, ok := got.GetString("stale_string"); ok {
+		t.Fatal("CopyInto retained stale string property")
+	}
+	if value, ok := got.Get("copy_into"); !ok || value != 7 {
+		t.Fatalf("copied integer = %d ok=%v, want 7/true", value, ok)
+	}
+	if value, ok := got.GetString("copy_into_string"); !ok || value != "seven" {
+		t.Fatalf("copied string = %q ok=%v, want seven/true", value, ok)
+	}
+	source.Set("copy_into", 8)
+	if value, _ := got.Get("copy_into"); value != 7 {
+		t.Fatalf("destination aliases source: got %d, want 7", value)
+	}
+}
+
 var benchmarkDynamicPropertiesCopy *DynamicProperties
 
 func BenchmarkDynamicPropertiesCopy(b *testing.B) {
@@ -222,6 +256,19 @@ func BenchmarkDynamicPropertiesCopy(b *testing.B) {
 	b.ReportAllocs()
 	for range b.N {
 		benchmarkDynamicPropertiesCopy = dp.Copy()
+	}
+}
+
+func BenchmarkDynamicPropertiesCopyInto(b *testing.B) {
+	dp := NewDynamicProperties()
+	dp.SetLatestBlockHeaderNumber(1)
+	dp.SetLatestBlockHeaderTimestamp(2)
+	dp.SetLatestSolidifiedBlockNum(3)
+	dp.SetLatestBlockHeaderHash(common.Hash{4})
+	dst := new(DynamicProperties)
+	b.ReportAllocs()
+	for range b.N {
+		benchmarkDynamicPropertiesCopy = dp.CopyInto(dst)
 	}
 }
 

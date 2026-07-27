@@ -322,6 +322,43 @@ func (dp *DynamicProperties) Copy() *DynamicProperties {
 	return out
 }
 
+// CopyInto overwrites dst with an independent snapshot while retaining dst's
+// map buckets and journal storage. It is intended for bounded snapshot pools;
+// ordinary callers should use Copy when they do not own reusable destination
+// storage. dst must not be dp.
+func (dp *DynamicProperties) CopyInto(dst *DynamicProperties) *DynamicProperties {
+	if dp == nil {
+		return nil
+	}
+	if dst == dp {
+		return dp.Copy()
+	}
+	if dst == nil {
+		dst = new(DynamicProperties)
+	}
+	dst.props = copyDynamicPropertyMapInto(dst.props, dp.props)
+	dst.dirty = copyDynamicPropertyMapInto(dst.dirty, dp.dirty)
+	dst.stringProps = copyDynamicPropertyMapInto(dst.stringProps, dp.stringProps)
+	dst.stringDirty = copyDynamicPropertyMapInto(dst.stringDirty, dp.stringDirty)
+	dst.latestBlockHeaderHash = dp.latestBlockHeaderHash
+	dst.hashDirty = dp.hashDirty
+	clear(dst.journal[:cap(dst.journal)])
+	dst.journal = dst.journal[:0]
+	clear(dst.snapshots[:cap(dst.snapshots)])
+	dst.snapshots = dst.snapshots[:0]
+	return dst
+}
+
+func copyDynamicPropertyMapInto[K comparable, V any](dst, src map[K]V) map[K]V {
+	if dst == nil {
+		dst = make(map[K]V, len(src))
+	} else {
+		clear(dst)
+	}
+	maps.Copy(dst, src)
+	return dst
+}
+
 func cloneNonEmptyMap[K comparable, V any](in map[K]V) map[K]V {
 	if len(in) == 0 {
 		return nil
@@ -488,8 +525,8 @@ func (dp *DynamicProperties) flushDerived(store derivedDynamicPropertyWriter) {
 		writeDerivedDynamicProperty(store, "latest_block_header_hash", dp.latestBlockHeaderHash.Bytes())
 		dp.hashDirty = false
 	}
-	dp.dirty = make(map[string]struct{})
-	dp.stringDirty = make(map[string]struct{})
+	clear(dp.dirty)
+	clear(dp.stringDirty)
 }
 
 func writeDerivedDynamicProperty(store derivedDynamicPropertyWriter, name string, value []byte) {

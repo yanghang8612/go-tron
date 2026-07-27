@@ -178,17 +178,25 @@ type BlockChain struct {
 	lastInsertNano atomic.Int64
 	closed         atomic.Bool
 
-	genesisBlock      *types.Block
-	genesisWitnesses  []consensus.GenesisWitnessInfo
-	activeWitnesses   atomic.Value // []tcommon.Address
-	dynPropsCache     atomic.Value // *state.DynamicProperties; canonical head snapshot
-	standbyPayCache   *standbyWitnessPaySet
-	rewardAcctCache   map[tcommon.Address]*state.AccountSnapshot
-	systemAcctCache   *state.AccountSnapshot
-	rewardAcctSeen    map[tcommon.Address]struct{}
-	rewardAcctAddrs   []tcommon.Address
-	witnessBlockCache map[tcommon.Address]int64
-	forkStatsCache    map[int32][]byte
+	genesisBlock     *types.Block
+	genesisWitnesses []consensus.GenesisWitnessInfo
+	activeWitnesses  atomic.Value // []tcommon.Address
+	// dynPropsCacheMu keeps readers on the published immutable snapshot until
+	// they finish copying/reading it. Async snapshots can then be recycled only
+	// after replacement, eliminating their per-block map allocations without
+	// racing PBFT hooks or range-boundary readers. Snapshots installed by other
+	// paths are never recycled because their ownership may remain external.
+	dynPropsCacheMu       sync.RWMutex
+	dynPropsCache         *state.DynamicProperties
+	dynPropsCacheReusable bool
+	dynPropsCopyPool      []*state.DynamicProperties
+	standbyPayCache       *standbyWitnessPaySet
+	rewardAcctCache       map[tcommon.Address]*state.AccountSnapshot
+	systemAcctCache       *state.AccountSnapshot
+	rewardAcctSeen        map[tcommon.Address]struct{}
+	rewardAcctAddrs       []tcommon.Address
+	witnessBlockCache     map[tcommon.Address]int64
+	forkStatsCache        map[int32][]byte
 	// stateForkController is the rooted-state controller used by canonical
 	// block execution. The pipeline is serialized by chainmu, so its typed
 	// store can be rebound to each range's current StateDB instead of allocating
@@ -2086,13 +2094,15 @@ func (bc *BlockChain) BufferedDB() ethdb.KeyValueReader {
 // next_maintenance_time, …) and silently return the default. The stored
 // snapshot is immutable after storage, so the no-copy Get is race-free.
 func (bc *BlockChain) BufferedDPInt64(name string) int64 {
-	if v := bc.dynPropsCache.Load(); v != nil {
-		if dp, ok := v.(*state.DynamicProperties); ok && dp != nil {
-			if val, found := dp.Get(name); found {
-				return val
-			}
+	bc.dynPropsCacheMu.RLock()
+	dp := bc.dynPropsCache
+	if dp != nil {
+		if val, found := dp.Get(name); found {
+			bc.dynPropsCacheMu.RUnlock()
+			return val
 		}
 	}
+	bc.dynPropsCacheMu.RUnlock()
 	def, _ := state.DefaultDPInt64(name)
 	return def
 }
@@ -2222,18 +2232,49 @@ func (bc *BlockChain) configureStateCodeColdHistory(statedb *state.StateDB) erro
 }
 
 func (bc *BlockChain) cachedDynProps() *state.DynamicProperties {
-	if v := bc.dynPropsCache.Load(); v != nil {
-		if dp, ok := v.(*state.DynamicProperties); ok && dp != nil {
-			return dp.Copy()
-		}
+	bc.dynPropsCacheMu.RLock()
+	if bc.dynPropsCache != nil {
+		dp := bc.dynPropsCache.Copy()
+		bc.dynPropsCacheMu.RUnlock()
+		return dp
 	}
+	bc.dynPropsCacheMu.RUnlock()
 	return state.LoadDynamicProperties(bc.buffer, bc.sysKVAt(bc.HeadStateRoot()))
 }
 
 func (bc *BlockChain) storeDynPropsCache(dp *state.DynamicProperties) {
-	if dp != nil {
-		bc.dynPropsCache.Store(dp)
+	bc.storeDynPropsCacheWithReuse(dp, false)
+}
+
+func (bc *BlockChain) copyDynPropsForCommit(src *state.DynamicProperties) *state.DynamicProperties {
+	bc.dynPropsCacheMu.Lock()
+	var dst *state.DynamicProperties
+	if n := len(bc.dynPropsCopyPool); n > 0 {
+		dst = bc.dynPropsCopyPool[n-1]
+		bc.dynPropsCopyPool[n-1] = nil
+		bc.dynPropsCopyPool = bc.dynPropsCopyPool[:n-1]
 	}
+	bc.dynPropsCacheMu.Unlock()
+	return src.CopyInto(dst)
+}
+
+func (bc *BlockChain) storeReusableDynPropsCache(dp *state.DynamicProperties) {
+	bc.storeDynPropsCacheWithReuse(dp, true)
+}
+
+func (bc *BlockChain) storeDynPropsCacheWithReuse(dp *state.DynamicProperties, reusable bool) {
+	if dp == nil {
+		return
+	}
+	bc.dynPropsCacheMu.Lock()
+	old := bc.dynPropsCache
+	oldReusable := bc.dynPropsCacheReusable
+	bc.dynPropsCache = dp
+	bc.dynPropsCacheReusable = reusable
+	if oldReusable && old != dp && len(bc.dynPropsCopyPool) < maxCommitPipelineDepth+1 {
+		bc.dynPropsCopyPool = append(bc.dynPropsCopyPool, old)
+	}
+	bc.dynPropsCacheMu.Unlock()
 }
 
 // SetDynPropsCacheForTest overwrites the in-memory dynamic-properties head
