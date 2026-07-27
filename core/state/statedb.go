@@ -11,6 +11,7 @@ import (
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
@@ -23,6 +24,11 @@ import (
 
 var (
 	ErrInsufficientBalance = errors.New("insufficient balance")
+
+	stateObjectCachePreviousReuseCounter = metrics.NewRegisteredCounter("state/account_cache/reuse/previous", nil)
+	stateObjectCacheOlderReuseCounter    = metrics.NewRegisteredCounter("state/account_cache/reuse/older", nil)
+	stateObjectCacheHydrationCounter     = metrics.NewRegisteredCounter("state/account_cache/hydrations", nil)
+	stateObjectCacheEvictionCounter      = metrics.NewRegisteredCounter("state/account_cache/evictions", nil)
 )
 
 // storageReadKeyPool keeps the computed 32-byte StorageRow key alive across
@@ -4056,7 +4062,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	// it before the full 21-byte equality so alternating-account workloads pay
 	// one byte comparison rather than comparing the common 0x41 prefix first.
 	if obj := s.lastStateObject; obj != nil && obj.address[20] == addr[20] && obj.address == addr {
-		s.touchStateObject(obj)
+		s.touchRetainedStateObject(obj)
 		return obj
 	}
 	if obj, ok := s.stateObjects[addr]; ok {
@@ -4066,7 +4072,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 			obj.dirtySet = s.dirtyObjects
 		}
 		s.lastStateObject = obj
-		s.touchStateObject(obj)
+		s.touchRetainedStateObject(obj)
 		return obj
 	}
 	data, ok, err := s.readStateAccountLatestForHydration(addr)
@@ -4081,6 +4087,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	if err != nil {
 		return nil
 	}
+	stateObjectCacheHydrationCounter.Inc(1)
 	obj := s.newStateObject(addr, acc)
 	// DecodeStateAccountV2 owns AccountProto. Retain those exact durable bytes as
 	// a potential journal pre-image instead of immediately re-marshaling the
@@ -4111,6 +4118,21 @@ func (s *StateDB) touchStateObject(obj *stateObject) {
 	s.touchedStateObjects = append(s.touchedStateObjects, obj.address)
 }
 
+// touchRetainedStateObject records the first cross-block reuse before moving
+// obj into the current generation. Calls after the first current-block touch
+// take the existing cacheTouched fast path and do not update global metrics.
+func (s *StateDB) touchRetainedStateObject(obj *stateObject) {
+	if obj != nil && !obj.cacheTouched && s.stateObjectWorkingGeneration > obj.cacheGeneration {
+		switch s.stateObjectWorkingGeneration - obj.cacheGeneration {
+		case 1:
+			stateObjectCachePreviousReuseCounter.Inc(1)
+		case 2:
+			stateObjectCacheOlderReuseCounter.Inc(1)
+		}
+	}
+	s.touchStateObject(obj)
+}
+
 // rotateStateObjectWorkingSet evicts clean accounts whose most recent access
 // was two successful blocks ago. All dirty objects have normally been finalized
 // before this call. The defensive dirty branch retains an object if a synthetic
@@ -4123,6 +4145,7 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 	if s.stateObjectWorkingGeneration >= 2 {
 		oldestGeneration = s.stateObjectWorkingGeneration - 2
 	}
+	evictions := int64(0)
 	for _, addr := range oldest {
 		obj := s.stateObjects[addr]
 		if obj == nil || obj.cacheGeneration != oldestGeneration {
@@ -4140,6 +4163,7 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 			s.lastStateObject = nil
 		}
 		s.releaseStateObject(obj)
+		evictions++
 	}
 	for _, addr := range current {
 		if obj := s.stateObjects[addr]; obj != nil {
@@ -4153,6 +4177,7 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 	s.retainedStateObjects = current
 	s.touchedStateObjects = oldest[:0]
 	s.stateObjectWorkingGeneration++
+	stateObjectCacheEvictionCounter.Inc(evictions)
 }
 
 // releaseUnusedLoadedAccountProtos drops envelope bytes retained only to avoid

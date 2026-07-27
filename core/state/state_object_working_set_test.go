@@ -83,6 +83,31 @@ func TestStateObjectWorkingSetEvictsAccountsNotReusedForTwoBlocks(t *testing.T) 
 	}
 }
 
+func TestStateObjectWorkingSetCountsOlderGenerationReuse(t *testing.T) {
+	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := testAddr(0xb3)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.AddBalance(addr, 33)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// Leave the account untouched for one complete block, moving it into the
+	// older retained generation without expiring it.
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	before := stateObjectCacheOlderReuseCounter.Snapshot().Count()
+	if got := sdb.GetBalance(addr); got != 33 {
+		t.Fatalf("balance = %d, want 33", got)
+	}
+	if got := stateObjectCacheOlderReuseCounter.Snapshot().Count() - before; got != 1 {
+		t.Fatalf("older-generation reuse delta = %d, want 1", got)
+	}
+}
+
 func TestRotateStateObjectWorkingSetClearsEvictedLastLookup(t *testing.T) {
 	sdb, err := New(tcommon.Hash{}, NewDatabase(ethrawdb.NewMemoryDatabase()))
 	if err != nil {
