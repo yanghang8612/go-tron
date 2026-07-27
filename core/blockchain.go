@@ -1221,12 +1221,15 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	if accountStateRootEnabled {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, -1, nil)
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, !plan.storedReplayTxInfos, -1, nil)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, -1, nil)
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, !plan.storedReplayTxInfos, -1, nil)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
+	}
+	if plan.storedReplayTxInfos {
+		storedReplayDiscardedTxInfosCounter.Inc(int64(len(block.Transactions())))
 	}
 
 	// Promote CURRENT_TREE to LAST_TREE + index by root + blockNum after

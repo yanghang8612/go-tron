@@ -39,6 +39,7 @@ var (
 	asyncCommitEnqueueCounter           = metrics.NewRegisteredCounter("core/async_commit/enqueue", nil)
 	asyncCommitBackpressureCounter      = metrics.NewRegisteredCounter("core/async_commit/backpressure", nil)
 	asyncCommitBackpressureNanosCounter = metrics.NewRegisteredCounter("core/async_commit/backpressure/nanos", nil)
+	storedReplayDiscardedTxInfosCounter = metrics.NewRegisteredCounter("core/stored_replay/transaction_infos_discarded", nil)
 )
 
 // resolveCommitPipelineDepth reads the ops-only GTRON_ASYNC_COMMIT_DEPTH override,
@@ -225,11 +226,13 @@ func (bc *BlockChain) commitAsync(
 		dynProps:          bc.copyDynPropsForCommit(dynProps),
 		cycleRewards:      bc.cycleRewards.Snapshot(),
 		txInfos:           txInfos,
-		txInfoBatch:       plan.txInfoBatch,
-		txInfoBatchPool:   plan.txInfoBatchPool,
 		wasMaintenance:    wasMaintenanceBlock,
 		maintNewWitnesses: maintNewWitnesses,
 		checkpoint:        bc.config.StateCommitmentCheckpoints,
+	}
+	if !plan.storedReplayTxInfos {
+		job.txInfoBatch = plan.txInfoBatch
+		job.txInfoBatchPool = plan.txInfoBatchPool
 	}
 	bc.buffer.ViewLayerInto(hN, &job.index)
 	// The worker's post-execution stage advances (StageCommitment, StageFinish)
@@ -239,7 +242,7 @@ func (bc *BlockChain) commitAsync(
 	// 5. Hand the fold + publish tail to the serial commit worker (rendezvous;
 	//    bounds the pipeline to depth 2). After this returns the foreground may
 	//    begin the next block's layer.
-	plan.txInfoBatchHandedOff = true
+	plan.txInfoBatchHandedOff = !plan.storedReplayTxInfos
 	capturedHandedOff = true
 	bc.enqueueCommit(job)
 

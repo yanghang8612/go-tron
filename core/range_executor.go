@@ -43,7 +43,9 @@ type canonicalBlockExecution struct {
 	finalDynProps  *state.DynamicProperties
 	// txInfoBatch is range-owned receipt storage. The synchronous path returns
 	// it after applyBlockWithPlan; async commit marks handedOff and returns it
-	// from the worker only after metadata serialization.
+	// from the worker only after metadata serialization. Stored replay with an
+	// archived TransactionRet uses only the batch's execution arenas and returns
+	// it from the foreground because the worker has no receipt payload to read.
 	txInfoBatch          *transactionInfoBatch
 	txInfoBatchPool      *transactionInfoBatchPool
 	txInfoBatchHandedOff bool

@@ -798,6 +798,53 @@ func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
 	}
 }
 
+func TestProcessBlock_CanDiscardTransactionInfosAfterValidation(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+
+	owner := testProcessorAddr(1)
+	receiver := testProcessorAddr(2)
+	witness := testProcessorAddr(0xff)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 10_000_000)
+	statedb.CreateAccount(receiver, corepb.AccountType_Normal)
+	statedb.CreateAccount(witness, corepb.AccountType_Normal)
+	if _, err := statedb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := makeTestTransferTx(1, 2, 1_000_000)
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number:         1,
+			Timestamp:      3000,
+			WitnessAddress: witness.Bytes(),
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	batch := new(transactionInfoBatch)
+	txInfos, _, err := processBlock(
+		statedb, dynProps, block, nil, nil, 0,
+		params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+		nil, nil, batch, false, -1, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if txInfos != nil {
+		t.Fatalf("discarded transaction infos = %+v, want nil", txInfos)
+	}
+	if len(batch.slots) != 1 {
+		t.Fatalf("execution scratch slots = %d, want 1", len(batch.slots))
+	}
+	if got := statedb.GetBalance(owner); got != 9_000_000 {
+		t.Fatalf("owner balance = %d, want 9000000", got)
+	}
+	if got := statedb.GetBalance(receiver); got != 1_000_000 {
+		t.Fatalf("receiver balance = %d, want 1000000", got)
+	}
+}
+
 func TestBuildTransactionInfo_PackingFee(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 
