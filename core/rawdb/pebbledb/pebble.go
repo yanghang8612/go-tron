@@ -98,7 +98,7 @@ const (
 	// bounded set of power-of-two buffers for the meaningful size range here.
 	pebbleBatchHeaderSize = 12
 	minPooledBatchSize    = 64 << 10
-	maxPooledBatchSize    = 8 << 20
+	maxPooledBatchSize    = 16 << 20
 	batchBuffersPerClass  = 2
 	maxTargetFileSizeBase = int64(^uint64(0)>>1) >> 6
 
@@ -124,6 +124,7 @@ var batchBufferPools = [...]chan []byte{
 	make(chan []byte, batchBuffersPerClass), // 2 MiB
 	make(chan []byte, batchBuffersPerClass), // 4 MiB
 	make(chan []byte, batchBuffersPerClass), // 8 MiB
+	make(chan []byte, batchBuffersPerClass), // 16 MiB
 }
 
 // exactPointComparer keeps Pebble's bytewise ordering and on-disk comparer
