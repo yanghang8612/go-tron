@@ -60,6 +60,11 @@ type Transaction struct {
 	triggerOwnerAddress    [common.AddressLength]byte
 	triggerContractAddress [common.AddressLength]byte
 	triggerData            [triggerDataInlineSize]byte
+	// borrowTriggerData is set only by Block.Transactions. A block owns its
+	// immutable protobuf graph (including Any.Value), so oversized calldata can
+	// safely alias that storage for the wrapper's equally long lifetime. A
+	// standalone transaction retains the established independent-copy behavior.
+	borrowTriggerData bool
 
 	// signers memoizes RecoverSigners' ECDSA output (recovered addresses or
 	// the first recovery error) so the parallel pre-verification pass in
@@ -236,7 +241,7 @@ func (tx *Transaction) unmarshalTriggerContractInline(data []byte) error {
 			case 2:
 				tx.triggerContract.ContractAddress = copyBytesInto(value, tx.triggerContractAddress[:])
 			case 4:
-				tx.triggerContract.Data = copyBytesInto(value, tx.triggerData[:])
+				tx.triggerContract.Data = tx.copyTriggerData(value)
 			}
 		case wireType == protowire.VarintType && (field == 3 || field == 5 || field == 6):
 			value, ok := varintFieldValue(fieldData[:n])
@@ -257,6 +262,21 @@ func (tx *Transaction) unmarshalTriggerContractInline(data []byte) error {
 	}
 	appendProtoUnknown(&tx.triggerContract, unknown)
 	return nil
+}
+
+func (tx *Transaction) copyTriggerData(value []byte) []byte {
+	if len(value) == 0 {
+		return nil
+	}
+	if len(value) <= cap(tx.triggerData) {
+		out := tx.triggerData[:len(value)]
+		copy(out, value)
+		return out
+	}
+	if tx.borrowTriggerData {
+		return value[:len(value):len(value)]
+	}
+	return append([]byte(nil), value...)
 }
 
 func copyBytesInto(value, storage []byte) []byte {

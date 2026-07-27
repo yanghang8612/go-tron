@@ -7,6 +7,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -17,6 +18,40 @@ var benchmarkBlockBytes []byte
 var benchmarkDecodedBlock *Block
 var benchmarkDecodedProtoBlock *corepb.Block
 var benchmarkDecodedContract *corepb.Transaction_Contract
+var benchmarkBlockTransactions []*Transaction
+
+func BenchmarkBlockTransactionsTriggerDecodeLargeData(b *testing.B) {
+	const txCount = 256
+	parameter, err := anypb.New(&contractpb.TriggerSmartContract{
+		OwnerAddress:    bytes.Repeat([]byte{0x41}, common.AddressLength),
+		ContractAddress: bytes.Repeat([]byte{0x42}, common.AddressLength),
+		Data:            bytes.Repeat([]byte{0xaa}, 132),
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	pb := &corepb.Block{Transactions: make([]*corepb.Transaction, txCount)}
+	for i := range pb.Transactions {
+		pb.Transactions[i] = &corepb.Transaction{RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TriggerSmartContract,
+				Parameter: parameter,
+			}},
+		}}
+	}
+	b.ReportAllocs()
+	b.SetBytes(txCount * 132)
+	b.ResetTimer()
+	for b.Loop() {
+		txs := NewBlockFromPB(pb).Transactions()
+		for _, tx := range txs {
+			if _, err := tx.DecodedContract(); err != nil {
+				b.Fatal(err)
+			}
+		}
+		benchmarkBlockTransactions = txs
+	}
+}
 
 func blockHashRawTestBlock(txCount, dataSize int) *Block {
 	txs := make([]*corepb.Transaction, txCount)
@@ -293,6 +328,47 @@ func TestUnmarshalBlockReservedOwnsAnyValues(t *testing.T) {
 		if value := transaction.RawData.Contract[0].Parameter.Value; !bytes.Equal(value, want[i]) {
 			t.Fatalf("transaction %d Any value aliases wire input: got %x, want %x", i, value, want[i])
 		}
+	}
+}
+
+func TestBlockTransactionsBorrowImmutableLargeTriggerData(t *testing.T) {
+	data := bytes.Repeat([]byte{0xab}, triggerDataInlineSize+64)
+	parameter, err := anypb.New(&contractpb.TriggerSmartContract{
+		OwnerAddress:    bytes.Repeat([]byte{0x41}, common.AddressLength),
+		ContractAddress: bytes.Repeat([]byte{0x42}, common.AddressLength),
+		Data:            data,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := NewBlockFromPB(&corepb.Block{Transactions: []*corepb.Transaction{{
+		RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TriggerSmartContract,
+			Parameter: parameter,
+		}}},
+	}}})
+	message, err := block.Transactions()[0].DecodedContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := message.(*contractpb.TriggerSmartContract)
+	var wireData []byte
+	for wire := parameter.Value; len(wire) != 0; {
+		fieldData := wire
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 {
+			t.Fatalf("malformed test parameter: %v", protowire.ParseError(n))
+		}
+		wire = wire[n:]
+		if field == 4 && wireType == protowire.BytesType {
+			wireData, _ = bytesFieldValue(fieldData[:n])
+		}
+	}
+	if len(wireData) == 0 || len(got.Data) == 0 || &got.Data[0] != &wireData[0] {
+		t.Fatal("block transaction did not borrow its immutable Any calldata")
+	}
+	if cap(got.Data) != len(got.Data) || !bytes.Equal(got.Data, data) {
+		t.Fatalf("borrowed data = len %d cap %d value %x", len(got.Data), cap(got.Data), got.Data)
 	}
 }
 

@@ -266,6 +266,7 @@ func (b *Block) Transactions() []*Transaction {
 		txs := make([]*Transaction, len(b.pb.Transactions))
 		for i, pb := range b.pb.Transactions {
 			storage[i].pb = pb
+			storage[i].borrowTriggerData = true
 			txs[i] = &storage[i]
 		}
 		b.txs = txs
