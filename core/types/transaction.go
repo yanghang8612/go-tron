@@ -23,9 +23,15 @@ const ContractTypeNone corepb.Transaction_Contract_ContractType = -1
 // larger calls already retain an exact-sized owned copy on the cold path below.
 const triggerDataInlineSize = 68
 
+// Current TRC10 IDs are seven ASCII digits. Keep the dominant replay shape in
+// the one owned decode object without charging every transfer for the legacy
+// 32-byte asset-name limit; longer names retain an exact standalone copy.
+const transferAssetNameInlineSize = 8
+
 var (
-	triggerDecodeReserveLayoutOK  = verifyTriggerDecodeReserveLayout()
-	transferDecodeReserveLayoutOK = verifyTransferDecodeReserveLayout()
+	triggerDecodeReserveLayoutOK       = verifyTriggerDecodeReserveLayout()
+	transferDecodeReserveLayoutOK      = verifyTransferDecodeReserveLayout()
+	transferAssetDecodeReserveLayoutOK = verifyTransferAssetDecodeReserveLayout()
 )
 
 // decodedTransferContract coalesces the message and its two canonical TRON
@@ -33,6 +39,16 @@ var (
 // entire wrapper reachable through Transaction.contractMessage.
 type decodedTransferContract struct {
 	contract     contractpb.TransferContract
+	ownerAddress [common.AddressLength]byte
+	toAddress    [common.AddressLength]byte
+}
+
+// decodedTransferAssetContract coalesces the protobuf message and its three
+// byte fields into one ownership object. A pointer to contract keeps the whole
+// wrapper reachable through Transaction.contractMessage.
+type decodedTransferAssetContract struct {
+	contract     contractpb.TransferAssetContract
+	assetName    [transferAssetNameInlineSize]byte
 	ownerAddress [common.AddressLength]byte
 	toAddress    [common.AddressLength]byte
 }
@@ -160,6 +176,22 @@ func (tx *Transaction) DecodedContract() (proto.Message, error) {
 				return
 			}
 		}
+		if contract.Type == corepb.Transaction_Contract_TransferAssetContract {
+			decoded := new(decodedTransferAssetContract)
+			if contract.Parameter.MessageIs(&decoded.contract) {
+				tx.contractMessage = &decoded.contract
+				if transferAssetDecodeReserveLayoutOK {
+					tx.contractMessageErr = decoded.unmarshal(contract.Parameter.Value)
+					if tx.contractMessageErr == nil {
+						return
+					}
+				}
+				// Preserve generated decoding errors for malformed data and act as
+				// the schema-regeneration fallback.
+				tx.contractMessageErr = contract.Parameter.UnmarshalTo(tx.contractMessage)
+				return
+			}
+		}
 		tx.contractMessage, tx.contractMessageErr = contract.Parameter.UnmarshalNew()
 	})
 	return tx.contractMessage, tx.contractMessageErr
@@ -182,6 +214,15 @@ func verifyTransferDecodeReserveLayout() bool {
 		protoFieldShape(fields, 1, protoreflect.BytesKind, false) &&
 		protoFieldShape(fields, 2, protoreflect.BytesKind, false) &&
 		protoFieldShape(fields, 3, protoreflect.Int64Kind, false)
+}
+
+func verifyTransferAssetDecodeReserveLayout() bool {
+	fields := (&contractpb.TransferAssetContract{}).ProtoReflect().Descriptor().Fields()
+	return fields.Len() == 4 &&
+		protoFieldShape(fields, 1, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 2, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 3, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 4, protoreflect.Int64Kind, false)
 }
 
 func (decoded *decodedTransferContract) unmarshal(data []byte) error {
@@ -209,6 +250,44 @@ func (decoded *decodedTransferContract) unmarshal(data []byte) error {
 			value, ok := varintFieldValue(fieldData[:n])
 			if !ok {
 				return errors.New("malformed transfer contract amount field")
+			}
+			decoded.contract.Amount = int64(value)
+		default:
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
+		}
+	}
+	appendProtoUnknown(&decoded.contract, unknown)
+	return nil
+}
+
+func (decoded *decodedTransferAssetContract) unmarshal(data []byte) error {
+	decoded.contract = contractpb.TransferAssetContract{}
+	var unknown []byte
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			return errors.New("malformed transfer asset contract wire envelope")
+		}
+		data = data[n:]
+		switch {
+		case wireType == protowire.BytesType && (field == 1 || field == 2 || field == 3):
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transfer asset contract bytes field")
+			}
+			switch field {
+			case 1:
+				decoded.contract.AssetName = copyBytesInto(value, decoded.assetName[:])
+			case 2:
+				decoded.contract.OwnerAddress = copyBytesInto(value, decoded.ownerAddress[:])
+			case 3:
+				decoded.contract.ToAddress = copyBytesInto(value, decoded.toAddress[:])
+			}
+		case wireType == protowire.VarintType && field == 4:
+			value, ok := varintFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed transfer asset contract amount field")
 			}
 			decoded.contract.Amount = int64(value)
 		default:
