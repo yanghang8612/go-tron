@@ -82,14 +82,16 @@ type StateDB struct {
 	// or replace the mapped object.
 	lastStateObject *stateObject
 	// touchedStateObjects contains each account first accessed in the current
-	// block. retainedStateObjects is the previous successful block's working set.
-	// At commit the two slices rotate and clean accounts not reused by the current
-	// block are evicted. This bounds a range-reused StateDB to roughly one block's
-	// account working set instead of retaining every account read since the range
-	// began. The slices alternate backing storage, so steady-state rotation does
-	// not allocate when adjacent blocks have similar working-set sizes.
-	touchedStateObjects  []tcommon.Address
-	retainedStateObjects []tcommon.Address
+	// block. retainedStateObjects and olderRetainedStateObjects are the preceding
+	// two successful blocks' working sets. At commit the three slices rotate and
+	// clean accounts not reused for two complete blocks are evicted. This small
+	// generational window captures common alternating-block account reuse without
+	// letting a range-reused StateDB retain every account it has ever read. Slice
+	// backing alternates in steady state, so rotation itself does not allocate.
+	touchedStateObjects          []tcommon.Address
+	retainedStateObjects         []tcommon.Address
+	olderRetainedStateObjects    []tcommon.Address
+	stateObjectWorkingGeneration uint64
 
 	// loadedAccountProtoObjects tracks objects whose original flat-envelope
 	// AccountProto is retained for a possible same-block journal pre-image.
@@ -4105,24 +4107,30 @@ func (s *StateDB) touchStateObject(obj *stateObject) {
 		return
 	}
 	obj.cacheTouched = true
+	obj.cacheGeneration = s.stateObjectWorkingGeneration
 	s.touchedStateObjects = append(s.touchedStateObjects, obj.address)
 }
 
-// rotateStateObjectWorkingSet evicts clean accounts that were retained from the
-// previous block but not accessed by the block that just committed. All dirty
-// objects have normally been finalized before this call. The defensive dirty
-// branch retains an object if a synthetic caller violates that lifecycle rather
-// than risking loss of uncommitted state.
+// rotateStateObjectWorkingSet evicts clean accounts whose most recent access
+// was two successful blocks ago. All dirty objects have normally been finalized
+// before this call. The defensive dirty branch retains an object if a synthetic
+// caller violates that lifecycle rather than risking loss of uncommitted state.
 func (s *StateDB) rotateStateObjectWorkingSet() {
+	oldest := s.olderRetainedStateObjects
 	previous := s.retainedStateObjects
 	current := s.touchedStateObjects
-	for _, addr := range previous {
+	oldestGeneration := uint64(0)
+	if s.stateObjectWorkingGeneration >= 2 {
+		oldestGeneration = s.stateObjectWorkingGeneration - 2
+	}
+	for _, addr := range oldest {
 		obj := s.stateObjects[addr]
-		if obj == nil || obj.cacheTouched {
+		if obj == nil || obj.cacheGeneration != oldestGeneration {
 			continue
 		}
 		if obj.dirty {
 			obj.cacheTouched = true
+			obj.cacheGeneration = s.stateObjectWorkingGeneration
 			current = append(current, addr)
 			continue
 		}
@@ -4141,8 +4149,10 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 			obj.cacheTouched = false
 		}
 	}
+	s.olderRetainedStateObjects = previous
 	s.retainedStateObjects = current
-	s.touchedStateObjects = previous[:0]
+	s.touchedStateObjects = oldest[:0]
+	s.stateObjectWorkingGeneration++
 }
 
 // releaseUnusedLoadedAccountProtos drops envelope bytes retained only to avoid
