@@ -53,6 +53,73 @@ func TestCompactTransactionInfoIDsPreservesOtherWireFields(t *testing.T) {
 	}
 }
 
+var compactTransactionInfoIDsBenchmarkSink []byte
+
+func TestCompactTransactionInfoIDsBoundsPayloadAllocations(t *testing.T) {
+	ret := transactionInfoCompactionFixture(100)
+	wantRemoved := 100 * (1 + 1 + 32)
+	got, infos, removed, err := CompactTransactionInfoIDs(ret, 100)
+	if err != nil || infos != 100 || removed != wantRemoved || len(got) >= len(ret) {
+		t.Fatalf("compact infos=%d removed=%d len=%d/%d err=%v", infos, removed, len(got), len(ret), err)
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		compact, _, _, compactErr := CompactTransactionInfoIDs(ret, 100)
+		if compactErr != nil {
+			panic(compactErr)
+		}
+		compactTransactionInfoIDsBenchmarkSink = compact
+	})
+	if allocs > 1 {
+		t.Fatalf("allocations = %.1f, want at most one output allocation", allocs)
+	}
+}
+
+func TestCompactTransactionInfoIDsLargeBlockUsesOverflowDrops(t *testing.T) {
+	const infos = 200
+	ret := transactionInfoCompactionFixture(infos)
+	got, count, removed, err := CompactTransactionInfoIDs(ret, infos)
+	if err != nil || count != infos || removed != infos*(1+1+32) {
+		t.Fatalf("compact count=%d removed=%d err=%v", count, removed, err)
+	}
+	if gotCount, err := countRepeatedBytesField(got, 3); err != nil || gotCount != infos {
+		t.Fatalf("rewritten info count=%d err=%v", gotCount, err)
+	}
+	if err := VisitTransactionInfoIDs(got, func(int, []byte) error {
+		t.Fatal("rewritten transaction info retained an ID")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func BenchmarkCompactTransactionInfoIDs(b *testing.B) {
+	const infos = 100
+	ret := transactionInfoCompactionFixture(infos)
+	b.SetBytes(int64(len(ret)))
+	b.ReportAllocs()
+	for b.Loop() {
+		compact, _, _, err := CompactTransactionInfoIDs(ret, infos)
+		if err != nil {
+			b.Fatal(err)
+		}
+		compactTransactionInfoIDsBenchmarkSink = compact
+	}
+}
+
+func transactionInfoCompactionFixture(infos int) []byte {
+	ret := make([]byte, 0, infos*48)
+	for i := 0; i < infos; i++ {
+		info := protowire.AppendTag(nil, 1, protowire.BytesType)
+		info = protowire.AppendBytes(info, bytes.Repeat([]byte{byte(i)}, 32))
+		info = protowire.AppendTag(info, 2, protowire.VarintType)
+		info = protowire.AppendVarint(info, uint64(i+1))
+		ret = protowire.AppendTag(ret, 3, protowire.BytesType)
+		ret = protowire.AppendBytes(ret, info)
+	}
+	return ret
+}
+
 func TestCompactTransactionInfoIDsRejectsMalformedWire(t *testing.T) {
 	if _, _, _, err := CompactTransactionInfoIDs([]byte{0x1a, 0xff}, 1); err == nil {
 		t.Fatal("malformed TransactionRet unexpectedly succeeded")

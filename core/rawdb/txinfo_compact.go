@@ -76,8 +76,54 @@ func CompactTransactionInfoIDs(retData []byte, expectedInfos int) (data []byte, 
 		return retData, 0, 0, nil
 	}
 
-	out := make([]byte, 0, len(retData))
+	// Record each nested message's shrinkage before constructing the outer
+	// length-delimited fields. Most mainnet blocks fit in the inline storage;
+	// unusually large blocks pay one bounded drop-count allocation rather than
+	// one allocation for every TransactionInfo payload.
+	var inlineDrops [128]int
+	drops := inlineDrops[:]
+	if infoCount > len(inlineDrops) {
+		drops = make([]int, infoCount)
+	} else {
+		drops = drops[:infoCount]
+	}
 	remaining := retData
+	ordinal := 0
+	for len(remaining) > 0 {
+		number, wireType, tagLen := protowire.ConsumeTag(remaining)
+		if tagLen < 0 {
+			return nil, 0, 0, protowire.ParseError(tagLen)
+		}
+		remaining = remaining[tagLen:]
+		fieldLen := protowire.ConsumeFieldValue(number, wireType, remaining)
+		if fieldLen < 0 {
+			return nil, 0, 0, protowire.ParseError(fieldLen)
+		}
+		if number == 3 && wireType == protowire.BytesType {
+			payload, payloadLen := protowire.ConsumeBytes(remaining)
+			if payloadLen < 0 {
+				return nil, 0, 0, protowire.ParseError(payloadLen)
+			}
+			_, dropped, compactErr := rewriteTransactionInfoWithoutID(nil, payload, false)
+			if compactErr != nil {
+				return nil, 0, 0, compactErr
+			}
+			drops[ordinal] = dropped
+			removed += dropped
+			ordinal++
+		}
+		remaining = remaining[fieldLen:]
+	}
+	if removed == 0 {
+		return retData, infoCount, 0, nil
+	}
+
+	// The rewritten outer size is at most len(retData)-removed; an outer
+	// length prefix can only retain its width or shrink after its payload does.
+	// Write every surviving nested field directly into this single allocation.
+	out := make([]byte, 0, len(retData)-removed)
+	remaining = retData
+	ordinal = 0
 	for len(remaining) > 0 {
 		field := remaining
 		number, wireType, tagLen := protowire.ConsumeTag(remaining)
@@ -100,17 +146,15 @@ func CompactTransactionInfoIDs(retData []byte, expectedInfos int) (data []byte, 
 		if payloadLen < 0 {
 			return nil, 0, 0, protowire.ParseError(payloadLen)
 		}
-		compact, dropped, compactErr := stripTransactionInfoID(payload)
+		out = protowire.AppendTag(out, 3, protowire.BytesType)
+		out = protowire.AppendVarint(out, uint64(len(payload)-drops[ordinal]))
+		var compactErr error
+		out, _, compactErr = rewriteTransactionInfoWithoutID(out, payload, true)
 		if compactErr != nil {
 			return nil, 0, 0, compactErr
 		}
-		out = protowire.AppendTag(out, 3, protowire.BytesType)
-		out = protowire.AppendBytes(out, compact)
-		removed += dropped
+		ordinal++
 		remaining = remaining[fieldLen:]
-	}
-	if removed == 0 {
-		return retData, infoCount, 0, nil
 	}
 	return out, infoCount, removed, nil
 }
@@ -294,8 +338,7 @@ func transactionInfoWireID(data []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func stripTransactionInfoID(data []byte) ([]byte, int, error) {
-	var out []byte
+func rewriteTransactionInfoWithoutID(out, data []byte, write bool) ([]byte, int, error) {
 	remaining := data
 	removed := 0
 	for len(remaining) > 0 {
@@ -311,18 +354,11 @@ func stripTransactionInfoID(data []byte) ([]byte, int, error) {
 		}
 		totalLen := tagLen + fieldLen
 		if number == 1 && wireType == protowire.BytesType {
-			if out == nil {
-				out = make([]byte, 0, len(data)-totalLen)
-				out = append(out, data[:len(data)-len(field)]...)
-			}
 			removed += totalLen
-		} else if out != nil {
+		} else if write {
 			out = append(out, field[:totalLen]...)
 		}
 		remaining = remaining[fieldLen:]
-	}
-	if out == nil {
-		return data, 0, nil
 	}
 	return out, removed, nil
 }
