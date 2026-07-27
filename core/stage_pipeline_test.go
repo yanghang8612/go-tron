@@ -60,6 +60,61 @@ func TestCanonicalStagePipelineUsesStageProgressStore(t *testing.T) {
 	}
 }
 
+func TestCanonicalStagePipelineSetWriterReplacesProgressStore(t *testing.T) {
+	first := rawdb.NewMemoryDatabase()
+	second := rawdb.NewMemoryDatabase()
+	store := &recordingStageProgressStore{}
+	pipeline := &canonicalStagePipeline{
+		progress: store,
+		blockNum: 46,
+		hash:     common.Hash{0x46},
+		last:     -1,
+	}
+
+	if err := pipeline.Advance(rawdb.StageHeaders); err != nil {
+		t.Fatalf("advance headers through store: %v", err)
+	}
+	pipeline.SetWriter(first)
+	if err := pipeline.Advance(rawdb.StageBodies); err != nil {
+		t.Fatalf("advance bodies through first writer: %v", err)
+	}
+	pipeline.SetWriter(second)
+	if err := pipeline.Advance(rawdb.StageExecution); err != nil {
+		t.Fatalf("advance execution through second writer: %v", err)
+	}
+
+	if len(store.writes) != 1 || store.writes[0].stage != rawdb.StageHeaders {
+		t.Fatalf("store writes after SetWriter = %+v, want only Headers", store.writes)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(first, rawdb.StageBodies); err != nil || !ok || row.BlockNum != 46 {
+		t.Fatalf("first writer Bodies row = %+v ok=%v err=%v", row, ok, err)
+	}
+	if _, ok, err := rawdb.ReadStageProgressRow(first, rawdb.StageExecution); err != nil || ok {
+		t.Fatalf("first writer Execution ok=%v err=%v, want absent", ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(second, rawdb.StageExecution); err != nil || !ok || row.BlockNum != 46 {
+		t.Fatalf("second writer Execution row = %+v ok=%v err=%v", row, ok, err)
+	}
+}
+
+var benchmarkStageProgressStore stageProgressStore
+
+func BenchmarkCanonicalStagePipelineWriterBinding(b *testing.B) {
+	db := rawdb.NewMemoryDatabase()
+	b.Run("boxed-store", func(b *testing.B) {
+		for b.Loop() {
+			benchmarkStageProgressStore = rawDBStageProgressStore{writer: db}
+		}
+	})
+	b.Run("direct-writer", func(b *testing.B) {
+		pipeline := &canonicalStagePipeline{}
+		b.ReportAllocs()
+		for b.Loop() {
+			pipeline.SetWriter(db)
+		}
+	})
+}
+
 func TestCanonicalStagePipelineRejectsSkippedOrForeignStages(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	pipeline := newCanonicalStagePipeline(db, 3, common.Hash{0x03})

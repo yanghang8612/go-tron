@@ -28,10 +28,6 @@ func newRawDBStageProgressStore(db interface {
 	return rawDBStageProgressStore{reader: db, writer: db}
 }
 
-func newRawDBStageProgressWriter(writer ethdb.KeyValueWriter) stageProgressStore {
-	return rawDBStageProgressStore{writer: writer}
-}
-
 func newRawDBStageProgressReader(reader ethdb.KeyValueReader) stageProgressStore {
 	return rawDBStageProgressStore{reader: reader}
 }

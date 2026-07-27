@@ -12,6 +12,7 @@ import (
 // canonical stage progress tied to one block hash and enforces the execution
 // order expected by rewind/prune consumers.
 type canonicalStagePipeline struct {
+	writer   ethdb.KeyValueWriter
 	progress stageProgressStore
 	blockNum uint64
 	hash     tcommon.Hash
@@ -20,7 +21,7 @@ type canonicalStagePipeline struct {
 
 func newCanonicalStagePipeline(writer ethdb.KeyValueWriter, blockNum uint64, hash tcommon.Hash) *canonicalStagePipeline {
 	return &canonicalStagePipeline{
-		progress: newRawDBStageProgressWriter(writer),
+		writer:   writer,
 		blockNum: blockNum,
 		hash:     hash,
 		last:     -1,
@@ -38,14 +39,15 @@ func (p *canonicalStagePipeline) SetWriter(writer ethdb.KeyValueWriter) {
 	if p == nil {
 		return
 	}
-	p.progress = newRawDBStageProgressWriter(writer)
+	p.writer = writer
+	p.progress = nil
 }
 
 func (p *canonicalStagePipeline) Advance(stages ...rawdb.StageID) error {
 	if p == nil {
 		return fmt.Errorf("canonical stage pipeline: nil pipeline")
 	}
-	if p.progress == nil {
+	if p.progress == nil && p.writer == nil {
 		return errNilStageProgressStore
 	}
 	for _, stage := range stages {
@@ -56,7 +58,13 @@ func (p *canonicalStagePipeline) Advance(stages ...rawdb.StageID) error {
 		if ord != p.last+1 {
 			return fmt.Errorf("canonical stage pipeline: stage %s out of order after ordinal %d", stage, p.last)
 		}
-		if err := p.progress.WriteWithHash(stage, p.blockNum, p.hash); err != nil {
+		var err error
+		if p.progress != nil {
+			err = p.progress.WriteWithHash(stage, p.blockNum, p.hash)
+		} else {
+			err = rawdb.WriteStageProgressWithHash(p.writer, stage, p.blockNum, p.hash)
+		}
+		if err != nil {
 			return fmt.Errorf("write %s stage progress: %w", stage, err)
 		}
 		p.last = ord
@@ -65,7 +73,10 @@ func (p *canonicalStagePipeline) Advance(stages ...rawdb.StageID) error {
 }
 
 func rewindCanonicalStagePipeline(writer ethdb.KeyValueWriter, blockNum uint64, hash tcommon.Hash) error {
-	if err := newRawDBStageProgressWriter(writer).RewindCanonicalWithHash(blockNum, hash); err != nil {
+	if writer == nil {
+		return fmt.Errorf("rewind canonical stage progress to %d: %w", blockNum, errNilStageProgressStore)
+	}
+	if err := rawdb.RewindCanonicalStageProgressWithHash(writer, blockNum, hash); err != nil {
 		return fmt.Errorf("rewind canonical stage progress to %d: %w", blockNum, err)
 	}
 	return nil
