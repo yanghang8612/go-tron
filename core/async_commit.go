@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -30,6 +31,14 @@ import (
 const (
 	defaultCommitPipelineDepth = 2
 	maxCommitPipelineDepth     = 16
+)
+
+var (
+	asyncCommitEnabledGauge             = metrics.NewRegisteredGauge("core/async_commit/enabled", nil)
+	asyncCommitDepthGauge               = metrics.NewRegisteredGauge("core/async_commit/depth", nil)
+	asyncCommitEnqueueCounter           = metrics.NewRegisteredCounter("core/async_commit/enqueue", nil)
+	asyncCommitBackpressureCounter      = metrics.NewRegisteredCounter("core/async_commit/backpressure", nil)
+	asyncCommitBackpressureNanosCounter = metrics.NewRegisteredCounter("core/async_commit/backpressure/nanos", nil)
 )
 
 // resolveCommitPipelineDepth reads the ops-only GTRON_ASYNC_COMMIT_DEPTH override,
@@ -88,8 +97,12 @@ type commitJob struct {
 func (bc *BlockChain) SetAsyncCommit(enabled bool) {
 	bc.asyncCommit = enabled
 	if enabled {
+		asyncCommitEnabledGauge.Update(1)
+		asyncCommitDepthGauge.Update(int64(bc.commitDepth))
 		bc.buffer.SetMaxInflight(bc.commitDepth)
 	} else {
+		asyncCommitEnabledGauge.Update(0)
+		asyncCommitDepthGauge.Update(0)
 		bc.buffer.SetMaxInflight(1)
 	}
 }
@@ -287,7 +300,16 @@ func (bc *BlockChain) enqueueCommit(job *commitJob) {
 		bc.runCommitJob(job)
 		return
 	}
+	asyncCommitEnqueueCounter.Inc(1)
+	select {
+	case bc.commitQueue <- job:
+		return
+	default:
+	}
+	asyncCommitBackpressureCounter.Inc(1)
+	start := time.Now()
 	bc.commitQueue <- job
+	asyncCommitBackpressureNanosCounter.Inc(time.Since(start).Nanoseconds())
 }
 
 // runCommitJob runs the deferred fold + ordered publish tail for one block on
