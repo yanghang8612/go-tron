@@ -75,6 +75,7 @@ func dbCommand() *cli.Command {
 				},
 				Action: dbInspectCmd,
 			},
+			dbBenchmarkAncientCommand(),
 			dbPruneTxInfoCommand(),
 		},
 	}
