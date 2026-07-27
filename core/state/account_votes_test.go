@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -10,6 +11,57 @@ import (
 )
 
 var materializedVotesBenchmarkSink []*corepb.Vote
+var marshaledAccountVoteBenchmarkSink []byte
+
+func BenchmarkMarshalAccountVote(b *testing.B) {
+	vote := &corepb.Vote{VoteAddress: testAddr(0x93).Bytes(), VoteCount: 11}
+	marshal := proto.MarshalOptions{Deterministic: true}
+	b.Run("Owned", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			value, err := marshal.Marshal(vote)
+			if err != nil {
+				b.Fatal(err)
+			}
+			marshaledAccountVoteBenchmarkSink = value
+		}
+	})
+	b.Run("Reusable", func(b *testing.B) {
+		var scratch [64]byte
+		b.ReportAllocs()
+		for b.Loop() {
+			value, err := marshal.MarshalAppend(scratch[:0], vote)
+			if err != nil {
+				b.Fatal(err)
+			}
+			marshaledAccountVoteBenchmarkSink = value
+		}
+	})
+}
+
+func TestAccountVoteReusableMarshalMatchesOwned(t *testing.T) {
+	tests := []*corepb.Vote{
+		{},
+		{VoteAddress: testAddr(0x91).Bytes(), VoteCount: 11},
+		{VoteAddress: make([]byte, 128), VoteCount: -1},
+	}
+	tests[2].ProtoReflect().SetUnknown([]byte{0x18, 0x01})
+	marshal := proto.MarshalOptions{Deterministic: true}
+	var scratch [64]byte
+	for _, vote := range tests {
+		want, err := marshal.Marshal(vote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := marshal.MarshalAppend(scratch[:0], vote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("reusable marshal = %x, want %x", got, want)
+		}
+	}
+}
 
 func BenchmarkMaterializeAccountVotesDirty(b *testing.B) {
 	sdb := newTestStateDB(b)

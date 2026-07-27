@@ -58,6 +58,11 @@ type StateDB struct {
 	trc10TokenKeyScratch    [20]byte
 	assetIDKeyScratch       [9]byte
 	accountUint32KeyScratch [4]byte
+	// A corepb.Vote normally encodes to at most 35 bytes (21-byte address plus
+	// tags, lengths, and a 10-byte signed count). writeAccountVotes marshals into
+	// this execution-confined buffer before SetAccountKV copies the bytes into
+	// its block arena, avoiding one short-lived protobuf allocation per row.
+	accountVoteMarshalScratch [64]byte
 	// Standard cycle reward keys are at most 46 bytes (dl- + cycle +
 	// separators + a 21-byte address + account-vote). The public APIs still
 	// accept arbitrary address slices; append grows beyond this scratch when

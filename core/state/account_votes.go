@@ -83,7 +83,13 @@ func (s *StateDB) writeAccountVotes(obj *stateObject, votes []*corepb.Vote) erro
 		if vote == nil {
 			continue
 		}
-		value, err := proto.MarshalOptions{Deterministic: true}.Marshal(vote)
+		// SetAccountKV synchronously copies value into the StateDB's immutable
+		// block arena. Reuse StateDB-owned scratch for the transient protobuf
+		// encoding rather than allocating a second owned byte slice for every
+		// vote row. MarshalAppend preserves the generated codec's exact wire
+		// behavior, including unknown fields and negative int64 values; unusually
+		// large messages simply grow beyond the common 64-byte scratch capacity.
+		value, err := proto.MarshalOptions{Deterministic: true}.MarshalAppend(s.accountVoteMarshalScratch[:0], vote)
 		if err != nil {
 			return err
 		}
