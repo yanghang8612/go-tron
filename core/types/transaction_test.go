@@ -309,6 +309,42 @@ func TestTransactionDecodedTransferAssetContractUsesOwnedArena(t *testing.T) {
 	}
 }
 
+func TestTransactionDecodedExchangeTransactionContractUsesOwnedArena(t *testing.T) {
+	want := &contractpb.ExchangeTransactionContract{
+		OwnerAddress: bytes.Repeat([]byte{0x41}, common.AddressLength),
+		ExchangeId:   17,
+		TokenId:      []byte("1000001"),
+		Quant:        23,
+		Expected:     29,
+	}
+	parameter, err := anypb.New(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_ExchangeTransactionContract,
+			Parameter: parameter,
+		}},
+	}})
+
+	gotMessage, err := tx.DecodedContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := gotMessage.(*contractpb.ExchangeTransactionContract)
+	if !ok {
+		t.Fatalf("decoded type = %T, want *ExchangeTransactionContract", gotMessage)
+	}
+	if !proto.Equal(got, want) {
+		t.Fatalf("decoded exchange transaction = %v, want %v", got, want)
+	}
+	clear(parameter.Value)
+	if !proto.Equal(got, want) {
+		t.Fatal("decoded exchange transaction aliases the Any wire buffer")
+	}
+}
+
 func FuzzUnmarshalTransferContractOwnedEquivalent(f *testing.F) {
 	seed, err := proto.Marshal(&contractpb.TransferContract{
 		OwnerAddress: bytes.Repeat([]byte{0x41}, common.AddressLength),
@@ -358,6 +394,37 @@ func FuzzUnmarshalTransferAssetContractOwnedEquivalent(f *testing.F) {
 		decoded := new(decodedTransferAssetContract)
 		gotErr := decoded.unmarshal(data)
 		var want contractpb.TransferAssetContract
+		wantErr := proto.Unmarshal(data, &want)
+		if (gotErr == nil) != (wantErr == nil) {
+			t.Fatalf("error mismatch: owned=%v generated=%v, wire=%x", gotErr, wantErr, data)
+		}
+		if gotErr == nil && !proto.Equal(&decoded.contract, &want) {
+			t.Fatalf("decode mismatch: owned=%v generated=%v, wire=%x", &decoded.contract, &want, data)
+		}
+	})
+}
+
+func FuzzUnmarshalExchangeTransactionContractOwnedEquivalent(f *testing.F) {
+	seed, err := proto.Marshal(&contractpb.ExchangeTransactionContract{
+		OwnerAddress: bytes.Repeat([]byte{0x41}, common.AddressLength),
+		ExchangeId:   17,
+		TokenId:      []byte("1000001"),
+		Quant:        23,
+		Expected:     29,
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add([]byte(nil))
+	f.Add(seed)
+	f.Add(append(bytes.Clone(seed), protowire.AppendTag(nil, 100, protowire.VarintType)...))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if !exchangeTxDecodeReserveLayoutOK {
+			t.Fatal("protobuf layout guard unexpectedly disabled exchange transaction decoder")
+		}
+		decoded := new(decodedExchangeTransactionContract)
+		gotErr := decoded.unmarshal(data)
+		var want contractpb.ExchangeTransactionContract
 		wantErr := proto.Unmarshal(data, &want)
 		if (gotErr == nil) != (wantErr == nil) {
 			t.Fatalf("error mismatch: owned=%v generated=%v, wire=%x", gotErr, wantErr, data)
@@ -578,6 +645,52 @@ func BenchmarkTransactionDecodedTransferAssetContractCold(b *testing.B) {
 			}
 		}
 	})
+	b.Run("Owned", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			tx := NewTransactionFromPB(pb)
+			decodedContractBenchmarkSink, err = tx.DecodedContract()
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("GeneratedTransaction", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			tx := NewTransactionFromPB(generatedPB)
+			decodedContractBenchmarkSink, err = tx.DecodedContract()
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkTransactionDecodedExchangeTransactionContractCold(b *testing.B) {
+	exchange := &contractpb.ExchangeTransactionContract{
+		OwnerAddress: make([]byte, common.AddressLength),
+		ExchangeId:   17,
+		TokenId:      []byte("1000001"),
+		Quant:        23,
+		Expected:     29,
+	}
+	parameter, err := anypb.New(exchange)
+	if err != nil {
+		b.Fatal(err)
+	}
+	pb := &corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_ExchangeTransactionContract,
+			Parameter: parameter,
+		}},
+	}}
+	generatedPB := &corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_ExchangeCreateContract,
+			Parameter: parameter,
+		}},
+	}}
 	b.Run("Owned", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {

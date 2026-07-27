@@ -28,10 +28,14 @@ const triggerDataInlineSize = 68
 // 32-byte asset-name limit; longer names retain an exact standalone copy.
 const transferAssetNameInlineSize = 8
 
+// Exchange token IDs use "_" for TRX or the same seven-digit TRC10 ID shape.
+const exchangeTokenIDInlineSize = 8
+
 var (
 	triggerDecodeReserveLayoutOK       = verifyTriggerDecodeReserveLayout()
 	transferDecodeReserveLayoutOK      = verifyTransferDecodeReserveLayout()
 	transferAssetDecodeReserveLayoutOK = verifyTransferAssetDecodeReserveLayout()
+	exchangeTxDecodeReserveLayoutOK    = verifyExchangeTransactionDecodeReserveLayout()
 )
 
 // decodedTransferContract coalesces the message and its two canonical TRON
@@ -51,6 +55,12 @@ type decodedTransferAssetContract struct {
 	assetName    [transferAssetNameInlineSize]byte
 	ownerAddress [common.AddressLength]byte
 	toAddress    [common.AddressLength]byte
+}
+
+type decodedExchangeTransactionContract struct {
+	contract     contractpb.ExchangeTransactionContract
+	ownerAddress [common.AddressLength]byte
+	tokenID      [exchangeTokenIDInlineSize]byte
 }
 
 type Transaction struct {
@@ -192,6 +202,22 @@ func (tx *Transaction) DecodedContract() (proto.Message, error) {
 				return
 			}
 		}
+		if contract.Type == corepb.Transaction_Contract_ExchangeTransactionContract {
+			decoded := new(decodedExchangeTransactionContract)
+			if contract.Parameter.MessageIs(&decoded.contract) {
+				tx.contractMessage = &decoded.contract
+				if exchangeTxDecodeReserveLayoutOK {
+					tx.contractMessageErr = decoded.unmarshal(contract.Parameter.Value)
+					if tx.contractMessageErr == nil {
+						return
+					}
+				}
+				// Preserve generated decoding errors for malformed data and act as
+				// the schema-regeneration fallback.
+				tx.contractMessageErr = contract.Parameter.UnmarshalTo(tx.contractMessage)
+				return
+			}
+		}
 		tx.contractMessage, tx.contractMessageErr = contract.Parameter.UnmarshalNew()
 	})
 	return tx.contractMessage, tx.contractMessageErr
@@ -223,6 +249,16 @@ func verifyTransferAssetDecodeReserveLayout() bool {
 		protoFieldShape(fields, 2, protoreflect.BytesKind, false) &&
 		protoFieldShape(fields, 3, protoreflect.BytesKind, false) &&
 		protoFieldShape(fields, 4, protoreflect.Int64Kind, false)
+}
+
+func verifyExchangeTransactionDecodeReserveLayout() bool {
+	fields := (&contractpb.ExchangeTransactionContract{}).ProtoReflect().Descriptor().Fields()
+	return fields.Len() == 5 &&
+		protoFieldShape(fields, 1, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 2, protoreflect.Int64Kind, false) &&
+		protoFieldShape(fields, 3, protoreflect.BytesKind, false) &&
+		protoFieldShape(fields, 4, protoreflect.Int64Kind, false) &&
+		protoFieldShape(fields, 5, protoreflect.Int64Kind, false)
 }
 
 func (decoded *decodedTransferContract) unmarshal(data []byte) error {
@@ -290,6 +326,48 @@ func (decoded *decodedTransferAssetContract) unmarshal(data []byte) error {
 				return errors.New("malformed transfer asset contract amount field")
 			}
 			decoded.contract.Amount = int64(value)
+		default:
+			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
+		}
+	}
+	appendProtoUnknown(&decoded.contract, unknown)
+	return nil
+}
+
+func (decoded *decodedExchangeTransactionContract) unmarshal(data []byte) error {
+	decoded.contract = contractpb.ExchangeTransactionContract{}
+	var unknown []byte
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			return errors.New("malformed exchange transaction contract wire envelope")
+		}
+		data = data[n:]
+		switch {
+		case wireType == protowire.BytesType && (field == 1 || field == 3):
+			value, ok := bytesFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed exchange transaction contract bytes field")
+			}
+			if field == 1 {
+				decoded.contract.OwnerAddress = copyBytesInto(value, decoded.ownerAddress[:])
+			} else {
+				decoded.contract.TokenId = copyBytesInto(value, decoded.tokenID[:])
+			}
+		case wireType == protowire.VarintType && (field == 2 || field == 4 || field == 5):
+			value, ok := varintFieldValue(fieldData[:n])
+			if !ok {
+				return errors.New("malformed exchange transaction contract varint field")
+			}
+			switch field {
+			case 2:
+				decoded.contract.ExchangeId = int64(value)
+			case 4:
+				decoded.contract.Quant = int64(value)
+			case 5:
+				decoded.contract.Expected = int64(value)
+			}
 		default:
 			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
 		}
