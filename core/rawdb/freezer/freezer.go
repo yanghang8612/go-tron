@@ -247,11 +247,11 @@ func (f *Freezer) Ancient(kind string, number uint64) ([]byte, error) {
 
 // AncientNoCopy returns an immutable ancient value without the V2 reader's
 // usual per-record defensive copy. V2 values may share a decoded frame backing
-// allocation; callers must neither mutate nor retain the bytes after their
-// synchronous decode. The V1 fallback already returns caller-owned storage but
-// follows the same immutable contract. This deliberately stays outside the
-// general AncientReader interface so ordinary accessors keep defensive-copy
-// semantics.
+// allocation; callers must never mutate the bytes, but may retain them because
+// the slice keeps an evicted frame's Go allocation alive. The V1 fallback
+// already returns caller-owned storage but follows the same immutable contract.
+// This deliberately stays outside the general AncientReader interface so
+// ordinary accessors keep defensive-copy semantics.
 func (f *Freezer) AncientNoCopy(kind string, number uint64) ([]byte, error) {
 	if table := f.tables[kind]; table != nil {
 		f.v2Mu.RLock()

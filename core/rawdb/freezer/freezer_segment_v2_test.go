@@ -198,6 +198,18 @@ func TestFreezerMigrateV2RoundTripResumeAndAppend(t *testing.T) {
 	if cap(borrowed) != len(borrowed) || !bytes.Equal(borrowed, want["bodies"][3]) {
 		t.Fatalf("borrowed body len/cap/value = %d/%d/%x", len(borrowed), cap(borrowed), borrowed)
 	}
+	// A retained immutable view keeps its decoded frame allocation alive even
+	// after the cache evicts that frame. Stored replay relies on this while the
+	// decoded block borrows calldata-like fields across execution.
+	retainedWant := bytes.Clone(borrowed)
+	freezer.v2.cacheLimit = 1
+	if _, err := freezer.AncientNoCopy("bodies", 11); err != nil {
+		t.Fatalf("load eviction frame: %v", err)
+	}
+	if !bytes.Equal(borrowed, retainedWant) {
+		t.Fatalf("retained borrowed body changed after frame eviction: got %x want %x", borrowed, retainedWant)
+	}
+	freezer.v2.cacheLimit = v2DefaultCacheBytes
 	rangeBodies, err := freezer.AncientRange("bodies", 120, 16, 0)
 	if err != nil || len(rangeBodies) != 16 {
 		t.Fatalf("cross-tier range len=%d err=%v", len(rangeBodies), err)

@@ -62,10 +62,10 @@ func (r freezerReader) Ancient(kind string, number uint64) ([]byte, error) {
 	return data, nil
 }
 
-// AncientNoCopy exposes freezer's immutable decoded-frame view to the one
-// stored-replay accessor that can consume it synchronously. It intentionally is
-// not part of AncientReader: all general callers retain Ancient's owned-copy
-// contract.
+// AncientNoCopy exposes freezer's immutable decoded-frame view to the stored-
+// replay accessor. The returned bytes may be retained but never mutated. It is
+// intentionally not part of AncientReader: all general callers retain
+// Ancient's owned-copy contract.
 func (r freezerReader) AncientNoCopy(kind string, number uint64) ([]byte, error) {
 	data, err := r.f.AncientNoCopy(kind, number)
 	if err != nil {
