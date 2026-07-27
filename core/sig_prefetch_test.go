@@ -440,6 +440,48 @@ func TestPrewarm_IdenticalAccept_OnVsOff(t *testing.T) {
 	}
 }
 
+func TestInsertBlocksSkipsPrewarmWithoutEngine(t *testing.T) {
+	witnessKey, witnessAddr := keyAndAddr(t)
+	senderKey, sender := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+	genesis := fixedVerifyGenesis(witnessAddr, sender)
+
+	refChain := newVerifierChain(t, genesis)
+	refBytes, refHash := genesisTaposRef(t, refChain)
+	defer func() { _ = refChain.Close() }()
+	raw := produceSignedBlocks(t, genesis, witnessKey, 2, func(height uint64) []*types.Transaction {
+		return []*types.Transaction{
+			buildTransferTxWithRef(t, sender, recipient, int32(10+height), 0, refBytes, refHash, senderKey),
+		}
+	})
+
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = bc.Close() }()
+
+	var jobs atomic.Int64
+	prevHook := sigPrewarmJobHook
+	sigPrewarmJobHook = func() { jobs.Add(1) }
+	defer func() { sigPrewarmJobHook = prevHook }()
+	withMinTxs(1, func() {
+		if err := bc.InsertBlocks(unmarshalBatch(t, raw)); err != nil {
+			t.Fatalf("engine-less InsertBlocks: %v", err)
+		}
+	})
+	if got := jobs.Load(); got != 0 {
+		t.Fatalf("engine-less prewarm jobs = %d, want 0", got)
+	}
+	if got := bc.CurrentBlock().Number(); got != 2 {
+		t.Fatalf("engine-less replay head = %d, want 2", got)
+	}
+}
+
 // TestPrewarm_IdenticalReject_BadTxSig: a batch whose 3rd block contains a tx
 // signed by the wrong key must be rejected at that exact block — identically
 // with the pre-pass ON and OFF. This is the load-bearing guarantee: the parallel

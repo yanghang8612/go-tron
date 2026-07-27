@@ -706,7 +706,13 @@ func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
 	// ordered state execution. Pure cache warming — the serial path (envelope
 	// validation, header verification) still owns every accept/reject decision
 	// and reads an identical memoized value, waiting/computing inline on a miss.
-	sigPrewarm := startBlockSignaturePrewarm(blocks, bc.headerSigPrewarmer())
+	// An engine-less offline replay deliberately skips both header and envelope
+	// validation, so no ordered consumer can observe these memos; avoid spending
+	// a full ECDSA recovery pass solely to discard it.
+	var sigPrewarm *signaturePrewarmRun
+	if bc.engine != nil {
+		sigPrewarm = startBlockSignaturePrewarm(blocks, bc.headerSigPrewarmer())
+	}
 	defer sigPrewarm.Wait()
 
 	executor := newCanonicalRangeExecutor(bc, true)
