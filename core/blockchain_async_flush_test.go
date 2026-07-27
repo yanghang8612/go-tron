@@ -134,8 +134,10 @@ func TestAsyncFlush_WorkerCoalescesQueuedCutoffs(t *testing.T) {
 	}
 }
 
-func TestCollectFlushCutoffsWaitsForNextArrival(t *testing.T) {
-	queue := make(chan uint64, flushQueueCap)
+func TestCollectFlushCutoffsCollectsUntilWindowExpires(t *testing.T) {
+	// An unbuffered queue proves both sends were consumed before the wait window
+	// expires. Returning after the first arrival deadlocks the second send.
+	queue := make(chan uint64)
 	wait := make(chan time.Time)
 	type result struct {
 		cutoff  uint64
@@ -148,9 +150,11 @@ func TestCollectFlushCutoffsWaitsForNextArrival(t *testing.T) {
 		done <- result{cutoff: cutoff, pending: pending, closed: closed}
 	}()
 	queue <- 11
+	queue <- 12
+	wait <- time.Now()
 	got := <-done
-	if got.cutoff != 11 || got.pending != 2 || got.closed {
-		t.Fatalf("collect result = %+v, want cutoff=11 pending=2 closed=false", got)
+	if got.cutoff != 12 || got.pending != 3 || got.closed {
+		t.Fatalf("collect result = %+v, want cutoff=12 pending=3 closed=false", got)
 	}
 }
 

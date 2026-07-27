@@ -750,6 +750,27 @@ func TestFlushLayersRecordsCoalescingMetrics(t *testing.T) {
 	}
 }
 
+func TestFlushUpToRecordsSuccessfulCallMetric(t *testing.T) {
+	dst := rawdb.NewMemoryDatabase()
+	b := New(dst)
+	b.BeginBlock(bufHash(1), 1)
+	if err := b.Put([]byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+
+	before := flushCallsCounter.Snapshot().Count()
+	if err := b.FlushUpTo(1, dst); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.FlushUpTo(1, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got := flushCallsCounter.Snapshot().Count() - before; got != 1 {
+		t.Fatalf("flush calls delta = %d, want 1 successful non-empty call", got)
+	}
+}
+
 func BenchmarkFlushLayersUncoalescedReference(b *testing.B) {
 	layers := benchmarkFlushLayers()
 	dst := rawdb.NewMemoryDatabase()

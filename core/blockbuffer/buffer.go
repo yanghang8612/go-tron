@@ -48,6 +48,7 @@ var (
 	flushOutputOpsCounter = metrics.NewRegisteredCounter("blockbuffer/flush/output/ops", nil)
 	flushLayersCounter    = metrics.NewRegisteredCounter("blockbuffer/flush/layers", nil)
 	flushGroupsCounter    = metrics.NewRegisteredCounter("blockbuffer/flush/groups", nil)
+	flushCallsCounter     = metrics.NewRegisteredCounter("blockbuffer/flush/calls", nil)
 )
 
 // layer is a single applyBlock's worth of buffered mutations.
@@ -1829,6 +1830,7 @@ func (b *Buffer) FlushUpTo(
 		b.baseReadCache.advanceVersion()
 	}
 	b.promoteBaseReadCacheLayers(snapshot[:flushed])
+	flushCallsCounter.Inc(1)
 
 	// Step 3: drop the flushed prefix under the write lock.
 	b.dropFlushedPrefix(flushed)

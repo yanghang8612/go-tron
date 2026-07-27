@@ -385,11 +385,12 @@ func (b *flushBarrier) wait() {
 // guarantees a flush is never lost.
 const flushQueueCap = 8
 
-// flushCoalesceWait gives a caught-up worker one short opportunity to collect
-// the next solidified cutoff. Mainnet bulk sync applies a block roughly every
-// 10-15ms; without this window the worker sees an empty queue, writes one layer,
-// and misses blockbuffer's cross-layer overwrite coalescing. The delay is fully
-// asynchronous, bounded, and interrupted immediately by queue close.
+// flushCoalesceWait gives a caught-up worker one short window to collect newly
+// solidified cutoffs. Mainnet bulk sync applies several blocks inside this
+// interval; waiting through the whole window lets blockbuffer collapse repeated
+// latest-state writes across all of them instead of consistently flushing the
+// first pair. The delay is fully asynchronous, bounded, and interrupted
+// immediately by queue close.
 const flushCoalesceWait = 15 * time.Millisecond
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
@@ -1622,7 +1623,7 @@ func (bc *BlockChain) startFlushWorker() {
 			// newly-solidified layers, and avoids one large Pebble batch per
 			// block. Bounding the drain to the initial depth prevents a steady
 			// producer from starving the actual disk flush.
-			// When already caught up, wait briefly for the next producer post.
+			// When already caught up, collect posts for one short bounded window.
 			// A closed queue wakes the select immediately and is reported back so
 			// the collected cutoff is flushed before the worker exits.
 			var wait <-chan time.Time
@@ -1645,13 +1646,13 @@ func (bc *BlockChain) startFlushWorker() {
 	}()
 }
 
-// collectFlushCutoffs folds one optional just-after-receive cutoff plus the
-// queue depth observed afterwards into the highest cumulative cutoff. wait is
-// nil when work was already queued; tests pass a controllable channel to pin
-// the delayed-arrival behaviour without sleeping.
+// collectFlushCutoffs folds cutoffs arriving throughout one optional bounded
+// wait window plus the queue depth observed afterwards into the highest
+// cumulative cutoff. wait is nil when work was already queued; tests pass a
+// controllable channel to pin the delayed-arrival behaviour without sleeping.
 func collectFlushCutoffs(queue <-chan uint64, cutoff uint64, wait <-chan time.Time) (uint64, int, bool) {
 	pending := 1
-	if wait != nil {
+	for wait != nil {
 		select {
 		case next, ok := <-queue:
 			if !ok {
@@ -1662,6 +1663,7 @@ func collectFlushCutoffs(queue <-chan uint64, cutoff uint64, wait <-chan time.Ti
 				cutoff = next
 			}
 		case <-wait:
+			wait = nil
 		}
 	}
 	for queued := len(queue); queued > 0; queued-- {
