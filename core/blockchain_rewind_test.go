@@ -75,6 +75,7 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	if got := bc.CurrentBlock().Number(); got != 5 {
 		t.Fatalf("precondition head = %d, want 5", got)
 	}
+	originalHeadRoot := bc.HeadStateRoot()
 	if got := readWitnessLatestBlockAtHead(t, bc, witness); got != 5 {
 		t.Fatalf("precondition witness latest = %d, want 5", got)
 	}
@@ -168,6 +169,31 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	for i := range wantProgress {
 		if progress[i] != wantProgress[i] {
 			t.Fatalf("progress[%d] = %+v, want %+v (all=%+v)", i, progress[i], wantProgress[i], progress)
+		}
+	}
+
+	progress = progress[:0]
+	if err := bc.ReplayStoredBlocksToHeight(5, func(p RestartSyncProgress) {
+		progress = append(progress, coreRestartEvent{phase: p.Phase, block: p.Block})
+	}); err != nil {
+		t.Fatalf("ReplayStoredBlocksToHeight: %v", err)
+	}
+	if got := bc.CurrentBlock(); got.Number() != 5 || got.Hash() != blocks[5].Hash() {
+		t.Fatalf("stored replay head = #%d %x, want #5 %x", got.Number(), got.Hash(), blocks[5].Hash())
+	}
+	if got := bc.HeadStateRoot(); got != originalHeadRoot {
+		t.Fatalf("stored replay root = %x, want original %x", got, originalHeadRoot)
+	}
+	if info := rawdb.ReadTransactionInfo(bc.ChainDB(), tx4Hash[:]); info == nil || info.BlockNumber != 4 {
+		t.Fatalf("stored replay tx4 info = %+v, want block 4", info)
+	}
+	wantReplayProgress := []coreRestartEvent{{phase: "replay", block: 5}, {phase: "flush", block: 5}, {phase: "done", block: 5}}
+	if len(progress) != len(wantReplayProgress) {
+		t.Fatalf("stored replay progress = %+v, want %+v", progress, wantReplayProgress)
+	}
+	for i := range wantReplayProgress {
+		if progress[i] != wantReplayProgress[i] {
+			t.Fatalf("stored replay progress[%d] = %+v, want %+v", i, progress[i], wantReplayProgress[i])
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
@@ -37,6 +39,13 @@ import (
 )
 
 const domainStateReorgWindow uint64 = 128
+
+const round141StoredReplayTarget uint64 = 19_349_383
+
+var (
+	round141StoredReplayTargetHash = tcommon.HexToHash("0000000001273f87ac576e31a2705cc8cadfbdb983897c175e304414e7470b58")
+	round141SkippedTxHash          = tcommon.HexToHash("1b894da582bc68dd47e96579e5c362e3de9f50dab862907cd0a21e2649bc1ef5")
+)
 
 var (
 	dataDirFlag = &cli.StringFlag{
@@ -526,6 +535,48 @@ func gtron(ctx *cli.Context) error {
 		}
 		log.Info("Historical sync restart complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
 	}
+	if !ctx.IsSet("sync.restart-from") && needsRound141StoredReplay(bc) {
+		healthServer, err := startStoredReplayHealthServer(fmt.Sprintf(":%d", cfg.HTTPPort), bc)
+		if err != nil {
+			closeStores()
+			return fmt.Errorf("start stored replay health server: %w", err)
+		}
+		var replayDebug *debugapi.Server
+		if cfg.PProfPort > 0 {
+			addr := cfg.PProfAddr
+			if addr == "" {
+				addr = "127.0.0.1"
+			}
+			replayDebug = debugapi.NewServer(fmt.Sprintf("%s:%d", addr, cfg.PProfPort))
+			if err := replayDebug.Start(); err != nil {
+				_ = healthServer.Close()
+				closeStores()
+				return fmt.Errorf("start stored replay debug server: %w", err)
+			}
+		}
+
+		startHead := bc.CurrentBlock().Number()
+		lastProgress := startHead
+		log.Warn("One-time round 141 stored-block replay triggered",
+			"currentHead", startHead,
+			"target", round141StoredReplayTarget,
+			"reason", "resume interrupted conservative state rebuild from preserved canonical blocks")
+		err = bc.ReplayStoredBlocksToHeight(round141StoredReplayTarget, func(p core.RestartSyncProgress) {
+			if p.Phase != "replay" || p.Block == p.Target || p.Block-lastProgress >= 100_000 {
+				lastProgress = p.Block
+				log.Info("Stored-block replay progress", "phase", p.Phase, "block", p.Block, "target", p.Target)
+			}
+		})
+		if replayDebug != nil {
+			_ = replayDebug.Stop()
+		}
+		_ = healthServer.Close()
+		if err != nil {
+			closeStores()
+			return err
+		}
+		log.Info("Stored-block replay complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
+	}
 
 	// Create transaction pool
 	pool := txpool.New()
@@ -878,6 +929,54 @@ func gtron(ctx *cli.Context) error {
 	}
 	closeStores()
 	return nil
+}
+
+// needsRound141StoredReplay identifies only the partial materialized image left
+// by the interrupted round-141 conservative rebuild. Immutable canonical block
+// bytes survived ResetMutableState, while transaction-info state above the
+// partial head was deliberately cleared.
+func needsRound141StoredReplay(bc *core.BlockChain) bool {
+	if bc == nil || bc.CurrentBlock() == nil || bc.CurrentBlock().Number() >= round141StoredReplayTarget {
+		return false
+	}
+	target := rawdb.ReadBlock(bc.ChainDB(), round141StoredReplayTarget)
+	if target == nil || target.Hash() != round141StoredReplayTargetHash {
+		return false
+	}
+	return rawdb.ReadTransactionInfo(bc.ChainDB(), round141SkippedTxHash.Bytes()) == nil
+}
+
+// startStoredReplayHealthServer keeps the deployment health contract available
+// during the long offline replay. The real Wallet API replaces it immediately
+// after replay finishes; the response always reflects BlockChain's atomic head.
+func startStoredReplayHealthServer(addr string, bc *core.BlockChain) (*http.Server, error) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	server := &http.Server{Addr: addr, Handler: storedReplayHealthHandler(bc)}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	return server, nil
+}
+
+type storedReplayHeadReader interface {
+	CurrentBlock() *types.Block
+}
+
+func storedReplayHealthHandler(chain storedReplayHeadReader) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/wallet/getnowblock", func(w http.ResponseWriter, _ *http.Request) {
+		head := chain.CurrentBlock()
+		if head == nil {
+			http.Error(w, "current block unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"blockID":"%s","block_header":{"raw_data":{"number":%d}}}`, head.Hash().Hex(), head.Number())
+	})
+	return mux
 }
 
 func versionCmd(ctx *cli.Context) error {

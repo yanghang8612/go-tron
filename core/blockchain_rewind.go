@@ -27,6 +27,96 @@ type RestartSyncProgress struct {
 	Target uint64
 }
 
+// ReplayStoredBlocksToHeight advances materialized state from the current head
+// using canonical block bytes that are already present in the hot database or
+// freezer. It is an offline startup operation for resuming an interrupted
+// reset+replay: callers must invoke it before P2P, producer, PBFT, and regular
+// API lifecycles start. Unlike RestartSyncFromHeight it never resets state and
+// never fetches from peers.
+func (bc *BlockChain) ReplayStoredBlocksToHeight(height uint64, progressFn func(RestartSyncProgress)) error {
+	if bc == nil {
+		return errors.New("stored replay: nil blockchain")
+	}
+	current := bc.CurrentBlock()
+	if current == nil {
+		return errors.New("stored replay: current block is nil")
+	}
+	if height < current.Number() {
+		return fmt.Errorf("stored replay: target height %d is below current head %d", height, current.Number())
+	}
+	target := rawdb.ReadBlock(bc.chaindb, height)
+	if target == nil {
+		return fmt.Errorf("stored replay: canonical block %d not found", height)
+	}
+	emit := func(phase string, block uint64) {
+		if progressFn != nil {
+			progressFn(RestartSyncProgress{Phase: phase, Block: block, Target: height})
+		}
+	}
+	if height == current.Number() {
+		emit("done", height)
+		return nil
+	}
+
+	for start := current.Number() + 1; start <= height; {
+		end := start + restartSyncReplayBatchSize - 1
+		if end < start || end > height {
+			end = height
+		}
+		blocks := make([]*types.Block, 0, end-start+1)
+		for n := start; n <= end; n++ {
+			block := rawdb.ReadBlock(bc.chaindb, n)
+			if block == nil {
+				return fmt.Errorf("stored replay: block %d not found", n)
+			}
+			var parent *types.Block
+			if len(blocks) == 0 {
+				parent = bc.CurrentBlock()
+			} else {
+				parent = blocks[len(blocks)-1]
+			}
+			if block.Number() != parent.Number()+1 {
+				return fmt.Errorf("stored replay: block %d has number %d, want %d", n, block.Number(), parent.Number()+1)
+			}
+			if block.ParentHash() != parent.Hash() {
+				return fmt.Errorf("stored replay: block %d parent mismatch: have %x want %x", n, block.ParentHash(), parent.Hash())
+			}
+			blocks = append(blocks, block)
+		}
+		if err := bc.InsertBlocks(blocks); err != nil {
+			var rangeErr *InsertBlocksError
+			if errors.As(err, &rangeErr) && rangeErr.BlockNumber != 0 {
+				return fmt.Errorf("stored replay: apply block %d: %w", rangeErr.BlockNumber, err)
+			}
+			return fmt.Errorf("stored replay: apply range %d-%d: %w", start, end, err)
+		}
+		emit("replay", end)
+		start = end + 1
+	}
+
+	emit("flush", height)
+	bc.WaitForFlushSettled()
+	if errPtr := bc.flushErr.Load(); errPtr != nil {
+		return fmt.Errorf("stored replay: async flush failed: %w", *errPtr)
+	}
+	if err := bc.buffer.Flush(bc.db); err != nil {
+		return fmt.Errorf("stored replay: flush replay buffer: %w", err)
+	}
+	bc.buffer.Discard()
+	final := bc.CurrentBlock()
+	if final == nil || final.Number() != height || final.Hash() != target.Hash() {
+		if final == nil {
+			return errors.New("stored replay: final head is nil")
+		}
+		return fmt.Errorf("stored replay: final head mismatch: got #%d %x want #%d %x", final.Number(), final.Hash(), height, target.Hash())
+	}
+	if err := syncKeyValueStore(bc.db); err != nil {
+		return fmt.Errorf("stored replay: sync completion: %w", err)
+	}
+	emit("done", height)
+	return nil
+}
+
 // RestartSyncFromHeight rewinds the local materialized state to height and
 // leaves the chain ready to request height+1 from peers.
 //
