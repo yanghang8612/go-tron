@@ -65,7 +65,7 @@ func (bc *BlockChain) ReplayStoredBlocksToHeight(height uint64, progressFn func(
 		}
 		blocks := make([]*types.Block, 0, end-start+1)
 		for n := start; n <= end; n++ {
-			block := rawdb.ReadBlock(bc.chaindb, n)
+			block := rawdb.ReadBlockReusable(bc.chaindb, n)
 			if block == nil {
 				return fmt.Errorf("stored replay: block %d not found", n)
 			}

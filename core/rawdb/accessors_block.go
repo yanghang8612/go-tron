@@ -64,8 +64,22 @@ func WriteBlockEncoded(db ethdb.KeyValueWriter, block *types.Block, data []byte)
 // hitting it first for in-range numbers avoids paying a Pebble Get for
 // frozen blocks (the common case once the freezer has caught up).
 func ReadBlock(db *ChainDB, number uint64) *types.Block {
+	return readBlock(db, number, false)
+}
+
+// ReadBlockReusable is ReadBlock for callers that will soon persist the same
+// decoded block through Block.MarshalReusable. Ancient and Pebble reads already
+// return caller-owned byte slices, so transferring that storage to the block
+// avoids allocating a second full-block wire buffer during replay. Callers that
+// only inspect a block should retain ReadBlock so the raw input can be released
+// immediately after protobuf decoding.
+func ReadBlockReusable(db *ChainDB, number uint64) *types.Block {
+	return readBlock(db, number, true)
+}
+
+func readBlock(db *ChainDB, number uint64, reusable bool) *types.Block {
 	if data, ok := readAncient(db, ancientBlocks, number); ok {
-		block, err := types.UnmarshalBlock(data)
+		block, err := unmarshalStoredBlock(data, reusable)
 		if err != nil {
 			return nil
 		}
@@ -75,11 +89,18 @@ func ReadBlock(db *ChainDB, number uint64) *types.Block {
 	if err != nil {
 		return nil
 	}
-	block, err := types.UnmarshalBlock(data)
+	block, err := unmarshalStoredBlock(data, reusable)
 	if err != nil {
 		return nil
 	}
 	return block
+}
+
+func unmarshalStoredBlock(data []byte, reusable bool) (*types.Block, error) {
+	if reusable {
+		return types.UnmarshalBlockOwned(data)
+	}
+	return types.UnmarshalBlock(data)
 }
 
 // ReadBlockNumber returns the block number persisted for the given block

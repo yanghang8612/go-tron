@@ -10,6 +10,8 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+var benchmarkReusableBlockBytes []byte
+
 type ownedBlockWriterProbe struct {
 	ownedKey   []byte
 	ownedValue []byte
@@ -55,6 +57,56 @@ func TestWriteReadBlock(t *testing.T) {
 	gotHash, ok := ReadBlockHash(chaindb, block.Number())
 	if !ok || gotHash != block.Hash() {
 		t.Fatalf("number->hash = %x,%v want %x,true", gotHash, ok, block.Hash())
+	}
+}
+
+func BenchmarkReadBlockMarshalReusable(b *testing.B) {
+	chaindb := NewMemoryChainDB()
+	txs := make([]*corepb.Transaction, 200)
+	for i := range txs {
+		txs[i] = &corepb.Transaction{
+			RawData: &corepb.TransactionRaw{
+				RefBlockBytes: []byte{byte(i >> 8), byte(i)},
+				Data:          bytes.Repeat([]byte{byte(i)}, 256),
+				Timestamp:     int64(i + 1),
+			},
+			Signature: [][]byte{bytes.Repeat([]byte{byte(i + 1)}, 65)},
+		}
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		Transactions: txs,
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number:         42,
+			Timestamp:      126_000,
+			TxTrieRoot:     bytes.Repeat([]byte{0x11}, common.HashLength),
+			ParentHash:     bytes.Repeat([]byte{0x22}, common.HashLength),
+			WitnessAddress: bytes.Repeat([]byte{0x33}, common.AddressLength),
+		}},
+	})
+	if err := WriteBlock(chaindb, block); err != nil {
+		b.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		read func(*ChainDB, uint64) *types.Block
+	}{
+		{name: "fresh-marshal", read: ReadBlock},
+		{name: "reuse-stored-wire", read: ReadBlockReusable},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				decoded := tc.read(chaindb, block.Number())
+				if decoded == nil {
+					b.Fatal("block not found")
+				}
+				var err error
+				benchmarkReusableBlockBytes, err = decoded.MarshalReusable()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
