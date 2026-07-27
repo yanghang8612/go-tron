@@ -18,6 +18,17 @@ type ownedBlockWriterProbe struct {
 	puts       map[string][]byte
 }
 
+type discardStructuredBlockWriter struct{}
+
+func (discardStructuredBlockWriter) Put(_, _ []byte) error            { return nil }
+func (discardStructuredBlockWriter) Delete(_ []byte) error            { return nil }
+func (discardStructuredBlockWriter) DeleteKeyParts(_, _ []byte) error { return nil }
+func (discardStructuredBlockWriter) PutOwnedValue(_, _ []byte) error  { return nil }
+func (discardStructuredBlockWriter) PutKeyParts(_, _, _ []byte) error { return nil }
+func (discardStructuredBlockWriter) PutKeyPartsOwnedValue(_, _, _ []byte) error {
+	return nil
+}
+
 func (p *ownedBlockWriterProbe) Put(key, value []byte) error {
 	if p.puts == nil {
 		p.puts = make(map[string][]byte)
@@ -27,6 +38,19 @@ func (p *ownedBlockWriterProbe) Put(key, value []byte) error {
 }
 
 func (*ownedBlockWriterProbe) Delete([]byte) error { return nil }
+
+func (*ownedBlockWriterProbe) DeleteKeyParts(_, _ []byte) error { return nil }
+
+func (p *ownedBlockWriterProbe) PutKeyParts(first, second, value []byte) error {
+	key := append(append([]byte(nil), first...), second...)
+	return p.Put(key, value)
+}
+
+func (p *ownedBlockWriterProbe) PutKeyPartsOwnedValue(first, second, value []byte) error {
+	p.ownedKey = append(append(p.ownedKey[:0], first...), second...)
+	p.ownedValue = value
+	return nil
+}
 
 func (p *ownedBlockWriterProbe) PutOwnedValue(key, value []byte) error {
 	p.ownedKey = append([]byte(nil), key...)
@@ -57,6 +81,35 @@ func TestWriteReadBlock(t *testing.T) {
 	gotHash, ok := ReadBlockHash(chaindb, block.Number())
 	if !ok || gotHash != block.Hash() {
 		t.Fatalf("number->hash = %x,%v want %x,true", gotHash, ok, block.Hash())
+	}
+}
+
+func BenchmarkWriteBlockEncodedStructured(b *testing.B) {
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 42, Timestamp: 126_000}},
+	})
+	data, err := block.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	_ = block.Hash()
+	writer := discardStructuredBlockWriter{}
+	b.ReportAllocs()
+	for range b.N {
+		if err := WriteBlockEncoded(writer, block, data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkWriteTaposRefStructured(b *testing.B) {
+	writer := discardStructuredBlockWriter{}
+	hash := common.Hash{8: 1}
+	b.ReportAllocs()
+	for range b.N {
+		if err := WriteTaposRef(writer, 42, hash); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

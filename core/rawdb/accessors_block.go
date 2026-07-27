@@ -32,8 +32,12 @@ func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 func WriteBlockEncoded(db ethdb.KeyValueWriter, block *types.Block, data []byte) error {
 	number := block.Number()
 	hash := block.Hash()
+	var num [8]byte
+	binary.BigEndian.PutUint64(num[:], number)
 	var err error
-	if writer, ok := db.(ownedValueWriter); ok {
+	if writer, ok := db.(keyPartsOwnedValueWriter); ok {
+		err = writer.PutKeyPartsOwnedValue(blockPrefix, num[:], data)
+	} else if writer, ok := db.(ownedValueWriter); ok {
 		err = writer.PutOwnedValue(blockKey(number), data)
 	} else {
 		err = db.Put(blockKey(number), data)
@@ -41,10 +45,14 @@ func WriteBlockEncoded(db ethdb.KeyValueWriter, block *types.Block, data []byte)
 	if err != nil {
 		return err
 	}
-	var num [8]byte
-	binary.BigEndian.PutUint64(num[:], number)
-	if err := db.Put(blockHashKey(hash[:]), num[:]); err != nil {
-		return err
+	if writer, ok := db.(keyPartsWriter); ok {
+		if err := writer.PutKeyParts(blockHashPrefix, hash[:], num[:]); err != nil {
+			return err
+		}
+	} else {
+		if err := db.Put(blockHashKey(hash[:]), num[:]); err != nil {
+			return err
+		}
 	}
 	var slot [8]byte
 	binary.BigEndian.PutUint64(slot[:], number%blockNumberHashSlots)

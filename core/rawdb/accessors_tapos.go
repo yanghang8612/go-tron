@@ -25,6 +25,9 @@ func taposRefBytes(blockNum uint64) [2]byte {
 // pushBlockInner.
 func WriteTaposRef(db ethdb.KeyValueWriter, blockNum uint64, blockHash common.Hash) error {
 	ref := taposRefBytes(blockNum)
+	if writer, ok := db.(keyPartsWriter); ok {
+		return writer.PutKeyParts(taposPrefix, ref[:], blockHash[8:16])
+	}
 	return db.Put(taposKey(ref[:]), blockHash[8:16])
 }
 
