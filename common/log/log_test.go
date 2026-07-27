@@ -120,6 +120,19 @@ func TestModuleTraceEnabledHonorsModuleLevel(t *testing.T) {
 	}
 }
 
+func TestModuleDebugEnabledHonorsModuleLevel(t *testing.T) {
+	defer setLevels(LevelInfo, nil)
+	module := NewModule("log/debug-gate")
+	setLevels(LevelInfo, map[string]slog.Level{"log/debug-gate": LevelInfo})
+	if module.DebugEnabled() {
+		t.Fatal("debug enabled at module info level")
+	}
+	setLevels(LevelInfo, map[string]slog.Level{"log/debug-gate": LevelDebug})
+	if !module.DebugEnabled() {
+		t.Fatal("debug disabled at module debug level")
+	}
+}
+
 func BenchmarkModuleDisabledTraceGuard(b *testing.B) {
 	defer setLevels(LevelInfo, nil)
 	module := NewModule("log/trace-benchmark")

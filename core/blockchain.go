@@ -140,6 +140,17 @@ func traceBlockApplied(block *types.Block, stats *applyStats, total time.Duratio
 	)
 }
 
+func debugBlockApplied(block *types.Block, total time.Duration) {
+	if !log.DebugEnabled() {
+		return
+	}
+	log.Debug("Block applied",
+		"number", block.Number(),
+		"txs", len(block.Transactions()),
+		"elapsed", ethcommon.PrettyDuration(total),
+	)
+}
+
 // BlockChain manages the canonical chain and provides block insertion.
 //
 // db vs chaindb split (freezer slice-2): every WRITE goes through bc.db
@@ -946,11 +957,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		}
 		total := time.Since(applyStart)
 		traceBlockApplied(block, &stats, total)
-		log.Debug("Block applied",
-			"number", block.Number(),
-			"txs", len(block.Transactions()),
-			"elapsed", ethcommon.PrettyDuration(total),
-		)
+		debugBlockApplied(block, total)
 		// Publish the per-phase breakdown to subscribers (sync summary line,
 		// metrics surface). Snapshot the hook slice under the mutex; invoke
 		// without holding it so a slow subscriber can't wedge applyBlock.

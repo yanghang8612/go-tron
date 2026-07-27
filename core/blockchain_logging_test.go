@@ -12,15 +12,16 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 )
 
-func TestTraceBlockAppliedDisabledSkipsContextEvaluation(t *testing.T) {
+func TestBlockAppliedLogsDisabledSkipContextEvaluation(t *testing.T) {
 	prev := gtronlog.Root()
 	defer gtronlog.SetDefault(prev)
 
 	h := gtronlog.LogfmtHandlerWithLevel(io.Discard, gtronlog.LevelInfo)
 	gtronlog.SetDefault(gtronlog.NewLogger(h))
 
-	// A disabled Trace call must return before dereferencing either argument.
+	// Disabled calls must return before dereferencing their context arguments.
 	traceBlockApplied(nil, nil, 0)
+	debugBlockApplied(nil, 0)
 }
 
 func BenchmarkTraceBlockAppliedDisabled(b *testing.B) {
@@ -32,6 +33,18 @@ func BenchmarkTraceBlockAppliedDisabled(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		traceBlockApplied(nil, nil, 0)
+	}
+}
+
+func BenchmarkDebugBlockAppliedDisabled(b *testing.B) {
+	prev := gtronlog.Root()
+	b.Cleanup(func() { gtronlog.SetDefault(prev) })
+	h := gtronlog.LogfmtHandlerWithLevel(io.Discard, gtronlog.LevelInfo)
+	gtronlog.SetDefault(gtronlog.NewLogger(h))
+
+	b.ReportAllocs()
+	for b.Loop() {
+		debugBlockApplied(nil, 0)
 	}
 }
 

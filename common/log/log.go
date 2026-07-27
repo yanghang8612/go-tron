@@ -69,6 +69,11 @@ func (m Module) enabled(level slog.Level) bool {
 // use it to avoid evaluating those values on the disabled hot path.
 func (m Module) TraceEnabled() bool { return m.enabled(gethlog.LevelTrace) }
 
+// DebugEnabled reports whether Debug records for this module are currently
+// enabled. Callers with expensive or allocation-producing context values can
+// use it to avoid evaluating those values on the disabled hot path.
+func (m Module) DebugEnabled() bool { return m.enabled(gethlog.LevelDebug) }
+
 // Trace logs at Trace level. The module tag is automatically prepended.
 func (m Module) Trace(msg string, ctx ...interface{}) {
 	if !m.enabled(gethlog.LevelTrace) {
