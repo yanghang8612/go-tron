@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"encoding/binary"
+	"maps"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -308,26 +309,21 @@ func (dp *DynamicProperties) Copy() *DynamicProperties {
 		return nil
 	}
 	out := &DynamicProperties{
-		props:                 make(map[string]int64, len(dp.props)),
-		dirty:                 make(map[string]struct{}, len(dp.dirty)),
-		stringProps:           make(map[string]string, len(dp.stringProps)),
-		stringDirty:           make(map[string]struct{}, len(dp.stringDirty)),
+		props:                 cloneNonEmptyMap(dp.props),
+		dirty:                 cloneNonEmptyMap(dp.dirty),
+		stringProps:           cloneNonEmptyMap(dp.stringProps),
+		stringDirty:           cloneNonEmptyMap(dp.stringDirty),
 		latestBlockHeaderHash: dp.latestBlockHeaderHash,
 		hashDirty:             dp.hashDirty,
 	}
-	for k, v := range dp.props {
-		out.props[k] = v
-	}
-	for k, v := range dp.dirty {
-		out.dirty[k] = v
-	}
-	for k, v := range dp.stringProps {
-		out.stringProps[k] = v
-	}
-	for k, v := range dp.stringDirty {
-		out.stringDirty[k] = v
-	}
 	return out
+}
+
+func cloneNonEmptyMap[K comparable, V any](in map[K]V) map[K]V {
+	if len(in) == 0 {
+		return nil
+	}
+	return maps.Clone(in)
 }
 
 // derivedDPKeys are runtime head pointers mirrored to flat dp- for startup,
@@ -541,6 +537,12 @@ func (dp *DynamicProperties) Set(key string, value int64) {
 				dirty:    dirty,
 			})
 		}
+	}
+	if dp.props == nil {
+		dp.props = make(map[string]int64)
+	}
+	if dp.dirty == nil {
+		dp.dirty = make(map[string]struct{})
 	}
 	dp.props[key] = value
 	dp.dirty[key] = struct{}{}
@@ -1950,6 +1952,12 @@ func (dp *DynamicProperties) SetString(key string, value string) {
 				dirty:       dirty,
 			})
 		}
+	}
+	if dp.stringProps == nil {
+		dp.stringProps = make(map[string]string)
+	}
+	if dp.stringDirty == nil {
+		dp.stringDirty = make(map[string]struct{})
 	}
 	dp.stringProps[key] = value
 	dp.stringDirty[key] = struct{}{}

@@ -184,6 +184,47 @@ func BenchmarkDynamicPropertiesSnapshot(b *testing.B) {
 	}
 }
 
+func TestDynamicPropertiesCopyIsIndependentAndLazilyMutable(t *testing.T) {
+	dp := NewDynamicProperties()
+	dp.Set("copy_int", 1)
+	dp.SetString("copy_string", "one")
+	cp := dp.Copy()
+	cp.Set("copy_int", 2)
+	cp.SetString("copy_string", "two")
+	if got, _ := dp.Get("copy_int"); got != 1 {
+		t.Fatalf("source int after copy mutation = %d, want 1", got)
+	}
+	if got, _ := dp.GetString("copy_string"); got != "one" {
+		t.Fatalf("source string after copy mutation = %q, want one", got)
+	}
+
+	// Copy deliberately keeps empty maps nil. Public mutators must lazily make
+	// them so even a sparse/test DynamicProperties remains safely mutable.
+	emptyCopy := new(DynamicProperties).Copy()
+	emptyCopy.Set("new_int", 3)
+	emptyCopy.SetString("new_string", "three")
+	if got, ok := emptyCopy.Get("new_int"); !ok || got != 3 {
+		t.Fatalf("lazy int = %d ok=%v, want 3/true", got, ok)
+	}
+	if got, ok := emptyCopy.GetString("new_string"); !ok || got != "three" {
+		t.Fatalf("lazy string = %q ok=%v, want three/true", got, ok)
+	}
+}
+
+var benchmarkDynamicPropertiesCopy *DynamicProperties
+
+func BenchmarkDynamicPropertiesCopy(b *testing.B) {
+	dp := NewDynamicProperties()
+	dp.SetLatestBlockHeaderNumber(1)
+	dp.SetLatestBlockHeaderTimestamp(2)
+	dp.SetLatestSolidifiedBlockNum(3)
+	dp.SetLatestBlockHeaderHash(common.Hash{4})
+	b.ReportAllocs()
+	for range b.N {
+		benchmarkDynamicPropertiesCopy = dp.Copy()
+	}
+}
+
 func BenchmarkDynamicPropertiesCommittedNestedSnapshots(b *testing.B) {
 	const transactions = 1024
 	b.ReportAllocs()
