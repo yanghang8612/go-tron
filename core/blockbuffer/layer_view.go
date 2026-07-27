@@ -303,8 +303,22 @@ func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.Commi
 	// linearization point. flushMu excludes layer flush/drop and b.mu excludes a
 	// concurrent CommitInflight append while the Pebble sequence is captured.
 	b.mu.RLock()
-	layers := append([]*layer(nil), b.layers...)
+	// publishReadViewLocked already owns an immutable copy of both topology
+	// slices. Retain that published backing for the fold instead of copying the
+	// committed slice a second time. A later topology publication cannot mutate
+	// this view, and the session's layers slice keeps its backing and layer
+	// pointers alive after the old view is replaced.
+	topology := b.readView.Load()
+	var layers []*layer
 	cache := b.baseReadCache
+	if topology != nil {
+		layers = topology.layers
+		cache = topology.baseReadCache
+	} else if len(b.layers) > 0 {
+		// Preserve Buffer's supported zero-value fallback. Production buffers are
+		// constructed with New and always have a published read view.
+		layers = append([]*layer(nil), b.layers...)
+	}
 	var cacheVersion uint64
 	if cache != nil {
 		cacheVersion = cache.version.Load()

@@ -89,6 +89,11 @@ func TestCommitmentParentReadSessionKeepsOverlayAndDurableCut(t *testing.T) {
 	if err != nil || session == nil {
 		t.Fatalf("NewCommitmentParentReadSession = (%T,%v)", session, err)
 	}
+	concrete := session.(*commitmentParentReadSession)
+	published := buf.readView.Load()
+	if len(concrete.layers) != 1 || len(published.layers) != 1 || &concrete.layers[0] != &published.layers[0] {
+		t.Fatal("commitment parent session did not retain the immutable published topology")
+	}
 	overlayBefore := commitmentParentOverlayResolvedCounter.Snapshot().Count()
 	cacheBefore := commitmentParentCacheResolvedCounter.Snapshot().Count()
 	durableReadsBefore := commitmentParentDurableReadsCounter.Snapshot().Count()
