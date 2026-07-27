@@ -964,43 +964,38 @@ func (b *Buffer) promoteBaseReadCacheLayer(l *layer) {
 	}
 }
 
-func (b *Buffer) promoteBaseReadCacheLayers(layers []*layer) {
-	if b == nil || b.baseReadCache == nil {
+// promoteBaseReadCacheMerged applies the already-coalesced final operations
+// from one successfully committed flush group. Grouping keys by their known
+// layer shard trades one cache lock per output key for at most one lock per
+// shard. The grouping scratch belongs to the pooled merge object and is reused
+// by later flushes.
+func (b *Buffer) promoteBaseReadCacheMerged(merged *flushMergedOps) {
+	if b == nil || b.baseReadCache == nil || merged == nil {
 		return
 	}
-	for start := 0; start < len(layers); {
-		end := start
-		queuedValueSize := 0
-		queuedEncodedSize := pebbleBatchHeaderSize
-		for end < len(layers) {
-			valueSize, encodedSize, _ := layerWriteStats(layers[end])
-			if end > start && (queuedValueSize+valueSize > maxFlushBatchValueSize ||
-				queuedEncodedSize+encodedSize > maxFlushBatchEncodedSize) {
-				break
-			}
-			queuedValueSize += valueSize
-			queuedEncodedSize += encodedSize
-			end++
-			if queuedValueSize >= maxFlushBatchValueSize || queuedEncodedSize >= maxFlushBatchEncodedSize {
-				break
-			}
-		}
-		if end-start == 1 {
-			b.promoteBaseReadCacheLayer(layers[start])
-			start = end
+	for key, op := range merged.ops {
+		shard := int(op.shard)
+		merged.promotionKeys[shard] = append(merged.promotionKeys[shard], key)
+	}
+	for shard, keys := range merged.promotionKeys {
+		if len(keys) == 0 {
 			continue
 		}
-		merged := borrowFlushMergedOps()
-		mergeLayers(layers[start:end], merged)
-		for k, op := range merged.ops {
+		cacheShard := &b.baseReadCache.shards[shard]
+		cacheShard.mu.Lock()
+		for _, k := range keys {
+			op := merged.ops[k]
+			b.baseReadCache.advanceInvalidationString(k)
 			if op.delete {
-				b.baseReadCache.delStringAt(k, uint32(op.shard))
+				b.baseReadCache.delStringLocked(cacheShard, k)
 			} else {
-				b.baseReadCache.setFlushedAt(k, op.value, uint32(op.shard))
+				b.baseReadCache.setFlushedLocked(cacheShard, k, op.value)
 			}
 		}
-		returnFlushMergedOps(merged)
-		start = end
+		cacheShard.compactIfSparse()
+		cacheShard.mu.Unlock()
+		clear(keys)
+		merged.promotionKeys[shard] = keys[:0]
 	}
 }
 

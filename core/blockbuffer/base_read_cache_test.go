@@ -863,6 +863,53 @@ func BenchmarkBaseReadCachePromoteShard(b *testing.B) {
 	})
 }
 
+func BenchmarkBaseReadCachePromoteMergedFlushGroup(b *testing.B) {
+	layers := benchmarkFlushLayers()
+	prepared := borrowFlushMergedOps()
+	mergeLayers(layers, prepared)
+	b.Cleanup(func() { returnFlushMergedOps(prepared) })
+	value := bytes.Repeat([]byte{0xab}, 16)
+
+	newCache := func() *baseReadCache {
+		c := newBaseReadCache(64 << 20)
+		for key, op := range prepared.ops {
+			if !op.delete {
+				testBaseReadCacheSet(c, []byte(key), value)
+			}
+		}
+		return c
+	}
+
+	b.Run("remerge-per-key-lock", func(b *testing.B) {
+		owner := &Buffer{baseReadCache: newCache()}
+		b.ReportAllocs()
+		b.ReportMetric(float64(len(prepared.ops)), "output-keys/op")
+		b.ResetTimer()
+		for range b.N {
+			merged := borrowFlushMergedOps()
+			mergeLayers(layers, merged)
+			for key, op := range merged.ops {
+				if op.delete {
+					owner.baseReadCache.delStringAt(key, uint32(op.shard))
+				} else {
+					owner.baseReadCache.setFlushedAt(key, op.value, uint32(op.shard))
+				}
+			}
+			returnFlushMergedOps(merged)
+		}
+	})
+
+	b.Run("reuse-merge-shard-lock", func(b *testing.B) {
+		owner := &Buffer{baseReadCache: newCache()}
+		b.ReportAllocs()
+		b.ReportMetric(float64(len(prepared.ops)), "output-keys/op")
+		b.ResetTimer()
+		for range b.N {
+			owner.promoteBaseReadCacheMerged(prepared)
+		}
+	})
+}
+
 func BenchmarkBaseReadCacheRecycledEntryStorage(b *testing.B) {
 	keys := [...]string{
 		strings.Repeat("a", 96),

@@ -1817,7 +1817,26 @@ func (b *Buffer) FlushUpTo(
 		}
 		eligible++
 	}
-	flushed, err := flushLayers(snapshot[:eligible], w)
+	var observe flushGroupObserver
+	if b.baseReadCache != nil {
+		versionAdvanced := false
+		observe = func(group []*layer, merged *flushMergedOps) {
+			// New sessions cannot start while flushMu is held. Existing sessions
+			// keep their older cache version and captured overlay, so advancing
+			// immediately after the first durable batch commit makes every
+			// replacement in this flush safely newer than their snapshot.
+			if !versionAdvanced {
+				b.baseReadCache.advanceVersion()
+				versionAdvanced = true
+			}
+			if merged == nil {
+				b.promoteBaseReadCacheLayer(group[0])
+				return
+			}
+			b.promoteBaseReadCacheMerged(merged)
+		}
+	}
+	flushed, err := flushLayersObserved(snapshot[:eligible], w, observe)
 	if err != nil {
 		// A failed batch may have been applied partially by the backend. Clear the
 		// whole cache rather than guessing which base values became durable.
@@ -1830,10 +1849,6 @@ func (b *Buffer) FlushUpTo(
 	if flushed == 0 {
 		return nil
 	}
-	if b.baseReadCache != nil {
-		b.baseReadCache.advanceVersion()
-	}
-	b.promoteBaseReadCacheLayers(snapshot[:flushed])
 	flushCallsCounter.Inc(1)
 
 	// Step 3: drop the flushed prefix under the write lock.
@@ -1876,15 +1891,27 @@ func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 }
 
 func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
+	return flushLayersObserved(layers, w, nil)
+}
+
+// flushGroupObserver runs after one bounded group is durably committed and
+// before its pooled coalescing map is cleared. It lets cache promotion reuse
+// the final operations without rescanning and remerging the source layers.
+type flushGroupObserver func(group []*layer, merged *flushMergedOps)
+
+func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushGroupObserver) (int, error) {
 	if len(layers) == 0 {
 		return 0, nil
 	}
 	batcher, ok := w.(ethdb.Batcher)
 	if !ok {
 		flushed := 0
-		for _, l := range layers {
+		for i, l := range layers {
 			if err := writeLayer(l, w); err != nil {
 				return flushed, err
+			}
+			if observe != nil {
+				observe(layers[i:i+1], nil)
 			}
 			flushed++
 		}
@@ -1964,6 +1991,9 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 		flushLayersCounter.Inc(int64(end - start))
 		flushGroupsCounter.Inc(1)
 		closeBatch(batch)
+		if observe != nil {
+			observe(layers[start:end], merged)
+		}
 		returnFlushMergedOps(merged)
 		flushed += end - start
 		start = end
@@ -2134,8 +2164,9 @@ type mergedLayerOp struct {
 const maxPooledFlushMergedOps = 32768
 
 type flushMergedOps struct {
-	ops       map[string]mergedLayerOp
-	highWater int
+	ops           map[string]mergedLayerOp
+	promotionKeys [layerShardCount][]string
+	highWater     int
 }
 
 var flushMergedOpsPool = sync.Pool{
@@ -2155,6 +2186,10 @@ func returnFlushMergedOps(merged *flushMergedOps) {
 		return
 	}
 	clear(merged.ops)
+	for i := range merged.promotionKeys {
+		clear(merged.promotionKeys[i])
+		merged.promotionKeys[i] = merged.promotionKeys[i][:0]
+	}
 	if merged.highWater > maxPooledFlushMergedOps {
 		return
 	}
