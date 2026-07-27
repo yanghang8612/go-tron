@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -10,6 +11,29 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
 )
+
+func TestTraceBlockAppliedDisabledSkipsContextEvaluation(t *testing.T) {
+	prev := gtronlog.Root()
+	defer gtronlog.SetDefault(prev)
+
+	h := gtronlog.LogfmtHandlerWithLevel(io.Discard, gtronlog.LevelInfo)
+	gtronlog.SetDefault(gtronlog.NewLogger(h))
+
+	// A disabled Trace call must return before dereferencing either argument.
+	traceBlockApplied(nil, nil, 0)
+}
+
+func BenchmarkTraceBlockAppliedDisabled(b *testing.B) {
+	prev := gtronlog.Root()
+	b.Cleanup(func() { gtronlog.SetDefault(prev) })
+	h := gtronlog.LogfmtHandlerWithLevel(io.Discard, gtronlog.LevelInfo)
+	gtronlog.SetDefault(gtronlog.NewLogger(h))
+
+	b.ReportAllocs()
+	for b.Loop() {
+		traceBlockApplied(nil, nil, 0)
+	}
+}
 
 // TestInsertBlock_PhaseTimings verifies that applyBlock emits a Trace-level
 // "Block applied" record with the seven phase-timing keys defined in the

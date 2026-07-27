@@ -113,6 +113,33 @@ func (s *applyStats) mark(phase *time.Duration) {
 	s.last = now
 }
 
+func traceBlockApplied(block *types.Block, stats *applyStats, total time.Duration) {
+	if !log.TraceEnabled() {
+		return
+	}
+	log.Trace("Block applied",
+		"number", block.Number(),
+		"hash", block.Hash(),
+		"txs", len(block.Transactions()),
+		"validate", ethcommon.PrettyDuration(stats.Validate),
+		"execute", ethcommon.PrettyDuration(stats.Execute),
+		"maintenance", ethcommon.PrettyDuration(stats.Maintenance),
+		"stateCommit", ethcommon.PrettyDuration(stats.StateCommit),
+		"stateCommitKVCompute", ethcommon.PrettyDuration(stats.StateCommitDetail.KVCompute),
+		"stateCommitKVNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.KVNodeWrite),
+		"stateCommitDeferredKVItems", stats.StateCommitDetail.DeferredKVItems,
+		"stateCommitRebuiltKVItems", stats.StateCommitDetail.RebuiltKVItems,
+		"stateCommitAccountMarshal", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieMarshal),
+		"stateCommitAccountTrieWrite", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieWrite),
+		"stateCommitTrieCommit", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieCommit),
+		"stateCommitTrieNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.TrieNodeWrite+stats.StateCommitDetail.TrieNodeFlush),
+		"dpUpdate", ethcommon.PrettyDuration(stats.DPUpdate),
+		"persist", ethcommon.PrettyDuration(stats.Persist),
+		"hooks", ethcommon.PrettyDuration(stats.Hooks),
+		"total", ethcommon.PrettyDuration(total),
+	)
+}
+
 // BlockChain manages the canonical chain and provides block insertion.
 //
 // db vs chaindb split (freezer slice-2): every WRITE goes through bc.db
@@ -918,27 +945,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			return
 		}
 		total := time.Since(applyStart)
-		log.Trace("Block applied",
-			"number", block.Number(),
-			"hash", block.Hash(),
-			"txs", len(block.Transactions()),
-			"validate", ethcommon.PrettyDuration(stats.Validate),
-			"execute", ethcommon.PrettyDuration(stats.Execute),
-			"maintenance", ethcommon.PrettyDuration(stats.Maintenance),
-			"stateCommit", ethcommon.PrettyDuration(stats.StateCommit),
-			"stateCommitKVCompute", ethcommon.PrettyDuration(stats.StateCommitDetail.KVCompute),
-			"stateCommitKVNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.KVNodeWrite),
-			"stateCommitDeferredKVItems", stats.StateCommitDetail.DeferredKVItems,
-			"stateCommitRebuiltKVItems", stats.StateCommitDetail.RebuiltKVItems,
-			"stateCommitAccountMarshal", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieMarshal),
-			"stateCommitAccountTrieWrite", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieWrite),
-			"stateCommitTrieCommit", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieCommit),
-			"stateCommitTrieNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.TrieNodeWrite+stats.StateCommitDetail.TrieNodeFlush),
-			"dpUpdate", ethcommon.PrettyDuration(stats.DPUpdate),
-			"persist", ethcommon.PrettyDuration(stats.Persist),
-			"hooks", ethcommon.PrettyDuration(stats.Hooks),
-			"total", ethcommon.PrettyDuration(total),
-		)
+		traceBlockApplied(block, &stats, total)
 		log.Debug("Block applied",
 			"number", block.Number(),
 			"txs", len(block.Transactions()),
