@@ -248,6 +248,20 @@ func (s *v2Store) find(kind string, number uint64) (*v2SegmentReader, bool) {
 }
 
 func (s *v2Store) read(kind string, number uint64) ([]byte, error) {
+	data, err := s.readNoCopy(kind, number)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), data...), nil
+}
+
+// readNoCopy returns an immutable view into the decoded-frame cache. The
+// returned slice keeps its backing frame alive even if the LRU subsequently
+// evicts the frame object. Callers must not mutate it; ordinary Ancient calls
+// retain read's defensive copy, while stored-block replay uses this narrower
+// lifetime to decode an already-archived block without allocating a second
+// full-block wire buffer.
+func (s *v2Store) readNoCopy(kind string, number uint64) ([]byte, error) {
 	segment, ok := s.find(kind, number)
 	if !ok {
 		return nil, errOutOfBounds
@@ -263,7 +277,7 @@ func (s *v2Store) read(kind string, number uint64) ([]byte, error) {
 		return nil, errOutOfBounds
 	}
 	bounds := frame.records[ordinal]
-	return append([]byte(nil), frame.data[bounds.start:bounds.end]...), nil
+	return frame.data[bounds.start:bounds.end:bounds.end], nil
 }
 
 func (s *v2Store) readRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {

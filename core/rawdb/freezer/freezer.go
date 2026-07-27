@@ -245,6 +245,34 @@ func (f *Freezer) Ancient(kind string, number uint64) ([]byte, error) {
 	return nil, errUnknownTable
 }
 
+// AncientNoCopy returns an immutable ancient value without the V2 reader's
+// usual per-record defensive copy. V2 values may share a decoded frame backing
+// allocation; callers must neither mutate nor retain the bytes after their
+// synchronous decode. The V1 fallback already returns caller-owned storage but
+// follows the same immutable contract. This deliberately stays outside the
+// general AncientReader interface so ordinary accessors keep defensive-copy
+// semantics.
+func (f *Freezer) AncientNoCopy(kind string, number uint64) ([]byte, error) {
+	if table := f.tables[kind]; table != nil {
+		f.v2Mu.RLock()
+		store := f.v2
+		if store != nil && store.has(kind, number) {
+			data, err := store.readNoCopy(kind, number)
+			f.v2Mu.RUnlock()
+			if err == nil {
+				return data, nil
+			}
+			if !table.has(number) {
+				return nil, err
+			}
+		} else {
+			f.v2Mu.RUnlock()
+		}
+		return table.Retrieve(number)
+	}
+	return nil, errUnknownTable
+}
+
 // AncientRange retrieves multiple items in sequence, starting from the index 'start'.
 // It will return
 //   - at most 'count' items,

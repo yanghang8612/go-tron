@@ -132,6 +132,21 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 // Reusing it avoids marshaling the same block again in the durable publish
 // tail. block remains the source of metadata indexes and must match blockData.
 func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockData []byte, stateRoot common.Hash, infos []*corepb.TransactionInfo) error {
+	return writeBlockMetadataBatchEncoded(db, block, blockData, stateRoot, infos, true)
+}
+
+// WriteStoredReplayBlockMetadataBatch rebuilds the mutable metadata removed by
+// ResetMutableState without rewriting the canonical block body. Stored replay
+// can only start after ReadBlock has proven the body exists in the preserved
+// hot/freezer chain store; writing that often-large immutable row again adds WAL,
+// memtable, and compaction traffic but cannot change replay state. The block-hash
+// index is still refreshed because it is tiny and repairs legacy/incomplete
+// indexes at negligible cost.
+func WriteStoredReplayBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot common.Hash, infos []*corepb.TransactionInfo) error {
+	return writeBlockMetadataBatchEncoded(db, block, nil, stateRoot, infos, false)
+}
+
+func writeBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockData []byte, stateRoot common.Hash, infos []*corepb.TransactionInfo, includeBlockBody bool) error {
 	if db == nil || block == nil {
 		return fmt.Errorf("write block metadata: nil database or block")
 	}
@@ -145,12 +160,14 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	ref := taposRefBytes(blockNum)
 
 	keyBytes := len(blockStateRootPrefix) + len(blockHash) +
-		len(blockPrefix) + len(numberValue) +
 		len(blockHashPrefix) + len(blockHash) +
 		len(blockNumberHashPrefix) + len(ringSlot) +
 		len(taposPrefix) + len(ref) +
 		len(txInfoBlockPrefix) + len(numberValue) +
 		len(txs)*(len(txPrefix)+common.HashLength)
+	if includeBlockBody {
+		keyBytes += len(blockPrefix) + len(numberValue)
+	}
 	// Keys, transaction-location values, and slice descriptors are needed only
 	// until the batch has copied them. Reuse one scratch object across blocks so
 	// the durable metadata tail does not create four short-lived heap objects per
@@ -170,9 +187,11 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	}
 
 	rows := scratch.rows
+	rows = append(rows, blockMetadataRow{key: metadataKey(blockStateRootPrefix, blockHash[:]), value: stateRoot[:]})
+	if includeBlockBody {
+		rows = append(rows, blockMetadataRow{key: metadataKey(blockPrefix, numberValue[:]), value: blockData})
+	}
 	rows = append(rows,
-		blockMetadataRow{key: metadataKey(blockStateRootPrefix, blockHash[:]), value: stateRoot[:]},
-		blockMetadataRow{key: metadataKey(blockPrefix, numberValue[:]), value: blockData},
 		blockMetadataRow{key: metadataKey(blockHashPrefix, blockHash[:]), value: numberValue[:]},
 		blockMetadataRow{key: metadataKey(blockNumberHashPrefix, ringSlot[:]), value: blockHash[:]},
 		blockMetadataRow{key: metadataKey(taposPrefix, ref[:]), value: blockHash[8:16]},

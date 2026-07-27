@@ -153,6 +153,53 @@ func TestWriteBlockMetadataBatchReservesPebbleScratchAndPreservesRows(t *testing
 	}
 }
 
+func TestWriteStoredReplayBlockMetadataBatchPreservesExistingBody(t *testing.T) {
+	pb := newBlockProto(23, 69_000)
+	pb.Transactions = []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: 3}}}
+	block := types.NewBlockFromPB(pb)
+	tx := block.Transactions()[0]
+	txHash := tx.Hash()
+	info := &corepb.TransactionInfo{
+		Id:             append([]byte(nil), txHash[:]...),
+		BlockNumber:    int64(block.Number()),
+		BlockTimeStamp: 69_000,
+		Fee:            123,
+	}
+	disk := NewMemoryDatabase()
+	preservedBody := []byte("already-archived-canonical-body")
+	if err := disk.Put(blockKey(block.Number()), preservedBody); err != nil {
+		t.Fatal(err)
+	}
+	root := common.Hash{0xdd, 0xee}
+	probe := &metadataBatchProbe{KeyValueStore: disk}
+	if err := WriteStoredReplayBlockMetadataBatch(probe, block, root, []*corepb.TransactionInfo{info}); err != nil {
+		t.Fatal(err)
+	}
+	gotBody, err := disk.Get(blockKey(block.Number()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotBody, preservedBody) {
+		t.Fatalf("stored replay rewrote preserved body: got %q want %q", gotBody, preservedBody)
+	}
+	if probe.hint != probe.actual+metadataBatchRecordSlack {
+		t.Fatalf("replay batch size hint = %d, want encoded %d + scratch %d", probe.hint, probe.actual, metadataBatchRecordSlack)
+	}
+	chainDB := NewChainDB(disk, NoopAncient{})
+	if got := ReadBlockStateRoot(chainDB, block.Hash()); got != root {
+		t.Fatalf("state root = %x, want %x", got, root)
+	}
+	if got := ReadTransactionInfo(chainDB, txHash[:]); got == nil || got.Fee != info.Fee {
+		t.Fatalf("transaction info = %+v, want fee %d", got, info.Fee)
+	}
+	if got := ReadTransactionIndex(chainDB, txHash[:]); got == nil || *got != block.Number() {
+		t.Fatalf("transaction index = %v, want %d", got, block.Number())
+	}
+	if got, ok := ReadBlockHash(chainDB, block.Number()); !ok || got != block.Hash() {
+		t.Fatalf("block hash index = %x,%v want %x,true", got, ok, block.Hash())
+	}
+}
+
 func TestWriteBlockMetadataBatchInfoArenaGrowthPreservesRows(t *testing.T) {
 	const txCount = 96
 	pb := newBlockProto(22, 66_000)

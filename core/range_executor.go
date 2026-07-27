@@ -24,6 +24,10 @@ type canonicalBlockExecution struct {
 	// parent-linkage and parent-state-root reads. Nil falls back to
 	// bc.CurrentBlock() for callers that do not plan a range.
 	parent *types.Block
+	// storedReplay means the immutable canonical block body already exists in
+	// the preserved hot/freezer chain store. The apply and metadata tails rebuild
+	// reset-derived rows but must not rewrite that large body.
+	storedReplay bool
 	// parentDynProps transfers ownership of the previous block's finalized
 	// dynamic properties into this block under async commit (decision-b), so
 	// execution never reads the lazily-published dynPropsCache or deep-copies the
@@ -183,6 +187,7 @@ func (p *canonicalBlockExecution) FlushLatestUpTo(cutoff int64) error {
 type canonicalRangeExecutor struct {
 	bc                *BlockChain
 	allowSharedCommit bool
+	storedReplay      bool
 	state             *state.StateDB
 	commit            *state.CommitScope
 	txRanges          *stateTxRangeAllocator
@@ -266,6 +271,7 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		txRange:         plannedTxRange,
 		pipeline:        newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash()),
 		parent:          current,
+		storedReplay:    e.storedReplay,
 		txInfoBatch:     e.txInfoBatches.acquire(),
 		txInfoBatchPool: e.txInfoBatches,
 	}

@@ -65,7 +65,7 @@ func (bc *BlockChain) ReplayStoredBlocksToHeight(height uint64, progressFn func(
 		}
 		blocks := make([]*types.Block, 0, end-start+1)
 		for n := start; n <= end; n++ {
-			block := rawdb.ReadBlockReusable(bc.chaindb, n)
+			block := rawdb.ReadStoredBlockForReplay(bc.chaindb, n)
 			if block == nil {
 				return fmt.Errorf("stored replay: block %d not found", n)
 			}
@@ -83,7 +83,7 @@ func (bc *BlockChain) ReplayStoredBlocksToHeight(height uint64, progressFn func(
 			}
 			blocks = append(blocks, block)
 		}
-		if err := bc.InsertBlocks(blocks); err != nil {
+		if err := bc.insertStoredBlocks(blocks); err != nil {
 			var rangeErr *InsertBlocksError
 			if errors.As(err, &rangeErr) && rangeErr.BlockNumber != 0 {
 				return fmt.Errorf("stored replay: apply block %d: %w", rangeErr.BlockNumber, err)
@@ -115,6 +115,21 @@ func (bc *BlockChain) ReplayStoredBlocksToHeight(height uint64, progressFn func(
 	}
 	emit("done", height)
 	return nil
+}
+
+// insertStoredBlocks applies an offline replay batch while marking its existing
+// canonical bodies as immutable preserved input. It mirrors InsertBlocks'
+// locking and error surface; only metadata persistence differs.
+func (bc *BlockChain) insertStoredBlocks(blocks []*types.Block) error {
+	if len(blocks) == 0 {
+		return nil
+	}
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+	if bc.closed.Load() {
+		return ErrBlockChainClosed
+	}
+	return bc.insertBlocksLockedMode(blocks, true)
 }
 
 // RestartSyncFromHeight rewinds the local materialized state to height and

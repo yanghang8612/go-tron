@@ -724,6 +724,14 @@ func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
 // insertBlocksLocked applies a contiguous range through insertBlockLocked.
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
+	return bc.insertBlocksLockedMode(blocks, false)
+}
+
+// insertBlocksLockedMode is insertBlocksLocked plus the offline stored-replay
+// policy. Stored replay rebuilds mutable state from canonical bodies that
+// ResetMutableState deliberately preserved, so it can skip staging and
+// durably rewriting those bodies. Callers must hold bc.chainmu.
+func (bc *BlockChain) insertBlocksLockedMode(blocks []*types.Block, storedReplay bool) (err error) {
 	// Parallel signature pre-verification: start every tx's sender recovery and
 	// every block's witness-signature recovery, then overlap later-block jobs with
 	// ordered state execution. Pure cache warming — the serial path (envelope
@@ -739,6 +747,7 @@ func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
 	defer sigPrewarm.Wait()
 
 	executor := newCanonicalRangeExecutor(bc, true)
+	executor.storedReplay = storedReplay
 	if bc.asyncCommit {
 		// Async commit: settle the range at its boundary in one ordered defer so
 		// the persistent state matches the synchronous path exactly. The
@@ -1397,15 +1406,27 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// serves the parent hash — Nile 10,552,292 stalled exactly here (OneSwap
 	// derives limit-order ids from blockhash(block.number-1) ^ tx.origin, so
 	// the zero hash silently diverged the order book at placement). Layered
-	// staging keeps the row fork-rewindable, like the TAPOS ref above. Keep this
-	// one immutable encoding for the durable metadata tail as well: the buffer
-	// takes a read-only alias instead of copying it, and neither side mutates it.
-	blockData, err := block.MarshalReusable()
-	if err != nil {
-		return fmt.Errorf("marshal staged block body: %w", err)
-	}
-	if err := rawdb.WriteBlockEncoded(bc.buffer, block, blockData); err != nil {
-		return fmt.Errorf("stage block body: %w", err)
+	// staging keeps the row fork-rewindable, like the TAPOS ref above. Normal
+	// imports keep one immutable encoding for the durable metadata tail as well:
+	// the buffer takes a read-only alias instead of copying it, and neither side
+	// mutates it. Offline stored replay already has the body durably preserved and
+	// stages only the indexes needed by subsequent execution.
+	var blockData []byte
+	if plan.storedReplay {
+		// ResetMutableState preserves canonical block bodies. Rebuild only the
+		// indexes needed by subsequent execution; replay's durable metadata tail
+		// likewise omits the already-stored body.
+		if err := rawdb.WriteBlockIndexes(bc.buffer, block); err != nil {
+			return fmt.Errorf("stage stored block indexes: %w", err)
+		}
+	} else {
+		blockData, err = block.MarshalReusable()
+		if err != nil {
+			return fmt.Errorf("marshal staged block body: %w", err)
+		}
+		if err := rawdb.WriteBlockEncoded(bc.buffer, block, blockData); err != nil {
+			return fmt.Errorf("stage block body: %w", err)
+		}
 	}
 	if n := len(block.Transactions()); n > 0 {
 		count := rawdb.ReadTotalTransactionCount(bc.buffer)
@@ -1485,7 +1506,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos); err != nil {
+	if err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos, plan.storedReplay); err != nil {
 		return err
 	}
 	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
@@ -1596,10 +1617,13 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 	}, nil
 }
 
-func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo) error {
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, storedReplay bool) error {
 	// The root is persisted out-of-band — we do NOT mutate
 	// `block.AccountStateRoot()` because the block proto's content must
 	// round-trip byte-identical to what the wire delivered.
+	if storedReplay {
+		return rawdb.WriteStoredReplayBlockMetadataBatch(bc.db, block, stateRoot, txInfos)
+	}
 	return rawdb.WriteBlockMetadataBatchEncoded(bc.db, block, blockData, stateRoot, txInfos)
 }
 

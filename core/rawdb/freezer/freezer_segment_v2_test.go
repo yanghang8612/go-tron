@@ -179,6 +179,25 @@ func TestFreezerMigrateV2RoundTripResumeAndAppend(t *testing.T) {
 	if result.End != 128 || result.Segments != 2 || freezer.v2.coverage != 128 {
 		t.Fatalf("first result = %+v, coverage=%d", result, freezer.v2.coverage)
 	}
+	borrowed, err := freezer.AncientNoCopy("bodies", 3)
+	if err != nil {
+		t.Fatalf("borrow V2 body: %v", err)
+	}
+	segment, ok := freezer.v2.find("bodies", 3)
+	if !ok {
+		t.Fatal("borrowed V2 segment missing")
+	}
+	frame, err := freezer.v2.readFrame(segment, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds := frame.records[3]
+	if len(borrowed) == 0 || &borrowed[0] != &frame.data[bounds.start] {
+		t.Fatal("AncientNoCopy did not return the decoded-frame record view")
+	}
+	if cap(borrowed) != len(borrowed) || !bytes.Equal(borrowed, want["bodies"][3]) {
+		t.Fatalf("borrowed body len/cap/value = %d/%d/%x", len(borrowed), cap(borrowed), borrowed)
+	}
 	rangeBodies, err := freezer.AncientRange("bodies", 120, 16, 0)
 	if err != nil || len(rangeBodies) != 16 {
 		t.Fatalf("cross-tier range len=%d err=%v", len(rangeBodies), err)

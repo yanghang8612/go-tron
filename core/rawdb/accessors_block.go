@@ -31,7 +31,6 @@ func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 // same block.
 func WriteBlockEncoded(db ethdb.KeyValueWriter, block *types.Block, data []byte) error {
 	number := block.Number()
-	hash := block.Hash()
 	var num [8]byte
 	binary.BigEndian.PutUint64(num[:], number)
 	var err error
@@ -45,6 +44,21 @@ func WriteBlockEncoded(db ethdb.KeyValueWriter, block *types.Block, data []byte)
 	if err != nil {
 		return err
 	}
+	return WriteBlockIndexes(db, block)
+}
+
+// WriteBlockIndexes stages the immutable hash->number index and bounded recent
+// number->hash ring without rewriting the block body. Stored replay uses it so
+// the next block's BLOCKHASH lookup sees its parent through the buffer while the
+// already-preserved canonical body stays in the hot/freezer chain store.
+func WriteBlockIndexes(db ethdb.KeyValueWriter, block *types.Block) error {
+	if db == nil || block == nil {
+		return errors.New("write block indexes: nil database or block")
+	}
+	number := block.Number()
+	hash := block.Hash()
+	var num [8]byte
+	binary.BigEndian.PutUint64(num[:], number)
 	if writer, ok := db.(keyPartsWriter); ok {
 		if err := writer.PutKeyParts(blockHashPrefix, hash[:], num[:]); err != nil {
 			return err
@@ -83,6 +97,32 @@ func ReadBlock(db *ChainDB, number uint64) *types.Block {
 // immediately after protobuf decoding.
 func ReadBlockReusable(db *ChainDB, number uint64) *types.Block {
 	return readBlock(db, number, true)
+}
+
+// ReadStoredBlockForReplay reads a canonical block for immediate offline
+// execution. V2 freezer frames are immutable and UnmarshalBlock owns every
+// decoded protobuf byte field, so the optional no-copy reader can lend the raw
+// record only for the synchronous decode and avoid the full-block copy that
+// ReadBlock normally returns. Hot-store and generic ancient readers retain the
+// existing owned-copy fallback.
+func ReadStoredBlockForReplay(db *ChainDB, number uint64) *types.Block {
+	if db != nil && db.AncientReader != nil {
+		if reader, ok := db.AncientReader.(interface {
+			AncientNoCopy(kind string, number uint64) ([]byte, error)
+		}); ok {
+			data, err := reader.AncientNoCopy(ancientBlocks, number)
+			if err == nil {
+				block, decodeErr := types.UnmarshalBlock(data)
+				if decodeErr == nil {
+					return block
+				}
+				return nil
+			}
+			// Match readAncient's graceful fallback for a miss or damaged freezer
+			// data: the hot row may still provide a healthy canonical copy.
+		}
+	}
+	return readBlock(db, number, false)
 }
 
 func readBlock(db *ChainDB, number uint64, reusable bool) *types.Block {
