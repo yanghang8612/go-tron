@@ -42,7 +42,7 @@ const domainStateReorgWindow uint64 = 128
 
 const round141StoredReplayTarget uint64 = 19_349_383
 
-const round141StoredReplayCommitmentCacheMiB = 512
+const round141StoredReplayCommitmentCacheMiB = 1024
 
 var (
 	round141StoredReplayTargetHash = tcommon.HexToHash("0000000001273f87ac576e31a2705cc8cadfbdb983897c175e304414e7470b58")
