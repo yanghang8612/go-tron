@@ -20,6 +20,8 @@ var (
 	benchmarkKVEntries           []kvEntry
 	benchmarkKVLookupEntry       kvEntry
 	benchmarkKVLookupFound       bool
+	benchmarkPendingLookupValue  accountKVLatestPending
+	benchmarkPendingLookupFound  bool
 )
 
 func TestKVEntryArenaKeepsValuesStableAcrossChunksAndReset(t *testing.T) {
@@ -256,6 +258,38 @@ func BenchmarkAccountKVDirtyLookup(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		benchmarkKVLookupEntry, benchmarkKVLookupFound = lookupKVEntry(obj.kvDirty, kvdomains.ContractStorage, key)
+	}
+}
+
+func TestAccountKVLatestPendingLookupKeyDoesNotAllocate(t *testing.T) {
+	owner := testAddr(0x7d)
+	logicalKey := bytes.Repeat([]byte{0x42}, 48)
+	want := accountKVLatestPending{value: []byte("value"), number: 9}
+	pending := map[accountKVLatestPendingMapKey]accountKVLatestPending{
+		accountKVLatestPendingKey(owner, 7, kvdomains.SystemReward, logicalKey): want,
+	}
+	lookup := func() {
+		benchmarkPendingLookupValue, benchmarkPendingLookupFound = pending[accountKVLatestPendingLookupKey(owner, 7, kvdomains.SystemReward, logicalKey)]
+	}
+	lookup()
+	if !benchmarkPendingLookupFound || !bytes.Equal(benchmarkPendingLookupValue.value, want.value) {
+		t.Fatal("borrowed pending key did not match the owned map key")
+	}
+	if allocs := testing.AllocsPerRun(1000, lookup); allocs != 0 {
+		t.Fatalf("pending lookup allocated %.2f objects, want zero", allocs)
+	}
+}
+
+func BenchmarkAccountKVLatestPendingLookup(b *testing.B) {
+	owner := testAddr(0x7e)
+	logicalKey := bytes.Repeat([]byte{0x24}, 48)
+	pending := map[accountKVLatestPendingMapKey]accountKVLatestPending{
+		accountKVLatestPendingKey(owner, 7, kvdomains.SystemReward, logicalKey): {value: []byte("value")},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkPendingLookupValue, benchmarkPendingLookupFound = pending[accountKVLatestPendingLookupKey(owner, 7, kvdomains.SystemReward, logicalKey)]
 	}
 }
 

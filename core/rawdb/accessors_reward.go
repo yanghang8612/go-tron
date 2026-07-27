@@ -146,20 +146,46 @@ func CycleRewardStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "reward")
 }
 
+// AppendCycleRewardStateKey appends CycleRewardStateKey to dst. It is the
+// allocation-free form used by execution-confined StateDB scalar accessors.
+func AppendCycleRewardStateKey(dst []byte, cycle int64, addr []byte) []byte {
+	return appendDelegRewardKey(dst, cycle, addr, "reward")
+}
+
 func CycleVoteStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "vote")
+}
+
+// AppendCycleVoteStateKey appends CycleVoteStateKey to dst.
+func AppendCycleVoteStateKey(dst []byte, cycle int64, addr []byte) []byte {
+	return appendDelegRewardKey(dst, cycle, addr, "vote")
 }
 
 func WitnessVIStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "vi")
 }
 
+// AppendWitnessVIStateKey appends WitnessVIStateKey to dst.
+func AppendWitnessVIStateKey(dst []byte, cycle int64, addr []byte) []byte {
+	return appendDelegRewardKey(dst, cycle, addr, "vi")
+}
+
 func CycleBrokerageStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "brokerage")
 }
 
+// AppendCycleBrokerageStateKey appends CycleBrokerageStateKey to dst.
+func AppendCycleBrokerageStateKey(dst []byte, cycle int64, addr []byte) []byte {
+	return appendDelegRewardKey(dst, cycle, addr, "brokerage")
+}
+
 func CycleAccountVoteStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "account-vote")
+}
+
+// AppendCycleAccountVoteStateKey appends CycleAccountVoteStateKey to dst.
+func AppendCycleAccountVoteStateKey(dst []byte, cycle int64, addr []byte) []byte {
+	return appendDelegRewardKey(dst, cycle, addr, "account-vote")
 }
 
 // ---- voter beginCycle / endCycle cursors -------------------------------

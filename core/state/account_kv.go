@@ -926,7 +926,7 @@ func (w *accountKVLatestBatch) readKVGeneration(owner tcommon.Address) (uint64, 
 
 func (w *accountKVLatestBatch) readLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
 	if w != nil {
-		if pending, ok := w.pending[accountKVLatestPendingKey(owner, generation, domain, logicalKey)]; ok {
+		if pending, ok := w.pending[accountKVLatestPendingLookupKey(owner, generation, domain, logicalKey)]; ok {
 			if pending.deleted {
 				return nil, false, nil
 			}
@@ -944,7 +944,7 @@ func (w *accountKVLatestBatch) readLatest(owner tcommon.Address, generation uint
 // immutable; generic stores fall back to their ordinary owned read.
 func (w *accountKVLatestBatch) readLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
 	if w != nil {
-		if pending, ok := w.pending[accountKVLatestPendingKey(owner, generation, domain, logicalKey)]; ok {
+		if pending, ok := w.pending[accountKVLatestPendingLookupKey(owner, generation, domain, logicalKey)]; ok {
 			if pending.deleted {
 				return nil, false, nil
 			}
@@ -1118,6 +1118,19 @@ func accountKVLatestPendingKey(owner tcommon.Address, generation uint64, domain 
 		generation: generation,
 		domain:     domain,
 		logicalKey: string(logicalKey),
+	}
+}
+
+// accountKVLatestPendingLookupKey borrows logicalKey only for the duration of
+// a synchronous map lookup. Map hashing/comparison does not retain its string
+// backing, so the hot latest-state read path avoids allocating an owned string.
+// Inserts must continue to use accountKVLatestPendingKey or its Owned variant.
+func accountKVLatestPendingLookupKey(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) accountKVLatestPendingMapKey {
+	return accountKVLatestPendingMapKey{
+		owner:      owner.AccountID(),
+		generation: generation,
+		domain:     domain,
+		logicalKey: borrowedBytesString(logicalKey),
 	}
 }
 

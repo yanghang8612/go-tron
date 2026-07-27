@@ -59,6 +59,11 @@ type StateDB struct {
 	trc10TokenKeyScratch    [20]byte
 	assetIDKeyScratch       [9]byte
 	accountUint32KeyScratch [4]byte
+	// Standard cycle reward keys are at most 46 bytes (dl- + cycle +
+	// separators + a 21-byte address + account-vote). The public APIs still
+	// accept arbitrary address slices; append grows beyond this scratch when
+	// necessary without changing key bytes.
+	delegRewardKeyScratch [64]byte
 
 	// lastStateObject is a single-entry lookup cache for the account map. TVM
 	// execution commonly performs long runs of SLOAD/SSTORE and account queries

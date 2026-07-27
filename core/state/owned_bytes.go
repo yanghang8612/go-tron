@@ -12,6 +12,16 @@ func ownedBytesString(value []byte) string {
 	return unsafe.String(unsafe.SliceData(value), len(value))
 }
 
+// borrowedBytesString is the lookup-only counterpart of ownedBytesString.
+// The returned string may be used only while value remains alive and
+// immutable; in particular it must never be inserted into a map or retained.
+func borrowedBytesString(value []byte) string {
+	if len(value) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(value), len(value))
+}
+
 // ownedStringBytes exposes an immutable string as bytes without allocating.
 // The returned slice must never be mutated. Retaining it keeps the string's
 // backing allocation reachable.

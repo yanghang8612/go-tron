@@ -8,6 +8,31 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 )
 
+func TestAppendCycleStateKeysMatchAllocatingKeys(t *testing.T) {
+	addr := append([]byte{0x41}, bytes.Repeat([]byte{0x7a}, 20)...)
+	prefix := []byte{0xaa, 0xbb}
+	tests := []struct {
+		name   string
+		append func([]byte, int64, []byte) []byte
+		want   func(int64, []byte) []byte
+	}{
+		{name: "reward", append: AppendCycleRewardStateKey, want: CycleRewardStateKey},
+		{name: "vote", append: AppendCycleVoteStateKey, want: CycleVoteStateKey},
+		{name: "vi", append: AppendWitnessVIStateKey, want: WitnessVIStateKey},
+		{name: "brokerage", append: AppendCycleBrokerageStateKey, want: CycleBrokerageStateKey},
+		{name: "account vote", append: AppendCycleAccountVoteStateKey, want: CycleAccountVoteStateKey},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.append(append([]byte(nil), prefix...), -7, addr)
+			want := append(append([]byte(nil), prefix...), test.want(-7, addr)...)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("appended key=%x want=%x", got, want)
+			}
+		})
+	}
+}
+
 func TestEncodeJavaNonNegativeBigInteger(t *testing.T) {
 	tests := []struct {
 		name  string

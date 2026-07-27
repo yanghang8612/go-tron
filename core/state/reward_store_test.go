@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math/big"
 	"testing"
 
@@ -10,6 +11,8 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
+
+var benchmarkCycleReward int64
 
 func TestRewardStoreDefaults(t *testing.T) {
 	statedb := newTestStateDB(t)
@@ -36,6 +39,47 @@ func TestRewardStoreDefaults(t *testing.T) {
 	if got := statedb.ReadEndCycle(addr); got != rawdb.RewardRemark {
 		t.Fatalf("default end cycle: got %d, want %d", got, rawdb.RewardRemark)
 	}
+}
+
+func TestReadCycleRewardDirtyScalarDoesNotAllocate(t *testing.T) {
+	statedb := newTestStateDB(t)
+	addr := testAddr(0x49).Bytes()
+	if err := statedb.WriteCycleReward(7, addr, 123); err != nil {
+		t.Fatal(err)
+	}
+	read := func() {
+		benchmarkCycleReward = statedb.ReadCycleReward(7, addr)
+	}
+	read()
+	if benchmarkCycleReward != 123 {
+		t.Fatalf("reward=%d want=123", benchmarkCycleReward)
+	}
+	if allocs := testing.AllocsPerRun(1000, read); allocs != 0 {
+		t.Fatalf("dirty scalar reward read allocated %.2f objects, want zero", allocs)
+	}
+}
+
+func BenchmarkReadCycleRewardDirtyScalar(b *testing.B) {
+	statedb := newTestStateDB(b)
+	addr := testAddr(0x4a).Bytes()
+	if err := statedb.WriteCycleReward(7, addr, 123); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("allocating-owned-baseline", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			key := rawdb.CycleRewardStateKey(7, addr)
+			if raw, ok := statedb.readSystemReward(key); ok && len(raw) == 8 {
+				benchmarkCycleReward = int64(binary.BigEndian.Uint64(raw))
+			}
+		}
+	})
+	b.Run("scratch-borrowed", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			benchmarkCycleReward = statedb.ReadCycleReward(7, addr)
+		}
+	})
 }
 
 func TestRewardStoreRoundTripAcrossRoot(t *testing.T) {
@@ -97,8 +141,13 @@ func TestRewardStoreRoundTripAcrossRoot(t *testing.T) {
 	if got := reopened.ReadCycleBrokerage(8, addr); got != 33 {
 		t.Fatalf("brokerage: got %d, want 33", got)
 	}
+	accountVote := reopened.ReadCycleAccountVote(8, addr)
+	if !bytes.Equal(accountVote, snap) {
+		t.Fatalf("account vote: got %x, want %x", accountVote, snap)
+	}
+	accountVote[0] ^= 0xff
 	if got := reopened.ReadCycleAccountVote(8, addr); !bytes.Equal(got, snap) {
-		t.Fatalf("account vote: got %x, want %x", got, snap)
+		t.Fatalf("account vote read exposed internal storage: got %x want=%x", got, snap)
 	}
 	if got := reopened.ReadBeginCycle(addr); got != 8 {
 		t.Fatalf("begin cycle: got %d, want 8", got)

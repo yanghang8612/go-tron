@@ -544,7 +544,15 @@ func brokerageKey(addr []byte) []byte {
 // cycle/address/suffix separation is preserved).
 func delegRewardKey(cycle int64, addr []byte, suffix string) []byte {
 	k := make([]byte, 0, len(delegRewardPrefix)+8+1+len(addr)+1+len(suffix))
-	k = append(k, delegRewardPrefix...)
+	return appendDelegRewardKey(k, cycle, addr, suffix)
+}
+
+// appendDelegRewardKey appends a per-cycle-per-witness key to dst. StateDB's
+// execution-confined scalar reward accessors pass reusable scratch storage so
+// their synchronous account-KV reads do not allocate a short-lived logical
+// key. Callers that retain the result must supply owned storage.
+func appendDelegRewardKey(dst []byte, cycle int64, addr []byte, suffix string) []byte {
+	k := append(dst, delegRewardPrefix...)
 	var cb [8]byte
 	binary.BigEndian.PutUint64(cb[:], uint64(cycle))
 	k = append(k, cb[:]...)
