@@ -973,7 +973,7 @@ func (b *Buffer) promoteBaseReadCacheLayers(layers []*layer) {
 		queuedValueSize := 0
 		queuedEncodedSize := pebbleBatchHeaderSize
 		for end < len(layers) {
-			valueSize, encodedSize := layerWriteStats(layers[end])
+			valueSize, encodedSize, _ := layerWriteStats(layers[end])
 			if end > start && (queuedValueSize+valueSize > maxFlushBatchValueSize ||
 				queuedEncodedSize+encodedSize > maxFlushBatchEncodedSize) {
 				break

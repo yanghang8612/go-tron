@@ -33,6 +33,7 @@ import (
 	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
 )
 
@@ -41,6 +42,13 @@ import (
 // missing keys (memorydb / pebble both return non-nil errors for misses;
 // callers normally check err != nil rather than identity).
 var ErrNotFound = errors.New("blockbuffer: not found")
+
+var (
+	flushInputOpsCounter  = metrics.NewRegisteredCounter("blockbuffer/flush/input/ops", nil)
+	flushOutputOpsCounter = metrics.NewRegisteredCounter("blockbuffer/flush/output/ops", nil)
+	flushLayersCounter    = metrics.NewRegisteredCounter("blockbuffer/flush/layers", nil)
+	flushGroupsCounter    = metrics.NewRegisteredCounter("blockbuffer/flush/groups", nil)
+)
 
 // layer is a single applyBlock's worth of buffered mutations.
 //
@@ -1850,7 +1858,7 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 	if batcher, ok := w.(ethdb.Batcher); ok {
-		_, encodedSize := layerWriteStats(l)
+		_, encodedSize, _ := layerWriteStats(l)
 		batch := batcher.NewBatchWithSize(pebbleBatchHeaderSize + encodedSize + pebbleBatchRecordSlack)
 		defer closeBatch(batch)
 		if err := writeLayerSorted(l, batch); err != nil {
@@ -1879,8 +1887,8 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 
 	sizes := make([]layerBatchSize, len(layers))
 	for i, l := range layers {
-		valueSize, encodedSize := layerWriteStats(l)
-		sizes[i] = layerBatchSize{value: valueSize, encoded: encodedSize}
+		valueSize, encodedSize, ops := layerWriteStats(l)
+		sizes[i] = layerBatchSize{value: valueSize, encoded: encodedSize, ops: ops}
 	}
 
 	flushed := 0
@@ -1888,6 +1896,7 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 		end := start
 		queuedValueSize := 0
 		queuedEncodedSize := pebbleBatchHeaderSize
+		queuedOps := 0
 		for end < len(layers) {
 			next := sizes[end]
 			if end > start && (queuedValueSize+next.value > maxFlushBatchValueSize ||
@@ -1896,6 +1905,7 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 			}
 			queuedValueSize += next.value
 			queuedEncodedSize += next.encoded
+			queuedOps += next.ops
 			end++
 			if queuedValueSize >= maxFlushBatchValueSize || queuedEncodedSize >= maxFlushBatchEncodedSize {
 				break
@@ -1939,6 +1949,14 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 			returnFlushMergedOps(merged)
 			return flushed, err
 		}
+		outputOps := queuedOps
+		if merged != nil {
+			outputOps = len(merged.ops)
+		}
+		flushInputOpsCounter.Inc(int64(queuedOps))
+		flushOutputOpsCounter.Inc(int64(outputOps))
+		flushLayersCounter.Inc(int64(end - start))
+		flushGroupsCounter.Inc(1)
 		closeBatch(batch)
 		returnFlushMergedOps(merged)
 		flushed += end - start
@@ -2069,7 +2087,7 @@ func writeLayerSorted(l *layer, w ethdb.KeyValueWriter) error {
 }
 
 func layerWriteSize(l *layer) int {
-	size, _ := layerWriteStats(l)
+	size, _, _ := layerWriteStats(l)
 	return size
 }
 
@@ -2087,6 +2105,7 @@ const (
 type layerBatchSize struct {
 	value   int
 	encoded int
+	ops     int
 }
 
 // mergedLayerOp is the final operation for one physical key across a bounded
@@ -2229,24 +2248,26 @@ func writeMergedLayerOpsSorted(ops map[string]mergedLayerOp, w ethdb.KeyValueWri
 // encoded size plus Pebble's one-record temporary varint slack up front avoids
 // Batch.grow copying a megabyte-scale flush batch. The 12-byte batch header and
 // scratch slack are added once by the caller.
-func layerWriteStats(l *layer) (valueSize, encodedSize int) {
+func layerWriteStats(l *layer) (valueSize, encodedSize, ops int) {
 	if l == nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	for i := range l.shards {
 		s := &l.shards[i]
 		s.mu.RLock()
 		for k, v := range s.writes {
+			ops++
 			valueSize += len(k) + len(v)
 			encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(v)) + len(v)
 		}
 		for k := range s.deletes {
+			ops++
 			valueSize += len(k)
 			encodedSize += 1 + uvarintSize(len(k)) + len(k)
 		}
 		s.mu.RUnlock()
 	}
-	return valueSize, encodedSize
+	return valueSize, encodedSize, ops
 }
 
 func uvarintSize(v int) int {

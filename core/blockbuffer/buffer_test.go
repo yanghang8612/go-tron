@@ -630,7 +630,7 @@ func BenchmarkPebbleFlushBatchSizing(b *testing.B) {
 		{name: "deletes", layer: deletes},
 	} {
 		b.Run(workload.name, func(b *testing.B) {
-			_, encodedSize := layerWriteStats(workload.layer)
+			_, encodedSize, _ := layerWriteStats(workload.layer)
 			exactSize := pebbleBatchHeaderSize + encodedSize
 			for _, sizing := range []struct {
 				name string
@@ -668,7 +668,7 @@ func BenchmarkPebbleFlushKeyOrder(b *testing.B) {
 	for i := 0; i < keyCount; i++ {
 		owner.putIntoString(layer, fmt.Sprintf("state-%08x-%08x", i*2654435761, i), value)
 	}
-	_, encodedSize := layerWriteStats(layer)
+	_, encodedSize, _ := layerWriteStats(layer)
 
 	for _, ordered := range []bool{false, true} {
 		name := "map-order"
@@ -714,12 +714,48 @@ func BenchmarkFlushLayersCoalesced(b *testing.B) {
 	}
 }
 
+func TestFlushLayersRecordsCoalescingMetrics(t *testing.T) {
+	owner := new(Buffer)
+	first := newLayer(bufHash(1), 1)
+	owner.putIntoString(first, "hot", []byte("old"))
+	owner.putIntoString(first, "first-only", []byte("value"))
+	owner.deleteIntoString(first, "deleted")
+	second := newLayer(bufHash(2), 2)
+	owner.putIntoString(second, "hot", []byte("new"))
+	owner.putIntoString(second, "second-only", []byte("value"))
+
+	inputBefore := flushInputOpsCounter.Snapshot().Count()
+	outputBefore := flushOutputOpsCounter.Snapshot().Count()
+	layersBefore := flushLayersCounter.Snapshot().Count()
+	groupsBefore := flushGroupsCounter.Snapshot().Count()
+
+	flushed, err := flushLayers([]*layer{first, second}, rawdb.NewMemoryDatabase())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flushed != 2 {
+		t.Fatalf("flushed = %d, want 2", flushed)
+	}
+	if got := flushInputOpsCounter.Snapshot().Count() - inputBefore; got != 5 {
+		t.Fatalf("input ops delta = %d, want 5", got)
+	}
+	if got := flushOutputOpsCounter.Snapshot().Count() - outputBefore; got != 4 {
+		t.Fatalf("output ops delta = %d, want 4", got)
+	}
+	if got := flushLayersCounter.Snapshot().Count() - layersBefore; got != 2 {
+		t.Fatalf("layers delta = %d, want 2", got)
+	}
+	if got := flushGroupsCounter.Snapshot().Count() - groupsBefore; got != 1 {
+		t.Fatalf("groups delta = %d, want 1", got)
+	}
+}
+
 func BenchmarkFlushLayersUncoalescedReference(b *testing.B) {
 	layers := benchmarkFlushLayers()
 	dst := rawdb.NewMemoryDatabase()
 	encodedSize := pebbleBatchHeaderSize
 	for _, layer := range layers {
-		_, encoded := layerWriteStats(layer)
+		_, encoded, _ := layerWriteStats(layer)
 		encodedSize += encoded
 	}
 	b.ReportAllocs()
