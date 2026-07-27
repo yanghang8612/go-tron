@@ -8,20 +8,47 @@ import (
 
 // WriteStateCommitmentDomain stores one opaque commitment-domain row.
 func WriteStateCommitmentDomain(db ethdb.KeyValueWriter, logicalKey, value []byte) error {
-	return db.Put(stateCommitmentDomainKey(logicalKey), append([]byte(nil), value...))
+	ownedValue := append([]byte(nil), value...)
+	if writer, ok := db.(keyPartsWriter); ok {
+		return writer.PutKeyParts(stateCommitmentDomainPrefix, logicalKey, ownedValue)
+	}
+	return db.Put(stateCommitmentDomainKey(logicalKey), ownedValue)
 }
 
 // ReadStateCommitmentDomain loads one opaque commitment-domain row.
 func ReadStateCommitmentDomain(db ethdb.KeyValueReader, logicalKey []byte) ([]byte, bool, error) {
-	value, err := db.Get(stateCommitmentDomainKey(logicalKey))
-	if err != nil {
-		return nil, false, nil
+	value, ok, err := readStateCommitmentDomainNoCopy(db, logicalKey)
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	return append([]byte(nil), value...), true, nil
 }
 
+// readStateCommitmentDomainNoCopy is the immediate-consumption form used by
+// typed decoders that copy bytes into values before their next DB operation.
+// Capable layered readers join the schema prefix and logical suffix directly,
+// avoiding an intermediate physical-key allocation.
+func readStateCommitmentDomainNoCopy(db ethdb.KeyValueReader, logicalKey []byte) ([]byte, bool, error) {
+	var (
+		value []byte
+		err   error
+	)
+	if reader, ok := db.(cachedNoCopyKeyPartsReader); ok {
+		value, err = reader.GetNoCopyCachedKeyParts(stateCommitmentDomainPrefix, logicalKey)
+	} else {
+		value, err = db.Get(stateCommitmentDomainKey(logicalKey))
+	}
+	if err != nil {
+		return nil, false, nil
+	}
+	return value, true, nil
+}
+
 // DeleteStateCommitmentDomain deletes one opaque commitment-domain row.
 func DeleteStateCommitmentDomain(db ethdb.KeyValueWriter, logicalKey []byte) error {
+	if writer, ok := db.(keyPartsWriter); ok {
+		return writer.DeleteKeyParts(stateCommitmentDomainPrefix, logicalKey)
+	}
 	return db.Delete(stateCommitmentDomainKey(logicalKey))
 }
 

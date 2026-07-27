@@ -46,6 +46,37 @@ func TestStateCommitmentDomainDelete(t *testing.T) {
 	}
 }
 
+func TestStateCommitmentDomainUsesSplitKeyPaths(t *testing.T) {
+	logicalKey := []byte("root")
+	wantKey := stateCommitmentDomainKey(logicalKey)
+	w := new(keyPartsProbeWriter)
+	if err := WriteStateCommitmentDomain(w, logicalKey, []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if w.putCalls != 1 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, []byte("value")) {
+		t.Fatalf("split Put = calls %d key %x value %q, want 1/%x/value", w.putCalls, w.key, w.value, wantKey)
+	}
+	if err := DeleteStateCommitmentDomain(w, logicalKey); err != nil {
+		t.Fatal(err)
+	}
+	if w.deleteCalls != 1 || !bytes.Equal(w.key, wantKey) {
+		t.Fatalf("split Delete = calls %d key %x, want 1/%x", w.deleteCalls, w.key, wantKey)
+	}
+
+	db := NewMemoryDatabase()
+	if err := db.Put(wantKey, []byte("stored")); err != nil {
+		t.Fatal(err)
+	}
+	probe := &splitCachedNoCopyProbe{cachedNoCopyProbe: &cachedNoCopyProbe{KeyValueReader: db}}
+	got, ok, err := ReadStateCommitmentDomain(probe, logicalKey)
+	if err != nil || !ok || !bytes.Equal(got, []byte("stored")) {
+		t.Fatalf("split read = %q ok=%v err=%v", got, ok, err)
+	}
+	if probe.splitCalls != 1 || probe.getCalls != 0 || !bytes.Equal(probe.first, stateCommitmentDomainPrefix) || !bytes.Equal(probe.second, logicalKey) {
+		t.Fatalf("split read calls=%d fallback=%d key=%x/%x", probe.splitCalls, probe.getCalls, probe.first, probe.second)
+	}
+}
+
 func TestStateCommitmentDomainIterateLogicalPrefix(t *testing.T) {
 	db := NewMemoryDatabase()
 	mustWriteStateCommitmentDomain(t, db, []byte("acct/a"), []byte("1"))

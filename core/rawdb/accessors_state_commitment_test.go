@@ -1,11 +1,55 @@
 package rawdb
 
 import (
+	"bytes"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/common"
 )
+
+func TestLatestDomainCommitmentRootTransfersOwnedValue(t *testing.T) {
+	w := new(ownedKeyPartsProbeWriter)
+	want := common.Hash{0xaa, 0xbb}
+	if err := WriteLatestDomainCommitmentRoot(w, want); err != nil {
+		t.Fatal(err)
+	}
+	wantKey := stateCommitmentDomainKey(latestDomainCommitmentRootKey)
+	if w.ownedCalls != 1 || w.putCalls != 0 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, want[:]) {
+		t.Fatalf("owned root Put = owned %d regular %d key %x value %x, want 1/0/%x/%x",
+			w.ownedCalls, w.putCalls, w.key, w.value, wantKey, want[:])
+	}
+}
+
+type discardOwnedStateCommitmentWriter struct{ discardCommitmentWriter }
+
+func (discardOwnedStateCommitmentWriter) PutKeyPartsOwnedValue(_, _, _ []byte) error { return nil }
+
+func writeLatestDomainCommitmentRootLegacy(db discardCommitmentWriter, root common.Hash) error {
+	return db.Put(stateCommitmentDomainKey(latestDomainCommitmentRootKey), append([]byte(nil), root.Bytes()...))
+}
+
+func BenchmarkLatestDomainCommitmentRootWrite(b *testing.B) {
+	root := common.Hash{0xaa, 0xbb}
+	b.Run("LegacyJoinedCopy", func(b *testing.B) {
+		writer := discardCommitmentWriter{}
+		b.ReportAllocs()
+		for b.Loop() {
+			if err := writeLatestDomainCommitmentRootLegacy(writer, root); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("SplitOwned", func(b *testing.B) {
+		writer := discardOwnedStateCommitmentWriter{}
+		b.ReportAllocs()
+		for b.Loop() {
+			if err := WriteLatestDomainCommitmentRoot(writer, root); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
 
 func TestStateCommitmentCheckpointRoundTrip(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
