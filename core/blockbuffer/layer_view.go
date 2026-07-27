@@ -139,6 +139,14 @@ type commitmentParentReadContext struct {
 	cacheable bool
 	fn        func(value []byte, stable bool) error
 	callback  func(value []byte) error
+
+	// One fold worker exclusively owns each context, so these counters stay
+	// non-atomic on the read hot path. Close aggregates them into process metrics
+	// once after all sibling workers have joined.
+	overlayResolved uint64
+	cacheResolved   uint64
+	durableReads    uint64
+	durableHits     uint64
 }
 
 func newCommitmentParentReadContext() any {
@@ -166,6 +174,10 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.epoch = baseReadCacheEpoch{}
 		ctx.cacheable = false
 		ctx.fn = nil
+		ctx.overlayResolved = 0
+		ctx.cacheResolved = 0
+		ctx.durableReads = 0
+		ctx.durableHits = 0
 		commitmentParentReadContextPool.Put(ctx)
 		contexts[i] = nil
 	}
@@ -340,14 +352,18 @@ func (s *commitmentParentReadSession) ViewKeyParts(reader int, first, second []b
 }
 
 func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn func(value []byte, stable bool) error) (bool, error) {
+	ctx := s.readContexts[reader]
 	keyHash := layerBloomHashBytes(key)
 	if value, found, tomb := lookupLayersNewest(s.layers, key, keyHash); tomb {
+		ctx.overlayResolved++
 		return false, nil
 	} else if found {
+		ctx.overlayResolved++
 		return true, fn(value, true)
 	}
 	cached, present, cacheEpoch, cacheable, err := s.cache.viewAtVersion(key, s.cacheVersion, fn)
 	if cached {
+		ctx.cacheResolved++
 		return present, err
 	}
 	cursor := s.cursors[reader]
@@ -359,12 +375,15 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 		}
 		s.cursors[reader] = cursor
 	}
-	ctx := s.readContexts[reader]
 	ctx.key = key
 	ctx.epoch = cacheEpoch
 	ctx.cacheable = cacheable
 	ctx.fn = fn
+	ctx.durableReads++
 	found, err := cursor.View(key, ctx.callback)
+	if found {
+		ctx.durableHits++
+	}
 	ctx.key = nil
 	ctx.epoch = baseReadCacheEpoch{}
 	ctx.cacheable = false
@@ -394,6 +413,17 @@ func (s *commitmentParentReadSession) Close() error {
 	s.snapshot = nil
 	s.layers = nil
 	s.cache = nil
+	var overlayResolved, cacheResolved, durableReads, durableHits uint64
+	for _, ctx := range s.readContexts {
+		overlayResolved += ctx.overlayResolved
+		cacheResolved += ctx.cacheResolved
+		durableReads += ctx.durableReads
+		durableHits += ctx.durableHits
+	}
+	commitmentParentOverlayResolvedCounter.Inc(int64(overlayResolved))
+	commitmentParentCacheResolvedCounter.Inc(int64(cacheResolved))
+	commitmentParentDurableReadsCounter.Inc(int64(durableReads))
+	commitmentParentDurableHitsCounter.Inc(int64(durableHits))
 	returnCommitmentParentReadContexts(s.readContexts)
 	s.readContexts = nil
 	returnCommitmentParentKeyScratch(s.keyScratch)

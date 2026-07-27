@@ -63,6 +63,7 @@ func TestCommitmentParentReadSessionKeepsOverlayAndDurableCut(t *testing.T) {
 	defer disk.Close()
 	durablePrefix := []byte{1, 2}
 	overridePrefix := []byte{2, 3}
+	cachedPrefix := []byte{3, 4}
 	if err := rawdb.WriteCommitmentBranch(disk, durablePrefix, []byte("durable-before")); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +73,8 @@ func TestCommitmentParentReadSessionKeepsOverlayAndDurableCut(t *testing.T) {
 
 	buf := New(disk)
 	buf.SetBaseReadCacheSize(1<<20, rawdb.CommitmentBranchKeyPrefix)
+	cacheKey := append([]byte(rawdb.CommitmentBranchKeyPrefix), cachedPrefix...)
+	testBaseReadCacheSet(buf.baseReadCache, cacheKey, []byte("cached-before"))
 	buf.BeginBlock(bufHash(1), 1)
 	h1, _ := buf.NewestInflight()
 	if err := rawdb.WriteCommitmentBranch(buf.ViewLayer(h1), overridePrefix, []byte("override-layer")); err != nil {
@@ -86,7 +89,10 @@ func TestCommitmentParentReadSessionKeepsOverlayAndDurableCut(t *testing.T) {
 	if err != nil || session == nil {
 		t.Fatalf("NewCommitmentParentReadSession = (%T,%v)", session, err)
 	}
-	defer session.Close()
+	overlayBefore := commitmentParentOverlayResolvedCounter.Snapshot().Count()
+	cacheBefore := commitmentParentCacheResolvedCounter.Snapshot().Count()
+	durableReadsBefore := commitmentParentDurableReadsCounter.Snapshot().Count()
+	durableHitsBefore := commitmentParentDurableHitsCounter.Snapshot().Count()
 
 	// Move the captured overlay into the durable DB, then mutate a row that was
 	// already durable. The session must retain both sides of its original cut.
@@ -100,8 +106,26 @@ func TestCommitmentParentReadSessionKeepsOverlayAndDurableCut(t *testing.T) {
 	if got, found, stable := readSessionBranch(t, session, 2, overridePrefix); !found || !stable || !bytes.Equal(got, []byte("override-layer")) {
 		t.Fatalf("overlay = (%q,%v,stable=%v)", got, found, stable)
 	}
+	if got, found, stable := readSessionBranch(t, session, 3, cachedPrefix); !found || stable || !bytes.Equal(got, []byte("cached-before")) {
+		t.Fatalf("cache = (%q,%v,stable=%v)", got, found, stable)
+	}
 	if got, found, stable := readSessionBranch(t, session, 1, durablePrefix); !found || stable || !bytes.Equal(got, []byte("durable-before")) {
 		t.Fatalf("durable snapshot = (%q,%v,stable=%v)", got, found, stable)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := commitmentParentOverlayResolvedCounter.Snapshot().Count() - overlayBefore; got != 1 {
+		t.Fatalf("overlay resolved delta = %d, want 1", got)
+	}
+	if got := commitmentParentCacheResolvedCounter.Snapshot().Count() - cacheBefore; got != 1 {
+		t.Fatalf("cache resolved delta = %d, want 1", got)
+	}
+	if got := commitmentParentDurableReadsCounter.Snapshot().Count() - durableReadsBefore; got != 1 {
+		t.Fatalf("durable reads delta = %d, want 1", got)
+	}
+	if got := commitmentParentDurableHitsCounter.Snapshot().Count() - durableHitsBefore; got != 1 {
+		t.Fatalf("durable hits delta = %d, want 1", got)
 	}
 }
 

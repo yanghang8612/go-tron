@@ -44,11 +44,15 @@ import (
 var ErrNotFound = errors.New("blockbuffer: not found")
 
 var (
-	flushInputOpsCounter  = metrics.NewRegisteredCounter("blockbuffer/flush/input/ops", nil)
-	flushOutputOpsCounter = metrics.NewRegisteredCounter("blockbuffer/flush/output/ops", nil)
-	flushLayersCounter    = metrics.NewRegisteredCounter("blockbuffer/flush/layers", nil)
-	flushGroupsCounter    = metrics.NewRegisteredCounter("blockbuffer/flush/groups", nil)
-	flushCallsCounter     = metrics.NewRegisteredCounter("blockbuffer/flush/calls", nil)
+	flushInputOpsCounter                   = metrics.NewRegisteredCounter("blockbuffer/flush/input/ops", nil)
+	flushOutputOpsCounter                  = metrics.NewRegisteredCounter("blockbuffer/flush/output/ops", nil)
+	flushLayersCounter                     = metrics.NewRegisteredCounter("blockbuffer/flush/layers", nil)
+	flushGroupsCounter                     = metrics.NewRegisteredCounter("blockbuffer/flush/groups", nil)
+	flushCallsCounter                      = metrics.NewRegisteredCounter("blockbuffer/flush/calls", nil)
+	commitmentParentOverlayResolvedCounter = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/overlay/resolved", nil)
+	commitmentParentCacheResolvedCounter   = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/cache/resolved", nil)
+	commitmentParentDurableReadsCounter    = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable/reads", nil)
+	commitmentParentDurableHitsCounter     = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable/hits", nil)
 )
 
 // layer is a single applyBlock's worth of buffered mutations.
