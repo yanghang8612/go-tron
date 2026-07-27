@@ -22,7 +22,7 @@ type cycleRewardAccumulator struct {
 
 type cycleRewardAccumulatorSnapshot struct {
 	cycle   int64
-	rewards map[tcommon.Address]int64
+	rewards []rawdb.CycleRewardPendingEntry
 }
 
 type cycleRewardAccumulatorRollback struct {
@@ -181,12 +181,18 @@ func (a *cycleRewardAccumulator) journalAllRewards() {
 
 func (a *cycleRewardAccumulator) Snapshot() cycleRewardAccumulatorSnapshot {
 	if a == nil {
-		return cycleRewardAccumulatorSnapshot{rewards: make(map[tcommon.Address]int64)}
+		return cycleRewardAccumulatorSnapshot{}
 	}
-	return cycleRewardAccumulatorSnapshot{
+	snap := cycleRewardAccumulatorSnapshot{
 		cycle:   a.cycle,
-		rewards: copyCycleRewardMap(a.rewards),
+		rewards: make([]rawdb.CycleRewardPendingEntry, 0, len(a.rewards)),
 	}
+	for addr, amount := range a.rewards {
+		if amount != 0 {
+			snap.rewards = append(snap.rewards, rawdb.CycleRewardPendingEntry{Address: addr, Amount: amount})
+		}
+	}
+	return snap
 }
 
 func (a *cycleRewardAccumulator) FlushCycleToState(statedb *state.StateDB, cycle int64) error {
@@ -218,7 +224,7 @@ func (snap cycleRewardAccumulatorSnapshot) Write(writer ethdb.KeyValueWriter) er
 	if len(snap.rewards) == 0 {
 		return rawdb.DeleteCycleRewardPending(writer)
 	}
-	return rawdb.WriteCycleRewardPending(writer, snap.cycle, snap.rewards)
+	return rawdb.WriteCycleRewardPendingEntries(writer, snap.cycle, snap.rewards)
 }
 
 func (a *cycleRewardAccumulator) canTrackCycle(cycle int64) bool {

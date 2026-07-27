@@ -4,11 +4,19 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"sort"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 )
+
+// CycleRewardPendingEntry is the compact handoff form of one current-cycle
+// reward. Async commit snapshots use a slice of entries instead of cloning the
+// whole map and its buckets.
+type CycleRewardPendingEntry struct {
+	Address common.Address
+	Amount  int64
+}
 
 // ReadCycleRewardPending reads the flat current-cycle reward accumulator.
 func ReadCycleRewardPending(db ethdb.KeyValueReader) (int64, map[common.Address]int64, bool, error) {
@@ -42,27 +50,45 @@ func ReadCycleRewardPending(db ethdb.KeyValueReader) (int64, map[common.Address]
 
 // WriteCycleRewardPending overwrites the flat current-cycle reward accumulator.
 func WriteCycleRewardPending(db ethdb.KeyValueWriter, cycle int64, rewards map[common.Address]int64) error {
-	addrs := make([]common.Address, 0, len(rewards))
+	entries := make([]CycleRewardPendingEntry, 0, len(rewards))
 	for addr, amount := range rewards {
 		if amount != 0 {
-			addrs = append(addrs, addr)
+			entries = append(entries, CycleRewardPendingEntry{Address: addr, Amount: amount})
 		}
 	}
-	if len(addrs) == 0 {
+	return WriteCycleRewardPendingEntries(db, cycle, entries)
+}
+
+// WriteCycleRewardPendingEntries sorts and consumes a freshly captured entry
+// slice. The caller transfers the slice and must not read or mutate it after
+// this call. Layered writers can likewise retain the freshly encoded value
+// without a defensive copy.
+func WriteCycleRewardPendingEntries(db ethdb.KeyValueWriter, cycle int64, entries []CycleRewardPendingEntry) error {
+	kept := entries[:0]
+	for _, entry := range entries {
+		if entry.Amount != 0 {
+			kept = append(kept, entry)
+		}
+	}
+	entries = kept
+	if len(entries) == 0 {
 		return DeleteCycleRewardPending(db)
 	}
-	sort.Slice(addrs, func(i, j int) bool {
-		return bytes.Compare(addrs[i][:], addrs[j][:]) < 0
+	slices.SortFunc(entries, func(a, b CycleRewardPendingEntry) int {
+		return bytes.Compare(a.Address[:], b.Address[:])
 	})
-	buf := make([]byte, 12+len(addrs)*(common.AddressLength+8))
+	buf := make([]byte, 12+len(entries)*(common.AddressLength+8))
 	binary.BigEndian.PutUint64(buf[:8], uint64(cycle))
-	binary.BigEndian.PutUint32(buf[8:12], uint32(len(addrs)))
+	binary.BigEndian.PutUint32(buf[8:12], uint32(len(entries)))
 	off := 12
-	for _, addr := range addrs {
-		copy(buf[off:off+common.AddressLength], addr[:])
+	for _, entry := range entries {
+		copy(buf[off:off+common.AddressLength], entry.Address[:])
 		off += common.AddressLength
-		binary.BigEndian.PutUint64(buf[off:off+8], uint64(rewards[addr]))
+		binary.BigEndian.PutUint64(buf[off:off+8], uint64(entry.Amount))
 		off += 8
+	}
+	if writer, ok := db.(stringOwnedValueWriter); ok {
+		return writer.PutStringOwnedValue(cycleRewardPendingKeyString, buf)
 	}
 	return db.Put(cycleRewardPendingKey, buf)
 }

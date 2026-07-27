@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	dynPropPrefixString       = "dp-"
-	stageProgressPrefixString = "stage-progress-v1-"
+	dynPropPrefixString         = "dp-"
+	stageProgressPrefixString   = "stage-progress-v1-"
+	cycleRewardPendingKeyString = "cycle-reward-pending-v1"
 )
 
 // CommitmentBranchKeyPrefix is the physical schema namespace for persisted
@@ -156,7 +157,7 @@ var (
 	// pool accumulator. It is a replay/runtime mirror used to avoid rooting
 	// dl-<cycle>-<witness>-reward on every historical block; maintenance flushes
 	// the accumulated values back to SystemReward before VI is computed.
-	cycleRewardPendingKey = []byte("cycle-reward-pending-v1")
+	cycleRewardPendingKey = []byte(cycleRewardPendingKeyString)
 
 	// abiPrefix (abi-) maps to java-tron's AbiStore (db "abi"). When
 	// allow_account_asset_optimization is active, contract ABIs are moved
