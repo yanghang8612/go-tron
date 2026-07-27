@@ -29,8 +29,8 @@ func TestCompactionPressureThresholdsReserveRoutineCapacity(t *testing.T) {
 	if l0CompactionConcurrency != 10 {
 		t.Fatalf("L0 concurrency threshold = %d, want 10", l0CompactionConcurrency)
 	}
-	if compactionDebtConcurrency != 2<<30 {
-		t.Fatalf("debt concurrency threshold = %d, want 2 GiB", compactionDebtConcurrency)
+	if compactionDebtConcurrency != 3<<30 {
+		t.Fatalf("debt concurrency threshold = %d, want 3 GiB", compactionDebtConcurrency)
 	}
 }
 
