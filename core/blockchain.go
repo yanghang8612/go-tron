@@ -3,7 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -2601,11 +2601,17 @@ func (bc *BlockChain) updateSolidifiedBlock(statedb *state.StateDB, producerAddr
 		return
 	}
 
-	nums := make([]int64, 0, n)
+	var numsStorage [params.MaxActiveWitnessNum]int64
+	nums := numsStorage[:0]
+	if n > len(numsStorage) {
+		// Defensive fallback for tests or non-standard networks. Mainnet and
+		// Nile cap the active schedule at params.MaxActiveWitnessNum.
+		nums = make([]int64, 0, n)
+	}
 	for _, addr := range active {
 		nums = append(nums, bc.cachedWitnessLatestBlock(statedb, addr))
 	}
-	sort.Slice(nums, func(i, j int) bool { return nums[i] < nums[j] })
+	slices.Sort(nums)
 
 	pos := int(float64(n) * 0.3) // SOLIDIFIED_THRESHOLD = 0.7 → position = floor(N*0.3)
 	if pos >= n {

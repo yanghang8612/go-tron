@@ -23,6 +23,23 @@ func benchAccount(i int) tcommon.Address {
 	return a
 }
 
+func BenchmarkUpdateSolidifiedBlock(b *testing.B) {
+	bc := new(BlockChain)
+	active := make([]tcommon.Address, params.MaxActiveWitnessNum)
+	bc.witnessBlockCache = make(map[tcommon.Address]int64, len(active))
+	for i := range active {
+		active[i] = benchAccount(i)
+		bc.witnessBlockCache[active[i]] = int64(i + 1)
+	}
+	bc.SetActiveWitnessesForTest(active)
+	dynProps := state.NewDynamicProperties()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bc.updateSolidifiedBlock(nil, active[i%len(active)], int64(i+1), dynProps)
+	}
+}
+
 // buildTransferChain returns a funded genesis plus a factory that builds
 // numBlocks chained blocks (parent-linked from genHash), each with txPerBlock
 // transfer txs spread across numAccounts funded accounts (each account sends
