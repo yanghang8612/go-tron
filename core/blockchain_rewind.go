@@ -23,6 +23,7 @@ const restartSyncReplayBatchSize = 1000
 var (
 	storedReplayPrefetchBatchesCounter   = metrics.NewRegisteredCounter("core/stored_replay/prefetch_batches", nil)
 	storedReplayPrefetchWaitNanosCounter = metrics.NewRegisteredCounter("core/stored_replay/prefetch_wait/nanos", nil)
+	storedReplayPreparedTxCounter        = metrics.NewRegisteredCounter("core/stored_replay/prepared_transactions", nil)
 )
 
 // RestartSyncProgress is emitted by RestartSyncFromHeight after each major
@@ -100,6 +101,16 @@ func (bc *BlockChain) replayStoredBlocksToHeight(height uint64, batchSize uint64
 				result.err = fmt.Errorf("stored replay: block %d parent mismatch: have %x want %x", n, block.ParentHash(), parent.Hash())
 				return result
 			}
+			// Build the immutable transaction wrappers and their two execution-hot
+			// memos while this batch is still on the prefetch goroutine. Hash and
+			// contract decoding are pure sync.Once computations; canonical execution
+			// later observes the same wrapper instances, values, and cached errors.
+			transactions := block.Transactions()
+			for _, tx := range transactions {
+				_ = tx.Hash()
+				_, _ = tx.DecodedContract()
+			}
+			storedReplayPreparedTxCounter.Inc(int64(len(transactions)))
 			result.blocks = append(result.blocks, block)
 		}
 		return result
