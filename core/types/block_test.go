@@ -17,6 +17,43 @@ var benchmarkBlockBytes []byte
 var benchmarkDecodedBlock *Block
 var benchmarkDecodedProtoBlock *corepb.Block
 var benchmarkDecodedContract *corepb.Transaction_Contract
+var benchmarkBlockTransactions []*Transaction
+
+func BenchmarkBlockTransactionsMixed(b *testing.B) {
+	const txCount = 256
+	pb := &corepb.Block{Transactions: make([]*corepb.Transaction, txCount)}
+	for i := range pb.Transactions {
+		contractType := corepb.Transaction_Contract_TransferContract
+		if i%10 == 0 {
+			contractType = corepb.Transaction_Contract_TriggerSmartContract
+		}
+		pb.Transactions[i] = &corepb.Transaction{RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{Type: contractType}},
+		}}
+	}
+	b.ReportAllocs()
+	b.SetBytes(txCount)
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkBlockTransactions = NewBlockFromPB(pb).Transactions()
+	}
+}
+
+func BenchmarkBlockTransactionsAllTriggers(b *testing.B) {
+	const txCount = 256
+	pb := &corepb.Block{Transactions: make([]*corepb.Transaction, txCount)}
+	for i := range pb.Transactions {
+		pb.Transactions[i] = &corepb.Transaction{RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{Type: corepb.Transaction_Contract_TriggerSmartContract}},
+		}}
+	}
+	b.ReportAllocs()
+	b.SetBytes(txCount)
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkBlockTransactions = NewBlockFromPB(pb).Transactions()
+	}
+}
 
 func blockHashRawTestBlock(txCount, dataSize int) *Block {
 	txs := make([]*corepb.Transaction, txCount)

@@ -259,14 +259,42 @@ func (b *Block) Version() int32 {
 
 func (b *Block) Transactions() []*Transaction {
 	b.txsOnce.Do(func() {
-		// The pointers stored in txs keep storage's backing allocation alive.
-		// Each element therefore owns independent sync.Once-backed caches while
-		// all wrappers require only one block-sized heap object.
-		storage := make([]Transaction, len(b.pb.Transactions))
+		// The pointers stored in txs keep both backing allocations alive. Wrappers
+		// are packed together, while the larger TriggerSmartContract-only decode
+		// caches have storage only for the trigger transactions in this block.
+		triggerCount := 0
+		for _, pb := range b.pb.Transactions {
+			if transactionHasTriggerContract(pb) {
+				triggerCount++
+			}
+		}
 		txs := make([]*Transaction, len(b.pb.Transactions))
+		if triggerCount == len(b.pb.Transactions) && triggerCount != 0 {
+			// In an all-trigger block, coallocate each wrapper with its cache. This
+			// removes the otherwise redundant second backing allocation without
+			// changing the total footprint.
+			triggers := make([]standaloneTriggerTransaction, triggerCount)
+			for i, pb := range b.pb.Transactions {
+				tx := &triggers[i].tx
+				tx.pb = pb
+				tx.triggerCache = &triggers[i].trigger
+				txs[i] = tx
+			}
+			b.txs = txs
+			return
+		}
+
+		storage := make([]Transaction, len(b.pb.Transactions))
+		triggers := make([]transactionTriggerCache, triggerCount)
+		triggerIndex := 0
 		for i, pb := range b.pb.Transactions {
-			storage[i].pb = pb
-			txs[i] = &storage[i]
+			tx := &storage[i]
+			tx.pb = pb
+			if transactionHasTriggerContract(pb) {
+				tx.triggerCache = &triggers[triggerIndex]
+				triggerIndex++
+			}
+			txs[i] = tx
 		}
 		b.txs = txs
 	})

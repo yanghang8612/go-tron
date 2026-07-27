@@ -26,6 +26,9 @@ const triggerDataInlineSize = 68
 var (
 	triggerDecodeReserveLayoutOK  = verifyTriggerDecodeReserveLayout()
 	transferDecodeReserveLayoutOK = verifyTransferDecodeReserveLayout()
+	// MessageIs consults only immutable descriptor metadata. Reuse one type
+	// witness instead of constructing a full generated message on every decode.
+	triggerContractMessageType    = new(contractpb.TriggerSmartContract)
 )
 
 // decodedTransferContract coalesces the message and its two canonical TRON
@@ -35,6 +38,26 @@ type decodedTransferContract struct {
 	contract     contractpb.TransferContract
 	ownerAddress [common.AddressLength]byte
 	toAddress    [common.AddressLength]byte
+}
+
+// transactionTriggerCache owns the large, TriggerSmartContract-only decode
+// state separately from the common transaction wrapper. Block.Transactions
+// coallocates these caches only for trigger transactions, so ordinary transfer,
+// vote and account operations do not carry roughly 200 bytes of permanently
+// unused smart-contract storage.
+type transactionTriggerCache struct {
+	contract        contractpb.TriggerSmartContract
+	ownerAddress    [common.AddressLength]byte
+	contractAddress [common.AddressLength]byte
+	data            [triggerDataInlineSize]byte
+}
+
+// standaloneTriggerTransaction keeps NewTransactionFromPB's trigger cache in
+// the same heap object as its wrapper. Block-backed transactions use one shared
+// []transactionTriggerCache allocation instead (see Block.Transactions).
+type standaloneTriggerTransaction struct {
+	tx      Transaction
+	trigger transactionTriggerCache
 }
 
 type Transaction struct {
@@ -52,14 +75,10 @@ type Transaction struct {
 	contractMessageOnce sync.Once
 	contractMessage     proto.Message
 	contractMessageErr  error
-	// triggerContract owns the dominant mainnet contract type inline. Block
-	// wrappers are already coallocated in one []Transaction backing object, so
-	// decoding a matching Any into this slot removes one standalone protobuf
-	// allocation without extending the lifetime of any additional object.
-	triggerContract        contractpb.TriggerSmartContract
-	triggerOwnerAddress    [common.AddressLength]byte
-	triggerContractAddress [common.AddressLength]byte
-	triggerData            [triggerDataInlineSize]byte
+	// triggerCache owns the dominant smart-contract decode state outside the
+	// common wrapper. Block.Transactions coallocates caches for trigger rows;
+	// standalone and malformed/mismatched envelopes use one owned sidecar.
+	triggerCache *transactionTriggerCache
 
 	// signers memoizes RecoverSigners' ECDSA output (recovered addresses or
 	// the first recovery error) so the parallel pre-verification pass in
@@ -78,7 +97,19 @@ type Transaction struct {
 }
 
 func NewTransactionFromPB(pb *corepb.Transaction) *Transaction {
+	if transactionHasTriggerContract(pb) {
+		owned := new(standaloneTriggerTransaction)
+		owned.tx.pb = pb
+		owned.tx.triggerCache = &owned.trigger
+		return &owned.tx
+	}
 	return &Transaction{pb: pb}
+}
+
+func transactionHasTriggerContract(pb *corepb.Transaction) bool {
+	return pb != nil && pb.RawData != nil && len(pb.RawData.Contract) != 0 &&
+		pb.RawData.Contract[0] != nil &&
+		pb.RawData.Contract[0].Type == corepb.Transaction_Contract_TriggerSmartContract
 }
 
 func (tx *Transaction) Proto() *corepb.Transaction { return tx.pb }
@@ -125,10 +156,18 @@ func (tx *Transaction) DecodedContract() (proto.Message, error) {
 			tx.contractMessageErr = errors.New("contract has no parameter")
 			return
 		}
-		if contract.Parameter.MessageIs(&tx.triggerContract) {
-			tx.contractMessage = &tx.triggerContract
+		if contract.Parameter.MessageIs(triggerContractMessageType) {
+			trigger := tx.triggerCache
+			if trigger == nil {
+				// Preserve support for a malformed/mismatched envelope whose Any URL
+				// identifies TriggerSmartContract even when the enum does not. Valid
+				// block and standalone wrappers preallocate this cache contiguously.
+				trigger = new(transactionTriggerCache)
+				tx.triggerCache = trigger
+			}
+			tx.contractMessage = &trigger.contract
 			if triggerDecodeReserveLayoutOK {
-				tx.contractMessageErr = tx.unmarshalTriggerContractInline(contract.Parameter.Value)
+				tx.contractMessageErr = trigger.unmarshal(contract.Parameter.Value)
 				if tx.contractMessageErr == nil {
 					return
 				}
@@ -214,8 +253,8 @@ func (decoded *decodedTransferContract) unmarshal(data []byte) error {
 	return nil
 }
 
-func (tx *Transaction) unmarshalTriggerContractInline(data []byte) error {
-	tx.triggerContract = contractpb.TriggerSmartContract{}
+func (decoded *transactionTriggerCache) unmarshal(data []byte) error {
+	decoded.contract = contractpb.TriggerSmartContract{}
 	var unknown []byte
 	for len(data) != 0 {
 		fieldData := data
@@ -232,11 +271,11 @@ func (tx *Transaction) unmarshalTriggerContractInline(data []byte) error {
 			}
 			switch field {
 			case 1:
-				tx.triggerContract.OwnerAddress = copyBytesInto(value, tx.triggerOwnerAddress[:])
+				decoded.contract.OwnerAddress = copyBytesInto(value, decoded.ownerAddress[:])
 			case 2:
-				tx.triggerContract.ContractAddress = copyBytesInto(value, tx.triggerContractAddress[:])
+				decoded.contract.ContractAddress = copyBytesInto(value, decoded.contractAddress[:])
 			case 4:
-				tx.triggerContract.Data = copyBytesInto(value, tx.triggerData[:])
+				decoded.contract.Data = copyBytesInto(value, decoded.data[:])
 			}
 		case wireType == protowire.VarintType && (field == 3 || field == 5 || field == 6):
 			value, ok := varintFieldValue(fieldData[:n])
@@ -245,17 +284,17 @@ func (tx *Transaction) unmarshalTriggerContractInline(data []byte) error {
 			}
 			switch field {
 			case 3:
-				tx.triggerContract.CallValue = int64(value)
+				decoded.contract.CallValue = int64(value)
 			case 5:
-				tx.triggerContract.CallTokenValue = int64(value)
+				decoded.contract.CallTokenValue = int64(value)
 			case 6:
-				tx.triggerContract.TokenId = int64(value)
+				decoded.contract.TokenId = int64(value)
 			}
 		default:
 			unknown = appendCanonicalUnknown(unknown, fieldData[:n], field, wireType)
 		}
 	}
-	appendProtoUnknown(&tx.triggerContract, unknown)
+	appendProtoUnknown(&decoded.contract, unknown)
 	return nil
 }
 

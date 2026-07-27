@@ -158,7 +158,7 @@ func TestTransactionDecodedContractMemoizesError(t *testing.T) {
 	}
 }
 
-func TestTransactionDecodedTriggerContractUsesInlineSlot(t *testing.T) {
+func TestTransactionDecodedTriggerContractUsesDedicatedCache(t *testing.T) {
 	want := &contractpb.TriggerSmartContract{
 		OwnerAddress:    []byte{0x41, 0x01},
 		ContractAddress: []byte{0x41, 0x02},
@@ -184,13 +184,13 @@ func TestTransactionDecodedTriggerContractUsesInlineSlot(t *testing.T) {
 	if !ok {
 		t.Fatalf("decoded type = %T, want *TriggerSmartContract", gotMessage)
 	}
-	if got != &tx.triggerContract {
-		t.Fatal("trigger contract was not decoded into the wrapper's inline slot")
+	if tx.triggerCache == nil || got != &tx.triggerCache.contract {
+		t.Fatal("trigger contract was not decoded into the wrapper's dedicated cache")
 	}
-	if &got.OwnerAddress[0] != &tx.triggerOwnerAddress[0] ||
-		&got.ContractAddress[0] != &tx.triggerContractAddress[0] ||
-		&got.Data[0] != &tx.triggerData[0] {
-		t.Fatal("trigger byte fields did not use the wrapper's inline backing slots")
+	if &got.OwnerAddress[0] != &tx.triggerCache.ownerAddress[0] ||
+		&got.ContractAddress[0] != &tx.triggerCache.contractAddress[0] ||
+		&got.Data[0] != &tx.triggerCache.data[0] {
+		t.Fatal("trigger byte fields did not use the dedicated cache's inline backing slots")
 	}
 	if !proto.Equal(got, want) {
 		t.Fatalf("decoded trigger = %v, want %v", got, want)
@@ -218,7 +218,7 @@ func TestTransactionDecodedTriggerContractOwnsLargerData(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := message.(*contractpb.TriggerSmartContract)
-	if &got.Data[0] == &tx.triggerData[0] {
+	if &got.Data[0] == &tx.triggerCache.data[0] {
 		t.Fatal("larger trigger data unexpectedly used the inline backing slot")
 	}
 	for i := range parameter.Value {
@@ -320,15 +320,15 @@ func FuzzUnmarshalTriggerContractInlineEquivalent(f *testing.F) {
 		if !triggerDecodeReserveLayoutOK {
 			t.Fatal("protobuf layout guard unexpectedly disabled trigger decoder")
 		}
-		tx := new(Transaction)
-		gotErr := tx.unmarshalTriggerContractInline(data)
+		decoded := new(transactionTriggerCache)
+		gotErr := decoded.unmarshal(data)
 		var want contractpb.TriggerSmartContract
 		wantErr := proto.Unmarshal(data, &want)
 		if (gotErr == nil) != (wantErr == nil) {
 			t.Fatalf("error mismatch: inline=%v generated=%v, wire=%x", gotErr, wantErr, data)
 		}
-		if gotErr == nil && !proto.Equal(&tx.triggerContract, &want) {
-			t.Fatalf("decode mismatch: inline=%v generated=%v, wire=%x", &tx.triggerContract, &want, data)
+		if gotErr == nil && !proto.Equal(&decoded.contract, &want) {
+			t.Fatalf("decode mismatch: inline=%v generated=%v, wire=%x", &decoded.contract, &want, data)
 		}
 	})
 }
