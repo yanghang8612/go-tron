@@ -173,7 +173,7 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	}
 
 	progress = progress[:0]
-	if err := bc.ReplayStoredBlocksToHeight(5, func(p RestartSyncProgress) {
+	if err := bc.replayStoredBlocksToHeight(5, 2, func(p RestartSyncProgress) {
 		progress = append(progress, coreRestartEvent{phase: p.Phase, block: p.Block})
 	}); err != nil {
 		t.Fatalf("ReplayStoredBlocksToHeight: %v", err)
@@ -187,7 +187,7 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	if info := rawdb.ReadTransactionInfo(bc.ChainDB(), tx4Hash[:]); info == nil || info.BlockNumber != 4 {
 		t.Fatalf("stored replay tx4 info = %+v, want block 4", info)
 	}
-	wantReplayProgress := []coreRestartEvent{{phase: "replay", block: 5}, {phase: "flush", block: 5}, {phase: "done", block: 5}}
+	wantReplayProgress := []coreRestartEvent{{phase: "replay", block: 4}, {phase: "replay", block: 5}, {phase: "flush", block: 5}, {phase: "done", block: 5}}
 	if len(progress) != len(wantReplayProgress) {
 		t.Fatalf("stored replay progress = %+v, want %+v", progress, wantReplayProgress)
 	}

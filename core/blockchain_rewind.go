@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus"
 	"github.com/tronprotocol/go-tron/core/forks"
@@ -18,6 +19,11 @@ import (
 )
 
 const restartSyncReplayBatchSize = 1000
+
+var (
+	storedReplayPrefetchBatchesCounter   = metrics.NewRegisteredCounter("core/stored_replay/prefetch_batches", nil)
+	storedReplayPrefetchWaitNanosCounter = metrics.NewRegisteredCounter("core/stored_replay/prefetch_wait/nanos", nil)
+)
 
 // RestartSyncProgress is emitted by RestartSyncFromHeight after each major
 // phase and replayed block. Block is meaningful for replay/done phases.
@@ -34,8 +40,15 @@ type RestartSyncProgress struct {
 // API lifecycles start. Unlike RestartSyncFromHeight it never resets state and
 // never fetches from peers.
 func (bc *BlockChain) ReplayStoredBlocksToHeight(height uint64, progressFn func(RestartSyncProgress)) error {
+	return bc.replayStoredBlocksToHeight(height, restartSyncReplayBatchSize, progressFn)
+}
+
+func (bc *BlockChain) replayStoredBlocksToHeight(height uint64, batchSize uint64, progressFn func(RestartSyncProgress)) error {
 	if bc == nil {
 		return errors.New("stored replay: nil blockchain")
+	}
+	if batchSize == 0 {
+		return errors.New("stored replay: zero batch size")
 	}
 	current := bc.CurrentBlock()
 	if current == nil {
@@ -58,40 +71,74 @@ func (bc *BlockChain) ReplayStoredBlocksToHeight(height uint64, progressFn func(
 		return nil
 	}
 
-	for start := current.Number() + 1; start <= height; {
-		end := start + restartSyncReplayBatchSize - 1
+	type loadedBatch struct {
+		start  uint64
+		end    uint64
+		blocks []*types.Block
+		err    error
+	}
+	load := func(start uint64, parent *types.Block) loadedBatch {
+		end := start + batchSize - 1
 		if end < start || end > height {
 			end = height
 		}
-		blocks := make([]*types.Block, 0, end-start+1)
+		result := loadedBatch{start: start, end: end, blocks: make([]*types.Block, 0, end-start+1)}
 		for n := start; n <= end; n++ {
 			block := rawdb.ReadStoredBlockForReplay(bc.chaindb, n)
 			if block == nil {
-				return fmt.Errorf("stored replay: block %d not found", n)
+				result.err = fmt.Errorf("stored replay: block %d not found", n)
+				return result
 			}
-			var parent *types.Block
-			if len(blocks) == 0 {
-				parent = bc.CurrentBlock()
-			} else {
-				parent = blocks[len(blocks)-1]
+			if len(result.blocks) > 0 {
+				parent = result.blocks[len(result.blocks)-1]
 			}
 			if block.Number() != parent.Number()+1 {
-				return fmt.Errorf("stored replay: block %d has number %d, want %d", n, block.Number(), parent.Number()+1)
+				result.err = fmt.Errorf("stored replay: block %d has number %d, want %d", n, block.Number(), parent.Number()+1)
+				return result
 			}
 			if block.ParentHash() != parent.Hash() {
-				return fmt.Errorf("stored replay: block %d parent mismatch: have %x want %x", n, block.ParentHash(), parent.Hash())
+				result.err = fmt.Errorf("stored replay: block %d parent mismatch: have %x want %x", n, block.ParentHash(), parent.Hash())
+				return result
 			}
-			blocks = append(blocks, block)
+			result.blocks = append(result.blocks, block)
 		}
-		if err := bc.insertStoredBlocks(blocks); err != nil {
+		return result
+	}
+
+	batch := load(current.Number()+1, current)
+	for {
+		if batch.err != nil {
+			return batch.err
+		}
+		var prefetched <-chan loadedBatch
+		if batch.end < height {
+			prefetch := make(chan loadedBatch, 1)
+			nextStart := batch.end + 1
+			nextParent := batch.blocks[len(batch.blocks)-1]
+			storedReplayPrefetchBatchesCounter.Inc(1)
+			go func() {
+				prefetch <- load(nextStart, nextParent)
+			}()
+			prefetched = prefetch
+		}
+
+		if err := bc.insertStoredBlocks(batch.blocks); err != nil {
+			if prefetched != nil {
+				<-prefetched
+			}
 			var rangeErr *InsertBlocksError
 			if errors.As(err, &rangeErr) && rangeErr.BlockNumber != 0 {
 				return fmt.Errorf("stored replay: apply block %d: %w", rangeErr.BlockNumber, err)
 			}
-			return fmt.Errorf("stored replay: apply range %d-%d: %w", start, end, err)
+			return fmt.Errorf("stored replay: apply range %d-%d: %w", batch.start, batch.end, err)
 		}
-		emit("replay", end)
-		start = end + 1
+		emit("replay", batch.end)
+		if prefetched == nil {
+			break
+		}
+		waitStart := time.Now()
+		batch = <-prefetched
+		storedReplayPrefetchWaitNanosCounter.Inc(time.Since(waitStart).Nanoseconds())
 	}
 
 	emit("flush", height)
