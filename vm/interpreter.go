@@ -277,7 +277,6 @@ func (in *Interpreter) runBaseEnergy(contract *Contract, mem *Memory, stack *Sta
 			return nil, newInvalidOpCodeError(op)
 		}
 		in.currentOp = op
-		in.energyErr = nil
 
 		stackLen := stack.len()
 		if stackLen < operation.minStack {
@@ -289,8 +288,15 @@ func (in *Interpreter) runBaseEnergy(contract *Contract, mem *Memory, stack *Sta
 		if in.readOnly && operation.writes {
 			return nil, ErrWriteProtection
 		}
-		if operation.energyCost > 0 && !contract.UseEnergy(operation.energyCost) {
-			return nil, newOutOfEnergyError(op, contract, operation.energyCost, 0, false)
+		if operation.energyCost > 0 {
+			if !contract.UseEnergy(operation.energyCost) {
+				return nil, newOutOfEnergyError(op, contract, operation.energyCost, 0, false)
+			}
+		} else {
+			// Dynamic-cost handlers populate energyErr through useEnergy. Clear a
+			// prior opcode's detail only for those handlers; fixed-cost opcodes
+			// never consult it.
+			in.energyErr = nil
 		}
 
 		var ret []byte

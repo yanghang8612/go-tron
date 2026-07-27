@@ -148,6 +148,28 @@ func TestBaseEnergyLoopMatchesGeneralTracerLoop(t *testing.T) {
 	}
 }
 
+func TestBaseEnergyLoopClearsStaleDynamicEnergyError(t *testing.T) {
+	tvm := newTestEVM(t)
+	contract := NewContract(tcommon.Address{0x41, 1}, tcommon.Address{0x41, 2}, 0, 7)
+	contract.SetCode(contract.Address, []byte{
+		byte(PUSH1), 2,
+		byte(PUSH1), 2,
+		byte(EXP),
+	})
+	// A nested call can leave the shared interpreter carrying a child frame's
+	// detail. The two fixed-cost PUSHes deliberately keep that stale value;
+	// EXP must clear it before its dynamic charge fails.
+	tvm.interpreter.energyErr = newOutOfEnergyError(SHA3, contract, 99, 0, false)
+	_, err := tvm.interpreter.Run(contract)
+	if !errors.Is(err, ErrOutOfEnergy) {
+		t.Fatalf("Run error = %v, want out of energy", err)
+	}
+	detail, ok := tvm.interpreter.energyErr.(outOfEnergyError)
+	if !ok || detail.op != EXP {
+		t.Fatalf("energy detail = %#v, want EXP", tvm.interpreter.energyErr)
+	}
+}
+
 func errorText(err error) string {
 	if err == nil {
 		return ""
