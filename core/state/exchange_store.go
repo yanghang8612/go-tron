@@ -58,8 +58,8 @@ func (s *StateDB) readExchange(discriminator byte, id int64) *corepb.Exchange {
 	if err != nil || !ok || len(raw) == 0 {
 		return nil
 	}
-	ex := &corepb.Exchange{}
-	if err := proto.Unmarshal(raw, ex); err != nil {
+	ex, err := unmarshalExchange(raw)
+	if err != nil {
 		return nil
 	}
 	return ex
