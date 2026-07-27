@@ -511,6 +511,38 @@ func TestBlockFilledSlots_SetLengthMismatchPanics(t *testing.T) {
 	dp.SetBlockFilledSlots(make([]byte, 64)) // wrong length
 }
 
+func TestApplyBlockToFilledSlotsRepairsInvalidWindow(t *testing.T) {
+	dp := NewDynamicProperties()
+	dp.stringProps["block_filled_slots"] = "invalid"
+	dp.ApplyBlockToFilledSlots(false)
+	if got := dp.BlockFilledSlots(); len(got) != BlockFilledSlotsNumber {
+		t.Fatalf("repaired length = %d, want %d", len(got), BlockFilledSlotsNumber)
+	} else {
+		for i, slot := range got {
+			if slot != 0 {
+				t.Fatalf("repaired slot %d = %d, want 0", i, slot)
+			}
+		}
+	}
+}
+
+func BenchmarkApplyBlockToFilledSlots(b *testing.B) {
+	b.Run("unchanged", func(b *testing.B) {
+		dp := NewDynamicProperties()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			dp.ApplyBlockToFilledSlots(true)
+		}
+	})
+	b.Run("changing", func(b *testing.B) {
+		dp := NewDynamicProperties()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			dp.ApplyBlockToFilledSlots((i/BlockFilledSlotsNumber)&1 != 0)
+		}
+	})
+}
+
 // Suppress potentially-unused import warning when only some tests reference common.
 var _ = common.Address{}
 

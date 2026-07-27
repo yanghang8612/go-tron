@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"maps"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -46,6 +47,8 @@ var defaultStringProps = map[string]string{
 	"available_contract_type":   padBitmapDefault([]byte{0x7f, 0xff, 0x1f, 0xc0, 0x03, 0x7e}),
 	"active_default_operations": padBitmapDefault([]byte{0x7f, 0xff, 0x1f, 0xc0, 0x03, 0x3e}),
 }
+
+var emptyBlockFilledSlots = string(make([]byte, BlockFilledSlotsNumber))
 
 var defaultProps = map[string]int64{
 	"maintenance_time_interval":                 21600000,
@@ -1827,17 +1830,27 @@ func (dp *DynamicProperties) SetBlockFilledSlots(v []byte) {
 // index, then advances index modulo BlockFilledSlotsNumber. Mirrors java-tron
 // DynamicPropertiesStore.applyBlock.
 func (dp *DynamicProperties) ApplyBlockToFilledSlots(filled bool) {
-	slots := dp.BlockFilledSlots()
+	slots := dp.stringProps["block_filled_slots"]
+	slotsValid := len(slots) == BlockFilledSlotsNumber
+	if !slotsValid {
+		slots = emptyBlockFilledSlots
+	}
 	idx := dp.BlockFilledSlotsIndex()
 	if idx < 0 || idx >= BlockFilledSlotsNumber {
 		idx = 0
 	}
+	next := byte(0)
 	if filled {
-		slots[idx] = 1
-	} else {
-		slots[idx] = 0
+		next = 1
 	}
-	dp.SetBlockFilledSlots(slots)
+	if !slotsValid || slots[idx] != next {
+		var updated strings.Builder
+		updated.Grow(BlockFilledSlotsNumber)
+		updated.WriteString(slots[:idx])
+		updated.WriteByte(next)
+		updated.WriteString(slots[idx+1:])
+		dp.SetString("block_filled_slots", updated.String())
+	}
 	dp.SetBlockFilledSlotsIndex((idx + 1) % BlockFilledSlotsNumber)
 }
 
