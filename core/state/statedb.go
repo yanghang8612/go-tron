@@ -58,6 +58,11 @@ type StateDB struct {
 	trc10TokenKeyScratch    [20]byte
 	assetIDKeyScratch       [9]byte
 	accountUint32KeyScratch [4]byte
+	// Witness capsule keys are address-dependent but the witness set is tiny and
+	// stable across a replay range. Cache one immutable fixed key per observed
+	// witness so repeated lookups do not allocate a 23-byte temporary that
+	// escapes through the generic account-KV reader interface.
+	witnessCapsuleKeys map[tcommon.Address]*[rawdb.WitnessCapsuleStateKeyLength]byte
 	// A corepb.Vote normally encodes to at most 35 bytes (21-byte address plus
 	// tags, lengths, and a 10-byte signed count). writeAccountVotes marshals into
 	// this execution-confined buffer before SetAccountKV copies the bytes into

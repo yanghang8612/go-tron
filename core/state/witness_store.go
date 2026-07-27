@@ -9,8 +9,21 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
+func (s *StateDB) witnessCapsuleStateKey(addr tcommon.Address) []byte {
+	if key := s.witnessCapsuleKeys[addr]; key != nil {
+		return key[:]
+	}
+	if s.witnessCapsuleKeys == nil {
+		s.witnessCapsuleKeys = make(map[tcommon.Address]*[rawdb.WitnessCapsuleStateKeyLength]byte)
+	}
+	key := new([rawdb.WitnessCapsuleStateKeyLength]byte)
+	rawdb.WitnessCapsuleStateKeyInto(key, addr)
+	s.witnessCapsuleKeys[addr] = key
+	return key[:]
+}
+
 func (s *StateDB) readWitnessCapsule(addr tcommon.Address) (*types.Witness, error) {
-	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.WitnessCapsule, rawdb.WitnessCapsuleStateKey(addr))
+	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.WitnessCapsule, s.witnessCapsuleStateKey(addr))
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -35,7 +48,7 @@ func (s *StateDB) SetWitnessCapsule(w *types.Witness) error {
 	if err != nil {
 		return err
 	}
-	return s.SetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessCapsuleStateKey(addr), data)
+	return s.SetAccountKV(addr, kvdomains.WitnessCapsule, s.witnessCapsuleStateKey(addr), data)
 }
 
 // ReadWitnessLatestBlock returns the latest produced block for a witness.

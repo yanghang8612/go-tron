@@ -6,6 +6,19 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
+// WitnessCapsuleStateKeyLength is the fixed legacy witness-key length used as
+// the logical key inside the rooted WitnessCapsule domain.
+const WitnessCapsuleStateKeyLength = len("w-") + common.AddressLength
+
+// WitnessCapsuleStateKeyInto fills caller-owned fixed storage with the witness
+// capsule key. Hot StateDB callers use a stack array and avoid allocating the
+// same 23-byte key for every lookup/write.
+func WitnessCapsuleStateKeyInto(dst *[WitnessCapsuleStateKeyLength]byte, addr common.Address) []byte {
+	copy(dst[:], witnessPrefix)
+	copy(dst[len(witnessPrefix):], addr[:])
+	return dst[:]
+}
+
 func WriteAccount(db ethdb.KeyValueWriter, addr common.Address, acc *types.Account) {
 	data, err := acc.Marshal()
 	if err != nil {
@@ -58,5 +71,6 @@ func ReadWitness(db ethdb.KeyValueReader, addr common.Address) *types.Witness {
 // WitnessCapsuleStateKey exposes the legacy witness key bytes for the native
 // typed StateDB witness store. The key shape stays centralized in rawdb/schema.
 func WitnessCapsuleStateKey(addr common.Address) []byte {
-	return witnessKey(addr.Bytes())
+	var key [WitnessCapsuleStateKeyLength]byte
+	return append([]byte(nil), WitnessCapsuleStateKeyInto(&key, addr)...)
 }

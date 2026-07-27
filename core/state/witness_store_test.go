@@ -1,11 +1,38 @@
 package state
 
 import (
+	"bytes"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
+
+var benchmarkWitnessCapsuleKey []byte
+
+func TestWitnessCapsuleStateKeyCache(t *testing.T) {
+	sdb := new(StateDB)
+	addr := tcommon.Address{0x41, 0x01}
+	first := sdb.witnessCapsuleStateKey(addr)
+	second := sdb.witnessCapsuleStateKey(addr)
+	if !bytes.Equal(first, rawdb.WitnessCapsuleStateKey(addr)) {
+		t.Fatalf("cached witness key = %x", first)
+	}
+	if &first[0] != &second[0] {
+		t.Fatal("witness key cache replaced immutable storage")
+	}
+}
+
+func BenchmarkWitnessCapsuleStateKeyCached(b *testing.B) {
+	sdb := new(StateDB)
+	addr := tcommon.Address{0x41, 0x01}
+	sdb.witnessCapsuleStateKey(addr)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		benchmarkWitnessCapsuleKey = sdb.witnessCapsuleStateKey(addr)
+	}
+}
 
 func TestWitnessBrokerageAnchorAndFlatLatest(t *testing.T) {
 	sdb := newTestStateDB(t)
