@@ -110,12 +110,12 @@ type bufferReadView struct {
 }
 
 const (
-	// The Pebble adapter has bounded reusable batch buffers through 16 MiB. Use
+	// The Pebble adapter has bounded reusable batch buffers through 8 MiB. Use
 	// that whole range as the solid-layer merge window: production commitment
 	// writes commonly exceed 1 MiB for one block, so the former 1 MiB limit made
 	// every such layer a single-layer group and defeated cross-block coalescing.
-	maxFlushBatchValueSize   = 16 << 20
-	maxFlushBatchEncodedSize = 16 << 20
+	maxFlushBatchValueSize   = 8 << 20
+	maxFlushBatchEncodedSize = 8 << 20
 )
 
 func newLayer(hash common.Hash, number uint64) *layer {
@@ -2122,9 +2122,9 @@ type mergedLayerOp struct {
 }
 
 // flushMergedOpsPool reuses the hash table needed to collapse consecutive
-// solidified layers. A flush group has a bounded merge window, so a modest
-// entry cap covers normal groups while preventing an exceptional set of tiny
-// keys from pinning an oversized map for the process lifetime.
+// solidified layers. A flush group is already bounded to roughly one MiB, so a
+// modest entry cap covers normal groups while preventing an exceptional set of
+// tiny keys from pinning an oversized map for the process lifetime.
 const maxPooledFlushMergedOps = 32768
 
 type flushMergedOps struct {
