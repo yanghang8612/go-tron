@@ -189,7 +189,13 @@ type BlockChain struct {
 	rewardAcctAddrs   []tcommon.Address
 	witnessBlockCache map[tcommon.Address]int64
 	forkStatsCache    map[int32][]byte
-	cycleRewards      *cycleRewardAccumulator
+	// stateForkController is the rooted-state controller used by canonical
+	// block execution. The pipeline is serialized by chainmu, so its typed
+	// store can be rebound to each range's current StateDB instead of allocating
+	// a controller/store pair for every block.
+	stateForkStatsStore cachedForkStatsStore
+	stateForkController *forks.ForkController
+	cycleRewards        *cycleRewardAccumulator
 	// proposalCache skips re-reading already-resolved proposals during the
 	// per-maintenance ProcessProposals scan. Node-local; reset on reorg /
 	// failed apply. See proposalScanCache.
@@ -439,6 +445,8 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		proposalCache:     newProposalScanCache(),
 		versionPassCache:  forks.NewVersionPassCache(),
 	}
+	bc.stateForkStatsStore.cache = bc.forkStatsCache
+	bc.stateForkController = forks.NewForkControllerFromStore(&bc.stateForkStatsStore)
 	var err error
 	bc.cycleRewards, err = newCycleRewardAccumulator(buffer)
 	if err != nil {

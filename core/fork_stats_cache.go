@@ -62,10 +62,12 @@ func (bc *BlockChain) forkControllerForState(statedb *state.StateDB) *forks.Fork
 	if bc.forkStatsCache == nil {
 		bc.forkStatsCache = make(map[int32][]byte, len(forks.KnownVersions))
 	}
-	return forks.NewForkControllerFromStore(&cachedForkStatsStore{
-		statedb: statedb,
-		cache:   bc.forkStatsCache,
-	})
+	bc.stateForkStatsStore.statedb = statedb
+	bc.stateForkStatsStore.cache = bc.forkStatsCache
+	if bc.stateForkController == nil {
+		bc.stateForkController = forks.NewForkControllerFromStore(&bc.stateForkStatsStore)
+	}
+	return bc.stateForkController
 }
 
 func (bc *BlockChain) clearForkStatsCache() {
