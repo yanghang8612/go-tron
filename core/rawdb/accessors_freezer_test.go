@@ -100,6 +100,18 @@ func (f *fakeAncient) HasAncient(kind string, number uint64) (bool, error) {
 	return ok, nil
 }
 
+func TestHasAncientTransactionInfos(t *testing.T) {
+	ancient := newFakeAncient()
+	db := NewChainDB(NewMemoryDatabase(), ancient)
+	if HasAncientTransactionInfos(db, 7) {
+		t.Fatal("missing ancient TransactionRet reported present")
+	}
+	ancient.put(ancientTxInfos, 7, []byte("ret"))
+	if !HasAncientTransactionInfos(db, 7) {
+		t.Fatal("existing ancient TransactionRet reported missing")
+	}
+}
+
 // newBlockProto builds a minimal *corepb.Block at the given number whose
 // hash is deterministic. The slice-2 tests don't care about transaction
 // content; they need the proto to round-trip through ReadBlock and to

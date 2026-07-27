@@ -26,8 +26,11 @@ type canonicalBlockExecution struct {
 	parent *types.Block
 	// storedReplay means the immutable canonical block body already exists in
 	// the preserved hot/freezer chain store. The apply and metadata tails rebuild
-	// reset-derived rows but must not rewrite that large body.
-	storedReplay bool
+	// reset-derived rows but must not rewrite that large body. TxInfos records
+	// whether the canonical block-level TransactionRet is likewise already in the
+	// freezer; its tx-hash location index is still rebuilt.
+	storedReplay        bool
+	storedReplayTxInfos bool
 	// parentDynProps transfers ownership of the previous block's finalized
 	// dynamic properties into this block under async commit (decision-b), so
 	// execution never reads the lazily-published dynPropsCache or deep-copies the
@@ -266,12 +269,15 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		e.commit = e.state.NewCommitScope()
 	}
 	plan := &canonicalBlockExecution{
-		state:           e.state,
-		commit:          e.commit,
-		txRange:         plannedTxRange,
-		pipeline:        newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash()),
-		parent:          current,
-		storedReplay:    e.storedReplay,
+		state:        e.state,
+		commit:       e.commit,
+		txRange:      plannedTxRange,
+		pipeline:     newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash()),
+		parent:       current,
+		storedReplay: e.storedReplay,
+		storedReplayTxInfos: e.storedReplay && rawdb.HasAncientTransactionInfos(
+			bc.chaindb, block.Number(),
+		),
 		txInfoBatch:     e.txInfoBatches.acquire(),
 		txInfoBatchPool: e.txInfoBatches,
 	}

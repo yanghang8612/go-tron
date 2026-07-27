@@ -172,7 +172,7 @@ func TestWriteStoredReplayBlockMetadataBatchPreservesExistingBody(t *testing.T) 
 	}
 	root := common.Hash{0xdd, 0xee}
 	probe := &metadataBatchProbe{KeyValueStore: disk}
-	if err := WriteStoredReplayBlockMetadataBatch(probe, block, root, []*corepb.TransactionInfo{info}); err != nil {
+	if err := WriteStoredReplayBlockMetadataBatch(probe, block, root, []*corepb.TransactionInfo{info}, false); err != nil {
 		t.Fatal(err)
 	}
 	gotBody, err := disk.Get(blockKey(block.Number()))
@@ -198,6 +198,30 @@ func TestWriteStoredReplayBlockMetadataBatchPreservesExistingBody(t *testing.T) 
 	if got, ok := ReadBlockHash(chainDB, block.Number()); !ok || got != block.Hash() {
 		t.Fatalf("block hash index = %x,%v want %x,true", got, ok, block.Hash())
 	}
+
+	t.Run("ancient transaction ret", func(t *testing.T) {
+		disk := NewMemoryDatabase()
+		if err := disk.Put(blockKey(block.Number()), preservedBody); err != nil {
+			t.Fatal(err)
+		}
+		probe := &metadataBatchProbe{KeyValueStore: disk}
+		if err := WriteStoredReplayBlockMetadataBatch(probe, block, root, []*corepb.TransactionInfo{info}, true); err != nil {
+			t.Fatal(err)
+		}
+		if probe.valueCalls != 0 {
+			t.Fatalf("ancient TransactionRet triggered %d value fills, want 0", probe.valueCalls)
+		}
+		if has, err := disk.Has(txInfoBlockKey(block.Number())); err != nil || has {
+			t.Fatalf("duplicate hot TransactionRet exists=%v err=%v, want false/nil", has, err)
+		}
+		chainDB := NewChainDB(disk, NoopAncient{})
+		if got := ReadTransactionIndex(chainDB, txHash[:]); got == nil || *got != block.Number() {
+			t.Fatalf("transaction index = %v, want %d", got, block.Number())
+		}
+		if got := ReadBlockStateRoot(chainDB, block.Hash()); got != root {
+			t.Fatalf("state root = %x, want %x", got, root)
+		}
+	})
 }
 
 func TestWriteBlockMetadataBatchInfoArenaGrowthPreservesRows(t *testing.T) {

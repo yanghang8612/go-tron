@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -15,6 +16,24 @@ import (
 // `corepb.TransactionRet` blobs keyed by block number (the same payload
 // `tib-<num>` stores in Pebble).
 const ancientTxInfos = "tx_infos"
+
+var storedReplayAncientTxInfosCounter = metrics.NewRegisteredCounter("core/stored_replay/ancient_tx_infos", nil)
+
+// HasAncientTransactionInfos reports whether the freezer already owns the
+// canonical block-level TransactionRet row. Stored replay uses this to rebuild
+// the reset tx-hash location index without writing a duplicate hot tib-* value
+// that readers would always bypass in favor of the ancient row.
+func HasAncientTransactionInfos(db *ChainDB, blockNum uint64) bool {
+	if db == nil || db.AncientReader == nil {
+		return false
+	}
+	ok, err := db.HasAncient(ancientTxInfos, blockNum)
+	if err == nil && ok {
+		storedReplayAncientTxInfosCounter.Inc(1)
+		return true
+	}
+	return false
+}
 
 const (
 	transactionLocationMarker      = uint64(1) << 63
