@@ -256,7 +256,7 @@ func BenchmarkRawdbBranchStoreGetBranchInto(b *testing.B) {
 	}
 }
 
-func BenchmarkRawdbBranchStorePutBranchesSorted(b *testing.B) {
+func BenchmarkRawdbBranchStorePutBranches(b *testing.B) {
 	for _, count := range []int{16, 32, 64, 128, 256, 1024} {
 		b.Run(strconv.Itoa(count), func(b *testing.B) {
 			keys := make([]string, count)
@@ -284,7 +284,7 @@ func BenchmarkRawdbBranchStorePutBranchesSorted(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				if err := store.putBranchesSorted(keys, branches, 1); err != nil {
+				if err := store.putBranches(keys, branches, 1); err != nil {
 					b.Fatal(err)
 				}
 			}

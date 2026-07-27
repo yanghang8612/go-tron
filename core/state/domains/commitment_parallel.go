@@ -144,11 +144,13 @@ type concurrentSiblingFlushStore interface {
 	concurrentSiblingFlushSafe() bool
 }
 
-// branchBatchStore accepts the sorted final writes from one sibling fold. The
-// rawdb adapter uses this seam to arena-pack immutable encodings; generic test
-// stores keep the ordinary one-PutBranch-at-a-time path.
+// branchBatchStore accepts the final writes from one sibling fold in arbitrary
+// order. The rawdb adapter publishes them into blockbuffer maps and the later
+// durable flush sorts the globally coalesced keys, so sorting each concurrent
+// sibling here would add work without creating an observable order. Generic
+// stores retain the sorted one-PutBranch-at-a-time fallback below.
 type branchBatchStore interface {
-	putBranchesSorted(keys []string, branches map[string]*BranchData, batchCount int) error
+	putBranches(keys []string, branches map[string]*BranchData, batchCount int) error
 }
 
 func newBufferedBranchStore(base branchStore) *bufferedBranchStore {
@@ -243,10 +245,11 @@ func (s *bufferedBranchStore) DelBranch(prefix []byte) error {
 
 // flush applies the buffered mutations to base. dels and puts hold disjoint
 // prefixes, and across all sibling buffers every prefix is written at most once,
-// so the resulting base state is independent of flush order; the sorted
-// iteration only makes the emitted write stream deterministic. Each surviving
-// branch is encoded here exactly once (inside base.PutBranch). Sorting stabilizes
-// each sibling's stream; opted-in concurrent siblings may interleave freely.
+// so the resulting base state is independent of flush order. Deletes and the
+// generic one-at-a-time put fallback stay sorted for deterministic stores. The
+// rawdb batch path may skip that local sort because blockbuffer is map-backed and
+// its durable flush sorts the globally coalesced write stream. Each surviving
+// branch is encoded here exactly once (inside the batch or base.PutBranch).
 func (s *bufferedBranchStore) flush(base branchStore, batchCount int) error {
 	// A buffered store is single-use: after applyRootParallel flushes it, no
 	// caller reads it again. Return every large BranchData destination even when
@@ -279,10 +282,10 @@ func (s *bufferedBranchStore) flush(base branchStore, batchCount int) error {
 		for k := range s.puts {
 			*keysPtr = append(*keysPtr, k)
 		}
-		sort.Strings(*keysPtr)
 		if batch, ok := base.(branchBatchStore); ok {
-			return batch.putBranchesSorted(*keysPtr, s.puts, batchCount)
+			return batch.putBranches(*keysPtr, s.puts, batchCount)
 		}
+		sort.Strings(*keysPtr)
 		for _, k := range *keysPtr {
 			if err := base.PutBranch([]byte(k), *s.puts[k]); err != nil {
 				return err

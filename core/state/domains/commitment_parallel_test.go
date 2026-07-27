@@ -80,12 +80,12 @@ func (*discardBranchBatchStore) DelBranch([]byte) error             { return nil
 
 var branchFlushBenchmarkSink int
 
-func (*discardBranchBatchStore) putBranchesSorted(keys []string, _ map[string]*BranchData, _ int) error {
+func (*discardBranchBatchStore) putBranches(keys []string, _ map[string]*BranchData, _ int) error {
 	branchFlushBenchmarkSink = len(keys)
 	return nil
 }
 
-func BenchmarkBufferedBranchStoreFlushSortedKeys(b *testing.B) {
+func BenchmarkBufferedBranchStoreFlushBatchKeys(b *testing.B) {
 	for _, count := range []int{16, 256, 1024} {
 		b.Run(fmt.Sprint(count), func(b *testing.B) {
 			store := newBufferedBranchStore(&discardBranchBatchStore{})

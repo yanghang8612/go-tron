@@ -274,12 +274,14 @@ func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
 	return rawdb.WriteCommitmentBranch(s.db, prefix, *bp)
 }
 
-// putBranchesSorted encodes one sibling fold's final branches into a single
+// putBranches encodes one sibling fold's final branches into a single
 // immutable arena before transferring its disjoint slices to blockbuffer. The
 // layer retains those slices until commit/drop, so a scratch buffer cannot be
 // reused; sharing one exact-sized arena removes the per-branch heap object while
-// preserving the owned-value lifetime. keys must be sorted by the caller.
-func (s *rawdbBranchStore) putBranchesSorted(keys []string, branches map[string]*BranchData, batchCount int) error {
+// preserving the owned-value lifetime. Key order is intentionally immaterial:
+// blockbuffer stores a map and its durable flush sorts the globally coalesced
+// operations after every sibling has published.
+func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*BranchData, batchCount int) error {
 	if !s.ownedValue {
 		for _, key := range keys {
 			if err := s.PutBranch([]byte(key), *branches[key]); err != nil {
