@@ -3,7 +3,7 @@ package freezer
 import (
 	"bytes"
 	"container/list"
-	"encoding/binary"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,17 +11,25 @@ import (
 	"time"
 )
 
-// V2MigrationOptions controls offline conversion of prunable V1 tables into
-// immutable Zstd segments. SegmentBlocks bounds temporary disk use; FrameBlocks
-// controls random-read amplification. Mainnet measurement selected 64 records
-// per frame and 65,536 records per segment.
+// V2MigrationOptions controls conversion of prunable V1 tables into immutable
+// Zstd segments. Online installs each published segment before reclaiming its
+// V1 source; the offline command keeps the lower-overhead final reload path.
+// SegmentBlocks bounds temporary disk use and FrameBlocks controls random-read
+// amplification. Mainnet measurement selected 64 records per frame and 65,536
+// records per segment.
 type V2MigrationOptions struct {
 	Tables        []string
 	SegmentBlocks uint64
 	FrameBlocks   uint32
 	MaxSegments   uint64
 	KeepV1        bool
+	Online        bool
+	Context       context.Context
 	Progress      func(V2MigrationProgress)
+	// Transform optionally rewrites a row before compression. body is the
+	// corresponding V1 bodies row when kind == "tx_infos", and nil for other
+	// tables. It must be deterministic because verification invokes it again.
+	Transform func(kind string, number uint64, data, body []byte) ([]byte, error)
 }
 
 type V2MigrationProgress struct {
@@ -51,6 +59,8 @@ type V2MigrationResult struct {
 
 func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, error) {
 	var result V2MigrationResult
+	f.v2Migrate.Lock()
+	defer f.v2Migrate.Unlock()
 	if f.readonly {
 		return result, errReadOnly
 	}
@@ -62,6 +72,9 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	}
 	if options.FrameBlocks == 0 {
 		options.FrameBlocks = v2DefaultFrames
+	}
+	if options.Context == nil {
+		options.Context = context.Background()
 	}
 	if options.SegmentBlocks%uint64(options.FrameBlocks) != 0 {
 		return result, fmt.Errorf("ancient V2: segment blocks %d must be divisible by frame blocks %d", options.SegmentBlocks, options.FrameBlocks)
@@ -77,10 +90,7 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	}
 
 	started := time.Now()
-	start := uint64(0)
-	if f.v2 != nil {
-		start = f.v2.coverage
-	}
+	start := f.V2Coverage()
 	result.Start = start
 	result.FrameBlocks = options.FrameBlocks
 	result.SegmentBlocks = options.SegmentBlocks
@@ -112,6 +122,9 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	base := filepath.Join(f.datadir, "v2")
 	removeOrphanV2Temps(base)
 	for start < target && (options.MaxSegments == 0 || result.Segments < options.MaxSegments) {
+		if err := options.Context.Err(); err != nil {
+			return result, err
+		}
 		segmentStarted := time.Now()
 		count := options.SegmentBlocks
 		manifest := v2Manifest{
@@ -120,6 +133,15 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			Count:       count,
 			FrameBlocks: options.FrameBlocks,
 			Tables:      make(map[string]string, len(options.Tables)),
+		}
+		if options.Transform != nil {
+			manifest.TxInfoIDsCompacted = true
+		}
+		var unpublished []string
+		cleanupUnpublished := func() {
+			for _, path := range unpublished {
+				_ = os.Remove(path)
+			}
 		}
 		for _, kind := range options.Tables {
 			name := v2SegmentName(start, count)
@@ -134,7 +156,14 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				return data, nil
 			}
 			readForWrite := func(number uint64) ([]byte, error) {
+				if err := options.Context.Err(); err != nil {
+					return nil, err
+				}
 				data, err := readV1(number)
+				if err != nil {
+					return nil, err
+				}
+				data, err = f.transformV2MigrationRecord(options, kind, number, data)
 				if err != nil {
 					return nil, err
 				}
@@ -153,10 +182,20 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				}
 				return data, nil
 			}
+			unpublished = append(unpublished, path)
 			if err := writeV2Segment(path, start, count, options.FrameBlocks, readForWrite); err != nil {
+				cleanupUnpublished()
 				return result, fmt.Errorf("write ancient V2 %s segment %d: %w", kind, start, err)
 			}
-			if err := verifyV2Segment(path, kind, start, count, readV1); err != nil {
+			readExpected := func(number uint64) ([]byte, error) {
+				data, err := readV1(number)
+				if err != nil {
+					return nil, err
+				}
+				return f.transformV2MigrationRecord(options, kind, number, data)
+			}
+			if err := verifyV2Segment(options.Context, path, kind, start, count, readExpected); err != nil {
+				cleanupUnpublished()
 				return result, err
 			}
 			manifest.Tables[kind] = name
@@ -165,6 +204,13 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			return result, fmt.Errorf("publish ancient V2 segment %d: %w", start, err)
 		}
 		end := start + count
+		if options.Online {
+			newStore, err := openV2Store(f.datadir)
+			if err != nil {
+				return result, fmt.Errorf("reload ancient V2 after segment %d: %w", start, err)
+			}
+			f.replaceV2Store(newStore)
+		}
 		if !options.KeepV1 {
 			if _, err := f.TruncateTail(end); err != nil {
 				return result, fmt.Errorf("reclaim V1 through %d: %w", end, err)
@@ -188,20 +234,35 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	if result.End == 0 {
 		result.End = result.Start
 	}
-	newStore, err := openV2Store(f.datadir)
-	if err != nil {
-		return result, fmt.Errorf("reload ancient V2: %w", err)
-	}
-	f.writeLock.Lock()
-	oldStore := f.v2
-	f.v2 = newStore
-	f.writeLock.Unlock()
-	if oldStore != nil {
-		_ = oldStore.Close()
+	if !options.Online {
+		newStore, err := openV2Store(f.datadir)
+		if err != nil {
+			return result, fmt.Errorf("reload ancient V2: %w", err)
+		}
+		f.replaceV2Store(newStore)
 	}
 	result.PhysicalBytesAfter = f.selectedPhysicalBytes(options.Tables)
 	result.Elapsed = time.Since(started)
 	return result, nil
+}
+
+func (f *Freezer) transformV2MigrationRecord(options V2MigrationOptions, kind string, number uint64, data []byte) ([]byte, error) {
+	if options.Transform == nil {
+		return data, nil
+	}
+	var body []byte
+	if kind == "tx_infos" {
+		table := f.tables["bodies"]
+		if table == nil {
+			return nil, fmt.Errorf("ancient V2: bodies table required to transform tx_infos")
+		}
+		var err error
+		body, err = table.Retrieve(number)
+		if err != nil {
+			return nil, fmt.Errorf("read V1 bodies[%d] for transform: %w", number, err)
+		}
+	}
+	return options.Transform(kind, number, data, body)
 }
 
 func (f *Freezer) selectedPhysicalBytes(tables []string) uint64 {
@@ -212,14 +273,26 @@ func (f *Freezer) selectedPhysicalBytes(tables []string) uint64 {
 				total += size
 			}
 		}
+		f.v2Mu.RLock()
 		if f.v2 != nil {
 			total += f.v2.size(kind)
 		}
+		f.v2Mu.RUnlock()
 	}
 	return total
 }
 
-func verifyV2Segment(path, kind string, start, count uint64, readV1 func(uint64) ([]byte, error)) error {
+func (f *Freezer) replaceV2Store(store *v2Store) {
+	f.v2Mu.Lock()
+	oldStore := f.v2
+	f.v2 = store
+	f.v2Mu.Unlock()
+	if oldStore != nil {
+		_ = oldStore.Close()
+	}
+}
+
+func verifyV2Segment(ctx context.Context, path, kind string, start, count uint64, readV1 func(uint64) ([]byte, error)) error {
 	reader, err := openV2Segment(path, kind)
 	if err != nil {
 		return fmt.Errorf("open new ancient V2 segment %s: %w", path, err)
@@ -234,26 +307,20 @@ func verifyV2Segment(path, kind string, start, count uint64, readV1 func(uint64)
 		decoder:    decoder,
 		cacheList:  list.New(),
 		cacheItems: make(map[v2FrameKey]*list.Element),
+		cacheLoads: make(map[v2FrameKey]*v2FrameLoad),
+		cacheLimit: v2DefaultCacheBytes,
 	}
 	defer store.Close()
 	for frameIndex, frame := range reader.frames {
-		data, err := store.readFrame(reader, frameIndex)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		decoded, err := store.readFrame(reader, frameIndex)
 		if err != nil {
 			return fmt.Errorf("verify ancient V2 %s frame %d: %w", kind, frameIndex, err)
 		}
-		for record := uint32(0); record < frame.records; record++ {
-			length, consumed := binary.Uvarint(data)
-			if consumed <= 0 {
-				return fmt.Errorf("verify ancient V2 %s frame %d: malformed record length", kind, frameIndex)
-			}
-			data = data[consumed:]
-			if length > uint64(len(data)) {
-				return fmt.Errorf("verify ancient V2 %s frame %d: record exceeds frame", kind, frameIndex)
-			}
-			data = data[length:]
-		}
-		if len(data) != 0 {
-			return fmt.Errorf("verify ancient V2 %s frame %d: trailing bytes", kind, frameIndex)
+		if len(decoded.records) != int(frame.records) {
+			return fmt.Errorf("verify ancient V2 %s frame %d: record count %d, want %d", kind, frameIndex, len(decoded.records), frame.records)
 		}
 	}
 	checks := []uint64{start, start + count/2, start + count - 1}

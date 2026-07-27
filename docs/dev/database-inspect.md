@@ -135,3 +135,53 @@ The command resumes from the last manifest, verifies every compressed frame
 before advancing the V1 tail, and leaves the final incomplete 65,536-block
 range in V1 so the running freezer can keep appending. Once V1 files have been
 reclaimed, do not roll back to a pre-V2 binary.
+
+After an initial V2 prefix exists, the normal freezer automatically promotes
+each new complete 65,536-block V1 range. Online promotion publishes and installs
+the new V2 read view before reclaiming its V1 source, so historical APIs remain
+available throughout. Promotion is deferred while the node is bulk-syncing and
+can be disabled independently when diagnosing storage or CPU pressure:
+
+```bash
+gtron --freezer.v2.disable ...
+```
+
+The production defaults remain 64 blocks per frame and 65,536 per segment.
+Datadirs migrated with custom values must pass the matching
+`--freezer.v2.frame-blocks` and `--freezer.v2.segment-blocks` settings.
+
+## Compact duplicate transaction IDs in existing V2 segments
+
+Deploy a binary containing the compact-row reader first. Then stop the node and
+the automatic deployment timer. Existing V2 `tx_infos` rows contain a copy of
+the 32-byte transaction hash for every transaction even though the hash is
+already the `tx-*` index key and is derivable from the matching body.
+
+Rewrite one segment as a canary:
+
+```bash
+gtron db compact-ancient-tx-info-v2 \
+  --datadir /data/gtron/main/datadir \
+  --max-segments 1 \
+  --yes
+```
+
+The command upgrades the hot `tx-*` values from a block-only locator to a
+block-plus-ordinal locator without changing their 8-byte size. It syncs those
+indexes before atomically publishing the ID-less replacement segment. All
+other TransactionInfo and unknown protobuf fields are preserved. Restart and
+verify both historical transaction-by-ID and block receipt queries, then stop
+the node and finish the remaining segments:
+
+```bash
+gtron db compact-ancient-tx-info-v2 \
+  --datadir /data/gtron/main/datadir \
+  --yes \
+  --json > /data/gtron/main/ancient-tx-info-v2-compact.json
+```
+
+The command resumes by manifest, reports logical duplicate bytes removed and
+actual physical `tx_infos` bytes reclaimed, and never publishes a replacement
+before its index prerequisite and every compressed frame are durable. Do not
+roll back to a binary that predates compact-row support after the first segment
+is published.

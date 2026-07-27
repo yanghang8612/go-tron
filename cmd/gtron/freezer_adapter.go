@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -79,7 +81,15 @@ func (s *freezerStore) Sync() error {
 	return s.f.Sync()
 }
 
-func makeFreezerConfig(ctx *cli.Context) chainfreezer.Config {
+func (s *freezerStore) V2Coverage() uint64 {
+	return s.f.V2Coverage()
+}
+
+func (s *freezerStore) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
+	return s.f.MigrateV2(options)
+}
+
+func makeFreezerConfig(ctx *cli.Context) (chainfreezer.Config, error) {
 	cfg := chainfreezer.Default()
 	cfg.Enabled = !ctx.Bool("freezer.disable")
 	if ctx.IsSet("freezer.interval") {
@@ -91,7 +101,17 @@ func makeFreezerConfig(ctx *cli.Context) chainfreezer.Config {
 	if ctx.IsSet("freezer.batch") {
 		cfg.BatchBlocks = ctx.Uint64("freezer.batch")
 	}
-	return cfg
+	cfg.V2Enabled = !ctx.Bool("freezer.v2.disable")
+	frameBlocks := ctx.Uint64("freezer.v2.frame-blocks")
+	if frameBlocks == 0 || frameBlocks > math.MaxUint32 {
+		return chainfreezer.Config{}, fmt.Errorf("--freezer.v2.frame-blocks must be between 1 and %d", uint64(math.MaxUint32))
+	}
+	cfg.V2FrameBlocks = uint32(frameBlocks)
+	cfg.V2SegmentBlocks = ctx.Uint64("freezer.v2.segment-blocks")
+	if cfg.V2SegmentBlocks == 0 || cfg.V2SegmentBlocks%frameBlocks != 0 {
+		return chainfreezer.Config{}, fmt.Errorf("--freezer.v2.segment-blocks must be positive and divisible by --freezer.v2.frame-blocks")
+	}
+	return cfg, nil
 }
 
 func shouldOpenFreezer(path string, cfg chainfreezer.Config) bool {

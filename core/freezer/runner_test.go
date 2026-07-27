@@ -13,6 +13,9 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // fakeChain implements ChainSource against an in-memory KV store plus
@@ -281,6 +284,67 @@ func wrapFreezer(f *rawdbfreezer.Freezer) FreezerStore {
 	return &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f}
 }
 
+func TestOnePassCompactsDuplicateTransactionInfoIDs(t *testing.T) {
+	fc := newFakeChain()
+	fz := newFreezer(t)
+
+	block := &corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{}},
+		Transactions: []*corepb.Transaction{
+			{RawData: &corepb.TransactionRaw{Timestamp: 1}},
+			{RawData: &corepb.TransactionRaw{Timestamp: 2}},
+		},
+	}
+	blockRaw, err := proto.Marshal(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typedBlock := types.NewBlockFromPB(block)
+	firstHash := typedBlock.Transactions()[0].Hash()
+	secondHash := typedBlock.Transactions()[1].Hash()
+	retRaw, err := proto.Marshal(&corepb.TransactionRet{
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: firstHash[:], Fee: 1},
+			{Id: secondHash[:], Fee: 2},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc.blockRaw[0] = blockRaw
+	fc.txInfosRaw[0] = retRaw
+	fc.blockHashByNo[0] = blockHash(0)
+	if err := writeBlockKV(fc.db, 0, blockRaw); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTxInfosKV(fc.db, 0, retRaw); err != nil {
+		t.Fatal(err)
+	}
+	fc.setSolidified(1)
+
+	r := New(fc, wrapFreezer(fz), Config{Enabled: true, MarginBlocks: 1, BatchBlocks: 1})
+	if frozen, err := r.OnePass(); err != nil || frozen != 1 {
+		t.Fatalf("frozen=%d err=%v, want 1,nil", frozen, err)
+	}
+	gotRaw, err := fz.Ancient(rawdbAncientTxInfos, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotRaw) >= len(retRaw) {
+		t.Fatalf("compacted row size=%d, original=%d", len(gotRaw), len(retRaw))
+	}
+	got := &corepb.TransactionRet{}
+	if err := proto.Unmarshal(gotRaw, got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Transactioninfo) != 2 || len(got.Transactioninfo[0].Id) != 0 || len(got.Transactioninfo[1].Id) != 0 {
+		t.Fatalf("frozen IDs were not removed: %x/%x", got.Transactioninfo[0].Id, got.Transactioninfo[1].Id)
+	}
+	if got.Transactioninfo[0].Fee != 1 || got.Transactioninfo[1].Fee != 2 {
+		t.Fatalf("non-ID fields changed: %+v", got.Transactioninfo)
+	}
+}
+
 func (w *freezerWriter) ModifyAncients(fn func(rawdb.AncientWriteOp) error) (int64, error) {
 	// rawdb.AncientWriteOp is a type alias to rawdbfreezer.AncientWriteOp
 	// (see core/rawdb/accessors_ancient.go) so the function-value passed
@@ -290,7 +354,60 @@ func (w *freezerWriter) ModifyAncients(fn func(rawdb.AncientWriteOp) error) (int
 func (w *freezerWriter) TruncateHead(items uint64) (uint64, error) {
 	return w.f.TruncateHead(items)
 }
-func (w *freezerWriter) Sync() error { return w.f.Sync() }
+func (w *freezerWriter) Sync() error        { return w.f.Sync() }
+func (w *freezerWriter) V2Coverage() uint64 { return w.f.V2Coverage() }
+func (w *freezerWriter) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
+	return w.f.MigrateV2(options)
+}
+
+func TestCompactV2OncePromotesContinuousSegments(t *testing.T) {
+	fc := newFakeChain()
+	fz := newFreezer(t)
+	r := New(fc, wrapFreezer(fz), Config{
+		Enabled:         true,
+		MarginBlocks:    0,
+		BatchBlocks:     64,
+		V2Enabled:       true,
+		V2FrameBlocks:   8,
+		V2SegmentBlocks: 64,
+	})
+	for n := uint64(0); n < 64; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(63)
+	if frozen, err := r.OnePass(); err != nil || frozen != 64 {
+		t.Fatalf("first freeze = %d, err=%v", frozen, err)
+	}
+	if compacted, err := r.CompactV2Once(); err != nil || compacted != 64 {
+		t.Fatalf("first V2 compact = %d, err=%v", compacted, err)
+	}
+	if got := fz.V2Coverage(); got != 64 {
+		t.Fatalf("first V2 coverage = %d, want 64", got)
+	}
+	for n := uint64(64); n < 128; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(127)
+	if frozen, err := r.OnePass(); err != nil || frozen != 64 {
+		t.Fatalf("second freeze = %d, err=%v", frozen, err)
+	}
+	if compacted, err := r.CompactV2Once(); err != nil || compacted != 64 {
+		t.Fatalf("second V2 compact = %d, err=%v", compacted, err)
+	}
+	if got := fz.V2Coverage(); got != 128 {
+		t.Fatalf("second V2 coverage = %d, want 128", got)
+	}
+	for _, n := range []uint64{0, 63, 64, 127} {
+		got, err := fz.Ancient(rawdbAncientBlocks, n)
+		if err != nil || len(got) == 0 {
+			t.Fatalf("read compressed body %d: len=%d err=%v", n, len(got), err)
+		}
+	}
+	stats := r.Snapshot()
+	if stats.V2Coverage != 128 || stats.V2BlocksCompacted != 128 {
+		t.Fatalf("V2 stats = %+v", stats)
+	}
+}
 
 // TestOnePass_FreezesToMargin: chain with solidified=N; pass; ancient
 // has 0..N-margin. Locks in the basic happy path.
@@ -823,7 +940,7 @@ func TestNew_NilFreezer(t *testing.T) {
 func TestDefault_AppliesNonZero(t *testing.T) {
 	t.Parallel()
 	d := Default()
-	if d.Interval <= 0 || d.MarginBlocks == 0 || d.BatchBlocks == 0 {
+	if d.Interval <= 0 || d.MarginBlocks == 0 || d.BatchBlocks == 0 || !d.V2Enabled || d.V2FrameBlocks == 0 || d.V2SegmentBlocks == 0 {
 		t.Fatalf("Default zero field: %+v", d)
 	}
 	// applyDefaults on a zero Config matches Default() apart from Enabled

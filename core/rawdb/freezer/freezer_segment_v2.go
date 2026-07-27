@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -19,13 +20,16 @@ import (
 )
 
 const (
-	v2Magic           = "gtanv201"
-	v2Version         = uint32(1)
-	v2HeaderSize      = 64
-	v2FrameEntrySize  = 48
-	v2DefaultFrames   = uint32(64)
-	v2DefaultSegments = uint64(65_536)
-	v2CacheFrames     = 16
+	v2Magic              = "gtanv201"
+	v2Version            = uint32(1)
+	v2HeaderSize         = 64
+	v2FrameEntrySize     = 48
+	v2DefaultFrames      = uint32(64)
+	v2DefaultSegments    = uint64(65_536)
+	v2DefaultCacheBytes  = uint64(64 << 20)
+	v2MaxFrameBytes      = uint64(512 << 20)
+	v2MaxCompressedBytes = v2MaxFrameBytes + uint64(1<<20)
+	v2DecoderConcurrency = 4
 )
 
 var v2CRC = crc32.MakeTable(crc32.Castagnoli)
@@ -50,11 +54,12 @@ type v2SegmentReader struct {
 }
 
 type v2Manifest struct {
-	Version     uint32            `json:"version"`
-	Start       uint64            `json:"start"`
-	Count       uint64            `json:"count"`
-	FrameBlocks uint32            `json:"frame_blocks"`
-	Tables      map[string]string `json:"tables"`
+	Version            uint32            `json:"version"`
+	Start              uint64            `json:"start"`
+	Count              uint64            `json:"count"`
+	FrameBlocks        uint32            `json:"frame_blocks"`
+	Tables             map[string]string `json:"tables"`
+	TxInfoIDsCompacted bool              `json:"tx_info_ids_compacted,omitempty"`
 }
 
 type v2FrameKey struct {
@@ -63,8 +68,25 @@ type v2FrameKey struct {
 }
 
 type v2CacheValue struct {
-	key  v2FrameKey
-	data []byte
+	key   v2FrameKey
+	frame *v2DecodedFrame
+	size  uint64
+}
+
+type v2RecordBounds struct {
+	start uint32
+	end   uint32
+}
+
+type v2DecodedFrame struct {
+	data    []byte
+	records []v2RecordBounds
+}
+
+type v2FrameLoad struct {
+	done  chan struct{}
+	frame *v2DecodedFrame
+	err   error
 }
 
 // v2Store is the immutable segment tier below the still-appendable V1 freezer
@@ -78,6 +100,9 @@ type v2Store struct {
 	cacheMu    sync.Mutex
 	cacheList  *list.List
 	cacheItems map[v2FrameKey]*list.Element
+	cacheLoads map[v2FrameKey]*v2FrameLoad
+	cacheBytes uint64
+	cacheLimit uint64
 }
 
 func openV2Store(ancientDir string) (*v2Store, error) {
@@ -92,6 +117,8 @@ func openV2Store(ancientDir string) (*v2Store, error) {
 		decoder:    decoder,
 		cacheList:  list.New(),
 		cacheItems: make(map[v2FrameKey]*list.Element),
+		cacheLoads: make(map[v2FrameKey]*v2FrameLoad),
+		cacheLimit: v2DefaultCacheBytes,
 	}
 	manifestDir := filepath.Join(base, "manifests")
 	entries, err := os.ReadDir(manifestDir)
@@ -168,7 +195,14 @@ func openV2Store(ancientDir string) (*v2Store, error) {
 }
 
 func newV2Decoder() (*zstd.Decoder, error) {
-	return zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+	concurrency := runtime.GOMAXPROCS(0)
+	if concurrency > v2DecoderConcurrency {
+		concurrency = v2DecoderConcurrency
+	}
+	return zstd.NewReader(nil,
+		zstd.WithDecoderConcurrency(concurrency),
+		zstd.WithDecoderMaxMemory(v2MaxFrameBytes),
+	)
 }
 
 func (s *v2Store) Close() error {
@@ -213,44 +247,105 @@ func (s *v2Store) read(kind string, number uint64) ([]byte, error) {
 	}
 	relative := number - segment.start
 	frameIndex := int(relative / uint64(segment.frameBlocks))
-	data, err := s.readFrame(segment, frameIndex)
+	frame, err := s.readFrame(segment, frameIndex)
 	if err != nil {
 		return nil, err
 	}
 	ordinal := relative - segment.frames[frameIndex].firstRecord
-	for i := uint64(0); i <= ordinal; i++ {
-		length, consumed := binary.Uvarint(data)
-		if consumed <= 0 {
-			return nil, fmt.Errorf("ancient V2 malformed record length in %s frame %d", segment.path, frameIndex)
-		}
-		data = data[consumed:]
-		if length > uint64(len(data)) {
-			return nil, fmt.Errorf("ancient V2 record exceeds frame in %s frame %d", segment.path, frameIndex)
-		}
-		if i == ordinal {
-			return append([]byte(nil), data[:length]...), nil
-		}
-		data = data[length:]
+	if ordinal >= uint64(len(frame.records)) {
+		return nil, errOutOfBounds
 	}
-	return nil, errOutOfBounds
+	bounds := frame.records[ordinal]
+	return append([]byte(nil), frame.data[bounds.start:bounds.end]...), nil
 }
 
-func (s *v2Store) readFrame(segment *v2SegmentReader, frameIndex int) ([]byte, error) {
+func (s *v2Store) readRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
+	if count == 0 {
+		return nil, nil
+	}
+	if !s.has(kind, start) {
+		return nil, errOutOfBounds
+	}
+	capacity := count
+	if available := s.coverage - start; capacity > available {
+		capacity = available
+	}
+	items := make([][]byte, 0, int(capacity))
+	var total uint64
+	for number := start; uint64(len(items)) < count && number < s.coverage; {
+		segment, ok := s.find(kind, number)
+		if !ok {
+			break
+		}
+		relative := number - segment.start
+		frameIndex := int(relative / uint64(segment.frameBlocks))
+		frame, err := s.readFrame(segment, frameIndex)
+		if err != nil {
+			return nil, err
+		}
+		ordinal := relative - segment.frames[frameIndex].firstRecord
+		for ordinal < uint64(len(frame.records)) && uint64(len(items)) < count {
+			bounds := frame.records[ordinal]
+			length := uint64(bounds.end - bounds.start)
+			if len(items) > 0 && maxBytes != 0 && total+length > maxBytes {
+				return items, nil
+			}
+			items = append(items, append([]byte(nil), frame.data[bounds.start:bounds.end]...))
+			total += length
+			number++
+			ordinal++
+		}
+	}
+	return items, nil
+}
+
+func (s *v2Store) readFrame(segment *v2SegmentReader, frameIndex int) (*v2DecodedFrame, error) {
 	key := v2FrameKey{segment: segment, frame: frameIndex}
 	s.cacheMu.Lock()
 	if element := s.cacheItems[key]; element != nil {
 		s.cacheList.MoveToFront(element)
-		data := element.Value.(v2CacheValue).data
+		frame := element.Value.(v2CacheValue).frame
 		s.cacheMu.Unlock()
-		return data, nil
+		return frame, nil
 	}
+	if load := s.cacheLoads[key]; load != nil {
+		s.cacheMu.Unlock()
+		<-load.done
+		return load.frame, load.err
+	}
+	load := &v2FrameLoad{done: make(chan struct{})}
+	s.cacheLoads[key] = load
 	s.cacheMu.Unlock()
 
+	frame, err := s.loadFrame(segment, frameIndex)
+
+	s.cacheMu.Lock()
+	load.frame, load.err = frame, err
+	delete(s.cacheLoads, key)
+	if err == nil && uint64(len(frame.data)) <= s.cacheLimit {
+		value := v2CacheValue{key: key, frame: frame, size: uint64(len(frame.data))}
+		element := s.cacheList.PushFront(value)
+		s.cacheItems[key] = element
+		s.cacheBytes += value.size
+		for s.cacheBytes > s.cacheLimit && s.cacheList.Len() > 0 {
+			oldest := s.cacheList.Back()
+			oldValue := oldest.Value.(v2CacheValue)
+			delete(s.cacheItems, oldValue.key)
+			s.cacheList.Remove(oldest)
+			s.cacheBytes -= oldValue.size
+		}
+	}
+	close(load.done)
+	s.cacheMu.Unlock()
+	return frame, err
+}
+
+func (s *v2Store) loadFrame(segment *v2SegmentReader, frameIndex int) (*v2DecodedFrame, error) {
 	if frameIndex < 0 || frameIndex >= len(segment.frames) {
 		return nil, errOutOfBounds
 	}
 	frame := segment.frames[frameIndex]
-	if frame.compressedLen > uint64(^uint(0)>>1) || frame.uncompressedLen > uint64(^uint(0)>>1) {
+	if frame.compressedLen > v2MaxCompressedBytes || frame.uncompressedLen > v2MaxFrameBytes || frame.compressedLen > uint64(^uint(0)>>1) || frame.uncompressedLen > uint64(^uint(0)>>1) {
 		return nil, fmt.Errorf("ancient V2 frame too large in %s", segment.path)
 	}
 	compressed := make([]byte, int(frame.compressedLen))
@@ -267,24 +362,28 @@ func (s *v2Store) readFrame(segment *v2SegmentReader, frameIndex int) ([]byte, e
 	if uint64(len(decoded)) != frame.uncompressedLen {
 		return nil, fmt.Errorf("ancient V2 decoded length %d, want %d", len(decoded), frame.uncompressedLen)
 	}
-
-	s.cacheMu.Lock()
-	if existing := s.cacheItems[key]; existing != nil {
-		data := existing.Value.(v2CacheValue).data
-		s.cacheList.MoveToFront(existing)
-		s.cacheMu.Unlock()
-		return data, nil
+	records := make([]v2RecordBounds, 0, frame.records)
+	remaining := decoded
+	consumedBytes := 0
+	for record := uint32(0); record < frame.records; record++ {
+		length, consumed := binary.Uvarint(remaining)
+		if consumed <= 0 {
+			return nil, fmt.Errorf("ancient V2 malformed record length in %s frame %d", segment.path, frameIndex)
+		}
+		remaining = remaining[consumed:]
+		consumedBytes += consumed
+		if length > uint64(len(remaining)) {
+			return nil, fmt.Errorf("ancient V2 record exceeds frame in %s frame %d", segment.path, frameIndex)
+		}
+		start := consumedBytes
+		consumedBytes += int(length)
+		records = append(records, v2RecordBounds{start: uint32(start), end: uint32(consumedBytes)})
+		remaining = remaining[length:]
 	}
-	element := s.cacheList.PushFront(v2CacheValue{key: key, data: decoded})
-	s.cacheItems[key] = element
-	for s.cacheList.Len() > v2CacheFrames {
-		oldest := s.cacheList.Back()
-		value := oldest.Value.(v2CacheValue)
-		delete(s.cacheItems, value.key)
-		s.cacheList.Remove(oldest)
+	if len(remaining) != 0 {
+		return nil, fmt.Errorf("ancient V2 trailing frame bytes in %s frame %d", segment.path, frameIndex)
 	}
-	s.cacheMu.Unlock()
-	return decoded, nil
+	return &v2DecodedFrame{data: decoded, records: records}, nil
 }
 
 func (s *v2Store) size(kind string) uint64 {
@@ -420,6 +519,9 @@ func writeV2Segment(path string, start, count uint64, frameBlocks uint32, read f
 			}
 			buffer = binary.AppendUvarint(buffer, uint64(len(record)))
 			buffer = append(buffer, record...)
+			if uint64(len(buffer)) > v2MaxFrameBytes {
+				return fmt.Errorf("ancient V2 frame exceeds %d bytes at record %d", v2MaxFrameBytes, start+written)
+			}
 			records++
 			written++
 		}

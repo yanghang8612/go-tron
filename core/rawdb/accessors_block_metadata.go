@@ -151,9 +151,16 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	}
 	retKey := metadataKey(txInfoBlockPrefix, numberValue[:])
 	retSize := transactionRetRowsSize(int64(blockNum), blockTimestamp, infoPayloads)
-	for _, tx := range txs {
+	txLocationValues := make([]byte, len(txs)*8)
+	for i, tx := range txs {
 		hash := tx.Hash()
-		rows = append(rows, blockMetadataRow{key: metadataKey(txPrefix, hash[:]), value: numberValue[:]})
+		if blockNum > transactionLocationMaxBlock || i > int(^uint16(0)) {
+			return fmt.Errorf("write block metadata: transaction location block=%d ordinal=%d out of range", blockNum, i)
+		}
+		packed := transactionLocationMarker | blockNum<<transactionLocationOrdinalBits | uint64(i)
+		value := txLocationValues[i*8 : (i+1)*8 : (i+1)*8]
+		binary.BigEndian.PutUint64(value, packed)
+		rows = append(rows, blockMetadataRow{key: metadataKey(txPrefix, hash[:]), value: value})
 	}
 
 	encodedSize := metadataBatchHeaderSize

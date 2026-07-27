@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -14,6 +15,18 @@ import (
 // `corepb.TransactionRet` blobs keyed by block number (the same payload
 // `tib-<num>` stores in Pebble).
 const ancientTxInfos = "tx_infos"
+
+const (
+	transactionLocationMarker      = uint64(1) << 63
+	transactionLocationOrdinalBits = 16
+	transactionLocationMaxBlock    = (uint64(1) << (63 - transactionLocationOrdinalBits)) - 1
+)
+
+type transactionLocation struct {
+	blockNumber uint64
+	ordinal     uint16
+	hasOrdinal  bool
+}
 
 // WriteTransactionInfo stores a legacy, individually indexed TransactionInfo.
 // New block commits no longer call this function: tx-* locates the block and
@@ -39,8 +52,8 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 	if db == nil {
 		return nil
 	}
-	if blockNum := ReadTransactionIndex(db, txID); blockNum != nil {
-		if info := readTransactionInfoFromBlock(db, *blockNum, txID); info != nil {
+	if location := readTransactionLocation(db, txID); location != nil {
+		if info := readTransactionInfoFromBlock(db, *location, txID); info != nil {
 			return info
 		}
 	}
@@ -55,16 +68,61 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 	return info
 }
 
-func readTransactionInfoFromBlock(db *ChainDB, blockNum uint64, txID []byte) *corepb.TransactionInfo {
-	if data, ok := readAncient(db, ancientTxInfos, blockNum); ok {
-		return findTransactionInfoInRet(data, txID)
+func readTransactionInfoFromBlock(db *ChainDB, location transactionLocation, txID []byte) *corepb.TransactionInfo {
+	if data, ok := readAncient(db, ancientTxInfos, location.blockNumber); ok {
+		return findTransactionInfoAtLocation(db, data, location, txID)
 	}
 	var info *corepb.TransactionInfo
-	_, _ = viewRawValue(db.KeyValueStore, txInfoBlockKey(blockNum), func(data []byte) error {
-		info = findTransactionInfoInRet(data, txID)
+	_, _ = viewRawValue(db.KeyValueStore, txInfoBlockKey(location.blockNumber), func(data []byte) error {
+		info = findTransactionInfoAtLocation(db, data, location, txID)
 		return nil
 	})
 	return info
+}
+
+func findTransactionInfoAtLocation(db *ChainDB, data []byte, location transactionLocation, txID []byte) *corepb.TransactionInfo {
+	if location.hasOrdinal {
+		info := transactionInfoAtOrdinal(data, uint64(location.ordinal))
+		if info != nil && (len(info.Id) == 0 || bytes.Equal(info.Id, txID)) {
+			if len(info.Id) == 0 {
+				info.Id = append([]byte(nil), txID...)
+			}
+			return info
+		}
+		// A mismatched packed locator should not hide an otherwise valid legacy
+		// row. The ID scan is corruption/partial-upgrade fallback, not the hot
+		// path for newly written indexes.
+		return findTransactionInfoInRet(data, txID)
+	}
+	if info := findTransactionInfoInRet(data, txID); info != nil {
+		return info
+	}
+	ordinal, ok := transactionOrdinalInBlock(db, location.blockNumber, txID)
+	if !ok {
+		return nil
+	}
+	info := transactionInfoAtOrdinal(data, ordinal)
+	if info == nil || (len(info.Id) > 0 && !bytes.Equal(info.Id, txID)) {
+		return nil
+	}
+	if len(info.Id) == 0 {
+		info.Id = append([]byte(nil), txID...)
+	}
+	return info
+}
+
+func transactionOrdinalInBlock(db *ChainDB, blockNum uint64, txID []byte) (uint64, bool) {
+	block := ReadBlock(db, blockNum)
+	if block == nil {
+		return 0, false
+	}
+	for i, tx := range block.Transactions() {
+		hash := tx.Hash()
+		if bytes.Equal(hash[:], txID) {
+			return uint64(i), true
+		}
+	}
+	return 0, false
 }
 
 // findTransactionInfoInRet scans the TransactionRet wire envelope and only
@@ -90,6 +148,39 @@ func findTransactionInfoInRet(data, txID []byte) *corepb.TransactionInfo {
 				}
 				return info
 			}
+			data = data[fieldLen:]
+			continue
+		}
+		fieldLen := protowire.ConsumeFieldValue(number, wireType, data)
+		if fieldLen < 0 {
+			return nil
+		}
+		data = data[fieldLen:]
+	}
+	return nil
+}
+
+func transactionInfoAtOrdinal(data []byte, wanted uint64) *corepb.TransactionInfo {
+	var ordinal uint64
+	for len(data) > 0 {
+		number, wireType, tagLen := protowire.ConsumeTag(data)
+		if tagLen < 0 {
+			return nil
+		}
+		data = data[tagLen:]
+		if number == 3 && wireType == protowire.BytesType {
+			payload, fieldLen := protowire.ConsumeBytes(data)
+			if fieldLen < 0 {
+				return nil
+			}
+			if ordinal == wanted {
+				info := &corepb.TransactionInfo{}
+				if err := proto.Unmarshal(payload, info); err != nil {
+					return nil
+				}
+				return info
+			}
+			ordinal++
 			data = data[fieldLen:]
 			continue
 		}
@@ -143,19 +234,39 @@ func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, info
 // the ancient cutoff; falls back to `tib-<num>` in Pebble otherwise.
 func ReadTransactionInfosByBlock(db *ChainDB, blockNum uint64) []*corepb.TransactionInfo {
 	if data, ok := readAncient(db, ancientTxInfos, blockNum); ok {
-		ret := &corepb.TransactionRet{}
-		if err := proto.Unmarshal(data, ret); err != nil {
-			return nil
-		}
-		return ret.Transactioninfo
+		return decodeTransactionInfosByBlock(db, blockNum, data)
 	}
 	data, err := db.Get(txInfoBlockKey(blockNum))
 	if err != nil {
 		return nil
 	}
+	return decodeTransactionInfosByBlock(db, blockNum, data)
+}
+
+func decodeTransactionInfosByBlock(db *ChainDB, blockNum uint64, data []byte) []*corepb.TransactionInfo {
 	ret := &corepb.TransactionRet{}
 	if err := proto.Unmarshal(data, ret); err != nil {
 		return nil
+	}
+	needsIDs := false
+	for _, info := range ret.Transactioninfo {
+		if info != nil && len(info.Id) == 0 {
+			needsIDs = true
+			break
+		}
+	}
+	if !needsIDs {
+		return ret.Transactioninfo
+	}
+	block := ReadBlock(db, blockNum)
+	if block == nil || len(block.Transactions()) != len(ret.Transactioninfo) {
+		return ret.Transactioninfo
+	}
+	for i, tx := range block.Transactions() {
+		if ret.Transactioninfo[i] != nil && len(ret.Transactioninfo[i].Id) == 0 {
+			hash := tx.Hash()
+			ret.Transactioninfo[i].Id = append([]byte(nil), hash[:]...)
+		}
 	}
 	return ret.Transactioninfo
 }
@@ -167,15 +278,47 @@ func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint
 	return db.Put(txKey(txHash), num)
 }
 
-// ReadTransactionIndex retrieves the block number for a tx hash. The tx
-// reverse index stays hot per the slice-1 freezer spec, so this accessor
-// reads only from Pebble.
-func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
+// WriteTransactionLocation stores the block number and transaction ordinal in
+// the existing 8-byte tx-* value. It is exported for offline upgrades of
+// legacy reverse indexes; normal block commits call it indirectly.
+func WriteTransactionLocation(db ethdb.KeyValueWriter, txHash []byte, blockNum uint64, ordinal int) error {
+	if blockNum > transactionLocationMaxBlock {
+		return fmt.Errorf("transaction location block %d exceeds %d", blockNum, transactionLocationMaxBlock)
+	}
+	if ordinal < 0 || ordinal > int(^uint16(0)) {
+		return fmt.Errorf("transaction location ordinal %d exceeds %d", ordinal, ^uint16(0))
+	}
+	packed := transactionLocationMarker | blockNum<<transactionLocationOrdinalBits | uint64(ordinal)
+	var value [8]byte
+	binary.BigEndian.PutUint64(value[:], packed)
+	return db.Put(txKey(txHash), value[:])
+}
+
+func readTransactionLocation(db *ChainDB, txHash []byte) *transactionLocation {
 	data, err := db.Get(txKey(txHash))
 	if err != nil || len(data) != 8 {
 		return nil
 	}
-	num := binary.BigEndian.Uint64(data)
+	value := binary.BigEndian.Uint64(data)
+	if value&transactionLocationMarker == 0 {
+		return &transactionLocation{blockNumber: value}
+	}
+	return &transactionLocation{
+		blockNumber: (value &^ transactionLocationMarker) >> transactionLocationOrdinalBits,
+		ordinal:     uint16(value),
+		hasOrdinal:  true,
+	}
+}
+
+// ReadTransactionIndex retrieves the block number for a tx hash. The tx
+// reverse index stays hot per the slice-1 freezer spec, so this accessor
+// reads only from Pebble.
+func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
+	location := readTransactionLocation(db, txHash)
+	if location == nil {
+		return nil
+	}
+	num := location.blockNumber
 	return &num
 }
 

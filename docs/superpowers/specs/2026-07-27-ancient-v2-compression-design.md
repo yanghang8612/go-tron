@@ -34,8 +34,11 @@ measured 256-block saving and is the compression/read-latency knee.
 
 ## Target V2 layout
 
-V2 keeps the exact marshalled protobuf bytes. Consecutive rows are encoded as
-length-delimited records and grouped into independently compressed Zstd frames.
+V2 keeps exact marshalled block bytes. Transaction-info rows may omit the
+redundant nested `TransactionInfo.id`; readers restore it from the 8-byte hot
+transaction locator so Wallet API messages remain byte-equivalent. Consecutive
+rows are encoded as length-delimited records and grouped into independently
+compressed Zstd frames.
 An immutable segment contains:
 
 - a versioned header;
@@ -44,7 +47,10 @@ An immutable segment contains:
 - enough record framing to recover any original row byte-for-byte.
 
 The benchmark candidates were 32, 64, 128, and 256 blocks per frame. Production
-uses 64. Readers share a bounded 16-frame decompressed LRU cache.
+uses 64. Readers share a 64 MiB decompressed LRU cache, cache parsed record
+offsets for O(1) row extraction, and coalesce concurrent misses for the same
+frame. Decoder concurrency is capped at four and decoded frames are bounded to
+protect the node from corrupt or unexpectedly large frame metadata.
 
 Each segment covers 65,536 blocks. The versioned header and frame table have
 CRC32C checksums, and every compressed frame has its own CRC32C. Before publish,
@@ -61,6 +67,17 @@ and byte-compares the first, middle, and last records against V1.
 - Interrupted migrations resume from the last published segment.
 - Existing V1 data remains the rollback source until its matching V2 segment
   has been durably published.
+- After the initial offline migration, the running freezer promotes at most one
+  newly complete segment per pass. It installs the published V2 view under a
+  read-lifetime lock before advancing the V1 tail, so concurrent historical
+  reads always resolve through at least one tier.
+- Online promotion is cancellable during node shutdown. A cancellation before
+  publication removes the temporary file; a cancellation after publication
+  leaves safe V1/V2 duplication for the next pass to reconcile.
+- New freezing and online promotion omit redundant transaction IDs only after
+  validating the block/info cardinality. Existing V2 segments use a separate
+  offline manifest-replacement rewrite that also upgrades legacy transaction
+  locators before publishing ID-less rows.
 
 Publishing a manifest is the commit point. Only manifests are loaded at node
 startup, so crash-leftover temporary or uncommitted segment files are ignored.
@@ -74,8 +91,8 @@ been reclaimed, rollback to a pre-V2 binary is not supported.
 
 ## Non-goals
 
-- Removing or semantically normalizing `TransactionInfo` fields is a separate,
-  higher-risk phase.
+- No `TransactionInfo` field other than the transaction ID is removed or
+  semantically normalized.
 - Remote object storage and history pruning are separate operating modes.
 - V2 does not change the hot Pebble schema.
 
@@ -86,4 +103,6 @@ been reclaimed, rollback to a pre-V2 binary is not supported.
 - Every V2 record round-trips byte-for-byte.
 - Mixed V1/V2 reads pass block and transaction-info accessor tests.
 - Crash tests never expose a range missing from both formats.
+- Concurrent reads remain byte-identical while an online segment is published
+  and its V1 source is reclaimed.
 - Historical transaction and block API responses match pre-migration output.

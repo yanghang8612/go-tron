@@ -3,9 +3,13 @@ package freezer
 import (
 	"bytes"
 	"container/list"
+	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -131,6 +135,11 @@ func TestFreezerMigrateV2RoundTripResumeAndAppend(t *testing.T) {
 			t.Fatalf("cross-tier range item %d mismatch", i)
 		}
 	}
+	maxBytes := uint64(len(want["bodies"][120]) + len(want["bodies"][121]) - 1)
+	limitedBodies, err := freezer.AncientRange("bodies", 120, 16, maxBytes)
+	if err != nil || len(limitedBodies) != 1 || !bytes.Equal(limitedBodies[0], want["bodies"][120]) {
+		t.Fatalf("limited V2 range len=%d err=%v", len(limitedBodies), err)
+	}
 	rangeRoots, err := freezer.AncientRange("state_roots", 0, 16, 0)
 	if err != nil || len(rangeRoots) != 16 {
 		t.Fatalf("V1-only range len=%d err=%v", len(rangeRoots), err)
@@ -186,6 +195,230 @@ func TestFreezerMigrateV2RoundTripResumeAndAppend(t *testing.T) {
 	}
 }
 
+func TestRewriteV2TransactionInfosRoundTripAndResume(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":   {Prunable: true},
+		"tx_infos": {Prunable: true},
+	}
+	freezer, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rows = uint64(32)
+	if _, err := freezer.ModifyAncients(func(op AncientWriteOp) error {
+		for number := uint64(0); number < rows; number++ {
+			if err := op.AppendRaw("bodies", number, []byte(fmt.Sprintf("body-%d", number))); err != nil {
+				return err
+			}
+			if err := op.AppendRaw("tx_infos", number, []byte(fmt.Sprintf("receipt-%d-DUPLICATE", number))); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := freezer.MigrateV2(V2MigrationOptions{
+		Tables: []string{"bodies", "tx_infos"}, SegmentBlocks: 16, FrameBlocks: 4,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = freezer.RewriteV2TransactionInfos(V2TxInfoRewriteOptions{
+		MaxSegments: 1,
+		Transform: func(_ uint64, txInfo, _ []byte) ([]byte, uint64, error) {
+			compact := bytes.TrimSuffix(txInfo, []byte("-DUPLICATE"))
+			return compact, uint64(len(txInfo) - len(compact)), nil
+		},
+		BeforePublish: func() error { return errors.New("injected prerequisite failure") },
+	})
+	if err == nil {
+		t.Fatal("rewrite published despite prerequisite failure")
+	}
+	if got, readErr := freezer.Ancient("tx_infos", 0); readErr != nil || string(got) != "receipt-0-DUPLICATE" {
+		t.Fatalf("failed rewrite changed active data: %q err=%v", got, readErr)
+	}
+	result, err := freezer.RewriteV2TransactionInfos(V2TxInfoRewriteOptions{
+		MaxSegments: 1,
+		Transform: func(_ uint64, txInfo, _ []byte) ([]byte, uint64, error) {
+			compact := bytes.TrimSuffix(txInfo, []byte("-DUPLICATE"))
+			return compact, uint64(len(txInfo) - len(compact)), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Segments != 1 || result.Rows != 16 || result.RemovedBytes != 16*10 {
+		t.Fatalf("first rewrite = %+v", result)
+	}
+	for number := uint64(0); number < rows; number++ {
+		got, err := freezer.Ancient("tx_infos", number)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantSuffix := "-DUPLICATE"
+		if number < 16 {
+			wantSuffix = ""
+		}
+		want := fmt.Sprintf("receipt-%d%s", number, wantSuffix)
+		if string(got) != want {
+			t.Fatalf("tx_infos[%d]=%q, want %q", number, got, want)
+		}
+	}
+	result, err = freezer.RewriteV2TransactionInfos(V2TxInfoRewriteOptions{
+		Transform: func(_ uint64, txInfo, _ []byte) ([]byte, uint64, error) {
+			compact := bytes.TrimSuffix(txInfo, []byte("-DUPLICATE"))
+			return compact, uint64(len(txInfo) - len(compact)), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Segments != 1 || result.Rows != 16 || result.RemovedBytes != 16*10 {
+		t.Fatalf("resume rewrite = %+v", result)
+	}
+	if err := freezer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	freezer, err = NewFreezer(dir, "", true, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer freezer.Close()
+	for number := uint64(0); number < rows; number++ {
+		got, err := freezer.Ancient("tx_infos", number)
+		if err != nil || string(got) != fmt.Sprintf("receipt-%d", number) {
+			t.Fatalf("reopen tx_infos[%d]=%q err=%v", number, got, err)
+		}
+	}
+}
+
+func TestFreezerMigrateV2OnlineKeepsConcurrentReadsAvailable(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":   {Prunable: true},
+		"tx_infos": {Prunable: true},
+	}
+	freezer, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer freezer.Close()
+	const rows = 512
+	want := make(map[string][][]byte, len(tables))
+	for kind := range tables {
+		want[kind] = make([][]byte, rows)
+	}
+	if _, err := freezer.ModifyAncients(func(op AncientWriteOp) error {
+		for number := uint64(0); number < rows; number++ {
+			for kind := range tables {
+				value := []byte(fmt.Sprintf("%s-%06d-%s", kind, number, bytes.Repeat([]byte("x"), int(number%31))))
+				want[kind][number] = append([]byte(nil), value...)
+				if err := op.AppendRaw(kind, number, value); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := freezer.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	readErr := make(chan error, 1)
+	var readers sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		worker := worker
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for iteration := uint64(0); ; iteration++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				number := (iteration*37 + uint64(worker)) % rows
+				for kind := range tables {
+					got, err := freezer.Ancient(kind, number)
+					if err != nil || !bytes.Equal(got, want[kind][number]) {
+						select {
+						case readErr <- fmt.Errorf("read %s[%d]: match=%v err=%v", kind, number, bytes.Equal(got, want[kind][number]), err):
+						default:
+						}
+						return
+					}
+				}
+			}
+		}()
+	}
+	result, migrateErr := freezer.MigrateV2(V2MigrationOptions{
+		Tables:        []string{"bodies", "tx_infos"},
+		SegmentBlocks: 64,
+		FrameBlocks:   8,
+		MaxSegments:   8,
+		Online:        true,
+	})
+	close(stop)
+	readers.Wait()
+	if migrateErr != nil {
+		t.Fatalf("online migration: %v", migrateErr)
+	}
+	select {
+	case err := <-readErr:
+		t.Fatal(err)
+	default:
+	}
+	if result.End != rows || freezer.V2Coverage() != rows {
+		t.Fatalf("result=%+v coverage=%d", result, freezer.V2Coverage())
+	}
+}
+
+func TestFreezerMigrateV2CancellationDoesNotPublish(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{"bodies": {Prunable: true}}
+	freezer, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer freezer.Close()
+	if _, err := freezer.ModifyAncients(func(op AncientWriteOp) error {
+		for number := uint64(0); number < 64; number++ {
+			if err := op.AppendRaw("bodies", number, bytes.Repeat([]byte("cancel"), 20)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = freezer.MigrateV2(V2MigrationOptions{
+		Tables:        []string{"bodies"},
+		SegmentBlocks: 64,
+		FrameBlocks:   8,
+		Online:        true,
+		Context:       ctx,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("migration error = %v, want context.Canceled", err)
+	}
+	if coverage := freezer.V2Coverage(); coverage != 0 {
+		t.Fatalf("coverage=%d after cancellation", coverage)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "v2", "manifests"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("published manifests after cancellation: %d", len(entries))
+	}
+}
+
 func newTestV2Store(t *testing.T, kind string, reader *v2SegmentReader) *v2Store {
 	t.Helper()
 	decoder, err := newV2Decoder()
@@ -197,5 +430,7 @@ func newTestV2Store(t *testing.T, kind string, reader *v2SegmentReader) *v2Store
 		decoder:    decoder,
 		cacheList:  list.New(),
 		cacheItems: make(map[v2FrameKey]*list.Element),
+		cacheLoads: make(map[v2FrameKey]*v2FrameLoad),
+		cacheLimit: v2DefaultCacheBytes,
 	}
 }

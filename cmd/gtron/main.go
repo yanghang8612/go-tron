@@ -230,6 +230,20 @@ var (
 		Usage: "Maximum blocks frozen per freezer pass",
 		Value: defaultFreezerBatch(),
 	}
+	freezerV2DisableFlag = &cli.BoolFlag{
+		Name:  "freezer.v2.disable",
+		Usage: "Disable automatic promotion of complete V1 segments to compressed V2",
+	}
+	freezerV2FrameBlocksFlag = &cli.Uint64Flag{
+		Name:  "freezer.v2.frame-blocks",
+		Usage: "Blocks per independently compressed V2 Zstd frame",
+		Value: 64,
+	}
+	freezerV2SegmentBlocksFlag = &cli.Uint64Flag{
+		Name:  "freezer.v2.segment-blocks",
+		Usage: "Blocks per automatically promoted V2 segment",
+		Value: 65_536,
+	}
 	syncRestartFromFlag = &cli.Uint64Flag{
 		Name:  "sync.restart-from",
 		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
@@ -286,6 +300,9 @@ var app = &cli.App{
 		freezerIntervalFlag,
 		freezerMarginFlag,
 		freezerBatchFlag,
+		freezerV2DisableFlag,
+		freezerV2FrameBlocksFlag,
+		freezerV2SegmentBlocksFlag,
 		syncRestartFromFlag,
 		syncStopAtFlag,
 	},
@@ -398,7 +415,10 @@ func gtron(ctx *cli.Context) error {
 		_ = db.Close()
 	}
 
-	freezerCfg := makeFreezerConfig(ctx)
+	freezerCfg, err := makeFreezerConfig(ctx)
+	if err != nil {
+		return err
+	}
 	ancientReader := rawdb.AncientReader(rawdb.NoopAncient{})
 	ancientPath := ancientDataDir(cfg.DataDir)
 	if shouldOpenFreezer(ancientPath, freezerCfg) {
@@ -754,7 +774,10 @@ func gtron(ctx *cli.Context) error {
 				"ancient", ancientPath,
 				"margin", freezerCfg.MarginBlocks,
 				"batch", freezerCfg.BatchBlocks,
-				"interval", freezerCfg.Interval)
+				"interval", freezerCfg.Interval,
+				"v2", freezerCfg.V2Enabled,
+				"v2FrameBlocks", freezerCfg.V2FrameBlocks,
+				"v2SegmentBlocks", freezerCfg.V2SegmentBlocks)
 		}
 	} else if ancientStore != nil {
 		log.Info("Chain freezer disabled; existing ancient data readable", "ancient", ancientPath)
