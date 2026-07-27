@@ -102,6 +102,13 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	code := contract.Code
 	codeLen := uint64(len(code))
 	table := in.table
+	// Historical replay runs without tracing before DynamicEnergy activates.
+	// Select that stable mode once per frame so its per-op loop does not keep
+	// sampling tracer state, dynamic-energy bookkeeping and trace operands that
+	// are provably unused for the whole frame.
+	if tracer == nil && !dynamicEnergy {
+		return in.runBaseEnergy(contract, mem, stack, code, codeLen, table)
+	}
 	for {
 		if *pc >= codeLen {
 			break
@@ -241,6 +248,71 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 
 	if dynamicEnergy {
 		recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
+	}
+	return nil, nil
+}
+
+// runBaseEnergy is Run's no-tracer, pre-DynamicEnergy execution loop. Keep its
+// validation, charging, dispatch, terminal and error order byte-for-byte aligned
+// with the general loop above; only tracing and dynamic-energy-only work is
+// absent. Selecting it once at frame entry avoids adding another opcode-level
+// dispatch branch.
+func (in *Interpreter) runBaseEnergy(contract *Contract, mem *Memory, stack *Stack, code []byte, codeLen uint64, table *JumpTable) ([]byte, error) {
+	pc := &stack.pc
+	for {
+		if *pc >= codeLen {
+			break
+		}
+
+		op := OpCode(code[*pc])
+		operation := &table[op]
+		if operation.execute == nil {
+			// Preserve the general loop's bookkeeping for a known opcode disabled
+			// by the resolved fork table. Unknown opcodes return immediately.
+			if isForkGatedOpcode(op) {
+				in.currentOp = op
+				in.energyErr = nil
+				in.opBaseAccum = 0
+			}
+			return nil, newInvalidOpCodeError(op)
+		}
+		in.currentOp = op
+		in.energyErr = nil
+
+		stackLen := stack.len()
+		if stackLen < operation.minStack {
+			return nil, newStackUnderflowError(operation.minStack, stackLen)
+		}
+		if stackLen > operation.maxInputStack {
+			return nil, newStackOverflowError()
+		}
+		if in.readOnly && operation.writes {
+			return nil, ErrWriteProtection
+		}
+		if operation.energyCost > 0 && !contract.UseEnergy(operation.energyCost) {
+			return nil, newOutOfEnergyError(op, contract, operation.energyCost, 0, false)
+		}
+
+		var ret []byte
+		var err error
+		if op >= PUSH1 && op <= PUSH32 {
+			ret, err = opPush(pc, in, contract, mem, stack)
+		} else {
+			ret, err = operation.execute(pc, in, contract, mem, stack)
+		}
+		if err != nil {
+			if errors.Is(err, ErrOutOfEnergy) {
+				return nil, in.outOfEnergyError()
+			}
+			return nil, err
+		}
+		if op == STOP || op == RETURN || op == REVERT || op == SELFDESTRUCT {
+			if op == REVERT {
+				return ret, ErrExecutionReverted
+			}
+			return ret, nil
+		}
+		(*pc)++
 	}
 	return nil, nil
 }

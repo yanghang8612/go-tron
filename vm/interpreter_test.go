@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -74,6 +75,84 @@ func BenchmarkInterpreterDup(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestBaseEnergyLoopMatchesGeneralTracerLoop(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     []byte
+		energy   uint64
+		readOnly bool
+	}{
+		{name: "normal", code: []byte{byte(PUSH1), 1, byte(PUSH1), 2, byte(ADD), byte(POP), byte(STOP)}, energy: 1_000_000},
+		{name: "return-data", code: []byte{byte(PUSH1), 0x2a, byte(PUSH1), 0, byte(MSTORE), byte(PUSH1), 32, byte(PUSH1), 0, byte(RETURN)}, energy: 1_000_000},
+		{name: "revert", code: []byte{byte(PUSH1), 0, byte(PUSH1), 0, byte(REVERT)}, energy: 1_000_000},
+		{name: "underflow", code: []byte{byte(ADD)}, energy: 1_000_000},
+		{name: "fork-gated-invalid", code: []byte{byte(SHL)}, energy: 1_000_000},
+		{name: "out-of-energy", code: []byte{byte(PUSH1), 1, byte(STOP)}, energy: 0},
+		{name: "dynamic-op-out-of-energy", code: []byte{byte(PUSH1), 0x2a, byte(PUSH1), 0, byte(MSTORE)}, energy: 6},
+		{name: "write-protection", code: []byte{byte(PUSH1), 0, byte(PUSH1), 0, byte(SSTORE)}, energy: 1_000_000, readOnly: true},
+	}
+
+	type result struct {
+		ret        []byte
+		err        error
+		energy     uint64
+		energyUsed uint64
+		currentOp  OpCode
+		energyErr  error
+	}
+	run := func(t *testing.T, tc struct {
+		name     string
+		code     []byte
+		energy   uint64
+		readOnly bool
+	}, traced bool) result {
+		t.Helper()
+		cfg := TVMConfig{}
+		if traced {
+			cfg.Tracer = &recorderTracer{}
+		}
+		tvm := newTestEVMWithConfig(t, cfg)
+		tvm.interpreter.readOnly = tc.readOnly
+		contract := NewContract(tcommon.Address{0x41, 1}, tcommon.Address{0x41, 2}, 0, tc.energy)
+		contract.SetCode(contract.Address, tc.code)
+		ret, err := tvm.interpreter.Run(contract)
+		return result{
+			ret:        ret,
+			err:        err,
+			energy:     contract.Energy,
+			energyUsed: contract.EnergyUsed,
+			currentOp:  tvm.interpreter.currentOp,
+			energyErr:  tvm.interpreter.energyErr,
+		}
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fast := run(t, tc, false)
+			reference := run(t, tc, true)
+			if !bytes.Equal(fast.ret, reference.ret) {
+				t.Fatalf("return = %x, traced reference %x", fast.ret, reference.ret)
+			}
+			if reflect.TypeOf(fast.err) != reflect.TypeOf(reference.err) || errorText(fast.err) != errorText(reference.err) {
+				t.Fatalf("error = %T %v, traced reference %T %v", fast.err, fast.err, reference.err, reference.err)
+			}
+			if fast.energy != reference.energy || fast.energyUsed != reference.energyUsed {
+				t.Fatalf("energy = (%d used %d), traced reference (%d used %d)", fast.energy, fast.energyUsed, reference.energy, reference.energyUsed)
+			}
+			if fast.currentOp != reference.currentOp || errorText(fast.energyErr) != errorText(reference.energyErr) {
+				t.Fatalf("bookkeeping = (op %s err %v), traced reference (op %s err %v)", fast.currentOp, fast.energyErr, reference.currentOp, reference.energyErr)
+			}
+		})
+	}
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func TestSharedPushHandlerUsesOpcodeWidth(t *testing.T) {
