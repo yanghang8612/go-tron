@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"unsafe"
@@ -193,6 +194,38 @@ func TestTransactionDecodedTriggerContractUsesInlineSlot(t *testing.T) {
 	}
 	if !proto.Equal(got, want) {
 		t.Fatalf("decoded trigger = %v, want %v", got, want)
+	}
+}
+
+func TestTransactionDecodedTriggerContractOwnsLargerData(t *testing.T) {
+	want := &contractpb.TriggerSmartContract{
+		OwnerAddress:    []byte{0x41, 0x01},
+		ContractAddress: []byte{0x41, 0x02},
+		Data:            bytes.Repeat([]byte{0xaa}, triggerDataInlineSize+1),
+	}
+	parameter, err := anypb.New(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TriggerSmartContract,
+			Parameter: parameter,
+		}},
+	}})
+	message, err := tx.DecodedContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := message.(*contractpb.TriggerSmartContract)
+	if &got.Data[0] == &tx.triggerData[0] {
+		t.Fatal("larger trigger data unexpectedly used the inline backing slot")
+	}
+	for i := range parameter.Value {
+		parameter.Value[i] ^= 0xff
+	}
+	if !proto.Equal(got, want) {
+		t.Fatal("decoded trigger data aliases the Any wire buffer")
 	}
 }
 
@@ -388,29 +421,33 @@ func BenchmarkTransactionDecodedContract(b *testing.B) {
 }
 
 func BenchmarkTransactionDecodedTriggerContractCold(b *testing.B) {
-	trigger := &contractpb.TriggerSmartContract{
-		OwnerAddress:    make([]byte, common.AddressLength),
-		ContractAddress: make([]byte, common.AddressLength),
-		Data:            make([]byte, 128),
-		CallValue:       1_000_000,
-	}
-	parameter, err := anypb.New(trigger)
-	if err != nil {
-		b.Fatal(err)
-	}
-	pb := &corepb.Transaction{RawData: &corepb.TransactionRaw{
-		Contract: []*corepb.Transaction_Contract{{
-			Type:      corepb.Transaction_Contract_TriggerSmartContract,
-			Parameter: parameter,
-		}},
-	}}
-	b.ReportAllocs()
-	for b.Loop() {
-		tx := NewTransactionFromPB(pb)
-		decodedContractBenchmarkSink, err = tx.DecodedContract()
-		if err != nil {
-			b.Fatal(err)
-		}
+	for _, size := range []int{68, 128, 196} {
+		b.Run(strconv.Itoa(size), func(b *testing.B) {
+			trigger := &contractpb.TriggerSmartContract{
+				OwnerAddress:    make([]byte, common.AddressLength),
+				ContractAddress: make([]byte, common.AddressLength),
+				Data:            make([]byte, size),
+				CallValue:       1_000_000,
+			}
+			parameter, err := anypb.New(trigger)
+			if err != nil {
+				b.Fatal(err)
+			}
+			pb := &corepb.Transaction{RawData: &corepb.TransactionRaw{
+				Contract: []*corepb.Transaction_Contract{{
+					Type:      corepb.Transaction_Contract_TriggerSmartContract,
+					Parameter: parameter,
+				}},
+			}}
+			b.ReportAllocs()
+			for b.Loop() {
+				tx := NewTransactionFromPB(pb)
+				decodedContractBenchmarkSink, err = tx.DecodedContract()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

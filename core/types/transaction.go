@@ -17,10 +17,11 @@ import (
 // ContractTypeNone indicates no contract is present in the transaction.
 const ContractTypeNone corepb.Transaction_Contract_ContractType = -1
 
-// triggerDataInlineSize fits the common ABI selector plus four 32-byte words.
-// A recent mainnet sample placed 76% of TriggerSmartContract data at or below
-// this size; larger calls retain the generated decoder's exact-sized heap copy.
-const triggerDataInlineSize = 132
+// triggerDataInlineSize fits the dominant token-call shape: a 4-byte selector
+// plus two 32-byte ABI words. Keeping four words inline saved one allocation for
+// some larger calls but charged every transaction wrapper another 64 bytes;
+// larger calls already retain an exact-sized owned copy on the cold path below.
+const triggerDataInlineSize = 68
 
 var (
 	triggerDecodeReserveLayoutOK  = verifyTriggerDecodeReserveLayout()
