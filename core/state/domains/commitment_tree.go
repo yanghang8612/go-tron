@@ -487,7 +487,9 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 			child := &dst.children[i]
 			child.kind = kindHash
 			child.leafKey = nil
-			copy(child.valueHash[:], rest[:common.HashLength])
+			// The checked fixed-width conversion compiles to inline vector moves;
+			// a slice copy otherwise calls runtime.memmove on linux/amd64.
+			child.valueHash = common.Hash(rest[:common.HashLength])
 			rest = rest[common.HashLength:]
 
 		case kindLeaf:
@@ -508,7 +510,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 			child := &dst.children[i]
 			child.kind = kindLeaf
 			child.leafKey = key
-			copy(child.valueHash[:], rest[:common.HashLength])
+			child.valueHash = common.Hash(rest[:common.HashLength])
 			rest = rest[common.HashLength:]
 
 		default:
