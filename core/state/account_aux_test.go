@@ -22,6 +22,71 @@ func BenchmarkStateDBGetTRC10BalanceDirty(b *testing.B) {
 	}
 }
 
+func TestTRC10BalancePointReadCachesAcrossTransferPhases(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x95)
+	sdb.SetTRC10Balance(addr, 1_000_001, 77)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(index)
+
+	if got := reopened.GetTRC10Balance(addr, 1_000_001); got != 77 {
+		t.Fatalf("first balance = %d, want 77", got)
+	}
+	if got := reopened.GetTRC10Balance(addr, 1_000_001); got != 77 {
+		t.Fatalf("cached balance = %d, want 77", got)
+	}
+	// TransferAsset bandwidth processing reads other split auxiliary domains;
+	// those must not evict the balance point read needed by Execute.
+	_ = reopened.GetFreeAssetNetUsageV2(addr, "1000001")
+	_ = reopened.GetLatestAssetOperationTimeV2(addr, "1000001")
+	if got := reopened.GetTRC10Balance(addr, 1_000_001); got != 77 {
+		t.Fatalf("balance after bandwidth reads = %d, want 77", got)
+	}
+	if got := index.getsByDomain[kvdomains.AccountAssetV2]; got != 1 {
+		t.Fatalf("repeated balance reads opened durable row %d times, want 1", got)
+	}
+
+	snapshot := reopened.Snapshot()
+	if err := reopened.SubTRC10Balance(addr, 1_000_001, 7); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.GetTRC10Balance(addr, 1_000_001); got != 70 {
+		t.Fatalf("dirty balance = %d, want 70", got)
+	}
+	if got := index.getsByDomain[kvdomains.AccountAssetV2]; got != 1 {
+		t.Fatalf("cached read + write opened durable row %d times, want 1", got)
+	}
+	reopened.RevertToSnapshot(snapshot)
+	if got := reopened.GetTRC10Balance(addr, 1_000_001); got != 77 {
+		t.Fatalf("reverted balance = %d, want 77", got)
+	}
+	if got := index.getsByDomain[kvdomains.AccountAssetV2]; got != 1 {
+		t.Fatalf("revert lost durable point cache: reads=%d, want 1", got)
+	}
+
+	if err := reopened.SubTRC10Balance(addr, 1_000_001, 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.GetTRC10Balance(addr, 1_000_001); got != 70 {
+		t.Fatalf("committed balance = %d, want 70", got)
+	}
+	if got := index.getsByDomain[kvdomains.AccountAssetV2]; got != 2 {
+		t.Fatalf("commit did not invalidate durable pre-image: reads=%d, want 2", got)
+	}
+}
+
 func TestTRC10MapsPersistOutsideAccountEnvelope(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x91)

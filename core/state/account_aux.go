@@ -137,6 +137,39 @@ func clearAccountAuxProto(pb *corepb.Account) {
 	pb.LatestAssetOperationTimeV2 = nil
 }
 
+func isTRC10BalanceDomain(domain kvdomains.KVDomain) bool {
+	return domain == kvdomains.AccountAsset || domain == kvdomains.AccountAssetV2
+}
+
+func clearTRC10PointCache(obj *stateObject) {
+	if obj == nil {
+		return
+	}
+	obj.trc10PointDomain = 0
+	obj.trc10PointKey = ""
+	obj.trc10PointValue = 0
+	obj.trc10PointExists = false
+	obj.trc10PointLoaded = false
+}
+
+func trc10PointValue(obj *stateObject, domain kvdomains.KVDomain, key []byte) (int64, bool, bool) {
+	if obj == nil || !obj.trc10PointLoaded || obj.trc10PointDomain != domain || obj.trc10PointKey != string(key) {
+		return 0, false, false
+	}
+	return obj.trc10PointValue, obj.trc10PointExists, true
+}
+
+func cacheTRC10PointValue(obj *stateObject, domain kvdomains.KVDomain, key []byte, value int64, exists bool) {
+	if obj == nil {
+		return
+	}
+	obj.trc10PointDomain = domain
+	obj.trc10PointKey = string(key)
+	obj.trc10PointValue = value
+	obj.trc10PointExists = exists
+	obj.trc10PointLoaded = true
+}
+
 func accountAuxMap(pb *corepb.Account, domain kvdomains.KVDomain, create bool) map[string]int64 {
 	if pb == nil {
 		return nil
@@ -165,6 +198,36 @@ func accountAuxMap(pb *corepb.Account, domain kvdomains.KVDomain, create bool) m
 }
 
 func (s *StateDB) accountAuxValue(addr tcommon.Address, domain kvdomains.KVDomain, key []byte) (int64, bool, error) {
+	if isTRC10BalanceDomain(domain) {
+		obj := s.getStateObject(addr)
+		if obj == nil || obj.deleted {
+			return 0, false, nil
+		}
+		if entry, dirty := lookupKVEntry(obj.kvDirty, domain, key); dirty {
+			if entry.deleted {
+				return 0, false, nil
+			}
+			decoded, err := decodeAccountAuxInt64(entry.val)
+			return decoded, true, err
+		}
+		if value, exists, cached := trc10PointValue(obj, domain, key); cached {
+			return value, exists, nil
+		}
+		value, exists, err := s.readAccountKVLatestForDecoding(addr, obj.accountKVGeneration, domain, key)
+		if err != nil {
+			return 0, false, err
+		}
+		if !exists {
+			cacheTRC10PointValue(obj, domain, key, 0, false)
+			return 0, false, nil
+		}
+		decoded, err := decodeAccountAuxInt64(value)
+		if err != nil {
+			return 0, true, err
+		}
+		cacheTRC10PointValue(obj, domain, key, decoded, true)
+		return decoded, true, nil
+	}
 	value, ok, err := s.getAccountKVForDecoding(addr, domain, key)
 	if err != nil || !ok {
 		return 0, ok, err
@@ -174,7 +237,22 @@ func (s *StateDB) accountAuxValue(addr tcommon.Address, domain kvdomains.KVDomai
 }
 
 func (s *StateDB) setAccountAuxValue(addr tcommon.Address, domain kvdomains.KVDomain, key []byte, value int64) error {
-	if err := s.SetAccountKV(addr, domain, key, encodeAccountAuxInt64(value)); err != nil {
+	encoded := encodeAccountAuxInt64(value)
+	var err error
+	if obj := s.stateObjects[addr]; isTRC10BalanceDomain(domain) && obj != nil {
+		if previous, exists, cached := trc10PointValue(obj, domain, key); cached {
+			var previousEncoded []byte
+			if exists {
+				previousEncoded = encodeAccountAuxInt64(previous)
+			}
+			err = s.setAccountKVWithPrev(addr, domain, key, encoded, true, previousEncoded, exists, true)
+		} else {
+			err = s.SetAccountKV(addr, domain, key, encoded)
+		}
+	} else {
+		err = s.SetAccountKV(addr, domain, key, encoded)
+	}
+	if err != nil {
 		return err
 	}
 	if obj := s.stateObjects[addr]; obj != nil && obj.account != nil {

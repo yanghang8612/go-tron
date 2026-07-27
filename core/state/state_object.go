@@ -139,6 +139,18 @@ type stateObject struct {
 	accountResourceLoaded         bool
 	accountFrozenBandwidthLoaded  bool
 	accountTronPowerLoaded        bool
+	// trc10Point caches the last durable TRC10 balance point-read for this
+	// account. TransferAsset validation, bandwidth charging, execution, and the
+	// balance mutator otherwise reopen the same flat-latest row several times in
+	// one transaction. Other account-auxiliary reads deliberately do not evict
+	// it because TransferAsset bandwidth accounting touches usage/time rows
+	// between validation and execution. A dirty overlay always takes precedence;
+	// releaseKVDirty clears this durable pre-image after a successful commit.
+	trc10PointDomain kvdomains.KVDomain
+	trc10PointKey    string
+	trc10PointValue  int64
+	trc10PointExists bool
+	trc10PointLoaded bool
 	// accountFrozenBandwidthCanonicalPooled marks Account.Frozen as backed by a
 	// one-element array borrowed from the canonical V1 bandwidth cache pool.
 	accountFrozenBandwidthCanonicalPooled bool
@@ -439,6 +451,7 @@ func (s *stateObject) setKVDirty(mapKey string, entry kvEntry) {
 // available to another account. Callers must first finish every operation that
 // borrows map keys or entries (commit plans do so through finalization).
 func (s *stateObject) releaseKVDirty() {
+	clearTRC10PointCache(s)
 	dirty := s.kvDirty
 	highWater := s.kvDirtyHighWater
 	s.kvDirty = nil
