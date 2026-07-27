@@ -128,6 +128,65 @@ func FuzzUnmarshalVotesOwnedEquivalent(f *testing.F) {
 }
 
 var benchmarkVotesSink *corepb.Votes
+var benchmarkVoteSink *corepb.Vote
+
+func FuzzUnmarshalVoteOwnedEquivalent(f *testing.F) {
+	for _, vote := range []*corepb.Vote{
+		{},
+		{VoteAddress: bytes.Repeat([]byte{0x41}, tcommon.AddressLength), VoteCount: 11},
+		{VoteAddress: bytes.Repeat([]byte{0x42}, 128), VoteCount: -1},
+	} {
+		data, err := proto.Marshal(vote)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(data)
+	}
+	f.Add([]byte{0x0a, 0x05, 0x01})
+	f.Add(protowire.AppendVarint(protowire.AppendTag(nil, 100, protowire.VarintType), 1))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		want := new(corepb.Vote)
+		genericErr := proto.Unmarshal(data, want)
+		got, directErr := unmarshalVoteOwned(data)
+		if (genericErr == nil) != (directErr == nil) {
+			t.Fatalf("error mismatch: generic=%v direct=%v data=%x", genericErr, directErr, data)
+		}
+		if genericErr == nil && !proto.Equal(got, want) {
+			t.Fatalf("decoded vote mismatch\ngot:  %v\nwant: %v\ndata: %x", got, want, data)
+		}
+	})
+}
+
+func BenchmarkUnmarshalVoteOwned(b *testing.B) {
+	vote := &corepb.Vote{
+		VoteAddress: bytes.Repeat([]byte{0x41}, tcommon.AddressLength),
+		VoteCount:   11,
+	}
+	payload, err := proto.Marshal(vote)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("Owned", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			benchmarkVoteSink, err = unmarshalVoteOwned(payload)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("Protobuf", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			vote := new(corepb.Vote)
+			err = proto.Unmarshal(payload, vote)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkVoteSink = vote
+		}
+	})
+}
 
 func BenchmarkUnmarshalVotesOwned(b *testing.B) {
 	votes := &corepb.Votes{Address: bytes.Repeat([]byte{0x41}, 21)}

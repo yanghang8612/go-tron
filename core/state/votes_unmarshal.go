@@ -32,6 +32,15 @@ type decodedVotes struct {
 	address [common.AddressLength]byte
 }
 
+// decodedVote co-locates the protocol-sized address with the protobuf object.
+// Account vote rows return &vote, which keeps the enclosing allocation alive;
+// ordinary 21-byte addresses therefore need one heap object instead of a Vote
+// plus a separately allocated bytes field.
+type decodedVote struct {
+	vote    corepb.Vote
+	address [common.AddressLength]byte
+}
+
 type votesWireLayout struct {
 	address      []byte
 	oldCount     int
@@ -54,6 +63,30 @@ func unmarshalVotesOwned(data []byte) (*corepb.Votes, error) {
 		return nil, err
 	}
 	return votes, nil
+}
+
+// unmarshalVoteOwned is the single-row counterpart of unmarshalVotesOwned.
+// The fast path accepts only the current two-field Vote schema. Unknown fields,
+// unusual wire types, and malformed input retain protobuf-go's generic decode
+// and error behavior through the fallback.
+func unmarshalVoteOwned(data []byte) (*corepb.Vote, error) {
+	if votesDecodeLayoutOK {
+		if address, ok := scanVoteWire(data); ok {
+			decoded := new(decodedVote)
+			addressArena := decoded.address[:]
+			if len(address) > len(addressArena) {
+				addressArena = make([]byte, len(address))
+			}
+			offset := 0
+			decodeVoteWire(data, &decoded.vote, addressArena, &offset)
+			return &decoded.vote, nil
+		}
+	}
+	vote := new(corepb.Vote)
+	if err := proto.Unmarshal(data, vote); err != nil {
+		return nil, err
+	}
+	return vote, nil
 }
 
 func scanVotesWire(data []byte) (votesWireLayout, bool) {

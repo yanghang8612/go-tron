@@ -20,11 +20,11 @@ func decodeAccountVoteRow(key, value []byte) (uint32, *corepb.Vote, error) {
 	if len(key) != 4 {
 		return 0, nil, fmt.Errorf("account vote key length %d, want 4", len(key))
 	}
-	var vote corepb.Vote
-	if err := proto.Unmarshal(value, &vote); err != nil {
+	vote, err := unmarshalVoteOwned(value)
+	if err != nil {
 		return 0, nil, fmt.Errorf("decode account vote %x: %w", key, err)
 	}
-	return binary.BigEndian.Uint32(key), &vote, nil
+	return binary.BigEndian.Uint32(key), vote, nil
 }
 
 func clearAccountVotesProto(pb *corepb.Account) {
