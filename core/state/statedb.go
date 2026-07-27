@@ -28,6 +28,7 @@ var (
 	stateObjectCachePreviousReuseCounter = metrics.NewRegisteredCounter("state/account_cache/reuse/previous", nil)
 	stateObjectCacheOlderReuseCounter    = metrics.NewRegisteredCounter("state/account_cache/reuse/older", nil)
 	stateObjectCacheOldestReuseCounter   = metrics.NewRegisteredCounter("state/account_cache/reuse/oldest", nil)
+	stateObjectCacheAncientReuseCounter  = metrics.NewRegisteredCounter("state/account_cache/reuse/ancient", nil)
 	stateObjectCacheHydrationCounter     = metrics.NewRegisteredCounter("state/account_cache/hydrations", nil)
 	stateObjectCacheEvictionCounter      = metrics.NewRegisteredCounter("state/account_cache/evictions", nil)
 )
@@ -89,9 +90,9 @@ type StateDB struct {
 	// or replace the mapped object.
 	lastStateObject *stateObject
 	// touchedStateObjects contains each account first accessed in the current
-	// block. The three retained-state slices are the preceding three successful
-	// blocks' working sets. At commit the four slices rotate and
-	// clean accounts not reused for three complete blocks are evicted. This small
+	// block. The four retained-state slices are the preceding four successful
+	// blocks' working sets. At commit the five slices rotate and
+	// clean accounts not reused for four complete blocks are evicted. This small
 	// generational window captures common alternating-block account reuse without
 	// letting a range-reused StateDB retain every account it has ever read. Slice
 	// backing alternates in steady state, so rotation itself does not allocate.
@@ -99,6 +100,7 @@ type StateDB struct {
 	retainedStateObjects         []tcommon.Address
 	olderRetainedStateObjects    []tcommon.Address
 	oldestRetainedStateObjects   []tcommon.Address
+	ancientRetainedStateObjects  []tcommon.Address
 	stateObjectWorkingGeneration uint64
 
 	// loadedAccountProtoObjects tracks objects whose original flat-envelope
@@ -4132,23 +4134,26 @@ func (s *StateDB) touchRetainedStateObject(obj *stateObject) {
 			stateObjectCacheOlderReuseCounter.Inc(1)
 		case 3:
 			stateObjectCacheOldestReuseCounter.Inc(1)
+		case 4:
+			stateObjectCacheAncientReuseCounter.Inc(1)
 		}
 	}
 	s.touchStateObject(obj)
 }
 
 // rotateStateObjectWorkingSet evicts clean accounts whose most recent access
-// was three successful blocks ago. All dirty objects have normally been finalized
+// was four successful blocks ago. All dirty objects have normally been finalized
 // before this call. The defensive dirty branch retains an object if a synthetic
 // caller violates that lifecycle rather than risking loss of uncommitted state.
 func (s *StateDB) rotateStateObjectWorkingSet() {
-	expired := s.oldestRetainedStateObjects
+	expired := s.ancientRetainedStateObjects
+	ancient := s.oldestRetainedStateObjects
 	oldest := s.olderRetainedStateObjects
 	previous := s.retainedStateObjects
 	current := s.touchedStateObjects
 	expiredGeneration := uint64(0)
-	if s.stateObjectWorkingGeneration >= 3 {
-		expiredGeneration = s.stateObjectWorkingGeneration - 3
+	if s.stateObjectWorkingGeneration >= 4 {
+		expiredGeneration = s.stateObjectWorkingGeneration - 4
 	}
 	evictions := int64(0)
 	for _, addr := range expired {
@@ -4178,6 +4183,7 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 			obj.cacheTouched = false
 		}
 	}
+	s.ancientRetainedStateObjects = ancient
 	s.oldestRetainedStateObjects = oldest
 	s.olderRetainedStateObjects = previous
 	s.retainedStateObjects = current

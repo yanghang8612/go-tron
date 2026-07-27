@@ -93,7 +93,7 @@ type stateObject struct {
 	// observe through its exported Account method.
 	wrapperEscaped bool
 	// cacheTouched records membership in StateDB.touchedStateObjects for the
-	// current block. StateDB keeps the preceding three blocks' account working sets
+	// current block. StateDB keeps the preceding four blocks' account working sets
 	// across successful commits; the bit makes repeated hot-path lookups a
 	// predictable branch instead of a map insertion on every access.
 	cacheTouched bool
