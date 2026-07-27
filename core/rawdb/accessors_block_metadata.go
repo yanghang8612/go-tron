@@ -26,13 +26,67 @@ type blockMetadataRow struct {
 	value []byte
 }
 
-const maxPooledMetadataInfoArena = 4 << 20
+type blockMetadataScratch struct {
+	bytes        []byte
+	rows         []blockMetadataRow
+	infoPayloads [][]byte
+}
+
+const (
+	maxPooledMetadataInfoArena    = 4 << 20
+	maxPooledMetadataScratchBytes = 4 << 20
+	maxPooledMetadataScratchRows  = 1 << 16
+)
 
 var metadataInfoArenaPool = sync.Pool{
 	New: func() any {
 		arena := make([]byte, 0, 64<<10)
 		return &arena
 	},
+}
+
+var blockMetadataScratchPool = sync.Pool{
+	New: func() any {
+		return &blockMetadataScratch{
+			bytes:        make([]byte, 0, 64<<10),
+			rows:         make([]blockMetadataRow, 0, 256),
+			infoPayloads: make([][]byte, 0, 256),
+		}
+	},
+}
+
+func borrowBlockMetadataScratch(byteCount, rowCount, infoCount int) *blockMetadataScratch {
+	scratch := blockMetadataScratchPool.Get().(*blockMetadataScratch)
+	if cap(scratch.bytes) < byteCount {
+		scratch.bytes = make([]byte, byteCount)
+	} else {
+		scratch.bytes = scratch.bytes[:byteCount]
+	}
+	if cap(scratch.rows) < rowCount {
+		scratch.rows = make([]blockMetadataRow, 0, rowCount)
+	} else {
+		scratch.rows = scratch.rows[:0]
+	}
+	if cap(scratch.infoPayloads) < infoCount {
+		scratch.infoPayloads = make([][]byte, 0, infoCount)
+	} else {
+		scratch.infoPayloads = scratch.infoPayloads[:0]
+	}
+	return scratch
+}
+
+func returnBlockMetadataScratch(scratch *blockMetadataScratch) {
+	clear(scratch.rows)
+	clear(scratch.infoPayloads)
+	if cap(scratch.bytes) > maxPooledMetadataScratchBytes ||
+		cap(scratch.rows) > maxPooledMetadataScratchRows ||
+		cap(scratch.infoPayloads) > maxPooledMetadataScratchRows {
+		return
+	}
+	scratch.bytes = scratch.bytes[:0]
+	scratch.rows = scratch.rows[:0]
+	scratch.infoPayloads = scratch.infoPayloads[:0]
+	blockMetadataScratchPool.Put(scratch)
 }
 
 func borrowMetadataInfoArena() *[]byte {
@@ -97,7 +151,14 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 		len(taposPrefix) + len(ref) +
 		len(txInfoBlockPrefix) + len(numberValue) +
 		len(txs)*(len(txPrefix)+common.HashLength)
-	keyArena := make([]byte, keyBytes)
+	// Keys, transaction-location values, and slice descriptors are needed only
+	// until the batch has copied them. Reuse one scratch object across blocks so
+	// the durable metadata tail does not create four short-lived heap objects per
+	// block. Capacity limits in returnBlockMetadataScratch keep outliers from
+	// pinning unusually large buffers in the pool.
+	scratch := borrowBlockMetadataScratch(keyBytes+len(txs)*8, 5+len(txs), len(infos))
+	defer returnBlockMetadataScratch(scratch)
+	keyArena := scratch.bytes[:keyBytes:keyBytes]
 	keyOffset := 0
 	metadataKey := func(prefix, suffix []byte) []byte {
 		start := keyOffset
@@ -108,7 +169,7 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 		return key
 	}
 
-	rows := make([]blockMetadataRow, 0, 5+len(txs))
+	rows := scratch.rows
 	rows = append(rows,
 		blockMetadataRow{key: metadataKey(blockStateRootPrefix, blockHash[:]), value: stateRoot[:]},
 		blockMetadataRow{key: metadataKey(blockPrefix, numberValue[:]), value: blockData},
@@ -123,7 +184,7 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	var (
 		infoArena    []byte
 		infoArenaPtr *[]byte
-		infoPayloads = make([][]byte, 0, len(infos))
+		infoPayloads = scratch.infoPayloads
 	)
 	if len(infos) > 0 {
 		infoArenaPtr = borrowMetadataInfoArena()
@@ -151,7 +212,7 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	}
 	retKey := metadataKey(txInfoBlockPrefix, numberValue[:])
 	retSize := transactionRetRowsSize(int64(blockNum), blockTimestamp, infoPayloads)
-	txLocationValues := make([]byte, len(txs)*8)
+	txLocationValues := scratch.bytes[keyBytes : keyBytes+len(txs)*8 : keyBytes+len(txs)*8]
 	for i, tx := range txs {
 		hash := tx.Hash()
 		if blockNum > transactionLocationMaxBlock || i > int(^uint16(0)) {
