@@ -76,6 +76,7 @@ func dbCommand() *cli.Command {
 				Action: dbInspectCmd,
 			},
 			dbBenchmarkAncientCommand(),
+			dbMigrateAncientV2Command(),
 			dbPruneTxInfoCommand(),
 		},
 	}
@@ -169,7 +170,10 @@ func inspectAncient(path string) (*ancientInspection, error) {
 		}
 		name := entry.Name()
 		for table := range tableConfigs {
-			if strings.HasPrefix(name, table+".") {
+			isV1 := strings.HasPrefix(name, table+".")
+			rel, relErr := filepath.Rel(path, filePath)
+			isV2 := relErr == nil && strings.HasPrefix(rel, filepath.Join("v2", table)+string(filepath.Separator)) && strings.HasSuffix(name, ".gtv2")
+			if isV1 || isV2 {
 				info, err := entry.Info()
 				if err != nil {
 					return err

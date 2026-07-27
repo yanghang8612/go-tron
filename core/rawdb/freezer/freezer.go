@@ -64,7 +64,7 @@ type AncientWriteOp interface {
 // tables when opening a freezer.
 type TableConfig struct {
 	NoSnappy bool // disables item compression
-	Prunable bool // true for tables that can be pruned by TruncateTail (unused in slice 1)
+	Prunable bool // true when a durable lower tier permits V1 TruncateTail
 }
 
 func (c TableConfig) toInternal() freezerTableConfig {
@@ -88,6 +88,7 @@ type Freezer struct {
 
 	readonly     bool
 	tables       map[string]*freezerTable // Data tables for storing everything
+	v2           *v2Store                 // Immutable Zstd segment prefix, if present
 	instanceLock *flock.Flock             // File-system lock to prevent double opens
 	closeOnce    sync.Once
 }
@@ -169,6 +170,14 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 		lock.Unlock()
 		return nil, err
 	}
+	freezer.v2, err = openV2Store(datadir)
+	if err != nil {
+		for _, table := range freezer.tables {
+			table.Close()
+		}
+		lock.Unlock()
+		return nil, fmt.Errorf("open ancient V2: %w", err)
+	}
 
 	// Create the write batch.
 	freezer.writeBatch = newFreezerBatch(freezer)
@@ -184,6 +193,9 @@ func (f *Freezer) Close() error {
 
 	var errs []error
 	f.closeOnce.Do(func() {
+		if err := f.v2.Close(); err != nil {
+			errs = append(errs, err)
+		}
 		for _, table := range f.tables {
 			if err := table.Close(); err != nil {
 				errs = append(errs, err)
@@ -204,6 +216,18 @@ func (f *Freezer) AncientDatadir() (string, error) {
 // Ancient retrieves an ancient binary blob from the append-only immutable files.
 func (f *Freezer) Ancient(kind string, number uint64) ([]byte, error) {
 	if table := f.tables[kind]; table != nil {
+		if f.v2 != nil && f.v2.has(kind, number) {
+			data, err := f.v2.read(kind, number)
+			if err == nil {
+				return data, nil
+			}
+			// Before V1 tail reclamation a published V2 segment is deliberately
+			// duplicated. Fall back so a damaged new segment cannot take a
+			// previously healthy archive offline before migration verification.
+			if !table.has(number) {
+				return nil, err
+			}
+		}
 		return table.Retrieve(number)
 	}
 	return nil, errUnknownTable
@@ -216,10 +240,33 @@ func (f *Freezer) Ancient(kind string, number uint64) ([]byte, error) {
 //     but will otherwise return as many items as fit into maxByteSize.
 //   - if maxBytes is not specified, 'count' items will be returned if they are present.
 func (f *Freezer) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
-	if table := f.tables[kind]; table != nil {
+	table := f.tables[kind]
+	if table == nil {
+		return nil, errUnknownTable
+	}
+	// Preserve the V1 bulk-read path for the appendable suffix. It coalesces
+	// adjacent disk reads and is substantially cheaper than one Retrieve call
+	// per row during sync/range APIs.
+	if f.v2 == nil || len(f.v2.segments[kind]) == 0 || start >= f.v2.coverage {
 		return table.RetrieveItems(start, count, maxBytes)
 	}
-	return nil, errUnknownTable
+	output := make([][]byte, 0, count)
+	var total uint64
+	for number := start; uint64(len(output)) < count; number++ {
+		data, err := f.Ancient(kind, number)
+		if err != nil {
+			if len(output) > 0 && errors.Is(err, errOutOfBounds) {
+				break
+			}
+			return nil, err
+		}
+		if len(output) > 0 && maxBytes != 0 && total+uint64(len(data)) > maxBytes {
+			break
+		}
+		output = append(output, data)
+		total += uint64(len(data))
+	}
+	return output, nil
 }
 
 // Ancients returns the length of the frozen items.
@@ -254,12 +301,24 @@ func (f *Freezer) HasAncient(kind string, number uint64) (bool, error) {
 	if table == nil {
 		return false, errUnknownTable
 	}
-	return table.has(number), nil
+	return table.has(number) || (f.v2 != nil && f.v2.has(kind, number)), nil
 }
 
 // Tail returns the number of first stored item in the freezer.
 func (f *Freezer) Tail() (uint64, error) {
+	if f.v2 != nil && f.v2.coverage > 0 {
+		return 0, nil
+	}
 	return f.tail.Load(), nil
+}
+
+// V2Coverage returns the first block number not covered by the contiguous V2
+// segment prefix. Zero means no V2 segments have been published.
+func (f *Freezer) V2Coverage() uint64 {
+	if f == nil || f.v2 == nil {
+		return 0
+	}
+	return f.v2.coverage
 }
 
 // AncientSize returns the ancient size of the specified category.
@@ -270,7 +329,14 @@ func (f *Freezer) AncientSize(kind string) (uint64, error) {
 	defer f.writeLock.RUnlock()
 
 	if table := f.tables[kind]; table != nil {
-		return table.size()
+		size, err := table.size()
+		if err != nil {
+			return 0, err
+		}
+		if f.v2 != nil {
+			size += f.v2.size(kind)
+		}
+		return size, nil
 	}
 	return 0, errUnknownTable
 }
@@ -329,6 +395,34 @@ func (f *Freezer) TruncateHead(items uint64) (uint64, error) {
 	}
 	f.head.Store(items)
 	return oitems, nil
+}
+
+// TruncateTail discards V1 rows below tail from tables marked prunable. Callers
+// must first persist the same range elsewhere; Ancient V2 migration is the only
+// production caller. It returns the previous V1 virtual tail.
+func (f *Freezer) TruncateTail(tail uint64) (uint64, error) {
+	if f.readonly {
+		return 0, errReadOnly
+	}
+	f.writeLock.Lock()
+	defer f.writeLock.Unlock()
+
+	old := f.tail.Load()
+	if old >= tail {
+		return old, nil
+	}
+	for _, table := range f.tables {
+		if table.config.prunable {
+			if err := table.truncateTail(tail); err != nil {
+				return 0, err
+			}
+		}
+	}
+	f.tail.Store(tail)
+	if f.head.Load() < tail {
+		f.head.Store(tail)
+	}
+	return old, nil
 }
 
 // Sync flushes all data tables to disk.
@@ -415,9 +509,11 @@ func (f *Freezer) repair() error {
 				panic(fmt.Sprintf("non-prunable freezer table %s has non-zero tail: %v", kind, table.itemHidden.Load()))
 			}
 		}
-		// Slice 1 has no prunable tables, so we deliberately do NOT
-		// implement the truncateTail branch here. Re-enable when a
-		// pruning use-case lands (see go-ethereum's freezer.go::repair).
+		if table.config.prunable {
+			if err := table.truncateTail(prunedTail); err != nil {
+				return err
+			}
+		}
 	}
 
 	f.head.Store(head)

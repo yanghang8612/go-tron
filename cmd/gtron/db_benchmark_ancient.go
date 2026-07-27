@@ -124,6 +124,9 @@ func dbBenchmarkAncientCmd(ctx *cli.Context) error {
 		return fmt.Errorf("open ancient %q (stop gtron before benchmarking): %w", path, err)
 	}
 	defer freezer.Close()
+	if coverage := freezer.V2Coverage(); coverage != 0 {
+		return fmt.Errorf("ancient V2 already covers [0,%d); benchmark projections require an unmigrated V1 freezer", coverage)
+	}
 
 	rows, err := freezer.AncientCount("bodies")
 	if err != nil {

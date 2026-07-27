@@ -665,8 +665,11 @@ const (
 // already sit below Snappy's per-row overhead.
 func FreezerTableSet() map[string]rawdbfreezer.TableConfig {
 	return map[string]rawdbfreezer.TableConfig{
-		rawdbAncientBlocks:     {NoSnappy: false},
-		rawdbAncientTxInfos:    {NoSnappy: false},
+		// V2 migration moves immutable prefixes of the two large protobuf
+		// tables into Zstd segments, then advances their V1 virtual tails.
+		// state_roots remains in the compact raw V1 table.
+		rawdbAncientBlocks:     {NoSnappy: false, Prunable: true},
+		rawdbAncientTxInfos:    {NoSnappy: false, Prunable: true},
 		rawdbAncientStateRoots: {NoSnappy: true},
 	}
 }

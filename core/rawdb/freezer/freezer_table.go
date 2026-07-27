@@ -713,6 +713,108 @@ func (t *freezerTable) sizeHidden() (uint64, error) {
 	return uint64(indices[1].offset), nil
 }
 
+// truncateTail hides all items below the requested threshold and physically
+// removes complete V1 shard files that no longer contain live rows. Ancient V2
+// uses this only after the same prefix has been durably published and verified
+// in immutable Zstd segments.
+func (t *freezerTable) truncateTail(items uint64) error {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if t.itemHidden.Load() >= items {
+		return nil
+	}
+	if t.items.Load() < items {
+		return fmt.Errorf("tail %d exceeds table head %d", items, t.items.Load())
+	}
+	var (
+		newTailID uint32
+		buffer    = make([]byte, indexEntrySize)
+	)
+	if t.items.Load() == items {
+		newTailID = t.headId
+	} else {
+		offset := items - t.itemOffset.Load()
+		if _, err := t.index.ReadAt(buffer, int64((offset+1)*indexEntrySize)); err != nil {
+			return err
+		}
+		var newTail indexEntry
+		newTail.unmarshalBinary(buffer)
+		newTailID = newTail.filenum
+	}
+	oldSize, err := t.sizeNolock()
+	if err != nil {
+		return err
+	}
+	t.itemHidden.Store(items)
+	if err := t.metadata.setVirtualTail(items, false); err != nil {
+		return err
+	}
+	if t.tailId == newTailID {
+		return nil
+	}
+	if t.tailId > newTailID {
+		return fmt.Errorf("invalid index, tail-file %d, item-file %d", t.tailId, newTailID)
+	}
+	if err := t.doSync(); err != nil {
+		return err
+	}
+	var (
+		newDeleted = items
+		deleted    = t.itemOffset.Load()
+	)
+	for current := items - 1; current >= deleted; current-- {
+		if _, err := t.index.ReadAt(buffer, int64((current-deleted+1)*indexEntrySize)); err != nil {
+			return err
+		}
+		var previous indexEntry
+		previous.unmarshalBinary(buffer)
+		if previous.filenum != newTailID {
+			break
+		}
+		newDeleted = current
+		if current == 0 {
+			break
+		}
+	}
+	indexName := t.index.Name()
+	if err := t.index.Close(); err != nil {
+		return err
+	}
+	err = copyFrom(indexName, indexName, indexEntrySize*(newDeleted-deleted+1), func(file *os.File) error {
+		tailIndex := indexEntry{filenum: newTailID, offset: uint32(newDeleted)}
+		_, err := file.Write(tailIndex.append(nil))
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	t.index, err = openFreezerFileForAppend(indexName)
+	if err != nil {
+		return err
+	}
+	if err := t.index.Sync(); err != nil {
+		return err
+	}
+	t.tailId = newTailID
+	t.itemOffset.Store(newDeleted)
+	t.releaseFilesBefore(t.tailId, true)
+
+	shorten := indexEntrySize * int64(newDeleted-deleted)
+	if t.metadata.flushOffset <= shorten {
+		return fmt.Errorf("invalid index flush offset: %d, shorten: %d", t.metadata.flushOffset, shorten)
+	}
+	if err := t.metadata.setFlushOffset(t.metadata.flushOffset-shorten, true); err != nil {
+		return err
+	}
+	newSize, err := t.sizeNolock()
+	if err != nil {
+		return err
+	}
+	t.sizeGauge.Dec(int64(oldSize - newSize))
+	return nil
+}
+
 // Close closes all opened files and finalizes the freezer table for use.
 // This operation must be completed before shutdown to prevent the loss of
 // recent writes.

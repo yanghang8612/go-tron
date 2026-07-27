@@ -1,6 +1,6 @@
 # Ancient V2 compression
 
-**Status:** In progress
+**Status:** Implemented
 **Date:** 2026-07-27
 **Related:** [Chain freezer](./2026-05-19-chain-freezer-design.md),
 [TransactionInfo deduplication](./2026-07-26-transaction-info-dedup-design.md)
@@ -19,6 +19,19 @@ Zstd frames. Results include existing physical table size and a sample-ratio
 projection so the production frame size is selected from chain data rather
 than synthetic fixtures.
 
+The deployed mainnet benchmark at height approximately 18.97M selected a
+64-block frame:
+
+| Table | V1 physical | V2 projected | Saving |
+|---|---:|---:|---:|
+| `bodies` | 133.05 GiB | 90.98 GiB | 31.62% |
+| `tx_infos` | 241.35 GiB | 169.04 GiB | 29.96% |
+| combined | 374.40 GiB | 260.02 GiB | 30.55% |
+
+Moving from 64 to 128 blocks would save only another 2.13 GiB while doubling
+single-query read amplification. A 64-block frame retains 97.3% of the maximum
+measured 256-block saving and is the compression/read-latency knee.
+
 ## Target V2 layout
 
 V2 keeps the exact marshalled protobuf bytes. Consecutive rows are encoded as
@@ -30,20 +43,34 @@ An immutable segment contains:
 - checksummed Zstd frames;
 - enough record framing to recover any original row byte-for-byte.
 
-The initial candidates are 32, 64, 128, and 256 blocks per frame. Readers use
-a bounded decompressed-frame cache. The selected default must materially beat
-row compression while keeping single-block read amplification bounded.
+The benchmark candidates were 32, 64, 128, and 256 blocks per frame. Production
+uses 64. Readers share a bounded 16-frame decompressed LRU cache.
+
+Each segment covers 65,536 blocks. The versioned header and frame table have
+CRC32C checksums, and every compressed frame has its own CRC32C. Before publish,
+the migration reopens the new segment, validates every frame and record boundary,
+and byte-compares the first, middle, and last records against V1.
 
 ## Compatibility and migration
 
 - No consensus, P2P, protobuf, or Wallet API format changes.
-- The reader supports V1 freezer shards and V2 segments concurrently.
+- The reader supports a V2 immutable prefix and an appendable V1 suffix.
 - Migration operates offline, oldest complete range first.
 - A V2 segment is written to a temporary file, fsynced, reopened, sampled and
   checksum-verified, then atomically published before any V1 bytes are removed.
 - Interrupted migrations resume from the last published segment.
 - Existing V1 data remains the rollback source until its matching V2 segment
   has been durably published.
+
+Publishing a manifest is the commit point. Only manifests are loaded at node
+startup, so crash-leftover temporary or uncommitted segment files are ignored.
+After publication, advancing the V1 virtual tail is restart-safe: a crash before
+tail reclamation leaves duplicate data; a crash during multi-table reclamation
+is reconciled to the greatest tail on reopen.
+
+Operators may first migrate one segment with `--keep-v1`, restart and validate
+historical APIs, then run without `--keep-v1` to reclaim V1. Once V1 space has
+been reclaimed, rollback to a pre-V2 binary is not supported.
 
 ## Non-goals
 

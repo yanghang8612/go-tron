@@ -100,3 +100,38 @@ substantial temporary free space:
 
 The range is exactly `[ti-, ti.)`; it cannot delete adjacent `tib-*` or `tx-*`
 rows. The command verifies that no live `ti-*` row remains before returning.
+
+## Migrate ancient bodies and receipts to V2
+
+Ancient V2 groups 64 consecutive protobuf rows into independently seekable
+Zstd frames and atomically publishes 65,536-block segments. The node must be
+stopped. On installations with an automatic deployment timer, pause that timer
+before stopping the node so its health recovery does not restart gtron during
+migration.
+
+Use a retained-source canary first:
+
+```bash
+gtron db migrate-ancient-v2 \
+  --datadir /data/gtron/main/datadir \
+  --max-segments 1 \
+  --keep-v1 \
+  --yes
+```
+
+Restart the node and verify historical block and transaction-info APIs. The new
+binary reads the published V2 segment first but V1 remains available as a
+fallback and as an older-binary rollback source.
+
+After validation, stop the node again and migrate every complete segment:
+
+```bash
+gtron db migrate-ancient-v2 \
+  --datadir /data/gtron/main/datadir \
+  --yes
+```
+
+The command resumes from the last manifest, verifies every compressed frame
+before advancing the V1 tail, and leaves the final incomplete 65,536-block
+range in V1 so the running freezer can keep appending. Once V1 files have been
+reclaimed, do not roll back to a pre-V2 binary.
