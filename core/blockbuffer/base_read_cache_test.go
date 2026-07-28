@@ -62,7 +62,7 @@ func TestBaseReadCache_ProductionAdmissionHistoryBudget(t *testing.T) {
 		}
 		totalSlots += len(c.shards[i].admission)
 	}
-	if got, want := totalSlots*8, 1<<20; got != want {
+	if got, want := totalSlots*8, 4<<20; got != want {
 		t.Fatalf("admission history bytes = %d, want %d", got, want)
 	}
 }

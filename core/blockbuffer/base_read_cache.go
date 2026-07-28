@@ -36,17 +36,20 @@ const (
 
 // baseReadCacheMaxAdmissionSlots bounds the direct-mapped two-hit admission
 // history per shard. The history stores fingerprints only (no key/value
-// objects), so a 128 MiB or larger cache spends at most 1 MiB across all 16
+// objects), so a 128 MiB or larger cache spends at most 4 MiB across all 16
 // shards to keep one-hit historical-sync scans out of the resident cache.
 //
 // Historical mainnet sync performs enough durable commitment reads that the
 // former 2,048-slot cap was routinely overwritten between a hot branch's first
 // and second sighting. Those collisions conservatively behaved like another
 // first sighting, but prevented genuinely hot rows from ever reaching the
-// payload cache. 8,192 slots keeps the metadata small while reducing that
-// direct-map collision window fourfold; the two-hit admission policy itself is
-// unchanged.
-const baseReadCacheMaxAdmissionSlots = 8192
+// payload cache. The stored-mainnet replay still performs roughly 6,000 cold
+// branch reads per second with the 8,192-slot cap (only 64 KiB of history per
+// shard), so a branch revisited after a few seconds can lose its frequency
+// evidence to an unrelated direct-map collision. 32,768 slots preserve a
+// materially longer observation window for only 4 MiB of process-wide metadata;
+// the two-hit admission policy itself is unchanged.
+const baseReadCacheMaxAdmissionSlots = 32768
 
 // baseReadCacheMaxInvalidationSlots bounds the generation table used to reject
 // a durable read that races a flush of the SAME key. Cache payload is split into
