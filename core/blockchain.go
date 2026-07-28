@@ -410,7 +410,7 @@ const flushQueueCap = 8
 // latest-state writes across all of them instead of consistently flushing the
 // first pair. The delay is fully asynchronous, bounded, and interrupted
 // immediately by queue close.
-const flushCoalesceWait = 180 * time.Millisecond
+const flushCoalesceWait = 120 * time.Millisecond
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
 func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig) (*BlockChain, error) {
