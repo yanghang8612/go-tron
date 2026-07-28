@@ -100,12 +100,6 @@ const (
 	minPooledBatchSize    = 64 << 10
 	maxPooledBatchSize    = 32 << 20
 	batchBuffersPerClass  = 2
-	// NoSync commits already rely on periodic WAL syncing rather than one fsync
-	// per batch. At bulk-replay write rates the inherited 500 KiB threshold
-	// schedules hundreds of background syncs per second. Four MiB keeps the
-	// unsynced interval in the tens-of-milliseconds range while amortizing the
-	// syscall and filesystem bookkeeping across the large flush batches.
-	walBytesPerSync       = 4 << 20
 	maxTargetFileSizeBase = int64(^uint64(0)>>1) >> 6
 
 	// Keep the first compaction worker active as needed, but reserve the second
@@ -728,7 +722,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		//
 		// By setting the WALBytesPerSync, the cached WAL writes will be periodically
 		// flushed at the background if the accumulated size exceeds this threshold.
-		WALBytesPerSync: walBytesPerSync,
+		WALBytesPerSync: 5 * ethdb.IdealBatchSize,
 
 		// L0CompactionThreshold specifies the number of L0 read-amplification
 		// necessary to trigger an L0 compaction. It essentially refers to the
