@@ -186,9 +186,8 @@ const (
 
 // branchChild holds one present child entry of a hex-trie branch node.
 type branchChild struct {
-	kind      uint8
-	valueHash common.Hash // child hash or leaf value hash, selected by kind
-	leafKey   []byte      // valid when kind == kindLeaf
+	valueHash common.Hash // child hash or leaf value hash, selected by childMask
+	leafKey   []byte      // valid when childMask marks this slot as a leaf
 }
 
 // BranchData represents a hex (16-way) trie branch node.  A branch has up to
@@ -235,7 +234,6 @@ func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
 	childBit := uint32(1) << nibble
 	atomic.OrUint32(&b.childMask, childBit|(childBit<<16))
 	b.children[nibble] = branchChild{
-		kind:      kindHash,
 		valueHash: h,
 	}
 }
@@ -245,7 +243,6 @@ func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
 func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash) {
 	b.markLeafChild(nibble)
 	b.children[nibble] = branchChild{
-		kind:      kindLeaf,
 		leafKey:   append([]byte(nil), key...),
 		valueHash: valHash,
 	}
@@ -259,7 +256,6 @@ func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash)
 func (b *BranchData) setLeafChildStable(nibble uint8, key []byte, valHash common.Hash) {
 	b.markLeafChild(nibble)
 	b.children[nibble] = branchChild{
-		kind:      kindLeaf,
 		leafKey:   key,
 		valueHash: valHash,
 	}
@@ -280,7 +276,7 @@ func (b *BranchData) Encode() []byte {
 	return b.EncodeTo(nil)
 }
 
-func (b *BranchData) encodingLayout() (uint16, int) {
+func (b *BranchData) encodingLayout() (uint32, int) {
 	childBits := atomic.LoadUint32(&b.childMask)
 	mask := uint16(childBits)
 	// Every present child contributes its kind byte and 32-byte hash. Only leaf
@@ -292,7 +288,7 @@ func (b *BranchData) encodingLayout() (uint16, int) {
 		// The fixed cost above already includes the value hash.
 		size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey)
 	}
-	return mask, size
+	return childBits, size
 }
 
 // EncodeTo appends BranchData's wire encoding to dst and returns the resulting
@@ -303,33 +299,37 @@ func (b *BranchData) EncodeTo(dst []byte) []byte {
 	// Compute the mask and exact wire length together. Leaf key lengths are
 	// ordinary small uvarints; reserving binary.MaxVarintLen64 (10 bytes) for
 	// each one over-allocates the immutable encoding retained by blockbuffer.
-	mask, size := b.encodingLayout()
-	return b.encodeToLayout(dst, mask, size)
+	childBits, size := b.encodingLayout()
+	return b.encodeToLayout(dst, childBits, size)
 }
 
 // encodeToLayout is EncodeTo with a caller-supplied layout. Bulk sibling
 // persistence needs every encoded size up front to allocate one exact arena;
-// retaining the computed mask/size lets its encoding pass avoid rescanning all
-// 16 child slots a second time.
-func (b *BranchData) encodeToLayout(dst []byte, mask uint16, size int) []byte {
+// retaining the computed child bits/size lets its encoding pass avoid
+// rescanning all 16 child slots or reloading the atomic mask a second time.
+func (b *BranchData) encodeToLayout(dst []byte, childBits uint32, size int) []byte {
 	if cap(dst)-len(dst) < size {
 		grown := make([]byte, len(dst), len(dst)+size)
 		copy(grown, dst)
 		dst = grown
 	}
 
+	mask := uint16(childBits)
 	// Write childMask.
 	dst = append(dst, byte(mask>>8), byte(mask))
 
 	// Write present children low→high nibble. encodingLayout already produced
-	// the mask, so skip absent slots without rescanning all 16 entries.
+	// the presence and kind masks, so skip absent slots without rescanning all
+	// 16 entries or reloading childMask.
+	hashMask := uint16(childBits >> 16)
 	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
 		i := uint8(bits.TrailingZeros16(remaining))
 		c := &b.children[i]
-		dst = append(dst, c.kind)
-		if c.kind == kindHash {
+		if hashMask&(1<<i) != 0 {
+			dst = append(dst, kindHash)
 			dst = append(dst, c.valueHash[:]...)
 		} else {
+			dst = append(dst, kindLeaf)
 			var uvBuf [binary.MaxVarintLen64]byte
 			n := binary.PutUvarint(uvBuf[:], uint64(len(c.leafKey)))
 			dst = append(dst, uvBuf[:n]...)
@@ -486,7 +486,6 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 				return errors.New("commitment_tree: truncated at hash child")
 			}
 			child := &dst.children[i]
-			child.kind = kindHash
 			child.leafKey = nil
 			// The checked fixed-width conversion compiles to inline vector moves;
 			// a slice copy otherwise calls runtime.memmove on linux/amd64.
@@ -509,7 +508,6 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 				return errors.New("commitment_tree: truncated at leaf valHash")
 			}
 			child := &dst.children[i]
-			child.kind = kindLeaf
 			child.leafKey = key
 			child.valueHash = common.Hash(rest[:common.HashLength])
 			rest = rest[common.HashLength:]
@@ -541,7 +539,10 @@ func (b *BranchData) childPresent(nibble uint8) bool {
 // childKindAt returns the kind (kindHash / kindLeaf) of the child at nibble.
 // The caller must ensure the child is present.
 func (b *BranchData) childKindAt(nibble uint8) uint8 {
-	return b.children[nibble].kind
+	if uint16(atomic.LoadUint32(&b.childMask)>>16)&(1<<nibble) != 0 {
+		return kindHash
+	}
+	return kindLeaf
 }
 
 // hashChildAt returns the stored 32-byte hash of a hash child at nibble.

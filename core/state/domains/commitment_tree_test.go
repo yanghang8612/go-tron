@@ -275,7 +275,7 @@ func TestDecodeBranchDataIntoNoCopyErrorClearsPartialState(t *testing.T) {
 	}
 	for i := range dst.children {
 		child := &dst.children[i]
-		if child.kind != 0 || child.valueHash != (common.Hash{}) || child.leafKey != nil {
+		if child.valueHash != (common.Hash{}) || child.leafKey != nil {
 			t.Fatalf("partial decode retained child %d: %+v", i, child)
 		}
 	}
@@ -323,7 +323,7 @@ func TestBranchDataDeterministicAndProperty(t *testing.T) {
 			if !ref.childPresent(uint8(nibble)) {
 				continue
 			}
-			if c.kind == 0 {
+			if ref.childKindAt(uint8(nibble)) == kindHash {
 				ref2.SetHashChild(uint8(nibble), c.valueHash)
 			} else {
 				ref2.SetLeafChild(uint8(nibble), c.leafKey, c.valueHash)

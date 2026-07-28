@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math/bits"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -17,7 +18,7 @@ type commitmentDBWithoutOwnedValue struct{ CommitmentDB }
 
 var benchmarkDecodedBranch BranchData
 var benchmarkEncodedBranch []byte
-var benchmarkBranchMask uint16
+var benchmarkBranchBits uint32
 var benchmarkBranchSize int
 
 func BenchmarkOpsBufReturn(b *testing.B) {
@@ -44,12 +45,12 @@ func BenchmarkBranchDataEncodeToLayout(b *testing.B) {
 			for nibble := 0; nibble < children; nibble++ {
 				branch.SetHashChild(uint8(nibble), common.Hash{byte(nibble + 1)})
 			}
-			mask, size := branch.encodingLayout()
+			childBits, size := branch.encodingLayout()
 			buf := make([]byte, 0, size)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				benchmarkEncodedBranch = branch.encodeToLayout(buf[:0], mask, size)
+				benchmarkEncodedBranch = branch.encodeToLayout(buf[:0], childBits, size)
 			}
 		})
 	}
@@ -68,7 +69,7 @@ func BenchmarkBranchDataEncodingLayout(b *testing.B) {
 		}
 		for _, tc := range []struct {
 			name string
-			fn   func(*BranchData) (uint16, int)
+			fn   func(*BranchData) (uint32, int)
 		}{
 			{name: "scan", fn: benchmarkBranchEncodingLayoutScan},
 			{name: "kind-mask", fn: (*BranchData).encodingLayout},
@@ -77,27 +78,28 @@ func BenchmarkBranchDataEncodingLayout(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
-					benchmarkBranchMask, benchmarkBranchSize = tc.fn(&branch)
+					benchmarkBranchBits, benchmarkBranchSize = tc.fn(&branch)
 				}
 			})
 		}
 	}
 }
 
-func benchmarkBranchEncodingLayoutScan(branch *BranchData) (uint16, int) {
-	mask := branch.presentMask()
+func benchmarkBranchEncodingLayoutScan(branch *BranchData) (uint32, int) {
+	childBits := atomic.LoadUint32(&branch.childMask)
+	mask := uint16(childBits)
 	size := 2
 	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
 		i := uint8(bits.TrailingZeros16(remaining))
 		child := &branch.children[i]
 		size++
-		if child.kind == kindHash {
+		if branch.childKindAt(i) == kindHash {
 			size += common.HashLength
 		} else {
 			size += uvarintEncodedLen(uint64(len(child.leafKey))) + len(child.leafKey) + common.HashLength
 		}
 	}
-	return mask, size
+	return childBits, size
 }
 
 func BenchmarkDecodeBranchDataIntoCopiedLeafKeys(b *testing.B) {

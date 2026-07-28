@@ -93,9 +93,9 @@ var branchEncodingSlicesPool = sync.Pool{
 }
 
 type branchEncodingPlan struct {
-	branch *BranchData
-	mask   uint16
-	size   int
+	branch    *BranchData
+	childBits uint32
+	size      int
 }
 
 var branchEncodingPlansPool = sync.Pool{
@@ -296,8 +296,8 @@ func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*Branc
 	totalSize := 0
 	for i, key := range keys {
 		branch := branches[key]
-		mask, size := branch.encodingLayout()
-		plans[i] = branchEncodingPlan{branch: branch, mask: mask, size: size}
+		childBits, size := branch.encodingLayout()
+		plans[i] = branchEncodingPlan{branch: branch, childBits: childBits, size: size}
 		totalSize += size
 	}
 	arena := make([]byte, 0, totalSize)
@@ -306,7 +306,7 @@ func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*Branc
 	values := *valuesPtr
 	for i, plan := range plans {
 		start := len(arena)
-		arena = plan.branch.encodeToLayout(arena, plan.mask, plan.size)
+		arena = plan.branch.encodeToLayout(arena, plan.childBits, plan.size)
 		values[i] = arena[start:len(arena):len(arena)]
 	}
 	return rawdb.WriteCommitmentBranchesOwnedStringsWithBatchCount(s.db, keys, values, batchCount)
