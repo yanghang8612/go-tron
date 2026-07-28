@@ -80,7 +80,7 @@ type bufferedBranchStore struct {
 	// counts. Overwriting removes it.)
 	//
 	// Map values are pooled pointers rather than BranchData values. BranchData is
-	// roughly 1 KiB; storing it inline makes every map bucket large and forces
+	// roughly 800 bytes; storing it inline makes every map bucket large and forces
 	// the runtime to copy those large values again while a growing map evacuates
 	// buckets. A pointer-sized map plus one pool-borrowed destination per distinct
 	// prefix keeps re-PUT overwrite semantics while reusing the large objects
@@ -88,9 +88,9 @@ type bufferedBranchStore struct {
 	//
 	// Copying the decoded BranchData into the pooled destination is safe even
 	// though the caller returns its source *child to branchPool immediately after
-	// PutBranch: a branch's only reference-typed field is leafKey, which is
-	// write-once — SetLeafChild always allocates a fresh slice and nothing mutates
-	// leafKey in place — so the shared backing arrays outlive the source reuse.
+	// PutBranch: a branch's only reference-typed field is the immutable leafKey.
+	// SetLeafChild always owns a fresh string and fold-internal aliases point into
+	// fold-lifetime storage, so their backing bytes outlive the source reuse.
 	puts map[string]*BranchData
 	dels map[string]struct{} // prefix -> tombstone
 }

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	gethkeccak "github.com/ethereum/go-ethereum/crypto/keccak"
 	"github.com/tronprotocol/go-tron/common"
@@ -125,7 +126,7 @@ func borrowBranch() *BranchData {
 
 // borrowEmptyBranch returns a zeroed branch for callers constructing a new
 // subtree. Callers that immediately decode or assign a complete BranchData use
-// borrowBranch directly and avoid clearing the ~1 KiB object twice.
+// borrowBranch directly and avoid clearing the ~800-byte object twice.
 func borrowEmptyBranch() *BranchData {
 	b := borrowBranch()
 	*b = BranchData{}
@@ -187,7 +188,25 @@ const (
 // branchChild holds one present child entry of a hex-trie branch node.
 type branchChild struct {
 	valueHash common.Hash // child hash or leaf value hash, selected by childMask
-	leafKey   []byte      // valid when childMask marks this slot as a leaf
+	leafKey   string      // immutable key; valid when childMask marks a leaf
+}
+
+// stableLeafKeyString aliases immutable fold/decoder storage without copying.
+// Every caller retains the backing bytes for the BranchData lifetime.
+func stableLeafKeyString(key []byte) string {
+	if len(key) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(key), len(key))
+}
+
+// leafKeyBytes returns a read-only byte view of an immutable leaf-key string.
+// Callers must not mutate the returned slice.
+func leafKeyBytes(key string) []byte {
+	if len(key) == 0 {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(key), len(key))
 }
 
 // BranchData represents a hex (16-way) trie branch node.  A branch has up to
@@ -243,7 +262,7 @@ func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
 func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash) {
 	b.markLeafChild(nibble)
 	b.children[nibble] = branchChild{
-		leafKey:   append([]byte(nil), key...),
+		leafKey:   string(key),
 		valueHash: valHash,
 	}
 }
@@ -256,7 +275,7 @@ func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash)
 func (b *BranchData) setLeafChildStable(nibble uint8, key []byte, valHash common.Hash) {
 	b.markLeafChild(nibble)
 	b.children[nibble] = branchChild{
-		leafKey:   key,
+		leafKey:   stableLeafKeyString(key),
 		valueHash: valHash,
 	}
 }
@@ -378,7 +397,7 @@ func DecodeBranchData(data []byte) (BranchData, error) {
 
 // DecodeBranchDataInto is DecodeBranchData written directly into *dst (zeroed
 // first). Used by GetBranchInto on the bulk-sync hot path to avoid the
-// return-by-value copy of the ~1 KiB BranchData struct.
+// return-by-value copy of the ~800-byte BranchData struct.
 func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 	return decodeBranchDataIntoArena(data, dst, nil)
 }
@@ -386,7 +405,7 @@ func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 // decodeBranchDataIntoArena is the fold-scoped form of DecodeBranchDataInto.
 // arena remains immutable until every BranchData decoded during that fold has
 // been encoded or discarded, so value copies can safely share its leaf-key
-// slices. A nil arena preserves the public decoder's independent ownership.
+// strings. A nil arena preserves the public decoder's independent ownership.
 func decodeBranchDataIntoArena(data []byte, dst *BranchData, arena *[]byte) error {
 	if err := decodeBranchDataInto(data, dst); err != nil {
 		// The no-copy parser may have installed views into data before detecting
@@ -426,7 +445,7 @@ func decodeBranchDataIntoArena(data []byte, dst *BranchData, arena *[]byte) erro
 			continue
 		}
 		end := offset + copy(leafKeys[offset:], child.leafKey)
-		child.leafKey = leafKeys[offset:end:end]
+		child.leafKey = stableLeafKeyString(leafKeys[offset:end:end])
 		offset = end
 	}
 	return nil
@@ -451,7 +470,7 @@ func decodeBranchDataIntoNoCopy(data []byte, dst *BranchData) error {
 func decodeBranchDataInto(data []byte, dst *BranchData) error {
 	// Decoding overwrites every field of each newly-present child. Clear only
 	// pointer-bearing fields from the previous presence mask instead of
-	// zeroing the whole ~1 KiB BranchData (mostly hashes) on every sparse pooled
+	// zeroing the whole ~800-byte BranchData (mostly hashes) on every sparse pooled
 	// read. At ten or more children the fixed-size memclr wins over the bit walk
 	// (BenchmarkDecodeBranchDataIntoNoCopyReuse), so retain it for dense nodes.
 	oldBits := atomic.LoadUint32(&dst.childMask)
@@ -461,7 +480,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 	} else {
 		for remaining := oldMask &^ uint16(oldBits>>16); remaining != 0; remaining &= remaining - 1 {
 			i := bits.TrailingZeros16(remaining)
-			dst.children[i].leafKey = nil
+			dst.children[i].leafKey = ""
 		}
 	}
 	if len(data) < 2 {
@@ -486,7 +505,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 				return errors.New("commitment_tree: truncated at hash child")
 			}
 			child := &dst.children[i]
-			child.leafKey = nil
+			child.leafKey = ""
 			// The checked fixed-width conversion compiles to inline vector moves;
 			// a slice copy otherwise calls runtime.memmove on linux/amd64.
 			child.valueHash = common.Hash(rest[:common.HashLength])
@@ -508,7 +527,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 				return errors.New("commitment_tree: truncated at leaf valHash")
 			}
 			child := &dst.children[i]
-			child.leafKey = key
+			child.leafKey = stableLeafKeyString(key)
 			child.valueHash = common.Hash(rest[:common.HashLength])
 			rest = rest[common.HashLength:]
 
@@ -553,7 +572,7 @@ func (b *BranchData) hashChildAt(nibble uint8) common.Hash {
 // leafChildAt returns the key and value hash of a leaf child at nibble.
 func (b *BranchData) leafChildAt(nibble uint8) (key []byte, valHash common.Hash) {
 	c := &b.children[nibble]
-	return c.leafKey, c.valueHash
+	return leafKeyBytes(c.leafKey), c.valueHash
 }
 
 // clearChild removes any child at nibble.
@@ -606,7 +625,7 @@ func (b *BranchData) nodeHash() common.Hash {
 type branchStore interface {
 	GetBranch(prefix []byte) (BranchData, bool, error)
 	// GetBranchInto reads a branch into *dst (zeroed first). The hot fold path
-	// uses this with a pool-borrowed *BranchData so the ~1 KiB struct stays
+	// uses this with a pool-borrowed *BranchData so the ~800-byte struct stays
 	// out of the heap.
 	GetBranchInto(prefix []byte, dst *BranchData) (bool, error)
 	PutBranch(prefix []byte, b BranchData) error
@@ -996,7 +1015,7 @@ func (t *commitmentTrie) applyLeafSplit(branch *BranchData, nb uint8, childPrefi
 }
 
 // applyOnHash resolves group against an existing hash child (a child subtree) at
-// nb. The child branch is borrowed from branchPool so the per-descent ~1 KiB
+// nb. The child branch is borrowed from branchPool so the per-descent ~800-byte
 // BranchData allocation (formerly the #1 alloc source at ~24% of fold heap
 // pressure) becomes pool reuse. linkChild consumes the data and never retains
 // the pointer past return, so the deferred release is unconditional.

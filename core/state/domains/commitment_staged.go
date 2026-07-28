@@ -173,7 +173,7 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 
 // GetBranchInto is GetBranch but writes into *dst instead of returning the
 // value. The bulk-sync fold uses this with a pool-borrowed *BranchData to keep
-// the ~1 KiB struct off the heap; see branchPool in commitment_tree.go.
+// the ~800-byte struct off the heap; see branchPool in commitment_tree.go.
 func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
 	decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
 	decodeView.dst = dst

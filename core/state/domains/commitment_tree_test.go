@@ -192,6 +192,18 @@ func TestBranchDataDecodeLeafKeyOwnership(t *testing.T) {
 	}
 }
 
+func TestBranchDataSetLeafChildOwnsKey(t *testing.T) {
+	key := []byte("owned-leaf")
+	var branch BranchData
+	branch.SetLeafChild(3, key, common.Hash{0x33})
+	key[0] = 'X'
+
+	stored, _ := branch.leafChildAt(3)
+	if string(stored) != "owned-leaf" {
+		t.Fatalf("SetLeafChild retained caller key: %q", stored)
+	}
+}
+
 func TestDecodeBranchDataIntoArenaReusesStorageAndPreservesValueCopies(t *testing.T) {
 	var firstSource BranchData
 	firstSource.SetLeafChild(2, []byte("first-leaf"), common.Hash{0x22})
@@ -251,10 +263,10 @@ func TestDecodeBranchDataIntoNoCopyReuseClearsStaleLeafKeys(t *testing.T) {
 	if got, want := dst.presentMask(), uint16(1<<2); got != want {
 		t.Fatalf("presence mask = %#x, want %#x", got, want)
 	}
-	if dst.children[2].leafKey != nil {
+	if dst.children[2].leafKey != "" {
 		t.Fatalf("hash replacement retained old leaf key: %q", dst.children[2].leafKey)
 	}
-	if dst.children[7].leafKey != nil {
+	if dst.children[7].leafKey != "" {
 		t.Fatalf("absent slot retained old leaf key: %q", dst.children[7].leafKey)
 	}
 }
@@ -275,7 +287,7 @@ func TestDecodeBranchDataIntoNoCopyErrorClearsPartialState(t *testing.T) {
 	}
 	for i := range dst.children {
 		child := &dst.children[i]
-		if child.valueHash != (common.Hash{}) || child.leafKey != nil {
+		if child.valueHash != (common.Hash{}) || child.leafKey != "" {
 			t.Fatalf("partial decode retained child %d: %+v", i, child)
 		}
 	}
@@ -326,7 +338,7 @@ func TestBranchDataDeterministicAndProperty(t *testing.T) {
 			if ref.childKindAt(uint8(nibble)) == kindHash {
 				ref2.SetHashChild(uint8(nibble), c.valueHash)
 			} else {
-				ref2.SetLeafChild(uint8(nibble), c.leafKey, c.valueHash)
+				ref2.SetLeafChild(uint8(nibble), leafKeyBytes(c.leafKey), c.valueHash)
 			}
 		}
 		enc2 := ref2.Encode()
