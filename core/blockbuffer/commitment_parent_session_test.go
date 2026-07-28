@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -29,6 +30,61 @@ func (benchmarkCommitmentSnapshot) Close() error { return nil }
 
 type checkingCommitmentCursor struct {
 	want []byte
+}
+
+// blockingCommitmentWriter forwards the first mutation either before or after
+// parking it. It holds FlushUpTo in the disk-I/O phase while tests capture a
+// commitment parent session on both sides of the durable write linearization.
+type blockingCommitmentWriter struct {
+	target interface {
+		Put([]byte, []byte) error
+		Delete([]byte) error
+	}
+	blockAfter bool
+	started    chan struct{}
+	release    chan struct{}
+	once       sync.Once
+}
+
+func newBlockingCommitmentWriter(target interface {
+	Put([]byte, []byte) error
+	Delete([]byte) error
+}, blockAfter bool) *blockingCommitmentWriter {
+	return &blockingCommitmentWriter{
+		target:     target,
+		blockAfter: blockAfter,
+		started:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (w *blockingCommitmentWriter) wait() {
+	w.once.Do(func() {
+		close(w.started)
+		<-w.release
+	})
+}
+
+func (w *blockingCommitmentWriter) Put(key, value []byte) error {
+	if !w.blockAfter {
+		w.wait()
+	}
+	err := w.target.Put(key, value)
+	if w.blockAfter {
+		w.wait()
+	}
+	return err
+}
+
+func (w *blockingCommitmentWriter) Delete(key []byte) error {
+	if !w.blockAfter {
+		w.wait()
+	}
+	err := w.target.Delete(key)
+	if w.blockAfter {
+		w.wait()
+	}
+	return err
 }
 
 func (c checkingCommitmentCursor) View(key []byte, fn func([]byte) error) (bool, error) {
@@ -131,6 +187,109 @@ func TestCommitmentParentReadSessionKeepsOverlayAndDurableCut(t *testing.T) {
 	}
 	if got := commitmentParentDurableHitsCounter.Snapshot().Count() - durableHitsBefore; got != 1 {
 		t.Fatalf("durable hits delta = %d, want 1", got)
+	}
+}
+
+func TestCommitmentParentReadSessionDoesNotWaitForFlushIO(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		blockAfter bool
+		delete     bool
+	}{
+		{name: "put-before-durable-write"},
+		{name: "put-after-durable-write", blockAfter: true},
+		{name: "delete-before-durable-write", delete: true},
+		{name: "delete-after-durable-write", blockAfter: true, delete: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disk, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer disk.Close()
+
+			prefix := []byte{4, 5, 6}
+			if tc.delete {
+				if err := rawdb.WriteCommitmentBranch(disk, prefix, []byte("durable-value")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			buf := New(disk)
+			buf.BeginBlock(bufHash(1), 1)
+			h1, _ := buf.NewestInflight()
+			var writeErr error
+			if tc.delete {
+				writeErr = rawdb.DeleteCommitmentBranch(buf.ViewLayer(h1), prefix)
+			} else {
+				writeErr = rawdb.WriteCommitmentBranch(buf.ViewLayer(h1), prefix, []byte("layer-value"))
+			}
+			if writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			if err := buf.CommitInflight(h1); err != nil {
+				t.Fatal(err)
+			}
+			buf.BeginBlock(bufHash(2), 2)
+			h2, _ := buf.NewestInflight()
+
+			writer := newBlockingCommitmentWriter(disk, tc.blockAfter)
+			flushDone := make(chan error, 1)
+			go func() { flushDone <- buf.FlushUpTo(1, writer) }()
+			<-writer.started
+
+			type sessionResult struct {
+				session pointread.CommitmentParentSession
+				err     error
+			}
+			sessionDone := make(chan sessionResult, 1)
+			go func() {
+				session, err := buf.ViewLayer(h2).NewCommitmentParentReadSession(17)
+				sessionDone <- sessionResult{session: session, err: err}
+			}()
+
+			var session pointread.CommitmentParentSession
+			select {
+			case result := <-sessionDone:
+				if result.err != nil || result.session == nil {
+					close(writer.release)
+					<-flushDone
+					t.Fatalf("NewCommitmentParentReadSession = (%T,%v)", result.session, result.err)
+				}
+				session = result.session
+			case <-time.After(2 * time.Second):
+				close(writer.release)
+				<-flushDone
+				t.Fatal("commitment parent session waited for background flush I/O")
+			}
+
+			got, found, stable := readSessionBranch(t, session, 4, prefix)
+			if tc.delete {
+				if found {
+					close(writer.release)
+					<-flushDone
+					t.Fatalf("mid-flush tombstone = (%q,%v,stable=%v)", got, found, stable)
+				}
+			} else if !found || !stable || !bytes.Equal(got, []byte("layer-value")) {
+				close(writer.release)
+				<-flushDone
+				t.Fatalf("mid-flush branch = (%q,%v,stable=%v)", got, found, stable)
+			}
+			close(writer.release)
+			if err := <-flushDone; err != nil {
+				t.Fatal(err)
+			}
+			got, found, stable = readSessionBranch(t, session, 4, prefix)
+			if tc.delete {
+				if found {
+					t.Fatalf("post-flush tombstone = (%q,%v,stable=%v)", got, found, stable)
+				}
+			} else if !found || !stable || !bytes.Equal(got, []byte("layer-value")) {
+				t.Fatalf("post-flush branch = (%q,%v,stable=%v)", got, found, stable)
+			}
+			if err := session.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

@@ -282,9 +282,13 @@ func (v *commitmentParentView) Close() error {
 }
 
 // NewCommitmentParentReadSession captures the committed overlay topology and a
-// durable Pebble snapshot as one parent-state cut. flushMu closes the otherwise
-// possible gap where a layer is flushed and removed between those two captures;
-// it is released immediately, so the fold never holds up background flush I/O.
+// durable Pebble snapshot as one parent-state cut. Holding b.mu.RLock across
+// both captures is sufficient: FlushUpTo cannot drop a layer until it acquires
+// b.mu.Lock. If its durable batch lands before the snapshot, the retained layer
+// merely overlays the same final values/tombstones; if it lands afterwards, the
+// retained layer supplies the writes absent from the older snapshot. Avoiding
+// flushMu here lets the commitment worker begin its fold while a background
+// flush is doing disk I/O instead of serializing the two independent paths.
 //
 // The returned session deliberately excludes this LayerView's bound in-flight
 // layer. Unsupported durable stores return (nil, nil), and rawdb falls back to
@@ -298,10 +302,9 @@ func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.Commi
 	if !ok {
 		return nil, nil
 	}
-	b.flushMu.Lock()
-	// Pair the durable snapshot with the exact committed topology at the same
-	// linearization point. flushMu excludes layer flush/drop and b.mu excludes a
-	// concurrent CommitInflight append while the Pebble sequence is captured.
+	// Pair the durable snapshot with a topology that cannot lose layers before
+	// the snapshot's Pebble sequence is fixed. b.mu also excludes a concurrent
+	// CommitInflight append, so the parent cut never includes a partial tail.
 	b.mu.RLock()
 	// publishReadViewLocked already owns an immutable copy of both topology
 	// slices. Retain that published backing for the fold instead of copying the
@@ -331,7 +334,6 @@ func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.Commi
 		snapshot, err = factory.NewPointReadSnapshot()
 	}
 	b.mu.RUnlock()
-	b.flushMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
