@@ -180,6 +180,31 @@ gtron db compact-ancient-tx-info-v2 \
   --json > /data/gtron/main/ancient-tx-info-v2-compact.json
 ```
 
+## Benchmark the historical transaction index
+
+Every live `tx-*` row currently stores the three-byte schema prefix, complete
+32-byte transaction hash, and eight-byte block/ordinal locator in Pebble. To
+measure the next cold-index optimization against a stopped node:
+
+```bash
+gtron db benchmark-tx-index \
+  --datadir /data/gtron/main/datadir \
+  --sample-transactions 1000000 \
+  --windows 256 \
+  --prefix-bits 20 \
+  --lookups 1000000 \
+  --progress 30s \
+  --json > /data/gtron/main/tx-index-benchmark.json
+```
+
+The command is read-only and bounded by `--sample-transactions`. It seeks into
+evenly distributed transaction-hash windows rather than scanning every index
+row. Projections compare the current 43-byte logical row with an exact sharded
+hash and 64/96-bit routed fingerprints. Fingerprint candidates are always
+verified against the complete transaction hash in the canonical block body;
+the collision estimates therefore describe extra candidate reads, not an API
+correctness risk.
+
 The command resumes by manifest, reports logical duplicate bytes removed and
 actual physical `tx_infos` bytes reclaimed, and never publishes a replacement
 before its index prerequisite and every compressed frame are durable. Do not
