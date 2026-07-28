@@ -68,6 +68,7 @@ type txIndexBenchmarkCandidate struct {
 	FingerprintBits          uint64  `json:"fingerprint_bits,omitempty"`
 	EntryBytes               uint64  `json:"entry_bytes"`
 	DirectoryBytes           uint64  `json:"directory_bytes"`
+	BucketHeaderBytes        uint64  `json:"bucket_header_bytes,omitempty"`
 	ProjectedBytes           uint64  `json:"projected_bytes"`
 	SavingsPercent           float64 `json:"savings_percent"`
 	ObservedSampleCollisions uint64  `json:"observed_sample_collision_pairs,omitempty"`
@@ -296,14 +297,22 @@ func benchmarkTxIndexLookups(table txIndexBenchmarkTable, samples []rawdb.Transa
 
 func projectTxIndexCandidates(rows, prefixBits, directoryBytes, observedCollisions uint64) []txIndexBenchmarkCandidate {
 	currentBytes := rows * currentTxIndexRowBytes
-	makeCandidate := func(name string, fingerprintBits, entryBytes, fixedBytes uint64) txIndexBenchmarkCandidate {
-		projected := rows*entryBytes + fixedBytes
+	buckets := uint64(1) << prefixBits
+	expectedNonEmpty := uint64(math.Ceil(float64(buckets) * -math.Expm1(-float64(rows)/float64(buckets))))
+	bucketHeaderBytes := expectedNonEmpty * 16
+	const fileHeaderBytes = uint64(128)
+	makeCandidate := func(name string, fingerprintBits, entryBytes, directory, bucketHeaders uint64) txIndexBenchmarkCandidate {
+		projected := rows*entryBytes + directory + bucketHeaders
+		if directory > 0 {
+			projected += fileHeaderBytes
+		}
 		candidate := txIndexBenchmarkCandidate{
-			Name:            name,
-			FingerprintBits: fingerprintBits,
-			EntryBytes:      entryBytes,
-			DirectoryBytes:  fixedBytes,
-			ProjectedBytes:  projected,
+			Name:              name,
+			FingerprintBits:   fingerprintBits,
+			EntryBytes:        entryBytes,
+			DirectoryBytes:    directory,
+			BucketHeaderBytes: bucketHeaders,
+			ProjectedBytes:    projected,
 		}
 		if currentBytes != 0 {
 			candidate.SavingsPercent = (1 - float64(projected)/float64(currentBytes)) * 100
@@ -315,14 +324,14 @@ func projectTxIndexCandidates(rows, prefixBits, directoryBytes, observedCollisio
 		}
 		return candidate
 	}
-	current := makeCandidate("pebble-current-logical", 0, currentTxIndexRowBytes, 0)
+	current := makeCandidate("pebble-current-logical", 0, currentTxIndexRowBytes, 0, 0)
 	// An exact sharded representation can omit complete prefix bytes. A partial
 	// byte remains in the first stored suffix byte.
 	exactHashBytes := uint64((256 - prefixBits + 7) / 8)
-	exact := makeCandidate("exact-hash-sharded", 0, exactHashBytes+8, directoryBytes)
-	compact64 := makeCandidate("fingerprint64-sharded", 64, 16, directoryBytes)
+	exact := makeCandidate("exact-hash-sharded", 0, exactHashBytes+8, directoryBytes, bucketHeaderBytes)
+	compact64 := makeCandidate("fingerprint64-sharded", 64, 16, directoryBytes, bucketHeaderBytes)
 	compact64.ObservedSampleCollisions = observedCollisions
-	compact96 := makeCandidate("fingerprint96-sharded", 96, 20, directoryBytes)
+	compact96 := makeCandidate("fingerprint96-sharded", 96, 20, directoryBytes, bucketHeaderBytes)
 	return []txIndexBenchmarkCandidate{current, exact, compact64, compact96}
 }
 
@@ -335,11 +344,11 @@ func writeTxIndexBenchmarkText(writer io.Writer, output txIndexBenchmarkOutput) 
 	fmt.Fprintf(writer, "Directory: %d bits, %s; projected average %.1f rows/bucket; sample max %d\n\n",
 		output.PrefixBits, formatIEC(output.DirectoryBytes), output.ProjectedAvgBucketRows, output.SampleMaxBucketRows)
 	tw := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "LAYOUT\tENTRY\tDIRECTORY\tPROJECTED\tSAVING\tEXPECTED COLLISIONS")
+	fmt.Fprintln(tw, "LAYOUT\tENTRY\tDIRECTORY\tBUCKET HEADERS\tPROJECTED\tSAVING\tEXPECTED COLLISIONS")
 	for _, candidate := range output.Candidates {
-		fmt.Fprintf(tw, "%s\t%d B\t%s\t%s\t%.2f%%\t%.6g\n",
+		fmt.Fprintf(tw, "%s\t%d B\t%s\t%s\t%s\t%.2f%%\t%.6g\n",
 			candidate.Name, candidate.EntryBytes, formatIEC(candidate.DirectoryBytes),
-			formatIEC(candidate.ProjectedBytes), candidate.SavingsPercent, candidate.ExpectedCollisionPairs)
+			formatIEC(candidate.BucketHeaderBytes), formatIEC(candidate.ProjectedBytes), candidate.SavingsPercent, candidate.ExpectedCollisionPairs)
 	}
 	_ = tw.Flush()
 	if output.Lookup.Lookups > 0 {

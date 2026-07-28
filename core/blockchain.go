@@ -1509,7 +1509,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos, plan.storedReplay, plan.storedReplayTxInfos); err != nil {
+	if err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos, plan.storedReplay, plan.storedReplayTxInfos, plan.storedReplayTxIndex); err != nil {
 		return err
 	}
 	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
@@ -1620,12 +1620,12 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 	}, nil
 }
 
-func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, storedReplay, storedReplayTxInfos bool) error {
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, storedReplay, storedReplayTxInfos, storedReplayTxIndex bool) error {
 	// The root is persisted out-of-band — we do NOT mutate
 	// `block.AccountStateRoot()` because the block proto's content must
 	// round-trip byte-identical to what the wire delivered.
 	if storedReplay {
-		return rawdb.WriteStoredReplayBlockMetadataBatch(bc.db, block, stateRoot, txInfos, storedReplayTxInfos)
+		return rawdb.WriteStoredReplayBlockMetadataBatch(bc.db, block, stateRoot, txInfos, storedReplayTxInfos, storedReplayTxIndex)
 	}
 	return rawdb.WriteBlockMetadataBatchEncoded(bc.db, block, blockData, stateRoot, txInfos)
 }

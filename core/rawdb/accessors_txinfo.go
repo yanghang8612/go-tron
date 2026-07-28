@@ -47,6 +47,11 @@ type transactionLocation struct {
 	hasOrdinal  bool
 }
 
+type ancientTransactionIndexReader interface {
+	TransactionIndexCandidates(hash [32]byte) ([]uint64, error)
+	TransactionIndexCoverage() uint64
+}
+
 // WriteTransactionInfo stores a legacy, individually indexed TransactionInfo.
 // New block commits no longer call this function: tx-* locates the block and
 // tib-*/ancient tx_infos owns the canonical TransactionRet payload. It remains
@@ -314,24 +319,86 @@ func WriteTransactionLocation(db ethdb.KeyValueWriter, txHash []byte, blockNum u
 }
 
 func readTransactionLocation(db *ChainDB, txHash []byte) *transactionLocation {
-	data, err := db.Get(txKey(txHash))
-	if err != nil || len(data) != 8 {
+	if db == nil {
 		return nil
 	}
-	value := binary.BigEndian.Uint64(data)
-	if value&transactionLocationMarker == 0 {
-		return &transactionLocation{blockNumber: value}
+	data, err := db.Get(txKey(txHash))
+	if err == nil && len(data) == 8 {
+		location := decodeTransactionLocation(binary.BigEndian.Uint64(data))
+		return &location
 	}
-	return &transactionLocation{
+	if len(txHash) != 32 || db.AncientReader == nil {
+		return nil
+	}
+	reader, ok := db.AncientReader.(ancientTransactionIndexReader)
+	if !ok {
+		return nil
+	}
+	var hash [32]byte
+	copy(hash[:], txHash)
+	candidates, err := reader.TransactionIndexCandidates(hash)
+	if err != nil {
+		return nil
+	}
+	for _, encoded := range candidates {
+		location := decodeTransactionLocation(encoded)
+		if location.blockNumber >= reader.TransactionIndexCoverage() {
+			continue
+		}
+		if transactionLocationMatches(db, location, hash) {
+			return &location
+		}
+	}
+	return nil
+}
+
+func decodeTransactionLocation(value uint64) transactionLocation {
+	if value&transactionLocationMarker == 0 {
+		return transactionLocation{blockNumber: value}
+	}
+	return transactionLocation{
 		blockNumber: (value &^ transactionLocationMarker) >> transactionLocationOrdinalBits,
 		ordinal:     uint16(value),
 		hasOrdinal:  true,
 	}
 }
 
-// ReadTransactionIndex retrieves the block number for a tx hash. The tx
-// reverse index stays hot per the slice-1 freezer spec, so this accessor
-// reads only from Pebble.
+func transactionIndexLocationBlock(value uint64) uint64 {
+	return decodeTransactionLocation(value).blockNumber
+}
+
+func transactionLocationMatches(db *ChainDB, location transactionLocation, hash [32]byte) bool {
+	block := ReadBlock(db, location.blockNumber)
+	if block == nil {
+		return false
+	}
+	txs := block.Transactions()
+	if location.hasOrdinal {
+		ordinal := int(location.ordinal)
+		return ordinal < len(txs) && txs[ordinal].Hash() == hash
+	}
+	for _, tx := range txs {
+		if tx.Hash() == hash {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAncientTransactionIndex reports whether a manifest-selected immutable
+// transaction-index run covers blockNum. Stored replay uses it to avoid
+// recreating historical tx-* rows that were safely removed after publication.
+func HasAncientTransactionIndex(db *ChainDB, blockNum uint64) bool {
+	if db == nil || db.AncientReader == nil {
+		return false
+	}
+	reader, ok := db.AncientReader.(ancientTransactionIndexReader)
+	return ok && blockNum < reader.TransactionIndexCoverage()
+}
+
+// ReadTransactionIndex retrieves the block number for a tx hash. Recent rows
+// resolve from Pebble; V2-covered history falls through to the immutable cold
+// index and verifies the full hash against the canonical block body.
 func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
 	location := readTransactionLocation(db, txHash)
 	if location == nil {
@@ -387,4 +454,17 @@ func DeleteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64) err
 // DeleteTransactionIndex removes the tx-hash→block-number reverse index row.
 func DeleteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte) error {
 	return db.Delete(txKey(txHash))
+}
+
+// TransactionIndexRangeBounds returns the half-open tx-* key range for
+// offline compaction after selected historical rows have been point-deleted.
+func TransactionIndexRangeBounds() (start, limit []byte) {
+	return append([]byte(nil), txPrefix...), prefixUpperBound(txPrefix)
+}
+
+// CompactTransactionIndexes rewrites the complete tx-* range so point-deleted
+// historical rows release their SST space immediately.
+func CompactTransactionIndexes(db ethdb.Compacter) error {
+	start, limit := TransactionIndexRangeBounds()
+	return db.Compact(start, limit)
 }

@@ -79,6 +79,7 @@ func dbCommand() *cli.Command {
 			dbBenchmarkTxIndexCommand(),
 			dbMigrateAncientV2Command(),
 			dbCompactAncientTxInfoV2Command(),
+			dbMigrateTxIndexCommand(),
 			dbPruneTxInfoCommand(),
 			dbPruneFrozenHotCommand(),
 		},

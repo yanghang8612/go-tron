@@ -91,6 +91,7 @@ type Freezer struct {
 	readonly     bool
 	tables       map[string]*freezerTable // Data tables for storing everything
 	v2           *v2Store                 // Immutable Zstd segment prefix, if present
+	txIndex      *TransactionIndexStore   // Immutable transaction hash -> location runs
 	instanceLock *flock.Flock             // File-system lock to prevent double opens
 	closeOnce    sync.Once
 }
@@ -180,6 +181,24 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 		lock.Unlock()
 		return nil, fmt.Errorf("open ancient V2: %w", err)
 	}
+	freezer.txIndex, err = OpenTransactionIndexStore(datadir)
+	if err != nil {
+		freezer.v2.Close()
+		for _, table := range freezer.tables {
+			table.Close()
+		}
+		lock.Unlock()
+		return nil, fmt.Errorf("open ancient transaction index: %w", err)
+	}
+	if txCoverage, v2Coverage := freezer.txIndex.Coverage(), freezer.V2Coverage(); txCoverage > v2Coverage {
+		freezer.txIndex.Close()
+		freezer.v2.Close()
+		for _, table := range freezer.tables {
+			table.Close()
+		}
+		lock.Unlock()
+		return nil, fmt.Errorf("ancient transaction index coverage %d exceeds V2 coverage %d", txCoverage, v2Coverage)
+	}
 
 	// Create the write batch.
 	freezer.writeBatch = newFreezerBatch(freezer)
@@ -203,6 +222,10 @@ func (f *Freezer) Close() error {
 		}
 		f.v2 = nil
 		f.v2Mu.Unlock()
+		if err := f.txIndex.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		f.txIndex = nil
 		for _, table := range f.tables {
 			if err := table.Close(); err != nil {
 				errs = append(errs, err)
@@ -213,6 +236,25 @@ func (f *Freezer) Close() error {
 		}
 	})
 	return errors.Join(errs...)
+}
+
+// TransactionIndexCandidates returns the truncated-fingerprint matches from
+// every manifest-selected immutable transaction-index run. Callers must verify
+// the complete transaction hash against the canonical block body.
+func (f *Freezer) TransactionIndexCandidates(hash [32]byte) ([]uint64, error) {
+	if f == nil || f.txIndex == nil {
+		return nil, nil
+	}
+	return f.txIndex.Candidates(hash)
+}
+
+// TransactionIndexCoverage is the first block not covered by the contiguous
+// immutable transaction-index prefix.
+func (f *Freezer) TransactionIndexCoverage() uint64 {
+	if f == nil || f.txIndex == nil {
+		return 0
+	}
+	return f.txIndex.Coverage()
 }
 
 // AncientDatadir returns the path of the ancient store.

@@ -53,3 +53,33 @@ func TestSampleTransactionIndexesRejectsMalformedValue(t *testing.T) {
 		t.Fatal("malformed value accepted")
 	}
 }
+
+func TestVisitTransactionIndexesByBlockRange(t *testing.T) {
+	db := NewMemoryDatabase()
+	defer db.Close()
+	locations := []uint64{
+		3,
+		transactionLocationMarker | 7<<transactionLocationOrdinalBits | 2,
+		transactionLocationMarker | 12<<transactionLocationOrdinalBits,
+	}
+	for i, location := range locations {
+		var hash [32]byte
+		hash[0] = byte(i + 1)
+		var value [8]byte
+		binary.BigEndian.PutUint64(value[:], location)
+		if err := db.Put(txKey(hash[:]), value[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []TransactionIndexSample
+	scanned, selected, err := VisitTransactionIndexesByBlockRange(db, 4, 10, func(sample TransactionIndexSample) error {
+		got = append(got, sample)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned != 3 || selected != 1 || len(got) != 1 || got[0].Location != locations[1] {
+		t.Fatalf("scanned=%d selected=%d got=%+v", scanned, selected, got)
+	}
+}

@@ -205,8 +205,29 @@ verified against the complete transaction hash in the canonical block body;
 the collision estimates therefore describe extra candidate reads, not an API
 correctness risk.
 
-The command resumes by manifest, reports logical duplicate bytes removed and
-actual physical `tx_infos` bytes reclaimed, and never publishes a replacement
-before its index prerequisite and every compressed frame are durable. Do not
-roll back to a binary that predates compact-row support after the first segment
-is published.
+## Migrate historical transaction indexes
+
+After benchmarking and deploying a binary containing the cold-index reader,
+stop both gtron and its automatic deployment timer. The command indexes exactly
+the block prefix already protected by Ancient V2:
+
+```bash
+gtron db migrate-tx-index \
+  --datadir /data/gtron/main/datadir \
+  --prefix-bits 20 \
+  --progress 30s \
+  --yes \
+  --json > /data/gtron/main/tx-index-migration.json
+```
+
+Building the run scans the live `tx-*` keyspace once in hash order. The run is
+checksummed, fsynced, fully verified, and atomically added to the manifest
+before any hot row is deleted. A process interruption is safe: rerunning either
+publishes a previously completed run or resumes deletion using the already
+published cold copy. Recent rows above V2 coverage remain in Pebble.
+
+By default, point-deleted SST bytes are left for normal background compaction.
+Use `--compact` only when immediate reclamation justifies several hours of
+heavy offline I/O and the host has sufficient temporary disk space. Once hot
+history has been deleted, do not roll back to a binary without cold-index
+support.

@@ -1,6 +1,6 @@
 # Ancient transaction index
 
-**Status:** Proposed
+**Status:** Implemented for offline initial/incremental runs; geometric merging remains
 **Date:** 2026-07-27
 **Related:** [Chain freezer](./2026-05-19-chain-freezer-design.md),
 [TransactionInfo deduplication](./2026-07-26-transaction-info-dedup-design.md),
@@ -40,6 +40,7 @@ eight-byte offsets, about 8 MiB) and stores two parallel arrays per bucket:
 ```text
 directory[prefix] -> bucket byte range
 bucket:
+  16-byte row-count/checksum header
   sorted 64-bit fingerprints[]
   packed 64-bit locations[]
 ```
@@ -52,11 +53,12 @@ the transaction at the candidate block/ordinal against the complete requested
 32-byte hash. A negative query is returned only after all equal candidates fail
 verification.
 
-Separating fingerprints from locations lets a miss read only the compact
-fingerprint portion of one bucket. The projected immutable payload is 16 bytes
-per transaction plus the fixed directory, about 63% below the current 43-byte
-logical row. A 96-bit fingerprint variant (20 bytes per transaction) remains a
-benchmark candidate.
+The reader fetches one bounded bucket, verifies independent CRC32C checksums for
+its header, fingerprints, and locations, then binary-searches the fingerprint
+array. The projected immutable payload is 16 bytes per transaction plus the
+fixed directory, file header, and 16 bytes per non-empty bucket, about 63%
+below the current 43-byte logical row. A 96-bit fingerprint variant (20 bytes
+per transaction) remains a benchmark candidate.
 
 ## Read routing
 
@@ -75,10 +77,17 @@ returning another transaction's receipt.
 
 ## Publication and migration
 
-The first migration is offline. It scans packed `tx-*` rows whose block number
-is below V2 coverage, writes and verifies a temporary immutable index, fsyncs
-it, and atomically publishes a small manifest. Only then may matching Pebble
-rows be deleted and compacted.
+The first migration is offline. `gtron db migrate-tx-index` scans packed `tx-*`
+rows whose block number is below V2 coverage once, streams completed hash
+buckets into a temporary immutable index, verifies and fsyncs it, and atomically
+publishes a small manifest. Only then are matching Pebble rows point-deleted;
+`--compact` optionally performs immediate physical reclamation.
+
+If execution stops after the run rename but before manifest publication, the
+next invocation verifies and publishes that complete unreferenced run. If it
+stops during Pebble deletion, the manifest already makes every covered lookup
+safe and the next invocation deletes the remaining live rows. Stored replay
+checks cold coverage and does not repopulate migrated `tx-*` rows.
 
 Incremental online publication must not rewrite the entire historical index on
 every 65,536-block V2 promotion. New immutable runs are accumulated and merged
@@ -113,4 +122,3 @@ follows it.
 - Rewind continues deleting hot `tx-*` rows; cold runs cover only blocks below
   the solidified/freezer boundary and are never part of a normal reorg.
 - Older binaries are not supported after historical `tx-*` rows are deleted.
-

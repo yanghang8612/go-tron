@@ -84,8 +84,8 @@ func ViewBlockRaw(db ethdb.KeyValueReader, number uint64, fn func([]byte) error)
 // for blocks that will be appended to ancient verbatim.
 //
 // The freezer owns tx-info-per-block. New writes no longer create duplicate
-// per-tx ti-* payloads; the compact tx-* reverse index remains hot and resolves
-// individual lookups through this block-level row.
+// per-tx ti-* payloads; the hot/cold tx reverse index resolves individual
+// lookups through this block-level row.
 func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	data, err := db.Get(txInfoBlockKey(number))
 	if err != nil {

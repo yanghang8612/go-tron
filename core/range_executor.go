@@ -28,9 +28,11 @@ type canonicalBlockExecution struct {
 	// the preserved hot/freezer chain store. The apply and metadata tails rebuild
 	// reset-derived rows but must not rewrite that large body. TxInfos records
 	// whether the canonical block-level TransactionRet is likewise already in the
-	// freezer; its tx-hash location index is still rebuilt.
+	// freezer. TxIndexes records whether a published cold index already owns the
+	// block's tx-hash locations, in which case replay must not repopulate tx-*.
 	storedReplay        bool
 	storedReplayTxInfos bool
+	storedReplayTxIndex bool
 	// parentDynProps transfers ownership of the previous block's finalized
 	// dynamic properties into this block under async commit (decision-b), so
 	// execution never reads the lazily-published dynPropsCache or deep-copies the
@@ -278,6 +280,9 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		parent:       current,
 		storedReplay: e.storedReplay,
 		storedReplayTxInfos: e.storedReplay && rawdb.HasAncientTransactionInfos(
+			bc.chaindb, block.Number(),
+		),
+		storedReplayTxIndex: e.storedReplay && rawdb.HasAncientTransactionIndex(
 			bc.chaindb, block.Number(),
 		),
 		txInfoBatch:     e.txInfoBatches.acquire(),

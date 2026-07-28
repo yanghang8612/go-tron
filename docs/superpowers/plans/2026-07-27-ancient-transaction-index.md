@@ -8,9 +8,9 @@
   fingerprints at selectable directory widths.
 - [ ] Run the benchmark against the deployed mainnet database and select the
   production directory/fingerprint parameters.
-- [ ] Implement the checksummed immutable run writer/reader and manifest.
-- [ ] Add hot-Pebble-first, cold-index-second lookup with full-body verification.
-- [ ] Add an offline resumable migration and safe historical `tx-*` deletion.
+- [x] Implement the checksummed immutable run writer/reader and manifest.
+- [x] Add hot-Pebble-first, cold-index-second lookup with full-body verification.
+- [x] Add an offline resumable migration and safe historical `tx-*` deletion.
 - [ ] Add geometrically merged incremental runs for newly V2-covered history.
 - [ ] Verify historical Wallet/JSON-RPC transactions and receipts before and
   after physical Pebble compaction.

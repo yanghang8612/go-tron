@@ -23,7 +23,9 @@ var (
 // the freezer) is the canonical write-side test; here we only need the
 // read side and a way to seed canned bytes per kind/number.
 type fakeAncient struct {
-	rows map[string]map[uint64][]byte
+	rows              map[string]map[uint64][]byte
+	txIndexCoverage   uint64
+	txIndexCandidates map[[32]byte][]uint64
 }
 
 func newFakeAncient() *fakeAncient {
@@ -98,6 +100,14 @@ func (f *fakeAncient) HasAncient(kind string, number uint64) (bool, error) {
 	}
 	_, ok = tbl[number]
 	return ok, nil
+}
+
+func (f *fakeAncient) TransactionIndexCandidates(hash [32]byte) ([]uint64, error) {
+	return append([]uint64(nil), f.txIndexCandidates[hash]...), nil
+}
+
+func (f *fakeAncient) TransactionIndexCoverage() uint64 {
+	return f.txIndexCoverage
 }
 
 func TestHasAncientTransactionInfos(t *testing.T) {
@@ -438,6 +448,64 @@ func TestReadTransactionInfo_AncientViaIndex(t *testing.T) {
 	got := ReadTransactionInfo(cdb, txID)
 	if got == nil || got.Fee != 88 || !bytes.Equal(got.Id, txID) {
 		t.Fatalf("ancient derived info = %#v", got)
+	}
+}
+
+func TestReadTransactionInfo_AncientViaColdIndex(t *testing.T) {
+	t.Parallel()
+
+	wrongPB := newBlockProto(4, 4_000)
+	wrongPB.Transactions = []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: 4}}}
+	wrongBlock := types.NewBlockFromPB(wrongPB)
+	wantedPB := newBlockProto(5, 5_000)
+	wantedPB.Transactions = []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: 5}}}
+	wantedBlock := types.NewBlockFromPB(wantedPB)
+	wantedHash := wantedBlock.Transactions()[0].Hash()
+
+	wantedBody, err := wantedBlock.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongBody, err := wrongBlock.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ret, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber: 5,
+		Transactioninfo: []*corepb.TransactionInfo{{
+			Id:          append([]byte(nil), wantedHash[:]...),
+			Fee:         88,
+			BlockNumber: 5,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	anc := newFakeAncient()
+	anc.put(ancientBlocks, 4, wrongBody)
+	anc.put(ancientBlocks, 5, wantedBody)
+	anc.put(ancientTxInfos, 5, ret)
+	anc.txIndexCoverage = 6
+	anc.txIndexCandidates = map[[32]byte][]uint64{
+		wantedHash: {
+			transactionLocationMarker | 4<<transactionLocationOrdinalBits,
+			transactionLocationMarker | 5<<transactionLocationOrdinalBits,
+		},
+	}
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+
+	if !HasAncientTransactionIndex(cdb, 5) || HasAncientTransactionIndex(cdb, 6) {
+		t.Fatal("cold transaction index coverage mismatch")
+	}
+	if got := ReadTransactionIndex(cdb, wantedHash[:]); got == nil || *got != 5 {
+		t.Fatalf("cold transaction index = %v, want 5", got)
+	}
+	got := ReadTransactionInfo(cdb, wantedHash[:])
+	if got == nil || got.Fee != 88 || !bytes.Equal(got.Id, wantedHash[:]) {
+		t.Fatalf("cold transaction info = %#v", got)
+	}
+	if has, err := cdb.Has(txKey(wantedHash[:])); err != nil || has {
+		t.Fatalf("cold lookup created hot row: has=%v err=%v", has, err)
 	}
 }
 

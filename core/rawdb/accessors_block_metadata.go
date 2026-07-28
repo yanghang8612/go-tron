@@ -132,7 +132,7 @@ func WriteBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot com
 // Reusing it avoids marshaling the same block again in the durable publish
 // tail. block remains the source of metadata indexes and must match blockData.
 func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockData []byte, stateRoot common.Hash, infos []*corepb.TransactionInfo) error {
-	return writeBlockMetadataBatchEncoded(db, block, blockData, stateRoot, infos, true, true)
+	return writeBlockMetadataBatchEncoded(db, block, blockData, stateRoot, infos, true, true, true)
 }
 
 // WriteStoredReplayBlockMetadataBatch rebuilds the mutable metadata removed by
@@ -142,13 +142,14 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 // memtable, and compaction traffic but cannot change replay state. The block-hash
 // index is still refreshed because it is tiny and repairs legacy/incomplete
 // indexes at negligible cost. When transactionInfosAlreadyAncient is true the
-// canonical TransactionRet is also omitted, while every reset tx-hash location
-// index is still rebuilt.
-func WriteStoredReplayBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot common.Hash, infos []*corepb.TransactionInfo, transactionInfosAlreadyAncient bool) error {
-	return writeBlockMetadataBatchEncoded(db, block, nil, stateRoot, infos, false, !transactionInfosAlreadyAncient)
+// canonical TransactionRet is also omitted. transactionIndexesAlreadyAncient
+// similarly prevents replay from recreating tx-* rows covered by a published
+// cold index.
+func WriteStoredReplayBlockMetadataBatch(db ethdb.Batcher, block *types.Block, stateRoot common.Hash, infos []*corepb.TransactionInfo, transactionInfosAlreadyAncient, transactionIndexesAlreadyAncient bool) error {
+	return writeBlockMetadataBatchEncoded(db, block, nil, stateRoot, infos, false, !transactionInfosAlreadyAncient, !transactionIndexesAlreadyAncient)
 }
 
-func writeBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockData []byte, stateRoot common.Hash, infos []*corepb.TransactionInfo, includeBlockBody, includeTransactionRet bool) error {
+func writeBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockData []byte, stateRoot common.Hash, infos []*corepb.TransactionInfo, includeBlockBody, includeTransactionRet, includeTransactionIndexes bool) error {
 	if db == nil || block == nil {
 		return fmt.Errorf("write block metadata: nil database or block")
 	}
@@ -164,8 +165,10 @@ func writeBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	keyBytes := len(blockStateRootPrefix) + len(blockHash) +
 		len(blockHashPrefix) + len(blockHash) +
 		len(blockNumberHashPrefix) + len(ringSlot) +
-		len(taposPrefix) + len(ref) +
-		len(txs)*(len(txPrefix)+common.HashLength)
+		len(taposPrefix) + len(ref)
+	if includeTransactionIndexes {
+		keyBytes += len(txs) * (len(txPrefix) + common.HashLength)
+	}
 	if includeBlockBody {
 		keyBytes += len(blockPrefix) + len(numberValue)
 	}
@@ -177,7 +180,10 @@ func writeBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	// the durable metadata tail does not create four short-lived heap objects per
 	// block. Capacity limits in returnBlockMetadataScratch keep outliers from
 	// pinning unusually large buffers in the pool.
-	rowCapacity := 4 + len(txs)
+	rowCapacity := 4
+	if includeTransactionIndexes {
+		rowCapacity += len(txs)
+	}
 	if includeBlockBody {
 		rowCapacity++
 	}
@@ -185,7 +191,11 @@ func writeBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	if includeTransactionRet {
 		infoCapacity = len(infos)
 	}
-	scratch := borrowBlockMetadataScratch(keyBytes+len(txs)*8, rowCapacity, infoCapacity)
+	valueBytes := 0
+	if includeTransactionIndexes {
+		valueBytes = len(txs) * 8
+	}
+	scratch := borrowBlockMetadataScratch(keyBytes+valueBytes, rowCapacity, infoCapacity)
 	defer returnBlockMetadataScratch(scratch)
 	keyArena := scratch.bytes[:keyBytes:keyBytes]
 	keyOffset := 0
@@ -241,16 +251,18 @@ func writeBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	if len(infos) > 0 {
 		blockTimestamp = infos[0].BlockTimeStamp
 	}
-	txLocationValues := scratch.bytes[keyBytes : keyBytes+len(txs)*8 : keyBytes+len(txs)*8]
-	for i, tx := range txs {
-		hash := tx.Hash()
-		if blockNum > transactionLocationMaxBlock || i > int(^uint16(0)) {
-			return fmt.Errorf("write block metadata: transaction location block=%d ordinal=%d out of range", blockNum, i)
+	if includeTransactionIndexes {
+		txLocationValues := scratch.bytes[keyBytes : keyBytes+len(txs)*8 : keyBytes+len(txs)*8]
+		for i, tx := range txs {
+			hash := tx.Hash()
+			if blockNum > transactionLocationMaxBlock || i > int(^uint16(0)) {
+				return fmt.Errorf("write block metadata: transaction location block=%d ordinal=%d out of range", blockNum, i)
+			}
+			packed := transactionLocationMarker | blockNum<<transactionLocationOrdinalBits | uint64(i)
+			value := txLocationValues[i*8 : (i+1)*8 : (i+1)*8]
+			binary.BigEndian.PutUint64(value, packed)
+			rows = append(rows, blockMetadataRow{key: metadataKey(txPrefix, hash[:]), value: value})
 		}
-		packed := transactionLocationMarker | blockNum<<transactionLocationOrdinalBits | uint64(i)
-		value := txLocationValues[i*8 : (i+1)*8 : (i+1)*8]
-		binary.BigEndian.PutUint64(value, packed)
-		rows = append(rows, blockMetadataRow{key: metadataKey(txPrefix, hash[:]), value: value})
 	}
 
 	encodedSize := metadataBatchHeaderSize

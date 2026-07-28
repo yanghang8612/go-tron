@@ -33,6 +33,50 @@ type TransactionIndexSampleOptions struct {
 	Progress         func(TransactionIndexSampleProgress)
 }
 
+// VisitTransactionIndexesByBlockRange scans tx-* in hash order and invokes
+// visit for locations in the half-open block range. The stable hash ordering
+// is suitable for streaming directly into an immutable transaction-index run.
+// It returns the total live tx-* rows scanned and the rows selected.
+func VisitTransactionIndexesByBlockRange(db ethdb.Iteratee, startBlock, endBlock uint64, visit func(TransactionIndexSample) error) (scanned, selected uint64, err error) {
+	if db == nil {
+		return 0, 0, fmt.Errorf("visit transaction indexes: nil database")
+	}
+	if endBlock < startBlock {
+		return 0, 0, fmt.Errorf("visit transaction indexes: invalid block range [%d,%d)", startBlock, endBlock)
+	}
+	if visit == nil {
+		return 0, 0, fmt.Errorf("visit transaction indexes: nil visitor")
+	}
+	it := db.NewIterator(txPrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		key, value := it.Key(), it.Value()
+		scanned++
+		if len(key) != len(txPrefix)+len(TransactionIndexSample{}.Hash) {
+			return scanned, selected, fmt.Errorf("visit transaction indexes: malformed tx key length %d", len(key))
+		}
+		if len(value) != 8 {
+			return scanned, selected, fmt.Errorf("visit transaction indexes: malformed tx value length %d for %x", len(value), key[len(txPrefix):])
+		}
+		location := binary.BigEndian.Uint64(value)
+		block := transactionIndexLocationBlock(location)
+		if block < startBlock || block >= endBlock {
+			continue
+		}
+		var sample TransactionIndexSample
+		copy(sample.Hash[:], key[len(txPrefix):])
+		sample.Location = location
+		if err := visit(sample); err != nil {
+			return scanned, selected, err
+		}
+		selected++
+	}
+	if err := it.Error(); err != nil {
+		return scanned, selected, fmt.Errorf("visit transaction indexes: %w", err)
+	}
+	return scanned, selected, nil
+}
+
 // SampleTransactionIndexes reads up to Rows tx-* records from evenly spaced,
 // disjoint ranges of the first 16 hash bits. Transaction IDs are SHA-256 values
 // and therefore uniformly distributed; seeking to every window makes the work

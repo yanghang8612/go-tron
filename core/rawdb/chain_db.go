@@ -74,6 +74,14 @@ func (r freezerReader) AncientNoCopy(kind string, number uint64) ([]byte, error)
 	return data, nil
 }
 
+func (r freezerReader) TransactionIndexCandidates(hash [32]byte) ([]uint64, error) {
+	return r.f.TransactionIndexCandidates(hash)
+}
+
+func (r freezerReader) TransactionIndexCoverage() uint64 {
+	return r.f.TransactionIndexCoverage()
+}
+
 func (r freezerReader) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
 	out, err := r.f.AncientRange(kind, start, count, maxBytes)
 	if err != nil {

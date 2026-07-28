@@ -172,7 +172,7 @@ func TestWriteStoredReplayBlockMetadataBatchPreservesExistingBody(t *testing.T) 
 	}
 	root := common.Hash{0xdd, 0xee}
 	probe := &metadataBatchProbe{KeyValueStore: disk}
-	if err := WriteStoredReplayBlockMetadataBatch(probe, block, root, []*corepb.TransactionInfo{info}, false); err != nil {
+	if err := WriteStoredReplayBlockMetadataBatch(probe, block, root, []*corepb.TransactionInfo{info}, false, false); err != nil {
 		t.Fatal(err)
 	}
 	gotBody, err := disk.Get(blockKey(block.Number()))
@@ -205,7 +205,7 @@ func TestWriteStoredReplayBlockMetadataBatchPreservesExistingBody(t *testing.T) 
 			t.Fatal(err)
 		}
 		probe := &metadataBatchProbe{KeyValueStore: disk}
-		if err := WriteStoredReplayBlockMetadataBatch(probe, block, root, []*corepb.TransactionInfo{info}, true); err != nil {
+		if err := WriteStoredReplayBlockMetadataBatch(probe, block, root, []*corepb.TransactionInfo{info}, true, false); err != nil {
 			t.Fatal(err)
 		}
 		if probe.valueCalls != 0 {
@@ -218,6 +218,30 @@ func TestWriteStoredReplayBlockMetadataBatchPreservesExistingBody(t *testing.T) 
 		if got := ReadTransactionIndex(chainDB, txHash[:]); got == nil || *got != block.Number() {
 			t.Fatalf("transaction index = %v, want %d", got, block.Number())
 		}
+		if got := ReadBlockStateRoot(chainDB, block.Hash()); got != root {
+			t.Fatalf("state root = %x, want %x", got, root)
+		}
+	})
+
+	t.Run("ancient transaction ret and index", func(t *testing.T) {
+		disk := NewMemoryDatabase()
+		if err := disk.Put(blockKey(block.Number()), preservedBody); err != nil {
+			t.Fatal(err)
+		}
+		probe := &metadataBatchProbe{KeyValueStore: disk}
+		if err := WriteStoredReplayBlockMetadataBatch(probe, block, root, []*corepb.TransactionInfo{info}, true, true); err != nil {
+			t.Fatal(err)
+		}
+		if probe.valueCalls != 0 {
+			t.Fatalf("ancient metadata triggered %d value fills, want 0", probe.valueCalls)
+		}
+		if has, err := disk.Has(txInfoBlockKey(block.Number())); err != nil || has {
+			t.Fatalf("duplicate hot TransactionRet exists=%v err=%v, want false/nil", has, err)
+		}
+		if has, err := disk.Has(txKey(txHash[:])); err != nil || has {
+			t.Fatalf("duplicate hot transaction index exists=%v err=%v, want false/nil", has, err)
+		}
+		chainDB := NewChainDB(disk, NoopAncient{})
 		if got := ReadBlockStateRoot(chainDB, block.Hash()); got != root {
 			t.Fatalf("state root = %x, want %x", got, root)
 		}
