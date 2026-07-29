@@ -435,6 +435,13 @@ func TestOnePass_FreezesToMargin(t *testing.T) {
 	if frozen != 33 {
 		t.Fatalf("frozen=%d, want 33", frozen)
 	}
+	var wantHotBytes uint64
+	for n := uint64(33); n < 50; n++ {
+		wantHotBytes += uint64(len(blockKVKey(n)) + len(blockBytes(n)))
+	}
+	if got := r.Snapshot().PebbleSizeAfter; got != wantHotBytes {
+		t.Fatalf("PebbleSizeAfter=%d, want hot suffix bytes %d", got, wantHotBytes)
+	}
 	// Verify ancient counts.
 	for _, kind := range []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots} {
 		got, err := r.freezer.AncientCount(kind)
@@ -470,6 +477,26 @@ func TestOnePass_FreezesToMargin(t *testing.T) {
 		if v, err := fc.db.Get(blockKVKey(n)); err != nil || len(v) == 0 {
 			t.Fatalf("Pebble lost b-%d (should still be hot)", n)
 		}
+	}
+}
+
+func TestPebbleBlockNamespaceSizeFromSkipsFrozenPrefix(t *testing.T) {
+	db := memorydb.New()
+	for n := uint64(0); n < 8; n++ {
+		if err := writeBlockKV(db, n, blockBytes(n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Put([]byte("bh-not-a-body"), []byte("ignored")); err != nil {
+		t.Fatal(err)
+	}
+
+	var want uint64
+	for n := uint64(5); n < 8; n++ {
+		want += uint64(len(blockKVKey(n)) + len(blockBytes(n)))
+	}
+	if got := pebbleBlockNamespaceSizeFrom(db, 5); got != want {
+		t.Fatalf("size from block 5 = %d, want %d", got, want)
 	}
 }
 

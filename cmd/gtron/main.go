@@ -540,12 +540,11 @@ func gtron(ctx *cli.Context) error {
 	if !ctx.IsSet("sync.restart-from") && needsRound141StoredReplay(bc) {
 		// Stored replay at multi-million-block state sizes fills the configured
 		// commitment cache and spends a material share of all CPU in cold Pebble
-		// branch seeks. This
-		// one-shot recovery owns startup exclusively and the host has ample headroom
-		// beside its configured Pebble cache, so widen only this temporary path for
-		// a live A/B without changing ordinary operator flag semantics.
-		if commitmentCacheMiB < round141StoredReplayCommitmentCacheMiB {
-			bc.SetCommitmentBranchCacheSize(round141StoredReplayCommitmentCacheMiB * 1024 * 1024)
+		// branch seeks. The one-shot recovery owns startup exclusively, so widen
+		// only this temporary path and restore the operator-configured budget before
+		// normal services start.
+		restoreReplayCommitmentCache, replayCommitmentCacheEnlarged := temporarilyEnlargeStoredReplayCommitmentCache(bc, commitmentCacheMiB)
+		if replayCommitmentCacheEnlarged {
 			log.Warn("Stored replay commitment cache enlarged",
 				"configuredMiB", commitmentCacheMiB,
 				"replayMiB", round141StoredReplayCommitmentCacheMiB)
@@ -581,6 +580,15 @@ func gtron(ctx *cli.Context) error {
 				log.Info("Stored-block replay progress", "phase", p.Phase, "block", p.Block, "target", p.Target)
 			}
 		})
+		// The enlarged cache belongs only to the exclusive offline replay. Drop
+		// it before normal P2P/API lifecycles start; otherwise the ordinary node
+		// silently retains the multi-GiB recovery budget despite the operator's
+		// --state.commitment.cache setting.
+		restoreReplayCommitmentCache()
+		if replayCommitmentCacheEnlarged {
+			log.Info("Stored replay commitment cache restored",
+				"cacheMiB", commitmentCacheMiB)
+		}
 		if replayDebug != nil {
 			_ = replayDebug.Stop()
 		}
@@ -943,6 +951,24 @@ func gtron(ctx *cli.Context) error {
 	}
 	closeStores()
 	return nil
+}
+
+type commitmentBranchCacheSizer interface {
+	SetCommitmentBranchCacheSize(sizeBytes int)
+}
+
+// temporarilyEnlargeStoredReplayCommitmentCache applies the one-shot replay
+// budget and returns a restore function for the operator-configured budget.
+// Keeping the transition in one helper makes it difficult for an early change
+// to the replay tail to forget the restore again.
+func temporarilyEnlargeStoredReplayCommitmentCache(cache commitmentBranchCacheSizer, configuredMiB int) (restore func(), enlarged bool) {
+	if cache == nil || configuredMiB >= round141StoredReplayCommitmentCacheMiB {
+		return func() {}, false
+	}
+	cache.SetCommitmentBranchCacheSize(round141StoredReplayCommitmentCacheMiB * 1024 * 1024)
+	return func() {
+		cache.SetCommitmentBranchCacheSize(configuredMiB * 1024 * 1024)
+	}, true
 }
 
 // needsRound141StoredReplay identifies only the partial materialized image left

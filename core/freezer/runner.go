@@ -34,6 +34,7 @@ package freezer
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -705,12 +706,20 @@ func (r *Runner) OnePass() (uint64, error) {
 			"from", freezeFromN, "to", frozenHi)
 	}
 
-	// Phase 5: update stats. PebbleSizeAfter is sampled by an iterator
-	// pass on the still-hot `b-` prefix — cheap because after a successful
-	// freeze the prefix only holds the post-margin window.
+	// Phase 5: update stats. Start at the first block that remains hot instead
+	// of walking the prefix from block zero. DeleteRange makes frozen rows
+	// logically invisible immediately, but until compaction reclaims their
+	// SSTables a prefix-wide iterator still has to read and decompress those
+	// tables to apply the range tombstones. On a historical-sync database that
+	// turned this diagnostic counter into a continuous full-database scan which
+	// polluted Pebble's block cache and could exhaust the service memory cgroup.
 	frozen := capExclusive - freezeFromN
 	r.blocksFrozen.Add(frozen)
-	r.pebbleSizeAfter.Store(pebbleBlockNamespaceSize(r.chain.DB()))
+	if frozenHi == ^uint64(0) {
+		r.pebbleSizeAfter.Store(0)
+	} else {
+		r.pebbleSizeAfter.Store(pebbleBlockNamespaceSizeFrom(r.chain.DB(), frozenHi+1))
+	}
 	return frozen, nil
 }
 
@@ -752,14 +761,20 @@ func (r *Runner) loop() {
 	}
 }
 
-// pebbleBlockNamespaceSize iterates `b-` rows and returns the cumulative
-// key+value bytes. Approximate — Pebble's on-disk footprint after
-// compression and block-overhead deduction is smaller — but accurate
-// enough as an unbounded-growth detector. Called once at the end of each
-// pass; cost is O(remaining-block-rows), which is bounded by
-// MarginBlocks + BatchBlocks under steady state.
-func pebbleBlockNamespaceSize(db ethdb.Iteratee) uint64 {
-	it := db.NewIterator(blockNamespacePrefix, nil)
+// pebbleBlockNamespaceSizeFrom iterates still-hot `b-` rows beginning at
+// firstBlock and returns their cumulative key+value bytes. Approximate —
+// Pebble's on-disk footprint after compression and block-overhead deduction is
+// smaller — but accurate enough as an unbounded-growth detector.
+//
+// The lower bound is essential even though older rows were DeleteRange'd:
+// starting at the prefix would make Pebble walk the physical SST history to
+// resolve range tombstones and admit that one-shot scan into its block cache.
+// Big-endian block suffixes preserve numeric order, so seeking directly to the
+// first remaining block bounds the work to the live hot tail.
+func pebbleBlockNamespaceSizeFrom(db ethdb.Iteratee, firstBlock uint64) uint64 {
+	var start [8]byte
+	binary.BigEndian.PutUint64(start[:], firstBlock)
+	it := db.NewIterator(blockNamespacePrefix, start[:])
 	defer it.Release()
 	var size uint64
 	for it.Next() {

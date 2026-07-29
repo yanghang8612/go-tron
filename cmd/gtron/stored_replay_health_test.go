@@ -16,6 +16,48 @@ type fixedStoredReplayHead struct {
 
 func (h fixedStoredReplayHead) CurrentBlock() *types.Block { return h.block }
 
+type recordingCommitmentCacheSizer struct {
+	sizes []int
+}
+
+func (s *recordingCommitmentCacheSizer) SetCommitmentBranchCacheSize(sizeBytes int) {
+	s.sizes = append(s.sizes, sizeBytes)
+}
+
+func TestStoredReplayCommitmentCacheIsTemporary(t *testing.T) {
+	cache := new(recordingCommitmentCacheSizer)
+	restore, enlarged := temporarilyEnlargeStoredReplayCommitmentCache(cache, 128)
+	if !enlarged {
+		t.Fatal("replay cache was not enlarged")
+	}
+	restore()
+
+	want := []int{
+		round141StoredReplayCommitmentCacheMiB * 1024 * 1024,
+		128 * 1024 * 1024,
+	}
+	if len(cache.sizes) != len(want) {
+		t.Fatalf("cache resize calls = %v, want %v", cache.sizes, want)
+	}
+	for i := range want {
+		if cache.sizes[i] != want[i] {
+			t.Fatalf("cache resize calls = %v, want %v", cache.sizes, want)
+		}
+	}
+}
+
+func TestStoredReplayCommitmentCacheKeepsLargerOperatorBudget(t *testing.T) {
+	cache := new(recordingCommitmentCacheSizer)
+	restore, enlarged := temporarilyEnlargeStoredReplayCommitmentCache(cache, round141StoredReplayCommitmentCacheMiB)
+	if enlarged {
+		t.Fatal("operator cache at replay budget was unexpectedly changed")
+	}
+	restore()
+	if len(cache.sizes) != 0 {
+		t.Fatalf("cache resize calls = %v, want none", cache.sizes)
+	}
+}
+
 func TestStoredReplayHealthHandlerReportsCurrentHead(t *testing.T) {
 	block := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{
 		RawData: &corepb.BlockHeaderRaw{Number: 42, Timestamp: 1234},
