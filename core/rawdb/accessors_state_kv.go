@@ -49,6 +49,14 @@ type stateKVLatestStructuredOwnedWriter interface {
 	PutStateKVLatestOwnedValue(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error
 }
 
+// stateKVLatestStructuredIteratee lets layered stores narrow an overlay scan by
+// account without teaching the storage layer rawdb's private physical prefix.
+// The returned iterator still exposes physical keys and therefore preserves
+// the ordinary ethdb.Iterator contract used by the fallback below.
+type stateKVLatestStructuredIteratee interface {
+	NewStateKVLatestIterator(schemaPrefix []byte, accountID common.AccountID, physicalPrefix []byte) ethdb.Iterator
+}
+
 type StateKVLatestRow struct {
 	Owner      common.Address
 	Generation uint64
@@ -156,7 +164,12 @@ func DeleteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generati
 func IterateStateKVLatest(db ethdb.Iteratee, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte, fn func(logicalKey, value []byte) (bool, error)) error {
 	prefix := stateKVLatestLogicalPrefix(owner, generation, domain, logicalPrefix)
 	headerLen := len(stateKVLatestDomainPrefix(owner, generation, domain))
-	it := db.NewIterator(prefix, nil)
+	var it ethdb.Iterator
+	if structured, ok := db.(stateKVLatestStructuredIteratee); ok {
+		it = structured.NewStateKVLatestIterator(stateKVLatestPrefix, owner.AccountID(), prefix)
+	} else {
+		it = db.NewIterator(prefix, nil)
+	}
 	defer it.Release()
 	for it.Next() {
 		key := it.Key()

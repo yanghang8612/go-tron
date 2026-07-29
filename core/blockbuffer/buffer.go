@@ -98,9 +98,79 @@ type layerShard struct {
 	mu                 sync.RWMutex
 	writes             map[string][]byte
 	deletes            map[string]struct{}
+	prefixBucketIndex  *layerPrefixBucketIndex
 	pendingOwnedPuts   int
 	commitmentReserved bool
-	_                  [15]byte
+	_                  [7]byte
+}
+
+// layerPrefixBucketIndex is built lazily by structured account-KV iterators.
+// Generic NewIterator retains its exact behavior, while the account-scoped
+// path visits only keys sharing the first account-ID byte instead of scanning
+// every unrelated write in every live layer. The schema prefix is supplied by
+// rawdb, so blockbuffer does not duplicate storage-prefix knowledge.
+type layerPrefixBucketIndex struct {
+	prefix  string
+	buckets map[byte][]string
+	built   [4]uint64
+}
+
+func newLayerPrefixBucketIndex(prefix string) *layerPrefixBucketIndex {
+	return &layerPrefixBucketIndex{prefix: prefix}
+}
+
+func (i *layerPrefixBucketIndex) bucketBuilt(bucket byte) bool {
+	return i != nil && i.built[bucket>>6]&(uint64(1)<<(bucket&63)) != 0
+}
+
+func (i *layerPrefixBucketIndex) ensureBucket(bucket byte, writes map[string][]byte, deletes map[string]struct{}) {
+	if i == nil || i.bucketBuilt(bucket) {
+		return
+	}
+	for key := range writes {
+		i.addToBucket(bucket, key)
+	}
+	for key := range deletes {
+		i.addToBucket(bucket, key)
+	}
+	i.built[bucket>>6] |= uint64(1) << (bucket & 63)
+}
+
+func (i *layerPrefixBucketIndex) addToBucket(bucket byte, key string) {
+	if i == nil || len(key) <= len(i.prefix) || !strings.HasPrefix(key, i.prefix) {
+		return
+	}
+	if key[len(i.prefix)] != bucket {
+		return
+	}
+	if i.buckets == nil {
+		i.buckets = make(map[byte][]string)
+	}
+	i.buckets[bucket] = append(i.buckets[bucket], key)
+}
+
+// trackPrefixBucketKeyBeforeMutation records a key only on its first mutation
+// in this layer. Callers hold s.mu. Tracking generic writes after lazy index
+// construction is required for ethdb correctness: a caller may write a raw
+// physical state-KV key without using rawdb's structured writer fast path.
+func (s *layerShard) trackPrefixBucketKeyBeforeMutation(key string) {
+	if s.prefixBucketIndex == nil {
+		return
+	}
+	if _, exists := s.writes[key]; exists {
+		return
+	}
+	if _, exists := s.deletes[key]; exists {
+		return
+	}
+	index := s.prefixBucketIndex
+	if len(key) <= len(index.prefix) || !strings.HasPrefix(key, index.prefix) {
+		return
+	}
+	bucket := key[len(index.prefix)]
+	if index.bucketBuilt(bucket) {
+		index.addToBucket(bucket, key)
+	}
 }
 
 // bufferReadView is an immutable snapshot of the layer topology used by the
@@ -590,6 +660,7 @@ func applyBatchOpToLayer(target *layer, op *bufferBatchOp) {
 		op.reservedOwnedPut = false
 	}
 	target.addBloomString(k)
+	s.trackPrefixBucketKeyBeforeMutation(k)
 	if op.delete {
 		delete(s.writes, k)
 		if s.deletes == nil {
@@ -2362,6 +2433,24 @@ func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
 	return b.finishIterator(overlay, prefix, start)
 }
 
+// NewStateKVLatestIterator is rawdb's optional structured iterator path. It
+// preserves the same physical-key snapshot semantics as NewIterator while
+// narrowing live-layer work to one coarse account bucket. Exact owner,
+// generation, domain, and logical-prefix filtering is still applied below.
+func (b *Buffer) NewStateKVLatestIterator(schemaPrefix []byte, accountID common.AccountID, physicalPrefix []byte) ethdb.Iterator {
+	view := b.loadReadView()
+	overlay := newOverlayState()
+	schema := string(schemaPrefix)
+	physical := unsafe.String(unsafe.SliceData(physicalPrefix), len(physicalPrefix))
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		overlay.walkPrefixBucket(view.inflight[i], schema, accountID[0], physical)
+	}
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		overlay.walkPrefixBucket(view.layers[i], schema, accountID[0], physical)
+	}
+	return b.finishIterator(overlay, physicalPrefix, nil)
+}
+
 // overlayOp is one resolved overlay entry: a value write, or a tombstone.
 type overlayOp struct {
 	value   []byte
@@ -2428,6 +2517,50 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 			o.m[k] = overlayOp{deleted: true}
 		}
 		s.mu.RUnlock()
+	}
+}
+
+// walkPrefixBucket is the account-scoped counterpart of walk. Each shard's
+// index is initialized under the same lock that guards its mutation maps, so a
+// concurrent writer either appears in the initial build or appends itself
+// before publication. If a different schema ever asks to reuse the single
+// per-shard index, fall back to the full walk for correctness.
+func (o *overlayState) walkPrefixBucket(l *layer, schema string, bucket byte, physical string) {
+	if l == nil {
+		return
+	}
+	for shardNum := range l.shards {
+		s := &l.shards[shardNum]
+		s.mu.Lock()
+		if s.prefixBucketIndex == nil {
+			s.prefixBucketIndex = newLayerPrefixBucketIndex(schema)
+		}
+		index := s.prefixBucketIndex
+		if index.prefix != schema {
+			s.mu.Unlock()
+			// All shards in a layer are normally initialized by the same
+			// structured call. A second schema is not expected in production;
+			// preserve generic iterator semantics with one full-layer fallback.
+			o.walk(l, []byte(physical), nil)
+			return
+		}
+		index.ensureBucket(bucket, s.writes, s.deletes)
+		for _, key := range index.buckets[bucket] {
+			if !strings.HasPrefix(key, physical) {
+				continue
+			}
+			if _, resolved := o.m[key]; resolved {
+				continue
+			}
+			if value, exists := s.writes[key]; exists {
+				o.m[key] = overlayOp{value: append([]byte(nil), value...)}
+				continue
+			}
+			if _, deleted := s.deletes[key]; deleted {
+				o.m[key] = overlayOp{deleted: true}
+			}
+		}
+		s.mu.Unlock()
 	}
 }
 

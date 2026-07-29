@@ -609,6 +609,9 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, secon
 				key = unsafe.String(unsafe.SliceData(keyArena[start:end]), end-start)
 			}
 			l.addBloomString(key)
+			// This bulk path is exclusively the CommitmentBranch structured
+			// writer. It cannot match the account-KV schema prefix, so avoid an
+			// index-prefix check on every branch emitted by the hot fold path.
 			delete(s.deletes, key)
 			s.writes[key] = values[i]
 		}
@@ -636,6 +639,7 @@ func (b *Buffer) putIntoStringOwnedValue(l *layer, key string, value []byte) {
 	s := l.shardForString(key)
 	s.mu.Lock()
 	l.addBloomString(key)
+	s.trackPrefixBucketKeyBeforeMutation(key)
 	delete(s.deletes, key)
 	if s.writes == nil {
 		s.writes = make(map[string][]byte)
@@ -661,6 +665,7 @@ func (b *Buffer) deleteIntoString(l *layer, key string) {
 	s := l.shardForString(key)
 	s.mu.Lock()
 	l.addBloomString(key)
+	s.trackPrefixBucketKeyBeforeMutation(key)
 	delete(s.writes, key)
 	if s.deletes == nil {
 		s.deletes = make(map[string]struct{})
@@ -1072,4 +1077,20 @@ func (v *LayerView) NewIterator(prefix, start []byte) ethdb.Iterator {
 		overlay.walk(view.layers[i], prefix, start)
 	}
 	return b.finishIterator(overlay, prefix, start)
+}
+
+// NewStateKVLatestIterator is the layer-bound form of Buffer's structured
+// account-KV iterator. It includes the bound worker layer and committed stack,
+// but excludes other in-flight layers exactly like LayerView.NewIterator.
+func (v *LayerView) NewStateKVLatestIterator(schemaPrefix []byte, accountID common.AccountID, physicalPrefix []byte) ethdb.Iterator {
+	b := v.b
+	view := b.loadReadView()
+	overlay := newOverlayState()
+	schema := string(schemaPrefix)
+	physical := unsafe.String(unsafe.SliceData(physicalPrefix), len(physicalPrefix))
+	overlay.walkPrefixBucket(v.l, schema, accountID[0], physical)
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		overlay.walkPrefixBucket(view.layers[i], schema, accountID[0], physical)
+	}
+	return b.finishIterator(overlay, physicalPrefix, nil)
 }

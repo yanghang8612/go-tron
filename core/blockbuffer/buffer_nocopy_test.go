@@ -85,6 +85,168 @@ func TestViewBaseIntoCachePooledCallbackReentrant(t *testing.T) {
 	}
 }
 
+func BenchmarkStateKVLatestAccountPrefixOverlay(b *testing.B) {
+	const (
+		layers       = 4
+		owners       = 256
+		rowsPerOwner = 8
+	)
+	buffer := New(rawdb.NewMemoryDatabase())
+	for layerNum := 0; layerNum < layers; layerNum++ {
+		buffer.BeginBlock(bufHash(byte(layerNum+1)), uint64(layerNum+1))
+		for ownerNum := 0; ownerNum < owners; ownerNum++ {
+			var owner common.Address
+			owner[0] = common.AddressPrefixMainnet
+			owner[1] = byte(ownerNum)
+			owner[19] = byte(layerNum)
+			for row := 0; row < rowsPerOwner; row++ {
+				key := []byte(fmt.Sprintf("row/%02d", row))
+				if err := rawdb.WriteStateKVLatest(buffer, owner, 0, kvdomains.AccountAssetV2, key, []byte("value")); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+		// Model the unrelated commitment and metadata entries that share every
+		// live block layer during sync. The state-KV iterator must not inspect
+		// these entries when looking up one account/domain prefix.
+		for row := 0; row < owners*rowsPerOwner; row++ {
+			key := []byte(fmt.Sprintf("state-commitment-branch-v1-%08d", row))
+			if err := buffer.Put(key, []byte("branch")); err != nil {
+				b.Fatal(err)
+			}
+		}
+		buffer.CommitBlock()
+	}
+	var target common.Address
+	target[0] = common.AddressPrefixMainnet
+	target[1] = 127
+	target[19] = layers - 1
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rows := 0
+		err := rawdb.IterateStateKVLatest(buffer, target, 0, kvdomains.AccountAssetV2, []byte("row/"), func(_, _ []byte) (bool, error) {
+			rows++
+			return true, nil
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if rows != rowsPerOwner {
+			b.Fatalf("rows = %d, want %d", rows, rowsPerOwner)
+		}
+	}
+}
+
+func collectStateKVLatest(t *testing.T, db interface {
+	ethdb.Iteratee
+}, owner common.Address) map[string]string {
+	t.Helper()
+	got := make(map[string]string)
+	err := rawdb.IterateStateKVLatest(db, owner, 0, kvdomains.AccountAssetV2, []byte("row/"), func(key, value []byte) (bool, error) {
+		got[string(key)] = string(value)
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestStateKVLatestAccountPrefixIndexPreservesOverlaySemantics(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	target := common.Address{common.AddressPrefixMainnet, 0x7f, 0x01}
+	sameBucket := common.Address{common.AddressPrefixMainnet, 0x7f, 0x02}
+	otherBucket := common.Address{common.AddressPrefixMainnet, 0x80, 0x01}
+	if err := rawdb.WriteStateKVLatest(base, target, 0, kvdomains.AccountAssetV2, []byte("row/base"), []byte("base")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(base, target, 0, kvdomains.AccountAssetV2, []byte("row/delete"), []byte("base-delete")); err != nil {
+		t.Fatal(err)
+	}
+
+	buffer := New(base)
+	buffer.BeginBlock(bufHash(1), 1)
+	if err := rawdb.WriteStateKVLatest(buffer, target, 0, kvdomains.AccountAssetV2, []byte("row/base"), []byte("overlay")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(buffer, sameBucket, 0, kvdomains.AccountAssetV2, []byte("row/collision"), []byte("wrong-owner")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(buffer, otherBucket, 0, kvdomains.AccountAssetV2, []byte("row/unrelated"), []byte("wrong-bucket")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first structured iteration lazily builds the index from mutations
+	// that were already present in the active layer.
+	if got := collectStateKVLatest(t, buffer, target); fmt.Sprint(got) != "map[row/base:overlay row/delete:base-delete]" {
+		t.Fatalf("initial indexed view = %v", got)
+	}
+
+	// Generic physical Put/Delete after index construction must update the
+	// index too; otherwise the optimized path would silently miss raw ethdb
+	// callers that do not use the structured writer extension.
+	putKey := rawdb.AppendStateKVLatestCommitmentKey(nil, target, 0, kvdomains.AccountAssetV2, []byte("row/generic"))
+	if err := buffer.Put(putKey, rawdb.EncodeStateKVLatestValue([]byte("generic"))); err != nil {
+		t.Fatal(err)
+	}
+	deleteKey := rawdb.AppendStateKVLatestCommitmentKey(nil, target, 0, kvdomains.AccountAssetV2, []byte("row/delete"))
+	if err := buffer.Delete(deleteKey); err != nil {
+		t.Fatal(err)
+	}
+	batchKey := rawdb.AppendStateKVLatestCommitmentKey(nil, target, 0, kvdomains.AccountAssetV2, []byte("row/batch"))
+	batch := buffer.NewBatch()
+	if err := rawdb.WriteStateKVLatestEncodedOwnedByKey(batch, batchKey, rawdb.EncodeStateKVLatestValue([]byte("batch"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	got := collectStateKVLatest(t, buffer, target)
+	want := map[string]string{"row/base": "overlay", "row/batch": "batch", "row/generic": "generic"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("indexed view after generic mutations = %v, want %v", got, want)
+	}
+
+	// A generic write into a bucket that has not been queried yet is found
+	// when that bucket is lazily built later.
+	otherKey := rawdb.AppendStateKVLatestCommitmentKey(nil, otherBucket, 0, kvdomains.AccountAssetV2, []byte("row/late"))
+	if err := buffer.Put(otherKey, rawdb.EncodeStateKVLatestValue([]byte("late"))); err != nil {
+		t.Fatal(err)
+	}
+	if other := collectStateKVLatest(t, buffer, otherBucket); other["row/late"] != "late" {
+		t.Fatalf("unbuilt bucket missed later generic write: %v", other)
+	}
+}
+
+func TestLayerViewStateKVLatestAccountPrefixIndexExcludesOtherInflightLayers(t *testing.T) {
+	target := common.Address{common.AddressPrefixMainnet, 0x42, 0x01}
+	buffer := New(rawdb.NewMemoryDatabase())
+	buffer.SetMaxInflight(2)
+	buffer.BeginBlock(bufHash(1), 1)
+	if err := rawdb.WriteStateKVLatest(buffer, target, 0, kvdomains.AccountAssetV2, []byte("row/committed"), []byte("committed")); err != nil {
+		t.Fatal(err)
+	}
+	buffer.CommitBlock()
+
+	buffer.BeginBlock(bufHash(2), 2)
+	if err := rawdb.WriteStateKVLatest(buffer, target, 0, kvdomains.AccountAssetV2, []byte("row/worker"), []byte("worker")); err != nil {
+		t.Fatal(err)
+	}
+	workerHash, _ := buffer.NewestInflight()
+	buffer.BeginBlock(bufHash(3), 3)
+	if err := rawdb.WriteStateKVLatest(buffer, target, 0, kvdomains.AccountAssetV2, []byte("row/foreground"), []byte("foreground")); err != nil {
+		t.Fatal(err)
+	}
+
+	got := collectStateKVLatest(t, buffer.ViewLayer(workerHash), target)
+	want := map[string]string{"row/committed": "committed", "row/worker": "worker"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("layer view = %v, want %v", got, want)
+	}
+}
+
 // keyValueWriterOnly intentionally hides optional writer extensions so
 // benchmarks can compare rawdb's generic Put fallback with LayerView's
 // split-key fast path.

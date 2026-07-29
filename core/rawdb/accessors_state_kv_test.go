@@ -34,6 +34,22 @@ type ownedStateKVWriteProbe struct {
 	value      []byte
 }
 
+type structuredStateKVIterProbe struct {
+	ethdb.Iteratee
+	called         bool
+	schemaPrefix   []byte
+	accountID      common.AccountID
+	physicalPrefix []byte
+}
+
+func (p *structuredStateKVIterProbe) NewStateKVLatestIterator(schemaPrefix []byte, accountID common.AccountID, physicalPrefix []byte) ethdb.Iterator {
+	p.called = true
+	p.schemaPrefix = append([]byte(nil), schemaPrefix...)
+	p.accountID = accountID
+	p.physicalPrefix = append([]byte(nil), physicalPrefix...)
+	return p.Iteratee.NewIterator(physicalPrefix, nil)
+}
+
 func (p *ownedStateKVWriteProbe) Put(_, _ []byte) error {
 	p.putCalled = true
 	return nil
@@ -75,6 +91,34 @@ func TestStateKVLatestReadWriteEmptyAndAccountID(t *testing.T) {
 	got, ok, err := ReadStateKVLatest(db, alias, 7, kvdomains.ContractStorage, []byte("slot"))
 	if err != nil || !ok || len(got) != 0 {
 		t.Fatalf("read via alias = %x ok=%v err=%v, want empty,true,nil", got, ok, err)
+	}
+}
+
+func TestIterateStateKVLatestPrefersStructuredIterator(t *testing.T) {
+	db := NewMemoryDatabase()
+	owner := stateKVTestAddress(common.AddressPrefixMainnet, 0x35)
+	if err := WriteStateKVLatest(db, owner, 9, kvdomains.AccountAssetV2, []byte("row"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	probe := &structuredStateKVIterProbe{Iteratee: db}
+	rows := 0
+	if err := IterateStateKVLatest(probe, owner, 9, kvdomains.AccountAssetV2, nil, func(key, value []byte) (bool, error) {
+		rows++
+		if !bytes.Equal(key, []byte("row")) || !bytes.Equal(value, []byte("value")) {
+			t.Fatalf("row = %q:%q", key, value)
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !probe.called || rows != 1 {
+		t.Fatalf("structured iterator called=%v rows=%d", probe.called, rows)
+	}
+	if !bytes.Equal(probe.schemaPrefix, stateKVLatestPrefix) || probe.accountID != owner.AccountID() {
+		t.Fatalf("structured iterator schema/account mismatch")
+	}
+	if want := stateKVLatestDomainPrefix(owner, 9, kvdomains.AccountAssetV2); !bytes.Equal(probe.physicalPrefix, want) {
+		t.Fatalf("physical prefix = %x, want %x", probe.physicalPrefix, want)
 	}
 }
 
