@@ -183,6 +183,11 @@ type accountKVLatestBatch struct {
 	// write). At depth 2 (deepAsync=false) the invariant holds and the fast
 	// tag-based prune is kept, preserving the byte-identical/synchronous path.
 	deepAsync bool
+	// storagePendingResolved points at its execution-confined StateDB batch on
+	// the long-lived CommitScope path. It distinguishes ContractStorage misses
+	// served by this pending overlay from reads that reach blockbuffer/Pebble,
+	// without an atomic increment on every SLOAD.
+	storagePendingResolved *int64
 }
 
 type accountKVLatestPending struct {
@@ -953,6 +958,9 @@ func (w *accountKVLatestBatch) readLatest(owner tcommon.Address, generation uint
 func (w *accountKVLatestBatch) readLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
 	if w != nil {
 		if pending, ok := w.pending[accountKVLatestPendingLookupKey(owner, generation, domain, logicalKey)]; ok {
+			if domain == kvdomains.ContractStorage && w.storagePendingResolved != nil {
+				(*w.storagePendingResolved)++
+			}
 			if pending.deleted {
 				return nil, false, nil
 			}

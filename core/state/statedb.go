@@ -103,6 +103,14 @@ type StateDB struct {
 	ancientRetainedStateObjects  []tcommon.Address
 	stateObjectWorkingGeneration uint64
 
+	// Storage-read counters are execution-goroutine confined and flushed to
+	// registered metrics once per successful commit. oversizedStorageSamples is
+	// a bounded exact probe of whether slots discarded from >4096-entry caches
+	// are read again in the next four blocks; it is diagnostic-only state and is
+	// intentionally excluded from Copy and consensus serialization.
+	storageObservability    storageObservabilityBatch
+	oversizedStorageSamples map[tcommon.Address]*oversizedStorageSample
+
 	// loadedAccountProtoObjects tracks objects whose original flat-envelope
 	// AccountProto is retained for a possible same-block journal pre-image.
 	// Successful commit releases bytes that were never consumed by a mutation,
@@ -357,6 +365,10 @@ func (s *StateDB) NewCommitScope() *CommitScope {
 	scope.commitment = &commitScopeCommitment{}
 	scope.commitmentState = NewDomainCommitmentState(s)
 	scope.latestWriter = newAccountKVLatestDomainBatch(index, resolveGeneration, &s.changeSet, nil)
+	// The scope's read-your-writes overlay can satisfy a storage-cache miss
+	// before the request reaches blockbuffer/Pebble. cold_pending_resolved is a
+	// strict subset of cold; their difference crossed the scope pending overlay.
+	scope.latestWriter.storagePendingResolved = &s.storageObservability.coldPendingResolved
 	scope.latestReader = &commitScopeLatestReader{writer: scope.latestWriter, state: s}
 	scope.tx = statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{
 		Latest:          scope.latestReader,
@@ -976,6 +988,10 @@ func (s *StateDB) getOrCreateAccount(addr tcommon.Address) *stateObject {
 	// same block.
 	s.journalAccount(addr, obj)
 	nextGeneration := s.nextAccountKVGeneration(addr, obj)
+	// Any exact storage sample belongs to the old object/incarnation. Settle it
+	// before replacing the stateObjects entry so the recreated account cannot
+	// produce false sampled-key reuse.
+	s.settleOversizedStorageSample(addr)
 	obj = s.newEmptyStateObject(addr)
 	obj.accountKVGeneration = nextGeneration
 	// A non-zero generation means this is a recreate after SELFDESTRUCT: the
@@ -2629,20 +2645,25 @@ func (s *StateDB) GetState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash 
 func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tcommon.Hash, bool) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
+		s.storageObservability.accountMissingZero++
 		return tcommon.Hash{}, false
 	}
 	if slot, ok := obj.storage[key]; ok {
+		s.storageObservability.objectCacheHits++
 		return slot.value, slot.exists
 	}
 	if obj.created {
+		s.storageObservability.createdZero++
 		return tcommon.Hash{}, false
 	}
 	// Load from persistent storage on cache miss.
+	s.storageObservability.coldReads++
 	rowKey := storageReadKeyPool.Get().(*tcommon.Hash)
 	*rowKey = s.storageRowKey(addr, key)
 	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractStorage, rowKey[:])
 	storageReadKeyPool.Put(rowKey)
 	if err != nil {
+		s.storageObservability.coldErrors++
 		return tcommon.Hash{}, false
 	}
 	// Cache durable misses as an explicit non-existent slot. Contracts often
@@ -2650,16 +2671,22 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	// every SLOAD crosses the blockbuffer and reaches Pebble again. Keep errors
 	// uncached above because a transient read failure must remain retryable.
 	if !ok || len(raw) == 0 {
+		s.storageObservability.coldMissing++
 		obj.cacheStorageSlot(key, storageSlot{})
+		s.recordOversizedStorageReload(obj, key)
 		return tcommon.Hash{}, false
 	}
 	var h tcommon.Hash
 	copy(h[len(h)-len(raw):], raw)
 	if h == (tcommon.Hash{}) {
+		s.storageObservability.coldMissing++
 		obj.cacheStorageSlot(key, storageSlot{})
+		s.recordOversizedStorageReload(obj, key)
 		return tcommon.Hash{}, false
 	}
+	s.storageObservability.coldFound++
 	obj.cacheStorageSlot(key, storageSlot{value: h, exists: true})
+	s.recordOversizedStorageReload(obj, key)
 	return h, true
 }
 
@@ -3498,6 +3525,9 @@ func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRo
 func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 	obj := plan.obj
 	if plan.deleteAccount {
+		// The account incarnation is ending; sampled keys from an earlier
+		// oversized-cache release can no longer be reloaded by this object.
+		s.settleOversizedStorageSample(obj.address)
 		obj.releaseKVDirty()
 		obj.deleted = true
 		obj.selfDestructed = false
@@ -3733,6 +3763,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		s.rotateStateObjectWorkingSet()
 		s.kvEntryArena.reset()
 		mark(&stats.AccountTrieCommit)
+		s.flushStorageObservability()
 		return tcommon.Hash{}, stats, nil
 	}
 	var touchUpdates []rawdb.StateCommitmentUpdate
@@ -3753,6 +3784,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	s.rotateStateObjectWorkingSet()
 	s.kvEntryArena.reset()
 	mark(&stats.AccountTrieCommit)
+	s.flushStorageObservability()
 
 	return root, stats, nil
 }
@@ -4168,6 +4200,7 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 			continue
 		}
 		clearAccountFrozenBandwidthCache(obj)
+		s.settleOversizedStorageSample(addr)
 		delete(s.stateObjects, addr)
 		if s.lastStateObject == obj {
 			s.lastStateObject = nil
@@ -4178,11 +4211,16 @@ func (s *StateDB) rotateStateObjectWorkingSet() {
 	for _, addr := range current {
 		if obj := s.stateObjects[addr]; obj != nil {
 			if !obj.dirty && len(obj.storage) > maxStateObjectCachedStorageSlots {
+				s.recordOversizedStorageRelease(obj)
 				obj.releaseStorage()
 			}
 			obj.cacheTouched = false
 		}
 	}
+	// Give every sampled key a full four-block window, then settle remaining
+	// keys. This also catches object replacements performed indirectly by journal
+	// replay without adding work to the hot RevertToSnapshot path.
+	s.expireOversizedStorageSamples()
 	s.ancientRetainedStateObjects = ancient
 	s.oldestRetainedStateObjects = oldest
 	s.olderRetainedStateObjects = previous
