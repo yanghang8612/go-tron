@@ -381,6 +381,10 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	for range workers {
 		go func() {
 			defer wg.Done()
+			hasher := borrowKeccak()
+			defer returnKeccak(hasher)
+			sub := commitmentTrie{hasher: hasher}
+			var path [pathLen]byte
 			for {
 				task := int(next.Add(1)) - 1
 				if task >= activeBatches {
@@ -393,11 +397,10 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 				buffers[nb] = buf
 
 				// Each subtrie folds sequentially against its private buffer. Keep
-				// this tiny owner and path on the worker stack; the path can be reused
+				// this tiny owner, hasher, and path on the worker stack. They are reused
 				// after each claimed group because recursive stores consume it before
 				// applyNibble returns.
-				sub := commitmentTrie{store: buf}
-				var path [pathLen]byte
+				sub.store = buf
 				nibbleChanged, err := sub.applyNibble(path[:0], 0, branch, nb, group)
 				changed[nb] = nibbleChanged
 				if err == nil && nibbleChanged && concurrentFlush {

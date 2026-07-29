@@ -57,6 +57,34 @@ func TestCommitmentKeccakMatchesLegacyReference(t *testing.T) {
 	}
 }
 
+func TestCommitmentHasherReuseMatchesOneShot(t *testing.T) {
+	h := borrowKeccak()
+	defer returnKeccak(h)
+
+	for _, tc := range []struct {
+		key   []byte
+		value []byte
+	}{
+		{key: nil, value: nil},
+		{key: []byte("account"), value: []byte("value")},
+		{key: bytes.Repeat([]byte{0xab}, 137), value: bytes.Repeat([]byte{0xcd}, 255)},
+	} {
+		if got, want := keyPathWithHasher(h, tc.key), keyPath(tc.key); got != want {
+			t.Fatalf("keyPathWithHasher(%x) = %x, want %x", tc.key, got, want)
+		}
+		if got, want := leafValueHashWithHasher(h, tc.key, tc.value), leafValueHash(tc.key, tc.value); got != want {
+			t.Fatalf("leafValueHashWithHasher(%x) = %x, want %x", tc.key, got, want)
+		}
+	}
+
+	var branch BranchData
+	branch.SetHashChild(1, common.Hash{1, 2, 3})
+	branch.SetLeafChild(9, []byte("leaf"), common.Hash{4, 5, 6})
+	if got, want := branch.nodeHashWith(h), branch.nodeHash(); got != want {
+		t.Fatalf("nodeHashWith(reused) = %x, want %x", got, want)
+	}
+}
+
 func benchmarkCommitmentKeccak(b *testing.B, newHash func() readableHash) {
 	h := newHash()
 	domain := []byte{1}
@@ -124,6 +152,14 @@ func BenchmarkCommitmentKeccakGethContiguous(b *testing.B) {
 var branchNodeHashSink common.Hash
 
 func BenchmarkBranchDataNodeHash(b *testing.B) {
+	benchmarkBranchDataNodeHash(b, false)
+}
+
+func BenchmarkBranchDataNodeHashReusedHasher(b *testing.B) {
+	benchmarkBranchDataNodeHash(b, true)
+}
+
+func benchmarkBranchDataNodeHash(b *testing.B, reuseHasher bool) {
 	for _, children := range []int{1, 4, 16} {
 		var branch BranchData
 		for nibble := 0; nibble < children; nibble++ {
@@ -135,9 +171,18 @@ func BenchmarkBranchDataNodeHash(b *testing.B) {
 			}
 		}
 		b.Run(fmt.Sprintf("children=%d", children), func(b *testing.B) {
+			var hasher *pooledKeccak
+			if reuseHasher {
+				hasher = borrowKeccak()
+				b.Cleanup(func() { returnKeccak(hasher) })
+			}
 			b.ReportAllocs()
 			for b.Loop() {
-				branchNodeHashSink = branch.nodeHash()
+				if hasher == nil {
+					branchNodeHashSink = branch.nodeHash()
+				} else {
+					branchNodeHashSink = branch.nodeHashWith(hasher)
+				}
 			}
 		})
 	}

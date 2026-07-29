@@ -64,6 +64,10 @@ type pooledKeccak struct {
 
 func borrowKeccak() *pooledKeccak {
 	h := keccakPool.Get().(*pooledKeccak)
+	// Preserve the pool's clean-on-borrow contract. Hot fold paths reuse the
+	// same hasher for many digests, so this one Reset per Fold/worker is
+	// negligible while keeping future callers safe from a returned sponge's
+	// absorb/squeeze state.
 	h.Reset()
 	return h
 }
@@ -602,6 +606,14 @@ func (b *BranchData) onlyChildNibble() uint8 {
 func (b *BranchData) nodeHash() common.Hash {
 	h := borrowKeccak()
 	defer returnKeccak(h)
+	return b.nodeHashWith(h)
+}
+
+// nodeHashWith is nodeHash using a caller-owned reusable sponge. A production
+// fold keeps one per sequential worker, avoiding a sync.Pool round trip for
+// every branch on the recursive path.
+func (b *BranchData) nodeHashWith(h *pooledKeccak) common.Hash {
+	h.Reset()
 	h.nodeBuf[0] = 0x01
 	off := 1
 	for remaining := b.presentMask(); remaining != 0; remaining &= remaining - 1 {
@@ -641,6 +653,9 @@ type Update = rawdb.StateCommitmentUpdate
 // by a branchStore. Branch nodes are keyed by their nibble prefix from the root.
 type commitmentTrie struct {
 	store branchStore
+	// hasher belongs exclusively to this sequential trie worker. The parallel
+	// root creates a private sub-trie (and hasher) per long-lived worker.
+	hasher *pooledKeccak
 
 	// parallelMinOps, when > 0, folds the root's 16 first-nibble subtries
 	// concurrently for any Fold with at least this many resolved ops. 0 (the
@@ -655,6 +670,20 @@ type commitmentTrie struct {
 
 func newCommitmentTrie(store branchStore) *commitmentTrie {
 	return &commitmentTrie{store: store}
+}
+
+func (t *commitmentTrie) keyPath(key []byte) common.Hash {
+	if t.hasher != nil {
+		return keyPathWithHasher(t.hasher, key)
+	}
+	return keyPath(key)
+}
+
+func (t *commitmentTrie) nodeHash(branch *BranchData) common.Hash {
+	if t.hasher != nil {
+		return branch.nodeHashWith(t.hasher)
+	}
+	return branch.nodeHash()
 }
 
 // pathLen is the number of nibbles in a hashed key path (keccak256 → 32 bytes).
@@ -677,7 +706,15 @@ type op struct {
 // Calling Fold with no updates re-derives and returns the current root without
 // modifying the store.
 func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
-	opsP, err := buildOps(updates)
+	h := borrowKeccak()
+	previousHasher := t.hasher
+	t.hasher = h
+	defer func() {
+		t.hasher = previousHasher
+		returnKeccak(h)
+	}()
+
+	opsP, err := buildOpsWithHasher(updates, h)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -734,13 +771,19 @@ func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
 	if !hasRoot {
 		return common.Hash{}, nil
 	}
-	return rootHash(&root), nil
+	return rootHashWithHasher(&root, h), nil
 }
 
 // rootHash returns the trie root hash for the root branch. The whole-trie
 // singleton case (exactly one leaf child, no hash children at the root) collapses
 // to that key's leaf value hash, per the spec.
 func rootHash(root *BranchData) common.Hash {
+	h := borrowKeccak()
+	defer returnKeccak(h)
+	return rootHashWithHasher(root, h)
+}
+
+func rootHashWithHasher(root *BranchData, h *pooledKeccak) common.Hash {
 	if root.childCount() == 1 {
 		n := root.onlyChildNibble()
 		if root.childKindAt(n) == kindLeaf {
@@ -748,7 +791,7 @@ func rootHash(root *BranchData) common.Hash {
 			return vh
 		}
 	}
-	return root.nodeHash()
+	return root.nodeHashWith(h)
 }
 
 // buildOps coalesces updates per key (last-writer-wins), resolves each to its
@@ -756,6 +799,12 @@ func rootHash(root *BranchData) common.Hash {
 // makes the in-tree walk order deterministic but does not affect the final
 // structure (which is path-keyed).
 func buildOps(updates []Update) (*[]op, error) {
+	h := borrowKeccak()
+	defer returnKeccak(h)
+	return buildOpsWithHasher(updates, h)
+}
+
+func buildOpsWithHasher(updates []Update, h *pooledKeccak) (*[]op, error) {
 	if len(updates) == 0 {
 		return nil, nil
 	}
@@ -777,7 +826,7 @@ func buildOps(updates []Update) (*[]op, error) {
 		opsP := borrowOpsBuf(len(updates))
 		ops := *opsP
 		for i, u := range updates {
-			ops[i] = resolveOp(u)
+			ops[i] = resolveOpWithHasher(u, h)
 		}
 		sortOps(ops)
 		return opsP, nil
@@ -791,7 +840,7 @@ func buildOps(updates []Update) (*[]op, error) {
 	ops := *opsP
 	i := 0
 	for _, u := range byKey {
-		ops[i] = resolveOp(u)
+		ops[i] = resolveOpWithHasher(u, h)
 		i++
 	}
 	sortOps(ops)
@@ -799,14 +848,20 @@ func buildOps(updates []Update) (*[]op, error) {
 }
 
 func resolveOp(u Update) op {
+	h := borrowKeccak()
+	defer returnKeccak(h)
+	return resolveOpWithHasher(u, h)
+}
+
+func resolveOpWithHasher(u Update, h *pooledKeccak) op {
 	// Fold is synchronous and every branch-store implementation consumes or
 	// copies leaf keys before Fold returns. Borrowing the input key for that
 	// interval avoids one allocation per update; persisted branch encodings do
 	// not alias the caller's Update buffers.
 	o := op{key: u.Key, delete: u.Delete}
-	o.path = keyPath(u.Key)
+	o.path = keyPathWithHasher(h, u.Key)
 	if !u.Delete {
-		o.valHash = leafValueHash(u.Key, u.Value)
+		o.valHash = leafValueHashWithHasher(h, u.Key, u.Value)
 	}
 	return o
 }
@@ -970,7 +1025,7 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 		return true, nil
 	default:
 		if existingNeedsPath {
-			survivors[0].path = keyPath(existKey)
+			survivors[0].path = t.keyPath(existKey)
 		}
 		// Multiple survivors → build a child subtree in a separate frame.
 		// Keeping the recursive apply/sortOps calls out of this function frame is
@@ -1078,7 +1133,7 @@ func (t *commitmentTrie) linkChild(branch *BranchData, nb uint8, childPrefix []b
 	if err := t.store.PutBranch(childPrefix, *child); err != nil {
 		return err
 	}
-	branch.SetHashChild(nb, child.nodeHash())
+	branch.SetHashChild(nb, t.nodeHash(child))
 	return nil
 }
 
@@ -1146,6 +1201,11 @@ func appendNibble(prefix []byte, nb uint8) []byte {
 func keyPath(key []byte) common.Hash {
 	h := borrowKeccak()
 	defer returnKeccak(h)
+	return keyPathWithHasher(h, key)
+}
+
+func keyPathWithHasher(h *pooledKeccak, key []byte) common.Hash {
+	h.Reset()
 	writeLen8Prefixed(h, key)
 	return readKeccakHash(h)
 }
@@ -1155,6 +1215,11 @@ func keyPath(key []byte) common.Hash {
 func leafValueHash(key, value []byte) common.Hash {
 	h := borrowKeccak()
 	defer returnKeccak(h)
+	return leafValueHashWithHasher(h, key, value)
+}
+
+func leafValueHashWithHasher(h *pooledKeccak, key, value []byte) common.Hash {
+	h.Reset()
 	writeKeccakByte(h, 0x00)
 	writeLen8Prefixed(h, key)
 	writeLen8Prefixed(h, value)
