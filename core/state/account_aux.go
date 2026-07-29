@@ -213,6 +213,11 @@ func (s *StateDB) accountAuxValue(addr tcommon.Address, domain kvdomains.KVDomai
 		if value, exists, cached := trc10PointValue(obj, domain, key); cached {
 			return value, exists, nil
 		}
+		if hasFreshAccountKVGeneration(obj) {
+			recordFreshAccountKVPointReadsAvoided(1)
+			cacheTRC10PointValue(obj, domain, key, 0, false)
+			return 0, false, nil
+		}
 		value, exists, err := s.readAccountKVLatestForDecoding(addr, obj.accountKVGeneration, domain, key)
 		if err != nil {
 			return 0, false, err

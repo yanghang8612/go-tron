@@ -1429,6 +1429,14 @@ func (s *StateDB) nextAccountKVGeneration(owner tcommon.Address, prev *stateObje
 	return 0
 }
 
+// hasFreshAccountKVGeneration reports that the current physical KV namespace
+// has not reached durable latest state yet. created covers first incarnations
+// (generation zero) and recreations; accountKVGenerationDirty also covers an
+// explicit ResetAccountKV on an otherwise existing object.
+func hasFreshAccountKVGeneration(obj *stateObject) bool {
+	return obj != nil && (obj.created || obj.accountKVGenerationDirty)
+}
+
 // GetAccountKV reads a generic-KV value for owner. Returns (value, exists, err).
 func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	if !kvdomains.IsRegistered(domain) {
@@ -1443,6 +1451,13 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 			return nil, false, nil
 		}
 		return append([]byte{}, e.val...), true, nil
+	}
+	if hasFreshAccountKVGeneration(obj) {
+		// A first incarnation, post-delete recreation, or explicit generation
+		// reset owns a fresh KV namespace. Missing dirty entries are therefore
+		// known absent without consulting an older durable generation.
+		recordFreshAccountKVPointReadsAvoided(1)
+		return nil, false, nil
 	}
 	return s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
 }
@@ -1463,6 +1478,10 @@ func (s *StateDB) getAccountKVForDecoding(owner tcommon.Address, domain kvdomain
 			return nil, false, nil
 		}
 		return e.val, true, nil
+	}
+	if hasFreshAccountKVGeneration(obj) {
+		recordFreshAccountKVPointReadsAvoided(1)
+		return nil, false, nil
 	}
 	return s.readAccountKVLatestForDecoding(owner, obj.accountKVGeneration, domain, key)
 }
@@ -1573,6 +1592,10 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 			}
 			continue
 		}
+		if hasFreshAccountKVGeneration(obj) {
+			recordFreshAccountKVPointReadsAvoided(1)
+			continue
+		}
 		value, ok, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
 			return nil, err
@@ -1597,11 +1620,15 @@ func (s *StateDB) IterateAccountKV(owner tcommon.Address, domain kvdomains.KVDom
 		return nil
 	}
 	entries := make(map[string][]byte)
-	if err := s.iterateAccountKVLatest(owner, obj.accountKVGeneration, domain, prefix, func(key, value []byte) (bool, error) {
-		entries[string(key)] = append([]byte(nil), value...)
-		return true, nil
-	}); err != nil {
-		return err
+	if hasFreshAccountKVGeneration(obj) {
+		recordFreshAccountKVPrefixIteratorAvoided()
+	} else {
+		if err := s.iterateAccountKVLatest(owner, obj.accountKVGeneration, domain, prefix, func(key, value []byte) (bool, error) {
+			entries[string(key)] = append([]byte(nil), value...)
+			return true, nil
+		}); err != nil {
+			return err
+		}
 	}
 	for mapKey, entry := range obj.kvDirty {
 		d, logicalKey, ok := splitKVCompositeKey(ownedStringBytes(mapKey))
@@ -1670,13 +1697,20 @@ func (s *StateDB) setAccountKVPrepared(owner tcommon.Address, domain kvdomains.K
 	)
 	prevDirty, dirty := lookupKVEntry(obj.kvDirty, domain, key)
 	if !dirty {
-		current, exists, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
-		if err != nil {
-			return err
+		if hasFreshAccountKVGeneration(obj) {
+			// A fresh generation cannot have durable rows. Record that exact
+			// absent pre-image so no-op/history planning does not retry the read.
+			recordFreshAccountKVPreimageReadAvoided()
+			prevLoaded = true
+		} else {
+			current, exists, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
+			if err != nil {
+				return err
+			}
+			prevValue = current
+			prevExists = exists
+			prevLoaded = true
 		}
-		prevValue = current
-		prevExists = exists
-		prevLoaded = true
 	}
 	return s.setAccountKVResolved(obj, domain, key, value, ownedWrapped, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
 }
@@ -1793,9 +1827,20 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 	mk := s.kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
 	entry := s.newKVEntry(value, deleted)
+	freshGeneration := hasFreshAccountKVGeneration(obj)
 	if dirty {
 		entry.inheritPrev(prevDirty)
-	} else if prevLoaded {
+	} else if prevLoaded || freshGeneration {
+		// Commit-generated metadata/ABI/storage mutations obey the same fresh-
+		// generation invariant as direct SetAccountKV. Treat it as an exact absent
+		// pre-image so cleanup deletes collapse to no-ops without point reads.
+		if freshGeneration {
+			if !prevLoaded {
+				recordFreshAccountKVPreimageReadAvoided()
+			}
+			prevValue = nil
+			prevExists = false
+		}
 		s.setKVEntryPrev(&entry, prevValue, prevExists)
 		if noop, known := entry.latestNoop(); known && noop {
 			return false, nil
@@ -1831,6 +1876,13 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 		prevLoaded bool
 	)
 	if !dirty {
+		// No durable row can exist in a fresh account generation. A
+		// delete of an untouched key is therefore already a no-op; same-block
+		// writes still take the dirty branch above and retain normal journaling.
+		if hasFreshAccountKVGeneration(obj) {
+			recordFreshAccountKVPreimageReadAvoided()
+			return nil
+		}
 		current, exists, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
 			return err
@@ -1867,13 +1919,13 @@ func (s *StateDB) DeleteAccountKVPrefix(owner tcommon.Address, domain kvdomains.
 	if obj == nil || obj.deleted {
 		return nil
 	}
-	if obj.created {
-		// A newly-created object owns a fresh KV generation: generation zero for
-		// a first incarnation, or the next generation after SELFDESTRUCT. No row
-		// in that generation can be durable yet, so consulting the physical latest
-		// index only performs an empty prefix scan. Same-block writes may still be
-		// visible in kvDirty; collect those keys and delete them through the normal
-		// journaled path so Snapshot/Revert semantics remain unchanged.
+	if hasFreshAccountKVGeneration(obj) {
+		recordFreshAccountKVPrefixIteratorAvoided()
+		// A first incarnation, post-SELFDESTRUCT recreation, or ResetAccountKV
+		// owns a fresh generation. No row in it can be durable yet, so consulting
+		// the physical latest index only performs an empty prefix scan. Same-block
+		// writes may still be visible in kvDirty; collect those keys and delete them
+		// through the normal journaled path so Snapshot/Revert stays unchanged.
 		for mapKey, entry := range obj.kvDirty {
 			dirtyDomain, logicalKey, ok := splitKVCompositeKeyView(ownedStringBytes(mapKey))
 			if !ok || dirtyDomain != domain || entry.deleted || !bytes.HasPrefix(logicalKey, prefix) {

@@ -2775,6 +2775,10 @@ func (s *StateDB) GetContractMetadataBytes(addr tcommon.Address) ([]byte, bool, 
 		}
 		return data, true, nil
 	}
+	if hasFreshAccountKVGeneration(obj) {
+		recordFreshAccountKVPointReadsAvoided(1)
+		return nil, false, nil
+	}
 	return s.readAccountKVLatest(addr, obj.accountKVGeneration, kvdomains.ContractMetadata, contractMetaKVKey)
 }
 

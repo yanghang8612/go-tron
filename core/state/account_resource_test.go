@@ -13,6 +13,26 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestFreshAccountResourceFirstMutationSkipsDurableRead(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xb0)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	reader := &countingAccountKVLatestReader{found: true}
+	sdb.setAccountKVLatestView(reader, nil)
+
+	sdb.SetEnergyUsage(addr, 77)
+	if reader.reads != 0 {
+		t.Fatalf("fresh AccountResource first-mutation reads = %d, want 0", reader.reads)
+	}
+	if got := sdb.GetEnergyUsage(addr); got != 77 {
+		t.Fatalf("fresh AccountResource energy usage = %d, want 77", got)
+	}
+	entry, ok := lookupKVEntry(sdb.getStateObject(addr).kvDirty, kvdomains.AccountResourceAux, accountResourceKey)
+	if !ok || entry.deleted || !entry.prevLoaded || entry.prevExists {
+		t.Fatalf("fresh AccountResource entry = %+v ok=%v, want put with known-absent pre-image", entry, ok)
+	}
+}
+
 func TestAccountResourceArenaMarshalMatchesDeterministicProto(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0xaf)

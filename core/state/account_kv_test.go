@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"slices"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -23,6 +24,541 @@ var (
 	benchmarkPendingLookupValue  accountKVLatestPending
 	benchmarkPendingLookupFound  bool
 )
+
+type countingAccountKVLatestReader struct {
+	reads int
+	value []byte
+	found bool
+}
+
+func (r *countingAccountKVLatestReader) GetLatest(_ tcommon.Address, _ kvdomains.KVDomain, _ []byte) ([]byte, bool, error) {
+	r.reads++
+	return append([]byte(nil), r.value...), r.found, nil
+}
+
+type countingAccountKVIterator struct {
+	iterations int
+	entries    map[string][]byte
+}
+
+func (i *countingAccountKVIterator) DomainIterate(_ tcommon.Address, _ kvdomains.KVDomain, prefix []byte, fn statedomains.IterateFunc) error {
+	i.iterations++
+	for key, value := range i.entries {
+		if !bytes.HasPrefix([]byte(key), prefix) {
+			continue
+		}
+		cont, err := fn([]byte(key), append([]byte(nil), value...))
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestFreshAccountKVSkipsDurablePreimageReads(t *testing.T) {
+	beforePoint := accountKVFreshPointReadsAvoidedCounter.Snapshot().Count()
+	beforePreimage := accountKVFreshPreimageReadsAvoidedCounter.Snapshot().Count()
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x14)
+	domain := kvdomains.SystemReward
+	reader := &countingAccountKVLatestReader{value: []byte("stale-durable-value"), found: true}
+	sdb.setAccountKVLatestView(reader, nil)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if got, ok, err := sdb.GetAccountKV(addr, domain, []byte("missing")); err != nil || ok || got != nil {
+		t.Fatalf("fresh public read = %q ok=%v err=%v, want absent", got, ok, err)
+	}
+	if got, ok, err := sdb.getAccountKVForDecoding(addr, domain, []byte("missing")); err != nil || ok || got != nil {
+		t.Fatalf("fresh decoding read = %q ok=%v err=%v, want absent", got, ok, err)
+	}
+	if got, err := sdb.GetAccountKVBatch(addr, domain, [][]byte{[]byte("missing"), []byte("also-missing")}); err != nil || len(got) != 0 {
+		t.Fatalf("fresh batch read = %v err=%v, want empty", got, err)
+	}
+
+	if err := sdb.SetAccountKV(addr, domain, []byte("created"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := lookupKVEntry(sdb.getStateObject(addr).kvDirty, domain, []byte("created"))
+	if !ok || !entry.prevLoaded || entry.prevExists {
+		t.Fatalf("fresh put entry = %+v ok=%v, want a known-absent durable pre-image", entry, ok)
+	}
+	journalLen := sdb.journal.length()
+	if err := sdb.SetAccountKV(addr, domain, []byte("created"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	if sdb.journal.length() != journalLen {
+		t.Fatal("same-value dirty put appended a journal entry")
+	}
+	if got, err := sdb.GetAccountKVBatch(addr, domain, [][]byte{[]byte("created"), []byte("missing")}); err != nil || string(got["created"]) != "v1" || len(got) != 1 {
+		t.Fatalf("fresh mixed batch read = %v err=%v, want only created=v1", got, err)
+	}
+
+	// An untouched key cannot exist in this generation, so deleting it is also
+	// a no-op. In particular, the stale value exposed by the test reader must
+	// neither trigger a read nor create a tombstone.
+	if err := sdb.DeleteAccountKV(addr, domain, []byte("never-written")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := lookupKVEntry(sdb.getStateObject(addr).kvDirty, domain, []byte("never-written")); ok {
+		t.Fatal("fresh missing delete staged a tombstone")
+	}
+	if reader.reads != 0 {
+		t.Fatalf("fresh-generation durable reads = %d, want 0", reader.reads)
+	}
+	if got := accountKVFreshPointReadsAvoidedCounter.Snapshot().Count() - beforePoint; got != 5 {
+		t.Fatalf("fresh point-read counter delta = %d, want 5", got)
+	}
+	if got := accountKVFreshPreimageReadsAvoidedCounter.Snapshot().Count() - beforePreimage; got != 2 {
+		t.Fatalf("fresh preimage-read counter delta = %d, want 2", got)
+	}
+}
+
+func TestFreshAccountKVShortcutMatchesExplicitAbsentCommitRoot(t *testing.T) {
+	run := func(t *testing.T, shortcut bool) tcommon.Hash {
+		t.Helper()
+		sdb := newTestStateDB(t)
+		addr := testAddr(0x1e)
+		sdb.CreateAccount(addr, corepb.AccountType_Normal)
+		writes := []struct {
+			domain kvdomains.KVDomain
+			key    []byte
+			value  []byte
+		}{
+			{domain: kvdomains.SystemReward, key: []byte("a"), value: []byte("one")},
+			{domain: kvdomains.SystemReward, key: []byte("b"), value: nil},
+			{domain: kvdomains.ContractRuntimeState, key: []byte("c"), value: []byte("three")},
+		}
+		for _, write := range writes {
+			var err error
+			if shortcut {
+				err = sdb.SetAccountKV(addr, write.domain, write.key, write.value)
+			} else {
+				err = sdb.setAccountKVWithPrev(addr, write.domain, write.key, write.value, true, nil, false, true)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		root, err := sdb.Commit()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Empty-but-present is the edge case where an absent pre-image must not
+		// be mistaken for a no-op delete.
+		if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemReward, []byte("b")); err != nil || !ok || len(got) != 0 {
+			t.Fatalf("empty present row = %x ok=%v err=%v", got, ok, err)
+		}
+		return root
+	}
+
+	shortcutRoot := run(t, true)
+	explicitAbsentRoot := run(t, false)
+	if shortcutRoot != explicitAbsentRoot {
+		t.Fatalf("fresh shortcut root = %x, explicit-absent root = %x", shortcutRoot, explicitAbsentRoot)
+	}
+}
+
+func TestFreshAccountKVCommitGeneratedDeletesSkipDurableReads(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x17)
+	reader := &countingAccountKVLatestReader{value: []byte("stale-contract-row"), found: true}
+	sdb.setAccountKVLatestView(reader, nil)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	obj := sdb.getStateObject(addr)
+	if !obj.created || !obj.contractMetaDirty {
+		t.Fatalf("fresh object flags: created=%v contractMetaDirty=%v", obj.created, obj.contractMetaDirty)
+	}
+
+	plan := new(accountCommitPlan)
+	if err := sdb.prepareAccountCommitPlan(addr, obj, plan); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseAccountKVCommitPlan(plan.kvPlan)
+	if reader.reads != 0 {
+		t.Fatalf("fresh commit-generated durable reads = %d, want 0", reader.reads)
+	}
+	if plan.hadKVDirty || plan.kvPlan != nil {
+		t.Fatalf("known-absent metadata cleanup staged KV work: hadDirty=%v plan=%+v", plan.hadKVDirty, plan.kvPlan)
+	}
+}
+
+func TestFreshAccountKVIterationSkipsDurableAndSortsDirtyOverlay(t *testing.T) {
+	beforeIterators := accountKVFreshPrefixIteratorsAvoidedCounter.Snapshot().Count()
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x1d)
+	domain := kvdomains.SystemReward
+	iterator := &countingAccountKVIterator{entries: map[string][]byte{
+		"p/stale": []byte("durable"),
+	}}
+	sdb.setAccountKVLatestView(nil, iterator)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	for key, value := range map[string]string{
+		"p/c": "3",
+		"p/a": "1",
+		"p/b": "2",
+	} {
+		if err := sdb.SetAccountKV(addr, domain, []byte(key), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sdb.DeleteAccountKV(addr, domain, []byte("p/b")); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := sdb.IterateAccountKV(addr, domain, []byte("p/"), func(key, value []byte) (bool, error) {
+		got = append(got, string(key)+"="+string(value))
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if iterator.iterations != 0 {
+		t.Fatalf("fresh-generation durable iterations = %d, want 0", iterator.iterations)
+	}
+	if got := accountKVFreshPrefixIteratorsAvoidedCounter.Snapshot().Count() - beforeIterators; got != 1 {
+		t.Fatalf("fresh prefix-iterator counter delta = %d, want 1", got)
+	}
+	if want := []string{"p/a=1", "p/c=3"}; !slices.Equal(got, want) {
+		t.Fatalf("fresh dirty iteration = %v, want %v", got, want)
+	}
+}
+
+func TestFreshAccountKVShortcutPreservesSnapshotRevert(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x15)
+	domain := kvdomains.SystemReward
+	reader := &countingAccountKVLatestReader{value: []byte("impossible"), found: true}
+	sdb.setAccountKVLatestView(reader, nil)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+
+	snapshot := sdb.Snapshot()
+	if err := sdb.SetAccountKV(addr, domain, []byte("k"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	sdb.RevertToSnapshot(snapshot)
+	if _, ok := lookupKVEntry(sdb.getStateObject(addr).kvDirty, domain, []byte("k")); ok {
+		t.Fatal("snapshot revert retained fresh-generation write")
+	}
+	if obj := sdb.getStateObject(addr); obj == nil || !obj.created {
+		t.Fatalf("snapshot revert lost fresh-generation marker: obj=%+v", obj)
+	}
+	if err := sdb.SetAccountKV(addr, domain, []byte("k"), []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := sdb.GetAccountKV(addr, domain, []byte("k")); err != nil || !ok || string(got) != "v2" {
+		t.Fatalf("post-revert value = %q ok=%v err=%v, want v2", got, ok, err)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("fresh-generation durable reads across revert = %d, want 0", reader.reads)
+	}
+}
+
+func TestCommittedAccountKVStillReadsForNoopDetection(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x16)
+	domain := kvdomains.SystemReward
+	key := []byte("k")
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := &countingAccountKVLatestReader{value: []byte("same"), found: true}
+	sdb.setAccountKVLatestView(reader, nil)
+	journalLen := sdb.journal.length()
+	if err := sdb.SetAccountKV(addr, domain, key, []byte("same")); err != nil {
+		t.Fatal(err)
+	}
+	if reader.reads != 1 || sdb.journal.length() != journalLen || len(sdb.getStateObject(addr).kvDirty) != 0 {
+		t.Fatalf("committed same-value put: reads=%d journal=%d/%d dirty=%d, want one read and no mutation", reader.reads, sdb.journal.length(), journalLen, len(sdb.getStateObject(addr).kvDirty))
+	}
+	reader.found = false
+	if err := sdb.DeleteAccountKV(addr, domain, []byte("missing")); err != nil {
+		t.Fatal(err)
+	}
+	if reader.reads != 2 || len(sdb.getStateObject(addr).kvDirty) != 0 {
+		t.Fatalf("committed missing delete: reads=%d dirty=%d, want one additional read and no mutation", reader.reads, len(sdb.getStateObject(addr).kvDirty))
+	}
+}
+
+func TestRecreatedAccountKVGenerationSkipsOldDurableRowsAcrossRevert(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x18)
+	domain := kvdomains.ContractRuntimeState
+	key := []byte("incarnation-key")
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, domain, key, []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	sdb.DeleteAccount(addr)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The reader deliberately exposes the old incarnation's row. A recreated
+	// object must not consult it because generation 1 is a new, empty namespace.
+	reader := &countingAccountKVLatestReader{value: []byte("old"), found: true}
+	sdb.setAccountKVLatestView(reader, nil)
+	snapshot := sdb.Snapshot()
+	if err := sdb.SetAccountKV(addr, domain, key, []byte("new-reverted")); err != nil {
+		t.Fatal(err)
+	}
+	if obj := sdb.getStateObject(addr); obj == nil || !obj.created || obj.accountKVGeneration != 1 {
+		t.Fatalf("first recreate object = %+v, want created generation 1", obj)
+	}
+	sdb.RevertToSnapshot(snapshot)
+	if obj := sdb.getStateObject(addr); obj == nil || !obj.deleted || obj.accountKVGeneration != 0 {
+		t.Fatalf("reverted recreate object = %+v, want deleted generation 0", obj)
+	}
+	if err := sdb.SetAccountKV(addr, domain, key, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.DeleteAccountKV(addr, domain, []byte("missing-in-new-generation")); err != nil {
+		t.Fatal(err)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("recreated-generation durable reads = %d, want 0", reader.reads)
+	}
+
+	// Restore the real latest view before committing and verify both physical
+	// generations: the old row remains archival data, while live state uses the
+	// newly written generation-1 row.
+	sdb.setAccountKVLatestView(nil, nil)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	disk := sdb.db.DiskDB()
+	if got, ok, err := rawdb.ReadStateKVLatest(disk, addr, 0, domain, key); err != nil || !ok || string(got) != "old" {
+		t.Fatalf("generation-0 row = %q ok=%v err=%v, want old", got, ok, err)
+	}
+	if got, ok, err := rawdb.ReadStateKVLatest(disk, addr, 1, domain, key); err != nil || !ok || string(got) != "new" {
+		t.Fatalf("generation-1 row = %q ok=%v err=%v, want new", got, ok, err)
+	}
+	if generation, ok, err := rawdb.ReadStateKVGeneration(disk, addr); err != nil || !ok || generation != 1 {
+		t.Fatalf("persisted generation = %d ok=%v err=%v, want 1", generation, ok, err)
+	}
+}
+
+func TestResetAccountKVGenerationSkipsOldDurableRows(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x1b)
+	domain := kvdomains.SystemReward
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, domain, []byte("old"), []byte("old-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.SetAccountKV(addr, kvdomains.ContractMetadata, contractMetaKVKey, []byte("old-metadata")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := sdb.Snapshot()
+	if err := sdb.ResetAccountKV(addr); err != nil {
+		t.Fatal(err)
+	}
+	obj := sdb.getStateObject(addr)
+	if obj.created || !obj.accountKVGenerationDirty || obj.accountKVGeneration != 1 {
+		t.Fatalf("reset object flags: created=%v generationDirty=%v generation=%d", obj.created, obj.accountKVGenerationDirty, obj.accountKVGeneration)
+	}
+
+	reader := &countingAccountKVLatestReader{value: []byte("old-value"), found: true}
+	iterator := &countingAccountKVIterator{entries: map[string][]byte{"old": []byte("old-value")}}
+	sdb.setAccountKVLatestView(reader, iterator)
+	if got, ok, err := sdb.GetAccountKV(addr, domain, []byte("old")); err != nil || ok || got != nil {
+		t.Fatalf("reset-generation old-key read = %q ok=%v err=%v, want absent", got, ok, err)
+	}
+	if got, ok, err := sdb.GetContractMetadataBytes(addr); err != nil || ok || got != nil {
+		t.Fatalf("reset-generation contract metadata = %q ok=%v err=%v, want absent", got, ok, err)
+	}
+	if err := sdb.SetAccountKV(addr, domain, []byte("new"), []byte("new-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.DeleteAccountKV(addr, domain, []byte("missing")); err != nil {
+		t.Fatal(err)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("reset-generation durable reads = %d, want 0", reader.reads)
+	}
+	var resetEntries []string
+	if err := sdb.IterateAccountKV(addr, domain, nil, func(key, value []byte) (bool, error) {
+		resetEntries = append(resetEntries, string(key)+"="+string(value))
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if iterator.iterations != 0 || !slices.Equal(resetEntries, []string{"new=new-value"}) {
+		t.Fatalf("reset-generation iteration = %v durableIterations=%d, want only new and zero scans", resetEntries, iterator.iterations)
+	}
+	sdb.RevertToSnapshot(snapshot)
+	obj = sdb.getStateObject(addr)
+	if obj.accountKVGenerationDirty || obj.accountKVGeneration != 0 {
+		t.Fatalf("reverted reset flags: generationDirty=%v generation=%d", obj.accountKVGenerationDirty, obj.accountKVGeneration)
+	}
+	if got, ok, err := sdb.GetAccountKV(addr, domain, []byte("old")); err != nil || !ok || string(got) != "old-value" {
+		t.Fatalf("reverted reset old-key read = %q ok=%v err=%v, want old-value", got, ok, err)
+	}
+	if reader.reads != 1 {
+		t.Fatalf("reverted reset durable reads = %d, want 1", reader.reads)
+	}
+	var revertedEntries []string
+	if err := sdb.IterateAccountKV(addr, domain, nil, func(key, value []byte) (bool, error) {
+		revertedEntries = append(revertedEntries, string(key)+"="+string(value))
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if iterator.iterations != 1 || !slices.Equal(revertedEntries, []string{"old=old-value"}) {
+		t.Fatalf("reverted reset iteration = %v durableIterations=%d, want old and one scan", revertedEntries, iterator.iterations)
+	}
+}
+
+func TestFreshAccountKVShortcutPreservesHistoryAsOf(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x19)
+	domain := kvdomains.SystemReward
+	key := []byte("fresh-history")
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SetAccountKV(addr, domain, key, []byte("v1")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		if err := s.SetAccountKV(addr, domain, key, []byte("v2")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		if err := s.DeleteAccountKV(addr, domain, key); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var firstPut *rawdb.StateDomainChange
+	for _, change := range collectStateDomainChanges(t, f.disk, 1) {
+		if change.FlatDomain == rawdb.StateFlatDomainKVLatest && change.Owner == addr && change.Domain == domain && bytes.Equal(change.Key, key) {
+			firstPut = change
+			break
+		}
+	}
+	if firstPut == nil || firstPut.Generation != 0 || firstPut.PrevExists || len(firstPut.Prev) != 0 || !firstPut.NextExists || string(firstPut.Next) != "v1" {
+		t.Fatalf("fresh first-put history = %+v, want generation-0 nil/absent -> v1", firstPut)
+	}
+
+	for _, test := range []struct {
+		block  uint64
+		value  string
+		exists bool
+	}{
+		{block: 1, value: "v1", exists: true},
+		{block: 2, value: "v2", exists: true},
+		{block: 3, exists: false},
+	} {
+		got, ok, err := f.state.GetAccountKVAsOf(addr, domain, key, test.block, f.head)
+		if err != nil || ok != test.exists || (ok && string(got) != test.value) {
+			t.Fatalf("as-of block %d = %q ok=%v err=%v, want %q ok=%v", test.block, got, ok, err, test.value, test.exists)
+		}
+	}
+}
+
+func TestFreshAccountKVJournalFallbackUsesKnownAbsentPreimage(t *testing.T) {
+	sdb := newTestStateDB(t)
+	disk := sdb.db.DiskDB()
+	addr := testAddr(0x1c)
+	domain := kvdomains.AccountAssetV2
+	key := []byte("1000001")
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	reader := &countingAccountKVLatestReader{value: encodeAccountAuxInt64(999), found: true}
+	sdb.setAccountKVLatestView(reader, nil)
+
+	begin, end, err := rawdb.NextStateTxRange(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.BeginDomainChangeJournalCapture(disk, 1, tcommon.Hash{0x01}, begin, end)
+	mark := sdb.DomainChangeJournalMark()
+	if err := sdb.setAccountAuxValueUnconditional(addr, domain, key, 77); err != nil {
+		t.Fatal(err)
+	}
+	changes, err := sdb.collectDomainChangesSince(mark, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("fresh journal fallback durable reads = %d, want 0", reader.reads)
+	}
+
+	var found *rawdb.StateDomainChange
+	for _, change := range changes {
+		if change.FlatDomain == rawdb.StateFlatDomainKVLatest && change.Owner == addr && change.Domain == domain && bytes.Equal(change.Key, key) {
+			found = change
+			break
+		}
+	}
+	if found == nil || found.PrevExists || found.Prev != nil || !found.NextExists || !bytes.Equal(found.Next, encodeAccountAuxInt64(77)) {
+		t.Fatalf("fresh journal change = %+v, want absent -> 77", found)
+	}
+}
+
+func TestFreshAccountKVShortcutSurvivesCopyAndDeepAsyncCommit(t *testing.T) {
+	base := newTestStateDB(t)
+	addr := testAddr(0x1a)
+	domain := kvdomains.SystemReward
+	key := []byte("copied-fresh")
+	base.CreateAccount(addr, corepb.AccountType_Normal)
+
+	copyState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj := copyState.getStateObject(addr); obj == nil || !obj.created {
+		t.Fatalf("copied object = %+v, want fresh-generation marker", obj)
+	}
+	reader := &countingAccountKVLatestReader{value: []byte("impossible"), found: true}
+	copyState.setAccountKVLatestView(reader, nil)
+	if err := copyState.SetAccountKV(addr, domain, key, []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("copied fresh-generation durable reads = %d, want 0", reader.reads)
+	}
+
+	// NewCommitScope installs the production pending latest view. DeepAsync plus
+	// deferred fold exercises the depth>2 commit ownership/lifetime path while
+	// the copied created marker supplies the pre-image decision above.
+	scope := copyState.NewCommitScope()
+	defer scope.Close()
+	copyState.SetDeferFold(true)
+	zeroRoot, _, err := copyState.CommitWithStatsOptionsInScope(scope, CommitOptions{BlockNumber: 1, DeepAsync: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zeroRoot != (tcommon.Hash{}) || !scope.latestWriter.deepAsync {
+		t.Fatalf("deep async commit = root %x deep=%v, want deferred zero root/deep=true", zeroRoot, scope.latestWriter.deepAsync)
+	}
+	captured := copyState.TakeCapturedFold()
+	if captured == nil {
+		t.Fatal("deep async commit did not capture a fold")
+	}
+	root, err := captured.Fold(copyState.accountKVIndex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := statedomains.NewStagedCommitmentStore(copyState.db.DiskDB()).Rebuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt != root {
+		t.Fatalf("deep-async fold root = %x, rebuilt latest root = %x", root, rebuilt)
+	}
+	reopened, err := New(root, copyState.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := reopened.GetAccountKV(addr, domain, key); err != nil || !ok || string(got) != "value" {
+		t.Fatalf("deep-async copied value = %q ok=%v err=%v, want value", got, ok, err)
+	}
+}
 
 func TestKVEntryArenaKeepsValuesStableAcrossChunksAndReset(t *testing.T) {
 	sdb := new(StateDB)

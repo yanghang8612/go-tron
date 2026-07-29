@@ -287,10 +287,16 @@ func (s *StateDB) kvJournalDomainChange(touch kvDomainJournalTouch) (*rawdb.Stat
 	prev := touch.prev
 	prevExist := touch.prevExist
 	if !touch.prevLoaded {
-		var err error
-		prev, prevExist, err = s.readAccountKVLatest(touch.addr, obj.accountKVGeneration, touch.domain, touch.key)
-		if err != nil {
-			return nil, err
+		if hasFreshAccountKVGeneration(obj) {
+			recordFreshAccountKVPreimageReadAvoided()
+			prev = nil
+			prevExist = false
+		} else {
+			var err error
+			prev, prevExist, err = s.readAccountKVLatest(touch.addr, obj.accountKVGeneration, touch.domain, touch.key)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	nextExist := !entry.deleted

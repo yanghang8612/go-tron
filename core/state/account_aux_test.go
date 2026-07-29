@@ -12,6 +12,28 @@ import (
 
 var trc10BalanceBenchmarkSink int64
 
+func TestFreshTRC10PointReadSkipsDurableGeneration(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x94)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	index := &countingKVIndexStore{KeyValueStore: sdb.db.DiskDB()}
+	sdb.SetAccountKVIndexStore(index)
+
+	if got := sdb.GetTRC10Balance(addr, 1_000_001); got != 0 {
+		t.Fatalf("fresh TRC10 balance = %d, want 0", got)
+	}
+	if got := index.getsByDomain[kvdomains.AccountAssetV2]; got != 0 {
+		t.Fatalf("fresh TRC10 point reads = %d, want 0", got)
+	}
+	sdb.SetTRC10Balance(addr, 1_000_001, 77)
+	if got := sdb.GetTRC10Balance(addr, 1_000_001); got != 77 {
+		t.Fatalf("fresh dirty TRC10 balance = %d, want 77", got)
+	}
+	if got := index.getsByDomain[kvdomains.AccountAssetV2]; got != 0 {
+		t.Fatalf("fresh TRC10 read/write durable reads = %d, want 0", got)
+	}
+}
+
 func BenchmarkStateDBGetTRC10BalanceDirty(b *testing.B) {
 	sdb := newTestStateDB(b)
 	addr := testAddr(0x90)
