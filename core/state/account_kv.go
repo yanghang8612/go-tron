@@ -1851,12 +1851,38 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 // owner/domain/prefix. It uses the physical latest-state index for committed
 // rows and the dirty overlay for same-block writes.
 func (s *StateDB) DeleteAccountKVPrefix(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte) error {
+	if !kvdomains.IsRegistered(domain) {
+		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+	}
 	var keys [][]byte
-	if err := s.IterateAccountKV(owner, domain, prefix, func(key, _ []byte) (bool, error) {
-		keys = append(keys, append([]byte(nil), key...))
-		return true, nil
-	}); err != nil {
-		return err
+	obj := s.getStateObject(owner)
+	if obj == nil || obj.deleted {
+		return nil
+	}
+	if obj.created {
+		// A newly-created object owns a fresh KV generation: generation zero for
+		// a first incarnation, or the next generation after SELFDESTRUCT. No row
+		// in that generation can be durable yet, so consulting the physical latest
+		// index only performs an empty prefix scan. Same-block writes may still be
+		// visible in kvDirty; collect those keys and delete them through the normal
+		// journaled path so Snapshot/Revert semantics remain unchanged.
+		for mapKey, entry := range obj.kvDirty {
+			dirtyDomain, logicalKey, ok := splitKVCompositeKeyView(ownedStringBytes(mapKey))
+			if !ok || dirtyDomain != domain || entry.deleted || !bytes.HasPrefix(logicalKey, prefix) {
+				continue
+			}
+			keys = append(keys, append([]byte(nil), logicalKey...))
+		}
+		// IterateAccountKV returns keys in lexical order. Preserve that order here
+		// rather than letting randomized map iteration leak into the journal.
+		slices.SortFunc(keys, bytes.Compare)
+	} else {
+		if err := s.IterateAccountKV(owner, domain, prefix, func(key, _ []byte) (bool, error) {
+			keys = append(keys, append([]byte(nil), key...))
+			return true, nil
+		}); err != nil {
+			return err
+		}
 	}
 	for _, key := range keys {
 		if err := s.DeleteAccountKV(owner, domain, key); err != nil {

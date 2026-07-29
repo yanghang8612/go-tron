@@ -338,6 +338,86 @@ func TestAccountPermissionsReplaceRemovesStaleActiveRows(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultPermissionsCreatedOverwritesDirtyAndReverts(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x9b)
+	dp := NewDynamicProperties()
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	owner := splitTestPermission(corepb.Permission_Owner, 0, "custom-owner", 0x71)
+	witness := splitTestPermission(corepb.Permission_Witness, 1, "custom-witness", 0x72)
+	active2 := splitTestPermission(corepb.Permission_Active, 2, "custom-active-2", 0x73)
+	active3 := splitTestPermission(corepb.Permission_Active, 3, "custom-active-3", 0x74)
+	sdb.SetPermissions(addr, owner, witness, []*corepb.Permission{active2, active3})
+	snapshot := sdb.Snapshot()
+
+	sdb.ApplyDefaultAccountPermissions(addr, dp)
+	got := sdb.GetAccount(addr)
+	if got == nil || got.OwnerPermission().GetPermissionName() != "owner" || got.WitnessPermission() != nil {
+		t.Fatalf("default singleton permissions = %+v", got)
+	}
+	if actives := got.ActivePermission(); len(actives) != 1 || actives[0].GetId() != 2 || actives[0].GetPermissionName() != "active" {
+		t.Fatalf("default active permissions = %+v", actives)
+	}
+
+	sdb.RevertToSnapshot(snapshot)
+	got = sdb.GetAccount(addr)
+	if got == nil || !proto.Equal(got.OwnerPermission(), owner) || !proto.Equal(got.WitnessPermission(), witness) {
+		t.Fatalf("reverted singleton permissions = %+v", got)
+	}
+	if actives := got.ActivePermission(); len(actives) != 2 || !proto.Equal(actives[0], active2) || !proto.Equal(actives[1], active3) {
+		t.Fatalf("reverted active permissions = %+v", actives)
+	}
+}
+
+func TestApplyDefaultPermissionsRecreatedGenerationDoesNotLeak(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x9c)
+	dp := NewDynamicProperties()
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	oldOwner := splitTestPermission(corepb.Permission_Owner, 0, "old-owner", 0x81)
+	oldActive := splitTestPermission(corepb.Permission_Active, 3, "old-active", 0x82)
+	sdb.SetPermissions(addr, oldOwner, nil, []*corepb.Permission{oldActive})
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.DeleteAccount(addr)
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.CreateAccount(addr, corepb.AccountType_Normal)
+	obj := reopened.getStateObject(addr)
+	if obj == nil || !obj.created || obj.accountKVGeneration != 1 {
+		t.Fatalf("recreated object = %+v", obj)
+	}
+	reopened.ApplyDefaultAccountPermissions(addr, dp)
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reopened.GetAccount(addr)
+	if got == nil || got.OwnerPermission().GetPermissionName() != "owner" {
+		t.Fatalf("recreated singleton permissions = %+v", got)
+	}
+	if actives := got.ActivePermission(); len(actives) != 1 || actives[0].GetId() != 2 {
+		t.Fatalf("old generation leaked into recreated account: %+v", actives)
+	}
+}
+
 func BenchmarkAccountPermissionLookup(b *testing.B) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := NewDatabase(diskdb)

@@ -1826,6 +1826,41 @@ func TestDeleteAccountKVPrefixUsesLatestIndex(t *testing.T) {
 	}
 }
 
+func TestDeleteAccountKVPrefixCreatedUsesDirtyOverlayAndReverts(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x6f)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	for key, value := range map[string]string{
+		"prefix/1": "one",
+		"prefix/2": "two",
+		"other":    "keep",
+	} {
+		if err := sdb.SetAccountKV(addr, kvdomains.SystemReward, []byte(key), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot := sdb.Snapshot()
+	if err := sdb.DeleteAccountKVPrefix(addr, kvdomains.SystemReward, []byte("prefix/")); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"prefix/1", "prefix/2"} {
+		if value, exists, err := sdb.GetAccountKV(addr, kvdomains.SystemReward, []byte(key)); err != nil || exists {
+			t.Fatalf("deleted %s = %q exists=%v err=%v", key, value, exists, err)
+		}
+	}
+	if value, exists, err := sdb.GetAccountKV(addr, kvdomains.SystemReward, []byte("other")); err != nil || !exists || string(value) != "keep" {
+		t.Fatalf("unmatched row = %q exists=%v err=%v", value, exists, err)
+	}
+
+	sdb.RevertToSnapshot(snapshot)
+	for key, want := range map[string]string{"prefix/1": "one", "prefix/2": "two", "other": "keep"} {
+		value, exists, err := sdb.GetAccountKV(addr, kvdomains.SystemReward, []byte(key))
+		if err != nil || !exists || string(value) != want {
+			t.Fatalf("reverted %s = %q exists=%v err=%v, want %q", key, value, exists, err, want)
+		}
+	}
+}
+
 func TestResetAccountKVLeavesOldLatestGenerationUnreachable(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x6a)
