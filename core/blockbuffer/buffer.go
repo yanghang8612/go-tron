@@ -123,10 +123,34 @@ func (i *layerPrefixBucketIndex) bucketBuilt(bucket byte) bool {
 	return i != nil && i.built[bucket>>6]&(uint64(1)<<(bucket&63)) != 0
 }
 
+func (i *layerPrefixBucketIndex) anyBucketBuilt() bool {
+	if i == nil {
+		return false
+	}
+	for _, word := range i.built {
+		if word != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (i *layerPrefixBucketIndex) ensureBucket(bucket byte, writes map[string][]byte, deletes map[string]struct{}) {
 	if i == nil || i.bucketBuilt(bucket) {
 		return
 	}
+	// Preserve the old one-account cold path and its small retained index. Once
+	// a second distinct account bucket is requested, the layer is demonstrating
+	// the multi-account access pattern seen during sync; switch to one packed
+	// build rather than rescanning both maps for every later bucket.
+	if !i.anyBucketBuilt() {
+		i.buildBucket(bucket, writes, deletes)
+		return
+	}
+	i.buildAllBuckets(writes, deletes)
+}
+
+func (i *layerPrefixBucketIndex) buildBucket(bucket byte, writes map[string][]byte, deletes map[string]struct{}) {
 	for key := range writes {
 		i.addToBucket(bucket, key)
 	}
@@ -134,6 +158,76 @@ func (i *layerPrefixBucketIndex) ensureBucket(bucket byte, writes map[string][]b
 		i.addToBucket(bucket, key)
 	}
 	i.built[bucket>>6] |= uint64(1) << (bucket & 63)
+}
+
+// buildAllBuckets groups every key in the indexed schema by the first account
+// byte in one packed build. Structured account-KV reads encounter
+// many distinct accounts while a sync layer is live; rebuilding one bucket at
+// a time rescans the same writes/deletes map for every distinct first byte.
+//
+// Two map passes keep the retained index compact: the first computes exact
+// bucket sizes and the second fills one shared string arena. Each published
+// bucket has cap == len, so a mutation after the build appends into independent
+// storage instead of overwriting the next bucket's arena segment. Callers hold
+// the layer-shard lock across this build and every later mutation.
+func (i *layerPrefixBucketIndex) buildAllBuckets(writes map[string][]byte, deletes map[string]struct{}) {
+	if i == nil {
+		return
+	}
+	var counts [256]int
+	total := 0
+	count := func(key string) {
+		if len(key) <= len(i.prefix) || !strings.HasPrefix(key, i.prefix) {
+			return
+		}
+		counts[key[len(i.prefix)]]++
+		total++
+	}
+	for key := range writes {
+		count(key)
+	}
+	for key := range deletes {
+		count(key)
+	}
+
+	if total != 0 {
+		var offsets [257]int
+		bucketCount := 0
+		for bucket, size := range counts {
+			offsets[bucket+1] = offsets[bucket] + size
+			if size != 0 {
+				bucketCount++
+			}
+		}
+		arena := make([]string, total)
+		next := offsets
+		place := func(key string) {
+			if len(key) <= len(i.prefix) || !strings.HasPrefix(key, i.prefix) {
+				return
+			}
+			bucket := key[len(i.prefix)]
+			arena[next[bucket]] = key
+			next[bucket]++
+		}
+		for key := range writes {
+			place(key)
+		}
+		for key := range deletes {
+			place(key)
+		}
+
+		i.buckets = make(map[byte][]string, bucketCount)
+		for bucket, size := range counts {
+			if size == 0 {
+				continue
+			}
+			start, end := offsets[bucket], offsets[bucket+1]
+			i.buckets[byte(bucket)] = arena[start:end:end]
+		}
+	}
+	for word := range i.built {
+		i.built[word] = ^uint64(0)
+	}
 }
 
 func (i *layerPrefixBucketIndex) addToBucket(bucket byte, key string) {
