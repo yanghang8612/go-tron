@@ -53,6 +53,52 @@ func TestBaseReadCache_TwoHitAdmissionRejectsOneHitScan(t *testing.T) {
 	}
 }
 
+func TestBaseReadCache_CommitmentTrunkAdmitsOnceAndSurvivesTailChurn(t *testing.T) {
+	const commitmentPrefix = "state-commitment-branch-v1-"
+	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*4096, baseReadCacheTrunkDepth, commitmentPrefix)
+	value := bytes.Repeat([]byte{0x5a}, 64)
+
+	// Physical branch paths store one byte per nibble. Find a depth-four path
+	// routed to shard zero so the test can put both tiers under the same budget.
+	var trunkKey []byte
+	for i := 0; i < 1<<16; i++ {
+		key := append([]byte(commitmentPrefix), byte(i>>12), byte(i>>8&15), byte(i>>4&15), byte(i&15))
+		if baseReadCacheShardIndex(key) == 0 {
+			trunkKey = key
+			break
+		}
+	}
+	if trunkKey == nil {
+		t.Fatal("no depth-four trunk key routed to shard zero")
+	}
+	_, _, epoch := c.getWithEpoch(trunkKey)
+	if _, stored := c.setIfEpoch(trunkKey, value, epoch); !stored {
+		t.Fatal("first shallow commitment read was not admitted to the trunk")
+	}
+	s := &c.shards[0]
+	entry := s.entries[string(trunkKey)]
+	if entry == nil || !entry.trunk || s.trunkUsed != entry.charge {
+		t.Fatalf("trunk entry=%p pinned=%v used=%d", entry, entry != nil && entry.trunk, s.trunkUsed)
+	}
+
+	// Repeated deep-branch admissions overflow the shard and churn the CLOCK
+	// tail. The fixed trunk must remain resident without exceeding either bound.
+	for _, key := range testBaseReadCacheKeysForShard(t, commitmentPrefix+"deep-tail-", 0, 128) {
+		testBaseReadCacheSet(c, key, value)
+	}
+	if got := s.entries[string(trunkKey)]; got != entry || !got.trunk {
+		t.Fatal("commitment trunk was displaced by deep branch churn")
+	}
+	if s.used > s.limit || s.trunkUsed > s.trunkLimit {
+		t.Fatalf("bounded trunk accounting used=%d/%d trunk=%d/%d", s.used, s.limit, s.trunkUsed, s.trunkLimit)
+	}
+
+	c.del(trunkKey)
+	if s.trunkUsed != 0 || s.entries[string(trunkKey)] != nil {
+		t.Fatalf("deleted trunk retained accounting=%d entry=%p", s.trunkUsed, s.entries[string(trunkKey)])
+	}
+}
+
 func TestBaseReadCache_ProductionAdmissionHistoryBudget(t *testing.T) {
 	c := newBaseReadCache(128 << 20)
 	var totalSlots int

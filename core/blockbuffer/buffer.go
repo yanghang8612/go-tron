@@ -53,6 +53,8 @@ var (
 	commitmentParentCacheResolvedCounter   = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/cache/resolved", nil)
 	commitmentParentDurableReadsCounter    = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable/reads", nil)
 	commitmentParentDurableHitsCounter     = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable/hits", nil)
+	commitmentParentTrunkCacheCounter      = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/trunk/cache_resolved", nil)
+	commitmentParentTrunkDurableCounter    = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/trunk/durable_reads", nil)
 )
 
 // layer is a single applyBlock's worth of buffered mutations.
@@ -558,12 +560,24 @@ func (b *Buffer) loadReadView() *bufferReadView {
 // An optional schema prefix lets a successful flush count as the second cache
 // observation for read-before-write rows in that namespace.
 func (b *Buffer) SetBaseReadCacheSize(sizeBytes int, flushAdmissionPrefix ...string) {
+	b.setBaseReadCacheSize(sizeBytes, -1, flushAdmissionPrefix...)
+}
+
+// SetBaseReadCacheSizeWithTrunk additionally reserves a bounded fixed tier for
+// physical keys whose suffix after flushAdmissionPrefix is at most trunkDepth
+// bytes. It is intended for commitment tries whose byte suffix is one nibble per
+// depth; other durable-cache users retain SetBaseReadCacheSize's CLOCK-only policy.
+func (b *Buffer) SetBaseReadCacheSizeWithTrunk(sizeBytes, trunkDepth int, flushAdmissionPrefix string) {
+	b.setBaseReadCacheSize(sizeBytes, trunkDepth, flushAdmissionPrefix)
+}
+
+func (b *Buffer) setBaseReadCacheSize(sizeBytes, trunkDepth int, flushAdmissionPrefix ...string) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
 	old := b.baseReadCache
-	b.baseReadCache = newBaseReadCache(sizeBytes, flushAdmissionPrefix...)
+	b.baseReadCache = newBaseReadCacheWithTrunk(sizeBytes, trunkDepth, flushAdmissionPrefix...)
 	b.publishReadViewLocked()
 	b.mu.Unlock()
 	if old != nil {

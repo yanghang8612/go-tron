@@ -82,6 +82,18 @@ const baseReadCacheMaxInvalidationSlots = 1 << 16
 // other. Total retained charge remains unchanged.
 const baseReadCacheOtherReserveDivisor = 4
 
+// Keep the global commitment-trie trunk resident, following Erigon's split
+// branch-cache design: depths 0-4 use a fixed tier while deeper branches compete
+// in the adaptive tail. A 16-way hex trie has at most 69,905 branches through
+// depth four, so one eighth of the configured cache is a conservative bounded
+// budget (64 MiB with the production 512 MiB cache). The reservation is hard per
+// shard: once full, additional shallow rows fall back to normal two-hit/CLOCK
+// admission instead of growing memory without bound.
+const (
+	baseReadCacheTrunkDepth         = 4
+	baseReadCacheTrunkBudgetDivisor = 8
+)
+
 // baseReadCache is a bounded, sharded FIFO/CLOCK cache for values read from
 // Buffer's durable base. It is intentionally below the overlay layers: in-flight and
 // committed writes/tombstones are always resolved first, so a fork discard only
@@ -101,6 +113,10 @@ type baseReadCache struct {
 	// whose successful canonical writes are expected to be read again soon.
 	// Ordinary write-only metadata never pays the full-key probation hash.
 	flushAdmissionPrefix string
+	// trunkDepth >= 0 enables fixed residency for commitment paths through this
+	// depth. The ordinary cache constructor leaves it at -1; the chain wiring
+	// explicitly opts in only for the physical commitment-branch namespace.
+	trunkDepth int
 	// version advances once for every durable-base flush/cache reset. Entries
 	// retain the version at which they became valid, allowing a point-in-time
 	// commitment session to reuse old hot entries while rejecting replacements
@@ -135,8 +151,10 @@ type baseReadCacheShard struct {
 	nonCommitmentHead      int
 	used                   int
 	nonCommitmentUsed      int
+	trunkUsed              int
 	limit                  int
 	nonCommitmentLimit     int
+	trunkLimit             int
 }
 
 // baseReadCacheEpoch identifies one key's direct-mapped invalidation slot and
@@ -163,6 +181,9 @@ type baseReadCacheEntry struct {
 	// nonCommitment selects the protected flat/account/code CLOCK segment. It
 	// fits in the structure's existing boolean/alignment padding.
 	nonCommitment bool
+	// trunk marks a shallow commitment branch held outside the CLOCK queues.
+	// Its charge is included in used and trunkUsed, both bounded by shard limits.
+	trunk bool
 	// exposed is set when a direct Get path returns value beyond the cache
 	// shard lock. The next changed flush must replace that backing allocation;
 	// callback-scoped reads instead hold RLock through consumption and leave it
@@ -207,10 +228,14 @@ func (e *baseReadCacheEntry) consumeReference() bool {
 }
 
 func newBaseReadCache(sizeBytes int, flushAdmissionPrefix ...string) *baseReadCache {
+	return newBaseReadCacheWithTrunk(sizeBytes, -1, flushAdmissionPrefix...)
+}
+
+func newBaseReadCacheWithTrunk(sizeBytes, trunkDepth int, flushAdmissionPrefix ...string) *baseReadCache {
 	if sizeBytes <= 0 {
 		return nil
 	}
-	c := &baseReadCache{}
+	c := &baseReadCache{trunkDepth: trunkDepth}
 	if len(flushAdmissionPrefix) > 0 {
 		c.flushAdmissionPrefix = flushAdmissionPrefix[0]
 	}
@@ -224,6 +249,9 @@ func newBaseReadCache(sizeBytes int, flushAdmissionPrefix ...string) *baseReadCa
 		}
 		if c.flushAdmissionPrefix != "" {
 			c.shards[i].nonCommitmentLimit = c.shards[i].limit / baseReadCacheOtherReserveDivisor
+			if trunkDepth >= 0 {
+				c.shards[i].trunkLimit = c.shards[i].limit / baseReadCacheTrunkBudgetDivisor
+			}
 		}
 		c.shards[i].entries = make(map[string]*baseReadCacheEntry)
 		c.shards[i].admission = make([]uint64, baseReadCacheAdmissionSlots(c.shards[i].limit))
@@ -256,6 +284,18 @@ func (c *baseReadCache) isOtherKeyBytes(key []byte) bool {
 
 func (c *baseReadCache) isOtherKeyString(key string) bool {
 	return c != nil && c.flushAdmissionPrefix != "" && !strings.HasPrefix(key, c.flushAdmissionPrefix)
+}
+
+func (c *baseReadCache) isCommitmentTrunkKey(key []byte) bool {
+	if c == nil || c.trunkDepth < 0 || c.flushAdmissionPrefix == "" || len(key) < len(c.flushAdmissionPrefix) {
+		return false
+	}
+	for i := range c.flushAdmissionPrefix {
+		if key[i] != c.flushAdmissionPrefix[i] {
+			return false
+		}
+	}
+	return len(key)-len(c.flushAdmissionPrefix) <= c.trunkDepth
 }
 
 // getWithEpoch returns the key's invalidation-slot generation on a miss. A miss
@@ -463,18 +503,34 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 		s.mu.Unlock()
 		return value, true
 	}
-	if !s.admit(key, other) {
+	trunk := !missing && c.isCommitmentTrunkKey(key) && s.trunkUsed+charge <= s.trunkLimit
+	if !trunk && !s.admit(key, other) {
 		s.mu.Unlock()
 		return value, false
 	}
 	entry := s.acquireEntryBytes(key, value, missing, c.version.Load())
+	if trunk && s.trunkUsed+entry.charge > s.trunkLimit {
+		// Recycled value/key storage can have more capacity than the requested
+		// payload. Account that real retained capacity before publishing the entry;
+		// if it no longer fits, fall back to ordinary probation without weakening
+		// the trunk's hard byte bound.
+		trunk = false
+		if !s.admit(key, other) {
+			s.recycleEntry(entry)
+			s.mu.Unlock()
+			return value, false
+		}
+	}
 	entry.nonCommitment = other
+	entry.trunk = trunk
 	if expose && entry.value != nil {
 		entry.exposed.Store(true)
 	}
 	storedValue := entry.value
 	s.entries[entry.key] = entry
-	if other {
+	if trunk {
+		s.trunkUsed += entry.charge
+	} else if other {
 		s.nonCommitmentQueue = append(s.nonCommitmentQueue, entry)
 		s.nonCommitmentUsed += entry.charge
 	} else {
@@ -572,7 +628,18 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 			old.exposed.Store(false)
 			newCharge := int(old.keyCapacity) + cap(old.value) + baseReadCacheEntryOverhead
 			delta := newCharge - old.charge
+			if old.trunk && s.trunkUsed+delta > s.trunkLimit {
+				// A replacement can grow beyond the bounded trunk reservation.
+				// Demote it to the ordinary CLOCK tail rather than exceeding the
+				// fixed tier; its stable entry/map identity remains unchanged.
+				old.trunk = false
+				s.trunkUsed -= old.charge
+				s.queue = append(s.queue, old)
+			}
 			s.used += delta
+			if old.trunk {
+				s.trunkUsed += delta
+			}
 			if old.nonCommitment {
 				s.nonCommitmentUsed += delta
 			}
@@ -584,6 +651,11 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		if cached {
 			delete(s.entries, key)
 			s.used -= old.charge
+			if old.trunk {
+				s.trunkUsed -= old.charge
+				s.recycleEntry(old)
+				return
+			}
 			if old.nonCommitment {
 				s.nonCommitmentUsed -= old.charge
 			}
@@ -737,6 +809,7 @@ func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
 	entry.version = 0
 	entry.live = false
 	entry.nonCommitment = false
+	entry.trunk = false
 	entry.exposed.Store(false)
 	entry.references.Store(0)
 	entry.nextFree = nil
@@ -783,6 +856,12 @@ func (c *baseReadCache) delStringLocked(s *baseReadCacheShard, key string) {
 		other = old.nonCommitment
 		delete(s.entries, key)
 		s.used -= old.charge
+		if old.trunk {
+			s.trunkUsed -= old.charge
+			s.recycleEntry(old)
+			s.forgetAdmissionString(key, other)
+			return
+		}
 		if old.nonCommitment {
 			s.nonCommitmentUsed -= old.charge
 		}
@@ -816,6 +895,7 @@ func (c *baseReadCache) clear() {
 		s.nonCommitmentHead = 0
 		s.used = 0
 		s.nonCommitmentUsed = 0
+		s.trunkUsed = 0
 		s.freeEntries = nil
 		s.freeEntryCount = 0
 		s.freeValueBytes = 0
@@ -1103,14 +1183,20 @@ func (s *baseReadCacheShard) compactIfSparse() {
 		return
 	}
 	nonCommitmentEntries := 0
+	trunkEntries := 0
 	for _, entry := range s.entries {
-		if entry.nonCommitment {
+		if entry.trunk {
+			trunkEntries++
+		} else if entry.nonCommitment {
 			nonCommitmentEntries++
 		}
 	}
-	queue := make([]*baseReadCacheEntry, 0, len(s.entries)-nonCommitmentEntries)
+	queue := make([]*baseReadCacheEntry, 0, len(s.entries)-nonCommitmentEntries-trunkEntries)
 	nonCommitmentQueue := make([]*baseReadCacheEntry, 0, nonCommitmentEntries)
 	for _, entry := range s.entries {
+		if entry.trunk {
+			continue
+		}
 		if entry.nonCommitment {
 			nonCommitmentQueue = append(nonCommitmentQueue, entry)
 		} else {

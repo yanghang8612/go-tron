@@ -613,7 +613,7 @@ func (bc *BlockChain) SetCommitmentBranchCacheSize(sizeBytes int) {
 	if bc == nil || bc.buffer == nil {
 		return
 	}
-	bc.buffer.SetBaseReadCacheSize(sizeBytes, rawdb.CommitmentBranchKeyPrefix)
+	bc.buffer.SetBaseReadCacheSizeWithTrunk(sizeBytes, 4, rawdb.CommitmentBranchKeyPrefix)
 }
 
 func (bc *BlockChain) stateCommitOptions(_ *types.Block, _ bool) state.CommitOptions {
