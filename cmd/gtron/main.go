@@ -378,7 +378,6 @@ var app = &cli.App{
 	},
 	Action: gtron,
 	Commands: []*cli.Command{
-		dbCommand(),
 		{
 			Name:   "version",
 			Usage:  "Print version information",
