@@ -149,6 +149,9 @@ type commitmentParentReadContext struct {
 	durableHits     uint64
 	trunkCached     uint64
 	trunkDurable    uint64
+	windowCached    uint64
+	depthCached     [4]uint64
+	depthDurable    [4]uint64
 }
 
 func newCommitmentParentReadContext() any {
@@ -182,6 +185,9 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.durableHits = 0
 		ctx.trunkCached = 0
 		ctx.trunkDurable = 0
+		ctx.windowCached = 0
+		ctx.depthCached = [4]uint64{}
+		ctx.depthDurable = [4]uint64{}
 		commitmentParentReadContextPool.Put(ctx)
 		contexts[i] = nil
 	}
@@ -373,7 +379,9 @@ func (s *commitmentParentReadSession) ViewKeyParts(reader int, first, second []b
 
 func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	ctx := s.readContexts[reader]
-	trunk := len(key) >= len(keyPrefix) && len(key)-len(keyPrefix) <= baseReadCacheTrunkDepth
+	depth := len(key) - len(keyPrefix)
+	trunk := depth >= 0 && depth <= baseReadCacheTrunkDepth
+	depthBucket := commitmentParentDeepDepthBucket(depth)
 	keyHash := layerBloomHashBytes(key)
 	if value, found, tomb := lookupLayersNewest(s.layers, key, keyHash); tomb {
 		ctx.overlayResolved++
@@ -382,11 +390,17 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 		ctx.overlayResolved++
 		return true, fn(value, true)
 	}
-	cached, present, cacheEpoch, cacheable, err := s.cache.viewAtVersion(key, s.cacheVersion, fn)
+	cached, present, windowHit, cacheEpoch, cacheable, err := s.cache.viewAtVersion(key, s.cacheVersion, fn)
 	if cached {
 		ctx.cacheResolved++
 		if trunk {
 			ctx.trunkCached++
+		}
+		if windowHit {
+			ctx.windowCached++
+		}
+		if depthBucket >= 0 {
+			ctx.depthCached[depthBucket]++
 		}
 		return present, err
 	}
@@ -406,6 +420,9 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 	ctx.durableReads++
 	if trunk {
 		ctx.trunkDurable++
+	}
+	if depthBucket >= 0 {
+		ctx.depthDurable[depthBucket]++
 	}
 	found, err := cursor.View(key, ctx.callback)
 	if found {
@@ -440,7 +457,8 @@ func (s *commitmentParentReadSession) Close() error {
 	s.snapshot = nil
 	s.layers = nil
 	s.cache = nil
-	var overlayResolved, cacheResolved, durableReads, durableHits, trunkCached, trunkDurable uint64
+	var overlayResolved, cacheResolved, durableReads, durableHits, trunkCached, trunkDurable, windowCached uint64
+	var depthCached, depthDurable [4]uint64
 	for _, ctx := range s.readContexts {
 		overlayResolved += ctx.overlayResolved
 		cacheResolved += ctx.cacheResolved
@@ -448,6 +466,11 @@ func (s *commitmentParentReadSession) Close() error {
 		durableHits += ctx.durableHits
 		trunkCached += ctx.trunkCached
 		trunkDurable += ctx.trunkDurable
+		windowCached += ctx.windowCached
+		for bucket := range depthCached {
+			depthCached[bucket] += ctx.depthCached[bucket]
+			depthDurable[bucket] += ctx.depthDurable[bucket]
+		}
 	}
 	commitmentParentOverlayResolvedCounter.Inc(int64(overlayResolved))
 	commitmentParentCacheResolvedCounter.Inc(int64(cacheResolved))
@@ -455,11 +478,31 @@ func (s *commitmentParentReadSession) Close() error {
 	commitmentParentDurableHitsCounter.Inc(int64(durableHits))
 	commitmentParentTrunkCacheCounter.Inc(int64(trunkCached))
 	commitmentParentTrunkDurableCounter.Inc(int64(trunkDurable))
+	commitmentParentWindowCacheCounter.Inc(int64(windowCached))
+	for bucket := range depthCached {
+		commitmentParentDepthCacheCounters[bucket].Inc(int64(depthCached[bucket]))
+		commitmentParentDepthDurableCounters[bucket].Inc(int64(depthDurable[bucket]))
+	}
 	returnCommitmentParentReadContexts(s.readContexts)
 	s.readContexts = nil
 	returnCommitmentParentKeyScratch(s.keyScratch)
 	s.keyScratch = nil
 	return firstErr
+}
+
+func commitmentParentDeepDepthBucket(depth int) int {
+	switch {
+	case depth < 5:
+		return -1
+	case depth <= 8:
+		return 0
+	case depth <= 16:
+		return 1
+	case depth <= 32:
+		return 2
+	default:
+		return 3
+	}
 }
 
 // ConcurrentReadWriteSafe is the LayerView counterpart of Buffer's structural

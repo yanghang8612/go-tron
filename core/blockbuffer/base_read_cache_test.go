@@ -99,6 +99,120 @@ func TestBaseReadCache_CommitmentTrunkAdmitsOnceAndSurvivesTailChurn(t *testing.
 	}
 }
 
+func TestBaseReadCache_DeepCommitmentOneHitScanStaysInWindow(t *testing.T) {
+	const commitmentPrefix = "state-commitment-branch-v1-"
+	const shard = uint32(0)
+	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*4096, baseReadCacheTrunkDepth, commitmentPrefix)
+	s := &c.shards[shard]
+	value := bytes.Repeat([]byte{0x31}, 64)
+	keys := testBaseReadCacheKeysForShard(t, commitmentPrefix+"deep-scan-", shard, 128)
+
+	for _, key := range keys {
+		_, _, epoch := c.getWithEpoch(key)
+		if _, stored := c.setIfEpoch(key, value, epoch); !stored {
+			t.Fatalf("first deep commitment read %q was not retained in the window", key)
+		}
+	}
+	if s.windowUsed > s.windowLimit || s.used > s.limit {
+		t.Fatalf("window scan exceeded bounds window=%d/%d total=%d/%d", s.windowUsed, s.windowLimit, s.used, s.limit)
+	}
+	if got := len(s.queue) - s.head; got != 0 {
+		t.Fatalf("one-hit scan polluted main CLOCK with %d tokens", got)
+	}
+	for _, entry := range s.entries {
+		if !entry.window || entry.trunk || entry.nonCommitment {
+			t.Fatalf("one-hit deep entry has wrong class: window=%v trunk=%v other=%v", entry.window, entry.trunk, entry.nonCommitment)
+		}
+	}
+}
+
+func TestBaseReadCache_DeepCommitmentWindowPromotesReuse(t *testing.T) {
+	const commitmentPrefix = "state-commitment-branch-v1-"
+	const shard = uint32(0)
+	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*4096, baseReadCacheTrunkDepth, commitmentPrefix)
+	s := &c.shards[shard]
+	value := bytes.Repeat([]byte{0x42}, 64)
+	keys := testBaseReadCacheKeysForShard(t, commitmentPrefix+"deep-window-", shard, 8)
+
+	storeFirst := func(key []byte) {
+		t.Helper()
+		_, _, epoch := c.getWithEpoch(key)
+		if _, stored := c.setIfEpoch(key, value, epoch); !stored {
+			t.Fatalf("first deep commitment read %q was not retained", key)
+		}
+	}
+	storeFirst(keys[0])
+	if entry := s.entries[string(keys[0])]; entry == nil || !entry.window {
+		t.Fatal("first deep read did not enter the window")
+	}
+	if _, found, _ := c.getWithEpoch(keys[0]); !found {
+		t.Fatal("window did not resolve the repeated read")
+	}
+
+	// Overflowing the small per-shard window promotes the referenced oldest
+	// row, while the next untouched oldest row is discarded as scan traffic.
+	storeFirst(keys[1])
+	storeFirst(keys[2])
+	hot := s.entries[string(keys[0])]
+	if hot == nil || hot.window || hot.trunk || hot.nonCommitment {
+		t.Fatalf("reused deep row was not promoted to main CLOCK: %#v", hot)
+	}
+	storeFirst(keys[3])
+	if s.entries[string(keys[1])] != nil {
+		t.Fatal("untouched window row survived FIFO pressure")
+	}
+
+	// The first observation's fingerprint survives a window eviction, so the
+	// next durable sighting enters the main CLOCK without another window cycle.
+	_, _, epoch := c.getWithEpoch(keys[1])
+	if _, stored := c.setIfEpoch(keys[1], value, epoch); !stored {
+		t.Fatal("second sighting after window eviction did not enter main CLOCK")
+	}
+	if entry := s.entries[string(keys[1])]; entry == nil || entry.window {
+		t.Fatal("second sighting was returned to the first-read window")
+	}
+	if s.windowUsed > s.windowLimit || s.used > s.limit {
+		t.Fatalf("promotion exceeded bounds window=%d/%d total=%d/%d", s.windowUsed, s.windowLimit, s.used, s.limit)
+	}
+}
+
+func TestBaseReadCache_FlushProtectsCommitmentWindowEntryForPromotion(t *testing.T) {
+	const commitmentPrefix = "state-commitment-branch-v1-"
+	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*4096, baseReadCacheTrunkDepth, commitmentPrefix)
+	key := []byte(commitmentPrefix + "deep-flushed-branch")
+	value := []byte("parent-v1")
+	_, _, epoch := c.getWithEpoch(key)
+	if _, stored := c.setIfEpoch(key, value, epoch); !stored {
+		t.Fatal("first deep commitment read was not retained")
+	}
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	entry := s.entries[string(key)]
+	if entry == nil || !entry.window || s.windowUsed != entry.charge {
+		t.Fatalf("window entry=%p marked=%v used=%d", entry, entry != nil && entry.window, s.windowUsed)
+	}
+
+	c.setFlushed(string(key), []byte("child-v2"))
+	if got, ok, _ := c.getWithEpoch(key); !ok || string(got) != "child-v2" {
+		t.Fatalf("flush-promoted value=(%q,%v), want child-v2/true", got, ok)
+	}
+	for _, churnKey := range testBaseReadCacheKeysForShard(t, commitmentPrefix+"deep-flush-churn-", baseReadCacheShardIndex(key), 8) {
+		_, _, churnEpoch := c.getWithEpoch(churnKey)
+		if _, stored := c.setIfEpoch(churnKey, value, churnEpoch); !stored {
+			t.Fatalf("first churn read %q was not retained", churnKey)
+		}
+		if !entry.window {
+			break
+		}
+	}
+	if entry.window {
+		t.Fatal("flush-protected window entry was not promoted under FIFO pressure")
+	}
+	c.del(key)
+	if s.entries[string(key)] != nil {
+		t.Fatalf("delete retained promoted entry: entry=%p", s.entries[string(key)])
+	}
+}
+
 func TestBaseReadCache_ProductionAdmissionHistoryBudget(t *testing.T) {
 	c := newBaseReadCache(128 << 20)
 	var totalSlots int

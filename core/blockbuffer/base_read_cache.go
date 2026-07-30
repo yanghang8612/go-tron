@@ -92,6 +92,12 @@ const baseReadCacheOtherReserveDivisor = 4
 const (
 	baseReadCacheTrunkDepth         = 4
 	baseReadCacheTrunkBudgetDivisor = 8
+	// Deep commitment rows get a small first-read window before the ordinary
+	// two-hit CLOCK tail. This adapts Erigon's first-read branch-cache tail to
+	// Pebble without letting one-shot historical scans occupy the main cache:
+	// rows reused while resident are promoted, while untouched rows leave at
+	// the window boundary. The window is part of (not additional to) limit.
+	baseReadCacheWindowBudgetDivisor = 8
 )
 
 // baseReadCache is a bounded, sharded FIFO/CLOCK cache for values read from
@@ -134,6 +140,10 @@ type baseReadCacheShard struct {
 	// frequency evidence before its second observation.
 	queue              []*baseReadCacheEntry
 	nonCommitmentQueue []*baseReadCacheEntry
+	// windowQueue is a bounded FIFO for present commitment branches below the
+	// fixed trunk. It removes the otherwise mandatory second Pebble read from
+	// short-term reuse while keeping scan pollution out of queue.
+	windowQueue []*baseReadCacheEntry
 	// freeEntries reuses metadata only after its sole CLOCK token has been
 	// consumed or removed by compaction. Explicit invalidation leaves the
 	// cleared entry queued, so it is deliberately not linked here at that point.
@@ -149,12 +159,15 @@ type baseReadCacheShard struct {
 	nonCommitmentAdmission []uint64
 	head                   int
 	nonCommitmentHead      int
+	windowHead             int
 	used                   int
 	nonCommitmentUsed      int
 	trunkUsed              int
+	windowUsed             int
 	limit                  int
 	nonCommitmentLimit     int
 	trunkLimit             int
+	windowLimit            int
 }
 
 // baseReadCacheEpoch identifies one key's direct-mapped invalidation slot and
@@ -184,6 +197,10 @@ type baseReadCacheEntry struct {
 	// trunk marks a shallow commitment branch held outside the CLOCK queues.
 	// Its charge is included in used and trunkUsed, both bounded by shard limits.
 	trunk bool
+	// window marks a deep commitment branch admitted on its first durable read.
+	// A resident hit gives it CLOCK credit; the FIFO boundary then promotes it
+	// into the main queue, otherwise it is discarded as a one-hit scan row.
+	window bool
 	// exposed is set when a direct Get path returns value beyond the cache
 	// shard lock. The next changed flush must replace that backing allocation;
 	// callback-scoped reads instead hold RLock through consumption and leave it
@@ -251,6 +268,7 @@ func newBaseReadCacheWithTrunk(sizeBytes, trunkDepth int, flushAdmissionPrefix .
 			c.shards[i].nonCommitmentLimit = c.shards[i].limit / baseReadCacheOtherReserveDivisor
 			if trunkDepth >= 0 {
 				c.shards[i].trunkLimit = c.shards[i].limit / baseReadCacheTrunkBudgetDivisor
+				c.shards[i].windowLimit = c.shards[i].limit / baseReadCacheWindowBudgetDivisor
 			}
 		}
 		c.shards[i].entries = make(map[string]*baseReadCacheEntry)
@@ -296,6 +314,18 @@ func (c *baseReadCache) isCommitmentTrunkKey(key []byte) bool {
 		}
 	}
 	return len(key)-len(c.flushAdmissionPrefix) <= c.trunkDepth
+}
+
+func (c *baseReadCache) isCommitmentWindowKey(key []byte) bool {
+	if c == nil || c.trunkDepth < 0 || c.flushAdmissionPrefix == "" || len(key) < len(c.flushAdmissionPrefix) {
+		return false
+	}
+	for i := range c.flushAdmissionPrefix {
+		if key[i] != c.flushAdmissionPrefix[i] {
+			return false
+		}
+	}
+	return len(key)-len(c.flushAdmissionPrefix) > c.trunkDepth
 }
 
 // getWithEpoch returns the key's invalidation-slot generation on a miss. A miss
@@ -391,9 +421,9 @@ func (c *baseReadCache) viewWithEpoch(key []byte, fn func(value []byte, stable b
 // viewAtVersion applies viewWithEpoch's scoped lifetime to a commitment
 // snapshot session. A replacement newer than maxVersion is bypassed exactly as
 // in getAtVersion and cannot be overwritten by the older snapshot value.
-func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(value []byte, stable bool) error) (cached, present bool, epoch baseReadCacheEpoch, cacheable bool, err error) {
+func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(value []byte, stable bool) error) (cached, present, windowHit bool, epoch baseReadCacheEpoch, cacheable bool, err error) {
 	if c == nil {
-		return false, false, baseReadCacheEpoch{}, false, nil
+		return false, false, false, baseReadCacheEpoch{}, false, nil
 	}
 	s := &c.shards[baseReadCacheShardIndex(key)]
 	s.mu.RLock()
@@ -401,25 +431,26 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 	if ok {
 		if e.version <= maxVersion {
 			e.reference()
+			windowHit = e.window
 			if e.value == nil {
 				s.mu.RUnlock()
-				return true, false, baseReadCacheEpoch{}, false, nil
+				return true, false, windowHit, baseReadCacheEpoch{}, false, nil
 			}
 			if !c.scopedRefreshKey(key) {
 				e.exposed.Store(true)
 				value := e.value
 				s.mu.RUnlock()
-				return true, true, baseReadCacheEpoch{}, false, fn(value, true)
+				return true, true, windowHit, baseReadCacheEpoch{}, false, fn(value, true)
 			}
 			defer s.mu.RUnlock()
-			return true, true, baseReadCacheEpoch{}, false, fn(e.value, false)
+			return true, true, windowHit, baseReadCacheEpoch{}, false, fn(e.value, false)
 		}
 		s.mu.RUnlock()
-		return false, false, baseReadCacheEpoch{}, false, nil
+		return false, false, false, baseReadCacheEpoch{}, false, nil
 	}
 	s.mu.RUnlock()
 	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
-	return false, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true, nil
+	return false, false, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true, nil
 }
 
 // scopedRefreshKey reports whether callback consumers of key may receive a
@@ -504,9 +535,18 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 		return value, true
 	}
 	trunk := !missing && c.isCommitmentTrunkKey(key) && s.trunkUsed+charge <= s.trunkLimit
-	if !trunk && !s.admit(key, other) {
-		s.mu.Unlock()
-		return value, false
+	window := false
+	if !trunk {
+		if !missing && !other && c.isCommitmentWindowKey(key) && s.windowLimit > 0 {
+			// Preserve the two-hit fingerprint even while retaining this first
+			// value in the bounded window. If it is evicted untouched, a later
+			// sighting can enter the main CLOCK directly; a second observation
+			// already present in probation skips the window altogether.
+			window = !s.admit(key, false)
+		} else if !s.admit(key, other) {
+			s.mu.Unlock()
+			return value, false
+		}
 	}
 	entry := s.acquireEntryBytes(key, value, missing, c.version.Load())
 	if trunk && s.trunkUsed+entry.charge > s.trunkLimit {
@@ -521,8 +561,16 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 			return value, false
 		}
 	}
+	if window && entry.charge > s.windowLimit {
+		// Recycled backing may be larger than the requested value. Retain the
+		// first-sighting fingerprint, but never exceed the hard window bound.
+		s.recycleEntry(entry)
+		s.mu.Unlock()
+		return value, false
+	}
 	entry.nonCommitment = other
 	entry.trunk = trunk
+	entry.window = window
 	if expose && entry.value != nil {
 		entry.exposed.Store(true)
 	}
@@ -533,6 +581,9 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 	} else if other {
 		s.nonCommitmentQueue = append(s.nonCommitmentQueue, entry)
 		s.nonCommitmentUsed += entry.charge
+	} else if window {
+		s.windowQueue = append(s.windowQueue, entry)
+		s.windowUsed += entry.charge
 	} else {
 		s.queue = append(s.queue, entry)
 	}
@@ -601,6 +652,15 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		return
 	}
 	if cached && charge <= s.limit {
+		if old.window {
+			// A durable read followed by a successful canonical write is the same
+			// second observation used by ordinary probation. Give the stable entry
+			// promotion credit, but leave it in the window until its FIFO token is
+			// consumed. Appending a main token here would give one recyclable entry
+			// two queue owners and make later invalidation unsafe.
+			old.reference()
+			s.forgetAdmissionString(old.key, false)
+		}
 		// Preserve the stable entry and its CLOCK queue pointer. This is a value
 		// refresh, not a new admission; appending one pointer per block would grow
 		// stale queue metadata for the lifetime of a hot commitment branch.
@@ -655,6 +715,9 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 				s.trunkUsed -= old.charge
 				s.recycleEntry(old)
 				return
+			}
+			if old.window {
+				s.windowUsed -= old.charge
 			}
 			if old.nonCommitment {
 				s.nonCommitmentUsed -= old.charge
@@ -810,6 +873,7 @@ func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
 	entry.live = false
 	entry.nonCommitment = false
 	entry.trunk = false
+	entry.window = false
 	entry.exposed.Store(false)
 	entry.references.Store(0)
 	entry.nextFree = nil
@@ -862,6 +926,9 @@ func (c *baseReadCache) delStringLocked(s *baseReadCacheShard, key string) {
 			s.forgetAdmissionString(key, other)
 			return
 		}
+		if old.window {
+			s.windowUsed -= old.charge
+		}
 		if old.nonCommitment {
 			s.nonCommitmentUsed -= old.charge
 		}
@@ -889,13 +956,17 @@ func (c *baseReadCache) clear() {
 		s.queue = s.queue[:0]
 		clear(s.nonCommitmentQueue)
 		s.nonCommitmentQueue = s.nonCommitmentQueue[:0]
+		clear(s.windowQueue)
+		s.windowQueue = s.windowQueue[:0]
 		clear(s.admission)
 		clear(s.nonCommitmentAdmission)
 		s.head = 0
 		s.nonCommitmentHead = 0
+		s.windowHead = 0
 		s.used = 0
 		s.nonCommitmentUsed = 0
 		s.trunkUsed = 0
+		s.windowUsed = 0
 		s.freeEntries = nil
 		s.freeEntryCount = 0
 		s.freeValueBytes = 0
@@ -1089,6 +1160,14 @@ func baseReadCacheAdmissionFingerprintString(key string) uint64 {
 }
 
 func (s *baseReadCacheShard) evict() {
+	// Enforce the first-read window independently of total cache occupancy. A
+	// referenced row moves into the main CLOCK; an untouched row leaves before
+	// it can displace established frequency evidence.
+	for s.windowUsed > s.windowLimit {
+		if !s.evictWindowOne() {
+			break
+		}
+	}
 	commitmentLimit := s.limit - s.nonCommitmentLimit
 	// Both classes may borrow unused capacity. Once the shard is full, reclaim
 	// whichever class exceeds its weighted share; when entry-size granularity
@@ -1101,13 +1180,13 @@ func (s *baseReadCacheShard) evict() {
 				continue
 			}
 		}
-		if commitmentUsed > commitmentLimit && s.evictOne(false) {
+		if commitmentUsed > commitmentLimit && s.evictCommitmentOne() {
 			continue
 		}
 		if s.nonCommitmentUsed > s.nonCommitmentLimit && s.evictOne(true) {
 			continue
 		}
-		if s.evictOne(false) {
+		if s.evictCommitmentOne() {
 			continue
 		}
 		if s.evictOne(true) {
@@ -1117,6 +1196,60 @@ func (s *baseReadCacheShard) evict() {
 	}
 	s.compactConsumedPrefix(false)
 	s.compactConsumedPrefix(true)
+	s.compactWindowConsumedPrefix()
+}
+
+func (s *baseReadCacheShard) promoteWindowEntry(entry *baseReadCacheEntry) {
+	if entry == nil || !entry.live || !entry.window {
+		return
+	}
+	entry.window = false
+	s.windowUsed -= entry.charge
+	s.queue = append(s.queue, entry)
+	s.forgetAdmissionString(entry.key, false)
+}
+
+// evictCommitmentOne gives the low-confidence first-read window priority over
+// the established CLOCK tail. A window hit promotes rather than evicts the row;
+// the outer loop can then reclaim another window row or eventually sweep the
+// promoted row using its bounded reference credits.
+func (s *baseReadCacheShard) evictCommitmentOne() bool {
+	if s.evictWindowOne() {
+		return true
+	}
+	return s.evictOne(false)
+}
+
+func (s *baseReadCacheShard) evictWindowOne() bool {
+	for s.windowHead < len(s.windowQueue) {
+		entry := s.windowQueue[s.windowHead]
+		s.windowQueue[s.windowHead] = nil
+		s.windowHead++
+		if entry == nil {
+			continue
+		}
+		if !entry.live {
+			s.recycleEntry(entry)
+			return true
+		}
+		if !entry.window {
+			// A flush can promote the stable entry while this original FIFO token
+			// remains queued. Its main-CLOCK token now owns recycling.
+			continue
+		}
+		if entry.consumeReference() {
+			s.promoteWindowEntry(entry)
+			baseReadCacheWindowPromotedCounter.Inc(1)
+			return true
+		}
+		delete(s.entries, entry.key)
+		s.used -= entry.charge
+		s.windowUsed -= entry.charge
+		s.recycleEntry(entry)
+		baseReadCacheWindowEvictedCounter.Inc(1)
+		return true
+	}
+	return false
 }
 
 // evictOne consumes one CLOCK candidate from the requested class. It returns
@@ -1173,32 +1306,48 @@ func (s *baseReadCacheShard) compactConsumedPrefix(other bool) {
 	}
 }
 
+func (s *baseReadCacheShard) compactWindowConsumedPrefix() {
+	if s.windowHead >= 1024 && s.windowHead*2 >= len(s.windowQueue) {
+		copy(s.windowQueue, s.windowQueue[s.windowHead:])
+		s.windowQueue = s.windowQueue[:len(s.windowQueue)-s.windowHead]
+		s.windowHead = 0
+	}
+}
+
 // compactIfSparse bounds stale queue entries left by explicit invalidation. A
 // sync node may cache a branch, flush and invalidate it, then repeat that cycle
 // for millions of blocks without ever exceeding the payload byte limit; without
 // this ratio gate the FIFO metadata alone would grow for the whole session.
 func (s *baseReadCacheShard) compactIfSparse() {
-	liveTokens := len(s.queue) - s.head + len(s.nonCommitmentQueue) - s.nonCommitmentHead
+	liveTokens := len(s.queue) - s.head +
+		len(s.nonCommitmentQueue) - s.nonCommitmentHead +
+		len(s.windowQueue) - s.windowHead
 	if liveTokens < 2048 || liveTokens <= len(s.entries)*2+1024 {
 		return
 	}
 	nonCommitmentEntries := 0
 	trunkEntries := 0
+	windowEntries := 0
 	for _, entry := range s.entries {
 		if entry.trunk {
 			trunkEntries++
 		} else if entry.nonCommitment {
 			nonCommitmentEntries++
+		} else if entry.window {
+			windowEntries++
 		}
 	}
-	queue := make([]*baseReadCacheEntry, 0, len(s.entries)-nonCommitmentEntries-trunkEntries)
+	queue := make([]*baseReadCacheEntry, 0, len(s.entries)-nonCommitmentEntries-trunkEntries-windowEntries)
 	nonCommitmentQueue := make([]*baseReadCacheEntry, 0, nonCommitmentEntries)
+	windowQueue := make([]*baseReadCacheEntry, 0, windowEntries)
 	for _, entry := range s.entries {
 		if entry.trunk {
 			continue
 		}
 		if entry.nonCommitment {
 			nonCommitmentQueue = append(nonCommitmentQueue, entry)
+		} else if entry.window {
+			windowQueue = append(windowQueue, entry)
 		} else {
 			queue = append(queue, entry)
 		}
@@ -1213,12 +1362,20 @@ func (s *baseReadCacheShard) compactIfSparse() {
 			s.recycleEntry(entry)
 		}
 	}
+	for _, entry := range s.windowQueue[s.windowHead:] {
+		if entry != nil && !entry.live {
+			s.recycleEntry(entry)
+		}
+	}
 	clear(s.queue)
 	s.queue = queue
 	s.head = 0
 	clear(s.nonCommitmentQueue)
 	s.nonCommitmentQueue = nonCommitmentQueue
 	s.nonCommitmentHead = 0
+	clear(s.windowQueue)
+	s.windowQueue = windowQueue
+	s.windowHead = 0
 }
 
 func baseReadCacheShardIndex(key []byte) uint32 {
