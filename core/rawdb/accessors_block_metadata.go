@@ -135,6 +135,14 @@ func WriteBlockMetadataBatchEncoded(db ethdb.Batcher, block *types.Block, blockD
 	return writeBlockMetadataBatchEncoded(db, block, blockData, stateRoot, infos, true, true, true)
 }
 
+// WriteBlockMetadataBatchEncodedWithTransactionIndexes is the canonical
+// metadata writer with an explicit tx-* ownership decision. Once an immutable
+// ancient index covers the block, historical resync may still rewrite the
+// body/receipt metadata but must not recreate the deleted hot reverse index.
+func WriteBlockMetadataBatchEncodedWithTransactionIndexes(db ethdb.Batcher, block *types.Block, blockData []byte, stateRoot common.Hash, infos []*corepb.TransactionInfo, includeTransactionIndexes bool) error {
+	return writeBlockMetadataBatchEncoded(db, block, blockData, stateRoot, infos, true, true, includeTransactionIndexes)
+}
+
 // WriteStoredReplayBlockMetadataBatch rebuilds the mutable metadata removed by
 // ResetMutableState without rewriting the canonical block body. Stored replay
 // can only start after ReadBlock has proven the body exists in the preserved

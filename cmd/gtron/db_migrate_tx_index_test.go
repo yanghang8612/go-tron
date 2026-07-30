@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
@@ -93,7 +94,7 @@ func TestDBMigrateTxIndexCommandPublishesBeforeDeletingAndResumes(t *testing.T) 
 	}
 
 	output := runMigrateTxIndexTestCommand(t, datadir)
-	if output.StartBlock != 0 || output.EndBlock != 4 || output.IndexedTransactions != 4 || output.DeletedHotRows != 4 || output.ScannedHotRows != blocks || output.RunBytes == 0 {
+	if output.StartBlock != 0 || output.EndBlock != 4 || output.IndexedTransactions != 4 || output.DeletedHotRows != 4 || output.RetainedHotRows != 2 || output.ScannedHotRows != blocks || output.RunBytes == 0 {
 		t.Fatalf("migration output = %+v", output)
 	}
 	db, err = rawdb.NewPebbleDBReadOnly(chainDataDir(datadir), 16, 16)
@@ -131,8 +132,63 @@ func TestDBMigrateTxIndexCommandPublishesBeforeDeletingAndResumes(t *testing.T) 
 	}
 
 	resumed := runMigrateTxIndexTestCommand(t, datadir)
-	if resumed.StartBlock != 4 || resumed.EndBlock != 4 || resumed.IndexedTransactions != 0 || resumed.DeletedHotRows != 0 || resumed.ScannedHotRows != 2 {
+	if resumed.StartBlock != 4 || resumed.EndBlock != 4 || resumed.IndexedTransactions != 0 || resumed.DeletedHotRows != 0 || resumed.RetainedHotRows != 2 || resumed.ScannedHotRows != 2 {
 		t.Fatalf("resumed output = %+v", resumed)
+	}
+}
+
+type txIndexBatchProbeDB struct {
+	ethdb.KeyValueStore
+	rangeDeletes int
+	pointDeletes int
+	puts         int
+}
+
+func (db *txIndexBatchProbeDB) NewBatchWithSize(size int) ethdb.Batch {
+	return ethdb.HookedBatch{
+		Batch: db.KeyValueStore.NewBatchWithSize(size),
+		OnPut: func([]byte, []byte) {
+			db.puts++
+		},
+		OnDelete: func([]byte) {
+			db.pointDeletes++
+		},
+		OnDeleteRange: func([]byte, []byte) {
+			db.rangeDeletes++
+		},
+	}
+}
+
+func TestReplaceCoveredTransactionIndexesUsesAtomicRangeRewrite(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	db := &txIndexBatchProbeDB{KeyValueStore: base}
+	var hashes [6][32]byte
+	for number := range hashes {
+		hashes[number][0] = byte(number + 1)
+		if err := rawdb.WriteTransactionLocation(db, hashes[number][:], uint64(number), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.puts = 0 // Count only writes made by the replacement batch.
+	scanned, deleted, retained, err := replaceCoveredTransactionIndexes(db, 4, 0, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned != 6 || deleted != 4 || retained != 2 {
+		t.Fatalf("rewrite stats scanned=%d deleted=%d retained=%d", scanned, deleted, retained)
+	}
+	if db.rangeDeletes != 1 || db.pointDeletes != 0 || db.puts != 2 {
+		t.Fatalf("batch ops rangeDeletes=%d pointDeletes=%d puts=%d", db.rangeDeletes, db.pointDeletes, db.puts)
+	}
+	chainDB := rawdb.NewChainDB(base, rawdb.NoopAncient{})
+	for number, hash := range hashes {
+		got := rawdb.ReadTransactionIndex(chainDB, hash[:])
+		if number < 4 && got != nil {
+			t.Fatalf("covered index %d remains: %v", number, got)
+		}
+		if number >= 4 && (got == nil || *got != uint64(number)) {
+			t.Fatalf("retained index %d=%v", number, got)
+		}
 	}
 }
 

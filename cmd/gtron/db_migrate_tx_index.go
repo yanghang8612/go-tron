@@ -16,6 +16,11 @@ import (
 
 const txIndexMigrationBatchBytes = 16 << 20
 
+// The uncovered tail is normally only the freezer margin plus a partial V2
+// segment. Refuse an unexpectedly huge atomic rewrite before it can exhaust an
+// offline maintenance host; advancing V2 coverage makes the tail small again.
+const txIndexMigrationMaxHotTailBatchBytes = 1 << 30
+
 var (
 	dbMigrateTxIndexYesFlag = &cli.BoolFlag{
 		Name:  "yes",
@@ -48,6 +53,7 @@ type txIndexMigrationOutput struct {
 	EndBlock            uint64  `json:"end_block"`
 	IndexedTransactions uint64  `json:"indexed_transactions"`
 	DeletedHotRows      uint64  `json:"deleted_hot_rows"`
+	RetainedHotRows     uint64  `json:"retained_hot_rows"`
 	ScannedHotRows      uint64  `json:"scanned_hot_rows"`
 	RunBytes            uint64  `json:"run_bytes"`
 	RecoveredBuiltRun   bool    `json:"recovered_built_run"`
@@ -159,7 +165,9 @@ func dbMigrateTxIndexCmd(ctx *cli.Context) error {
 		output.IndexedTransactions = result.Rows
 		output.RunBytes = result.FileBytes
 		output.RecoveredBuiltRun = recovered
-		if err := rawdbfreezer.PublishTransactionIndexRun(ancientPath, result); err != nil {
+		if err := runTxIndexMaintenanceHeartbeat(errWriter, progressInterval, "verifying and publishing transaction index", func() error {
+			return rawdbfreezer.PublishTransactionIndexRun(ancientPath, result)
+		}); err != nil {
 			return fmt.Errorf("publish transaction index run: %w", err)
 		}
 		fmt.Fprintf(errWriter, "published transaction index range=[%d,%d) rows=%d size=%s\n", startBlock, endBlock, result.Rows, formatIEC(result.FileBytes))
@@ -176,12 +184,13 @@ func dbMigrateTxIndexCmd(ctx *cli.Context) error {
 		return fmt.Errorf("close verified transaction index: %w", err)
 	}
 
-	scanned, deleted, err := deleteCoveredTransactionIndexes(db, endBlock, progressInterval, errWriter)
+	scanned, deleted, retained, err := replaceCoveredTransactionIndexes(db, endBlock, progressInterval, errWriter)
 	if err != nil {
 		return err
 	}
 	output.ScannedHotRows = scanned
 	output.DeletedHotRows = deleted
+	output.RetainedHotRows = retained
 	if syncer, ok := db.(interface{ SyncKeyValue() error }); !ok {
 		return fmt.Errorf("chaindata does not support an explicit sync barrier")
 	} else if err := syncer.SyncKeyValue(); err != nil {
@@ -193,7 +202,9 @@ func dbMigrateTxIndexCmd(ctx *cli.Context) error {
 			return fmt.Errorf("chaindata does not support compaction")
 		}
 		fmt.Fprintln(errWriter, "compacting tx-* range; this may take hours on a mainnet database...")
-		if err := rawdb.CompactTransactionIndexes(compacter); err != nil {
+		if err := runTxIndexMaintenanceHeartbeat(errWriter, progressInterval, "compacting tx-*", func() error {
+			return rawdb.CompactTransactionIndexes(compacter)
+		}); err != nil {
 			return fmt.Errorf("compact transaction indexes: %w", err)
 		}
 		output.Compacted = true
@@ -222,7 +233,7 @@ func dbMigrateTxIndexCmd(ctx *cli.Context) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(output)
 	}
-	fmt.Fprintf(writer, "Transaction index coverage: [%d,%d), %d indexed; deleted %d covered hot rows after scanning %d rows.\n", output.StartBlock, output.EndBlock, output.IndexedTransactions, output.DeletedHotRows, output.ScannedHotRows)
+	fmt.Fprintf(writer, "Transaction index coverage: [%d,%d), %d indexed; deleted %d covered hot rows and retained %d hot-tail rows after scanning %d rows.\n", output.StartBlock, output.EndBlock, output.IndexedTransactions, output.DeletedHotRows, output.RetainedHotRows, output.ScannedHotRows)
 	fmt.Fprintf(writer, "Cold run bytes: %s. Chaindata physical files: %s before, %s after.\n", formatIEC(output.RunBytes), formatIEC(output.PhysicalBytesBefore), formatIEC(output.PhysicalBytesAfter))
 	if !output.Compacted {
 		fmt.Fprintln(writer, "Physical SST bytes will be reclaimed by background compaction; rerun with --compact for immediate offline reclamation.")
@@ -240,7 +251,7 @@ func buildOrRecoverTransactionIndexRun(db ethdb.Iteratee, path string, startBloc
 		if run.StartBlock() != startBlock || run.EndBlock() != endBlock || run.PrefixBits() != prefixBits {
 			return rawdbfreezer.TransactionIndexBuildResult{}, false, fmt.Errorf("unpublished transaction index run %q has incompatible metadata", path)
 		}
-		if err := run.Verify(); err != nil {
+		if err := runTxIndexMaintenanceHeartbeat(progressWriter, progress, "verifying recovered transaction index", run.Verify); err != nil {
 			return rawdbfreezer.TransactionIndexBuildResult{}, false, fmt.Errorf("verify unpublished transaction index run %q: %w", path, err)
 		}
 		return rawdbfreezer.TransactionIndexBuildResult{Path: path, Rows: run.Rows(), StartBlock: startBlock, EndBlock: endBlock, PrefixBits: prefixBits, FileBytes: run.Size()}, true, nil
@@ -248,7 +259,8 @@ func buildOrRecoverTransactionIndexRun(db ethdb.Iteratee, path string, startBloc
 		return rawdbfreezer.TransactionIndexBuildResult{}, false, err
 	}
 	var selected uint64
-	lastProgress := time.Now()
+	started := time.Now()
+	lastProgress := started
 	result, err := rawdbfreezer.BuildTransactionIndexRun(path, rawdbfreezer.TransactionIndexBuildOptions{
 		PrefixBits: prefixBits,
 		StartBlock: startBlock,
@@ -260,7 +272,7 @@ func buildOrRecoverTransactionIndexRun(db ethdb.Iteratee, path string, startBloc
 				}
 				selected++
 				if progress > 0 && time.Since(lastProgress) >= progress {
-					fmt.Fprintf(progressWriter, "building transaction index range=[%d,%d) rows=%d elapsed=%s\n", startBlock, endBlock, selected, time.Since(lastProgress).Round(time.Second))
+					fmt.Fprintf(progressWriter, "building transaction index range=[%d,%d) rows=%d elapsed=%s\n", startBlock, endBlock, selected, time.Since(started).Round(time.Second))
 					lastProgress = time.Now()
 				}
 				return nil
@@ -274,45 +286,71 @@ func buildOrRecoverTransactionIndexRun(db ethdb.Iteratee, path string, startBloc
 	return result, false, nil
 }
 
-func deleteCoveredTransactionIndexes(db ethdb.KeyValueStore, coverage uint64, progress time.Duration, progressWriter interface{ Write([]byte) (int, error) }) (uint64, uint64, error) {
+func replaceCoveredTransactionIndexes(db ethdb.KeyValueStore, coverage uint64, progress time.Duration, progressWriter interface{ Write([]byte) (int, error) }) (uint64, uint64, uint64, error) {
 	batch := db.NewBatchWithSize(txIndexMigrationBatchBytes)
 	defer batch.Reset()
-	var deleted uint64
-	lastProgress := time.Now()
-	flush := func() error {
-		if batch.ValueSize() == 0 {
-			return nil
-		}
-		if err := batch.Write(); err != nil {
-			return err
-		}
-		batch.Reset()
-		return nil
+	start, limit := rawdb.TransactionIndexRangeBounds()
+	if err := batch.DeleteRange(start, limit); err != nil {
+		return 0, 0, 0, fmt.Errorf("replace covered transaction indexes: range delete: %w", err)
 	}
-	scanned, selected, err := rawdb.VisitTransactionIndexesByBlockRange(db, 0, coverage, func(sample rawdb.TransactionIndexSample) error {
-		if err := rawdb.DeleteTransactionIndex(batch, sample.Hash[:]); err != nil {
-			return err
-		}
-		deleted++
-		if batch.ValueSize() >= txIndexMigrationBatchBytes {
-			if err := flush(); err != nil {
+	var covered, retained uint64
+	started := time.Now()
+	lastProgress := started
+	scanned, err := rawdb.VisitTransactionIndexes(db, func(sample rawdb.TransactionIndexSample) error {
+		if rawdb.TransactionIndexLocationBlock(sample.Location) < coverage {
+			covered++
+		} else {
+			if err := rawdb.WriteEncodedTransactionLocation(batch, sample.Hash[:], sample.Location); err != nil {
 				return err
+			}
+			retained++
+			if batch.ValueSize() > txIndexMigrationMaxHotTailBatchBytes {
+				return fmt.Errorf("uncovered tx-* tail exceeds %s atomic batch limit; advance ancient V2 coverage before retrying", formatIEC(txIndexMigrationMaxHotTailBatchBytes))
 			}
 		}
 		if progress > 0 && time.Since(lastProgress) >= progress {
-			fmt.Fprintf(progressWriter, "deleting covered tx indexes rows=%d elapsed=%s\n", deleted, time.Since(lastProgress).Round(time.Second))
+			fmt.Fprintf(progressWriter, "planning atomic tx-* replacement scanned=%d covered=%d retained=%d elapsed=%s\n", covered+retained, covered, retained, time.Since(started).Round(time.Second))
 			lastProgress = time.Now()
 		}
 		return nil
 	})
 	if err != nil {
-		return scanned, deleted, fmt.Errorf("delete covered transaction indexes: %w", err)
+		return scanned, covered, retained, fmt.Errorf("replace covered transaction indexes: %w", err)
 	}
-	if selected != deleted {
-		return scanned, deleted, fmt.Errorf("delete covered transaction indexes: selected=%d deleted=%d", selected, deleted)
+	if scanned != covered+retained {
+		return scanned, covered, retained, fmt.Errorf("replace covered transaction indexes: scanned=%d covered=%d retained=%d", scanned, covered, retained)
 	}
-	if err := flush(); err != nil {
-		return scanned, deleted, fmt.Errorf("flush deleted transaction indexes: %w", err)
+	if covered == 0 {
+		return scanned, 0, retained, nil
 	}
-	return scanned, deleted, nil
+	if err := batch.Write(); err != nil {
+		return scanned, covered, retained, fmt.Errorf("atomically replace transaction indexes: %w", err)
+	}
+	return scanned, covered, retained, nil
+}
+
+func runTxIndexMaintenanceHeartbeat(writer interface{ Write([]byte) (int, error) }, interval time.Duration, phase string, work func() error) error {
+	if interval <= 0 {
+		return work()
+	}
+	started := time.Now()
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				fmt.Fprintf(writer, "%s elapsed=%s\n", phase, time.Since(started).Round(time.Second))
+			case <-done:
+				return
+			}
+		}
+	}()
+	err := work()
+	close(done)
+	<-stopped
+	return err
 }

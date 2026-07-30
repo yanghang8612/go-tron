@@ -318,6 +318,18 @@ func WriteTransactionLocation(db ethdb.KeyValueWriter, txHash []byte, blockNum u
 	return db.Put(txKey(txHash), value[:])
 }
 
+// WriteEncodedTransactionLocation restores one validated tx-* row without
+// decoding and repacking its location. It is used by the offline cold-index
+// migration to preserve the unarchived hot tail after a namespace DeleteRange.
+func WriteEncodedTransactionLocation(db ethdb.KeyValueWriter, txHash []byte, location uint64) error {
+	if len(txHash) != 32 {
+		return fmt.Errorf("transaction hash length %d, want 32", len(txHash))
+	}
+	var value [8]byte
+	binary.BigEndian.PutUint64(value[:], location)
+	return db.Put(txKey(txHash), value[:])
+}
+
 func readTransactionLocation(db *ChainDB, txHash []byte) *transactionLocation {
 	if db == nil {
 		return nil
@@ -365,6 +377,12 @@ func decodeTransactionLocation(value uint64) transactionLocation {
 
 func transactionIndexLocationBlock(value uint64) uint64 {
 	return decodeTransactionLocation(value).blockNumber
+}
+
+// TransactionIndexLocationBlock returns the block component of the persisted
+// eight-byte tx-* location without exposing the marker/ordinal bit layout.
+func TransactionIndexLocationBlock(value uint64) uint64 {
+	return transactionIndexLocationBlock(value)
 }
 
 func transactionLocationMatches(db *ChainDB, location transactionLocation, hash [32]byte) bool {

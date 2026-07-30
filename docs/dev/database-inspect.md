@@ -220,14 +220,17 @@ gtron db migrate-tx-index \
   --json > /data/gtron/main/tx-index-migration.json
 ```
 
-Building the run scans the live `tx-*` keyspace once in hash order. The run is
+Building the run scans the live `tx-*` keyspace in hash order. The run is
 checksummed, fsynced, fully verified, and atomically added to the manifest
-before any hot row is deleted. A process interruption is safe: rerunning either
-publishes a previously completed run or resumes deletion using the already
-published cold copy. Recent rows above V2 coverage remain in Pebble.
+before any hot row is deleted. A second validation scan plans one atomic Pebble
+batch: delete the complete `tx-*` namespace and reinsert only rows above V2
+coverage. This avoids billions of point tombstones while preserving the hot
+tail. A process interruption is safe: rerunning either publishes a previously
+completed run or repeats the atomic replacement using the already published
+cold copy. Recent rows above V2 coverage remain in Pebble.
 
-By default, point-deleted SST bytes are left for normal background compaction.
+By default, range-deleted SST bytes are left for normal background compaction.
 Use `--compact` only when immediate reclamation justifies several hours of
-heavy offline I/O and the host has sufficient temporary disk space. Once hot
-history has been deleted, do not roll back to a binary without cold-index
-support.
+heavy offline I/O and the host has sufficient temporary disk space. The
+configured `--progress` interval also emits compact heartbeats. Once hot history
+has been deleted, do not roll back to a binary without cold-index support.

@@ -248,6 +248,32 @@ func TestWriteStoredReplayBlockMetadataBatchPreservesExistingBody(t *testing.T) 
 	})
 }
 
+func TestWriteBlockMetadataBatchCanReuseAncientTransactionIndex(t *testing.T) {
+	pb := newBlockProto(24, 72_000)
+	pb.Transactions = []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: 4}}}
+	block := types.NewBlockFromPB(pb)
+	txHash := block.Transactions()[0].Hash()
+	blockData, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := NewMemoryDatabase()
+	if err := WriteBlockMetadataBatchEncodedWithTransactionIndexes(
+		disk, block, blockData, common.Hash{0xfa}, []*corepb.TransactionInfo{{BlockNumber: 24}}, false,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := disk.Has(blockKey(block.Number())); err != nil || !has {
+		t.Fatalf("body exists=%v err=%v", has, err)
+	}
+	if has, err := disk.Has(txInfoBlockKey(block.Number())); err != nil || !has {
+		t.Fatalf("transaction ret exists=%v err=%v", has, err)
+	}
+	if has, err := disk.Has(txKey(txHash[:])); err != nil || has {
+		t.Fatalf("duplicate hot transaction index exists=%v err=%v", has, err)
+	}
+}
+
 func TestWriteBlockMetadataBatchInfoArenaGrowthPreservesRows(t *testing.T) {
 	const txCount = 96
 	pb := newBlockProto(22, 66_000)

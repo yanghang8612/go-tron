@@ -78,16 +78,19 @@ returning another transaction's receipt.
 ## Publication and migration
 
 The first migration is offline. `gtron db migrate-tx-index` scans packed `tx-*`
-rows whose block number is below V2 coverage once, streams completed hash
+rows in hash order and streams entries below V2 coverage into completed hash
 buckets into a temporary immutable index, verifies and fsyncs it, and atomically
-publishes a small manifest. Only then are matching Pebble rows point-deleted;
-`--compact` optionally performs immediate physical reclamation.
+publishes a small manifest. Only then does a validation scan build one atomic
+Pebble batch that range-deletes `tx-*` and reinserts the uncovered hot tail;
+`--compact` optionally performs immediate physical reclamation. This avoids a
+point tombstone and WAL record for every historical transaction.
 
 If execution stops after the run rename but before manifest publication, the
 next invocation verifies and publishes that complete unreferenced run. If it
 stops during Pebble deletion, the manifest already makes every covered lookup
-safe and the next invocation deletes the remaining live rows. Stored replay
-checks cold coverage and does not repopulate migrated `tx-*` rows.
+safe and the next invocation repeats the atomic replacement. Stored replay and
+later historical resync both check cold coverage and do not repopulate migrated
+`tx-*` rows.
 
 Incremental online publication must not rewrite the entire historical index on
 every 65,536-block V2 promotion. New immutable runs are accumulated and merged

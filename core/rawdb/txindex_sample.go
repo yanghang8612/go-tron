@@ -47,34 +47,57 @@ func VisitTransactionIndexesByBlockRange(db ethdb.Iteratee, startBlock, endBlock
 	if visit == nil {
 		return 0, 0, fmt.Errorf("visit transaction indexes: nil visitor")
 	}
+	scanned, err = VisitTransactionIndexes(db, func(sample TransactionIndexSample) error {
+		location := sample.Location
+		block := transactionIndexLocationBlock(location)
+		if block < startBlock || block >= endBlock {
+			return nil
+		}
+		if err := visit(sample); err != nil {
+			return err
+		}
+		selected++
+		return nil
+	})
+	if err != nil {
+		return scanned, selected, err
+	}
+	return scanned, selected, nil
+}
+
+// VisitTransactionIndexes scans every live tx-* row once in full-hash order.
+// It validates the physical key/value shape before exposing each immutable
+// sample. Offline migration uses this to replace the covered prefix while
+// preserving the small unarchived hot tail in one atomic Pebble batch.
+func VisitTransactionIndexes(db ethdb.Iteratee, visit func(TransactionIndexSample) error) (scanned uint64, err error) {
+	if db == nil {
+		return 0, fmt.Errorf("visit transaction indexes: nil database")
+	}
+	if visit == nil {
+		return 0, fmt.Errorf("visit transaction indexes: nil visitor")
+	}
 	it := db.NewIterator(txPrefix, nil)
 	defer it.Release()
 	for it.Next() {
 		key, value := it.Key(), it.Value()
 		scanned++
 		if len(key) != len(txPrefix)+len(TransactionIndexSample{}.Hash) {
-			return scanned, selected, fmt.Errorf("visit transaction indexes: malformed tx key length %d", len(key))
+			return scanned, fmt.Errorf("visit transaction indexes: malformed tx key length %d", len(key))
 		}
 		if len(value) != 8 {
-			return scanned, selected, fmt.Errorf("visit transaction indexes: malformed tx value length %d for %x", len(value), key[len(txPrefix):])
-		}
-		location := binary.BigEndian.Uint64(value)
-		block := transactionIndexLocationBlock(location)
-		if block < startBlock || block >= endBlock {
-			continue
+			return scanned, fmt.Errorf("visit transaction indexes: malformed tx value length %d for %x", len(value), key[len(txPrefix):])
 		}
 		var sample TransactionIndexSample
 		copy(sample.Hash[:], key[len(txPrefix):])
-		sample.Location = location
+		sample.Location = binary.BigEndian.Uint64(value)
 		if err := visit(sample); err != nil {
-			return scanned, selected, err
+			return scanned, err
 		}
-		selected++
 	}
 	if err := it.Error(); err != nil {
-		return scanned, selected, fmt.Errorf("visit transaction indexes: %w", err)
+		return scanned, fmt.Errorf("visit transaction indexes: %w", err)
 	}
-	return scanned, selected, nil
+	return scanned, nil
 }
 
 // SampleTransactionIndexes reads up to Rows tx-* records from evenly spaced,
