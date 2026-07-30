@@ -25,6 +25,17 @@ const baseReadCacheEntryOverhead = 64
 // retaining an unbounded historical high-water mark after the cache empties.
 const baseReadCacheMaxFreeEntries = 2048
 
+// baseReadCacheMaxReferenceCredit lets repeated resident hits accumulate a
+// small amount of CLOCK protection. A single bit loses frequency information:
+// a branch read hundreds of times between two eviction sweeps receives the
+// same protection as a row read once. Historical sync continuously admits new
+// commitment paths, so that policy lets the hot upper trie working set fall
+// out after one scan wave and sends the fold back to Pebble. Three credits keep
+// genuinely hot rows through short admission bursts while remaining strictly
+// bounded; newly admitted/two-hit scan rows still start at zero and are the
+// first eviction candidates.
+const baseReadCacheMaxReferenceCredit = 3
+
 // Recycle only modest, commonly sized unexposed values and keep their total
 // backing below one eighth of each shard's live payload limit. This makes the
 // allocation cache useful for commitment branches without letting a historical
@@ -157,10 +168,10 @@ type baseReadCacheEntry struct {
 	// callback-scoped reads instead hold RLock through consumption and leave it
 	// false, allowing a same-capacity refresh to reuse the bytes in place.
 	exposed atomic.Bool
-	// referenced is set only by a resident cache hit (not admission or flush).
-	// Eviction gives such entries one CLOCK-style second chance, preserving hot
-	// upper commitment branches without promoting two-hit scan noise forever.
-	referenced atomic.Bool
+	// references is a small saturating credit set only by resident cache hits
+	// (not admission or flush). Eviction consumes one credit per CLOCK sweep,
+	// preserving frequency information that a single referenced bit discards.
+	references atomic.Uint32
 	// keyCapacity records the private key allocation size across shorter-key
 	// reuse. It occupies existing alignment padding, so the entry remains in the
 	// same 80-byte allocator size class.
@@ -169,6 +180,30 @@ type baseReadCacheEntry struct {
 	// It grows the 72-byte payload to 80 bytes, which is the allocator size
 	// class the entry already occupied before this field was added.
 	nextFree *baseReadCacheEntry
+}
+
+func (e *baseReadCacheEntry) reference() {
+	for {
+		credit := e.references.Load()
+		if credit >= baseReadCacheMaxReferenceCredit {
+			return
+		}
+		if e.references.CompareAndSwap(credit, credit+1) {
+			return
+		}
+	}
+}
+
+func (e *baseReadCacheEntry) consumeReference() bool {
+	for {
+		credit := e.references.Load()
+		if credit == 0 {
+			return false
+		}
+		if e.references.CompareAndSwap(credit, credit-1) {
+			return true
+		}
+	}
 }
 
 func newBaseReadCache(sizeBytes int, flushAdmissionPrefix ...string) *baseReadCache {
@@ -234,9 +269,7 @@ func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, baseReadCacheEpo
 	s.mu.RLock()
 	e, ok := s.entries[string(key)]
 	if ok {
-		if !e.referenced.Load() {
-			e.referenced.Store(true)
-		}
+		e.reference()
 		value := e.value
 		if value != nil {
 			e.exposed.Store(true)
@@ -263,9 +296,7 @@ func (c *baseReadCache) getAtVersion(key []byte, maxVersion uint64) (value []byt
 	e, ok := s.entries[string(key)]
 	if ok {
 		if e.version <= maxVersion {
-			if !e.referenced.Load() {
-				e.referenced.Store(true)
-			}
+			e.reference()
 			value := e.value
 			if value != nil {
 				e.exposed.Store(true)
@@ -298,9 +329,7 @@ func (c *baseReadCache) viewWithEpoch(key []byte, fn func(value []byte, stable b
 	s.mu.RLock()
 	e, ok := s.entries[string(key)]
 	if ok {
-		if !e.referenced.Load() {
-			e.referenced.Store(true)
-		}
+		e.reference()
 		if e.value == nil {
 			s.mu.RUnlock()
 			return true, false, baseReadCacheEpoch{}, nil
@@ -331,9 +360,7 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 	e, ok := s.entries[string(key)]
 	if ok {
 		if e.version <= maxVersion {
-			if !e.referenced.Load() {
-				e.referenced.Store(true)
-			}
+			e.reference()
 			if e.value == nil {
 				s.mu.RUnlock()
 				return true, false, baseReadCacheEpoch{}, false, nil
@@ -428,7 +455,7 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 	// instead of copying the same key/value again, appending a stale queue entry,
 	// and replacing an entry from the identical durable generation.
 	if current, ok := s.entries[string(key)]; ok {
-		current.referenced.Store(true)
+		current.reference()
 		value := current.value
 		if expose && value != nil {
 			current.exposed.Store(true)
@@ -696,7 +723,7 @@ func retireBaseReadCacheEntry(entry *baseReadCacheEntry) {
 	entry.value = nil
 	entry.live = false
 	entry.exposed.Store(false)
-	entry.referenced.Store(false)
+	entry.references.Store(0)
 }
 
 func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
@@ -711,7 +738,7 @@ func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
 	entry.live = false
 	entry.nonCommitment = false
 	entry.exposed.Store(false)
-	entry.referenced.Store(false)
+	entry.references.Store(0)
 	entry.nextFree = nil
 	if s.freeEntryCount >= baseReadCacheMaxFreeEntries {
 		entry.key = ""
@@ -1013,9 +1040,9 @@ func (s *baseReadCacheShard) evict() {
 }
 
 // evictOne consumes one CLOCK candidate from the requested class. It returns
-// false only when that queue has no remaining token. A referenced entry gets
-// one second chance in the same class; stale invalidation tokens are recycled
-// without touching resident accounting.
+// false only when that queue has no remaining token. A referenced entry spends
+// one bounded credit for another chance in the same class; stale invalidation
+// tokens are recycled without touching resident accounting.
 func (s *baseReadCacheShard) evictOne(other bool) bool {
 	queue := &s.queue
 	head := &s.head
@@ -1031,9 +1058,10 @@ func (s *baseReadCacheShard) evictOne(other bool) bool {
 			continue
 		}
 		if entry.live {
-			if entry.referenced.Swap(false) {
-				// Newly admitted entries start unreferenced, so a one-time two-hit
-				// scan is evicted before a genuinely reused row.
+			if entry.consumeReference() {
+				// Newly admitted entries start without credit, so a one-time two-hit
+				// scan is evicted before a genuinely reused row. Repeated resident
+				// hits can carry a hot row across a short burst of scan admissions.
 				*queue = append(*queue, entry)
 				return true
 			}
