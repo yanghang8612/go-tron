@@ -98,6 +98,15 @@ const (
 	// rows reused while resident are promoted, while untouched rows leave at
 	// the window boundary. The window is part of (not additional to) limit.
 	baseReadCacheWindowBudgetDivisor = 8
+	// Window admission learns from completed FIFO outcomes. Historical sync has
+	// long scan phases where every first-read row is evicted untouched, but can
+	// also move into phases with strong short-term path reuse. Every outcome
+	// batch adjusts first-read sampling by one power of two: dry scans converge
+	// to 1/64 admission, while useful windows recover to full admission.
+	baseReadCacheWindowOutcomeBatch      = 1024
+	baseReadCacheWindowLowReuseDivisor   = 16
+	baseReadCacheWindowHighReuseDivisor  = 4
+	baseReadCacheWindowMaxAdmissionShift = 6
 )
 
 // baseReadCache is a bounded, sharded FIFO/CLOCK cache for values read from
@@ -168,6 +177,13 @@ type baseReadCacheShard struct {
 	nonCommitmentLimit     int
 	trunkLimit             int
 	windowLimit            int
+	windowAdmissionCounter uint32
+	windowProbeCandidates  uint16
+	windowProbeAdmissions  uint16
+	windowOutcomeCount     uint16
+	windowPromotions       uint16
+	windowAdmissionShift   uint8
+	windowHitEvents        atomic.Uint32
 }
 
 // baseReadCacheEpoch identifies one key's direct-mapped invalidation slot and
@@ -432,6 +448,11 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 		if e.version <= maxVersion {
 			e.reference()
 			windowHit = e.window
+			if windowHit {
+				// Only the commitment-session path needs admission feedback. Keeping
+				// this atomic off ordinary Get hits preserves their existing hot path.
+				s.windowHitEvents.Add(1)
+			}
 			if e.value == nil {
 				s.mu.RUnlock()
 				return true, false, windowHit, baseReadCacheEpoch{}, false, nil
@@ -542,7 +563,15 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 			// value in the bounded window. If it is evicted untouched, a later
 			// sighting can enter the main CLOCK directly; a second observation
 			// already present in probation skips the window altogether.
-			window = !s.admit(key, false)
+			if s.admit(key, false) {
+				window = false
+			} else if s.admitWindowFirstRead() {
+				window = true
+			} else {
+				baseReadCacheWindowAdmissionBypassedCounter.Inc(1)
+				s.mu.Unlock()
+				return value, false
+			}
 		} else if !s.admit(key, other) {
 			s.mu.Unlock()
 			return value, false
@@ -967,6 +996,13 @@ func (c *baseReadCache) clear() {
 		s.nonCommitmentUsed = 0
 		s.trunkUsed = 0
 		s.windowUsed = 0
+		s.windowAdmissionCounter = 0
+		s.windowProbeCandidates = 0
+		s.windowProbeAdmissions = 0
+		s.windowOutcomeCount = 0
+		s.windowPromotions = 0
+		s.windowAdmissionShift = 0
+		s.windowHitEvents.Store(0)
 		s.freeEntries = nil
 		s.freeEntryCount = 0
 		s.freeValueBytes = 0
@@ -1209,6 +1245,54 @@ func (s *baseReadCacheShard) promoteWindowEntry(entry *baseReadCacheEntry) {
 	s.forgetAdmissionString(entry.key, false)
 }
 
+func (s *baseReadCacheShard) admitWindowFirstRead() bool {
+	s.windowAdmissionCounter++
+	sampled := s.windowAdmissionShift == 0
+	if !sampled {
+		mask := uint32(1<<s.windowAdmissionShift) - 1
+		sampled = s.windowAdmissionCounter&mask == 0
+	}
+	s.windowProbeCandidates++
+	if sampled {
+		s.windowProbeAdmissions++
+	}
+	if s.windowProbeCandidates >= baseReadCacheWindowOutcomeBatch {
+		hits := s.windowHitEvents.Swap(0)
+		admissions := uint32(s.windowProbeAdmissions)
+		if s.windowAdmissionShift > 0 && admissions > 0 &&
+			hits*baseReadCacheWindowHighReuseDivisor >= admissions {
+			s.windowAdmissionShift--
+			baseReadCacheWindowAdmissionRelaxedCounter.Inc(1)
+		}
+		s.windowProbeCandidates = 0
+		s.windowProbeAdmissions = 0
+	}
+	return sampled
+}
+
+func (s *baseReadCacheShard) observeWindowOutcome(promoted bool) {
+	s.windowOutcomeCount++
+	if promoted {
+		s.windowPromotions++
+	}
+	if s.windowOutcomeCount < baseReadCacheWindowOutcomeBatch {
+		return
+	}
+	promotions := uint32(s.windowPromotions)
+	outcomes := uint32(s.windowOutcomeCount)
+	switch {
+	case promotions*baseReadCacheWindowLowReuseDivisor < outcomes &&
+		s.windowAdmissionShift < baseReadCacheWindowMaxAdmissionShift:
+		s.windowAdmissionShift++
+		baseReadCacheWindowAdmissionThrottledCounter.Inc(1)
+	case promotions*baseReadCacheWindowHighReuseDivisor >= outcomes && s.windowAdmissionShift > 0:
+		s.windowAdmissionShift--
+		baseReadCacheWindowAdmissionRelaxedCounter.Inc(1)
+	}
+	s.windowOutcomeCount = 0
+	s.windowPromotions = 0
+}
+
 // evictCommitmentOne gives the low-confidence first-read window priority over
 // the established CLOCK tail. A window hit promotes rather than evicts the row;
 // the outer loop can then reclaim another window row or eventually sweep the
@@ -1239,6 +1323,7 @@ func (s *baseReadCacheShard) evictWindowOne() bool {
 		}
 		if entry.consumeReference() {
 			s.promoteWindowEntry(entry)
+			s.observeWindowOutcome(true)
 			baseReadCacheWindowPromotedCounter.Inc(1)
 			return true
 		}
@@ -1246,6 +1331,7 @@ func (s *baseReadCacheShard) evictWindowOne() bool {
 		s.used -= entry.charge
 		s.windowUsed -= entry.charge
 		s.recycleEntry(entry)
+		s.observeWindowOutcome(false)
 		baseReadCacheWindowEvictedCounter.Inc(1)
 		return true
 	}

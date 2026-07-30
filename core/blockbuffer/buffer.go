@@ -44,21 +44,24 @@ import (
 var ErrNotFound = errors.New("blockbuffer: not found")
 
 var (
-	flushInputOpsCounter                   = metrics.NewRegisteredCounter("blockbuffer/flush/input/ops", nil)
-	flushOutputOpsCounter                  = metrics.NewRegisteredCounter("blockbuffer/flush/output/ops", nil)
-	flushLayersCounter                     = metrics.NewRegisteredCounter("blockbuffer/flush/layers", nil)
-	flushGroupsCounter                     = metrics.NewRegisteredCounter("blockbuffer/flush/groups", nil)
-	flushCallsCounter                      = metrics.NewRegisteredCounter("blockbuffer/flush/calls", nil)
-	commitmentParentOverlayResolvedCounter = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/overlay/resolved", nil)
-	commitmentParentCacheResolvedCounter   = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/cache/resolved", nil)
-	commitmentParentDurableReadsCounter    = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable/reads", nil)
-	commitmentParentDurableHitsCounter     = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable/hits", nil)
-	commitmentParentTrunkCacheCounter      = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/trunk/cache_resolved", nil)
-	commitmentParentTrunkDurableCounter    = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/trunk/durable_reads", nil)
-	commitmentParentWindowCacheCounter     = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/window/cache_resolved", nil)
-	baseReadCacheWindowPromotedCounter     = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/promoted", nil)
-	baseReadCacheWindowEvictedCounter      = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/evicted", nil)
-	commitmentParentDepthCacheCounters     = [...]*metrics.Counter{
+	flushInputOpsCounter                         = metrics.NewRegisteredCounter("blockbuffer/flush/input/ops", nil)
+	flushOutputOpsCounter                        = metrics.NewRegisteredCounter("blockbuffer/flush/output/ops", nil)
+	flushLayersCounter                           = metrics.NewRegisteredCounter("blockbuffer/flush/layers", nil)
+	flushGroupsCounter                           = metrics.NewRegisteredCounter("blockbuffer/flush/groups", nil)
+	flushCallsCounter                            = metrics.NewRegisteredCounter("blockbuffer/flush/calls", nil)
+	commitmentParentOverlayResolvedCounter       = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/overlay/resolved", nil)
+	commitmentParentCacheResolvedCounter         = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/cache/resolved", nil)
+	commitmentParentDurableReadsCounter          = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable/reads", nil)
+	commitmentParentDurableHitsCounter           = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable/hits", nil)
+	commitmentParentTrunkCacheCounter            = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/trunk/cache_resolved", nil)
+	commitmentParentTrunkDurableCounter          = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/trunk/durable_reads", nil)
+	commitmentParentWindowCacheCounter           = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/window/cache_resolved", nil)
+	baseReadCacheWindowPromotedCounter           = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/promoted", nil)
+	baseReadCacheWindowEvictedCounter            = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/evicted", nil)
+	baseReadCacheWindowAdmissionBypassedCounter  = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_bypassed", nil)
+	baseReadCacheWindowAdmissionThrottledCounter = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_throttled", nil)
+	baseReadCacheWindowAdmissionRelaxedCounter   = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_relaxed", nil)
+	commitmentParentDepthCacheCounters           = [...]*metrics.Counter{
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_5_8/cache_resolved", nil),
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_9_16/cache_resolved", nil),
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_17_32/cache_resolved", nil),

@@ -213,6 +213,72 @@ func TestBaseReadCache_FlushProtectsCommitmentWindowEntryForPromotion(t *testing
 	}
 }
 
+func TestBaseReadCache_WindowAdmissionAdaptsToObservedReuse(t *testing.T) {
+	var shard baseReadCacheShard
+	for wantShift := uint8(1); wantShift <= baseReadCacheWindowMaxAdmissionShift; wantShift++ {
+		for i := 0; i < baseReadCacheWindowOutcomeBatch; i++ {
+			shard.observeWindowOutcome(false)
+		}
+		if shard.windowAdmissionShift != wantShift {
+			t.Fatalf("dry-scan admission shift=%d, want %d", shard.windowAdmissionShift, wantShift)
+		}
+	}
+
+	admitted := 0
+	for i := 0; i < 6400; i++ {
+		if shard.admitWindowFirstRead() {
+			admitted++
+		}
+	}
+	if admitted != 100 {
+		t.Fatalf("1/64 probe admissions=%d, want 100", admitted)
+	}
+
+	// Resident hits relax sampling on the next candidate batch without waiting
+	// for a large, slowly rotating sampled window to reach its FIFO boundary.
+	shard.windowProbeCandidates = 0
+	shard.windowProbeAdmissions = 0
+	shard.windowHitEvents.Store(4)
+	for i := 0; i < baseReadCacheWindowOutcomeBatch; i++ {
+		shard.admitWindowFirstRead()
+	}
+	if got, want := shard.windowAdmissionShift, uint8(baseReadCacheWindowMaxAdmissionShift-1); got != want {
+		t.Fatalf("hit-feedback admission shift=%d, want %d", got, want)
+	}
+
+	for wantShift := int(shard.windowAdmissionShift) - 1; wantShift >= 0; wantShift-- {
+		for i := 0; i < baseReadCacheWindowOutcomeBatch; i++ {
+			shard.observeWindowOutcome(true)
+		}
+		if int(shard.windowAdmissionShift) != wantShift {
+			t.Fatalf("reused-window admission shift=%d, want %d", shard.windowAdmissionShift, wantShift)
+		}
+	}
+}
+
+func TestBaseReadCache_WindowSamplingPreservesTwoHitAdmission(t *testing.T) {
+	const commitmentPrefix = "state-commitment-branch-v1-"
+	const shardIndex = uint32(0)
+	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*4096, baseReadCacheTrunkDepth, commitmentPrefix)
+	s := &c.shards[shardIndex]
+	s.windowAdmissionShift = baseReadCacheWindowMaxAdmissionShift
+	key := testBaseReadCacheKeysForShard(t, commitmentPrefix+"deep-sampled-", shardIndex, 1)[0]
+	value := []byte("durable-parent")
+
+	_, _, epoch := c.getWithEpoch(key)
+	if _, stored := c.setIfEpoch(key, value, epoch); stored {
+		t.Fatal("unsampled first sighting was retained")
+	}
+	_, _, epoch = c.getWithEpoch(key)
+	if _, stored := c.setIfEpoch(key, value, epoch); !stored {
+		t.Fatal("second sighting did not bypass window sampling")
+	}
+	entry := s.entries[string(key)]
+	if entry == nil || entry.window || entry.trunk || entry.nonCommitment {
+		t.Fatalf("second sighting entered wrong cache class: %#v", entry)
+	}
+}
+
 func TestBaseReadCache_ProductionAdmissionHistoryBudget(t *testing.T) {
 	c := newBaseReadCache(128 << 20)
 	var totalSlots int
