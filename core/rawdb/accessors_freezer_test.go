@@ -196,6 +196,18 @@ func TestViewFreezerRawFallsBackToGet(t *testing.T) {
 	}
 }
 
+func TestFrozenBlockRangeBoundsCoverBothNamespaces(t *testing.T) {
+	lo, hi := uint64(7), uint64(19)
+	blockStart, blockLimit := BlockRangeBounds(lo, hi)
+	infoStart, infoLimit := TransactionInfoBlockRangeBounds(lo, hi)
+	if !bytes.Equal(blockStart, blockKey(lo)) || !bytes.Equal(blockLimit, blockKey(hi+1)) {
+		t.Fatalf("block bounds = %x..%x", blockStart, blockLimit)
+	}
+	if !bytes.Equal(infoStart, txInfoBlockKey(lo)) || !bytes.Equal(infoLimit, txInfoBlockKey(hi+1)) {
+		t.Fatalf("tx-info bounds = %x..%x", infoStart, infoLimit)
+	}
+}
+
 func BenchmarkFreezerRawRead(b *testing.B) {
 	db, err := NewPebbleDB(b.TempDir(), 16, 16)
 	if err != nil {

@@ -47,15 +47,13 @@ type viewingFakeChain struct {
 
 type compactionCountingDB struct {
 	ethdb.KeyValueStore
-	count int
-	start []byte
-	limit []byte
+	starts [][]byte
+	limits [][]byte
 }
 
 func (db *compactionCountingDB) Compact(start, limit []byte) error {
-	db.count++
-	db.start = append(db.start[:0], start...)
-	db.limit = append(db.limit[:0], limit...)
+	db.starts = append(db.starts, append([]byte(nil), start...))
+	db.limits = append(db.limits, append([]byte(nil), limit...))
 	return nil
 }
 
@@ -579,8 +577,8 @@ func TestOnePass_SkipsEagerCompactionWhileGated(t *testing.T) {
 	if frozen != 8 {
 		t.Fatalf("frozen = %d, want 8", frozen)
 	}
-	if countingDB.count != 0 {
-		t.Fatalf("compactions while gated = %d, want 0", countingDB.count)
+	if len(countingDB.starts) != 0 {
+		t.Fatalf("compactions while gated = %d, want 0", len(countingDB.starts))
 	}
 	if _, err := fc.db.Get(blockKVKey(7)); err == nil {
 		t.Fatal("gated compaction also skipped the logical range deletion")
@@ -597,8 +595,8 @@ func TestOnePass_SkipsEagerCompactionWhileGated(t *testing.T) {
 	if frozen, err := r.OnePass(); err != nil || frozen != 0 {
 		t.Fatalf("no-op pass: frozen=%d err=%v", frozen, err)
 	}
-	if countingDB.count != 0 {
-		t.Fatalf("no-op pass compacted a skipped range: %d", countingDB.count)
+	if len(countingDB.starts) != 0 {
+		t.Fatalf("no-op pass compacted a skipped range: %d", len(countingDB.starts))
 	}
 
 	// Newly eligible blocks retain the normal explicit-compaction behaviour
@@ -607,12 +605,16 @@ func TestOnePass_SkipsEagerCompactionWhileGated(t *testing.T) {
 	if frozen, err := r.OnePass(); err != nil || frozen != 1 {
 		t.Fatalf("new eligible block: frozen=%d err=%v", frozen, err)
 	}
-	if countingDB.count != 1 {
-		t.Fatalf("compactions after gate reopened = %d, want 1", countingDB.count)
+	if len(countingDB.starts) != 2 {
+		t.Fatalf("compactions after gate reopened = %d, want 2", len(countingDB.starts))
 	}
-	wantStart, wantLimit := rawdb.BlockRangeBounds(8, 8)
-	if !bytes.Equal(countingDB.start, wantStart) || !bytes.Equal(countingDB.limit, wantLimit) {
-		t.Fatalf("compact bounds = %x..%x, want %x..%x", countingDB.start, countingDB.limit, wantStart, wantLimit)
+	wantBodyStart, wantBodyLimit := rawdb.BlockRangeBounds(8, 8)
+	wantInfoStart, wantInfoLimit := rawdb.TransactionInfoBlockRangeBounds(8, 8)
+	if !bytes.Equal(countingDB.starts[0], wantBodyStart) || !bytes.Equal(countingDB.limits[0], wantBodyLimit) {
+		t.Fatalf("body compact bounds = %x..%x, want %x..%x", countingDB.starts[0], countingDB.limits[0], wantBodyStart, wantBodyLimit)
+	}
+	if !bytes.Equal(countingDB.starts[1], wantInfoStart) || !bytes.Equal(countingDB.limits[1], wantInfoLimit) {
+		t.Fatalf("tx-info compact bounds = %x..%x, want %x..%x", countingDB.starts[1], countingDB.limits[1], wantInfoStart, wantInfoLimit)
 	}
 }
 
@@ -873,6 +875,76 @@ func TestOnePass_CrashBetweenSyncAndDelete(t *testing.T) {
 	}
 	if got, err := f.Ancient(rawdbAncientBlocks, 5); err != nil || string(got) != string(blockBytes(5)) {
 		t.Fatalf("ancient block #5 corrupted after reconciliation: %x err=%v", got, err)
+	}
+}
+
+// TestOnePass_ReconcilesInteriorFrozenRows covers the replay leak shape that a
+// highest-frozen-row probe cannot detect: an old replay materialized a middle
+// range after the freezer tip had already advanced, while the current ancient
+// tip itself remained clean.
+func TestOnePass_ReconcilesInteriorFrozenRows(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fc := newFakeChain()
+	for n := uint64(0); n < 10; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(5)
+
+	f, err := rawdbfreezer.NewFreezer(dir, "", false, 2049, FreezerTableSet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+		for n := uint64(0); n < 10; n++ {
+			if err := op.AppendRaw(rawdbAncientBlocks, n, blockBytes(n)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, n, txInfosBytes(n)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientStateRoots, n, stateRootBytes(n)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the frozen range clean, then recreate only an interior duplicate.
+	if err := rawdb.DeleteFrozenBlockRange(fc.db, 0, 9); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeBlockKV(fc.db, 3, blockBytes(3)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTxInfosKV(fc.db, 3, txInfosBytes(3)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fc.db.Get(blockKVKey(9)); err == nil {
+		t.Fatal("precondition: ancient tip unexpectedly remains hot")
+	}
+
+	r := New(fc, &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f}, Config{
+		Enabled:      true,
+		MarginBlocks: 1,
+		BatchBlocks:  10,
+	})
+	if frozen, err := r.OnePass(); err != nil || frozen != 0 {
+		t.Fatalf("OnePass: frozen=%d err=%v", frozen, err)
+	}
+	for _, key := range [][]byte{blockKVKey(3), txInfoBlockKVKey(3)} {
+		if _, err := fc.db.Get(key); err == nil {
+			t.Fatalf("interior duplicate %x remains visible", key)
+		}
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageFreezerHotPrune); err != nil || !ok || progress != 10 {
+		t.Fatalf("prune progress=%d ok=%v err=%v", progress, ok, err)
 	}
 }
 

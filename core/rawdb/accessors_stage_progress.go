@@ -34,6 +34,13 @@ const (
 	StageSnapshotAccessor        StageID = "SnapshotAccessor"
 	StageSnapshotCommitmentFlush StageID = "SnapshotCommitmentFlush"
 	StageSnapshotHotPrune        StageID = "SnapshotHotPrune"
+
+	// StageFreezerHotPrune stores the exclusive ancient count through which
+	// num-keyed block bodies and transaction results have been range-deleted
+	// from the hot database. ResetMutableState clears stage progress, forcing a
+	// full frozen-range reconciliation after any stored replay that may have
+	// materialized historical metadata again.
+	StageFreezerHotPrune StageID = "FreezerHotPrune"
 )
 
 type StageProgress struct {

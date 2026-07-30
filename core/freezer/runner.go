@@ -36,6 +36,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -494,14 +495,19 @@ func (r *Runner) CompactV2Once() (uint64, error) {
 	return compacted, nil
 }
 
-// compactRange performs eager physical reclamation only when the runtime gate
-// permits it. DeleteRange has already made the rows logically absent, so a
-// skipped manual compaction affects temporary disk usage only; Pebble's normal
-// background compactions may reclaim the tombstoned range independently.
-func (r *Runner) compactRange(start, limit []byte) (attempted bool, err error) {
+// compactFrozenBlockRange performs eager physical reclamation for both
+// num-keyed frozen namespaces only when the runtime gate permits it. Evaluate
+// the gate once so one namespace cannot be compacted while the other is skipped
+// if the foreground-idle signal changes between calls.
+func (r *Runner) compactFrozenBlockRange(lo, hi uint64) (attempted bool, err error) {
 	if r.cfg.CompactionAllowed != nil && !r.cfg.CompactionAllowed() {
 		return false, nil
 	}
+	start, limit := rawdb.BlockRangeBounds(lo, hi)
+	if err := r.chain.DB().Compact(start, limit); err != nil {
+		return true, err
+	}
+	start, limit = rawdb.TransactionInfoBlockRangeBounds(lo, hi)
 	return true, r.chain.DB().Compact(start, limit)
 }
 
@@ -545,41 +551,40 @@ func (r *Runner) OnePass() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	// Startup reconciliation (once per process). A crash that landed
-	// between Phase 2 (ancient Sync) and Phase 3 (Pebble DeleteRange) of a
-	// prior pass leaves blocks [x, freezeFromN) durably in ancient but
-	// with their hot `b-`/`tib-` rows still in Pebble. No later pass would
-	// ever revisit them — passes only delete the range they just froze
-	// ([freezeFromN, cap)) — so the frozen-but-undeleted rows would leak
-	// disk space forever. Detect the condition cheaply (the highest frozen
-	// block's hot row still present) and sweep [0, freezeFromN) once. The
-	// expensive DeleteRange+Compact only runs when a crash actually left
-	// rows behind; the clean-restart path pays a single Get.
-	if freezeFromN > 0 && !r.reconciled.Swap(true) {
-		var leftover bool
-		_, viewErr := viewBlockRaw(r.chain, freezeFromN-1, func(raw []byte) error {
-			leftover = len(raw) > 0
-			return nil
-		})
-		if viewErr != nil {
-			return 0, viewErr
+	// Startup reconciliation (once per process). StageFreezerHotPrune is an
+	// exclusive durable cursor recording the ancient range already deleted
+	// from Pebble. A crash between ancient Sync and DeleteRange is repaired by
+	// deleting from the old cursor to freezeFromN. ResetMutableState clears the
+	// cursor together with the other stage rows, so a stored replay that wrote
+	// historical b-*/tib-* rows back into the middle of the frozen range forces
+	// a complete [0, freezeFromN) sweep. The old highest-frozen-row point probe
+	// missed exactly that interior-leak shape once the ancient tip moved beyond
+	// the replay target.
+	//
+	// Reconciliation writes only range tombstones and deliberately does not run
+	// a potentially multi-hour manual compaction on service startup. The offline
+	// prune-frozen-hot command provides immediate, operator-controlled physical
+	// reclamation; Pebble background compaction remains safe in the meantime.
+	if freezeFromN > 0 && !r.reconciled.Load() {
+		prunedTo, ok, err := rawdb.ReadStageProgress(r.chain.DB(), rawdb.StageFreezerHotPrune)
+		if err != nil {
+			return 0, fmt.Errorf("read freezer hot-prune progress: %w", err)
 		}
-		if leftover {
-			leftoverHi := freezeFromN - 1
-			if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), 0, leftoverHi); err != nil {
+		if !ok || prunedTo > freezeFromN {
+			prunedTo = 0
+		}
+		if prunedTo < freezeFromN {
+			if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), prunedTo, freezeFromN-1); err != nil {
 				return 0, err
 			}
-			start, limit := rawdb.BlockRangeBounds(0, leftoverHi)
-			attempted, compactErr := r.compactRange(start, limit)
-			if compactErr != nil {
-				log.Warn("Freezer: crash-leftover compact failed (rows still deleted)",
-					"to", leftoverHi, "err", compactErr)
-			} else if !attempted {
-				log.Debug("Freezer: deferred crash-leftover compact",
-					"to", leftoverHi)
+			if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerHotPrune, freezeFromN); err != nil {
+				return 0, fmt.Errorf("write freezer hot-prune progress: %w", err)
 			}
-			log.Info("Freezer: swept crash-leftover hot rows", "upTo", leftoverHi)
+			log.Info("Freezer: reconciled frozen hot rows",
+				"from", prunedTo, "to", freezeFromN-1,
+				"physicalReclaim", "background-or-offline")
 		}
+		r.reconciled.Store(true)
 	}
 
 	if freezeTo < freezeFromN {
@@ -683,7 +688,14 @@ func (r *Runner) OnePass() (uint64, error) {
 	// `bh-<hash>` / `bsr-<hash>` stay hot per the slice-1 design.
 	frozenHi := capExclusive - 1
 	if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), freezeFromN, frozenHi); err != nil {
+		// AncientCount has already advanced, so the normal freeze path will not
+		// revisit this range. Re-arm reconciliation for the next pass.
+		r.reconciled.Store(false)
 		return 0, err
+	}
+	if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerHotPrune, capExclusive); err != nil {
+		r.reconciled.Store(false)
+		return 0, fmt.Errorf("write freezer hot-prune progress: %w", err)
 	}
 
 	// Phase 4: optionally compact the freed range. Pebble turns DeleteRange into
@@ -692,8 +704,7 @@ func (r *Runner) OnePass() (uint64, error) {
 	// permits it, explicit Compact reclaims the range promptly; otherwise
 	// ordinary Pebble background compaction handles it without making foreground
 	// bulk sync wait on a synchronous I/O burst.
-	start1, limit1 := rawdb.BlockRangeBounds(freezeFromN, frozenHi)
-	attempted, compactErr := r.compactRange(start1, limit1)
+	attempted, compactErr := r.compactFrozenBlockRange(freezeFromN, frozenHi)
 	if compactErr != nil {
 		// Compaction failure is non-fatal: the rows are deleted from a
 		// correctness standpoint (range tombstones above them), the only

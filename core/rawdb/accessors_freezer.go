@@ -187,3 +187,15 @@ func BlockRangeBounds(lo, hi uint64) (start, limit []byte) {
 	}
 	return blockKey(lo), blockKey(endBlock)
 }
+
+// TransactionInfoBlockRangeBounds is BlockRangeBounds for the `tib-<num>`
+// namespace. Both ranges must be compacted after DeleteFrozenBlockRange;
+// compacting only `b-*` leaves the much larger transaction-result tombstones
+// waiting for incidental background compaction.
+func TransactionInfoBlockRangeBounds(lo, hi uint64) (start, limit []byte) {
+	endBlock := hi + 1
+	if endBlock < hi {
+		endBlock = hi
+	}
+	return txInfoBlockKey(lo), txInfoBlockKey(endBlock)
+}
