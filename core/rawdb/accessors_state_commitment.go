@@ -170,15 +170,11 @@ func DecodeStateCommitmentCheckpointValue(data []byte) (*StateCommitmentCheckpoi
 }
 
 func WriteLatestDomainCommitmentRoot(db ethdb.KeyValueWriter, root common.Hash) error {
-	value := root.Bytes()
-	if writer, ok := db.(keyPartsOwnedValueWriter); ok {
-		return writer.PutKeyPartsOwnedValue(stateCommitmentDomainPrefix, latestDomainCommitmentRootKey, value)
-	}
-	return WriteStateCommitmentDomain(db, latestDomainCommitmentRootKey, value)
+	return WriteStateCommitmentDomain(db, latestDomainCommitmentRootKey, root.Bytes())
 }
 
 func ReadLatestDomainCommitmentRoot(db ethdb.KeyValueReader) (common.Hash, bool, error) {
-	value, ok, err := readStateCommitmentDomainNoCopy(db, latestDomainCommitmentRootKey)
+	value, ok, err := ReadStateCommitmentDomain(db, latestDomainCommitmentRootKey)
 	if err != nil || !ok {
 		return common.Hash{}, ok, err
 	}

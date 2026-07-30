@@ -3,60 +3,26 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
 // ancientTxInfos names the freezer table holding marshalled
 // `corepb.TransactionRet` blobs keyed by block number (the same payload
 // `tib-<num>` stores in Pebble).
-const ancientTxInfos = "tx_infos"
+const ancientTxInfos = AncientTxInfosTable
 
-var storedReplayAncientTxInfosCounter = metrics.NewRegisteredCounter("core/stored_replay/ancient_tx_infos", nil)
-
-// HasAncientTransactionInfos reports whether the freezer already owns the
-// canonical block-level TransactionRet row. Stored replay uses this to rebuild
-// the reset tx-hash location index without writing a duplicate hot tib-* value
-// that readers would always bypass in favor of the ancient row.
-func HasAncientTransactionInfos(db *ChainDB, blockNum uint64) bool {
-	if db == nil || db.AncientReader == nil {
-		return false
-	}
-	ok, err := db.HasAncient(ancientTxInfos, blockNum)
-	if err == nil && ok {
-		storedReplayAncientTxInfosCounter.Inc(1)
-		return true
-	}
-	return false
-}
-
-const (
-	transactionLocationMarker      = uint64(1) << 63
-	transactionLocationOrdinalBits = 16
-	transactionLocationMaxBlock    = (uint64(1) << (63 - transactionLocationOrdinalBits)) - 1
-)
-
-type transactionLocation struct {
-	blockNumber uint64
-	ordinal     uint16
-	hasOrdinal  bool
-}
-
-type ancientTransactionIndexReader interface {
-	TransactionIndexCandidates(hash [32]byte) ([]uint64, error)
-	TransactionIndexCoverage() uint64
-}
-
-// WriteTransactionInfo stores a legacy, individually indexed TransactionInfo.
-// New block commits no longer call this function: tx-* locates the block and
-// tib-*/ancient tx_infos owns the canonical TransactionRet payload. It remains
-// exported for old-database compatibility and focused migration tests.
+// WriteTransactionInfo stores a single TransactionInfo indexed by txID.
 func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.TransactionInfo) error {
+	if err := validateTransactionInfoIDForKey(txID, info, "write transaction info"); err != nil {
+		return err
+	}
 	data, err := proto.Marshal(info)
 	if err != nil {
 		return err
@@ -64,413 +30,515 @@ func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.Tra
 	return db.Put(txInfoKey(txID), data)
 }
 
-// ReadTransactionInfo retrieves a TransactionInfo by txID without requiring a
-// duplicate ti-<txID> payload. The compact tx-* reverse index resolves the
-// block number, then the canonical per-block TransactionRet is read from the
-// hot tib-* row or ancient tx_infos table and searched by ID.
-//
-// A direct ti-* lookup remains as the final fallback so binaries can be rolled
-// out before operators prune legacy rows, and so partially migrated databases
-// with a missing tx-* row remain readable.
-func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
+// HasHotTransactionInfo reports whether the legacy per-transaction
+// `ti-<txid>` row exists in the hot key-value store. It deliberately does not
+// consult per-block TransactionRet rows or cold indexes: callers use it only
+// to migrate or prune the redundant physical row without suppressing the
+// receipt-by-ID fallback path.
+func HasHotTransactionInfo(db ethdb.KeyValueReader, txID []byte) (bool, error) {
+	if err := validateTransactionHashKey(txID, "check hot transaction info"); err != nil {
+		return false, err
+	}
 	if db == nil {
+		return false, fmt.Errorf("rawdb: nil database during check hot transaction info")
+	}
+	return db.Has(txInfoKey(txID))
+}
+
+// ReadTransactionInfo retrieves a TransactionInfo by txID. A transaction
+// lookup plus the canonical per-block TransactionRet is authoritative; the
+// legacy hot `ti-<txid>` row is used only when that block-level coverage is
+// unavailable. A ChainDB with a cold chain-index sidecar can resolve txID ->
+// block number and read the TransactionRet payload from ancient storage.
+func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
+	info, ok, err := ReadTransactionInfoStrict(db, txID)
+	if err != nil || !ok {
 		return nil
 	}
-	if location := readTransactionLocation(db, txID); location != nil {
-		if info := readTransactionInfoFromBlock(db, *location, txID); info != nil {
-			return info
+	return info
+}
+
+// ReadTransactionInfoStrict retrieves a TransactionInfo by txID and surfaces
+// malformed hot rows, corrupt per-block TransactionRet payloads, and
+// hash/index mismatches as data errors.
+func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInfo, bool, error) {
+	if err := validateTransactionHashKey(txID, "read transaction info"); err != nil {
+		return nil, false, err
+	}
+	if info, ok, err := readTransactionInfoFromCanonicalBlock(db, txID); err != nil || ok {
+		return info, ok, err
+	}
+	return readLegacyTransactionInfo(db, txID)
+}
+
+func readTransactionInfoFromCanonicalBlock(db *ChainDB, txID []byte) (*corepb.TransactionInfo, bool, error) {
+	blockNum, hasIndex, err := readHotTransactionIndexStrict(db, txID)
+	if err != nil {
+		return nil, hasIndex, err
+	}
+	hasHotIndex := hasIndex
+	if !hasIndex {
+		blockNum, hasIndex, err = ReadTransactionIndexStrict(db, txID)
+		if err != nil || !hasIndex {
+			return nil, hasIndex, err
 		}
 	}
-	data, err := db.Get(txInfoKey(txID))
+	infos, hasInfos, err := ReadTransactionInfosByBlockStrict(db, blockNum)
+	if err != nil || !hasInfos {
+		return nil, hasInfos, err
+	}
+	if hasHotIndex {
+		if info, ok, err := transactionInfoByReadableBlockPosition(db, txID, blockNum, infos, "read transaction info"); err != nil || ok {
+			return info, ok, err
+		}
+		if info, ok, err := transactionInfoByExplicitIDPosition(txID, blockNum, infos, "read transaction info by explicit id"); err != nil || ok {
+			return info, ok, err
+		}
+	}
+	lookup, ok, err := readColdTransactionIndexByHash(db, txID)
 	if err != nil {
-		return nil
+		return nil, false, err
+	}
+	if ok && lookup.BlockNum == blockNum {
+		matchesBlock, err := coldTransactionPositionMatchesReadableBlock(db, txID, lookup)
+		if err != nil {
+			return nil, true, err
+		}
+		if !matchesBlock {
+			return nil, true, fmt.Errorf("rawdb: cold transaction index position block %d tx %d does not match transaction %x", lookup.BlockNum, lookup.TxIndex, txID)
+		}
+		if int(lookup.TxIndex) < len(infos) {
+			info := infos[lookup.TxIndex]
+			if len(info.GetId()) == 0 && transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
+				return info, true, nil
+			}
+			if err := validateTransactionInfoIDForKey(txID, info, "read transaction info by cold position"); err != nil {
+				return info, true, err
+			}
+			if transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
+				return info, true, nil
+			}
+			return info, true, fmt.Errorf("rawdb: transaction info block number %d does not match indexed block %d during read transaction info by cold position", info.BlockNumber, blockNum)
+		}
+		return nil, true, fmt.Errorf("rawdb: cold transaction index position %d outside transaction info coverage %d for block %d", lookup.TxIndex, len(infos), blockNum)
+	}
+	if info, ok, err := transactionInfoByReadableBlockPosition(db, txID, blockNum, infos, "read transaction info"); err != nil || ok {
+		return info, ok, err
+	}
+	return transactionInfoByExplicitIDPosition(txID, blockNum, infos, "read transaction info by explicit id")
+}
+
+func readLegacyTransactionInfo(db *ChainDB, txID []byte) (*corepb.TransactionInfo, bool, error) {
+	data, ok, err := readValueThenVerifyMiss(db, txInfoKey(txID), fmt.Sprintf("transaction info %x", txID), nil)
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	info := &corepb.TransactionInfo{}
 	if err := proto.Unmarshal(data, info); err != nil {
-		return nil
+		return nil, true, err
 	}
-	return info
+	if err := validateTransactionInfoIDForKey(txID, info, "read legacy transaction info"); err != nil {
+		return info, true, err
+	}
+	return info, true, nil
 }
 
-func readTransactionInfoFromBlock(db *ChainDB, location transactionLocation, txID []byte) *corepb.TransactionInfo {
-	if data, ok := readAncient(db, ancientTxInfos, location.blockNumber); ok {
-		return findTransactionInfoAtLocation(db, data, location, txID)
-	}
-	var info *corepb.TransactionInfo
-	_, _ = viewRawValue(db.KeyValueStore, txInfoBlockKey(location.blockNumber), func(data []byte) error {
-		info = findTransactionInfoAtLocation(db, data, location, txID)
-		return nil
-	})
-	return info
-}
-
-func findTransactionInfoAtLocation(db *ChainDB, data []byte, location transactionLocation, txID []byte) *corepb.TransactionInfo {
-	if location.hasOrdinal {
-		info := transactionInfoAtOrdinal(data, uint64(location.ordinal))
-		if info != nil && (len(info.Id) == 0 || bytes.Equal(info.Id, txID)) {
-			if len(info.Id) == 0 {
-				info.Id = append([]byte(nil), txID...)
-			}
-			return info
+func transactionInfoByExplicitIDPosition(txID []byte, blockNum uint64, infos []*corepb.TransactionInfo, context string) (*corepb.TransactionInfo, bool, error) {
+	for _, info := range infos {
+		if info == nil || len(info.Id) == 0 {
+			continue
 		}
-		// A mismatched packed locator should not hide an otherwise valid legacy
-		// row. The ID scan is corruption/partial-upgrade fallback, not the hot
-		// path for newly written indexes.
-		return findTransactionInfoInRet(data, txID)
+		if !bytes.Equal(info.Id, txID) {
+			continue
+		}
+		if err := validateTransactionInfoIDForKey(txID, info, context); err != nil {
+			return info, true, err
+		}
+		if transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
+			return info, true, nil
+		}
+		return info, true, fmt.Errorf("rawdb: transaction info block number %d does not match indexed block %d during %s", info.BlockNumber, blockNum, context)
 	}
-	if info := findTransactionInfoInRet(data, txID); info != nil {
-		return info
+	return nil, false, nil
+}
+
+func validateTransactionInfoIDForKey(txID []byte, info *corepb.TransactionInfo, context string) error {
+	if info == nil {
+		return fmt.Errorf("rawdb: nil transaction info during %s", context)
 	}
-	ordinal, ok := transactionOrdinalInBlock(db, location.blockNumber, txID)
-	if !ok {
-		return nil
-	}
-	info := transactionInfoAtOrdinal(data, ordinal)
-	if info == nil || (len(info.Id) > 0 && !bytes.Equal(info.Id, txID)) {
-		return nil
+	if err := validateTransactionHashKey(txID, context); err != nil {
+		return err
 	}
 	if len(info.Id) == 0 {
-		info.Id = append([]byte(nil), txID...)
+		return nil
 	}
-	return info
+	if len(info.Id) != common.HashLength {
+		return fmt.Errorf("rawdb: transaction info id length %d during %s", len(info.Id), context)
+	}
+	if !bytes.Equal(info.Id, txID) {
+		return fmt.Errorf("rawdb: transaction info id %x does not match key %x during %s", info.Id, txID, context)
+	}
+	return nil
 }
 
-func transactionOrdinalInBlock(db *ChainDB, blockNum uint64, txID []byte) (uint64, bool) {
-	block := ReadBlock(db, blockNum)
-	if block == nil {
-		return 0, false
+func readColdTransactionIndexByHash(db *ChainDB, txHash []byte) (ChainIndexTxLookup, bool, error) {
+	var zero ChainIndexTxLookup
+	if db == nil || db.chainIndex == nil || len(txHash) != common.HashLength {
+		return zero, false, nil
 	}
-	for i, tx := range block.Transactions() {
+	reader, ok := db.chainIndex.(ChainIndexTxPositionReader)
+	if !ok {
+		return zero, false, nil
+	}
+	var hash common.Hash
+	copy(hash[:], txHash)
+	lookup, ok, err := reader.TransactionIndexByHash(hash)
+	if err != nil {
+		return zero, false, err
+	}
+	if !ok {
+		return zero, false, nil
+	}
+	return lookup, true, nil
+}
+
+func coldTransactionPositionMatchesReadableBlock(db *ChainDB, txID []byte, lookup ChainIndexTxLookup) (bool, error) {
+	block, ok, err := ReadBlockStrict(db, lookup.BlockNum)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return true, nil
+	}
+	txs := block.Transactions()
+	txIndex := int(lookup.TxIndex)
+	if txIndex < 0 || txIndex >= len(txs) {
+		return false, nil
+	}
+	tx := txs[txIndex]
+	if tx == nil {
+		return false, nil
+	}
+	txHash := tx.Hash()
+	return bytes.Equal(txHash[:], txID), nil
+}
+
+func transactionIndexInReadableBlock(db *ChainDB, txID []byte, blockNum uint64) (uint32, bool, error) {
+	block, ok, err := ReadBlockStrict(db, blockNum)
+	if err != nil {
+		return 0, true, err
+	}
+	if !ok {
+		return 0, false, nil
+	}
+	for txIndex, tx := range block.Transactions() {
+		if tx == nil {
+			continue
+		}
+		txHash := tx.Hash()
+		if !bytes.Equal(txHash[:], txID) {
+			continue
+		}
+		if uint64(txIndex) > uint64(^uint32(0)) {
+			return 0, true, fmt.Errorf("rawdb: transaction index %d exceeds uint32 for block %d", txIndex, blockNum)
+		}
+		return uint32(txIndex), true, nil
+	}
+	return 0, true, fmt.Errorf("rawdb: transaction index points to block %d but transaction %x is not in the readable block body", blockNum, txID)
+}
+
+func transactionInfoByReadableBlockPosition(db *ChainDB, txID []byte, blockNum uint64, infos []*corepb.TransactionInfo, context string) (*corepb.TransactionInfo, bool, error) {
+	block, ok, err := ReadBlockStrict(db, blockNum)
+	if err != nil {
+		return nil, true, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	txs := block.Transactions()
+	if err := ValidateTransactionInfosForBlock(blockNum, txs, infos, context); err != nil {
+		return nil, true, err
+	}
+	for txIndex, tx := range txs {
+		if tx == nil {
+			continue
+		}
 		hash := tx.Hash()
-		if bytes.Equal(hash[:], txID) {
-			return uint64(i), true
-		}
-	}
-	return 0, false
-}
-
-// findTransactionInfoInRet scans the TransactionRet wire envelope and only
-// unmarshals the matching nested TransactionInfo. A mainnet block contains
-// about 54 transactions on average, so avoiding a full repeated-message
-// unmarshal keeps single-transaction wallet lookups inexpensive.
-func findTransactionInfoInRet(data, txID []byte) *corepb.TransactionInfo {
-	for len(data) > 0 {
-		number, wireType, tagLen := protowire.ConsumeTag(data)
-		if tagLen < 0 {
-			return nil
-		}
-		data = data[tagLen:]
-		if number == 3 && wireType == protowire.BytesType {
-			payload, fieldLen := protowire.ConsumeBytes(data)
-			if fieldLen < 0 {
-				return nil
-			}
-			if transactionInfoWireIDEqual(payload, txID) {
-				info := &corepb.TransactionInfo{}
-				if err := proto.Unmarshal(payload, info); err != nil {
-					return nil
-				}
-				return info
-			}
-			data = data[fieldLen:]
+		if !bytes.Equal(hash[:], txID) {
 			continue
 		}
-		fieldLen := protowire.ConsumeFieldValue(number, wireType, data)
-		if fieldLen < 0 {
-			return nil
-		}
-		data = data[fieldLen:]
+		return infos[txIndex], true, nil
 	}
-	return nil
+	return nil, true, fmt.Errorf("rawdb: transaction index points to block %d but transaction %x is not in the readable block body", blockNum, txID)
 }
 
-func transactionInfoAtOrdinal(data []byte, wanted uint64) *corepb.TransactionInfo {
-	var ordinal uint64
-	for len(data) > 0 {
-		number, wireType, tagLen := protowire.ConsumeTag(data)
-		if tagLen < 0 {
-			return nil
-		}
-		data = data[tagLen:]
-		if number == 3 && wireType == protowire.BytesType {
-			payload, fieldLen := protowire.ConsumeBytes(data)
-			if fieldLen < 0 {
-				return nil
-			}
-			if ordinal == wanted {
-				info := &corepb.TransactionInfo{}
-				if err := proto.Unmarshal(payload, info); err != nil {
-					return nil
-				}
-				return info
-			}
-			ordinal++
-			data = data[fieldLen:]
-			continue
-		}
-		fieldLen := protowire.ConsumeFieldValue(number, wireType, data)
-		if fieldLen < 0 {
-			return nil
-		}
-		data = data[fieldLen:]
-	}
-	return nil
-}
-
-func transactionInfoWireIDEqual(data, txID []byte) bool {
-	for len(data) > 0 {
-		number, wireType, tagLen := protowire.ConsumeTag(data)
-		if tagLen < 0 {
-			return false
-		}
-		data = data[tagLen:]
-		if number == 1 && wireType == protowire.BytesType {
-			id, fieldLen := protowire.ConsumeBytes(data)
-			return fieldLen >= 0 && bytes.Equal(id, txID)
-		}
-		fieldLen := protowire.ConsumeFieldValue(number, wireType, data)
-		if fieldLen < 0 {
-			return false
-		}
-		data = data[fieldLen:]
-	}
-	return false
-}
-
-// WriteTransactionInfosByBlock stores all TransactionInfos for a block.
+// WriteTransactionInfosByBlock stores all TransactionInfos for a block without
+// changing their payload. Use WriteCompactTransactionInfosByBlock only when a
+// matching canonical block body is retained to reconstruct omitted IDs.
 func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo) error {
-	ret := &corepb.TransactionRet{
-		BlockNumber:     int64(blockNum),
-		Transactioninfo: infos,
+	if err := validateTransactionInfosForKey(blockNum, infos, "write transaction infos by block"); err != nil {
+		return err
 	}
-	if len(infos) > 0 {
-		ret.BlockTimeStamp = infos[0].BlockTimeStamp
-	}
-	data, err := proto.Marshal(ret)
+	return writeTransactionInfosByBlock(db, blockNum, infos, transactionInfosBlockTimestamp(infos))
+}
+
+func writeTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo, blockTimestamp int64) error {
+	data, err := marshalTransactionInfosByBlock(blockNum, infos, blockTimestamp)
 	if err != nil {
 		return err
 	}
 	return db.Put(txInfoBlockKey(blockNum), data)
 }
 
+func marshalTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo, blockTimestamp int64) ([]byte, error) {
+	ret := &corepb.TransactionRet{
+		BlockNumber:     int64(blockNum),
+		BlockTimeStamp:  blockTimestamp,
+		Transactioninfo: infos,
+	}
+	data, err := proto.Marshal(ret)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// WriteCompactTransactionInfosByBlock stores a block's receipt payload without
+// per-transaction Id, block number, or timestamp fields. The ID duplicates the
+// canonical block body's transaction hash at the same position, while the
+// block metadata is retained once in TransactionRet. Canonical execution and
+// verified rebuilds can therefore save that space while readers reconstruct it.
+// The input slice and its messages are never modified.
+func WriteCompactTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo) error {
+	compact, blockTimestamp, err := compactTransactionInfosByBlock(blockNum, infos, "write compact transaction infos by block")
+	if err != nil {
+		return err
+	}
+	return writeTransactionInfosByBlock(db, blockNum, compact, blockTimestamp)
+}
+
+func compactTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo, context string) ([]*corepb.TransactionInfo, int64, error) {
+	if err := validateTransactionInfosForKey(blockNum, infos, context); err != nil {
+		return nil, 0, err
+	}
+	compact := make([]*corepb.TransactionInfo, len(infos))
+	var blockTimestamp int64
+	for i, info := range infos {
+		if info.BlockTimeStamp != 0 {
+			if blockTimestamp != 0 && blockTimestamp != info.BlockTimeStamp {
+				return nil, 0, fmt.Errorf("rawdb: transaction info block timestamp %d at block %d index %d during %s does not match timestamp %d", info.BlockTimeStamp, blockNum, i, context, blockTimestamp)
+			}
+			blockTimestamp = info.BlockTimeStamp
+		}
+		cloned := proto.Clone(info).(*corepb.TransactionInfo)
+		cloned.Id = nil
+		cloned.BlockNumber = 0
+		cloned.BlockTimeStamp = 0
+		compact[i] = cloned
+	}
+	return compact, blockTimestamp, nil
+}
+
+func transactionInfosBlockTimestamp(infos []*corepb.TransactionInfo) int64 {
+	if len(infos) == 0 {
+		return 0
+	}
+	return infos[0].BlockTimeStamp
+}
+
 // ReadTransactionInfosByBlock retrieves all TransactionInfos for a block
 // number. Consults the freezer first when the requested block is below
 // the ancient cutoff; falls back to `tib-<num>` in Pebble otherwise.
 func ReadTransactionInfosByBlock(db *ChainDB, blockNum uint64) []*corepb.TransactionInfo {
-	if data, ok := readAncient(db, ancientTxInfos, blockNum); ok {
-		return decodeTransactionInfosByBlock(db, blockNum, data)
-	}
-	data, err := db.Get(txInfoBlockKey(blockNum))
-	if err != nil {
+	infos, ok, err := ReadTransactionInfosByBlockStrict(db, blockNum)
+	if err != nil || !ok {
 		return nil
 	}
-	return decodeTransactionInfosByBlock(db, blockNum, data)
+	return infos
 }
 
-func decodeTransactionInfosByBlock(db *ChainDB, blockNum uint64, data []byte) []*corepb.TransactionInfo {
+// ReadTransactionInfosByBlockStrict retrieves the per-block TransactionRet row
+// and reports whether a source row existed. Unlike ReadTransactionInfosByBlock,
+// malformed or block-number-mismatched payloads are returned as errors so
+// rebuild/snapshot publishers can fail loudly instead of treating corrupt
+// coverage as an ordinary miss.
+func ReadTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.TransactionInfo, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read transaction infos by block")
+	}
+	if data, ok, err := readAncientTransactionInfosStrict(db, blockNum); err != nil || ok {
+		if err != nil {
+			return nil, ok, err
+		}
+		infos, err := decodeTransactionRetForBlock(data, blockNum)
+		return infos, true, err
+	}
+	data, ok, err := readValueThenVerifyMiss(db, txInfoBlockKey(blockNum), fmt.Sprintf("transaction infos for block %d", blockNum), nil)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	infos, err := decodeTransactionRetForBlock(data, blockNum)
+	return infos, true, err
+}
+
+func readAncientTransactionInfosStrict(db *ChainDB, blockNum uint64) ([]byte, bool, error) {
+	if db == nil || db.AncientReader == nil {
+		return nil, false, nil
+	}
+	data, err := db.Ancient(ancientTxInfos, blockNum)
+	if err != nil {
+		if errors.Is(err, ErrNotInAncient) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
+func decodeTransactionRetForBlock(data []byte, blockNum uint64) ([]*corepb.TransactionInfo, error) {
 	ret := &corepb.TransactionRet{}
 	if err := proto.Unmarshal(data, ret); err != nil {
-		return nil
+		return nil, err
 	}
-	needsIDs := false
-	for _, info := range ret.Transactioninfo {
-		if info != nil && len(info.Id) == 0 {
-			needsIDs = true
-			break
+	if !transactionInfoBlockNumberMatches(ret.BlockNumber, blockNum) {
+		return nil, fmt.Errorf("rawdb: transaction ret block number %d does not match key block %d", ret.BlockNumber, blockNum)
+	}
+	for txIndex, info := range ret.Transactioninfo {
+		if info != nil && info.BlockNumber == 0 {
+			info.BlockNumber = int64(blockNum)
+		}
+		if info != nil && info.BlockTimeStamp == 0 && ret.BlockTimeStamp != 0 {
+			info.BlockTimeStamp = ret.BlockTimeStamp
+		}
+		if err := validateTransactionInfoForBlockKey(blockNum, txIndex, info, "read transaction infos by block"); err != nil {
+			return nil, err
 		}
 	}
-	if !needsIDs {
-		return ret.Transactioninfo
-	}
-	block := ReadBlock(db, blockNum)
-	if block == nil || len(block.Transactions()) != len(ret.Transactioninfo) {
-		return ret.Transactioninfo
-	}
-	for i, tx := range block.Transactions() {
-		if ret.Transactioninfo[i] != nil && len(ret.Transactioninfo[i].Id) == 0 {
-			hash := tx.Hash()
-			ret.Transactioninfo[i].Id = append([]byte(nil), hash[:]...)
-		}
-	}
-	return ret.Transactioninfo
+	return ret.Transactioninfo, nil
 }
 
-// WriteTransactionIndex stores a tx-hash to block-number mapping.
-func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint64) error {
-	num := make([]byte, 8)
-	binary.BigEndian.PutUint64(num, blockNum)
-	return db.Put(txKey(txHash), num)
+func transactionInfoBlockNumberMatches(got int64, want uint64) bool {
+	if got == 0 {
+		return true
+	}
+	if got < 0 {
+		return false
+	}
+	return uint64(got) == want
 }
 
-// WriteTransactionLocation stores the block number and transaction ordinal in
-// the existing 8-byte tx-* value. It is exported for offline upgrades of
-// legacy reverse indexes; normal block commits call it indirectly.
-func WriteTransactionLocation(db ethdb.KeyValueWriter, txHash []byte, blockNum uint64, ordinal int) error {
-	packed, err := EncodeTransactionLocation(blockNum, ordinal)
-	if err != nil {
-		return err
-	}
-	var value [8]byte
-	binary.BigEndian.PutUint64(value[:], packed)
-	return db.Put(txKey(txHash), value[:])
-}
-
-// EncodeTransactionLocation returns the persisted block/ordinal value used by
-// both hot tx-* rows and immutable transaction-index runs.
-func EncodeTransactionLocation(blockNum uint64, ordinal int) (uint64, error) {
-	if blockNum > transactionLocationMaxBlock {
-		return 0, fmt.Errorf("transaction location block %d exceeds %d", blockNum, transactionLocationMaxBlock)
-	}
-	if ordinal < 0 || ordinal > int(^uint16(0)) {
-		return 0, fmt.Errorf("transaction location ordinal %d exceeds %d", ordinal, ^uint16(0))
-	}
-	return transactionLocationMarker | blockNum<<transactionLocationOrdinalBits | uint64(ordinal), nil
-}
-
-// WriteEncodedTransactionLocation restores one validated tx-* row without
-// decoding and repacking its location. It is used by the offline cold-index
-// migration to preserve the unarchived hot tail after a namespace DeleteRange.
-func WriteEncodedTransactionLocation(db ethdb.KeyValueWriter, txHash []byte, location uint64) error {
-	if len(txHash) != 32 {
-		return fmt.Errorf("transaction hash length %d, want 32", len(txHash))
-	}
-	var value [8]byte
-	binary.BigEndian.PutUint64(value[:], location)
-	return db.Put(txKey(txHash), value[:])
-}
-
-func readTransactionLocation(db *ChainDB, txHash []byte) *transactionLocation {
-	if db == nil {
-		return nil
-	}
-	data, err := db.Get(txKey(txHash))
-	if err == nil && len(data) == 8 {
-		location := decodeTransactionLocation(binary.BigEndian.Uint64(data))
-		return &location
-	}
-	if len(txHash) != 32 || db.AncientReader == nil {
-		return nil
-	}
-	reader, ok := db.AncientReader.(ancientTransactionIndexReader)
-	if !ok {
-		return nil
-	}
-	var hash [32]byte
-	copy(hash[:], txHash)
-	candidates, err := reader.TransactionIndexCandidates(hash)
-	if err != nil {
-		return nil
-	}
-	for _, encoded := range candidates {
-		location := decodeTransactionLocation(encoded)
-		if location.blockNumber >= reader.TransactionIndexCoverage() {
-			continue
-		}
-		if transactionLocationMatches(db, location, hash) {
-			return &location
+func validateTransactionInfosForKey(blockNum uint64, infos []*corepb.TransactionInfo, context string) error {
+	for txIndex, info := range infos {
+		if err := validateTransactionInfoForBlockKey(blockNum, txIndex, info, context); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func decodeTransactionLocation(value uint64) transactionLocation {
-	if value&transactionLocationMarker == 0 {
-		return transactionLocation{blockNumber: value}
+func validateTransactionInfoForBlockKey(blockNum uint64, txIndex int, info *corepb.TransactionInfo, context string) error {
+	if info == nil {
+		return fmt.Errorf("rawdb: nil transaction info at block %d index %d during %s", blockNum, txIndex, context)
 	}
-	return transactionLocation{
-		blockNumber: (value &^ transactionLocationMarker) >> transactionLocationOrdinalBits,
-		ordinal:     uint16(value),
-		hasOrdinal:  true,
+	if !transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
+		return fmt.Errorf("rawdb: transaction info block number %d at block %d index %d during %s", info.BlockNumber, blockNum, txIndex, context)
 	}
+	if len(info.Id) != 0 && len(info.Id) != common.HashLength {
+		return fmt.Errorf("rawdb: transaction info id length %d at block %d index %d during %s", len(info.Id), blockNum, txIndex, context)
+	}
+	return nil
 }
 
-func transactionIndexLocationBlock(value uint64) uint64 {
-	return decodeTransactionLocation(value).blockNumber
-}
-
-// TransactionIndexLocationBlock returns the block component of the persisted
-// eight-byte tx-* location without exposing the marker/ordinal bit layout.
-func TransactionIndexLocationBlock(value uint64) uint64 {
-	return transactionIndexLocationBlock(value)
-}
-
-func transactionLocationMatches(db *ChainDB, location transactionLocation, hash [32]byte) bool {
-	block := ReadBlock(db, location.blockNumber)
-	if block == nil {
-		return false
+// PopulateTransactionInfoIDsForBlock restores omitted compact receipt IDs from
+// the matching canonical transaction positions. Callers receive decoded
+// per-block payloads and may safely expose the populated values to APIs.
+func PopulateTransactionInfoIDsForBlock(blockNum uint64, txs []*types.Transaction, infos []*corepb.TransactionInfo, context string) error {
+	if err := ValidateTransactionInfosForBlock(blockNum, txs, infos, context); err != nil {
+		return err
 	}
-	txs := block.Transactions()
-	if location.hasOrdinal {
-		ordinal := int(location.ordinal)
-		return ordinal < len(txs) && txs[ordinal].Hash() == hash
-	}
-	for _, tx := range txs {
-		if tx.Hash() == hash {
-			return true
+	for txIndex, info := range infos {
+		if len(info.Id) != 0 {
+			continue
 		}
+		hash := txs[txIndex].Hash()
+		info.Id = append([]byte(nil), hash[:]...)
 	}
-	return false
+	return nil
 }
 
-// HasAncientTransactionIndex reports whether a manifest-selected immutable
-// transaction-index run covers blockNum. Stored replay uses it to avoid
-// recreating historical tx-* rows that were safely removed after publication.
-func HasAncientTransactionIndex(db *ChainDB, blockNum uint64) bool {
-	if db == nil || db.AncientReader == nil {
-		return false
+// WriteTransactionIndex stores a tx-hash to block-number mapping.
+func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint64) error {
+	if err := validateTransactionHashKey(txHash, "write transaction index"); err != nil {
+		return err
 	}
-	reader, ok := db.AncientReader.(ancientTransactionIndexReader)
-	return ok && blockNum < reader.TransactionIndexCoverage()
+	num := make([]byte, 8)
+	binary.BigEndian.PutUint64(num, blockNum)
+	return db.Put(txKey(txHash), num)
 }
 
-// ReadTransactionIndex retrieves the block number for a tx hash. Recent rows
-// resolve from Pebble; V2-covered history falls through to the immutable cold
-// index and verifies the full hash against the canonical block body.
+// ReadTransactionIndex retrieves the block number for a tx hash. The hot
+// `tx-<hash>` row is preferred; on a miss, an attached cold chain-index sidecar
+// can resolve historical tx hashes without keeping every old reverse index in
+// Pebble.
 func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
-	location := readTransactionLocation(db, txHash)
-	if location == nil {
+	num, ok, err := ReadTransactionIndexStrict(db, txHash)
+	if err != nil || !ok {
 		return nil
 	}
-	num := location.blockNumber
 	return &num
+}
+
+// ReadTransactionIndexStrict retrieves the block number for a tx hash and
+// surfaces malformed hot rows or cold sidecar lookup errors. Boundary checks
+// use this to decide solid/PBFT visibility from the lookup index before reading
+// full transaction or receipt payloads.
+func ReadTransactionIndexStrict(db *ChainDB, txHash []byte) (uint64, bool, error) {
+	if err := validateTransactionHashKey(txHash, "read transaction index"); err != nil {
+		return 0, false, err
+	}
+	if num, ok, err := readHotTransactionIndexStrict(db, txHash); err != nil || ok {
+		return num, ok, err
+	}
+	if db != nil && db.chainIndex != nil && len(txHash) == common.HashLength {
+		var hash common.Hash
+		copy(hash[:], txHash)
+		num, ok, err := db.chainIndex.TransactionBlockNumberByHash(hash)
+		if err != nil || !ok {
+			return 0, ok, err
+		}
+		return num, true, nil
+	}
+	return 0, false, nil
+}
+
+func readHotTransactionIndexStrict(db ethdb.KeyValueReader, txHash []byte) (uint64, bool, error) {
+	if db == nil {
+		return 0, false, fmt.Errorf("rawdb: nil database during read transaction index")
+	}
+	key := txKey(txHash)
+	exists, err := db.Has(key)
+	if err != nil {
+		return 0, false, err
+	}
+	if !exists {
+		return 0, false, nil
+	}
+	data, err := db.Get(key)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(data) != 8 {
+		return 0, true, fmt.Errorf("rawdb: transaction index %x has length %d, want 8", txHash, len(data))
+	}
+	return binary.BigEndian.Uint64(data), true, nil
 }
 
 // DeleteTransactionInfo removes the per-tx TransactionInfo row for txID.
 func DeleteTransactionInfo(db ethdb.KeyValueWriter, txID []byte) error {
-	return db.Delete(txInfoKey(txID))
-}
-
-// HasLegacyTransactionInfos reports whether the deprecated ti-* keyspace still
-// contains at least one live row.
-func HasLegacyTransactionInfos(db ethdb.Iteratee) (bool, error) {
-	it := db.NewIterator(txInfoPrefix, nil)
-	defer it.Release()
-	found := it.Next()
-	if err := it.Error(); err != nil {
-		return false, err
+	if err := validateTransactionHashKey(txID, "delete transaction info"); err != nil {
+		return err
 	}
-	return found, nil
-}
-
-// DeleteLegacyTransactionInfos hides the complete deprecated ti-* keyspace
-// with one range tombstone. It deliberately does not compact: physical
-// reclamation can require hundreds of GiB of I/O and is an explicit operator
-// choice exposed by CompactLegacyTransactionInfos.
-func DeleteLegacyTransactionInfos(db ethdb.KeyValueRangeDeleter) error {
-	start, limit := LegacyTransactionInfoRangeBounds()
-	return db.DeleteRange(start, limit)
-}
-
-// CompactLegacyTransactionInfos physically reclaims obsolete ti-* SST data.
-func CompactLegacyTransactionInfos(db ethdb.Compacter) error {
-	start, limit := LegacyTransactionInfoRangeBounds()
-	return db.Compact(start, limit)
-}
-
-// LegacyTransactionInfoRangeBounds returns the half-open ti-* key range. The
-// upper bound is ti. and therefore cannot overlap the tib-* block rows.
-func LegacyTransactionInfoRangeBounds() (start, limit []byte) {
-	return append([]byte(nil), txInfoPrefix...), prefixUpperBound(txInfoPrefix)
+	return db.Delete(txInfoKey(txID))
 }
 
 // DeleteTransactionInfosByBlock removes the per-block TransactionRet row for blockNum.
@@ -480,18 +548,19 @@ func DeleteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64) err
 
 // DeleteTransactionIndex removes the tx-hash→block-number reverse index row.
 func DeleteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte) error {
+	if err := validateTransactionHashKey(txHash, "delete transaction index"); err != nil {
+		return err
+	}
 	return db.Delete(txKey(txHash))
 }
 
-// TransactionIndexRangeBounds returns the half-open tx-* key range for
-// offline compaction after selected historical rows have been point-deleted.
-func TransactionIndexRangeBounds() (start, limit []byte) {
-	return append([]byte(nil), txPrefix...), prefixUpperBound(txPrefix)
+func validateTransactionHashKey(hash []byte, context string) error {
+	if !validTransactionHashKey(hash) {
+		return fmt.Errorf("rawdb: transaction hash length %d during %s", len(hash), context)
+	}
+	return nil
 }
 
-// CompactTransactionIndexes rewrites the complete tx-* range so point-deleted
-// historical rows release their SST space immediately.
-func CompactTransactionIndexes(db ethdb.Compacter) error {
-	start, limit := TransactionIndexRangeBounds()
-	return db.Compact(start, limit)
+func validTransactionHashKey(hash []byte) bool {
+	return len(hash) == common.HashLength
 }

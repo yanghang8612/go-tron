@@ -1,9 +1,12 @@
 package rawdb
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 )
 
@@ -69,6 +72,17 @@ func TestDelegatedResourceV2BucketsAndAggregate(t *testing.T) {
 	if agg == nil || agg.FrozenBalanceForBandwidth != 300 || agg.ExpireTimeForBandwidth != 5000 {
 		t.Fatalf("unexpected aggregate: %+v", agg)
 	}
+	strict, ok, err := ReadDelegatedResourceStrict(db, from, to)
+	if err != nil || !ok || strict == nil || strict.FrozenBalanceForBandwidth != 300 || strict.ExpireTimeForBandwidth != 5000 {
+		t.Fatalf("strict aggregate = %+v/%v/%v, want bandwidth 300 expiry 5000", strict, ok, err)
+	}
+	unlocked, ok, err := ReadDelegatedResourceV2Strict(db, from, to, false)
+	if err != nil || !ok || unlocked == nil || unlocked.FrozenBalanceForBandwidth != 100 {
+		t.Fatalf("strict unlocked = %+v/%v/%v, want bandwidth 100", unlocked, ok, err)
+	}
+	if legacy, ok, err := ReadDelegatedResourceLegacyStrict(db, from, to); err != nil || ok || legacy != nil {
+		t.Fatalf("strict legacy absent = %+v/%v/%v, want nil/false/nil", legacy, ok, err)
+	}
 }
 
 func TestUnlockExpiredDelegatedResource(t *testing.T) {
@@ -111,6 +125,30 @@ func TestDelegationIndex(t *testing.T) {
 	if got[0] != receivers[0] || got[1] != receivers[1] {
 		t.Fatalf("unexpected receivers: %v", got)
 	}
+	strict, ok, err := ReadDelegationIndexStrict(db, from)
+	if err != nil || !ok || len(strict) != 2 || strict[0] != receivers[0] || strict[1] != receivers[1] {
+		t.Fatalf("strict delegation index = %v/%v/%v, want receivers", strict, ok, err)
+	}
+	if err := db.Put(delegationIndexKey(from[:]), nil); err != nil {
+		t.Fatal(err)
+	}
+	if strict, ok, err := ReadDelegationIndexStrict(db, from); err != nil || !ok || len(strict) != 0 {
+		t.Fatalf("strict empty delegation index = %v/%v/%v, want empty/true/nil", strict, ok, err)
+	}
+}
+
+func TestDelegationIndexRejectsMalformedBytes(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	from := common.Address{0x41, 0x01}
+	if err := db.Put(delegationIndexKey(from[:]), []byte("short")); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadDelegationIndex(db, from); got != nil {
+		t.Fatalf("delegation index = %v, want nil for malformed bytes", got)
+	}
+	if got, ok, err := ReadDelegationIndexStrict(db, from); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "length 5") {
+		t.Fatalf("strict delegation index malformed = %v/%v/%v, want length error", got, ok, err)
+	}
 }
 
 func TestDelegationNotFound(t *testing.T) {
@@ -122,5 +160,97 @@ func TestDelegationNotFound(t *testing.T) {
 	}
 	if ReadDelegationIndex(db, from) != nil {
 		t.Fatal("expected nil")
+	}
+	if got, ok, err := ReadDelegatedResourceStrict(db, from, to); err != nil || ok || got != nil {
+		t.Fatalf("strict delegation absent = %+v/%v/%v, want nil/false/nil", got, ok, err)
+	}
+	if got, ok, err := ReadDelegationIndexStrict(db, from); err != nil || ok || got != nil {
+		t.Fatalf("strict delegation index absent = %v/%v/%v, want nil/false/nil", got, ok, err)
+	}
+}
+
+func TestDelegatedResourceStrictSurfacesStorageErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	from := common.Address{0x41, 0x01}
+	to := common.Address{0x41, 0x02}
+	if err := WriteDelegatedResource(db, from, to, &DelegatedResource{From: from, To: to, FrozenBalanceForEnergy: 5}); err != nil {
+		t.Fatal(err)
+	}
+
+	readers := []struct {
+		name string
+		read func(ethdb.KeyValueReader) (bool, error)
+	}{
+		{
+			name: "legacy",
+			read: func(r ethdb.KeyValueReader) (bool, error) {
+				_, ok, err := ReadDelegatedResourceLegacyStrict(r, from, to)
+				return ok, err
+			},
+		},
+		{
+			name: "aggregate",
+			read: func(r ethdb.KeyValueReader) (bool, error) {
+				_, ok, err := ReadDelegatedResourceStrict(r, from, to)
+				return ok, err
+			},
+		},
+		{
+			name: "index",
+			read: func(r ethdb.KeyValueReader) (bool, error) {
+				_, ok, err := ReadDelegationIndexStrict(r, from)
+				return ok, err
+			},
+		},
+	}
+
+	if err := WriteDelegationIndex(db, from, []common.Address{to}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range readers {
+		t.Run(tc.name+"/has", func(t *testing.T) {
+			ok, err := tc.read(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")})
+			if err == nil || ok || !strings.Contains(err.Error(), "presence") {
+				t.Fatalf("has error: ok=%v err=%v, want presence error", ok, err)
+			}
+		})
+		t.Run(tc.name+"/get", func(t *testing.T) {
+			ok, err := tc.read(failingStateDomainReader{reader: db, getErr: errors.New("get boom")})
+			if err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+				t.Fatalf("get error: ok=%v err=%v, want get error", ok, err)
+			}
+		})
+	}
+}
+
+func TestDelegatedResourceStrictSurfacesCorruptRows(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	from := common.Address{0x41, 0x01}
+	to := common.Address{0x41, 0x02}
+
+	if err := db.Put(delegationKey(from[:], to[:]), []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadDelegatedResourceLegacy(db, from, to); got != nil {
+		t.Fatalf("compat corrupt legacy = %+v, want nil", got)
+	}
+	if got, ok, err := ReadDelegatedResourceLegacyStrict(db, from, to); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode delegated resource legacy") {
+		t.Fatalf("strict corrupt legacy = %+v/%v/%v, want decode error", got, ok, err)
+	}
+	if got, ok, err := ReadDelegatedResourceStrict(db, from, to); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode delegated resource legacy") {
+		t.Fatalf("strict corrupt aggregate = %+v/%v/%v, want decode error", got, ok, err)
+	}
+
+	if err := db.Delete(delegationKey(from[:], to[:])); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(delegationKeyV2(from[:], to[:], true), []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadDelegatedResourceV2(db, from, to, true); got != nil {
+		t.Fatalf("compat corrupt v2 = %+v, want nil", got)
+	}
+	if got, ok, err := ReadDelegatedResourceV2Strict(db, from, to, true); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode delegated resource v2") {
+		t.Fatalf("strict corrupt v2 = %+v/%v/%v, want decode error", got, ok, err)
 	}
 }

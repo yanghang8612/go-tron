@@ -2,6 +2,8 @@ package snapshots
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -68,6 +70,9 @@ func TestCommitmentBranchSegmentRoundTrip(t *testing.T) {
 	if ref.Size == 0 || ref.Checksum == "" {
 		t.Fatalf("ref missing size/checksum: %+v", ref)
 	}
+	if ref.Path == "commitment/branches-10-10.json" {
+		t.Fatalf("branch segment path %q is not content addressed", ref.Path)
+	}
 
 	got := map[string][]byte{}
 	seg, err := OpenCommitmentBranchSegment(dir, ref)
@@ -92,6 +97,55 @@ func TestCommitmentBranchSegmentRoundTrip(t *testing.T) {
 		if !bytes.Equal(gv, wv) {
 			t.Fatalf("round-trip prefix %x value = %x, want %x", []byte(k), gv, wv)
 		}
+	}
+}
+
+func TestCommitmentBranchSegmentRejectsTrailingJSON(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	seedStagedBranchRows(t, db)
+	dir := t.TempDir()
+	ref, err := BuildCommitmentBranchSegmentFromDB(db, dir, "commitment/branches-10-10.json", 10, 10)
+	if err != nil {
+		t.Fatalf("build branch segment: %v", err)
+	}
+
+	path := filepath.Join(dir, ref.Path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read branch segment: %v", err)
+	}
+	data = append(data, '\n', '{', '}')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("append trailing JSON: %v", err)
+	}
+	ref.Size = uint64(len(data))
+	ref.Checksum = checksumBytes(data)
+	if _, err := OpenCommitmentBranchSegment(dir, ref); err == nil {
+		t.Fatal("opened branch segment with trailing JSON")
+	}
+}
+
+func TestCommitmentBranchSegmentIterationCanStopEarly(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	seedStagedBranchRows(t, db)
+	dir := t.TempDir()
+	ref, err := BuildCommitmentBranchSegmentFromDB(db, dir, "commitment/branches-10-10.json", 10, 10)
+	if err != nil {
+		t.Fatalf("build branch segment: %v", err)
+	}
+	seg, err := OpenCommitmentBranchSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("open branch segment: %v", err)
+	}
+	called := 0
+	if err := seg.Iterate(func(_, _ []byte) (bool, error) {
+		called++
+		return false, nil
+	}); err != nil {
+		t.Fatalf("iterate branch segment: %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("callback count = %d, want 1", called)
 	}
 }
 
@@ -200,6 +254,46 @@ func TestCommitmentBranchEmptyKeyspaceSkipped(t *testing.T) {
 			t.Fatalf("expected no CommitmentBranch ref, found: %+v", ref)
 		}
 	}
+}
+
+func TestCommitmentBranchLatestBuildScansBranchKeyspaceOnce(t *testing.T) {
+	db := &countingCommitmentBranchBuildDB{KeyValueStore: rawdb.NewMemoryDatabase()}
+	seedStagedBranchRows(t, db)
+
+	refs, err := buildCommitmentBranchLatest(db, t.TempDir(), 0, 10, 10, "commitment/branches-10-10.json")
+	if err != nil {
+		t.Fatalf("build commitment branch latest: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("built refs = %d, want 1", len(refs))
+	}
+	if db.iterators != 1 {
+		t.Fatalf("branch builder opened %d iterators, want 1", db.iterators)
+	}
+}
+
+func TestCommitmentBranchLatestBuildSkipsEmptyAfterOneScan(t *testing.T) {
+	db := &countingCommitmentBranchBuildDB{KeyValueStore: rawdb.NewMemoryDatabase()}
+	refs, err := buildCommitmentBranchLatest(db, t.TempDir(), 0, 10, 10, "commitment/branches-10-10.json")
+	if err != nil {
+		t.Fatalf("build empty commitment branch latest: %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("built refs = %d, want 0", len(refs))
+	}
+	if db.iterators != 1 {
+		t.Fatalf("empty branch builder opened %d iterators, want 1", db.iterators)
+	}
+}
+
+type countingCommitmentBranchBuildDB struct {
+	ethdb.KeyValueStore
+	iterators int
+}
+
+func (db *countingCommitmentBranchBuildDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	db.iterators++
+	return db.KeyValueStore.NewIterator(prefix, start)
 }
 
 // TestCommitmentBranchSourceComposes proves CommitmentBranchSource serves the

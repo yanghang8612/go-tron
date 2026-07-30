@@ -13,11 +13,15 @@ import (
 )
 
 func (s *StateDB) readSystemDelegation(key []byte) ([]byte, bool) {
-	raw, ok, err := s.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key)
+	raw, ok, err := s.readSystemDelegationWithError(key)
 	if err != nil || !ok {
 		return nil, false
 	}
 	return raw, true
+}
+
+func (s *StateDB) readSystemDelegationWithError(key []byte) ([]byte, bool, error) {
+	return s.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key)
 }
 
 func (s *StateDB) writeSystemDelegation(key, value []byte) error {
@@ -52,12 +56,56 @@ func (s *StateDB) ReadDelegatedResource(from, to tcommon.Address) *rawdb.Delegat
 	return out
 }
 
+func (s *StateDB) ReadDelegatedResourceStrict(from, to tcommon.Address) (*rawdb.DelegatedResource, bool, error) {
+	var out *rawdb.DelegatedResource
+	seen := false
+	merge := func(dr *rawdb.DelegatedResource, ok bool, err error) (bool, error) {
+		if err != nil {
+			return ok, err
+		}
+		if !ok || dr == nil {
+			return false, nil
+		}
+		seen = true
+		if out == nil {
+			out = &rawdb.DelegatedResource{From: from, To: to}
+		}
+		out.FrozenBalanceForBandwidth += dr.FrozenBalanceForBandwidth
+		out.FrozenBalanceForEnergy += dr.FrozenBalanceForEnergy
+		if dr.ExpireTimeForBandwidth > out.ExpireTimeForBandwidth {
+			out.ExpireTimeForBandwidth = dr.ExpireTimeForBandwidth
+		}
+		if dr.ExpireTimeForEnergy > out.ExpireTimeForEnergy {
+			out.ExpireTimeForEnergy = dr.ExpireTimeForEnergy
+		}
+		return true, nil
+	}
+	if rowOK, err := merge(s.ReadDelegatedResourceLegacyStrict(from, to)); err != nil {
+		return nil, seen || rowOK, err
+	}
+	if rowOK, err := merge(s.ReadDelegatedResourceV2Strict(from, to, false)); err != nil {
+		return nil, seen || rowOK, err
+	}
+	if rowOK, err := merge(s.ReadDelegatedResourceV2Strict(from, to, true)); err != nil {
+		return nil, seen || rowOK, err
+	}
+	return out, seen, nil
+}
+
 func (s *StateDB) ReadDelegatedResourceLegacy(from, to tcommon.Address) *rawdb.DelegatedResource {
 	return s.readDelegatedResourceByKey(rawdb.DelegatedResourceStateKey(from, to))
 }
 
+func (s *StateDB) ReadDelegatedResourceLegacyStrict(from, to tcommon.Address) (*rawdb.DelegatedResource, bool, error) {
+	return s.readDelegatedResourceByKeyStrict(rawdb.DelegatedResourceStateKey(from, to), "delegated resource legacy")
+}
+
 func (s *StateDB) ReadDelegatedResourceV2(from, to tcommon.Address, locked bool) *rawdb.DelegatedResource {
 	return s.readDelegatedResourceByKey(rawdb.DelegatedResourceV2StateKey(from, to, locked))
+}
+
+func (s *StateDB) ReadDelegatedResourceV2Strict(from, to tcommon.Address, locked bool) (*rawdb.DelegatedResource, bool, error) {
+	return s.readDelegatedResourceByKeyStrict(rawdb.DelegatedResourceV2StateKey(from, to, locked), fmt.Sprintf("delegated resource v2 locked=%v", locked))
 }
 
 func (s *StateDB) readDelegatedResourceByKey(key []byte) *rawdb.DelegatedResource {
@@ -70,6 +118,18 @@ func (s *StateDB) readDelegatedResourceByKey(key []byte) *rawdb.DelegatedResourc
 		return nil
 	}
 	return dr
+}
+
+func (s *StateDB) readDelegatedResourceByKeyStrict(key []byte, context string) (*rawdb.DelegatedResource, bool, error) {
+	data, ok, err := s.readSystemDelegationWithError(key)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	dr := &rawdb.DelegatedResource{}
+	if err := json.Unmarshal(data, dr); err != nil {
+		return nil, true, fmt.Errorf("decode %s: %w", context, err)
+	}
+	return dr, true, nil
 }
 
 func (s *StateDB) WriteDelegatedResourceLegacy(from, to tcommon.Address, dr *rawdb.DelegatedResource) error {
@@ -142,12 +202,31 @@ func (s *StateDB) ReadDelegationIndex(from tcommon.Address) []tcommon.Address {
 	if !ok || len(data) == 0 {
 		return nil
 	}
+	if len(data)%tcommon.AddressLength != 0 {
+		return nil
+	}
 	count := len(data) / tcommon.AddressLength
 	addrs := make([]tcommon.Address, count)
 	for i := range addrs {
 		copy(addrs[i][:], data[i*tcommon.AddressLength:])
 	}
 	return addrs
+}
+
+func (s *StateDB) ReadDelegationIndexStrict(from tcommon.Address) ([]tcommon.Address, error) {
+	data, ok, err := s.readSystemDelegationWithError(rawdb.DelegationIndexStateKey(from))
+	if err != nil || !ok || len(data) == 0 {
+		return nil, err
+	}
+	if len(data)%tcommon.AddressLength != 0 {
+		return nil, fmt.Errorf("delegation index for %x has malformed length %d, want multiple of %d", from, len(data), tcommon.AddressLength)
+	}
+	count := len(data) / tcommon.AddressLength
+	addrs := make([]tcommon.Address, count)
+	for i := range addrs {
+		copy(addrs[i][:], data[i*tcommon.AddressLength:])
+	}
+	return addrs, nil
 }
 
 func (s *StateDB) ReadDrAccountIndexLegacy(account []byte) *corepb.DelegatedResourceAccountIndex {
@@ -160,6 +239,10 @@ func (s *StateDB) ReadDrAccountIndexLegacy(account []byte) *corepb.DelegatedReso
 		return nil
 	}
 	return rec
+}
+
+func (s *StateDB) ReadDrAccountIndexLegacyStrict(account []byte) (*corepb.DelegatedResourceAccountIndex, bool, error) {
+	return s.readDrAccountIndexByKeyStrict(rawdb.DrAccountIndexLegacyStateKey(account), "dr account index legacy")
 }
 
 func (s *StateDB) writeDrAccountIndexLegacy(account []byte, rec *corepb.DelegatedResourceAccountIndex) error {
@@ -178,20 +261,26 @@ func (s *StateDB) WriteDrAccountIndexLegacyDelegate(from, to []byte) error {
 	if len(from) == 0 || len(to) == 0 {
 		return fmt.Errorf("dr account index: empty address (from=%d to=%d)", len(from), len(to))
 	}
-	fromRec := s.ReadDrAccountIndexLegacy(from)
+	fromRec, _, err := s.ReadDrAccountIndexLegacyStrict(from)
+	if err != nil {
+		return err
+	}
 	if fromRec == nil {
 		fromRec = &corepb.DelegatedResourceAccountIndex{Account: append([]byte(nil), from...)}
 	}
-	fromRec.ToAccounts = appendUniqueDelegationAccount(fromRec.ToAccounts, to)
-	if err := s.writeDrAccountIndexLegacy(from, fromRec); err != nil {
+	toRec, _, err := s.ReadDrAccountIndexLegacyStrict(to)
+	if err != nil {
 		return err
 	}
-
-	toRec := s.ReadDrAccountIndexLegacy(to)
 	if toRec == nil {
 		toRec = &corepb.DelegatedResourceAccountIndex{Account: append([]byte(nil), to...)}
 	}
+
+	fromRec.ToAccounts = appendUniqueDelegationAccount(fromRec.ToAccounts, to)
 	toRec.FromAccounts = appendUniqueDelegationAccount(toRec.FromAccounts, from)
+	if err := s.writeDrAccountIndexLegacy(from, fromRec); err != nil {
+		return err
+	}
 	return s.writeDrAccountIndexLegacy(to, toRec)
 }
 
@@ -199,13 +288,21 @@ func (s *StateDB) WriteDrAccountIndexLegacyUnDelegate(from, to []byte) error {
 	if len(from) == 0 || len(to) == 0 {
 		return fmt.Errorf("dr account index: empty address")
 	}
-	if fromRec := s.ReadDrAccountIndexLegacy(from); fromRec != nil {
+	fromRec, _, err := s.ReadDrAccountIndexLegacyStrict(from)
+	if err != nil {
+		return err
+	}
+	toRec, _, err := s.ReadDrAccountIndexLegacyStrict(to)
+	if err != nil {
+		return err
+	}
+	if fromRec != nil {
 		fromRec.ToAccounts = removeDelegationAccount(fromRec.ToAccounts, to)
 		if err := s.writeDrAccountIndexLegacy(from, fromRec); err != nil {
 			return err
 		}
 	}
-	if toRec := s.ReadDrAccountIndexLegacy(to); toRec != nil {
+	if toRec != nil {
 		toRec.FromAccounts = removeDelegationAccount(toRec.FromAccounts, from)
 		return s.writeDrAccountIndexLegacy(to, toRec)
 	}
@@ -213,7 +310,10 @@ func (s *StateDB) WriteDrAccountIndexLegacyUnDelegate(from, to []byte) error {
 }
 
 func (s *StateDB) ConvertDrAccountIndexLegacy(account []byte) error {
-	rec := s.ReadDrAccountIndexLegacy(account)
+	rec, _, err := s.ReadDrAccountIndexLegacyStrict(account)
+	if err != nil {
+		return err
+	}
 	if rec == nil {
 		return nil
 	}
@@ -284,6 +384,22 @@ func (s *StateDB) ReadDrAccountIndexEntry(dir rawdb.DrAccIdxDirection, anchor, c
 		return nil
 	}
 	return &rec
+}
+
+func (s *StateDB) ReadDrAccountIndexEntryStrict(dir rawdb.DrAccIdxDirection, anchor, counterparty []byte) (*corepb.DelegatedResourceAccountIndex, bool, error) {
+	return s.readDrAccountIndexByKeyStrict(rawdb.DrAccountIndexStateKey(dir, anchor, counterparty), fmt.Sprintf("dr account index entry dir=%d", dir))
+}
+
+func (s *StateDB) readDrAccountIndexByKeyStrict(key []byte, context string) (*corepb.DelegatedResourceAccountIndex, bool, error) {
+	data, ok, err := s.readSystemDelegationWithError(key)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var rec corepb.DelegatedResourceAccountIndex
+	if err := proto.Unmarshal(data, &rec); err != nil {
+		return nil, true, fmt.Errorf("decode %s: %w", context, err)
+	}
+	return &rec, true, nil
 }
 
 func (s *StateDB) IterateDrAccountIndex(dir rawdb.DrAccIdxDirection, anchor []byte, fn func(counterparty []byte, rec *corepb.DelegatedResourceAccountIndex) error) error {

@@ -3,13 +3,16 @@ package state
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 var benchmarkCycleReward int64
@@ -155,6 +158,28 @@ func TestRewardStoreRoundTripAcrossRoot(t *testing.T) {
 	if got := reopened.ReadEndCycle(addr); got != 9 {
 		t.Fatalf("end cycle: got %d, want 9", got)
 	}
+
+	if got, ok, err := reopened.ReadCycleRewardStrict(8, addr); err != nil || !ok || got != 130 {
+		t.Fatalf("strict cycle reward = (%d,%v,%v), want (130,true,nil)", got, ok, err)
+	}
+	if got, ok, err := reopened.ReadCycleVoteStrict(8, addr); err != nil || !ok || got != 456 {
+		t.Fatalf("strict cycle vote = (%d,%v,%v), want (456,true,nil)", got, ok, err)
+	}
+	if got, ok, err := reopened.ReadWitnessVIStrict(8, addr); err != nil || !ok || got.Cmp(vi) != 0 {
+		t.Fatalf("strict witness VI = (%s,%v,%v), want (%s,true,nil)", got, ok, err, vi)
+	}
+	if got, ok, err := reopened.ReadCycleBrokerageStrict(8, addr); err != nil || !ok || got != 33 {
+		t.Fatalf("strict brokerage = (%d,%v,%v), want (33,true,nil)", got, ok, err)
+	}
+	if got, ok, err := reopened.ReadCycleAccountVoteStrict(8, addr); err != nil || !ok || !bytes.Equal(got, snap) {
+		t.Fatalf("strict account vote = (%x,%v,%v), want (%x,true,nil)", got, ok, err, snap)
+	}
+	if got, ok, err := reopened.ReadBeginCycleStrict(addr); err != nil || !ok || got != 8 {
+		t.Fatalf("strict begin cycle = (%d,%v,%v), want (8,true,nil)", got, ok, err)
+	}
+	if got, ok, err := reopened.ReadEndCycleStrict(addr); err != nil || !ok || got != 9 {
+		t.Fatalf("strict end cycle = (%d,%v,%v), want (9,true,nil)", got, ok, err)
+	}
 }
 
 func TestRewardStoreAddCycleRewardsBatch(t *testing.T) {
@@ -187,6 +212,115 @@ func TestRewardStoreAddCycleRewardsBatch(t *testing.T) {
 	}
 }
 
+func TestRewardStoreStrictBatchSurfacesMalformedReward(t *testing.T) {
+	statedb := newTestStateDB(t)
+	addr := testAddr(0x4c)
+
+	if err := statedb.SystemKVPut(kvdomains.SystemReward, rawdb.CycleRewardStateKey(8, addr.Bytes()), []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("write malformed cycle reward: %v", err)
+	}
+	if got, err := statedb.ReadCycleRewardsStrict(8, []tcommon.Address{addr}); err == nil {
+		t.Fatalf("ReadCycleRewardsStrict malformed error = nil, got %v", got)
+	} else if !strings.Contains(err.Error(), "decode cycle reward") || !strings.Contains(err.Error(), "length 2, want 8") {
+		t.Fatalf("ReadCycleRewardsStrict malformed error = %v, want decode length context", err)
+	}
+	if got := statedb.ReadCycleRewards(8, []tcommon.Address{addr}); len(got) != 0 {
+		t.Fatalf("legacy ReadCycleRewards malformed = %v, want empty map", got)
+	}
+}
+
+func TestRewardStoreStrictSurfacesMalformedRows(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      func([]byte) []byte
+		write    []byte
+		strictOK func(*StateDB, []byte) error
+		legacyOK func(*StateDB, []byte) bool
+	}{
+		{
+			name:  "cycle reward",
+			key:   func(addr []byte) []byte { return rawdb.CycleRewardStateKey(3, addr) },
+			write: []byte{0x01},
+			strictOK: func(s *StateDB, addr []byte) error {
+				_, ok, err := s.ReadCycleRewardStrict(3, addr)
+				if err == nil || ok {
+					return fmt.Errorf("err=%v ok=%v", err, ok)
+				}
+				return nil
+			},
+			legacyOK: func(s *StateDB, addr []byte) bool { return s.ReadCycleReward(3, addr) == 0 },
+		},
+		{
+			name:  "cycle vote",
+			key:   func(addr []byte) []byte { return rawdb.CycleVoteStateKey(3, addr) },
+			write: []byte{0x01},
+			strictOK: func(s *StateDB, addr []byte) error {
+				_, ok, err := s.ReadCycleVoteStrict(3, addr)
+				if err == nil || ok {
+					return fmt.Errorf("err=%v ok=%v", err, ok)
+				}
+				return nil
+			},
+			legacyOK: func(s *StateDB, addr []byte) bool { return s.ReadCycleVote(3, addr) == rawdb.RewardRemark },
+		},
+		{
+			name:  "cycle brokerage",
+			key:   func(addr []byte) []byte { return rawdb.CycleBrokerageStateKey(3, addr) },
+			write: []byte{0x01, 0x02, 0x03},
+			strictOK: func(s *StateDB, addr []byte) error {
+				_, ok, err := s.ReadCycleBrokerageStrict(3, addr)
+				if err == nil || ok {
+					return fmt.Errorf("err=%v ok=%v", err, ok)
+				}
+				return nil
+			},
+			legacyOK: func(s *StateDB, addr []byte) bool { return s.ReadCycleBrokerage(3, addr) == rawdb.DefaultBrokerage },
+		},
+		{
+			name:  "begin cycle",
+			key:   rawdb.BeginCycleStateKey,
+			write: []byte{0x01},
+			strictOK: func(s *StateDB, addr []byte) error {
+				_, ok, err := s.ReadBeginCycleStrict(addr)
+				if err == nil || ok {
+					return fmt.Errorf("err=%v ok=%v", err, ok)
+				}
+				return nil
+			},
+			legacyOK: func(s *StateDB, addr []byte) bool { return s.ReadBeginCycle(addr) == 0 },
+		},
+		{
+			name:  "end cycle",
+			key:   rawdb.EndCycleStateKey,
+			write: []byte{0x01},
+			strictOK: func(s *StateDB, addr []byte) error {
+				_, ok, err := s.ReadEndCycleStrict(addr)
+				if err == nil || ok {
+					return fmt.Errorf("err=%v ok=%v", err, ok)
+				}
+				return nil
+			},
+			legacyOK: func(s *StateDB, addr []byte) bool { return s.ReadEndCycle(addr) == rawdb.RewardRemark },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statedb := newTestStateDB(t)
+			addr := testAddr(0x4d).Bytes()
+			if err := statedb.SystemKVPut(kvdomains.SystemReward, tt.key(addr), tt.write); err != nil {
+				t.Fatalf("write malformed %s: %v", tt.name, err)
+			}
+			if err := tt.strictOK(statedb, addr); err != nil {
+				t.Fatalf("%s strict malformed err = %v, want non-nil decode error", tt.name, err)
+			}
+			if !tt.legacyOK(statedb, addr) {
+				t.Fatalf("%s legacy reader did not preserve default behavior", tt.name)
+			}
+		})
+	}
+}
+
 func TestRewardStoreAddCycleRewardsFinalStacksDirtyValues(t *testing.T) {
 	statedb := newTestStateDB(t)
 	addr := testAddr(0x48)
@@ -207,5 +341,43 @@ func TestRewardStoreAddCycleRewardsFinalStacksDirtyValues(t *testing.T) {
 	}
 	if got := reopened.ReadCycleReward(9, addr.Bytes()); got != 12 {
 		t.Fatalf("reward = %d, want 12", got)
+	}
+}
+
+func TestCycleBrokerageAtDefaultsMissingHistory(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x49)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(*StateDB) {})
+
+	got, err := f.reader().CycleBrokerageAt(9, addr.Bytes(), 1)
+	if err != nil {
+		t.Fatalf("CycleBrokerageAt missing history error = %v", err)
+	}
+	if got != int64(rawdb.DefaultBrokerage) {
+		t.Fatalf("CycleBrokerageAt missing history = %d, want %d", got, rawdb.DefaultBrokerage)
+	}
+}
+
+func TestCycleBrokerageAtSurfacesMalformedLength(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x4a)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SystemKVPut(kvdomains.SystemReward, rawdb.CycleBrokerageStateKey(9, addr.Bytes()), []byte{0x01, 0x02, 0x03}); err != nil {
+			t.Fatalf("write malformed brokerage history: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	got, err := f.reader().CycleBrokerageAt(9, addr.Bytes(), 1)
+	if err == nil {
+		t.Fatal("CycleBrokerageAt malformed history error = nil")
+	}
+	if got != 0 {
+		t.Fatalf("CycleBrokerageAt malformed history = %d, want 0", got)
+	}
+	if !strings.Contains(err.Error(), "decode cycle brokerage at block 1") || !strings.Contains(err.Error(), "length 3, want 4") {
+		t.Fatalf("CycleBrokerageAt malformed history error = %v, want decode length context", err)
 	}
 }

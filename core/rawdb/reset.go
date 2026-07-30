@@ -61,6 +61,7 @@ var resetMutablePrefixes = [][]byte{
 	stateAccountLatestPrefix,
 	stateCodePrefix,
 	stageProgressPrefix,
+	syncStagedBlockPrefix,
 	stateTxRangePrefix,
 	stateChangeSetPrefix,
 	stateChangeInversePrefix,

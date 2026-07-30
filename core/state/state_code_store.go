@@ -14,6 +14,10 @@ type stateCodeReader interface {
 	ReadStateCode(hash tcommon.Hash) []byte
 }
 
+type stateCodeStrictReader interface {
+	ReadStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error)
+}
+
 type stateCodeWriter interface {
 	WriteStateCode(hash tcommon.Hash, code []byte) error
 }
@@ -44,6 +48,13 @@ func (s rawDBStateCodeStore) ReadStateCode(hash tcommon.Hash) []byte {
 		return nil
 	}
 	return rawdb.ReadStateCodeImmutable(s.reader, hash)
+}
+
+func (s rawDBStateCodeStore) ReadStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
+	if s.reader == nil {
+		return nil, false, nil
+	}
+	return rawdb.ReadStateCodeStrict(s.reader, hash)
 }
 
 func (s rawDBStateCodeStore) WriteStateCode(hash tcommon.Hash, code []byte) error {
@@ -90,6 +101,21 @@ func (s *StateDB) readStateCode(hash tcommon.Hash) []byte {
 		return nil
 	}
 	return store.ReadStateCode(hash)
+}
+
+func (s *StateDB) readStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
+	store := s.getStateCodeStore()
+	if store == nil {
+		return nil, false, nil
+	}
+	if strict, ok := store.(stateCodeStrictReader); ok {
+		return strict.ReadStateCodeStrict(hash)
+	}
+	code := store.ReadStateCode(hash)
+	if len(code) == 0 {
+		return nil, false, nil
+	}
+	return append([]byte(nil), code...), true, nil
 }
 
 func (s *StateDB) writeStateCode(hash tcommon.Hash, code []byte) error {

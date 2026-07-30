@@ -25,6 +25,15 @@ import (
 // without poking at the freezer's package-private `errOutOfBounds`.
 var ErrNotInAncient = errors.New("not in ancient store")
 
+// Ancient table names used by the chain freezer. Keep these in rawdb so
+// accessors, freezer writers, and snapshot installers share one source of
+// truth for the append-only table layout.
+const (
+	AncientBlocksTable     = "bodies"
+	AncientTxInfosTable    = "tx_infos"
+	AncientStateRootsTable = "state_roots"
+)
+
 // AncientReader exposes the subset of operations needed to read frozen
 // data. Implemented by `*freezer.Freezer`; also implemented by `NoopAncient`
 // for tests / configs where the freezer is disabled.
@@ -43,6 +52,12 @@ type AncientReader interface {
 	// HasAncient reports whether the named table currently stores an entry
 	// at number (i.e. number is in [tail, head)).
 	HasAncient(kind string, number uint64) (bool, error)
+}
+
+// AncientStatsReader is an optional diagnostic extension for AncientReader
+// implementations backed by local freezer files.
+type AncientStatsReader interface {
+	Stats() (freezer.Stats, error)
 }
 
 // AncientWriter exposes the subset of operations needed to migrate hot data
@@ -96,3 +111,115 @@ func (NoopAncient) AncientCount(string) (uint64, error) { return 0, nil }
 
 // HasAncient always returns false.
 func (NoopAncient) HasAncient(string, uint64) (bool, error) { return false, nil }
+
+// NewFallbackAncientReader composes ancient readers in priority order. It is
+// useful when local freezer files should be tried first, with verified cold
+// snapshot files acting as the historical fallback after the local virtual tail
+// has advanced.
+func NewFallbackAncientReader(readers ...AncientReader) AncientReader {
+	filtered := make([]AncientReader, 0, len(readers))
+	for _, reader := range readers {
+		if reader != nil {
+			filtered = append(filtered, reader)
+		}
+	}
+	switch len(filtered) {
+	case 0:
+		return NoopAncient{}
+	case 1:
+		return filtered[0]
+	default:
+		return fallbackAncientReader{readers: filtered}
+	}
+}
+
+type fallbackAncientReader struct {
+	readers []AncientReader
+}
+
+func (r fallbackAncientReader) Ancient(kind string, number uint64) ([]byte, error) {
+	for _, reader := range r.readers {
+		data, err := reader.Ancient(kind, number)
+		if err == nil {
+			return data, nil
+		}
+		if errors.Is(err, ErrNotInAncient) {
+			continue
+		}
+		return nil, err
+	}
+	return nil, ErrNotInAncient
+}
+
+func (r fallbackAncientReader) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
+	if count == 0 {
+		return nil, nil
+	}
+	var (
+		out        [][]byte
+		totalBytes uint64
+	)
+	for i := uint64(0); i < count; i++ {
+		number := start + i
+		if number < start {
+			break
+		}
+		data, err := r.Ancient(kind, number)
+		if err != nil {
+			if len(out) > 0 && errors.Is(err, ErrNotInAncient) {
+				break
+			}
+			return nil, err
+		}
+		if maxBytes > 0 && len(out) > 0 && totalBytes+uint64(len(data)) > maxBytes {
+			break
+		}
+		out = append(out, data)
+		totalBytes += uint64(len(data))
+	}
+	if len(out) == 0 {
+		return nil, ErrNotInAncient
+	}
+	return out, nil
+}
+
+func (r fallbackAncientReader) AncientCount(kind string) (uint64, error) {
+	var max uint64
+	for _, reader := range r.readers {
+		count, err := reader.AncientCount(kind)
+		if err != nil {
+			return 0, err
+		}
+		if count > max {
+			max = count
+		}
+	}
+	return max, nil
+}
+
+func (r fallbackAncientReader) HasAncient(kind string, number uint64) (bool, error) {
+	for _, reader := range r.readers {
+		ok, err := reader.HasAncient(kind, number)
+		if err != nil {
+			if errors.Is(err, ErrNotInAncient) {
+				continue
+			}
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r fallbackAncientReader) Stats() (freezer.Stats, error) {
+	for _, reader := range r.readers {
+		statsReader, ok := reader.(AncientStatsReader)
+		if !ok {
+			continue
+		}
+		return statsReader.Stats()
+	}
+	return freezer.Stats{}, ErrNotInAncient
+}

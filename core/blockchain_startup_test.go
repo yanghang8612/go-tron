@@ -1,0 +1,210 @@
+package core
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+)
+
+func TestLoadStoredHeadBlockSurfacesColdLookupErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	head := tcommon.Hash{0x42}
+	rawdb.WriteHeadBlockHash(db, head)
+	chain.SetChainIndexReader(blockchainStartupErrChainIndex{err: errors.New("cold chain index corrupt")})
+
+	_, err := loadStoredHeadBlock(chain, blockchainStartupBlock(0))
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("loadStoredHeadBlock err = %v, want cold chain index error", err)
+	}
+	if !strings.Contains(err.Error(), "load stored head") {
+		t.Fatalf("loadStoredHeadBlock err = %v, want startup head context", err)
+	}
+}
+
+func TestLoadStoredHeadBlockSurfacesHeadHashReadErrors(t *testing.T) {
+	db := blockchainStartupStrictReadFailingStore{
+		KeyValueStore: ethrawdb.NewMemoryDatabase(),
+		hasErr:        errors.New("head hash presence failed"),
+	}
+	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+
+	_, err := loadStoredHeadBlock(chain, blockchainStartupBlock(0))
+	if err == nil || !strings.Contains(err.Error(), "head hash presence failed") {
+		t.Fatalf("loadStoredHeadBlock err = %v, want head hash read error", err)
+	}
+	if !strings.Contains(err.Error(), "load stored head hash") {
+		t.Fatalf("loadStoredHeadBlock err = %v, want startup head-hash context", err)
+	}
+}
+
+func TestNewBlockChainWithAncientSurfacesGenesisColdReadErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	_, err := NewBlockChainWithAncient(db, state.NewDatabase(db), params.MainnetChainConfig, blockchainStartupFailingAncient{
+		kind:   rawdb.AncientBlocksTable,
+		number: 0,
+		err:    errors.New("cold genesis read failed"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "cold genesis read failed") {
+		t.Fatalf("NewBlockChainWithAncient err = %v, want cold genesis read error", err)
+	}
+	if !strings.Contains(err.Error(), "read genesis block") {
+		t.Fatalf("NewBlockChainWithAncient err = %v, want genesis read context", err)
+	}
+}
+
+func TestLoadForkLCABlockAndRootSurfacesColdLookupErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	lcaHash := tcommon.Hash{0x44}
+	chain.SetChainIndexReader(blockchainStartupErrChainIndex{err: errors.New("cold chain index corrupt")})
+
+	_, _, err := loadForkLCABlockAndRoot(chain, db, lcaHash)
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("loadForkLCABlockAndRoot err = %v, want cold chain index error", err)
+	}
+	if !strings.Contains(err.Error(), "load LCA block") {
+		t.Fatalf("loadForkLCABlockAndRoot err = %v, want LCA context", err)
+	}
+}
+
+func TestStateRootForKnownGenesisSurfacesGenesisRootReadErrors(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	rawdb.WriteGenesisStateRoot(base, tcommon.Hash{0x55})
+	db := blockchainStartupStrictReadFailingStore{
+		KeyValueStore: base,
+		getErr:        errors.New("genesis root get failed"),
+	}
+	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	bc := &BlockChain{db: db, chaindb: chain}
+
+	_, _, err := bc.stateRootForKnownBlockStrict(blockchainStartupBlock(0))
+	if err == nil || !strings.Contains(err.Error(), "genesis root get failed") {
+		t.Fatalf("stateRootForKnownBlockStrict err = %v, want genesis root read error", err)
+	}
+	if !strings.Contains(err.Error(), "state root for genesis block") {
+		t.Fatalf("stateRootForKnownBlockStrict err = %v, want genesis state-root context", err)
+	}
+}
+
+func TestLoadForkLCABlockAndRootSurfacesColdStateRootErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	block := blockchainStartupBlock(2)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	chain := rawdb.NewChainDB(db, blockchainStartupFailingAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: block.Number(),
+		err:    errors.New("cold state root read failed"),
+	})
+
+	_, _, err := loadForkLCABlockAndRoot(chain, db, block.Hash())
+	if err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+		t.Fatalf("loadForkLCABlockAndRoot err = %v, want cold state-root error", err)
+	}
+	if !strings.Contains(err.Error(), "state root") {
+		t.Fatalf("loadForkLCABlockAndRoot err = %v, want state-root context", err)
+	}
+}
+
+func TestOpenCurrentStateSurfacesColdStateRootErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	block := blockchainStartupBlock(2)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	chain := rawdb.NewChainDB(db, blockchainStartupFailingAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: block.Number(),
+		err:    errors.New("cold state root read failed"),
+	})
+	bc := &BlockChain{db: db, chaindb: chain}
+	bc.currentBlock.Store(block)
+
+	_, err := bc.openCurrentState()
+	if err == nil || !strings.Contains(err.Error(), "cold state root read failed") {
+		t.Fatalf("openCurrentState err = %v, want cold state-root error", err)
+	}
+	if !strings.Contains(err.Error(), "state root for block 2") {
+		t.Fatalf("openCurrentState err = %v, want state-root context", err)
+	}
+}
+
+func blockchainStartupBlock(number uint64) *types.Block {
+	return types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(number) * 3000,
+				Version:   params.BlockVersion,
+			},
+		},
+	})
+}
+
+type blockchainStartupFailingAncient struct {
+	kind   string
+	number uint64
+	err    error
+}
+
+func (a blockchainStartupFailingAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	if kind == a.kind && number == a.number {
+		return nil, a.err
+	}
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (a blockchainStartupFailingAncient) AncientRange(string, uint64, uint64, uint64) ([][]byte, error) {
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (a blockchainStartupFailingAncient) AncientCount(string) (uint64, error) {
+	return 0, nil
+}
+
+func (a blockchainStartupFailingAncient) HasAncient(kind string, number uint64) (bool, error) {
+	return kind == a.kind && number == a.number, nil
+}
+
+type blockchainStartupErrChainIndex struct {
+	err error
+}
+
+func (i blockchainStartupErrChainIndex) BlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return 0, false, i.err
+}
+
+func (i blockchainStartupErrChainIndex) TransactionBlockNumberByHash(tcommon.Hash) (uint64, bool, error) {
+	return 0, false, i.err
+}
+
+type blockchainStartupStrictReadFailingStore struct {
+	ethdb.KeyValueStore
+	hasErr error
+	getErr error
+}
+
+func (s blockchainStartupStrictReadFailingStore) Has(key []byte) (bool, error) {
+	if s.hasErr != nil {
+		return false, s.hasErr
+	}
+	return s.KeyValueStore.Has(key)
+}
+
+func (s blockchainStartupStrictReadFailingStore) Get(key []byte) ([]byte, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.KeyValueStore.Get(key)
+}

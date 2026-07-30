@@ -198,38 +198,65 @@ func TestInsertSession_CrossBatch_MatchesSync(t *testing.T) {
 	const N = 20
 	blocks, syncRoots := buildSyncBlockSequence(t, witnessAddr, N)
 
-	t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
-	diskdb := ethrawdb.NewMemoryDatabase()
-	bc := newAsyncFlushChainOn(t, diskdb, witnessAddr)
-	bc.SetAsyncCommit(true)
-	defer bc.Close()
+	for _, tc := range []struct {
+		name  string
+		async bool
+		depth string
+	}{
+		{name: "synchronous"},
+		{name: "depth_two_async", async: true, depth: "2"},
+		{name: "deep_async", async: true, depth: "4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.async {
+				t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", tc.depth)
+			}
+			bc := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
+			if tc.async {
+				bc.SetAsyncCommit(true)
+			}
+			defer bc.Close()
 
-	s := bc.BeginInsertSession()
-	const split = 11
-	if err := s.Insert(blocks[:split]); err != nil {
-		t.Fatalf("session batch 1: %v", err)
-	}
-	if err := s.Insert(blocks[split:]); err != nil {
-		t.Fatalf("session batch 2: %v", err)
-	}
-	if err := s.Finish(); err != nil {
-		t.Fatalf("session finish: %v", err)
-	}
-	if errPtr := bc.commitErr.Load(); errPtr != nil {
-		t.Fatalf("async commit recorded error: %v", *errPtr)
-	}
+			stateOpens, commitScopes := 0, 0
+			bc.stateOpenHook = func(tcommon.Hash) { stateOpens++ }
+			bc.stateCommitScopeHook = func() { commitScopes++ }
 
-	for i, b := range blocks {
-		got := rawdb.ReadBlockStateRoot(bc.chaindb, b.Hash())
-		if got != syncRoots[i] {
-			t.Fatalf("block %d root mismatch: session %x != sync %x", b.Number(), got, syncRoots[i])
-		}
-		if got == (tcommon.Hash{}) {
-			t.Fatalf("block %d session root is zero", b.Number())
-		}
-	}
-	if got := bc.CurrentBlock().Hash(); got != blocks[N-1].Hash() {
-		t.Fatalf("session head = %x, want %x", got, blocks[N-1].Hash())
+			s := bc.BeginInsertSession()
+			const split = 11
+			if err := s.Insert(blocks[:split]); err != nil {
+				t.Fatalf("session batch 1: %v", err)
+			}
+			if !tc.async {
+				if err := s.FlushLatest(); err != nil {
+					t.Fatalf("flush session batch 1: %v", err)
+				}
+			}
+			if err := s.Insert(blocks[split:]); err != nil {
+				t.Fatalf("session batch 2: %v", err)
+			}
+			if err := s.Finish(); err != nil {
+				t.Fatalf("session finish: %v", err)
+			}
+			if errPtr := bc.commitErr.Load(); errPtr != nil {
+				t.Fatalf("async commit recorded error: %v", *errPtr)
+			}
+			if stateOpens != 1 || commitScopes != 1 {
+				t.Fatalf("cross-batch session opened state/scopes=%d/%d, want 1/1", stateOpens, commitScopes)
+			}
+
+			for i, b := range blocks {
+				got := rawdb.ReadBlockStateRoot(bc.chaindb, b.Hash())
+				if got != syncRoots[i] {
+					t.Fatalf("block %d root mismatch: session %x != sync %x", b.Number(), got, syncRoots[i])
+				}
+				if got == (tcommon.Hash{}) {
+					t.Fatalf("block %d session root is zero", b.Number())
+				}
+			}
+			if got := bc.CurrentBlock().Hash(); got != blocks[N-1].Hash() {
+				t.Fatalf("session head = %x, want %x", got, blocks[N-1].Hash())
+			}
+		})
 	}
 }
 
@@ -360,12 +387,13 @@ func TestAsyncCommit_Depth4_FoldErrorUnwind(t *testing.T) {
 	_ = asyncBC.Close() // commitErr is sticky; don't assert Close result
 }
 
-// TestInsertSession_ReorgUnderDeepPipeline drives a fork switch through a deep
-// (depth 4) cross-batch session: the losing branch is applied across two batches,
-// then the heavier branch triggers switchFork INSIDE an Insert (which drains the
-// commit worker, rewinds, and Reset()s the shared executor). Post-reorg head +
-// per-block roots of the winner must match a fully-synchronous reference.
-func TestInsertSession_ReorgUnderDeepPipeline(t *testing.T) {
+// TestInsertSession_ReorgCrossBatchMatchesSync drives a fork switch through a
+// cross-batch session in synchronous and deep modes. The losing branch is
+// applied across two batches, then the heavier branch triggers switchFork
+// inside the same session. Post-reorg head and roots must match the ordinary
+// synchronous reference, proving an open shared scope cannot leak across a
+// rewind.
+func TestInsertSession_ReorgCrossBatchMatchesSync(t *testing.T) {
 	witnessAddr := testInsertAddr(1)
 
 	ref := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
@@ -391,36 +419,59 @@ func TestInsertSession_ReorgUnderDeepPipeline(t *testing.T) {
 		syncRoots[i] = rawdb.ReadBlockStateRoot(syncBC.chaindb, b.Hash())
 	}
 
-	// Deep session: chain A across two batches, then chain B (triggers switchFork
-	// inside the second session Insert).
-	t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
-	asyncBC := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
-	asyncBC.SetAsyncCommit(true)
-	defer asyncBC.Close()
-	s := asyncBC.BeginInsertSession()
-	if err := s.Insert(chainA[:5]); err != nil {
-		t.Fatalf("session chain A batch 1: %v", err)
-	}
-	if err := s.Insert(chainA[5:]); err != nil {
-		t.Fatalf("session chain A batch 2: %v", err)
-	}
-	if err := s.Insert(chainB); err != nil {
-		t.Fatalf("session chain B (switch): %v", err)
-	}
-	if err := s.Finish(); err != nil {
-		t.Fatalf("session finish: %v", err)
-	}
-	if errPtr := asyncBC.commitErr.Load(); errPtr != nil {
-		t.Fatalf("async commit error during reorg: %v", *errPtr)
-	}
+	for _, tc := range []struct {
+		name  string
+		async bool
+	}{
+		{name: "synchronous"},
+		{name: "deep_async", async: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.async {
+				t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
+			}
+			bc := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
+			if tc.async {
+				bc.SetAsyncCommit(true)
+			}
+			defer bc.Close()
 
-	if asyncBC.CurrentBlock().Hash() != chainB[len(chainB)-1].Hash() {
-		t.Fatalf("post-reorg head = %x, want chain B tip %x", asyncBC.CurrentBlock().Hash(), chainB[len(chainB)-1].Hash())
-	}
-	for i, b := range chainB {
-		got := rawdb.ReadBlockStateRoot(asyncBC.chaindb, b.Hash())
-		if got != syncRoots[i] {
-			t.Fatalf("post-reorg block %d root mismatch: session %x != sync %x", b.Number(), got, syncRoots[i])
-		}
+			s := bc.BeginInsertSession()
+			if err := s.Insert(chainA[:5]); err != nil {
+				t.Fatalf("session chain A batch 1: %v", err)
+			}
+			if !tc.async {
+				if err := s.FlushLatest(); err != nil {
+					t.Fatalf("flush session chain A batch 1: %v", err)
+				}
+			}
+			if err := s.Insert(chainA[5:]); err != nil {
+				t.Fatalf("session chain A batch 2: %v", err)
+			}
+			if !tc.async {
+				if err := s.FlushLatest(); err != nil {
+					t.Fatalf("flush session chain A batch 2: %v", err)
+				}
+			}
+			if err := s.Insert(chainB); err != nil {
+				t.Fatalf("session chain B (switch): %v", err)
+			}
+			if err := s.Finish(); err != nil {
+				t.Fatalf("session finish: %v", err)
+			}
+			if errPtr := bc.commitErr.Load(); errPtr != nil {
+				t.Fatalf("async commit error during reorg: %v", *errPtr)
+			}
+
+			if bc.CurrentBlock().Hash() != chainB[len(chainB)-1].Hash() {
+				t.Fatalf("post-reorg head = %x, want chain B tip %x", bc.CurrentBlock().Hash(), chainB[len(chainB)-1].Hash())
+			}
+			for i, b := range chainB {
+				got := rawdb.ReadBlockStateRoot(bc.chaindb, b.Hash())
+				if got != syncRoots[i] {
+					t.Fatalf("post-reorg block %d root mismatch: session %x != sync %x", b.Number(), got, syncRoots[i])
+				}
+			}
+		})
 	}
 }

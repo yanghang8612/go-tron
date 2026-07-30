@@ -175,11 +175,14 @@ type Backend interface {
 	GetNodeInfo() *NodeInfo
 	PendingTransactionCount() int
 	GetContract(addr common.Address) (*contractpb.SmartContract, error)
+	GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error)
 	TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*TriggerResult, error)
+	TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*TriggerResult, error)
 
 	// Transaction queries
 	GetTransactionByID(txHash common.Hash) (*corepb.Transaction, error)
 	GetTransactionInfoByID(txHash common.Hash) (*corepb.TransactionInfo, error)
+	GetTransactionBlockNumByID(txHash common.Hash) (uint64, bool, error)
 	GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error)
 
 	// Block queries
@@ -193,20 +196,24 @@ type Backend interface {
 	BuildTriggerContractTransaction(owner, contract common.Address, data []byte,
 		feeLimit int64, callValue int64) (*corepb.Transaction, *TriggerResult, error)
 	EstimateEnergy(owner, contract common.Address, data []byte) (int64, error)
+	EstimateEnergyAt(owner, contract common.Address, data []byte, blockNum uint64) (int64, error)
 
 	// Resource & chain queries
 	GetAccountResource(addr common.Address) (*AccountResource, error)
 	// GetAccountResourceAt opens state at the given block to compute the
 	// per-account net/energy usage figures, used by /walletsolidity/ and
 	// /walletpbft/ variants so the bandwidth view matches the bound's
-	// commit point rather than live head. The DP-derived limits
-	// (FreeNetLimit, TotalNetLimit, TotalEnergyLimit) still read from
-	// disk DP (effectively solid) since DynamicProperties only flushes
-	// on solidification.
+	// commit point rather than live head. DP-derived limits are reconstructed
+	// from the same rooted/bound dynamic-property view.
 	GetAccountResourceAt(addr common.Address, blockNum uint64) (*AccountResource, error)
-	GetChainParameters() []ChainParameter
+	GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error)
+	GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error)
+	GetChainParameters() ([]ChainParameter, error)
+	GetChainParametersAt(blockNum uint64) ([]ChainParameter, error)
 	ListWitnesses() ([]*WitnessInfo, error)
-	NextMaintenanceTime() int64
+	ListWitnessesAt(blockNum uint64) ([]*WitnessInfo, error)
+	NextMaintenanceTime() (int64, error)
+	NextMaintenanceTimeAt(blockNum uint64) (int64, error)
 
 	// Stake 2.0 transaction building
 	BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error)
@@ -224,13 +231,23 @@ type Backend interface {
 	BuildProposalApproveTransaction(owner common.Address, proposalID int64, approve bool) (*corepb.Transaction, error)
 	BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error)
 	ListProposals() ([]*ProposalInfo, error)
+	ListProposalsAt(blockNum uint64) ([]*ProposalInfo, error)
 
 	// Delegation/resource queries (Stake 2.0)
+	GetDelegatedResource(from, to common.Address) ([]*DelegatedResourceInfo, error)
+	GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*DelegatedResourceInfo, error)
+	GetDelegatedResourceAccountIndex(addr common.Address) (*corepb.DelegatedResourceAccountIndex, error)
+	GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error)
 	GetDelegatedResourceV2(from, to common.Address) ([]*DelegatedResourceInfo, error)
+	GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*DelegatedResourceInfo, error)
 	GetDelegatedResourceAccountIndexV2(addr common.Address) (*DelegationIndexInfo, error)
+	GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*DelegationIndexInfo, error)
 	CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*CanDelegateInfo, error)
+	CanDelegateResourceAt(addr common.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*CanDelegateInfo, error)
 	GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*CanWithdrawUnfreezeInfo, error)
+	GetCanWithdrawUnfreezeAmountAt(addr common.Address, timestamp int64, blockNum uint64) (*CanWithdrawUnfreezeInfo, error)
 	GetAvailableUnfreezeCount(addr common.Address) (*AvailableUnfreezeCountInfo, error)
+	GetAvailableUnfreezeCountAt(addr common.Address, blockNum uint64) (*AvailableUnfreezeCountInfo, error)
 
 	// Rewards
 	GetReward(addr common.Address) (*RewardInfo, error)
@@ -246,34 +263,55 @@ type Backend interface {
 	ListNodes() ([]*PeerInfo, error)
 
 	// Asset queries (TRC10)
-	GetAssetIssueByID(id int64) *contractpb.AssetIssueContract
-	GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract
-	GetAssetIssueList() []*contractpb.AssetIssueContract
-	GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract
-	GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract
+	GetAssetIssueByID(id int64) (*contractpb.AssetIssueContract, error)
+	GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error)
+	GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error)
+	GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error)
+	GetAssetIssueList() ([]*contractpb.AssetIssueContract, error)
+	GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error)
+	GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error)
+	GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error)
+	GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error)
+	GetAssetIssueByAccountAt(addr common.Address, blockNum uint64) (*contractpb.AssetIssueContract, error)
 
 	// Market queries (Phase 13)
-	GetMarketOrderByID(orderID []byte) *corepb.MarketOrder
-	GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder
-	GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList
+	GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error)
+	GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error)
+	GetMarketOrdersByAccount(addr common.Address) ([]*corepb.MarketOrder, error)
+	GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error)
+	GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error)
+	GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error)
+	GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) ([]*corepb.MarketOrder, error)
+	GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error)
+	GetMarketPairList() (*corepb.MarketOrderPairList, error)
+	GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error)
 
 	// Exchange queries
 	ListExchanges() ([]*corepb.Exchange, error)
+	ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error)
+	GetExchangeByID(id int64) (*corepb.Exchange, error)
+	GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error)
 
 	// Brokerage
-	GetBrokerageInfo(addr common.Address) int64
+	GetBrokerageInfo(addr common.Address) (int64, error)
+	GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error)
 
-	// Chain-level counters (stubs until dynamic-properties tracking is wired)
-	TotalTransaction() int64
-	GetBurnTrx() int64
+	// Chain-level counters.
+	TotalTransaction() (int64, error)
+	GetBurnTrx() (int64, error)
+	GetBurnTrxAt(blockNum uint64) (int64, error)
 
 	// Historical price strings (encoded as "blockNum:price,blockNum:price,...")
-	GetBandwidthPrices() string
-	GetEnergyPrices() string
+	GetBandwidthPrices() (string, error)
+	GetBandwidthPricesAt(blockNum uint64) (string, error)
+	GetEnergyPrices() (string, error)
+	GetEnergyPricesAt(blockNum uint64) (string, error)
 
 	// Paginated queries
 	ListProposalsPaginated(offset, limit int) ([]*ProposalInfo, error)
+	ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*ProposalInfo, error)
 	ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error)
+	ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error)
 
 	// Account / permission (M5.1 PR-1)
 	BuildCreateAccountTransaction(owner, account common.Address) (*corepb.Transaction, error)
@@ -281,7 +319,9 @@ type Backend interface {
 	BuildSetAccountIdTransaction(owner common.Address, accountID []byte) (*corepb.Transaction, error)
 	BuildAccountPermissionUpdateTransaction(c *contractpb.AccountPermissionUpdateContract) (*corepb.Transaction, error)
 	GetAccountById(accountID []byte) (*types.Account, error)
+	GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error)
 	GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error)
+	GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error)
 
 	// Generic contract transaction builder (M5.1 PR-3+)
 	// Wraps tronapi.BuildTransaction with head-block context from the chain.
@@ -300,13 +340,14 @@ type Backend interface {
 
 	// Proposal queries (M5.1 PR-6)
 	GetProposalByID(id int64) (*ProposalInfo, error)
+	GetProposalByIDAt(id int64, blockNum uint64) (*ProposalInfo, error)
 
 	// Address validation (M5.1 PR-7) — pure utility, no state needed
 	ValidateAddress(addr string) (bool, string)
 
 	// Confirmation-depth block numbers (M8.1)
-	SolidifiedBlockNum() uint64 // latest solidified (DPoS 2/3 confirmed) block number
-	LatestPbftBlockNum() int64  // latest PBFT-confirmed block number; -1 if not yet active
+	SolidifiedBlockNum() uint64         // latest solidified (DPoS 2/3 confirmed) block number
+	LatestPbftBlockNum() (int64, error) // latest PBFT-confirmed block number; -1 if not yet active
 
 	// ValidateTransaction validates a transaction's contract logic against current state.
 	// Returns nil if valid; a human-readable error otherwise.

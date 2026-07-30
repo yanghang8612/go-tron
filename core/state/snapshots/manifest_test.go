@@ -10,7 +10,7 @@ import (
 
 func TestPublishLoadManifestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	manifest := NewManifest(10, 30, []SegmentRef{
+	manifest := NewManifestForChain(10, 30, []SegmentRef{
 		{
 			Domain:    kvdomains.SystemReward,
 			Kind:      SegmentHistory,
@@ -35,6 +35,11 @@ func TestPublishLoadManifestRoundTrip(t *testing.T) {
 			ToTxNum:   30,
 			Path:      "latest/storage-10-30.json",
 		},
+	}, ChainIdentity{
+		ChainID:        1,
+		NetworkID:      11111,
+		GenesisHash:    "0x0000000000000000000000000000000000000000000000000000000000000001",
+		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	})
 	if err := PublishManifest(dir, manifest); err != nil {
 		t.Fatalf("publish manifest: %v", err)
@@ -51,6 +56,79 @@ func TestPublishLoadManifestRoundTrip(t *testing.T) {
 	}
 	if len(loaded.Segments) != 3 {
 		t.Fatalf("loaded segments = %d", len(loaded.Segments))
+	}
+	if loaded.Chain == nil {
+		t.Fatal("loaded manifest missing chain identity")
+	}
+	if loaded.Chain.GenesisHash != "0000000000000000000000000000000000000000000000000000000000000001" {
+		t.Fatalf("loaded genesis hash not normalised: %q", loaded.Chain.GenesisHash)
+	}
+	if err := loaded.ValidateChainIdentity(ChainIdentity{
+		ChainID:        1,
+		NetworkID:      11111,
+		GenesisHash:    "0000000000000000000000000000000000000000000000000000000000000001",
+		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}); err != nil {
+		t.Fatalf("chain identity validation failed: %v", err)
+	}
+	if err := loaded.ValidateChainIdentity(ChainIdentity{
+		ChainID:        1,
+		NetworkID:      201910292,
+		GenesisHash:    "0000000000000000000000000000000000000000000000000000000000000001",
+		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}); err == nil {
+		t.Fatal("wrong network id accepted by chain identity validation")
+	}
+}
+
+func TestManifestValidateChainIdentityRequiresIdentity(t *testing.T) {
+	manifest := NewManifest(1, 1, nil)
+	if err := manifest.ValidateChainIdentity(ChainIdentity{
+		ChainID:     1,
+		NetworkID:   11111,
+		GenesisHash: "0000000000000000000000000000000000000000000000000000000000000001",
+	}); err == nil {
+		t.Fatal("manifest without chain identity accepted")
+	}
+}
+
+func TestManifestRejectsInvalidChainIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		identity ChainIdentity
+	}{
+		{
+			name: "missing genesis",
+			identity: ChainIdentity{
+				ChainID:   1,
+				NetworkID: 11111,
+			},
+		},
+		{
+			name: "bad genesis hash",
+			identity: ChainIdentity{
+				ChainID:     1,
+				NetworkID:   11111,
+				GenesisHash: "not-hex",
+			},
+		},
+		{
+			name: "bad fork hash",
+			identity: ChainIdentity{
+				ChainID:        1,
+				NetworkID:      11111,
+				GenesisHash:    "0000000000000000000000000000000000000000000000000000000000000001",
+				ForkConfigHash: "not-sha256",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest := NewManifestForChain(1, 1, nil, tt.identity)
+			if err := manifest.Validate(); err == nil {
+				t.Fatal("invalid chain identity accepted")
+			}
+		})
 	}
 }
 
@@ -77,13 +155,13 @@ func TestManifestAcceptsFlatLatestDatasets(t *testing.T) {
 	}
 }
 
-func TestManifestRejectsIncompleteBinaryLatestCompanions(t *testing.T) {
+func TestManifestValidatesBinaryLatestCompanions(t *testing.T) {
 	tests := []struct {
 		name     string
 		segments []SegmentRef
 	}{
 		{
-			name: "missing accessor",
+			name: "btree only",
 			segments: []SegmentRef{
 				{Dataset: SegmentDatasetAccountLatest, Kind: SegmentLatest, FromTxNum: 1, ToTxNum: 10, Path: "latest/accounts.seg"},
 				{Dataset: SegmentDatasetAccountLatest, Kind: SegmentBTree, FromTxNum: 1, ToTxNum: 10, Path: "latest/accounts.bt"},
@@ -111,8 +189,15 @@ func TestManifestRejectsIncompleteBinaryLatestCompanions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := NewManifest(1, 10, tt.segments).Validate(); err == nil {
-				t.Fatal("incomplete binary latest companion set accepted")
+			err := NewManifest(1, 10, tt.segments).Validate()
+			if tt.name == "btree only" {
+				if err != nil {
+					t.Fatalf("btree-only latest companion set rejected: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("invalid binary latest companion set accepted")
 			}
 		})
 	}
@@ -141,6 +226,58 @@ func TestManifestAcceptsStateDomainChangeIndexedDatasets(t *testing.T) {
 	}
 	if err := manifest.ValidateProduction(); err != nil {
 		t.Fatalf("production state domain change manifest rejected: %v", err)
+	}
+}
+
+func TestManifestValidatesEventLogIndexCompanions(t *testing.T) {
+	valid := NewManifest(0, 0, []SegmentRef{
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 10, ToTxNum: 12, Path: "log/event-log-10-12.seg"},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 13, ToTxNum: 15, Path: "log/event-log-13-15.seg"},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 15, Path: "log/event-log-index-10-15.idx"},
+	})
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid event-log index companions rejected: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		segments []SegmentRef
+	}{
+		{
+			name: "orphan index",
+			segments: []SegmentRef{
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 12, Path: "log/event-log-index-10-12.idx"},
+			},
+		},
+		{
+			name: "gap in coverage",
+			segments: []SegmentRef{
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 10, ToTxNum: 11, Path: "log/event-log-10-11.seg"},
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 13, ToTxNum: 15, Path: "log/event-log-13-15.seg"},
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 15, Path: "log/event-log-index-10-15.idx"},
+			},
+		},
+		{
+			name: "prefix missing",
+			segments: []SegmentRef{
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 11, ToTxNum: 15, Path: "log/event-log-11-15.seg"},
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 15, Path: "log/event-log-index-10-15.idx"},
+			},
+		},
+		{
+			name: "suffix missing",
+			segments: []SegmentRef{
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 10, ToTxNum: 14, Path: "log/event-log-10-14.seg"},
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 15, Path: "log/event-log-index-10-15.idx"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := NewManifest(0, 0, tt.segments).Validate(); err == nil {
+				t.Fatal("invalid event-log index companions accepted")
+			}
+		})
 	}
 }
 

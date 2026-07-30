@@ -3,6 +3,7 @@ package jsonrpc_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -114,5 +115,108 @@ func TestDebugAPI_TraceTransactionRoutesAndParses(t *testing.T) {
 	}
 	if got["type"] != "CALL" {
 		t.Fatalf("backend trace result not echoed: %s", result)
+	}
+}
+
+func TestDebugAPI_TraceBlockByNumberRoutesTransactions(t *testing.T) {
+	block := buildFreezeBlock()
+	txHash := block.Transactions()[0].Hash()
+	be := &stubBackend{
+		blockNumber: block.Number(),
+		block:       block,
+		traceResult: map[string]interface{}{"type": "CALL"},
+	}
+	ts := debugServer(t, be)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"debug_traceBlockByNumber","params":["0x64",{"tracer":"callTracer"}]}`
+	result, errObj := postRPC(t, ts.URL, body)
+	if errObj != nil {
+		t.Fatalf("debug_traceBlockByNumber error: %+v", errObj)
+	}
+	if len(be.gotTraceHashes) != 1 || be.gotTraceHashes[0] != txHash {
+		t.Fatalf("TraceBlock hashes = %x, want %x", be.gotTraceHashes, txHash)
+	}
+	if be.gotTraceBlockObj != block {
+		t.Fatalf("TraceBlock block = %p, want %p", be.gotTraceBlockObj, block)
+	}
+	if be.gotTraceCfg == nil || be.gotTraceCfg.Tracer == nil || *be.gotTraceCfg.Tracer != "callTracer" {
+		t.Fatalf("tracer name not parsed into TraceConfig: %+v", be.gotTraceCfg)
+	}
+
+	var traces []map[string]interface{}
+	if err := json.Unmarshal(result, &traces); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(traces) != 1 {
+		t.Fatalf("trace count = %d, want 1: %s", len(traces), result)
+	}
+	traceResult, ok := traces[0]["result"].(map[string]interface{})
+	if !ok || traceResult["type"] != "CALL" {
+		t.Fatalf("trace result = %v, want call tracer payload", traces[0]["result"])
+	}
+	if traces[0]["txHash"] != "0x"+txHash.Hex() {
+		t.Fatalf("txHash = %v, want 0x%s", traces[0]["txHash"], txHash.Hex())
+	}
+}
+
+func TestDebugAPI_TraceBlockByHashRoutesTransactions(t *testing.T) {
+	block := buildFreezeBlock()
+	txHash := block.Transactions()[0].Hash()
+	be := &stubBackend{
+		blockNumber: block.Number(),
+		block:       block,
+		traceResult: map[string]interface{}{"gas": "0x1"},
+	}
+	ts := debugServer(t, be)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"debug_traceBlockByHash","params":["` + freezeBlockHashHex() + `",null]}`
+	result, errObj := postRPC(t, ts.URL, body)
+	if errObj != nil {
+		t.Fatalf("debug_traceBlockByHash error: %+v", errObj)
+	}
+	if len(be.gotTraceHashes) != 1 || be.gotTraceHashes[0] != txHash {
+		t.Fatalf("TraceBlock hashes = %x, want %x", be.gotTraceHashes, txHash)
+	}
+	if be.gotTraceBlockObj != block {
+		t.Fatalf("TraceBlock block = %p, want %p", be.gotTraceBlockObj, block)
+	}
+	var traces []map[string]interface{}
+	if err := json.Unmarshal(result, &traces); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(traces) != 1 || traces[0]["txHash"] != "0x"+txHash.Hex() {
+		t.Fatalf("debug_traceBlockByHash result = %+v, want one trace for tx %x", traces, txHash)
+	}
+}
+
+func TestDebugAPI_TraceBlockReturnsPerTxTraceError(t *testing.T) {
+	block := buildFreezeBlock()
+	traceErr := errors.New("trace replay failed")
+	be := &stubBackend{blockNumber: block.Number(), block: block, traceErr: traceErr}
+	ts := debugServer(t, be)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"debug_traceBlockByNumber","params":["0x64",null]}`
+	result, errObj := postRPC(t, ts.URL, body)
+	if errObj != nil {
+		t.Fatalf("debug_traceBlockByNumber unexpected JSON-RPC error: %+v", errObj)
+	}
+
+	var traces []map[string]interface{}
+	if err := json.Unmarshal(result, &traces); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(traces) != 1 || traces[0]["error"] != traceErr.Error() || traces[0]["result"] != nil {
+		t.Fatalf("trace error result = %+v, want per-tx error only", traces)
+	}
+}
+
+func TestDebugAPI_TraceBlockUnknownBlockErrors(t *testing.T) {
+	be := &stubBackend{blockNumber: 100}
+	ts := debugServer(t, be)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"debug_traceBlockByNumber","params":["0x64",null]}`
+	_, errObj := postRPC(t, ts.URL, body)
+	if errObj == nil || !strings.Contains(errObj.Message, "block not found") {
+		t.Fatalf("debug_traceBlockByNumber error = %+v, want block not found", errObj)
 	}
 }

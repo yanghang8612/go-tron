@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -466,6 +467,23 @@ func TestStateDBContractRuntimeStateIgnoresFutureFlatMirror(t *testing.T) {
 	}
 }
 
+func TestStateDBContractRuntimeStateStrictSurfacesCorruptPayload(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := tcommon.Address{0x41, 0x35}
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	if err := sdb.SetAccountKV(addr, kvdomains.ContractRuntimeState, contractStateKVKey, []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sdb.ReadContractState(addr); got != nil {
+		t.Fatalf("compat ReadContractState corrupt payload = %v, want nil", got)
+	}
+	got, ok, err := sdb.ReadContractStateStrict(addr)
+	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode contract state") {
+		t.Fatalf("ReadContractStateStrict corrupt payload = %v/%v/%v, want decode error", got, ok, err)
+	}
+}
+
 func TestStateDBContractABIRoundTrip(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := tcommon.Address{0x41, 0x26}
@@ -553,6 +571,23 @@ func TestStateDBContractABIIgnoresFutureFlatMirror(t *testing.T) {
 	}
 	if got := reloaded.ReadContractABI(addr); !proto.Equal(got, abi) {
 		t.Fatalf("historical root loaded future flat ABI: %v", got)
+	}
+}
+
+func TestStateDBContractABIStrictSurfacesCorruptPayload(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := tcommon.Address{0x41, 0x36}
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	if err := sdb.SetAccountKV(addr, kvdomains.ContractABI, contractABIKVKey, []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sdb.ReadContractABI(addr); got != nil {
+		t.Fatalf("compat ReadContractABI corrupt payload = %v, want nil", got)
+	}
+	got, ok, err := sdb.ReadContractABIStrict(addr)
+	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode contract abi") {
+		t.Fatalf("ReadContractABIStrict corrupt payload = %v/%v/%v, want decode error", got, ok, err)
 	}
 }
 

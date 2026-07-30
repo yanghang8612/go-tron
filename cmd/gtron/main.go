@@ -2,9 +2,9 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
@@ -31,6 +30,7 @@ import (
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	tnet "github.com/tronprotocol/go-tron/net"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/node"
 	"github.com/tronprotocol/go-tron/p2p"
 	"github.com/tronprotocol/go-tron/p2p/discover"
@@ -39,15 +39,6 @@ import (
 )
 
 const domainStateReorgWindow uint64 = 128
-
-const round141StoredReplayTarget uint64 = 19_349_383
-
-const round141StoredReplayCommitmentCacheMiB = 3072
-
-var (
-	round141StoredReplayTargetHash = tcommon.HexToHash("0000000001273f87ac576e31a2705cc8cadfbdb983897c175e304414e7470b58")
-	round141SkippedTxHash          = tcommon.HexToHash("1b894da582bc68dd47e96579e5c362e3de9f50dab862907cd0a21e2649bc1ef5")
-)
 
 var (
 	dataDirFlag = &cli.StringFlag{
@@ -157,12 +148,33 @@ var (
 	}
 	gcmodeFlag = &cli.StringFlag{
 		Name:  "gcmode",
-		Usage: "Flat temporal state retention: full (prune hot rows) | snap (prune hot rows after snapshot coverage) | archive (keep hot rows forever)",
+		Usage: "Deprecated alias for --prune.mode",
 		Value: params.HistoryModeFull,
+	}
+	pruneModeFlag = &cli.StringFlag{
+		Name:  "prune.mode",
+		Usage: "Erigon-style retention mode: full | blocks | minimal | snap | archive",
 	}
 	historyEnabledFlag = &cli.BoolFlag{
 		Name:  "history.enabled",
-		Usage: "Turn on flat temporal state capture. Required to populate as-of history; archive mode implies it.",
+		Usage: "Turn on flat temporal state capture. Explicit prune modes imply it.",
+	}
+	snapshotCompressHistoryFlag = &cli.BoolFlag{
+		Name:    "snapshot.compress-history",
+		Usage:   "Write new cold state-history segments in block-compressed format; set false to emit legacy raw segments",
+		Value:   true,
+		EnvVars: []string{"GTRON_SNAPSHOT_COMPRESS_HISTORY"},
+	}
+	snapshotCompressLatestFlag = &cli.BoolFlag{
+		Name:    "snapshot.compress-latest",
+		Usage:   "Write new cold latest-state records with Snappy compression when smaller; set false to emit legacy raw records",
+		Value:   true,
+		EnvVars: []string{"GTRON_SNAPSHOT_COMPRESS_LATEST"},
+	}
+	snapshotCatalogSigningKeyFileRuntimeFlag = &cli.StringFlag{
+		Name:    "snapshot.catalog-signing-key-file",
+		Usage:   "File with the Ed25519 key used to sign each newly published runtime cold snapshot catalog (snap mode only)",
+		EnvVars: []string{"GTRON_SNAPSHOT_CATALOG_SIGNING_KEY_FILE"},
 	}
 	stateCommitmentCheckpointsFlag = &cli.BoolFlag{
 		Name:  "state.commitment.checkpoints",
@@ -178,6 +190,18 @@ var (
 		Usage: "Hash-trie clean-node cache size in MiB (-1 auto from --db.cache, 0 disables)",
 		Value: -1,
 	}
+	statePrefetchEnabledFlag = &cli.BoolFlag{
+		Name:  "state.prefetch.enabled",
+		Usage: "Enable experimental ProcessBlock state read prefetching",
+	}
+	statePrefetchWorkersFlag = &cli.IntFlag{
+		Name:  "state.prefetch.workers",
+		Usage: "State prefetch worker count (0 = auto)",
+	}
+	statePrefetchLookaheadFlag = &cli.IntFlag{
+		Name:  "state.prefetch.lookahead",
+		Usage: "Future transactions to enqueue for state prefetching (0 = default)",
+	}
 	stateCommitmentCacheFlag = &cli.IntFlag{
 		Name:  "state.commitment.cache",
 		Usage: "Generation-safe commitment/flat-latest base-read cache size in MiB (0 disables)",
@@ -185,7 +209,7 @@ var (
 	}
 	configFileFlag = &cli.StringFlag{
 		Name:  "config",
-		Usage: "Path to a TOML config file (currently understood: [history] enabled, mode, prune_window)",
+		Usage: "Path to a TOML config file (currently understood: [history] and [state.prefetch])",
 	}
 	dbCacheFlag = &cli.IntFlag{
 		Name:  "db.cache",
@@ -241,32 +265,35 @@ var (
 		Usage: "Maximum blocks frozen per freezer pass",
 		Value: defaultFreezerBatch(),
 	}
-	freezerV2DisableFlag = &cli.BoolFlag{
-		Name:  "freezer.v2.disable",
-		Usage: "Disable automatic promotion of complete V1 segments to compressed V2",
-	}
-	freezerV2FrameBlocksFlag = &cli.Uint64Flag{
-		Name:  "freezer.v2.frame-blocks",
-		Usage: "Blocks per independently compressed V2 Zstd frame",
-		Value: 64,
-	}
-	freezerV2SegmentBlocksFlag = &cli.Uint64Flag{
-		Name:  "freezer.v2.segment-blocks",
-		Usage: "Blocks per automatically promoted V2 segment",
-		Value: 65_536,
-	}
-	freezerTxIndexDisableFlag = &cli.BoolFlag{
-		Name:  "freezer.tx-index.disable",
-		Usage: "Disable automatic archival of V2-covered transaction indexes",
-	}
-	freezerTxIndexPrefixBitsFlag = &cli.Uint64Flag{
-		Name:  "freezer.tx-index.prefix-bits",
-		Usage: "Leading transaction-hash bits in automatically built immutable runs",
-		Value: 20,
-	}
 	syncRestartFromFlag = &cli.Uint64Flag{
 		Name:  "sync.restart-from",
 		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
+	}
+	syncImportBatchFlag = &cli.IntFlag{
+		Name:    "sync.import-batch",
+		Usage:   "Maximum staged block bodies imported per local sync pass (1-1024; wire fetch batch stays 100)",
+		Value:   tsync.MaxImportBatch,
+		EnvVars: []string{"GTRON_SYNC_IMPORT_BATCH"},
+	}
+	syncETLTempDirFlag = &cli.StringFlag{
+		Name:    "sync.etl.tempdir",
+		Usage:   "Parent directory for sorted TxLookup ETL run files during bulk sync",
+		EnvVars: []string{"GTRON_SYNC_ETL_TEMPDIR"},
+	}
+	syncETLBufferMiBFlag = &cli.Uint64Flag{
+		Name:    "sync.etl.buffer",
+		Usage:   "TxLookup ETL memory buffer in MiB during bulk sync (0 = default)",
+		EnvVars: []string{"GTRON_SYNC_ETL_BUFFER"},
+	}
+	syncETLBatchMiBFlag = &cli.Uint64Flag{
+		Name:    "sync.etl.batch",
+		Usage:   "TxLookup ETL output batch size in MiB during bulk sync (0 = default)",
+		EnvVars: []string{"GTRON_SYNC_ETL_BATCH"},
+	}
+	syncAsyncCommitFlag = &cli.BoolFlag{
+		Name:    "sync.async-commit",
+		Usage:   "Experimental: pipeline staged-sync state commits; validate with a Nile re-sync before production use",
+		EnvVars: []string{"GTRON_ASYNC_COMMIT"},
 	}
 	syncStopAtFlag = &cli.Uint64Flag{
 		Name:  "sync.stop-at",
@@ -303,10 +330,28 @@ var app = &cli.App{
 		logFileFlag,
 		logModuleFlag,
 		gcmodeFlag,
+		pruneModeFlag,
 		historyEnabledFlag,
+		snapshotBootstrapFlag,
+		snapshotDirFlag,
+		snapshotURLFlag,
+		snapshotResetFlag,
+		snapshotFetchConcurrencyFlag,
+		snapshotTrustedCatalogKeyFlag,
+		snapshotTrustedCatalogKeyFileFlag,
+		snapshotForkConfigHashFlag,
+		snapshotETLTempDirFlag,
+		snapshotETLBufferMiBFlag,
+		snapshotETLBatchMiBFlag,
+		snapshotCompressHistoryFlag,
+		snapshotCompressLatestFlag,
+		snapshotCatalogSigningKeyFileRuntimeFlag,
 		stateCommitmentCheckpointsFlag,
 		stateCommitmentModeFlag,
 		stateTrieCacheFlag,
+		statePrefetchEnabledFlag,
+		statePrefetchWorkersFlag,
+		statePrefetchLookaheadFlag,
 		stateCommitmentCacheFlag,
 		configFileFlag,
 		dbCacheFlag,
@@ -320,12 +365,12 @@ var app = &cli.App{
 		freezerIntervalFlag,
 		freezerMarginFlag,
 		freezerBatchFlag,
-		freezerV2DisableFlag,
-		freezerV2FrameBlocksFlag,
-		freezerV2SegmentBlocksFlag,
-		freezerTxIndexDisableFlag,
-		freezerTxIndexPrefixBitsFlag,
 		syncRestartFromFlag,
+		syncImportBatchFlag,
+		syncETLTempDirFlag,
+		syncETLBufferMiBFlag,
+		syncETLBatchMiBFlag,
+		syncAsyncCommitFlag,
 		syncStopAtFlag,
 	},
 	Before: func(ctx *cli.Context) error {
@@ -344,6 +389,7 @@ var app = &cli.App{
 			Usage: "Initialize genesis block",
 			Flags: []cli.Flag{
 				dataDirFlag,
+				snapshotDirFlag,
 				testnetFlag,
 				genesisFileFlag,
 				dbCacheFlag,
@@ -356,6 +402,8 @@ var app = &cli.App{
 			},
 			Action: initCmd,
 		},
+		dbCommand(),
+		snapshotCommand(),
 	},
 }
 
@@ -383,6 +431,11 @@ func initCmd(ctx *cli.Context) error {
 		defer fz.Close()
 		ancientReader = rawdb.NewFreezerReader(fz)
 	}
+	stateSnapshotManager, err := statesnapshots.OpenManager(snapshotDir(ctx, cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open state snapshots: %w", err)
+	}
+	ancientReader = rawdb.NewFallbackAncientReader(ancientReader, stateSnapshotManager)
 
 	config, hash, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
 	if err != nil {
@@ -394,6 +447,15 @@ func initCmd(ctx *cli.Context) error {
 
 func gtron(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
+	snapshotETL, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	if err := validateSyncImportBatch(cfg.SyncImportBatch); err != nil {
+		return err
+	}
+	compressHistorySegments, compressLatestSegments := applySnapshotCompressionConfigs(ctx)
+	log.Info("Cold snapshot compression configured", "history", compressHistorySegments, "latest", compressLatestSegments)
 	dbPath := chainDataDir(cfg.DataDir)
 
 	// In dev mode, parse witness key early so we can build the genesis with it
@@ -422,6 +484,13 @@ func gtron(ctx *cli.Context) error {
 			"witnesses", len(genesis.Witnesses),
 			"accounts", len(genesis.Accounts))
 	}
+	if ctx.Bool("snapshot.bootstrap") {
+		log.Info("Bootstrapping verified remote snapshot before node startup")
+		if err := bootstrapRuntimeSnapshot(ctx); err != nil {
+			return err
+		}
+		log.Info("Verified remote snapshot bootstrap completed")
+	}
 
 	// Open database
 	db, err := openPebbleDB(ctx, dbPath)
@@ -437,10 +506,7 @@ func gtron(ctx *cli.Context) error {
 		_ = db.Close()
 	}
 
-	freezerCfg, err := makeFreezerConfig(ctx)
-	if err != nil {
-		return err
-	}
+	freezerCfg := makeFreezerConfig(ctx)
 	ancientReader := rawdb.AncientReader(rawdb.NoopAncient{})
 	ancientPath := ancientDataDir(cfg.DataDir)
 	if shouldOpenFreezer(ancientPath, freezerCfg) {
@@ -451,9 +517,16 @@ func gtron(ctx *cli.Context) error {
 		}
 		ancientReader = rawdb.NewFreezerReader(ancientStore)
 	}
+	stateSnapshotDir := snapshotDir(ctx, cfg.DataDir)
+	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
+	if err != nil {
+		closeStores()
+		return fmt.Errorf("open state snapshots: %w", err)
+	}
+	ancientReader = rawdb.NewFallbackAncientReader(ancientReader, stateSnapshotManager)
 
 	// Setup genesis (idempotent)
-	chainConfig, _, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
+	chainConfig, genesisHash, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
 	if err != nil {
 		closeStores()
 		return fmt.Errorf("setup genesis: %w", err)
@@ -467,6 +540,28 @@ func gtron(ctx *cli.Context) error {
 	if err := applyHistoryConfig(ctx, chainConfig); err != nil {
 		closeStores()
 		return err
+	}
+	if err := applyStatePrefetchConfig(ctx, chainConfig); err != nil {
+		closeStores()
+		return err
+	}
+	if err := ensureHistoryPruneModeLocked(db, chainConfig.EffectiveHistoryMode()); err != nil {
+		closeStores()
+		return err
+	}
+	snapshotCatalogSigningKey, snapshotCatalogSigningEnabled, err := runtimeSnapshotCatalogSigningKey(ctx)
+	if err != nil {
+		closeStores()
+		return err
+	}
+	if snapshotCatalogSigningEnabled && (chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap || !chainConfig.HistoryEnabled) {
+		closeStores()
+		return errors.New("--snapshot.catalog-signing-key-file requires snap history mode with history capture enabled")
+	}
+	var snapshotCatalogChain *statesnapshots.ChainIdentity
+	if snapshotCatalogSigningEnabled {
+		identity := snapshotExpectedChainIdentity(chainConfig, genesis, genesisHash, "")
+		snapshotCatalogChain = &identity
 	}
 	chainConfig.StateCommitmentCheckpoints = ctx.Bool("state.commitment.checkpoints")
 	switch mode := ctx.String("state.commitment.mode"); mode {
@@ -513,16 +608,15 @@ func gtron(ctx *cli.Context) error {
 	}
 	// Async/pipelined commit is OFF by default and DELIBERATELY not a
 	// chain-config / proposal value (it changes only the internal commit
-	// schedule, never any wire-observable byte). It is enabled ops-only via an
-	// environment variable for the live re-sync validation described in
-	// docs (async-commit validation protocol). Experimental; do not enable on a
-	// production node until that validation passes.
-	if os.Getenv("GTRON_ASYNC_COMMIT") == "1" {
+	// schedule, never any wire-observable byte). It is enabled only by the
+	// explicit experimental flag (or its retained environment alias) for the
+	// live re-sync validation described in the runbook.
+	if shouldEnableAsyncCommit(ctx) {
 		bc.SetAsyncCommit(true)
-		// depth > 2 (GTRON_ASYNC_COMMIT_DEPTH) additionally buffers the commit
-		// queue and amortizes the per-range drain across sync batches; depth 2
-		// (default) is the current rendezvous behavior.
-		log.Warn("Async commit ENABLED (experimental, GTRON_ASYNC_COMMIT=1) — internal commit pipelined off the critical path; validate via re-sync before production use",
+		// Every depth amortizes the shared staged-sync session across local import
+		// batches. Depth > 2 additionally buffers the commit queue; depth 2 keeps
+		// the conservative rendezvous worker behavior.
+		log.Warn("Async commit ENABLED (experimental, --sync.async-commit) — internal commit pipelined off the critical path; validate via re-sync before production use",
 			"depth", bc.PipelinedCommitDepth())
 	}
 	if ctx.IsSet("sync.restart-from") {
@@ -548,69 +642,6 @@ func gtron(ctx *cli.Context) error {
 		}
 		log.Info("Historical sync restart complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
 	}
-	if !ctx.IsSet("sync.restart-from") && needsRound141StoredReplay(bc) {
-		// Stored replay at multi-million-block state sizes fills the configured
-		// commitment cache and spends a material share of all CPU in cold Pebble
-		// branch seeks. The one-shot recovery owns startup exclusively, so widen
-		// only this temporary path and restore the operator-configured budget before
-		// normal services start.
-		restoreReplayCommitmentCache, replayCommitmentCacheEnlarged := temporarilyEnlargeStoredReplayCommitmentCache(bc, commitmentCacheMiB)
-		if replayCommitmentCacheEnlarged {
-			log.Warn("Stored replay commitment cache enlarged",
-				"configuredMiB", commitmentCacheMiB,
-				"replayMiB", round141StoredReplayCommitmentCacheMiB)
-		}
-		healthServer, err := startStoredReplayHealthServer(fmt.Sprintf(":%d", cfg.HTTPPort), bc)
-		if err != nil {
-			closeStores()
-			return fmt.Errorf("start stored replay health server: %w", err)
-		}
-		var replayDebug *debugapi.Server
-		if cfg.PProfPort > 0 {
-			addr := cfg.PProfAddr
-			if addr == "" {
-				addr = "127.0.0.1"
-			}
-			replayDebug = debugapi.NewServer(fmt.Sprintf("%s:%d", addr, cfg.PProfPort))
-			if err := replayDebug.Start(); err != nil {
-				_ = healthServer.Close()
-				closeStores()
-				return fmt.Errorf("start stored replay debug server: %w", err)
-			}
-		}
-
-		startHead := bc.CurrentBlock().Number()
-		lastProgress := startHead
-		log.Warn("One-time round 141 stored-block replay triggered",
-			"currentHead", startHead,
-			"target", round141StoredReplayTarget,
-			"reason", "resume interrupted conservative state rebuild from preserved canonical blocks")
-		err = bc.ReplayStoredBlocksToHeight(round141StoredReplayTarget, func(p core.RestartSyncProgress) {
-			if p.Phase != "replay" || p.Block == p.Target || p.Block-lastProgress >= 100_000 {
-				lastProgress = p.Block
-				log.Info("Stored-block replay progress", "phase", p.Phase, "block", p.Block, "target", p.Target)
-			}
-		})
-		// The enlarged cache belongs only to the exclusive offline replay. Drop
-		// it before normal P2P/API lifecycles start; otherwise the ordinary node
-		// silently retains the multi-GiB recovery budget despite the operator's
-		// --state.commitment.cache setting.
-		restoreReplayCommitmentCache()
-		if replayCommitmentCacheEnlarged {
-			log.Info("Stored replay commitment cache restored",
-				"cacheMiB", commitmentCacheMiB)
-		}
-		if replayDebug != nil {
-			_ = replayDebug.Stop()
-		}
-		_ = healthServer.Close()
-		if err != nil {
-			closeStores()
-			return err
-		}
-		log.Info("Stored-block replay complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
-	}
-
 	// Create transaction pool
 	pool := txpool.New()
 
@@ -623,15 +654,12 @@ func gtron(ctx *cli.Context) error {
 
 	// Create backend + API server
 	backend := core.NewTronBackend(bc, pool)
-	stateSnapshotDir := stateSnapshotsDir(cfg.DataDir)
-	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
-	if err != nil {
-		_ = bc.Close()
-		closeStores()
-		return fmt.Errorf("open state snapshots: %w", err)
-	}
 	bc.SetStateCodeColdHistory(stateSnapshotManager)
 	bc.SetStateCommitmentColdHistory(stateSnapshotManager)
+	bc.ChainDB().SetChainIndexReader(stateSnapshotManager)
+	bc.ChainDB().SetBalanceTraceReader(stateSnapshotManager)
+	bc.ChainDB().SetSectionBloomReader(stateSnapshotManager)
+	bc.ChainDB().SetEventLogReader(stateSnapshotManager)
 	backend.SetStateColdHistory(stateSnapshotManager)
 	if manifest := stateSnapshotManager.Manifest(); manifest != nil {
 		log.Info("State snapshots loaded",
@@ -802,23 +830,35 @@ func gtron(ctx *cli.Context) error {
 	stack.RegisterLifecycle(handler.PbftHandler())
 	stack.RegisterLifecycle(pbftDataSync)
 
-	if shouldEnableDomainStatePruner(chainConfig) {
-		historyWindow := chainConfig.EffectiveHistoryPruneWindow()
-		reorgWindow := domainStateReorgWindow
-		if historyWindow < reorgWindow {
-			reorgWindow = historyWindow
-		}
-		prunePolicy := statepruning.FullPolicy(historyWindow, reorgWindow)
-		if chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap {
-			prunePolicy = statepruning.SnapPolicy(historyWindow, reorgWindow)
-		}
-		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
-		domainLifecycle := statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
-			Snapshot: statesnapshots.Config{
+	chainLookupPruneLifecycleWired := false
+	sectionBloomPruneLifecycleWired := false
+	balanceTracePruneLifecycleWired := false
+	retiredPruneLifecycleWired := false
+	var domainLifecycle *statepruning.SnapshotLifecycle
+	var chainFreezerSnapshotBuild statepruning.ChainFreezerBuildFunc
+	if shouldEnableChainFreezerSnapshotBuilder(chainConfig, ancientStore != nil, freezerCfg.Enabled) {
+		chainFreezerSnapshotBuild = func() (statesnapshots.ChainFreezerSnapshotPassResult, error) {
+			return statesnapshots.BuildChainFreezerSnapshotPass(ancientStore, bc.ChainDB(), statesnapshots.ChainFreezerSnapshotConfig{
 				Dir:            stateSnapshotDir,
-				Enabled:        chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
-				HistoryDataset: historyDataset,
-				HistoryWindow:  historyWindow,
+				BuildEventLogs: true,
+			})
+		}
+	}
+	if shouldEnableDomainStatePruner(chainConfig) {
+		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
+		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
+		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
+			Snapshot: statesnapshots.Config{
+				Dir:                stateSnapshotDir,
+				Enabled:            chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
+				HistoryDataset:     historyDataset,
+				HistoryWindow:      prunePolicy.HistoryWindow,
+				ETL:                snapshotETL,
+				BuildSectionBlooms: true,
+				BuildBalanceTraces: true,
+				BuildEventLogs:     true,
+				CatalogSigningKey:  snapshotCatalogSigningKey,
+				CatalogChain:       snapshotCatalogChain,
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.
@@ -827,50 +867,139 @@ func gtron(ctx *cli.Context) error {
 			Pruner: statepruning.PrunerConfig{
 				Policy:      prunePolicy,
 				SnapshotDir: stateSnapshotDir,
-				MaxSyncLag:  historyWindow,
+				MaxSyncLag:  prunePolicy.HistoryWindow,
+			},
+			ChainFreezerBuild: chainFreezerSnapshotBuild,
+			ChainLookupPrune: func() (*statesnapshots.PruneHotChainLookupResult, error) {
+				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
+				if err != nil {
+					if os.IsNotExist(err) {
+						return nil, nil
+					}
+					return nil, err
+				}
+				return statesnapshots.PruneHotChainLookupsWithProgress(rawdb.NewChainDB(db, ancientReader), stateSnapshotDir, manifest)
+			},
+			SectionBloomPrune: func() (*statesnapshots.PruneHotSectionBloomResult, error) {
+				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
+				if err != nil {
+					if os.IsNotExist(err) {
+						return nil, nil
+					}
+					return nil, err
+				}
+				return statesnapshots.PruneHotSectionBloomsWithProgress(rawdb.NewChainDB(db, ancientReader), stateSnapshotDir, manifest)
+			},
+			BalanceTracePrune: func() (*statesnapshots.PruneHotBalanceTraceResult, error) {
+				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
+				if err != nil {
+					if os.IsNotExist(err) {
+						return nil, nil
+					}
+					return nil, err
+				}
+				return statesnapshots.PruneHotBalanceTracesWithProgress(db, stateSnapshotDir, manifest)
+			},
+			RetiredPrune: func() (*statesnapshots.PruneRetiredSegmentFilesResult, error) {
+				if _, err := statesnapshots.LoadProductionManifest(stateSnapshotDir); err != nil {
+					if os.IsNotExist(err) {
+						return nil, nil
+					}
+					return nil, err
+				}
+				return statesnapshots.PruneRetiredSegmentFiles(stateSnapshotDir)
 			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)
+		syncService.AddSyncCompleteHook(domainLifecycle.RequestPass)
+		chainLookupPruneLifecycleWired = true
+		sectionBloomPruneLifecycleWired = true
+		balanceTracePruneLifecycleWired = true
+		retiredPruneLifecycleWired = true
 		log.Info("Domain state snapshot/prune lifecycle enabled",
 			"mode", prunePolicy.Mode,
 			"snapshotEnabled", chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
+			"chainFreezerBuild", chainFreezerSnapshotBuild != nil,
+			"chainLookupPrune", true,
+			"sectionBloomPrune", true,
+			"balanceTracePrune", true,
+			"retiredPrune", true,
 			"dataset", historyDataset,
-			"historyWindow", historyWindow,
-			"reorgWindow", reorgWindow,
+			"historyWindow", prunePolicy.HistoryWindow,
+			"reorgWindow", prunePolicy.ReorgWindow,
+			"etlTempDir", snapshotETL.TempDir,
+			"etlBufferBytes", snapshotETL.BufferLimit,
+			"etlBatchBytes", snapshotETL.BatchSize,
 			"snapshotDir", stateSnapshotDir)
 	} else {
 		log.Info("Domain state pruning disabled", "mode", chainConfig.EffectiveHistoryMode())
 	}
+	if !chainLookupPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
+		stack.RegisterLifecycle(statesnapshots.NewChainLookupPruneLifecycle(rawdb.NewChainDB(db, ancientReader), statesnapshots.ChainLookupPruneLifecycleConfig{
+			Dir: stateSnapshotDir,
+		}))
+		log.Info("Chain lookup prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"snapshotDir", stateSnapshotDir)
+	}
+	if !sectionBloomPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
+		stack.RegisterLifecycle(statesnapshots.NewSectionBloomPruneLifecycle(rawdb.NewChainDB(db, ancientReader), statesnapshots.SectionBloomPruneLifecycleConfig{
+			Dir: stateSnapshotDir,
+		}))
+		log.Info("Section bloom prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"snapshotDir", stateSnapshotDir)
+	}
+	if !balanceTracePruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
+		stack.RegisterLifecycle(statesnapshots.NewBalanceTracePruneLifecycle(db, statesnapshots.BalanceTracePruneLifecycleConfig{
+			Dir: stateSnapshotDir,
+		}))
+		log.Info("Balance trace prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"snapshotDir", stateSnapshotDir)
+	}
+	if !retiredPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
+		stack.RegisterLifecycle(statesnapshots.NewRetiredPruneLifecycle(statesnapshots.RetiredPruneLifecycleConfig{
+			Dir: stateSnapshotDir,
+		}))
+		log.Info("Retired snapshot segment prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"snapshotDir", stateSnapshotDir)
+	}
+	if ancientStore != nil && shouldEnableChainFreezerTailPruner(chainConfig) {
+		retainBlocks := statesnapshots.EffectiveChainFreezerTailRetainBlocks(chainConfig.EffectiveHistoryPruneWindow())
+		chainFreezerTailLifecycle := statesnapshots.NewChainFreezerTailPruneLifecycle(bc.ChainDB(), ancientStore, stateSnapshotManager, statesnapshots.ChainFreezerTailPruneLifecycleConfig{
+			RetainBlocks: retainBlocks,
+			HeadBlock: func() uint64 {
+				if head := bc.CurrentBlock(); head != nil {
+					return head.Number()
+				}
+				return 0
+			},
+		})
+		stack.RegisterLifecycle(chainFreezerTailLifecycle)
+		if domainLifecycle != nil {
+			domainLifecycle.AddPassCompleteHook(chainFreezerTailLifecycle.RequestPass)
+		}
+		log.Info("Chain freezer tail prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"retainBlocks", retainBlocks,
+			"snapshotDir", stateSnapshotDir)
+	}
 
 	if ancientStore != nil && freezerCfg.Enabled {
-		// Let P2P establish the initial sync session before permitting an eager
-		// manual compaction. During bulk sync the freezer still persists ancient
-		// rows and deletes hot keys; Pebble reclaims skipped ranges through its
-		// ordinary background compactions.
-		compactionReadyAt := time.Now().Add(freezerCfg.Interval)
-		freezerCfg.CompactionAllowed = func() bool {
-			return !time.Now().Before(compactionReadyAt) && !syncService.IsSyncing()
-		}
-		// V2 promotion is bounded to one complete segment per freezer pass and
-		// has its own cooldown. Keep it moving during bulk sync; coupling it to
-		// the heavyweight Pebble Compact gate lets V1 and tx-* grow without
-		// bound on a node that remains in IsSyncing for weeks.
-		freezerCfg.V2PromotionAllowed = func() bool {
-			return !time.Now().Before(compactionReadyAt)
-		}
 		freezerRunner := chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
 		if freezerRunner != nil {
+			syncService.AddSyncCompleteHook(freezerRunner.RequestPass)
+			if domainLifecycle != nil {
+				freezerRunner.AddChainFreezerAdvanceHook(domainLifecycle.RequestPass)
+			}
 			stack.RegisterLifecycle(freezerRunner)
 			log.Info("Chain freezer enabled",
 				"ancient", ancientPath,
 				"margin", freezerCfg.MarginBlocks,
 				"batch", freezerCfg.BatchBlocks,
-				"interval", freezerCfg.Interval,
-				"v2", freezerCfg.V2Enabled,
-				"v2FrameBlocks", freezerCfg.V2FrameBlocks,
-				"v2SegmentBlocks", freezerCfg.V2SegmentBlocks,
-				"txIndex", freezerCfg.TransactionIndexEnabled,
-				"txIndexPrefixBits", freezerCfg.TransactionIndexPrefixBits)
+				"interval", freezerCfg.Interval)
 		}
 	} else if ancientStore != nil {
 		log.Info("Chain freezer disabled; existing ancient data readable", "ancient", ancientPath)
@@ -952,6 +1081,7 @@ func gtron(ctx *cli.Context) error {
 		"jsonrpc", fmt.Sprintf(":%d", cfg.JSONRPCPort),
 		"grpc", cfg.GRPCPort,
 		"p2p", fmt.Sprintf(":%d", cfg.P2PPort),
+		"syncImportBatch", cfg.SyncImportBatch,
 		"datadir", cfg.DataDir)
 
 	// Wait for interrupt
@@ -973,70 +1103,8 @@ func gtron(ctx *cli.Context) error {
 	return nil
 }
 
-type commitmentBranchCacheSizer interface {
-	SetCommitmentBranchCacheSize(sizeBytes int)
-}
-
-// temporarilyEnlargeStoredReplayCommitmentCache applies the one-shot replay
-// budget and returns a restore function for the operator-configured budget.
-// Keeping the transition in one helper makes it difficult for an early change
-// to the replay tail to forget the restore again.
-func temporarilyEnlargeStoredReplayCommitmentCache(cache commitmentBranchCacheSizer, configuredMiB int) (restore func(), enlarged bool) {
-	if cache == nil || configuredMiB >= round141StoredReplayCommitmentCacheMiB {
-		return func() {}, false
-	}
-	cache.SetCommitmentBranchCacheSize(round141StoredReplayCommitmentCacheMiB * 1024 * 1024)
-	return func() {
-		cache.SetCommitmentBranchCacheSize(configuredMiB * 1024 * 1024)
-	}, true
-}
-
-// needsRound141StoredReplay identifies only the partial materialized image left
-// by the interrupted round-141 conservative rebuild. Immutable canonical block
-// bytes survived ResetMutableState, while transaction-info state above the
-// partial head was deliberately cleared.
-func needsRound141StoredReplay(bc *core.BlockChain) bool {
-	if bc == nil || bc.CurrentBlock() == nil || bc.CurrentBlock().Number() >= round141StoredReplayTarget {
-		return false
-	}
-	target := rawdb.ReadBlock(bc.ChainDB(), round141StoredReplayTarget)
-	if target == nil || target.Hash() != round141StoredReplayTargetHash {
-		return false
-	}
-	return rawdb.ReadTransactionInfo(bc.ChainDB(), round141SkippedTxHash.Bytes()) == nil
-}
-
-// startStoredReplayHealthServer keeps the deployment health contract available
-// during the long offline replay. The real Wallet API replaces it immediately
-// after replay finishes; the response always reflects BlockChain's atomic head.
-func startStoredReplayHealthServer(addr string, bc *core.BlockChain) (*http.Server, error) {
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	server := &http.Server{Addr: addr, Handler: storedReplayHealthHandler(bc)}
-	go func() {
-		_ = server.Serve(listener)
-	}()
-	return server, nil
-}
-
-type storedReplayHeadReader interface {
-	CurrentBlock() *types.Block
-}
-
-func storedReplayHealthHandler(chain storedReplayHeadReader) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/wallet/getnowblock", func(w http.ResponseWriter, _ *http.Request) {
-		head := chain.CurrentBlock()
-		if head == nil {
-			http.Error(w, "current block unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"blockID":"%s","block_header":{"raw_data":{"number":%d}}}`, head.Hash().Hex(), head.Number())
-	})
-	return mux
+func shouldEnableAsyncCommit(ctx *cli.Context) bool {
+	return ctx != nil && ctx.Bool("sync.async-commit")
 }
 
 func versionCmd(ctx *cli.Context) error {

@@ -699,6 +699,196 @@ func (t *freezerTable) truncateHead(items uint64) error {
 	return nil
 }
 
+// truncateTail marks old data below items as hidden. It updates the virtual
+// tail only; physical file deletion is a later compaction step once an entire
+// data file falls below the hidden range.
+func (t *freezerTable) truncateTail(items uint64) error {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if !t.config.prunable {
+		return errors.New("tail truncation disabled")
+	}
+	existing := t.items.Load()
+	if items > existing {
+		return errors.New("tail truncation above head")
+	}
+	hidden := t.itemHidden.Load()
+	if items <= hidden {
+		return nil
+	}
+	oldSize, err := t.sizeNolock()
+	if err != nil {
+		return err
+	}
+	t.logger.Debug("Truncating freezer table tail", "hidden", hidden, "limit", items)
+	if err := t.metadata.setVirtualTail(items, true); err != nil {
+		return err
+	}
+	t.itemHidden.Store(items)
+	newSize, err := t.sizeNolock()
+	if err != nil {
+		return err
+	}
+	t.sizeGauge.Dec(int64(oldSize - newSize))
+	return nil
+}
+
+// pruneTailFiles physically removes data shards that are completely below the
+// virtual tail. If the virtual tail falls inside a shard, the shard is kept and
+// the physical item offset advances only to that shard's first item.
+func (t *freezerTable) pruneTailFiles() (uint64, error) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if t.readonly {
+		return 0, errReadOnly
+	}
+	if !t.config.prunable {
+		return 0, errors.New("tail truncation disabled")
+	}
+	if t.index == nil || t.head == nil || t.metadata.file == nil {
+		return 0, errClosed
+	}
+	items := t.items.Load()
+	hidden := t.itemHidden.Load()
+	physicalTail := t.itemOffset.Load()
+	if hidden <= physicalTail {
+		return 0, nil
+	}
+	if hidden > items {
+		return 0, errors.New("hidden tail above head")
+	}
+
+	oldSize, err := t.sizeNolock()
+	if err != nil {
+		return 0, err
+	}
+	oldTailID := t.tailId
+	retainedFile := t.headId
+	newPhysicalTail := items
+	copyOffset := int64(0)
+	if hidden == items {
+		stat, err := t.index.Stat()
+		if err != nil {
+			return 0, err
+		}
+		copyOffset = stat.Size()
+	} else {
+		indices, err := t.getIndices(hidden, 1)
+		if err != nil {
+			return 0, err
+		}
+		_, _, retainedFile = indices[0].bounds(indices[1])
+		if retainedFile <= oldTailID {
+			return 0, nil
+		}
+		firstEndIndex, err := t.firstIndexEntryInFile(retainedFile, hidden)
+		if err != nil {
+			return 0, err
+		}
+		newPhysicalTail = physicalTail + firstEndIndex - 1
+		copyOffset = int64(firstEndIndex * indexEntrySize)
+	}
+	if newPhysicalTail <= physicalTail && hidden != items {
+		return 0, nil
+	}
+	if newPhysicalTail > uint64(^uint32(0)) {
+		return 0, errors.New("physical tail exceeds freezer index encoding")
+	}
+
+	if err := t.doSync(); err != nil {
+		return 0, err
+	}
+	indexPath := t.index.Name()
+	if err := t.index.Close(); err != nil {
+		return 0, err
+	}
+	t.index = nil
+	header := indexEntry{filenum: retainedFile, offset: uint32(newPhysicalTail)}
+	if err := copyFrom(indexPath, indexPath, uint64(copyOffset), func(f *os.File) error {
+		_, err := f.Write(header.append(nil))
+		return err
+	}); err != nil {
+		if reopenErr := t.reopenIndex(indexPath); reopenErr != nil {
+			return 0, errors.Join(err, reopenErr)
+		}
+		return 0, err
+	}
+	if err := t.reopenIndex(indexPath); err != nil {
+		return 0, err
+	}
+
+	t.tailId = retainedFile
+	t.itemOffset.Store(newPhysicalTail)
+	removedFiles, err := t.releaseFilesBeforeWithError(retainedFile, true)
+	if err != nil {
+		return removedFiles, err
+	}
+	if hidden == items {
+		if err := truncateFreezerFile(t.head, 0); err != nil {
+			return removedFiles, err
+		}
+		t.headBytes = 0
+	}
+	if err := t.doSync(); err != nil {
+		return removedFiles, err
+	}
+
+	newSize, err := t.sizeNolock()
+	if err != nil {
+		return removedFiles, err
+	}
+	switch {
+	case oldSize > newSize:
+		t.sizeGauge.Dec(int64(oldSize - newSize))
+	case newSize > oldSize:
+		t.sizeGauge.Inc(int64(newSize - oldSize))
+	}
+	return removedFiles, nil
+}
+
+func (t *freezerTable) firstIndexEntryInFile(fileID uint32, maxItem uint64) (uint64, error) {
+	physicalTail := t.itemOffset.Load()
+	if maxItem < physicalTail {
+		return 0, errors.New("max item below physical tail")
+	}
+	low, high := uint64(1), maxItem-physicalTail+1
+	buffer := make([]byte, indexEntrySize)
+	for low < high {
+		mid := low + (high-low)/2
+		entry, err := t.readIndexEntry(mid, buffer)
+		if err != nil {
+			return 0, err
+		}
+		if entry.filenum >= fileID {
+			high = mid
+		} else {
+			low = mid + 1
+		}
+	}
+	entry, err := t.readIndexEntry(low, buffer)
+	if err != nil {
+		return 0, err
+	}
+	if entry.filenum != fileID {
+		return 0, fmt.Errorf("missing first index entry for data file %d", fileID)
+	}
+	return low, nil
+}
+
+func (t *freezerTable) readIndexEntry(index uint64, buffer []byte) (indexEntry, error) {
+	var entry indexEntry
+	if len(buffer) < indexEntrySize {
+		buffer = make([]byte, indexEntrySize)
+	}
+	if _, err := t.index.ReadAt(buffer[:indexEntrySize], int64(index*indexEntrySize)); err != nil {
+		return entry, err
+	}
+	entry.unmarshalBinary(buffer[:indexEntrySize])
+	return entry, nil
+}
+
 // sizeHidden returns the total data size of hidden items in the freezer table.
 // This function assumes the lock is already held.
 func (t *freezerTable) sizeHidden() (uint64, error) {
@@ -711,108 +901,6 @@ func (t *freezerTable) sizeHidden() (uint64, error) {
 		return 0, err
 	}
 	return uint64(indices[1].offset), nil
-}
-
-// truncateTail hides all items below the requested threshold and physically
-// removes complete V1 shard files that no longer contain live rows. Ancient V2
-// uses this only after the same prefix has been durably published and verified
-// in immutable Zstd segments.
-func (t *freezerTable) truncateTail(items uint64) error {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-
-	if t.itemHidden.Load() >= items {
-		return nil
-	}
-	if t.items.Load() < items {
-		return fmt.Errorf("tail %d exceeds table head %d", items, t.items.Load())
-	}
-	var (
-		newTailID uint32
-		buffer    = make([]byte, indexEntrySize)
-	)
-	if t.items.Load() == items {
-		newTailID = t.headId
-	} else {
-		offset := items - t.itemOffset.Load()
-		if _, err := t.index.ReadAt(buffer, int64((offset+1)*indexEntrySize)); err != nil {
-			return err
-		}
-		var newTail indexEntry
-		newTail.unmarshalBinary(buffer)
-		newTailID = newTail.filenum
-	}
-	oldSize, err := t.sizeNolock()
-	if err != nil {
-		return err
-	}
-	t.itemHidden.Store(items)
-	if err := t.metadata.setVirtualTail(items, false); err != nil {
-		return err
-	}
-	if t.tailId == newTailID {
-		return nil
-	}
-	if t.tailId > newTailID {
-		return fmt.Errorf("invalid index, tail-file %d, item-file %d", t.tailId, newTailID)
-	}
-	if err := t.doSync(); err != nil {
-		return err
-	}
-	var (
-		newDeleted = items
-		deleted    = t.itemOffset.Load()
-	)
-	for current := items - 1; current >= deleted; current-- {
-		if _, err := t.index.ReadAt(buffer, int64((current-deleted+1)*indexEntrySize)); err != nil {
-			return err
-		}
-		var previous indexEntry
-		previous.unmarshalBinary(buffer)
-		if previous.filenum != newTailID {
-			break
-		}
-		newDeleted = current
-		if current == 0 {
-			break
-		}
-	}
-	indexName := t.index.Name()
-	if err := t.index.Close(); err != nil {
-		return err
-	}
-	err = copyFrom(indexName, indexName, indexEntrySize*(newDeleted-deleted+1), func(file *os.File) error {
-		tailIndex := indexEntry{filenum: newTailID, offset: uint32(newDeleted)}
-		_, err := file.Write(tailIndex.append(nil))
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	t.index, err = openFreezerFileForAppend(indexName)
-	if err != nil {
-		return err
-	}
-	if err := t.index.Sync(); err != nil {
-		return err
-	}
-	t.tailId = newTailID
-	t.itemOffset.Store(newDeleted)
-	t.releaseFilesBefore(t.tailId, true)
-
-	shorten := indexEntrySize * int64(newDeleted-deleted)
-	if t.metadata.flushOffset <= shorten {
-		return fmt.Errorf("invalid index flush offset: %d, shorten: %d", t.metadata.flushOffset, shorten)
-	}
-	if err := t.metadata.setFlushOffset(t.metadata.flushOffset-shorten, true); err != nil {
-		return err
-	}
-	newSize, err := t.sizeNolock()
-	if err != nil {
-		return err
-	}
-	t.sizeGauge.Dec(int64(oldSize - newSize))
-	return nil
 }
 
 // Close closes all opened files and finalizes the freezer table for use.
@@ -850,19 +938,32 @@ func (t *freezerTable) Close() error {
 func (t *freezerTable) openFile(num uint32, opener func(string) (*os.File, error)) (f *os.File, err error) {
 	var exist bool
 	if f, exist = t.files[num]; !exist {
-		var name string
-		if t.config.noSnappy {
-			name = fmt.Sprintf("%s.%04d.rdat", t.name, num)
-		} else {
-			name = fmt.Sprintf("%s.%04d.cdat", t.name, num)
-		}
-		f, err = opener(filepath.Join(t.path, name))
+		f, err = opener(t.dataFilePath(num))
 		if err != nil {
 			return nil, err
 		}
 		t.files[num] = f
 	}
 	return f, err
+}
+
+func (t *freezerTable) dataFilePath(num uint32) string {
+	var name string
+	if t.config.noSnappy {
+		name = fmt.Sprintf("%s.%04d.rdat", t.name, num)
+	} else {
+		name = fmt.Sprintf("%s.%04d.cdat", t.name, num)
+	}
+	return filepath.Join(t.path, name)
+}
+
+func (t *freezerTable) reopenIndex(path string) error {
+	index, err := openFreezerFileForAppend(path)
+	if err != nil {
+		return err
+	}
+	t.index = index
+	return nil
 }
 
 // releaseFile closes a file, and removes it from the open file cache.
@@ -889,15 +990,49 @@ func (t *freezerTable) releaseFilesAfter(num uint32, remove bool) {
 
 // releaseFilesBefore closes all open files with a lower number, and optionally also deletes the files
 func (t *freezerTable) releaseFilesBefore(num uint32, remove bool) {
+	_, _ = t.releaseFilesBeforeWithError(num, remove)
+}
+
+func (t *freezerTable) releaseFilesBeforeWithError(num uint32, remove bool) (uint64, error) {
+	var (
+		removed uint64
+		errs    []error
+	)
 	for fnum, f := range t.files {
 		if fnum < num {
 			delete(t.files, fnum)
-			f.Close()
+			if err := f.Close(); err != nil {
+				errs = append(errs, err)
+			}
 			if remove {
-				os.Remove(f.Name())
+				if err := os.Remove(f.Name()); err != nil {
+					if !os.IsNotExist(err) {
+						errs = append(errs, err)
+					}
+				} else {
+					removed++
+				}
 			}
 		}
 	}
+	if remove {
+		for fnum := uint32(0); fnum < num; fnum++ {
+			if _, open := t.files[fnum]; open {
+				continue
+			}
+			if err := os.Remove(t.dataFilePath(fnum)); err != nil {
+				if !os.IsNotExist(err) {
+					errs = append(errs, err)
+				}
+			} else {
+				removed++
+			}
+		}
+		if err := syncDir(t.path); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return removed, errors.Join(errs...)
 }
 
 // getIndices returns the index entries for the given from-item, covering 'count' items.
@@ -1100,6 +1235,33 @@ func (t *freezerTable) size() (uint64, error) {
 	defer t.lock.RUnlock()
 
 	return t.sizeNolock()
+}
+
+// stats returns a diagnostic table status snapshot.
+func (t *freezerTable) stats() (TableStats, error) {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	hidden, err := t.sizeHidden()
+	if err != nil {
+		return TableStats{}, err
+	}
+	visible, err := t.sizeNolock()
+	if err != nil {
+		return TableStats{}, err
+	}
+	return TableStats{
+		Head:         t.items.Load(),
+		PhysicalTail: t.itemOffset.Load(),
+		HiddenTail:   t.itemHidden.Load(),
+		Prunable:     t.config.prunable,
+		NoSnappy:     t.config.noSnappy,
+		TailFile:     t.tailId,
+		HeadFile:     t.headId,
+		HeadBytes:    t.headBytes,
+		VisibleSize:  visible,
+		HiddenSize:   hidden,
+	}, nil
 }
 
 // sizeNolock returns the total data size in the freezer table. This function

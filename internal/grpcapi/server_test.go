@@ -1,7 +1,9 @@
 package grpcapi_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"net"
 	"testing"
 
@@ -24,42 +26,118 @@ const bufSize = 1 << 20
 
 // testBackend is a minimal stub implementation of tronapi.Backend for grpcapi tests.
 type testBackend struct {
-	block              *types.Block
-	blocks             []*types.Block // for range queries
-	account            *types.Account
-	tx                 *corepb.Transaction
-	params             []tronapi.ChainParameter
-	contract           *contractpb.SmartContract
-	witnesses          []*tronapi.WitnessInfo
-	nextMaint          int64
-	delegatedResources []*tronapi.DelegatedResourceInfo
+	block                   *types.Block
+	blocks                  []*types.Block // for range queries
+	blockNumCalls           int
+	lastNumQueried          uint64
+	hashCalls               int
+	lastHashQueried         common.Hash
+	blockErr                error
+	hashErr                 error
+	rangeCalls              int
+	lastRangeStart          uint64
+	lastRangeEnd            uint64
+	account                 *types.Account
+	accountErr              error
+	accountAtErr            error
+	accountIDErr            error
+	accountIDAtErr          error
+	assetErr                error
+	assetByName             *contractpb.AssetIssueContract
+	marketErr               error
+	proposalErr             error
+	exchange                *corepb.Exchange
+	exchangeErr             error
+	tx                      *corepb.Transaction
+	txErr                   error
+	txInfoErr               error
+	txInfoByBlockErr        error
+	params                  []tronapi.ChainParameter
+	paramsErr               error
+	contract                *contractpb.SmartContract
+	contractErr             error
+	witnesses               []*tronapi.WitnessInfo
+	nextMaint               int64
+	nextMaintErr            error
+	totalTxErr              error
+	burnErr                 error
+	bandwidthErr            error
+	energyErr               error
+	delegatedResources      []*tronapi.DelegatedResourceInfo
+	legacyDelegIndex        *corepb.DelegatedResourceAccountIndex
+	accountBalanceResp      *contractpb.AccountBalanceResponse
+	blockBalanceTrace       *contractpb.BlockBalanceTrace
+	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
+	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
+	rangeErr                error
 }
 
-func (b *testBackend) CurrentBlock() *types.Block                             { return b.block }
-func (b *testBackend) GetBlockByNumber(n uint64) (*types.Block, error)        { return b.block, nil }
-func (b *testBackend) GetAccount(addr common.Address) (*types.Account, error) { return b.account, nil }
+func (b *testBackend) CurrentBlock() *types.Block { return b.block }
+func (b *testBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
+	b.blockNumCalls++
+	b.lastNumQueried = n
+	if b.blockErr != nil {
+		return nil, b.blockErr
+	}
+	return b.block, nil
+}
+func (b *testBackend) GetAccount(addr common.Address) (*types.Account, error) {
+	if b.accountErr != nil {
+		return nil, b.accountErr
+	}
+	return b.account, nil
+}
 func (b *testBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
+	if b.accountAtErr != nil {
+		return nil, b.accountAtErr
+	}
 	return b.account, nil
 }
 func (b *testBackend) BroadcastTransaction(tx *types.Transaction) error { return nil }
 func (b *testBackend) GetNodeInfo() *tronapi.NodeInfo                   { return &tronapi.NodeInfo{} }
 func (b *testBackend) PendingTransactionCount() int                     { return 0 }
 func (b *testBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
+	if b.contractErr != nil {
+		return nil, b.contractErr
+	}
+	return b.contract, nil
+}
+func (b *testBackend) GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error) {
 	return b.contract, nil
 }
 func (b *testBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	return nil, nil
 }
+func (b *testBackend) TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
+	return nil, nil
+}
 func (b *testBackend) GetTransactionByID(h common.Hash) (*corepb.Transaction, error) {
+	if b.txErr != nil {
+		return nil, b.txErr
+	}
 	return b.tx, nil
 }
 func (b *testBackend) GetTransactionInfoByID(h common.Hash) (*corepb.TransactionInfo, error) {
+	if b.txInfoErr != nil {
+		return nil, b.txInfoErr
+	}
 	return nil, nil
 }
+func (b *testBackend) GetTransactionBlockNumByID(h common.Hash) (uint64, bool, error) {
+	return 0, false, nil
+}
 func (b *testBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.TransactionInfo, error) {
+	if b.txInfoByBlockErr != nil {
+		return nil, b.txInfoByBlockErr
+	}
 	return nil, nil
 }
 func (b *testBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
+	b.hashCalls++
+	b.lastHashQueried = h
+	if b.hashErr != nil {
+		return nil, b.hashErr
+	}
 	if b.block != nil && b.block.Hash() == h {
 		return b.block, nil
 	}
@@ -71,6 +149,12 @@ func (b *testBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
 	return nil, nil
 }
 func (b *testBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
+	b.rangeCalls++
+	b.lastRangeStart = start
+	b.lastRangeEnd = end
+	if b.rangeErr != nil {
+		return nil, b.rangeErr
+	}
 	if len(b.blocks) > 0 {
 		var result []*types.Block
 		for _, blk := range b.blocks {
@@ -98,6 +182,9 @@ func (b *testBackend) BuildTriggerContractTransaction(owner, contract common.Add
 func (b *testBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
 	return 0, nil
 }
+func (b *testBackend) EstimateEnergyAt(owner, contract common.Address, data []byte, blockNum uint64) (int64, error) {
+	return 0, nil
+}
 func (b *testBackend) GetAccountResourceAt(addr common.Address, blockNum uint64) (*tronapi.AccountResource, error) {
 	return nil, nil
 }
@@ -107,11 +194,38 @@ func (b *testBackend) GetRewardAt(addr common.Address, blockNum uint64) (*tronap
 func (b *testBackend) GetAccountResource(addr common.Address) (*tronapi.AccountResource, error) {
 	return nil, nil
 }
-func (b *testBackend) GetChainParameters() []tronapi.ChainParameter { return b.params }
+func (b *testBackend) GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error) {
+	b.lastAccountBalanceReq = req
+	return b.accountBalanceResp, nil
+}
+func (b *testBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error) {
+	b.lastBlockBalanceTraceID = id
+	return b.blockBalanceTrace, nil
+}
+func (b *testBackend) GetChainParameters() ([]tronapi.ChainParameter, error) {
+	if b.paramsErr != nil {
+		return nil, b.paramsErr
+	}
+	return b.params, nil
+}
+func (b *testBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
+	return nil, nil
+}
 func (b *testBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 	return b.witnesses, nil
 }
-func (b *testBackend) NextMaintenanceTime() int64 { return b.nextMaint }
+func (b *testBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
+	return b.witnesses, nil
+}
+func (b *testBackend) NextMaintenanceTime() (int64, error) {
+	if b.nextMaintErr != nil {
+		return 0, b.nextMaintErr
+	}
+	return b.nextMaint, nil
+}
+func (b *testBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
+	return 0, nil
+}
 func (b *testBackend) BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
@@ -121,48 +235,175 @@ func (b *testBackend) BuildProposalApproveTransaction(owner common.Address, prop
 func (b *testBackend) BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (b *testBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return nil, nil }
+func (b *testBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
+	if b.proposalErr != nil {
+		return nil, b.proposalErr
+	}
+	return nil, nil
+}
+func (b *testBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	if b.proposalErr != nil {
+		return nil, b.proposalErr
+	}
+	return nil, nil
+}
+func (b *testBackend) GetDelegatedResource(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	return b.delegatedResources, nil
+}
+func (b *testBackend) GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	return b.delegatedResources, nil
+}
+func (b *testBackend) GetDelegatedResourceAccountIndex(addr common.Address) (*corepb.DelegatedResourceAccountIndex, error) {
+	return b.legacyDelegIndex, nil
+}
+func (b *testBackend) GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
+	return b.legacyDelegIndex, nil
+}
 func (b *testBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	return b.delegatedResources, nil
+}
+func (b *testBackend) GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
 	return b.delegatedResources, nil
 }
 func (b *testBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
 	return nil, nil
 }
+func (b *testBackend) GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
+	return nil, nil
+}
 func (b *testBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
+	return nil, nil
+}
+func (b *testBackend) CanDelegateResourceAt(addr common.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*tronapi.CanDelegateInfo, error) {
 	return nil, nil
 }
 func (b *testBackend) GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
 	return nil, nil
 }
+func (b *testBackend) GetCanWithdrawUnfreezeAmountAt(addr common.Address, timestamp int64, blockNum uint64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	return nil, nil
+}
 func (b *testBackend) GetAvailableUnfreezeCount(addr common.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	return nil, nil
+}
+func (b *testBackend) GetAvailableUnfreezeCountAt(addr common.Address, blockNum uint64) (*tronapi.AvailableUnfreezeCountInfo, error) {
 	return nil, nil
 }
 func (b *testBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error) { return nil, nil }
 func (b *testBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (b *testBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error)  { return nil, nil }
-func (b *testBackend) ListNodes() ([]*tronapi.PeerInfo, error)                        { return nil, nil }
-func (b *testBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract      { return nil }
-func (b *testBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract { return nil }
-func (b *testBackend) GetAssetIssueList() []*contractpb.AssetIssueContract            { return nil }
-func (b *testBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
-	return nil
+func (b *testBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error) { return nil, nil }
+func (b *testBackend) ListNodes() ([]*tronapi.PeerInfo, error)                       { return nil, nil }
+func (b *testBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
 }
-func (b *testBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract {
-	return nil
+func (b *testBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
 }
-func (b *testBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder { return nil }
-func (b *testBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
-	return nil
+func (b *testBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error) {
+	if b.assetErr != nil {
+		return nil, b.assetErr
+	}
+	return b.assetByName, nil
 }
-func (b *testBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
-	return nil
+func (b *testBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	if b.assetErr != nil {
+		return nil, b.assetErr
+	}
+	return b.assetByName, nil
 }
-func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
-func (b *testBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
-func (b *testBackend) TotalTransaction() int64                    { return 0 }
-func (b *testBackend) GetBurnTrx() int64                          { return 0 }
+func (b *testBackend) GetAssetIssueList() ([]*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
+}
+func (b *testBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
+}
+func (b *testBackend) GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
+}
+func (b *testBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
+}
+func (b *testBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
+}
+func (b *testBackend) GetAssetIssueByAccountAt(addr common.Address, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, b.assetErr
+}
+func (b *testBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketOrdersByAccount(addr common.Address) ([]*corepb.MarketOrder, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) ([]*corepb.MarketOrder, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
+	return nil, b.marketErr
+}
+func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
+	return nil, nil
+}
+func (b *testBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
+	return nil, nil
+}
+func (b *testBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
+	return b.exchange, nil
+}
+func (b *testBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
+	return b.exchange, nil
+}
+func (b *testBackend) GetBrokerageInfo(addr common.Address) (int64, error) { return 0, nil }
+func (b *testBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
+	return 0, nil
+}
+func (b *testBackend) TotalTransaction() (int64, error) {
+	if b.totalTxErr != nil {
+		return 0, b.totalTxErr
+	}
+	return 0, nil
+}
+func (b *testBackend) GetBurnTrx() (int64, error) {
+	if b.burnErr != nil {
+		return 0, b.burnErr
+	}
+	return 0, nil
+}
+func (b *testBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
+	return 0, nil
+}
 func (b *testBackend) BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
 	return nil, nil
 }
@@ -184,12 +425,46 @@ func (b *testBackend) BuildWithdrawExpireUnfreezeTransaction(owner common.Addres
 func (b *testBackend) BuildVoteWitnessTransaction(owner common.Address, votes map[common.Address]int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (b *testBackend) GetBandwidthPrices() string { return "" }
-func (b *testBackend) GetEnergyPrices() string    { return "" }
+func (b *testBackend) GetBandwidthPrices() (string, error) {
+	if b.bandwidthErr != nil {
+		return "", b.bandwidthErr
+	}
+	return "", nil
+}
+func (b *testBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
+	return "", nil
+}
+func (b *testBackend) GetEnergyPrices() (string, error) {
+	if b.energyErr != nil {
+		return "", b.energyErr
+	}
+	return "", nil
+}
+func (b *testBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
+	return "", nil
+}
 func (b *testBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
+	if b.proposalErr != nil {
+		return nil, b.proposalErr
+	}
+	return nil, nil
+}
+func (b *testBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	if b.proposalErr != nil {
+		return nil, b.proposalErr
+	}
 	return nil, nil
 }
 func (b *testBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
+	return nil, nil
+}
+func (b *testBackend) ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error) {
+	if b.exchangeErr != nil {
+		return nil, b.exchangeErr
+	}
 	return nil, nil
 }
 func (b *testBackend) BuildCreateAccountTransaction(owner, account common.Address) (*corepb.Transaction, error) {
@@ -205,9 +480,21 @@ func (b *testBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.Acco
 	return nil, nil
 }
 func (b *testBackend) GetAccountById(accountID []byte) (*types.Account, error) {
+	if b.accountIDErr != nil {
+		return nil, b.accountIDErr
+	}
+	return nil, nil
+}
+func (b *testBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
+	if b.accountIDAtErr != nil {
+		return nil, b.accountIDAtErr
+	}
 	return nil, nil
 }
 func (b *testBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
+	return nil, nil
+}
+func (b *testBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
 	return nil, nil
 }
 func (b *testBackend) BuildTransferAssetTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error) {
@@ -238,10 +525,13 @@ func (b *testBackend) BuildContractTransaction(contractType corepb.Transaction_C
 	return nil, nil
 }
 func (b *testBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) { return nil, nil }
-func (b *testBackend) ValidateAddress(addr string) (bool, string)              { return false, "" }
-func (b *testBackend) SolidifiedBlockNum() uint64                              { return 0 }
-func (b *testBackend) LatestPbftBlockNum() int64                               { return -1 }
-func (b *testBackend) ValidateTransaction(tx *types.Transaction) error         { return nil }
+func (b *testBackend) GetProposalByIDAt(id int64, blockNum uint64) (*tronapi.ProposalInfo, error) {
+	return nil, nil
+}
+func (b *testBackend) ValidateAddress(addr string) (bool, string)      { return false, "" }
+func (b *testBackend) SolidifiedBlockNum() uint64                      { return 0 }
+func (b *testBackend) LatestPbftBlockNum() (int64, error)              { return -1, nil }
+func (b *testBackend) ValidateTransaction(tx *types.Transaction) error { return nil }
 
 // newTestClient sets up an in-process gRPC server+client using bufconn.
 func newTestClient(t *testing.T, backend tronapi.Backend) apipb.WalletClient {
@@ -299,6 +589,15 @@ func TestGetBlockByNum_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetBlockByNum_BackendErrorReturnsNotFound(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	client := newTestClient(t, &testBackend{blockErr: backendErr})
+	_, err := client.GetBlockByNum(context.Background(), &apipb.NumberMessage{Num: 1})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
 func TestGetAccount_Empty(t *testing.T) {
 	client := newTestClient(t, &testBackend{account: nil})
 	resp, err := client.GetAccount(context.Background(), &corepb.Account{
@@ -313,11 +612,107 @@ func TestGetAccount_Empty(t *testing.T) {
 	}
 }
 
+func TestGetAccount_BackendErrorReturnsInternal(t *testing.T) {
+	backendErr := errors.New("state history: cold account segment corrupt")
+	client := newTestClient(t, &testBackend{accountErr: backendErr})
+	_, err := client.GetAccount(context.Background(), &corepb.Account{Address: make([]byte, 21)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
+	}
+}
+
+func TestGetAccount_PreservesNotFoundErrorAsEmpty(t *testing.T) {
+	client := newTestClient(t, &testBackend{accountErr: errors.New("account not found")})
+	resp, err := client.GetAccount(context.Background(), &corepb.Account{Address: make([]byte, 21)})
+	if err != nil {
+		t.Fatalf("GetAccount: %v", err)
+	}
+	if resp == nil || len(resp.GetAddress()) != 0 {
+		t.Fatalf("GetAccount = %+v, want empty account", resp)
+	}
+}
+
+func TestGetAccountById_BackendErrorReturnsInternal(t *testing.T) {
+	backendErr := errors.New("state history: cold account-id index corrupt")
+	client := newTestClient(t, &testBackend{accountIDErr: backendErr})
+	_, err := client.GetAccountById(context.Background(), &corepb.Account{AccountId: []byte("user1234")})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
+	}
+}
+
+func TestGetAccountBalanceTrace(t *testing.T) {
+	hash := grpcTestBytes(common.HashLength, 0x44)
+	addr := grpcTestBytes(common.AddressLength, common.AddressPrefixMainnet)
+	backend := &testBackend{
+		accountBalanceResp: &contractpb.AccountBalanceResponse{
+			Balance: 77,
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+				Number: 9,
+				Hash:   hash,
+			},
+		},
+	}
+	client := newTestClient(t, backend)
+	resp, err := client.GetAccountBalance(context.Background(), &contractpb.AccountBalanceRequest{
+		AccountIdentifier: &contractpb.AccountIdentifier{Address: addr},
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Number: 9,
+			Hash:   hash,
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetAccountBalance: %v", err)
+	}
+	if resp.GetBalance() != 77 || resp.GetBlockIdentifier().GetNumber() != 9 {
+		t.Fatalf("response = %+v", resp)
+	}
+	if backend.lastAccountBalanceReq == nil || backend.lastAccountBalanceReq.GetBlockIdentifier().GetNumber() != 9 {
+		t.Fatalf("backend request = %+v", backend.lastAccountBalanceReq)
+	}
+}
+
+func TestGetBlockBalanceTrace(t *testing.T) {
+	hash := grpcTestBytes(common.HashLength, 0x55)
+	backend := &testBackend{
+		blockBalanceTrace: &contractpb.BlockBalanceTrace{
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+				Number: 10,
+				Hash:   hash,
+			},
+			Timestamp: 1234,
+		},
+	}
+	client := newTestClient(t, backend)
+	resp, err := client.GetBlockBalanceTrace(context.Background(), &contractpb.BlockBalanceTrace_BlockIdentifier{
+		Number: 10,
+		Hash:   hash,
+	})
+	if err != nil {
+		t.Fatalf("GetBlockBalanceTrace: %v", err)
+	}
+	if resp.GetTimestamp() != 1234 {
+		t.Fatalf("timestamp = %d, want 1234", resp.GetTimestamp())
+	}
+	if backend.lastBlockBalanceTraceID == nil || backend.lastBlockBalanceTraceID.GetNumber() != 10 {
+		t.Fatalf("backend block id = %+v", backend.lastBlockBalanceTraceID)
+	}
+}
+
 func TestGetTransactionById_NotFound(t *testing.T) {
 	client := newTestClient(t, &testBackend{tx: nil})
 	_, err := client.GetTransactionById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestGetTransactionById_BackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	client := newTestClient(t, &testBackend{txErr: backendErr})
+	_, err := client.GetTransactionById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 
@@ -339,6 +734,44 @@ func TestGetChainParameters(t *testing.T) {
 	}
 }
 
+func TestLiveDynamicPropertyRPCsSurfaceBackendErrors(t *testing.T) {
+	backendErr := errors.New("load head dynamic properties: corrupt")
+	tests := []struct {
+		name string
+		b    *testBackend
+		call func(apipb.WalletClient) error
+	}{
+		{name: "GetChainParameters", b: &testBackend{paramsErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetChainParameters(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetNextMaintenanceTime", b: &testBackend{nextMaintErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetNextMaintenanceTime(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetBurnTrx", b: &testBackend{burnErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetBurnTrx(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetBandwidthPrices", b: &testBackend{bandwidthErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetBandwidthPrices(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetEnergyPrices", b: &testBackend{energyErr: backendErr}, call: func(client apipb.WalletClient) error {
+			_, err := client.GetEnergyPrices(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newTestClient(t, tt.b)
+			if err := tt.call(client); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+}
+
 // ── PR-A1 tests ──────────────────────────────────────────────────────────────
 
 func makeBlock(num int64) *types.Block {
@@ -347,6 +780,14 @@ func makeBlock(num int64) *types.Block {
 			RawData: &corepb.BlockHeaderRaw{Number: num},
 		},
 	})
+}
+
+func grpcTestBytes(n int, start byte) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = start + byte(i)
+	}
+	return out
 }
 
 func TestGetNowBlock2_WithBlock(t *testing.T) {
@@ -381,8 +822,87 @@ func TestGetBlockByNum2_Found(t *testing.T) {
 	}
 }
 
+func TestGetBlockLatestUsesCurrentBlock(t *testing.T) {
+	blk := makeBlock(8)
+	client := newTestClient(t, &testBackend{block: blk})
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: "latest", Detail: true})
+	if err != nil {
+		t.Fatalf("GetBlock latest: %v", err)
+	}
+	if resp.GetBlockHeader().GetRawData().GetNumber() != 8 {
+		t.Fatalf("want block 8, got %d", resp.GetBlockHeader().GetRawData().GetNumber())
+	}
+}
+
+func TestGetBlockNumberUsesNumberLookup(t *testing.T) {
+	blk := makeBlock(9)
+	backend := &testBackend{block: blk}
+	client := newTestClient(t, backend)
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: "9", Detail: true})
+	if err != nil {
+		t.Fatalf("GetBlock number: %v", err)
+	}
+	if resp.GetBlockHeader().GetRawData().GetNumber() != 9 {
+		t.Fatalf("want block 9, got %d", resp.GetBlockHeader().GetRawData().GetNumber())
+	}
+	if backend.blockNumCalls != 1 || backend.lastNumQueried != 9 {
+		t.Fatalf("number lookup calls/num = %d/%d, want 1/9", backend.blockNumCalls, backend.lastNumQueried)
+	}
+}
+
+func TestGetBlockIDUsesHashLookup(t *testing.T) {
+	blk := makeBlock(10)
+	backend := &testBackend{block: blk}
+	client := newTestClient(t, backend)
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: blk.Hash().Hex(), Detail: true})
+	if err != nil {
+		t.Fatalf("GetBlock id: %v", err)
+	}
+	if resp.GetBlockHeader().GetRawData().GetNumber() != 10 {
+		t.Fatalf("want block 10, got %d", resp.GetBlockHeader().GetRawData().GetNumber())
+	}
+	if backend.hashCalls != 1 || backend.lastHashQueried != blk.Hash() {
+		t.Fatalf("hash lookup calls/hash = %d/%s, want 1/%s", backend.hashCalls, backend.lastHashQueried.Hex(), blk.Hash().Hex())
+	}
+}
+
+func TestGetBlockDetailFalseOmitsTransactionBody(t *testing.T) {
+	blk := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 11},
+		},
+		Transactions: []*corepb.Transaction{{
+			RawData: &corepb.TransactionRaw{Timestamp: 99},
+		}},
+	})
+	client := newTestClient(t, &testBackend{block: blk})
+	resp, err := client.GetBlock(context.Background(), &apipb.BlockReq{IdOrNum: "11"})
+	if err != nil {
+		t.Fatalf("GetBlock detail=false: %v", err)
+	}
+	txs := resp.GetTransactions()
+	if len(txs) != 1 {
+		t.Fatalf("transaction count = %d, want 1", len(txs))
+	}
+	if txs[0].GetTransaction() != nil {
+		t.Fatal("detail=false returned full transaction body")
+	}
+	if len(txs[0].GetTxid()) != common.HashLength {
+		t.Fatalf("txid length = %d, want %d", len(txs[0].GetTxid()), common.HashLength)
+	}
+}
+
 func TestGetBlockById_NotFound(t *testing.T) {
 	client := newTestClient(t, &testBackend{})
+	_, err := client.GetBlockById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestGetBlockById_BackendErrorReturnsNotFound(t *testing.T) {
+	backendErr := errors.New("rawdb: cold block index corrupt")
+	client := newTestClient(t, &testBackend{hashErr: backendErr})
 	_, err := client.GetBlockById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
@@ -415,6 +935,70 @@ func TestGetBlockByLimitNext2(t *testing.T) {
 	}
 }
 
+func TestGetBlockByLimitNextRejectsInvalidRangeBeforeBackend(t *testing.T) {
+	cases := []struct {
+		name  string
+		start int64
+		end   int64
+	}{
+		{name: "negative start", start: -1, end: 3},
+		{name: "negative end", start: 1, end: -3},
+		{name: "empty", start: 3, end: 3},
+		{name: "reversed", start: 4, end: 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/block", func(t *testing.T) {
+			backend := &testBackend{}
+			client := newTestClient(t, backend)
+			_, err := client.GetBlockByLimitNext(context.Background(), &apipb.BlockLimit{StartNum: tc.start, EndNum: tc.end})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("want InvalidArgument, got %v", err)
+			}
+			if backend.rangeCalls != 0 {
+				t.Fatalf("GetBlocksByRange called %d times for invalid range, want 0", backend.rangeCalls)
+			}
+		})
+		t.Run(tc.name+"/extension", func(t *testing.T) {
+			backend := &testBackend{}
+			client := newTestClient(t, backend)
+			_, err := client.GetBlockByLimitNext2(context.Background(), &apipb.BlockLimit{StartNum: tc.start, EndNum: tc.end})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("want InvalidArgument, got %v", err)
+			}
+			if backend.rangeCalls != 0 {
+				t.Fatalf("GetBlocksByRange called %d times for invalid range, want 0", backend.rangeCalls)
+			}
+		})
+	}
+}
+
+func TestGetBlockByLimitNextBackendErrorReturnsEmpty(t *testing.T) {
+	backend := &testBackend{rangeErr: errors.New("rawdb: block 2 decode: corrupt")}
+	client := newTestClient(t, backend)
+
+	resp, err := client.GetBlockByLimitNext(context.Background(), &apipb.BlockLimit{StartNum: 1, EndNum: 3})
+	if err != nil {
+		t.Fatalf("GetBlockByLimitNext: %v", err)
+	}
+	if len(resp.GetBlock()) != 0 {
+		t.Fatalf("GetBlockByLimitNext returned %d blocks, want 0", len(resp.GetBlock()))
+	}
+	if backend.rangeCalls != 1 || backend.lastRangeStart != 1 || backend.lastRangeEnd != 3 {
+		t.Fatalf("range call = %d [%d,%d), want 1 [1,3)", backend.rangeCalls, backend.lastRangeStart, backend.lastRangeEnd)
+	}
+
+	resp2, err := client.GetBlockByLimitNext2(context.Background(), &apipb.BlockLimit{StartNum: 1, EndNum: 3})
+	if err != nil {
+		t.Fatalf("GetBlockByLimitNext2: %v", err)
+	}
+	if len(resp2.GetBlock()) != 0 {
+		t.Fatalf("GetBlockByLimitNext2 returned %d blocks, want 0", len(resp2.GetBlock()))
+	}
+	if backend.rangeCalls != 2 {
+		t.Fatalf("range calls = %d, want 2", backend.rangeCalls)
+	}
+}
+
 func TestGetBlockByLatestNum(t *testing.T) {
 	blk := makeBlock(10)
 	client := newTestClient(t, &testBackend{block: blk})
@@ -424,6 +1008,30 @@ func TestGetBlockByLatestNum(t *testing.T) {
 	}
 	if len(resp.GetBlock()) == 0 {
 		t.Fatal("want at least one block")
+	}
+}
+
+func TestGetBlockByLatestNumBackendErrorReturnsEmpty(t *testing.T) {
+	backend := &testBackend{block: makeBlock(10), rangeErr: errors.New("rawdb: block 10 decode: corrupt")}
+	client := newTestClient(t, backend)
+
+	resp, err := client.GetBlockByLatestNum(context.Background(), &apipb.NumberMessage{Num: 1})
+	if err != nil {
+		t.Fatalf("GetBlockByLatestNum: %v", err)
+	}
+	if len(resp.GetBlock()) != 0 {
+		t.Fatalf("GetBlockByLatestNum returned %d blocks, want 0", len(resp.GetBlock()))
+	}
+
+	resp2, err := client.GetBlockByLatestNum2(context.Background(), &apipb.NumberMessage{Num: 1})
+	if err != nil {
+		t.Fatalf("GetBlockByLatestNum2: %v", err)
+	}
+	if len(resp2.GetBlock()) != 0 {
+		t.Fatalf("GetBlockByLatestNum2 returned %d blocks, want 0", len(resp2.GetBlock()))
+	}
+	if backend.rangeCalls != 2 {
+		t.Fatalf("range calls = %d, want 2", backend.rangeCalls)
 	}
 }
 
@@ -447,6 +1055,23 @@ func TestGetContract_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetContract_BackendErrorReturnsInternal(t *testing.T) {
+	backendErr := errors.New("state latest: contract metadata corrupt")
+	client := newTestClient(t, &testBackend{contractErr: backendErr})
+	_, err := client.GetContract(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
+	}
+}
+
+func TestGetContract_PreservesNotFoundError(t *testing.T) {
+	client := newTestClient(t, &testBackend{contractErr: errors.New("contract not found")})
+	_, err := client.GetContract(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
 func TestGetContract_Found(t *testing.T) {
 	sc := &contractpb.SmartContract{Name: "TestContract", Bytecode: []byte{0x60, 0x80}}
 	client := newTestClient(t, &testBackend{contract: sc})
@@ -456,6 +1081,15 @@ func TestGetContract_Found(t *testing.T) {
 	}
 	if resp.GetName() != "TestContract" {
 		t.Fatalf("want TestContract, got %s", resp.GetName())
+	}
+}
+
+func TestGetContractInfo_BackendErrorReturnsInternal(t *testing.T) {
+	backendErr := errors.New("state latest: contract bytecode corrupt")
+	client := newTestClient(t, &testBackend{contractErr: backendErr})
+	_, err := client.GetContractInfo(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 
@@ -488,6 +1122,27 @@ func TestListWitnesses(t *testing.T) {
 	}
 	if resp.GetWitnesses()[0].GetUrl() != "http://witness1.tron" {
 		t.Fatalf("url mismatch: %s", resp.GetWitnesses()[0].GetUrl())
+	}
+}
+
+func TestGetPaginatedNowWitnessList(t *testing.T) {
+	ws := []*tronapi.WitnessInfo{
+		{Address: "000000000000000000000000000000000000000001", VoteCount: 100, URL: "w1", IsJobs: true},
+		{Address: "000000000000000000000000000000000000000002", VoteCount: 200, URL: "w2", IsJobs: false},
+		{Address: "000000000000000000000000000000000000000003", VoteCount: 300, URL: "w3", IsJobs: true},
+	}
+	client := newTestClient(t, &testBackend{witnesses: ws})
+	resp, err := client.GetPaginatedNowWitnessList(context.Background(), &apipb.PaginatedMessage{Offset: 1, Limit: 1})
+	if err != nil {
+		t.Fatalf("GetPaginatedNowWitnessList: %v", err)
+	}
+	if len(resp.GetWitnesses()) != 1 || string(resp.GetWitnesses()[0].GetUrl()) != "w2" {
+		t.Fatalf("page = %+v, want second witness", resp.GetWitnesses())
+	}
+
+	_, err = client.GetPaginatedNowWitnessList(context.Background(), &apipb.PaginatedMessage{Offset: -1, Limit: 1})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("negative offset error = %v, want InvalidArgument", err)
 	}
 }
 
@@ -529,6 +1184,42 @@ func TestGetDelegatedResourceV2_Empty(t *testing.T) {
 	}
 }
 
+func TestGetDelegatedResource_Legacy(t *testing.T) {
+	client := newTestClient(t, &testBackend{
+		delegatedResources: []*tronapi.DelegatedResourceInfo{{
+			FrozenBalanceForBandwidth: 123,
+			ExpireTimeForBandwidth:    456,
+		}},
+	})
+	resp, err := client.GetDelegatedResource(context.Background(), &apipb.DelegatedResourceMessage{
+		FromAddress: make([]byte, 21),
+		ToAddress:   make([]byte, 21),
+	})
+	if err != nil {
+		t.Fatalf("GetDelegatedResource: %v", err)
+	}
+	if len(resp.GetDelegatedResource()) != 1 || resp.GetDelegatedResource()[0].GetFrozenBalanceForBandwidth() != 123 {
+		t.Fatalf("GetDelegatedResource = %+v, want legacy resource", resp.GetDelegatedResource())
+	}
+}
+
+func TestGetDelegatedResourceAccountIndex_Legacy(t *testing.T) {
+	to := grpcTestBytes(common.AddressLength, 0x33)
+	client := newTestClient(t, &testBackend{
+		legacyDelegIndex: &corepb.DelegatedResourceAccountIndex{
+			Account:    grpcTestBytes(common.AddressLength, 0x22),
+			ToAccounts: [][]byte{to},
+		},
+	})
+	resp, err := client.GetDelegatedResourceAccountIndex(context.Background(), &apipb.BytesMessage{Value: grpcTestBytes(common.AddressLength, 0x22)})
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAccountIndex: %v", err)
+	}
+	if len(resp.GetToAccounts()) != 1 || !bytes.Equal(resp.GetToAccounts()[0], to) {
+		t.Fatalf("GetDelegatedResourceAccountIndex = %+v, want %x", resp.GetToAccounts(), to)
+	}
+}
+
 func TestGetRewardInfo_Zero(t *testing.T) {
 	client := newTestClient(t, &testBackend{})
 	resp, err := client.GetRewardInfo(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
@@ -562,11 +1253,87 @@ func TestGetAssetIssueList_Empty(t *testing.T) {
 	}
 }
 
+func TestAssetIssueLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head asset state root corrupt")
+	client := newTestClient(t, &testBackend{assetErr: backendErr})
+
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetAssetIssueById", call: func() error {
+			_, err := client.GetAssetIssueById(context.Background(), &apipb.BytesMessage{Value: []byte("1000001")})
+			return err
+		}},
+		{name: "GetAssetIssueByAccount", call: func() error {
+			_, err := client.GetAssetIssueByAccount(context.Background(), &corepb.Account{Address: make([]byte, 21)})
+			return err
+		}},
+		{name: "GetAssetIssueList", call: func() error {
+			_, err := client.GetAssetIssueList(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetPaginatedAssetIssueList", call: func() error {
+			_, err := client.GetPaginatedAssetIssueList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 10})
+			return err
+		}},
+	}
+	for _, check := range checks {
+		err := check.call()
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("%s error = %v, want Internal", check.name, err)
+		}
+	}
+}
+
 func TestGetMarketOrderById_NotFound(t *testing.T) {
 	client := newTestClient(t, &testBackend{})
 	_, err := client.GetMarketOrderById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestMarketLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head market state root corrupt")
+	client := newTestClient(t, &testBackend{marketErr: backendErr})
+
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{name: "GetMarketOrderById", call: func() error {
+			_, err := client.GetMarketOrderById(context.Background(), &apipb.BytesMessage{Value: []byte("order")})
+			return err
+		}},
+		{name: "GetMarketOrderByAccount", call: func() error {
+			_, err := client.GetMarketOrderByAccount(context.Background(), &apipb.BytesMessage{Value: make([]byte, 21)})
+			return err
+		}},
+		{name: "GetMarketPriceByPair", call: func() error {
+			_, err := client.GetMarketPriceByPair(context.Background(), &corepb.MarketOrderPair{
+				SellTokenId: []byte("sell"),
+				BuyTokenId:  []byte("buy"),
+			})
+			return err
+		}},
+		{name: "GetMarketOrderListByPair", call: func() error {
+			_, err := client.GetMarketOrderListByPair(context.Background(), &corepb.MarketOrderPair{
+				SellTokenId: []byte("sell"),
+				BuyTokenId:  []byte("buy"),
+			})
+			return err
+		}},
+		{name: "GetMarketPairList", call: func() error {
+			_, err := client.GetMarketPairList(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+	}
+	for _, check := range checks {
+		err := check.call()
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("%s error = %v, want Internal", check.name, err)
+		}
 	}
 }
 
@@ -603,6 +1370,30 @@ func TestListProposals_Empty(t *testing.T) {
 	}
 }
 
+func TestProposalListQueriesSurfaceBackendError(t *testing.T) {
+	client := newTestClient(t, &testBackend{proposalErr: errors.New("cold proposal state corrupt")})
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "ListProposals", call: func() error {
+			_, err := client.ListProposals(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetPaginatedProposalList", call: func() error {
+			_, err := client.GetPaginatedProposalList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 10})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+}
+
 func TestListExchanges_Empty(t *testing.T) {
 	client := newTestClient(t, &testBackend{})
 	resp, err := client.ListExchanges(context.Background(), &apipb.EmptyMessage{})
@@ -614,11 +1405,73 @@ func TestListExchanges_Empty(t *testing.T) {
 	}
 }
 
+func TestGetExchangeById_Found(t *testing.T) {
+	client := newTestClient(t, &testBackend{
+		exchange: &corepb.Exchange{
+			ExchangeId:         7,
+			FirstTokenBalance:  70,
+			SecondTokenBalance: 700,
+		},
+	})
+	resp, err := client.GetExchangeById(context.Background(), &apipb.BytesMessage{Value: []byte("7")})
+	if err != nil {
+		t.Fatalf("GetExchangeById: %v", err)
+	}
+	if resp.GetExchangeId() != 7 || resp.GetFirstTokenBalance() != 70 {
+		t.Fatalf("GetExchangeById = %+v, want exchange 7", resp)
+	}
+}
+
+func TestGetExchangeById_NotFound(t *testing.T) {
+	client := newTestClient(t, &testBackend{})
+	_, err := client.GetExchangeById(context.Background(), &apipb.BytesMessage{Value: []byte("7")})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestExchangeLiveQueriesSurfaceBackendError(t *testing.T) {
+	client := newTestClient(t, &testBackend{exchangeErr: errors.New("cold exchange state corrupt")})
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "ListExchanges", call: func() error {
+			_, err := client.ListExchanges(context.Background(), &apipb.EmptyMessage{})
+			return err
+		}},
+		{name: "GetExchangeById", call: func() error {
+			_, err := client.GetExchangeById(context.Background(), &apipb.BytesMessage{Value: []byte("7")})
+			return err
+		}},
+		{name: "GetPaginatedExchangeList", call: func() error {
+			_, err := client.GetPaginatedExchangeList(context.Background(), &apipb.PaginatedMessage{Offset: 0, Limit: 10})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Internal {
+				t.Fatalf("%s error = %v, want Internal", tt.name, err)
+			}
+		})
+	}
+}
+
 func TestGetTransactionInfoById_NotFound(t *testing.T) {
 	client := newTestClient(t, &testBackend{})
 	_, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestGetTransactionInfoById_BackendErrorReturnsInternal(t *testing.T) {
+	backendErr := errors.New("rawdb: cold tx lookup corrupt")
+	client := newTestClient(t, &testBackend{txInfoErr: backendErr})
+	_, err := client.GetTransactionInfoById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v", err)
 	}
 }
 
@@ -631,6 +1484,15 @@ func TestGetTransactionInfoByBlockNum_Empty(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+	}
+}
+
+func TestGetTransactionInfoByBlockNumBackendErrorReturnsInternal(t *testing.T) {
+	backendErr := errors.New("rawdb: transaction info block 1 decode: corrupt")
+	client := newTestClient(t, &testBackend{txInfoByBlockErr: backendErr})
+	resp, err := client.GetTransactionInfoByBlockNum(context.Background(), &apipb.NumberMessage{Num: 1})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got resp=%+v err=%v", resp, err)
 	}
 }
 
@@ -664,6 +1526,14 @@ func TestGetBurnTrx(t *testing.T) {
 	}
 	if resp.GetNum() != 0 {
 		t.Fatalf("want 0, got %d", resp.GetNum())
+	}
+}
+
+func TestTotalTransactionBackendError(t *testing.T) {
+	client := newTestClient(t, &testBackend{totalTxErr: errors.New("rawdb: decode total transaction count")})
+	_, err := client.TotalTransaction(context.Background(), &apipb.EmptyMessage{})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("TotalTransaction error = %v, want Internal", err)
 	}
 }
 
@@ -763,6 +1633,47 @@ func TestGetPaginatedAssetIssueList(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+	}
+}
+
+func TestGetAssetIssueByNameAndListByName(t *testing.T) {
+	asset := &contractpb.AssetIssueContract{
+		Id:          "1000001",
+		Name:        []byte("TOKEN"),
+		TotalSupply: 99,
+	}
+	client := newTestClient(t, &testBackend{assetByName: asset})
+
+	byName, err := client.GetAssetIssueByName(context.Background(), &apipb.BytesMessage{Value: []byte("TOKEN")})
+	if err != nil {
+		t.Fatalf("GetAssetIssueByName: %v", err)
+	}
+	if byName.GetId() != "1000001" || byName.GetTotalSupply() != 99 {
+		t.Fatalf("GetAssetIssueByName = %+v, want asset", byName)
+	}
+
+	list, err := client.GetAssetIssueListByName(context.Background(), &apipb.BytesMessage{Value: []byte("TOKEN")})
+	if err != nil {
+		t.Fatalf("GetAssetIssueListByName: %v", err)
+	}
+	if len(list.GetAssetIssue()) != 1 || list.GetAssetIssue()[0].GetId() != "1000001" {
+		t.Fatalf("GetAssetIssueListByName = %+v, want one asset", list.GetAssetIssue())
+	}
+}
+
+func TestGetAssetIssueByNameNotFound(t *testing.T) {
+	client := newTestClient(t, &testBackend{})
+	_, err := client.GetAssetIssueByName(context.Background(), &apipb.BytesMessage{Value: []byte("MISSING")})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("GetAssetIssueByName error = %v, want NotFound", err)
+	}
+
+	list, err := client.GetAssetIssueListByName(context.Background(), &apipb.BytesMessage{Value: []byte("MISSING")})
+	if err != nil {
+		t.Fatalf("GetAssetIssueListByName missing: %v", err)
+	}
+	if len(list.GetAssetIssue()) != 0 {
+		t.Fatalf("missing list has %d assets, want 0", len(list.GetAssetIssue()))
 	}
 }
 

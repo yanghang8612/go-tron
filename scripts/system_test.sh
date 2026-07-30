@@ -255,9 +255,15 @@ echo "=== Starting SR node (dev mode) ==="
 SR_PID=$!
 echo "SR PID=$SR_PID"
 
-wait_for_http $SR_HTTP "SR"
+if ! wait_for_http $SR_HTTP "SR"; then
+    FAIL=$((FAIL + 1))
+    exit 1
+fi
 echo "Waiting for blocks..."
-wait_for_block $SR_HTTP 2 "SR"
+if ! wait_for_block $SR_HTTP 2 "SR"; then
+    FAIL=$((FAIL + 1))
+    exit 1
+fi
 
 # ─────────────────────────────────────────────────────────────────
 # SECTION 2: Consensus & Block Production
@@ -526,11 +532,17 @@ echo "Starting regular node (relay/sync only — no --witness flag)..."
 NODE_PID=$!
 echo "Node PID=$NODE_PID"
 
-wait_for_http $NODE_HTTP "Node"
+if ! wait_for_http $NODE_HTTP "Node"; then
+    FAIL=$((FAIL + 1))
+    exit 1
+fi
 
 # Wait for sync
 echo "Waiting for node to sync..."
-wait_for_sync_close $SR_HTTP $NODE_HTTP 3 "Node"
+if ! wait_for_sync_close $SR_HTTP $NODE_HTTP 3 "Node"; then
+    FAIL=$((FAIL + 1))
+    exit 1
+fi
 
 SR_BLOCK=$(json_field "d.get('block_header',{}).get('raw_data',{}).get('number',0)" "$(http_get $SR_HTTP /wallet/getnowblock)" || echo "0")
 NODE_BLOCK=$(json_field "d.get('block_header',{}).get('raw_data',{}).get('number',0)" "$(http_get $NODE_HTTP /wallet/getnowblock)" || echo "0")
@@ -649,7 +661,15 @@ echo "  TX2 mined in block: $TX2_BLOCK"
 if [ "$TX2_BLOCK" -gt 0 ] 2>/dev/null; then
     echo "  PASS: SR mined the tx received via P2P from relay node"
     PASS=$((PASS + 1))
-    wait_for_block $NODE_HTTP $TX2_BLOCK "Node"
+    if wait_for_block $NODE_HTTP $TX2_BLOCK "Node"; then
+        echo "  PASS: node received the mined block via P2P"
+        PASS=$((PASS + 1))
+        RESULT2_NODE=$(http_post $NODE_HTTP "/wallet/gettransactioninfobyid" "{\"value\": \"$TX_ID2\"}")
+        check "node has propagated tx info" "$RESULT2_NODE" '"blockNumber"'
+    else
+        echo "  FAIL: node did not receive the mined block via P2P"
+        FAIL=$((FAIL + 1))
+    fi
 else
     echo "  FAIL: SR did not mine tx (P2P propagation may have failed)"
     FAIL=$((FAIL + 1))

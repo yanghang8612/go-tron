@@ -14,19 +14,19 @@ import (
 )
 
 type CheckReport struct {
-	LatestRows                     int
-	AccountLatestRows              int
-	KVLatestRows                   int
-	KVGenerationRows               int
-	CommitmentDomainRows           int
-	CommitmentRootPresent          bool
-	ReferencedCodeHashes           int
-	RetainedTxRanges               int
-	RetainedDomainChanges          int
-	CommitmentCheckpoints          int
-	SnapshotSegments               int
-	CommitmentBranchSnapshotRows   uint64
-	Warnings                       []string
+	LatestRows                   int
+	AccountLatestRows            int
+	KVLatestRows                 int
+	KVGenerationRows             int
+	CommitmentDomainRows         int
+	CommitmentRootPresent        bool
+	ReferencedCodeHashes         int
+	RetainedTxRanges             int
+	RetainedDomainChanges        int
+	CommitmentCheckpoints        int
+	SnapshotSegments             int
+	CommitmentBranchSnapshotRows uint64
+	Warnings                     []string
 }
 
 type Checker struct {
@@ -156,7 +156,7 @@ func (c Checker) Check(headNum uint64) (CheckReport, error) {
 			return false, fmt.Errorf("pruning: state tx range for block %d is inverted", row.BlockNum)
 		}
 		if !c.Policy.RetainHistory(row.BlockNum, headNum) {
-			if c.Policy.Mode == ModeFull {
+			if c.Policy.Mode == ModeFull || c.Policy.Mode == ModeBlocks || c.Policy.Mode == ModeMinimal {
 				report.Warnings = append(report.Warnings, fmt.Sprintf("state tx range for prunable block %d is still present", row.BlockNum))
 				return true, nil
 			}
@@ -345,25 +345,16 @@ func (c Checker) checkReferencedCodeHashes(hashes codeHashRefs, headNum uint64) 
 		return errors.New("pruning: missing CodeDomain hot reader")
 	}
 	for hash, txNums := range hashes {
+		covered, err := codeHashCoveredInSnapshots(codeSnapshots, hash, txNums, codeSnapshotTxNum)
+		if err != nil {
+			return err
+		}
+		if covered {
+			continue
+		}
 		if code, ok, err := codeCfg.ReadHotCode(c.DB, hash); err != nil {
 			return err
 		} else if ok && len(code) > 0 {
-			continue
-		}
-		covered := false
-		if codeSnapshots != nil && len(txNums) == 0 {
-			covered = codeHashAvailableInSnapshot(codeSnapshots, hash, codeSnapshotTxNum)
-		}
-		if codeSnapshots != nil && len(txNums) > 0 {
-			covered = true
-			for txNum := range txNums {
-				if !codeHashAvailableInSnapshot(codeSnapshots, hash, txNum) {
-					covered = false
-					break
-				}
-			}
-		}
-		if covered {
 			continue
 		}
 		return fmt.Errorf("pruning: account history references missing code hash %x", hash)
@@ -371,9 +362,28 @@ func (c Checker) checkReferencedCodeHashes(hashes codeHashRefs, headNum uint64) 
 	return nil
 }
 
-func codeHashAvailableInSnapshot(mgr *snapshots.Manager, hash common.Hash, txNum uint64) bool {
+func codeHashCoveredInSnapshots(mgr *snapshots.Manager, hash common.Hash, txNums map[uint64]struct{}, fallbackTxNum uint64) (bool, error) {
+	if mgr == nil {
+		return false, nil
+	}
+	if len(txNums) == 0 {
+		return codeHashAvailableInSnapshot(mgr, hash, fallbackTxNum)
+	}
+	for txNum := range txNums {
+		covered, err := codeHashAvailableInSnapshot(mgr, hash, txNum)
+		if err != nil || !covered {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func codeHashAvailableInSnapshot(mgr *snapshots.Manager, hash common.Hash, txNum uint64) (bool, error) {
 	code, ok, err := mgr.GetCodeAtOrBefore(hash, txNum)
-	return err == nil && ok && len(code) > 0
+	if err != nil {
+		return false, err
+	}
+	return ok && len(code) > 0, nil
 }
 
 func isMeaningfulCodeHash(hash common.Hash) bool {
@@ -390,6 +400,12 @@ func (c Checker) checkSnapshots(report *CheckReport) error {
 	}
 	for _, ref := range manifest.Segments {
 		report.SnapshotSegments++
+		if cfg, ok := snapshots.DefaultDomainRegistry().ConfigForRef(ref); ok && cfg.HasHistory && ref.Kind == snapshots.SegmentHistory {
+			if err := snapshots.VerifyHistorySegmentWithCompanions(c.SnapshotDir, manifest, ref); err != nil {
+				return err
+			}
+			continue
+		}
 		checked, err := snapshots.CheckRegisteredSegment(c.SnapshotDir, ref)
 		if err != nil {
 			return err

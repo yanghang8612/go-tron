@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/tronprotocol/go-tron/core/types"
+	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -210,6 +212,10 @@ func (api *API) accountPermissionUpdate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (api *API) getAccountById(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountById(w, r, nil)
+}
+
+func (api *API) handleGetAccountById(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	accountID := r.URL.Query().Get("account_id")
 	if accountID == "" {
 		var body struct {
@@ -219,16 +225,39 @@ func (api *API) getAccountById(w http.ResponseWriter, r *http.Request) {
 			accountID = body.AccountID
 		}
 	}
-	acc, err := api.backend.GetAccountById([]byte(accountID))
-	if err != nil || acc == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+	var (
+		acc *types.Account
+		err error
+	)
+	if boundFn != nil {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		acc, err = api.backend.GetAccountByIdAt([]byte(accountID), blockNum)
+	} else {
+		acc, err = api.backend.GetAccountById([]byte(accountID))
+	}
+	if err != nil {
+		if accountLookupNotFound(err) {
+			writeEmptyJSON(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if acc == nil {
+		writeEmptyJSON(w)
 		return
 	}
 	writeTronJSON(w, acc.Proto())
 }
 
 func (api *API) getAccountNet(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountNet(w, r, nil)
+}
+
+func (api *API) handleGetAccountNet(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -252,8 +281,26 @@ func (api *API) getAccountNet(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "address", err)
 		return
 	}
-	msg, err := api.backend.GetAccountNet(addr)
-	if err != nil || msg == nil {
+	var msg *apipb.AccountNetMessage
+	if boundFn != nil {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		msg, err = api.backend.GetAccountNetAt(addr, blockNum)
+	} else {
+		msg, err = api.backend.GetAccountNet(addr)
+	}
+	if err != nil {
+		if accountLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if msg == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return

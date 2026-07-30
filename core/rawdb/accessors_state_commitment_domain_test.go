@@ -2,7 +2,9 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -43,37 +45,6 @@ func TestStateCommitmentDomainDelete(t *testing.T) {
 	}
 	if got, ok, err := ReadStateCommitmentDomain(db, []byte("node/1")); err != nil || ok || got != nil {
 		t.Fatalf("read after delete = %q ok=%v err=%v, want nil,false,nil", got, ok, err)
-	}
-}
-
-func TestStateCommitmentDomainUsesSplitKeyPaths(t *testing.T) {
-	logicalKey := []byte("root")
-	wantKey := stateCommitmentDomainKey(logicalKey)
-	w := new(keyPartsProbeWriter)
-	if err := WriteStateCommitmentDomain(w, logicalKey, []byte("value")); err != nil {
-		t.Fatal(err)
-	}
-	if w.putCalls != 1 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, []byte("value")) {
-		t.Fatalf("split Put = calls %d key %x value %q, want 1/%x/value", w.putCalls, w.key, w.value, wantKey)
-	}
-	if err := DeleteStateCommitmentDomain(w, logicalKey); err != nil {
-		t.Fatal(err)
-	}
-	if w.deleteCalls != 1 || !bytes.Equal(w.key, wantKey) {
-		t.Fatalf("split Delete = calls %d key %x, want 1/%x", w.deleteCalls, w.key, wantKey)
-	}
-
-	db := NewMemoryDatabase()
-	if err := db.Put(wantKey, []byte("stored")); err != nil {
-		t.Fatal(err)
-	}
-	probe := &splitCachedNoCopyProbe{cachedNoCopyProbe: &cachedNoCopyProbe{KeyValueReader: db}}
-	got, ok, err := ReadStateCommitmentDomain(probe, logicalKey)
-	if err != nil || !ok || !bytes.Equal(got, []byte("stored")) {
-		t.Fatalf("split read = %q ok=%v err=%v", got, ok, err)
-	}
-	if probe.splitCalls != 1 || probe.getCalls != 0 || !bytes.Equal(probe.first, stateCommitmentDomainPrefix) || !bytes.Equal(probe.second, logicalKey) {
-		t.Fatalf("split read calls=%d fallback=%d key=%x/%x", probe.splitCalls, probe.getCalls, probe.first, probe.second)
 	}
 }
 
@@ -122,6 +93,21 @@ func TestStateCommitmentDomainEmptyValue(t *testing.T) {
 	}
 	if !slices.Equal(rows, []string{"empty="}) {
 		t.Fatalf("empty rows = %v", rows)
+	}
+}
+
+func TestStateCommitmentDomainSurfacesStorageErrors(t *testing.T) {
+	db := NewMemoryDatabase()
+	key := []byte("node/error")
+	if err := WriteStateCommitmentDomain(db, key, []byte("value")); err != nil {
+		t.Fatalf("write commitment domain: %v", err)
+	}
+
+	if got, ok, err := ReadStateCommitmentDomain(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, key); err == nil || ok || got != nil || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("has error = %x ok=%v err=%v, want presence error", got, ok, err)
+	}
+	if got, ok, err := ReadStateCommitmentDomain(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, key); err == nil || ok || got != nil || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("get error = %x ok=%v err=%v, want get error", got, ok, err)
 	}
 }
 

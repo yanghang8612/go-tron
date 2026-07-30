@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"google.golang.org/protobuf/proto"
@@ -15,6 +16,9 @@ func WriteAccountTrace(db ethdb.KeyValueWriter, owner []byte, blockNum int64, ba
 	if len(owner) == 0 {
 		return fmt.Errorf("account trace: empty owner")
 	}
+	if blockNum < 0 {
+		return fmt.Errorf("account trace: negative block %d", blockNum)
+	}
 	data, err := proto.Marshal(&contractpb.AccountTrace{Balance: balance})
 	if err != nil {
 		return fmt.Errorf("account trace: marshal: %w", err)
@@ -23,22 +27,208 @@ func WriteAccountTrace(db ethdb.KeyValueWriter, owner []byte, blockNum int64, ba
 }
 
 // ReadAccountTrace returns the balance recorded for (owner, blockNum) or
-// 0 + false if no trace exists at that height. For "latest balance at or
-// before block N" use iteration with a prefix of accountTracePrefix ||
-// owner starting at the key for N — but that API isn't exposed yet.
+// 0 + false if no trace exists at that exact height.
 func ReadAccountTrace(db ethdb.KeyValueReader, owner []byte, blockNum int64) (int64, bool) {
-	data, err := db.Get(accountTraceKey(owner, blockNum))
-	if err != nil || len(data) == 0 {
+	if blockNum < 0 {
 		return 0, false
+	}
+	balance, ok, err := readHotAccountTrace(db, owner, blockNum)
+	if err != nil || !ok {
+		traceBlock, balance, ok, err := readColdAccountTraceAtOrBefore(db, owner, blockNum)
+		if err != nil || !ok || traceBlock != blockNum {
+			return 0, false
+		}
+		return balance, true
+	}
+	return balance, true
+}
+
+// ReadAccountTraceStrict returns the exact-height account trace and preserves
+// malformed hot rows or cold sidecar lookup errors for integrity-sensitive
+// rebuild/backfill paths.
+func ReadAccountTraceStrict(db ethdb.KeyValueReader, owner []byte, blockNum int64) (int64, bool, error) {
+	if len(owner) == 0 {
+		return 0, false, fmt.Errorf("account trace: empty owner")
+	}
+	if blockNum < 0 {
+		return 0, false, fmt.Errorf("account trace: negative block %d", blockNum)
+	}
+	balance, ok, err := readHotAccountTrace(db, owner, blockNum)
+	if err != nil || ok {
+		return balance, ok, err
+	}
+	traceBlock, balance, ok, err := readColdAccountTraceAtOrBefore(db, owner, blockNum)
+	if err != nil || !ok || traceBlock != blockNum {
+		return 0, false, err
+	}
+	return balance, true, nil
+}
+
+func readHotAccountTrace(db ethdb.KeyValueReader, owner []byte, blockNum int64) (int64, bool, error) {
+	if db == nil {
+		return 0, false, fmt.Errorf("account trace: nil database")
+	}
+	if blockNum < 0 {
+		return 0, false, fmt.Errorf("account trace: negative block %d", blockNum)
+	}
+	key := accountTraceKey(owner, blockNum)
+	exists, err := db.Has(key)
+	if err != nil || !exists {
+		return 0, false, err
+	}
+	data, err := db.Get(key)
+	if err != nil || len(data) == 0 {
+		return 0, false, err
 	}
 	var at contractpb.AccountTrace
 	if err := proto.Unmarshal(data, &at); err != nil {
-		return 0, false
+		return 0, false, fmt.Errorf("account trace: unmarshal: %w", err)
 	}
-	return at.Balance, true
+	return at.Balance, true, nil
+}
+
+// ReadAccountTraceAtOrBefore returns the newest account-trace row whose block
+// number is <= blockNum. This mirrors java-tron's AccountTraceStore.getPrevBalance.
+func ReadAccountTraceAtOrBefore(db ethdb.Iteratee, owner []byte, blockNum int64) (traceBlock int64, balance int64, ok bool, err error) {
+	if db == nil {
+		return 0, 0, false, fmt.Errorf("account trace: nil database")
+	}
+	if len(owner) == 0 {
+		return 0, 0, false, fmt.Errorf("account trace: empty owner")
+	}
+	if blockNum < 0 {
+		return 0, 0, false, fmt.Errorf("account trace: negative block %d", blockNum)
+	}
+	prefix := accountTraceOwnerPrefix(owner)
+	start := accountTraceBlockSuffix(blockNum)
+	it := db.NewIterator(prefix, start)
+	defer it.Release()
+	var hotBlock int64
+	var hotBalance int64
+	var hotOK bool
+	if it.Next() {
+		key := it.Key()
+		if len(key) != len(prefix)+8 {
+			return 0, 0, false, fmt.Errorf("account trace: malformed key length %d", len(key))
+		}
+		var at contractpb.AccountTrace
+		if err := proto.Unmarshal(it.Value(), &at); err != nil {
+			return 0, 0, false, fmt.Errorf("account trace: unmarshal: %w", err)
+		}
+		hotBlock = accountTraceBlockFromSuffix(key[len(prefix):])
+		if hotBlock < 0 {
+			return 0, 0, false, fmt.Errorf("account trace: negative block %d in hot row", hotBlock)
+		}
+		hotBalance = at.Balance
+		hotOK = true
+	} else if err := it.Error(); err != nil {
+		return 0, 0, false, err
+	}
+
+	coldBlock, coldBalance, coldOK, err := readColdAccountTraceAtOrBefore(db, owner, blockNum)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if coldOK && (!hotOK || coldBlock > hotBlock) {
+		return coldBlock, coldBalance, true, nil
+	}
+	if hotOK {
+		return hotBlock, hotBalance, true, nil
+	}
+	return 0, 0, false, nil
 }
 
 // DeleteAccountTrace removes the record.
 func DeleteAccountTrace(db ethdb.KeyValueWriter, owner []byte, blockNum int64) error {
+	if len(owner) == 0 {
+		return fmt.Errorf("account trace: empty owner")
+	}
+	if blockNum < 0 {
+		return fmt.Errorf("account trace: negative block %d", blockNum)
+	}
 	return db.Delete(accountTraceKey(owner, blockNum))
+}
+
+// IterateAccountTraceRows walks hot AccountTrace rows in raw key order, filtering
+// to the inclusive block range. It does not consult cold snapshot sidecars.
+func IterateAccountTraceRows(db ethdb.Iteratee, fromBlock, toBlock int64, fn func(owner []byte, blockNum int64, balance int64) (bool, error)) error {
+	if db == nil {
+		return fmt.Errorf("account trace: nil database")
+	}
+	if fn == nil {
+		return fmt.Errorf("account trace: nil callback")
+	}
+	if fromBlock < 0 || toBlock < 0 {
+		return fmt.Errorf("account trace: negative range [%d,%d]", fromBlock, toBlock)
+	}
+	if toBlock < fromBlock {
+		return fmt.Errorf("account trace: inverted range [%d,%d]", fromBlock, toBlock)
+	}
+	it := db.NewIterator(accountTracePrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		key := it.Key()
+		if len(key) <= len(accountTracePrefix)+8 {
+			return fmt.Errorf("account trace: malformed key length %d", len(key))
+		}
+		owner := key[len(accountTracePrefix) : len(key)-8]
+		blockNum := accountTraceBlockFromSuffix(key[len(key)-8:])
+		if blockNum < 0 {
+			return fmt.Errorf("account trace: negative block %d in hot row", blockNum)
+		}
+		if blockNum < fromBlock || blockNum > toBlock {
+			continue
+		}
+		var at contractpb.AccountTrace
+		if err := proto.Unmarshal(it.Value(), &at); err != nil {
+			return fmt.Errorf("account trace: unmarshal block %d owner %x: %w", blockNum, owner, err)
+		}
+		keepGoing, err := fn(append([]byte(nil), owner...), blockNum, at.Balance)
+		if err != nil {
+			return err
+		}
+		if !keepGoing {
+			break
+		}
+	}
+	return it.Error()
+}
+
+func accountTraceOwnerPrefix(owner []byte) []byte {
+	k := make([]byte, 0, len(accountTracePrefix)+len(owner))
+	k = append(k, accountTracePrefix...)
+	return append(k, owner...)
+}
+
+func accountTraceBlockSuffix(blockNum int64) []byte {
+	const longMax int64 = 0x7FFFFFFFFFFFFFFF
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(blockNum^longMax))
+	return b[:]
+}
+
+func accountTraceBlockFromSuffix(suffix []byte) int64 {
+	const longMax int64 = 0x7FFFFFFFFFFFFFFF
+	return int64(binary.BigEndian.Uint64(suffix)) ^ longMax
+}
+
+func readColdAccountTraceAtOrBefore(db interface{}, owner []byte, blockNum int64) (int64, int64, bool, error) {
+	if blockNum < 0 {
+		return 0, 0, false, fmt.Errorf("account trace: negative block %d", blockNum)
+	}
+	chain, ok := db.(*ChainDB)
+	if !ok || chain == nil || chain.balanceTrace == nil {
+		return 0, 0, false, nil
+	}
+	traceBlock, balance, ok, err := chain.balanceTrace.AccountTraceAtOrBefore(owner, blockNum)
+	if err != nil || !ok {
+		return 0, 0, false, err
+	}
+	if traceBlock < 0 {
+		return 0, 0, false, fmt.Errorf("account trace: cold lookup returned negative block %d for target %d", traceBlock, blockNum)
+	}
+	if traceBlock > blockNum {
+		return 0, 0, false, fmt.Errorf("account trace: cold lookup returned future block %d for target %d", traceBlock, blockNum)
+	}
+	return traceBlock, balance, true, nil
 }

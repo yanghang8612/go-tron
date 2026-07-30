@@ -3,8 +3,10 @@ package jsonrpc_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -16,22 +18,39 @@ import (
 
 // stubBackend is a test double implementing jsonrpc.Backend.
 type stubBackend struct {
-	chainID     int64
-	blockNumber uint64
-	block       *types.Block
-	balance     int64
-	code        []byte
-	storage     common.Hash
-	tx          *corepb.Transaction
-	txBlock     *types.Block
-	txIndex     int
-	txInfo      *corepb.TransactionInfo
-	callResult  []byte
-	gotCallFrom *common.Address
-	gotCallTo   *common.Address
-	logs        []*jsonrpc.RPCLog
-	gasPrice    int64
-	peerCount   int
+	chainID           int64
+	blockNumber       uint64
+	block             *types.Block
+	blockErr          error
+	balance           int64
+	code              []byte
+	storage           common.Hash
+	tx                *corepb.Transaction
+	txErr             error
+	txBlock           *types.Block
+	txIndex           int
+	txInfo            *corepb.TransactionInfo
+	txInfos           []*corepb.TransactionInfo
+	txInfoErr         error
+	callResult        []byte
+	gotCallFrom       *common.Address
+	gotCallTo         *common.Address
+	callAtResult      []byte
+	callAtBlock       uint64
+	callAtCalls       int
+	liveCallCalls     int
+	estimateGas       uint64
+	estimateGasAt     uint64
+	estimateAtBlock   uint64
+	estimateAtCalls   int
+	liveEstimateCalls int
+	logs              []*jsonrpc.RPCLog
+	gasPrice          int64
+	peerCount         int
+	freezerStatus     *jsonrpc.FreezerStatus
+	freezerErr        error
+	stageStatus       *jsonrpc.StageStatus
+	stageErr          error
 
 	// Archive-query stubs: when atErr is non-nil the *At methods return it
 	// (used to exercise the history-disabled gate at the handler layer).
@@ -41,26 +60,45 @@ type stubBackend struct {
 	balanceAt int64
 	codeAt    []byte
 	storageAt common.Hash
+	liveErr   error
 
 	// Trace recording (debug namespace): the *At methods capture the parsed
 	// arguments so tests can assert the DebugAPI routed/parsed correctly, and
 	// return traceResult as the canned tracer output.
-	traceResult   interface{}
-	gotTraceFrom  *common.Address
-	gotTraceTo    *common.Address
-	gotTraceData  []byte
-	gotTraceValue int64
-	gotTraceBlock *uint64
-	gotTraceCfg   *tracers.TraceConfig
-	gotTraceHash  common.Hash
+	traceResult      interface{}
+	gotTraceFrom     *common.Address
+	gotTraceTo       *common.Address
+	gotTraceData     []byte
+	gotTraceValue    int64
+	gotTraceBlock    *uint64
+	gotTraceCfg      *tracers.TraceConfig
+	gotTraceHash     common.Hash
+	gotTraceHashes   []common.Hash
+	gotTraceBlockObj *types.Block
+	traceErr         error
+	traceBlockErr    error
+	traceBlockResult []jsonrpc.BlockTraceResult
 }
 
-func (s *stubBackend) ChainID() int64                       { return s.chainID }
-func (s *stubBackend) BlockNumber() uint64                  { return s.blockNumber }
-func (s *stubBackend) GetBalance(addr common.Address) int64 { return s.balance }
-func (s *stubBackend) GetCode(addr common.Address) []byte   { return s.code }
-func (s *stubBackend) GetStorageAt(addr common.Address, slot common.Hash) common.Hash {
-	return s.storage
+func (s *stubBackend) ChainID() int64      { return s.chainID }
+func (s *stubBackend) BlockNumber() uint64 { return s.blockNumber }
+func (s *stubBackend) GetBalance(addr common.Address) (int64, error) {
+	if s.liveErr != nil {
+		return 0, s.liveErr
+	}
+	return s.balance, nil
+}
+func (s *stubBackend) GetCode(addr common.Address) ([]byte, error) {
+	if s.liveErr != nil {
+		return nil, s.liveErr
+	}
+	return s.code, nil
+}
+func (s *stubBackend) GetStorageAt(addr common.Address, slot common.Hash) (common.Hash, error) {
+	if s.liveErr != nil {
+		return common.Hash{}, s.liveErr
+	}
+	return s.storage, nil
 }
 func (s *stubBackend) GetBalanceAt(addr common.Address, blockNum uint64) (int64, error) {
 	if s.atErr != nil {
@@ -80,18 +118,49 @@ func (s *stubBackend) GetStorageAtBlock(addr common.Address, slot common.Hash, b
 	}
 	return s.storageAt, nil
 }
-func (s *stubBackend) GetBlockByNumber(num uint64) (*types.Block, error)     { return s.block, nil }
-func (s *stubBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) { return s.block, nil }
+func (s *stubBackend) GetBlockByNumber(num uint64) (*types.Block, error) {
+	if s.blockErr != nil {
+		return nil, s.blockErr
+	}
+	return s.block, nil
+}
+func (s *stubBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) {
+	if s.blockErr != nil {
+		return nil, s.blockErr
+	}
+	return s.block, nil
+}
 func (s *stubBackend) GetTransactionByHash(hash common.Hash) (*corepb.Transaction, *types.Block, int, error) {
+	if s.txErr != nil {
+		return nil, nil, 0, s.txErr
+	}
 	return s.tx, s.txBlock, s.txIndex, nil
 }
 func (s *stubBackend) GetTransactionInfo(hash common.Hash) (*corepb.TransactionInfo, error) {
+	if s.txInfoErr != nil {
+		return nil, s.txInfoErr
+	}
 	return s.txInfo, nil
 }
+func (s *stubBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error) {
+	if s.txInfoErr != nil {
+		return nil, s.txInfoErr
+	}
+	return s.txInfos, nil
+}
 func (s *stubBackend) Call(from, to *common.Address, data []byte, value int64) ([]byte, error) {
+	s.liveCallCalls++
 	s.gotCallFrom = from
 	s.gotCallTo = to
 	return s.callResult, nil
+}
+func (s *stubBackend) CallAt(from, to *common.Address, data []byte, value int64, blockNum uint64) ([]byte, error) {
+	s.callAtCalls++
+	s.callAtBlock = blockNum
+	if s.atErr != nil {
+		return nil, s.atErr
+	}
+	return s.callAtResult, nil
 }
 func (s *stubBackend) TraceCall(from, to *common.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error) {
 	s.gotTraceFrom = from
@@ -104,16 +173,73 @@ func (s *stubBackend) TraceCall(from, to *common.Address, data []byte, value int
 }
 func (s *stubBackend) TraceTransaction(hash common.Hash, cfg *tracers.TraceConfig) (interface{}, error) {
 	s.gotTraceHash = hash
+	s.gotTraceHashes = append(s.gotTraceHashes, hash)
 	s.gotTraceCfg = cfg
+	if s.traceErr != nil {
+		return nil, s.traceErr
+	}
 	return s.traceResult, nil
+}
+func (s *stubBackend) TraceBlock(block *types.Block, cfg *tracers.TraceConfig) ([]jsonrpc.BlockTraceResult, error) {
+	s.gotTraceBlockObj = block
+	s.gotTraceCfg = cfg
+	if s.traceBlockErr != nil {
+		return nil, s.traceBlockErr
+	}
+	if s.traceBlockResult != nil {
+		return s.traceBlockResult, nil
+	}
+	if block == nil {
+		return nil, nil
+	}
+	results := make([]jsonrpc.BlockTraceResult, 0, len(block.Transactions()))
+	for _, tx := range block.Transactions() {
+		hash := tx.Hash()
+		s.gotTraceHashes = append(s.gotTraceHashes, hash)
+		item := jsonrpc.BlockTraceResult{TxHash: "0x" + hash.Hex()}
+		if s.traceErr != nil {
+			item.Error = s.traceErr.Error()
+		} else {
+			item.Result = s.traceResult
+		}
+		results = append(results, item)
+	}
+	return results, nil
 }
 func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
 	return s.logs, nil
 }
 func (s *stubBackend) GasPrice() int64 { return s.gasPrice }
 func (s *stubBackend) PeerCount() int  { return s.peerCount }
+func (s *stubBackend) FreezerStatus() (*jsonrpc.FreezerStatus, error) {
+	if s.freezerErr != nil {
+		return nil, s.freezerErr
+	}
+	if s.freezerStatus != nil {
+		return s.freezerStatus, nil
+	}
+	return &jsonrpc.FreezerStatus{TableCounts: map[string]uint64{}}, nil
+}
+func (s *stubBackend) StageStatus() (*jsonrpc.StageStatus, error) {
+	if s.stageErr != nil {
+		return nil, s.stageErr
+	}
+	if s.stageStatus != nil {
+		return s.stageStatus, nil
+	}
+	return &jsonrpc.StageStatus{Status: "ok", Complete: true, Pipeline: jsonrpc.StageStatusPipeline{Complete: true}}, nil
+}
 func (s *stubBackend) EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error) {
-	return 0, nil
+	s.liveEstimateCalls++
+	return s.estimateGas, nil
+}
+func (s *stubBackend) EstimateGasAt(from, to *common.Address, data []byte, value int64, blockNum uint64) (uint64, error) {
+	s.estimateAtCalls++
+	s.estimateAtBlock = blockNum
+	if s.atErr != nil {
+		return 0, s.atErr
+	}
+	return s.estimateGasAt, nil
 }
 func (s *stubBackend) SubscribeBlocks(_ chan<- *types.Block)   {}
 func (s *stubBackend) UnsubscribeBlocks(_ chan<- *types.Block) {}
@@ -254,6 +380,45 @@ func TestEthGetStorageAt(t *testing.T) {
 	})
 }
 
+func TestEthLiveStateMethodsSurfaceBackendErrors(t *testing.T) {
+	backendErr := errors.New("cold head state root corrupt")
+	tests := []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "balance",
+			method: "eth_getBalance",
+			params: []interface{}{"0x4101020304050607080900010203040506070809", "latest"},
+		},
+		{
+			name:   "code",
+			method: "eth_getCode",
+			params: []interface{}{"0x4101020304050607080900010203040506070809", "latest"},
+		},
+		{
+			name:   "storage",
+			method: "eth_getStorageAt",
+			params: []interface{}{"0x4101020304050607080900010203040506070809", "0x0", "latest"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{liveErr: backendErr})
+			defer srv.Close()
+			resp := rpcCallRaw(t, srv, tt.method, tt.params)
+			errObj, ok := resp["error"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s error = %v, want JSON-RPC error", tt.method, resp["error"])
+			}
+			if errObj["message"] != backendErr.Error() {
+				t.Fatalf("%s error message = %v, want %q", tt.method, errObj["message"], backendErr.Error())
+			}
+		})
+	}
+}
+
 func TestEthCall(t *testing.T) {
 	// stub returns 32-byte ABI-encoded uint256(1)
 	ret := make([]byte, 32)
@@ -309,6 +474,15 @@ func TestEthGetBlockByNumber_NotFound(t *testing.T) {
 	}
 }
 
+func TestEthGetBlockByNumber_NotFoundError(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{blockErr: errors.New("block 9 not found")})
+	defer srv.Close()
+	resp := rpcCall(t, srv, "eth_getBlockByNumber", []interface{}{"0x9", false})
+	if resp["result"] != nil {
+		t.Fatalf("eth_getBlockByNumber not-found error should return null, got %v", resp["result"])
+	}
+}
+
 func TestEthGetBlockByHash_NotFound(t *testing.T) {
 	srv := newTestServer(t, &stubBackend{block: nil})
 	defer srv.Close()
@@ -319,6 +493,534 @@ func TestEthGetBlockByHash_NotFound(t *testing.T) {
 	if resp["result"] != nil {
 		t.Fatalf("eth_getBlockByHash not-found should return null, got %v", resp["result"])
 	}
+}
+
+func TestEthGetBlockLookups_PropagateBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	tests := []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "by number",
+			method: "eth_getBlockByNumber",
+			params: []interface{}{"0x1", false},
+		},
+		{
+			name:   "by hash",
+			method: "eth_getBlockByHash",
+			params: []interface{}{
+				"0x0000000000000000000000000000000000000000000000000000000000000000",
+				false,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{blockErr: backendErr})
+			defer srv.Close()
+			resp := rpcCallRaw(t, srv, tt.method, tt.params)
+			errObj, ok := resp["error"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s error = %v, want JSON-RPC error", tt.method, resp["error"])
+			}
+			if errObj["message"] != backendErr.Error() {
+				t.Fatalf("%s error message = %v, want %q", tt.method, errObj["message"], backendErr.Error())
+			}
+		})
+	}
+}
+
+func TestEthAPI_GetBlockLookups_PropagateBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	api := jsonrpc.NewEthAPI(&stubBackend{blockErr: backendErr}, nil)
+
+	if got, err := api.GetBlockByNumber("0x1", nil); err == nil || got != nil || err.Error() != backendErr.Error() {
+		t.Fatalf("EthAPI.GetBlockByNumber = %v/%v, want backend error", got, err)
+	}
+	if got, err := api.GetBlockByHash("0x0000000000000000000000000000000000000000000000000000000000000000", nil); err == nil || got != nil || err.Error() != backendErr.Error() {
+		t.Fatalf("EthAPI.GetBlockByHash = %v/%v, want backend error", got, err)
+	}
+}
+
+func TestEthBlockTransactionCountAndIndexedTransactionLookups(t *testing.T) {
+	block := buildFreezeBlock()
+	blockHash := freezeBlockHashHex()
+	txHash := freezeTxHashHex()
+	txInfo := buildFreezeTxInfo()
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfos: []*corepb.TransactionInfo{txInfo}})
+	defer srv.Close()
+
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "count by number",
+			method: "eth_getBlockTransactionCountByNumber",
+			params: []interface{}{"latest"},
+		},
+		{
+			name:   "count by hash",
+			method: "eth_getBlockTransactionCountByHash",
+			params: []interface{}{blockHash},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, tt.method, tt.params)
+			if resp["result"] != "0x1" {
+				t.Fatalf("%s result = %v, want 0x1", tt.method, resp["result"])
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "tx by number/index",
+			method: "eth_getTransactionByBlockNumberAndIndex",
+			params: []interface{}{"0x64", "0x0"},
+		},
+		{
+			name:   "tx by hash/index",
+			method: "eth_getTransactionByBlockHashAndIndex",
+			params: []interface{}{blockHash, "0x0"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, tt.method, tt.params)
+			tx, ok := resp["result"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s result = %T %v, want transaction object", tt.method, resp["result"], resp["result"])
+			}
+			if tx["hash"] != txHash {
+				t.Fatalf("%s hash = %v, want %s", tt.method, tx["hash"], txHash)
+			}
+			if tx["transactionIndex"] != "0x0" {
+				t.Fatalf("%s transactionIndex = %v, want 0x0", tt.method, tx["transactionIndex"])
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "tx by number/index out of range",
+			method: "eth_getTransactionByBlockNumberAndIndex",
+			params: []interface{}{"0x64", "0x1"},
+		},
+		{
+			name:   "tx by hash/index out of range",
+			method: "eth_getTransactionByBlockHashAndIndex",
+			params: []interface{}{blockHash, "0x1"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, tt.method, tt.params)
+			if resp["result"] != nil {
+				t.Fatalf("%s out-of-range result = %v, want null", tt.method, resp["result"])
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name   string
+		params []interface{}
+	}{
+		{name: "receipts by latest", params: []interface{}{"latest"}},
+		{name: "receipts by number", params: []interface{}{"0x64"}},
+		{name: "receipts by hash", params: []interface{}{blockHash}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, "eth_getBlockReceipts", tt.params)
+			receipts, ok := resp["result"].([]interface{})
+			if !ok || len(receipts) != 1 {
+				t.Fatalf("eth_getBlockReceipts result = %T %v, want one receipt", resp["result"], resp["result"])
+			}
+			receipt, ok := receipts[0].(map[string]interface{})
+			if !ok {
+				t.Fatalf("eth_getBlockReceipts receipt = %T %v, want object", receipts[0], receipts[0])
+			}
+			if receipt["transactionHash"] != txHash {
+				t.Fatalf("eth_getBlockReceipts transactionHash = %v, want %s", receipt["transactionHash"], txHash)
+			}
+			if receipt["blockNumber"] != "0x64" || receipt["transactionIndex"] != "0x0" || receipt["status"] != "0x1" {
+				t.Fatalf("eth_getBlockReceipts receipt = %+v, want block/index/status pinned", receipt)
+			}
+		})
+	}
+
+	t.Run("receipts unknown block", func(t *testing.T) {
+		unknown := newTestServer(t, &stubBackend{blockNumber: block.Number()})
+		defer unknown.Close()
+		resp := rpcCall(t, unknown, "eth_getBlockReceipts", []interface{}{"0x64"})
+		if resp["result"] != nil {
+			t.Fatalf("eth_getBlockReceipts unknown block = %v, want null", resp["result"])
+		}
+	})
+}
+
+func TestEthUncleLookupsReturnEmptyForTRONBlocks(t *testing.T) {
+	block := buildFreezeBlock()
+	blockHash := freezeBlockHashHex()
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block})
+	defer srv.Close()
+
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+		want   interface{}
+	}{
+		{
+			name:   "count by number",
+			method: "eth_getUncleCountByBlockNumber",
+			params: []interface{}{"latest"},
+			want:   "0x0",
+		},
+		{
+			name:   "count by hash",
+			method: "eth_getUncleCountByBlockHash",
+			params: []interface{}{blockHash},
+			want:   "0x0",
+		},
+		{
+			name:   "uncle by number/index",
+			method: "eth_getUncleByBlockNumberAndIndex",
+			params: []interface{}{"0x64", "0x0"},
+		},
+		{
+			name:   "uncle by hash/index",
+			method: "eth_getUncleByBlockHashAndIndex",
+			params: []interface{}{blockHash, "0x0"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, srv, tt.method, tt.params)
+			if resp["result"] != tt.want {
+				t.Fatalf("%s result = %v, want %v", tt.method, resp["result"], tt.want)
+			}
+		})
+	}
+
+	unknown := newTestServer(t, &stubBackend{blockNumber: block.Number()})
+	defer unknown.Close()
+	for _, tt := range []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "unknown count by number",
+			method: "eth_getUncleCountByBlockNumber",
+			params: []interface{}{"0x64"},
+		},
+		{
+			name:   "unknown count by hash",
+			method: "eth_getUncleCountByBlockHash",
+			params: []interface{}{blockHash},
+		},
+		{
+			name:   "unknown uncle by number/index",
+			method: "eth_getUncleByBlockNumberAndIndex",
+			params: []interface{}{"0x64", "0x0"},
+		},
+		{
+			name:   "unknown uncle by hash/index",
+			method: "eth_getUncleByBlockHashAndIndex",
+			params: []interface{}{blockHash, "0x0"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := rpcCall(t, unknown, tt.method, tt.params)
+			if resp["result"] != nil {
+				t.Fatalf("%s unknown result = %v, want null", tt.method, resp["result"])
+			}
+		})
+	}
+}
+
+func TestEthIndexedBlockLookups_PropagateBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	tests := []struct {
+		name   string
+		method string
+		params []interface{}
+	}{
+		{
+			name:   "count by number",
+			method: "eth_getBlockTransactionCountByNumber",
+			params: []interface{}{"0x1"},
+		},
+		{
+			name:   "count by hash",
+			method: "eth_getBlockTransactionCountByHash",
+			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000"},
+		},
+		{
+			name:   "uncle count by number",
+			method: "eth_getUncleCountByBlockNumber",
+			params: []interface{}{"0x1"},
+		},
+		{
+			name:   "uncle count by hash",
+			method: "eth_getUncleCountByBlockHash",
+			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000"},
+		},
+		{
+			name:   "uncle by number/index",
+			method: "eth_getUncleByBlockNumberAndIndex",
+			params: []interface{}{"0x1", "0x0"},
+		},
+		{
+			name:   "uncle by hash/index",
+			method: "eth_getUncleByBlockHashAndIndex",
+			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000", "0x0"},
+		},
+		{
+			name:   "tx by number/index",
+			method: "eth_getTransactionByBlockNumberAndIndex",
+			params: []interface{}{"0x1", "0x0"},
+		},
+		{
+			name:   "tx by hash/index",
+			method: "eth_getTransactionByBlockHashAndIndex",
+			params: []interface{}{"0x0000000000000000000000000000000000000000000000000000000000000000", "0x0"},
+		},
+		{
+			name:   "block receipts",
+			method: "eth_getBlockReceipts",
+			params: []interface{}{"0x1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{blockErr: backendErr})
+			defer srv.Close()
+			resp := rpcCallRaw(t, srv, tt.method, tt.params)
+			errObj, ok := resp["error"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s error = %v, want JSON-RPC error", tt.method, resp["error"])
+			}
+			if errObj["message"] != backendErr.Error() {
+				t.Fatalf("%s error message = %v, want %q", tt.method, errObj["message"], backendErr.Error())
+			}
+		})
+	}
+}
+
+func TestEthGetBlockReceipts_PropagatesTxInfoError(t *testing.T) {
+	block := buildFreezeBlock()
+	backendErr := errors.New("rawdb: transaction info block 100 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfoErr: backendErr})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getBlockReceipts", []interface{}{"0x64"})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getBlockReceipts error = %v, want JSON-RPC error", resp["error"])
+	}
+	if errObj["message"] != backendErr.Error() {
+		t.Fatalf("eth_getBlockReceipts error message = %v, want %q", errObj["message"], backendErr.Error())
+	}
+
+	api := jsonrpc.NewEthAPI(&stubBackend{blockNumber: block.Number(), block: block, txInfoErr: backendErr}, nil)
+	if got, err := api.GetBlockReceipts("0x64"); err == nil || got != nil || err.Error() != backendErr.Error() {
+		t.Fatalf("EthAPI.GetBlockReceipts = %v/%v, want backend error", got, err)
+	}
+}
+
+func TestEthGetBlockReceipts_RejectsIncompleteTxInfoCoverage(t *testing.T) {
+	block := buildFreezeBlock()
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getBlockReceipts", []interface{}{"0x64"})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getBlockReceipts error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "transaction info count 0 does not match block transaction count 1") {
+		t.Fatalf("eth_getBlockReceipts error message = %v, want incomplete coverage", errObj["message"])
+	}
+}
+
+func TestEthGetBlockReceipts_RejectsMismatchedTxInfoID(t *testing.T) {
+	block := buildFreezeBlock()
+	mismatched := buildFreezeTxInfo()
+	mismatched.Id = bytes.Repeat([]byte{0xee}, common.HashLength)
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfos: []*corepb.TransactionInfo{mismatched}})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getBlockReceipts", []interface{}{"0x64"})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getBlockReceipts error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "block 100 transaction 0 transaction info id 0x") || !strings.Contains(msg, "does not match transaction hash") {
+		t.Fatalf("eth_getBlockReceipts error message = %v, want txInfo/hash mismatch", errObj["message"])
+	}
+
+	api := jsonrpc.NewEthAPI(&stubBackend{blockNumber: block.Number(), block: block, txInfos: []*corepb.TransactionInfo{mismatched}}, nil)
+	if got, err := api.GetBlockReceipts("0x64"); err == nil || got != nil || !strings.Contains(err.Error(), "does not match transaction hash") {
+		t.Fatalf("EthAPI.GetBlockReceipts = %v/%v, want txInfo/hash mismatch", got, err)
+	}
+}
+
+func TestEthGetBlockReceipts_RejectsMismatchedTxInfoBlockNumber(t *testing.T) {
+	block := buildFreezeBlock()
+	mismatched := buildFreezeTxInfo()
+	mismatched.BlockNumber = int64(block.Number()) + 1
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfos: []*corepb.TransactionInfo{mismatched}})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getBlockReceipts", []interface{}{"0x64"})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getBlockReceipts error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "block 100 transaction 0 transaction info block number 101 does not match block 100") {
+		t.Fatalf("eth_getBlockReceipts error message = %v, want txInfo block-number mismatch", errObj["message"])
+	}
+
+	api := jsonrpc.NewEthAPI(&stubBackend{blockNumber: block.Number(), block: block, txInfos: []*corepb.TransactionInfo{mismatched}}, nil)
+	if got, err := api.GetBlockReceipts("0x64"); err == nil || got != nil || !strings.Contains(err.Error(), "transaction info block number 101 does not match block 100") {
+		t.Fatalf("EthAPI.GetBlockReceipts = %v/%v, want txInfo block-number mismatch", got, err)
+	}
+}
+
+func TestEthGetBlockReceipts_UsesBlockGlobalLogIndexes(t *testing.T) {
+	block, infos := buildReceiptLogIndexBlock()
+	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfos: infos})
+	defer srv.Close()
+
+	resp := rpcCall(t, srv, "eth_getBlockReceipts", []interface{}{"0x64"})
+	receipts, ok := resp["result"].([]interface{})
+	if !ok || len(receipts) != 2 {
+		t.Fatalf("eth_getBlockReceipts result = %T %v, want two receipts", resp["result"], resp["result"])
+	}
+	if got := receiptLogIndexes(t, receipts[0]); !stringSlicesEqual(got, []string{"0x0"}) {
+		t.Fatalf("first receipt log indexes = %v, want [0x0]", got)
+	}
+	if got := receiptLogIndexes(t, receipts[1]); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
+		t.Fatalf("second receipt log indexes = %v, want [0x1 0x2]", got)
+	}
+
+	api := jsonrpc.NewEthAPI(&stubBackend{blockNumber: block.Number(), block: block, txInfos: infos}, nil)
+	got, err := api.GetBlockReceipts("0x64")
+	if err != nil {
+		t.Fatalf("EthAPI.GetBlockReceipts: %v", err)
+	}
+	apiReceipts, ok := got.([]interface{})
+	if !ok || len(apiReceipts) != 2 {
+		t.Fatalf("EthAPI.GetBlockReceipts = %T %v, want two receipts", got, got)
+	}
+	if got := receiptLogIndexes(t, apiReceipts[1]); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
+		t.Fatalf("EthAPI second receipt log indexes = %v, want [0x1 0x2]", got)
+	}
+}
+
+func buildReceiptLogIndexBlock() (*types.Block, []*corepb.TransactionInfo) {
+	tx1PB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp:  10_001,
+			Expiration: 20_001,
+			Data:       []byte{0x01},
+		},
+	}
+	tx2PB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp:  10_002,
+			Expiration: 20_002,
+			Data:       []byte{0x02},
+		},
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    100,
+				Timestamp: 30_000,
+			},
+		},
+		Transactions: []*corepb.Transaction{tx1PB, tx2PB},
+	})
+	txs := block.Transactions()
+	log := func(seed byte) *corepb.TransactionInfo_Log {
+		return &corepb.TransactionInfo_Log{
+			Address: bytes.Repeat([]byte{seed}, 20),
+			Topics:  [][]byte{bytes.Repeat([]byte{seed + 1}, common.HashLength)},
+			Data:    []byte{seed, seed + 2},
+		}
+	}
+	return block, []*corepb.TransactionInfo{
+		{
+			Id:          append([]byte(nil), txs[0].Hash().Bytes()...),
+			BlockNumber: int64(block.Number()),
+			Log:         []*corepb.TransactionInfo_Log{log(0x10)},
+		},
+		{
+			Id:          append([]byte(nil), txs[1].Hash().Bytes()...),
+			BlockNumber: int64(block.Number()),
+			Log:         []*corepb.TransactionInfo_Log{log(0x20), log(0x30)},
+		},
+	}
+}
+
+func receiptLogIndexes(t *testing.T, raw interface{}) []string {
+	t.Helper()
+	receipt, ok := raw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("receipt = %T %v, want object", raw, raw)
+	}
+	switch logs := receipt["logs"].(type) {
+	case []interface{}:
+		out := make([]string, 0, len(logs))
+		for _, item := range logs {
+			logObj, ok := item.(map[string]interface{})
+			if !ok {
+				t.Fatalf("receipt log = %T %v, want object", item, item)
+			}
+			index, ok := logObj["logIndex"].(string)
+			if !ok {
+				t.Fatalf("receipt log index = %T %v, want string", logObj["logIndex"], logObj["logIndex"])
+			}
+			out = append(out, index)
+		}
+		return out
+	case []map[string]interface{}:
+		out := make([]string, 0, len(logs))
+		for _, logObj := range logs {
+			index, ok := logObj["logIndex"].(string)
+			if !ok {
+				t.Fatalf("receipt log index = %T %v, want string", logObj["logIndex"], logObj["logIndex"])
+			}
+			out = append(out, index)
+		}
+		return out
+	default:
+		t.Fatalf("receipt logs = %T %v, want array", receipt["logs"], receipt["logs"])
+		return nil
+	}
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestEthGetTransactionByHash_NotFound(t *testing.T) {
@@ -332,6 +1034,87 @@ func TestEthGetTransactionByHash_NotFound(t *testing.T) {
 	}
 }
 
+func TestEthGetTransactionByHash_RejectsMissingLookupMetadata(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+
+	wrongHash := "0x" + strings.Repeat("aa", common.HashLength)
+	otherTx := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: tx.Proto().GetRawData().GetTimestamp() + 1}}
+	tests := []struct {
+		name    string
+		hash    string
+		backend *stubBackend
+		want    string
+	}{
+		{
+			name: "missing block",
+			hash: txHash,
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: nil,
+				txIndex: 0,
+			},
+			want: "transaction lookup for " + txHash + " is missing block metadata",
+		},
+		{
+			name: "missing index",
+			hash: txHash,
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: block,
+				txIndex: -1,
+			},
+			want: "transaction lookup for " + txHash + " is missing index metadata",
+		},
+		{
+			name: "index out of range",
+			hash: txHash,
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: block,
+				txIndex: 1,
+			},
+			want: "transaction lookup for " + txHash + " has index 1 outside block 100 transaction count 1",
+		},
+		{
+			name: "block index hash mismatch",
+			hash: wrongHash,
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: block,
+				txIndex: 0,
+			},
+			want: "transaction lookup for " + wrongHash + " points to block 100 index 0 with hash " + txHash,
+		},
+		{
+			name: "returned transaction hash mismatch",
+			hash: txHash,
+			backend: &stubBackend{
+				tx:      otherTx,
+				txBlock: block,
+				txIndex: 0,
+			},
+			want: "transaction lookup for " + txHash + " returned transaction hash 0x" + types.NewTransactionFromPB(otherTx).Hash().Hex(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, tt.backend)
+			defer srv.Close()
+			resp := rpcCallRaw(t, srv, "eth_getTransactionByHash", []interface{}{tt.hash})
+			errObj, ok := resp["error"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("eth_getTransactionByHash error = %v, want JSON-RPC error", resp["error"])
+			}
+			if errObj["message"] != tt.want {
+				t.Fatalf("eth_getTransactionByHash error message = %v, want %q", errObj["message"], tt.want)
+			}
+		})
+	}
+}
+
 func TestEthGetTransactionReceipt_NotFound(t *testing.T) {
 	srv := newTestServer(t, &stubBackend{txInfo: nil})
 	defer srv.Close()
@@ -340,6 +1123,273 @@ func TestEthGetTransactionReceipt_NotFound(t *testing.T) {
 	})
 	if resp["result"] != nil {
 		t.Fatalf("eth_getTransactionReceipt not-found should return null, got %v", resp["result"])
+	}
+}
+
+func TestEthGetTransactionReceipt_PropagatesTxLookupError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{
+		txInfo: &corepb.TransactionInfo{},
+		txErr:  backendErr,
+	})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getTransactionReceipt", []interface{}{
+		"0x0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt error = %v, want JSON-RPC error", resp["error"])
+	}
+	if errObj["message"] != backendErr.Error() {
+		t.Fatalf("eth_getTransactionReceipt error message = %v, want %q", errObj["message"], backendErr.Error())
+	}
+}
+
+func TestEthGetTransactionReceipt_RejectsReceiptWithoutTransactionLookup(t *testing.T) {
+	txHash := "0x00000000000000000000000000000000000000000000000000000000000000aa"
+	srv := newTestServer(t, &stubBackend{
+		txInfo: &corepb.TransactionInfo{},
+	})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getTransactionReceipt", []interface{}{txHash})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "transaction receipt exists for "+txHash+" but transaction lookup is missing") {
+		t.Fatalf("eth_getTransactionReceipt error message = %v, want receipt/tx lookup mismatch", errObj["message"])
+	}
+}
+
+func TestEthGetTransactionReceipt_RejectsMismatchedTxInfoID(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	mismatched := buildFreezeTxInfo()
+	mismatched.Id = bytes.Repeat([]byte{0xdd}, common.HashLength)
+	srv := newTestServer(t, &stubBackend{
+		txInfo:  mismatched,
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 0,
+	})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getTransactionReceipt", []interface{}{txHash})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "transaction receipt "+txHash+" transaction info id 0x") || !strings.Contains(msg, "does not match transaction hash") {
+		t.Fatalf("eth_getTransactionReceipt error message = %v, want txInfo/hash mismatch", errObj["message"])
+	}
+}
+
+func TestEthGetTransactionReceipt_RejectsMismatchedTxInfoBlockNumber(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	mismatched := buildFreezeTxInfo()
+	mismatched.BlockNumber = int64(block.Number()) + 1
+	srv := newTestServer(t, &stubBackend{
+		txInfo:  mismatched,
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 0,
+	})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getTransactionReceipt", []interface{}{txHash})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt error = %v, want JSON-RPC error", resp["error"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "transaction receipt "+txHash+" transaction info block number 101 does not match block 100") {
+		t.Fatalf("eth_getTransactionReceipt error message = %v, want txInfo block-number mismatch", errObj["message"])
+	}
+}
+
+func TestEthGetTransactionReceipt_RejectsMismatchedLookupMetadata(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	srv := newTestServer(t, &stubBackend{
+		txInfo:  buildFreezeTxInfo(),
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 1,
+	})
+	defer srv.Close()
+
+	resp := rpcCallRaw(t, srv, "eth_getTransactionReceipt", []interface{}{txHash})
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt error = %v, want JSON-RPC error", resp["error"])
+	}
+	if want := "transaction lookup for " + txHash + " has index 1 outside block 100 transaction count 1"; errObj["message"] != want {
+		t.Fatalf("eth_getTransactionReceipt error message = %v, want %q", errObj["message"], want)
+	}
+}
+
+func TestEthGetTransactionReceipt_UsesBlockGlobalLogIndex(t *testing.T) {
+	block, infos := buildReceiptLogIndexBlock()
+	tx := block.Transactions()[1]
+	txHash := "0x" + tx.Hash().Hex()
+	backend := &stubBackend{
+		blockNumber: block.Number(),
+		txInfo:      infos[1],
+		tx:          tx.Proto(),
+		txBlock:     block,
+		txIndex:     1,
+		txInfos:     infos,
+	}
+	srv := newTestServer(t, backend)
+	defer srv.Close()
+
+	resp := rpcCall(t, srv, "eth_getTransactionReceipt", []interface{}{txHash})
+	receipt, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt result = %T %v, want receipt", resp["result"], resp["result"])
+	}
+	if got := receiptLogIndexes(t, receipt); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
+		t.Fatalf("eth_getTransactionReceipt log indexes = %v, want [0x1 0x2]", got)
+	}
+
+	api := jsonrpc.NewEthAPI(backend, nil)
+	got, err := api.GetTransactionReceipt(txHash)
+	if err != nil {
+		t.Fatalf("EthAPI.GetTransactionReceipt: %v", err)
+	}
+	apiReceipt, ok := got.(map[string]interface{})
+	if !ok {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %T %v, want receipt", got, got)
+	}
+	if got := receiptLogIndexes(t, apiReceipt); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
+		t.Fatalf("EthAPI.GetTransactionReceipt log indexes = %v, want [0x1 0x2]", got)
+	}
+}
+
+func TestEthAPI_GetTransactionByHash_RejectsMissingLookupMetadata(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+
+	tests := []struct {
+		name    string
+		backend *stubBackend
+		want    string
+	}{
+		{
+			name: "missing block",
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: nil,
+				txIndex: 0,
+			},
+			want: "transaction lookup for " + txHash + " is missing block metadata",
+		},
+		{
+			name: "missing index",
+			backend: &stubBackend{
+				tx:      tx.Proto(),
+				txBlock: block,
+				txIndex: -1,
+			},
+			want: "transaction lookup for " + txHash + " is missing index metadata",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := jsonrpc.NewEthAPI(tt.backend, nil)
+			got, err := api.GetTransactionByHash(txHash)
+			if err == nil || got != nil || err.Error() != tt.want {
+				t.Fatalf("EthAPI.GetTransactionByHash = %v/%v, want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestEthAPI_GetTransactionReceipt_PropagatesTxLookupError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	api := jsonrpc.NewEthAPI(&stubBackend{
+		txInfo: &corepb.TransactionInfo{},
+		txErr:  backendErr,
+	}, nil)
+
+	got, err := api.GetTransactionReceipt("0x0000000000000000000000000000000000000000000000000000000000000000")
+	if err == nil || got != nil || err.Error() != backendErr.Error() {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want backend error", got, err)
+	}
+}
+
+func TestEthAPI_GetTransactionReceipt_RejectsReceiptWithoutTransactionLookup(t *testing.T) {
+	txHash := "0x00000000000000000000000000000000000000000000000000000000000000aa"
+	api := jsonrpc.NewEthAPI(&stubBackend{
+		txInfo: &corepb.TransactionInfo{},
+	}, nil)
+
+	got, err := api.GetTransactionReceipt(txHash)
+	if err == nil || got != nil || !strings.Contains(err.Error(), "transaction receipt exists for "+txHash+" but transaction lookup is missing") {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want receipt/tx lookup mismatch", got, err)
+	}
+}
+
+func TestEthAPI_GetTransactionReceipt_RejectsMismatchedTxInfoID(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	mismatched := buildFreezeTxInfo()
+	mismatched.Id = bytes.Repeat([]byte{0xdd}, common.HashLength)
+	api := jsonrpc.NewEthAPI(&stubBackend{
+		txInfo:  mismatched,
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 0,
+	}, nil)
+
+	got, err := api.GetTransactionReceipt(txHash)
+	if err == nil || got != nil || !strings.Contains(err.Error(), "does not match transaction hash") {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want txInfo/hash mismatch", got, err)
+	}
+}
+
+func TestEthAPI_GetTransactionReceipt_RejectsMismatchedTxInfoBlockNumber(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	mismatched := buildFreezeTxInfo()
+	mismatched.BlockNumber = int64(block.Number()) + 1
+	api := jsonrpc.NewEthAPI(&stubBackend{
+		txInfo:  mismatched,
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 0,
+	}, nil)
+
+	got, err := api.GetTransactionReceipt(txHash)
+	if err == nil || got != nil || !strings.Contains(err.Error(), "transaction info block number 101 does not match block 100") {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want txInfo block-number mismatch", got, err)
+	}
+}
+
+func TestEthAPI_GetTransactionReceipt_RejectsMismatchedLookupMetadata(t *testing.T) {
+	block := buildFreezeBlock()
+	tx := block.Transactions()[0]
+	txHash := "0x" + tx.Hash().Hex()
+	api := jsonrpc.NewEthAPI(&stubBackend{
+		txInfo:  buildFreezeTxInfo(),
+		tx:      tx.Proto(),
+		txBlock: block,
+		txIndex: 1,
+	}, nil)
+
+	got, err := api.GetTransactionReceipt(txHash)
+	want := "transaction lookup for " + txHash + " has index 1 outside block 100 transaction count 1"
+	if err == nil || got != nil || err.Error() != want {
+		t.Fatalf("EthAPI.GetTransactionReceipt = %v/%v, want %q", got, err, want)
 	}
 }
 
@@ -489,6 +1539,82 @@ func TestEthAccounts(t *testing.T) {
 	accounts, ok := resp["result"].([]interface{})
 	if !ok || len(accounts) != 0 {
 		t.Fatalf("eth_accounts should return [], got %v", resp["result"])
+	}
+}
+
+func TestGtronFreezerStatus(t *testing.T) {
+	min, max := uint64(3), uint64(9)
+	srv := newTestServer(t, &stubBackend{freezerStatus: &jsonrpc.FreezerStatus{
+		Available:   true,
+		HasFrozen:   true,
+		FrozenMin:   &min,
+		FrozenMax:   &max,
+		TableCounts: map[string]uint64{"bodies": 10},
+		Stage: &jsonrpc.FreezerStageStatus{
+			BlockNum:  9,
+			HashBound: true,
+			BlockHash: "0x1234",
+		},
+	}})
+	defer srv.Close()
+
+	resp := rpcCall(t, srv, "gtron_freezerStatus", []interface{}{})
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("gtron_freezerStatus result = %T %v, want object", resp["result"], resp["result"])
+	}
+	if result["available"] != true || result["hasFrozen"] != true {
+		t.Fatalf("gtron_freezerStatus flags = %+v, want available and frozen", result)
+	}
+	if result["frozenMin"] != float64(3) || result["frozenMax"] != float64(9) {
+		t.Fatalf("gtron_freezerStatus bounds = %+v, want 3..9", result)
+	}
+	stage, ok := result["stage"].(map[string]interface{})
+	if !ok || stage["blockNum"] != float64(9) || stage["blockHash"] != "0x1234" {
+		t.Fatalf("gtron_freezerStatus stage = %+v, want block 9 hash 0x1234", result["stage"])
+	}
+}
+
+func TestGtronStageStatus(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{stageStatus: &jsonrpc.StageStatus{
+		Status:   "critical",
+		Complete: false,
+		Pending:  1,
+		Pipeline: jsonrpc.StageStatusPipeline{
+			Complete: false,
+			Pending:  1,
+			Tasks: []jsonrpc.StageStatusPipelineTask{{
+				Stage:          "Bodies",
+				Upstream:       "Headers",
+				Status:         "behind",
+				TargetValue:    9,
+				CurrentValue:   8,
+				CurrentPresent: true,
+			}},
+		},
+		Stages: []jsonrpc.StageStatusRow{{
+			Stage:     "Headers",
+			Group:     "canonical",
+			Present:   true,
+			BlockNum:  9,
+			HashBound: true,
+			Verified:  "canonical",
+		}},
+		Issues: []string{"Bodies=8 ahead of Headers=9"},
+	}})
+	defer srv.Close()
+
+	resp := rpcCall(t, srv, "gtron_stageStatus", []interface{}{})
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("gtron_stageStatus result = %T %v, want object", resp["result"], resp["result"])
+	}
+	if result["status"] != "critical" || result["pending"] != float64(1) {
+		t.Fatalf("gtron_stageStatus summary = %+v, want critical pending=1", result)
+	}
+	pipeline, ok := result["pipeline"].(map[string]interface{})
+	if !ok || pipeline["pending"] != float64(1) {
+		t.Fatalf("gtron_stageStatus pipeline = %+v, want pending=1", result["pipeline"])
 	}
 }
 

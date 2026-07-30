@@ -8,7 +8,8 @@
 //  1. Read the chain's latest solidified block number from the supplied
 //     ChainSource.
 //  2. Compute `freezeTo = solidified - cfg.MarginBlocks` (don't get any
-//     closer to the live head than the configured margin).
+//     closer to the live head than the configured margin), then cap it at
+//     the verified hash-bound `StageFinish` row when that stage exists.
 //  3. `freezeFrom = freezer.AncientCount("bodies")` — the freezer's own
 //     position is the canonical resume point; all three slice-1 tables
 //     advance in lockstep via ModifyAncients, so `bodies` is enough.
@@ -18,10 +19,10 @@
 //     a single ModifyAncients call. The freezer rolls back atomically on
 //     error so a partial pass leaves no orphan ancient rows.
 //  6. fsync the ancient (`freezer.Sync()`).
-//  7. DeleteRange the now-frozen `b-<num>` and `tib-<num>` rows from
-//     Pebble. Hash-keyed `bh-<hash>`, `bsr-<hash>`, and compact
-//     `tx-<hash>` indexes remain hot. New block writes do not create the
-//     deprecated duplicate `ti-<txid>` payload.
+//  7. Delete the now-frozen `b-<num>`, `tib-<num>`, and `bsr-<hash>` rows
+//     from Pebble. The block/transaction lookup rows (`bh-<hash>`,
+//     `tx-<hash>`, `ti-<txid>`) remain hot until a verified cold chain-index
+//     sidecar can replace them.
 //  8. Compact the freed range so Pebble reclaims space promptly.
 //
 // Crash safety: every batch first appends to ancient (with fsync), then
@@ -33,23 +34,23 @@
 package freezer
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
-	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
-	"github.com/tronprotocol/go-tron/core/types"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 var log = gtronlog.NewModule("core/freezer")
@@ -61,13 +62,10 @@ var log = gtronlog.NewModule("core/freezer")
 // fresh-install backlog in under an hour, small enough that one pass
 // can't dominate Pebble's compaction queue).
 const (
-	defaultInterval          = 30 * time.Second
-	defaultMarginBlocks      = uint64(128)
-	defaultBatchBlocks       = uint64(30_000)
-	defaultV2FrameBlocks     = uint32(64)
-	defaultV2SegmentBlocks   = uint64(65_536)
-	defaultTxIndexPrefixBits = uint32(20)
-	txIndexDeleteBatchBytes  = 16 << 20
+	defaultInterval         = 30 * time.Second
+	defaultMarginBlocks     = uint64(128)
+	defaultBatchBlocks      = uint64(30_000)
+	defaultMetricsNamespace = "chain/freezer/"
 )
 
 // Config governs the freezing pass cadence and batch sizing.
@@ -106,52 +104,21 @@ type Config struct {
 	// so one pass fits comfortably under the Interval ceiling.
 	BatchBlocks uint64
 
-	// CompactionAllowed is an optional runtime gate for the explicit Pebble
-	// range compaction that follows a successful freeze. Returning false does
-	// not skip ancient persistence or the crash-safe DeleteRange; it only
-	// leaves physical space reclamation to Pebble's ordinary background work so
-	// latency-sensitive foreground work (notably bulk sync) does not compete
-	// with a manual compaction. Nil preserves the historical always-compact
-	// behaviour.
-	CompactionAllowed func() bool
-
-	// V2PromotionAllowed is independent from CompactionAllowed because V2
-	// segment creation is bounded and required to keep immutable history
-	// advancing during bulk sync, while a synchronous Pebble Compact can create
-	// an unbounded foreground I/O stall. Nil permits promotion.
-	V2PromotionAllowed func() bool
-
-	// V2Enabled promotes complete V1 bodies/tx_infos ranges into seekable Zstd
-	// segments. Default true. Legacy stores with more than one complete segment
-	// and no V2 prefix are left for the explicit offline migration command so a
-	// binary upgrade cannot unexpectedly start a multi-hundred-GiB rewrite.
-	V2Enabled bool
-
-	// V2FrameBlocks and V2SegmentBlocks control incremental V2 output. They
-	// must match the offline migration settings already used by the datadir.
-	V2FrameBlocks   uint32
-	V2SegmentBlocks uint64
-
-	// TransactionIndexEnabled archives tx-* rows one V2 segment at a time and
-	// geometrically merges equal-sized immutable runs. It is enabled by the
-	// production Default config; explicit Config literals remain opt-in.
-	TransactionIndexEnabled    bool
-	TransactionIndexPrefixBits uint32
+	// MetricsNamespace is the go-ethereum metrics prefix used for runner
+	// gauges. Default "chain/freezer/". Tests may override it to avoid
+	// sharing process-global metric names across parallel runners.
+	MetricsNamespace string
 }
 
 // Default returns the production defaults. Used by cmd/gtron when no
 // operator overrides have been supplied.
 func Default() Config {
 	return Config{
-		Enabled:                    true,
-		Interval:                   defaultInterval,
-		MarginBlocks:               defaultMarginBlocks,
-		BatchBlocks:                defaultBatchBlocks,
-		V2Enabled:                  true,
-		V2FrameBlocks:              defaultV2FrameBlocks,
-		V2SegmentBlocks:            defaultV2SegmentBlocks,
-		TransactionIndexEnabled:    true,
-		TransactionIndexPrefixBits: defaultTxIndexPrefixBits,
+		Enabled:          true,
+		Interval:         defaultInterval,
+		MarginBlocks:     defaultMarginBlocks,
+		BatchBlocks:      defaultBatchBlocks,
+		MetricsNamespace: defaultMetricsNamespace,
 	}
 }
 
@@ -179,14 +146,8 @@ func (c Config) applyDefaults() Config {
 	if c.BatchBlocks == 0 {
 		c.BatchBlocks = defaultBatchBlocks
 	}
-	if c.V2FrameBlocks == 0 {
-		c.V2FrameBlocks = defaultV2FrameBlocks
-	}
-	if c.V2SegmentBlocks == 0 {
-		c.V2SegmentBlocks = defaultV2SegmentBlocks
-	}
-	if c.TransactionIndexPrefixBits == 0 {
-		c.TransactionIndexPrefixBits = defaultTxIndexPrefixBits
+	if c.MetricsNamespace == "" {
+		c.MetricsNamespace = defaultMetricsNamespace
 	}
 	return c
 }
@@ -218,62 +179,35 @@ type ChainSource interface {
 	// freezing considers them.
 	DB() ethdb.KeyValueStore
 
-	// ReadBlockRaw returns the marshalled `corepb.Block` bytes under
-	// `b-<num>`, or nil if the row is missing. A nil return is treated
-	// as a hard error by the freezer pass: if a solidified block
-	// disappeared from Pebble, something else is wrong upstream.
-	ReadBlockRaw(number uint64) []byte
+	// ReadBlockRawStrict returns the marshalled `corepb.Block` bytes under
+	// `b-<num>`. A missing row is treated as a hard error by the freezer pass:
+	// if a solidified block disappeared from Pebble, something else is wrong
+	// upstream. Storage read errors must be surfaced so the pass rolls back
+	// instead of recording ambiguous ancient data.
+	ReadBlockRawStrict(number uint64) ([]byte, bool, error)
 
-	// ReadTransactionInfosRaw returns the marshalled
+	// ReadTransactionInfosRawStrict returns the marshalled
 	// `corepb.TransactionRet` bytes under `tib-<num>`, or nil if absent.
 	// Empty blocks (no transactions) still have a row written by
 	// applyBlock — see core.WriteTransactionInfosByBlock — so nil only
 	// occurs in test fakes; the freezer pass treats nil as "no rows" and
 	// appends an empty byte slice to preserve the per-num cardinality of
 	// the ancient table.
-	ReadTransactionInfosRaw(number uint64) []byte
+	ReadTransactionInfosRawStrict(number uint64) ([]byte, bool, error)
 
-	// ReadBlockHash derives the canonical hash from blockRaw already returned by
-	// ReadBlockRaw. Reusing those bytes avoids a second KV read and full decode.
-	ReadBlockHash(number uint64, blockRaw []byte) tcommon.Hash
+	// ReadBlockHashByNumberStrict returns the canonical block hash for the
+	// given number. Used by the freezer to verify hash-bound stages and write
+	// its own ChainFreezer stage. Storage corruption must return an error so
+	// the pass rolls back instead of treating the hash as unavailable.
+	ReadBlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error)
 
 	// ReadBlockStateRootRaw returns the raw state-root bytes under
 	// `bsr-<hash>`, or nil if absent. Pre-AccountStateRoot fork blocks
 	// don't have this row; the freezer pass writes an empty entry in
 	// that case so per-num cardinality matches across all three tables.
-	ReadBlockStateRootRaw(hash tcommon.Hash) []byte
-}
-
-// RawViewSource is the optional zero-intermediate-copy extension implemented
-// by production's Pebble-backed chain adapter. Each callback runs
-// synchronously while the underlying value handle is valid; callers must not
-// retain or mutate raw after it returns. ChainSource's slice-returning methods
-// remain the compatibility fallback for tests and alternate stores.
-type RawViewSource interface {
-	ViewBlockRaw(number uint64, fn func(raw []byte) error) (found bool, err error)
-	ViewTransactionInfosRaw(number uint64, fn func(raw []byte) error) (found bool, err error)
-}
-
-func viewBlockRaw(chain ChainSource, number uint64, fn func([]byte) error) (bool, error) {
-	if viewer, ok := chain.(RawViewSource); ok {
-		return viewer.ViewBlockRaw(number, fn)
-	}
-	raw := chain.ReadBlockRaw(number)
-	if raw == nil {
-		return false, nil
-	}
-	return true, fn(raw)
-}
-
-func viewTransactionInfosRaw(chain ChainSource, number uint64, fn func([]byte) error) (bool, error) {
-	if viewer, ok := chain.(RawViewSource); ok {
-		return viewer.ViewTransactionInfosRaw(number, fn)
-	}
-	raw := chain.ReadTransactionInfosRaw(number)
-	if raw == nil {
-		return false, nil
-	}
-	return true, fn(raw)
+	// Corruption and cold-index lookup failures must return an error so
+	// the pass rolls back instead of appending an empty state-root row.
+	ReadBlockStateRootRaw(hash tcommon.Hash) ([]byte, error)
 }
 
 // FreezerStore is the writer surface the runner needs from the freezer.
@@ -286,28 +220,8 @@ type FreezerStore interface {
 	rawdb.AncientWriter
 }
 
-// V2Compactor is the optional online promotion surface implemented by the
-// production freezer adapter. Keeping it separate from FreezerStore preserves
-// lightweight test fakes and alternate ancient implementations.
-type V2Compactor interface {
-	V2Coverage() uint64
-	MigrateV2(rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error)
-}
-
-// TransactionIndexCompactor is the live publication/merge surface implemented
-// by the production freezer. Keeping it optional preserves simple ancient test
-// fakes and deployments that only use V1/V2 block storage.
-type TransactionIndexCompactor interface {
-	AncientDatadir() (string, error)
-	TransactionIndexCoverage() uint64
-	PublishTransactionIndexRun(rawdbfreezer.TransactionIndexBuildResult) error
-	CompactTransactionIndexTail() (bool, error)
-}
-
-// Stats is a thread-safe snapshot of runner progress. Operators consume
-// it via Runner.Snapshot; a future metrics layer (Prometheus / OTel) can
-// translate it into gauges without the runner having a dep on a metrics
-// package.
+// Stats is a thread-safe snapshot of runner progress. Operators consume it via
+// Runner.Snapshot, and the runner mirrors the same values into metrics gauges.
 type Stats struct {
 	// FrozenMin is the lowest block number currently in ancient. Slice 1
 	// of the freezer spec never truncates the tail, so this is always 0
@@ -339,17 +253,74 @@ type Stats struct {
 	// via an iterator pass on the prefix; expensive enough that the
 	// runner samples only at the end of each pass, not per-block.
 	PebbleSizeAfter uint64
-	// V2Coverage is the first block not yet covered by compressed V2 segments.
-	V2Coverage uint64
-	// V2BlocksCompacted is the number of V1 rows promoted by this process.
-	V2BlocksCompacted uint64
-	// TransactionIndexCoverage is the first block not covered by immutable
-	// transaction-index runs. TransactionIndexPruned is the first block whose
-	// hot tx-* rows may still exist.
-	TransactionIndexCoverage     uint64
-	TransactionIndexPruned       uint64
-	TransactionIndexRowsArchived uint64
-	TransactionIndexRowsPruned   uint64
+}
+
+type runnerMetrics struct {
+	frozenMin        *metrics.Gauge
+	frozenMax        *metrics.Gauge
+	frozenHas        *metrics.Gauge
+	blocksFrozen     *metrics.Gauge
+	passesCompleted  *metrics.Gauge
+	lastPassAt       *metrics.Gauge
+	lastPassDuration *metrics.Gauge
+	pebbleSizeAfter  *metrics.Gauge
+}
+
+func newRunnerMetrics(namespace string) runnerMetrics {
+	namespace = normalizeMetricNamespace(namespace)
+	return runnerMetrics{
+		frozenMin:       metrics.GetOrRegisterGauge(namespace+"frozen/min", nil),
+		frozenMax:       metrics.GetOrRegisterGauge(namespace+"frozen/max", nil),
+		frozenHas:       metrics.GetOrRegisterGauge(namespace+"frozen/has", nil),
+		blocksFrozen:    metrics.GetOrRegisterGauge(namespace+"blocks", nil),
+		passesCompleted: metrics.GetOrRegisterGauge(namespace+"passes", nil),
+		lastPassAt:      metrics.GetOrRegisterGauge(namespace+"lastpass/time", nil),
+		lastPassDuration: metrics.GetOrRegisterGauge(
+			namespace+"lastpass/duration",
+			nil,
+		),
+		pebbleSizeAfter: metrics.GetOrRegisterGauge(namespace+"pebble/size", nil),
+	}
+}
+
+func normalizeMetricNamespace(namespace string) string {
+	if namespace == "" {
+		namespace = defaultMetricsNamespace
+	}
+	if !strings.HasSuffix(namespace, "/") {
+		namespace += "/"
+	}
+	return namespace
+}
+
+func (m runnerMetrics) update(stats Stats) {
+	m.frozenMin.Update(uint64GaugeValue(stats.FrozenMin))
+	m.frozenMax.Update(uint64GaugeValue(stats.FrozenMax))
+	m.frozenHas.Update(boolGaugeValue(stats.HasFrozen))
+	m.blocksFrozen.Update(uint64GaugeValue(stats.BlocksFrozen))
+	m.passesCompleted.Update(uint64GaugeValue(stats.PassesCompleted))
+	if stats.LastPassAt.IsZero() {
+		m.lastPassAt.Update(0)
+	} else {
+		m.lastPassAt.Update(stats.LastPassAt.Unix())
+	}
+	m.lastPassDuration.Update(int64(stats.LastPassDuration))
+	m.pebbleSizeAfter.Update(uint64GaugeValue(stats.PebbleSizeAfter))
+}
+
+func boolGaugeValue(v bool) int64 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func uint64GaugeValue(v uint64) int64 {
+	const maxInt64GaugeValue = uint64(1<<63 - 1)
+	if v > maxInt64GaugeValue {
+		return int64(maxInt64GaugeValue)
+	}
+	return int64(v)
 }
 
 // Runner is the freezer's Lifecycle service. Construct with New, register
@@ -359,24 +330,23 @@ type Runner struct {
 	chain   ChainSource
 	freezer FreezerStore
 	cfg     Config
+	metrics runnerMetrics
 
+	wake chan struct{}
 	quit chan struct{}
 	done chan struct{}
 	once sync.Once
 
+	hookMu       sync.Mutex
+	advanceHooks []func()
+
 	// stats fields are atomics so Snapshot is lock-free against the running
 	// goroutine.
-	blocksFrozen        atomic.Uint64
-	passesCompleted     atomic.Uint64
-	lastPassUnixNano    atomic.Int64
-	lastPassDuration    atomic.Int64 // nanoseconds
-	pebbleSizeAfter     atomic.Uint64
-	v2BlocksCompacted   atomic.Uint64
-	v2BacklogWarned     atomic.Bool
-	lastV2Promotion     atomic.Int64
-	txIndexRowsArchived atomic.Uint64
-	txIndexRowsPruned   atomic.Uint64
-	txIndexLegacyWarned atomic.Bool
+	blocksFrozen     atomic.Uint64
+	passesCompleted  atomic.Uint64
+	lastPassUnixNano atomic.Int64
+	lastPassDuration atomic.Int64 // nanoseconds
+	pebbleSizeAfter  atomic.Uint64
 
 	// reconciled guards the once-per-process crash-leftover sweep in
 	// onePass. See the reconciliation block there.
@@ -401,15 +371,20 @@ func New(chain ChainSource, fz FreezerStore, cfg Config) *Runner {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Runner{
+	cfg = cfg.applyDefaults()
+	r := &Runner{
 		chain:       chain,
 		freezer:     fz,
-		cfg:         cfg.applyDefaults(),
+		cfg:         cfg,
+		metrics:     newRunnerMetrics(cfg.MetricsNamespace),
+		wake:        make(chan struct{}, 1),
 		quit:        make(chan struct{}),
 		done:        make(chan struct{}),
 		pauseCtx:    ctx,
 		pauseCancel: cancel,
 	}
+	r.updateMetrics()
+	return r
 }
 
 // Start implements node.Lifecycle. Launches the freezing goroutine. If
@@ -447,29 +422,60 @@ func (r *Runner) Stop() error {
 	return nil
 }
 
+// RequestPass schedules one freezer pass without waiting for it. Requests
+// coalesce while a pass is pending, so sync completion can wake the freezer
+// without creating an unbounded queue during catch-up.
+func (r *Runner) RequestPass() {
+	if r == nil {
+		return
+	}
+	select {
+	case <-r.quit:
+		return
+	default:
+	}
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// AddChainFreezerAdvanceHook registers a callback that runs after a pass
+// advances or repairs the hash-bound ChainFreezer stage. Hooks run without
+// runner locks held and must return promptly.
+func (r *Runner) AddChainFreezerAdvanceHook(hook func()) {
+	if r == nil || hook == nil {
+		return
+	}
+	r.hookMu.Lock()
+	r.advanceHooks = append(r.advanceHooks, hook)
+	r.hookMu.Unlock()
+}
+
+func (r *Runner) notifyChainFreezerAdvance() {
+	r.hookMu.Lock()
+	hooks := append([]func(){}, r.advanceHooks...)
+	r.hookMu.Unlock()
+	for _, hook := range hooks {
+		hook()
+	}
+}
+
 // Snapshot returns a thread-safe copy of the runner's current counters.
 // Safe to call from any goroutine — every field is read from an atomic.
 func (r *Runner) Snapshot() Stats {
+	return r.snapshot()
+}
+
+func (r *Runner) snapshot() Stats {
 	stats := Stats{
-		BlocksFrozen:                 r.blocksFrozen.Load(),
-		PassesCompleted:              r.passesCompleted.Load(),
-		LastPassDuration:             time.Duration(r.lastPassDuration.Load()),
-		PebbleSizeAfter:              r.pebbleSizeAfter.Load(),
-		V2BlocksCompacted:            r.v2BlocksCompacted.Load(),
-		TransactionIndexRowsArchived: r.txIndexRowsArchived.Load(),
-		TransactionIndexRowsPruned:   r.txIndexRowsPruned.Load(),
+		BlocksFrozen:     r.blocksFrozen.Load(),
+		PassesCompleted:  r.passesCompleted.Load(),
+		LastPassDuration: time.Duration(r.lastPassDuration.Load()),
+		PebbleSizeAfter:  r.pebbleSizeAfter.Load(),
 	}
 	if t := r.lastPassUnixNano.Load(); t > 0 {
 		stats.LastPassAt = time.Unix(0, t)
-	}
-	if compactor, ok := r.freezer.(V2Compactor); ok {
-		stats.V2Coverage = compactor.V2Coverage()
-	}
-	if compactor, ok := r.freezer.(TransactionIndexCompactor); ok {
-		stats.TransactionIndexCoverage = compactor.TransactionIndexCoverage()
-	}
-	if progress, ok, err := rawdb.ReadStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune); err == nil && ok {
-		stats.TransactionIndexPruned = progress
 	}
 	// FrozenMin / FrozenMax come straight from the ancient store so the
 	// caller always sees the canonical position even if a concurrent
@@ -484,309 +490,8 @@ func (r *Runner) Snapshot() Stats {
 	return stats
 }
 
-// CompactV2Once promotes at most one complete V1 segment. It is safe while the
-// node serves reads: MigrateV2 publishes and installs the new read view before
-// reclaiming the V1 source. A cancelled runner leaves only an unpublished temp
-// file, or a published duplicate that the next pass reconciles.
-func (r *Runner) CompactV2Once() (uint64, error) {
-	if !r.cfg.Enabled || !r.cfg.V2Enabled {
-		return 0, nil
-	}
-	compactor, ok := r.freezer.(V2Compactor)
-	if !ok {
-		return 0, nil
-	}
-	if r.cfg.V2PromotionAllowed != nil && !r.cfg.V2PromotionAllowed() {
-		return 0, nil
-	}
-	segmentBlocks := r.cfg.V2SegmentBlocks
-	if segmentBlocks == 0 || r.cfg.V2FrameBlocks == 0 || segmentBlocks%uint64(r.cfg.V2FrameBlocks) != 0 {
-		return 0, errors.New("freezer: invalid V2 frame/segment configuration")
-	}
-	head, err := r.freezer.AncientCount(rawdbAncientBlocks)
-	if err != nil {
-		return 0, err
-	}
-	coverage := compactor.V2Coverage()
-	target := head / segmentBlocks * segmentBlocks
-	if target <= coverage {
-		return 0, nil
-	}
-	// An empty/new store reaches exactly one complete segment through normal
-	// passes and may bootstrap V2 online. A legacy backlog is intentionally
-	// refused until the operator runs the offline migration once.
-	if coverage == 0 && target > segmentBlocks {
-		if !r.v2BacklogWarned.Swap(true) {
-			log.Warn("Freezer: legacy V1 backlog requires offline V2 migration",
-				"head", head, "completeTarget", target, "segmentBlocks", segmentBlocks)
-		}
-		return 0, nil
-	}
-	result, err := compactor.MigrateV2(rawdbfreezer.V2MigrationOptions{
-		Tables:        []string{rawdbAncientBlocks, rawdbAncientTxInfos},
-		SegmentBlocks: segmentBlocks,
-		FrameBlocks:   r.cfg.V2FrameBlocks,
-		MaxSegments:   1,
-		Online:        true,
-		Context:       r.pauseCtx,
-		Transform:     rawdb.CompactAncientV2Record,
-	})
-	if err != nil {
-		return 0, err
-	}
-	compacted := result.End - result.Start
-	if compacted > 0 {
-		r.v2BlocksCompacted.Add(compacted)
-		log.Info("Freezer: promoted V1 segment to V2",
-			"from", result.Start, "to", result.End,
-			"frameBlocks", result.FrameBlocks,
-			"elapsed", result.Elapsed,
-			"physicalBefore", result.PhysicalBytesBefore,
-			"physicalAfter", result.PhysicalBytesAfter)
-	}
-	return compacted, nil
-}
-
-// compactV2Scheduled enforces a full freezer interval between successful V2
-// promotions. A time.Ticker retains one queued tick while a long segment is
-// being written; without this guard a backlog would otherwise run segments
-// back-to-back and starve foreground sync.
-func (r *Runner) compactV2Scheduled() (uint64, error) {
-	if last := r.lastV2Promotion.Load(); last > 0 && time.Since(time.Unix(0, last)) < r.cfg.Interval {
-		return 0, nil
-	}
-	compacted, err := r.CompactV2Once()
-	if compacted > 0 {
-		r.lastV2Promotion.Store(time.Now().UnixNano())
-	}
-	return compacted, err
-}
-
-// MaintainTransactionIndexOnce performs one bounded maintenance action:
-// prune one already-published segment, merge one equal-sized run pair, or
-// publish one newly V2-covered segment. Publication precedes hot deletion;
-// StageFreezerTxIndexPrune makes interrupted deletion safely resumable.
-func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
-	if !r.cfg.Enabled || !r.cfg.V2Enabled || !r.cfg.TransactionIndexEnabled {
-		return false, nil
-	}
-	v2, ok := r.freezer.(V2Compactor)
-	if !ok {
-		return false, nil
-	}
-	index, ok := r.freezer.(TransactionIndexCompactor)
-	if !ok {
-		return false, nil
-	}
-	coverage := index.TransactionIndexCoverage()
-	v2Coverage := v2.V2Coverage()
-	if coverage > v2Coverage {
-		return false, fmt.Errorf("freezer: transaction index coverage %d exceeds V2 coverage %d", coverage, v2Coverage)
-	}
-	pruned, initialized, err := r.transactionIndexPruneProgress(coverage)
-	if err != nil || !initialized {
-		return false, err
-	}
-	if pruned > coverage {
-		return false, fmt.Errorf("freezer: transaction index prune progress %d exceeds coverage %d", pruned, coverage)
-	}
-	if pruned < coverage {
-		end := pruned + r.cfg.V2SegmentBlocks
-		if end > coverage {
-			end = coverage
-		}
-		entries, err := r.collectTransactionIndexEntries(pruned, end)
-		if err != nil {
-			return false, err
-		}
-		if err := r.deleteHotTransactionIndexes(entries); err != nil {
-			return false, err
-		}
-		if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune, end); err != nil {
-			return false, err
-		}
-		if syncer, ok := r.chain.DB().(interface{ SyncKeyValue() error }); ok {
-			if err := syncer.SyncKeyValue(); err != nil {
-				return false, err
-			}
-		}
-		r.txIndexRowsPruned.Add(uint64(len(entries)))
-		log.Info("Freezer: pruned archived hot transaction indexes", "from", pruned, "to", end, "rows", len(entries))
-		return true, nil
-	}
-	if merged, err := index.CompactTransactionIndexTail(); err != nil {
-		return false, err
-	} else if merged {
-		log.Info("Freezer: geometrically merged transaction index tail")
-		return true, nil
-	}
-	if coverage+r.cfg.V2SegmentBlocks > v2Coverage {
-		return false, nil
-	}
-	end := coverage + r.cfg.V2SegmentBlocks
-	entries, err := r.collectTransactionIndexEntries(coverage, end)
-	if err != nil {
-		return false, err
-	}
-	path, err := index.AncientDatadir()
-	if err != nil {
-		return false, err
-	}
-	runPath := rawdbfreezer.TransactionIndexRunPath(path, coverage, end)
-	result, recovered, err := buildOrRecoverOnlineTransactionIndex(runPath, coverage, end, r.cfg.TransactionIndexPrefixBits, entries)
-	if err != nil {
-		return false, err
-	}
-	if err := index.PublishTransactionIndexRun(result); err != nil {
-		return false, err
-	}
-	r.txIndexRowsArchived.Add(result.Rows)
-	log.Info("Freezer: published online transaction index",
-		"from", coverage, "to", end, "rows", result.Rows,
-		"bytes", result.FileBytes, "recovered", recovered)
-	return true, nil
-}
-
-func (r *Runner) transactionIndexPruneProgress(coverage uint64) (uint64, bool, error) {
-	progress, ok, err := rawdb.ReadStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune)
-	if err != nil || ok || coverage == 0 {
-		return progress, true, err
-	}
-	// Older offline migrations predate this cursor. If no covered tx-* row
-	// remains, establish the cursor without replaying already-completed work.
-	// A failed legacy migration is detected by the first covered row and left
-	// for the atomic offline command instead of issuing billions of point tombstones.
-	coveredRowPresent := false
-	errStop := errors.New("covered transaction index found")
-	_, err = rawdb.VisitTransactionIndexes(r.chain.DB(), func(sample rawdb.TransactionIndexSample) error {
-		if rawdb.TransactionIndexLocationBlock(sample.Location) < coverage {
-			coveredRowPresent = true
-			return errStop
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, errStop) {
-		return 0, false, err
-	}
-	if coveredRowPresent && coverage > r.cfg.V2SegmentBlocks {
-		if !r.txIndexLegacyWarned.Swap(true) {
-			log.Warn("Freezer: legacy cold transaction index still has covered hot rows; run db migrate-tx-index offline",
-				"coverage", coverage)
-		}
-		return 0, false, nil
-	}
-	if coveredRowPresent {
-		return 0, true, nil
-	}
-	if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune, coverage); err != nil {
-		return 0, false, err
-	}
-	return coverage, true, nil
-}
-
-func (r *Runner) collectTransactionIndexEntries(start, end uint64) ([]rawdbfreezer.TransactionIndexEntry, error) {
-	started := time.Now()
-	lastProgress := started
-	entries := make([]rawdbfreezer.TransactionIndexEntry, 0, (end-start)*32)
-	for number := start; number < end; number++ {
-		body, err := r.freezer.Ancient(rawdbAncientBlocks, number)
-		if err != nil {
-			return nil, fmt.Errorf("read ancient body %d for transaction index: %w", number, err)
-		}
-		block, err := types.UnmarshalBlockBorrowed(body)
-		if err != nil {
-			return nil, fmt.Errorf("decode ancient body %d for transaction index: %w", number, err)
-		}
-		for ordinal, tx := range block.Transactions() {
-			location, err := rawdb.EncodeTransactionLocation(number, ordinal)
-			if err != nil {
-				return nil, err
-			}
-			entries = append(entries, rawdbfreezer.TransactionIndexEntry{Hash: tx.Hash(), Location: location})
-		}
-		if time.Since(lastProgress) >= 30*time.Second {
-			log.Info("Freezer: collecting transaction index", "from", start, "to", end, "block", number, "rows", len(entries), "elapsed", time.Since(started))
-			lastProgress = time.Now()
-		}
-	}
-	sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].Hash[:], entries[j].Hash[:]) < 0 })
-	for i := 1; i < len(entries); i++ {
-		if entries[i-1].Hash == entries[i].Hash {
-			return nil, fmt.Errorf("duplicate transaction hash %x in archived range [%d,%d)", entries[i].Hash, start, end)
-		}
-	}
-	return entries, nil
-}
-
-func buildOrRecoverOnlineTransactionIndex(path string, start, end uint64, prefixBits uint32, entries []rawdbfreezer.TransactionIndexEntry) (rawdbfreezer.TransactionIndexBuildResult, bool, error) {
-	if run, err := rawdbfreezer.OpenTransactionIndexRun(path); err == nil {
-		defer run.Close()
-		if run.StartBlock() != start || run.EndBlock() != end || run.PrefixBits() != prefixBits || run.Rows() != uint64(len(entries)) {
-			return rawdbfreezer.TransactionIndexBuildResult{}, false, fmt.Errorf("online transaction index run %q has incompatible metadata", path)
-		}
-		if err := run.Verify(); err != nil {
-			return rawdbfreezer.TransactionIndexBuildResult{}, false, err
-		}
-		return rawdbfreezer.TransactionIndexBuildResult{Path: path, Rows: run.Rows(), StartBlock: start, EndBlock: end, PrefixBits: prefixBits, FileBytes: run.Size()}, true, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return rawdbfreezer.TransactionIndexBuildResult{}, false, err
-	}
-	result, err := rawdbfreezer.BuildTransactionIndexRun(path, rawdbfreezer.TransactionIndexBuildOptions{
-		PrefixBits: prefixBits,
-		StartBlock: start,
-		EndBlock:   end,
-		Iterate: func(yield func(rawdbfreezer.TransactionIndexEntry) error) error {
-			for _, entry := range entries {
-				if err := yield(entry); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-	})
-	return result, false, err
-}
-
-func (r *Runner) deleteHotTransactionIndexes(entries []rawdbfreezer.TransactionIndexEntry) error {
-	batch := r.chain.DB().NewBatchWithSize(txIndexDeleteBatchBytes)
-	defer batch.Reset()
-	flush := func() error {
-		if batch.ValueSize() == 0 {
-			return nil
-		}
-		if err := batch.Write(); err != nil {
-			return err
-		}
-		batch.Reset()
-		return nil
-	}
-	for _, entry := range entries {
-		if err := rawdb.DeleteTransactionIndex(batch, entry.Hash[:]); err != nil {
-			return err
-		}
-		if batch.ValueSize() >= txIndexDeleteBatchBytes {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-	}
-	return flush()
-}
-
-// compactFrozenBlockRange performs eager physical reclamation for both
-// num-keyed frozen namespaces only when the runtime gate permits it. Evaluate
-// the gate once so one namespace cannot be compacted while the other is skipped
-// if the foreground-idle signal changes between calls.
-func (r *Runner) compactFrozenBlockRange(lo, hi uint64) (attempted bool, err error) {
-	if r.cfg.CompactionAllowed != nil && !r.cfg.CompactionAllowed() {
-		return false, nil
-	}
-	start, limit := rawdb.BlockRangeBounds(lo, hi)
-	if err := r.chain.DB().Compact(start, limit); err != nil {
-		return true, err
-	}
-	start, limit = rawdb.TransactionInfoBlockRangeBounds(lo, hi)
-	return true, r.chain.DB().Compact(start, limit)
+func (r *Runner) updateMetrics() {
+	r.metrics.update(r.snapshot())
 }
 
 // OnePass runs a single freezing pass synchronously and returns the
@@ -797,12 +502,17 @@ func (r *Runner) compactFrozenBlockRange(lo, hi uint64) (attempted bool, err err
 // produced enough blocks above the margin yet). Per-pass errors leave
 // the freezer in a consistent state thanks to ModifyAncients' atomic
 // rollback; the next pass simply retries.
-func (r *Runner) OnePass() (uint64, error) {
+func (r *Runner) OnePass() (frozen uint64, err error) {
 	start := time.Now()
+	stageAdvanced := false
 	defer func() {
 		r.lastPassUnixNano.Store(start.UnixNano())
 		r.lastPassDuration.Store(int64(time.Since(start)))
 		r.passesCompleted.Add(1)
+		r.updateMetrics()
+		if err == nil && stageAdvanced {
+			r.notifyChainFreezerAdvance()
+		}
 	}()
 
 	if !r.cfg.Enabled {
@@ -821,6 +531,13 @@ func (r *Runner) OnePass() (uint64, error) {
 		return 0, nil
 	}
 	freezeTo := uint64(solid) - r.cfg.MarginBlocks // inclusive upper bound
+	finishStage, hasFinishStage, err := r.verifiedFinishStageBlock()
+	if err != nil {
+		return 0, err
+	}
+	if hasFinishStage && finishStage < freezeTo {
+		freezeTo = finishStage
+	}
 
 	// Resume from the freezer's own canonical position. Reading
 	// AncientCount on every pass means we never need to persist a
@@ -829,43 +546,56 @@ func (r *Runner) OnePass() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	// Startup reconciliation (once per process). StageFreezerHotPrune is an
-	// exclusive durable cursor recording the ancient range already deleted
-	// from Pebble. A crash between ancient Sync and DeleteRange is repaired by
-	// deleting from the old cursor to freezeFromN. ResetMutableState clears the
-	// cursor together with the other stage rows, so a stored replay that wrote
-	// historical b-*/tib-* rows back into the middle of the frozen range forces
-	// a complete [0, freezeFromN) sweep. The old highest-frozen-row point probe
-	// missed exactly that interior-leak shape once the ancient tip moved beyond
-	// the replay target.
-	//
-	// Reconciliation writes only range tombstones and deliberately does not run
-	// a potentially multi-hour manual compaction on service startup. The offline
-	// prune-frozen-hot command provides immediate, operator-controlled physical
-	// reclamation; Pebble background compaction remains safe in the meantime.
-	if freezeFromN > 0 && !r.reconciled.Load() {
-		prunedTo, ok, err := rawdb.ReadStageProgress(r.chain.DB(), rawdb.StageFreezerHotPrune)
+	if hasFinishStage && freezeFromN > 0 && freezeFromN-1 > finishStage {
+		return 0, fmt.Errorf("freezer: ancient head %d exceeds verified finish stage %d", freezeFromN-1, finishStage)
+	}
+	// Startup reconciliation (once per process). A crash that landed
+	// between Phase 2 (ancient Sync) and Phase 3 (Pebble DeleteRange) of a
+	// prior pass leaves blocks [x, freezeFromN) durably in ancient but
+	// with their hot `b-`/`tib-` rows still in Pebble. No later pass would
+	// ever revisit them — passes only delete the range they just froze
+	// ([freezeFromN, cap)) — so the frozen-but-undeleted rows would leak
+	// disk space forever. Detect the condition cheaply (the highest frozen
+	// block's hot row still present) and sweep [0, freezeFromN) once. The
+	// expensive DeleteRange+Compact only runs when a crash actually left
+	// rows behind; the clean-restart path pays a single Get.
+	if freezeFromN > 0 && !r.reconciled.Swap(true) {
+		leftoverRaw, leftoverOK, err := r.chain.ReadBlockRawStrict(freezeFromN - 1)
 		if err != nil {
-			return 0, fmt.Errorf("read freezer hot-prune progress: %w", err)
+			return 0, err
 		}
-		if !ok || prunedTo > freezeFromN {
-			prunedTo = 0
-		}
-		if prunedTo < freezeFromN {
-			if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), prunedTo, freezeFromN-1); err != nil {
+		if leftoverOK && len(leftoverRaw) > 0 {
+			leftoverHi := freezeFromN - 1
+			if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), 0, leftoverHi); err != nil {
 				return 0, err
 			}
-			if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerHotPrune, freezeFromN); err != nil {
-				return 0, fmt.Errorf("write freezer hot-prune progress: %w", err)
+			advanced, err := r.writeChainFreezerStage(leftoverHi)
+			if err != nil {
+				return 0, err
 			}
-			log.Info("Freezer: reconciled frozen hot rows",
-				"from", prunedTo, "to", freezeFromN-1,
-				"physicalReclaim", "background-or-offline")
+			stageAdvanced = stageAdvanced || advanced
+			start, limit := rawdb.BlockRangeBounds(0, leftoverHi)
+			if err := r.chain.DB().Compact(start, limit); err != nil {
+				log.Warn("Freezer: crash-leftover compact failed (rows still deleted)",
+					"to", leftoverHi, "err", err)
+			}
+			log.Info("Freezer: swept crash-leftover hot rows", "upTo", leftoverHi)
 		}
-		r.reconciled.Store(true)
+	}
+	if freezeFromN > 0 {
+		advanced, err := r.writeChainFreezerStage(freezeFromN - 1)
+		if err != nil {
+			return 0, err
+		}
+		stageAdvanced = stageAdvanced || advanced
 	}
 
 	if freezeTo < freezeFromN {
+		if freezeFromN > 0 {
+			if err := r.pruneFrozenStateRoots(freezeFromN - 1); err != nil {
+				return 0, err
+			}
+		}
 		return 0, nil
 	}
 	// The freezer pass works in half-open [freezeFromN, capExclusive)
@@ -878,6 +608,7 @@ func (r *Runner) OnePass() (uint64, error) {
 	if capExclusive <= freezeFromN {
 		return 0, nil
 	}
+	blockHashes := make([]tcommon.Hash, 0, capExclusive-freezeFromN)
 
 	// Phase 1: append every block's three blobs to ancient atomically.
 	// ModifyAncients rolls every table back to its pre-call head if the
@@ -885,66 +616,49 @@ func (r *Runner) OnePass() (uint64, error) {
 	// rows in one table.
 	if _, err := r.freezer.ModifyAncients(func(op rawdb.AncientWriteOp) error {
 		for n := freezeFromN; n < capExclusive; n++ {
-			var (
-				hash     tcommon.Hash
-				txHashes [][32]byte
-			)
-			found, err := viewBlockRaw(r.chain, n, func(raw []byte) error {
-				if len(raw) == 0 {
-					return errMissingBlock(n)
-				}
-				if err := op.AppendRaw(rawdbAncientBlocks, n, raw); err != nil {
-					return err
-				}
-				hash = r.chain.ReadBlockHash(n, raw)
-				txHashes, err = rawdb.TransactionHashesFromBlock(raw)
-				if err != nil {
-					// Preserve compatibility with synthetic/test sources and with a
-					// damaged legacy body: freezing the exact bytes is safer than
-					// making the optional deduplication a new availability hazard.
-					log.Warn("Freezer: cannot count block transactions; preserving transaction IDs", "number", n, "err", err)
-					txHashes = nil
-				}
-				return nil
-			})
+			blockRaw, ok, err := r.chain.ReadBlockRawStrict(n)
 			if err != nil {
-				return err
+				return fmt.Errorf("freezer: read block %d: %w", n, err)
 			}
-			if !found {
+			if !ok || len(blockRaw) == 0 {
 				return errMissingBlock(n)
 			}
-
-			found, err = viewTransactionInfosRaw(r.chain, n, func(txInfosRaw []byte) error {
-				compact, infos, removed, compactErr := rawdb.CompactTransactionInfoIDsForHashes(txInfosRaw, txHashes)
-				if compactErr != nil {
-					log.Warn("Freezer: preserving malformed transaction info row", "number", n, "err", compactErr)
-					return op.AppendRaw(rawdbAncientTxInfos, n, txInfosRaw)
-				}
-				if infos > 0 && removed == 0 {
-					log.Warn("Freezer: preserving transaction IDs after block/info count mismatch", "number", n, "infos", infos)
-				}
-				return op.AppendRaw(rawdbAncientTxInfos, n, compact)
-			})
+			block, err := decodeFreezerBlockRaw(n, blockRaw)
 			if err != nil {
 				return err
 			}
-			if !found {
-				if err := op.AppendRaw(rawdbAncientTxInfos, n, nil); err != nil {
-					return err
-				}
+			if err := op.AppendRaw(rawdbAncientBlocks, n, blockRaw); err != nil {
+				return err
 			}
-			// State-root row is hash-keyed; derive it from the block bytes already
-			// loaded above instead of reading and decoding the block a second time.
+			txInfosRaw, _, err := r.chain.ReadTransactionInfosRawStrict(n)
+			if err != nil {
+				return fmt.Errorf("freezer: read tx infos for block %d: %w", n, err)
+			}
+			if err := validateFreezerTransactionInfosRaw(n, block, txInfosRaw); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, n, txInfosRaw); err != nil {
+				return err
+			}
+			// State-root row is hash-keyed; resolve via the block proto.
 			// Pre-AccountStateRoot fork blocks have no row, in which case
 			// ReadBlockStateRootRaw returns nil — append nil so the
 			// ancient table's per-num cardinality stays aligned with
 			// `bodies` / `tx_infos`. Empty entries decode back to the
 			// zero hash via the slice-2 read path, which matches the
 			// pre-freezer Pebble miss → zero-hash behavior.
-			stateRoot := r.chain.ReadBlockStateRootRaw(hash)
+			hash := block.Hash()
+			stateRoot, err := r.chain.ReadBlockStateRootRaw(hash)
+			if err != nil {
+				return fmt.Errorf("freezer: read state root for block %d hash %x: %w", n, hash.Bytes(), err)
+			}
+			if err := validateFreezerStateRootRaw(n, stateRoot); err != nil {
+				return err
+			}
 			if err := op.AppendRaw(rawdbAncientStateRoots, n, stateRoot); err != nil {
 				return err
 			}
+			blockHashes = append(blockHashes, hash)
 		}
 		return nil
 	}); err != nil {
@@ -961,55 +675,210 @@ func (r *Runner) OnePass() (uint64, error) {
 		return 0, err
 	}
 
-	// Phase 3: delete the now-frozen hot rows from Pebble. The two
-	// DeleteRange calls cover `b-<num>` and `tib-<num>`; hash-keyed
-	// `bh-<hash>` / `bsr-<hash>` stay hot per the slice-1 design.
+	// Phase 3: delete the now-frozen hot rows from Pebble. `b-<num>` and
+	// `tib-<num>` leave through range tombstones while `bsr-<hash>` leaves in
+	// the same batch: state_roots is already durable in ancient, and hot
+	// bh-<hash> rows retain the ancient fallback path until cold chain-index
+	// coverage permits pruning those lookup rows too.
 	frozenHi := capExclusive - 1
-	if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), freezeFromN, frozenHi); err != nil {
-		// AncientCount has already advanced, so the normal freeze path will not
-		// revisit this range. Re-arm reconciliation for the next pass.
-		r.reconciled.Store(false)
+	if err := rawdb.DeleteFrozenBlockRangeWithStateRoots(r.chain.DB(), freezeFromN, frozenHi, blockHashes); err != nil {
 		return 0, err
 	}
-	if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerHotPrune, capExclusive); err != nil {
-		r.reconciled.Store(false)
-		return 0, fmt.Errorf("write freezer hot-prune progress: %w", err)
+	advanced, err := r.writeChainFreezerStage(frozenHi)
+	if err != nil {
+		return 0, err
 	}
+	stageAdvanced = stageAdvanced || advanced
 
-	// Phase 4: optionally compact the freed range. Pebble turns DeleteRange into
+	// Phase 4: compact the freed range. Pebble turns DeleteRange into
 	// range tombstones, which are O(1) on the write path but only reclaim
-	// space when their containing SSTables get compacted. When the runtime gate
-	// permits it, explicit Compact reclaims the range promptly; otherwise
-	// ordinary Pebble background compaction handles it without making foreground
-	// bulk sync wait on a synchronous I/O burst.
-	attempted, compactErr := r.compactFrozenBlockRange(freezeFromN, frozenHi)
-	if compactErr != nil {
+	// space when their containing SSTables get compacted. Explicit
+	// Compact triggers a synchronous compaction so the operator sees the
+	// datadir shrink without waiting for background compaction to roll
+	// through (which can take hours on a healthy LSM).
+	start1, limit1 := rawdb.BlockRangeBounds(freezeFromN, frozenHi)
+	if err := r.chain.DB().Compact(start1, limit1); err != nil {
 		// Compaction failure is non-fatal: the rows are deleted from a
 		// correctness standpoint (range tombstones above them), the only
 		// loss is that the operator's datadir won't shrink as quickly.
 		// Log and proceed.
 		log.Warn("Freezer: compact failed (rows still deleted)",
-			"from", freezeFromN, "to", frozenHi, "err", compactErr)
-	} else if !attempted {
-		log.Debug("Freezer: deferred Pebble compaction",
-			"from", freezeFromN, "to", frozenHi)
+			"from", freezeFromN, "to", frozenHi, "err", err)
+	}
+	if err := r.pruneFrozenStateRoots(frozenHi); err != nil {
+		return 0, err
 	}
 
-	// Phase 5: update stats. Start at the first block that remains hot instead
-	// of walking the prefix from block zero. DeleteRange makes frozen rows
-	// logically invisible immediately, but until compaction reclaims their
-	// SSTables a prefix-wide iterator still has to read and decompress those
-	// tables to apply the range tombstones. On a historical-sync database that
-	// turned this diagnostic counter into a continuous full-database scan which
-	// polluted Pebble's block cache and could exhaust the service memory cgroup.
-	frozen := capExclusive - freezeFromN
+	// Phase 5: update stats. PebbleSizeAfter is sampled by an iterator
+	// pass on the still-hot `b-` prefix — cheap because after a successful
+	// freeze the prefix only holds the post-margin window.
+	frozen = capExclusive - freezeFromN
 	r.blocksFrozen.Add(frozen)
-	if frozenHi == ^uint64(0) {
-		r.pebbleSizeAfter.Store(0)
-	} else {
-		r.pebbleSizeAfter.Store(pebbleBlockNamespaceSizeFrom(r.chain.DB(), frozenHi+1))
-	}
+	r.pebbleSizeAfter.Store(pebbleBlockNamespaceSize(r.chain.DB()))
 	return frozen, nil
+}
+
+func decodeFreezerBlockRaw(blockNum uint64, raw []byte) (*coretypes.Block, error) {
+	block, err := coretypes.UnmarshalBlock(raw)
+	if err != nil {
+		return nil, fmt.Errorf("freezer: decode block %d: %w", blockNum, err)
+	}
+	if block.Number() != blockNum {
+		return nil, fmt.Errorf("freezer: block row %d contains block number %d", blockNum, block.Number())
+	}
+	return block, nil
+}
+
+func validateFreezerTransactionInfosRaw(blockNum uint64, block *coretypes.Block, raw []byte) error {
+	if len(raw) == 0 {
+		if block != nil && len(block.Transactions()) != 0 {
+			return fmt.Errorf("freezer: missing transaction info coverage for block %d with %d transactions", blockNum, len(block.Transactions()))
+		}
+		return nil
+	}
+	var ret corepb.TransactionRet
+	if err := proto.Unmarshal(raw, &ret); err != nil {
+		return fmt.Errorf("freezer: decode tx infos for block %d: %w", blockNum, err)
+	}
+	if ret.BlockNumber != 0 && ret.BlockNumber != int64(blockNum) {
+		return fmt.Errorf("freezer: tx infos row %d contains block number %d", blockNum, ret.BlockNumber)
+	}
+	return rawdb.ValidateTransactionInfosForBlock(blockNum, block.Transactions(), ret.Transactioninfo, "chain freezer append")
+}
+
+func validateFreezerStateRootRaw(blockNum uint64, raw []byte) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	if len(raw) != tcommon.HashLength {
+		return fmt.Errorf("freezer: state root for block %d has length %d, want %d", blockNum, len(raw), tcommon.HashLength)
+	}
+	return nil
+}
+
+func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
+	if r == nil || r.chain == nil || r.chain.DB() == nil {
+		return 0, false, nil
+	}
+	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(
+		r.chain.DB(),
+		rawdb.StageFinish,
+		r.chain.ReadBlockHashByNumberStrict,
+	)
+	if err != nil {
+		return 0, ok, fmt.Errorf("freezer: %w", err)
+	}
+	return block, ok, nil
+}
+
+func (r *Runner) writeChainFreezerStage(blockNum uint64) (bool, error) {
+	return r.writeHashBoundStage(rawdb.StageChainFreezer, blockNum)
+}
+
+func (r *Runner) writeChainFreezerStateRootPruneStage(blockNum uint64) (bool, error) {
+	return r.writeHashBoundStage(rawdb.StageChainFreezerStateRootPrune, blockNum)
+}
+
+func (r *Runner) writeHashBoundStage(stage rawdb.StageID, blockNum uint64) (bool, error) {
+	db := r.chain.DB()
+	blockHash, ok, err := r.chain.ReadBlockHashByNumberStrict(blockNum)
+	if err != nil {
+		return false, fmt.Errorf("freezer: read canonical hash for %s stage %d: %w", stage, blockNum, err)
+	}
+	if !ok || blockHash == (tcommon.Hash{}) {
+		return false, fmt.Errorf("freezer: cannot resolve block hash for %s stage %d", stage, blockNum)
+	}
+	current, ok, err := rawdb.ReadStageProgressRow(db, stage)
+	if err != nil {
+		return false, err
+	}
+	if ok && current.BlockNum > blockNum {
+		return false, fmt.Errorf("freezer: %s stage %d is ahead of local ancient head %d", stage, current.BlockNum, blockNum)
+	}
+	if ok && current.BlockNum == blockNum && current.HasBlockHash {
+		if current.BlockHash != blockHash {
+			return false, fmt.Errorf("freezer: %s stage %d hash %x does not match canonical hash %x", stage, blockNum, current.BlockHash, blockHash)
+		}
+		return false, nil
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, stage, blockNum, blockHash); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// pruneFrozenStateRoots incrementally removes bsr- rows left by freezer
+// versions that kept hash-keyed state roots hot. The same Config.BatchBlocks
+// budget bounds migration work so an upgrade cannot monopolize one freezer
+// pass. Ancient state-root presence is checked before every delete; the
+// hash-bound progress row makes retries and restarts idempotent.
+func (r *Runner) pruneFrozenStateRoots(upTo uint64) error {
+	if r == nil || r.chain == nil || r.chain.DB() == nil || r.freezer == nil {
+		return nil
+	}
+	current, hasCurrent, err := rawdb.ReadStageProgressRow(r.chain.DB(), rawdb.StageChainFreezerStateRootPrune)
+	if err != nil {
+		return err
+	}
+	start := uint64(0)
+	if hasCurrent {
+		if current.BlockNum > upTo {
+			return fmt.Errorf("freezer: %s stage %d is ahead of local ancient head %d", rawdb.StageChainFreezerStateRootPrune, current.BlockNum, upTo)
+		}
+		if current.HasBlockHash {
+			canonicalHash, ok, err := r.chain.ReadBlockHashByNumberStrict(current.BlockNum)
+			if err != nil {
+				return fmt.Errorf("freezer: read canonical hash for %s stage %d: %w", rawdb.StageChainFreezerStateRootPrune, current.BlockNum, err)
+			}
+			if !ok || canonicalHash == (tcommon.Hash{}) {
+				return fmt.Errorf("freezer: cannot resolve block hash for %s stage %d", rawdb.StageChainFreezerStateRootPrune, current.BlockNum)
+			}
+			if current.BlockHash != canonicalHash {
+				return fmt.Errorf("freezer: %s stage %d hash %x does not match canonical hash %x", rawdb.StageChainFreezerStateRootPrune, current.BlockNum, current.BlockHash, canonicalHash)
+			}
+			if current.BlockNum == upTo {
+				return nil
+			}
+			start = current.BlockNum + 1
+		} else {
+			// Reprocess the legacy unbound boundary so it is upgraded to a
+			// hash-bound row before later blocks are skipped.
+			start = current.BlockNum
+		}
+	}
+	if start > upTo {
+		return nil
+	}
+	end := upTo
+	if limit := r.cfg.BatchBlocks; limit > 0 && end-start+1 > limit {
+		end = start + limit - 1
+	}
+	hashes := make([]tcommon.Hash, 0, end-start+1)
+	for number := start; ; number++ {
+		hasRoot, err := r.freezer.HasAncient(rawdb.AncientStateRootsTable, number)
+		if err != nil {
+			return fmt.Errorf("freezer: check ancient state root %d: %w", number, err)
+		}
+		if !hasRoot {
+			return fmt.Errorf("freezer: ancient state root %d is missing below ChainFreezer stage", number)
+		}
+		blockHash, ok, err := r.chain.ReadBlockHashByNumberStrict(number)
+		if err != nil {
+			return fmt.Errorf("freezer: read canonical hash for frozen block %d while pruning state roots: %w", number, err)
+		}
+		if !ok || blockHash == (tcommon.Hash{}) {
+			return fmt.Errorf("freezer: cannot resolve canonical hash for frozen block %d while pruning state roots", number)
+		}
+		hashes = append(hashes, blockHash)
+		if number == end {
+			break
+		}
+	}
+	if err := rawdb.DeleteFrozenBlockStateRoots(r.chain.DB(), hashes); err != nil {
+		return fmt.Errorf("freezer: delete frozen state roots [%d,%d]: %w", start, end, err)
+	}
+	_, err = r.writeChainFreezerStateRootPruneStage(end)
+	return err
 }
 
 // loop is the goroutine. Fires once on Start so a fresh-install backlog
@@ -1023,16 +892,6 @@ func (r *Runner) loop() {
 	} else if frozen > 0 {
 		log.Info("Freezer: initial pass frozen", "blocks", frozen)
 	}
-	if compacted, err := r.compactV2Scheduled(); err != nil && !errors.Is(err, context.Canceled) {
-		log.Warn("Freezer: initial V2 compaction failed", "err", err)
-	} else if compacted > 0 {
-		log.Info("Freezer: initial V2 compaction complete", "blocks", compacted)
-	}
-	if changed, err := r.MaintainTransactionIndexOnce(); err != nil && !errors.Is(err, context.Canceled) {
-		log.Warn("Freezer: initial transaction-index maintenance failed", "err", err)
-	} else if changed {
-		log.Info("Freezer: initial transaction-index maintenance complete")
-	}
 
 	ticker := time.NewTicker(r.cfg.Interval)
 	defer ticker.Stop()
@@ -1044,15 +903,11 @@ func (r *Runner) loop() {
 			} else if frozen > 0 {
 				log.Info("Freezer: pass frozen", "blocks", frozen)
 			}
-			if compacted, err := r.compactV2Scheduled(); err != nil && !errors.Is(err, context.Canceled) {
-				log.Warn("Freezer: V2 compaction failed", "err", err)
-			} else if compacted > 0 {
-				log.Info("Freezer: V2 compaction complete", "blocks", compacted)
-			}
-			if changed, err := r.MaintainTransactionIndexOnce(); err != nil && !errors.Is(err, context.Canceled) {
-				log.Warn("Freezer: transaction-index maintenance failed", "err", err)
-			} else if changed {
-				log.Info("Freezer: transaction-index maintenance complete")
+		case <-r.wake:
+			if frozen, err := r.OnePass(); err != nil {
+				log.Warn("Freezer: requested pass failed", "err", err)
+			} else if frozen > 0 {
+				log.Info("Freezer: requested pass frozen", "blocks", frozen)
 			}
 		case <-r.quit:
 			return
@@ -1060,20 +915,14 @@ func (r *Runner) loop() {
 	}
 }
 
-// pebbleBlockNamespaceSizeFrom iterates still-hot `b-` rows beginning at
-// firstBlock and returns their cumulative key+value bytes. Approximate —
-// Pebble's on-disk footprint after compression and block-overhead deduction is
-// smaller — but accurate enough as an unbounded-growth detector.
-//
-// The lower bound is essential even though older rows were DeleteRange'd:
-// starting at the prefix would make Pebble walk the physical SST history to
-// resolve range tombstones and admit that one-shot scan into its block cache.
-// Big-endian block suffixes preserve numeric order, so seeking directly to the
-// first remaining block bounds the work to the live hot tail.
-func pebbleBlockNamespaceSizeFrom(db ethdb.Iteratee, firstBlock uint64) uint64 {
-	var start [8]byte
-	binary.BigEndian.PutUint64(start[:], firstBlock)
-	it := db.NewIterator(blockNamespacePrefix, start[:])
+// pebbleBlockNamespaceSize iterates `b-` rows and returns the cumulative
+// key+value bytes. Approximate — Pebble's on-disk footprint after
+// compression and block-overhead deduction is smaller — but accurate
+// enough as an unbounded-growth detector. Called once at the end of each
+// pass; cost is O(remaining-block-rows), which is bounded by
+// MarginBlocks + BatchBlocks under steady state.
+func pebbleBlockNamespaceSize(db ethdb.Iteratee) uint64 {
+	it := db.NewIterator(blockNamespacePrefix, nil)
 	defer it.Release()
 	var size uint64
 	for it.Next() {
@@ -1090,15 +939,12 @@ func pebbleBlockNamespaceSizeFrom(db ethdb.Iteratee, firstBlock uint64) uint64 {
 // that changes the prefix must update both places.
 var blockNamespacePrefix = []byte("b-")
 
-// rawdbAncient* mirrors core/rawdb's per-table ancient name constants.
-// They are package-private in rawdb because each accessor file owns its
-// own name; the runner needs all three. Mirrored here rather than
-// exported because the table set is a runner-side concern (the freezer
-// is content-agnostic).
+// rawdbAncient* aliases rawdb's per-table ancient name constants so the
+// runner, chain accessors, and snapshot installer stay on one table layout.
 const (
-	rawdbAncientBlocks     = "bodies"
-	rawdbAncientTxInfos    = "tx_infos"
-	rawdbAncientStateRoots = "state_roots"
+	rawdbAncientBlocks     = rawdb.AncientBlocksTable
+	rawdbAncientTxInfos    = rawdb.AncientTxInfosTable
+	rawdbAncientStateRoots = rawdb.AncientStateRootsTable
 )
 
 // FreezerTableSet returns the table-name/config map the runner expects
@@ -1108,15 +954,14 @@ const (
 //
 // Compression is Snappy for `bodies` (proto blobs compress well) and
 // `tx_infos`; raw bytes for `state_roots` because 32-byte payloads
-// already sit below Snappy's per-row overhead.
+// already sit below Snappy's per-row overhead. All three tables are marked
+// prunable so minimal-mode retention can advance the ancient virtual tail
+// consistently across chain bodies, tx infos, and state roots.
 func FreezerTableSet() map[string]rawdbfreezer.TableConfig {
 	return map[string]rawdbfreezer.TableConfig{
-		// V2 migration moves immutable prefixes of the two large protobuf
-		// tables into Zstd segments, then advances their V1 virtual tails.
-		// state_roots remains in the compact raw V1 table.
 		rawdbAncientBlocks:     {NoSnappy: false, Prunable: true},
 		rawdbAncientTxInfos:    {NoSnappy: false, Prunable: true},
-		rawdbAncientStateRoots: {NoSnappy: true},
+		rawdbAncientStateRoots: {NoSnappy: true, Prunable: true},
 	}
 }
 

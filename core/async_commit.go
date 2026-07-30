@@ -21,9 +21,12 @@ import (
 // in-flight buffer layers, matching SetMaxInflight(D)); the send blocking on a
 // full queue is the backpressure that keeps BeginBlock from exceeding maxInflight.
 //
-//   - D == 2  → cap 0 (unbuffered rendezvous), maxInflight 2 — EXACTLY today.
-//   - D  > 2  → buffered + the cross-batch barrier-amortization path (see
-//     pipelinedCommit / InsertSession). Enabled ops-only, never wire-observable.
+//   - D == 2  → cap 0 (unbuffered rendezvous), maxInflight 2. InsertSession
+//     still spans contiguous local sync chunks, but this never widens the
+//     in-flight cap.
+//   - D  > 2  → additionally buffers commit jobs and keeps that worker pipeline
+//     filled across chunks (see pipelinedCommit / InsertSession). Enabled
+//     ops-only, never wire-observable.
 //
 // The depth is resolved ONCE at NewBlockChain (so the commit worker, started in
 // the constructor, ranges a correctly-sized channel and is never orphaned by a
@@ -39,7 +42,6 @@ var (
 	asyncCommitEnqueueCounter           = metrics.NewRegisteredCounter("core/async_commit/enqueue", nil)
 	asyncCommitBackpressureCounter      = metrics.NewRegisteredCounter("core/async_commit/backpressure", nil)
 	asyncCommitBackpressureNanosCounter = metrics.NewRegisteredCounter("core/async_commit/backpressure/nanos", nil)
-	storedReplayDiscardedTxInfosCounter = metrics.NewRegisteredCounter("core/stored_replay/transaction_infos_discarded", nil)
 )
 
 // resolveCommitPipelineDepth reads the ops-only GTRON_ASYNC_COMMIT_DEPTH override,
@@ -79,6 +81,7 @@ type commitJob struct {
 	txInfos           []*corepb.TransactionInfo
 	txInfoBatch       *transactionInfoBatch
 	txInfoBatchPool   *transactionInfoBatchPool
+	balanceTrace      *blockBalanceTraceData
 	wasMaintenance    bool
 	maintNewWitnesses []tcommon.Address
 	checkpoint        bool
@@ -109,10 +112,10 @@ func (bc *BlockChain) SetAsyncCommit(enabled bool) {
 	}
 }
 
-// PipelinedCommitDepth returns the configured async-commit pipeline depth (≥2)
-// when async commit is enabled, else 0. Used by the sync drain loop to decide
-// whether to span one InsertSession across batches (depth > 2) for cross-batch
-// barrier amortization.
+// PipelinedCommitDepth returns the configured async-commit pipeline depth (>=2)
+// when async commit is enabled, else 0. The sync drain reuses an InsertSession
+// across contiguous chunks in every mode; depth > 2 additionally buffers the
+// commit worker to overlap more than one pending commitment suffix.
 func (bc *BlockChain) PipelinedCommitDepth() int {
 	if !bc.asyncCommit {
 		return 0
@@ -172,6 +175,7 @@ func (bc *BlockChain) commitAsync(
 	maintNewWitnesses []tcommon.Address,
 	rewardAcctAddrs []tcommon.Address,
 	txInfos []*corepb.TransactionInfo,
+	balanceTrace *blockBalanceTraceData,
 ) error {
 	// 1. Write latest-domain rows to the scope + capture the fold inputs. On the
 	//    deep pipeline (depth>2) tag the scoped latest writer so its prunePending
@@ -226,14 +230,13 @@ func (bc *BlockChain) commitAsync(
 		dynProps:          bc.copyDynPropsForCommit(dynProps),
 		cycleRewards:      bc.cycleRewards.Snapshot(),
 		txInfos:           txInfos,
+		balanceTrace:      balanceTrace,
 		wasMaintenance:    wasMaintenanceBlock,
 		maintNewWitnesses: maintNewWitnesses,
 		checkpoint:        bc.config.StateCommitmentCheckpoints,
 	}
-	if !plan.storedReplayTxInfos {
-		job.txInfoBatch = plan.txInfoBatch
-		job.txInfoBatchPool = plan.txInfoBatchPool
-	}
+	job.txInfoBatch = plan.txInfoBatch
+	job.txInfoBatchPool = plan.txInfoBatchPool
 	bc.buffer.ViewLayerInto(hN, &job.index)
 	// The worker's post-execution stage advances (StageCommitment, StageFinish)
 	// must land in THIS block's layer rather than whatever layer is newest then.
@@ -242,7 +245,7 @@ func (bc *BlockChain) commitAsync(
 	// 5. Hand the fold + publish tail to the serial commit worker (rendezvous;
 	//    bounds the pipeline to depth 2). After this returns the foreground may
 	//    begin the next block's layer.
-	plan.txInfoBatchHandedOff = !plan.storedReplayTxInfos
+	plan.txInfoBatchHandedOff = true
 	capturedHandedOff = true
 	bc.enqueueCommit(job)
 
@@ -368,11 +371,18 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 		return
 	}
 
-	// Out-of-band metadata batch to disk (block, state root, TAPOS, tx infos,
-	// tx index) — durable BEFORE the head pointer advances, preserving the
+	// Out-of-band metadata batch to disk (block, state root, TAPOS, per-block
+	// tx infos, and normally tx lookup) — durable BEFORE the head pointer advances, preserving the
 	// head=N ⟹ root[N] durable invariant for off-lock readers.
-	if err := bc.writeBlockMetadataBatch(job.block, job.blockData, root, job.txInfos, job.plan.storedReplay, job.plan.storedReplayTxInfos, job.plan.transactionIndexesAncient); err != nil {
+	if err := bc.writeBlockMetadataBatch(job.block, job.blockData, root, job.txInfos, job.balanceTrace, !job.plan.deferTransactionLookup); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit metadata block %d: %w", job.block.Number(), err))
+		return
+	}
+	// Keep the body/TAPOS rows in this layer for foreground reads and potential
+	// rewind, while skipping their duplicate write when the committed layer is
+	// eventually flushed to Pebble.
+	if err := bc.buffer.MarkInflightWritesDurable(job.layer, blockMetadataOverlayKeys(job.block)...); err != nil {
+		bc.failCommit(job, fmt.Errorf("async commit mark durable metadata block %d: %w", job.block.Number(), err))
 		return
 	}
 	rawdb.WriteHeadBlockHash(index, job.block.Hash())
@@ -403,6 +413,10 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 
 	if err := job.plan.pipeline.Advance(rawdb.StageFinish); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit stage finish block %d: %w", job.block.Number(), err))
+		return
+	}
+	if err := job.plan.AdvanceTransactionLookupStage(index, job.block); err != nil {
+		bc.failCommit(job, fmt.Errorf("async commit tx lookup stage block %d: %w", job.block.Number(), err))
 		return
 	}
 

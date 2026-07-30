@@ -134,7 +134,7 @@ the commit worker publishes later:
 When adding a new exec-time consumer of recently-written data, stage it
 into the buffer at apply time (fork-rewindable for free) — the durable
 copy in `writeBlockMetadataBatch` is not enough under
-`GTRON_ASYNC_COMMIT=1`.
+`--sync.async-commit` (or the legacy `GTRON_ASYNC_COMMIT=1` alias).
 
 ## 4. Fix + validation discipline
 

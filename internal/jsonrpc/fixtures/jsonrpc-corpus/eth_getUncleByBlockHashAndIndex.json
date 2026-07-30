@@ -1,0 +1,17 @@
+{
+  "name": "eth_getUncleByBlockHashAndIndex",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_getUncleByBlockHashAndIndex",
+    "params": [
+      "0x0000000000000064524e207f2a2ceae5c1d814fb378a66cd03d3bb00945a573a",
+      "0x0"
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": null
+  }
+}

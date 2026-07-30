@@ -151,6 +151,30 @@ func (tvm *TVM) adjustedCallEnergy(contract *Contract, requested uint64) uint64 
 	return requested
 }
 
+func (tvm *TVM) enqueueRuntimePrefetch(keys ...state.PrefetchKey) {
+	if tvm == nil || tvm.cfg.RuntimePrefetcher == nil || len(keys) == 0 {
+		return
+	}
+	tvm.cfg.RuntimePrefetcher.Enqueue(keys)
+}
+
+func (tvm *TVM) prefetchRuntimeContract(addr tcommon.Address) {
+	if tvm == nil || tvm.cfg.RuntimePrefetcher == nil {
+		return
+	}
+	if getPrecompile(addr, tvm.cfg, tvm.GenesisHash) != nil {
+		return
+	}
+	tvm.enqueueRuntimePrefetch(
+		state.ContractCodePrefetchKey(addr),
+		state.ContractMetadataPrefetchKey(addr),
+	)
+}
+
+func (tvm *TVM) prefetchRuntimeStorage(addr tcommon.Address, slot tcommon.Hash) {
+	tvm.enqueueRuntimePrefetch(state.ContractStoragePrefetchKey(addr, slot))
+}
+
 func (tvm *TVM) adjustedCreateEnergy(contract *Contract) uint64 {
 	available := contract.Energy
 	if tvm.cfg.Compatibility && contract.Version == 1 {
@@ -1018,6 +1042,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
+	tvm.prefetchRuntimeContract(addr)
 
 	snap := tvm.StateDB.Snapshot()
 	logSnap := tvm.LogSnapshot()
@@ -1143,6 +1168,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
+	tvm.prefetchRuntimeContract(addr)
 
 	snap := tvm.StateDB.Snapshot()
 	logSnap := tvm.LogSnapshot()
@@ -1333,6 +1359,7 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
+	tvm.prefetchRuntimeContract(addr)
 
 	if p := getPrecompile(addr, tvm.cfg, tvm.GenesisHash); p != nil {
 		ret, energyUsed, success, err := runPrecompile(tvm, p, caller, input, energy)
@@ -1411,6 +1438,7 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
+	tvm.prefetchRuntimeContract(addr)
 
 	if p := getPrecompile(addr, tvm.cfg, tvm.GenesisHash); p != nil {
 		ret, energyUsed, success, err := runPrecompile(tvm, p, caller, input, energy)

@@ -2,7 +2,9 @@ package state
 
 import (
 	"encoding/binary"
+	"fmt"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -51,6 +53,16 @@ func exchangeKVKey(discriminator byte, id int64) []byte {
 	return k
 }
 
+// ExchangePrefetchKey returns the latest V1 exchange row for id.
+func ExchangePrefetchKey(id int64) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV1, id))
+}
+
+// ExchangeV2PrefetchKey returns the latest V2 exchange row for id.
+func ExchangeV2PrefetchKey(id int64) PrefetchKey {
+	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemExchange, exchangeKVKey(exchangeKVDiscriminatorV2, id))
+}
+
 // readExchange resolves one exchange leg, swallowing a KV error to nil to match
 // the prior rawdb reader's defensive behavior (read sites treat nil as absent).
 func (s *StateDB) readExchange(discriminator byte, id int64) *corepb.Exchange {
@@ -63,6 +75,18 @@ func (s *StateDB) readExchange(discriminator byte, id int64) *corepb.Exchange {
 		return nil
 	}
 	return ex
+}
+
+func (s *StateDB) readExchangeStrict(discriminator byte, id int64) (*corepb.Exchange, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemExchange, exchangeKVKey(discriminator, id))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	ex := &corepb.Exchange{}
+	if err := proto.Unmarshal(raw, ex); err != nil {
+		return nil, true, fmt.Errorf("decode exchange %d: %w", id, err)
+	}
+	return ex, true, nil
 }
 
 // writeExchange stages one exchange leg into the system-KV. The error is non-nil
@@ -81,9 +105,43 @@ func (s *StateDB) ReadExchange(id int64) *corepb.Exchange {
 	return s.readExchange(exchangeKVDiscriminatorV1, id)
 }
 
+// ReadExchangeStrict returns the rooted V1 exchange with id and surfaces
+// storage/corruption errors. Missing rows return (nil, false, nil).
+func (s *StateDB) ReadExchangeStrict(id int64) (*corepb.Exchange, bool, error) {
+	return s.readExchangeStrict(exchangeKVDiscriminatorV1, id)
+}
+
 // ReadExchangeV2 returns the rooted V2 exchange with id, or nil if absent.
 func (s *StateDB) ReadExchangeV2(id int64) *corepb.Exchange {
 	return s.readExchange(exchangeKVDiscriminatorV2, id)
+}
+
+// ReadExchangeV2Strict returns the rooted V2 exchange with id and surfaces
+// storage/corruption errors. Missing rows return (nil, false, nil).
+func (s *StateDB) ReadExchangeV2Strict(id int64) (*corepb.Exchange, bool, error) {
+	return s.readExchangeStrict(exchangeKVDiscriminatorV2, id)
+}
+
+func (r *PersistentHistoryReader) readExchangeAt(discriminator byte, id int64, blockNum uint64) (*corepb.Exchange, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemExchange, exchangeKVKey(discriminator, id), blockNum)
+	if err != nil || !ok || len(raw) == 0 {
+		return nil, err
+	}
+	ex := &corepb.Exchange{}
+	if err := proto.Unmarshal(raw, ex); err != nil {
+		return nil, fmt.Errorf("decode exchange %d at block %d: %w", id, blockNum, err)
+	}
+	return ex, nil
+}
+
+// ExchangeAt reconstructs a rooted V1 exchange at the end of blockNum.
+func (r *PersistentHistoryReader) ExchangeAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	return r.readExchangeAt(exchangeKVDiscriminatorV1, id, blockNum)
+}
+
+// ExchangeV2At reconstructs a rooted V2 exchange at the end of blockNum.
+func (r *PersistentHistoryReader) ExchangeV2At(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	return r.readExchangeAt(exchangeKVDiscriminatorV2, id, blockNum)
 }
 
 // WriteExchange stages the V1 (legacy) exchange keyed by its ExchangeId.
@@ -113,9 +171,31 @@ func (s *StateDB) ListExchanges(latestID int64) []*corepb.Exchange {
 	return s.listExchanges(exchangeKVDiscriminatorV1, latestID)
 }
 
+// ListExchangesStrict enumerates the V1 bucket over ids 1..latestID and
+// surfaces storage/corruption errors instead of silently skipping bad rows.
+func (s *StateDB) ListExchangesStrict(latestID int64) ([]*corepb.Exchange, error) {
+	return s.listExchangesStrict(exchangeKVDiscriminatorV1, latestID)
+}
+
 // ListExchangesV2 enumerates the V2 bucket over ids 1..latestID.
 func (s *StateDB) ListExchangesV2(latestID int64) []*corepb.Exchange {
 	return s.listExchanges(exchangeKVDiscriminatorV2, latestID)
+}
+
+// ListExchangesV2Strict enumerates the V2 bucket over ids 1..latestID and
+// surfaces storage/corruption errors instead of silently skipping bad rows.
+func (s *StateDB) ListExchangesV2Strict(latestID int64) ([]*corepb.Exchange, error) {
+	return s.listExchangesStrict(exchangeKVDiscriminatorV2, latestID)
+}
+
+// ListExchangesAt enumerates the V1 bucket over ids 1..latestID at blockNum.
+func (r *PersistentHistoryReader) ListExchangesAt(latestID int64, blockNum uint64) ([]*corepb.Exchange, error) {
+	return r.listExchangesAt(exchangeKVDiscriminatorV1, latestID, blockNum)
+}
+
+// ListExchangesV2At enumerates the V2 bucket over ids 1..latestID at blockNum.
+func (r *PersistentHistoryReader) ListExchangesV2At(latestID int64, blockNum uint64) ([]*corepb.Exchange, error) {
+	return r.listExchangesAt(exchangeKVDiscriminatorV2, latestID, blockNum)
 }
 
 func (s *StateDB) listExchanges(discriminator byte, latestID int64) []*corepb.Exchange {
@@ -126,4 +206,32 @@ func (s *StateDB) listExchanges(discriminator byte, latestID int64) []*corepb.Ex
 		}
 	}
 	return out
+}
+
+func (s *StateDB) listExchangesStrict(discriminator byte, latestID int64) ([]*corepb.Exchange, error) {
+	var out []*corepb.Exchange
+	for id := int64(1); id <= latestID; id++ {
+		ex, ok, err := s.readExchangeStrict(discriminator, id)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, ex)
+		}
+	}
+	return out, nil
+}
+
+func (r *PersistentHistoryReader) listExchangesAt(discriminator byte, latestID int64, blockNum uint64) ([]*corepb.Exchange, error) {
+	var out []*corepb.Exchange
+	for id := int64(1); id <= latestID; id++ {
+		ex, err := r.readExchangeAt(discriminator, id, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if ex != nil {
+			out = append(out, ex)
+		}
+	}
+	return out, nil
 }

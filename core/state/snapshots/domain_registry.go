@@ -118,7 +118,7 @@ type HistorySnapshotBuilder func(db AggregatorDB, dir string, fromTxNum, toTxNum
 
 type HistorySnapshotOpener func(dir string, ref SegmentRef) ([]*rawdb.StateDomainChange, error)
 
-type HistorySnapshotWriter func(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange) (SegmentRef, SegmentRef, SegmentRef, error)
+type HistorySnapshotWriter func(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange, txRanges ...[]*rawdb.StateTxRange) (SegmentRef, SegmentRef, SegmentRef, error)
 
 type HistoryCompactor func(dir string, cfg DomainCfg, selection historyCompactionSelection) ([]SegmentRef, error)
 
@@ -190,11 +190,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildAccountLatestSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildAccountLatestSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return []SegmentRef{latest, btree}, nil
 			},
 			ReadHotAccountLatest:    rawdb.ReadStateAccountLatest,
 			IterateHotAccountLatest: rawdb.IterateStateAccountLatest,
@@ -208,11 +208,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildLatestDomainSegmentFilesFromDB(db, dir, domain, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildLatestDomainSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, domain, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return []SegmentRef{latest, btree}, nil
 			},
 			ReadHotKVLatest:        rawdb.ReadStateKVLatest,
 			IterateHotKVLatestRows: rawdb.IterateStateKVLatestRows,
@@ -225,11 +225,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildKVGenerationSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildKVGenerationSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return []SegmentRef{latest, btree}, nil
 			},
 			ReadHotKVGeneration:    rawdb.ReadStateKVGeneration,
 			IterateHotKVGeneration: rawdb.IterateStateKVGeneration,
@@ -255,11 +255,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildCodeSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildCodeSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return []SegmentRef{latest, btree}, nil
 			},
 			ReadHotCode:    readHotStateCode,
 			IterateHotCode: rawdb.IterateStateCode,
@@ -274,11 +274,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestBTree:        true,
 			TracksCommitmentFlush: true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildCommitmentRootSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildCommitmentRootSegmentFilesFromStore(newRawDBLatestHotReadStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return []SegmentRef{latest, btree}, nil
 			},
 		},
 		{
@@ -290,11 +290,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestBTree:        true,
 			TracksCommitmentFlush: true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, accessor, btree, err := BuildCommitmentCheckpointSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				latest, _, btree, err := buildCommitmentCheckpointSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
-				return []SegmentRef{latest, accessor, btree}, nil
+				return []SegmentRef{latest, btree}, nil
 			},
 			WriteHotCommitmentCheckpoint:      rawdb.WriteStateCommitmentCheckpoint,
 			ReadHotLatestCommitmentCheckpoint: rawdb.ReadLatestStateCommitmentCheckpoint,
@@ -376,7 +376,10 @@ func readHotStateCode(db ethdb.KeyValueReader, hash common.Hash) ([]byte, bool, 
 	if hash == (common.Hash{}) {
 		return nil, false, nil
 	}
-	code := rawdb.ReadStateCode(db, hash)
+	code, ok, err := rawdb.ReadStateCodeStrict(db, hash)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
 	if len(code) == 0 {
 		return nil, false, nil
 	}
@@ -577,6 +580,27 @@ func IsLatestBTreeRef(ref SegmentRef) bool {
 }
 
 func CheckRegisteredSegment(dir string, ref SegmentRef) (bool, error) {
+	if ref.Kind == SegmentChainFreezer {
+		return true, CheckChainFreezerSegment(dir, ref)
+	}
+	if ref.Kind == SegmentChainIndex {
+		return true, CheckChainIndexSegment(dir, ref)
+	}
+	if ref.Kind == SegmentChainFreezerAccessor {
+		return true, CheckChainFreezerAccessorSegment(dir, ref)
+	}
+	if ref.Kind == SegmentBalanceTrace {
+		return true, CheckBalanceTraceSegment(dir, ref)
+	}
+	if ref.Kind == SegmentSectionBloom {
+		return true, CheckSectionBloomSegment(dir, ref)
+	}
+	if ref.Kind == SegmentEventLog {
+		return true, CheckEventLogSegment(dir, ref)
+	}
+	if ref.Kind == SegmentEventLogIndex {
+		return true, CheckEventLogIndexSegment(dir, ref)
+	}
 	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
 	if !ok {
 		return false, nil
@@ -607,6 +631,63 @@ func CheckRegisteredSegment(dir string, ref SegmentRef) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// VerifyHistorySegmentWithCompanions verifies a history segment and the
+// registered binary sidecars needed to read it after hot history is pruned.
+func VerifyHistorySegmentWithCompanions(dir string, manifest *Manifest, ref SegmentRef) error {
+	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
+	if !ok || !cfg.HasHistory || ref.Kind != SegmentHistory {
+		return fmt.Errorf("snapshots: segment %q has no registered history checker for %s/%s", ref.Path, ref.NormalizedDataset(), ref.Kind)
+	}
+	checked, err := CheckRegisteredSegment(dir, ref)
+	if err != nil {
+		return err
+	}
+	if !checked {
+		return fmt.Errorf("snapshots: segment %q has no registered checker for %s/%s", ref.Path, ref.NormalizedDataset(), ref.Kind)
+	}
+	if !cfg.IsHistoryBinarySegmentPath(ref.Path) {
+		return nil
+	}
+	if !cfg.HasHistoryInvertedIndex && !cfg.HasHistoryAccessor {
+		return fmt.Errorf("snapshots: binary %s history %q missing registered companion configuration", cfg.Dataset, ref.Path)
+	}
+	var idxRef SegmentRef
+	var accessorRef SegmentRef
+	var companionRefs []SegmentRef
+	if cfg.HasHistoryInvertedIndex {
+		var ok bool
+		idxRef, ok = cfg.HistoryIndexRef(manifest, ref)
+		if !ok {
+			return fmt.Errorf("snapshots: binary %s history %q missing required index %q", cfg.Dataset, ref.Path, cfg.HistoryIndexPathFor(ref.Path))
+		}
+		companionRefs = append(companionRefs, idxRef)
+	}
+	if cfg.HasHistoryAccessor {
+		var ok bool
+		accessorRef, ok = cfg.HistoryAccessorRef(manifest, ref)
+		if !ok {
+			return fmt.Errorf("snapshots: binary %s history %q missing required accessor %q", cfg.Dataset, ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
+		}
+		companionRefs = append(companionRefs, accessorRef)
+	}
+	if cfg.Dataset == SegmentDatasetStateDomainChange {
+		if !cfg.HasHistoryInvertedIndex || !cfg.HasHistoryAccessor {
+			return fmt.Errorf("snapshots: binary %s history %q missing registered state-domain companion configuration", cfg.Dataset, ref.Path)
+		}
+		return verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, ref, idxRef, accessorRef)
+	}
+	for _, companionRef := range companionRefs {
+		checked, err := CheckRegisteredSegment(dir, companionRef)
+		if err != nil {
+			return err
+		}
+		if !checked {
+			return fmt.Errorf("snapshots: segment %q has no registered checker for %s/%s", companionRef.Path, companionRef.NormalizedDataset(), companionRef.Kind)
+		}
+	}
+	return nil
 }
 
 func checkLatestSegmentRef(dir string, ref SegmentRef) error {

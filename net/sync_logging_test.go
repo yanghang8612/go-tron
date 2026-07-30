@@ -11,8 +11,10 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	"github.com/tronprotocol/go-tron/p2p"
 )
 
@@ -73,7 +75,6 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		}
 		parent = blk.Hash()
 	}
-	ss.waitForDrain()
 
 	out := buf.String()
 	if !strings.Contains(out, "Imported chain segment") {
@@ -85,10 +86,19 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"elapsed=",
 		"execElapsed=",
 		"applyElapsed=",
+		"statePrefetchEnqueued=",
+		"statePrefetchDropped=",
+		"statePrefetchProcessed=",
+		"statePrefetchHits=",
+		"statePrefetchMisses=",
+		"statePrefetchErrors=",
 		"slowPhase=",
 		"slowElapsed=",
 		"slowStateCommitPhase=",
 		"slowStateCommitElapsed=",
+		"syncStageComplete=",
+		"syncStageCompleted=",
+		"syncStageScheduled=",
 		"stateMutTop=",
 		"stateMutKVTop=",
 		"blocks/s=",
@@ -142,17 +152,113 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"dpUpdate=",
 		"persist=",
 		"hooks=",
+		"statePrefetchEnqueued=",
+		"statePrefetchDropped=",
+		"statePrefetchProcessed=",
+		"statePrefetchHits=",
+		"statePrefetchMisses=",
+		"statePrefetchErrors=",
 		"blockBuffer=",
-		"retainedDecoded=",
-		"retainedDecodedBytes=",
 		"requested=",
 		"retryList=",
+		"syncStageComplete=",
+		"syncStageCompleted=",
+		"syncStageScheduled=",
 		"peerState=",
 		"inflight=",
 		"fetchList=",
 	} {
 		if !strings.Contains(out, k) {
 			t.Errorf("missing key %q in summary line:\n%s", k, out)
+		}
+	}
+}
+
+func TestSync_StartupRepairSummaryLogged(t *testing.T) {
+	var buf bytes.Buffer
+	prev := gtronlog.Root()
+	defer gtronlog.SetDefault(prev)
+	h := gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelDebug)
+	gtronlog.SetDefault(gtronlog.NewLogger(h))
+
+	ss := &SyncService{}
+	ss.logSyncStartupRepairSummary(syncdl.SessionStartupApplyResult{
+		HasSyncPipelineRepair: true,
+		SyncPipelineRepairResult: syncdl.SyncPipelineProgressRepairResult{
+			Repairs:           []syncdl.SyncStageProgressRepair{{Stage: rawdb.StageSyncImport}, {Stage: rawdb.StageSyncExecution}, {Stage: rawdb.StageSyncCommitment}},
+			Kept:              2,
+			Deleted:           1,
+			HasBlocked:        true,
+			FirstBlockedStage: rawdb.StageSyncCommitment,
+		},
+		HasSyncPipelineOrderRepair: true,
+		SyncPipelineOrderRepair: syncdl.SyncPipelineProgressOrderRepairResult{
+			Complete: true,
+			Deleted:  1,
+			Updated:  2,
+			Repairs: []syncdl.SyncPipelineProgressOrderRepair{
+				{Stage: rawdb.StageSyncBodies},
+				{Stage: rawdb.StageSyncImport},
+				{Stage: rawdb.StageSyncExecution},
+			},
+		},
+		HasSyncPipelineCursor: true,
+		SyncPipelineCursor: syncdl.SyncPipelineProgressCursor{
+			StageRows:   4,
+			HasLast:     true,
+			LastStage:   rawdb.StageSyncExecution,
+			LastBlock:   6,
+			LastHasHash: true,
+			HasNext:     true,
+			NextStage:   rawdb.StageSyncCommitment,
+		},
+		HasStagedBodyRestore: true,
+		StagedBodyRestore: syncdl.StagedBodyRestoreResult{
+			Restored:         3,
+			TargetHead:       9,
+			NextExpected:     7,
+			NeedPruneTail:    true,
+			PruneFrom:        8,
+			HaveLastRestored: true,
+			LastRestoredNum:  6,
+		},
+	})
+
+	out := buf.String()
+	if !strings.Contains(out, "Sync startup repair summary") {
+		t.Fatalf("expected startup repair summary line, got:\n%s", out)
+	}
+	for _, k := range []string{
+		"syncStartupRepairComplete=false",
+		"syncStartupRepairKept=2",
+		"syncStartupRepairMissing=0",
+		"syncStartupRepairDeleted=1",
+		"syncStartupRepairHasBlocked=true",
+		"syncStartupRepairFirstBlocked=SyncCommitment",
+		"syncStartupRepairRows=3",
+		"syncStartupPipelineOrderRepairChecked=true",
+		"syncStartupPipelineOrderRepairComplete=true",
+		"syncStartupPipelineOrderRepairDeleted=1",
+		"syncStartupPipelineOrderRepairUpdated=2",
+		"syncStartupPipelineOrderRepairRows=3",
+		"syncStartupPipelineCursorChecked=true",
+		"syncStartupPipelineCursorRows=4",
+		"syncStartupPipelineCursorHasLast=true",
+		"syncStartupPipelineCursorLastStage=SyncExecution",
+		"syncStartupPipelineCursorLastBlock=6",
+		"syncStartupPipelineCursorLastHasHash=true",
+		"syncStartupPipelineCursorHasNext=true",
+		"syncStartupPipelineCursorNextStage=SyncCommitment",
+		"syncStartupStagedRestored=3",
+		"syncStartupStagedTargetHead=9",
+		"syncStartupStagedNextExpected=7",
+		"syncStartupStagedNeedPruneTail=true",
+		"syncStartupStagedPruneFrom=8",
+		"syncStartupStagedHaveLastRestored=true",
+		"syncStartupStagedLastRestored=6",
+	} {
+		if !strings.Contains(out, k) {
+			t.Errorf("missing key/value %q in startup summary line:\n%s", k, out)
 		}
 	}
 }

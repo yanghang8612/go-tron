@@ -1,11 +1,19 @@
 package pruning
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T) {
@@ -56,5 +64,467 @@ func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHotPrune); err != nil || !ok || got != 12 {
 		t.Fatalf("snapshot hot-prune stage = %d ok=%v err=%v, want 12", got, ok, err)
+	}
+}
+
+func TestSnapshotLifecyclePublishesCatalogAfterHotPrune(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	identity := snapshots.ChainIdentity{
+		ChainID:     1,
+		NetworkID:   1,
+		GenesisHash: strings.Repeat("91", common.HashLength),
+	}
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x91}, ed25519.SeedSize))
+
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 2}, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:               dir,
+			Enabled:           true,
+			Interval:          time.Hour,
+			HistoryWindow:     1,
+			CatalogSigningKey: privateKey,
+			CatalogChain:      &identity,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+	})
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !result.Snapshot.CatalogPublished || result.Prune.DeletedDomainChangeBlocks != 1 {
+		t.Fatalf("lifecycle result = %+v, want signed catalog before hot prune", result)
+	}
+	if _, _, err := snapshots.VerifySignedSnapshotCatalog(dir, identity, []ed25519.PublicKey{privateKey.Public().(ed25519.PublicKey)}); err != nil {
+		t.Fatalf("VerifySignedSnapshotCatalog: %v", err)
+	}
+}
+
+func TestSnapshotLifecycleDoesNotPruneWhenCatalogIdentityMismatches(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	wrongIdentity := snapshots.ChainIdentity{
+		ChainID:     2,
+		NetworkID:   1,
+		GenesisHash: strings.Repeat("92", common.HashLength),
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifestForChain(0, 0, nil, wrongIdentity)); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	wantIdentity := wrongIdentity
+	wantIdentity.ChainID = 1
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x92}, ed25519.SeedSize))
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 2}, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:               dir,
+			Enabled:           true,
+			Interval:          time.Hour,
+			HistoryWindow:     1,
+			CatalogSigningKey: privateKey,
+			CatalogChain:      &wantIdentity,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+	})
+	if _, err := lifecycle.OnePass(); err == nil || !strings.Contains(err.Error(), "chain identity mismatch") {
+		t.Fatalf("lifecycle pass error = %v, want catalog identity mismatch", err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || !ok {
+		t.Fatalf("hot domain change after failed catalog publish = ok %v err %v, want retained", ok, err)
+	}
+}
+
+func TestSnapshotLifecycleBuildsEventLogsBeforePruningHotRows(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	addr := []byte{0x41, 0x21, 0x22, 0x23, 0x24}
+	topic := common.Hash{0xbb}
+	block, infos := lifecycleEventLogBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x01}},
+	})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+
+	chain := &fakePruneChain{db: db, solidified: 2}
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:            dir,
+			Enabled:        true,
+			Interval:       time.Hour,
+			HistoryWindow:  1,
+			BuildEventLogs: true,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+	})
+
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !result.Snapshot.EventLogBuilt || result.Snapshot.FromBlock != 1 || result.Snapshot.ToBlock != 1 {
+		t.Fatalf("snapshot result = %+v, want event-log build over block 1", result.Snapshot)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || ok {
+		t.Fatalf("hot domain change survived ok=%v err=%v", ok, err)
+	}
+	mgr, err := snapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	covered, err := mgr.EventLogRangeCovered(1, 1)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	var rows []rawdb.EventLog
+	if err := mgr.IterateEventLogs(1, 1, rawdb.EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addr)},
+		Topics:    [][]common.Hash{{topic}},
+	}, func(row rawdb.EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(rows) != 1 || rows[0].BlockNum != 1 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x01}) {
+		t.Fatalf("event rows = %+v, want one cold event log", rows)
+	}
+}
+
+func TestSnapshotLifecycleBuildsBalanceTracesBeforePruningHotRows(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	traceOwner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x77}, common.AccountIDLength)...))
+	block, _ := lifecycleEventLogBlock(t, 1, nil)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, lifecycleBlockBalanceTrace(block, 40_001)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, traceOwner.Bytes(), 1, 444); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+
+	chain := &fakePruneChain{db: db, solidified: 2}
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:                dir,
+			Enabled:            true,
+			Interval:           time.Hour,
+			HistoryWindow:      1,
+			BuildBalanceTraces: true,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+		BalanceTracePrune: func() (*snapshots.PruneHotBalanceTraceResult, error) {
+			manifest, err := snapshots.LoadProductionManifest(dir)
+			if err != nil {
+				return nil, err
+			}
+			return snapshots.PruneHotBalanceTracesWithProgress(db, dir, manifest)
+		},
+	})
+
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !result.Snapshot.BalanceTraceBuilt || result.Snapshot.FromBlock != 1 || result.Snapshot.ToBlock != 1 {
+		t.Fatalf("snapshot result = %+v, want balance-trace build over block 1", result.Snapshot)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || ok {
+		t.Fatalf("hot domain change survived ok=%v err=%v", ok, err)
+	}
+	if result.BalanceTracePrune == nil ||
+		result.BalanceTracePrune.BlockTracesDeleted != 1 ||
+		result.BalanceTracePrune.AccountTracesDeleted != 1 ||
+		result.BalanceTracePrune.ColdTraceSegments != 1 {
+		t.Fatalf("balance trace prune result = %+v, want one hot block/account trace deleted", result.BalanceTracePrune)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got != nil {
+		t.Fatalf("hot BlockBalanceTrace survived = %+v, want nil", got)
+	}
+	if balance, ok := rawdb.ReadAccountTrace(db, traceOwner.Bytes(), 1); ok || balance != 0 {
+		t.Fatalf("hot AccountTrace survived = %d/%v, want 0/false", balance, ok)
+	}
+	mgr, err := snapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	db.SetBalanceTraceReader(mgr)
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got == nil || got.GetTimestamp() != 40_001 {
+		t.Fatalf("cold ReadBlockBalanceTrace after prune = %+v, want timestamp 40001", got)
+	}
+	traceBlock, balance, ok, err := rawdb.ReadAccountTraceAtOrBefore(db, traceOwner.Bytes(), 1)
+	if err != nil || !ok || traceBlock != 1 || balance != 444 {
+		t.Fatalf("cold ReadAccountTraceAtOrBefore = block %d balance %d ok %v err %v, want 1/444/true/nil", traceBlock, balance, ok, err)
+	}
+}
+
+func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	chain := &fakePruneChain{db: db, solidified: 5}
+	sawHotPruneStage := false
+	chainLookupRan := false
+	sawChainLookupBeforeSectionBloom := false
+	sectionBloomRan := false
+	sawSectionBloomBeforeBalanceTrace := false
+	balanceTraceRan := false
+	sawBalanceTraceBeforeRetiredPrune := false
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:    FullPolicy(2, 1),
+			Interval:  time.Hour,
+			BatchSize: 10,
+		},
+		ChainLookupPrune: func() (*snapshots.PruneHotChainLookupResult, error) {
+			got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotPrune)
+			if err != nil {
+				return nil, err
+			}
+			sawHotPruneStage = ok && got == 5
+			chainLookupRan = true
+			return &snapshots.PruneHotChainLookupResult{
+				HasRange:          true,
+				FromBlock:         0,
+				ToBlock:           1,
+				ColdIndexSegments: 1,
+			}, nil
+		},
+		SectionBloomPrune: func() (*snapshots.PruneHotSectionBloomResult, error) {
+			sawChainLookupBeforeSectionBloom = chainLookupRan
+			sectionBloomRan = true
+			return &snapshots.PruneHotSectionBloomResult{
+				HasRange:          true,
+				FromSection:       0,
+				ToSection:         1,
+				ColdBloomSegments: 1,
+				RowsDeleted:       2,
+			}, nil
+		},
+		BalanceTracePrune: func() (*snapshots.PruneHotBalanceTraceResult, error) {
+			sawSectionBloomBeforeBalanceTrace = sectionBloomRan
+			balanceTraceRan = true
+			return &snapshots.PruneHotBalanceTraceResult{
+				HasRange:             true,
+				FromBlock:            10,
+				ToBlock:              12,
+				ColdTraceSegments:    1,
+				BlockTracesDeleted:   2,
+				AccountTracesDeleted: 2,
+			}, nil
+		},
+		RetiredPrune: func() (*snapshots.PruneRetiredSegmentFilesResult, error) {
+			sawBalanceTraceBeforeRetiredPrune = balanceTraceRan
+			return &snapshots.PruneRetiredSegmentFilesResult{
+				RetiredSegments: 3,
+				FilesDeleted:    2,
+				BytesDeleted:    100,
+			}, nil
+		},
+	})
+
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !sawHotPruneStage {
+		t.Fatal("chain lookup prune hook ran before state hot-prune stage advanced")
+	}
+	if result.ChainLookupPrune == nil || !result.ChainLookupPrune.HasRange || result.ChainLookupPrune.ToBlock != 1 {
+		t.Fatalf("chain lookup prune result = %+v, want hook result", result.ChainLookupPrune)
+	}
+	if !sawChainLookupBeforeSectionBloom {
+		t.Fatal("section bloom prune hook ran before chain lookup prune hook")
+	}
+	if result.SectionBloomPrune == nil || !result.SectionBloomPrune.HasRange || result.SectionBloomPrune.RowsDeleted != 2 {
+		t.Fatalf("section bloom prune result = %+v, want hook result", result.SectionBloomPrune)
+	}
+	if !sawSectionBloomBeforeBalanceTrace {
+		t.Fatal("balance trace prune hook ran before section bloom prune hook")
+	}
+	if result.BalanceTracePrune == nil || !result.BalanceTracePrune.HasRange || result.BalanceTracePrune.ToBlock != 12 {
+		t.Fatalf("balance trace prune result = %+v, want hook result", result.BalanceTracePrune)
+	}
+	if !sawBalanceTraceBeforeRetiredPrune {
+		t.Fatal("retired segment prune hook ran before balance trace prune hook")
+	}
+	if result.RetiredPrune == nil || result.RetiredPrune.FilesDeleted != 2 || result.RetiredPrune.BytesDeleted != 100 {
+		t.Fatalf("retired segment prune result = %+v, want hook result", result.RetiredPrune)
+	}
+}
+
+func TestSnapshotLifecycleBuildsChainFreezerBeforePruningLookups(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain := &fakePruneChain{db: db, solidified: 2}
+	chainFreezerBuilt := false
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:   FullPolicy(2, 1),
+			Interval: time.Hour,
+		},
+		ChainFreezerBuild: func() (snapshots.ChainFreezerSnapshotPassResult, error) {
+			chainFreezerBuilt = true
+			return snapshots.ChainFreezerSnapshotPassResult{
+				Built:     true,
+				FromBlock: 0,
+				ToBlock:   1,
+				ColdHead:  2,
+			}, nil
+		},
+		ChainLookupPrune: func() (*snapshots.PruneHotChainLookupResult, error) {
+			if !chainFreezerBuilt {
+				t.Fatal("chain lookup pruning ran before chain-freezer cold coverage was built")
+			}
+			return &snapshots.PruneHotChainLookupResult{HasRange: true, FromBlock: 0, ToBlock: 1}, nil
+		},
+	})
+
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !result.ChainFreezerBuild.Built || result.ChainFreezerBuild.ToBlock != 1 {
+		t.Fatalf("chain-freezer result = %+v, want published range through block 1", result.ChainFreezerBuild)
+	}
+	if result.ChainLookupPrune == nil || !result.ChainLookupPrune.HasRange {
+		t.Fatalf("chain lookup result = %+v, want hook result", result.ChainLookupPrune)
+	}
+}
+
+func TestSnapshotLifecycleRequestPassCoalesces(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain := &fakePruneChain{db: db, solidified: 2}
+	entered := make(chan int, 3)
+	release := make(chan struct{})
+	var passes atomic.Int32
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:   FullPolicy(2, 1),
+			Interval: time.Hour,
+		},
+		RetiredPrune: func() (*snapshots.PruneRetiredSegmentFilesResult, error) {
+			pass := int(passes.Add(1))
+			entered <- pass
+			if pass == 2 {
+				<-release
+			}
+			return nil, nil
+		},
+	})
+	if err := lifecycle.Start(); err != nil {
+		t.Fatalf("start lifecycle: %v", err)
+	}
+	defer func() {
+		if err := lifecycle.Stop(); err != nil {
+			t.Fatalf("stop lifecycle: %v", err)
+		}
+	}()
+
+	waitLifecyclePass(t, entered, 1)
+	lifecycle.RequestPass()
+	waitLifecyclePass(t, entered, 2)
+	lifecycle.RequestPass()
+	lifecycle.RequestPass()
+	close(release)
+	waitLifecyclePass(t, entered, 3)
+
+	time.Sleep(50 * time.Millisecond)
+	if got := passes.Load(); got != 3 {
+		t.Fatalf("lifecycle passes = %d, want initial pass plus two coalesced requested passes", got)
+	}
+}
+
+func TestSnapshotLifecyclePassCompleteHookRunsAfterSuccess(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 2}, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:   FullPolicy(2, 1),
+			Interval: time.Hour,
+		},
+	})
+	completed := 0
+	lifecycle.AddPassCompleteHook(func() { completed++ })
+	if _, err := lifecycle.OnePass(); err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if completed != 1 {
+		t.Fatalf("completed hooks = %d, want 1", completed)
+	}
+}
+
+func waitLifecyclePass(t *testing.T, entered <-chan int, want int) {
+	t.Helper()
+	select {
+	case got := <-entered:
+		if got != want {
+			t.Fatalf("lifecycle pass = %d, want %d", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for lifecycle pass %d", want)
+	}
+}
+
+func lifecycleEventLogBlock(t *testing.T, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {
+	t.Helper()
+	txPB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp:  int64(10_000 + number),
+			Expiration: int64(20_000 + number),
+			Data:       []byte{byte(number)},
+		},
+	}
+	tx := coretypes.NewTransactionFromPB(txPB)
+	info := &corepb.TransactionInfo{
+		Id:             append([]byte(nil), tx.Hash().Bytes()...),
+		BlockNumber:    int64(number),
+		BlockTimeStamp: int64(30_000 + number),
+		Log:            logs,
+	}
+	block := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(30_000 + number),
+			},
+		},
+		Transactions: []*corepb.Transaction{txPB},
+	})
+	return block, []*corepb.TransactionInfo{info}
+}
+
+func lifecycleBlockBalanceTrace(block *coretypes.Block, timestamp int64) *contractpb.BlockBalanceTrace {
+	if block == nil {
+		return &contractpb.BlockBalanceTrace{Timestamp: timestamp}
+	}
+	return &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   append([]byte(nil), block.Hash().Bytes()...),
+			Number: int64(block.Number()),
+		},
+		Timestamp: timestamp,
 	}
 }

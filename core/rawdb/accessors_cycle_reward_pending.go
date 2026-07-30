@@ -10,9 +10,8 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 )
 
-// CycleRewardPendingEntry is the compact handoff form of one current-cycle
-// reward. Async commit snapshots use a slice of entries instead of cloning the
-// whole map and its buckets.
+// CycleRewardPendingEntry is the compact async-commit handoff form of one
+// current-cycle reward. It avoids cloning the accumulator map and buckets.
 type CycleRewardPendingEntry struct {
 	Address common.Address
 	Amount  int64
@@ -20,9 +19,9 @@ type CycleRewardPendingEntry struct {
 
 // ReadCycleRewardPending reads the flat current-cycle reward accumulator.
 func ReadCycleRewardPending(db ethdb.KeyValueReader) (int64, map[common.Address]int64, bool, error) {
-	data, err := db.Get(cycleRewardPendingKey)
-	if err != nil || len(data) == 0 {
-		return 0, nil, false, nil
+	data, ok, err := readPresentValue(db, cycleRewardPendingKey, "cycle reward pending accumulator")
+	if err != nil || !ok {
+		return 0, nil, ok, err
 	}
 	if len(data) < 12 {
 		return 0, nil, false, errors.New("cycle reward pending: short value")
@@ -60,9 +59,7 @@ func WriteCycleRewardPending(db ethdb.KeyValueWriter, cycle int64, rewards map[c
 }
 
 // WriteCycleRewardPendingEntries sorts and consumes a freshly captured entry
-// slice. The caller transfers the slice and must not read or mutate it after
-// this call. Layered writers can likewise retain the freshly encoded value
-// without a defensive copy.
+// slice. The wire format is identical to WriteCycleRewardPending.
 func WriteCycleRewardPendingEntries(db ethdb.KeyValueWriter, cycle int64, entries []CycleRewardPendingEntry) error {
 	kept := entries[:0]
 	for _, entry := range entries {

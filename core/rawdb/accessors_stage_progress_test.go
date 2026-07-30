@@ -1,61 +1,33 @@
 package rawdb
 
 import (
-	"bytes"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 )
 
-type stageProgressOwnedWriterProbe struct {
-	putCalled bool
-	key       string
-	value     []byte
+type stageProgressFailingReader struct {
+	has    bool
+	hasErr error
+	getErr error
+	data   []byte
 }
 
-func (p *stageProgressOwnedWriterProbe) Put([]byte, []byte) error {
-	p.putCalled = true
-	return nil
-}
-
-func (*stageProgressOwnedWriterProbe) Delete([]byte) error { return nil }
-
-func (p *stageProgressOwnedWriterProbe) PutStringOwnedValue(key string, value []byte) error {
-	p.key = key
-	p.value = value
-	return nil
-}
-
-type stageProgressMultiWriterProbe struct {
-	stageProgressOwnedWriterProbe
-	values [][]byte
-}
-
-func (p *stageProgressMultiWriterProbe) PutStringOwnedValue(key string, value []byte) error {
-	p.key = key
-	p.value = value
-	p.values = append(p.values, value)
-	return nil
-}
-
-func TestWriteCanonicalStageProgressSharesEncodedValue(t *testing.T) {
-	probe := new(stageProgressMultiWriterProbe)
-	hash := common.Hash{0x43}
-	if err := WriteCanonicalStageProgressWithHash(probe, 124, hash); err != nil {
-		t.Fatal(err)
+func (r stageProgressFailingReader) Has([]byte) (bool, error) {
+	if r.hasErr != nil {
+		return false, r.hasErr
 	}
-	if len(probe.values) != len(CanonicalExecutionStages()) {
-		t.Fatalf("writes = %d, want %d", len(probe.values), len(CanonicalExecutionStages()))
+	return r.has, nil
+}
+
+func (r stageProgressFailingReader) Get([]byte) ([]byte, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
 	}
-	want := encodeStageProgress(124, hash, true)
-	for i, value := range probe.values {
-		if !bytes.Equal(value, want) {
-			t.Fatalf("write %d value = %x, want %x", i, value, want)
-		}
-		if &value[0] != &probe.values[0][0] {
-			t.Fatalf("write %d did not share the canonical encoded value", i)
-		}
-	}
+	return append([]byte(nil), r.data...), nil
 }
 
 func TestStageProgressReadWriteIterateDelete(t *testing.T) {
@@ -98,6 +70,180 @@ func TestStageProgressReadWriteIterateDelete(t *testing.T) {
 	}
 }
 
+func TestReadStageProgressRowSurfacesStorageErrors(t *testing.T) {
+	if _, ok, err := ReadStageProgressRow(stageProgressFailingReader{
+		hasErr: errors.New("stage has failed"),
+	}, StageFinish); err == nil || ok || !strings.Contains(err.Error(), "stage has failed") {
+		t.Fatalf("Has failure row ok=%v err=%v, want storage error", ok, err)
+	}
+	if _, ok, err := ReadStageProgress(stageProgressFailingReader{
+		has:    true,
+		getErr: errors.New("stage get failed"),
+	}, StageFinish); err == nil || ok || !strings.Contains(err.Error(), "stage get failed") {
+		t.Fatalf("Get failure progress ok=%v err=%v, want storage error", ok, err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(stageProgressFailingReader{
+		hasErr: errors.New("stage verify failed"),
+	}, StageFinish); err == nil || ok || !strings.Contains(err.Error(), "stage verify failed") {
+		t.Fatalf("verified stage row read failure ok=%v err=%v, want storage error", ok, err)
+	}
+}
+
+func TestWriteStageProgressRows(t *testing.T) {
+	db := NewMemoryDatabase()
+	rows := []StageProgress{
+		{Stage: StageSyncImport, BlockNum: 10, BlockHash: common.Hash{0x10}, HasBlockHash: true},
+		{Stage: StageSyncExecution, BlockNum: 9, BlockHash: common.Hash{0x09}, HasBlockHash: true},
+		{Stage: StageSnapshotBuild, BlockNum: 8},
+	}
+
+	if err := WriteStageProgressRows(db, rows); err != nil {
+		t.Fatalf("write stage progress rows: %v", err)
+	}
+	for _, want := range rows {
+		got, ok, err := ReadStageProgressRow(db, want.Stage)
+		if err != nil || !ok {
+			t.Fatalf("read %s progress ok=%v err=%v", want.Stage, ok, err)
+		}
+		if got.BlockNum != want.BlockNum || got.BlockHash != want.BlockHash || got.HasBlockHash != want.HasBlockHash {
+			t.Fatalf("%s progress = %+v, want %+v", want.Stage, got, want)
+		}
+	}
+}
+
+func TestWriteStageProgressRowsNilEmptyAndInvalid(t *testing.T) {
+	if err := WriteStageProgressRows(nil, nil); err != nil {
+		t.Fatalf("empty rows with nil db: %v", err)
+	}
+	if err := WriteStageProgressRows(nil, []StageProgress{{Stage: StageSyncImport, BlockNum: 1}}); err == nil {
+		t.Fatal("nil db with rows returned nil error")
+	}
+
+	db := NewMemoryDatabase()
+	rows := []StageProgress{
+		{Stage: StageSyncImport, BlockNum: 1, BlockHash: common.Hash{0x01}, HasBlockHash: true},
+		{BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true},
+	}
+	if err := WriteStageProgressRows(db, rows); err == nil || !strings.Contains(err.Error(), "empty stage id") {
+		t.Fatalf("invalid rows error = %v, want empty stage id", err)
+	}
+	if _, ok, err := ReadStageProgressRow(db, StageSyncImport); err != nil || ok {
+		t.Fatalf("invalid batch wrote first row: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestReadVerifiedStageProgressBlock(t *testing.T) {
+	db := NewMemoryDatabase()
+	block := testSyncStagedBlock(3, common.Hash{0x02})
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("write block: %v", err)
+	}
+	if err := WriteStageProgressWithHash(db, StageFinish, block.Number(), block.Hash()); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	got, ok, err := ReadVerifiedStageProgressBlock(db, StageFinish)
+	if err != nil || !ok || got != block.Number() {
+		t.Fatalf("verified finish stage = %d ok=%v err=%v, want block %d", got, ok, err, block.Number())
+	}
+
+	if err := WriteStageProgress(db, StageFinish, block.Number()); err != nil {
+		t.Fatalf("write unbound finish stage: %v", err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageFinish); err == nil || !ok || !strings.Contains(err.Error(), "finish stage 3 is not hash-bound") {
+		t.Fatalf("unbound verified finish stage ok=%v err=%v, want not hash-bound", ok, err)
+	}
+
+	if err := WriteStageProgressWithHash(db, StageFinish, block.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("write mismatched finish stage: %v", err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageFinish); err == nil || !ok || !strings.Contains(err.Error(), "finish stage 3 hash") {
+		t.Fatalf("mismatched verified finish stage ok=%v err=%v, want hash mismatch", ok, err)
+	}
+
+	if err := WriteStageProgressWithHash(db, StageCommitment, 9, common.Hash{0x09}); err != nil {
+		t.Fatalf("write missing-block commitment stage: %v", err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageCommitment); err == nil || !ok || !strings.Contains(err.Error(), "commitment stage 9 has hash") {
+		t.Fatalf("missing-block verified commitment stage ok=%v err=%v, want unavailable block", ok, err)
+	}
+
+	if err := db.Put(blockKey(10), []byte("not-a-valid-block")); err != nil {
+		t.Fatalf("put malformed block: %v", err)
+	}
+	if err := WriteStageProgressWithHash(db, StageBodies, 10, common.Hash{0x10}); err != nil {
+		t.Fatalf("write malformed-block bodies stage: %v", err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageBodies); err == nil || !ok || !strings.Contains(err.Error(), "canonical hash lookup") || !strings.Contains(err.Error(), "block 10 decode") {
+		t.Fatalf("malformed-block verified bodies stage ok=%v err=%v, want canonical hash decode error", ok, err)
+	}
+
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageExecution); err != nil || ok {
+		t.Fatalf("missing verified execution stage ok=%v err=%v, want absent", ok, err)
+	}
+}
+
+func TestReadVerifiedStageProgressBlockWithHashReader(t *testing.T) {
+	db := NewMemoryDatabase()
+	hash := common.Hash{0x42}
+	if err := WriteStageProgressWithHash(db, StageFinish, 99, hash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	got, ok, err := ReadVerifiedStageProgressBlockWithHashReader(db, StageFinish, func(number uint64) common.Hash {
+		if number != 99 {
+			return common.Hash{}
+		}
+		return hash
+	})
+	if err != nil || !ok || got != 99 {
+		t.Fatalf("custom-hash verified finish stage = %d ok=%v err=%v, want block 99", got, ok, err)
+	}
+}
+
+func TestReadVerifiedStageProgressBlockWithHashLookupSurfacesReaderError(t *testing.T) {
+	db := NewMemoryDatabase()
+	hash := common.Hash{0x42}
+	if err := WriteStageProgressWithHash(db, StageFinish, 99, hash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	got, ok, err := ReadVerifiedStageProgressBlockWithHashLookup(db, StageFinish, func(number uint64) (common.Hash, bool, error) {
+		if number != 99 {
+			t.Fatalf("canonical lookup number = %d, want 99", number)
+		}
+		return common.Hash{}, false, errors.New("canonical hash reader failed")
+	})
+	if err == nil || !ok || got != 0 || !strings.Contains(err.Error(), "canonical hash reader failed") {
+		t.Fatalf("error-aware verified finish stage = %d/%v/%v, want ok reader error", got, ok, err)
+	}
+}
+
+func TestRestoreSyncInventoryTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		head     uint64
+		row      uint64
+		haveRow  bool
+		target   uint64
+		restored bool
+	}{
+		{name: "missing", head: 10, target: 10},
+		{name: "ahead", head: 10, row: 25, haveRow: true, target: 25, restored: true},
+		{name: "stale", head: 10, row: 7, haveRow: true, target: 10},
+		{name: "equal", head: 10, row: 10, haveRow: true, target: 10},
+	}
+	for _, tt := range tests {
+		db := NewMemoryDatabase()
+		if tt.haveRow {
+			if err := WriteStageProgress(db, StageSyncInventory, tt.row); err != nil {
+				t.Fatalf("%s: write sync inventory: %v", tt.name, err)
+			}
+		}
+		got := RestoreSyncInventoryTarget(db, tt.head)
+		if got.Target != tt.target || got.Restored != tt.restored || got.ReadError != nil || got.HaveRow != tt.haveRow {
+			t.Fatalf("%s: restore = %+v, want target %d restored %v haveRow %v", tt.name, got, tt.target, tt.restored, tt.haveRow)
+		}
+	}
+}
+
 func TestCanonicalStageProgressWriteAndRewind(t *testing.T) {
 	db := NewMemoryDatabase()
 	hash12 := common.Hash{0x12}
@@ -107,6 +253,11 @@ func TestCanonicalStageProgressWriteAndRewind(t *testing.T) {
 	for _, stage := range CanonicalExecutionStages() {
 		if row, ok, err := ReadStageProgressRow(db, stage); err != nil || !ok || row.BlockNum != 12 || !row.HasBlockHash || row.BlockHash != hash12 {
 			t.Fatalf("%s progress after write = %+v ok=%v err=%v, want 12 hash", stage, row, ok, err)
+		}
+	}
+	for _, stage := range []StageID{StageChainFreezer, StageChainFreezerStateRootPrune, StageSyncInventory, StageSyncBodies, StageSyncBodiesReady, StageSyncImport, StageSyncExecution, StageSyncCommitment, StageSyncFinish, StageSnapshotEventLogBuild, StageSnapshotChainFreezerTailPrune} {
+		if _, ok, err := ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s downloader progress should not be written by canonical helper: ok=%v err=%v", stage, ok, err)
 		}
 	}
 	hash7 := common.Hash{0x07}
@@ -120,40 +271,320 @@ func TestCanonicalStageProgressWriteAndRewind(t *testing.T) {
 	}
 }
 
-func TestWriteStageProgressTransfersCanonicalKeyAndValue(t *testing.T) {
-	probe := new(stageProgressOwnedWriterProbe)
-	hash := common.Hash{0x42}
-	if err := WriteStageProgressWithHash(probe, StageExecution, 123, hash); err != nil {
-		t.Fatal(err)
+func TestCheckStageProgressOrder(t *testing.T) {
+	hashA := common.Hash{0xaa}
+	hashB := common.Hash{0xbb}
+	rows := map[StageID]StageProgress{
+		StageBodies: {
+			Stage:    StageBodies,
+			BlockNum: 5,
+		},
+		StageExecution: {
+			Stage:    StageExecution,
+			BlockNum: 6,
+		},
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     20,
+			BlockHash:    hashA,
+			HasBlockHash: true,
+		},
+		StageSnapshotBuild: {
+			Stage:    StageSnapshotBuild,
+			BlockNum: 21,
+		},
+		StageSnapshotLatestBuild: {
+			Stage:    StageSnapshotLatestBuild,
+			BlockNum: 22,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     20,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageChainFreezerStateRootPrune: {
+			Stage:    StageChainFreezerStateRootPrune,
+			BlockNum: 21,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:    StageSnapshotChainLookupPrune,
+			BlockNum: 23,
+		},
+		StageSnapshotEventLogBuild: {
+			Stage:    StageSnapshotEventLogBuild,
+			BlockNum: 24,
+		},
+		StageSnapshotChainFreezerTailPrune: {
+			Stage:    StageSnapshotChainFreezerTailPrune,
+			BlockNum: 25,
+		},
 	}
-	if probe.putCalled {
-		t.Fatal("stage progress used defensive Put instead of owned string write")
-	}
-	if probe.key != stageExecutionProgressKeyString {
-		t.Fatalf("stage key = %q, want %q", probe.key, stageExecutionProgressKeyString)
-	}
-	want := encodeStageProgress(123, hash, true)
-	if !bytes.Equal(probe.value, want) {
-		t.Fatalf("stage value = %x, want %x", probe.value, want)
-	}
-}
 
-var benchmarkStageProgressKey []byte
-
-func BenchmarkCanonicalStageProgressKey(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		benchmarkStageProgressKey = stageProgressKey(StageExecution)
-	}
-}
-
-func BenchmarkWriteCanonicalStageProgressWithHash(b *testing.B) {
-	probe := new(stageProgressOwnedWriterProbe)
-	hash := common.Hash{0x42}
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if err := WriteStageProgressWithHash(probe, StageExecution, uint64(i), hash); err != nil {
-			b.Fatal(err)
+	issues := CheckStageProgressOrder(rows)
+	for _, want := range []string{
+		"Execution=6 ahead of Bodies=5",
+		"SnapshotBuild=21 ahead of Finish=20",
+		"SnapshotLatestBuild=22 ahead of Finish=20",
+		"ChainFreezerStateRootPrune=21 ahead of ChainFreezer=20",
+		"SnapshotChainLookupPrune=23 ahead of ChainFreezer=20",
+		"SnapshotEventLogBuild=24 ahead of Finish=20",
+		"SnapshotChainFreezerTailPrune=25 ahead of SnapshotChainLookupPrune=23",
+		"SnapshotChainFreezerTailPrune=25 ahead of SnapshotEventLogBuild=24",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue.String() == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("stage progress order issues missing %q in %+v", want, issues)
 		}
 	}
+
+	hashIssues := CheckStageProgressOrder(map[StageID]StageProgress{
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     20,
+			BlockHash:    hashA,
+			HasBlockHash: true,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     20,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+	})
+	wantHashIssue := fmt.Sprintf("ChainFreezer=20/%x hash does not match Finish=20/%x", hashB, hashA)
+	if len(hashIssues) != 1 || hashIssues[0].String() != wantHashIssue {
+		t.Fatalf("hash issues = %+v, want %q", hashIssues, wantHashIssue)
+	}
+
+	missing := CheckStageProgressOrder(map[StageID]StageProgress{
+		StageSnapshotBuild: {
+			Stage:    StageSnapshotBuild,
+			BlockNum: 12,
+		},
+		StageChainFreezerStateRootPrune: {
+			Stage:    StageChainFreezerStateRootPrune,
+			BlockNum: 8,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:    StageSnapshotChainLookupPrune,
+			BlockNum: 8,
+		},
+	})
+	for _, want := range []string{
+		"SnapshotBuild requires Finish",
+		"ChainFreezerStateRootPrune requires ChainFreezer",
+		"SnapshotChainLookupPrune requires ChainFreezer",
+	} {
+		found := false
+		for _, issue := range missing {
+			if issue.String() == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing-upstream issues missing %q in %+v", want, missing)
+		}
+	}
+
+	genesisTail := CheckStageProgressOrder(map[StageID]StageProgress{
+		StageFinish: {
+			Stage:    StageFinish,
+			BlockNum: 0,
+		},
+		StageChainFreezer: {
+			Stage:    StageChainFreezer,
+			BlockNum: 0,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:    StageSnapshotChainLookupPrune,
+			BlockNum: 0,
+		},
+		StageSnapshotChainFreezerTailPrune: {
+			Stage:    StageSnapshotChainFreezerTailPrune,
+			BlockNum: 0,
+		},
+	})
+	if len(genesisTail) != 0 {
+		t.Fatalf("genesis-only tail prune issues = %+v, want none without event-log stage", genesisTail)
+	}
+}
+
+func TestPlanStageProgressPipelineCursor(t *testing.T) {
+	var (
+		hashA = common.Hash{0x0a}
+		hashB = common.Hash{0x0b}
+		hashC = common.Hash{0x0c}
+	)
+	empty := PlanStageProgressPipelineCursor(nil)
+	if !empty.Complete || empty.Pending != 0 || len(empty.Tasks) != 0 || len(empty.Issues) != 0 {
+		t.Fatalf("empty cursor = %+v, want complete without tasks", empty)
+	}
+
+	cursor := PlanStageProgressPipelineCursor(map[StageID]StageProgress{
+		StageHeaders: {
+			Stage:        StageHeaders,
+			BlockNum:     10,
+			BlockHash:    hashA,
+			HasBlockHash: true,
+		},
+		StageBodies: {
+			Stage:        StageBodies,
+			BlockNum:     8,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageExecution: {
+			Stage:        StageExecution,
+			BlockNum:     8,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageCommitment: {
+			Stage:        StageCommitment,
+			BlockNum:     8,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     8,
+			BlockHash:    hashB,
+			HasBlockHash: true,
+		},
+		StageSnapshotBuild: {
+			Stage:        StageSnapshotBuild,
+			BlockNum:     8,
+			BlockHash:    hashC,
+			HasBlockHash: true,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     6,
+			BlockHash:    hashA,
+			HasBlockHash: true,
+		},
+	})
+	if cursor.Complete || cursor.Pending != len(cursor.Tasks) || len(cursor.Tasks) < 4 {
+		t.Fatalf("cursor = %+v, want incomplete pending tasks", cursor)
+	}
+	wantTasks := map[StageID]StageProgressPipelineTaskStatus{
+		StageBodies:                     StageProgressPipelineTaskBehind,
+		StageSnapshotBuild:              StageProgressPipelineTaskHashMismatch,
+		StageSnapshotLatestBuild:        StageProgressPipelineTaskMissing,
+		StageSnapshotEventLogBuild:      StageProgressPipelineTaskMissing,
+		StageSnapshotPrune:              StageProgressPipelineTaskMissing,
+		StageChainFreezer:               StageProgressPipelineTaskBehind,
+		StageChainFreezerStateRootPrune: StageProgressPipelineTaskMissing,
+		StageSnapshotSectionBloomPrune:  StageProgressPipelineTaskMissing,
+		StageSnapshotBalanceTracePrune:  StageProgressPipelineTaskMissing,
+	}
+	for stage, status := range wantTasks {
+		task, ok := stageProgressCursorTask(cursor.Tasks, stage)
+		if !ok {
+			t.Fatalf("cursor tasks missing %s in %+v", stage, cursor.Tasks)
+		}
+		if task.Status != status {
+			t.Fatalf("%s task status = %s, want %s", stage, task.Status, status)
+		}
+	}
+	if bodyTask, ok := stageProgressCursorTask(cursor.Tasks, StageBodies); !ok || bodyTask.TargetBlock != 10 || bodyTask.CurrentBlock != 8 || bodyTask.TargetHash != hashA || bodyTask.CurrentHash != hashB {
+		t.Fatalf("body task = %+v ok=%v, want target headers 10/hashA current 8/hashB", bodyTask, ok)
+	}
+	if snapshotTask, ok := stageProgressCursorTask(cursor.Tasks, StageSnapshotBuild); !ok || snapshotTask.TargetBlock != 8 || snapshotTask.TargetHash != hashB || snapshotTask.CurrentHash != hashC {
+		t.Fatalf("snapshot task = %+v ok=%v, want same-height hash mismatch against finish", snapshotTask, ok)
+	}
+	if len(cursor.Issues) == 0 {
+		t.Fatalf("cursor issues = nil, want hash/order issues for blocked stages")
+	}
+}
+
+func TestPlanStageProgressPipelineCursorHoldsTailPruneUntilEventLogsCovered(t *testing.T) {
+	hash := common.Hash{0x10}
+	cursor := PlanStageProgressPipelineCursor(map[StageID]StageProgress{
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     100,
+			BlockHash:    hash,
+			HasBlockHash: true,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     100,
+			BlockHash:    hash,
+			HasBlockHash: true,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:        StageSnapshotChainLookupPrune,
+			BlockNum:     100,
+			BlockHash:    hash,
+			HasBlockHash: true,
+		},
+	})
+	if task, ok := stageProgressCursorTask(cursor.Tasks, StageSnapshotChainFreezerTailPrune); ok {
+		t.Fatalf("tail-prune task = %+v, want no non-genesis task before event-log coverage exists", task)
+	}
+	if task, ok := stageProgressCursorTask(cursor.Tasks, StageSnapshotEventLogBuild); !ok || task.TargetBlock != 100 || task.Upstream != StageFinish {
+		t.Fatalf("event-log build task = %+v ok=%v, want missing task at finish boundary", task, ok)
+	}
+}
+
+func TestPlanStageProgressPipelineCursorUsesLowestTailPruneDependency(t *testing.T) {
+	hash100 := common.Hash{0x10}
+	hash90 := common.Hash{0x09}
+	cursor := PlanStageProgressPipelineCursor(map[StageID]StageProgress{
+		StageFinish: {
+			Stage:        StageFinish,
+			BlockNum:     100,
+			BlockHash:    hash100,
+			HasBlockHash: true,
+		},
+		StageChainFreezer: {
+			Stage:        StageChainFreezer,
+			BlockNum:     100,
+			BlockHash:    hash100,
+			HasBlockHash: true,
+		},
+		StageSnapshotChainLookupPrune: {
+			Stage:        StageSnapshotChainLookupPrune,
+			BlockNum:     100,
+			BlockHash:    hash100,
+			HasBlockHash: true,
+		},
+		StageSnapshotEventLogBuild: {
+			Stage:        StageSnapshotEventLogBuild,
+			BlockNum:     90,
+			BlockHash:    hash90,
+			HasBlockHash: true,
+		},
+	})
+	var tailTasks []StageProgressPipelineTask
+	for _, task := range cursor.Tasks {
+		if task.Stage == StageSnapshotChainFreezerTailPrune {
+			tailTasks = append(tailTasks, task)
+		}
+	}
+	if len(tailTasks) != 1 {
+		t.Fatalf("tail-prune tasks = %+v, want one task capped by lowest upstream", tailTasks)
+	}
+	task := tailTasks[0]
+	if task.Upstream != StageSnapshotEventLogBuild || task.Status != StageProgressPipelineTaskMissing || task.TargetBlock != 90 || task.TargetHash != hash90 {
+		t.Fatalf("tail-prune task = %+v, want target event-log boundary 90/hash90", task)
+	}
+}
+
+func stageProgressCursorTask(tasks []StageProgressPipelineTask, stage StageID) (StageProgressPipelineTask, bool) {
+	for _, task := range tasks {
+		if task.Stage == stage {
+			return task, true
+		}
+	}
+	return StageProgressPipelineTask{}, false
 }

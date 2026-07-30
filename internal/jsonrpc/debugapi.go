@@ -8,9 +8,10 @@ import (
 )
 
 // DebugAPI implements the geth-compatible "debug" JSON-RPC namespace
-// (debug_traceCall, debug_traceTransaction) on the reflection-based
-// internal/rpc framework. Method names map by the framework's first-letter
-// lowering: TraceCall -> debug_traceCall, TraceTransaction -> debug_traceTransaction.
+// (debug_traceCall, debug_traceTransaction, debug_traceBlockByNumber, and
+// debug_traceBlockByHash) on the reflection-based internal/rpc framework.
+// Method names map by the framework's first-letter lowering: TraceCall ->
+// debug_traceCall, TraceBlockByNumber -> debug_traceBlockByNumber, etc.
 //
 // NOTE: distinct from internal/debugapi, which is the pprof HTTP server — this
 // is the JSON-RPC tracing namespace.
@@ -57,6 +58,37 @@ func (d *DebugAPI) TraceTransaction(hashHex string, config *tracers.TraceConfig)
 	var hash common.Hash
 	copy(hash[:], common.FromHex(hashHex))
 	return d.backend.TraceTransaction(hash, config)
+}
+
+// TraceBlockByNumber serves debug_traceBlockByNumber by resolving the selected
+// canonical block and delegating whole-block replay to the backend.
+func (d *DebugAPI) TraceBlockByNumber(blockParam string, config *tracers.TraceConfig) ([]BlockTraceResult, error) {
+	block, err := blockByNumberOrHash(d.backend, blockParam)
+	if err != nil {
+		return nil, err
+	}
+	if block == nil {
+		return nil, fmt.Errorf("block not found")
+	}
+	return d.backend.TraceBlock(block, config)
+}
+
+// TraceBlockByHash serves debug_traceBlockByHash by resolving the block through
+// the archive-aware hash lookup path and delegating whole-block replay.
+func (d *DebugAPI) TraceBlockByHash(hashHex string, config *tracers.TraceConfig) ([]BlockTraceResult, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	block, err := d.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, fmt.Errorf("block not found")
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, fmt.Errorf("block not found")
+	}
+	return d.backend.TraceBlock(block, config)
 }
 
 // resolveTraceBlock maps a block tag to a *uint64 block number: a nil/empty tag

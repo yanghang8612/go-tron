@@ -3,10 +3,18 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 )
+
+// BlockStorageKey returns the hot canonical block-body key for number. It is
+// exposed for layered writers that need to retain a block row for overlay and
+// reorg reads after the same row has already been committed in a direct batch.
+func BlockStorageKey(number uint64) []byte {
+	return blockKey(number)
+}
 
 func WriteHeadBlockHash(db ethdb.KeyValueWriter, hash common.Hash) {
 	db.Put(headBlockKey, hash.Bytes())
@@ -17,7 +25,17 @@ func ReadHeadBlockHash(db ethdb.KeyValueReader) common.Hash {
 	if err != nil {
 		return common.Hash{}
 	}
-	return common.BytesToHash(data)
+	hash, ok := decodeHashRow(data)
+	if !ok {
+		return common.Hash{}
+	}
+	return hash
+}
+
+// ReadHeadBlockHashStrict returns the canonical head hash and surfaces
+// storage/corruption errors. Missing rows return (zero, false, nil).
+func ReadHeadBlockHashStrict(db ethdb.KeyValueReader) (common.Hash, bool, error) {
+	return readHashRowStrict(db, headBlockKey, "head block hash")
 }
 
 func WriteHeadSolidBlockHash(db ethdb.KeyValueWriter, hash common.Hash) {
@@ -29,16 +47,25 @@ func ReadHeadSolidBlockHash(db ethdb.KeyValueReader) common.Hash {
 	if err != nil {
 		return common.Hash{}
 	}
-	return common.BytesToHash(data)
+	hash, ok := decodeHashRow(data)
+	if !ok {
+		return common.Hash{}
+	}
+	return hash
+}
+
+// ReadHeadSolidBlockHashStrict returns the latest solid block hash and
+// surfaces storage/corruption errors. Missing rows return (zero, false, nil).
+func ReadHeadSolidBlockHashStrict(db ethdb.KeyValueReader) (common.Hash, bool, error) {
+	return readHashRowStrict(db, headSolidBlockKey, "head solid block hash")
 }
 
 func WriteDynamicProperty(db ethdb.KeyValueWriter, name string, value []byte) {
 	db.Put(dynPropKey(name), value)
 }
 
-// WriteDynamicPropertyOwned writes a freshly encoded immutable derived value.
-// Canonical-head callers use this path so layered stores can retain the four
-// fixed dp- keys and the encoded value without defensive intermediate copies.
+// WriteDynamicPropertyOwned lets layered stores retain a freshly encoded
+// immutable derived value without another defensive copy.
 func WriteDynamicPropertyOwned(db ethdb.KeyValueWriter, name string, value []byte) {
 	if writer, ok := db.(stringOwnedValueWriter); ok {
 		_ = writer.PutStringOwnedValue(dynPropKeyString(name), value)
@@ -57,6 +84,12 @@ func ReadDynamicProperty(db ethdb.KeyValueReader, name string) []byte {
 		return nil
 	}
 	return data
+}
+
+// ReadDynamicPropertyStrict returns a dynamic property value and surfaces
+// storage errors. Missing rows return (nil, false, nil).
+func ReadDynamicPropertyStrict(db ethdb.KeyValueReader, name string) ([]byte, bool, error) {
+	return readPresentValue(db, dynPropKey(name), fmt.Sprintf("dynamic property %s", name))
 }
 
 // IterateDynamicProperties invokes fn for every persisted DynamicProperties
@@ -78,6 +111,29 @@ func IterateDynamicProperties(db ethdb.Iteratee, fn func(name string, value []by
 		name := string(bytes.TrimPrefix(it.Key(), dynPropPrefix))
 		fn(name, it.Value())
 	}
+}
+
+// IterateDynamicPropertiesStrict invokes fn for every persisted dynamic
+// property row and returns iterator or callback errors to the caller.
+func IterateDynamicPropertiesStrict(db ethdb.Iteratee, fn func(name string, value []byte) error) error {
+	if db == nil {
+		return fmt.Errorf("rawdb: nil database while iterating dynamic properties")
+	}
+	if fn == nil {
+		return nil
+	}
+	it := db.NewIterator(dynPropPrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		name := string(bytes.TrimPrefix(it.Key(), dynPropPrefix))
+		if err := fn(name, append([]byte(nil), it.Value()...)); err != nil {
+			return err
+		}
+	}
+	if err := it.Error(); err != nil {
+		return fmt.Errorf("rawdb: iterate dynamic properties: %w", err)
+	}
+	return nil
 }
 
 // GenesisWitness is the immutable {address, initial vote count} pair captured
@@ -107,9 +163,39 @@ func ReadGenesisWitnesses(db ethdb.KeyValueReader) []GenesisWitness {
 	if err != nil || len(data) < 4 {
 		return nil
 	}
-	count := int(binary.BigEndian.Uint32(data[:4]))
-	if len(data) < 4+count*genesisWitnessRecordLen {
+	out, ok, err := decodeGenesisWitnesses(data, true)
+	if err != nil || !ok {
 		return nil
+	}
+	return out
+}
+
+// ReadGenesisWitnessesStrict returns the immutable genesis witness vote set
+// and surfaces storage/corruption errors. Missing rows return
+// (nil, false, nil).
+func ReadGenesisWitnessesStrict(db ethdb.KeyValueReader) ([]GenesisWitness, bool, error) {
+	data, ok, err := readPresentValue(db, genesisWitnessesKey, "genesis witnesses")
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	out, valid, err := decodeGenesisWitnesses(data, false)
+	if err != nil {
+		return nil, true, err
+	}
+	if !valid {
+		return nil, false, nil
+	}
+	return out, true, nil
+}
+
+func decodeGenesisWitnesses(data []byte, allowTrailing bool) ([]GenesisWitness, bool, error) {
+	if len(data) < 4 {
+		return nil, false, fmt.Errorf("rawdb: decode genesis witnesses: length %d, want at least 4", len(data))
+	}
+	count := int(binary.BigEndian.Uint32(data[:4]))
+	wantLen := 4 + count*genesisWitnessRecordLen
+	if len(data) < wantLen || !allowTrailing && len(data) != wantLen {
+		return nil, false, fmt.Errorf("rawdb: decode genesis witnesses: length %d, want %d", len(data), wantLen)
 	}
 	out := make([]GenesisWitness, count)
 	for i := 0; i < count; i++ {
@@ -117,7 +203,7 @@ func ReadGenesisWitnesses(db ethdb.KeyValueReader) []GenesisWitness {
 		out[i].Address = common.BytesToAddress(data[off : off+common.AddressLength])
 		out[i].VoteCount = int64(binary.BigEndian.Uint64(data[off+common.AddressLength : off+genesisWitnessRecordLen]))
 	}
-	return out
+	return out, true, nil
 }
 
 // ReadTotalTransactionCount returns the cumulative number of transactions ever
@@ -129,6 +215,19 @@ func ReadTotalTransactionCount(db ethdb.KeyValueReader) int64 {
 		return 0
 	}
 	return int64(binary.BigEndian.Uint64(data))
+}
+
+// ReadTotalTransactionCountStrict returns the cumulative transaction count and
+// surfaces storage/corruption errors. Missing rows return (0, false, nil).
+func ReadTotalTransactionCountStrict(db ethdb.KeyValueReader) (int64, bool, error) {
+	data, ok, err := readPresentValue(db, totalTransactionCountKey, "total transaction count")
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	if len(data) != 8 {
+		return 0, false, fmt.Errorf("rawdb: decode total transaction count: length %d, want 8", len(data))
+	}
+	return int64(binary.BigEndian.Uint64(data)), true, nil
 }
 
 // WriteTotalTransactionCount persists the cumulative transaction count.
@@ -152,7 +251,17 @@ func ReadGenesisStateRoot(db ethdb.KeyValueReader) common.Hash {
 	if err != nil {
 		return common.Hash{}
 	}
-	return common.BytesToHash(data)
+	root, ok := decodeHashRow(data)
+	if !ok {
+		return common.Hash{}
+	}
+	return root
+}
+
+// ReadGenesisStateRootStrict returns the post-genesis StateDB root and
+// surfaces storage/corruption errors. Missing rows return (zero, false, nil).
+func ReadGenesisStateRootStrict(db ethdb.KeyValueReader) (common.Hash, bool, error) {
+	return readHashRowStrict(db, genesisStateRootKey, "genesis state root")
 }
 
 // WriteBlockStateRoot persists the post-apply state root for the given
@@ -179,7 +288,7 @@ func DeleteBlockStateRoot(db ethdb.KeyValueWriter, blockHash common.Hash) {
 // num-keyed ancient is reached via the two-step
 // `bh-<hash>` → num → `state_roots[num]` fall-through encoded in
 // `ReadBlockStateRoot`.
-const ancientStateRoots = "state_roots"
+const ancientStateRoots = AncientStateRootsTable
 
 // ReadBlockStateRoot returns the post-apply state root for the given
 // block hash, or the zero hash if not stored.
@@ -192,16 +301,57 @@ const ancientStateRoots = "state_roots"
 // hot-block read path single-Get.
 func ReadBlockStateRoot(db *ChainDB, blockHash common.Hash) common.Hash {
 	if data, err := db.Get(blockStateRootKey(blockHash.Bytes())); err == nil {
-		return common.BytesToHash(data)
+		if root, ok := decodeHashRow(data); ok {
+			return root
+		}
 	}
-	// KV miss: try the freezer via the still-hot bh-<hash> reverse index.
-	numBytes, err := db.Get(blockHashKey(blockHash.Bytes()))
-	if err != nil || len(numBytes) != 8 {
+	// KV miss: try the freezer via hash->number. Recent blocks use the hot
+	// bh-<hash> reverse index; historical blocks may resolve through the cold
+	// chain-index sidecar attached to ChainDB.
+	numPtr := ReadBlockNumber(db, blockHash)
+	if numPtr == nil {
 		return common.Hash{}
 	}
-	num := binary.BigEndian.Uint64(numBytes)
-	if data, ok := readAncient(db, ancientStateRoots, num); ok {
-		return common.BytesToHash(data)
+	if data, ok := readAncient(db, ancientStateRoots, *numPtr); ok {
+		if root, ok := decodeHashRow(data); ok {
+			return root
+		}
 	}
 	return common.Hash{}
+}
+
+// ReadBlockStateRootStrict returns the post-apply state root for the given
+// block hash and reports malformed hot/freezer rows or cold lookup errors.
+// The legacy ReadBlockStateRoot accessor deliberately keeps its zero-on-error
+// contract for existing chain code; strict callers use this when corruption
+// must abort the operation instead of looking like a missing root.
+func ReadBlockStateRootStrict(db *ChainDB, blockHash common.Hash) (common.Hash, bool, error) {
+	data, ok, err := ReadBlockStateRootRawStrict(db, blockHash)
+	if err != nil || !ok {
+		return common.Hash{}, ok, err
+	}
+	root, ok := decodeHashRow(data)
+	if !ok {
+		return common.Hash{}, true, fmt.Errorf("rawdb: block state root %x has length %d, want %d", blockHash.Bytes(), len(data), common.HashLength)
+	}
+	return root, true, nil
+}
+
+func decodeHashRow(data []byte) (common.Hash, bool) {
+	if len(data) != common.HashLength {
+		return common.Hash{}, false
+	}
+	return common.BytesToHash(data), true
+}
+
+func readHashRowStrict(db ethdb.KeyValueReader, key []byte, context string) (common.Hash, bool, error) {
+	data, ok, err := readPresentValue(db, key, context)
+	if err != nil || !ok {
+		return common.Hash{}, ok, err
+	}
+	hash, valid := decodeHashRow(data)
+	if !valid {
+		return common.Hash{}, false, fmt.Errorf("rawdb: decode %s: length %d, want %d", context, len(data), common.HashLength)
+	}
+	return hash, true, nil
 }

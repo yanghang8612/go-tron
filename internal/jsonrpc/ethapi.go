@@ -7,6 +7,8 @@ import (
 	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // callArgs is the {from,to,data,value} object accepted by eth_call and
@@ -33,11 +35,10 @@ func parseCallValue(s string) int64 {
 // internal/rpc framework. It is the migration target for the eth_* arms of
 // api.go's dispatch switch (jsonrpc-reflection).
 //
-// Covered so far: the no-parameter methods and the param-bearing account
-// readers, all of which migrate zero-diff against the frozen jsonrpc-corpus.
-// Still to land: eth_call/estimateGas, the block/tx/receipt readers (which
-// additionally FIX the legacy double-hex-hash bug, so their corpus entries get
-// regenerated at that point), eth_getLogs, and the filter methods.
+// Covered so far: the no-parameter methods, param-bearing account readers,
+// eth_call/estimateGas, block/tx/receipt readers, eth_getLogs, and filter
+// methods, all of which migrate zero-diff against the frozen jsonrpc-corpus
+// except where the legacy double-hex-hash bug was intentionally corrected.
 //
 // Method names map by the framework's reflection rule (first letter lowered):
 // ChainId -> eth_chainId, GetBalance -> eth_getBalance, etc. Param-bearing
@@ -105,7 +106,10 @@ func (e *EthAPI) GetBalance(addrHex string, block *string) (string, error) {
 	}
 	var balSUN int64
 	if isLatest {
-		balSUN = e.backend.GetBalance(addr)
+		balSUN, err = e.backend.GetBalance(addr)
+		if err != nil {
+			return "", err
+		}
 	} else if balSUN, err = e.backend.GetBalanceAt(addr, blockNum); err != nil {
 		return "", err
 	}
@@ -130,7 +134,11 @@ func (e *EthAPI) GetCode(addrHex string, block *string) (string, error) {
 		return "", err
 	}
 	if isLatest {
-		return hexBytes(e.backend.GetCode(addr)), nil
+		code, err := e.backend.GetCode(addr)
+		if err != nil {
+			return "", err
+		}
+		return hexBytes(code), nil
 	}
 	code, err := e.backend.GetCodeAt(addr, blockNum)
 	if err != nil {
@@ -158,7 +166,10 @@ func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, e
 		return "", err
 	}
 	if isLatest {
-		val := e.backend.GetStorageAt(addr, slot)
+		val, err := e.backend.GetStorageAt(addr, slot)
+		if err != nil {
+			return "", err
+		}
 		return hexBytes(val[:]), nil
 	}
 	val, err := e.backend.GetStorageAtBlock(addr, slot, blockNum)
@@ -168,9 +179,9 @@ func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, e
 	return hexBytes(val[:]), nil
 }
 
-// Call serves eth_call: read-only TVM execution against head state, returning
-// the result bytes as 0x-hex. 'to' is required. The block tag is accepted and
-// ignored (the legacy handler always reads head), preserving that behavior.
+// Call serves eth_call: read-only TVM execution returning the result bytes as
+// 0x-hex. 'to' is required. A numeric block tag executes against archive state;
+// latest/pending uses the live head state.
 func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
 	if tx.To == "" {
 		return "", fmt.Errorf("eth_call: 'to' required")
@@ -187,7 +198,16 @@ func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	result, err := e.backend.Call(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	blockNum, isLatest, err := e.resolveBlock(block)
+	if err != nil {
+		return "", err
+	}
+	var result []byte
+	if isLatest {
+		result, err = e.backend.Call(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	} else {
+		result, err = e.backend.CallAt(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNum)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -196,7 +216,8 @@ func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
 
 // EstimateGas serves eth_estimateGas: the energy used by a simulated execution
 // as 0x-hex. Both from and to are optional (to may be nil for creation-style
-// estimates, unlike eth_call). The block tag, if present, is ignored.
+// estimates, unlike eth_call). A numeric block tag estimates against archive
+// state; latest/pending uses the live head state.
 func (e *EthAPI) EstimateGas(tx callArgs, block *string) (string, error) {
 	var from, to *common.Address
 	if tx.From != "" {
@@ -213,7 +234,16 @@ func (e *EthAPI) EstimateGas(tx callArgs, block *string) (string, error) {
 		}
 		to = &a
 	}
-	energy, err := e.backend.EstimateGas(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	blockNum, isLatest, err := e.resolveBlock(block)
+	if err != nil {
+		return "", err
+	}
+	var energy uint64
+	if isLatest {
+		energy, err = e.backend.EstimateGas(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	} else {
+		energy, err = e.backend.EstimateGasAt(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNum)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -232,7 +262,13 @@ func (e *EthAPI) GetBlockByNumber(blockTag string, fullTx *bool) (interface{}, e
 		num = e.backend.BlockNumber()
 	}
 	block, err := e.backend.GetBlockByNumber(num)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
 		return nil, nil
 	}
 	return blockToRPC(block, fullTx != nil && *fullTx), nil
@@ -243,10 +279,145 @@ func (e *EthAPI) GetBlockByHash(hashHex string, fullTx *bool) (interface{}, erro
 	var hash common.Hash
 	copy(hash[:], common.FromHex(hashHex))
 	block, err := e.backend.GetBlockByHash(hash)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
 		return nil, nil
 	}
 	return blockToRPC(block, fullTx != nil && *fullTx), nil
+}
+
+// GetBlockTransactionCountByNumber serves
+// eth_getBlockTransactionCountByNumber. Unknown block => null.
+func (e *EthAPI) GetBlockTransactionCountByNumber(blockTag string) (interface{}, error) {
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = e.backend.BlockNumber()
+	}
+	block, err := e.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return hexUint64(uint64(len(block.Transactions()))), nil
+}
+
+// GetBlockTransactionCountByHash serves eth_getBlockTransactionCountByHash.
+// Unknown block => null.
+func (e *EthAPI) GetBlockTransactionCountByHash(hashHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	block, err := e.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return hexUint64(uint64(len(block.Transactions()))), nil
+}
+
+// GetUncleCountByBlockNumber serves eth_getUncleCountByBlockNumber. TRON has no
+// uncle blocks, so known blocks always return 0x0; unknown blocks return null.
+func (e *EthAPI) GetUncleCountByBlockNumber(blockTag string) (interface{}, error) {
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = e.backend.BlockNumber()
+	}
+	block, err := e.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return "0x0", nil
+}
+
+// GetUncleCountByBlockHash serves eth_getUncleCountByBlockHash. TRON has no
+// uncle blocks, so known blocks always return 0x0; unknown blocks return null.
+func (e *EthAPI) GetUncleCountByBlockHash(hashHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	block, err := e.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return "0x0", nil
+}
+
+// GetUncleByBlockNumberAndIndex serves eth_getUncleByBlockNumberAndIndex.
+// Known TRON blocks have no uncles, so every valid index resolves to null.
+func (e *EthAPI) GetUncleByBlockNumberAndIndex(blockTag, indexHex string) (interface{}, error) {
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = e.backend.BlockNumber()
+	}
+	if _, err := parseQuantityParam(indexHex, "uncle index"); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := e.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return nil, nil
+}
+
+// GetUncleByBlockHashAndIndex serves eth_getUncleByBlockHashAndIndex. Known
+// TRON blocks have no uncles, so every valid index resolves to null.
+func (e *EthAPI) GetUncleByBlockHashAndIndex(hashHex, indexHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	if _, err := parseQuantityParam(indexHex, "uncle index"); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := e.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return nil, nil
 }
 
 // GetTransactionByHash serves eth_getTransactionByHash. Not found => null.
@@ -260,7 +431,54 @@ func (e *EthAPI) GetTransactionByHash(hashHex string) (interface{}, error) {
 	if tx == nil {
 		return nil, nil
 	}
+	if err := validateTransactionLookupMetadata(hash, tx, block, index); err != nil {
+		return nil, err
+	}
 	return txToRPC(tx, hash, block, index), nil
+}
+
+// GetTransactionByBlockNumberAndIndex serves
+// eth_getTransactionByBlockNumberAndIndex. Unknown block or out-of-range index
+// => null.
+func (e *EthAPI) GetTransactionByBlockNumberAndIndex(blockTag, indexHex string) (interface{}, error) {
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) {
+		num = e.backend.BlockNumber()
+	}
+	index, err := parseQuantityParam(indexHex, "transaction index")
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := e.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return transactionByBlockIndex(block, index), nil
+}
+
+// GetTransactionByBlockHashAndIndex serves eth_getTransactionByBlockHashAndIndex.
+// Unknown block or out-of-range index => null.
+func (e *EthAPI) GetTransactionByBlockHashAndIndex(hashHex, indexHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	index, err := parseQuantityParam(indexHex, "transaction index")
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	block, err := e.backend.GetBlockByHash(hash)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return transactionByBlockIndex(block, index), nil
 }
 
 // GetTransactionReceipt serves eth_getTransactionReceipt. Not found => null.
@@ -275,21 +493,53 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 		return nil, nil
 	}
 	tx, block, index, err := e.backend.GetTransactionByHash(hash)
-	if err != nil || tx == nil {
-		return nil, nil
+	if err != nil {
+		return nil, err
 	}
-	return receiptToRPC(hash, tx, info, block, index), nil
+	if tx == nil {
+		return nil, transactionReceiptLookupError(hash)
+	}
+	if block == nil {
+		return nil, fmt.Errorf("transaction receipt exists for %s but transaction block lookup is missing", rpcHashHex(hash))
+	}
+	if index < 0 {
+		return nil, fmt.Errorf("transaction receipt exists for %s but transaction index is missing", rpcHashHex(hash))
+	}
+	if err := validateTransactionLookupMetadata(hash, tx, block, index); err != nil {
+		return nil, err
+	}
+	if err := validateTransactionInfoBlockNumber(block.Number(), info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
+		return nil, err
+	}
+	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
+		return nil, err
+	}
+	logIndexBase, err := e.receiptLogIndexBase(block, index, info)
+	if err != nil {
+		return nil, err
+	}
+	return receiptToRPCWithLogTimestamp(hash, tx, info, block, index, logIndexBase), nil
 }
 
-// logFilterArgs is the eth_getLogs filter object. Address and Topics are kept
-// raw because each is polymorphic (address: string|[]string; topics: array of
-// null|string|[]string), parsed below exactly as the legacy handler does.
-type logFilterArgs struct {
-	FromBlock string          `json:"fromBlock"`
-	ToBlock   string          `json:"toBlock"`
-	BlockHash string          `json:"blockHash"`
-	Address   json.RawMessage `json:"address"`
-	Topics    json.RawMessage `json:"topics"`
+func (e *EthAPI) receiptLogIndexBase(block *types.Block, txIndex int, info *corepb.TransactionInfo) (uint64, error) {
+	if txIndex <= 0 || len(info.GetLog()) == 0 {
+		return 0, nil
+	}
+	infos, err := e.backend.GetTransactionInfoByBlockNum(block.Number())
+	if err != nil {
+		return 0, err
+	}
+	return receiptLogIndexBaseFromInfos(block, txIndex, infos)
+}
+
+// GetBlockReceipts serves eth_getBlockReceipts for an Ethereum-compatible block
+// tag or 32-byte block hash. Unknown block => null.
+func (e *EthAPI) GetBlockReceipts(blockParam string) (interface{}, error) {
+	block, err := blockByNumberOrHash(e.backend, blockParam)
+	if err != nil {
+		return nil, err
+	}
+	return blockReceiptsToRPC(e.backend, block)
 }
 
 // toLogFilter converts the polymorphic eth filter object into a LogFilter,

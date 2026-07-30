@@ -21,8 +21,6 @@ import (
 
 var errGenesisNoConfig = errors.New("genesis has no chain configuration")
 
-var ErrIncompatibleStateSchema = errors.New("incompatible state database schema")
-
 // genesisWitnessAddress is the literal byte string java-tron's
 // `BlockUtil.newGenesisBlockCapsule` writes into `block_header.raw_data
 // .witness_address` for the genesis block. It is the ASCII bytes of the
@@ -68,19 +66,12 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 	// SetupGenesisBlock intentionally takes `ethdb.KeyValueStore` rather
 	// than `*rawdb.ChainDB` because it runs before NewBlockChain
 	// constructs bc.chaindb; the local wrap is the cleanest bridge.
-	storedBlock := rawdb.ReadBlock(rawdb.NewChainDB(db, ancient), 0)
-	if storedBlock != nil {
+	storedBlock, stored, err := rawdb.ReadBlockStrict(rawdb.NewChainDB(db, ancient), 0)
+	if err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("read existing genesis block: %w", err)
+	}
+	if stored {
 		storedHash := storedBlock.Hash()
-		version, ok, err := rawdb.ReadStateSchemaVersion(db)
-		if err != nil {
-			return genesis.Config, storedHash, fmt.Errorf("%w: %v", ErrIncompatibleStateSchema, err)
-		}
-		if !ok {
-			return genesis.Config, storedHash, fmt.Errorf("%w: database has no state schema marker; rebuild it for schema v%d", ErrIncompatibleStateSchema, rawdb.CurrentStateSchemaVersion)
-		}
-		if version != rawdb.CurrentStateSchemaVersion {
-			return genesis.Config, storedHash, fmt.Errorf("%w: database schema v%d, binary requires v%d", ErrIncompatibleStateSchema, version, rawdb.CurrentStateSchemaVersion)
-		}
 
 		// Compute the expected hash on a scratch store. genesisBlockAndStateRoot
 		// commits the genesis state as part of building the block, so running it
@@ -112,9 +103,6 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 }
 
 func writeGenesisMaterializedState(db ethdb.KeyValueStore, genesis *params.Genesis, block *types.Block, stateRoot tcommon.Hash, dp *state.DynamicProperties) error {
-	if err := rawdb.WriteStateSchemaVersion(db, rawdb.CurrentStateSchemaVersion); err != nil {
-		return fmt.Errorf("write state schema version: %w", err)
-	}
 	if err := rawdb.WriteBlock(db, block); err != nil {
 		return fmt.Errorf("write genesis block: %w", err)
 	}

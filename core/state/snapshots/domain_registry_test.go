@@ -2,10 +2,13 @@ package snapshots
 
 import (
 	"bytes"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -184,6 +187,53 @@ func TestDomainRegistryHotLatestReaders(t *testing.T) {
 	if gotCode, ok, err = codeCfg.ReadHotCode(db, codeHash); err != nil || ok || len(gotCode) != 0 {
 		t.Fatalf("code after registry delete = %x ok=%v err=%v", gotCode, ok, err)
 	}
+}
+
+func TestDomainRegistryHotCodeSurfacesStorageErrors(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	code := []byte{0x60, 0x02, 0x00}
+	codeHash := common.Keccak256(code)
+	if err := rawdb.WriteStateCode(db, codeHash, code); err != nil {
+		t.Fatal(err)
+	}
+	codeCfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetCode)
+	if !ok || codeCfg.ReadHotCode == nil {
+		t.Fatalf("code hot reader missing: %+v", codeCfg)
+	}
+
+	if got, ok, err := codeCfg.ReadHotCode(failingHotCodeReader{
+		KeyValueStore: db,
+		getErr:        errors.New("get boom"),
+	}, codeHash); err == nil || ok || got != nil || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("hot code get error = %x ok=%v err=%v, want get error", got, ok, err)
+	}
+	if got, ok, err := codeCfg.ReadHotCode(failingHotCodeReader{
+		KeyValueStore: db,
+		getErr:        errors.New("get boom"),
+		hasErr:        errors.New("has boom"),
+	}, codeHash); err == nil || ok || got != nil || !strings.Contains(err.Error(), "presence after get error") {
+		t.Fatalf("hot code presence error = %x ok=%v err=%v, want presence error", got, ok, err)
+	}
+}
+
+type failingHotCodeReader struct {
+	ethdb.KeyValueStore
+	getErr error
+	hasErr error
+}
+
+func (r failingHotCodeReader) Has(key []byte) (bool, error) {
+	if r.hasErr != nil {
+		return false, r.hasErr
+	}
+	return r.KeyValueStore.Has(key)
+}
+
+func (r failingHotCodeReader) Get(key []byte) ([]byte, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	return r.KeyValueStore.Get(key)
 }
 
 func TestDomainRegistryHotCommitmentLifecycle(t *testing.T) {

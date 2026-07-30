@@ -675,6 +675,59 @@ func TestPayEnergyBill_OriginSplit_OriginCappedByStake(t *testing.T) {
 	}
 }
 
+func TestPayEnergyBill_OriginSplit_UsesVMOriginEnergyLeft(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x13}
+	origin := tcommon.Address{0x41, 0xBB, 0x13}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+	ctx.DynProps.SetAllowTvmFreeze(true)
+
+	const (
+		totalEnergy       = int64(454_994)
+		vmOriginLeft      = int64(371_124)
+		recomputedOrigin  = vmOriginLeft - 1
+		expectedCallerFee = (totalEnergy - vmOriginLeft) * 100
+	)
+
+	installOriginContract(t, ctx, contractAddr, origin, 0, 1_000_000_000)
+
+	ctx.State.CreateAccount(origin, corepb.AccountType_Normal)
+	originAcct := ctx.State.GetAccount(origin)
+	originAcct.AddFrozenEnergy(params.TRXPrecision, ctx.BlockTime+10_000_000)
+	ctx.DynProps.SetTotalEnergyWeight(1)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(recomputedOrigin)
+
+	if got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime()); got != recomputedOrigin {
+		t.Fatalf("test setup recomputed origin energy left = %d, want %d", got, recomputedOrigin)
+	}
+
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.AddBalance(caller, 100_000_000)
+
+	result := &Result{
+		EnergyUsageTotal:    totalEnergy,
+		ContractRet:         1,
+		OriginEnergyLeft:    vmOriginLeft,
+		HasOriginEnergyLeft: true,
+	}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+
+	if result.OriginEnergyUsage != vmOriginLeft {
+		t.Fatalf("OriginEnergyUsage = %d, want VM-cached left %d (not recomputed %d)",
+			result.OriginEnergyUsage, vmOriginLeft, recomputedOrigin)
+	}
+	if result.EnergyFee != expectedCallerFee {
+		t.Fatalf("EnergyFee = %d, want %d", result.EnergyFee, expectedCallerFee)
+	}
+	if got := ctx.State.GetEnergyUsage(origin); got != vmOriginLeft {
+		t.Fatalf("origin energy_usage = %d, want %d", got, vmOriginLeft)
+	}
+}
+
 // TestPayEnergyBill_OriginSplit_PercentZero: when the contract's
 // ConsumeUserResourcePercent is 0, java bills the origin for up to
 // origin_energy_limit/frozen-energy and spills the rest to the caller.

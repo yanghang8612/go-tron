@@ -1,0 +1,33 @@
+{
+  "name": "eth_getTransactionByBlockHashAndIndex",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_getTransactionByBlockHashAndIndex",
+    "params": [
+      "0x0000000000000064524e207f2a2ceae5c1d814fb378a66cd03d3bb00945a573a",
+      "0x0"
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": {
+      "blockHash": "0x0000000000000064524e207f2a2ceae5c1d814fb378a66cd03d3bb00945a573a",
+      "blockNumber": "0x64",
+      "from": "0x1020304050607080900010203040506070809000",
+      "gas": "0x3b9aca00",
+      "gasPrice": "0x1",
+      "hash": "0x94b5700b3a7b2ce5c44c97825508194d88dcb107ba073414bca708780a920f09",
+      "input": "0x70a08231",
+      "nonce": "0x0",
+      "r": "0x0",
+      "s": "0x0",
+      "to": "0xa0b0c0d0e0f000102030405060708090a0b0c0d0",
+      "transactionIndex": "0x0",
+      "type": "0x0",
+      "v": "0x0",
+      "value": "0x10"
+    }
+  }
+}

@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -147,6 +148,27 @@ func TestStorageRowKeyFromFlatLatestReturnsReaderError(t *testing.T) {
 	reader := &storageKeyLatestReader{err: wantErr}
 	if _, err := storageRowKeyFromFlatLatest(reader, testAddr(0x92), 1, tcommon.Hash{0x01}); !errors.Is(err, wantErr) {
 		t.Fatalf("storage row key error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestStorageRowKeyFromFlatLatestSurfacesCorruptMetadata(t *testing.T) {
+	addr := testAddr(0x93)
+	reader := &storageKeyLatestReader{
+		t:          t,
+		owner:      addr,
+		generation: 7,
+		value:      []byte{0x80},
+	}
+
+	got, err := storageRowKeyFromFlatLatest(reader, addr, 7, tcommon.Hash{0x01})
+	if err == nil {
+		t.Fatal("storage row key corrupt metadata error = nil")
+	}
+	if got != (tcommon.Hash{}) {
+		t.Fatalf("storage row key corrupt metadata = %x, want zero", got)
+	}
+	if !strings.Contains(err.Error(), "decode contract metadata for storage key") || !strings.Contains(err.Error(), "generation 7") {
+		t.Fatalf("storage row key corrupt metadata error = %v, want metadata decode context", err)
 	}
 }
 

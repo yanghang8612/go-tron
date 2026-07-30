@@ -15,8 +15,8 @@
 // can be used to denial-of-service the process via repeated CPU profiles or
 // to leak heap contents; keeping them on a separate, default-localhost port
 // makes the exposure footprint a deliberate operator choice. (2) Future
-// surface: /debug/metrics (go-ethereum-style Timer/Meter dump) will land
-// here too; bundling them keeps the diagnostic surface in one place.
+// surface: /debug/metrics exposes the go-ethereum-style Timer/Meter dump here
+// too; bundling them keeps the diagnostic surface in one place.
 package debugapi
 
 import (
@@ -93,6 +93,11 @@ func NewServer(addr string) *Server {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		runtimepprof.Lookup("goroutine").WriteTo(w, 2)
 	})
+	mux.HandleFunc("/debug/metrics", metricsHandler)
+	// Keep metrics under the protected pprof gateway prefix as well. The
+	// deployment's Nginx configuration exposes /debug/pprof/ but not the
+	// standalone /debug/metrics path.
+	mux.HandleFunc("/debug/pprof/metrics", metricsHandler)
 
 	// /debug/state-hotspots: per-(domain,key) write activity since process
 	// start. Supports query params:
@@ -105,18 +110,6 @@ func NewServer(addr string) *Server {
 	// puts, deletes, putBytes } ] }
 	mux.HandleFunc("/debug/state-hotspots", stateHotspotsHandler)
 
-	// /debug/metrics exposes snapshots of the process metrics registry. Pebble
-	// already updates cache/filter/compaction gauges every three seconds; making
-	// them reachable here lets live sync sampling distinguish block-cache misses,
-	// table-cache misses, Bloom-filter effectiveness, and compaction debt without
-	// enabling any additional hot-path instrumentation. Use ?prefix=cache/ (or
-	// another metric-name prefix) to keep the response focused.
-	mux.HandleFunc("/debug/metrics", metricsHandler)
-	// The deployment gateway already proxies /debug/pprof/ as one protected
-	// diagnostic prefix. Keep an alias below it so operators can use metrics
-	// immediately without adding another externally reachable Nginx location.
-	mux.HandleFunc("/debug/pprof/metrics", metricsHandler)
-
 	return &Server{
 		httpServer: &http.Server{
 			Addr:    addr,
@@ -124,30 +117,6 @@ func NewServer(addr string) *Server {
 		},
 		addr: addr,
 	}
-}
-
-func metricsHandler(w http.ResponseWriter, r *http.Request) {
-	prefix := r.URL.Query().Get("prefix")
-	all := metrics.DefaultRegistry.GetAll()
-	selected := make(map[string]map[string]interface{}, len(all))
-	for name, values := range all {
-		if prefix == "" || strings.HasPrefix(name, prefix) {
-			selected[name] = values
-		}
-	}
-	out := struct {
-		Prefix  string                            `json:"prefix,omitempty"`
-		Count   int                               `json:"count"`
-		Metrics map[string]map[string]interface{} `json:"metrics"`
-	}{
-		Prefix:  prefix,
-		Count:   len(selected),
-		Metrics: selected,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(out)
 }
 
 // Start begins listening. Implements node.Lifecycle.
@@ -178,6 +147,34 @@ func parseIntDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// metricsHandler serves /debug/metrics as an operator-facing JSON snapshot of
+// the process-wide go-ethereum metrics registry. Use ?prefix=ancient/repair/
+// to narrow the dump for alert checks.
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	all := metrics.DefaultRegistry.GetAll()
+	selected := make(map[string]map[string]interface{}, len(all))
+	for name, values := range all {
+		if prefix == "" || strings.HasPrefix(name, prefix) {
+			selected[name] = values
+		}
+	}
+	out := struct {
+		Prefix  string                            `json:"prefix,omitempty"`
+		Count   int                               `json:"count"`
+		Metrics map[string]map[string]interface{} `json:"metrics"`
+	}{
+		Prefix:  prefix,
+		Count:   len(selected),
+		Metrics: selected,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(out)
 }
 
 // stateHotspotsHandler serves /debug/state-hotspots. Uses the process

@@ -1,0 +1,3172 @@
+package main
+
+import (
+	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
+	corepkg "github.com/tronprotocol/go-tron/core"
+	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	corestate "github.com/tronprotocol/go-tron/core/state"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"github.com/urfave/cli/v2"
+	"google.golang.org/protobuf/types/known/anypb"
+)
+
+func TestDBRebuildTxIndexesCmdRebuildsHotIndexes(t *testing.T) {
+	dataDir := t.TempDir()
+	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, false)
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+		"--db.etl.tempdir", filepath.Join(t.TempDir(), "etl"),
+		"--db.etl.buffer", "1",
+	})
+	if err := dbRebuildTxIndexesCmd(ctx); err != nil {
+		t.Fatalf("dbRebuildTxIndexesCmd: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble: %v", err)
+	}
+	defer reopened.Close()
+	chainDB := rawdb.NewChainDB(reopened, rawdb.NoopAncient{})
+	txID := txInfos[1].Id
+	if got := rawdb.ReadTransactionIndex(chainDB, txID); got == nil || *got != 1 {
+		t.Fatalf("ReadTransactionIndex = %v, want 1", got)
+	}
+	if got := rawdb.ReadTransactionInfo(chainDB, txID); got == nil || got.Fee != txInfos[1].Fee {
+		t.Fatalf("ReadTransactionInfo = %+v, want fee %d", got, txInfos[1].Fee)
+	}
+}
+
+func TestDBRebuildTxIndexesCmdDefaultsToHead(t *testing.T) {
+	dataDir := t.TempDir()
+	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, true)
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+	})
+	if err := dbRebuildTxIndexesCmd(ctx); err != nil {
+		t.Fatalf("dbRebuildTxIndexesCmd default head: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble: %v", err)
+	}
+	defer reopened.Close()
+	chainDB := rawdb.NewChainDB(reopened, rawdb.NoopAncient{})
+	txID := txInfos[2].Id
+	if got := rawdb.ReadTransactionIndex(chainDB, txID); got == nil || *got != 2 {
+		t.Fatalf("ReadTransactionIndex default head = %v, want 2", got)
+	}
+	if got := rawdb.ReadTransactionInfo(chainDB, txID); got == nil || got.Fee != txInfos[2].Fee {
+		t.Fatalf("ReadTransactionInfo default head = %+v, want fee %d", got, txInfos[2].Fee)
+	}
+}
+
+func TestDBRebuildToBlockSurfacesHeadLookupErrors(t *testing.T) {
+	chainDB := rawdb.NewMemoryChainDB()
+	head := common.Hash{0x42}
+	rawdb.WriteHeadBlockHash(chainDB, head)
+	chainDB.SetChainIndexReader(dbRebuildErrChainIndex{err: fmt.Errorf("cold chain index corrupt")})
+
+	ctx := makeDBTestContext(t, []string{"--db.from-block", "1"})
+	_, err := dbRebuildToBlock(ctx, chainDB)
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("dbRebuildToBlock err = %v, want cold chain index error", err)
+	}
+}
+
+func TestDBBalanceTraceReplayHeadBlockNumberSurfacesLookupErrors(t *testing.T) {
+	chainDB := rawdb.NewMemoryChainDB()
+	head := common.Hash{0x43}
+	chainDB.SetChainIndexReader(dbRebuildErrChainIndex{err: fmt.Errorf("cold chain index corrupt")})
+
+	_, err := dbBalanceTraceReplayHeadBlockNumber(chainDB, head)
+	if err == nil || !strings.Contains(err.Error(), "cold chain index corrupt") {
+		t.Fatalf("dbBalanceTraceReplayHeadBlockNumber err = %v, want cold chain index error", err)
+	}
+	if !strings.Contains(err.Error(), "balance trace replay snapshot seed: existing replay head") {
+		t.Fatalf("dbBalanceTraceReplayHeadBlockNumber err = %v, want replay seed context", err)
+	}
+}
+
+func TestDBRebuildSectionBloomsCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, false)
+	txInfos[0].Log = []*corepb.TransactionInfo_Log{{
+		Address: []byte{0x11, 0x22, 0x33, 0x44},
+		Topics: [][]byte{
+			{0xaa, 0xbb, 0xcc},
+			{0x01, 0x02, 0x03, 0x04},
+		},
+	}}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, txInfos[:2]); err != nil {
+		t.Fatalf("rewrite block1 tx infos with logs: %v", err)
+	}
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+		"--db.etl.tempdir", filepath.Join(t.TempDir(), "etl"),
+		"--db.etl.buffer", "1",
+	})
+	if err := dbRebuildSectionBloomsCmd(ctx); err != nil {
+		t.Fatalf("dbRebuildSectionBloomsCmd: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble: %v", err)
+	}
+	defer reopened.Close()
+	rows := 0
+	for bitIndex := uint64(0); bitIndex < rawdb.SectionBloomBitSize; bitIndex++ {
+		bitset, ok, err := rawdb.ReadSectionBloomBitSet(reopened, 0, bitIndex)
+		if err != nil {
+			t.Fatalf("ReadSectionBloomBitSet %d: %v", bitIndex, err)
+		}
+		if !ok {
+			continue
+		}
+		rows++
+		if !dbTestSectionBloomBitSetHas(bitset, 1) {
+			t.Fatalf("section bloom row %d does not include block offset 1: %x", bitIndex, bitset)
+		}
+	}
+	if rows == 0 {
+		t.Fatal("section bloom rebuild wrote no rows")
+	}
+}
+
+func TestDBRebuildAccountTracesCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, false)
+	chainDB := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	block1 := rawdb.ReadBlock(chainDB, 1)
+	block2 := rawdb.ReadBlock(chainDB, 2)
+	if block1 == nil || block2 == nil {
+		t.Fatal("seeded blocks missing")
+	}
+	a := dbRebuildTraceAddress(0xa0)
+	b := dbRebuildTraceAddress(0xb0)
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: dbRebuildBlockBalanceID(block1),
+		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{
+			{
+				TransactionIdentifier: append([]byte(nil), txInfos[0].Id...),
+				Operation: []*contractpb.TransactionBalanceTrace_Operation{
+					dbRebuildBalanceOp(0, a, 100),
+					dbRebuildBalanceOp(1, b, 50),
+				},
+				Type:   "TransferContract",
+				Status: "SUCCESS",
+			},
+			{
+				TransactionIdentifier: append([]byte(nil), txInfos[1].Id...),
+				Operation: []*contractpb.TransactionBalanceTrace_Operation{
+					dbRebuildBalanceOp(0, a, -10),
+				},
+				Type:   "TransferContract",
+				Status: "SUCCESS",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 2, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: dbRebuildBlockBalanceID(block2),
+		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{
+			{
+				TransactionIdentifier: append([]byte(nil), txInfos[2].Id...),
+				Operation: []*contractpb.TransactionBalanceTrace_Operation{
+					dbRebuildBalanceOp(0, a, 3),
+				},
+				Type:   "TransferContract",
+				Status: "SUCCESS",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block2: %v", err)
+	}
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+		"--db.etl.tempdir", filepath.Join(t.TempDir(), "etl"),
+		"--db.etl.buffer", "1",
+	})
+	if err := dbRebuildAccountTracesCmd(ctx); err != nil {
+		t.Fatalf("dbRebuildAccountTracesCmd: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble: %v", err)
+	}
+	defer reopened.Close()
+	for _, tc := range []struct {
+		addr  []byte
+		block int64
+		want  int64
+	}{
+		{a, 1, 90},
+		{b, 1, 50},
+		{a, 2, 93},
+	} {
+		got, ok := rawdb.ReadAccountTrace(reopened, tc.addr, tc.block)
+		if !ok || got != tc.want {
+			t.Fatalf("ReadAccountTrace addr=%x block=%d = %d/%v, want %d/true", tc.addr, tc.block, got, ok, tc.want)
+		}
+	}
+}
+
+func TestDBAuditBalanceTracesCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, false)
+	chainDB := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	block1 := rawdb.ReadBlock(chainDB, 1)
+	block2 := rawdb.ReadBlock(chainDB, 2)
+	if block1 == nil || block2 == nil {
+		t.Fatal("seeded blocks missing")
+	}
+	addr := dbRebuildTraceAddress(0xc0)
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: dbRebuildBlockBalanceID(block1),
+		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{{
+			TransactionIdentifier: append([]byte(nil), txInfos[0].Id...),
+			Operation: []*contractpb.TransactionBalanceTrace_Operation{
+				dbRebuildBalanceOp(0, addr, 1),
+			},
+			Type:   "TransferContract",
+			Status: "SUCCESS",
+		}},
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, addr, 1, 1); err != nil {
+		t.Fatalf("WriteAccountTrace block1: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 2, &contractpb.BlockBalanceTrace{
+		BlockIdentifier:         dbRebuildBlockBalanceID(block2),
+		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{},
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block2: %v", err)
+	}
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+	})
+	if err := dbAuditBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("dbAuditBalanceTracesCmd: %v", err)
+	}
+}
+
+func TestDBAuditBalanceTracesCmdRejectsIncompleteCoverage(t *testing.T) {
+	dataDir := t.TempDir()
+	db, _ := seedDBRebuildTxIndexDatadir(t, dataDir, false)
+	chainDB := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	block1 := rawdb.ReadBlock(chainDB, 1)
+	if block1 == nil {
+		t.Fatal("seeded block1 missing")
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: dbRebuildBlockBalanceID(block1),
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
+	}
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+	})
+	err := dbAuditBalanceTracesCmd(ctx)
+	if err == nil || !strings.Contains(err.Error(), "coverage incomplete") {
+		t.Fatalf("dbAuditBalanceTracesCmd error = %v, want coverage incomplete", err)
+	}
+}
+
+func TestDBBackfillBalanceTracesCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	genesisPath, sender, receiver, block1 := seedDBBackfillBalanceTraceDatadir(t, dataDir)
+	replayDir := filepath.Join(t.TempDir(), "replay")
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--genesis", genesisPath,
+		"--db.from-block", "1",
+		"--db.to-block", "1",
+		"--db.replay.dir", replayDir,
+		"--db.etl.tempdir", t.TempDir(),
+		"--db.etl.buffer", "1",
+	})
+	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("dbBackfillBalanceTracesCmd: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble: %v", err)
+	}
+	trace := rawdb.ReadBlockBalanceTrace(reopened, 1)
+	if trace == nil {
+		t.Fatal("BlockBalanceTrace missing after backfill")
+	}
+	if trace.GetBlockIdentifier().GetNumber() != 1 || string(trace.GetBlockIdentifier().GetHash()) != string(block1.Hash().Bytes()) {
+		t.Fatalf("trace id = %+v, want block 1 %x", trace.GetBlockIdentifier(), block1.Hash())
+	}
+	if _, ok := rawdb.ReadAccountTrace(reopened, sender.Bytes(), 1); !ok {
+		t.Fatal("sender AccountTrace missing after backfill")
+	}
+	if _, ok := rawdb.ReadAccountTrace(reopened, receiver.Bytes(), 1); !ok {
+		t.Fatal("receiver AccountTrace missing after backfill")
+	}
+	if err := rawdb.DeleteBlockBalanceTrace(reopened, 1); err != nil {
+		t.Fatalf("DeleteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.DeleteAccountTrace(reopened, sender.Bytes(), 1); err != nil {
+		t.Fatalf("DeleteAccountTrace sender: %v", err)
+	}
+	if err := rawdb.DeleteAccountTrace(reopened, receiver.Bytes(), 1); err != nil {
+		t.Fatalf("DeleteAccountTrace receiver: %v", err)
+	}
+	reopened.Close()
+
+	ctx = makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--genesis", genesisPath,
+		"--db.from-block", "1",
+		"--db.to-block", "1",
+		"--db.replay.dir", replayDir,
+		"--db.etl.tempdir", t.TempDir(),
+		"--db.etl.buffer", "1",
+	})
+	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("resume dbBackfillBalanceTracesCmd: %v", err)
+	}
+	reopened, err = rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble after resume: %v", err)
+	}
+	defer reopened.Close()
+	if trace := rawdb.ReadBlockBalanceTrace(reopened, 1); trace == nil {
+		t.Fatal("BlockBalanceTrace missing after replay-dir resume")
+	}
+}
+
+func TestDBBackfillBalanceTracesCmdSeedsReplayFromSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	genesisPath, sender, receiver, block1 := seedDBBackfillBalanceTraceDatadir(t, dataDir)
+	snapshotDir := filepath.Join(t.TempDir(), "snapshot")
+	replayDir := filepath.Join(t.TempDir(), "replay")
+
+	sourceDB, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open source pebble: %v", err)
+	}
+	if err := rawdb.WriteStateTxRange(sourceDB, block1.Number(), block1.Hash(), 1, 1); err != nil {
+		t.Fatalf("WriteStateTxRange block1: %v", err)
+	}
+	trustedKey := writeDBBackfillReplaySeedSnapshot(t, sourceDB, genesisPath, snapshotDir, block1)
+
+	genesis, err := loadGenesisFile(genesisPath)
+	if err != nil {
+		t.Fatalf("loadGenesisFile: %v", err)
+	}
+	bc, err := corepkg.NewBlockChain(sourceDB, corestate.NewDatabase(rawdb.WrapKeyValueStore(sourceDB)), genesis.Config)
+	if err != nil {
+		t.Fatalf("NewBlockChain source: %v", err)
+	}
+	block2 := dbBackfillTransferBlock(t, 2, 6000, block1.Hash(), sender, receiver, 7_000_000)
+	if err := bc.InsertBlock(block2); err != nil {
+		t.Fatalf("InsertBlock block2: %v", err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(sourceDB, 2); got != nil {
+		t.Fatalf("pre-backfill BlockBalanceTrace 2 = %+v, want nil", got)
+	}
+	if err := bc.Close(); err != nil {
+		t.Fatalf("close source chain: %v", err)
+	}
+	sourceDB.Close()
+
+	rejectCtx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--genesis", genesisPath,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+		"--db.replay.dir", filepath.Join(t.TempDir(), "reject-replay"),
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.trusted-key", trustedKey,
+	})
+	if err := dbBackfillBalanceTracesCmd(rejectCtx); err == nil || !strings.Contains(err.Error(), "can only backfill from block 2 or later") {
+		t.Fatalf("dbBackfillBalanceTracesCmd boundary error = %v, want from-block rejection", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--genesis", genesisPath,
+		"--db.from-block", "2",
+		"--db.to-block", "2",
+		"--db.replay.dir", replayDir,
+		"--db.etl.tempdir", t.TempDir(),
+		"--db.etl.buffer", "1",
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.trusted-key", trustedKey,
+	})
+	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("dbBackfillBalanceTracesCmd snapshot seed: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen target pebble: %v", err)
+	}
+	defer reopened.Close()
+	if got := rawdb.ReadBlockBalanceTrace(reopened, 1); got != nil {
+		t.Fatalf("target BlockBalanceTrace 1 = %+v, want untouched", got)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(reopened, 2); got == nil {
+		t.Fatal("target BlockBalanceTrace 2 missing after snapshot-seeded backfill")
+	}
+
+	replayDB, err := rawdb.NewPebbleDB(replayDir, 256, 500)
+	if err != nil {
+		t.Fatalf("open replay pebble: %v", err)
+	}
+	defer replayDB.Close()
+	if got := rawdb.ReadBlockBalanceTrace(replayDB, 1); got != nil {
+		t.Fatalf("replay BlockBalanceTrace 1 = %+v, want no genesis-prefix replay", got)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(replayDB, 2); got == nil {
+		t.Fatal("replay BlockBalanceTrace 2 missing after replay from snapshot boundary")
+	}
+}
+
+func TestDBCopyReplayRecentChainWindowRejectsCorruptSourceStateRoot(t *testing.T) {
+	sourceKV := rawdb.NewMemoryDatabase()
+	block0, _ := dbRebuildTxIndexBlock(t, 0, 0)
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteBlock(sourceKV, block0); err != nil {
+		t.Fatalf("WriteBlock block0: %v", err)
+	}
+	if err := rawdb.WriteBlock(sourceKV, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	source := rawdb.NewChainDB(sourceKV, &dbCmdStaticAncient{
+		kind:   rawdb.AncientStateRootsTable,
+		number: 1,
+		data:   []byte{0x01},
+	})
+	target := rawdb.NewMemoryDatabase()
+
+	copied, err := dbCopyReplayRecentChainWindow(source, target, 1)
+	if err == nil || !strings.Contains(err.Error(), "read block 1 state root") {
+		t.Fatalf("dbCopyReplayRecentChainWindow error = %v, copied=%d, want strict state-root error", err, copied)
+	}
+	if copied != 1 {
+		t.Fatalf("copied = %d, want block 0 copied before corrupt block 1 root", copied)
+	}
+	if got := rawdb.ReadBlock(rawdb.NewChainDB(target, rawdb.NoopAncient{}), 1); got != nil {
+		t.Fatalf("target block 1 = %+v, want absent after corrupt source root", got)
+	}
+	if got := rawdb.ReadBlockStateRoot(rawdb.NewChainDB(target, rawdb.NoopAncient{}), block1.Hash()); got != (common.Hash{}) {
+		t.Fatalf("target block 1 state root = %x, want absent after corrupt source root", got)
+	}
+}
+
+func TestDBFreezerStatusCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 5)
+	if _, err := f.TruncateTail(3); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerStatusCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbFreezerStatusCmd: %v", err)
+	}
+	for _, want := range []string{
+		"Freezer status:",
+		"readonly=true",
+		"head=5",
+		"tail=3",
+		"repairApplied=false",
+		"repairRecordedAt=-",
+		"name=" + rawdb.AncientBlocksTable,
+		"name=" + rawdb.AncientTxInfosTable,
+		"name=" + rawdb.AncientStateRootsTable,
+		"hiddenTail=3",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer status output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertsCmdOK(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbFreezerAlertsCmd: %v", err)
+	}
+	for _, want := range []string{
+		"Freezer alerts:",
+		"status=ok",
+		"issues=0",
+		"head=5",
+		"tail=0",
+		"chainFreezerStage=4",
+		"repairApplied=false",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertsCmdRejectsStageAheadOfHead(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 2)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, 4, common.Hash{0x44}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "chain-freezer-stage-ahead") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want stage-ahead alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"severity=critical kind=chain-freezer-stage-ahead",
+		"chainFreezerStage=4",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertsCmdRejectsUnboundChainFreezerStage(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "chain-freezer-stage-unbound") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want chain-freezer-stage-unbound alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"severity=critical kind=chain-freezer-stage-unbound",
+		"chainFreezerStage=4",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertsCmdRejectsMismatchedChainFreezerStageHash(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "chain-freezer-stage-hash-mismatch") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want chain-freezer-stage-hash-mismatch alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"severity=critical kind=chain-freezer-stage-hash-mismatch",
+		"chainFreezerStage=4",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertsCmdRejectsHiddenTailWithoutTailPruneStage(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 5)
+	if _, err := f.TruncateTail(3); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, 4, common.Hash{0x44}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "tail-prune-stage-missing") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want tail-prune-stage-missing alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"tail=3",
+		"severity=critical kind=tail-prune-stage-missing",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertsCmdRejectsUnboundTailPruneStage(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 5)
+	if _, err := f.TruncateTail(3); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, 4, common.Hash{0x44}); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainFreezerTailPrune, 2); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotChainFreezerTailPrune: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "tail-prune-stage-unbound") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want tail-prune-stage-unbound alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"tail=3",
+		"severity=critical kind=tail-prune-stage-unbound",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertsCmdRejectsTailPruneStageWithoutColdProof(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if _, err := f.TruncateTail(3); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block2, _ := dbRebuildTxIndexBlock(t, 2, 0)
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotChainFreezerTailPrune, block2.Number(), block2.Hash()); err != nil {
+		t.Fatalf("WriteStageProgressWithHash SnapshotChainFreezerTailPrune: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "tail-prune-stage-missing-canonical") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want tail-prune-stage-missing-canonical alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"tail=3",
+		"severity=critical kind=tail-prune-stage-missing-canonical",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertIssuesDetectRepairAndTailInvariants(t *testing.T) {
+	stats := rawdbfreezer.Stats{
+		Head: 5,
+		Tail: 2,
+		Repair: rawdbfreezer.RepairStats{
+			Applied:    true,
+			TargetHead: 4,
+			TargetTail: 1,
+			RecordedAt: "2026-06-12T00:00:00Z",
+			Tables: []rawdbfreezer.TableRepairStats{
+				{Name: rawdb.AncientBlocksTable, HeadBefore: 6, HeadAfter: 4},
+			},
+		},
+		Tables: []rawdbfreezer.TableStats{
+			{Name: rawdb.AncientBlocksTable, Head: 5, PhysicalTail: 3, HiddenTail: 2, Prunable: true},
+			{Name: "legacy", Head: 5, PhysicalTail: 0, HiddenTail: 1, Prunable: false},
+		},
+	}
+	issues := dbFreezerAlertIssues(stats, rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 0, HasBlockHash: true, BlockHash: common.Hash{0x44}}, true, rawdb.StageProgress{}, false)
+	for _, want := range []string{
+		"repair-applied",
+		"chain-freezer-stage-behind-tail",
+		"tail-prune-stage-missing",
+		"table-physical-tail-ahead",
+		"non-prunable-hidden-tail",
+	} {
+		if !dbFreezerAlertIssueKindsContain(issues, want) {
+			t.Fatalf("issues missing %q: %+v", want, issues)
+		}
+	}
+	if !dbFreezerAlertHasCritical(issues) {
+		t.Fatalf("issues have no critical severity: %+v", issues)
+	}
+}
+
+func TestDBFreezerAlertIssuesDetectChainFreezerStageInvariants(t *testing.T) {
+	stats := rawdbfreezer.Stats{Head: 5, Tail: 2}
+	tests := []struct {
+		name     string
+		stage    rawdb.StageProgress
+		hasStage bool
+		want     string
+	}{
+		{name: "missing", want: "chain-freezer-stage-missing"},
+		{
+			name:     "unbound",
+			stage:    rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 4},
+			hasStage: true,
+			want:     "chain-freezer-stage-unbound",
+		},
+		{
+			name:     "behind-tail",
+			stage:    rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 1, HasBlockHash: true, BlockHash: common.Hash{0x44}},
+			hasStage: true,
+			want:     "chain-freezer-stage-behind-tail",
+		},
+		{
+			name:     "ahead",
+			stage:    rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 5, HasBlockHash: true, BlockHash: common.Hash{0x44}},
+			hasStage: true,
+			want:     "chain-freezer-stage-ahead",
+		},
+		{
+			name:     "exact",
+			stage:    rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 4, HasBlockHash: true, BlockHash: common.Hash{0x44}},
+			hasStage: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issues := dbFreezerAlertIssues(stats, tt.stage, tt.hasStage, rawdb.StageProgress{}, false)
+			if tt.want == "" {
+				for _, issue := range issues {
+					if strings.HasPrefix(issue.kind, "chain-freezer-stage-") {
+						t.Fatalf("unexpected chain-freezer issue in %+v", issues)
+					}
+				}
+				return
+			}
+			if !dbFreezerAlertIssueKindsContain(issues, tt.want) {
+				t.Fatalf("issues missing %q: %+v", tt.want, issues)
+			}
+		})
+	}
+}
+
+func TestDBFreezerAlertIssuesDetectTailPruneStageInvariants(t *testing.T) {
+	stats := rawdbfreezer.Stats{Head: 10, Tail: 4}
+	tests := []struct {
+		name     string
+		stage    uint64
+		hasStage bool
+		bound    bool
+		want     string
+	}{
+		{name: "missing", want: "tail-prune-stage-missing"},
+		{name: "unbound", stage: 3, hasStage: true, want: "tail-prune-stage-unbound"},
+		{name: "behind", stage: 2, hasStage: true, bound: true, want: "tail-prune-stage-behind-tail"},
+		{name: "ahead", stage: 4, hasStage: true, bound: true, want: "tail-prune-stage-ahead-of-tail"},
+		{name: "exact", stage: 3, hasStage: true, bound: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			progress := rawdb.StageProgress{Stage: rawdb.StageSnapshotChainFreezerTailPrune, BlockNum: tt.stage, HasBlockHash: tt.bound}
+			if tt.bound {
+				progress.BlockHash = common.Hash{0x33}
+			}
+			issues := dbFreezerAlertIssues(stats, rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 9, HasBlockHash: true, BlockHash: common.Hash{0x44}}, true, progress, tt.hasStage)
+			if tt.want == "" {
+				for _, issue := range issues {
+					if strings.HasPrefix(issue.kind, "tail-prune-stage-") {
+						t.Fatalf("unexpected tail-prune issue in %+v", issues)
+					}
+				}
+				return
+			}
+			if !dbFreezerAlertIssueKindsContain(issues, tt.want) {
+				t.Fatalf("issues missing %q: %+v", tt.want, issues)
+			}
+		})
+	}
+
+	issues := dbFreezerAlertIssues(rawdbfreezer.Stats{Head: 10, Tail: 0}, rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 9, HasBlockHash: true, BlockHash: common.Hash{0x44}}, true, rawdb.StageProgress{Stage: rawdb.StageSnapshotChainFreezerTailPrune}, true)
+	if !dbFreezerAlertIssueKindsContain(issues, "tail-prune-stage-without-hidden-tail") {
+		t.Fatalf("tail=0 issues missing tail-prune-stage-without-hidden-tail: %+v", issues)
+	}
+}
+
+func TestDBStorageAlertsCmdOK(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbStorageAlertsCmd: %v", err)
+	}
+	for _, want := range []string{
+		"Storage alerts:",
+		"status=ok",
+		"freezerStatus=ok",
+		"freezerIssues=0",
+		"stageStatus=ok",
+		"stageIssues=0",
+		"stagePipelineComplete=false",
+		"stagePipelinePending=9",
+		"stagePipelineIssues=0",
+		fmt.Sprintf("stagePipelineNext=%s", rawdb.StageTxLookup),
+		"stagePipelineNextStatus=missing",
+		"stagePipelineNextTarget=4",
+		fmt.Sprintf("stagePipelineNextUpstream=%s", rawdb.StageFinish),
+		"stagePipelineNextCurrent=0",
+		"modeStatus=ok",
+		"modeIssues=0",
+		"pruneMode=unknown",
+		"pruneModePersisted=false",
+		"signedColdPrune=false",
+		"coldFreezerToBlock=4",
+		"derivedIndexToBlock=-1",
+		"chainLookupPruneToBlock=-1",
+		"tailPrunedThroughBlock=-1",
+		"balanceTracePruneToBlock=-1",
+		"sectionBloomPruneToBlock=-1",
+		"snapshotStatus=ok",
+		"snapshotIssues=0",
+		"retiredSegments=0",
+		"retiredFiles=0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("storage alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageChainFreezer,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageChainFreezer,
+				BlockNum: 20,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 17,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 18,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotBalanceTracePrune,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBalanceTracePrune,
+				BlockNum: 16,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotSectionBloomPrune,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotSectionBloomPrune,
+				BlockNum: 14,
+			},
+		},
+	}
+	got := dbStoragePruneEvidenceFromStageRows(rows)
+	if !got.SignedColdPrune {
+		t.Fatalf("SignedColdPrune = false, want true")
+	}
+	if got.ColdFreezerToBlock != 20 ||
+		got.DerivedIndexToBlock != 17 ||
+		got.ChainLookupPruneToBlock != 18 ||
+		got.TailPrunedThroughBlock != 12 ||
+		got.BalanceTracePruneToBlock != 16 ||
+		got.SectionBloomPruneToBlock != 14 {
+		t.Fatalf("prune evidence = %+v, want exported stage boundaries", got)
+	}
+
+	got = dbStoragePruneEvidenceFromStageRows(nil)
+	if got.SignedColdPrune ||
+		got.ColdFreezerToBlock != -1 ||
+		got.DerivedIndexToBlock != -1 ||
+		got.ChainLookupPruneToBlock != -1 ||
+		got.TailPrunedThroughBlock != -1 ||
+		got.BalanceTracePruneToBlock != -1 ||
+		got.SectionBloomPruneToBlock != -1 {
+		t.Fatalf("empty prune evidence = %+v, want absent sentinels", got)
+	}
+}
+
+func TestDBStorageAlertsCmdPrometheusOK(t *testing.T) {
+	dataDir := t.TempDir()
+	seedDBStorageAlertsOKDatadir(t, dataDir)
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--prometheus"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbStorageAlertsCmd --prometheus: %v", err)
+	}
+	for _, want := range []string{
+		"# HELP gtron_storage_alert_status",
+		fmt.Sprintf(`gtron_storage_alert_status{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_component_status{component="freezer",datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_component_issues{component="stage",datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_complete{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_pending{datadir="%s"} 9`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_issues{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_next_target_block{datadir="%s",stage="%s",status="missing",upstream="%s"} 4`, dbPrometheusLabelValue(dataDir), rawdb.StageTxLookup, rawdb.StageFinish),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_next_current_block{datadir="%s",stage="%s",status="missing",upstream="%s"} 0`, dbPrometheusLabelValue(dataDir), rawdb.StageTxLookup, rawdb.StageFinish),
+		fmt.Sprintf(`gtron_storage_alert_freezer_hidden_bytes{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_snapshot_retired_files{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_mode_info{datadir="%s",mode="unknown",persisted="false"} 1`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_signed_cold_prune{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="coldFreezerToBlock"} 4`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="derivedIndexToBlock"} -1`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="chainLookupPruneToBlock"} -1`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="tailPrunedThroughBlock"} -1`, dbPrometheusLabelValue(dataDir)),
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("storage alerts prometheus output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBStorageAlertsCmdPrometheusCriticalReturnsError(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--prometheus"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "Finish verified=mismatch") {
+		t.Fatalf("dbStorageAlertsCmd --prometheus err = %v, want Finish mismatch", err)
+	}
+	for _, want := range []string{
+		fmt.Sprintf(`gtron_storage_alert_status{datadir="%s"} 2`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_component_status{component="stage",datadir="%s"} 2`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_alert_component_issues{component="stage",datadir="%s"} 2`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_stage_pipeline_issues{datadir="%s"} 1`, dbPrometheusLabelValue(dataDir)),
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("storage alerts prometheus output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBStorageAlertsPrometheusReportsIssueKinds(t *testing.T) {
+	report := dbStorageAlertsJSON{
+		Datadir:       "/tmp/gtron",
+		Status:        "critical",
+		FreezerStatus: "critical",
+		FreezerIssues: 2,
+		FreezerAlertDetails: []dbStorageAlertIssueJSON{
+			{Severity: "critical", Kind: "tail-prune-stage-missing-canonical", Detail: "first"},
+			{Severity: "critical", Kind: "tail-prune-stage-missing-canonical", Detail: "second"},
+		},
+		StageStatus: "critical",
+		StageIssues: 1,
+		StagePipeline: dbStageStatusPipelineJSON{
+			Pending: 2,
+			Issues:  1,
+			Tasks: []dbStageStatusPipelineTaskJSON{{
+				Stage:        string(rawdb.StageChainFreezer),
+				Upstream:     string(rawdb.StageFinish),
+				Status:       string(rawdb.StageProgressPipelineTaskHashMismatch),
+				TargetValue:  12,
+				CurrentValue: 12,
+			}},
+		},
+		StageVerifyDetails: []dbStorageAlertIssueJSON{
+			{Severity: "critical", Detail: "SyncBodiesReady staged-body status=hash-mismatch"},
+		},
+		ModeStatus:     "ok",
+		SnapshotStatus: "ok",
+		PruneMode:      "unknown",
+	}
+
+	var output strings.Builder
+	dbWriteStorageAlertsPrometheus(&output, report)
+	got := output.String()
+	for _, want := range []string{
+		"# HELP gtron_storage_alert_issue Storage alert issue count by component, severity, and issue kind.",
+		"# TYPE gtron_storage_alert_issue gauge",
+		`gtron_storage_alert_issue{component="freezer",datadir="/tmp/gtron",kind="tail-prune-stage-missing-canonical",severity="critical"} 2`,
+		`gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="unclassified",severity="critical"} 1`,
+		`gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 2`,
+		`gtron_storage_stage_pipeline_issues{datadir="/tmp/gtron"} 1`,
+		`gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="ChainFreezer",status="hash-mismatch",upstream="Finish"} 12`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("storage alert prometheus output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestDBStorageAlertStageDetailsPreserveIssueKindsAndRootCauses(t *testing.T) {
+	stageDetails := []dbStageStatusIssueJSON{{
+		Severity: "critical",
+		Kind:     "stage-verification",
+		Detail:   `Finish verified=missing-canonical canonicalError="canonical read failed"`,
+	}}
+	storageDetails := dbStageAlertIssueDetailsJSON(stageDetails)
+	if len(storageDetails) != 1 {
+		t.Fatalf("storage details = %+v, want one detail", storageDetails)
+	}
+	if storageDetails[0].Severity != "critical" || storageDetails[0].Kind != "stage-verification" || !strings.Contains(storageDetails[0].Detail, "canonicalError=") {
+		t.Fatalf("storage stage detail = %+v, want structured canonical error detail", storageDetails[0])
+	}
+
+	report := dbStorageAlertsJSON{
+		Datadir:            "/tmp/gtron",
+		Status:             "critical",
+		StageStatus:        "critical",
+		StageIssues:        len(storageDetails),
+		StageVerifyDetails: storageDetails,
+		FreezerStatus:      "ok",
+		ModeStatus:         "ok",
+		SnapshotStatus:     "ok",
+		PruneMode:          "unknown",
+	}
+	var output strings.Builder
+	dbWriteStorageAlertsPrometheus(&output, report)
+	want := `gtron_storage_alert_issue{component="stage",datadir="/tmp/gtron",kind="stage-verification",severity="critical"} 1`
+	if !strings.Contains(output.String(), want) {
+		t.Fatalf("storage alert prometheus output missing %q:\n%s", want, output.String())
+	}
+}
+
+func TestDBStorageAlertsCmdRejectsAmbiguousMachineFormats(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json", "--prometheus"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "--json and --prometheus are mutually exclusive") {
+		t.Fatalf("dbStorageAlertsCmd err = %v output=%q, want machine-format conflict", err, output)
+	}
+	if output != "" {
+		t.Fatalf("dbStorageAlertsCmd conflict output = %q, want empty", output)
+	}
+}
+
+func TestDBPrometheusLabelValueEscapesSpecialCharacters(t *testing.T) {
+	got := dbPrometheusLabelValue("a\\b\nc\"d")
+	if got != `a\\b\nc\"d` {
+		t.Fatalf("dbPrometheusLabelValue = %q, want escaped prometheus label", got)
+	}
+}
+
+func TestDBStorageAlertsCmdWarnsOnRetiredSnapshotFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	configuredSnapshotDir := filepath.Join(t.TempDir(), "cold-snapshots")
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	defaultSnapshotDir := stateSnapshotsDir(dataDir)
+	if err := os.MkdirAll(defaultSnapshotDir, 0o755); err != nil {
+		t.Fatalf("mkdir default snapshot dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(defaultSnapshotDir, statesnapshots.ManifestFile), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("write invalid default manifest: %v", err)
+	}
+	retiredPath := filepath.Join("event-log", "retired.seg")
+	retiredBytes := []byte("retired snapshot bytes")
+	if err := os.MkdirAll(filepath.Join(configuredSnapshotDir, filepath.Dir(retiredPath)), 0o755); err != nil {
+		t.Fatalf("mkdir retired dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configuredSnapshotDir, retiredPath), retiredBytes, 0o644); err != nil {
+		t.Fatalf("write retired file: %v", err)
+	}
+	manifest := statesnapshots.NewManifest(0, 0, nil)
+	manifest.Retired = []statesnapshots.SegmentRef{{
+		Dataset:   statesnapshots.SegmentDatasetEventLog,
+		Kind:      statesnapshots.SegmentEventLog,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Path:      retiredPath,
+		Size:      uint64(len(retiredBytes)),
+	}}
+	if err := statesnapshots.PublishManifest(configuredSnapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--snapshot.dir", configuredSnapshotDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbStorageAlertsCmd: %v", err)
+	}
+	for _, want := range []string{
+		"status=warning",
+		"freezerStatus=ok",
+		"stageStatus=ok",
+		"snapshotStatus=warning",
+		"snapshotIssues=1",
+		"retiredSegments=1",
+		"retiredFiles=1",
+		"retiredMissing=0",
+		"retiredSkippedActive=0",
+		fmt.Sprintf("retiredBytes=%d", len(retiredBytes)),
+		"Storage snapshot alert: severity=warning kind=retired-prune-pending",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("storage alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBColdDataCommandsExposeSnapshotDirFlag(t *testing.T) {
+	wantCommands := map[string]struct{}{
+		"rebuild-tx-indexes":      {},
+		"rebuild-section-blooms":  {},
+		"rebuild-account-traces":  {},
+		"audit-balance-traces":    {},
+		"backfill-balance-traces": {},
+		"freezer-alerts":          {},
+		"storage-alerts":          {},
+		"stage-status":            {},
+	}
+	for _, command := range dbCommand().Subcommands {
+		if _, ok := wantCommands[command.Name]; !ok {
+			continue
+		}
+		found := false
+		for _, flag := range command.Flags {
+			for _, name := range flag.Names() {
+				if name == snapshotDirFlag.Name {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("db %s does not expose --%s", command.Name, snapshotDirFlag.Name)
+		}
+		delete(wantCommands, command.Name)
+	}
+	if len(wantCommands) != 0 {
+		t.Fatalf("missing db commands: %v", wantCommands)
+	}
+}
+
+func seedDBStorageAlertsOKDatadir(t *testing.T, dataDir string) {
+	t.Helper()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+}
+
+func TestDBStorageAlertsCmdRejectsStageVerificationIssue(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "Finish verified=mismatch") {
+		t.Fatalf("dbStorageAlertsCmd err = %v, want Finish mismatch", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"freezerStatus=ok",
+		"stageStatus=critical",
+		"Storage stage alert: severity=critical kind=stage-verification detail=Finish verified=mismatch",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("storage alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "Finish verified=mismatch") {
+		t.Fatalf("dbStorageAlertsCmd err = %v, want Finish mismatch", err)
+	}
+	var report dbStorageAlertsJSON
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("storage alerts json unmarshal failed: %v\n%s", err, output)
+	}
+	if report.Status != "critical" || report.StageStatus != "critical" || report.StageIssues < 1 {
+		t.Fatalf("unexpected storage alert status: %+v", report)
+	}
+	if report.StagePipeline.Pending == 0 || report.StagePipeline.Issues != 1 || len(report.StagePipeline.Tasks) == 0 {
+		t.Fatalf("storage alert stage pipeline = %+v, want pending task and one hash/order issue", report.StagePipeline)
+	}
+	if first := report.StagePipeline.Tasks[0]; first.Stage != string(rawdb.StageTxLookup) || first.Upstream != string(rawdb.StageFinish) || first.Status != string(rawdb.StageProgressPipelineTaskMissing) || first.TargetValue != block4.Number() {
+		t.Fatalf("storage alert first pipeline task = %+v, want missing TxLookup after Finish", first)
+	}
+	if report.FreezerStatus != "ok" || report.FreezerIssues != 0 || report.FreezerAlertHiddenBytes != 0 {
+		t.Fatalf("unexpected freezer alert fields: %+v", report)
+	}
+	if report.SnapshotStatus != "ok" || report.SnapshotIssues != 0 {
+		t.Fatalf("unexpected snapshot alert fields: %+v", report)
+	}
+	if report.ModeStatus != "ok" || report.ModeIssues != 0 || report.PruneMode != "unknown" || report.PruneModePersisted {
+		t.Fatalf("unexpected mode alert fields: %+v", report)
+	}
+	if report.SignedColdPrune || report.ColdFreezerToBlock != 4 || report.DerivedIndexToBlock != -1 || report.ChainLookupPruneToBlock != -1 || report.TailPrunedThroughBlock != -1 {
+		t.Fatalf("unexpected prune evidence fields: %+v", report)
+	}
+	if len(report.StageVerifyDetails) != report.StageIssues {
+		t.Fatalf("unexpected stage verify details: %+v", report.StageVerifyDetails)
+	}
+	var foundFinishMismatch bool
+	for _, detail := range report.StageVerifyDetails {
+		if detail.Severity != "critical" {
+			t.Fatalf("unexpected stage verify severity: %+v", report.StageVerifyDetails)
+		}
+		if strings.Contains(detail.Detail, "Finish verified=mismatch") {
+			if detail.Kind != "stage-verification" {
+				t.Fatalf("finish mismatch detail = %+v, want stage-verification kind", detail)
+			}
+			foundFinishMismatch = true
+		}
+	}
+	if !foundFinishMismatch {
+		t.Fatalf("stage verify details missing Finish mismatch: %+v", report.StageVerifyDetails)
+	}
+	if len(report.FreezerAlertDetails) != 0 || len(report.SnapshotAlertDetails) != 0 {
+		t.Fatalf("unexpected non-stage details: freezer=%+v snapshot=%+v", report.FreezerAlertDetails, report.SnapshotAlertDetails)
+	}
+}
+
+func TestDBStorageAlertsCmdJSONReportsArchiveModePruneConflict(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteHistoryPruneMode(db, params.HistoryModeArchive); err != nil {
+		t.Fatalf("WriteHistoryPruneMode: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageChainFreezer, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotHotPrune, block4.Number()); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotHotPrune: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "archive-prune-stage") {
+		t.Fatalf("dbStorageAlertsCmd err = %v, want archive prune conflict", err)
+	}
+	var report dbStorageAlertsJSON
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("storage alerts json unmarshal failed: %v\n%s", err, output)
+	}
+	if report.Status != "critical" || report.ModeStatus != "critical" || report.PruneMode != params.HistoryModeArchive || !report.PruneModePersisted {
+		t.Fatalf("unexpected archive mode alert summary: %+v", report)
+	}
+	if report.ModeIssues != 1 || len(report.ModeAlertDetails) != 1 {
+		t.Fatalf("mode alert details = %+v issues=%d", report.ModeAlertDetails, report.ModeIssues)
+	}
+	detail := report.ModeAlertDetails[0]
+	if detail.Severity != "critical" || detail.Kind != "archive-prune-stage" || !strings.Contains(detail.Detail, string(rawdb.StageSnapshotHotPrune)) {
+		t.Fatalf("unexpected mode alert detail: %+v", detail)
+	}
+}
+
+func TestDBStageStatusCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageHeaders, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Headers: %v", err)
+	}
+	stagedBlock1 := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(block1.Number()),
+				Timestamp: 40_000 + int64(block1.Number()),
+			},
+		},
+	})
+	if stagedBlock1.Hash() == block1.Hash() {
+		t.Fatal("staged block hash unexpectedly matches canonical block")
+	}
+	if err := rawdb.WriteSyncStagedBlock(db, stagedBlock1); err != nil {
+		t.Fatalf("WriteSyncStagedBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, stagedBlock1.Number(), stagedBlock1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
+	}
+	mismatchHash := common.Hash{0xee}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, block1.Number(), mismatchHash); err != nil {
+		t.Fatalf("WriteStageProgress SyncImport: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotHistory, 11); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotHistory: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageID("FutureStage"), 77); err != nil {
+		t.Fatalf("WriteStageProgress FutureStage: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbStageStatusCmd: %v", err)
+	}
+	for _, want := range []string{
+		"Stage status:",
+		"known=",
+		fmt.Sprintf("group=canonical name=%s value=1 hash=%x verified=canonical", rawdb.StageHeaders, block1.Hash()),
+		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=staged", rawdb.StageSyncBodies, stagedBlock1.Hash()),
+		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=mismatch canonicalHash=%x", rawdb.StageSyncImport, mismatchHash, block1.Hash()),
+		fmt.Sprintf("group=snapshot name=%s value=11 hash=none verified=unbound", rawdb.StageSnapshotHistory),
+		fmt.Sprintf("group=freezer name=%s status=missing", rawdb.StageChainFreezer),
+		"group=unknown name=FutureStage value=77 hash=none verified=unbound",
+		"Stage pipeline: complete=false pending=1",
+		fmt.Sprintf("Stage pipeline task: stage=%s upstream=%s status=missing target=1 targetHash=%x", rawdb.StageBodies, rawdb.StageHeaders, block1.Hash()),
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stage status output missing %q:\n%s", want, output)
+		}
+	}
+
+	jsonCtx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json"})
+	jsonOutput, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(jsonCtx)
+	})
+	if err != nil {
+		t.Fatalf("dbStageStatusCmd json: %v", err)
+	}
+	var report dbStageStatusJSON
+	if err := json.Unmarshal([]byte(jsonOutput), &report); err != nil {
+		t.Fatalf("stage status json unmarshal failed: %v\n%s", err, jsonOutput)
+	}
+	if report.Datadir != dataDir || report.Known != len(rawdb.KnownStageProgressStages()) || report.Rows == 0 || report.Status != "critical" || report.Verify {
+		t.Fatalf("stage status json summary = %+v", report)
+	}
+	if report.Pipeline.Complete || report.Pipeline.Pending != 1 || len(report.Pipeline.Tasks) != 1 {
+		t.Fatalf("stage status pipeline = %+v, want one pending bodies task", report.Pipeline)
+	}
+	if task := report.Pipeline.Tasks[0]; task.Stage != string(rawdb.StageBodies) || task.Upstream != string(rawdb.StageHeaders) || task.Status != string(rawdb.StageProgressPipelineTaskMissing) || task.TargetValue != block1.Number() || task.TargetHash != fmt.Sprintf("%x", block1.Hash()) {
+		t.Fatalf("stage status pipeline task = %+v, want missing Bodies after Headers", task)
+	}
+	headersRow, ok := dbStageStatusJSONRow(report, rawdb.StageHeaders)
+	if !ok || !headersRow.Present || headersRow.Group != "canonical" || headersRow.Value != block1.Number() || headersRow.Hash != fmt.Sprintf("%x", block1.Hash()) || headersRow.Verified != "canonical" {
+		t.Fatalf("headers json row = %+v ok=%v", headersRow, ok)
+	}
+	syncImportRow, ok := dbStageStatusJSONRow(report, rawdb.StageSyncImport)
+	if !ok || !syncImportRow.Present || syncImportRow.Verified != "mismatch" || syncImportRow.CanonicalHash != fmt.Sprintf("%x", block1.Hash()) {
+		t.Fatalf("sync import json row = %+v ok=%v", syncImportRow, ok)
+	}
+	chainFreezerRow, ok := dbStageStatusJSONRow(report, rawdb.StageChainFreezer)
+	if !ok || chainFreezerRow.Present || chainFreezerRow.Status != "missing" {
+		t.Fatalf("chain freezer json row = %+v ok=%v", chainFreezerRow, ok)
+	}
+	if !strings.Contains(strings.Join(report.Issues, "; "), "SyncImport verified=mismatch") {
+		t.Fatalf("stage status json issues = %v, want SyncImport mismatch", report.Issues)
+	}
+	var foundSyncImportDetail bool
+	for _, detail := range report.IssueDetails {
+		if detail.Kind == "stage-verification" && detail.Stage == string(rawdb.StageSyncImport) && detail.Verified == "mismatch" {
+			foundSyncImportDetail = true
+			break
+		}
+	}
+	if !foundSyncImportDetail {
+		t.Fatalf("stage status issue details = %+v, want structured SyncImport mismatch", report.IssueDetails)
+	}
+
+	verifyCtx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	verifyOutput, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(verifyCtx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "stage status verification failed") || !strings.Contains(err.Error(), string(rawdb.StageSyncImport)) || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncImport mismatch", err)
+	}
+	if strings.Contains(err.Error(), string(rawdb.StageSyncBodies)) {
+		t.Fatalf("dbStageStatusCmd verify err = %v, downloader SyncBodies should not fail verification", err)
+	}
+	if !strings.Contains(verifyOutput, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodies)) {
+		t.Fatalf("verify output missing SyncBodies line:\n%s", verifyOutput)
+	}
+
+	verifyJSONCtx := makeDBTestContext(t, []string{"--datadir", dataDir, "--json", "--db.stage.verify"})
+	verifyJSONOutput, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(verifyJSONCtx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "stage status verification failed") {
+		t.Fatalf("dbStageStatusCmd json verify err = %v, want verification failure", err)
+	}
+	var verifyReport dbStageStatusJSON
+	if jsonErr := json.Unmarshal([]byte(verifyJSONOutput), &verifyReport); jsonErr != nil {
+		t.Fatalf("stage status verify json unmarshal failed: %v\n%s", jsonErr, verifyJSONOutput)
+	}
+	if !verifyReport.Verify || verifyReport.Status != "critical" || len(verifyReport.Issues) == 0 {
+		t.Fatalf("stage status verify json = %+v, want critical verified report", verifyReport)
+	}
+}
+
+func TestDBStageStatusVerifyChecksSyncBodiesStagedRow(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SyncBodies staged-body status=staged-missing") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncBodies staged missing", err)
+	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodies)) {
+		t.Fatalf("verify output missing SyncBodies line:\n%s", output)
+	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=staged-missing", rawdb.StageSyncBodies, block1.Hash())) {
+		t.Fatalf("verify output missing SyncBodies staged-missing verification:\n%s", output)
+	}
+}
+
+func TestDBStageStatusVerifyRejectsUnboundSyncImportStage(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncImport, 1); err != nil {
+		t.Fatalf("WriteStageProgress SyncImport: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SyncImport verified=unbound") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want unbound SyncImport failure", err)
+	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s value=1 hash=none verified=unbound", rawdb.StageSyncImport)) {
+		t.Fatalf("verify output missing unbound SyncImport line:\n%s", output)
+	}
+}
+
+func TestDBStageStatusVerifyRejectsUnboundSnapshotBuildStages(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild} {
+		if err := rawdb.WriteStageProgress(db, stage, block1.Number()); err != nil {
+			t.Fatalf("WriteStageProgress %s: %v", stage, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SnapshotBuild verified=unbound") || !strings.Contains(err.Error(), "SnapshotLatestBuild verified=unbound") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want unbound snapshot build failures", err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild} {
+		if !strings.Contains(output, fmt.Sprintf("group=snapshot name=%s value=1 hash=none verified=unbound", stage)) {
+			t.Fatalf("verify output missing unbound %s line:\n%s", stage, output)
+		}
+	}
+}
+
+func TestDBStageStatusVerifyShowsSyncBodiesStagedMismatchDetails(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteSyncStagedBlock(db, block1); err != nil {
+		t.Fatalf("WriteSyncStagedBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SyncBodies staged-body status=hash-mismatch") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncBodies hash mismatch", err)
+	}
+	want := fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=staged-hash-mismatch stagedBlock=1 stagedHash=%x", rawdb.StageSyncBodies, common.Hash{0xee}, block1.Hash())
+	if !strings.Contains(output, want) {
+		t.Fatalf("verify output missing SyncBodies staged mismatch details %q:\n%s", want, output)
+	}
+}
+
+func TestDBStageStatusVerifyChecksSyncBodiesReadyStagedRow(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteSyncStagedBlock(db, block1); err != nil {
+		t.Fatalf("WriteSyncStagedBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block1.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodiesReady: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SyncBodiesReady staged-body status=hash-mismatch") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncBodiesReady hash mismatch", err)
+	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodiesReady)) {
+		t.Fatalf("verify output missing SyncBodiesReady line:\n%s", output)
+	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=staged-hash-mismatch", rawdb.StageSyncBodiesReady, common.Hash{0xee})) {
+		t.Fatalf("verify output missing SyncBodiesReady staged hash mismatch:\n%s", output)
+	}
+	if !strings.Contains(output, fmt.Sprintf("stagedBlock=1 stagedHash=%x", block1.Hash())) {
+		t.Fatalf("verify output missing SyncBodiesReady staged row details:\n%s", output)
+	}
+}
+
+func TestDBStageStatusStagedBodyIssuesAcceptsMatchingSyncBodiesReady(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteSyncStagedBlock(db, block1); err != nil {
+		t.Fatalf("WriteSyncStagedBlock: %v", err)
+	}
+	row := rawdb.StageProgress{
+		Stage:        rawdb.StageSyncBodiesReady,
+		BlockNum:     block1.Number(),
+		BlockHash:    block1.Hash(),
+		HasBlockHash: true,
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, row.BlockNum, row.BlockHash); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodiesReady: %v", err)
+	}
+	rows := []dbStageStatusRow{{
+		stage:    rawdb.StageSyncBodiesReady,
+		group:    "sync",
+		present:  true,
+		progress: row,
+	}}
+	if issues := dbStageStatusStagedBodyIssues(db, rows); len(issues) != 0 {
+		t.Fatalf("dbStageStatusStagedBodyIssues = %#v, want none", issues)
+	}
+}
+
+func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageBodies,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageBodies,
+				BlockNum: 5,
+			},
+		},
+		{
+			stage:   rawdb.StageExecution,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageExecution,
+				BlockNum: 6,
+			},
+		},
+		{
+			stage:   rawdb.StageFinish,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageFinish,
+				BlockNum: 30,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBuild,
+				BlockNum: 31,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotPrune,
+				BlockNum: 32,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 33,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotSectionBloomPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotSectionBloomPrune,
+				BlockNum: 34,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotBalanceTracePrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBalanceTracePrune,
+				BlockNum: 35,
+			},
+		},
+		{
+			stage:   rawdb.StageSyncBodies,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncBodies,
+				BlockNum: 7,
+			},
+		},
+		{
+			stage:   rawdb.StageSyncBodiesReady,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncBodiesReady,
+				BlockNum: 8,
+			},
+		},
+		{
+			stage:   rawdb.StageSyncImport,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncImport,
+				BlockNum: 3,
+			},
+		},
+		{
+			stage:   rawdb.StageSyncExecution,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncExecution,
+				BlockNum: 4,
+			},
+		},
+		{
+			stage:   rawdb.StageChainFreezer,
+			group:   "freezer",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageChainFreezer,
+				BlockNum: 20,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 21,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 34,
+			},
+		},
+	}
+
+	issues := dbStageStatusPipelineOrderIssues(rows)
+	details := dbStageStatusPipelineOrderIssueDetails(rows)
+	for _, want := range []string{
+		"Execution=6 ahead of Bodies=5",
+		"SnapshotBuild=31 ahead of Finish=30",
+		"SnapshotPrune=32 ahead of Finish=30",
+		"SnapshotEventLogBuild=33 ahead of Finish=30",
+		"SnapshotSectionBloomPrune=34 ahead of Finish=30",
+		"SnapshotBalanceTracePrune=35 ahead of Finish=30",
+		"SyncBodiesReady=8 ahead of SyncBodies=7",
+		"SyncExecution=4 ahead of SyncImport=3",
+		"SnapshotChainLookupPrune=21 ahead of ChainFreezer=20",
+		"SnapshotChainFreezerTailPrune=34 ahead of SnapshotChainLookupPrune=21",
+		"SnapshotChainFreezerTailPrune=34 ahead of SnapshotEventLogBuild=33",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("pipeline order issues missing %q in %#v", want, issues)
+		}
+	}
+	var foundExecutionOrderDetail bool
+	for _, detail := range details {
+		if detail.Kind == "stage-order" &&
+			detail.Downstream == string(rawdb.StageExecution) &&
+			detail.Upstream == string(rawdb.StageBodies) &&
+			detail.DownstreamValue == 6 &&
+			detail.UpstreamValue == 5 {
+			foundExecutionOrderDetail = true
+			break
+		}
+	}
+	if !foundExecutionOrderDetail {
+		t.Fatalf("pipeline order issue details = %+v, want structured Execution/Bodies issue", details)
+	}
+
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSyncExecution,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncExecution,
+				BlockNum: 4,
+			},
+		},
+	}
+	if issues := dbStageStatusPipelineOrderIssues(rows); len(issues) != 0 {
+		t.Fatalf("pipeline order issues with missing upstream = %#v, want none", issues)
+	}
+
+	hashA := common.Hash{0xaa}
+	hashB := common.Hash{0xbb}
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageBodies,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageBodies,
+				BlockNum:     12,
+				BlockHash:    hashA,
+				HasBlockHash: true,
+			},
+		},
+		{
+			stage:   rawdb.StageExecution,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageExecution,
+				BlockNum:     12,
+				BlockHash:    hashB,
+				HasBlockHash: true,
+			},
+		},
+		{
+			stage:   rawdb.StageFinish,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageFinish,
+				BlockNum:     20,
+				BlockHash:    hashA,
+				HasBlockHash: true,
+			},
+		},
+		{
+			stage:   rawdb.StageChainFreezer,
+			group:   "freezer",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageChainFreezer,
+				BlockNum:     20,
+				BlockHash:    hashB,
+				HasBlockHash: true,
+			},
+		},
+	}
+	issues = dbStageStatusPipelineOrderIssues(rows)
+	for _, want := range []string{
+		fmt.Sprintf("Execution=12/%x hash does not match Bodies=12/%x", hashB, hashA),
+		fmt.Sprintf("ChainFreezer=20/%x hash does not match Finish=20/%x", hashB, hashA),
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("pipeline order issues missing hash mismatch %q in %#v", want, issues)
+		}
+	}
+
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBuild,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 8,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotSectionBloomPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotSectionBloomPrune,
+				BlockNum: 9,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 10,
+			},
+		},
+	}
+	issues = dbStageStatusPipelineOrderIssues(rows)
+	for _, want := range []string{
+		"SnapshotBuild requires Finish",
+		"SnapshotChainLookupPrune requires ChainFreezer",
+		"SnapshotSectionBloomPrune requires Finish",
+		"SnapshotEventLogBuild requires Finish",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("pipeline order issues missing %q in %#v", want, issues)
+		}
+	}
+
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 20,
+			},
+		},
+	}
+	issues = dbStageStatusPipelineOrderIssues(rows)
+	for _, want := range []string{
+		"SnapshotChainFreezerTailPrune requires SnapshotChainLookupPrune",
+		"SnapshotChainFreezerTailPrune requires SnapshotEventLogBuild",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("pipeline order issues missing %q in %#v", want, issues)
+		}
+	}
+
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageHeaders,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageHeaders,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageBodies,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageBodies,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageExecution,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageExecution,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageCommitment,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageCommitment,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageFinish,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageFinish,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageChainFreezer,
+			group:   "freezer",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageChainFreezer,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 0,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 0,
+			},
+		},
+	}
+	if issues := dbStageStatusPipelineOrderIssues(rows); len(issues) != 0 {
+		t.Fatalf("genesis-only tail prune pipeline issues = %#v, want none without event-log stage", issues)
+	}
+}
+
+func TestDBStageStatusVerificationIssuesRequireColdCoverageStagesHashBound(t *testing.T) {
+	boundaryHash := common.Hash{0x12}
+	rows := []dbStageStatusRow{
+		{
+			stage:    rawdb.StageFinish,
+			group:    "canonical",
+			present:  true,
+			verified: "canonical",
+			progress: rawdb.StageProgress{
+				Stage:        rawdb.StageFinish,
+				BlockNum:     12,
+				BlockHash:    boundaryHash,
+				HasBlockHash: true,
+			},
+		},
+		{
+			stage:   rawdb.StageChainFreezer,
+			group:   "freezer",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageChainFreezer,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotSectionBloomPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotSectionBloomPrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotBalanceTracePrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBalanceTracePrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 12,
+			},
+		},
+	}
+	issues := dbStageStatusVerificationIssues(rows)
+	for _, want := range []string{
+		"ChainFreezer verified=unbound",
+		"SnapshotChainLookupPrune verified=unbound",
+		"SnapshotEventLogBuild verified=unbound",
+		"SnapshotSectionBloomPrune verified=unbound",
+		"SnapshotBalanceTracePrune verified=unbound",
+		"SnapshotChainFreezerTailPrune verified=unbound",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("verification issues missing %q in %#v", want, issues)
+		}
+	}
+
+	rows[1].progress.BlockHash = boundaryHash
+	rows[1].progress.HasBlockHash = true
+	rows[1].verified = "canonical"
+	rows[2].progress.BlockHash = boundaryHash
+	rows[2].progress.HasBlockHash = true
+	rows[2].verified = "canonical"
+	rows[6].progress.BlockHash = common.Hash{0xee}
+	rows[6].progress.HasBlockHash = true
+	rows[6].verified = "mismatch"
+	issues = dbStageStatusVerificationIssues(rows)
+	if want := "SnapshotChainFreezerTailPrune verified=mismatch"; !stageStatusIssueContains(issues, want) {
+		t.Fatalf("verification issues missing %q in %#v", want, issues)
+	}
+}
+
+func TestDBStageStatusVerificationUsesStateTxRangeHashFallback(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	boundaryHash := common.Hash{0x12}
+	if err := rawdb.WriteStateTxRange(db, 12, boundaryHash, 120, 121); err != nil {
+		t.Fatalf("WriteStateTxRange: %v", err)
+	}
+	for _, stage := range []rawdb.StageID{
+		rawdb.StageSnapshotEventLogBuild,
+		rawdb.StageSnapshotSectionBloomPrune,
+		rawdb.StageSnapshotBalanceTracePrune,
+	} {
+		progress := rawdb.StageProgress{
+			Stage:        stage,
+			BlockNum:     12,
+			BlockHash:    boundaryHash,
+			HasBlockHash: true,
+		}
+		verified, canonicalHash, details := dbStageStatusVerification(stage, progress, db, db)
+		if verified != "canonical" || canonicalHash != boundaryHash || len(details) != 0 {
+			t.Fatalf("%s verification = %s hash=%x details=%v, want canonical via StateTxRange %x", stage, verified, canonicalHash, details, boundaryHash)
+		}
+	}
+}
+
+func TestDBStageStatusVerificationLimitsStateTxRangeHashFallback(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	boundaryHash := common.Hash{0x34}
+	if err := rawdb.WriteStateTxRange(db, 34, boundaryHash, 340, 341); err != nil {
+		t.Fatalf("WriteStateTxRange: %v", err)
+	}
+
+	for _, stage := range []rawdb.StageID{
+		rawdb.StageFinish,
+		rawdb.StageChainFreezer,
+		rawdb.StageChainFreezerStateRootPrune,
+		rawdb.StageSnapshotBuild,
+		rawdb.StageSnapshotLatestBuild,
+		rawdb.StageSnapshotChainLookupPrune,
+		rawdb.StageSnapshotChainFreezerTailPrune,
+	} {
+		progress := rawdb.StageProgress{
+			Stage:        stage,
+			BlockNum:     34,
+			BlockHash:    boundaryHash,
+			HasBlockHash: true,
+		}
+		verified, canonicalHash, details := dbStageStatusVerification(stage, progress, db, db)
+		if verified != "missing-canonical" || canonicalHash != (common.Hash{}) || len(details) != 0 {
+			t.Fatalf("%s verification = %s hash=%x details=%v, want missing canonical without StateTxRange fallback", stage, verified, canonicalHash, details)
+		}
+	}
+}
+
+func TestDBStageStatusVerificationSurfacesCanonicalHashReadError(t *testing.T) {
+	progress := rawdb.StageProgress{
+		Stage:        rawdb.StageFinish,
+		BlockNum:     9,
+		BlockHash:    common.Hash{0x09},
+		HasBlockHash: true,
+	}
+	wantErr := fmt.Errorf("canonical read failed")
+
+	verified, canonicalHash, details := dbStageStatusVerification(
+		rawdb.StageFinish,
+		progress,
+		rawdb.NewMemoryDatabase(),
+		failingStageCanonicalReader{err: wantErr},
+	)
+	if verified != "missing-canonical" || canonicalHash != (common.Hash{}) {
+		t.Fatalf("verification = %s hash=%x, want missing-canonical zero hash", verified, canonicalHash)
+	}
+	if len(details) != 1 || !strings.Contains(details[0], "canonicalError=") || !strings.Contains(details[0], wantErr.Error()) {
+		t.Fatalf("details = %v, want canonical read error", details)
+	}
+
+	issueDetails := dbStageStatusVerificationIssueDetails([]dbStageStatusRow{{
+		stage:    rawdb.StageFinish,
+		group:    "canonical",
+		present:  true,
+		progress: progress,
+		verified: verified,
+		details:  details,
+	}})
+	if len(issueDetails) != 1 || issueDetails[0].Kind != "stage-verification" || !strings.Contains(issueDetails[0].Detail, "canonicalError=") || !strings.Contains(issueDetails[0].Detail, wantErr.Error()) {
+		t.Fatalf("issue details = %+v, want canonical read error detail", issueDetails)
+	}
+	issues := dbStageStatusIssueStrings(issueDetails)
+	if len(issues) != 1 || !strings.Contains(issues[0], "canonicalError=") {
+		t.Fatalf("issues = %v, want canonical read error detail", issues)
+	}
+}
+
+type failingStageCanonicalReader struct {
+	err error
+}
+
+func (r failingStageCanonicalReader) Has([]byte) (bool, error) {
+	return false, r.err
+}
+
+func (r failingStageCanonicalReader) Get([]byte) ([]byte, error) {
+	return nil, r.err
+}
+
+func stageStatusIssueContains(issues []string, want string) bool {
+	for _, issue := range issues {
+		if issue == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDBStageStatusSnapshotCoverageIssues(t *testing.T) {
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotSectionBloomPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotSectionBloomPrune,
+				BlockNum: rawdb.SectionBloomBlockPerSection - 1,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotBalanceTracePrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBalanceTracePrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 12,
+			},
+		},
+	}
+	issues := dbStageStatusSnapshotCoverageIssues(rows, filepath.Join(t.TempDir(), "missing-snapshots"))
+	for _, want := range []string{
+		"SnapshotEventLogBuild=12 missing cold indexed event-log coverage [1,12]",
+		"SnapshotChainLookupPrune=12 missing cold chain-index coverage [0,12]",
+		fmt.Sprintf("SnapshotSectionBloomPrune=%d missing cold section-bloom coverage [0,%d]", rawdb.SectionBloomBlockPerSection-1, rawdb.SectionBloomBlockPerSection-1),
+		"SnapshotBalanceTracePrune=12 missing cold balance-trace coverage [1,12]",
+		"SnapshotChainFreezerTailPrune=12 missing cold chain-freezer coverage [0,12]",
+		"SnapshotChainFreezerTailPrune=12 missing cold chain-index coverage [0,12]",
+		"SnapshotChainFreezerTailPrune=12 missing cold indexed event-log coverage [1,12]",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("snapshot coverage issues missing %q in %#v", want, issues)
+		}
+	}
+}
+
+func TestDBStageStatusBalanceTraceCoverageStartsAfterGenesis(t *testing.T) {
+	snapshotDir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{Timestamp: 100}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	ref, err := statesnapshots.BuildBalanceTraceSegmentFromDB(db, snapshotDir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotBalanceTracePrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBalanceTracePrune,
+				BlockNum: 1,
+			},
+		},
+	}
+	if issues := dbStageStatusSnapshotCoverageIssues(rows, snapshotDir); len(issues) != 0 {
+		t.Fatalf("snapshot coverage issues = %#v, want none for balance trace coverage [1,1]", issues)
+	}
+}
+
+func TestDBStageStatusSnapshotCoverageIssuesChecksManifestProgress(t *testing.T) {
+	snapshotDir := t.TempDir()
+	manifest := statesnapshots.NewManifest(1, 12, nil)
+	manifest.Progress = &statesnapshots.Progress{
+		LatestBuildTxNum:     10,
+		HistoryBuildTxNum:    10,
+		AccessorBuildTxNum:   13,
+		CommitmentFlushTxNum: 0,
+		HotPruneTxNum:        5,
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotLatest,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotLatest,
+				BlockNum: 8,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotHistory,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotHistory,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotAccessor,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotAccessor,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotCommitmentFlush,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotCommitmentFlush,
+				BlockNum: 1,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotHotPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotHotPrune,
+				BlockNum: 6,
+			},
+		},
+	}
+	issues := dbStageStatusSnapshotCoverageIssues(rows, snapshotDir)
+	for _, want := range []string{
+		"SnapshotHistory=12 ahead of snapshot manifest history progress 10",
+		"SnapshotCommitmentFlush=1 missing snapshot manifest commitment-flush progress",
+		"SnapshotHotPrune=6 ahead of snapshot manifest hot-prune progress 5",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("snapshot coverage issues missing %q in %#v", want, issues)
+		}
+	}
+	if len(issues) != 3 {
+		t.Fatalf("snapshot coverage issues = %#v, want only manifest progress issues", issues)
+	}
+}
+
+func TestDBStageStatusSnapshotCoverageIssuesRequiresManifestProgress(t *testing.T) {
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotLatest,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotLatest,
+				BlockNum: 7,
+			},
+		},
+	}
+	issues := dbStageStatusSnapshotCoverageIssues(rows, filepath.Join(t.TempDir(), "missing-snapshots"))
+	want := "SnapshotLatest=7 missing snapshot manifest latest progress"
+	for _, issue := range issues {
+		if issue == want {
+			return
+		}
+	}
+	t.Fatalf("snapshot coverage issues missing %q in %#v", want, issues)
+}
+
+func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStore, genesisPath string, snapshotDir string, boundary *coretypes.Block) string {
+	t.Helper()
+	genesis, err := loadGenesisFile(genesisPath)
+	if err != nil {
+		t.Fatalf("loadGenesisFile: %v", err)
+	}
+	if root, ok, err := rawdb.ReadLatestDomainCommitmentRoot(sourceDB); err != nil || !ok || root == (common.Hash{}) {
+		t.Fatalf("ReadLatestDomainCommitmentRoot = %x/%v/%v, want restored latest root", root, ok, err)
+	} else if err := rawdb.WriteStateCommitmentCheckpoint(sourceDB, &rawdb.StateCommitmentCheckpoint{
+		BlockNum:  boundary.Number(),
+		BlockHash: boundary.Hash(),
+		Root:      root,
+		Scheme:    rawdb.LatestDomainCommitmentScheme,
+	}); err != nil {
+		t.Fatalf("WriteStateCommitmentCheckpoint: %v", err)
+	}
+	refs, err := statesnapshots.NewAggregator(snapshotDir).BuildSegments(sourceDB, statesnapshots.AggregatorBuildOptions{
+		FromTxNum: 1,
+		ToTxNum:   1,
+	})
+	if err != nil {
+		t.Fatalf("BuildSegments: %v", err)
+	}
+	identity, err := snapshotExpectedChainIdentityFromGenesis(genesis, "")
+	if err != nil {
+		t.Fatalf("snapshotExpectedChainIdentityFromGenesis: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifestForChain(1, 1, refs, identity)); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := statesnapshots.PublishSignedSnapshotCatalog(snapshotDir, priv); err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
+	}
+	return hex.EncodeToString(pub)
+}
+
+func seedDBRebuildTxIndexDatadir(t *testing.T, dataDir string, writeHead bool) (ethdb.KeyValueStore, []*corepb.TransactionInfo) {
+	t.Helper()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, infos1 := dbRebuildTxIndexBlock(t, 1, 2)
+	block2, infos2 := dbRebuildTxIndexBlock(t, 2, 1)
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 2, infos2); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block2: %v", err)
+	}
+	if writeHead {
+		rawdb.WriteHeadBlockHash(db, block2.Hash())
+	}
+	chainDB := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	if got := rawdb.ReadTransactionIndex(chainDB, infos1[1].Id); got != nil {
+		t.Fatalf("pre-rebuild tx index = %v, want nil", got)
+	}
+	if got := rawdb.ReadTransactionInfo(chainDB, infos1[1].Id); got != nil {
+		t.Fatalf("pre-rebuild tx info = %+v, want nil", got)
+	}
+	return db, append(infos1, infos2...)
+}
+
+func seedDBBackfillBalanceTraceDatadir(t *testing.T, dataDir string) (string, common.Address, common.Address, *coretypes.Block) {
+	t.Helper()
+	sender := dbRebuildTraceAddressT(0xd0)
+	receiver := dbRebuildTraceAddressT(0xe0)
+	genesisPath := filepath.Join(t.TempDir(), "genesis.json")
+	genesisJSON := `{
+  "chain_id": 1999,
+  "p2p_version": 1999,
+  "timestamp_ms": 0,
+  "parent_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "accounts": [
+    {"address": "` + sender.Hex() + `", "balance": "99000000000000000"},
+    {"address": "` + receiver.Hex() + `", "balance": "1"}
+  ],
+  "dynamic_properties": {
+    "maintenance_time_interval": 21600000,
+    "next_maintenance_time": 4611686018427387903
+  }
+}`
+	if err := os.WriteFile(genesisPath, []byte(genesisJSON), 0o644); err != nil {
+		t.Fatalf("write genesis file: %v", err)
+	}
+	genesis, err := loadGenesisFile(genesisPath)
+	if err != nil {
+		t.Fatalf("loadGenesisFile: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	defer db.Close()
+	_, genesisHash, err := corepkg.SetupGenesisBlock(db, genesis)
+	if err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	bc, err := corepkg.NewBlockChain(db, corestate.NewDatabase(rawdb.WrapKeyValueStore(db)), genesis.Config)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+	defer bc.Close()
+	block1 := dbBackfillTransferBlock(t, 1, 3000, genesisHash, sender, receiver, 5_000_000)
+	if err := bc.InsertBlock(block1); err != nil {
+		t.Fatalf("InsertBlock: %v", err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got != nil {
+		t.Fatalf("pre-backfill BlockBalanceTrace = %+v, want nil", got)
+	}
+	return genesisPath, sender, receiver, block1
+}
+
+func dbBackfillTransferBlock(t *testing.T, number int64, ts int64, parentHash common.Hash, sender, receiver common.Address, amount int64) *coretypes.Block {
+	t.Helper()
+	tc := &contractpb.TransferContract{
+		OwnerAddress: sender.Bytes(),
+		ToAddress:    receiver.Bytes(),
+		Amount:       amount,
+	}
+	param, err := anypb.New(tc)
+	if err != nil {
+		t.Fatalf("Any TransferContract: %v", err)
+	}
+	txPB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Expiration: ts + 60_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TransferContract,
+				Parameter: param,
+			}},
+		},
+	}
+	return coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     number,
+				Timestamp:  ts,
+				ParentHash: parentHash.Bytes(),
+			},
+		},
+		Transactions: []*corepb.Transaction{txPB},
+	})
+}
+
+func dbRebuildTxIndexBlock(t *testing.T, number uint64, txCount int) (*coretypes.Block, []*corepb.TransactionInfo) {
+	t.Helper()
+	txs := make([]*corepb.Transaction, 0, txCount)
+	infos := make([]*corepb.TransactionInfo, 0, txCount)
+	for i := 0; i < txCount; i++ {
+		txPB := &corepb.Transaction{
+			RawData: &corepb.TransactionRaw{
+				Timestamp:  int64(10_000 + number*100 + uint64(i)),
+				Expiration: int64(20_000 + number*100 + uint64(i)),
+				Data:       []byte{byte(number), byte(i)},
+			},
+		}
+		tx := coretypes.NewTransactionFromPB(txPB)
+		txHash := tx.Hash()
+		txs = append(txs, txPB)
+		infos = append(infos, &corepb.TransactionInfo{
+			Id:             append([]byte(nil), txHash[:]...),
+			Fee:            int64(1_000 + number*10 + uint64(i)),
+			BlockNumber:    int64(number),
+			BlockTimeStamp: int64(30_000 + number),
+		})
+	}
+	block := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(30_000 + number),
+			},
+		},
+		Transactions: txs,
+	})
+	return block, infos
+}
+
+func dbRebuildTraceAddress(seed byte) []byte {
+	out := make([]byte, common.AddressLength)
+	out[0] = common.AddressPrefixMainnet
+	for i := 1; i < len(out); i++ {
+		out[i] = seed + byte(i)
+	}
+	return out
+}
+
+func dbRebuildTraceAddressT(seed byte) common.Address {
+	return common.BytesToAddress(dbRebuildTraceAddress(seed))
+}
+
+func dbRebuildBalanceOp(id int64, addr []byte, amount int64) *contractpb.TransactionBalanceTrace_Operation {
+	return &contractpb.TransactionBalanceTrace_Operation{
+		OperationIdentifier: id,
+		Address:             append([]byte(nil), addr...),
+		Amount:              amount,
+	}
+}
+
+func dbRebuildBlockBalanceID(block *coretypes.Block) *contractpb.BlockBalanceTrace_BlockIdentifier {
+	return &contractpb.BlockBalanceTrace_BlockIdentifier{
+		Hash:   append([]byte(nil), block.Hash().Bytes()...),
+		Number: int64(block.Number()),
+	}
+}
+
+type dbRebuildErrChainIndex struct {
+	err error
+}
+
+func (r dbRebuildErrChainIndex) BlockNumberByHash(common.Hash) (uint64, bool, error) {
+	return 0, false, r.err
+}
+
+func (r dbRebuildErrChainIndex) TransactionBlockNumberByHash(common.Hash) (uint64, bool, error) {
+	return 0, false, r.err
+}
+
+func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
+	t.Helper()
+	app := cli.NewApp()
+	app.Flags = []cli.Flag{
+		dataDirFlag,
+		dbCacheFlag,
+		dbHandlesFlag,
+		dbMemtableFlag,
+		dbL0CompactionFlag,
+		dbL0StopFlag,
+		dbFromBlockFlag,
+		dbToBlockFlag,
+		dbETLTempDirFlag,
+		dbETLBufferMiBFlag,
+		dbETLBatchMiBFlag,
+		dbReplayTempDirFlag,
+		dbReplayDirFlag,
+		dbBalanceTraceOverwriteFlag,
+		dbStageVerifyFlag,
+		dbAlertJSONFlag,
+		dbAlertPrometheusFlag,
+		snapshotDirFlag,
+		snapshotTrustedCatalogKeyFlag,
+		snapshotTrustedCatalogKeyFileFlag,
+		snapshotForkConfigHashFlag,
+		testnetFlag,
+		genesisFileFlag,
+		devFlag,
+		devFullFeaturesFlag,
+		devMaintenanceIntervalFlag,
+		witnessKeyFlag,
+	}
+	set := flag.NewFlagSet("db-command-test", flag.ContinueOnError)
+	for _, f := range app.Flags {
+		if err := f.Apply(set); err != nil {
+			t.Fatalf("apply flag: %v", err)
+		}
+	}
+	if err := set.Parse(argv); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	return cli.NewContext(app, set, nil)
+}
+
+func openDBCmdFreezer(t *testing.T, dataDir string) *rawdbfreezer.Freezer {
+	t.Helper()
+	f, err := rawdbfreezer.NewFreezer(ancientDataDir(dataDir), "", false, 50, chainfreezer.FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	return f
+}
+
+func appendDBCmdFreezerRows(t *testing.T, f *rawdbfreezer.Freezer, rows uint64) {
+	t.Helper()
+	_, err := f.ModifyAncients(func(op rawdbfreezer.AncientWriteOp) error {
+		for i := uint64(0); i < rows; i++ {
+			if err := op.AppendRaw(rawdb.AncientBlocksTable, i, []byte{byte(i), byte(i + 1)}); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientTxInfosTable, i, []byte{byte(i + 2)}); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientStateRootsTable, i, []byte{byte(i + 3)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ModifyAncients: %v", err)
+	}
+}
+
+func appendDBCmdFreezerValidBlockRows(t *testing.T, f *rawdbfreezer.Freezer, rows uint64) {
+	t.Helper()
+	_, err := f.ModifyAncients(func(op rawdbfreezer.AncientWriteOp) error {
+		for i := uint64(0); i < rows; i++ {
+			block, _ := dbRebuildTxIndexBlock(t, i, 0)
+			blockRaw, err := block.Marshal()
+			if err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientBlocksTable, i, blockRaw); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientTxInfosTable, i, nil); err != nil {
+				return err
+			}
+			root := common.Hash{byte(i + 1)}
+			if err := op.AppendRaw(rawdb.AncientStateRootsTable, i, root.Bytes()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ModifyAncients valid block rows: %v", err)
+	}
+}
+
+func dbFreezerAlertIssueKindsContain(issues []dbFreezerAlertIssue, kind string) bool {
+	for _, issue := range issues {
+		if issue.kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func dbStageStatusJSONRow(report dbStageStatusJSON, stage rawdb.StageID) (dbStageStatusRowJSON, bool) {
+	for _, row := range report.Stages {
+		if row.Name == string(stage) {
+			return row, true
+		}
+	}
+	return dbStageStatusRowJSON{}, false
+}
+
+type dbCmdStaticAncient struct {
+	rawdb.NoopAncient
+	kind   string
+	number uint64
+	data   []byte
+}
+
+func (a *dbCmdStaticAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	if a != nil && kind == a.kind && number == a.number {
+		return append([]byte(nil), a.data...), nil
+	}
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (a *dbCmdStaticAncient) HasAncient(kind string, number uint64) (bool, error) {
+	return a != nil && kind == a.kind && number == a.number, nil
+}
+
+func captureDBCmdStdout(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	os.Stdout = w
+	defer func() {
+		os.Stdout = old
+		_ = r.Close()
+	}()
+	runErr := fn()
+	closeErr := w.Close()
+	out, readErr := io.ReadAll(r)
+	if runErr != nil {
+		return string(out), runErr
+	}
+	if closeErr != nil {
+		return string(out), closeErr
+	}
+	if readErr != nil {
+		return string(out), readErr
+	}
+	return string(out), nil
+}
+
+func dbTestSectionBloomBitSetHas(bitset []byte, bit uint64) bool {
+	byteIndex := bit / 8
+	if byteIndex >= uint64(len(bitset)) {
+		return false
+	}
+	return bitset[byteIndex]&(1<<(bit%8)) != 0
+}

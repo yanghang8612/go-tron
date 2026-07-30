@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/pointread"
@@ -182,20 +183,17 @@ func ReadCommitmentBranch(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool,
 // bytes immediately (decodes and copies the leaf-key field) before any further
 // DB access, so it can use this variant to skip the per-Get heap copy.
 func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool, error) {
-	var (
-		raw []byte
-		err error
-	)
 	if reader, ok := db.(cachedNoCopyKeyPartsReader); ok {
-		raw, err = reader.GetNoCopyCachedKeyParts(stateCommitmentBranchPrefix, prefix)
-	} else {
-		raw, err = readStateNoCopyCached(db, commitmentBranchKey(prefix))
+		raw, err := reader.GetNoCopyCachedKeyParts(stateCommitmentBranchPrefix, prefix)
+		if err != nil {
+			return verifyStateReadMiss(db, commitmentBranchKey(prefix), fmt.Sprintf("commitment branch %x", prefix), err)
+		}
+		return raw, true, nil
 	}
-	if err != nil {
-		// go-ethereum memorydb / pebble both return an error on missing keys.
-		return nil, false, nil
-	}
-	return raw, true, nil
+	key := commitmentBranchKey(prefix)
+	return readValueThenVerifyMiss(db, key, fmt.Sprintf("commitment branch %x", prefix), func(key []byte) ([]byte, error) {
+		return readStateNoCopyCached(db, key)
+	})
 }
 
 // ViewCommitmentBranchNoCopy invokes fn with the encoded branch and reports
@@ -236,6 +234,70 @@ func DeleteCommitmentBranch(db ethdb.KeyValueWriter, prefix []byte) error {
 	return db.Delete(commitmentBranchKey(prefix))
 }
 
+type commitmentBranchStore interface {
+	ethdb.KeyValueWriter
+	ethdb.Iteratee
+}
+
+// DeleteCommitmentBranches removes the staged commitment branch keyspace.
+// Pebble uses one range tombstone; generic stores fall back to bounded point
+// deletion so fresh-database rebuilds do not retain the retired branch state.
+func DeleteCommitmentBranches(db commitmentBranchStore) error {
+	if deleter, ok := db.(ethdb.KeyValueRangeDeleter); ok {
+		if err := deleter.DeleteRange(stateCommitmentBranchPrefix, prefixUpperBound(stateCommitmentBranchPrefix)); err == nil {
+			return nil
+		} else if !errors.Is(err, ethdb.ErrTooManyKeys) {
+			return err
+		}
+	}
+	return deleteCommitmentBranchesByPointScan(db)
+}
+
+func deleteCommitmentBranchesByPointScan(db commitmentBranchStore) error {
+	for {
+		it := db.NewIterator(stateCommitmentBranchPrefix, nil)
+		keys := make([][]byte, 0, resetScanBatch)
+		for it.Next() {
+			keys = append(keys, append([]byte(nil), it.Key()...))
+			if len(keys) >= resetScanBatch {
+				break
+			}
+		}
+		err := it.Error()
+		it.Release()
+		if err != nil {
+			return err
+		}
+		if len(keys) == 0 {
+			return nil
+		}
+		if err := deleteCommitmentBranchKeys(db, keys); err != nil {
+			return err
+		}
+		if len(keys) < resetScanBatch {
+			return nil
+		}
+	}
+}
+
+func deleteCommitmentBranchKeys(db commitmentBranchStore, keys [][]byte) error {
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatch()
+		for _, key := range keys {
+			if err := batch.Delete(key); err != nil {
+				return err
+			}
+		}
+		return batch.Write()
+	}
+	for _, key := range keys {
+		if err := db.Delete(key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // IterateCommitmentBranches iterates every branch row in the commitment
 // keyspace and calls fn with (logicalPrefix, encodedBranchData).  logicalPrefix
 // is the hex-trie prefix as passed to WriteCommitmentBranch (i.e. the physical
@@ -272,11 +334,7 @@ func WriteCommitmentEngineState(db ethdb.KeyValueWriter, encoded []byte) error {
 // ReadCommitmentEngineState retrieves the staged-engine state blob.
 // Returns (nil, false, nil) when absent.
 func ReadCommitmentEngineState(db ethdb.KeyValueReader) ([]byte, bool, error) {
-	raw, err := db.Get(stateCommitmentEngineStateKey)
-	if err != nil {
-		return nil, false, nil
-	}
-	return append([]byte(nil), raw...), true, nil
+	return readPresentValue(db, stateCommitmentEngineStateKey, "commitment engine state")
 }
 
 // commitmentBranchKey builds the physical DB key for a branch row with an

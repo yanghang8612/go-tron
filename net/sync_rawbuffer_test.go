@@ -1,19 +1,19 @@
 package net
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
 
 // rawOf marshals a block to its wire bytes for tests that seed the sync buffer
-// directly. Raw bytes remain authoritative even when the bounded decoded fast
-// path also retains the receive object.
+// directly (the buffer now stores raw bytes, not the decoded block).
 func rawOf(t *testing.T, b *types.Block) []byte {
 	t.Helper()
 	raw, err := proto.Marshal(b.Proto())
@@ -58,20 +58,23 @@ func TestPopDecodesRawBufferedBlock(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.ensureSessionMapsLocked()
-	ss.blockBuffer[1] = bufferedSyncBlock{raw: raw, num: 1, hash: blk.Hash()}
+	ss.blockBuffer[1] = syncdl.BufferedBlock{Raw: raw, Num: 1, Hash: blk.Hash()}
 	ss.bufferedHash[blk.Hash()] = struct{}{}
 	batch := ss.popBufferedSyncBatchLocked(time.Now())
 	ss.mu.Unlock()
 
 	// pop only moves raw entries (cheap, under lock); decode runs off-lock.
-	if len(batch.buffered) != 1 {
-		t.Fatalf("expected 1 popped raw entry, got %d", len(batch.buffered))
+	if len(batch.Buffered) != 1 {
+		t.Fatalf("expected 1 popped raw entry, got %d", len(batch.Buffered))
 	}
-	ss.decodeBatchBlocks(&batch)
-	if len(batch.blocks) != 1 {
-		t.Fatalf("expected 1 decoded block, got %d", len(batch.blocks))
+	decoded := syncdl.DecodeBufferedBatch(&batch)
+	if decoded.Action != syncdl.BufferedBatchDecodeImport {
+		t.Fatalf("decode action = %v err=%v, want import", decoded.Action, decoded.Err)
 	}
-	got := batch.blocks[0]
+	if len(batch.Blocks) != 1 {
+		t.Fatalf("expected 1 decoded block, got %d", len(batch.Blocks))
+	}
+	got := batch.Blocks[0]
 	if got == nil {
 		t.Fatal("popped block is nil — raw bytes were not decoded")
 	}
@@ -84,33 +87,13 @@ func TestPopDecodesRawBufferedBlock(t *testing.T) {
 	if n := len(got.Transactions()); n != 3 {
 		t.Fatalf("transactions lost in raw round-trip: got %d want 3", n)
 	}
-	canonical, err := got.MarshalReusable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(raw) > 0 && &canonical[0] != &raw[0] {
-		t.Fatal("raw-only decode did not reuse the transferred wire capacity")
-	}
-	wantCanonical, err := proto.Marshal(got.Proto())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(canonical, wantCanonical) {
-		t.Fatal("reused block encoding differs from canonical protobuf marshal")
-	}
-	again, err := got.MarshalReusable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(again, canonical) {
-		t.Fatal("second reusable marshal did not fall back to equivalent fresh output")
-	}
 }
 
-// TestHandleBlockBuffersRawBytesAndBoundedDecodedFastPath pins that raw bytes
-// remain authoritative while a near-tip entry may reuse the receive-path block.
-// Block #2 stays buffered behind a gap at #1 and can be inspected.
-func TestHandleBlockBuffersRawBytesAndBoundedDecodedFastPath(t *testing.T) {
+// TestHandleBlockBuffersRawBytes pins that the receive path stores the raw
+// wire bytes plus light metadata rather than retaining the decoded block, so a
+// buffered entry carries no decoded proto tree. Block #2 is delivered while the
+// head is at genesis, so it stays buffered (gap at #1) and can be inspected.
+func TestHandleBlockBuffersRawBytes(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
 
@@ -139,295 +122,61 @@ func TestHandleBlockBuffersRawBytesAndBoundedDecodedFastPath(t *testing.T) {
 	if !ok {
 		t.Fatal("block #2 was not buffered")
 	}
-	if len(buf.raw) == 0 {
+	if len(buf.Raw) == 0 {
 		t.Fatal("buffered entry holds no raw bytes")
 	}
-	if &buf.raw[0] != &raw[0] {
-		t.Fatal("sync buffer copied an exclusively owned wire payload")
+	if buf.Hash != blk.Hash() || buf.Num != 2 {
+		t.Fatalf("buffered metadata wrong: hash=%s num=%d", buf.Hash, buf.Num)
 	}
-	if buf.decoded != blk {
-		t.Fatal("near-tip buffered entry did not retain the receive-path block")
+	staged, ok, err := rawdb.ReadSyncStagedBlockRaw(bc.DB(), 2)
+	if err != nil || !ok {
+		t.Fatalf("persistent staged block ok=%v err=%v", ok, err)
 	}
-	if buf.hash != blk.Hash() || buf.num != 2 {
-		t.Fatalf("buffered metadata wrong: hash=%s num=%d", buf.hash, buf.num)
-	}
-	batch := bufferedSyncBatch{buffered: []bufferedSyncBlock{buf}}
-	ss.decodeBatchBlocks(&batch)
-	reused, err := batch.blocks[0].MarshalReusable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(raw) > 0 && &reused[0] != &raw[0] {
-		t.Fatal("decoded fast path did not reuse the transferred wire capacity")
+	if !bytesEqual(staged.Raw, raw) {
+		t.Fatal("persistent staged block did not preserve received raw bytes")
 	}
 }
 
-func TestHandleRawBlockDefersDecodedGraphUntilDrain(t *testing.T) {
-	bc := makeTestChain(t)
-	ss := NewSyncService(bc, nil)
-	peer, closePeer := testPeer(t, "raw-first")
-	defer closePeer()
-
-	blk := blockWithTxs(2, tcommon.Hash{0xcd}, 200)
-	raw := rawOf(t, blk)
-	ss.mu.Lock()
-	ss.initSessionLocked(time.Now())
-	ps, _ := ss.addPeerStateLocked(peer)
-	markPendingLocked(ss, ps, blk.ID())
-	ss.mu.Unlock()
-
-	if !ss.HandleRawBlock(peer, raw) {
-		t.Fatal("HandleRawBlock should consume the requested sync block")
-	}
-	ss.mu.Lock()
-	buffered, ok := ss.blockBuffer[2]
-	ss.mu.Unlock()
-	if !ok {
-		t.Fatal("raw block was not buffered")
-	}
-	if buffered.decoded != nil {
-		t.Fatal("raw receive path retained an eagerly decoded protobuf graph")
-	}
-	if len(buffered.raw) == 0 || &buffered.raw[0] != &raw[0] {
-		t.Fatal("raw receive path copied or lost the transferred payload")
-	}
-
-	batch := bufferedSyncBatch{buffered: []bufferedSyncBlock{buffered}}
-	ss.decodeBatchBlocks(&batch)
-	if len(batch.blocks) != 1 || batch.blocks[0].Number() != 2 || len(batch.blocks[0].Transactions()) != 200 {
-		t.Fatal("deferred decode did not reconstruct the requested block")
-	}
-	encoded, err := batch.blocks[0].MarshalReusable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(encoded) == 0 || &encoded[0] != &raw[0] {
-		t.Fatal("deferred block did not reuse raw capacity for durable marshal")
-	}
-}
-
-func TestMalformedRawBatchRollsBackCursorAndFailsOver(t *testing.T) {
-	bc := makeTestChain(t)
-	ss := NewSyncService(bc, nil)
-	bad, closeBad := testPeer(t, "malformed-raw")
-	defer closeBad()
-	good, closeGood := testPeer(t, "replacement")
-	defer closeGood()
-
-	b1 := blockWithTxs(1, bc.CurrentBlock().Hash(), 1)
-	b2 := blockWithTxs(2, b1.Hash(), 1)
-	b3 := blockWithTxs(3, b2.Hash(), 1)
-	batch := bufferedSyncBatch{buffered: []bufferedSyncBlock{
-		{raw: rawOf(t, b1), hash: b1.Hash(), num: 1, peer: bad},
-		// A header-only scanner can identify a requested BlockID while a
-		// malformed nested transaction later makes full protobuf decoding fail.
-		{raw: []byte{0x12, 0x80}, hash: b2.Hash(), num: 2, peer: bad},
-		{raw: rawOf(t, b3), hash: b3.Hash(), num: 3, peer: bad},
-	}}
-
-	ss.mu.Lock()
-	ss.initSessionLocked(time.Now())
-	ss.addPeerStateLocked(bad)
-	goodState, _ := ss.addPeerStateLocked(good)
-	goodState.minFetchNum = 1
-	goodState.lastInventoryNum = 3
-	ss.syncedTipNum = 3
-	ss.bufferPrunedTipNum = 3
-	ss.mu.Unlock()
-
-	if err := ss.decodeBatchBlocks(&batch); err == nil {
-		t.Fatal("malformed nested block decoded successfully")
-	}
-	if len(batch.blocks) != 1 {
-		t.Fatalf("decoded prefix=%d, want 1", len(batch.blocks))
-	}
-	failedPeer, out, restart := ss.recoverMalformedBatch(&batch)
-	if restart {
-		t.Fatal("replacement peer should keep the session active")
-	}
-	if failedPeer != bad {
-		t.Fatalf("failed peer=%v, want %v", failedPeer, bad)
-	}
-	if len(out) != 1 || len(out[0].blocks) != 3 || out[0].peer != good {
-		t.Fatalf("retry requests=%+v, want all three blocks on replacement", out)
-	}
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	if ss.syncedTipNum != 0 || ss.bufferPrunedTipNum != 0 {
-		t.Fatalf("cursor not rolled back: synced=%d pruned=%d", ss.syncedTipNum, ss.bufferPrunedTipNum)
-	}
-	if _, ok := ss.peers[bad.ID()]; ok {
-		t.Fatal("malformed peer remained in sync session")
-	}
-}
-
-func TestHandleRawBlockBroadcastFallbackAndMalformedSyncDrop(t *testing.T) {
-	bc := makeTestChain(t)
-	ss := NewSyncService(bc, nil)
-	blk := blockWithTxs(1, bc.CurrentBlock().Hash(), 1)
-	if ss.HandleRawBlock(nil, rawOf(t, blk)) {
-		t.Fatal("non-syncing service consumed a block that belongs to broadcast handling")
-	}
-
-	ss.mu.Lock()
-	ss.initSessionLocked(time.Now())
-	ss.mu.Unlock()
-	if !ss.HandleRawBlock(nil, []byte{0x12, 0x80}) {
-		t.Fatal("syncing service did not consume malformed raw block")
-	}
-	ss.mu.Lock()
-	buffered := len(ss.blockBuffer)
-	requested := len(ss.requested)
-	ss.mu.Unlock()
-	if buffered != 0 || requested != 0 {
-		t.Fatalf("malformed raw block changed sync state: buffered=%d requested=%d", buffered, requested)
-	}
-}
-
-func TestDecodedFastPathIsBoundedReusedAndReleased(t *testing.T) {
+func TestRestoreStagedBodyBuffersRawBytes(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
 
-	peer, closePeer := testPeer(t, "decoded-cap")
-	defer closePeer()
-
-	count := maxRetainedDecodedBlocks + 5
-	originals := make(map[uint64]*types.Block, count)
-	ss.mu.Lock()
-	ss.initSessionLocked(time.Now())
-	ps, _ := ss.addPeerStateLocked(peer)
-	ss.mu.Unlock()
-
-	// Leave #1 missing so every #2.. block remains buffered while admission
-	// exercises the decoded-object cap.
-	for i := 0; i < count; i++ {
-		num := int64(i + 2)
-		blk := blockWithTxs(num, tcommon.Hash{0xab}, 1)
-		originals[uint64(num)] = blk
-		ss.mu.Lock()
-		markPendingLocked(ss, ps, blk.ID())
-		ss.mu.Unlock()
-		if !ss.HandleBlock(peer, blk, rawOf(t, blk)) {
-			t.Fatalf("HandleBlock(%d) should consume the expected block", num)
-		}
-	}
-	ss.waitForDrain()
-
-	ss.mu.Lock()
-	retained := ss.retainedDecodedBlocks
-	retainedBytes := ss.retainedDecodedBytes
-	decodedEntries := 0
-	for _, buffered := range ss.blockBuffer {
-		if buffered.decoded != nil {
-			decodedEntries++
-		}
-	}
-	ss.mu.Unlock()
-	if retained != maxRetainedDecodedBlocks || decodedEntries != maxRetainedDecodedBlocks {
-		t.Fatalf("decoded cap mismatch: charged=%d entries=%d want=%d",
-			retained, decodedEntries, maxRetainedDecodedBlocks)
-	}
-	if retainedBytes <= 0 || retainedBytes > maxRetainedDecodedBytes {
-		t.Fatalf("retained decoded bytes=%d outside (0,%d]", retainedBytes, maxRetainedDecodedBytes)
-	}
-
-	ss.mu.Lock()
-	ss.syncedTipNum = 1
-	ss.mu.Unlock()
-	var (
-		batches []bufferedSyncBatch
-		decoded []*types.Block
-	)
-	for len(decoded) < count {
-		ss.mu.Lock()
-		batch := ss.popBufferedSyncBatchLocked(time.Now())
-		ss.mu.Unlock()
-		if len(batch.buffered) == 0 {
-			t.Fatalf("buffer drained after %d/%d blocks", len(decoded), count)
-		}
-		ss.decodeBatchBlocks(&batch)
-		decoded = append(decoded, batch.blocks...)
-		batches = append(batches, batch)
-	}
-	ss.mu.Lock()
-	chargedWhileActive := ss.retainedDecodedBlocks
-	ss.mu.Unlock()
-	if chargedWhileActive != maxRetainedDecodedBlocks {
-		t.Fatalf("active batch lost decoded charge: got=%d want=%d",
-			chargedWhileActive, maxRetainedDecodedBlocks)
-	}
-	if len(decoded) != count {
-		t.Fatalf("decoded blocks=%d, want=%d", len(decoded), count)
-	}
-	for i, block := range decoded {
-		num := uint64(i + 2)
-		if i < maxRetainedDecodedBlocks && block != originals[num] {
-			t.Fatalf("block #%d did not reuse retained receive object", num)
-		}
-		if i >= maxRetainedDecodedBlocks && block == originals[num] {
-			t.Fatalf("block #%d bypassed raw decode beyond retention cap", num)
-		}
-	}
-
-	for i := range batches {
-		ss.releaseDecodedBatch(&batches[i])
-	}
-	ss.mu.Lock()
-	remainingBlocks := ss.retainedDecodedBlocks
-	remainingBytes := ss.retainedDecodedBytes
-	ss.mu.Unlock()
-	if remainingBlocks != 0 || remainingBytes != 0 {
-		t.Fatalf("decoded charge not released: blocks=%d bytes=%d", remainingBlocks, remainingBytes)
-	}
-
-	probe := originals[2]
-	ss.mu.Lock()
-	oversizeRetained := ss.retainDecodedBlockLocked(probe, 2, 0, maxRetainedDecodedBytes+1)
-	farRetained := ss.retainDecodedBlockLocked(probe, alwaysFetchRunaheadBlocks+1, 0, 1)
-	finalBlocks := ss.retainedDecodedBlocks
-	finalBytes := ss.retainedDecodedBytes
-	ss.mu.Unlock()
-	if oversizeRetained || farRetained || finalBlocks != 0 || finalBytes != 0 {
-		t.Fatalf("decoded guards admitted unsafe block: oversize=%v far=%v blocks=%d bytes=%d",
-			oversizeRetained, farRetained, finalBlocks, finalBytes)
-	}
-}
-
-func BenchmarkDecodeBatchBlocks(b *testing.B) {
-	const batchSize = maxFetchBatch
-	blk := blockWithTxs(1, tcommon.Hash{0xab}, 200)
+	blk := blockWithTxs(1, bc.CurrentBlock().Hash(), 2)
 	raw, err := proto.Marshal(blk.Proto())
 	if err != nil {
-		b.Fatal(err)
+		t.Fatal(err)
 	}
-	ss := &SyncService{}
+	if err := rawdb.WriteSyncStagedBlockRaw(bc.DB(), blk, raw); err != nil {
+		t.Fatalf("write raw staged block: %v", err)
+	}
 
-	for _, tc := range []struct {
-		name       string
-		retainMode int
-	}{
-		{name: "raw"},
-		{name: "bounded", retainMode: 1},
-		{name: "all-retained", retainMode: 2},
-	} {
-		b.Run(tc.name, func(b *testing.B) {
-			buffered := make([]bufferedSyncBlock, batchSize)
-			for i := range buffered {
-				buffered[i].raw = raw
-				if tc.retainMode == 2 || (tc.retainMode == 1 && i < maxRetainedDecodedBlocks) {
-					buffered[i].decoded = blk
-				}
-			}
-			b.SetBytes(int64(batchSize * len(raw)))
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				batch := bufferedSyncBatch{buffered: buffered}
-				ss.decodeBatchBlocks(&batch)
-				if len(batch.blocks) != batchSize {
-					b.Fatalf("decoded %d blocks, want %d", len(batch.blocks), batchSize)
-				}
-			}
-		})
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buf, ok := ss.blockBuffer[1]
+	bufferedBytes := ss.bufferedBytes
+	ss.mu.Unlock()
+	if !ok {
+		t.Fatal("raw staged block was not restored into sync buffer")
 	}
+	if !bytesEqual(buf.Raw, raw) {
+		t.Fatal("restored sync buffer did not preserve staged raw bytes")
+	}
+	if buf.Hash != blk.Hash() || buf.Num != 1 {
+		t.Fatalf("restored metadata wrong: hash=%s num=%d", buf.Hash, buf.Num)
+	}
+	if bufferedBytes != int64(len(raw)) {
+		t.Fatalf("restored bufferedBytes=%d, want %d", bufferedBytes, len(raw))
+	}
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -385,6 +385,7 @@ func opCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 func opExtCodeSize(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	addr := stack.peek()
 	address := uint256ToAddress(addr)
+	interpreter.tvm.prefetchRuntimeContract(address)
 	size := interpreter.tvm.StateDB.GetCodeSize(address)
 	addr.SetUint64(uint64(size))
 	return nil, nil
@@ -393,6 +394,7 @@ func opExtCodeSize(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 func opExtCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	a, memOffset, codeOffset, length := stack.pop(), stack.pop(), stack.pop(), stack.pop()
 	address := uint256ToAddress(&a)
+	interpreter.tvm.prefetchRuntimeContract(address)
 	off, size, memCost, err := checkedMemoryExpansionCostWords(memory, &memOffset, &length, EXTCODECOPY)
 	if err != nil {
 		return nil, err
@@ -444,6 +446,7 @@ func opReturnDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, 
 func opExtCodeHash(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	addr := stack.peek()
 	address := uint256ToAddress(addr)
+	interpreter.tvm.prefetchRuntimeContract(address)
 	if !interpreter.tvm.StateDB.Exist(address) {
 		addr.Clear()
 	} else {
@@ -469,6 +472,27 @@ const (
 	javaMaxInt             = uint64(1<<31 - 1)
 )
 
+type blockHashByNumberReader interface {
+	BlockHashByNumber(number uint64) (tcommon.Hash, bool)
+}
+
+func tvmBlockHashByNumber(db KVReadWriter, number uint64) (tcommon.Hash, bool, error) {
+	if db == nil {
+		return tcommon.Hash{}, false, nil
+	}
+	if hash, found, err := rawdb.ReadBlockHashByNumberStrict(db, number); err != nil || found {
+		return hash, found, err
+	}
+	if reader, ok := db.(rawdb.BlockHashReaderStrict); ok {
+		return reader.BlockHashByNumberStrict(number)
+	}
+	if reader, ok := db.(blockHashByNumberReader); ok {
+		hash, found := reader.BlockHashByNumber(number)
+		return hash, found, nil
+	}
+	return tcommon.Hash{}, false, nil
+}
+
 func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	num := stack.peek()
 	index := javaMaxInt
@@ -485,30 +509,19 @@ func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memor
 		num.Clear()
 		return nil, nil
 	}
-	// The 256-block lookback window reaches PAST the freezer line: with the
-	// default 128-block margin the slice-3 freezer deletes hot b-<num> rows
-	// older than (solidified - 128), so a bare KV read goes blind for the
-	// older part of the window. Nile stalled at block 16,745,722 exactly
-	// here — JustLink VRF mixes blockhash(head-211) into its seed, the row
-	// was already pruned, BLOCKHASH returned 0 and the proof check
-	// reverted while java-tron (whose RecentBlockStore always covers 256
-	// blocks) succeeded. Production paths hand the VM a store implementing
-	// rawdb.BlockHashReader whose lookup falls through to ancient; the raw
-	// KV read below remains as the fallback for tests with bare memdbs.
-	if bhr, ok := interpreter.tvm.DB.(rawdb.BlockHashReader); ok {
-		if h, found := bhr.BlockHashByNumber(index); found {
-			num.SetBytes(h.Bytes())
-		} else {
-			num.Clear()
-		}
+	// The 256-block lookback window reaches past the freezer line. Production
+	// paths hand the VM a store implementing BlockHashByNumber whose lookup
+	// falls through to ancient; bare test stores still resolve via the hot
+	// canonical block-hash helper.
+	hash, found, err := tvmBlockHashByNumber(interpreter.tvm.DB, index)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		num.SetBytes(hash.Bytes())
 		return nil, nil
 	}
-	block := rawdb.ReadBlockKV(interpreter.tvm.DB, index)
-	if block == nil {
-		num.Clear()
-		return nil, nil
-	}
-	num.SetBytes(block.Hash().Bytes())
+	num.Clear()
 	return nil, nil
 }
 
@@ -556,18 +569,19 @@ func opChainID(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	// genesis hash (mainnet 0x2b6653dc, Nile 0xcd8690dc); pre-fork it is the
 	// full 32-byte genesis hash.
 	//
-	// Resolve the genesis hash via BlockHashReader first (same freezer hazard as
-	// BLOCKHASH: once block 0 is frozen its hot b-<0> row is pruned and a bare
-	// KV read goes blind), then fall back to ReadBlockKV for bare-memdb stores.
+	// Resolve the genesis hash through the same audited helper as BLOCKHASH:
+	// production stores fall through to ancient, while bare memdb tests can use
+	// hot canonical block rows.
 	postFork := interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId
 	if interpreter.tvm.DB != nil {
 		var genesisHash []byte
-		if bhr, ok := interpreter.tvm.DB.(rawdb.BlockHashReader); ok {
-			if h, found := bhr.BlockHashByNumber(0); found {
-				genesisHash = h.Bytes()
-			}
-		} else if genesis := rawdb.ReadBlockKV(interpreter.tvm.DB, 0); genesis != nil {
-			genesisHash = genesis.Hash().Bytes()
+		if hash, found, err := tvmBlockHashByNumber(interpreter.tvm.DB, 0); err != nil {
+			return nil, err
+		} else if found {
+			genesisHash = hash.Bytes()
+		}
+		if genesisHash == nil && interpreter.tvm.GenesisHash != (tcommon.Hash{}) {
+			genesisHash = interpreter.tvm.GenesisHash.Bytes()
 		}
 		if genesisHash != nil {
 			if postFork && len(genesisHash) >= 4 {
@@ -731,6 +745,7 @@ func opSload(pc *uint64, interpreter *Interpreter, contract *Contract, memory *M
 	var k tcommon.Hash
 	b := key.Bytes32()
 	copy(k[:], b[:])
+	interpreter.tvm.prefetchRuntimeStorage(contract.Address, k)
 	val := interpreter.tvm.StateDB.GetState(contract.Address, k)
 	key.SetBytes(val.Bytes())
 	return nil, nil
@@ -744,6 +759,7 @@ func opSstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	copy(k[:], kb[:])
 	copy(v[:], vb[:])
 
+	interpreter.tvm.prefetchRuntimeStorage(contract.Address, k)
 	_, exists := interpreter.tvm.StateDB.GetStateWithExist(contract.Address, k)
 	var cost uint64
 	if !exists && v != (tcommon.Hash{}) {

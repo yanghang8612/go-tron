@@ -3,246 +3,11 @@ package rawdb
 import (
 	"bytes"
 	"errors"
-	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 )
-
-type discardCommitmentWriter struct{}
-
-func (discardCommitmentWriter) Put(_, _ []byte) error { return nil }
-func (discardCommitmentWriter) Delete(_ []byte) error { return nil }
-
-type keyPartsProbeWriter struct {
-	putCalls    int
-	deleteCalls int
-	key         []byte
-	value       []byte
-}
-
-type ownedKeyPartsProbeWriter struct {
-	keyPartsProbeWriter
-	ownedCalls       int
-	stringOwnedCalls int
-	batchOwnedCalls  int
-	batchCount       int
-	batchKeys        [][]byte
-	batchValues      [][]byte
-}
-
-func (w *ownedKeyPartsProbeWriter) PutKeyPartsOwnedValue(first, second, value []byte) error {
-	w.ownedCalls++
-	w.key = append(append(w.key[:0], first...), second...)
-	w.value = value
-	return nil
-}
-
-func (w *ownedKeyPartsProbeWriter) PutKeyPartsStringOwnedValue(first []byte, second string, value []byte) error {
-	w.stringOwnedCalls++
-	w.key = append(append(w.key[:0], first...), second...)
-	w.value = value
-	return nil
-}
-
-func (w *ownedKeyPartsProbeWriter) PutKeyPartsStringsOwnedValues(first []byte, seconds []string, values [][]byte) error {
-	w.batchOwnedCalls++
-	w.batchKeys = make([][]byte, len(seconds))
-	for i, second := range seconds {
-		w.batchKeys[i] = append(append([]byte(nil), first...), second...)
-	}
-	w.batchValues = values
-	return nil
-}
-
-func (w *ownedKeyPartsProbeWriter) PutKeyPartsStringsOwnedValuesWithBatchCount(first []byte, seconds []string, values [][]byte, batchCount int) error {
-	w.batchCount = batchCount
-	return w.PutKeyPartsStringsOwnedValues(first, seconds, values)
-}
-
-func (w *keyPartsProbeWriter) Put(_, _ []byte) error {
-	return fmt.Errorf("unexpected fallback Put")
-}
-
-func (w *keyPartsProbeWriter) Delete(_ []byte) error {
-	return fmt.Errorf("unexpected fallback Delete")
-}
-
-func (w *keyPartsProbeWriter) PutKeyParts(first, second, value []byte) error {
-	w.putCalls++
-	w.key = append(append(w.key[:0], first...), second...)
-	w.value = append(w.value[:0], value...)
-	return nil
-}
-
-func (w *keyPartsProbeWriter) DeleteKeyParts(first, second []byte) error {
-	w.deleteCalls++
-	w.key = append(append(w.key[:0], first...), second...)
-	return nil
-}
-
-func TestCommitmentBranchUsesSplitKeyWriter(t *testing.T) {
-	w := new(keyPartsProbeWriter)
-	prefix := []byte{1, 2, 3, 4}
-	value := []byte{5, 6, 7}
-	wantKey := commitmentBranchKey(prefix)
-	if err := WriteCommitmentBranch(w, prefix, value); err != nil {
-		t.Fatal(err)
-	}
-	if w.putCalls != 1 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, value) {
-		t.Fatalf("split Put = calls %d key %x value %x, want 1/%x/%x", w.putCalls, w.key, w.value, wantKey, value)
-	}
-	if err := DeleteCommitmentBranch(w, prefix); err != nil {
-		t.Fatal(err)
-	}
-	if w.deleteCalls != 1 || !bytes.Equal(w.key, wantKey) {
-		t.Fatalf("split Delete = calls %d key %x, want 1/%x", w.deleteCalls, w.key, wantKey)
-	}
-}
-
-func TestCommitmentBranchOwnedValueUsesTransferWriter(t *testing.T) {
-	w := new(ownedKeyPartsProbeWriter)
-	prefix := []byte{1, 2, 3, 4}
-	value := []byte{5, 6, 7}
-	wantKey := commitmentBranchKey(prefix)
-	if !SupportsCommitmentBranchOwnedValue(w) {
-		t.Fatal("owned split-key writer capability was not detected")
-	}
-	if err := WriteCommitmentBranchOwned(w, prefix, value); err != nil {
-		t.Fatal(err)
-	}
-	if w.ownedCalls != 1 || w.putCalls != 0 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, value) {
-		t.Fatalf("owned Put = owned %d regular %d key %x value %x, want 1/0/%x/%x", w.ownedCalls, w.putCalls, w.key, w.value, wantKey, value)
-	}
-	if &w.value[0] != &value[0] {
-		t.Fatal("owned commitment writer copied the transferred value")
-	}
-}
-
-func TestCommitmentBranchOwnedStringUsesTransferWriter(t *testing.T) {
-	w := new(ownedKeyPartsProbeWriter)
-	prefix := string([]byte{1, 2, 3, 4})
-	value := []byte{5, 6, 7}
-	wantKey := commitmentBranchKey([]byte(prefix))
-	if err := WriteCommitmentBranchOwnedString(w, prefix, value); err != nil {
-		t.Fatal(err)
-	}
-	if w.stringOwnedCalls != 1 || w.ownedCalls != 0 || w.putCalls != 0 || !bytes.Equal(w.key, wantKey) || !bytes.Equal(w.value, value) {
-		t.Fatalf("string-owned Put = string %d owned %d regular %d key %x value %x, want 1/0/0/%x/%x", w.stringOwnedCalls, w.ownedCalls, w.putCalls, w.key, w.value, wantKey, value)
-	}
-	if &w.value[0] != &value[0] {
-		t.Fatal("string-owned commitment writer copied the transferred value")
-	}
-}
-
-func TestCommitmentBranchesOwnedStringsUsesBatchTransferWriter(t *testing.T) {
-	w := new(ownedKeyPartsProbeWriter)
-	prefixes := []string{string([]byte{1, 2}), string([]byte{3, 4, 5})}
-	values := [][]byte{{6, 7}, {8, 9, 10}}
-	if err := WriteCommitmentBranchesOwnedStrings(w, prefixes, values); err != nil {
-		t.Fatal(err)
-	}
-	if w.batchOwnedCalls != 1 || w.stringOwnedCalls != 0 || w.ownedCalls != 0 || w.putCalls != 0 {
-		t.Fatalf("batch owned calls = batch %d string %d owned %d regular %d, want 1/0/0/0",
-			w.batchOwnedCalls, w.stringOwnedCalls, w.ownedCalls, w.putCalls)
-	}
-	if w.batchCount != 1 {
-		t.Fatalf("default batch count = %d, want 1", w.batchCount)
-	}
-	for i, prefix := range prefixes {
-		wantKey := commitmentBranchKey([]byte(prefix))
-		if !bytes.Equal(w.batchKeys[i], wantKey) || !bytes.Equal(w.batchValues[i], values[i]) {
-			t.Fatalf("batch[%d] = key %x value %x, want %x/%x", i, w.batchKeys[i], w.batchValues[i], wantKey, values[i])
-		}
-		if &w.batchValues[i][0] != &values[i][0] {
-			t.Fatalf("batch[%d] copied the transferred value", i)
-		}
-	}
-	if err := WriteCommitmentBranchesOwnedStrings(w, prefixes, values[:1]); err == nil {
-		t.Fatal("mismatched batch lengths were accepted")
-	}
-	if err := WriteCommitmentBranchesOwnedStringsWithBatchCount(w, prefixes, values, 7); err != nil {
-		t.Fatal(err)
-	}
-	if w.batchCount != 7 {
-		t.Fatalf("explicit batch count = %d, want 7", w.batchCount)
-	}
-}
-
-func BenchmarkCommitmentBranchKeyAllocation(b *testing.B) {
-	w := discardCommitmentWriter{}
-	value := bytes.Repeat([]byte{0xcd}, 256)
-	for _, prefixLen := range []int{0, 8, 32, 64} {
-		b.Run(fmt.Sprintf("prefix-%d", prefixLen), func(b *testing.B) {
-			prefix := bytes.Repeat([]byte{0x0a}, prefixLen)
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				if err := WriteCommitmentBranch(w, prefix, value); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-type cachedNoCopyProbe struct {
-	ethdb.KeyValueReader
-	getCalls    int
-	noCopyCalls int
-	cachedCalls int
-}
-
-type splitCachedNoCopyProbe struct {
-	*cachedNoCopyProbe
-	splitCalls int
-	first      []byte
-	second     []byte
-}
-
-type splitCachedNoCopyViewProbe struct {
-	*splitCachedNoCopyProbe
-	stable    bool
-	viewCalls int
-	missing   bool
-}
-
-func (p *splitCachedNoCopyViewProbe) ViewNoCopyCachedKeyParts(first, second []byte, fn func([]byte, bool) error) (bool, error) {
-	p.viewCalls++
-	p.first = append(p.first[:0], first...)
-	p.second = append(p.second[:0], second...)
-	if p.missing {
-		return false, nil
-	}
-	key := append(append(make([]byte, 0, len(first)+len(second)), first...), second...)
-	value, err := p.KeyValueReader.Get(key)
-	if err != nil {
-		return false, err
-	}
-	return true, fn(value, p.stable)
-}
-
-func (p *splitCachedNoCopyProbe) GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error) {
-	p.splitCalls++
-	p.first = append(p.first[:0], first...)
-	p.second = append(p.second[:0], second...)
-	key := append(append(make([]byte, 0, len(first)+len(second)), first...), second...)
-	return p.KeyValueReader.Get(key)
-}
-
-func (p *cachedNoCopyProbe) Get(key []byte) ([]byte, error) {
-	p.getCalls++
-	return p.KeyValueReader.Get(key)
-}
-
-func (p *cachedNoCopyProbe) GetNoCopy(key []byte) ([]byte, error) {
-	p.noCopyCalls++
-	return p.KeyValueReader.Get(key)
-}
-
-func (p *cachedNoCopyProbe) GetNoCopyCached(key []byte) ([]byte, error) {
-	p.cachedCalls++
-	return p.KeyValueReader.Get(key)
-}
 
 func TestCommitmentBranchRoundTrip(t *testing.T) {
 	db := NewMemoryDatabase()
@@ -348,86 +113,152 @@ func TestCommitmentBranchMissing(t *testing.T) {
 	}
 }
 
-func TestReadCommitmentBranchNoCopy_PrefersCachedReader(t *testing.T) {
+func TestDeleteCommitmentBranchesLeavesOtherKeyspaces(t *testing.T) {
 	db := NewMemoryDatabase()
-	prefix := []byte{0x01, 0x02, 0x03}
-	want := []byte{0xaa, 0xbb, 0xcc}
-	if err := WriteCommitmentBranch(db, prefix, want); err != nil {
+	if err := WriteCommitmentBranch(db, nil, []byte("root")); err != nil {
 		t.Fatal(err)
 	}
-	probe := &cachedNoCopyProbe{KeyValueReader: db}
-	got, ok, err := ReadCommitmentBranchNoCopy(probe, prefix)
-	if err != nil || !ok || !bytes.Equal(got, want) {
-		t.Fatalf("ReadCommitmentBranchNoCopy = (%x,%v,%v)", got, ok, err)
+	if err := WriteCommitmentBranch(db, []byte{0x0a}, []byte("branch")); err != nil {
+		t.Fatal(err)
 	}
-	if probe.cachedCalls != 1 || probe.noCopyCalls != 0 || probe.getCalls != 0 {
-		t.Fatalf("reader calls cached/noCopy/Get = %d/%d/%d, want 1/0/0",
-			probe.cachedCalls, probe.noCopyCalls, probe.getCalls)
+	if err := db.Put([]byte("unrelated"), []byte("keep")); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteCommitmentBranches(db); err != nil {
+		t.Fatalf("delete commitment branches: %v", err)
+	}
+
+	count := 0
+	if err := IterateCommitmentBranches(db, func(_, _ []byte) (bool, error) {
+		count++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate commitment branches: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("commitment branch count = %d, want 0", count)
+	}
+	value, err := db.Get([]byte("unrelated"))
+	if err != nil || !bytes.Equal(value, []byte("keep")) {
+		t.Fatalf("unrelated value = %q, err = %v", value, err)
 	}
 }
 
-func TestReadCommitmentBranchNoCopy_PrefersSplitCachedReader(t *testing.T) {
-	db := NewMemoryDatabase()
-	prefix := []byte{0x04, 0x05, 0x06}
-	want := []byte{0xdd, 0xee, 0xff}
-	if err := WriteCommitmentBranch(db, prefix, want); err != nil {
-		t.Fatal(err)
-	}
-	probe := &splitCachedNoCopyProbe{
-		cachedNoCopyProbe: &cachedNoCopyProbe{KeyValueReader: db},
-	}
-	got, ok, err := ReadCommitmentBranchNoCopy(probe, prefix)
-	if err != nil || !ok || !bytes.Equal(got, want) {
-		t.Fatalf("ReadCommitmentBranchNoCopy = (%x,%v,%v)", got, ok, err)
-	}
-	if probe.splitCalls != 1 || probe.cachedCalls != 0 || probe.noCopyCalls != 0 || probe.getCalls != 0 {
-		t.Fatalf("reader calls split/cached/noCopy/Get = %d/%d/%d/%d, want 1/0/0/0",
-			probe.splitCalls, probe.cachedCalls, probe.noCopyCalls, probe.getCalls)
-	}
-	if !bytes.Equal(probe.first, stateCommitmentBranchPrefix) || !bytes.Equal(probe.second, prefix) {
-		t.Fatalf("split key parts = %x/%x, want %x/%x", probe.first, probe.second, stateCommitmentBranchPrefix, prefix)
-	}
-}
-
-func TestViewCommitmentBranchNoCopy_PrefersSplitViewerAndPropagatesLifetime(t *testing.T) {
-	db := NewMemoryDatabase()
-	prefix := []byte{0x07, 0x08, 0x09}
-	want := []byte{0xaa, 0xbb, 0xcc}
-	if err := WriteCommitmentBranch(db, prefix, want); err != nil {
-		t.Fatal(err)
-	}
-	probe := &splitCachedNoCopyViewProbe{
-		splitCachedNoCopyProbe: &splitCachedNoCopyProbe{
-			cachedNoCopyProbe: &cachedNoCopyProbe{KeyValueReader: db},
-		},
-		stable: false,
-	}
-	called := 0
-	found, err := ViewCommitmentBranchNoCopy(probe, prefix, func(encoded []byte, stable bool) error {
-		called++
-		if !bytes.Equal(encoded, want) || stable {
-			t.Fatalf("view callback = (%x, stable=%v), want (%x, false)", encoded, stable, want)
+func TestDeleteCommitmentBranchesFallsBackToBoundedPointScan(t *testing.T) {
+	db := &noRangeCommitmentBranchStore{db: NewMemoryDatabase()}
+	for i := 0; i < resetScanBatch*2+1; i++ {
+		prefix := []byte{byte(i >> 8), byte(i)}
+		if err := WriteCommitmentBranch(db, prefix, []byte{byte(i)}); err != nil {
+			t.Fatalf("write branch %d: %v", i, err)
 		}
-		return nil
-	})
-	if err != nil || !found || called != 1 {
-		t.Fatalf("ViewCommitmentBranchNoCopy = found %v called %d err %v, want true/1/nil", found, called, err)
 	}
-	if probe.viewCalls != 1 || probe.splitCalls != 0 || probe.cachedCalls != 0 || probe.getCalls != 0 {
-		t.Fatalf("reader calls view/split/cached/noCopy/Get = %d/%d/%d/%d/%d, want 1/0/0/0/0",
-			probe.viewCalls, probe.splitCalls, probe.cachedCalls, probe.noCopyCalls, probe.getCalls)
+	if err := DeleteCommitmentBranches(db); err != nil {
+		t.Fatalf("delete commitment branches: %v", err)
 	}
-	if !bytes.Equal(probe.first, stateCommitmentBranchPrefix) || !bytes.Equal(probe.second, prefix) {
-		t.Fatalf("split key parts = %x/%x, want %x/%x", probe.first, probe.second, stateCommitmentBranchPrefix, prefix)
+	count := 0
+	if err := IterateCommitmentBranches(db, func(_, _ []byte) (bool, error) {
+		count++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate commitment branches: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("commitment branch count = %d, want 0", count)
+	}
+}
+
+// noRangeCommitmentBranchStore intentionally exposes only the interfaces the
+// fallback needs; embedding KeyValueStore would promote DeleteRange and bypass
+// the bounded point-scan path.
+type noRangeCommitmentBranchStore struct {
+	db ethdb.KeyValueStore
+}
+
+func (s *noRangeCommitmentBranchStore) Put(key, value []byte) error {
+	return s.db.Put(key, value)
+}
+
+func (s *noRangeCommitmentBranchStore) Delete(key []byte) error {
+	return s.db.Delete(key)
+}
+
+func (s *noRangeCommitmentBranchStore) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return s.db.NewIterator(prefix, start)
+}
+
+func TestCommitmentBranchSurfacesStorageErrors(t *testing.T) {
+	db := NewMemoryDatabase()
+	prefix := []byte{0x01, 0x02}
+	if err := WriteCommitmentBranch(db, prefix, []byte("branch")); err != nil {
+		t.Fatalf("write branch: %v", err)
 	}
 
-	injected := errors.New("decode failed")
-	if found, err := ViewCommitmentBranchNoCopy(probe, prefix, func([]byte, bool) error { return injected }); !found || !errors.Is(err, injected) {
-		t.Fatalf("callback failure = found %v err %v, want true/%v", found, err, injected)
+	_, ok, err := ReadCommitmentBranch(failingCommitmentReader{
+		reader: db,
+		getErr: errors.New("get boom"),
+	}, prefix)
+	if err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("plain get error ok=%v err=%v, want get error", ok, err)
 	}
-	probe.missing = true
-	called = 0
-	if found, err := ViewCommitmentBranchNoCopy(probe, prefix, func([]byte, bool) error { called++; return nil }); err != nil || found || called != 0 {
-		t.Fatalf("missing view = found %v called %d err %v, want false/0/nil", found, called, err)
+
+	_, ok, err = ReadCommitmentBranchNoCopy(failingNoCopyCommitmentReader{
+		failingCommitmentReader: failingCommitmentReader{
+			reader: db,
+			getErr: errors.New("nocopy boom"),
+		},
+	}, prefix)
+	if err == nil || ok || !strings.Contains(err.Error(), "nocopy boom") {
+		t.Fatalf("nocopy get error ok=%v err=%v, want get error", ok, err)
 	}
+
+	_, ok, err = ReadCommitmentBranch(failingCommitmentReader{
+		reader: db,
+		getErr: errors.New("get boom"),
+		hasErr: errors.New("has boom"),
+	}, prefix)
+	if err == nil || ok || !strings.Contains(err.Error(), "presence after get error") {
+		t.Fatalf("presence error ok=%v err=%v, want presence error", ok, err)
+	}
+}
+
+func TestCommitmentEngineStateSurfacesStorageErrors(t *testing.T) {
+	db := NewMemoryDatabase()
+	if err := WriteCommitmentEngineState(db, []byte("engine")); err != nil {
+		t.Fatalf("write engine state: %v", err)
+	}
+
+	if got, ok, err := ReadCommitmentEngineState(failingCommitmentReader{reader: db, hasErr: errors.New("has boom")}); err == nil || ok || got != nil || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("has error = %x ok=%v err=%v, want presence error", got, ok, err)
+	}
+	if got, ok, err := ReadCommitmentEngineState(failingCommitmentReader{reader: db, getErr: errors.New("get boom")}); err == nil || ok || got != nil || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("get error = %x ok=%v err=%v, want get error", got, ok, err)
+	}
+}
+
+type failingCommitmentReader struct {
+	reader ethdb.KeyValueReader
+	hasErr error
+	getErr error
+}
+
+func (r failingCommitmentReader) Has(key []byte) (bool, error) {
+	if r.hasErr != nil {
+		return false, r.hasErr
+	}
+	return r.reader.Has(key)
+}
+
+func (r failingCommitmentReader) Get(key []byte) ([]byte, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	return r.reader.Get(key)
+}
+
+type failingNoCopyCommitmentReader struct {
+	failingCommitmentReader
+}
+
+func (r failingNoCopyCommitmentReader) GetNoCopy(key []byte) ([]byte, error) {
+	return r.Get(key)
 }

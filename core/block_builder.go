@@ -9,7 +9,6 @@ import (
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -44,12 +43,12 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// hash; falls back to the genesis state root for block #1). Goes
 	// through bc.chaindb so frozen blocks transparently resolve through
 	// the freezer's `state_roots` table.
-	parentRoot := rawdb.ReadBlockStateRoot(bc.chaindb, parent.Hash())
-	if parentRoot == (tcommon.Hash{}) && parent.Number() == 0 {
-		parentRoot = rawdb.ReadGenesisStateRoot(bc.db)
+	parentRoot, ok, err := bc.stateRootForKnownBlockStrict(parent)
+	if err != nil {
+		return nil, fmt.Errorf("parent state root: %w", err)
 	}
-	if parentRoot == (tcommon.Hash{}) {
-		parentRoot = parent.AccountStateRoot()
+	if !ok {
+		return nil, fmt.Errorf("parent state root for block %d not available", parent.Number())
 	}
 	statedb, err := state.New(parentRoot, bc.stateDB)
 	if err != nil {
@@ -173,7 +172,10 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.TryRemoveThePowerOfTheGr(adapter, allWitnesses)
 		applyRewardVI(buildBuf, statedb, dynProps)
-		hasPendingVotes := applyPendingVotes(statedb)
+		hasPendingVotes, err := applyPendingVotes(statedb)
+		if err != nil {
+			return nil, fmt.Errorf("apply pending votes: %w", err)
+		}
 		if hasPendingVotes {
 			allWitnesses = bc.gatherWitnessVotes(statedb)
 			sorted := dpos.SortWitnessesByVotesWithOptimization(allWitnesses, dynProps.ConsensusLogicOptimization())

@@ -65,7 +65,8 @@ func buildHistoryStructs(blocks, perBlock int) []*rawdb.StateDomainChange {
 // the codec's ReadAt — and asserts byte-identical results vs reading the raw,
 // uncompressed segment. This proves the offset-addressed read path needs no
 // change beyond swapping in the codec-backed io.ReaderAt; the on-disk segment is
-// smaller. (The remaining work is routing each read site through that swap.)
+// smaller. Source-audit coverage keeps production record readers behind the
+// compressed-aware openers that provide that codec-backed ReaderAt.
 func TestCompressedHistorySegmentReaderEquivalence(t *testing.T) {
 	changes := buildHistoryStructs(300, 50)
 	fromTx, toTx := uint64(9_000_000), uint64(9_000_000+300-1)
@@ -241,13 +242,13 @@ func BenchmarkKeyedLookupUncompressed(b *testing.B) { benchmarkKeyedLookup(b, fa
 
 // TestCompactionMergesCompressedSources proves the compactor reads COMPRESSED
 // source segments (copyPayload decompresses instead of raw-copying) and emits a
-// compressed merged seg+kv that reads back — so compression survives merges
-// rather than decaying to uncompressed on every retire.
+// compressed merged payload plus raw random-read accessor that reads back.
 func TestCompactionMergesCompressedSources(t *testing.T) {
 	if !CompressHistorySegments {
 		t.Skip("compression disabled")
 	}
 	dir := t.TempDir()
+	const recordsPerSource = 128
 	mk := func(from, to uint64, changes ...*rawdb.StateDomainChange) []SegmentRef {
 		seg, idx, acc, err := writeHistorySegmentFiles(dir, SegmentRef{
 			Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
@@ -266,10 +267,18 @@ func TestCompactionMergesCompressedSources(t *testing.T) {
 		}
 		return []SegmentRef{seg, acc, idx}
 	}
+	many := func(blockNum, txNum uint64, fill byte) []*rawdb.StateDomainChange {
+		changes := make([]*rawdb.StateDomainChange, 0, recordsPerSource)
+		for seq := uint64(1); seq <= recordsPerSource; seq++ {
+			key := string(append([]byte{fill, byte(seq)}, bytes.Repeat([]byte{fill}, 768)...))
+			changes = append(changes, binaryStateDomainChange(blockNum, txNum, seq, key))
+		}
+		return changes
+	}
 	var refs []SegmentRef
-	refs = append(refs, mk(1, 1, binaryStateDomainChange(1, 1, 1, "a"))...)
-	refs = append(refs, mk(2, 2, binaryStateDomainChange(2, 2, 1, "b"))...)
-	refs = append(refs, mk(3, 3, binaryStateDomainChange(3, 3, 1, "c"))...)
+	refs = append(refs, mk(1, 1, many(1, 1, 'a')...)...)
+	refs = append(refs, mk(2, 2, many(2, 2, 'b')...)...)
+	refs = append(refs, mk(3, 3, many(3, 3, 'c')...)...)
 	if err := PublishManifest(dir, NewManifest(1, 3, refs)); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
@@ -286,7 +295,7 @@ func TestCompactionMergesCompressedSources(t *testing.T) {
 	mergedSeg := compactionRefByKind(t, result, SegmentHistory)
 	mergedAcc := compactionRefByKind(t, result, SegmentAccessor)
 
-	assertMagic := func(rel string) {
+	assertMagic := func(rel string, want string) {
 		f, err := os.Open(filepath.Join(dir, rel))
 		if err != nil {
 			t.Fatal(err)
@@ -296,20 +305,21 @@ func TestCompactionMergesCompressedSources(t *testing.T) {
 		if _, err := f.ReadAt(m[:], 0); err != nil {
 			t.Fatal(err)
 		}
-		if string(m[:]) != compressedBlockMagic {
-			t.Fatalf("merged %s not compressed (magic %q)", rel, m)
+		if string(m[:]) != want {
+			t.Fatalf("merged %s magic %q, want %q", rel, m, want)
 		}
 	}
-	assertMagic(mergedSeg.Path)
-	assertMagic(mergedAcc.Path)
+	assertMagic(mergedSeg.Path, compressedBlockMagic)
+	assertMagic(mergedAcc.Path, string(stateDomainChangeBinaryAccessorMagic[:]))
 
-	// The merged compressed seg reads back with all three records.
+	// The merged compressed seg reads back across multiple source compression
+	// blocks without materializing a source segment.
 	got, err := readStateDomainChangeBinarySegment(dir, mergedSeg)
 	if err != nil {
 		t.Fatalf("read merged compressed seg: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("merged seg has %d records, want 3", len(got))
+	if len(got) != recordsPerSource*3 {
+		t.Fatalf("merged seg has %d records, want %d", len(got), recordsPerSource*3)
 	}
 }
 

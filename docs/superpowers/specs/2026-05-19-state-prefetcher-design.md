@@ -1,6 +1,9 @@
 # State prefetcher — design
 
-**Status:** Proposed
+**Status:** Partial implementation: raw latest-domain prefetch driver,
+`actuator.PrefetchKeysFor(tx)` envelope-key extraction, opt-in
+`ProcessBlock` wiring, focused benchmarks, and a repeatable benchmark harness
+landed. Long replay soak and default-on rollout remain.
 **Author:** yanghang8612
 **Date:** 2026-05-19
 **Inspiration:** [go-ethereum/core/state/trie_prefetcher.go](../../../../ethereum/go-ethereum/core/state/trie_prefetcher.go)
@@ -33,10 +36,11 @@ main thread reaches that tx, the relevant trie nodes are already warm in
 the cache.
 
 gtron has a flat state (no MPT) so each "state read" is just one Pebble
-Get. But the same prefetch idea applies: while tx N runs on the main
-thread, kick off async `state.GetAccount(senderOfTxN+1)` and friends in
-parallel goroutines so when tx N+1 starts, the in-memory `state.StateDB`
-cache is warm.
+Get. The same prefetch idea applies, but with an important current-state
+constraint: `StateDB`'s account/storage maps are still single-writer data
+structures, so the first safe implementation warms the underlying latest-domain
+KV/blockbuffer reads rather than mutating `StateDB` object caches from worker
+goroutines.
 
 Initial benchmarks against geth's main-net replay show 10-20% block-apply
 throughput uplift from this pattern. gtron should see similar gains on
@@ -58,16 +62,17 @@ heavy blocks (DEX trade clusters, dapp activity bursts).
 - Do NOT prefetch from disk-key-set we don't know upfront (e.g. VM CALL
   targets only known at runtime). Prefetch the things we CAN derive from
   the tx envelope (sender, recipient, contract address, asset issuer).
-- Do NOT introduce data races. Prefetcher results must be visible to the
-  main goroutine via `state.StateDB`'s existing locked access patterns —
-  not a side cache.
+- Do NOT introduce data races. Until `StateDB` object maps have explicit
+  concurrent-read/write locking, worker goroutines must not call `GetAccount`,
+  `GetState`, `GetCode`, or other methods that populate those maps. The landed
+  driver reads raw latest-domain rows through `ethdb.KeyValueReader` only.
 
 ## Mental model
 
 ```
 main goroutine:        run tx N → run tx N+1 → run tx N+2
 prefetcher goroutine:  warm (tx N+1) → warm (tx N+2) → warm (tx N+3)
-                       ^ runs in parallel; populates state.StateDB cache
+                       ^ runs in parallel; warms raw KV/blockbuffer caches
 ```
 
 If the main goroutine catches up, prefetcher idles. If a tx execution is
@@ -93,50 +98,57 @@ guaranteed-read by `Validate + Execute`:
 | `ShieldedTransferContract` | merkle current/last tree, nullifier set (cheap; usually cached) |
 | (other ~20 types) | per-actuator audit |
 
-Each `actuator.Actuator` interface gains a new optional method:
+The first implementation uses a single dispatcher rather than extending every
+actuator:
 
 ```go
-type Prefetcher interface {
-    PrefetchKeys(tx *types.Transaction) []state.PrefetchKey
-}
+func actuator.PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey
 ```
 
-Actuators that don't implement it default to "no prefetch" (no harm; just
-no speedup for that contract type).
+The dispatcher emits best-effort hints and treats malformed payloads or invalid
+addresses as "no prefetch" for that field. That keeps prefetching out of the
+consensus validation path.
 
 ### Prefetcher driver
 
-`core/state/prefetcher.go`:
+`core/state/prefetcher.go` currently provides the race-safe raw latest-domain
+driver:
 
 ```go
 type StatePrefetcher struct {
-    statedb  *StateDB
+    db       ethdb.KeyValueReader
     workCh   chan PrefetchKey
     workers  int             // default GOMAXPROCS/2, capped at 8
-    done     chan struct{}
+    stats    StatePrefetcherStats
 }
 
 func (p *StatePrefetcher) Start()
-func (p *StatePrefetcher) Stop()           // drains workers, idempotent
-func (p *StatePrefetcher) Enqueue(keys []PrefetchKey)
+func (p *StatePrefetcher) Stop()            // drains workers, idempotent
+func (p *StatePrefetcher) Enqueue(keys []PrefetchKey) int
+func (p *StatePrefetcher) Stats() StatePrefetcherStats
 ```
 
-`state_processor.go::ProcessBlock`:
+`state_processor.go::ProcessBlock` passes the same `ethdb.KeyValueReader`
+surface used for block execution, normally `bc.buffer`, so prefetch reads see
+already-buffered previous-block writes without touching `StateDB` caches. The
+public test helpers keep prefetch disabled; production `BlockChain.applyBlock`
+uses `params.ChainConfig.StatePrefetchEnabled`.
+Accepted keys are deduplicated for the worker lifetime. This keeps repeated
+hot hints from consuming queue capacity; only keys that could not fit in the
+queue are counted as `Dropped`.
 
 ```go
-prefetcher := state.NewPrefetcher(statedb, runtime.GOMAXPROCS(0)/2)
+prefetcher := state.NewStatePrefetcher(db, state.StatePrefetcherConfig{
+    Workers: workers,
+})
 defer prefetcher.Stop()
 prefetcher.Start()
 
-const lookahead = 8        // tunable
+nextPrefetchTx := 0
 for i, tx := range txs {
-    // Enqueue prefetch work for txs [i+1, i+lookahead]
-    for j := i + 1; j <= i+lookahead && j < len(txs); j++ {
-        if pfk, ok := actuatorPrefetchKeys(txs[j]); ok {
-            prefetcher.Enqueue(pfk)
-        }
-    }
-    // Execute current tx (synchronous, as today)
+    nextPrefetchTx = enqueueProcessBlockPrefetch(
+        prefetcher, txs, i, nextPrefetchTx, lookahead,
+    )
     runTx(i, tx)
 }
 ```
@@ -147,56 +159,64 @@ churn). 8 ahead is enough to keep workers fed without bloat.
 
 ### Worker behaviour
 
-Each worker is a simple read loop:
+Each worker is a simple read loop over raw latest-domain rows:
 
 ```go
 for key := range workCh {
     switch key.Kind {
-    case AccountKey:
-        statedb.GetAccount(key.Addr)            // populates cache
-    case StorageKey:
-        statedb.GetState(key.Addr, key.Slot)
-    case CodeKey:
-        statedb.GetCode(key.Addr)
-    case TRC10Key:
-        statedb.GetTRC10Balance(key.Addr, key.AssetID)
-    case WitnessKey:
-        statedb.GetWitness(key.Addr)
+    case PrefetchAccountLatest:
+        rawdb.ReadStateAccountLatest(db, key.Owner)
+    case PrefetchAccountKVLatest:
+        generation := key.Generation
+        if !key.HasGeneration {
+            generation, _, _ = rawdb.ReadStateKVGeneration(db, key.Owner)
+        }
+        rawdb.ReadStateKVLatest(db, key.Owner, generation, key.Domain, key.Key)
+    case PrefetchContractStorage:
+        generation := key.Generation
+        if !key.HasGeneration {
+            generation, _, _ = rawdb.ReadStateKVGeneration(db, key.Owner)
+        }
+        metadata, _, _ := rawdb.ReadStateKVLatest(db, key.Owner, generation, ContractMetadata, []byte("meta"))
+        meta := decodeContractMetadata(metadata)
+        rowKey := javaStorageRowKey(key.Owner, key.Slot, meta)
+        rawdb.ReadStateKVLatest(db, key.Owner, generation, ContractStorage, rowKey.Bytes())
     }
-    // errors silently ignored — this is just a warmup
+    // stats record hits, misses, drops, and errors; no consensus state changes.
 }
 ```
 
-`statedb.GetAccount` etc. are already thread-safe (the StateDB has an
-RWMutex over its object cache). The prefetcher's reads only populate the
-cache; no writes; concurrent main-thread reads see the populated entry
-instead of going to disk.
+Future work may warm `StateDB` object caches directly, but only after those
+maps have an explicit concurrency model and race tests.
 
 ## Race / correctness
 
-The only shared mutable state is `StateDB`'s object cache. Today's reads
-already lock the cache, so prefetcher reads are race-free by construction.
-Verify with `go test -race -count=3 ./core/...` after landing.
+The landed driver shares only the underlying `ethdb.KeyValueReader` with the
+main goroutine. Pebble and `blockbuffer.Buffer` already support concurrent
+reads; no `StateDB` map is touched by worker goroutines.
 
 Edge case: prefetcher fetches account X; main thread mutates X mid-flight
 (during current tx). Mutation goes through the same locked path, so:
 
-1. Prefetcher Get → cache populated with disk value V
-2. Main Execute → cache write (V → V')
-3. Next tx's GetAccount → cache returns V' (correct)
+1. Prefetcher raw latest-domain read warms the DB/blockbuffer read path.
+2. Main Execute remains the only path mutating `StateDB` object caches.
+3. Next tx's `StateDB` read observes the same serial state as today.
 
-No staleness possible: cache writes invalidate any prefetched read.
+No staleness is introduced because prefetched values are not stored in a side
+cache used for consensus reads.
 
 ## Stop semantics
 
 When `ProcessBlock` returns (success or error), prefetcher.Stop():
 
 - Closes `workCh` so workers exit
-- Waits for in-flight work via `done` channel
-- Any work that hadn't started gets dropped silently
+- Waits for in-flight work via the worker `WaitGroup`
+- `Enqueue` is non-blocking and returns the number of accepted keys.
+- Work that cannot fit in the queue is counted in `Dropped`.
 
-This is bounded: per-block prefetch fan-out is at most `lookahead × workers`
-keys, all returning O(1) Pebble Gets each.
+This is bounded: per-block prefetch fan-out should stay at most
+`lookahead × deterministic-keys-per-tx`, all returning O(1) latest-domain
+reads each.
 
 ## Configuration
 
@@ -204,14 +224,14 @@ keys, all returning O(1) Pebble Gets each.
 
 ```toml
 [state.prefetch]
-enabled    = true     # default
+enabled    = true     # currently opt-in; default is false until soak evidence
 workers    = 0        # 0 = GOMAXPROCS/2, capped at 8
 lookahead  = 8
 ```
 
-CLI: `--state.prefetch.disable`, `--state.prefetch.workers=4`, etc. The
-disable flag is the operator escape hatch if we discover a regression in
-production.
+CLI: `--state.prefetch.enabled`, `--state.prefetch.workers=4`, and
+`--state.prefetch.lookahead=8`. Leaving `enabled=false` recovers the prefetch-off
+behaviour exactly.
 
 ## Per-actuator audit format
 
@@ -224,11 +244,18 @@ per actuator listing:
 
 ## Acceptance criteria
 
-- `go test -race ./core/state/... ./core/state_processor/...` clean
-- A new benchmark `BenchmarkProcessBlock_HeavyTRX/prefetch=on`:
-  - on `prefetch=off`: baseline
-  - on `prefetch=on`: ≥ 10% throughput improvement
-  - on `prefetch=on` lightblock: ≤ 1% overhead vs baseline
+- `go test -race ./core ./core/state -run 'TestProcessBlockStatePrefetch|TestStatePrefetcher' -count=1` clean
+- Focused benchmarks in `core/state_processor_prefetch_bench_test.go`:
+  - `BenchmarkProcessBlock_HeavyTRX_HeavyState`
+  - `BenchmarkProcessBlock_HeavyTRX_ColdState`
+  - variants: `prefetch=off`, `prefetch=on_workers=2_lookahead=8`,
+    `prefetch=on_workers=4_lookahead=8`, `prefetch=on_workers=8_lookahead=8`
+- Repeatable benchmark collection through
+  `scripts/dev/state_prefetch_benchmark.sh`, preserving raw output plus commit
+  and host metadata for later sweep comparisons
+- Default-on threshold:
+  - on cold-state/heavy-block replay: ≥ 10% throughput improvement
+  - on hot/light blocks: ≤ 1% overhead vs baseline
 - Long-running Nile import (24h): no regressions in correctness, +5-15%
   in steady-state block import rate
 - Disable flag flips back to today's behaviour exactly
@@ -238,9 +265,8 @@ per actuator listing:
 - Prefetcher reads on Pebble compete with hot path. If we over-parallelize
   we starve the main goroutine's reads. Cap workers at 8 by default; the
   benchmark will tune this.
-- Memory bloat: prefetcher cache lives on `StateDB`, which is per-block.
-  Worst case 50 KB extra per block (8 cached accounts × 6 KB account
-  proto). Negligible.
+- Memory bloat: the landed driver does not populate `StateDB` object caches.
+  Queue size is bounded and values are discarded after the raw read returns.
 - Wrong prefetch keys (over-prefetch) waste work but never affect
   correctness. Under-prefetch just leaves perf on the table.
 

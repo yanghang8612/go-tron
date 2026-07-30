@@ -2,13 +2,16 @@ package snapshots
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -83,6 +86,162 @@ func TestLatestSegmentIteratorWriterRejectsUnsortedStream(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "not strictly sorted") {
 		t.Fatalf("unsorted stream err = %v, want sortedness error", err)
+	}
+}
+
+func TestManagerReloadsLatestSegmentWhenSamePathMetadataChanges(t *testing.T) {
+	dir := t.TempDir()
+	owner := latestStoreTestAddress(0x21)
+	key := AccountKVSnapshotKey(owner, 1, []byte("slot/a"))
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetKVLatest,
+		Domain:    kvdomains.SystemDynamicProperty,
+		Kind:      SegmentLatest,
+		FromTxNum: 1,
+		ToTxNum:   10,
+		Path:      "latest/system-dp-1-10.json",
+	}
+
+	firstRef, err := WriteLatestSegment(dir, ref, []LatestEntry{{Key: key, Value: []byte("old")}})
+	if err != nil {
+		t.Fatalf("write first segment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{firstRef})); err != nil {
+		t.Fatalf("publish first manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if got, ok, err := mgr.GetKVLatest(kvdomains.SystemDynamicProperty, owner, 1, []byte("slot/a"), 10); err != nil || !ok || string(got) != "old" {
+		t.Fatalf("first GetKVLatest = %q ok=%v err=%v, want old/true/nil", got, ok, err)
+	}
+	if len(mgr.cache) != 1 {
+		t.Fatalf("legacy latest cache entries = %d, want 1 after first read", len(mgr.cache))
+	}
+
+	secondRef, err := WriteLatestSegment(dir, ref, []LatestEntry{{Key: key, Value: []byte("new")}})
+	if err != nil {
+		t.Fatalf("write second segment: %v", err)
+	}
+	if secondRef.Checksum == firstRef.Checksum {
+		t.Fatalf("test fixture did not change segment checksum: first size/checksum %d/%s second %d/%s", firstRef.Size, firstRef.Checksum, secondRef.Size, secondRef.Checksum)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{secondRef})); err != nil {
+		t.Fatalf("publish second manifest: %v", err)
+	}
+	if _, err := mgr.currentManifest(); err != nil {
+		t.Fatalf("reload second manifest: %v", err)
+	}
+	if len(mgr.cache) != 0 {
+		t.Fatalf("legacy latest cache entries = %d after manifest replacement, want stale entry evicted", len(mgr.cache))
+	}
+
+	if got, ok, err := mgr.GetKVLatest(kvdomains.SystemDynamicProperty, owner, 1, []byte("slot/a"), 10); err != nil || !ok || string(got) != "new" {
+		t.Fatalf("reloaded GetKVLatest = %q ok=%v err=%v, want new/true/nil", got, ok, err)
+	}
+}
+
+func TestManagerReusesUnchangedManifest(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := latestStoreTestAddress(0x2d)
+	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account")); err != nil {
+		t.Fatalf("WriteStateAccountLatest: %v", err)
+	}
+	ref, err := BuildAccountLatestSegmentFromDB(db, dir, 1, 1, "latest/account-latest-1-1.json")
+	if err != nil {
+		t.Fatalf("BuildAccountLatestSegmentFromDB: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 1, []SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	first, err := mgr.currentManifest()
+	if err != nil || first == nil {
+		t.Fatalf("first currentManifest = %v/%v, want manifest/nil", first, err)
+	}
+	second, err := mgr.currentManifest()
+	if err != nil || second == nil {
+		t.Fatalf("second currentManifest = %v/%v, want manifest/nil", second, err)
+	}
+	if first != second {
+		t.Fatal("unchanged manifest was reparsed instead of reusing the verified manager view")
+	}
+}
+
+func TestManagerConcurrentLatestReadsAndManifestReload(t *testing.T) {
+	dir := t.TempDir()
+	owner := latestStoreTestAddress(0x22)
+	logicalKey := []byte("slot/a")
+	key := AccountKVSnapshotKey(owner, 1, logicalKey)
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetKVLatest,
+		Domain:    kvdomains.SystemDynamicProperty,
+		Kind:      SegmentLatest,
+		FromTxNum: 1,
+		ToTxNum:   10,
+		Path:      "latest/system-dp-1-10.json",
+	}
+	publish := func(value string) {
+		t.Helper()
+		segRef, err := WriteLatestSegment(dir, ref, []LatestEntry{{Key: key, Value: []byte(value)}})
+		if err != nil {
+			t.Fatalf("write segment %q: %v", value, err)
+		}
+		if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{segRef})); err != nil {
+			t.Fatalf("publish manifest %q: %v", value, err)
+		}
+	}
+	publish("value-00")
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	errs := make(chan error, 256)
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 40; j++ {
+				got, ok, err := mgr.GetKVLatest(kvdomains.SystemDynamicProperty, owner, 1, logicalKey, 10)
+				if err != nil || !ok || !strings.HasPrefix(string(got), "value-") {
+					errs <- fmt.Errorf("GetKVLatest = %q ok=%v err=%v", got, ok, err)
+					return
+				}
+				if manifest := mgr.Manifest(); manifest == nil {
+					errs <- fmt.Errorf("Manifest returned nil")
+					return
+				}
+				seen := false
+				err = mgr.IterateKVLatestPrefix(kvdomains.SystemDynamicProperty, owner, 1, []byte("slot/"), 10, func(key, value []byte) (bool, error) {
+					seen = true
+					if string(key) != string(logicalKey) || !strings.HasPrefix(string(value), "value-") {
+						return false, fmt.Errorf("prefix row key=%q value=%q", key, value)
+					}
+					return true, nil
+				})
+				if err != nil || !seen {
+					errs <- fmt.Errorf("IterateKVLatestPrefix seen=%v err=%v", seen, err)
+					return
+				}
+			}
+		}()
+	}
+	for i := 1; i <= 25; i++ {
+		publish(fmt.Sprintf("value-%02d", i))
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -288,6 +447,145 @@ func TestLatestSegmentRestoreUsesHotStore(t *testing.T) {
 	}
 }
 
+func TestManagerRestoreLatestLoadsThroughSortedETL(t *testing.T) {
+	dir := t.TempDir()
+	owner := latestStoreTestAddress(0x36)
+	code := []byte{0x60, 0x03, 0x60, 0x00}
+	codeHash := common.Keccak256(code)
+
+	type restoreInput struct {
+		ref      SegmentRef
+		entries  []LatestEntry
+		writeRaw func(*latestRestoreOrderWriter) error
+	}
+	inputs := []restoreInput{
+		{
+			ref: SegmentRef{
+				Dataset:   SegmentDatasetAccountLatest,
+				Kind:      SegmentLatest,
+				FromTxNum: 1,
+				ToTxNum:   10,
+				Path:      "latest/account.json",
+			},
+			entries: []LatestEntry{{Key: AccountSnapshotKey(owner), Value: []byte("account")}},
+			writeRaw: func(w *latestRestoreOrderWriter) error {
+				return rawdb.WriteStateAccountLatest(w, owner, []byte("account"))
+			},
+		},
+		{
+			ref: SegmentRef{
+				Dataset:   SegmentDatasetKVLatest,
+				Domain:    kvdomains.SystemReward,
+				Kind:      SegmentLatest,
+				FromTxNum: 1,
+				ToTxNum:   10,
+				Path:      "latest/kv.json",
+			},
+			entries: []LatestEntry{{Key: AccountKVSnapshotKey(owner, 9, []byte("reward/a")), Value: []byte("reward")}},
+			writeRaw: func(w *latestRestoreOrderWriter) error {
+				return rawdb.WriteStateKVLatest(w, owner, 9, kvdomains.SystemReward, []byte("reward/a"), []byte("reward"))
+			},
+		},
+		{
+			ref: SegmentRef{
+				Dataset:   SegmentDatasetKVGeneration,
+				Kind:      SegmentLatest,
+				FromTxNum: 1,
+				ToTxNum:   10,
+				Path:      "latest/generation.json",
+			},
+			entries: []LatestEntry{{Key: KVGenerationSnapshotKey(owner), Value: rawdb.EncodeStateKVGenerationValue(9)}},
+			writeRaw: func(w *latestRestoreOrderWriter) error {
+				return rawdb.WriteStateKVGeneration(w, owner, 9)
+			},
+		},
+		{
+			ref: SegmentRef{
+				Dataset:   SegmentDatasetCode,
+				Kind:      SegmentLatest,
+				FromTxNum: 1,
+				ToTxNum:   10,
+				Path:      "latest/code.json",
+			},
+			entries: []LatestEntry{{Key: CodeSnapshotKey(codeHash), Value: code}},
+			writeRaw: func(w *latestRestoreOrderWriter) error {
+				return rawdb.WriteStateCode(w, codeHash, code)
+			},
+		},
+	}
+
+	type keyedRef struct {
+		key []byte
+		ref SegmentRef
+	}
+	refsByPhysicalKey := make([]keyedRef, 0, len(inputs))
+	for _, input := range inputs {
+		ref, err := WriteLatestSegment(dir, input.ref, input.entries)
+		if err != nil {
+			t.Fatalf("write latest segment %s: %v", input.ref.Path, err)
+		}
+		recorder := newLatestRestoreOrderWriter()
+		if err := input.writeRaw(recorder); err != nil {
+			t.Fatalf("capture raw key for %s: %v", input.ref.Path, err)
+		}
+		if len(recorder.putKeys) != 1 {
+			t.Fatalf("capture raw key for %s wrote %d keys, want 1", input.ref.Path, len(recorder.putKeys))
+		}
+		refsByPhysicalKey = append(refsByPhysicalKey, keyedRef{
+			key: recorder.putKeys[0],
+			ref: ref,
+		})
+	}
+	sort.Slice(refsByPhysicalKey, func(i, j int) bool {
+		return bytes.Compare(refsByPhysicalKey[i].key, refsByPhysicalKey[j].key) < 0
+	})
+
+	manifestRefs := make([]SegmentRef, 0, len(refsByPhysicalKey))
+	directOrder := make([][]byte, 0, len(refsByPhysicalKey))
+	for i := len(refsByPhysicalKey) - 1; i >= 0; i-- {
+		manifestRefs = append(manifestRefs, refsByPhysicalKey[i].ref)
+		directOrder = append(directOrder, refsByPhysicalKey[i].key)
+	}
+	if sort.SliceIsSorted(directOrder, func(i, j int) bool {
+		return bytes.Compare(directOrder[i], directOrder[j]) < 0
+	}) {
+		t.Fatal("test setup produced already-sorted direct restore order")
+	}
+	if err := PublishManifest(dir, NewManifest(1, 10, manifestRefs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+
+	writer := newLatestRestoreOrderWriter()
+	if err := mgr.RestoreLatest(writer, 5); err != nil {
+		t.Fatalf("RestoreLatest: %v", err)
+	}
+	expectedKeys := make([][]byte, 0, len(refsByPhysicalKey))
+	for _, keyed := range refsByPhysicalKey {
+		expectedKeys = append(expectedKeys, keyed.key)
+	}
+	if !byteSlicesEqual(writer.putKeys, expectedKeys) {
+		t.Fatalf("restore put keys are not sorted by physical key\n got: %x\nwant: %x", writer.putKeys, expectedKeys)
+	}
+	if len(writer.deleteKeys) != 0 {
+		t.Fatalf("restore deletes = %d, want 0", len(writer.deleteKeys))
+	}
+
+	etlTemp := filepath.Join(t.TempDir(), "etl-scratch")
+	if err := mgr.RestoreLatestWithOptions(newLatestRestoreOrderWriter(), 5, RestoreETLOptions{
+		TempDir:     etlTemp,
+		BufferLimit: 1,
+	}); err != nil {
+		t.Fatalf("RestoreLatestWithOptions: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("custom latest restore ETL temp dir stat: %v", err)
+	}
+}
+
 func TestLatestSegmentBuildPublishAndRead(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -296,7 +594,13 @@ func TestLatestSegmentBuildPublishAndRead(t *testing.T) {
 	if err := rawdb.WriteStateKVLatest(db, owner2, 3, kvdomains.SystemReward, []byte("cycle/2"), []byte("ignored")); err != nil {
 		t.Fatal(err)
 	}
+	if err := rawdb.WriteStateKVGeneration(db, owner1, 7); err != nil {
+		t.Fatal(err)
+	}
 	if err := rawdb.WriteStateKVLatest(db, owner1, 7, kvdomains.SystemDynamicProperty, []byte("latest_block"), []byte("12")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVGeneration(db, owner2, 9); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteStateKVLatest(db, owner2, 9, kvdomains.SystemDynamicProperty, []byte("next_maintenance"), []byte("42")); err != nil {
@@ -350,6 +654,37 @@ func TestLatestSegmentBuildPublishAndRead(t *testing.T) {
 	}
 }
 
+type latestRestoreOrderWriter struct {
+	putKeys    [][]byte
+	deleteKeys [][]byte
+}
+
+func newLatestRestoreOrderWriter() *latestRestoreOrderWriter {
+	return &latestRestoreOrderWriter{}
+}
+
+func (w *latestRestoreOrderWriter) Put(key, value []byte) error {
+	w.putKeys = append(w.putKeys, append([]byte(nil), key...))
+	return nil
+}
+
+func (w *latestRestoreOrderWriter) Delete(key []byte) error {
+	w.deleteKeys = append(w.deleteKeys, append([]byte(nil), key...))
+	return nil
+}
+
+func byteSlicesEqual(a, b [][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !bytes.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 func TestLatestBinaryBuildSkipsStaleKVGenerations(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -383,12 +718,65 @@ func TestLatestBinaryBuildSkipsStaleKVGenerations(t *testing.T) {
 	}
 }
 
+func TestLatestBinaryBuildTreatsMissingKVGenerationAsZero(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x60}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, []byte("live-zero"), []byte("zero")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, owner, 1, kvdomains.ContractStorage, []byte("stale-one"), []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	ref, accessorRef, btreeRef, err := BuildLatestDomainSegmentFilesFromDB(db, dir, kvdomains.ContractStorage, 1, 10, "latest/contract-storage.seg")
+	if err != nil {
+		t.Fatalf("build latest binary segment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{ref, accessorRef, btreeRef})); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	got, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 0, []byte("live-zero"), 5)
+	if err != nil || !ok || string(got) != "zero" {
+		t.Fatalf("implicit generation-zero value = %q ok:%v err:%v", got, ok, err)
+	}
+	if got, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 1, []byte("stale-one"), 5); err != nil || ok || got != nil {
+		t.Fatalf("nonzero generation without generation row = %q ok:%v err:%v, want miss", got, ok, err)
+	}
+}
+
+func TestLatestBinaryBuildRequiresKVGenerationReader(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x61}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, []byte("slot"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := BuildLatestDomainSegmentFilesFromDB(iteratorOnlyLatestDB{Iteratee: db}, dir, kvdomains.ContractStorage, 1, 10, "latest/contract-storage.seg")
+	if err == nil || !strings.Contains(err.Error(), "nil reader while reading KV generation") {
+		t.Fatalf("build error = %v, want missing reader error", err)
+	}
+}
+
+type iteratorOnlyLatestDB struct {
+	ethdb.Iteratee
+}
+
 func TestLatestBinaryManagerReadsWithoutMaterializingSegment(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner1 := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x51}, common.AccountIDLength)...))
 	owner2 := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x52}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVGeneration(db, owner1, 7); err != nil {
+		t.Fatal(err)
+	}
 	if err := rawdb.WriteStateKVLatest(db, owner1, 7, kvdomains.SystemDynamicProperty, []byte("a"), []byte("value-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVGeneration(db, owner2, 7); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteStateKVLatest(db, owner2, 7, kvdomains.SystemDynamicProperty, []byte("b"), []byte("value-b")); err != nil {
@@ -450,6 +838,9 @@ func TestLatestBinaryManagerReadsWithBTreeAccessor(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x53}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVGeneration(db, owner, 7); err != nil {
+		t.Fatal(err)
+	}
 	entryCount := int(latestBinaryBTreeBlockSize) + 17
 	for i := 0; i < entryCount; i++ {
 		key := []byte(fmt.Sprintf("slot/%03d", i))
@@ -470,6 +861,43 @@ func TestLatestBinaryManagerReadsWithBTreeAccessor(t *testing.T) {
 	}
 	if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
 		t.Fatalf("check latest btree: %v", err)
+	}
+	badBTreeChecksum := btreeRef
+	badBTreeChecksum.Checksum = "sha256:bad"
+	if err := CheckLatestBTreeSegment(dir, badBTreeChecksum); err == nil {
+		t.Fatal("latest btree with bad checksum checked successfully")
+	}
+	btreeData, err := os.ReadFile(filepath.Join(dir, btreeRef.Path))
+	if err != nil {
+		t.Fatalf("read latest btree: %v", err)
+	}
+	badBTreeTrailing := btreeRef
+	badBTreeTrailing.Path = "latest/contract-storage-trailing.bt"
+	trailingData := append(append([]byte(nil), btreeData...), 0xaa)
+	badBTreeTrailing.Size, badBTreeTrailing.Checksum = latestBinaryMetadata(trailingData)
+	if err := os.WriteFile(filepath.Join(dir, badBTreeTrailing.Path), trailingData, 0o644); err != nil {
+		t.Fatalf("write trailing latest btree: %v", err)
+	}
+	if err := CheckLatestBTreeSegment(dir, badBTreeTrailing); err == nil || !strings.Contains(err.Error(), "trailing payload bytes") {
+		t.Fatalf("latest btree with trailing payload err = %v, want trailing payload rejection", err)
+	}
+	badBTreeOrdinal := btreeRef
+	badBTreeOrdinal.Path = "latest/contract-storage-bad-ordinal.bt"
+	ordinalData := append([]byte(nil), btreeData...)
+	if len(ordinalData) < latestBinaryBTreeHeaderSize+8 {
+		t.Fatalf("btree data length = %d, want first entry offset", len(ordinalData))
+	}
+	entryOffset := binary.BigEndian.Uint64(ordinalData[latestBinaryBTreeHeaderSize : latestBinaryBTreeHeaderSize+8])
+	if entryOffset+12 > uint64(len(ordinalData)) {
+		t.Fatalf("btree first entry offset %d outside data length %d", entryOffset, len(ordinalData))
+	}
+	binary.BigEndian.PutUint64(ordinalData[entryOffset+4:entryOffset+12], 1)
+	badBTreeOrdinal.Size, badBTreeOrdinal.Checksum = latestBinaryMetadata(ordinalData)
+	if err := os.WriteFile(filepath.Join(dir, badBTreeOrdinal.Path), ordinalData, 0o644); err != nil {
+		t.Fatalf("write bad ordinal latest btree: %v", err)
+	}
+	if err := CheckLatestBTreeSegment(dir, badBTreeOrdinal); err == nil || !strings.Contains(err.Error(), "ordinal=1, want 0") {
+		t.Fatalf("latest btree with bad ordinal err = %v, want ordinal rejection", err)
 	}
 	if err := PublishManifest(dir, NewManifest(1, 20, []SegmentRef{ref, accessorRef, btreeRef})); err != nil {
 		t.Fatalf("publish manifest: %v", err)
@@ -501,6 +929,37 @@ func TestLatestBinaryManagerReadsWithBTreeAccessor(t *testing.T) {
 	}
 	if len(mgr.cache) != 0 {
 		t.Fatalf("btree IterateLatestPrefix materialized segment cache entries = %d", len(mgr.cache))
+	}
+}
+
+func TestLatestBinaryFastPathsValidateCodeValue(t *testing.T) {
+	dir := t.TempDir()
+	codeHash, ref, accessorRef, btreeRef := buildCorruptCodeLatestBinaryWithCompanions(t, dir)
+	if err := CheckLatestSegment(dir, ref); err == nil || !strings.Contains(err.Error(), "code segment hash mismatch") {
+		t.Fatalf("CheckLatestSegment corrupt code = %v, want code-hash mismatch", err)
+	}
+	if err := CheckLatestAccessorSegment(dir, accessorRef); err != nil {
+		t.Fatalf("CheckLatestAccessorSegment: %v", err)
+	}
+	if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
+		t.Fatalf("CheckLatestBTreeSegment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 20, []SegmentRef{ref, accessorRef, btreeRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if got, ok, err := mgr.GetCode(codeHash, 10); err == nil || ok || got != nil || !strings.Contains(err.Error(), "code segment hash mismatch") {
+		t.Fatalf("GetCode corrupt binary code = %x/%v/%v, want code-hash mismatch", got, ok, err)
+	}
+	if err := mgr.IterateCodePrefix(codeHash[:1], 10, func(common.Hash, []byte) (bool, error) {
+		t.Fatal("callback called for corrupt binary code")
+		return true, nil
+	}); err == nil || !strings.Contains(err.Error(), "code segment hash mismatch") {
+		t.Fatalf("IterateCodePrefix corrupt binary code = %v, want code-hash mismatch", err)
 	}
 }
 
@@ -818,6 +1277,86 @@ func (s *recordingLatestHotStore) WriteCommitmentDomain(logicalKey, value []byte
 	}
 	s.writtenCommitment[string(logicalKey)] = append([]byte(nil), value...)
 	return nil
+}
+
+func buildCorruptCodeLatestBinaryWithCompanions(t *testing.T, dir string) (common.Hash, SegmentRef, SegmentRef, SegmentRef) {
+	t.Helper()
+	goodCode := []byte{0x60, 0x00}
+	badCode := []byte{0x60, 0x01}
+	codeHash := common.Keccak256(goodCode)
+	seg := &LatestSegment{
+		Version:   LatestSegmentVersion,
+		Dataset:   SegmentDatasetCode,
+		FromTxNum: 1,
+		ToTxNum:   20,
+		Entries: []LatestEntry{{
+			Key:   CodeSnapshotKey(codeHash),
+			Value: badCode,
+		}},
+	}
+	data, err := encodeLatestBinarySegment(seg)
+	if err != nil {
+		t.Fatalf("encode corrupt code latest binary segment: %v", err)
+	}
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetCode,
+		Kind:      SegmentLatest,
+		FromTxNum: seg.FromTxNum,
+		ToTxNum:   seg.ToTxNum,
+		Path:      "latest/corrupt-code.seg",
+	}
+	abs := filepath.Join(dir, ref.Path)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
+		t.Fatalf("WriteFile corrupt code segment: %v", err)
+	}
+	size, checksum, checksumBytes, err := latestBinaryFileMetadata(abs)
+	if err != nil {
+		t.Fatalf("latestBinaryFileMetadata: %v", err)
+	}
+	ref.Size = size
+	ref.Checksum = checksum
+
+	accessorRef, err := writeLatestBinaryAccessorForSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("writeLatestBinaryAccessorForSegment: %v", err)
+	}
+	payload, err := os.CreateTemp(dir, "corrupt-code-btree-payload-*.tmp")
+	if err != nil {
+		t.Fatalf("CreateTemp payload: %v", err)
+	}
+	payloadName := payload.Name()
+	defer os.Remove(payloadName)
+	offsets, err := os.CreateTemp(dir, "corrupt-code-btree-offsets-*.tmp")
+	if err != nil {
+		_ = payload.Close()
+		t.Fatalf("CreateTemp offsets: %v", err)
+	}
+	offsetsName := offsets.Name()
+	defer os.Remove(offsetsName)
+	if err := writeLatestBinaryBTreeTempEntry(payload, offsets, latestBinaryBTreeEntry{
+		key:           CodeSnapshotKey(codeHash),
+		ordinal:       0,
+		segmentOffset: latestBinaryHeaderSize,
+	}); err != nil {
+		_ = payload.Close()
+		_ = offsets.Close()
+		t.Fatalf("writeLatestBinaryBTreeTempEntry: %v", err)
+	}
+	if err := payload.Close(); err != nil {
+		_ = offsets.Close()
+		t.Fatalf("close payload: %v", err)
+	}
+	if err := offsets.Close(); err != nil {
+		t.Fatalf("close offsets: %v", err)
+	}
+	btreeRef, err := writeLatestBinaryBTreeFromTempFiles(dir, ref, checksumBytes, payloadName, offsetsName, 1)
+	if err != nil {
+		t.Fatalf("writeLatestBinaryBTreeFromTempFiles: %v", err)
+	}
+	return codeHash, ref, accessorRef, btreeRef
 }
 
 func recordingLatestKVKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) string {

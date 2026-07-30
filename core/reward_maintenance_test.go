@@ -10,6 +10,8 @@ import (
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 var _ = ethrawdb.NewMemoryDatabase // pin import
@@ -60,6 +62,58 @@ func TestBuildStandbyWitnessPaySet_OptAwareTiebreakAndFilter(t *testing.T) {
 		if w.addr == z {
 			t.Fatal("0-vote witness must be filtered (java removeIf voteCount<1)")
 		}
+	}
+}
+
+func TestProcessBlockRebuildsStandbyPaySetAtRewardTime(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.SetChangeDelegation(true)
+	dp.SetCurrentCycleNumber(11)
+	dp.Set("witness_pay_per_block", 0)
+	dp.Set("witness_127_pay_per_block", 100)
+
+	a := tcommon.BytesToAddress([]byte{0x41, 0x01})
+	b := tcommon.BytesToAddress([]byte{0x41, 0x02})
+	statedb.CreateAccount(a, corepb.AccountType_Normal)
+	statedb.CreateAccount(b, corepb.AccountType_Normal)
+	seedWitness(t, statedb, a, 100)
+	seedWitness(t, statedb, b, 100)
+
+	staleSet := &standbyWitnessPaySet{
+		cycle:   11,
+		voteSum: 100,
+		witnesses: []standbyWitnessVote{{
+			addr:      a,
+			votes:     100,
+			brokerage: 20,
+		}},
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:         1,
+				Timestamp:      3000,
+				WitnessAddress: a.Bytes(),
+			},
+		},
+	})
+
+	_, _, err := processBlock(
+		statedb, dp, block, db, nil, 0, params.DefaultBlockNumForEnergyLimit,
+		false, tcommon.Hash{}, nil, staleSet, nil, processBlockPrefetchConfig{}, nil,
+		nil, nil, true, -1, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Reward-time rebuild sees both witnesses: totalPay=100, voteSum=200,
+	// pay=50 each, default 20% brokerage leaves 40 for each voter pool. The
+	// stale caller set above omits b and would leave this at zero.
+	if got := statedb.ReadCycleReward(11, b.Bytes()); got != 40 {
+		t.Fatalf("standby reward for current witness set: got %d, want 40", got)
 	}
 }
 

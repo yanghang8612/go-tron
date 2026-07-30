@@ -1,10 +1,12 @@
 package state
 
 import (
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 func propAddr(tag byte) tcommon.Address {
@@ -46,6 +48,13 @@ func TestProposalStoreReadWrite(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected proposal 7")
 	}
+	strict, ok, err := sdb.ReadProposalStrict(7)
+	if err != nil || !ok || strict == nil {
+		t.Fatalf("ReadProposalStrict = %+v/%v/%v, want proposal/true/nil", strict, ok, err)
+	}
+	if strict.ID != 7 || strict.Proposer != propAddr(1) || strict.State != rawdb.ProposalStatePending {
+		t.Fatalf("unexpected strict proposal: %+v", strict)
+	}
 	if got.ID != 7 || got.Proposer != propAddr(1) || got.State != rawdb.ProposalStatePending {
 		t.Fatalf("unexpected proposal: %+v", got)
 	}
@@ -57,6 +66,9 @@ func TestProposalStoreReadWrite(t *testing.T) {
 	}
 	if sdb.ReadProposal(999) != nil {
 		t.Fatal("missing proposal should read nil")
+	}
+	if got, ok, err := sdb.ReadProposalStrict(999); got != nil || ok || err != nil {
+		t.Fatalf("ReadProposalStrict missing = %+v/%v/%v, want nil/false/nil", got, ok, err)
 	}
 }
 
@@ -73,6 +85,45 @@ func TestProposalIndexAppend(t *testing.T) {
 	}
 	if got := sdb.ReadProposalIndex(); !sameInt64s(got, []int64{1, 2, 5}) {
 		t.Fatalf("index mismatch: got %v", got)
+	}
+	if got, ok, err := sdb.ReadProposalIndexStrict(); err != nil || !ok || !sameInt64s(got, []int64{1, 2, 5}) {
+		t.Fatalf("strict index mismatch: got %v ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestProposalIndexAppendRejectsCorruptLength(t *testing.T) {
+	sdb := newTestStateDB(t)
+	if err := sdb.SystemKVPut(kvdomains.SystemProposal, proposalStoreIndexKey, []byte{0x01, 0x02, 0x03}); err != nil {
+		t.Fatalf("write corrupt proposal index: %v", err)
+	}
+
+	if got := sdb.ReadProposalIndex(); got != nil {
+		t.Fatalf("ReadProposalIndex corrupt length = %v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadProposalIndexStrict(); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "length 3 is not a multiple of 8") {
+		t.Fatalf("ReadProposalIndexStrict corrupt length = %v ok=%v err=%v, want nil true length error", got, ok, err)
+	}
+	err := sdb.AppendProposalIndex(7)
+	if err == nil || !strings.Contains(err.Error(), "length 3 is not a multiple of 8") {
+		t.Fatalf("AppendProposalIndex corrupt length error = %v", err)
+	}
+	if got := sdb.ReadProposalIndex(); got != nil {
+		t.Fatalf("proposal index after failed append = %v, want nil/corrupt preserved", got)
+	}
+}
+
+func TestProposalStoreStrictSurfacesCorruptJSON(t *testing.T) {
+	sdb := newTestStateDB(t)
+	if err := sdb.SystemKVPut(kvdomains.SystemProposal, proposalStoreKey(7), []byte("{not-json")); err != nil {
+		t.Fatalf("write corrupt proposal: %v", err)
+	}
+
+	if got := sdb.ReadProposal(7); got != nil {
+		t.Fatalf("ReadProposal corrupt JSON = %+v, want nil", got)
+	}
+	got, ok, err := sdb.ReadProposalStrict(7)
+	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode proposal 7") {
+		t.Fatalf("ReadProposalStrict corrupt JSON = %+v ok=%v err=%v, want nil true decode error", got, ok, err)
 	}
 }
 
@@ -161,5 +212,47 @@ func TestProposalAnchorAndRewind(t *testing.T) {
 	}
 	if got := atR2.ReadProposalIndex(); !sameInt64s(got, []int64{1, 2}) {
 		t.Fatalf("R2 index: got %v", got)
+	}
+}
+
+func TestProposalAtSurfacesCorruptJSON(t *testing.T) {
+	f := newHistoryFixture(t)
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SystemKVPut(kvdomains.SystemProposal, proposalStoreKey(7), []byte("{not-json")); err != nil {
+			t.Fatalf("write corrupt proposal: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	got, err := f.reader().ProposalAt(7, 1)
+	if err == nil {
+		t.Fatal("ProposalAt corrupt JSON error = nil")
+	}
+	if got != nil {
+		t.Fatalf("ProposalAt corrupt JSON proposal = %+v, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "decode proposal 7") {
+		t.Fatalf("ProposalAt corrupt JSON error = %v, want decode proposal context", err)
+	}
+}
+
+func TestProposalIndexAtSurfacesCorruptLength(t *testing.T) {
+	f := newHistoryFixture(t)
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SystemKVPut(kvdomains.SystemProposal, proposalStoreIndexKey, []byte{0x01, 0x02, 0x03}); err != nil {
+			t.Fatalf("write corrupt proposal index: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	got, err := f.reader().ProposalIndexAt(1)
+	if err == nil {
+		t.Fatal("ProposalIndexAt corrupt length error = nil")
+	}
+	if got != nil {
+		t.Fatalf("ProposalIndexAt corrupt length = %v, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "length 3 is not a multiple of 8") {
+		t.Fatalf("ProposalIndexAt corrupt length error = %v", err)
 	}
 }

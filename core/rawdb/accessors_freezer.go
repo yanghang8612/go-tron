@@ -7,49 +7,22 @@
 // here next to the schema rather than reaching into private prefixes from
 // outside the package.
 //
-// Slice 1's freezer scope (per the design doc) keeps `bh-<hash>` and
-// `bsr-<hash>` hot in Pebble for wallet hot-path lookup. The freezer
-// therefore only deletes the num-keyed rows (`b-<num>`, `tib-<num>`); the
-// hash-keyed rows remain in Pebble until a future slice introduces a
-// num→hash reverse index inside ancient.
+// The freezer runner owns the num-keyed hot rows (`b-<num>`, `tib-<num>`) and
+// the hash-keyed state-root row (`bsr-<hash>`), because the latter has an
+// identical durable copy in the ancient `state_roots` table. Block/transaction
+// hash lookup rows (`bh-<hash>`, `tx-<hash>`, `ti-<txid>`) still require a
+// verified cold chain-index sidecar before they can leave Pebble.
 
 package rawdb
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 )
-
-// rawValueViewReader exposes a KV value only while fn is running. Pebble uses
-// this shape to keep its value closer open, letting synchronous consumers copy
-// or compress directly from table-cache storage without Database.Get's
-// intermediate defensive allocation.
-type rawValueViewReader interface {
-	View(key []byte, fn func([]byte) error) error
-}
-
-func viewRawValue(db ethdb.KeyValueReader, key []byte, fn func([]byte) error) (bool, error) {
-	if viewer, ok := db.(rawValueViewReader); ok {
-		called := false
-		err := viewer.View(key, func(value []byte) error {
-			called = true
-			return fn(value)
-		})
-		// The existing Read*Raw accessors collapse a Get failure into a nil
-		// result. Preserve that contract for misses/read failures while still
-		// propagating callback and closer errors after a value was found.
-		if !called {
-			return false, nil
-		}
-		return true, err
-	}
-	value, err := db.Get(key)
-	if err != nil {
-		return false, nil
-	}
-	return true, fn(value)
-}
 
 // ReadBlockRaw returns the marshalled `corepb.Block` bytes stored under
 // `b-<num>` in Pebble, or nil if no row exists. The freezer pass calls
@@ -63,6 +36,11 @@ func viewRawValue(db ethdb.KeyValueReader, key []byte, fn func([]byte) error) (b
 // Get always returns a copy), so the freezer batch may safely retain it
 // across the ModifyAncients call.
 func ReadBlockRaw(db ethdb.KeyValueReader, number uint64) []byte {
+	if cdb, ok := db.(*ChainDB); ok {
+		if data, ok := readAncient(cdb, ancientBlocks, number); ok {
+			return data
+		}
+	}
 	data, err := db.Get(blockKey(number))
 	if err != nil {
 		return nil
@@ -70,12 +48,35 @@ func ReadBlockRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	return data
 }
 
-// ViewBlockRaw invokes fn synchronously with the marshalled block row while a
-// capable store's value handle remains open. found is false on a missing/read-
-// failed row, matching ReadBlockRaw's nil contract. fn must not retain or
-// mutate value after returning.
-func ViewBlockRaw(db ethdb.KeyValueReader, number uint64, fn func([]byte) error) (found bool, err error) {
-	return viewRawValue(db, blockKey(number), fn)
+// ReadBlockRawStrict returns the raw block row at number and preserves freezer
+// or hot-KV read errors. It does not decode the block; callers that need to
+// validate the proto and key number should use ReadBlockStrict.
+func ReadBlockRawStrict(db ethdb.KeyValueReader, number uint64) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read block raw")
+	}
+	if cdb, ok := db.(*ChainDB); ok {
+		if cdb == nil {
+			return nil, false, fmt.Errorf("rawdb: nil database during read block raw")
+		}
+		data, ok, err := readAncientStrict(cdb, ancientBlocks, number)
+		if err != nil || ok {
+			return data, ok, err
+		}
+	}
+	key := blockKey(number)
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	data, err := db.Get(key)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
 }
 
 // ReadTransactionInfosRaw returns the marshalled `corepb.TransactionRet`
@@ -83,10 +84,16 @@ func ViewBlockRaw(db ethdb.KeyValueReader, number uint64, fn func([]byte) error)
 // Same fast-path rationale as ReadBlockRaw: avoid round-tripping the proto
 // for blocks that will be appended to ancient verbatim.
 //
-// The freezer owns tx-info-per-block. New writes no longer create duplicate
-// per-tx ti-* payloads; the hot/cold tx reverse index resolves individual
-// lookups through this block-level row.
+// Slice-1 of the freezer design includes tx-info-per-block in the frozen
+// kinds; the per-tx index (`ti-<txid>`) and tx-hash reverse index
+// (`tx-<hash>`) remain hot, so they intentionally do not have a *Raw
+// counterpart here.
 func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
+	if cdb, ok := db.(*ChainDB); ok {
+		if data, ok := readAncient(cdb, ancientTxInfos, number); ok {
+			return data
+		}
+	}
 	data, err := db.Get(txInfoBlockKey(number))
 	if err != nil {
 		return nil
@@ -94,31 +101,96 @@ func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	return data
 }
 
-// ViewTransactionInfosRaw is the callback form of ReadTransactionInfosRaw.
-// It avoids a full TransactionRet-sized intermediate copy when the consumer
-// synchronously compresses/appends the row (the freezer hot path).
-func ViewTransactionInfosRaw(db ethdb.KeyValueReader, number uint64, fn func([]byte) error) (found bool, err error) {
-	return viewRawValue(db, txInfoBlockKey(number), fn)
+// ReadTransactionInfosRawStrict returns the raw per-block TransactionRet row
+// and preserves freezer/hot-KV read errors. A missing row is not an error:
+// old empty-block fixtures and pre-backfill data can legitimately lack tx-info
+// coverage, and freezer validation decides whether that is acceptable for the
+// corresponding block body.
+func ReadTransactionInfosRawStrict(db ethdb.KeyValueReader, number uint64) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read transaction infos raw")
+	}
+	if cdb, ok := db.(*ChainDB); ok {
+		if cdb == nil {
+			return nil, false, fmt.Errorf("rawdb: nil database during read transaction infos raw")
+		}
+		data, ok, err := readAncientStrict(cdb, ancientTxInfos, number)
+		if err != nil || ok {
+			return data, ok, err
+		}
+	}
+	key := txInfoBlockKey(number)
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	data, err := db.Get(key)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
 }
 
-// ReadBlockHashRaw returns the canonical block hash from bytes previously
-// loaded by ReadBlockRaw. It scans only BlockHeader.RawData and skips all
-// transaction messages without decoding them.
-func ReadBlockHashRaw(data []byte) common.Hash {
-	hash, err := types.BlockHashFromRaw(data)
+// WriteTransactionInfosRaw stores a pre-marshalled `corepb.TransactionRet`
+// blob under `tib-<num>` without decoding or validating it. Normal block
+// execution and backfill paths must use WriteTransactionInfosByBlock instead;
+// this helper exists for raw snapshot/freezer replay and corruption fixtures
+// that intentionally need to preserve bytes at the schema boundary.
+func WriteTransactionInfosRaw(db ethdb.KeyValueWriter, number uint64, data []byte) error {
+	return db.Put(txInfoBlockKey(number), data)
+}
+
+// ReadBlockHashByNumber returns the canonical block hash for the given block
+// number. When the caller passes a ChainDB, this walks the normal ReadBlock
+// path, so frozen block bodies are served from ancient and hot bodies from KV.
+// Plain KV readers keep the original hot-only path.
+//
+// The freezer pass uses this to resolve the `bsr-<hash>` key for each
+// block in the freeze range — `bsr-<hash>` is the hash-keyed state-root
+// row that the freezer copies into the num-keyed `state_roots` ancient
+// table. Once the freezer has caught up the row also gets deleted from
+// Pebble.
+//
+// Cost: one Pebble Get + one proto Unmarshal + Hash() per call. Hot enough
+// for a per-block freezer pass; not intended for VM/RPC hot paths.
+func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
+	if cdb, ok := db.(*ChainDB); ok {
+		block := ReadBlock(cdb, number)
+		if block == nil {
+			return common.Hash{}
+		}
+		return block.Hash()
+	}
+	data, err := db.Get(blockKey(number))
 	if err != nil {
 		return common.Hash{}
 	}
-	return hash
+	block, err := types.UnmarshalBlock(data)
+	if err != nil {
+		return common.Hash{}
+	}
+	return block.Hash()
 }
 
-// ReadBlockHashByNumber remains for rare KV-only callers that do not already
-// hold the block bytes. It prefers the bounded recent BlockID ring and retains a
-// raw-body fallback for databases created before that index existed. The
-// freezer runner uses ReadBlockHashRaw on its existing read.
-func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
-	hash, _ := ReadBlockHashKV(db, number)
-	return hash
+// ReadBlockHashByNumberStrict returns the canonical block hash for number and
+// preserves block-row read/decode errors. It is intended for verifier paths
+// that must distinguish "canonical body missing" from "canonical body corrupt".
+func ReadBlockHashByNumberStrict(db ethdb.KeyValueReader, number uint64) (common.Hash, bool, error) {
+	data, ok, err := ReadBlockRawStrict(db, number)
+	if err != nil || !ok {
+		return common.Hash{}, ok, err
+	}
+	block, err := types.UnmarshalBlock(data)
+	if err != nil {
+		return common.Hash{}, true, fmt.Errorf("rawdb: block %d decode during read block hash: %w", number, err)
+	}
+	if block.Number() != number {
+		return common.Hash{}, true, fmt.Errorf("rawdb: block hash lookup row %d contains block number %d", number, block.Number())
+	}
+	return block.Hash(), true, nil
 }
 
 // ReadBlockStateRootRaw returns the raw 32-byte state root stored under
@@ -126,21 +198,97 @@ func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
 // row into the `state_roots` ancient table verbatim.
 func ReadBlockStateRootRaw(db ethdb.KeyValueReader, hash common.Hash) []byte {
 	data, err := db.Get(blockStateRootKey(hash.Bytes()))
-	if err != nil {
-		return nil
+	if err == nil && len(data) == common.HashLength {
+		return data
 	}
-	return data
+	if cdb, ok := db.(*ChainDB); ok {
+		numPtr := ReadBlockNumber(cdb, hash)
+		if numPtr == nil {
+			return nil
+		}
+		if data, ok := readAncient(cdb, ancientStateRoots, *numPtr); ok && len(data) == common.HashLength {
+			return data
+		}
+	}
+	return nil
+}
+
+// ReadBlockStateRootRawStrict returns the raw 32-byte state root for hash and
+// reports whether a state-root row was found. Unlike ReadBlockStateRootRaw, it
+// surfaces malformed hot rows, malformed ancient rows, and cold chain-index
+// lookup errors instead of folding them into "missing".
+func ReadBlockStateRootRawStrict(db ethdb.KeyValueReader, hash common.Hash) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read block state root")
+	}
+	if cdb, ok := db.(*ChainDB); ok && cdb == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database during read block state root")
+	}
+	key := blockStateRootKey(hash.Bytes())
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if exists {
+		data, err := db.Get(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(data) != common.HashLength {
+			return nil, true, fmt.Errorf("rawdb: block state root %x has length %d, want %d", hash.Bytes(), len(data), common.HashLength)
+		}
+		return data, true, nil
+	}
+
+	cdb, ok := db.(*ChainDB)
+	if !ok {
+		return nil, false, nil
+	}
+	num, ok, err := ReadBlockNumberStrict(cdb, hash)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	return readAncientBlockStateRootRawStrict(cdb, hash, num)
+}
+
+func readAncientBlockStateRootRawStrict(db *ChainDB, hash common.Hash, number uint64) ([]byte, bool, error) {
+	if db == nil || db.AncientReader == nil {
+		return nil, false, nil
+	}
+	exists, err := db.HasAncient(ancientStateRoots, number)
+	if err != nil {
+		if errors.Is(err, ErrNotInAncient) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	data, err := db.Ancient(ancientStateRoots, number)
+	if err != nil {
+		if errors.Is(err, ErrNotInAncient) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if len(data) != common.HashLength {
+		return nil, true, fmt.Errorf("rawdb: ancient block state root %x at block %d has length %d, want %d", hash.Bytes(), number, len(data), common.HashLength)
+	}
+	return data, true, nil
 }
 
 // DeleteFrozenBlockRange removes the hot Pebble rows that the slice-3
 // freezer has just copied into ancient: `b-<num>` (block proto) and
 // `tib-<num>` (tx-info-per-block) for every num in [lo, hi].
 //
-// The hash-keyed `bh-<hash>`, `bsr-<hash>`, and compact `tx-<hash>` indexes
-// remain in Pebble. Deprecated ti-* payload rows are removed separately by the
-// offline prune command because they are not block-number ordered. The bounded
-// `bnh-<slot>` recent-hash ring also stays hot so the full 256-block TVM
-// BLOCKHASH window remains body-free after freezing.
+// `bh-<hash>`, `bsr-<hash>`, `tx-<hash>`, and `ti-<txid>` are intentionally
+// left to the chain-lookup prune lifecycle because deleting them safely
+// requires a verified chain-index sidecar. This helper stays narrow so the
+// freezer writer only deletes rows it copied in the same pass.
 //
 // Implementation: two DeleteRange calls — one per prefix — wrapping the
 // half-open `[prefix||lo, prefix||(hi+1))` window. Pebble turns each into
@@ -171,6 +319,93 @@ func DeleteFrozenBlockRange(db ethdb.KeyValueRangeDeleter, lo, hi uint64) error 
 	return nil
 }
 
+// DeleteFrozenBlockRangeWithStateRoots removes frozen number-keyed block rows
+// plus their hash-keyed state-root rows. The caller must provide exactly the
+// canonical block hashes for [lo, hi], after the same roots are durable in the
+// ancient state_roots table. Keeping every delete in one batch prevents a
+// crash from leaving the b-/tib- cleanup ahead of the root cleanup or vice
+// versa; both outcomes are readable, but one atomic transition avoids a
+// permanent hot-root leak after normal freezer operation.
+func DeleteFrozenBlockRangeWithStateRoots(db ethdb.KeyValueStore, lo, hi uint64, blockHashes []common.Hash) error {
+	if db == nil {
+		return errors.New("rawdb: nil database while deleting frozen block range")
+	}
+	if lo > hi {
+		return nil
+	}
+	if len(blockHashes) == 0 || uint64(len(blockHashes)-1) != hi-lo {
+		return fmt.Errorf("rawdb: frozen block state-root hashes %d do not cover range [%d,%d]", len(blockHashes), lo, hi)
+	}
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatch()
+		defer batch.Reset()
+		if err := deleteFrozenBlockRows(batch, lo, hi); err != nil {
+			return err
+		}
+		for _, hash := range blockHashes {
+			if err := batch.Delete(blockStateRootKey(hash.Bytes())); err != nil {
+				return err
+			}
+		}
+		return batch.Write()
+	}
+	if err := DeleteFrozenBlockRange(db, lo, hi); err != nil {
+		return err
+	}
+	for _, hash := range blockHashes {
+		if err := db.Delete(blockStateRootKey(hash.Bytes())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteFrozenBlockStateRoots removes only hash-keyed state-root rows whose
+// ancient copies are already known durable. It is used to incrementally clean
+// bsr- rows left by freezer versions that predate the combined freezer delete
+// batch. The caller owns the coverage proof and stage progress update.
+func DeleteFrozenBlockStateRoots(db ethdb.KeyValueStore, blockHashes []common.Hash) error {
+	if db == nil {
+		return errors.New("rawdb: nil database while deleting frozen block state roots")
+	}
+	if len(blockHashes) == 0 {
+		return nil
+	}
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatch()
+		defer batch.Reset()
+		for _, hash := range blockHashes {
+			if err := batch.Delete(blockStateRootKey(hash.Bytes())); err != nil {
+				return err
+			}
+		}
+		return batch.Write()
+	}
+	for _, hash := range blockHashes {
+		if err := db.Delete(blockStateRootKey(hash.Bytes())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteFrozenBlockRows(writer ethdb.KeyValueWriter, lo, hi uint64) error {
+	if rangeDeleter, ok := writer.(ethdb.KeyValueRangeDeleter); ok {
+		return DeleteFrozenBlockRange(rangeDeleter, lo, hi)
+	}
+	for number := lo; ; number++ {
+		if err := writer.Delete(blockKey(number)); err != nil {
+			return err
+		}
+		if err := writer.Delete(txInfoBlockKey(number)); err != nil {
+			return err
+		}
+		if number == hi {
+			return nil
+		}
+	}
+}
+
 // BlockRangeBounds returns the prefix-encoded `b-<num>` half-open key
 // bounds covering [lo, hi]. Used by the slice-3 freezer runner to call
 // Pebble's `Compact(start, limit)` over the range it just deleted so the
@@ -186,16 +421,4 @@ func BlockRangeBounds(lo, hi uint64) (start, limit []byte) {
 		endBlock = hi
 	}
 	return blockKey(lo), blockKey(endBlock)
-}
-
-// TransactionInfoBlockRangeBounds is BlockRangeBounds for the `tib-<num>`
-// namespace. Both ranges must be compacted after DeleteFrozenBlockRange;
-// compacting only `b-*` leaves the much larger transaction-result tombstones
-// waiting for incidental background compaction.
-func TransactionInfoBlockRangeBounds(lo, hi uint64) (start, limit []byte) {
-	endBlock := hi + 1
-	if endBlock < hi {
-		endBlock = hi
-	}
-	return txInfoBlockKey(lo), txInfoBlockKey(endBlock)
 }

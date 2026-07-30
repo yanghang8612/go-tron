@@ -227,9 +227,9 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if height > current.Number() {
 		return fmt.Errorf("restart sync: target height %d exceeds current head %d", height, current.Number())
 	}
-	target := rawdb.ReadBlock(bc.chaindb, height)
-	if target == nil {
-		return fmt.Errorf("restart sync: canonical block %d not found", height)
+	target, err := readRestartSyncBlock(bc.chaindb, height, fmt.Sprintf("canonical block %d not found", height))
+	if err != nil {
+		return fmt.Errorf("restart sync: %w", err)
 	}
 
 	emit := func(phase string, block uint64) {
@@ -296,9 +296,9 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 		}
 		blocks := make([]*types.Block, 0, end-start+1)
 		for n := start; n <= end; n++ {
-			block := rawdb.ReadBlock(bc.chaindb, n)
-			if block == nil {
-				return fmt.Errorf("restart sync: block %d not found during replay", n)
+			block, err := readRestartSyncBlock(bc.chaindb, n, fmt.Sprintf("block %d not found during replay", n))
+			if err != nil {
+				return fmt.Errorf("restart sync: %w", err)
 			}
 			if len(blocks) == 0 {
 				parent := bc.CurrentBlock()
@@ -319,7 +319,7 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 			}
 			blocks = append(blocks, block)
 		}
-		if err := bc.insertBlocksLocked(blocks); err != nil {
+		if err := bc.insertBlocksLocked(blocks, nil); err != nil {
 			var rangeErr *InsertBlocksError
 			if errors.As(err, &rangeErr) {
 				for i := 0; i < rangeErr.Index && i < len(blocks); i++ {
@@ -357,6 +357,9 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	rawdb.WriteHeadBlockHash(bc.db, final.Hash())
 	if err := rewindCanonicalStagePipeline(bc.db, height, final.Hash()); err != nil {
 		return fmt.Errorf("restart sync: rewind canonical stage progress: %w", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.db, rawdb.StageTxLookup, height, final.Hash()); err != nil {
+		return fmt.Errorf("restart sync: write tx lookup stage progress: %w", err)
 	}
 	if err := bc.resetRuntimeStateLocked(final, bc.HeadStateRoot()); err != nil {
 		return err
@@ -578,16 +581,19 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 	//    delete and total-tx-count subtraction. Iterate descending for safety.
 	orphans := make([]*types.Block, 0, currentHead-height)
 	for n := currentHead; n > height; n-- {
-		b := rawdb.ReadBlock(bc.chaindb, n)
-		if b == nil {
-			return fmt.Errorf("block %d missing during unwind", n)
+		b, err := readRestartSyncBlock(bc.chaindb, n, fmt.Sprintf("block %d missing during unwind", n))
+		if err != nil {
+			return err
 		}
 		orphans = append(orphans, b)
 	}
 
 	// 4. Inverse-delta unwind of latest tables + staged commitment branches.
 	emit("unwind", height)
-	expectedRoot := rawdb.ReadBlockStateRoot(bc.chaindb, target.Hash())
+	expectedRoot, err := readRestartSyncStateRoot(bc.chaindb, target)
+	if err != nil {
+		return err
+	}
 	store := domains.NewStagedCommitmentStore(bc.db)
 	if _, err := domains.UnwindCommitment(bc.db, store, currentHead, height, expectedRoot); err != nil {
 		return fmt.Errorf("commitment unwind %d->%d: %w", currentHead, height, err)
@@ -676,10 +682,32 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 	if err := rewindCanonicalStagePipeline(bc.db, height, target.Hash()); err != nil {
 		return fmt.Errorf("rewind canonical stage progress: %w", err)
 	}
+	if err := bc.rewindTransactionLookupStageLocked(height, target.Hash()); err != nil {
+		return fmt.Errorf("rewind tx lookup stage progress: %w", err)
+	}
 	if err := bc.resetRuntimeStateLocked(target, expectedRoot); err != nil {
 		return err
 	}
 	return nil
+}
+
+func readRestartSyncBlock(chain *rawdb.ChainDB, number uint64, missing string) (*types.Block, error) {
+	block, ok, err := rawdb.ReadBlockStrict(chain, number)
+	if err != nil {
+		return nil, fmt.Errorf("read block %d: %w", number, err)
+	}
+	if !ok {
+		return nil, errors.New(missing)
+	}
+	return block, nil
+}
+
+func readRestartSyncStateRoot(chain *rawdb.ChainDB, block *types.Block) (tcommon.Hash, error) {
+	root, _, err := rawdb.ReadBlockStateRootStrict(chain, block.Hash())
+	if err != nil {
+		return tcommon.Hash{}, fmt.Errorf("read state root for block %d (%x): %w", block.Number(), block.Hash(), err)
+	}
+	return root, nil
 }
 
 func (bc *BlockChain) rewriteDerivedDynPropsAtHead(head *types.Block, root tcommon.Hash) error {

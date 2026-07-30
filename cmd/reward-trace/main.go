@@ -43,6 +43,8 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/pebbledb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -106,15 +108,34 @@ func main() {
 		defer fz.Close()
 		ancient = rawdb.NewFreezerReader(fz)
 	}
+	snapshotPath := filepath.Join(*datadir, "gtron", "state-snapshots")
+	snapshotManager, err := statesnapshots.OpenManager(snapshotPath)
+	if err != nil {
+		log.Crit("open state snapshots", "path", snapshotPath, "err", err)
+	}
+	ancient = rawdb.NewFallbackAncientReader(ancient, snapshotManager)
 	chaindb := rawdb.NewChainDB(db, ancient)
+	attachRewardTraceColdReaders(chaindb, snapshotManager)
 
-	headHash := rawdb.ReadHeadBlockHash(db)
-	if headHash == (tcommon.Hash{}) {
+	headHash, hasHead, err := rawdb.ReadHeadBlockHashStrict(db)
+	if err != nil {
+		log.Crit("read head block hash", "path", dbPath, "err", err)
+	}
+	if !hasHead || headHash == (tcommon.Hash{}) {
 		log.Crit("no head block", "path", dbPath)
 	}
-	headRoot := rawdb.ReadBlockStateRoot(chaindb, headHash)
-	if headRoot == (tcommon.Hash{}) {
-		headRoot = rawdb.ReadGenesisStateRoot(db)
+	headRoot, ok, err := readRewardTraceBlockStateRoot(chaindb, headHash)
+	if err != nil {
+		log.Crit("read head state root", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
+	}
+	if !ok {
+		headRoot, ok, err = rawdb.ReadGenesisStateRootStrict(db)
+		if err != nil {
+			log.Crit("read genesis state root", "err", err)
+		}
+		if !ok || headRoot == (tcommon.Hash{}) {
+			log.Crit("head block has no state root and genesis state root is missing", "hash", fmt.Sprintf("%x", headHash[:]))
+		}
 	}
 	stateDB := state.NewDatabase(rawdb.WrapKeyValueStore(db))
 	statedb, err := state.New(headRoot, stateDB)
@@ -122,9 +143,11 @@ func main() {
 		log.Crit("open statedb", "root", fmt.Sprintf("%x", headRoot[:]), "err", err)
 	}
 	dp := state.LoadDynamicProperties(db, statedb)
-	if hn := rawdb.ReadBlockNumber(chaindb, headHash); hn != nil {
+	if hn, ok, err := readRewardTraceBlockNumber(chaindb, headHash); err != nil {
+		log.Crit("read head block number", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
+	} else if ok {
 		fmt.Printf("head block=%d currentCycle=%d newRewardAlgoEffectiveCycle=%d allowOldRewardOpt=%v changeDelegation=%v\n",
-			*hn, dp.CurrentCycleNumber(), dp.NewRewardAlgorithmEffectiveCycle(), dp.AllowOldRewardOpt(), dp.ChangeDelegation())
+			hn, dp.CurrentCycleNumber(), dp.NewRewardAlgorithmEffectiveCycle(), dp.AllowOldRewardOpt(), dp.ChangeDelegation())
 	}
 
 	dec := reward.DecimalOfViReward
@@ -248,8 +271,10 @@ func main() {
 	// Block timestamps ARE in the block body, so we locate the era by timestamp and
 	// scan the raw block range for the vote/unfreeze tx that mis-folded the witness.
 	var headNum uint64
-	if hn := rawdb.ReadBlockNumber(chaindb, headHash); hn != nil {
-		headNum = *hn
+	if hn, ok, err := readRewardTraceBlockNumber(chaindb, headHash); err != nil {
+		log.Crit("read head block number", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
+	} else if ok {
+		headNum = hn
 	}
 
 	if *blockTs != "" {
@@ -263,7 +288,11 @@ func main() {
 				continue
 			}
 			ts := int64(0)
-			if b := rawdb.ReadBlock(chaindb, n); b != nil {
+			b, err := readRewardTraceBlock(chaindb, n)
+			if err != nil {
+				log.Crit("read block timestamp", "block", n, "err", err)
+			}
+			if b != nil {
 				ts = b.Timestamp()
 			}
 			fmt.Printf("block %d: ts=%d\n", n, ts)
@@ -282,7 +311,11 @@ func main() {
 	nextMaint := dp.NextMaintenanceTime()
 	maintTimeOf := func(C int64) int64 { return nextMaint - (headCycle+1-C)*interval }
 	tsOf := func(n uint64) int64 {
-		if b := rawdb.ReadBlock(chaindb, n); b != nil {
+		b, err := readRewardTraceBlock(chaindb, n)
+		if err != nil {
+			log.Crit("read block timestamp", "block", n, "err", err)
+		}
+		if b != nil {
 			return b.Timestamp()
 		}
 		return 0
@@ -323,7 +356,10 @@ func main() {
 		fmt.Printf("=== scan-cycle %d (blocks [%d, %d)) witness=%x — votes here fold into cycleVote[%d] ===\n", C, s, e, w.Bytes(), C+1)
 		votes, unfreezes, triggers := 0, 0, 0
 		for n := s; n < e; n++ {
-			blk := rawdb.ReadBlock(chaindb, n)
+			blk, err := readRewardTraceBlock(chaindb, n)
+			if err != nil {
+				log.Crit("read block", "block", n, "err", err)
+			}
 			if blk == nil {
 				continue
 			}
@@ -400,25 +436,25 @@ func main() {
 		w := mustAddr(strings.TrimSpace(*witnessVoters))
 		voters, contractVoters := 0, 0
 		var total int64
-		err := rawdb.IterateStateAccountLatest(db, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
-			envelope, err := state.DecodeStateAccountV3(row.Value)
-			if err != nil {
+		err := stateDB.IterateAccountLatest(nil, func(owner tcommon.Address, value []byte) (bool, error) {
+			env, derr := state.DecodeStateAccountV2(value)
+			if derr != nil {
 				return true, nil
 			}
-			var accountCore corepb.Account
-			if err := proto.Unmarshal(envelope.AccountProto, &accountCore); err != nil {
+			acct, aerr := types.UnmarshalAccount(env.AccountProto)
+			if aerr != nil || acct == nil {
 				return true, nil
 			}
-			for _, v := range statedb.GetVotes(row.Owner) {
+			for _, v := range acct.Votes() {
 				if tcommon.BytesToAddress(v.VoteAddress) == w {
 					voters++
 					total += v.VoteCount
 					mark := ""
-					if accountCore.GetType() == corepb.AccountType_Contract {
+					if acct.Type() == corepb.AccountType_Contract {
 						contractVoters++
 						mark = "  <<< CONTRACT"
 					}
-					fmt.Printf("voter %x count=%d%s\n", row.Owner.Bytes(), v.VoteCount, mark)
+					fmt.Printf("voter %x count=%d%s\n", owner.Bytes(), v.VoteCount, mark)
 					break
 				}
 			}
@@ -433,8 +469,16 @@ func main() {
 
 	if *tallyAudit {
 		sum := make(map[tcommon.Address]int64)
-		err := rawdb.IterateStateAccountLatest(db, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
-			for _, v := range statedb.GetVotes(row.Owner) {
+		err := stateDB.IterateAccountLatest(nil, func(_ tcommon.Address, value []byte) (bool, error) {
+			env, derr := state.DecodeStateAccountV2(value)
+			if derr != nil {
+				return true, nil
+			}
+			acct, aerr := types.UnmarshalAccount(env.AccountProto)
+			if aerr != nil || acct == nil {
+				return true, nil
+			}
+			for _, v := range acct.Votes() {
 				sum[tcommon.BytesToAddress(v.VoteAddress)] += v.VoteCount
 			}
 			return true, nil
@@ -577,6 +621,39 @@ func main() {
 			}
 		}
 	}
+}
+
+func readRewardTraceBlockNumber(chaindb *rawdb.ChainDB, hash tcommon.Hash) (uint64, bool, error) {
+	return rawdb.ReadBlockNumberStrict(chaindb, hash)
+}
+
+func readRewardTraceBlockStateRoot(chaindb *rawdb.ChainDB, hash tcommon.Hash) (tcommon.Hash, bool, error) {
+	return rawdb.ReadBlockStateRootStrict(chaindb, hash)
+}
+
+func readRewardTraceBlock(chaindb *rawdb.ChainDB, number uint64) (*types.Block, error) {
+	block, ok, err := rawdb.ReadBlockStrict(chaindb, number)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return block, nil
+}
+
+type rewardTraceColdReader interface {
+	rawdb.ChainIndexReader
+	rawdb.BalanceTraceReader
+	rawdb.SectionBloomReader
+	rawdb.EventLogReader
+}
+
+func attachRewardTraceColdReaders(chaindb *rawdb.ChainDB, reader rewardTraceColdReader) {
+	if chaindb == nil || reader == nil {
+		return
+	}
+	chaindb.SetChainIndexReader(reader)
+	chaindb.SetBalanceTraceReader(reader)
+	chaindb.SetSectionBloomReader(reader)
+	chaindb.SetEventLogReader(reader)
 }
 
 func votesStr(vs []*corepb.Vote) string {

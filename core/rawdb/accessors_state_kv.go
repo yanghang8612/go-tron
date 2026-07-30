@@ -135,17 +135,21 @@ func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation
 // and must be consumed before the next database operation. Internal StateDB
 // decode paths use it only for immediate protobuf or scalar decoding.
 func ReadStateKVLatestNoCopy(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
-	var (
-		raw []byte
-		err error
-	)
+	context := fmt.Sprintf("state kv latest for %s generation %d domain %#04x", owner.Hex(), generation, uint16(domain))
+	var raw []byte
 	if reader, ok := db.(cachedNoCopyStateKVLatestReader); ok {
+		var err error
 		raw, err = reader.GetNoCopyCachedStateKVLatest(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey)
+		if err != nil {
+			return verifyStateReadMiss(db, stateKVLatestKey(owner, generation, domain, logicalKey), context, err)
+		}
 	} else {
-		raw, err = readStateNoCopyCached(db, stateKVLatestKey(owner, generation, domain, logicalKey))
-	}
-	if err != nil {
-		return nil, false, nil
+		var ok bool
+		var err error
+		raw, ok, err = readStatePresentNoCopy(db, stateKVLatestKey(owner, generation, domain, logicalKey), context)
+		if err != nil || !ok {
+			return nil, ok, err
+		}
 	}
 	value, err := decodeStateKVLatestValueNoCopy(raw)
 	if err != nil {
@@ -289,9 +293,10 @@ func EncodeStateKVGenerationValue(generation uint64) []byte {
 }
 
 func ReadStateKVGeneration(db ethdb.KeyValueReader, owner common.Address) (uint64, bool, error) {
-	data, err := readStateNoCopyCached(db, stateKVGenerationKey(owner))
-	if err != nil {
-		return 0, false, nil
+	key := stateKVGenerationKey(owner)
+	data, ok, err := readStatePresentNoCopy(db, key, fmt.Sprintf("state kv generation for %s", owner.Hex()))
+	if err != nil || !ok {
+		return 0, ok, err
 	}
 	generation, err := DecodeStateKVGenerationValue(data)
 	if err != nil {

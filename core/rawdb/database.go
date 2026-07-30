@@ -20,23 +20,15 @@ type PebbleOptions = pebbledb.Options
 //   - MemTableSize is sized independently from the cache (256 MiB by default,
 //     up from go-eth's cache/8 ≈ 32 MiB at cache=256 MiB) so the WAL/memtable
 //     absorbs more sync write traffic before flushing to L0.
-//   - The target SST size starts at 8 MiB and doubles per level, reducing the
-//     hundreds of small table outputs observed in each full-sync profile.
-//   - LBaseMaxBytes is 1 GiB, lowering the dynamic level multiplier and the
-//     full-sync write amplification caused by Pebble's 64 MiB default base.
 //   - L0CompactionThreshold is relaxed to 8 (go-eth uses 2 to cap compaction
 //     debt; that pegged background-compaction CPU under our sync workload).
 //   - L0StopWritesThreshold is raised to 64 (Pebble default 12) so transient
 //     L0 bursts don't stall foreground writers when MaxConcurrentCompactions
 //     can drain them.
-//   - MaxConcurrentCompactions uses half of the quota-aware GOMAXPROCS budget
-//     so compaction does not consume every CPU available to foreground sync.
-//   - Extra compaction slots retain Pebble's conservative L0-depth / debt
-//     triggers so routine debt does not immediately consume that entire budget.
 //
-// Everything else — async writes (pebble.NoSync), MemTableStopWritesThreshold=8,
-// the per-level TargetFileSize ramp, bloom filters, and the metrics surface —
-// matches the upstream go-ethereum wrapper.
+// Everything else — async writes (pebble.NoSync), MaxConcurrentCompactions=NumCPU,
+// MemTableStopWritesThreshold=8, the per-level TargetFileSize ramp, bloom
+// filters, and the metrics surface — matches the upstream go-ethereum wrapper.
 func NewPebbleDB(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
 	return pebbledb.New(path, cache, handles, "", false, pebbledb.DefaultOptions())
 }
@@ -50,19 +42,6 @@ func DefaultPebbleOptions() PebbleOptions {
 // and low-level Pebble tuning values.
 func NewPebbleDBWithOptions(path string, cache int, handles int, tune PebbleOptions) (ethdb.KeyValueStore, error) {
 	return pebbledb.New(path, cache, handles, "", false, tune)
-}
-
-// NewPebbleDBReadOnly opens an existing Pebble database without permitting
-// writes. Pebble still takes its database lock, so callers must stop the node
-// before opening the live chaindata directory.
-func NewPebbleDBReadOnly(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
-	return pebbledb.New(path, cache, handles, "", true, pebbledb.DefaultOptions())
-}
-
-// NewPebbleDBReadOnlyWithOptions is the explicitly tuned variant of
-// NewPebbleDBReadOnly.
-func NewPebbleDBReadOnlyWithOptions(path string, cache int, handles int, tune PebbleOptions) (ethdb.KeyValueStore, error) {
-	return pebbledb.New(path, cache, handles, "", true, tune)
 }
 
 func NewMemoryDatabase() ethdb.KeyValueStore {

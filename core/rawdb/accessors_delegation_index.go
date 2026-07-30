@@ -21,11 +21,18 @@ func ReadDrAccountIndexLegacy(db ethdb.KeyValueReader, account []byte) *corepb.D
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	m, err := DecodeDrAccountIndexLegacy(data)
-	if err != nil {
+	var m corepb.DelegatedResourceAccountIndex
+	if err := proto.Unmarshal(data, &m); err != nil {
 		return nil
 	}
-	return m
+	return &m
+}
+
+// ReadDrAccountIndexLegacyStrict returns the aggregate pre-proposal-69 V1
+// index for account and surfaces storage/corruption errors. Missing rows
+// return (nil, false, nil).
+func ReadDrAccountIndexLegacyStrict(db ethdb.KeyValueReader, account []byte) (*corepb.DelegatedResourceAccountIndex, bool, error) {
+	return readDrAccountIndexByKeyStrict(db, drAccIdxLegacyKey(account), "dr account index legacy")
 }
 
 func writeDrAccountIndexLegacy(db ethdb.KeyValueWriter, account []byte, rec *corepb.DelegatedResourceAccountIndex) error {
@@ -65,20 +72,26 @@ func WriteDrAccountIndexLegacyDelegate(db delegationIndexReadWriter, from, to []
 	if len(from) == 0 || len(to) == 0 {
 		return fmt.Errorf("dr account index: empty address (from=%d to=%d)", len(from), len(to))
 	}
-	fromRec := ReadDrAccountIndexLegacy(db, from)
+	fromRec, _, err := ReadDrAccountIndexLegacyStrict(db, from)
+	if err != nil {
+		return err
+	}
 	if fromRec == nil {
 		fromRec = &corepb.DelegatedResourceAccountIndex{Account: append([]byte(nil), from...)}
 	}
-	fromRec.ToAccounts = appendUniqueAccount(fromRec.ToAccounts, to)
-	if err := writeDrAccountIndexLegacy(db, from, fromRec); err != nil {
+	toRec, _, err := ReadDrAccountIndexLegacyStrict(db, to)
+	if err != nil {
 		return err
 	}
-
-	toRec := ReadDrAccountIndexLegacy(db, to)
 	if toRec == nil {
 		toRec = &corepb.DelegatedResourceAccountIndex{Account: append([]byte(nil), to...)}
 	}
+
+	fromRec.ToAccounts = appendUniqueAccount(fromRec.ToAccounts, to)
 	toRec.FromAccounts = appendUniqueAccount(toRec.FromAccounts, from)
+	if err := writeDrAccountIndexLegacy(db, from, fromRec); err != nil {
+		return err
+	}
 	return writeDrAccountIndexLegacy(db, to, toRec)
 }
 
@@ -88,13 +101,21 @@ func WriteDrAccountIndexLegacyUnDelegate(db delegationIndexReadWriter, from, to 
 	if len(from) == 0 || len(to) == 0 {
 		return fmt.Errorf("dr account index: empty address")
 	}
-	if fromRec := ReadDrAccountIndexLegacy(db, from); fromRec != nil {
+	fromRec, _, err := ReadDrAccountIndexLegacyStrict(db, from)
+	if err != nil {
+		return err
+	}
+	toRec, _, err := ReadDrAccountIndexLegacyStrict(db, to)
+	if err != nil {
+		return err
+	}
+	if fromRec != nil {
 		fromRec.ToAccounts = removeAccount(fromRec.ToAccounts, to)
 		if err := writeDrAccountIndexLegacy(db, from, fromRec); err != nil {
 			return err
 		}
 	}
-	if toRec := ReadDrAccountIndexLegacy(db, to); toRec != nil {
+	if toRec != nil {
 		toRec.FromAccounts = removeAccount(toRec.FromAccounts, from)
 		return writeDrAccountIndexLegacy(db, to, toRec)
 	}
@@ -105,7 +126,10 @@ func WriteDrAccountIndexLegacyUnDelegate(db delegationIndexReadWriter, from, to 
 // DelegatedResourceAccountIndexStore.convert: aggregate V1 records are expanded
 // into directional V1 entries using list position as timestamp, then removed.
 func ConvertDrAccountIndexLegacy(db delegationIndexReadWriter, account []byte) error {
-	rec := ReadDrAccountIndexLegacy(db, account)
+	rec, _, err := ReadDrAccountIndexLegacyStrict(db, account)
+	if err != nil {
+		return err
+	}
 	if rec == nil {
 		return nil
 	}
@@ -193,6 +217,25 @@ func ReadDrAccountIndexEntry(db ethdb.KeyValueReader, dir DrAccIdxDirection, anc
 		return nil
 	}
 	return &m
+}
+
+// ReadDrAccountIndexEntryStrict returns the directional index row at
+// (direction, anchor, counterparty) and surfaces storage/corruption errors.
+// Missing rows return (nil, false, nil).
+func ReadDrAccountIndexEntryStrict(db ethdb.KeyValueReader, dir DrAccIdxDirection, anchor, counterparty []byte) (*corepb.DelegatedResourceAccountIndex, bool, error) {
+	return readDrAccountIndexByKeyStrict(db, drAccIdxKey(dir, anchor, counterparty), fmt.Sprintf("dr account index entry dir=%d", dir))
+}
+
+func readDrAccountIndexByKeyStrict(db ethdb.KeyValueReader, key []byte, context string) (*corepb.DelegatedResourceAccountIndex, bool, error) {
+	data, ok, err := readPresentValue(db, key, context)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var m corepb.DelegatedResourceAccountIndex
+	if err := proto.Unmarshal(data, &m); err != nil {
+		return nil, true, fmt.Errorf("rawdb: decode %s: %w", context, err)
+	}
+	return &m, true, nil
 }
 
 // IterateDrAccountIndex scans every counterparty for (direction, anchor)

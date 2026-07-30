@@ -1,6 +1,8 @@
 package rawdb
 
 import (
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -30,6 +32,21 @@ func ReadContractABI(db ethdb.KeyValueReader, contractAddr []byte) *contractpb.S
 		return nil
 	}
 	return &abi
+}
+
+// ReadContractABIStrict returns the dedicated ABI entry for a contract and
+// surfaces storage/corruption errors. Missing rows return (nil, false, nil).
+// A present zero-byte protobuf is decoded as an empty ABI with ok=true.
+func ReadContractABIStrict(db ethdb.KeyValueReader, contractAddr []byte) (*contractpb.SmartContract_ABI, bool, error) {
+	data, ok, err := readPresentValue(db, abiKey(contractAddr), fmt.Sprintf("contract abi %x", contractAddr))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var abi contractpb.SmartContract_ABI
+	if err := proto.Unmarshal(data, &abi); err != nil {
+		return nil, true, fmt.Errorf("rawdb: decode contract abi %x: %w", contractAddr, err)
+	}
+	return &abi, true, nil
 }
 
 // HasContractABI reports whether a dedicated ABI entry exists for

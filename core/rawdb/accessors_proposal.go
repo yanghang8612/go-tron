@@ -5,10 +5,6 @@ import (
 )
 
 const (
-	// Keep the historical internal APPROVED value stable: proposal records are
-	// JSON-encoded in rooted state and existing databases already contain 1.
-	// DISAPPROVED and CANCELED must nevertheless remain distinct, matching
-	// java-tron's Proposal.State semantics.
 	ProposalStatePending     = 0
 	ProposalStateApproved    = 1
 	ProposalStateDisapproved = 2

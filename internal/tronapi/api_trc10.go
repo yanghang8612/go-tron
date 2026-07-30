@@ -149,6 +149,10 @@ func (api *API) updateAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAssetIssueListByName(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAssetIssueListByName(w, r, nil)
+}
+
+func (api *API) handleGetAssetIssueListByName(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	name := r.URL.Query().Get("value")
 	visible := r.URL.Query().Get("visible") == "true"
 	if name == "" {
@@ -168,7 +172,20 @@ func (api *API) getAssetIssueListByName(w http.ResponseWriter, r *http.Request) 
 		httpFieldErr(w, "value", err)
 		return
 	}
-	asset := api.backend.GetAssetIssueByName(nameBytes)
+	var asset *contractpb.AssetIssueContract
+	if boundFn == nil {
+		asset, err = api.backend.GetAssetIssueByName(nameBytes)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		asset, err = api.backend.GetAssetIssueByNameAt(nameBytes, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	var items []*contractpb.AssetIssueContract
 	if asset != nil {
 		items = []*contractpb.AssetIssueContract{asset}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -461,18 +462,44 @@ func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapsh
 		return false, err
 	}
 	restored := 0
+	var batch ethdb.Batch
+	if batcher, ok := s.db.(ethdb.Batcher); ok {
+		batch = batcher.NewBatch()
+	}
+	flush := func() error {
+		if batch == nil || batch.ValueSize() == 0 {
+			return nil
+		}
+		if err := batch.Write(); err != nil {
+			return err
+		}
+		batch.Reset()
+		return nil
+	}
 	if err := branchSource.IterateCommitmentBranches(txNum, func(prefix, encoded []byte) (bool, error) {
 		// Validate the encoded value decodes to a BranchData before persisting,
 		// so a corrupt snapshot is rejected rather than poisoning the keyspace.
 		if _, decodeErr := DecodeBranchData(encoded); decodeErr != nil {
 			return false, fmt.Errorf("domains: snapshot branch %x: %w", prefix, decodeErr)
 		}
-		if err := rawdb.WriteCommitmentBranch(s.db, prefix, encoded); err != nil {
+		writer := ethdb.KeyValueWriter(s.db)
+		if batch != nil {
+			writer = batch
+		}
+		if err := rawdb.WriteCommitmentBranch(writer, prefix, encoded); err != nil {
 			return false, err
 		}
 		restored++
+		if batch != nil && batch.ValueSize() >= ethdb.IdealBatchSize {
+			if err := flush(); err != nil {
+				return false, err
+			}
+		}
 		return true, nil
 	}); err != nil {
+		return false, err
+	}
+	if err := flush(); err != nil {
 		return false, err
 	}
 	if restored == 0 {

@@ -2,9 +2,11 @@ package state
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 var benchmarkAddressListBytes []byte
@@ -98,6 +100,12 @@ func TestAddressListCodec(t *testing.T) {
 	if got := decodeAddressList(encodeAddressList(in)); !sameAddrs(got, in) {
 		t.Fatalf("round-trip mismatch: got %v want %v", got, in)
 	}
+	if got, err := decodeAddressListStrict("test list", encodeAddressList(in)); err != nil || !sameAddrs(got, in) {
+		t.Fatalf("strict round-trip = %v err=%v, want %v nil", got, err, in)
+	}
+	if got, err := decodeAddressListStrict("test list", encodeAddressList(nil)); err != nil || got != nil {
+		t.Fatalf("strict empty list = %v err=%v, want nil nil", got, err)
+	}
 	if got := decodeAddressList(encodeAddressList(nil)); got != nil {
 		t.Fatalf("empty list should decode to nil, got %v", got)
 	}
@@ -108,6 +116,9 @@ func TestAddressListCodec(t *testing.T) {
 	bad := []byte{0, 0, 0, 2, 0x41}
 	if got := decodeAddressList(bad); got != nil {
 		t.Fatalf("truncated data should decode to nil, got %v", got)
+	}
+	if got, err := decodeAddressListStrict("test list", bad); err == nil || got != nil {
+		t.Fatalf("strict truncated data = %v err=%v, want nil error", got, err)
 	}
 }
 
@@ -165,6 +176,41 @@ func TestWitnessIndexAppendDedup(t *testing.T) {
 	}
 	if got := sdb.ReadWitnessIndex(); !sameAddrs(got, []tcommon.Address{wsAddr(1), wsAddr(2)}) {
 		t.Fatalf("dedup failed: got %v", got)
+	}
+}
+
+func TestWitnessScheduleStrictSurfacesMalformedIndexes(t *testing.T) {
+	sdb := newTestStateDB(t)
+
+	if got, ok, err := sdb.ReadWitnessIndexStrict(); err != nil || ok || got != nil {
+		t.Fatalf("strict absent witness index = %v ok=%v err=%v, want nil false nil", got, ok, err)
+	}
+	if got, ok, err := sdb.ReadActiveWitnessesStrict(); err != nil || ok || got != nil {
+		t.Fatalf("strict absent active witnesses = %v ok=%v err=%v, want nil false nil", got, ok, err)
+	}
+
+	truncated := []byte{0, 0, 0, 2, 0x41}
+	if err := sdb.SystemKVPut(kvdomains.SystemWitnessSchedule, witnessScheduleIndexKey, truncated); err != nil {
+		t.Fatalf("write malformed witness index: %v", err)
+	}
+	if got := sdb.ReadWitnessIndex(); got != nil {
+		t.Fatalf("compat malformed witness index = %v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadWitnessIndexStrict(); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "witness index") {
+		t.Fatalf("strict malformed witness index = %v ok=%v err=%v, want decode error", got, ok, err)
+	}
+	if err := sdb.AppendWitnessIndex(wsAddr(4)); err == nil || !strings.Contains(err.Error(), "witness index") {
+		t.Fatalf("AppendWitnessIndex malformed index err = %v, want decode error", err)
+	}
+
+	if err := sdb.SystemKVPut(kvdomains.SystemWitnessSchedule, witnessScheduleActiveKey, truncated); err != nil {
+		t.Fatalf("write malformed active witnesses: %v", err)
+	}
+	if got := sdb.ReadActiveWitnesses(); got != nil {
+		t.Fatalf("compat malformed active witnesses = %v, want nil", got)
+	}
+	if got, ok, err := sdb.ReadActiveWitnessesStrict(); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "active witness list") {
+		t.Fatalf("strict malformed active witnesses = %v ok=%v err=%v, want decode error", got, ok, err)
 	}
 }
 

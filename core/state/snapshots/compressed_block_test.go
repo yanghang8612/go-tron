@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -135,6 +136,80 @@ func TestCompressedBlockEdgeCases(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCompressedBlockReaderRejectsOutOfFileBlockBeforeAlloc(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "corrupt.cb")
+	var buf bytes.Buffer
+	buf.WriteString(compressedBlockMagic)
+	writeUint32(&buf, compressedBlockVersion)
+	writeUint32(&buf, 1)
+	writeUint64(&buf, 1)
+	writeUint64(&buf, 1)
+	writeUint64(&buf, 1)
+	writeUint64(&buf, compressedBlockHeaderSize+compressedBlockTableEntry)
+	writeUint64(&buf, 0)
+	writeUint64(&buf, 0)
+	writeUint64(&buf, 1<<32)
+	writeUint32(&buf, 1)
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := openCompressedBlockReader(path); err == nil {
+		_ = r.Close()
+		t.Fatal("openCompressedBlockReader accepted out-of-file compressed block")
+	} else if !strings.Contains(err.Error(), "outside file size") {
+		t.Fatalf("openCompressedBlockReader error = %v, want file-size bound", err)
+	}
+}
+
+func TestDecompressBlockBlobRejectsHugeUncompressedSizeBeforeAlloc(t *testing.T) {
+	var buf bytes.Buffer
+	buf.WriteString(compressedBlockMagic)
+	writeUint32(&buf, compressedBlockVersion)
+	writeUint32(&buf, 1)
+	writeUint64(&buf, 0)
+	writeUint64(&buf, 0)
+	writeUint64(&buf, ^uint64(0))
+	writeUint64(&buf, compressedBlockHeaderSize)
+	if _, err := decompressBlockBlob(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "empty compressed-block table") {
+		t.Fatalf("decompressBlockBlob error = %v, want empty-table size rejection", err)
+	}
+}
+
+func TestCompressedBlockRejectsHugeDecodedBlockBeforeAlloc(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "huge-decoded.cb")
+	huge := uint64(compressedBlockMaxDecodedBlockSize + 1)
+	var buf bytes.Buffer
+	buf.WriteString(compressedBlockMagic)
+	writeUint32(&buf, compressedBlockVersion)
+	writeUint32(&buf, 1)
+	writeUint64(&buf, 1)
+	writeUint64(&buf, 1)
+	writeUint64(&buf, huge)
+	writeUint64(&buf, compressedBlockHeaderSize+compressedBlockTableEntry)
+	writeUint64(&buf, 0)
+	writeUint64(&buf, 0)
+	writeUint64(&buf, 1)
+	writeUint32(&buf, 1)
+	buf.WriteByte(0)
+	data := buf.Bytes()
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := openCompressedBlockReader(path)
+	if err != nil {
+		t.Fatalf("open compressed block: %v", err)
+	}
+	defer r.Close()
+	if _, _, err := r.BlockAt(0); err == nil || !strings.Contains(err.Error(), "decoded block limit") {
+		t.Fatalf("BlockAt error = %v, want decoded-block limit", err)
+	}
+	if _, err := decompressBlockBlob(data); err == nil || !strings.Contains(err.Error(), "decoded block limit") {
+		t.Fatalf("decompressBlockBlob error = %v, want decoded-block limit", err)
 	}
 }
 

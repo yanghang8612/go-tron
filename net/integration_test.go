@@ -43,7 +43,7 @@ func makeChainWithBlocks(t *testing.T, numBlocks int) *core.BlockChain {
 				},
 			},
 		})
-		if err := bc.InsertBlockWithoutVerify(block); err != nil {
+		if err := bc.InsertBlock(block); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -96,5 +96,18 @@ func TestTwoNodeSync(t *testing.T) {
 
 	if bcB.CurrentBlock().Number() != 20 {
 		t.Fatalf("Node B should have synced to block #20, got #%d", bcB.CurrentBlock().Number())
+	}
+
+	// A caught-up head is not sufficient: the sync session must finish so
+	// subsequent advertised blocks use the normal gossip path.
+	deadline = time.Now().Add(5 * time.Second)
+	for syncB.IsSyncing() && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if syncB.IsSyncing() {
+		syncB.mu.Lock()
+		progress := syncB.sessionProgressLocked()
+		syncB.mu.Unlock()
+		t.Fatalf("Node B reached the target head but left the sync session active: %+v", progress)
 	}
 }

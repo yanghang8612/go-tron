@@ -2,8 +2,11 @@ package grpcapi
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
@@ -76,7 +79,13 @@ func (s *Server) GetBlockByNum(_ context.Context, in *apipb.NumberMessage) (*cor
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return block.Proto(), nil
@@ -89,10 +98,32 @@ func (s *Server) GetAccount(_ context.Context, in *corepb.Account) (*corepb.Acco
 	}
 	addr := common.BytesToAddress(in.Address)
 	acc, err := s.backend.GetAccount(addr)
-	if err != nil || acc == nil {
+	if err != nil {
+		if accountLookupNotFound(err) {
+			return &corepb.Account{}, nil
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if acc == nil {
 		return &corepb.Account{}, nil
 	}
 	return acc.Proto(), nil
+}
+
+func (s *Server) GetAccountBalance(_ context.Context, in *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error) {
+	resp, err := s.backend.GetAccountBalanceTrace(in)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return resp, nil
+}
+
+func (s *Server) GetBlockBalanceTrace(_ context.Context, in *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error) {
+	trace, err := s.backend.GetBlockBalanceTrace(in)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return trace, nil
 }
 
 // GetTransactionById returns the transaction with the given 32-byte hash.
@@ -102,7 +133,13 @@ func (s *Server) GetTransactionById(_ context.Context, in *apipb.BytesMessage) (
 	}
 	txHash := common.BytesToHash(in.Value)
 	tx, err := s.backend.GetTransactionByID(txHash)
-	if err != nil || tx == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "transaction not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if tx == nil {
 		return nil, status.Error(codes.NotFound, "transaction not found")
 	}
 	return tx, nil
@@ -110,7 +147,10 @@ func (s *Server) GetTransactionById(_ context.Context, in *apipb.BytesMessage) (
 
 // GetChainParameters returns the current chain governance parameters.
 func (s *Server) GetChainParameters(_ context.Context, _ *apipb.EmptyMessage) (*corepb.ChainParameters, error) {
-	params := s.backend.GetChainParameters()
+	params, err := s.backend.GetChainParameters()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	cp := make([]*corepb.ChainParameters_ChainParameter, len(params))
 	for i, p := range params {
 		cp[i] = &corepb.ChainParameters_ChainParameter{
@@ -123,13 +163,19 @@ func (s *Server) GetChainParameters(_ context.Context, _ *apipb.EmptyMessage) (*
 
 // blockToExtention converts a types.Block to a BlockExtention.
 func blockToExtention(block *types.Block) *apipb.BlockExtention {
+	return blockToExtentionWithDetail(block, true)
+}
+
+func blockToExtentionWithDetail(block *types.Block, detail bool) *apipb.BlockExtention {
 	id := block.ID()
 	txs := block.Transactions()
 	txExts := make([]*apipb.TransactionExtention, len(txs))
 	for i, tx := range txs {
 		txExts[i] = &apipb.TransactionExtention{
-			Transaction: tx.Proto(),
-			Txid:        tx.Hash().Bytes(),
+			Txid: tx.Hash().Bytes(),
+		}
+		if detail {
+			txExts[i].Transaction = tx.Proto()
 		}
 	}
 	return &apipb.BlockExtention{
@@ -154,10 +200,77 @@ func (s *Server) GetBlockByNum2(_ context.Context, in *apipb.NumberMessage) (*ap
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return blockToExtention(block), nil
+}
+
+// GetBlock returns a block extension by latest/head, earliest/genesis, number, or BlockID.
+func (s *Server) GetBlock(_ context.Context, in *apipb.BlockReq) (*apipb.BlockExtention, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	idOrNum := strings.TrimSpace(in.GetIdOrNum())
+	if idOrNum == "" || strings.EqualFold(idOrNum, "latest") {
+		block := s.backend.CurrentBlock()
+		if block == nil {
+			return nil, status.Error(codes.NotFound, "no current block")
+		}
+		return blockToExtentionWithDetail(block, in.GetDetail()), nil
+	}
+	if strings.EqualFold(idOrNum, "earliest") {
+		block, err := s.backend.GetBlockByNumber(0)
+		if err != nil {
+			if blockLookupNotFound(err) {
+				return nil, status.Error(codes.NotFound, "block not found")
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if block == nil {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return blockToExtentionWithDetail(block, in.GetDetail()), nil
+	}
+
+	if hash, _, ok, err := parseGRPCBlockID(idOrNum); ok || err != nil {
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid block id")
+		}
+		block, err := s.backend.GetBlockByHash(hash)
+		if err != nil {
+			if blockLookupNotFound(err) {
+				return nil, status.Error(codes.NotFound, "block not found")
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if block == nil {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return blockToExtentionWithDetail(block, in.GetDetail()), nil
+	}
+
+	num, err := parseGRPCBlockNumber(idOrNum)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid block number")
+	}
+	block, err := s.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
+		return nil, status.Error(codes.NotFound, "block not found")
+	}
+	return blockToExtentionWithDetail(block, in.GetDetail()), nil
 }
 
 // GetBlockById returns the block matching the given block ID (hash bytes).
@@ -167,7 +280,13 @@ func (s *Server) GetBlockById(_ context.Context, in *apipb.BytesMessage) (*corep
 	}
 	hash := common.BytesToHash(in.Value)
 	block, err := s.backend.GetBlockByHash(hash)
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return block.Proto(), nil
@@ -178,9 +297,13 @@ func (s *Server) GetBlockByLimitNext(_ context.Context, in *apipb.BlockLimit) (*
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	blocks, err := s.backend.GetBlocksByRange(uint64(in.StartNum), uint64(in.EndNum))
+	start, end, err := validateGRPCBlockLimit(in)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, err
+	}
+	blocks, err := s.backend.GetBlocksByRange(start, end)
+	if err != nil {
+		return &apipb.BlockList{}, nil
 	}
 	result := make([]*corepb.Block, len(blocks))
 	for i, b := range blocks {
@@ -194,15 +317,26 @@ func (s *Server) GetBlockByLimitNext2(_ context.Context, in *apipb.BlockLimit) (
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	blocks, err := s.backend.GetBlocksByRange(uint64(in.StartNum), uint64(in.EndNum))
+	start, end, err := validateGRPCBlockLimit(in)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, err
+	}
+	blocks, err := s.backend.GetBlocksByRange(start, end)
+	if err != nil {
+		return &apipb.BlockListExtention{}, nil
 	}
 	result := make([]*apipb.BlockExtention, len(blocks))
 	for i, b := range blocks {
 		result[i] = blockToExtention(b)
 	}
 	return &apipb.BlockListExtention{Block: result}, nil
+}
+
+func validateGRPCBlockLimit(in *apipb.BlockLimit) (uint64, uint64, error) {
+	if in.StartNum < 0 || in.EndNum < 0 || in.EndNum <= in.StartNum {
+		return 0, 0, status.Error(codes.InvalidArgument, "invalid block range")
+	}
+	return uint64(in.StartNum), uint64(in.EndNum), nil
 }
 
 // GetBlockByLatestNum returns the latest N blocks.
@@ -225,7 +359,7 @@ func (s *Server) GetBlockByLatestNum(_ context.Context, in *apipb.NumberMessage)
 	}
 	blocks, err := s.backend.GetBlocksByRange(start, end)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return &apipb.BlockList{}, nil
 	}
 	result := make([]*corepb.Block, len(blocks))
 	for i, b := range blocks {
@@ -254,7 +388,7 @@ func (s *Server) GetBlockByLatestNum2(_ context.Context, in *apipb.NumberMessage
 	}
 	blocks, err := s.backend.GetBlocksByRange(start, end)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return &apipb.BlockListExtention{}, nil
 	}
 	result := make([]*apipb.BlockExtention, len(blocks))
 	for i, b := range blocks {
@@ -269,7 +403,13 @@ func (s *Server) GetTransactionCountByBlockNum(_ context.Context, in *apipb.Numb
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return &apipb.NumberMessage{Num: int64(len(block.Transactions()))}, nil
@@ -285,12 +425,30 @@ func (s *Server) GetAccountById(_ context.Context, in *corepb.Account) (*corepb.
 	if len(in.Address) > 0 {
 		addr := common.BytesToAddress(in.Address)
 		acc, err := s.backend.GetAccount(addr)
-		if err != nil || acc == nil {
+		if err != nil {
+			if accountLookupNotFound(err) {
+				return &corepb.Account{}, nil
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if acc == nil {
 			return &corepb.Account{}, nil
 		}
 		return acc.Proto(), nil
 	}
-	// No reverse-index for account_id yet; return empty account matching java-tron behavior.
+	if len(in.AccountId) > 0 {
+		acc, err := s.backend.GetAccountById(in.AccountId)
+		if err != nil {
+			if accountLookupNotFound(err) {
+				return &corepb.Account{}, nil
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if acc == nil {
+			return &corepb.Account{}, nil
+		}
+		return acc.Proto(), nil
+	}
 	return &corepb.Account{}, nil
 }
 
@@ -301,7 +459,13 @@ func (s *Server) GetContract(_ context.Context, in *apipb.BytesMessage) (*contra
 	}
 	addr := common.BytesToAddress(in.Value)
 	sc, err := s.backend.GetContract(addr)
-	if err != nil || sc == nil {
+	if err != nil {
+		if contractLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "contract not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if sc == nil {
 		return nil, status.Error(codes.NotFound, "contract not found")
 	}
 	return sc, nil
@@ -314,7 +478,13 @@ func (s *Server) GetContractInfo(_ context.Context, in *apipb.BytesMessage) (*co
 	}
 	addr := common.BytesToAddress(in.Value)
 	sc, err := s.backend.GetContract(addr)
-	if err != nil || sc == nil {
+	if err != nil {
+		if contractLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "contract not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if sc == nil {
 		return nil, status.Error(codes.NotFound, "contract not found")
 	}
 	return &contractpb.SmartContractDataWrapper{
@@ -329,22 +499,66 @@ func (s *Server) ListWitnesses(_ context.Context, _ *apipb.EmptyMessage) (*apipb
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	result := make([]*corepb.Witness, len(witnesses))
-	for i, w := range witnesses {
-		addrBytes := common.FromHex(w.Address)
-		result[i] = &corepb.Witness{
-			Address:   addrBytes,
+	return witnessListFromInfos(witnesses), nil
+}
+
+func (s *Server) GetPaginatedNowWitnessList(_ context.Context, in *apipb.PaginatedMessage) (*apipb.WitnessList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	witnesses, err := s.backend.ListWitnesses()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	page, err := paginateWitnessInfos(witnesses, in.Offset, in.Limit)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return witnessListFromInfos(page), nil
+}
+
+func witnessListFromInfos(witnesses []*tronapi.WitnessInfo) *apipb.WitnessList {
+	result := make([]*corepb.Witness, 0, len(witnesses))
+	for _, w := range witnesses {
+		if w == nil {
+			continue
+		}
+		result = append(result, &corepb.Witness{
+			Address:   common.FromHex(w.Address),
 			VoteCount: w.VoteCount,
 			Url:       w.URL,
 			IsJobs:    w.IsJobs,
-		}
+		})
 	}
-	return &apipb.WitnessList{Witnesses: result}, nil
+	return &apipb.WitnessList{Witnesses: result}
+}
+
+func paginateWitnessInfos(witnesses []*tronapi.WitnessInfo, offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	if offset < 0 {
+		return nil, fmt.Errorf("offset must be non-negative")
+	}
+	if limit < 0 {
+		return nil, fmt.Errorf("limit must be non-negative")
+	}
+	if limit == 0 || offset >= int64(len(witnesses)) {
+		return nil, nil
+	}
+	remaining := int64(len(witnesses)) - offset
+	if limit > remaining {
+		limit = remaining
+	}
+	start := int(offset)
+	end := int(offset + limit)
+	return witnesses[start:end], nil
 }
 
 // GetNextMaintenanceTime returns the timestamp of the next maintenance window.
 func (s *Server) GetNextMaintenanceTime(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NumberMessage, error) {
-	return &apipb.NumberMessage{Num: s.backend.NextMaintenanceTime()}, nil
+	next, err := s.backend.NextMaintenanceTime()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: next}, nil
 }
 
 // ── PR-A2: Resource / Market / TRC10 / Node read RPCs ────────────────────────
@@ -382,6 +596,21 @@ func (s *Server) GetAccountResource(_ context.Context, in *corepb.Account) (*api
 }
 
 // GetDelegatedResourceV2 returns the delegation record from one address to another.
+func (s *Server) GetDelegatedResource(_ context.Context, in *apipb.DelegatedResourceMessage) (*apipb.DelegatedResourceList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	from := common.BytesToAddress(in.FromAddress)
+	to := common.BytesToAddress(in.ToAddress)
+	infos, err := s.backend.GetDelegatedResource(from, to)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.DelegatedResourceList{
+		DelegatedResource: delegatedResourcesFromInfos(in.FromAddress, in.ToAddress, infos),
+	}, nil
+}
+
 func (s *Server) GetDelegatedResourceV2(_ context.Context, in *apipb.DelegatedResourceMessage) (*apipb.DelegatedResourceList, error) {
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
@@ -392,28 +621,45 @@ func (s *Server) GetDelegatedResourceV2(_ context.Context, in *apipb.DelegatedRe
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if len(infos) == 0 {
-		return &apipb.DelegatedResourceList{}, nil
-	}
-	resources := make([]*corepb.DelegatedResource, 0, len(infos))
-	for range infos {
-		resources = append(resources, &corepb.DelegatedResource{
-			From: in.FromAddress,
-			To:   in.ToAddress,
-		})
-	}
-	for i, info := range infos {
-		resources[i].FrozenBalanceForBandwidth = info.FrozenBalanceForBandwidth
-		resources[i].FrozenBalanceForEnergy = info.FrozenBalanceForEnergy
-		resources[i].ExpireTimeForBandwidth = info.ExpireTimeForBandwidth
-		resources[i].ExpireTimeForEnergy = info.ExpireTimeForEnergy
-	}
 	return &apipb.DelegatedResourceList{
-		DelegatedResource: resources,
+		DelegatedResource: delegatedResourcesFromInfos(in.FromAddress, in.ToAddress, infos),
 	}, nil
 }
 
+func delegatedResourcesFromInfos(from, to []byte, infos []*tronapi.DelegatedResourceInfo) []*corepb.DelegatedResource {
+	if len(infos) == 0 {
+		return nil
+	}
+	resources := make([]*corepb.DelegatedResource, len(infos))
+	for i, info := range infos {
+		resources[i] = &corepb.DelegatedResource{
+			From:                      from,
+			To:                        to,
+			FrozenBalanceForBandwidth: info.FrozenBalanceForBandwidth,
+			FrozenBalanceForEnergy:    info.FrozenBalanceForEnergy,
+			ExpireTimeForBandwidth:    info.ExpireTimeForBandwidth,
+			ExpireTimeForEnergy:       info.ExpireTimeForEnergy,
+		}
+	}
+	return resources
+}
+
 // GetDelegatedResourceAccountIndexV2 returns the delegation index for an address.
+func (s *Server) GetDelegatedResourceAccountIndex(_ context.Context, in *apipb.BytesMessage) (*corepb.DelegatedResourceAccountIndex, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "address required")
+	}
+	addr := common.BytesToAddress(in.Value)
+	idx, err := s.backend.GetDelegatedResourceAccountIndex(addr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if idx == nil {
+		return &corepb.DelegatedResourceAccountIndex{Account: in.Value}, nil
+	}
+	return idx, nil
+}
+
 func (s *Server) GetDelegatedResourceAccountIndexV2(_ context.Context, in *apipb.BytesMessage) (*corepb.DelegatedResourceAccountIndex, error) {
 	if in == nil || len(in.Value) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "address required")
@@ -522,7 +768,11 @@ func (s *Server) GetBrokerageInfo(_ context.Context, in *apipb.BytesMessage) (*a
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	return &apipb.NumberMessage{Num: s.backend.GetBrokerageInfo(addr)}, nil
+	rate, err := s.backend.GetBrokerageInfo(addr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: rate}, nil
 }
 
 // GetAssetIssueById returns the TRC10 token with the given numeric ID.
@@ -538,11 +788,42 @@ func (s *Server) GetAssetIssueById(_ context.Context, in *apipb.BytesMessage) (*
 		}
 		id = id*10 + int64(b-'0')
 	}
-	ac := s.backend.GetAssetIssueByID(id)
+	ac, err := s.backend.GetAssetIssueByID(id)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if ac == nil {
 		return nil, status.Error(codes.NotFound, "asset not found")
 	}
 	return ac, nil
+}
+
+func (s *Server) GetAssetIssueByName(_ context.Context, in *apipb.BytesMessage) (*contractpb.AssetIssueContract, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "asset name required")
+	}
+	ac, err := s.backend.GetAssetIssueByName(in.Value)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if ac == nil {
+		return nil, status.Error(codes.NotFound, "asset not found")
+	}
+	return ac, nil
+}
+
+func (s *Server) GetAssetIssueListByName(_ context.Context, in *apipb.BytesMessage) (*apipb.AssetIssueList, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "asset name required")
+	}
+	ac, err := s.backend.GetAssetIssueByName(in.Value)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if ac == nil {
+		return &apipb.AssetIssueList{}, nil
+	}
+	return &apipb.AssetIssueList{AssetIssue: []*contractpb.AssetIssueContract{ac}}, nil
 }
 
 // GetAssetIssueByAccount returns the TRC10 token created by the given account.
@@ -551,7 +832,10 @@ func (s *Server) GetAssetIssueByAccount(_ context.Context, in *corepb.Account) (
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Address)
-	ac := s.backend.GetAssetIssueByAccount(addr)
+	ac, err := s.backend.GetAssetIssueByAccount(addr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if ac == nil {
 		return &apipb.AssetIssueList{}, nil
 	}
@@ -560,7 +844,10 @@ func (s *Server) GetAssetIssueByAccount(_ context.Context, in *corepb.Account) (
 
 // GetAssetIssueList returns all TRC10 tokens.
 func (s *Server) GetAssetIssueList(_ context.Context, _ *apipb.EmptyMessage) (*apipb.AssetIssueList, error) {
-	assets := s.backend.GetAssetIssueList()
+	assets, err := s.backend.GetAssetIssueList()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &apipb.AssetIssueList{AssetIssue: assets}, nil
 }
 
@@ -569,7 +856,10 @@ func (s *Server) GetMarketOrderById(_ context.Context, in *apipb.BytesMessage) (
 	if in == nil || len(in.Value) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "order id required")
 	}
-	order := s.backend.GetMarketOrderByID(in.Value)
+	order, err := s.backend.GetMarketOrderByID(in.Value)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if order == nil {
 		return nil, status.Error(codes.NotFound, "market order not found")
 	}
@@ -582,7 +872,10 @@ func (s *Server) GetMarketOrderByAccount(_ context.Context, in *apipb.BytesMessa
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	orders := s.backend.GetMarketOrdersByAccount(addr)
+	orders, err := s.backend.GetMarketOrdersByAccount(addr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &corepb.MarketOrderList{Orders: orders}, nil
 }
 
@@ -591,11 +884,38 @@ func (s *Server) GetMarketPriceByPair(_ context.Context, in *corepb.MarketOrderP
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	pl := s.backend.GetMarketPriceByPair(in.SellTokenId, in.BuyTokenId)
+	pl, err := s.backend.GetMarketPriceByPair(in.SellTokenId, in.BuyTokenId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if pl == nil {
 		return &corepb.MarketPriceList{}, nil
 	}
 	return pl, nil
+}
+
+// GetMarketOrderListByPair returns all active orders for a sell/buy token pair.
+func (s *Server) GetMarketOrderListByPair(_ context.Context, in *corepb.MarketOrderPair) (*corepb.MarketOrderList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	orders, err := s.backend.GetMarketOrderListByPair(in.SellTokenId, in.BuyTokenId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &corepb.MarketOrderList{Orders: orders}, nil
+}
+
+// GetMarketPairList returns all active market pairs.
+func (s *Server) GetMarketPairList(_ context.Context, _ *apipb.EmptyMessage) (*corepb.MarketOrderPairList, error) {
+	pairs, err := s.backend.GetMarketPairList()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if pairs == nil {
+		return &corepb.MarketOrderPairList{}, nil
+	}
+	return pairs, nil
 }
 
 // ListNodes returns connected P2P peers as a NodeList.
@@ -661,6 +981,21 @@ func (s *Server) ListExchanges(_ context.Context, _ *apipb.EmptyMessage) (*apipb
 	return &apipb.ExchangeList{Exchanges: exchanges}, nil
 }
 
+func (s *Server) GetExchangeById(_ context.Context, in *apipb.BytesMessage) (*corepb.Exchange, error) {
+	id, err := parseExchangeIDMessage(in)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	exchange, err := s.backend.GetExchangeByID(id)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if exchange == nil {
+		return nil, status.Error(codes.NotFound, "exchange not found")
+	}
+	return exchange, nil
+}
+
 // GetTransactionInfoById returns the receipt and log for the given transaction hash.
 func (s *Server) GetTransactionInfoById(_ context.Context, in *apipb.BytesMessage) (*corepb.TransactionInfo, error) {
 	if in == nil || len(in.Value) == 0 {
@@ -668,10 +1003,82 @@ func (s *Server) GetTransactionInfoById(_ context.Context, in *apipb.BytesMessag
 	}
 	hash := common.BytesToHash(in.Value)
 	info, err := s.backend.GetTransactionInfoByID(hash)
-	if err != nil || info == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "transaction info not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if info == nil {
 		return nil, status.Error(codes.NotFound, "transaction info not found")
 	}
 	return info, nil
+}
+
+func transactionLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "transaction not found" || msg == "transaction info not found"
+}
+
+func blockLookupNotFound(err error) bool {
+	return readLookupMiss(err)
+}
+
+func accountLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "account not found" || strings.HasPrefix(msg, "account not found at block ")
+}
+
+func contractLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.TrimSpace(err.Error()) == "contract not found"
+}
+
+func parseExchangeIDMessage(in *apipb.BytesMessage) (int64, error) {
+	if in == nil || len(in.Value) == 0 {
+		return 0, fmt.Errorf("exchange id required")
+	}
+	if exchangeIDValueLooksText(in.Value) {
+		id, err := strconv.ParseInt(strings.TrimSpace(string(in.Value)), 10, 64)
+		if err != nil || id <= 0 {
+			return 0, fmt.Errorf("exchange id must be numeric")
+		}
+		return id, nil
+	}
+	if len(in.Value) > 8 {
+		return 0, fmt.Errorf("exchange id must be numeric")
+	}
+	var buf [8]byte
+	copy(buf[8-len(in.Value):], in.Value)
+	id := int64(binary.BigEndian.Uint64(buf[:]))
+	if id <= 0 {
+		return 0, fmt.Errorf("exchange id must be positive")
+	}
+	return id, nil
+}
+
+func exchangeIDValueLooksText(value []byte) bool {
+	for _, b := range value {
+		if b != '\t' && b != '\n' && b != '\r' && (b < ' ' || b > '~') {
+			return false
+		}
+	}
+	return true
+}
+
+func readLookupMiss(err error) bool {
+	// Block lookup APIs keep the legacy java-tron-style empty/not-found
+	// surface. Account and contract archive reads use narrower helpers so cold
+	// reconstruction failures remain visible.
+	return err != nil
 }
 
 // GetTransactionInfoByBlockNum returns all transaction receipts in the given block.
@@ -702,12 +1109,20 @@ func (s *Server) GetTransactionListFromPending(_ context.Context, _ *apipb.Empty
 
 // TotalTransaction returns the total number of transactions ever processed.
 func (s *Server) TotalTransaction(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NumberMessage, error) {
-	return &apipb.NumberMessage{Num: s.backend.TotalTransaction()}, nil
+	count, err := s.backend.TotalTransaction()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: count}, nil
 }
 
 // GetBurnTrx returns the amount of TRX burned by energy consumption.
 func (s *Server) GetBurnTrx(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NumberMessage, error) {
-	return &apipb.NumberMessage{Num: s.backend.GetBurnTrx()}, nil
+	burned, err := s.backend.GetBurnTrx()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: burned}, nil
 }
 
 // ── PR-B: Transaction building RPCs ──────────────────────────────────────────
@@ -1047,7 +1462,10 @@ func (s *Server) GetPaginatedAssetIssueList(_ context.Context, in *apipb.Paginat
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	assets := s.backend.GetAssetIssueListPaginated(int(in.Offset), int(in.Limit))
+	assets, err := s.backend.GetAssetIssueListPaginated(int(in.Offset), int(in.Limit))
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &apipb.AssetIssueList{AssetIssue: assets}, nil
 }
 
@@ -1065,10 +1483,18 @@ func (s *Server) GetPaginatedExchangeList(_ context.Context, in *apipb.Paginated
 
 // GetBandwidthPrices returns the historical bandwidth price string.
 func (s *Server) GetBandwidthPrices(_ context.Context, _ *apipb.EmptyMessage) (*apipb.PricesResponseMessage, error) {
-	return &apipb.PricesResponseMessage{Prices: s.backend.GetBandwidthPrices()}, nil
+	prices, err := s.backend.GetBandwidthPrices()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.PricesResponseMessage{Prices: prices}, nil
 }
 
 // GetEnergyPrices returns the historical energy price string.
 func (s *Server) GetEnergyPrices(_ context.Context, _ *apipb.EmptyMessage) (*apipb.PricesResponseMessage, error) {
-	return &apipb.PricesResponseMessage{Prices: s.backend.GetEnergyPrices()}, nil
+	prices, err := s.backend.GetEnergyPrices()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.PricesResponseMessage{Prices: prices}, nil
 }

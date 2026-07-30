@@ -20,6 +20,13 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	if err := WriteStateAccountLatest(db, addr, []byte("acct")); err != nil {
 		t.Fatal(err)
 	}
+	if err := WriteHistoryPruneMode(db, "archive"); err != nil {
+		t.Fatal(err)
+	}
+	staged := testSyncStagedBlock(1, common.Hash{0x01})
+	if err := WriteSyncStagedBlock(db, staged); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := ResetMutableState(db); err != nil {
 		t.Fatalf("reset: %v", err)
@@ -40,23 +47,10 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	if _, ok, err := ReadLatestDomainCommitmentRoot(db); err != nil || ok {
 		t.Fatalf("commitment root survived reset: ok=%v err=%v", ok, err)
 	}
-}
-
-func TestResetMutableStateClearsFreezerPruneCursors(t *testing.T) {
-	db := NewMemoryDatabase()
-	if err := WriteStageProgress(db, StageFreezerHotPrune, 12345); err != nil {
-		t.Fatal(err)
+	if mode, ok, err := ReadHistoryPruneMode(db); err != nil || !ok || mode != "archive" {
+		t.Fatalf("history prune mode should survive reset: mode=%q ok=%v err=%v", mode, ok, err)
 	}
-	if err := WriteStageProgress(db, StageFreezerTxIndexPrune, 12345); err != nil {
-		t.Fatal(err)
-	}
-	if err := ResetMutableState(db); err != nil {
-		t.Fatal(err)
-	}
-	if progress, ok, err := ReadStageProgress(db, StageFreezerHotPrune); err != nil || ok {
-		t.Fatalf("freezer hot-prune progress=%d ok=%v err=%v after reset", progress, ok, err)
-	}
-	if progress, ok, err := ReadStageProgress(db, StageFreezerTxIndexPrune); err != nil || ok {
-		t.Fatalf("freezer tx-index prune progress=%d ok=%v err=%v after reset", progress, ok, err)
+	if _, ok, err := ReadSyncStagedBlock(db, staged.Number()); err != nil || ok {
+		t.Fatalf("sync staged block survived reset: ok=%v err=%v", ok, err)
 	}
 }

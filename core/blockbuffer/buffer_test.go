@@ -46,7 +46,7 @@ func pendingOwnedPuts(l *layer) int {
 	for i := range l.shards {
 		s := &l.shards[i]
 		s.mu.RLock()
-		total += s.pendingOwnedPuts
+		total += int(s.pendingOwnedPuts)
 		s.mu.RUnlock()
 	}
 	return total

@@ -2,11 +2,13 @@ package state
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 // TestAccountNameIndexRoundTrip exercises write/read/has/delete and confirms the
@@ -22,6 +24,9 @@ func TestAccountNameIndexRoundTrip(t *testing.T) {
 	if got := sdb.ReadAccountNameIndex([]byte("alice")); got != nil {
 		t.Fatalf("absent: got %x, want nil", got)
 	}
+	if got, ok, err := sdb.ReadAccountNameIndexStrict([]byte("alice")); got != nil || ok || err != nil {
+		t.Fatalf("strict absent name: got %x ok=%v err=%v, want nil false nil", got, ok, err)
+	}
 
 	if err := sdb.WriteAccountNameIndex([]byte("alice"), owner); err != nil {
 		t.Fatal(err)
@@ -32,9 +37,18 @@ func TestAccountNameIndexRoundTrip(t *testing.T) {
 	if got := sdb.ReadAccountNameIndex([]byte("alice")); !bytes.Equal(got, owner.Bytes()) {
 		t.Fatalf("read: got %x, want %x", got, owner.Bytes())
 	}
+	if got, ok, err := sdb.ReadAccountNameIndexStrict([]byte("alice")); err != nil || !ok || !bytes.Equal(got, owner.Bytes()) {
+		t.Fatalf("strict read: got %x ok=%v err=%v, want %x true nil", got, ok, err, owner.Bytes())
+	}
+	if ok, err := sdb.HasAccountNameIndexStrict([]byte("alice")); err != nil || !ok {
+		t.Fatalf("strict has: got %v err=%v, want true nil", ok, err)
+	}
 	// Case-sensitive: "Alice" is a distinct key from "alice".
 	if sdb.HasAccountNameIndex([]byte("Alice")) {
 		t.Fatal("name index must be case-sensitive")
+	}
+	if ok, err := sdb.HasAccountNameIndexStrict([]byte("Alice")); err != nil || ok {
+		t.Fatalf("strict has mixed case: got %v err=%v, want false nil", ok, err)
 	}
 
 	if err := sdb.DeleteAccountNameIndex([]byte("alice")); err != nil {
@@ -89,11 +103,63 @@ func TestAccountIdIndexCaseInsensitive(t *testing.T) {
 	if got := sdb.ReadAccountIdIndex([]byte("ALICEID1")); !bytes.Equal(got, owner.Bytes()) {
 		t.Fatalf("upper-case lookup: got %x, want %x", got, owner.Bytes())
 	}
+	if got, ok, err := sdb.ReadAccountIdIndexStrict([]byte("ALICEID1")); err != nil || !ok || !bytes.Equal(got, owner.Bytes()) {
+		t.Fatalf("strict upper-case lookup: got %x ok=%v err=%v, want %x true nil", got, ok, err, owner.Bytes())
+	}
+	if ok, err := sdb.HasAccountIdIndexStrict([]byte("ALICEID1")); err != nil || !ok {
+		t.Fatalf("strict has account id: got %v err=%v, want true nil", ok, err)
+	}
 	if err := sdb.DeleteAccountIdIndex([]byte("aLiCeId1")); err != nil {
 		t.Fatal(err)
 	}
 	if sdb.HasAccountIdIndex([]byte("AliceID1")) {
 		t.Fatal("after case-insensitive delete: Has returned true")
+	}
+}
+
+func TestAccountIndexRejectsMalformedAddressValues(t *testing.T) {
+	sdb := newTestStateDB(t)
+	if err := sdb.SystemKVPut(kvdomains.SystemAccountIndex, accountNameIndexKVKey([]byte("alice")), []byte("short")); err != nil {
+		t.Fatalf("write malformed account name index: %v", err)
+	}
+	if err := sdb.SystemKVPut(kvdomains.SystemAccountIndex, accountIdIndexKVKey([]byte("aliceid1")), []byte("short")); err != nil {
+		t.Fatalf("write malformed account id index: %v", err)
+	}
+
+	if got := sdb.ReadAccountNameIndex([]byte("alice")); got != nil {
+		t.Fatalf("ReadAccountNameIndex malformed = %x, want nil", got)
+	}
+	gotName, nameOK, nameErr := sdb.ReadAccountNameIndexStrict([]byte("alice"))
+	if nameErr == nil || !nameOK || gotName != nil || !strings.Contains(nameErr.Error(), "account name index") {
+		t.Fatalf("ReadAccountNameIndexStrict malformed = %x ok=%v err=%v, want nil true malformed length", gotName, nameOK, nameErr)
+	}
+	if ok, err := sdb.HasAccountNameIndexStrict([]byte("alice")); err == nil || ok || !strings.Contains(err.Error(), "account name index") {
+		t.Fatalf("HasAccountNameIndexStrict malformed = %v err=%v, want false malformed length", ok, err)
+	}
+	if got := sdb.ReadAccountIdIndex([]byte("aliceid1")); got != nil {
+		t.Fatalf("ReadAccountIdIndex malformed = %x, want nil", got)
+	}
+	got, ok, err := sdb.ReadAccountIdIndexStrict([]byte("aliceid1"))
+	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "malformed length") {
+		t.Fatalf("ReadAccountIdIndexStrict malformed = %x ok=%v err=%v, want nil true malformed length", got, ok, err)
+	}
+	if ok, err := sdb.HasAccountIdIndexStrict([]byte("aliceid1")); err == nil || ok || !strings.Contains(err.Error(), "account id index") {
+		t.Fatalf("HasAccountIdIndexStrict malformed = %v err=%v, want false malformed length", ok, err)
+	}
+}
+
+func TestAccountIdIndexAtSurfacesMalformedAddressValue(t *testing.T) {
+	f := newHistoryFixture(t)
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		if err := s.SystemKVPut(kvdomains.SystemAccountIndex, accountIdIndexKVKey([]byte("aliceid1")), []byte("short")); err != nil {
+			t.Fatalf("write malformed account id index: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	got, ok, err := f.reader().AccountIdIndexAt([]byte("ALICEID1"), 1)
+	if err == nil || ok || got != nil || !strings.Contains(err.Error(), "account id index at block 1") {
+		t.Fatalf("AccountIdIndexAt malformed = %x ok=%v err=%v, want nil false block decode error", got, ok, err)
 	}
 }
 

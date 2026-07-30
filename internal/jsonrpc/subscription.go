@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
@@ -33,9 +32,6 @@ func newSubscriptionManager() *SubscriptionManager {
 	return &SubscriptionManager{subs: make(map[string]*wsSub)}
 }
 
-// eventDemand reports the event classes currently consumed by WebSocket
-// subscriptions. It deliberately does not expose the subscription map to the
-// FilterManager; notify takes its own later snapshot for delivery.
 func (sm *SubscriptionManager) eventDemand() (block, logs bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -240,71 +236,4 @@ func marshalPush(subID string, result interface{}) []byte {
 		},
 	})
 	return data
-}
-
-// parseLogFilterObject parses an eth filter object (address + topics + block range).
-func parseLogFilterObject(raw json.RawMessage) (LogFilter, error) {
-	var obj struct {
-		FromBlock string          `json:"fromBlock"`
-		ToBlock   string          `json:"toBlock"`
-		BlockHash string          `json:"blockHash"`
-		Address   json.RawMessage `json:"address"`
-		Topics    json.RawMessage `json:"topics"`
-	}
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return LogFilter{}, fmt.Errorf("invalid filter: %w", err)
-	}
-	lf := LogFilter{}
-	if obj.BlockHash != "" {
-		var h common.Hash
-		copy(h[:], common.FromHex(obj.BlockHash))
-		lf.BlockHash = &h
-	} else {
-		if obj.FromBlock != "" {
-			n, err := parseBlockParam(obj.FromBlock)
-			if err != nil {
-				return LogFilter{}, err
-			}
-			lf.FromBlock = &n
-		}
-		if obj.ToBlock != "" {
-			n, err := parseBlockParam(obj.ToBlock)
-			if err != nil {
-				return LogFilter{}, err
-			}
-			lf.ToBlock = &n
-		}
-	}
-	if len(obj.Address) > 0 && string(obj.Address) != "null" {
-		addresses, err := parseFilterAddresses(obj.Address)
-		if err != nil {
-			return LogFilter{}, err
-		}
-		lf.Addresses = addresses
-	}
-	if len(obj.Topics) > 0 && string(obj.Topics) != "null" {
-		var rawTopics []json.RawMessage
-		if err := json.Unmarshal(obj.Topics, &rawTopics); err == nil {
-			lf.Topics = make([][]common.Hash, len(rawTopics))
-			for i, rt := range rawTopics {
-				if string(rt) == "null" {
-					continue
-				}
-				var single string
-				var multi []string
-				if json.Unmarshal(rt, &single) == nil {
-					var h common.Hash
-					copy(h[:], common.FromHex(single))
-					lf.Topics[i] = []common.Hash{h}
-				} else if json.Unmarshal(rt, &multi) == nil {
-					for _, s := range multi {
-						var h common.Hash
-						copy(h[:], common.FromHex(s))
-						lf.Topics[i] = append(lf.Topics[i], h)
-					}
-				}
-			}
-		}
-	}
-	return lf, nil
 }

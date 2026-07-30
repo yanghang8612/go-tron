@@ -1,0 +1,543 @@
+package downloader
+
+import (
+	"fmt"
+
+	"github.com/ethereum/go-ethereum/ethdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
+)
+
+// StagedBodyReader returns one persisted sync-staged body row by block number.
+type StagedBodyReader func(number uint64) (rawdb.SyncStagedBlockRow, bool, error)
+
+// StagedBodyReadyFrontier is the highest contiguous staged body reachable from
+// a canonical head's next block.
+type StagedBodyReadyFrontier struct {
+	Have        bool
+	Number      uint64
+	Hash        tcommon.Hash
+	ErrorAt     uint64
+	Error       error
+	NextMissing uint64
+}
+
+// StagedBodyReadyProgressRefresh records how SyncBodiesReady was refreshed
+// from the current contiguous staged-body frontier.
+type StagedBodyReadyProgressRefresh struct {
+	Frontier    StagedBodyReadyFrontier
+	Updated     bool
+	Deleted     bool
+	WriteError  error
+	DeleteError error
+}
+
+// Failed reports whether recomputing or persisting SyncBodiesReady failed.
+func (r StagedBodyReadyProgressRefresh) Failed() bool {
+	return r.Frontier.Error != nil || r.WriteError != nil || r.DeleteError != nil
+}
+
+// StagedBodyReadyAfterStageRefresh records the optional SyncBodiesReady refresh
+// after one staged body was accepted.
+type StagedBodyReadyAfterStageRefresh struct {
+	ReadyLimit StagedBodyReadyLimit
+	Refresh    StagedBodyReadyProgressRefresh
+	Refreshed  bool
+	Skipped    bool
+}
+
+// StagedBodyAcceptance records the downloader-owned storage and ready-frontier
+// effects of accepting one fetched sync body.
+type StagedBodyAcceptance struct {
+	Write rawdb.SyncStagedBlockWriteResult
+	Ready StagedBodyReadyAfterStageRefresh
+}
+
+// Failed reports whether accepting a fetched body failed before downstream
+// receipt settlement can safely refill fetch slots or drain local imports.
+func (a StagedBodyAcceptance) Failed() bool {
+	return a.Write.StageError != nil ||
+		a.Write.ProgressReadError != nil ||
+		a.Write.ProgressWriteError != nil ||
+		(a.Ready.Refreshed && a.Ready.Refresh.Failed())
+}
+
+// FailureError returns the first acceptance error in the stage-before-view
+// order used by fetched-body receipt settlement.
+func (a StagedBodyAcceptance) FailureError() error {
+	if a.Write.StageError != nil {
+		return a.Write.StageError
+	}
+	if a.Write.ProgressReadError != nil {
+		return a.Write.ProgressReadError
+	}
+	if a.Write.ProgressWriteError != nil {
+		return a.Write.ProgressWriteError
+	}
+	if a.Ready.Refreshed {
+		if a.Ready.Refresh.Frontier.Error != nil {
+			return a.Ready.Refresh.Frontier.Error
+		}
+		if a.Ready.Refresh.WriteError != nil {
+			return a.Ready.Refresh.WriteError
+		}
+		if a.Ready.Refresh.DeleteError != nil {
+			return a.Ready.Refresh.DeleteError
+		}
+	}
+	return nil
+}
+
+// StagedBodyTailPrune records a stale staged-body tail prune plus the
+// resulting ready-frontier refresh.
+type StagedBodyTailPrune struct {
+	Prune      rawdb.SyncStagedTailPruneResult
+	PruneError error
+	Ready      StagedBodyReadyProgressRefresh
+}
+
+// ImportedStagedBodyCleanup records deletion of already-imported staged body
+// rows plus the resulting ready-frontier refresh.
+type ImportedStagedBodyCleanup struct {
+	Deleted     int
+	DeleteError error
+	Ready       StagedBodyReadyProgressRefresh
+}
+
+// Failed reports whether imported-body deletion failed. A ready-refresh error
+// here can be caused by the still-unrepaired staged tail and is handled by the
+// later restore/prune step before downstream ready progress is trusted.
+func (c ImportedStagedBodyCleanup) Failed() bool {
+	return c.DeleteError != nil
+}
+
+// StagedBodyReadyLimitStatus explains whether a persisted SyncBodiesReady row
+// is usable as the next local import drain limit.
+type StagedBodyReadyLimitStatus uint8
+
+const (
+	StagedBodyReadyLimitMissing StagedBodyReadyLimitStatus = iota
+	StagedBodyReadyLimitProgressReadError
+	StagedBodyReadyLimitUnbound
+	StagedBodyReadyLimitStale
+	StagedBodyReadyLimitReadError
+	StagedBodyReadyLimitStagedMissing
+	StagedBodyReadyLimitNumberMismatch
+	StagedBodyReadyLimitHashMismatch
+	StagedBodyReadyLimitValid
+)
+
+// StagedBodyProgressStatus explains whether a downloader stage progress row
+// points to a readable staged-body row with the same block number and hash.
+type StagedBodyProgressStatus uint8
+
+const (
+	StagedBodyProgressMissing StagedBodyProgressStatus = iota
+	StagedBodyProgressReadError
+	StagedBodyProgressUnbound
+	StagedBodyProgressStagedReadError
+	StagedBodyProgressStagedMissing
+	StagedBodyProgressNumberMismatch
+	StagedBodyProgressHashMismatch
+	StagedBodyProgressValid
+)
+
+// StagedBodyReadyLimit is the validation result for a persisted
+// SyncBodiesReady row.
+type StagedBodyReadyLimit struct {
+	Status     StagedBodyReadyLimitStatus
+	Limit      uint64
+	StageRow   rawdb.StageProgress
+	StagedRow  rawdb.SyncStagedBlockRow
+	StageError error
+	ReadError  error
+	StagedHash tcommon.Hash
+}
+
+// StagedBodyProgressCheck is the validation result for a downloader stage
+// progress row that should be backed by the sync-staged body table.
+type StagedBodyProgressCheck struct {
+	Status     StagedBodyProgressStatus
+	StageRow   rawdb.StageProgress
+	StagedRow  rawdb.SyncStagedBlockRow
+	StageError error
+	ReadError  error
+	StagedHash tcommon.Hash
+}
+
+// StagedBodyDrainReadPlan is the downloader-owned local import drain plan plus
+// the SyncBodiesReady validation evidence that produced it.
+type StagedBodyDrainReadPlan struct {
+	Ready StagedBodyReadyLimit
+	Plan  StagedBodyDrainPlan
+}
+
+// StagedBodyDrainRunResult is the combined read/apply outcome for one local
+// staged-body drain attempt.
+type StagedBodyDrainRunResult struct {
+	Read  StagedBodyDrainReadPlan
+	Apply StagedBodyDrainApplyResult
+	Batch BufferedBatch
+}
+
+// Failed reports whether local staged-body drain preparation failed before a
+// batch could be safely imported.
+func (r StagedBodyDrainRunResult) Failed() bool {
+	return r.Apply.Failed()
+}
+
+// Valid reports whether the row can cap a local import drain.
+func (l StagedBodyReadyLimit) Valid() bool {
+	return l.Status == StagedBodyReadyLimitValid
+}
+
+// Valid reports whether the stage row is hash-bound and backed by a matching
+// sync-staged body row.
+func (c StagedBodyProgressCheck) Valid() bool {
+	return c.Status == StagedBodyProgressValid
+}
+
+// FindStagedBodyReadyFrontier scans staged bodies from start until the first
+// gap, read error, target-head cap, or uint64 wrap. targetHead zero means no
+// target cap is known.
+func FindStagedBodyReadyFrontier(start, targetHead uint64, read StagedBodyReader) StagedBodyReadyFrontier {
+	var frontier StagedBodyReadyFrontier
+	if read == nil {
+		frontier.NextMissing = start
+		return frontier
+	}
+	expected := start
+	for {
+		if targetHead != 0 && expected > targetHead {
+			frontier.NextMissing = expected
+			return frontier
+		}
+		row, ok, err := read(expected)
+		if err != nil {
+			frontier.ErrorAt = expected
+			frontier.Error = err
+			frontier.NextMissing = expected
+			return frontier
+		}
+		if !ok {
+			frontier.NextMissing = expected
+			return frontier
+		}
+		if row.Number != expected {
+			frontier.ErrorAt = expected
+			frontier.Error = fmt.Errorf("downloader: staged body reader returned block %d for expected block %d", row.Number, expected)
+			frontier.NextMissing = expected
+			return frontier
+		}
+		frontier.Have = true
+		frontier.Number = row.Number
+		frontier.Hash = row.Hash
+		expected++
+		if expected == 0 {
+			frontier.NextMissing = expected
+			return frontier
+		}
+	}
+}
+
+// PlanStagedBodyReadyProgress recomputes the SyncBodiesReady frontier without
+// writing it. Callers that have already advanced the canonical head can use
+// this plan to fold the ready update into the same database batch as their
+// imported-body delete and SyncImport progress rows.
+func PlanStagedBodyReadyProgress(db ethdb.KeyValueReader, start, targetHead uint64) StagedBodyReadyProgressRefresh {
+	var result StagedBodyReadyProgressRefresh
+	if db == nil {
+		result.Frontier.NextMissing = start
+		return result
+	}
+	frontier := FindStagedBodyReadyFrontier(start, targetHead, func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
+		return rawdb.ReadSyncStagedBlockRaw(db, number)
+	})
+	result.Frontier = frontier
+	if !frontier.Have {
+		result.Deleted = true
+		return result
+	}
+	result.Updated = true
+	return result
+}
+
+// ReadyStageProgress returns the hash-bound row for a planned ready frontier.
+// A nil row means the frontier should be deleted. Plans with a scan error are
+// intentionally not safe to batch: the ordinary refresh path still publishes
+// the verified prefix and surfaces the unreadable suffix to the caller.
+func (r StagedBodyReadyProgressRefresh) ReadyStageProgress() (*rawdb.StageProgress, bool) {
+	if r.Frontier.Error != nil {
+		return nil, false
+	}
+	if r.Updated {
+		return &rawdb.StageProgress{
+			Stage:        rawdb.StageSyncBodiesReady,
+			BlockNum:     r.Frontier.Number,
+			BlockHash:    r.Frontier.Hash,
+			HasBlockHash: true,
+		}, true
+	}
+	if r.Deleted {
+		return nil, true
+	}
+	return nil, false
+}
+
+// RefreshStagedBodyReadyProgress recomputes SyncBodiesReady from the persisted
+// sync-staged body table and writes or deletes the ready stage row.
+func RefreshStagedBodyReadyProgress(db ethdb.KeyValueStore, start, targetHead uint64) StagedBodyReadyProgressRefresh {
+	result := PlanStagedBodyReadyProgress(db, start, targetHead)
+	if result.Frontier.Error != nil {
+		if !result.Frontier.Have {
+			result.DeleteError = rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady)
+			return result
+		}
+		result.WriteError = rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, result.Frontier.Number, result.Frontier.Hash)
+		return result
+	}
+	if result.Deleted {
+		result.DeleteError = rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady)
+		return result
+	}
+	if result.Updated {
+		result.WriteError = rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, result.Frontier.Number, result.Frontier.Hash)
+	}
+	return result
+}
+
+// RefreshStagedBodyReadyProgressAfterStage refreshes SyncBodiesReady only when
+// the newly staged body can start or extend the persisted contiguous frontier.
+// Invalid existing ready rows still force a refresh so restart/drain state is
+// repaired promptly.
+func RefreshStagedBodyReadyProgressAfterStage(db ethdb.KeyValueStore, start, targetHead, stagedNum uint64) StagedBodyReadyAfterStageRefresh {
+	var result StagedBodyReadyAfterStageRefresh
+	if db == nil {
+		result.Skipped = true
+		result.ReadyLimit = StagedBodyReadyLimit{Status: StagedBodyReadyLimitMissing}
+		return result
+	}
+	ready := ReadStagedBodyReadyDrainLimit(db, start)
+	result.ReadyLimit = ready
+	if !ShouldRefreshStagedBodyReadyAfterStage(start, targetHead, stagedNum, ready) {
+		result.Skipped = true
+		return result
+	}
+	result.Refreshed = true
+	result.Refresh = RefreshStagedBodyReadyProgress(db, start, targetHead)
+	return result
+}
+
+// AcceptStagedBody persists a fetched body and then refreshes SyncBodiesReady
+// when that body can start or extend the contiguous staged-body frontier. The
+// ready frontier is only published after the SyncBodies watermark was read and
+// updated/skipped cleanly; otherwise downstream import could trust a ready row
+// whose upstream body stage is unreadable or stale.
+func AcceptStagedBody(db ethdb.KeyValueStore, block *types.Block, raw []byte, start, targetHead uint64) StagedBodyAcceptance {
+	result := StagedBodyAcceptance{
+		Write: rawdb.WriteSyncStagedBlockRawAndProgress(db, block, raw),
+	}
+	if result.Write.StageError != nil || result.Write.ProgressReadError != nil || result.Write.ProgressWriteError != nil {
+		return result
+	}
+	result.Ready = RefreshStagedBodyReadyProgressAfterStage(db, start, targetHead, result.Write.Number)
+	return result
+}
+
+// PruneStaleStagedBodyTail removes a stale downloader body tail, rewinds the
+// SyncBodies watermark if needed, and then recomputes SyncBodiesReady for the
+// caller's current canonical head/target.
+func PruneStaleStagedBodyTail(db ethdb.KeyValueStore, from uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool, start uint64, targetHead uint64) StagedBodyTailPrune {
+	var result StagedBodyTailPrune
+	result.Prune, result.PruneError = rawdb.PruneSyncStagedBlocksFrom(db, from, lastRestoredNum, lastRestoredHash, haveLastRestored)
+	if result.PruneError != nil {
+		return result
+	}
+	result.Ready = RefreshStagedBodyReadyProgress(db, start, targetHead)
+	return result
+}
+
+// DeleteImportedStagedBodiesThrough removes staged body rows that are already
+// covered by the canonical head and then recomputes SyncBodiesReady from the
+// next import boundary.
+func DeleteImportedStagedBodiesThrough(db ethdb.KeyValueStore, through uint64, start uint64, targetHead uint64) ImportedStagedBodyCleanup {
+	var result ImportedStagedBodyCleanup
+	result.Deleted, result.DeleteError = rawdb.DeleteSyncStagedBlocksThrough(db, through)
+	if result.DeleteError != nil {
+		return result
+	}
+	result.Ready = RefreshStagedBodyReadyProgress(db, start, targetHead)
+	return result
+}
+
+// ShouldRefreshStagedBodyReadyAfterStage reports whether a newly accepted
+// staged body can change the persisted ready frontier.
+func ShouldRefreshStagedBodyReadyAfterStage(start, targetHead, stagedNum uint64, ready StagedBodyReadyLimit) bool {
+	switch ready.Status {
+	case StagedBodyReadyLimitMissing:
+		return stagedNum == start
+	case StagedBodyReadyLimitValid:
+		if targetHead != 0 && ready.Limit >= targetHead {
+			return false
+		}
+		if ready.Limit == ^uint64(0) {
+			return false
+		}
+		return stagedNum == ready.Limit+1
+	default:
+		return true
+	}
+}
+
+// ReadStagedBodyReadyDrainLimit reads and validates the persisted
+// SyncBodiesReady frontier that can cap one local staged-body import drain.
+func ReadStagedBodyReadyDrainLimit(db ethdb.KeyValueReader, next uint64) StagedBodyReadyLimit {
+	if db == nil {
+		return ValidateStagedBodyReadyDrainLimit(next, rawdb.StageProgress{}, false, rawdb.SyncStagedBlockRow{}, false, nil)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
+	if err != nil {
+		return StagedBodyReadyLimit{
+			Status:     StagedBodyReadyLimitProgressReadError,
+			StageError: err,
+		}
+	}
+	var (
+		staged   rawdb.SyncStagedBlockRow
+		stagedOK bool
+		readErr  error
+	)
+	if ok && row.HasBlockHash && row.BlockNum >= next {
+		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
+	}
+	return ValidateStagedBodyReadyDrainLimit(next, row, ok, staged, stagedOK, readErr)
+}
+
+// ReadStagedBodyProgress reads a downloader stage progress row and validates
+// that its hash-bound block points to the same row in sync-staged body storage.
+func ReadStagedBodyProgress(db ethdb.KeyValueReader, stage rawdb.StageID) StagedBodyProgressCheck {
+	if db == nil {
+		return ValidateStagedBodyProgress(rawdb.StageProgress{Stage: stage}, false, rawdb.SyncStagedBlockRow{}, false, nil)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+	if err != nil {
+		return StagedBodyProgressCheck{
+			Status:     StagedBodyProgressReadError,
+			StageRow:   rawdb.StageProgress{Stage: stage},
+			StageError: err,
+		}
+	}
+	var (
+		staged   rawdb.SyncStagedBlockRow
+		stagedOK bool
+		readErr  error
+	)
+	if ok && row.HasBlockHash {
+		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
+	}
+	return ValidateStagedBodyProgress(row, ok, staged, stagedOK, readErr)
+}
+
+// ReadStagedBodyDrainPlan reads SyncBodiesReady and derives the local
+// staged-body drain plan in one downloader-owned decision point.
+func ReadStagedBodyDrainPlan(db ethdb.KeyValueReader, next uint64, max int) StagedBodyDrainReadPlan {
+	ready := ReadStagedBodyReadyDrainLimit(db, next)
+	return StagedBodyDrainReadPlan{
+		Ready: ready,
+		Plan:  PlanStagedBodyDrain(next, max, ready),
+	}
+}
+
+// ReadAndApplyStagedBodyDrainPlan reads the persisted ready frontier, derives
+// the downloader-owned local drain schedule, and dispatches that schedule to
+// the caller's persistence/runtime adapter.
+func ReadAndApplyStagedBodyDrainPlan(db ethdb.KeyValueReader, next uint64, max int, applier StagedBodyDrainPlanApplier) StagedBodyDrainRunResult {
+	read := ReadStagedBodyDrainPlan(db, next, max)
+	apply := ApplyStagedBodyDrainPlan(read.Plan, applier)
+	return StagedBodyDrainRunResult{
+		Read:  read,
+		Apply: apply,
+		Batch: apply.Batch,
+	}
+}
+
+// ValidateStagedBodyReadyDrainLimit checks that a persisted SyncBodiesReady
+// row is hash-bound, not behind the next needed block, and still matches the
+// staged body row it points at.
+func ValidateStagedBodyReadyDrainLimit(next uint64, row rawdb.StageProgress, haveRow bool, staged rawdb.SyncStagedBlockRow, haveStaged bool, readErr error) StagedBodyReadyLimit {
+	result := StagedBodyReadyLimit{
+		StageRow:   row,
+		StagedRow:  staged,
+		ReadError:  readErr,
+		StagedHash: staged.Hash,
+	}
+	if !haveRow {
+		result.Status = StagedBodyReadyLimitMissing
+		return result
+	}
+	if !row.HasBlockHash {
+		result.Status = StagedBodyReadyLimitUnbound
+		return result
+	}
+	if row.BlockNum < next {
+		result.Status = StagedBodyReadyLimitStale
+		return result
+	}
+	if readErr != nil {
+		result.Status = StagedBodyReadyLimitReadError
+		return result
+	}
+	if !haveStaged {
+		result.Status = StagedBodyReadyLimitStagedMissing
+		return result
+	}
+	if staged.Number != row.BlockNum {
+		result.Status = StagedBodyReadyLimitNumberMismatch
+		return result
+	}
+	if staged.Hash != row.BlockHash {
+		result.Status = StagedBodyReadyLimitHashMismatch
+		return result
+	}
+	result.Status = StagedBodyReadyLimitValid
+	result.Limit = row.BlockNum
+	return result
+}
+
+// ValidateStagedBodyProgress checks that a downloader progress row is
+// hash-bound and still matches the staged body row it points at.
+func ValidateStagedBodyProgress(row rawdb.StageProgress, haveRow bool, staged rawdb.SyncStagedBlockRow, haveStaged bool, readErr error) StagedBodyProgressCheck {
+	result := StagedBodyProgressCheck{
+		StageRow:   row,
+		StagedRow:  staged,
+		ReadError:  readErr,
+		StagedHash: staged.Hash,
+	}
+	if !haveRow {
+		result.Status = StagedBodyProgressMissing
+		return result
+	}
+	if !row.HasBlockHash {
+		result.Status = StagedBodyProgressUnbound
+		return result
+	}
+	if readErr != nil {
+		result.Status = StagedBodyProgressStagedReadError
+		return result
+	}
+	if !haveStaged {
+		result.Status = StagedBodyProgressStagedMissing
+		return result
+	}
+	if staged.Number != row.BlockNum {
+		result.Status = StagedBodyProgressNumberMismatch
+		return result
+	}
+	if staged.Hash != row.BlockHash {
+		result.Status = StagedBodyProgressHashMismatch
+		return result
+	}
+	result.Status = StagedBodyProgressValid
+	return result
+}

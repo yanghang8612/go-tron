@@ -1,14 +1,18 @@
 package snapshots
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -31,6 +35,14 @@ type ChainSource interface {
 	LatestSolidifiedBlockNum() int64
 }
 
+type canonicalHashSource interface {
+	CanonicalBlockHash(blockNum uint64) (common.Hash, bool)
+}
+
+type canonicalHashLookupSource interface {
+	CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error)
+}
+
 // Config controls the cold history snapshot builder lifecycle.
 type Config struct {
 	Dir                    string
@@ -47,6 +59,24 @@ type Config struct {
 	// build pass entirely. Latest builds are full-keyspace scans, so all latest
 	// datasets share this single coarse cadence rather than rebuilding every tick.
 	LatestBuildBlocks uint64
+	// BuildSectionBlooms builds full-section cold section-bloom sidecars once
+	// the state-history cutoff has fully covered the source block section.
+	BuildSectionBlooms bool
+	// BuildBalanceTraces builds cold balance-trace sidecars for the same block
+	// range as a newly published state-history segment, but only when every
+	// canonical block in that range already has a matching hot BlockBalanceTrace.
+	BuildBalanceTraces bool
+	// BuildEventLogs builds registered cold event-log sidecars for the same
+	// block range as each newly published state-history segment.
+	BuildEventLogs bool
+	// ETL configures sorted scratch ingestion for derived cold sidecar builds
+	// launched by this lifecycle pass. Zero values preserve collector defaults.
+	ETL RestoreETLOptions
+	// CatalogSigningKey optionally lets SnapshotLifecycle sign the final active
+	// production manifest after a lifecycle pass. CatalogChain identifies the
+	// chain served by that catalog.
+	CatalogSigningKey ed25519.PrivateKey
+	CatalogChain      *ChainIdentity
 }
 
 // PassResult describes a single cold snapshot builder pass.
@@ -56,11 +86,17 @@ type PassResult struct {
 	Compaction        HistoryCompactionResult
 	FromTxNum         uint64
 	ToTxNum           uint64
+	FromBlock         uint64
+	ToBlock           uint64
 	CutoffBlock       uint64
 	SolidifiedBlock   uint64
 	PreviousVisibleTx uint64
 	Segment           SegmentRef
 	Segments          []SegmentRef
+	SectionBloomBuilt bool
+	BalanceTraceBuilt bool
+	EventLogBuilt     bool
+	CatalogPublished  bool
 	Manifest          *Manifest
 }
 
@@ -128,6 +164,13 @@ func (c Config) applyDefaults() Config {
 	if c.CompactMaxTxSpan == 0 {
 		c.CompactMaxTxSpan = c.BatchBlocks * uint64(c.CompactMinSegments)
 	}
+	if c.CatalogSigningKey != nil {
+		c.CatalogSigningKey = append(ed25519.PrivateKey(nil), c.CatalogSigningKey...)
+	}
+	if c.CatalogChain != nil {
+		identity := *c.CatalogChain
+		c.CatalogChain = &identity
+	}
 	return c
 }
 
@@ -153,6 +196,21 @@ func (c Config) validate() error {
 	}
 	if cfg.BuildHistory == nil {
 		return fmt.Errorf("snapshots: history domain %s has no builder", c.HistoryDataset)
+	}
+	if c.CatalogChain != nil {
+		identity := *c.CatalogChain
+		normalizeChainIdentity(&identity)
+		if err := validateChainIdentity(&identity); err != nil {
+			return fmt.Errorf("snapshots: invalid catalog chain identity: %w", err)
+		}
+	}
+	if len(c.CatalogSigningKey) != 0 {
+		if len(c.CatalogSigningKey) != ed25519.PrivateKeySize {
+			return fmt.Errorf("snapshots: catalog signing key length %d, want %d", len(c.CatalogSigningKey), ed25519.PrivateKeySize)
+		}
+		if c.CatalogChain == nil {
+			return errors.New("snapshots: catalog signing requires a chain identity")
+		}
 	}
 	return nil
 }
@@ -186,12 +244,10 @@ func (r *Runner) Start() error {
 		// Seed lastLatestBuildBlock from the persisted stage first (survives
 		// restarts); fall back to the current solidified block for fresh nodes
 		// that have never run a latest build (self-heals after the first build).
-		if r.cfg.LatestBuildBlocks > 0 {
-			if row, ok, err := newRawDBStageProgressReader(r.chain.DB()).Read(rawdb.StageSnapshotLatestBuild); err == nil && ok {
-				r.lastLatestBuildBlock.Store(row.BlockNum)
-			} else if block, _, ok, werr := r.latestBuildWatermark(); werr == nil && ok {
-				r.lastLatestBuildBlock.Store(block)
-			}
+		if err := r.seedLatestBuildBlock(); err != nil {
+			close(r.done)
+			r.startErr = err
+			return
 		}
 		go r.loop()
 		coldSnapshotLog.Info("History cold snapshot builder started",
@@ -199,7 +255,10 @@ func (r *Runner) Start() error {
 			"dataset", r.cfg.HistoryDataset,
 			"interval", r.cfg.Interval,
 			"historyWindow", r.cfg.HistoryWindow,
-			"batchBlocks", r.cfg.BatchBlocks)
+			"batchBlocks", r.cfg.BatchBlocks,
+			"sectionBloomBuild", r.cfg.BuildSectionBlooms,
+			"balanceTraceBuild", r.cfg.BuildBalanceTraces,
+			"eventLogBuild", r.cfg.BuildEventLogs)
 	})
 	return r.startErr
 }
@@ -268,6 +327,67 @@ func (r *Runner) OnePass() (PassResult, error) {
 	return result, err
 }
 
+// PreflightCatalog verifies an existing manifest identity before a lifecycle
+// pass can prune hot data. New manifests are bound and signed after the pass,
+// once every manifest progress update is complete.
+func (r *Runner) PreflightCatalog() error {
+	if r == nil || len(r.cfg.CatalogSigningKey) == 0 {
+		return nil
+	}
+	if r.cfg.CatalogChain == nil {
+		return errors.New("snapshots: catalog signing requires a chain identity")
+	}
+	if err := r.cfg.validate(); err != nil {
+		return err
+	}
+	if _, err := LoadProductionManifest(r.cfg.Dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	_, err := EnsureProductionManifestChainIdentity(r.cfg.Dir, *r.cfg.CatalogChain)
+	return err
+}
+
+// PublishCatalogIfManifestChanged signs the final manifest view after a
+// lifecycle pass. It avoids rehashing every cold segment when the existing
+// catalog already authenticates the same manifest for this signer and chain.
+func (r *Runner) PublishCatalogIfManifestChanged() (bool, error) {
+	if r == nil || len(r.cfg.CatalogSigningKey) == 0 {
+		return false, nil
+	}
+	if r.cfg.CatalogChain == nil {
+		return false, errors.New("snapshots: catalog signing requires a chain identity")
+	}
+	if err := r.cfg.validate(); err != nil {
+		return false, err
+	}
+	if _, err := LoadProductionManifest(r.cfg.Dir); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err := EnsureProductionManifestChainIdentity(r.cfg.Dir, *r.cfg.CatalogChain); err != nil {
+		return false, err
+	}
+	checksum, err := checksumFile(filepath.Join(r.cfg.Dir, ManifestFile))
+	if err != nil {
+		return false, err
+	}
+	if catalog, err := LoadSnapshotCatalog(r.cfg.Dir); err == nil &&
+		strings.EqualFold(catalog.ManifestChecksum, checksum) &&
+		catalog.ValidateChainIdentity(*r.cfg.CatalogChain) == nil &&
+		catalog.VerifySignature([]ed25519.PublicKey{r.cfg.CatalogSigningKey.Public().(ed25519.PublicKey)}) == nil {
+		return false, nil
+	}
+	if _, err := PublishSignedSnapshotCatalog(r.cfg.Dir, r.cfg.CatalogSigningKey); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (r *Runner) onePass() (PassResult, error) {
 	if !r.cfg.Enabled {
 		return PassResult{}, nil
@@ -292,6 +412,13 @@ func (r *Runner) onePass() (PassResult, error) {
 		return PassResult{}, nil
 	}
 	cutoffBlock := uint64(solidified) - r.cfg.HistoryWindow
+	finishStage, hasFinishStage, err := r.verifiedFinishStageBlock(db)
+	if err != nil {
+		return PassResult{}, err
+	}
+	if hasFinishStage && finishStage < cutoffBlock {
+		cutoffBlock = finishStage
+	}
 	result := PassResult{
 		SolidifiedBlock: uint64(solidified),
 		CutoffBlock:     cutoffBlock,
@@ -322,14 +449,14 @@ func (r *Runner) onePass() (PassResult, error) {
 	}
 
 	toTxNum := cutoffRange.EndTxNum
+	startBlock, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, fromTxNum, cutoffBlock)
+	if err != nil {
+		return PassResult{}, err
+	}
+	if !ok {
+		return result, nil
+	}
 	if r.cfg.BatchBlocks > 0 {
-		startBlock, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, fromTxNum, cutoffBlock)
-		if err != nil {
-			return PassResult{}, err
-		}
-		if !ok {
-			return result, nil
-		}
 		batchCutoffBlock := startBlock + r.cfg.BatchBlocks - 1
 		if batchCutoffBlock < startBlock || batchCutoffBlock > cutoffBlock {
 			batchCutoffBlock = cutoffBlock
@@ -354,6 +481,14 @@ func (r *Runner) onePass() (PassResult, error) {
 		return result, nil
 	}
 
+	var snapshotBuildHash common.Hash
+	if _, ok := db.(ethdb.KeyValueWriter); ok {
+		snapshotBuildHash, err = r.snapshotBuildStageBoundaryHash(db, rawdb.StageSnapshotBuild, cutoffBlock)
+		if err != nil {
+			return PassResult{}, err
+		}
+	}
+
 	refs, err := historyCfg.BuildHistory(db, r.cfg.Dir, fromTxNum, toTxNum, historyCfg.HistoryPath(fromTxNum, toTxNum))
 	if err != nil {
 		return PassResult{}, err
@@ -361,26 +496,239 @@ func (r *Runner) onePass() (PassResult, error) {
 	if len(refs) == 0 {
 		return result, nil
 	}
-	manifest, err := NewAggregator(r.cfg.Dir).Integrate(fromTxNum, toTxNum, refs)
+	aggregator := NewAggregator(r.cfg.Dir)
+	var chainDB *rawdb.ChainDB
+	if r.cfg.BuildBalanceTraces || r.cfg.BuildEventLogs {
+		chainDB, err = r.derivedIndexChainDB()
+		if err != nil {
+			return PassResult{}, err
+		}
+	}
+	balanceTraceBuilt := false
+	if r.cfg.BuildBalanceTraces {
+		traceRefs, err := r.balanceTracePass(chainDB, db, startBlock, cutoffBlock)
+		if err != nil {
+			return PassResult{}, err
+		}
+		if len(traceRefs) > 0 {
+			refs = append(refs, traceRefs...)
+			balanceTraceBuilt = true
+		}
+	}
+	eventLogBuilt := false
+	if r.cfg.BuildEventLogs {
+		ref, err := BuildEventLogSegmentFromChainWithOptions(chainDB, r.cfg.Dir, EventLogSegmentPath(startBlock, cutoffBlock), startBlock, cutoffBlock, r.cfg.ETL)
+		if err != nil {
+			return PassResult{}, err
+		}
+		refs = append(refs, ref)
+		eventRefs, err := aggregator.eventLogRefsAfterIntegrating([]SegmentRef{ref})
+		if err != nil {
+			return PassResult{}, err
+		}
+		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(r.cfg.Dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum), r.cfg.ETL)
+		if err != nil {
+			return PassResult{}, err
+		}
+		refs = append(refs, indexRef)
+		eventLogBuilt = true
+	}
+	sectionBloomBuilt := false
+	if r.cfg.BuildSectionBlooms {
+		sectionRefs, err := r.sectionBloomPass(db, cutoffBlock)
+		if err != nil {
+			return PassResult{}, err
+		}
+		if len(sectionRefs) > 0 {
+			refs = append(refs, sectionRefs...)
+			sectionBloomBuilt = true
+		}
+	}
+	manifest, err := aggregator.Integrate(fromTxNum, toTxNum, refs)
 	if err != nil {
 		return PassResult{}, err
 	}
 	result.Built = true
 	result.FromTxNum = fromTxNum
 	result.ToTxNum = toTxNum
+	result.FromBlock = startBlock
+	result.ToBlock = cutoffBlock
 	result.Segment = refs[0]
 	result.Segments = append([]SegmentRef(nil), refs...)
+	result.SectionBloomBuilt = sectionBloomBuilt
+	result.BalanceTraceBuilt = balanceTraceBuilt
+	result.EventLogBuilt = eventLogBuilt
 	result.Manifest = manifest
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {
 		stageProgress := newRawDBStageProgressStore(writer)
-		if err := stageProgress.Write(rawdb.StageSnapshotBuild, cutoffBlock); err != nil {
+		if err := writeSnapshotBuildStage(writer, rawdb.StageSnapshotBuild, cutoffBlock, snapshotBuildHash); err != nil {
 			return PassResult{}, err
+		}
+		if eventLogBuilt {
+			if err := writeEventLogBuildStage(chainDB, manifest); err != nil {
+				return PassResult{}, err
+			}
 		}
 		if err := writeManifestProgressStages(stageProgress, manifest.Progress); err != nil {
 			return PassResult{}, err
 		}
 	}
 	return result, nil
+}
+
+func writeSnapshotBuildStage(writer ethdb.KeyValueWriter, stage rawdb.StageID, block uint64, hash common.Hash) error {
+	if writer == nil {
+		return errNilStageProgressStore
+	}
+	if hash == (common.Hash{}) {
+		return fmt.Errorf("snapshots: missing canonical hash for %s stage block %d", stage, block)
+	}
+	return rawdb.WriteStageProgressWithHash(writer, stage, block, hash)
+}
+
+func (r *Runner) snapshotBuildStageBoundaryHash(db AggregatorDB, stage rawdb.StageID, block uint64) (common.Hash, error) {
+	hash, ok, err := r.snapshotBuildStageCanonicalHash(db, stage, block)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if !ok {
+		return common.Hash{}, fmt.Errorf("snapshots: missing canonical hash for %s stage block %d", stage, block)
+	}
+	return hash, nil
+}
+
+func (r *Runner) snapshotBuildStageCanonicalHash(db AggregatorDB, stage rawdb.StageID, block uint64) (common.Hash, bool, error) {
+	if db == nil {
+		return common.Hash{}, false, fmt.Errorf("snapshots: %s stage block %d requires readable database", stage, block)
+	}
+	hash, ok, err := r.canonicalHashLookup(db)(block)
+	if err != nil {
+		return common.Hash{}, false, fmt.Errorf("snapshots: read %s stage block %d canonical hash: %w", stage, block, err)
+	}
+	if ok && hash != (common.Hash{}) {
+		return hash, true, nil
+	}
+	return common.Hash{}, false, nil
+}
+
+func (r *Runner) verifiedFinishStageBlock(db AggregatorDB) (uint64, bool, error) {
+	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(db, rawdb.StageFinish, r.canonicalHashLookup(db))
+	if err != nil {
+		return 0, ok, fmt.Errorf("snapshots: %w", err)
+	}
+	return block, ok, nil
+}
+
+func (r *Runner) canonicalHashLookup(db AggregatorDB) func(uint64) (common.Hash, bool, error) {
+	return func(blockNum uint64) (common.Hash, bool, error) {
+		if r != nil && r.chain != nil {
+			if source, ok := r.chain.(canonicalHashLookupSource); ok {
+				return source.CanonicalBlockHashStrict(blockNum)
+			}
+			if source, ok := r.chain.(canonicalHashSource); ok {
+				hash, ok := source.CanonicalBlockHash(blockNum)
+				return hash, ok, nil
+			}
+		}
+		return rawdb.ReadBlockHashByNumberStrict(db, blockNum)
+	}
+}
+
+func (r *Runner) balanceTracePass(chain *rawdb.ChainDB, db AggregatorDB, fromBlock, toBlock uint64) ([]SegmentRef, error) {
+	if r == nil || !r.cfg.BuildBalanceTraces {
+		return nil, nil
+	}
+	if chain == nil {
+		return nil, errors.New("snapshots: nil balance trace chain database")
+	}
+	if db == nil {
+		return nil, errors.New("snapshots: nil balance trace build database")
+	}
+	coverage, err := rawdb.AuditBlockBalanceTraceCoverage(chain, db, fromBlock, toBlock, 1)
+	if err != nil {
+		return nil, err
+	}
+	if coverage.MismatchedBlockBalanceTrace > 0 {
+		detail := ""
+		if len(coverage.Issues) > 0 {
+			detail = ": " + coverage.Issues[0].Detail
+		}
+		return nil, fmt.Errorf("snapshots: balance trace coverage mismatch over [%d,%d]%s", fromBlock, toBlock, detail)
+	}
+	if coverage.MissingBlockBalanceTrace > 0 || coverage.MissingAccountTrace > 0 {
+		return nil, nil
+	}
+	ref, err := BuildBalanceTraceSegmentFromDBWithOptions(db, r.cfg.Dir, BalanceTraceSegmentPath(fromBlock, toBlock), fromBlock, toBlock, r.cfg.ETL)
+	if err != nil {
+		return nil, err
+	}
+	return []SegmentRef{ref}, nil
+}
+
+func (r *Runner) sectionBloomPass(db AggregatorDB, cutoffBlock uint64) ([]SegmentRef, error) {
+	if r == nil || !r.cfg.BuildSectionBlooms {
+		return nil, nil
+	}
+	if db == nil {
+		return nil, errors.New("snapshots: nil section bloom build database")
+	}
+	if cutoffBlock < rawdb.SectionBloomBlockPerSection-1 {
+		return nil, nil
+	}
+	manifest, err := LoadProductionManifest(r.cfg.Dir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	maxSection := cutoffBlock / rawdb.SectionBloomBlockPerSection
+	for section := uint64(0); section <= maxSection; section++ {
+		fromBlock := section * rawdb.SectionBloomBlockPerSection
+		toBlock := sectionBloomSectionEndBlock(section)
+		if toBlock > cutoffBlock {
+			break
+		}
+		if sectionBloomManifestCoversFullSection(manifest, section) {
+			continue
+		}
+		ref, err := BuildSectionBloomSegmentFromDBWithOptions(db, r.cfg.Dir, SectionBloomSegmentPath(fromBlock, toBlock), fromBlock, toBlock, r.cfg.ETL)
+		if err != nil {
+			return nil, err
+		}
+		return []SegmentRef{ref}, nil
+	}
+	return nil, nil
+}
+
+func sectionBloomManifestCoversFullSection(manifest *Manifest, section uint64) bool {
+	if manifest == nil {
+		return false
+	}
+	fromBlock := section * rawdb.SectionBloomBlockPerSection
+	toBlock := sectionBloomSectionEndBlock(section)
+	for _, ref := range sectionBloomRefs(manifest) {
+		if ref.FromTxNum <= fromBlock && ref.ToTxNum >= toBlock {
+			return true
+		}
+	}
+	return false
+}
+
+type eventLogChainSource interface {
+	EventLogDB() *rawdb.ChainDB
+}
+
+func (r *Runner) derivedIndexChainDB() (*rawdb.ChainDB, error) {
+	if r == nil || r.chain == nil {
+		return nil, errors.New("snapshots: nil derived index chain source")
+	}
+	if source, ok := r.chain.(eventLogChainSource); ok {
+		if db := source.EventLogDB(); db != nil {
+			return db, nil
+		}
+	}
+	if db, ok := r.chain.DB().(*rawdb.ChainDB); ok && db != nil {
+		return db, nil
+	}
+	return nil, errors.New("snapshots: derived index build requires rawdb.ChainDB")
 }
 
 func (r *Runner) recordPass(result PassResult, start time.Time) {
@@ -410,16 +758,72 @@ func (r *Runner) compactHistory() (HistoryCompactionResult, error) {
 	})
 }
 
+func (r *Runner) seedLatestBuildBlock() error {
+	if r == nil || !r.cfg.Enabled || r.cfg.LatestBuildBlocks == 0 {
+		return nil
+	}
+	block, ok, hadStage, err := r.latestBuildStageSeed()
+	if err != nil {
+		return err
+	}
+	if ok {
+		r.lastLatestBuildBlock.Store(block)
+		return nil
+	}
+	if hadStage {
+		return nil
+	}
+	block, _, ok, err = r.latestBuildWatermark()
+	if err != nil {
+		return err
+	}
+	if ok {
+		r.lastLatestBuildBlock.Store(block)
+	}
+	return nil
+}
+
+func (r *Runner) latestBuildStageSeed() (block uint64, ok bool, hadStage bool, err error) {
+	if r == nil || r.chain == nil || r.chain.DB() == nil {
+		return 0, false, false, errors.New("snapshots: nil cold builder chain or database")
+	}
+	db := r.chain.DB()
+	row, exists, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild)
+	if err != nil || !exists {
+		return 0, false, exists, err
+	}
+	if !row.HasBlockHash {
+		return 0, false, true, nil
+	}
+	hash, hasHash, err := r.snapshotBuildStageCanonicalHash(db, rawdb.StageSnapshotLatestBuild, row.BlockNum)
+	if err != nil {
+		return 0, false, true, err
+	}
+	if !hasHash || hash != row.BlockHash {
+		return 0, false, true, nil
+	}
+	return row.BlockNum, true, true, nil
+}
+
 func (r *Runner) latestBuildWatermark() (block uint64, txNum uint64, ok bool, err error) {
 	solidified := r.chain.LatestSolidifiedBlockNum()
 	if solidified <= 0 {
 		return 0, 0, false, nil
 	}
-	tx, err := StateDomainHistoryTxNumAtBlockEnd(r.chain.DB(), uint64(solidified))
+	db := r.chain.DB()
+	block = uint64(solidified)
+	finishStage, hasFinishStage, err := r.verifiedFinishStageBlock(db)
 	if err != nil {
 		return 0, 0, false, err
 	}
-	return uint64(solidified), tx, tx > 0, nil
+	if hasFinishStage && finishStage < block {
+		block = finishStage
+	}
+	tx, err := StateDomainHistoryTxNumAtBlockEnd(db, block)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	return block, tx, tx > 0, nil
 }
 
 func (r *Runner) latestPass() (bool, error) {
@@ -438,13 +842,20 @@ func (r *Runner) latestPass() (bool, error) {
 	if prevBlock != 0 && block < prevBlock+r.cfg.LatestBuildBlocks {
 		return false, nil // not enough blocks elapsed
 	}
+	var latestBuildHash common.Hash
+	if _, ok := db.(ethdb.KeyValueWriter); ok {
+		latestBuildHash, err = r.snapshotBuildStageBoundaryHash(db, rawdb.StageSnapshotLatestBuild, block)
+		if err != nil {
+			return false, err
+		}
+	}
 	res, err := NewAggregator(r.cfg.Dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: txNum})
 	if err != nil {
 		return false, err
 	}
 	r.lastLatestBuildBlock.Store(block)
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {
-		if err := newRawDBStageProgressStore(writer).Write(rawdb.StageSnapshotLatestBuild, block); err != nil {
+		if err := writeSnapshotBuildStage(writer, rawdb.StageSnapshotLatestBuild, block, latestBuildHash); err != nil {
 			return false, err
 		}
 	}
@@ -461,7 +872,12 @@ func (r *Runner) loop() {
 			"dataset", r.cfg.HistoryDataset,
 			"fromTx", result.FromTxNum,
 			"toTx", result.ToTxNum,
-			"cutoffBlock", result.CutoffBlock)
+			"fromBlock", result.FromBlock,
+			"toBlock", result.ToBlock,
+			"cutoffBlock", result.CutoffBlock,
+			"sectionBloomBuilt", result.SectionBloomBuilt,
+			"balanceTraceBuilt", result.BalanceTraceBuilt,
+			"eventLogBuilt", result.EventLogBuilt)
 	} else if result.Compaction.Merged {
 		coldSnapshotLog.Info("History cold snapshot initial pass compacted",
 			"dataset", result.Compaction.Dataset,
@@ -485,7 +901,12 @@ func (r *Runner) loop() {
 					"dataset", r.cfg.HistoryDataset,
 					"fromTx", result.FromTxNum,
 					"toTx", result.ToTxNum,
-					"cutoffBlock", result.CutoffBlock)
+					"fromBlock", result.FromBlock,
+					"toBlock", result.ToBlock,
+					"cutoffBlock", result.CutoffBlock,
+					"sectionBloomBuilt", result.SectionBloomBuilt,
+					"balanceTraceBuilt", result.BalanceTraceBuilt,
+					"eventLogBuilt", result.EventLogBuilt)
 			} else if result.Compaction.Merged {
 				coldSnapshotLog.Info("History cold snapshot pass compacted",
 					"dataset", result.Compaction.Dataset,

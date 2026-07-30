@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +36,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 // ErrNotFound is returned by Get/Has when the key is tombstoned in a layer.
@@ -115,13 +118,17 @@ const layerOwnedKeyArenaMaxChunk = 64 << 10
 // The fixed ~1 KiB per live layer is small relative to the layer values and the
 // configured 24 GiB Pebble cache, and maps remain lazily allocated.
 type layerShard struct {
-	mu                 sync.RWMutex
-	writes             map[string][]byte
-	deletes            map[string]struct{}
+	mu      sync.RWMutex
+	writes  map[string][]byte
+	deletes map[string]struct{}
+	// durableWrites keeps overlay values that an ordered direct metadata batch
+	// already persisted. Reads still see them, while a later layer flush skips
+	// byte-identical rows.
+	durableWrites      map[string][]byte
 	prefixBucketIndex  *layerPrefixBucketIndex
-	pendingOwnedPuts   int
+	pendingOwnedPuts   uint32
 	commitmentReserved bool
-	_                  [7]byte
+	_                  [3]byte
 }
 
 // layerPrefixBucketIndex is built lazily by structured account-KV iterators.
@@ -453,7 +460,8 @@ func layerShardIndexString(key string) uint32 {
 // committed (and thus flush-eligible) only after its fold completes and
 // CommitBlock/CommitInflight promotes it.
 type Buffer struct {
-	base ethdb.KeyValueReader
+	base            ethdb.KeyValueReader
+	blockHashReader BlockHashReader
 	// baseReadCache is populated through GetNoCopyCached. Overlay layers always
 	// win; a successful canonical flush refreshes already-cached keys directly
 	// from immutable layer values and invalidates tombstones, while Discard clears
@@ -487,6 +495,21 @@ type bufferBatch struct {
 	ops    []bufferBatchOp
 	size   int
 	closed bool
+}
+
+// BlockHashReader is the optional cold-chain lookup carried by buffers used as
+// TVM rawdb readers.
+type BlockHashReader interface {
+	BlockHashByNumber(number uint64) (common.Hash, bool)
+}
+
+type BlockHashReaderFunc func(number uint64) (common.Hash, bool)
+
+func (fn BlockHashReaderFunc) BlockHashByNumber(number uint64) (common.Hash, bool) {
+	if fn == nil {
+		return common.Hash{}, false
+	}
+	return fn(number)
 }
 
 // valueViewReader exposes a value only for the duration of fn. Pebble can use
@@ -528,8 +551,62 @@ type stringKeyWriter interface {
 // New creates a Buffer that falls through reads to base.
 func New(base ethdb.KeyValueReader) *Buffer {
 	b := &Buffer{base: base}
+	if reader, ok := base.(BlockHashReader); ok {
+		b.blockHashReader = reader
+	}
 	b.publishReadViewLocked()
 	return b
+}
+
+func (b *Buffer) SetBlockHashReader(reader BlockHashReader) {
+	b.mu.Lock()
+	b.blockHashReader = reader
+	b.mu.Unlock()
+}
+
+func (b *Buffer) BlockHashByNumber(number uint64) (common.Hash, bool) {
+	if b == nil {
+		return common.Hash{}, false
+	}
+	if hash, ok := rawdb.ReadBlockHashKV(b, number); ok {
+		return hash, true
+	}
+	b.mu.RLock()
+	reader := b.blockHashReader
+	b.mu.RUnlock()
+	if reader == nil {
+		return common.Hash{}, false
+	}
+	return reader.BlockHashByNumber(number)
+}
+
+func (b *Buffer) BlockHashByNumberStrict(number uint64) (common.Hash, bool, error) {
+	if b == nil {
+		return common.Hash{}, false, nil
+	}
+	if data, ok, err := rawdb.ReadBlockRawStrict(b, number); err != nil {
+		return common.Hash{}, ok, err
+	} else if ok {
+		block, err := types.UnmarshalBlock(data)
+		if err != nil {
+			return common.Hash{}, true, fmt.Errorf("rawdb: block %d decode: %w", number, err)
+		}
+		if block.Number() != number {
+			return common.Hash{}, true, fmt.Errorf("rawdb: block row %d contains block number %d", number, block.Number())
+		}
+		return block.Hash(), true, nil
+	}
+	b.mu.RLock()
+	reader := b.blockHashReader
+	b.mu.RUnlock()
+	if reader == nil {
+		return common.Hash{}, false, nil
+	}
+	if strict, ok := reader.(rawdb.BlockHashReaderStrict); ok {
+		return strict.BlockHashByNumberStrict(number)
+	}
+	hash, found := reader.BlockHashByNumber(number)
+	return hash, found, nil
 }
 
 // ConcurrentReadWriteSafe is a structural marker for higher-level stores that
@@ -779,7 +856,7 @@ func applyBatchOpToLayer(target *layer, op *bufferBatchOp) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if op.reservedOwnedPut {
-		if s.pendingOwnedPuts <= 0 {
+		if s.pendingOwnedPuts == 0 {
 			panic("blockbuffer: owned batch reservation underflow")
 		}
 		s.pendingOwnedPuts--
@@ -789,6 +866,7 @@ func applyBatchOpToLayer(target *layer, op *bufferBatchOp) {
 	s.trackPrefixBucketKeyBeforeMutation(k)
 	if op.delete {
 		delete(s.writes, k)
+		delete(s.durableWrites, k)
 		if s.deletes == nil {
 			s.deletes = make(map[string]struct{})
 		}
@@ -796,6 +874,7 @@ func applyBatchOpToLayer(target *layer, op *bufferBatchOp) {
 		return
 	}
 	delete(s.deletes, k)
+	delete(s.durableWrites, k)
 	// Put already copied the caller's value into storage owned by the batch.
 	// Batches never mutate those bytes, so the layer can retain that owned
 	// slice directly instead of allocating and copying it a second time.
@@ -811,7 +890,7 @@ func releaseBatchOpReservation(op *bufferBatchOp) {
 	}
 	s := op.target.shardForString(op.key)
 	s.mu.Lock()
-	if s.pendingOwnedPuts <= 0 {
+	if s.pendingOwnedPuts == 0 {
 		s.mu.Unlock()
 		panic("blockbuffer: owned batch reservation underflow")
 	}
@@ -1159,6 +1238,52 @@ func (b *Buffer) NewestInflight() (InflightHandle, bool) {
 		return InflightHandle{}, false
 	}
 	return InflightHandle{l: l, hash: l.blockHash, number: l.number}, true
+}
+
+// MarkActiveWritesDurable records active-layer values already persisted by an
+// ordered direct metadata batch. The overlay remains readable and rewindable,
+// but its eventual flush skips the identical durable value.
+func (b *Buffer) MarkActiveWritesDurable(keys ...[]byte) error {
+	b.mu.RLock()
+	target := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if target == nil {
+		return errors.New("blockbuffer: mark durable writes with no active layer")
+	}
+	return markLayerWritesDurable(target, keys...)
+}
+
+func (b *Buffer) MarkInflightWritesDurable(h InflightHandle, keys ...[]byte) error {
+	if !h.Valid() {
+		return errors.New("blockbuffer: mark durable writes with invalid handle")
+	}
+	b.mu.RLock()
+	inflight := b.layerInflightLocked(h.l)
+	b.mu.RUnlock()
+	if !inflight {
+		return errors.New("blockbuffer: mark durable writes for non-inflight layer")
+	}
+	return markLayerWritesDurable(h.l, keys...)
+}
+
+func markLayerWritesDurable(target *layer, keys ...[]byte) error {
+	for _, key := range keys {
+		k := string(key)
+		s := target.shardForString(k)
+		s.mu.Lock()
+		value, ok := s.writes[k]
+		_, deleted := s.deletes[k]
+		if !ok || deleted {
+			s.mu.Unlock()
+			return fmt.Errorf("blockbuffer: mark durable write missing or deleted key %x", key)
+		}
+		if s.durableWrites == nil {
+			s.durableWrites = make(map[string][]byte)
+		}
+		s.durableWrites[k] = value
+		s.mu.Unlock()
+	}
+	return nil
 }
 
 // CommitInflight promotes the in-flight layer referenced by h onto the
@@ -2204,6 +2329,9 @@ func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
 		s := &l.shards[i]
 		s.mu.RLock()
 		for k, v := range s.writes {
+			if durable, ok := s.durableWrites[k]; ok && bytes.Equal(durable, v) {
+				continue
+			}
 			var err error
 			if writesString {
 				err = stringWriter.PutString(k, v)
@@ -2283,13 +2411,22 @@ func writeLayerSorted(l *layer, w ethdb.KeyValueWriter) error {
 	count := 0
 	for i := range l.shards {
 		s := &l.shards[i]
-		count += len(s.writes) + len(s.deletes)
+		for k, v := range s.writes {
+			if durable, ok := s.durableWrites[k]; ok && bytes.Equal(durable, v) {
+				continue
+			}
+			count++
+		}
+		count += len(s.deletes)
 	}
 	keysPtr := borrowFlushWriteKeys(count)
 	defer returnFlushWriteKeys(keysPtr)
 	for i := range l.shards {
 		s := &l.shards[i]
 		for key := range s.writes {
+			if durable, ok := s.durableWrites[key]; ok && bytes.Equal(durable, s.writes[key]) {
+				continue
+			}
 			*keysPtr = append(*keysPtr, key)
 		}
 		for key := range s.deletes {
@@ -2413,6 +2550,10 @@ func mergeLayers(layers []*layer, merged *flushMergedOps) {
 			s := &l.shards[i]
 			s.mu.RLock()
 			for k, v := range s.writes {
+				if durable, ok := s.durableWrites[k]; ok && bytes.Equal(durable, v) {
+					delete(merged.ops, k)
+					continue
+				}
 				merged.ops[k] = mergedLayerOp{value: v, shard: uint8(i)}
 			}
 			for k := range s.deletes {
@@ -2502,6 +2643,9 @@ func layerWriteStats(l *layer) (valueSize, encodedSize, ops int) {
 		s := &l.shards[i]
 		s.mu.RLock()
 		for k, v := range s.writes {
+			if durable, ok := s.durableWrites[k]; ok && bytes.Equal(durable, v) {
+				continue
+			}
 			ops++
 			valueSize += len(k) + len(v)
 			encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(v)) + len(v)

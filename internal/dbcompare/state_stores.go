@@ -993,11 +993,11 @@ func (c *comparer) compareStorageRows(gtron ethdb.KeyValueStore, java ethdb.KeyV
 	var lastGeneration uint64
 	haveOwner := false
 	indexProgress := c.newProgressCounter(&r, "building gtron storage index")
-	err = rawdb.IterateStateKVLatestDomainRows(gtron, kvdomains.ContractStorage, func(row rawdb.StateKVLatestRow) (bool, error) {
+	err = state.IterateKVLatestDomainRows(gtron, kvdomains.ContractStorage, func(row rawdb.StateKVLatestRow) (bool, error) {
 		indexProgress.Add(1)
 		if !haveOwner || row.Owner != lastOwner {
 			lastOwner, haveOwner = row.Owner, true
-			generation, ok, err := rawdb.ReadStateKVGeneration(gtron, row.Owner)
+			generation, ok, err := state.ReadKVGenerationLatest(gtron, row.Owner)
 			if err != nil {
 				return false, err
 			}

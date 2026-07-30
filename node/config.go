@@ -1,8 +1,8 @@
 package node
 
 type Config struct {
-	DataDir     string
-	P2PPort     int
+	DataDir string
+	P2PPort int
 	// DiscoverPort is the UDP port used by Kademlia discovery. 0 → reuse P2PPort
 	// (java-tron's default; UDP and TCP share the same port number).
 	DiscoverPort int
@@ -17,6 +17,15 @@ type Config struct {
 	PProfAddr string
 	SeedNodes []string // "host:port" entries for initial peer discovery
 	MaxPeers  int      // max simultaneous peers, default 30
+
+	// SyncImportBatch bounds local staged block import chunks. It does not
+	// affect wire-level fetch batch size.
+	SyncImportBatch int
+	// SyncETL* tune the sorted TxLookup catch-up stage used after bulk block
+	// import. Zero buffer/batch values retain the collector defaults.
+	SyncETLTempDir   string
+	SyncETLBufferMiB uint64
+	SyncETLBatchMiB  uint64
 
 	// NetworkID matches the value java-tron peers send in HelloMessage. Defaults
 	// to 1 (libp2p default). Mainnet/Nile should override via params.

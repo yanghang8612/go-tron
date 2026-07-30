@@ -13,10 +13,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -37,9 +39,12 @@ type LatestSegment struct {
 }
 
 type Manager struct {
-	dir      string
-	manifest *Manifest
-	cache    map[string]*LatestSegment
+	dir          string
+	mu           sync.RWMutex
+	manifest     *Manifest
+	manifestInfo os.FileInfo
+	pinned       bool
+	cache        map[string]*LatestSegment
 }
 
 func AccountSnapshotKey(owner common.Address) []byte {
@@ -99,14 +104,14 @@ func BuildAccountLatestSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxN
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildAccountLatestSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildAccountLatestSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildAccountLatestSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildAccountLatestSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetAccountLatest,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -119,7 +124,7 @@ func buildAccountLatestSegmentFilesFromStore(store latestHotStore, dir string, f
 			}
 			return true, nil
 		})
-	})
+	}, writeAccessor)
 }
 
 func BuildLatestDomainSegmentFromDB(db ethdb.Iteratee, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
@@ -162,15 +167,15 @@ func BuildLatestDomainSegmentFilesFromDB(db ethdb.Iteratee, dir string, domain k
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildLatestDomainSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, domain, fromTxNum, toTxNum, relPath)
+	return buildLatestDomainSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, domain, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildLatestDomainSegmentFilesFromStore(store latestHotStore, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildLatestDomainSegmentFilesFromStore(store latestHotStore, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
 	currentGeneration := latestKVGenerationFilter(store)
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetKVLatest,
 		Domain:    domain,
 		Kind:      SegmentLatest,
@@ -191,7 +196,7 @@ func buildLatestDomainSegmentFilesFromStore(store latestHotStore, dir string, do
 			}
 			return true, nil
 		})
-	})
+	}, writeAccessor)
 }
 
 func latestKVGenerationFilter(store latestHotStore) func(owner common.Address, generation uint64) (bool, error) {
@@ -213,7 +218,7 @@ func latestKVGenerationFilter(store latestHotStore) func(owner common.Address, g
 			cached = true
 		}
 		if !cachedExists {
-			return true, nil
+			return generation == 0, nil
 		}
 		return generation == cachedGeneration, nil
 	}
@@ -250,14 +255,14 @@ func BuildKVGenerationSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxNu
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildKVGenerationSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildKVGenerationSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildKVGenerationSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildKVGenerationSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetKVGeneration,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -270,7 +275,7 @@ func buildKVGenerationSegmentFilesFromStore(store latestHotStore, dir string, fr
 			}
 			return true, nil
 		})
-	})
+	}, writeAccessor)
 }
 
 func BuildCodeSegmentFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
@@ -304,14 +309,14 @@ func BuildCodeSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxN
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildCodeSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildCodeSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildCodeSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildCodeSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetCode,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -324,7 +329,7 @@ func buildCodeSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum,
 			}
 			return true, nil
 		})
-	})
+	}, writeAccessor)
 }
 
 func BuildCommitmentRootSegmentFromDB(db ethdb.KeyValueReader, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
@@ -360,10 +365,10 @@ func BuildCommitmentRootSegmentFilesFromDB(db ethdb.KeyValueReader, dir string, 
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildCommitmentRootSegmentFilesFromStore(newRawDBLatestHotReadStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildCommitmentRootSegmentFilesFromStore(newRawDBLatestHotReadStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildCommitmentRootSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildCommitmentRootSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
@@ -374,7 +379,7 @@ func buildCommitmentRootSegmentFilesFromStore(store latestHotStore, dir string, 
 	if !ok {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: missing latest commitment root")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetCommitmentRoot,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -382,21 +387,21 @@ func buildCommitmentRootSegmentFilesFromStore(store latestHotStore, dir string, 
 		Path:      relPath,
 	}, func(yield func(LatestEntry) error) error {
 		return yield(LatestEntry{Key: rawdb.LatestDomainCommitmentRootLogicalKey(), Value: root.Bytes()})
-	})
+	}, writeAccessor)
 }
 
 func BuildCommitmentCheckpointSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
 	}
-	return buildCommitmentCheckpointSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath)
+	return buildCommitmentCheckpointSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, true)
 }
 
-func buildCommitmentCheckpointSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
+func buildCommitmentCheckpointSegmentFilesFromStore(store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
+	return writeLatestBinarySegmentWithCompanions(dir, SegmentRef{
 		Dataset:   SegmentDatasetCommitmentCheckpoint,
 		Kind:      SegmentLatest,
 		FromTxNum: fromTxNum,
@@ -426,7 +431,7 @@ func buildCommitmentCheckpointSegmentFilesFromStore(store latestHotStore, dir st
 			return nil
 		}
 		return yield(LatestEntry{Key: rawdb.LatestStateCommitmentCheckpointLogicalKey(), Value: latestValue})
-	})
+	}, writeAccessor)
 }
 
 func WriteLatestSegment(dir string, ref SegmentRef, entries []LatestEntry) (SegmentRef, error) {
@@ -703,23 +708,62 @@ func CheckLatestAccessorSegment(dir string, ref SegmentRef) error {
 }
 
 func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
+	path := filepath.Join(dir, ref.Path)
+	if err := verifyLatestBinaryFileRef(path, ref); err != nil {
+		return err
+	}
 	file, header, err := openLatestBinaryBTreeReader(dir, ref)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	size := uint64(stat.Size())
+	payloadStart := latestBinaryBTreeHeaderSize + header.count*8
+	if payloadStart > size {
+		return fmt.Errorf("snapshots: latest btree %q payload starts at %d beyond size %d", ref.Path, payloadStart, size)
+	}
 	var prev []byte
 	var prevOrdinal uint64
+	var prevEntryOffset uint64
+	var payloadEnd = payloadStart
 	for i := uint64(0); i < header.count; i++ {
-		entry, ok, err := readLatestBinaryBTreeEntryAt(file, i)
+		entryOffset, err := readLatestBinaryBTreeEntryOffsetAt(file, i)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return fmt.Errorf("snapshots: latest btree %q missing entry %d", ref.Path, i)
+			}
+			return err
+		}
+		if entryOffset < payloadStart || entryOffset >= size {
+			return fmt.Errorf("snapshots: latest btree %q entry %d offset %d outside payload [%d,%d)", ref.Path, i, entryOffset, payloadStart, size)
+		}
+		if entryOffset != payloadEnd {
+			return fmt.Errorf("snapshots: latest btree %q entry %d offset=%d, want contiguous payload offset %d", ref.Path, i, entryOffset, payloadEnd)
+		}
+		if i > 0 && entryOffset <= prevEntryOffset {
+			return fmt.Errorf("snapshots: latest btree %q entry offsets are not increasing", ref.Path)
+		}
+		entry, err := readLatestBinaryBTreeEntryAtOffset(file, entryOffset, size)
 		if err != nil {
 			return err
 		}
-		if !ok {
-			return fmt.Errorf("snapshots: latest btree %q missing entry %d", ref.Path, i)
-		}
 		if len(entry.key) == 0 {
 			return fmt.Errorf("snapshots: latest btree %q entry %d has empty key", ref.Path, i)
+		}
+		entryEnd := entryOffset + uint64(20+len(entry.key))
+		if entryEnd < entryOffset || entryEnd > size {
+			return fmt.Errorf("snapshots: latest btree %q entry %d payload ends at %d beyond size %d", ref.Path, i, entryEnd, size)
+		}
+		if entry.segmentOffset < latestBinaryHeaderSize {
+			return fmt.Errorf("snapshots: latest btree %q entry %d has invalid segment offset %d", ref.Path, i, entry.segmentOffset)
+		}
+		wantOrdinal := i * header.blockSize
+		if entry.ordinal != wantOrdinal {
+			return fmt.Errorf("snapshots: latest btree %q entry %d ordinal=%d, want %d", ref.Path, i, entry.ordinal, wantOrdinal)
 		}
 		if i > 0 {
 			if bytes.Compare(prev, entry.key) >= 0 {
@@ -731,19 +775,31 @@ func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
 		}
 		prev = entry.key
 		prevOrdinal = entry.ordinal
+		prevEntryOffset = entryOffset
+		payloadEnd = entryEnd
+	}
+	if payloadEnd != size {
+		return fmt.Errorf("snapshots: latest btree %q has %d trailing payload bytes", ref.Path, size-payloadEnd)
 	}
 	return nil
 }
 
 func OpenManager(dir string) (*Manager, error) {
-	manifest, err := LoadProductionManifest(dir)
+	manifest, info, err := loadCurrentProductionManifest(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &Manager{dir: dir, cache: make(map[string]*LatestSegment)}, nil
-		}
 		return nil, err
 	}
-	return &Manager{dir: dir, manifest: manifest, cache: make(map[string]*LatestSegment)}, nil
+	return &Manager{dir: dir, manifest: manifest, manifestInfo: info, cache: make(map[string]*LatestSegment)}, nil
+}
+
+func OpenPinnedManager(dir string, manifest *Manifest) (*Manager, error) {
+	if manifest == nil {
+		return nil, errors.New("snapshots: nil pinned manifest")
+	}
+	if err := manifest.ValidateProduction(); err != nil {
+		return nil, err
+	}
+	return &Manager{dir: dir, manifest: cloneManifest(manifest), pinned: true, cache: make(map[string]*LatestSegment)}, nil
 }
 
 func (m *Manager) Manifest() *Manifest {
@@ -756,9 +812,37 @@ func (m *Manager) Manifest() *Manifest {
 		progress := *manifest.Progress
 		cp.Progress = &progress
 	}
+	if manifest.Chain != nil {
+		chain := *manifest.Chain
+		cp.Chain = &chain
+	}
 	cp.Segments = append([]SegmentRef(nil), manifest.Segments...)
 	cp.Retired = append([]SegmentRef(nil), manifest.Retired...)
 	return &cp
+}
+
+// LatestStateTxNum reports the manifest txNum boundary for cold latest reads.
+func (m *Manager) LatestStateTxNum() (uint64, bool, error) {
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return 0, false, err
+	}
+	hasLatest := false
+	registry := DefaultDomainRegistry()
+	for _, ref := range manifest.Segments {
+		cfg, ok := registry.ConfigForRef(ref)
+		if ok && cfg.HasLatest && ref.Kind == SegmentLatest {
+			hasLatest = true
+			break
+		}
+	}
+	if !hasLatest {
+		return 0, false, nil
+	}
+	if manifest.Progress != nil && manifest.Progress.LatestBuildTxNum != 0 {
+		return manifest.Progress.LatestBuildTxNum, true, nil
+	}
+	return manifest.VisibleTxEnd, true, nil
 }
 
 func (m *Manager) GetLatest(domain kvdomains.KVDomain, key []byte, txNum uint64) ([]byte, bool, error) {
@@ -919,6 +1003,10 @@ func (m *Manager) IterateCodePrefix(hashPrefix []byte, txNum uint64, fn func(has
 }
 
 func (m *Manager) RestoreLatest(db ethdb.KeyValueWriter, txNum uint64) error {
+	return m.RestoreLatestWithOptions(db, txNum, RestoreETLOptions{})
+}
+
+func (m *Manager) RestoreLatestWithOptions(db ethdb.KeyValueWriter, txNum uint64, opts RestoreETLOptions) error {
 	manifest, err := m.currentManifest()
 	if err != nil {
 		return err
@@ -926,12 +1014,31 @@ func (m *Manager) RestoreLatest(db ethdb.KeyValueWriter, txNum uint64) error {
 	if manifest == nil {
 		return nil
 	}
+	collector, err := etl.NewCollector(opts.collectorOptions())
+	if err != nil {
+		return fmt.Errorf("snapshots: create latest restore ETL collector: %w", err)
+	}
+	defer collector.Close()
+
+	var matched bool
+	restoreWriter := ethdb.KeyValueWriter(collector)
 	for _, ref := range manifest.Segments {
 		if ref.Kind != SegmentLatest || txNum < ref.FromTxNum || txNum > ref.ToTxNum {
 			continue
 		}
+		matched = true
+		if ref.NormalizedDataset() == SegmentDatasetCommitmentBranch {
+			seg, err := OpenCommitmentBranchSegment(m.dir, ref)
+			if err != nil {
+				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
+			}
+			if err := seg.Restore(restoreWriter); err != nil {
+				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
+			}
+			continue
+		}
 		if isLatestBinarySegmentPath(ref.Path) {
-			if err := restoreLatestBinarySegmentToStore(m.dir, ref, newRawDBLatestHotRestoreStore(db)); err != nil {
+			if err := restoreLatestBinarySegmentToStore(m.dir, ref, newRawDBLatestHotRestoreStore(restoreWriter)); err != nil {
 				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
 			}
 			continue
@@ -940,9 +1047,15 @@ func (m *Manager) RestoreLatest(db ethdb.KeyValueWriter, txNum uint64) error {
 		if err != nil {
 			return err
 		}
-		if err := seg.Restore(db); err != nil {
+		if err := seg.Restore(restoreWriter); err != nil {
 			return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
 		}
+	}
+	if !matched {
+		return nil
+	}
+	if _, err := collector.Load(db); err != nil {
+		return fmt.Errorf("snapshots: load latest restore ETL collector: %w", err)
 	}
 	return nil
 }
@@ -957,10 +1070,14 @@ func (m *Manager) getLatestValue(dataset SegmentDataset, domain kvdomains.KVDoma
 
 func (m *Manager) getLatestValueFromRef(ref SegmentRef, key []byte) ([]byte, bool, error) {
 	if isLatestBinarySegmentPath(ref.Path) {
-		if btreeRef, ok := latestBinaryBTreeRef(m.manifest, ref); ok {
+		manifest, err := m.currentManifest()
+		if err != nil {
+			return nil, false, err
+		}
+		if btreeRef, ok := latestBinaryBTreeRef(manifest, ref); ok {
 			return readLatestBinaryValueByBTreeFile(m.dir, filepath.Join(m.dir, ref.Path), ref, btreeRef, key)
 		}
-		if accessorRef, ok := latestBinaryAccessorRef(m.manifest, ref); ok {
+		if accessorRef, ok := latestBinaryAccessorRef(manifest, ref); ok {
 			return readLatestBinaryValueByAccessorFile(m.dir, filepath.Join(m.dir, ref.Path), ref, accessorRef, key)
 		}
 		return readLatestBinaryValue(filepath.Join(m.dir, ref.Path), ref, key)
@@ -978,10 +1095,14 @@ func (m *Manager) iterateLatestPrefix(dataset SegmentDataset, domain kvdomains.K
 		return err
 	}
 	if isLatestBinarySegmentPath(ref.Path) {
-		if btreeRef, ok := latestBinaryBTreeRef(m.manifest, ref); ok {
+		manifest, err := m.currentManifest()
+		if err != nil {
+			return err
+		}
+		if btreeRef, ok := latestBinaryBTreeRef(manifest, ref); ok {
 			return iterateLatestBinaryPrefixByBTreeFile(m.dir, filepath.Join(m.dir, ref.Path), ref, btreeRef, prefix, fn)
 		}
-		if accessorRef, ok := latestBinaryAccessorRef(m.manifest, ref); ok {
+		if accessorRef, ok := latestBinaryAccessorRef(manifest, ref); ok {
 			return iterateLatestBinaryPrefixByAccessorFile(m.dir, filepath.Join(m.dir, ref.Path), ref, accessorRef, prefix, fn)
 		}
 		return iterateLatestBinaryPrefix(filepath.Join(m.dir, ref.Path), ref, prefix, fn)
@@ -1062,27 +1183,160 @@ func (m *Manager) currentManifest() (*Manifest, error) {
 	if m == nil {
 		return nil, nil
 	}
-	manifest, err := LoadProductionManifest(m.dir)
+	if m.pinned {
+		m.mu.RLock()
+		manifest := m.manifest
+		m.mu.RUnlock()
+		return manifest, nil
+	}
+	path := filepath.Join(m.dir, ManifestFile)
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			m.mu.Lock()
+			m.setManifestLocked(nil, nil)
+			m.mu.Unlock()
 			return nil, nil
 		}
 		return nil, err
 	}
-	m.manifest = manifest
+	m.mu.RLock()
+	if sameManifestFile(m.manifestInfo, info) {
+		manifest := m.manifest
+		m.mu.RUnlock()
+		return manifest, nil
+	}
+	m.mu.RUnlock()
+
+	manifest, manifestInfo, err := loadCurrentProductionManifest(m.dir)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	if sameManifestFile(m.manifestInfo, manifestInfo) {
+		manifest = m.manifest
+	} else {
+		m.setManifestLocked(manifest, manifestInfo)
+	}
+	m.mu.Unlock()
 	return manifest, nil
 }
 
+// loadCurrentProductionManifest returns a manifest only when the file identity
+// remains stable across parsing. PublishManifest uses atomic rename, so the
+// identity check detects a newly published generation without reparsing an
+// unchanged manifest on every archive cold-state lookup.
+func loadCurrentProductionManifest(dir string) (*Manifest, os.FileInfo, error) {
+	path := filepath.Join(dir, ManifestFile)
+	for attempt := 0; attempt < 3; attempt++ {
+		before, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, nil, nil
+			}
+			return nil, nil, err
+		}
+		manifest, err := LoadProductionManifest(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		after, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, nil, err
+		}
+		if sameManifestFile(before, after) {
+			return manifest, after, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("snapshots: manifest changed while loading %q", path)
+}
+
+func sameManifestFile(a, b os.FileInfo) bool {
+	return a != nil && b != nil &&
+		os.SameFile(a, b) &&
+		a.Size() == b.Size() &&
+		a.ModTime().Equal(b.ModTime())
+}
+
+func (m *Manager) setManifestLocked(manifest *Manifest, info os.FileInfo) {
+	m.manifest = manifest
+	m.manifestInfo = info
+	m.pruneInactiveLatestCacheLocked()
+}
+
+// pruneInactiveLatestCacheLocked prevents legacy JSON latest segments from
+// surviving every manifest compaction in the process heap. New binary readers
+// stay file-backed and do not enter this cache.
+func (m *Manager) pruneInactiveLatestCacheLocked() {
+	if len(m.cache) == 0 {
+		return
+	}
+	active := make(map[string]struct{})
+	if m.manifest != nil {
+		for _, ref := range m.manifest.Segments {
+			if cacheKey, ok := latestSegmentCacheKey(ref); ok {
+				active[cacheKey] = struct{}{}
+			}
+		}
+	}
+	for cacheKey := range m.cache {
+		if _, ok := active[cacheKey]; !ok {
+			delete(m.cache, cacheKey)
+		}
+	}
+}
+
 func (m *Manager) load(ref SegmentRef) (*LatestSegment, error) {
-	if seg := m.cache[ref.Path]; seg != nil {
-		return seg, nil
+	cacheKey, cacheable := latestSegmentCacheKey(ref)
+	if cacheable {
+		m.mu.RLock()
+		if seg := m.cache[cacheKey]; seg != nil {
+			m.mu.RUnlock()
+			return seg, nil
+		}
+		m.mu.RUnlock()
 	}
 	seg, err := OpenLatestSegment(m.dir, ref)
 	if err != nil {
 		return nil, err
 	}
-	m.cache[ref.Path] = seg
+	if cacheable {
+		m.mu.Lock()
+		if m.cache == nil {
+			m.cache = make(map[string]*LatestSegment)
+		}
+		if cached := m.cache[cacheKey]; cached != nil {
+			m.mu.Unlock()
+			return cached, nil
+		}
+		if m.latestRefActiveLocked(cacheKey) {
+			m.cache[cacheKey] = seg
+		}
+		m.mu.Unlock()
+	}
 	return seg, nil
+}
+
+func (m *Manager) latestRefActiveLocked(cacheKey string) bool {
+	if m == nil || m.manifest == nil {
+		return false
+	}
+	for _, ref := range m.manifest.Segments {
+		if key, ok := latestSegmentCacheKey(ref); ok && key == cacheKey {
+			return true
+		}
+	}
+	return false
+}
+
+func latestSegmentCacheKey(ref SegmentRef) (string, bool) {
+	if ref.Checksum == "" && ref.Size == 0 {
+		return "", false
+	}
+	return fmt.Sprintf("%s\x00%d\x00%s", ref.Path, ref.Size, ref.Checksum), true
 }
 
 func (s *LatestSegment) Validate() error {

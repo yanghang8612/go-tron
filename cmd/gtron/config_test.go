@@ -1,13 +1,158 @@
 package main
 
 import (
+	"flag"
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
+	"github.com/tronprotocol/go-tron/node"
 	"github.com/tronprotocol/go-tron/params"
+	"github.com/urfave/cli/v2"
 )
 
 var testWitnessAddr = tcommon.Address{0x01}
+
+func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
+	t.Helper()
+	app := cli.NewApp()
+	app.Flags = []cli.Flag{
+		dataDirFlag,
+		p2pPortFlag,
+		discoverPortFlag,
+		externalIPFlag,
+		httpPortFlag,
+		jsonrpcPortFlag,
+		grpcPortFlag,
+		pprofPortFlag,
+		pprofAddrFlag,
+		seednodeFlag,
+		maxpeersFlag,
+		syncImportBatchFlag,
+		syncETLTempDirFlag,
+		syncETLBufferMiBFlag,
+		syncETLBatchMiBFlag,
+		syncAsyncCommitFlag,
+	}
+	set := flag.NewFlagSet("test", flag.ContinueOnError)
+	for _, f := range app.Flags {
+		if err := f.Apply(set); err != nil {
+			t.Fatalf("apply flag: %v", err)
+		}
+	}
+	if err := set.Parse(argv); err != nil {
+		t.Fatalf("parse argv: %v", err)
+	}
+	return cli.NewContext(app, set, nil)
+}
+
+func TestMakeConfigSyncImportBatchDefault(t *testing.T) {
+	cfg := makeConfig(makeNodeConfigFlagSet(t, nil))
+	if cfg.SyncImportBatch != tsync.MaxImportBatch {
+		t.Fatalf("SyncImportBatch default = %d, want %d", cfg.SyncImportBatch, tsync.MaxImportBatch)
+	}
+}
+
+func TestMakeConfigSyncImportBatchOverride(t *testing.T) {
+	cfg := makeConfig(makeNodeConfigFlagSet(t, []string{"--sync.import-batch", "12"}))
+	if cfg.SyncImportBatch != 12 {
+		t.Fatalf("SyncImportBatch override = %d, want 12", cfg.SyncImportBatch)
+	}
+}
+
+func TestValidateSyncImportBatch(t *testing.T) {
+	for _, size := range []int{0, -1, tsync.MaxStagedImportBatch + 1} {
+		if err := validateSyncImportBatch(size); err == nil {
+			t.Fatalf("validateSyncImportBatch(%d) succeeded", size)
+		}
+	}
+	if err := validateSyncImportBatch(tsync.MaxStagedImportBatch); err != nil {
+		t.Fatalf("validateSyncImportBatch(max) = %v", err)
+	}
+}
+
+func TestGtronRejectsInvalidSyncImportBatchBeforeStartup(t *testing.T) {
+	ctx := makeNodeConfigFlagSet(t, []string{"--sync.import-batch", "0"})
+	if err := gtron(ctx); err == nil || !strings.Contains(err.Error(), "sync import batch") {
+		t.Fatalf("gtron invalid sync import batch error = %v, want startup validation error", err)
+	}
+}
+
+func TestSyncImportBatchEnvironmentAlias(t *testing.T) {
+	t.Setenv("GTRON_SYNC_IMPORT_BATCH", "12")
+	app := cli.NewApp()
+	app.Flags = []cli.Flag{syncImportBatchFlag}
+	var got int
+	app.Action = func(ctx *cli.Context) error {
+		got = makeConfig(ctx).SyncImportBatch
+		return nil
+	}
+	if err := app.Run([]string{"gtron"}); err != nil {
+		t.Fatalf("run sync import batch environment alias: %v", err)
+	}
+	if got != 12 {
+		t.Fatalf("SyncImportBatch environment value = %d, want 12", got)
+	}
+}
+
+func TestSyncTransactionLookupETLOptions(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := makeConfig(makeNodeConfigFlagSet(t, []string{
+		"--sync.etl.tempdir", tempDir,
+		"--sync.etl.buffer", "12",
+		"--sync.etl.batch", "3",
+	}))
+	opts, err := syncTransactionLookupETLOptions(cfg)
+	if err != nil {
+		t.Fatalf("syncTransactionLookupETLOptions: %v", err)
+	}
+	if opts.TempDir != tempDir || opts.BufferLimit != 12*1024*1024 || opts.BatchSize != 3*1024*1024 {
+		t.Fatalf("sync TxLookup ETL options = %+v", opts)
+	}
+}
+
+func TestSyncTransactionLookupETLOptionsDefaultsAndOverflow(t *testing.T) {
+	opts, err := syncTransactionLookupETLOptions(makeConfig(makeNodeConfigFlagSet(t, nil)))
+	if err != nil {
+		t.Fatalf("default syncTransactionLookupETLOptions: %v", err)
+	}
+	if opts.TempDir != "" || opts.BufferLimit != 0 || opts.BatchSize != 0 {
+		t.Fatalf("default sync TxLookup ETL options = %+v, want zero values", opts)
+	}
+	if _, err := syncTransactionLookupETLOptions(&node.Config{SyncETLBufferMiB: ^uint64(0)}); err == nil {
+		t.Fatal("syncTransactionLookupETLOptions accepted overflowing buffer")
+	}
+}
+
+func TestShouldEnableAsyncCommit(t *testing.T) {
+	if shouldEnableAsyncCommit(makeNodeConfigFlagSet(t, nil)) {
+		t.Fatal("async commit enabled by default")
+	}
+	if !shouldEnableAsyncCommit(makeNodeConfigFlagSet(t, []string{"--sync.async-commit"})) {
+		t.Fatal("explicit async commit flag was ignored")
+	}
+}
+
+func TestSyncAsyncCommitEnvironmentAlias(t *testing.T) {
+	t.Setenv("GTRON_ASYNC_COMMIT", "1")
+	var enabled bool
+	app := cli.NewApp()
+	app.Flags = []cli.Flag{&cli.BoolFlag{
+		Name:    "sync.async-commit",
+		EnvVars: []string{"GTRON_ASYNC_COMMIT"},
+	}}
+	app.Action = func(ctx *cli.Context) error {
+		enabled = shouldEnableAsyncCommit(ctx)
+		return nil
+	}
+	if err := app.Run([]string{"gtron"}); err != nil {
+		t.Fatalf("run app with async commit alias: %v", err)
+	}
+	if !enabled {
+		t.Fatal("GTRON_ASYNC_COMMIT=1 did not enable async commit")
+	}
+}
 
 func TestResolveNetworkID_Mainnet(t *testing.T) {
 	got := resolveNetworkID(params.DefaultMainnetGenesis())

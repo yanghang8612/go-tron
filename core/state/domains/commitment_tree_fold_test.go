@@ -3,6 +3,7 @@ package domains
 import (
 	"bytes"
 	"math/rand"
+	"runtime"
 	"sort"
 	"testing"
 
@@ -292,6 +293,102 @@ func TestCommitmentTrie_LastWriterWinsWithinFold(t *testing.T) {
 		t.Fatalf("last-writer root = %x, want %x", got, want)
 	}
 	assertRowSetsEqual(t, gotStore.rowSet(), wantStore.rowSet())
+}
+
+func TestCommitmentTrie_ParallelFoldMatchesSerial(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	updates := randomPutUpdates(t, 11, 2048, 32, 48)
+
+	serialStore := newMapBranchStore()
+	serialRoot, err := newCommitmentTrie(serialStore).Fold(updates)
+	if err != nil {
+		t.Fatalf("serial Fold: %v", err)
+	}
+
+	parallelDB := rawdb.NewMemoryDatabase()
+	parallelRoot, err := newCommitmentTrie(newRawdbBranchStore(parallelDB)).Fold(updates)
+	if err != nil {
+		t.Fatalf("parallel Fold: %v", err)
+	}
+	if parallelRoot != serialRoot {
+		t.Fatalf("parallel root = %x, want serial %x", parallelRoot, serialRoot)
+	}
+
+	parallelRows := make(map[string][]byte)
+	if err := rawdb.IterateCommitmentBranches(parallelDB, func(prefix, encoded []byte) (bool, error) {
+		parallelRows[string(prefix)] = append([]byte(nil), encoded...)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("parallel IterateCommitmentBranches: %v", err)
+	}
+	assertRowSetsEqual(t, serialStore.rowSet(), parallelRows)
+}
+
+func BenchmarkCommitmentTrieFoldBulk(b *testing.B) {
+	updates := randomPutUpdates(b, 31, 4096, 32, 48)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		db := rawdb.NewMemoryDatabase()
+		if _, err := newCommitmentTrie(newRawdbBranchStore(db)).Fold(updates); err != nil {
+			b.Fatalf("Fold: %v", err)
+		}
+	}
+}
+
+func BenchmarkCommitmentTrieFoldExistingBulk(b *testing.B) {
+	base := randomPutUpdates(b, 41, 4096, 32, 48)
+	updates := revalueUpdates(b, base, 43, 48)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		db := rawdb.NewMemoryDatabase()
+		trie := newCommitmentTrie(newRawdbBranchStore(db))
+		if _, err := trie.Fold(base); err != nil {
+			b.Fatalf("seed Fold: %v", err)
+		}
+		b.StartTimer()
+		if _, err := trie.Fold(updates); err != nil {
+			b.Fatalf("Fold: %v", err)
+		}
+	}
+}
+
+func randomPutUpdates(tb testing.TB, seed int64, n, keyLen, valueLen int) []Update {
+	tb.Helper()
+	rng := rand.New(rand.NewSource(seed))
+	updates := make([]Update, n)
+	for i := range updates {
+		key := make([]byte, keyLen)
+		value := make([]byte, valueLen)
+		if _, err := rng.Read(key); err != nil {
+			tb.Fatalf("rng key: %v", err)
+		}
+		if _, err := rng.Read(value); err != nil {
+			tb.Fatalf("rng value: %v", err)
+		}
+		updates[i] = put(key, value)
+	}
+	return updates
+}
+
+func revalueUpdates(tb testing.TB, base []Update, seed int64, valueLen int) []Update {
+	tb.Helper()
+	rng := rand.New(rand.NewSource(seed))
+	updates := make([]Update, len(base))
+	for i, u := range base {
+		value := make([]byte, valueLen)
+		if _, err := rng.Read(value); err != nil {
+			tb.Fatalf("rng value: %v", err)
+		}
+		updates[i] = put(u.Key, value)
+	}
+	return updates
 }
 
 func TestCommitmentTrie_IncrementalEqualsBatch(t *testing.T) {

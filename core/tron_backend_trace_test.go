@@ -1,6 +1,7 @@
 package core
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -8,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
+	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -240,4 +242,49 @@ func TestTraceTransaction_NotFound(t *testing.T) {
 	if _, err := b.TraceTransaction(missing, &tracers.TraceConfig{}); err == nil {
 		t.Fatal("tracing an unknown tx must return an error")
 	}
+}
+
+func TestDebugTraceBlockUsesTransactionReplay(t *testing.T) {
+	b, txHash := newTraceTxBackend(t)
+	block := b.chain.CurrentBlock()
+	if err := rawdb.DeleteTransactionIndex(b.chain.db, txHash[:]); err != nil {
+		t.Fatalf("DeleteTransactionIndex: %v", err)
+	}
+	if _, err := b.TraceTransaction(txHash, &tracers.TraceConfig{}); err == nil {
+		t.Fatal("TraceTransaction should require the pruned tx index")
+	}
+
+	rpcServer := jsonrpc.NewServer(b, 0)
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer.Handler())
+	defer httpServer.Close()
+
+	assertBlockTrace := func(method string, blockParam string) {
+		t.Helper()
+		resp := postCoreJSONRPC(t, httpServer.URL, method, []any{blockParam, map[string]any{"disableStack": true}})
+		traces, ok := resp["result"].([]any)
+		if !ok || len(traces) != 1 {
+			t.Fatalf("%s result = %T %v, want one tx trace", method, resp["result"], resp["result"])
+		}
+		trace, ok := traces[0].(map[string]any)
+		if !ok {
+			t.Fatalf("%s trace = %T %v, want object", method, traces[0], traces[0])
+		}
+		if trace["txHash"] != "0x"+txHash.Hex() {
+			t.Fatalf("%s txHash = %v, want 0x%s", method, trace["txHash"], txHash.Hex())
+		}
+		result, ok := trace["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s trace result = %T %v, want object", method, trace["result"], trace["result"])
+		}
+		if result["failed"] != false {
+			t.Fatalf("%s trace failed = %v, want false", method, result["failed"])
+		}
+		if logs, ok := result["structLogs"].([]any); !ok || len(logs) == 0 {
+			t.Fatalf("%s structLogs = %T %v, want non-empty logs", method, result["structLogs"], result["structLogs"])
+		}
+	}
+
+	assertBlockTrace("debug_traceBlockByNumber", "0x1")
+	assertBlockTrace("debug_traceBlockByHash", "0x"+block.Hash().Hex())
 }

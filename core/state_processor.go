@@ -83,17 +83,17 @@ func repairMainnetCreateTransferFailureOvercharge(statedb *state.StateDB, blockN
 // or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
 // fix widened the type so actuator-side rawdb-direct writes are rewindable.
 func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
-	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, HeadSlot(prevBlockTime, 0), blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil, nil)
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, HeadSlot(prevBlockTime, 0), blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil, nil, nil)
 }
 
 // ApplyTransactionWithResourceSlot executes a transaction with java-tron's
 // resource-window time (`head slot`) separated from millisecond timestamps.
 func ApplyTransactionWithResourceSlot(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
-	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil, nil)
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil, nil, nil)
 }
 
 func ApplyTransactionWithResourceSlotAndEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, validate, validateEnvelope bool) (*actuator.Result, error) {
-	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil, nil)
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil, nil, nil)
 }
 
 // applyTransactionScratch owns the per-block actuator objects whose contents
@@ -103,11 +103,11 @@ type applyTransactionScratch struct {
 	result  actuator.Result
 }
 
-func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer) (result *actuator.Result, err error) {
-	return applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, hasHeadSlot, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, genesisHash, coinbase, validate, validateEnvelope, trustTransactionRet, forkPassCache, tracer, nil, nil, nil)
+func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, runtimePrefetcher vm.RuntimePrefetcher, tracer vm.Tracer) (result *actuator.Result, err error) {
+	return applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, hasHeadSlot, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, genesisHash, coinbase, validate, validateEnvelope, trustTransactionRet, forkPassCache, runtimePrefetcher, tracer, nil, nil, nil)
 }
 
-func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer, scratch *applyTransactionScratch, internalTxArena *vm.InternalTransactionArena, executionLogArena *vm.ExecutionLogArena) (result *actuator.Result, err error) {
+func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, runtimePrefetcher vm.RuntimePrefetcher, tracer vm.Tracer, scratch *applyTransactionScratch, internalTxArena *vm.InternalTransactionArena, executionLogArena *vm.ExecutionLogArena) (result *actuator.Result, err error) {
 	var revertOnOverflow func()
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -225,6 +225,7 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 		InternalTransactionArena:   internalTxArena,
 		ExecutionLogArena:          executionLogArena,
 		Tracer:                     tracer,
+		RuntimePrefetcher:          runtimePrefetcher,
 	}
 
 	if validateEnvelope {
@@ -708,21 +709,21 @@ func (slot *transactionInfoSlot) setInternalTransactions(txs []*corepb.InternalT
 // execution, such as TAPOS references and genesis witness metadata. Mutable
 // state writes go through StateDB typed stores.
 func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, nil, true, -1, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, processBlockPrefetchConfig{}, nil, nil, nil, true, -1, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRoot(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, nil, true, -1, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, processBlockPrefetchConfig{}, nil, nil, nil, true, -1, nil)
 }
 
 func ProcessBlockWithEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil, nil, true, -1, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, processBlockPrefetchConfig{}, nil, nil, nil, true, -1, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil, nil, true, -1, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, processBlockPrefetchConfig{}, nil, nil, nil, true, -1, nil)
 }
 
 // ProcessBlockTraced re-executes block against the supplied (copied) PARENT
@@ -731,7 +732,12 @@ func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, d
 // tracer captures just the target tx's opcode/call stream (every other tx runs
 // with a nil tracer at zero overhead). genesisHash is optional.
 func ProcessBlockTraced(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, forkPassCache *forks.VersionPassCache, traceTxIndex int, tracer vm.Tracer, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, forkPassCache, nil, true, traceTxIndex, tracer)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, processBlockPrefetchConfig{}, nil, forkPassCache, nil, true, traceTxIndex, tracer)
+	return txInfos, err
+}
+
+func processBlockTracedEach(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, forkPassCache *forks.VersionPassCache, tracerForTx func(index int, tx *types.Transaction) vm.Tracer, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, processBlockPrefetchConfig{}, nil, forkPassCache, nil, true, -1, nil, tracerForTx)
 	return txInfos, err
 }
 
@@ -742,7 +748,40 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 	return values[0]
 }
 
-func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, collectTxInfos bool, traceTxIndex int, traceTracer vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+type processBlockPrefetchConfig struct {
+	Enabled   bool
+	Workers   int
+	Lookahead int
+}
+
+func processBlockPrefetchConfigFromChainConfig(cfg *params.ChainConfig) processBlockPrefetchConfig {
+	if cfg == nil || !cfg.StatePrefetchEnabled {
+		return processBlockPrefetchConfig{}
+	}
+	return normalizeProcessBlockPrefetchConfig(processBlockPrefetchConfig{
+		Enabled:   true,
+		Workers:   cfg.EffectiveStatePrefetchWorkers(),
+		Lookahead: cfg.EffectiveStatePrefetchLookahead(),
+	})
+}
+
+func normalizeProcessBlockPrefetchConfig(cfg processBlockPrefetchConfig) processBlockPrefetchConfig {
+	if !cfg.Enabled {
+		return processBlockPrefetchConfig{}
+	}
+	if cfg.Workers < 0 {
+		cfg.Workers = 0
+	}
+	if cfg.Lookahead <= 0 {
+		cfg.Lookahead = params.StatePrefetchDefaultLookahead
+	}
+	if cfg.Lookahead <= 0 {
+		cfg.Enabled = false
+	}
+	return cfg
+}
+
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, prefetchCfg processBlockPrefetchConfig, prefetchStatsOut *state.StatePrefetcherStats, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, collectTxInfos bool, traceTxIndex int, traceTracer vm.Tracer, traceForTxOpt ...func(index int, tx *types.Transaction) vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
 	// Fork stats and prevBlockTime are immutable throughout this block. Share
 	// permanently-passed versions with the chain cache, but keep pending/false
 	// results in a disposable block view so per-tx gates read each version only
@@ -781,6 +820,13 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	accountStateMark := statedb.JournalMark()
 	var txScratch applyTransactionScratch
 	transactions := block.Transactions()
+	prefetchCfg = normalizeProcessBlockPrefetchConfig(prefetchCfg)
+	prefetcher := newProcessBlockPrefetcher(db, prefetchCfg, len(transactions))
+	if prefetcher != nil {
+		defer prefetcher.Stop()
+		prefetcher.Start()
+	}
+	nextPrefetchTx := 0
 	var txInfoSlots []transactionInfoSlot
 	if txInfoBatch != nil {
 		preparedSlots, preparedInfos := txInfoBatch.prepare(len(transactions))
@@ -796,6 +842,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	}
 
 	for i, tx := range transactions {
+		if prefetcher != nil {
+			nextPrefetchTx = enqueueProcessBlockPrefetch(prefetcher, transactions, i, nextPrefetchTx, prefetchCfg.Lookahead)
+		}
 		domainChangeMark := statedb.DomainChangeJournalMark()
 		if domainChanges != nil {
 			domainChangeMark = domainChanges.JournalMark()
@@ -812,18 +861,22 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		// validateEnvelope is per-tx so a same-block tx2 sees tx1's effects
 		// (e.g. an AccountPermissionUpdate followed by a Transfer signed with
 		// the post-rotation key).
+		txHash := tx.Hash()
+		statedb.BeginBalanceTraceTransaction(txHash.Bytes(), tx.ContractType().String())
 		//
 		// traceTracer is installed only on the target tx index (debug_traceTransaction
 		// replay); -1 disables it for the normal block-apply path.
 		var txTracer vm.Tracer
-		if traceTxIndex >= 0 && i == traceTxIndex {
+		if len(traceForTxOpt) > 0 && traceForTxOpt[0] != nil {
+			txTracer = traceForTxOpt[0](i, tx)
+		} else if traceTxIndex >= 0 && i == traceTxIndex {
 			txTracer = traceTracer
 		}
 		internalTxArena := &txInfoSlots[i].internalTxArena
 		internalTxArena.Reset()
 		executionLogArena := &txInfoSlots[i].executionLogArena
 		executionLogArena.Reset()
-		result, err := applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer, &txScratch, internalTxArena, executionLogArena)
+		result, err := applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, prefetcher, txTracer, &txScratch, internalTxArena, executionLogArena)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
@@ -835,6 +888,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		if collectTxInfos {
 			txInfos[i] = txInfoSlots[i].build(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
 		}
+		balanceTraceStatus := balanceTraceTransactionStatus(result)
 		// When collected, TransactionInfo now owns copies of the log slice headers
 		// while their immutable payload bytes stay independently allocated. Stored
 		// replay with an archived TransactionRet needs neither copy. In both cases,
@@ -843,6 +897,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		vm.ReleaseExecutionLogs(result.Logs)
 		result.Logs = nil
 		statedb.FinalizeTransaction()
+		statedb.EndBalanceTraceTransaction(balanceTraceStatus)
 		if domainChanges != nil {
 			if err := domainChanges.FlushOrdinal(domainChangeMark, uint64(i)); err != nil {
 				return nil, tcommon.Hash{}, fmt.Errorf("tx %d domain changes: %w", i, err)
@@ -885,9 +940,61 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	witnessAddr := block.WitnessAddress()
 	if witnessAddr != (tcommon.Address{}) {
 		payBlockReward(db, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
-		payStandbyWitnessWithSet(db, statedb, dynProps, standbyPaySet)
+		// java-tron rebuilds WitnessStore.getWitnessStandby at reward time,
+		// after the block's transactions have executed. A caller-provided set is
+		// only a preload hint; using it for consensus rewards can make
+		// cycleReward stale when the in-block witness set changes.
+		payStandbyWitnessWithSet(db, statedb, dynProps, nil)
 		payTransactionFeeReward(db, statedb, dynProps, witnessAddr)
 	}
 
+	if prefetcher != nil {
+		prefetcher.Stop()
+		if prefetchStatsOut != nil {
+			*prefetchStatsOut = prefetcher.Stats()
+		}
+	}
+
 	return txInfos, javaAccountStateRoot, nil
+}
+
+func balanceTraceTransactionStatus(result *actuator.Result) string {
+	if result == nil {
+		return "SUCCESS"
+	}
+	ret := corepb.Transaction_ResultContractResult(result.ContractRet)
+	if ret == corepb.Transaction_Result_DEFAULT {
+		return "SUCCESS"
+	}
+	status := ret.String()
+	if status == "" {
+		return "SUCCESS"
+	}
+	return status
+}
+
+func newProcessBlockPrefetcher(db actuator.BufferedKVStore, cfg processBlockPrefetchConfig, txCount int) *state.StatePrefetcher {
+	if !cfg.Enabled || db == nil || txCount <= 0 {
+		return nil
+	}
+	return state.NewStatePrefetcher(db, state.StatePrefetcherConfig{Workers: cfg.Workers})
+}
+
+func enqueueProcessBlockPrefetch(p *state.StatePrefetcher, txs []*types.Transaction, current, next, lookahead int) int {
+	if p == nil || lookahead <= 0 {
+		return next
+	}
+	start := current + 1
+	if next < start {
+		next = start
+	}
+	end := current + lookahead
+	if end >= len(txs) {
+		end = len(txs) - 1
+	}
+	for next <= end {
+		p.Enqueue(actuator.PrefetchKeysFor(txs[next]))
+		next++
+	}
+	return next
 }

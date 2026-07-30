@@ -216,8 +216,8 @@ func TestBufferedBytesTrackBufferLifecycle(t *testing.T) {
 	batch := ss.popBufferedSyncBatchLocked(time.Now())
 	got = ss.bufferedBytes
 	ss.mu.Unlock()
-	if len(batch.buffered) != 1 {
-		t.Fatalf("expected to pop 1 entry, got %d", len(batch.buffered))
+	if len(batch.Buffered) != 1 {
+		t.Fatalf("expected to pop 1 entry, got %d", len(batch.Buffered))
 	}
 	if got != 0 {
 		t.Fatalf("bufferedBytes=%d after pop, want 0", got)

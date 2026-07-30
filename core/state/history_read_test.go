@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -14,7 +15,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 // historyFixture spins up an in-memory disk store and a StateDB that persists
@@ -26,59 +26,6 @@ type historyFixture struct {
 	state    *StateDB
 	head     uint64
 	endTxNum uint64
-}
-
-type splitAccountColdLatestStub struct {
-	values  map[kvdomains.KVDomain]map[string]int64
-	changes []*rawdb.StateDomainChange
-}
-
-type splitAccountPermissionColdLatestStub struct {
-	values  map[string][]byte
-	changes []*rawdb.StateDomainChange
-}
-
-func (s *splitAccountPermissionColdLatestStub) IterateStateDomainChanges(_, _ uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
-	for _, change := range s.changes {
-		cont, err := fn(change)
-		if err != nil || !cont {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *splitAccountPermissionColdLatestStub) IterateKVLatestPrefix(domain kvdomains.KVDomain, _ tcommon.Address, _ uint64, _ []byte, _ uint64, fn func([]byte, []byte) (bool, error)) error {
-	if domain != kvdomains.AccountPermissionAux {
-		return nil
-	}
-	for key, value := range s.values {
-		cont, err := fn([]byte(key), value)
-		if err != nil || !cont {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *splitAccountColdLatestStub) IterateStateDomainChanges(_, _ uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
-	for _, change := range s.changes {
-		cont, err := fn(change)
-		if err != nil || !cont {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *splitAccountColdLatestStub) IterateKVLatestPrefix(domain kvdomains.KVDomain, _ tcommon.Address, _ uint64, _ []byte, _ uint64, fn func([]byte, []byte) (bool, error)) error {
-	for key, value := range s.values[domain] {
-		cont, err := fn([]byte(key), encodeAccountAuxInt64(value))
-		if err != nil || !cont {
-			return err
-		}
-	}
-	return nil
 }
 
 func newHistoryFixture(t *testing.T) *historyFixture {
@@ -118,264 +65,62 @@ func (f *historyFixture) reader() *PersistentHistoryReader {
 	return NewPersistentHistoryReader(f.disk, f.state, f.head)
 }
 
-func TestPersistentHistoryReaderMaterializesSplitAccountMaps(t *testing.T) {
-	f := newHistoryFixture(t)
-	addr := testAddr(0x21)
-	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
-		s.AddBalance(addr, 1)
-		s.SetTRC10BalanceLegacyAndV2(addr, []byte("TOKEN"), 1_000_001, 11)
-		s.SetFreeAssetNetUsage(addr, "TOKEN", 12)
-		s.SetLatestAssetOperationTimeV2(addr, "1000001", 13)
-	})
-	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
-		s.SetTRC10BalanceLegacyAndV2(addr, []byte("TOKEN"), 1_000_001, 21)
-		s.SetFreeAssetNetUsage(addr, "TOKEN", 22)
-		s.SetLatestAssetOperationTimeV2(addr, "1000001", 23)
-	})
-
-	at1, err := f.reader().AccountAt(addr, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if at1 == nil || at1.Proto().Asset["TOKEN"] != 11 || at1.Proto().AssetV2["1000001"] != 11 {
-		t.Fatalf("block 1 split balances = %+v", at1)
-	}
-	if at1.Proto().FreeAssetNetUsage["TOKEN"] != 12 || at1.Proto().LatestAssetOperationTimeV2["1000001"] != 13 {
-		t.Fatalf("block 1 split resource maps = %+v", at1.Proto())
-	}
-
-	at2, err := f.reader().AccountAt(addr, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if at2 == nil || at2.Proto().AssetV2["1000001"] != 21 || at2.Proto().FreeAssetNetUsage["TOKEN"] != 22 || at2.Proto().LatestAssetOperationTimeV2["1000001"] != 23 {
-		t.Fatalf("block 2 split maps = %+v", at2)
-	}
-}
-
-func TestPersistentHistoryReaderMaterializesSplitAccountPermissions(t *testing.T) {
-	f := newHistoryFixture(t)
-	addr := testAddr(0x23)
-	owner1 := splitTestPermission(corepb.Permission_Owner, 0, "owner-1", 0x21)
-	owner2 := splitTestPermission(corepb.Permission_Owner, 0, "owner-2", 0x22)
-	witness2 := splitTestPermission(corepb.Permission_Witness, 1, "witness-2", 0x23)
-	active2 := splitTestPermission(corepb.Permission_Active, 2, "active-2", 0x24)
-	active3 := splitTestPermission(corepb.Permission_Active, 3, "active-3", 0x25)
-	f.applyBlock(tcommon.Hash{0x11}, func(s *StateDB) {
-		s.AddBalance(addr, 1)
-		s.SetPermissions(addr, owner1, nil, []*corepb.Permission{active2})
-	})
-	f.applyBlock(tcommon.Hash{0x12}, func(s *StateDB) {
-		s.SetPermissions(addr, owner2, witness2, []*corepb.Permission{active3})
-	})
-
-	at1, err := f.reader().AccountAt(addr, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if at1 == nil || !proto.Equal(at1.OwnerPermission(), owner1) || at1.WitnessPermission() != nil {
-		t.Fatalf("block 1 singleton permissions = %+v", at1)
-	}
-	if actives := at1.ActivePermission(); len(actives) != 1 || !proto.Equal(actives[0], active2) {
-		t.Fatalf("block 1 active permissions = %+v", actives)
-	}
-
-	at2, err := f.reader().AccountAt(addr, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if at2 == nil || !proto.Equal(at2.OwnerPermission(), owner2) || !proto.Equal(at2.WitnessPermission(), witness2) {
-		t.Fatalf("block 2 singleton permissions = %+v", at2)
-	}
-	if actives := at2.ActivePermission(); len(actives) != 1 || !proto.Equal(actives[0], active3) {
-		t.Fatalf("block 2 active permissions = %+v", actives)
-	}
-}
-
-func TestPersistentHistoryReaderMaterializesSplitAccountPermissionsFromColdLatest(t *testing.T) {
-	f := newHistoryFixture(t)
-	addr := testAddr(0x24)
-	owner1 := splitTestPermission(corepb.Permission_Owner, 0, "owner-1", 0x41)
-	owner2 := splitTestPermission(corepb.Permission_Owner, 0, "owner-2", 0x42)
-	active2 := splitTestPermission(corepb.Permission_Active, 2, "active-2", 0x43)
-	active3 := splitTestPermission(corepb.Permission_Active, 3, "active-3", 0x44)
-	f.applyBlock(tcommon.Hash{0x21}, func(s *StateDB) {
-		s.AddBalance(addr, 1)
-		s.SetPermissions(addr, owner1, nil, []*corepb.Permission{active2})
-	})
-	f.applyBlock(tcommon.Hash{0x22}, func(s *StateDB) {
-		s.SetPermissions(addr, owner2, nil, []*corepb.Permission{active3})
-	})
-	f.applyBlock(tcommon.Hash{0x23}, func(s *StateDB) {
-		s.AddBalance(testAddr(0x25), 1)
-	})
-
-	owner1Data, err := proto.MarshalOptions{Deterministic: true}.Marshal(owner1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	owner2Data, err := proto.MarshalOptions{Deterministic: true}.Marshal(owner2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	active2Data, err := proto.MarshalOptions{Deterministic: true}.Marshal(active2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	active3Data, err := proto.MarshalOptions{Deterministic: true}.Marshal(active3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cold := &splitAccountPermissionColdLatestStub{
-		values: map[string][]byte{
-			string(accountOwnerPermissionKey):     owner1Data,
-			string(accountActivePermissionKey(2)): active2Data,
-		},
-		changes: []*rawdb.StateDomainChange{
-			{
-				FlatDomain: rawdb.StateFlatDomainKVLatest,
-				Owner:      addr,
-				Domain:     kvdomains.AccountPermissionAux,
-				Key:        accountOwnerPermissionKey,
-				PrevExists: true,
-				Prev:       owner1Data,
-				NextExists: true,
-				Next:       owner2Data,
-			},
-			{
-				FlatDomain: rawdb.StateFlatDomainKVLatest,
-				Owner:      addr,
-				Domain:     kvdomains.AccountPermissionAux,
-				Key:        accountActivePermissionKey(2),
-				PrevExists: true,
-				Prev:       active2Data,
-			},
-			{
-				FlatDomain: rawdb.StateFlatDomainKVLatest,
-				Owner:      addr,
-				Domain:     kvdomains.AccountPermissionAux,
-				Key:        accountActivePermissionKey(3),
-				NextExists: true,
-				Next:       active3Data,
-			},
-		},
-	}
-	account, err := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, cold).AccountAt(addr, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if account == nil || !proto.Equal(account.OwnerPermission(), owner1) || account.WitnessPermission() != nil {
-		t.Fatalf("cold singleton permissions = %+v", account)
-	}
-	if actives := account.ActivePermission(); len(actives) != 1 || !proto.Equal(actives[0], active2) {
-		t.Fatalf("cold active permissions = %+v", actives)
-	}
-}
-
-func TestPersistentHistoryReaderMaterializesSplitAccountVotes(t *testing.T) {
-	f := newHistoryFixture(t)
-	addr := testAddr(0x26)
-	vote1 := splitTestVote(0x81, 11)
-	vote2 := splitTestVote(0x82, 22)
-	vote3 := splitTestVote(0x83, 33)
-	f.applyBlock(tcommon.Hash{0x31}, func(s *StateDB) {
-		s.AddBalance(addr, 1)
-		s.SetVotes(addr, []*corepb.Vote{vote2, vote1})
-	})
-	f.applyBlock(tcommon.Hash{0x32}, func(s *StateDB) {
-		s.SetVotes(addr, []*corepb.Vote{vote3})
-	})
-
-	at1, err := f.reader().AccountAt(addr, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if at1 == nil || len(at1.Votes()) != 2 || !proto.Equal(at1.Votes()[0], vote2) || !proto.Equal(at1.Votes()[1], vote1) {
-		t.Fatalf("block 1 votes = %+v", at1)
-	}
-	at2, err := f.reader().AccountAt(addr, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if at2 == nil || len(at2.Votes()) != 1 || !proto.Equal(at2.Votes()[0], vote3) {
-		t.Fatalf("block 2 votes = %+v", at2)
-	}
-}
-
-func TestPersistentHistoryReaderMaterializesSplitAccountStakeV2(t *testing.T) {
-	f := newHistoryFixture(t)
-	addr := testAddr(0x27)
-	f.applyBlock(tcommon.Hash{0x41}, func(s *StateDB) {
-		s.AddBalance(addr, 1)
-		s.AddFreezeV2(addr, corepb.ResourceCode_ENERGY, 100)
-		s.AddFreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 200)
-		s.AddUnfreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 11, 10)
-		s.AddUnfreezeV2(addr, corepb.ResourceCode_ENERGY, 22, 30)
-	})
-	f.applyBlock(tcommon.Hash{0x42}, func(s *StateDB) {
-		s.ReduceFreezeV2(addr, corepb.ResourceCode_ENERGY, 40)
-		s.AddFreezeV2(addr, corepb.ResourceCode_TRON_POWER, 50)
-		if withdrawn := s.RemoveExpiredUnfreezeV2(addr, 20); withdrawn != 11 {
-			t.Fatalf("withdrawn at block 2 = %d, want 11", withdrawn)
+func (f *historyFixture) pruneHotStateDomainHistory() {
+	f.t.Helper()
+	for blockNum := uint64(1); blockNum <= f.head; blockNum++ {
+		if err := rawdb.DeleteStateDomainChanges(f.disk, blockNum); err != nil {
+			f.t.Fatalf("DeleteStateDomainChanges block=%d: %v", blockNum, err)
 		}
-	})
-
-	at1, err := f.reader().AccountAt(addr, 1)
-	if err != nil {
-		t.Fatal(err)
+		if err := rawdb.DeleteStateTxRange(f.disk, blockNum); err != nil {
+			f.t.Fatalf("DeleteStateTxRange block=%d: %v", blockNum, err)
+		}
 	}
-	if at1 == nil || len(at1.FrozenV2()) != 2 || at1.FrozenV2()[0].GetType() != corepb.ResourceCode_ENERGY || at1.FrozenV2()[0].GetAmount() != 100 || at1.FrozenV2()[1].GetType() != corepb.ResourceCode_BANDWIDTH {
-		t.Fatalf("block 1 frozen-v2 = %+v", at1)
-	}
-	assertUnfrozenV2(t, at1.UnfrozenV2(),
-		&corepb.Account_UnFreezeV2{Type: corepb.ResourceCode_BANDWIDTH, UnfreezeAmount: 11, UnfreezeExpireTime: 10},
-		&corepb.Account_UnFreezeV2{Type: corepb.ResourceCode_ENERGY, UnfreezeAmount: 22, UnfreezeExpireTime: 30},
-	)
-
-	at2, err := f.reader().AccountAt(addr, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if at2 == nil || len(at2.FrozenV2()) != 3 || at2.FrozenV2()[0].GetAmount() != 60 || at2.FrozenV2()[2].GetType() != corepb.ResourceCode_TRON_POWER || at2.FrozenV2()[2].GetAmount() != 50 {
-		t.Fatalf("block 2 frozen-v2 = %+v", at2)
-	}
-	assertUnfrozenV2(t, at2.UnfrozenV2(),
-		&corepb.Account_UnFreezeV2{Type: corepb.ResourceCode_ENERGY, UnfreezeAmount: 22, UnfreezeExpireTime: 30},
-	)
 }
 
-func TestPersistentHistoryReaderMaterializesSplitAccountMapsFromColdLatest(t *testing.T) {
-	f := newHistoryFixture(t)
-	addr := testAddr(0x20)
-	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
-		s.AddBalance(addr, 1)
-		s.SetTRC10Balance(addr, 1_000_001, 11)
-	})
-	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
-		s.SetTRC10Balance(addr, 1_000_001, 22)
-	})
-	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
-		s.AddBalance(testAddr(0x19), 1)
-	})
-
-	cold := &splitAccountColdLatestStub{values: map[kvdomains.KVDomain]map[string]int64{
-		kvdomains.AccountAssetV2: {"1000001": 11},
-	}, changes: []*rawdb.StateDomainChange{{
-		FlatDomain: rawdb.StateFlatDomainKVLatest,
-		Owner:      addr,
-		Domain:     kvdomains.AccountAssetV2,
-		Key:        []byte("1000001"),
-		PrevExists: true,
-		Prev:       encodeAccountAuxInt64(11),
-		NextExists: true,
-		Next:       encodeAccountAuxInt64(22),
-	}}}
-	account, err := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, cold).AccountAt(addr, 1)
-	if err != nil {
-		t.Fatal(err)
+func TestPersistentHistoryReaderLiveAccountSurfacesCorruptEnvelope(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	addr := testAddr(0x91)
+	if err := rawdb.WriteStateAccountLatest(db, addr, []byte{0x80}); err != nil {
+		t.Fatalf("write corrupt account envelope: %v", err)
 	}
-	if account == nil || account.Proto().AssetV2["1000001"] != 11 {
-		t.Fatalf("cold split account = %+v", account)
+
+	got, err := NewPersistentHistoryReader(db, nil, 1).AccountAt(addr, 1)
+	if err == nil {
+		t.Fatal("AccountAt corrupt live envelope error = nil")
+	}
+	if got != nil {
+		t.Fatalf("AccountAt corrupt live envelope account = %+v, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "read live account latest") {
+		t.Fatalf("AccountAt corrupt live envelope error = %v, want live account latest context", err)
+	}
+}
+
+func TestPersistentHistoryReaderLiveAccountSurfacesCorruptAccountProto(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	addr := testAddr(0x92)
+	envelope := &StateAccountV2{
+		Version:       StateAccountVersion,
+		AccountProto:  []byte{0x80},
+		AccountKVRoot: EmptyKVRoot,
+	}
+	encoded, err := envelope.Encode()
+	if err != nil {
+		t.Fatalf("encode account envelope: %v", err)
+	}
+	if err := rawdb.WriteStateAccountLatest(db, addr, encoded); err != nil {
+		t.Fatalf("write corrupt account proto envelope: %v", err)
+	}
+
+	got, err := NewPersistentHistoryReader(db, nil, 1).AccountAt(addr, 1)
+	if err == nil {
+		t.Fatal("AccountAt corrupt live account proto error = nil")
+	}
+	if got != nil {
+		t.Fatalf("AccountAt corrupt live account proto account = %+v, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "decode live account proto") {
+		t.Fatalf("AccountAt corrupt live account proto error = %v, want decode account proto context", err)
 	}
 }
 
@@ -478,6 +223,412 @@ func TestPersistentHistoryReaderUsesStateDomainAccountLatest(t *testing.T) {
 	}
 }
 
+func TestPersistentHistoryReaderReadsAccountStorageAndCodeFromColdStateDomainHistory(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x75)
+	other := testAddr(0x76)
+	var slot tcommon.Hash
+	slot[31] = 0x75
+	value1 := tcommon.HexToHash("01")
+	value2 := tcommon.HexToHash("02")
+	code1 := []byte{0x60, 0x75, 0x60, 0x01}
+	code2 := []byte{0x60, 0x75, 0x60, 0x02}
+	codeHash1 := tcommon.Keccak256(code1)
+	codeHash2 := tcommon.Keccak256(code2)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(addr, corepb.AccountType_Contract)
+		s.AddBalance(addr, 100)
+		s.SetCode(addr, code1)
+		s.SetState(addr, slot, value1)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.AddBalance(addr, 50)
+		s.SetCode(addr, code2)
+		s.SetState(addr, slot, value2)
+	})
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		s.AddBalance(other, 1)
+	})
+
+	fromRange, ok, err := rawdb.ReadStateTxRange(f.disk, 1)
+	if err != nil || !ok {
+		t.Fatalf("read block 1 tx range: ok=%v err=%v", ok, err)
+	}
+	toRange, ok, err := rawdb.ReadStateTxRange(f.disk, f.head)
+	if err != nil || !ok {
+		t.Fatalf("read head tx range: ok=%v err=%v", ok, err)
+	}
+	dir := t.TempDir()
+	refs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(
+		f.disk,
+		dir,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"history/state-domain-change-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold state-domain history: %v", err)
+	}
+	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(
+		f.disk,
+		dir,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"latest/account-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold account latest: %v", err)
+	}
+	storageRef, storageAccessorRef, storageBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(
+		f.disk,
+		dir,
+		kvdomains.ContractStorage,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"latest/contract-storage-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold contract storage latest: %v", err)
+	}
+	codeRef, codeAccessorRef, codeBTreeRef, err := statesnapshots.BuildCodeSegmentFilesFromDB(
+		f.disk,
+		dir,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"latest/code-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold code latest: %v", err)
+	}
+	refs = append(
+		refs,
+		accountRef,
+		accountAccessorRef,
+		accountBTreeRef,
+		storageRef,
+		storageAccessorRef,
+		storageBTreeRef,
+		codeRef,
+		codeAccessorRef,
+		codeBTreeRef,
+	)
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(fromRange.BeginTxNum, toRange.EndTxNum, refs)); err != nil {
+		t.Fatalf("publish cold state-domain history: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+
+	f.pruneHotStateDomainHistory()
+	if _, ok, err := rawdb.ReadStateTxRange(f.disk, 2); err != nil || ok {
+		t.Fatalf("hot tx range after prune: ok=%v err=%v, want missing", ok, err)
+	}
+	hotChanges := 0
+	if err := rawdb.IterateStateDomainChanges(f.disk, 2, func(*rawdb.StateDomainChange) (bool, error) {
+		hotChanges++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate hot changes after prune: %v", err)
+	}
+	if hotChanges != 0 {
+		t.Fatalf("hot changes after prune = %d, want 0", hotChanges)
+	}
+	generation, _, err := rawdb.ReadStateKVGeneration(f.disk, addr)
+	if err != nil {
+		t.Fatalf("read hot kv generation before latest prune: %v", err)
+	}
+	if err := rawdb.DeleteStateAccountLatest(f.disk, addr); err != nil {
+		t.Fatalf("delete hot account latest: %v", err)
+	}
+	if err := rawdb.DeleteStateKVGeneration(f.disk, addr); err != nil {
+		t.Fatalf("delete hot kv generation: %v", err)
+	}
+	if err := rawdb.DeleteStateKVLatestPrefix(f.disk, addr, generation, kvdomains.ContractStorage, nil); err != nil {
+		t.Fatalf("delete hot contract storage latest: %v", err)
+	}
+	if err := rawdb.DeleteStateCode(f.disk, codeHash1); err != nil {
+		t.Fatalf("delete hot code 1: %v", err)
+	}
+	if err := rawdb.DeleteStateCode(f.disk, codeHash2); err != nil {
+		t.Fatalf("delete hot code 2: %v", err)
+	}
+
+	hotOnly := NewPersistentHistoryReader(f.disk, nil, f.head)
+	if _, err := hotOnly.AccountAt(addr, 1); !errors.Is(err, ErrStateDomainHistoryUnavailable) {
+		t.Fatalf("hot-only AccountAt after prune err = %v, want ErrStateDomainHistoryUnavailable", err)
+	}
+
+	cold := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, mgr)
+	acc, err := cold.AccountAt(addr, 1)
+	if err != nil {
+		t.Fatalf("cold AccountAt block 1: %v", err)
+	}
+	if acc == nil || acc.Balance() != 100 {
+		t.Fatalf("cold AccountAt block 1 = %+v, want balance 100", acc)
+	}
+	headAcc, err := cold.AccountAt(addr, f.head)
+	if err != nil {
+		t.Fatalf("cold AccountAt head: %v", err)
+	}
+	if headAcc == nil || headAcc.Balance() != 150 {
+		t.Fatalf("cold AccountAt head = %+v, want balance 150", headAcc)
+	}
+	gotStorage, err := cold.StorageAt(addr, slot, 1)
+	if err != nil {
+		t.Fatalf("cold StorageAt block 1: %v", err)
+	}
+	if gotStorage != value1 {
+		t.Fatalf("cold StorageAt block 1 = %x, want %x", gotStorage, value1)
+	}
+	headStorage, err := cold.StorageAt(addr, slot, f.head)
+	if err != nil {
+		t.Fatalf("cold StorageAt head: %v", err)
+	}
+	if headStorage != value2 {
+		t.Fatalf("cold StorageAt head = %x, want %x", headStorage, value2)
+	}
+	gotCode, err := cold.CodeAt(addr, 1)
+	if err != nil {
+		t.Fatalf("cold CodeAt block 1: %v", err)
+	}
+	if !bytes.Equal(gotCode, code1) {
+		t.Fatalf("cold CodeAt block 1 = %x, want %x", gotCode, code1)
+	}
+	headCode, err := cold.CodeAt(addr, f.head)
+	if err != nil {
+		t.Fatalf("cold CodeAt head: %v", err)
+	}
+	if !bytes.Equal(headCode, code2) {
+		t.Fatalf("cold CodeAt head = %x, want %x", headCode, code2)
+	}
+}
+
+func TestPersistentHistoryReaderHeadLatestUsesColdSnapshotTxNumWithoutStateRange(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x83)
+	var slot tcommon.Hash
+	slot[31] = 0x83
+	value := tcommon.HexToHash("83")
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(addr, corepb.AccountType_Contract)
+		s.AddBalance(addr, 83)
+		s.SetState(addr, slot, value)
+	})
+
+	dir := t.TempDir()
+	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(
+		f.disk,
+		dir,
+		100,
+		110,
+		"latest/account-100-110.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold account latest: %v", err)
+	}
+	storageRef, storageAccessorRef, storageBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(
+		f.disk,
+		dir,
+		kvdomains.ContractStorage,
+		100,
+		110,
+		"latest/contract-storage-100-110.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold contract storage latest: %v", err)
+	}
+	manifest := statesnapshots.NewManifest(100, 110, []statesnapshots.SegmentRef{
+		accountRef, accountAccessorRef, accountBTreeRef,
+		storageRef, storageAccessorRef, storageBTreeRef,
+	})
+	if err := statesnapshots.PublishManifest(dir, manifest); err != nil {
+		t.Fatalf("publish cold latest manifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+
+	if err := rawdb.DeleteStateTxRange(f.disk, f.head); err != nil {
+		t.Fatalf("delete hot head tx range: %v", err)
+	}
+	if err := rawdb.DeleteStateAccountLatest(f.disk, addr); err != nil {
+		t.Fatalf("delete hot account latest: %v", err)
+	}
+	if err := rawdb.DeleteStateKVLatestPrefix(f.disk, addr, 0, kvdomains.ContractStorage, nil); err != nil {
+		t.Fatalf("delete hot contract storage latest: %v", err)
+	}
+
+	cold := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, mgr)
+	acc, err := cold.AccountAt(addr, f.head)
+	if err != nil {
+		t.Fatalf("cold AccountAt head without tx range: %v", err)
+	}
+	if acc == nil || acc.Balance() != 83 {
+		t.Fatalf("cold AccountAt head without tx range = %+v, want balance 83", acc)
+	}
+	gotStorage, err := cold.StorageAt(addr, slot, f.head)
+	if err != nil {
+		t.Fatalf("cold StorageAt head without tx range: %v", err)
+	}
+	if gotStorage != value {
+		t.Fatalf("cold StorageAt head without tx range = %x, want %x", gotStorage, value)
+	}
+}
+
+func TestPersistentHistoryReaderAccountKVPrefixAtUsesStateDomainHistory(t *testing.T) {
+	f := newHistoryFixture(t)
+	owner := testAddr(0x77)
+	domain := kvdomains.SystemReward
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a1")
+		mustSetAccountKV(t, s, owner, domain, "reward/b", "b1")
+		mustSetAccountKV(t, s, owner, domain, "other/c", "c1")
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a2")
+		if err := s.DeleteAccountKV(owner, domain, []byte("reward/b")); err != nil {
+			t.Fatalf("DeleteAccountKV: %v", err)
+		}
+		mustSetAccountKV(t, s, owner, domain, "reward/c", "c2")
+	})
+
+	r := f.reader()
+	at1 := collectHistoryAccountKVPrefix(t, r, owner, domain, "reward/", 1)
+	if len(at1) != 2 || at1["reward/a"] != "a1" || at1["reward/b"] != "b1" {
+		t.Fatalf("block 1 prefix = %v, want reward/a=a1 reward/b=b1", at1)
+	}
+	at2 := collectHistoryAccountKVPrefix(t, r, owner, domain, "reward/", 2)
+	if len(at2) != 2 || at2["reward/a"] != "a2" || at2["reward/c"] != "c2" {
+		t.Fatalf("block 2 prefix = %v, want reward/a=a2 reward/c=c2", at2)
+	}
+}
+
+func TestHistoricalLatestViewIteratesAccountKVPrefixAtBound(t *testing.T) {
+	f := newHistoryFixture(t)
+	owner := testAddr(0x78)
+	domain := kvdomains.SystemReward
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a1")
+		mustSetAccountKV(t, s, owner, domain, "reward/b", "b1")
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a2")
+		if err := s.DeleteAccountKV(owner, domain, []byte("reward/b")); err != nil {
+			t.Fatalf("DeleteAccountKV: %v", err)
+		}
+		mustSetAccountKV(t, s, owner, domain, "reward/c", "c2")
+	})
+
+	f.state.SetHistoricalLatestView(f.reader(), 1)
+	at1 := collectStateDBAccountKVPrefix(t, f.state, owner, domain, "reward/")
+	if len(at1) != 2 || at1["reward/a"] != "a1" || at1["reward/b"] != "b1" {
+		t.Fatalf("historical latest view prefix = %v, want block 1 values", at1)
+	}
+}
+
+func TestPersistentHistoryReaderAccountKVPrefixAtUsesColdStateDomainHistory(t *testing.T) {
+	f := newHistoryFixture(t)
+	owner := testAddr(0x79)
+	other := testAddr(0x7A)
+	domain := kvdomains.SystemReward
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a1")
+		mustSetAccountKV(t, s, owner, domain, "reward/b", "b1")
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a2")
+		if err := s.DeleteAccountKV(owner, domain, []byte("reward/b")); err != nil {
+			t.Fatalf("DeleteAccountKV: %v", err)
+		}
+		mustSetAccountKV(t, s, owner, domain, "reward/c", "c2")
+	})
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		s.AddBalance(other, 1)
+	})
+
+	fromRange, ok, err := rawdb.ReadStateTxRange(f.disk, 1)
+	if err != nil || !ok {
+		t.Fatalf("read block 1 tx range: ok=%v err=%v", ok, err)
+	}
+	toRange, ok, err := rawdb.ReadStateTxRange(f.disk, f.head)
+	if err != nil || !ok {
+		t.Fatalf("read head tx range: ok=%v err=%v", ok, err)
+	}
+	dir := t.TempDir()
+	refs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(
+		f.disk,
+		dir,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"history/state-domain-change-prefix-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold state-domain history: %v", err)
+	}
+	latestRef, latestAccessorRef, latestBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(
+		f.disk,
+		dir,
+		domain,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"latest/system-reward-prefix-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold latest prefix domain: %v", err)
+	}
+	refs = append(refs, latestRef, latestAccessorRef, latestBTreeRef)
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(fromRange.BeginTxNum, toRange.EndTxNum, refs)); err != nil {
+		t.Fatalf("publish cold state-domain history: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+
+	f.pruneHotStateDomainHistory()
+	if err := rawdb.DeleteStateKVLatestPrefix(f.disk, owner, 0, domain, []byte("reward/")); err != nil {
+		t.Fatalf("delete hot reward latest prefix: %v", err)
+	}
+	hotOnly := NewPersistentHistoryReader(f.disk, nil, f.head)
+	if err := hotOnly.AccountKVPrefixAt(owner, domain, []byte("reward/"), 1, func(key, value []byte) (bool, error) {
+		return true, nil
+	}); !errors.Is(err, ErrStateDomainHistoryUnavailable) {
+		t.Fatalf("hot-only AccountKVPrefixAt after prune err = %v, want ErrStateDomainHistoryUnavailable", err)
+	}
+
+	cold := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, mgr)
+	at1 := collectHistoryAccountKVPrefix(t, cold, owner, domain, "reward/", 1)
+	if len(at1) != 2 || at1["reward/a"] != "a1" || at1["reward/b"] != "b1" {
+		t.Fatalf("cold block 1 prefix = %v, want reward/a=a1 reward/b=b1", at1)
+	}
+	at2 := collectHistoryAccountKVPrefix(t, cold, owner, domain, "reward/", 2)
+	if len(at2) != 2 || at2["reward/a"] != "a2" || at2["reward/c"] != "c2" {
+		t.Fatalf("cold block 2 prefix = %v, want reward/a=a2 reward/c=c2", at2)
+	}
+	headValue, ok, err := cold.AccountKVAt(owner, domain, []byte("reward/a"), f.head)
+	if err != nil {
+		t.Fatalf("cold AccountKVAt head: %v", err)
+	}
+	if !ok || string(headValue) != "a2" {
+		t.Fatalf("cold AccountKVAt head reward/a = %q ok=%v, want a2", headValue, ok)
+	}
+	headAccountPrefix := collectHistoryAccountKVPrefix(t, cold, owner, domain, "reward/", f.head)
+	if len(headAccountPrefix) != 2 || headAccountPrefix["reward/a"] != "a2" || headAccountPrefix["reward/c"] != "c2" {
+		t.Fatalf("cold head account prefix = %v, want reward/a=a2 reward/c=c2", headAccountPrefix)
+	}
+	headLatestPrefix := collectHistoryKVLatestPrefix(t, cold, owner, 0, domain, "reward/", f.head)
+	if len(headLatestPrefix) != 2 || headLatestPrefix["reward/a"] != "a2" || headLatestPrefix["reward/c"] != "c2" {
+		t.Fatalf("cold head latest prefix = %v, want reward/a=a2 reward/c=c2", headLatestPrefix)
+	}
+}
+
 func TestPersistentHistoryReaderReadsCodeFromColdCodeDomain(t *testing.T) {
 	f := newHistoryFixture(t)
 	addr := testAddr(0x73)
@@ -544,6 +695,67 @@ func TestPersistentHistoryReaderReadsCodeFromColdCodeDomain(t *testing.T) {
 	}
 	if !bytes.Equal(code2Got, code2) {
 		t.Fatalf("CodeAt block 2 = %x, want %x", code2Got, code2)
+	}
+}
+
+func TestPersistentHistoryReaderCodeAtSurfacesMissingHistoricalCodeRow(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x83)
+	other := testAddr(0x84)
+	code := []byte{0x60, 0x0c, 0x60, 0x00, 0xf3}
+	codeHash := tcommon.Keccak256(code)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetCode(contract, code)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.AddBalance(other, 1)
+	})
+	if err := rawdb.DeleteStateCode(f.disk, codeHash); err != nil {
+		t.Fatalf("delete state code: %v", err)
+	}
+
+	got, err := f.reader().CodeAt(contract, 1)
+	if err == nil {
+		t.Fatal("CodeAt missing historical code row error = nil")
+	}
+	if got != nil {
+		t.Fatalf("CodeAt missing historical code row = %x, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "state code") ||
+		!strings.Contains(err.Error(), "block 1") ||
+		!strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("CodeAt missing historical code row error = %v, want block-scoped missing state code context", err)
+	}
+}
+
+func TestPersistentHistoryReaderHeadCodeSurfacesMissingCodeRowWithoutLiveState(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x85)
+	code := []byte{0x60, 0x0d, 0x60, 0x00, 0xf3}
+	codeHash := tcommon.Keccak256(code)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetCode(contract, code)
+	})
+	if err := rawdb.DeleteStateCode(f.disk, codeHash); err != nil {
+		t.Fatalf("delete state code: %v", err)
+	}
+
+	r := NewPersistentHistoryReader(f.disk, nil, f.head)
+	got, err := r.CodeAt(contract, f.head)
+	if err == nil {
+		t.Fatal("CodeAt missing head code row error = nil")
+	}
+	if got != nil {
+		t.Fatalf("CodeAt missing head code row = %x, want nil", got)
+	}
+	if !strings.Contains(err.Error(), "read live code") ||
+		!strings.Contains(err.Error(), "state code") ||
+		!strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("CodeAt missing head code row error = %v, want live missing state code context", err)
 	}
 }
 
@@ -773,6 +985,88 @@ func TestPersistentHistoryReaderUsesColdStateDomainChangeSnapshot(t *testing.T) 
 	}
 	if got != (tcommon.Hash{0x03}) {
 		t.Fatalf("cold StorageAt block 3 = %x, want 0x03", got)
+	}
+}
+
+func TestPersistentHistoryReaderUsesColdStateDomainChangeSnapshotAcrossRecreate(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x63)
+	other := testAddr(0x64)
+	slotA := tcommon.Hash{31: 0xA0}
+	slotB := tcommon.Hash{31: 0xB0}
+	oldA := tcommon.Hash{31: 0x0A}
+	oldB := tcommon.Hash{31: 0x0B}
+	newA := tcommon.Hash{31: 0x1A}
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetState(contract, slotA, oldA)
+		s.SetState(contract, slotB, oldB)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.SelfDestruct(contract)
+		s.FinalizeTransaction()
+	})
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetState(contract, slotA, newA)
+	})
+	f.applyBlock(tcommon.Hash{0x04}, func(s *StateDB) {
+		s.AddBalance(other, 1)
+	})
+
+	range2, ok, err := rawdb.ReadStateTxRange(f.disk, 2)
+	if err != nil || !ok {
+		t.Fatalf("read block 2 tx range: ok=%v err=%v", ok, err)
+	}
+	range3, ok, err := rawdb.ReadStateTxRange(f.disk, 3)
+	if err != nil || !ok {
+		t.Fatalf("read block 3 tx range: ok=%v err=%v", ok, err)
+	}
+	dir := t.TempDir()
+	refs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(f.disk, dir, range2.BeginTxNum, range3.EndTxNum, "history/state-domain-change-2-3.seg")
+	if err != nil {
+		t.Fatalf("build cold state-domain-change segment: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(range2.BeginTxNum, range3.EndTxNum, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+	for _, blockNum := range []uint64{2, 3} {
+		if err := rawdb.DeleteStateDomainChanges(f.disk, blockNum); err != nil {
+			t.Fatalf("delete hot block %d changes: %v", blockNum, err)
+		}
+		if err := rawdb.DeleteStateTxRange(f.disk, blockNum); err != nil {
+			t.Fatalf("delete hot block %d tx range: %v", blockNum, err)
+		}
+	}
+
+	r := NewPersistentHistoryReaderWithColdHistory(f.disk, f.state, f.head, mgr)
+	for _, tc := range []struct {
+		name  string
+		block uint64
+		slot  tcommon.Hash
+		want  tcommon.Hash
+	}{
+		{"old slot A before delete", 1, slotA, oldA},
+		{"old slot B before delete", 1, slotB, oldB},
+		{"slot A while deleted", 2, slotA, tcommon.Hash{}},
+		{"slot B while deleted", 2, slotB, tcommon.Hash{}},
+		{"new slot A after recreate", 3, slotA, newA},
+		{"old slot B after recreate", 3, slotB, tcommon.Hash{}},
+		{"new slot A at head", 4, slotA, newA},
+		{"old slot B at head", 4, slotB, tcommon.Hash{}},
+	} {
+		got, err := r.StorageAt(contract, tc.slot, tc.block)
+		if err != nil {
+			t.Fatalf("%s: StorageAt block %d: %v", tc.name, tc.block, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: StorageAt block %d = %x, want %x", tc.name, tc.block, got, tc.want)
+		}
 	}
 }
 
@@ -1129,6 +1423,88 @@ func TestPersistentHistoryReader_StorageSlotZeroPreValue(t *testing.T) {
 	}
 }
 
+func TestPersistentHistoryReaderStorageAtSurfacesOversizedValue(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x81)
+	slot := tcommon.Hash{0xCE}
+	rowKey := javaStorageRowKey(contract, slot, nil)
+	oversized := bytes.Repeat([]byte{0xaa}, tcommon.HashLength+1)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.GetOrCreateAccount(contract)
+		if err := s.SetAccountKV(contract, kvdomains.ContractStorage, rowKey.Bytes(), oversized); err != nil {
+			t.Fatalf("write oversized storage value: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(*StateDB) {})
+
+	got, err := f.reader().StorageAt(contract, slot, 1)
+	if err == nil {
+		t.Fatal("StorageAt oversized value error = nil")
+	}
+	if got != (tcommon.Hash{}) {
+		t.Fatalf("StorageAt oversized value = %x, want zero", got)
+	}
+	if !strings.Contains(err.Error(), "storage value at block 1") || !strings.Contains(err.Error(), "length 33, want <= 32") {
+		t.Fatalf("StorageAt oversized value error = %v, want storage length context", err)
+	}
+}
+
+func TestPersistentHistoryReaderLiveStorageSurfacesCorruptMetadata(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x82)
+	slot := tcommon.Hash{0xCF}
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(contract, 1)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		if err := s.SetAccountKV(contract, kvdomains.ContractMetadata, contractMetaKVKey, []byte{0x80}); err != nil {
+			t.Fatalf("write corrupt contract metadata: %v", err)
+		}
+	})
+
+	got, err := f.reader().StorageAt(contract, slot, f.head)
+	if err == nil {
+		t.Fatal("live StorageAt corrupt metadata error = nil")
+	}
+	if got != (tcommon.Hash{}) {
+		t.Fatalf("live StorageAt corrupt metadata = %x, want zero", got)
+	}
+	if !strings.Contains(err.Error(), "decode contract metadata for storage key") {
+		t.Fatalf("live StorageAt corrupt metadata error = %v, want metadata decode context", err)
+	}
+}
+
+func TestPersistentHistoryReaderHistoricalStorageSurfacesCorruptMetadataContext(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x83)
+	slot := tcommon.Hash{0xD0}
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(contract, 1)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		if err := s.SetAccountKV(contract, kvdomains.ContractMetadata, contractMetaKVKey, []byte{0x80}); err != nil {
+			t.Fatalf("write corrupt contract metadata: %v", err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{0x03}, func(*StateDB) {})
+
+	got, err := f.reader().StorageAt(contract, slot, 2)
+	if err == nil {
+		t.Fatal("historical StorageAt corrupt metadata error = nil")
+	}
+	if got != (tcommon.Hash{}) {
+		t.Fatalf("historical StorageAt corrupt metadata = %x, want zero", got)
+	}
+	if !strings.Contains(err.Error(), "decode contract metadata for storage key") ||
+		!strings.Contains(err.Error(), contract.Hex()) ||
+		!strings.Contains(err.Error(), "block 2") {
+		t.Fatalf("historical StorageAt corrupt metadata error = %v, want metadata decode context", err)
+	}
+}
+
 // TestPersistentHistoryReader_SparseInverseIndexSeek pins down the
 // advisor's concern: if every block touches every slot, the inverse
 // index has dense entries and the reader's walk is trivial. The
@@ -1384,6 +1760,49 @@ type keyedColdHistoryCall struct {
 	generation uint64
 	domain     kvdomains.KVDomain
 	key        string
+}
+
+func mustSetAccountKV(t *testing.T, s *StateDB, owner tcommon.Address, domain kvdomains.KVDomain, key, value string) {
+	t.Helper()
+	if err := s.SetAccountKV(owner, domain, []byte(key), []byte(value)); err != nil {
+		t.Fatalf("SetAccountKV(%s): %v", key, err)
+	}
+}
+
+func collectHistoryAccountKVPrefix(t *testing.T, r *PersistentHistoryReader, owner tcommon.Address, domain kvdomains.KVDomain, prefix string, blockNum uint64) map[string]string {
+	t.Helper()
+	out := make(map[string]string)
+	if err := r.AccountKVPrefixAt(owner, domain, []byte(prefix), blockNum, func(key, value []byte) (bool, error) {
+		out[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("AccountKVPrefixAt block %d prefix %q: %v", blockNum, prefix, err)
+	}
+	return out
+}
+
+func collectHistoryKVLatestPrefix(t *testing.T, r *PersistentHistoryReader, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix string, blockNum uint64) map[string]string {
+	t.Helper()
+	out := make(map[string]string)
+	if err := r.KVLatestPrefixAt(owner, generation, domain, []byte(prefix), blockNum, func(key, value []byte) (bool, error) {
+		out[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("KVLatestPrefixAt block %d prefix %q: %v", blockNum, prefix, err)
+	}
+	return out
+}
+
+func collectStateDBAccountKVPrefix(t *testing.T, s *StateDB, owner tcommon.Address, domain kvdomains.KVDomain, prefix string) map[string]string {
+	t.Helper()
+	out := make(map[string]string)
+	if err := s.IterateAccountKV(owner, domain, []byte(prefix), func(key, value []byte) (bool, error) {
+		out[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateAccountKV prefix %q: %v", prefix, err)
+	}
+	return out
 }
 
 type keyedColdHistoryStub struct {
@@ -1670,6 +2089,36 @@ func TestStateDB_RecreatedAccountKVAsOfDoesNotLeakOldGeneration(t *testing.T) {
 	}
 	if got, ok, err := f.state.GetAccountKVAsOf(addr, domain, keyB, 1, f.head); err != nil || !ok || string(got) != "b0" {
 		t.Errorf("archive GetAccountKVAsOf(keyB, 1) = %q ok=%v err=%v, want \"b0\"", got, ok, err)
+	}
+}
+
+func TestPersistentHistoryReaderAccountKVPrefixAtDoesNotLeakOldGeneration(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x7B)
+	other := testAddr(0x7C)
+	domain := kvdomains.ContractRuntimeState
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(addr, 100)
+		mustSetAccountKV(t, s, addr, domain, "slot/a", "a0")
+		mustSetAccountKV(t, s, addr, domain, "slot/b", "b0")
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) { s.AddBalance(other, 1) })
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) { s.SelfDestruct(addr) })
+	f.applyBlock(tcommon.Hash{0x04}, func(s *StateDB) {
+		s.AddBalance(addr, 999)
+		mustSetAccountKV(t, s, addr, domain, "slot/a", "a1")
+	})
+	f.applyBlock(tcommon.Hash{0x05}, func(s *StateDB) { s.AddBalance(other, 1) })
+
+	r := f.reader()
+	beforeDestroy := collectHistoryAccountKVPrefix(t, r, addr, domain, "slot/", 1)
+	if len(beforeDestroy) != 2 || beforeDestroy["slot/a"] != "a0" || beforeDestroy["slot/b"] != "b0" {
+		t.Fatalf("block 1 prefix = %v, want old generation values", beforeDestroy)
+	}
+	afterRecreate := collectHistoryAccountKVPrefix(t, r, addr, domain, "slot/", 4)
+	if len(afterRecreate) != 1 || afterRecreate["slot/a"] != "a1" {
+		t.Fatalf("block 4 prefix = %v, want only recreated generation slot/a=a1", afterRecreate)
 	}
 }
 

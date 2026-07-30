@@ -282,11 +282,15 @@ TRON-specific (mirror java-tron solidity API):
 
 ```toml
 [history]
-mode = "archive"             # or "full"
-prune_window = 27000         # blocks; only used in full mode
+mode = "archive"             # or "full", "blocks", "minimal", "snap"
+prune_window = 262144        # optional finite-mode override
 ```
 
-Default: `mode = "full"`, `prune_window` = `27 * maintSlots ≈ 27 * 1024`.
+Current default: `mode = "full"`, `prune_window` = 262,144 blocks for
+`full`/`blocks`/`snap`, and 100,000 blocks for `minimal`. The older
+`27 * maintSlots ≈ 27 * 1024` sizing from this initial design was superseded by
+the Erigon 3.5 retention update tracked in
+`docs/superpowers/specs/2026-06-04-erigon-db-alignment.md`.
 Operator flips to `archive` and restarts — backfill from latest snapshot or
 re-sync depending on their situation. The audit doc captures both paths.
 

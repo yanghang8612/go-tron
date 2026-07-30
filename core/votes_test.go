@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -79,8 +80,8 @@ func TestApplyPendingVotes_SameBlockVisibility(t *testing.T) {
 	}
 
 	// The maintenance drain runs later in the same block on the same statedb.
-	if applied := applyPendingVotes(statedb); !applied {
-		t.Fatal("drain reported no records — same-block write was not visible to the drain")
+	if applied, err := applyPendingVotes(statedb); err != nil || !applied {
+		t.Fatalf("applyPendingVotes = applied %v err %v, want applied nil", applied, err)
 	}
 
 	// The delta folded into the witness, and the pending store was cleared.
@@ -92,5 +93,77 @@ func TestApplyPendingVotes_SameBlockVisibility(t *testing.T) {
 	}
 	if idx := statedb.ReadVotesIndex(); len(idx) != 0 {
 		t.Fatalf("voter index not cleared by drain: %v", idx)
+	}
+}
+
+func TestApplyPendingVotes_SurfacesCorruptPendingVoteRows(t *testing.T) {
+	db := state.NewDatabase(ethrawdb.NewMemoryDatabase())
+	statedb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	voter := testCoreAddr(1)
+	if err := statedb.WriteVotesIndex([]tcommon.Address{voter}); err != nil {
+		t.Fatal(err)
+	}
+	rowKey := state.PendingVotesPrefetchKey(voter)
+	if err := statedb.SystemKVPut(rowKey.Domain, rowKey.Key, []byte{0x80}); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, err := applyPendingVotes(statedb)
+	if err == nil || applied || !strings.Contains(err.Error(), "decode votes") {
+		t.Fatalf("applyPendingVotes corrupt votes = applied %v err %v, want decode error", applied, err)
+	}
+	if raw, ok, err := statedb.SystemKVGet(rowKey.Domain, rowKey.Key); err != nil || !ok || len(raw) != 1 || raw[0] != 0x80 {
+		t.Fatalf("corrupt votes row after failed drain = %x ok=%v err=%v, want preserved", raw, ok, err)
+	}
+	if idx := statedb.ReadVotesIndex(); len(idx) != 1 || idx[0] != voter {
+		t.Fatalf("votes index after failed drain = %v, want voter preserved", idx)
+	}
+}
+
+func TestApplyPendingVotes_SurfacesCorruptPendingVoteIndex(t *testing.T) {
+	db := state.NewDatabase(ethrawdb.NewMemoryDatabase())
+	statedb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	indexKey := state.PendingVotesIndexPrefetchKey()
+	if err := statedb.SystemKVPut(indexKey.Domain, indexKey.Key, []byte{0, 0, 0, 2, 0x41}); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, err := applyPendingVotes(statedb)
+	if err == nil || applied || !strings.Contains(err.Error(), "votes index") {
+		t.Fatalf("applyPendingVotes corrupt index = applied %v err %v, want index decode error", applied, err)
+	}
+	if raw, ok, err := statedb.SystemKVGet(indexKey.Domain, indexKey.Key); err != nil || !ok || len(raw) != 5 {
+		t.Fatalf("corrupt votes index after failed drain = %x ok=%v err=%v, want preserved", raw, ok, err)
+	}
+}
+
+func TestPendingVoteDeltasStrictSurfacesCorruptRows(t *testing.T) {
+	db := state.NewDatabase(ethrawdb.NewMemoryDatabase())
+	statedb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	voter := testCoreAddr(1)
+	if err := statedb.WriteVotesIndex([]tcommon.Address{voter}); err != nil {
+		t.Fatal(err)
+	}
+	rowKey := state.PendingVotesPrefetchKey(voter)
+	if err := statedb.SystemKVPut(rowKey.Domain, rowKey.Key, []byte{0x80}); err != nil {
+		t.Fatal(err)
+	}
+	if got, applied, err := pendingVoteDeltasStrict(statedb); err == nil || applied || got != nil || !strings.Contains(err.Error(), "decode votes") {
+		t.Fatalf("pendingVoteDeltasStrict corrupt row = %v applied %v err %v, want decode error", got, applied, err)
+	}
+	if got, applied := pendingVoteDeltas(statedb); got != nil || applied {
+		t.Fatalf("compat pendingVoteDeltas corrupt row = %v applied %v, want nil false", got, applied)
 	}
 }

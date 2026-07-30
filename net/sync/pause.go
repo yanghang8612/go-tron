@@ -1,8 +1,11 @@
 package sync
 
 import (
+	"errors"
 	"sync"
 	"time"
+
+	"github.com/tronprotocol/go-tron/core"
 )
 
 // PauseGate is the sticky-pause flag. Set on any InsertBlock failure or an
@@ -59,4 +62,13 @@ func (p *PauseGate) Status() (paused bool, atNum uint64, at time.Time, err error
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.paused, p.atNum, p.atTime, p.err
+}
+
+// PauseHint returns the operator-facing recovery hint for a sync pause cause.
+func PauseHint(err error) string {
+	var insertErr *core.InsertBlocksError
+	if errors.As(err, &insertErr) {
+		return "block execution failed; restart retries the same state, rebuild from a trusted pre-divergence snapshot or clean resync"
+	}
+	return "restart to resume"
 }

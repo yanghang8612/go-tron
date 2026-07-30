@@ -121,6 +121,51 @@ func TestCompactHistoryDomainReturnsGenericResult(t *testing.T) {
 	}
 }
 
+func TestCompactHistoryDomainMergesDuplicateBlockTxRanges(t *testing.T) {
+	dir := t.TempDir()
+	first := binaryStateDomainChange(1, 10, 1, "first")
+	second := binaryStateDomainChange(1, 11, 2, "second")
+	sharedRange := &rawdb.StateTxRange{
+		BlockNum:   1,
+		BlockHash:  first.BlockHash,
+		BeginTxNum: 10,
+		EndTxNum:   11,
+	}
+	write := func(fromTxNum, toTxNum uint64, change *rawdb.StateDomainChange) []SegmentRef {
+		t.Helper()
+		segRef, idxRef, accessorRef, err := writeHistorySegmentFiles(dir, SegmentRef{
+			Dataset:   SegmentDatasetStateDomainChange,
+			Kind:      SegmentHistory,
+			FromTxNum: fromTxNum,
+			ToTxNum:   toTxNum,
+			Path:      stateDomainChangeHistorySegmentPath(fromTxNum, toTxNum),
+		}, []*rawdb.StateDomainChange{change}, []*rawdb.StateTxRange{sharedRange})
+		if err != nil {
+			t.Fatalf("write state-domain-change segment [%d,%d]: %v", fromTxNum, toTxNum, err)
+		}
+		return []SegmentRef{segRef, accessorRef, idxRef}
+	}
+	refs := append(write(10, 10, first), write(11, 11, second)...)
+	if err := PublishManifest(dir, NewManifest(10, 11, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
+	if err != nil {
+		t.Fatalf("compact split block history: %v", err)
+	}
+	merged := compactionRefByKind(t, result, SegmentHistory)
+	ranges, err := readStateDomainChangeBinaryTxRanges(dir, merged)
+	if err != nil {
+		t.Fatalf("read merged tx ranges: %v", err)
+	}
+	if len(ranges) != 1 {
+		t.Fatalf("merged tx ranges = %+v, want one row", ranges)
+	}
+	if got := ranges[0]; got.BlockNum != 1 || got.BlockHash != first.BlockHash || got.BeginTxNum != 10 || got.EndTxNum != 11 {
+		t.Fatalf("merged tx range = %+v, want block 1 [10,11]", got)
+	}
+}
+
 func TestCompactHistoryDomainPreservesRepeatedAccessorKeys(t *testing.T) {
 	dir := t.TempDir()
 	owner := binaryAddress(0xee)
@@ -166,6 +211,66 @@ func TestCompactHistoryDomainPreservesRepeatedAccessorKeys(t *testing.T) {
 	})
 }
 
+func TestCompactHistoryDomainUpgradesV2AccessorToV4(t *testing.T) {
+	dir := t.TempDir()
+	owner := binaryAddress(0xef)
+	first := binaryStateDomainChange(1, 1, 1, "slot/a")
+	first.Owner = owner
+	first.Generation = 7
+	first.Domain = kvdomains.ContractStorage
+	second := binaryStateDomainChange(2, 2, 1, "slot/b")
+	second.Owner = owner
+	second.Generation = 7
+	second.Domain = kvdomains.ContractStorage
+
+	firstRefs := writeCompactionStateDomainChangeSegment(t, dir, 1, 1, first)
+	rewriteStateDomainChangeAccessorAsV2(t, dir, &firstRefs[1])
+	refs := append([]SegmentRef{}, firstRefs...)
+	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 2, 2, second)...)
+	if err := PublishManifest(dir, NewManifest(1, 2, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
+	if err != nil {
+		t.Fatalf("compact mixed v2/v4 history: %v", err)
+	}
+	accessorRef := compactionRefByKind(t, result, SegmentAccessor)
+	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
+	if got := binary.BigEndian.Uint32(data[8:12]); got != stateDomainChangeBinaryVersionV4 {
+		t.Fatalf("compacted accessor version = %d, want %d", got, stateDomainChangeBinaryVersionV4)
+	}
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	var got []*rawdb.StateDomainChange
+	if err := mgr.IterateStateDomainChangesByPrefix(1, 2, owner, 7, kvdomains.ContractStorage, []byte("slot/"), func(change *rawdb.StateDomainChange) (bool, error) {
+		got = append(got, change)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate compacted v4 prefix: %v", err)
+	}
+	assertBinaryChangeOrder(t, got, []binaryChangeOrder{{txNum: 1, seq: 1, key: "slot/a"}, {txNum: 2, seq: 1, key: "slot/b"}})
+}
+
+func rewriteStateDomainChangeAccessorAsV2(t *testing.T, dir string, ref *SegmentRef) {
+	t.Helper()
+	entries, err := readStateDomainChangeBinaryAccessor(dir, *ref)
+	if err != nil {
+		t.Fatalf("read accessor: %v", err)
+	}
+	data, err := encodeStateDomainChangeBinaryAccessorV2ForTest(ref.FromTxNum, ref.ToTxNum, entries)
+	if err != nil {
+		t.Fatalf("encode v2 accessor: %v", err)
+	}
+	setStateDomainChangeBinaryRefMetadata(ref, data)
+	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, ref.Path), data); err != nil {
+		t.Fatalf("write v2 accessor: %v", err)
+	}
+}
+
 func TestCompactHistoryDomainValidatesAccessorAgainstSegment(t *testing.T) {
 	dir := t.TempDir()
 	refs := append([]SegmentRef{},
@@ -173,10 +278,15 @@ func TestCompactHistoryDomainValidatesAccessorAgainstSegment(t *testing.T) {
 	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 3, 3, binaryStateDomainChange(3, 3, 1, "b"))...)
 	accessorRef := refs[1]
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	entryOffset := binary.BigEndian.Uint64(data[stateDomainChangeBinaryHeaderSize : stateDomainChangeBinaryHeaderSize+8])
-	keyLen := binary.BigEndian.Uint32(data[entryOffset : entryOffset+4])
-	txNumOffset := entryOffset + 4 + uint64(keyLen)
-	binary.BigEndian.PutUint64(data[txNumOffset:txNumOffset+8], 2)
+	if binary.BigEndian.Uint32(data[8:12]) >= stateDomainChangeBinaryVersionV3 {
+		recordIndexOffset := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV3HashSize + 8
+		binary.BigEndian.PutUint32(data[recordIndexOffset:recordIndexOffset+4], 1)
+	} else {
+		entryOffset := binary.BigEndian.Uint64(data[stateDomainChangeBinaryHeaderSize : stateDomainChangeBinaryHeaderSize+8])
+		keyLen := binary.BigEndian.Uint32(data[entryOffset : entryOffset+4])
+		txNumOffset := entryOffset + 4 + uint64(keyLen)
+		binary.BigEndian.PutUint64(data[txNumOffset:txNumOffset+8], 2)
+	}
 	setStateDomainChangeBinaryRefMetadata(&accessorRef, data)
 	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, accessorRef.Path), data); err != nil {
 		t.Fatalf("write corrupted accessor: %v", err)
@@ -186,7 +296,7 @@ func TestCompactHistoryDomainValidatesAccessorAgainstSegment(t *testing.T) {
 		t.Fatalf("publish manifest: %v", err)
 	}
 	_, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
-	if err == nil || !strings.Contains(err.Error(), "entry tx/seq") {
+	if err == nil || (!strings.Contains(err.Error(), "entry tx/seq") && !strings.Contains(err.Error(), "exact entry")) {
 		t.Fatalf("compact err = %v, want accessor/segment mismatch", err)
 	}
 }

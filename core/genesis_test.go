@@ -3,7 +3,7 @@ package core
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -15,31 +15,6 @@ import (
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
 )
-
-func TestSetupGenesisBlockWritesAndEnforcesStateSchemaV3(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
-	genesis := params.DefaultMainnetGenesis()
-	if _, _, err := SetupGenesisBlock(db, genesis); err != nil {
-		t.Fatal(err)
-	}
-	version, ok, err := rawdb.ReadStateSchemaVersion(db)
-	if err != nil || !ok || version != rawdb.CurrentStateSchemaVersion {
-		t.Fatalf("state schema: version=%d ok=%v err=%v", version, ok, err)
-	}
-
-	if err := rawdb.DeleteStateSchemaVersion(db); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := SetupGenesisBlock(db, genesis); !errors.Is(err, ErrIncompatibleStateSchema) {
-		t.Fatalf("missing schema marker error = %v", err)
-	}
-	if err := rawdb.WriteStateSchemaVersion(db, 2); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := SetupGenesisBlock(db, genesis); !errors.Is(err, ErrIncompatibleStateSchema) {
-		t.Fatalf("v2 schema error = %v", err)
-	}
-}
 
 func TestGenesisToBlock(t *testing.T) {
 	genesis := &params.Genesis{
@@ -508,6 +483,22 @@ func TestSetupGenesisBlockWithAncientFindsFrozenGenesis(t *testing.T) {
 	}
 	if gotHash != genesisHash {
 		t.Fatalf("genesis hash = %x, want %x", gotHash, genesisHash)
+	}
+}
+
+func TestSetupGenesisBlockWithAncientSurfacesCorruptFrozenGenesis(t *testing.T) {
+	genesis := &params.Genesis{
+		Config: params.MainnetChainConfig,
+	}
+	diskdb := ethrawdb.NewMemoryDatabase()
+
+	_, _, err := SetupGenesisBlockWithAncient(diskdb, staticAncientRow{
+		kind:   rawdb.AncientBlocksTable,
+		number: 0,
+		data:   []byte("not-a-valid-genesis-block"),
+	}, genesis)
+	if err == nil || !strings.Contains(err.Error(), "read existing genesis block") || !strings.Contains(err.Error(), "block 0 decode") {
+		t.Fatalf("SetupGenesisBlockWithAncient err = %v, want corrupt frozen genesis decode error", err)
 	}
 }
 

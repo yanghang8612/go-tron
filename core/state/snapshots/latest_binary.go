@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/golang/snappy"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -26,6 +27,15 @@ const (
 	latestBinaryAccessorHeaderSize = 8 + 4 + 4 + 2 + 2 + 2 + 2 + 8 + 8 + 8 + 8 + sha256.Size
 	latestBinaryBTreeHeaderSize    = latestBinaryAccessorHeaderSize + 8
 	latestBinaryBTreeBlockSize     = uint64(128)
+	latestBinaryCompressedValues   = uint16(1 << 0)
+
+	// Within a segment whose header has latestBinaryCompressedValues set, the
+	// high bit of an entry's uint32 value length marks a Snappy-compressed
+	// payload. Legacy segments have no header flag and always treat all 32 bits
+	// as the raw value length.
+	latestBinaryValueCompressedFlag = uint32(1 << 31)
+	latestBinaryMaxDecodedValueSize = 256 << 20
+	latestBinaryCompressMinValue    = 64
 )
 
 var (
@@ -35,12 +45,14 @@ var (
 )
 
 type latestBinaryHeader struct {
-	dataset   SegmentDataset
-	domain    kvdomains.KVDomain
-	kind      SegmentKind
-	fromTxNum uint64
-	toTxNum   uint64
-	count     uint64
+	dataset          SegmentDataset
+	domain           kvdomains.KVDomain
+	kind             SegmentKind
+	fromTxNum        uint64
+	toTxNum          uint64
+	count            uint64
+	compressedValues bool
+	fileSize         uint64
 }
 
 type latestBinaryAccessorHeader struct {
@@ -52,6 +64,7 @@ type latestBinaryAccessorHeader struct {
 	count           uint64
 	segmentSize     uint64
 	segmentChecksum [sha256.Size]byte
+	fileSize        uint64
 }
 
 type latestBinaryAccessor struct {
@@ -69,6 +82,16 @@ type latestBinaryBTreeEntry struct {
 	ordinal       uint64
 	segmentOffset uint64
 }
+
+type latestBinaryValueFrame struct {
+	encodedLen uint32
+	compressed bool
+}
+
+// CompressLatestSegments gates whether new cold latest-state records use
+// per-value Snappy compression. Readers always accept both compressed and
+// legacy raw records, so this only affects future segment emission.
+var CompressLatestSegments = true
 
 type latestEntryIterator func(func(LatestEntry) error) error
 
@@ -100,6 +123,10 @@ func writeLatestBinarySegment(path string, seg *LatestSegment) (string, uint64, 
 }
 
 func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latestEntryIterator) (SegmentRef, SegmentRef, SegmentRef, error) {
+	return writeLatestBinarySegmentWithCompanions(dir, ref, iter, true)
+}
+
+func writeLatestBinarySegmentWithCompanions(dir string, ref SegmentRef, iter latestEntryIterator, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if iter == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest entry iterator")
 	}
@@ -126,36 +153,39 @@ func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latest
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	offsets, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".offsets-*.tmp")
-	if err != nil {
-		_ = tmp.Close()
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	var offsets, btreePayload, btreeOffsets *os.File
+	closeTemps := func() {
+		for _, file := range []*os.File{tmp, offsets, btreePayload, btreeOffsets} {
+			if file != nil {
+				_ = file.Close()
+			}
+		}
 	}
-	offsetsName := offsets.Name()
-	defer os.Remove(offsetsName)
-	btreePayload, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".btree-*.tmp")
+	defer closeTemps()
+
+	var offsetsName string
+	if writeAccessor {
+		offsets, err = os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".offsets-*.tmp")
+		if err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+		}
+		offsetsName = offsets.Name()
+		defer os.Remove(offsetsName)
+	}
+	btreePayload, err = os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".btree-*.tmp")
 	if err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	btreePayloadName := btreePayload.Name()
 	defer os.Remove(btreePayloadName)
-	btreeOffsets, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".btree-offsets-*.tmp")
+	btreeOffsets, err = os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".btree-offsets-*.tmp")
 	if err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	btreeOffsetsName := btreeOffsets.Name()
 	defer os.Remove(btreeOffsetsName)
 
 	if err := writeLatestBinaryHeaderTo(tmp, ref.normalizedDataset(), ref.Domain, SegmentLatest, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	var count uint64
@@ -182,10 +212,12 @@ func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latest
 		if pos < 0 {
 			return fmt.Errorf("snapshots: latest stream negative offset %d", pos)
 		}
-		var off [8]byte
-		binary.BigEndian.PutUint64(off[:], uint64(pos))
-		if _, err := offsets.Write(off[:]); err != nil {
-			return err
+		if writeAccessor {
+			var off [8]byte
+			binary.BigEndian.PutUint64(off[:], uint64(pos))
+			if _, err := offsets.Write(off[:]); err != nil {
+				return err
+			}
 		}
 		if count%latestBinaryBTreeBlockSize == 0 {
 			if err := writeLatestBinaryBTreeTempEntry(btreePayload, btreeOffsets, latestBinaryBTreeEntry{
@@ -205,63 +237,37 @@ func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latest
 		return nil
 	})
 	if err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if ref.normalizedDataset() == SegmentDatasetCommitmentRoot && count != 1 {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: commitment root segment entries = %d, want 1", count)
 	}
 	var countBuf [8]byte
 	binary.BigEndian.PutUint64(countBuf[:], count)
 	if _, err := tmp.WriteAt(countBuf[:], 40); err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := tmp.Close(); err != nil {
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	if err := offsets.Sync(); err != nil {
-		_ = offsets.Close()
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
-	}
-	if err := offsets.Close(); err != nil {
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	if writeAccessor {
+		if err := offsets.Sync(); err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+		}
+		if err := offsets.Close(); err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+		}
 	}
 	if err := btreePayload.Sync(); err != nil {
-		_ = btreePayload.Close()
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := btreePayload.Close(); err != nil {
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := btreeOffsets.Sync(); err != nil {
-		_ = btreeOffsets.Close()
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := btreeOffsets.Close(); err != nil {
@@ -285,9 +291,12 @@ func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latest
 	segRef.Size = size
 	segRef.Checksum = checksum
 
-	accessorRef, err := writeLatestBinaryAccessorFromOffsetsFile(dir, segRef, checksumBytes, offsetsName, count)
-	if err != nil {
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	var accessorRef SegmentRef
+	if writeAccessor {
+		accessorRef, err = writeLatestBinaryAccessorFromOffsetsFile(dir, segRef, checksumBytes, offsetsName, count)
+		if err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+		}
 	}
 	btreeRef, err := writeLatestBinaryBTreeFromTempFiles(dir, segRef, checksumBytes, btreePayloadName, btreeOffsetsName, btreeCount)
 	if err != nil {
@@ -335,14 +344,14 @@ func restoreLatestBinarySegmentToStore(dir string, ref SegmentRef, store latestH
 	}
 	var prev []byte
 	for i := uint64(0); i < header.count; i++ {
-		key, valueLen, err := readLatestBinaryEntryKey(file)
+		key, valueLen, err := readLatestBinaryEntryKey(file, header.fileSize, header.compressedValues)
 		if err != nil {
 			return fmt.Errorf("snapshots: decode latest binary key %d: %w", i, err)
 		}
 		if len(prev) > 0 && bytes.Compare(prev, key) >= 0 {
 			return errors.New("snapshots: latest binary entries are not strictly sorted")
 		}
-		value, err := readLatestBinaryValueBytes(file, valueLen)
+		value, err := readLatestBinaryValueBytes(file, valueLen, header.fileSize)
 		if err != nil {
 			return fmt.Errorf("snapshots: decode latest binary value %d: %w", i, err)
 		}
@@ -376,14 +385,14 @@ func checkLatestBinarySegment(dir string, ref SegmentRef) error {
 	}
 	var prev []byte
 	for i := uint64(0); i < header.count; i++ {
-		key, valueLen, err := readLatestBinaryEntryKey(file)
+		key, valueLen, err := readLatestBinaryEntryKey(file, header.fileSize, header.compressedValues)
 		if err != nil {
 			return fmt.Errorf("snapshots: decode latest binary key %d: %w", i, err)
 		}
 		if len(prev) > 0 && bytes.Compare(prev, key) >= 0 {
 			return errors.New("snapshots: latest binary entries are not strictly sorted")
 		}
-		value, err := readLatestBinaryValueBytes(file, valueLen)
+		value, err := readLatestBinaryValueBytes(file, valueLen, header.fileSize)
 		if err != nil {
 			return fmt.Errorf("snapshots: decode latest binary value %d: %w", i, err)
 		}
@@ -464,7 +473,7 @@ func readLatestBinaryValue(path string, ref SegmentRef, key []byte) ([]byte, boo
 	defer file.Close()
 	var prev []byte
 	for i := uint64(0); i < header.count; i++ {
-		entryKey, valueLen, err := readLatestBinaryEntryKey(file)
+		entryKey, valueLen, err := readLatestBinaryEntryKey(file, header.fileSize, header.compressedValues)
 		if err != nil {
 			return nil, false, fmt.Errorf("snapshots: decode latest binary key %d: %w", i, err)
 		}
@@ -474,15 +483,18 @@ func readLatestBinaryValue(path string, ref SegmentRef, key []byte) ([]byte, boo
 		cmp := bytes.Compare(entryKey, key)
 		switch {
 		case cmp == 0:
-			value, err := readLatestBinaryValueBytes(file, valueLen)
+			value, err := readLatestBinaryValueBytes(file, valueLen, header.fileSize)
 			if err != nil {
 				return nil, false, fmt.Errorf("snapshots: decode latest binary value %d: %w", i, err)
+			}
+			if err := validateLatestBinaryEntry(header.dataset, entryKey, value); err != nil {
+				return nil, false, fmt.Errorf("snapshots: latest binary entry %d: %w", i, err)
 			}
 			return value, true, nil
 		case cmp > 0:
 			return nil, false, nil
 		default:
-			if err := skipLatestBinaryValue(file, valueLen); err != nil {
+			if err := skipLatestBinaryValue(file, valueLen, header.fileSize); err != nil {
 				return nil, false, fmt.Errorf("snapshots: skip latest binary value %d: %w", i, err)
 			}
 		}
@@ -503,16 +515,19 @@ func readLatestBinaryValueByAccessor(path string, ref SegmentRef, accessor lates
 	if err := validateLatestBinaryAccessorMatchesSegment(path, ref, header, accessor.header); err != nil {
 		return nil, false, err
 	}
-	i, ok, err := latestBinaryAccessorLowerBound(file, accessor.offsets, key)
+	i, ok, err := latestBinaryAccessorLowerBound(file, accessor.offsets, key, header.fileSize, header.compressedValues)
 	if err != nil || !ok {
 		return nil, false, err
 	}
-	entryKey, value, err := readLatestBinaryEntryAt(file, accessor.offsets[i])
+	entryKey, value, err := readLatestBinaryEntryAt(file, accessor.offsets[i], header.fileSize, header.compressedValues)
 	if err != nil {
 		return nil, false, err
 	}
 	if !bytes.Equal(entryKey, key) {
 		return nil, false, nil
+	}
+	if err := validateLatestBinaryEntry(header.dataset, entryKey, value); err != nil {
+		return nil, false, err
 	}
 	return value, true, nil
 }
@@ -525,7 +540,7 @@ func iterateLatestBinaryPrefix(path string, ref SegmentRef, prefix []byte, fn fu
 	defer file.Close()
 	var prev []byte
 	for i := uint64(0); i < header.count; i++ {
-		key, valueLen, err := readLatestBinaryEntryKey(file)
+		key, valueLen, err := readLatestBinaryEntryKey(file, header.fileSize, header.compressedValues)
 		if err != nil {
 			return fmt.Errorf("snapshots: decode latest binary key %d: %w", i, err)
 		}
@@ -536,15 +551,18 @@ func iterateLatestBinaryPrefix(path string, ref SegmentRef, prefix []byte, fn fu
 			if bytes.Compare(key, prefix) > 0 {
 				return nil
 			}
-			if err := skipLatestBinaryValue(file, valueLen); err != nil {
+			if err := skipLatestBinaryValue(file, valueLen, header.fileSize); err != nil {
 				return fmt.Errorf("snapshots: skip latest binary value %d: %w", i, err)
 			}
 			prev = key
 			continue
 		}
-		value, err := readLatestBinaryValueBytes(file, valueLen)
+		value, err := readLatestBinaryValueBytes(file, valueLen, header.fileSize)
 		if err != nil {
 			return fmt.Errorf("snapshots: decode latest binary value %d: %w", i, err)
+		}
+		if err := validateLatestBinaryEntry(header.dataset, key, value); err != nil {
+			return fmt.Errorf("snapshots: latest binary entry %d: %w", i, err)
 		}
 		cont, err := fn(append([]byte(nil), key...), value)
 		if err != nil {
@@ -569,14 +587,14 @@ func iterateLatestBinaryPrefixByAccessor(path string, ref SegmentRef, accessor l
 	}
 	start := 0
 	if len(prefix) > 0 {
-		i, _, err := latestBinaryAccessorLowerBound(file, accessor.offsets, prefix)
+		i, _, err := latestBinaryAccessorLowerBound(file, accessor.offsets, prefix, header.fileSize, header.compressedValues)
 		if err != nil {
 			return err
 		}
 		start = i
 	}
 	for i := start; i < len(accessor.offsets); i++ {
-		key, value, err := readLatestBinaryEntryAt(file, accessor.offsets[i])
+		key, value, err := readLatestBinaryEntryAt(file, accessor.offsets[i], header.fileSize, header.compressedValues)
 		if err != nil {
 			return err
 		}
@@ -585,6 +603,9 @@ func iterateLatestBinaryPrefixByAccessor(path string, ref SegmentRef, accessor l
 				return nil
 			}
 			continue
+		}
+		if err := validateLatestBinaryEntry(header.dataset, key, value); err != nil {
+			return err
 		}
 		cont, err := fn(key, value)
 		if err != nil {
@@ -614,7 +635,7 @@ func readLatestBinaryValueByAccessorFile(dir, path string, ref SegmentRef, acces
 	if err := validateLatestBinaryAccessorMatchesSegment(path, ref, segHeader, accessorHeader); err != nil {
 		return nil, false, err
 	}
-	i, ok, err := latestBinaryAccessorLowerBoundFile(segFile, accessorFile, accessorHeader.count, key)
+	i, ok, err := latestBinaryAccessorLowerBoundFile(segFile, accessorFile, accessorHeader.count, key, segHeader.fileSize, segHeader.compressedValues)
 	if err != nil || !ok {
 		return nil, false, err
 	}
@@ -622,12 +643,15 @@ func readLatestBinaryValueByAccessorFile(dir, path string, ref SegmentRef, acces
 	if err != nil {
 		return nil, false, err
 	}
-	entryKey, value, err := readLatestBinaryEntryAt(segFile, offset)
+	entryKey, value, err := readLatestBinaryEntryAt(segFile, offset, segHeader.fileSize, segHeader.compressedValues)
 	if err != nil {
 		return nil, false, err
 	}
 	if !bytes.Equal(entryKey, key) {
 		return nil, false, nil
+	}
+	if err := validateLatestBinaryEntry(segHeader.dataset, entryKey, value); err != nil {
+		return nil, false, err
 	}
 	return value, true, nil
 }
@@ -648,7 +672,7 @@ func iterateLatestBinaryPrefixByAccessorFile(dir, path string, ref SegmentRef, a
 	}
 	start := 0
 	if len(prefix) > 0 {
-		i, _, err := latestBinaryAccessorLowerBoundFile(segFile, accessorFile, accessorHeader.count, prefix)
+		i, _, err := latestBinaryAccessorLowerBoundFile(segFile, accessorFile, accessorHeader.count, prefix, segHeader.fileSize, segHeader.compressedValues)
 		if err != nil {
 			return err
 		}
@@ -659,7 +683,7 @@ func iterateLatestBinaryPrefixByAccessorFile(dir, path string, ref SegmentRef, a
 		if err != nil {
 			return err
 		}
-		key, value, err := readLatestBinaryEntryAt(segFile, offset)
+		key, value, err := readLatestBinaryEntryAt(segFile, offset, segHeader.fileSize, segHeader.compressedValues)
 		if err != nil {
 			return err
 		}
@@ -668,6 +692,9 @@ func iterateLatestBinaryPrefixByAccessorFile(dir, path string, ref SegmentRef, a
 				return nil
 			}
 			continue
+		}
+		if err := validateLatestBinaryEntry(segHeader.dataset, key, value); err != nil {
+			return err
 		}
 		cont, err := fn(key, value)
 		if err != nil {
@@ -697,19 +724,22 @@ func readLatestBinaryValueByBTreeFile(dir, path string, ref SegmentRef, btreeRef
 	if err := validateLatestBinaryCompanionMatchesSegment(path, ref, segHeader, btreeHeader.latestBinaryAccessorHeader, SegmentBTree); err != nil {
 		return nil, false, err
 	}
-	entry, ok, err := latestBinaryBTreeFloor(segFile, btreeFile, btreeHeader.count, key)
+	entry, ok, err := latestBinaryBTreeFloor(segFile, btreeFile, btreeHeader.count, key, btreeHeader.fileSize)
 	if err != nil || !ok {
 		return nil, false, err
 	}
 	limit := min(segHeader.count, entry.ordinal+btreeHeader.blockSize)
 	offset := entry.segmentOffset
 	for ordinal := entry.ordinal; ordinal < limit; ordinal++ {
-		entryKey, value, next, err := readLatestBinaryEntryAtWithNext(segFile, offset)
+		entryKey, value, next, err := readLatestBinaryEntryAtWithNext(segFile, offset, segHeader.fileSize, segHeader.compressedValues)
 		if err != nil {
 			return nil, false, err
 		}
 		cmp := bytes.Compare(entryKey, key)
 		if cmp == 0 {
+			if err := validateLatestBinaryEntry(segHeader.dataset, entryKey, value); err != nil {
+				return nil, false, err
+			}
 			return value, true, nil
 		}
 		if cmp > 0 {
@@ -737,18 +767,18 @@ func iterateLatestBinaryPrefixByBTreeFile(dir, path string, ref SegmentRef, btre
 	var entry latestBinaryBTreeEntry
 	if len(prefix) == 0 {
 		var ok bool
-		entry, ok, err = readLatestBinaryBTreeEntryAt(btreeFile, 0)
+		entry, ok, err = readLatestBinaryBTreeEntryAt(btreeFile, 0, btreeHeader.fileSize)
 		if err != nil || !ok {
 			return err
 		}
 	} else {
 		var ok bool
-		entry, ok, err = latestBinaryBTreeFloor(segFile, btreeFile, btreeHeader.count, prefix)
+		entry, ok, err = latestBinaryBTreeFloor(segFile, btreeFile, btreeHeader.count, prefix, btreeHeader.fileSize)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			entry, ok, err = readLatestBinaryBTreeEntryAt(btreeFile, 0)
+			entry, ok, err = readLatestBinaryBTreeEntryAt(btreeFile, 0, btreeHeader.fileSize)
 			if err != nil || !ok {
 				return err
 			}
@@ -756,7 +786,7 @@ func iterateLatestBinaryPrefixByBTreeFile(dir, path string, ref SegmentRef, btre
 	}
 	offset := entry.segmentOffset
 	for ordinal := entry.ordinal; ordinal < segHeader.count; ordinal++ {
-		key, value, next, err := readLatestBinaryEntryAtWithNext(segFile, offset)
+		key, value, next, err := readLatestBinaryEntryAtWithNext(segFile, offset, segHeader.fileSize, segHeader.compressedValues)
 		if err != nil {
 			return err
 		}
@@ -766,6 +796,9 @@ func iterateLatestBinaryPrefixByBTreeFile(dir, path string, ref SegmentRef, btre
 			}
 			offset = next
 			continue
+		}
+		if err := validateLatestBinaryEntry(segHeader.dataset, key, value); err != nil {
+			return err
 		}
 		cont, err := fn(key, value)
 		if err != nil {
@@ -784,22 +817,24 @@ func openLatestBinaryReader(path string, ref SegmentRef) (*os.File, latestBinary
 	if err != nil {
 		return nil, latestBinaryHeader{}, err
 	}
-	if ref.Size != 0 {
-		stat, err := file.Stat()
-		if err != nil {
-			_ = file.Close()
-			return nil, latestBinaryHeader{}, err
-		}
-		if uint64(stat.Size()) != ref.Size {
-			_ = file.Close()
-			return nil, latestBinaryHeader{}, fmt.Errorf("snapshots: segment %q size %d, want %d", path, stat.Size(), ref.Size)
-		}
-	}
-	header, err := readLatestBinaryHeader(file)
+	stat, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
 		return nil, latestBinaryHeader{}, err
 	}
+	fileSize := uint64(stat.Size())
+	if ref.Size != 0 {
+		if fileSize != ref.Size {
+			_ = file.Close()
+			return nil, latestBinaryHeader{}, fmt.Errorf("snapshots: segment %q size %d, want %d", path, stat.Size(), ref.Size)
+		}
+	}
+	header, err := readLatestBinaryHeader(file, fileSize)
+	if err != nil {
+		_ = file.Close()
+		return nil, latestBinaryHeader{}, err
+	}
+	header.fileSize = fileSize
 	if err := validateLatestBinaryHeaderRefMetadata(path, ref, header); err != nil {
 		_ = file.Close()
 		return nil, latestBinaryHeader{}, err
@@ -1098,7 +1133,11 @@ func encodeLatestBinarySegment(seg *LatestSegment) ([]byte, error) {
 	writeUint16(&buf, datasetCode)
 	writeUint16(&buf, uint16(seg.Domain))
 	writeUint16(&buf, kindCode)
-	writeUint16(&buf, 0)
+	if CompressLatestSegments {
+		writeUint16(&buf, latestBinaryCompressedValues)
+	} else {
+		writeUint16(&buf, 0)
+	}
 	writeUint64(&buf, seg.FromTxNum)
 	writeUint64(&buf, seg.ToTxNum)
 	writeUint64(&buf, uint64(len(seg.Entries)))
@@ -1163,7 +1202,7 @@ func decodeLatestBinarySegment(data []byte) (*LatestSegment, error) {
 	}
 	entries := make([]LatestEntry, 0, header.count)
 	for i := uint64(0); i < header.count; i++ {
-		entry, next, err := decodeLatestBinaryEntry(rest)
+		entry, next, err := decodeLatestBinaryEntry(rest, header.compressedValues)
 		if err != nil {
 			return nil, fmt.Errorf("snapshots: decode latest binary record %d: %w", i, err)
 		}
@@ -1236,16 +1275,17 @@ func decodeLatestBinaryHeader(data []byte) (latestBinaryHeader, []byte, error) {
 		return latestBinaryHeader{}, nil, err
 	}
 	flags := binary.BigEndian.Uint16(data[22:24])
-	if flags != 0 {
+	if flags&^latestBinaryCompressedValues != 0 {
 		return latestBinaryHeader{}, nil, fmt.Errorf("snapshots: unsupported latest binary flags %#04x", flags)
 	}
 	return latestBinaryHeader{
-		dataset:   dataset,
-		domain:    kvdomains.KVDomain(binary.BigEndian.Uint16(data[18:20])),
-		kind:      kind,
-		fromTxNum: binary.BigEndian.Uint64(data[24:32]),
-		toTxNum:   binary.BigEndian.Uint64(data[32:40]),
-		count:     binary.BigEndian.Uint64(data[40:48]),
+		dataset:          dataset,
+		domain:           kvdomains.KVDomain(binary.BigEndian.Uint16(data[18:20])),
+		kind:             kind,
+		fromTxNum:        binary.BigEndian.Uint64(data[24:32]),
+		toTxNum:          binary.BigEndian.Uint64(data[32:40]),
+		count:            binary.BigEndian.Uint64(data[40:48]),
+		compressedValues: flags&latestBinaryCompressedValues != 0,
 	}, data[headerSize:], nil
 }
 
@@ -1297,7 +1337,7 @@ func decodeLatestBinaryAccessorHeaderWithMagic(data []byte, magic [8]byte, versi
 	}, data[headerSize:], nil
 }
 
-func readLatestBinaryHeader(r io.Reader) (latestBinaryHeader, error) {
+func readLatestBinaryHeader(r io.Reader, fileSize uint64) (latestBinaryHeader, error) {
 	fixed := make([]byte, latestBinaryHeaderSize)
 	if _, err := io.ReadFull(r, fixed); err != nil {
 		return latestBinaryHeader{}, err
@@ -1308,6 +1348,9 @@ func readLatestBinaryHeader(r io.Reader) (latestBinaryHeader, error) {
 	headerSize := binary.BigEndian.Uint32(fixed[12:16])
 	if headerSize < latestBinaryHeaderSize {
 		return latestBinaryHeader{}, fmt.Errorf("snapshots: latest binary header size %d, want at least %d", headerSize, latestBinaryHeaderSize)
+	}
+	if uint64(headerSize) > fileSize {
+		return latestBinaryHeader{}, fmt.Errorf("snapshots: latest binary header size %d exceeds file size %d", headerSize, fileSize)
 	}
 	headerBytes := fixed
 	if headerSize > latestBinaryHeaderSize {
@@ -1335,22 +1378,24 @@ func openLatestBinaryAccessorReader(dir string, ref SegmentRef) (*os.File, lates
 	if err != nil {
 		return nil, latestBinaryAccessorHeader{}, err
 	}
-	if ref.Size != 0 {
-		stat, err := file.Stat()
-		if err != nil {
-			_ = file.Close()
-			return nil, latestBinaryAccessorHeader{}, err
-		}
-		if uint64(stat.Size()) != ref.Size {
-			_ = file.Close()
-			return nil, latestBinaryAccessorHeader{}, fmt.Errorf("snapshots: accessor %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
-		}
-	}
-	header, err := readLatestBinaryAccessorHeader(file)
+	stat, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
 		return nil, latestBinaryAccessorHeader{}, err
 	}
+	fileSize := uint64(stat.Size())
+	if ref.Size != 0 {
+		if fileSize != ref.Size {
+			_ = file.Close()
+			return nil, latestBinaryAccessorHeader{}, fmt.Errorf("snapshots: accessor %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
+		}
+	}
+	header, err := readLatestBinaryAccessorHeader(file, fileSize)
+	if err != nil {
+		_ = file.Close()
+		return nil, latestBinaryAccessorHeader{}, err
+	}
+	header.fileSize = fileSize
 	if ref.Dataset != "" && header.dataset != ref.normalizedDataset() {
 		_ = file.Close()
 		return nil, latestBinaryAccessorHeader{}, fmt.Errorf("snapshots: latest binary accessor %q dataset %q, want %q", ref.Path, header.dataset, ref.normalizedDataset())
@@ -1378,22 +1423,24 @@ func openLatestBinaryBTreeReader(dir string, ref SegmentRef) (*os.File, latestBi
 	if err != nil {
 		return nil, latestBinaryBTreeHeader{}, err
 	}
-	if ref.Size != 0 {
-		stat, err := file.Stat()
-		if err != nil {
-			_ = file.Close()
-			return nil, latestBinaryBTreeHeader{}, err
-		}
-		if uint64(stat.Size()) != ref.Size {
-			_ = file.Close()
-			return nil, latestBinaryBTreeHeader{}, fmt.Errorf("snapshots: latest binary btree %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
-		}
-	}
-	header, err := readLatestBinaryBTreeHeader(file)
+	stat, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
 		return nil, latestBinaryBTreeHeader{}, err
 	}
+	fileSize := uint64(stat.Size())
+	if ref.Size != 0 {
+		if fileSize != ref.Size {
+			_ = file.Close()
+			return nil, latestBinaryBTreeHeader{}, fmt.Errorf("snapshots: latest binary btree %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
+		}
+	}
+	header, err := readLatestBinaryBTreeHeader(file, fileSize)
+	if err != nil {
+		_ = file.Close()
+		return nil, latestBinaryBTreeHeader{}, err
+	}
+	header.fileSize = fileSize
 	if ref.Dataset != "" && header.dataset != ref.normalizedDataset() {
 		_ = file.Close()
 		return nil, latestBinaryBTreeHeader{}, fmt.Errorf("snapshots: latest binary btree %q dataset %q, want %q", ref.Path, header.dataset, ref.normalizedDataset())
@@ -1417,7 +1464,7 @@ func openLatestBinaryBTreeReader(dir string, ref SegmentRef) (*os.File, latestBi
 	return file, header, nil
 }
 
-func readLatestBinaryAccessorHeader(r io.Reader) (latestBinaryAccessorHeader, error) {
+func readLatestBinaryAccessorHeader(r io.Reader, fileSize uint64) (latestBinaryAccessorHeader, error) {
 	fixed := make([]byte, latestBinaryAccessorHeaderSize)
 	if _, err := io.ReadFull(r, fixed); err != nil {
 		return latestBinaryAccessorHeader{}, err
@@ -1425,6 +1472,9 @@ func readLatestBinaryAccessorHeader(r io.Reader) (latestBinaryAccessorHeader, er
 	headerSize := binary.BigEndian.Uint32(fixed[12:16])
 	if headerSize < latestBinaryAccessorHeaderSize {
 		return latestBinaryAccessorHeader{}, fmt.Errorf("snapshots: latest binary accessor header size %d, want at least %d", headerSize, latestBinaryAccessorHeaderSize)
+	}
+	if uint64(headerSize) > fileSize {
+		return latestBinaryAccessorHeader{}, fmt.Errorf("snapshots: latest binary accessor header size %d exceeds file size %d", headerSize, fileSize)
 	}
 	headerBytes := fixed
 	if headerSize > latestBinaryAccessorHeaderSize {
@@ -1444,7 +1494,7 @@ func readLatestBinaryAccessorHeader(r io.Reader) (latestBinaryAccessorHeader, er
 	return header, nil
 }
 
-func readLatestBinaryBTreeHeader(r io.Reader) (latestBinaryBTreeHeader, error) {
+func readLatestBinaryBTreeHeader(r io.Reader, fileSize uint64) (latestBinaryBTreeHeader, error) {
 	fixed := make([]byte, latestBinaryBTreeHeaderSize)
 	if _, err := io.ReadFull(r, fixed); err != nil {
 		return latestBinaryBTreeHeader{}, err
@@ -1459,6 +1509,9 @@ func readLatestBinaryBTreeHeader(r io.Reader) (latestBinaryBTreeHeader, error) {
 	headerSize := binary.BigEndian.Uint32(fixed[12:16])
 	if headerSize < latestBinaryBTreeHeaderSize {
 		return latestBinaryBTreeHeader{}, fmt.Errorf("snapshots: latest binary btree header size %d, want at least %d", headerSize, latestBinaryBTreeHeaderSize)
+	}
+	if uint64(headerSize) > fileSize {
+		return latestBinaryBTreeHeader{}, fmt.Errorf("snapshots: latest binary btree header size %d exceeds file size %d", headerSize, fileSize)
 	}
 	headerBytes := fixed
 	if headerSize > latestBinaryBTreeHeaderSize {
@@ -1544,6 +1597,9 @@ func writeLatestBinaryHeaderTo(w io.Writer, dataset SegmentDataset, domain kvdom
 	binary.BigEndian.PutUint16(header[16:18], datasetCode)
 	binary.BigEndian.PutUint16(header[18:20], uint16(domain))
 	binary.BigEndian.PutUint16(header[20:22], kindCode)
+	if CompressLatestSegments {
+		binary.BigEndian.PutUint16(header[22:24], latestBinaryCompressedValues)
+	}
 	binary.BigEndian.PutUint64(header[24:32], fromTxNum)
 	binary.BigEndian.PutUint64(header[32:40], toTxNum)
 	binary.BigEndian.PutUint64(header[40:48], count)
@@ -1606,92 +1662,246 @@ func writeLatestBinaryEntry(w io.Writer, index int, entry LatestEntry) error {
 	if len(entry.Key) > math.MaxUint32 {
 		return fmt.Errorf("snapshots: latest binary record %d key is too large: %d bytes", index, len(entry.Key))
 	}
-	if len(entry.Value) > math.MaxUint32 {
+	if len(entry.Value) > latestBinaryMaxDecodedValueSize {
 		return fmt.Errorf("snapshots: latest binary record %d value is too large: %d bytes", index, len(entry.Value))
+	}
+	encodedValue, frame, err := encodeLatestBinaryValue(entry.Value)
+	if err != nil {
+		return fmt.Errorf("snapshots: latest binary record %d value: %w", index, err)
 	}
 	var lens [8]byte
 	binary.BigEndian.PutUint32(lens[:4], uint32(len(entry.Key)))
-	binary.BigEndian.PutUint32(lens[4:], uint32(len(entry.Value)))
+	storedLen := frame.encodedLen
+	if frame.compressed {
+		storedLen |= latestBinaryValueCompressedFlag
+	}
+	binary.BigEndian.PutUint32(lens[4:], storedLen)
 	if _, err := w.Write(lens[:]); err != nil {
 		return err
 	}
 	if _, err := w.Write(entry.Key); err != nil {
 		return err
 	}
-	_, err := w.Write(entry.Value)
+	_, err = w.Write(encodedValue)
 	return err
 }
 
-func readLatestBinaryEntryKey(r io.Reader) ([]byte, uint32, error) {
-	var lens [8]byte
-	if _, err := io.ReadFull(r, lens[:]); err != nil {
-		return nil, 0, err
+func encodeLatestBinaryValue(value []byte) ([]byte, latestBinaryValueFrame, error) {
+	if len(value) > latestBinaryMaxDecodedValueSize {
+		return nil, latestBinaryValueFrame{}, fmt.Errorf("decoded length %d exceeds limit %d", len(value), latestBinaryMaxDecodedValueSize)
 	}
-	keyLen := binary.BigEndian.Uint32(lens[:4])
-	valueLen := binary.BigEndian.Uint32(lens[4:])
-	key := make([]byte, keyLen)
-	if _, err := io.ReadFull(r, key); err != nil {
-		return nil, 0, err
+	if len(value) > int(latestBinaryValueCompressedFlag-1) {
+		return nil, latestBinaryValueFrame{}, fmt.Errorf("encoded length %d exceeds limit %d", len(value), latestBinaryValueCompressedFlag-1)
 	}
-	return key, valueLen, nil
+	frame := latestBinaryValueFrame{encodedLen: uint32(len(value))}
+	if !CompressLatestSegments || len(value) < latestBinaryCompressMinValue {
+		return value, frame, nil
+	}
+	compressed := snappy.Encode(nil, value)
+	if len(compressed) >= len(value) {
+		return value, frame, nil
+	}
+	if len(compressed) > int(latestBinaryValueCompressedFlag-1) {
+		return nil, latestBinaryValueFrame{}, fmt.Errorf("compressed length %d exceeds limit %d", len(compressed), latestBinaryValueCompressedFlag-1)
+	}
+	return compressed, latestBinaryValueFrame{encodedLen: uint32(len(compressed)), compressed: true}, nil
 }
 
-func readLatestBinaryEntryKeyAt(r io.ReaderAt, offset uint64) ([]byte, uint32, error) {
+func latestBinaryValueFrameFromStoredLength(stored uint32, compressedValues bool) (latestBinaryValueFrame, error) {
+	if !compressedValues {
+		return latestBinaryValueFrame{encodedLen: stored}, nil
+	}
+	frame := latestBinaryValueFrame{
+		encodedLen: stored &^ latestBinaryValueCompressedFlag,
+		compressed: stored&latestBinaryValueCompressedFlag != 0,
+	}
+	if frame.compressed && frame.encodedLen == 0 {
+		return latestBinaryValueFrame{}, errors.New("compressed latest binary value has zero encoded length")
+	}
+	return frame, nil
+}
+
+func validateLatestBinaryValueFrame(frame latestBinaryValueFrame) error {
+	if frame.encodedLen > latestBinaryMaxDecodedValueSize {
+		return fmt.Errorf("encoded length %d exceeds limit %d", frame.encodedLen, latestBinaryMaxDecodedValueSize)
+	}
+	return nil
+}
+
+func decodeLatestBinaryValue(encoded []byte, frame latestBinaryValueFrame) ([]byte, error) {
+	if err := validateLatestBinaryValueFrame(frame); err != nil {
+		return nil, err
+	}
+	if uint64(len(encoded)) != uint64(frame.encodedLen) {
+		return nil, fmt.Errorf("encoded length %d, want %d", len(encoded), frame.encodedLen)
+	}
+	if !frame.compressed {
+		if len(encoded) > latestBinaryMaxDecodedValueSize {
+			return nil, fmt.Errorf("decoded length %d exceeds limit %d", len(encoded), latestBinaryMaxDecodedValueSize)
+		}
+		return encoded, nil
+	}
+	decodedLen, err := snappy.DecodedLen(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode compressed latest binary value length: %w", err)
+	}
+	if decodedLen > latestBinaryMaxDecodedValueSize {
+		return nil, fmt.Errorf("compressed latest binary value decoded length %d exceeds limit %d", decodedLen, latestBinaryMaxDecodedValueSize)
+	}
+	decoded, err := snappy.Decode(nil, encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode compressed latest binary value: %w", err)
+	}
+	return decoded, nil
+}
+
+func latestBinaryBoundedRange(kind string, offset, length, maxEnd uint64) (uint64, error) {
+	if offset > maxEnd {
+		return 0, fmt.Errorf("snapshots: latest binary %s offset %d exceeds segment bound %d", kind, offset, maxEnd)
+	}
+	if length > maxEnd-offset {
+		return 0, fmt.Errorf("snapshots: latest binary %s length %d at offset %d exceeds segment bound %d", kind, length, offset, maxEnd)
+	}
+	return offset + length, nil
+}
+
+func readLatestBinaryEntryKey(file *os.File, maxEnd uint64, compressedValues bool) ([]byte, latestBinaryValueFrame, error) {
+	pos, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, latestBinaryValueFrame{}, err
+	}
+	if pos < 0 {
+		return nil, latestBinaryValueFrame{}, fmt.Errorf("snapshots: latest binary negative offset %d", pos)
+	}
+	offset := uint64(pos)
+	if _, err := latestBinaryBoundedRange("entry header", offset, 8, maxEnd); err != nil {
+		return nil, latestBinaryValueFrame{}, err
+	}
+	var lens [8]byte
+	if _, err := io.ReadFull(file, lens[:]); err != nil {
+		return nil, latestBinaryValueFrame{}, err
+	}
+	keyLen := binary.BigEndian.Uint32(lens[:4])
+	frame, err := latestBinaryValueFrameFromStoredLength(binary.BigEndian.Uint32(lens[4:]), compressedValues)
+	if err != nil {
+		return nil, latestBinaryValueFrame{}, err
+	}
+	keyOffset := offset + 8
+	if _, err := latestBinaryBoundedRange("entry key", keyOffset, uint64(keyLen), maxEnd); err != nil {
+		return nil, latestBinaryValueFrame{}, err
+	}
+	key := make([]byte, keyLen)
+	if keyLen > 0 {
+		if _, err := io.ReadFull(file, key); err != nil {
+			return nil, latestBinaryValueFrame{}, err
+		}
+	}
+	return key, frame, nil
+}
+
+func readLatestBinaryEntryKeyAt(r io.ReaderAt, offset, maxEnd uint64, compressedValues bool) ([]byte, latestBinaryValueFrame, error) {
 	if offset > math.MaxInt64 {
-		return nil, 0, fmt.Errorf("snapshots: latest binary offset too large: %d", offset)
+		return nil, latestBinaryValueFrame{}, fmt.Errorf("snapshots: latest binary offset too large: %d", offset)
+	}
+	if _, err := latestBinaryBoundedRange("entry header", offset, 8, maxEnd); err != nil {
+		return nil, latestBinaryValueFrame{}, err
 	}
 	var lens [8]byte
 	if _, err := r.ReadAt(lens[:], int64(offset)); err != nil {
-		return nil, 0, err
+		return nil, latestBinaryValueFrame{}, err
 	}
 	keyLen := binary.BigEndian.Uint32(lens[:4])
-	valueLen := binary.BigEndian.Uint32(lens[4:])
-	key := make([]byte, keyLen)
-	if _, err := r.ReadAt(key, int64(offset)+8); err != nil {
-		return nil, 0, err
+	frame, err := latestBinaryValueFrameFromStoredLength(binary.BigEndian.Uint32(lens[4:]), compressedValues)
+	if err != nil {
+		return nil, latestBinaryValueFrame{}, err
 	}
-	return key, valueLen, nil
+	keyOffset := offset + 8
+	if _, err := latestBinaryBoundedRange("entry key", keyOffset, uint64(keyLen), maxEnd); err != nil {
+		return nil, latestBinaryValueFrame{}, err
+	}
+	if keyOffset > math.MaxInt64 {
+		return nil, latestBinaryValueFrame{}, fmt.Errorf("snapshots: latest binary key offset too large: %d", keyOffset)
+	}
+	key := make([]byte, keyLen)
+	if keyLen > 0 {
+		if _, err := r.ReadAt(key, int64(keyOffset)); err != nil {
+			return nil, latestBinaryValueFrame{}, err
+		}
+	}
+	return key, frame, nil
 }
 
-func readLatestBinaryEntryAt(r io.ReaderAt, offset uint64) ([]byte, []byte, error) {
-	key, valueLen, err := readLatestBinaryEntryKeyAt(r, offset)
+func readLatestBinaryEntryAt(r io.ReaderAt, offset, maxEnd uint64, compressedValues bool) ([]byte, []byte, error) {
+	key, frame, err := readLatestBinaryEntryKeyAt(r, offset, maxEnd, compressedValues)
 	if err != nil {
 		return nil, nil, err
 	}
 	valueOffset := offset + 8 + uint64(len(key))
+	if _, err := latestBinaryBoundedRange("entry value", valueOffset, uint64(frame.encodedLen), maxEnd); err != nil {
+		return nil, nil, err
+	}
 	if valueOffset > math.MaxInt64 {
 		return nil, nil, fmt.Errorf("snapshots: latest binary value offset too large: %d", valueOffset)
 	}
-	value := make([]byte, valueLen)
-	if _, err := r.ReadAt(value, int64(valueOffset)); err != nil {
+	if err := validateLatestBinaryValueFrame(frame); err != nil {
+		return nil, nil, err
+	}
+	encoded := make([]byte, frame.encodedLen)
+	if frame.encodedLen > 0 {
+		if _, err := r.ReadAt(encoded, int64(valueOffset)); err != nil {
+			return nil, nil, err
+		}
+	}
+	value, err := decodeLatestBinaryValue(encoded, frame)
+	if err != nil {
 		return nil, nil, err
 	}
 	return key, value, nil
 }
 
-func readLatestBinaryEntryAtWithNext(r io.ReaderAt, offset uint64) ([]byte, []byte, uint64, error) {
-	key, valueLen, err := readLatestBinaryEntryKeyAt(r, offset)
+func readLatestBinaryEntryAtWithNext(r io.ReaderAt, offset, maxEnd uint64, compressedValues bool) ([]byte, []byte, uint64, error) {
+	key, frame, err := readLatestBinaryEntryKeyAt(r, offset, maxEnd, compressedValues)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 	valueOffset := offset + 8 + uint64(len(key))
+	next, err := latestBinaryBoundedRange("entry value", valueOffset, uint64(frame.encodedLen), maxEnd)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	if valueOffset > math.MaxInt64 {
 		return nil, nil, 0, fmt.Errorf("snapshots: latest binary value offset too large: %d", valueOffset)
 	}
-	value := make([]byte, valueLen)
-	if _, err := r.ReadAt(value, int64(valueOffset)); err != nil {
+	if err := validateLatestBinaryValueFrame(frame); err != nil {
 		return nil, nil, 0, err
 	}
-	return key, value, valueOffset + uint64(valueLen), nil
+	encoded := make([]byte, frame.encodedLen)
+	if frame.encodedLen > 0 {
+		if _, err := r.ReadAt(encoded, int64(valueOffset)); err != nil {
+			return nil, nil, 0, err
+		}
+	}
+	value, err := decodeLatestBinaryValue(encoded, frame)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	return key, value, next, nil
 }
 
-func latestBinaryAccessorLowerBound(r io.ReaderAt, offsets []uint64, key []byte) (int, bool, error) {
+func validateLatestBinaryEntry(dataset SegmentDataset, key, value []byte) error {
+	return validateLatestEntry(dataset, LatestEntry{
+		Key:   key,
+		Value: value,
+	})
+}
+
+func latestBinaryAccessorLowerBound(r io.ReaderAt, offsets []uint64, key []byte, maxEnd uint64, compressedValues bool) (int, bool, error) {
 	var foundErr error
 	i := sort.Search(len(offsets), func(i int) bool {
 		if foundErr != nil {
 			return true
 		}
-		entryKey, _, err := readLatestBinaryEntryKeyAt(r, offsets[i])
+		entryKey, _, err := readLatestBinaryEntryKeyAt(r, offsets[i], maxEnd, compressedValues)
 		if err != nil {
 			foundErr = err
 			return true
@@ -1704,7 +1914,7 @@ func latestBinaryAccessorLowerBound(r io.ReaderAt, offsets []uint64, key []byte)
 	return i, i < len(offsets), nil
 }
 
-func readLatestBinaryBTreeEntryAt(r io.ReaderAt, index uint64) (latestBinaryBTreeEntry, bool, error) {
+func readLatestBinaryBTreeEntryAt(r io.ReaderAt, index, fileSize uint64) (latestBinaryBTreeEntry, bool, error) {
 	offset, err := readLatestBinaryBTreeEntryOffsetAt(r, index)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -1712,7 +1922,7 @@ func readLatestBinaryBTreeEntryAt(r io.ReaderAt, index uint64) (latestBinaryBTre
 		}
 		return latestBinaryBTreeEntry{}, false, err
 	}
-	entry, err := readLatestBinaryBTreeEntryAtOffset(r, offset)
+	entry, err := readLatestBinaryBTreeEntryAtOffset(r, offset, fileSize)
 	return entry, true, err
 }
 
@@ -1727,9 +1937,12 @@ func readLatestBinaryBTreeEntryOffsetAt(r io.ReaderAt, index uint64) (uint64, er
 	return binary.BigEndian.Uint64(raw[:]), nil
 }
 
-func readLatestBinaryBTreeEntryAtOffset(r io.ReaderAt, offset uint64) (latestBinaryBTreeEntry, error) {
+func readLatestBinaryBTreeEntryAtOffset(r io.ReaderAt, offset, fileSize uint64) (latestBinaryBTreeEntry, error) {
 	if offset > math.MaxInt64 {
 		return latestBinaryBTreeEntry{}, fmt.Errorf("snapshots: latest btree offset too large: %d", offset)
+	}
+	if _, err := latestBinaryBoundedRange("btree entry header", offset, 20, fileSize); err != nil {
+		return latestBinaryBTreeEntry{}, err
 	}
 	var head [20]byte
 	if _, err := r.ReadAt(head[:], int64(offset)); err != nil {
@@ -1737,12 +1950,17 @@ func readLatestBinaryBTreeEntryAtOffset(r io.ReaderAt, offset uint64) (latestBin
 	}
 	keyLen := binary.BigEndian.Uint32(head[:4])
 	keyOffset := offset + uint64(len(head))
+	if _, err := latestBinaryBoundedRange("btree entry key", keyOffset, uint64(keyLen), fileSize); err != nil {
+		return latestBinaryBTreeEntry{}, err
+	}
 	if keyOffset > math.MaxInt64 {
 		return latestBinaryBTreeEntry{}, fmt.Errorf("snapshots: latest btree key offset too large: %d", keyOffset)
 	}
 	key := make([]byte, keyLen)
-	if _, err := r.ReadAt(key, int64(keyOffset)); err != nil {
-		return latestBinaryBTreeEntry{}, err
+	if keyLen > 0 {
+		if _, err := r.ReadAt(key, int64(keyOffset)); err != nil {
+			return latestBinaryBTreeEntry{}, err
+		}
 	}
 	return latestBinaryBTreeEntry{
 		key:           key,
@@ -1751,7 +1969,7 @@ func readLatestBinaryBTreeEntryAtOffset(r io.ReaderAt, offset uint64) (latestBin
 	}, nil
 }
 
-func latestBinaryBTreeFloor(segment io.ReaderAt, btree io.ReaderAt, count uint64, key []byte) (latestBinaryBTreeEntry, bool, error) {
+func latestBinaryBTreeFloor(segment io.ReaderAt, btree io.ReaderAt, count uint64, key []byte, btreeFileSize uint64) (latestBinaryBTreeEntry, bool, error) {
 	if count == 0 {
 		return latestBinaryBTreeEntry{}, false, nil
 	}
@@ -1760,7 +1978,7 @@ func latestBinaryBTreeFloor(segment io.ReaderAt, btree io.ReaderAt, count uint64
 		if foundErr != nil {
 			return true
 		}
-		entry, ok, err := readLatestBinaryBTreeEntryAt(btree, uint64(i))
+		entry, ok, err := readLatestBinaryBTreeEntryAt(btree, uint64(i), btreeFileSize)
 		if err != nil {
 			foundErr = err
 			return true
@@ -1775,7 +1993,7 @@ func latestBinaryBTreeFloor(segment io.ReaderAt, btree io.ReaderAt, count uint64
 		return latestBinaryBTreeEntry{}, false, foundErr
 	}
 	if i == 0 {
-		first, ok, err := readLatestBinaryBTreeEntryAt(btree, 0)
+		first, ok, err := readLatestBinaryBTreeEntryAt(btree, 0, btreeFileSize)
 		if err != nil || !ok {
 			return latestBinaryBTreeEntry{}, false, err
 		}
@@ -1784,7 +2002,7 @@ func latestBinaryBTreeFloor(segment io.ReaderAt, btree io.ReaderAt, count uint64
 		}
 		return first, true, nil
 	}
-	entry, ok, err := readLatestBinaryBTreeEntryAt(btree, uint64(i-1))
+	entry, ok, err := readLatestBinaryBTreeEntryAt(btree, uint64(i-1), btreeFileSize)
 	if err != nil || !ok {
 		return latestBinaryBTreeEntry{}, false, err
 	}
@@ -1794,7 +2012,7 @@ func latestBinaryBTreeFloor(segment io.ReaderAt, btree io.ReaderAt, count uint64
 	return latestBinaryBTreeEntry{}, false, fmt.Errorf("snapshots: latest btree entry has invalid segment offset %d", entry.segmentOffset)
 }
 
-func latestBinaryAccessorLowerBoundFile(segment io.ReaderAt, accessor io.ReaderAt, count uint64, key []byte) (int, bool, error) {
+func latestBinaryAccessorLowerBoundFile(segment io.ReaderAt, accessor io.ReaderAt, count uint64, key []byte, maxEnd uint64, compressedValues bool) (int, bool, error) {
 	var foundErr error
 	i := sort.Search(int(count), func(i int) bool {
 		if foundErr != nil {
@@ -1805,7 +2023,7 @@ func latestBinaryAccessorLowerBoundFile(segment io.ReaderAt, accessor io.ReaderA
 			foundErr = err
 			return true
 		}
-		entryKey, _, err := readLatestBinaryEntryKeyAt(segment, offset)
+		entryKey, _, err := readLatestBinaryEntryKeyAt(segment, offset, maxEnd, compressedValues)
 		if err != nil {
 			foundErr = err
 			return true
@@ -1829,19 +2047,44 @@ func readLatestBinaryAccessorOffsetAt(r io.ReaderAt, i uint64) (uint64, error) {
 	return binary.BigEndian.Uint64(raw[:]), nil
 }
 
-func readLatestBinaryValueBytes(r io.Reader, valueLen uint32) ([]byte, error) {
-	value := make([]byte, valueLen)
-	if _, err := io.ReadFull(r, value); err != nil {
+func readLatestBinaryValueBytes(file *os.File, frame latestBinaryValueFrame, maxEnd uint64) ([]byte, error) {
+	pos, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
 		return nil, err
 	}
-	return value, nil
+	if pos < 0 {
+		return nil, fmt.Errorf("snapshots: latest binary negative offset %d", pos)
+	}
+	if _, err := latestBinaryBoundedRange("entry value", uint64(pos), uint64(frame.encodedLen), maxEnd); err != nil {
+		return nil, err
+	}
+	if err := validateLatestBinaryValueFrame(frame); err != nil {
+		return nil, err
+	}
+	encoded := make([]byte, frame.encodedLen)
+	if frame.encodedLen > 0 {
+		if _, err := io.ReadFull(file, encoded); err != nil {
+			return nil, err
+		}
+	}
+	return decodeLatestBinaryValue(encoded, frame)
 }
 
-func skipLatestBinaryValue(file *os.File, valueLen uint32) error {
-	if valueLen == 0 {
+func skipLatestBinaryValue(file *os.File, frame latestBinaryValueFrame, maxEnd uint64) error {
+	if frame.encodedLen == 0 {
 		return nil
 	}
-	_, err := file.Seek(int64(valueLen), io.SeekCurrent)
+	pos, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	if pos < 0 {
+		return fmt.Errorf("snapshots: latest binary negative offset %d", pos)
+	}
+	if _, err := latestBinaryBoundedRange("entry value", uint64(pos), uint64(frame.encodedLen), maxEnd); err != nil {
+		return err
+	}
+	_, err = file.Seek(int64(frame.encodedLen), io.SeekCurrent)
 	return err
 }
 
@@ -1856,7 +2099,7 @@ func collectLatestBinaryOffsets(file *os.File, header latestBinaryHeader) ([]uin
 		if pos < 0 {
 			return nil, fmt.Errorf("snapshots: latest binary negative offset %d", pos)
 		}
-		key, valueLen, err := readLatestBinaryEntryKey(file)
+		key, valueLen, err := readLatestBinaryEntryKey(file, header.fileSize, header.compressedValues)
 		if err != nil {
 			return nil, fmt.Errorf("snapshots: decode latest binary key %d: %w", i, err)
 		}
@@ -1864,7 +2107,7 @@ func collectLatestBinaryOffsets(file *os.File, header latestBinaryHeader) ([]uin
 			return nil, errors.New("snapshots: latest binary entries are not strictly sorted")
 		}
 		offsets = append(offsets, uint64(pos))
-		if err := skipLatestBinaryValue(file, valueLen); err != nil {
+		if err := skipLatestBinaryValue(file, valueLen, header.fileSize); err != nil {
 			return nil, err
 		}
 		prev = key
@@ -1872,19 +2115,26 @@ func collectLatestBinaryOffsets(file *os.File, header latestBinaryHeader) ([]uin
 	return offsets, nil
 }
 
-func decodeLatestBinaryEntry(data []byte) (LatestEntry, []byte, error) {
+func decodeLatestBinaryEntry(data []byte, compressedValues bool) (LatestEntry, []byte, error) {
 	if len(data) < 8 {
 		return LatestEntry{}, nil, io.ErrUnexpectedEOF
 	}
 	keyLen := binary.BigEndian.Uint32(data[:4])
-	valueLen := binary.BigEndian.Uint32(data[4:8])
-	end := 8 + uint64(keyLen) + uint64(valueLen)
+	frame, err := latestBinaryValueFrameFromStoredLength(binary.BigEndian.Uint32(data[4:8]), compressedValues)
+	if err != nil {
+		return LatestEntry{}, nil, err
+	}
+	end := 8 + uint64(keyLen) + uint64(frame.encodedLen)
 	if uint64(len(data)) < end {
 		return LatestEntry{}, nil, io.ErrUnexpectedEOF
 	}
+	value, err := decodeLatestBinaryValue(data[8+keyLen:end], frame)
+	if err != nil {
+		return LatestEntry{}, nil, err
+	}
 	entry := LatestEntry{
 		Key:   append([]byte(nil), data[8:8+keyLen]...),
-		Value: append([]byte(nil), data[8+keyLen:end]...),
+		Value: append([]byte(nil), value...),
 	}
 	return entry, data[end:], nil
 }
@@ -1924,6 +2174,103 @@ func validateLatestBinaryAccessorMatchesSegment(path string, ref SegmentRef, seg
 	}
 	if accessor.count != segment.count {
 		return fmt.Errorf("snapshots: latest binary accessor for %q count %d, want %d", path, accessor.count, segment.count)
+	}
+	return nil
+}
+
+func verifyLatestBinaryAccessorOffsetsAgainstSegment(path string, segment *os.File, segmentHeader latestBinaryHeader, accessor *os.File, accessorHeader latestBinaryAccessorHeader) error {
+	if err := validateLatestBinaryAccessorMatchesSegment(path, SegmentRef{
+		Dataset:   segmentHeader.dataset,
+		Domain:    segmentHeader.domain,
+		Kind:      SegmentLatest,
+		FromTxNum: segmentHeader.fromTxNum,
+		ToTxNum:   segmentHeader.toTxNum,
+	}, segmentHeader, accessorHeader); err != nil {
+		return err
+	}
+	if _, err := segment.Seek(latestBinaryHeaderSize, io.SeekStart); err != nil {
+		return err
+	}
+	for i := uint64(0); i < segmentHeader.count; i++ {
+		pos, err := segment.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		if pos < 0 {
+			return fmt.Errorf("snapshots: latest binary segment %q negative offset %d", path, pos)
+		}
+		want := uint64(pos)
+		got, err := readLatestBinaryAccessorOffsetAt(accessor, i)
+		if err != nil {
+			return fmt.Errorf("snapshots: decode latest binary accessor offset %d: %w", i, err)
+		}
+		if got != want {
+			return fmt.Errorf("snapshots: latest binary accessor for %q offset %d=%d, want segment record offset %d", path, i, got, want)
+		}
+		if _, valueLen, err := readLatestBinaryEntryKey(segment, segmentHeader.fileSize, segmentHeader.compressedValues); err != nil {
+			return fmt.Errorf("snapshots: decode latest binary key %d: %w", i, err)
+		} else if err := skipLatestBinaryValue(segment, valueLen, segmentHeader.fileSize); err != nil {
+			return fmt.Errorf("snapshots: skip latest binary value %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func verifyLatestBinaryBTreeAgainstSegment(path string, segment *os.File, segmentHeader latestBinaryHeader, btree *os.File, btreeHeader latestBinaryBTreeHeader) error {
+	if err := validateLatestBinaryCompanionMatchesSegment(path, SegmentRef{
+		Dataset:   segmentHeader.dataset,
+		Domain:    segmentHeader.domain,
+		Kind:      SegmentLatest,
+		FromTxNum: segmentHeader.fromTxNum,
+		ToTxNum:   segmentHeader.toTxNum,
+	}, segmentHeader, btreeHeader.latestBinaryAccessorHeader, SegmentBTree); err != nil {
+		return err
+	}
+	var expectedEntries uint64
+	if segmentHeader.count > 0 {
+		expectedEntries = (segmentHeader.count + btreeHeader.blockSize - 1) / btreeHeader.blockSize
+	}
+	if btreeHeader.count != expectedEntries {
+		return fmt.Errorf("snapshots: latest binary btree for %q entries=%d, want %d for %d segment records and block size %d", path, btreeHeader.count, expectedEntries, segmentHeader.count, btreeHeader.blockSize)
+	}
+	if _, err := segment.Seek(latestBinaryHeaderSize, io.SeekStart); err != nil {
+		return err
+	}
+	var btreeIndex uint64
+	for ordinal := uint64(0); ordinal < segmentHeader.count; ordinal++ {
+		pos, err := segment.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		if pos < 0 {
+			return fmt.Errorf("snapshots: latest binary segment %q negative offset %d", path, pos)
+		}
+		key, valueLen, err := readLatestBinaryEntryKey(segment, segmentHeader.fileSize, segmentHeader.compressedValues)
+		if err != nil {
+			return fmt.Errorf("snapshots: decode latest binary key %d: %w", ordinal, err)
+		}
+		if ordinal%btreeHeader.blockSize == 0 {
+			entry, ok, err := readLatestBinaryBTreeEntryAt(btree, btreeIndex, btreeHeader.fileSize)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("snapshots: latest binary btree for %q missing entry %d", path, btreeIndex)
+			}
+			if entry.ordinal != ordinal {
+				return fmt.Errorf("snapshots: latest binary btree for %q entry %d ordinal=%d, want %d", path, btreeIndex, entry.ordinal, ordinal)
+			}
+			if entry.segmentOffset != uint64(pos) {
+				return fmt.Errorf("snapshots: latest binary btree for %q entry %d offset=%d, want segment record offset %d", path, btreeIndex, entry.segmentOffset, uint64(pos))
+			}
+			if !bytes.Equal(entry.key, key) {
+				return fmt.Errorf("snapshots: latest binary btree for %q entry %d key mismatch", path, btreeIndex)
+			}
+			btreeIndex++
+		}
+		if err := skipLatestBinaryValue(segment, valueLen, segmentHeader.fileSize); err != nil {
+			return fmt.Errorf("snapshots: skip latest binary value %d: %w", ordinal, err)
+		}
 	}
 	return nil
 }

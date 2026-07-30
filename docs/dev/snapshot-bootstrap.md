@@ -1,0 +1,368 @@
+# Verified Snapshot Bootstrap
+
+This runbook covers the operator flow for bootstrapping `gtron` from signed
+state and chain-freezer snapshots. It is intentionally explicit: a node must
+trust a catalog signer before it trusts any remote manifest path or segment
+file.
+
+## Inputs
+
+- Snapshot URL: the HTTP(S) directory containing `snapshot-catalog.json`,
+  `manifest.json`, and all referenced segment files. Pass it with
+  `--snapshot.url` or set `GTRON_SNAPSHOT_URL` for repeated fetch/bootstrap
+  runs.
+- Trusted catalog keys: Ed25519 public keys for snapshot catalogs. Pass them
+  with `--snapshot.trusted-key` / `--snapshot.trusted-key-file` or set
+  `GTRON_SNAPSHOT_TRUSTED_KEY` / `GTRON_SNAPSHOT_TRUSTED_KEY_FILE`.
+- Chain identity: selected by `--testnet`, `--genesis`, and optional
+  `--snapshot.fork-config-hash` or `GTRON_SNAPSHOT_FORK_CONFIG_HASH`.
+- Fetch concurrency: `snapshot fetch` and `snapshot bootstrap` download
+  catalog/manifest serially for trust establishment, then fetch segment files
+  concurrently. Use `--snapshot.fetch.concurrency N` to tune the segment worker
+  count; `0` keeps the built-in default.
+- Interrupted segment downloads are retained as checksum-bound local partial
+  files. A retry sends HTTP Range requests for the missing suffix, validates the
+  exact `Content-Range`, length, and final SHA-256 before publishing the file.
+  Servers without Range support fall back to a verified full-file download.
+
+Official mainnet/testnet URLs and signer keys are release artifacts. Until they
+are published, operators should pass their deployment-specific URL and key set
+explicitly.
+
+```bash
+export GTRON_SNAPSHOT_URL=https://snapshots.example.invalid/go-tron/mainnet/latest
+export GTRON_SNAPSHOT_TRUSTED_KEY_FILE=/path/to/snapshot-trusted-keys.txt
+# Only needed when the catalog carries forkConfigHash:
+export GTRON_SNAPSHOT_FORK_CONFIG_HASH=sha256:<hex>
+```
+
+## Trusted Key File
+
+Use `--snapshot.trusted-key-file` when more than one signer is trusted or during
+rotation. The file accepts one or more keys per line, comma-separated entries,
+blank lines, and `#` comments.
+
+```text
+# current production signer
+ed25519:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+# rotation overlap: old signer remains accepted until the next catalog cutover
+ed25519:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+```
+
+Key rotation policy:
+
+1. Add the next signer to the key file before publishing catalogs signed by it.
+2. Publish catalogs signed by either old or new signer during the overlap.
+3. After every node has had time to update the key file, remove the retired key.
+4. Never reuse retired signer keys for future snapshot catalogs.
+
+## Preflight Local Snapshot
+
+After `snapshot fetch`, or before restoring a snapshot copied from another host:
+
+```bash
+gtron snapshot verify \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+```
+
+This verifies the signed catalog, chain identity, manifest checksum, registered
+segment families, file sizes, checksums, and format-aware segment checks. It
+does not write chain state or freezer data.
+
+## Storage Placement
+
+`--snapshot.dir` is a single logical snapshot root. The manifest and catalog
+remain at its root and every segment path is relative to it. Operators can use
+directory mounts or symlinks below that root to place cold immutable data on
+capacity storage while keeping mutable state and ETL work on fast local disk.
+
+For example, prepare the layout before fetching or building segments:
+
+```bash
+SNAPSHOT_ROOT=/fast/gtron/state-snapshots
+mkdir -p "$SNAPSHOT_ROOT" /cold/gtron/{history,chain,trace,log}
+ln -s /cold/gtron/history "$SNAPSHOT_ROOT/history"
+ln -s /cold/gtron/chain "$SNAPSHOT_ROOT/chain"
+ln -s /cold/gtron/trace "$SNAPSHOT_ROOT/trace"
+ln -s /cold/gtron/log "$SNAPSHOT_ROOT/log"
+```
+
+- Keep `manifest.json`, `snapshot-catalog.json`, `latest/`, and `commitment/`
+  on the fast snapshot root. `latest/` and `commitment/` participate in normal
+  state reads and runtime rebuilds.
+- `history/` contains archive state-history segments and their accessors;
+  `chain/` contains freezer and chain-index segments; `trace/` contains balance
+  trace segments; `log/` contains event-log and section-bloom segments. These
+  immutable families are suitable for capacity storage once their latency meets
+  the archive RPC workload.
+- Put `--snapshot.etl.tempdir`, `--sync.etl.tempdir`, and any
+  `--db.etl.tempdir` on fast local storage. ETL collectors create sorted runs
+  there and can temporarily require substantially more space than their final
+  segment.
+
+Do not move individual segment files after manifest publication. Move or mount
+the complete family directory, preserve the relative paths recorded in the
+manifest, and use the same `--snapshot.dir` for the node, snapshot commands,
+and DB maintenance commands. `--snapshot.reset` removes the entire configured
+snapshot root, so never point it at a shared capacity volume containing another
+node's segments.
+
+## Fetch Then Restore
+
+For a fresh datadir where you want to inspect the downloaded files first:
+
+```bash
+gtron snapshot fetch \
+  --datadir /path/to/datadir \
+  --snapshot.reset \
+  --snapshot.fetch.concurrency 8
+
+gtron snapshot verify \
+  --datadir /path/to/datadir
+
+gtron snapshot restore \
+  --datadir /path/to/datadir \
+  --snapshot.etl.tempdir /path/to/fast/tmp
+```
+
+`snapshot restore` refuses non-genesis datadirs and non-empty freezer tables. It
+also preflights the signed manifest's chain-freezer segments against the current
+ancient heads before restoring latest state or history, so a non-contiguous
+freezer range fails before hot state is written. After that it restores state
+domains and state-domain history, installs chain-freezer rows, verifies the
+canonical boundary block, then advances canonical Headers/Bodies/Execution/
+Commitment/Finish stages only after chain data proves the boundary hash.
+
+## Optional Archive Trace Sidecars
+
+Archive operators that enable balance-history capture can publish cold
+account/balance trace sidecars with the same signed catalog:
+
+```bash
+gtron db audit-balance-traces \
+  --datadir /path/to/datadir \
+  --db.from-block 1 \
+  --db.to-block 12345678
+
+gtron db backfill-balance-traces \
+  --datadir /path/to/datadir \
+  --db.from-block 1 \
+  --db.to-block 12345678 \
+  --db.replay.dir /path/to/datadir/gtron/balance-trace-replay \
+  --db.etl.tempdir /path/to/fast/tmp
+
+# Optional tail-only acceleration when the replay DB can start from a verified
+# snapshot boundary instead of genesis. Set --db.from-block to boundary+1.
+gtron db backfill-balance-traces \
+  --datadir /path/to/datadir \
+  --db.from-block 12345679 \
+  --db.to-block 13000000 \
+  --db.replay.dir /path/to/datadir/gtron/balance-trace-replay \
+  --db.etl.tempdir /path/to/fast/tmp \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+
+gtron snapshot build-balance-traces \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.from-block 1 \
+  --snapshot.to-block 12345678 \
+  --snapshot.etl.tempdir /path/to/fast/tmp
+
+gtron snapshot build-section-blooms \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.from-block 1 \
+  --snapshot.to-block 12345678 \
+  --snapshot.etl.tempdir /path/to/fast/tmp
+
+# Equivalent one-pass manifest integration for both derived sidecars.
+gtron snapshot build-derived-indexes \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.from-block 1 \
+  --snapshot.to-block 12345678 \
+  --snapshot.etl.tempdir /path/to/fast/tmp
+
+gtron snapshot publish-catalog \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.signing-key-file /secure/path/catalog-signing-key.hex
+
+# For automated publish jobs, GTRON_SNAPSHOT_SIGNING_KEY_FILE is equivalent.
+
+# A snap-mode node can sign each changed runtime manifest after its cold
+# build/compaction/prune lifecycle completes. This option is file-only so the
+# private key is not exposed through the command line.
+gtron --datadir /path/to/datadir \
+  --prune.mode snap \
+  --snapshot.catalog-signing-key-file /secure/path/catalog-signing-key.hex
+
+# GTRON_SNAPSHOT_CATALOG_SIGNING_KEY_FILE is the equivalent environment setting.
+
+gtron snapshot prune-retired \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots
+```
+
+`snapshot build-balance-traces` repeats the coverage audit and refuses to build
+if any canonical block in the requested range is missing a `BlockBalanceTrace`
+row or if the trace payload identifies a different block hash/number. Generate
+or repair the hot trace rows first; `gtron db backfill-balance-traces` does
+this by replaying canonical blocks into an isolated replay database and then
+copying only the generated trace rows back into the operator datadir through
+the sorted ETL collector. The cold sidecar is only safe when the source range is
+complete. Maintenance commands open the same snapshot-aware chain view as
+runtime startup, so replay backfill treats matching cold `balance-trace`
+sidecar rows as existing target rows and does not rewrite them into the hot
+Pebble store after trace pruning.
+
+Use `--db.replay.dir` for long backfills so interrupted runs can resume from
+the isolated replay database head. Use `--db.replay.tempdir` for one-shot runs
+that should discard the replay database after the command exits. If a verified
+state snapshot is available, pass `--snapshot.dir` plus the trusted catalog key
+flags to seed an empty/genesis-only replay database from the signed snapshot
+boundary before replay starts. Snapshot seeding can only backfill blocks after
+that boundary; it does not reconstruct balance traces for the already-restored
+prefix. The seed path restores latest state and state-domain history, verifies
+the canonical boundary against local chain data, writes the boundary state
+root/head, and copies the recent block/TAPOS window so the first post-boundary
+block can validate without replaying from genesis.
+
+`snapshot build-section-blooms` freezes existing java-tron-compatible `sb-`
+rows for the source block range. It does not rebuild missing bloom rows; use
+`gtron db rebuild-section-blooms` first when the hot bloom index is absent or
+incomplete.
+
+`snapshot build-derived-indexes` builds the balance-trace, section-bloom, and
+event-log sidecars together and integrates them into a single manifest
+generation. It uses the same balance-trace coverage audit as
+`snapshot build-balance-traces`; run the specific single-dataset commands when
+only one sidecar needs to be refreshed. Event-log builds advance the
+`SnapshotEventLogBuild` stage as a hash-bound row at the highest source block
+covered by a continuous block-1 prefix of `event-log` segments and matching
+`event-log-index` sidecars. Snapshot restore/bootstrap derives the same stage
+from verified manifest indexed event-log coverage, combining adjacent index
+sidecars into one continuous block-1 boundary. Minimal-mode freezer tail pruning
+verifies that stage and continuous cold chain-freezer, chain-index, and indexed
+event-log coverage before hiding or reclaiming non-genesis local freezer rows.
+When a `chain-freezer-accessor` sidecar is present, cold chain-freezer coverage
+also verifies its offsets against the freezer segment contents. Event-log
+coverage starts at block 1; genesis-only tail movement remains guarded by the
+cold chain-freezer plus chain-index coverage check.
+`gtron db stage-status --db.stage.verify` also reopens the local snapshot
+manifest and verifies indexed cold coverage for event-log build and freezer-tail
+prune stages by comparing `event-log-index` postings with the active event-log
+segments, and verifies the freezer-tail prune stage against the same
+chain-freezer, chain-index, and non-genesis indexed event-log coverage required
+before minimal mode can hide or reclaim local freezer rows. Genesis-only
+tail-prune progress is checked against chain-freezer plus chain-index coverage.
+It also verifies chain
+lookup, section-bloom, and balance-trace coverage, so operators can detect
+stale stage rows after sidecar files are moved or corrupted. Balance-trace
+stage verification starts at block 1 because genesis has no replayed
+`BlockBalanceTrace` row. The same gate compares manifest-backed snapshot stage
+rows
+(`SnapshotLatest`, `SnapshotHistory`, `SnapshotAccessor`,
+`SnapshotCommitmentFlush`, and `SnapshotHotPrune`) with the active manifest
+`progress` section, so DB stage watermarks cannot move ahead of the snapshot
+artifacts that prove them.
+
+`snapshot prune-retired` removes physical files listed in the manifest's
+`retired` section after verifying that all active segments are still present.
+It does not rewrite `manifest.json` or `snapshot-catalog.json`, so an already
+signed catalog continues to authenticate the active snapshot view. Run it after
+segment replacement or compaction when the retired files are no longer needed
+for local audit. The runtime snapshot/prune lifecycle also runs the same
+retired-file cleanup after cold/hot prune hooks in pruning modes that enable
+snapshot-backed cold storage reclamation.
+
+`snapshot fetch` and `snapshot verify` perform registered format checks for
+`balance-trace` and `section-bloom` segments. At runtime, `ChainDB` falls
+through to the snapshot manager for block/account balance trace reads and
+section-bloom reads when hot rows are absent.
+
+After a signed catalog has been fetched and verified, hot trace and bloom rows
+covered by cold segments can be reclaimed:
+
+```bash
+gtron snapshot prune-balance-traces \
+  --datadir /path/to/datadir \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+
+gtron snapshot prune-section-blooms \
+  --datadir /path/to/datadir \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+```
+
+The prune commands recheck the signed catalog and compare each covered hot row
+against the cold segment before deleting anything. Balance-trace pruning also
+requires a cold block-trace row for every block in the segment range before it
+can advance `SnapshotBalanceTracePrune`; a sparse trace sidecar is rejected
+instead of being treated as covered. Section-bloom cold segments must cover
+complete 2048-block java-tron bloom sections before they can enter the catalog,
+so a partial sidecar cannot claim coverage for the rest of its section. Runtime
+snapshot/prune lifecycle also runs balance-trace and section-bloom pruning with
+persisted `SnapshotBalanceTracePrune` and `SnapshotSectionBloomPrune` stages, so
+already processed cold segments are skipped after restart. The manual prune
+commands update the same hash-bound stages, and
+`gtron db stage-status --db.stage.verify` rejects unbound or mismatched rows for
+these cold derived-prune boundaries.
+
+## One-Step Bootstrap
+
+For a fresh node, bootstrap and continue directly into normal P2P sync in one
+process:
+
+```bash
+gtron \
+  --datadir /path/to/datadir \
+  --snapshot.bootstrap \
+  --snapshot.reset \
+  --snapshot.fetch.concurrency 8
+```
+
+`--snapshot.bootstrap` is opt-in. Before any fetch or `--snapshot.reset` side
+effect, it rejects a non-genesis chain database or a non-empty freezer. It does
+not support `--dev`. After the verified restore completes, startup continues
+from the installed canonical boundary and normal sync imports the recent tail.
+
+The equivalent two-process operator flow remains available:
+
+For the normal operator path:
+
+```bash
+gtron snapshot bootstrap \
+  --datadir /path/to/datadir \
+  --snapshot.reset \
+  --snapshot.fetch.concurrency 8
+```
+
+Pass `--snapshot.url`, `--snapshot.trusted-key-file`, or
+`--snapshot.fork-config-hash` on the command line when a one-off run should
+override the corresponding `GTRON_SNAPSHOT_*` environment default.
+
+After bootstrap completes, start `gtron` with the same `--snapshot.dir` when
+the snapshot directory is outside the datadir. Sync resumes from the verified
+snapshot/freezer boundary and imports the recent tail from peers.
+
+Use that same `--snapshot.dir` for `gtron db storage-alerts`, `gtron db
+stage-status`, freezer alerts, and DB rebuild/audit commands. Those commands
+open the cold snapshot readers to verify coverage and to read pruned archive
+data.
+
+## Safety Notes
+
+- Use `--snapshot.reset` only for the snapshot directory, not for chain data.
+  The command deletes the local snapshot directory before fetching the current
+  remote catalog, including any resumable partial files.
+- Keep `archive` mode for RPC providers that need full historical state APIs.
+  `full`, `snap`, `blocks`, and `minimal` may prune hot rows once verified cold
+  coverage exists.
+- If the catalog carries `forkConfigHash`, pass the matching
+  `--snapshot.fork-config-hash sha256:<hex>` so a snapshot built for another
+  fork configuration cannot install.

@@ -111,8 +111,15 @@ Either should land before:
   `change_delegation`); added `BlockChain.Close()` for graceful-shutdown
   flush up to solidified, wired into `cmd/gtron/main.go` ahead of
   `db.Close()`.
+- **Slice 4**: removed producer-side construction writes from the durable
+  path. `core.BuildBlock` now runs actuator/reward/proposal side effects
+  against a throwaway `blockbuffer.Buffer` layered over `bc.buffer`; the
+  built block is still re-applied by `InsertBlock`, and that applyBlock pass
+  remains the single canonical writer. `core/block_builder_test.go` pins both
+  the build-only "no persistent reward/allowance side effects" property and
+  the build-then-insert no-double-reward property.
 
-## Known remaining gaps (post slice 3)
+## Known remaining gaps (post slice 4)
 
 - **Process crash between applyBlock and the next solidified flush**
   (`kill -9` / unhandled panic). The current `BlockChain.Close()` is
@@ -122,13 +129,3 @@ Either should land before:
   java-tron's `revokingStore` provides — sessions above solidified are
   in-memory only, and a crash drops them; on restart, the node re-syncs
   the missing range from peers.
-- **BuildBlock writes still go to disk directly.** The producer's
-  `core.BuildBlock` invokes `ApplyTransaction` / `payBlockReward` /
-  `payStandbyWitness` / `applyRewardMaintenance` / `ProcessProposals`
-  with `bc.db` (not `bc.buffer`). This is intentional for now — the
-  built block is then handed to `bc.InsertBlock` which re-applies via
-  `applyBlock`, and the second pass writes through the buffer.
-  Pre-slice-3 this caused double-writes on disk; that is unchanged. A
-  future cleanup would either (a) make BuildBlock pure (no rawdb writes
-  during construction) or (b) route both paths through a transient
-  buffer that is discarded if the build fails.

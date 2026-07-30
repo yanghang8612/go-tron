@@ -2,61 +2,15 @@ package rawdb
 
 import (
 	"bytes"
-	"encoding/binary"
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
-
-var benchmarkReusableBlockBytes []byte
-
-type ownedBlockWriterProbe struct {
-	ownedKey   []byte
-	ownedValue []byte
-	puts       map[string][]byte
-}
-
-type discardStructuredBlockWriter struct{}
-
-func (discardStructuredBlockWriter) Put(_, _ []byte) error            { return nil }
-func (discardStructuredBlockWriter) Delete(_ []byte) error            { return nil }
-func (discardStructuredBlockWriter) DeleteKeyParts(_, _ []byte) error { return nil }
-func (discardStructuredBlockWriter) PutOwnedValue(_, _ []byte) error  { return nil }
-func (discardStructuredBlockWriter) PutKeyParts(_, _, _ []byte) error { return nil }
-func (discardStructuredBlockWriter) PutKeyPartsOwnedValue(_, _, _ []byte) error {
-	return nil
-}
-
-func (p *ownedBlockWriterProbe) Put(key, value []byte) error {
-	if p.puts == nil {
-		p.puts = make(map[string][]byte)
-	}
-	p.puts[string(key)] = append([]byte(nil), value...)
-	return nil
-}
-
-func (*ownedBlockWriterProbe) Delete([]byte) error { return nil }
-
-func (*ownedBlockWriterProbe) DeleteKeyParts(_, _ []byte) error { return nil }
-
-func (p *ownedBlockWriterProbe) PutKeyParts(first, second, value []byte) error {
-	key := append(append([]byte(nil), first...), second...)
-	return p.Put(key, value)
-}
-
-func (p *ownedBlockWriterProbe) PutKeyPartsOwnedValue(first, second, value []byte) error {
-	p.ownedKey = append(append(p.ownedKey[:0], first...), second...)
-	p.ownedValue = value
-	return nil
-}
-
-func (p *ownedBlockWriterProbe) PutOwnedValue(key, value []byte) error {
-	p.ownedKey = append([]byte(nil), key...)
-	p.ownedValue = value
-	return nil
-}
 
 func TestWriteReadBlock(t *testing.T) {
 	chaindb := NewMemoryChainDB()
@@ -77,174 +31,6 @@ func TestWriteReadBlock(t *testing.T) {
 	}
 	if got.Number() != 42 {
 		t.Fatalf("expected 42, got %d", got.Number())
-	}
-	gotHash, ok := ReadBlockHash(chaindb, block.Number())
-	if !ok || gotHash != block.Hash() {
-		t.Fatalf("number->hash = %x,%v want %x,true", gotHash, ok, block.Hash())
-	}
-}
-
-func BenchmarkWriteBlockEncodedStructured(b *testing.B) {
-	block := types.NewBlockFromPB(&corepb.Block{
-		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 42, Timestamp: 126_000}},
-	})
-	data, err := block.Marshal()
-	if err != nil {
-		b.Fatal(err)
-	}
-	_ = block.Hash()
-	writer := discardStructuredBlockWriter{}
-	b.ReportAllocs()
-	for range b.N {
-		if err := WriteBlockEncoded(writer, block, data); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkWriteTaposRefStructured(b *testing.B) {
-	writer := discardStructuredBlockWriter{}
-	hash := common.Hash{8: 1}
-	b.ReportAllocs()
-	for range b.N {
-		if err := WriteTaposRef(writer, 42, hash); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkReadBlockMarshalReusable(b *testing.B) {
-	chaindb := NewMemoryChainDB()
-	txs := make([]*corepb.Transaction, 200)
-	for i := range txs {
-		txs[i] = &corepb.Transaction{
-			RawData: &corepb.TransactionRaw{
-				RefBlockBytes: []byte{byte(i >> 8), byte(i)},
-				Data:          bytes.Repeat([]byte{byte(i)}, 256),
-				Timestamp:     int64(i + 1),
-			},
-			Signature: [][]byte{bytes.Repeat([]byte{byte(i + 1)}, 65)},
-		}
-	}
-	block := types.NewBlockFromPB(&corepb.Block{
-		Transactions: txs,
-		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
-			Number:         42,
-			Timestamp:      126_000,
-			TxTrieRoot:     bytes.Repeat([]byte{0x11}, common.HashLength),
-			ParentHash:     bytes.Repeat([]byte{0x22}, common.HashLength),
-			WitnessAddress: bytes.Repeat([]byte{0x33}, common.AddressLength),
-		}},
-	})
-	if err := WriteBlock(chaindb, block); err != nil {
-		b.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name string
-		read func(*ChainDB, uint64) *types.Block
-	}{
-		{name: "fresh-marshal", read: ReadBlock},
-		{name: "reuse-stored-wire", read: ReadBlockReusable},
-	} {
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			for b.Loop() {
-				decoded := tc.read(chaindb, block.Number())
-				if decoded == nil {
-					b.Fatal("block not found")
-				}
-				var err error
-				benchmarkReusableBlockBytes, err = decoded.MarshalReusable()
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-func TestWriteBlockEncodedTransfersPayloadToOwnedWriter(t *testing.T) {
-	block := types.NewBlockFromPB(&corepb.Block{
-		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 42, Timestamp: 126_000}},
-		Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Data: bytes.Repeat([]byte{0xab}, 512)}}},
-	})
-	data, err := block.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	probe := new(ownedBlockWriterProbe)
-	if err := WriteBlockEncoded(probe, block, data); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(probe.ownedKey, blockKey(block.Number())) {
-		t.Fatalf("owned key = %x, want %x", probe.ownedKey, blockKey(block.Number()))
-	}
-	if !bytes.Equal(probe.ownedValue, data) || &probe.ownedValue[0] != &data[0] {
-		t.Fatal("encoded block payload was copied instead of transferred")
-	}
-	hash := block.Hash()
-	if got := probe.puts[string(blockHashKey(hash[:]))]; !bytes.Equal(got, encodeBlockNumber(block.Number())) {
-		t.Fatalf("hash index = %x, want block number %d", got, block.Number())
-	}
-	wantRingKey := blockNumberHashKey(block.Number())
-	if got := probe.puts[string(wantRingKey)]; !bytes.Equal(got, hash[:]) {
-		t.Fatalf("number index = %x, want hash %x", got, hash)
-	}
-}
-
-func encodeBlockNumber(number uint64) []byte {
-	var out [8]byte
-	binary.BigEndian.PutUint64(out[:], number)
-	return out[:]
-}
-
-func TestReadBlockHashKVCompactIndexWithoutBody(t *testing.T) {
-	db := NewMemoryDatabase()
-	var want common.Hash
-	binary.BigEndian.PutUint64(want[:8], 42)
-	copy(want[8:], []byte("compact-index"))
-	if err := db.Put(blockNumberHashKey(42), want[:]); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := ReadBlockHashKV(db, 42)
-	if !ok || got != want {
-		t.Fatalf("ReadBlockHashKV = %x,%v want %x,true", got, ok, want)
-	}
-}
-
-func TestReadBlockHashKVRejectsOverwrittenRingSlot(t *testing.T) {
-	db := NewMemoryDatabase()
-	newer := uint64(42) + blockNumberHashSlots
-	var want common.Hash
-	binary.BigEndian.PutUint64(want[:8], newer)
-	copy(want[8:], []byte("newer-ring-value"))
-	if err := db.Put(blockNumberHashKey(newer), want[:]); err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := ReadBlockHashKV(db, 42); ok || got != (common.Hash{}) {
-		t.Fatalf("overwritten slot answered old number: %x,%v", got, ok)
-	}
-	if got, ok := ReadBlockHashKV(db, newer); !ok || got != want {
-		t.Fatalf("new slot value = %x,%v want %x,true", got, ok, want)
-	}
-}
-
-func TestReadBlockHashKVLegacyBodyFallback(t *testing.T) {
-	db := NewMemoryDatabase()
-	block := types.NewBlockFromPB(&corepb.Block{
-		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 42, Timestamp: 126000}},
-	})
-	data, err := block.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Simulate a database created before the compact number→hash index.
-	if err := db.Put(blockKey(block.Number()), data); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := ReadBlockHashKV(db, block.Number())
-	if !ok || got != block.Hash() {
-		t.Fatalf("legacy ReadBlockHashKV = %x,%v want %x,true", got, ok, block.Hash())
 	}
 }
 
@@ -267,35 +53,34 @@ func TestWriteReadBlockByHash(t *testing.T) {
 	}
 }
 
-func TestWriteBlockOverwritesRecentHashForCanonicalNumber(t *testing.T) {
-	db := NewMemoryChainDB()
-	first := types.NewBlockFromPB(&corepb.Block{
-		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 10, Timestamp: 30_000}},
-	})
-	second := types.NewBlockFromPB(&corepb.Block{
-		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 10, Timestamp: 30_001}},
-	})
-	if first.Hash() == second.Hash() {
-		t.Fatal("test blocks unexpectedly have the same hash")
-	}
-	if err := WriteBlock(db, first); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteBlock(db, second); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := ReadBlockHashKV(db, 10)
-	if !ok || got != second.Hash() {
-		t.Fatalf("canonical replacement hash = %x,%v want %x,true", got, ok, second.Hash())
-	}
-}
-
 func TestHeadBlock(t *testing.T) {
 	db := NewMemoryDatabase()
 	WriteHeadBlockHash(db, common.HexToHash("aabb"))
 	h := ReadHeadBlockHash(db)
 	if h != common.HexToHash("aabb") {
 		t.Fatal("head block hash mismatch")
+	}
+}
+
+func TestHashBoundaryRowsRejectMalformedValues(t *testing.T) {
+	db := NewMemoryDatabase()
+	if err := db.Put(headBlockKey, []byte{0xaa}); err != nil {
+		t.Fatalf("put malformed head block hash: %v", err)
+	}
+	if got := ReadHeadBlockHash(db); got != (common.Hash{}) {
+		t.Fatalf("ReadHeadBlockHash malformed row = %x, want zero", got)
+	}
+	if err := db.Put(headSolidBlockKey, bytes.Repeat([]byte{0xbb}, common.HashLength-1)); err != nil {
+		t.Fatalf("put malformed solid head block hash: %v", err)
+	}
+	if got := ReadHeadSolidBlockHash(db); got != (common.Hash{}) {
+		t.Fatalf("ReadHeadSolidBlockHash malformed row = %x, want zero", got)
+	}
+	if err := db.Put(genesisStateRootKey, bytes.Repeat([]byte{0xcc}, common.HashLength+1)); err != nil {
+		t.Fatalf("put malformed genesis state root: %v", err)
+	}
+	if got := ReadGenesisStateRoot(db); got != (common.Hash{}) {
+		t.Fatalf("ReadGenesisStateRoot malformed row = %x, want zero", got)
 	}
 }
 
@@ -312,5 +97,99 @@ func TestWriteReadAccount(t *testing.T) {
 	}
 	if got.Balance() != 1000000 {
 		t.Fatalf("expected 1000000, got %d", got.Balance())
+	}
+}
+
+func TestAccountStrictReaders(t *testing.T) {
+	db := NewMemoryDatabase()
+	addr := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
+
+	if got, ok, err := ReadAccountStrict(db, addr); got != nil || ok || err != nil {
+		t.Fatalf("ReadAccountStrict absent = %v/%v/%v, want nil/false/nil", got, ok, err)
+	}
+	if ok, err := HasAccountStrict(db, addr); err != nil || ok {
+		t.Fatalf("HasAccountStrict absent = %v/%v, want false/nil", ok, err)
+	}
+
+	acc := types.NewAccount(addr, corepb.AccountType_Normal)
+	acc.SetBalance(123)
+	WriteAccount(db, addr, acc)
+	if ok, err := HasAccountStrict(db, addr); err != nil || !ok {
+		t.Fatalf("HasAccountStrict present = %v/%v, want true/nil", ok, err)
+	}
+	got, ok, err := ReadAccountStrict(db, addr)
+	if err != nil || !ok || got == nil || got.Balance() != 123 {
+		t.Fatalf("ReadAccountStrict present = %v/%v/%v, want balance 123", got, ok, err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		reader ethdb.KeyValueReader
+		want   string
+	}{
+		{name: "has", reader: failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, want: "presence"},
+		{name: "get", reader: failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, want: "get boom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, ok, err := ReadAccountStrict(tc.reader, addr); err == nil || ok || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ReadAccountStrict %s error ok=%v err=%v, want %q", tc.name, ok, err, tc.want)
+			}
+		})
+	}
+	if ok, err := HasAccountStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, addr); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("HasAccountStrict has error = %v/%v, want presence error", ok, err)
+	}
+
+	if err := db.Put(accountKey(addr.Bytes()), []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadAccount(db, addr); got != nil {
+		t.Fatalf("compat ReadAccount corrupt row = %v, want nil", got)
+	}
+	if got, ok, err := ReadAccountStrict(db, addr); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode account") {
+		t.Fatalf("ReadAccountStrict corrupt row = %v/%v/%v, want decode error", got, ok, err)
+	}
+	if err := db.Put(accountKey(addr.Bytes()), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := ReadAccountStrict(db, addr); err != nil || !ok || got == nil {
+		t.Fatalf("ReadAccountStrict empty proto = %v/%v/%v, want empty account/true/nil", got, ok, err)
+	}
+}
+
+func TestWitnessStrictReader(t *testing.T) {
+	db := NewMemoryDatabase()
+	addr := common.BytesToAddress([]byte{0x41, 2, 3, 4, 5})
+
+	if got, ok, err := ReadWitnessStrict(db, addr); got != nil || ok || err != nil {
+		t.Fatalf("ReadWitnessStrict absent = %v/%v/%v, want nil/false/nil", got, ok, err)
+	}
+	w := types.NewWitness(addr, "https://sr")
+	w.SetVoteCount(99)
+	WriteWitness(db, addr, w)
+	got, ok, err := ReadWitnessStrict(db, addr)
+	if err != nil || !ok || got == nil || got.URL() != "https://sr" || got.VoteCount() != 99 {
+		t.Fatalf("ReadWitnessStrict present = %v/%v/%v, want witness/true/nil", got, ok, err)
+	}
+	if _, ok, err := ReadWitnessStrict(failingStateDomainReader{reader: db, hasErr: errors.New("has boom")}, addr); err == nil || ok || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("ReadWitnessStrict has error ok=%v err=%v, want presence error", ok, err)
+	}
+	if _, ok, err := ReadWitnessStrict(failingStateDomainReader{reader: db, getErr: errors.New("get boom")}, addr); err == nil || ok || !strings.Contains(err.Error(), "get boom") {
+		t.Fatalf("ReadWitnessStrict get error ok=%v err=%v, want get error", ok, err)
+	}
+	if err := db.Put(witnessKey(addr.Bytes()), []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadWitness(db, addr); got != nil {
+		t.Fatalf("compat ReadWitness corrupt row = %v, want nil", got)
+	}
+	if got, ok, err := ReadWitnessStrict(db, addr); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode witness") {
+		t.Fatalf("ReadWitnessStrict corrupt row = %v/%v/%v, want decode error", got, ok, err)
+	}
+	if err := db.Put(witnessKey(addr.Bytes()), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := ReadWitnessStrict(db, addr); err != nil || !ok || got == nil {
+		t.Fatalf("ReadWitnessStrict empty proto = %v/%v/%v, want empty witness/true/nil", got, ok, err)
 	}
 }

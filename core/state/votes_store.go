@@ -1,6 +1,8 @@
 package state
 
 import (
+	"fmt"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -40,15 +42,25 @@ func votesStoreKey(addr tcommon.Address) []byte {
 // (nil if absent or on a decode/KV error, matching the prior rawdb reader's
 // defensive behavior).
 func (s *StateDB) ReadVotes(addr tcommon.Address) *corepb.Votes {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.WitnessVoteState, votesStoreKey(addr))
-	if err != nil || !ok || len(raw) == 0 {
-		return nil
-	}
-	votes, err := unmarshalVotesOwned(raw)
+	votes, _, err := s.ReadVotesStrict(addr)
 	if err != nil {
 		return nil
 	}
 	return votes
+}
+
+// ReadVotesStrict resolves a voter's pending vote record and distinguishes
+// missing rows from unreadable or malformed rooted data.
+func (s *StateDB) ReadVotesStrict(addr tcommon.Address) (*corepb.Votes, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, votesStoreKey(addr))
+	if err != nil || !ok || len(raw) == 0 {
+		return nil, ok, err
+	}
+	votes := &corepb.Votes{}
+	if err := proto.Unmarshal(raw, votes); err != nil {
+		return nil, true, fmt.Errorf("decode votes: %w", err)
+	}
+	return votes, true, nil
 }
 
 // WriteVotes stages a voter's pending vote record into the system-KV and adds
@@ -84,11 +96,28 @@ func (s *StateDB) DeleteVotes(addr tcommon.Address) error {
 // ReadVotesIndex returns the rooted voter index (nil if unset). KV error
 // swallowed to nil — drop-in for the prior rawdb reader's consumers.
 func (s *StateDB) ReadVotesIndex() []tcommon.Address {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.WitnessVoteState, votesStoreIndexKey)
-	if err != nil || !ok {
+	voters, _, err := s.ReadVotesIndexStrict()
+	if err != nil {
 		return nil
 	}
-	return decodeAddressList(raw)
+	return voters
+}
+
+// ReadVotesIndexStrict returns the rooted voter index and distinguishes an
+// absent row from unreadable or malformed rooted data.
+func (s *StateDB) ReadVotesIndexStrict() ([]tcommon.Address, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, votesStoreIndexKey)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	voters, err := decodeAddressListStrict("votes index", raw)
+	if err != nil {
+		return nil, true, err
+	}
+	return voters, true, nil
 }
 
 // WriteVotesIndex stages the full voter index into the system-KV. A nil/empty
@@ -104,16 +133,14 @@ func (s *StateDB) WriteVotesIndex(voters []tcommon.Address) error {
 // the WitnessVoteState domain directly (not the witness-schedule-scoped
 // readAddressList helper) so the round-trip stays within this store's domain.
 func (s *StateDB) AppendVotesIndex(addr tcommon.Address) error {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.WitnessVoteState, votesStoreIndexKey)
+	existing, _, err := s.ReadVotesIndexStrict()
 	if err != nil {
 		return err
 	}
-	if !ok {
-		raw = nil
+	for _, a := range existing {
+		if a == addr {
+			return nil
+		}
 	}
-	encoded, found := appendAddressListEncoded(raw, addr)
-	if found {
-		return nil
-	}
-	return s.SystemKVPut(kvdomains.WitnessVoteState, votesStoreIndexKey, encoded)
+	return s.WriteVotesIndex(append(existing, addr))
 }

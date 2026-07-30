@@ -43,7 +43,7 @@ func stubBlock(num int64, parent tcommon.Hash) *types.Block {
 // inflight>0-but-timer-stopped stall: when a peer delivers part of a
 // batch and then goes silent, the fetch timer must re-arm so
 // onFetchTimeout eventually fires and the sync state machine recovers
-// via a dormant retry session / tryFindSyncPeer. Before the fix HandleBlock unconditionally
+// via tryFindSyncPeer. Before the fix HandleBlock unconditionally
 // stopped the timer without re-arming, leaving inflight>0 forever.
 func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	bc := makeTestChain(t)
@@ -70,7 +70,6 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 		second.Hash(): second.Number(),
 	}
 	ss.armFetchTimer()
-	initialDeadline := ss.peers[peer.ID()].fetchDeadline
 	ss.mu.Unlock()
 
 	// Peer delivers only block 1 of the batch and then goes silent. The
@@ -86,7 +85,6 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	ss.mu.Lock()
 	infl := ss.inflight
 	timer := ss.fetchTimer
-	deadline := ss.peers[peer.ID()].fetchDeadline
 	ss.mu.Unlock()
 	if infl != 1 {
 		t.Fatalf("inflight after 1/2 blocks: got %d, want 1", infl)
@@ -94,42 +92,11 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	if timer == nil {
 		t.Fatal("partial batch left fetchTimer nil — peer-silent stall would never recover")
 	}
-	if deadline.IsZero() {
-		t.Fatal("partial batch lost its absolute fetch deadline")
-	}
-	if !deadline.Equal(initialDeadline) {
-		t.Fatalf("partial batch reset absolute deadline: got %v want %v", deadline, initialDeadline)
-	}
 
-	// Wait past the timeout. onFetchTimeout should evict the silent peer while
-	// preserving the missing request for a replacement instead of discarding the
-	// successfully received prefix.
+	// Wait past the timeout. onFetchTimeout should fire and clear syncing.
 	time.Sleep(200 * time.Millisecond)
-	status := ss.Status()
-	if !status.Active {
-		t.Fatal("recoverable partial batch was reset after fetch timeout")
-	}
-	if status.SyncPeerCount != 0 || status.RetryBlocks != 1 {
-		t.Fatalf("dormant recovery status: peers=%d retries=%d, want 0/1",
-			status.SyncPeerCount, status.RetryBlocks)
-	}
-}
-
-func TestPeerFetchTimerDelayCapsTrickleBatch(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	inactivity := 30 * time.Second
-	deadline := now.Add(60 * time.Second)
-
-	if got := peerFetchTimerDelay(now, inactivity, deadline); got != inactivity {
-		t.Fatalf("initial delay=%v, want %v", got, inactivity)
-	}
-	// A block arriving 45 seconds into the batch may reset the inactivity
-	// clock, but only the 15 seconds remaining on the absolute deadline apply.
-	if got := peerFetchTimerDelay(now.Add(45*time.Second), inactivity, deadline); got != 15*time.Second {
-		t.Fatalf("trickle delay=%v, want 15s", got)
-	}
-	if got := peerFetchTimerDelay(deadline, inactivity, deadline); got != time.Nanosecond {
-		t.Fatalf("expired delay=%v, want asynchronous floor", got)
+	if ss.IsSyncing() {
+		t.Fatal("sync should have aborted after fetch timeout on partial batch")
 	}
 }
 
@@ -371,7 +338,6 @@ func TestInsertFailurePausesSync(t *testing.T) {
 	if !consumed {
 		t.Fatal("HandleBlock should have consumed the block while syncing")
 	}
-	ss.waitForDrain()
 
 	// Sync must be paused, not syncing, and not have sent any outbound
 	// frame (no SYNC_BLOCK_CHAIN retry, no FETCH_INV_DATA).
@@ -397,5 +363,87 @@ func TestInsertFailurePausesSync(t *testing.T) {
 	ss.StartSync(peer)
 	if ss.IsSyncing() {
 		t.Fatal("StartSync should short-circuit while paused")
+	}
+}
+
+func TestStagedBodyProgressFailurePausesBeforeDrain(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	c1, c2 := gnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	peer := p2p.NewPeer(c1, "stage-fail-peer", false, nopHandler{})
+	peer.Start()
+	defer peer.Stop()
+
+	gotFrame := make(chan struct{}, 8)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := c2.Read(buf)
+			if err != nil {
+				return
+			}
+			if n > 0 {
+				select {
+				case gotFrame <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	if err := rawdb.WriteSyncStagedBlockRaw(bc.DB(), block1, []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("write corrupt staged block1: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodiesReady, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("write ready progress: %v", err)
+	}
+	block2 := stubBlock(2, block1.Hash())
+
+	ss.mu.Lock()
+	ss.syncing = true
+	ss.syncPeer = peer
+	ps, _ := ss.addPeerStateLocked(peer)
+	markPendingLocked(ss, ps, block2.ID())
+	ss.mu.Unlock()
+
+	consumed := ss.HandleBlock(peer, block2, nil)
+	if !consumed {
+		t.Fatal("HandleBlock should consume the requested block while syncing")
+	}
+	if !ss.IsPaused() {
+		t.Fatal("staged-body progress failure should pause sync")
+	}
+	if ss.IsSyncing() {
+		t.Fatal("staged-body progress failure should reset active sync")
+	}
+	select {
+	case <-gotFrame:
+		t.Fatal("paused sync must not send follow-up fetch frames after staged-body failure")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	paused, atNum, _, err := ss.PausedStatus()
+	if !paused || atNum != block2.Number() || err == nil {
+		t.Fatalf("PausedStatus mismatch: paused=%v atNum=%d err=%v, want block2 staging error", paused, atNum, err)
+	}
+	ss.mu.Lock()
+	buffered := len(ss.blockBuffer)
+	_, hashBuffered := ss.bufferedHash[block2.Hash()]
+	ss.mu.Unlock()
+	if buffered != 0 || hashBuffered {
+		t.Fatalf("failed staged body entered drain buffer: buffered=%d hashBuffered=%v", buffered, hashBuffered)
+	}
+	if row, ok, err := rawdb.ReadSyncStagedBlockRaw(bc.DB(), block2.Number()); err != nil || ok {
+		t.Fatalf("staged block2 after pause reset = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodies); err != nil || ok {
+		t.Fatalf("SyncBodies after pause reset = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after pause reset = %+v ok=%v err=%v, want absent", row, ok, err)
 	}
 }

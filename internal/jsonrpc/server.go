@@ -18,6 +18,7 @@ import (
 type Server struct {
 	httpServer *http.Server
 	filters    *FilterManager
+	listener   net.Listener
 }
 
 // NewServer creates a JSON-RPC server on the given port.
@@ -36,6 +37,7 @@ func NewServer(backend Backend, port int) *Server {
 		{"net", NewNetAPI(backend)},
 		{"eth", NewEthAPI(backend, fm)},
 		{"debug", NewDebugAPI(backend)},
+		{"gtron", NewGtronAPI(backend)},
 	} {
 		// RegisterName only fails if a service exposes no eligible methods,
 		// which is a static programming error for these fixed structs.
@@ -66,11 +68,21 @@ func (s *Server) Handler() http.Handler {
 	return s.httpServer.Handler
 }
 
+// ListenAddr returns the actual bind address after Start. It is useful for
+// tests that start the server on port 0.
+func (s *Server) ListenAddr() string {
+	if s == nil || s.listener == nil {
+		return ""
+	}
+	return s.listener.Addr().String()
+}
+
 func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", s.httpServer.Addr)
 	if err != nil {
 		return fmt.Errorf("jsonrpc listen: %w", err)
 	}
+	s.listener = ln
 	go s.httpServer.Serve(ln)
 	return nil
 }

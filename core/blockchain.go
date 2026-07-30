@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -79,6 +81,8 @@ func (e *InsertBlocksError) Unwrap() error {
 //   - Persist: WriteBlock + WriteTaposRef + tx info persist + the final
 //     buffer flushBufferUpToSolidified that lands committed layers on disk.
 //   - Hooks: post-apply callback fan-out (PBFT, broadcaster, etc.).
+//   - StatePrefetch: read-only state prefetch work observed during Execute.
+//     It is diagnostic only; prefetch never changes consensus state.
 type ApplyStats struct {
 	Validate          time.Duration
 	Execute           time.Duration
@@ -88,6 +92,7 @@ type ApplyStats struct {
 	DPUpdate          time.Duration
 	Persist           time.Duration
 	Hooks             time.Duration
+	StatePrefetch     state.StatePrefetcherStats
 }
 
 // Total returns the sum of every phase.
@@ -167,11 +172,12 @@ type BlockChain struct {
 	stateDB *state.Database
 	config  *params.ChainConfig
 
-	stateCodeColdHistory       state.StateCodeColdHistoryAtOrBefore
-	stateCommitmentColdHistory state.StateCommitmentColdHistory
-	stateOpenHook              func(tcommon.Hash)
-	stateCommitScopeHook       func()
-	stateTxRangeSeedHook       func(uint64)
+	stateCodeColdHistory        state.StateCodeColdHistoryAtOrBefore
+	stateCommitmentColdHistory  state.StateCommitmentColdHistory
+	stateOpenHook               func(tcommon.Hash)
+	stateCommitScopeHook        func()
+	stateTxRangeSeedHook        func(uint64)
+	transactionLookupETLOptions etl.Options
 
 	currentBlock   atomic.Pointer[types.Block]
 	chainmu        sync.Mutex // serializes block insertion
@@ -421,11 +427,12 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 // reader. Production startup passes the freezer reader here so block and
 // transaction-info accessors can transparently fall through to frozen data.
 func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig, ancient rawdb.AncientReader) (*BlockChain, error) {
-	buffer := blockbuffer.New(db)
 	if ancient == nil {
 		ancient = rawdb.NoopAncient{}
 	}
 	chaindb := rawdb.NewChainDB(db, ancient)
+	buffer := blockbuffer.New(db)
+	buffer.SetBlockHashReader(chainDBBlockHashReader{db: chaindb})
 	// Resolve the async-commit pipeline depth ONCE here and size the commit queue
 	// to depth-2 (the backpressure bound). The commit worker, started below in
 	// this constructor, ranges this exact channel for its lifetime — sizing it
@@ -463,10 +470,14 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
 	// Load genesis
-	bc.genesisBlock = rawdb.ReadBlock(chaindb, 0)
-	if bc.genesisBlock == nil {
+	genesisBlock, ok, err := rawdb.ReadBlockStrict(chaindb, 0)
+	if err != nil {
+		return nil, fmt.Errorf("read genesis block: %w", err)
+	}
+	if !ok {
 		return nil, errors.New("genesis block not found in database")
 	}
+	bc.genesisBlock = genesisBlock
 
 	for _, gw := range rawdb.ReadGenesisWitnesses(db) {
 		bc.genesisWitnesses = append(bc.genesisWitnesses, consensus.GenesisWitnessInfo{
@@ -483,8 +494,17 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	// flush to head) or crashed (last async flush to a solidified block).
 	// Block bodies written ahead of the flushed head are harmless orphans that
 	// re-sync re-applies. No startup state rebuild is required.
-	head := loadStoredHeadBlock(chaindb, bc.genesisBlock)
+	head, err := loadStoredHeadBlock(chaindb, bc.genesisBlock)
+	if err != nil {
+		return nil, err
+	}
 	bc.currentBlock.Store(head)
+	if err := bc.ensureCanonicalStageHead(head); err != nil {
+		return nil, err
+	}
+	if err := bc.ensureTransactionLookupStageLocked(); err != nil {
+		return nil, err
+	}
 
 	// Seed the dynprops cache now that the head is known: rooted keys load from
 	// the system-KV at the head root, derived keys from the buffer.
@@ -516,20 +536,72 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	return bc, nil
 }
 
-func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) *types.Block {
-	headHash := rawdb.ReadHeadBlockHash(chaindb)
-	if headHash == (tcommon.Hash{}) {
-		return genesis
-	}
-	num := rawdb.ReadBlockNumber(chaindb, headHash)
-	if num == nil {
-		return genesis
-	}
-	block := rawdb.ReadBlock(chaindb, *num)
+type chainDBBlockHashReader struct {
+	db *rawdb.ChainDB
+}
+
+func (r chainDBBlockHashReader) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
+	block := rawdb.ReadBlock(r.db, number)
 	if block == nil {
-		return genesis
+		return tcommon.Hash{}, false
 	}
-	return block
+	return block.Hash(), true
+}
+
+func (r chainDBBlockHashReader) BlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error) {
+	block, ok, err := rawdb.ReadBlockStrict(r.db, number)
+	if err != nil || !ok {
+		return tcommon.Hash{}, ok, err
+	}
+	return block.Hash(), true, nil
+}
+
+func (bc *BlockChain) ensureCanonicalStageHead(head *types.Block) error {
+	if bc == nil {
+		return errors.New("canonical stage startup repair: nil blockchain")
+	}
+	if head == nil {
+		return errors.New("canonical stage startup repair: nil head")
+	}
+	hash := head.Hash()
+	if err := verifyCanonicalStagePipelineHead(bc.db, head.Number(), hash); err == nil {
+		return nil
+	} else {
+		log.Debug("Repairing canonical stage progress to stored head",
+			"head", head.Number(), "hash", hash, "err", err)
+	}
+	if err := rewindCanonicalStagePipeline(bc.db, head.Number(), hash); err != nil {
+		return fmt.Errorf("repair canonical stage progress to stored head %d: %w", head.Number(), err)
+	}
+	return nil
+}
+
+func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) (*types.Block, error) {
+	headHash, ok, err := rawdb.ReadHeadBlockHashStrict(chaindb)
+	if err != nil {
+		return nil, fmt.Errorf("load stored head hash: %w", err)
+	}
+	if !ok || headHash == (tcommon.Hash{}) {
+		return genesis, nil
+	}
+	num, ok, err := rawdb.ReadBlockNumberStrict(chaindb, headHash)
+	if err != nil {
+		return nil, fmt.Errorf("load stored head %x block number: %w", headHash, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("stored head %x has no block number", headHash)
+	}
+	block, ok, err := rawdb.ReadBlockStrict(chaindb, num)
+	if err != nil {
+		return nil, fmt.Errorf("load stored head block %d (%x): %w", num, headHash, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("stored head block %d (%x) not found", num, headHash)
+	}
+	if block.Hash() != headHash {
+		return nil, fmt.Errorf("stored head block %d hash mismatch: have %x want %x", num, block.Hash(), headHash)
+	}
+	return block, nil
 }
 
 func syncKeyValueStore(db ethdb.KeyValueStore) error {
@@ -709,6 +781,26 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 // surface sync can move onto while execution is collapsed toward shared domain
 // transactions.
 func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
+	return bc.InsertBlocksWithStageHook(blocks, nil)
+}
+
+// InsertBlocksWithStageHook applies a fetched canonical range and calls hook
+// after each canonical stage row is advanced. The hook is intended for staged
+// sync/import diagnostics that need to mirror the real canonical stage
+// boundary without registering a global BlockChain callback.
+func (bc *BlockChain) InsertBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {
+	return bc.insertBlocksWithStageHook(blocks, hook, false)
+}
+
+// InsertSyncBlocksWithStageHook applies a bulk-sync range while deferring its
+// rebuildable tx-hash lookup rows. Per-block TransactionRet rows remain
+// durable; canonical insertion never materializes their duplicate `ti-` rows.
+// SyncService must follow each successful range with AdvanceTransactionLookupStage.
+func (bc *BlockChain) InsertSyncBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {
+	return bc.insertBlocksWithStageHook(blocks, hook, true)
+}
+
+func (bc *BlockChain) insertBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool) error {
 	if len(blocks) == 0 {
 		return nil
 	}
@@ -718,13 +810,17 @@ func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
 		return ErrBlockChainClosed
 	}
 
-	return bc.insertBlocksLocked(blocks)
+	return bc.insertBlocksLockedWithOptions(blocks, hook, deferTransactionLookup)
 }
 
 // insertBlocksLocked applies a contiguous range through insertBlockLocked.
 // Callers must hold bc.chainmu.
-func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
-	return bc.insertBlocksLockedMode(blocks, false)
+func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block, hooks ...StageProgressHook) (err error) {
+	var hook StageProgressHook
+	if len(hooks) > 0 {
+		hook = hooks[0]
+	}
+	return bc.insertBlocksLockedModeWithOptions(blocks, false, hook, false)
 }
 
 // insertBlocksLockedMode is insertBlocksLocked plus the offline stored-replay
@@ -732,6 +828,18 @@ func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
 // ResetMutableState deliberately preserved, so it can skip staging and
 // durably rewriting those bodies. Callers must hold bc.chainmu.
 func (bc *BlockChain) insertBlocksLockedMode(blocks []*types.Block, storedReplay bool) (err error) {
+	return bc.insertBlocksLockedModeWithOptions(blocks, storedReplay, nil, false)
+}
+
+func (bc *BlockChain) insertBlocksLockedWithOptions(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool) (err error) {
+	return bc.insertBlocksLockedModeWithOptions(blocks, false, hook, deferTransactionLookup)
+}
+
+func (bc *BlockChain) insertBlocksLockedModeWithOptions(blocks []*types.Block, storedReplay bool, hook StageProgressHook, deferTransactionLookup bool) (err error) {
+	// The Erigon-aligned layout supports one fresh canonical format. Historical
+	// replay therefore follows the normal writer path instead of branching into
+	// the retired freezer-v2/immutable-index compatibility path.
+	_ = storedReplay
 	// Parallel signature pre-verification: start every tx's sender recovery and
 	// every block's witness-signature recovery, then overlap later-block jobs with
 	// ordered state execution. Pure cache warming — the serial path (envelope
@@ -746,8 +854,7 @@ func (bc *BlockChain) insertBlocksLockedMode(blocks []*types.Block, storedReplay
 	}
 	defer sigPrewarm.Wait()
 
-	executor := newCanonicalRangeExecutor(bc, true)
-	executor.storedReplay = storedReplay
+	executor := newCanonicalRangeExecutorWithOptions(bc, true, hook, deferTransactionLookup)
 	if bc.asyncCommit {
 		// Async commit: settle the range at its boundary in one ordered defer so
 		// the persistent state matches the synchronous path exactly. The
@@ -1114,6 +1221,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	defer func() {
 		statedb.SetCycleRewardSink(nil)
 		if retErr != nil {
+			statedb.ClearBalanceTrace()
 			// Async commit: a foreground failure (e.g. exec of a speculative
 			// block) can race in-flight commits of earlier blocks. Quiesce the
 			// worker first so currentBlock/HeadStateRoot reflect every committed
@@ -1218,19 +1326,19 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		if err != nil {
 			return fmt.Errorf("begin domain change stage: %w", err)
 		}
+		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
 	}
+	var prefetchStats state.StatePrefetcherStats
 	if accountStateRootEnabled {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, !plan.storedReplayTxInfos, -1, nil)
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config), &prefetchStats, bc.versionPassCache, plan.txInfoBatch, true, -1, nil)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, !plan.storedReplayTxInfos, -1, nil)
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, processBlockPrefetchConfigFromChainConfig(bc.config), &prefetchStats, bc.versionPassCache, plan.txInfoBatch, true, -1, nil)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
-	if plan.storedReplayTxInfos {
-		storedReplayDiscardedTxInfosCounter.Inc(int64(len(block.Transactions())))
-	}
+	stats.StatePrefetch = prefetchStats
 
 	// Promote CURRENT_TREE to LAST_TREE + index by root + blockNum after
 	// every block, matching java-tron Manager.processBlock. This keeps the
@@ -1330,7 +1438,10 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 				}
 			}
 			applyRewardVI(bc.buffer, statedb, dynProps)
-			hasPendingVotes := applyPendingVotes(statedb)
+			hasPendingVotes, err := applyPendingVotes(statedb)
+			if err != nil {
+				return fmt.Errorf("apply pending votes: %w", err)
+			}
 			statedb.FlushWitnesses()
 			maintNewWitnesses = bc.ActiveWitnesses()
 			if hasPendingVotes {
@@ -1414,22 +1525,12 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// the buffer takes a read-only alias instead of copying it, and neither side
 	// mutates it. Offline stored replay already has the body durably preserved and
 	// stages only the indexes needed by subsequent execution.
-	var blockData []byte
-	if plan.storedReplay {
-		// ResetMutableState preserves canonical block bodies. Rebuild only the
-		// indexes needed by subsequent execution; replay's durable metadata tail
-		// likewise omits the already-stored body.
-		if err := rawdb.WriteBlockIndexes(bc.buffer, block); err != nil {
-			return fmt.Errorf("stage stored block indexes: %w", err)
-		}
-	} else {
-		blockData, err = block.MarshalReusable()
-		if err != nil {
-			return fmt.Errorf("marshal staged block body: %w", err)
-		}
-		if err := rawdb.WriteBlockEncoded(bc.buffer, block, blockData); err != nil {
-			return fmt.Errorf("stage block body: %w", err)
-		}
+	blockData, err := block.MarshalReusable()
+	if err != nil {
+		return fmt.Errorf("marshal staged block body: %w", err)
+	}
+	if err := rawdb.WriteBlockEncoded(bc.buffer, block, blockData); err != nil {
+		return fmt.Errorf("stage block body: %w", err)
 	}
 	if n := len(block.Transactions()); n > 0 {
 		count := rawdb.ReadTotalTransactionCount(bc.buffer)
@@ -1444,6 +1545,16 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if domainChangeStage != nil {
 		if err := domainChangeStage.FlushFinal(); err != nil {
 			return fmt.Errorf("flush block-final domain changes: %w", err)
+		}
+	}
+	var balanceTraceData *blockBalanceTraceData
+	if historyEnabled {
+		trace, accountBalances := statedb.FinishBalanceTrace()
+		if trace != nil {
+			balanceTraceData = &blockBalanceTraceData{
+				trace:           trace,
+				accountBalances: accountBalances,
+			}
 		}
 	}
 
@@ -1471,7 +1582,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// is skipped entirely and the synchronous commit runs unchanged —
 	// byte-identical.
 	if bc.asyncCommit && plan.commit != nil {
-		return bc.commitAsync(block, blockData, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos)
+		return bc.commitAsync(block, blockData, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos, balanceTraceData)
 	}
 
 	commitResult, err := plan.CommitState(bc.buffer, block, commitOpts, bc.config.StateCommitmentCheckpoints)
@@ -1509,13 +1620,20 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos, plan.storedReplay, plan.storedReplayTxInfos, plan.transactionIndexesAncient); err != nil {
+	if err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos, balanceTraceData, !plan.deferTransactionLookup); err != nil {
 		return err
+	}
+	// The block body and TAPOS row above are intentionally retained in the
+	// buffer overlay for in-range BLOCKHASH/TAPOS reads and fork rewind. The
+	// metadata batch just made their identical disk rows durable, so mark them
+	// to avoid writing the same bytes again when a solidified layer flushes.
+	if err := bc.buffer.MarkActiveWritesDurable(blockMetadataOverlayKeys(block)...); err != nil {
+		return fmt.Errorf("mark durable block metadata overlay writes: %w", err)
 	}
 	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
 
 	// Publish the new head only after all metadata needed by readers
-	// (block body, out-of-band state root, TAPOS, tx infos, tx indexes) has
+	// (block body, out-of-band state root, TAPOS, and per-block tx infos) has
 	// landed in one durable batch.
 	bc.currentBlock.Store(block)
 	bc.lastInsertNano.Store(time.Now().UnixNano())
@@ -1545,6 +1663,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	stats.mark(&stats.Hooks)
 	if err := stagePipeline.Advance(rawdb.StageFinish); err != nil {
+		return err
+	}
+	if err := plan.AdvanceTransactionLookupStage(bc.buffer, block); err != nil {
 		return err
 	}
 
@@ -1620,14 +1741,69 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 	}, nil
 }
 
-func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, storedReplay, storedReplayTxInfos, transactionIndexesAncient bool) error {
-	// The root is persisted out-of-band — we do NOT mutate
-	// `block.AccountStateRoot()` because the block proto's content must
-	// round-trip byte-identical to what the wire delivered.
-	if storedReplay {
-		return rawdb.WriteStoredReplayBlockMetadataBatch(bc.db, block, stateRoot, txInfos, storedReplayTxInfos, transactionIndexesAncient)
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData, writeTransactionLookup bool) error {
+	batch := bc.db.NewBatch()
+	// The root stays out-of-band so the wire block remains byte-identical to the
+	// java-tron payload.
+	if err := rawdb.WriteBlockStateRoot(batch, block.Hash(), stateRoot); err != nil {
+		return fmt.Errorf("write block state root: %w", err)
 	}
-	return rawdb.WriteBlockMetadataBatchEncodedWithTransactionIndexes(bc.db, block, blockData, stateRoot, txInfos, !transactionIndexesAncient)
+	if len(blockData) > 0 {
+		if err := rawdb.WriteBlockEncoded(batch, block, blockData); err != nil {
+			return fmt.Errorf("write block: %w", err)
+		}
+	} else if err := rawdb.WriteBlock(batch, block); err != nil {
+		return fmt.Errorf("write block: %w", err)
+	}
+	if err := rawdb.WriteTaposRef(batch, block.Number(), block.Hash()); err != nil {
+		return fmt.Errorf("write tapos ref: %w", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
+		return fmt.Errorf("write block tx infos: %w", err)
+	}
+	if writeTransactionLookup {
+		for _, tx := range block.Transactions() {
+			hash := tx.Hash()
+			if err := rawdb.WriteTransactionIndex(batch, hash[:], block.Number()); err != nil {
+				return fmt.Errorf("write tx index: %w", err)
+			}
+		}
+	}
+	if balanceTrace != nil {
+		if balanceTrace.trace != nil {
+			if err := rawdb.WriteBlockBalanceTrace(batch, int64(block.Number()), balanceTrace.trace); err != nil {
+				return fmt.Errorf("write block balance trace: %w", err)
+			}
+		}
+		addrs := make([]tcommon.Address, 0, len(balanceTrace.accountBalances))
+		for addr := range balanceTrace.accountBalances {
+			addrs = append(addrs, addr)
+		}
+		slices.SortFunc(addrs, func(a, b tcommon.Address) int { return bytes.Compare(a[:], b[:]) })
+		for _, addr := range addrs {
+			if err := rawdb.WriteAccountTrace(batch, addr.Bytes(), int64(block.Number()), balanceTrace.accountBalances[addr]); err != nil {
+				return fmt.Errorf("write account trace: %w", err)
+			}
+		}
+	}
+	if err := batch.Write(); err != nil {
+		return fmt.Errorf("write block metadata batch: %w", err)
+	}
+	return nil
+}
+
+// blockMetadataOverlayKeys returns the buffered rows that writeBlockMetadataBatch
+// persists directly. Keeping those rows in a buffer layer is necessary for
+// in-range execution and reorg visibility; marking them durable later prevents
+// the solidified-layer flusher from writing their identical bytes twice.
+func blockMetadataOverlayKeys(block *types.Block) [][]byte {
+	if block == nil {
+		return nil
+	}
+	return [][]byte{
+		rawdb.BlockStorageKey(block.Number()),
+		rawdb.TaposRefStorageKey(block.Number()),
+	}
 }
 
 // flushBufferUpToSolidified drains every committed buffer layer whose block
@@ -1927,6 +2103,22 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	} else {
 		lcaHash = oldBranch[len(oldBranch)-1].ParentHash()
 	}
+	// Block bodies at an orphaned height will be overwritten by the replacement
+	// branch below, but their hash-keyed metadata will not. Capture the small
+	// history-mode account-trace key set before dropping the buffer layers, then
+	// remove the old direct rows before the rewind changes canonical state. A
+	// replacement block rewrites its numbered rows and any shared tx- lookup.
+	orphanBlocks := make([]*types.Block, 0, len(oldBranch))
+	for _, kb := range oldBranch {
+		orphanBlocks = append(orphanBlocks, kb.block)
+	}
+	orphaned, err := bc.planOrphanedBlockMetadata(orphanBlocks)
+	if err != nil {
+		return fmt.Errorf("plan orphaned block metadata cleanup: %w", err)
+	}
+	if err := bc.deleteOrphanedBlockMetadata(orphaned); err != nil {
+		return fmt.Errorf("delete orphaned block metadata: %w", err)
+	}
 
 	// Drop the buffer layers belonging to orphan-branch blocks. These were
 	// laid down by earlier applyBlock calls (linear extensions) and contain
@@ -1942,11 +2134,9 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// pre-switch head here, so compute the LCA root explicitly rather than
 	// relying on HeadStateRoot(). Both the active witness list (Phase 3c) and
 	// the rooted dynprops live in the system-KV at the LCA root.
-	lcaRoot := rawdb.ReadBlockStateRoot(bc.chaindb, lcaHash)
-	if lcaRoot == (tcommon.Hash{}) {
-		if n := rawdb.ReadBlockNumber(bc.chaindb, lcaHash); n != nil && *n == 0 {
-			lcaRoot = rawdb.ReadGenesisStateRoot(bc.db)
-		}
+	lcaBlock, lcaRoot, err := loadForkLCABlockAndRoot(bc.chaindb, bc.db, lcaHash)
+	if err != nil {
+		return err
 	}
 	// An orphan-branch maintenance block may have called SetActiveWitnesses,
 	// mutating the in-memory atomic. Its rooted write was dropped with the
@@ -1973,19 +2163,13 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// branch re-evaluates each version from live fork-stats. See forks.VersionPassCache.
 	bc.versionPassCache.Reset()
 
-	var lcaBlock *types.Block
-	numPtr := rawdb.ReadBlockNumber(bc.chaindb, lcaHash)
-	if numPtr != nil {
-		lcaBlock = rawdb.ReadBlock(bc.chaindb, *numPtr)
-	}
-	if lcaBlock == nil {
-		return fmt.Errorf("LCA block %x not found in DB", lcaHash)
-	}
-
 	// Rewind currentBlock to LCA so that applyBlock reads the correct parent root.
 	bc.currentBlock.Store(lcaBlock)
 	if err := rewindCanonicalStagePipeline(bc.db, lcaBlock.Number(), lcaBlock.Hash()); err != nil {
 		return fmt.Errorf("rewind canonical stage progress to LCA %d: %w", lcaBlock.Number(), err)
+	}
+	if err := bc.rewindTransactionLookupStageLocked(lcaBlock.Number(), lcaBlock.Hash()); err != nil {
+		return fmt.Errorf("rewind tx lookup stage progress to LCA %d: %w", lcaBlock.Number(), err)
 	}
 
 	// Apply new branch blocks in order LCA+1 → newHead.
@@ -2030,6 +2214,141 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	return forkExecutor.Close()
 }
 
+type orphanedBlockMetadata struct {
+	block              *types.Block
+	accountTraceOwners map[tcommon.Address]struct{}
+}
+
+// planOrphanedBlockMetadata reads the history rows while the orphan layers are
+// still visible, so their account-trace keys can be deleted before the layers
+// are dropped.
+func (bc *BlockChain) planOrphanedBlockMetadata(blocks []*types.Block) ([]orphanedBlockMetadata, error) {
+	if bc == nil || bc.db == nil {
+		return nil, errors.New("blockchain unavailable")
+	}
+	plans := make([]orphanedBlockMetadata, 0, len(blocks))
+	for _, block := range blocks {
+		if block == nil {
+			return nil, errors.New("nil orphan block")
+		}
+		owners, err := bc.accountTraceOwnersAtBlock(block)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, orphanedBlockMetadata{block: block, accountTraceOwners: owners})
+	}
+	return plans, nil
+}
+
+func (bc *BlockChain) accountTraceOwnersAtBlock(block *types.Block) (map[tcommon.Address]struct{}, error) {
+	owners := make(map[tcommon.Address]struct{})
+	if bc == nil || bc.config == nil || !bc.config.HistoryEnabled || block == nil {
+		return owners, nil
+	}
+	blockNum := block.Number()
+	blockHash := block.Hash()
+	if err := rawdb.IterateStateDomainChanges(bc.buffer, blockNum, func(change *rawdb.StateDomainChange) (bool, error) {
+		if change.BlockNum != blockNum || change.BlockHash != blockHash {
+			return false, fmt.Errorf("state change belongs to block %d (%x), want %d (%x)", change.BlockNum, change.BlockHash, blockNum, blockHash)
+		}
+		if change.FlatDomain == rawdb.StateFlatDomainAccountLatest {
+			owners[change.Owner] = struct{}{}
+		}
+		return true, nil
+	}); err != nil {
+		return nil, fmt.Errorf("read state changes for block %d: %w", blockNum, err)
+	}
+	return owners, nil
+}
+
+// deleteOrphanedBlockMetadata removes direct, canonical-only metadata that is
+// not covered by replacing numbered block rows during a fork switch. The
+// caller invokes it before the buffer layers are dropped and before applying
+// the replacement branch, so any storage failure leaves the canonical head
+// unchanged.
+func (bc *BlockChain) deleteOrphanedBlockMetadata(orphaned []orphanedBlockMetadata) error {
+	if len(orphaned) == 0 {
+		return nil
+	}
+	if bc == nil || bc.db == nil {
+		return errors.New("blockchain unavailable")
+	}
+	batch := bc.db.NewBatch()
+	for _, orphan := range orphaned {
+		block := orphan.block
+		blockNum := block.Number()
+		blockHash := block.Hash()
+		if err := rawdb.DeleteBlockNumber(batch, blockHash); err != nil {
+			return fmt.Errorf("delete block number %d (%x): %w", blockNum, blockHash, err)
+		}
+		rawdb.DeleteBlockStateRoot(batch, blockHash)
+		if err := rawdb.DeleteTransactionInfosByBlock(batch, blockNum); err != nil {
+			return fmt.Errorf("delete transaction infos for block %d: %w", blockNum, err)
+		}
+		if err := rawdb.DeleteBlockBalanceTrace(batch, int64(blockNum)); err != nil {
+			return fmt.Errorf("delete balance trace for block %d: %w", blockNum, err)
+		}
+		for _, tx := range block.Transactions() {
+			txHash := tx.Hash()
+			// ti- is no longer written for new blocks, but deleting it keeps a
+			// reorg correct for databases created by prior releases.
+			if err := rawdb.DeleteTransactionInfo(batch, txHash[:]); err != nil {
+				return fmt.Errorf("delete transaction info %x: %w", txHash, err)
+			}
+			if err := rawdb.DeleteTransactionIndex(batch, txHash[:]); err != nil {
+				return fmt.Errorf("delete transaction index %x: %w", txHash, err)
+			}
+		}
+		for owner := range orphan.accountTraceOwners {
+			if err := rawdb.DeleteAccountTrace(batch, owner.Bytes(), int64(blockNum)); err != nil {
+				return fmt.Errorf("delete account trace for block %d owner %x: %w", blockNum, owner, err)
+			}
+		}
+	}
+	if err := batch.Write(); err != nil {
+		return fmt.Errorf("write orphan metadata delete batch: %w", err)
+	}
+	return nil
+}
+
+func loadForkLCABlockAndRoot(chain *rawdb.ChainDB, db ethdb.KeyValueReader, lcaHash tcommon.Hash) (*types.Block, tcommon.Hash, error) {
+	num, ok, err := rawdb.ReadBlockNumberStrict(chain, lcaHash)
+	if err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("load LCA block %x number: %w", lcaHash, err)
+	}
+	if !ok {
+		return nil, tcommon.Hash{}, fmt.Errorf("LCA block %x has no block number", lcaHash)
+	}
+	block, ok, err := rawdb.ReadBlockStrict(chain, num)
+	if err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("load LCA block %d (%x): %w", num, lcaHash, err)
+	}
+	if !ok {
+		return nil, tcommon.Hash{}, fmt.Errorf("LCA block %d (%x) not found in DB", num, lcaHash)
+	}
+	if block.Hash() != lcaHash {
+		return nil, tcommon.Hash{}, fmt.Errorf("LCA block %d hash mismatch: have %x want %x", num, block.Hash(), lcaHash)
+	}
+	root, ok, err := rawdb.ReadBlockStateRootStrict(chain, lcaHash)
+	if err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("load LCA block %d (%x) state root: %w", num, lcaHash, err)
+	}
+	if ok {
+		return block, root, nil
+	}
+	if num == 0 {
+		root, ok, err := rawdb.ReadGenesisStateRootStrict(db)
+		if err != nil {
+			return nil, tcommon.Hash{}, fmt.Errorf("load LCA genesis state root: %w", err)
+		}
+		if !ok || root == (tcommon.Hash{}) {
+			return nil, tcommon.Hash{}, errors.New("load LCA genesis state root: missing")
+		}
+		return block, root, nil
+	}
+	return block, block.AccountStateRoot(), nil
+}
+
 // LastInsertTime returns when the last block was successfully inserted.
 func (bc *BlockChain) LastInsertTime() time.Time {
 	return time.Unix(0, bc.lastInsertNano.Load())
@@ -2047,19 +2366,61 @@ func (bc *BlockChain) StateDB() *state.Database {
 // /walletsolidity/getaccount returns live (possibly-reorgable) balances,
 // which is the bug the audit's "Solidity API isolation" P1 called out.
 func (bc *BlockChain) StateRootAtBlock(num uint64) tcommon.Hash {
-	block := bc.GetBlockByNumber(num)
-	if block == nil {
-		return tcommon.Hash{}
-	}
-	if root := rawdb.ReadBlockStateRoot(bc.chaindb, block.Hash()); root != (tcommon.Hash{}) {
+	root, ok, err := bc.stateRootAtBlockStrict(num)
+	if err == nil && ok {
 		return root
 	}
-	if num == 0 {
-		return rawdb.ReadGenesisStateRoot(bc.db)
+	return tcommon.Hash{}
+}
+
+func (bc *BlockChain) stateRootAtBlockStrict(num uint64) (tcommon.Hash, bool, error) {
+	if bc == nil {
+		return tcommon.Hash{}, false, errors.New("state root at block: nil blockchain")
+	}
+	if current := bc.CurrentBlock(); current != nil && num > current.Number() {
+		return tcommon.Hash{}, false, nil
+	}
+	block, ok, err := rawdb.ReadBlockStrict(bc.chaindb, num)
+	if err != nil {
+		return tcommon.Hash{}, false, fmt.Errorf("read block %d for state root: %w", num, err)
+	}
+	if !ok {
+		return tcommon.Hash{}, false, nil
+	}
+	return bc.stateRootForKnownBlockStrict(block)
+}
+
+func (bc *BlockChain) stateRootForKnownBlockStrict(block *types.Block) (tcommon.Hash, bool, error) {
+	if bc == nil {
+		return tcommon.Hash{}, false, errors.New("state root for block: nil blockchain")
+	}
+	if block == nil {
+		return tcommon.Hash{}, false, errors.New("state root for block: nil block")
+	}
+	root, ok, err := rawdb.ReadBlockStateRootStrict(bc.chaindb, block.Hash())
+	if err != nil {
+		return tcommon.Hash{}, false, fmt.Errorf("state root for block %d (%x): %w", block.Number(), block.Hash(), err)
+	}
+	if ok {
+		return root, true, nil
+	}
+	if block.Number() == 0 {
+		root, ok, err := rawdb.ReadGenesisStateRootStrict(bc.db)
+		if err != nil {
+			return tcommon.Hash{}, false, fmt.Errorf("state root for genesis block: %w", err)
+		}
+		if !ok || root == (tcommon.Hash{}) {
+			return tcommon.Hash{}, false, nil
+		}
+		return root, true, nil
 	}
 	// Backwards-compat fallback for chain databases written before
 	// blockStateRootPrefix existed; matches HeadStateRoot's behaviour.
-	return block.AccountStateRoot()
+	root = block.AccountStateRoot()
+	if root == (tcommon.Hash{}) {
+		return tcommon.Hash{}, false, nil
+	}
+	return root, true, nil
 }
 
 // HeadStateRoot returns the post-apply state root of the canonical head
@@ -2212,14 +2573,12 @@ func (bc *BlockChain) openState(root tcommon.Hash) (*state.StateDB, error) {
 
 func (bc *BlockChain) openCurrentState() (*state.StateDB, error) {
 	current := bc.CurrentBlock()
-	root := rawdb.ReadBlockStateRoot(bc.chaindb, current.Hash())
-	if root == (tcommon.Hash{}) && current.Number() == 0 {
-		root = rawdb.ReadGenesisStateRoot(bc.db)
+	root, ok, err := bc.stateRootForKnownBlockStrict(current)
+	if err != nil {
+		return nil, err
 	}
-	if root == (tcommon.Hash{}) {
-		// Backwards-compat fallback for chain databases written before
-		// blockStateRootPrefix existed.
-		root = current.AccountStateRoot()
+	if !ok {
+		return nil, fmt.Errorf("state root for current block %d not available", current.Number())
 	}
 	return bc.openState(root)
 }
@@ -2750,6 +3109,25 @@ func (s vmKVStore) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
 	}
 	// Frozen / legacy path: recent BlockID ring first, then raw ancient body.
 	return rawdb.ReadBlockHash(s.chaindb, number)
+}
+
+func (s vmKVStore) BlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error) {
+	// Hot/buffered path first. Buffer implements the strict variant, so
+	// malformed staged rows fail before execution can silently push hash 0.
+	if reader, ok := s.BufferedKVStore.(rawdb.BlockHashReaderStrict); ok {
+		if hash, found, err := reader.BlockHashByNumberStrict(number); err != nil || found {
+			return hash, found, err
+		}
+	} else if reader, ok := s.BufferedKVStore.(rawdb.BlockHashReader); ok {
+		if hash, found := reader.BlockHashByNumber(number); found {
+			return hash, true, nil
+		}
+	}
+	block, found, err := rawdb.ReadBlockStrict(s.chaindb, number)
+	if err != nil || !found {
+		return tcommon.Hash{}, found, err
+	}
+	return block.Hash(), true, nil
 }
 
 // vmKV wraps a processing view for handoff to the actuator/VM layer.

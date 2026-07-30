@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 )
 
 func TestSyncStopHeightPausesAtExistingHead(t *testing.T) {
@@ -29,20 +31,20 @@ func TestSyncStopHeightCapsBufferedBatch(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
-	for _, block := range []bufferedSyncBlock{
-		{raw: rawOf(t, block1), hash: block1.Hash(), num: 1},
-		{raw: rawOf(t, block2), hash: block2.Hash(), num: 2},
-		{raw: rawOf(t, block3), hash: block3.Hash(), num: 3},
+	for _, block := range []syncdl.BufferedBlock{
+		{Raw: rawOf(t, block1), Hash: block1.Hash(), Num: 1},
+		{Raw: rawOf(t, block2), Hash: block2.Hash(), Num: 2},
+		{Raw: rawOf(t, block3), Hash: block3.Hash(), Num: 3},
 	} {
-		ss.blockBuffer[block.num] = block
-		ss.bufferedHash[block.hash] = struct{}{}
+		ss.blockBuffer[block.Num] = block
+		ss.bufferedHash[block.Hash] = struct{}{}
 	}
 	batch := ss.popBufferedSyncBatchLocked(time.Now())
 	_, keptAboveStop := ss.blockBuffer[3]
 	ss.mu.Unlock()
 
-	if len(batch.buffered) != 2 || batch.buffered[1].num != 2 {
-		t.Fatalf("popped blocks = %+v, want contiguous heights 1..2", batch.buffered)
+	if len(batch.Buffered) != 2 || batch.Buffered[1].Num != 2 {
+		t.Fatalf("popped blocks = %+v, want contiguous heights 1..2", batch.Buffered)
 	}
 	if !keptAboveStop {
 		t.Fatal("block above stop height must not be popped for import")

@@ -30,14 +30,44 @@ Pebble data), while the same TransactionInfo messages already existed in the
 ancient `tx_infos` table. The 2026-07-26 follow-up therefore retains only the
 small `tx-*` locator: `ReadTransactionInfo` resolves `txID → blockNum`, reads
 the hot `tib-*` or ancient `tx_infos` row, and wire-scans the repeated field.
-It unmarshals only the matching message. A direct `ti-*` read is a final
-upgrade-compatibility fallback until the operator runs `db prune-tx-info`.
+It unmarshals only the matching message. A direct `ti-*` read remains a
+read-only compatibility fallback, but fresh databases never write that row and
+the Erigon-aligned layout does not retain an offline migration command.
 
 `ReadBlockStateRoot` is the special case: its key is hash-indexed, but
 the freezer table is num-indexed (geth-style). The accessor first tries
 KV (`bsr-<hash>`); on miss it falls through to ancient via a two-step
 lookup `bh-<hash>` → num → `state_roots[num]`. Both halves of that
 two-step are zero-allocation on the KV-hit path.
+
+The production `rawdb.ReadBlockHashByNumber` call sites are now locked by
+`TestProductionBlockHashByNumberReadsStayOnAuditedBoundaries`. New direct calls
+must either move behind a freezer/cold-index-aware interface or update the
+explicit audit whitelist with the reason. The block-hash whitelist is scoped to
+the owning function, not just the file, so `actuator.go` only permits the
+`EffectiveGenesisHash` legacy identity fallback and `blockbuffer` only permits
+its `BlockHashByNumber` adapter. The current whitelist covers only the known
+boundary adapters: `blockbuffer`/TVM `BLOCKHASH`, pruning and snapshot
+canonical-hash verification, the chain-freezer adapter, actuator genesis
+identity, and `gtron db` diagnostics.
+
+Run `scripts/dev/audit_hot_only_reads.sh` before changing rawdb chain/state read
+paths or chain pruning defaults. It executes the focused source audits for
+hot-only block readers, raw freezer readers, block-hash-by-number fallbacks,
+hot-only `ChainDB` constructors, cold archive reader boundaries, state latest
+and as-of raw readers, event-log cold boundaries, and snapshot transaction-info
+publisher strictness.
+
+Runtime chain-freezer accessor point and range reads must validate the decoded
+row they land on before returning a table payload. This keeps a format-valid
+but stale offset sidecar from returning block `N+1` data for a block `N`
+lookup outside full manifest verification or tail-prune coverage checks.
+
+`TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries` also rejects
+new production `rawdb.NewChainDB(..., rawdb.NoopAncient{})` wrappers. Those
+wrappers bypass ancient/cold sidecars by construction, so the whitelist is kept
+to isolated replay and diagnostic boundaries that intentionally do not read the
+live chain freezer.
 
 ### Why not split `header` and `body` tables?
 
@@ -93,7 +123,8 @@ the ancient reader for a real `*freezer.Freezer`.
 | `core/block_builder.go` | 35 | `rawdb.ReadBlockStateRoot(bc.db, …)` | `rawdb.ReadBlockStateRoot(bc.chaindb, …)` (helper takes `*ChainDB`) |
 | `core/genesis.go` | 54 | `rawdb.ReadBlock(db, 0)` | helper accepts `*ChainDB`; call sites that have raw KV wrap with `NoopAncient` |
 | `core/tron_backend.go` | 232, 236, 249, 257, 1143, 1160, 1239 | `rawdb.Read*(b.chain.db, …)` | `rawdb.Read*(b.chain.chaindb, …)` |
-| `cmd/balance-trace/main.go` | 60, 72, 94 | `rawdb.Read*(db, …)` (raw Pebble store) | `rawdb.NewChainDB(db, ancient)`; auto-opens `datadir/gtron/ancient` read-only when present, otherwise falls back to `NoopAncient{}` |
+| `cmd/balance-trace/main.go` | 60, 72, 94 | `rawdb.Read*(db, …)` (raw Pebble store) | snapshot-aware `rawdb.NewChainDB(db, rawdb.NewFallbackAncientReader(ancient, manager))`; auto-opens `datadir/gtron/ancient` and `datadir/gtron/state-snapshots`, then attaches chain-index, balance-trace, section-bloom, and event-log sidecars so diagnostics keep seeing cold archive rows after hot pruning |
+| `cmd/reward-trace/main.go` | 124, 134, 260, 275, 294, 335 | `rawdb.NewChainDB(db, ancient)` without snapshot sidecars | snapshot-aware `rawdb.NewFallbackAncientReader(ancient, manager)` plus chain-index, balance-trace, section-bloom, and event-log sidecars so timestamp/cycle scans can read cold blocks and lookup rows after hot pruning |
 | `vm/instructions.go` | 482 | `rawdb.ReadBlock(interpreter.tvm.DB, index)` | switched to dedicated `rawdb.ReadBlockKV` (KV-only; never consults ancient). Safe because `opBlockHash`'s 256-block window sits above the freezer margin so any frozen lookup would land in cold storage anyway. |
 
 ### Test-side migration
@@ -135,10 +166,13 @@ blocks/tx-infos/state-roots through `rawdb.Read*` are switched to
    Slice 3 only needs to inject a `NewFreezerReader(*freezer.Freezer)`
    into `NewChainDB` when the operator turns the freezer on.
 
-4. **`cmd/balance-trace` opens ancient when available.** The diagnostic
-   tool now detects `datadir/gtron/ancient` and uses a read-only freezer
-   reader so post-freezer datadirs still scan frozen blocks. Datadirs
-   without ancient files keep the pre-freezer `NoopAncient{}` behavior.
+4. **Diagnostics open cold storage when available.** `cmd/balance-trace`
+   and `cmd/reward-trace` detect `datadir/gtron/ancient`, open the
+   `state-snapshots` manager, and compose both behind `ChainDB` so
+   post-prune datadirs still scan frozen blocks and cold lookup rows.
+   Head block-number, head state-root, and block scans use strict accessors, so
+   corrupt hot/freezer/cold payloads fail the diagnostic instead of being
+   reported as missing or triggering a false genesis-root fallback.
 
 5. **VM `opBlockHash` is intentionally KV-only.** The 256-block lookback
    window in `vm/instructions.go` sits entirely above the 128-block

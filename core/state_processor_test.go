@@ -304,7 +304,7 @@ func TestApplyTransaction_InBlockPreConsensusSkipsResultSizeGate(t *testing.T) {
 
 		_, err := applyTransaction(
 			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
-			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true, nil, nil,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true, nil, nil, nil,
 		)
 		return err
 	}
@@ -335,7 +335,7 @@ func TestApplyTransaction_InBlockExpirationLowerBound(t *testing.T) {
 		tx.Proto().RawData.Expiration = expiration
 		_, err := applyTransaction(
 			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
-			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true, nil, nil,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true, nil, nil, nil,
 		)
 		return err
 	}
@@ -368,7 +368,7 @@ func TestApplyTransaction_RejectsOversizedResult(t *testing.T) {
 		}
 		_, err := applyTransaction(
 			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
-			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true, nil, nil,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true, nil, nil, nil,
 		)
 		return err
 	}
@@ -609,7 +609,7 @@ func TestApplyTransaction_ExchangeNileUsesVersion34(t *testing.T) {
 			statedb, dynProps, makeExchangeTransactionTx(1),
 			1_700_000_000_000, true, 0, 1_700_000_000_000, 1,
 			db, nil, params.DefaultBlockNumForEnergyLimit, params.NileGenesisHash,
-			tcommon.Address{}, false, false, true, nil, nil,
+			tcommon.Address{}, false, false, true, nil, nil, nil,
 		)
 		return err
 	}
@@ -826,7 +826,7 @@ func TestProcessBlock_CanDiscardTransactionInfosAfterValidation(t *testing.T) {
 	txInfos, _, err := processBlock(
 		statedb, dynProps, block, nil, nil, 0,
 		params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
-		nil, nil, batch, false, -1, nil,
+		nil, processBlockPrefetchConfig{}, nil, nil, batch, false, -1, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"math"
 	"os"
 	"time"
 
@@ -33,28 +31,24 @@ func (a *freezerChainSource) DB() ethdb.KeyValueStore {
 	return a.chain.DB()
 }
 
-func (a *freezerChainSource) ReadBlockRaw(number uint64) []byte {
-	return rawdb.ReadBlockRaw(a.chain.DB(), number)
+func (a *freezerChainSource) ReadBlockRawStrict(number uint64) ([]byte, bool, error) {
+	return rawdb.ReadBlockRawStrict(a.chain.DB(), number)
 }
 
-func (a *freezerChainSource) ReadTransactionInfosRaw(number uint64) []byte {
-	return rawdb.ReadTransactionInfosRaw(a.chain.DB(), number)
+func (a *freezerChainSource) ReadTransactionInfosRawStrict(number uint64) ([]byte, bool, error) {
+	return rawdb.ReadTransactionInfosRawStrict(a.chain.DB(), number)
 }
 
-func (a *freezerChainSource) ViewBlockRaw(number uint64, fn func([]byte) error) (bool, error) {
-	return rawdb.ViewBlockRaw(a.chain.DB(), number, fn)
+func (a *freezerChainSource) ReadBlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error) {
+	return rawdb.ReadBlockHashByNumberStrict(a.chain.ChainDB(), number)
 }
 
-func (a *freezerChainSource) ViewTransactionInfosRaw(number uint64, fn func([]byte) error) (bool, error) {
-	return rawdb.ViewTransactionInfosRaw(a.chain.DB(), number, fn)
-}
-
-func (a *freezerChainSource) ReadBlockHash(_ uint64, blockRaw []byte) tcommon.Hash {
-	return rawdb.ReadBlockHashRaw(blockRaw)
-}
-
-func (a *freezerChainSource) ReadBlockStateRootRaw(hash tcommon.Hash) []byte {
-	return rawdb.ReadBlockStateRootRaw(a.chain.DB(), hash)
+func (a *freezerChainSource) ReadBlockStateRootRaw(hash tcommon.Hash) ([]byte, error) {
+	data, _, err := rawdb.ReadBlockStateRootRawStrict(a.chain.ChainDB(), hash)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 type freezerStore struct {
@@ -81,31 +75,7 @@ func (s *freezerStore) Sync() error {
 	return s.f.Sync()
 }
 
-func (s *freezerStore) V2Coverage() uint64 {
-	return s.f.V2Coverage()
-}
-
-func (s *freezerStore) AncientDatadir() (string, error) {
-	return s.f.AncientDatadir()
-}
-
-func (s *freezerStore) TransactionIndexCoverage() uint64 {
-	return s.f.TransactionIndexCoverage()
-}
-
-func (s *freezerStore) PublishTransactionIndexRun(result rawdbfreezer.TransactionIndexBuildResult) error {
-	return s.f.PublishTransactionIndexRun(result)
-}
-
-func (s *freezerStore) CompactTransactionIndexTail() (bool, error) {
-	return s.f.CompactTransactionIndexTail()
-}
-
-func (s *freezerStore) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
-	return s.f.MigrateV2(options)
-}
-
-func makeFreezerConfig(ctx *cli.Context) (chainfreezer.Config, error) {
+func makeFreezerConfig(ctx *cli.Context) chainfreezer.Config {
 	cfg := chainfreezer.Default()
 	cfg.Enabled = !ctx.Bool("freezer.disable")
 	if ctx.IsSet("freezer.interval") {
@@ -117,23 +87,7 @@ func makeFreezerConfig(ctx *cli.Context) (chainfreezer.Config, error) {
 	if ctx.IsSet("freezer.batch") {
 		cfg.BatchBlocks = ctx.Uint64("freezer.batch")
 	}
-	cfg.V2Enabled = !ctx.Bool("freezer.v2.disable")
-	frameBlocks := ctx.Uint64("freezer.v2.frame-blocks")
-	if frameBlocks == 0 || frameBlocks > math.MaxUint32 {
-		return chainfreezer.Config{}, fmt.Errorf("--freezer.v2.frame-blocks must be between 1 and %d", uint64(math.MaxUint32))
-	}
-	cfg.V2FrameBlocks = uint32(frameBlocks)
-	cfg.V2SegmentBlocks = ctx.Uint64("freezer.v2.segment-blocks")
-	if cfg.V2SegmentBlocks == 0 || cfg.V2SegmentBlocks%frameBlocks != 0 {
-		return chainfreezer.Config{}, fmt.Errorf("--freezer.v2.segment-blocks must be positive and divisible by --freezer.v2.frame-blocks")
-	}
-	cfg.TransactionIndexEnabled = !ctx.Bool("freezer.tx-index.disable")
-	prefixBits := ctx.Uint64("freezer.tx-index.prefix-bits")
-	if prefixBits < 8 || prefixBits > 24 {
-		return chainfreezer.Config{}, fmt.Errorf("--freezer.tx-index.prefix-bits must be between 8 and 24")
-	}
-	cfg.TransactionIndexPrefixBits = uint32(prefixBits)
-	return cfg, nil
+	return cfg
 }
 
 func shouldOpenFreezer(path string, cfg chainfreezer.Config) bool {

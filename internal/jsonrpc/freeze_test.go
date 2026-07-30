@@ -119,10 +119,19 @@ func freezeSpecs() []requestSpec {
 		{name: "eth_getBlockByNumber_fullTx", method: "eth_getBlockByNumber", params: []interface{}{"0x64", true}},
 		{name: "eth_getBlockByHash_hashesOnly", method: "eth_getBlockByHash", params: []interface{}{blockHash, false}},
 		{name: "eth_getBlockByHash_fullTx", method: "eth_getBlockByHash", params: []interface{}{blockHash, true}},
+		{name: "eth_getBlockTransactionCountByNumber", method: "eth_getBlockTransactionCountByNumber", params: []interface{}{"latest"}},
+		{name: "eth_getBlockTransactionCountByHash", method: "eth_getBlockTransactionCountByHash", params: []interface{}{blockHash}},
+		{name: "eth_getUncleCountByBlockNumber", method: "eth_getUncleCountByBlockNumber", params: []interface{}{"latest"}},
+		{name: "eth_getUncleCountByBlockHash", method: "eth_getUncleCountByBlockHash", params: []interface{}{blockHash}},
+		{name: "eth_getUncleByBlockNumberAndIndex", method: "eth_getUncleByBlockNumberAndIndex", params: []interface{}{"0x64", "0x0"}},
+		{name: "eth_getUncleByBlockHashAndIndex", method: "eth_getUncleByBlockHashAndIndex", params: []interface{}{blockHash, "0x0"}},
 
 		// ── transaction queries ──
 		{name: "eth_getTransactionByHash", method: "eth_getTransactionByHash", params: []interface{}{txHash}},
+		{name: "eth_getTransactionByBlockNumberAndIndex", method: "eth_getTransactionByBlockNumberAndIndex", params: []interface{}{"0x64", "0x0"}},
+		{name: "eth_getTransactionByBlockHashAndIndex", method: "eth_getTransactionByBlockHashAndIndex", params: []interface{}{blockHash, "0x0"}},
 		{name: "eth_getTransactionReceipt", method: "eth_getTransactionReceipt", params: []interface{}{txHash}},
+		{name: "eth_getBlockReceipts", method: "eth_getBlockReceipts", params: []interface{}{"0x64"}},
 
 		// ── logs ──
 		{name: "eth_getLogs", method: "eth_getLogs", params: []interface{}{

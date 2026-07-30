@@ -17,6 +17,14 @@ func taposRefBytes(blockNum uint64) [2]byte {
 	return b
 }
 
+// TaposRefStorageKey returns the recent-block ring key selected by blockNum.
+// It is used by layered writers that retain the TAPOS row for overlay/reorg
+// reads after a direct metadata batch has already persisted the same value.
+func TaposRefStorageKey(blockNum uint64) []byte {
+	ref := taposRefBytes(blockNum)
+	return taposKey(ref[:])
+}
+
 // WriteTaposRef records a block's hash tail (bytes 8..16 of its
 // 32-byte hash) under the 2-byte ref slot derived from its block number.
 // Each new block at the same lower-half number overwrites the previous
@@ -25,9 +33,6 @@ func taposRefBytes(blockNum uint64) [2]byte {
 // pushBlockInner.
 func WriteTaposRef(db ethdb.KeyValueWriter, blockNum uint64, blockHash common.Hash) error {
 	ref := taposRefBytes(blockNum)
-	if writer, ok := db.(keyPartsWriter); ok {
-		return writer.PutKeyParts(taposPrefix, ref[:], blockHash[8:16])
-	}
 	return db.Put(taposKey(ref[:]), blockHash[8:16])
 }
 
@@ -46,11 +51,9 @@ func ReadTaposRef(db ethdb.KeyValueReader, refBlockBytes []byte) []byte {
 	return v
 }
 
-// ReadTaposRefNoCopy is the synchronous-validation counterpart of
-// ReadTaposRef. Layered readers can assemble the fixed prefix and 2-byte slot
-// in stack storage and return their immutable overlay/cache value directly.
-// The returned bytes must not be mutated or retained across another database
-// operation.
+// ReadTaposRefNoCopy is the validation hot-path variant. Layered readers can
+// resolve the fixed prefix and slot without allocating a physical key and may
+// return their immutable cached value directly.
 func ReadTaposRefNoCopy(db ethdb.KeyValueReader, refBlockBytes []byte) []byte {
 	if len(refBlockBytes) != 2 {
 		return nil

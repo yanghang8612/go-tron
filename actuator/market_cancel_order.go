@@ -186,15 +186,8 @@ func removeOrderFromBook(st *state.StateDB, order *corepb.MarketOrder, pk [16]by
 		if err := st.WriteMarketPriceList(order.SellTokenId, order.BuyTokenId, pl); err != nil {
 			return err
 		}
-		count := st.ReadMarketPairPriceCount(order.SellTokenId, order.BuyTokenId)
-		if count <= 1 {
-			if err := st.DeleteMarketPairPriceCount(order.SellTokenId, order.BuyTokenId); err != nil {
-				return err
-			}
-		} else {
-			if err := st.WriteMarketPairPriceCount(order.SellTokenId, order.BuyTokenId, count-1); err != nil {
-				return err
-			}
+		if err := st.DecrementMarketPairPriceCount(order.SellTokenId, order.BuyTokenId); err != nil {
+			return err
 		}
 	} else {
 		// Write updated order book list back

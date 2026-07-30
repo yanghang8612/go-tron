@@ -4,74 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 )
-
-type accountLatestOwnedValueProbe struct {
-	ownedCalls int
-	putCalls   int
-	key        []byte
-	value      []byte
-}
-
-type accountLatestOwnedKeyValueProbe struct {
-	accountLatestOwnedValueProbe
-	ownedKeyValueCalls int
-}
-
-func (p *accountLatestOwnedKeyValueProbe) PutOwnedKeyValue(key, value []byte) error {
-	p.ownedKeyValueCalls++
-	p.key = key
-	p.value = value
-	return nil
-}
-
-func (p *accountLatestOwnedValueProbe) Put(key, value []byte) error {
-	p.putCalls++
-	p.key = append(p.key[:0], key...)
-	p.value = append(p.value[:0], value...)
-	return nil
-}
-
-func (*accountLatestOwnedValueProbe) Delete([]byte) error { return nil }
-
-func (p *accountLatestOwnedValueProbe) PutOwnedValue(key, value []byte) error {
-	p.ownedCalls++
-	p.key = key
-	p.value = value
-	return nil
-}
-
-func TestWriteStateAccountLatestOwnedByKeyPrefersOwnedWriter(t *testing.T) {
-	probe := new(accountLatestOwnedValueProbe)
-	key := []byte("physical-account-key")
-	value := []byte("fresh-account-envelope")
-	if err := WriteStateAccountLatestOwnedByKey(probe, key, value); err != nil {
-		t.Fatal(err)
-	}
-	if probe.ownedCalls != 1 || probe.putCalls != 0 {
-		t.Fatalf("writer calls owned/Put = %d/%d, want 1/0", probe.ownedCalls, probe.putCalls)
-	}
-	if &probe.key[0] != &key[0] || &probe.value[0] != &value[0] {
-		t.Fatal("owned writer did not receive the original key/value slices")
-	}
-}
-
-func TestWriteStateAccountLatestOwnedByKeyPrefersOwnedKeyValueWriter(t *testing.T) {
-	probe := new(accountLatestOwnedKeyValueProbe)
-	key := []byte("owned-physical-account-key")
-	value := []byte("owned-account-envelope")
-	if err := WriteStateAccountLatestOwnedByKey(probe, key, value); err != nil {
-		t.Fatal(err)
-	}
-	if probe.ownedKeyValueCalls != 1 || probe.ownedCalls != 0 || probe.putCalls != 0 {
-		t.Fatalf("writer calls key-value/value/Put = %d/%d/%d, want 1/0/0", probe.ownedKeyValueCalls, probe.ownedCalls, probe.putCalls)
-	}
-	if &probe.key[0] != &key[0] || &probe.value[0] != &value[0] {
-		t.Fatal("owned key/value writer did not receive the original slices")
-	}
-}
 
 func TestStateAccountLatestReadWriteDelete(t *testing.T) {
 	db := NewMemoryDatabase()
@@ -100,59 +34,6 @@ func TestStateAccountLatestReadWriteDelete(t *testing.T) {
 	}
 	if _, ok, err := ReadStateAccountLatest(db, owner); err != nil || ok {
 		t.Fatalf("read after delete = ok:%v err:%v", ok, err)
-	}
-}
-
-type accountLatestAliasingReadProbe struct {
-	ethdb.KeyValueReader
-	value             []byte
-	structuredReads   int
-	legacyCachedReads int
-	structuredAccount common.AccountID
-}
-
-var stateAccountLatestReadSink []byte
-
-func (p *accountLatestAliasingReadProbe) GetNoCopyCached([]byte) ([]byte, error) {
-	p.legacyCachedReads++
-	return p.value, nil
-}
-
-func (p *accountLatestAliasingReadProbe) GetNoCopyCachedStateAccountLatest(_ []byte, accountID common.AccountID) ([]byte, error) {
-	p.structuredReads++
-	p.structuredAccount = accountID
-	return p.value, nil
-}
-
-func TestReadStateAccountLatestNoCopyAliasesReaderValue(t *testing.T) {
-	owner := stateKVTestAddress(0x41, 0x56)
-	backing := []byte("account-envelope")
-	probe := &accountLatestAliasingReadProbe{value: backing}
-	borrowed, ok, err := ReadStateAccountLatestNoCopy(probe, owner)
-	if err != nil || !ok || !bytes.Equal(borrowed, backing) {
-		t.Fatalf("borrowed read = (%q,%v,%v)", borrowed, ok, err)
-	}
-	if &borrowed[0] != &backing[0] {
-		t.Fatal("no-copy account read copied the reader value")
-	}
-	if probe.structuredReads != 1 || probe.legacyCachedReads != 0 || probe.structuredAccount != owner.AccountID() {
-		t.Fatalf("structured/legacy reads = %d/%d account=%x", probe.structuredReads, probe.legacyCachedReads, probe.structuredAccount)
-	}
-	owned, ok, err := ReadStateAccountLatest(probe, owner)
-	if err != nil || !ok || !bytes.Equal(owned, backing) {
-		t.Fatalf("owned read = (%q,%v,%v)", owned, ok, err)
-	}
-	if &owned[0] == &backing[0] {
-		t.Fatal("ordinary account read exposed the reader value")
-	}
-}
-
-func BenchmarkReadStateAccountLatestNoCopyCachedHit(b *testing.B) {
-	owner := stateKVTestAddress(0x41, 0x56)
-	probe := &accountLatestAliasingReadProbe{value: []byte("account-envelope")}
-	b.ReportAllocs()
-	for b.Loop() {
-		stateAccountLatestReadSink, _, _ = ReadStateAccountLatestNoCopy(probe, owner)
 	}
 }
 

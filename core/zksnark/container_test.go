@@ -3,6 +3,7 @@ package zksnark
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
@@ -208,6 +209,31 @@ func TestContainerSaveReusesPreviousEmptyRootWhenLastTreeIsAbsent(t *testing.T) 
 	}
 	if got := rawdb.ReadIncrMerkleTree(db, root); got != nil {
 		t.Fatalf("empty root-keyed tree should remain zero-byte/absent, got %v", got)
+	}
+}
+
+func TestContainerSaveRejectsCorruptPreviousEmptyRoot(t *testing.T) {
+	db := memorydb.New()
+	c := NewMerkleContainerFromDB(db)
+
+	root := make([]byte, len(PedersenHash{}))
+	root[0] = 0xbc
+	if err := db.Put(rawdb.IncrMerkleTreeStateKey(root), []byte{0x80}); err != nil {
+		t.Fatalf("write corrupt tree: %v", err)
+	}
+	if err := rawdb.WriteMerkleTreeRootByBlock(db, 10, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("ResetCurrent: %v", err)
+	}
+
+	err := c.SaveCurrentAsBest(11)
+	if err == nil || !strings.Contains(err.Error(), "decode incremental merkle tree") {
+		t.Fatalf("SaveCurrentAsBest error = %v, want decode error", err)
+	}
+	if got := rawdb.ReadMerkleTreeRootByBlock(db, 11); got != nil {
+		t.Fatalf("block 11 root should not be written after corrupt anchor, got %x", got)
 	}
 }
 

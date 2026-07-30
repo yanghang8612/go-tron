@@ -7,6 +7,7 @@ package vm
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -28,6 +29,19 @@ func (f *hashReaderKV) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
 	f.calls = append(f.calls, number)
 	h, ok := f.hashes[number]
 	return h, ok
+}
+
+type strictHashReaderKV struct {
+	ethdb.KeyValueStore
+	err error
+}
+
+func (f *strictHashReaderKV) BlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error) {
+	return tcommon.Hash{}, false, f.err
+}
+
+func (f *strictHashReaderKV) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
+	return tcommon.Hash{0xFF}, true
 }
 
 func TestBlockHashOpcodePrefersBlockHashReader(t *testing.T) {
@@ -61,6 +75,19 @@ func TestBlockHashOpcodePrefersBlockHashReader(t *testing.T) {
 	}
 }
 
+func TestBlockHashOpcodeSurfacesStrictReaderError(t *testing.T) {
+	wantErr := errors.New("cold block hash corrupt")
+	db := &strictHashReaderKV{KeyValueStore: ethrawdb.NewMemoryDatabase(), err: wantErr}
+	tvm := NewTVM(nil, nil, tcommon.Address{}, 100, 0, tcommon.Address{}, 1, TVMConfig{})
+	tvm.SetDB(db)
+
+	stack := newStack()
+	stack.push(uint256.NewInt(50))
+	if _, err := opBlockHash(nil, tvm.interpreter, nil, nil, stack); !errors.Is(err, wantErr) {
+		t.Fatalf("opBlockHash err = %v, want %v", err, wantErr)
+	}
+}
+
 func TestChainIDOpcodeUsesBlockHashReaderForGenesis(t *testing.T) {
 	genesisID := tcommon.HexToHash("0000000000000000d698d4192c56cb6be724a558448e2684802de4d6cd8690dc")
 	db := &hashReaderKV{
@@ -78,5 +105,17 @@ func TestChainIDOpcodeUsesBlockHashReaderForGenesis(t *testing.T) {
 	got := top.Bytes32()
 	if !bytes.Equal(got[:], genesisID.Bytes()) {
 		t.Fatalf("CHAINID via reader: got %x want %x (genesis blockID)", got, genesisID.Bytes())
+	}
+}
+
+func TestChainIDOpcodeSurfacesStrictReaderError(t *testing.T) {
+	wantErr := errors.New("cold genesis hash corrupt")
+	db := &strictHashReaderKV{KeyValueStore: ethrawdb.NewMemoryDatabase(), err: wantErr}
+	tvm := NewTVM(nil, nil, tcommon.Address{}, 100, 0, tcommon.Address{}, 1, TVMConfig{Istanbul: true})
+	tvm.SetDB(db)
+
+	stack := newStack()
+	if _, err := opChainID(nil, tvm.interpreter, nil, nil, stack); !errors.Is(err, wantErr) {
+		t.Fatalf("opChainID err = %v, want %v", err, wantErr)
 	}
 }

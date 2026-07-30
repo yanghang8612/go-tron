@@ -4,10 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // getProposalById handles GET/POST /wallet/getproposalbyid
 func (api *API) getProposalById(w http.ResponseWriter, r *http.Request) {
+	api.handleGetProposalById(w, r, nil)
+}
+
+func (api *API) handleGetProposalById(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	idStr := r.URL.Query().Get("id")
 	if idStr == "" {
 		var body struct {
@@ -22,8 +27,26 @@ func (api *API) getProposalById(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	p, err := api.backend.GetProposalByID(id)
-	if err != nil || p == nil {
+	var p *ProposalInfo
+	if boundFn == nil {
+		p, err = api.backend.GetProposalByID(id)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		p, err = api.backend.GetProposalByIDAt(id, blockNum)
+	}
+	if err != nil {
+		if proposalLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
@@ -33,8 +56,21 @@ func (api *API) getProposalById(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func proposalLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return strings.HasPrefix(msg, "proposal ") &&
+		(strings.HasSuffix(msg, " not found") || strings.Contains(msg, " not found at block "))
+}
+
 // getPaginatedProposalList handles POST /wallet/getpaginatedproposallist
 func (api *API) getPaginatedProposalList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedProposalList(w, r, nil)
+}
+
+func (api *API) handleGetPaginatedProposalList(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		Offset int `json:"offset"`
 		Limit  int `json:"limit"`
@@ -46,7 +82,19 @@ func (api *API) getPaginatedProposalList(w http.ResponseWriter, r *http.Request)
 	if body.Limit <= 0 {
 		body.Limit = 20
 	}
-	proposals, err := api.backend.ListProposalsPaginated(body.Offset, body.Limit)
+	var (
+		proposals []*ProposalInfo
+		err       error
+	)
+	if boundFn == nil {
+		proposals, err = api.backend.ListProposalsPaginated(body.Offset, body.Limit)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		proposals, err = api.backend.ListProposalsPaginatedAt(body.Offset, body.Limit, blockNum)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -3,8 +3,6 @@ package net
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,14 +11,12 @@ import (
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
-	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/p2p"
 	"github.com/tronprotocol/go-tron/params"
-	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
 
-func makeTestChain(t testing.TB) *core.BlockChain {
+func makeTestChain(t *testing.T) *core.BlockChain {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
@@ -36,7 +32,23 @@ func makeTestChain(t testing.TB) *core.BlockChain {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := bc.Close(); err != nil {
+			t.Logf("close test chain: %v", err)
+		}
+	})
 	return bc
+}
+
+func waitUntil(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return cond()
 }
 
 func TestHandleBlockDropsBroadcastWhileSyncPaused(t *testing.T) {
@@ -72,19 +84,23 @@ func TestHandshakeSuccess(t *testing.T) {
 	h1.SetServer(srv1)
 	h2.SetServer(srv2)
 
-	srv1.Start()
+	if err := srv1.Start(); err != nil {
+		t.Fatalf("start srv1: %v", err)
+	}
 	defer srv1.Stop()
-	srv2.Start()
+	if err := srv2.Start(); err != nil {
+		t.Fatalf("start srv2: %v", err)
+	}
 	defer srv2.Stop()
 
-	srv2.AddPeer(srv1.ListenAddr())
-	time.Sleep(200 * time.Millisecond)
-
-	if h1.HandshakedPeerCount() != 1 {
-		t.Fatalf("h1 handshaked peers: want 1, got %d", h1.HandshakedPeerCount())
+	if err := srv2.AddPeer(srv1.ListenAddr()); err != nil {
+		t.Fatalf("add peer: %v", err)
 	}
-	if h2.HandshakedPeerCount() != 1 {
-		t.Fatalf("h2 handshaked peers: want 1, got %d", h2.HandshakedPeerCount())
+
+	if !waitUntil(3*time.Second, func() bool {
+		return h1.HandshakedPeerCount() == 1 && h2.HandshakedPeerCount() == 1
+	}) {
+		t.Fatalf("handshaked peers: h1=%d h2=%d, want 1/1", h1.HandshakedPeerCount(), h2.HandshakedPeerCount())
 	}
 }
 
@@ -120,158 +136,6 @@ func TestBuildHelloIncludesFromEndpoint(t *testing.T) {
 	}
 }
 
-func TestBuildHelloUsesSolidifiedBlockInsteadOfHead(t *testing.T) {
-	diskdb := ethrawdb.NewMemoryDatabase()
-	sdb := state.NewDatabase(diskdb)
-	witnesses := []tcommon.Address{
-		{0x41, 1},
-		{0x41, 2},
-		{0x41, 3},
-		{0x41, 4},
-	}
-	genesis := &params.Genesis{
-		Config:    params.MainnetChainConfig,
-		Timestamp: 0,
-		DynamicProperties: map[string]int64{
-			"next_maintenance_time": 1<<62 - 1,
-		},
-	}
-	for _, addr := range witnesses {
-		genesis.Accounts = append(genesis.Accounts, params.GenesisAccount{
-			Address: addr,
-			Balance: 1_000_000,
-		})
-		genesis.Witnesses = append(genesis.Witnesses, params.GenesisWitness{
-			Address:   addr,
-			VoteCount: 1,
-			URL:       "test",
-		})
-	}
-	if _, _, err := core.SetupGenesisBlock(diskdb, genesis); err != nil {
-		t.Fatal(err)
-	}
-	bc, err := core.NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bc.Close()
-
-	for i := 1; i <= 3; i++ {
-		parent := bc.CurrentBlock()
-		block := types.NewBlockFromPB(&corepb.Block{
-			BlockHeader: &corepb.BlockHeader{
-				RawData: &corepb.BlockHeaderRaw{
-					Number:         int64(i),
-					Timestamp:      int64(i) * 3000,
-					ParentHash:     parent.Hash().Bytes(),
-					WitnessAddress: witnesses[i-1].Bytes(),
-				},
-			},
-		})
-		if err := bc.InsertBlock(block); err != nil {
-			t.Fatalf("insert block %d: %v", i, err)
-		}
-	}
-
-	if got := bc.DynProps().LatestSolidifiedBlockNum(); got != 1 {
-		t.Fatalf("test setup solidified block = %d, want 1", got)
-	}
-
-	handler := NewTronHandler(bc, txpool.New(), nil)
-	hello := handler.buildHello()
-	solidID, ok := bc.BlockIDByNumber(1)
-	if !ok {
-		t.Fatal("solidified block #1 is unavailable")
-	}
-	if got := hello.GetSolidBlockId().GetNumber(); got != int64(solidID.Num) {
-		t.Fatalf("hello solid block number = %d, want %d", got, solidID.Num)
-	}
-	if got := hello.GetSolidBlockId().GetHash(); !bytes.Equal(got, solidID.Hash[:]) {
-		t.Fatalf("hello solid block hash = %x, want %x", got, solidID.Hash)
-	}
-	if got := hello.GetHeadBlockId().GetNumber(); got != 3 {
-		t.Fatalf("hello head block number = %d, want 3", got)
-	}
-	if bytes.Equal(hello.GetSolidBlockId().GetHash(), hello.GetHeadBlockId().GetHash()) {
-		t.Fatal("hello solid block must not be the unsolidified head")
-	}
-}
-
-func TestHandleHelloDefersCacheUntilMutualTraffic(t *testing.T) {
-	bc := makeTestChain(t)
-	cachePath := filepath.Join(t.TempDir(), "p2p-peers")
-	handler := NewTronHandler(bc, txpool.New(), nil)
-	srv := p2p.NewServer(p2p.ServerConfig{
-		ListenAddr:    "127.0.0.1:0",
-		MaxPeers:      5,
-		PeerCachePath: cachePath,
-	}, handler)
-	handler.SetServer(srv)
-
-	peer := p2p.NewPeer(nil, "198.51.100.7:18888", false, nil)
-	handler.mu.Lock()
-	handler.peers[peer.ID()] = &peerState{peer: peer, rl: p2p.NewRateLimiter()}
-	handler.mu.Unlock()
-
-	hello := handler.buildHello()
-	hello.HeadBlockId.Number = 10
-	hello.LowestBlockNum = 2 // local next block is 1, so this peer cannot serve it
-	payload, err := proto.Marshal(hello)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler.handleHello(peer, payload)
-	handler.confirmApplicationPeer(peer)
-	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
-		t.Fatalf("unusable peer must not populate cache: %v", err)
-	}
-
-	hello.LowestBlockNum = 1
-	payload, err = proto.Marshal(hello)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler.handleHello(peer, payload)
-	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
-		t.Fatalf("hello alone must not populate cache: %v", err)
-	}
-	handler.confirmApplicationPeer(peer)
-	data, err := os.ReadFile(cachePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := string(data), peer.ID()+"\n"; got != want {
-		t.Fatalf("cached peer = %q, want %q", got, want)
-	}
-}
-
-func TestCacheRejectReasonsIncludeMissingHistoricalBlocks(t *testing.T) {
-	for _, reason := range []corepb.ReasonCode{
-		corepb.ReasonCode_FORKED,
-		corepb.ReasonCode_FETCH_FAIL,
-		corepb.ReasonCode_LIGHT_NODE_SYNC_FAIL,
-	} {
-		if !isCacheRejectReason(reason) {
-			t.Fatalf("reason %s should evict a cached sync peer", reason)
-		}
-	}
-	if isCacheRejectReason(corepb.ReasonCode_REQUESTED) {
-		t.Fatal("routine disconnect reason must not evict a cached peer")
-	}
-}
-
-func TestDisconnectPeerRecordsLocalReason(t *testing.T) {
-	bc := makeTestChain(t)
-	handler := NewTronHandler(bc, txpool.New(), nil)
-	peer, closePeer := testPeer(t, "local-reject")
-	defer closePeer()
-
-	handler.disconnectPeer(peer, corepb.ReasonCode_BAD_BLOCK)
-	if got := peer.DisconnectCause(); got != "local disconnect: BAD_BLOCK" {
-		t.Fatalf("disconnect cause = %q", got)
-	}
-}
-
 func TestPbftMsgDispatch(t *testing.T) {
 	bc := makeTestChain(t)
 	pool := txpool.New()
@@ -290,10 +154,11 @@ func TestPbftMsgDispatch(t *testing.T) {
 	defer srv2.Stop()
 
 	srv2.AddPeer(srv1.ListenAddr())
-	time.Sleep(200 * time.Millisecond)
 
-	if h2.HandshakedPeerCount() != 1 {
-		t.Fatalf("expected 1 handshaked peer, got %d", h2.HandshakedPeerCount())
+	if !waitUntil(3*time.Second, func() bool {
+		return h1.HandshakedPeerCount() == 1 && h2.HandshakedPeerCount() == 1
+	}) {
+		t.Fatalf("handshaked peers: h1=%d h2=%d, want 1/1", h1.HandshakedPeerCount(), h2.HandshakedPeerCount())
 	}
 
 	// Send PBFT messages from h2 to h1 — stubs must dispatch without panic.
@@ -301,9 +166,8 @@ func TestPbftMsgDispatch(t *testing.T) {
 	peers2[0].Send(p2p.MsgPbftMsg, []byte{})
 	peers2[0].Send(p2p.MsgPbftCommitMsg, []byte{})
 
-	time.Sleep(50 * time.Millisecond)
 	// success = no panic, no disconnect
-	if h1.HandshakedPeerCount() != 1 {
+	if !waitUntil(time.Second, func() bool { return h1.HandshakedPeerCount() == 1 }) {
 		t.Fatalf("peer disconnected after PBFT messages")
 	}
 }
@@ -320,6 +184,11 @@ func TestHandshakeRejectsWrongGenesis(t *testing.T) {
 	}
 	core.SetupGenesisBlock(diskdb2, genesis2)
 	bc2, _ := core.NewBlockChain(diskdb2, sdb2, genesis2.Config)
+	t.Cleanup(func() {
+		if err := bc2.Close(); err != nil {
+			t.Logf("close mismatched genesis chain: %v", err)
+		}
+	})
 
 	pool := txpool.New()
 	h1 := NewTronHandler(bc1, pool, nil)

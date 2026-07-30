@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"maps"
 	"strings"
 
@@ -378,6 +379,13 @@ var derivedDPKeys = map[string]struct{}{
 	"latest_solidified_block_num":   {},
 }
 
+var derivedDPKeyOrder = []string{
+	"latest_block_header_number",
+	"latest_block_header_timestamp",
+	"latest_block_header_hash",
+	"latest_solidified_block_num",
+}
+
 func isDerivedDPKey(k string) bool { _, ok := derivedDPKeys[k]; return ok }
 
 // FlushRooted stages dirty non-derived dynamic properties into the system
@@ -433,6 +441,90 @@ func (dp *DynamicProperties) loadDerived(store derivedDynamicPropertyReader) {
 // non-derived governance/economic keys whenever a state root is available.
 func LoadDynamicProperties(db ethdb.KeyValueReader, sysKV *StateDB) *DynamicProperties {
 	return loadDynamicPropertiesFromDerivedStore(newRawDBDerivedDynamicPropertyReader(db), sysKV)
+}
+
+// LoadDynamicPropertiesStrict loads rooted dynamic properties while surfacing
+// storage errors. Fresh databases use the rooted SystemDynamicProperty domain;
+// the derived mirror remains a non-consensus compatibility cache.
+func LoadDynamicPropertiesStrict(db ethdb.KeyValueReader, sysKV *StateDB) (*DynamicProperties, error) {
+	return loadDynamicPropertiesFromDerivedStoreStrict(newRawDBDerivedDynamicPropertyReader(db), sysKV)
+}
+
+func loadDynamicPropertiesFromDerivedStoreStrict(store derivedDynamicPropertyReader, sysKV *StateDB) (*DynamicProperties, error) {
+	dp := NewDynamicProperties()
+	if err := dp.loadDerivedStrict(store); err != nil {
+		return nil, err
+	}
+	if sysKV == nil {
+		return dp, nil
+	}
+	keys := make([][]byte, 0, len(defaultProps)+len(defaultStringProps))
+	for k := range defaultProps {
+		if !isDerivedDPKey(k) {
+			keys = append(keys, []byte(k))
+		}
+	}
+	for k := range defaultStringProps {
+		if !isDerivedDPKey(k) {
+			keys = append(keys, []byte(k))
+		}
+	}
+	vals, err := sysKV.SystemKVGetBatch(kvdomains.SystemDynamicProperty, keys)
+	if err != nil {
+		return nil, fmt.Errorf("load rooted dynamic properties: %w", err)
+	}
+	for k := range defaultProps {
+		if isDerivedDPKey(k) {
+			continue
+		}
+		if v, ok := vals[k]; ok {
+			if len(v) != 8 {
+				return nil, fmt.Errorf("dynamic property %q has length %d, want 8", k, len(v))
+			}
+			dp.props[k] = int64(binary.BigEndian.Uint64(v))
+		}
+	}
+	for k := range defaultStringProps {
+		if isDerivedDPKey(k) {
+			continue
+		}
+		if v, ok := vals[k]; ok {
+			dp.stringProps[k] = string(v)
+		}
+	}
+	return dp, nil
+}
+
+func (dp *DynamicProperties) loadDerivedStrict(store derivedDynamicPropertyReader) error {
+	if store == nil {
+		return nil
+	}
+	strictStore, ok := store.(strictDerivedDynamicPropertyReader)
+	if !ok {
+		return fmt.Errorf("dynamic properties: derived store does not support strict reads")
+	}
+	if iterated, err := strictStore.IterateDerivedDynamicPropertiesStrict(func(name string, value []byte) error {
+		if !isDerivedDPKey(name) {
+			return nil
+		}
+		return applyLoadedDPValueStrict(dp, name, value)
+	}); err != nil {
+		return err
+	} else if iterated {
+		return nil
+	}
+	for _, k := range derivedDPKeyOrder {
+		value, ok, err := strictStore.ReadDerivedDynamicPropertyStrict(k)
+		if err != nil {
+			return fmt.Errorf("read derived dynamic property %q: %w", k, err)
+		}
+		if ok {
+			if err := applyLoadedDPValueStrict(dp, k, value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func loadDynamicPropertiesFromDerivedStore(store derivedDynamicPropertyReader, sysKV *StateDB) *DynamicProperties {
@@ -497,6 +589,27 @@ func applyLoadedDPValue(dp *DynamicProperties, name string, value []byte) {
 	if name == "latest_block_header_hash" && len(value) == common.HashLength {
 		dp.latestBlockHeaderHash = common.BytesToHash(value)
 	}
+}
+
+func applyLoadedDPValueStrict(dp *DynamicProperties, name string, value []byte) error {
+	if _, ok := defaultProps[name]; ok {
+		if len(value) != 8 {
+			return fmt.Errorf("dynamic property %q has length %d, want 8", name, len(value))
+		}
+		dp.props[name] = int64(binary.BigEndian.Uint64(value))
+		return nil
+	}
+	if _, ok := defaultStringProps[name]; ok {
+		dp.stringProps[name] = string(value)
+		return nil
+	}
+	if name == "latest_block_header_hash" {
+		if len(value) != common.HashLength {
+			return fmt.Errorf("dynamic property %q has length %d, want %d", name, len(value), common.HashLength)
+		}
+		dp.latestBlockHeaderHash = common.BytesToHash(value)
+	}
+	return nil
 }
 
 // Flush mirrors only derived/runtime dirty props to flat dp-, then clears dirty

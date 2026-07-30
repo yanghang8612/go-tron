@@ -1,6 +1,10 @@
 package rawdb
 
-import "github.com/ethereum/go-ethereum/ethdb"
+import (
+	"fmt"
+
+	"github.com/ethereum/go-ethereum/ethdb"
+)
 
 // noCopyKeyValueReader is an optional fast path for state accessors that
 // consume or defensively copy a value before returning it. Buffer-backed
@@ -25,4 +29,43 @@ func readStateNoCopyCached(db ethdb.KeyValueReader, key []byte) ([]byte, error) 
 		return noCopy.GetNoCopy(key)
 	}
 	return db.Get(key)
+}
+
+func readStatePresentNoCopy(db ethdb.KeyValueReader, key []byte, context string) ([]byte, bool, error) {
+	// The bounded blockbuffer cache provides a one-lookup no-copy fast path.
+	// Missing keys still run through Has so backend failures are not mistaken
+	// for absence.
+	if _, ok := db.(cachedNoCopyKeyValueReader); ok {
+		value, err := readStateNoCopyCached(db, key)
+		if err != nil {
+			return verifyStateReadMiss(db, key, context, err)
+		}
+		return value, true, nil
+	}
+	exists, err := readKeyPresence(db, key, context)
+	if err != nil || !exists {
+		return nil, exists, err
+	}
+	value, err := readStateNoCopyCached(db, key)
+	if err != nil {
+		return nil, false, fmt.Errorf("rawdb: read %s: %w", context, err)
+	}
+	return value, true, nil
+}
+
+// verifyStateReadMiss distinguishes the not-found error returned by Pebble and
+// memorydb from an actual storage failure. State hot paths optimistically issue
+// one no-copy Get; only misses and failures pay for the follow-up Has call.
+func verifyStateReadMiss(db ethdb.KeyValueReader, key []byte, context string, readErr error) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database while reading %s", context)
+	}
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, fmt.Errorf("rawdb: read %s presence after get error: %w", context, err)
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("rawdb: read %s: %w", context, readErr)
 }

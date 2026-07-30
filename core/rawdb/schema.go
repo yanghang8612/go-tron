@@ -8,23 +8,20 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
+// CommitmentBranchKeyPrefix is exported for the block buffer's commitment
+// parent cache. It is the physical prefix of the only supported staged
+// commitment branch format.
 const (
-	dynPropPrefixString         = "dp-"
+	CommitmentBranchKeyPrefix   = "state-commitment-branch-v1-"
 	stageProgressPrefixString   = "stage-progress-v1-"
 	cycleRewardPendingKeyString = "cycle-reward-pending-v1"
 )
-
-// CommitmentBranchKeyPrefix is the physical schema namespace for persisted
-// latest-domain commitment branches. It is exported as an immutable string so
-// layered caches can target branch-specific policies without duplicating rawdb
-// schema bytes or importing a mutable []byte.
-const CommitmentBranchKeyPrefix = "state-commitment-branch-v1-"
 
 var (
 	headBlockKey             = []byte("LastBlock")
 	headSolidBlockKey        = []byte("LastSolidBlock")
 	totalTransactionCountKey = []byte("total-tx-count")
-	stateSchemaVersionKey    = []byte("state-schema-version")
+	historyPruneModeKey      = []byte("history-prune-mode-v1")
 
 	// genesisStateRootKey holds the post-genesis state root. java-tron does
 	// not put account_state_root on the genesis block header (we mirror that
@@ -41,12 +38,9 @@ var (
 
 	blockPrefix     = []byte("b-")
 	blockHashPrefix = []byte("bh-")
-	// blockNumberHashPrefix is a bounded recent BlockID ring. Each key selects
-	// one of blockNumberHashSlots slots. A TRON BlockID embeds its number in the
-	// first 8 bytes, so readers can reject overwritten slots without storing
-	// separate metadata. The ring covers a complete 2000-block sync inventory
-	// as well as the TVM's 256-block BLOCKHASH window without an ever-growing
-	// number→hash index.
+	// blockNumberHashPrefix is a bounded recent BlockID ring. A TRON BlockID
+	// embeds its height in the first eight bytes, so readers can reject an
+	// overwritten slot without a second metadata row.
 	blockNumberHashPrefix    = []byte("bnh-")
 	txPrefix                 = []byte("tx-")
 	txInfoPrefix             = []byte("ti-")
@@ -57,7 +51,7 @@ var (
 	codePrefix               = []byte("c-")
 	contractPrefix           = []byte("ct-")
 	storagePrefix            = []byte("s-")
-	dynPropPrefix            = []byte(dynPropPrefixString)
+	dynPropPrefix            = []byte("dp-")
 
 	// witnessScheduleKey is the head sentinel for witness-schedule state.
 	// Kept for backwards compatibility with pre-M2 data; not written today.
@@ -212,12 +206,12 @@ var (
 
 	// stateAccountLatestPrefix is the Erigon-style flat account latest
 	// domain. Values are opaque to rawdb; state.StateDB stores its internal
-	// StateAccountV3 envelope here so account reads no longer require
+	// StateAccountV2 envelope here so account reads no longer require
 	// resolving the account MPT in latest-mode sync.
 	//
-	// Key:   state-account-latest-v2- || owner AccountID20
-	// Value: state.StateAccountV3 RLP bytes (slim AccountProto)
-	stateAccountLatestPrefix = []byte("state-account-latest-v2-")
+	// Key:   state-account-latest-v1- || owner AccountID20
+	// Value: state.StateAccountV2 RLP bytes
+	stateAccountLatestPrefix = []byte("state-account-latest-v1-")
 
 	// stateCodePrefix is the content-addressed TVM bytecode domain.
 	// Account envelopes commit only the code hash; code bytes are immutable
@@ -234,6 +228,14 @@ var (
 	// Key:   stage-progress-v1- || stage name
 	// Value: block number u64
 	stageProgressPrefix = []byte(stageProgressPrefixString)
+
+	// syncStagedBlockPrefix stores block bodies accepted by the live sync
+	// downloader but not yet executed. It is a transient Erigon-style body stage:
+	// rows are deleted once the matching block imports successfully.
+	//
+	// Key:   sync-staged-block-v1- || block number u64
+	// Value: marshalled corepb.Block
+	syncStagedBlockPrefix = []byte("sync-staged-block-v1-")
 
 	// stateTxRangePrefix maps block numbers to the compact global txNum range
 	// used by flat temporal history. Each block consumes one txNum per
@@ -459,48 +461,12 @@ func witnessLatestBlockKey(addr []byte) []byte {
 	return append(append([]byte{}, witnessLatestBlockPrefix...), addr...)
 }
 
-const (
-	dynPropLatestBlockNumberKeyString    = dynPropPrefixString + "latest_block_header_number"
-	dynPropLatestBlockTimestampKeyString = dynPropPrefixString + "latest_block_header_timestamp"
-	dynPropLatestBlockHashKeyString      = dynPropPrefixString + "latest_block_header_hash"
-	dynPropLatestSolidifiedKeyString     = dynPropPrefixString + "latest_solidified_block_num"
-)
-
-var (
-	dynPropLatestBlockNumberKey    = []byte(dynPropLatestBlockNumberKeyString)
-	dynPropLatestBlockTimestampKey = []byte(dynPropLatestBlockTimestampKeyString)
-	dynPropLatestBlockHashKey      = []byte(dynPropLatestBlockHashKeyString)
-	dynPropLatestSolidifiedKey     = []byte(dynPropLatestSolidifiedKeyString)
-)
-
-func dynPropKeyString(name string) string {
-	switch name {
-	case "latest_block_header_number":
-		return dynPropLatestBlockNumberKeyString
-	case "latest_block_header_timestamp":
-		return dynPropLatestBlockTimestampKeyString
-	case "latest_block_header_hash":
-		return dynPropLatestBlockHashKeyString
-	case "latest_solidified_block_num":
-		return dynPropLatestSolidifiedKeyString
-	default:
-		return dynPropPrefixString + name
-	}
+func dynPropKey(name string) []byte {
+	return append(append([]byte{}, dynPropPrefix...), []byte(name)...)
 }
 
-func dynPropKey(name string) []byte {
-	switch name {
-	case "latest_block_header_number":
-		return dynPropLatestBlockNumberKey
-	case "latest_block_header_timestamp":
-		return dynPropLatestBlockTimestampKey
-	case "latest_block_header_hash":
-		return dynPropLatestBlockHashKey
-	case "latest_solidified_block_num":
-		return dynPropLatestSolidifiedKey
-	default:
-		return []byte(dynPropKeyString(name))
-	}
+func dynPropKeyString(name string) string {
+	return string(dynPropPrefix) + name
 }
 
 func forkStatsKey(version int32) []byte {
@@ -548,12 +514,8 @@ func delegRewardKey(cycle int64, addr []byte, suffix string) []byte {
 	return appendDelegRewardKey(k, cycle, addr, suffix)
 }
 
-// appendDelegRewardKey appends a per-cycle-per-witness key to dst. StateDB's
-// execution-confined scalar reward accessors pass reusable scratch storage so
-// their synchronous account-KV reads do not allocate a short-lived logical
-// key. Callers that retain the result must supply owned storage.
-func appendDelegRewardKey(dst []byte, cycle int64, addr []byte, suffix string) []byte {
-	k := append(dst, delegRewardPrefix...)
+func appendDelegRewardKey(k []byte, cycle int64, addr []byte, suffix string) []byte {
+	k = append(k, delegRewardPrefix...)
 	var cb [8]byte
 	binary.BigEndian.PutUint64(cb[:], uint64(cycle))
 	k = append(k, cb[:]...)
@@ -607,14 +569,10 @@ func accountAssetKey(owner []byte, tokenID int64) []byte {
 // ordering so a lexicographic iterator walks newest-first, matching
 // java-tron's AccountTraceStore key layout for recordBalanceWithBlock.
 func accountTraceKey(owner []byte, blockNum int64) []byte {
-	const longMax int64 = 0x7FFFFFFFFFFFFFFF
-	xored := blockNum ^ longMax
 	k := make([]byte, 0, len(accountTracePrefix)+len(owner)+8)
 	k = append(k, accountTracePrefix...)
 	k = append(k, owner...)
-	var b [8]byte
-	binary.BigEndian.PutUint64(b[:], uint64(xored))
-	return append(k, b[:]...)
+	return append(k, accountTraceBlockSuffix(blockNum)...)
 }
 
 func stateKVLatestKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
@@ -639,9 +597,7 @@ func stateKVLatestDomainPrefix(owner common.Address, generation uint64, domain k
 }
 
 func stateKVLatestLogicalPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte) []byte {
-	k := make([]byte, 0, len(stateKVLatestPrefix)+common.AccountIDLength+8+2+len(logicalPrefix))
-	k = appendStateKVLatestKeyHeader(k, owner, generation, domain)
-	return append(k, logicalPrefix...)
+	return append(stateKVLatestDomainPrefix(owner, generation, domain), logicalPrefix...)
 }
 
 func stateKVLatestOwnerPrefix(owner common.Address) []byte {
@@ -681,57 +637,19 @@ func stateCodeKey(hash common.Hash) []byte {
 	return append(k, hash.Bytes()...)
 }
 
-const (
-	stageHeadersProgressKeyString    = stageProgressPrefixString + string(StageHeaders)
-	stageBodiesProgressKeyString     = stageProgressPrefixString + string(StageBodies)
-	stageExecutionProgressKeyString  = stageProgressPrefixString + string(StageExecution)
-	stageCommitmentProgressKeyString = stageProgressPrefixString + string(StageCommitment)
-	stageFinishProgressKeyString     = stageProgressPrefixString + string(StageFinish)
-)
-
-var (
-	stageHeadersProgressKey    = []byte(stageHeadersProgressKeyString)
-	stageBodiesProgressKey     = []byte(stageBodiesProgressKeyString)
-	stageExecutionProgressKey  = []byte(stageExecutionProgressKeyString)
-	stageCommitmentProgressKey = []byte(stageCommitmentProgressKeyString)
-	stageFinishProgressKey     = []byte(stageFinishProgressKeyString)
-)
-
-// stageProgressKeyString returns immutable process-lifetime storage for every
-// canonical execution stage. Other stage IDs are infrequent snapshot/admin
-// rows and retain the generic construction path.
-func stageProgressKeyString(stage StageID) string {
-	switch stage {
-	case StageHeaders:
-		return stageHeadersProgressKeyString
-	case StageBodies:
-		return stageBodiesProgressKeyString
-	case StageExecution:
-		return stageExecutionProgressKeyString
-	case StageCommitment:
-		return stageCommitmentProgressKeyString
-	case StageFinish:
-		return stageFinishProgressKeyString
-	default:
-		return stageProgressPrefixString + string(stage)
-	}
+func stageProgressKey(stage StageID) []byte {
+	return append(append([]byte{}, stageProgressPrefix...), []byte(stage)...)
 }
 
-func stageProgressKey(stage StageID) []byte {
-	switch stage {
-	case StageHeaders:
-		return stageHeadersProgressKey
-	case StageBodies:
-		return stageBodiesProgressKey
-	case StageExecution:
-		return stageExecutionProgressKey
-	case StageCommitment:
-		return stageCommitmentProgressKey
-	case StageFinish:
-		return stageFinishProgressKey
-	default:
-		return []byte(stageProgressKeyString(stage))
-	}
+func stageProgressKeyString(stage StageID) string {
+	return stageProgressPrefixString + string(stage)
+}
+
+func syncStagedBlockKey(number uint64) []byte {
+	k := make([]byte, len(syncStagedBlockPrefix)+8)
+	copy(k, syncStagedBlockPrefix)
+	binary.BigEndian.PutUint64(k[len(syncStagedBlockPrefix):], number)
+	return k
 }
 
 func stateTxRangeKey(blockNum uint64) []byte {
@@ -778,11 +696,11 @@ func stateChangeInverseKeyPrefix(latestKey []byte) []byte {
 }
 
 // sectionBloomKey builds the section-bloom key: java-tron encodes the
-// (section, bitIndex) composite as a single decimal integer
-// section*1_000_000 + bitIndex, then takes its ASCII bytes.
+// (section, bitIndex) composite as section*1_000_000 + bitIndex, formats it
+// with Long.toHexString, then takes its ASCII bytes.
 func sectionBloomKey(section, bitIndex uint64) []byte {
 	composite := section*1_000_000 + bitIndex
-	return append(append([]byte{}, sectionBloomPrefix...), []byte(strconv.FormatUint(composite, 10))...)
+	return append(append([]byte{}, sectionBloomPrefix...), []byte(strconv.FormatUint(composite, 16))...)
 }
 
 // treeBlockIndexKey builds the tree-block-index key: blockNum big-endian.

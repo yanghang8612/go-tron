@@ -2,12 +2,16 @@ package snapshots
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
@@ -67,7 +71,7 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build aggregate snapshot: %v", err)
 	}
-	if result.Manifest == nil || len(result.Segments) != 21 {
+	if result.Manifest == nil || len(result.Segments) != 15 {
 		t.Fatalf("aggregate result = %+v", result)
 	}
 	loaded, err := LoadManifest(dir)
@@ -75,28 +79,26 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 		t.Fatalf("load manifest: %v", err)
 	}
 	assertSegmentRef(t, loaded, SegmentDatasetAccountLatest, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetAccountLatest, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetAccountLatest, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetKVGeneration, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetKVGeneration, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetKVGeneration, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetCode, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetCode, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCode, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentBTree)
 	historyRef := assertSegmentRef(t, loaded, SegmentDatasetStateDomainChange, 0, SegmentHistory)
 	assertSegmentRef(t, loaded, SegmentDatasetStateDomainChange, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetStateDomainChange, 0, SegmentInverted)
 
 	accountRef := assertSegmentRef(t, loaded, SegmentDatasetAccountLatest, 0, SegmentLatest)
+	assertNoLatestAccessorRef(t, loaded)
+	if _, err := os.Stat(filepath.Join(dir, latestBinaryAccessorPath(accountRef.Path))); !os.IsNotExist(err) {
+		t.Fatalf("new latest accessor file stat error = %v, want not exist", err)
+	}
 	if !strings.HasSuffix(accountRef.Path, ".seg") {
 		t.Fatalf("account latest path = %q, want .seg", accountRef.Path)
 	}
@@ -216,6 +218,170 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	}
 }
 
+func TestAggregatorRetiresLegacyLatestAccessor(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x6a}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account-v1")); err != nil {
+		t.Fatal(err)
+	}
+	legacyLatest, legacyAccessor, legacyBTree, err := BuildAccountLatestSegmentFilesFromDB(db, dir, 10, 20, "latest/accounts.seg")
+	if err != nil {
+		t.Fatalf("build legacy latest segment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(10, 20, []SegmentRef{legacyLatest, legacyAccessor, legacyBTree})); err != nil {
+		t.Fatalf("publish legacy manifest: %v", err)
+	}
+
+	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account-v2")); err != nil {
+		t.Fatal(err)
+	}
+	latest, accessor, btree, err := buildAccountLatestSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, 10, 20, "latest/accounts.seg", false)
+	if err != nil {
+		t.Fatalf("build compact latest segment: %v", err)
+	}
+	if accessor != (SegmentRef{}) {
+		t.Fatalf("compact latest accessor = %+v, want none", accessor)
+	}
+	refs := []SegmentRef{latest, btree}
+	manifest, err := NewAggregator(dir).Integrate(10, 20, refs)
+	if err != nil {
+		t.Fatalf("integrate compact latest segment: %v", err)
+	}
+	assertNoLatestAccessorRef(t, manifest)
+	legacyRetired := false
+	for _, ref := range manifest.Retired {
+		if ref.Path == legacyAccessor.Path && ref.Kind == legacyAccessor.Kind {
+			legacyRetired = true
+			break
+		}
+	}
+	if !legacyRetired {
+		t.Fatalf("legacy latest accessor was not retired: %+v", manifest.Retired)
+	}
+	if _, err := os.Stat(filepath.Join(dir, legacyAccessor.Path)); err != nil {
+		t.Fatalf("legacy accessor file missing before retired prune: %v", err)
+	}
+	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{}); err != nil {
+		t.Fatalf("verify compact manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open compact manager: %v", err)
+	}
+	if got, ok, err := mgr.GetAccountLatest(owner, 15); err != nil || !ok || string(got) != "account-v2" {
+		t.Fatalf("compact latest account = %q ok=%v err=%v, want account-v2", got, ok, err)
+	}
+}
+
+func TestAggregatorBuildDerivedIndexes(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x88}, common.AccountIDLength)...))
+	bloomRow := sectionBloomTestEncodedBit(t, 9)
+	eventAddress := eventLogTestAddress(0x55)
+	eventTopic := common.Hash{0xee}
+	sectionEnd := uint64(rawdb.SectionBloomBlockPerSection) - 1
+	eventBlock, eventInfos := eventLogTestBlock(t, 12, []*corepb.TransactionInfo_Log{
+		{Address: eventAddress, Topics: [][]byte{eventTopic[:]}, Data: []byte{0x12}},
+	})
+
+	for blockNum := uint64(0); blockNum <= sectionEnd; blockNum++ {
+		block := aggregatorTestBlock(blockNum)
+		timestamp := int64(30_000 + blockNum)
+		if blockNum == 12 {
+			block = eventBlock
+			timestamp = 1200
+		}
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteBlockBalanceTrace(db, int64(blockNum), balanceTraceTestBlockTrace(int64(blockNum), timestamp)); err != nil {
+			t.Fatalf("WriteBlockBalanceTrace %d: %v", blockNum, err)
+		}
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 12, eventInfos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 12, 900); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	if err := rawdb.WriteSectionBloom(db, 0, 42, bloomRow); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+
+	result, err := NewAggregator(dir).BuildDerivedIndexes(db, 0, sectionEnd, AggregatorBuildDerivedOptions{
+		BalanceTraces: true,
+		SectionBlooms: true,
+		EventLogs:     true,
+	})
+	if err != nil {
+		t.Fatalf("BuildDerivedIndexes: %v", err)
+	}
+	if len(result.Segments) != 4 {
+		t.Fatalf("segments = %d, want 4", len(result.Segments))
+	}
+	if result.Manifest == nil || len(result.Manifest.Segments) != 4 {
+		t.Fatalf("manifest = %+v, want four active segments", result.Manifest)
+	}
+	assertSegmentRef(t, result.Manifest, SegmentDatasetBalanceTrace, 0, SegmentBalanceTrace)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetSectionBloom, 0, SegmentSectionBloom)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetEventLog, 0, SegmentEventLog)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetEventLog, 0, SegmentEventLogIndex)
+	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	trace, ok, err := mgr.BlockBalanceTrace(12)
+	if err != nil || !ok || trace.GetTimestamp() != 1200 {
+		t.Fatalf("BlockBalanceTrace = %+v/%v/%v, want timestamp 1200", trace, ok, err)
+	}
+	_, balance, ok, err := mgr.AccountTraceAtOrBefore(owner.Bytes(), 12)
+	if err != nil || !ok || balance != 900 {
+		t.Fatalf("AccountTraceAtOrBefore = %d/%v/%v, want 900/true/nil", balance, ok, err)
+	}
+	raw, ok, err := mgr.SectionBloom(0, 42)
+	if err != nil || !ok || !bytes.Equal(raw, bloomRow) {
+		t.Fatalf("SectionBloom = %x/%v/%v, want bloom row", raw, ok, err)
+	}
+	covered, err := mgr.EventLogRangeCovered(12, 12)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	covered, err = mgr.EventLogIndexedRangeCovered(12, 12)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	var eventRows []EventLog
+	if err := mgr.IterateEventLogs(12, 12, EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(eventAddress)},
+		Topics:    [][]common.Hash{{eventTopic}},
+	}, func(row EventLog) (bool, error) {
+		eventRows = append(eventRows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(eventRows) != 1 || eventRows[0].BlockNum != 12 || !bytes.Equal(eventRows[0].Log.GetData(), []byte{0x12}) {
+		t.Fatalf("event rows = %+v, want one cold event log", eventRows)
+	}
+}
+
+func aggregatorTestBlock(number uint64) *coretypes.Block {
+	return coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(30_000 + number),
+			},
+		},
+	})
+}
+
 func TestAggregatorBuildLatestOnly(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -278,25 +444,20 @@ func TestAggregatorBuildLatestOnly(t *testing.T) {
 		t.Fatal("BuildLatest returned nil manifest")
 	}
 
-	// (a) Verify expected latest/accessor/btree refs are present.
+	// (a) Verify expected latest/btree refs are present without redundant .lidx files.
 	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCode, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetCode, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCode, 0, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentBTree)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentCheckpoint, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentCheckpoint, 0, SegmentAccessor)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentCheckpoint, 0, SegmentBTree)
+	assertNoLatestAccessorRef(t, result.Manifest)
 
 	// (b) Assert NO history-kind refs are present.
 	for _, ref := range result.Manifest.Segments {
@@ -322,6 +483,102 @@ func TestAggregatorBuildLatestOnly(t *testing.T) {
 	}
 	if got, ok, _ := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHistory); ok {
 		t.Errorf("StageSnapshotHistory progress = %d, want absent", got)
+	}
+}
+
+func TestAggregatorBuildLatestPrunesDeletedContractGeneration(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	contract := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x99}, common.AccountIDLength)...))
+	root := common.BytesToHash(bytes.Repeat([]byte{0x45}, common.HashLength))
+
+	if err := rawdb.WriteStateKVGeneration(db, contract, 8); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct {
+		generation uint64
+		domain     kvdomains.KVDomain
+		key        []byte
+		value      []byte
+	}{
+		{generation: 7, domain: kvdomains.ContractMetadata, key: []byte("meta"), value: []byte("deleted-contract-meta")},
+		{generation: 7, domain: kvdomains.ContractStorage, key: []byte("slot/reused"), value: []byte("deleted-storage")},
+		{generation: 8, domain: kvdomains.ContractMetadata, key: []byte("meta"), value: []byte("recreated-contract-meta")},
+		{generation: 8, domain: kvdomains.ContractStorage, key: []byte("slot/reused"), value: []byte("recreated-storage")},
+	} {
+		if err := rawdb.WriteStateKVLatest(db, contract, row.generation, row.domain, row.key, row.value); err != nil {
+			t.Fatalf("write generation %d domain %s: %v", row.generation, kvdomains.Name(row.domain), err)
+		}
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{
+		BlockNum:  8,
+		BlockHash: common.Hash{0x08},
+		Root:      root,
+		Scheme:    rawdb.LatestDomainCommitmentScheme,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateTxRange(db, 8, common.Hash{0x08}, 80, 90); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewAggregator(dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 80, ToTxNum: 90})
+	if err != nil {
+		t.Fatalf("BuildLatest: %v", err)
+	}
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractMetadata, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentLatest)
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if generation, ok, err := mgr.GetKVGeneration(contract, 85); err != nil || !ok || generation != 8 {
+		t.Fatalf("cold generation = %d ok=%v err=%v, want 8", generation, ok, err)
+	}
+	for _, tc := range []struct {
+		domain kvdomains.KVDomain
+		key    []byte
+		want   string
+	}{
+		{domain: kvdomains.ContractMetadata, key: []byte("meta"), want: "recreated-contract-meta"},
+		{domain: kvdomains.ContractStorage, key: []byte("slot/reused"), want: "recreated-storage"},
+	} {
+		if old, ok, err := mgr.GetKVLatest(tc.domain, contract, 7, tc.key, 85); err != nil || ok {
+			t.Fatalf("old generation %s value = %q ok=%v err=%v, want absent", kvdomains.Name(tc.domain), old, ok, err)
+		}
+		got, ok, err := mgr.GetKVLatest(tc.domain, contract, 8, tc.key, 85)
+		if err != nil || !ok || string(got) != tc.want {
+			t.Fatalf("current generation %s value = %q ok=%v err=%v, want %q", kvdomains.Name(tc.domain), got, ok, err, tc.want)
+		}
+	}
+
+	restored := rawdb.NewMemoryDatabase()
+	if err := mgr.RestoreLatest(restored, 85); err != nil {
+		t.Fatalf("RestoreLatest: %v", err)
+	}
+	if generation, ok, err := rawdb.ReadStateKVGeneration(restored, contract); err != nil || !ok || generation != 8 {
+		t.Fatalf("restored generation = %d ok=%v err=%v, want 8", generation, ok, err)
+	}
+	for _, tc := range []struct {
+		domain kvdomains.KVDomain
+		key    []byte
+		want   string
+	}{
+		{domain: kvdomains.ContractMetadata, key: []byte("meta"), want: "recreated-contract-meta"},
+		{domain: kvdomains.ContractStorage, key: []byte("slot/reused"), want: "recreated-storage"},
+	} {
+		if old, ok, err := rawdb.ReadStateKVLatest(restored, contract, 7, tc.domain, tc.key); err != nil || ok {
+			t.Fatalf("restored old generation %s value = %q ok=%v err=%v, want absent", kvdomains.Name(tc.domain), old, ok, err)
+		}
+		got, ok, err := rawdb.ReadStateKVLatest(restored, contract, 8, tc.domain, tc.key)
+		if err != nil || !ok || string(got) != tc.want {
+			t.Fatalf("restored current generation %s value = %q ok=%v err=%v, want %q", kvdomains.Name(tc.domain), got, ok, err, tc.want)
+		}
 	}
 }
 
@@ -381,4 +638,13 @@ func assertSegmentRef(t *testing.T, manifest *Manifest, dataset SegmentDataset, 
 	}
 	t.Fatalf("missing %s/%s domain %#04x in %+v", dataset, kind, uint16(domain), manifest.Segments)
 	return SegmentRef{}
+}
+
+func assertNoLatestAccessorRef(t *testing.T, manifest *Manifest) {
+	t.Helper()
+	for _, ref := range manifest.Segments {
+		if ref.Kind == SegmentAccessor && strings.EqualFold(filepath.Ext(ref.Path), ".lidx") {
+			t.Fatalf("manifest retained redundant latest accessor: %+v", ref)
+		}
+	}
 }

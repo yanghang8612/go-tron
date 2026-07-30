@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -65,6 +66,19 @@ func ReadStateCode(db ethdb.KeyValueReader, hash common.Hash) []byte {
 // code again.
 func ReadStateCodeImmutable(db ethdb.KeyValueReader, hash common.Hash) []byte {
 	return readStateCode(db, hash, true)
+}
+
+// ReadStateCodeStrict distinguishes a missing row from a backend read error
+// while retaining the public reader's owned-byte contract.
+func ReadStateCodeStrict(db ethdb.KeyValueReader, hash common.Hash) ([]byte, bool, error) {
+	if hash == (common.Hash{}) {
+		return nil, false, nil
+	}
+	data, ok, err := readValueThenVerifyMiss(db, stateCodeKey(hash), fmt.Sprintf("state code %x", hash), nil)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return append([]byte(nil), data...), true, nil
 }
 
 func readStateCode(db ethdb.KeyValueReader, hash common.Hash, shareStable bool) []byte {

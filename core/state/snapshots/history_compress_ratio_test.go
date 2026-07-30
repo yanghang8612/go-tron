@@ -182,13 +182,13 @@ func zstdBlockCompress(t *testing.T, records [][]byte, blockSize int) (raw, comp
 	return raw, compressed
 }
 
-// TestKvKeyDuplicationCost measures the recsplit upside for the .kv accessor: how
-// much of the (already zstd-compressed) .kv is the duplicated 32-byte keccak key
-// per record, which zstd cannot compress (random) but an Erigon-style recsplit
-// .kvi would drop entirely (key→offset via a minimal perfect hash, verified by
-// reading the key back from the .seg). This is the go/no-go for whether the large
-// recsplit/efII port is worth it on top of the 2.56x already achieved.
-func TestKvKeyDuplicationCost(t *testing.T) {
+// TestHistoryAccessorV4IndexComposition reports the current v4 accessor against
+// the legacy v2 ordered-key format. v4 keeps a 128-bit hash + offset + record
+// index exact table and a KV-latest owner/generation/domain prefix group with a
+// 4-byte logical-key seek prefix, then
+// verifies all resolved records against the history segment. It is intentionally
+// not an MPHF/recsplit estimate: this test records the real emitted layout.
+func TestHistoryAccessorV4IndexComposition(t *testing.T) {
 	changes := buildHistoryStructs(400, 50)
 	from, to := uint64(9_000_000), uint64(9_000_399)
 	normalized := normalizeStateDomainChangesForBinary(changes)
@@ -200,33 +200,35 @@ func TestKvKeyDuplicationCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// keyless = just the per-entry ints (txNum, seq, offset, recordIndex) a
-	// recsplit-backed accessor would still need; the key is gone.
-	var keyless bytes.Buffer
-	keyBytes := 0
-	for _, e := range accessor {
-		var b [32]byte
-		binary.BigEndian.PutUint64(b[0:8], e.txNum)
-		binary.BigEndian.PutUint64(b[8:16], e.seq)
-		binary.BigEndian.PutUint64(b[16:24], e.offset)
-		binary.BigEndian.PutUint64(b[24:32], e.recordIndex)
-		keyless.Write(b[:])
-		keyBytes += len(e.key)
+	legacyV2, err := encodeStateDomainChangeBinaryAccessorV2ForTest(from, to, accessor)
+	if err != nil {
+		t.Fatal(err)
 	}
 	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer enc.Close()
-	fullC := len(enc.EncodeAll(accessorData, nil))
-	keylessC := len(enc.EncodeAll(keyless.Bytes(), nil))
-	mphfBytes := len(accessor) * 3 / 8 // ~3 bits/key recsplit MPHF
-	recsplitEst := keylessC + mphfBytes
-	t.Logf("entries=%d  raw-key-bytes=%d  raw-kv=%d", len(accessor), keyBytes, len(accessorData))
-	t.Logf("  .kv zstd (with keys)        = %8d", fullC)
-	t.Logf("  .kv zstd (keyless ints)     = %8d  (%.0f%% of full)", keylessC, 100*float64(keylessC)/float64(fullC))
-	t.Logf("  recsplit est (keyless+MPHF) = %8d  -> .kv %.2fx smaller", recsplitEst, float64(fullC)/float64(recsplitEst))
-	t.Logf("  => keys are ~%.0f%% of the compressed .kv", 100*(1-float64(keylessC)/float64(fullC)))
+	v2Compressed := len(enc.EncodeAll(legacyV2, nil))
+	v4Compressed := len(enc.EncodeAll(accessorData, nil))
+	layout, err := stateDomainChangeBinaryAccessorV4LayoutAt(bytes.NewReader(accessorData), uint64(len(accessorData)), stateDomainChangeBinaryHeader{
+		version:   stateDomainChangeBinaryVersionV4,
+		fromTxNum: from,
+		toTxNum:   to,
+		count:     uint64(len(accessor)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exactBytes := uint64(len(accessor)) * stateDomainChangeBinaryAccessorV3ExactEntrySize
+	groupBytes := uint64(len(accessorData)) - layout.groupPayloadStart
+	t.Logf("entries=%d", len(accessor))
+	t.Logf("  v2 ordered .kv zstd       = %8d", v2Compressed)
+	t.Logf("  v4 raw .kv                = %8d", len(accessorData))
+	t.Logf("  v4 zstd .kv               = %8d", v4Compressed)
+	t.Logf("  v4 exact table            = %8d", exactBytes)
+	t.Logf("  v4 prefix groups           = %8d (%d groups)", groupBytes, layout.groupCount)
+	t.Logf("  v4 raw versus v2 zstd     = %.2fx", float64(v2Compressed)/float64(len(accessorData)))
 }
 
 // TestHistoryCompressionRatioGate is the go/no-go measurement (not a pass/fail

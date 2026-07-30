@@ -1,9 +1,11 @@
 package actuator
 
 import (
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -48,6 +50,26 @@ func TestSetAccountIdDuplicateIndexIsCaseInsensitive(t *testing.T) {
 	act := &SetAccountIdActuator{}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected duplicate id error")
+	}
+}
+
+func TestSetAccountIdMalformedIndexFailsValidation(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	c := &contractpb.SetAccountIdContract{
+		OwnerAddress: owner[:],
+		AccountId:    []byte("AliceID1"),
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_SetAccountIdContract, c, 0)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	key := append([]byte{0x02}, []byte("aliceid1")...)
+	if err := ctx.State.SystemKVPut(kvdomains.SystemAccountIndex, key, []byte("short")); err != nil {
+		t.Fatal(err)
+	}
+
+	act := &SetAccountIdActuator{}
+	err := act.Validate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "read account id index") || !strings.Contains(err.Error(), "malformed length") {
+		t.Fatalf("Validate malformed id index error = %v, want index read malformed length", err)
 	}
 }
 

@@ -3,6 +3,7 @@ package rawdb
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -13,7 +14,7 @@ import (
 // blobs keyed by block number. gtron's block proto is monolithic (header +
 // transaction list in a single message), so unlike geth we don't split
 // "headers" and "bodies" into separate ancient tables.
-const ancientBlocks = "bodies"
+const ancientBlocks = AncientBlocksTable
 
 func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	data, err := block.Marshal()
@@ -24,12 +25,12 @@ func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 }
 
 // WriteBlockEncoded writes a block using an already-marshaled protobuf
-// payload. The caller must keep data immutable after this call: layered stores
-// may retain its backing bytes directly, allowing the later durable metadata
-// batch to reuse the same payload without another full-block marshal or copy.
-// block remains the source of the number/hash indexes, so data must encode that
-// same block.
+// payload. The caller keeps data immutable after the call so layered stores
+// can retain the bytes without another full-block copy.
 func WriteBlockEncoded(db ethdb.KeyValueWriter, block *types.Block, data []byte) error {
+	if db == nil || block == nil {
+		return errors.New("write encoded block: nil database or block")
+	}
 	number := block.Number()
 	var num [8]byte
 	binary.BigEndian.PutUint64(num[:], number)
@@ -47,10 +48,8 @@ func WriteBlockEncoded(db ethdb.KeyValueWriter, block *types.Block, data []byte)
 	return WriteBlockIndexes(db, block)
 }
 
-// WriteBlockIndexes stages the immutable hash->number index and bounded recent
-// number->hash ring without rewriting the block body. Stored replay uses it so
-// the next block's BLOCKHASH lookup sees its parent through the buffer while the
-// already-preserved canonical body stays in the hot/freezer chain store.
+// WriteBlockIndexes writes the immutable hash-to-number lookup and bounded
+// recent number-to-hash ring without rewriting the block body.
 func WriteBlockIndexes(db ethdb.KeyValueWriter, block *types.Block) error {
 	if db == nil || block == nil {
 		return errors.New("write block indexes: nil database or block")
@@ -63,10 +62,8 @@ func WriteBlockIndexes(db ethdb.KeyValueWriter, block *types.Block) error {
 		if err := writer.PutKeyParts(blockHashPrefix, hash[:], num[:]); err != nil {
 			return err
 		}
-	} else {
-		if err := db.Put(blockHashKey(hash[:]), num[:]); err != nil {
-			return err
-		}
+	} else if err := db.Put(blockHashKey(hash[:]), num[:]); err != nil {
+		return err
 	}
 	var slot [8]byte
 	binary.BigEndian.PutUint64(slot[:], number%blockNumberHashSlots)
@@ -74,6 +71,16 @@ func WriteBlockIndexes(db ethdb.KeyValueWriter, block *types.Block) error {
 		return writer.PutKeyParts(blockNumberHashPrefix, slot[:], hash[:])
 	}
 	return db.Put(blockNumberHashKey(number), hash[:])
+}
+
+func WriteBlockNumber(db ethdb.KeyValueWriter, hash common.Hash, number uint64) error {
+	num := make([]byte, 8)
+	binary.BigEndian.PutUint64(num, number)
+	return db.Put(blockHashKey(hash.Bytes()), num)
+}
+
+func DeleteBlockNumber(db ethdb.KeyValueWriter, hash common.Hash) error {
+	return db.Delete(blockHashKey(hash.Bytes()))
 }
 
 // ReadBlock returns the block at the given number, consulting the freezer
@@ -89,39 +96,17 @@ func ReadBlock(db *ChainDB, number uint64) *types.Block {
 	return readBlock(db, number, false)
 }
 
-// ReadBlockReusable is ReadBlock for callers that will soon persist the same
-// decoded block through Block.MarshalReusable. Ancient and Pebble reads already
-// return caller-owned byte slices, so transferring that storage to the block
-// avoids allocating a second full-block wire buffer during replay. Callers that
-// only inspect a block should retain ReadBlock so the raw input can be released
-// immediately after protobuf decoding.
+// ReadBlockReusable transfers an owned storage buffer to the decoded block so
+// a subsequent MarshalReusable can avoid a second full-block allocation.
 func ReadBlockReusable(db *ChainDB, number uint64) *types.Block {
 	return readBlock(db, number, true)
 }
 
-// ReadStoredBlockForReplay reads a canonical block for immediate offline
-// execution. V2 freezer frames are immutable and remain Go-reachable through
-// the decoded block, so the optional no-copy reader can lend calldata-like byte
-// fields directly as well as avoid the full-block record copy. Hot-store and
-// generic ancient readers retain the existing owned-copy fallback.
+// ReadStoredBlockForReplay is the fresh-format replay reader. The retired V2
+// freezer loaned mmap-backed fields here; the current format deliberately uses
+// the owned reusable path instead.
 func ReadStoredBlockForReplay(db *ChainDB, number uint64) *types.Block {
-	if db != nil && db.AncientReader != nil {
-		if reader, ok := db.AncientReader.(interface {
-			AncientNoCopy(kind string, number uint64) ([]byte, error)
-		}); ok {
-			data, err := reader.AncientNoCopy(ancientBlocks, number)
-			if err == nil {
-				block, decodeErr := types.UnmarshalBlockBorrowed(data)
-				if decodeErr == nil {
-					return block
-				}
-				return nil
-			}
-			// Match readAncient's graceful fallback for a miss or damaged freezer
-			// data: the hot row may still provide a healthy canonical copy.
-		}
-	}
-	return readBlock(db, number, false)
+	return readBlock(db, number, true)
 }
 
 func readBlock(db *ChainDB, number uint64, reusable bool) *types.Block {
@@ -150,23 +135,71 @@ func unmarshalStoredBlock(data []byte, reusable bool) (*types.Block, error) {
 	return types.UnmarshalBlock(data)
 }
 
-// ReadBlockNumber returns the block number persisted for the given block
-// hash, or nil if unknown. Slice 1 of the freezer design keeps `bh-<hash>`
-// hot, so this accessor is KV-only — the `*ChainDB` parameter exists for
-// signature uniformity with other chain readers.
+// ReadBlockStrict returns the block at the given number and reports malformed
+// hot/freezer rows instead of folding them into "missing". Legacy ReadBlock
+// keeps its nil-on-error contract for chain code that treats corrupt rows the
+// same way old hot-only accessors did.
+func ReadBlockStrict(db *ChainDB, number uint64) (*types.Block, bool, error) {
+	data, ok, err := ReadBlockRawStrict(db, number)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	block, err := types.UnmarshalBlock(data)
+	if err != nil {
+		return nil, true, fmt.Errorf("rawdb: block %d decode: %w", number, err)
+	}
+	if block.Number() != number {
+		return block, true, fmt.Errorf("rawdb: block row %d contains block number %d", number, block.Number())
+	}
+	return block, true, nil
+}
+
+// ReadBlockNumber returns the block number persisted for the given block hash,
+// or nil if unknown. The hot `bh-<hash>` row is preferred; on a miss, a ChainDB
+// with an attached cold chain-index sidecar can resolve historical hashes
+// without requiring every old lookup row to stay in Pebble.
 func ReadBlockNumber(db *ChainDB, hash common.Hash) *uint64 {
-	data, err := db.Get(blockHashKey(hash.Bytes()))
-	if err != nil || len(data) != 8 {
+	num, ok, err := ReadBlockNumberStrict(db, hash)
+	if err != nil || !ok {
 		return nil
 	}
-	num := binary.BigEndian.Uint64(data)
 	return &num
 }
 
-// ReadBlockHash returns the canonical BlockID hash at number without decoding
-// the block. New databases answer from the bounded recent BlockID ring. For
-// databases created before that index existed, the fallback scans the raw hot
-// or ancient block protobuf and extracts only BlockHeader.RawData.
+// ReadBlockNumberStrict retrieves the block number for a block hash and
+// surfaces malformed hot rows or cold sidecar lookup errors.
+func ReadBlockNumberStrict(db *ChainDB, hash common.Hash) (uint64, bool, error) {
+	if db == nil {
+		return 0, false, fmt.Errorf("rawdb: nil database during read block number")
+	}
+	key := blockHashKey(hash.Bytes())
+	exists, err := db.Has(key)
+	if err != nil {
+		return 0, false, err
+	}
+	if exists {
+		data, err := db.Get(key)
+		if err != nil {
+			return 0, false, err
+		}
+		if len(data) != 8 {
+			return 0, true, fmt.Errorf("rawdb: block number lookup %x has length %d, want 8", hash.Bytes(), len(data))
+		}
+		return binary.BigEndian.Uint64(data), true, nil
+	}
+	if db.chainIndex != nil {
+		num, ok, err := db.chainIndex.BlockNumberByHash(hash)
+		if err != nil || !ok {
+			return 0, ok, err
+		}
+		return num, true, nil
+	}
+	return 0, false, nil
+}
+
+// ReadBlockHash returns the canonical BlockID at number without fully decoding
+// the block. Fresh databases answer recent requests from the bounded ring and
+// fall back to the freezer/hot canonical body for older heights.
 func ReadBlockHash(db *ChainDB, number uint64) (common.Hash, bool) {
 	if hash, ok := readBlockHashIndex(db, number); ok {
 		return hash, true
@@ -180,9 +213,7 @@ func ReadBlockHash(db *ChainDB, number uint64) (common.Hash, bool) {
 	return readBlockHashRawKV(db, number)
 }
 
-// ReadBlockHashKV is the hot-store variant of ReadBlockHash. The raw-body
-// fallback keeps pre-index databases compatible and uses immutable no-copy
-// overlay values when the reader advertises that optional capability.
+// ReadBlockHashKV is the hot/layered-store variant of ReadBlockHash.
 func ReadBlockHashKV(db ethdb.KeyValueReader, number uint64) (common.Hash, bool) {
 	if hash, ok := readBlockHashIndex(db, number); ok {
 		return hash, true
@@ -251,6 +282,20 @@ func readAncient(db *ChainDB, kind string, number uint64) ([]byte, bool) {
 	return data, true
 }
 
+func readAncientStrict(db *ChainDB, kind string, number uint64) ([]byte, bool, error) {
+	if db == nil || db.AncientReader == nil {
+		return nil, false, nil
+	}
+	data, err := db.Ancient(kind, number)
+	if err != nil {
+		if errors.Is(err, ErrNotInAncient) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
 // BlockHashReader is an optional capability interface for the KV store the
 // VM holds (TVM.DB). When the store implements it, BLOCKHASH and the
 // genesis-hash read behind CHAINID resolve block hashes through it instead
@@ -264,6 +309,13 @@ type BlockHashReader interface {
 	// BlockHashByNumber returns the block hash at the given height and
 	// whether it could be resolved at all.
 	BlockHashByNumber(number uint64) (common.Hash, bool)
+}
+
+// BlockHashReaderStrict is the error-returning variant used by execution and
+// verification paths that must distinguish a genuinely missing canonical block
+// from a corrupt or unreadable hot/freezer block row.
+type BlockHashReaderStrict interface {
+	BlockHashByNumberStrict(number uint64) (common.Hash, bool, error)
 }
 
 // ReadBlockKV is the KV-only variant of ReadBlock, for callers that hold a

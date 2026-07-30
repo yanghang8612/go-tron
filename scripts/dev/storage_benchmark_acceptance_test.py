@@ -1,0 +1,5007 @@
+#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = REPO_ROOT / "scripts" / "dev" / "storage_benchmark_acceptance.py"
+
+
+def write_result(path, rows):
+    with path.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+SNAPSHOT_POINT_PREFIXES = (
+    "snapshotPointTxHashLookup",
+    "snapshotPointEventLogIndex",
+    "snapshotPointStateHistoryAccessor",
+    "snapshotPointLatestBTree",
+    "snapshotPointChainFreezerAccessor",
+    "snapshotPointCodeDomain",
+    "snapshotPointCommitmentSnapshot",
+)
+
+
+SNAPSHOT_POINT_METRIC_PREFIXES = {
+    "snapshotPointTxHashLookup": "gtron_storage_benchmark_snapshot_point_tx_hash_lookup",
+    "snapshotPointEventLogIndex": "gtron_storage_benchmark_snapshot_point_event_log_index",
+    "snapshotPointStateHistoryAccessor": "gtron_storage_benchmark_snapshot_point_state_history_accessor",
+    "snapshotPointLatestBTree": "gtron_storage_benchmark_snapshot_point_latest_btree",
+    "snapshotPointChainFreezerAccessor": "gtron_storage_benchmark_snapshot_point_chain_freezer_accessor",
+    "snapshotPointCodeDomain": "gtron_storage_benchmark_snapshot_point_code_domain",
+    "snapshotPointCommitmentSnapshot": "gtron_storage_benchmark_snapshot_point_commitment_snapshot",
+}
+
+
+SNAPSHOT_POINT_FIELD_SUFFIXES = (
+    ("Segments", "segments"),
+    ("Bytes", "bytes"),
+    ("PayloadBytes", "payload_bytes"),
+    ("SidecarBytes", "sidecar_bytes"),
+    ("SidecarShareMilli", "sidecar_share_milli"),
+    ("SnapshotShareMilli", "snapshot_share_milli"),
+)
+
+
+def snapshot_point_fields(prefix, segments, total, payload, sidecar, sidecar_share, snapshot_share):
+    values = (segments, total, payload, sidecar, sidecar_share, snapshot_share)
+    return {
+        f"{prefix}{field_suffix}": value
+        for (field_suffix, _), value in zip(SNAPSHOT_POINT_FIELD_SUFFIXES, values)
+    }
+
+
+def snapshot_point_metric_values(evidence):
+    metrics = {}
+    for prefix, metric_prefix in SNAPSHOT_POINT_METRIC_PREFIXES.items():
+        for field_suffix, metric_suffix in SNAPSHOT_POINT_FIELD_SUFFIXES:
+            field = f"{prefix}{field_suffix}"
+            if field in evidence:
+                metrics[f"{metric_prefix}_{metric_suffix}"] = evidence[field]
+    return metrics
+
+
+SNAPSHOT_POINT_PROFILE_EVIDENCE = {}
+SNAPSHOT_POINT_PROFILE_EVIDENCE.update(
+    snapshot_point_fields("snapshotPointTxHashLookup", 1, 100, 0, 100, 1000, 63)
+)
+SNAPSHOT_POINT_PROFILE_EVIDENCE.update(
+    snapshot_point_fields("snapshotPointEventLogIndex", 1, 200, 0, 200, 1000, 125)
+)
+for prefix in SNAPSHOT_POINT_PREFIXES[2:]:
+    SNAPSHOT_POINT_PROFILE_EVIDENCE.update(snapshot_point_fields(prefix, 0, 0, 0, 0, 0, 0))
+
+
+def clean_snapshot_profile_evidence_row():
+    row = {
+        "unix": 10,
+        "profile": "producer",
+        "mode": "minimal",
+        "role": "producer",
+        "status": "ok",
+        "freezerAlertStatus": "ok",
+        "stageVerifyStatus": "ok",
+        "modeAlertStatus": "ok",
+        "snapshotAlertStatus": "ok",
+        "snapshotManifestProfileStatus": "ok",
+        "snapshotProfileSegments": 4,
+        "snapshotProfileVerifyFiles": True,
+        "snapshotProfileVerifiedSegments": 4,
+        "snapshotProfileTotalBytes": 1600,
+        "snapshotPayloadBytes": 1300,
+        "snapshotSidecarBytes": 300,
+        "snapshotSidecarShareMilli": 188,
+        "snapshotStateHistoryBytes": 0,
+        "snapshotStateHistoryCompressedSegments": 0,
+        "snapshotStateHistoryCompressedBytes": 0,
+        "snapshotStateHistoryCompressedShareMilli": -1,
+        "snapshotLatestSidecarBytes": 0,
+        "snapshotLatestSidecarShareMilli": -1,
+        "snapshotStateHistorySidecarBytes": 0,
+        "snapshotStateHistorySidecarShareMilli": -1,
+        "snapshotChainFreezerSidecarBytes": 100,
+        "snapshotChainFreezerSidecarShareMilli": 91,
+        "snapshotEventLogSidecarBytes": 200,
+        "snapshotEventLogSidecarShareMilli": 400,
+        "snapshotBalanceTraceSidecarBytes": 0,
+        "snapshotBalanceTraceSidecarShareMilli": -1,
+        "snapshotSectionBloomSidecarBytes": 0,
+        "snapshotSectionBloomSidecarShareMilli": -1,
+    }
+    row.update(SNAPSHOT_POINT_PROFILE_EVIDENCE)
+    return row
+
+
+def write_benchmark_prometheus(path, datadir, values):
+    labels = f'{{datadir="{datadir}",mode="minimal",profile="producer",role="producer",status="ok"}}'
+    lines = []
+    if "gtron_storage_benchmark_status" not in values:
+        values = {"gtron_storage_benchmark_status": 0, **values}
+    for metric, value in values.items():
+        lines.append(f"# TYPE {metric} gauge")
+        lines.append(f"{metric}{labels} {value}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def append_benchmark_archive_method_prometheus(path, datadir, row, *, include_trace=True):
+    base_labels = f'datadir="{datadir}",mode="minimal",profile="producer",role="producer",status="ok"'
+    lines = [
+        "# TYPE gtron_storage_benchmark_archive_api_method_success gauge",
+    ]
+    for method in row["archiveApiMethods"]:
+        if method == "debug_traceTransaction" and not include_trace:
+            continue
+        lines.append(
+            f'gtron_storage_benchmark_archive_api_method_success{{{base_labels},method="{method}"}} 1'
+        )
+    lines.append("# TYPE gtron_storage_benchmark_archive_api_tx_method_success gauge")
+    for method in row["archiveApiTxMethods"]:
+        if method == "debug_traceTransaction" and not include_trace:
+            continue
+        lines.append(
+            f'gtron_storage_benchmark_archive_api_tx_method_success{{{base_labels},method="{method}"}} 1'
+        )
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+class StorageBenchmarkAcceptanceTest(unittest.TestCase):
+    def test_accepts_clean_required_modes_artifacts_and_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            for name in ("full.prom", "blocks.prom", "minimal.prom"):
+                lines = [
+                    "# TYPE gtron_storage_alert_status gauge",
+                    "# TYPE gtron_storage_alert_issue gauge",
+                    'gtron_storage_alert_status{datadir="/tmp/gtron"} 0',
+                ]
+                if name == "minimal.prom":
+                    lines.extend(
+                        [
+                            "# TYPE gtron_storage_signed_cold_prune gauge",
+                            'gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1',
+                            "# TYPE gtron_storage_prune_boundary_block gauge",
+                            'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="derivedIndexToBlock"} 46',
+                            'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="chainLookupPruneToBlock"} 50',
+                            'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="tailPrunedThroughBlock"} 45',
+                        ]
+                    )
+                (tmpdir / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "height": 120,
+                "freezerAlertIssues": 0,
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "full",
+                    "storageAlertPrometheus": str(tmpdir / "full.prom"),
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "blocks",
+                    "storageAlertPrometheus": str(tmpdir / "blocks.prom"),
+                },
+                {
+                    **base,
+                    "unix": 30,
+                    "mode": "minimal",
+                    "storageAlertPrometheus": str(tmpdir / "minimal.prom"),
+                    "signedColdPrune": 1,
+                    "derivedIndexToBlock": 46,
+                    "chainLookupPruneToBlock": 50,
+                    "tailPrunedThroughBlock": 45,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-modes",
+                    "full,blocks,minimal",
+                    "--require-prometheus-artifacts",
+                    "--require-minimal-tail-prune",
+                    "--min",
+                    "minimal.producer.tailPrunedThroughBlock=40",
+                    "--max",
+                    "full.producer.freezerAlertIssues=0",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+            self.assertIn("modes=blocks,full,minimal", proc.stdout)
+
+    def test_rejects_missing_mode_artifact_status_and_minimal_tail_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "full",
+                    "role": "producer",
+                    "status": "storage-alerts-critical",
+                    "freezerAlertStatus": "critical",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "storageAlertPrometheus": str(tmpdir / "missing.prom"),
+                    "height": 120,
+                },
+                {
+                    "unix": 20,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "storageAlertPrometheus": str(tmpdir / "also-missing.prom"),
+                    "signedColdPrune": 0,
+                    "derivedIndexToBlock": -1,
+                    "chainLookupPruneToBlock": -1,
+                    "tailPrunedThroughBlock": -1,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-modes",
+                    "full,minimal,archive",
+                    "--require-prometheus-artifacts",
+                    "--require-minimal-tail-prune",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("required mode 'archive'", proc.stderr)
+            self.assertIn("status='storage-alerts-critical'", proc.stderr)
+            self.assertIn("prometheus artifact", proc.stderr)
+            self.assertIn("signedColdPrune must be true", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock must be >= 0", proc.stderr)
+
+    def test_rejects_minimal_tail_prune_without_derived_index_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "signedColdPrune": 1,
+                        "coldFreezerToBlock": 50,
+                        "derivedIndexToBlock": 44,
+                        "chainLookupPruneToBlock": 50,
+                        "tailPrunedThroughBlock": 45,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-minimal-tail-prune",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "derivedIndexToBlock=44.0 must cover tailPrunedThroughBlock=45",
+                proc.stderr,
+            )
+
+    def test_accepts_minimal_physical_tail_prune_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "signedColdPrune": 1,
+                    "coldFreezerToBlock": 100,
+                    "derivedIndexToBlock": 100,
+                    "chainLookupPruneToBlock": 100,
+                    "tailPrunedThroughBlock": 95,
+                    "tailPrunedFiles": 2,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-minimal-physical-tail-prune",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_minimal_physical_tail_prune_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 100,
+                    "tailPrunedThroughBlock": 95,
+                    "tailPrunedFiles": 0,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-minimal-physical-tail-prune",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("tailPrunedFiles=0.0, want > 0", proc.stderr)
+
+    def test_rejects_minimal_tail_files_without_tail_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "pruneMode": "minimal",
+                    "pruneModePersisted": True,
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 100,
+                    "coldFreezerToBlock": 100,
+                    "derivedIndexToBlock": 100,
+                    "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 1,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "tailPrunedThroughBlock must be >= 0 when tailPrunedFiles is positive",
+                proc.stderr,
+            )
+
+    def test_accepts_prune_mode_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "pruneModePersisted": True,
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "archive",
+                    "pruneMode": "archive",
+                    "signedColdPrune": 0,
+                    "chainLookupPruneToBlock": -1,
+                    "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 0,
+                    "coldFreezerToBlock": -1,
+                    "derivedIndexToBlock": -1,
+                    "balanceTracePruneToBlock": -1,
+                    "sectionBloomPruneToSection": -1,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "blocks",
+                    "pruneMode": "blocks",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 50,
+                    "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 0,
+                },
+                {
+                    **base,
+                    "unix": 30,
+                    "mode": "minimal",
+                    "pruneMode": "minimal",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 50,
+                    "derivedIndexToBlock": 50,
+                    "tailPrunedThroughBlock": 45,
+                    "tailPrunedFiles": 0,
+                },
+                {
+                    **base,
+                    "unix": 40,
+                    "mode": "full",
+                    "pruneMode": "full",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 50,
+                    "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 0,
+                },
+                {
+                    **base,
+                    "unix": 50,
+                    "mode": "snap",
+                    "pruneMode": "snap",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 50,
+                    "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 0,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-modes",
+                    "archive,blocks,full,minimal,snap",
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_prune_mode_semantic_violations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "pruneModePersisted": True,
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "archive",
+                    "pruneMode": "archive",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 12,
+                    "tailPrunedThroughBlock": 9,
+                    "tailPrunedFiles": 1,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "blocks",
+                    "pruneMode": "blocks",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": -1,
+                    "tailPrunedThroughBlock": 7,
+                    "tailPrunedFiles": 2,
+                },
+                {
+                    **base,
+                    "unix": 25,
+                    "role": "observer",
+                    "mode": "blocks",
+                    "pruneMode": "blocks",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 49,
+                    "tailPrunedThroughBlock": -1,
+                    "tailPrunedFiles": 1,
+                },
+                {
+                    **base,
+                    "unix": 30,
+                    "mode": "minimal",
+                    "pruneMode": "minimal",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 10,
+                    "coldFreezerToBlock": 11,
+                    "derivedIndexToBlock": 9,
+                    "tailPrunedThroughBlock": 12,
+                },
+                {
+                    **base,
+                    "unix": 40,
+                    "mode": "full",
+                    "pruneMode": "minimal",
+                    "pruneModePersisted": "false",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": -1,
+                },
+                {
+                    **base,
+                    "unix": 50,
+                    "mode": "snap",
+                    "pruneMode": "snap",
+                    "signedColdPrune": 1,
+                    "chainLookupPruneToBlock": 50,
+                    "coldFreezerToBlock": 49,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("signedColdPrune must be false for archive", proc.stderr)
+            self.assertIn("chainLookupPruneToBlock=12 is not allowed for archive mode", proc.stderr)
+            self.assertIn("tailPrunedFiles=1 is not allowed for archive mode", proc.stderr)
+            self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for blocks mode", proc.stderr)
+            self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=7 is not allowed for blocks mode", proc.stderr)
+            self.assertIn("tailPrunedFiles=2 is not allowed for blocks mode", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=12 exceeds chainLookupPruneToBlock=10", proc.stderr)
+            self.assertIn("coldFreezerToBlock=11.0 must cover tailPrunedThroughBlock=12", proc.stderr)
+            self.assertIn("derivedIndexToBlock=9.0 must cover tailPrunedThroughBlock=12", proc.stderr)
+            self.assertIn("pruneMode='minimal' does not match mode='full'", proc.stderr)
+            self.assertIn("pruneModePersisted must be true", proc.stderr)
+            self.assertIn("chainLookupPruneToBlock must be >= 0 when signedColdPrune is true for full mode", proc.stderr)
+            self.assertIn("coldFreezerToBlock=49.0 must cover chainLookupPruneToBlock=50", proc.stderr)
+
+    def test_rejects_fractional_prune_mode_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            row = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "pruneModePersisted": True,
+                "unix": 10,
+                "mode": "minimal",
+                "pruneMode": "minimal",
+                "signedColdPrune": 1,
+                "chainLookupPruneToBlock": 50.5,
+                "coldFreezerToBlock": 50.5,
+                "derivedIndexToBlock": 50.5,
+                "tailPrunedThroughBlock": 45.5,
+                "tailPrunedFiles": 1.5,
+                "balanceTracePruneToBlock": 44.5,
+                "sectionBloomPruneToSection": 2.5,
+            }
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("chainLookupPruneToBlock=50.5, want integer", proc.stderr)
+            self.assertIn("coldFreezerToBlock=50.5, want integer", proc.stderr)
+            self.assertIn("derivedIndexToBlock=50.5, want integer", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=45.5, want integer", proc.stderr)
+            self.assertIn("tailPrunedFiles=1.5, want non-negative integer", proc.stderr)
+            self.assertIn("balanceTracePruneToBlock=44.5, want integer", proc.stderr)
+            self.assertIn("sectionBloomPruneToSection=2.5, want integer", proc.stderr)
+
+    def test_rejects_missing_prune_mode_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "full",
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "minimal",
+                    "pruneMode": "unknown",
+                    "pruneModePersisted": False,
+                },
+                {
+                    **base,
+                    "unix": 30,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prune-mode-semantics",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("mode is missing", proc.stderr)
+            self.assertIn("pruneMode is missing or unknown", proc.stderr)
+            self.assertIn("pruneModePersisted must be true", proc.stderr)
+
+    def test_accepts_required_size_reduction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "full",
+                    "chaindataBytes": 1000,
+                    "datadirBytes": 2000,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "minimal",
+                    "chaindataBytes": 550,
+                    "datadirBytes": 1500,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-modes",
+                    "full,minimal",
+                    "--require-size-reduction",
+                    "minimal:full:chaindataBytes=0.40",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_required_size_reduction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "full",
+                    "chaindataBytes": 1000,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "minimal",
+                    "chaindataBytes": 850,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-size-reduction",
+                    "minimal:full:chaindataBytes=0.40",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "minimal chaindataBytes reduction=15.00%, want >= 40.00% versus full",
+                proc.stderr,
+            )
+
+    def test_rejects_non_integer_required_size_reduction_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "full",
+                    "chaindataBytes": 1000.5,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "minimal",
+                    "chaindataBytes": -1,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-size-reduction",
+                    "minimal:full:chaindataBytes=0.40",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "minimal:full:chaindataBytes=0.40: line 2 minimal/producer "
+                "chaindataBytes=-1, want non-negative integer byte counter",
+                proc.stderr,
+            )
+
+            rows[0]["chaindataBytes"] = 1000
+            rows[1]["chaindataBytes"] = 550.5
+            write_result(result, rows)
+            fractional = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-size-reduction",
+                    "minimal:full:chaindataBytes=0.40",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(fractional.returncode, 0, fractional.stdout + fractional.stderr)
+            self.assertIn(
+                "minimal:full:chaindataBytes=0.40: line 2 minimal/producer "
+                "chaindataBytes=550.5, want non-negative integer byte counter",
+                fractional.stderr,
+            )
+
+    def test_rejects_malformed_required_size_reduction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "mode": "full",
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-size-reduction",
+                    "minimal:full",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("must use MODE:BASE_MODE:FIELD=RATIO", proc.stderr)
+
+    def test_accepts_storage_bytes_per_block_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "datadirBytes": 10000,
+                        "chaindataBytes": 2000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                    "--max-hot-bytes-per-block",
+                    "25",
+                    "--max-cold-archive-bytes-per-block",
+                    "45",
+                    "--max-derived-index-bytes-per-block",
+                    "6",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_storage_bytes_per_block_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "datadirBytes": 13000,
+                        "chaindataBytes": 3000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 2000,
+                        "derivedIndexBytes": 700,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                    "--max-hot-bytes-per-block",
+                    "25",
+                    "--max-cold-archive-bytes-per-block",
+                    "45",
+                    "--max-derived-index-bytes-per-block",
+                    "6",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("datadirBytesPerBlock=130 failed <= max datadir bytes per block 120", proc.stderr)
+            self.assertIn("hotBytesPerBlock=30 failed <= max hot bytes per block 25", proc.stderr)
+            self.assertIn(
+                "coldArchiveBytesPerBlock=50 failed <= max cold archive bytes per block 45",
+                proc.stderr,
+            )
+            self.assertIn(
+                "derivedIndexBytesPerBlock=7 failed <= max derived index bytes per block 6",
+                proc.stderr,
+            )
+
+    def test_rejects_storage_bytes_per_block_without_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 0,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("height=0, want > 0 for datadir bytes-per-block evidence", proc.stderr)
+
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100.5,
+                        "datadirBytes": 10000,
+                    }
+                ],
+            )
+            fractional_height = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                fractional_height.returncode,
+                0,
+                fractional_height.stdout + fractional_height.stderr,
+            )
+            self.assertIn(
+                "height=100.5, want > 0 for datadir bytes-per-block evidence",
+                fractional_height.stderr,
+            )
+
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "datadirBytes": 10000.5,
+                        "chaindataBytes": -1,
+                        "ancientBytes": 3000.5,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500.5,
+                    }
+                ],
+            )
+            invalid_bytes = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-datadir-bytes-per-block",
+                    "120",
+                    "--max-hot-bytes-per-block",
+                    "25",
+                    "--max-cold-archive-bytes-per-block",
+                    "45",
+                    "--max-derived-index-bytes-per-block",
+                    "6",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(invalid_bytes.returncode, 0, invalid_bytes.stdout + invalid_bytes.stderr)
+            self.assertIn(
+                "datadir bytes-per-block evidence invalid fields: datadirBytes",
+                invalid_bytes.stderr,
+            )
+            self.assertIn(
+                "hot bytes-per-block evidence invalid fields: chaindataBytes",
+                invalid_bytes.stderr,
+            )
+            self.assertIn(
+                "cold archive bytes-per-block evidence invalid fields: ancientBytes",
+                invalid_bytes.stderr,
+            )
+            self.assertIn(
+                "derived index bytes-per-block evidence invalid fields: derivedIndexBytes",
+                invalid_bytes.stderr,
+            )
+
+    def test_accepts_benchmark_prometheus_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 5,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_depth_blocks": 20,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+                "gtron_storage_benchmark_cold_freezer_to_block": 90,
+                "gtron_storage_benchmark_derived_index_to_block": 90,
+                "gtron_storage_benchmark_chain_lookup_prune_to_block": 80,
+                "gtron_storage_benchmark_tail_pruned_through_block": 75,
+                "gtron_storage_benchmark_balance_trace_prune_to_block": 80,
+                "gtron_storage_benchmark_section_bloom_prune_to_section": 2,
+                "gtron_storage_benchmark_signed_cold_prune": 1,
+                "gtron_storage_benchmark_tail_pruned_files": 3,
+                "gtron_storage_benchmark_history_window": 256,
+                "gtron_storage_benchmark_event_log_index_segments": 2,
+                "gtron_storage_benchmark_event_log_index_address_keys": 3,
+                "gtron_storage_benchmark_event_log_index_address_postings": 6,
+                "gtron_storage_benchmark_event_log_index_address_avg_postings_milli": 2000,
+                "gtron_storage_benchmark_event_log_index_address_max_postings": 3,
+                "gtron_storage_benchmark_event_log_index_address_singleton_keys": 1,
+                "gtron_storage_benchmark_event_log_index_address_multi_posting_keys": 2,
+                "gtron_storage_benchmark_event_log_index_topic_keys": 2,
+                "gtron_storage_benchmark_event_log_index_topic_postings": 3,
+                "gtron_storage_benchmark_event_log_index_topic_avg_postings_milli": 1500,
+                "gtron_storage_benchmark_event_log_index_topic_max_postings": 2,
+                "gtron_storage_benchmark_event_log_index_topic_singleton_keys": 1,
+                "gtron_storage_benchmark_event_log_index_topic_multi_posting_keys": 1,
+            }
+            values.update(snapshot_point_metric_values(SNAPSHOT_POINT_PROFILE_EVIDENCE))
+            write_benchmark_prometheus(prom, datadir, values)
+            row = {
+                "unix": 10,
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "mode": "minimal",
+                "height": 100,
+                "elapsedSeconds": 9,
+                "datadirBytes": 10000,
+                "chaindataBytes": 2000,
+                "ancientBytes": 3000,
+                "snapshotBytes": 1000,
+                "derivedIndexBytes": 500,
+                "snapshotSidecarShareMilli": 125,
+                "archiveApiChecks": 5,
+                "archiveApiBlock": 80,
+                "archiveApiDepthBlocks": 20,
+                "archiveApiFailures": 0,
+                "coldFreezerToBlock": 90,
+                "derivedIndexToBlock": 90,
+                "chainLookupPruneToBlock": 80,
+                "tailPrunedThroughBlock": 75,
+                "balanceTracePruneToBlock": 80,
+                "sectionBloomPruneToSection": 2,
+                "signedColdPrune": 1,
+                "tailPrunedFiles": 3,
+                "historyWindow": 256,
+                "eventLogIndexSegments": 2,
+                "eventLogIndexAddressKeys": 3,
+                "eventLogIndexAddressPostings": 6,
+                "eventLogIndexAddressAvgPostingsMilli": 2000,
+                "eventLogIndexAddressMaxPostings": 3,
+                "eventLogIndexAddressSingletonKeys": 1,
+                "eventLogIndexAddressMultiPostingKeys": 2,
+                "eventLogIndexTopicKeys": 2,
+                "eventLogIndexTopicPostings": 3,
+                "eventLogIndexTopicAvgPostingsMilli": 1500,
+                "eventLogIndexTopicMaxPostings": 2,
+                "eventLogIndexTopicSingletonKeys": 1,
+                "eventLogIndexTopicMultiPostingKeys": 1,
+                "datadir": datadir,
+                "storageBenchmarkPrometheus": prom.name,
+            }
+            row.update(SNAPSHOT_POINT_PROFILE_EVIDENCE)
+            write_result(
+                result,
+                [row],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_fractional_benchmark_prometheus_direct_integer_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 5,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_depth_blocks": 20.5,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+                "gtron_storage_benchmark_cold_freezer_to_block": 90,
+                "gtron_storage_benchmark_chain_lookup_prune_to_block": 80,
+                "gtron_storage_benchmark_tail_pruned_through_block": 75,
+                "gtron_storage_benchmark_signed_cold_prune": 1,
+                "gtron_storage_benchmark_tail_pruned_files": 3,
+                "gtron_storage_benchmark_event_log_index_segments": 2,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            row = {
+                "unix": 10,
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "mode": "minimal",
+                "height": 100,
+                "elapsedSeconds": 9,
+                "datadirBytes": 10000,
+                "chaindataBytes": 2000,
+                "ancientBytes": 3000,
+                "snapshotBytes": 1000,
+                "derivedIndexBytes": 500,
+                "snapshotSidecarShareMilli": 125,
+                "archiveApiChecks": 5,
+                "archiveApiBlock": 80,
+                "archiveApiDepthBlocks": 20,
+                "archiveApiFailures": 0,
+                "coldFreezerToBlock": 90,
+                "chainLookupPruneToBlock": 80.5,
+                "tailPrunedThroughBlock": 75,
+                "signedColdPrune": 1,
+                "tailPrunedFiles": 3,
+                "eventLogIndexSegments": 2,
+                "datadir": datadir,
+                "storageBenchmarkPrometheus": prom.name,
+            }
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                    "--require-archive-call-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "benchmark prometheus evidence field 'chainLookupPruneToBlock'=80.5, "
+                "want integer",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_archive_api_depth_blocks=20.5, "
+                "want non-negative integer",
+                proc.stderr,
+            )
+
+    def test_rejects_benchmark_prometheus_label_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 5,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "blocks",
+                        "height": 100,
+                        "elapsedSeconds": 9,
+                        "datadirBytes": 10000,
+                        "chaindataBytes": 2000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500,
+                        "snapshotSidecarShareMilli": 125,
+                        "archiveApiChecks": 5,
+                        "archiveApiBlock": 80,
+                        "archiveApiFailures": 0,
+                        "datadir": datadir,
+                        "storageBenchmarkPrometheus": prom.name,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing gtron_storage_benchmark_height", proc.stderr)
+
+    def test_rejects_benchmark_prometheus_status_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_status": 1,
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 5,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "elapsedSeconds": 9,
+                        "datadirBytes": 10000,
+                        "chaindataBytes": 2000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500,
+                        "snapshotSidecarShareMilli": 125,
+                        "archiveApiChecks": 5,
+                        "archiveApiBlock": 80,
+                        "archiveApiFailures": 0,
+                        "datadir": datadir,
+                        "storageBenchmarkPrometheus": prom.name,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("gtron_storage_benchmark_status=1, want 0", proc.stderr)
+
+    def test_accepts_benchmark_prometheus_archive_method_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 21,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+            }
+            row = {
+                "unix": 10,
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "mode": "minimal",
+                "height": 100,
+                "elapsedSeconds": 9,
+                "datadirBytes": 10000,
+                "chaindataBytes": 2000,
+                "ancientBytes": 3000,
+                "snapshotBytes": 1000,
+                "derivedIndexBytes": 500,
+                "snapshotSidecarShareMilli": 125,
+                "archiveApiChecks": 21,
+                "archiveApiBlock": 80,
+                "archiveApiFailures": 0,
+                "archiveApiCallProbe": True,
+                "archiveApiTraceTransactionProbe": True,
+                "archiveApiMethods": [
+                    "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
+                    "eth_getUncleCountByBlockNumber",
+                    "eth_getUncleByBlockNumberAndIndex",
+                    "eth_getBlockReceipts",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_call",
+                    "debug_traceCall",
+                    "eth_estimateGas",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getBlockByHash",
+                    "eth_getBlockTransactionCountByHash",
+                    "eth_getUncleCountByBlockHash",
+                    "eth_getUncleByBlockHashAndIndex",
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+                "archiveApiTxProbe": True,
+                "archiveApiTxHash": "0x" + "ab" * 32,
+                "archiveApiTxMethods": [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+                "datadir": datadir,
+                "storageBenchmarkPrometheus": prom.name,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            append_benchmark_archive_method_prometheus(prom, datadir, row)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_benchmark_prometheus_missing_archive_method_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 21,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+            }
+            row = {
+                "unix": 10,
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "mode": "minimal",
+                "height": 100,
+                "elapsedSeconds": 9,
+                "datadirBytes": 10000,
+                "chaindataBytes": 2000,
+                "ancientBytes": 3000,
+                "snapshotBytes": 1000,
+                "derivedIndexBytes": 500,
+                "snapshotSidecarShareMilli": 125,
+                "archiveApiChecks": 21,
+                "archiveApiBlock": 80,
+                "archiveApiFailures": 0,
+                "archiveApiCallProbe": True,
+                "archiveApiTraceTransactionProbe": True,
+                "archiveApiMethods": [
+                    "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
+                    "eth_getUncleCountByBlockNumber",
+                    "eth_getUncleByBlockNumberAndIndex",
+                    "eth_getBlockReceipts",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_call",
+                    "debug_traceCall",
+                    "eth_estimateGas",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getBlockByHash",
+                    "eth_getBlockTransactionCountByHash",
+                    "eth_getUncleCountByBlockHash",
+                    "eth_getUncleByBlockHashAndIndex",
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+                "archiveApiTxProbe": True,
+                "archiveApiTxHash": "0x" + "ab" * 32,
+                "archiveApiTxMethods": [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+                "datadir": datadir,
+                "storageBenchmarkPrometheus": prom.name,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            append_benchmark_archive_method_prometheus(prom, datadir, row, include_trace=False)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "missing gtron_storage_benchmark_archive_api_method_success{method='debug_traceTransaction'}",
+                proc.stderr,
+            )
+            self.assertIn(
+                "missing gtron_storage_benchmark_archive_api_tx_method_success{method='debug_traceTransaction'}",
+                proc.stderr,
+            )
+
+    def test_rejects_benchmark_prometheus_archive_method_metric_wrong_success_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 21,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+            }
+            row = {
+                "unix": 10,
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "mode": "minimal",
+                "height": 100,
+                "elapsedSeconds": 9,
+                "datadirBytes": 10000,
+                "chaindataBytes": 2000,
+                "ancientBytes": 3000,
+                "snapshotBytes": 1000,
+                "derivedIndexBytes": 500,
+                "snapshotSidecarShareMilli": 125,
+                "archiveApiChecks": 21,
+                "archiveApiBlock": 80,
+                "archiveApiFailures": 0,
+                "archiveApiCallProbe": True,
+                "archiveApiTraceTransactionProbe": True,
+                "archiveApiMethods": [
+                    "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
+                    "eth_getUncleCountByBlockNumber",
+                    "eth_getUncleByBlockNumberAndIndex",
+                    "eth_getBlockReceipts",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_call",
+                    "debug_traceCall",
+                    "eth_estimateGas",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getBlockByHash",
+                    "eth_getBlockTransactionCountByHash",
+                    "eth_getUncleCountByBlockHash",
+                    "eth_getUncleByBlockHashAndIndex",
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+                "archiveApiTxProbe": True,
+                "archiveApiTxHash": "0x" + "ab" * 32,
+                "archiveApiTxMethods": [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+                "datadir": datadir,
+                "storageBenchmarkPrometheus": prom.name,
+            }
+            prometheus_row = dict(row)
+            row["archiveApiMethods"] = [
+                method for method in row["archiveApiMethods"] if method != "debug_traceTransaction"
+            ]
+            row["archiveApiTxMethods"] = [
+                method for method in row["archiveApiTxMethods"] if method != "debug_traceTransaction"
+            ]
+            write_benchmark_prometheus(prom, datadir, values)
+            append_benchmark_archive_method_prometheus(prom, datadir, prometheus_row)
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_storage_benchmark_archive_api_method_success{method='debug_traceTransaction'}=1, want 0",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_archive_api_tx_method_success{method='debug_traceTransaction'}=1, want 0",
+                proc.stderr,
+            )
+
+    def test_rejects_benchmark_prometheus_artifact_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 499,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 4.99,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 5,
+                "gtron_storage_benchmark_archive_api_block": 80,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+                "gtron_storage_benchmark_tail_pruned_through_block": 79,
+                "gtron_storage_benchmark_event_log_index_address_postings": 5,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "elapsedSeconds": 9,
+                        "datadirBytes": 10000,
+                        "chaindataBytes": 2000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500,
+                        "snapshotSidecarShareMilli": 125,
+                        "archiveApiChecks": 5,
+                        "archiveApiBlock": 80,
+                        "archiveApiFailures": 0,
+                        "tailPrunedThroughBlock": 80,
+                        "eventLogIndexAddressPostings": 6,
+                        "datadir": datadir,
+                        "storageBenchmarkPrometheus": prom.name,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_storage_benchmark_derived_index_bytes=499, want 500",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_tail_pruned_through_block=79, want 80",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_event_log_index_address_postings=5, want 6",
+                proc.stderr,
+            )
+
+    def test_rejects_benchmark_prometheus_archive_probe_metric_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            prom = tmpdir / "benchmark.prom"
+            datadir = "/tmp/storage"
+            values = {
+                "gtron_storage_benchmark_height": 100,
+                "gtron_storage_benchmark_elapsed_seconds": 9,
+                "gtron_storage_benchmark_datadir_bytes": 10000,
+                "gtron_storage_benchmark_chaindata_bytes": 2000,
+                "gtron_storage_benchmark_ancient_bytes": 3000,
+                "gtron_storage_benchmark_snapshot_bytes": 1000,
+                "gtron_storage_benchmark_cold_archive_bytes": 4000,
+                "gtron_storage_benchmark_derived_index_bytes": 500,
+                "gtron_storage_benchmark_datadir_bytes_per_block": 100,
+                "gtron_storage_benchmark_hot_bytes_per_block": 20,
+                "gtron_storage_benchmark_cold_archive_bytes_per_block": 40,
+                "gtron_storage_benchmark_derived_index_bytes_per_block": 5,
+                "gtron_storage_benchmark_snapshot_sidecar_share_milli": 125,
+                "gtron_storage_benchmark_archive_api_checks": 5,
+                "gtron_storage_benchmark_archive_api_block": 79,
+                "gtron_storage_benchmark_archive_api_depth_blocks": 19,
+                "gtron_storage_benchmark_archive_api_failures": 0,
+            }
+            write_benchmark_prometheus(prom, datadir, values)
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "mode": "minimal",
+                        "height": 100,
+                        "elapsedSeconds": 9,
+                        "datadirBytes": 10000,
+                        "chaindataBytes": 2000,
+                        "ancientBytes": 3000,
+                        "snapshotBytes": 1000,
+                        "derivedIndexBytes": 500,
+                        "snapshotSidecarShareMilli": 125,
+                        "archiveApiChecks": 5,
+                        "archiveApiBlock": 80,
+                        "archiveApiDepthBlocks": 20,
+                        "archiveApiFailures": 0,
+                        "datadir": datadir,
+                        "storageBenchmarkPrometheus": prom.name,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-benchmark-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_storage_benchmark_archive_api_block=79, want 80",
+                proc.stderr,
+            )
+            self.assertIn(
+                "gtron_storage_benchmark_archive_api_depth_blocks=19, want 20",
+                proc.stderr,
+            )
+
+    def test_accepts_retired_prune_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "retiredPruneRan": True,
+                    "retiredPruneSegments": 1,
+                    "retiredPruneDeleted": 2,
+                    "retiredPruneMissing": 0,
+                    "retiredPruneSkippedActive": 0,
+                    "retiredPruneBytesDeleted": 4096,
+                    "snapshotRetiredSegments": 0,
+                    "snapshotRetiredFiles": 0,
+                    "snapshotRetiredMissing": 0,
+                    "snapshotRetiredSkippedActive": 0,
+                    "snapshotRetiredBytes": 0,
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-retired-prune-evidence",
+                    "--require-retired-prune-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_invalid_retired_prune_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "retiredPruneRan": False,
+                    "retiredPruneSegments": 1,
+                    "retiredPruneDeleted": 0,
+                    "retiredPruneMissing": 1,
+                    "retiredPruneSkippedActive": 1,
+                    "retiredPruneBytesDeleted": 0,
+                    "snapshotRetiredSegments": 1,
+                    "snapshotRetiredFiles": 2,
+                    "snapshotRetiredMissing": 1,
+                    "snapshotRetiredSkippedActive": 1,
+                    "snapshotRetiredBytes": 1024,
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-retired-prune-evidence",
+                    "--require-retired-prune-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("retiredPruneRan=False, want true", proc.stderr)
+            self.assertIn("retiredPruneMissing=1, want 0", proc.stderr)
+            self.assertIn("retiredPruneSkippedActive=1, want 0", proc.stderr)
+            self.assertIn("snapshotRetiredBytes=1024, want 0 after prune-retired", proc.stderr)
+
+    def test_rejects_retired_prune_evidence_missing_required_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-retired-prune-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer missing retired-prune evidence for required mode 'minimal'",
+                proc.stderr,
+            )
+
+    def test_accepts_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 13,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiDepthBlocks": 120,
+                    "coldFreezerToBlock": 90,
+                    "archiveApiExpectedBalance": "0x0",
+                    "archiveApiExpectedCode": "0x",
+                    "archiveApiExpectedStorage": "0x00",
+                    "archiveApiFixtureFile": "/tmp/archive-fixture.json",
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBlockTransactionCountByNumber",
+                        "eth_getUncleCountByBlockNumber",
+                        "eth_getUncleByBlockNumberAndIndex",
+                        "eth_getBlockReceipts",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                        "eth_getBlockByHash",
+                        "eth_getBlockTransactionCountByHash",
+                        "eth_getUncleCountByBlockHash",
+                        "eth_getUncleByBlockHashAndIndex",
+                    ],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-api-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
+                    "--require-post-prune-archive-evidence",
+                    "--require-archive-state-fixtures",
+                    "--require-archive-fixture-file",
+                    "--min-archive-api-depth-blocks",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+            without_prune = json.loads(result.read_text(encoding="utf-8").splitlines()[0])
+            without_prune.pop("tailPrunedThroughBlock", None)
+            write_result(result, [without_prune])
+            missing_post_prune = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-post-prune-archive-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                missing_post_prune.returncode,
+                0,
+                missing_post_prune.stdout + missing_post_prune.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer post-prune archive API evidence requires "
+                "chainLookupPruneToBlock or tailPrunedThroughBlock >= 0",
+                missing_post_prune.stderr,
+            )
+
+            missing_cold = json.loads(result.read_text(encoding="utf-8").splitlines()[0])
+            missing_cold["tailPrunedThroughBlock"] = 90
+            missing_cold["coldFreezerToBlock"] = 79
+            write_result(result, [missing_cold])
+            missing_cold_proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-post-prune-archive-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                missing_cold_proc.returncode,
+                0,
+                missing_cold_proc.stdout + missing_cold_proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer coldFreezerToBlock=79 must cover "
+                "archiveApiBlock=80 for post-prune archive API evidence",
+                missing_cold_proc.stderr,
+            )
+
+            write_result(result, rows)
+            require_call = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-api-evidence",
+                    "--archive-api-method",
+                    "eth_call",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_call.returncode,
+                0,
+                require_call.stdout + require_call.stderr,
+            )
+            self.assertIn("archiveApiMethods missing required methods: eth_call", require_call.stderr)
+
+            require_call_probe = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-call-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_call_probe.returncode,
+                0,
+                require_call_probe.stdout + require_call_probe.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiCallProbe is not true; "
+                "run storage_benchmark.sh with --archive-api-call-data",
+                require_call_probe.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiMethods missing required methods: "
+                "debug_traceCall,eth_call,eth_estimateGas",
+                require_call_probe.stderr,
+            )
+
+            require_call_without_evidence_flag = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--archive-api-method",
+                    "eth_call",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_call_without_evidence_flag.returncode,
+                0,
+                require_call_without_evidence_flag.stdout
+                + require_call_without_evidence_flag.stderr,
+            )
+            self.assertIn(
+                "archiveApiMethods missing required methods: eth_call",
+                require_call_without_evidence_flag.stderr,
+            )
+
+            require_filtered_logs = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-filtered-log-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                require_filtered_logs.returncode,
+                0,
+                require_filtered_logs.stdout + require_filtered_logs.stderr,
+            )
+            self.assertIn(
+                "archiveApiMethods missing required methods: eth_getLogsFiltered",
+                require_filtered_logs.stderr,
+            )
+
+            filtered_log_row = json.loads(result.read_text(encoding="utf-8").splitlines()[0])
+            filtered_log_row["archiveApiChecks"] = 14
+            filtered_log_row["archiveApiMethods"] = [
+                *filtered_log_row["archiveApiMethods"],
+                "eth_getLogsFiltered",
+            ]
+            write_result(result, [filtered_log_row])
+
+            filtered_logs_without_index = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-filtered-log-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(
+                filtered_logs_without_index.returncode,
+                0,
+                filtered_logs_without_index.stdout + filtered_logs_without_index.stderr,
+            )
+            self.assertIn(
+                "event-log index evidence is missing for eth_getLogsFiltered",
+                filtered_logs_without_index.stderr,
+            )
+
+            filtered_log_row.update(
+                {
+                    "derivedIndexToBlock": 100,
+                    "eventLogIndexSegments": 2,
+                    "eventLogIndexFromBlock": 1,
+                    "eventLogIndexToBlock": 100,
+                    "eventLogIndexAddressKeys": 3,
+                    "eventLogIndexAddressPostings": 6,
+                    "eventLogIndexAddressAvgPostingsMilli": 2000,
+                    "eventLogIndexAddressMaxPostings": 3,
+                    "eventLogIndexAddressSingletonKeys": 1,
+                    "eventLogIndexAddressMultiPostingKeys": 2,
+                    "eventLogIndexTopicKeys": 2,
+                    "eventLogIndexTopicPostings": 3,
+                    "eventLogIndexTopicAvgPostingsMilli": 1500,
+                    "eventLogIndexTopicMaxPostings": 2,
+                    "eventLogIndexTopicSingletonKeys": 1,
+                    "eventLogIndexTopicMultiPostingKeys": 1,
+                }
+            )
+            write_result(result, [filtered_log_row])
+
+            filtered_logs_ok = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-filtered-log-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(
+                filtered_logs_ok.returncode,
+                0,
+                filtered_logs_ok.stdout + filtered_logs_ok.stderr,
+            )
+            self.assertIn("storage benchmark acceptance: ok", filtered_logs_ok.stdout)
+
+    def test_rejects_archive_api_evidence_missing_state_fixtures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 5,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 80,
+                        "archiveApiExpectedBalance": "0x",
+                        "archiveApiExpectedCode": "not-hex",
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-state-fixtures",
+                    "--require-archive-fixture-file",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer archiveApiExpectedBalance='0x', want 0x hex quantity",
+                proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiExpectedCode='not-hex', want 0x hex string",
+                proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiExpectedStorage is missing",
+                proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer archiveApiFixtureFile is missing",
+                proc.stderr,
+            )
+
+    def test_rejects_archive_api_depth_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 5,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 80,
+                        "archiveApiDepthBlocks": 21,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiDepthBlocks=21, want height - archiveApiBlock = 20",
+                proc.stderr,
+            )
+
+    def test_rejects_archive_api_depth_below_minimum(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 5,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 80,
+                        "archiveApiDepthBlocks": 20,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-api-evidence",
+                    "--min-archive-api-depth-blocks",
+                    "30",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiBlock depth=20 failed >= min archive API depth 30 blocks",
+                proc.stderr,
+            )
+
+    def test_accepts_archive_tx_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 17,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBlockTransactionCountByNumber",
+                        "eth_getUncleCountByBlockNumber",
+                        "eth_getUncleByBlockNumberAndIndex",
+                        "eth_getBlockReceipts",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                        "eth_getBlockByHash",
+                        "eth_getBlockTransactionCountByHash",
+                        "eth_getUncleCountByBlockHash",
+                        "eth_getUncleByBlockHashAndIndex",
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                        "eth_getTransactionByBlockNumberAndIndex",
+                        "eth_getTransactionByBlockHashAndIndex",
+                    ],
+                    "archiveApiTxProbe": True,
+                    "archiveApiTxHash": "0x" + "ab" * 32,
+                    "archiveApiTxMethods": [
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                        "eth_getTransactionByBlockNumberAndIndex",
+                        "eth_getTransactionByBlockHashAndIndex",
+                    ],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-tx-evidence",
+                    "--require-archive-tx-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_requires_archive_trace_transaction_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base_row = {
+                "unix": 10,
+                "profile": "producer",
+                "mode": "minimal",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "height": 200,
+                "tailPrunedThroughBlock": 90,
+                "archiveApiStatus": "ok",
+                "archiveApiChecks": 18,
+                "archiveApiFailures": 0,
+                "archiveApiBlock": 80,
+                "archiveApiTraceTransactionProbe": True,
+                "archiveApiMethods": [
+                    "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
+                    "eth_getUncleCountByBlockNumber",
+                    "eth_getUncleByBlockNumberAndIndex",
+                    "eth_getBlockReceipts",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getBlockByHash",
+                    "eth_getBlockTransactionCountByHash",
+                    "eth_getUncleCountByBlockHash",
+                    "eth_getUncleByBlockHashAndIndex",
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+                "archiveApiTxProbe": True,
+                "archiveApiTxHash": "0x" + "ab" * 32,
+                "archiveApiTxMethods": [
+                    "eth_getTransactionByHash",
+                    "eth_getTransactionReceipt",
+                    "eth_getTransactionByBlockNumberAndIndex",
+                    "eth_getTransactionByBlockHashAndIndex",
+                    "debug_traceTransaction",
+                ],
+            }
+            write_result(result, [base_row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+            missing_trace = dict(base_row)
+            missing_trace["archiveApiChecks"] = 17
+            missing_trace["archiveApiMethods"] = [
+                method for method in base_row["archiveApiMethods"] if method != "debug_traceTransaction"
+            ]
+            missing_trace["archiveApiTxMethods"] = [
+                method for method in base_row["archiveApiTxMethods"] if method != "debug_traceTransaction"
+            ]
+            write_result(result, [missing_trace])
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiMethods missing required methods: debug_traceTransaction",
+                proc.stderr,
+            )
+            self.assertIn(
+                "archiveApiTxMethods missing required methods: debug_traceTransaction",
+                proc.stderr,
+            )
+
+            trace_not_requested = dict(base_row)
+            trace_not_requested["archiveApiTraceTransactionProbe"] = False
+            write_result(result, [trace_not_requested])
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-trace-transaction",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiTraceTransactionProbe is not true", proc.stderr)
+
+    def test_requires_archive_trace_block_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base_row = {
+                "unix": 10,
+                "profile": "producer",
+                "mode": "minimal",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "height": 200,
+                "tailPrunedThroughBlock": 90,
+                "archiveApiStatus": "ok",
+                "archiveApiChecks": 15,
+                "archiveApiFailures": 0,
+                "archiveApiBlock": 80,
+                "archiveApiTraceBlockProbe": True,
+                "archiveApiMethods": [
+                    "eth_getBlockByNumber",
+                    "eth_getBlockTransactionCountByNumber",
+                    "eth_getUncleCountByBlockNumber",
+                    "eth_getUncleByBlockNumberAndIndex",
+                    "eth_getBlockReceipts",
+                    "eth_getBalance",
+                    "eth_getCode",
+                    "eth_getStorageAt",
+                    "eth_getLogs",
+                    "eth_getBlockByHash",
+                    "eth_getBlockTransactionCountByHash",
+                    "eth_getUncleCountByBlockHash",
+                    "eth_getUncleByBlockHashAndIndex",
+                    "debug_traceBlockByNumber",
+                    "debug_traceBlockByHash",
+                ],
+            }
+            write_result(result, [base_row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-trace-block",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+            trace_not_requested = dict(base_row)
+            trace_not_requested["archiveApiTraceBlockProbe"] = False
+            write_result(result, [trace_not_requested])
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-trace-block",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiTraceBlockProbe is not true", proc.stderr)
+
+    def test_rejects_archive_tx_evidence_missing_required_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 5,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                    ],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-tx-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer missing archive tx evidence for required mode 'minimal'",
+                proc.stderr,
+            )
+
+    def test_rejects_invalid_archive_tx_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 5,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                    ],
+                    "archiveApiTxProbe": False,
+                    "archiveApiTxHash": "",
+                    "archiveApiTxMethods": [],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-tx-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiMethods missing required tx methods", proc.stderr)
+            self.assertIn("archiveApiTxProbe is not true", proc.stderr)
+            self.assertIn("archiveApiTxHash is missing", proc.stderr)
+            self.assertIn("archiveApiTxMethods must be a non-empty list", proc.stderr)
+
+    def test_rejects_duplicate_archive_tx_methods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 17,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBlockTransactionCountByNumber",
+                        "eth_getUncleCountByBlockNumber",
+                        "eth_getUncleByBlockNumberAndIndex",
+                        "eth_getBlockReceipts",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                        "eth_getBlockByHash",
+                        "eth_getBlockTransactionCountByHash",
+                        "eth_getUncleCountByBlockHash",
+                        "eth_getUncleByBlockHashAndIndex",
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                        "eth_getTransactionByBlockNumberAndIndex",
+                        "eth_getTransactionByBlockHashAndIndex",
+                    ],
+                    "archiveApiTxProbe": True,
+                    "archiveApiTxHash": "0x" + "ab" * 32,
+                    "archiveApiTxMethods": [
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                        "eth_getTransactionByBlockNumberAndIndex",
+                        "eth_getTransactionByBlockHashAndIndex",
+                        "eth_getTransactionReceipt",
+                    ],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-tx-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiTxMethods contains duplicate methods: eth_getTransactionReceipt",
+                proc.stderr,
+            )
+
+    def test_rejects_malformed_archive_tx_methods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 17,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBlockTransactionCountByNumber",
+                        "eth_getUncleCountByBlockNumber",
+                        "eth_getUncleByBlockNumberAndIndex",
+                        "eth_getBlockReceipts",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                        "eth_getBlockByHash",
+                        "eth_getBlockTransactionCountByHash",
+                        "eth_getUncleCountByBlockHash",
+                        "eth_getUncleByBlockHashAndIndex",
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                        "eth_getTransactionByBlockNumberAndIndex",
+                        "eth_getTransactionByBlockHashAndIndex",
+                    ],
+                    "archiveApiTxProbe": True,
+                    "archiveApiTxHash": "0x" + "ab" * 32,
+                    "archiveApiTxMethods": [
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                        "eth_getTransactionByBlockNumberAndIndex",
+                        "eth_getTransactionByBlockHashAndIndex",
+                        "",
+                        123,
+                    ],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-tx-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiTxMethods contains non-string or empty entries: 4:'',5:123",
+                proc.stderr,
+            )
+
+    def test_rejects_archive_tx_evidence_short_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 200,
+                    "tailPrunedThroughBlock": 90,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 7,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                    ],
+                    "archiveApiTxProbe": True,
+                    "archiveApiTxHash": "0xabc",
+                    "archiveApiTxMethods": [
+                        "eth_getTransactionByHash",
+                        "eth_getTransactionReceipt",
+                    ],
+                }
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-archive-tx-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiTxHash must be a 0x-prefixed 32-byte hash", proc.stderr)
+
+    def test_rejects_missing_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("required archive API evidence has no selected latest row", proc.stderr)
+
+    def test_rejects_archive_api_evidence_missing_required_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "tailPrunedThroughBlock": 40,
+                },
+                {
+                    "unix": 20,
+                    "profile": "producer",
+                    "mode": "archive",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 5,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                    ],
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                    "--require-archive-api-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer missing archive API evidence for required mode 'minimal'",
+                proc.stderr,
+            )
+
+    def test_rejects_invalid_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "tailPrunedThroughBlock": 40,
+                    "archiveApiStatus": "failed",
+                    "archiveApiChecks": 0,
+                    "archiveApiFailures": 2,
+                    "archiveApiBlock": 100,
+                    "archiveApiMethods": ["eth_getBalance"],
+                },
+                {
+                    "unix": 20,
+                    "profile": "producer",
+                    "mode": "snap",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "tailPrunedThroughBlock": 40,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 1,
+                    "archiveApiBlock": 45,
+                    "archiveApiMethods": "eth_getBalance",
+                },
+                {
+                    "unix": 30,
+                    "profile": "producer",
+                    "mode": "blocks",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "chainLookupPruneToBlock": 50,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 5,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                    ],
+                },
+                {
+                    "unix": 40,
+                    "profile": "producer",
+                    "mode": "archive",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": 2,
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": [
+                        "eth_getBlockByNumber",
+                        "eth_getBalance",
+                        "eth_getCode",
+                        "eth_getStorageAt",
+                        "eth_getLogs",
+                    ],
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("archiveApiStatus='failed', want 'ok'", proc.stderr)
+            self.assertIn("archiveApiChecks=0, want positive integer", proc.stderr)
+            self.assertIn("archiveApiFailures=2, want 0", proc.stderr)
+            self.assertIn("archiveApiFailures=None, want non-negative integer", proc.stderr)
+            self.assertIn("archiveApiBlock=100 must be below height=100", proc.stderr)
+            self.assertIn("archiveApiMethods missing required methods", proc.stderr)
+            self.assertIn("archiveApiBlock=45 must be <= tailPrunedThroughBlock=40", proc.stderr)
+            self.assertIn("archiveApiBlock=80 must be <= chainLookupPruneToBlock=50", proc.stderr)
+            self.assertIn("archiveApiMethods must be a non-empty list", proc.stderr)
+            self.assertIn(
+                "archiveApiChecks=2 must equal successful archiveApiMethods=5 when archiveApiFailures=0",
+                proc.stderr,
+            )
+
+    def test_rejects_duplicate_archive_api_methods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            methods = [
+                "eth_getBlockByNumber",
+                "eth_getBlockByHash",
+                "eth_getBlockTransactionCountByNumber",
+                "eth_getBlockTransactionCountByHash",
+                "eth_getUncleCountByBlockNumber",
+                "eth_getUncleCountByBlockHash",
+                "eth_getUncleByBlockNumberAndIndex",
+                "eth_getUncleByBlockHashAndIndex",
+                "eth_getBlockReceipts",
+                "eth_getBalance",
+                "eth_getCode",
+                "eth_getStorageAt",
+                "eth_getLogs",
+                "eth_getBalance",
+            ]
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": len(methods),
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": methods,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiMethods contains duplicate methods: eth_getBalance",
+                proc.stderr,
+            )
+
+    def test_rejects_malformed_archive_api_methods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            methods = [
+                "eth_getBlockByNumber",
+                "eth_getBlockByHash",
+                "eth_getBlockTransactionCountByNumber",
+                "eth_getBlockTransactionCountByHash",
+                "eth_getUncleCountByBlockNumber",
+                "eth_getUncleCountByBlockHash",
+                "eth_getUncleByBlockNumberAndIndex",
+                "eth_getUncleByBlockHashAndIndex",
+                "eth_getBlockReceipts",
+                "eth_getBalance",
+                "eth_getCode",
+                "eth_getStorageAt",
+                "eth_getLogs",
+                "",
+                123,
+            ]
+            rows = [
+                {
+                    "unix": 10,
+                    "profile": "producer",
+                    "mode": "minimal",
+                    "role": "producer",
+                    "status": "ok",
+                    "freezerAlertStatus": "ok",
+                    "stageVerifyStatus": "ok",
+                    "modeAlertStatus": "ok",
+                    "snapshotAlertStatus": "ok",
+                    "height": 100,
+                    "archiveApiStatus": "ok",
+                    "archiveApiChecks": len(methods),
+                    "archiveApiFailures": 0,
+                    "archiveApiBlock": 80,
+                    "archiveApiMethods": methods,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiMethods contains non-string or empty entries: 13:'',14:123",
+                proc.stderr,
+            )
+
+    def test_rejects_fractional_archive_api_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "height": 100,
+                        "archiveApiStatus": "ok",
+                        "archiveApiChecks": 13,
+                        "archiveApiFailures": 0,
+                        "archiveApiBlock": 80.5,
+                        "archiveApiDepthBlocks": 19.5,
+                        "chainLookupPruneToBlock": 80.5,
+                        "tailPrunedThroughBlock": 75.5,
+                        "archiveApiMethods": [
+                            "eth_getBlockByNumber",
+                            "eth_getBlockByHash",
+                            "eth_getBlockTransactionCountByNumber",
+                            "eth_getBlockTransactionCountByHash",
+                            "eth_getUncleCountByBlockNumber",
+                            "eth_getUncleCountByBlockHash",
+                            "eth_getUncleByBlockNumberAndIndex",
+                            "eth_getUncleByBlockHashAndIndex",
+                            "eth_getBlockReceipts",
+                            "eth_getBalance",
+                            "eth_getCode",
+                            "eth_getStorageAt",
+                            "eth_getLogs",
+                        ],
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-archive-api-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "archiveApiBlock=80.5, want non-negative integer historical block",
+                proc.stderr,
+            )
+            self.assertIn("chainLookupPruneToBlock=80.5, want integer", proc.stderr)
+            self.assertIn("tailPrunedThroughBlock=75.5, want integer", proc.stderr)
+
+    def test_accepts_event_log_index_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "snap",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexSegments": 2,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
+                        "eventLogIndexAddressKeys": 3,
+                        "eventLogIndexAddressPostings": 6,
+                        "eventLogIndexAddressAvgPostingsMilli": 2000,
+                        "eventLogIndexAddressMaxPostings": 3,
+                        "eventLogIndexAddressSingletonKeys": 1,
+                        "eventLogIndexAddressMultiPostingKeys": 2,
+                        "eventLogIndexTopicKeys": 2,
+                        "eventLogIndexTopicPostings": 3,
+                        "eventLogIndexTopicAvgPostingsMilli": 1500,
+                        "eventLogIndexTopicMaxPostings": 2,
+                        "eventLogIndexTopicSingletonKeys": 1,
+                        "eventLogIndexTopicMultiPostingKeys": 1,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                    "--require-event-log-index-mode",
+                    "snap",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_fractional_event_log_index_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "snap",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "derivedIndexToBlock": 80.5,
+                        "eventLogIndexSegments": 1.5,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
+                        "tailPrunedThroughBlock": 75.5,
+                        "eventLogIndexAddressKeys": 3,
+                        "eventLogIndexAddressPostings": 6,
+                        "eventLogIndexAddressAvgPostingsMilli": 2000,
+                        "eventLogIndexAddressMaxPostings": 3,
+                        "eventLogIndexAddressSingletonKeys": 1,
+                        "eventLogIndexAddressMultiPostingKeys": 2,
+                        "eventLogIndexTopicKeys": 2,
+                        "eventLogIndexTopicPostings": 3,
+                        "eventLogIndexTopicAvgPostingsMilli": 1500,
+                        "eventLogIndexTopicMaxPostings": 2,
+                        "eventLogIndexTopicSingletonKeys": 1,
+                        "eventLogIndexTopicMultiPostingKeys": 1,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "derivedIndexToBlock=80.5, want non-negative integer",
+                proc.stderr,
+            )
+            self.assertIn(
+                "eventLogIndexSegments=1.5, want positive integer",
+                proc.stderr,
+            )
+            self.assertIn("tailPrunedThroughBlock=75.5, want integer", proc.stderr)
+
+    def test_rejects_missing_or_invalid_event_log_index_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "unix": 10,
+                "profile": "producer",
+                "mode": "snap",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            write_result(result, [{**base, "derivedIndexToBlock": -1, "eventLogIndexSegments": 0}])
+
+            missing = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(missing.returncode, 0, missing.stdout + missing.stderr)
+            self.assertIn("required event-log index evidence has no selected latest derived-index row", missing.stderr)
+
+            write_result(
+                result,
+                [
+                    {
+                        **base,
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexSegments": 0,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
+                        "eventLogIndexAddressKeys": 2,
+                        "eventLogIndexAddressPostings": 1,
+                        "eventLogIndexAddressAvgPostingsMilli": 500,
+                        "eventLogIndexAddressMaxPostings": 2,
+                        "eventLogIndexAddressSingletonKeys": 2,
+                        "eventLogIndexAddressMultiPostingKeys": 1,
+                        "eventLogIndexTopicKeys": 0,
+                        "eventLogIndexTopicPostings": 1,
+                        "eventLogIndexTopicAvgPostingsMilli": 0,
+                        "eventLogIndexTopicMaxPostings": 0,
+                        "eventLogIndexTopicSingletonKeys": 0,
+                        "eventLogIndexTopicMultiPostingKeys": 0,
+                    }
+                ],
+            )
+            invalid = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(invalid.returncode, 0, invalid.stdout + invalid.stderr)
+            self.assertIn("eventLogIndexSegments=0, want > 0", invalid.stderr)
+            self.assertIn("address singleton+multi=3 must equal keys=2", invalid.stderr)
+            self.assertIn("address postings=1 must be >= keys=2", invalid.stderr)
+            self.assertIn("topic postings=1 must be 0 when keys=0", invalid.stderr)
+
+    def test_rejects_event_log_index_range_mismatch_and_empty_required_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "unix": 10,
+                "profile": "producer",
+                "mode": "snap",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+                "eventLogIndexSegments": 1,
+                "eventLogIndexAddressKeys": 1,
+                "eventLogIndexAddressPostings": 1,
+                "eventLogIndexAddressAvgPostingsMilli": 1000,
+                "eventLogIndexAddressMaxPostings": 1,
+                "eventLogIndexAddressSingletonKeys": 1,
+                "eventLogIndexAddressMultiPostingKeys": 0,
+                "eventLogIndexTopicKeys": 1,
+                "eventLogIndexTopicPostings": 1,
+                "eventLogIndexTopicAvgPostingsMilli": 1000,
+                "eventLogIndexTopicMaxPostings": 1,
+                "eventLogIndexTopicSingletonKeys": 1,
+                "eventLogIndexTopicMultiPostingKeys": 0,
+            }
+            write_result(
+                result,
+                [
+                    {
+                        **base,
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 70,
+                    }
+                ],
+            )
+            mismatch = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(mismatch.returncode, 0, mismatch.stdout + mismatch.stderr)
+            self.assertIn("eventLogIndexToBlock=70 must match derivedIndexToBlock=80", mismatch.stderr)
+
+            write_result(
+                result,
+                [
+                    {
+                        **base,
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
+                        "eventLogIndexAddressKeys": 0,
+                        "eventLogIndexAddressPostings": 0,
+                        "eventLogIndexAddressAvgPostingsMilli": 0,
+                        "eventLogIndexAddressMaxPostings": 0,
+                        "eventLogIndexAddressSingletonKeys": 0,
+                        "eventLogIndexAddressMultiPostingKeys": 0,
+                    }
+                ],
+            )
+            empty = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                    "--require-event-log-index-non-empty",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(empty.returncode, 0, empty.stdout + empty.stderr)
+            self.assertIn("eventLogIndexAddressPostings=0, want > 0", empty.stderr)
+
+            write_result(
+                result,
+                [
+                    {
+                        **base,
+                        "derivedIndexToBlock": 80,
+                        "eventLogIndexFromBlock": 1,
+                        "eventLogIndexToBlock": 80,
+                        "eventLogIndexTopicKeys": 0,
+                        "eventLogIndexTopicPostings": 0,
+                        "eventLogIndexTopicAvgPostingsMilli": 0,
+                        "eventLogIndexTopicMaxPostings": 0,
+                        "eventLogIndexTopicSingletonKeys": 0,
+                        "eventLogIndexTopicMultiPostingKeys": 0,
+                    }
+                ],
+            )
+            empty_topic = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                    "--require-event-log-index-non-empty",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(empty_topic.returncode, 0, empty_topic.stdout + empty_topic.stderr)
+            self.assertIn("eventLogIndexTopicPostings=0, want > 0", empty_topic.stderr)
+
+    def test_rejects_event_log_index_evidence_missing_required_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            base = {
+                "profile": "producer",
+                "role": "producer",
+                "status": "ok",
+                "freezerAlertStatus": "ok",
+                "stageVerifyStatus": "ok",
+                "modeAlertStatus": "ok",
+                "snapshotAlertStatus": "ok",
+            }
+            rows = [
+                {
+                    **base,
+                    "unix": 10,
+                    "mode": "minimal",
+                    "derivedIndexToBlock": -1,
+                    "eventLogIndexSegments": 0,
+                },
+                {
+                    **base,
+                    "unix": 20,
+                    "mode": "snap",
+                    "derivedIndexToBlock": 80,
+                    "eventLogIndexSegments": 1,
+                    "eventLogIndexFromBlock": 1,
+                    "eventLogIndexToBlock": 80,
+                    "eventLogIndexAddressKeys": 1,
+                    "eventLogIndexAddressPostings": 1,
+                    "eventLogIndexAddressAvgPostingsMilli": 1000,
+                    "eventLogIndexAddressMaxPostings": 1,
+                    "eventLogIndexAddressSingletonKeys": 1,
+                    "eventLogIndexAddressMultiPostingKeys": 0,
+                    "eventLogIndexTopicKeys": 1,
+                    "eventLogIndexTopicPostings": 1,
+                    "eventLogIndexTopicAvgPostingsMilli": 1000,
+                    "eventLogIndexTopicMaxPostings": 1,
+                    "eventLogIndexTopicSingletonKeys": 1,
+                    "eventLogIndexTopicMultiPostingKeys": 0,
+                },
+            ]
+            write_result(result, rows)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-event-log-index-evidence",
+                    "--require-event-log-index-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer missing event-log index evidence for required mode 'minimal'",
+                proc.stderr,
+            )
+
+    def test_accepts_snapshot_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            row = clean_snapshot_profile_evidence_row()
+            write_result(
+                result,
+                [row],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-snapshot-profile-evidence",
+                    "--require-snapshot-profile-mode",
+                    "minimal",
+                    "--require-event-log-index-point-profile",
+                    "--max-snapshot-point-sidecar-share-milli",
+                    "1000",
+                    "--max-snapshot-point-snapshot-share-milli",
+                    "200",
+                    "--max",
+                    "minimal.producer.snapshotSidecarShareMilli=200",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("storage benchmark acceptance: ok", proc.stdout)
+
+    def test_rejects_missing_event_log_index_point_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            row = clean_snapshot_profile_evidence_row()
+            row["snapshotPointEventLogIndexSegments"] = 0
+            row["snapshotPointEventLogIndexBytes"] = 0
+            row["snapshotPointEventLogIndexSidecarBytes"] = 0
+            row["snapshotPointEventLogIndexSidecarShareMilli"] = 0
+            row["snapshotPointEventLogIndexSnapshotShareMilli"] = 0
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-snapshot-profile-mode",
+                    "minimal",
+                    "--require-event-log-index-point-profile",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer snapshotPointEventLogIndexSegments=0, "
+                "want > 0 for event-log index point profile",
+                proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer snapshotPointEventLogIndexBytes=0, "
+                "want > 0 for event-log index point profile",
+                proc.stderr,
+            )
+
+    def test_accepts_required_compressed_state_history_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            row = clean_snapshot_profile_evidence_row()
+            row.update(
+                {
+                    "snapshotStateHistoryBytes": 80,
+                    "snapshotStateHistoryCompressedSegments": 1,
+                    "snapshotStateHistoryCompressedBytes": 80,
+                    "snapshotStateHistoryCompressedShareMilli": 1000,
+                }
+            )
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-snapshot-profile-evidence",
+                    "--require-compressed-state-history",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_rejects_missing_compressed_state_history_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(result, [clean_snapshot_profile_evidence_row()])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-compressed-state-history",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("snapshotStateHistoryCompressedSegments=0, want > 0", proc.stderr)
+            self.assertIn("snapshotStateHistoryCompressedBytes=0, want > 0", proc.stderr)
+
+    def test_rejects_invalid_snapshot_point_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            row = clean_snapshot_profile_evidence_row()
+            row["snapshotPointEventLogIndexSnapshotShareMilli"] = 999
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-snapshot-profile-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "snapshotPointEventLogIndexSnapshotShareMilli=999, want 125 "
+                "for snapshotPointEventLogIndexBytes=200 totalBytes=1600",
+                proc.stderr,
+            )
+
+    def test_rejects_snapshot_point_profile_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            row = clean_snapshot_profile_evidence_row()
+            write_result(result, [row])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-snapshot-point-sidecar-share-milli",
+                    "999",
+                    "--max-snapshot-point-snapshot-share-milli",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer snapshotPointTxHashLookupSidecarShareMilli=1000 exceeds max 999",
+                proc.stderr,
+            )
+            self.assertIn(
+                "line 1 minimal/producer snapshotPointEventLogIndexSnapshotShareMilli=125 exceeds max 100",
+                proc.stderr,
+            )
+
+    def test_rejects_snapshot_point_threshold_without_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--max-snapshot-point-snapshot-share-milli",
+                    "100",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer snapshot point threshold requires snapshot manifest profile evidence",
+                proc.stderr,
+            )
+
+    def test_rejects_missing_snapshot_profile_evidence_for_required_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-snapshot-profile-mode",
+                    "minimal",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "line 1 minimal/producer missing snapshot manifest profile evidence for required mode 'minimal'",
+                proc.stderr,
+            )
+
+    def test_rejects_invalid_snapshot_profile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "snapshotManifestProfileStatus": "missing",
+                        "snapshotProfileSegments": 0,
+                        "snapshotProfileVerifyFiles": False,
+                        "snapshotProfileVerifiedSegments": 3,
+                        "snapshotProfileTotalBytes": 1600,
+                        "snapshotPayloadBytes": 1200,
+                        "snapshotSidecarBytes": 300,
+                        "snapshotSidecarShareMilli": 111,
+                        "snapshotLatestSidecarBytes": 1,
+                        "snapshotLatestSidecarShareMilli": -1,
+                        "snapshotStateHistorySidecarBytes": 0,
+                        "snapshotStateHistorySidecarShareMilli": -1,
+                        "snapshotChainFreezerSidecarBytes": 100,
+                        "snapshotChainFreezerSidecarShareMilli": 1001,
+                        "snapshotEventLogSidecarBytes": 200,
+                        "snapshotEventLogSidecarShareMilli": 400,
+                        "snapshotBalanceTraceSidecarBytes": 0,
+                        "snapshotBalanceTraceSidecarShareMilli": -1,
+                        "snapshotSectionBloomSidecarBytes": 0,
+                        "snapshotSectionBloomSidecarShareMilli": -1,
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--role",
+                    "producer",
+                    "--require-snapshot-profile-evidence",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("snapshotManifestProfileStatus='missing', want 'ok'", proc.stderr)
+            self.assertIn("snapshotProfileSegments=0, want > 0", proc.stderr)
+            self.assertIn("snapshotProfileVerifyFiles must be true", proc.stderr)
+            self.assertIn("snapshotProfileVerifiedSegments=3, want snapshotProfileSegments=0", proc.stderr)
+            self.assertIn("snapshot payload+sidecar=1500 must equal total=1600", proc.stderr)
+            self.assertIn(
+                "snapshotSidecarShareMilli=111, want 188 for sidecarBytes=300 totalBytes=1600",
+                proc.stderr,
+            )
+            self.assertIn(
+                "snapshotLatestSidecarShareMilli=-1, want >= 0 when snapshotLatestSidecarBytes=1",
+                proc.stderr,
+            )
+            self.assertIn("snapshotChainFreezerSidecarShareMilli=1001, want -1..1000", proc.stderr)
+
+    def test_rejects_prometheus_artifact_without_issue_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing gtron_storage_alert_issue", proc.stderr)
+
+    def test_rejects_prometheus_alert_status_for_wrong_datadir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/other"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "datadir": "/tmp/gtron",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing gtron_storage_alert_status", proc.stderr)
+
+    def test_rejects_prometheus_alert_status_value_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 2\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "datadir": "/tmp/gtron",
+                        "status": "ok",
+                        "storageAlertStatus": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("gtron_storage_alert_status=2, want 0", proc.stderr)
+
+    def test_rejects_prometheus_prune_boundary_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                '# TYPE gtron_storage_signed_cold_prune gauge\n'
+                '# TYPE gtron_storage_prune_boundary_block gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="chainLookupPruneToBlock"} 40\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "datadir": "/tmp/gtron",
+                        "status": "ok",
+                        "storageAlertStatus": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "signedColdPrune": 1,
+                        "derivedIndexToBlock": 44,
+                        "chainLookupPruneToBlock": 50,
+                        "tailPrunedThroughBlock": 45,
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "gtron_storage_prune_boundary_block field='chainLookupPruneToBlock'=40, want 50",
+                proc.stderr,
+            )
+            self.assertIn(
+                "missing gtron_storage_prune_boundary_block field='tailPrunedThroughBlock'",
+                proc.stderr,
+            )
+            self.assertIn(
+                "missing gtron_storage_prune_boundary_block field='derivedIndexToBlock'",
+                proc.stderr,
+            )
+
+    def test_rejects_fractional_prometheus_prune_boundary_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                '# TYPE gtron_storage_signed_cold_prune gauge\n'
+                '# TYPE gtron_storage_prune_boundary_block gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_signed_cold_prune{datadir="/tmp/gtron"} 1\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="derivedIndexToBlock"} 44.5\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="chainLookupPruneToBlock"} 50.5\n'
+                'gtron_storage_prune_boundary_block{datadir="/tmp/gtron",field="tailPrunedThroughBlock"} 45.5\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "minimal",
+                        "role": "producer",
+                        "datadir": "/tmp/gtron",
+                        "status": "ok",
+                        "storageAlertStatus": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "signedColdPrune": 1,
+                        "derivedIndexToBlock": 44.5,
+                        "chainLookupPruneToBlock": 50.5,
+                        "tailPrunedThroughBlock": 45.5,
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(
+                "chainLookupPruneToBlock=50.5, want integer for prometheus prune boundary evidence",
+                proc.stderr,
+            )
+            self.assertIn(
+                "derivedIndexToBlock=44.5, want integer for prometheus prune boundary evidence",
+                proc.stderr,
+            )
+            self.assertIn(
+                "tailPrunedThroughBlock=45.5, want integer for prometheus prune boundary evidence",
+                proc.stderr,
+            )
+
+    def test_rejects_prometheus_artifact_missing_structured_issue_kind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "stageVerifyDetails": [
+                            {
+                                "severity": "critical",
+                                "kind": "stage-verification",
+                                "detail": "Finish verified=missing-canonical",
+                            }
+                        ],
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("component='stage'", proc.stderr)
+            self.assertIn("kind='stage-verification'", proc.stderr)
+
+    def test_rejects_prometheus_artifact_missing_stage_pipeline_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "stageAlertPipelineComplete": False,
+                        "stageAlertPipelinePending": 2,
+                        "stageAlertPipelineIssues": 0,
+                        "stageAlertPipelineNext": "SnapshotBuild",
+                        "stageAlertPipelineNextStatus": "missing",
+                        "stageAlertPipelineNextTarget": 10,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 8,
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_pending", proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_next_target_block", proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_next_current_block", proc.stderr)
+
+    def test_rejects_prometheus_stage_pipeline_for_wrong_datadir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_complete gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_pending gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_issues gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_target_block gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_current_block gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/other"} 0\n'
+                'gtron_storage_stage_pipeline_complete{datadir="/tmp/other"} 0\n'
+                'gtron_storage_stage_pipeline_pending{datadir="/tmp/other"} 2\n'
+                'gtron_storage_stage_pipeline_issues{datadir="/tmp/other"} 0\n'
+                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/other",stage="SnapshotBuild",status="missing",upstream="Finish"} 10\n'
+                'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/other",stage="SnapshotBuild",status="missing",upstream="Finish"} 8\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "datadir": "/tmp/gtron",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "stageAlertPipelineComplete": False,
+                        "stageAlertPipelinePending": 2,
+                        "stageAlertPipelineIssues": 0,
+                        "stageAlertPipelineNext": "SnapshotBuild",
+                        "stageAlertPipelineNextStatus": "missing",
+                        "stageAlertPipelineNextTarget": 10,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 8,
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("missing gtron_storage_stage_pipeline_pending", proc.stderr)
+            self.assertIn("missing next pipeline target", proc.stderr)
+
+    def test_rejects_prometheus_artifact_mismatched_stage_pipeline_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_complete gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_pending gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_issues gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_target_block gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_current_block gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_stage_pipeline_complete{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 3\n'
+                'gtron_storage_stage_pipeline_issues{datadir="/tmp/gtron"} 1\n'
+                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="SnapshotBuild",status="missing",upstream="Finish"} 9\n'
+                'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/gtron",stage="SnapshotBuild",status="missing",upstream="Finish"} 7\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "stageAlertPipelineComplete": False,
+                        "stageAlertPipelinePending": 2,
+                        "stageAlertPipelineIssues": 0,
+                        "stageAlertPipelineNext": "SnapshotBuild",
+                        "stageAlertPipelineNextStatus": "missing",
+                        "stageAlertPipelineNextTarget": 10,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 8,
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("gtron_storage_stage_pipeline_pending=3, want 2", proc.stderr)
+            self.assertIn("gtron_storage_stage_pipeline_issues=1, want 0", proc.stderr)
+            self.assertIn("value=9, want 10", proc.stderr)
+            self.assertIn("value=7, want 8", proc.stderr)
+
+    def test_rejects_fractional_prometheus_stage_pipeline_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            prom = tmpdir / "alerts.prom"
+            prom.write_text(
+                '# TYPE gtron_storage_alert_status gauge\n'
+                '# TYPE gtron_storage_alert_issue gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_complete gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_pending gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_issues gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_target_block gauge\n'
+                '# TYPE gtron_storage_stage_pipeline_next_current_block gauge\n'
+                'gtron_storage_alert_status{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_stage_pipeline_complete{datadir="/tmp/gtron"} 0\n'
+                'gtron_storage_stage_pipeline_pending{datadir="/tmp/gtron"} 2.5\n'
+                'gtron_storage_stage_pipeline_issues{datadir="/tmp/gtron"} 0.5\n'
+                'gtron_storage_stage_pipeline_next_target_block{datadir="/tmp/gtron",stage="SnapshotBuild",status="missing",upstream="Finish"} 10.5\n'
+                'gtron_storage_stage_pipeline_next_current_block{datadir="/tmp/gtron",stage="SnapshotBuild",status="missing",upstream="Finish"} 8.5\n',
+                encoding="utf-8",
+            )
+            result = tmpdir / "results.jsonl"
+            write_result(
+                result,
+                [
+                    {
+                        "unix": 10,
+                        "profile": "producer",
+                        "mode": "full",
+                        "role": "producer",
+                        "status": "ok",
+                        "freezerAlertStatus": "ok",
+                        "stageVerifyStatus": "ok",
+                        "stageAlertPipelineComplete": False,
+                        "stageAlertPipelinePending": 2.5,
+                        "stageAlertPipelineIssues": 0.5,
+                        "stageAlertPipelineNext": "SnapshotBuild",
+                        "stageAlertPipelineNextStatus": "missing",
+                        "stageAlertPipelineNextTarget": 10.5,
+                        "stageAlertPipelineNextUpstream": "Finish",
+                        "stageAlertPipelineNextCurrent": 8.5,
+                        "modeAlertStatus": "ok",
+                        "snapshotAlertStatus": "ok",
+                        "storageAlertPrometheus": str(prom),
+                    }
+                ],
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(result),
+                    "--require-prometheus-artifacts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("stageAlertPipelinePending=2.5, want non-negative integer", proc.stderr)
+            self.assertIn("stageAlertPipelineIssues=0.5, want non-negative integer", proc.stderr)
+            self.assertIn("stageAlertPipelineNextTarget=10.5, want non-negative integer", proc.stderr)
+            self.assertIn("stageAlertPipelineNextCurrent=8.5, want non-negative integer", proc.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

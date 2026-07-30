@@ -82,6 +82,12 @@ func (s *Stats) AddApplyBlock(a core.ApplyStats) {
 	s.cur.ApplyStats.DPUpdate += a.DPUpdate
 	s.cur.ApplyStats.Persist += a.Persist
 	s.cur.ApplyStats.Hooks += a.Hooks
+	s.cur.ApplyStats.StatePrefetch.Enqueued += a.StatePrefetch.Enqueued
+	s.cur.ApplyStats.StatePrefetch.Dropped += a.StatePrefetch.Dropped
+	s.cur.ApplyStats.StatePrefetch.Processed += a.StatePrefetch.Processed
+	s.cur.ApplyStats.StatePrefetch.Hits += a.StatePrefetch.Hits
+	s.cur.ApplyStats.StatePrefetch.Misses += a.StatePrefetch.Misses
+	s.cur.ApplyStats.StatePrefetch.Errors += a.StatePrefetch.Errors
 }
 
 // AddBlock records one successfully-applied block: bumps the rolling window's
@@ -117,8 +123,10 @@ func (s *Stats) AddTxKinds(kinds map[string]int) {
 	if s.cur.TxKinds == nil {
 		s.cur.TxKinds = make(map[string]int, len(kinds))
 	}
-	for k, n := range kinds {
-		s.cur.TxKinds[k] += n
+	for kind, count := range kinds {
+		if count > 0 {
+			s.cur.TxKinds[kind] += count
+		}
 	}
 }
 
@@ -135,10 +143,13 @@ func TopTxKindsString(kinds map[string]int, limit int) string {
 		count int
 	}
 	entries := make([]entry, 0, len(kinds))
-	for k, n := range kinds {
-		if n > 0 {
-			entries = append(entries, entry{k, n})
+	for name, count := range kinds {
+		if count > 0 {
+			entries = append(entries, entry{name: name, count: count})
 		}
+	}
+	if len(entries) == 0 {
+		return ""
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].count != entries[j].count {
@@ -150,8 +161,8 @@ func TopTxKindsString(kinds map[string]int, limit int) string {
 		limit = len(entries)
 	}
 	parts := make([]string, 0, limit)
-	for _, e := range entries[:limit] {
-		parts = append(parts, fmt.Sprintf("%s=%d", e.name, e.count))
+	for _, entry := range entries[:limit] {
+		parts = append(parts, fmt.Sprintf("%s=%d", entry.name, entry.count))
 	}
 	return strings.Join(parts, ",")
 }

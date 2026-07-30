@@ -60,7 +60,7 @@ func accountIdIndexKVKey(accountID []byte) []byte {
 // ReadAccountNameIndex returns the owner address registered for accountName, or
 // nil if none. A KV error is swallowed to nil, matching the prior rawdb reader.
 func (s *StateDB) ReadAccountNameIndex(accountName []byte) []byte {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, accountNameIndexKVKey(accountName))
+	raw, ok, err := s.ReadAccountNameIndexStrict(accountName)
 	if err != nil || !ok {
 		return nil
 	}
@@ -103,7 +103,7 @@ func (s *StateDB) DeleteAccountNameIndex(accountName []byte) error {
 // ReadAccountIdIndex returns the owner address registered for accountID
 // (case-insensitive), or nil if none. KV error swallowed to nil.
 func (s *StateDB) ReadAccountIdIndex(accountID []byte) []byte {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID))
+	raw, ok, err := s.ReadAccountIdIndexStrict(accountID)
 	if err != nil || !ok {
 		return nil
 	}

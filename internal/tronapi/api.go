@@ -2,20 +2,36 @@ package tronapi
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
 
 type API struct {
 	backend Backend
+}
+
+func resolveBound(w http.ResponseWriter, boundFn blockBoundFunc) (uint64, bool) {
+	if boundFn == nil {
+		return 0, true
+	}
+	blockNum, err := boundFn()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return 0, false
+	}
+	return blockNum, true
 }
 
 func NewAPI(backend Backend) *API {
@@ -49,9 +65,15 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 
 	// Resource & chain queries
 	mux.HandleFunc("/wallet/getaccountresource", api.getAccountResource)
+	mux.HandleFunc("/wallet/getaccountbalance", api.getAccountBalance)
+	mux.HandleFunc("/wallet/getblockbalancetrace", api.getBlockBalanceTrace)
 	mux.HandleFunc("/wallet/getchainparameters", api.getChainParameters)
 	mux.HandleFunc("/wallet/listwitnesses", api.listWitnesses)
+	mux.HandleFunc("/wallet/getpaginatednowwitnesslist", api.getPaginatedNowWitnessList)
 	mux.HandleFunc("/wallet/getnextmaintenancetime", api.getNextMaintenanceTime)
+	mux.HandleFunc("/wallet/getburntrx", api.getBurnTrx)
+	mux.HandleFunc("/wallet/getbandwidthprices", api.getBandwidthPrices)
+	mux.HandleFunc("/wallet/getenergyprices", api.getEnergyPrices)
 
 	// Proposal APIs
 	mux.HandleFunc("/wallet/proposalcreate", api.proposalCreate)
@@ -60,7 +82,9 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/listproposals", api.listProposals)
 
 	// Phase 10: delegation/resource queries
+	mux.HandleFunc("/wallet/getdelegatedresource", api.getDelegatedResource)
 	mux.HandleFunc("/wallet/getdelegatedresourcev2", api.getDelegatedResourceV2)
+	mux.HandleFunc("/wallet/getdelegatedresourceaccountindex", api.getDelegatedResourceAccountIndex)
 	mux.HandleFunc("/wallet/getdelegatedresourceaccountindexv2", api.getDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/wallet/candelegateresource", api.canDelegateResource)
 
@@ -88,6 +112,8 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getmarketorderbyid", api.getMarketOrderByID)
 	mux.HandleFunc("/wallet/getmarketordersfromaccount", api.getMarketOrdersFromAccount)
 	mux.HandleFunc("/wallet/getmarketpricebypair", api.getMarketPriceByPair)
+	mux.HandleFunc("/wallet/getmarketorderlistbypair", api.getMarketOrderListByPair)
+	mux.HandleFunc("/wallet/getmarketpairlist", api.getMarketPairList)
 
 	// M5.1 PR-1: Account / permission
 	mux.HandleFunc("/wallet/createaccount", api.createAccount)
@@ -129,6 +155,8 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 
 	// M5.1 PR-5: Exchange / Market
 	mux.HandleFunc("/wallet/listexchanges", api.listExchanges)
+	mux.HandleFunc("/wallet/getpaginatedexchangelist", api.getPaginatedExchangeList)
+	mux.HandleFunc("/wallet/getexchangebyid", api.getExchangeByID)
 	mux.HandleFunc("/wallet/exchangecreate", api.exchangeCreate)
 	mux.HandleFunc("/wallet/exchangeinject", api.exchangeInject)
 	mux.HandleFunc("/wallet/exchangetransaction", api.exchangeTransaction)
@@ -175,8 +203,12 @@ func (api *API) getBlockByNum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	block, err := api.backend.GetBlockByNumber(num)
-	if err != nil || block == nil {
-		http.Error(w, "block not found", http.StatusNotFound)
+	if err != nil {
+		writeEmptyJSON(w)
+		return
+	}
+	if block == nil {
+		writeEmptyJSON(w)
 		return
 	}
 	writeBlockJSON(w, block.Proto())
@@ -191,7 +223,7 @@ func (api *API) getAccount(w http.ResponseWriter, r *http.Request) {
 // from the live head (matches the pre-isolation behaviour); when non-nil
 // it calls Backend.GetAccountAt at the returned block number — the audit's
 // "Solidity API isolation" fix routes all read endpoints this way.
-func (api *API) handleGetAccount(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetAccount(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -217,13 +249,24 @@ func (api *API) handleGetAccount(w http.ResponseWriter, r *http.Request, boundFn
 	}
 	var acc *types.Account
 	if boundFn != nil {
-		acc, err = api.backend.GetAccountAt(addr, boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		acc, err = api.backend.GetAccountAt(addr, blockNum)
 	} else {
 		acc, err = api.backend.GetAccount(addr)
 	}
-	if err != nil || acc == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+	if err != nil {
+		if accountLookupNotFound(err) {
+			writeEmptyJSON(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if acc == nil {
+		writeEmptyJSON(w)
 		return
 	}
 	writeTronJSON(w, wireSortFrozenV2(acc.Proto()))
@@ -349,7 +392,21 @@ func writeBlockJSON(w http.ResponseWriter, msg proto.Message) {
 	w.Write(data)
 }
 
+func writeEmptyJSON(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("{}"))
+}
+
+func writeEmptyJSONArray(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("[]"))
+}
+
 func (api *API) getContract(w http.ResponseWriter, r *http.Request) {
+	api.handleGetContract(w, r, nil)
+}
+
+func (api *API) handleGetContract(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	addrStr := r.URL.Query().Get("value")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -373,16 +430,36 @@ func (api *API) getContract(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "value", err)
 		return
 	}
-	sc, err := api.backend.GetContract(addr)
-	if err != nil || sc == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+	var sc *contractpb.SmartContract
+	if boundFn == nil {
+		sc, err = api.backend.GetContract(addr)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		sc, err = api.backend.GetContractAt(addr, blockNum)
+	}
+	if err != nil {
+		if contractLookupNotFound(err) {
+			writeEmptyJSON(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sc == nil {
+		writeEmptyJSON(w)
 		return
 	}
 	writeTronJSON(w, sc)
 }
 
 func (api *API) triggerConstantContract(w http.ResponseWriter, r *http.Request) {
+	api.handleTriggerConstantContract(w, r, nil)
+}
+
+func (api *API) handleTriggerConstantContract(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -436,7 +513,16 @@ func (api *API) triggerConstantContract(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	result, err := api.backend.TriggerConstantContract(owner, contract, data, 30_000_000)
+	var result *TriggerResult
+	if boundFn == nil {
+		result, err = api.backend.TriggerConstantContract(owner, contract, data, 30_000_000)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		result, err = api.backend.TriggerConstantContractAt(owner, contract, data, 30_000_000, blockNum)
+	}
 
 	resp := map[string]interface{}{
 		"result": map[string]interface{}{
@@ -621,6 +707,10 @@ func (api *API) triggerSmartContract(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) estimateEnergy(w http.ResponseWriter, r *http.Request) {
+	api.handleEstimateEnergy(w, r, nil)
+}
+
+func (api *API) handleEstimateEnergy(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -668,7 +758,16 @@ func (api *API) estimateEnergy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	energy, err := api.backend.EstimateEnergy(owner, contract, data)
+	var energy int64
+	if boundFn == nil {
+		energy, err = api.backend.EstimateEnergy(owner, contract, data)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		energy, err = api.backend.EstimateEnergyAt(owner, contract, data, blockNum)
+	}
 	resp := map[string]interface{}{
 		"result": map[string]interface{}{
 			"result": err == nil,
@@ -686,6 +785,14 @@ func (api *API) estimateEnergy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getTransactionByID(w http.ResponseWriter, r *http.Request) {
+	hash, ok := parseTransactionIDRequest(w, r)
+	if !ok {
+		return
+	}
+	api.writeTransactionByID(w, hash)
+}
+
+func parseTransactionIDRequest(w http.ResponseWriter, r *http.Request) (common.Hash, bool) {
 	var body struct {
 		Value string `json:"value"`
 	}
@@ -695,7 +802,7 @@ func (api *API) getTransactionByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Value == "" {
 		http.Error(w, "value required", http.StatusBadRequest)
-		return
+		return common.Hash{}, false
 	}
 	// tx hash is always hex on the wire — java-tron's HTTP doesn't support
 	// a visible variant for hashes. parseBytes still surfaces invalid-hex
@@ -703,12 +810,25 @@ func (api *API) getTransactionByID(w http.ResponseWriter, r *http.Request) {
 	hashBytes, err := parseBytes(body.Value, false)
 	if err != nil {
 		httpFieldErr(w, "value", err)
-		return
+		return common.Hash{}, false
 	}
 	var hash common.Hash
 	copy(hash[:], hashBytes)
+	return hash, true
+}
+
+func (api *API) writeTransactionByID(w http.ResponseWriter, hash common.Hash) {
 	tx, err := api.backend.GetTransactionByID(hash)
 	if err != nil {
+		if transactionLookupNotFound(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{}"))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if tx == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
 		return
@@ -717,31 +837,52 @@ func (api *API) getTransactionByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getTransactionInfoByID(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Value string `json:"value"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-	if body.Value == "" {
-		body.Value = r.URL.Query().Get("value")
-	}
-	if body.Value == "" {
-		http.Error(w, "value required", http.StatusBadRequest)
+	hash, ok := parseTransactionIDRequest(w, r)
+	if !ok {
 		return
 	}
-	hashBytes, err := parseBytes(body.Value, false)
-	if err != nil {
-		httpFieldErr(w, "value", err)
-		return
-	}
-	var hash common.Hash
-	copy(hash[:], hashBytes)
+	api.writeTransactionInfoByID(w, hash)
+}
+
+func (api *API) writeTransactionInfoByID(w http.ResponseWriter, hash common.Hash) {
 	info, err := api.backend.GetTransactionInfoByID(hash)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+		if transactionLookupNotFound(err) {
+			writeEmptyJSON(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info == nil {
+		writeEmptyJSON(w)
 		return
 	}
 	writeTronJSON(w, info)
+}
+
+func transactionLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "transaction not found" || msg == "transaction info not found"
+}
+
+func accountLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "account not found" || (strings.HasPrefix(msg, "account not found at block "))
+}
+
+func contractLookupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return msg == "contract not found"
 }
 
 func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Request) {
@@ -759,6 +900,10 @@ func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid block number", http.StatusBadRequest)
 		return
 	}
+	api.writeTransactionInfoByBlockNum(w, num)
+}
+
+func (api *API) writeTransactionInfoByBlockNum(w http.ResponseWriter, num uint64) {
 	infos, err := api.backend.GetTransactionInfoByBlockNum(num)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -778,6 +923,14 @@ func (api *API) getTransactionInfoByBlockNum(w http.ResponseWriter, r *http.Requ
 }
 
 func (api *API) getBlockByID(w http.ResponseWriter, r *http.Request) {
+	hash, _, ok := parseBlockIDRequest(w, r)
+	if !ok {
+		return
+	}
+	api.writeBlockByHash(w, hash)
+}
+
+func parseBlockIDRequest(w http.ResponseWriter, r *http.Request) (common.Hash, []byte, bool) {
 	var body struct {
 		Value string `json:"value"`
 	}
@@ -787,19 +940,33 @@ func (api *API) getBlockByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Value == "" {
 		http.Error(w, "value required", http.StatusBadRequest)
-		return
+		return common.Hash{}, nil, false
 	}
 	hashBytes, err := parseBytes(body.Value, false)
 	if err != nil {
 		httpFieldErr(w, "value", err)
-		return
+		return common.Hash{}, nil, false
 	}
 	var hash common.Hash
 	copy(hash[:], hashBytes)
+	return hash, hashBytes, true
+}
+
+func blockNumberFromBlockIDBytes(hashBytes []byte) (uint64, bool) {
+	if len(hashBytes) < 8 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(hashBytes[:8]), true
+}
+
+func (api *API) writeBlockByHash(w http.ResponseWriter, hash common.Hash) {
 	block, err := api.backend.GetBlockByHash(hash)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+		writeEmptyJSON(w)
+		return
+	}
+	if block == nil {
+		writeEmptyJSON(w)
 		return
 	}
 	writeBlockJSON(w, block.Proto())
@@ -814,11 +981,23 @@ func (api *API) getBlockByLimitNext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	blocks, err := api.backend.GetBlocksByRange(uint64(body.StartNum), uint64(body.EndNum))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if body.StartNum < 0 || body.EndNum < 0 || body.EndNum <= body.StartNum {
+		http.Error(w, "invalid block range", http.StatusBadRequest)
 		return
 	}
+	api.writeBlockRange(w, uint64(body.StartNum), uint64(body.EndNum))
+}
+
+func (api *API) writeBlockRange(w http.ResponseWriter, start, end uint64) {
+	blocks, err := api.backend.GetBlocksByRange(start, end)
+	if err != nil {
+		writeBlockListJSON(w, nil)
+		return
+	}
+	writeBlockListJSON(w, blocks)
+}
+
+func writeBlockListJSON(w http.ResponseWriter, blocks []*types.Block) {
 	var blockList []map[string]interface{}
 	for _, b := range blocks {
 		data, err := MarshalBlock(b.Proto())
@@ -844,9 +1023,188 @@ func (api *API) getAccountResource(w http.ResponseWriter, r *http.Request) {
 	api.handleGetAccountResource(w, r, nil)
 }
 
+func (api *API) getAccountBalance(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountBalance(w, r, nil, "")
+}
+
+func (api *API) handleGetAccountBalance(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc, notReadyMessage string) {
+	req, err := parseAccountBalanceRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !balanceTraceIdentifierWithinBound(w, req.GetBlockIdentifier(), boundFn, notReadyMessage) {
+		return
+	}
+	resp, err := api.backend.GetAccountBalanceTrace(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeTronJSON(w, resp)
+}
+
+func (api *API) getBlockBalanceTrace(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBlockBalanceTrace(w, r, nil, "")
+}
+
+func (api *API) handleGetBlockBalanceTrace(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc, notReadyMessage string) {
+	id, err := parseBlockBalanceIdentifierRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !balanceTraceIdentifierWithinBound(w, id, boundFn, notReadyMessage) {
+		return
+	}
+	trace, err := api.backend.GetBlockBalanceTrace(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeTronJSON(w, trace)
+}
+
+func balanceTraceIdentifierWithinBound(w http.ResponseWriter, id *contractpb.BlockBalanceTrace_BlockIdentifier, boundFn blockBoundFunc, notReadyMessage string) bool {
+	if boundFn == nil || id == nil || id.GetNumber() < 0 {
+		return true
+	}
+	blockNum, ok := resolveBound(w, boundFn)
+	if !ok {
+		return false
+	}
+	if uint64(id.GetNumber()) > blockNum {
+		http.Error(w, notReadyMessage, http.StatusNotFound)
+		return false
+	}
+	return true
+}
+
+type balanceTraceBlockIDJSON struct {
+	Number int64  `json:"number"`
+	Hash   string `json:"hash"`
+}
+
+type accountBalanceRequestJSON struct {
+	AccountIdentifier      *accountIdentifierJSON   `json:"account_identifier"`
+	AccountIdentifierCamel *accountIdentifierJSON   `json:"accountIdentifier"`
+	BlockIdentifier        *balanceTraceBlockIDJSON `json:"block_identifier"`
+	BlockIdentifierCamel   *balanceTraceBlockIDJSON `json:"blockIdentifier"`
+	Visible                bool                     `json:"visible"`
+}
+
+type accountIdentifierJSON struct {
+	Address string `json:"address"`
+}
+
+func parseAccountBalanceRequest(r *http.Request) (*contractpb.AccountBalanceRequest, error) {
+	visible := r.URL.Query().Get("visible") == "true"
+	if r.URL.Query().Get("address") != "" {
+		addr, err := parseAddress(r.URL.Query().Get("address"), visible)
+		if err != nil {
+			return nil, addressFieldErr("address", err)
+		}
+		id, err := parseBlockBalanceIdentifierValues(r.URL.Query().Get("number"), r.URL.Query().Get("hash"))
+		if err != nil {
+			return nil, err
+		}
+		return &contractpb.AccountBalanceRequest{
+			AccountIdentifier: &contractpb.AccountIdentifier{Address: addr.Bytes()},
+			BlockIdentifier:   id,
+		}, nil
+	}
+	var body accountBalanceRequestJSON
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	if body.Visible {
+		visible = true
+	}
+	account := body.AccountIdentifier
+	if account == nil {
+		account = body.AccountIdentifierCamel
+	}
+	if account == nil || account.Address == "" {
+		return nil, fmt.Errorf("account_identifier address is null")
+	}
+	blockID := body.BlockIdentifier
+	if blockID == nil {
+		blockID = body.BlockIdentifierCamel
+	}
+	if blockID == nil {
+		return nil, fmt.Errorf("block_identifier null")
+	}
+	addr, err := parseAddress(account.Address, visible)
+	if err != nil {
+		return nil, addressFieldErr("account_identifier.address", err)
+	}
+	id, err := parseBlockBalanceIdentifier(blockID)
+	if err != nil {
+		return nil, err
+	}
+	return &contractpb.AccountBalanceRequest{
+		AccountIdentifier: &contractpb.AccountIdentifier{Address: addr.Bytes()},
+		BlockIdentifier:   id,
+	}, nil
+}
+
+func parseBlockBalanceIdentifierRequest(r *http.Request) (*contractpb.BlockBalanceTrace_BlockIdentifier, error) {
+	if r.URL.Query().Get("number") != "" || r.URL.Query().Get("hash") != "" {
+		return parseBlockBalanceIdentifierValues(r.URL.Query().Get("number"), r.URL.Query().Get("hash"))
+	}
+	var body balanceTraceBlockIDJSON
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return parseBlockBalanceIdentifier(&body)
+}
+
+func parseBlockBalanceIdentifier(id *balanceTraceBlockIDJSON) (*contractpb.BlockBalanceTrace_BlockIdentifier, error) {
+	if id == nil {
+		return nil, fmt.Errorf("block_identifier null")
+	}
+	hash, err := parseBlockIdentifierHash(id.Hash)
+	if err != nil {
+		return nil, err
+	}
+	return &contractpb.BlockBalanceTrace_BlockIdentifier{
+		Number: id.Number,
+		Hash:   hash,
+	}, nil
+}
+
+func parseBlockBalanceIdentifierValues(number, hash string) (*contractpb.BlockBalanceTrace_BlockIdentifier, error) {
+	if number == "" {
+		return nil, fmt.Errorf("block_identifier number required")
+	}
+	n, err := strconv.ParseInt(number, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("block_identifier number: %w", err)
+	}
+	h, err := parseBlockIdentifierHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	return &contractpb.BlockBalanceTrace_BlockIdentifier{Number: n, Hash: h}, nil
+}
+
+func parseBlockIdentifierHash(hash string) ([]byte, error) {
+	if hash == "" {
+		return nil, fmt.Errorf("block_identifier hash required")
+	}
+	raw, err := parseBytes(hash, false)
+	if err != nil {
+		return nil, fmt.Errorf("block_identifier hash: %w", err)
+	}
+	if len(raw) != common.HashLength {
+		return nil, fmt.Errorf("block_identifier hash length not equals 32")
+	}
+	return raw, nil
+}
+
 // handleGetAccountResource is the shared body for /wallet/, /walletsolidity/
 // and /walletpbft/ getaccountresource variants. boundFn=nil reads live head.
-func (api *API) handleGetAccountResource(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetAccountResource(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -872,7 +1230,11 @@ func (api *API) handleGetAccountResource(w http.ResponseWriter, r *http.Request,
 	}
 	var res *AccountResource
 	if boundFn != nil {
-		res, err = api.backend.GetAccountResourceAt(addr, boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		res, err = api.backend.GetAccountResourceAt(addr, blockNum)
 	} else {
 		res, err = api.backend.GetAccountResource(addr)
 	}
@@ -886,7 +1248,27 @@ func (api *API) handleGetAccountResource(w http.ResponseWriter, r *http.Request,
 }
 
 func (api *API) getChainParameters(w http.ResponseWriter, r *http.Request) {
-	params := api.backend.GetChainParameters()
+	api.handleGetChainParameters(w, r, nil)
+}
+
+func (api *API) handleGetChainParameters(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var (
+		params []ChainParameter
+		err    error
+	)
+	if boundFn == nil {
+		params, err = api.backend.GetChainParameters()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		params, err = api.backend.GetChainParametersAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	resp := map[string]interface{}{
 		"chainParameter": params,
 	}
@@ -896,7 +1278,23 @@ func (api *API) getChainParameters(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) listWitnesses(w http.ResponseWriter, r *http.Request) {
-	witnesses, err := api.backend.ListWitnesses()
+	api.handleListWitnesses(w, r, nil)
+}
+
+func (api *API) handleListWitnesses(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var (
+		witnesses []*WitnessInfo
+		err       error
+	)
+	if boundFn == nil {
+		witnesses, err = api.backend.ListWitnesses()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		witnesses, err = api.backend.ListWitnessesAt(blockNum)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -909,10 +1307,190 @@ func (api *API) listWitnesses(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (api *API) getPaginatedNowWitnessList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedNowWitnessList(w, r, nil)
+}
+
+func (api *API) handleGetPaginatedNowWitnessList(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var body struct {
+		Offset int `json:"offset"`
+		Limit  int `json:"limit"`
+	}
+	if r.Method == http.MethodGet {
+		if v := r.URL.Query().Get("offset"); v != "" {
+			offset, err := strconv.Atoi(v)
+			if err != nil {
+				http.Error(w, "invalid offset", http.StatusBadRequest)
+				return
+			}
+			body.Offset = offset
+		}
+		if v := r.URL.Query().Get("limit"); v != "" {
+			limit, err := strconv.Atoi(v)
+			if err != nil {
+				http.Error(w, "invalid limit", http.StatusBadRequest)
+				return
+			}
+			body.Limit = limit
+		}
+	} else if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if body.Limit <= 0 {
+		body.Limit = 20
+	}
+	if body.Offset < 0 {
+		http.Error(w, "invalid offset", http.StatusBadRequest)
+		return
+	}
+	var (
+		witnesses []*WitnessInfo
+		err       error
+	)
+	if boundFn == nil {
+		witnesses, err = api.backend.ListWitnesses()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		witnesses, err = api.backend.ListWitnessesAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	witnesses = paginateWitnessInfos(witnesses, body.Offset, body.Limit)
+	resp := map[string]interface{}{
+		"witnesses": witnesses,
+	}
+	data, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func paginateWitnessInfos(witnesses []*WitnessInfo, offset, limit int) []*WitnessInfo {
+	if limit <= 0 || offset >= len(witnesses) {
+		return []*WitnessInfo{}
+	}
+	remaining := len(witnesses) - offset
+	if limit > remaining {
+		limit = remaining
+	}
+	end := offset + limit
+	out := witnesses[offset:end]
+	if out == nil {
+		return []*WitnessInfo{}
+	}
+	return out
+}
+
 func (api *API) getNextMaintenanceTime(w http.ResponseWriter, r *http.Request) {
-	t := api.backend.NextMaintenanceTime()
+	api.handleGetNextMaintenanceTime(w, r, nil)
+}
+
+func (api *API) handleGetNextMaintenanceTime(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var (
+		t   int64
+		err error
+	)
+	if boundFn == nil {
+		t, err = api.backend.NextMaintenanceTime()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		t, err = api.backend.NextMaintenanceTimeAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	resp := map[string]int64{"num": t}
 	data, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getBurnTrx(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBurnTrx(w, r, nil)
+}
+
+func (api *API) handleGetBurnTrx(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var (
+		burned int64
+		err    error
+	)
+	if boundFn == nil {
+		burned, err = api.backend.GetBurnTrx()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		burned, err = api.backend.GetBurnTrxAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data, _ := json.Marshal(map[string]int64{"num": burned})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getBandwidthPrices(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBandwidthPrices(w, r, nil)
+}
+
+func (api *API) handleGetBandwidthPrices(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var (
+		prices string
+		err    error
+	)
+	if boundFn == nil {
+		prices, err = api.backend.GetBandwidthPrices()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		prices, err = api.backend.GetBandwidthPricesAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data, _ := json.Marshal(map[string]string{"prices": prices})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getEnergyPrices(w http.ResponseWriter, r *http.Request) {
+	api.handleGetEnergyPrices(w, r, nil)
+}
+
+func (api *API) handleGetEnergyPrices(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var (
+		prices string
+		err    error
+	)
+	if boundFn == nil {
+		prices, err = api.backend.GetEnergyPrices()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		prices, err = api.backend.GetEnergyPricesAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data, _ := json.Marshal(map[string]string{"prices": prices})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -1007,11 +1585,27 @@ func (api *API) proposalDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) listProposals(w http.ResponseWriter, r *http.Request) {
+	api.handleListProposals(w, r, nil)
+}
+
+func (api *API) handleListProposals(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	proposals, err := api.backend.ListProposals()
+	var (
+		proposals []*ProposalInfo
+		err       error
+	)
+	if boundFn == nil {
+		proposals, err = api.backend.ListProposals()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		proposals, err = api.backend.ListProposalsAt(blockNum)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1021,26 +1615,31 @@ func (api *API) listProposals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		FromAddress string `json:"fromAddress"`
-		ToAddress   string `json:"toAddress"`
-		Visible     bool   `json:"visible"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FromAddress == "" || body.ToAddress == "" {
-		http.Error(w, "fromAddress and toAddress required", http.StatusBadRequest)
+	api.handleGetDelegatedResourceV2(w, r, nil)
+}
+
+func (api *API) getDelegatedResource(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResource(w, r, nil)
+}
+
+func (api *API) handleGetDelegatedResource(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	from, to, ok := parseDelegatedResourceRequest(w, r)
+	if !ok {
 		return
 	}
-	from, err := parseAddress(body.FromAddress, body.Visible)
-	if err != nil {
-		httpFieldErr(w, "fromAddress", err)
-		return
+	var (
+		list []*DelegatedResourceInfo
+		err  error
+	)
+	if boundFn != nil {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		list, err = api.backend.GetDelegatedResourceAt(from, to, blockNum)
+	} else {
+		list, err = api.backend.GetDelegatedResource(from, to)
 	}
-	to, err := parseAddress(body.ToAddress, body.Visible)
-	if err != nil {
-		httpFieldErr(w, "toAddress", err)
-		return
-	}
-	list, err := api.backend.GetDelegatedResourceV2(from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1053,7 +1652,119 @@ func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (api *API) handleGetDelegatedResourceV2(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	from, to, ok := parseDelegatedResourceRequest(w, r)
+	if !ok {
+		return
+	}
+	var list []*DelegatedResourceInfo
+	var err error
+	if boundFn != nil {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		list, err = api.backend.GetDelegatedResourceV2At(from, to, blockNum)
+	} else {
+		list, err = api.backend.GetDelegatedResourceV2(from, to)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []*DelegatedResourceInfo{}
+	}
+	data, _ := json.Marshal(map[string]interface{}{"delegatedResource": list})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func parseDelegatedResourceRequest(w http.ResponseWriter, r *http.Request) (common.Address, common.Address, bool) {
+	var body struct {
+		FromAddress string `json:"fromAddress"`
+		ToAddress   string `json:"toAddress"`
+		Visible     bool   `json:"visible"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FromAddress == "" || body.ToAddress == "" {
+		http.Error(w, "fromAddress and toAddress required", http.StatusBadRequest)
+		return common.Address{}, common.Address{}, false
+	}
+	from, err := parseAddress(body.FromAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "fromAddress", err)
+		return common.Address{}, common.Address{}, false
+	}
+	to, err := parseAddress(body.ToAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "toAddress", err)
+		return common.Address{}, common.Address{}, false
+	}
+	return from, to, true
+}
+
 func (api *API) getDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResourceAccountIndexV2(w, r, nil)
+}
+
+func (api *API) getDelegatedResourceAccountIndex(w http.ResponseWriter, r *http.Request) {
+	api.handleGetDelegatedResourceAccountIndex(w, r, nil)
+}
+
+func (api *API) handleGetDelegatedResourceAccountIndex(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	addr, ok := parseDelegatedResourceAccountIndexRequest(w, r)
+	if !ok {
+		return
+	}
+	var (
+		info *corepb.DelegatedResourceAccountIndex
+		err  error
+	)
+	if boundFn != nil {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		info, err = api.backend.GetDelegatedResourceAccountIndexAt(addr, blockNum)
+	} else {
+		info, err = api.backend.GetDelegatedResourceAccountIndex(addr)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info == nil {
+		info = &corepb.DelegatedResourceAccountIndex{Account: addr.Bytes()}
+	}
+	writeTronJSON(w, info)
+}
+
+func (api *API) handleGetDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	addr, ok := parseDelegatedResourceAccountIndexRequest(w, r)
+	if !ok {
+		return
+	}
+	var info *DelegationIndexInfo
+	var err error
+	if boundFn != nil {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		info, err = api.backend.GetDelegatedResourceAccountIndexV2At(addr, blockNum)
+	} else {
+		info, err = api.backend.GetDelegatedResourceAccountIndexV2(addr)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data, _ := json.Marshal(info)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func parseDelegatedResourceAccountIndexRequest(w http.ResponseWriter, r *http.Request) (common.Address, bool) {
 	var body struct {
 		Value   string `json:"value"`
 		Visible bool   `json:"visible"`
@@ -1064,24 +1775,21 @@ func (api *API) getDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *htt
 	}
 	if body.Value == "" {
 		http.Error(w, "value required", http.StatusBadRequest)
-		return
+		return common.Address{}, false
 	}
 	addr, err := parseAddress(body.Value, body.Visible)
 	if err != nil {
 		httpFieldErr(w, "value", err)
-		return
+		return common.Address{}, false
 	}
-	info, err := api.backend.GetDelegatedResourceAccountIndexV2(addr)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	data, _ := json.Marshal(info)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	return addr, true
 }
 
 func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
+	api.handleCanDelegateResource(w, r, nil)
+}
+
+func (api *API) handleCanDelegateResource(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		OwnerAddress string `json:"owner_address"`
 		Balance      int64  `json:"balance"`
@@ -1097,7 +1805,16 @@ func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "owner_address", err)
 		return
 	}
-	info, err := api.backend.CanDelegateResource(addr, body.Balance, corepb.ResourceCode(body.Type))
+	var info *CanDelegateInfo
+	if boundFn == nil {
+		info, err = api.backend.CanDelegateResource(addr, body.Balance, corepb.ResourceCode(body.Type))
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		info, err = api.backend.CanDelegateResourceAt(addr, body.Balance, corepb.ResourceCode(body.Type), blockNum)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1108,6 +1825,10 @@ func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetCanWithdrawUnfreezeAmount(w, r, nil)
+}
+
+func (api *API) handleGetCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		OwnerAddress string `json:"owner_address"`
 		Timestamp    int64  `json:"timestamp"`
@@ -1122,7 +1843,16 @@ func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Requ
 		httpFieldErr(w, "owner_address", err)
 		return
 	}
-	info, err := api.backend.GetCanWithdrawUnfreezeAmount(addr, body.Timestamp)
+	var info *CanWithdrawUnfreezeInfo
+	if boundFn == nil {
+		info, err = api.backend.GetCanWithdrawUnfreezeAmount(addr, body.Timestamp)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		info, err = api.backend.GetCanWithdrawUnfreezeAmountAt(addr, body.Timestamp, blockNum)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1133,6 +1863,10 @@ func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Requ
 }
 
 func (api *API) getAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAvailableUnfreezeCount(w, r, nil)
+}
+
+func (api *API) handleGetAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	addrStr := r.URL.Query().Get("owner_address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -1155,7 +1889,16 @@ func (api *API) getAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request
 		httpFieldErr(w, "owner_address", err)
 		return
 	}
-	info, err := api.backend.GetAvailableUnfreezeCount(addr)
+	var info *AvailableUnfreezeCountInfo
+	if boundFn == nil {
+		info, err = api.backend.GetAvailableUnfreezeCount(addr)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		info, err = api.backend.GetAvailableUnfreezeCountAt(addr, blockNum)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1169,7 +1912,7 @@ func (api *API) getReward(w http.ResponseWriter, r *http.Request) {
 	api.handleGetReward(w, r, nil)
 }
 
-func (api *API) handleGetReward(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+func (api *API) handleGetReward(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -1194,7 +1937,11 @@ func (api *API) handleGetReward(w http.ResponseWriter, r *http.Request, boundFn 
 	}
 	var info *RewardInfo
 	if boundFn != nil {
-		info, err = api.backend.GetRewardAt(addr, boundFn())
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		info, err = api.backend.GetRewardAt(addr, blockNum)
 	} else {
 		info, err = api.backend.GetReward(addr)
 	}
@@ -1211,6 +1958,10 @@ func (api *API) handleGetReward(w http.ResponseWriter, r *http.Request, boundFn 
 // address. Mirrors java-tron Wallet.getBrokerage so the cross-impl test
 // can hit both nodes via the same endpoint.
 func (api *API) getBrokerage(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBrokerage(w, r, nil)
+}
+
+func (api *API) handleGetBrokerage(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -1233,7 +1984,20 @@ func (api *API) getBrokerage(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "address", err)
 		return
 	}
-	rate := api.backend.GetBrokerageInfo(addr)
+	var rate int64
+	if boundFn == nil {
+		rate, err = api.backend.GetBrokerageInfo(addr)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		rate, err = api.backend.GetBrokerageInfoAt(addr, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	data, _ := json.Marshal(map[string]int64{"brokerage": rate})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
@@ -1304,6 +2068,10 @@ func (api *API) listNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAssetIssueByID(w, r, nil)
+}
+
+func (api *API) handleGetAssetIssueByID(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		Value interface{} `json:"value"`
 	}
@@ -1329,7 +2097,21 @@ func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	asset := api.backend.GetAssetIssueByID(id)
+	var asset *contractpb.AssetIssueContract
+	var err error
+	if boundFn == nil {
+		asset, err = api.backend.GetAssetIssueByID(id)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		asset, err = api.backend.GetAssetIssueByIDAt(id, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -1339,6 +2121,10 @@ func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAssetIssueByName(w, r, nil)
+}
+
+func (api *API) handleGetAssetIssueByName(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		Value   string `json:"value"`
 		Visible bool   `json:"visible"`
@@ -1356,7 +2142,20 @@ func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "value", err)
 		return
 	}
-	asset := api.backend.GetAssetIssueByName(nameBytes)
+	var asset *contractpb.AssetIssueContract
+	if boundFn == nil {
+		asset, err = api.backend.GetAssetIssueByName(nameBytes)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		asset, err = api.backend.GetAssetIssueByNameAt(nameBytes, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -1366,7 +2165,27 @@ func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAssetIssueList(w http.ResponseWriter, r *http.Request) {
-	assets := api.backend.GetAssetIssueList()
+	api.handleGetAssetIssueList(w, r, nil)
+}
+
+func (api *API) handleGetAssetIssueList(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var (
+		assets []*contractpb.AssetIssueContract
+		err    error
+	)
+	if boundFn == nil {
+		assets, err = api.backend.GetAssetIssueList()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		assets, err = api.backend.GetAssetIssueListAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	var list []map[string]any
 	for _, a := range assets {
 		list = append(list, marshalMessage(a.ProtoReflect()))
@@ -1381,6 +2200,10 @@ func (api *API) getAssetIssueList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getPaginatedAssetIssueList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedAssetIssueList(w, r, nil)
+}
+
+func (api *API) handleGetPaginatedAssetIssueList(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		Offset int `json:"offset"`
 		Limit  int `json:"limit"`
@@ -1392,7 +2215,23 @@ func (api *API) getPaginatedAssetIssueList(w http.ResponseWriter, r *http.Reques
 	if body.Limit <= 0 {
 		body.Limit = 20
 	}
-	assets := api.backend.GetAssetIssueListPaginated(body.Offset, body.Limit)
+	var (
+		assets []*contractpb.AssetIssueContract
+		err    error
+	)
+	if boundFn == nil {
+		assets, err = api.backend.GetAssetIssueListPaginated(body.Offset, body.Limit)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		assets, err = api.backend.GetAssetIssueListPaginatedAt(body.Offset, body.Limit, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	var list []map[string]any
 	for _, a := range assets {
 		list = append(list, marshalMessage(a.ProtoReflect()))
@@ -1407,6 +2246,10 @@ func (api *API) getPaginatedAssetIssueList(w http.ResponseWriter, r *http.Reques
 }
 
 func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAssetIssueByAccount(w, r, nil)
+}
+
+func (api *API) handleGetAssetIssueByAccount(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		Address string `json:"address"`
 		Visible bool   `json:"visible"`
@@ -1424,7 +2267,20 @@ func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "address", err)
 		return
 	}
-	asset := api.backend.GetAssetIssueByAccount(addr)
+	var asset *contractpb.AssetIssueContract
+	if boundFn == nil {
+		asset, err = api.backend.GetAssetIssueByAccount(addr)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		asset, err = api.backend.GetAssetIssueByAccountAt(addr, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -1434,6 +2290,10 @@ func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketOrderByID(w, r, nil)
+}
+
+func (api *API) handleGetMarketOrderByID(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		Value   string `json:"value"`
 		Visible bool   `json:"visible"`
@@ -1451,7 +2311,20 @@ func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "value", err)
 		return
 	}
-	order := api.backend.GetMarketOrderByID(orderID)
+	var order *corepb.MarketOrder
+	if boundFn == nil {
+		order, err = api.backend.GetMarketOrderByID(orderID)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		order, err = api.backend.GetMarketOrderByIDAt(orderID, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if order == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -1461,6 +2334,10 @@ func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getMarketOrdersFromAccount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketOrdersFromAccount(w, r, nil)
+}
+
+func (api *API) handleGetMarketOrdersFromAccount(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
 		Address string `json:"address"`
 		Visible bool   `json:"visible"`
@@ -1478,20 +2355,109 @@ func (api *API) getMarketOrdersFromAccount(w http.ResponseWriter, r *http.Reques
 		httpFieldErr(w, "address", err)
 		return
 	}
-	orders := api.backend.GetMarketOrdersByAccount(addr)
-	var list []map[string]any
-	for _, o := range orders {
-		list = append(list, marshalMessage(o.ProtoReflect()))
+	var orders []*corepb.MarketOrder
+	if boundFn == nil {
+		orders, err = api.backend.GetMarketOrdersByAccount(addr)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		orders, err = api.backend.GetMarketOrdersByAccountAt(addr, blockNum)
 	}
-	if list == nil {
-		list = []map[string]any{}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	data, _ := json.Marshal(map[string]any{"orders": list})
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	writeMarketOrderListJSON(w, orders)
 }
 
 func (api *API) getMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketPriceByPair(w, r, nil)
+}
+
+func (api *API) handleGetMarketPriceByPair(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	sell, buy, ok := parseMarketPairRequest(w, r)
+	if !ok {
+		return
+	}
+	var pl *corepb.MarketPriceList
+	var err error
+	if boundFn == nil {
+		pl, err = api.backend.GetMarketPriceByPair(sell, buy)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		pl, err = api.backend.GetMarketPriceByPairAt(sell, buy, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if pl == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+	writeTronJSON(w, pl)
+}
+
+func (api *API) getMarketOrderListByPair(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketOrderListByPair(w, r, nil)
+}
+
+func (api *API) handleGetMarketOrderListByPair(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	sell, buy, ok := parseMarketPairRequest(w, r)
+	if !ok {
+		return
+	}
+	var orders []*corepb.MarketOrder
+	var err error
+	if boundFn == nil {
+		orders, err = api.backend.GetMarketOrderListByPair(sell, buy)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		orders, err = api.backend.GetMarketOrderListByPairAt(sell, buy, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeMarketOrderListJSON(w, orders)
+}
+
+func (api *API) getMarketPairList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketPairList(w, r, nil)
+}
+
+func (api *API) handleGetMarketPairList(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var pairs *corepb.MarketOrderPairList
+	var err error
+	if boundFn == nil {
+		pairs, err = api.backend.GetMarketPairList()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		pairs, err = api.backend.GetMarketPairListAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if pairs == nil {
+		pairs = &corepb.MarketOrderPairList{}
+	}
+	writeTronJSON(w, pairs)
+}
+
+func parseMarketPairRequest(w http.ResponseWriter, r *http.Request) ([]byte, []byte, bool) {
 	var body struct {
 		SellTokenId string `json:"sell_token_id"`
 		BuyTokenId  string `json:"buy_token_id"`
@@ -1500,23 +2466,33 @@ func (api *API) getMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.SellTokenId == "" || body.BuyTokenId == "" {
 		http.Error(w, "sell_token_id and buy_token_id required", http.StatusBadRequest)
-		return
+		return nil, nil, false
 	}
 	sell, err := parseBytes(body.SellTokenId, body.Visible)
 	if err != nil {
 		httpFieldErr(w, "sell_token_id", err)
-		return
+		return nil, nil, false
 	}
 	buy, err := parseBytes(body.BuyTokenId, body.Visible)
 	if err != nil {
 		httpFieldErr(w, "buy_token_id", err)
-		return
+		return nil, nil, false
 	}
-	pl := api.backend.GetMarketPriceByPair(sell, buy)
-	if pl == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
-		return
+	return sell, buy, true
+}
+
+func writeMarketOrderListJSON(w http.ResponseWriter, orders []*corepb.MarketOrder) {
+	var list []map[string]any
+	for _, o := range orders {
+		if o == nil {
+			continue
+		}
+		list = append(list, marshalMessage(o.ProtoReflect()))
 	}
-	writeTronJSON(w, pl)
+	if list == nil {
+		list = []map[string]any{}
+	}
+	data, _ := json.Marshal(map[string]any{"orders": list})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }

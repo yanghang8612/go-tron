@@ -3,9 +3,12 @@ package snapshots
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -39,6 +42,172 @@ func TestStateDomainChangeBinaryRecordRoundTrip(t *testing.T) {
 	if _, err := decodeStateDomainChangeRecord(encoded); err == nil {
 		t.Fatal("record with trailing bytes decoded successfully")
 	}
+}
+
+func TestStateDomainChangeBinaryV2AccessorCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 10,
+		ToTxNum:   11,
+		Path:      "history/state-domain-change-v2.seg",
+	}
+	owner := binaryAddress(0xa4)
+	changes := []*rawdb.StateDomainChange{
+		binaryStateDomainChange(10, 10, 1, "slot/a"),
+		binaryStateDomainChange(11, 11, 1, "slot/b"),
+	}
+	for _, change := range changes {
+		change.Owner = owner
+		change.Generation = 3
+		change.Domain = kvdomains.ContractStorage
+	}
+	normalized := normalizeStateDomainChangesForBinary(changes)
+	segmentData, index, accessor, err := encodeStateDomainChangeBinarySegment(ref.FromTxNum, ref.ToTxNum, normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexData, err := encodeStateDomainChangeBinaryIndex(ref.FromTxNum, ref.ToTxNum, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessorV2ForTest(ref.FromTxNum, ref.ToTxNum, accessor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segRef := ref
+	setStateDomainChangeBinaryRefMetadata(&segRef, segmentData)
+	idxRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentInverted, FromTxNum: ref.FromTxNum, ToTxNum: ref.ToTxNum, Path: stateDomainChangeBinaryIndexPath(ref.Path)}
+	setStateDomainChangeBinaryRefMetadata(&idxRef, indexData)
+	accessorRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: ref.FromTxNum, ToTxNum: ref.ToTxNum, Path: stateDomainChangeBinaryAccessorPath(ref.Path)}
+	setStateDomainChangeBinaryRefMetadata(&accessorRef, accessorData)
+	for _, file := range []struct {
+		ref  SegmentRef
+		data []byte
+	}{{segRef, segmentData}, {idxRef, indexData}, {accessorRef, accessorData}} {
+		if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, file.ref.Path), file.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, segRef, idxRef, accessorRef); err != nil {
+		t.Fatalf("verify v2 companions: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(10, 11, []SegmentRef{segRef, accessorRef, idxRef})); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keyed []*rawdb.StateDomainChange
+	if err := mgr.IterateStateDomainChangesByKey(10, 11, rawdb.StateFlatDomainKVLatest, owner, 3, kvdomains.ContractStorage, []byte("slot/a"), func(change *rawdb.StateDomainChange) (bool, error) {
+		keyed = append(keyed, change)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertBinaryChangeOrder(t, keyed, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}})
+	var prefixed []*rawdb.StateDomainChange
+	if err := mgr.IterateStateDomainChangesByPrefix(10, 11, owner, 3, kvdomains.ContractStorage, []byte("slot/"), func(change *rawdb.StateDomainChange) (bool, error) {
+		prefixed = append(prefixed, change)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertBinaryChangeOrder(t, prefixed, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}, {txNum: 11, seq: 1, key: "slot/b"}})
+}
+
+func TestStateDomainChangeBinaryV3AccessorRejectsCountBeyondRecordIndex(t *testing.T) {
+	var data bytes.Buffer
+	writeStateDomainChangeBinaryHeaderVersion(&data, stateDomainChangeBinaryAccessorMagic, 1, 1, uint64(math.MaxUint32)+1, stateDomainChangeBinaryVersionV3)
+	writeUint64(&data, 0)
+	header, err := readStateDomainChangeBinaryHeaderAt(bytes.NewReader(data.Bytes()), stateDomainChangeBinaryAccessorMagic)
+	if err != nil {
+		t.Fatalf("read v3 header: %v", err)
+	}
+	if _, err := stateDomainChangeBinaryAccessorV3LayoutAt(bytes.NewReader(data.Bytes()), uint64(data.Len()), header); err == nil || !strings.Contains(err.Error(), "exceeds uint32") {
+		t.Fatalf("v3 oversized count error = %v, want uint32 limit", err)
+	}
+}
+
+func TestStateDomainChangeBinaryV3AccessorCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	ref := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 10, ToTxNum: 11, Path: "history/state-domain-change-v3.seg"}
+	owner := binaryAddress(0xa5)
+	changes := []*rawdb.StateDomainChange{binaryStateDomainChange(10, 10, 1, "slot/a"), binaryStateDomainChange(11, 11, 1, "slot/b")}
+	for _, change := range changes {
+		change.Owner = owner
+		change.Generation = 3
+		change.Domain = kvdomains.ContractStorage
+	}
+	segmentData, index, entries, err := encodeStateDomainChangeBinarySegment(ref.FromTxNum, ref.ToTxNum, normalizeStateDomainChangesForBinary(changes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexData, err := encodeStateDomainChangeBinaryIndex(ref.FromTxNum, ref.ToTxNum, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessorV3(ref.FromTxNum, ref.ToTxNum, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segRef := ref
+	setStateDomainChangeBinaryRefMetadata(&segRef, segmentData)
+	idxRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentInverted, FromTxNum: ref.FromTxNum, ToTxNum: ref.ToTxNum, Path: stateDomainChangeBinaryIndexPath(ref.Path)}
+	setStateDomainChangeBinaryRefMetadata(&idxRef, indexData)
+	accessorRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: ref.FromTxNum, ToTxNum: ref.ToTxNum, Path: stateDomainChangeBinaryAccessorPath(ref.Path)}
+	setStateDomainChangeBinaryRefMetadata(&accessorRef, accessorData)
+	for _, file := range []struct {
+		ref  SegmentRef
+		data []byte
+	}{{segRef, segmentData}, {idxRef, indexData}, {accessorRef, accessorData}} {
+		if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, file.ref.Path), file.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, segRef, idxRef, accessorRef); err != nil {
+		t.Fatalf("verify v3 companions: %v", err)
+	}
+	var got []*rawdb.StateDomainChange
+	if err := iterateStateDomainChangeBinarySegmentByAccessorPrefixFile(dir, segRef, accessorRef, stateDomainChangeBinaryAccessorLookupPrefix(owner, 3, kvdomains.ContractStorage, []byte("slot/")), 10, 11, func(change *rawdb.StateDomainChange) (bool, error) {
+		got = append(got, change)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertBinaryChangeOrder(t, got, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}, {txNum: 11, seq: 1, key: "slot/b"}})
+}
+
+func encodeStateDomainChangeBinaryAccessorV2ForTest(fromTxNum, toTxNum uint64, entries []stateDomainChangeBinaryAccessorEntry) ([]byte, error) {
+	sorted := append([]stateDomainChangeBinaryAccessorEntry(nil), entries...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return compareStateDomainChangeBinaryAccessorEntry(sorted[i], sorted[j]) < 0
+	})
+	var out bytes.Buffer
+	writeStateDomainChangeBinaryHeaderVersion(&out, stateDomainChangeBinaryAccessorMagic, fromTxNum, toTxNum, uint64(len(sorted)), stateDomainChangeBinaryVersionV2)
+	payloadStart := uint64(stateDomainChangeBinaryHeaderSize + len(sorted)*8)
+	var offsets bytes.Buffer
+	var payload bytes.Buffer
+	for i, entry := range sorted {
+		if err := validateStateDomainChangeBinaryAccessorEntry(SegmentRef{Path: "v2 accessor", FromTxNum: fromTxNum, ToTxNum: toTxNum}, entry, uint64(i)); err != nil {
+			return nil, err
+		}
+		if len(entry.key) > math.MaxUint32 {
+			return nil, fmt.Errorf("accessor key too large: %d", len(entry.key))
+		}
+		writeUint64(&offsets, payloadStart+uint64(payload.Len()))
+		writeUint32(&payload, uint32(len(entry.key)))
+		payload.Write(entry.key)
+		writeUint64(&payload, entry.txNum)
+		writeUint64(&payload, entry.seq)
+		writeUint64(&payload, entry.offset)
+		writeUint64(&payload, entry.recordIndex)
+	}
+	out.Write(offsets.Bytes())
+	out.Write(payload.Bytes())
+	return out.Bytes(), nil
 }
 
 func TestStateDomainChangeBinaryFilesRoundTripChecksumSizeAndIndex(t *testing.T) {
@@ -108,8 +277,9 @@ func TestStateDomainChangeBinaryFilesRoundTripChecksumSizeAndIndex(t *testing.T)
 	if index[0].txNum != 10 || index[0].count != 2 || index[1].txNum != 11 || index[1].count != 1 || index[2].txNum != 12 || index[2].count != 2 {
 		t.Fatalf("unexpected index entries: %+v", index)
 	}
-	if index[0].offset != stateDomainChangeBinaryHeaderSize {
-		t.Fatalf("first index offset = %d, want %d", index[0].offset, stateDomainChangeBinaryHeaderSize)
+	recordOffset := binarySegmentRecordOffsetForTest(t, dir, segRef)
+	if index[0].offset != recordOffset {
+		t.Fatalf("first index offset = %d, want %d", index[0].offset, recordOffset)
 	}
 	accessor, err := readStateDomainChangeBinaryAccessor(dir, accessorRef)
 	if err != nil {
@@ -125,8 +295,8 @@ func TestStateDomainChangeBinaryFilesRoundTripChecksumSizeAndIndex(t *testing.T)
 		{txNum: 12, seq: 2, key: "d"},
 		{txNum: 12, seq: 1, key: "e"},
 	})
-	if accessor[0].offset != stateDomainChangeBinaryHeaderSize {
-		t.Fatalf("first accessor offset = %d, want %d", accessor[0].offset, stateDomainChangeBinaryHeaderSize)
+	if accessor[0].offset != recordOffset {
+		t.Fatalf("first accessor offset = %d, want %d", accessor[0].offset, recordOffset)
 	}
 
 	badSize := segRef
@@ -223,7 +393,8 @@ func TestStateDomainChangeBinarySegmentCheckStreamsAndValidates(t *testing.T) {
 	hugeRecord := segRef
 	hugeRecord.Path = "history/state-domain-change-70-71-huge-record.seg"
 	hugeRecordData := append([]byte(nil), data...)
-	binary.BigEndian.PutUint32(hugeRecordData[stateDomainChangeBinaryHeaderSize:stateDomainChangeBinaryHeaderSize+4], ^uint32(0))
+	recordOffset := binarySegmentRecordOffsetForTest(t, dir, segRef)
+	binary.BigEndian.PutUint32(hugeRecordData[recordOffset:recordOffset+4], ^uint32(0))
 	setStateDomainChangeBinaryRefMetadata(&hugeRecord, hugeRecordData)
 	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, hugeRecord.Path), hugeRecordData); err != nil {
 		t.Fatalf("write huge-record segment: %v", err)
@@ -266,7 +437,7 @@ func TestStateDomainChangeBinarySegmentCheckStreamsAndValidates(t *testing.T) {
 	unsortedData, _, _, err := encodeStateDomainChangeBinarySegment(unsorted.FromTxNum, unsorted.ToTxNum, []*rawdb.StateDomainChange{
 		binaryStateDomainChange(70, 70, 2, "b"),
 		binaryStateDomainChange(70, 70, 1, "a"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("encode unsorted segment: %v", err)
 	}
@@ -421,6 +592,110 @@ func TestStateDomainChangeBinaryIndexReadsBlockTxRange(t *testing.T) {
 	if _, ok, err := readStateDomainChangeBinaryTxRangeForBlockByIndexFile(dir, segRef, idxRef, 13); err != nil || ok {
 		t.Fatalf("missing block tx range: ok=%v err=%v", ok, err)
 	}
+}
+
+func TestStateDomainChangeBinaryStoresNoChangeBlockTxRange(t *testing.T) {
+	dir := t.TempDir()
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 40,
+		ToTxNum:   46,
+		Path:      "history/state-domain-change-40-46.seg",
+	}
+	changes := []*rawdb.StateDomainChange{
+		binaryStateDomainChange(10, 40, 1, "a"),
+		binaryStateDomainChange(11, 41, 1, "b"),
+		binaryStateDomainChange(11, 42, 1, "c"),
+		binaryStateDomainChange(12, 44, 1, "e"),
+	}
+	noChangeHash := common.Hash{0x13}
+	txRanges := []*rawdb.StateTxRange{
+		{BlockNum: 13, BlockHash: noChangeHash, BeginTxNum: 45, EndTxNum: 46},
+	}
+	segRef, idxRef, err := writeStateDomainChangeBinaryFiles(dir, ref, changes, txRanges)
+	if err != nil {
+		t.Fatalf("write binary files: %v", err)
+	}
+	rows, err := readStateDomainChangeBinaryTxRanges(dir, segRef)
+	if err != nil {
+		t.Fatalf("read binary tx ranges: %v", err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("tx ranges = %d, want 4: %+v", len(rows), rows)
+	}
+	var streamed []*rawdb.StateTxRange
+	if err := iterateStateDomainChangeBinaryTxRanges(dir, segRef, func(row *rawdb.StateTxRange) (bool, error) {
+		streamed = append(streamed, cloneStateTxRangeForSegment(row))
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate binary tx ranges: %v", err)
+	}
+	if !reflect.DeepEqual(streamed, rows) {
+		t.Fatalf("streamed tx ranges = %+v, want %+v", streamed, rows)
+	}
+	got, ok, err := readStateDomainChangeBinaryTxRangeForBlockByIndexFile(dir, segRef, idxRef, 13)
+	if err != nil || !ok {
+		t.Fatalf("read no-change block tx range: ok=%v err=%v", ok, err)
+	}
+	if got.BlockNum != 13 || got.BlockHash != noChangeHash || got.BeginTxNum != 45 || got.EndTxNum != 46 {
+		t.Fatalf("no-change block tx range = %+v, want block 13 tx [45,46]", got)
+	}
+}
+
+func TestStateDomainChangeBinaryTxRangePointLookupUsesLogarithmicReads(t *testing.T) {
+	dir := t.TempDir()
+	const rangeCount = 4096
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 1,
+		ToTxNum:   rangeCount,
+		Path:      "history/state-domain-change-point-lookup.seg",
+	}
+	ranges := make([]*rawdb.StateTxRange, rangeCount)
+	for i := range ranges {
+		num := uint64(i + 1)
+		ranges[i] = &rawdb.StateTxRange{
+			BlockNum:   num,
+			BlockHash:  common.Hash{byte(num)},
+			BeginTxNum: num,
+			EndTxNum:   num,
+		}
+	}
+	segRef, _, err := writeStateDomainChangeBinaryFiles(dir, ref, nil, ranges)
+	if err != nil {
+		t.Fatalf("write binary files: %v", err)
+	}
+	reader, size, header, err := openHistorySegmentForRead(dir, segRef)
+	if err != nil {
+		t.Fatalf("open binary segment: %v", err)
+	}
+	defer reader.Close()
+	counted := &countingStateDomainReaderAt{reader: reader}
+
+	got, hasTableRows, found, err := findStateDomainChangeBinaryTxRangeForBlock(counted, size, segRef, header, 3073)
+	if err != nil || !hasTableRows || !found {
+		t.Fatalf("point lookup: hasTableRows=%v found=%v err=%v", hasTableRows, found, err)
+	}
+	if got.BlockNum != 3073 || got.BeginTxNum != 3073 || got.EndTxNum != 3073 {
+		t.Fatalf("point lookup range = %+v, want block 3073 tx [3073,3073]", got)
+	}
+	if counted.reads > 20 {
+		t.Fatalf("point lookup used %d reads for %d ranges, want logarithmic reads", counted.reads, rangeCount)
+	}
+}
+
+type countingStateDomainReaderAt struct {
+	reader interface {
+		ReadAt([]byte, int64) (int, error)
+	}
+	reads int
+}
+
+func (r *countingStateDomainReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	r.reads++
+	return r.reader.ReadAt(p, off)
 }
 
 func TestStateDomainChangeBinaryContentAddressedPathsDifferForSameRange(t *testing.T) {
@@ -617,10 +892,24 @@ func mustReadFile(t *testing.T, path string) []byte {
 	return data
 }
 
+func binarySegmentRecordOffsetForTest(t *testing.T, dir string, ref SegmentRef) uint64 {
+	t.Helper()
+	file, header, size, err := openStateDomainChangeBinarySegmentReader(dir, ref)
+	if err != nil {
+		t.Fatalf("open binary segment: %v", err)
+	}
+	defer file.Close()
+	_, offset, err := readStateDomainChangeBinaryTxRangeTableAt(file, size, ref, header)
+	if err != nil {
+		t.Fatalf("read binary tx range table: %v", err)
+	}
+	return offset
+}
+
 func binaryStateDomainChange(blockNum, txNum, seq uint64, key string) *rawdb.StateDomainChange {
 	return &rawdb.StateDomainChange{
 		BlockNum:   blockNum,
-		BlockHash:  common.Hash{byte(blockNum), byte(txNum), byte(seq)},
+		BlockHash:  common.Hash{byte(blockNum)},
 		TxNum:      txNum,
 		Seq:        seq,
 		FlatDomain: rawdb.StateFlatDomainKVLatest,

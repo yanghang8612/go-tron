@@ -102,6 +102,10 @@ type Context struct {
 	// debug_traceTransaction replay captures the opcode/call stream. Nil on every
 	// production path (block-apply, producer, pool) — zero overhead.
 	Tracer vm.Tracer
+	// RuntimePrefetcher, when non-nil, is installed into TVM execution so nested
+	// CALL/EXTCODE/storage reads discovered at runtime can warm raw latest-domain
+	// rows through the same worker pool as envelope prefetch.
+	RuntimePrefetcher vm.RuntimePrefetcher
 }
 
 // PassVersion reports whether SR software-fork `version` has activated as of
@@ -138,11 +142,7 @@ func (ctx *Context) passVersion(version int32) bool {
 }
 
 func (ctx *Context) isNile() bool {
-	genesisHash := ctx.GenesisHash
-	if genesisHash == (common.Hash{}) && ctx.DB != nil {
-		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
-	}
-	return genesisHash == params.NileGenesisHash
+	return ctx.EffectiveGenesisHash() == params.NileGenesisHash
 }
 
 func (ctx *Context) ResourceTime() int64 {
@@ -153,6 +153,22 @@ func (ctx *Context) ResourceTime() int64 {
 		return 0
 	}
 	return ctx.PrevBlockTime
+}
+
+// EffectiveGenesisHash returns the chain identity used by narrow historical
+// compatibility exceptions. Normal block processing passes GenesisHash
+// explicitly; the DB fallback is retained for tests and legacy callers.
+func (ctx *Context) EffectiveGenesisHash() common.Hash {
+	if ctx == nil {
+		return common.Hash{}
+	}
+	if ctx.GenesisHash != (common.Hash{}) {
+		return ctx.GenesisHash
+	}
+	if ctx.DB == nil {
+		return common.Hash{}
+	}
+	return rawdb.ReadBlockHashByNumber(ctx.DB, 0)
 }
 
 // Result captures the outcome of an actuator's Execute() call. The energy

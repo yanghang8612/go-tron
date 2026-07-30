@@ -1,9 +1,11 @@
 package actuator
 
 import (
+	"strings"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -105,5 +107,25 @@ func TestAccountUpdateDuplicateNameIndex(t *testing.T) {
 	act := &AccountUpdateActuator{}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for duplicate account name index")
+	}
+}
+
+func TestAccountUpdateMalformedNameIndexFailsValidation(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	c := &contractpb.AccountUpdateContract{
+		OwnerAddress: owner[:],
+		AccountName:  []byte("taken"),
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_AccountUpdateContract, c, 0)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	key := append([]byte{0x01}, []byte("taken")...)
+	if err := ctx.State.SystemKVPut(kvdomains.SystemAccountIndex, key, []byte("short")); err != nil {
+		t.Fatal(err)
+	}
+
+	act := &AccountUpdateActuator{}
+	err := act.Validate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "read account name index") || !strings.Contains(err.Error(), "malformed length") {
+		t.Fatalf("Validate malformed name index error = %v, want index read malformed length", err)
 	}
 }

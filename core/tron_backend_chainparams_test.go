@@ -29,7 +29,10 @@ func TestTronBackendGetChainParametersJavaKeySet(t *testing.T) {
 	}
 
 	backend := NewTronBackend(bc, txpool.New())
-	got := backend.GetChainParameters()
+	got, err := backend.GetChainParameters()
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := state.ChainParameterKeys()
 	if len(got) != len(want) {
 		t.Fatalf("GetChainParameters returned %d entries, want %d", len(got), len(want))

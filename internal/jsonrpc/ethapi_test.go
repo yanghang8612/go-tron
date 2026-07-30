@@ -139,8 +139,7 @@ func TestEthAPI_AccountFrameworkParity(t *testing.T) {
 
 // TestEthAPI_CallFrameworkParity proves eth_call and eth_estimateGas dispatch
 // through the framework — including the {from,to,data,value} object param and
-// the optional/ignored block tag — with output byte-identical to the frozen
-// corpus.
+// the latest block tag — with output byte-identical to the frozen corpus.
 func TestEthAPI_CallFrameworkParity(t *testing.T) {
 	ts := ethParityServer(t)
 	const to = "0x41a0b0c0d0e0f000102030405060708090a0b0c0d0"
@@ -161,6 +160,45 @@ func TestEthAPI_CallFrameworkParity(t *testing.T) {
 	}
 }
 
+func TestEthAPI_HistoricalExecutionUsesArchivePath(t *testing.T) {
+	backend := &stubBackend{
+		blockNumber:   100,
+		callResult:    []byte{0x01},
+		callAtResult:  []byte{0x02},
+		estimateGas:   5,
+		estimateGasAt: 7,
+	}
+	srv := rpc.NewServer()
+	if err := srv.RegisterName("eth", jsonrpc.NewEthAPI(backend, jsonrpc.NewFilterManager(backend))); err != nil {
+		t.Fatalf("RegisterName: %v", err)
+	}
+	t.Cleanup(srv.Stop)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	const to = "0x4101020304050607080900010203040506070809"
+	postParity(t, ts.URL,
+		`{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x70a08231","to":"`+to+`"},"latest"]}`,
+		`"0x01"`)
+	postParity(t, ts.URL,
+		`{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x70a08231","to":"`+to+`"},"0x7"]}`,
+		`"0x02"`)
+	postParity(t, ts.URL,
+		`{"jsonrpc":"2.0","id":1,"method":"eth_estimateGas","params":[{"data":"0x70a08231","to":"`+to+`"},"latest"]}`,
+		`"0x5"`)
+	postParity(t, ts.URL,
+		`{"jsonrpc":"2.0","id":1,"method":"eth_estimateGas","params":[{"data":"0x70a08231","to":"`+to+`"},"0x8"]}`,
+		`"0x7"`)
+	if backend.liveCallCalls != 1 || backend.callAtCalls != 1 || backend.callAtBlock != 7 {
+		t.Fatalf("eth_call routing live=%d archive=%d block=%d, want 1/1/7",
+			backend.liveCallCalls, backend.callAtCalls, backend.callAtBlock)
+	}
+	if backend.liveEstimateCalls != 1 || backend.estimateAtCalls != 1 || backend.estimateAtBlock != 8 {
+		t.Fatalf("eth_estimateGas routing live=%d archive=%d block=%d, want 1/1/8",
+			backend.liveEstimateCalls, backend.estimateAtCalls, backend.estimateAtBlock)
+	}
+}
+
 // TestEthAPI_BlockTxFrameworkParity proves the block/tx/receipt readers dispatch
 // through the framework with output identical to the (post-hash-fix) frozen
 // corpus. They reuse the shared blockToRPC/txToRPC/receiptToRPC converters, so
@@ -173,12 +211,59 @@ func TestEthAPI_BlockTxFrameworkParity(t *testing.T) {
 		"eth_getBlockByNumber_hashesOnly",
 		"eth_getBlockByHash_fullTx",
 		"eth_getBlockByHash_hashesOnly",
+		"eth_getUncleCountByBlockNumber",
+		"eth_getUncleCountByBlockHash",
+		"eth_getUncleByBlockNumberAndIndex",
+		"eth_getUncleByBlockHashAndIndex",
 		"eth_getTransactionByHash",
 		"eth_getTransactionReceipt",
+		"eth_getBlockReceipts",
 	} {
 		t.Run(name, func(t *testing.T) {
 			req, wantResult := loadCorpusCase(t, name)
 			postParity(t, ts.URL, req, wantResult)
+		})
+	}
+}
+
+func TestEthAPI_BlockIndexedTxFrameworkParity(t *testing.T) {
+	ts := ethParityServer(t)
+	blockHash := freezeBlockHashHex()
+	_, txResult := loadCorpusCase(t, "eth_getTransactionByHash")
+
+	for _, tc := range []struct {
+		name       string
+		body       string
+		wantResult string
+	}{
+		{
+			name:       "count by number",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getBlockTransactionCountByNumber","params":["latest"]}`,
+			wantResult: `"0x1"`,
+		},
+		{
+			name:       "count by hash",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getBlockTransactionCountByHash","params":["` + blockHash + `"]}`,
+			wantResult: `"0x1"`,
+		},
+		{
+			name:       "tx by number/index",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getTransactionByBlockNumberAndIndex","params":["0x64","0x0"]}`,
+			wantResult: txResult,
+		},
+		{
+			name:       "tx by hash/index",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getTransactionByBlockHashAndIndex","params":["` + blockHash + `","0x0"]}`,
+			wantResult: txResult,
+		},
+		{
+			name:       "tx by number/index out of range",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"eth_getTransactionByBlockNumberAndIndex","params":["0x64","0x1"]}`,
+			wantResult: `null`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			postParity(t, ts.URL, tc.body, tc.wantResult)
 		})
 	}
 }

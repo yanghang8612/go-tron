@@ -5,6 +5,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	tnet "github.com/tronprotocol/go-tron/net"
@@ -41,6 +42,13 @@ func (a *prunerChainSource) DB() ethdb.KeyValueStore {
 	return a.chain.DB()
 }
 
+func (a *prunerChainSource) EventLogDB() *rawdb.ChainDB {
+	if a == nil || a.chain == nil {
+		return nil
+	}
+	return a.chain.ChainDB()
+}
+
 func (a *prunerChainSource) LatestSolidifiedBlockNum() int64 {
 	// DynProps reads through the in-memory applyBlock buffer; the
 	// solidified counter is consensus-derived and rarely lags by more
@@ -51,11 +59,18 @@ func (a *prunerChainSource) LatestSolidifiedBlockNum() int64 {
 }
 
 func (a *prunerChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
-	block := a.chain.GetBlockByNumber(blockNum)
-	if block == nil {
+	hash, ok, err := a.CanonicalBlockHashStrict(blockNum)
+	if err != nil {
 		return common.Hash{}, false
 	}
-	return block.Hash(), true
+	return hash, ok
+}
+
+func (a *prunerChainSource) CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error) {
+	if a == nil || a.chain == nil {
+		return common.Hash{}, false, nil
+	}
+	return rawdb.ReadBlockHashByNumberStrict(a.chain.ChainDB(), blockNum)
 }
 
 func (a *stateSnapshotChainSource) DB() statesnapshots.AggregatorDB {
@@ -64,6 +79,21 @@ func (a *stateSnapshotChainSource) DB() statesnapshots.AggregatorDB {
 
 func (a *stateSnapshotChainSource) LatestSolidifiedBlockNum() int64 {
 	return a.chain.DynProps().LatestSolidifiedBlockNum()
+}
+
+func (a *stateSnapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
+	hash, ok, err := a.CanonicalBlockHashStrict(blockNum)
+	if err != nil {
+		return common.Hash{}, false
+	}
+	return hash, ok
+}
+
+func (a *stateSnapshotChainSource) CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error) {
+	if a == nil || a.chain == nil {
+		return common.Hash{}, false, nil
+	}
+	return rawdb.ReadBlockHashByNumberStrict(a.chain.ChainDB(), blockNum)
 }
 
 func (a *domainPrunerChainSource) SyncRemainingBlocks() (uint64, bool) {

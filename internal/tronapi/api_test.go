@@ -28,6 +28,7 @@ import (
 // All pre-existing methods return zero/nil values.
 type stubBackend struct {
 	delegatedResources []*tronapi.DelegatedResourceInfo
+	legacyDelegIndex   *corepb.DelegatedResourceAccountIndex
 	delegationIndex    *tronapi.DelegationIndexInfo
 	canDelegate        *tronapi.CanDelegateInfo
 	canWithdraw        *tronapi.CanWithdrawUnfreezeInfo
@@ -37,9 +38,32 @@ type stubBackend struct {
 	pendingTxList      []*corepb.Transaction
 	nodes              []*tronapi.PeerInfo
 	// M5.1 PR-1
-	accountByID     *types.Account
-	accountNet      *apipb.AccountNetMessage
-	accountResource *tronapi.AccountResource
+	accountByID             *types.Account
+	accountNet              *apipb.AccountNetMessage
+	accountNetErr           error
+	accountNetAtErr         error
+	accountResource         *tronapi.AccountResource
+	accountBalanceResp      *contractpb.AccountBalanceResponse
+	accountBalanceErr       error
+	blockBalanceTrace       *contractpb.BlockBalanceTrace
+	blockBalanceTraceErr    error
+	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
+	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
+	accountErr              error
+	accountAtErr            error
+	accountIDErr            error
+	accountIDAtErr          error
+	contractErr             error
+	contractAtErr           error
+	blockErr                error
+	hashErr                 error
+	txErr                   error
+	txInfoErr               error
+	txInfoByBlockErr        error
+	rangeErr                error
+	rangeCalls              int
+	lastRangeStart          uint64
+	lastRangeEnd            uint64
 	// For inspecting what contract was passed to BuildContractTransaction
 	lastContractType corepb.Transaction_Contract_ContractType
 	lastContract     proto.Message
@@ -47,44 +71,99 @@ type stubBackend struct {
 	validateErr error
 	// Proposal output divergence test (D-4): canned proposals returned
 	// from ListProposals / ListProposalsPaginated / GetProposalByID.
-	proposals []*tronapi.ProposalInfo
-	// Canned chain parameters returned from GetChainParameters.
-	chainParams []tronapi.ChainParameter
-	nodeInfo    *tronapi.NodeInfo
+	proposals       []*tronapi.ProposalInfo
+	proposalErr     error
+	proposalAtErr   error
+	witnesses       []*tronapi.WitnessInfo
+	nextMaintErr    error
+	burnTrx         int64
+	burnTrxErr      error
+	bandwidthPrices string
+	bandwidthErr    error
+	energyPrices    string
+	energyErr       error
+	chainParamsErr  error
+	exchanges       []*corepb.Exchange
+	exchangeErr     error
+	assetErr        error
+	marketErr       error
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
-func (s *stubBackend) CurrentBlock() *types.Block                             { return nil }
-func (s *stubBackend) GetBlockByNumber(n uint64) (*types.Block, error)        { return nil, nil }
-func (s *stubBackend) GetAccount(addr common.Address) (*types.Account, error) { return nil, nil }
+func (s *stubBackend) CurrentBlock() *types.Block { return nil }
+func (s *stubBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
+	if s.blockErr != nil {
+		return nil, s.blockErr
+	}
+	return nil, nil
+}
+func (s *stubBackend) GetAccount(addr common.Address) (*types.Account, error) {
+	if s.accountErr != nil {
+		return nil, s.accountErr
+	}
+	return nil, nil
+}
 func (s *stubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
+	if s.accountAtErr != nil {
+		return nil, s.accountAtErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) BroadcastTransaction(tx *types.Transaction) error { return nil }
-func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo {
-	if s.nodeInfo != nil {
-		return s.nodeInfo
-	}
-	return &tronapi.NodeInfo{}
-}
-func (s *stubBackend) PendingTransactionCount() int { return 0 }
+func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo                   { return &tronapi.NodeInfo{} }
+func (s *stubBackend) PendingTransactionCount() int                     { return 0 }
 func (s *stubBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
+	if s.contractErr != nil {
+		return nil, s.contractErr
+	}
+	return nil, nil
+}
+func (s *stubBackend) GetContractAt(addr common.Address, blockNum uint64) (*contractpb.SmartContract, error) {
+	if s.contractAtErr != nil {
+		return nil, s.contractAtErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	return nil, nil
 }
+func (s *stubBackend) TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
+	return nil, nil
+}
 func (s *stubBackend) GetTransactionByID(h common.Hash) (*corepb.Transaction, error) {
+	if s.txErr != nil {
+		return nil, s.txErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) GetTransactionInfoByID(h common.Hash) (*corepb.TransactionInfo, error) {
+	if s.txInfoErr != nil {
+		return nil, s.txInfoErr
+	}
 	return nil, nil
+}
+func (s *stubBackend) GetTransactionBlockNumByID(h common.Hash) (uint64, bool, error) {
+	return 0, false, nil
 }
 func (s *stubBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.TransactionInfo, error) {
+	if s.txInfoByBlockErr != nil {
+		return nil, s.txInfoByBlockErr
+	}
 	return nil, nil
 }
-func (s *stubBackend) GetBlockByHash(h common.Hash) (*types.Block, error) { return nil, nil }
+func (s *stubBackend) GetBlockByHash(h common.Hash) (*types.Block, error) {
+	if s.hashErr != nil {
+		return nil, s.hashErr
+	}
+	return nil, nil
+}
 func (s *stubBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
+	s.rangeCalls++
+	s.lastRangeStart = start
+	s.lastRangeEnd = end
+	if s.rangeErr != nil {
+		return nil, s.rangeErr
+	}
 	return nil, nil
 }
 func (s *stubBackend) BuildTransferTransaction(owner, to common.Address, amount int64) (*corepb.Transaction, error) {
@@ -99,15 +178,51 @@ func (s *stubBackend) BuildTriggerContractTransaction(owner, contract common.Add
 func (s *stubBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
 	return 0, nil
 }
+func (s *stubBackend) EstimateEnergyAt(owner, contract common.Address, data []byte, blockNum uint64) (int64, error) {
+	return 0, nil
+}
 func (s *stubBackend) GetAccountResource(addr common.Address) (*tronapi.AccountResource, error) {
 	return s.accountResource, nil
 }
 func (s *stubBackend) GetAccountResourceAt(addr common.Address, blockNum uint64) (*tronapi.AccountResource, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter   { return s.chainParams }
-func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return nil, nil }
-func (s *stubBackend) NextMaintenanceTime() int64                     { return 0 }
+func (s *stubBackend) GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error) {
+	s.lastAccountBalanceReq = req
+	if s.accountBalanceErr != nil {
+		return nil, s.accountBalanceErr
+	}
+	return s.accountBalanceResp, nil
+}
+func (s *stubBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error) {
+	s.lastBlockBalanceTraceID = id
+	if s.blockBalanceTraceErr != nil {
+		return nil, s.blockBalanceTraceErr
+	}
+	return s.blockBalanceTrace, nil
+}
+func (s *stubBackend) GetChainParameters() ([]tronapi.ChainParameter, error) {
+	if s.chainParamsErr != nil {
+		return nil, s.chainParamsErr
+	}
+	return nil, nil
+}
+func (s *stubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
+	return nil, nil
+}
+func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return s.witnesses, nil }
+func (s *stubBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
+	return s.witnesses, nil
+}
+func (s *stubBackend) NextMaintenanceTime() (int64, error) {
+	if s.nextMaintErr != nil {
+		return 0, s.nextMaintErr
+	}
+	return 0, nil
+}
+func (s *stubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
+	return 0, nil
+}
 func (s *stubBackend) BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
@@ -117,22 +232,60 @@ func (s *stubBackend) BuildProposalApproveTransaction(owner common.Address, prop
 func (s *stubBackend) BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return s.proposals, nil }
+func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
+	if s.proposalErr != nil {
+		return nil, s.proposalErr
+	}
+	return s.proposals, nil
+}
+func (s *stubBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	if s.proposalErr != nil {
+		return nil, s.proposalErr
+	}
+	return s.proposals, nil
+}
 
 // --- New Phase 10 methods ---
+func (s *stubBackend) GetDelegatedResource(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	return s.delegatedResources, nil
+}
+func (s *stubBackend) GetDelegatedResourceAt(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
+	return s.delegatedResources, nil
+}
+func (s *stubBackend) GetDelegatedResourceAccountIndex(addr common.Address) (*corepb.DelegatedResourceAccountIndex, error) {
+	return s.legacyDelegIndex, nil
+}
+func (s *stubBackend) GetDelegatedResourceAccountIndexAt(addr common.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
+	return s.legacyDelegIndex, nil
+}
 func (s *stubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	return s.delegatedResources, nil
+}
+func (s *stubBackend) GetDelegatedResourceV2At(from, to common.Address, blockNum uint64) ([]*tronapi.DelegatedResourceInfo, error) {
 	return s.delegatedResources, nil
 }
 func (s *stubBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
 	return s.delegationIndex, nil
 }
+func (s *stubBackend) GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*tronapi.DelegationIndexInfo, error) {
+	return s.delegationIndex, nil
+}
 func (s *stubBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
+	return s.canDelegate, nil
+}
+func (s *stubBackend) CanDelegateResourceAt(addr common.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*tronapi.CanDelegateInfo, error) {
 	return s.canDelegate, nil
 }
 func (s *stubBackend) GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
 	return s.canWithdraw, nil
 }
+func (s *stubBackend) GetCanWithdrawUnfreezeAmountAt(addr common.Address, timestamp int64, blockNum uint64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	return s.canWithdraw, nil
+}
 func (s *stubBackend) GetAvailableUnfreezeCount(addr common.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	return s.availableUnfreeze, nil
+}
+func (s *stubBackend) GetAvailableUnfreezeCountAt(addr common.Address, blockNum uint64) (*tronapi.AvailableUnfreezeCountInfo, error) {
 	return s.availableUnfreeze, nil
 }
 func (s *stubBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error) {
@@ -155,34 +308,108 @@ func (s *stubBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
 }
 
 // --- New Phase 12 methods (TRC10 asset queries) ---
-func (s *stubBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueByID(id int64) (*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
 }
-func (s *stubBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueByIDAt(id int64, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, nil
 }
-func (s *stubBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueByName(name []byte) (*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
 }
-func (s *stubBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueByNameAt(name []byte, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, nil
 }
-func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract {
-	return nil
+func (s *stubBackend) GetAssetIssueList() ([]*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
+}
+func (s *stubBackend) GetAssetIssueListAt(blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetAssetIssueListPaginated(offset, limit int) ([]*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
+}
+func (s *stubBackend) GetAssetIssueListPaginatedAt(offset, limit int, blockNum uint64) ([]*contractpb.AssetIssueContract, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) (*contractpb.AssetIssueContract, error) {
+	return nil, s.assetErr
+}
+func (s *stubBackend) GetAssetIssueByAccountAt(addr common.Address, blockNum uint64) (*contractpb.AssetIssueContract, error) {
+	return nil, nil
 }
 
 // --- New Phase 13 methods (Market order queries) ---
-func (s *stubBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder { return nil }
-func (s *stubBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
-	return nil
+func (s *stubBackend) GetMarketOrderByID(orderID []byte) (*corepb.MarketOrder, error) {
+	return nil, s.marketErr
 }
-func (s *stubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
-	return nil
+func (s *stubBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
+	return nil, nil
 }
-func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
-func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
-func (s *stubBackend) TotalTransaction() int64                    { return 0 }
-func (s *stubBackend) GetBurnTrx() int64                          { return 0 }
+func (s *stubBackend) GetMarketOrdersByAccount(addr common.Address) ([]*corepb.MarketOrder, error) {
+	return nil, s.marketErr
+}
+func (s *stubBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) (*corepb.MarketPriceList, error) {
+	return nil, s.marketErr
+}
+func (s *stubBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetMarketOrderListByPair(sellTokenID, buyTokenID []byte) ([]*corepb.MarketOrder, error) {
+	return nil, s.marketErr
+}
+func (s *stubBackend) GetMarketOrderListByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetMarketPairList() (*corepb.MarketOrderPairList, error) {
+	return nil, s.marketErr
+}
+func (s *stubBackend) GetMarketPairListAt(blockNum uint64) (*corepb.MarketOrderPairList, error) {
+	return nil, nil
+}
+func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) {
+	if s.exchangeErr != nil {
+		return nil, s.exchangeErr
+	}
+	return s.exchanges, nil
+}
+func (s *stubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
+	if s.exchangeErr != nil {
+		return nil, s.exchangeErr
+	}
+	return s.exchanges, nil
+}
+func (s *stubBackend) GetExchangeByID(id int64) (*corepb.Exchange, error) {
+	if s.exchangeErr != nil {
+		return nil, s.exchangeErr
+	}
+	for _, exchange := range s.exchanges {
+		if exchange.GetExchangeId() == id {
+			return exchange, nil
+		}
+	}
+	return nil, nil
+}
+func (s *stubBackend) GetExchangeByIDAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	return s.GetExchangeByID(id)
+}
+func (s *stubBackend) GetBrokerageInfo(addr common.Address) (int64, error) { return 0, nil }
+func (s *stubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
+	return 0, nil
+}
+func (s *stubBackend) TotalTransaction() (int64, error) { return 0, nil }
+func (s *stubBackend) GetBurnTrx() (int64, error) {
+	if s.burnTrxErr != nil {
+		return 0, s.burnTrxErr
+	}
+	return s.burnTrx, nil
+}
+func (s *stubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
+	return 0, nil
+}
 func (s *stubBackend) BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
@@ -204,9 +431,28 @@ func (s *stubBackend) BuildWithdrawExpireUnfreezeTransaction(owner common.Addres
 func (s *stubBackend) BuildVoteWitnessTransaction(owner common.Address, votes map[common.Address]int64) (*corepb.Transaction, error) {
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
-func (s *stubBackend) GetBandwidthPrices() string { return "" }
-func (s *stubBackend) GetEnergyPrices() string    { return "" }
+func (s *stubBackend) GetBandwidthPrices() (string, error) {
+	if s.bandwidthErr != nil {
+		return "", s.bandwidthErr
+	}
+	return s.bandwidthPrices, nil
+}
+func (s *stubBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
+	return "", nil
+}
+func (s *stubBackend) GetEnergyPrices() (string, error) {
+	if s.energyErr != nil {
+		return "", s.energyErr
+	}
+	return s.energyPrices, nil
+}
+func (s *stubBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
+	return "", nil
+}
 func (s *stubBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
+	if s.proposalErr != nil {
+		return nil, s.proposalErr
+	}
 	if len(s.proposals) == 0 {
 		return nil, nil
 	}
@@ -219,8 +465,27 @@ func (s *stubBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.Prop
 	}
 	return s.proposals[offset:end], nil
 }
+func (s *stubBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	return s.ListProposalsPaginated(offset, limit)
+}
 func (s *stubBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
-	return nil, nil
+	if s.exchangeErr != nil {
+		return nil, s.exchangeErr
+	}
+	if len(s.exchanges) == 0 {
+		return nil, nil
+	}
+	if offset >= len(s.exchanges) {
+		return []*corepb.Exchange{}, nil
+	}
+	end := offset + limit
+	if end > len(s.exchanges) {
+		end = len(s.exchanges)
+	}
+	return s.exchanges[offset:end], nil
+}
+func (s *stubBackend) ListExchangesPaginatedAt(offset, limit int, blockNum uint64) ([]*corepb.Exchange, error) {
+	return s.ListExchangesPaginated(offset, limit)
 }
 
 // --- M5.1 PR-1: Account / permission ---
@@ -237,12 +502,36 @@ func (s *stubBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.Acco
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) GetAccountById(accountID []byte) (*types.Account, error) {
+	if s.accountIDErr != nil {
+		return nil, s.accountIDErr
+	}
+	if s.accountByID != nil {
+		return s.accountByID, nil
+	}
+	return nil, fmt.Errorf("account not found")
+}
+func (s *stubBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
+	if s.accountIDAtErr != nil {
+		return nil, s.accountIDAtErr
+	}
 	if s.accountByID != nil {
 		return s.accountByID, nil
 	}
 	return nil, fmt.Errorf("account not found")
 }
 func (s *stubBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
+	if s.accountNetErr != nil {
+		return nil, s.accountNetErr
+	}
+	if s.accountNet != nil {
+		return s.accountNet, nil
+	}
+	return nil, nil
+}
+func (s *stubBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
+	if s.accountNetAtErr != nil {
+		return nil, s.accountNetAtErr
+	}
 	if s.accountNet != nil {
 		return s.accountNet, nil
 	}
@@ -282,6 +571,9 @@ func (s *stubBackend) BuildContractTransaction(contractType corepb.Transaction_C
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
+	if s.proposalErr != nil {
+		return nil, s.proposalErr
+	}
 	for _, p := range s.proposals {
 		if p.ProposalID == id {
 			return p, nil
@@ -290,7 +582,13 @@ func (s *stubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
 	if id == 1 {
 		return &tronapi.ProposalInfo{ProposalID: 1}, nil
 	}
-	return nil, fmt.Errorf("not found")
+	return nil, fmt.Errorf("proposal %d not found", id)
+}
+func (s *stubBackend) GetProposalByIDAt(id int64, blockNum uint64) (*tronapi.ProposalInfo, error) {
+	if s.proposalAtErr != nil {
+		return nil, s.proposalAtErr
+	}
+	return s.GetProposalByID(id)
 }
 func (s *stubBackend) ValidateAddress(addr string) (bool, string) {
 	return len(addr) == 42, "test"
@@ -298,7 +596,9 @@ func (s *stubBackend) ValidateAddress(addr string) (bool, string) {
 
 // --- M8.1: confirmation-depth stubs ---
 func (s *stubBackend) SolidifiedBlockNum() uint64 { return 0 }
-func (s *stubBackend) LatestPbftBlockNum() int64  { return -1 }
+func (s *stubBackend) LatestPbftBlockNum() (int64, error) {
+	return -1, nil
+}
 
 // --- M9.7: synchronous actuator validate ---
 func (s *stubBackend) ValidateTransaction(tx *types.Transaction) error {
@@ -331,7 +631,353 @@ func postJSON(t *testing.T, url, body string) map[string]interface{} {
 	return result
 }
 
+func TestGetBlockByLimitNextRejectsInvalidRangeBeforeBackend(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "negative start", body: `{"startNum":-1,"endNum":3}`},
+		{name: "negative end", body: `{"startNum":1,"endNum":-3}`},
+		{name: "empty", body: `{"startNum":3,"endNum":3}`},
+		{name: "reversed", body: `{"startNum":4,"endNum":3}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubBackend{}
+			srv := newTestServer(t, stub)
+			defer srv.Close()
+
+			resp, err := http.Post(srv.URL+"/wallet/getblockbylimitnext", "application/json", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatalf("POST getblockbylimitnext: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+			}
+			if stub.rangeCalls != 0 {
+				t.Fatalf("GetBlocksByRange called %d times for invalid range, want 0", stub.rangeCalls)
+			}
+		})
+	}
+}
+
+func TestGetBlockByLimitNextBackendErrorReturnsEmptyList(t *testing.T) {
+	stub := &stubBackend{rangeErr: errors.New("rawdb: block 2 decode: corrupt")}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getblockbylimitnext", "application/json", strings.NewReader(`{"startNum":1,"endNum":3}`))
+	if err != nil {
+		t.Fatalf("POST getblockbylimitnext: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		Block []json.RawMessage `json:"block"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode getblockbylimitnext: %v", err)
+	}
+	if len(body.Block) != 0 {
+		t.Fatalf("block list len = %d, want 0", len(body.Block))
+	}
+	if stub.rangeCalls != 1 || stub.lastRangeStart != 1 || stub.lastRangeEnd != 3 {
+		t.Fatalf("range call = %d [%d,%d), want 1 [1,3)", stub.rangeCalls, stub.lastRangeStart, stub.lastRangeEnd)
+	}
+}
+
+func TestGetBlockByNumBackendErrorReturnsEmpty(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{blockErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getblockbynum", "application/json", strings.NewReader(`{"num":1}`))
+	if err != nil {
+		t.Fatalf("POST getblockbynum: %v", err)
+	}
+	defer resp.Body.Close()
+	assertHTTPEmptyObject(t, resp)
+}
+
+func TestGetBlockByNumNotFoundReturnsEmpty(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getblockbynum", "application/json", strings.NewReader(`{"num":1}`))
+	if err != nil {
+		t.Fatalf("POST getblockbynum: %v", err)
+	}
+	defer resp.Body.Close()
+	assertHTTPEmptyObject(t, resp)
+}
+
+func TestGetBlockByIdBackendErrorReturnsEmpty(t *testing.T) {
+	backendErr := errors.New("rawdb: cold block index corrupt")
+	srv := newTestServer(t, &stubBackend{hashErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getblockbyid", "application/json", strings.NewReader(`{"value":"aabbcc"}`))
+	if err != nil {
+		t.Fatalf("POST getblockbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	assertHTTPEmptyObject(t, resp)
+}
+
+func TestGetAccountBackendErrorReturnsInternal(t *testing.T) {
+	backendErr := errors.New("state history: cold account segment corrupt")
+	srv := newTestServer(t, &stubBackend{accountErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccount", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getaccount: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccount status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetAccountPreservesNotFoundErrorAsEmpty(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{accountErr: errors.New("account not found")})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccount", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getaccount: %v", err)
+	}
+	defer resp.Body.Close()
+	assertHTTPEmptyObject(t, resp)
+}
+
+func TestGetAccountByIdBackendErrorReturnsInternal(t *testing.T) {
+	backendErr := errors.New("state history: cold account-id index corrupt")
+	srv := newTestServer(t, &stubBackend{accountIDErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccountbyid", "application/json", strings.NewReader(`{"account_id":"user1234"}`))
+	if err != nil {
+		t.Fatalf("POST getaccountbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountbyid status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetContractBackendErrorReturnsInternal(t *testing.T) {
+	backendErr := errors.New("state latest: contract metadata corrupt")
+	srv := newTestServer(t, &stubBackend{contractErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getcontract", "application/json", strings.NewReader(`{"value":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getcontract: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getcontract status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetContractPreservesNotFoundErrorAsEmpty(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{contractErr: errors.New("contract not found")})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getcontract", "application/json", strings.NewReader(`{"value":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getcontract: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getcontract status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if strings.TrimSpace(string(body)) != "{}" {
+		t.Fatalf("getcontract body = %q, want {}", string(body))
+	}
+}
+
+func TestGetAccountBalanceTrace(t *testing.T) {
+	addr := make([]byte, common.AddressLength)
+	addr[0] = common.AddressPrefixMainnet
+	for i := 1; i < len(addr); i++ {
+		addr[i] = byte(i)
+	}
+	hash := testBytes(common.HashLength, 0x80)
+	stub := &stubBackend{
+		accountBalanceResp: &contractpb.AccountBalanceResponse{
+			Balance: 123_456,
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+				Number: 7,
+				Hash:   hash,
+			},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	body := fmt.Sprintf(`{"account_identifier":{"address":"%s"},"block_identifier":{"number":7,"hash":"%s"}}`,
+		hex.EncodeToString(addr), hex.EncodeToString(hash))
+	got := postJSON(t, srv.URL+"/wallet/getaccountbalance", body)
+	if got["balance"].(float64) != 123456 {
+		t.Fatalf("balance = %v, want 123456", got["balance"])
+	}
+	blockID := got["block_identifier"].(map[string]interface{})
+	if blockID["number"].(float64) != 7 || blockID["hash"].(string) != hex.EncodeToString(hash) {
+		t.Fatalf("block_identifier = %+v", blockID)
+	}
+	if stub.lastAccountBalanceReq == nil {
+		t.Fatal("backend was not called")
+	}
+	if hex.EncodeToString(stub.lastAccountBalanceReq.GetAccountIdentifier().GetAddress()) != hex.EncodeToString(addr) {
+		t.Fatalf("backend address = %x, want %x", stub.lastAccountBalanceReq.GetAccountIdentifier().GetAddress(), addr)
+	}
+	if stub.lastAccountBalanceReq.GetBlockIdentifier().GetNumber() != 7 ||
+		hex.EncodeToString(stub.lastAccountBalanceReq.GetBlockIdentifier().GetHash()) != hex.EncodeToString(hash) {
+		t.Fatalf("backend block id = %+v", stub.lastAccountBalanceReq.GetBlockIdentifier())
+	}
+}
+
+func TestGetAccountBalanceTraceBackendErrorReturnsInternal(t *testing.T) {
+	hash := testBytes(common.HashLength, 0x80)
+	stub := &stubBackend{
+		accountBalanceErr: errors.New("read account balance trace segment"),
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	body := fmt.Sprintf(`{"account_identifier":{"address":"4100000000000000000000000000000000000000aa"},"block_identifier":{"number":7,"hash":"%s"}}`,
+		hex.EncodeToString(hash))
+	resp, err := http.Post(srv.URL+"/wallet/getaccountbalance", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST getaccountbalance: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountbalance status = %d, want 500", resp.StatusCode)
+	}
+	if stub.lastAccountBalanceReq == nil {
+		t.Fatal("backend was not called")
+	}
+}
+
+func TestGetBlockBalanceTrace(t *testing.T) {
+	hash := testBytes(common.HashLength, 0x33)
+	stub := &stubBackend{
+		blockBalanceTrace: &contractpb.BlockBalanceTrace{
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+				Number: 8,
+				Hash:   hash,
+			},
+			Timestamp: 99_999,
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	body := fmt.Sprintf(`{"number":8,"hash":"%s"}`, hex.EncodeToString(hash))
+	got := postJSON(t, srv.URL+"/wallet/getblockbalancetrace", body)
+	if got["timestamp"].(float64) != 99999 {
+		t.Fatalf("timestamp = %v, want 99999", got["timestamp"])
+	}
+	if stub.lastBlockBalanceTraceID == nil {
+		t.Fatal("backend was not called")
+	}
+	if stub.lastBlockBalanceTraceID.GetNumber() != 8 ||
+		hex.EncodeToString(stub.lastBlockBalanceTraceID.GetHash()) != hex.EncodeToString(hash) {
+		t.Fatalf("backend block id = %+v", stub.lastBlockBalanceTraceID)
+	}
+}
+
+func TestGetBlockBalanceTraceBackendErrorReturnsInternal(t *testing.T) {
+	hash := testBytes(common.HashLength, 0x33)
+	stub := &stubBackend{
+		blockBalanceTraceErr: errors.New("read block balance trace segment"),
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	body := fmt.Sprintf(`{"number":8,"hash":"%s"}`, hex.EncodeToString(hash))
+	resp, err := http.Post(srv.URL+"/wallet/getblockbalancetrace", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST getblockbalancetrace: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getblockbalancetrace status = %d, want 500", resp.StatusCode)
+	}
+	if stub.lastBlockBalanceTraceID == nil {
+		t.Fatal("backend was not called")
+	}
+}
+
+func testBytes(n int, start byte) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = start + byte(i)
+	}
+	return out
+}
+
+func assertHTTPEmptyObject(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if strings.TrimSpace(string(body)) != "{}" {
+		t.Fatalf("body = %q, want {}", string(body))
+	}
+}
+
+func assertHTTPEmptyArray(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("body = %q, want []", string(body))
+	}
+}
+
 // --- Tests: delegation group ---
+
+func TestGetDelegatedResourceWithData(t *testing.T) {
+	stub := &stubBackend{
+		delegatedResources: []*tronapi.DelegatedResourceInfo{
+			{
+				FromAddress:               "4101",
+				ToAddress:                 "4102",
+				FrozenBalanceForBandwidth: 1000000,
+				ExpireTimeForBandwidth:    123,
+			},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getdelegatedresource",
+		`{"fromAddress":"4101","toAddress":"4102"}`)
+	list, ok := result["delegatedResource"].([]interface{})
+	if !ok || len(list) != 1 {
+		t.Fatalf("expected delegatedResource=[1 entry], got %v", result)
+	}
+}
 
 func TestGetDelegatedResourceV2WithData(t *testing.T) {
 	stub := &stubBackend{
@@ -371,6 +1017,31 @@ func TestGetDelegatedResourceV2Empty(t *testing.T) {
 	list, ok := result["delegatedResource"].([]interface{})
 	if !ok || len(list) != 0 {
 		t.Fatalf("expected delegatedResource=[], got %v", result)
+	}
+}
+
+func TestGetDelegatedResourceAccountIndex(t *testing.T) {
+	to := common.Address{0x41, 0x02}
+	from := common.Address{0x41, 0x03}
+	stub := &stubBackend{
+		legacyDelegIndex: &corepb.DelegatedResourceAccountIndex{
+			Account:      common.Address{0x41, 0x01}.Bytes(),
+			ToAccounts:   [][]byte{to.Bytes()},
+			FromAccounts: [][]byte{from.Bytes()},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getdelegatedresourceaccountindex",
+		`{"value":"4101"}`)
+	toAccounts, ok := result["toAccounts"].([]interface{})
+	if !ok || len(toAccounts) != 1 || toAccounts[0] != hex.EncodeToString(to.Bytes()) {
+		t.Fatalf("expected legacy toAccounts %x, got %v", to.Bytes(), result)
+	}
+	fromAccounts, ok := result["fromAccounts"].([]interface{})
+	if !ok || len(fromAccounts) != 1 || fromAccounts[0] != hex.EncodeToString(from.Bytes()) {
+		t.Fatalf("expected legacy fromAccounts %x, got %v", from.Bytes(), result)
 	}
 }
 
@@ -433,6 +1104,59 @@ func TestGetAvailableUnfreezeCount(t *testing.T) {
 		`{"owner_address":"4101"}`)
 	if result["count"].(float64) != 30 {
 		t.Fatalf("unexpected count: %v", result)
+	}
+}
+
+func TestGetBurnTrxAndPrices(t *testing.T) {
+	stub := &stubBackend{
+		burnTrx:         123456,
+		bandwidthPrices: "0:10,100:20",
+		energyPrices:    "0:100,200:300",
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	burn := postJSON(t, srv.URL+"/wallet/getburntrx", `{}`)
+	if burn["num"].(float64) != 123456 {
+		t.Fatalf("getburntrx = %v, want 123456", burn)
+	}
+
+	bandwidth := postJSON(t, srv.URL+"/wallet/getbandwidthprices", `{}`)
+	if bandwidth["prices"] != "0:10,100:20" {
+		t.Fatalf("getbandwidthprices = %v, want 0:10,100:20", bandwidth)
+	}
+
+	energy := postJSON(t, srv.URL+"/wallet/getenergyprices", `{}`)
+	if energy["prices"] != "0:100,200:300" {
+		t.Fatalf("getenergyprices = %v, want 0:100,200:300", energy)
+	}
+}
+
+func TestLiveDynamicPropertyEndpointsSurfaceBackendErrors(t *testing.T) {
+	backendErr := errors.New("load head dynamic properties: corrupt")
+	tests := []struct {
+		path string
+		stub *stubBackend
+	}{
+		{path: "/wallet/getchainparameters", stub: &stubBackend{chainParamsErr: backendErr}},
+		{path: "/wallet/getnextmaintenancetime", stub: &stubBackend{nextMaintErr: backendErr}},
+		{path: "/wallet/getburntrx", stub: &stubBackend{burnTrxErr: backendErr}},
+		{path: "/wallet/getbandwidthprices", stub: &stubBackend{bandwidthErr: backendErr}},
+		{path: "/wallet/getenergyprices", stub: &stubBackend{energyErr: backendErr}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			srv := newTestServer(t, tt.stub)
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(`{}`))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
 	}
 }
 
@@ -531,60 +1255,6 @@ func TestListNodes(t *testing.T) {
 	}
 }
 
-func TestGetNodeInfoIncludesSyncDiagnostics(t *testing.T) {
-	stub := &stubBackend{nodeInfo: &tronapi.NodeInfo{
-		Version:        "test-version",
-		CurrentBlock:   123,
-		LastInsertTime: 456,
-		Sync: &tronapi.SyncInfo{
-			Active:                false,
-			Paused:                true,
-			PeerCount:             16,
-			SyncPeerCount:         0,
-			TargetHead:            789,
-			AppliedTip:            124,
-			SessionBlocks:         100,
-			SessionTransactions:   200,
-			Remaining:             665,
-			Inflight:              3,
-			BufferedBlocks:        4,
-			BufferedBytes:         5000,
-			RequestedBlocks:       6,
-			RetryBlocks:           7,
-			RetainedDecodedBlocks: 8,
-			RetainedDecodedBytes:  9000,
-			PauseBlock:            125,
-			PauseTime:             "2026-07-24T00:00:00Z",
-			PauseError:            "state root mismatch",
-			LastPeerFailure:       "archive-peer: application disconnect: FETCH_FAIL",
-			LastPeerFailureTime:   "2026-07-24T00:01:00Z",
-		},
-	}}
-	srv := newTestServer(t, stub)
-	defer srv.Close()
-
-	result := postJSON(t, srv.URL+"/wallet/getnodeinfo", `{}`)
-	if result["version"] != "test-version" || result["currentBlock"] != float64(123) || result["lastInsertTime"] != float64(456) {
-		t.Fatalf("node info base fields = %v", result)
-	}
-	syncInfo, ok := result["syncInfo"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("syncInfo missing or not an object: %v", result)
-	}
-	if syncInfo["paused"] != true || syncInfo["peerCount"] != float64(16) || syncInfo["pauseBlock"] != float64(125) || syncInfo["pauseError"] != "state root mismatch" {
-		t.Fatalf("syncInfo diagnostics = %v", syncInfo)
-	}
-	if syncInfo["bufferedBlocks"] != float64(4) || syncInfo["retainedDecodedBytes"] != float64(9000) {
-		t.Fatalf("syncInfo backlog fields = %v", syncInfo)
-	}
-	if syncInfo["sessionBlocks"] != float64(100) || syncInfo["sessionTransactions"] != float64(200) {
-		t.Fatalf("syncInfo session counters = %v", syncInfo)
-	}
-	if syncInfo["lastPeerFailure"] != "archive-peer: application disconnect: FETCH_FAIL" || syncInfo["lastPeerFailureTime"] != "2026-07-24T00:01:00Z" {
-		t.Fatalf("syncInfo peer failure fields = %v", syncInfo)
-	}
-}
-
 // --- Tests: M5.1 PR-1 account/permission ---
 
 func TestCreateAccount(t *testing.T) {
@@ -679,6 +1349,42 @@ func TestGetAccountNet(t *testing.T) {
 	// protojson encodes int64 as string
 	if result["freeNetUsed"] != "100" {
 		t.Fatalf("unexpected freeNetUsed: %v", result)
+	}
+}
+
+func TestGetAccountNetSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold account net dynamic properties corrupt")
+	srv := newTestServer(t, &stubBackend{accountNetErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccountnet", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getaccountnet: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getaccountnet status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetAccountNetPreservesAccountNotFoundAsEmpty(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{accountNetErr: errors.New("account not found")})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getaccountnet", "application/json", strings.NewReader(`{"address":"4100000000000000000000000000000000000000aa"}`))
+	if err != nil {
+		t.Fatalf("POST getaccountnet: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getaccountnet status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if strings.TrimSpace(string(body)) != "{}" {
+		t.Fatalf("getaccountnet body = %q, want {}", string(body))
 	}
 }
 
@@ -866,6 +1572,66 @@ func TestGetAssetIssueListByName(t *testing.T) {
 		t.Fatalf("expected assetIssue key, got %v", result)
 	}
 }
+
+func TestAssetIssueLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head asset state root corrupt")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "by id", path: "/wallet/getassetissuebyid", body: `{"value":"1000001"}`},
+		{name: "by name", path: "/wallet/getassetissuebyname", body: `{"value":"TOKEN","visible":true}`},
+		{name: "list", path: "/wallet/getassetissuelist", body: `{}`},
+		{name: "paginated", path: "/wallet/getpaginatedassetissuelist", body: `{"offset":0,"limit":10}`},
+		{name: "by account", path: "/wallet/getassetissuebyaccount", body: `{"address":"4101000000000000000000000000000000000000000000"}`},
+		{name: "list by name", path: "/wallet/getassetissuelistbyname", body: `{"value":"TOKEN","visible":true}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{assetErr: backendErr})
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestMarketLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head market state root corrupt")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "order by id", path: "/wallet/getmarketorderbyid", body: `{"value":"order","visible":true}`},
+		{name: "orders by account", path: "/wallet/getmarketordersfromaccount", body: `{"address":"4101000000000000000000000000000000000000000000"}`},
+		{name: "price by pair", path: "/wallet/getmarketpricebypair", body: `{"sell_token_id":"sell","buy_token_id":"buy","visible":true}`},
+		{name: "order list by pair", path: "/wallet/getmarketorderlistbypair", body: `{"sell_token_id":"sell","buy_token_id":"buy","visible":true}`},
+		{name: "pair list", path: "/wallet/getmarketpairlist", body: `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{marketErr: backendErr})
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
+	}
+}
+
 func TestClearABI(t *testing.T) {
 	testTxBuilder(t, "/wallet/clearabi",
 		`{"owner_address":"4101","contract_address":"4102"}`)
@@ -957,6 +1723,22 @@ func TestGetProposalByIdNotFound(t *testing.T) {
 		t.Fatalf("expected empty object, got %v", result)
 	}
 }
+
+func TestGetProposalByIdSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold proposal segment corrupt")
+	srv := newTestServer(t, &stubBackend{proposalErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/getproposalbyid", "application/json", strings.NewReader(`{"id":42}`))
+	if err != nil {
+		t.Fatalf("POST getproposalbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("getproposalbyid status = %d, want 500", resp.StatusCode)
+	}
+}
+
 func TestGetPaginatedProposalList(t *testing.T) {
 	stub := &stubBackend{}
 	srv := newTestServer(t, stub)
@@ -964,6 +1746,196 @@ func TestGetPaginatedProposalList(t *testing.T) {
 	result := postJSON(t, srv.URL+"/wallet/getpaginatedproposallist", `{"offset":0,"limit":10}`)
 	if _, ok := result["proposal"]; !ok {
 		t.Fatalf("expected proposal key, got %v", result)
+	}
+}
+
+func TestProposalListQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("state history: cold proposal index corrupt")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "list", path: "/wallet/listproposals", body: `{}`},
+		{name: "paginated", path: "/wallet/getpaginatedproposallist", body: `{"offset":0,"limit":10}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{proposalErr: backendErr})
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestGetPaginatedNowWitnessList(t *testing.T) {
+	stub := &stubBackend{
+		witnesses: []*tronapi.WitnessInfo{
+			{Address: "000000000000000000000000000000000000000001", VoteCount: 10, URL: "w1"},
+			{Address: "000000000000000000000000000000000000000002", VoteCount: 20, URL: "w2", IsJobs: true},
+			{Address: "000000000000000000000000000000000000000003", VoteCount: 30, URL: "w3"},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getpaginatednowwitnesslist", `{"offset":1,"limit":1}`)
+	witnesses, ok := result["witnesses"].([]interface{})
+	if !ok || len(witnesses) != 1 {
+		t.Fatalf("expected one witness, got %v", result["witnesses"])
+	}
+	witness := witnesses[0].(map[string]interface{})
+	if witness["url"] != "w2" || witness["voteCount"].(float64) != 20 || witness["isJobs"] != true {
+		t.Fatalf("witness = %v, want paginated witness w2", witness)
+	}
+
+	resp, err := http.Get(srv.URL + "/wallet/getpaginatednowwitnesslist?offset=2&limit=1")
+	if err != nil {
+		t.Fatalf("GET getpaginatednowwitnesslist: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET getpaginatednowwitnesslist status = %d", resp.StatusCode)
+	}
+	var getResult struct {
+		Witnesses []tronapi.WitnessInfo `json:"witnesses"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&getResult); err != nil {
+		t.Fatalf("decode GET getpaginatednowwitnesslist: %v", err)
+	}
+	if len(getResult.Witnesses) != 1 || getResult.Witnesses[0].URL != "w3" {
+		t.Fatalf("GET witnesses = %+v, want w3", getResult.Witnesses)
+	}
+
+	resp, err = http.Get(srv.URL + "/wallet/getpaginatednowwitnesslist?offset=-1&limit=1")
+	if err != nil {
+		t.Fatalf("GET negative offset getpaginatednowwitnesslist: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("negative offset status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestGetPaginatedExchangeList(t *testing.T) {
+	stub := &stubBackend{
+		exchanges: []*corepb.Exchange{
+			{ExchangeId: 1, FirstTokenBalance: 10, SecondTokenBalance: 100},
+			{ExchangeId: 2, FirstTokenBalance: 20, SecondTokenBalance: 200},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getpaginatedexchangelist", `{"offset":1,"limit":1}`)
+	exchanges, ok := result["exchanges"].([]interface{})
+	if !ok || len(exchanges) != 1 {
+		t.Fatalf("expected one exchange, got %v", result["exchanges"])
+	}
+	exchange := exchanges[0].(map[string]interface{})
+	if exchange["exchange_id"].(float64) != 2 || exchange["first_token_balance"].(float64) != 20 {
+		t.Fatalf("exchange = %v, want paginated exchange id 2", exchange)
+	}
+
+	resp, err := http.Get(srv.URL + "/wallet/getpaginatedexchangelist?offset=0&limit=1")
+	if err != nil {
+		t.Fatalf("GET getpaginatedexchangelist: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET getpaginatedexchangelist status = %d", resp.StatusCode)
+	}
+	var getResult struct {
+		Exchanges []struct {
+			ExchangeID int64 `json:"exchange_id"`
+		} `json:"exchanges"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&getResult); err != nil {
+		t.Fatalf("decode GET getpaginatedexchangelist: %v", err)
+	}
+	if len(getResult.Exchanges) != 1 || getResult.Exchanges[0].ExchangeID != 1 {
+		t.Fatalf("GET exchanges = %+v, want exchange id 1", getResult.Exchanges)
+	}
+
+	resp, err = http.Get(srv.URL + "/wallet/getpaginatedexchangelist?offset=-1&limit=1")
+	if err != nil {
+		t.Fatalf("GET negative offset getpaginatedexchangelist: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("negative offset status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestGetExchangeByID(t *testing.T) {
+	stub := &stubBackend{
+		exchanges: []*corepb.Exchange{
+			{ExchangeId: 7, FirstTokenBalance: 70, SecondTokenBalance: 700},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getexchangebyid", `{"id":7}`)
+	if result["exchange_id"].(float64) != 7 || result["first_token_balance"].(float64) != 70 {
+		t.Fatalf("exchange = %v, want exchange 7", result)
+	}
+
+	resp, err := http.Get(srv.URL + "/wallet/getexchangebyid?value=7")
+	if err != nil {
+		t.Fatalf("GET getexchangebyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET getexchangebyid status = %d", resp.StatusCode)
+	}
+	var getResult struct {
+		ExchangeID int64 `json:"exchange_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&getResult); err != nil {
+		t.Fatalf("decode GET getexchangebyid: %v", err)
+	}
+	if getResult.ExchangeID != 7 {
+		t.Fatalf("GET exchange id = %d, want 7", getResult.ExchangeID)
+	}
+
+	result = postJSON(t, srv.URL+"/wallet/getexchangebyid", `{"id":99}`)
+	if len(result) != 0 {
+		t.Fatalf("missing exchange result = %v, want empty object", result)
+	}
+}
+
+func TestExchangeLiveQueriesSurfaceBackendError(t *testing.T) {
+	backendErr := errors.New("cold head exchange state root corrupt")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "list", path: "/wallet/listexchanges", body: `{}`},
+		{name: "paginated", path: "/wallet/getpaginatedexchangelist", body: `{"offset":0,"limit":10}`},
+		{name: "by id", path: "/wallet/getexchangebyid", body: `{"id":7}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, &stubBackend{exchangeErr: backendErr})
+			defer srv.Close()
+			resp, err := http.Post(srv.URL+tt.path, "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("POST %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", tt.path, resp.StatusCode)
+			}
+		})
 	}
 }
 
@@ -1144,6 +2116,51 @@ func TestGetTransactionReceiptById(t *testing.T) {
 	_ = result
 }
 
+func TestGetTransactionByIdSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: block 1 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{txErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/gettransactionbyid", "application/json", strings.NewReader(`{"value":"aabbcc"}`))
+	if err != nil {
+		t.Fatalf("POST gettransactionbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("gettransactionbyid status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetTransactionReceiptByIdSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: cold tx lookup corrupt")
+	srv := newTestServer(t, &stubBackend{txInfoErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/gettransactionreceiptbyid", "application/json", strings.NewReader(`{"value":"aabbcc"}`))
+	if err != nil {
+		t.Fatalf("POST gettransactionreceiptbyid: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("gettransactionreceiptbyid status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestGetTransactionInfoByBlockNumSurfacesBackendError(t *testing.T) {
+	backendErr := errors.New("rawdb: transaction info block 1 decode: corrupt")
+	srv := newTestServer(t, &stubBackend{txInfoByBlockErr: backendErr})
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/wallet/gettransactioninfobyblocknum", "application/json", strings.NewReader(`{"num":1}`))
+	if err != nil {
+		t.Fatalf("POST gettransactioninfobyblocknum: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("gettransactioninfobyblocknum status = %d, want 500", resp.StatusCode)
+	}
+}
+
 // --- Tests: M9.7 broadcastTransaction synchronous actuator.Validate ---
 
 // buildBroadcastEnvelope creates the JSON body for /wallet/broadcasttransaction.
@@ -1232,33 +2249,5 @@ func TestBroadcastTransactionValidateSuccess(t *testing.T) {
 	}
 	if result["code"] != "SUCCESS" {
 		t.Fatalf("expected code=SUCCESS, got %v", result["code"])
-	}
-}
-
-// TestGetChainParametersJavaShape pins the wire shape of
-// /wallet/getchainparameters to java-tron's: camelCase java getter keys, and
-// java's omit-zero quirk where an entry with value 0 serializes without a
-// "value" field (negative values like getRemoveThePowerOfTheGr's -1 are kept).
-func TestGetChainParametersJavaShape(t *testing.T) {
-	stub := &stubBackend{chainParams: []tronapi.ChainParameter{
-		{Key: "getEnergyFee", Value: 420},
-		{Key: "getAllowTvmBlob", Value: 0},
-		{Key: "getRemoveThePowerOfTheGr", Value: -1},
-	}}
-	srv := newTestServer(t, stub)
-	defer srv.Close()
-
-	resp, err := http.Post(srv.URL+"/wallet/getchainparameters", "application/json", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatalf("POST getchainparameters: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	want := `{"chainParameter":[{"key":"getEnergyFee","value":420},{"key":"getAllowTvmBlob"},{"key":"getRemoveThePowerOfTheGr","value":-1}]}`
-	if got := strings.TrimSpace(string(body)); got != want {
-		t.Fatalf("getchainparameters body mismatch\n got: %s\nwant: %s", got, want)
 	}
 }

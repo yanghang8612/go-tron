@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -19,11 +20,19 @@ const RewardRemark int64 = -1
 // ReadCycleReward returns the accumulated voter reward pool for a witness in
 // a given cycle. Returns 0 if absent.
 func ReadCycleReward(db ethdb.KeyValueReader, cycle int64, addr []byte) int64 {
-	data, _ := db.Get(delegRewardKey(cycle, addr, "reward"))
-	if len(data) != 8 {
+	value, ok, err := ReadCycleRewardStrict(db, cycle, addr)
+	if err != nil || !ok {
 		return 0
 	}
-	return int64(binary.BigEndian.Uint64(data))
+	return value
+}
+
+// ReadCycleRewardStrict returns the accumulated voter reward pool for a
+// witness in a given cycle and surfaces storage/corruption errors. Missing
+// rows return (0, false, nil), preserving the java-tron default for callers
+// that choose to ignore the presence flag.
+func ReadCycleRewardStrict(db ethdb.KeyValueReader, cycle int64, addr []byte) (int64, bool, error) {
+	return readRewardInt64(db, delegRewardKey(cycle, addr, "reward"), "cycle reward", 0)
 }
 
 // WriteCycleReward overwrites the voter pool for a witness in a cycle.
@@ -51,11 +60,18 @@ func AddCycleReward(db interface {
 // cycle. Returns RewardRemark (-1) if never written, matching java-tron's
 // DelegationStore.getWitnessVote sentinel.
 func ReadCycleVote(db ethdb.KeyValueReader, cycle int64, addr []byte) int64 {
-	data, _ := db.Get(delegRewardKey(cycle, addr, "vote"))
-	if len(data) != 8 {
+	value, ok, err := ReadCycleVoteStrict(db, cycle, addr)
+	if err != nil || !ok {
 		return RewardRemark
 	}
-	return int64(binary.BigEndian.Uint64(data))
+	return value
+}
+
+// ReadCycleVoteStrict returns the witness vote snapshot for a cycle and
+// surfaces storage/corruption errors. Missing rows return
+// (RewardRemark, false, nil).
+func ReadCycleVoteStrict(db ethdb.KeyValueReader, cycle int64, addr []byte) (int64, bool, error) {
+	return readRewardInt64(db, delegRewardKey(cycle, addr, "vote"), "cycle vote", RewardRemark)
 }
 
 // WriteCycleVote stores the vote snapshot for a witness in a cycle.
@@ -71,18 +87,28 @@ func WriteCycleVote(db ethdb.KeyValueWriter, cycle int64, addr []byte, v int64) 
 // boundary. Zero if never written. Uses big.Int to mirror java-tron's
 // BigInteger (VI values overflow int64 at high vote volumes × 10^18).
 func ReadWitnessVI(db ethdb.KeyValueReader, cycle int64, addr []byte) *big.Int {
-	data, _ := db.Get(delegRewardKey(cycle, addr, "vi"))
-	if len(data) == 0 {
+	vi, ok, err := ReadWitnessVIStrict(db, cycle, addr)
+	if err != nil || !ok {
 		return new(big.Int)
 	}
-	// VI is non-negative. A leading zero byte written by Java to preserve the
-	// sign is therefore safe to decode as an unsigned magnitude.
-	return new(big.Int).SetBytes(data)
+	return vi
+}
+
+// ReadWitnessVIStrict returns the accumulated VI for a witness at a cycle
+// boundary and surfaces storage errors. Empty present values are valid zeroes
+// because WriteWitnessVI stores vi.Bytes().
+func ReadWitnessVIStrict(db ethdb.KeyValueReader, cycle int64, addr []byte) (*big.Int, bool, error) {
+	data, ok, err := readPresentValue(db, delegRewardKey(cycle, addr, "vi"), "witness vi")
+	if err != nil || !ok || len(data) == 0 {
+		return new(big.Int), ok, err
+	}
+	// Java-tron uses BigInteger.toByteArray (two's-complement, big-endian,
+	// with sign bit). Mirror that format exactly.
+	return new(big.Int).SetBytes(data), true, nil
 }
 
 // EncodeJavaNonNegativeBigInteger mirrors BigInteger.toByteArray for the
-// non-negative values used by java-tron's VI stores. Java writes one zero byte
-// for zero and prepends a zero sign byte when the magnitude's high bit is set.
+// non-negative values used by java-tron's VI stores.
 func EncodeJavaNonNegativeBigInteger(value *big.Int) []byte {
 	if value == nil || value.Sign() == 0 {
 		return []byte{0}
@@ -110,11 +136,25 @@ func WriteWitnessVI(db ethdb.KeyValueWriter, cycle int64, addr []byte, vi *big.I
 // cycle. Default 20 if absent. When cycle == -1 this is the "current"
 // brokerage rate set by the UpdateBrokerage actuator.
 func ReadCycleBrokerage(db ethdb.KeyValueReader, cycle int64, addr []byte) int {
-	data, _ := db.Get(delegRewardKey(cycle, addr, "brokerage"))
-	if len(data) != 4 {
+	value, ok, err := ReadCycleBrokerageStrict(db, cycle, addr)
+	if err != nil || !ok {
 		return DefaultBrokerage
 	}
-	return int(int32(binary.BigEndian.Uint32(data)))
+	return value
+}
+
+// ReadCycleBrokerageStrict returns the brokerage rate for a witness at a cycle
+// and surfaces storage/corruption errors. Missing rows return
+// (DefaultBrokerage, false, nil).
+func ReadCycleBrokerageStrict(db ethdb.KeyValueReader, cycle int64, addr []byte) (int, bool, error) {
+	data, ok, err := readPresentValue(db, delegRewardKey(cycle, addr, "brokerage"), "cycle brokerage")
+	if err != nil || !ok {
+		return DefaultBrokerage, ok, err
+	}
+	if len(data) != 4 {
+		return DefaultBrokerage, false, fmt.Errorf("rawdb: decode cycle brokerage: length %d, want 4", len(data))
+	}
+	return int(int32(binary.BigEndian.Uint32(data))), true, nil
 }
 
 // WriteCycleBrokerage stores the brokerage rate for a witness at a cycle.
@@ -129,11 +169,17 @@ func WriteCycleBrokerage(db ethdb.KeyValueWriter, cycle int64, addr []byte, rate
 // ReadCycleAccountVote returns the voter account snapshot for a given cycle.
 // Nil if absent.
 func ReadCycleAccountVote(db ethdb.KeyValueReader, cycle int64, addr []byte) []byte {
-	data, _ := db.Get(delegRewardKey(cycle, addr, "account-vote"))
-	if len(data) == 0 {
+	data, ok, err := ReadCycleAccountVoteStrict(db, cycle, addr)
+	if err != nil || !ok || len(data) == 0 {
 		return nil
 	}
 	return data
+}
+
+// ReadCycleAccountVoteStrict returns the voter account snapshot for a given
+// cycle and surfaces storage errors. Missing rows return (nil, false, nil).
+func ReadCycleAccountVoteStrict(db ethdb.KeyValueReader, cycle int64, addr []byte) ([]byte, bool, error) {
+	return readPresentValue(db, delegRewardKey(cycle, addr, "account-vote"), "cycle account vote")
 }
 
 // WriteCycleAccountVote stores the voter account protobuf snapshot for a
@@ -146,8 +192,6 @@ func CycleRewardStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "reward")
 }
 
-// AppendCycleRewardStateKey appends CycleRewardStateKey to dst. It is the
-// allocation-free form used by execution-confined StateDB scalar accessors.
 func AppendCycleRewardStateKey(dst []byte, cycle int64, addr []byte) []byte {
 	return appendDelegRewardKey(dst, cycle, addr, "reward")
 }
@@ -156,7 +200,6 @@ func CycleVoteStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "vote")
 }
 
-// AppendCycleVoteStateKey appends CycleVoteStateKey to dst.
 func AppendCycleVoteStateKey(dst []byte, cycle int64, addr []byte) []byte {
 	return appendDelegRewardKey(dst, cycle, addr, "vote")
 }
@@ -165,7 +208,6 @@ func WitnessVIStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "vi")
 }
 
-// AppendWitnessVIStateKey appends WitnessVIStateKey to dst.
 func AppendWitnessVIStateKey(dst []byte, cycle int64, addr []byte) []byte {
 	return appendDelegRewardKey(dst, cycle, addr, "vi")
 }
@@ -174,7 +216,6 @@ func CycleBrokerageStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "brokerage")
 }
 
-// AppendCycleBrokerageStateKey appends CycleBrokerageStateKey to dst.
 func AppendCycleBrokerageStateKey(dst []byte, cycle int64, addr []byte) []byte {
 	return appendDelegRewardKey(dst, cycle, addr, "brokerage")
 }
@@ -183,7 +224,6 @@ func CycleAccountVoteStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "account-vote")
 }
 
-// AppendCycleAccountVoteStateKey appends CycleAccountVoteStateKey to dst.
 func AppendCycleAccountVoteStateKey(dst []byte, cycle int64, addr []byte) []byte {
 	return appendDelegRewardKey(dst, cycle, addr, "account-vote")
 }
@@ -192,11 +232,17 @@ func AppendCycleAccountVoteStateKey(dst []byte, cycle int64, addr []byte) []byte
 
 // ReadBeginCycle returns the voter's beginCycle cursor. Zero if unset.
 func ReadBeginCycle(db ethdb.KeyValueReader, addr []byte) int64 {
-	data, _ := db.Get(delegBeginCycleKey(addr))
-	if len(data) != 8 {
+	value, ok, err := ReadBeginCycleStrict(db, addr)
+	if err != nil || !ok {
 		return 0
 	}
-	return int64(binary.BigEndian.Uint64(data))
+	return value
+}
+
+// ReadBeginCycleStrict returns the voter's beginCycle cursor and surfaces
+// storage/corruption errors. Missing rows return (0, false, nil).
+func ReadBeginCycleStrict(db ethdb.KeyValueReader, addr []byte) (int64, bool, error) {
+	return readRewardInt64(db, delegBeginCycleKey(addr), "begin cycle", 0)
 }
 
 // WriteBeginCycle stores the voter's beginCycle cursor.
@@ -213,11 +259,17 @@ func BeginCycleStateKey(addr []byte) []byte {
 // ReadEndCycle returns the voter's endCycle cursor. Returns RewardRemark (-1)
 // if never written, matching java-tron's DelegationStore.getEndCycle sentinel.
 func ReadEndCycle(db ethdb.KeyValueReader, addr []byte) int64 {
-	data, _ := db.Get(delegEndCycleKey(addr))
-	if len(data) != 8 {
+	value, ok, err := ReadEndCycleStrict(db, addr)
+	if err != nil || !ok {
 		return RewardRemark
 	}
-	return int64(binary.BigEndian.Uint64(data))
+	return value
+}
+
+// ReadEndCycleStrict returns the voter's endCycle cursor and surfaces
+// storage/corruption errors. Missing rows return (RewardRemark, false, nil).
+func ReadEndCycleStrict(db ethdb.KeyValueReader, addr []byte) (int64, bool, error) {
+	return readRewardInt64(db, delegEndCycleKey(addr), "end cycle", RewardRemark)
 }
 
 // WriteEndCycle stores the voter's endCycle cursor.
@@ -229,4 +281,15 @@ func WriteEndCycle(db ethdb.KeyValueWriter, addr []byte, cycle int64) {
 
 func EndCycleStateKey(addr []byte) []byte {
 	return delegEndCycleKey(addr)
+}
+
+func readRewardInt64(db ethdb.KeyValueReader, key []byte, context string, missing int64) (int64, bool, error) {
+	data, ok, err := readPresentValue(db, key, context)
+	if err != nil || !ok {
+		return missing, ok, err
+	}
+	if len(data) != 8 {
+		return missing, false, fmt.Errorf("rawdb: decode %s: length %d, want 8", context, len(data))
+	}
+	return int64(binary.BigEndian.Uint64(data)), true, nil
 }

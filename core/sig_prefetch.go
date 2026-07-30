@@ -129,7 +129,7 @@ func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePre
 	// across goroutines regardless of how txs are distributed between blocks.
 	jobs := make([]signaturePrewarmJob, 0, totalTx+headerJobs)
 	for _, block := range blocks {
-		if block == nil {
+		if block == nil || block.Proto() == nil {
 			continue
 		}
 		if engine != nil {

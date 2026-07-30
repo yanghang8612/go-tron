@@ -24,17 +24,10 @@ type canonicalBlockExecution struct {
 	// parent-linkage and parent-state-root reads. Nil falls back to
 	// bc.CurrentBlock() for callers that do not plan a range.
 	parent *types.Block
-	// storedReplay means the immutable canonical block body already exists in
-	// the preserved hot/freezer chain store. The apply and metadata tails rebuild
-	// reset-derived rows but must not rewrite that large body. TxInfos records
-	// whether the canonical block-level TransactionRet is likewise already in the
-	// freezer. transactionIndexesAncient records whether a published cold index
-	// already owns the block's tx-hash locations. Any canonical import below
-	// that immutable coverage (stored replay or a later historical resync) must
-	// not repopulate tx-*.
-	storedReplay              bool
-	storedReplayTxInfos       bool
-	transactionIndexesAncient bool
+	// deferTransactionLookup is restricted to staged bulk sync. Canonical
+	// execution still writes per-block receipts; the recoverable TxLookup stage
+	// materializes reverse hash rows after the range settles.
+	deferTransactionLookup bool
 	// parentDynProps transfers ownership of the previous block's finalized
 	// dynamic properties into this block under async commit (decision-b), so
 	// execution never reads the lazily-published dynPropsCache or deep-copies the
@@ -189,17 +182,38 @@ func (p *canonicalBlockExecution) FlushLatestUpTo(cutoff int64) error {
 	return p.commit.FlushLatestUpTo(uint64(cutoff))
 }
 
+// AdvanceTransactionLookupStage records inline tx lookup completion only after
+// Finish. Bulk sync intentionally skips this: its tx- rows are rebuilt by the
+// independent TxLookup stage after the canonical range has settled, while
+// receipt-by-ID reads fall back to the durable per-block TransactionRet row.
+func (p *canonicalBlockExecution) AdvanceTransactionLookupStage(writer ethdb.KeyValueWriter, block *types.Block) error {
+	if p == nil {
+		return fmt.Errorf("canonical block execution: nil plan")
+	}
+	if block == nil {
+		return fmt.Errorf("canonical block execution: nil block")
+	}
+	if p.deferTransactionLookup {
+		return nil
+	}
+	if err := rawdb.WriteStageProgressWithHash(writer, rawdb.StageTxLookup, block.Number(), block.Hash()); err != nil {
+		return fmt.Errorf("write tx lookup stage progress: %w", err)
+	}
+	return nil
+}
+
 // canonicalRangeExecutor owns the reusable state surfaces for one canonical
 // range application. InsertBlocks, fork replay, and restart replay should all
 // enter block execution through this object so state opening, txNum planning,
 // commit-scope reuse, and per-block stage progress stay on one staged path.
 type canonicalRangeExecutor struct {
-	bc                *BlockChain
-	allowSharedCommit bool
-	storedReplay      bool
-	state             *state.StateDB
-	commit            *state.CommitScope
-	txRanges          *stateTxRangeAllocator
+	bc                     *BlockChain
+	allowSharedCommit      bool
+	stageHook              StageProgressHook
+	deferTransactionLookup bool
+	state                  *state.StateDB
+	commit                 *state.CommitScope
+	txRanges               *stateTxRangeAllocator
 	// tipBlock is the range-local tip: the block this executor last applied
 	// successfully. nil means "not yet advanced in this range" → tip() falls
 	// back to bc.CurrentBlock(). Reset/Abort clear it. With async commit off,
@@ -215,6 +229,14 @@ type canonicalRangeExecutor struct {
 }
 
 func newCanonicalRangeExecutor(bc *BlockChain, allowSharedCommit bool) *canonicalRangeExecutor {
+	return newCanonicalRangeExecutorWithStageHook(bc, allowSharedCommit, nil)
+}
+
+func newCanonicalRangeExecutorWithStageHook(bc *BlockChain, allowSharedCommit bool, hook StageProgressHook) *canonicalRangeExecutor {
+	return newCanonicalRangeExecutorWithOptions(bc, allowSharedCommit, hook, false)
+}
+
+func newCanonicalRangeExecutorWithOptions(bc *BlockChain, allowSharedCommit bool, hook StageProgressHook, deferTransactionLookup bool) *canonicalRangeExecutor {
 	depth := 1
 	if bc != nil && bc.asyncCommit {
 		depth = bc.commitDepth
@@ -224,9 +246,11 @@ func newCanonicalRangeExecutor(bc *BlockChain, allowSharedCommit bool) *canonica
 		txInfoBatches = bc.txInfoBatches
 	}
 	return &canonicalRangeExecutor{
-		bc:                bc,
-		allowSharedCommit: allowSharedCommit,
-		txInfoBatches:     txInfoBatches,
+		bc:                     bc,
+		allowSharedCommit:      allowSharedCommit,
+		stageHook:              hook,
+		deferTransactionLookup: deferTransactionLookup,
+		txInfoBatches:          txInfoBatches,
 	}
 }
 
@@ -275,20 +299,14 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		e.commit = e.state.NewCommitScope()
 	}
 	plan := &canonicalBlockExecution{
-		state:        e.state,
-		commit:       e.commit,
-		txRange:      plannedTxRange,
-		pipeline:     newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash()),
-		parent:       current,
-		storedReplay: e.storedReplay,
-		storedReplayTxInfos: e.storedReplay && rawdb.HasAncientTransactionInfos(
-			bc.chaindb, block.Number(),
-		),
-		transactionIndexesAncient: rawdb.HasAncientTransactionIndex(
-			bc.chaindb, block.Number(),
-		),
-		txInfoBatch:     e.txInfoBatches.acquire(),
-		txInfoBatchPool: e.txInfoBatches,
+		state:                  e.state,
+		commit:                 e.commit,
+		txRange:                plannedTxRange,
+		pipeline:               newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash(), e.stageHook),
+		parent:                 current,
+		deferTransactionLookup: e.deferTransactionLookup,
+		txInfoBatch:            e.txInfoBatches.acquire(),
+		txInfoBatchPool:        e.txInfoBatches,
 	}
 	defer func() {
 		if !plan.txInfoBatchHandedOff {
@@ -326,6 +344,18 @@ func (e *canonicalRangeExecutor) Reset() {
 	e.txRanges = nil
 	e.tipBlock = nil
 	e.lastDynProps = nil
+}
+
+// FlushLatest makes the shared scope's latest-domain writes visible through the
+// current block-buffer layers without closing the scope or its domain
+// transaction. Synchronous staged sync calls this at each local chunk boundary
+// so it retains ordinary InsertBlocks visibility while reusing the executor for
+// the following chunk.
+func (e *canonicalRangeExecutor) FlushLatest() error {
+	if e == nil || e.commit == nil {
+		return nil
+	}
+	return e.commit.FlushLatest()
 }
 
 func (e *canonicalRangeExecutor) Abort() error {

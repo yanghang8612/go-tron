@@ -81,19 +81,14 @@ func ReadStateAccountLatest(db ethdb.KeyValueReader, owner common.Address) ([]by
 // hydration path decodes the RLP envelope immediately and retains only the
 // decoder-owned fields.
 func ReadStateAccountLatestNoCopy(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
-	var (
-		value []byte
-		err   error
-	)
 	if reader, ok := db.(cachedNoCopyStateAccountLatestReader); ok {
-		value, err = reader.GetNoCopyCachedStateAccountLatest(stateAccountLatestPrefix, owner.AccountID())
-	} else {
-		value, err = readStateNoCopyCached(db, stateAccountLatestKey(owner))
+		value, err := reader.GetNoCopyCachedStateAccountLatest(stateAccountLatestPrefix, owner.AccountID())
+		if err != nil {
+			return verifyStateReadMiss(db, stateAccountLatestKey(owner), fmt.Sprintf("state account latest for %s", owner.Hex()), err)
+		}
+		return value, true, nil
 	}
-	if err != nil {
-		return nil, false, nil
-	}
-	return value, true, nil
+	return readStatePresentNoCopy(db, stateAccountLatestKey(owner), fmt.Sprintf("state account latest for %s", owner.Hex()))
 }
 
 func DeleteStateAccountLatest(db ethdb.KeyValueWriter, owner common.Address) error {

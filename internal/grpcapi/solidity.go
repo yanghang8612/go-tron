@@ -2,6 +2,10 @@ package grpcapi
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
+	"strconv"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
@@ -12,9 +16,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// SolidityServer implements the WalletSolidity gRPC service. Its block-returning
-// methods are clamped to the latest solidified block; all state queries delegate
-// to the same backend as the main Wallet service (state is monotonic).
+// SolidityServer implements the WalletSolidity gRPC service. Block and state
+// reads are clamped to the latest solidified block so they share the same
+// archive/as-of path as the HTTP /walletsolidity endpoints.
 // Shielded and unimplemented-in-wallet methods return codes.Unimplemented via the
 // embedded stub.
 type SolidityServer struct {
@@ -34,11 +38,115 @@ func (s *SolidityServer) solidNum() uint64 {
 
 // ── Block queries (solid-bounded) ──────────────────────────────────────────────
 
+func (s *SolidityServer) GetBlock(_ context.Context, in *apipb.BlockReq) (*apipb.BlockExtention, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	idOrNum := strings.TrimSpace(in.GetIdOrNum())
+	if idOrNum == "" || strings.EqualFold(idOrNum, "latest") {
+		return s.getSolidBlockByNumber(s.solidNum(), in.GetDetail())
+	}
+	if strings.EqualFold(idOrNum, "earliest") {
+		return s.getSolidBlockByNumber(0, in.GetDetail())
+	}
+
+	if hash, hashBytes, ok, err := parseGRPCBlockID(idOrNum); ok || err != nil {
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid block id")
+		}
+		num, ok := blockNumberFromGRPCBlockIDBytes(hashBytes)
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "invalid block id")
+		}
+		if num > s.solidNum() {
+			return nil, status.Error(codes.NotFound, "block not yet solidified")
+		}
+		block, err := s.backend.GetBlockByHash(hash)
+		if err != nil {
+			if blockLookupNotFound(err) {
+				return nil, status.Error(codes.NotFound, "block not found")
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if block == nil {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		if block.Number() > s.solidNum() {
+			return nil, status.Error(codes.NotFound, "block not yet solidified")
+		}
+		return blockToExtentionWithDetail(block, in.GetDetail()), nil
+	}
+
+	num, err := parseGRPCBlockNumber(idOrNum)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid block number")
+	}
+	return s.getSolidBlockByNumber(num, in.GetDetail())
+}
+
+func (s *SolidityServer) getSolidBlockByNumber(num uint64, detail bool) (*apipb.BlockExtention, error) {
+	if num > s.solidNum() {
+		return nil, status.Error(codes.NotFound, "block not yet solidified")
+	}
+	block, err := s.backend.GetBlockByNumber(num)
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
+		return nil, status.Error(codes.NotFound, "block not found")
+	}
+	return blockToExtentionWithDetail(block, detail), nil
+}
+
+func parseGRPCBlockID(value string) (common.Hash, []byte, bool, error) {
+	raw := value
+	if strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X") {
+		raw = raw[2:]
+	}
+	if len(raw) != common.HashLength*2 {
+		return common.Hash{}, nil, false, nil
+	}
+	hashBytes, err := hex.DecodeString(raw)
+	if err != nil {
+		return common.Hash{}, nil, true, err
+	}
+	return common.BytesToHash(hashBytes), hashBytes, true, nil
+}
+
+func parseGRPCBlockNumber(value string) (uint64, error) {
+	raw := value
+	base := 10
+	if strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X") {
+		raw = raw[2:]
+		base = 16
+	}
+	if raw == "" {
+		return 0, strconv.ErrSyntax
+	}
+	return strconv.ParseUint(raw, base, 64)
+}
+
+func blockNumberFromGRPCBlockIDBytes(hashBytes []byte) (uint64, bool) {
+	if len(hashBytes) < 8 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(hashBytes[:8]), true
+}
+
 func (s *SolidityServer) GetNowBlock(_ context.Context, _ *apipb.EmptyMessage) (*corepb.Block, error) {
 	// solidNum()==0 on a fresh chain → looks up genesis block (#0), matching
 	// java-tron's WalletSolidityApi which returns the solidified-DB head.
 	block, err := s.backend.GetBlockByNumber(s.solidNum())
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "solid block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "solid block not found")
 	}
 	return block.Proto(), nil
@@ -46,7 +154,13 @@ func (s *SolidityServer) GetNowBlock(_ context.Context, _ *apipb.EmptyMessage) (
 
 func (s *SolidityServer) GetNowBlock2(_ context.Context, _ *apipb.EmptyMessage) (*apipb.BlockExtention, error) {
 	block, err := s.backend.GetBlockByNumber(s.solidNum())
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "solid block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "solid block not found")
 	}
 	return blockToExtention(block), nil
@@ -60,7 +174,13 @@ func (s *SolidityServer) GetBlockByNum(_ context.Context, in *apipb.NumberMessag
 		return nil, status.Error(codes.NotFound, "block not yet solidified")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return block.Proto(), nil
@@ -74,7 +194,13 @@ func (s *SolidityServer) GetBlockByNum2(_ context.Context, in *apipb.NumberMessa
 		return nil, status.Error(codes.NotFound, "block not yet solidified")
 	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return blockToExtention(block), nil
@@ -98,8 +224,17 @@ func (s *SolidityServer) GetTransactionCountByBlockNum(_ context.Context, in *ap
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
+	if uint64(in.Num) > s.solidNum() {
+		return nil, status.Error(codes.NotFound, "block not yet solidified")
+	}
 	block, err := s.backend.GetBlockByNumber(uint64(in.Num))
-	if err != nil || block == nil {
+	if err != nil {
+		if blockLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "block not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if block == nil {
 		return nil, status.Error(codes.NotFound, "block not found")
 	}
 	return &apipb.NumberMessage{Num: int64(len(block.Transactions()))}, nil
@@ -112,8 +247,14 @@ func (s *SolidityServer) GetAccount(_ context.Context, in *corepb.Account) (*cor
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Address)
-	acc, err := s.backend.GetAccount(addr)
-	if err != nil || acc == nil {
+	acc, err := s.backend.GetAccountAt(addr, s.solidNum())
+	if err != nil {
+		if accountLookupNotFound(err) {
+			return &corepb.Account{}, nil
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if acc == nil {
 		return &corepb.Account{}, nil
 	}
 	return acc.Proto(), nil
@@ -125,8 +266,27 @@ func (s *SolidityServer) GetAccountById(_ context.Context, in *corepb.Account) (
 	}
 	if len(in.Address) > 0 {
 		addr := common.BytesToAddress(in.Address)
-		acc, err := s.backend.GetAccount(addr)
-		if err != nil || acc == nil {
+		acc, err := s.backend.GetAccountAt(addr, s.solidNum())
+		if err != nil {
+			if accountLookupNotFound(err) {
+				return &corepb.Account{}, nil
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if acc == nil {
+			return &corepb.Account{}, nil
+		}
+		return acc.Proto(), nil
+	}
+	if len(in.AccountId) > 0 {
+		acc, err := s.backend.GetAccountByIdAt(in.AccountId, s.solidNum())
+		if err != nil {
+			if accountLookupNotFound(err) {
+				return &corepb.Account{}, nil
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if acc == nil {
 			return &corepb.Account{}, nil
 		}
 		return acc.Proto(), nil
@@ -137,31 +297,44 @@ func (s *SolidityServer) GetAccountById(_ context.Context, in *corepb.Account) (
 // ── Witness / asset queries ────────────────────────────────────────────────────
 
 func (s *SolidityServer) ListWitnesses(_ context.Context, _ *apipb.EmptyMessage) (*apipb.WitnessList, error) {
-	witnesses, err := s.backend.ListWitnesses()
+	witnesses, err := s.backend.ListWitnessesAt(s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	result := make([]*corepb.Witness, len(witnesses))
-	for i, w := range witnesses {
-		result[i] = &corepb.Witness{
-			Address:   common.FromHex(w.Address),
-			VoteCount: w.VoteCount,
-			Url:       w.URL,
-			IsJobs:    w.IsJobs,
-		}
+	return witnessListFromInfos(witnesses), nil
+}
+
+func (s *SolidityServer) GetPaginatedNowWitnessList(_ context.Context, in *apipb.PaginatedMessage) (*apipb.WitnessList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	return &apipb.WitnessList{Witnesses: result}, nil
+	witnesses, err := s.backend.ListWitnessesAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	page, err := paginateWitnessInfos(witnesses, in.Offset, in.Limit)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return witnessListFromInfos(page), nil
 }
 
 func (s *SolidityServer) GetAssetIssueList(_ context.Context, _ *apipb.EmptyMessage) (*apipb.AssetIssueList, error) {
-	return &apipb.AssetIssueList{AssetIssue: s.backend.GetAssetIssueList()}, nil
+	assets, err := s.backend.GetAssetIssueListAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.AssetIssueList{AssetIssue: assets}, nil
 }
 
 func (s *SolidityServer) GetPaginatedAssetIssueList(_ context.Context, in *apipb.PaginatedMessage) (*apipb.AssetIssueList, error) {
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	assets := s.backend.GetAssetIssueListPaginated(int(in.Offset), int(in.Limit))
+	assets, err := s.backend.GetAssetIssueListPaginatedAt(int(in.Offset), int(in.Limit), s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &apipb.AssetIssueList{AssetIssue: assets}, nil
 }
 
@@ -169,11 +342,28 @@ func (s *SolidityServer) GetAssetIssueByName(_ context.Context, in *apipb.BytesM
 	if in == nil || len(in.Value) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "asset name required")
 	}
-	ac := s.backend.GetAssetIssueByName(in.Value)
+	ac, err := s.backend.GetAssetIssueByNameAt(in.Value, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if ac == nil {
 		return nil, status.Error(codes.NotFound, "asset not found")
 	}
 	return ac, nil
+}
+
+func (s *SolidityServer) GetAssetIssueListByName(_ context.Context, in *apipb.BytesMessage) (*apipb.AssetIssueList, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "asset name required")
+	}
+	ac, err := s.backend.GetAssetIssueByNameAt(in.Value, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if ac == nil {
+		return &apipb.AssetIssueList{}, nil
+	}
+	return &apipb.AssetIssueList{AssetIssue: []*contractpb.AssetIssueContract{ac}}, nil
 }
 
 func (s *SolidityServer) GetAssetIssueById(_ context.Context, in *apipb.BytesMessage) (*contractpb.AssetIssueContract, error) {
@@ -187,7 +377,10 @@ func (s *SolidityServer) GetAssetIssueById(_ context.Context, in *apipb.BytesMes
 		}
 		id = id*10 + int64(b-'0')
 	}
-	ac := s.backend.GetAssetIssueByID(id)
+	ac, err := s.backend.GetAssetIssueByIDAt(id, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if ac == nil {
 		return nil, status.Error(codes.NotFound, "asset not found")
 	}
@@ -196,35 +389,49 @@ func (s *SolidityServer) GetAssetIssueById(_ context.Context, in *apipb.BytesMes
 
 // ── Delegation queries ─────────────────────────────────────────────────────────
 
+func (s *SolidityServer) GetDelegatedResource(_ context.Context, in *apipb.DelegatedResourceMessage) (*apipb.DelegatedResourceList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	from := common.BytesToAddress(in.FromAddress)
+	to := common.BytesToAddress(in.ToAddress)
+	infos, err := s.backend.GetDelegatedResourceAt(from, to, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.DelegatedResourceList{
+		DelegatedResource: delegatedResourcesFromInfos(in.FromAddress, in.ToAddress, infos),
+	}, nil
+}
+
 func (s *SolidityServer) GetDelegatedResourceV2(_ context.Context, in *apipb.DelegatedResourceMessage) (*apipb.DelegatedResourceList, error) {
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
 	from := common.BytesToAddress(in.FromAddress)
 	to := common.BytesToAddress(in.ToAddress)
-	infos, err := s.backend.GetDelegatedResourceV2(from, to)
+	infos, err := s.backend.GetDelegatedResourceV2At(from, to, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if len(infos) == 0 {
-		return &apipb.DelegatedResourceList{}, nil
-	}
-	resources := make([]*corepb.DelegatedResource, 0, len(infos))
-	for range infos {
-		resources = append(resources, &corepb.DelegatedResource{
-			From: in.FromAddress,
-			To:   in.ToAddress,
-		})
-	}
-	for i, info := range infos {
-		resources[i].FrozenBalanceForBandwidth = info.FrozenBalanceForBandwidth
-		resources[i].FrozenBalanceForEnergy = info.FrozenBalanceForEnergy
-		resources[i].ExpireTimeForBandwidth = info.ExpireTimeForBandwidth
-		resources[i].ExpireTimeForEnergy = info.ExpireTimeForEnergy
-	}
 	return &apipb.DelegatedResourceList{
-		DelegatedResource: resources,
+		DelegatedResource: delegatedResourcesFromInfos(in.FromAddress, in.ToAddress, infos),
 	}, nil
+}
+
+func (s *SolidityServer) GetDelegatedResourceAccountIndex(_ context.Context, in *apipb.BytesMessage) (*corepb.DelegatedResourceAccountIndex, error) {
+	if in == nil || len(in.Value) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "address required")
+	}
+	addr := common.BytesToAddress(in.Value)
+	idx, err := s.backend.GetDelegatedResourceAccountIndexAt(addr, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if idx == nil {
+		return &corepb.DelegatedResourceAccountIndex{Account: in.Value}, nil
+	}
+	return idx, nil
 }
 
 func (s *SolidityServer) GetDelegatedResourceAccountIndexV2(_ context.Context, in *apipb.BytesMessage) (*corepb.DelegatedResourceAccountIndex, error) {
@@ -232,7 +439,7 @@ func (s *SolidityServer) GetDelegatedResourceAccountIndexV2(_ context.Context, i
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	idx, err := s.backend.GetDelegatedResourceAccountIndexV2(addr)
+	idx, err := s.backend.GetDelegatedResourceAccountIndexV2At(addr, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -251,18 +458,14 @@ func (s *SolidityServer) GetCanDelegatedMaxSize(_ context.Context, in *apipb.Can
 		return nil, status.Error(codes.InvalidArgument, "owner address required")
 	}
 	addr := common.BytesToAddress(in.OwnerAddress)
-	info, err := canDelegateWithPQ(s.backend, addr, corepb.ResourceCode(in.Type), in.GetPqScheme())
+	info, err := s.backend.CanDelegateResourceAt(addr, 0, corepb.ResourceCode(in.Type), s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	if info == nil {
 		return &apipb.CanDelegatedMaxSizeResponseMessage{}, nil
 	}
-	maxSize := info.CanDelegateSize
-	if maxSize < 1_000_000 {
-		maxSize = 0
-	}
-	return &apipb.CanDelegatedMaxSizeResponseMessage{MaxSize: maxSize}, nil
+	return &apipb.CanDelegatedMaxSizeResponseMessage{MaxSize: info.CanDelegateSize}, nil
 }
 
 func (s *SolidityServer) GetAvailableUnfreezeCount(_ context.Context, in *apipb.GetAvailableUnfreezeCountRequestMessage) (*apipb.GetAvailableUnfreezeCountResponseMessage, error) {
@@ -270,7 +473,7 @@ func (s *SolidityServer) GetAvailableUnfreezeCount(_ context.Context, in *apipb.
 		return nil, status.Error(codes.InvalidArgument, "owner address required")
 	}
 	addr := common.BytesToAddress(in.OwnerAddress)
-	info, err := s.backend.GetAvailableUnfreezeCount(addr)
+	info, err := s.backend.GetAvailableUnfreezeCountAt(addr, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -285,7 +488,7 @@ func (s *SolidityServer) GetCanWithdrawUnfreezeAmount(_ context.Context, in *api
 		return nil, status.Error(codes.InvalidArgument, "owner address required")
 	}
 	addr := common.BytesToAddress(in.OwnerAddress)
-	info, err := s.backend.GetCanWithdrawUnfreezeAmount(addr, in.Timestamp)
+	info, err := s.backend.GetCanWithdrawUnfreezeAmountAt(addr, in.Timestamp, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -298,11 +501,26 @@ func (s *SolidityServer) GetCanWithdrawUnfreezeAmount(_ context.Context, in *api
 // ── Exchange queries ───────────────────────────────────────────────────────────
 
 func (s *SolidityServer) ListExchanges(_ context.Context, _ *apipb.EmptyMessage) (*apipb.ExchangeList, error) {
-	exchanges, err := s.backend.ListExchanges()
+	exchanges, err := s.backend.ListExchangesAt(s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &apipb.ExchangeList{Exchanges: exchanges}, nil
+}
+
+func (s *SolidityServer) GetExchangeById(_ context.Context, in *apipb.BytesMessage) (*corepb.Exchange, error) {
+	id, err := parseExchangeIDMessage(in)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	exchange, err := s.backend.GetExchangeByIDAt(id, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if exchange == nil {
+		return nil, status.Error(codes.NotFound, "exchange not found")
+	}
+	return exchange, nil
 }
 
 // ── Transaction queries ────────────────────────────────────────────────────────
@@ -312,8 +530,19 @@ func (s *SolidityServer) GetTransactionById(_ context.Context, in *apipb.BytesMe
 		return nil, status.Error(codes.InvalidArgument, "tx hash required")
 	}
 	hash := common.BytesToHash(in.Value)
+	if ok, err := s.transactionWithinSolid(hash); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	} else if !ok {
+		return nil, status.Error(codes.NotFound, "transaction not found")
+	}
 	tx, err := s.backend.GetTransactionByID(hash)
-	if err != nil || tx == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "transaction not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if tx == nil {
 		return nil, status.Error(codes.NotFound, "transaction not found")
 	}
 	return tx, nil
@@ -324,11 +553,33 @@ func (s *SolidityServer) GetTransactionInfoById(_ context.Context, in *apipb.Byt
 		return nil, status.Error(codes.InvalidArgument, "tx hash required")
 	}
 	hash := common.BytesToHash(in.Value)
+	if ok, err := s.transactionWithinSolid(hash); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	} else if !ok {
+		return nil, status.Error(codes.NotFound, "transaction info not found")
+	}
 	info, err := s.backend.GetTransactionInfoByID(hash)
-	if err != nil || info == nil {
+	if err != nil {
+		if transactionLookupNotFound(err) {
+			return nil, status.Error(codes.NotFound, "transaction info not found")
+		}
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if info == nil {
 		return nil, status.Error(codes.NotFound, "transaction info not found")
 	}
 	return info, nil
+}
+
+func (s *SolidityServer) transactionWithinSolid(hash common.Hash) (bool, error) {
+	blockNum, ok, err := s.backend.GetTransactionBlockNumByID(hash)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	return blockNum <= s.solidNum(), nil
 }
 
 // ── Reward / brokerage ────────────────────────────────────────────────────────
@@ -338,7 +589,7 @@ func (s *SolidityServer) GetRewardInfo(_ context.Context, in *apipb.BytesMessage
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	info, err := s.backend.GetReward(addr)
+	info, err := s.backend.GetRewardAt(addr, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -353,7 +604,11 @@ func (s *SolidityServer) GetBrokerageInfo(_ context.Context, in *apipb.BytesMess
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	return &apipb.NumberMessage{Num: s.backend.GetBrokerageInfo(addr)}, nil
+	rate, err := s.backend.GetBrokerageInfoAt(addr, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: rate}, nil
 }
 
 // ── Contract execution ─────────────────────────────────────────────────────────
@@ -364,7 +619,7 @@ func (s *SolidityServer) TriggerConstantContract(_ context.Context, in *contract
 	}
 	owner := common.BytesToAddress(in.OwnerAddress)
 	contract := common.BytesToAddress(in.ContractAddress)
-	result, err := s.backend.TriggerConstantContract(owner, contract, in.Data, 30_000_000)
+	result, err := s.backend.TriggerConstantContractAt(owner, contract, in.Data, 30_000_000, s.solidNum())
 	ext := &apipb.TransactionExtention{
 		Result: &apipb.Return{Result: err == nil},
 	}
@@ -384,7 +639,7 @@ func (s *SolidityServer) EstimateEnergy(_ context.Context, in *contractpb.Trigge
 	}
 	owner := common.BytesToAddress(in.OwnerAddress)
 	contract := common.BytesToAddress(in.ContractAddress)
-	energy, err := s.backend.EstimateEnergy(owner, contract, in.Data)
+	energy, err := s.backend.EstimateEnergyAt(owner, contract, in.Data, s.solidNum())
 	if err != nil {
 		return &apipb.EstimateEnergyMessage{
 			Result: &apipb.Return{Result: false, Message: []byte(err.Error())},
@@ -402,7 +657,10 @@ func (s *SolidityServer) GetMarketOrderById(_ context.Context, in *apipb.BytesMe
 	if in == nil || len(in.Value) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "order id required")
 	}
-	order := s.backend.GetMarketOrderByID(in.Value)
+	order, err := s.backend.GetMarketOrderByIDAt(in.Value, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if order == nil {
 		return nil, status.Error(codes.NotFound, "order not found")
 	}
@@ -414,7 +672,10 @@ func (s *SolidityServer) GetMarketOrderByAccount(_ context.Context, in *apipb.By
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	orders := s.backend.GetMarketOrdersByAccount(addr)
+	orders, err := s.backend.GetMarketOrdersByAccountAt(addr, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &corepb.MarketOrderList{Orders: orders}, nil
 }
 
@@ -422,23 +683,60 @@ func (s *SolidityServer) GetMarketPriceByPair(_ context.Context, in *corepb.Mark
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	pl := s.backend.GetMarketPriceByPair(in.SellTokenId, in.BuyTokenId)
+	pl, err := s.backend.GetMarketPriceByPairAt(in.SellTokenId, in.BuyTokenId, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if pl == nil {
 		return &corepb.MarketPriceList{}, nil
 	}
 	return pl, nil
 }
 
+func (s *SolidityServer) GetMarketOrderListByPair(_ context.Context, in *corepb.MarketOrderPair) (*corepb.MarketOrderList, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	orders, err := s.backend.GetMarketOrderListByPairAt(in.SellTokenId, in.BuyTokenId, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &corepb.MarketOrderList{Orders: orders}, nil
+}
+
+func (s *SolidityServer) GetMarketPairList(_ context.Context, _ *apipb.EmptyMessage) (*corepb.MarketOrderPairList, error) {
+	pairs, err := s.backend.GetMarketPairListAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if pairs == nil {
+		return &corepb.MarketOrderPairList{}, nil
+	}
+	return pairs, nil
+}
+
 // ── Price history ──────────────────────────────────────────────────────────────
 
 func (s *SolidityServer) GetBandwidthPrices(_ context.Context, _ *apipb.EmptyMessage) (*apipb.PricesResponseMessage, error) {
-	return &apipb.PricesResponseMessage{Prices: s.backend.GetBandwidthPrices()}, nil
+	prices, err := s.backend.GetBandwidthPricesAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.PricesResponseMessage{Prices: prices}, nil
 }
 
 func (s *SolidityServer) GetEnergyPrices(_ context.Context, _ *apipb.EmptyMessage) (*apipb.PricesResponseMessage, error) {
-	return &apipb.PricesResponseMessage{Prices: s.backend.GetEnergyPrices()}, nil
+	prices, err := s.backend.GetEnergyPricesAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.PricesResponseMessage{Prices: prices}, nil
 }
 
 func (s *SolidityServer) GetBurnTrx(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NumberMessage, error) {
-	return &apipb.NumberMessage{Num: s.backend.GetBurnTrx()}, nil
+	burned, err := s.backend.GetBurnTrxAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: burned}, nil
 }

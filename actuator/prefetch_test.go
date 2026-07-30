@@ -1,0 +1,625 @@
+package actuator
+
+import (
+	"bytes"
+	"testing"
+
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+)
+
+func TestPrefetchKeysForTransferDedupesAccountAndContractMetadata(t *testing.T) {
+	owner := makeTestAddr(0x01)
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferContract, &contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    owner.Bytes(),
+		Amount:       1,
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(owner))
+	if len(keys) != 2 {
+		t.Fatalf("len(keys) = %d, want 2 deduplicated keys: %#v", len(keys), keys)
+	}
+}
+
+func TestPrefetchKeysForTriggerSmartContract(t *testing.T) {
+	owner := makeTestAddr(0x02)
+	contract := makeTestAddr(0x03)
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_TriggerSmartContract, &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner.Bytes(),
+		ContractAddress: contract.Bytes(),
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(contract))
+	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(contract))
+	assertPrefetchHas(t, keys, state.ContractCodePrefetchKey(contract))
+	assertPrefetchHas(t, keys, state.ContractOriginAccountPrefetchKey(contract))
+	assertPrefetchHas(t, keys, state.AccountNameIndexPrefetchKey([]byte("Blackhole")))
+}
+
+func TestPrefetchKeysForContractSettingsWarmOriginAccount(t *testing.T) {
+	owner := makeTestAddr(0x30)
+	contract := makeTestAddr(0x31)
+	tests := []struct {
+		name string
+		typ  corepb.Transaction_Contract_ContractType
+		msg  proto.Message
+	}{
+		{
+			name: "update setting",
+			typ:  corepb.Transaction_Contract_UpdateSettingContract,
+			msg: &contractpb.UpdateSettingContract{
+				OwnerAddress:    owner.Bytes(),
+				ContractAddress: contract.Bytes(),
+			},
+		},
+		{
+			name: "update energy limit",
+			typ:  corepb.Transaction_Contract_UpdateEnergyLimitContract,
+			msg: &contractpb.UpdateEnergyLimitContract{
+				OwnerAddress:    owner.Bytes(),
+				ContractAddress: contract.Bytes(),
+			},
+		},
+		{
+			name: "clear abi",
+			typ:  corepb.Transaction_Contract_ClearABIContract,
+			msg: &contractpb.ClearABIContract{
+				OwnerAddress:    owner.Bytes(),
+				ContractAddress: contract.Bytes(),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newPrefetchTestTx(t, tt.typ, tt.msg)
+			keys := PrefetchKeysFor(tx)
+			assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+			assertPrefetchHas(t, keys, state.AccountPrefetchKey(contract))
+			assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(contract))
+			assertPrefetchHas(t, keys, state.ContractOriginAccountPrefetchKey(contract))
+		})
+	}
+}
+
+func TestPrefetchKeysForTransferAssetSystemAssetRows(t *testing.T) {
+	owner := makeTestAddr(0x21)
+	to := makeTestAddr(0x22)
+	assetName := []byte("1000001")
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferAssetContract, &contractpb.TransferAssetContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    to.Bytes(),
+		AssetName:    assetName,
+		Amount:       1,
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(to))
+	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(to))
+	assertPrefetchHas(t, keys, state.AssetIssueByNamePrefetchKey(assetName))
+	assertPrefetchHas(t, keys, state.AssetNameIndexPrefetchKey(assetName))
+	assertPrefetchHas(t, keys, state.AssetIssuePrefetchKey(1_000_001))
+}
+
+func TestPrefetchKeysForCreateSmartContract(t *testing.T) {
+	owner := makeTestAddr(0x04)
+	origin := makeTestAddr(0x05)
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_CreateSmartContract, &contractpb.CreateSmartContract{
+		OwnerAddress: owner.Bytes(),
+		NewContract: &contractpb.SmartContract{
+			OriginAddress: origin.Bytes(),
+		},
+	})
+	created := generateContractAddress(tx, owner)
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(origin))
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(created))
+	assertPrefetchHas(t, keys, state.ContractMetadataPrefetchKey(created))
+	assertPrefetchHas(t, keys, state.AccountNameIndexPrefetchKey([]byte("Blackhole")))
+}
+
+func TestPrefetchKeysForShieldedTransferSystemRows(t *testing.T) {
+	from := makeTestAddr(0x28)
+	to := makeTestAddr(0x29)
+	anchor := bytes.Repeat([]byte{0xaa}, 32)
+	nullifier := bytes.Repeat([]byte{0xbb}, 32)
+	commitment := bytes.Repeat([]byte{0xcc}, 32)
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_ShieldedTransferContract, &contractpb.ShieldedTransferContract{
+		TransparentFromAddress: from.Bytes(),
+		TransparentToAddress:   to.Bytes(),
+		SpendDescription: []*contractpb.SpendDescription{{
+			Anchor:    anchor,
+			Nullifier: nullifier,
+		}},
+		ReceiveDescription: []*contractpb.ReceiveDescription{{
+			NoteCommitment: commitment,
+		}},
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(from))
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(to))
+	assertPrefetchHas(t, keys, state.ShieldedZKProofResultPrefetchKey(tx.Hash().Bytes()))
+	assertPrefetchHas(t, keys, state.ShieldedMerkleAnchorPrefetchKey(anchor))
+	assertPrefetchHas(t, keys, state.ShieldedNullifierPrefetchKey(nullifier))
+	assertPrefetchHas(t, keys, state.ShieldedNoteCommitmentCountPrefetchKey())
+}
+
+func TestPrefetchKeysForAssetIssueSystemAssetRows(t *testing.T) {
+	owner := makeTestAddr(0x23)
+	name := []byte("MYTOKEN")
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_AssetIssueContract, &contractpb.AssetIssueContract{
+		OwnerAddress: owner.Bytes(),
+		Name:         name,
+		TotalSupply:  1,
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.AssetOwnerIndexPrefetchKey(owner.Bytes()))
+	assertPrefetchHas(t, keys, state.AssetIssueByNamePrefetchKey(name))
+	assertPrefetchHas(t, keys, state.AssetNameIndexPrefetchKey(name))
+}
+
+func TestPrefetchKeysForAccountMetadataIndexes(t *testing.T) {
+	owner := makeTestAddr(0x27)
+
+	nameTx := newPrefetchTestTx(t, corepb.Transaction_Contract_AccountUpdateContract, &contractpb.AccountUpdateContract{
+		OwnerAddress: owner.Bytes(),
+		AccountName:  []byte("alice"),
+	})
+	nameKeys := PrefetchKeysFor(nameTx)
+	assertPrefetchHas(t, nameKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, nameKeys, state.AccountNameIndexPrefetchKey([]byte("alice")))
+
+	idTx := newPrefetchTestTx(t, corepb.Transaction_Contract_SetAccountIdContract, &contractpb.SetAccountIdContract{
+		OwnerAddress: owner.Bytes(),
+		AccountId:    []byte("USER1234"),
+	})
+	idKeys := PrefetchKeysFor(idTx)
+	assertPrefetchHas(t, idKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, idKeys, state.AccountIDIndexPrefetchKey([]byte("user1234")))
+}
+
+func TestPrefetchKeysForWitnessGovernanceRows(t *testing.T) {
+	owner := makeTestAddr(0x32)
+	witness := makeTestAddr(0x33)
+
+	voteTx := newPrefetchTestTx(t, corepb.Transaction_Contract_VoteWitnessContract, &contractpb.VoteWitnessContract{
+		OwnerAddress: owner.Bytes(),
+		Votes: []*contractpb.VoteWitnessContract_Vote{{
+			VoteAddress: witness.Bytes(),
+			VoteCount:   1,
+		}},
+	})
+	voteKeys := PrefetchKeysFor(voteTx)
+	assertPrefetchHas(t, voteKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, voteKeys, state.AccountPrefetchKey(witness))
+	assertPrefetchHas(t, voteKeys, state.WitnessCapsulePrefetchKey(witness))
+	assertPrefetchHas(t, voteKeys, state.PendingVotesPrefetchKey(owner))
+	assertPrefetchHas(t, voteKeys, state.PendingVotesIndexPrefetchKey())
+	assertPrefetchHas(t, voteKeys, state.RewardBeginCyclePrefetchKey(owner))
+	assertPrefetchHas(t, voteKeys, state.RewardEndCyclePrefetchKey(owner))
+
+	createTx := newPrefetchTestTx(t, corepb.Transaction_Contract_WitnessCreateContract, &contractpb.WitnessCreateContract{
+		OwnerAddress: owner.Bytes(),
+	})
+	createKeys := PrefetchKeysFor(createTx)
+	assertPrefetchHas(t, createKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, createKeys, state.WitnessCapsulePrefetchKey(owner))
+	assertPrefetchHas(t, createKeys, state.WitnessIndexPrefetchKey())
+
+	updateTx := newPrefetchTestTx(t, corepb.Transaction_Contract_WitnessUpdateContract, &contractpb.WitnessUpdateContract{
+		OwnerAddress: owner.Bytes(),
+	})
+	updateKeys := PrefetchKeysFor(updateTx)
+	assertPrefetchHas(t, updateKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, updateKeys, state.WitnessCapsulePrefetchKey(owner))
+
+	brokerageTx := newPrefetchTestTx(t, corepb.Transaction_Contract_UpdateBrokerageContract, &contractpb.UpdateBrokerageContract{
+		OwnerAddress: owner.Bytes(),
+	})
+	brokerageKeys := PrefetchKeysFor(brokerageTx)
+	assertPrefetchHas(t, brokerageKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, brokerageKeys, state.WitnessCapsulePrefetchKey(owner))
+	assertPrefetchHas(t, brokerageKeys, state.WitnessBrokeragePrefetchKey(owner))
+
+	proposalCreateTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ProposalCreateContract, &contractpb.ProposalCreateContract{
+		OwnerAddress: owner.Bytes(),
+	})
+	proposalCreateKeys := PrefetchKeysFor(proposalCreateTx)
+	assertPrefetchHas(t, proposalCreateKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, proposalCreateKeys, state.WitnessCapsulePrefetchKey(owner))
+	assertPrefetchHas(t, proposalCreateKeys, state.ProposalIndexPrefetchKey())
+
+	proposalApproveTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ProposalApproveContract, &contractpb.ProposalApproveContract{
+		OwnerAddress: owner.Bytes(),
+		ProposalId:   7,
+	})
+	proposalApproveKeys := PrefetchKeysFor(proposalApproveTx)
+	assertPrefetchHas(t, proposalApproveKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, proposalApproveKeys, state.WitnessCapsulePrefetchKey(owner))
+	assertPrefetchHas(t, proposalApproveKeys, state.ProposalPrefetchKey(7))
+
+	proposalDeleteTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ProposalDeleteContract, &contractpb.ProposalDeleteContract{
+		OwnerAddress: owner.Bytes(),
+		ProposalId:   7,
+	})
+	proposalDeleteKeys := PrefetchKeysFor(proposalDeleteTx)
+	assertPrefetchHas(t, proposalDeleteKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, proposalDeleteKeys, state.ProposalPrefetchKey(7))
+}
+
+func TestPrefetchKeysForDelegateResourceSystemRows(t *testing.T) {
+	owner := makeTestAddr(0x06)
+	receiver := makeTestAddr(0x07)
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_DelegateResourceContract, &contractpb.DelegateResourceContract{
+		OwnerAddress:    owner.Bytes(),
+		ReceiverAddress: receiver.Bytes(),
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(receiver))
+	assertPrefetchHas(t, keys, systemDelegationPrefetchKey(rawdb.DelegatedResourceV2StateKey(owner, receiver, false)))
+	assertPrefetchHas(t, keys, systemDelegationPrefetchKey(rawdb.DelegatedResourceV2StateKey(owner, receiver, true)))
+	assertPrefetchHas(t, keys, systemDelegationPrefetchKey(rawdb.DelegationIndexStateKey(owner)))
+}
+
+func TestPrefetchKeysForUnfreezeVoteRows(t *testing.T) {
+	owner := makeTestAddr(0x0a)
+	receiver := makeTestAddr(0x0b)
+
+	unfreezeTx := newPrefetchTestTx(t, corepb.Transaction_Contract_UnfreezeBalanceContract, &contractpb.UnfreezeBalanceContract{
+		OwnerAddress:    owner.Bytes(),
+		ReceiverAddress: receiver.Bytes(),
+	})
+	unfreezeKeys := PrefetchKeysFor(unfreezeTx)
+	assertPrefetchHas(t, unfreezeKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeKeys, state.AccountPrefetchKey(receiver))
+	assertPrefetchHas(t, unfreezeKeys, systemDelegationPrefetchKey(rawdb.DelegatedResourceStateKey(owner, receiver)))
+	assertPrefetchHas(t, unfreezeKeys, state.PendingVotesPrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeKeys, state.PendingVotesIndexPrefetchKey())
+	assertPrefetchHas(t, unfreezeKeys, state.RewardBeginCyclePrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeKeys, state.RewardEndCyclePrefetchKey(owner))
+
+	unfreezeV2Tx := newPrefetchTestTx(t, corepb.Transaction_Contract_UnfreezeBalanceV2Contract, &contractpb.UnfreezeBalanceV2Contract{
+		OwnerAddress: owner.Bytes(),
+	})
+	unfreezeV2Keys := PrefetchKeysFor(unfreezeV2Tx)
+	assertPrefetchHas(t, unfreezeV2Keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeV2Keys, state.PendingVotesPrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeV2Keys, state.PendingVotesIndexPrefetchKey())
+	assertPrefetchHas(t, unfreezeV2Keys, state.RewardBeginCyclePrefetchKey(owner))
+	assertPrefetchHas(t, unfreezeV2Keys, state.RewardEndCyclePrefetchKey(owner))
+}
+
+func TestPrefetchKeysForWithdrawBalanceRewardCursorRows(t *testing.T) {
+	owner := makeTestAddr(0x34)
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_WithdrawBalanceContract, &contractpb.WithdrawBalanceContract{
+		OwnerAddress: owner.Bytes(),
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.RewardBeginCyclePrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.RewardEndCyclePrefetchKey(owner))
+}
+
+func TestPrefetchKeysForMarketAndExchangeAssetRows(t *testing.T) {
+	owner := makeTestAddr(0x24)
+	sellToken := []byte("1000002")
+	marketTx := newPrefetchTestTx(t, corepb.Transaction_Contract_MarketSellAssetContract, &contractpb.MarketSellAssetContract{
+		OwnerAddress:      owner.Bytes(),
+		SellTokenId:       sellToken,
+		SellTokenQuantity: 1,
+		BuyTokenId:        []byte("_"),
+		BuyTokenQuantity:  1,
+	})
+
+	marketKeys := PrefetchKeysFor(marketTx)
+	assertPrefetchHas(t, marketKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, marketKeys, state.MarketAccountOrderPrefetchKey(owner.Bytes()))
+	assertPrefetchHas(t, marketKeys, state.AssetIssueByNamePrefetchKey(sellToken))
+	assertPrefetchHas(t, marketKeys, state.AssetNameIndexPrefetchKey(sellToken))
+	assertPrefetchHas(t, marketKeys, state.AssetIssuePrefetchKey(1_000_002))
+	assertPrefetchHas(t, marketKeys, state.MarketPriceListPrefetchKey(sellToken, []byte("_")))
+	assertPrefetchHas(t, marketKeys, state.MarketPairPriceCountPrefetchKey(sellToken, []byte("_")))
+	assertPrefetchHas(t, marketKeys, state.MarketOrderBookPrefetchKey(sellToken, []byte("_"), rawdb.PriceKey(1, 1)))
+	assertPrefetchHas(t, marketKeys, state.MarketPriceListPrefetchKey([]byte("_"), sellToken))
+	assertPrefetchHas(t, marketKeys, state.MarketMatchOrdersPrefetchKey(sellToken, []byte("_"), 1, 1))
+	assertPrefetchMissing(t, marketKeys, state.AssetIssueByNamePrefetchKey([]byte("_")))
+	assertPrefetchMissing(t, marketKeys, state.AssetNameIndexPrefetchKey([]byte("_")))
+
+	firstToken := []byte("MYTOKEN")
+	secondToken := []byte("1000003")
+	exchangeTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ExchangeCreateContract, &contractpb.ExchangeCreateContract{
+		OwnerAddress:       owner.Bytes(),
+		FirstTokenId:       firstToken,
+		FirstTokenBalance:  1,
+		SecondTokenId:      secondToken,
+		SecondTokenBalance: 1,
+	})
+
+	exchangeKeys := PrefetchKeysFor(exchangeTx)
+	assertPrefetchHas(t, exchangeKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, exchangeKeys, state.AssetIssueByNamePrefetchKey(firstToken))
+	assertPrefetchHas(t, exchangeKeys, state.AssetNameIndexPrefetchKey(firstToken))
+	assertPrefetchHas(t, exchangeKeys, state.AssetIssueByNamePrefetchKey(secondToken))
+	assertPrefetchHas(t, exchangeKeys, state.AssetNameIndexPrefetchKey(secondToken))
+	assertPrefetchHas(t, exchangeKeys, state.AssetIssuePrefetchKey(1_000_003))
+
+	injectTx := newPrefetchTestTx(t, corepb.Transaction_Contract_ExchangeInjectContract, &contractpb.ExchangeInjectContract{
+		OwnerAddress: owner.Bytes(),
+		ExchangeId:   7,
+		TokenId:      secondToken,
+		Quant:        1,
+	})
+
+	injectKeys := PrefetchKeysFor(injectTx)
+	assertPrefetchHas(t, injectKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, injectKeys, state.ExchangePrefetchKey(7))
+	assertPrefetchHas(t, injectKeys, state.ExchangeV2PrefetchKey(7))
+	assertPrefetchHas(t, injectKeys, state.ExchangeTokenAssetsPrefetchKey(7))
+	assertPrefetchHas(t, injectKeys, state.AssetIssueByNamePrefetchKey(secondToken))
+	assertPrefetchHas(t, injectKeys, state.AssetNameIndexPrefetchKey(secondToken))
+	assertPrefetchHas(t, injectKeys, state.AssetIssuePrefetchKey(1_000_003))
+
+	orderID := []byte("order-1")
+	cancelTx := newPrefetchTestTx(t, corepb.Transaction_Contract_MarketCancelOrderContract, &contractpb.MarketCancelOrderContract{
+		OwnerAddress: owner.Bytes(),
+		OrderId:      orderID,
+	})
+
+	cancelKeys := PrefetchKeysFor(cancelTx)
+	assertPrefetchHas(t, cancelKeys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, cancelKeys, state.MarketAccountOrderPrefetchKey(owner.Bytes()))
+	assertPrefetchHas(t, cancelKeys, state.MarketOrderPrefetchKey(orderID))
+}
+
+func TestPrefetchKeysForMarketRowsSkipsInvalidPriceKey(t *testing.T) {
+	owner := makeTestAddr(0x25)
+	sellToken := []byte("1000004")
+	buyToken := []byte("1000005")
+	tx := newPrefetchTestTx(t, corepb.Transaction_Contract_MarketSellAssetContract, &contractpb.MarketSellAssetContract{
+		OwnerAddress:      owner.Bytes(),
+		SellTokenId:       sellToken,
+		SellTokenQuantity: 0,
+		BuyTokenId:        buyToken,
+		BuyTokenQuantity:  0,
+	})
+
+	keys := PrefetchKeysFor(tx)
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+	assertPrefetchHas(t, keys, state.MarketPriceListPrefetchKey(sellToken, buyToken))
+	assertPrefetchHas(t, keys, state.MarketPairPriceCountPrefetchKey(sellToken, buyToken))
+	assertPrefetchHas(t, keys, state.MarketPriceListPrefetchKey(buyToken, sellToken))
+	assertPrefetchMissing(t, keys, state.MarketOrderBookPrefetchKey(sellToken, buyToken, rawdb.PriceKey(1, 1)))
+}
+
+func TestPrefetchKeysForOwnerIssuedAssetRows(t *testing.T) {
+	owner := makeTestAddr(0x26)
+	tests := []struct {
+		name string
+		typ  corepb.Transaction_Contract_ContractType
+		msg  proto.Message
+	}{
+		{
+			name: "update asset",
+			typ:  corepb.Transaction_Contract_UpdateAssetContract,
+			msg: &contractpb.UpdateAssetContract{
+				OwnerAddress: owner.Bytes(),
+			},
+		},
+		{
+			name: "unfreeze asset",
+			typ:  corepb.Transaction_Contract_UnfreezeAssetContract,
+			msg: &contractpb.UnfreezeAssetContract{
+				OwnerAddress: owner.Bytes(),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys := PrefetchKeysFor(newPrefetchTestTx(t, tt.typ, tt.msg))
+			assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+			assertPrefetchHas(t, keys, state.OwnerIssuedAssetRowsPrefetchKey(owner))
+		})
+	}
+}
+
+func TestPrefetchKeysForLegacyBlackholeFeeAccount(t *testing.T) {
+	owner := makeTestAddr(0x35)
+	other := makeTestAddr(0x36)
+	blackhole := state.AccountPrefetchKey(params.BlackholeAddress)
+
+	tests := []struct {
+		name string
+		typ  corepb.Transaction_Contract_ContractType
+		msg  proto.Message
+	}{
+		{
+			name: "account create",
+			typ:  corepb.Transaction_Contract_AccountCreateContract,
+			msg: &contractpb.AccountCreateContract{
+				OwnerAddress:   owner.Bytes(),
+				AccountAddress: other.Bytes(),
+			},
+		},
+		{
+			name: "asset issue",
+			typ:  corepb.Transaction_Contract_AssetIssueContract,
+			msg: &contractpb.AssetIssueContract{
+				OwnerAddress: owner.Bytes(),
+				Name:         []byte("FEEASSET"),
+			},
+		},
+		{
+			name: "witness create",
+			typ:  corepb.Transaction_Contract_WitnessCreateContract,
+			msg: &contractpb.WitnessCreateContract{
+				OwnerAddress: owner.Bytes(),
+			},
+		},
+		{
+			name: "account permission update",
+			typ:  corepb.Transaction_Contract_AccountPermissionUpdateContract,
+			msg: &contractpb.AccountPermissionUpdateContract{
+				OwnerAddress: owner.Bytes(),
+			},
+		},
+		{
+			name: "exchange create",
+			typ:  corepb.Transaction_Contract_ExchangeCreateContract,
+			msg: &contractpb.ExchangeCreateContract{
+				OwnerAddress:  owner.Bytes(),
+				FirstTokenId:  []byte("1000010"),
+				SecondTokenId: []byte("_"),
+			},
+		},
+		{
+			name: "market sell",
+			typ:  corepb.Transaction_Contract_MarketSellAssetContract,
+			msg: &contractpb.MarketSellAssetContract{
+				OwnerAddress: owner.Bytes(),
+				SellTokenId:  []byte("1000011"),
+				BuyTokenId:   []byte("_"),
+			},
+		},
+		{
+			name: "market cancel",
+			typ:  corepb.Transaction_Contract_MarketCancelOrderContract,
+			msg: &contractpb.MarketCancelOrderContract{
+				OwnerAddress: owner.Bytes(),
+				OrderId:      []byte("order-fee"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys := PrefetchKeysFor(newPrefetchTestTx(t, tt.typ, tt.msg))
+			assertPrefetchHas(t, keys, state.AccountPrefetchKey(owner))
+			assertPrefetchHas(t, keys, blackhole)
+		})
+	}
+
+	memoTx := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferContract, &contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    other.Bytes(),
+	})
+	memoTx.Proto().RawData.Data = []byte("memo")
+	assertPrefetchHas(t, PrefetchKeysFor(memoTx), blackhole)
+
+	multiSigTx := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferContract, &contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    other.Bytes(),
+	})
+	multiSigTx.Proto().Signature = [][]byte{make([]byte, 65), make([]byte, 65)}
+	assertPrefetchHas(t, PrefetchKeysFor(multiSigTx), blackhole)
+
+	plainTransfer := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferContract, &contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    other.Bytes(),
+	})
+	assertPrefetchMissing(t, PrefetchKeysFor(plainTransfer), blackhole)
+}
+
+func TestPrefetchKeysForMalformedOrInvalidInputs(t *testing.T) {
+	if keys := PrefetchKeysFor(nil); len(keys) != 0 {
+		t.Fatalf("nil tx keys = %#v, want none", keys)
+	}
+
+	txWithoutContract := types.NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{}})
+	if keys := PrefetchKeysFor(txWithoutContract); len(keys) != 0 {
+		t.Fatalf("tx without contract keys = %#v, want none", keys)
+	}
+
+	malformed := types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{
+			Type: corepb.Transaction_Contract_TransferContract,
+		}}},
+	})
+	if keys := PrefetchKeysFor(malformed); len(keys) != 0 {
+		t.Fatalf("malformed tx keys = %#v, want none", keys)
+	}
+
+	invalidPrefix := makeTestAddr(0x08)
+	invalidPrefix[0] = 0xa0
+	validTo := makeTestAddr(0x09)
+	invalidAddrTx := newPrefetchTestTx(t, corepb.Transaction_Contract_TransferContract, &contractpb.TransferContract{
+		OwnerAddress: invalidPrefix.Bytes(),
+		ToAddress:    validTo.Bytes(),
+		Amount:       1,
+	})
+	keys := PrefetchKeysFor(invalidAddrTx)
+	assertPrefetchMissing(t, keys, state.AccountPrefetchKey(invalidPrefix))
+	assertPrefetchHas(t, keys, state.AccountPrefetchKey(validTo))
+}
+
+func newPrefetchTestTx(t *testing.T, typ corepb.Transaction_Contract_ContractType, msg proto.Message) *types.Transaction {
+	t.Helper()
+	param, err := anypb.New(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp: 1,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      typ,
+				Parameter: param,
+			}},
+		},
+	})
+}
+
+func systemDelegationPrefetchKey(key []byte) state.PrefetchKey {
+	return state.AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key)
+}
+
+func assertPrefetchHas(t *testing.T, keys []state.PrefetchKey, want state.PrefetchKey) {
+	t.Helper()
+	if !prefetchKeySliceContains(keys, want) {
+		t.Fatalf("missing prefetch key %#v in %#v", want, keys)
+	}
+}
+
+func assertPrefetchMissing(t *testing.T, keys []state.PrefetchKey, want state.PrefetchKey) {
+	t.Helper()
+	if prefetchKeySliceContains(keys, want) {
+		t.Fatalf("unexpected prefetch key %#v in %#v", want, keys)
+	}
+}
+
+func prefetchKeySliceContains(keys []state.PrefetchKey, want state.PrefetchKey) bool {
+	for _, got := range keys {
+		if got.Kind == want.Kind &&
+			got.Owner == want.Owner &&
+			got.Domain == want.Domain &&
+			got.Slot == want.Slot &&
+			got.Generation == want.Generation &&
+			got.HasGeneration == want.HasGeneration &&
+			bytes.Equal(got.Key, want.Key) {
+			return true
+		}
+	}
+	return false
+}

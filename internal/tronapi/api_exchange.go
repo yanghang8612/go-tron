@@ -3,13 +3,147 @@ package tronapi
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 func (api *API) listExchanges(w http.ResponseWriter, r *http.Request) {
-	exchanges, err := api.backend.ListExchanges()
+	api.handleListExchanges(w, r, nil)
+}
+
+func (api *API) getPaginatedExchangeList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedExchangeList(w, r, nil)
+}
+
+func (api *API) getExchangeByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetExchangeByID(w, r, nil)
+}
+
+func (api *API) handleListExchanges(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var (
+		exchanges []*corepb.Exchange
+		err       error
+	)
+	if boundFn == nil {
+		exchanges, err = api.backend.ListExchanges()
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		exchanges, err = api.backend.ListExchangesAt(blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var list []map[string]any
+	for _, e := range exchanges {
+		list = append(list, marshalMessage(e.ProtoReflect()))
+	}
+	if list == nil {
+		list = []map[string]any{}
+	}
+	data, _ := json.Marshal(map[string]any{"exchanges": list})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) handleGetExchangeByID(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		idStr = r.URL.Query().Get("value")
+	}
+	if idStr == "" {
+		var body struct {
+			ID    int64  `json:"id"`
+			Value string `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			if body.ID != 0 {
+				idStr = strconv.FormatInt(body.ID, 10)
+			} else {
+				idStr = body.Value
+			}
+		}
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid exchange id", http.StatusBadRequest)
+		return
+	}
+	var exchange *corepb.Exchange
+	if boundFn == nil {
+		exchange, err = api.backend.GetExchangeByID(id)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		exchange, err = api.backend.GetExchangeByIDAt(id, blockNum)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if exchange == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+	writeTronJSON(w, exchange)
+}
+
+func (api *API) handleGetPaginatedExchangeList(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
+	var body struct {
+		Offset int `json:"offset"`
+		Limit  int `json:"limit"`
+	}
+	if r.Method == http.MethodGet {
+		if v := r.URL.Query().Get("offset"); v != "" {
+			offset, err := strconv.Atoi(v)
+			if err != nil {
+				http.Error(w, "invalid offset", http.StatusBadRequest)
+				return
+			}
+			body.Offset = offset
+		}
+		if v := r.URL.Query().Get("limit"); v != "" {
+			limit, err := strconv.Atoi(v)
+			if err != nil {
+				http.Error(w, "invalid limit", http.StatusBadRequest)
+				return
+			}
+			body.Limit = limit
+		}
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+	}
+	if body.Limit <= 0 {
+		body.Limit = 20
+	}
+	if body.Offset < 0 {
+		http.Error(w, "invalid offset", http.StatusBadRequest)
+		return
+	}
+	var (
+		exchanges []*corepb.Exchange
+		err       error
+	)
+	if boundFn == nil {
+		exchanges, err = api.backend.ListExchangesPaginated(body.Offset, body.Limit)
+	} else {
+		blockNum, ok := resolveBound(w, boundFn)
+		if !ok {
+			return
+		}
+		exchanges, err = api.backend.ListExchangesPaginatedAt(body.Offset, body.Limit, blockNum)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

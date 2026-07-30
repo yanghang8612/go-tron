@@ -111,9 +111,9 @@ func WriteStateTxRange(db ethdb.KeyValueWriter, blockNum uint64, blockHash commo
 }
 
 func ReadStateTxRange(db ethdb.KeyValueReader, blockNum uint64) (*StateTxRange, bool, error) {
-	data, err := db.Get(stateTxRangeKey(blockNum))
-	if err != nil {
-		return nil, false, nil
+	data, ok, err := readPresentValue(db, stateTxRangeKey(blockNum), fmt.Sprintf("state tx range for block %d", blockNum))
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	var row StateTxRange
 	if err := rlp.DecodeBytes(data, &row); err != nil {
@@ -171,14 +171,12 @@ func WriteStateDomainChangeRow(db ethdb.KeyValueWriter, change *StateDomainChang
 	if err := validateStateDomainChange(change); err != nil {
 		return err
 	}
-	// RLP encoding is synchronous and produces an owned output buffer, so
-	// cloning Key/Prev/Next here only duplicates potentially large account
-	// envelopes without protecting the database write from aliasing.
-	data, err := rlp.EncodeToBytes(change)
+	c := cloneStateDomainChange(change)
+	data, err := rlp.EncodeToBytes(c)
 	if err != nil {
 		return err
 	}
-	return db.Put(stateChangeSetKey(change.BlockNum, change.Seq), data)
+	return db.Put(stateChangeSetKey(c.BlockNum, c.Seq), data)
 }
 
 // WriteStateDomainChangeInverseIndex writes the latest-key -> block index for
@@ -205,12 +203,12 @@ func validateStateDomainChange(change *StateDomainChange) error {
 		return err
 	}
 	if change.PrevExists {
-		if err := validateStateDomainChangeValue(change, change.Prev); err != nil {
+		if _, err := stateDomainChangeCommitmentValue(change, change.Prev); err != nil {
 			return err
 		}
 	}
 	if change.NextExists {
-		if err := validateStateDomainChangeValue(change, change.Next); err != nil {
+		if _, err := stateDomainChangeCommitmentValue(change, change.Next); err != nil {
 			return err
 		}
 	}
@@ -218,15 +216,15 @@ func validateStateDomainChange(change *StateDomainChange) error {
 }
 
 func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*StateDomainChange, bool, error) {
-	data, err := db.Get(stateChangeSetKey(blockNum, seq))
-	if err != nil {
-		return nil, false, nil
+	data, ok, err := readPresentValue(db, stateChangeSetKey(blockNum, seq), fmt.Sprintf("state domain change for block %d seq %d", blockNum, seq))
+	if err != nil || !ok {
+		return nil, ok, err
 	}
-	row := new(StateDomainChange)
-	if err := rlp.DecodeBytes(data, row); err != nil {
+	var row StateDomainChange
+	if err := rlp.DecodeBytes(data, &row); err != nil {
 		return nil, false, err
 	}
-	return row, true, nil
+	return cloneStateDomainChange(&row), true, nil
 }
 
 func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
@@ -238,13 +236,11 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 		if !bytes.HasPrefix(key, prefix) {
 			continue
 		}
-		// Allocate one decoded row per iteration. RLP owns the decoded byte
-		// slices, so callbacks may retain the row without another deep copy.
-		row := new(StateDomainChange)
-		if err := rlp.DecodeBytes(it.Value(), row); err != nil {
+		var row StateDomainChange
+		if err := rlp.DecodeBytes(it.Value(), &row); err != nil {
 			return err
 		}
-		cont, err := fn(row)
+		cont, err := fn(cloneStateDomainChange(&row))
 		if err != nil {
 			return err
 		}
@@ -511,35 +507,17 @@ func stateDomainChangeLatestKey(change *StateDomainChange) ([]byte, error) {
 	}
 }
 
-func validateStateDomainChangeValue(change *StateDomainChange, value []byte) error {
+func stateDomainChangeCommitmentValue(change *StateDomainChange, value []byte) ([]byte, error) {
 	switch change.FlatDomain {
 	case StateFlatDomainAccountLatest:
-		return nil
-	case StateFlatDomainKVLatest:
-		return nil
-	case StateFlatDomainKVGeneration:
-		if len(value) != 8 {
-			return fmt.Errorf("rawdb: bad KV generation change value length %d", len(value))
-		}
-		return nil
-	default:
-		return fmt.Errorf("rawdb: unknown state flat domain %d", uint8(change.FlatDomain))
-	}
-}
-
-// stateDomainChangeCommitmentValue converts a decoded history pre-image into
-// the value committed by the physical latest domain. Account and generation
-// values already have the correct encoding and can transfer their owned slice;
-// KV values need the latest-domain presence prefix.
-func stateDomainChangeCommitmentValue(change *StateDomainChange, value []byte) ([]byte, error) {
-	if err := validateStateDomainChangeValue(change, value); err != nil {
-		return nil, err
-	}
-	switch change.FlatDomain {
-	case StateFlatDomainAccountLatest, StateFlatDomainKVGeneration:
-		return value, nil
+		return append([]byte(nil), value...), nil
 	case StateFlatDomainKVLatest:
 		return EncodeStateKVLatestValue(value), nil
+	case StateFlatDomainKVGeneration:
+		if len(value) != 8 {
+			return nil, fmt.Errorf("rawdb: bad KV generation change value length %d", len(value))
+		}
+		return append([]byte(nil), value...), nil
 	default:
 		return nil, fmt.Errorf("rawdb: unknown state flat domain %d", uint8(change.FlatDomain))
 	}
@@ -1015,4 +993,15 @@ func readStateKVLatestPrefixInto(db stateKVHistoryReader, owner common.Address, 
 		entries[string(key)] = append([]byte(nil), value...)
 		return true, nil
 	})
+}
+
+func cloneStateDomainChange(in *StateDomainChange) *StateDomainChange {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Key = append([]byte(nil), in.Key...)
+	out.Prev = append([]byte(nil), in.Prev...)
+	out.Next = append([]byte(nil), in.Next...)
+	return &out
 }

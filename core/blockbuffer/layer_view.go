@@ -647,7 +647,7 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, secon
 			// or two siblings; assuming the maximum fan-out of 16 made every sparse
 			// block allocate a mostly empty map. A dense fold still supplies 16 and
 			// preserves the single-allocation behaviour of the original fast path.
-			capacity := len(s.writes) + counts[shard]*reserveBatches + s.pendingOwnedPuts
+			capacity := len(s.writes) + counts[shard]*reserveBatches + int(s.pendingOwnedPuts)
 			reserved := make(map[string][]byte, capacity)
 			for key, value := range s.writes {
 				reserved[key] = value

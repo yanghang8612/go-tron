@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -56,14 +57,25 @@ func decodeAddressList(data []byte) []tcommon.Address {
 	return out
 }
 
-// appendAddressListEncoded performs the read-modify-write used by the votes
-// index without first materialising every address. Existing voters are the hot
-// path during an epoch: scan the immutable encoded bytes directly and allocate
-// nothing when addr is already present. A new voter needs only the final encoded
-// value, instead of a decoded []Address, its append growth, and the re-encoding.
-// Malformed, empty, and trailing-byte inputs retain decodeAddressList's exact
-// semantics: invalid/zero-count data becomes a one-entry list, while trailing
-// bytes after a valid declared count are discarded on rewrite.
+func decodeAddressListStrict(label string, data []byte) ([]tcommon.Address, error) {
+	if len(data) < 4 {
+		return nil, fmt.Errorf("%s: length %d shorter than 4-byte count", label, len(data))
+	}
+	count := uint64(binary.BigEndian.Uint32(data[:4]))
+	expected := uint64(4) + count*uint64(tcommon.AddressLength)
+	if uint64(len(data)) != expected {
+		return nil, fmt.Errorf("%s: length %d, want %d for %d addresses", label, len(data), expected, count)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	out := make([]tcommon.Address, int(count))
+	for i := range out {
+		out[i] = tcommon.BytesToAddress(data[4+i*tcommon.AddressLength : 4+(i+1)*tcommon.AddressLength])
+	}
+	return out, nil
+}
+
 func appendAddressListEncoded(data []byte, addr tcommon.Address) (encoded []byte, found bool) {
 	count := 0
 	valid := false
@@ -81,7 +93,6 @@ func appendAddressListEncoded(data []byte, addr tcommon.Address) (encoded []byte
 			}
 		}
 	}
-
 	encoded = make([]byte, 4+(count+1)*tcommon.AddressLength)
 	binary.BigEndian.PutUint32(encoded[:4], uint32(count+1))
 	if valid {
@@ -91,22 +102,32 @@ func appendAddressListEncoded(data []byte, addr tcommon.Address) (encoded []byte
 	return encoded, false
 }
 
-// readAddressList resolves a witness-schedule key, propagating the KV error so
-// callers that do read-modify-write (AppendWitnessIndex) never truncate on a
-// transient trie error.
-func (s *StateDB) readAddressList(key []byte) ([]tcommon.Address, error) {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemWitnessSchedule, key)
-	if err != nil || !ok {
-		return nil, err
+func (s *StateDB) readAddressListStrict(key []byte, label string) ([]tcommon.Address, bool, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.SystemWitnessSchedule, key)
+	if err != nil {
+		return nil, false, err
 	}
-	return decodeAddressList(raw), nil
+	if !ok {
+		return nil, false, nil
+	}
+	addrs, err := decodeAddressListStrict(label, raw)
+	if err != nil {
+		return nil, true, err
+	}
+	return addrs, true, nil
 }
 
 // ReadActiveWitnesses returns the rooted active witness list (nil if unset). A
 // KV error is swallowed to nil, matching the prior rawdb reader and 3b's Load.
 func (s *StateDB) ReadActiveWitnesses() []tcommon.Address {
-	v, _ := s.readAddressList(witnessScheduleActiveKey)
+	v, _, _ := s.ReadActiveWitnessesStrict()
 	return v
+}
+
+// ReadActiveWitnessesStrict returns the rooted active witness list and
+// distinguishes absent rows from unreadable or malformed rooted data.
+func (s *StateDB) ReadActiveWitnessesStrict() ([]tcommon.Address, bool, error) {
+	return s.readAddressListStrict(witnessScheduleActiveKey, "active witness list")
 }
 
 // WriteActiveWitnesses stages the active witness list into the system-KV. The
@@ -119,8 +140,14 @@ func (s *StateDB) WriteActiveWitnesses(addrs []tcommon.Address) error {
 // ReadWitnessIndex returns the rooted witness index (nil if unset). KV error
 // swallowed to nil — drop-in for the prior rawdb reader's consumers.
 func (s *StateDB) ReadWitnessIndex() []tcommon.Address {
-	v, _ := s.readAddressList(witnessScheduleIndexKey)
+	v, _, _ := s.ReadWitnessIndexStrict()
 	return v
+}
+
+// ReadWitnessIndexStrict returns the rooted witness index and distinguishes
+// absent rows from unreadable or malformed rooted data.
+func (s *StateDB) ReadWitnessIndexStrict() ([]tcommon.Address, bool, error) {
+	return s.readAddressListStrict(witnessScheduleIndexKey, "witness index")
 }
 
 // WriteWitnessIndex stages the full witness index into the system-KV.
@@ -132,7 +159,7 @@ func (s *StateDB) WriteWitnessIndex(addrs []tcommon.Address) error {
 // propagated (not swallowed) so a transient trie failure aborts the append
 // instead of overwriting the index with a truncated list.
 func (s *StateDB) AppendWitnessIndex(addr tcommon.Address) error {
-	existing, err := s.readAddressList(witnessScheduleIndexKey)
+	existing, _, err := s.ReadWitnessIndexStrict()
 	if err != nil {
 		return err
 	}

@@ -783,18 +783,18 @@ func (c *comparer) compareAccounts(gtron ethdb.KeyValueStore, sdb *state.StateDB
 		return nil
 	}
 	reverseProgress := c.newProgressCounter(&r, "checking gtron-only accounts")
-	return rawdb.IterateStateAccountLatest(gtron, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
+	return state.IterateAccountLatestRows(gtron, nil, func(owner tcommon.Address, _ []byte) (bool, error) {
 		reverseProgress.Add(1)
-		if tcommon.IsSystemAccount(row.Owner) {
+		if tcommon.IsSystemAccount(owner) {
 			return true, nil
 		}
-		has, err := java.Has(row.Owner.Bytes())
+		has, err := java.Has(owner.Bytes())
 		if err != nil {
 			return false, err
 		}
 		if !has {
 			r.MissingJava++
-			c.addDiff("account", hex.EncodeToString(row.Owner.Bytes()), "missing_java", "gtron latest account has no java account row")
+			c.addDiff("account", hex.EncodeToString(owner.Bytes()), "missing_java", "gtron latest account has no java account row")
 		}
 		return true, nil
 	})

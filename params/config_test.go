@@ -51,12 +51,50 @@ func TestHistoryModeConfigDefaults(t *testing.T) {
 		{HistoryModeFull, HistoryModeFull},
 		{HistoryModeSnap, HistoryModeSnap},
 		{HistoryModeArchive, HistoryModeArchive},
+		{HistoryModeBlocks, HistoryModeBlocks},
+		{HistoryModeMinimal, HistoryModeMinimal},
 		{"unknown", HistoryModeFull},
 	} {
 		cfg.HistoryMode = tc.mode
 		if got := cfg.EffectiveHistoryMode(); got != tc.want {
 			t.Fatalf("history mode %q = %q, want %q", tc.mode, got, tc.want)
 		}
+	}
+}
+
+func TestHistoryPruneWindowDefaultsByMode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode string
+		want uint64
+	}{
+		{name: "blank defaults to full", mode: "", want: HistoryDefaultPruneWindow},
+		{name: "full", mode: HistoryModeFull, want: HistoryDefaultPruneWindow},
+		{name: "blocks", mode: HistoryModeBlocks, want: HistoryDefaultPruneWindow},
+		{name: "snap", mode: HistoryModeSnap, want: HistoryDefaultPruneWindow},
+		{name: "minimal", mode: HistoryModeMinimal, want: HistoryMinimalDefaultPruneWindow},
+		{name: "unknown defaults to full", mode: "unknown", want: HistoryDefaultPruneWindow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &ChainConfig{HistoryMode: tc.mode}
+			if got := cfg.EffectiveHistoryPruneWindow(); got != tc.want {
+				t.Fatalf("EffectiveHistoryPruneWindow() = %d, want %d", got, tc.want)
+			}
+			if got := DefaultHistoryPruneWindowForMode(tc.mode); tc.mode != "" && got != tc.want {
+				t.Fatalf("DefaultHistoryPruneWindowForMode(%q) = %d, want %d", tc.mode, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHistoryPruneWindowExplicitOverrideWins(t *testing.T) {
+	for _, mode := range []string{HistoryModeFull, HistoryModeBlocks, HistoryModeMinimal, HistoryModeSnap, HistoryModeArchive} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := &ChainConfig{HistoryMode: mode, HistoryPruneWindow: 42}
+			if got := cfg.EffectiveHistoryPruneWindow(); got != 42 {
+				t.Fatalf("EffectiveHistoryPruneWindow() = %d, want explicit override 42", got)
+			}
+		})
 	}
 }
 

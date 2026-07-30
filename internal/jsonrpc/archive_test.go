@@ -15,13 +15,13 @@ import (
 
 // Slice 7 of the State History Index: JSON-RPC archive-query handler tests.
 //
-// These exercise the block-tag plumbing added to eth_getBalance /
-// eth_getCode / eth_getStorageAt — namely that a non-"latest" block
-// argument routes to the backend's *At (history-reader-backed) methods,
-// "latest"/absent routes to the live read, and a backend gate error
-// (history disabled) surfaces as a JSON-RPC error rather than a wrong
-// value. The reconstruction itself is covered at the reader / TronBackend
-// layers; here we only validate the handler's routing + error mapping.
+// These exercise the block-tag plumbing added to historical account reads and
+// read-only TVM execution — namely that a non-"latest" block argument routes
+// to the backend's *At (history-reader-backed) methods, "latest"/absent routes
+// to the live read, and a backend gate error (history disabled) surfaces as a
+// JSON-RPC error rather than a wrong value. The reconstruction itself is
+// covered at the reader / TronBackend layers; here we only validate the
+// handler's routing + error mapping.
 
 const archiveTestAddr = "0x4101020304050607080900010203040506070809"
 
@@ -111,6 +111,60 @@ func TestEthGetStorageAt_ArchiveBlock(t *testing.T) {
 	}
 }
 
+func TestEthCall_ArchiveBlock(t *testing.T) {
+	backend := &stubBackend{
+		callResult:   []byte{0x01},
+		callAtResult: []byte{0x02},
+		blockNumber:  100,
+	}
+	srv := newTestServer(t, backend)
+	defer srv.Close()
+
+	tx := map[string]interface{}{
+		"to":   archiveTestAddr,
+		"data": "0x70a08231",
+	}
+	live := rpcCall(t, srv, "eth_call", []interface{}{tx, "latest"})
+	if live["result"] != "0x01" {
+		t.Fatalf("latest eth_call = %v, want live result 0x01", live["result"])
+	}
+	hist := rpcCall(t, srv, "eth_call", []interface{}{tx, "0x7"})
+	if hist["result"] != "0x02" {
+		t.Fatalf("archive eth_call = %v, want archive result 0x02", hist["result"])
+	}
+	if backend.liveCallCalls != 1 || backend.callAtCalls != 1 || backend.callAtBlock != 7 {
+		t.Fatalf("eth_call routing live=%d archive=%d block=%d, want 1/1/7",
+			backend.liveCallCalls, backend.callAtCalls, backend.callAtBlock)
+	}
+}
+
+func TestEthEstimateGas_ArchiveBlock(t *testing.T) {
+	backend := &stubBackend{
+		estimateGas:   5,
+		estimateGasAt: 7,
+		blockNumber:   100,
+	}
+	srv := newTestServer(t, backend)
+	defer srv.Close()
+
+	tx := map[string]interface{}{
+		"to":   archiveTestAddr,
+		"data": "0x70a08231",
+	}
+	live := rpcCall(t, srv, "eth_estimateGas", []interface{}{tx, "latest"})
+	if live["result"] != "0x5" {
+		t.Fatalf("latest eth_estimateGas = %v, want live result 0x5", live["result"])
+	}
+	hist := rpcCall(t, srv, "eth_estimateGas", []interface{}{tx, "0x8"})
+	if hist["result"] != "0x7" {
+		t.Fatalf("archive eth_estimateGas = %v, want archive result 0x7", hist["result"])
+	}
+	if backend.liveEstimateCalls != 1 || backend.estimateAtCalls != 1 || backend.estimateAtBlock != 8 {
+		t.Fatalf("eth_estimateGas routing live=%d archive=%d block=%d, want 1/1/8",
+			backend.liveEstimateCalls, backend.estimateAtCalls, backend.estimateAtBlock)
+	}
+}
+
 // TestEthArchive_GateError asserts that when the backend's archive query
 // returns an error (e.g. history disabled), the handler surfaces it as a
 // JSON-RPC error for a historical block — but a "latest" query still
@@ -120,7 +174,8 @@ func TestEthArchive_GateError(t *testing.T) {
 	srv := newTestServer(t, &stubBackend{balance: 1_000_000, atErr: gate, blockNumber: 100})
 	defer srv.Close()
 
-	// Historical block → archive path → error surfaced for all three methods.
+	// Historical block → archive path → error surfaced for archive reads and
+	// read-only execution.
 	if got := rpcCallRaw(t, srv, "eth_getBalance", []interface{}{archiveTestAddr, "0x5"}); got["error"] == nil {
 		t.Errorf("eth_getBalance(block 5) with history disabled: expected error, got %v", got["result"])
 	}
@@ -130,10 +185,23 @@ func TestEthArchive_GateError(t *testing.T) {
 	if got := rpcCallRaw(t, srv, "eth_getStorageAt", []interface{}{archiveTestAddr, "0x0", "0x5"}); got["error"] == nil {
 		t.Errorf("eth_getStorageAt(block 5) with history disabled: expected error")
 	}
+	tx := map[string]interface{}{"to": archiveTestAddr, "data": "0x70a08231"}
+	if got := rpcCallRaw(t, srv, "eth_call", []interface{}{tx, "0x5"}); got["error"] == nil {
+		t.Errorf("eth_call(block 5) with history disabled: expected error")
+	}
+	if got := rpcCallRaw(t, srv, "eth_estimateGas", []interface{}{tx, "0x5"}); got["error"] == nil {
+		t.Errorf("eth_estimateGas(block 5) with history disabled: expected error")
+	}
 
 	// "latest" → live path → no error even though atErr is set.
 	live := rpcCall(t, srv, "eth_getBalance", []interface{}{archiveTestAddr, "latest"})
 	if _, ok := live["result"].(string); !ok {
 		t.Fatalf("eth_getBalance(latest) should succeed via live path, got %v", live)
+	}
+	if got := rpcCallRaw(t, srv, "eth_call", []interface{}{tx, "latest"}); got["error"] != nil {
+		t.Fatalf("eth_call(latest) should succeed via live path, got %v", got["error"])
+	}
+	if got := rpcCallRaw(t, srv, "eth_estimateGas", []interface{}{tx, "latest"}); got["error"] != nil {
+		t.Fatalf("eth_estimateGas(latest) should succeed via live path, got %v", got["error"])
 	}
 }

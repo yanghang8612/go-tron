@@ -5,6 +5,13 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 )
 
+// RuntimePrefetcher accepts raw latest-domain warmup hints discovered only
+// during VM execution. Implementations must treat hints as best-effort and
+// must not mutate StateDB object caches from worker goroutines.
+type RuntimePrefetcher interface {
+	Enqueue([]state.PrefetchKey) int
+}
+
 // TVMConfig holds per-transaction fork flags for the TVM interpreter.
 // Computed once in VMActuator before constructing the TVM.
 type TVMConfig struct {
@@ -63,6 +70,12 @@ type TVMConfig struct {
 	// GTRON_TVM_TRACE diagnostic path install one — so production execution
 	// pays a single nil check per opcode.
 	Tracer Tracer
+
+	// RuntimePrefetcher is the optional state prefetch worker used by block
+	// execution. It warms raw latest-domain rows for addresses/slots that are
+	// only known after bytecode starts running, such as nested CALL targets and
+	// SLOAD/SSTORE slots.
+	RuntimePrefetcher RuntimePrefetcher
 }
 
 // NewTVMConfig builds a TVMConfig from the current DynamicProperties and block number.
