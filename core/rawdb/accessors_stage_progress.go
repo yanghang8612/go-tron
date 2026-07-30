@@ -41,6 +41,13 @@ const (
 	// full frozen-range reconciliation after any stored replay that may have
 	// materialized historical metadata again.
 	StageFreezerHotPrune StageID = "FreezerHotPrune"
+
+	// StageFreezerTxIndexPrune stores the exclusive block boundary through
+	// which tx-* rows have been removed after an immutable transaction-index
+	// run was published. Publication always precedes deletion; a crash before
+	// this cursor advances therefore repeats harmless point deletes instead of
+	// risking a missing historical lookup.
+	StageFreezerTxIndexPrune StageID = "FreezerTxIndexPrune"
 )
 
 type StageProgress struct {

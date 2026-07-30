@@ -91,31 +91,7 @@ func OpenTransactionIndexStore(ancientDir string) (*TransactionIndexStore, error
 // manifest. Publication is atomic and requires contiguous block coverage.
 func PublishTransactionIndexRun(ancientDir string, result TransactionIndexBuildResult) error {
 	base := filepath.Join(ancientDir, transactionIndexDirectoryName)
-	runsDir := filepath.Join(base, transactionIndexRunsDirectory)
-	absPath, err := filepath.Abs(result.Path)
-	if err != nil {
-		return err
-	}
-	absRuns, err := filepath.Abs(runsDir)
-	if err != nil {
-		return err
-	}
-	if filepath.Dir(absPath) != absRuns {
-		return fmt.Errorf("transaction index publish: run %q is outside %q", result.Path, runsDir)
-	}
-	run, err := OpenTransactionIndexRun(result.Path)
-	if err != nil {
-		return fmt.Errorf("transaction index publish: reopen run: %w", err)
-	}
-	if err := run.Verify(); err != nil {
-		run.Close()
-		return fmt.Errorf("transaction index publish: verify run: %w", err)
-	}
-	if run.StartBlock() != result.StartBlock || run.EndBlock() != result.EndBlock || run.Rows() != result.Rows || run.Size() != result.FileBytes {
-		run.Close()
-		return errors.New("transaction index publish: build result does not match run")
-	}
-	if err := run.Close(); err != nil {
+	if err := verifyTransactionIndexBuildResult(ancientDir, result); err != nil {
 		return err
 	}
 	manifest, err := readTransactionIndexManifest(base)
@@ -140,6 +116,37 @@ func PublishTransactionIndexRun(ancientDir string, result TransactionIndexBuildR
 		EndBlock:   result.EndBlock,
 		Rows:       result.Rows,
 	})
+	return writeTransactionIndexManifest(base, manifest)
+}
+
+func verifyTransactionIndexBuildResult(ancientDir string, result TransactionIndexBuildResult) error {
+	runsDir := filepath.Join(ancientDir, transactionIndexDirectoryName, transactionIndexRunsDirectory)
+	absPath, err := filepath.Abs(result.Path)
+	if err != nil {
+		return err
+	}
+	absRuns, err := filepath.Abs(runsDir)
+	if err != nil {
+		return err
+	}
+	if filepath.Dir(absPath) != absRuns {
+		return fmt.Errorf("transaction index publish: run %q is outside %q", result.Path, runsDir)
+	}
+	run, err := OpenTransactionIndexRun(result.Path)
+	if err != nil {
+		return fmt.Errorf("transaction index publish: reopen run: %w", err)
+	}
+	defer run.Close()
+	if err := run.Verify(); err != nil {
+		return fmt.Errorf("transaction index publish: verify run: %w", err)
+	}
+	if run.StartBlock() != result.StartBlock || run.EndBlock() != result.EndBlock || run.Rows() != result.Rows || run.Size() != result.FileBytes {
+		return errors.New("transaction index publish: build result does not match run")
+	}
+	return nil
+}
+
+func writeTransactionIndexManifest(base string, manifest transactionIndexManifest) error {
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err

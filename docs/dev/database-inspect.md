@@ -234,3 +234,34 @@ Use `--compact` only when immediate reclamation justifies several hours of
 heavy offline I/O and the host has sufficient temporary disk space. The
 configured `--progress` interval also emits compact heartbeats. Once hot history
 has been deleted, do not roll back to a binary without cold-index support.
+
+The successful offline command also records `FreezerTxIndexPrune` at its V2
+coverage. Thereafter the normal freezer maintains both formats online. Pebble
+physical compaction remains deferred while P2P sync is active, but one bounded
+V1-to-V2 segment promotion is allowed per freezer interval. For each newly
+covered 65,536-block segment the runner:
+
+1. derives complete transaction hashes and packed ordinals from canonical V2
+   bodies;
+2. builds, verifies, fsyncs, and publishes an immutable transaction-index run;
+3. switches the live reader before deleting any matching hot `tx-*` rows;
+4. deletes those rows in bounded batches and advances a durable prune cursor;
+5. geometrically merges equal-sized tail runs so lookup fan-out stays
+   logarithmic rather than growing by one file per segment.
+
+Each pass performs at most one index action, and successful V2 promotions have
+at least one freezer interval between them. This keeps V1 and `tx-*` bounded
+during a long initial sync without enabling synchronous Pebble compaction on
+the foreground path. Operators can independently disable the online index or
+change its directory width:
+
+```bash
+gtron \
+  --freezer.tx-index.disable \
+  --freezer.tx-index.prefix-bits 20
+```
+
+If a pre-cursor binary published a large cold run but exited before deleting
+its covered hot rows, the online runner logs an offline-migration warning
+instead of generating billions of point tombstones. Rerun `migrate-tx-index`;
+completed files and manifests are reused.

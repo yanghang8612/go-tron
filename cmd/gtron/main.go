@@ -255,6 +255,15 @@ var (
 		Usage: "Blocks per automatically promoted V2 segment",
 		Value: 65_536,
 	}
+	freezerTxIndexDisableFlag = &cli.BoolFlag{
+		Name:  "freezer.tx-index.disable",
+		Usage: "Disable automatic archival of V2-covered transaction indexes",
+	}
+	freezerTxIndexPrefixBitsFlag = &cli.Uint64Flag{
+		Name:  "freezer.tx-index.prefix-bits",
+		Usage: "Leading transaction-hash bits in automatically built immutable runs",
+		Value: 20,
+	}
 	syncRestartFromFlag = &cli.Uint64Flag{
 		Name:  "sync.restart-from",
 		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
@@ -314,6 +323,8 @@ var app = &cli.App{
 		freezerV2DisableFlag,
 		freezerV2FrameBlocksFlag,
 		freezerV2SegmentBlocksFlag,
+		freezerTxIndexDisableFlag,
+		freezerTxIndexPrefixBitsFlag,
 		syncRestartFromFlag,
 		syncStopAtFlag,
 	},
@@ -840,6 +851,13 @@ func gtron(ctx *cli.Context) error {
 		freezerCfg.CompactionAllowed = func() bool {
 			return !time.Now().Before(compactionReadyAt) && !syncService.IsSyncing()
 		}
+		// V2 promotion is bounded to one complete segment per freezer pass and
+		// has its own cooldown. Keep it moving during bulk sync; coupling it to
+		// the heavyweight Pebble Compact gate lets V1 and tx-* grow without
+		// bound on a node that remains in IsSyncing for weeks.
+		freezerCfg.V2PromotionAllowed = func() bool {
+			return !time.Now().Before(compactionReadyAt)
+		}
 		freezerRunner := chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
 		if freezerRunner != nil {
 			stack.RegisterLifecycle(freezerRunner)
@@ -850,7 +868,9 @@ func gtron(ctx *cli.Context) error {
 				"interval", freezerCfg.Interval,
 				"v2", freezerCfg.V2Enabled,
 				"v2FrameBlocks", freezerCfg.V2FrameBlocks,
-				"v2SegmentBlocks", freezerCfg.V2SegmentBlocks)
+				"v2SegmentBlocks", freezerCfg.V2SegmentBlocks,
+				"txIndex", freezerCfg.TransactionIndexEnabled,
+				"txIndexPrefixBits", freezerCfg.TransactionIndexPrefixBits)
 		}
 	} else if ancientStore != nil {
 		log.Info("Chain freezer disabled; existing ancient data readable", "ancient", ancientPath)

@@ -357,6 +357,16 @@ func (w *freezerWriter) V2Coverage() uint64 { return w.f.V2Coverage() }
 func (w *freezerWriter) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
 	return w.f.MigrateV2(options)
 }
+func (w *freezerWriter) AncientDatadir() (string, error) { return w.f.AncientDatadir() }
+func (w *freezerWriter) TransactionIndexCoverage() uint64 {
+	return w.f.TransactionIndexCoverage()
+}
+func (w *freezerWriter) PublishTransactionIndexRun(result rawdbfreezer.TransactionIndexBuildResult) error {
+	return w.f.PublishTransactionIndexRun(result)
+}
+func (w *freezerWriter) CompactTransactionIndexTail() (bool, error) {
+	return w.f.CompactTransactionIndexTail()
+}
 
 func TestCompactV2OncePromotesContinuousSegments(t *testing.T) {
 	fc := newFakeChain()
@@ -405,6 +415,189 @@ func TestCompactV2OncePromotesContinuousSegments(t *testing.T) {
 	if stats.V2Coverage != 128 || stats.V2BlocksCompacted != 128 {
 		t.Fatalf("V2 stats = %+v", stats)
 	}
+}
+
+func TestCompactV2UsesIndependentPromotionGate(t *testing.T) {
+	fc := newFakeChain()
+	fz := newFreezer(t)
+	for number := uint64(0); number < 8; number++ {
+		fc.plantBlock(t, number)
+	}
+	fc.setSolidified(7)
+	r := New(fc, wrapFreezer(fz), Config{
+		Enabled:            true,
+		MarginBlocks:       0,
+		BatchBlocks:        8,
+		CompactionAllowed:  func() bool { return false },
+		V2PromotionAllowed: func() bool { return true },
+		V2Enabled:          true,
+		V2FrameBlocks:      2,
+		V2SegmentBlocks:    8,
+	})
+	if frozen, err := r.OnePass(); err != nil || frozen != 8 {
+		t.Fatalf("freeze=%d err=%v", frozen, err)
+	}
+	if compacted, err := r.CompactV2Once(); err != nil || compacted != 8 {
+		t.Fatalf("V2 promotion=%d err=%v", compacted, err)
+	}
+	if got := fz.V2Coverage(); got != 8 {
+		t.Fatalf("V2 coverage=%d, want 8", got)
+	}
+}
+
+func TestOnlineTransactionIndexPublishesPrunesAndMerges(t *testing.T) {
+	fc := newFakeChain()
+	fz := newFreezer(t)
+	r := New(fc, wrapFreezer(fz), Config{
+		Enabled:                    true,
+		MarginBlocks:               0,
+		BatchBlocks:                4,
+		V2Enabled:                  true,
+		V2FrameBlocks:              2,
+		V2SegmentBlocks:            4,
+		TransactionIndexEnabled:    true,
+		TransactionIndexPrefixBits: 8,
+	})
+	var hashes [][32]byte
+	plant := func(number uint64) {
+		block := &corepb.Block{
+			BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(number)}},
+			Transactions: []*corepb.Transaction{
+				{RawData: &corepb.TransactionRaw{Timestamp: int64(number*10 + 1)}},
+				{RawData: &corepb.TransactionRaw{Timestamp: int64(number*10 + 2)}},
+			},
+		}
+		body, err := proto.Marshal(block)
+		if err != nil {
+			t.Fatal(err)
+		}
+		typed := types.NewBlockFromPB(block)
+		infos := make([]*corepb.TransactionInfo, 0, len(block.Transactions))
+		for ordinal, tx := range typed.Transactions() {
+			hash := tx.Hash()
+			hashes = append(hashes, hash)
+			infos = append(infos, &corepb.TransactionInfo{Id: hash[:]})
+			if err := rawdb.WriteTransactionLocation(fc.db, hash[:], number, ordinal); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ret, err := proto.Marshal(&corepb.TransactionRet{Transactioninfo: infos})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fc.mu.Lock()
+		fc.blockRaw[number] = body
+		fc.txInfosRaw[number] = ret
+		fc.stateRootRaw[number] = stateRootBytes(number)
+		fc.blockHashByNo[number] = blockHash(number)
+		fc.mu.Unlock()
+		if err := writeBlockKV(fc.db, number, body); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeTxInfosKV(fc.db, number, ret); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hotExists := func(hash [32]byte) bool {
+		key := append([]byte("tx-"), hash[:]...)
+		_, err := fc.db.Get(key)
+		return err == nil
+	}
+
+	for number := uint64(0); number < 4; number++ {
+		plant(number)
+	}
+	fc.setSolidified(3)
+	if frozen, err := r.OnePass(); err != nil || frozen != 4 {
+		t.Fatalf("first freeze=%d err=%v", frozen, err)
+	}
+	if compacted, err := r.CompactV2Once(); err != nil || compacted != 4 {
+		t.Fatalf("first V2=%d err=%v", compacted, err)
+	}
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+		t.Fatalf("publish changed=%v err=%v", changed, err)
+	}
+	if got := fz.TransactionIndexCoverage(); got != 4 {
+		t.Fatalf("coverage after publish=%d, want 4", got)
+	}
+	for _, hash := range hashes {
+		if !hotExists(hash) {
+			t.Fatalf("publication deleted hot row early: %x", hash[:8])
+		}
+		if candidates, err := fz.TransactionIndexCandidates(hash); err != nil || len(candidates) != 1 {
+			t.Fatalf("cold candidates=%v err=%v", candidates, err)
+		}
+	}
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+		t.Fatalf("prune changed=%v err=%v", changed, err)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageFreezerTxIndexPrune); err != nil || !ok || progress != 4 {
+		t.Fatalf("prune progress=%d ok=%v err=%v", progress, ok, err)
+	}
+	for _, hash := range hashes {
+		if hotExists(hash) {
+			t.Fatalf("hot row survived prune: %x", hash[:8])
+		}
+	}
+	// Simulate a successful migration produced by the previous binary, which
+	// removed covered rows before StageFreezerTxIndexPrune existed. The runner
+	// proves no covered hot row remains and establishes the cursor without
+	// rebuilding or deleting the cold range.
+	if err := rawdb.DeleteStageProgress(fc.db, rawdb.StageFreezerTxIndexPrune); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || changed {
+		t.Fatalf("legacy cursor bootstrap changed=%v err=%v", changed, err)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageFreezerTxIndexPrune); err != nil || !ok || progress != 4 {
+		t.Fatalf("bootstrapped prune progress=%d ok=%v err=%v", progress, ok, err)
+	}
+
+	for number := uint64(4); number < 8; number++ {
+		plant(number)
+	}
+	fc.setSolidified(7)
+	if frozen, err := r.OnePass(); err != nil || frozen != 4 {
+		t.Fatalf("second freeze=%d err=%v", frozen, err)
+	}
+	if compacted, err := r.CompactV2Once(); err != nil || compacted != 4 {
+		t.Fatalf("second V2=%d err=%v", compacted, err)
+	}
+	for step := 0; step < 3; step++ { // publish, prune, geometric merge
+		if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+			t.Fatalf("maintenance step %d changed=%v err=%v", step, changed, err)
+		}
+	}
+	if got := fz.TransactionIndexCoverage(); got != 8 {
+		t.Fatalf("coverage after merge=%d, want 8", got)
+	}
+	store, err := rawdbfreezer.OpenTransactionIndexStore(mustAncientDatadir(t, fz))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	chainDB := rawdb.NewChainDB(fc.db, rawdb.NewFreezerReader(fz))
+	for i, hash := range hashes {
+		if candidates, err := store.Candidates(hash); err != nil || len(candidates) != 1 {
+			t.Fatalf("merged candidates=%v err=%v", candidates, err)
+		}
+		wantBlock := uint64(i / 2)
+		if got := rawdb.ReadTransactionIndex(chainDB, hash[:]); got == nil || *got != wantBlock {
+			t.Fatalf("historical transaction index %d=%v, want %d", i, got, wantBlock)
+		}
+		if got := rawdb.ReadTransactionInfo(chainDB, hash[:]); got == nil || !bytes.Equal(got.Id, hash[:]) {
+			t.Fatalf("historical transaction info %d=%+v", i, got)
+		}
+	}
+}
+
+func mustAncientDatadir(t *testing.T, freezer *rawdbfreezer.Freezer) string {
+	t.Helper()
+	path, err := freezer.AncientDatadir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // TestOnePass_FreezesToMargin: chain with solidified=N; pass; ancient

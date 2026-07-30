@@ -1,6 +1,6 @@
 # Ancient transaction index
 
-**Status:** Implemented for offline initial/incremental runs; geometric merging remains
+**Status:** Implemented for offline bootstrap and bounded online maintenance
 **Date:** 2026-07-27
 **Related:** [Chain freezer](./2026-05-19-chain-freezer-design.md),
 [TransactionInfo deduplication](./2026-07-26-transaction-info-dedup-design.md),
@@ -92,11 +92,26 @@ safe and the next invocation repeats the atomic replacement. Stored replay and
 later historical resync both check cold coverage and do not repopulate migrated
 `tx-*` rows.
 
-Incremental online publication must not rewrite the entire historical index on
-every 65,536-block V2 promotion. New immutable runs are accumulated and merged
-geometrically so a lookup checks a bounded logarithmic number of runs. A later
-implementation step may collapse the initial offline database into one run and
-use size-tiered levels for newly frozen history.
+Incremental online publication does not rewrite the entire historical index on
+every 65,536-block V2 promotion. One segment's complete hashes and packed
+ordinals are derived from canonical bodies, sorted in bounded memory, and
+published as a new immutable run. Covered `tx-*` keys are point-deleted in
+bounded batches only after the live ancient reader has installed that run. A
+durable `FreezerTxIndexPrune` cursor advances after deletion, so a crash repeats
+only the final segment.
+
+Equal-block-span tail runs are merged geometrically, like carries in a binary
+counter. The merge combines already-routed fingerprint/location buckets and
+does not require the discarded full hashes; public lookup correctness remains
+anchored by full-hash verification against the canonical body. Consequently N
+online segments produce O(log N) open runs and lookup probes rather than N.
+
+V2 promotion has a gate independent from synchronous Pebble compaction. During
+bulk sync the latter remains disabled, while V2 may publish at most one segment
+per freezer pass with a full freezer-interval cooldown after success. Each pass
+also performs at most one transaction-index action (publish, prune, or merge),
+which bounds CPU, memory, WAL, and I/O bursts while preventing unbounded V1 and
+`tx-*` growth.
 
 The manifest is the commit point. Unreferenced temporary files are ignored on
 startup. A crash before Pebble deletion leaves duplicate readable indexes; a
@@ -124,4 +139,7 @@ follows it.
   hash in the canonical body.
 - Rewind continues deleting hot `tx-*` rows; cold runs cover only blocks below
   the solidified/freezer boundary and are never part of a normal reorg.
+- A legacy cold run with no prune cursor is adopted automatically only when a
+  scan proves it has no covered hot rows. A large partially completed legacy
+  run requires the atomic offline command instead of online point deletion.
 - Older binaries are not supported after historical `tx-*` rows are deleted.

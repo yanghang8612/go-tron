@@ -85,6 +85,22 @@ func (s *freezerStore) V2Coverage() uint64 {
 	return s.f.V2Coverage()
 }
 
+func (s *freezerStore) AncientDatadir() (string, error) {
+	return s.f.AncientDatadir()
+}
+
+func (s *freezerStore) TransactionIndexCoverage() uint64 {
+	return s.f.TransactionIndexCoverage()
+}
+
+func (s *freezerStore) PublishTransactionIndexRun(result rawdbfreezer.TransactionIndexBuildResult) error {
+	return s.f.PublishTransactionIndexRun(result)
+}
+
+func (s *freezerStore) CompactTransactionIndexTail() (bool, error) {
+	return s.f.CompactTransactionIndexTail()
+}
+
 func (s *freezerStore) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
 	return s.f.MigrateV2(options)
 }
@@ -111,6 +127,12 @@ func makeFreezerConfig(ctx *cli.Context) (chainfreezer.Config, error) {
 	if cfg.V2SegmentBlocks == 0 || cfg.V2SegmentBlocks%frameBlocks != 0 {
 		return chainfreezer.Config{}, fmt.Errorf("--freezer.v2.segment-blocks must be positive and divisible by --freezer.v2.frame-blocks")
 	}
+	cfg.TransactionIndexEnabled = !ctx.Bool("freezer.tx-index.disable")
+	prefixBits := ctx.Uint64("freezer.tx-index.prefix-bits")
+	if prefixBits < 8 || prefixBits > 24 {
+		return chainfreezer.Config{}, fmt.Errorf("--freezer.tx-index.prefix-bits must be between 8 and 24")
+	}
+	cfg.TransactionIndexPrefixBits = uint32(prefixBits)
 	return cfg, nil
 }
 

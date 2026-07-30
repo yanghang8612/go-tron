@@ -102,6 +102,9 @@ func TestDBMigrateTxIndexCommandPublishesBeforeDeletingAndResumes(t *testing.T) 
 		t.Fatal(err)
 	}
 	hotOnly := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	if progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageFreezerTxIndexPrune); err != nil || !ok || progress != 4 {
+		t.Fatalf("transaction-index prune progress=%d ok=%v err=%v", progress, ok, err)
+	}
 	for number, hash := range hashes {
 		got := rawdb.ReadTransactionIndex(hotOnly, hash[:])
 		if number < 4 && got != nil {

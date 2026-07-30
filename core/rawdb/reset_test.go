@@ -42,9 +42,12 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	}
 }
 
-func TestResetMutableStateClearsFreezerHotPruneCursor(t *testing.T) {
+func TestResetMutableStateClearsFreezerPruneCursors(t *testing.T) {
 	db := NewMemoryDatabase()
 	if err := WriteStageProgress(db, StageFreezerHotPrune, 12345); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStageProgress(db, StageFreezerTxIndexPrune, 12345); err != nil {
 		t.Fatal(err)
 	}
 	if err := ResetMutableState(db); err != nil {
@@ -52,5 +55,8 @@ func TestResetMutableStateClearsFreezerHotPruneCursor(t *testing.T) {
 	}
 	if progress, ok, err := ReadStageProgress(db, StageFreezerHotPrune); err != nil || ok {
 		t.Fatalf("freezer hot-prune progress=%d ok=%v err=%v after reset", progress, ok, err)
+	}
+	if progress, ok, err := ReadStageProgress(db, StageFreezerTxIndexPrune); err != nil || ok {
+		t.Fatalf("freezer tx-index prune progress=%d ok=%v err=%v after reset", progress, ok, err)
 	}
 }

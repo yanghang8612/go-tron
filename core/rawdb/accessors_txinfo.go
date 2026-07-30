@@ -306,16 +306,25 @@ func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint
 // the existing 8-byte tx-* value. It is exported for offline upgrades of
 // legacy reverse indexes; normal block commits call it indirectly.
 func WriteTransactionLocation(db ethdb.KeyValueWriter, txHash []byte, blockNum uint64, ordinal int) error {
-	if blockNum > transactionLocationMaxBlock {
-		return fmt.Errorf("transaction location block %d exceeds %d", blockNum, transactionLocationMaxBlock)
+	packed, err := EncodeTransactionLocation(blockNum, ordinal)
+	if err != nil {
+		return err
 	}
-	if ordinal < 0 || ordinal > int(^uint16(0)) {
-		return fmt.Errorf("transaction location ordinal %d exceeds %d", ordinal, ^uint16(0))
-	}
-	packed := transactionLocationMarker | blockNum<<transactionLocationOrdinalBits | uint64(ordinal)
 	var value [8]byte
 	binary.BigEndian.PutUint64(value[:], packed)
 	return db.Put(txKey(txHash), value[:])
+}
+
+// EncodeTransactionLocation returns the persisted block/ordinal value used by
+// both hot tx-* rows and immutable transaction-index runs.
+func EncodeTransactionLocation(blockNum uint64, ordinal int) (uint64, error) {
+	if blockNum > transactionLocationMaxBlock {
+		return 0, fmt.Errorf("transaction location block %d exceeds %d", blockNum, transactionLocationMaxBlock)
+	}
+	if ordinal < 0 || ordinal > int(^uint16(0)) {
+		return 0, fmt.Errorf("transaction location ordinal %d exceeds %d", ordinal, ^uint16(0))
+	}
+	return transactionLocationMarker | blockNum<<transactionLocationOrdinalBits | uint64(ordinal), nil
 }
 
 // WriteEncodedTransactionLocation restores one validated tx-* row without

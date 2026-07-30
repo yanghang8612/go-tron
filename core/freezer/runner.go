@@ -33,10 +33,13 @@
 package freezer
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +49,7 @@ import (
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 var log = gtronlog.NewModule("core/freezer")
@@ -57,11 +61,13 @@ var log = gtronlog.NewModule("core/freezer")
 // fresh-install backlog in under an hour, small enough that one pass
 // can't dominate Pebble's compaction queue).
 const (
-	defaultInterval        = 30 * time.Second
-	defaultMarginBlocks    = uint64(128)
-	defaultBatchBlocks     = uint64(30_000)
-	defaultV2FrameBlocks   = uint32(64)
-	defaultV2SegmentBlocks = uint64(65_536)
+	defaultInterval          = 30 * time.Second
+	defaultMarginBlocks      = uint64(128)
+	defaultBatchBlocks       = uint64(30_000)
+	defaultV2FrameBlocks     = uint32(64)
+	defaultV2SegmentBlocks   = uint64(65_536)
+	defaultTxIndexPrefixBits = uint32(20)
+	txIndexDeleteBatchBytes  = 16 << 20
 )
 
 // Config governs the freezing pass cadence and batch sizing.
@@ -109,6 +115,12 @@ type Config struct {
 	// behaviour.
 	CompactionAllowed func() bool
 
+	// V2PromotionAllowed is independent from CompactionAllowed because V2
+	// segment creation is bounded and required to keep immutable history
+	// advancing during bulk sync, while a synchronous Pebble Compact can create
+	// an unbounded foreground I/O stall. Nil permits promotion.
+	V2PromotionAllowed func() bool
+
 	// V2Enabled promotes complete V1 bodies/tx_infos ranges into seekable Zstd
 	// segments. Default true. Legacy stores with more than one complete segment
 	// and no V2 prefix are left for the explicit offline migration command so a
@@ -119,19 +131,27 @@ type Config struct {
 	// must match the offline migration settings already used by the datadir.
 	V2FrameBlocks   uint32
 	V2SegmentBlocks uint64
+
+	// TransactionIndexEnabled archives tx-* rows one V2 segment at a time and
+	// geometrically merges equal-sized immutable runs. It is enabled by the
+	// production Default config; explicit Config literals remain opt-in.
+	TransactionIndexEnabled    bool
+	TransactionIndexPrefixBits uint32
 }
 
 // Default returns the production defaults. Used by cmd/gtron when no
 // operator overrides have been supplied.
 func Default() Config {
 	return Config{
-		Enabled:         true,
-		Interval:        defaultInterval,
-		MarginBlocks:    defaultMarginBlocks,
-		BatchBlocks:     defaultBatchBlocks,
-		V2Enabled:       true,
-		V2FrameBlocks:   defaultV2FrameBlocks,
-		V2SegmentBlocks: defaultV2SegmentBlocks,
+		Enabled:                    true,
+		Interval:                   defaultInterval,
+		MarginBlocks:               defaultMarginBlocks,
+		BatchBlocks:                defaultBatchBlocks,
+		V2Enabled:                  true,
+		V2FrameBlocks:              defaultV2FrameBlocks,
+		V2SegmentBlocks:            defaultV2SegmentBlocks,
+		TransactionIndexEnabled:    true,
+		TransactionIndexPrefixBits: defaultTxIndexPrefixBits,
 	}
 }
 
@@ -164,6 +184,9 @@ func (c Config) applyDefaults() Config {
 	}
 	if c.V2SegmentBlocks == 0 {
 		c.V2SegmentBlocks = defaultV2SegmentBlocks
+	}
+	if c.TransactionIndexPrefixBits == 0 {
+		c.TransactionIndexPrefixBits = defaultTxIndexPrefixBits
 	}
 	return c
 }
@@ -271,6 +294,16 @@ type V2Compactor interface {
 	MigrateV2(rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error)
 }
 
+// TransactionIndexCompactor is the live publication/merge surface implemented
+// by the production freezer. Keeping it optional preserves simple ancient test
+// fakes and deployments that only use V1/V2 block storage.
+type TransactionIndexCompactor interface {
+	AncientDatadir() (string, error)
+	TransactionIndexCoverage() uint64
+	PublishTransactionIndexRun(rawdbfreezer.TransactionIndexBuildResult) error
+	CompactTransactionIndexTail() (bool, error)
+}
+
 // Stats is a thread-safe snapshot of runner progress. Operators consume
 // it via Runner.Snapshot; a future metrics layer (Prometheus / OTel) can
 // translate it into gauges without the runner having a dep on a metrics
@@ -310,6 +343,13 @@ type Stats struct {
 	V2Coverage uint64
 	// V2BlocksCompacted is the number of V1 rows promoted by this process.
 	V2BlocksCompacted uint64
+	// TransactionIndexCoverage is the first block not covered by immutable
+	// transaction-index runs. TransactionIndexPruned is the first block whose
+	// hot tx-* rows may still exist.
+	TransactionIndexCoverage     uint64
+	TransactionIndexPruned       uint64
+	TransactionIndexRowsArchived uint64
+	TransactionIndexRowsPruned   uint64
 }
 
 // Runner is the freezer's Lifecycle service. Construct with New, register
@@ -326,13 +366,17 @@ type Runner struct {
 
 	// stats fields are atomics so Snapshot is lock-free against the running
 	// goroutine.
-	blocksFrozen      atomic.Uint64
-	passesCompleted   atomic.Uint64
-	lastPassUnixNano  atomic.Int64
-	lastPassDuration  atomic.Int64 // nanoseconds
-	pebbleSizeAfter   atomic.Uint64
-	v2BlocksCompacted atomic.Uint64
-	v2BacklogWarned   atomic.Bool
+	blocksFrozen        atomic.Uint64
+	passesCompleted     atomic.Uint64
+	lastPassUnixNano    atomic.Int64
+	lastPassDuration    atomic.Int64 // nanoseconds
+	pebbleSizeAfter     atomic.Uint64
+	v2BlocksCompacted   atomic.Uint64
+	v2BacklogWarned     atomic.Bool
+	lastV2Promotion     atomic.Int64
+	txIndexRowsArchived atomic.Uint64
+	txIndexRowsPruned   atomic.Uint64
+	txIndexLegacyWarned atomic.Bool
 
 	// reconciled guards the once-per-process crash-leftover sweep in
 	// onePass. See the reconciliation block there.
@@ -407,17 +451,25 @@ func (r *Runner) Stop() error {
 // Safe to call from any goroutine — every field is read from an atomic.
 func (r *Runner) Snapshot() Stats {
 	stats := Stats{
-		BlocksFrozen:      r.blocksFrozen.Load(),
-		PassesCompleted:   r.passesCompleted.Load(),
-		LastPassDuration:  time.Duration(r.lastPassDuration.Load()),
-		PebbleSizeAfter:   r.pebbleSizeAfter.Load(),
-		V2BlocksCompacted: r.v2BlocksCompacted.Load(),
+		BlocksFrozen:                 r.blocksFrozen.Load(),
+		PassesCompleted:              r.passesCompleted.Load(),
+		LastPassDuration:             time.Duration(r.lastPassDuration.Load()),
+		PebbleSizeAfter:              r.pebbleSizeAfter.Load(),
+		V2BlocksCompacted:            r.v2BlocksCompacted.Load(),
+		TransactionIndexRowsArchived: r.txIndexRowsArchived.Load(),
+		TransactionIndexRowsPruned:   r.txIndexRowsPruned.Load(),
 	}
 	if t := r.lastPassUnixNano.Load(); t > 0 {
 		stats.LastPassAt = time.Unix(0, t)
 	}
 	if compactor, ok := r.freezer.(V2Compactor); ok {
 		stats.V2Coverage = compactor.V2Coverage()
+	}
+	if compactor, ok := r.freezer.(TransactionIndexCompactor); ok {
+		stats.TransactionIndexCoverage = compactor.TransactionIndexCoverage()
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune); err == nil && ok {
+		stats.TransactionIndexPruned = progress
 	}
 	// FrozenMin / FrozenMax come straight from the ancient store so the
 	// caller always sees the canonical position even if a concurrent
@@ -444,7 +496,7 @@ func (r *Runner) CompactV2Once() (uint64, error) {
 	if !ok {
 		return 0, nil
 	}
-	if r.cfg.CompactionAllowed != nil && !r.cfg.CompactionAllowed() {
+	if r.cfg.V2PromotionAllowed != nil && !r.cfg.V2PromotionAllowed() {
 		return 0, nil
 	}
 	segmentBlocks := r.cfg.V2SegmentBlocks
@@ -493,6 +545,232 @@ func (r *Runner) CompactV2Once() (uint64, error) {
 			"physicalAfter", result.PhysicalBytesAfter)
 	}
 	return compacted, nil
+}
+
+// compactV2Scheduled enforces a full freezer interval between successful V2
+// promotions. A time.Ticker retains one queued tick while a long segment is
+// being written; without this guard a backlog would otherwise run segments
+// back-to-back and starve foreground sync.
+func (r *Runner) compactV2Scheduled() (uint64, error) {
+	if last := r.lastV2Promotion.Load(); last > 0 && time.Since(time.Unix(0, last)) < r.cfg.Interval {
+		return 0, nil
+	}
+	compacted, err := r.CompactV2Once()
+	if compacted > 0 {
+		r.lastV2Promotion.Store(time.Now().UnixNano())
+	}
+	return compacted, err
+}
+
+// MaintainTransactionIndexOnce performs one bounded maintenance action:
+// prune one already-published segment, merge one equal-sized run pair, or
+// publish one newly V2-covered segment. Publication precedes hot deletion;
+// StageFreezerTxIndexPrune makes interrupted deletion safely resumable.
+func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
+	if !r.cfg.Enabled || !r.cfg.V2Enabled || !r.cfg.TransactionIndexEnabled {
+		return false, nil
+	}
+	v2, ok := r.freezer.(V2Compactor)
+	if !ok {
+		return false, nil
+	}
+	index, ok := r.freezer.(TransactionIndexCompactor)
+	if !ok {
+		return false, nil
+	}
+	coverage := index.TransactionIndexCoverage()
+	v2Coverage := v2.V2Coverage()
+	if coverage > v2Coverage {
+		return false, fmt.Errorf("freezer: transaction index coverage %d exceeds V2 coverage %d", coverage, v2Coverage)
+	}
+	pruned, initialized, err := r.transactionIndexPruneProgress(coverage)
+	if err != nil || !initialized {
+		return false, err
+	}
+	if pruned > coverage {
+		return false, fmt.Errorf("freezer: transaction index prune progress %d exceeds coverage %d", pruned, coverage)
+	}
+	if pruned < coverage {
+		end := pruned + r.cfg.V2SegmentBlocks
+		if end > coverage {
+			end = coverage
+		}
+		entries, err := r.collectTransactionIndexEntries(pruned, end)
+		if err != nil {
+			return false, err
+		}
+		if err := r.deleteHotTransactionIndexes(entries); err != nil {
+			return false, err
+		}
+		if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune, end); err != nil {
+			return false, err
+		}
+		if syncer, ok := r.chain.DB().(interface{ SyncKeyValue() error }); ok {
+			if err := syncer.SyncKeyValue(); err != nil {
+				return false, err
+			}
+		}
+		r.txIndexRowsPruned.Add(uint64(len(entries)))
+		log.Info("Freezer: pruned archived hot transaction indexes", "from", pruned, "to", end, "rows", len(entries))
+		return true, nil
+	}
+	if merged, err := index.CompactTransactionIndexTail(); err != nil {
+		return false, err
+	} else if merged {
+		log.Info("Freezer: geometrically merged transaction index tail")
+		return true, nil
+	}
+	if coverage+r.cfg.V2SegmentBlocks > v2Coverage {
+		return false, nil
+	}
+	end := coverage + r.cfg.V2SegmentBlocks
+	entries, err := r.collectTransactionIndexEntries(coverage, end)
+	if err != nil {
+		return false, err
+	}
+	path, err := index.AncientDatadir()
+	if err != nil {
+		return false, err
+	}
+	runPath := rawdbfreezer.TransactionIndexRunPath(path, coverage, end)
+	result, recovered, err := buildOrRecoverOnlineTransactionIndex(runPath, coverage, end, r.cfg.TransactionIndexPrefixBits, entries)
+	if err != nil {
+		return false, err
+	}
+	if err := index.PublishTransactionIndexRun(result); err != nil {
+		return false, err
+	}
+	r.txIndexRowsArchived.Add(result.Rows)
+	log.Info("Freezer: published online transaction index",
+		"from", coverage, "to", end, "rows", result.Rows,
+		"bytes", result.FileBytes, "recovered", recovered)
+	return true, nil
+}
+
+func (r *Runner) transactionIndexPruneProgress(coverage uint64) (uint64, bool, error) {
+	progress, ok, err := rawdb.ReadStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune)
+	if err != nil || ok || coverage == 0 {
+		return progress, true, err
+	}
+	// Older offline migrations predate this cursor. If no covered tx-* row
+	// remains, establish the cursor without replaying already-completed work.
+	// A failed legacy migration is detected by the first covered row and left
+	// for the atomic offline command instead of issuing billions of point tombstones.
+	coveredRowPresent := false
+	errStop := errors.New("covered transaction index found")
+	_, err = rawdb.VisitTransactionIndexes(r.chain.DB(), func(sample rawdb.TransactionIndexSample) error {
+		if rawdb.TransactionIndexLocationBlock(sample.Location) < coverage {
+			coveredRowPresent = true
+			return errStop
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStop) {
+		return 0, false, err
+	}
+	if coveredRowPresent && coverage > r.cfg.V2SegmentBlocks {
+		if !r.txIndexLegacyWarned.Swap(true) {
+			log.Warn("Freezer: legacy cold transaction index still has covered hot rows; run db migrate-tx-index offline",
+				"coverage", coverage)
+		}
+		return 0, false, nil
+	}
+	if coveredRowPresent {
+		return 0, true, nil
+	}
+	if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune, coverage); err != nil {
+		return 0, false, err
+	}
+	return coverage, true, nil
+}
+
+func (r *Runner) collectTransactionIndexEntries(start, end uint64) ([]rawdbfreezer.TransactionIndexEntry, error) {
+	started := time.Now()
+	lastProgress := started
+	entries := make([]rawdbfreezer.TransactionIndexEntry, 0, (end-start)*32)
+	for number := start; number < end; number++ {
+		body, err := r.freezer.Ancient(rawdbAncientBlocks, number)
+		if err != nil {
+			return nil, fmt.Errorf("read ancient body %d for transaction index: %w", number, err)
+		}
+		block, err := types.UnmarshalBlockBorrowed(body)
+		if err != nil {
+			return nil, fmt.Errorf("decode ancient body %d for transaction index: %w", number, err)
+		}
+		for ordinal, tx := range block.Transactions() {
+			location, err := rawdb.EncodeTransactionLocation(number, ordinal)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, rawdbfreezer.TransactionIndexEntry{Hash: tx.Hash(), Location: location})
+		}
+		if time.Since(lastProgress) >= 30*time.Second {
+			log.Info("Freezer: collecting transaction index", "from", start, "to", end, "block", number, "rows", len(entries), "elapsed", time.Since(started))
+			lastProgress = time.Now()
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].Hash[:], entries[j].Hash[:]) < 0 })
+	for i := 1; i < len(entries); i++ {
+		if entries[i-1].Hash == entries[i].Hash {
+			return nil, fmt.Errorf("duplicate transaction hash %x in archived range [%d,%d)", entries[i].Hash, start, end)
+		}
+	}
+	return entries, nil
+}
+
+func buildOrRecoverOnlineTransactionIndex(path string, start, end uint64, prefixBits uint32, entries []rawdbfreezer.TransactionIndexEntry) (rawdbfreezer.TransactionIndexBuildResult, bool, error) {
+	if run, err := rawdbfreezer.OpenTransactionIndexRun(path); err == nil {
+		defer run.Close()
+		if run.StartBlock() != start || run.EndBlock() != end || run.PrefixBits() != prefixBits || run.Rows() != uint64(len(entries)) {
+			return rawdbfreezer.TransactionIndexBuildResult{}, false, fmt.Errorf("online transaction index run %q has incompatible metadata", path)
+		}
+		if err := run.Verify(); err != nil {
+			return rawdbfreezer.TransactionIndexBuildResult{}, false, err
+		}
+		return rawdbfreezer.TransactionIndexBuildResult{Path: path, Rows: run.Rows(), StartBlock: start, EndBlock: end, PrefixBits: prefixBits, FileBytes: run.Size()}, true, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return rawdbfreezer.TransactionIndexBuildResult{}, false, err
+	}
+	result, err := rawdbfreezer.BuildTransactionIndexRun(path, rawdbfreezer.TransactionIndexBuildOptions{
+		PrefixBits: prefixBits,
+		StartBlock: start,
+		EndBlock:   end,
+		Iterate: func(yield func(rawdbfreezer.TransactionIndexEntry) error) error {
+			for _, entry := range entries {
+				if err := yield(entry); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	return result, false, err
+}
+
+func (r *Runner) deleteHotTransactionIndexes(entries []rawdbfreezer.TransactionIndexEntry) error {
+	batch := r.chain.DB().NewBatchWithSize(txIndexDeleteBatchBytes)
+	defer batch.Reset()
+	flush := func() error {
+		if batch.ValueSize() == 0 {
+			return nil
+		}
+		if err := batch.Write(); err != nil {
+			return err
+		}
+		batch.Reset()
+		return nil
+	}
+	for _, entry := range entries {
+		if err := rawdb.DeleteTransactionIndex(batch, entry.Hash[:]); err != nil {
+			return err
+		}
+		if batch.ValueSize() >= txIndexDeleteBatchBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
 }
 
 // compactFrozenBlockRange performs eager physical reclamation for both
@@ -745,10 +1023,15 @@ func (r *Runner) loop() {
 	} else if frozen > 0 {
 		log.Info("Freezer: initial pass frozen", "blocks", frozen)
 	}
-	if compacted, err := r.CompactV2Once(); err != nil && !errors.Is(err, context.Canceled) {
+	if compacted, err := r.compactV2Scheduled(); err != nil && !errors.Is(err, context.Canceled) {
 		log.Warn("Freezer: initial V2 compaction failed", "err", err)
 	} else if compacted > 0 {
 		log.Info("Freezer: initial V2 compaction complete", "blocks", compacted)
+	}
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil && !errors.Is(err, context.Canceled) {
+		log.Warn("Freezer: initial transaction-index maintenance failed", "err", err)
+	} else if changed {
+		log.Info("Freezer: initial transaction-index maintenance complete")
 	}
 
 	ticker := time.NewTicker(r.cfg.Interval)
@@ -761,10 +1044,15 @@ func (r *Runner) loop() {
 			} else if frozen > 0 {
 				log.Info("Freezer: pass frozen", "blocks", frozen)
 			}
-			if compacted, err := r.CompactV2Once(); err != nil && !errors.Is(err, context.Canceled) {
+			if compacted, err := r.compactV2Scheduled(); err != nil && !errors.Is(err, context.Canceled) {
 				log.Warn("Freezer: V2 compaction failed", "err", err)
 			} else if compacted > 0 {
 				log.Info("Freezer: V2 compaction complete", "blocks", compacted)
+			}
+			if changed, err := r.MaintainTransactionIndexOnce(); err != nil && !errors.Is(err, context.Canceled) {
+				log.Warn("Freezer: transaction-index maintenance failed", "err", err)
+			} else if changed {
+				log.Info("Freezer: transaction-index maintenance complete")
 			}
 		case <-r.quit:
 			return

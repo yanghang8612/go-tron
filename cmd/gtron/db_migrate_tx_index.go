@@ -191,6 +191,9 @@ func dbMigrateTxIndexCmd(ctx *cli.Context) error {
 	output.ScannedHotRows = scanned
 	output.DeletedHotRows = deleted
 	output.RetainedHotRows = retained
+	if err := rawdb.WriteStageProgress(db, rawdb.StageFreezerTxIndexPrune, endBlock); err != nil {
+		return fmt.Errorf("write transaction-index prune progress: %w", err)
+	}
 	if syncer, ok := db.(interface{ SyncKeyValue() error }); !ok {
 		return fmt.Errorf("chaindata does not support an explicit sync barrier")
 	} else if err := syncer.SyncKeyValue(); err != nil {

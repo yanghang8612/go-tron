@@ -221,11 +221,11 @@ func (f *Freezer) Close() error {
 			errs = append(errs, err)
 		}
 		f.v2 = nil
-		f.v2Mu.Unlock()
 		if err := f.txIndex.Close(); err != nil {
 			errs = append(errs, err)
 		}
 		f.txIndex = nil
+		f.v2Mu.Unlock()
 		for _, table := range f.tables {
 			if err := table.Close(); err != nil {
 				errs = append(errs, err)
@@ -242,7 +242,12 @@ func (f *Freezer) Close() error {
 // every manifest-selected immutable transaction-index run. Callers must verify
 // the complete transaction hash against the canonical block body.
 func (f *Freezer) TransactionIndexCandidates(hash [32]byte) ([]uint64, error) {
-	if f == nil || f.txIndex == nil {
+	if f == nil {
+		return nil, nil
+	}
+	f.v2Mu.RLock()
+	defer f.v2Mu.RUnlock()
+	if f.txIndex == nil {
 		return nil, nil
 	}
 	return f.txIndex.Candidates(hash)
@@ -251,10 +256,91 @@ func (f *Freezer) TransactionIndexCandidates(hash [32]byte) ([]uint64, error) {
 // TransactionIndexCoverage is the first block not covered by the contiguous
 // immutable transaction-index prefix.
 func (f *Freezer) TransactionIndexCoverage() uint64 {
-	if f == nil || f.txIndex == nil {
+	if f == nil {
+		return 0
+	}
+	f.v2Mu.RLock()
+	defer f.v2Mu.RUnlock()
+	if f.txIndex == nil {
 		return 0
 	}
 	return f.txIndex.Coverage()
+}
+
+// PublishTransactionIndexRun atomically appends a verified run to the on-disk
+// manifest and installs a refreshed read view before callers remove hot tx-*
+// rows. Reopening the manifest first makes publication idempotent across a
+// crash after the manifest rename but before the in-memory swap.
+func (f *Freezer) PublishTransactionIndexRun(result TransactionIndexBuildResult) error {
+	f.v2Migrate.Lock()
+	defer f.v2Migrate.Unlock()
+	if f.readonly {
+		return errReadOnly
+	}
+	store, err := OpenTransactionIndexStore(f.datadir)
+	if err != nil {
+		return err
+	}
+	if store.Coverage() == result.EndBlock {
+		if result.EndBlock > f.V2Coverage() {
+			store.Close()
+			return fmt.Errorf("transaction index coverage %d exceeds V2 coverage %d", result.EndBlock, f.V2Coverage())
+		}
+		f.replaceTransactionIndexStore(store)
+		return nil
+	}
+	if store.Coverage() != result.StartBlock {
+		coverage := store.Coverage()
+		store.Close()
+		return fmt.Errorf("transaction index disk coverage %d does not continue run [%d,%d)", coverage, result.StartBlock, result.EndBlock)
+	}
+	store.Close()
+	if result.EndBlock > f.V2Coverage() {
+		return fmt.Errorf("transaction index end %d exceeds V2 coverage %d", result.EndBlock, f.V2Coverage())
+	}
+	if err := PublishTransactionIndexRun(f.datadir, result); err != nil {
+		return err
+	}
+	store, err = OpenTransactionIndexStore(f.datadir)
+	if err != nil {
+		return err
+	}
+	f.replaceTransactionIndexStore(store)
+	return nil
+}
+
+// CompactTransactionIndexTail merges one equal-sized tail pair and refreshes
+// the live read view. Old files are removed only after readers have switched to
+// the merged run; a crash before removal merely leaves harmless orphans.
+func (f *Freezer) CompactTransactionIndexTail() (bool, error) {
+	f.v2Migrate.Lock()
+	defer f.v2Migrate.Unlock()
+	if f.readonly {
+		return false, errReadOnly
+	}
+	_, obsolete, merged, err := CompactTransactionIndexTail(f.datadir)
+	if err != nil || !merged {
+		return merged, err
+	}
+	store, err := OpenTransactionIndexStore(f.datadir)
+	if err != nil {
+		return false, err
+	}
+	f.replaceTransactionIndexStore(store)
+	for _, path := range obsolete {
+		_ = os.Remove(path)
+	}
+	return true, nil
+}
+
+func (f *Freezer) replaceTransactionIndexStore(store *TransactionIndexStore) {
+	f.v2Mu.Lock()
+	oldStore := f.txIndex
+	f.txIndex = store
+	f.v2Mu.Unlock()
+	if oldStore != nil {
+		_ = oldStore.Close()
+	}
 }
 
 // AncientDatadir returns the path of the ancient store.
