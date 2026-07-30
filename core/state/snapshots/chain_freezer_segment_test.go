@@ -476,11 +476,24 @@ func TestCheckChainFreezerSegmentRejectsMalformedPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal tx block: %v", err)
 	}
+	txBlock1, _, _ := chainFreezerBlockWithTx(t, 1)
+	txBlock1Raw, err := txBlock1.Marshal()
+	if err != nil {
+		t.Fatalf("marshal tx block 1: %v", err)
+	}
+	genesisRef := writeChainFreezerSegmentRowsForTest(t, snapshotDir, "genesis-missing-tx-info.seg", 0, 0, []chainFreezerRow{{
+		blockNum: 0,
+		blockRaw: txBlockRaw,
+	}})
+	if err := CheckChainFreezerSegment(snapshotDir, genesisRef); err != nil {
+		t.Fatalf("CheckChainFreezerSegment genesis without transaction infos: %v", err)
+	}
 
 	for _, tc := range []struct {
-		name string
-		row  chainFreezerRow
-		want string
+		name     string
+		blockNum uint64
+		row      chainFreezerRow
+		want     string
 	}{
 		{
 			name: "bad-state-root",
@@ -492,16 +505,17 @@ func TestCheckChainFreezerSegmentRejectsMalformedPayloads(t *testing.T) {
 			want: "state root length",
 		},
 		{
-			name: "missing-tx-info",
+			name:     "missing-tx-info",
+			blockNum: 1,
 			row: chainFreezerRow{
-				blockNum: 0,
-				blockRaw: txBlockRaw,
+				blockNum: 1,
+				blockRaw: txBlock1Raw,
 			},
 			want: "missing transaction info coverage",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ref := writeChainFreezerSegmentRowsForTest(t, snapshotDir, tc.name+".seg", 0, 0, []chainFreezerRow{tc.row})
+			ref := writeChainFreezerSegmentRowsForTest(t, snapshotDir, tc.name+".seg", tc.blockNum, tc.blockNum, []chainFreezerRow{tc.row})
 			if err := CheckChainFreezerSegment(snapshotDir, ref); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("CheckChainFreezerSegment error = %v, want %q", err, tc.want)
 			}

@@ -237,6 +237,73 @@ func stateRootBytes(n uint64) []byte {
 	return out
 }
 
+func TestValidateFreezerTransactionInfosAllowsGenesisWithoutReceipts(t *testing.T) {
+	block := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 0}},
+		Transactions: []*corepb.Transaction{
+			{RawData: &corepb.TransactionRaw{}},
+			{RawData: &corepb.TransactionRaw{}},
+			{RawData: &corepb.TransactionRaw{}},
+		},
+	})
+	if err := validateFreezerTransactionInfosRaw(0, block, nil); err != nil {
+		t.Fatalf("genesis transaction infos: %v", err)
+	}
+	if err := validateFreezerTransactionInfosRaw(1, block, nil); err == nil || !strings.Contains(err.Error(), "missing transaction info coverage") {
+		t.Fatalf("ordinary block missing transaction infos error = %v", err)
+	}
+}
+
+func TestOnePassFreezesGenesisTransactionsWithoutReceipts(t *testing.T) {
+	fc := newFakeChain()
+	for n := uint64(0); n < 3; n++ {
+		fc.plantBlock(t, n)
+	}
+	genesis := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 0}},
+		Transactions: []*corepb.Transaction{
+			{RawData: &corepb.TransactionRaw{}},
+			{RawData: &corepb.TransactionRaw{}},
+			{RawData: &corepb.TransactionRaw{}},
+		},
+	})
+	genesisRaw, err := genesis.Marshal()
+	if err != nil {
+		t.Fatalf("marshal genesis: %v", err)
+	}
+	fc.mu.Lock()
+	fc.blockRaw[0] = genesisRaw
+	delete(fc.txInfosRaw, 0)
+	fc.blockHashByNo[0] = genesis.Hash()
+	fc.mu.Unlock()
+	if err := rawdb.WriteBlock(fc.db, genesis); err != nil {
+		t.Fatalf("write genesis: %v", err)
+	}
+	if err := rawdb.WriteBlockStateRoot(fc.db, genesis.Hash(), tcommon.BytesToHash(stateRootBytes(0))); err != nil {
+		t.Fatalf("write genesis state root: %v", err)
+	}
+	if err := fc.db.Delete(txInfoBlockKVKey(0)); err != nil {
+		t.Fatalf("delete synthetic genesis tx infos: %v", err)
+	}
+	fc.setSolidified(2)
+
+	r := New(fc, wrapFreezer(newFreezer(t)), Config{Enabled: true, BatchBlocks: 100})
+	frozen, err := r.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if frozen != 3 {
+		t.Fatalf("frozen=%d, want 3", frozen)
+	}
+	txInfos, err := r.freezer.Ancient(rawdbAncientTxInfos, 0)
+	if err != nil {
+		t.Fatalf("read frozen genesis tx infos: %v", err)
+	}
+	if len(txInfos) != 0 {
+		t.Fatalf("frozen genesis tx infos len=%d, want 0", len(txInfos))
+	}
+}
+
 // newFreezer wires a temp-dir freezer with a 2 KiB shard size so even
 // the small test loads exercise a shard rollover or two.
 func newFreezer(t *testing.T) *rawdbfreezer.Freezer {

@@ -731,6 +731,13 @@ func decodeFreezerBlockRaw(blockNum uint64, raw []byte) (*coretypes.Block, error
 
 func validateFreezerTransactionInfosRaw(blockNum uint64, block *coretypes.Block, raw []byte) error {
 	if len(raw) == 0 {
+		if blockNum == 0 {
+			var txs []*coretypes.Transaction
+			if block != nil {
+				txs = block.Transactions()
+			}
+			return rawdb.ValidateTransactionInfosForBlock(blockNum, txs, nil, "chain freezer append")
+		}
 		if block != nil && len(block.Transactions()) != 0 {
 			return fmt.Errorf("freezer: missing transaction info coverage for block %d with %d transactions", blockNum, len(block.Transactions()))
 		}

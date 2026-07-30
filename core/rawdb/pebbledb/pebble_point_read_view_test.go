@@ -37,6 +37,32 @@ func TestExactPointComparerReopensDefaultDatabase(t *testing.T) {
 	}
 }
 
+func TestGetWithPresence(t *testing.T) {
+	db, err := New(t.TempDir(), 16, 16, "test/get-with-presence/", false, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	key := []byte("staged-body")
+	if value, present, err := db.GetWithPresence(key); err != nil || present || value != nil {
+		t.Fatalf("missing value = (%q,%v,%v), want nil/false/nil", value, present, err)
+	}
+	if err := db.Put(key, []byte("block")); err != nil {
+		t.Fatal(err)
+	}
+	value, present, err := db.GetWithPresence(key)
+	if err != nil || !present || !bytes.Equal(value, []byte("block")) {
+		t.Fatalf("present value = (%q,%v,%v), want block/true/nil", value, present, err)
+	}
+	if err := db.Delete(key); err != nil {
+		t.Fatal(err)
+	}
+	if value, present, err := db.GetWithPresence(key); err != nil || present || value != nil {
+		t.Fatalf("deleted value = (%q,%v,%v), want nil/false/nil", value, present, err)
+	}
+}
+
 func TestPointReadSnapshotCursorIsStableAndExact(t *testing.T) {
 	db, err := New(t.TempDir(), 16, 16, "test/snapshot/", false, Options{})
 	if err != nil {

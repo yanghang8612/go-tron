@@ -205,16 +205,8 @@ func ReadSyncStagedBlock(db ethdb.KeyValueReader, number uint64) (*types.Block, 
 	if db == nil {
 		return nil, false, nil
 	}
-	key := syncStagedBlockKey(number)
-	exists, err := db.Has(key)
-	if err != nil {
-		return nil, false, err
-	}
-	if !exists {
-		return nil, false, nil
-	}
-	data, err := db.Get(key)
-	if err != nil {
+	data, exists, err := readPresentValue(db, syncStagedBlockKey(number), fmt.Sprintf("sync staged block %d", number))
+	if err != nil || !exists {
 		return nil, false, err
 	}
 	block, err := types.UnmarshalBlock(data)
@@ -231,16 +223,8 @@ func ReadSyncStagedBlockRaw(db ethdb.KeyValueReader, number uint64) (SyncStagedB
 	if db == nil {
 		return SyncStagedBlockRow{}, false, nil
 	}
-	key := syncStagedBlockKey(number)
-	exists, err := db.Has(key)
-	if err != nil {
-		return SyncStagedBlockRow{}, false, err
-	}
-	if !exists {
-		return SyncStagedBlockRow{}, false, nil
-	}
-	data, err := db.Get(key)
-	if err != nil {
+	data, exists, err := readPresentValue(db, syncStagedBlockKey(number), fmt.Sprintf("sync staged block %d", number))
+	if err != nil || !exists {
 		return SyncStagedBlockRow{}, false, err
 	}
 	return decodeSyncStagedBlockRow(number, data)

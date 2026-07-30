@@ -372,6 +372,9 @@ func TestRebuildSectionBloomsRejectsBadInputs(t *testing.T) {
 	if err := ValidateTransactionInfosForBlock(1, block.Transactions(), []*corepb.TransactionInfo{nil}, "section bloom rebuild"); err == nil || !strings.Contains(err.Error(), "nil transaction info") {
 		t.Fatalf("nil tx-info err = %v, want nil transaction info", err)
 	}
+	if err := ValidateTransactionInfosForBlock(0, block.Transactions(), nil, "genesis"); err != nil {
+		t.Fatalf("genesis allocation transactions without tx infos: %v", err)
+	}
 	mismatchedDB := NewMemoryChainDB()
 	block, infos := derivedRebuildTestBlock(t, 1, 1)
 	infos[0].Id = bytes.Repeat([]byte{0xfe}, common.HashLength)

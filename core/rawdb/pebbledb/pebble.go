@@ -849,6 +849,30 @@ func (d *Database) Get(key []byte) ([]byte, error) {
 	return ret, nil
 }
 
+// GetWithPresence retrieves a key and its presence in one Pebble point read.
+// Keeping the two results coupled avoids a Has/Get time-of-check/time-of-use
+// race when another goroutine deletes or inserts the key between calls.
+func (d *Database) GetWithPresence(key []byte) ([]byte, bool, error) {
+	d.quitLock.RLock()
+	defer d.quitLock.RUnlock()
+	if d.closed {
+		return nil, false, pebble.ErrClosed
+	}
+	dat, closer, err := d.db.Get(key)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	ret := make([]byte, len(dat))
+	copy(ret, dat)
+	if err = closer.Close(); err != nil {
+		return nil, false, err
+	}
+	return ret, true, nil
+}
+
 // View invokes fn with the Pebble-owned value for key while its closer remains
 // open. fn must consume or copy value synchronously and must not retain or
 // mutate it. Blockbuffer uses this optional capability to copy a durable-base

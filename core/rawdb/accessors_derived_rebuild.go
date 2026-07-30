@@ -547,6 +547,13 @@ func RebuildSectionBloomsFromTransactionInfos(chain *ChainDB, sectionReader ethd
 // ValidateTransactionInfosForBlock verifies that per-block TransactionInfo rows
 // describe the canonical transaction list before derived log indexes trust them.
 func ValidateTransactionInfosForBlock(blockNum uint64, txs []*types.Transaction, infos []*corepb.TransactionInfo, context string) error {
+	// java-tron's genesis allocation transactions materialize the initial state,
+	// but they are not executed as ordinary block transactions and therefore do
+	// not have TransactionInfo receipts. Preserve those transactions in the
+	// canonical/cold body while accepting the intentionally empty receipt row.
+	if blockNum == 0 && len(infos) == 0 {
+		return nil
+	}
 	if len(infos) != len(txs) {
 		return fmt.Errorf("%w for block %d during %s: have %d entries for %d transactions", ErrIncompleteTransactionInfoCoverage, blockNum, context, len(infos), len(txs))
 	}

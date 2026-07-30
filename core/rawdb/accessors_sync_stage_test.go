@@ -59,6 +59,31 @@ func TestReadSyncStagedBlockSurfacesStorageErrors(t *testing.T) {
 	}
 }
 
+func TestReadSyncStagedBlockUsesAtomicPresenceRead(t *testing.T) {
+	block := testSyncStagedBlock(3, common.Hash{0x02})
+	raw, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal staged block: %v", err)
+	}
+	reader := &atomicSyncStagedBlockReader{data: raw, present: true}
+	row, ok, err := ReadSyncStagedBlockRaw(reader, block.Number())
+	if err != nil || !ok || row.Number != block.Number() || row.Hash != block.Hash() {
+		t.Fatalf("ReadSyncStagedBlockRaw = %+v ok=%v err=%v", row, ok, err)
+	}
+	if reader.atomicReads != 1 || reader.hasCalls != 0 || reader.getCalls != 0 {
+		t.Fatalf("reader calls atomic=%d has=%d get=%d, want 1/0/0", reader.atomicReads, reader.hasCalls, reader.getCalls)
+	}
+
+	reader.data = nil
+	reader.present = false
+	if _, ok, err := ReadSyncStagedBlock(reader, block.Number()); err != nil || ok {
+		t.Fatalf("atomic missing staged block ok=%v err=%v, want clean miss", ok, err)
+	}
+	if reader.atomicReads != 2 || reader.hasCalls != 0 || reader.getCalls != 0 {
+		t.Fatalf("reader calls after miss atomic=%d has=%d get=%d, want 2/0/0", reader.atomicReads, reader.hasCalls, reader.getCalls)
+	}
+}
+
 func TestDeleteSyncStagedBlockBatch(t *testing.T) {
 	base := NewMemoryDatabase()
 	blocks := []*types.Block{
@@ -1580,6 +1605,30 @@ type directSyncStageWriter struct {
 	writer  ethdb.KeyValueWriter
 	puts    int
 	deletes int
+}
+
+type atomicSyncStagedBlockReader struct {
+	data        []byte
+	present     bool
+	err         error
+	atomicReads int
+	hasCalls    int
+	getCalls    int
+}
+
+func (r *atomicSyncStagedBlockReader) GetWithPresence([]byte) ([]byte, bool, error) {
+	r.atomicReads++
+	return append([]byte(nil), r.data...), r.present, r.err
+}
+
+func (r *atomicSyncStagedBlockReader) Has([]byte) (bool, error) {
+	r.hasCalls++
+	return false, errors.New("unexpected Has call")
+}
+
+func (r *atomicSyncStagedBlockReader) Get([]byte) ([]byte, error) {
+	r.getCalls++
+	return nil, errors.New("unexpected Get call")
 }
 
 func (db *directSyncStageWriter) Has(key []byte) (bool, error) {

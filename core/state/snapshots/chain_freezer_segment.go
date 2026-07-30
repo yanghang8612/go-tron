@@ -248,6 +248,12 @@ func validateChainFreezerRowPayload(row chainFreezerRow, context string) (valida
 	}
 	out.block = block
 	if len(row.txInfosRaw) == 0 {
+		if row.blockNum == 0 {
+			if err := rawdb.ValidateTransactionInfosForBlock(row.blockNum, block.Transactions(), nil, context); err != nil {
+				return out, err
+			}
+			return out, nil
+		}
 		if len(block.Transactions()) != 0 {
 			return out, fmt.Errorf("snapshots: %s row %d missing transaction info coverage for %d transactions", context, row.blockNum, len(block.Transactions()))
 		}
