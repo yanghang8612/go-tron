@@ -65,6 +65,261 @@ func TestBaseReadCache_ProductionAdmissionHistoryBudget(t *testing.T) {
 	if got, want := totalSlots*8, 4<<20; got != want {
 		t.Fatalf("admission history bytes = %d, want %d", got, want)
 	}
+
+	partitioned := newBaseReadCache(128<<20, "commitment-")
+	otherSlots := 0
+	for i := range partitioned.shards {
+		otherSlots += len(partitioned.shards[i].nonCommitmentAdmission)
+	}
+	if got, want := otherSlots*8, 1<<20; got != want {
+		t.Fatalf("other admission history bytes = %d, want %d", got, want)
+	}
+	if got, want := (totalSlots+otherSlots)*8, 5<<20; got != want {
+		t.Fatalf("partitioned admission history bytes = %d, want %d", got, want)
+	}
+}
+
+func testBaseReadCacheKeysForShard(t *testing.T, prefix string, shard uint32, count int) [][]byte {
+	t.Helper()
+	keys := make([][]byte, 0, count)
+	for i := 0; len(keys) < count && i < 1_000_000; i++ {
+		key := []byte(fmt.Sprintf("%s%08d", prefix, i))
+		if baseReadCacheShardIndex(key) == shard {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) != count {
+		t.Fatalf("found %d %q keys for shard %d, want %d", len(keys), prefix, shard, count)
+	}
+	return keys
+}
+
+func TestBaseReadCache_OtherReservationIsSoftAndBounded(t *testing.T) {
+	const (
+		commitmentPrefix = "commitment-"
+		shard            = uint32(0)
+	)
+	c := newBaseReadCache(baseReadCacheShardCount*4096, commitmentPrefix)
+	s := &c.shards[shard]
+	value := bytes.Repeat([]byte{0x5a}, 320)
+	otherKeys := testBaseReadCacheKeysForShard(t, "flat-latest-", shard, 3)
+
+	// With no commitment pressure, other rows borrow beyond their nominal
+	// quarter instead of leaving the shard underfilled.
+	for _, key := range otherKeys {
+		testBaseReadCacheSet(c, key, value)
+	}
+	if s.nonCommitmentUsed <= s.nonCommitmentLimit || s.used > s.limit {
+		t.Fatalf("other borrowing used=%d reservation=%d total=%d/%d", s.nonCommitmentUsed, s.nonCommitmentLimit, s.used, s.limit)
+	}
+
+	// Under sustained commitment pressure the mix converges to the weighted
+	// share, allowing at most one entry of charge granularity above the target.
+	for _, key := range testBaseReadCacheKeysForShard(t, commitmentPrefix, shard, 24) {
+		testBaseReadCacheSet(c, key, value)
+	}
+	if s.used > s.limit {
+		t.Fatalf("total used=%d exceeds limit=%d", s.used, s.limit)
+	}
+	maxEntryCharge := len(otherKeys[0]) + len(value) + baseReadCacheEntryOverhead
+	if s.nonCommitmentUsed > s.nonCommitmentLimit+maxEntryCharge {
+		t.Fatalf("other used=%d exceeds weighted target=%d plus entry=%d", s.nonCommitmentUsed, s.nonCommitmentLimit, maxEntryCharge)
+	}
+	protected := make([]string, 0, len(otherKeys))
+	for key, entry := range s.entries {
+		if entry.nonCommitment {
+			protected = append(protected, key)
+		}
+	}
+	if len(protected) == 0 {
+		t.Fatal("weighted reservation retained no other rows")
+	}
+}
+
+func TestBaseReadCache_CommitmentBorrowsUnusedReservation(t *testing.T) {
+	const (
+		commitmentPrefix = "commitment-"
+		shard            = uint32(0)
+	)
+	c := newBaseReadCache(baseReadCacheShardCount*4096, commitmentPrefix)
+	s := &c.shards[shard]
+	value := bytes.Repeat([]byte{0x6b}, 320)
+	for _, key := range testBaseReadCacheKeysForShard(t, commitmentPrefix, shard, 24) {
+		testBaseReadCacheSet(c, key, value)
+	}
+	if s.nonCommitmentUsed != 0 {
+		t.Fatalf("unused other reservation retained %d bytes", s.nonCommitmentUsed)
+	}
+	if s.used <= s.limit-s.nonCommitmentLimit {
+		t.Fatalf("commitment used=%d did not borrow unused reservation above %d", s.used, s.limit-s.nonCommitmentLimit)
+	}
+	if s.used > s.limit {
+		t.Fatalf("commitment used=%d exceeds total limit=%d", s.used, s.limit)
+	}
+}
+
+func TestBaseReadCache_OtherReclaimsBorrowedCommitmentCapacity(t *testing.T) {
+	const (
+		commitmentPrefix = "commitment-"
+		shard            = uint32(0)
+	)
+	c := newBaseReadCache(baseReadCacheShardCount*4096, commitmentPrefix)
+	s := &c.shards[shard]
+	value := bytes.Repeat([]byte{0x7c}, 320)
+	commitmentKeys := testBaseReadCacheKeysForShard(t, commitmentPrefix, shard, 24)
+	for _, key := range commitmentKeys {
+		testBaseReadCacheSet(c, key, value)
+	}
+	commitmentBefore := 0
+	for _, entry := range s.entries {
+		if !entry.nonCommitment {
+			commitmentBefore++
+		}
+	}
+	if s.used <= s.limit-s.nonCommitmentLimit {
+		t.Fatalf("precondition: commitment did not borrow reservation: used=%d limit=%d reserve=%d", s.used, s.limit, s.nonCommitmentLimit)
+	}
+
+	otherKeys := testBaseReadCacheKeysForShard(t, "flat-reclaim-", shard, 3)
+	for _, key := range otherKeys {
+		testBaseReadCacheSet(c, key, value)
+	}
+	commitmentAfter := 0
+	otherAfter := 0
+	for _, entry := range s.entries {
+		if entry.nonCommitment {
+			otherAfter++
+		} else {
+			commitmentAfter++
+		}
+	}
+	maxEntryCharge := len(otherKeys[0]) + len(value) + baseReadCacheEntryOverhead
+	if otherAfter == 0 || s.nonCommitmentUsed == 0 || s.nonCommitmentUsed > s.nonCommitmentLimit+maxEntryCharge {
+		t.Fatalf("other reclaim entries=%d used=%d limit=%d", otherAfter, s.nonCommitmentUsed, s.nonCommitmentLimit)
+	}
+	if commitmentAfter >= commitmentBefore {
+		t.Fatalf("commitment entries before=%d after=%d, want reclaimed capacity", commitmentBefore, commitmentAfter)
+	}
+	if s.used > s.limit {
+		t.Fatalf("reclaimed total used=%d exceeds limit=%d", s.used, s.limit)
+	}
+
+	// Later commitment pressure must keep the newly established reservation.
+	protected := make([]string, 0, otherAfter)
+	for key, entry := range s.entries {
+		if entry.nonCommitment {
+			protected = append(protected, key)
+		}
+	}
+	for _, key := range testBaseReadCacheKeysForShard(t, commitmentPrefix+"later-", shard, 24) {
+		testBaseReadCacheSet(c, key, value)
+	}
+	for _, key := range protected {
+		if entry := s.entries[key]; entry == nil || !entry.nonCommitment {
+			t.Fatalf("reclaimed other key %q displaced by later commitment churn", key)
+		}
+	}
+}
+
+func TestBaseReadCache_AdmissionEvidenceIsolatedByClass(t *testing.T) {
+	const commitmentPrefix = "commitment-"
+	c := newBaseReadCache(1<<20, commitmentPrefix)
+	otherKey := []byte("flat-admission-evidence")
+	s := &c.shards[baseReadCacheShardIndex(otherKey)]
+	otherFingerprint := baseReadCacheAdmissionFingerprint(otherKey)
+	otherIndex := otherFingerprint & uint64(len(s.nonCommitmentAdmission)-1)
+
+	_, _, epoch := c.getWithEpoch(otherKey)
+	if _, stored := c.setIfEpoch(otherKey, []byte("flat"), epoch); stored {
+		t.Fatal("first other sighting bypassed probation")
+	}
+	if s.nonCommitmentAdmission[otherIndex] != otherFingerprint {
+		t.Fatal("other probation evidence was not recorded in its own table")
+	}
+
+	// Commitment activity uses a disjoint table even if its direct-map index is
+	// identical, so a streaming branch scan cannot erase the flat row's first
+	// observation.
+	commitmentKeys := testBaseReadCacheKeysForShard(t, commitmentPrefix, baseReadCacheShardIndex(otherKey), 1)
+	commitmentKey := commitmentKeys[0]
+	_, _, commitmentEpoch := c.getWithEpoch(commitmentKey)
+	c.setIfEpoch(commitmentKey, []byte("branch"), commitmentEpoch)
+	if s.nonCommitmentAdmission[otherIndex] != otherFingerprint {
+		t.Fatal("commitment probation displaced other evidence")
+	}
+
+	_, _, epoch = c.getWithEpoch(otherKey)
+	if got, stored := c.setIfEpoch(otherKey, []byte("flat"), epoch); !stored || string(got) != "flat" {
+		t.Fatalf("second other sighting = (%q,%v), want admitted", got, stored)
+	}
+}
+
+func TestBaseReadCache_OtherRefreshDeleteAndClearAccounting(t *testing.T) {
+	c := newBaseReadCache(1<<20, "commitment-")
+	key := []byte("flat-latest-account-row")
+	testBaseReadCacheSet(c, key, []byte("old"))
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	entry := s.entries[string(key)]
+	if entry == nil || !entry.nonCommitment || s.nonCommitmentUsed != entry.charge {
+		t.Fatalf("initial other accounting entry=%p used=%d", entry, s.nonCommitmentUsed)
+	}
+	c.setFlushed(string(key), []byte("replacement-value"))
+	entry = s.entries[string(key)]
+	if entry == nil || string(entry.value) != "replacement-value" || s.nonCommitmentUsed != entry.charge {
+		t.Fatalf("refreshed other accounting entry=%p used=%d", entry, s.nonCommitmentUsed)
+	}
+	c.del(key)
+	if s.nonCommitmentUsed != 0 || s.used != 0 || len(s.entries) != 0 {
+		t.Fatalf("delete accounting used=%d other=%d entries=%d", s.used, s.nonCommitmentUsed, len(s.entries))
+	}
+	testBaseReadCacheSet(c, key, []byte("again"))
+	c.clear()
+	if s.nonCommitmentUsed != 0 || s.used != 0 || len(s.entries) != 0 || len(s.nonCommitmentQueue) != 0 {
+		t.Fatalf("clear accounting used=%d other=%d entries=%d queue=%d", s.used, s.nonCommitmentUsed, len(s.entries), len(s.nonCommitmentQueue))
+	}
+}
+
+func TestBaseReadCache_NoPrefixKeepsLegacySingleClock(t *testing.T) {
+	c := newBaseReadCache(1 << 20)
+	key := []byte("flat-looking-key-without-policy")
+	testBaseReadCacheSet(c, key, []byte("value"))
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	entry := s.entries[string(key)]
+	if entry == nil || entry.nonCommitment {
+		t.Fatalf("legacy entry=%p other=%v", entry, entry != nil && entry.nonCommitment)
+	}
+	if s.nonCommitmentLimit != 0 || len(s.nonCommitmentAdmission) != 0 || len(s.nonCommitmentQueue) != 0 {
+		t.Fatalf("legacy cache unexpectedly enabled policy: limit=%d admission=%d queue=%d", s.nonCommitmentLimit, len(s.nonCommitmentAdmission), len(s.nonCommitmentQueue))
+	}
+}
+
+func TestBaseReadCache_OtherStaleQueueCompactsAndReinserts(t *testing.T) {
+	const shard = uint32(0)
+	c := newBaseReadCache(8<<20, "commitment-")
+	s := &c.shards[shard]
+	keys := testBaseReadCacheKeysForShard(t, "flat-compact-", shard, 2500)
+	for _, key := range keys {
+		testBaseReadCacheSet(c, key, []byte("value"))
+	}
+	for _, key := range keys {
+		c.del(key)
+	}
+	if s.used != 0 || s.nonCommitmentUsed != 0 || len(s.entries) != 0 {
+		t.Fatalf("post-delete used=%d other=%d entries=%d", s.used, s.nonCommitmentUsed, len(s.entries))
+	}
+	if live := len(s.nonCommitmentQueue) - s.nonCommitmentHead; live >= 2048 {
+		t.Fatalf("stale other CLOCK tokens=%d, want compacted below 2048", live)
+	}
+
+	for _, key := range keys[:32] {
+		testBaseReadCacheSet(c, key, []byte("again"))
+		if entry := s.entries[string(key)]; entry == nil || !entry.nonCommitment {
+			t.Fatalf("reinserted key %q missing from other CLOCK", key)
+		}
+	}
+	if s.used > s.limit || s.nonCommitmentUsed > s.used {
+		t.Fatalf("reinsert accounting used=%d other=%d limit=%d", s.used, s.nonCommitmentUsed, s.limit)
+	}
 }
 
 func TestBaseReadCache_RecyclesPrivateKeyStorage(t *testing.T) {

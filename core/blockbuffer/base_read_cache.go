@@ -36,8 +36,10 @@ const (
 
 // baseReadCacheMaxAdmissionSlots bounds the direct-mapped two-hit admission
 // history per shard. The history stores fingerprints only (no key/value
-// objects), so a 128 MiB or larger cache spends at most 4 MiB across all 16
-// shards to keep one-hit historical-sync scans out of the resident cache.
+// objects), so a 128 MiB or larger cache spends 4 MiB across all 16 shards to
+// keep one-hit historical-sync scans out of the resident cache. When namespace
+// weighting is enabled, the non-commitment class gets a separate 1 MiB table so
+// commitment scans cannot erase its probation evidence.
 //
 // Historical mainnet sync performs enough durable commitment reads that the
 // former 2,048-slot cap was routinely overwritten between a hot branch's first
@@ -61,6 +63,13 @@ const baseReadCacheMaxAdmissionSlots = 32768
 // A 128 MiB production cache gets 65,536 generation slots (512 KiB). Collisions
 // remain conservative false rejections; they can never publish a stale value.
 const baseReadCacheMaxInvalidationSlots = 1 << 16
+
+// Keep a bounded share of the common cache available to flat-latest, account
+// and code rows when commitment replay continuously streams branch keys. The
+// reservation is deliberately soft: either class may borrow unused capacity,
+// while contention converges toward three quarters commitment and one quarter
+// other. Total retained charge remains unchanged.
+const baseReadCacheOtherReserveDivisor = 4
 
 // baseReadCache is a bounded, sharded FIFO/CLOCK cache for values read from
 // Buffer's durable base. It is intentionally below the overlay layers: in-flight and
@@ -91,7 +100,13 @@ type baseReadCache struct {
 type baseReadCacheShard struct {
 	mu      sync.RWMutex
 	entries map[string]*baseReadCacheEntry
-	queue   []*baseReadCacheEntry
+	// queue is the commitment/default CLOCK. nonCommitmentQueue is enabled only
+	// when a flush-admission prefix configures the production namespace split.
+	// The entry map and invalidation/version lifecycle remain shared; probation
+	// tables are class-local so a commitment scan cannot erase flat-state
+	// frequency evidence before its second observation.
+	queue              []*baseReadCacheEntry
+	nonCommitmentQueue []*baseReadCacheEntry
 	// freeEntries reuses metadata only after its sole CLOCK token has been
 	// consumed or removed by compaction. Explicit invalidation leaves the
 	// cleared entry queued, so it is deliberately not linked here at that point.
@@ -103,10 +118,14 @@ type baseReadCacheShard struct {
 	// displaced. Commitment sync walks a large number of cold branches once,
 	// while upper trie branches and flat-latest rows are revisited quickly; this
 	// tiny probation stage preserves the latter without retaining the former.
-	admission []uint64
-	head      int
-	used      int
-	limit     int
+	admission              []uint64
+	nonCommitmentAdmission []uint64
+	head                   int
+	nonCommitmentHead      int
+	used                   int
+	nonCommitmentUsed      int
+	limit                  int
+	nonCommitmentLimit     int
 }
 
 // baseReadCacheEpoch identifies one key's direct-mapped invalidation slot and
@@ -130,6 +149,9 @@ type baseReadCacheEntry struct {
 	charge  int
 	version uint64
 	live    bool
+	// nonCommitment selects the protected flat/account/code CLOCK segment. It
+	// fits in the structure's existing boolean/alignment padding.
+	nonCommitment bool
 	// exposed is set when a direct Get path returns value beyond the cache
 	// shard lock. The next changed flush must replace that backing allocation;
 	// callback-scoped reads instead hold RLock through consumption and leave it
@@ -165,10 +187,40 @@ func newBaseReadCache(sizeBytes int, flushAdmissionPrefix ...string) *baseReadCa
 		if i < remainder {
 			c.shards[i].limit++
 		}
+		if c.flushAdmissionPrefix != "" {
+			c.shards[i].nonCommitmentLimit = c.shards[i].limit / baseReadCacheOtherReserveDivisor
+		}
 		c.shards[i].entries = make(map[string]*baseReadCacheEntry)
 		c.shards[i].admission = make([]uint64, baseReadCacheAdmissionSlots(c.shards[i].limit))
+		if c.shards[i].nonCommitmentLimit > 0 {
+			// Keep the classes' probation evidence independent without doubling
+			// the existing 4 MiB production table. The protected class receives
+			// one quarter as many slots (1 MiB process-wide), matching its reserved
+			// share; commitment retains its full historical window.
+			otherSlots := len(c.shards[i].admission) / baseReadCacheOtherReserveDivisor
+			if otherSlots < 8 {
+				otherSlots = 8
+			}
+			c.shards[i].nonCommitmentAdmission = make([]uint64, otherSlots)
+		}
 	}
 	return c
+}
+
+func (c *baseReadCache) isOtherKeyBytes(key []byte) bool {
+	if c == nil || c.flushAdmissionPrefix == "" || len(key) < len(c.flushAdmissionPrefix) {
+		return c != nil && c.flushAdmissionPrefix != ""
+	}
+	for i := range c.flushAdmissionPrefix {
+		if key[i] != c.flushAdmissionPrefix[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *baseReadCache) isOtherKeyString(key string) bool {
+	return c != nil && c.flushAdmissionPrefix != "" && !strings.HasPrefix(key, c.flushAdmissionPrefix)
 }
 
 // getWithEpoch returns the key's invalidation-slot generation on a miss. A miss
@@ -359,6 +411,7 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 	if c == nil {
 		return value, false
 	}
+	other := c.isOtherKeyBytes(key)
 	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	s := &c.shards[baseReadCacheShardIndex(key)]
 	if charge > s.limit {
@@ -383,17 +436,23 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 		s.mu.Unlock()
 		return value, true
 	}
-	if !s.admit(key) {
+	if !s.admit(key, other) {
 		s.mu.Unlock()
 		return value, false
 	}
 	entry := s.acquireEntryBytes(key, value, missing, c.version.Load())
+	entry.nonCommitment = other
 	if expose && entry.value != nil {
 		entry.exposed.Store(true)
 	}
 	storedValue := entry.value
 	s.entries[entry.key] = entry
-	s.queue = append(s.queue, entry)
+	if other {
+		s.nonCommitmentQueue = append(s.nonCommitmentQueue, entry)
+		s.nonCommitmentUsed += entry.charge
+	} else {
+		s.queue = append(s.queue, entry)
+	}
 	s.used += entry.charge
 	s.evict()
 	s.compactIfSparse()
@@ -443,7 +502,7 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	old, cached := s.entries[key]
 	if !cached && charge <= s.limit && c.flushAdmissionPrefix != "" &&
-		strings.HasPrefix(key, c.flushAdmissionPrefix) && s.admitObservedString(key) {
+		strings.HasPrefix(key, c.flushAdmissionPrefix) && s.admitObservedString(key, false) {
 		// The first durable read already paid for this value and established
 		// frequency evidence. The successful canonical flush supplies the
 		// second observation and a newer immutable value, so retain it now
@@ -451,6 +510,7 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		// complete admission. Clone the layer-owned key/value: sibling batches
 		// may share large arenas which are released after layer promotion.
 		entry := s.acquireEntryString(key, value, false, c.version.Load())
+		entry.nonCommitment = false
 		s.entries[entry.key] = entry
 		s.queue = append(s.queue, entry)
 		s.used += entry.charge
@@ -484,7 +544,11 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 			old.value = cloneBaseReadCacheValue(value)
 			old.exposed.Store(false)
 			newCharge := int(old.keyCapacity) + cap(old.value) + baseReadCacheEntryOverhead
-			s.used += newCharge - old.charge
+			delta := newCharge - old.charge
+			s.used += delta
+			if old.nonCommitment {
+				s.nonCommitmentUsed += delta
+			}
 			old.charge = newCharge
 		}
 		old.version = c.version.Load()
@@ -493,6 +557,9 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		if cached {
 			delete(s.entries, key)
 			s.used -= old.charge
+			if old.nonCommitment {
+				s.nonCommitmentUsed -= old.charge
+			}
 			retireBaseReadCacheEntry(old)
 		}
 	}
@@ -642,6 +709,7 @@ func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
 	entry.charge = 0
 	entry.version = 0
 	entry.live = false
+	entry.nonCommitment = false
 	entry.exposed.Store(false)
 	entry.referenced.Store(false)
 	entry.nextFree = nil
@@ -683,12 +751,17 @@ func (c *baseReadCache) delStringAt(key string, shard uint32) {
 // delStringLocked removes one resident value and its admission history. The
 // caller owns s.mu and has already advanced the key's invalidation epoch.
 func (c *baseReadCache) delStringLocked(s *baseReadCacheShard, key string) {
+	other := c.isOtherKeyString(key)
 	if old, ok := s.entries[key]; ok {
+		other = old.nonCommitment
 		delete(s.entries, key)
 		s.used -= old.charge
+		if old.nonCommitment {
+			s.nonCommitmentUsed -= old.charge
+		}
 		retireBaseReadCacheEntry(old)
 	}
-	s.forgetAdmissionString(key)
+	s.forgetAdmissionString(key, other)
 }
 
 func (c *baseReadCache) clear() {
@@ -708,9 +781,14 @@ func (c *baseReadCache) clear() {
 		clear(s.entries)
 		clear(s.queue)
 		s.queue = s.queue[:0]
+		clear(s.nonCommitmentQueue)
+		s.nonCommitmentQueue = s.nonCommitmentQueue[:0]
 		clear(s.admission)
+		clear(s.nonCommitmentAdmission)
 		s.head = 0
+		s.nonCommitmentHead = 0
 		s.used = 0
+		s.nonCommitmentUsed = 0
 		s.freeEntries = nil
 		s.freeEntryCount = 0
 		s.freeValueBytes = 0
@@ -829,14 +907,22 @@ func baseReadCacheAdmissionSlots(limit int) int {
 // cannot return an incorrect value because resident entries still compare the
 // complete key. Clearing the slot on admission means a later eviction requires
 // fresh evidence before the row can pollute the cache again.
-func (s *baseReadCacheShard) admit(key []byte) bool {
+func (s *baseReadCacheShard) admissionFor(other bool) []uint64 {
+	if other && len(s.nonCommitmentAdmission) != 0 {
+		return s.nonCommitmentAdmission
+	}
+	return s.admission
+}
+
+func (s *baseReadCacheShard) admit(key []byte, other bool) bool {
+	admission := s.admissionFor(other)
 	fingerprint := baseReadCacheAdmissionFingerprint(key)
-	index := fingerprint & uint64(len(s.admission)-1)
-	if s.admission[index] == fingerprint {
-		s.admission[index] = 0
+	index := fingerprint & uint64(len(admission)-1)
+	if admission[index] == fingerprint {
+		admission[index] = 0
 		return true
 	}
-	s.admission[index] = fingerprint
+	admission[index] = fingerprint
 	return false
 }
 
@@ -844,21 +930,23 @@ func (s *baseReadCacheShard) admit(key []byte) bool {
 // its probation slot. Unlike admit, a miss does not install the fingerprint:
 // calling this from flush promotion must not let write-only metadata displace
 // evidence collected by durable reads.
-func (s *baseReadCacheShard) admitObservedString(key string) bool {
+func (s *baseReadCacheShard) admitObservedString(key string, other bool) bool {
+	admission := s.admissionFor(other)
 	fingerprint := baseReadCacheAdmissionFingerprintString(key)
-	index := fingerprint & uint64(len(s.admission)-1)
-	if s.admission[index] != fingerprint {
+	index := fingerprint & uint64(len(admission)-1)
+	if admission[index] != fingerprint {
 		return false
 	}
-	s.admission[index] = 0
+	admission[index] = 0
 	return true
 }
 
-func (s *baseReadCacheShard) forgetAdmissionString(key string) {
+func (s *baseReadCacheShard) forgetAdmissionString(key string, other bool) {
+	admission := s.admissionFor(other)
 	fingerprint := baseReadCacheAdmissionFingerprintString(key)
-	index := fingerprint & uint64(len(s.admission)-1)
-	if s.admission[index] == fingerprint {
-		s.admission[index] = 0
+	index := fingerprint & uint64(len(admission)-1)
+	if admission[index] == fingerprint {
+		admission[index] = 0
 	}
 }
 
@@ -894,33 +982,86 @@ func baseReadCacheAdmissionFingerprintString(key string) uint64 {
 }
 
 func (s *baseReadCacheShard) evict() {
-	for s.used > s.limit && s.head < len(s.queue) {
-		entry := s.queue[s.head]
-		s.queue[s.head] = nil
-		s.head++
+	commitmentLimit := s.limit - s.nonCommitmentLimit
+	// Both classes may borrow unused capacity. Once the shard is full, reclaim
+	// whichever class exceeds its weighted share; when entry-size granularity
+	// puts both slightly over, prefer retaining the foreground/other share.
+	for s.used > s.limit {
+		commitmentUsed := s.used - s.nonCommitmentUsed
+		if s.nonCommitmentLimit > 0 &&
+			s.nonCommitmentUsed > s.nonCommitmentLimit && commitmentUsed <= commitmentLimit {
+			if s.evictOne(true) {
+				continue
+			}
+		}
+		if commitmentUsed > commitmentLimit && s.evictOne(false) {
+			continue
+		}
+		if s.nonCommitmentUsed > s.nonCommitmentLimit && s.evictOne(true) {
+			continue
+		}
+		if s.evictOne(false) {
+			continue
+		}
+		if s.evictOne(true) {
+			continue
+		}
+		break
+	}
+	s.compactConsumedPrefix(false)
+	s.compactConsumedPrefix(true)
+}
+
+// evictOne consumes one CLOCK candidate from the requested class. It returns
+// false only when that queue has no remaining token. A referenced entry gets
+// one second chance in the same class; stale invalidation tokens are recycled
+// without touching resident accounting.
+func (s *baseReadCacheShard) evictOne(other bool) bool {
+	queue := &s.queue
+	head := &s.head
+	if other {
+		queue = &s.nonCommitmentQueue
+		head = &s.nonCommitmentHead
+	}
+	for *head < len(*queue) {
+		entry := (*queue)[*head]
+		(*queue)[*head] = nil
+		*head = *head + 1
 		if entry == nil {
 			continue
 		}
 		if entry.live {
 			if entry.referenced.Swap(false) {
-				// Move the same stable entry to the tail. Newly admitted entries
-				// start unreferenced, so a
-				// one-time two-hit scan is evicted before a genuinely reused row.
-				s.queue = append(s.queue, entry)
-				continue
+				// Newly admitted entries start unreferenced, so a one-time two-hit
+				// scan is evicted before a genuinely reused row.
+				*queue = append(*queue, entry)
+				return true
 			}
 			delete(s.entries, entry.key)
 			s.used -= entry.charge
+			if entry.nonCommitment {
+				s.nonCommitmentUsed -= entry.charge
+			}
 		}
 		s.recycleEntry(entry)
+		return true
 	}
-	// Avoid retaining an ever-growing stale-entry prefix when invalidated keys
-	// are later inserted again. Copy only occasionally so steady-state hits stay
-	// allocation-free.
-	if s.head >= 1024 && s.head*2 >= len(s.queue) {
-		copy(s.queue, s.queue[s.head:])
-		s.queue = s.queue[:len(s.queue)-s.head]
-		s.head = 0
+	return false
+}
+
+func (s *baseReadCacheShard) compactConsumedPrefix(other bool) {
+	queue := &s.queue
+	head := &s.head
+	if other {
+		queue = &s.nonCommitmentQueue
+		head = &s.nonCommitmentHead
+	}
+	// Avoid retaining an ever-growing consumed prefix. Copy only occasionally so
+	// steady-state hits stay allocation-free.
+	if *head >= 1024 && *head*2 >= len(*queue) {
+		copy(*queue, (*queue)[*head:])
+		*queue = (*queue)[:len(*queue)-*head]
+		*head = 0
 	}
 }
 
@@ -929,15 +1070,31 @@ func (s *baseReadCacheShard) evict() {
 // for millions of blocks without ever exceeding the payload byte limit; without
 // this ratio gate the FIFO metadata alone would grow for the whole session.
 func (s *baseReadCacheShard) compactIfSparse() {
-	liveTokens := len(s.queue) - s.head
+	liveTokens := len(s.queue) - s.head + len(s.nonCommitmentQueue) - s.nonCommitmentHead
 	if liveTokens < 2048 || liveTokens <= len(s.entries)*2+1024 {
 		return
 	}
-	queue := make([]*baseReadCacheEntry, 0, len(s.entries))
+	nonCommitmentEntries := 0
 	for _, entry := range s.entries {
-		queue = append(queue, entry)
+		if entry.nonCommitment {
+			nonCommitmentEntries++
+		}
+	}
+	queue := make([]*baseReadCacheEntry, 0, len(s.entries)-nonCommitmentEntries)
+	nonCommitmentQueue := make([]*baseReadCacheEntry, 0, nonCommitmentEntries)
+	for _, entry := range s.entries {
+		if entry.nonCommitment {
+			nonCommitmentQueue = append(nonCommitmentQueue, entry)
+		} else {
+			queue = append(queue, entry)
+		}
 	}
 	for _, entry := range s.queue[s.head:] {
+		if entry != nil && !entry.live {
+			s.recycleEntry(entry)
+		}
+	}
+	for _, entry := range s.nonCommitmentQueue[s.nonCommitmentHead:] {
 		if entry != nil && !entry.live {
 			s.recycleEntry(entry)
 		}
@@ -945,6 +1102,9 @@ func (s *baseReadCacheShard) compactIfSparse() {
 	clear(s.queue)
 	s.queue = queue
 	s.head = 0
+	clear(s.nonCommitmentQueue)
+	s.nonCommitmentQueue = nonCommitmentQueue
+	s.nonCommitmentHead = 0
 }
 
 func baseReadCacheShardIndex(key []byte) uint32 {
