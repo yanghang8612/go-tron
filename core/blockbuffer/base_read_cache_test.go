@@ -507,6 +507,40 @@ func TestBaseReadCache_SecondChancePreservesReferencedOldestEntry(t *testing.T) 
 	}
 }
 
+func TestBaseReadCache_RepeatedHitsAccumulateBoundedClockCredit(t *testing.T) {
+	value := bytes.Repeat([]byte{0x7c}, 128)
+	c := newBaseReadCache(1 << 20)
+	keys := testBaseReadCacheKeysForShard(t, "credit-", 0, 1)
+	charge := len(keys[0]) + len(value) + baseReadCacheEntryOverhead
+	s := &c.shards[baseReadCacheShardIndex(keys[0])]
+	s.limit = charge
+
+	testBaseReadCacheSet(c, keys[0], value)
+	for range baseReadCacheMaxReferenceCredit + 4 {
+		if _, ok, _ := c.getWithEpoch(keys[0]); !ok {
+			t.Fatal("hot entry missed while accumulating CLOCK credit")
+		}
+	}
+	entry := s.entries[string(keys[0])]
+	if got := entry.references.Load(); got != baseReadCacheMaxReferenceCredit {
+		t.Fatalf("reference credit = %d, want saturated %d", got, baseReadCacheMaxReferenceCredit)
+	}
+
+	// Each transient insert is admitted through the normal two-hit probation.
+	// The hot entry should spend one credit per sweep and survive all three;
+	// the fourth pressure wave may finally evict it if it has not been hit again.
+	for wave := uint32(0); wave < baseReadCacheMaxReferenceCredit; wave++ {
+		key := testBaseReadCacheKeysForShard(t, fmt.Sprintf("wave-%d-", wave), 0, 1)[0]
+		testBaseReadCacheSet(c, key, value)
+		if _, ok, _ := c.getWithEpoch(keys[0]); !ok {
+			t.Fatalf("hot entry evicted on credited wave %d", wave)
+		}
+		// Undo the observation made by the assertion so the test checks the
+		// originally accumulated budget rather than replenishing it.
+		entry.references.Add(^uint32(0))
+	}
+}
+
 func TestBaseReadCache_EvictionReusesEntryMetadata(t *testing.T) {
 	c := newBaseReadCache(1 << 20)
 	keys := make([][]byte, 0, 3)
