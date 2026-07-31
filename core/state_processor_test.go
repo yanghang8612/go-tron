@@ -798,6 +798,25 @@ func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
 	}
 }
 
+func TestTransactionInfoSlotOwnsContractAddress(t *testing.T) {
+	tx := makeTestTriggerTx(1, testProcessorAddr(2), nil)
+	firstAddress := testProcessorAddr(3)
+	secondAddress := testProcessorAddr(4)
+	sharedResultAddress := firstAddress.Bytes()
+	result := &actuator.Result{ContractAddress: sharedResultAddress}
+	var firstSlot, secondSlot transactionInfoSlot
+	firstInfo := firstSlot.build(tx, result, 1, 3_000, false)
+
+	copy(sharedResultAddress, secondAddress.Bytes())
+	secondInfo := secondSlot.build(tx, result, 1, 3_000, false)
+	if !bytes.Equal(firstInfo.ContractAddress, firstAddress.Bytes()) {
+		t.Fatalf("first slot contract address = %x, want %x", firstInfo.ContractAddress, firstAddress)
+	}
+	if !bytes.Equal(secondInfo.ContractAddress, secondAddress.Bytes()) {
+		t.Fatalf("second slot contract address = %x, want %x", secondInfo.ContractAddress, secondAddress)
+	}
+}
+
 func TestProcessBlock_CanDiscardTransactionInfosAfterValidation(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()

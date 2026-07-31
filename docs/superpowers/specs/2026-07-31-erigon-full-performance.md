@@ -555,6 +555,14 @@ Transfer, and other contracts and by receipt, fee, contract result, logs,
 internal transactions, and remaining fields before changing eligibility or
 snapshot semantics.
 
+Field-level production diagnostics then isolated 127 of 147 mismatches to
+`TransactionInfo.contract_address`; transaction status, error message, and
+identity all matched. This exposed an existing canonical receipt ownership bug:
+the transaction-info slot borrowed ContractAddress from the block-reused
+`applyTransactionScratch.result` embedded array, so the next VM transaction
+overwrote earlier receipts. Each slot now owns and copies its 21-byte contract
+address. Transfer workers remained byte-identical throughout this sample.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

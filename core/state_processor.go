@@ -337,6 +337,7 @@ type transactionInfoSlot struct {
 	info                 corepb.TransactionInfo
 	receipt              corepb.ResourceReceipt
 	id                   tcommon.Hash
+	contractAddress      [tcommon.AddressLength]byte
 	contractResult       [1][]byte
 	internalTxArena      vm.InternalTransactionArena
 	executionLogArena    vm.ExecutionLogArena
@@ -512,7 +513,8 @@ func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.R
 	}
 
 	if len(result.ContractAddress) > 0 {
-		info.ContractAddress = result.ContractAddress
+		addressLen := copy(slot.contractAddress[:], result.ContractAddress)
+		info.ContractAddress = slot.contractAddress[:addressLen:addressLen]
 	}
 	if result.AssetIssueID != "" {
 		info.AssetIssueID = result.AssetIssueID
