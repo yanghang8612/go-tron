@@ -594,10 +594,11 @@ with an exact-key raw-KV recorder. Reads join the same block-local version map;
 successful puts/deletes contribute owned post-images to the same WriteSet. The
 wrapper preserves blockbuffer cached reads, missing-key classification, and
 ancient-aware block-hash lookup. Discard workers record the same accesses in
-their private write overlay. Raw read/write-cell and conflict metrics distinguish
-an exercised immutable direct-DB path from an unobserved path. This remains observe-only until production proves
-that adding raw keys preserves the 100% result/WriteSet sample and ordered
-publication can apply every typed family safely.
+their private write overlay. Raw read/write-cell and conflict metrics
+distinguish an exercised immutable direct-DB path from an unobserved path. This
+remains observe-only until production proves that adding raw keys preserves the
+100% result/WriteSet sample and ordered publication can apply every typed
+family safely.
 
 The first raw-key production sample covered 413,166 transactions and recorded
 416,127 raw read cells (1.007 per transaction), with zero raw writes and zero
@@ -607,6 +608,28 @@ Across the same deployment, 385/385 sampled workers matched both complete
 TransactionInfo and the combined typed/raw WriteSet. Repeated physical keys are
 interned once per block and reused across transaction recorder resets, avoiding
 one string allocation per TAPOS validation while preserving owned-key lifetime.
+
+#### P4.11: Preflighted ordered write application
+
+Introduce a publication primitive without routing canonical execution through
+it yet. The applier first validates the complete WriteSet and accepts only
+unambiguous typed families: account scalar fields, witness capsules, storage,
+code, contract metadata, exact account-KV cells, transient storage,
+DynamicProperties, and raw KV. Ordinary post-images replace the logical cell;
+audited balance/dynamic settlement values are added as signed deltas to the
+publisher's current ordered baseline. Presence bits drive storage/account-KV,
+metadata, and raw deletion rather than collapsing deletion into an empty value.
+
+Full-account replacement, account-KV generation reset, self-destruct, unknown
+account fields, and malformed values fail preflight before any mutation. The
+state-aware phase also rejects typed writes whose owner account is absent,
+because valid creation would carry a currently unsupported full-account
+post-image. Applying disables the execution access recorder temporarily so
+publication does not masquerade as another transaction. Unit fixtures cover
+absolute field publication, commutative deltas over a newer baseline, storage,
+account-KV/metadata/raw deletion, and preflight atomicity. Sampled workers now
+report how many exact WriteSets are eligible for this narrow applier; actual
+production publication remains disabled.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

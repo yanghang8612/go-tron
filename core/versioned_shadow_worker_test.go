@@ -159,8 +159,8 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 		canonicalWriteSets: []state.TransactionWriteSet{canonicalWriteSet},
 		genesisTimestamp:   0,
 	})
-	if got.err != nil || !got.matched || got.writeSetErr != nil || !got.writeSetMatch {
-		t.Fatalf("discard worker = info-matched:%v writes-matched:%v err:%v write-err:%v", got.matched, got.writeSetMatch, got.err, got.writeSetErr)
+	if got.err != nil || !got.matched || got.writeSetErr != nil || !got.writeSetMatch || !got.applyEligible {
+		t.Fatalf("discard worker = info-matched:%v writes-matched:%v apply-eligible:%v err:%v write-err:%v", got.matched, got.writeSetMatch, got.applyEligible, got.err, got.writeSetErr)
 	}
 	if balance := workerState.GetBalance(owner); balance != 10_000_000 {
 		t.Fatalf("discard worker owner balance = %d, want 10000000", balance)

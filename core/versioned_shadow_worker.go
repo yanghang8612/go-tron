@@ -33,6 +33,8 @@ var (
 	discardShadowWriteSetMatchesCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_matches", nil)
 	discardShadowWriteSetMismatchesCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_mismatches", nil)
 	discardShadowWriteSetErrorsCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_errors", nil)
+	discardShadowWriteSetApplyEligibleCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_eligible", nil)
+	discardShadowWriteSetApplyUnsupportedCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported", nil)
 	discardShadowErrorsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/errors", nil)
 	discardShadowCopyNanosCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/copy_nanos", nil)
 	discardShadowExecutionNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/execution_nanos", nil)
@@ -160,6 +162,7 @@ type discardShadowTaskResult struct {
 	matched       bool
 	writeSetMatch bool
 	writeSetErr   error
+	applyEligible bool
 	err           error
 }
 
@@ -451,7 +454,7 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 		close(results)
 	}()
 
-	var executed, matches, mismatches, coreMatches, coreMismatches, writeSetMatches, writeSetMismatches, writeSetErrors, executionErrors int64
+	var executed, matches, mismatches, coreMatches, coreMismatches, writeSetMatches, writeSetMismatches, writeSetErrors, applyEligible, applyUnsupported, executionErrors int64
 	for result := range results {
 		executed++
 		switch {
@@ -552,6 +555,13 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 			default:
 				writeSetMismatches++
 			}
+			if result.writeSetErr == nil {
+				if result.applyEligible {
+					applyEligible++
+				} else {
+					applyUnsupported++
+				}
+			}
 		}
 	}
 	executionNanos := time.Since(executionStarted).Nanoseconds()
@@ -565,6 +575,8 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 	discardShadowWriteSetMatchesCounter.Inc(writeSetMatches)
 	discardShadowWriteSetMismatchesCounter.Inc(writeSetMismatches)
 	discardShadowWriteSetErrorsCounter.Inc(writeSetErrors)
+	discardShadowWriteSetApplyEligibleCounter.Inc(applyEligible)
+	discardShadowWriteSetApplyUnsupportedCounter.Inc(applyUnsupported)
 	discardShadowErrorsCounter.Inc(executionErrors)
 	discardShadowCopyNanosCounter.Inc(shadow.copyNanos)
 	discardShadowExecutionNanosCounter.Inc(executionNanos)
@@ -658,8 +670,10 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		writeSetErr = errors.New("unknown worker state write")
 	}
 	writeSetMatch := writeSetErr == nil
+	applyEligible := false
 	if writeSetMatch && txIndex < len(cfg.canonicalWriteSets) {
 		writeSetMatch = state.EqualTransactionWriteSets(writes, cfg.canonicalWriteSets[txIndex])
+		applyEligible = state.ValidateTransactionWriteSetApply(writes, worker.dynProps, &worker.db) == nil
 	}
 	worker.state.RevertToSnapshot(stateSnapshot)
 	worker.dynProps.RevertToSnapshot(dpSnapshot)
@@ -670,5 +684,6 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		matched:       mismatch == 0,
 		writeSetMatch: writeSetMatch,
 		writeSetErr:   writeSetErr,
+		applyEligible: applyEligible,
 	}
 }
