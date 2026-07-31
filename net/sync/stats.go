@@ -82,12 +82,6 @@ func (s *Stats) AddApplyBlock(a core.ApplyStats) {
 	s.cur.ApplyStats.DPUpdate += a.DPUpdate
 	s.cur.ApplyStats.Persist += a.Persist
 	s.cur.ApplyStats.Hooks += a.Hooks
-	s.cur.ApplyStats.StatePrefetch.Enqueued += a.StatePrefetch.Enqueued
-	s.cur.ApplyStats.StatePrefetch.Dropped += a.StatePrefetch.Dropped
-	s.cur.ApplyStats.StatePrefetch.Processed += a.StatePrefetch.Processed
-	s.cur.ApplyStats.StatePrefetch.Hits += a.StatePrefetch.Hits
-	s.cur.ApplyStats.StatePrefetch.Misses += a.StatePrefetch.Misses
-	s.cur.ApplyStats.StatePrefetch.Errors += a.StatePrefetch.Errors
 }
 
 // AddBlock records one successfully-applied block: bumps the rolling window's

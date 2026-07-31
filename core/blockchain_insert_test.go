@@ -527,7 +527,6 @@ func TestBlockChain_StageProgressDoesNotAdvanceOnFailedExecution(t *testing.T) {
 func TestBlockChain_LatestCommitmentModeUsesFlatRootAndCommitmentDomain(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	cfg := *params.MainnetChainConfig
-	cfg.StateCommitmentMode = params.StateCommitmentModeLatest
 	genesis := &params.Genesis{
 		Config:            &cfg,
 		DynamicProperties: map[string]int64{},

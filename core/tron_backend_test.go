@@ -645,7 +645,7 @@ func TestTronBackend_LiveWitnessReadsSurfaceCorruptRootedIndexes(t *testing.T) {
 	truncated := []byte{0, 0, 0, 2, 0x41}
 
 	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
-		key := state.WitnessIndexPrefetchKey()
+		key := state.WitnessIndexSystemRow()
 		if err := statedb.SystemKVPut(key.Domain, key.Key, truncated); err != nil {
 			t.Fatal(err)
 		}
@@ -672,7 +672,7 @@ func TestTronBackend_LiveWitnessReadsSurfaceCorruptPendingVotes(t *testing.T) {
 		if err := statedb.WriteVotesIndex([]tcommon.Address{voter}); err != nil {
 			t.Fatal(err)
 		}
-		key := state.PendingVotesPrefetchKey(voter)
+		key := state.PendingVotesSystemRow(voter)
 		if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0x80}); err != nil {
 			t.Fatal(err)
 		}
@@ -683,7 +683,7 @@ func TestTronBackend_LiveWitnessReadsSurfaceCorruptPendingVotes(t *testing.T) {
 	}
 
 	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
-		key := state.PendingVotesIndexPrefetchKey()
+		key := state.PendingVotesIndexSystemRow()
 		if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0, 0, 0, 2, 0x41}); err != nil {
 			t.Fatal(err)
 		}
@@ -703,11 +703,11 @@ func TestTronBackend_LiveMarketReadsSurfaceCorruptRows(t *testing.T) {
 	sell, buy := []byte("_"), []byte("1000001")
 
 	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
-		for _, key := range []state.PrefetchKey{
-			state.MarketOrderPrefetchKey(orderID),
-			state.MarketAccountOrderPrefetchKey(owner[:]),
-			state.MarketPriceListPrefetchKey(sell, buy),
-			state.MarketPairIndexPrefetchKey(),
+		for _, key := range []state.SystemKVRow{
+			state.MarketOrderSystemRow(orderID),
+			state.MarketAccountOrderSystemRow(owner[:]),
+			state.MarketPriceListSystemRow(sell, buy),
+			state.MarketPairIndexSystemRow(),
 		} {
 			if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0x80}); err != nil {
 				t.Fatal(err)
@@ -768,7 +768,7 @@ func TestTronBackend_LiveMarketOrderListSurfacesCorruptLinkedRows(t *testing.T) 
 		}); err != nil {
 			t.Fatal(err)
 		}
-		key := state.MarketOrderBookPrefetchKey(sell, buy, pk)
+		key := state.MarketOrderBookSystemRow(sell, buy, pk)
 		if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0x80}); err != nil {
 			t.Fatal(err)
 		}
@@ -784,7 +784,7 @@ func TestTronBackend_LiveMarketOrderListSurfacesCorruptLinkedRows(t *testing.T) 
 		}); err != nil {
 			t.Fatal(err)
 		}
-		key := state.MarketOrderPrefetchKey(orderID)
+		key := state.MarketOrderSystemRow(orderID)
 		if err := statedb.SystemKVPut(key.Domain, key.Key, []byte{0x80}); err != nil {
 			t.Fatal(err)
 		}

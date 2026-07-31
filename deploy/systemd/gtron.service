@@ -16,13 +16,15 @@ Environment=GOMEMLIMIT=10GiB
 Environment=GOGC=200
 
 # 正常 P2P 同步使用 4 层流水线，降低提交等待。
-Environment=GTRON_ASYNC_COMMIT=1
 Environment=GTRON_ASYNC_COMMIT_DEPTH=4
 
 ExecStart=/data/gtron/go-tron/build/bin/gtron \
     --datadir /data/gtron/main/datadir \
-    --gcmode full \
+    --prune.mode full \
+    --sync.async-commit \
+    --sync.import-batch 32 \
     --p2p.port 18890 \
+    --external.ip 3.12.206.71 \
     --http.port 8090 \
     --jsonrpc.port 8545 \
     --grpc.port 50051 \
@@ -35,6 +37,8 @@ ExecStart=/data/gtron/go-tron/build/bin/gtron \
     --db.cache 16384 \
     --db.handles 8192 \
     --db.memtable 256 \
+    --db.target-file-size 8 \
+    --db.lbase-max-size 1024 \
     --db.l0.compact 8 \
     --db.l0.stop 64 \
     --state.trie.cache 128 \
@@ -54,7 +58,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=gtron
 
-Restart=on-failure
+Restart=always
 RestartSec=10
 TimeoutStopSec=300
 KillSignal=SIGTERM

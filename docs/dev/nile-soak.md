@@ -247,9 +247,7 @@ distinguished from the larger attempted execution plan. These fields are
 log-derived and complement the
 `stage*` fields from `gtron db stage-status`: log fields explain what the last
 import batch planned and observed, while DB fields show the persisted recovery
-boundary. `syncLogStatePrefetch*` records the prefetch queue, hit/miss, and
-error counters for the same import window, which lets prefetch-on/off Nile
-soaks compare throughput against actual read-warmup work. `syncLogTxTop`
+boundary. `syncLogTxTop`
 records the top transaction contract types in the same segment window, which
 separates contract-heavy `TriggerSmartContract` windows from transfer-heavy
 windows when throughput changes. The same log parser also records startup
@@ -456,8 +454,6 @@ scripts/dev/nile_sync_acceptance.py /Users/asuka/gtron-soak/logs/sync-samples.js
   --require-stage-stall-evidence \
   --require-stage-detail-evidence \
   --require-startup-recovery-evidence \
-  --require-state-prefetch-evidence \
-  --max-state-prefetch-errors 0 \
   --require-sync-phase-cursor-evidence \
   --require-archive-api-evidence \
   --require-archive-tx-evidence \
@@ -542,14 +538,6 @@ non-empty current/next phase plus task index/count/remaining and block-range
 evidence. This is the production gate that proves a blocked or partially drained
 full staged-sync batch can be resumed from typed phase-cursor evidence rather
 than inferred from stage-progress counters alone.
-Use `--require-state-prefetch-evidence` when rows were collected with
-`--sync-log-file` on binaries that emit the state-prefetch counters. It requires
-`syncLogStatus=ok`, all six `syncLogStatePrefetch*` counters to be non-negative,
-and `syncLogStatePrefetchProcessed` to equal hits plus misses plus errors. Add
-`--require-state-prefetch-activity` for prefetch-enabled comparison runs where
-the sampled segment must prove actual queued and processed warmup work. Use
-`--max-state-prefetch-errors 0` for production soak gates unless the run is
-intentionally exercising storage-read failure paths.
 Use `--require-event-log-index-evidence` when rows were collected with
 `--event-log-index-stats`. It requires the readonly
 `gtron snapshot event-log-index-stats` probe to report `ok`, positive active
@@ -581,7 +569,6 @@ when `fullStagedSyncStageDetails` is present,
 `gtron_nile_sync_stage_status_collection_status`,
 `gtron_nile_sync_freezer_rpc_*`,
 `gtron_nile_sync_stage_sync_*_lag_blocks`,
-`gtron_nile_sync_log_state_prefetch_*`,
 `gtron_nile_sync_log_phase_cursor_*`,
 `gtron_nile_sync_event_log_index_*`,
 `gtron_nile_sync_stage_chain_freezer_head_lag_blocks`,

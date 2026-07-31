@@ -5,7 +5,6 @@ import (
 	"errors"
 	"unicode/utf8"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -304,22 +303,6 @@ func assetBytesKey(tag byte, raw []byte) []byte {
 	k[0] = tag
 	copy(k[1:], raw)
 	return k
-}
-
-func AssetIssuePrefetchKey(tokenID int64) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetIDKey(assetV2Tag, tokenID))
-}
-
-func AssetIssueByNamePrefetchKey(name []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBytesKey(assetLegacyTag, name))
-}
-
-func AssetNameIndexPrefetchKey(name []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBytesKey(assetNameIndexTag, name))
-}
-
-func AssetOwnerIndexPrefetchKey(ownerAddr []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBytesKey(assetOwnerIndexTag, ownerAddr))
 }
 
 // readAssetMeta resolves one AssetIssueContract leg, swallowing a KV error to

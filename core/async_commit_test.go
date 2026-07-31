@@ -716,7 +716,7 @@ func buildTxBlock(parent *types.Block, witnessAddr tcommon.Address, txs ...*type
 
 // TestAsyncCommit_BlockHashSeesInFlightParent replays the Nile 10,552,292
 // stall mechanism (OneSwap removeOrders, SUCCESS->REVERT). Under
-// GTRON_ASYNC_COMMIT=1 the parent block's b-<num> row is written only by the
+// --sync.async-commit the parent block's b-<num> row is written only by the
 // commit worker's metadata batch, so a tx in block N executing
 // BLOCKHASH(N-1) raced the worker and read 0 — java-tron always serves the
 // parent hash. OneSwap derives limit-order ids as

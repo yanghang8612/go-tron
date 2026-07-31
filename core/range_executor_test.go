@@ -81,7 +81,7 @@ func TestCanonicalCommitStateDefersScopedLatestFlushUntilClose(t *testing.T) {
 	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v1")); err != nil {
 		t.Fatalf("set kv: %v", err)
 	}
-	if _, err := plan.CommitState(buf, block, state.CommitOptions{}, false); err != nil {
+	if _, err := plan.CommitState(block, state.CommitOptions{}); err != nil {
 		t.Fatalf("commit state: %v", err)
 	}
 	if _, ok, err := rawdb.ReadStateKVLatest(buf, addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
@@ -124,7 +124,7 @@ func TestCanonicalCommitStateFlushesLatestBeforeSolidifiedLayerDrop(t *testing.T
 		if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, key, value); err != nil {
 			t.Fatalf("set kv block %d: %v", block.Number(), err)
 		}
-		if _, err := lastPlan.CommitState(buf, block, state.CommitOptions{}, false); err != nil {
+		if _, err := lastPlan.CommitState(block, state.CommitOptions{}); err != nil {
 			t.Fatalf("commit state block %d: %v", block.Number(), err)
 		}
 		buf.CommitBlock()
@@ -160,7 +160,7 @@ func TestCanonicalRangeAbortFlushesCommittedLatestAndDropsFailedActiveLayer(t *t
 	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("committed"), []byte("v1")); err != nil {
 		t.Fatalf("set committed kv: %v", err)
 	}
-	if _, err := plan1.CommitState(buf, block1, state.CommitOptions{}, false); err != nil {
+	if _, err := plan1.CommitState(block1, state.CommitOptions{}); err != nil {
 		t.Fatalf("commit block 1: %v", err)
 	}
 	buf.CommitBlock()
@@ -173,7 +173,7 @@ func TestCanonicalRangeAbortFlushesCommittedLatestAndDropsFailedActiveLayer(t *t
 	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("failed"), []byte("v2")); err != nil {
 		t.Fatalf("set failed kv: %v", err)
 	}
-	if _, err := plan2.CommitState(buf, block2, state.CommitOptions{}, false); err != nil {
+	if _, err := plan2.CommitState(block2, state.CommitOptions{}); err != nil {
 		t.Fatalf("commit block 2: %v", err)
 	}
 	buf.DiscardActive()
@@ -208,7 +208,7 @@ func TestCanonicalRangeAbortFlushesCommittedAccountLatestAndDropsFailedActiveLay
 	plan1 := &canonicalBlockExecution{state: sdb, commit: scope, pipeline: pipeline1}
 	sdb.CreateAccount(committedAddr, corepb.AccountType_Normal)
 	sdb.AddBalance(committedAddr, 11)
-	if _, err := plan1.CommitState(buf, block1, state.CommitOptions{}, false); err != nil {
+	if _, err := plan1.CommitState(block1, state.CommitOptions{}); err != nil {
 		t.Fatalf("commit block 1: %v", err)
 	}
 	buf.CommitBlock()
@@ -220,7 +220,7 @@ func TestCanonicalRangeAbortFlushesCommittedAccountLatestAndDropsFailedActiveLay
 	plan2 := &canonicalBlockExecution{state: sdb, commit: scope, pipeline: pipeline2}
 	sdb.CreateAccount(failedAddr, corepb.AccountType_Normal)
 	sdb.AddBalance(failedAddr, 22)
-	if _, err := plan2.CommitState(buf, block2, state.CommitOptions{}, false); err != nil {
+	if _, err := plan2.CommitState(block2, state.CommitOptions{}); err != nil {
 		t.Fatalf("commit block 2: %v", err)
 	}
 	buf.DiscardActive()

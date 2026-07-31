@@ -245,7 +245,6 @@ func newLatestModeAccountRootChainWithProposal25(t *testing.T, enabled bool) (*B
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
 	cfg := *params.MainnetChainConfig
-	cfg.StateCommitmentMode = params.StateCommitmentModeLatest
 
 	witnessAddr := testProcessorAddr(0xFF)
 	allowAccountStateRoot := int64(0)

@@ -84,7 +84,6 @@ type commitJob struct {
 	balanceTrace      *blockBalanceTraceData
 	wasMaintenance    bool
 	maintNewWitnesses []tcommon.Address
-	checkpoint        bool
 }
 
 // SetAsyncCommit enables (or disables) the async/pipelined commit path. It must
@@ -233,7 +232,6 @@ func (bc *BlockChain) commitAsync(
 		balanceTrace:      balanceTrace,
 		wasMaintenance:    wasMaintenanceBlock,
 		maintNewWitnesses: maintNewWitnesses,
-		checkpoint:        bc.config.StateCommitmentCheckpoints,
 	}
 	job.txInfoBatch = plan.txInfoBatch
 	job.txInfoBatchPool = plan.txInfoBatchPool
@@ -358,8 +356,8 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 		bc.failCommit(job, fmt.Errorf("async commit fold block %d: %w", job.block.Number(), err))
 		return
 	}
-	// Commitment checkpoint + StageCommitment progress (needs the root).
-	if err := job.plan.finishCommitState(index, job.block, root, job.checkpoint); err != nil {
+	// Publish StageCommitment only after the fold succeeds.
+	if err := job.plan.finishCommitState(); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit finish state block %d: %w", job.block.Number(), err))
 		return
 	}

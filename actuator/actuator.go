@@ -102,10 +102,6 @@ type Context struct {
 	// debug_traceTransaction replay captures the opcode/call stream. Nil on every
 	// production path (block-apply, producer, pool) — zero overhead.
 	Tracer vm.Tracer
-	// RuntimePrefetcher, when non-nil, is installed into TVM execution so nested
-	// CALL/EXTCODE/storage reads discovered at runtime can warm raw latest-domain
-	// rows through the same worker pool as envelope prefetch.
-	RuntimePrefetcher vm.RuntimePrefetcher
 }
 
 // PassVersion reports whether SR software-fork `version` has activated as of

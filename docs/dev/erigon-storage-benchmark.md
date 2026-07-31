@@ -157,20 +157,14 @@ sets `derivedIndexToBlock` from the event-log-index coverage end so production
 soak evidence can be checked against the same lookup-selectivity and
 minimal-mode tail-prune coverage rules as benchmark artifacts.
 
-Cold state-domain history payload segments are block-compressed by default when
+Cold state-domain history payload segments are always block-compressed when
 the producer lifecycle emits them. The v4 history `.kv` companion remains raw:
 it is a fixed-width random-read hash table plus owner/domain prefix groups, and
-compressing it adds zstd expansion to archive point lookups. For A/B payload
-measurements or an emergency rollback to raw segment emission, start the producer with
-`--snapshot.compress-history=false` or set
-`GTRON_SNAPSHOT_COMPRESS_HISTORY=false`; existing compressed and raw segments
-and v1/v2/v3/v4 accessors remain readable either way.
+compressing it adds zstd expansion to archive point lookups.
 
 New latest-state records in cold snapshot segments use per-value Snappy
-compression when it reduces their size. For an A/B comparison or raw-emission
-rollback, use `--snapshot.compress-latest=false` or set
-`GTRON_SNAPSHOT_COMPRESS_LATEST=false`; readers accept both this compressed
-encoding and the legacy raw records.
+compression when it reduces their size. Compression is part of the current
+latest-domain publication format and is no longer operator-selectable.
 
 New latest snapshot publications retain the sparse `.bt` lookup index but omit
 the redundant per-entry `.lidx` offset sidecar. Existing accessor-bearing

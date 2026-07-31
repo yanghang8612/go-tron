@@ -7,14 +7,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
-func AccountNameIndexPrefetchKey(accountName []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAccountIndex, accountNameIndexKVKey(accountName))
-}
-
-func AccountIDIndexPrefetchKey(accountID []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID))
-}
-
 func validateAccountIndexAddress(label string, raw []byte) ([]byte, error) {
 	if len(raw) != tcommon.AddressLength {
 		return nil, fmt.Errorf("%s has malformed length %d, want %d", label, len(raw), tcommon.AddressLength)

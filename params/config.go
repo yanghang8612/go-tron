@@ -39,24 +39,6 @@ type ChainConfig struct {
 	// background pruner. When unset, defaults are mode-specific to match
 	// Erigon's current retention policy. Ignored in archive mode.
 	HistoryPruneWindow uint64
-	// StateCommitmentCheckpoints enables optional latest-domain commitment
-	// checkpoint rows after each block. The block state root itself is already
-	// the CommitmentDomain root.
-	StateCommitmentCheckpoints bool
-	// StateCommitmentMode is retained as an operator-facing label. Fresh nodes
-	// always use "latest": flat latest domains plus CommitmentDomain root.
-	StateCommitmentMode string
-	// StatePrefetchEnabled enables a non-consensus block-apply read warmup:
-	// upcoming transaction envelopes are scanned for deterministic account,
-	// account-KV, and contract metadata rows, and worker goroutines warm the
-	// raw latest-domain reader before the serial tx loop reaches them.
-	StatePrefetchEnabled bool
-	// StatePrefetchWorkers is the worker count. 0 lets the state prefetcher
-	// choose runtime.GOMAXPROCS(0)/2 capped at its internal maximum.
-	StatePrefetchWorkers int
-	// StatePrefetchLookahead is the number of future transactions to keep
-	// queued. 0 falls back to StatePrefetchDefaultLookahead.
-	StatePrefetchLookahead int
 }
 
 const DefaultBlockNumForEnergyLimit int64 = 4_727_890
@@ -72,12 +54,6 @@ const (
 	HistoryModeMinimal = "minimal"
 )
 
-// State commitment modes. Latest is the only fresh-node state layout:
-// flat latest domains plus CommitmentDomain root.
-const (
-	StateCommitmentModeLatest = "latest"
-)
-
 // HistoryDefaultPruneWindow is the default finite-prune state history window
 // for full/blocks/snap modes. It follows Erigon 3.5's EIP-8252 retention
 // window for full and blocks mode: 262,144 blocks.
@@ -87,8 +63,6 @@ const HistoryDefaultPruneWindow uint64 = 262_144
 // window for minimal mode. Erigon 3.5 kept minimal at 100,000 blocks while
 // widening full and blocks mode.
 const HistoryMinimalDefaultPruneWindow uint64 = 100_000
-
-const StatePrefetchDefaultLookahead = 8
 
 func chainConfigInt64(v int64) *int64 { return &v }
 
@@ -150,27 +124,6 @@ func (c *ChainConfig) EffectiveHistoryPruneWindow() uint64 {
 		return DefaultHistoryPruneWindowForMode(mode)
 	}
 	return c.HistoryPruneWindow
-}
-
-// EffectiveStateCommitmentMode returns the active commitment mode. Blank and
-// unrecognised values normalise to latest; new databases do not preserve the
-// old per-block MPT materialisation path by default.
-func (c *ChainConfig) EffectiveStateCommitmentMode() string {
-	return StateCommitmentModeLatest
-}
-
-func (c *ChainConfig) EffectiveStatePrefetchLookahead() int {
-	if c == nil || c.StatePrefetchLookahead <= 0 {
-		return StatePrefetchDefaultLookahead
-	}
-	return c.StatePrefetchLookahead
-}
-
-func (c *ChainConfig) EffectiveStatePrefetchWorkers() int {
-	if c == nil || c.StatePrefetchWorkers < 0 {
-		return 0
-	}
-	return c.StatePrefetchWorkers
 }
 
 var MainnetChainConfig = &ChainConfig{

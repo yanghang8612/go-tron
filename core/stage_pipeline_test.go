@@ -259,7 +259,7 @@ func TestCanonicalBlockExecutionValidateRequiresRangeOwnedPlan(t *testing.T) {
 	}
 }
 
-func TestCanonicalBlockExecutionCommitStateWritesCheckpointAndStage(t *testing.T) {
+func TestCanonicalBlockExecutionCommitStateWritesRootAndStage(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	statedb, err := state.New(common.Hash{}, state.NewDatabase(db))
 	if err != nil {
@@ -285,7 +285,7 @@ func TestCanonicalBlockExecutionCommitStateWritesCheckpointAndStage(t *testing.T
 		pipeline: pipeline,
 	}
 
-	result, err := plan.CommitState(db, block, state.CommitOptions{}, true)
+	result, err := plan.CommitState(block, state.CommitOptions{})
 	if err != nil {
 		t.Fatalf("commit state: %v", err)
 	}
@@ -296,11 +296,7 @@ func TestCanonicalBlockExecutionCommitStateWritesCheckpointAndStage(t *testing.T
 	if err != nil || !ok || row.BlockNum != block.Number() || !row.HasBlockHash || row.BlockHash != block.Hash() {
 		t.Fatalf("commitment stage row = %+v ok=%v err=%v, want block 9 hash-bound", row, ok, err)
 	}
-	checkpoint, ok, err := rawdb.ReadStateCommitmentCheckpoint(db, block.Number())
-	if err != nil || !ok {
-		t.Fatalf("checkpoint ok=%v err=%v", ok, err)
-	}
-	if checkpoint.BlockHash != block.Hash() || checkpoint.Root != result.Root || checkpoint.Scheme != rawdb.LatestDomainCommitmentScheme {
-		t.Fatalf("checkpoint = %+v, want hash %x root %x scheme %s", checkpoint, block.Hash(), result.Root, rawdb.LatestDomainCommitmentScheme)
+	if _, ok, err := rawdb.ReadStateCommitmentCheckpoint(db, block.Number()); err != nil || ok {
+		t.Fatalf("per-block checkpoint unexpectedly written: ok=%v err=%v", ok, err)
 	}
 }

@@ -178,26 +178,6 @@ func TestShouldEnableAsyncCommit(t *testing.T) {
 	}
 }
 
-func TestSyncAsyncCommitEnvironmentAlias(t *testing.T) {
-	t.Setenv("GTRON_ASYNC_COMMIT", "1")
-	var enabled bool
-	app := cli.NewApp()
-	app.Flags = []cli.Flag{&cli.BoolFlag{
-		Name:    "sync.async-commit",
-		EnvVars: []string{"GTRON_ASYNC_COMMIT"},
-	}}
-	app.Action = func(ctx *cli.Context) error {
-		enabled = shouldEnableAsyncCommit(ctx)
-		return nil
-	}
-	if err := app.Run([]string{"gtron"}); err != nil {
-		t.Fatalf("run app with async commit alias: %v", err)
-	}
-	if !enabled {
-		t.Fatal("GTRON_ASYNC_COMMIT=1 did not enable async commit")
-	}
-}
-
 func TestResolveNetworkID_Mainnet(t *testing.T) {
 	got := resolveNetworkID(params.DefaultMainnetGenesis())
 	if got != params.MainnetNetworkID {

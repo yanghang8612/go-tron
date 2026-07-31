@@ -215,11 +215,6 @@ var (
 		Name:  "log.module",
 		Usage: "Per-module log level override (module=trace|debug|info|warn|error|crit or 0-5); repeatable, e.g. --log.module net/sync=debug --log.module p2p=warn",
 	}
-	gcmodeFlag = &cli.StringFlag{
-		Name:  "gcmode",
-		Usage: "Deprecated alias for --prune.mode",
-		Value: params.HistoryModeFull,
-	}
 	pruneModeFlag = &cli.StringFlag{
 		Name:  "prune.mode",
 		Usage: "Erigon-style retention mode: full | blocks | minimal | snap | archive",
@@ -228,48 +223,15 @@ var (
 		Name:  "history.enabled",
 		Usage: "Turn on flat temporal state capture. Explicit prune modes imply it.",
 	}
-	snapshotCompressHistoryFlag = &cli.BoolFlag{
-		Name:    "snapshot.compress-history",
-		Usage:   "Write new cold state-history segments in block-compressed format; set false to emit legacy raw segments",
-		Value:   true,
-		EnvVars: []string{"GTRON_SNAPSHOT_COMPRESS_HISTORY"},
-	}
-	snapshotCompressLatestFlag = &cli.BoolFlag{
-		Name:    "snapshot.compress-latest",
-		Usage:   "Write new cold latest-state records with Snappy compression when smaller; set false to emit legacy raw records",
-		Value:   true,
-		EnvVars: []string{"GTRON_SNAPSHOT_COMPRESS_LATEST"},
-	}
 	snapshotCatalogSigningKeyFileRuntimeFlag = &cli.StringFlag{
 		Name:    "snapshot.catalog-signing-key-file",
 		Usage:   "File with the Ed25519 key used to sign each newly published runtime cold snapshot catalog (snap mode only)",
 		EnvVars: []string{"GTRON_SNAPSHOT_CATALOG_SIGNING_KEY_FILE"},
 	}
-	stateCommitmentCheckpointsFlag = &cli.BoolFlag{
-		Name:  "state.commitment.checkpoints",
-		Usage: "Write transitional Erigon-style latest-domain commitment checkpoints after each block",
-	}
-	stateCommitmentModeFlag = &cli.StringFlag{
-		Name:  "state.commitment.mode",
-		Usage: "State commitment mode: latest (flat latest domains + CommitmentDomain root)",
-		Value: params.StateCommitmentModeLatest,
-	}
 	stateTrieCacheFlag = &cli.IntFlag{
 		Name:  "state.trie.cache",
 		Usage: "Hash-trie clean-node cache size in MiB (-1 auto from --db.cache, 0 disables)",
 		Value: -1,
-	}
-	statePrefetchEnabledFlag = &cli.BoolFlag{
-		Name:  "state.prefetch.enabled",
-		Usage: "Enable experimental ProcessBlock state read prefetching",
-	}
-	statePrefetchWorkersFlag = &cli.IntFlag{
-		Name:  "state.prefetch.workers",
-		Usage: "State prefetch worker count (0 = auto)",
-	}
-	statePrefetchLookaheadFlag = &cli.IntFlag{
-		Name:  "state.prefetch.lookahead",
-		Usage: "Future transactions to enqueue for state prefetching (0 = default)",
 	}
 	stateCommitmentCacheFlag = &cli.IntFlag{
 		Name:  "state.commitment.cache",
@@ -278,7 +240,7 @@ var (
 	}
 	configFileFlag = &cli.StringFlag{
 		Name:  "config",
-		Usage: "Path to a TOML config file (currently understood: [history] and [state.prefetch])",
+		Usage: "Path to a TOML config file (currently understood: [history])",
 	}
 	dbCacheFlag = &cli.IntFlag{
 		Name:  "db.cache",
@@ -360,9 +322,8 @@ var (
 		EnvVars: []string{"GTRON_SYNC_ETL_BATCH"},
 	}
 	syncAsyncCommitFlag = &cli.BoolFlag{
-		Name:    "sync.async-commit",
-		Usage:   "Experimental: pipeline staged-sync state commits; validate with a Nile re-sync before production use",
-		EnvVars: []string{"GTRON_ASYNC_COMMIT"},
+		Name:  "sync.async-commit",
+		Usage: "Pipeline staged-sync state commits",
 	}
 	syncStopAtFlag = &cli.Uint64Flag{
 		Name:  "sync.stop-at",
@@ -407,7 +368,6 @@ var app = &cli.App{
 		logFileMaxAgeFlag,
 		logFileCompressFlag,
 		logModuleFlag,
-		gcmodeFlag,
 		pruneModeFlag,
 		historyEnabledFlag,
 		snapshotBootstrapFlag,
@@ -421,15 +381,8 @@ var app = &cli.App{
 		snapshotETLTempDirFlag,
 		snapshotETLBufferMiBFlag,
 		snapshotETLBatchMiBFlag,
-		snapshotCompressHistoryFlag,
-		snapshotCompressLatestFlag,
 		snapshotCatalogSigningKeyFileRuntimeFlag,
-		stateCommitmentCheckpointsFlag,
-		stateCommitmentModeFlag,
 		stateTrieCacheFlag,
-		statePrefetchEnabledFlag,
-		statePrefetchWorkersFlag,
-		statePrefetchLookaheadFlag,
 		stateCommitmentCacheFlag,
 		configFileFlag,
 		dbCacheFlag,
@@ -566,8 +519,7 @@ func gtron(ctx *cli.Context) error {
 	if err := validateSyncImportBatch(cfg.SyncImportBatch); err != nil {
 		return err
 	}
-	compressHistorySegments, compressLatestSegments := applySnapshotCompressionConfigs(ctx)
-	log.Info("Cold snapshot compression configured", "history", compressHistorySegments, "latest", compressLatestSegments)
+	log.Info("Cold snapshot compression enabled", "history", true, "latest", true)
 	dbPath := chainDataDir(cfg.DataDir)
 
 	// In dev mode, parse witness key early so we can build the genesis with it
@@ -645,15 +597,11 @@ func gtron(ctx *cli.Context) error {
 	}
 
 	// Apply operator-supplied flat temporal-state retention settings
-	// (--gcmode / [history] in --config). Done after SetupGenesisBlock
+	// (--prune.mode / [history] in --config). Done after SetupGenesisBlock
 	// because it returns a pointer into genesis.Config we now mutate.
 	// HistoryMode is operator-level (not consensus-relevant) so this
 	// mutation is safe.
 	if err := applyHistoryConfig(ctx, chainConfig); err != nil {
-		closeStores()
-		return err
-	}
-	if err := applyStatePrefetchConfig(ctx, chainConfig); err != nil {
 		closeStores()
 		return err
 	}
@@ -675,20 +623,7 @@ func gtron(ctx *cli.Context) error {
 		identity := snapshotExpectedChainIdentity(chainConfig, genesis, genesisHash, "")
 		snapshotCatalogChain = &identity
 	}
-	chainConfig.StateCommitmentCheckpoints = ctx.Bool("state.commitment.checkpoints")
-	switch mode := ctx.String("state.commitment.mode"); mode {
-	case "", params.StateCommitmentModeLatest:
-		chainConfig.StateCommitmentMode = params.StateCommitmentModeLatest
-	default:
-		closeStores()
-		return fmt.Errorf("invalid --state.commitment.mode %q (want %q)", mode, params.StateCommitmentModeLatest)
-	}
-	if chainConfig.EffectiveStateCommitmentMode() == params.StateCommitmentModeLatest {
-		log.Warn("Latest-domain state commitment mode enabled",
-			"mode", chainConfig.EffectiveStateCommitmentMode(),
-			"compatibility", "legacy state trie materialisation is disabled",
-		)
-	}
+	log.Info("Latest-domain state storage enabled", "mode", "latest")
 
 	// Create blockchain
 	stateDBConfig, err := makeStateDatabaseConfig(ctx)
@@ -718,17 +653,16 @@ func gtron(ctx *cli.Context) error {
 	} else {
 		log.Info("Commitment branch base-read cache disabled")
 	}
-	// Async/pipelined commit is OFF by default and DELIBERATELY not a
+	// Async/pipelined commit is OFF by default and deliberately not a
 	// chain-config / proposal value (it changes only the internal commit
-	// schedule, never any wire-observable byte). It is enabled only by the
-	// explicit experimental flag (or its retained environment alias) for the
-	// live re-sync validation described in the runbook.
+	// schedule, never any wire-observable byte). The explicit CLI flag keeps
+	// this operational choice visible in the service definition.
 	if shouldEnableAsyncCommit(ctx) {
 		bc.SetAsyncCommit(true)
 		// Every depth amortizes the shared staged-sync session across local import
 		// batches. Depth > 2 additionally buffers the commit queue; depth 2 keeps
 		// the conservative rendezvous worker behavior.
-		log.Warn("Async commit ENABLED (experimental, --sync.async-commit) — internal commit pipelined off the critical path; validate via re-sync before production use",
+		log.Info("Async commit enabled",
 			"depth", bc.PipelinedCommitDepth())
 	}
 	if ctx.IsSet("sync.restart-from") {

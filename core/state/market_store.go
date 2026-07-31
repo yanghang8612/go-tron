@@ -109,36 +109,6 @@ func marketPairIndexKVKey() []byte {
 	return []byte{marketPairIndexTag}
 }
 
-// MarketOrderPrefetchKey returns the latest market order row for orderID.
-func MarketOrderPrefetchKey(orderID []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketOrderKVKey(orderID))
-}
-
-// MarketAccountOrderPrefetchKey returns the latest per-owner market order row.
-func MarketAccountOrderPrefetchKey(ownerAddr []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketAccountOrderKVKey(ownerAddr))
-}
-
-// MarketOrderBookPrefetchKey returns the latest price-level order-book row.
-func MarketOrderBookPrefetchKey(sellTokenID, buyTokenID []byte, pk [16]byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk))
-}
-
-// MarketPairPriceCountPrefetchKey returns the latest pair price-count row.
-func MarketPairPriceCountPrefetchKey(sellTokenID, buyTokenID []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketPairToPriceKVKey(sellTokenID, buyTokenID))
-}
-
-// MarketPriceListPrefetchKey returns the latest materialized pair price-list row.
-func MarketPriceListPrefetchKey(sellTokenID, buyTokenID []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID))
-}
-
-// MarketPairIndexPrefetchKey returns the latest materialized market pair index.
-func MarketPairIndexPrefetchKey() PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketPairIndexKVKey())
-}
-
 // ReadMarketOrder returns the rooted MarketOrder for orderID, or nil if absent.
 // A KV/unmarshal error is swallowed to nil, matching the prior rawdb reader (its
 // callers treat nil as "no order").

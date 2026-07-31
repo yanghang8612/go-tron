@@ -17,7 +17,7 @@ import (
 // applyHistoryConfig wires the operator-level flat temporal-state retention
 // settings into a chain config. Precedence (highest first):
 //
-//  1. --prune.mode / --gcmode CLI flags
+//  1. --prune.mode CLI flag
 //  2. [history] section in the TOML file (when --config is set)
 //  3. params.ChainConfig defaults
 //
@@ -62,8 +62,7 @@ func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 
 	// Step 2: CLI flags override the TOML. cli/v2 treats flags with a
 	// default value as "set" even when the user didn't pass them; we
-	// detect explicit setting via IsSet so the TOML's value isn't
-	// trampled by the --gcmode default.
+	// detect explicit setting via IsSet so a TOML value is not trampled.
 	if mode, ok, err := historyModeFromFlags(ctx); err != nil {
 		return err
 	} else if ok {
@@ -89,37 +88,18 @@ func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 }
 
 func modeFlagExplicit(ctx *cli.Context) bool {
-	return ctx != nil && (ctx.IsSet("gcmode") || ctx.IsSet("prune.mode"))
+	return ctx != nil && ctx.IsSet("prune.mode")
 }
 
 func historyModeFromFlags(ctx *cli.Context) (string, bool, error) {
 	if ctx == nil {
 		return "", false, nil
 	}
-	var (
-		mode  string
-		found bool
-	)
-	if ctx.IsSet("gcmode") {
-		normalised, err := normaliseHistoryMode(ctx.String("gcmode"))
-		if err != nil {
-			return "", false, err
-		}
-		mode = normalised
-		found = true
+	if !ctx.IsSet("prune.mode") {
+		return "", false, nil
 	}
-	if ctx.IsSet("prune.mode") {
-		normalised, err := normaliseHistoryMode(ctx.String("prune.mode"))
-		if err != nil {
-			return "", false, err
-		}
-		if found && normalised != mode {
-			return "", false, fmt.Errorf("--prune.mode %q conflicts with --gcmode %q", normalised, mode)
-		}
-		mode = normalised
-		found = true
-	}
-	return mode, found, nil
+	mode, err := normaliseHistoryMode(ctx.String("prune.mode"))
+	return mode, true, err
 }
 
 func shouldEnableDomainStatePruner(cfg *params.ChainConfig) bool {
@@ -131,7 +111,7 @@ func shouldEnableDomainStatePruner(cfg *params.ChainConfig) bool {
 	default:
 		return false
 	}
-	return cfg.HistoryEnabled || cfg.StateCommitmentCheckpoints
+	return cfg.HistoryEnabled
 }
 
 func shouldEnableChainLookupPruner(cfg *params.ChainConfig) bool {
@@ -302,7 +282,7 @@ func historyPruneModeStageConflictSummary(conflicts []historyPruneModeStageConfl
 	return strings.Join(parts, "; ")
 }
 
-// normaliseHistoryMode validates a user-supplied --prune.mode / --gcmode value.
+// normaliseHistoryMode validates a user-supplied --prune.mode value.
 // Unknown values are a hard error rather than a silent fallback so a typo
 // doesn't degrade an archive node to full mode without warning.
 func normaliseHistoryMode(s string) (string, error) {

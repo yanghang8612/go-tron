@@ -385,7 +385,6 @@ func opCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 func opExtCodeSize(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	addr := stack.peek()
 	address := uint256ToAddress(addr)
-	interpreter.tvm.prefetchRuntimeContract(address)
 	size := interpreter.tvm.StateDB.GetCodeSize(address)
 	addr.SetUint64(uint64(size))
 	return nil, nil
@@ -394,7 +393,6 @@ func opExtCodeSize(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 func opExtCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	a, memOffset, codeOffset, length := stack.pop(), stack.pop(), stack.pop(), stack.pop()
 	address := uint256ToAddress(&a)
-	interpreter.tvm.prefetchRuntimeContract(address)
 	off, size, memCost, err := checkedMemoryExpansionCostWords(memory, &memOffset, &length, EXTCODECOPY)
 	if err != nil {
 		return nil, err
@@ -446,7 +444,6 @@ func opReturnDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, 
 func opExtCodeHash(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	addr := stack.peek()
 	address := uint256ToAddress(addr)
-	interpreter.tvm.prefetchRuntimeContract(address)
 	if !interpreter.tvm.StateDB.Exist(address) {
 		addr.Clear()
 	} else {
@@ -745,7 +742,6 @@ func opSload(pc *uint64, interpreter *Interpreter, contract *Contract, memory *M
 	var k tcommon.Hash
 	b := key.Bytes32()
 	copy(k[:], b[:])
-	interpreter.tvm.prefetchRuntimeStorage(contract.Address, k)
 	val := interpreter.tvm.StateDB.GetState(contract.Address, k)
 	key.SetBytes(val.Bytes())
 	return nil, nil
@@ -759,7 +755,6 @@ func opSstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	copy(k[:], kb[:])
 	copy(v[:], vb[:])
 
-	interpreter.tvm.prefetchRuntimeStorage(contract.Address, k)
 	_, exists := interpreter.tvm.StateDB.GetStateWithExist(contract.Address, k)
 	var cost uint64
 	if !exists && v != (tcommon.Hash{}) {

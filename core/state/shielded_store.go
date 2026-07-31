@@ -45,11 +45,6 @@ func (s *StateDB) WriteNullifier(nullifier []byte) error {
 	return s.writeSystemShielded(rawdb.NullifierStateKey(nullifier), []byte{1})
 }
 
-// ShieldedNullifierPrefetchKey returns the latest nullifier spent-marker row.
-func ShieldedNullifierPrefetchKey(nullifier []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemShielded, rawdb.NullifierStateKey(nullifier))
-}
-
 func (s *StateDB) NoteCommitmentCount() int64 {
 	data, ok := s.readSystemShielded(rawdb.NoteCommitmentCountStateKey())
 	if !ok || len(data) != 8 {
@@ -67,11 +62,6 @@ func (s *StateDB) NoteCommitmentCountStrict() (int64, bool, error) {
 		return 0, false, fmt.Errorf("decode note commitment count: length %d, want 8", len(data))
 	}
 	return int64(binary.BigEndian.Uint64(data)), true, nil
-}
-
-// ShieldedNoteCommitmentCountPrefetchKey returns the latest note-commitment counter row.
-func ShieldedNoteCommitmentCountPrefetchKey() PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemShielded, rawdb.NoteCommitmentCountStateKey())
 }
 
 func (s *StateDB) AppendNoteCommitment(commitment []byte) error {
@@ -123,11 +113,6 @@ func (s *StateDB) WriteZKProofResult(txID []byte, ok bool) error {
 	return s.writeSystemShielded(rawdb.ZKProofStateKey(txID), []byte{value})
 }
 
-// ShieldedZKProofResultPrefetchKey returns the latest cached proof-result row.
-func ShieldedZKProofResultPrefetchKey(txID []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemShielded, rawdb.ZKProofStateKey(txID))
-}
-
 func (s *StateDB) WriteIncrMerkleTree(root []byte, tree *shieldpb.IncrementalMerkleTree) error {
 	data, err := proto.Marshal(tree)
 	if err != nil {
@@ -156,11 +141,6 @@ func (s *StateDB) HasIncrMerkleTree(root []byte) bool {
 func (s *StateDB) HasIncrMerkleTreeStrict(root []byte) (bool, error) {
 	_, ok, err := s.readSystemShieldedWithError(rawdb.IncrMerkleTreeStateKey(root))
 	return ok, err
-}
-
-// ShieldedMerkleAnchorPrefetchKey returns the latest anchor-root merkle tree row.
-func ShieldedMerkleAnchorPrefetchKey(root []byte) PrefetchKey {
-	return AccountKVPrefetchKey(tcommon.SystemAccountAddress, kvdomains.SystemShielded, rawdb.IncrMerkleTreeStateKey(root))
 }
 
 func (s *StateDB) ReadLastMerkleTree() *shieldpb.IncrementalMerkleTree {

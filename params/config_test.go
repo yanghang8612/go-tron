@@ -31,16 +31,6 @@ func TestNileConfig(t *testing.T) {
 	}
 }
 
-func TestStateCommitmentConfigDefaults(t *testing.T) {
-	cfg := &ChainConfig{}
-	for _, mode := range []string{"", StateCommitmentModeLatest, "full", "unknown"} {
-		cfg.StateCommitmentMode = mode
-		if got := cfg.EffectiveStateCommitmentMode(); got != StateCommitmentModeLatest {
-			t.Fatalf("state commitment mode %q = %q, want %q", mode, got, StateCommitmentModeLatest)
-		}
-	}
-}
-
 func TestHistoryModeConfigDefaults(t *testing.T) {
 	cfg := &ChainConfig{}
 	for _, tc := range []struct {

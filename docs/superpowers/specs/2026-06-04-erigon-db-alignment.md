@@ -4,6 +4,14 @@ Date: 2026-06-04
 
 Status: active assessment and roadmap
 
+2026-07-31 latest-only decision: new deployments sync from an empty datadir.
+The deprecated `--gcmode`, selectable commitment mode/checkpoint writes,
+snapshot compression rollback flags, and transaction-envelope state prefetch
+rollout have been removed. Historical implementation notes below are retained
+as design history; current operation uses `--prune.mode`, always-on latest
+domains, current compressed snapshot emission, and optional
+`--sync.async-commit`.
+
 Scope: compare go-tron's current database, state, snapshot, pruning, archive,
 and sync-storage architecture with Erigon's current database implementation.
 The target is to import the Erigon ideas that materially improve sync speed,
@@ -74,12 +82,12 @@ not complete.
 | Latest state domains | `state-account-latest-v1`, `state-kv-latest-v2`, `state-kv-generation-v2`, `state-code-v1`, `state-commitment-*`. | Strong. Domain shape is Erigon-style and TRON-adapted. |
 | Domain registry | `core/state/snapshots/domain_registry.go` registers account, account-KV, generation, code, commitment root/checkpoint/branch, and history. | Strong. Lifecycle is config-driven. |
 | Temporal history | `StateDomainChange`, `StateTxRange`, inverse indexes, hot as-of readers. | Strong for consensus state covered by the flat domains. |
-| Cold history | Binary `history/state-domain-change-*.seg` plus `.idx` and `.kv`; new builds and compactions emit a block-compressed `.seg`, raw v4 `.kv` random-read accessor, and raw `.idx`. `--snapshot.compress-history=false` / `GTRON_SNAPSHOT_COMPRESS_HISTORY=false` only changes `.seg` emission; legacy raw/compressed v1/v2/v3 companions remain readable. | Strong functionally, different file names from Erigon. Source-audit coverage now pins low-level record readers behind compressed-aware openers. |
-| Latest files | New binary publications use `.seg` plus sparse `.bt`; legacy `.lidx` files remain readable and verifiable. Values use per-value Snappy compression when smaller, controlled by `--snapshot.compress-latest`. | Strong for point lookup and prefix iteration. Not recsplit, intentionally. |
+| Cold history | Binary `history/state-domain-change-*.seg` plus `.idx` and `.kv`; new builds and compactions emit a block-compressed `.seg`, raw v4 `.kv` random-read accessor, and raw `.idx`. | Strong functionally, different file names from Erigon. |
+| Latest files | New binary publications use `.seg` plus sparse `.bt`; values use per-value Snappy compression when smaller. | Strong for point lookup and prefix iteration. Not recsplit, intentionally. |
 | Commitment domain | Staged hex-patricia branch rows, checkpoints, cold branch restore, java root adapter. | Strong. Internal root is decoupled from java-tron header root. |
 | Code retention | Content-addressed CodeDomain latest snapshots selected by account-envelope history. | Strong, with a deliberate no-temporal-code policy. |
 | Cold/hot lifecycle | `SnapshotLifecycle` runs builder, compactor, and pruner in order. | Moderate to strong. Local lifecycle can optionally bind chain identity and sign the final catalog after a changed manifest; remote distribution/handoff remains operator-managed. |
-| Pruning modes | `archive`, `full`, `snap`, `blocks`, and `minimal` are accepted through `--prune.mode`; `--gcmode` remains a deprecated alias. | Moderate. The CLI vocabulary matches Erigon; `blocks` keeps complete local block freezer history while pruning hot state/lookup rows, and `minimal` adds freezer virtual-tail enforcement plus physical shard reclamation gated by cold coverage. Longer benchmark/soak evidence is still needed. |
+| Pruning modes | `archive`, `full`, `snap`, `blocks`, and `minimal` are accepted through `--prune.mode`; the old `--gcmode` alias is removed. | Moderate. The CLI vocabulary matches Erigon; `blocks` keeps complete local block freezer history while pruning hot state/lookup rows, and `minimal` adds freezer virtual-tail enforcement plus physical shard reclamation gated by cold coverage. Longer benchmark/soak evidence is still needed. |
 | Chain freezer | `core/freezer` plus `core/rawdb/freezer`, `ChainDB` fall-through, and cold `chain-index` sidecars. | Moderate. Old block bodies/tx infos/state roots can be served from freezer, and verified sidecars cover block/tx lookup rows after hot prune. |
 | Staged execution | Hash-bound `Headers/Bodies/Execution/Commitment/Finish`, recoverable `TxLookup`, `InsertBlocks`, `canonicalRangeExecutor`, reusable `CommitScope`. | Partial. Canonical insertion retains one authoritative compact `tib-` receipt row per block instead of duplicate `ti-` rows or per-receipt transaction IDs, block numbers, and timestamps already present in the canonical block/`TransactionRet` header; bulk sync also defers `tx-`, which is caught up from canonical bodies with sorted ETL. Range execution is staged, but this is not yet a full Erigon staged-sync loop. |
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |

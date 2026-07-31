@@ -48,24 +48,6 @@ SAMPLE_PROMETHEUS_REQUIRED_SNIPPETS = (
     ("gtron_nile_sync_height{", "gtron_nile_sync_height"),
 )
 
-STATE_PREFETCH_EVIDENCE_FIELDS = (
-    "syncLogStatePrefetchEnqueued",
-    "syncLogStatePrefetchDropped",
-    "syncLogStatePrefetchProcessed",
-    "syncLogStatePrefetchHits",
-    "syncLogStatePrefetchMisses",
-    "syncLogStatePrefetchErrors",
-)
-
-STATE_PREFETCH_PROMETHEUS_FIELD_METRICS = (
-    ("gtron_nile_sync_log_state_prefetch_enqueued", "syncLogStatePrefetchEnqueued"),
-    ("gtron_nile_sync_log_state_prefetch_dropped", "syncLogStatePrefetchDropped"),
-    ("gtron_nile_sync_log_state_prefetch_processed", "syncLogStatePrefetchProcessed"),
-    ("gtron_nile_sync_log_state_prefetch_hits", "syncLogStatePrefetchHits"),
-    ("gtron_nile_sync_log_state_prefetch_misses", "syncLogStatePrefetchMisses"),
-    ("gtron_nile_sync_log_state_prefetch_errors", "syncLogStatePrefetchErrors"),
-)
-
 SYNC_PHASE_CURSOR_INTEGER_FIELDS = (
     "syncLogPhaseCursorCompletedPhases",
     "syncLogPhaseCursorScheduledPhases",
@@ -193,7 +175,6 @@ EVENT_LOG_INDEX_PROMETHEUS_FIELD_METRICS = (
 SAMPLE_PROMETHEUS_FIELD_METRICS = (
     ("gtron_nile_sync_height", "height"),
     ("gtron_nile_sync_target_lag_blocks", "syncTargetLagBlocks"),
-    *STATE_PREFETCH_PROMETHEUS_FIELD_METRICS,
     *SYNC_PHASE_CURSOR_PROMETHEUS_FIELD_METRICS,
     ("gtron_nile_sync_full_staged_sync_head_lag_blocks", "fullStagedSyncHeadLagBlocks"),
     ("gtron_nile_sync_full_staged_sync_ready", "fullStagedSyncReady"),
@@ -453,7 +434,6 @@ SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
     "archiveApiBlock",
     "archiveApiDepthBlocks",
     "archiveApiFailures",
-    *STATE_PREFETCH_EVIDENCE_FIELDS,
     *SYNC_PHASE_CURSOR_INTEGER_FIELDS,
     "derivedIndexToBlock",
     "eventLogIndexSegments",
@@ -462,7 +442,6 @@ SAMPLE_PROMETHEUS_NON_NEGATIVE_INTEGER_FIELDS = {
 }
 
 SAMPLE_PROMETHEUS_OPTIONAL_NON_NEGATIVE_INTEGER_FIELDS = {
-    *STATE_PREFETCH_EVIDENCE_FIELDS,
     *SYNC_PHASE_CURSOR_INTEGER_FIELDS,
     "derivedIndexToBlock",
     *EVENT_LOG_INDEX_RANGE_FIELDS,
@@ -3528,51 +3507,6 @@ def check_compressed_state_history_evidence(row):
     return issues
 
 
-def check_state_prefetch_evidence(row, require_activity=False, max_errors=None):
-    issues = []
-    if row.get("syncLogStatus") != "ok":
-        issues.append(
-            f"syncLogStatus={row.get('syncLogStatus')!r}, want 'ok' "
-            "for state prefetch evidence"
-        )
-
-    values = {}
-    for field in STATE_PREFETCH_EVIDENCE_FIELDS:
-        value = as_non_negative_int(row, field)
-        if value is None:
-            issues.append(f"{field}={row.get(field)!r}, want non-negative integer")
-        else:
-            values[field] = value
-    if len(values) != len(STATE_PREFETCH_EVIDENCE_FIELDS):
-        return issues
-
-    enqueued = values["syncLogStatePrefetchEnqueued"]
-    processed = values["syncLogStatePrefetchProcessed"]
-    hits = values["syncLogStatePrefetchHits"]
-    misses = values["syncLogStatePrefetchMisses"]
-    errors = values["syncLogStatePrefetchErrors"]
-    want_processed = hits + misses + errors
-    if processed != want_processed:
-        issues.append(
-            f"state prefetch processed={processed:g}, "
-            f"want hits+misses+errors={want_processed:g}"
-        )
-    if processed > enqueued:
-        issues.append(
-            f"state prefetch processed={processed:g} exceeds enqueued={enqueued:g}"
-        )
-    if require_activity and (enqueued <= 0 or processed <= 0):
-        issues.append(
-            f"state prefetch activity missing: enqueued={enqueued:g} "
-            f"processed={processed:g}"
-        )
-    if max_errors is not None and errors > max_errors:
-        issues.append(
-            f"syncLogStatePrefetchErrors={errors:g}, want <= {max_errors:g}"
-        )
-    return issues
-
-
 def check_sync_phase_cursor_evidence(row):
     issues = []
     if row.get("syncLogStatus") != "ok":
@@ -3834,19 +3768,6 @@ def check_row(row, args):
         )
     if args.require_startup_recovery_evidence:
         issues.extend(check_startup_recovery_evidence(row))
-
-    if (
-        args.require_state_prefetch_evidence
-        or args.require_state_prefetch_activity
-        or args.max_state_prefetch_errors is not None
-    ):
-        issues.extend(
-            check_state_prefetch_evidence(
-                row,
-                require_activity=args.require_state_prefetch_activity,
-                max_errors=args.max_state_prefetch_errors,
-            )
-        )
 
     if args.require_sync_phase_cursor_evidence:
         issues.extend(check_sync_phase_cursor_evidence(row))
@@ -4120,22 +4041,6 @@ def build_parser():
         "--require-startup-recovery-evidence",
         action="store_true",
         help="require selected rows to include healthy staged-sync startup recovery evidence",
-    )
-    parser.add_argument(
-        "--require-state-prefetch-evidence",
-        action="store_true",
-        help="require selected rows to include complete non-negative syncLogStatePrefetch* counters",
-    )
-    parser.add_argument(
-        "--require-state-prefetch-activity",
-        action="store_true",
-        help="require state-prefetch evidence and at least one enqueued and processed prefetch key",
-    )
-    parser.add_argument(
-        "--max-state-prefetch-errors",
-        type=parse_non_negative_int_arg,
-        metavar="N",
-        help="fail if syncLogStatePrefetchErrors exceeds N; also requires state-prefetch evidence",
     )
     parser.add_argument(
         "--require-sync-phase-cursor-evidence",

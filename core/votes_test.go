@@ -107,7 +107,7 @@ func TestApplyPendingVotes_SurfacesCorruptPendingVoteRows(t *testing.T) {
 	if err := statedb.WriteVotesIndex([]tcommon.Address{voter}); err != nil {
 		t.Fatal(err)
 	}
-	rowKey := state.PendingVotesPrefetchKey(voter)
+	rowKey := state.PendingVotesSystemRow(voter)
 	if err := statedb.SystemKVPut(rowKey.Domain, rowKey.Key, []byte{0x80}); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestApplyPendingVotes_SurfacesCorruptPendingVoteIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	indexKey := state.PendingVotesIndexPrefetchKey()
+	indexKey := state.PendingVotesIndexSystemRow()
 	if err := statedb.SystemKVPut(indexKey.Domain, indexKey.Key, []byte{0, 0, 0, 2, 0x41}); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestPendingVoteDeltasStrictSurfacesCorruptRows(t *testing.T) {
 	if err := statedb.WriteVotesIndex([]tcommon.Address{voter}); err != nil {
 		t.Fatal(err)
 	}
-	rowKey := state.PendingVotesPrefetchKey(voter)
+	rowKey := state.PendingVotesSystemRow(voter)
 	if err := statedb.SystemKVPut(rowKey.Domain, rowKey.Key, []byte{0x80}); err != nil {
 		t.Fatal(err)
 	}

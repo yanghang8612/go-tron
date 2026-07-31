@@ -14,13 +14,13 @@ import (
 )
 
 // makeHistoryFlagSet builds a flag.FlagSet pre-populated with the
-// prune/gcmode + config flags that applyHistoryConfig consults. Tests parse
+// prune + config flags that applyHistoryConfig consults. Tests parse
 // per-case argv into this set and then wrap it in a cli.Context the way
 // urfave/cli does in production.
 func makeHistoryFlagSet(t *testing.T, argv []string) *cli.Context {
 	t.Helper()
 	app := cli.NewApp()
-	app.Flags = []cli.Flag{gcmodeFlag, pruneModeFlag, historyEnabledFlag, configFileFlag}
+	app.Flags = []cli.Flag{pruneModeFlag, historyEnabledFlag, configFileFlag}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
 	for _, f := range app.Flags {
 		if err := f.Apply(set); err != nil {
@@ -79,14 +79,6 @@ func TestApplyHistoryConfig_PruneModeBlocksAndMinimal(t *testing.T) {
 	}
 }
 
-func TestApplyHistoryConfig_PruneModeConflictsWithGcmode(t *testing.T) {
-	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "archive", "--prune.mode", "full"})
-	cfg := &params.ChainConfig{}
-	if err := applyHistoryConfig(ctx, cfg); err == nil {
-		t.Fatal("expected conflicting --gcmode/--prune.mode to fail")
-	}
-}
-
 func TestApplyHistoryConfig_DefaultsToFull(t *testing.T) {
 	ctx := makeHistoryFlagSet(t, nil)
 	cfg := &params.ChainConfig{}
@@ -103,45 +95,6 @@ func TestApplyHistoryConfig_DefaultsToFull(t *testing.T) {
 	// zero-cost default for non-archive operators.
 	if cfg.HistoryEnabled {
 		t.Error("HistoryEnabled was auto-flipped in full mode (expected off)")
-	}
-}
-
-func TestApplyHistoryConfig_GcmodeArchive(t *testing.T) {
-	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "archive"})
-	cfg := &params.ChainConfig{}
-	if err := applyHistoryConfig(ctx, cfg); err != nil {
-		t.Fatalf("applyHistoryConfig: %v", err)
-	}
-	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeArchive {
-		t.Errorf("--gcmode archive: mode = %q, want %q", got, params.HistoryModeArchive)
-	}
-	// Archive mode flips HistoryEnabled on — otherwise the archive is
-	// silent.
-	if !cfg.HistoryEnabled {
-		t.Error("archive mode did not auto-enable HistoryEnabled")
-	}
-}
-
-func TestApplyHistoryConfig_GcmodeSnap(t *testing.T) {
-	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "snap"})
-	cfg := &params.ChainConfig{}
-	if err := applyHistoryConfig(ctx, cfg); err != nil {
-		t.Fatalf("applyHistoryConfig: %v", err)
-	}
-	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeSnap {
-		t.Errorf("--gcmode snap: mode = %q, want %q", got, params.HistoryModeSnap)
-	}
-	if !cfg.HistoryEnabled {
-		t.Error("snap mode did not auto-enable HistoryEnabled")
-	}
-}
-
-func TestApplyHistoryConfig_GcmodeUnknownErrors(t *testing.T) {
-	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "weird"})
-	cfg := &params.ChainConfig{}
-	err := applyHistoryConfig(ctx, cfg)
-	if err == nil {
-		t.Fatal("expected error for unknown --gcmode")
 	}
 }
 
@@ -169,8 +122,8 @@ prune_window = 12345  # ignored in archive mode but kept for symmetry
 	}
 }
 
-// TestApplyHistoryConfig_CLIOverridesTOML asserts the precedence: a
-// --gcmode flag wins over a [history] mode in the TOML.
+// TestApplyHistoryConfig_CLIOverridesTOML asserts the precedence: the
+// --prune.mode flag wins over a [history] mode in the TOML.
 func TestApplyHistoryConfig_CLIOverridesTOML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gtron.toml")
@@ -178,7 +131,7 @@ func TestApplyHistoryConfig_CLIOverridesTOML(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write toml: %v", err)
 	}
-	ctx := makeHistoryFlagSet(t, []string{"--config", path, "--gcmode", "full"})
+	ctx := makeHistoryFlagSet(t, []string{"--config", path, "--prune.mode", "full"})
 	cfg := &params.ChainConfig{}
 	if err := applyHistoryConfig(ctx, cfg); err != nil {
 		t.Fatalf("applyHistoryConfig: %v", err)
@@ -234,18 +187,18 @@ func TestApplyHistoryConfig_TOMLNoHistorySection(t *testing.T) {
 	}
 }
 
-// TestApplyHistoryConfig_ExplicitGcmodeFullEnablesHistory asserts the
+// TestApplyHistoryConfig_ExplicitPruneModeFullEnablesHistory asserts the
 // Erigon-style mode contract: an operator who explicitly requests full mode gets
 // the recent-history capture needed for full-mode state retention. The no-flag
 // default remains zero-cost and is covered by TestApplyHistoryConfig_DefaultsToFull.
-func TestApplyHistoryConfig_ExplicitGcmodeFullEnablesHistory(t *testing.T) {
-	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "full"})
+func TestApplyHistoryConfig_ExplicitPruneModeFullEnablesHistory(t *testing.T) {
+	ctx := makeHistoryFlagSet(t, []string{"--prune.mode", "full"})
 	cfg := &params.ChainConfig{}
 	if err := applyHistoryConfig(ctx, cfg); err != nil {
 		t.Fatalf("applyHistoryConfig: %v", err)
 	}
 	if !cfg.HistoryEnabled {
-		t.Error("--gcmode=full did not turn on HistoryEnabled")
+		t.Error("--prune.mode=full did not turn on HistoryEnabled")
 	}
 }
 
@@ -253,7 +206,7 @@ func TestApplyHistoryConfig_ExplicitGcmodeFullEnablesHistory(t *testing.T) {
 // --history.enabled opt-in usable for operators who leave prune.mode unset but
 // still want captured-and-pruned full-mode state history.
 func TestApplyHistoryConfig_FullModeEnabledIsReachable(t *testing.T) {
-	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "full", "--history.enabled"})
+	ctx := makeHistoryFlagSet(t, []string{"--prune.mode", "full", "--history.enabled"})
 	cfg := &params.ChainConfig{}
 	if err := applyHistoryConfig(ctx, cfg); err != nil {
 		t.Fatalf("applyHistoryConfig: %v", err)
@@ -374,11 +327,6 @@ func TestShouldEnableDomainStatePruner(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "full checkpoints need pruning",
-			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeFull, StateCommitmentCheckpoints: true},
-			want: true,
-		},
-		{
 			name: "blocks history capture needs pruning",
 			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeBlocks, HistoryEnabled: true},
 			want: true,
@@ -390,7 +338,7 @@ func TestShouldEnableDomainStatePruner(t *testing.T) {
 		},
 		{
 			name: "archive never prunes",
-			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeArchive, HistoryEnabled: true, StateCommitmentCheckpoints: true},
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeArchive, HistoryEnabled: true},
 			want: false,
 		},
 		{

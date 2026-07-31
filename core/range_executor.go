@@ -7,7 +7,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
-	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
@@ -94,7 +93,7 @@ func (p *canonicalBlockExecution) Commit(opts state.CommitOptions) (tcommon.Hash
 	return p.state.CommitWithStatsOptions(opts)
 }
 
-func (p *canonicalBlockExecution) CommitState(writer ethdb.KeyValueWriter, block *types.Block, opts state.CommitOptions, checkpoint bool) (canonicalCommitResult, error) {
+func (p *canonicalBlockExecution) CommitState(block *types.Block, opts state.CommitOptions) (canonicalCommitResult, error) {
 	if p == nil {
 		return canonicalCommitResult{}, fmt.Errorf("canonical block execution: nil plan")
 	}
@@ -104,9 +103,6 @@ func (p *canonicalBlockExecution) CommitState(writer ethdb.KeyValueWriter, block
 	if p.pipeline == nil {
 		return canonicalCommitResult{}, fmt.Errorf("canonical block execution: nil stage pipeline")
 	}
-	if checkpoint && writer == nil {
-		return canonicalCommitResult{}, fmt.Errorf("canonical block execution: nil checkpoint writer")
-	}
 	opts.BlockNumber = block.Number()
 	if p.commit != nil {
 		opts.FlushLatestDomain = func() error { return nil }
@@ -115,32 +111,16 @@ func (p *canonicalBlockExecution) CommitState(writer ethdb.KeyValueWriter, block
 	if err != nil {
 		return canonicalCommitResult{}, fmt.Errorf("commit state: %w", err)
 	}
-	if err := p.finishCommitState(writer, block, root, checkpoint); err != nil {
+	if err := p.finishCommitState(); err != nil {
 		return canonicalCommitResult{}, err
 	}
 	return canonicalCommitResult{Root: root, Stats: stats}, nil
 }
 
-// finishCommitState writes the commitment checkpoint (when enabled) and advances
-// the StageCommitment progress row. Shared by the synchronous CommitState and
-// the async commit worker (which folds first, then calls this with the computed
-// root and a writer bound to the committing block's buffer layer). Pulling it
-// out keeps the two paths from drifting.
-func (p *canonicalBlockExecution) finishCommitState(writer ethdb.KeyValueWriter, block *types.Block, root tcommon.Hash, checkpoint bool) error {
-	if checkpoint {
-		cfg, ok := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetCommitmentCheckpoint)
-		if !ok || cfg.WriteHotCommitmentCheckpoint == nil {
-			return fmt.Errorf("commitment checkpoint domain writer unavailable")
-		}
-		if err := cfg.WriteHotCommitmentCheckpoint(writer, &rawdb.StateCommitmentCheckpoint{
-			BlockNum:  block.Number(),
-			BlockHash: block.Hash(),
-			Root:      root,
-			Scheme:    rawdb.LatestDomainCommitmentScheme,
-		}); err != nil {
-			return fmt.Errorf("write domain commitment checkpoint: %w", err)
-		}
-	}
+// finishCommitState advances the StageCommitment progress row. The internal
+// root is already persisted in CommitmentDomain; fresh latest-only nodes do
+// not duplicate it into a per-block checkpoint row.
+func (p *canonicalBlockExecution) finishCommitState() error {
 	if err := p.pipeline.Advance(rawdb.StageCommitment); err != nil {
 		return err
 	}
@@ -150,8 +130,8 @@ func (p *canonicalBlockExecution) finishCommitState(writer ethdb.KeyValueWriter,
 // CommitStateCapture is the async-commit foreground half of CommitState: it
 // writes the latest-domain rows to the in-memory scope and captures the
 // commitment-fold inputs WITHOUT folding (the plan's StateDB must be in
-// deferFold mode). It does NOT write the checkpoint or advance StageCommitment —
-// those need the fold root and run on the commit worker via finishCommitState.
+// deferFold mode). It does not advance StageCommitment; the worker does that
+// after the fold succeeds via finishCommitState.
 // The caller consumes the captured fold via StateDB.TakeCapturedFold.
 func (p *canonicalBlockExecution) CommitStateCapture(block *types.Block, opts state.CommitOptions) (state.CommitStats, error) {
 	if p == nil || p.state == nil {

@@ -277,7 +277,6 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
 	cfg.CpuTimeGuard = cpuTimeGuardPass(ctx)
 	cfg.Tracer = ctx.Tracer
-	cfg.RuntimePrefetcher = ctx.RuntimePrefetcher
 	tokenID := int64(0)
 	tokenValue := int64(0)
 	if cfg.TransferTrc10 {
@@ -377,7 +376,6 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
 	cfg.CpuTimeGuard = cpuTimeGuardPass(ctx)
 	cfg.Tracer = ctx.Tracer
-	cfg.RuntimePrefetcher = ctx.RuntimePrefetcher
 	tokenID := int64(0)
 	tokenValue := int64(0)
 	if cfg.TransferTrc10 {
