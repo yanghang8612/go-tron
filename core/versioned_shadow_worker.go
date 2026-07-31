@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"sync"
 	"time"
@@ -22,17 +23,29 @@ const (
 )
 
 var (
-	discardShadowBlocksCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/blocks", nil)
-	discardShadowCandidatesCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/candidates", nil)
-	discardShadowExecutedCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/executed", nil)
-	discardShadowMatchesCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/matches", nil)
-	discardShadowMismatchesCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatches", nil)
-	discardShadowErrorsCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/errors", nil)
-	discardShadowCopyNanosCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/copy_nanos", nil)
-	discardShadowExecutionNanosCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/execution_nanos", nil)
-	discardShadowLastCandidatesGauge   = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/candidates", nil)
-	discardShadowLastExecutedGauge     = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/executed", nil)
-	discardShadowLastMatchesGauge      = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/matches", nil)
+	discardShadowBlocksCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/blocks", nil)
+	discardShadowCandidatesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/candidates", nil)
+	discardShadowExecutedCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/executed", nil)
+	discardShadowMatchesCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/matches", nil)
+	discardShadowMismatchesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatches", nil)
+	discardShadowErrorsCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/errors", nil)
+	discardShadowCopyNanosCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/copy_nanos", nil)
+	discardShadowExecutionNanosCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/execution_nanos", nil)
+	discardShadowLastCandidatesGauge       = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/candidates", nil)
+	discardShadowLastExecutedGauge         = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/executed", nil)
+	discardShadowLastMatchesGauge          = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/matches", nil)
+	discardShadowMismatchVMCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/vm", nil)
+	discardShadowMismatchTransferCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/transfer", nil)
+	discardShadowMismatchOtherCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/other", nil)
+	discardShadowErrorVMCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/vm", nil)
+	discardShadowErrorTransferCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/transfer", nil)
+	discardShadowErrorOtherCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/other", nil)
+	discardShadowMismatchReceiptCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt", nil)
+	discardShadowMismatchFeeCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/fee", nil)
+	discardShadowMismatchResultCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_result", nil)
+	discardShadowMismatchLogsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/logs", nil)
+	discardShadowMismatchInternalCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/internal_transactions", nil)
+	discardShadowMismatchOtherFieldCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/other", nil)
 )
 
 // discardKVOverlay isolates rawdb writes performed by actuators. Reads fall
@@ -117,8 +130,103 @@ func prepareDiscardShadowBlock(statedb *state.StateDB, dynProps *state.DynamicPr
 }
 
 type discardShadowTaskResult struct {
-	matched bool
-	err     error
+	class    discardShadowTransactionClass
+	mismatch discardShadowMismatch
+	matched  bool
+	err      error
+}
+
+type discardShadowTransactionClass uint8
+
+const (
+	discardShadowOther discardShadowTransactionClass = iota
+	discardShadowTransfer
+	discardShadowVM
+)
+
+func classifyDiscardShadowTransaction(tx *types.Transaction) discardShadowTransactionClass {
+	if tx == nil {
+		return discardShadowOther
+	}
+	switch tx.ContractType() {
+	case corepb.Transaction_Contract_TransferContract:
+		return discardShadowTransfer
+	case corepb.Transaction_Contract_TriggerSmartContract, corepb.Transaction_Contract_CreateSmartContract:
+		return discardShadowVM
+	default:
+		return discardShadowOther
+	}
+}
+
+type discardShadowMismatch uint8
+
+const (
+	discardShadowMismatchReceipt discardShadowMismatch = 1 << iota
+	discardShadowMismatchFee
+	discardShadowMismatchResult
+	discardShadowMismatchLogs
+	discardShadowMismatchInternal
+	discardShadowMismatchOtherField
+)
+
+func equalTransactionInfoMessages[A proto.Message](left, right []A) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !proto.Equal(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func equalByteSlices(left, right [][]byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !bytes.Equal(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func compareDiscardShadowInfo(shadow, canonical *corepb.TransactionInfo) discardShadowMismatch {
+	if proto.Equal(shadow, canonical) {
+		return 0
+	}
+	var mismatch discardShadowMismatch
+	if !proto.Equal(shadow.GetReceipt(), canonical.GetReceipt()) {
+		mismatch |= discardShadowMismatchReceipt
+	}
+	if shadow.GetFee() != canonical.GetFee() || shadow.GetPackingFee() != canonical.GetPackingFee() {
+		mismatch |= discardShadowMismatchFee
+	}
+	if !equalByteSlices(shadow.GetContractResult(), canonical.GetContractResult()) {
+		mismatch |= discardShadowMismatchResult
+	}
+	if !equalTransactionInfoMessages(shadow.GetLog(), canonical.GetLog()) {
+		mismatch |= discardShadowMismatchLogs
+	}
+	if !equalTransactionInfoMessages(shadow.GetInternalTransactions(), canonical.GetInternalTransactions()) {
+		mismatch |= discardShadowMismatchInternal
+	}
+	shadowRemainder := proto.Clone(shadow).(*corepb.TransactionInfo)
+	canonicalRemainder := proto.Clone(canonical).(*corepb.TransactionInfo)
+	for _, info := range []*corepb.TransactionInfo{shadowRemainder, canonicalRemainder} {
+		info.Receipt = nil
+		info.Fee = 0
+		info.PackingFee = 0
+		info.ContractResult = nil
+		info.Log = nil
+		info.InternalTransactions = nil
+	}
+	if !proto.Equal(shadowRemainder, canonicalRemainder) {
+		mismatch |= discardShadowMismatchOtherField
+	}
+	return mismatch
 }
 
 type discardShadowRunConfig struct {
@@ -209,10 +317,44 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 		switch {
 		case result.err != nil:
 			executionErrors++
+			switch result.class {
+			case discardShadowVM:
+				discardShadowErrorVMCounter.Inc(1)
+			case discardShadowTransfer:
+				discardShadowErrorTransferCounter.Inc(1)
+			default:
+				discardShadowErrorOtherCounter.Inc(1)
+			}
 		case result.matched:
 			matches++
 		default:
 			mismatches++
+			switch result.class {
+			case discardShadowVM:
+				discardShadowMismatchVMCounter.Inc(1)
+			case discardShadowTransfer:
+				discardShadowMismatchTransferCounter.Inc(1)
+			default:
+				discardShadowMismatchOtherCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchReceipt != 0 {
+				discardShadowMismatchReceiptCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchFee != 0 {
+				discardShadowMismatchFeeCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchResult != 0 {
+				discardShadowMismatchResultCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchLogs != 0 {
+				discardShadowMismatchLogsCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchInternal != 0 {
+				discardShadowMismatchInternalCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchOtherField != 0 {
+				discardShadowMismatchOtherFieldCounter.Inc(1)
+			}
 		}
 	}
 	executionNanos := time.Since(executionStarted).Nanoseconds()
@@ -250,6 +392,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		return discardShadowTaskResult{err: errors.New("missing shadow transaction input")}
 	}
 	tx := cfg.transactions[txIndex]
+	class := classifyDiscardShadowTransaction(tx)
 	stateSnapshot := worker.state.Snapshot()
 	dpSnapshot := worker.dynProps.Snapshot()
 	worker.db.reset()
@@ -289,16 +432,16 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		worker.state.ClearBalanceTrace()
 		worker.state.RevertToSnapshot(stateSnapshot)
 		worker.dynProps.RevertToSnapshot(dpSnapshot)
-		return discardShadowTaskResult{err: err}
+		return discardShadowTaskResult{class: class, err: err}
 	}
 
 	shadowInfo := worker.infoSlot.build(tx, result, cfg.block.Number(), cfg.block.Timestamp(), worker.dynProps.AllowTransactionFeePool())
-	matched := proto.Equal(shadowInfo, cfg.canonicalInfos[txIndex])
+	mismatch := compareDiscardShadowInfo(shadowInfo, cfg.canonicalInfos[txIndex])
 	vm.ReleaseExecutionLogs(result.Logs)
 	result.Logs = nil
 	worker.state.FinalizeTransaction()
 	worker.state.EndBalanceTraceTransaction(balanceTraceTransactionStatus(result))
 	worker.state.RevertToSnapshot(stateSnapshot)
 	worker.dynProps.RevertToSnapshot(dpSnapshot)
-	return discardShadowTaskResult{matched: matched}
+	return discardShadowTaskResult{class: class, mismatch: mismatch, matched: mismatch == 0}
 }

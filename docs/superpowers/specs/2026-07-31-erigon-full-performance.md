@@ -545,6 +545,16 @@ Canonical state and receipts remain authoritative regardless of comparison
 outcome. Journal value comparison and non-zero-indegree predecessor materialization
 remain required before any result can be published.
 
+The first live worker sample covered 172 zero-indegree transactions in 30
+sampled blocks. Only 57 TransactionInfo values matched; 111 mismatched and four
+worker executions returned an error. Isolation overhead was acceptable at
+about 5.0 ms of state copying and 0.64 ms of parallel execution per sampled
+block (roughly 0.09 ms amortized per canonical block), but correctness is not.
+Publication remains disabled. Follow-up metrics split mismatches by VM,
+Transfer, and other contracts and by receipt, fee, contract result, logs,
+internal transactions, and remaining fields before changing eligibility or
+snapshot semantics.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
