@@ -109,10 +109,12 @@
 - [x] Implement an opt-in narrow Transfer speculative executor with full
   TransactionInfo, WriteSet, and BalanceTrace result carriers.
 - [x] Replay conflicts serially and publish only in original transaction order.
-- [ ] Reach the BalanceTrace production sample gate, enable
+- [x] Reach the BalanceTrace production sample gate, enable
   `--exec.parallel-transfers`, and compare canonical throughput/state metrics.
-- [ ] Normalize the block-scoped public-bandwidth recovered baseline and usage
+- [x] Normalize the block-scoped public-bandwidth recovered baseline and usage
   increments so independent free-bandwidth transfers can publish together.
+- [ ] Run the public-bandwidth reservation production gate and compare
+  published/conflict ratios plus limit fallbacks over a fixed height window.
 - [ ] Expand eligibility by actuator family using java-tron fixtures and fixed
   mainnet replay windows.
 

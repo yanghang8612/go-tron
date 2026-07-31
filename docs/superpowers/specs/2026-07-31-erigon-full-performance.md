@@ -827,6 +827,41 @@ fall back after the first publication even when their accounts are disjoint.
 The next breadth step is to model the within-block recovered public-bandwidth
 baseline plus ordered usage increments without weakening the limit check.
 
+The first enabled production window reached 2,995,135 pre-executed transfers,
+761,571 candidates, and 761,571 publications, with zero publication errors or
+preflight failures. The remaining 2,232,926 conflict fallbacks made the shared
+public-bandwidth cells the next measured breadth bottleneck. Average retained
+pre-execution time was about 0.91 ms per transfer and ordered publication about
+40.9 microseconds per published transfer.
+
+#### P4.19: Conditional public-bandwidth reservation
+
+Model java-tron's `useFreeNet` decision explicitly instead of labelling the
+global public usage counter as an unconditional commutative delta. A worker
+that successfully consumes free bandwidth retains the starting usage/time,
+recovered usage, resource time, transaction byte delta, and public limit. The
+carrier is accepted only when its retained post-images reproduce the same
+recovery and limit decision.
+
+At the original transaction position, the Erigon-style ordered publisher
+ignores predecessor versions only for `public_net_usage` and
+`public_net_time` covered by a valid carrier. It recovers the current canonical
+usage once from the state left by preceding transactions, repeats java-tron's
+`bytes <= limit - recoveredUsage` check, and temporarily normalizes the worker
+post-image to `recoveredUsage + bytes`. If the limit changed or preceding
+transactions exhausted it, the transaction falls back to the authoritative
+serial path, which can charge bandwidth exactly as java-tron would. The
+timestamp remains an idempotent block-scoped write.
+
+Serial/parallel fixtures cover two disjoint free-bandwidth transfers with a
+non-zero decaying starting usage: both publish and produce identical
+TransactionInfo, account balances, dynamic usage/time, and state root. A
+second fixture constrains the public limit so both block-start workers are
+individually eligible but only the first ordered reservation fits; the second
+falls back, including fee settlement, and again matches the serial root and
+results. Production acceptance requires zero errors and preflight failures,
+zero state/result divergence, and a material reduction in conflict fallbacks.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

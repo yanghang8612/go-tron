@@ -137,6 +137,21 @@ type TransactionReadSet struct {
 	Unsupported bool
 }
 
+// PublicNetReservation describes one successful free-bandwidth admission.
+// Unlike an unconditional commutative counter, public_net_usage is guarded by
+// a global limit and is recovered against public_net_time before every use.
+// Speculative workers therefore retain the complete admission input so the
+// ordered publisher can repeat the java-tron limit check against the state
+// left by all preceding transactions.
+type PublicNetReservation struct {
+	StartUsage     int64
+	StartTime      int64
+	RecoveredUsage int64
+	ResourceTime   int64
+	Delta          int64
+	Limit          int64
+}
+
 // TransactionAccessRecorder is a transaction-scoped, reusable read/write set.
 // Canonical execution installs one recorder on StateDB and DynamicProperties,
 // resets it at the transaction boundary, and removes it before advancing. The
@@ -153,6 +168,9 @@ type TransactionAccessRecorder struct {
 	unsupported          bool
 	commutativeScopeKey  TransactionAccessKey
 	commutativeScopeOpen bool
+	publicNetReservation PublicNetReservation
+	publicNetRecorded    bool
+	publicNetValid       bool
 }
 
 // Reset begins a new transaction capture. capacityHint is used only for the
@@ -177,6 +195,32 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 	r.unsupported = false
 	r.commutativeScopeKey = TransactionAccessKey{}
 	r.commutativeScopeOpen = false
+	r.publicNetReservation = PublicNetReservation{}
+	r.publicNetRecorded = false
+	r.publicNetValid = true
+}
+
+// RecordPublicNetReservation retains the conditional global-bandwidth update
+// made by the authoritative serial bandwidth processor. Recording more than
+// one non-identical reservation in a transaction is rejected conservatively.
+func (r *TransactionAccessRecorder) RecordPublicNetReservation(reservation PublicNetReservation) {
+	if r == nil {
+		return
+	}
+	if r.publicNetRecorded && r.publicNetReservation != reservation {
+		r.publicNetValid = false
+		return
+	}
+	r.publicNetReservation = reservation
+	r.publicNetRecorded = true
+}
+
+// PublicNetReservation returns the transaction-local conditional reservation.
+func (r *TransactionAccessRecorder) PublicNetReservation() (PublicNetReservation, bool) {
+	if r == nil || !r.publicNetRecorded || !r.publicNetValid {
+		return PublicNetReservation{}, false
+	}
+	return r.publicNetReservation, true
 }
 
 func (r *TransactionAccessRecorder) recordCommutativeDelta(key TransactionAccessKey, delta int64) {
@@ -519,6 +563,15 @@ func (s *StateDB) recordAccountKVPrefixRead(owner tcommon.Address) {
 func (dp *DynamicProperties) SetTransactionAccessRecorder(recorder *TransactionAccessRecorder) {
 	if dp != nil {
 		dp.transactionAccess = recorder
+	}
+}
+
+// RecordPublicNetReservation retains the limit-checked free-bandwidth update
+// for ordered speculative publication. It is observe-only and has no effect
+// when transaction access capture is disabled.
+func (dp *DynamicProperties) RecordPublicNetReservation(reservation PublicNetReservation) {
+	if dp != nil && dp.transactionAccess != nil {
+		dp.transactionAccess.RecordPublicNetReservation(reservation)
 	}
 }
 

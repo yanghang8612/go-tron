@@ -271,11 +271,24 @@ func consumeBandwidthWithResourceTimeAndSizes(statedb *state.StateDB, dynProps *
 	freeLimit := dynProps.FreeNetLimit()
 	recoveredFreeUsage := recoverUsageForDP(statedb.GetFreeNetUsage(sender), statedb.GetLatestConsumeFreeTime(sender), resourceTime, dynProps)
 	publicLimit := dynProps.PublicNetLimit()
-	recoveredPublicUsage := recoverUsageForDP(dynProps.PublicNetUsage(), dynProps.PublicNetTime(), resourceTime, dynProps)
-	if recoveredFreeUsage+txSize <= freeLimit && recoveredPublicUsage+txSize <= publicLimit {
+	publicUsage := dynProps.PublicNetUsage()
+	publicTime := dynProps.PublicNetTime()
+	recoveredPublicUsage := recoverUsageForDP(publicUsage, publicTime, resourceTime, dynProps)
+	// Match java-tron's bytes <= limit-recovered form. Besides preserving the
+	// exact admission order, this avoids overflowing recovered+txSize at the
+	// boundary of an int64 configuration.
+	if txSize <= freeLimit-recoveredFreeUsage && txSize <= publicLimit-recoveredPublicUsage {
 		statedb.SetFreeNetUsage(sender, recoveredFreeUsage+txSize)
 		statedb.SetLatestConsumeFreeTime(sender, resourceTime)
 		statedb.SetLatestOperationTime(sender, prevBlockTime)
+		dynProps.RecordPublicNetReservation(state.PublicNetReservation{
+			StartUsage:     publicUsage,
+			StartTime:      publicTime,
+			RecoveredUsage: recoveredPublicUsage,
+			ResourceTime:   resourceTime,
+			Delta:          txSize,
+			Limit:          publicLimit,
+		})
 		dynProps.SetPublicNetUsage(recoveredPublicUsage + txSize)
 		dynProps.SetPublicNetTime(resourceTime)
 		return BandwidthResult{NetUsage: txSize}, nil

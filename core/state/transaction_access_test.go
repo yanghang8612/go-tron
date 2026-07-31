@@ -178,6 +178,33 @@ func TestDynamicPropertiesSnapshotChangedBeforeNestedCommit(t *testing.T) {
 	}
 }
 
+func TestTransactionAccessRecorderRetainsSinglePublicNetReservation(t *testing.T) {
+	reservation := PublicNetReservation{
+		StartUsage:     100,
+		StartTime:      10,
+		RecoveredUsage: 90,
+		ResourceTime:   11,
+		Delta:          128,
+		Limit:          1_000,
+	}
+	var recorder TransactionAccessRecorder
+	recorder.Reset(8)
+	recorder.RecordPublicNetReservation(reservation)
+	recorder.RecordPublicNetReservation(reservation)
+	if got, ok := recorder.PublicNetReservation(); !ok || got != reservation {
+		t.Fatalf("reservation = %+v ok=%v, want %+v", got, ok, reservation)
+	}
+
+	recorder.RecordPublicNetReservation(PublicNetReservation{Delta: 1})
+	if _, ok := recorder.PublicNetReservation(); ok {
+		t.Fatal("non-identical second reservation was accepted")
+	}
+	recorder.Reset(8)
+	if _, ok := recorder.PublicNetReservation(); ok {
+		t.Fatal("reservation survived transaction reset")
+	}
+}
+
 func TestTransactionAccessRecorderCapturesLogicalCellsWithoutMutation(t *testing.T) {
 	s := newTestStateDB(t)
 	account := testAddr(0x31)

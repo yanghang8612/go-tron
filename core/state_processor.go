@@ -908,15 +908,26 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				parallelTransferConflictFallbackCounter.Inc(1)
 			default:
 				parallelTransferCandidatesCounter.Inc(1)
+				if preResult.publicNetValid {
+					parallelTransferPublicNetReservationsCounter.Inc(1)
+				}
+				publicNetOverride, publicNetAdmitted := overridePublicNetReservation(preResult, dynProps)
+				if !publicNetAdmitted {
+					parallelTransferPublicNetLimitFallbackCounter.Inc(1)
+					break
+				}
 				if err := statedb.ValidateTransactionWriteSetApply(preResult.writes, dynProps, transactionDB); err != nil {
+					publicNetOverride.restore()
 					parallelTransferPreflightFallbackCounter.Inc(1)
 					break
 				}
 				publishedStarted := time.Now()
 				versionedShadow.recorder.RestoreReadSet(preResult.reads)
-				if err := statedb.ApplyTransactionWriteSetRecorded(preResult.writes, dynProps, transactionDB, &versionedShadow.recorder); err != nil {
+				publishErr := statedb.ApplyTransactionWriteSetRecorded(preResult.writes, dynProps, transactionDB, &versionedShadow.recorder)
+				publicNetOverride.restore()
+				if publishErr != nil {
 					parallelTransferErrorsCounter.Inc(1)
-					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed transfer: %w", i, err)
+					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed transfer: %w", i, publishErr)
 				}
 				statedb.FinalizeTransaction()
 				statedb.AppendBalanceTraceTransaction(preResult.balanceTrace)
@@ -934,6 +945,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					return nil, tcommon.Hash{}, err
 				}
 				parallelTransferPublishedCounter.Inc(1)
+				if preResult.publicNetValid {
+					parallelTransferPublicNetPublishedCounter.Inc(1)
+				}
 				parallelTransferPublicationNanosCounter.Inc(time.Since(publishedStarted).Nanoseconds())
 				continue
 			}

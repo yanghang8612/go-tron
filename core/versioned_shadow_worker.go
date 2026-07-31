@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"sort"
 	"sync"
@@ -84,6 +85,9 @@ var (
 	parallelTransferErrorsCounter                    = metrics.NewRegisteredCounter("core/parallel_transfer/errors", nil)
 	parallelTransferPreexecutionNanosCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/preexecution_nanos", nil)
 	parallelTransferPublicationNanosCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/publication_nanos", nil)
+	parallelTransferPublicNetReservationsCounter     = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/reservations", nil)
+	parallelTransferPublicNetPublishedCounter        = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/published", nil)
+	parallelTransferPublicNetLimitFallbackCounter    = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/fallback/limit", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -248,6 +252,8 @@ type discardShadowTaskResult struct {
 	reads            state.TransactionReadSet
 	info             *corepb.TransactionInfo
 	balanceTrace     *contractpb.TransactionBalanceTrace
+	publicNet        state.PublicNetReservation
+	publicNetValid   bool
 	err              error
 }
 
@@ -758,6 +764,12 @@ func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, t
 		return decision
 	}
 	for _, read := range result.reads.Reads {
+		// public_net_usage/public_net_time form one conditional reservation,
+		// not two unconditional block-start reads. The ordered publisher repeats
+		// java-tron's recovery and limit check against all predecessor effects.
+		if result.publicNetValid && isPublicNetReservationKey(read.Key) {
+			continue
+		}
 		if read.Mode&state.TransactionAccessRead != 0 {
 			if _, conflict := versioned.typedPreviousVersion(read.Key, txIndex); conflict {
 				decision.readConflict = true
@@ -782,6 +794,96 @@ func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, t
 	}
 	decision.publishable = !decision.unsupported && !decision.readConflict && !decision.deltaInvalid && !decision.sender && !decision.barrier
 	return decision
+}
+
+func isPublicNetReservationKey(key state.TransactionAccessKey) bool {
+	return key.Kind == state.TransactionAccessDynamicInt &&
+		(key.LogicalKey == "public_net_usage" || key.LogicalKey == "public_net_time")
+}
+
+func publicNetReservationWriteValue(writes state.TransactionWriteSet, logicalKey string) (int64, bool) {
+	value, ok := writes[state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: logicalKey}]
+	if !ok || !value.Exists || value.Commutative || len(value.Value) != 8 {
+		return 0, false
+	}
+	return int64(binary.BigEndian.Uint64(value.Value)), true
+}
+
+func validatePublicNetReservation(reservation state.PublicNetReservation, writes state.TransactionWriteSet, dynProps *state.DynamicProperties) bool {
+	if dynProps == nil || reservation.Delta <= 0 || reservation.RecoveredUsage < 0 ||
+		reservation.Limit != dynProps.PublicNetLimit() ||
+		reservation.RecoveredUsage != recoverUsageForDP(reservation.StartUsage, reservation.StartTime, reservation.ResourceTime, dynProps) ||
+		reservation.RecoveredUsage > reservation.Limit || reservation.Delta > reservation.Limit-reservation.RecoveredUsage {
+		return false
+	}
+	usage, usageOK := publicNetReservationWriteValue(writes, "public_net_usage")
+	resourceTime, timeWritten := publicNetReservationWriteValue(writes, "public_net_time")
+	timeOK := timeWritten && resourceTime == reservation.ResourceTime
+	if !timeWritten {
+		// DynamicProperties.Set intentionally emits no write when the recovered
+		// timestamp already equals this block's resource time.
+		timeOK = reservation.StartTime == reservation.ResourceTime
+	}
+	return usageOK && timeOK && usage == reservation.RecoveredUsage+reservation.Delta
+}
+
+type publicNetWriteOverride struct {
+	writes      state.TransactionWriteSet
+	oldUsage    int64
+	oldTime     int64
+	timeWritten bool
+	reservation bool
+}
+
+// overridePublicNetReservation repeats java-tron's conditional admission at
+// the original transaction position, then temporarily changes the retained
+// block-start post-images to the ordered post-images consumed by the generic
+// typed publisher. The retained worker result is restored after publication
+// so sampled parity diagnostics still see its original output.
+func overridePublicNetReservation(result *discardShadowTaskResult, dynProps *state.DynamicProperties) (publicNetWriteOverride, bool) {
+	if result == nil || !result.publicNetValid {
+		return publicNetWriteOverride{}, true
+	}
+	reservation := result.publicNet
+	publicLimit := dynProps.PublicNetLimit()
+	currentUsage := dynProps.PublicNetUsage()
+	currentTime := dynProps.PublicNetTime()
+	recoveredUsage := recoverUsageForDP(currentUsage, currentTime, reservation.ResourceTime, dynProps)
+	if publicLimit != reservation.Limit || recoveredUsage > publicLimit || reservation.Delta > publicLimit-recoveredUsage {
+		return publicNetWriteOverride{reservation: true}, false
+	}
+	usageKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
+	timeKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_time"}
+	usageValue := result.writes[usageKey]
+	timeValue, timeWritten := result.writes[timeKey]
+	override := publicNetWriteOverride{
+		writes:      result.writes,
+		oldUsage:    int64(binary.BigEndian.Uint64(usageValue.Value)),
+		timeWritten: timeWritten,
+		reservation: true,
+	}
+	if timeWritten {
+		override.oldTime = int64(binary.BigEndian.Uint64(timeValue.Value))
+	}
+	binary.BigEndian.PutUint64(usageValue.Value, uint64(recoveredUsage+reservation.Delta))
+	if timeWritten {
+		binary.BigEndian.PutUint64(timeValue.Value, uint64(reservation.ResourceTime))
+	}
+	return override, true
+}
+
+func (override publicNetWriteOverride) restore() {
+	if !override.reservation || override.writes == nil {
+		return
+	}
+	usageKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
+	timeKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_time"}
+	usageValue := override.writes[usageKey]
+	binary.BigEndian.PutUint64(usageValue.Value, uint64(override.oldUsage))
+	if override.timeWritten {
+		timeValue := override.writes[timeKey]
+		binary.BigEndian.PutUint64(timeValue.Value, uint64(override.oldTime))
+	}
 }
 
 func (pre *discardShadowPreexecution) validateReadVersion(txIndex int, tx *types.Transaction, versioned *versionedAccessShadow) {
@@ -868,10 +970,13 @@ func (shadow *discardShadowBlock) finishTransferPreexecution(pre *discardShadowP
 			if decision.barrier {
 				stats.readBarrier++
 			}
+			// The original DAG deliberately models every ordinary path. A valid
+			// public-net carrier replaces its two global edges with an ordered
+			// conditional reservation, so it is no longer comparable to that DAG.
 			dagCandidate := writeSetReady && zeroIndegree && supported
 			if decision.publishable == dagCandidate {
 				stats.readDAGMatches++
-			} else {
+			} else if !result.publicNetValid {
 				stats.readDAGMismatches++
 			}
 		}
@@ -1401,6 +1506,8 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	worker.dynProps.SetTransactionAccessRecorder(nil)
 	writes, known, writeSetErr := worker.state.CaptureTransactionWriteSet(journalMark, &worker.recorder, worker.dynProps)
 	reads := worker.recorder.CaptureReadSet()
+	publicNet, hasPublicNet := worker.recorder.PublicNetReservation()
+	publicNetValid := hasPublicNet && writeSetErr == nil && known && validatePublicNetReservation(publicNet, writes, worker.dynProps)
 	if writeSetErr == nil && !known {
 		writeSetErr = errors.New("unknown worker state write")
 	}
@@ -1475,5 +1582,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		reads:            reads,
 		info:             retainedInfo,
 		balanceTrace:     balanceTrace,
+		publicNet:        publicNet,
+		publicNetValid:   publicNetValid,
 	}
 }
