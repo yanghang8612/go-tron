@@ -3078,21 +3078,30 @@ func (s *StateDB) HasSelfDestructed(addr tcommon.Address) bool {
 // Production uses Copy only for read-only VM execution (eth_call /
 // debug_traceCall snapshots), where temporal history capture is not invoked.
 func (s *StateDB) Copy() (*StateDB, error) {
+	// CommitScope can retain several committed-but-not-yet-flushed latest-domain
+	// batches. A read-only copy must share those read views; falling back to the
+	// physical index would silently execute against an older head. Copy callers
+	// run while the parent execution view is stable, and all mutations below stay
+	// in copy-owned state objects and journals.
 	cp := &StateDB{
-		db:                    s.db,
-		stateObjects:          make(map[tcommon.Address]*stateObject),
-		witnesses:             make(map[tcommon.Address]*types.Witness),
-		dirtyWitnesses:        make(map[tcommon.Address]struct{}),
-		txFinalizeDirty:       make(map[tcommon.Address]struct{}),
-		dirtyObjects:          make(map[tcommon.Address]struct{}),
-		journal:               newJournal(),
-		dynProps:              s.dynProps,
-		originRoot:            s.originRoot,
-		accountKVIndexStore:   s.accountKVIndexStore,
-		codeColdHistory:       s.codeColdHistory,
-		codeColdTxNum:         s.codeColdTxNum,
-		commitmentColdHistory: s.commitmentColdHistory,
-		commitmentColdTxNum:   s.commitmentColdTxNum,
+		db:                      s.db,
+		stateObjects:            make(map[tcommon.Address]*stateObject),
+		witnesses:               make(map[tcommon.Address]*types.Witness),
+		dirtyWitnesses:          make(map[tcommon.Address]struct{}),
+		txFinalizeDirty:         make(map[tcommon.Address]struct{}),
+		dirtyObjects:            make(map[tcommon.Address]struct{}),
+		journal:                 newJournal(),
+		dynProps:                s.dynProps,
+		originRoot:              s.originRoot,
+		accountKVIndexStore:     s.accountKVIndexStore,
+		accountKVLatestReader:   s.accountKVLatestReader,
+		accountKVLatestIterator: s.accountKVLatestIterator,
+		flatLatestReader:        s.flatLatestReader,
+		codeStore:               s.codeStore,
+		codeColdHistory:         s.codeColdHistory,
+		codeColdTxNum:           s.codeColdTxNum,
+		commitmentColdHistory:   s.commitmentColdHistory,
+		commitmentColdTxNum:     s.commitmentColdTxNum,
 	}
 	for addr, obj := range s.stateObjects {
 		var metaCopy *contractpb.SmartContract

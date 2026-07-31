@@ -1493,6 +1493,13 @@ func TestCommitScopeStateDBReadsUnflushedLatestAcrossCommits(t *testing.T) {
 	if got, ok, err := sdb.GetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v1")) {
 		t.Fatalf("StateDB GetAccountKV through pending latest = %q ok=%v err=%v, want v1", got, ok, err)
 	}
+	copied, err := sdb.Copy()
+	if err != nil {
+		t.Fatalf("copy StateDB with pending latest: %v", err)
+	}
+	if got, ok, err := copied.GetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("copied StateDB GetAccountKV through pending latest = %q ok=%v err=%v, want v1", got, ok, err)
+	}
 	batch, err := sdb.GetAccountKVBatch(addr, kvdomains.SystemDynamicProperty, [][]byte{[]byte("k")})
 	if err != nil {
 		t.Fatalf("StateDB GetAccountKVBatch through pending latest: %v", err)

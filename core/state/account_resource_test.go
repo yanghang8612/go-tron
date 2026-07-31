@@ -33,6 +33,38 @@ func TestFreshAccountResourceFirstMutationSkipsDurableRead(t *testing.T) {
 	}
 }
 
+func TestStateDBCopyPreservesPendingAccountResourceLatestView(t *testing.T) {
+	base := newTestStateDB(t)
+	addr := testAddr(0xb9)
+	base.CreateAccount(addr, corepb.AccountType_Normal)
+	root, err := base.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, base.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resource, err := proto.Marshal(&corepb.Account_AccountResource{EnergyUsage: 77})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := &countingAccountKVLatestReader{value: resource, found: true}
+	reopened.setAccountKVLatestView(pending, nil)
+
+	copied, err := reopened.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := copied.GetEnergyUsage(addr); got != 77 {
+		t.Fatalf("copied pending AccountResource energy usage = %d, want 77", got)
+	}
+	if pending.reads != 1 {
+		t.Fatalf("copied pending AccountResource reads = %d, want 1", pending.reads)
+	}
+}
+
 func TestAccountResourceArenaMarshalMatchesDeterministicProto(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0xaf)
