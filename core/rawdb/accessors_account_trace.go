@@ -19,11 +19,10 @@ func WriteAccountTrace(db ethdb.KeyValueWriter, owner []byte, blockNum int64, ba
 	if blockNum < 0 {
 		return fmt.Errorf("account trace: negative block %d", blockNum)
 	}
-	data, err := proto.Marshal(&contractpb.AccountTrace{Balance: balance})
-	if err != nil {
+	if err := putProtoValue(db, accountTraceKey(owner, blockNum), &contractpb.AccountTrace{Balance: balance}); err != nil {
 		return fmt.Errorf("account trace: marshal: %w", err)
 	}
-	return db.Put(accountTraceKey(owner, blockNum), data)
+	return nil
 }
 
 // ReadAccountTrace returns the balance recorded for (owner, blockNum) or

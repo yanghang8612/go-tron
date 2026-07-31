@@ -25,6 +25,12 @@ func (b *discardMetadataBatch) Write() error {
 	return nil
 }
 
+func (b *discardMetadataBatch) PutValueFunc(key []byte, valueLen int, fill func([]byte) error) error {
+	return b.Batch.(interface {
+		PutValueFunc([]byte, int, func([]byte) error) error
+	}).PutValueFunc(key, valueLen, fill)
+}
+
 func (b *discardMetadataBatch) Close() {
 	b.store.closeCalls++
 	b.Batch.Close()

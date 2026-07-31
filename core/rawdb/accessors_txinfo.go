@@ -23,11 +23,7 @@ func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.Tra
 	if err := validateTransactionInfoIDForKey(txID, info, "write transaction info"); err != nil {
 		return err
 	}
-	data, err := proto.Marshal(info)
-	if err != nil {
-		return err
-	}
-	return db.Put(txInfoKey(txID), data)
+	return putProtoValue(db, txInfoKey(txID), info)
 }
 
 // HasHotTransactionInfo reports whether the legacy per-transaction
@@ -283,11 +279,11 @@ func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, info
 }
 
 func writeTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo, blockTimestamp int64) error {
-	data, err := marshalTransactionInfosByBlock(blockNum, infos, blockTimestamp)
-	if err != nil {
-		return err
-	}
-	return db.Put(txInfoBlockKey(blockNum), data)
+	return putProtoValue(db, txInfoBlockKey(blockNum), &corepb.TransactionRet{
+		BlockNumber:     int64(blockNum),
+		BlockTimeStamp:  blockTimestamp,
+		Transactioninfo: infos,
+	})
 }
 
 func marshalTransactionInfosByBlock(blockNum uint64, infos []*corepb.TransactionInfo, blockTimestamp int64) ([]byte, error) {

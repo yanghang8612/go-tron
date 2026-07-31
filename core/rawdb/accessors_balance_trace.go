@@ -19,11 +19,7 @@ func WriteBlockBalanceTrace(db ethdb.KeyValueWriter, blockNum int64, trace *cont
 	if err := validateBlockBalanceTraceForKey(blockNum, trace, "write block balance trace"); err != nil {
 		return err
 	}
-	data, err := proto.Marshal(trace)
-	if err != nil {
-		return err
-	}
-	return db.Put(balanceTraceKey(blockNum), data)
+	return putProtoValue(db, balanceTraceKey(blockNum), trace)
 }
 
 // ReadBlockBalanceTrace returns the BlockBalanceTrace for blockNum, or nil
