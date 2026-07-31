@@ -126,6 +126,39 @@ func TestApplyTransactionWriteSetRecordedPreservesTypedAccountType(t *testing.T)
 	}
 }
 
+func TestApplyTransactionWriteSetRecordedPreservesNoopIntent(t *testing.T) {
+	sdb := newTestStateDB(t)
+	account := testAddr(0xd5)
+	sdb.CreateAccount(account, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(account, kvdomains.SystemReward, []byte("same"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	sameKey := TransactionAccessKey{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.SystemReward, LogicalKey: "same"}
+	absentKey := TransactionAccessKey{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.SystemReward, LogicalKey: "absent"}
+	writes := TransactionWriteSet{
+		sameKey:   ownedTransactionWriteValue(true, []byte("value")),
+		absentKey: {},
+	}
+	mark := sdb.DomainChangeJournalMark()
+	var recorder TransactionAccessRecorder
+	recorder.Reset(16)
+	if err := sdb.ApplyTransactionWriteSetRecorded(writes, NewDynamicProperties(), ethrawdb.NewMemoryDatabase(), &recorder); err != nil {
+		t.Fatal(err)
+	}
+	sdb.FinalizeTransaction()
+	applied, known, err := sdb.CaptureTransactionWriteSet(mark, &recorder, NewDynamicProperties())
+	if err != nil || !known {
+		t.Fatalf("capture applied writes: known=%v err=%v", known, err)
+	}
+	if !EqualTransactionWriteSets(applied, writes) {
+		t.Fatalf("applied writes = %#v, want %#v", applied, writes)
+	}
+}
+
 func TestApplyTransactionWriteSetPreservesDeletionPostImages(t *testing.T) {
 	base := newTestStateDB(t)
 	contract := testAddr(0xd5)

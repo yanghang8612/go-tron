@@ -196,11 +196,31 @@ func (s *StateDB) applyTransactionWriteSet(writes TransactionWriteSet, dynProps 
 	}()
 
 	for key, value := range writes {
+		recordTransactionWriteApply(recorder, key, value)
 		if err := s.applyTransactionWrite(key, value, dynProps, raw); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// recordTransactionWriteApply retains the publication intent even when the
+// final post-image equals the ordered baseline and the underlying setter
+// correctly performs no mutation. CaptureTransactionWriteSet still reads the
+// resulting logical value, so an incorrect no-op remains a value mismatch.
+func recordTransactionWriteApply(recorder *TransactionAccessRecorder, key TransactionAccessKey, value TransactionWriteValue) {
+	if recorder == nil || value.Commutative {
+		return
+	}
+	if key.Kind == TransactionAccessRawKV {
+		if value.Exists {
+			recorder.RecordRawKVPut([]byte(key.LogicalKey), value.Value)
+		} else {
+			recorder.RecordRawKVDelete([]byte(key.LogicalKey))
+		}
+		return
+	}
+	recorder.record(key, TransactionAccessWrite)
 }
 
 func transactionWriteInt64(value TransactionWriteValue) int64 {

@@ -671,6 +671,17 @@ diagnostics also split missing/extra/presence/commutative/value differences by
 cell family so the next production sample can distinguish this fix from any
 remaining publication defect.
 
+The diagnostic deployment then reproduced five mismatches among 309 eligible
+sets. Every mismatch was a missing AccountKV key; extra-key, presence, value,
+commutative, and all other cell-family counters stayed zero. This is the
+expected shape of a transaction that writes a cell and returns it to its
+block-start value: the worker WriteSet preserves write intent, while applying
+only the final post-image correctly takes the setter's no-op path and emits no
+journal entry. Verification now pre-registers each non-commutative input key
+with its recorder before applying it, then captures the actual final logical
+value. This preserves setter no-op optimization without masking an incorrect
+post-state.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
