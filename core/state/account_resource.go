@@ -20,7 +20,14 @@ func clearAccountResourceProto(pb *corepb.Account) {
 }
 
 func (s *StateDB) materializeAccountResource(obj *stateObject) error {
-	if obj == nil || obj.account == nil || obj.accountResourceLoaded {
+	if obj == nil || obj.account == nil {
+		return nil
+	}
+	// State-object caches outlive one transaction. Re-emit the logical point
+	// dependency even when the protobuf row is already materialized so every
+	// transaction receives the same read set as a cold lookup.
+	s.recordAccountKVRead(obj.address, kvdomains.AccountResourceAux, accountResourceKey)
+	if obj.accountResourceLoaded {
 		return nil
 	}
 	pb := obj.account.Proto()
@@ -108,7 +115,7 @@ func (s *StateDB) mutateAccountResource(obj *stateObject, mutate func(*corepb.Ac
 // bandwidth rows, and the point-addressable V2 bandwidth row without loading
 // any other split account domain.
 func (s *StateDB) GetAccountFrozenBandwidth(addr tcommon.Address) (int64, error) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
 	if obj == nil || obj.deleted || obj.account == nil {
 		return 0, nil
 	}
@@ -120,7 +127,7 @@ func (s *StateDB) GetAccountFrozenBandwidth(addr tcommon.Address) (int64, error)
 // state cannot contain V2 freezes, so resource accounting can avoid probing
 // that split domain entirely.
 func (s *StateDB) GetAccountFrozenBandwidthV1(addr tcommon.Address) (int64, error) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
 	if obj == nil || obj.deleted || obj.account == nil {
 		return 0, nil
 	}
@@ -149,9 +156,9 @@ func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject, includeV2 boo
 	if includeV2 {
 		acquiredV2 = acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
 		if obj.accountStakeV2Loaded {
+			s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_BANDWIDTH))
 			frozenV2 = acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
 		} else {
-			var err error
 			frozenV2, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
 			if err != nil {
 				return 0, err
@@ -170,7 +177,7 @@ func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject, includeV2 boo
 // AccountResource row, and the point-addressable V2 ENERGY row. In particular
 // it avoids the full account prefix scans performed by GetAccount.
 func (s *StateDB) GetAccountFrozenEnergy(addr tcommon.Address) (int64, error) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
 	if obj == nil || obj.deleted || obj.account == nil {
 		return 0, nil
 	}
@@ -181,7 +188,7 @@ func (s *StateDB) GetAccountFrozenEnergy(addr tcommon.Address) (int64, error) {
 // Stake 2.0 activation while preserving the full accessor for later blocks and
 // general callers.
 func (s *StateDB) GetAccountFrozenEnergyV1(addr tcommon.Address) (int64, error) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
 	if obj == nil || obj.deleted || obj.account == nil {
 		return 0, nil
 	}
@@ -198,13 +205,14 @@ func (s *StateDB) accountFrozenEnergyForLimit(obj *stateObject, includeV2 bool) 
 	if includeV2 {
 		acquiredV2Energy = acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
 		if obj.accountStakeV2Loaded {
+			s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_ENERGY))
 			frozenV2Energy = acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY)
 		} else {
-			var err error
-			frozenV2Energy, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_ENERGY)
+			amount, _, err := s.accountFrozenV2Amount(obj, corepb.ResourceCode_ENERGY)
 			if err != nil {
 				return 0, err
 			}
+			frozenV2Energy = amount
 		}
 	}
 
@@ -236,7 +244,7 @@ func (s *StateDB) GetAccountFrozenResourceTotalsV1(addr tcommon.Address) (bandwi
 }
 
 func (s *StateDB) getAccountFrozenResourceTotals(addr tcommon.Address, includeV2 bool) (bandwidth, energy int64, err error) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
 	if obj == nil || obj.deleted || obj.account == nil {
 		return 0, 0, nil
 	}

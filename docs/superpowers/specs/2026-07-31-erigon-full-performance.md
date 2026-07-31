@@ -322,6 +322,64 @@ transaction. Production normalized-validity and CPU evidence is the gate for
 extracting an explicit settlement-delta result and starting discard-only
 workers.
 
+The first fixed production sample at historical mainnet height approximately
+4.70 million improved first-pass validity from 3.519% raw to 5.444% after
+settlement normalization. That 54.7% relative gain confirmed the model, but the
+absolute worker yield remained far too low: Account was still represented as
+one very wide protobuf dependency.
+
+#### P4.4: Erigon-style typed Account paths
+
+Erigon does not hash every property of an address into one account version.
+Its local `execution/state/versionmap.go` uses typed `AddressEntry` paths, and
+`execution/state/versionedio.go` carries corresponding typed `ReadSet` and
+`WriteSet` maps. P4.4 adopts that mechanism for TRON while retaining the wider
+Account protobuf and split account-KV storage required by java-tron.
+
+Hot logical Account reads and scalar mutations are now captured independently:
+
+- existence and account type;
+- balance, allowance, and latest-withdraw time;
+- bandwidth usage/timestamps/free usage and the bandwidth recovery window;
+- the compact-envelope frozen-resource fields.
+
+Full-account APIs remain a hierarchy barrier. Each address has a full-write
+version, an any-field-write version, and per-field versions. A typed field read
+checks the latest full or matching-field writer; a full-account read checks any
+preceding field writer. Account creation, deletion, and unclassified mutations
+therefore still invalidate every typed field. The original whole-account
+validator also remains live as the raw baseline.
+
+Temporal history deliberately journals a scalar Account mutation with complete
+pre-image bytes. Inline field-write coverage lets the observer recognize that
+physical `accountChange` as an already classified scalar mutation. A real full
+mutation records an explicit full write; a journaled Account write with no
+field coverage falls back to a full barrier. This keeps measurement
+conservative if a new setter is added without typed instrumentation.
+
+TRON's split rows remain exact account-KV cells rather than Account fields.
+Permission validation records the requested permission row even when the
+decoded permission is cached. V1 frozen-bandwidth, `AccountResource`, and V2
+frozen-resource point caches likewise replay their physical logical reads at
+every transaction boundary. Prefix scans remain unsupported. These rules avoid
+the false independence that would occur if a block-scoped object cache hid a
+worker's transaction-scoped dependency.
+
+The first hot call-site conversion removes whole-account reads from transaction
+permission presence checks, TRX/TRC10 recipient-type validation, balance and
+bandwidth scalar accounting, contract code/storage existence checks, and VM
+energy-resource accounting. Freeze/unfreeze and other paths that inspect
+multiple arbitrary Account fields retain the full barrier until separately
+audited.
+
+Metrics publish raw, settlement-normalized, and typed-plus-settlement
+first-pass validity overall and by VM/Transfer/other class. Typed Account
+conflicts are split into coarse, existence, type, balance, allowance,
+bandwidth, and frozen-resource paths. This phase is still observe-only: the
+serial StateDB remains authoritative and no worker result is executed or
+published. Production typed validity and observer CPU determine whether the
+next safe step is explicit settlement deltas or discard-only worker execution.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

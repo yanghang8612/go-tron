@@ -953,6 +953,21 @@ func (s *StateDB) AccountReference(addr tcommon.Address) *types.Account {
 	return obj.account
 }
 
+// AccountResourceReference returns the live account with only its resource row
+// materialized. Callers must restrict themselves to resource-bearing fields;
+// unlike AccountReference this records a typed resource dependency rather than
+// consuming the whole Account envelope version.
+func (s *StateDB) AccountResourceReference(addr tcommon.Address) *types.Account {
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
+	if obj == nil || obj.deleted {
+		return nil
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return nil
+	}
+	return obj.account
+}
+
 // AccountSnapshotReferenceInto refreshes snapshot with a cacheable view of the
 // account envelope without copying the account proto. A nil snapshot allocates
 // one; callers that cache the result across successful blocks can pass it back
@@ -999,7 +1014,14 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 }
 
 func (s *StateDB) getOrCreateAccount(addr tcommon.Address) *stateObject {
-	obj := s.getStateObject(addr)
+	return s.getOrCreateAccountLoaded(addr, s.getStateObject(addr))
+}
+
+func (s *StateDB) getOrCreateAccountForField(addr tcommon.Address, field TransactionAccountField) *stateObject {
+	return s.getOrCreateAccountLoaded(addr, s.getStateObjectForField(addr, field))
+}
+
+func (s *StateDB) getOrCreateAccountLoaded(addr tcommon.Address, obj *stateObject) *stateObject {
 	if obj != nil && !obj.deleted {
 		return obj
 	}
@@ -1060,7 +1082,7 @@ func (s *StateDB) getOrCreateAccount(addr tcommon.Address) *stateObject {
 
 // GetBalance returns the TRX balance of the account.
 func (s *StateDB) GetBalance(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldBalance)
 	if obj == nil {
 		return 0
 	}
@@ -1069,7 +1091,8 @@ func (s *StateDB) GetBalance(addr tcommon.Address) int64 {
 
 // AddBalance adds amount to the account's balance.
 func (s *StateDB) AddBalance(addr tcommon.Address, amount int64) {
-	obj := s.getOrCreateAccount(addr)
+	obj := s.getOrCreateAccountForField(addr, TransactionAccountFieldBalance)
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldBalance)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetBalance(obj.account.Balance() + amount)
 	obj.markDirty()
@@ -1086,7 +1109,7 @@ func (s *StateDB) AddSettlementBalance(addr tcommon.Address, amount int64) {
 		return
 	}
 	if recorder := s.transactionAccess; recorder != nil {
-		key := TransactionAccessKey{Kind: TransactionAccessAccount, Address: addr}
+		key := TransactionAccessKey{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldBalance}
 		previousKey, previousOpen := recorder.beginCommutativeScope(key)
 		s.AddBalance(addr, amount)
 		recorder.endCommutativeScope(previousKey, previousOpen)
@@ -1097,13 +1120,14 @@ func (s *StateDB) AddSettlementBalance(addr tcommon.Address, amount int64) {
 
 // SubBalance subtracts amount from the account's balance.
 func (s *StateDB) SubBalance(addr tcommon.Address, amount int64) error {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldBalance)
 	if obj == nil {
 		return ErrInsufficientBalance
 	}
 	if obj.account.Balance() < amount {
 		return ErrInsufficientBalance
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldBalance)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetBalance(obj.account.Balance() - amount)
 	obj.markDirty()
@@ -1826,8 +1850,18 @@ func (s *StateDB) SetTransientState(addr tcommon.Address, key, value tcommon.Has
 
 // AccountExists returns whether an account exists (non-nil and not deleted).
 func (s *StateDB) AccountExists(addr tcommon.Address) bool {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	return obj != nil && !obj.deleted
+}
+
+// GetAccountType returns the compact account-envelope type and existence bit
+// without making callers consume every mutable Account field.
+func (s *StateDB) GetAccountType(addr tcommon.Address) (corepb.AccountType, bool) {
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldAccountType)
+	if obj == nil || obj.deleted || obj.account == nil {
+		return corepb.AccountType_Normal, false
+	}
+	return obj.account.Type(), true
 }
 
 // CreateAccount creates a new account at addr with the given type.
@@ -2269,7 +2303,7 @@ func (s *StateDB) AddWitnessVoteCount(addr tcommon.Address, delta int64) {
 
 // GetAllowance returns the witness reward allowance.
 func (s *StateDB) GetAllowance(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldAllowance)
 	if obj == nil {
 		return 0
 	}
@@ -2278,10 +2312,11 @@ func (s *StateDB) GetAllowance(addr tcommon.Address) int64 {
 
 // SetAllowance sets the witness reward allowance.
 func (s *StateDB) SetAllowance(addr tcommon.Address, allowance int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldAllowance)
 	if obj == nil {
 		return
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldAllowance)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetAllowance(allowance)
 	obj.markDirty()
@@ -2289,10 +2324,11 @@ func (s *StateDB) SetAllowance(addr tcommon.Address, allowance int64) {
 
 // AddAllowance adds amount to the witness reward allowance.
 func (s *StateDB) AddAllowance(addr tcommon.Address, amount int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldAllowance)
 	if obj == nil {
 		return
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldAllowance)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetAllowance(obj.account.Allowance() + amount)
 	obj.markDirty()
@@ -2328,7 +2364,7 @@ func (s *StateDB) AddAllowanceFinalReward(addr tcommon.Address, amount int64) {
 
 // GetLatestWithdrawTime returns the latest withdraw timestamp.
 func (s *StateDB) GetLatestWithdrawTime(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldLatestWithdrawTime)
 	if obj == nil {
 		return 0
 	}
@@ -2337,10 +2373,11 @@ func (s *StateDB) GetLatestWithdrawTime(addr tcommon.Address) int64 {
 
 // SetLatestWithdrawTime sets the latest withdraw timestamp.
 func (s *StateDB) SetLatestWithdrawTime(addr tcommon.Address, t int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldLatestWithdrawTime)
 	if obj == nil {
 		return
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldLatestWithdrawTime)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetLatestWithdrawTime(t)
 	obj.markDirty()
@@ -2360,7 +2397,7 @@ func (s *StateDB) SetOldTronPower(addr tcommon.Address, v int64) {
 
 // GetNetUsage returns the net (bandwidth) usage for an account.
 func (s *StateDB) GetNetUsage(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldNetUsage)
 	if obj == nil {
 		return 0
 	}
@@ -2369,10 +2406,11 @@ func (s *StateDB) GetNetUsage(addr tcommon.Address) int64 {
 
 // SetNetUsage sets the net (bandwidth) usage for an account.
 func (s *StateDB) SetNetUsage(addr tcommon.Address, usage int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldNetUsage)
 	if obj == nil {
 		return
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldNetUsage)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetNetUsage(usage)
 	obj.markDirty()
@@ -2380,7 +2418,7 @@ func (s *StateDB) SetNetUsage(addr tcommon.Address, usage int64) {
 
 // GetLatestOperationTime returns the latest account operation timestamp.
 func (s *StateDB) GetLatestOperationTime(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldLatestOperationTime)
 	if obj == nil {
 		return 0
 	}
@@ -2389,10 +2427,11 @@ func (s *StateDB) GetLatestOperationTime(addr tcommon.Address) int64 {
 
 // SetLatestOperationTime sets the latest account operation timestamp.
 func (s *StateDB) SetLatestOperationTime(addr tcommon.Address, t int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldLatestOperationTime)
 	if obj == nil {
 		return
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldLatestOperationTime)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetLatestOperationTime(t)
 	obj.markDirty()
@@ -2400,7 +2439,7 @@ func (s *StateDB) SetLatestOperationTime(addr tcommon.Address, t int64) {
 
 // GetLatestConsumeTime returns the latest consume time for an account.
 func (s *StateDB) GetLatestConsumeTime(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldLatestConsumeTime)
 	if obj == nil {
 		return 0
 	}
@@ -2409,10 +2448,11 @@ func (s *StateDB) GetLatestConsumeTime(addr tcommon.Address) int64 {
 
 // SetLatestConsumeTime sets the latest consume time for an account.
 func (s *StateDB) SetLatestConsumeTime(addr tcommon.Address, t int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldLatestConsumeTime)
 	if obj == nil {
 		return
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldLatestConsumeTime)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetLatestConsumeTime(t)
 	obj.markDirty()
@@ -2420,7 +2460,7 @@ func (s *StateDB) SetLatestConsumeTime(addr tcommon.Address, t int64) {
 
 // GetFreeNetUsage returns the free net (bandwidth) usage for an account.
 func (s *StateDB) GetFreeNetUsage(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFreeNetUsage)
 	if obj == nil {
 		return 0
 	}
@@ -2429,10 +2469,11 @@ func (s *StateDB) GetFreeNetUsage(addr tcommon.Address) int64 {
 
 // SetFreeNetUsage sets the free net (bandwidth) usage for an account.
 func (s *StateDB) SetFreeNetUsage(addr tcommon.Address, usage int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFreeNetUsage)
 	if obj == nil {
 		return
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldFreeNetUsage)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetFreeNetUsage(usage)
 	obj.markDirty()
@@ -2440,7 +2481,7 @@ func (s *StateDB) SetFreeNetUsage(addr tcommon.Address, usage int64) {
 
 // GetLatestConsumeFreeTime returns the latest consume free time for an account.
 func (s *StateDB) GetLatestConsumeFreeTime(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldLatestConsumeFreeTime)
 	if obj == nil {
 		return 0
 	}
@@ -2449,10 +2490,11 @@ func (s *StateDB) GetLatestConsumeFreeTime(addr tcommon.Address) int64 {
 
 // SetLatestConsumeFreeTime sets the latest consume free time for an account.
 func (s *StateDB) SetLatestConsumeFreeTime(addr tcommon.Address, t int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldLatestConsumeFreeTime)
 	if obj == nil {
 		return
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldLatestConsumeFreeTime)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetLatestConsumeFreeTime(t)
 	obj.markDirty()
@@ -2520,7 +2562,7 @@ func (s *StateDB) SetLatestAssetOperationTimeV2(addr tcommon.Address, key string
 
 // GetEnergyUsage returns the energy usage for an account.
 func (s *StateDB) GetEnergyUsage(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil {
 		return 0
 	}
@@ -2532,7 +2574,7 @@ func (s *StateDB) GetEnergyUsage(addr tcommon.Address) int64 {
 
 // SetEnergyUsage sets the energy usage for an account.
 func (s *StateDB) SetEnergyUsage(addr tcommon.Address, usage int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil {
 		return
 	}
@@ -2543,7 +2585,7 @@ func (s *StateDB) SetEnergyUsage(addr tcommon.Address, usage int64) {
 
 // GetLatestConsumeTimeForEnergy returns the latest energy consume time for an account.
 func (s *StateDB) GetLatestConsumeTimeForEnergy(addr tcommon.Address) int64 {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil {
 		return 0
 	}
@@ -2555,7 +2597,7 @@ func (s *StateDB) GetLatestConsumeTimeForEnergy(addr tcommon.Address) int64 {
 
 // SetLatestConsumeTimeForEnergy sets the latest energy consume time for an account.
 func (s *StateDB) SetLatestConsumeTimeForEnergy(addr tcommon.Address, t int64) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil {
 		return
 	}
@@ -2580,7 +2622,7 @@ func (s *StateDB) SetEnergyUsageWindowAndLatestConsumeTime(addr tcommon.Address,
 }
 
 func (s *StateDB) setEnergySettlement(addr tcommon.Address, usage, t, rawWindow int64, optimized, updateWindow bool) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil {
 		return
 	}
@@ -2599,7 +2641,7 @@ func (s *StateDB) setEnergySettlement(addr tcommon.Address, usage, t, rawWindow 
 // optimized flag) for an account. Mirrors java-tron's
 // setNewWindowSize / setNewWindowSizeV2 persistence.
 func (s *StateDB) SetEnergyWindow(addr tcommon.Address, raw int64, optimized bool) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil {
 		return
 	}
@@ -2612,13 +2654,24 @@ func (s *StateDB) SetEnergyWindow(addr tcommon.Address, raw int64, optimized boo
 // optimized flag) for an account. Mirrors java-tron's
 // setNewWindowSize / setNewWindowSizeV2 persistence for BANDWIDTH.
 func (s *StateDB) SetNetWindow(addr tcommon.Address, raw int64, optimized bool) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldNetWindow)
 	if obj == nil {
 		return
 	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldNetWindow)
 	s.journalAccountScalars(addr, obj)
 	obj.account.SetNetWindow(raw, optimized)
 	obj.markDirty()
+}
+
+// GetNetWindow returns the per-account bandwidth recovery window without
+// promoting the read to a full Account dependency.
+func (s *StateDB) GetNetWindow(addr tcommon.Address) (raw int64, optimized bool) {
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldNetWindow)
+	if obj == nil {
+		return 0, false
+	}
+	return obj.account.RawNetWindowSize(), obj.account.NetWindowOptimized()
 }
 
 // --- Contract support ---
@@ -2632,7 +2685,7 @@ var (
 // GetCode returns the contract bytecode at addr.
 func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 	s.recordCodeRead(addr)
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return nil
 	}
@@ -2653,7 +2706,7 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 
 // SetCode sets the contract bytecode at addr. Creates the account if needed.
 func (s *StateDB) SetCode(addr tcommon.Address, code []byte) {
-	obj := s.getOrCreateAccount(addr)
+	obj := s.getOrCreateAccountForField(addr, TransactionAccountFieldExistence)
 	prevCode := append([]byte(nil), s.GetCode(addr)...)
 	var prevLatest []byte
 	if latest, exists, err := encodeAccountLatestObject(obj, true); err == nil && exists {
@@ -2678,7 +2731,7 @@ func (s *StateDB) GetCodeSize(addr tcommon.Address) int {
 // without contract code. Missing accounts return zero.
 func (s *StateDB) GetCodeHash(addr tcommon.Address) tcommon.Hash {
 	s.recordCodeRead(addr)
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return tcommon.Hash{}
 	}
@@ -2704,7 +2757,8 @@ func (s *StateDB) GetState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash 
 // row even though both read as zero.
 func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tcommon.Hash, bool) {
 	s.recordStorageRead(addr, key)
-	obj := s.getStateObject(addr)
+	s.recordContractMetadataRead(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil {
 		s.storageObservability.accountMissingZero++
 		return tcommon.Hash{}, false
@@ -2753,7 +2807,8 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 
 // SetState sets a storage value on a contract.
 func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
-	obj := s.getOrCreateAccount(addr)
+	s.recordContractMetadataRead(addr)
+	obj := s.getOrCreateAccountForField(addr, TransactionAccountFieldExistence)
 	prev, prevExists, cached := obj.getStorageWithExist(key)
 	if !cached {
 		prev, prevExists = s.GetStateWithExist(addr, key)
@@ -2777,7 +2832,8 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 }
 
 func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
-	obj := s.getStateObject(addr)
+	s.recordContractMetadataRead(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return javaStorageRowKey(addr, key, nil)
 	}
@@ -2796,7 +2852,7 @@ func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.
 // GetContract returns the contract metadata at addr.
 func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 	s.recordContractMetadataRead(addr)
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return nil
 	}
@@ -2824,7 +2880,7 @@ func (s *StateDB) loadContract(obj *stateObject) *contractpb.SmartContract {
 // Dirty in-memory metadata is marshalled so the result matches GetContract.
 func (s *StateDB) GetContractMetadataBytes(addr tcommon.Address) ([]byte, bool, error) {
 	s.recordContractMetadataRead(addr)
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return nil, false, nil
 	}
@@ -2847,7 +2903,7 @@ func (s *StateDB) GetContractMetadataBytes(addr tcommon.Address) ([]byte, bool, 
 
 // SetContract stores contract metadata at addr.
 func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartContract) {
-	obj := s.getOrCreateAccount(addr)
+	obj := s.getOrCreateAccountForField(addr, TransactionAccountFieldExistence)
 	// Clone prevMeta so the journal holds a snapshot of the pre-mutation state.
 	// Callers often mutate the pointer returned by GetContract in-place and then
 	// call SetContract with the same pointer; without cloning, prevMeta would
@@ -2937,11 +2993,10 @@ func (s *StateDB) Exist(addr tcommon.Address) bool {
 
 // Empty returns whether an account is empty (no balance, no code).
 func (s *StateDB) Empty(addr tcommon.Address) bool {
-	obj := s.getStateObject(addr)
-	if obj == nil || obj.deleted {
+	if !s.AccountExists(addr) {
 		return true
 	}
-	return obj.account.Balance() == 0 && len(s.GetCode(addr)) == 0
+	return s.GetBalance(addr) == 0 && len(s.GetCode(addr)) == 0
 }
 
 // SelfDestruct marks an account as self-destructed.
@@ -3010,7 +3065,7 @@ func (s *StateDB) DeleteAccount(addr tcommon.Address) {
 // HasSelfDestructed returns whether the account has been self-destructed.
 func (s *StateDB) HasSelfDestructed(addr tcommon.Address) bool {
 	s.recordSelfDestructRead(addr)
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil {
 		return false
 	}
@@ -4165,6 +4220,15 @@ func (s *StateDB) ClearUnfrozenV2(addr tcommon.Address) {
 // account latest domain.
 func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	s.recordAccountRead(addr)
+	return s.getStateObjectWithoutAccess(addr)
+}
+
+func (s *StateDB) getStateObjectForField(addr tcommon.Address, field TransactionAccountField) *stateObject {
+	s.recordAccountFieldRead(addr, field)
+	return s.getStateObjectWithoutAccess(addr)
+}
+
+func (s *StateDB) getStateObjectWithoutAccess(addr tcommon.Address) *stateObject {
 	// Address byte 20 is uniformly distributed for normal TRON addresses. Check
 	// it before the full 21-byte equality so alternating-account workloads pay
 	// one byte comparison rather than comparing the common 0x41 prefix first.
@@ -4317,6 +4381,15 @@ func (s *StateDB) releaseUnusedLoadedAccountProtos() {
 
 // journalAccount records the current state of an account for revert.
 func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
+	s.recordAccountWrite(addr)
+	s.journalAccountPreimage(addr, obj)
+}
+
+// journalAccountPreimage performs the canonical undo/history work without
+// classifying the mutation as a full-account access. Scalar setters use this
+// path when temporal history requires accountChange bytes but their exact
+// transaction field writes have already been recorded inline.
+func (s *StateDB) journalAccountPreimage(addr tcommon.Address, obj *stateObject) {
 	if obj != nil && obj.account != nil {
 		obj.accountDirty = true
 	}
@@ -4367,7 +4440,7 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 // intentionally falls back to journalAccount unchanged.
 func (s *StateDB) journalAccountScalars(addr tcommon.Address, obj *stateObject) {
 	if s.changeSet.enabled {
-		s.journalAccount(addr, obj)
+		s.journalAccountPreimage(addr, obj)
 		return
 	}
 	if obj == nil || obj.account == nil {

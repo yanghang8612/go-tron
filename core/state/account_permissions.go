@@ -93,7 +93,23 @@ func (s *StateDB) WitnessPermissionAddress(addr common.Address) common.Address {
 // because the decoding read merges the StateDB dirty overlay with the latest
 // store while retaining the public GetAccountKV ownership boundary.
 func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.Permission, error) {
-	obj := s.getStateObject(addr)
+	var key []byte
+	switch id {
+	case 0:
+		key = accountOwnerPermissionKey
+	case 1:
+		key = accountWitnessPermissionKey
+	default:
+		if id < 2 {
+			return nil, nil
+		}
+		key = accountActivePermissionKey(id)
+	}
+	// Cached permission materialization may outlive a transaction boundary.
+	// Record the exact row before consulting it so a preceding permission update
+	// still invalidates a worker result that hits the object cache.
+	s.recordAccountKVRead(addr, kvdomains.AccountPermissionAux, key)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return nil, nil
 	}
@@ -120,18 +136,6 @@ func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.
 		return obj.accountPermissionPoint, nil
 	}
 
-	var key []byte
-	switch id {
-	case 0:
-		key = accountOwnerPermissionKey
-	case 1:
-		key = accountWitnessPermissionKey
-	default:
-		if id < 2 {
-			return nil, nil
-		}
-		key = accountActivePermissionKey(id)
-	}
 	value, exists, err := s.getAccountKVForDecoding(addr, kvdomains.AccountPermissionAux, key)
 	if err != nil {
 		return nil, err

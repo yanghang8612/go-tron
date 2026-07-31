@@ -159,6 +159,7 @@ func TestTransactionAccessRecorderCapturesLogicalCellsWithoutMutation(t *testing
 	var slot tcommon.Hash
 	slot[31] = 7
 	_ = s.GetBalance(account)
+	_, _ = s.GetAccountType(account)
 	_, _, _ = s.GetAccountKV(account, kvdomains.AccountPermissionAux, []byte("owner"))
 	_ = s.GetState(contract, slot)
 	_ = s.GetCode(contract)
@@ -174,7 +175,8 @@ func TestTransactionAccessRecorderCapturesLogicalCellsWithoutMutation(t *testing
 	_ = dp.LatestBlockHeaderHash()
 
 	want := map[TransactionAccessKey]TransactionAccessMode{
-		{Kind: TransactionAccessAccount, Address: account}:                                                                  TransactionAccessRead,
+		{Kind: TransactionAccessAccountField, Address: account, AccountField: TransactionAccountFieldBalance}:               TransactionAccessRead,
+		{Kind: TransactionAccessAccountField, Address: account, AccountField: TransactionAccountFieldAccountType}:           TransactionAccessRead,
 		{Kind: TransactionAccessAccountKVGeneration, Address: account}:                                                      TransactionAccessRead,
 		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountPermissionAux, LogicalKey: "owner"}: TransactionAccessRead,
 		{Kind: TransactionAccessStorage, Address: contract, StorageKey: slot}:                                               TransactionAccessRead,
@@ -208,6 +210,48 @@ func TestTransactionAccessRecorderCapturesLogicalCellsWithoutMutation(t *testing
 	}
 }
 
+func TestTransactionAccessRecorderReplaysCachedResourcePointReads(t *testing.T) {
+	s := newTestStateDB(t)
+	account := testAddr(0x35)
+	s.CreateAccount(account, corepb.AccountType_Normal)
+
+	// Warm every resource cache without a transaction recorder. The following
+	// access must still describe the physical rows it consumes.
+	if _, _, err := s.GetAccountFrozenResourceTotals(account); err != nil {
+		t.Fatalf("warm resource totals: %v", err)
+	}
+
+	var recorder TransactionAccessRecorder
+	recorder.Reset(16)
+	s.SetTransactionAccessRecorder(&recorder)
+	if _, _, err := s.GetAccountFrozenResourceTotals(account); err != nil {
+		t.Fatalf("cached resource totals: %v", err)
+	}
+
+	want := []TransactionAccessKey{
+		{Kind: TransactionAccessAccountField, Address: account, AccountField: TransactionAccountFieldFrozenResource},
+		{Kind: TransactionAccessAccountKVGeneration, Address: account},
+		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountFrozenBandwidthAux, LogicalKey: string(accountFrozenBandwidthKey(0))},
+		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountFrozenBandwidthAux, LogicalKey: string(accountFrozenBandwidthKey(1))},
+		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountFrozenV2Aux, LogicalKey: string(accountFrozenV2Key(corepb.ResourceCode_BANDWIDTH))},
+		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountResourceAux, LogicalKey: string(accountResourceKey)},
+		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountFrozenV2Aux, LogicalKey: string(accountFrozenV2Key(corepb.ResourceCode_ENERGY))},
+	}
+	got := make(map[TransactionAccessKey]TransactionAccessMode)
+	recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+		got[key] = mode
+		return true
+	})
+	for _, key := range want {
+		if mode := got[key]; mode&TransactionAccessRead == 0 {
+			t.Fatalf("cached resource access %v mode = %d, want read (all=%v)", key, mode, got)
+		}
+	}
+	if recorder.Unsupported() {
+		t.Fatal("cached point reads unexpectedly marked unsupported")
+	}
+}
+
 func TestTransactionAccessRecorderSeparatesSettlementAndOrdinaryReads(t *testing.T) {
 	s := newTestStateDB(t)
 	blackhole := testAddr(0x39)
@@ -227,19 +271,23 @@ func TestTransactionAccessRecorderSeparatesSettlementAndOrdinaryReads(t *testing
 	dp.AddTotalCreateAccountCost(11)
 	dp.AddTotalCreateWitnessCost(13)
 
-	accountKey := TransactionAccessKey{Kind: TransactionAccessAccount, Address: blackhole}
+	accountKey := TransactionAccessKey{Kind: TransactionAccessAccountField, Address: blackhole, AccountField: TransactionAccountFieldBalance}
 	burnKey := TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: "burn_trx_amount"}
 	got := make(map[TransactionAccessKey]TransactionAccessMode)
 	recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
 		got[key] = mode
 		return true
 	})
-	if mode := got[accountKey]; mode != TransactionAccessCommutativeRead {
-		t.Fatalf("settlement account mode = %d, want commutative read", mode)
+	wantSettlementAccount := TransactionAccessCommutativeRead | TransactionAccessCommutativeWrite
+	if mode := got[accountKey]; mode != wantSettlementAccount {
+		t.Fatalf("settlement account mode = %d, want %d", mode, wantSettlementAccount)
 	}
 	wantBurn := TransactionAccessCommutativeRead | TransactionAccessCommutativeWrite
 	if mode := got[burnKey]; mode != wantBurn {
 		t.Fatalf("burn accumulator mode = %d, want %d", mode, wantBurn)
+	}
+	if full, fields := recorder.AccountWriteCoverage(blackhole); full || !fields {
+		t.Fatalf("settlement account coverage = full:%t fields:%t, want false/true", full, fields)
 	}
 	for _, key := range []string{
 		"transaction_fee_pool",
@@ -263,7 +311,7 @@ func TestTransactionAccessRecorderSeparatesSettlementAndOrdinaryReads(t *testing
 		got[key] = mode
 		return true
 	})
-	if mode := got[accountKey]; mode != TransactionAccessRead|TransactionAccessCommutativeRead {
+	if mode := got[accountKey]; mode != TransactionAccessRead|wantSettlementAccount {
 		t.Fatalf("mixed account mode = %d", mode)
 	}
 	if mode := got[burnKey]; mode != TransactionAccessRead|wantBurn {
@@ -274,6 +322,10 @@ func TestTransactionAccessRecorderSeparatesSettlementAndOrdinaryReads(t *testing
 	}
 	if got := dp.BurnTrxAmount(); got != 3 {
 		t.Fatalf("burn amount = %d, want 3", got)
+	}
+	s.SetAccountName(blackhole, "full-write")
+	if full, fields := recorder.AccountWriteCoverage(blackhole); !full || !fields {
+		t.Fatalf("mixed account coverage = full:%t fields:%t, want true/true", full, fields)
 	}
 }
 

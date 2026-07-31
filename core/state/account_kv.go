@@ -1445,7 +1445,7 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	if !kvdomains.IsRegistered(domain) {
 		return nil, false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
-	obj := s.getStateObject(owner)
+	obj := s.getStateObjectForField(owner, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return nil, false, nil
 	}
@@ -1473,7 +1473,7 @@ func (s *StateDB) getAccountKVForDecoding(owner tcommon.Address, domain kvdomain
 	if !kvdomains.IsRegistered(domain) {
 		return nil, false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
-	obj := s.getStateObject(owner)
+	obj := s.getStateObjectForField(owner, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return nil, false, nil
 	}
@@ -1697,7 +1697,7 @@ func (s *StateDB) setAccountKVPrepared(owner tcommon.Address, domain kvdomains.K
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
-	obj := s.getOrCreateAccount(owner)
+	obj := s.getOrCreateAccountForField(owner, TransactionAccountFieldExistence)
 	var (
 		prevValue  []byte
 		prevExists bool

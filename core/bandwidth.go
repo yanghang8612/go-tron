@@ -182,12 +182,7 @@ func chargeStakedNet(statedb *state.StateDB, dynProps *state.DynamicProperties, 
 
 	harden := dynProps.AllowHardenResourceCalculation()
 	cancelAllV2 := dynProps.SupportCancelAllUnfreezeV2()
-	var rawWindow int64
-	var optimized bool
-	acct := statedb.AccountReference(addr)
-	if acct != nil {
-		rawWindow, optimized = acct.RawNetWindowSize(), acct.NetWindowOptimized()
-	}
+	rawWindow, optimized := statedb.GetNetWindow(addr)
 	// recovery(ac, BANDWIDTH, usage, lastTime, now) for the limit check — usage==0
 	// degenerates computeResourceIncrease to java's recovery (newUsage == remainUsage).
 	recovered, _, _ := computeResourceIncrease(rawWindow, optimized, netUsage, 0, lastTime, now, harden, cancelAllV2)
@@ -387,7 +382,7 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 	}
 
 	issuer := tcommon.BytesToAddress(asset.OwnerAddress)
-	if statedb.AccountReference(issuer) == nil {
+	if !statedb.AccountExists(issuer) {
 		return false, nil
 	}
 	// java useAssetAccountNet charges the issuer's own staked net via the same

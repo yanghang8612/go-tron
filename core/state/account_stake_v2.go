@@ -205,10 +205,13 @@ func (s *StateDB) accountFrozenV2Amount(obj *stateObject, resource corepb.Resour
 	if obj == nil || obj.account == nil {
 		return 0, false, nil
 	}
+	key := accountFrozenV2Key(resource)
+	// Point caches survive transaction boundaries. Record the physical row
+	// before consulting them so a cache hit cannot hide a predecessor write.
+	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenV2Aux, key)
 	if amount, exists, loaded := cachedAccountFrozenV2Point(obj, resource); loaded {
 		return amount, exists, nil
 	}
-	key := accountFrozenV2Key(resource)
 	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenV2Aux, key)
 	if err != nil || !exists {
 		if err == nil {

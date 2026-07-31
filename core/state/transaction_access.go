@@ -60,17 +60,49 @@ const (
 	TransactionAccessDynamicInt
 	TransactionAccessDynamicString
 	TransactionAccessDynamicHash
+	TransactionAccessAccountField
 )
+
+// TransactionAccountField follows Erigon's per-account path model, adapted to
+// the hot scalar fields in TRON's much wider Account protobuf. Full-account
+// readers remain TransactionAccessAccount barriers; account creation/deletion
+// invalidates every field through the shadow validator's hierarchical version.
+type TransactionAccountField uint8
+
+const (
+	TransactionAccountFieldUnknown TransactionAccountField = iota
+	TransactionAccountFieldExistence
+	TransactionAccountFieldAccountType
+	TransactionAccountFieldBalance
+	TransactionAccountFieldAllowance
+	TransactionAccountFieldLatestWithdrawTime
+	TransactionAccountFieldNetUsage
+	TransactionAccountFieldLatestOperationTime
+	TransactionAccountFieldLatestConsumeTime
+	TransactionAccountFieldFreeNetUsage
+	TransactionAccountFieldLatestConsumeFreeTime
+	TransactionAccountFieldNetWindow
+	TransactionAccountFieldFrozenResource
+)
+
+// TransactionAccountFieldKey is kept smaller than TransactionAccessKey so hot
+// account-path recording and validation do not hash unused storage/string
+// fields. This mirrors Erigon's per-path typed maps.
+type TransactionAccountFieldKey struct {
+	Address tcommon.Address
+	Field   TransactionAccountField
+}
 
 // TransactionAccessKey is comparable and can therefore be used directly by a
 // block-local version map. LogicalKey is populated for account-KV and dynamic
 // property cells. StorageKey is populated for persistent/transient storage.
 type TransactionAccessKey struct {
-	Kind       TransactionAccessKind
-	Address    tcommon.Address
-	KVDomain   kvdomains.KVDomain
-	StorageKey tcommon.Hash
-	LogicalKey string
+	Kind         TransactionAccessKind
+	Address      tcommon.Address
+	AccountField TransactionAccountField
+	KVDomain     kvdomains.KVDomain
+	StorageKey   tcommon.Hash
+	LogicalKey   string
 }
 
 // TransactionAccessMode is a bit set because a transaction can both read and
@@ -95,6 +127,9 @@ const (
 // are copied only on the first unique access in a transaction.
 type TransactionAccessRecorder struct {
 	accesses             map[TransactionAccessKey]TransactionAccessMode
+	accounts             map[tcommon.Address]TransactionAccessMode
+	accountFields        map[TransactionAccountFieldKey]TransactionAccessMode
+	accountFieldWrites   map[tcommon.Address]struct{}
 	unsupported          bool
 	commutativeScopeKey  TransactionAccessKey
 	commutativeScopeOpen bool
@@ -114,6 +149,9 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 	} else {
 		clear(r.accesses)
 	}
+	clear(r.accounts)
+	clear(r.accountFields)
+	clear(r.accountFieldWrites)
 	r.unsupported = false
 	r.commutativeScopeKey = TransactionAccessKey{}
 	r.commutativeScopeOpen = false
@@ -130,13 +168,23 @@ func (r *TransactionAccessRecorder) Visit(visit func(TransactionAccessKey, Trans
 			return
 		}
 	}
+	for address, mode := range r.accounts {
+		if !visit(TransactionAccessKey{Kind: TransactionAccessAccount, Address: address}, mode) {
+			return
+		}
+	}
+	for key, mode := range r.accountFields {
+		if !visit(TransactionAccessKey{Kind: TransactionAccessAccountField, Address: key.Address, AccountField: key.Field}, mode) {
+			return
+		}
+	}
 }
 
 func (r *TransactionAccessRecorder) Len() int {
 	if r == nil {
 		return 0
 	}
-	return len(r.accesses)
+	return len(r.accesses) + len(r.accounts) + len(r.accountFields)
 }
 
 func (r *TransactionAccessRecorder) Unsupported() bool {
@@ -161,10 +209,44 @@ func (r *TransactionAccessRecorder) record(key TransactionAccessKey, mode Transa
 			mode = mode&^TransactionAccessWrite | TransactionAccessCommutativeWrite
 		}
 	}
+	switch key.Kind {
+	case TransactionAccessAccount:
+		if r.accounts == nil {
+			r.accounts = make(map[tcommon.Address]TransactionAccessMode, 16)
+		}
+		r.accounts[key.Address] |= mode
+		return
+	case TransactionAccessAccountField:
+		if r.accountFields == nil {
+			r.accountFields = make(map[TransactionAccountFieldKey]TransactionAccessMode, 32)
+		}
+		fieldKey := TransactionAccountFieldKey{Address: key.Address, Field: key.AccountField}
+		r.accountFields[fieldKey] |= mode
+		if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0 {
+			if r.accountFieldWrites == nil {
+				r.accountFieldWrites = make(map[tcommon.Address]struct{}, 16)
+			}
+			r.accountFieldWrites[key.Address] = struct{}{}
+		}
+		return
+	}
 	if r.accesses == nil {
 		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, 16)
 	}
 	r.accesses[key] |= mode
+}
+
+// AccountWriteCoverage lets the journal observer distinguish a full Account
+// mutation from an accountScalarChange represented by exact inline field
+// writes. No field write means an unrecognized journal path and therefore
+// remains a conservative full-account barrier.
+func (r *TransactionAccessRecorder) AccountWriteCoverage(address tcommon.Address) (full, fields bool) {
+	if r == nil {
+		return false, false
+	}
+	full = r.accounts[address]&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0
+	_, fields = r.accountFieldWrites[address]
+	return full, fields
 }
 
 // beginCommutativeScope reclassifies only the exact logical cell subsequently
@@ -207,6 +289,24 @@ func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domai
 func (s *StateDB) recordAccountRead(address tcommon.Address) {
 	if s != nil && s.transactionAccess != nil {
 		s.transactionAccess.record(TransactionAccessKey{Kind: TransactionAccessAccount, Address: address}, TransactionAccessRead)
+	}
+}
+
+func (s *StateDB) recordAccountWrite(address tcommon.Address) {
+	if s != nil && s.transactionAccess != nil {
+		s.transactionAccess.record(TransactionAccessKey{Kind: TransactionAccessAccount, Address: address}, TransactionAccessWrite)
+	}
+}
+
+func (s *StateDB) recordAccountFieldRead(address tcommon.Address, field TransactionAccountField) {
+	if s != nil && s.transactionAccess != nil {
+		s.transactionAccess.record(TransactionAccessKey{Kind: TransactionAccessAccountField, Address: address, AccountField: field}, TransactionAccessRead)
+	}
+}
+
+func (s *StateDB) recordAccountFieldWrite(address tcommon.Address, field TransactionAccountField) {
+	if s != nil && s.transactionAccess != nil {
+		s.transactionAccess.record(TransactionAccessKey{Kind: TransactionAccessAccountField, Address: address, AccountField: field}, TransactionAccessWrite)
 	}
 }
 

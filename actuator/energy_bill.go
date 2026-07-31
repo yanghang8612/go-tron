@@ -388,7 +388,7 @@ func accountEnergyResourceView(s *state.StateDB, dp *state.DynamicProperties, ad
 	if err != nil {
 		return nil, 0
 	}
-	return s.AccountReference(addr), frozen
+	return s.AccountResourceReference(addr), frozen
 }
 
 // recoveredEnergyUsage returns the caller's energy_usage decayed to `now`.

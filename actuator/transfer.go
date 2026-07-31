@@ -36,16 +36,14 @@ func (a *TransferActuator) Validate(ctx *Context) error {
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	// Validation only needs immutable fields from the account envelope. Avoid
-	// GetAccount here: it materializes every split account domain, including all
-	// TRC10 maps, votes, permissions, and stake rows.
-	toAccount := ctx.State.AccountReference(toAddr)
-	if ctx.DynProps.ForbidTransferToContract() && toAccount != nil {
-		if toAccount.Type() == corepb.AccountType_Contract {
+	// Validation only needs the typed account-envelope discriminator.
+	toType, toExists := ctx.State.GetAccountType(toAddr)
+	if ctx.DynProps.ForbidTransferToContract() && toExists {
+		if toType == corepb.AccountType_Contract {
 			return errors.New("cannot transfer TRX to a smart contract")
 		}
 	}
-	if ctx.DynProps.AllowTvmCompatibleEvm() && toAccount != nil && toAccount.Type() == corepb.AccountType_Contract {
+	if ctx.DynProps.AllowTvmCompatibleEvm() && toExists && toType == corepb.AccountType_Contract {
 		meta, ok := ctx.State.ContractRuntime(toAddr)
 		if !ok {
 			return errors.New("contract account missing contract metadata")
@@ -55,7 +53,7 @@ func (a *TransferActuator) Validate(ctx *Context) error {
 		}
 	}
 	fee := int64(0)
-	if toAccount == nil {
+	if !toExists {
 		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
 	}
 	if fee > math.MaxInt64-tc.Amount {
@@ -64,7 +62,7 @@ func (a *TransferActuator) Validate(ctx *Context) error {
 	if ctx.State.GetBalance(ownerAddr) < tc.Amount+fee {
 		return errors.New("insufficient balance")
 	}
-	if toAccount != nil && ctx.State.GetBalance(toAddr) > math.MaxInt64-tc.Amount {
+	if toExists && ctx.State.GetBalance(toAddr) > math.MaxInt64-tc.Amount {
 		return errors.New("recipient balance overflows int64")
 	}
 	return nil

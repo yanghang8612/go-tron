@@ -3,6 +3,8 @@ package core
 import (
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -163,6 +165,77 @@ func TestVersionedAccessShadowModelsOrderedSettlementDeltas(t *testing.T) {
 	}
 	if got := dynProps.BurnTrxAmount(); got != 3 {
 		t.Fatalf("canonical burn amount = %d, want 3", got)
+	}
+}
+
+func TestVersionedAccessShadowTypedAccountHierarchy(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := statedb.DynamicProperties()
+	// Production sync enables temporal history, which represents scalar undo as
+	// a full accountChange. Inline field coverage must keep that physical journal
+	// shape from becoming a false typed full-account write.
+	statedb.SetDomainChangeSetWriter(ethrawdb.NewMemoryDatabase(), 1, tcommon.Hash{0x80})
+	for _, suffix := range []byte{0x81, 0x82, 0x83, 0x84} {
+		statedb.CreateAccount(testProcessorAddr(suffix), corepb.AccountType_Normal)
+		statedb.AddBalance(testProcessorAddr(suffix), 100)
+	}
+
+	var shadow versionedAccessShadow
+	shadow.Prepare(9)
+	tx := types.NewTransactionFromPB(&corepb.Transaction{})
+	a := testProcessorAddr(0x81)
+	b := testProcessorAddr(0x82)
+	c := testProcessorAddr(0x83)
+	d := testProcessorAddr(0x84)
+
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 0, tx, func() {
+		statedb.SetNetUsage(a, 1)
+	})
+	// A balance read is stale under the old whole-account model, but independent
+	// from the preceding bandwidth-field write under the typed model.
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 1, tx, func() {
+		_ = statedb.GetBalance(a)
+	})
+	// A full-account view consumes the aggregate account version and must still
+	// conflict with any preceding typed field write.
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 2, tx, func() {
+		_ = statedb.AccountReference(a)
+	})
+
+	// Full-account mutations invalidate every typed field.
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 3, tx, func() {
+		statedb.SetAccountName(b, "typed-shadow")
+	})
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 4, tx, func() {
+		_ = statedb.GetBalance(b)
+	})
+
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 5, tx, func() {
+		statedb.AddBalance(c, 1)
+	})
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 6, tx, func() {
+		_ = statedb.GetNetUsage(c)
+	})
+
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 7, tx, func() {
+		statedb.AddBalance(d, 1)
+	})
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 8, tx, func() {
+		_, _, _ = statedb.GetAccountKV(d, kvdomains.AccountPermissionAux, []byte("owner"))
+	})
+
+	got := shadow.Finish(statedb, dynProps)
+	if got.transactions != 9 || got.firstPassValid != 4 || got.normalizedFirstPassValid != 4 || got.typedFirstPassValid != 7 {
+		t.Fatalf("typed hierarchy validity = %+v", got)
+	}
+	if got.conflicts != 5 || got.normalizedConflicts != 5 || got.typedConflicts != 2 || got.typedResolvedFirstPass != 3 {
+		t.Fatalf("typed hierarchy conflicts = %+v", got)
+	}
+	if got.typedAccountConflicts != 2 || got.typedAccountCoarseConflicts != 1 || got.typedAccountBalanceConflicts != 1 {
+		t.Fatalf("typed account conflict paths = %+v", got)
+	}
+	if got.otherFirstPassValid != 4 || got.otherNormalizedFirstPass != 4 || got.otherTypedFirstPass != 7 {
+		t.Fatalf("typed class stats = %+v", got)
 	}
 }
 

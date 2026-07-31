@@ -64,6 +64,9 @@
 - [x] Label only audited commutative fee/cumulative settlement operations and
   measure raw versus ordered-delta-normalized first-pass validity without
   changing canonical execution.
+- [x] Split hot TRON Account access into Erigon-style typed field paths with
+  full-account hierarchy barriers, exact cached-row dependencies, and an
+  observe-only typed first-pass validator.
 - [ ] Extract normalized settlement writes into explicit per-transaction deltas
   and apply them at ordered publication after serial-equivalence fixtures pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full

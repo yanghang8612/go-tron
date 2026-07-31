@@ -123,8 +123,7 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 
 	permID := contract.PermissionId
 	var perm *corepb.Permission
-	account := statedb.AccountReference(ownerAddr)
-	if account == nil {
+	if !statedb.AccountExists(ownerAddr) {
 		// Account not yet materialized. java-tron's
 		// AccountCapsule.getDefaultPermission returns a single-key Owner
 		// permission keyed on ownerAddr — works for first-tx onboarding

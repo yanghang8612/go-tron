@@ -267,7 +267,14 @@ func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) error {
 // row, so callers on the consensus hot path avoid a prefix scan without
 // weakening compatibility handling.
 func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) error {
-	if obj == nil || obj.account == nil || obj.accountFrozenBandwidthLoaded {
+	if obj == nil || obj.account == nil {
+		return nil
+	}
+	// Reproduce the two compatibility point probes on cache hits. The cache is
+	// block-scoped while transaction access capture is transaction-scoped.
+	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
+	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(1))
+	if obj.accountFrozenBandwidthLoaded {
 		return nil
 	}
 	rows, err := s.accountFrozenBandwidthFastRows(obj)
@@ -289,7 +296,13 @@ func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) error 
 // not need the index-1 compatibility probe used by the general fast loader.
 // Full account materialization and mutation paths retain the sparse-row scan.
 func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) error {
-	if obj == nil || obj.account == nil || obj.accountFrozenBandwidthLoaded {
+	if obj == nil || obj.account == nil {
+		return nil
+	}
+	// The materialized value can come from an earlier transaction. Keep the
+	// current transaction dependent on the canonical physical row as well.
+	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
+	if obj.accountFrozenBandwidthLoaded {
 		return nil
 	}
 	row, exists, err := s.accountFrozenBandwidthRowAt(obj, 0)
