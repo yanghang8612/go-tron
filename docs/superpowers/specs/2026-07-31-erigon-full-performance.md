@@ -620,12 +620,12 @@ audited balance/dynamic settlement values are added as signed deltas to the
 publisher's current ordered baseline. Presence bits drive storage/account-KV,
 metadata, and raw deletion rather than collapsing deletion into an empty value.
 
-Full-account replacement, account-KV generation reset, self-destruct, unknown
-account fields, and malformed values fail preflight before any mutation. The
-state-aware phase also rejects typed writes whose owner account is absent,
-because valid creation would carry a currently unsupported full-account
-post-image. Applying disables the execution access recorder temporarily so
-publication does not masquerade as another transaction. Unit fixtures cover
+Full-account replacement/deletion, account-KV generation reset, self-destruct,
+unknown account fields, and malformed values fail preflight before any
+mutation. The state-aware phase also rejects typed writes whose owner account
+is absent unless the same WriteSet carries a validated fresh-account creation.
+Applying disables the execution access recorder temporarily so publication
+does not masquerade as another transaction. Unit fixtures cover
 absolute field publication, commutative deltas over a newer baseline, storage,
 account-KV/metadata/raw deletion, and preflight atomicity. Sampled workers now
 report how many exact WriteSets are eligible for this narrow applier; actual
@@ -681,6 +681,28 @@ journal entry. Verification now pre-registers each non-commutative input key
 with its recorder before applying it, then captures the actual final logical
 value. This preserves setter no-op optimization without masking an incorrect
 post-state.
+
+After that normalization, the next production window compared 397/397
+TransactionInfo values and 397/397 original worker WriteSets exactly. All
+350/350 eligible sets reproduced their complete WriteSet through the ordered
+applier, with zero mismatch, apply error, or missing-key diagnostics; 47 sets
+remained outside the schema because they carried a full-account post-image.
+
+#### P4.13: Fresh-account publication
+
+Close the measured account-creation gap without accepting ambiguous full-row
+replacement. A full-account post-image is eligible only when it decodes as the
+current flat-v3 envelope, its embedded address matches the logical key, its KV
+root is flat, its incarnation generation is zero, and the ordered baseline has
+no account at that address. A non-zero code hash additionally requires a code
+post-image in the same WriteSet with an exactly matching hash.
+
+The applier installs fresh accounts before their typed account-field,
+AccountKV, code, contract-metadata, witness, or storage cells, removing Go map
+order from creation semantics. Existing-account replacement, deletion, and
+post-SELFDESTRUCT reincarnation remain serial fallbacks. This follows Erigon's
+incarnation discipline: creation of generation zero is distinct from mutating
+or reviving an existing account.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

@@ -86,8 +86,10 @@
 - [x] Include direct Context.DB exact-key reads and raw put/delete post-images
   in version validation and sampled worker WriteSet comparison.
 - [x] Implement a preflighted ordered applier for unambiguous typed post-images
-  and settlement deltas, while explicitly rejecting full-account, generation,
-  and self-destruct publication.
+  and settlement deltas, while explicitly rejecting account replacement,
+  generation reset, self-destruct, and reincarnation publication.
+- [x] Publish a full-account post-image only as a validated fresh absent-to-
+  present creation, before applying its typed AccountKV/code/metadata cells.
 - [x] Reapply eligible sampled worker WriteSets to isolated block-start copies
   and compare the resulting post-state before enabling canonical publication.
 - [ ] Apply typed writes and settlement deltas at ordered publication after

@@ -159,6 +159,60 @@ func TestApplyTransactionWriteSetRecordedPreservesNoopIntent(t *testing.T) {
 	}
 }
 
+func TestApplyTransactionWriteSetCreatesFreshAccount(t *testing.T) {
+	worker := newTestStateDB(t)
+	publisher := newTestStateDB(t)
+	account := testAddr(0xd6)
+	workerDP := NewDynamicProperties()
+	publisherDP := NewDynamicProperties()
+
+	var workerRecorder TransactionAccessRecorder
+	workerRecorder.Reset(16)
+	worker.SetTransactionAccessRecorder(&workerRecorder)
+	mark := worker.DomainChangeJournalMark()
+	worker.CreateAccountWithTime(account, corepb.AccountType_Normal, 123)
+	worker.AddBalance(account, 456)
+	if err := worker.SetAccountKV(account, kvdomains.SystemReward, []byte("created"), []byte("row")); err != nil {
+		t.Fatal(err)
+	}
+	worker.FinalizeTransaction()
+	worker.SetTransactionAccessRecorder(nil)
+	writes, known, err := worker.CaptureTransactionWriteSet(mark, &workerRecorder, workerDP)
+	if err != nil || !known {
+		t.Fatalf("capture creation writes: known=%v err=%v", known, err)
+	}
+	accountKey := TransactionAccessKey{Kind: TransactionAccessAccount, Address: account}
+	if value, ok := writes[accountKey]; !ok || !value.Exists {
+		t.Fatalf("creation account post-image = %+v ok=%v", value, ok)
+	}
+
+	applyMark := publisher.DomainChangeJournalMark()
+	var applyRecorder TransactionAccessRecorder
+	applyRecorder.Reset(16)
+	if err := publisher.ApplyTransactionWriteSetRecorded(writes, publisherDP, ethrawdb.NewMemoryDatabase(), &applyRecorder); err != nil {
+		t.Fatal(err)
+	}
+	publisher.FinalizeTransaction()
+	applied, appliedKnown, err := publisher.CaptureTransactionWriteSet(applyMark, &applyRecorder, publisherDP)
+	if err != nil || !appliedKnown {
+		t.Fatalf("capture applied creation: known=%v err=%v", appliedKnown, err)
+	}
+	if !EqualTransactionWriteSets(applied, writes) {
+		t.Fatalf("applied creation writes = %#v, want %#v", applied, writes)
+	}
+	created := publisher.GetAccount(account)
+	if created == nil || created.Balance() != 456 || created.CreateTime() != 123 {
+		t.Fatalf("created account = %+v", created)
+	}
+	if value, exists, err := publisher.GetAccountKV(account, kvdomains.SystemReward, []byte("created")); err != nil || !exists || string(value) != "row" {
+		t.Fatalf("created account KV = %q exists=%v err=%v", value, exists, err)
+	}
+
+	if err := publisher.ApplyTransactionWriteSet(writes, publisherDP, ethrawdb.NewMemoryDatabase()); err == nil {
+		t.Fatal("full account replacement unexpectedly accepted")
+	}
+}
+
 func TestApplyTransactionWriteSetPreservesDeletionPostImages(t *testing.T) {
 	base := newTestStateDB(t)
 	contract := testAddr(0xd5)

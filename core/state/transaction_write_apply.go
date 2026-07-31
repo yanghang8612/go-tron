@@ -28,6 +28,23 @@ func ValidateTransactionWriteSetApply(writes TransactionWriteSet, dynProps *Dyna
 			return err
 		}
 	}
+	for key, value := range writes {
+		if key.Kind != TransactionAccessAccount {
+			continue
+		}
+		envelope, _, err := decodeTransactionAccountCreate(key, value)
+		if err != nil {
+			return err
+		}
+		codeKey := TransactionAccessKey{Kind: TransactionAccessCode, Address: key.Address}
+		code, hasCode := writes[codeKey]
+		if hasCode && envelope.CodeHash != tcommon.Keccak256(code.Value) {
+			return fmt.Errorf("apply transaction writes: account %s code hash does not match code post-image", key.Address.Hex())
+		}
+		if !hasCode && envelope.CodeHash != (tcommon.Hash{}) {
+			return fmt.Errorf("apply transaction writes: account %s has code hash without code post-image", key.Address.Hex())
+		}
+	}
 	return nil
 }
 
@@ -40,7 +57,8 @@ func validateTransactionWriteApply(key TransactionAccessKey, value TransactionWr
 	}
 	switch key.Kind {
 	case TransactionAccessAccount:
-		return fmt.Errorf("apply transaction writes: full account %s is not supported", key.Address.Hex())
+		_, _, err := decodeTransactionAccountCreate(key, value)
+		return err
 	case TransactionAccessAccountField:
 		if !value.Exists {
 			return fmt.Errorf("apply transaction writes: missing account field %d for %s", key.AccountField, key.Address.Hex())
@@ -137,6 +155,30 @@ func validateTransactionWriteApply(key TransactionAccessKey, value TransactionWr
 	return nil
 }
 
+func decodeTransactionAccountCreate(key TransactionAccessKey, value TransactionWriteValue) (*StateAccountV3, *types.Account, error) {
+	if !value.Exists {
+		return nil, nil, fmt.Errorf("apply transaction writes: account deletion %s is not supported", key.Address.Hex())
+	}
+	envelope, err := DecodeStateAccountV3(value.Value)
+	if err != nil {
+		return nil, nil, fmt.Errorf("apply transaction writes: account %s: %w", key.Address.Hex(), err)
+	}
+	if envelope.AccountKVRoot != EmptyKVRoot {
+		return nil, nil, fmt.Errorf("apply transaction writes: account %s has non-flat KV root", key.Address.Hex())
+	}
+	if envelope.AccountKVGeneration != 0 {
+		return nil, nil, fmt.Errorf("apply transaction writes: account %s generation %d is not a fresh creation", key.Address.Hex(), envelope.AccountKVGeneration)
+	}
+	account, err := types.UnmarshalAccount(envelope.AccountProto)
+	if err != nil {
+		return nil, nil, fmt.Errorf("apply transaction writes: account %s proto: %w", key.Address.Hex(), err)
+	}
+	if account.Address() != key.Address {
+		return nil, nil, fmt.Errorf("apply transaction writes: account key %s contains %s", key.Address.Hex(), account.Address().Hex())
+	}
+	return envelope, account, nil
+}
+
 // ApplyTransactionWriteSet publishes validated typed post-images into target
 // state. Commutative settlement values are signed deltas and are applied to the
 // target's current ordered value; ordinary values replace the exact logical
@@ -157,12 +199,29 @@ func (s *StateDB) ApplyTransactionWriteSetRecorded(writes TransactionWriteSet, d
 	return s.applyTransactionWriteSet(writes, dynProps, raw, recorder)
 }
 
-func (s *StateDB) applyTransactionWriteSet(writes TransactionWriteSet, dynProps *DynamicProperties, raw TransactionRawKVWriter, recorder *TransactionAccessRecorder) error {
+// ValidateTransactionWriteSetApply adds state-aware creation checks to the
+// schema preflight. Full-account post-images are accepted only as fresh
+// absent-to-present creations; replacement, deletion, and reincarnation stay
+// on the serial path.
+func (s *StateDB) ValidateTransactionWriteSetApply(writes TransactionWriteSet, dynProps *DynamicProperties, raw TransactionRawKVWriter) error {
 	if s == nil {
 		return fmt.Errorf("apply transaction writes: nil state")
 	}
 	if err := ValidateTransactionWriteSetApply(writes, dynProps, raw); err != nil {
 		return err
+	}
+	var creates map[tcommon.Address]struct{}
+	for key := range writes {
+		if key.Kind != TransactionAccessAccount {
+			continue
+		}
+		if obj := s.getStateObjectWithoutAccess(key.Address); obj != nil {
+			return fmt.Errorf("apply transaction writes: full account replacement %s is not supported", key.Address.Hex())
+		}
+		if creates == nil {
+			creates = make(map[tcommon.Address]struct{}, 1)
+		}
+		creates[key.Address] = struct{}{}
 	}
 	for key := range writes {
 		switch key.Kind {
@@ -173,11 +232,23 @@ func (s *StateDB) applyTransactionWriteSet(writes TransactionWriteSet, dynProps 
 			TransactionAccessContractMetadata,
 			TransactionAccessAccountKV,
 			TransactionAccessTransientStorage:
-			obj := s.getStateObject(key.Address)
-			if obj == nil || obj.deleted {
-				return fmt.Errorf("apply transaction writes: %s requires an existing account", key.Address.Hex())
+			if obj := s.getStateObjectWithoutAccess(key.Address); obj != nil && !obj.deleted {
+				continue
+			}
+			if _, creating := creates[key.Address]; !creating {
+				return fmt.Errorf("apply transaction writes: %s requires an existing or created account", key.Address.Hex())
 			}
 		}
+	}
+	return nil
+}
+
+func (s *StateDB) applyTransactionWriteSet(writes TransactionWriteSet, dynProps *DynamicProperties, raw TransactionRawKVWriter, recorder *TransactionAccessRecorder) error {
+	if s == nil {
+		return fmt.Errorf("apply transaction writes: nil state")
+	}
+	if err := s.ValidateTransactionWriteSetApply(writes, dynProps, raw); err != nil {
+		return err
 	}
 	previousStateRecorder := s.transactionAccess
 	var previousDynamicRecorder *TransactionAccessRecorder
@@ -196,6 +267,18 @@ func (s *StateDB) applyTransactionWriteSet(writes TransactionWriteSet, dynProps 
 	}()
 
 	for key, value := range writes {
+		if key.Kind != TransactionAccessAccount {
+			continue
+		}
+		recordTransactionWriteApply(recorder, key, value)
+		if err := s.applyTransactionWrite(key, value, dynProps, raw); err != nil {
+			return err
+		}
+	}
+	for key, value := range writes {
+		if key.Kind == TransactionAccessAccount {
+			continue
+		}
 		recordTransactionWriteApply(recorder, key, value)
 		if err := s.applyTransactionWrite(key, value, dynProps, raw); err != nil {
 			return err
@@ -229,6 +312,8 @@ func transactionWriteInt64(value TransactionWriteValue) int64 {
 
 func (s *StateDB) applyTransactionWrite(key TransactionAccessKey, value TransactionWriteValue, dynProps *DynamicProperties, raw TransactionRawKVWriter) error {
 	switch key.Kind {
+	case TransactionAccessAccount:
+		return s.applyTransactionAccountCreate(key, value)
 	case TransactionAccessAccountField:
 		return s.applyTransactionAccountField(key, value)
 	case TransactionAccessWitness:
@@ -286,6 +371,22 @@ func (s *StateDB) applyTransactionWrite(key TransactionAccessKey, value Transact
 	default:
 		return fmt.Errorf("apply transaction writes: validated kind %d has no applier", key.Kind)
 	}
+	return nil
+}
+
+func (s *StateDB) applyTransactionAccountCreate(key TransactionAccessKey, value TransactionWriteValue) error {
+	envelope, account, err := decodeTransactionAccountCreate(key, value)
+	if err != nil {
+		return err
+	}
+	obj := s.getOrCreateAccountLoaded(key.Address, nil)
+	obj.account = account
+	obj.accountProto = envelope.AccountProto
+	obj.accountProtoLoaded = true
+	obj.accountKVRoot = envelope.AccountKVRoot
+	obj.accountKVGeneration = envelope.AccountKVGeneration
+	obj.accountKVGenerationDirty = false
+	obj.codeHash = envelope.CodeHash
 	return nil
 }
 

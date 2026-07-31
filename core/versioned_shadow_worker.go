@@ -909,6 +909,12 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	}
 	worker.state.RevertToSnapshot(stateSnapshot)
 	worker.dynProps.RevertToSnapshot(dpSnapshot)
+	if applyEligible {
+		if err := worker.state.ValidateTransactionWriteSetApply(writes, worker.dynProps, &worker.db); err != nil {
+			applyEligible = false
+			applyUnsupported = classifyDiscardShadowApplyUnsupported(writes)
+		}
+	}
 	applyMatch := false
 	var applyMismatch discardShadowApplyMismatch
 	var applyErr error
