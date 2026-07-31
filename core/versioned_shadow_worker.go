@@ -45,6 +45,10 @@ var (
 	discardShadowMismatchResultCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_result", nil)
 	discardShadowMismatchLogsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/logs", nil)
 	discardShadowMismatchInternalCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/internal_transactions", nil)
+	discardShadowMismatchStatusCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/status", nil)
+	discardShadowMismatchMessageCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/res_message", nil)
+	discardShadowMismatchAddressCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_address", nil)
+	discardShadowMismatchIdentityCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/identity", nil)
 	discardShadowMismatchOtherFieldCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/other", nil)
 )
 
@@ -158,7 +162,7 @@ func classifyDiscardShadowTransaction(tx *types.Transaction) discardShadowTransa
 	}
 }
 
-type discardShadowMismatch uint8
+type discardShadowMismatch uint16
 
 const (
 	discardShadowMismatchReceipt discardShadowMismatch = 1 << iota
@@ -166,6 +170,10 @@ const (
 	discardShadowMismatchResult
 	discardShadowMismatchLogs
 	discardShadowMismatchInternal
+	discardShadowMismatchStatus
+	discardShadowMismatchMessage
+	discardShadowMismatchAddress
+	discardShadowMismatchIdentity
 	discardShadowMismatchOtherField
 )
 
@@ -213,6 +221,18 @@ func compareDiscardShadowInfo(shadow, canonical *corepb.TransactionInfo) discard
 	if !equalTransactionInfoMessages(shadow.GetInternalTransactions(), canonical.GetInternalTransactions()) {
 		mismatch |= discardShadowMismatchInternal
 	}
+	if shadow.GetResult() != canonical.GetResult() {
+		mismatch |= discardShadowMismatchStatus
+	}
+	if !bytes.Equal(shadow.GetResMessage(), canonical.GetResMessage()) {
+		mismatch |= discardShadowMismatchMessage
+	}
+	if !bytes.Equal(shadow.GetContractAddress(), canonical.GetContractAddress()) {
+		mismatch |= discardShadowMismatchAddress
+	}
+	if !bytes.Equal(shadow.GetId(), canonical.GetId()) || shadow.GetBlockNumber() != canonical.GetBlockNumber() || shadow.GetBlockTimeStamp() != canonical.GetBlockTimeStamp() {
+		mismatch |= discardShadowMismatchIdentity
+	}
 	shadowRemainder := proto.Clone(shadow).(*corepb.TransactionInfo)
 	canonicalRemainder := proto.Clone(canonical).(*corepb.TransactionInfo)
 	for _, info := range []*corepb.TransactionInfo{shadowRemainder, canonicalRemainder} {
@@ -222,6 +242,12 @@ func compareDiscardShadowInfo(shadow, canonical *corepb.TransactionInfo) discard
 		info.ContractResult = nil
 		info.Log = nil
 		info.InternalTransactions = nil
+		info.Result = 0
+		info.ResMessage = nil
+		info.ContractAddress = nil
+		info.Id = nil
+		info.BlockNumber = 0
+		info.BlockTimeStamp = 0
 	}
 	if !proto.Equal(shadowRemainder, canonicalRemainder) {
 		mismatch |= discardShadowMismatchOtherField
@@ -351,6 +377,18 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 			}
 			if result.mismatch&discardShadowMismatchInternal != 0 {
 				discardShadowMismatchInternalCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchStatus != 0 {
+				discardShadowMismatchStatusCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchMessage != 0 {
+				discardShadowMismatchMessageCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchAddress != 0 {
+				discardShadowMismatchAddressCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchIdentity != 0 {
+				discardShadowMismatchIdentityCounter.Inc(1)
 			}
 			if result.mismatch&discardShadowMismatchOtherField != 0 {
 				discardShadowMismatchOtherFieldCounter.Inc(1)
