@@ -45,6 +45,10 @@ var (
 	discardShadowMismatchReceiptCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt", nil)
 	discardShadowMismatchReceiptCoreCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core", nil)
 	discardShadowMismatchReceiptEnergyCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_energy", nil)
+	discardShadowMismatchEnergyUsageCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_usage", nil)
+	discardShadowMismatchEnergyFeeCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_fee", nil)
+	discardShadowMismatchOriginEnergyCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_origin_energy_usage", nil)
+	discardShadowMismatchEnergyTotalCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_usage_total", nil)
 	discardShadowMismatchReceiptBandwidthCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_bandwidth", nil)
 	discardShadowMismatchReceiptResultCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_result", nil)
 	discardShadowMismatchOwnerDiagnosticCounter  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_owner_diagnostic", nil)
@@ -171,7 +175,7 @@ func classifyDiscardShadowTransaction(tx *types.Transaction) discardShadowTransa
 	}
 }
 
-type discardShadowMismatch uint16
+type discardShadowMismatch uint32
 
 const (
 	discardShadowMismatchReceipt discardShadowMismatch = 1 << iota
@@ -190,6 +194,10 @@ const (
 	discardShadowMismatchReceiptEnergy
 	discardShadowMismatchReceiptBandwidth
 	discardShadowMismatchReceiptResult
+	discardShadowMismatchEnergyUsage
+	discardShadowMismatchEnergyFee
+	discardShadowMismatchOriginEnergy
+	discardShadowMismatchEnergyTotal
 )
 
 func equalTransactionInfoMessages[A proto.Message](left, right []A) bool {
@@ -278,6 +286,18 @@ func compareDiscardShadowInfo(shadow, canonical *corepb.TransactionInfo) discard
 				shadowReceipt.GetOriginEnergyUsage() != canonicalReceipt.GetOriginEnergyUsage() ||
 				shadowReceipt.GetEnergyUsageTotal() != canonicalReceipt.GetEnergyUsageTotal() {
 				mismatch |= discardShadowMismatchReceiptEnergy
+			}
+			if shadowReceipt.GetEnergyUsage() != canonicalReceipt.GetEnergyUsage() {
+				mismatch |= discardShadowMismatchEnergyUsage
+			}
+			if shadowReceipt.GetEnergyFee() != canonicalReceipt.GetEnergyFee() {
+				mismatch |= discardShadowMismatchEnergyFee
+			}
+			if shadowReceipt.GetOriginEnergyUsage() != canonicalReceipt.GetOriginEnergyUsage() {
+				mismatch |= discardShadowMismatchOriginEnergy
+			}
+			if shadowReceipt.GetEnergyUsageTotal() != canonicalReceipt.GetEnergyUsageTotal() {
+				mismatch |= discardShadowMismatchEnergyTotal
 			}
 			if shadowReceipt.GetNetUsage() != canonicalReceipt.GetNetUsage() || shadowReceipt.GetNetFee() != canonicalReceipt.GetNetFee() {
 				mismatch |= discardShadowMismatchReceiptBandwidth
@@ -449,6 +469,18 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 			}
 			if result.mismatch&discardShadowMismatchReceiptEnergy != 0 {
 				discardShadowMismatchReceiptEnergyCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchEnergyUsage != 0 {
+				discardShadowMismatchEnergyUsageCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchEnergyFee != 0 {
+				discardShadowMismatchEnergyFeeCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchOriginEnergy != 0 {
+				discardShadowMismatchOriginEnergyCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchEnergyTotal != 0 {
+				discardShadowMismatchEnergyTotalCounter.Inc(1)
 			}
 			if result.mismatch&discardShadowMismatchReceiptBandwidth != 0 {
 				discardShadowMismatchReceiptBandwidthCounter.Inc(1)

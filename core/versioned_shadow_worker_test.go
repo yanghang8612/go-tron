@@ -9,6 +9,32 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+func TestCompareDiscardShadowInfoSplitsEnergyFields(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*corepb.ResourceReceipt)
+		want discardShadowMismatch
+	}{
+		{"usage", func(receipt *corepb.ResourceReceipt) { receipt.EnergyUsage = 1 }, discardShadowMismatchEnergyUsage},
+		{"fee", func(receipt *corepb.ResourceReceipt) { receipt.EnergyFee = 1 }, discardShadowMismatchEnergyFee},
+		{"origin", func(receipt *corepb.ResourceReceipt) { receipt.OriginEnergyUsage = 1 }, discardShadowMismatchOriginEnergy},
+		{"total", func(receipt *corepb.ResourceReceipt) { receipt.EnergyUsageTotal = 1 }, discardShadowMismatchEnergyTotal},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			shadow := &corepb.TransactionInfo{Receipt: &corepb.ResourceReceipt{}}
+			canonical := &corepb.TransactionInfo{Receipt: &corepb.ResourceReceipt{}}
+			test.set(shadow.Receipt)
+			mismatch := compareDiscardShadowInfo(shadow, canonical)
+			want := discardShadowMismatchReceipt | discardShadowMismatchReceiptCore |
+				discardShadowMismatchReceiptEnergy | test.want
+			if mismatch != want {
+				t.Fatalf("mismatch = %#x, want %#x", mismatch, want)
+			}
+		})
+	}
+}
+
 func TestDiscardKVOverlayIsolatesWrites(t *testing.T) {
 	parent := ethrawdb.NewMemoryDatabase()
 	if err := parent.Put([]byte("stable"), []byte("parent")); err != nil {
