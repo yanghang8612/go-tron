@@ -393,6 +393,40 @@ plus runtime-state/ABI point readers, to typed existence and their existing
 metadata/account-KV cells before reassessing the irreducible per-owner
 balance/resource conflicts.
 
+After that conversion, a second 31-second sample processed 134,000
+transactions. Coarse conflicts fell from 112,008 in the first sample to 5,094,
+and VM typed validity improved from 2.7224% normalized to 3.0845%. Overall typed
+validity nevertheless reached only 6.4604% because balance and bandwidth paths
+still conflicted in 120,688 and 121,108 transactions. Those are real ordered
+dependencies from repeated transactions by the same owner, not protobuf field
+aliasing, so further Account splitting is not justified by the evidence.
+
+#### P4.5: Explicit previous-sender dependencies
+
+Erigon does not dispatch every transaction from the block-start snapshot. In
+local `execution/stagedsync/exec3_parallel.go`, `processRequest` tracks
+`prevSenderTx` and adds an execution dependency between consecutive tasks from
+the same sender when no complete access list is available. Its version map and
+transaction incarnations then handle dynamic cross-sender conflicts and
+re-execution. This serializes an account's nonce/balance chain while leaving
+different senders available to workers.
+
+The go-tron observer now models that pre-execution rule on top of P4.4 typed
+versions. It uses the already memoized contract owner, identifies the latest
+writer for every stale typed read, and treats the conflict as resolved only
+when that writer belongs to the same valid TRON owner. The direct previous-owner
+edge makes all older writes in that sender chain settled before dispatch. A
+latest writer from any different owner remains a conflict, regardless of state
+family. Shielded or malformed owner identities receive no inferred edge.
+
+Metrics expose sender-serialized first-pass validity overall and for
+VM/Transfer/other classes, the number of transactions with an explicit sender
+predecessor, typed conflicts resolved by that dependency, remaining conflicts,
+and the last block's maximum sender-chain depth. This remains observe-only; no
+task is dispatched and canonical execution is unchanged. A useful production
+yield with bounded sender critical chains is the gate for implementing the
+first discard-only worker scheduler.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

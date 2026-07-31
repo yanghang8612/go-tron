@@ -67,6 +67,9 @@
 - [x] Split hot TRON Account access into Erigon-style typed field paths with
   full-account hierarchy barriers, exact cached-row dependencies, and an
   observe-only typed first-pass validator.
+- [x] Model Erigon's explicit previous-sender execution dependency on top of
+  typed versions and measure the remaining cross-sender retry set and sender
+  critical-chain depth before starting workers.
 - [ ] Extract normalized settlement writes into explicit per-transaction deltas
   and apply them at ordered publication after serial-equivalence fixtures pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full

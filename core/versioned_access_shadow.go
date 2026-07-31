@@ -14,9 +14,11 @@ var (
 	versionedShadowFirstPassValidCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/first_pass_valid", nil)
 	versionedShadowNormalizedFirstPassValidCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/normalized_first_pass_valid", nil)
 	versionedShadowTypedFirstPassValidCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/typed_first_pass_valid", nil)
+	versionedShadowSenderFirstPassValidCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized_first_pass_valid", nil)
 	versionedShadowConflictsCounter                           = metrics.NewRegisteredCounter("core/versioned_shadow/conflicts", nil)
 	versionedShadowNormalizedConflictsCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/normalized_conflicts", nil)
 	versionedShadowTypedConflictsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/typed_conflicts", nil)
+	versionedShadowSenderConflictsCounter                     = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized_conflicts", nil)
 	versionedShadowUnsupportedCounter                         = metrics.NewRegisteredCounter("core/versioned_shadow/unsupported", nil)
 	versionedShadowReadCellsCounter                           = metrics.NewRegisteredCounter("core/versioned_shadow/read_cells", nil)
 	versionedShadowWriteCellsCounter                          = metrics.NewRegisteredCounter("core/versioned_shadow/write_cells", nil)
@@ -31,14 +33,19 @@ var (
 	versionedShadowVMFirstPassValidCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/vm/first_pass_valid", nil)
 	versionedShadowVMNormalizedFirstPassCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/vm/normalized_first_pass_valid", nil)
 	versionedShadowVMTypedFirstPassCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/vm/typed_first_pass_valid", nil)
+	versionedShadowVMSenderFirstPassCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/vm/sender_serialized_first_pass_valid", nil)
 	versionedShadowTransferTransactionsCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/transfer/transactions", nil)
 	versionedShadowTransferFirstPassValidCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/transfer/first_pass_valid", nil)
 	versionedShadowTransferNormalizedFirstPassCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/transfer/normalized_first_pass_valid", nil)
 	versionedShadowTransferTypedFirstPassCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/transfer/typed_first_pass_valid", nil)
+	versionedShadowTransferSenderFirstPassCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/transfer/sender_serialized_first_pass_valid", nil)
 	versionedShadowOtherTransactionsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/other/transactions", nil)
 	versionedShadowOtherFirstPassValidCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/other/first_pass_valid", nil)
 	versionedShadowOtherNormalizedFirstPassCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/other/normalized_first_pass_valid", nil)
 	versionedShadowOtherTypedFirstPassCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/other/typed_first_pass_valid", nil)
+	versionedShadowOtherSenderFirstPassCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/other/sender_serialized_first_pass_valid", nil)
+	versionedShadowSenderDependencyTaggedCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_dependency/tagged_transactions", nil)
+	versionedShadowSenderDependencyResolvedCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/sender_dependency/resolved_first_pass", nil)
 	versionedShadowTypedResolvedCounter                       = metrics.NewRegisteredCounter("core/versioned_shadow/typed/resolved_first_pass", nil)
 	versionedShadowTypedAccountConflictCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/typed/conflict/account", nil)
 	versionedShadowTypedAccountCoarseConflictCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/typed/account_field/conflict/coarse", nil)
@@ -60,6 +67,8 @@ var (
 	versionedShadowLastFirstPassValidGauge                    = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/first_pass_valid", nil)
 	versionedShadowLastNormalizedFirstPassValidGauge          = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/normalized_first_pass_valid", nil)
 	versionedShadowLastTypedFirstPassValidGauge               = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/typed_first_pass_valid", nil)
+	versionedShadowLastSenderFirstPassValidGauge              = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/sender_serialized_first_pass_valid", nil)
+	versionedShadowLastMaxSenderChainDepthGauge               = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/max_sender_chain_depth", nil)
 	versionedShadowLastConflictsGauge                         = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/conflicts", nil)
 	versionedShadowLastUnsupportedGauge                       = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/unsupported", nil)
 	versionedShadowLastMaxDependencyDistanceGauge             = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/max_dependency_distance", nil)
@@ -82,6 +91,10 @@ type versionedAccessShadow struct {
 	accountFullVersions  map[tcommon.Address]int
 	accountAnyVersions   map[tcommon.Address]int
 	accountFieldVersions map[state.TransactionAccountFieldKey]int
+	transactionOwners    []tcommon.Address
+	transactionHasOwner  []bool
+	senderChainDepths    []int
+	lastSenderTx         map[tcommon.Address]int
 	stats                versionedAccessShadowStats
 }
 
@@ -90,9 +103,11 @@ type versionedAccessShadowStats struct {
 	firstPassValid                       int64
 	normalizedFirstPassValid             int64
 	typedFirstPassValid                  int64
+	senderFirstPassValid                 int64
 	conflicts                            int64
 	normalizedConflicts                  int64
 	typedConflicts                       int64
+	senderConflicts                      int64
 	unsupported                          int64
 	readCells                            int64
 	writeCells                           int64
@@ -107,14 +122,20 @@ type versionedAccessShadowStats struct {
 	vmFirstPassValid                     int64
 	vmNormalizedFirstPass                int64
 	vmTypedFirstPass                     int64
+	vmSenderFirstPass                    int64
 	transferTransactions                 int64
 	transferFirstPass                    int64
 	transferNormalizedFirstPass          int64
 	transferTypedFirstPass               int64
+	transferSenderFirstPass              int64
 	otherTransactions                    int64
 	otherFirstPassValid                  int64
 	otherNormalizedFirstPass             int64
 	otherTypedFirstPass                  int64
+	otherSenderFirstPass                 int64
+	senderDependencyTaggedTransactions   int64
+	senderDependencyResolvedFirstPass    int64
+	maxSenderChainDepth                  int64
 	typedResolvedFirstPass               int64
 	typedAccountConflicts                int64
 	typedAccountCoarseConflicts          int64
@@ -149,6 +170,45 @@ func (s *versionedAccessShadow) Prepare(transactionCount int) {
 	s.accountFullVersions = make(map[tcommon.Address]int, hint/8)
 	s.accountAnyVersions = make(map[tcommon.Address]int, hint/4)
 	s.accountFieldVersions = make(map[state.TransactionAccountFieldKey]int, hint/2)
+	s.transactionOwners = make([]tcommon.Address, transactionCount)
+	s.transactionHasOwner = make([]bool, transactionCount)
+	s.senderChainDepths = make([]int, transactionCount)
+	s.lastSenderTx = make(map[tcommon.Address]int, transactionCount/4+1)
+}
+
+// observeSenderDependency mirrors Erigon's pre-execution prevSenderTx edge:
+// transactions from one sender are never dispatched concurrently. The model
+// remains conservative for dependencies written by any different sender.
+func (s *versionedAccessShadow) observeSenderDependency(txIndex int, tx *types.Transaction) (tcommon.Address, bool) {
+	if tx == nil || tx.Contract() == nil || txIndex < 0 || txIndex >= len(s.transactionOwners) {
+		return tcommon.Address{}, false
+	}
+	ownerBytes, shielded, err := tx.ContractOwnerAddress()
+	if err != nil || shielded || len(ownerBytes) != tcommon.AddressLength {
+		return tcommon.Address{}, false
+	}
+	owner := tcommon.BytesToAddress(ownerBytes)
+	if !owner.ValidPrefix() {
+		return tcommon.Address{}, false
+	}
+	s.transactionOwners[txIndex] = owner
+	s.transactionHasOwner[txIndex] = true
+	depth := 1
+	if previous, ok := s.lastSenderTx[owner]; ok {
+		s.stats.senderDependencyTaggedTransactions++
+		depth = s.senderChainDepths[previous] + 1
+	}
+	s.senderChainDepths[txIndex] = depth
+	s.lastSenderTx[owner] = txIndex
+	if int64(depth) > s.stats.maxSenderChainDepth {
+		s.stats.maxSenderChainDepth = int64(depth)
+	}
+	return owner, true
+}
+
+func (s *versionedAccessShadow) writtenBySender(txIndex int, owner tcommon.Address, hasOwner bool) bool {
+	return hasOwner && txIndex >= 0 && txIndex < len(s.transactionOwners) &&
+		s.transactionHasOwner[txIndex] && s.transactionOwners[txIndex] == owner
 }
 
 func (s *versionedAccessShadow) BeginTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties) {
@@ -228,11 +288,13 @@ func (s *versionedAccessShadow) installJournalWrite(key state.TransactionAccessK
 func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transaction, statedb *state.StateDB, dynProps *state.DynamicProperties, journalMark int) {
 	s.detach(statedb, dynProps)
 	s.stats.transactions++
+	owner, hasOwner := s.observeSenderDependency(txIndex, tx)
 
 	var (
 		readConflict                        bool
 		normalizedReadConflict              bool
 		typedReadConflict                   bool
+		senderReadConflict                  bool
 		writeConflict                       bool
 		accountConflict                     bool
 		storageConflict                     bool
@@ -269,8 +331,11 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 		ordinaryRead := mode&state.TransactionAccessRead != 0
 		if ordinaryRead {
 			normalizedReadConflict = true
-			if _, typedConflictForKey := s.typedPreviousVersion(key, txIndex); typedConflictForKey {
+			if typedPrevious, typedConflictForKey := s.typedPreviousVersion(key, txIndex); typedConflictForKey {
 				typedReadConflict = true
+				if !s.writtenBySender(typedPrevious, owner, hasOwner) {
+					senderReadConflict = true
+				}
 				switch key.Kind {
 				case state.TransactionAccessAccount:
 					typedAccountConflict = true
@@ -365,6 +430,7 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	conflict := readConflict
 	normalizedConflict := normalizedReadConflict
 	typedConflict := typedReadConflict
+	senderConflict := senderReadConflict
 	if unsupported {
 		s.stats.unsupported++
 	}
@@ -397,6 +463,9 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	}
 	if typedConflict {
 		s.stats.typedConflicts++
+	}
+	if senderConflict {
+		s.stats.senderConflicts++
 	}
 	if writeConflict {
 		s.stats.writeConflicts++
@@ -450,7 +519,8 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	firstPassValid := !unsupported && !conflict
 	normalizedFirstPassValid := !unsupported && !normalizedConflict
 	typedFirstPassValid := !unsupported && !typedConflict
-	s.classify(tx, firstPassValid, normalizedFirstPassValid, typedFirstPassValid)
+	senderFirstPassValid := !unsupported && !senderConflict
+	s.classify(tx, firstPassValid, normalizedFirstPassValid, typedFirstPassValid, senderFirstPassValid)
 	if firstPassValid {
 		s.stats.firstPassValid++
 	}
@@ -460,11 +530,17 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	if typedFirstPassValid {
 		s.stats.typedFirstPassValid++
 	}
+	if senderFirstPassValid {
+		s.stats.senderFirstPassValid++
+	}
 	if !unsupported && conflict && !normalizedConflict {
 		s.stats.settlementResolvedFirstPass++
 	}
 	if !unsupported && normalizedConflict && !typedConflict {
 		s.stats.typedResolvedFirstPass++
+	}
+	if !unsupported && typedConflict && !senderConflict {
+		s.stats.senderDependencyResolvedFirstPass++
 	}
 
 	// Only after validation do this transaction's serially-authoritative writes
@@ -481,7 +557,7 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	})
 }
 
-func (s *versionedAccessShadow) classify(tx *types.Transaction, firstPassValid, normalizedFirstPassValid, typedFirstPassValid bool) {
+func (s *versionedAccessShadow) classify(tx *types.Transaction, firstPassValid, normalizedFirstPassValid, typedFirstPassValid, senderFirstPassValid bool) {
 	contractType := corepb.Transaction_Contract_AccountCreateContract
 	if tx != nil {
 		contractType = tx.ContractType()
@@ -498,6 +574,9 @@ func (s *versionedAccessShadow) classify(tx *types.Transaction, firstPassValid, 
 		if typedFirstPassValid {
 			s.stats.vmTypedFirstPass++
 		}
+		if senderFirstPassValid {
+			s.stats.vmSenderFirstPass++
+		}
 	case corepb.Transaction_Contract_TransferContract:
 		s.stats.transferTransactions++
 		if firstPassValid {
@@ -509,6 +588,9 @@ func (s *versionedAccessShadow) classify(tx *types.Transaction, firstPassValid, 
 		if typedFirstPassValid {
 			s.stats.transferTypedFirstPass++
 		}
+		if senderFirstPassValid {
+			s.stats.transferSenderFirstPass++
+		}
 	default:
 		s.stats.otherTransactions++
 		if firstPassValid {
@@ -519,6 +601,9 @@ func (s *versionedAccessShadow) classify(tx *types.Transaction, firstPassValid, 
 		}
 		if typedFirstPassValid {
 			s.stats.otherTypedFirstPass++
+		}
+		if senderFirstPassValid {
+			s.stats.otherSenderFirstPass++
 		}
 	}
 }
@@ -535,9 +620,11 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowFirstPassValidCounter.Inc(stats.firstPassValid)
 	versionedShadowNormalizedFirstPassValidCounter.Inc(stats.normalizedFirstPassValid)
 	versionedShadowTypedFirstPassValidCounter.Inc(stats.typedFirstPassValid)
+	versionedShadowSenderFirstPassValidCounter.Inc(stats.senderFirstPassValid)
 	versionedShadowConflictsCounter.Inc(stats.conflicts)
 	versionedShadowNormalizedConflictsCounter.Inc(stats.normalizedConflicts)
 	versionedShadowTypedConflictsCounter.Inc(stats.typedConflicts)
+	versionedShadowSenderConflictsCounter.Inc(stats.senderConflicts)
 	versionedShadowUnsupportedCounter.Inc(stats.unsupported)
 	versionedShadowReadCellsCounter.Inc(stats.readCells)
 	versionedShadowWriteCellsCounter.Inc(stats.writeCells)
@@ -552,14 +639,19 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowVMFirstPassValidCounter.Inc(stats.vmFirstPassValid)
 	versionedShadowVMNormalizedFirstPassCounter.Inc(stats.vmNormalizedFirstPass)
 	versionedShadowVMTypedFirstPassCounter.Inc(stats.vmTypedFirstPass)
+	versionedShadowVMSenderFirstPassCounter.Inc(stats.vmSenderFirstPass)
 	versionedShadowTransferTransactionsCounter.Inc(stats.transferTransactions)
 	versionedShadowTransferFirstPassValidCounter.Inc(stats.transferFirstPass)
 	versionedShadowTransferNormalizedFirstPassCounter.Inc(stats.transferNormalizedFirstPass)
 	versionedShadowTransferTypedFirstPassCounter.Inc(stats.transferTypedFirstPass)
+	versionedShadowTransferSenderFirstPassCounter.Inc(stats.transferSenderFirstPass)
 	versionedShadowOtherTransactionsCounter.Inc(stats.otherTransactions)
 	versionedShadowOtherFirstPassValidCounter.Inc(stats.otherFirstPassValid)
 	versionedShadowOtherNormalizedFirstPassCounter.Inc(stats.otherNormalizedFirstPass)
 	versionedShadowOtherTypedFirstPassCounter.Inc(stats.otherTypedFirstPass)
+	versionedShadowOtherSenderFirstPassCounter.Inc(stats.otherSenderFirstPass)
+	versionedShadowSenderDependencyTaggedCounter.Inc(stats.senderDependencyTaggedTransactions)
+	versionedShadowSenderDependencyResolvedCounter.Inc(stats.senderDependencyResolvedFirstPass)
 	versionedShadowTypedResolvedCounter.Inc(stats.typedResolvedFirstPass)
 	versionedShadowTypedAccountConflictCounter.Inc(stats.typedAccountConflicts)
 	versionedShadowTypedAccountCoarseConflictCounter.Inc(stats.typedAccountCoarseConflicts)
@@ -581,6 +673,8 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowLastFirstPassValidGauge.Update(stats.firstPassValid)
 	versionedShadowLastNormalizedFirstPassValidGauge.Update(stats.normalizedFirstPassValid)
 	versionedShadowLastTypedFirstPassValidGauge.Update(stats.typedFirstPassValid)
+	versionedShadowLastSenderFirstPassValidGauge.Update(stats.senderFirstPassValid)
+	versionedShadowLastMaxSenderChainDepthGauge.Update(stats.maxSenderChainDepth)
 	versionedShadowLastConflictsGauge.Update(stats.conflicts)
 	versionedShadowLastUnsupportedGauge.Update(stats.unsupported)
 	versionedShadowLastMaxDependencyDistanceGauge.Update(stats.maxDependencyDistance)

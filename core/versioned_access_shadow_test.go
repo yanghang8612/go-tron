@@ -239,6 +239,49 @@ func TestVersionedAccessShadowTypedAccountHierarchy(t *testing.T) {
 	}
 }
 
+func TestVersionedAccessShadowModelsErigonSenderDependency(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := statedb.DynamicProperties()
+	owner := testProcessorAddr(0x91)
+	other := testProcessorAddr(0x92)
+	for _, addr := range []tcommon.Address{owner, other} {
+		statedb.CreateAccount(addr, corepb.AccountType_Normal)
+		statedb.AddBalance(addr, 100)
+	}
+
+	var shadow versionedAccessShadow
+	shadow.Prepare(3)
+	ownerTx := makeTestTransferTx(0x91, 0x93, 1)
+	otherTx := makeTestTransferTx(0x92, 0x94, 1)
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 0, ownerTx, func() {
+		statedb.AddBalance(owner, 1)
+	})
+	// Erigon inserts a prevSenderTx edge, so this read executes only after tx 0
+	// has published and is valid without an optimistic retry.
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 1, ownerTx, func() {
+		_ = statedb.GetBalance(owner)
+	})
+	// A different sender receives no such edge; its stale read remains a real
+	// optimistic conflict.
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 2, otherTx, func() {
+		_ = statedb.GetBalance(owner)
+	})
+
+	got := shadow.Finish(statedb, dynProps)
+	if got.transactions != 3 || got.typedFirstPassValid != 1 || got.senderFirstPassValid != 2 {
+		t.Fatalf("sender dependency validity = %+v", got)
+	}
+	if got.typedConflicts != 2 || got.senderConflicts != 1 || got.senderDependencyResolvedFirstPass != 1 {
+		t.Fatalf("sender dependency conflicts = %+v", got)
+	}
+	if got.senderDependencyTaggedTransactions != 1 || got.maxSenderChainDepth != 2 {
+		t.Fatalf("sender dependency shape = %+v", got)
+	}
+	if got.transferTypedFirstPass != 1 || got.transferSenderFirstPass != 2 {
+		t.Fatalf("sender dependency class = %+v", got)
+	}
+}
+
 func recordVersionedShadowTx(t *testing.T, shadow *versionedAccessShadow, statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, tx *types.Transaction, execute func()) {
 	t.Helper()
 	mark := statedb.DomainChangeJournalMark()
