@@ -854,6 +854,10 @@ func (bc *BlockChain) insertBlocksLockedModeWithOptions(blocks []*types.Block, s
 	defer sigPrewarm.Wait()
 
 	executor := newCanonicalRangeExecutorWithOptions(bc, true, hook, deferTransactionLookup)
+	if deferTransactionLookup {
+		executor.enableStateReadAhead()
+		executor.PrepareReadAhead(blocks)
+	}
 	if bc.asyncCommit {
 		// Async commit: settle the range at its boundary in one ordered defer so
 		// the persistent state matches the synchronous path exactly. The

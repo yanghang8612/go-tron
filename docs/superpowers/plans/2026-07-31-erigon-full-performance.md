@@ -2,28 +2,36 @@
 
 **Spec:** [2026-07-31-erigon-full-performance.md](../specs/2026-07-31-erigon-full-performance.md)
 
-## P1: Shared read-cache hot path
+## P1: Shared read-cache substrate
 
-- [x] Preserve blockbuffer generic and typed no-copy cache capabilities through
-  `vmKVStore`.
-- [x] Route prefetch reads into the same cache used by canonical state reads.
+- [x] Keep latest-account, latest-KV, code, and commitment reads on the bounded
+  blockbuffer base cache below rewindable overlays.
 - [x] Reuse confirmed missing-key classification instead of issuing a second
   Pebble `Has`.
 - [x] Let `Buffer.Has` consume authoritative positive/negative base-cache rows.
-- [x] Remove defensive copies from prefetch-only latest-state reads.
-- [x] Add focused forwarding, negative-cache, and error-semantics tests.
-- [x] Reject the current default-on candidate after its hot-state benchmark
-  exceeded the light/hot overhead gates; keep all network defaults off.
+- [x] Preserve snapshot-version, flush-refresh, discard, and same-key
+  invalidation semantics for concurrent fills.
+- [x] Remove the rejected per-block compatibility-prefetch rollout and its
+  configuration surface from the latest-only fresh-sync path.
 - [ ] Collect before/after mainnet CPU, Pebble, and sync-throughput samples.
 
 ## P2: Session-scoped read ahead
 
-- [ ] Move worker ownership from `processBlock` to `canonicalRangeExecutor` for
+- [x] Move worker ownership to `canonicalRangeExecutor` for
   sync sessions.
-- [ ] Enqueue future-block hints from decoded staged bodies.
-- [ ] Replace lifetime-wide deduplication with a bounded/version-aware policy.
-- [ ] Add cache invalidation and reorg/restart concurrency tests.
-- [ ] Add queue-byte, useful-hit, stale/reload, and wait-avoided metrics.
+- [x] Enqueue future-block hints immediately after staged bodies decode.
+- [x] Extract schema-owned account, contract-metadata, and code keys without
+  mutating or validating canonical state.
+- [x] Route direct admissions into the same bounded cache canonical reads use,
+  retaining overlay precedence and same-key late-fill rejection.
+- [x] Replace lifetime-wide deduplication with per-block deduplication plus a
+  bounded block/byte queue.
+- [x] Tie reset, abort, and close to a session epoch and cover queued/in-flight
+  old-fork rejection plus late-fill/flush races with race-clean tests.
+- [x] Add queue bytes, drops, present/missing rows, read errors, stale blocks,
+  and useful canonical-prefetch-hit metrics.
+- [ ] Validate roots/results and collect fixed-window before/after production
+  throughput, CPU, Pebble reads, and useful-prefetch ratios.
 
 ## P3: Ordered parallel preprocessing
 

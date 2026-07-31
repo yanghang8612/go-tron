@@ -816,6 +816,81 @@ func TestGetNoCopyCached_CachesConfirmedDurableMiss(t *testing.T) {
 	}
 }
 
+func TestPrefetchAdmitsDurableValueOnFirstRead(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	key := []byte("state-account-latest-prefetched")
+	value := []byte("account-envelope")
+	if err := disk.Put(key, value); err != nil {
+		t.Fatal(err)
+	}
+	base := &countingKeyValueReader{KeyValueReader: disk}
+	b := New(base)
+	b.SetBaseReadCacheSize(1 << 20)
+	usefulBefore := baseReadCachePrefetchUsefulCounter.Snapshot().Count()
+
+	got, err := b.Prefetch(key)
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("Prefetch = (%q,%v), want (%q,nil)", got, err, value)
+	}
+	got, err = b.GetNoCopyCached(key)
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("GetNoCopyCached after prefetch = (%q,%v), want (%q,nil)", got, err, value)
+	}
+	if base.gets != 1 {
+		t.Fatalf("durable reads = %d, want 1", base.gets)
+	}
+	if got := baseReadCachePrefetchUsefulCounter.Snapshot().Count() - usefulBefore; got != 1 {
+		t.Fatalf("useful prefetch hits = %d, want 1", got)
+	}
+}
+
+func TestPrefetchLateFillCannotReplaceFlushedValue(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	key := []byte("state-account-latest-racing-prefetch")
+	oldValue := []byte("old-account")
+	newValue := []byte("new-account")
+	if err := disk.Put(key, oldValue); err != nil {
+		t.Fatal(err)
+	}
+	base := &blockingSnapshotReader{
+		KeyValueReader: disk,
+		started:        make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+	b := New(base)
+	b.SetBaseReadCacheSize(1 << 20)
+
+	type readResult struct {
+		value []byte
+		err   error
+	}
+	result := make(chan readResult, 1)
+	go func() {
+		value, err := b.Prefetch(key)
+		result <- readResult{value: value, err: err}
+	}()
+	<-base.started
+
+	b.BeginBlock(bufHash(1), 1)
+	if err := b.Put(key, newValue); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+	if err := b.FlushUpTo(1, disk); err != nil {
+		t.Fatal(err)
+	}
+	close(base.release)
+	first := <-result
+	if first.err != nil || !bytes.Equal(first.value, oldValue) {
+		t.Fatalf("in-flight prefetch = (%q,%v), want old snapshot", first.value, first.err)
+	}
+
+	got, err := b.GetNoCopyCached(key)
+	if err != nil || !bytes.Equal(got, newValue) {
+		t.Fatalf("read after racing flush = (%q,%v), want new durable value", got, err)
+	}
+}
+
 func TestHasUsesConfirmedBaseCacheMiss(t *testing.T) {
 	disk := rawdb.NewMemoryDatabase()
 	counting := &countingKeyValueReader{KeyValueReader: disk}

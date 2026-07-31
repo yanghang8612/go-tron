@@ -21,6 +21,10 @@ type cachedNoCopyKeyValueReader interface {
 	GetNoCopyCached(key []byte) ([]byte, error)
 }
 
+type statePrefetchReader interface {
+	Prefetch(key []byte) ([]byte, error)
+}
+
 // keyNotFoundClassifier lets a reader identify its native missing-key error.
 // Layered readers already have to classify durable backend misses before they
 // can safely negative-cache them, so asking the same reader here avoids a
@@ -59,6 +63,17 @@ func readStatePresentNoCopy(db ethdb.KeyValueReader, key []byte, context string)
 		return nil, false, fmt.Errorf("rawdb: read %s: %w", context, err)
 	}
 	return value, true, nil
+}
+
+func prefetchStatePresentNoCopy(db ethdb.KeyValueReader, key []byte, context string) ([]byte, bool, error) {
+	if reader, ok := db.(statePrefetchReader); ok {
+		value, err := reader.Prefetch(key)
+		if err != nil {
+			return verifyStateReadMiss(db, key, context, err)
+		}
+		return value, true, nil
+	}
+	return readStatePresentNoCopy(db, key, context)
 }
 
 // verifyStateReadMiss distinguishes the not-found error returned by Pebble and

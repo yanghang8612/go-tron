@@ -158,6 +158,21 @@ func ReadStateKVLatestNoCopy(db ethdb.KeyValueReader, owner common.Address, gene
 	return value, true, nil
 }
 
+// PrefetchStateKVLatest is the direct-admission counterpart of
+// ReadStateKVLatestNoCopy for deterministic near-future reads.
+func PrefetchStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
+	context := fmt.Sprintf("state kv latest for %s generation %d domain %#04x", owner.Hex(), generation, uint16(domain))
+	raw, ok, err := prefetchStatePresentNoCopy(db, stateKVLatestKey(owner, generation, domain, logicalKey), context)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	value, err := decodeStateKVLatestValueNoCopy(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w for %s domain %#04x", err, owner.Hex(), uint16(domain))
+	}
+	return value, true, nil
+}
+
 func DeleteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
 	if writer, ok := db.(stateKVLatestStructuredWriter); ok {
 		return writer.DeleteStateKVLatest(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey)

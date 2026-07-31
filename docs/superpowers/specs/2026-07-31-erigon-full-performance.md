@@ -40,26 +40,36 @@ No performance result is accepted if it requires weakening one of these gates.
 
 ## Erigon Mechanisms And go-tron Work
 
-### P1: Cache-coupled read ahead and single-lookup misses
+### P1: Shared latest-state cache substrate
 
-Erigon's `execution/exec/blocks_read_ahead.go` deliberately populates the same
-`StateCache` that `SharedDomains.GetLatest` probes. Merely warming the OS page
-cache is called out as insufficient.
+Erigon's state read path depends on one process-level `StateCache` shared by
+canonical `SharedDomains.GetLatest`, flush publication, unwind, and
+`execution/exec/blocks_read_ahead.go`. Merely warming the OS page cache is not
+equivalent because canonical execution would still pay the database lookup and
+decode path.
 
-go-tron's first prefetch implementation accepted a `vmKVStore`. That wrapper
-preserved ordinary reads but did not preserve the blockbuffer's typed
-`GetNoCopyCachedState*` capabilities. Prefetch therefore warmed Pebble while
-canonical execution still had to enter the blockbuffer cache independently.
+go-tron's blockbuffer base cache is the corresponding shared substrate. It is
+bounded, understands positive and negative rows, sits below rewindable
+overlays, refreshes cached values after canonical flush, clears on out-of-band
+discard, and rejects a durable read that races a same-key flush by comparing an
+invalidation generation. Canonical latest-account, latest-KV, state-code, and
+commitment reads already use this cache.
 
-The first implementation slice:
+An earlier opt-in, per-block prefetch experiment was rejected because it added
+hot/light-block overhead and was removed when latest-domain fresh sync became
+mandatory. P2 does not restore that rollout or its compatibility flags. It
+uses the current blockbuffer substrate and is always scoped to the bulk-sync
+session.
 
-- forwards generic and typed no-copy cache reads through `vmKVStore`;
-- forwards the durable backend's missing-key classifier;
-- lets rawdb consume a confirmed missing-key classification without a second
-  `Has` point lookup;
+The retained P1 substrate:
+
+- exposes generic and typed no-copy cached reads directly through blockbuffer;
+- forwards the durable backend's missing-key classifier so rawdb can consume a
+  confirmed miss without a second `Has` point lookup;
 - lets `Buffer.Has` answer from an authoritative positive or negative base
   cache entry after checking overlays;
-- removes defensive value copies from read-only state prefetch consumers.
+- preserves snapshot-version and same-key invalidation rules for concurrent
+  durable fills, flush, discard, and unwind.
 
 Acceptance for P1 on a fixed transaction-dense replay window:
 
@@ -69,22 +79,52 @@ Acceptance for P1 on a fixed transaction-dense replay window:
 - at least 5% higher throughput or 10% lower state-read CPU, with no more than
   2% regression on empty/light blocks.
 
-### P2: Stage-lifetime and cross-block read ahead
+### P2: Session-owned cross-block read ahead
 
-The current worker pool is created per block and only looks ahead within that
-block. The next slice will attach read ahead to `canonicalRangeExecutor` /
-`InsertSession`, enqueue deterministic keys while staged bodies are decoded,
-and stop it at the session barrier. Values continue to land in the shared,
-versioned base cache; overlay writes always win.
+The implementation follows the chain-tip mechanism introduced by Erigon
+commit `c10b394286`: start state reads once decoded bodies are available and
+overlap them with ordered execution. It also incorporates the stale-fill
+hardening from `317c00f81f` and `d580222edf`: asynchronous warmup may populate
+an absent cache row, but it may not replace a fresher value published by flush
+or unwind.
 
-Required safeguards:
+The go-tron adaptation is deliberately narrower than Erigon's Ethereum target
+set and matches TRON's current latest-domain model:
 
-- bounded key and byte budgets rather than an unbounded session-wide `seen`
-  map;
-- per-block or versioned deduplication so a key changed by an earlier block can
-  be warmed again;
-- cache invalidation tied to blockbuffer flush, discard, reset, and unwind;
-- backpressure counters separating queue saturation from read errors.
+- `canonicalRangeExecutor` owns one `StateReadAhead` for an entire bulk-sync
+  `InsertSession`; ordinary single-block insertion does not create workers;
+- the downloader submits a batch immediately after protobuf body decode and
+  before execution planning, signature recovery, and ordered state execution;
+  queue accounting reuses the retained wire length instead of walking the
+  decoded protobuf again on the scheduling thread;
+- a default pool of `GOMAXPROCS/4`, capped at four workers, drains a bounded
+  queue of 64 blocks and 16 MiB; saturation drops hints and never stalls or
+  changes canonical execution;
+- each block extracts and deduplicates witness, owner, destination, receiver,
+  account, transparent sender/receiver, and smart-contract addresses in stable
+  order; contract targets additionally warm metadata and content-addressed
+  bytecode after decoding the latest account envelope;
+- rawdb schema accessors construct every physical key. `Buffer.Prefetch`
+  checks rewindable overlays first, probes the exact cache canonical reads use,
+  and directly admits the durable positive or negative result because the
+  decoded block proves near-future demand;
+- direct admission bypasses ordinary two-hit scan protection but remains under
+  the existing byte limit and CLOCK eviction policy. It is `put-if-absent` at
+  the observed per-key invalidation generation, so a late warmup cannot replace
+  a flush result;
+- deduplication is per block rather than session-wide. A later block may warm
+  the same logical account again after an intervening canonical mutation;
+- executor reset/abort advances an epoch. Workers stop an in-flight old-fork
+  block at its next target and discard every queued old-epoch block. Session
+  close advances the epoch, drains workers, and then closes the commit scope;
+- malformed hints and storage errors are counted but never returned to the
+  consensus path. Metrics distinguish queue pressure, present/missing rows,
+  errors, stale work, and canonical cache hits that actually consumed a
+  prefetched row.
+
+There is no CLI flag, compatibility mode, or persistent prefetch state. This is
+part of the latest-only fresh-sync pipeline and can be removed or redesigned
+without a datadir migration.
 
 ### P3: Parallel work that cannot change state order
 

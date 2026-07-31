@@ -81,6 +81,15 @@ func ReadStateCodeStrict(db ethdb.KeyValueReader, hash common.Hash) ([]byte, boo
 	return append([]byte(nil), data...), true, nil
 }
 
+// PrefetchStateCode admits immutable bytecode directly into a capable
+// reader's bounded cache without changing the ordinary owned-byte API.
+func PrefetchStateCode(db ethdb.KeyValueReader, hash common.Hash) ([]byte, bool, error) {
+	if hash == (common.Hash{}) {
+		return nil, false, nil
+	}
+	return prefetchStatePresentNoCopy(db, stateCodeKey(hash), fmt.Sprintf("state code %x", hash))
+}
+
 func readStateCode(db ethdb.KeyValueReader, hash common.Hash, shareStable bool) []byte {
 	if hash == (common.Hash{}) {
 		return nil

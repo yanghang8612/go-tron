@@ -206,6 +206,26 @@ type canonicalRangeExecutor struct {
 	// bc.asyncCommit; nil for the synchronous path (which reads the head cache).
 	lastDynProps  *state.DynamicProperties
 	txInfoBatches *transactionInfoBatchPool
+	readAhead     *state.StateReadAhead
+}
+
+func (e *canonicalRangeExecutor) enableStateReadAhead() {
+	if e == nil || e.bc == nil || e.bc.buffer == nil || e.readAhead != nil {
+		return
+	}
+	e.readAhead = state.NewStateReadAhead(e.bc.buffer, state.StateReadAheadConfig{})
+	e.readAhead.Start()
+}
+
+func (e *canonicalRangeExecutor) PrepareReadAhead(blocks []*types.Block) int {
+	if e == nil || e.readAhead == nil {
+		return 0
+	}
+	return e.readAhead.EnqueueBlocks(blocks)
+}
+
+func (e *canonicalRangeExecutor) PrepareReadAheadBlock(block *types.Block, encodedBytes int) bool {
+	return e != nil && e.readAhead != nil && e.readAhead.EnqueueBlock(block, encodedBytes)
 }
 
 func newCanonicalRangeExecutor(bc *BlockChain, allowSharedCommit bool) *canonicalRangeExecutor {
@@ -319,6 +339,9 @@ func (e *canonicalRangeExecutor) Reset() {
 	if e.commit != nil {
 		e.commit.Discard()
 	}
+	if e.readAhead != nil {
+		e.readAhead.Reset()
+	}
 	e.state = nil
 	e.commit = nil
 	e.txRanges = nil
@@ -346,6 +369,9 @@ func (e *canonicalRangeExecutor) Abort() error {
 	if e.commit != nil {
 		err = e.commit.Abort()
 	}
+	if e.readAhead != nil {
+		e.readAhead.Reset()
+	}
 	e.state = nil
 	e.commit = nil
 	e.txRanges = nil
@@ -355,7 +381,14 @@ func (e *canonicalRangeExecutor) Abort() error {
 }
 
 func (e *canonicalRangeExecutor) Close() error {
-	if e == nil || e.commit == nil {
+	if e == nil {
+		return nil
+	}
+	if e.readAhead != nil {
+		e.readAhead.Close()
+		e.readAhead = nil
+	}
+	if e.commit == nil {
 		return nil
 	}
 	err := e.commit.Close()

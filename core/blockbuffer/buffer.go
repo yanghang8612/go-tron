@@ -64,6 +64,7 @@ var (
 	baseReadCacheWindowAdmissionBypassedCounter  = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_bypassed", nil)
 	baseReadCacheWindowAdmissionThrottledCounter = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_throttled", nil)
 	baseReadCacheWindowAdmissionRelaxedCounter   = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_relaxed", nil)
+	baseReadCachePrefetchUsefulCounter           = metrics.NewRegisteredCounter("blockbuffer/base_cache/prefetch/useful_hits", nil)
 	commitmentParentDepthCacheCounters           = [...]*metrics.Counter{
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_5_8/cache_resolved", nil),
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_9_16/cache_resolved", nil),
@@ -1487,6 +1488,52 @@ func (b *Buffer) GetNoCopy(key []byte) ([]byte, error) {
 // accessors detect this optional method; ordinary buffer reads remain uncached.
 func (b *Buffer) GetNoCopyCached(key []byte) ([]byte, error) {
 	return b.getNoCopy(key, true)
+}
+
+// Prefetch resolves a key through the current overlays and, on a durable-base
+// read, admits the result directly into the bounded base cache. The caller has
+// already identified the key as near-future work, so it does not pay the
+// ordinary two-observation admission delay. Same-key flush invalidation still
+// rejects a late stale fill.
+func (b *Buffer) Prefetch(key []byte) ([]byte, error) {
+	view := b.loadReadView()
+	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(view.inflight, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return value, nil
+	}
+	if value, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return value, nil
+	}
+	if b.base == nil {
+		return nil, ErrNotFound
+	}
+	cache := view.baseReadCache
+	if cache == nil {
+		return b.base.Get(key)
+	}
+	value, ok, epoch := cache.getForPrefetchWithEpoch(key)
+	if ok {
+		if value == nil {
+			return nil, ErrNotFound
+		}
+		return value, nil
+	}
+	value, err := b.base.Get(key)
+	if err != nil {
+		if isKeyNotFound(b.base, err) {
+			cache.prefetchMissingIfEpoch(key, epoch)
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if stored, admitted := cache.prefetchIfEpoch(key, value, epoch); admitted {
+		return stored, nil
+	}
+	return value, nil
 }
 
 func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {

@@ -34,7 +34,13 @@ const baseReadCacheMaxFreeEntries = 2048
 // genuinely hot rows through short admission bursts while remaining strictly
 // bounded; newly admitted/two-hit scan rows still start at zero and are the
 // first eviction candidates.
-const baseReadCacheMaxReferenceCredit = 3
+const (
+	baseReadCacheMaxReferenceCredit = 3
+	// The CLOCK credit uses only the low bits of references. Reuse one otherwise
+	// idle high bit to mark a direct read-ahead admission without growing every
+	// cache entry from the allocator's 80-byte class to 88 bytes.
+	baseReadCachePrefetchedReference uint32 = 1 << 31
+)
 
 // Recycle only modest, commonly sized unexposed values and keep their total
 // backing below one eighth of each shard's live payload limit. This makes the
@@ -222,9 +228,9 @@ type baseReadCacheEntry struct {
 	// callback-scoped reads instead hold RLock through consumption and leave it
 	// false, allowing a same-capacity refresh to reuse the bytes in place.
 	exposed atomic.Bool
-	// references is a small saturating credit set only by resident cache hits
-	// (not admission or flush). Eviction consumes one credit per CLOCK sweep,
-	// preserving frequency information that a single referenced bit discards.
+	// references stores a small saturating CLOCK credit in its low bits and the
+	// direct-read-ahead marker in its high bit. Eviction consumes only credit;
+	// the first ordinary cache hit consumes the marker for usefulness metrics.
 	references atomic.Uint32
 	// keyCapacity records the private key allocation size across shorter-key
 	// reuse. It occupies existing alignment padding, so the entry remains in the
@@ -238,11 +244,12 @@ type baseReadCacheEntry struct {
 
 func (e *baseReadCacheEntry) reference() {
 	for {
-		credit := e.references.Load()
+		state := e.references.Load()
+		credit := state &^ baseReadCachePrefetchedReference
 		if credit >= baseReadCacheMaxReferenceCredit {
 			return
 		}
-		if e.references.CompareAndSwap(credit, credit+1) {
+		if e.references.CompareAndSwap(state, state+1) {
 			return
 		}
 	}
@@ -250,12 +257,26 @@ func (e *baseReadCacheEntry) reference() {
 
 func (e *baseReadCacheEntry) consumeReference() bool {
 	for {
-		credit := e.references.Load()
+		state := e.references.Load()
+		credit := state &^ baseReadCachePrefetchedReference
 		if credit == 0 {
 			return false
 		}
-		if e.references.CompareAndSwap(credit, credit-1) {
+		if e.references.CompareAndSwap(state, state-1) {
 			return true
+		}
+	}
+}
+
+func (e *baseReadCacheEntry) recordUsefulPrefetch() {
+	for {
+		state := e.references.Load()
+		if state&baseReadCachePrefetchedReference == 0 {
+			return
+		}
+		if e.references.CompareAndSwap(state, state&^baseReadCachePrefetchedReference) {
+			baseReadCachePrefetchUsefulCounter.Inc(1)
+			return
 		}
 	}
 }
@@ -348,6 +369,14 @@ func (c *baseReadCache) isCommitmentWindowKey(key []byte) bool {
 // caller passes it to setIfEpoch after reading the durable base, preventing a
 // concurrent same-key flush from being undone by a late cache fill.
 func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, baseReadCacheEpoch) {
+	return c.getWithEpochMode(key, true)
+}
+
+func (c *baseReadCache) getForPrefetchWithEpoch(key []byte) ([]byte, bool, baseReadCacheEpoch) {
+	return c.getWithEpochMode(key, false)
+}
+
+func (c *baseReadCache) getWithEpochMode(key []byte, recordUseful bool) ([]byte, bool, baseReadCacheEpoch) {
 	if c == nil {
 		return nil, false, baseReadCacheEpoch{}
 	}
@@ -356,6 +385,9 @@ func (c *baseReadCache) getWithEpoch(key []byte) ([]byte, bool, baseReadCacheEpo
 	e, ok := s.entries[string(key)]
 	if ok {
 		e.reference()
+		if recordUseful {
+			e.recordUsefulPrefetch()
+		}
 		value := e.value
 		if value != nil {
 			e.exposed.Store(true)
@@ -383,6 +415,7 @@ func (c *baseReadCache) getAtVersion(key []byte, maxVersion uint64) (value []byt
 	if ok {
 		if e.version <= maxVersion {
 			e.reference()
+			e.recordUsefulPrefetch()
 			value := e.value
 			if value != nil {
 				e.exposed.Store(true)
@@ -416,6 +449,7 @@ func (c *baseReadCache) viewWithEpoch(key []byte, fn func(value []byte, stable b
 	e, ok := s.entries[string(key)]
 	if ok {
 		e.reference()
+		e.recordUsefulPrefetch()
 		if e.value == nil {
 			s.mu.RUnlock()
 			return true, false, baseReadCacheEpoch{}, nil
@@ -447,6 +481,7 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 	if ok {
 		if e.version <= maxVersion {
 			e.reference()
+			e.recordUsefulPrefetch()
 			windowHit = e.window
 			if windowHit {
 				// Only the commitment-session path needs admission feedback. Keeping
@@ -505,14 +540,14 @@ func (c *baseReadCache) advanceVersion() uint64 {
 // whether the returned slice is cache-owned; a callback-backed reader must copy
 // it before returning when false.
 func (c *baseReadCache) setIfEpoch(key, value []byte, epoch baseReadCacheEpoch) ([]byte, bool) {
-	return c.setEntryIfEpoch(key, value, false, true, epoch)
+	return c.setEntryIfEpoch(key, value, false, true, false, epoch)
 }
 
 // storeIfEpoch admits an immutable copy without returning its backing bytes.
 // Callback-style durable readers consume their original scoped/owned value and
 // use this form so the cache entry remains eligible for in-place flush refresh.
 func (c *baseReadCache) storeIfEpoch(key, value []byte, epoch baseReadCacheEpoch) bool {
-	_, stored := c.setEntryIfEpoch(key, value, false, false, epoch)
+	_, stored := c.setEntryIfEpoch(key, value, false, false, false, epoch)
 	return stored
 }
 
@@ -522,11 +557,20 @@ func (c *baseReadCache) storeIfEpoch(key, value []byte, epoch baseReadCacheEpoch
 // storage probes stop reopening Pebble iterators. Overlay layers are consulted
 // first, and flush/discard invalidation uses the same complete physical key.
 func (c *baseReadCache) setMissingIfEpoch(key []byte, epoch baseReadCacheEpoch) bool {
-	_, stored := c.setEntryIfEpoch(key, nil, true, false, epoch)
+	_, stored := c.setEntryIfEpoch(key, nil, true, false, false, epoch)
 	return stored
 }
 
-func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool, epoch baseReadCacheEpoch) ([]byte, bool) {
+func (c *baseReadCache) prefetchIfEpoch(key, value []byte, epoch baseReadCacheEpoch) ([]byte, bool) {
+	return c.setEntryIfEpoch(key, value, false, true, true, epoch)
+}
+
+func (c *baseReadCache) prefetchMissingIfEpoch(key []byte, epoch baseReadCacheEpoch) bool {
+	_, stored := c.setEntryIfEpoch(key, nil, true, false, true, epoch)
+	return stored
+}
+
+func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, force bool, epoch baseReadCacheEpoch) ([]byte, bool) {
 	if c == nil {
 		return value, false
 	}
@@ -557,7 +601,7 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 	}
 	trunk := !missing && c.isCommitmentTrunkKey(key) && s.trunkUsed+charge <= s.trunkLimit
 	window := false
-	if !trunk {
+	if !trunk && !force {
 		if !missing && !other && c.isCommitmentWindowKey(key) && s.windowLimit > 0 {
 			// Preserve the two-hit fingerprint even while retaining this first
 			// value in the bounded window. If it is evicted untouched, a later
@@ -600,6 +644,9 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose bool,
 	entry.nonCommitment = other
 	entry.trunk = trunk
 	entry.window = window
+	if force {
+		entry.references.Store(baseReadCachePrefetchedReference)
+	}
 	if expose && entry.value != nil {
 		entry.exposed.Store(true)
 	}

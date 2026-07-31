@@ -91,6 +91,12 @@ func ReadStateAccountLatestNoCopy(db ethdb.KeyValueReader, owner common.Address)
 	return readStatePresentNoCopy(db, stateAccountLatestKey(owner), fmt.Sprintf("state account latest for %s", owner.Hex()))
 }
 
+// PrefetchStateAccountLatest admits a deterministic near-future account read
+// directly into a reader's bounded cache when that capability is available.
+func PrefetchStateAccountLatest(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error) {
+	return prefetchStatePresentNoCopy(db, stateAccountLatestKey(owner), fmt.Sprintf("state account latest for %s", owner.Hex()))
+}
+
 func DeleteStateAccountLatest(db ethdb.KeyValueWriter, owner common.Address) error {
 	return DeleteStateAccountLatestByKey(db, stateAccountLatestKey(owner))
 }

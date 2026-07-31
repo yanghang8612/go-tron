@@ -1341,7 +1341,11 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 	block2 := testBufferedBlock(2)
 	batch := testImportRunBatch(t, block1, block2)
 
-	success := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{})
+	successApplier := &recordingImportBatchRunApplier{}
+	success := ApplyImportBatchRun(batch, successApplier)
+	if len(successApplier.preparedBlocks) != 2 || successApplier.preparedBlocks[0].Number() != 1 || successApplier.preparedBlocks[1].Number() != 2 {
+		t.Fatalf("prepared blocks = %+v, want decoded blocks 1 and 2 before execution", successApplier.preparedBlocks)
+	}
 	wantPlan := NewImportBatchRunPlan(batch)
 	if !reflect.DeepEqual(success.Plan, wantPlan) || !reflect.DeepEqual(success.Run.Plan, wantPlan) {
 		t.Fatalf("success plan = %+v run.plan=%+v, want %+v", success.Plan, success.Run.Plan, wantPlan)
@@ -2184,6 +2188,7 @@ type recordingImportBatchRunApplier struct {
 	progress                  []rawdb.StageProgress
 	pauseNum                  uint64
 	pauseErr                  error
+	preparedBlocks            []*types.Block
 }
 
 type recordingImportBatchStageHookExecutor struct {
@@ -2202,6 +2207,10 @@ func (e *recordingImportBatchStageHookExecutor) InsertBlocksWithStageHook(blocks
 
 func (a *recordingImportBatchRunApplier) LogDecodeBatchResult(BufferedBatchDecodeResult) {
 	a.calls = append(a.calls, ImportBatchRunDecode)
+}
+
+func (a *recordingImportBatchRunApplier) PrepareDecodedBlocks(batch BufferedBatch) {
+	a.preparedBlocks = append(a.preparedBlocks, batch.Blocks...)
 }
 
 func (a *recordingImportBatchRunApplier) RecordBufferWait(wait time.Duration) {

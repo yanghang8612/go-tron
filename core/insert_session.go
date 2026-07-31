@@ -47,7 +47,25 @@ func (bc *BlockChain) BeginInsertSession() *InsertSession {
 // finished. Per-block TransactionRet rows remain on the normal synchronous
 // metadata path; all canonical insertion omits duplicate per-tx materialization.
 func (bc *BlockChain) BeginSyncInsertSession() *InsertSession {
-	return &InsertSession{bc: bc, executor: newCanonicalRangeExecutorWithOptions(bc, true, nil, true)}
+	executor := newCanonicalRangeExecutorWithOptions(bc, true, nil, true)
+	executor.enableStateReadAhead()
+	return &InsertSession{bc: bc, executor: executor}
+}
+
+// PrepareDecodedBlocks starts deterministic state read ahead as soon as a
+// staged body batch has been decoded. It does not validate or mutate state;
+// canonical insertion remains the sole ordered accept/reject path.
+func (s *InsertSession) PrepareDecodedBlocks(blocks []*types.Block) int {
+	if s == nil || s.executor == nil {
+		return 0
+	}
+	return s.executor.PrepareReadAhead(blocks)
+}
+
+// PrepareDecodedBlock is the downloader fast path. It uses the retained wire
+// size for queue accounting instead of traversing the decoded protobuf again.
+func (s *InsertSession) PrepareDecodedBlock(block *types.Block, encodedBytes int) bool {
+	return s != nil && s.executor != nil && s.executor.PrepareReadAheadBlock(block, encodedBytes)
 }
 
 // Insert applies one batch within the session WITHOUT settling (no scope close

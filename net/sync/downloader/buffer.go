@@ -464,6 +464,10 @@ type ImportBatchRunPlanApplier interface {
 	PauseImport(peer *p2p.Peer, blockNum uint64, err error)
 }
 
+type decodedBlocksPreparer interface {
+	PrepareDecodedBlocks(batch BufferedBatch)
+}
+
 // ImportBatchRunResult reports the outcome of applying an import-batch run
 // plan. ContinueDrain means decode produced no importable prefix; StopDrain
 // means canonical import failed, imported-prefix progress could not be durably
@@ -755,6 +759,9 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			if result.Decode.Action != BufferedBatchDecodeImport {
 				result.ContinueDrain = true
 				return result
+			}
+			if prepare, ok := applier.(decodedBlocksPreparer); ok {
+				prepare.PrepareDecodedBlocks(plan.Batch)
 			}
 		case ImportBatchRunRecordBufferWaits:
 			for _, wait := range plan.Batch.BufferWaits {

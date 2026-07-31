@@ -11,6 +11,12 @@ import (
 
 var baseReadCacheEntryBenchmarkSink *baseReadCacheEntry
 
+func TestBaseReadCacheEntryStaysInEightyByteClass(t *testing.T) {
+	if got := unsafe.Sizeof(baseReadCacheEntry{}); got != 80 {
+		t.Fatalf("baseReadCacheEntry size = %d, want 80", got)
+	}
+}
+
 func testBaseReadCacheSet(c *baseReadCache, key, value []byte) {
 	for attempt := 0; attempt < 2; attempt++ {
 		_, _, epoch := c.getWithEpoch(key)

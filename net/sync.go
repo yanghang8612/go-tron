@@ -2512,6 +2512,19 @@ func (a syncImportBatchRunApplier) LogDecodeBatchResult(result syncdl.BufferedBa
 	a.service.logDecodeBatchResult(result)
 }
 
+func (a syncImportBatchRunApplier) PrepareDecodedBlocks(batch syncdl.BufferedBatch) {
+	if a.session == nil {
+		return
+	}
+	for i, block := range batch.Blocks {
+		encodedBytes := 0
+		if i < len(batch.Buffered) {
+			encodedBytes = len(batch.Buffered[i].Raw)
+		}
+		a.session.PrepareDecodedBlock(block, encodedBytes)
+	}
+}
+
 func (a syncImportBatchRunApplier) RecordBufferWait(wait time.Duration) {
 	a.service.stats.AddBufferWait(wait)
 }
