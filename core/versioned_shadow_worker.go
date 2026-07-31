@@ -23,33 +23,36 @@ const (
 )
 
 var (
-	discardShadowBlocksCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/blocks", nil)
-	discardShadowCandidatesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/candidates", nil)
-	discardShadowExecutedCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/executed", nil)
-	discardShadowMatchesCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/matches", nil)
-	discardShadowMismatchesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatches", nil)
-	discardShadowErrorsCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/errors", nil)
-	discardShadowCopyNanosCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/copy_nanos", nil)
-	discardShadowExecutionNanosCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/execution_nanos", nil)
-	discardShadowLastCandidatesGauge       = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/candidates", nil)
-	discardShadowLastExecutedGauge         = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/executed", nil)
-	discardShadowLastMatchesGauge          = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/matches", nil)
-	discardShadowMismatchVMCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/vm", nil)
-	discardShadowMismatchTransferCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/transfer", nil)
-	discardShadowMismatchOtherCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/other", nil)
-	discardShadowErrorVMCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/vm", nil)
-	discardShadowErrorTransferCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/transfer", nil)
-	discardShadowErrorOtherCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/other", nil)
-	discardShadowMismatchReceiptCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt", nil)
-	discardShadowMismatchFeeCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/fee", nil)
-	discardShadowMismatchResultCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_result", nil)
-	discardShadowMismatchLogsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/logs", nil)
-	discardShadowMismatchInternalCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/internal_transactions", nil)
-	discardShadowMismatchStatusCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/status", nil)
-	discardShadowMismatchMessageCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/res_message", nil)
-	discardShadowMismatchAddressCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_address", nil)
-	discardShadowMismatchIdentityCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/identity", nil)
-	discardShadowMismatchOtherFieldCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/other", nil)
+	discardShadowBlocksCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/blocks", nil)
+	discardShadowCandidatesCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/candidates", nil)
+	discardShadowExecutedCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/executed", nil)
+	discardShadowMatchesCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/matches", nil)
+	discardShadowMismatchesCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatches", nil)
+	discardShadowErrorsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/errors", nil)
+	discardShadowCopyNanosCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/copy_nanos", nil)
+	discardShadowExecutionNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/execution_nanos", nil)
+	discardShadowLastCandidatesGauge             = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/candidates", nil)
+	discardShadowLastExecutedGauge               = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/executed", nil)
+	discardShadowLastMatchesGauge                = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/matches", nil)
+	discardShadowMismatchVMCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/vm", nil)
+	discardShadowMismatchTransferCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/transfer", nil)
+	discardShadowMismatchOtherCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/other", nil)
+	discardShadowErrorVMCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/vm", nil)
+	discardShadowErrorTransferCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/transfer", nil)
+	discardShadowErrorOtherCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/other", nil)
+	discardShadowMismatchReceiptCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt", nil)
+	discardShadowMismatchReceiptCoreCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core", nil)
+	discardShadowMismatchOwnerDiagnosticCounter  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_owner_diagnostic", nil)
+	discardShadowMismatchEnergyDiagnosticCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_diagnostic", nil)
+	discardShadowMismatchFeeCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/fee", nil)
+	discardShadowMismatchResultCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_result", nil)
+	discardShadowMismatchLogsCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/logs", nil)
+	discardShadowMismatchInternalCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/internal_transactions", nil)
+	discardShadowMismatchStatusCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/status", nil)
+	discardShadowMismatchMessageCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/res_message", nil)
+	discardShadowMismatchAddressCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_address", nil)
+	discardShadowMismatchIdentityCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/identity", nil)
+	discardShadowMismatchOtherFieldCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/other", nil)
 )
 
 // discardKVOverlay isolates rawdb writes performed by actuators. Reads fall
@@ -175,6 +178,9 @@ const (
 	discardShadowMismatchAddress
 	discardShadowMismatchIdentity
 	discardShadowMismatchOtherField
+	discardShadowMismatchReceiptCore
+	discardShadowMismatchOwnerDiagnostic
+	discardShadowMismatchEnergyDiagnostic
 )
 
 func equalTransactionInfoMessages[A proto.Message](left, right []A) bool {
@@ -208,6 +214,57 @@ func compareDiscardShadowInfo(shadow, canonical *corepb.TransactionInfo) discard
 	var mismatch discardShadowMismatch
 	if !proto.Equal(shadow.GetReceipt(), canonical.GetReceipt()) {
 		mismatch |= discardShadowMismatchReceipt
+		shadowReceipt := proto.Clone(shadow.GetReceipt()).(*corepb.ResourceReceipt)
+		canonicalReceipt := proto.Clone(canonical.GetReceipt()).(*corepb.ResourceReceipt)
+		if shadowReceipt.GetOwnerBalance() != canonicalReceipt.GetOwnerBalance() ||
+			shadowReceipt.GetOwnerFreeNetLeft() != canonicalReceipt.GetOwnerFreeNetLeft() ||
+			shadowReceipt.GetOwnerFrozenNetLeft() != canonicalReceipt.GetOwnerFrozenNetLeft() ||
+			shadowReceipt.GetOwnerNetLastConsumeTime() != canonicalReceipt.GetOwnerNetLastConsumeTime() ||
+			shadowReceipt.GetOwnerFreeNetLastConsumeTime() != canonicalReceipt.GetOwnerFreeNetLastConsumeTime() ||
+			shadowReceipt.GetOwnerFrozenForNet() != canonicalReceipt.GetOwnerFrozenForNet() ||
+			shadowReceipt.GetOwnerFrozenForEnergy() != canonicalReceipt.GetOwnerFrozenForEnergy() {
+			mismatch |= discardShadowMismatchOwnerDiagnostic
+		}
+		if shadowReceipt.GetOriginEnergyLeft() != canonicalReceipt.GetOriginEnergyLeft() ||
+			shadowReceipt.GetCallerEnergyLeft() != canonicalReceipt.GetCallerEnergyLeft() ||
+			shadowReceipt.GetOriginEnergyWindow() != canonicalReceipt.GetOriginEnergyWindow() ||
+			shadowReceipt.GetCallerEnergyWindow() != canonicalReceipt.GetCallerEnergyWindow() ||
+			shadowReceipt.GetCallerEnergyLimit() != canonicalReceipt.GetCallerEnergyLimit() ||
+			shadowReceipt.GetOriginEnergyLimit() != canonicalReceipt.GetOriginEnergyLimit() ||
+			shadowReceipt.GetOriginFrozenForEnergy() != canonicalReceipt.GetOriginFrozenForEnergy() ||
+			shadowReceipt.GetCallerEnergyUsagePre() != canonicalReceipt.GetCallerEnergyUsagePre() ||
+			shadowReceipt.GetOriginEnergyUsagePre() != canonicalReceipt.GetOriginEnergyUsagePre() ||
+			shadowReceipt.GetCallerEnergyLastConsumeTime() != canonicalReceipt.GetCallerEnergyLastConsumeTime() ||
+			shadowReceipt.GetOriginEnergyLastConsumeTime() != canonicalReceipt.GetOriginEnergyLastConsumeTime() ||
+			shadowReceipt.GetTotalEnergyWeight() != canonicalReceipt.GetTotalEnergyWeight() ||
+			shadowReceipt.GetTotalEnergyCurrentLimit() != canonicalReceipt.GetTotalEnergyCurrentLimit() {
+			mismatch |= discardShadowMismatchEnergyDiagnostic
+		}
+		for _, receipt := range []*corepb.ResourceReceipt{shadowReceipt, canonicalReceipt} {
+			receipt.OwnerBalance = 0
+			receipt.OwnerFreeNetLeft = 0
+			receipt.OwnerFrozenNetLeft = 0
+			receipt.OwnerNetLastConsumeTime = 0
+			receipt.OwnerFreeNetLastConsumeTime = 0
+			receipt.OwnerFrozenForNet = 0
+			receipt.OwnerFrozenForEnergy = 0
+			receipt.OriginEnergyLeft = 0
+			receipt.CallerEnergyLeft = 0
+			receipt.OriginEnergyWindow = 0
+			receipt.CallerEnergyWindow = 0
+			receipt.CallerEnergyLimit = 0
+			receipt.OriginEnergyLimit = 0
+			receipt.OriginFrozenForEnergy = 0
+			receipt.CallerEnergyUsagePre = 0
+			receipt.OriginEnergyUsagePre = 0
+			receipt.CallerEnergyLastConsumeTime = 0
+			receipt.OriginEnergyLastConsumeTime = 0
+			receipt.TotalEnergyWeight = 0
+			receipt.TotalEnergyCurrentLimit = 0
+		}
+		if !proto.Equal(shadowReceipt, canonicalReceipt) {
+			mismatch |= discardShadowMismatchReceiptCore
+		}
 	}
 	if shadow.GetFee() != canonical.GetFee() || shadow.GetPackingFee() != canonical.GetPackingFee() {
 		mismatch |= discardShadowMismatchFee
@@ -365,6 +422,15 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 			}
 			if result.mismatch&discardShadowMismatchReceipt != 0 {
 				discardShadowMismatchReceiptCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchReceiptCore != 0 {
+				discardShadowMismatchReceiptCoreCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchOwnerDiagnostic != 0 {
+				discardShadowMismatchOwnerDiagnosticCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchEnergyDiagnostic != 0 {
+				discardShadowMismatchEnergyDiagnosticCounter.Inc(1)
 			}
 			if result.mismatch&discardShadowMismatchFee != 0 {
 				discardShadowMismatchFeeCounter.Inc(1)
