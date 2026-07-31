@@ -23,50 +23,55 @@ const (
 )
 
 var (
-	discardShadowBlocksCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/blocks", nil)
-	discardShadowCandidatesCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/candidates", nil)
-	discardShadowExecutedCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/executed", nil)
-	discardShadowMatchesCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/matches", nil)
-	discardShadowMismatchesCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatches", nil)
-	discardShadowCoreMatchesCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/core_matches", nil)
-	discardShadowCoreMismatchesCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/core_mismatches", nil)
-	discardShadowWriteSetMatchesCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_matches", nil)
-	discardShadowWriteSetMismatchesCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_mismatches", nil)
-	discardShadowWriteSetErrorsCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_errors", nil)
-	discardShadowWriteSetApplyEligibleCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_eligible", nil)
-	discardShadowWriteSetApplyUnsupportedCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported", nil)
-	discardShadowErrorsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/errors", nil)
-	discardShadowCopyNanosCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/copy_nanos", nil)
-	discardShadowExecutionNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/execution_nanos", nil)
-	discardShadowLastCandidatesGauge             = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/candidates", nil)
-	discardShadowLastExecutedGauge               = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/executed", nil)
-	discardShadowLastMatchesGauge                = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/matches", nil)
-	discardShadowMismatchVMCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/vm", nil)
-	discardShadowMismatchTransferCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/transfer", nil)
-	discardShadowMismatchOtherCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/other", nil)
-	discardShadowErrorVMCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/vm", nil)
-	discardShadowErrorTransferCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/transfer", nil)
-	discardShadowErrorOtherCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/other", nil)
-	discardShadowMismatchReceiptCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt", nil)
-	discardShadowMismatchReceiptCoreCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core", nil)
-	discardShadowMismatchReceiptEnergyCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_energy", nil)
-	discardShadowMismatchEnergyUsageCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_usage", nil)
-	discardShadowMismatchEnergyFeeCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_fee", nil)
-	discardShadowMismatchOriginEnergyCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_origin_energy_usage", nil)
-	discardShadowMismatchEnergyTotalCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_usage_total", nil)
-	discardShadowMismatchReceiptBandwidthCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_bandwidth", nil)
-	discardShadowMismatchReceiptResultCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_result", nil)
-	discardShadowMismatchOwnerDiagnosticCounter  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_owner_diagnostic", nil)
-	discardShadowMismatchEnergyDiagnosticCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_diagnostic", nil)
-	discardShadowMismatchFeeCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/fee", nil)
-	discardShadowMismatchResultCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_result", nil)
-	discardShadowMismatchLogsCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/logs", nil)
-	discardShadowMismatchInternalCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/internal_transactions", nil)
-	discardShadowMismatchStatusCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/status", nil)
-	discardShadowMismatchMessageCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/res_message", nil)
-	discardShadowMismatchAddressCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_address", nil)
-	discardShadowMismatchIdentityCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/identity", nil)
-	discardShadowMismatchOtherFieldCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/other", nil)
+	discardShadowBlocksCounter                       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/blocks", nil)
+	discardShadowCandidatesCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/candidates", nil)
+	discardShadowExecutedCounter                     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/executed", nil)
+	discardShadowMatchesCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/matches", nil)
+	discardShadowMismatchesCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatches", nil)
+	discardShadowCoreMatchesCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/core_matches", nil)
+	discardShadowCoreMismatchesCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/core_mismatches", nil)
+	discardShadowWriteSetMatchesCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_matches", nil)
+	discardShadowWriteSetMismatchesCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_mismatches", nil)
+	discardShadowWriteSetErrorsCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_errors", nil)
+	discardShadowWriteSetApplyEligibleCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_eligible", nil)
+	discardShadowWriteSetApplyUnsupportedCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported", nil)
+	discardShadowApplyUnsupportedAccountCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/account", nil)
+	discardShadowApplyUnsupportedGenerationCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/account_kv_generation", nil)
+	discardShadowApplyUnsupportedSelfDestructCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/self_destruct", nil)
+	discardShadowApplyUnsupportedFieldCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/account_field", nil)
+	discardShadowApplyUnsupportedOtherCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/other", nil)
+	discardShadowErrorsCounter                       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/errors", nil)
+	discardShadowCopyNanosCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/copy_nanos", nil)
+	discardShadowExecutionNanosCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/execution_nanos", nil)
+	discardShadowLastCandidatesGauge                 = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/candidates", nil)
+	discardShadowLastExecutedGauge                   = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/executed", nil)
+	discardShadowLastMatchesGauge                    = metrics.NewRegisteredGauge("core/versioned_shadow/discard_worker/last_block/matches", nil)
+	discardShadowMismatchVMCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/vm", nil)
+	discardShadowMismatchTransferCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/transfer", nil)
+	discardShadowMismatchOtherCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch/other", nil)
+	discardShadowErrorVMCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/vm", nil)
+	discardShadowErrorTransferCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/transfer", nil)
+	discardShadowErrorOtherCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/other", nil)
+	discardShadowMismatchReceiptCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt", nil)
+	discardShadowMismatchReceiptCoreCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core", nil)
+	discardShadowMismatchReceiptEnergyCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_energy", nil)
+	discardShadowMismatchEnergyUsageCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_usage", nil)
+	discardShadowMismatchEnergyFeeCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_fee", nil)
+	discardShadowMismatchOriginEnergyCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_origin_energy_usage", nil)
+	discardShadowMismatchEnergyTotalCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_usage_total", nil)
+	discardShadowMismatchReceiptBandwidthCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_bandwidth", nil)
+	discardShadowMismatchReceiptResultCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_result", nil)
+	discardShadowMismatchOwnerDiagnosticCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_owner_diagnostic", nil)
+	discardShadowMismatchEnergyDiagnosticCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_diagnostic", nil)
+	discardShadowMismatchFeeCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/fee", nil)
+	discardShadowMismatchResultCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_result", nil)
+	discardShadowMismatchLogsCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/logs", nil)
+	discardShadowMismatchInternalCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/internal_transactions", nil)
+	discardShadowMismatchStatusCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/status", nil)
+	discardShadowMismatchMessageCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/res_message", nil)
+	discardShadowMismatchAddressCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_address", nil)
+	discardShadowMismatchIdentityCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/identity", nil)
+	discardShadowMismatchOtherFieldCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/other", nil)
 )
 
 // discardKVOverlay isolates rawdb writes performed by actuators. Reads fall
@@ -156,14 +161,58 @@ func prepareDiscardShadowBlock(statedb *state.StateDB, dynProps *state.DynamicPr
 }
 
 type discardShadowTaskResult struct {
-	class         discardShadowTransactionClass
-	mismatch      discardShadowMismatch
-	coreMatch     bool
-	matched       bool
-	writeSetMatch bool
-	writeSetErr   error
-	applyEligible bool
-	err           error
+	class            discardShadowTransactionClass
+	mismatch         discardShadowMismatch
+	coreMatch        bool
+	matched          bool
+	writeSetMatch    bool
+	writeSetErr      error
+	applyEligible    bool
+	applyUnsupported discardShadowApplyUnsupported
+	err              error
+}
+
+type discardShadowApplyUnsupported uint8
+
+const (
+	discardShadowApplyUnsupportedAccount discardShadowApplyUnsupported = 1 << iota
+	discardShadowApplyUnsupportedGeneration
+	discardShadowApplyUnsupportedSelfDestruct
+	discardShadowApplyUnsupportedField
+	discardShadowApplyUnsupportedOther
+)
+
+func classifyDiscardShadowApplyUnsupported(writes state.TransactionWriteSet) discardShadowApplyUnsupported {
+	var unsupported discardShadowApplyUnsupported
+	for key := range writes {
+		switch key.Kind {
+		case state.TransactionAccessAccount:
+			unsupported |= discardShadowApplyUnsupportedAccount
+		case state.TransactionAccessAccountKVGeneration:
+			unsupported |= discardShadowApplyUnsupportedGeneration
+		case state.TransactionAccessSelfDestruct:
+			unsupported |= discardShadowApplyUnsupportedSelfDestruct
+		case state.TransactionAccessAccountField:
+			switch key.AccountField {
+			case state.TransactionAccountFieldAccountType,
+				state.TransactionAccountFieldBalance,
+				state.TransactionAccountFieldAllowance,
+				state.TransactionAccountFieldLatestWithdrawTime,
+				state.TransactionAccountFieldNetUsage,
+				state.TransactionAccountFieldLatestOperationTime,
+				state.TransactionAccountFieldLatestConsumeTime,
+				state.TransactionAccountFieldFreeNetUsage,
+				state.TransactionAccountFieldLatestConsumeFreeTime,
+				state.TransactionAccountFieldNetWindow:
+			default:
+				unsupported |= discardShadowApplyUnsupportedField
+			}
+		}
+	}
+	if unsupported == 0 {
+		unsupported = discardShadowApplyUnsupportedOther
+	}
+	return unsupported
 }
 
 type discardShadowTransactionClass uint8
@@ -454,7 +503,7 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 		close(results)
 	}()
 
-	var executed, matches, mismatches, coreMatches, coreMismatches, writeSetMatches, writeSetMismatches, writeSetErrors, applyEligible, applyUnsupported, executionErrors int64
+	var executed, matches, mismatches, coreMatches, coreMismatches, writeSetMatches, writeSetMismatches, writeSetErrors, applyEligible, applyUnsupported, applyUnsupportedAccount, applyUnsupportedGeneration, applyUnsupportedSelfDestruct, applyUnsupportedField, applyUnsupportedOther, executionErrors int64
 	for result := range results {
 		executed++
 		switch {
@@ -560,6 +609,21 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 					applyEligible++
 				} else {
 					applyUnsupported++
+					if result.applyUnsupported&discardShadowApplyUnsupportedAccount != 0 {
+						applyUnsupportedAccount++
+					}
+					if result.applyUnsupported&discardShadowApplyUnsupportedGeneration != 0 {
+						applyUnsupportedGeneration++
+					}
+					if result.applyUnsupported&discardShadowApplyUnsupportedSelfDestruct != 0 {
+						applyUnsupportedSelfDestruct++
+					}
+					if result.applyUnsupported&discardShadowApplyUnsupportedField != 0 {
+						applyUnsupportedField++
+					}
+					if result.applyUnsupported&discardShadowApplyUnsupportedOther != 0 {
+						applyUnsupportedOther++
+					}
 				}
 			}
 		}
@@ -577,6 +641,11 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 	discardShadowWriteSetErrorsCounter.Inc(writeSetErrors)
 	discardShadowWriteSetApplyEligibleCounter.Inc(applyEligible)
 	discardShadowWriteSetApplyUnsupportedCounter.Inc(applyUnsupported)
+	discardShadowApplyUnsupportedAccountCounter.Inc(applyUnsupportedAccount)
+	discardShadowApplyUnsupportedGenerationCounter.Inc(applyUnsupportedGeneration)
+	discardShadowApplyUnsupportedSelfDestructCounter.Inc(applyUnsupportedSelfDestruct)
+	discardShadowApplyUnsupportedFieldCounter.Inc(applyUnsupportedField)
+	discardShadowApplyUnsupportedOtherCounter.Inc(applyUnsupportedOther)
 	discardShadowErrorsCounter.Inc(executionErrors)
 	discardShadowCopyNanosCounter.Inc(shadow.copyNanos)
 	discardShadowExecutionNanosCounter.Inc(executionNanos)
@@ -671,19 +740,24 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	}
 	writeSetMatch := writeSetErr == nil
 	applyEligible := false
+	var applyUnsupported discardShadowApplyUnsupported
 	if writeSetMatch && txIndex < len(cfg.canonicalWriteSets) {
 		writeSetMatch = state.EqualTransactionWriteSets(writes, cfg.canonicalWriteSets[txIndex])
 		applyEligible = state.ValidateTransactionWriteSetApply(writes, worker.dynProps, &worker.db) == nil
+		if !applyEligible {
+			applyUnsupported = classifyDiscardShadowApplyUnsupported(writes)
+		}
 	}
 	worker.state.RevertToSnapshot(stateSnapshot)
 	worker.dynProps.RevertToSnapshot(dpSnapshot)
 	return discardShadowTaskResult{
-		class:         class,
-		mismatch:      mismatch,
-		coreMatch:     coreMismatch == 0,
-		matched:       mismatch == 0,
-		writeSetMatch: writeSetMatch,
-		writeSetErr:   writeSetErr,
-		applyEligible: applyEligible,
+		class:            class,
+		mismatch:         mismatch,
+		coreMatch:        coreMismatch == 0,
+		matched:          mismatch == 0,
+		writeSetMatch:    writeSetMatch,
+		writeSetErr:      writeSetErr,
+		applyEligible:    applyEligible,
+		applyUnsupported: applyUnsupported,
 	}
 }

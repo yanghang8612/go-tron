@@ -86,6 +86,18 @@ func TestDiscardKVOverlayIsolatesWrites(t *testing.T) {
 	}
 }
 
+func TestClassifyDiscardShadowApplyUnsupported(t *testing.T) {
+	writes := state.TransactionWriteSet{
+		{Kind: state.TransactionAccessAccount, Address: testProcessorAddr(1)}:                                                                 {},
+		{Kind: state.TransactionAccessAccountKVGeneration, Address: testProcessorAddr(1)}:                                                     {},
+		{Kind: state.TransactionAccessAccountField, Address: testProcessorAddr(1), AccountField: state.TransactionAccountFieldFrozenResource}: {},
+	}
+	want := discardShadowApplyUnsupportedAccount | discardShadowApplyUnsupportedGeneration | discardShadowApplyUnsupportedField
+	if got := classifyDiscardShadowApplyUnsupported(writes); got != want {
+		t.Fatalf("unsupported classes = %#x, want %#x", got, want)
+	}
+}
+
 func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 	canonical := newTestState(t)
 	owner := testProcessorAddr(1)

@@ -631,6 +631,13 @@ account-KV/metadata/raw deletion, and preflight atomicity. Sampled workers now
 report how many exact WriteSets are eligible for this narrow applier; actual
 production publication remains disabled.
 
+The first eligibility sample accepted 168 of 202 exact worker WriteSets
+(83.2%) while all 202 TransactionInfo/WriteSet comparisons remained exact.
+Overlapping rejection counters split the remaining set into full-account,
+account-KV generation, self-destruct, unsupported account-field, and other
+families. Production measurements choose the next schema extension rather than
+broadening the applier speculatively.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
