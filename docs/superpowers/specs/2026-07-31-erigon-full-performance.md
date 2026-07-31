@@ -638,6 +638,29 @@ account-KV generation, self-destruct, unsupported account-field, and other
 families. Production measurements choose the next schema extension rather than
 broadening the applier speculatively.
 
+A larger production sample accepted 689 of 738 exact worker WriteSets (93.4%).
+All 49 rejected sets contained a full-account post-image; generation reset,
+self-destruct, unsupported account-field, other rejection, and write-capture
+error counters remained zero. Account creation is therefore the measured next
+schema gap, rather than a hidden unsupported mutation family.
+
+#### P4.12: Isolated ordered-write reapplication
+
+For every sampled exact WriteSet that passes preflight, rewind the discard
+worker to its block-start state and apply the set through the ordered
+publication primitive in a second isolated transaction. Attach a fresh access
+recorder to this verification pass, finalize at the normal transaction
+boundary, extract the mutations produced by the applier, and compare that
+second WriteSet exactly with the worker's original set. Revert both StateDB and
+DynamicProperties afterward; raw writes remain inside the worker's private
+overlay.
+
+Commutative balance and DynamicProperties cells retain their signed-delta
+identity during verification instead of being observed as absolute
+post-images. Separate match, mismatch, and apply-error counters make schema or
+implementation gaps visible before canonical publication is enabled. This
+stage still performs no canonical mutation and cannot affect consensus output.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

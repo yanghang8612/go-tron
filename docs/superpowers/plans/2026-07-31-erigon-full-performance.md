@@ -88,7 +88,7 @@
 - [x] Implement a preflighted ordered applier for unambiguous typed post-images
   and settlement deltas, while explicitly rejecting full-account, generation,
   and self-destruct publication.
-- [ ] Reapply eligible sampled worker WriteSets to isolated block-start copies
+- [x] Reapply eligible sampled worker WriteSets to isolated block-start copies
   and compare the resulting post-state before enabling canonical publication.
 - [ ] Apply typed writes and settlement deltas at ordered publication after
   serial-equivalence fixtures and production samples pass.

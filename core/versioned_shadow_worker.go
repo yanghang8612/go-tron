@@ -35,6 +35,9 @@ var (
 	discardShadowWriteSetErrorsCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_errors", nil)
 	discardShadowWriteSetApplyEligibleCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_eligible", nil)
 	discardShadowWriteSetApplyUnsupportedCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported", nil)
+	discardShadowWriteSetApplyMatchesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_matches", nil)
+	discardShadowWriteSetApplyMismatchesCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatches", nil)
+	discardShadowWriteSetApplyErrorsCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_errors", nil)
 	discardShadowApplyUnsupportedAccountCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/account", nil)
 	discardShadowApplyUnsupportedGenerationCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/account_kv_generation", nil)
 	discardShadowApplyUnsupportedSelfDestructCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/self_destruct", nil)
@@ -169,6 +172,8 @@ type discardShadowTaskResult struct {
 	writeSetErr      error
 	applyEligible    bool
 	applyUnsupported discardShadowApplyUnsupported
+	applyMatch       bool
+	applyErr         error
 	err              error
 }
 
@@ -503,7 +508,7 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 		close(results)
 	}()
 
-	var executed, matches, mismatches, coreMatches, coreMismatches, writeSetMatches, writeSetMismatches, writeSetErrors, applyEligible, applyUnsupported, applyUnsupportedAccount, applyUnsupportedGeneration, applyUnsupportedSelfDestruct, applyUnsupportedField, applyUnsupportedOther, executionErrors int64
+	var executed, matches, mismatches, coreMatches, coreMismatches, writeSetMatches, writeSetMismatches, writeSetErrors, applyEligible, applyUnsupported, applyMatches, applyMismatches, applyErrors, applyUnsupportedAccount, applyUnsupportedGeneration, applyUnsupportedSelfDestruct, applyUnsupportedField, applyUnsupportedOther, executionErrors int64
 	for result := range results {
 		executed++
 		switch {
@@ -607,6 +612,14 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 			if result.writeSetErr == nil {
 				if result.applyEligible {
 					applyEligible++
+					switch {
+					case result.applyErr != nil:
+						applyErrors++
+					case result.applyMatch:
+						applyMatches++
+					default:
+						applyMismatches++
+					}
 				} else {
 					applyUnsupported++
 					if result.applyUnsupported&discardShadowApplyUnsupportedAccount != 0 {
@@ -641,6 +654,9 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 	discardShadowWriteSetErrorsCounter.Inc(writeSetErrors)
 	discardShadowWriteSetApplyEligibleCounter.Inc(applyEligible)
 	discardShadowWriteSetApplyUnsupportedCounter.Inc(applyUnsupported)
+	discardShadowWriteSetApplyMatchesCounter.Inc(applyMatches)
+	discardShadowWriteSetApplyMismatchesCounter.Inc(applyMismatches)
+	discardShadowWriteSetApplyErrorsCounter.Inc(applyErrors)
 	discardShadowApplyUnsupportedAccountCounter.Inc(applyUnsupportedAccount)
 	discardShadowApplyUnsupportedGenerationCounter.Inc(applyUnsupportedGeneration)
 	discardShadowApplyUnsupportedSelfDestructCounter.Inc(applyUnsupportedSelfDestruct)
@@ -662,13 +678,14 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 }
 
 type discardShadowWorker struct {
-	state     *state.StateDB
-	dynProps  *state.DynamicProperties
-	db        discardKVOverlay
-	forkCache *forks.VersionPassCache
-	scratch   applyTransactionScratch
-	infoSlot  transactionInfoSlot
-	recorder  state.TransactionAccessRecorder
+	state         *state.StateDB
+	dynProps      *state.DynamicProperties
+	db            discardKVOverlay
+	forkCache     *forks.VersionPassCache
+	scratch       applyTransactionScratch
+	infoSlot      transactionInfoSlot
+	recorder      state.TransactionAccessRecorder
+	applyRecorder state.TransactionAccessRecorder
 }
 
 func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConfig) discardShadowTaskResult {
@@ -750,6 +767,33 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	}
 	worker.state.RevertToSnapshot(stateSnapshot)
 	worker.dynProps.RevertToSnapshot(dpSnapshot)
+	applyMatch := false
+	var applyErr error
+	if applyEligible {
+		applyStateSnapshot := worker.state.Snapshot()
+		applyDPSnapshot := worker.dynProps.Snapshot()
+		applyJournalMark := worker.state.DomainChangeJournalMark()
+		worker.applyRecorder.Reset(64)
+		worker.db.reset()
+		worker.db.recorder = &worker.applyRecorder
+		applyErr = worker.state.ApplyTransactionWriteSetRecorded(writes, worker.dynProps, &worker.db, &worker.applyRecorder)
+		if applyErr == nil {
+			worker.state.FinalizeTransaction()
+			appliedWrites, appliedKnown, captureErr := worker.state.CaptureTransactionWriteSet(applyJournalMark, &worker.applyRecorder, worker.dynProps)
+			switch {
+			case captureErr != nil:
+				applyErr = captureErr
+			case !appliedKnown:
+				applyErr = errors.New("unknown applied state write")
+			default:
+				applyMatch = state.EqualTransactionWriteSets(appliedWrites, writes)
+			}
+		}
+		worker.state.RevertToSnapshot(applyStateSnapshot)
+		worker.dynProps.RevertToSnapshot(applyDPSnapshot)
+		worker.db.reset()
+		worker.db.recorder = &worker.recorder
+	}
 	return discardShadowTaskResult{
 		class:            class,
 		mismatch:         mismatch,
@@ -759,5 +803,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		writeSetErr:      writeSetErr,
 		applyEligible:    applyEligible,
 		applyUnsupported: applyUnsupported,
+		applyMatch:       applyMatch,
+		applyErr:         applyErr,
 	}
 }

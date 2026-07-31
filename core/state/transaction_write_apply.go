@@ -143,6 +143,21 @@ func validateTransactionWriteApply(key TransactionAccessKey, value TransactionWr
 // cell. The caller owns transaction ordering and calls FinalizeTransaction at
 // the same boundary as normal execution.
 func (s *StateDB) ApplyTransactionWriteSet(writes TransactionWriteSet, dynProps *DynamicProperties, raw TransactionRawKVWriter) error {
+	return s.applyTransactionWriteSet(writes, dynProps, raw, nil)
+}
+
+// ApplyTransactionWriteSetRecorded is the discard-shadow verification form of
+// ApplyTransactionWriteSet. It records the mutations produced by the applier
+// so callers can extract and compare a second WriteSet. Canonical publication
+// uses ApplyTransactionWriteSet and does not record itself as another task.
+func (s *StateDB) ApplyTransactionWriteSetRecorded(writes TransactionWriteSet, dynProps *DynamicProperties, raw TransactionRawKVWriter, recorder *TransactionAccessRecorder) error {
+	if recorder == nil {
+		return fmt.Errorf("apply transaction writes: nil verification recorder")
+	}
+	return s.applyTransactionWriteSet(writes, dynProps, raw, recorder)
+}
+
+func (s *StateDB) applyTransactionWriteSet(writes TransactionWriteSet, dynProps *DynamicProperties, raw TransactionRawKVWriter, recorder *TransactionAccessRecorder) error {
 	if s == nil {
 		return fmt.Errorf("apply transaction writes: nil state")
 	}
@@ -169,9 +184,9 @@ func (s *StateDB) ApplyTransactionWriteSet(writes TransactionWriteSet, dynProps 
 	if dynProps != nil {
 		previousDynamicRecorder = dynProps.transactionAccess
 	}
-	s.SetTransactionAccessRecorder(nil)
+	s.SetTransactionAccessRecorder(recorder)
 	if dynProps != nil {
-		dynProps.SetTransactionAccessRecorder(nil)
+		dynProps.SetTransactionAccessRecorder(recorder)
 	}
 	defer func() {
 		s.SetTransactionAccessRecorder(previousStateRecorder)
@@ -225,6 +240,10 @@ func (s *StateDB) applyTransactionWrite(key TransactionAccessKey, value Transact
 		}
 		amount := transactionWriteInt64(value)
 		if value.Commutative {
+			if dynProps.transactionAccess != nil {
+				dynProps.addCommutativeInt(key.LogicalKey, amount)
+				break
+			}
 			amount += dynProps.readInt(key.LogicalKey)
 		}
 		dynProps.Set(key.LogicalKey, amount)
@@ -260,7 +279,11 @@ func (s *StateDB) applyTransactionAccountField(key TransactionAccessKey, value T
 		s.CreateAccount(key.Address, corepb.AccountType(amount))
 	case TransactionAccountFieldBalance:
 		if value.Commutative {
-			s.AddBalance(key.Address, amount)
+			if s.transactionAccess != nil {
+				s.AddSettlementBalance(key.Address, amount)
+			} else {
+				s.AddBalance(key.Address, amount)
+			}
 		} else {
 			s.AddBalance(key.Address, amount-s.GetBalance(key.Address))
 		}
