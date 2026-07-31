@@ -78,6 +78,8 @@
   implementation.
 - [x] Preserve exact read-version and previous-sender edges, then simulate an
   Erigon-style four-worker ready queue without global wave barriers.
+- [x] Add sampled zero-indegree discard-only workers with isolated StateDB,
+  DynamicProperties, rawdb write overlays, and full TransactionInfo comparison.
 - [ ] Extract normalized settlement writes into explicit per-transaction deltas
   and apply them at ordered publication after serial-equivalence fixtures pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full

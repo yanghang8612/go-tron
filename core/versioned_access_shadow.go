@@ -128,6 +128,7 @@ type versionedAccessShadow struct {
 	dependencyWaveWidths []int
 	dependencyHeads      []int
 	dependencyEdges      []transactionDependencyEdge
+	transactionSupported []bool
 	transactionDurations []int64
 	transactionStarted   time.Time
 	lastBarrierTx        int
@@ -245,6 +246,7 @@ func (s *versionedAccessShadow) Prepare(transactionCount int) {
 		s.dependencyHeads[txIndex] = -1
 	}
 	s.dependencyEdges = make([]transactionDependencyEdge, 0, transactionCount*2)
+	s.transactionSupported = make([]bool, transactionCount)
 	s.transactionDurations = make([]int64, transactionCount)
 	s.dependencyMaxWave = -1
 	s.lastBarrierTx = -1
@@ -576,6 +578,9 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	})
 
 	unsupported := s.recorder.Unsupported() || !knownWrites
+	if txIndex >= 0 && txIndex < len(s.transactionSupported) {
+		s.transactionSupported[txIndex] = !unsupported
+	}
 	// Unknown/range dependencies are a serial barrier. Later known tasks may
 	// form parallel waves again, but only after this transaction's barrier wave.
 	if unsupported {

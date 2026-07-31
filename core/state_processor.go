@@ -814,6 +814,10 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 			txInfos = make([]*corepb.TransactionInfo, len(transactions))
 		}
 	}
+	var discardShadow *discardShadowBlock
+	if shadowEnabled && collectTxInfos {
+		discardShadow = prepareDiscardShadowBlock(statedb, dynProps, block.Number())
+	}
 
 	for i, tx := range transactions {
 		domainChangeMark := statedb.DomainChangeJournalMark()
@@ -891,6 +895,20 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		}
 
 		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result, forkPassCache)
+	}
+
+	if discardShadow != nil {
+		_ = discardShadow.run(&versionedShadow, discardShadowRunConfig{
+			block:                   block,
+			db:                      db,
+			validateEnvelope:        validateEnvelope,
+			activeWitnesses:         activeWitnesses,
+			genesisTimestamp:        genesisTimestamp,
+			energyLimitForkBlockNum: energyLimitForkBlockNum,
+			genesisHash:             genesisHash,
+			transactions:            transactions,
+			canonicalInfos:          txInfos,
+		})
 	}
 
 	if parentAccountStateRoot != nil {

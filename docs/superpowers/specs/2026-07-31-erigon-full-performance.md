@@ -515,6 +515,36 @@ dependency: the ready queue is the implementation model for discard-only
 workers, while its critical path is the ceiling no worker count can exceed.
 No simulated result is published.
 
+The first production ready-queue sample covered 95,507 transactions in 826
+observed blocks. Canonical execution cost 13.480 seconds. The global-wave
+four-worker model needed 11.672 seconds (1.155x), while direct-edge four-worker
+execution needed 10.017 seconds (1.346x). Its unlimited-worker critical path
+was 10.010 seconds (1.347x), demonstrating that four workers already expose
+nearly all available parallelism and that removing the wave barrier crosses
+the 1.25x implementation gate.
+
+#### P4.9: Sampled discard-only execution
+
+Run the first real workers with no publication capability. Every 64th canonical
+block captures one block-start StateDB copy and an independent DynamicProperties
+copy. After serial execution discovers the exact graph, up to four workers
+replay supported zero-indegree transactions from that immutable start state.
+
+StateDB isolation alone is insufficient because actuators can write Context.DB
+directly. Each worker therefore receives a read-through KV overlay: parent
+reads remain visible, but puts and deletes are copied into worker-local maps
+and discarded at the transaction boundary. Each worker owns its StateDB,
+DynamicProperties, fork cache, result scratch, VM arenas, and balance trace.
+State and dynamic-property snapshots are reverted after every task.
+
+The comparison boundary is the complete TransactionInfo protobuf, including
+receipt, result, logs, internal transactions, fees, return data, and diagnostic
+resource fields. Metrics report sampled blocks, candidates, executions,
+matches, mismatches, errors, state-copy time, and parallel execution wall time.
+Canonical state and receipts remain authoritative regardless of comparison
+outcome. Journal value comparison and non-zero-indegree predecessor materialization
+remain required before any result can be published.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
