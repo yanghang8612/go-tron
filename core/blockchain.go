@@ -27,6 +27,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/zksnark"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 var log = gtronlog.NewModule("core/chain")
@@ -1737,8 +1738,63 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 	}, nil
 }
 
+// blockMetadataBatchSizeHint bounds the encoded Pebble batch representation
+// before any metadata writer appends to it. Pebble's default batch starts
+// small and grows geometrically; transaction receipts and balance traces made
+// that growth account for roughly 4% of full-sync allocations. Values below
+// are exact protobuf sizes where available, plus enough per-record room for
+// every metadata key and Pebble's kind/varint framing.
+func blockMetadataBatchSizeHint(block *types.Block, blockData []byte, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData, writeTransactionLookup bool) int {
+	const (
+		pebbleBatchHeaderSize       = 12
+		metadataRecordSizeAllowance = 96
+		accountTraceValueAllowance  = 12
+	)
+	if block == nil {
+		return 0
+	}
+	bodySize := len(blockData)
+	if bodySize == 0 {
+		bodySize = proto.Size(block.Proto())
+	}
+	// State root, block body plus its two indexes, TAPOS, and per-block
+	// TransactionRet are always present.
+	records := 6
+	values := 32 + bodySize + 8 + 32 + 8
+	blockTimestamp := int64(0)
+	if len(txInfos) != 0 && txInfos[0] != nil {
+		blockTimestamp = txInfos[0].BlockTimeStamp
+	}
+	values += proto.Size(&corepb.TransactionRet{
+		BlockNumber:     int64(block.Number()),
+		BlockTimeStamp:  blockTimestamp,
+		Transactioninfo: txInfos,
+	})
+	if writeTransactionLookup {
+		txCount := len(block.Proto().GetTransactions())
+		records += txCount
+		values += 8 * txCount
+	}
+	if balanceTrace != nil {
+		if balanceTrace.trace != nil {
+			records++
+			values += proto.Size(balanceTrace.trace)
+		}
+		records += len(balanceTrace.accountBalances)
+		// AccountTrace contains one int64 field: one tag plus at most ten
+		// varint bytes. Keep one spare byte so the estimate stays a bound.
+		values += accountTraceValueAllowance * len(balanceTrace.accountBalances)
+	}
+	hint := pebbleBatchHeaderSize + values + metadataRecordSizeAllowance*records
+	if hint < 0 { // Defensive overflow fallback for malformed oversized input.
+		return 0
+	}
+	return hint
+}
+
 func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData, writeTransactionLookup bool) error {
-	batch := bc.db.NewBatch()
+	batch := bc.db.NewBatchWithSize(blockMetadataBatchSizeHint(block, blockData, txInfos, balanceTrace, writeTransactionLookup))
+	defer batch.Close()
 	// The root stays out-of-band so the wire block remains byte-identical to the
 	// java-tron payload.
 	if err := rawdb.WriteBlockStateRoot(batch, block.Hash(), stateRoot); err != nil {
