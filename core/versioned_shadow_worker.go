@@ -28,6 +28,8 @@ var (
 	discardShadowExecutedCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/executed", nil)
 	discardShadowMatchesCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/matches", nil)
 	discardShadowMismatchesCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatches", nil)
+	discardShadowCoreMatchesCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/core_matches", nil)
+	discardShadowCoreMismatchesCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/core_mismatches", nil)
 	discardShadowErrorsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/errors", nil)
 	discardShadowCopyNanosCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/copy_nanos", nil)
 	discardShadowExecutionNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/execution_nanos", nil)
@@ -42,6 +44,9 @@ var (
 	discardShadowErrorOtherCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/error/other", nil)
 	discardShadowMismatchReceiptCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt", nil)
 	discardShadowMismatchReceiptCoreCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core", nil)
+	discardShadowMismatchReceiptEnergyCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_energy", nil)
+	discardShadowMismatchReceiptBandwidthCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_bandwidth", nil)
+	discardShadowMismatchReceiptResultCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_result", nil)
 	discardShadowMismatchOwnerDiagnosticCounter  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_owner_diagnostic", nil)
 	discardShadowMismatchEnergyDiagnosticCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_diagnostic", nil)
 	discardShadowMismatchFeeCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/fee", nil)
@@ -137,10 +142,11 @@ func prepareDiscardShadowBlock(statedb *state.StateDB, dynProps *state.DynamicPr
 }
 
 type discardShadowTaskResult struct {
-	class    discardShadowTransactionClass
-	mismatch discardShadowMismatch
-	matched  bool
-	err      error
+	class     discardShadowTransactionClass
+	mismatch  discardShadowMismatch
+	coreMatch bool
+	matched   bool
+	err       error
 }
 
 type discardShadowTransactionClass uint8
@@ -181,6 +187,9 @@ const (
 	discardShadowMismatchReceiptCore
 	discardShadowMismatchOwnerDiagnostic
 	discardShadowMismatchEnergyDiagnostic
+	discardShadowMismatchReceiptEnergy
+	discardShadowMismatchReceiptBandwidth
+	discardShadowMismatchReceiptResult
 )
 
 func equalTransactionInfoMessages[A proto.Message](left, right []A) bool {
@@ -264,6 +273,18 @@ func compareDiscardShadowInfo(shadow, canonical *corepb.TransactionInfo) discard
 		}
 		if !proto.Equal(shadowReceipt, canonicalReceipt) {
 			mismatch |= discardShadowMismatchReceiptCore
+			if shadowReceipt.GetEnergyUsage() != canonicalReceipt.GetEnergyUsage() ||
+				shadowReceipt.GetEnergyFee() != canonicalReceipt.GetEnergyFee() ||
+				shadowReceipt.GetOriginEnergyUsage() != canonicalReceipt.GetOriginEnergyUsage() ||
+				shadowReceipt.GetEnergyUsageTotal() != canonicalReceipt.GetEnergyUsageTotal() {
+				mismatch |= discardShadowMismatchReceiptEnergy
+			}
+			if shadowReceipt.GetNetUsage() != canonicalReceipt.GetNetUsage() || shadowReceipt.GetNetFee() != canonicalReceipt.GetNetFee() {
+				mismatch |= discardShadowMismatchReceiptBandwidth
+			}
+			if shadowReceipt.GetResult() != canonicalReceipt.GetResult() || shadowReceipt.GetEnergyPenaltyTotal() != canonicalReceipt.GetEnergyPenaltyTotal() {
+				mismatch |= discardShadowMismatchReceiptResult
+			}
 		}
 	}
 	if shadow.GetFee() != canonical.GetFee() || shadow.GetPackingFee() != canonical.GetPackingFee() {
@@ -394,7 +415,7 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 		close(results)
 	}()
 
-	var executed, matches, mismatches, executionErrors int64
+	var executed, matches, mismatches, coreMatches, coreMismatches, executionErrors int64
 	for result := range results {
 		executed++
 		switch {
@@ -425,6 +446,15 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 			}
 			if result.mismatch&discardShadowMismatchReceiptCore != 0 {
 				discardShadowMismatchReceiptCoreCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchReceiptEnergy != 0 {
+				discardShadowMismatchReceiptEnergyCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchReceiptBandwidth != 0 {
+				discardShadowMismatchReceiptBandwidthCounter.Inc(1)
+			}
+			if result.mismatch&discardShadowMismatchReceiptResult != 0 {
+				discardShadowMismatchReceiptResultCounter.Inc(1)
 			}
 			if result.mismatch&discardShadowMismatchOwnerDiagnostic != 0 {
 				discardShadowMismatchOwnerDiagnosticCounter.Inc(1)
@@ -460,6 +490,13 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 				discardShadowMismatchOtherFieldCounter.Inc(1)
 			}
 		}
+		if result.err == nil {
+			if result.coreMatch {
+				coreMatches++
+			} else {
+				coreMismatches++
+			}
+		}
 	}
 	executionNanos := time.Since(executionStarted).Nanoseconds()
 	discardShadowBlocksCounter.Inc(1)
@@ -467,6 +504,8 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 	discardShadowExecutedCounter.Inc(executed)
 	discardShadowMatchesCounter.Inc(matches)
 	discardShadowMismatchesCounter.Inc(mismatches)
+	discardShadowCoreMatchesCounter.Inc(coreMatches)
+	discardShadowCoreMismatchesCounter.Inc(coreMismatches)
 	discardShadowErrorsCounter.Inc(executionErrors)
 	discardShadowCopyNanosCounter.Inc(shadow.copyNanos)
 	discardShadowExecutionNanosCounter.Inc(executionNanos)
@@ -541,11 +580,12 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 
 	shadowInfo := worker.infoSlot.build(tx, result, cfg.block.Number(), cfg.block.Timestamp(), worker.dynProps.AllowTransactionFeePool())
 	mismatch := compareDiscardShadowInfo(shadowInfo, cfg.canonicalInfos[txIndex])
+	coreMismatch := mismatch &^ (discardShadowMismatchReceipt | discardShadowMismatchOwnerDiagnostic | discardShadowMismatchEnergyDiagnostic)
 	vm.ReleaseExecutionLogs(result.Logs)
 	result.Logs = nil
 	worker.state.FinalizeTransaction()
 	worker.state.EndBalanceTraceTransaction(balanceTraceTransactionStatus(result))
 	worker.state.RevertToSnapshot(stateSnapshot)
 	worker.dynProps.RevertToSnapshot(dpSnapshot)
-	return discardShadowTaskResult{class: class, mismatch: mismatch, matched: mismatch == 0}
+	return discardShadowTaskResult{class: class, mismatch: mismatch, coreMatch: coreMismatch == 0, matched: mismatch == 0}
 }
