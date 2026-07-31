@@ -1253,7 +1253,9 @@ func (b *Buffer) NewestInflight() (InflightHandle, bool) {
 
 // MarkActiveWritesDurable records active-layer values already persisted by an
 // ordered direct metadata batch. The overlay remains readable and rewindable,
-// but its eventual flush skips the identical durable value.
+// but its eventual flush skips the identical durable value. Any resident
+// durable-base cache entry is refreshed here, while the overlay still masks
+// the base, so dropping a coalesced solid layer cannot reveal its stale value.
 func (b *Buffer) MarkActiveWritesDurable(keys ...[]byte) error {
 	b.mu.RLock()
 	target := b.newestInflightLocked()
@@ -1261,7 +1263,7 @@ func (b *Buffer) MarkActiveWritesDurable(keys ...[]byte) error {
 	if target == nil {
 		return errors.New("blockbuffer: mark durable writes with no active layer")
 	}
-	return markLayerWritesDurable(target, keys...)
+	return markLayerWritesDurable(target, b.baseReadCache, keys...)
 }
 
 func (b *Buffer) MarkInflightWritesDurable(h InflightHandle, keys ...[]byte) error {
@@ -1274,10 +1276,10 @@ func (b *Buffer) MarkInflightWritesDurable(h InflightHandle, keys ...[]byte) err
 	if !inflight {
 		return errors.New("blockbuffer: mark durable writes for non-inflight layer")
 	}
-	return markLayerWritesDurable(h.l, keys...)
+	return markLayerWritesDurable(h.l, b.baseReadCache, keys...)
 }
 
-func markLayerWritesDurable(target *layer, keys ...[]byte) error {
+func markLayerWritesDurable(target *layer, cache *baseReadCache, keys ...[]byte) error {
 	for _, key := range keys {
 		k := string(key)
 		s := target.shardForString(k)
@@ -1293,6 +1295,13 @@ func markLayerWritesDurable(target *layer, keys ...[]byte) error {
 		}
 		s.durableWrites[k] = value
 		s.mu.Unlock()
+		// The caller invokes Mark*WritesDurable only after the out-of-band
+		// batch has committed. Treat that batch exactly like a successful
+		// canonical layer flush for cache-generation purposes. This must not be
+		// deferred to FlushUpTo: when several layers are coalesced,
+		// mergeLayers intentionally removes already-durable writes from its
+		// output map, so the flush observer cannot discover and promote them.
+		cache.setFlushedAt(k, value, layerShardIndexString(k))
 	}
 	return nil
 }

@@ -1319,6 +1319,94 @@ func TestBaseReadCache_GenerationLifecycle(t *testing.T) {
 	mustCached(resetNew)
 }
 
+// TestBaseReadCache_DirectDurableWriteSurvivesCoalescedDrop covers metadata
+// rows (notably the 65536-slot TAPOS ring) that are written directly to disk,
+// retained in an overlay for execution visibility, and marked durable so the
+// ordinary solid-layer flush skips them. A multi-layer flush coalesces away
+// those already-durable writes; the durable marker must therefore refresh the
+// base cache before the overlays are dropped.
+func TestBaseReadCache_DirectDurableWriteSurvivesCoalescedDrop(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mark func(*Buffer, InflightHandle, []byte) error
+	}{
+		{
+			name: "active",
+			mark: func(b *Buffer, _ InflightHandle, key []byte) error {
+				return b.MarkActiveWritesDurable(key)
+			},
+		},
+		{
+			name: "inflight-handle",
+			mark: func(b *Buffer, h InflightHandle, key []byte) error {
+				return b.MarkInflightWritesDurable(h, key)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disk := rawdb.NewMemoryDatabase()
+			key := rawdb.TaposRefStorageKey(0xac3f)
+			oldValue := []byte("old-slot")
+			newValue := []byte("new-slot")
+			if err := disk.Put(key, oldValue); err != nil {
+				t.Fatal(err)
+			}
+			base := &countingKeyValueReader{KeyValueReader: disk}
+			b := New(base)
+			b.SetBaseReadCacheSize(1 << 20)
+
+			// Two durable observations admit the old TAPOS occupant; the third
+			// proves subsequent reads can hit the cache.
+			for i := 0; i < 3; i++ {
+				got, err := b.GetNoCopyCached(key)
+				if err != nil || !bytes.Equal(got, oldValue) {
+					t.Fatalf("warm read %d = (%q,%v), want (%q,nil)", i, got, err, oldValue)
+				}
+			}
+			baseGets := base.gets
+
+			b.SetMaxInflight(2)
+			b.BeginBlock(bufHash(1), 1)
+			h, ok := b.NewestInflight()
+			if !ok {
+				t.Fatal("missing in-flight handle")
+			}
+			if err := b.Put(key, newValue); err != nil {
+				t.Fatal(err)
+			}
+			// Mirrors writeBlockMetadataBatch completing before Mark*Durable.
+			if err := disk.Put(key, newValue); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.mark(b, h, key); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.CommitInflight(h); err != nil {
+				t.Fatal(err)
+			}
+
+			// Force FlushUpTo down its multi-layer merge path. The target key is
+			// absent from the merged output because it was already durable.
+			b.BeginBlock(bufHash(2), 2)
+			if err := b.Put([]byte("ordinary-row"), []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+			b.CommitBlock()
+			if err := b.FlushUpTo(2, disk); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := b.GetNoCopyCached(key)
+			if err != nil || !bytes.Equal(got, newValue) {
+				t.Fatalf("post-drop read = (%q,%v), want (%q,nil)", got, err, newValue)
+			}
+			if base.gets != baseGets {
+				t.Fatalf("post-drop read reached durable base: gets=%d, want %d", base.gets, baseGets)
+			}
+		})
+	}
+}
+
 func TestBaseReadCache_FlatLatestLifecycle(t *testing.T) {
 	disk := rawdb.NewMemoryDatabase()
 	owner := common.Address{0x41, 0x7a}
