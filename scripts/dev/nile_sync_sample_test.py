@@ -3383,6 +3383,7 @@ class NileSyncSampleTest(unittest.TestCase):
                     {
                         "lvl": "info",
                         "msg": "Imported chain segment",
+                        "head": 114,
                         "blocks": 12,
                         "txs": 9,
                         "elapsed": "2s",
@@ -3512,7 +3513,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogProgressBlocks"], 1725)
             self.assertEqual(row["syncLogSegmentBlocks"], 12)
             self.assertEqual(row["syncLogSegmentTxs"], 9)
-            self.assertEqual(row["syncLogSegmentHead"], 112)
+            self.assertEqual(row["syncLogSegmentHead"], 114)
             self.assertEqual(row["syncLogSegmentTarget"], 115)
             self.assertEqual(row["syncLogSegmentProgress"], 97.39)
             self.assertEqual(row["syncLogSegmentRemain"], 3)

@@ -89,6 +89,7 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		t.Fatalf("expected 'Imported chain segment' summary line, got:\n%s", out)
 	}
 	for _, k := range []string{
+		"head=",
 		"blocks=",
 		"txs=",
 		"elapsed=",
@@ -109,7 +110,6 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		}
 	}
 	for _, k := range []string{
-		"head=",
 		"target=",
 		"progress=",
 		"remain=",
@@ -224,7 +224,7 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 		}
 	}
 	for _, field := range []string{
-		"blocks=20", "txs=40", "blocks/s=10", "txs/s=20",
+		"head=90", "blocks=20", "txs=40", "blocks/s=10", "txs/s=20",
 		`txTop="TransferContract=40"`, `stateMutTop="storagePut=12,accountUpdate=8"`, "stateMutKVTop=none",
 		"peers=2", "activePeers=1", "inflight=2",
 		"buffered=3", "requested=4", "retries=1",

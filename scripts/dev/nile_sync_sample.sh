@@ -2034,6 +2034,10 @@ def parse_sync_log(path):
     combined = dict(latest)
     if latest_progress is not None:
         combined.update(latest_progress)
+    # Imported chain segment is emitted every few seconds, while Sync progress
+    # can be five minutes old. Preserve the real-time applied height.
+    if "head" in latest:
+        combined["head"] = latest["head"]
     mappings = {
         "blocks": "syncLogSegmentBlocks",
         "txs": "syncLogSegmentTxs",

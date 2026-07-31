@@ -2980,6 +2980,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		stateMutKVTop = "none"
 	}
 	ctx := []any{
+		"head", head,
 		"blocks", s.Blocks,
 		"txs", s.Txs,
 		"elapsed", ethcommon.PrettyDuration(elapsed),

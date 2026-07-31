@@ -212,8 +212,8 @@ endpoint error.
 When `--sync-log-file` points at the gtron runtime log, the sampler parses the
 latest `Imported chain segment` summary and emits `syncLog*` fields. These
 always include the compact real-time status: segment throughput
-(`syncLogSegmentBlocks`, `syncLogSegmentTxs`, `syncLogBlocksPerSecond`,
-`syncLogTxsPerSecond`), transaction/state mutation mix (`syncLogTxTop`,
+(`syncLogSegmentHead`, `syncLogSegmentBlocks`, `syncLogSegmentTxs`,
+`syncLogBlocksPerSecond`, `syncLogTxsPerSecond`), transaction/state mutation mix (`syncLogTxTop`,
 `syncLogStateMutTop`, `syncLogStateMutKVTop`), and peer/queue health
 (`syncLogPeers`, `syncLogActivePeers`, `syncLogInflight`, `syncLogBuffered`,
 `syncLogRequested`, `syncLogRetries`). Periodic `Sync progress` records use
@@ -224,8 +224,10 @@ five-minute record (falling back to the latest available window) and supply
 `syncLogProgressCoverage`, `syncLogProgressBlocks`,
 `syncLogAverageBlocksPerSecond`, `syncLogMinimumBlocksPerSecond`,
 `syncLogMaximumBlocksPerSecond`, and chain progress
-(`syncLogSegmentHead`, `syncLogSegmentTarget`, `syncLogSegmentProgress`,
-`syncLogSegmentRemain`). When `net/sync=debug` is enabled, the
+(`syncLogSegmentTarget`, `syncLogSegmentProgress`, `syncLogSegmentRemain`).
+The sampler always keeps `syncLogSegmentHead` from the newer real-time segment
+instead of overwriting it with a periodic progress record. When
+`net/sync=debug` is enabled, the
 sampler merges the immediately following `Imported chain segment details`
 record into the same sample. Those optional diagnostic fields include the
 observed stage planner result

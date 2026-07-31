@@ -65,11 +65,12 @@ secret-bearing flag values have been redacted.
 ## Sync progress logs
 
 At info level, `Imported chain segment` is a compact operator status line. It
-reports current throughput (`blocks/s`, `txs/s`), transaction mix (`txTop`),
-the leading state mutation classes (`stateMutTop`, `stateMutKVTop`), and
-peer/queue health (`peers`, `activePeers`, `inflight`, `buffered`, `requested`,
-`retries`). The `blocks`, `txs`, and `elapsed` values describe the latest
-reporting window, not the whole session.
+reports the current applied height (`head`), current throughput (`blocks/s`,
+`txs/s`), transaction mix (`txTop`), the leading state mutation classes
+(`stateMutTop`, `stateMutKVTop`), and peer/queue health (`peers`,
+`activePeers`, `inflight`, `buffered`, `requested`, `retries`). The `blocks`,
+`txs`, and `elapsed` values describe the latest reporting window, not the whole
+session.
 
 `Sync progress` is emitted separately on natural wall-clock boundaries during
 active imports. Every `:00/:05/.../:55` it reports the preceding natural five
