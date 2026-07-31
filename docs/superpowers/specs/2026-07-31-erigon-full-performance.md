@@ -751,6 +751,29 @@ pre-execution wall time. This establishes the exact result carrier and
 pre-dispatch boundary needed for the next step; canonical execution remains
 serial and is still the sole source of persisted state.
 
+The first production window pre-executed 307 transfers and admitted 134
+zero-indegree candidates. All 134 matched canonical TransactionInfo, typed/raw
+WriteSet, individual reapplication, and cumulative ordered publication; every
+mismatch, unsupported, and error counter remained zero. Total sampled
+pre-execution wall time was 315 ms, or about 1.03 ms per transfer, while the
+observer ran only once per 64 blocks.
+
+#### P4.16: Frozen worker read-version validation
+
+Retain an owned read set with every pre-execution result before its reusable
+recorder advances to another task. At the end of the sampled block, validate
+ordinary reads against the canonical typed account/path version hierarchy.
+Commutative reads are exempt from ordinary version conflicts only when the
+same result carries an audited commutative WriteSet delta for that path.
+
+The publishability decision also preserves Erigon's previous-sender edge and
+go-tron's conservative unknown/range-read barrier. Compare this independent
+decision with the already captured dependency DAG and expose separate counters
+for read conflicts, invalid deltas, unsupported accesses, sender conflicts,
+barrier conflicts, and DAG agreement. This is still observe-only: it proves the
+result-carried validation boundary before the same predicate is allowed to
+select canonical ordered publication or serial fallback.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

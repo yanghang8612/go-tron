@@ -14,6 +14,35 @@ type unknownTransactionJournalChange struct{}
 func (unknownTransactionJournalChange) revert(map[tcommon.Address]*stateObject, map[tcommon.Address]*types.Witness) {
 }
 
+func TestTransactionAccessRecorderCaptureReadSetSurvivesReset(t *testing.T) {
+	var address tcommon.Address
+	address[0], address[20] = 0x41, 7
+	var recorder TransactionAccessRecorder
+	recorder.Reset(4)
+	recorder.recordAccountKV(address, kvdomains.AccountPermissionAux, []byte("owner"), TransactionAccessRead)
+	commutative := TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: "transaction_fee_pool"}
+	recorder.record(commutative, TransactionAccessCommutativeRead|TransactionAccessCommutativeWrite)
+	recorder.markUnsupported()
+
+	captured := recorder.CaptureReadSet()
+	recorder.Reset(4)
+	if !captured.Unsupported || len(captured.Reads) != 2 {
+		t.Fatalf("captured read set = %+v", captured)
+	}
+	seenKV, seenDelta := false, false
+	for _, read := range captured.Reads {
+		switch {
+		case read.Key.Kind == TransactionAccessAccountKV:
+			seenKV = read.Key.Address == address && read.Key.LogicalKey == "owner" && read.Mode == TransactionAccessRead
+		case read.Key == commutative:
+			seenDelta = read.Mode == TransactionAccessCommutativeRead
+		}
+	}
+	if !seenKV || !seenDelta {
+		t.Fatalf("captured reads lost after reset: %+v", captured.Reads)
+	}
+}
+
 func TestVisitTransactionWritesSinceClassifiesJournal(t *testing.T) {
 	var account, created, witness, contract tcommon.Address
 	account[0], created[0], witness[0], contract[0] = 0x41, 0x41, 0x41, 0x41

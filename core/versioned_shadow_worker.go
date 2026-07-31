@@ -61,6 +61,15 @@ var (
 	discardShadowPreOrderedErrorsCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/ordered_errors", nil)
 	discardShadowPreErrorsCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/errors", nil)
 	discardShadowPreWallNanosCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/wall_nanos", nil)
+	discardShadowReadVersionCandidatesCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/candidates", nil)
+	discardShadowReadVersionPublishableCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/publishable", nil)
+	discardShadowReadVersionConflictsCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/read_conflicts", nil)
+	discardShadowReadVersionUnsupportedCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/unsupported", nil)
+	discardShadowReadVersionDeltaInvalidCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/delta_invalid", nil)
+	discardShadowReadVersionSenderCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/sender_conflicts", nil)
+	discardShadowReadVersionBarrierCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/barrier_conflicts", nil)
+	discardShadowReadVersionDAGMatchesCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/dag_matches", nil)
+	discardShadowReadVersionDAGMismatchesCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/dag_mismatches", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -216,6 +225,7 @@ type discardShadowTaskResult struct {
 	applyMismatch    discardShadowApplyMismatch
 	applyErr         error
 	writes           state.TransactionWriteSet
+	reads            state.TransactionReadSet
 	info             *corepb.TransactionInfo
 	err              error
 }
@@ -249,6 +259,24 @@ type discardShadowPreexecutionStats struct {
 	orderedMismatches int64
 	orderedErrors     int64
 	errors            int64
+	readCandidates    int64
+	readPublishable   int64
+	readConflicts     int64
+	readUnsupported   int64
+	readDeltaInvalid  int64
+	readSender        int64
+	readBarrier       int64
+	readDAGMatches    int64
+	readDAGMismatches int64
+}
+
+type discardShadowReadVersionResult struct {
+	publishable  bool
+	readConflict bool
+	unsupported  bool
+	deltaInvalid bool
+	sender       bool
+	barrier      bool
 }
 
 type discardShadowApplyMismatch uint32
@@ -670,6 +698,49 @@ func (shadow *discardShadowBlock) preexecuteTransfers(cfg discardShadowRunConfig
 	}
 }
 
+// validateBlockStartReadSet applies Erigon's read-version rule to one retained
+// worker result after canonical execution has populated the block-local typed
+// version maps. The worker read block-start state, so any earlier ordinary
+// write to a consumed path invalidates it. Audited commutative reads remain
+// valid only when the worker returned an ordered delta for the same path.
+func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, result discardShadowTaskResult) discardShadowReadVersionResult {
+	decision := discardShadowReadVersionResult{unsupported: result.reads.Unsupported}
+	if versioned == nil || txIndex < 0 || txIndex >= len(versioned.transactionSupported) {
+		decision.unsupported = true
+		return decision
+	}
+	for _, read := range result.reads.Reads {
+		if read.Mode&state.TransactionAccessRead != 0 {
+			if _, conflict := versioned.typedPreviousVersion(read.Key, txIndex); conflict {
+				decision.readConflict = true
+			}
+		}
+		if read.Mode&state.TransactionAccessCommutativeRead != 0 {
+			value, ok := result.writes[read.Key]
+			if !ok || !value.Commutative {
+				decision.deltaInvalid = true
+			}
+		}
+	}
+	for previous := 0; previous < txIndex; previous++ {
+		if !versioned.transactionSupported[previous] {
+			decision.barrier = true
+			break
+		}
+	}
+	if txIndex < len(versioned.transactionHasOwner) && versioned.transactionHasOwner[txIndex] {
+		owner := versioned.transactionOwners[txIndex]
+		for previous := 0; previous < txIndex; previous++ {
+			if previous < len(versioned.transactionHasOwner) && versioned.transactionHasOwner[previous] && versioned.transactionOwners[previous] == owner {
+				decision.sender = true
+				break
+			}
+		}
+	}
+	decision.publishable = !decision.unsupported && !decision.readConflict && !decision.deltaInvalid && !decision.sender && !decision.barrier
+	return decision
+}
+
 // finishTransferPreexecution admits only zero-indegree results: their exact
 // canonical read versions remained at block start. It then compares the full
 // TransactionInfo, typed/raw WriteSet, and isolated applier result. Canonical
@@ -687,6 +758,34 @@ func (shadow *discardShadowBlock) finishTransferPreexecution(pre *discardShadowP
 		writeSetReady := txIndex >= 0 && txIndex < len(versioned.transactionWritesOK) && versioned.transactionWritesOK[txIndex]
 		zeroIndegree := txIndex >= 0 && txIndex < len(versioned.dependencyHeads) && versioned.dependencyHeads[txIndex] < 0
 		supported := txIndex >= 0 && txIndex < len(versioned.transactionSupported) && versioned.transactionSupported[txIndex]
+		if result.err == nil && result.info != nil && result.writeSetErr == nil && result.applyEligible && result.applyErr == nil && result.applyMatch {
+			stats.readCandidates++
+			decision := versioned.validateBlockStartReadSet(txIndex, result)
+			if decision.publishable {
+				stats.readPublishable++
+			}
+			if decision.readConflict {
+				stats.readConflicts++
+			}
+			if decision.unsupported {
+				stats.readUnsupported++
+			}
+			if decision.deltaInvalid {
+				stats.readDeltaInvalid++
+			}
+			if decision.sender {
+				stats.readSender++
+			}
+			if decision.barrier {
+				stats.readBarrier++
+			}
+			dagCandidate := writeSetReady && zeroIndegree && supported
+			if decision.publishable == dagCandidate {
+				stats.readDAGMatches++
+			} else {
+				stats.readDAGMismatches++
+			}
+		}
 		if !writeSetReady || !zeroIndegree || !supported {
 			continue
 		}
@@ -756,6 +855,15 @@ func (shadow *discardShadowBlock) finishTransferPreexecution(pre *discardShadowP
 	discardShadowPreOrderedErrorsCounter.Inc(stats.orderedErrors)
 	discardShadowPreErrorsCounter.Inc(stats.errors)
 	discardShadowPreWallNanosCounter.Inc(pre.wallNanos)
+	discardShadowReadVersionCandidatesCounter.Inc(stats.readCandidates)
+	discardShadowReadVersionPublishableCounter.Inc(stats.readPublishable)
+	discardShadowReadVersionConflictsCounter.Inc(stats.readConflicts)
+	discardShadowReadVersionUnsupportedCounter.Inc(stats.readUnsupported)
+	discardShadowReadVersionDeltaInvalidCounter.Inc(stats.readDeltaInvalid)
+	discardShadowReadVersionSenderCounter.Inc(stats.readSender)
+	discardShadowReadVersionBarrierCounter.Inc(stats.readBarrier)
+	discardShadowReadVersionDAGMatchesCounter.Inc(stats.readDAGMatches)
+	discardShadowReadVersionDAGMismatchesCounter.Inc(stats.readDAGMismatches)
 	return stats
 }
 
@@ -1186,6 +1294,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	worker.state.SetTransactionAccessRecorder(nil)
 	worker.dynProps.SetTransactionAccessRecorder(nil)
 	writes, known, writeSetErr := worker.state.CaptureTransactionWriteSet(journalMark, &worker.recorder, worker.dynProps)
+	reads := worker.recorder.CaptureReadSet()
 	if writeSetErr == nil && !known {
 		writeSetErr = errors.New("unknown worker state write")
 	}
@@ -1257,6 +1366,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		applyMismatch:    applyMismatch,
 		applyErr:         applyErr,
 		writes:           writes,
+		reads:            reads,
 		info:             retainedInfo,
 	}
 }

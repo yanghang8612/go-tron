@@ -212,7 +212,8 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 		preStats.infoMatches != 1 || preStats.writeMatches != 1 || preStats.applyMatches != 1 ||
 		preStats.validated != 1 || preStats.infoMismatches != 0 || preStats.writeMismatches != 0 ||
 		preStats.applyMismatches != 0 || preStats.applyUnsupported != 0 || preStats.orderedCandidates != 1 ||
-		preStats.orderedMatches != 1 || preStats.orderedMismatches != 0 || preStats.orderedErrors != 0 || preStats.errors != 0 {
+		preStats.orderedMatches != 1 || preStats.orderedMismatches != 0 || preStats.orderedErrors != 0 || preStats.errors != 0 ||
+		preStats.readCandidates != 1 || preStats.readPublishable != 1 || preStats.readDAGMatches != 1 || preStats.readDAGMismatches != 0 {
 		t.Fatalf("transfer preexecutor stats = %+v", preStats)
 	}
 	got := worker.execute(0, cfg)
@@ -228,6 +229,65 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 	ordered := (&discardShadowBlock{base: workerState}).verifyOrderedApply([]discardShadowTaskResult{got}, cfg)
 	if ordered.candidates != 1 || ordered.matches != 1 || ordered.mismatches != 0 || ordered.errors != 0 {
 		t.Fatalf("ordered publisher stats = %+v", ordered)
+	}
+}
+
+func TestVersionedShadowValidatesFrozenWorkerReadVersions(t *testing.T) {
+	owner := testProcessorAddr(1)
+	key := state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		Address:      owner,
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	deltaKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "transaction_fee_pool"}
+	base := func() versionedAccessShadow {
+		var versioned versionedAccessShadow
+		versioned.Prepare(2)
+		versioned.transactionSupported[0] = true
+		versioned.transactionSupported[1] = true
+		return versioned
+	}
+
+	clean := base()
+	if decision := clean.validateBlockStartReadSet(1, discardShadowTaskResult{reads: state.TransactionReadSet{
+		Reads: []state.TransactionRead{{Key: key, Mode: state.TransactionAccessRead}},
+	}}); !decision.publishable {
+		t.Fatalf("clean read unexpectedly invalid: %+v", decision)
+	}
+
+	conflicted := base()
+	conflicted.accountFieldVersions[state.TransactionAccountFieldKey{Address: owner, Field: state.TransactionAccountFieldBalance}] = 0
+	if decision := conflicted.validateBlockStartReadSet(1, discardShadowTaskResult{reads: state.TransactionReadSet{
+		Reads: []state.TransactionRead{{Key: key, Mode: state.TransactionAccessRead}},
+	}}); decision.publishable || !decision.readConflict {
+		t.Fatalf("ordinary stale read accepted: %+v", decision)
+	}
+
+	delta := base()
+	delta.versions[deltaKey] = 0
+	validDelta := discardShadowTaskResult{
+		reads:  state.TransactionReadSet{Reads: []state.TransactionRead{{Key: deltaKey, Mode: state.TransactionAccessCommutativeRead}}},
+		writes: state.TransactionWriteSet{deltaKey: {Exists: true, Commutative: true, Value: make([]byte, 8)}},
+	}
+	if decision := delta.validateBlockStartReadSet(1, validDelta); !decision.publishable || decision.readConflict || decision.deltaInvalid {
+		t.Fatalf("ordered delta unexpectedly invalid: %+v", decision)
+	}
+	validDelta.writes = nil
+	if decision := delta.validateBlockStartReadSet(1, validDelta); decision.publishable || !decision.deltaInvalid {
+		t.Fatalf("commutative read without delta accepted: %+v", decision)
+	}
+
+	barrier := base()
+	barrier.transactionSupported[0] = false
+	if decision := barrier.validateBlockStartReadSet(1, discardShadowTaskResult{}); decision.publishable || !decision.barrier {
+		t.Fatalf("unknown predecessor barrier accepted: %+v", decision)
+	}
+
+	sender := base()
+	sender.transactionOwners[0], sender.transactionOwners[1] = owner, owner
+	sender.transactionHasOwner[0], sender.transactionHasOwner[1] = true, true
+	if decision := sender.validateBlockStartReadSet(1, discardShadowTaskResult{}); decision.publishable || !decision.sender {
+		t.Fatalf("same-sender block-start result accepted: %+v", decision)
 	}
 }
 

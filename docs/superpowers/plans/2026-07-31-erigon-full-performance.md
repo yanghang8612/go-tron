@@ -97,6 +97,9 @@
 - [x] Pre-execute Transfer transactions concurrently from block start before
   the serial loop, retain their results, and validate zero-indegree results
   against canonical TransactionInfo, WriteSet, and ordered publication.
+- [x] Freeze each pre-executed Transfer read set and independently validate its
+  typed versions, commutative deltas, sender edge, and unknown-read barrier
+  against the canonical dependency DAG.
 - [ ] Apply typed writes and settlement deltas at ordered publication after
   serial-equivalence fixtures and production samples pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full

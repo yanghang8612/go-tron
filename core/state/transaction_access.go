@@ -121,6 +121,22 @@ const (
 	TransactionAccessCommutativeWrite
 )
 
+// TransactionRead records one logical path consumed by speculative execution.
+// Keys are owned by the source recorder, including LogicalKey strings, so a
+// captured set remains valid after the recorder is reset for another task.
+type TransactionRead struct {
+	Key  TransactionAccessKey
+	Mode TransactionAccessMode
+}
+
+// TransactionReadSet is the block-start read-version carrier returned by a
+// speculative worker. Unsupported marks range/unknown reads that cannot be
+// validated by exact logical-key versions and must fall back to serial replay.
+type TransactionReadSet struct {
+	Reads       []TransactionRead
+	Unsupported bool
+}
+
 // TransactionAccessRecorder is a transaction-scoped, reusable read/write set.
 // Canonical execution installs one recorder on StateDB and DynamicProperties,
 // resets it at the transaction boundary, and removes it before advancing. The
@@ -216,6 +232,25 @@ func (r *TransactionAccessRecorder) Len() int {
 
 func (r *TransactionAccessRecorder) Unsupported() bool {
 	return r != nil && r.unsupported
+}
+
+// CaptureReadSet freezes the exact reads observed by one worker result before
+// its recorder is reused. Ordinary reads participate in version validation;
+// commutative reads are retained so the publisher can audit that their write
+// set carries an ordered delta instead of an absolute block-start value.
+func (r *TransactionAccessRecorder) CaptureReadSet() TransactionReadSet {
+	if r == nil {
+		return TransactionReadSet{}
+	}
+	reads := make([]TransactionRead, 0, r.Len())
+	r.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+		readMode := mode & (TransactionAccessRead | TransactionAccessCommutativeRead)
+		if readMode != 0 {
+			reads = append(reads, TransactionRead{Key: key, Mode: readMode})
+		}
+		return true
+	})
+	return TransactionReadSet{Reads: reads, Unsupported: r.unsupported}
 }
 
 func (r *TransactionAccessRecorder) markUnsupported() {
