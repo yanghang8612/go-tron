@@ -844,6 +844,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	}
 
 	for i, tx := range transactions {
+		if transferPreexecution != nil {
+			transferPreexecution.validateReadVersion(i, tx, &versionedShadow)
+		}
 		domainChangeMark := statedb.DomainChangeJournalMark()
 		if domainChanges != nil {
 			domainChangeMark = domainChanges.JournalMark()

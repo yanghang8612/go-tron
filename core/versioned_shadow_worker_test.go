@@ -207,6 +207,7 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 	versioned.transactionSupported[0] = true
 	versioned.transactionWritesOK[0] = true
 	versioned.transactionWriteSets[0] = canonicalWriteSet
+	pre.validateReadVersion(0, tx, &versioned)
 	preStats := preShadow.finishTransferPreexecution(pre, &versioned, cfg)
 	if preStats.transfers != 1 || preStats.executed != 1 || preStats.candidates != 1 ||
 		preStats.infoMatches != 1 || preStats.writeMatches != 1 || preStats.applyMatches != 1 ||
@@ -249,7 +250,7 @@ func TestVersionedShadowValidatesFrozenWorkerReadVersions(t *testing.T) {
 	}
 
 	clean := base()
-	if decision := clean.validateBlockStartReadSet(1, discardShadowTaskResult{reads: state.TransactionReadSet{
+	if decision := clean.validateBlockStartReadSet(1, nil, discardShadowTaskResult{reads: state.TransactionReadSet{
 		Reads: []state.TransactionRead{{Key: key, Mode: state.TransactionAccessRead}},
 	}}); !decision.publishable {
 		t.Fatalf("clean read unexpectedly invalid: %+v", decision)
@@ -257,7 +258,7 @@ func TestVersionedShadowValidatesFrozenWorkerReadVersions(t *testing.T) {
 
 	conflicted := base()
 	conflicted.accountFieldVersions[state.TransactionAccountFieldKey{Address: owner, Field: state.TransactionAccountFieldBalance}] = 0
-	if decision := conflicted.validateBlockStartReadSet(1, discardShadowTaskResult{reads: state.TransactionReadSet{
+	if decision := conflicted.validateBlockStartReadSet(1, nil, discardShadowTaskResult{reads: state.TransactionReadSet{
 		Reads: []state.TransactionRead{{Key: key, Mode: state.TransactionAccessRead}},
 	}}); decision.publishable || !decision.readConflict {
 		t.Fatalf("ordinary stale read accepted: %+v", decision)
@@ -269,25 +270,55 @@ func TestVersionedShadowValidatesFrozenWorkerReadVersions(t *testing.T) {
 		reads:  state.TransactionReadSet{Reads: []state.TransactionRead{{Key: deltaKey, Mode: state.TransactionAccessCommutativeRead}}},
 		writes: state.TransactionWriteSet{deltaKey: {Exists: true, Commutative: true, Value: make([]byte, 8)}},
 	}
-	if decision := delta.validateBlockStartReadSet(1, validDelta); !decision.publishable || decision.readConflict || decision.deltaInvalid {
+	if decision := delta.validateBlockStartReadSet(1, nil, validDelta); !decision.publishable || decision.readConflict || decision.deltaInvalid {
 		t.Fatalf("ordered delta unexpectedly invalid: %+v", decision)
 	}
 	validDelta.writes = nil
-	if decision := delta.validateBlockStartReadSet(1, validDelta); decision.publishable || !decision.deltaInvalid {
+	if decision := delta.validateBlockStartReadSet(1, nil, validDelta); decision.publishable || !decision.deltaInvalid {
 		t.Fatalf("commutative read without delta accepted: %+v", decision)
 	}
 
 	barrier := base()
-	barrier.transactionSupported[0] = false
-	if decision := barrier.validateBlockStartReadSet(1, discardShadowTaskResult{}); decision.publishable || !decision.barrier {
+	barrier.lastBarrierTx = 0
+	if decision := barrier.validateBlockStartReadSet(1, nil, discardShadowTaskResult{}); decision.publishable || !decision.barrier {
 		t.Fatalf("unknown predecessor barrier accepted: %+v", decision)
 	}
 
 	sender := base()
-	sender.transactionOwners[0], sender.transactionOwners[1] = owner, owner
-	sender.transactionHasOwner[0], sender.transactionHasOwner[1] = true, true
-	if decision := sender.validateBlockStartReadSet(1, discardShadowTaskResult{}); decision.publishable || !decision.sender {
+	sender.lastSenderTx[owner] = 0
+	if decision := sender.validateBlockStartReadSet(1, makeTestTransferTx(1, 2, 1), discardShadowTaskResult{}); decision.publishable || !decision.sender {
 		t.Fatalf("same-sender block-start result accepted: %+v", decision)
+	}
+}
+
+func TestPreexecutionFreezesReadDecisionBeforeLaterWriter(t *testing.T) {
+	owner := testProcessorAddr(1)
+	key := state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		Address:      owner,
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	var versioned versionedAccessShadow
+	versioned.Prepare(3)
+	versioned.accountFieldVersions[state.TransactionAccountFieldKey{Address: owner, Field: state.TransactionAccountFieldBalance}] = 0
+	pre := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{{
+			txIndex: 1,
+			reads: state.TransactionReadSet{Reads: []state.TransactionRead{{
+				Key: key, Mode: state.TransactionAccessRead,
+			}}},
+		}},
+		resultByTx:    []int{-1, 0, -1},
+		readVersions:  make([]discardShadowReadVersionResult, 1),
+		readValidated: make([]bool, 1),
+	}
+	pre.validateReadVersion(1, nil, &versioned)
+	// Reproduce the production failure mode: a later transaction becomes the
+	// latest writer for the same path. The decision for tx 1 must not be
+	// recomputed from this lossy final map.
+	versioned.accountFieldVersions[state.TransactionAccountFieldKey{Address: owner, Field: state.TransactionAccountFieldBalance}] = 2
+	if !pre.readValidated[0] || pre.readVersions[0].publishable || !pre.readVersions[0].readConflict {
+		t.Fatalf("frozen decision lost earlier writer: %+v", pre.readVersions[0])
 	}
 }
 

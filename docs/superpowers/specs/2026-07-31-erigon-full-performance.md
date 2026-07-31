@@ -761,8 +761,9 @@ observer ran only once per 64 blocks.
 #### P4.16: Frozen worker read-version validation
 
 Retain an owned read set with every pre-execution result before its reusable
-recorder advances to another task. At the end of the sampled block, validate
-ordinary reads against the canonical typed account/path version hierarchy.
+recorder advances to another task. Immediately before canonical execution
+reaches that transaction index, validate ordinary reads against the typed
+account/path version hierarchy containing exactly the preceding transactions.
 Commutative reads are exempt from ordinary version conflicts only when the
 same result carries an audited commutative WriteSet delta for that path.
 

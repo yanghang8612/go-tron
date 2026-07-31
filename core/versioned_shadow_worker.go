@@ -238,8 +238,11 @@ type discardShadowOrderedApplyStats struct {
 }
 
 type discardShadowPreexecution struct {
-	results   []discardShadowTaskResult
-	wallNanos int64
+	results       []discardShadowTaskResult
+	resultByTx    []int
+	readVersions  []discardShadowReadVersionResult
+	readValidated []bool
+	wallNanos     int64
 }
 
 type discardShadowPreexecutionStats struct {
@@ -692,18 +695,32 @@ func (shadow *discardShadowBlock) preexecuteTransfers(cfg discardShadowRunConfig
 	for result := range results {
 		retained = append(retained, result)
 	}
+	resultByTx := make([]int, len(cfg.transactions))
+	for txIndex := range resultByTx {
+		resultByTx[txIndex] = -1
+	}
+	for resultIndex, result := range retained {
+		if result.txIndex >= 0 && result.txIndex < len(resultByTx) {
+			resultByTx[result.txIndex] = resultIndex
+		}
+	}
 	return &discardShadowPreexecution{
-		results:   retained,
-		wallNanos: time.Since(started).Nanoseconds(),
+		results:       retained,
+		resultByTx:    resultByTx,
+		readVersions:  make([]discardShadowReadVersionResult, len(retained)),
+		readValidated: make([]bool, len(retained)),
+		wallNanos:     time.Since(started).Nanoseconds(),
 	}
 }
 
 // validateBlockStartReadSet applies Erigon's read-version rule to one retained
-// worker result after canonical execution has populated the block-local typed
-// version maps. The worker read block-start state, so any earlier ordinary
-// write to a consumed path invalidates it. Audited commutative reads remain
-// valid only when the worker returned an ordered delta for the same path.
-func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, result discardShadowTaskResult) discardShadowReadVersionResult {
+// worker result immediately before canonical execution reaches that index.
+// The version maps therefore contain exactly the preceding transactions; a
+// later writer cannot hide an earlier conflict by replacing the map entry.
+// The worker read block-start state, so any earlier ordinary write to a
+// consumed path invalidates it. Audited commutative reads remain valid only
+// when the worker returned an ordered delta for the same path.
+func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, tx *types.Transaction, result discardShadowTaskResult) discardShadowReadVersionResult {
 	decision := discardShadowReadVersionResult{unsupported: result.reads.Unsupported}
 	if versioned == nil || txIndex < 0 || txIndex >= len(versioned.transactionSupported) {
 		decision.unsupported = true
@@ -722,23 +739,30 @@ func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, r
 			}
 		}
 	}
-	for previous := 0; previous < txIndex; previous++ {
-		if !versioned.transactionSupported[previous] {
-			decision.barrier = true
-			break
-		}
-	}
-	if txIndex < len(versioned.transactionHasOwner) && versioned.transactionHasOwner[txIndex] {
-		owner := versioned.transactionOwners[txIndex]
-		for previous := 0; previous < txIndex; previous++ {
-			if previous < len(versioned.transactionHasOwner) && versioned.transactionHasOwner[previous] && versioned.transactionOwners[previous] == owner {
-				decision.sender = true
-				break
+	decision.barrier = versioned.lastBarrierTx >= 0
+	if tx != nil && tx.Contract() != nil {
+		ownerBytes, shielded, err := tx.ContractOwnerAddress()
+		if err == nil && !shielded && len(ownerBytes) == tcommon.AddressLength {
+			owner := tcommon.BytesToAddress(ownerBytes)
+			if owner.ValidPrefix() {
+				_, decision.sender = versioned.lastSenderTx[owner]
 			}
 		}
 	}
 	decision.publishable = !decision.unsupported && !decision.readConflict && !decision.deltaInvalid && !decision.sender && !decision.barrier
 	return decision
+}
+
+func (pre *discardShadowPreexecution) validateReadVersion(txIndex int, tx *types.Transaction, versioned *versionedAccessShadow) {
+	if pre == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
+		return
+	}
+	resultIndex := pre.resultByTx[txIndex]
+	if resultIndex < 0 || resultIndex >= len(pre.results) {
+		return
+	}
+	pre.readVersions[resultIndex] = versioned.validateBlockStartReadSet(txIndex, tx, pre.results[resultIndex])
+	pre.readValidated[resultIndex] = true
 }
 
 // finishTransferPreexecution admits only zero-indegree results: their exact
@@ -753,14 +777,17 @@ func (shadow *discardShadowBlock) finishTransferPreexecution(pre *discardShadowP
 	stats.transfers = int64(len(pre.results))
 	stats.executed = int64(len(pre.results))
 	validatedResults := make([]discardShadowTaskResult, 0, len(pre.results))
-	for _, result := range pre.results {
+	for resultIndex, result := range pre.results {
 		txIndex := result.txIndex
 		writeSetReady := txIndex >= 0 && txIndex < len(versioned.transactionWritesOK) && versioned.transactionWritesOK[txIndex]
 		zeroIndegree := txIndex >= 0 && txIndex < len(versioned.dependencyHeads) && versioned.dependencyHeads[txIndex] < 0
 		supported := txIndex >= 0 && txIndex < len(versioned.transactionSupported) && versioned.transactionSupported[txIndex]
 		if result.err == nil && result.info != nil && result.writeSetErr == nil && result.applyEligible && result.applyErr == nil && result.applyMatch {
 			stats.readCandidates++
-			decision := versioned.validateBlockStartReadSet(txIndex, result)
+			decision := discardShadowReadVersionResult{unsupported: true}
+			if resultIndex < len(pre.readValidated) && pre.readValidated[resultIndex] {
+				decision = pre.readVersions[resultIndex]
+			}
 			if decision.publishable {
 				stats.readPublishable++
 			}
