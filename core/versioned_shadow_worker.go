@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	discardShadowSampleInterval = uint64(64)
-	discardShadowWorkerCount    = 4
+	discardShadowSampleInterval     = uint64(64)
+	discardShadowWorkerCount        = 4
+	discardShadowRetryMaxAttempts   = int64(8)
+	discardShadowRetryMaxExecutions = int64(64)
 )
 
 var (
@@ -88,6 +90,19 @@ var (
 	discardShadowSenderChainBalanceMismatchesCounter = metrics.NewRegisteredCounter("core/versioned_shadow/sender_chain/balance_trace_mismatches", nil)
 	discardShadowSenderChainErrorsCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/sender_chain/errors", nil)
 	discardShadowSenderChainWallNanosCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_chain/wall_nanos", nil)
+	discardShadowRetryBlocksCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/blocks", nil)
+	discardShadowRetryAttemptsCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/attempts", nil)
+	discardShadowRetryExecutedCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/executed", nil)
+	discardShadowRetryCandidatesCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/candidates", nil)
+	discardShadowRetryRecoveredCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/recovered", nil)
+	discardShadowRetryValidatedCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/validated", nil)
+	discardShadowRetryInfoMismatchCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/info_mismatches", nil)
+	discardShadowRetryWriteMismatchCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/write_set_mismatches", nil)
+	discardShadowRetryBalanceMismatchCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/balance_trace_mismatches", nil)
+	discardShadowRetryErrorsCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/errors", nil)
+	discardShadowRetryBudgetSkippedCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/budget_skipped", nil)
+	discardShadowRetryCopyNanosCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/copy_nanos", nil)
+	discardShadowRetryExecutionNanosCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/execution_nanos", nil)
 	parallelTransferEnabledGauge                     = metrics.NewRegisteredGauge("core/parallel_transfer/enabled", nil)
 	parallelTransferBlocksCounter                    = metrics.NewRegisteredCounter("core/parallel_transfer/blocks", nil)
 	parallelTransferPreexecutedCounter               = metrics.NewRegisteredCounter("core/parallel_transfer/preexecuted", nil)
@@ -275,6 +290,8 @@ type discardShadowTaskResult struct {
 	publicNetValid    bool
 	senderPredecessor int
 	senderVersioned   bool
+	settledPrefix     int
+	hasSettledPrefix  bool
 	err               error
 }
 
@@ -291,6 +308,9 @@ type discardShadowPreexecution struct {
 	readVersions  []discardShadowReadVersionResult
 	readValidated []bool
 	published     []bool
+	senderTasks   []discardShadowSenderChainTask
+	senderTaskOK  []bool
+	senderNext    []int
 	groups        int
 	wallNanos     int64
 }
@@ -308,6 +328,34 @@ type discardShadowSenderChainStats struct {
 	writeMismatches    int64
 	balanceMismatches  int64
 	errors             int64
+}
+
+type discardShadowSenderRetryStats struct {
+	attempts          int64
+	executed          int64
+	candidates        int64
+	recovered         int64
+	validated         int64
+	infoMismatches    int64
+	writeMismatches   int64
+	balanceMismatches int64
+	errors            int64
+	budgetSkipped     int64
+	copyNanos         int64
+	executionNanos    int64
+}
+
+// discardShadowSenderRetry holds the newest sampled incarnation for each
+// sender-chain transaction. It never publishes state. At the real canonical
+// boundary it may rebuild a failed suffix from a copy of the now-settled
+// prefix, then freezes the result selected for later serial comparison.
+type discardShadowSenderRetry struct {
+	source     *discardShadowPreexecution
+	results    []discardShadowTaskResult
+	available  []bool
+	selected   []discardShadowTaskResult
+	selectedOK []bool
+	stats      discardShadowSenderRetryStats
 }
 
 type discardShadowPreexecutionStats struct {
@@ -898,6 +946,21 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChains(cfg discardShad
 	if len(chains) == 0 {
 		return nil
 	}
+	senderTasks := make([]discardShadowSenderChainTask, len(cfg.transactions))
+	senderTaskOK := make([]bool, len(cfg.transactions))
+	senderNext := make([]int, len(cfg.transactions))
+	for txIndex := range senderNext {
+		senderNext[txIndex] = -1
+	}
+	for _, chain := range chains {
+		for taskIndex, task := range chain {
+			senderTasks[task.txIndex] = task
+			senderTaskOK[task.txIndex] = true
+			if taskIndex+1 < len(chain) {
+				senderNext[task.txIndex] = chain[taskIndex+1].txIndex
+			}
+		}
+	}
 	started := time.Now()
 	workerCount := min(discardShadowWorkerCount, len(chains))
 	workerStates := make([]*state.StateDB, 0, workerCount)
@@ -990,9 +1053,256 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChains(cfg discardShad
 		readVersions:  make([]discardShadowReadVersionResult, len(retained)),
 		readValidated: make([]bool, len(retained)),
 		published:     make([]bool, len(retained)),
+		senderTasks:   senderTasks,
+		senderTaskOK:  senderTaskOK,
+		senderNext:    senderNext,
 		groups:        len(chains),
 		wallNanos:     time.Since(started).Nanoseconds(),
 	}
+}
+
+func (pre *discardShadowPreexecution) observedResultForTransaction(txIndex int) (*discardShadowTaskResult, discardShadowReadVersionResult, bool) {
+	if pre == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
+		return nil, discardShadowReadVersionResult{}, false
+	}
+	resultIndex := pre.resultByTx[txIndex]
+	if resultIndex < 0 || resultIndex >= len(pre.results) || resultIndex >= len(pre.readValidated) || !pre.readValidated[resultIndex] {
+		return nil, discardShadowReadVersionResult{}, false
+	}
+	return &pre.results[resultIndex], pre.readVersions[resultIndex], true
+}
+
+func newDiscardShadowSenderRetry(source *discardShadowPreexecution, transactionCount int) *discardShadowSenderRetry {
+	if source == nil || transactionCount == 0 || len(source.senderNext) != transactionCount {
+		return nil
+	}
+	hasSuffix := false
+	for _, next := range source.senderNext {
+		if next >= 0 {
+			hasSuffix = true
+			break
+		}
+	}
+	if !hasSuffix {
+		return nil
+	}
+	return &discardShadowSenderRetry{
+		source:     source,
+		results:    make([]discardShadowTaskResult, transactionCount),
+		available:  make([]bool, transactionCount),
+		selected:   make([]discardShadowTaskResult, transactionCount),
+		selectedOK: make([]bool, transactionCount),
+	}
+}
+
+func annotateSenderRetryReadVersions(reads *state.TransactionReadSet, base, forwarded *versionedAccessShadow, txIndex int) {
+	if reads == nil {
+		return
+	}
+	for readIndex := range reads.Reads {
+		read := &reads.Reads[readIndex]
+		if read.Mode&state.TransactionAccessRead == 0 {
+			continue
+		}
+		previous := -1
+		if basePrevious, ok := base.typedPreviousVersion(read.Key, txIndex); ok {
+			previous = basePrevious
+		}
+		if forwardedPrevious, ok := forwarded.typedPreviousVersion(read.Key, txIndex); ok && forwardedPrevious > previous {
+			previous = forwardedPrevious
+		}
+		if previous >= 0 {
+			read.ExpectedWriter = previous
+			read.HasExpectedWriter = true
+		}
+	}
+}
+
+func senderRetryOwnerPredecessor(versioned *versionedAccessShadow, tx *types.Transaction) (int, bool) {
+	if versioned == nil || tx == nil || tx.Contract() == nil {
+		return 0, false
+	}
+	ownerBytes, shielded, err := tx.ContractOwnerAddress()
+	if err != nil || shielded || len(ownerBytes) != tcommon.AddressLength {
+		return 0, false
+	}
+	owner := tcommon.BytesToAddress(ownerBytes)
+	if !owner.ValidPrefix() {
+		return 0, false
+	}
+	previous, ok := versioned.lastSenderTx[owner]
+	return previous, ok
+}
+
+// retryFrom rebuilds the conflicted transaction and its remaining sender
+// suffix from the real canonical prefix. This sampled implementation is
+// synchronous on purpose: it establishes exact incarnation semantics and
+// measures deep-copy cost before a later stage introduces an asynchronous
+// shared-version worker queue.
+func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
+	if retry == nil || retry.source == nil || statedb == nil || dynProps == nil || versioned == nil ||
+		txIndex < 0 || txIndex >= len(retry.source.senderTaskOK) || !retry.source.senderTaskOK[txIndex] {
+		return
+	}
+	retry.stats.attempts++
+	// The new incarnation supersedes every retained result in its suffix. Clear
+	// them before copying/executing so a failed retry cannot expose a stale
+	// descendant from an older incarnation at a later canonical boundary.
+	for current, traversed := txIndex, 0; current >= 0 && current < len(retry.available) && traversed < len(retry.available); traversed++ {
+		retry.available[current] = false
+		retry.selectedOK[current] = false
+		current = retry.source.senderNext[current]
+	}
+	copyStarted := time.Now()
+	retryState, err := statedb.Copy()
+	retry.stats.copyNanos += time.Since(copyStarted).Nanoseconds()
+	if err != nil {
+		retry.stats.errors++
+		return
+	}
+	retryState.SetDynamicProperties(dynProps.Copy())
+	if cfg.captureBalanceTrace {
+		retryState.BeginBalanceTrace(int64(cfg.block.Number()), cfg.block.Hash().Bytes(), cfg.block.Timestamp())
+	}
+	worker := discardShadowWorker{
+		state:     retryState,
+		dynProps:  retryState.DynamicProperties(),
+		db:        discardKVOverlay{parent: cfg.db},
+		forkCache: forks.NewVersionPassCache().BlockScope(),
+	}
+	worker.db.recorder = &worker.recorder
+	retryCfg := cfg
+	retryCfg.canonicalInfos = nil
+	retryCfg.canonicalWriteSets = nil
+	retryCfg.retainInfos = true
+	var forwarded versionedAccessShadow
+	forwarded.Prepare(len(cfg.transactions))
+	executionStarted := time.Now()
+	current := txIndex
+	first := true
+	for current >= 0 && current < len(cfg.transactions) && retry.source.senderTaskOK[current] && retry.stats.executed < discardShadowRetryMaxExecutions {
+		task := retry.source.senderTasks[current]
+		result := worker.execute(current, retryCfg)
+		result.settledPrefix = txIndex - 1
+		result.hasSettledPrefix = true
+		if first {
+			if previous, ok := senderRetryOwnerPredecessor(versioned, cfg.transactions[current]); ok {
+				result.senderPredecessor = previous
+				result.senderVersioned = true
+			}
+		} else {
+			result.senderPredecessor = task.senderPredecessor
+			result.senderVersioned = task.senderVersioned
+		}
+		annotateSenderRetryReadVersions(&result.reads, versioned, &forwarded, current)
+		if preexecutedTransferReady(&result) {
+			if advanceErr := worker.advanceSenderChain(result.writes); advanceErr != nil {
+				result.err = advanceErr
+			}
+		}
+		retry.results[current] = result
+		retry.available[current] = true
+		retry.selectedOK[current] = false
+		retry.stats.executed++
+		if !preexecutedTransferReady(&result) {
+			retry.stats.errors++
+			break
+		}
+		installSenderChainWrites(&forwarded, result.writes, current)
+		first = false
+		current = retry.source.senderNext[current]
+	}
+	retry.stats.executionNanos += time.Since(executionStarted).Nanoseconds()
+}
+
+// observeBoundary validates the newest incarnation against exactly the
+// canonical prefix preceding txIndex. When the existing incarnation is stale
+// and has dependent sender work, it immediately builds a new sampled suffix.
+func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Transaction, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
+	if retry == nil || txIndex < 0 || txIndex >= len(retry.results) {
+		return
+	}
+	_, sourceDecision, sourceAvailable := retry.source.observedResultForTransaction(txIndex)
+	decision := discardShadowReadVersionResult{}
+	resultAvailable := false
+	if retry.available[txIndex] {
+		decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
+		resultAvailable = true
+	}
+	newestPublishable := sourceAvailable && sourceDecision.publishable
+	if resultAvailable {
+		newestPublishable = decision.publishable
+	}
+	if !newestPublishable && txIndex < len(retry.source.senderNext) && retry.source.senderNext[txIndex] >= 0 {
+		if retry.stats.attempts >= discardShadowRetryMaxAttempts || retry.stats.executed >= discardShadowRetryMaxExecutions {
+			retry.stats.budgetSkipped++
+			return
+		}
+		retry.retryFrom(txIndex, statedb, dynProps, versioned, cfg)
+		if retry.available[txIndex] {
+			decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
+			resultAvailable = true
+		}
+	}
+	if !resultAvailable || !decision.publishable {
+		return
+	}
+	retry.selected[txIndex] = retry.results[txIndex]
+	retry.selectedOK[txIndex] = true
+	retry.stats.candidates++
+}
+
+func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, cfg discardShadowRunConfig) discardShadowSenderRetryStats {
+	if retry == nil || versioned == nil || len(cfg.canonicalInfos) != len(cfg.transactions) {
+		return discardShadowSenderRetryStats{}
+	}
+	for txIndex, selected := range retry.selected {
+		if !retry.selectedOK[txIndex] {
+			continue
+		}
+		if txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
+			txIndex >= len(versioned.transactionWriteSets) || (cfg.captureBalanceTrace && txIndex >= len(cfg.canonicalBalanceTraces)) {
+			retry.stats.errors++
+			continue
+		}
+		infoMatch := compareDiscardShadowInfo(selected.info, cfg.canonicalInfos[txIndex]) == 0
+		writeMatch := equalSenderChainWriteSets(selected.writes, versioned.transactionWriteSets[txIndex], selected.publicNetValid)
+		balanceMatch := !cfg.captureBalanceTrace || proto.Equal(selected.balanceTrace, cfg.canonicalBalanceTraces[txIndex])
+		if !infoMatch {
+			retry.stats.infoMismatches++
+		}
+		if !writeMatch {
+			retry.stats.writeMismatches++
+		}
+		if !balanceMatch {
+			retry.stats.balanceMismatches++
+		}
+		if infoMatch && writeMatch && balanceMatch {
+			retry.stats.validated++
+			sourceAccepted := false
+			if txIndex < len(retry.source.resultByTx) {
+				resultIndex := retry.source.resultByTx[txIndex]
+				sourceAccepted = resultIndex >= 0 && resultIndex < len(retry.source.published) && retry.source.published[resultIndex]
+			}
+			if !sourceAccepted {
+				retry.stats.recovered++
+			}
+		}
+	}
+	discardShadowRetryBlocksCounter.Inc(1)
+	discardShadowRetryAttemptsCounter.Inc(retry.stats.attempts)
+	discardShadowRetryExecutedCounter.Inc(retry.stats.executed)
+	discardShadowRetryCandidatesCounter.Inc(retry.stats.candidates)
+	discardShadowRetryRecoveredCounter.Inc(retry.stats.recovered)
+	discardShadowRetryValidatedCounter.Inc(retry.stats.validated)
+	discardShadowRetryInfoMismatchCounter.Inc(retry.stats.infoMismatches)
+	discardShadowRetryWriteMismatchCounter.Inc(retry.stats.writeMismatches)
+	discardShadowRetryBalanceMismatchCounter.Inc(retry.stats.balanceMismatches)
+	discardShadowRetryErrorsCounter.Inc(retry.stats.errors)
+	discardShadowRetryBudgetSkippedCounter.Inc(retry.stats.budgetSkipped)
+	discardShadowRetryCopyNanosCounter.Inc(retry.stats.copyNanos)
+	discardShadowRetryExecutionNanosCounter.Inc(retry.stats.executionNanos)
+	return retry.stats
 }
 
 // validateBlockStartReadSet applies Erigon's read-version rule to one retained
@@ -1008,6 +1318,13 @@ func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, t
 	if versioned == nil || txIndex < 0 || txIndex >= len(versioned.transactionSupported) {
 		decision.unsupported = true
 		return decision
+	}
+	// A retry executed from the immediately preceding settled prefix cannot
+	// have an intervening mutation, so even an unknown/range read is current.
+	// Suffix results still require exact-key coverage because canonical work may
+	// run between the retry snapshot and their publication boundary.
+	if result.hasSettledPrefix && result.settledPrefix == txIndex-1 {
+		decision.unsupported = false
 	}
 	for _, read := range result.reads.Reads {
 		// public_net_usage/public_net_time form one conditional reservation,
@@ -1033,7 +1350,8 @@ func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, t
 			}
 		}
 	}
-	decision.barrier = versioned.lastBarrierTx >= 0
+	decision.barrier = versioned.lastBarrierTx >= 0 &&
+		(!result.hasSettledPrefix || versioned.lastBarrierTx > result.settledPrefix)
 	if tx != nil && tx.Contract() != nil {
 		ownerBytes, shielded, err := tx.ContractOwnerAddress()
 		if err == nil && !shielded && len(ownerBytes) == tcommon.AddressLength {
@@ -1387,7 +1705,13 @@ func (shadow *discardShadowBlock) finishTransferSenderChains(pre *discardShadowP
 	}
 	stats.groups = int64(pre.groups)
 	stats.executed = int64(len(pre.results))
-	for resultIndex, result := range pre.results {
+	accepted := make([]bool, len(pre.results))
+	clear(pre.published)
+	for txIndex, resultIndex := range pre.resultByTx {
+		if resultIndex < 0 || resultIndex >= len(pre.results) {
+			continue
+		}
+		result := pre.results[resultIndex]
 		if result.senderVersioned {
 			stats.forwarded++
 		}
@@ -1403,6 +1727,16 @@ func (shadow *discardShadowBlock) finishTransferSenderChains(pre *discardShadowP
 		if decision.readConflict {
 			stats.readConflicts++
 		}
+		if result.senderVersioned {
+			predecessorResult := -1
+			if result.senderPredecessor >= 0 && result.senderPredecessor < len(pre.resultByTx) {
+				predecessorResult = pre.resultByTx[result.senderPredecessor]
+			}
+			if predecessorResult < 0 || predecessorResult >= len(accepted) || !accepted[predecessorResult] {
+				decision.sender = true
+				decision.publishable = false
+			}
+		}
 		if decision.sender {
 			stats.senderConflicts++
 		}
@@ -1410,7 +1744,6 @@ func (shadow *discardShadowBlock) finishTransferSenderChains(pre *discardShadowP
 			continue
 		}
 		stats.candidates++
-		txIndex := result.txIndex
 		if txIndex < 0 || txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
 			txIndex >= len(versioned.transactionWriteSets) || (cfg.captureBalanceTrace && txIndex >= len(cfg.canonicalBalanceTraces)) {
 			stats.errors++
@@ -1430,6 +1763,8 @@ func (shadow *discardShadowBlock) finishTransferSenderChains(pre *discardShadowP
 		}
 		if infoMatch && writeMatch && balanceMatch {
 			stats.validated++
+			accepted[resultIndex] = true
+			pre.published[resultIndex] = true
 			if result.senderVersioned {
 				stats.forwardedValidated++
 			}

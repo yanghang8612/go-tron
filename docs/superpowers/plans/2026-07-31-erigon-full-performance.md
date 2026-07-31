@@ -119,6 +119,12 @@
   state, retain exact read-source versions, and reject intervening writers.
 - [x] Run the first sender-chain TransactionInfo/WriteSet/BalanceTrace
   production gate and enable canonical publication on non-sampled blocks.
+- [x] Add sampled Erigon-style sender incarnations that rebuild a stale suffix
+  from the settled canonical prefix and retry again after a later conflict.
+- [ ] Measure recovered work versus StateDB copy/execution cost and complete the
+  sender-retry TransactionInfo/WriteSet/BalanceTrace production gate.
+- [ ] Replace sampled synchronous copies with an asynchronous incarnation-
+  priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64
   serial canary over a longer fixed production window.
 - [ ] Run the public-bandwidth reservation production gate and compare

@@ -951,6 +951,36 @@ results with themselves. Dedicated `core/parallel_transfer/sender_chain/`
 counters report pre-executed dependents, version-valid candidates, actual
 publications, and predecessor-fallback cascades so uplift is measured directly.
 
+#### P4.21: Sender-chain incarnation and retry
+
+Erigon does not permanently discard a sender suffix when an optimistic result
+conflicts. Its scheduler increments that transaction's incarnation, puts it on
+the priority retry queue, and validates the replacement against the versioned
+state that has settled since the previous attempt. The first go-tron bridge
+implements the same lifecycle as a sampled, observe-only executor: immediately
+before canonical transaction `N`, a stale sender result is rebuilt from a deep
+copy of the real canonical prefix `0..N-1`, then the remaining same-sender
+suffix is executed serially and retains exact read-writer provenance.
+
+A replacement result is frozen until its own canonical boundary. An
+intervening cross-sender writer invalidates it and, when dependent sender work
+remains, creates another incarnation from the newer prefix. Results executed
+directly on the immediately preceding settled prefix may accept an unknown-read
+barrier because no mutation can exist between their snapshot and validation;
+later suffix members still require complete exact-key version coverage. Every
+selected incarnation is compared with canonical TransactionInfo, typed
+WriteSet, and BalanceTrace, and no retry state is published in this phase.
+
+The synchronous deep copy is deliberate instrumentation, not the final
+scheduler. Metrics under `core/versioned_shadow/sender_retry/` report attempts,
+executions, recovered candidates, full validation, mismatches/errors, copy
+nanoseconds, and execution nanoseconds. The production gate determines whether
+recovered work justifies moving the mechanism onto an asynchronous
+incarnation-priority queue backed by shared versioned state, avoiding a full
+StateDB copy for each retry. To keep this diagnostic from dominating sampled
+blocks, one block is capped at eight copies and 64 retry executions;
+`budget_skipped` records work omitted by that guard.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

@@ -347,6 +347,151 @@ func TestProcessBlockSamplesSenderChainForwarding(t *testing.T) {
 	}
 }
 
+func TestProcessBlockSamplesSenderRetryIncarnation(t *testing.T) {
+	statedb := newTestState(t)
+	for _, id := range []byte{1, 2, 3, 4, 5} {
+		statedb.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+	}
+	statedb.AddBalance(testProcessorAddr(1), 10_000_000)
+	statedb.AddBalance(testProcessorAddr(3), 10_000_000)
+	if _, err := statedb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	transactions := []*types.Transaction{
+		makeTestTransferTx(1, 2, 1_000_000),
+		makeTestTransferTx(3, 1, 2_000_000),
+		makeTestTransferTx(1, 4, 3_000_000),
+		makeTestTransferTx(1, 5, 1_000_000),
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(discardShadowSampleInterval), Timestamp: 3_000,
+		}},
+		Transactions: []*corepb.Transaction{
+			transactions[0].Proto(), transactions[1].Proto(), transactions[2].Proto(), transactions[3].Proto(),
+		},
+	})
+	attemptsBefore := discardShadowRetryAttemptsCounter.Snapshot().Count()
+	executedBefore := discardShadowRetryExecutedCounter.Snapshot().Count()
+	candidatesBefore := discardShadowRetryCandidatesCounter.Snapshot().Count()
+	recoveredBefore := discardShadowRetryRecoveredCounter.Snapshot().Count()
+	validatedBefore := discardShadowRetryValidatedCounter.Snapshot().Count()
+	mismatchBefore := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
+		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +
+		discardShadowRetryBalanceMismatchCounter.Snapshot().Count() +
+		discardShadowRetryErrorsCounter.Snapshot().Count()
+	if _, _, err := processBlockWithOptions(
+		statedb, statedb.DynamicProperties(), block, nil, nil, 0,
+		params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+		nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+		processBlockOptions{parallelTransfers: true},
+	); err != nil {
+		t.Fatalf("process sampled sender retry: %v", err)
+	}
+	if attempts := discardShadowRetryAttemptsCounter.Snapshot().Count() - attemptsBefore; attempts != 1 {
+		t.Fatalf("sender retry attempts = %d, want 1 (executed=%d candidates=%d recovered=%d validated=%d)", attempts,
+			discardShadowRetryExecutedCounter.Snapshot().Count()-executedBefore,
+			discardShadowRetryCandidatesCounter.Snapshot().Count()-candidatesBefore,
+			discardShadowRetryRecoveredCounter.Snapshot().Count()-recoveredBefore,
+			discardShadowRetryValidatedCounter.Snapshot().Count()-validatedBefore)
+	}
+	if executed := discardShadowRetryExecutedCounter.Snapshot().Count() - executedBefore; executed != 2 {
+		t.Fatalf("sender retry executions = %d, want 2", executed)
+	}
+	if candidates := discardShadowRetryCandidatesCounter.Snapshot().Count() - candidatesBefore; candidates != 2 {
+		t.Fatalf("sender retry candidates = %d, want 2", candidates)
+	}
+	if recovered := discardShadowRetryRecoveredCounter.Snapshot().Count() - recoveredBefore; recovered != 2 {
+		t.Fatalf("sender retry recovered = %d, want 2", recovered)
+	}
+	if validated := discardShadowRetryValidatedCounter.Snapshot().Count() - validatedBefore; validated != 2 {
+		t.Fatalf("sender retry validated = %d, want 2", validated)
+	}
+	mismatchAfter := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
+		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +
+		discardShadowRetryBalanceMismatchCounter.Snapshot().Count() +
+		discardShadowRetryErrorsCounter.Snapshot().Count()
+	if mismatches := mismatchAfter - mismatchBefore; mismatches != 0 {
+		t.Fatalf("sender retry mismatches/errors = %d, want 0", mismatches)
+	}
+	if balance := statedb.GetBalance(testProcessorAddr(1)); balance != 7_000_000 {
+		t.Fatalf("owner balance = %d, want 7000000", balance)
+	}
+}
+
+func TestProcessBlockReincarnatesSenderRetryAfterLaterConflict(t *testing.T) {
+	statedb := newTestState(t)
+	for _, id := range []byte{1, 2, 3, 4, 5, 6, 7} {
+		statedb.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+	}
+	statedb.AddBalance(testProcessorAddr(1), 20_000_000)
+	statedb.AddBalance(testProcessorAddr(6), 10_000_000)
+	statedb.AddBalance(testProcessorAddr(7), 10_000_000)
+	if _, err := statedb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	transactions := []*types.Transaction{
+		makeTestTransferTx(1, 2, 1_000_000),
+		makeTestTransferTx(6, 1, 2_000_000),
+		makeTestTransferTx(1, 3, 3_000_000),
+		makeTestTransferTx(7, 1, 2_000_000),
+		makeTestTransferTx(1, 4, 4_000_000),
+		makeTestTransferTx(1, 5, 1_000_000),
+	}
+	transactionProtos := make([]*corepb.Transaction, len(transactions))
+	for index, tx := range transactions {
+		transactionProtos[index] = tx.Proto()
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(discardShadowSampleInterval), Timestamp: 3_000,
+		}},
+		Transactions: transactionProtos,
+	})
+	attemptsBefore := discardShadowRetryAttemptsCounter.Snapshot().Count()
+	executedBefore := discardShadowRetryExecutedCounter.Snapshot().Count()
+	candidatesBefore := discardShadowRetryCandidatesCounter.Snapshot().Count()
+	recoveredBefore := discardShadowRetryRecoveredCounter.Snapshot().Count()
+	validatedBefore := discardShadowRetryValidatedCounter.Snapshot().Count()
+	mismatchBefore := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
+		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +
+		discardShadowRetryBalanceMismatchCounter.Snapshot().Count() +
+		discardShadowRetryErrorsCounter.Snapshot().Count()
+	if _, _, err := processBlockWithOptions(
+		statedb, statedb.DynamicProperties(), block, nil, nil, 0,
+		params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+		nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+		processBlockOptions{parallelTransfers: true},
+	); err != nil {
+		t.Fatalf("process reincarnated sender retry: %v", err)
+	}
+	if attempts := discardShadowRetryAttemptsCounter.Snapshot().Count() - attemptsBefore; attempts != 2 {
+		t.Fatalf("sender retry attempts = %d, want 2", attempts)
+	}
+	if executed := discardShadowRetryExecutedCounter.Snapshot().Count() - executedBefore; executed != 5 {
+		t.Fatalf("sender retry executions = %d, want 5", executed)
+	}
+	if candidates := discardShadowRetryCandidatesCounter.Snapshot().Count() - candidatesBefore; candidates != 3 {
+		t.Fatalf("sender retry candidates = %d, want 3", candidates)
+	}
+	if recovered := discardShadowRetryRecoveredCounter.Snapshot().Count() - recoveredBefore; recovered != 3 {
+		t.Fatalf("sender retry recovered = %d, want 3", recovered)
+	}
+	if validated := discardShadowRetryValidatedCounter.Snapshot().Count() - validatedBefore; validated != 3 {
+		t.Fatalf("sender retry validated = %d, want 3", validated)
+	}
+	mismatchAfter := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
+		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +
+		discardShadowRetryBalanceMismatchCounter.Snapshot().Count() +
+		discardShadowRetryErrorsCounter.Snapshot().Count()
+	if mismatches := mismatchAfter - mismatchBefore; mismatches != 0 {
+		t.Fatalf("sender retry mismatches/errors = %d, want 0", mismatches)
+	}
+	if balance := statedb.GetBalance(testProcessorAddr(1)); balance != 15_000_000 {
+		t.Fatalf("owner balance = %d, want 15000000", balance)
+	}
+}
+
 func TestProcessBlockPublishesVersionedSenderChain(t *testing.T) {
 	base := newTestState(t)
 	for _, id := range []byte{1, 2, 3} {
