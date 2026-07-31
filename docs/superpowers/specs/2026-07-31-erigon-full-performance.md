@@ -704,6 +704,29 @@ post-SELFDESTRUCT reincarnation remain serial fallbacks. This follows Erigon's
 incarnation discipline: creation of generation zero is distinct from mutating
 or reviving an existing account.
 
+The first post-deployment window accepted all 305/305 sampled WriteSets and
+reapplied all 305 exactly, with zero unsupported, mismatch, or apply-error
+counts. TransactionInfo and original worker WriteSet comparisons were also
+305/305 exact. The previously observed full-account rejection set therefore
+consisted of fresh creations in this window, while the state-aware guard still
+keeps replacement and reincarnation out of publication.
+
+#### P4.14: Shared ordered shadow publisher
+
+Per-transaction block-start reapplication proves each publication primitive,
+but not their composition. Retain successful sampled worker WriteSets until
+the block's workers finish, sort them by original transaction index, and apply
+them cumulatively to one isolated block-start publisher. Each application is
+recorded and its resulting WriteSet compared exactly before the next task sees
+that newer baseline. Raw overlay writes are retained across tasks and all
+commutative settlement values are applied as deltas.
+
+Only zero-indegree tasks enter this initial publisher, so ordinary cells are
+disjoint by the observed dependency graph while audited commutative cells may
+overlap. Match, mismatch, and error counters are separate from the individual
+worker counters. The publisher and raw overlay are discarded after the sampled
+block; canonical state and the backing database remain untouched.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

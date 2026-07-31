@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -38,6 +39,10 @@ var (
 	discardShadowWriteSetApplyMatchesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_matches", nil)
 	discardShadowWriteSetApplyMismatchesCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatches", nil)
 	discardShadowWriteSetApplyErrorsCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_errors", nil)
+	discardShadowOrderedApplyCandidatesCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/ordered_publisher/candidates", nil)
+	discardShadowOrderedApplyMatchesCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/ordered_publisher/matches", nil)
+	discardShadowOrderedApplyMismatchesCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/ordered_publisher/mismatches", nil)
+	discardShadowOrderedApplyErrorsCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/ordered_publisher/errors", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -180,6 +185,7 @@ func prepareDiscardShadowBlock(statedb *state.StateDB, dynProps *state.DynamicPr
 }
 
 type discardShadowTaskResult struct {
+	txIndex          int
 	class            discardShadowTransactionClass
 	mismatch         discardShadowMismatch
 	coreMatch        bool
@@ -191,7 +197,15 @@ type discardShadowTaskResult struct {
 	applyMatch       bool
 	applyMismatch    discardShadowApplyMismatch
 	applyErr         error
+	writes           state.TransactionWriteSet
 	err              error
+}
+
+type discardShadowOrderedApplyStats struct {
+	candidates int64
+	matches    int64
+	mismatches int64
+	errors     int64
 }
 
 type discardShadowApplyMismatch uint32
@@ -602,8 +616,10 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 		close(results)
 	}()
 
+	orderedResults := make([]discardShadowTaskResult, 0, len(candidates))
 	var executed, matches, mismatches, coreMatches, coreMismatches, writeSetMatches, writeSetMismatches, writeSetErrors, applyEligible, applyUnsupported, applyMatches, applyMismatches, applyErrors, applyUnsupportedAccount, applyUnsupportedGeneration, applyUnsupportedSelfDestruct, applyUnsupportedField, applyUnsupportedOther, executionErrors int64
 	for result := range results {
+		orderedResults = append(orderedResults, result)
 		executed++
 		switch {
 		case result.err != nil:
@@ -810,6 +826,7 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 	discardShadowLastCandidatesGauge.Update(int64(len(candidates)))
 	discardShadowLastExecutedGauge.Update(executed)
 	discardShadowLastMatchesGauge.Update(matches)
+	shadow.verifyOrderedApply(orderedResults, cfg)
 	return discardShadowRunStats{
 		candidates: int64(len(candidates)),
 		executed:   executed,
@@ -817,6 +834,56 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 		mismatches: mismatches,
 		errors:     executionErrors,
 	}
+}
+
+// verifyOrderedApply accumulates successful worker write sets in original
+// transaction order on the block-start shadow. Unlike each worker's isolated
+// reapply, this exercises a shared publisher baseline, including successive
+// commutative settlement deltas. The publisher is discarded with the sampled
+// block and never reaches canonical state or the backing database.
+func (shadow *discardShadowBlock) verifyOrderedApply(results []discardShadowTaskResult, cfg discardShadowRunConfig) discardShadowOrderedApplyStats {
+	var stats discardShadowOrderedApplyStats
+	if shadow == nil || shadow.base == nil || len(results) == 0 {
+		return stats
+	}
+	sort.Slice(results, func(i, j int) bool { return results[i].txIndex < results[j].txIndex })
+	publisher := shadow.base
+	dynProps := publisher.DynamicProperties()
+	var recorder state.TransactionAccessRecorder
+	raw := discardKVOverlay{parent: cfg.db, recorder: &recorder}
+	for _, result := range results {
+		if result.err != nil || !result.matched || result.writeSetErr != nil || !result.writeSetMatch ||
+			!result.applyEligible || result.applyErr != nil || !result.applyMatch {
+			continue
+		}
+		stats.candidates++
+		recorder.Reset(64)
+		raw.recorder = &recorder
+		journalMark := publisher.DomainChangeJournalMark()
+		if err := publisher.ApplyTransactionWriteSetRecorded(result.writes, dynProps, &raw, &recorder); err != nil {
+			stats.errors++
+			break
+		}
+		publisher.FinalizeTransaction()
+		applied, known, err := publisher.CaptureTransactionWriteSet(journalMark, &recorder, dynProps)
+		switch {
+		case err != nil || !known:
+			stats.errors++
+			break
+		case !state.EqualTransactionWriteSets(applied, result.writes):
+			stats.mismatches++
+			break
+		default:
+			stats.matches++
+			continue
+		}
+		break
+	}
+	discardShadowOrderedApplyCandidatesCounter.Inc(stats.candidates)
+	discardShadowOrderedApplyMatchesCounter.Inc(stats.matches)
+	discardShadowOrderedApplyMismatchesCounter.Inc(stats.mismatches)
+	discardShadowOrderedApplyErrorsCounter.Inc(stats.errors)
+	return stats
 }
 
 type discardShadowWorker struct {
@@ -947,6 +1014,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		worker.db.recorder = &worker.recorder
 	}
 	return discardShadowTaskResult{
+		txIndex:          txIndex,
 		class:            class,
 		mismatch:         mismatch,
 		coreMatch:        coreMismatch == 0,
@@ -958,5 +1026,6 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		applyMatch:       applyMatch,
 		applyMismatch:    applyMismatch,
 		applyErr:         applyErr,
+		writes:           writes,
 	}
 }

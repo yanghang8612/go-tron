@@ -92,6 +92,8 @@
   present creation, before applying its typed AccountKV/code/metadata cells.
 - [x] Reapply eligible sampled worker WriteSets to isolated block-start copies
   and compare the resulting post-state before enabling canonical publication.
+- [x] Accumulate successful sampled WriteSets in transaction order on one
+  shared isolated publisher to validate multi-transaction ordered baselines.
 - [ ] Apply typed writes and settlement deltas at ordered publication after
   serial-equivalence fixtures and production samples pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full

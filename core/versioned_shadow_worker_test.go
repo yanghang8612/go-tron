@@ -192,13 +192,14 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 		dynProps:  workerState.DynamicProperties(),
 		forkCache: forks.NewVersionPassCache().BlockScope(),
 	}
-	got := worker.execute(0, discardShadowRunConfig{
+	cfg := discardShadowRunConfig{
 		block:              block,
 		transactions:       []*types.Transaction{tx},
 		canonicalInfos:     []*corepb.TransactionInfo{canonicalInfo},
 		canonicalWriteSets: []state.TransactionWriteSet{canonicalWriteSet},
 		genesisTimestamp:   0,
-	})
+	}
+	got := worker.execute(0, cfg)
 	if got.err != nil || !got.matched || got.writeSetErr != nil || !got.writeSetMatch || !got.applyEligible || got.applyErr != nil || !got.applyMatch {
 		t.Fatalf("discard worker = info-matched:%v writes-matched:%v apply-eligible:%v apply-matched:%v err:%v write-err:%v apply-err:%v", got.matched, got.writeSetMatch, got.applyEligible, got.applyMatch, got.err, got.writeSetErr, got.applyErr)
 	}
@@ -207,6 +208,10 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 	}
 	if balance := workerState.GetBalance(recipient); balance != 0 {
 		t.Fatalf("discard worker recipient balance = %d, want 0", balance)
+	}
+	ordered := (&discardShadowBlock{base: workerState}).verifyOrderedApply([]discardShadowTaskResult{got}, cfg)
+	if ordered.candidates != 1 || ordered.matches != 1 || ordered.mismatches != 0 || ordered.errors != 0 {
+		t.Fatalf("ordered publisher stats = %+v", ordered)
 	}
 }
 
