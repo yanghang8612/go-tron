@@ -467,6 +467,31 @@ discard-only scheduler that learns dependencies via estimates/retries; narrow
 width means the historical workload itself is serial and worker construction
 would add overhead without useful execution capacity.
 
+The first production DAG sample covered 175,106 transactions in 1,904 blocks.
+It formed 143,881 waves (1.217 transactions per wave), and 51,211 transactions
+(29.25%) belonged to a wave wider than one. Random last-block sampling observed
+a maximum width of 7, with 74 parallel-wave transactions in a 235-transaction
+block. This is enough concurrency to reject a fully serial model, but the
+transaction-count-only four-worker bound is only about 1.28x and treats a
+simple transfer as equal to a VM invocation.
+
+#### P4.7: Cost-weighted dependency waves
+
+Before allocating real workers, time canonical transaction execution between
+access-recorder installation and observation. Aggregate the measured durations
+three ways: their serial sum; the sum of the longest transaction in each DAG
+wave (unlimited workers); and a canonical-order greedy four-worker schedule
+inside each wave. Both parallel estimates retain a conservative barrier between
+waves, so a later dependency-aware scheduler may overlap unrelated adjacent
+waves but cannot obtain less concurrency than this model because of the DAG.
+
+The observer exports cumulative and last-block nanoseconds for all three
+models. Production decides the next implementation step from their ratios,
+not raw wave width: proceed to discard-only workers only when cost-weighted
+four-worker gain justifies worker snapshots, retries, journal comparison, and
+ordered publication. The timing remains observe-only and never affects
+consensus state or transaction results.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

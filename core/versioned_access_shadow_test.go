@@ -288,6 +288,26 @@ func TestVersionedAccessShadowModelsErigonSenderDependency(t *testing.T) {
 	}
 }
 
+func TestEstimateDependencyDAGTiming(t *testing.T) {
+	// Wave 0 has five tasks, so the unlimited-worker cost is its largest task
+	// while the four-worker schedule must place a second task on one lane.
+	// Wave 1 cannot begin until the wave-0 barrier completes.
+	timing := estimateDependencyDAGTiming(
+		[]int{0, 0, 0, 0, 0, 1},
+		[]int64{10, 20, 30, 40, 50, 7},
+		2,
+	)
+	if timing.serialNanos != 157 {
+		t.Fatalf("serial duration = %d, want 157", timing.serialNanos)
+	}
+	if timing.waveNanos != 57 {
+		t.Fatalf("unlimited-worker wave duration = %d, want 57", timing.waveNanos)
+	}
+	if timing.fourWorkerNanos != 67 {
+		t.Fatalf("four-worker wave duration = %d, want 67", timing.fourWorkerNanos)
+	}
+}
+
 func recordVersionedShadowTx(t *testing.T, shadow *versionedAccessShadow, statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, tx *types.Transaction, execute func()) {
 	t.Helper()
 	mark := statedb.DomainChangeJournalMark()

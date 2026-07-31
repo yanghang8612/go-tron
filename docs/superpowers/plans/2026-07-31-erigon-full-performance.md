@@ -73,6 +73,9 @@
 - [x] Build an observe-only dependency-ready DAG from actual typed read/write
   versions, with unknown/range reads as serial barriers, and report attainable
   wave width before allocating speculative workers.
+- [x] Weight dependency-ready waves with measured canonical transaction cost
+  and report unlimited-worker plus four-worker barrier schedules before worker
+  implementation.
 - [ ] Extract normalized settlement writes into explicit per-transaction deltas
   and apply them at ordered publication after serial-equivalence fixtures pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full

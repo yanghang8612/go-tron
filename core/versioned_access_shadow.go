@@ -1,6 +1,8 @@
 package core
 
 import (
+	"time"
+
 	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -60,6 +62,9 @@ var (
 	versionedShadowSenderFrozenResourceConflictCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/frozen_resource", nil)
 	versionedShadowDependencyDAGWavesCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/waves", nil)
 	versionedShadowDependencyDAGParallelTransactionsCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/parallel_transactions", nil)
+	versionedShadowDAGSerialNanosCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/serial_execution_nanos", nil)
+	versionedShadowDAGWaveNanosCounter                        = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/wave_execution_nanos", nil)
+	versionedShadowDAGFourWorkerNanosCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/four_worker_execution_nanos", nil)
 	versionedShadowTypedResolvedCounter                       = metrics.NewRegisteredCounter("core/versioned_shadow/typed/resolved_first_pass", nil)
 	versionedShadowTypedAccountConflictCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/typed/conflict/account", nil)
 	versionedShadowTypedAccountCoarseConflictCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/typed/account_field/conflict/coarse", nil)
@@ -86,6 +91,9 @@ var (
 	versionedShadowLastDependencyDAGWavesGauge                = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/waves", nil)
 	versionedShadowLastDependencyDAGMaxWidthGauge             = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/max_width", nil)
 	versionedShadowLastDependencyDAGParallelTransactionsGauge = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/parallel_transactions", nil)
+	versionedShadowLastDAGSerialNanosGauge                    = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/serial_execution_nanos", nil)
+	versionedShadowLastDAGWaveNanosGauge                      = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/wave_execution_nanos", nil)
+	versionedShadowLastDAGFourWorkerNanosGauge                = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/four_worker_execution_nanos", nil)
 	versionedShadowLastConflictsGauge                         = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/conflicts", nil)
 	versionedShadowLastUnsupportedGauge                       = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/unsupported", nil)
 	versionedShadowLastMaxDependencyDistanceGauge             = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/max_dependency_distance", nil)
@@ -114,6 +122,8 @@ type versionedAccessShadow struct {
 	lastSenderTx         map[tcommon.Address]int
 	dependencyWaves      []int
 	dependencyWaveWidths []int
+	transactionDurations []int64
+	transactionStarted   time.Time
 	dependencyMinWave    int
 	dependencyMaxWave    int
 	stats                versionedAccessShadowStats
@@ -172,6 +182,9 @@ type versionedAccessShadowStats struct {
 	dependencyDAGWaves                   int64
 	dependencyDAGMaxWidth                int64
 	dependencyDAGParallelTransactions    int64
+	dependencyDAGSerialNanos             int64
+	dependencyDAGWaveNanos               int64
+	dependencyDAGFourWorkerNanos         int64
 	typedResolvedFirstPass               int64
 	typedAccountConflicts                int64
 	typedAccountCoarseConflicts          int64
@@ -212,6 +225,7 @@ func (s *versionedAccessShadow) Prepare(transactionCount int) {
 	s.lastSenderTx = make(map[tcommon.Address]int, transactionCount/4+1)
 	s.dependencyWaves = make([]int, transactionCount)
 	s.dependencyWaveWidths = make([]int, 0, transactionCount)
+	s.transactionDurations = make([]int64, transactionCount)
 	s.dependencyMaxWave = -1
 }
 
@@ -254,6 +268,7 @@ func (s *versionedAccessShadow) BeginTransaction(statedb *state.StateDB, dynProp
 	s.recorder.Reset(64)
 	statedb.SetTransactionAccessRecorder(&s.recorder)
 	dynProps.SetTransactionAccessRecorder(&s.recorder)
+	s.transactionStarted = time.Now()
 }
 
 func (s *versionedAccessShadow) detach(statedb *state.StateDB, dynProps *state.DynamicProperties) {
@@ -325,6 +340,9 @@ func (s *versionedAccessShadow) installJournalWrite(key state.TransactionAccessK
 }
 
 func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transaction, statedb *state.StateDB, dynProps *state.DynamicProperties, journalMark int) {
+	if txIndex >= 0 && txIndex < len(s.transactionDurations) && !s.transactionStarted.IsZero() {
+		s.transactionDurations[txIndex] = time.Since(s.transactionStarted).Nanoseconds()
+	}
 	s.detach(statedb, dynProps)
 	s.stats.transactions++
 	owner, hasOwner := s.observeSenderDependency(txIndex, tx)
@@ -751,6 +769,58 @@ func (s *versionedAccessShadow) classify(tx *types.Transaction, firstPassValid, 
 	}
 }
 
+type dependencyDAGTiming struct {
+	serialNanos     int64
+	waveNanos       int64
+	fourWorkerNanos int64
+}
+
+// estimateDependencyDAGTiming applies a conservative wave barrier between DAG
+// levels. waveNanos assumes unlimited workers inside a wave. fourWorkerNanos
+// greedily assigns canonical-order transactions to four lanes inside each
+// wave. A dependency-aware executor may overlap unrelated adjacent waves and
+// beat these estimates, but cannot infer that opportunity from wave width
+// alone.
+func estimateDependencyDAGTiming(waves []int, durations []int64, waveCount int) dependencyDAGTiming {
+	if waveCount <= 0 {
+		return dependencyDAGTiming{}
+	}
+	waveMax := make([]int64, waveCount)
+	waveWorkerLoads := make([][4]int64, waveCount)
+	var timing dependencyDAGTiming
+	for txIndex, duration := range durations {
+		if duration < 0 {
+			duration = 0
+		}
+		timing.serialNanos += duration
+		if txIndex >= len(waves) || waves[txIndex] < 0 || waves[txIndex] >= waveCount {
+			continue
+		}
+		wave := waves[txIndex]
+		if duration > waveMax[wave] {
+			waveMax[wave] = duration
+		}
+		lane := 0
+		for candidate := 1; candidate < len(waveWorkerLoads[wave]); candidate++ {
+			if waveWorkerLoads[wave][candidate] < waveWorkerLoads[wave][lane] {
+				lane = candidate
+			}
+		}
+		waveWorkerLoads[wave][lane] += duration
+	}
+	for wave := range waveMax {
+		timing.waveNanos += waveMax[wave]
+		var fourWorkerWaveNanos int64
+		for _, load := range waveWorkerLoads[wave] {
+			if load > fourWorkerWaveNanos {
+				fourWorkerWaveNanos = load
+			}
+		}
+		timing.fourWorkerNanos += fourWorkerWaveNanos
+	}
+	return timing
+}
+
 func (s *versionedAccessShadow) Finish(statedb *state.StateDB, dynProps *state.DynamicProperties) versionedAccessShadowStats {
 	s.detach(statedb, dynProps)
 	stats := s.stats
@@ -766,6 +836,10 @@ func (s *versionedAccessShadow) Finish(statedb *state.StateDB, dynProps *state.D
 			stats.dependencyDAGParallelTransactions += int64(width)
 		}
 	}
+	timing := estimateDependencyDAGTiming(s.dependencyWaves, s.transactionDurations, len(s.dependencyWaveWidths))
+	stats.dependencyDAGSerialNanos = timing.serialNanos
+	stats.dependencyDAGWaveNanos = timing.waveNanos
+	stats.dependencyDAGFourWorkerNanos = timing.fourWorkerNanos
 	return stats
 }
 
@@ -822,6 +896,9 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowSenderFrozenResourceConflictCounter.Inc(stats.senderFrozenResourceConflicts)
 	versionedShadowDependencyDAGWavesCounter.Inc(stats.dependencyDAGWaves)
 	versionedShadowDependencyDAGParallelTransactionsCounter.Inc(stats.dependencyDAGParallelTransactions)
+	versionedShadowDAGSerialNanosCounter.Inc(stats.dependencyDAGSerialNanos)
+	versionedShadowDAGWaveNanosCounter.Inc(stats.dependencyDAGWaveNanos)
+	versionedShadowDAGFourWorkerNanosCounter.Inc(stats.dependencyDAGFourWorkerNanos)
 	versionedShadowTypedResolvedCounter.Inc(stats.typedResolvedFirstPass)
 	versionedShadowTypedAccountConflictCounter.Inc(stats.typedAccountConflicts)
 	versionedShadowTypedAccountCoarseConflictCounter.Inc(stats.typedAccountCoarseConflicts)
@@ -848,6 +925,9 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowLastDependencyDAGWavesGauge.Update(stats.dependencyDAGWaves)
 	versionedShadowLastDependencyDAGMaxWidthGauge.Update(stats.dependencyDAGMaxWidth)
 	versionedShadowLastDependencyDAGParallelTransactionsGauge.Update(stats.dependencyDAGParallelTransactions)
+	versionedShadowLastDAGSerialNanosGauge.Update(stats.dependencyDAGSerialNanos)
+	versionedShadowLastDAGWaveNanosGauge.Update(stats.dependencyDAGWaveNanos)
+	versionedShadowLastDAGFourWorkerNanosGauge.Update(stats.dependencyDAGFourWorkerNanos)
 	versionedShadowLastConflictsGauge.Update(stats.conflicts)
 	versionedShadowLastUnsupportedGauge.Update(stats.unsupported)
 	versionedShadowLastMaxDependencyDistanceGauge.Update(stats.maxDependencyDistance)
