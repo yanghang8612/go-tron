@@ -73,6 +73,17 @@ var (
 	discardShadowReadVersionBarrierCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/barrier_conflicts", nil)
 	discardShadowReadVersionDAGMatchesCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/dag_matches", nil)
 	discardShadowReadVersionDAGMismatchesCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/dag_mismatches", nil)
+	parallelTransferEnabledGauge                     = metrics.NewRegisteredGauge("core/parallel_transfer/enabled", nil)
+	parallelTransferBlocksCounter                    = metrics.NewRegisteredCounter("core/parallel_transfer/blocks", nil)
+	parallelTransferPreexecutedCounter               = metrics.NewRegisteredCounter("core/parallel_transfer/preexecuted", nil)
+	parallelTransferCandidatesCounter                = metrics.NewRegisteredCounter("core/parallel_transfer/candidates", nil)
+	parallelTransferPublishedCounter                 = metrics.NewRegisteredCounter("core/parallel_transfer/published", nil)
+	parallelTransferConflictFallbackCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/fallback/conflict", nil)
+	parallelTransferUnavailableFallbackCounter       = metrics.NewRegisteredCounter("core/parallel_transfer/fallback/unavailable", nil)
+	parallelTransferPreflightFallbackCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/fallback/preflight", nil)
+	parallelTransferErrorsCounter                    = metrics.NewRegisteredCounter("core/parallel_transfer/errors", nil)
+	parallelTransferPreexecutionNanosCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/preexecution_nanos", nil)
+	parallelTransferPublicationNanosCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/publication_nanos", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -198,10 +209,16 @@ func (db *discardKVOverlay) Delete(key []byte) error {
 type discardShadowBlock struct {
 	base      *state.StateDB
 	copyNanos int64
+	sampled   bool
 }
 
 func prepareDiscardShadowBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blockNum uint64) *discardShadowBlock {
-	if statedb == nil || dynProps == nil || blockNum%discardShadowSampleInterval != 0 {
+	return prepareTransferExecutionBlock(statedb, dynProps, blockNum, false)
+}
+
+func prepareTransferExecutionBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blockNum uint64, force bool) *discardShadowBlock {
+	sampled := blockNum%discardShadowSampleInterval == 0
+	if statedb == nil || dynProps == nil || (!sampled && !force) {
 		return nil
 	}
 	started := time.Now()
@@ -211,7 +228,7 @@ func prepareDiscardShadowBlock(statedb *state.StateDB, dynProps *state.DynamicPr
 		return nil
 	}
 	base.SetDynamicProperties(dynProps.Copy())
-	return &discardShadowBlock{base: base, copyNanos: time.Since(started).Nanoseconds()}
+	return &discardShadowBlock{base: base, copyNanos: time.Since(started).Nanoseconds(), sampled: sampled}
 }
 
 type discardShadowTaskResult struct {
@@ -777,6 +794,37 @@ func (pre *discardShadowPreexecution) validateReadVersion(txIndex int, tx *types
 	}
 	pre.readVersions[resultIndex] = versioned.validateBlockStartReadSet(txIndex, tx, pre.results[resultIndex])
 	pre.readValidated[resultIndex] = true
+}
+
+func (pre *discardShadowPreexecution) resultForTransaction(txIndex int) (*discardShadowTaskResult, discardShadowReadVersionResult, bool) {
+	if pre == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
+		return nil, discardShadowReadVersionResult{}, false
+	}
+	resultIndex := pre.resultByTx[txIndex]
+	if resultIndex < 0 || resultIndex >= len(pre.results) || resultIndex >= len(pre.readValidated) || !pre.readValidated[resultIndex] {
+		return nil, discardShadowReadVersionResult{}, false
+	}
+	return &pre.results[resultIndex], pre.readVersions[resultIndex], true
+}
+
+func preexecutedTransferReady(result *discardShadowTaskResult) bool {
+	if result == nil || result.err != nil || result.info == nil || result.writeSetErr != nil ||
+		!result.applyEligible || result.applyErr != nil || !result.applyMatch {
+		return false
+	}
+	receipt := result.info.GetReceipt()
+	return receipt == nil || (receipt.GetEnergyUsage() == 0 && receipt.GetEnergyFee() == 0 &&
+		receipt.GetOriginEnergyUsage() == 0 && receipt.GetEnergyUsageTotal() == 0 && receipt.GetEnergyPenaltyTotal() == 0)
+}
+
+func transactionWriteSetChangesDynamic(writes state.TransactionWriteSet) bool {
+	for key := range writes {
+		switch key.Kind {
+		case state.TransactionAccessDynamicInt, state.TransactionAccessDynamicString, state.TransactionAccessDynamicHash:
+			return true
+		}
+	}
+	return false
 }
 
 // finishTransferPreexecution admits only zero-indegree results: their exact

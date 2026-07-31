@@ -102,12 +102,17 @@
   against the canonical dependency DAG.
 - [x] Retain and compare java-compatible per-transaction BalanceTrace operation
   order before allowing typed WriteSets to replace canonical execution.
-- [ ] Apply typed writes and settlement deltas at ordered publication after
+- [x] Apply typed writes and settlement deltas at ordered publication after
   serial-equivalence fixtures and production samples pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full
   journals plus TransactionInfo with the serial reference.
-- [ ] Implement a narrow disjoint-transfer speculative executor.
-- [ ] Replay conflicts serially and publish only in original transaction order.
+- [x] Implement an opt-in narrow Transfer speculative executor with full
+  TransactionInfo, WriteSet, and BalanceTrace result carriers.
+- [x] Replay conflicts serially and publish only in original transaction order.
+- [ ] Reach the BalanceTrace production sample gate, enable
+  `--exec.parallel-transfers`, and compare canonical throughput/state metrics.
+- [ ] Normalize the block-scoped public-bandwidth recovered baseline and usage
+  increments so independent free-bandwidth transfers can publish together.
 - [ ] Expand eligibility by actuator family using java-tron fixtures and fixed
   mainnet replay windows.
 

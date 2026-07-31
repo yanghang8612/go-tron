@@ -253,6 +253,21 @@ func (r *TransactionAccessRecorder) CaptureReadSet() TransactionReadSet {
 	return TransactionReadSet{Reads: reads, Unsupported: r.unsupported}
 }
 
+// RestoreReadSet installs a frozen worker read set into the recorder used for
+// canonical ordered publication. The caller resets the recorder first; writes
+// produced by the typed applier are then added to the same transaction view.
+func (r *TransactionAccessRecorder) RestoreReadSet(reads TransactionReadSet) {
+	if r == nil {
+		return
+	}
+	if reads.Unsupported {
+		r.unsupported = true
+	}
+	for _, read := range reads.Reads {
+		r.record(read.Key, read.Mode&(TransactionAccessRead|TransactionAccessCommutativeRead))
+	}
+}
+
 func (r *TransactionAccessRecorder) markUnsupported() {
 	if r != nil {
 		r.unsupported = true

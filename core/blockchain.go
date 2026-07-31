@@ -273,13 +273,14 @@ type BlockChain struct {
 	//
 	// With asyncCommit false (the default) the guard in applyBlockWithPlan is not
 	// taken and the synchronous commit path runs unchanged — byte-identical.
-	asyncCommit    bool
-	commitDepth    int // resolved at NewBlockChain (GTRON_ASYNC_COMMIT_DEPTH), ≥2
-	commitQueue    chan *commitJob
-	commitPending  *flushBarrier
-	commitWorkerWg sync.WaitGroup
-	commitClosed   bool
-	commitErr      atomic.Pointer[error]
+	asyncCommit       bool
+	parallelTransfers bool
+	commitDepth       int // resolved at NewBlockChain (GTRON_ASYNC_COMMIT_DEPTH), ≥2
+	commitQueue       chan *commitJob
+	commitPending     *flushBarrier
+	commitWorkerWg    sync.WaitGroup
+	commitClosed      bool
+	commitErr         atomic.Pointer[error]
 	// txInfoBatches survives individual InsertBlocks/range executors. Receipt
 	// slots own reusable VM result arenas and log shells, so scoping this pool
 	// to a short sync batch would discard their warmed high-water storage at
@@ -303,6 +304,19 @@ type BlockChain struct {
 // state-machine fixtures) simply omit the call.
 func (bc *BlockChain) SetEngine(eng consensus.Engine) {
 	bc.engine = eng
+}
+
+// SetParallelTransferExecution enables Erigon-style block-start pre-execution,
+// typed read-version validation, ordered WriteSet publication, and serial
+// fallback for plain TransferContract transactions. It is an operational
+// execution strategy and never changes consensus or wire configuration.
+func (bc *BlockChain) SetParallelTransferExecution(enabled bool) {
+	bc.parallelTransfers = enabled
+	if enabled {
+		parallelTransferEnabledGauge.Update(1)
+	} else {
+		parallelTransferEnabledGauge.Update(0)
+	}
 }
 
 // headerSigPrewarmer returns the consensus engine as a headerSignaturePrewarmer
@@ -1333,9 +1347,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	if accountStateRootEnabled {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil)
+		txInfos, javaAccountStateRoot, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers})
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil)
+		txInfos, _, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers})
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)

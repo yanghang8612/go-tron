@@ -41,6 +41,13 @@ func TestTransactionAccessRecorderCaptureReadSetSurvivesReset(t *testing.T) {
 	if !seenKV || !seenDelta {
 		t.Fatalf("captured reads lost after reset: %+v", captured.Reads)
 	}
+	var restored TransactionAccessRecorder
+	restored.Reset(4)
+	restored.RestoreReadSet(captured)
+	roundTrip := restored.CaptureReadSet()
+	if !roundTrip.Unsupported || len(roundTrip.Reads) != len(captured.Reads) {
+		t.Fatalf("restored read set = %+v", roundTrip)
+	}
 }
 
 func TestVisitTransactionWritesSinceClassifiesJournal(t *testing.T) {

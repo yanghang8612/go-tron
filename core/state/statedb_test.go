@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 func newTestStateDB(t testing.TB) *StateDB {
@@ -181,6 +182,30 @@ func TestStateDBBalanceTraceDeleteAccountFinalBalance(t *testing.T) {
 	}
 	if got := balances[addr]; got != 0 {
 		t.Fatalf("deleted account final balance = %d, want 0", got)
+	}
+}
+
+func TestStateDBAppendBalanceTraceTransactionOwnsTrace(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(5)
+	trace := &contractpb.TransactionBalanceTrace{
+		TransactionIdentifier: []byte{0x05},
+		Type:                  "TransferContract",
+		Status:                "SUCCESS",
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			OperationIdentifier: 0,
+			Address:             addr.Bytes(),
+			Amount:              7,
+		}},
+	}
+	sdb.BeginBalanceTrace(9, []byte{0xcc}, 3000)
+	sdb.AppendBalanceTraceTransaction(trace)
+	trace.Operation[0].Amount = 99
+
+	blockTrace, _ := sdb.FinishBalanceTrace()
+	transactions := blockTrace.GetTransactionBalanceTrace()
+	if len(transactions) != 1 || len(transactions[0].GetOperation()) != 1 || transactions[0].GetOperation()[0].GetAmount() != 7 {
+		t.Fatalf("appended trace = %+v", transactions)
 	}
 }
 

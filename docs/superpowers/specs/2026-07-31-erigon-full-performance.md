@@ -797,6 +797,36 @@ capture prevents them from accidentally inheriting the preceding transaction's
 trace. A pre-executed result is not eligible for the next canonical stage when
 its balance trace differs, even if its post-state and receipt match.
 
+The first production window reached 202/202 exact BalanceTrace comparisons
+with zero trace mismatches. Read-version/DAG disagreement, ordered-publication
+mismatch, and worker execution errors also remained zero in the same window.
+
+#### P4.18: Opt-in canonical Transfer publication
+
+Add `--exec.parallel-transfers` (or `GTRON_EXEC_PARALLEL_TRANSFERS=1`), disabled
+by default. When enabled on the canonical block-import path, pre-execute plain
+Transfer contracts from block start on four workers. Immediately before each
+transaction index, publish only a result whose worker execution, typed/raw
+WriteSet reapplication, zero-energy receipt, frozen read versions,
+previous-sender edge, unknown-read barrier, and current-state applier preflight
+all pass. Apply typed post-images and commutative deltas to canonical StateDB in
+original block order, restore the worker read set to the live version tracker,
+and append the owned BalanceTrace. Any unavailable, stale, or newly
+inapplicable result runs through the existing serial path.
+
+The option also exposes pre-executed, candidate, published, conflict fallback,
+unavailable fallback, preflight fallback, error, and wall-time counters under
+`core/parallel_transfer/`. It does not affect public ProcessBlock/tracing paths
+or nodes that omit the flag. Production deployment remains gated on the P4.17
+BalanceTrace sample; merging this stage alone therefore leaves the service on
+the proven serial canonical path.
+
+The current typed graph deliberately treats `public_net_usage` as an ordinary
+read/write path. Multiple free-bandwidth transfers in one block consequently
+fall back after the first publication even when their accounts are disjoint.
+The next breadth step is to model the within-block recovered public-bandwidth
+baseline plus ordered usage increments without weakening the limit check.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

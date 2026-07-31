@@ -199,6 +199,24 @@ func (s *StateDB) CopyLastBalanceTraceTransaction(txID []byte) *contractpb.Trans
 	return proto.Clone(last).(*contractpb.TransactionBalanceTrace)
 }
 
+// AppendBalanceTraceTransaction publishes an already validated worker trace in
+// canonical order. The clone transfers independent ownership to the block
+// recorder; nil represents the java-compatible absence of a trace for a
+// transaction with no balance operations.
+func (s *StateDB) AppendBalanceTraceTransaction(trace *contractpb.TransactionBalanceTrace) {
+	if s == nil || s.balanceTrace == nil || trace == nil {
+		return
+	}
+	owned := proto.Clone(trace).(*contractpb.TransactionBalanceTrace)
+	s.balanceTrace.txs = append(s.balanceTrace.txs, owned)
+	for _, operation := range owned.Operation {
+		if operation == nil || len(operation.Address) != tcommon.AddressLength {
+			continue
+		}
+		s.balanceTrace.touch(tcommon.BytesToAddress(operation.Address))
+	}
+}
+
 // FinishBalanceTrace returns the per-block operation trace plus final balances
 // for every account touched during the block, then disables capture.
 func (s *StateDB) FinishBalanceTrace() (*contractpb.BlockBalanceTrace, map[tcommon.Address]int64) {

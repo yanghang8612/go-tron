@@ -325,6 +325,11 @@ var (
 		Name:  "sync.async-commit",
 		Usage: "Pipeline staged-sync state commits",
 	}
+	execParallelTransfersFlag = &cli.BoolFlag{
+		Name:    "exec.parallel-transfers",
+		Usage:   "Pre-execute plain transfers, validate typed read versions, publish in block order, and replay conflicts serially",
+		EnvVars: []string{"GTRON_EXEC_PARALLEL_TRANSFERS"},
+	}
 	syncStopAtFlag = &cli.Uint64Flag{
 		Name:  "sync.stop-at",
 		Usage: "Pause block sync after importing this height (inclusive), for database parity audits",
@@ -402,6 +407,7 @@ var app = &cli.App{
 		syncETLBufferMiBFlag,
 		syncETLBatchMiBFlag,
 		syncAsyncCommitFlag,
+		execParallelTransfersFlag,
 		syncStopAtFlag,
 	},
 	Before: func(ctx *cli.Context) error {
@@ -648,6 +654,10 @@ func gtron(ctx *cli.Context) error {
 		return fmt.Errorf("create blockchain: %w", err)
 	}
 	bc.SetCommitmentBranchCacheSize(commitmentCacheMiB * 1024 * 1024)
+	if ctx.Bool(execParallelTransfersFlag.Name) {
+		bc.SetParallelTransferExecution(true)
+		log.Info("Parallel Transfer execution enabled", "workers", 4)
+	}
 	if commitmentCacheMiB > 0 {
 		log.Info("Commitment and flat-latest base-read cache enabled", "cacheMiB", commitmentCacheMiB)
 	} else {

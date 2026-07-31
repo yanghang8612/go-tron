@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -757,7 +758,15 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 	return values[0]
 }
 
+type processBlockOptions struct {
+	parallelTransfers bool
+}
+
 func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, collectTxInfos bool, traceTxIndex int, traceTracer vm.Tracer, traceForTxOpt ...func(index int, tx *types.Transaction) vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+	return processBlockWithOptions(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, genesisHash, parentAccountStateRoot, standbyPaySet, domainChanges, forkPassCache, txInfoBatch, collectTxInfos, traceTxIndex, traceTracer, processBlockOptions{}, traceForTxOpt...)
+}
+
+func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, collectTxInfos bool, traceTxIndex int, traceTracer vm.Tracer, options processBlockOptions, traceForTxOpt ...func(index int, tx *types.Transaction) vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
 	// Fork stats and prevBlockTime are immutable throughout this block. Share
 	// permanently-passed versions with the chain cache, but keep pending/false
 	// results in a disposable block view so per-tx gates read each version only
@@ -796,7 +805,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	accountStateMark := statedb.JournalMark()
 	var txScratch applyTransactionScratch
 	transactions := block.Transactions()
-	shadowEnabled := txInfoBatch != nil && validateEnvelope
+	shadowEnabled := txInfoBatch != nil && (validateEnvelope || options.parallelTransfers)
 	var transferShadow speculativeTransferShadow
 	var versionedShadow versionedAccessShadow
 	if shadowEnabled {
@@ -827,9 +836,11 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	var discardCfg discardShadowRunConfig
 	var transferPreexecution *discardShadowPreexecution
 	if shadowEnabled && collectTxInfos {
-		discardShadow = prepareDiscardShadowBlock(statedb, dynProps, block.Number())
+		discardShadow = prepareTransferExecutionBlock(statedb, dynProps, block.Number(), options.parallelTransfers)
 		if discardShadow != nil {
-			versionedShadow.EnableWriteSetCapture(len(transactions))
+			if discardShadow.sampled {
+				versionedShadow.EnableWriteSetCapture(len(transactions))
+			}
 			discardCfg = discardShadowRunConfig{
 				block:                   block,
 				db:                      db,
@@ -841,11 +852,34 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 				transactions:            transactions,
 				captureBalanceTrace:     domainChanges != nil,
 			}
-			if discardCfg.captureBalanceTrace {
+			if discardShadow.sampled && discardCfg.captureBalanceTrace {
 				discardCfg.canonicalBalanceTraces = make([]*contractpb.TransactionBalanceTrace, len(transactions))
 			}
 			transferPreexecution = discardShadow.preexecuteTransfers(discardCfg)
+			if options.parallelTransfers {
+				parallelTransferBlocksCounter.Inc(1)
+				if transferPreexecution != nil {
+					parallelTransferPreexecutedCounter.Inc(int64(len(transferPreexecution.results)))
+					parallelTransferPreexecutionNanosCounter.Inc(transferPreexecution.wallNanos)
+				}
+			}
 		}
+	}
+	flushDomainChanges := func(txIndex int, mark int) error {
+		if domainChanges != nil {
+			if err := domainChanges.FlushOrdinal(mark, uint64(txIndex)); err != nil {
+				return fmt.Errorf("tx %d domain changes: %w", txIndex, err)
+			}
+			return nil
+		}
+		txNum, err := statedb.DomainChangeTxNumAtOrdinal(uint64(txIndex))
+		if err != nil {
+			return fmt.Errorf("tx %d state txNum: %w", txIndex, err)
+		}
+		if err := statedb.FlushDomainChangesSince(mark, txNum); err != nil {
+			return fmt.Errorf("tx %d domain changes: %w", txIndex, err)
+		}
+		return nil
 	}
 
 	for i, tx := range transactions {
@@ -862,6 +896,46 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		if dynProps.ConsensusLogicOptimization() {
 			if err := ValidateTxRetCount(tx); err != nil {
 				return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
+			}
+		}
+		if options.parallelTransfers {
+			preResult, readVersion, found := transferPreexecution.resultForTransaction(i)
+			switch {
+			case !found:
+			case !preexecutedTransferReady(preResult):
+				parallelTransferUnavailableFallbackCounter.Inc(1)
+			case !readVersion.publishable:
+				parallelTransferConflictFallbackCounter.Inc(1)
+			default:
+				parallelTransferCandidatesCounter.Inc(1)
+				if err := statedb.ValidateTransactionWriteSetApply(preResult.writes, dynProps, transactionDB); err != nil {
+					parallelTransferPreflightFallbackCounter.Inc(1)
+					break
+				}
+				publishedStarted := time.Now()
+				versionedShadow.recorder.RestoreReadSet(preResult.reads)
+				if err := statedb.ApplyTransactionWriteSetRecorded(preResult.writes, dynProps, transactionDB, &versionedShadow.recorder); err != nil {
+					parallelTransferErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed transfer: %w", i, err)
+				}
+				statedb.FinalizeTransaction()
+				statedb.AppendBalanceTraceTransaction(preResult.balanceTrace)
+				if collectTxInfos {
+					txInfos[i] = preResult.info
+				}
+				txHash := tx.Hash()
+				if discardShadow != nil && discardShadow.sampled && discardCfg.captureBalanceTrace {
+					discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
+				}
+				versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
+				transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(preResult.writes))
+				if err := flushDomainChanges(i, domainChangeMark); err != nil {
+					parallelTransferErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, err
+				}
+				parallelTransferPublishedCounter.Inc(1)
+				parallelTransferPublicationNanosCounter.Inc(time.Since(publishedStarted).Nanoseconds())
+				continue
 			}
 		}
 		// validate=true: replay calls actuator.Validate (P0-2a). Every
@@ -908,31 +982,21 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		result.Logs = nil
 		statedb.FinalizeTransaction()
 		statedb.EndBalanceTraceTransaction(balanceTraceStatus)
-		if discardShadow != nil && discardCfg.captureBalanceTrace {
+		if discardShadow != nil && discardShadow.sampled && discardCfg.captureBalanceTrace {
 			discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
 		}
 		if shadowEnabled {
 			versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
 			transferShadow.Observe(tx, statedb, domainChangeMark, txScratch.dynamicPropertiesChanged)
 		}
-		if domainChanges != nil {
-			if err := domainChanges.FlushOrdinal(domainChangeMark, uint64(i)); err != nil {
-				return nil, tcommon.Hash{}, fmt.Errorf("tx %d domain changes: %w", i, err)
-			}
-		} else {
-			txNum, err := statedb.DomainChangeTxNumAtOrdinal(uint64(i))
-			if err != nil {
-				return nil, tcommon.Hash{}, fmt.Errorf("tx %d state txNum: %w", i, err)
-			}
-			if err := statedb.FlushDomainChangesSince(domainChangeMark, txNum); err != nil {
-				return nil, tcommon.Hash{}, fmt.Errorf("tx %d domain changes: %w", i, err)
-			}
+		if err := flushDomainChanges(i, domainChangeMark); err != nil {
+			return nil, tcommon.Hash{}, err
 		}
 
 		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result, forkPassCache)
 	}
 
-	if discardShadow != nil {
+	if discardShadow != nil && discardShadow.sampled {
 		discardCfg.canonicalInfos = txInfos
 		_ = discardShadow.finishTransferPreexecution(transferPreexecution, &versionedShadow, discardCfg)
 		_ = discardShadow.run(&versionedShadow, discardCfg)
