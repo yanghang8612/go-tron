@@ -775,6 +775,28 @@ barrier conflicts, and DAG agreement. This is still observe-only: it proves the
 result-carried validation boundary before the same predicate is allowed to
 select canonical ordered publication or serial fallback.
 
+The first implementation attempted to reconstruct an intermediate decision
+from the block-final latest-writer map. Production caught two false accepts in
+105 candidates because a later writer can replace the earlier writer that made
+an intermediate read stale. Moving validation to the real publication
+boundary fixed the information loss. The corrected window reached 505/505 DAG
+agreements, including 131 publishable results, with zero invalid deltas,
+unsupported accesses, ordered mismatches, or execution errors.
+
+#### P4.17: Balance-history result carrier
+
+State and TransactionInfo equality are not sufficient when history capture is
+enabled. A typed WriteSet contains each account's final balance but loses the
+ordered sequence of balance operations that java-tron's BlockBalanceTrace API
+persists. Initialize an isolated trace recorder on each sampled worker, retain
+an owned copy of the completed transaction trace, and compare its identifiers,
+status, operation order, addresses, and signed amounts with canonical history.
+
+Transactions with no balance operations carry a nil trace; identifier-aware
+capture prevents them from accidentally inheriting the preceding transaction's
+trace. A pre-executed result is not eligible for the next canonical stage when
+its balance trace differs, even if its post-state and receipt match.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 func TestCompareDiscardShadowInfoSplitsEnergyFields(t *testing.T) {
@@ -153,6 +154,8 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 
 	var accessRecorder state.TransactionAccessRecorder
 	accessRecorder.Reset(16)
+	canonical.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
+	canonical.BeginBalanceTraceTransaction(tx.Hash().Bytes(), tx.ContractType().String())
 	canonical.SetTransactionAccessRecorder(&accessRecorder)
 	canonical.DynamicProperties().SetTransactionAccessRecorder(&accessRecorder)
 	journalMark := canonical.DomainChangeJournalMark()
@@ -182,6 +185,8 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 	canonical.SetTransactionAccessRecorder(nil)
 	canonical.DynamicProperties().SetTransactionAccessRecorder(nil)
 	canonical.FinalizeTransaction()
+	canonical.EndBalanceTraceTransaction(balanceTraceTransactionStatus(result))
+	canonicalBalanceTrace := canonical.CopyLastBalanceTraceTransaction(tx.Hash().Bytes())
 	canonicalWriteSet, known, err := canonical.CaptureTransactionWriteSet(journalMark, &accessRecorder, canonical.DynamicProperties())
 	if err != nil || !known {
 		t.Fatalf("capture canonical transfer writes: known=%v err=%v", known, err)
@@ -193,11 +198,13 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 		forkCache: forks.NewVersionPassCache().BlockScope(),
 	}
 	cfg := discardShadowRunConfig{
-		block:              block,
-		transactions:       []*types.Transaction{tx},
-		canonicalInfos:     []*corepb.TransactionInfo{canonicalInfo},
-		canonicalWriteSets: []state.TransactionWriteSet{canonicalWriteSet},
-		genesisTimestamp:   0,
+		block:                  block,
+		transactions:           []*types.Transaction{tx},
+		canonicalInfos:         []*corepb.TransactionInfo{canonicalInfo},
+		canonicalBalanceTraces: []*contractpb.TransactionBalanceTrace{canonicalBalanceTrace},
+		canonicalWriteSets:     []state.TransactionWriteSet{canonicalWriteSet},
+		captureBalanceTrace:    true,
+		genesisTimestamp:       0,
 	}
 	preShadow := &discardShadowBlock{base: workerState}
 	pre := preShadow.preexecuteTransfers(cfg)
@@ -214,7 +221,8 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 		preStats.validated != 1 || preStats.infoMismatches != 0 || preStats.writeMismatches != 0 ||
 		preStats.applyMismatches != 0 || preStats.applyUnsupported != 0 || preStats.orderedCandidates != 1 ||
 		preStats.orderedMatches != 1 || preStats.orderedMismatches != 0 || preStats.orderedErrors != 0 || preStats.errors != 0 ||
-		preStats.readCandidates != 1 || preStats.readPublishable != 1 || preStats.readDAGMatches != 1 || preStats.readDAGMismatches != 0 {
+		preStats.readCandidates != 1 || preStats.readPublishable != 1 || preStats.readDAGMatches != 1 || preStats.readDAGMismatches != 0 ||
+		preStats.balanceMatches != 1 || preStats.balanceMismatches != 0 {
 		t.Fatalf("transfer preexecutor stats = %+v", preStats)
 	}
 	got := worker.execute(0, cfg)

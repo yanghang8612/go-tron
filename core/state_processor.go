@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/tronprotocol/go-tron/vm"
 )
 
@@ -838,6 +839,10 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 				energyLimitForkBlockNum: energyLimitForkBlockNum,
 				genesisHash:             genesisHash,
 				transactions:            transactions,
+				captureBalanceTrace:     domainChanges != nil,
+			}
+			if discardCfg.captureBalanceTrace {
+				discardCfg.canonicalBalanceTraces = make([]*contractpb.TransactionBalanceTrace, len(transactions))
 			}
 			transferPreexecution = discardShadow.preexecuteTransfers(discardCfg)
 		}
@@ -903,6 +908,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		result.Logs = nil
 		statedb.FinalizeTransaction()
 		statedb.EndBalanceTraceTransaction(balanceTraceStatus)
+		if discardShadow != nil && discardCfg.captureBalanceTrace {
+			discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
+		}
 		if shadowEnabled {
 			versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
 			transferShadow.Observe(tx, statedb, domainChangeMark, txScratch.dynamicPropertiesChanged)

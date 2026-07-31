@@ -14,6 +14,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/tronprotocol/go-tron/vm"
 	"google.golang.org/protobuf/proto"
 )
@@ -61,6 +62,8 @@ var (
 	discardShadowPreOrderedErrorsCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/ordered_errors", nil)
 	discardShadowPreErrorsCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/errors", nil)
 	discardShadowPreWallNanosCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/wall_nanos", nil)
+	discardShadowPreBalanceTraceMatchesCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/balance_trace_matches", nil)
+	discardShadowPreBalanceTraceMismatchesCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/balance_trace_mismatches", nil)
 	discardShadowReadVersionCandidatesCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/candidates", nil)
 	discardShadowReadVersionPublishableCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/publishable", nil)
 	discardShadowReadVersionConflictsCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/read_version/read_conflicts", nil)
@@ -227,6 +230,7 @@ type discardShadowTaskResult struct {
 	writes           state.TransactionWriteSet
 	reads            state.TransactionReadSet
 	info             *corepb.TransactionInfo
+	balanceTrace     *contractpb.TransactionBalanceTrace
 	err              error
 }
 
@@ -262,6 +266,8 @@ type discardShadowPreexecutionStats struct {
 	orderedMismatches int64
 	orderedErrors     int64
 	errors            int64
+	balanceMatches    int64
+	balanceMismatches int64
 	readCandidates    int64
 	readPublishable   int64
 	readConflicts     int64
@@ -612,7 +618,9 @@ type discardShadowRunConfig struct {
 	genesisHash             tcommon.Hash
 	transactions            []*types.Transaction
 	canonicalInfos          []*corepb.TransactionInfo
+	canonicalBalanceTraces  []*contractpb.TransactionBalanceTrace
 	canonicalWriteSets      []state.TransactionWriteSet
+	captureBalanceTrace     bool
 	retainInfos             bool
 }
 
@@ -657,6 +665,12 @@ func (shadow *discardShadowBlock) preexecuteTransfers(cfg discardShadowRunConfig
 	}
 	if len(workerStates) == 0 {
 		return nil
+	}
+	if cfg.captureBalanceTrace {
+		blockHash := cfg.block.Hash()
+		for _, workerState := range workerStates {
+			workerState.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
+		}
 	}
 
 	preCfg := cfg
@@ -823,6 +837,7 @@ func (shadow *discardShadowBlock) finishTransferPreexecution(pre *discardShadowP
 		}
 		infoMatch := compareDiscardShadowInfo(result.info, cfg.canonicalInfos[txIndex]) == 0
 		writeMatch := state.EqualTransactionWriteSets(result.writes, versioned.transactionWriteSets[txIndex])
+		balanceMatch := !cfg.captureBalanceTrace || (txIndex < len(cfg.canonicalBalanceTraces) && proto.Equal(result.balanceTrace, cfg.canonicalBalanceTraces[txIndex]))
 		if infoMatch {
 			stats.infoMatches++
 		} else {
@@ -832,6 +847,11 @@ func (shadow *discardShadowBlock) finishTransferPreexecution(pre *discardShadowP
 			stats.writeMatches++
 		} else {
 			stats.writeMismatches++
+		}
+		if balanceMatch {
+			stats.balanceMatches++
+		} else {
+			stats.balanceMismatches++
 		}
 		switch {
 		case !result.applyEligible:
@@ -843,7 +863,7 @@ func (shadow *discardShadowBlock) finishTransferPreexecution(pre *discardShadowP
 		default:
 			stats.applyMismatches++
 		}
-		if infoMatch && writeMatch && result.applyEligible && result.applyErr == nil && result.applyMatch {
+		if infoMatch && writeMatch && balanceMatch && result.applyEligible && result.applyErr == nil && result.applyMatch {
 			stats.validated++
 			result.matched = true
 			result.coreMatch = true
@@ -882,6 +902,8 @@ func (shadow *discardShadowBlock) finishTransferPreexecution(pre *discardShadowP
 	discardShadowPreOrderedErrorsCounter.Inc(stats.orderedErrors)
 	discardShadowPreErrorsCounter.Inc(stats.errors)
 	discardShadowPreWallNanosCounter.Inc(pre.wallNanos)
+	discardShadowPreBalanceTraceMatchesCounter.Inc(stats.balanceMatches)
+	discardShadowPreBalanceTraceMismatchesCounter.Inc(stats.balanceMismatches)
 	discardShadowReadVersionCandidatesCounter.Inc(stats.readCandidates)
 	discardShadowReadVersionPublishableCounter.Inc(stats.readPublishable)
 	discardShadowReadVersionConflictsCounter.Inc(stats.readConflicts)
@@ -930,6 +952,12 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 	workerCount = len(workerStates)
 	if workerCount == 0 {
 		return discardShadowRunStats{}
+	}
+	if cfg.captureBalanceTrace {
+		blockHash := cfg.block.Hash()
+		for _, workerState := range workerStates {
+			workerState.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
+		}
 	}
 
 	jobs := make(chan int)
@@ -1298,7 +1326,6 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	if err != nil {
 		worker.state.SetTransactionAccessRecorder(nil)
 		worker.dynProps.SetTransactionAccessRecorder(nil)
-		worker.state.ClearBalanceTrace()
 		worker.state.RevertToSnapshot(stateSnapshot)
 		worker.dynProps.RevertToSnapshot(dpSnapshot)
 		return discardShadowTaskResult{txIndex: txIndex, class: class, err: err}
@@ -1318,6 +1345,10 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	result.Logs = nil
 	worker.state.FinalizeTransaction()
 	worker.state.EndBalanceTraceTransaction(balanceTraceTransactionStatus(result))
+	var balanceTrace *contractpb.TransactionBalanceTrace
+	if cfg.captureBalanceTrace {
+		balanceTrace = worker.state.CopyLastBalanceTraceTransaction(tx.Hash().Bytes())
+	}
 	worker.state.SetTransactionAccessRecorder(nil)
 	worker.dynProps.SetTransactionAccessRecorder(nil)
 	writes, known, writeSetErr := worker.state.CaptureTransactionWriteSet(journalMark, &worker.recorder, worker.dynProps)
@@ -1395,5 +1426,6 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		writes:           writes,
 		reads:            reads,
 		info:             retainedInfo,
+		balanceTrace:     balanceTrace,
 	}
 }

@@ -106,6 +106,14 @@ func TestStateDBBalanceTraceRecordsAndRevertsSnapshots(t *testing.T) {
 	sdb.AddBalance(reverted, 50)
 	sdb.RevertToSnapshot(snap)
 	sdb.EndBalanceTraceTransaction("")
+	copied := sdb.CopyLastBalanceTraceTransaction([]byte{0x01})
+	if copied == nil || len(copied.GetOperation()) != 2 {
+		t.Fatalf("copied tx trace = %+v", copied)
+	}
+	if inherited := sdb.CopyLastBalanceTraceTransaction([]byte{0x02}); inherited != nil {
+		t.Fatalf("unrelated transaction inherited trace: %+v", inherited)
+	}
+	copied.Operation[0].Amount = 999
 
 	trace, balances := sdb.FinishBalanceTrace()
 	if trace == nil {

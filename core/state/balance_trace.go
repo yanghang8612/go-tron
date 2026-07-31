@@ -1,8 +1,11 @@
 package state
 
 import (
+	"bytes"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 const balanceTraceSuccessStatus = "SUCCESS"
@@ -179,6 +182,21 @@ func (s *StateDB) EndBalanceTraceTransaction(status string) {
 	if s.balanceTrace != nil {
 		s.balanceTrace.endTransaction(status)
 	}
+}
+
+// CopyLastBalanceTraceTransaction returns an owned copy only when the most
+// recently completed trace belongs to txID. Transactions without balance
+// operations are deliberately absent from java-tron's block trace; checking
+// the identifier prevents such a transaction from inheriting its predecessor.
+func (s *StateDB) CopyLastBalanceTraceTransaction(txID []byte) *contractpb.TransactionBalanceTrace {
+	if s == nil || s.balanceTrace == nil || len(s.balanceTrace.txs) == 0 {
+		return nil
+	}
+	last := s.balanceTrace.txs[len(s.balanceTrace.txs)-1]
+	if last == nil || !bytes.Equal(last.TransactionIdentifier, txID) {
+		return nil
+	}
+	return proto.Clone(last).(*contractpb.TransactionBalanceTrace)
 }
 
 // FinishBalanceTrace returns the per-block operation trace plus final balances
