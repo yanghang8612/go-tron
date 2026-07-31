@@ -1865,6 +1865,20 @@ func (s *StateDB) GetAccountType(addr tcommon.Address) (corepb.AccountType, bool
 	return obj.account.Type(), true
 }
 
+// SetAccountType updates the typed account-envelope field without turning an
+// existing-account mutation into a coarse full-account write. Account creation
+// remains the responsibility of CreateAccount/CreateAccountWithTime.
+func (s *StateDB) SetAccountType(addr tcommon.Address, accountType corepb.AccountType) {
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldAccountType)
+	if obj == nil || obj.deleted || obj.account == nil {
+		return
+	}
+	s.recordAccountFieldWrite(addr, TransactionAccountFieldAccountType)
+	s.journalAccountScalars(addr, obj)
+	obj.account.SetAccountType(accountType)
+	obj.markDirty()
+}
+
 // CreateAccount creates a new account at addr with the given type.
 // If the account already exists, it returns the existing account.
 //

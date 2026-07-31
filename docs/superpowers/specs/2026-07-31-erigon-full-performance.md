@@ -661,6 +661,16 @@ post-images. Separate match, mismatch, and apply-error counters make schema or
 implementation gaps visible before canonical publication is enabled. This
 stage still performs no canonical mutation and cannot affect consensus output.
 
+The first production pass kept 132/132 worker TransactionInfo and WriteSet
+comparisons exact, but only 114 of 116 eligible sets reproduced their typed
+WriteSet after application; two mismatched without an apply error. Canonical
+publication therefore remains disabled. Audit found that applying a typed
+AccountType field through CreateAccount incorrectly emitted a coarse Account
+journal entry; a dedicated typed setter now preserves field identity. Mismatch
+diagnostics also split missing/extra/presence/commutative/value differences by
+cell family so the next production sample can distinguish this fix from any
+remaining publication defect.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

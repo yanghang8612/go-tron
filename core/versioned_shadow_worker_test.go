@@ -36,6 +36,34 @@ func TestCompareDiscardShadowInfoSplitsEnergyFields(t *testing.T) {
 	}
 }
 
+func TestClassifyDiscardShadowApplyMismatch(t *testing.T) {
+	fieldKey := state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	dynamicKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "fee"}
+	accountKey := state.TransactionAccessKey{Kind: state.TransactionAccessAccount}
+	expected := state.TransactionWriteSet{
+		fieldKey:   {Exists: true, Commutative: true, Value: []byte{1}},
+		dynamicKey: {Exists: true, Value: []byte{3}},
+	}
+	applied := state.TransactionWriteSet{
+		fieldKey:   {Exists: false, Value: []byte{2}},
+		accountKey: {Exists: true, Value: []byte{4}},
+	}
+	want := discardShadowApplyMismatchMissing |
+		discardShadowApplyMismatchExtra |
+		discardShadowApplyMismatchPresence |
+		discardShadowApplyMismatchCommutative |
+		discardShadowApplyMismatchValue |
+		discardShadowApplyMismatchAccount |
+		discardShadowApplyMismatchAccountField |
+		discardShadowApplyMismatchDynamic
+	if got := classifyDiscardShadowApplyMismatch(applied, expected); got != want {
+		t.Fatalf("mismatch = %#x, want %#x", got, want)
+	}
+}
+
 func TestDiscardKVOverlayIsolatesWrites(t *testing.T) {
 	parent := ethrawdb.NewMemoryDatabase()
 	if err := parent.Put([]byte("stable"), []byte("parent")); err != nil {

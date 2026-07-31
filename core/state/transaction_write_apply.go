@@ -276,7 +276,7 @@ func (s *StateDB) applyTransactionAccountField(key TransactionAccessKey, value T
 	}
 	switch key.AccountField {
 	case TransactionAccountFieldAccountType:
-		s.CreateAccount(key.Address, corepb.AccountType(amount))
+		s.SetAccountType(key.Address, corepb.AccountType(amount))
 	case TransactionAccountFieldBalance:
 		if value.Commutative {
 			if s.transactionAccess != nil {

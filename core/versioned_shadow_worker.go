@@ -38,6 +38,22 @@ var (
 	discardShadowWriteSetApplyMatchesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_matches", nil)
 	discardShadowWriteSetApplyMismatchesCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatches", nil)
 	discardShadowWriteSetApplyErrorsCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_errors", nil)
+	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
+	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
+	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
+	discardShadowApplyMismatchCommutativeCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/commutative", nil)
+	discardShadowApplyMismatchValueCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/value", nil)
+	discardShadowApplyMismatchAccountCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/account", nil)
+	discardShadowApplyMismatchAccountFieldCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/account_field", nil)
+	discardShadowApplyMismatchWitnessCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/witness", nil)
+	discardShadowApplyMismatchStorageCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/storage", nil)
+	discardShadowApplyMismatchCodeCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/code", nil)
+	discardShadowApplyMismatchMetadataCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/contract_metadata", nil)
+	discardShadowApplyMismatchAccountKVCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/account_kv", nil)
+	discardShadowApplyMismatchTransientCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/transient_storage", nil)
+	discardShadowApplyMismatchDynamicCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/dynamic", nil)
+	discardShadowApplyMismatchRawCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/raw_kv", nil)
+	discardShadowApplyMismatchOtherCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_kind/other", nil)
 	discardShadowApplyUnsupportedAccountCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/account", nil)
 	discardShadowApplyUnsupportedGenerationCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/account_kv_generation", nil)
 	discardShadowApplyUnsupportedSelfDestructCounter = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_unsupported/self_destruct", nil)
@@ -173,8 +189,86 @@ type discardShadowTaskResult struct {
 	applyEligible    bool
 	applyUnsupported discardShadowApplyUnsupported
 	applyMatch       bool
+	applyMismatch    discardShadowApplyMismatch
 	applyErr         error
 	err              error
+}
+
+type discardShadowApplyMismatch uint32
+
+const (
+	discardShadowApplyMismatchMissing discardShadowApplyMismatch = 1 << iota
+	discardShadowApplyMismatchExtra
+	discardShadowApplyMismatchPresence
+	discardShadowApplyMismatchCommutative
+	discardShadowApplyMismatchValue
+	discardShadowApplyMismatchAccount
+	discardShadowApplyMismatchAccountField
+	discardShadowApplyMismatchWitness
+	discardShadowApplyMismatchStorage
+	discardShadowApplyMismatchCode
+	discardShadowApplyMismatchMetadata
+	discardShadowApplyMismatchAccountKV
+	discardShadowApplyMismatchTransient
+	discardShadowApplyMismatchDynamic
+	discardShadowApplyMismatchRaw
+	discardShadowApplyMismatchOther
+)
+
+func addDiscardShadowApplyMismatchKind(mismatch discardShadowApplyMismatch, key state.TransactionAccessKey) discardShadowApplyMismatch {
+	switch key.Kind {
+	case state.TransactionAccessAccount:
+		return mismatch | discardShadowApplyMismatchAccount
+	case state.TransactionAccessAccountField:
+		return mismatch | discardShadowApplyMismatchAccountField
+	case state.TransactionAccessWitness:
+		return mismatch | discardShadowApplyMismatchWitness
+	case state.TransactionAccessStorage:
+		return mismatch | discardShadowApplyMismatchStorage
+	case state.TransactionAccessCode:
+		return mismatch | discardShadowApplyMismatchCode
+	case state.TransactionAccessContractMetadata:
+		return mismatch | discardShadowApplyMismatchMetadata
+	case state.TransactionAccessAccountKV, state.TransactionAccessAccountKVGeneration:
+		return mismatch | discardShadowApplyMismatchAccountKV
+	case state.TransactionAccessTransientStorage:
+		return mismatch | discardShadowApplyMismatchTransient
+	case state.TransactionAccessDynamicInt, state.TransactionAccessDynamicString, state.TransactionAccessDynamicHash:
+		return mismatch | discardShadowApplyMismatchDynamic
+	case state.TransactionAccessRawKV:
+		return mismatch | discardShadowApplyMismatchRaw
+	default:
+		return mismatch | discardShadowApplyMismatchOther
+	}
+}
+
+func classifyDiscardShadowApplyMismatch(applied, expected state.TransactionWriteSet) discardShadowApplyMismatch {
+	var mismatch discardShadowApplyMismatch
+	for key, expectedValue := range expected {
+		appliedValue, ok := applied[key]
+		if !ok {
+			mismatch = addDiscardShadowApplyMismatchKind(mismatch|discardShadowApplyMismatchMissing, key)
+			continue
+		}
+		if expectedValue.Exists != appliedValue.Exists {
+			mismatch |= discardShadowApplyMismatchPresence
+		}
+		if expectedValue.Commutative != appliedValue.Commutative {
+			mismatch |= discardShadowApplyMismatchCommutative
+		}
+		if !bytes.Equal(expectedValue.Value, appliedValue.Value) {
+			mismatch |= discardShadowApplyMismatchValue
+		}
+		if expectedValue.Exists != appliedValue.Exists || expectedValue.Commutative != appliedValue.Commutative || !bytes.Equal(expectedValue.Value, appliedValue.Value) {
+			mismatch = addDiscardShadowApplyMismatchKind(mismatch, key)
+		}
+	}
+	for key := range applied {
+		if _, ok := expected[key]; !ok {
+			mismatch = addDiscardShadowApplyMismatchKind(mismatch|discardShadowApplyMismatchExtra, key)
+		}
+	}
+	return mismatch
 }
 
 type discardShadowApplyUnsupported uint8
@@ -619,6 +713,54 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 						applyMatches++
 					default:
 						applyMismatches++
+						if result.applyMismatch&discardShadowApplyMismatchMissing != 0 {
+							discardShadowApplyMismatchMissingCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchExtra != 0 {
+							discardShadowApplyMismatchExtraCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchPresence != 0 {
+							discardShadowApplyMismatchPresenceCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchCommutative != 0 {
+							discardShadowApplyMismatchCommutativeCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchValue != 0 {
+							discardShadowApplyMismatchValueCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchAccount != 0 {
+							discardShadowApplyMismatchAccountCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchAccountField != 0 {
+							discardShadowApplyMismatchAccountFieldCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchWitness != 0 {
+							discardShadowApplyMismatchWitnessCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchStorage != 0 {
+							discardShadowApplyMismatchStorageCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchCode != 0 {
+							discardShadowApplyMismatchCodeCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchMetadata != 0 {
+							discardShadowApplyMismatchMetadataCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchAccountKV != 0 {
+							discardShadowApplyMismatchAccountKVCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchTransient != 0 {
+							discardShadowApplyMismatchTransientCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchDynamic != 0 {
+							discardShadowApplyMismatchDynamicCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchRaw != 0 {
+							discardShadowApplyMismatchRawCounter.Inc(1)
+						}
+						if result.applyMismatch&discardShadowApplyMismatchOther != 0 {
+							discardShadowApplyMismatchOtherCounter.Inc(1)
+						}
 					}
 				} else {
 					applyUnsupported++
@@ -768,6 +910,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	worker.state.RevertToSnapshot(stateSnapshot)
 	worker.dynProps.RevertToSnapshot(dpSnapshot)
 	applyMatch := false
+	var applyMismatch discardShadowApplyMismatch
 	var applyErr error
 	if applyEligible {
 		applyStateSnapshot := worker.state.Snapshot()
@@ -787,6 +930,9 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 				applyErr = errors.New("unknown applied state write")
 			default:
 				applyMatch = state.EqualTransactionWriteSets(appliedWrites, writes)
+				if !applyMatch {
+					applyMismatch = classifyDiscardShadowApplyMismatch(appliedWrites, writes)
+				}
 			}
 		}
 		worker.state.RevertToSnapshot(applyStateSnapshot)
@@ -804,6 +950,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		applyEligible:    applyEligible,
 		applyUnsupported: applyUnsupported,
 		applyMatch:       applyMatch,
+		applyMismatch:    applyMismatch,
 		applyErr:         applyErr,
 	}
 }

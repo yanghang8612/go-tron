@@ -94,6 +94,38 @@ func TestApplyTransactionWriteSetPublishesTypedPostImagesAndDeltas(t *testing.T)
 	}
 }
 
+func TestApplyTransactionWriteSetRecordedPreservesTypedAccountType(t *testing.T) {
+	sdb := newTestStateDB(t)
+	account := testAddr(0xd4)
+	sdb.CreateAccount(account, corepb.AccountType_Normal)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	key := TransactionAccessKey{
+		Kind:         TransactionAccessAccountField,
+		Address:      account,
+		AccountField: TransactionAccountFieldAccountType,
+	}
+	writes := TransactionWriteSet{
+		key: int64TransactionWriteValue(int64(corepb.AccountType_Contract)),
+	}
+	mark := sdb.DomainChangeJournalMark()
+	var recorder TransactionAccessRecorder
+	recorder.Reset(16)
+	if err := sdb.ApplyTransactionWriteSetRecorded(writes, NewDynamicProperties(), ethrawdb.NewMemoryDatabase(), &recorder); err != nil {
+		t.Fatal(err)
+	}
+	sdb.FinalizeTransaction()
+	applied, known, err := sdb.CaptureTransactionWriteSet(mark, &recorder, NewDynamicProperties())
+	if err != nil || !known {
+		t.Fatalf("capture applied writes: known=%v err=%v", known, err)
+	}
+	if !EqualTransactionWriteSets(applied, writes) {
+		t.Fatalf("applied writes = %#v, want %#v", applied, writes)
+	}
+}
+
 func TestApplyTransactionWriteSetPreservesDeletionPostImages(t *testing.T) {
 	base := newTestStateDB(t)
 	contract := testAddr(0xd5)
