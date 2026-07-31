@@ -727,6 +727,30 @@ overlap. Match, mismatch, and error counters are separate from the individual
 worker counters. The publisher and raw overlay are discarded after the sampled
 block; canonical state and the backing database remain untouched.
 
+The first shared-publisher production window reached 659/659 exact
+TransactionInfo, original WriteSet, individual reapplication, and cumulative
+ordered-publication comparisons. All sampled sets were eligible; unsupported,
+mismatch, and apply-error counters remained zero.
+
+#### P4.15: Pre-serial Transfer execution
+
+Move the first speculative work ahead of canonical execution without yet
+publishing it. On sampled blocks, select Transfer transactions statically and
+run them over four independent block-start StateDB/DynamicProperties copies
+before entering the serial loop. Retain owned TransactionInfo and typed/raw
+WriteSet results; each worker reverts its copy after the task, so one worker can
+process multiple transfers without inheriting another speculative result.
+
+After canonical execution builds the authoritative version graph, admit only
+supported zero-indegree transfers whose canonical WriteSet capture completed.
+Compare their full TransactionInfo and WriteSet, require the individual
+publication check, then cumulatively apply the retained pre-execution results
+to a fresh isolated ordered publisher. Separate metrics expose total transfers,
+zero-indegree candidates, validated results, ordered results, errors, and
+pre-execution wall time. This establishes the exact result carrier and
+pre-dispatch boundary needed for the next step; canonical execution remains
+serial and is still the sole source of persisted state.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

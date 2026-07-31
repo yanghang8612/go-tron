@@ -94,6 +94,9 @@
   and compare the resulting post-state before enabling canonical publication.
 - [x] Accumulate successful sampled WriteSets in transaction order on one
   shared isolated publisher to validate multi-transaction ordered baselines.
+- [x] Pre-execute Transfer transactions concurrently from block start before
+  the serial loop, retain their results, and validate zero-indegree results
+  against canonical TransactionInfo, WriteSet, and ordered publication.
 - [ ] Apply typed writes and settlement deltas at ordered publication after
   serial-equivalence fixtures and production samples pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full

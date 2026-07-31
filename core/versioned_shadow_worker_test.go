@@ -199,6 +199,22 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 		canonicalWriteSets: []state.TransactionWriteSet{canonicalWriteSet},
 		genesisTimestamp:   0,
 	}
+	preShadow := &discardShadowBlock{base: workerState}
+	pre := preShadow.preexecuteTransfers(cfg)
+	var versioned versionedAccessShadow
+	versioned.Prepare(1)
+	versioned.EnableWriteSetCapture(1)
+	versioned.transactionSupported[0] = true
+	versioned.transactionWritesOK[0] = true
+	versioned.transactionWriteSets[0] = canonicalWriteSet
+	preStats := preShadow.finishTransferPreexecution(pre, &versioned, cfg)
+	if preStats.transfers != 1 || preStats.executed != 1 || preStats.candidates != 1 ||
+		preStats.infoMatches != 1 || preStats.writeMatches != 1 || preStats.applyMatches != 1 ||
+		preStats.validated != 1 || preStats.infoMismatches != 0 || preStats.writeMismatches != 0 ||
+		preStats.applyMismatches != 0 || preStats.applyUnsupported != 0 || preStats.orderedCandidates != 1 ||
+		preStats.orderedMatches != 1 || preStats.orderedMismatches != 0 || preStats.orderedErrors != 0 || preStats.errors != 0 {
+		t.Fatalf("transfer preexecutor stats = %+v", preStats)
+	}
 	got := worker.execute(0, cfg)
 	if got.err != nil || !got.matched || got.writeSetErr != nil || !got.writeSetMatch || !got.applyEligible || got.applyErr != nil || !got.applyMatch {
 		t.Fatalf("discard worker = info-matched:%v writes-matched:%v apply-eligible:%v apply-matched:%v err:%v write-err:%v apply-err:%v", got.matched, got.writeSetMatch, got.applyEligible, got.applyMatch, got.err, got.writeSetErr, got.applyErr)

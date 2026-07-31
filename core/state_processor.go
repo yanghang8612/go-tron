@@ -823,10 +823,23 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		}
 	}
 	var discardShadow *discardShadowBlock
+	var discardCfg discardShadowRunConfig
+	var transferPreexecution *discardShadowPreexecution
 	if shadowEnabled && collectTxInfos {
 		discardShadow = prepareDiscardShadowBlock(statedb, dynProps, block.Number())
 		if discardShadow != nil {
 			versionedShadow.EnableWriteSetCapture(len(transactions))
+			discardCfg = discardShadowRunConfig{
+				block:                   block,
+				db:                      db,
+				validateEnvelope:        validateEnvelope,
+				activeWitnesses:         activeWitnesses,
+				genesisTimestamp:        genesisTimestamp,
+				energyLimitForkBlockNum: energyLimitForkBlockNum,
+				genesisHash:             genesisHash,
+				transactions:            transactions,
+			}
+			transferPreexecution = discardShadow.preexecuteTransfers(discardCfg)
 		}
 	}
 
@@ -909,17 +922,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	}
 
 	if discardShadow != nil {
-		_ = discardShadow.run(&versionedShadow, discardShadowRunConfig{
-			block:                   block,
-			db:                      db,
-			validateEnvelope:        validateEnvelope,
-			activeWitnesses:         activeWitnesses,
-			genesisTimestamp:        genesisTimestamp,
-			energyLimitForkBlockNum: energyLimitForkBlockNum,
-			genesisHash:             genesisHash,
-			transactions:            transactions,
-			canonicalInfos:          txInfos,
-		})
+		discardCfg.canonicalInfos = txInfos
+		_ = discardShadow.finishTransferPreexecution(transferPreexecution, &versionedShadow, discardCfg)
+		_ = discardShadow.run(&versionedShadow, discardCfg)
 	}
 
 	if parentAccountStateRoot != nil {

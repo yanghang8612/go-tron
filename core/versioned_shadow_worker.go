@@ -43,6 +43,24 @@ var (
 	discardShadowOrderedApplyMatchesCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/ordered_publisher/matches", nil)
 	discardShadowOrderedApplyMismatchesCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/ordered_publisher/mismatches", nil)
 	discardShadowOrderedApplyErrorsCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/ordered_publisher/errors", nil)
+	discardShadowPreBlocksCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/blocks", nil)
+	discardShadowPreTransfersCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/transfers", nil)
+	discardShadowPreExecutedCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/executed", nil)
+	discardShadowPreCandidatesCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/zero_indegree_candidates", nil)
+	discardShadowPreInfoMatchesCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/info_matches", nil)
+	discardShadowPreInfoMismatchesCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/info_mismatches", nil)
+	discardShadowPreWriteMatchesCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/write_set_matches", nil)
+	discardShadowPreWriteMismatchesCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/write_set_mismatches", nil)
+	discardShadowPreApplyMatchesCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/apply_matches", nil)
+	discardShadowPreApplyMismatchesCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/apply_mismatches", nil)
+	discardShadowPreApplyUnsupportedCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/apply_unsupported", nil)
+	discardShadowPreValidatedCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/validated", nil)
+	discardShadowPreOrderedCandidatesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/ordered_candidates", nil)
+	discardShadowPreOrderedMatchesCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/ordered_matches", nil)
+	discardShadowPreOrderedMismatchesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/ordered_mismatches", nil)
+	discardShadowPreOrderedErrorsCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/ordered_errors", nil)
+	discardShadowPreErrorsCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/errors", nil)
+	discardShadowPreWallNanosCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/preexecutor/wall_nanos", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -198,6 +216,7 @@ type discardShadowTaskResult struct {
 	applyMismatch    discardShadowApplyMismatch
 	applyErr         error
 	writes           state.TransactionWriteSet
+	info             *corepb.TransactionInfo
 	err              error
 }
 
@@ -206,6 +225,30 @@ type discardShadowOrderedApplyStats struct {
 	matches    int64
 	mismatches int64
 	errors     int64
+}
+
+type discardShadowPreexecution struct {
+	results   []discardShadowTaskResult
+	wallNanos int64
+}
+
+type discardShadowPreexecutionStats struct {
+	transfers         int64
+	executed          int64
+	candidates        int64
+	infoMatches       int64
+	infoMismatches    int64
+	writeMatches      int64
+	writeMismatches   int64
+	applyMatches      int64
+	applyMismatches   int64
+	applyUnsupported  int64
+	validated         int64
+	orderedCandidates int64
+	orderedMatches    int64
+	orderedMismatches int64
+	orderedErrors     int64
+	errors            int64
 }
 
 type discardShadowApplyMismatch uint32
@@ -539,6 +582,7 @@ type discardShadowRunConfig struct {
 	transactions            []*types.Transaction
 	canonicalInfos          []*corepb.TransactionInfo
 	canonicalWriteSets      []state.TransactionWriteSet
+	retainInfos             bool
 }
 
 type discardShadowRunStats struct {
@@ -547,6 +591,172 @@ type discardShadowRunStats struct {
 	matches    int64
 	mismatches int64
 	errors     int64
+}
+
+// preexecuteTransfers runs the first deliberately narrow speculative cohort
+// before canonical serial execution begins. Workers share only immutable
+// block-start copies and execute concurrently with each other. The retained
+// results are observe-only until finishTransferPreexecution validates them
+// against canonical execution and the captured dependency graph.
+func (shadow *discardShadowBlock) preexecuteTransfers(cfg discardShadowRunConfig) *discardShadowPreexecution {
+	if shadow == nil || shadow.base == nil || cfg.block == nil {
+		return nil
+	}
+	candidates := make([]int, 0, discardShadowWorkerCount*2)
+	for txIndex, tx := range cfg.transactions {
+		if tx != nil && tx.ContractType() == corepb.Transaction_Contract_TransferContract {
+			candidates = append(candidates, txIndex)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	started := time.Now()
+	workerCount := min(discardShadowWorkerCount, len(candidates))
+	workerStates := make([]*state.StateDB, 0, workerCount)
+	workerStates = append(workerStates, shadow.base)
+	for len(workerStates) < workerCount {
+		workerState, err := shadow.base.Copy()
+		if err != nil {
+			break
+		}
+		workerState.SetDynamicProperties(shadow.base.DynamicProperties().Copy())
+		workerStates = append(workerStates, workerState)
+	}
+	if len(workerStates) == 0 {
+		return nil
+	}
+
+	preCfg := cfg
+	preCfg.canonicalInfos = nil
+	preCfg.canonicalWriteSets = nil
+	preCfg.retainInfos = true
+	jobs := make(chan int)
+	results := make(chan discardShadowTaskResult, len(candidates))
+	var workers sync.WaitGroup
+	for _, workerState := range workerStates {
+		workers.Add(1)
+		go func(workerState *state.StateDB) {
+			defer workers.Done()
+			worker := discardShadowWorker{
+				state:     workerState,
+				dynProps:  workerState.DynamicProperties(),
+				db:        discardKVOverlay{parent: preCfg.db},
+				forkCache: forks.NewVersionPassCache().BlockScope(),
+			}
+			worker.db.recorder = &worker.recorder
+			for txIndex := range jobs {
+				results <- worker.execute(txIndex, preCfg)
+			}
+		}(workerState)
+	}
+	go func() {
+		for _, txIndex := range candidates {
+			jobs <- txIndex
+		}
+		close(jobs)
+		workers.Wait()
+		close(results)
+	}()
+
+	retained := make([]discardShadowTaskResult, 0, len(candidates))
+	for result := range results {
+		retained = append(retained, result)
+	}
+	return &discardShadowPreexecution{
+		results:   retained,
+		wallNanos: time.Since(started).Nanoseconds(),
+	}
+}
+
+// finishTransferPreexecution admits only zero-indegree results: their exact
+// canonical read versions remained at block start. It then compares the full
+// TransactionInfo, typed/raw WriteSet, and isolated applier result. Canonical
+// serial state is never modified by this observer.
+func (shadow *discardShadowBlock) finishTransferPreexecution(pre *discardShadowPreexecution, versioned *versionedAccessShadow, cfg discardShadowRunConfig) discardShadowPreexecutionStats {
+	var stats discardShadowPreexecutionStats
+	if shadow == nil || pre == nil || versioned == nil || len(cfg.canonicalInfos) != len(cfg.transactions) {
+		return stats
+	}
+	stats.transfers = int64(len(pre.results))
+	stats.executed = int64(len(pre.results))
+	validatedResults := make([]discardShadowTaskResult, 0, len(pre.results))
+	for _, result := range pre.results {
+		txIndex := result.txIndex
+		writeSetReady := txIndex >= 0 && txIndex < len(versioned.transactionWritesOK) && versioned.transactionWritesOK[txIndex]
+		zeroIndegree := txIndex >= 0 && txIndex < len(versioned.dependencyHeads) && versioned.dependencyHeads[txIndex] < 0
+		supported := txIndex >= 0 && txIndex < len(versioned.transactionSupported) && versioned.transactionSupported[txIndex]
+		if !writeSetReady || !zeroIndegree || !supported {
+			continue
+		}
+		stats.candidates++
+		if result.err != nil || result.info == nil || result.writeSetErr != nil || txIndex >= len(versioned.transactionWriteSets) {
+			stats.errors++
+			continue
+		}
+		infoMatch := compareDiscardShadowInfo(result.info, cfg.canonicalInfos[txIndex]) == 0
+		writeMatch := state.EqualTransactionWriteSets(result.writes, versioned.transactionWriteSets[txIndex])
+		if infoMatch {
+			stats.infoMatches++
+		} else {
+			stats.infoMismatches++
+		}
+		if writeMatch {
+			stats.writeMatches++
+		} else {
+			stats.writeMismatches++
+		}
+		switch {
+		case !result.applyEligible:
+			stats.applyUnsupported++
+		case result.applyErr != nil:
+			stats.errors++
+		case result.applyMatch:
+			stats.applyMatches++
+		default:
+			stats.applyMismatches++
+		}
+		if infoMatch && writeMatch && result.applyEligible && result.applyErr == nil && result.applyMatch {
+			stats.validated++
+			result.matched = true
+			result.coreMatch = true
+			result.writeSetMatch = true
+			validatedResults = append(validatedResults, result)
+		}
+	}
+	if len(validatedResults) > 0 {
+		publisher, err := shadow.base.Copy()
+		if err != nil {
+			stats.orderedErrors++
+		} else {
+			publisher.SetDynamicProperties(shadow.base.DynamicProperties().Copy())
+			ordered := verifyOrderedApplyState(publisher, validatedResults, cfg)
+			stats.orderedCandidates = ordered.candidates
+			stats.orderedMatches = ordered.matches
+			stats.orderedMismatches = ordered.mismatches
+			stats.orderedErrors = ordered.errors
+		}
+	}
+	discardShadowPreBlocksCounter.Inc(1)
+	discardShadowPreTransfersCounter.Inc(stats.transfers)
+	discardShadowPreExecutedCounter.Inc(stats.executed)
+	discardShadowPreCandidatesCounter.Inc(stats.candidates)
+	discardShadowPreInfoMatchesCounter.Inc(stats.infoMatches)
+	discardShadowPreInfoMismatchesCounter.Inc(stats.infoMismatches)
+	discardShadowPreWriteMatchesCounter.Inc(stats.writeMatches)
+	discardShadowPreWriteMismatchesCounter.Inc(stats.writeMismatches)
+	discardShadowPreApplyMatchesCounter.Inc(stats.applyMatches)
+	discardShadowPreApplyMismatchesCounter.Inc(stats.applyMismatches)
+	discardShadowPreApplyUnsupportedCounter.Inc(stats.applyUnsupported)
+	discardShadowPreValidatedCounter.Inc(stats.validated)
+	discardShadowPreOrderedCandidatesCounter.Inc(stats.orderedCandidates)
+	discardShadowPreOrderedMatchesCounter.Inc(stats.orderedMatches)
+	discardShadowPreOrderedMismatchesCounter.Inc(stats.orderedMismatches)
+	discardShadowPreOrderedErrorsCounter.Inc(stats.orderedErrors)
+	discardShadowPreErrorsCounter.Inc(stats.errors)
+	discardShadowPreWallNanosCounter.Inc(pre.wallNanos)
+	return stats
 }
 
 func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg discardShadowRunConfig) discardShadowRunStats {
@@ -842,12 +1052,23 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 // commutative settlement deltas. The publisher is discarded with the sampled
 // block and never reaches canonical state or the backing database.
 func (shadow *discardShadowBlock) verifyOrderedApply(results []discardShadowTaskResult, cfg discardShadowRunConfig) discardShadowOrderedApplyStats {
-	var stats discardShadowOrderedApplyStats
 	if shadow == nil || shadow.base == nil || len(results) == 0 {
+		return discardShadowOrderedApplyStats{}
+	}
+	stats := verifyOrderedApplyState(shadow.base, results, cfg)
+	discardShadowOrderedApplyCandidatesCounter.Inc(stats.candidates)
+	discardShadowOrderedApplyMatchesCounter.Inc(stats.matches)
+	discardShadowOrderedApplyMismatchesCounter.Inc(stats.mismatches)
+	discardShadowOrderedApplyErrorsCounter.Inc(stats.errors)
+	return stats
+}
+
+func verifyOrderedApplyState(publisher *state.StateDB, results []discardShadowTaskResult, cfg discardShadowRunConfig) discardShadowOrderedApplyStats {
+	var stats discardShadowOrderedApplyStats
+	if publisher == nil || len(results) == 0 {
 		return stats
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].txIndex < results[j].txIndex })
-	publisher := shadow.base
 	dynProps := publisher.DynamicProperties()
 	var recorder state.TransactionAccessRecorder
 	raw := discardKVOverlay{parent: cfg.db, recorder: &recorder}
@@ -879,10 +1100,6 @@ func (shadow *discardShadowBlock) verifyOrderedApply(results []discardShadowTask
 		}
 		break
 	}
-	discardShadowOrderedApplyCandidatesCounter.Inc(stats.candidates)
-	discardShadowOrderedApplyMatchesCounter.Inc(stats.matches)
-	discardShadowOrderedApplyMismatchesCounter.Inc(stats.mismatches)
-	discardShadowOrderedApplyErrorsCounter.Inc(stats.errors)
 	return stats
 }
 
@@ -898,9 +1115,10 @@ type discardShadowWorker struct {
 }
 
 func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConfig) discardShadowTaskResult {
-	if txIndex < 0 || txIndex >= len(cfg.transactions) || cfg.canonicalInfos[txIndex] == nil {
-		return discardShadowTaskResult{err: errors.New("missing shadow transaction input")}
+	if txIndex < 0 || txIndex >= len(cfg.transactions) || cfg.block == nil {
+		return discardShadowTaskResult{txIndex: txIndex, err: errors.New("missing shadow transaction input")}
 	}
+	compareCanonical := txIndex < len(cfg.canonicalInfos) && cfg.canonicalInfos[txIndex] != nil
 	tx := cfg.transactions[txIndex]
 	class := classifyDiscardShadowTransaction(tx)
 	stateSnapshot := worker.state.Snapshot()
@@ -948,11 +1166,18 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		worker.state.ClearBalanceTrace()
 		worker.state.RevertToSnapshot(stateSnapshot)
 		worker.dynProps.RevertToSnapshot(dpSnapshot)
-		return discardShadowTaskResult{class: class, err: err}
+		return discardShadowTaskResult{txIndex: txIndex, class: class, err: err}
 	}
 
 	shadowInfo := worker.infoSlot.build(tx, result, cfg.block.Number(), cfg.block.Timestamp(), worker.dynProps.AllowTransactionFeePool())
-	mismatch := compareDiscardShadowInfo(shadowInfo, cfg.canonicalInfos[txIndex])
+	var retainedInfo *corepb.TransactionInfo
+	if cfg.retainInfos {
+		retainedInfo = proto.Clone(shadowInfo).(*corepb.TransactionInfo)
+	}
+	var mismatch discardShadowMismatch
+	if compareCanonical {
+		mismatch = compareDiscardShadowInfo(shadowInfo, cfg.canonicalInfos[txIndex])
+	}
 	coreMismatch := mismatch &^ (discardShadowMismatchReceipt | discardShadowMismatchOwnerDiagnostic | discardShadowMismatchEnergyDiagnostic)
 	vm.ReleaseExecutionLogs(result.Logs)
 	result.Logs = nil
@@ -967,8 +1192,13 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	writeSetMatch := writeSetErr == nil
 	applyEligible := false
 	var applyUnsupported discardShadowApplyUnsupported
-	if writeSetMatch && txIndex < len(cfg.canonicalWriteSets) {
-		writeSetMatch = state.EqualTransactionWriteSets(writes, cfg.canonicalWriteSets[txIndex])
+	if writeSetMatch {
+		hasCanonicalWriteSet := txIndex < len(cfg.canonicalWriteSets) && cfg.canonicalWriteSets[txIndex] != nil
+		if hasCanonicalWriteSet {
+			writeSetMatch = state.EqualTransactionWriteSets(writes, cfg.canonicalWriteSets[txIndex])
+		} else if !cfg.retainInfos {
+			writeSetMatch = false
+		}
 		applyEligible = state.ValidateTransactionWriteSetApply(writes, worker.dynProps, &worker.db) == nil
 		if !applyEligible {
 			applyUnsupported = classifyDiscardShadowApplyUnsupported(writes)
@@ -1027,5 +1257,6 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		applyMismatch:    applyMismatch,
 		applyErr:         applyErr,
 		writes:           writes,
+		info:             retainedInfo,
 	}
 }
