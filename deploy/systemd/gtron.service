@@ -42,13 +42,14 @@ ExecStart=/data/gtron/go-tron/build/bin/gtron \
     --log.format terminal \
     --verbosity 3 \
     --log.file /data/gtron/main/gtron.log \
+    --log.file.format terminal \
     --log.file.verbosity 3 \
     --log.file.max-size 100 \
     --log.file.max-backups 3 \
     --log.file.max-age 28 \
     --log.file.compress
 
-# 控制台日志交给 journald；结构化 JSON 文件由 gtron 自身轮转。
+# 控制台日志交给 journald；命令行格式文件由 gtron 自身轮转。
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=gtron

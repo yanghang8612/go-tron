@@ -192,6 +192,7 @@ type SetupOptions struct {
 	Verbosity      int
 	Format         string
 	File           string
+	FileFormat     string
 	Modules        []string
 	FileVerbosity  int
 	FileMaxSizeMB  int
@@ -212,6 +213,7 @@ func SetupWithModules(verbosity int, format, file string, modules []string) erro
 		Verbosity:      verbosity,
 		Format:         format,
 		File:           file,
+		FileFormat:     "json",
 		Modules:        modules,
 		FileVerbosity:  -1,
 		FileMaxSizeMB:  defaultFileMaxSizeMB,
@@ -221,7 +223,7 @@ func SetupWithModules(verbosity int, format, file string, modules []string) erro
 	})
 }
 
-// SetupWithOptions configures the root logger and optional rotating JSON file.
+// SetupWithOptions configures the root logger and optional rotating file.
 func SetupWithOptions(opts SetupOptions) error {
 	if opts.Verbosity < 0 || opts.Verbosity > 5 {
 		return fmt.Errorf("verbosity %d out of range 0-5", opts.Verbosity)
@@ -230,6 +232,10 @@ func SetupWithOptions(opts SetupOptions) error {
 		return fmt.Errorf("file verbosity %d out of range -1 or 0-5", opts.FileVerbosity)
 	}
 	if opts.File != "" {
+		fileFormat := strings.ToLower(strings.TrimSpace(opts.FileFormat))
+		if fileFormat != "" && fileFormat != "terminal" && fileFormat != "json" && fileFormat != "logfmt" {
+			return fmt.Errorf("unknown file log format %q (want terminal|json|logfmt)", opts.FileFormat)
+		}
 		if opts.FileMaxSizeMB < 1 {
 			return fmt.Errorf("log file max size must be >= 1 MiB")
 		}
@@ -279,7 +285,16 @@ func SetupWithOptions(opts SetupOptions) error {
 			LocalTime:  true,
 			Compress:   opts.FileCompress,
 		}
-		secondary := gethlog.JSONHandlerWithLevel(writer, lowestLevel(fileLevel, moduleLevels))
+		fileHandlerLevel := lowestLevel(fileLevel, moduleLevels)
+		var secondary slog.Handler
+		switch strings.ToLower(strings.TrimSpace(opts.FileFormat)) {
+		case "terminal":
+			secondary = gethlog.NewTerminalHandlerWithLevel(writer, fileHandlerLevel, false)
+		case "logfmt":
+			secondary = gethlog.LogfmtHandlerWithLevel(writer, fileHandlerLevel)
+		case "", "json":
+			secondary = gethlog.JSONHandlerWithLevel(writer, fileHandlerLevel)
+		}
 		secondary = moduleLevelHandler{next: secondary, global: fileLevel, modules: moduleLevels}
 		handler = teeHandler{primary: primary, secondary: secondary}
 		closer = writer

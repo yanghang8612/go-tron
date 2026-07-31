@@ -39,8 +39,9 @@ Prometheus, alert-rule and Grafana provisioning examples live under
 
 ## Rotating logs
 
-The optional file sink is JSON, independent of the console format, and creates
-the active file with `0600` permissions. Defaults mirror the bounded Erigon
+The optional file sink supports terminal, JSON and logfmt output independently
+of the console format, and creates the active file with `0600` permissions.
+JSON remains the compatibility default. Defaults mirror the bounded Erigon
 operating profile: rotate at 100 MiB, keep 3 backups for up to 28 days, and
 compress rotated files.
 
@@ -48,6 +49,7 @@ compress rotated files.
 gtron \
   --verbosity 3 \
   --log.file /data/gtron/main/gtron.log \
+  --log.file.format terminal \
   --log.file.verbosity 4 \
   --log.file.max-size 100 \
   --log.file.max-backups 3 \
@@ -55,6 +57,7 @@ gtron \
   --log.file.compress
 ```
 
+`--log.file.format` accepts `terminal`, `json`, or `logfmt`, while
 `--log.file.verbosity=-1` inherits `--verbosity`. Module overrides still apply
 to both sinks. Startup arguments are logged for incident reconstruction after
 secret-bearing flag values have been redacted.

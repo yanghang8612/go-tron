@@ -173,7 +173,13 @@ var (
 	}
 	logFileFlag = &cli.StringFlag{
 		Name:  "log.file",
-		Usage: "Optional rotating log file path; records are tee'd to this file in JSON",
+		Usage: "Optional rotating log file path",
+	}
+	logFileFormatFlag = &cli.StringFlag{
+		Name:    "log.file.format",
+		Usage:   "File log format: terminal|json|logfmt",
+		Value:   "json",
+		EnvVars: []string{"GTRON_LOG_FILE_FORMAT"},
 	}
 	logFileVerbosityFlag = &cli.IntFlag{
 		Name:    "log.file.verbosity",
@@ -394,6 +400,7 @@ var app = &cli.App{
 		verbosityFlag,
 		logFormatFlag,
 		logFileFlag,
+		logFileFormatFlag,
 		logFileVerbosityFlag,
 		logFileMaxSizeFlag,
 		logFileMaxBackupsFlag,
@@ -449,6 +456,7 @@ var app = &cli.App{
 			Verbosity:      ctx.Int(verbosityFlag.Name),
 			Format:         ctx.String(logFormatFlag.Name),
 			File:           ctx.String(logFileFlag.Name),
+			FileFormat:     ctx.String(logFileFormatFlag.Name),
 			Modules:        ctx.StringSlice(logModuleFlag.Name),
 			FileVerbosity:  ctx.Int(logFileVerbosityFlag.Name),
 			FileMaxSizeMB:  ctx.Int(logFileMaxSizeFlag.Name),

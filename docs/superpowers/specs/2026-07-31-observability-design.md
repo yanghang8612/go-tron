@@ -49,9 +49,10 @@ addresses and RPC request values must never become labels.
 ## Logging model
 
 Console output keeps its selected terminal, JSON or logfmt format. The optional
-file sink always uses JSON and supports an independent level. File logs rotate
-at bounded size, retain a bounded number/age of backups, compress archives, and
-use `0600` permissions. Per-module level overrides apply to both sinks.
+file sink supports the same formats with an independent level; JSON remains the
+compatibility default. File logs rotate at bounded size, retain a bounded
+number/age of backups, compress archives, and use `0600` permissions.
+Per-module level overrides apply to both sinks.
 
 Startup arguments are useful incident evidence but secret-bearing flag values
 must be redacted before logging. The witness private key, snapshot signing keys

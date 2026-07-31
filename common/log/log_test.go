@@ -86,6 +86,53 @@ func TestSetupWithOptions_IndependentFileVerbosity(t *testing.T) {
 	}
 }
 
+func TestSetupWithOptions_TerminalFileFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gtron.log")
+	if err := SetupWithOptions(SetupOptions{
+		Verbosity:      3,
+		Format:         "terminal",
+		File:           path,
+		FileFormat:     "terminal",
+		FileVerbosity:  -1,
+		FileMaxSizeMB:  1,
+		FileMaxBackups: 1,
+		FileMaxAgeDays: 1,
+	}); err != nil {
+		t.Fatalf("SetupWithOptions: %v", err)
+	}
+	t.Cleanup(func() { _ = Close() })
+
+	NewModule("log/test").Info("terminal-file-message", "height", 42)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read terminal log file: %v", err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
+		t.Fatalf("terminal file unexpectedly contains JSON: %s", data)
+	}
+	for _, want := range []string{"INFO", "terminal-file-message", "height=42"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("terminal file missing %q: %s", want, data)
+		}
+	}
+}
+
+func TestSetupWithOptions_RejectsUnknownFileFormat(t *testing.T) {
+	err := SetupWithOptions(SetupOptions{
+		Verbosity:      3,
+		Format:         "terminal",
+		File:           filepath.Join(t.TempDir(), "gtron.log"),
+		FileFormat:     "xml",
+		FileVerbosity:  -1,
+		FileMaxSizeMB:  1,
+		FileMaxBackups: 1,
+		FileMaxAgeDays: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "file log format") {
+		t.Fatalf("unknown file format error = %v", err)
+	}
+}
+
 func TestRedactArgs(t *testing.T) {
 	got := RedactArgs([]string{
 		"gtron",

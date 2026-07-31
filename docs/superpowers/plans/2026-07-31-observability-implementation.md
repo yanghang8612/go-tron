@@ -24,8 +24,8 @@ themselves close an already deployed Nginx route.
 
 ## Phase 2 — logging lifecycle
 
-- [x] Add JSON file rotation (100 MiB, 3 backups, 28 days, compressed by
-  default).
+- [x] Add configurable terminal/JSON/logfmt file rotation (100 MiB, 3 backups,
+  28 days, compressed by default).
 - [x] Force active log-file permissions to `0600`.
 - [x] Add an independent file verbosity while retaining module overrides.
 - [x] Close the rotating writer during CLI teardown.
