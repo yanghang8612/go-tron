@@ -427,6 +427,16 @@ task is dispatched and canonical execution is unchanged. A useful production
 yield with bounded sender critical chains is the gate for implementing the
 first discard-only worker scheduler.
 
+The first production sender-dependency sample covered 140,232 transactions in
+32 seconds. Typed first-pass validity rose from 5.3183% to 17.3420% after the
+explicit sender edge, resolving 16,861 transactions; 68,003 transactions had a
+same-sender predecessor. Transfer reached 77.3361%, but the dominant VM class
+reached only 13.0235%, leaving 115,786 cross-sender conflicts. The last sampled
+block had a sender-chain depth of 27. Before worker implementation, the observer
+therefore splits this residual set by account field, storage, account-KV,
+DynamicProperties, and other families; pre-sender balance/resource counts
+cannot identify the cross-sender VM bottleneck.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

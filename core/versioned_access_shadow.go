@@ -46,6 +46,18 @@ var (
 	versionedShadowOtherSenderFirstPassCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/other/sender_serialized_first_pass_valid", nil)
 	versionedShadowSenderDependencyTaggedCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_dependency/tagged_transactions", nil)
 	versionedShadowSenderDependencyResolvedCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/sender_dependency/resolved_first_pass", nil)
+	versionedShadowSenderAccountConflictCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/conflict/account", nil)
+	versionedShadowSenderStorageConflictCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/conflict/storage", nil)
+	versionedShadowSenderAccountKVConflictCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/conflict/account_kv", nil)
+	versionedShadowSenderDynamicConflictCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/conflict/dynamic", nil)
+	versionedShadowSenderOtherConflictCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/conflict/other", nil)
+	versionedShadowSenderCoarseConflictCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/coarse", nil)
+	versionedShadowSenderExistenceConflictCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/existence", nil)
+	versionedShadowSenderTypeConflictCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/type", nil)
+	versionedShadowSenderBalanceConflictCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/balance", nil)
+	versionedShadowSenderAllowanceConflictCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/allowance", nil)
+	versionedShadowSenderBandwidthConflictCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/bandwidth", nil)
+	versionedShadowSenderFrozenResourceConflictCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/frozen_resource", nil)
 	versionedShadowTypedResolvedCounter                       = metrics.NewRegisteredCounter("core/versioned_shadow/typed/resolved_first_pass", nil)
 	versionedShadowTypedAccountConflictCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/typed/conflict/account", nil)
 	versionedShadowTypedAccountCoarseConflictCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/typed/account_field/conflict/coarse", nil)
@@ -136,6 +148,18 @@ type versionedAccessShadowStats struct {
 	senderDependencyTaggedTransactions   int64
 	senderDependencyResolvedFirstPass    int64
 	maxSenderChainDepth                  int64
+	senderAccountConflicts               int64
+	senderStorageConflicts               int64
+	senderAccountKVConflicts             int64
+	senderDynamicConflicts               int64
+	senderOtherConflicts                 int64
+	senderCoarseConflicts                int64
+	senderExistenceConflicts             int64
+	senderTypeConflicts                  int64
+	senderBalanceConflicts               int64
+	senderAllowanceConflicts             int64
+	senderBandwidthConflicts             int64
+	senderFrozenResourceConflicts        int64
 	typedResolvedFirstPass               int64
 	typedAccountConflicts                int64
 	typedAccountCoarseConflicts          int64
@@ -309,6 +333,18 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 		typedAccountAllowanceConflict       bool
 		typedAccountBandwidthConflict       bool
 		typedAccountFrozenResourceConflict  bool
+		senderAccountConflict               bool
+		senderStorageConflict               bool
+		senderAccountKVConflict             bool
+		senderDynamicConflict               bool
+		senderOtherConflict                 bool
+		senderCoarseConflict                bool
+		senderExistenceConflict             bool
+		senderTypeConflict                  bool
+		senderBalanceConflict               bool
+		senderAllowanceConflict             bool
+		senderBandwidthConflict             bool
+		senderFrozenResourceConflict        bool
 		settlementTagged                    bool
 		settlementBlackholeConflict         bool
 		settlementBurnConflict              bool
@@ -335,6 +371,40 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 				typedReadConflict = true
 				if !s.writtenBySender(typedPrevious, owner, hasOwner) {
 					senderReadConflict = true
+					switch key.Kind {
+					case state.TransactionAccessAccount:
+						senderAccountConflict = true
+						senderCoarseConflict = true
+					case state.TransactionAccessAccountField:
+						senderAccountConflict = true
+						switch key.AccountField {
+						case state.TransactionAccountFieldExistence:
+							senderExistenceConflict = true
+						case state.TransactionAccountFieldAccountType:
+							senderTypeConflict = true
+						case state.TransactionAccountFieldBalance:
+							senderBalanceConflict = true
+						case state.TransactionAccountFieldAllowance:
+							senderAllowanceConflict = true
+						case state.TransactionAccountFieldFrozenResource:
+							senderFrozenResourceConflict = true
+						case state.TransactionAccountFieldNetUsage,
+							state.TransactionAccountFieldLatestOperationTime,
+							state.TransactionAccountFieldLatestConsumeTime,
+							state.TransactionAccountFieldFreeNetUsage,
+							state.TransactionAccountFieldLatestConsumeFreeTime,
+							state.TransactionAccountFieldNetWindow:
+							senderBandwidthConflict = true
+						}
+					case state.TransactionAccessStorage, state.TransactionAccessTransientStorage:
+						senderStorageConflict = true
+					case state.TransactionAccessAccountKV, state.TransactionAccessAccountKVGeneration:
+						senderAccountKVConflict = true
+					case state.TransactionAccessDynamicInt, state.TransactionAccessDynamicString, state.TransactionAccessDynamicHash:
+						senderDynamicConflict = true
+					default:
+						senderOtherConflict = true
+					}
 				}
 				switch key.Kind {
 				case state.TransactionAccessAccount:
@@ -466,6 +536,42 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	}
 	if senderConflict {
 		s.stats.senderConflicts++
+	}
+	if senderAccountConflict {
+		s.stats.senderAccountConflicts++
+	}
+	if senderStorageConflict {
+		s.stats.senderStorageConflicts++
+	}
+	if senderAccountKVConflict {
+		s.stats.senderAccountKVConflicts++
+	}
+	if senderDynamicConflict {
+		s.stats.senderDynamicConflicts++
+	}
+	if senderOtherConflict {
+		s.stats.senderOtherConflicts++
+	}
+	if senderCoarseConflict {
+		s.stats.senderCoarseConflicts++
+	}
+	if senderExistenceConflict {
+		s.stats.senderExistenceConflicts++
+	}
+	if senderTypeConflict {
+		s.stats.senderTypeConflicts++
+	}
+	if senderBalanceConflict {
+		s.stats.senderBalanceConflicts++
+	}
+	if senderAllowanceConflict {
+		s.stats.senderAllowanceConflicts++
+	}
+	if senderBandwidthConflict {
+		s.stats.senderBandwidthConflicts++
+	}
+	if senderFrozenResourceConflict {
+		s.stats.senderFrozenResourceConflicts++
 	}
 	if writeConflict {
 		s.stats.writeConflicts++
@@ -652,6 +758,18 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowOtherSenderFirstPassCounter.Inc(stats.otherSenderFirstPass)
 	versionedShadowSenderDependencyTaggedCounter.Inc(stats.senderDependencyTaggedTransactions)
 	versionedShadowSenderDependencyResolvedCounter.Inc(stats.senderDependencyResolvedFirstPass)
+	versionedShadowSenderAccountConflictCounter.Inc(stats.senderAccountConflicts)
+	versionedShadowSenderStorageConflictCounter.Inc(stats.senderStorageConflicts)
+	versionedShadowSenderAccountKVConflictCounter.Inc(stats.senderAccountKVConflicts)
+	versionedShadowSenderDynamicConflictCounter.Inc(stats.senderDynamicConflicts)
+	versionedShadowSenderOtherConflictCounter.Inc(stats.senderOtherConflicts)
+	versionedShadowSenderCoarseConflictCounter.Inc(stats.senderCoarseConflicts)
+	versionedShadowSenderExistenceConflictCounter.Inc(stats.senderExistenceConflicts)
+	versionedShadowSenderTypeConflictCounter.Inc(stats.senderTypeConflicts)
+	versionedShadowSenderBalanceConflictCounter.Inc(stats.senderBalanceConflicts)
+	versionedShadowSenderAllowanceConflictCounter.Inc(stats.senderAllowanceConflicts)
+	versionedShadowSenderBandwidthConflictCounter.Inc(stats.senderBandwidthConflicts)
+	versionedShadowSenderFrozenResourceConflictCounter.Inc(stats.senderFrozenResourceConflicts)
 	versionedShadowTypedResolvedCounter.Inc(stats.typedResolvedFirstPass)
 	versionedShadowTypedAccountConflictCounter.Inc(stats.typedAccountConflicts)
 	versionedShadowTypedAccountCoarseConflictCounter.Inc(stats.typedAccountCoarseConflicts)

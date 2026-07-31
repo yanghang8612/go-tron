@@ -277,6 +277,9 @@ func TestVersionedAccessShadowModelsErigonSenderDependency(t *testing.T) {
 	if got.senderDependencyTaggedTransactions != 1 || got.maxSenderChainDepth != 2 {
 		t.Fatalf("sender dependency shape = %+v", got)
 	}
+	if got.senderAccountConflicts != 1 || got.senderBalanceConflicts != 1 || got.senderStorageConflicts != 0 || got.senderDynamicConflicts != 0 {
+		t.Fatalf("sender dependency conflict families = %+v", got)
+	}
 	if got.transferTypedFirstPass != 1 || got.transferSenderFirstPass != 2 {
 		t.Fatalf("sender dependency class = %+v", got)
 	}
