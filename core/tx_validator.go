@@ -364,9 +364,9 @@ func validateTxCommonWithSizes(tx *types.Transaction, headBlockTime int64, valid
 	return sizes, nil
 }
 
-// extractContractOwner uses proto reflection to read the owner address from a
-// Transaction_Contract regardless of its concrete type. Almost every TRON
-// contract carries `bytes owner_address`; ShieldedTransferContract uses
+// extractContractOwner reads the typed owner accessor from the transaction's
+// memoized concrete contract. Almost every TRON contract carries
+// `bytes owner_address`; ShieldedTransferContract uses
 // `bytes transparent_from_address` and may legitimately leave it empty.
 //
 // Returns:
@@ -378,18 +378,9 @@ func extractContractOwner(tx *types.Transaction) ([]byte, bool, error) {
 	if contract == nil {
 		return nil, false, ErrNoContract
 	}
-	msg, err := tx.DecodedContract()
+	owner, isShielded, err := tx.ContractOwnerAddress()
 	if err != nil {
 		return nil, false, fmt.Errorf("unmarshal contract parameter: %w", err)
 	}
-	mr := msg.ProtoReflect()
-	fields := mr.Descriptor().Fields()
-	isShielded := contract.Type == corepb.Transaction_Contract_ShieldedTransferContract
-	if fd := fields.ByName("owner_address"); fd != nil {
-		return mr.Get(fd).Bytes(), isShielded, nil
-	}
-	if fd := fields.ByName("transparent_from_address"); fd != nil {
-		return mr.Get(fd).Bytes(), isShielded, nil
-	}
-	return nil, isShielded, nil
+	return owner, isShielded, nil
 }

@@ -3,6 +3,7 @@ package types
 import (
 	"crypto/sha256"
 	"math/rand"
+	"sync"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -72,6 +73,7 @@ func TestBlockValidateTransactionMerkleRoot(t *testing.T) {
 		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 9, TxTrieRoot: root.Bytes()}},
 		Transactions: []*corepb.Transaction{tx},
 	})
+	block.PrewarmTransactionMerkleRoot()
 	if err := block.ValidateTransactionMerkleRoot(); err != nil {
 		t.Fatalf("valid root rejected: %v", err)
 	}
@@ -84,6 +86,37 @@ func TestBlockValidateTransactionMerkleRoot(t *testing.T) {
 	if err := block.ValidateTransactionMerkleRoot(); err == nil {
 		t.Fatal("missing 32-byte root accepted")
 	}
+}
+
+func TestBlockTransactionMerklePrewarmConcurrentWithValidation(t *testing.T) {
+	transactions := make([]*corepb.Transaction, 64)
+	for i := range transactions {
+		transactions[i] = &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: int64(i + 1)}}
+	}
+	root, err := TransactionMerkleRoot(transactions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, TxTrieRoot: root.Bytes()}},
+		Transactions: transactions,
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func(validate bool) {
+			defer wg.Done()
+			if validate {
+				if err := block.ValidateTransactionMerkleRoot(); err != nil {
+					t.Errorf("validation: %v", err)
+				}
+				return
+			}
+			block.PrewarmTransactionMerkleRoot()
+		}(i%2 == 0)
+	}
+	wg.Wait()
 }
 
 // TestMerkleRoot_Empty: java-tron stores 32 bytes of zero in `tx_trie_root`

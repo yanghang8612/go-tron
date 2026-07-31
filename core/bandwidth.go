@@ -10,8 +10,6 @@ import (
 	"github.com/tronprotocol/go-tron/crypto/pq"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
 )
 
 // trxPrecision is the SUN-per-TRX conversion used by resource weight math.
@@ -62,9 +60,8 @@ func transactionSizeWithoutRet(tx *types.Transaction) int {
 }
 
 // transactionWireSizes holds the protobuf size facts used by validation and
-// bandwidth accounting. It is intentionally scoped to one transaction
-// execution rather than cached on types.Transaction: callers may mutate the
-// underlying protobuf before submitting or building a block.
+// bandwidth accounting. Immutable block transactions reuse types.Transaction's
+// preprocessed facts; mutable standalone transactions are measured per call.
 type transactionWireSizes struct {
 	full       int
 	withoutRet int
@@ -77,19 +74,15 @@ type transactionWireSizes struct {
 // protobuf walk across common validation, the result-size guard, and bandwidth
 // accounting.
 func measureTransactionWireSizes(tx *types.Transaction) transactionWireSizes {
-	pb := tx.Proto()
-	if pb == nil {
+	if tx == nil {
 		return transactionWireSizes{}
 	}
-	sizes := transactionWireSizes{full: tx.Size()}
-	sizes.withoutRet = sizes.full
-	const retFieldNumber = protowire.Number(5)
-	for _, result := range pb.Ret {
-		resultSize := proto.Size(result)
-		sizes.results += resultSize
-		sizes.withoutRet -= protowire.SizeTag(retFieldNumber) + protowire.SizeBytes(resultSize)
+	precomputed := tx.SerializedSizes()
+	return transactionWireSizes{
+		full:       precomputed.Full,
+		withoutRet: precomputed.WithoutRet,
+		results:    precomputed.Results,
 	}
-	return sizes
 }
 
 // transactionSizes preserves the small tuple helper used by focused tests and

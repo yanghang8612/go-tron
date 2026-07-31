@@ -67,6 +67,18 @@ type Transaction struct {
 	pb       *corepb.Transaction
 	hash     common.Hash
 	hashOnce sync.Once
+	// immutableBlockMember is set only by Block.Transactions. Network/stored
+	// blocks own an immutable protobuf graph, so pure serialized-size facts may
+	// be retained beside the already memoized contract decode. Standalone
+	// transactions keep recomputing sizes because builders and tests may mutate
+	// their protobuf before admission.
+	immutableBlockMember bool
+	// Wire transactions are bounded far below 4 GiB (consensus accepts at most
+	// 500 KiB). uint32 keeps these three facts to 12 bytes per block member.
+	serializedSizeOnce   sync.Once
+	serializedSizeFull   uint32
+	serializedWithoutRet uint32
+	serializedResults    uint32
 
 	// contractMessage memoizes Any.UnmarshalNew for the first (and, by TRON
 	// envelope rules, only) contract. Envelope validation, bandwidth charging,
@@ -106,6 +118,14 @@ type Transaction struct {
 	// placing its one element here removes one tiny heap object per ordinary
 	// transaction without changing the public []Address result.
 	signerInline [1]common.Address
+}
+
+// TransactionSerializedSizes contains the protobuf size facts shared by
+// common validation, result-size checks, and bandwidth charging.
+type TransactionSerializedSizes struct {
+	Full       int
+	WithoutRet int
+	Results    int
 }
 
 func NewTransactionFromPB(pb *corepb.Transaction) *Transaction {
@@ -221,6 +241,69 @@ func (tx *Transaction) DecodedContract() (proto.Message, error) {
 		tx.contractMessage, tx.contractMessageErr = contract.Parameter.UnmarshalNew()
 	})
 	return tx.contractMessage, tx.contractMessageErr
+}
+
+// SerializedSizes returns the transaction's complete encoded size, its size
+// without field-5 Ret entries, and the Ret payload total. Immutable block
+// members retain the result in a dedicated memo; mutable standalone
+// transactions are measured on every call. Keeping this independent from
+// DecodedContract avoids forcing contract decoding before an ordered size
+// rejection on sub-threshold batches.
+func (tx *Transaction) SerializedSizes() TransactionSerializedSizes {
+	if tx == nil {
+		return TransactionSerializedSizes{}
+	}
+	if !tx.immutableBlockMember {
+		return measureTransactionSerializedSizes(tx.pb)
+	}
+	tx.serializedSizeOnce.Do(func() {
+		sizes := measureTransactionSerializedSizes(tx.pb)
+		tx.serializedSizeFull = uint32(sizes.Full)
+		tx.serializedWithoutRet = uint32(sizes.WithoutRet)
+		tx.serializedResults = uint32(sizes.Results)
+	})
+	return TransactionSerializedSizes{
+		Full:       int(tx.serializedSizeFull),
+		WithoutRet: int(tx.serializedWithoutRet),
+		Results:    int(tx.serializedResults),
+	}
+}
+
+// ContractOwnerAddress returns the cached contract's owner field. Fully
+// shielded transfers may return an empty address; the boolean identifies that
+// contract family so consensus validation can preserve java-tron's exception.
+func (tx *Transaction) ContractOwnerAddress() ([]byte, bool, error) {
+	contract := tx.Contract()
+	if contract == nil {
+		return nil, false, errors.New("transaction has no contract")
+	}
+	message, err := tx.DecodedContract()
+	if err != nil {
+		return nil, false, err
+	}
+	isShielded := contract.Type == corepb.Transaction_Contract_ShieldedTransferContract
+	if value, ok := message.(interface{ GetOwnerAddress() []byte }); ok {
+		return value.GetOwnerAddress(), isShielded, nil
+	}
+	if value, ok := message.(interface{ GetTransparentFromAddress() []byte }); ok {
+		return value.GetTransparentFromAddress(), isShielded, nil
+	}
+	return nil, isShielded, nil
+}
+
+func measureTransactionSerializedSizes(pb *corepb.Transaction) TransactionSerializedSizes {
+	if pb == nil {
+		return TransactionSerializedSizes{}
+	}
+	sizes := TransactionSerializedSizes{Full: proto.Size(pb)}
+	sizes.WithoutRet = sizes.Full
+	const retFieldNumber = protowire.Number(5)
+	for _, result := range pb.Ret {
+		resultSize := proto.Size(result)
+		sizes.Results += resultSize
+		sizes.WithoutRet -= protowire.SizeTag(retFieldNumber) + protowire.SizeBytes(resultSize)
+	}
+	return sizes
 }
 
 func verifyTriggerDecodeReserveLayout() bool {

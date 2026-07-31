@@ -166,6 +166,12 @@ type Block struct {
 	// come from UnmarshalBlock), so caching the wrappers is safe.
 	txsOnce sync.Once
 	txs     []*Transaction
+	// transactionMerkleOnce lets the batch preprocessing pool compute the full
+	// transaction Merkle root before ordered header validation reaches this
+	// block. The protobuf transaction graph is immutable after construction.
+	transactionMerkleOnce sync.Once
+	transactionMerkleRoot common.Hash
+	transactionMerkleErr  error
 
 	// witness memoizes the ECDSA recovery of the block's witness signature
 	// (recovered address or error), keyed by this block's identity. Header
@@ -244,7 +250,7 @@ func (b *Block) ValidateTransactionMerkleRoot() error {
 	if len(encoded) != common.HashLength {
 		return fmt.Errorf("%w for block %d: root length %d, want %d", ErrInvalidTransactionMerkleRoot, b.Number(), len(encoded), common.HashLength)
 	}
-	actual, err := TransactionMerkleRoot(b.pb.Transactions)
+	actual, err := b.cachedTransactionMerkleRoot()
 	if err != nil {
 		return fmt.Errorf("%w for block %d: %v", ErrInvalidTransactionMerkleRoot, b.Number(), err)
 	}
@@ -253,6 +259,22 @@ func (b *Block) ValidateTransactionMerkleRoot() error {
 		return fmt.Errorf("%w for block %d: expected %x, actual %x", ErrInvalidTransactionMerkleRoot, b.Number(), expected, actual)
 	}
 	return nil
+}
+
+func (b *Block) cachedTransactionMerkleRoot() (common.Hash, error) {
+	b.transactionMerkleOnce.Do(func() {
+		b.transactionMerkleRoot, b.transactionMerkleErr = TransactionMerkleRoot(b.pb.Transactions)
+	})
+	return b.transactionMerkleRoot, b.transactionMerkleErr
+}
+
+// PrewarmTransactionMerkleRoot computes the immutable body root without making
+// an accept/reject decision. ValidateTransactionMerkleRoot still compares it
+// with the header in canonical order and returns the memoized error unchanged.
+func (b *Block) PrewarmTransactionMerkleRoot() {
+	if b != nil {
+		_, _ = b.cachedTransactionMerkleRoot()
+	}
 }
 
 func (b *Block) Version() int32 {
@@ -272,6 +294,7 @@ func (b *Block) Transactions() []*Transaction {
 		for i, pb := range b.pb.Transactions {
 			storage[i].pb = pb
 			storage[i].borrowTriggerData = true
+			storage[i].immutableBlockMember = true
 			txs[i] = &storage[i]
 		}
 		b.txs = txs

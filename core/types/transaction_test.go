@@ -158,6 +158,75 @@ func TestTransactionDecodedContractMemoizesError(t *testing.T) {
 	}
 }
 
+func TestBlockTransactionMemoizesSerializedSizes(t *testing.T) {
+	transfer := &contractpb.TransferContract{
+		OwnerAddress: []byte{0x41, 0x01},
+		ToAddress:    []byte{0x41, 0x02},
+		Amount:       100,
+	}
+	parameter, err := anypb.New(transfer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := &corepb.Transaction_Result{ContractRet: corepb.Transaction_Result_SUCCESS}
+	pb := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TransferContract,
+			Parameter: parameter,
+		}}},
+		Signature: [][]byte{make([]byte, 65)},
+		Ret:       []*corepb.Transaction_Result{result},
+	}
+	tx := NewBlockFromPB(&corepb.Block{Transactions: []*corepb.Transaction{pb}}).Transactions()[0]
+
+	resultSize := proto.Size(result)
+	want := TransactionSerializedSizes{
+		Full:       proto.Size(pb),
+		WithoutRet: proto.Size(pb) - protowire.SizeTag(5) - protowire.SizeBytes(resultSize),
+		Results:    resultSize,
+	}
+	if got := tx.SerializedSizes(); got != want {
+		t.Fatalf("serialized sizes = %+v, want %+v", got, want)
+	}
+	if got := (TransactionSerializedSizes{Full: int(tx.serializedSizeFull), WithoutRet: int(tx.serializedWithoutRet), Results: int(tx.serializedResults)}); got != want {
+		t.Fatalf("block-member sizes were not retained: %+v", got)
+	}
+	// Block transaction protobufs are immutable by contract. Deliberately
+	// mutating this fixture proves subsequent serial consumers use the memo
+	// produced by preprocessing rather than walking the graph again.
+	pb.Ret = nil
+	if got := tx.SerializedSizes(); got != want {
+		t.Fatalf("memoized sizes changed after fixture mutation: %+v", got)
+	}
+}
+
+func TestStandaloneTransactionSerializedSizesTrackMutation(t *testing.T) {
+	pb := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 1}}
+	tx := NewTransactionFromPB(pb)
+	before := tx.SerializedSizes()
+	pb.Ret = append(pb.Ret, &corepb.Transaction_Result{ContractRet: corepb.Transaction_Result_SUCCESS})
+	after := tx.SerializedSizes()
+	if after.Full <= before.Full || after.Results == 0 || after.WithoutRet != before.WithoutRet {
+		t.Fatalf("sizes did not track standalone mutation: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestTransactionContractOwnerAddressUsesDecodedContract(t *testing.T) {
+	owner := []byte{0x41, 0x01}
+	parameter, err := anypb.New(&contractpb.TransferContract{OwnerAddress: owner, ToAddress: []byte{0x41, 0x02}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{
+		Type:      corepb.Transaction_Contract_TransferContract,
+		Parameter: parameter,
+	}}}})
+	got, shielded, err := tx.ContractOwnerAddress()
+	if err != nil || shielded || !bytes.Equal(got, owner) {
+		t.Fatalf("owner = %x shielded=%t err=%v", got, shielded, err)
+	}
+}
+
 func TestTransactionDecodedTriggerContractUsesInlineSlot(t *testing.T) {
 	want := &contractpb.TriggerSmartContract{
 		OwnerAddress:    []byte{0x41, 0x01},

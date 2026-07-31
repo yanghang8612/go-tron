@@ -308,9 +308,9 @@ func (bc *BlockChain) SetEngine(eng consensus.Engine) {
 // headerSigPrewarmer returns the consensus engine as a headerSignaturePrewarmer
 // for the parallel signature pre-pass, or nil when no engine is wired (test
 // path) or the engine doesn't implement header-signature prewarming. When nil,
-// the pre-pass warms only transaction senders; header recovery (also skipped
-// without an engine) happens inline. Mirrors the bc.engine != nil guard that
-// gates VerifyHeaderWithDynProps.
+// the shared pre-pass can still warm transaction and body facts; header recovery
+// happens inline. Mirrors the bc.engine != nil guard that gates
+// VerifyHeaderWithDynProps.
 func (bc *BlockChain) headerSigPrewarmer() headerSignaturePrewarmer {
 	if bc.engine == nil {
 		return nil
@@ -839,11 +839,11 @@ func (bc *BlockChain) insertBlocksLockedModeWithOptions(blocks []*types.Block, s
 	// replay therefore follows the normal writer path instead of branching into
 	// the retired freezer-v2/immutable-index compatibility path.
 	_ = storedReplay
-	// Parallel signature pre-verification: start every tx's sender recovery and
-	// every block's witness-signature recovery, then overlap later-block jobs with
-	// ordered state execution. Pure cache warming — the serial path (envelope
-	// validation, header verification) still owns every accept/reject decision
-	// and reads an identical memoized value, waiting/computing inline on a miss.
+	// Parallel immutable preprocessing: start transaction decode/size/sender and
+	// block Merkle/witness work, then overlap later-block jobs with ordered state
+	// execution. Pure cache warming — the serial path (envelope and header
+	// validation) still owns every accept/reject decision and reads identical
+	// memoized values, waiting/computing inline on a miss.
 	// An engine-less offline replay deliberately skips both header and envelope
 	// validation, so no ordered consumer can observe these memos; avoid spending
 	// a full ECDSA recovery pass solely to discard it.

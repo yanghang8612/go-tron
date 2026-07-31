@@ -384,8 +384,8 @@ func stateReadAheadTargets(block *types.Block) []stateReadAheadTarget {
 		if err != nil || message == nil {
 			continue
 		}
-		if value, ok := message.(interface{ GetOwnerAddress() []byte }); ok {
-			add(value.GetOwnerAddress(), false)
+		if owner, _, err := tx.ContractOwnerAddress(); err == nil {
+			add(owner, false)
 		}
 		if value, ok := message.(interface{ GetToAddress() []byte }); ok {
 			add(value.GetToAddress(), false)

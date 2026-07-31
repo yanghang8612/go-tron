@@ -5,16 +5,21 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
-// ParallelSigVerifyMinTxs gates the parallel signature pre-verification pass run
-// at the top of InsertBlocks. When the total transaction count across the batch
-// is at least this value, every transaction's sender recovery (and every block's
-// witness-signature recovery) is computed concurrently on a bounded worker pool,
-// warming the per-tx / per-block memos so the serial execution path reads them
-// instead of doing ECDSA on the critical hot path. Below the threshold the pass
-// is skipped and recovery happens inline during execution.
+var (
+	blockPreprocessBlocksCounter         = metrics.NewRegisteredCounter("core/block_preprocess/blocks", nil)
+	blockPreprocessTransactionsCounter   = metrics.NewRegisteredCounter("core/block_preprocess/transactions", nil)
+	blockPreprocessContractErrorsCounter = metrics.NewRegisteredCounter("core/block_preprocess/contract_errors", nil)
+)
+
+// ParallelSigVerifyMinTxs gates the immutable block-preprocessing pass run at
+// the top of InsertBlocks. Above the threshold, one bounded pool warms sender
+// and witness recovery, transaction contract/size facts, and body Merkle roots.
+// The historical variable name is retained because signature recovery remains
+// the dominant work and the threshold is an internal test/benchmark control.
 //
 // 0 disables the parallel pre-pass entirely (pure inline recovery, the original
 // behavior) — an operational kill switch, never a consensus toggle. Both paths
@@ -22,15 +27,12 @@ import (
 // no accept/reject decision; the serial path still owns every check and observes
 // an identical recovered value whether it was precomputed or computed inline.
 //
-// The default is a small positive threshold so a batch of a few txs (single-block
-// extension in steady state) stays serial and never pays goroutine-spawn
-// overhead, while a real sync batch (up to maxFetchBatch blocks, each up to
-// hundreds of txs) fans the ECDSA work out across idle cores. Signature recovery
-// is ~6-10% of the single-threaded sync hot path; this split moves it off the
-// critical path.
+// The default keeps light steady-state extensions serial while a real sync
+// batch fans immutable work out across idle cores. The ordered path still owns
+// every header, envelope, and state-dependent validation decision.
 var ParallelSigVerifyMinTxs = defaultParallelSigVerifyMinTxs
 
-// ParallelSigVerifyMaxWorkers caps the signature prewarm worker pool. A
+// ParallelSigVerifyMaxWorkers caps the shared preprocessing worker pool. A
 // positive value is an explicit cap; zero or less uses the automatic policy,
 // which reserves one GOMAXPROCS slot for overlapping state/commitment work.
 // ECDSA recovery runs in cgo and releases its P, so a GOMAXPROCS-sized recovery
@@ -56,10 +58,10 @@ type headerSignaturePrewarmer interface {
 // warmed on the happy path / not touched when the kill switch is off.
 var sigPrewarmJobHook func()
 
-// signaturePrewarmRun owns the worker lifetime of one batch. Callers may execute
-// blocks while it runs, but must Wait before releasing the batch. RecoverSigners'
-// sync.Once and the header memo safely turn an early serial read into a wait for
-// that one in-flight recovery; workers otherwise stay ahead on later blocks.
+// signaturePrewarmRun owns the preprocessing worker lifetime of one batch.
+// Callers may execute blocks while it runs, but must Wait before releasing the
+// batch. Each derived fact is protected by the transaction/block memo that the
+// serial path reads, so an early consumer waits only for its own in-flight fact.
 type signaturePrewarmRun struct {
 	wg sync.WaitGroup
 }
@@ -80,25 +82,22 @@ func (r *signaturePrewarmRun) Wait() {
 	}
 }
 
-// prewarmBlockSignatures is the synchronous wrapper retained for focused callers
-// and benchmarks. The block insertion paths use startBlockSignaturePrewarm
-// directly so signature recovery for later blocks overlaps current-block state
-// execution, then join the returned run before the batch is released.
+// prewarmBlockSignatures is the historical synchronous wrapper retained for
+// focused callers and benchmarks. Block insertion starts the same shared
+// preprocessing asynchronously and joins it before releasing the batch.
 func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarmer) {
 	startBlockSignaturePrewarm(blocks, engine).Wait()
 }
 
-// startBlockSignaturePrewarm starts warming the ECDSA-recovery memos for a
-// contiguous batch of blocks: each transaction's recovered signers and (when the
-// engine supports it) each block's recovered witness. It is pure cache warming
-// and never aborts on a bad signature; a recovery error is captured in the memo
-// and surfaced, identically, by the ordered verification/envelope path.
+// startBlockSignaturePrewarm warms immutable preprocessing memos for a
+// contiguous batch: transaction hash/signers, contract decode/wire sizes, each
+// block's transaction Merkle root, and (when supported) recovered witness. It
+// never makes an accept/reject decision; ordered verification consumes the same
+// memoized values and errors.
 //
-// Concurrency safety: the per-tx signers memo (sync.Once) and the per-block
-// witness memo (mutex-guarded) are each populated at most once and are pure
-// functions of immutable proto fields, so warming them from many goroutines races
-// with nothing and yields the same value the serial path would compute. Blocks the
-// pre-pass never sees (e.g. fork-replay) just miss the cache and recover inline.
+// Concurrency safety: transaction signers/contract facts and block witness/body
+// facts are each populated at most once from immutable protobuf fields. Blocks
+// the pass never sees simply compute the same facts inline.
 func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePrewarmer) *signaturePrewarmRun {
 	if ParallelSigVerifyMinTxs <= 0 || len(blocks) == 0 {
 		return nil
@@ -109,32 +108,31 @@ func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePre
 	// without constructing Transaction wrappers that the serial path may never
 	// need (for example, after a header rejection).
 	totalTx := 0
-	headerJobs := 0
+	blockJobs := 0
 	for _, block := range blocks {
 		if block == nil {
 			continue
 		}
-		totalTx += len(block.Proto().GetTransactions())
-		if engine != nil {
-			headerJobs++
+		pb := block.Proto()
+		if pb != nil {
+			totalTx += len(pb.GetTransactions())
+			blockJobs++
 		}
 	}
 	// Gate on transaction volume: a near-empty batch is cheaper to recover
-	// inline than to fan out. Header-only jobs don't count toward the gate.
-	if totalTx < ParallelSigVerifyMinTxs || totalTx+headerJobs == 0 {
+	// inline than to fan out. Block-only jobs don't count toward the gate.
+	if totalTx < ParallelSigVerifyMinTxs || totalTx+blockJobs == 0 {
 		return nil
 	}
 
-	// Flatten the batch into independent recovery jobs so work is balanced
+	// Flatten the batch into independent preprocessing jobs so work is balanced
 	// across goroutines regardless of how txs are distributed between blocks.
-	jobs := make([]signaturePrewarmJob, 0, totalTx+headerJobs)
+	jobs := make([]signaturePrewarmJob, 0, totalTx+blockJobs)
 	for _, block := range blocks {
 		if block == nil || block.Proto() == nil {
 			continue
 		}
-		if engine != nil {
-			jobs = append(jobs, signaturePrewarmJob{block: block})
-		}
+		jobs = append(jobs, signaturePrewarmJob{block: block})
 		for _, tx := range block.Transactions() {
 			jobs = append(jobs, signaturePrewarmJob{tx: tx})
 		}
@@ -182,19 +180,25 @@ func signaturePrewarmWorkerCount(jobCount int) int {
 	return workers
 }
 
-// runSigJob executes one recovery job. A non-nil block warms the header
-// signature; otherwise tx identifies the transaction signer memo to warm.
-// Errors are intentionally discarded here — they are memoized and resurfaced
-// by the serial path.
+// runSigJob executes one immutable preprocessing job. Errors are intentionally
+// discarded here: the serial path consumes the same memo and returns them at
+// the original ordered validation boundary.
 func runSigJob(job signaturePrewarmJob, engine headerSignaturePrewarmer) {
 	if sigPrewarmJobHook != nil {
 		sigPrewarmJobHook()
 	}
 	if job.block != nil {
+		job.block.PrewarmTransactionMerkleRoot()
 		if engine != nil {
 			engine.PrewarmHeaderSignature(job.block)
 		}
+		blockPreprocessBlocksCounter.Inc(1)
 		return
 	}
+	_ = job.tx.SerializedSizes()
+	if _, err := job.tx.DecodedContract(); err != nil {
+		blockPreprocessContractErrorsCounter.Inc(1)
+	}
 	_, _ = job.tx.RecoverSigners()
+	blockPreprocessTransactionsCounter.Inc(1)
 }

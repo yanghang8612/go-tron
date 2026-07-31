@@ -139,6 +139,32 @@ Use idle cores before attempting parallel mutation:
 Results are consumed in original block/transaction order. The serial path owns
 the final accept/reject decision.
 
+The first implemented slice follows Erigon's separation between pure
+preprocessing and ordered execution without introducing another worker pool:
+
+- the existing bounded batch signature pool is now a shared immutable-block
+  preprocessing pool;
+- each block job computes the transaction Merkle root and, when supported by
+  the consensus engine, recovers the witness signer;
+- each transaction job computes the txid/signers, decodes the typed contract,
+  and measures the complete, result-free, and result-only protobuf sizes;
+- immutable block-member transactions retain those size facts, while mutable
+  standalone transactions recompute them on every call so txpool/builders keep
+  their existing mutation semantics;
+- owner extraction consumes the memoized typed contract instead of performing
+  protobuf reflection in the ordered envelope path;
+- state read ahead consumes the same typed owner accessor, so it cannot create
+  a second decode/cache representation;
+- Merkle comparison, size/expiration rejection, permission lookup, TAPOS,
+  actuator validation, and every state mutation remain at their original
+  serial boundaries and observe the memoized value or error.
+
+The pool still gates on transaction volume and reserves one `GOMAXPROCS` slot
+under its automatic policy. There is no new CLI flag, compatibility branch, or
+persistent cache format. Metrics expose preprocessed blocks, transactions, and
+contract-decode errors so production profiles can verify that the ordered path
+actually consumes the work rather than duplicating it.
+
 ### P4: Conflict-aware speculative transaction execution
 
 Erigon's parallel executor cannot be copied directly because TRON actuators,

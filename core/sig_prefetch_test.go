@@ -108,11 +108,14 @@ func benchPrewarm(b *testing.B, minTxs, maxWorkers int) {
 		blocks := mkBlocks()
 		b.StartTimer()
 		prewarmBlockSignatures(blocks, nil)
-		// Force the serial-equivalent recovery when the kill switch is on so
-		// both arms do the same total ECDSA work (apples-to-apples).
+		// Force the serial-equivalent immutable preprocessing when the kill
+		// switch is on so both arms do the same total work (apples-to-apples).
 		if minTxs == 0 {
 			for _, blk := range blocks {
+				blk.PrewarmTransactionMerkleRoot()
 				for _, tx := range blk.Transactions() {
+					_ = tx.SerializedSizes()
+					_, _ = tx.DecodedContract()
 					_, _ = tx.RecoverSigners()
 				}
 			}
@@ -373,7 +376,7 @@ func TestStartBlockSignaturePrewarmReturnsBeforeWorkersFinish(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("prewarm Wait did not join released workers")
 	}
-	if got, want := jobs.Load(), int64(64); got != want {
+	if got, want := jobs.Load(), int64(66); got != want {
 		t.Fatalf("prewarm jobs = %d, want %d", got, want)
 	}
 }

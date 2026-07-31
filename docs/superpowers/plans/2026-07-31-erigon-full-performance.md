@@ -37,10 +37,18 @@
 
 - [ ] Profile protobuf decode, signature, envelope, receipt/log, and derived
   index costs on a transaction-dense fixed replay.
+- [x] Expand the bounded signature pool into a shared immutable-block
+  preprocessing pool without adding workers or configuration.
+- [x] Precompute transaction Merkle roots, typed contract decode, protobuf wire
+  sizes, txid/signers, and witness recovery for sync batches.
+- [x] Keep mutable standalone transaction sizing uncached and retain serial
+  authoritative validation/error ordering.
+- [x] Replace ordered owner reflection and read-ahead owner extraction with the
+  shared typed-contract memo.
 - [ ] Parallelize independent static validation with serial authoritative
-  consumption.
-- [ ] Move deterministic key extraction and eligible cold reads ahead of the
-  serial executor.
+  consumption beyond the implemented immutable facts.
+- [x] Move deterministic latest-state key extraction and eligible reads ahead
+  of the serial executor.
 - [ ] Parallelize derived receipt/log/trace encoding behind recoverable stages.
 
 ## P4: Conflict-aware execution
