@@ -819,6 +819,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	var discardShadow *discardShadowBlock
 	if shadowEnabled && collectTxInfos {
 		discardShadow = prepareDiscardShadowBlock(statedb, dynProps, block.Number())
+		if discardShadow != nil {
+			versionedShadow.EnableWriteSetCapture(len(transactions))
+		}
 	}
 
 	for i, tx := range transactions {

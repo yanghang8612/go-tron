@@ -130,11 +130,18 @@ type versionedAccessShadow struct {
 	dependencyEdges      []transactionDependencyEdge
 	transactionSupported []bool
 	transactionDurations []int64
+	transactionWriteSets []state.TransactionWriteSet
+	transactionWritesOK  []bool
 	transactionStarted   time.Time
 	lastBarrierTx        int
 	dependencyMinWave    int
 	dependencyMaxWave    int
 	stats                versionedAccessShadowStats
+}
+
+func (s *versionedAccessShadow) EnableWriteSetCapture(transactionCount int) {
+	s.transactionWriteSets = make([]state.TransactionWriteSet, transactionCount)
+	s.transactionWritesOK = make([]bool, transactionCount)
 }
 
 type versionedAccessShadowStats struct {
@@ -385,6 +392,13 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 		s.transactionDurations[txIndex] = time.Since(s.transactionStarted).Nanoseconds()
 	}
 	s.detach(statedb, dynProps)
+	if txIndex >= 0 && txIndex < len(s.transactionWriteSets) {
+		writes, known, captureErr := statedb.CaptureTransactionWriteSet(journalMark, &s.recorder, dynProps)
+		if captureErr == nil && known {
+			s.transactionWriteSets[txIndex] = writes
+			s.transactionWritesOK[txIndex] = true
+		}
+	}
 	s.stats.transactions++
 	if s.lastBarrierTx >= 0 {
 		s.addDependency(txIndex, s.lastBarrierTx)

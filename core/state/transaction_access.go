@@ -130,6 +130,7 @@ type TransactionAccessRecorder struct {
 	accounts             map[tcommon.Address]TransactionAccessMode
 	accountFields        map[TransactionAccountFieldKey]TransactionAccessMode
 	accountFieldWrites   map[tcommon.Address]struct{}
+	commutativeDeltas    map[TransactionAccessKey]int64
 	unsupported          bool
 	commutativeScopeKey  TransactionAccessKey
 	commutativeScopeOpen bool
@@ -152,9 +153,31 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 	clear(r.accounts)
 	clear(r.accountFields)
 	clear(r.accountFieldWrites)
+	clear(r.commutativeDeltas)
 	r.unsupported = false
 	r.commutativeScopeKey = TransactionAccessKey{}
 	r.commutativeScopeOpen = false
+}
+
+func (r *TransactionAccessRecorder) recordCommutativeDelta(key TransactionAccessKey, delta int64) {
+	if r == nil || delta == 0 {
+		return
+	}
+	if r.commutativeDeltas == nil {
+		r.commutativeDeltas = make(map[TransactionAccessKey]int64, 8)
+	}
+	r.commutativeDeltas[key] += delta
+}
+
+// CommutativeDelta returns the transaction-local settlement increment for key.
+// The absolute state value remains canonical and serial; ordered publication
+// applies this delta after validating all ordinary reads.
+func (r *TransactionAccessRecorder) CommutativeDelta(key TransactionAccessKey) (int64, bool) {
+	if r == nil {
+		return 0, false
+	}
+	delta, ok := r.commutativeDeltas[key]
+	return delta, ok
 }
 
 // Visit visits each unique access in unspecified order. Returning false stops
@@ -392,6 +415,7 @@ func (dp *DynamicProperties) addCommutativeInt(key string, delta int64) {
 	}
 	if recorder := dp.transactionAccess; recorder != nil {
 		accessKey := TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: key}
+		recorder.recordCommutativeDelta(accessKey, delta)
 		previousKey, previousOpen := recorder.beginCommutativeScope(accessKey)
 		dp.Set(key, dp.readInt(key)+delta)
 		recorder.endCommutativeScope(previousKey, previousOpen)

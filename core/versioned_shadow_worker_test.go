@@ -5,6 +5,7 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -96,6 +97,11 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx.Proto()},
 	})
 
+	var accessRecorder state.TransactionAccessRecorder
+	accessRecorder.Reset(16)
+	canonical.SetTransactionAccessRecorder(&accessRecorder)
+	canonical.DynamicProperties().SetTransactionAccessRecorder(&accessRecorder)
+	journalMark := canonical.DomainChangeJournalMark()
 	result, err := applyTransaction(
 		canonical,
 		canonical.DynamicProperties(),
@@ -119,6 +125,13 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	canonical.SetTransactionAccessRecorder(nil)
+	canonical.DynamicProperties().SetTransactionAccessRecorder(nil)
+	canonical.FinalizeTransaction()
+	canonicalWriteSet, known, err := canonical.CaptureTransactionWriteSet(journalMark, &accessRecorder, canonical.DynamicProperties())
+	if err != nil || !known {
+		t.Fatalf("capture canonical transfer writes: known=%v err=%v", known, err)
+	}
 	canonicalInfo := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), canonical.DynamicProperties().AllowTransactionFeePool())
 	worker := discardShadowWorker{
 		state:     workerState,
@@ -126,13 +139,14 @@ func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
 		forkCache: forks.NewVersionPassCache().BlockScope(),
 	}
 	got := worker.execute(0, discardShadowRunConfig{
-		block:            block,
-		transactions:     []*types.Transaction{tx},
-		canonicalInfos:   []*corepb.TransactionInfo{canonicalInfo},
-		genesisTimestamp: 0,
+		block:              block,
+		transactions:       []*types.Transaction{tx},
+		canonicalInfos:     []*corepb.TransactionInfo{canonicalInfo},
+		canonicalWriteSets: []state.TransactionWriteSet{canonicalWriteSet},
+		genesisTimestamp:   0,
 	})
-	if got.err != nil || !got.matched {
-		t.Fatalf("discard worker = matched:%v err:%v", got.matched, got.err)
+	if got.err != nil || !got.matched || got.writeSetErr != nil || !got.writeSetMatch {
+		t.Fatalf("discard worker = info-matched:%v writes-matched:%v err:%v write-err:%v", got.matched, got.writeSetMatch, got.err, got.writeSetErr)
 	}
 	if balance := workerState.GetBalance(owner); balance != 10_000_000 {
 		t.Fatalf("discard worker owner balance = %d, want 10000000", balance)

@@ -30,6 +30,9 @@ var (
 	discardShadowMismatchesCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatches", nil)
 	discardShadowCoreMatchesCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/core_matches", nil)
 	discardShadowCoreMismatchesCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/core_mismatches", nil)
+	discardShadowWriteSetMatchesCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_matches", nil)
+	discardShadowWriteSetMismatchesCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_mismatches", nil)
+	discardShadowWriteSetErrorsCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/state_write_set_errors", nil)
 	discardShadowErrorsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/errors", nil)
 	discardShadowCopyNanosCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/copy_nanos", nil)
 	discardShadowExecutionNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/execution_nanos", nil)
@@ -146,11 +149,13 @@ func prepareDiscardShadowBlock(statedb *state.StateDB, dynProps *state.DynamicPr
 }
 
 type discardShadowTaskResult struct {
-	class     discardShadowTransactionClass
-	mismatch  discardShadowMismatch
-	coreMatch bool
-	matched   bool
-	err       error
+	class         discardShadowTransactionClass
+	mismatch      discardShadowMismatch
+	coreMatch     bool
+	matched       bool
+	writeSetMatch bool
+	writeSetErr   error
+	err           error
 }
 
 type discardShadowTransactionClass uint8
@@ -363,6 +368,7 @@ type discardShadowRunConfig struct {
 	genesisHash             tcommon.Hash
 	transactions            []*types.Transaction
 	canonicalInfos          []*corepb.TransactionInfo
+	canonicalWriteSets      []state.TransactionWriteSet
 }
 
 type discardShadowRunStats struct {
@@ -377,10 +383,14 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 	if shadow == nil || shadow.base == nil || versioned == nil || cfg.block == nil || len(cfg.canonicalInfos) != len(cfg.transactions) {
 		return discardShadowRunStats{}
 	}
+	cfg.canonicalWriteSets = versioned.transactionWriteSets
 	candidates := make([]int, 0, discardShadowWorkerCount*2)
 	for txIndex := range cfg.transactions {
+		writeSetReady := len(versioned.transactionWritesOK) == 0 ||
+			(txIndex < len(versioned.transactionWritesOK) && versioned.transactionWritesOK[txIndex])
 		if txIndex < len(versioned.transactionSupported) && versioned.transactionSupported[txIndex] &&
-			txIndex < len(versioned.dependencyHeads) && versioned.dependencyHeads[txIndex] < 0 {
+			txIndex < len(versioned.dependencyHeads) && versioned.dependencyHeads[txIndex] < 0 &&
+			writeSetReady {
 			candidates = append(candidates, txIndex)
 		}
 	}
@@ -435,7 +445,7 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 		close(results)
 	}()
 
-	var executed, matches, mismatches, coreMatches, coreMismatches, executionErrors int64
+	var executed, matches, mismatches, coreMatches, coreMismatches, writeSetMatches, writeSetMismatches, writeSetErrors, executionErrors int64
 	for result := range results {
 		executed++
 		switch {
@@ -528,6 +538,14 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 			} else {
 				coreMismatches++
 			}
+			switch {
+			case result.writeSetErr != nil:
+				writeSetErrors++
+			case result.writeSetMatch:
+				writeSetMatches++
+			default:
+				writeSetMismatches++
+			}
 		}
 	}
 	executionNanos := time.Since(executionStarted).Nanoseconds()
@@ -538,6 +556,9 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 	discardShadowMismatchesCounter.Inc(mismatches)
 	discardShadowCoreMatchesCounter.Inc(coreMatches)
 	discardShadowCoreMismatchesCounter.Inc(coreMismatches)
+	discardShadowWriteSetMatchesCounter.Inc(writeSetMatches)
+	discardShadowWriteSetMismatchesCounter.Inc(writeSetMismatches)
+	discardShadowWriteSetErrorsCounter.Inc(writeSetErrors)
 	discardShadowErrorsCounter.Inc(executionErrors)
 	discardShadowCopyNanosCounter.Inc(shadow.copyNanos)
 	discardShadowExecutionNanosCounter.Inc(executionNanos)
@@ -560,6 +581,7 @@ type discardShadowWorker struct {
 	forkCache *forks.VersionPassCache
 	scratch   applyTransactionScratch
 	infoSlot  transactionInfoSlot
+	recorder  state.TransactionAccessRecorder
 }
 
 func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConfig) discardShadowTaskResult {
@@ -570,6 +592,10 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	class := classifyDiscardShadowTransaction(tx)
 	stateSnapshot := worker.state.Snapshot()
 	dpSnapshot := worker.dynProps.Snapshot()
+	journalMark := worker.state.DomainChangeJournalMark()
+	worker.recorder.Reset(64)
+	worker.state.SetTransactionAccessRecorder(&worker.recorder)
+	worker.dynProps.SetTransactionAccessRecorder(&worker.recorder)
 	worker.db.reset()
 	worker.infoSlot.internalTxArena.Reset()
 	worker.infoSlot.executionLogArena.Reset()
@@ -604,6 +630,8 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		err = ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet))
 	}
 	if err != nil {
+		worker.state.SetTransactionAccessRecorder(nil)
+		worker.dynProps.SetTransactionAccessRecorder(nil)
 		worker.state.ClearBalanceTrace()
 		worker.state.RevertToSnapshot(stateSnapshot)
 		worker.dynProps.RevertToSnapshot(dpSnapshot)
@@ -617,7 +645,24 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	result.Logs = nil
 	worker.state.FinalizeTransaction()
 	worker.state.EndBalanceTraceTransaction(balanceTraceTransactionStatus(result))
+	worker.state.SetTransactionAccessRecorder(nil)
+	worker.dynProps.SetTransactionAccessRecorder(nil)
+	writes, known, writeSetErr := worker.state.CaptureTransactionWriteSet(journalMark, &worker.recorder, worker.dynProps)
+	if writeSetErr == nil && !known {
+		writeSetErr = errors.New("unknown worker state write")
+	}
+	writeSetMatch := writeSetErr == nil
+	if writeSetMatch && txIndex < len(cfg.canonicalWriteSets) {
+		writeSetMatch = state.EqualTransactionWriteSets(writes, cfg.canonicalWriteSets[txIndex])
+	}
 	worker.state.RevertToSnapshot(stateSnapshot)
 	worker.dynProps.RevertToSnapshot(dpSnapshot)
-	return discardShadowTaskResult{class: class, mismatch: mismatch, coreMatch: coreMismatch == 0, matched: mismatch == 0}
+	return discardShadowTaskResult{
+		class:         class,
+		mismatch:      mismatch,
+		coreMatch:     coreMismatch == 0,
+		matched:       mismatch == 0,
+		writeSetMatch: writeSetMatch,
+		writeSetErr:   writeSetErr,
+	}
 }

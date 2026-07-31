@@ -1110,6 +1110,7 @@ func (s *StateDB) AddSettlementBalance(addr tcommon.Address, amount int64) {
 	}
 	if recorder := s.transactionAccess; recorder != nil {
 		key := TransactionAccessKey{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldBalance}
+		recorder.recordCommutativeDelta(key, amount)
 		previousKey, previousOpen := recorder.beginCommutativeScope(key)
 		s.AddBalance(addr, amount)
 		recorder.endCommutativeScope(previousKey, previousOpen)
