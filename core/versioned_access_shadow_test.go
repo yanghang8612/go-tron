@@ -87,7 +87,7 @@ func TestVersionedAccessShadowValidatesReadVersionsAcrossStateFamilies(t *testin
 	shadow.ObserveTransaction(11, tx, statedb, dynProps, rawMark)
 
 	got := shadow.Finish(statedb, dynProps)
-	if got.transactions != 12 || got.firstPassValid != 6 || got.conflicts != 5 || got.rawKVConflicts != 1 || got.unsupported != 1 {
+	if got.transactions != 12 || got.firstPassValid != 6 || got.conflicts != 5 || got.rawKVConflicts != 1 || got.rawKVReadCells != 1 || got.rawKVWriteCells != 1 || got.unsupported != 1 {
 		t.Fatalf("versioned shadow summary = %+v", got)
 	}
 	if got.accountConflicts != 1 || got.storageConflicts != 1 || got.accountKVConflicts != 1 || got.dynamicConflicts != 1 || got.otherConflicts != 0 {

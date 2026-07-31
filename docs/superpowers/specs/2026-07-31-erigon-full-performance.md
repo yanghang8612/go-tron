@@ -594,7 +594,8 @@ with an exact-key raw-KV recorder. Reads join the same block-local version map;
 successful puts/deletes contribute owned post-images to the same WriteSet. The
 wrapper preserves blockbuffer cached reads, missing-key classification, and
 ancient-aware block-hash lookup. Discard workers record the same accesses in
-their private write overlay. This remains observe-only until production proves
+their private write overlay. Raw read/write-cell and conflict metrics distinguish
+an exercised immutable direct-DB path from an unobserved path. This remains observe-only until production proves
 that adding raw keys preserves the 100% result/WriteSet sample and ordered
 publication can apply every typed family safely.
 

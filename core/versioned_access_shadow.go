@@ -31,6 +31,8 @@ var (
 	versionedShadowAccountKVConflictsCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/account_kv", nil)
 	versionedShadowDynamicConflictsCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/dynamic", nil)
 	versionedShadowRawKVConflictsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/raw_kv", nil)
+	versionedShadowRawKVReadCellsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/raw_kv/read_cells", nil)
+	versionedShadowRawKVWriteCellsCounter                     = metrics.NewRegisteredCounter("core/versioned_shadow/raw_kv/write_cells", nil)
 	versionedShadowOtherConflictsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/other", nil)
 	versionedShadowVMTransactionsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/vm/transactions", nil)
 	versionedShadowVMFirstPassValidCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/vm/first_pass_valid", nil)
@@ -165,6 +167,8 @@ type versionedAccessShadowStats struct {
 	accountKVConflicts                   int64
 	dynamicConflicts                     int64
 	rawKVConflicts                       int64
+	rawKVReadCells                       int64
+	rawKVWriteCells                      int64
 	otherConflicts                       int64
 	vmTransactions                       int64
 	vmFirstPassValid                     int64
@@ -578,10 +582,16 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	s.recorder.Visit(func(key state.TransactionAccessKey, mode state.TransactionAccessMode) bool {
 		if mode&(state.TransactionAccessRead|state.TransactionAccessCommutativeRead) != 0 {
 			s.stats.readCells++
+			if key.Kind == state.TransactionAccessRawKV {
+				s.stats.rawKVReadCells++
+			}
 			recordReadConflict(key, mode)
 		}
 		if mode&(state.TransactionAccessWrite|state.TransactionAccessCommutativeWrite) != 0 {
 			s.stats.writeCells++
+			if key.Kind == state.TransactionAccessRawKV {
+				s.stats.rawKVWriteCells++
+			}
 			recordWriteConflict(key)
 		}
 		if mode&(state.TransactionAccessCommutativeRead|state.TransactionAccessCommutativeWrite) != 0 {
@@ -1082,6 +1092,8 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowAccountKVConflictsCounter.Inc(stats.accountKVConflicts)
 	versionedShadowDynamicConflictsCounter.Inc(stats.dynamicConflicts)
 	versionedShadowRawKVConflictsCounter.Inc(stats.rawKVConflicts)
+	versionedShadowRawKVReadCellsCounter.Inc(stats.rawKVReadCells)
+	versionedShadowRawKVWriteCellsCounter.Inc(stats.rawKVWriteCells)
 	versionedShadowOtherConflictsCounter.Inc(stats.otherConflicts)
 	versionedShadowVMTransactionsCounter.Inc(stats.vmTransactions)
 	versionedShadowVMFirstPassValidCounter.Inc(stats.vmFirstPassValid)
