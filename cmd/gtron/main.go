@@ -9,9 +9,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
+	gethmetrics "github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
@@ -28,6 +30,7 @@ import (
 	"github.com/tronprotocol/go-tron/internal/debugapi"
 	"github.com/tronprotocol/go-tron/internal/grpcapi"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
+	"github.com/tronprotocol/go-tron/internal/metricsapi"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	tnet "github.com/tronprotocol/go-tron/net"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
@@ -38,7 +41,20 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-const domainStateReorgWindow uint64 = 128
+const (
+	domainStateReorgWindow uint64 = 128
+	gtronVersion                  = "0.3.0-dev"
+)
+
+var metricsOnce sync.Once
+
+func enableMetrics() {
+	metricsOnce.Do(func() {
+		gethmetrics.Enable()
+		gethmetrics.GetOrRegisterGauge("gtron/info", nil).Update(1)
+		go gethmetrics.CollectProcessMetrics(3 * time.Second)
+	})
+}
 
 var (
 	dataDirFlag = &cli.StringFlag{
@@ -128,6 +144,23 @@ var (
 		Usage: "Bind address for the pprof endpoint (defaults to 127.0.0.1)",
 		Value: "127.0.0.1",
 	}
+	metricsEnabledFlag = &cli.BoolFlag{
+		Name:    "metrics",
+		Usage:   "Enable the dedicated Prometheus metrics endpoint",
+		EnvVars: []string{"GTRON_METRICS"},
+	}
+	metricsAddrFlag = &cli.StringFlag{
+		Name:    "metrics.addr",
+		Usage:   "Bind address for Prometheus metrics",
+		Value:   "127.0.0.1",
+		EnvVars: []string{"GTRON_METRICS_ADDR"},
+	}
+	metricsPortFlag = &cli.IntFlag{
+		Name:    "metrics.port",
+		Usage:   "HTTP port for Prometheus metrics",
+		Value:   6061,
+		EnvVars: []string{"GTRON_METRICS_PORT"},
+	}
 	verbosityFlag = &cli.IntFlag{
 		Name:  "verbosity",
 		Usage: "Log verbosity (0=Crit 1=Error 2=Warn 3=Info 4=Debug 5=Trace)",
@@ -140,7 +173,37 @@ var (
 	}
 	logFileFlag = &cli.StringFlag{
 		Name:  "log.file",
-		Usage: "Optional log file path; records are tee'd to this file in JSON",
+		Usage: "Optional rotating log file path; records are tee'd to this file in JSON",
+	}
+	logFileVerbosityFlag = &cli.IntFlag{
+		Name:    "log.file.verbosity",
+		Usage:   "File log verbosity (0-5; -1 inherits --verbosity)",
+		Value:   -1,
+		EnvVars: []string{"GTRON_LOG_FILE_VERBOSITY"},
+	}
+	logFileMaxSizeFlag = &cli.IntFlag{
+		Name:    "log.file.max-size",
+		Usage:   "Rotate the log file after it reaches this size in MiB",
+		Value:   100,
+		EnvVars: []string{"GTRON_LOG_FILE_MAX_SIZE"},
+	}
+	logFileMaxBackupsFlag = &cli.IntFlag{
+		Name:    "log.file.max-backups",
+		Usage:   "Maximum number of rotated log files to retain (0 = unlimited by count)",
+		Value:   3,
+		EnvVars: []string{"GTRON_LOG_FILE_MAX_BACKUPS"},
+	}
+	logFileMaxAgeFlag = &cli.IntFlag{
+		Name:    "log.file.max-age",
+		Usage:   "Maximum age in days for rotated log files (0 = unlimited by age)",
+		Value:   28,
+		EnvVars: []string{"GTRON_LOG_FILE_MAX_AGE"},
+	}
+	logFileCompressFlag = &cli.BoolFlag{
+		Name:    "log.file.compress",
+		Usage:   "Compress rotated log files",
+		Value:   true,
+		EnvVars: []string{"GTRON_LOG_FILE_COMPRESS"},
 	}
 	logModuleFlag = &cli.StringSliceFlag{
 		Name:  "log.module",
@@ -304,7 +367,7 @@ var (
 var app = &cli.App{
 	Name:    "gtron",
 	Usage:   "TRON blockchain node (Go implementation)",
-	Version: "0.3.0-dev",
+	Version: gtronVersion,
 	Flags: []cli.Flag{
 		dataDirFlag,
 		p2pPortFlag,
@@ -315,6 +378,9 @@ var app = &cli.App{
 		grpcPortFlag,
 		pprofPortFlag,
 		pprofAddrFlag,
+		metricsEnabledFlag,
+		metricsAddrFlag,
+		metricsPortFlag,
 		testnetFlag,
 		witnessFlag,
 		witnessKeyFlag,
@@ -328,6 +394,11 @@ var app = &cli.App{
 		verbosityFlag,
 		logFormatFlag,
 		logFileFlag,
+		logFileVerbosityFlag,
+		logFileMaxSizeFlag,
+		logFileMaxBackupsFlag,
+		logFileMaxAgeFlag,
+		logFileCompressFlag,
 		logModuleFlag,
 		gcmodeFlag,
 		pruneModeFlag,
@@ -374,7 +445,35 @@ var app = &cli.App{
 		syncStopAtFlag,
 	},
 	Before: func(ctx *cli.Context) error {
-		return log.SetupWithModules(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"), ctx.StringSlice("log.module"))
+		if err := log.SetupWithOptions(log.SetupOptions{
+			Verbosity:      ctx.Int(verbosityFlag.Name),
+			Format:         ctx.String(logFormatFlag.Name),
+			File:           ctx.String(logFileFlag.Name),
+			Modules:        ctx.StringSlice(logModuleFlag.Name),
+			FileVerbosity:  ctx.Int(logFileVerbosityFlag.Name),
+			FileMaxSizeMB:  ctx.Int(logFileMaxSizeFlag.Name),
+			FileMaxBackups: ctx.Int(logFileMaxBackupsFlag.Name),
+			FileMaxAgeDays: ctx.Int(logFileMaxAgeFlag.Name),
+			FileCompress:   ctx.Bool(logFileCompressFlag.Name),
+		}); err != nil {
+			return err
+		}
+		log.Info("Starting gtron",
+			"version", gtronVersion,
+			"command", log.RedactArgs(os.Args,
+				"witness.key",
+				"witness.keys-file",
+				"snapshot.signing-key",
+				"snapshot.signing-key-file",
+				"snapshot.catalog-signing-key-file",
+				"snapshot.url"))
+		if ctx.Bool(metricsEnabledFlag.Name) {
+			enableMetrics()
+		}
+		return nil
+	},
+	After: func(_ *cli.Context) error {
+		return log.Close()
 	},
 	Action: gtron,
 	Commands: []*cli.Command{
@@ -446,6 +545,12 @@ func initCmd(ctx *cli.Context) error {
 
 func gtron(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
+	if err := validateMetricsConfig(cfg); err != nil {
+		return err
+	}
+	if cfg.MetricsEnabled {
+		enableMetrics()
+	}
 	snapshotETL, err := snapshotETLOptions(ctx)
 	if err != nil {
 		return err
@@ -825,6 +930,22 @@ func gtron(ctx *cli.Context) error {
 			addr = "127.0.0.1"
 		}
 		stack.RegisterLifecycle(debugapi.NewServer(fmt.Sprintf("%s:%d", addr, cfg.PProfPort)))
+	}
+	if cfg.MetricsEnabled {
+		stack.RegisterLifecycle(metricsapi.NewNodeCollector(metricsapi.NodeSources{
+			HeadBlock: func() uint64 {
+				return bc.CurrentBlock().Number()
+			},
+			SolidifiedBlock: func() int64 {
+				return bc.DynProps().LatestSolidifiedBlockNum()
+			},
+			ConnectedPeers:      p2pServer.PeerCount,
+			HandshakedPeers:     handler.HandshakedPeerCount,
+			PendingTransactions: pool.Count,
+			Syncing:             syncService.IsSyncing,
+			SyncRemainingBlocks: syncService.SyncRemainingBlocks,
+		}))
+		stack.RegisterLifecycle(metricsapi.NewServer(fmt.Sprintf("%s:%d", cfg.MetricsAddr, cfg.MetricsPort)))
 	}
 	stack.RegisterLifecycle(handler.PbftHandler())
 	stack.RegisterLifecycle(pbftDataSync)

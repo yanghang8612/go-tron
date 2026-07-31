@@ -1,0 +1,70 @@
+[Unit]
+Description=gtron full node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=java-tron
+Group=java-tron
+WorkingDirectory=/data/gtron/main
+
+Environment=ZCASH_PARAMS_DIR=/data/gtron/params
+
+# 32 GiB systemd 硬限制下，为 Pebble 原生内存和进程开销保留余量。
+Environment=GOMEMLIMIT=10GiB
+Environment=GOGC=200
+
+# 正常 P2P 同步使用 4 层流水线，降低提交等待。
+Environment=GTRON_ASYNC_COMMIT=1
+Environment=GTRON_ASYNC_COMMIT_DEPTH=4
+
+ExecStart=/data/gtron/go-tron/build/bin/gtron \
+    --datadir /data/gtron/main/datadir \
+    --gcmode full \
+    --p2p.port 18890 \
+    --http.port 8090 \
+    --jsonrpc.port 8545 \
+    --grpc.port 50051 \
+    --pprof.port 6062 \
+    --pprof.addr 127.0.0.1 \
+    --metrics \
+    --metrics.addr 127.0.0.1 \
+    --metrics.port 6071 \
+    --maxpeers 30 \
+    --db.cache 16384 \
+    --db.handles 8192 \
+    --db.memtable 256 \
+    --db.l0.compact 8 \
+    --db.l0.stop 64 \
+    --state.trie.cache 128 \
+    --state.commitment.cache 512 \
+    --log.format terminal \
+    --verbosity 3 \
+    --log.file /data/gtron/main/gtron.log \
+    --log.file.verbosity 3 \
+    --log.file.max-size 100 \
+    --log.file.max-backups 3 \
+    --log.file.max-age 28 \
+    --log.file.compress
+
+# 控制台日志交给 journald；结构化 JSON 文件由 gtron 自身轮转。
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gtron
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=300
+KillSignal=SIGTERM
+
+LimitNOFILE=65536
+
+# 服务器为旧版 systemd，仅使用 MemorySoftLimit/MemoryLimit。
+MemorySoftLimit=28G
+MemoryLimit=32G
+
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

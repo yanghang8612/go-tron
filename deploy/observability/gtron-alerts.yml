@@ -1,0 +1,42 @@
+groups:
+  - name: gtron
+    rules:
+      - alert: GtronMetricsDown
+        expr: up{job=~"gtron-.+"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "gtron metrics target {{ $labels.job }} is down"
+
+      - alert: GtronNoHandshakedPeers
+        expr: p2p_peers_handshaked{job=~"gtron-.+"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "gtron {{ $labels.job }} has no handshaked peers"
+
+      - alert: GtronSyncStalled
+        expr: sync_active{job=~"gtron-.+"} == 1 and changes(chain_head_block{job=~"gtron-.+"}[10m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "gtron {{ $labels.job }} is syncing but its head is stalled"
+
+      - alert: GtronSolidifiedLagHigh
+        expr: chain_solidified_lag{job=~"gtron-.+"} > 128
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "gtron {{ $labels.job }} solidified lag is {{ $value }} blocks"
+
+      - alert: GtronTxPoolNearCapacity
+        expr: txpool_pending{job=~"gtron-.+"} > 9000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "gtron {{ $labels.job }} transaction pool is near capacity"

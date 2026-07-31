@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - gtron-alerts.yml
+
+scrape_configs:
+  - job_name: gtron-mainnet
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:6071"]
+
+  - job_name: gtron-nile
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:6072"]

@@ -37,6 +37,7 @@ func TestSetup_FileSinkWritesJSON(t *testing.T) {
 	if err := Setup(3, "terminal", path); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
+	t.Cleanup(func() { _ = Close() })
 	logger := New("module", "log/test")
 	logger.Info("hello", "k", "v")
 
@@ -49,6 +50,57 @@ func TestSetup_FileSinkWritesJSON(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"module":"log/test"`) {
 		t.Errorf("file does not contain module tag; got: %s", data)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat log file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("log file permissions = %o, want 600", got)
+	}
+}
+
+func TestSetupWithOptions_IndependentFileVerbosity(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gtron.log")
+	if err := SetupWithOptions(SetupOptions{
+		Verbosity:      2,
+		Format:         "terminal",
+		File:           path,
+		FileVerbosity:  4,
+		FileMaxSizeMB:  1,
+		FileMaxBackups: 1,
+		FileMaxAgeDays: 1,
+	}); err != nil {
+		t.Fatalf("SetupWithOptions: %v", err)
+	}
+	t.Cleanup(func() { _ = Close() })
+
+	NewModule("log/test").Debug("file-only-debug")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	if !strings.Contains(string(data), "file-only-debug") {
+		t.Fatalf("debug record missing from file: %s", data)
+	}
+}
+
+func TestRedactArgs(t *testing.T) {
+	got := RedactArgs([]string{
+		"gtron",
+		"--witness.key=secret-one",
+		"--snapshot.signing-key", "secret-two",
+		"--datadir", "/data/gtron",
+	}, "witness.key", "snapshot.signing-key")
+	want := []string{
+		"gtron",
+		"--witness.key=<redacted>",
+		"--snapshot.signing-key", "<redacted>",
+		"--datadir", "/data/gtron",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("RedactArgs = %#v, want %#v", got, want)
 	}
 }
 

@@ -42,6 +42,9 @@ func makeConfig(ctx *cli.Context) *node.Config {
 		GRPCPort:         ctx.Int("grpc.port"),
 		PProfPort:        ctx.Int("pprof.port"),
 		PProfAddr:        ctx.String("pprof.addr"),
+		MetricsEnabled:   ctx.Bool("metrics"),
+		MetricsAddr:      strings.TrimSpace(ctx.String("metrics.addr")),
+		MetricsPort:      ctx.Int("metrics.port"),
 		SeedNodes:        ctx.StringSlice("seednode"),
 		MaxPeers:         ctx.Int("maxpeers"),
 		SyncImportBatch:  ctx.Int("sync.import-batch"),
@@ -49,6 +52,22 @@ func makeConfig(ctx *cli.Context) *node.Config {
 		SyncETLBufferMiB: ctx.Uint64("sync.etl.buffer"),
 		SyncETLBatchMiB:  ctx.Uint64("sync.etl.batch"),
 	}
+}
+
+func validateMetricsConfig(cfg *node.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("metrics: nil node config")
+	}
+	if !cfg.MetricsEnabled {
+		return nil
+	}
+	if cfg.MetricsAddr == "" {
+		return fmt.Errorf("metrics address must not be empty")
+	}
+	if cfg.MetricsPort < 1 || cfg.MetricsPort > 65535 {
+		return fmt.Errorf("metrics port must be between 1 and 65535")
+	}
+	return nil
 }
 
 func syncTransactionLookupETLOptions(cfg *node.Config) (etl.Options, error) {

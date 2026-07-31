@@ -1,0 +1,117 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "none"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [
+        {"expr": "chain_head_block{job=\"$job\"}", "legendFormat": "head", "refId": "A"},
+        {"expr": "chain_solidified_block{job=\"$job\"}", "legendFormat": "solidified", "refId": "B"}
+      ],
+      "title": "Chain height",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "chain_solidified_lag{job=\"$job\"}", "refId": "A"}],
+      "title": "Solidified lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+      "id": 3,
+      "targets": [{"expr": "sync_remaining_blocks{job=\"$job\"}", "refId": "A"}],
+      "title": "Sync remaining blocks",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "id": 4,
+      "targets": [
+        {"expr": "p2p_peers_connected{job=\"$job\"}", "legendFormat": "connected", "refId": "A"},
+        {"expr": "p2p_peers_handshaked{job=\"$job\"}", "legendFormat": "handshaked", "refId": "B"}
+      ],
+      "title": "P2P peers",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "id": 5,
+      "targets": [{"expr": "txpool_pending{job=\"$job\"}", "refId": "A"}],
+      "title": "Pending transactions",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "id": 6,
+      "targets": [
+        {"expr": "system_memory_used{job=\"$job\"}", "legendFormat": "heap used", "refId": "A"},
+        {"expr": "system_memory_held{job=\"$job\"}", "legendFormat": "held", "refId": "B"}
+      ],
+      "title": "Go memory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "id": 7,
+      "targets": [
+        {"expr": "system_cpu_goroutines{job=\"$job\"}", "legendFormat": "goroutines", "refId": "A"},
+        {"expr": "system_cpu_threads{job=\"$job\"}", "legendFormat": "OS threads", "refId": "B"}
+      ],
+      "title": "Runtime concurrency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "id": 8,
+      "targets": [
+        {"expr": "rate(rpc_requests{job=\"$job\"}[5m])", "legendFormat": "requests", "refId": "A"},
+        {"expr": "rate(rpc_failure{job=\"$job\"}[5m])", "legendFormat": "failures", "refId": "B"}
+      ],
+      "title": "JSON-RPC rate",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": ["gtron"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": "Prometheus",
+        "definition": "label_values(gtron_info, job)",
+        "includeAll": false,
+        "label": "Node",
+        "name": "job",
+        "query": {"query": "label_values(gtron_info, job)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+        "refresh": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "gtron overview",
+  "uid": "gtron-overview",
+  "version": 1
+}

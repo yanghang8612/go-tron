@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"sync"
 
 	gethlog "github.com/ethereum/go-ethereum/log"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // Logger is the gtron logger interface, identical to geth's. Useful for
@@ -178,6 +180,26 @@ func Setup(verbosity int, format, file string) error {
 	return SetupWithModules(verbosity, format, file, nil)
 }
 
+const (
+	defaultFileMaxSizeMB = 100
+	defaultFileBackups   = 3
+	defaultFileMaxAge    = 28
+)
+
+// SetupOptions configures console and rotating-file logging. FileVerbosity -1
+// inherits Verbosity; otherwise it accepts the same legacy 0-5 scale.
+type SetupOptions struct {
+	Verbosity      int
+	Format         string
+	File           string
+	Modules        []string
+	FileVerbosity  int
+	FileMaxSizeMB  int
+	FileMaxBackups int
+	FileMaxAgeDays int
+	FileCompress   bool
+}
+
 // SetupWithModules configures the global logger with optional per-module
 // levels. Each module entry is "module=level", where level is trace, debug,
 // info, warn, error, crit, or the legacy 0-5 verbosity number.
@@ -186,41 +208,159 @@ func Setup(verbosity int, format, file string) error {
 //
 //	SetupWithModules(3, "terminal", "", []string{"net/sync=debug", "p2p=warn"})
 func SetupWithModules(verbosity int, format, file string, modules []string) error {
-	if verbosity < 0 || verbosity > 5 {
-		return fmt.Errorf("verbosity %d out of range 0-5", verbosity)
+	return SetupWithOptions(SetupOptions{
+		Verbosity:      verbosity,
+		Format:         format,
+		File:           file,
+		Modules:        modules,
+		FileVerbosity:  -1,
+		FileMaxSizeMB:  defaultFileMaxSizeMB,
+		FileMaxBackups: defaultFileBackups,
+		FileMaxAgeDays: defaultFileMaxAge,
+		FileCompress:   true,
+	})
+}
+
+// SetupWithOptions configures the root logger and optional rotating JSON file.
+func SetupWithOptions(opts SetupOptions) error {
+	if opts.Verbosity < 0 || opts.Verbosity > 5 {
+		return fmt.Errorf("verbosity %d out of range 0-5", opts.Verbosity)
 	}
-	level := gethlog.FromLegacyLevel(verbosity)
-	moduleLevels, err := ParseModuleLevels(modules)
+	if opts.FileVerbosity < -1 || opts.FileVerbosity > 5 {
+		return fmt.Errorf("file verbosity %d out of range -1 or 0-5", opts.FileVerbosity)
+	}
+	if opts.File != "" {
+		if opts.FileMaxSizeMB < 1 {
+			return fmt.Errorf("log file max size must be >= 1 MiB")
+		}
+		if opts.FileMaxBackups < 0 {
+			return fmt.Errorf("log file max backups must be >= 0")
+		}
+		if opts.FileMaxAgeDays < 0 {
+			return fmt.Errorf("log file max age must be >= 0 days")
+		}
+	}
+
+	consoleLevel := gethlog.FromLegacyLevel(opts.Verbosity)
+	fileLevel := consoleLevel
+	if opts.FileVerbosity >= 0 {
+		fileLevel = gethlog.FromLegacyLevel(opts.FileVerbosity)
+	}
+	moduleLevels, err := ParseModuleLevels(opts.Modules)
 	if err != nil {
 		return err
 	}
-	handlerLevel := lowestLevel(level, moduleLevels)
+	consoleHandlerLevel := lowestLevel(consoleLevel, moduleLevels)
 
 	var primary slog.Handler
-	switch strings.ToLower(strings.TrimSpace(format)) {
+	switch strings.ToLower(strings.TrimSpace(opts.Format)) {
 	case "", "terminal":
-		primary = gethlog.NewTerminalHandlerWithLevel(os.Stderr, handlerLevel, useColor(os.Stderr))
+		primary = gethlog.NewTerminalHandlerWithLevel(os.Stderr, consoleHandlerLevel, useColor(os.Stderr))
 	case "json":
-		primary = gethlog.JSONHandlerWithLevel(os.Stderr, handlerLevel)
+		primary = gethlog.JSONHandlerWithLevel(os.Stderr, consoleHandlerLevel)
 	case "logfmt":
-		primary = gethlog.LogfmtHandlerWithLevel(os.Stderr, handlerLevel)
+		primary = gethlog.LogfmtHandlerWithLevel(os.Stderr, consoleHandlerLevel)
 	default:
-		return fmt.Errorf("unknown log format %q (want terminal|json|logfmt)", format)
+		return fmt.Errorf("unknown log format %q (want terminal|json|logfmt)", opts.Format)
 	}
+	primary = moduleLevelHandler{next: primary, global: consoleLevel, modules: moduleLevels}
 
 	handler := primary
-	if file != "" {
-		f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			return fmt.Errorf("open log file: %w", err)
+	var closer io.Closer
+	if opts.File != "" {
+		if err := prepareLogFile(opts.File); err != nil {
+			return err
 		}
-		handler = teeHandler{primary: primary, secondary: gethlog.JSONHandlerWithLevel(f, handlerLevel)}
+		writer := &lumberjack.Logger{
+			Filename:   opts.File,
+			MaxSize:    opts.FileMaxSizeMB,
+			MaxBackups: opts.FileMaxBackups,
+			MaxAge:     opts.FileMaxAgeDays,
+			LocalTime:  true,
+			Compress:   opts.FileCompress,
+		}
+		secondary := gethlog.JSONHandlerWithLevel(writer, lowestLevel(fileLevel, moduleLevels))
+		secondary = moduleLevelHandler{next: secondary, global: fileLevel, modules: moduleLevels}
+		handler = teeHandler{primary: primary, secondary: secondary}
+		closer = writer
 	}
 
-	setLevels(level, moduleLevels)
-	handler = moduleLevelHandler{next: handler, global: level, modules: moduleLevels}
-	gethlog.SetDefault(gethlog.NewLogger(handler))
+	setLevels(consoleLevel, moduleLevels)
+	installLogger(gethlog.NewLogger(handler), closer)
 	return nil
+}
+
+func prepareLogFile(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open log file: %w", err)
+	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return fmt.Errorf("set log file permissions: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close prepared log file: %w", err)
+	}
+	return nil
+}
+
+var fileSinkState struct {
+	sync.Mutex
+	closer io.Closer
+}
+
+func installLogger(logger Logger, closer io.Closer) {
+	fileSinkState.Lock()
+	previous := fileSinkState.closer
+	gethlog.SetDefault(logger)
+	fileSinkState.closer = closer
+	fileSinkState.Unlock()
+	if previous != nil {
+		_ = previous.Close()
+	}
+}
+
+// Close flushes and closes the active rotating file sink, if any.
+func Close() error {
+	fileSinkState.Lock()
+	closer := fileSinkState.closer
+	fileSinkState.closer = nil
+	fileSinkState.Unlock()
+	if closer == nil {
+		return nil
+	}
+	return closer.Close()
+}
+
+// RedactArgs returns a copy of argv with values for the named flags replaced.
+// It handles both --flag=value and --flag value forms.
+func RedactArgs(argv []string, sensitiveFlags ...string) []string {
+	sensitive := make(map[string]struct{}, len(sensitiveFlags))
+	for _, flag := range sensitiveFlags {
+		sensitive[strings.TrimLeft(flag, "-")] = struct{}{}
+	}
+	out := append([]string(nil), argv...)
+	for i := 0; i < len(out); i++ {
+		arg := out[i]
+		if !strings.HasPrefix(arg, "--") {
+			continue
+		}
+		nameValue := strings.TrimPrefix(arg, "--")
+		name, _, hasValue := strings.Cut(nameValue, "=")
+		if _, ok := sensitive[name]; !ok {
+			continue
+		}
+		if hasValue {
+			out[i] = "--" + name + "=<redacted>"
+			continue
+		}
+		if i+1 < len(out) {
+			out[i+1] = "<redacted>"
+			i++
+		}
+	}
+	return out
 }
 
 // ParseModuleLevels parses module-specific level overrides. Entries may be

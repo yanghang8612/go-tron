@@ -15,8 +15,13 @@ type Config struct {
 	// PProfAddr is the bind address for the pprof endpoint. Defaults to
 	// "127.0.0.1" so remote profiling is opt-in.
 	PProfAddr string
-	SeedNodes []string // "host:port" entries for initial peer discovery
-	MaxPeers  int      // max simultaneous peers, default 30
+	// MetricsEnabled enables the dedicated Prometheus listener. The listener
+	// never serves pprof or other debug endpoints.
+	MetricsEnabled bool
+	MetricsAddr    string
+	MetricsPort    int
+	SeedNodes      []string // "host:port" entries for initial peer discovery
+	MaxPeers       int      // max simultaneous peers, default 30
 
 	// SyncImportBatch bounds local staged block import chunks. It does not
 	// affect wire-level fetch batch size.

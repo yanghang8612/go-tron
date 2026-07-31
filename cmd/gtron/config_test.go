@@ -27,6 +27,9 @@ func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
 		grpcPortFlag,
 		pprofPortFlag,
 		pprofAddrFlag,
+		metricsEnabledFlag,
+		metricsAddrFlag,
+		metricsPortFlag,
 		seednodeFlag,
 		maxpeersFlag,
 		syncImportBatchFlag,
@@ -51,6 +54,47 @@ func TestMakeConfigSyncImportBatchDefault(t *testing.T) {
 	cfg := makeConfig(makeNodeConfigFlagSet(t, nil))
 	if cfg.SyncImportBatch != tsync.MaxImportBatch {
 		t.Fatalf("SyncImportBatch default = %d, want %d", cfg.SyncImportBatch, tsync.MaxImportBatch)
+	}
+}
+
+func TestMakeConfigMetrics(t *testing.T) {
+	cfg := makeConfig(makeNodeConfigFlagSet(t, nil))
+	if cfg.MetricsEnabled {
+		t.Fatal("metrics enabled by default")
+	}
+	if cfg.MetricsAddr != "127.0.0.1" || cfg.MetricsPort != 6061 {
+		t.Fatalf("default metrics endpoint = %s:%d", cfg.MetricsAddr, cfg.MetricsPort)
+	}
+
+	cfg = makeConfig(makeNodeConfigFlagSet(t, []string{
+		"--metrics",
+		"--metrics.addr", "0.0.0.0",
+		"--metrics.port", "9091",
+	}))
+	if !cfg.MetricsEnabled || cfg.MetricsAddr != "0.0.0.0" || cfg.MetricsPort != 9091 {
+		t.Fatalf("overridden metrics config = %+v", cfg)
+	}
+}
+
+func TestValidateMetricsConfig(t *testing.T) {
+	if err := validateMetricsConfig(&node.Config{}); err != nil {
+		t.Fatalf("disabled metrics config: %v", err)
+	}
+	for _, cfg := range []*node.Config{
+		{MetricsEnabled: true, MetricsPort: 6061},
+		{MetricsEnabled: true, MetricsAddr: "127.0.0.1", MetricsPort: 0},
+		{MetricsEnabled: true, MetricsAddr: "127.0.0.1", MetricsPort: 65536},
+	} {
+		if err := validateMetricsConfig(cfg); err == nil {
+			t.Fatalf("invalid metrics config accepted: %+v", cfg)
+		}
+	}
+	if err := validateMetricsConfig(&node.Config{
+		MetricsEnabled: true,
+		MetricsAddr:    "127.0.0.1",
+		MetricsPort:    6061,
+	}); err != nil {
+		t.Fatalf("valid metrics config: %v", err)
 	}
 }
 
