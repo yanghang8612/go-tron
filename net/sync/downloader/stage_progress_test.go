@@ -1273,6 +1273,45 @@ func TestNewImportBatchStagePhaseSchedule(t *testing.T) {
 	}
 }
 
+var (
+	benchmarkImportBatchStagePlan     ImportBatchStagePlan
+	benchmarkImportStageObservation   ImportStageObservation
+	benchmarkImportStageObservationOK bool
+)
+
+func BenchmarkImportBatchStagePlanning(b *testing.B) {
+	const blocks = 32
+	schedules := make([]ImportStageSchedule, blocks)
+	for i := range schedules {
+		number := uint64(i + 1)
+		schedules[i] = NewImportStageSchedule(number, tcommon.Hash{byte(number)})
+	}
+
+	b.Run("build", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			plan := NewImportBatchStagePlan(schedules)
+			_ = NewImportBatchStagePhaseSchedule(plan)
+			benchmarkImportBatchStagePlan = plan
+		}
+	})
+
+	plan := NewImportBatchStagePlan(schedules)
+	phaseSchedule := NewImportBatchStagePhaseSchedule(plan)
+	b.Run("match_observations", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			for _, schedule := range schedules {
+				for _, task := range schedule.Tasks {
+					observation, ok := phaseSchedule.MatchPhaseObservation(task.CanonicalStage, task.BlockNum, task.BlockHash)
+					benchmarkImportStageObservation = observation
+					benchmarkImportStageObservationOK = ok
+				}
+			}
+		}
+	})
+}
+
 func TestPlanImportStagePhaseCursor(t *testing.T) {
 	hash1 := tcommon.Hash{0x41}
 	hash2 := tcommon.Hash{0x42}

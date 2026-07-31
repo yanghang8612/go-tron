@@ -320,7 +320,9 @@ func importStageTaskForPhase(phase ImportStagePhase, blockNum uint64, blockHash 
 }
 
 // ImportStageObservation is one canonical stage hook observation accepted by
-// the downloader-owned phase plan.
+// the downloader-owned phase plan. Phase borrows its immutable task slice from
+// that plan; observation consumers must treat it as read-only. This keeps the
+// four per-block stage hooks allocation-free.
 type ImportStageObservation struct {
 	Phase ImportStagePhasePlan
 	Task  ImportStageTask
@@ -430,7 +432,13 @@ func NewImportBatchStagePlan(schedules []ImportStageSchedule) ImportBatchStagePl
 		return ImportBatchStagePlan{}
 	}
 	plan := ImportBatchStagePlan{
-		Schedules: append([]ImportStageSchedule(nil), schedules...),
+		Schedules:  append([]ImportStageSchedule(nil), schedules...),
+		Bodies:     make([]ImportStageTask, 0, len(schedules)),
+		Execution:  make([]ImportStageTask, 0, len(schedules)),
+		Commitment: make([]ImportStageTask, 0, len(schedules)),
+		Finish:     make([]ImportStageTask, 0, len(schedules)),
+		PostBody:   make([]ImportStageTask, 0, len(schedules)*3),
+		Tasks:      make([]ImportStageTask, 0, len(schedules)*4),
 	}
 	for _, schedule := range schedules {
 		if len(schedule.Tasks) == 0 {
@@ -455,10 +463,14 @@ func NewImportBatchStagePlan(schedules []ImportStageSchedule) ImportBatchStagePl
 // batch. Bodies are scheduled first; execution, commitment, and finish are
 // retained as separate post-body phases in canonical planner order.
 func NewImportBatchStagePhaseSchedule(stagePlan ImportBatchStagePlan) ImportBatchStagePhaseSchedule {
-	var schedule ImportBatchStagePhaseSchedule
-	for _, phase := range stagePlan.PhasePlans() {
-		phase = cloneImportStagePhasePlan(phase)
-		schedule.Phases = append(schedule.Phases, phase)
+	phases := stagePlan.PhasePlans()
+	schedule := ImportBatchStagePhaseSchedule{
+		Phases:        phases,
+		PostBody:      make([]ImportStagePhasePlan, 0, 3),
+		Tasks:         make([]ImportStageTask, 0, len(stagePlan.Tasks)),
+		PostBodyTasks: make([]ImportStageTask, 0, len(stagePlan.PostBody)),
+	}
+	for _, phase := range phases {
 		schedule.Tasks = append(schedule.Tasks, phase.Tasks...)
 		switch phase.Phase {
 		case ImportStagePhaseBodies:
@@ -544,7 +556,7 @@ func (s ImportBatchStagePhaseSchedule) MatchPhaseObservation(stage rawdb.StageID
 			continue
 		}
 		return ImportStageObservation{
-			Phase: cloneImportStagePhasePlan(phase),
+			Phase: phase,
 			Task:  task,
 		}, true
 	}
@@ -741,7 +753,7 @@ func (p ImportBatchStagePlan) MatchPhaseObservation(stage rawdb.StageID, blockNu
 			continue
 		}
 		return ImportStageObservation{
-			Phase: cloneImportStagePhasePlan(phase),
+			Phase: phase,
 			Task:  task,
 		}, true
 	}
@@ -1676,6 +1688,8 @@ func NewImportStageSchedule(blockNum uint64, blockHash tcommon.Hash) ImportStage
 	schedule := ImportStageSchedule{
 		BlockNum:  blockNum,
 		BlockHash: blockHash,
+		PostBody:  make([]ImportStageTask, 0, len(importStageSpecs)-1),
+		Tasks:     make([]ImportStageTask, 0, len(importStageSpecs)),
 	}
 	for _, spec := range importStageSpecs {
 		task := spec.Task(blockNum, blockHash)
