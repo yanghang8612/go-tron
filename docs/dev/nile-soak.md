@@ -211,15 +211,21 @@ endpoint error.
 
 When `--sync-log-file` points at the gtron runtime log, the sampler parses the
 latest `Imported chain segment` summary and emits `syncLog*` fields. These
-always include the compact operational status: segment throughput
+always include the compact real-time status: segment throughput
 (`syncLogSegmentBlocks`, `syncLogSegmentTxs`, `syncLogBlocksPerSecond`,
-`syncLogTxsPerSecond`, `syncLogSpeedWindow`,
+`syncLogTxsPerSecond`), transaction/state mutation mix (`syncLogTxTop`,
+`syncLogStateMutTop`, `syncLogStateMutKVTop`), and peer/queue health
+(`syncLogPeers`, `syncLogActivePeers`, `syncLogInflight`, `syncLogBuffered`,
+`syncLogRequested`, `syncLogRetries`). Periodic `Sync progress` records use
+natural server-time buckets (`5m`, `30m`, `1h`, and `1d`) and are retained by
+window in `syncLogProgressWindows`. The flattened fields prefer the latest
+five-minute record (falling back to the latest available window) and supply
+`syncLogSpeedWindow`, `syncLogProgressFrom`, `syncLogProgressTo`,
+`syncLogProgressCoverage`, `syncLogProgressBlocks`,
 `syncLogAverageBlocksPerSecond`, `syncLogMinimumBlocksPerSecond`,
-`syncLogMaximumBlocksPerSecond`), progress
+`syncLogMaximumBlocksPerSecond`, and chain progress
 (`syncLogSegmentHead`, `syncLogSegmentTarget`, `syncLogSegmentProgress`,
-`syncLogSegmentRemain`), and peer/queue health (`syncLogPeers`,
-`syncLogActivePeers`, `syncLogInflight`, `syncLogBuffered`,
-`syncLogRequested`, `syncLogRetries`). When `net/sync=debug` is enabled, the
+`syncLogSegmentRemain`). When `net/sync=debug` is enabled, the
 sampler merges the immediately following `Imported chain segment details`
 record into the same sample. Those optional diagnostic fields include the
 observed stage planner result

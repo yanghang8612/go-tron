@@ -53,15 +53,48 @@ func TestStatsObserveSpeedUsesRollingWeightedWindow(t *testing.T) {
 	}
 }
 
-func TestStatsInitSessionClearsSpeedHistory(t *testing.T) {
+func TestStatsInitSessionPreservesClockSpeedHistory(t *testing.T) {
 	stats := NewStats()
 	now := time.Unix(2_000, 0)
-	stats.ObserveSpeed(now, 8, 8*time.Second, SpeedHistoryWindow)
+	stats.ObserveSpeed(now, 8, 8*time.Second, 5*time.Minute)
 	stats.InitSession(now.Add(time.Minute))
 
-	summary := stats.ObserveSpeed(now.Add(2*time.Minute), 16, 8*time.Second, SpeedHistoryWindow)
-	if summary.Samples != 1 || summary.Average != 2 || summary.Minimum != 2 || summary.Maximum != 2 {
-		t.Fatalf("speed history survived session reset: %+v", summary)
+	summary := stats.ObserveSpeed(now.Add(2*time.Minute), 16, 8*time.Second, 5*time.Minute)
+	if summary.Samples != 2 || summary.Average != 1.5 || summary.Minimum != 1 || summary.Maximum != 2 {
+		t.Fatalf("speed history did not survive session reset: %+v", summary)
+	}
+}
+
+func TestStatsCalendarSpeedSummaryUsesWallClockCoverage(t *testing.T) {
+	stats := NewStats()
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	from := time.Date(2026, 7, 31, 10, 0, 0, 0, loc)
+	started := from.Add(2 * time.Minute)
+	stats.InitSession(started)
+	end := from.Add(4 * time.Minute)
+	stats.SnapshotAndReset(end)
+	stats.ObserveSpeed(end, 120, 2*time.Minute, 5*time.Minute)
+
+	summary := stats.CalendarSpeedSummary(from, from.Add(5*time.Minute))
+	if summary.Coverage != 3*time.Minute {
+		t.Fatalf("coverage = %v, want 3m", summary.Coverage)
+	}
+	if summary.Blocks != 120 || summary.Average != 120.0/180.0 || summary.Minimum != 0 || summary.Maximum != 1 {
+		t.Fatalf("calendar speed summary = %+v, want blocks=120 avg=2/3 min=0 max=1", summary)
+	}
+}
+
+func TestStatsEndSessionRetainsPartialWindow(t *testing.T) {
+	stats := NewStats()
+	from := time.Unix(10_000, 0)
+	stats.InitSession(from)
+	stats.AddBlocks(12, 0, time.Second)
+	stats.EndSession(from.Add(4 * time.Second))
+	stats.InitSession(from.Add(10 * time.Second))
+
+	summary := stats.CalendarSpeedSummary(from, from.Add(12*time.Second))
+	if summary.Blocks != 12 || summary.Average != 1 || summary.Minimum != 0 || summary.Maximum != 3 {
+		t.Fatalf("partial session summary = %+v, want blocks=12 avg=1 min=0 max=3", summary)
 	}
 }
 

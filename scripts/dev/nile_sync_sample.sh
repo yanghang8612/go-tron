@@ -1730,6 +1730,24 @@ def imported_segment_detail_fields_from_line(line):
     fields = parse_logfmt_fields(text)
     return fields if fields else {}
 
+def sync_progress_fields_from_line(line):
+    text = line.strip()
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            msg = obj.get("msg") or obj.get("message") or ""
+            if msg == "Sync progress":
+                return obj
+            return None
+    except Exception:
+        pass
+    if "Sync progress" not in text:
+        return None
+    fields = parse_logfmt_fields(text)
+    return fields if fields else {}
+
 def startup_repair_fields_from_line(line):
     text = line.strip()
     if not text:
@@ -1753,6 +1771,12 @@ def parse_sync_log(path):
         "syncLogFile": path,
         "syncLogStatus": "skipped" if not path else "missing",
         "syncLogImportedSegments": 0,
+        "syncLogProgressReports": 0,
+        "syncLogProgressWindows": {},
+        "syncLogProgressFrom": "",
+        "syncLogProgressTo": "",
+        "syncLogProgressCoverage": -1.0,
+        "syncLogProgressBlocks": -1.0,
         "syncLogSegmentBlocks": -1,
         "syncLogSegmentTxs": -1,
         "syncLogSegmentHead": -1,
@@ -1915,6 +1939,9 @@ def parse_sync_log(path):
         return row
     latest = None
     count = 0
+    latest_progress = None
+    latest_progress_by_window = {}
+    progress_count = 0
     latest_startup = None
     startup_count = 0
     for line in lines:
@@ -1925,11 +1952,23 @@ def parse_sync_log(path):
         detail_fields = imported_segment_detail_fields_from_line(line)
         if detail_fields is not None and latest is not None:
             latest.update(detail_fields)
+        progress_fields = sync_progress_fields_from_line(line)
+        if progress_fields is not None:
+            progress_count += 1
+            latest_progress = progress_fields
+            progress_window = str(progress_fields.get("window", ""))
+            if progress_window:
+                latest_progress_by_window[progress_window] = progress_fields
         startup_fields = startup_repair_fields_from_line(line)
         if startup_fields is not None:
             startup_count += 1
             latest_startup = startup_fields
     row["syncLogImportedSegments"] = count
+    row["syncLogProgressReports"] = progress_count
+    row["syncLogProgressWindows"] = latest_progress_by_window
+    # Keep the flattened compatibility fields focused on the most recent 5m
+    # operational view. Longer windows remain available in the window map.
+    latest_progress = latest_progress_by_window.get("5m", latest_progress)
     row["syncStartupRepairSummaries"] = startup_count
     if latest_startup is not None:
         row["syncStartupRepairStatus"] = "ok"
@@ -1992,6 +2031,9 @@ def parse_sync_log(path):
         row["syncLogStatus"] = "no-segment"
         return row
     row["syncLogStatus"] = "ok"
+    combined = dict(latest)
+    if latest_progress is not None:
+        combined.update(latest_progress)
     mappings = {
         "blocks": "syncLogSegmentBlocks",
         "txs": "syncLogSegmentTxs",
@@ -2005,6 +2047,11 @@ def parse_sync_log(path):
         "blocks/s": "syncLogBlocksPerSecond",
         "txs/s": "syncLogTxsPerSecond",
         "speedWindow": "syncLogSpeedWindow",
+        "window": "syncLogSpeedWindow",
+        "from": "syncLogProgressFrom",
+        "to": "syncLogProgressTo",
+        "coverage": "syncLogProgressCoverage",
+        "windowBlocks": "syncLogProgressBlocks",
         "avgBlocks/s": "syncLogAverageBlocksPerSecond",
         "minBlocks/s": "syncLogMinimumBlocksPerSecond",
         "maxBlocks/s": "syncLogMaximumBlocksPerSecond",
@@ -2081,8 +2128,8 @@ def parse_sync_log(path):
         "syncAppliedPlanLast": "syncLogAppliedPlanLast",
     }
     for source, dest in mappings.items():
-        if source in latest:
-            row[dest] = parse_log_value(latest[source])
+        if source in combined:
+            row[dest] = parse_log_value(combined[source])
     scheduled = number(row, "syncLogStageScheduled", -1)
     completed = number(row, "syncLogStageCompleted", -1)
     segment_blocks = number(row, "syncLogSegmentBlocks", -1)

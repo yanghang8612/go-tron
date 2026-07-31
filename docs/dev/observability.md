@@ -65,28 +65,39 @@ secret-bearing flag values have been redacted.
 ## Sync progress logs
 
 At info level, `Imported chain segment` is a compact operator status line. It
-reports the current and target heights (`head`, `target`, `progress`,
-`remain`), current throughput (`blocks/s`, `txs/s`), the recent five-minute
-speed range (`speedWindow`, `avgBlocks/s`, `minBlocks/s`, `maxBlocks/s`),
-`eta`, and peer/queue health (`peers`, `activePeers`,
-`inflight`, `buffered`, `requested`, `retries`). The `blocks`, `txs`, and
-`elapsed` values describe the latest reporting window, not the whole session.
-The recent average is weighted by elapsed time; minimum and maximum are the
-slowest and fastest individual reporting intervals still inside the window.
+reports current throughput (`blocks/s`, `txs/s`), transaction mix (`txTop`),
+the leading state mutation classes (`stateMutTop`, `stateMutKVTop`), and
+peer/queue health (`peers`, `activePeers`, `inflight`, `buffered`, `requested`,
+`retries`). The `blocks`, `txs`, and `elapsed` values describe the latest
+reporting window, not the whole session.
 
-Execution-phase, state-commit, mutation, prefetch, transaction-mix, peer-state,
-and staged-import planner fields are emitted separately as `Imported chain
-segment details` at debug level. Enable them only while collecting a sync
-diagnostic sample:
+`Sync progress` is emitted separately on natural wall-clock boundaries during
+active imports. Every `:00/:05/.../:55` it reports the preceding natural five
+minutes; `:00/:30` also reports 30 minutes; the top of each hour also reports
+one hour; and local midnight also reports the preceding calendar day. These
+boundaries use the server's local timezone, not process uptime or sync-session
+start time.
+
+Each record identifies its bucket with `window`, `from`, and `to`, then reports
+`coverage`, `windowBlocks`, `head`, `target`, `progress`, `remain`, `eta`, and
+`avgBlocks/s`, `minBlocks/s`, `maxBlocks/s`. `coverage` is the percentage of
+the natural bucket observed by this process, so the first record after startup
+can be partial. The average uses the observed wall-clock duration; minimum and
+maximum are the slowest and fastest real-time import intervals in the bucket,
+with an observed idle gap making the minimum zero. Speed history survives sync
+session changes but naturally resets when the process restarts.
+
+Execution-phase, granular state-commit/mutation, peer-state, and staged-import
+planner fields are emitted separately as `Imported chain segment details` at
+debug level. Enable them only while collecting a sync diagnostic sample:
 
 ```bash
 gtron ... --log.module net/sync=debug
 ```
 
 The normal info configuration does not construct or emit the large detail
-record. Existing parsers can continue matching `Imported chain segment`; the
-Nile sampling script merges an immediately following debug detail record into
-the corresponding summary when debug logging is enabled.
+record. The Nile sampling script combines the latest real-time segment,
+periodic progress, and (when enabled) debug detail records into one sample.
 
 ## Runtime debugging
 

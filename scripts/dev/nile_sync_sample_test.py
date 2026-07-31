@@ -3385,23 +3385,56 @@ class NileSyncSampleTest(unittest.TestCase):
                         "msg": "Imported chain segment",
                         "blocks": 12,
                         "txs": 9,
-                        "head": 112,
-                        "target": 115,
-                        "progress": 97.39,
-                        "remain": 3,
                         "elapsed": "2s",
                         "blocks/s": 6.25,
                         "txs/s": 4.5,
-                        "speedWindow": "5m0s",
-                        "avgBlocks/s": 5.75,
-                        "minBlocks/s": 3.25,
-                        "maxBlocks/s": 8.5,
+                        "txTop": "TriggerSmartContract=7,TransferContract=2",
+                        "stateMutTop": "storagePuts:9",
+                        "stateMutKVTop": "accountKV:4",
                         "peers": 3,
                         "activePeers": 2,
                         "inflight": 16,
                         "buffered": 8,
                         "requested": 16,
                         "retries": 1,
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "lvl": "info",
+                        "msg": "Sync progress",
+                        "window": "5m",
+                        "from": "2026-07-31T11:55:00+08:00",
+                        "to": "2026-07-31T12:00:00+08:00",
+                        "coverage": 100,
+                        "windowBlocks": 1725,
+                        "head": 112,
+                        "target": 115,
+                        "progress": 97.39,
+                        "remain": 3,
+                        "avgBlocks/s": 5.75,
+                        "minBlocks/s": 3.25,
+                        "maxBlocks/s": 8.5,
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "lvl": "info",
+                        "msg": "Sync progress",
+                        "window": "30m",
+                        "from": "2026-07-31T11:30:00+08:00",
+                        "to": "2026-07-31T12:00:00+08:00",
+                        "coverage": 100,
+                        "windowBlocks": 9000,
+                        "head": 112,
+                        "target": 115,
+                        "progress": 97.39,
+                        "remain": 3,
+                        "avgBlocks/s": 5,
+                        "minBlocks/s": 2,
+                        "maxBlocks/s": 9,
                     }
                 )
                 + "\n"
@@ -3470,6 +3503,13 @@ class NileSyncSampleTest(unittest.TestCase):
             row = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(row["syncLogStatus"], "ok")
             self.assertEqual(row["syncLogImportedSegments"], 1)
+            self.assertEqual(row["syncLogProgressReports"], 2)
+            self.assertIn("5m", row["syncLogProgressWindows"])
+            self.assertIn("30m", row["syncLogProgressWindows"])
+            self.assertEqual(row["syncLogProgressFrom"], "2026-07-31T11:55:00+08:00")
+            self.assertEqual(row["syncLogProgressTo"], "2026-07-31T12:00:00+08:00")
+            self.assertEqual(row["syncLogProgressCoverage"], 100)
+            self.assertEqual(row["syncLogProgressBlocks"], 1725)
             self.assertEqual(row["syncLogSegmentBlocks"], 12)
             self.assertEqual(row["syncLogSegmentTxs"], 9)
             self.assertEqual(row["syncLogSegmentHead"], 112)
@@ -3480,7 +3520,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogSegmentExecElapsed"], "1500ms")
             self.assertEqual(row["syncLogSegmentApplyElapsed"], "1700ms")
             self.assertEqual(row["syncLogBlocksPerSecond"], 6.25)
-            self.assertEqual(row["syncLogSpeedWindow"], "5m0s")
+            self.assertEqual(row["syncLogSpeedWindow"], "5m")
             self.assertEqual(row["syncLogAverageBlocksPerSecond"], 5.75)
             self.assertEqual(row["syncLogMinimumBlocksPerSecond"], 3.25)
             self.assertEqual(row["syncLogMaximumBlocksPerSecond"], 8.5)

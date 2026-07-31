@@ -89,16 +89,14 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		t.Fatalf("expected 'Imported chain segment' summary line, got:\n%s", out)
 	}
 	for _, k := range []string{
-		"head=",
-		"target=",
-		"progress=",
-		"remain=",
 		"blocks=",
 		"txs=",
 		"elapsed=",
 		"blocks/s=",
 		"txs/s=",
-		"avgBlocks/s=",
+		"txTop=",
+		"stateMutTop=",
+		"stateMutKVTop=",
 		"peers=",
 		"activePeers=",
 		"inflight=",
@@ -111,12 +109,20 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		}
 	}
 	for _, k := range []string{
+		"head=",
+		"target=",
+		"progress=",
+		"remain=",
+		"speedWindow=",
+		"avgBlocks/s=",
+		"minBlocks/s=",
+		"maxBlocks/s=",
+		"eta=",
 		"execElapsed=",
 		"applyElapsed=",
 		"statePrefetchEnqueued=",
 		"slowPhase=",
 		"syncStageComplete=",
-		"stateMutTop=",
 		"peer=",
 	} {
 		if strings.Contains(summary, k) {
@@ -200,25 +206,97 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 		Blocks:      20,
 		Txs:         40,
 		TotalBlocks: 80,
+		TotalTxs:    160,
+		TxKinds:     map[string]int{"TransferContract": 40},
+		ApplyStats: core.ApplyStats{StateCommitDetail: state.CommitStats{
+			Mutations: state.CommitMutationStats{StoragePuts: 12, AccountUpdates: 8},
+		}},
 	}, syncdl.NewDiagnostics(3, 4, 1, []syncdl.PeerDiagnostics{
 		{ID: "active", Inflight: 2},
 		{ID: "done", Done: true},
 	}), 90, 10, nil)
 
 	out := buf.String()
+	var segmentLine string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "Imported chain segment") {
+			segmentLine = line
+		}
+	}
 	for _, field := range []string{
-		"head=90", "target=100", "progress=90", "remain=10",
-		"speedWindow=5m0s", "avgBlocks/s=10", "minBlocks/s=10", "maxBlocks/s=10",
+		"blocks=20", "txs=40", "blocks/s=10", "txs/s=20",
+		`txTop="TransferContract=40"`, `stateMutTop="storagePut=12,accountUpdate=8"`, "stateMutKVTop=none",
 		"peers=2", "activePeers=1", "inflight=2",
-		"buffered=3", "requested=4", "retries=1", "eta=",
+		"buffered=3", "requested=4", "retries=1",
 	} {
-		if !strings.Contains(out, field) {
-			t.Errorf("missing operational field %q:\n%s", field, out)
+		if !strings.Contains(segmentLine, field) {
+			t.Errorf("missing real-time field %q:\n%s", field, segmentLine)
 		}
 	}
 	for _, field := range []string{"Imported chain segment details", "execElapsed=", "stateCommit=", "peerState="} {
 		if strings.Contains(out, field) {
 			t.Errorf("diagnostic field %q emitted at info level:\n%s", field, out)
+		}
+	}
+}
+
+func TestSyncProgressWindowsAlignToWallClock(t *testing.T) {
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	now := time.Date(2026, 7, 31, 12, 3, 27, 0, loc)
+	wantNext := time.Date(2026, 7, 31, 12, 5, 0, 0, loc)
+	if got := nextSyncProgressBoundary(now); !got.Equal(wantNext) {
+		t.Fatalf("next boundary = %v, want %v", got, wantNext)
+	}
+
+	hour := time.Date(2026, 7, 31, 13, 0, 0, 0, loc)
+	windows := dueSyncProgressWindows(hour)
+	if len(windows) != 3 || windows[0].label != "5m" || windows[1].label != "30m" || windows[2].label != "1h" {
+		t.Fatalf("hour windows = %+v, want 5m/30m/1h", windows)
+	}
+	halfHour := time.Date(2026, 7, 31, 13, 30, 0, 0, loc)
+	windows = dueSyncProgressWindows(halfHour)
+	if len(windows) != 2 || windows[0].label != "5m" || windows[1].label != "30m" {
+		t.Fatalf("half-hour windows = %+v, want 5m/30m", windows)
+	}
+	midnight := time.Date(2026, 8, 1, 0, 0, 0, 0, loc)
+	windows = dueSyncProgressWindows(midnight)
+	if len(windows) != 4 || windows[3].label != "1d" || !windows[3].from.Equal(midnight.AddDate(0, 0, -1)) {
+		t.Fatalf("midnight windows = %+v, want natural previous day", windows)
+	}
+}
+
+func TestReportCalendarProgressEmitsDueWindows(t *testing.T) {
+	var buf bytes.Buffer
+	prev := gtronlog.Root()
+	defer gtronlog.SetDefault(prev)
+	h := gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelInfo)
+	gtronlog.SetDefault(gtronlog.NewLogger(h))
+
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	boundary := time.Date(2026, 7, 31, 12, 0, 0, 0, loc)
+	stats := tsync.NewStats()
+	stats.InitSession(boundary.Add(-2 * time.Hour))
+	stats.ObserveSpeed(boundary.Add(-30*time.Minute), 300, 5*time.Minute, time.Hour)
+	ss := &SyncService{
+		stats:         stats,
+		pause:         tsync.NewPauseGate(),
+		syncing:       true,
+		syncedTipNum:  90,
+		targetHeadNum: 100,
+	}
+	ss.reportCalendarProgress(boundary)
+
+	out := buf.String()
+	if got := strings.Count(out, `msg="Sync progress"`); got != 3 {
+		t.Fatalf("progress line count = %d, want 3:\n%s", got, out)
+	}
+	for _, field := range []string{
+		"window=5m", "window=30m", "window=1h",
+		"from=", "to=", "coverage=100", "head=90", "target=100",
+		"progress=90", "remain=10", "windowBlocks=", "avgBlocks/s=", "minBlocks/s=", "maxBlocks/s=", "eta=",
+	} {
+		if !strings.Contains(out, field) {
+			t.Errorf("missing progress field %q:\n%s", field, out)
 		}
 	}
 }

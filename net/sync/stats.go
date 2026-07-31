@@ -38,19 +38,26 @@ type Snapshot struct {
 	TxKinds map[string]int
 }
 
-// SpeedHistoryWindow is the operator-facing rolling interval used for recent
-// sync speed averages and extrema.
-const SpeedHistoryWindow = 5 * time.Minute
+// SpeedHistoryRetention keeps enough completed import windows to produce the
+// previous natural day at midnight, with one hour of scheduling margin.
+const SpeedHistoryRetention = 25 * time.Hour
 
-// SpeedSummary describes block import speed over a rolling observation
-// window. Average is weighted by each reporting interval's elapsed time;
-// Minimum and Maximum are the slowest and fastest individual report windows.
+// SpeedSummary describes block import speed over an observation window.
+// Calendar summaries use natural wall-clock boundaries and expose Coverage so
+// an operator can distinguish a full bucket from a process that started partway
+// through it. Minimum and Maximum are the slowest and fastest real-time import
+// report intervals contributing to the window; idle gaps count as a zero
+// minimum.
 type SpeedSummary struct {
-	Window  time.Duration
-	Samples int
-	Average float64
-	Minimum float64
-	Maximum float64
+	Window   time.Duration
+	From     time.Time
+	To       time.Time
+	Coverage time.Duration
+	Samples  int
+	Blocks   float64
+	Average  float64
+	Minimum  float64
+	Maximum  float64
 }
 
 type speedSample struct {
@@ -69,9 +76,10 @@ type speedSample struct {
 // onApplyStats path is the only writer that does NOT also hold ss.mu, which is
 // safe because Stats serializes its own state.
 type Stats struct {
-	mu           sync.Mutex
-	cur          Snapshot
-	speedSamples []speedSample
+	mu            sync.Mutex
+	cur           Snapshot
+	speedSamples  []speedSample
+	trackingStart time.Time
 }
 
 // NewStats returns a fresh zero-valued accumulator. Both startTime and
@@ -87,22 +95,55 @@ func (s *Stats) InitSession(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cur = Snapshot{StartTime: now, TotalStart: now}
-	s.speedSamples = nil
+	if s.trackingStart.IsZero() {
+		s.trackingStart = now
+	}
 }
 
 // ObserveSpeed adds one completed report window and returns recent weighted
-// average, minimum, and maximum block rates. Samples older than window are
-// discarded; the current sample is always retained when its elapsed time is
-// positive.
+// average, minimum, and maximum block rates. Samples older than the history
+// retention are discarded, while the returned summary is limited to window;
+// the current sample is always retained when its elapsed time is positive.
 func (s *Stats) ObserveSpeed(now time.Time, blocks int, elapsed, window time.Duration) SpeedSummary {
 	if elapsed <= 0 || window <= 0 {
 		return SpeedSummary{Window: window}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.trackingStart.IsZero() {
+		s.trackingStart = now.Add(-elapsed)
+	}
 
 	s.speedSamples = append(s.speedSamples, speedSample{at: now, blocks: blocks, elapsed: elapsed})
+	s.pruneSpeedSamplesLocked(now)
+
 	cutoff := now.Add(-window)
+	summary := SpeedSummary{Window: window, From: cutoff, To: now}
+	var totalElapsed time.Duration
+	for _, sample := range s.speedSamples {
+		if sample.at.Before(cutoff) {
+			continue
+		}
+		rate := float64(sample.blocks) * float64(time.Second) / float64(sample.elapsed)
+		if summary.Samples == 0 || rate < summary.Minimum {
+			summary.Minimum = rate
+		}
+		if summary.Samples == 0 || rate > summary.Maximum {
+			summary.Maximum = rate
+		}
+		summary.Blocks += float64(sample.blocks)
+		totalElapsed += sample.elapsed
+		summary.Samples++
+	}
+	if totalElapsed > 0 {
+		summary.Coverage = totalElapsed
+		summary.Average = summary.Blocks / totalElapsed.Seconds()
+	}
+	return summary
+}
+
+func (s *Stats) pruneSpeedSamplesLocked(now time.Time) {
+	cutoff := now.Add(-SpeedHistoryRetention)
 	first := 0
 	for first < len(s.speedSamples) && s.speedSamples[first].at.Before(cutoff) {
 		first++
@@ -111,23 +152,121 @@ func (s *Stats) ObserveSpeed(now time.Time, blocks int, elapsed, window time.Dur
 		copy(s.speedSamples, s.speedSamples[first:])
 		s.speedSamples = s.speedSamples[:len(s.speedSamples)-first]
 	}
+}
 
-	summary := SpeedSummary{Window: window, Samples: len(s.speedSamples)}
-	var totalBlocks int
-	var totalElapsed time.Duration
-	for i, sample := range s.speedSamples {
+// RecordSpeed retains one completed real-time import window for later natural
+// time-bucket summaries.
+func (s *Stats) RecordSpeed(now time.Time, blocks int, elapsed time.Duration) {
+	_ = s.ObserveSpeed(now, blocks, elapsed, SpeedHistoryRetention)
+}
+
+// EndSession retains the final partial real-time window before downloader
+// state is reset. Without this flush, a sync session that ends between the
+// regular eight-second report ticks would disappear from later 30m/1h/1d
+// calendar summaries.
+func (s *Stats) EndSession(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.cur.StartTime.IsZero() && now.After(s.cur.StartTime) && s.cur.Blocks > 0 {
+		s.speedSamples = append(s.speedSamples, speedSample{
+			at:      now,
+			blocks:  s.cur.Blocks,
+			elapsed: now.Sub(s.cur.StartTime),
+		})
+		s.pruneSpeedSamplesLocked(now)
+	}
+	s.cur.StartTime = time.Time{}
+	s.cur.Blocks = 0
+	s.cur.Txs = 0
+	s.cur.ExecElapsed = 0
+	s.cur.BufferWaitElapsed = 0
+	s.cur.ApplyStats = core.ApplyStats{}
+	s.cur.TxKinds = nil
+}
+
+// CalendarSpeedSummary returns speed statistics for a completed wall-clock
+// interval. Missing time after tracking started counts as zero throughput;
+// time before tracking started is excluded and exposed through Coverage.
+func (s *Stats) CalendarSpeedSummary(from, to time.Time) SpeedSummary {
+	if !to.After(from) {
+		return SpeedSummary{From: from, To: to}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.trackingStart.IsZero() {
+		return SpeedSummary{Window: to.Sub(from), From: from, To: to}
+	}
+	samples := append([]speedSample(nil), s.speedSamples...)
+	if !s.cur.StartTime.IsZero() && to.After(s.cur.StartTime) {
+		end := to
+		if end.After(s.cur.StartTime) {
+			samples = append(samples, speedSample{at: end, blocks: s.cur.Blocks, elapsed: end.Sub(s.cur.StartTime)})
+		}
+	}
+	coverageStart := from
+	if !s.trackingStart.IsZero() && s.trackingStart.After(coverageStart) {
+		coverageStart = s.trackingStart
+	}
+	return summarizeSpeedSamples(samples, from, to, coverageStart)
+}
+
+func summarizeSpeedSamples(samples []speedSample, from, to, coverageStart time.Time) SpeedSummary {
+	summary := SpeedSummary{Window: to.Sub(from), From: from, To: to}
+	if coverageStart.Before(to) {
+		summary.Coverage = to.Sub(coverageStart)
+	}
+	type sampleInterval struct{ start, end time.Time }
+	intervals := make([]sampleInterval, 0, len(samples))
+	for _, sample := range samples {
+		if sample.elapsed <= 0 {
+			continue
+		}
+		start := sample.at.Add(-sample.elapsed)
+		end := sample.at
+		if start.Before(from) {
+			start = from
+		}
+		if start.Before(coverageStart) {
+			start = coverageStart
+		}
+		if end.After(to) {
+			end = to
+		}
+		if !end.After(start) {
+			continue
+		}
+		overlap := end.Sub(start)
 		rate := float64(sample.blocks) * float64(time.Second) / float64(sample.elapsed)
-		if i == 0 || rate < summary.Minimum {
+		summary.Blocks += rate * overlap.Seconds()
+		intervals = append(intervals, sampleInterval{start: start, end: end})
+		if summary.Samples == 0 || rate < summary.Minimum {
 			summary.Minimum = rate
 		}
-		if i == 0 || rate > summary.Maximum {
+		if summary.Samples == 0 || rate > summary.Maximum {
 			summary.Maximum = rate
 		}
-		totalBlocks += sample.blocks
-		totalElapsed += sample.elapsed
+		summary.Samples++
 	}
-	if totalElapsed > 0 {
-		summary.Average = float64(totalBlocks) * float64(time.Second) / float64(totalElapsed)
+	if summary.Coverage > 0 {
+		summary.Average = summary.Blocks / summary.Coverage.Seconds()
+	}
+	sort.Slice(intervals, func(i, j int) bool { return intervals[i].start.Before(intervals[j].start) })
+	var observed time.Duration
+	if len(intervals) > 0 {
+		start, end := intervals[0].start, intervals[0].end
+		for _, interval := range intervals[1:] {
+			if interval.start.After(end) {
+				observed += end.Sub(start)
+				start, end = interval.start, interval.end
+			} else if interval.end.After(end) {
+				end = interval.end
+			}
+		}
+		observed += end.Sub(start)
+	}
+	if observed < summary.Coverage {
+		summary.Minimum = 0
 	}
 	return summary
 }

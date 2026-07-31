@@ -143,6 +143,10 @@ type SyncService struct {
 	// and ticker; Start/Stop fan-out launches and joins it.
 	watchdog *tsync.Watchdog
 
+	progressMu   sync.Mutex
+	progressStop chan struct{}
+	progressWG   sync.WaitGroup
+
 	bufferWait syncdl.BufferWaitTracker
 
 	lastPeerJoinAttempt time.Time
@@ -278,12 +282,14 @@ func (ss *SyncService) Start() {
 	if ss.watchdog != nil {
 		ss.watchdog.Start()
 	}
+	ss.startProgressReporter()
 }
 
 // Stop shuts down the sync service, cancels any in-progress sync, and waits
 // for the active drain to leave InsertBlocks before shutdown continues.
 func (ss *SyncService) Stop() {
 	ss.stopping.Store(true)
+	ss.stopProgressReporter()
 	if ss.watchdog != nil {
 		ss.watchdog.Stop()
 	}
@@ -291,6 +297,120 @@ func (ss *SyncService) Stop() {
 	ss.doReset()
 	ss.mu.Unlock()
 	ss.waitForDrain()
+}
+
+type syncProgressWindow struct {
+	label string
+	from  time.Time
+}
+
+func nextSyncProgressBoundary(now time.Time) time.Time {
+	minute := now.Minute() - now.Minute()%5
+	boundary := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), minute, 0, 0, now.Location())
+	if !boundary.After(now) {
+		boundary = boundary.Add(5 * time.Minute)
+	}
+	return boundary
+}
+
+func dueSyncProgressWindows(boundary time.Time) []syncProgressWindow {
+	windows := []syncProgressWindow{{label: "5m", from: boundary.Add(-5 * time.Minute)}}
+	if boundary.Minute()%30 == 0 {
+		windows = append(windows, syncProgressWindow{label: "30m", from: boundary.Add(-30 * time.Minute)})
+	}
+	if boundary.Minute() == 0 {
+		windows = append(windows, syncProgressWindow{label: "1h", from: boundary.Add(-time.Hour)})
+	}
+	if boundary.Hour() == 0 && boundary.Minute() == 0 {
+		previousDay := boundary.AddDate(0, 0, -1)
+		windows = append(windows, syncProgressWindow{label: "1d", from: previousDay})
+	}
+	return windows
+}
+
+func (ss *SyncService) startProgressReporter() {
+	ss.progressMu.Lock()
+	if ss.progressStop != nil {
+		ss.progressMu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	ss.progressStop = stop
+	ss.progressWG.Add(1)
+	ss.progressMu.Unlock()
+	go func() {
+		defer ss.progressWG.Done()
+		for {
+			boundary := nextSyncProgressBoundary(time.Now())
+			timer := time.NewTimer(time.Until(boundary))
+			select {
+			case <-timer.C:
+				ss.reportCalendarProgress(boundary)
+			case <-stop:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			}
+		}
+	}()
+}
+
+func (ss *SyncService) stopProgressReporter() {
+	ss.progressMu.Lock()
+	stop := ss.progressStop
+	ss.progressStop = nil
+	if stop != nil {
+		close(stop)
+	}
+	ss.progressMu.Unlock()
+	if stop != nil {
+		ss.progressWG.Wait()
+	}
+}
+
+func (ss *SyncService) reportCalendarProgress(boundary time.Time) {
+	status := ss.Status()
+	if !status.Active {
+		return
+	}
+	target := status.TargetHead
+	if target < status.AppliedTip {
+		target = status.AppliedTip
+	}
+	progress := 100.0
+	if target > 0 {
+		progress = float64(status.AppliedTip) * 100 / float64(target)
+	}
+	for _, window := range dueSyncProgressWindows(boundary) {
+		speed := ss.stats.CalendarSpeedSummary(window.from, boundary)
+		coverage := 0.0
+		if speed.Window > 0 {
+			coverage = float64(speed.Coverage) * 100 / float64(speed.Window)
+		}
+		ctx := []any{
+			"window", window.label,
+			"from", window.from.Format(time.RFC3339),
+			"to", boundary.Format(time.RFC3339),
+			"coverage", round2(coverage),
+			"head", status.AppliedTip,
+			"target", target,
+			"progress", round2(progress),
+			"remain", status.Remaining,
+			"windowBlocks", round2(speed.Blocks),
+			"avgBlocks/s", round2(speed.Average),
+			"minBlocks/s", round2(speed.Minimum),
+			"maxBlocks/s", round2(speed.Maximum),
+		}
+		if speed.Average > 0 && status.Remaining > 0 {
+			etaSec := float64(status.Remaining) / speed.Average
+			ctx = append(ctx, "eta", ethcommon.PrettyDuration(time.Duration(etaSec*float64(time.Second))))
+		}
+		syncLog.Info("Sync progress", ctx...)
+	}
 }
 
 // IsSyncing returns whether sync is in progress.
@@ -2832,39 +2952,35 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	}
 	blocksPerSec := float64(s.Blocks) * float64(time.Second) / float64(elapsed)
 	txsPerSec := float64(s.Txs) * float64(time.Second) / float64(elapsed)
-	speed := ss.stats.ObserveSpeed(now, s.Blocks, elapsed, tsync.SpeedHistoryWindow)
-	target := head
-	if remain > 0 && uint64(remain) <= ^uint64(0)-head {
-		target += uint64(remain)
+	ss.stats.RecordSpeed(now, s.Blocks, elapsed)
+	_ = remain // retained in the report payload for compatibility with downloader scheduling
+	txTop := tsync.TopTxKindsString(s.TxKinds, 5)
+	if txTop == "" {
+		txTop = "none"
 	}
-	progress := 100.0
-	if target > 0 {
-		progress = float64(head) * 100 / float64(target)
+	stateMutTop := s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(3)
+	if stateMutTop == "" {
+		stateMutTop = "none"
+	}
+	stateMutKVTop := s.ApplyStats.StateCommitDetail.Mutations.TopKVDomainsString(3)
+	if stateMutKVTop == "" {
+		stateMutKVTop = "none"
 	}
 	ctx := []any{
-		"head", head,
-		"target", target,
-		"progress", round2(progress),
-		"remain", remain,
 		"blocks", s.Blocks,
 		"txs", s.Txs,
 		"elapsed", ethcommon.PrettyDuration(elapsed),
 		"blocks/s", round2(blocksPerSec),
 		"txs/s", round2(txsPerSec),
-		"speedWindow", ethcommon.PrettyDuration(speed.Window),
-		"avgBlocks/s", round2(speed.Average),
-		"minBlocks/s", round2(speed.Minimum),
-		"maxBlocks/s", round2(speed.Maximum),
+		"txTop", txTop,
+		"stateMutTop", stateMutTop,
+		"stateMutKVTop", stateMutKVTop,
 		"peers", diag.PeerCount,
 		"activePeers", diag.ActivePeerCount,
 		"inflight", diag.Inflight,
 		"buffered", diag.BlockBufferLen,
 		"requested", diag.RequestedLen,
 		"retries", diag.RetryListLen,
-	}
-	if blocksPerSec > 0 && remain > 0 {
-		etaSec := float64(remain) / blocksPerSec
-		ctx = append(ctx, "eta", ethcommon.PrettyDuration(time.Duration(etaSec*float64(time.Second))))
 	}
 	syncLog.Info("Imported chain segment", ctx...)
 
@@ -2941,10 +3057,6 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	topKVDomains := s.ApplyStats.StateCommitDetail.Mutations.TopKVDomainsString(10)
 	if topKVDomains == "" {
 		topKVDomains = "none"
-	}
-	txTop := tsync.TopTxKindsString(s.TxKinds, 5)
-	if txTop == "" {
-		txTop = "none"
 	}
 	detail = append(detail, "stateMutTop", topMutations, "stateMutKVTop", topKVDomains, "txTop", txTop)
 	detail = diag.AppendImportPlanLogFields(detail)
@@ -3047,6 +3159,9 @@ func (a syncSessionResetApplier) StopPeerTimers() {
 }
 
 func (a syncSessionResetApplier) DeactivateSession() {
+	if a.service.stats != nil {
+		a.service.stats.EndSession(time.Now())
+	}
 	a.service.syncing = false
 }
 
