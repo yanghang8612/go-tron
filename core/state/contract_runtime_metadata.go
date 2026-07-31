@@ -115,6 +115,7 @@ func (s *StateDB) contractRuntime(obj *stateObject) (ContractRuntimeMetadata, bo
 	if obj == nil || obj.deleted {
 		return ContractRuntimeMetadata{}, false
 	}
+	s.recordContractMetadataRead(obj.address)
 	// A materialized or dirty protobuf may be mutated in place before
 	// SetContract is called. Derive from the live object instead of caching it.
 	if obj.contractMeta != nil || obj.contractMetaDirty {

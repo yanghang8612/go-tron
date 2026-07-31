@@ -795,8 +795,11 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	transactions := block.Transactions()
 	shadowEnabled := txInfoBatch != nil && validateEnvelope
 	var transferShadow speculativeTransferShadow
+	var versionedShadow versionedAccessShadow
 	if shadowEnabled {
 		transferShadow.Prepare(len(transactions))
+		versionedShadow.Prepare(len(transactions))
+		defer versionedShadow.Finish(statedb, dynProps)
 	}
 	var txInfoSlots []transactionInfoSlot
 	if txInfoBatch != nil {
@@ -816,6 +819,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		domainChangeMark := statedb.DomainChangeJournalMark()
 		if domainChanges != nil {
 			domainChangeMark = domainChanges.JournalMark()
+		}
+		if shadowEnabled {
+			versionedShadow.BeginTransaction(statedb, dynProps)
 		}
 		if dynProps.ConsensusLogicOptimization() {
 			if err := ValidateTxRetCount(tx); err != nil {
@@ -867,6 +873,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		statedb.FinalizeTransaction()
 		statedb.EndBalanceTraceTransaction(balanceTraceStatus)
 		if shadowEnabled {
+			versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
 			transferShadow.Observe(tx, statedb, domainChangeMark, txScratch.dynamicPropertiesChanged)
 		}
 		if domainChanges != nil {
@@ -920,6 +927,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	}
 	if shadowEnabled {
 		transferShadow.Publish()
+		versionedShadow.Publish(statedb, dynProps)
 	}
 
 	return txInfos, javaAccountStateRoot, nil

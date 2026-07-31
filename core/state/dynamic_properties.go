@@ -241,6 +241,10 @@ type DynamicProperties struct {
 	latestBlockHeaderHash common.Hash
 	hashDirty             bool
 
+	// transactionAccess is installed only while the canonical executor records
+	// one transaction's logical read/write set. Copies intentionally omit it.
+	transactionAccess *TransactionAccessRecorder
+
 	// journal stores only properties actually changed while a snapshot is
 	// active. Historical sync takes one block snapshot plus one nested snapshot
 	// per transaction; copying the entire ~130-key property map at every one of
@@ -343,6 +347,7 @@ func (dp *DynamicProperties) CopyInto(dst *DynamicProperties) *DynamicProperties
 	dst.stringDirty = copyDynamicPropertyMapInto(dst.stringDirty, dp.stringDirty)
 	dst.latestBlockHeaderHash = dp.latestBlockHeaderHash
 	dst.hashDirty = dp.hashDirty
+	dst.transactionAccess = nil
 	clear(dst.journal[:cap(dst.journal)])
 	dst.journal = dst.journal[:0]
 	clear(dst.snapshots[:cap(dst.snapshots)])
@@ -651,6 +656,7 @@ func writeDerivedDynamicProperty(store derivedDynamicPropertyWriter, name string
 
 // Get returns the value for a key and whether it was found.
 func (dp *DynamicProperties) Get(key string) (int64, bool) {
+	dp.recordDynamicAccess(TransactionAccessDynamicInt, key, TransactionAccessRead)
 	v, ok := dp.props[key]
 	return v, ok
 }
@@ -674,6 +680,7 @@ func DefaultDPInt64(key string) (int64, bool) {
 
 // Set sets a value and marks the key dirty when the stored value changes.
 func (dp *DynamicProperties) Set(key string, value int64) {
+	dp.recordDynamicAccess(TransactionAccessDynamicInt, key, TransactionAccessRead)
 	if current, ok := dp.props[key]; ok && current == value {
 		return
 	}
@@ -699,12 +706,14 @@ func (dp *DynamicProperties) Set(key string, value int64) {
 	}
 	dp.props[key] = value
 	dp.dirty[key] = struct{}{}
+	dp.recordDynamicAccess(TransactionAccessDynamicInt, key, TransactionAccessWrite)
 }
 
 // Keys returns every currently-known DP key (defaults plus anything Set()).
 // The result is unsorted; callers that need stability (e.g. the conformance
 // digest) must sort it themselves.
 func (dp *DynamicProperties) Keys() []string {
+	dp.recordAllDynamicReadsUnsupported()
 	out := make([]string, 0, len(dp.props))
 	for k := range dp.props {
 		out = append(out, k)
@@ -715,6 +724,7 @@ func (dp *DynamicProperties) Keys() []string {
 // StringKeys returns every currently-known string-typed DP key.
 // The result is unsorted; callers that need stability must sort it themselves.
 func (dp *DynamicProperties) StringKeys() []string {
+	dp.recordAllDynamicReadsUnsupported()
 	out := make([]string, 0, len(dp.stringProps))
 	for k := range dp.stringProps {
 		out = append(out, k)
@@ -725,18 +735,18 @@ func (dp *DynamicProperties) StringKeys() []string {
 // --- Typed getters ---
 
 func (dp *DynamicProperties) MaintenanceTimeInterval() int64 {
-	return dp.props["maintenance_time_interval"]
+	return dp.readInt("maintenance_time_interval")
 }
 
 func (dp *DynamicProperties) NextMaintenanceTime() int64 {
-	return dp.props["next_maintenance_time"]
+	return dp.readInt("next_maintenance_time")
 }
 
 // StateFlag is 1 iff the most recently applied block triggered a maintenance
 // pass; the next block reads it to know whether to add MAINTENANCE_SKIP_SLOTS
 // when computing slot offsets (mirrors java-tron `lastHeadBlockIsMaintenance`).
 func (dp *DynamicProperties) StateFlag() int64 {
-	return dp.props["state_flag"]
+	return dp.readInt("state_flag")
 }
 
 func (dp *DynamicProperties) SetStateFlag(v int64) {
@@ -744,39 +754,39 @@ func (dp *DynamicProperties) SetStateFlag(v int64) {
 }
 
 func (dp *DynamicProperties) LatestBlockHeaderNumber() int64 {
-	return dp.props["latest_block_header_number"]
+	return dp.readInt("latest_block_header_number")
 }
 
 func (dp *DynamicProperties) LatestBlockHeaderTimestamp() int64 {
-	return dp.props["latest_block_header_timestamp"]
+	return dp.readInt("latest_block_header_timestamp")
 }
 
 func (dp *DynamicProperties) LatestSolidifiedBlockNum() int64 {
-	return dp.props["latest_solidified_block_num"]
+	return dp.readInt("latest_solidified_block_num")
 }
 
 func (dp *DynamicProperties) WitnessPayPerBlock() int64 {
-	return dp.props["witness_pay_per_block"]
+	return dp.readInt("witness_pay_per_block")
 }
 
 func (dp *DynamicProperties) WitnessStandbyAllowance() int64 {
-	return dp.props["witness_standby_allowance"]
+	return dp.readInt("witness_standby_allowance")
 }
 
 func (dp *DynamicProperties) TransactionFee() int64 {
-	return dp.props["transaction_fee"]
+	return dp.readInt("transaction_fee")
 }
 
 func (dp *DynamicProperties) EnergyFee() int64 {
-	return dp.props["energy_fee"]
+	return dp.readInt("energy_fee")
 }
 
 func (dp *DynamicProperties) CreateAccountFee() int64 {
-	return dp.props["create_account_fee"]
+	return dp.readInt("create_account_fee")
 }
 
 func (dp *DynamicProperties) CreateNewAccountFeeInSystemContract() int64 {
-	return dp.props["create_new_account_fee_in_system_contract"]
+	return dp.readInt("create_new_account_fee_in_system_contract")
 }
 
 // CreateNewAccountBandwidthRate is the bytes-per-bandwidth-credit ratio used
@@ -784,30 +794,30 @@ func (dp *DynamicProperties) CreateNewAccountFeeInSystemContract() int64 {
 // account (TransferContract / TransferAssetContract / AccountCreateContract).
 // Default 1; mirrors java-tron `getCreateNewAccountBandwidthRate`.
 func (dp *DynamicProperties) CreateNewAccountBandwidthRate() int64 {
-	return dp.props["create_new_account_bandwidth_rate"]
+	return dp.readInt("create_new_account_bandwidth_rate")
 }
 
 func (dp *DynamicProperties) TotalEnergyCurrentLimit() int64 {
-	return dp.props["total_energy_current_limit"]
+	return dp.readInt("total_energy_current_limit")
 }
 func (dp *DynamicProperties) SetTotalEnergyCurrentLimit(v int64) {
 	dp.Set("total_energy_current_limit", v)
 }
 
-func (dp *DynamicProperties) BlockEnergyUsage() int64 { return dp.props["block_energy_usage"] }
+func (dp *DynamicProperties) BlockEnergyUsage() int64 { return dp.readInt("block_energy_usage") }
 func (dp *DynamicProperties) SetBlockEnergyUsage(v int64) {
 	dp.Set("block_energy_usage", v)
 }
 
 func (dp *DynamicProperties) TotalEnergyAverageTime() int64 {
-	return dp.props["total_energy_average_time"]
+	return dp.readInt("total_energy_average_time")
 }
 func (dp *DynamicProperties) SetTotalEnergyAverageTime(v int64) {
 	dp.Set("total_energy_average_time", v)
 }
 
 func (dp *DynamicProperties) TotalNetLimit() int64 {
-	return dp.props["total_net_limit"]
+	return dp.readInt("total_net_limit")
 }
 
 // --- Resource weight counters ---
@@ -815,18 +825,18 @@ func (dp *DynamicProperties) TotalNetLimit() int64 {
 // DynamicPropertiesStore. Unit is TRX (not SUN); actuators convert
 // frozen SUN amounts via `amount / TRX_PRECISION` before calling Add*.
 
-func (dp *DynamicProperties) TotalNetWeight() int64 { return dp.props["total_net_weight"] }
+func (dp *DynamicProperties) TotalNetWeight() int64 { return dp.readInt("total_net_weight") }
 func (dp *DynamicProperties) SetTotalNetWeight(v int64) {
 	dp.Set("total_net_weight", v)
 }
 
-func (dp *DynamicProperties) TotalEnergyWeight() int64 { return dp.props["total_energy_weight"] }
+func (dp *DynamicProperties) TotalEnergyWeight() int64 { return dp.readInt("total_energy_weight") }
 func (dp *DynamicProperties) SetTotalEnergyWeight(v int64) {
 	dp.Set("total_energy_weight", v)
 }
 
 func (dp *DynamicProperties) TotalTronPowerWeight() int64 {
-	return dp.props["total_tron_power_weight"]
+	return dp.readInt("total_tron_power_weight")
 }
 func (dp *DynamicProperties) SetTotalTronPowerWeight(v int64) {
 	dp.Set("total_tron_power_weight", v)
@@ -872,7 +882,7 @@ func (dp *DynamicProperties) AddTotalTronPowerWeight(delta int64) {
 }
 
 func (dp *DynamicProperties) UnfreezeDelayDays() int64 {
-	return dp.props["unfreeze_delay_days"]
+	return dp.readInt("unfreeze_delay_days")
 }
 func (dp *DynamicProperties) SetUnfreezeDelayDays(days int64) {
 	dp.Set("unfreeze_delay_days", days)
@@ -895,11 +905,11 @@ func (dp *DynamicProperties) SupportCancelAllUnfreezeV2() bool {
 }
 
 func (dp *DynamicProperties) MaxCpuTimeOfOneTx() int64 {
-	return dp.props["max_cpu_time_of_one_tx"]
+	return dp.readInt("max_cpu_time_of_one_tx")
 }
 
 func (dp *DynamicProperties) AllowNewResourceModel() bool {
-	return dp.props["allow_new_resource_model"] != 0
+	return dp.readInt("allow_new_resource_model") != 0
 }
 func (dp *DynamicProperties) SetAllowNewResourceModel(v bool) {
 	if v {
@@ -910,7 +920,7 @@ func (dp *DynamicProperties) SetAllowNewResourceModel(v bool) {
 }
 
 func (dp *DynamicProperties) AllowSameTokenName() bool {
-	return dp.props["allow_same_token_name"] != 0
+	return dp.readInt("allow_same_token_name") != 0
 }
 func (dp *DynamicProperties) SetAllowSameTokenName(v bool) {
 	if v {
@@ -921,7 +931,7 @@ func (dp *DynamicProperties) SetAllowSameTokenName(v bool) {
 }
 
 func (dp *DynamicProperties) AllowDelegateResource() bool {
-	return dp.props["allow_delegate_resource"] != 0
+	return dp.readInt("allow_delegate_resource") != 0
 }
 func (dp *DynamicProperties) SetAllowDelegateResource(v bool) {
 	if v {
@@ -932,7 +942,7 @@ func (dp *DynamicProperties) SetAllowDelegateResource(v bool) {
 }
 
 func (dp *DynamicProperties) AllowAdaptiveEnergy() bool {
-	return dp.props["allow_adaptive_energy"] != 0
+	return dp.readInt("allow_adaptive_energy") != 0
 }
 func (dp *DynamicProperties) SetAllowAdaptiveEnergy(v bool) {
 	if v {
@@ -943,7 +953,7 @@ func (dp *DynamicProperties) SetAllowAdaptiveEnergy(v bool) {
 }
 
 func (dp *DynamicProperties) AllowMultiSign() bool {
-	return dp.props["allow_multi_sign"] != 0
+	return dp.readInt("allow_multi_sign") != 0
 }
 func (dp *DynamicProperties) SetAllowMultiSign(v bool) {
 	if v {
@@ -954,7 +964,7 @@ func (dp *DynamicProperties) SetAllowMultiSign(v bool) {
 }
 
 func (dp *DynamicProperties) ChangeDelegation() bool {
-	return dp.props["change_delegation"] != 0
+	return dp.readInt("change_delegation") != 0
 }
 func (dp *DynamicProperties) SetChangeDelegation(v bool) {
 	if v {
@@ -965,7 +975,7 @@ func (dp *DynamicProperties) SetChangeDelegation(v bool) {
 }
 
 func (dp *DynamicProperties) AllowTvmTransferTrc10() bool {
-	return dp.props["allow_tvm_transfer_trc10"] != 0
+	return dp.readInt("allow_tvm_transfer_trc10") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmTransferTrc10(v bool) {
 	if v {
@@ -976,7 +986,7 @@ func (dp *DynamicProperties) SetAllowTvmTransferTrc10(v bool) {
 }
 
 func (dp *DynamicProperties) AllowTvmConstantinople() bool {
-	return dp.props["allow_tvm_constantinople"] != 0
+	return dp.readInt("allow_tvm_constantinople") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmConstantinople(v bool) {
 	if v {
@@ -987,7 +997,7 @@ func (dp *DynamicProperties) SetAllowTvmConstantinople(v bool) {
 }
 
 func (dp *DynamicProperties) AllowTvmSolidity059() bool {
-	return dp.props["allow_tvm_solidity059"] != 0
+	return dp.readInt("allow_tvm_solidity059") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmSolidity059(v bool) {
 	if v {
@@ -998,7 +1008,7 @@ func (dp *DynamicProperties) SetAllowTvmSolidity059(v bool) {
 }
 
 func (dp *DynamicProperties) AllowTvmIstanbul() bool {
-	return dp.props["allow_tvm_istanbul"] != 0
+	return dp.readInt("allow_tvm_istanbul") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmIstanbul(v bool) {
 	if v {
@@ -1009,7 +1019,7 @@ func (dp *DynamicProperties) SetAllowTvmIstanbul(v bool) {
 }
 
 func (dp *DynamicProperties) AllowMarketTransaction() bool {
-	return dp.props["allow_market_transaction"] != 0
+	return dp.readInt("allow_market_transaction") != 0
 }
 func (dp *DynamicProperties) SetAllowMarketTransaction(v bool) {
 	if v {
@@ -1020,7 +1030,7 @@ func (dp *DynamicProperties) SetAllowMarketTransaction(v bool) {
 }
 
 func (dp *DynamicProperties) AllowTvmFreeze() bool {
-	return dp.props["allow_tvm_freeze"] != 0
+	return dp.readInt("allow_tvm_freeze") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmFreeze(v bool) {
 	if v {
@@ -1040,7 +1050,7 @@ func (dp *DynamicProperties) SetAllowTvmShieldedToken(v bool) {
 }
 
 func (dp *DynamicProperties) AllowTvmVote() bool {
-	return dp.props["allow_tvm_vote"] != 0
+	return dp.readInt("allow_tvm_vote") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmVote(v bool) {
 	if v {
@@ -1051,7 +1061,7 @@ func (dp *DynamicProperties) SetAllowTvmVote(v bool) {
 }
 
 func (dp *DynamicProperties) AllowPbft() bool {
-	return dp.props["allow_pbft"] != 0
+	return dp.readInt("allow_pbft") != 0
 }
 func (dp *DynamicProperties) SetAllowPbft(v bool) {
 	if v {
@@ -1070,7 +1080,7 @@ func (dp *DynamicProperties) AllowStakingV2() bool     { return dp.AllowNewResou
 func (dp *DynamicProperties) SetAllowStakingV2(v bool) { dp.SetAllowNewResourceModel(v) }
 
 func (dp *DynamicProperties) AllowTvmLondon() bool {
-	return dp.props["allow_tvm_london"] != 0
+	return dp.readInt("allow_tvm_london") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmLondon(v bool) {
 	if v {
@@ -1081,7 +1091,7 @@ func (dp *DynamicProperties) SetAllowTvmLondon(v bool) {
 }
 
 func (dp *DynamicProperties) AllowTvmCompatibleEvm() bool {
-	return dp.props["allow_tvm_compatible_evm"] != 0
+	return dp.readInt("allow_tvm_compatible_evm") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmCompatibleEvm(v bool) {
 	if v {
@@ -1092,7 +1102,7 @@ func (dp *DynamicProperties) SetAllowTvmCompatibleEvm(v bool) {
 }
 
 func (dp *DynamicProperties) AllowDynamicEnergy() bool {
-	return dp.props["allow_dynamic_energy"] != 0
+	return dp.readInt("allow_dynamic_energy") != 0
 }
 func (dp *DynamicProperties) SetAllowDynamicEnergy(v bool) {
 	if v {
@@ -1103,7 +1113,7 @@ func (dp *DynamicProperties) SetAllowDynamicEnergy(v bool) {
 }
 
 func (dp *DynamicProperties) AllowTvmBlob() bool {
-	return dp.props["allow_tvm_blob"] != 0
+	return dp.readInt("allow_tvm_blob") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmBlob(v bool) {
 	if v {
@@ -1114,7 +1124,7 @@ func (dp *DynamicProperties) SetAllowTvmBlob(v bool) {
 }
 
 func (dp *DynamicProperties) AllowTvmCancun() bool {
-	return dp.props["allow_tvm_cancun"] != 0
+	return dp.readInt("allow_tvm_cancun") != 0
 }
 func (dp *DynamicProperties) SetAllowTvmCancun(v bool) {
 	if v {
@@ -1125,7 +1135,7 @@ func (dp *DynamicProperties) SetAllowTvmCancun(v bool) {
 }
 
 func (dp *DynamicProperties) AllowEnergyAdjustment() bool {
-	return dp.props["allow_energy_adjustment"] != 0
+	return dp.readInt("allow_energy_adjustment") != 0
 }
 func (dp *DynamicProperties) SetAllowEnergyAdjustment(v bool) {
 	if v {
@@ -1136,10 +1146,11 @@ func (dp *DynamicProperties) SetAllowEnergyAdjustment(v bool) {
 }
 
 func (dp *DynamicProperties) FreeNetLimit() int64 {
-	return dp.props["free_net_limit"]
+	return dp.readInt("free_net_limit")
 }
 
 func (dp *DynamicProperties) LatestBlockHeaderHash() common.Hash {
+	dp.recordDynamicAccess(TransactionAccessDynamicHash, "latest_block_header_hash", TransactionAccessRead)
 	return dp.latestBlockHeaderHash
 }
 
@@ -1162,6 +1173,7 @@ func (dp *DynamicProperties) SetLatestSolidifiedBlockNum(n int64) {
 }
 
 func (dp *DynamicProperties) SetLatestBlockHeaderHash(h common.Hash) {
+	dp.recordDynamicAccess(TransactionAccessDynamicHash, "latest_block_header_hash", TransactionAccessRead)
 	if dp.latestBlockHeaderHash == h {
 		return
 	}
@@ -1177,13 +1189,14 @@ func (dp *DynamicProperties) SetLatestBlockHeaderHash(h common.Hash) {
 	}
 	dp.latestBlockHeaderHash = h
 	dp.hashDirty = true
+	dp.recordDynamicAccess(TransactionAccessDynamicHash, "latest_block_header_hash", TransactionAccessWrite)
 }
 
 // LatestProposalNum mirrors java-tron `DynamicPropertiesStore.LATEST_PROPOSAL_NUM`:
 // the most recently assigned proposal id. Genesis = 0; `ProposalCreate`
 // pre-increments to assign each new id.
 func (dp *DynamicProperties) LatestProposalNum() int64 {
-	return dp.props["latest_proposal_num"]
+	return dp.readInt("latest_proposal_num")
 }
 
 func (dp *DynamicProperties) SetLatestProposalNum(id int64) {
@@ -1193,23 +1206,23 @@ func (dp *DynamicProperties) SetLatestProposalNum(id int64) {
 // TokenIdNum mirrors java-tron `DynamicPropertiesStore.TOKEN_ID_NUM`:
 // the most recently assigned TRC10 token id. Genesis = 1_000_000;
 // `AssetIssueActuator` pre-increments to assign each new id.
-func (dp *DynamicProperties) TokenIdNum() int64 { return dp.props["token_id_num"] }
+func (dp *DynamicProperties) TokenIdNum() int64 { return dp.readInt("token_id_num") }
 
 func (dp *DynamicProperties) SetTokenIdNum(id int64) { dp.Set("token_id_num", id) }
 
 // LatestExchangeNum mirrors java-tron `DynamicPropertiesStore.LATEST_EXCHANGE_NUM`:
 // the most recently assigned exchange id. Genesis = 0;
 // `ExchangeCreateActuator` pre-increments to assign each new id.
-func (dp *DynamicProperties) LatestExchangeNum() int64 { return dp.props["latest_exchange_num"] }
+func (dp *DynamicProperties) LatestExchangeNum() int64 { return dp.readInt("latest_exchange_num") }
 
 func (dp *DynamicProperties) SetLatestExchangeNum(id int64) { dp.Set("latest_exchange_num", id) }
 
 // AssetIssueFee returns the fee (in SUN) required to issue a TRC10 token.
-func (dp *DynamicProperties) AssetIssueFee() int64 { return dp.props["asset_issue_fee"] }
+func (dp *DynamicProperties) AssetIssueFee() int64 { return dp.readInt("asset_issue_fee") }
 
 // ExchangeCreateFee returns the fee (in SUN) required to create a DEX exchange.
 // Matches java-tron DynamicPropertiesStore.getExchangeCreateFee (default 1024 TRX).
-func (dp *DynamicProperties) ExchangeCreateFee() int64 { return dp.props["exchange_create_fee"] }
+func (dp *DynamicProperties) ExchangeCreateFee() int64 { return dp.readInt("exchange_create_fee") }
 
 // SetExchangeCreateFee updates the exchange creation fee.
 func (dp *DynamicProperties) SetExchangeCreateFee(fee int64) { dp.Set("exchange_create_fee", fee) }
@@ -1217,7 +1230,7 @@ func (dp *DynamicProperties) SetExchangeCreateFee(fee int64) { dp.Set("exchange_
 // ExchangeBalanceLimit returns the maximum per-token balance an exchange may hold.
 // Matches java-tron DynamicPropertiesStore.getExchangeBalanceLimit (default 1e15).
 func (dp *DynamicProperties) ExchangeBalanceLimit() int64 {
-	return dp.props["exchange_balance_limit"]
+	return dp.readInt("exchange_balance_limit")
 }
 
 // SetExchangeBalanceLimit updates the exchange balance limit.
@@ -1226,27 +1239,27 @@ func (dp *DynamicProperties) SetExchangeBalanceLimit(limit int64) {
 }
 
 // AccountUpgradeCost returns the fee (in SUN) to upgrade an account to witness.
-func (dp *DynamicProperties) AccountUpgradeCost() int64 { return dp.props["account_upgrade_cost"] }
+func (dp *DynamicProperties) AccountUpgradeCost() int64 { return dp.readInt("account_upgrade_cost") }
 
 // ForbidTransferToContract returns true if TRX/TRC10 transfers to smart contracts are forbidden.
 func (dp *DynamicProperties) ForbidTransferToContract() bool {
-	return dp.props["forbid_transfer_to_contract"] != 0
+	return dp.readInt("forbid_transfer_to_contract") != 0
 }
 
 // UpdateAccountPermissionFee returns the fee (in SUN) to update account permissions.
 func (dp *DynamicProperties) UpdateAccountPermissionFee() int64 {
-	return dp.props["update_account_permission_fee"]
+	return dp.readInt("update_account_permission_fee")
 }
 
 // TotalSignNum returns the maximum total number of keys across all permissions.
-func (dp *DynamicProperties) TotalSignNum() int64 { return dp.props["total_sign_num"] }
+func (dp *DynamicProperties) TotalSignNum() int64 { return dp.readInt("total_sign_num") }
 
 // ProposalExpireTime returns the proposal expiration window in milliseconds (default 3 days).
-func (dp *DynamicProperties) ProposalExpireTime() int64 { return dp.props["proposal_expire_time"] }
+func (dp *DynamicProperties) ProposalExpireTime() int64 { return dp.readInt("proposal_expire_time") }
 
 // AllowShieldedTransaction returns true if shielded (Sapling) transactions are enabled.
 func (dp *DynamicProperties) AllowShieldedTransaction() bool {
-	return dp.props["allow_shielded_transaction"] != 0
+	return dp.readInt("allow_shielded_transaction") != 0
 }
 func (dp *DynamicProperties) SetAllowShieldedTransaction(v bool) {
 	if v {
@@ -1257,30 +1270,31 @@ func (dp *DynamicProperties) SetAllowShieldedTransaction(v bool) {
 }
 
 // ZenTokenID returns the TRC10 token ID of the ZEN token (default 1000016).
-func (dp *DynamicProperties) ZenTokenID() int64 { return dp.props["zen_token_id"] }
+func (dp *DynamicProperties) ZenTokenID() int64 { return dp.readInt("zen_token_id") }
 
 // TotalShieldedPoolValue returns the total ZEN value currently held in the shielded pool.
 func (dp *DynamicProperties) TotalShieldedPoolValue() int64 {
-	return dp.props["total_shielded_pool_value"]
+	return dp.readInt("total_shielded_pool_value")
 }
 
 // AdjustTotalShieldedPoolValue adds delta to the total shielded pool value.
 func (dp *DynamicProperties) AdjustTotalShieldedPoolValue(delta int64) {
-	dp.Set("total_shielded_pool_value", dp.props["total_shielded_pool_value"]+delta)
+	dp.Set("total_shielded_pool_value", dp.readInt("total_shielded_pool_value")+delta)
 }
 
 // ShieldedTransactionFee returns the fee (in ZEN smallest unit) for a shielded transaction.
 func (dp *DynamicProperties) ShieldedTransactionFee() int64 {
-	return dp.props["shielded_transaction_fee"]
+	return dp.readInt("shielded_transaction_fee")
 }
 
 // ShieldedTransactionCreateAccountFee returns the fee when a shielded tx creates a new account.
 func (dp *DynamicProperties) ShieldedTransactionCreateAccountFee() int64 {
-	return dp.props["shielded_transaction_create_account_fee"]
+	return dp.readInt("shielded_transaction_create_account_fee")
 }
 
 // All returns a read-only copy of all dynamic properties.
 func (dp *DynamicProperties) All() map[string]int64 {
+	dp.recordAllDynamicReadsUnsupported()
 	result := make(map[string]int64, len(dp.props))
 	for k, v := range dp.props {
 		result[k] = v
@@ -1407,7 +1421,7 @@ func (dp *DynamicProperties) CommitSnapshot(id int) {
 // M1.4–M1.8 of PLAN.md.
 // ---------------------------------------------------------------------------
 
-func boolGet(dp *DynamicProperties, key string) bool { return dp.props[key] != 0 }
+func boolGet(dp *DynamicProperties, key string) bool { return dp.readInt(key) != 0 }
 func boolSet(dp *DynamicProperties, key string, v bool) {
 	if v {
 		dp.Set(key, 1)
@@ -1419,20 +1433,20 @@ func boolSet(dp *DynamicProperties, key string, v bool) {
 // Numeric params.
 
 func (dp *DynamicProperties) AdaptiveResourceLimitMultiplier() int64 {
-	return dp.props["adaptive_resource_limit_multiplier"]
+	return dp.readInt("adaptive_resource_limit_multiplier")
 }
 func (dp *DynamicProperties) SetAdaptiveResourceLimitMultiplier(v int64) {
 	dp.Set("adaptive_resource_limit_multiplier", v)
 }
 
 func (dp *DynamicProperties) AdaptiveResourceLimitTargetRatio() int64 {
-	return dp.props["adaptive_resource_limit_target_ratio"]
+	return dp.readInt("adaptive_resource_limit_target_ratio")
 }
 func (dp *DynamicProperties) SetAdaptiveResourceLimitTargetRatio(v int64) {
 	dp.Set("adaptive_resource_limit_target_ratio", v)
 }
 
-func (dp *DynamicProperties) TotalEnergyLimit() int64 { return dp.props["total_energy_limit"] }
+func (dp *DynamicProperties) TotalEnergyLimit() int64 { return dp.readInt("total_energy_limit") }
 
 // SetTotalEnergyLimit mirrors java-tron's saveTotalEnergyLimit2 (proposal #19):
 // updates the base limit, recomputes targetLimit, and (only when adaptive
@@ -1462,66 +1476,66 @@ func (dp *DynamicProperties) SetTotalEnergyLimitV1(v int64) {
 }
 
 func (dp *DynamicProperties) TotalEnergyTargetLimit() int64 {
-	return dp.props["total_energy_target_limit"]
+	return dp.readInt("total_energy_target_limit")
 }
 func (dp *DynamicProperties) SetTotalEnergyTargetLimit(v int64) {
 	dp.Set("total_energy_target_limit", v)
 }
 
 func (dp *DynamicProperties) TotalEnergyAverageUsage() int64 {
-	return dp.props["total_energy_average_usage"]
+	return dp.readInt("total_energy_average_usage")
 }
 func (dp *DynamicProperties) SetTotalEnergyAverageUsage(v int64) {
 	dp.Set("total_energy_average_usage", v)
 }
 
 func (dp *DynamicProperties) DynamicEnergyIncreaseFactor() int64 {
-	return dp.props["dynamic_energy_increase_factor"]
+	return dp.readInt("dynamic_energy_increase_factor")
 }
 func (dp *DynamicProperties) SetDynamicEnergyIncreaseFactor(v int64) {
 	dp.Set("dynamic_energy_increase_factor", v)
 }
 
 func (dp *DynamicProperties) DynamicEnergyMaxFactor() int64 {
-	return dp.props["dynamic_energy_max_factor"]
+	return dp.readInt("dynamic_energy_max_factor")
 }
 func (dp *DynamicProperties) SetDynamicEnergyMaxFactor(v int64) {
 	dp.Set("dynamic_energy_max_factor", v)
 }
 
 func (dp *DynamicProperties) DynamicEnergyThreshold() int64 {
-	return dp.props["dynamic_energy_threshold"]
+	return dp.readInt("dynamic_energy_threshold")
 }
 func (dp *DynamicProperties) SetDynamicEnergyThreshold(v int64) {
 	dp.Set("dynamic_energy_threshold", v)
 }
 
-func (dp *DynamicProperties) MarketCancelFee() int64 { return dp.props["market_cancel_fee"] }
+func (dp *DynamicProperties) MarketCancelFee() int64 { return dp.readInt("market_cancel_fee") }
 func (dp *DynamicProperties) SetMarketCancelFee(v int64) {
 	dp.Set("market_cancel_fee", v)
 }
 
-func (dp *DynamicProperties) MarketSellFee() int64 { return dp.props["market_sell_fee"] }
+func (dp *DynamicProperties) MarketSellFee() int64 { return dp.readInt("market_sell_fee") }
 func (dp *DynamicProperties) SetMarketSellFee(v int64) {
 	dp.Set("market_sell_fee", v)
 }
 
 func (dp *DynamicProperties) MarketQuantityLimit() int64 {
-	return dp.props["market_quantity_limit"]
+	return dp.readInt("market_quantity_limit")
 }
 func (dp *DynamicProperties) SetMarketQuantityLimit(v int64) {
 	dp.Set("market_quantity_limit", v)
 }
 
 func (dp *DynamicProperties) MaxCreateAccountTxSize() int64 {
-	return dp.props["max_create_account_tx_size"]
+	return dp.readInt("max_create_account_tx_size")
 }
 func (dp *DynamicProperties) SetMaxCreateAccountTxSize(v int64) {
 	dp.Set("max_create_account_tx_size", v)
 }
 
 func (dp *DynamicProperties) MaxDelegateLockPeriod() int64 {
-	return dp.props["max_delegate_lock_period"]
+	return dp.readInt("max_delegate_lock_period")
 }
 func (dp *DynamicProperties) SetMaxDelegateLockPeriod(v int64) {
 	dp.Set("max_delegate_lock_period", v)
@@ -1537,10 +1551,10 @@ func (dp *DynamicProperties) SupportMaxDelegateLockPeriod() bool {
 		dp.UnfreezeDelayDays() > 0
 }
 
-func (dp *DynamicProperties) MaxFeeLimit() int64     { return dp.props["max_fee_limit"] }
+func (dp *DynamicProperties) MaxFeeLimit() int64     { return dp.readInt("max_fee_limit") }
 func (dp *DynamicProperties) SetMaxFeeLimit(v int64) { dp.Set("max_fee_limit", v) }
 
-func (dp *DynamicProperties) BurnTrxAmount() int64 { return dp.props["burn_trx_amount"] }
+func (dp *DynamicProperties) BurnTrxAmount() int64 { return dp.readInt("burn_trx_amount") }
 
 // AddBurnTrx accumulates burned TRX (in SUN). Only called when AllowBlackholeOptimization
 // is active; mirrors java-tron DynamicPropertiesStore.burnTrx.
@@ -1548,17 +1562,17 @@ func (dp *DynamicProperties) AddBurnTrx(amount int64) {
 	if amount <= 0 {
 		return
 	}
-	dp.Set("burn_trx_amount", dp.props["burn_trx_amount"]+amount)
+	dp.Set("burn_trx_amount", dp.readInt("burn_trx_amount")+amount)
 }
 
-func (dp *DynamicProperties) MemoFee() int64     { return dp.props["memo_fee"] }
+func (dp *DynamicProperties) MemoFee() int64     { return dp.readInt("memo_fee") }
 func (dp *DynamicProperties) SetMemoFee(v int64) { dp.Set("memo_fee", v) }
 
-func (dp *DynamicProperties) MultiSignFee() int64     { return dp.props["multi_sign_fee"] }
+func (dp *DynamicProperties) MultiSignFee() int64     { return dp.readInt("multi_sign_fee") }
 func (dp *DynamicProperties) SetMultiSignFee(v int64) { dp.Set("multi_sign_fee", v) }
 
 func (dp *DynamicProperties) Witness127PayPerBlock() int64 {
-	return dp.props["witness_127_pay_per_block"]
+	return dp.readInt("witness_127_pay_per_block")
 }
 func (dp *DynamicProperties) SetWitness127PayPerBlock(v int64) {
 	dp.Set("witness_127_pay_per_block", v)
@@ -1630,7 +1644,7 @@ func (dp *DynamicProperties) SetAllowOldRewardOpt(v bool) {
 }
 
 func (dp *DynamicProperties) CurrentCycleNumber() int64 {
-	return dp.props["current_cycle_number"]
+	return dp.readInt("current_cycle_number")
 }
 func (dp *DynamicProperties) SetCurrentCycleNumber(v int64) {
 	dp.Set("current_cycle_number", v)
@@ -1641,7 +1655,7 @@ func (dp *DynamicProperties) SetCurrentCycleNumber(v int64) {
 // the proposal activates; then set by proposal application to the current
 // cycle + 1.
 func (dp *DynamicProperties) NewRewardAlgorithmEffectiveCycle() int64 {
-	return dp.props["new_reward_algorithm_effective_cycle"]
+	return dp.readInt("new_reward_algorithm_effective_cycle")
 }
 
 // SetNewRewardAlgorithmEffectiveCycle writes v unconditionally.
@@ -1690,7 +1704,7 @@ func (dp *DynamicProperties) SetAllowOptimizedReturnValueOfChainId(v bool) {
 }
 
 func (dp *DynamicProperties) AllowProtoFilterNum() int64 {
-	return dp.props["allow_proto_filter_num"]
+	return dp.readInt("allow_proto_filter_num")
 }
 func (dp *DynamicProperties) SetAllowProtoFilterNum(v int64) {
 	dp.Set("allow_proto_filter_num", v)
@@ -1805,7 +1819,7 @@ func (dp *DynamicProperties) AllowPQSignatures() bool {
 // RemoveThePowerOfTheGr mirrors java-tron's getRemoveThePowerOfTheGr,
 // which stores 0 (initial) or -1 (executed) — it is not a classic bool.
 func (dp *DynamicProperties) RemoveThePowerOfTheGr() int64 {
-	return dp.props["remove_the_power_of_the_gr"]
+	return dp.readInt("remove_the_power_of_the_gr")
 }
 func (dp *DynamicProperties) SetRemoveThePowerOfTheGr(v int64) {
 	dp.Set("remove_the_power_of_the_gr", v)
@@ -1814,23 +1828,25 @@ func (dp *DynamicProperties) SetRemoveThePowerOfTheGr(v int64) {
 // M1.6: storage market — dormant on mainnet (feature never activated).
 // Keys are initialized to java-tron defaults and never modified at runtime.
 
-func (dp *DynamicProperties) TotalStoragePool() int64 { return dp.props["total_storage_pool"] }
+func (dp *DynamicProperties) TotalStoragePool() int64 { return dp.readInt("total_storage_pool") }
 func (dp *DynamicProperties) SetTotalStoragePool(v int64) {
 	dp.Set("total_storage_pool", v)
 }
 
-func (dp *DynamicProperties) TotalStorageTax() int64 { return dp.props["total_storage_tax"] }
+func (dp *DynamicProperties) TotalStorageTax() int64 { return dp.readInt("total_storage_tax") }
 func (dp *DynamicProperties) SetTotalStorageTax(v int64) {
 	dp.Set("total_storage_tax", v)
 }
 
-func (dp *DynamicProperties) TotalStorageReserved() int64 { return dp.props["total_storage_reserved"] }
+func (dp *DynamicProperties) TotalStorageReserved() int64 {
+	return dp.readInt("total_storage_reserved")
+}
 func (dp *DynamicProperties) SetTotalStorageReserved(v int64) {
 	dp.Set("total_storage_reserved", v)
 }
 
 func (dp *DynamicProperties) StorageExchangeTaxRate() int64 {
-	return dp.props["storage_exchange_tax_rate"]
+	return dp.readInt("storage_exchange_tax_rate")
 }
 func (dp *DynamicProperties) SetStorageExchangeTaxRate(v int64) {
 	dp.Set("storage_exchange_tax_rate", v)
@@ -1838,65 +1854,65 @@ func (dp *DynamicProperties) SetStorageExchangeTaxRate(v int64) {
 
 // §1.6: freeze/supply/bandwidth/accounting accessors.
 
-func (dp *DynamicProperties) MaxFrozenTime() int64 { return dp.props["max_frozen_time"] }
+func (dp *DynamicProperties) MaxFrozenTime() int64 { return dp.readInt("max_frozen_time") }
 func (dp *DynamicProperties) SetMaxFrozenTime(v int64) {
 	dp.Set("max_frozen_time", v)
 }
 
-func (dp *DynamicProperties) MinFrozenTime() int64 { return dp.props["min_frozen_time"] }
+func (dp *DynamicProperties) MinFrozenTime() int64 { return dp.readInt("min_frozen_time") }
 func (dp *DynamicProperties) SetMinFrozenTime(v int64) {
 	dp.Set("min_frozen_time", v)
 }
 
 func (dp *DynamicProperties) MaxFrozenSupplyNumber() int64 {
-	return dp.props["max_frozen_supply_number"]
+	return dp.readInt("max_frozen_supply_number")
 }
 func (dp *DynamicProperties) SetMaxFrozenSupplyNumber(v int64) {
 	dp.Set("max_frozen_supply_number", v)
 }
 
 func (dp *DynamicProperties) MaxFrozenSupplyTime() int64 {
-	return dp.props["max_frozen_supply_time"]
+	return dp.readInt("max_frozen_supply_time")
 }
 func (dp *DynamicProperties) SetMaxFrozenSupplyTime(v int64) {
 	dp.Set("max_frozen_supply_time", v)
 }
 
 func (dp *DynamicProperties) MinFrozenSupplyTime() int64 {
-	return dp.props["min_frozen_supply_time"]
+	return dp.readInt("min_frozen_supply_time")
 }
 func (dp *DynamicProperties) SetMinFrozenSupplyTime(v int64) {
 	dp.Set("min_frozen_supply_time", v)
 }
 
 func (dp *DynamicProperties) WitnessAllowanceFrozenTime() int64 {
-	return dp.props["witness_allowance_frozen_time"]
+	return dp.readInt("witness_allowance_frozen_time")
 }
 func (dp *DynamicProperties) SetWitnessAllowanceFrozenTime(v int64) {
 	dp.Set("witness_allowance_frozen_time", v)
 }
 
-func (dp *DynamicProperties) OneDayNetLimit() int64 { return dp.props["one_day_net_limit"] }
+func (dp *DynamicProperties) OneDayNetLimit() int64 { return dp.readInt("one_day_net_limit") }
 func (dp *DynamicProperties) SetOneDayNetLimit(v int64) {
 	dp.Set("one_day_net_limit", v)
 }
 
-func (dp *DynamicProperties) PublicNetLimit() int64 { return dp.props["public_net_limit"] }
+func (dp *DynamicProperties) PublicNetLimit() int64 { return dp.readInt("public_net_limit") }
 func (dp *DynamicProperties) SetPublicNetLimit(v int64) {
 	dp.Set("public_net_limit", v)
 }
 
-func (dp *DynamicProperties) PublicNetUsage() int64 { return dp.props["public_net_usage"] }
+func (dp *DynamicProperties) PublicNetUsage() int64 { return dp.readInt("public_net_usage") }
 func (dp *DynamicProperties) SetPublicNetUsage(v int64) {
 	dp.Set("public_net_usage", v)
 }
 
-func (dp *DynamicProperties) PublicNetTime() int64 { return dp.props["public_net_time"] }
+func (dp *DynamicProperties) PublicNetTime() int64 { return dp.readInt("public_net_time") }
 func (dp *DynamicProperties) SetPublicNetTime(v int64) {
 	dp.Set("public_net_time", v)
 }
 
-func (dp *DynamicProperties) TransactionFeePool() int64 { return dp.props["transaction_fee_pool"] }
+func (dp *DynamicProperties) TransactionFeePool() int64 { return dp.readInt("transaction_fee_pool") }
 func (dp *DynamicProperties) SetTransactionFeePool(v int64) {
 	dp.Set("transaction_fee_pool", v)
 }
@@ -1913,11 +1929,11 @@ func (dp *DynamicProperties) AddTransactionFeePool(amount int64) {
 	if amount <= 0 {
 		return
 	}
-	dp.Set("transaction_fee_pool", dp.props["transaction_fee_pool"]+amount)
+	dp.Set("transaction_fee_pool", dp.readInt("transaction_fee_pool")+amount)
 }
 
 func (dp *DynamicProperties) TotalTransactionCost() int64 {
-	return dp.props["total_transaction_cost"]
+	return dp.readInt("total_transaction_cost")
 }
 func (dp *DynamicProperties) SetTotalTransactionCost(v int64) {
 	dp.Set("total_transaction_cost", v)
@@ -1926,11 +1942,11 @@ func (dp *DynamicProperties) AddTotalTransactionCost(amount int64) {
 	if amount == 0 {
 		return
 	}
-	dp.Set("total_transaction_cost", dp.props["total_transaction_cost"]+amount)
+	dp.Set("total_transaction_cost", dp.readInt("total_transaction_cost")+amount)
 }
 
 func (dp *DynamicProperties) TotalCreateAccountCost() int64 {
-	return dp.props["total_create_account_cost"]
+	return dp.readInt("total_create_account_cost")
 }
 func (dp *DynamicProperties) SetTotalCreateAccountCost(v int64) {
 	dp.Set("total_create_account_cost", v)
@@ -1939,7 +1955,7 @@ func (dp *DynamicProperties) AddTotalCreateAccountCost(amount int64) {
 	if amount == 0 {
 		return
 	}
-	dp.Set("total_create_account_cost", dp.props["total_create_account_cost"]+amount)
+	dp.Set("total_create_account_cost", dp.readInt("total_create_account_cost")+amount)
 }
 
 // TotalCreateWitnessCost returns the cumulative TRX (in SUN) burned to upgrade
@@ -1947,7 +1963,7 @@ func (dp *DynamicProperties) AddTotalCreateAccountCost(amount int64) {
 // java DB key string is "TOTAL_CREATE_WITNESS_FEE" while the constant is
 // TOTAL_CREATE_WITNESS_COST).
 func (dp *DynamicProperties) TotalCreateWitnessCost() int64 {
-	return dp.props["total_create_witness_cost"]
+	return dp.readInt("total_create_witness_cost")
 }
 func (dp *DynamicProperties) SetTotalCreateWitnessCost(v int64) {
 	dp.Set("total_create_witness_cost", v)
@@ -1956,11 +1972,11 @@ func (dp *DynamicProperties) AddTotalCreateWitnessCost(amount int64) {
 	if amount == 0 {
 		return
 	}
-	dp.Set("total_create_witness_cost", dp.props["total_create_witness_cost"]+amount)
+	dp.Set("total_create_witness_cost", dp.readInt("total_create_witness_cost")+amount)
 }
 
 func (dp *DynamicProperties) BlockFilledSlotsIndex() int64 {
-	return dp.props["block_filled_slots_index"]
+	return dp.readInt("block_filled_slots_index")
 }
 func (dp *DynamicProperties) SetBlockFilledSlotsIndex(v int64) {
 	dp.Set("block_filled_slots_index", v)
@@ -1969,7 +1985,7 @@ func (dp *DynamicProperties) SetBlockFilledSlotsIndex(v int64) {
 // BlockFilledSlots returns the 128-byte rolling window of produced/missed slot
 // flags (1 = produced, 0 = missed). Mirrors java-tron BLOCK_FILLED_SLOTS.
 func (dp *DynamicProperties) BlockFilledSlots() []byte {
-	v := dp.stringProps["block_filled_slots"]
+	v := dp.readString("block_filled_slots")
 	if len(v) != BlockFilledSlotsNumber {
 		return make([]byte, BlockFilledSlotsNumber)
 	}
@@ -1989,7 +2005,7 @@ func (dp *DynamicProperties) SetBlockFilledSlots(v []byte) {
 // index, then advances index modulo BlockFilledSlotsNumber. Mirrors java-tron
 // DynamicPropertiesStore.applyBlock.
 func (dp *DynamicProperties) ApplyBlockToFilledSlots(filled bool) {
-	slots := dp.stringProps["block_filled_slots"]
+	slots := dp.readString("block_filled_slots")
 	slotsValid := len(slots) == BlockFilledSlotsNumber
 	if !slotsValid {
 		slots = emptyBlockFilledSlots
@@ -2027,7 +2043,7 @@ func (dp *DynamicProperties) CalculateFilledSlotsCount() int64 {
 // custom permissions are allowed to reference in their operations bitmap.
 // Mirrors java-tron AVAILABLE_CONTRACT_TYPE.
 func (dp *DynamicProperties) AvailableContractType() []byte {
-	v := dp.stringProps["available_contract_type"]
+	v := dp.readString("available_contract_type")
 	if len(v) != ContractTypeBitmapBytes {
 		out := make([]byte, ContractTypeBitmapBytes)
 		copy(out, v)
@@ -2049,7 +2065,7 @@ func (dp *DynamicProperties) SetAvailableContractType(v []byte) {
 // appear by default in a newly-created account's active permission. Mirrors
 // java-tron ACTIVE_DEFAULT_OPERATIONS.
 func (dp *DynamicProperties) ActiveDefaultOperations() []byte {
-	v := dp.stringProps["active_default_operations"]
+	v := dp.readString("active_default_operations")
 	if len(v) != ContractTypeBitmapBytes {
 		out := make([]byte, ContractTypeBitmapBytes)
 		copy(out, v)
@@ -2093,7 +2109,7 @@ func (dp *DynamicProperties) AddSystemContractAndSetPermission(id int) {
 	dp.SetActiveDefaultOperations(active)
 }
 
-func (dp *DynamicProperties) VersionNumber() int64 { return dp.props["version_number"] }
+func (dp *DynamicProperties) VersionNumber() int64 { return dp.readInt("version_number") }
 func (dp *DynamicProperties) SetVersionNumber(v int64) {
 	dp.Set("version_number", v)
 }
@@ -2102,12 +2118,14 @@ func (dp *DynamicProperties) SetVersionNumber(v int64) {
 
 // GetString returns the value and existence flag for a string-typed DP key.
 func (dp *DynamicProperties) GetString(key string) (string, bool) {
+	dp.recordDynamicAccess(TransactionAccessDynamicString, key, TransactionAccessRead)
 	v, ok := dp.stringProps[key]
 	return v, ok
 }
 
 // SetString sets a string-typed DP key and marks it dirty when it changes.
 func (dp *DynamicProperties) SetString(key string, value string) {
+	dp.recordDynamicAccess(TransactionAccessDynamicString, key, TransactionAccessRead)
 	if current, ok := dp.stringProps[key]; ok && current == value {
 		return
 	}
@@ -2133,6 +2151,7 @@ func (dp *DynamicProperties) SetString(key string, value string) {
 	}
 	dp.stringProps[key] = value
 	dp.stringDirty[key] = struct{}{}
+	dp.recordDynamicAccess(TransactionAccessDynamicString, key, TransactionAccessWrite)
 }
 
 // Price-history accessors.
@@ -2141,35 +2160,35 @@ func (dp *DynamicProperties) SetString(key string, value string) {
 // java-tron ProposalService.proposalCapsule.getExpirationTime()).
 
 func (dp *DynamicProperties) EnergyPriceHistory() string {
-	return dp.stringProps["energy_price_history"]
+	return dp.readString("energy_price_history")
 }
 func (dp *DynamicProperties) SetEnergyPriceHistory(v string) {
 	dp.SetString("energy_price_history", v)
 }
 
 func (dp *DynamicProperties) BandwidthPriceHistory() string {
-	return dp.stringProps["bandwidth_price_history"]
+	return dp.readString("bandwidth_price_history")
 }
 func (dp *DynamicProperties) SetBandwidthPriceHistory(v string) {
 	dp.SetString("bandwidth_price_history", v)
 }
 
 func (dp *DynamicProperties) MemoFeeHistory() string {
-	return dp.stringProps["memo_fee_history"]
+	return dp.readString("memo_fee_history")
 }
 func (dp *DynamicProperties) SetMemoFeeHistory(v string) {
 	dp.SetString("memo_fee_history", v)
 }
 
 func (dp *DynamicProperties) EnergyPriceHistoryDone() int64 {
-	return dp.props["energy_price_history_done"]
+	return dp.readInt("energy_price_history_done")
 }
 func (dp *DynamicProperties) SetEnergyPriceHistoryDone(v int64) {
 	dp.Set("energy_price_history_done", v)
 }
 
 func (dp *DynamicProperties) BandwidthPriceHistoryDone() int64 {
-	return dp.props["bandwidth_price_history_done"]
+	return dp.readInt("bandwidth_price_history_done")
 }
 func (dp *DynamicProperties) SetBandwidthPriceHistoryDone(v int64) {
 	dp.Set("bandwidth_price_history_done", v)

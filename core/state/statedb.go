@@ -228,6 +228,12 @@ type StateDB struct {
 
 	dynProps *DynamicProperties
 
+	// transactionAccess is installed only around canonical transaction
+	// execution by the P4 versioned-shadow planner. StateDB remains confined to
+	// the execution goroutine, so recording needs no synchronization. Copies and
+	// RPC simulations intentionally start with this nil.
+	transactionAccess *TransactionAccessRecorder
+
 	// originRoot is the CommitmentDomain root at the time of the last successful
 	// Commit (or the root passed to New).
 	originRoot ethcommon.Hash
@@ -265,6 +271,15 @@ type StateDB struct {
 	commitmentColdTxNum   uint64
 
 	cycleRewardSink CycleRewardSink
+}
+
+// SetTransactionAccessRecorder installs a transaction-scoped observe-only
+// access recorder. Passing nil disables capture. The recorder never changes
+// state values, journal entries, snapshots, or commit behavior.
+func (s *StateDB) SetTransactionAccessRecorder(recorder *TransactionAccessRecorder) {
+	if s != nil {
+		s.transactionAccess = recorder
+	}
 }
 
 // CommitStats breaks StateDB.Commit wall-clock time into the write phases that
@@ -1559,6 +1574,7 @@ func (s *StateDB) GetStateObject(addr tcommon.Address) *types.Account {
 
 // GetWitness returns the witness at addr.
 func (s *StateDB) GetWitness(addr tcommon.Address) *types.Witness {
+	s.recordWitnessRead(addr)
 	if w := s.witnesses[addr]; w != nil {
 		return w
 	}
@@ -1767,6 +1783,7 @@ type transientStorageKey struct {
 // GetTransientState returns the transient storage value at (addr, key) for the
 // current transaction, or the zero hash if unset. EIP-1153 (Cancun).
 func (s *StateDB) GetTransientState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
+	s.recordTransientStorageRead(addr, key)
 	return s.transientStorage[transientStorageKey{addr: addr, key: key}]
 }
 
@@ -2595,6 +2612,7 @@ var (
 
 // GetCode returns the contract bytecode at addr.
 func (s *StateDB) GetCode(addr tcommon.Address) []byte {
+	s.recordCodeRead(addr)
 	obj := s.getStateObject(addr)
 	if obj == nil || obj.deleted {
 		return nil
@@ -2640,6 +2658,7 @@ func (s *StateDB) GetCodeSize(addr tcommon.Address) int {
 // Keccak-256(code) for contracts and Keccak-256(empty) for existing accounts
 // without contract code. Missing accounts return zero.
 func (s *StateDB) GetCodeHash(addr tcommon.Address) tcommon.Hash {
+	s.recordCodeRead(addr)
 	obj := s.getStateObject(addr)
 	if obj == nil || obj.deleted {
 		return tcommon.Hash{}
@@ -2665,6 +2684,7 @@ func (s *StateDB) GetState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash 
 // before commit; SSTORE energy accounting distinguishes that from a missing
 // row even though both read as zero.
 func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tcommon.Hash, bool) {
+	s.recordStorageRead(addr, key)
 	obj := s.getStateObject(addr)
 	if obj == nil {
 		s.storageObservability.accountMissingZero++
@@ -2756,6 +2776,7 @@ func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.
 
 // GetContract returns the contract metadata at addr.
 func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
+	s.recordContractMetadataRead(addr)
 	obj := s.getStateObject(addr)
 	if obj == nil || obj.deleted {
 		return nil
@@ -2783,6 +2804,7 @@ func (s *StateDB) loadContract(obj *stateObject) *contractpb.SmartContract {
 // unmarshalling committed data or populating the contract metadata cache.
 // Dirty in-memory metadata is marshalled so the result matches GetContract.
 func (s *StateDB) GetContractMetadataBytes(addr tcommon.Address) ([]byte, bool, error) {
+	s.recordContractMetadataRead(addr)
 	obj := s.getStateObject(addr)
 	if obj == nil || obj.deleted {
 		return nil, false, nil
@@ -2968,6 +2990,7 @@ func (s *StateDB) DeleteAccount(addr tcommon.Address) {
 
 // HasSelfDestructed returns whether the account has been self-destructed.
 func (s *StateDB) HasSelfDestructed(addr tcommon.Address) bool {
+	s.recordSelfDestructRead(addr)
 	obj := s.getStateObject(addr)
 	if obj == nil {
 		return false
@@ -4122,6 +4145,7 @@ func (s *StateDB) ClearUnfrozenV2(addr tcommon.Address) {
 // getStateObject returns the state object for addr, loading from the flat
 // account latest domain.
 func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
+	s.recordAccountRead(addr)
 	// Address byte 20 is uniformly distributed for normal TRON addresses. Check
 	// it before the full 21-byte equality so alternating-account workloads pay
 	// one byte comparison rather than comparing the common 0x41 prefix first.

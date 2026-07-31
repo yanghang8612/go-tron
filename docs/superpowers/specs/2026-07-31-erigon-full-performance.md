@@ -230,6 +230,51 @@ journal and TransactionInfo with the serial reference, discard it
 unconditionally, and collect mismatch/overhead evidence before any publication
 path exists.
 
+#### P4.2: Generic versioned-access shadow
+
+Mainnet measurement of P4.1 showed that the deliberately narrow Transfer
+subset was too sparse to justify a worker pool: only 0.73% of transactions were
+eligible and roughly 0.008% of all transactions appeared in a wave wider than
+one. P4.2 therefore moves the measurement boundary to Erigon's real OCC model
+before spending execution resources on shadow workers.
+
+Canonical serial execution installs one transaction-scoped access recorder on
+StateDB and DynamicProperties. Reads are deduplicated into typed logical cells:
+
+- account envelope, witness, code, contract metadata, self-destruct state;
+- persistent and transient storage keyed by address and slot;
+- account-KV keyed by owner, domain, and logical key, plus a separate namespace
+  generation cell so reset/recreation invalidates old-generation reads;
+- integer, string, and hash DynamicProperties keyed by property name.
+
+State writes still come from the authoritative undo journal after successful
+execution. Dynamic-property writes are captured at the typed setter because a
+nested transaction snapshot is compacted into its parent before the processor
+can inspect it. Getters route through recording helpers only while capture is
+installed; disabled RPC/simulation paths pay a nil branch and retain existing
+values and ownership behavior.
+
+Prefix/range reads are conservatively unsupported until range-version cells
+exist: recording only the rows returned by an iterator would miss a predecessor
+inserting a previously absent key. Unknown future journal entries follow the
+same rule. Neither case can enter speculative publication.
+
+After each serial transaction, a block-local version map checks every captured
+read against the last preceding writer. A match means the result would be valid
+on its first block-start speculative attempt; a mismatch is classified by
+account, storage, account-KV, dynamic-property, or other path. Blind write/write
+overlap is reported separately but does not invalidate the result: Erigon can
+publish such writes safely in original transaction order without re-execution.
+Metrics also split first-pass validity between VM, Transfer, and other contract
+families and report maximum dependency distance.
+
+This remains observe-only. It never copies, reorders, or publishes a result.
+The 64-disjoint-transfer microbenchmark measured about 1 microsecond per
+transaction and four additional allocations per block-sized batch on the local
+development machine. Live sync profiling is the deployment gate before the
+next slice introduces discard-only workers and full journal/TransactionInfo
+comparison.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

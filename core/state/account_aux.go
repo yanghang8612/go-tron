@@ -198,6 +198,7 @@ func accountAuxMap(pb *corepb.Account, domain kvdomains.KVDomain, create bool) m
 }
 
 func (s *StateDB) accountAuxValue(addr tcommon.Address, domain kvdomains.KVDomain, key []byte) (int64, bool, error) {
+	s.recordAccountKVRead(addr, domain, key)
 	if isTRC10BalanceDomain(domain) {
 		obj := s.getStateObject(addr)
 		if obj == nil || obj.deleted {

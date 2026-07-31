@@ -57,6 +57,10 @@
   StateDB journal, with conservative unknown-entry handling.
 - [x] Add an observe-only Transfer wave planner using actual serial writes,
   dynamic-property barriers, and address dependency detection.
+- [x] Capture generic transaction read cells across StateDB account, storage,
+  code, metadata, witness, account-KV, and per-key DynamicProperties paths.
+- [x] Validate captured reads against a block-local version map and report
+  first-pass validity/conflict families by VM, Transfer, and other contracts.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full
   journals plus TransactionInfo with the serial reference.
 - [ ] Implement a narrow disjoint-transfer speculative executor.

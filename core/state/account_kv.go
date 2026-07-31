@@ -1357,6 +1357,7 @@ func (s *StateDB) setAccountKVLatestView(reader statedomains.LatestReader, itera
 }
 
 func (s *StateDB) readAccountKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	s.recordAccountKVRead(owner, domain, key)
 	if s != nil && s.accountKVLatestReader != nil {
 		if reader, ok := s.accountKVLatestReader.(accountKVLatestGenerationReader); ok {
 			return reader.KVLatest(owner, generation, domain, key)
@@ -1367,6 +1368,7 @@ func (s *StateDB) readAccountKVLatest(owner tcommon.Address, generation uint64, 
 }
 
 func (s *StateDB) readAccountKVLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	s.recordAccountKVRead(owner, domain, key)
 	if s != nil && s.accountKVLatestReader != nil {
 		if reader, ok := s.accountKVLatestReader.(accountKVLatestDecodingBorrower); ok {
 			return reader.kvLatestForDecoding(owner, generation, domain, key)
@@ -1439,6 +1441,7 @@ func hasFreshAccountKVGeneration(obj *stateObject) bool {
 
 // GetAccountKV reads a generic-KV value for owner. Returns (value, exists, err).
 func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	s.recordAccountKVRead(owner, domain, key)
 	if !kvdomains.IsRegistered(domain) {
 		return nil, false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
@@ -1466,6 +1469,7 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 // internal decoding. Callers must neither mutate nor retain the returned slice.
 // GetAccountKV remains the owning public API.
 func (s *StateDB) getAccountKVForDecoding(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	s.recordAccountKVRead(owner, domain, key)
 	if !kvdomains.IsRegistered(domain) {
 		return nil, false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
@@ -1581,6 +1585,9 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 	if len(keys) == 0 {
 		return out, nil
 	}
+	for _, key := range keys {
+		s.recordAccountKVRead(owner, domain, key)
+	}
 	obj := s.getStateObject(owner)
 	if obj == nil || obj.deleted {
 		return out, nil
@@ -1612,6 +1619,7 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 // the in-memory dirty overlay is merged on top so callers see uncommitted puts
 // and tombstones consistently with GetAccountKV.
 func (s *StateDB) IterateAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
+	s.recordAccountKVPrefixRead(owner)
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
