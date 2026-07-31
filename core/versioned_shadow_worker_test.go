@@ -41,7 +41,9 @@ func TestDiscardKVOverlayIsolatesWrites(t *testing.T) {
 	if err := parent.Put([]byte("stable"), []byte("parent")); err != nil {
 		t.Fatal(err)
 	}
-	overlay := discardKVOverlay{parent: parent}
+	var recorder state.TransactionAccessRecorder
+	recorder.Reset(8)
+	overlay := discardKVOverlay{parent: parent, recorder: &recorder}
 	if err := overlay.Put([]byte("stable"), []byte("worker")); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +67,18 @@ func TestDiscardKVOverlayIsolatesWrites(t *testing.T) {
 	}
 	if exists, err := parent.Has([]byte("stable")); err != nil || !exists {
 		t.Fatalf("overlay delete escaped to parent: exists=%v err=%v", exists, err)
+	}
+	writes, known, err := newTestState(t).CaptureTransactionWriteSet(0, &recorder, state.NewDynamicProperties())
+	if err != nil || !known {
+		t.Fatalf("capture overlay writes: known=%v err=%v", known, err)
+	}
+	deletedKey := state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "stable"}
+	if value, ok := writes[deletedKey]; !ok || value.Exists {
+		t.Fatalf("overlay delete write = %+v ok=%v", value, ok)
+	}
+	putKey := state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "new"}
+	if value, ok := writes[putKey]; !ok || !value.Exists || string(value.Value) != "value" {
+		t.Fatalf("overlay put write = %+v ok=%v", value, ok)
 	}
 	overlay.reset()
 	if got, err := overlay.Get([]byte("stable")); err != nil || string(got) != "parent" {

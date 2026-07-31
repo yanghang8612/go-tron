@@ -188,3 +188,30 @@ func TestEqualTransactionWriteSetsOwnsAndComparesValues(t *testing.T) {
 		t.Fatal("presence mismatch compared equal")
 	}
 }
+
+func TestCaptureTransactionWriteSetIncludesRawKVPostImages(t *testing.T) {
+	sdb := newTestStateDB(t)
+	var recorder TransactionAccessRecorder
+	recorder.Reset(8)
+	mark := sdb.DomainChangeJournalMark()
+	putKey := []byte("raw-put")
+	putValue := []byte("value")
+	recorder.RecordRawKVRead(putKey)
+	recorder.RecordRawKVPut(putKey, putValue)
+	recorder.RecordRawKVDelete([]byte("raw-delete"))
+	putKey[0] = 'X'
+	putValue[0] = 'X'
+
+	writes, known, err := sdb.CaptureTransactionWriteSet(mark, &recorder, NewDynamicProperties())
+	if err != nil || !known {
+		t.Fatalf("capture raw writes: known=%v err=%v", known, err)
+	}
+	put := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: "raw-put"}
+	if value, ok := writes[put]; !ok || !value.Exists || string(value.Value) != "value" {
+		t.Fatalf("raw put = %+v ok=%v", value, ok)
+	}
+	deleted := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: "raw-delete"}
+	if value, ok := writes[deleted]; !ok || value.Exists || value.Value != nil {
+		t.Fatalf("raw delete = %+v ok=%v", value, ok)
+	}
+}

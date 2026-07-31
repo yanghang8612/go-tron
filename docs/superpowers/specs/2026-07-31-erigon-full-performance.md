@@ -563,6 +563,41 @@ the transaction-info slot borrowed ContractAddress from the block-reused
 overwrote earlier receipts. Each slot now owns and copies its 21-byte contract
 address. Transfer workers remained byte-identical throughout this sample.
 
+The remaining receipt-energy mismatches were not VM divergence. `StateDB.Copy`
+omitted the active async-commit latest readers, so workers loaded an older
+physical AccountResource row while canonical execution saw the unflushed
+pending latest value. Copies now retain the same read-only latest views and
+code store. The first post-fix production sample compared 262/262 complete
+TransactionInfo values exactly, with every receipt subfield and execution class
+at zero mismatches.
+
+#### P4.10: Typed transaction write sets
+
+Execution equivalence is necessary but not sufficient for publication. Extract
+an Erigon-style typed WriteSet after every sampled canonical/worker execution
+from the authoritative StateDB journal plus inline access recorder. Values own
+their bytes and preserve presence, so delete and present-empty remain distinct.
+Account scalars use field-level post-images instead of serializing the complete
+Account; otherwise an independent worker would spuriously include unrelated
+fields changed by a predecessor. Audited settlement cells carry transaction-
+local signed deltas rather than their serial absolute baselines.
+
+The first deployment exposed exactly that coarse-account representation bug:
+only 24/45 worker write sets matched while all 45 TransactionInfo values did.
+After removing the coarse journal post-image when typed scalar coverage is
+complete, production reached 1,417/1,417 exact TransactionInfo matches and
+1,417/1,417 exact state/DynamicProperties WriteSet matches across 245 sampled
+blocks, with zero execution, comparison, or capture errors.
+
+Complete the storage surface by wrapping the remaining direct Context.DB calls
+with an exact-key raw-KV recorder. Reads join the same block-local version map;
+successful puts/deletes contribute owned post-images to the same WriteSet. The
+wrapper preserves blockbuffer cached reads, missing-key classification, and
+ancient-aware block-hash lookup. Discard workers record the same accesses in
+their private write overlay. This remains observe-only until production proves
+that adding raw keys preserves the 100% result/WriteSet sample and ordered
+publication can apply every typed family safely.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

@@ -30,6 +30,7 @@ var (
 	versionedShadowStorageConflictsCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/storage", nil)
 	versionedShadowAccountKVConflictsCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/account_kv", nil)
 	versionedShadowDynamicConflictsCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/dynamic", nil)
+	versionedShadowRawKVConflictsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/raw_kv", nil)
 	versionedShadowOtherConflictsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/other", nil)
 	versionedShadowVMTransactionsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/vm/transactions", nil)
 	versionedShadowVMFirstPassValidCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/vm/first_pass_valid", nil)
@@ -163,6 +164,7 @@ type versionedAccessShadowStats struct {
 	storageConflicts                     int64
 	accountKVConflicts                   int64
 	dynamicConflicts                     int64
+	rawKVConflicts                       int64
 	otherConflicts                       int64
 	vmTransactions                       int64
 	vmFirstPassValid                     int64
@@ -416,6 +418,7 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 		storageConflict                     bool
 		accountKVConflict                   bool
 		dynamicConflict                     bool
+		rawKVConflict                       bool
 		otherConflict                       bool
 		typedAccountConflict                bool
 		typedAccountCoarseConflict          bool
@@ -544,6 +547,8 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 			accountKVConflict = true
 		case state.TransactionAccessDynamicInt, state.TransactionAccessDynamicString, state.TransactionAccessDynamicHash:
 			dynamicConflict = true
+		case state.TransactionAccessRawKV:
+			rawKVConflict = true
 		default:
 			otherConflict = true
 		}
@@ -641,6 +646,9 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 		}
 		if dynamicConflict {
 			s.stats.dynamicConflicts++
+		}
+		if rawKVConflict {
+			s.stats.rawKVConflicts++
 		}
 		if otherConflict {
 			s.stats.otherConflicts++
@@ -1073,6 +1081,7 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowStorageConflictsCounter.Inc(stats.storageConflicts)
 	versionedShadowAccountKVConflictsCounter.Inc(stats.accountKVConflicts)
 	versionedShadowDynamicConflictsCounter.Inc(stats.dynamicConflicts)
+	versionedShadowRawKVConflictsCounter.Inc(stats.rawKVConflicts)
 	versionedShadowOtherConflictsCounter.Inc(stats.otherConflicts)
 	versionedShadowVMTransactionsCounter.Inc(stats.vmTransactions)
 	versionedShadowVMFirstPassValidCounter.Inc(stats.vmFirstPassValid)

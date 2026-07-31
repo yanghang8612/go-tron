@@ -803,6 +803,12 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		versionedShadow.Prepare(len(transactions))
 		defer versionedShadow.Finish(statedb, dynProps)
 	}
+	transactionDB := db
+	var recordedTransactionDB transactionRecordingKVStore
+	if shadowEnabled && db != nil {
+		recordedTransactionDB = transactionRecordingKVStore{parent: db, recorder: &versionedShadow.recorder}
+		transactionDB = &recordedTransactionDB
+	}
 	var txInfoSlots []transactionInfoSlot
 	if txInfoBatch != nil {
 		preparedSlots, preparedInfos := txInfoBatch.prepare(len(transactions))
@@ -859,7 +865,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		internalTxArena.Reset()
 		executionLogArena := &txInfoSlots[i].executionLogArena
 		executionLogArena.Reset()
-		result, err := applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer, &txScratch, internalTxArena, executionLogArena)
+		result, err := applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), transactionDB, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer, &txScratch, internalTxArena, executionLogArena)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}

@@ -21,7 +21,7 @@ func TestVersionedAccessShadowValidatesReadVersionsAcrossStateFamilies(t *testin
 	contract := testProcessorAddr(3)
 
 	var shadow versionedAccessShadow
-	shadow.Prepare(10)
+	shadow.Prepare(12)
 	tx := types.NewTransactionFromPB(&corepb.Transaction{})
 
 	// tx 0 writes account 1; tx 1 is disjoint and both validate on the first
@@ -76,8 +76,18 @@ func TestVersionedAccessShadowValidatesReadVersionsAcrossStateFamilies(t *testin
 		}
 	})
 
+	// Direct Context.DB accesses participate in the same exact-key version map.
+	rawMark := statedb.DomainChangeJournalMark()
+	shadow.BeginTransaction(statedb, dynProps)
+	shadow.recorder.RecordRawKVPut([]byte("raw-governance"), []byte("v1"))
+	shadow.ObserveTransaction(10, tx, statedb, dynProps, rawMark)
+	rawMark = statedb.DomainChangeJournalMark()
+	shadow.BeginTransaction(statedb, dynProps)
+	shadow.recorder.RecordRawKVRead([]byte("raw-governance"))
+	shadow.ObserveTransaction(11, tx, statedb, dynProps, rawMark)
+
 	got := shadow.Finish(statedb, dynProps)
-	if got.transactions != 10 || got.firstPassValid != 5 || got.conflicts != 4 || got.unsupported != 1 {
+	if got.transactions != 12 || got.firstPassValid != 6 || got.conflicts != 5 || got.rawKVConflicts != 1 || got.unsupported != 1 {
 		t.Fatalf("versioned shadow summary = %+v", got)
 	}
 	if got.accountConflicts != 1 || got.storageConflicts != 1 || got.accountKVConflicts != 1 || got.dynamicConflicts != 1 || got.otherConflicts != 0 {
@@ -86,8 +96,11 @@ func TestVersionedAccessShadowValidatesReadVersionsAcrossStateFamilies(t *testin
 	if got.maxDependencyDistance != 2 {
 		t.Fatalf("max dependency distance = %d, want 2", got.maxDependencyDistance)
 	}
-	if got.otherTransactions != 10 || got.otherFirstPassValid != 5 {
+	if got.otherTransactions != 12 || got.otherFirstPassValid != 6 {
 		t.Fatalf("versioned shadow class stats = %+v", got)
+	}
+	if head := shadow.dependencyHeads[11]; head < 0 || shadow.dependencyEdges[head].predecessor != 10 {
+		t.Fatalf("raw KV dependency head = %d, edges=%+v", head, shadow.dependencyEdges)
 	}
 }
 

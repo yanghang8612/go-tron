@@ -67,6 +67,14 @@ func (s *StateDB) CaptureTransactionWriteSet(journalMark int, recorder *Transact
 	}
 	writes = make(TransactionWriteSet, len(keys))
 	for key := range keys {
+		if key.Kind == TransactionAccessRawKV {
+			value, ok := recorder.rawKVWrite(key)
+			if !ok {
+				return nil, false, fmt.Errorf("capture raw kv %x: missing post-image", key.LogicalKey)
+			}
+			writes[key] = value
+			continue
+		}
 		mode := modes[key]
 		if mode&TransactionAccessWrite == 0 && mode&TransactionAccessCommutativeWrite != 0 {
 			if delta, ok := recorder.CommutativeDelta(key); ok {

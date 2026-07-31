@@ -80,8 +80,13 @@
   Erigon-style four-worker ready queue without global wave barriers.
 - [x] Add sampled zero-indegree discard-only workers with isolated StateDB,
   DynamicProperties, rawdb write overlays, and full TransactionInfo comparison.
-- [ ] Extract normalized settlement writes into explicit per-transaction deltas
-  and apply them at ordered publication after serial-equivalence fixtures pass.
+- [x] Extract StateDB/DynamicProperties typed post-images and normalized
+  settlement deltas, then compare sampled worker WriteSets with the serial
+  reference.
+- [x] Include direct Context.DB exact-key reads and raw put/delete post-images
+  in version validation and sampled worker WriteSet comparison.
+- [ ] Apply typed writes and settlement deltas at ordered publication after
+  serial-equivalence fixtures and production samples pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full
   journals plus TransactionInfo with the serial reference.
 - [ ] Implement a narrow disjoint-transfer speculative executor.

@@ -71,9 +71,10 @@ var (
 // through to the canonical block view, while writes remain worker-local and
 // are thrown away after one transaction.
 type discardKVOverlay struct {
-	parent  actuator.BufferedKVStore
-	puts    map[string][]byte
-	deletes map[string]struct{}
+	parent   actuator.BufferedKVStore
+	recorder *state.TransactionAccessRecorder
+	puts     map[string][]byte
+	deletes  map[string]struct{}
 }
 
 func (db *discardKVOverlay) reset() {
@@ -82,6 +83,7 @@ func (db *discardKVOverlay) reset() {
 }
 
 func (db *discardKVOverlay) Has(key []byte) (bool, error) {
+	db.recorder.RecordRawKVRead(key)
 	keyString := string(key)
 	if _, ok := db.puts[keyString]; ok {
 		return true, nil
@@ -96,6 +98,7 @@ func (db *discardKVOverlay) Has(key []byte) (bool, error) {
 }
 
 func (db *discardKVOverlay) Get(key []byte) ([]byte, error) {
+	db.recorder.RecordRawKVRead(key)
 	keyString := string(key)
 	if value, ok := db.puts[keyString]; ok {
 		return append([]byte(nil), value...), nil
@@ -116,6 +119,7 @@ func (db *discardKVOverlay) Put(key, value []byte) error {
 	keyString := string(key)
 	db.puts[keyString] = append(db.puts[keyString][:0], value...)
 	delete(db.deletes, keyString)
+	db.recorder.RecordRawKVPut(key, value)
 	return nil
 }
 
@@ -126,6 +130,7 @@ func (db *discardKVOverlay) Delete(key []byte) error {
 	keyString := string(key)
 	delete(db.puts, keyString)
 	db.deletes[keyString] = struct{}{}
+	db.recorder.RecordRawKVDelete(key)
 	return nil
 }
 
@@ -431,6 +436,7 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 				db:        discardKVOverlay{parent: cfg.db},
 				forkCache: forks.NewVersionPassCache().BlockScope(),
 			}
+			worker.db.recorder = &worker.recorder
 			for txIndex := range jobs {
 				results <- worker.execute(txIndex, cfg)
 			}

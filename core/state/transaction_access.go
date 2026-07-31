@@ -61,6 +61,7 @@ const (
 	TransactionAccessDynamicString
 	TransactionAccessDynamicHash
 	TransactionAccessAccountField
+	TransactionAccessRawKV
 )
 
 // TransactionAccountField follows Erigon's per-account path model, adapted to
@@ -131,6 +132,7 @@ type TransactionAccessRecorder struct {
 	accountFields        map[TransactionAccountFieldKey]TransactionAccessMode
 	accountFieldWrites   map[tcommon.Address]struct{}
 	commutativeDeltas    map[TransactionAccessKey]int64
+	rawKVWrites          map[TransactionAccessKey]TransactionWriteValue
 	unsupported          bool
 	commutativeScopeKey  TransactionAccessKey
 	commutativeScopeOpen bool
@@ -154,6 +156,7 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 	clear(r.accountFields)
 	clear(r.accountFieldWrites)
 	clear(r.commutativeDeltas)
+	clear(r.rawKVWrites)
 	r.unsupported = false
 	r.commutativeScopeKey = TransactionAccessKey{}
 	r.commutativeScopeOpen = false
@@ -307,6 +310,64 @@ func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domai
 	// unique access; the borrowed lookup above makes repeats allocation-free.
 	lookup.LogicalKey = string(logicalKey)
 	r.accesses[lookup] = mode
+}
+
+func (r *TransactionAccessRecorder) recordRawKV(key []byte, mode TransactionAccessMode) {
+	if r == nil {
+		return
+	}
+	if r.accesses == nil {
+		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, 16)
+	}
+	// Raw Context.DB calls are rare compared with typed StateDB accesses. Own
+	// the key on every call: a Go map update may replace the stored string
+	// header with the lookup key, so using a borrowed []byte-to-string view on
+	// repeats could leave the read set aliasing actuator scratch memory.
+	owned := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: string(key)}
+	r.accesses[owned] |= mode
+}
+
+// RecordRawKVRead adds a direct Context.DB read to the transaction's versioned
+// read set. StateDB's typed accessors do not use this path; it covers only the
+// remaining actuator/VM raw database surface.
+func (r *TransactionAccessRecorder) RecordRawKVRead(key []byte) {
+	r.recordRawKV(key, TransactionAccessRead)
+}
+
+// RecordRawKVPut records the final transaction-local value of a direct raw DB
+// write. The value and key are owned because the caller may lend scratch bytes.
+func (r *TransactionAccessRecorder) RecordRawKVPut(key, value []byte) {
+	if r == nil {
+		return
+	}
+	r.recordRawKV(key, TransactionAccessWrite)
+	if r.rawKVWrites == nil {
+		r.rawKVWrites = make(map[TransactionAccessKey]TransactionWriteValue, 4)
+	}
+	writeKey := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: string(key)}
+	r.rawKVWrites[writeKey] = ownedTransactionWriteValue(true, value)
+}
+
+// RecordRawKVDelete records a direct raw DB deletion including its absence
+// post-image, so ordered publication can distinguish it from an empty value.
+func (r *TransactionAccessRecorder) RecordRawKVDelete(key []byte) {
+	if r == nil {
+		return
+	}
+	r.recordRawKV(key, TransactionAccessWrite)
+	if r.rawKVWrites == nil {
+		r.rawKVWrites = make(map[TransactionAccessKey]TransactionWriteValue, 4)
+	}
+	writeKey := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: string(key)}
+	r.rawKVWrites[writeKey] = TransactionWriteValue{}
+}
+
+func (r *TransactionAccessRecorder) rawKVWrite(key TransactionAccessKey) (TransactionWriteValue, bool) {
+	if r == nil {
+		return TransactionWriteValue{}, false
+	}
+	value, ok := r.rawKVWrites[key]
+	return value, ok
 }
 
 func (s *StateDB) recordAccountRead(address tcommon.Address) {
