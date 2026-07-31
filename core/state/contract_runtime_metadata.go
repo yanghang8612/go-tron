@@ -104,7 +104,7 @@ func decodeContractRuntimeMetadata(addr tcommon.Address, data []byte) (ContractR
 // ContractRuntime returns the lightweight metadata used by hot execution
 // paths. It never materializes SmartContract's ABI graph for clean state.
 func (s *StateDB) ContractRuntime(addr tcommon.Address) (ContractRuntimeMetadata, bool) {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return ContractRuntimeMetadata{}, false
 	}

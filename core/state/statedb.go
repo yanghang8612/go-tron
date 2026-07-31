@@ -2924,7 +2924,7 @@ func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartCo
 
 // ReadContractState loads the per-contract dynamic-energy runtime state.
 func (s *StateDB) ReadContractState(addr tcommon.Address) *types.ContractState {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return nil
 	}
@@ -2953,7 +2953,7 @@ func (s *StateDB) WriteContractState(addr tcommon.Address, cs *types.ContractSta
 
 // ReadContractABI loads the dedicated ABI store entry for a contract.
 func (s *StateDB) ReadContractABI(addr tcommon.Address) *contractpb.SmartContract_ABI {
-	obj := s.getStateObject(addr)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
 		return nil
 	}

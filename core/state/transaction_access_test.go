@@ -164,6 +164,7 @@ func TestTransactionAccessRecorderCapturesLogicalCellsWithoutMutation(t *testing
 	_ = s.GetState(contract, slot)
 	_ = s.GetCode(contract)
 	_ = s.GetContract(contract)
+	_, _ = s.ContractRuntime(contract)
 	_ = s.GetWitness(account)
 	_ = s.GetTransientState(contract, slot)
 
@@ -197,6 +198,11 @@ func TestTransactionAccessRecorderCapturesLogicalCellsWithoutMutation(t *testing
 	for key, mode := range want {
 		if got[key]&mode != mode {
 			t.Fatalf("access %v mode = %d, want bits %d (all=%v)", key, got[key], mode, got)
+		}
+	}
+	for key := range got {
+		if key.Kind == TransactionAccessAccount {
+			t.Fatalf("typed point-read path captured coarse account dependency: %v", key)
 		}
 	}
 	if recorder.Unsupported() {

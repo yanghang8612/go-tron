@@ -380,6 +380,19 @@ serial StateDB remains authoritative and no worker result is executed or
 published. Production typed validity and observer CPU determine whether the
 next safe step is explicit settlement deltas or discard-only worker execution.
 
+The first 32-second production sample processed 126,088 transactions at
+historical height 4.85 million. Raw, settlement-normalized, and typed validity
+were 4.0829%, 6.4360%, and 6.4590% respectively. The typed gain was only 29
+transactions, while 112,008 of 117,809 typed-conflict transactions still
+included a coarse Account dependency. CPU evidence identified
+`ContractRuntime` as the sampled caller of the remaining hot
+`getStateObject` path: contract validation, call setup, and energy settlement
+were consuming the full Account version even though they need only existence
+and contract metadata. The next P4.4 increment converts that shared VM path,
+plus runtime-state/ABI point readers, to typed existence and their existing
+metadata/account-KV cells before reassessing the irreducible per-owner
+balance/resource conflicts.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
