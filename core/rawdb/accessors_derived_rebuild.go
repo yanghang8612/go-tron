@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -15,7 +16,10 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-var ErrIncompleteTransactionInfoCoverage = errors.New("rawdb: incomplete transaction info coverage")
+var (
+	ErrIncompleteTransactionInfoCoverage   = errors.New("rawdb: incomplete transaction info coverage")
+	ErrTransactionLookupRebuildInterrupted = errors.New("rawdb: transaction lookup rebuild interrupted")
+)
 
 type RebuildTransactionDerivedIndexesResult struct {
 	FromBlock           uint64
@@ -35,11 +39,13 @@ type RebuildTransactionDerivedIndexesResult struct {
 // not touch transaction receipts or per-block receipt rows: those are produced
 // on the canonical execution path and are not a prerequisite for tx lookup.
 type RebuildTransactionLookupResult struct {
-	FromBlock           uint64
-	ToBlock             uint64
-	BlocksScanned       uint64
-	TransactionsIndexed uint64
-	ETL                 etl.Stats
+	FromBlock            uint64
+	ToBlock              uint64
+	BlocksScanned        uint64
+	AncientBlocksScanned uint64
+	HotBlocksScanned     uint64
+	TransactionsIndexed  uint64
+	ETL                  etl.Stats
 }
 
 type RebuildSectionBloomsResult struct {
@@ -178,6 +184,15 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 // stage payload used after bulk sync; keeping it independent lets execution
 // avoid unordered tx- writes without delaying receipt availability.
 func RebuildTransactionLookupFromBlocks(chain *ChainDB, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options) (*RebuildTransactionLookupResult, error) {
+	return RebuildTransactionLookupFromBlocksInterruptible(chain, writer, fromBlock, toBlock, opts, nil)
+}
+
+// RebuildTransactionLookupFromBlocksInterruptible rebuilds tx-hash lookup
+// rows while allowing a sync-service shutdown to abandon an unpublished ETL
+// pass. Ancient bodies are fetched as one contiguous range and hot Pebble
+// bodies are consumed by a single prefix iterator; this avoids the Has+Get
+// random-point-read pair previously issued for every block.
+func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options, interrupted func() bool) (*RebuildTransactionLookupResult, error) {
 	if chain == nil {
 		return nil, errors.New("rawdb: nil chain db")
 	}
@@ -194,28 +209,40 @@ func RebuildTransactionLookupFromBlocks(chain *ChainDB, writer ethdb.KeyValueWri
 	defer collector.Close()
 
 	result := &RebuildTransactionLookupResult{FromBlock: fromBlock, ToBlock: toBlock}
-	for blockNum := fromBlock; ; blockNum++ {
-		block, ok, err := ReadBlockStrict(chain, blockNum)
-		if err != nil {
-			return nil, err
+	consume := func(blockNum uint64, encoded []byte, ancient bool) error {
+		if interrupted != nil && interrupted() {
+			return ErrTransactionLookupRebuildInterrupted
 		}
-		if !ok {
-			return nil, fmt.Errorf("rawdb: missing block %d during transaction lookup rebuild", blockNum)
+		block, err := types.UnmarshalBlock(encoded)
+		if err != nil {
+			return fmt.Errorf("rawdb: block %d decode: %w", blockNum, err)
+		}
+		if block.Number() != blockNum {
+			return fmt.Errorf("rawdb: block row %d contains block number %d", blockNum, block.Number())
 		}
 		result.BlocksScanned++
+		if ancient {
+			result.AncientBlocksScanned++
+		} else {
+			result.HotBlocksScanned++
+		}
 		for _, tx := range block.Transactions() {
 			if tx == nil {
 				continue
 			}
 			txHash := tx.Hash()
 			if err := collector.PutTransactionIndex(txHash[:], blockNum); err != nil {
-				return nil, err
+				return err
 			}
 			result.TransactionsIndexed++
 		}
-		if blockNum == toBlock {
-			break
-		}
+		return nil
+	}
+	if err := iterateTransactionLookupBlockRange(chain, fromBlock, toBlock, consume); err != nil {
+		return nil, err
+	}
+	if interrupted != nil && interrupted() {
+		return nil, ErrTransactionLookupRebuildInterrupted
 	}
 	stats, err := collector.Load(writer)
 	if err != nil {
@@ -223,6 +250,60 @@ func RebuildTransactionLookupFromBlocks(chain *ChainDB, writer ethdb.KeyValueWri
 	}
 	result.ETL = stats
 	return result, nil
+}
+
+func iterateTransactionLookupBlockRange(chain *ChainDB, fromBlock, toBlock uint64, consume func(uint64, []byte, bool) error) error {
+	next := fromBlock
+	hasAncient, err := chain.HasAncient(ancientBlocks, next)
+	if err != nil {
+		return fmt.Errorf("rawdb: check ancient block %d: %w", next, err)
+	}
+	if hasAncient {
+		count := toBlock - next + 1
+		rows, rangeErr := chain.AncientRange(ancientBlocks, next, count, 0)
+		if rangeErr != nil {
+			return fmt.Errorf("rawdb: read ancient block range [%d,%d]: %w", next, toBlock, rangeErr)
+		}
+		for _, encoded := range rows {
+			if len(encoded) == 0 {
+				return fmt.Errorf("rawdb: empty ancient block %d during transaction lookup rebuild", next)
+			}
+			if err := consume(next, encoded, true); err != nil {
+				return err
+			}
+			next++
+		}
+	}
+	if next > toBlock {
+		return nil
+	}
+
+	var seek [8]byte
+	binary.BigEndian.PutUint64(seek[:], next)
+	it := chain.NewIterator(blockPrefix, seek[:])
+	defer it.Release()
+	for expected := next; ; expected++ {
+		if !it.Next() {
+			if err := it.Error(); err != nil {
+				return fmt.Errorf("rawdb: iterate block %d during transaction lookup rebuild: %w", expected, err)
+			}
+			return fmt.Errorf("rawdb: missing block %d during transaction lookup rebuild", expected)
+		}
+		key := it.Key()
+		if len(key) != len(blockPrefix)+8 {
+			return fmt.Errorf("rawdb: malformed block key %x during transaction lookup rebuild", key)
+		}
+		blockNum := binary.BigEndian.Uint64(key[len(blockPrefix):])
+		if blockNum != expected {
+			return fmt.Errorf("rawdb: missing block %d during transaction lookup rebuild (next %d)", expected, blockNum)
+		}
+		if err := consume(blockNum, it.Value(), false); err != nil {
+			return err
+		}
+		if expected == toBlock {
+			return nil
+		}
+	}
 }
 
 // RebuildAccountTracesFromBlockBalanceTraces rebuilds AccountTrace rows from

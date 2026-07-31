@@ -87,6 +87,14 @@ func (bc *BlockChain) ensureTransactionLookupStageLocked() error {
 // past a different canonical branch. A failed ETL load leaves the previous
 // watermark intact; rerunning is idempotent.
 func (bc *BlockChain) AdvanceTransactionLookupStage(maxBlocks uint64) (TransactionLookupStageResult, error) {
+	return bc.AdvanceTransactionLookupStageInterruptible(maxBlocks, nil)
+}
+
+// AdvanceTransactionLookupStageInterruptible is the sync-service form of the
+// bounded stage pass. interrupted is polled between block rows; cancellation
+// abandons the ETL collector before any lookup rows or stage watermark are
+// published.
+func (bc *BlockChain) AdvanceTransactionLookupStageInterruptible(maxBlocks uint64, interrupted func() bool) (TransactionLookupStageResult, error) {
 	if bc == nil {
 		return TransactionLookupStageResult{}, fmt.Errorf("tx lookup stage: nil blockchain")
 	}
@@ -122,7 +130,7 @@ func (bc *BlockChain) AdvanceTransactionLookupStage(maxBlocks uint64) (Transacti
 		toBlock = fromBlock + maxBlocks - 1
 	}
 
-	rebuilt, err := rawdb.RebuildTransactionLookupFromBlocks(bc.chaindb, bc.db, fromBlock, toBlock, bc.transactionLookupETLOptions)
+	rebuilt, err := rawdb.RebuildTransactionLookupFromBlocksInterruptible(bc.chaindb, bc.db, fromBlock, toBlock, bc.transactionLookupETLOptions, interrupted)
 	if err != nil {
 		return TransactionLookupStageResult{}, fmt.Errorf("tx lookup stage: rebuild [%d,%d]: %w", fromBlock, toBlock, err)
 	}

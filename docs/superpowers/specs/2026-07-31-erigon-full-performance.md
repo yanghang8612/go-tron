@@ -139,6 +139,19 @@ Use idle cores before attempting parallel mutation:
 Results are consumed in original block/transaction order. The serial path owns
 the final accept/reject decision.
 
+The recoverable TxLookup stage follows the same sequential-stage principle.
+Its original catch-up pass reread every retained block through a strict helper
+that issued a freezer probe followed by separate Pebble `Has` and `Get` point
+reads. A production deployment caught one 4,096-block pass holding the sync
+drain for more than four minutes while rebuilding transaction hashes. The
+stage now reads a contiguous freezer range followed by one ordered `b-` prefix
+iterator for the hot suffix, validates every expected number/protobuf, and
+feeds the existing key-sorted ETL collector without changing its watermark
+semantics. Stop requests interrupt between block rows before ETL publication;
+partial or interrupted scans leave the prior watermark authoritative and are
+safe to rerun. Metrics separate ancient/hot rows, transactions, passes,
+interruptions, and elapsed time under `sync/stage/tx_lookup/`.
+
 The first implemented slice follows Erigon's separation between pure
 preprocessing and ordered execution without introducing another worker pool:
 
@@ -853,6 +866,10 @@ transactions exhausted it, the transaction falls back to the authoritative
 serial path, which can charge bandwidth exactly as java-tron would. The
 timestamp remains an idempotent block-scoped write.
 
+`core/parallel_transfer/public_net/rebased` counts the subset whose ordered
+baseline differs from the worker's block-start baseline. It is the direct
+uplift attributable to this normalization rather than a workload-mix estimate.
+
 Serial/parallel fixtures cover two disjoint free-bandwidth transfers with a
 non-zero decaying starting usage: both publish and produce identical
 TransactionInfo, account balances, dynamic usage/time, and state root. A
@@ -861,6 +878,15 @@ individually eligible but only the first ordered reservation fits; the second
 falls back, including fee settlement, and again matches the serial root and
 results. Production acceptance requires zero errors and preflight failures,
 zero state/result divergence, and a material reduction in conflict fallbacks.
+
+The first enabled reservation window covered 143,627 pre-executed transfers
+over 27,702 blocks and published 45,158 (31.44%); 24,182 publications carried
+a public-bandwidth reservation. The preceding binary's longer cumulative
+window published 25.22%, so this is a positive directional result but not a
+fixed-workload comparison. Public-limit fallbacks, publication/preflight
+errors, and sampled info/write/apply/ordered/balance mismatches all remained
+zero. The `rebased` counter added for the next window isolates the exact
+incremental publications from workload mix.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

@@ -242,6 +242,7 @@ func TestProcessBlockParallelTransfersMatchesSerial(t *testing.T) {
 		t.Fatalf("serial process: %v", err)
 	}
 	publishedBefore := parallelTransferPublishedCounter.Snapshot().Count()
+	publicNetRebasedBefore := parallelTransferPublicNetRebasedCounter.Snapshot().Count()
 	candidatesBefore := parallelTransferCandidatesCounter.Snapshot().Count()
 	conflictsBefore := parallelTransferConflictFallbackCounter.Snapshot().Count()
 	unavailableBefore := parallelTransferUnavailableFallbackCounter.Snapshot().Count()
@@ -260,6 +261,9 @@ func TestProcessBlockParallelTransfersMatchesSerial(t *testing.T) {
 	}
 	if conflicts := parallelTransferConflictFallbackCounter.Snapshot().Count() - conflictsBefore; conflicts != 0 {
 		t.Fatalf("serial conflict fallbacks = %d, want 0", conflicts)
+	}
+	if rebased := parallelTransferPublicNetRebasedCounter.Snapshot().Count() - publicNetRebasedBefore; rebased != 1 {
+		t.Fatalf("rebased public-net publications = %d, want 1", rebased)
 	}
 	if len(serialInfos) != len(parallelInfos) {
 		t.Fatalf("info count serial=%d parallel=%d", len(serialInfos), len(parallelInfos))

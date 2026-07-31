@@ -121,6 +121,9 @@ func TestRebuildTransactionLookupFromBlocksLeavesReceiptIndexesUntouched(t *test
 	if result.BlocksScanned != 2 || result.TransactionsIndexed != 3 || result.ETL.SpilledRuns == 0 {
 		t.Fatalf("result = %+v, want 2 blocks, 3 tx indexes, spilled ETL", result)
 	}
+	if result.HotBlocksScanned != 2 || result.AncientBlocksScanned != 0 {
+		t.Fatalf("scan sources = %+v, want two hot iterator blocks", result)
+	}
 	for _, info := range append(infos1, infos2...) {
 		if got := ReadTransactionIndex(db, info.Id); got == nil || *got != uint64(info.BlockNumber) {
 			t.Fatalf("tx lookup %x = %v, want block %d", info.Id, got, info.BlockNumber)
@@ -131,6 +134,62 @@ func TestRebuildTransactionLookupFromBlocksLeavesReceiptIndexesUntouched(t *test
 	}
 	if got := ReadTransactionInfosByBlock(db, block1.Number()); len(got) != len(infos1) {
 		t.Fatalf("tx infos by block1 = %+v, want untouched %d infos", got, len(infos1))
+	}
+}
+
+func TestRebuildTransactionLookupFromBlocksTransitionsFromAncientToHot(t *testing.T) {
+	hot := NewMemoryDatabase()
+	ancient := newFakeAncient()
+	block1, infos1 := derivedRebuildTestBlock(t, 1, 1)
+	block2, infos2 := derivedRebuildTestBlock(t, 2, 1)
+	encoded1, err := block1.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ancient.put(ancientBlocks, 1, encoded1)
+	db := NewChainDB(hot, ancient)
+	if err := WriteBlock(db, block2); err != nil {
+		t.Fatalf("write hot block: %v", err)
+	}
+
+	result, err := RebuildTransactionLookupFromBlocks(db, db, 1, 2, etl.Options{TempDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("rebuild ancient/hot range: %v", err)
+	}
+	if result.BlocksScanned != 2 || result.AncientBlocksScanned != 1 || result.HotBlocksScanned != 1 {
+		t.Fatalf("result = %+v, want one ancient and one hot block", result)
+	}
+	for _, info := range append(infos1, infos2...) {
+		if got := ReadTransactionIndex(db, info.Id); got == nil || *got != uint64(info.BlockNumber) {
+			t.Fatalf("tx lookup %x = %v, want block %d", info.Id, got, info.BlockNumber)
+		}
+	}
+}
+
+func TestRebuildTransactionLookupFromBlocksInterruptsBeforePublish(t *testing.T) {
+	db := NewMemoryChainDB()
+	block1, infos1 := derivedRebuildTestBlock(t, 1, 1)
+	block2, infos2 := derivedRebuildTestBlock(t, 2, 1)
+	for _, block := range []*types.Block{block1, block2} {
+		if err := WriteBlock(db, block); err != nil {
+			t.Fatalf("write block %d: %v", block.Number(), err)
+		}
+	}
+	polls := 0
+	result, err := RebuildTransactionLookupFromBlocksInterruptible(db, db, 1, 2, etl.Options{
+		TempDir:     t.TempDir(),
+		BufferLimit: 1,
+	}, func() bool {
+		polls++
+		return polls > 1
+	})
+	if !errors.Is(err, ErrTransactionLookupRebuildInterrupted) || result != nil {
+		t.Fatalf("interrupted rebuild result=%+v err=%v", result, err)
+	}
+	for _, info := range append(infos1, infos2...) {
+		if got := ReadTransactionIndex(db, info.Id); got != nil {
+			t.Fatalf("interrupted rebuild published tx lookup %x = %d", info.Id, *got)
+		}
 	}
 }
 

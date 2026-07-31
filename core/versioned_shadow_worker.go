@@ -87,6 +87,7 @@ var (
 	parallelTransferPublicationNanosCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/publication_nanos", nil)
 	parallelTransferPublicNetReservationsCounter     = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/reservations", nil)
 	parallelTransferPublicNetPublishedCounter        = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/published", nil)
+	parallelTransferPublicNetRebasedCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/rebased", nil)
 	parallelTransferPublicNetLimitFallbackCounter    = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/fallback/limit", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
@@ -833,6 +834,7 @@ type publicNetWriteOverride struct {
 	oldTime     int64
 	timeWritten bool
 	reservation bool
+	rebased     bool
 }
 
 // overridePublicNetReservation repeats java-tron's conditional admission at
@@ -861,6 +863,7 @@ func overridePublicNetReservation(result *discardShadowTaskResult, dynProps *sta
 		oldUsage:    int64(binary.BigEndian.Uint64(usageValue.Value)),
 		timeWritten: timeWritten,
 		reservation: true,
+		rebased:     currentUsage != reservation.StartUsage || currentTime != reservation.StartTime,
 	}
 	if timeWritten {
 		override.oldTime = int64(binary.BigEndian.Uint64(timeValue.Value))

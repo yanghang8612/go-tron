@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -71,6 +72,15 @@ func TestBlockChainSyncInsertDefersTransactionLookupUntilStage(t *testing.T) {
 	}
 	if infos := rawdb.ReadTransactionInfosByBlock(bc.ChainDB(), block.Number()); len(infos) != 1 {
 		t.Fatalf("tx infos by block = %+v, want durable receipt", infos)
+	}
+	if result, err := bc.AdvanceTransactionLookupStageInterruptible(1, func() bool { return true }); !errors.Is(err, rawdb.ErrTransactionLookupRebuildInterrupted) || result.Advanced {
+		t.Fatalf("interrupted TxLookup result=%+v err=%v", result, err)
+	}
+	if got := rawdb.ReadTransactionIndex(bc.ChainDB(), txHash[:]); got != nil {
+		t.Fatalf("tx lookup after interrupted derived stage = %d, want nil", *got)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != 0 || !row.HasBlockHash || row.BlockHash != genesisHash {
+		t.Fatalf("TxLookup progress after interruption = %+v ok=%v err=%v, want genesis", row, ok, err)
 	}
 
 	result, err := bc.AdvanceTransactionLookupStage(1)

@@ -947,6 +947,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				parallelTransferPublishedCounter.Inc(1)
 				if preResult.publicNetValid {
 					parallelTransferPublicNetPublishedCounter.Inc(1)
+					if publicNetOverride.rebased {
+						parallelTransferPublicNetRebasedCounter.Inc(1)
+					}
 				}
 				parallelTransferPublicationNanosCounter.Inc(time.Since(publishedStarted).Nanoseconds())
 				continue

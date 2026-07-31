@@ -49,6 +49,8 @@
   consumption beyond the implemented immutable facts.
 - [x] Move deterministic latest-state key extraction and eligible reads ahead
   of the serial executor.
+- [x] Replace TxLookup stage per-block Has+Get point reads with freezer range
+  reads / one ordered Pebble iterator and make unpublished ETL scans stoppable.
 - [ ] Parallelize derived receipt/log/trace encoding behind recoverable stages.
 
 ## P4: Conflict-aware execution

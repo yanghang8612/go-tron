@@ -9,6 +9,7 @@ import (
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -161,6 +162,16 @@ type SyncService struct {
 // downloader buffer cannot hold the chain writer lock for an unbounded ETL
 // sort/load.
 const transactionLookupStageBatchBlocks = 4096
+
+var (
+	transactionLookupStagePassesCounter       = metrics.NewRegisteredCounter("sync/stage/tx_lookup/passes", nil)
+	transactionLookupStageBlocksCounter       = metrics.NewRegisteredCounter("sync/stage/tx_lookup/blocks", nil)
+	transactionLookupStageAncientCounter      = metrics.NewRegisteredCounter("sync/stage/tx_lookup/ancient_blocks", nil)
+	transactionLookupStageHotCounter          = metrics.NewRegisteredCounter("sync/stage/tx_lookup/hot_iterator_blocks", nil)
+	transactionLookupStageTransactionsCounter = metrics.NewRegisteredCounter("sync/stage/tx_lookup/transactions", nil)
+	transactionLookupStageInterruptedCounter  = metrics.NewRegisteredCounter("sync/stage/tx_lookup/interrupted", nil)
+	transactionLookupStageNanosCounter        = metrics.NewRegisteredCounter("sync/stage/tx_lookup/nanos", nil)
+)
 
 // chainStatusAdapter adapts *core.BlockChain to tsync.ChainStatus by adding
 // a CurrentBlockNum accessor that unwraps CurrentBlock().Number() — keeps
@@ -2544,11 +2555,17 @@ func (a syncImportBatchRunApplier) ExecuteImportBatch(attempt syncdl.ImportBatch
 }
 
 func (ss *SyncService) advanceTransactionLookupStage() {
-	if ss == nil || ss.chain == nil {
+	if ss == nil || ss.chain == nil || ss.stopping.Load() {
 		return
 	}
-	result, err := ss.chain.AdvanceTransactionLookupStage(transactionLookupStageBatchBlocks)
+	started := time.Now()
+	result, err := ss.chain.AdvanceTransactionLookupStageInterruptible(transactionLookupStageBatchBlocks, ss.stopping.Load)
+	transactionLookupStageNanosCounter.Inc(time.Since(started).Nanoseconds())
 	if err != nil {
+		if errors.Is(err, rawdb.ErrTransactionLookupRebuildInterrupted) && ss.stopping.Load() {
+			transactionLookupStageInterruptedCounter.Inc(1)
+			return
+		}
 		// TxLookup is derived from durable canonical bodies. Keep consensus import
 		// live on a transient ETL failure; the watermark remains unchanged and a
 		// later drain wake retries the same range.
@@ -2556,6 +2573,13 @@ func (ss *SyncService) advanceTransactionLookupStage() {
 		return
 	}
 	if result.Advanced {
+		transactionLookupStagePassesCounter.Inc(1)
+		if result.Rebuilt != nil {
+			transactionLookupStageBlocksCounter.Inc(int64(result.Rebuilt.BlocksScanned))
+			transactionLookupStageAncientCounter.Inc(int64(result.Rebuilt.AncientBlocksScanned))
+			transactionLookupStageHotCounter.Inc(int64(result.Rebuilt.HotBlocksScanned))
+			transactionLookupStageTransactionsCounter.Inc(int64(result.Rebuilt.TransactionsIndexed))
+		}
 		ss.requestDrainAgain()
 	}
 }
