@@ -55,6 +55,13 @@ import (
 
 var log = gtronlog.NewModule("core/freezer")
 
+// errRunnerStopping is internal control flow, not an operational failure. A
+// pass returns it only at a boundary where either no freezer mutation has been
+// committed, ModifyAncients has rolled the mutation back, or the ancient rows
+// have already crossed the explicit fsync barrier. The loop suppresses warning
+// logs for this error and exits.
+var errRunnerStopping = errors.New("freezer runner stopping")
+
 // Defaults applied when Config fields are zero. They mirror the spec's
 // recommended production values: 30-second cadence, 128-block margin
 // (keeps us well below the PBFT solidification line under steady-state
@@ -407,18 +414,39 @@ func (r *Runner) Start() error {
 	return nil
 }
 
-// Stop implements node.Lifecycle. Signals the loop to exit and waits for
-// the in-flight pass (if any) to finish. Idempotent: safe to call from
-// multiple goroutines / multiple times.
+// Stop implements node.Lifecycle. It signals the loop to stop at the next
+// crash-safe boundary and joins the goroutine before callers close either
+// database. Idempotent: safe to call from multiple goroutines / multiple times.
 func (r *Runner) Stop() error {
-	r.once.Do(func() {
-		close(r.quit)
-		r.pauseCancel()
-	})
+	r.BeginStop()
 	<-r.done
 	log.Info("Freezer runner stopped",
 		"blocksFrozen", r.blocksFrozen.Load(),
 		"passes", r.passesCompleted.Load())
+	return nil
+}
+
+// BeginStop signals cancellation without waiting for the runner goroutine.
+// Shutdown coordinators use it before draining other services so the freezer
+// can roll back or reach its next durable boundary concurrently. Stop must
+// still be called before closing either database.
+func (r *Runner) BeginStop() {
+	if r == nil {
+		return
+	}
+	r.once.Do(func() {
+		close(r.quit)
+		r.pauseCancel()
+	})
+}
+
+func (r *Runner) checkStopping() error {
+	if r == nil || r.pauseCtx == nil {
+		return nil
+	}
+	if r.pauseCtx.Err() != nil {
+		return errRunnerStopping
+	}
 	return nil
 }
 
@@ -503,9 +531,15 @@ func (r *Runner) updateMetrics() {
 // the freezer in a consistent state thanks to ModifyAncients' atomic
 // rollback; the next pass simply retries.
 func (r *Runner) OnePass() (frozen uint64, err error) {
+	if err := r.checkStopping(); err != nil {
+		return 0, err
+	}
 	start := time.Now()
 	stageAdvanced := false
 	defer func() {
+		if errors.Is(err, errRunnerStopping) {
+			return
+		}
 		r.lastPassUnixNano.Store(start.UnixNano())
 		r.lastPassDuration.Store(int64(time.Since(start)))
 		r.passesCompleted.Add(1)
@@ -574,6 +608,9 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 				return 0, err
 			}
 			stageAdvanced = stageAdvanced || advanced
+			if err := r.checkStopping(); err != nil {
+				return 0, err
+			}
 			start, limit := rawdb.BlockRangeBounds(0, leftoverHi)
 			if err := r.chain.DB().Compact(start, limit); err != nil {
 				log.Warn("Freezer: crash-leftover compact failed (rows still deleted)",
@@ -588,6 +625,9 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 			return 0, err
 		}
 		stageAdvanced = stageAdvanced || advanced
+	}
+	if err := r.checkStopping(); err != nil {
+		return 0, err
 	}
 
 	if freezeTo < freezeFromN {
@@ -616,6 +656,13 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	// rows in one table.
 	if _, err := r.freezer.ModifyAncients(func(op rawdb.AncientWriteOp) error {
 		for n := freezeFromN; n < capExclusive; n++ {
+			// Returning from the callback with an error makes ModifyAncients
+			// truncate every table back to its pre-pass head. This is the only
+			// safe way to interrupt phase 1 without exposing partial ancient
+			// table cardinalities.
+			if err := r.checkStopping(); err != nil {
+				return err
+			}
 			blockRaw, ok, err := r.chain.ReadBlockRawStrict(n)
 			if err != nil {
 				return fmt.Errorf("freezer: read block %d: %w", n, err)
@@ -674,6 +721,14 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	if err := r.freezer.Sync(); err != nil {
 		return 0, err
 	}
+	// Once ModifyAncients has committed we must not honor cancellation until
+	// after Sync: Pebble deletion is allowed to lag ancient durability, never
+	// lead it. If shutdown lands here, the next process detects the durable
+	// ancient head plus duplicate hot rows and reconciles them before freezing
+	// new blocks.
+	if err := r.checkStopping(); err != nil {
+		return 0, err
+	}
 
 	// Phase 3: delete the now-frozen hot rows from Pebble. `b-<num>` and
 	// `tib-<num>` leave through range tombstones while `bsr-<hash>` leaves in
@@ -689,6 +744,13 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 		return 0, err
 	}
 	stageAdvanced = stageAdvanced || advanced
+	// Compaction only reclaims space; it is not part of the data-durability
+	// transition. Skip starting it during shutdown. A compaction already inside
+	// Pebble v1 cannot be interrupted, but this check and the loop's stop
+	// priority ensure shutdown never starts another one.
+	if err := r.checkStopping(); err != nil {
+		return 0, err
+	}
 
 	// Phase 4: compact the freed range. Pebble turns DeleteRange into
 	// range tombstones, which are O(1) on the write path but only reclaim
@@ -708,13 +770,20 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	if err := r.pruneFrozenStateRoots(frozenHi); err != nil {
 		return 0, err
 	}
+	if err := r.checkStopping(); err != nil {
+		return 0, err
+	}
 
 	// Phase 5: update stats. PebbleSizeAfter is sampled by an iterator
 	// pass on the still-hot `b-` prefix — cheap because after a successful
 	// freeze the prefix only holds the post-margin window.
 	frozen = capExclusive - freezeFromN
+	pebbleSize, err := r.pebbleBlockNamespaceSize()
+	if err != nil {
+		return 0, err
+	}
 	r.blocksFrozen.Add(frozen)
-	r.pebbleSizeAfter.Store(pebbleBlockNamespaceSize(r.chain.DB()))
+	r.pebbleSizeAfter.Store(pebbleSize)
 	return frozen, nil
 }
 
@@ -862,6 +931,11 @@ func (r *Runner) pruneFrozenStateRoots(upTo uint64) error {
 	}
 	hashes := make([]tcommon.Hash, 0, end-start+1)
 	for number := start; ; number++ {
+		// No mutation occurs until the complete hash slice is validated, so an
+		// interrupted migration can simply restart from its persisted stage.
+		if err := r.checkStopping(); err != nil {
+			return err
+		}
 		hasRoot, err := r.freezer.HasAncient(rawdb.AncientStateRootsTable, number)
 		if err != nil {
 			return fmt.Errorf("freezer: check ancient state root %d: %w", number, err)
@@ -895,6 +969,9 @@ func (r *Runner) loop() {
 	defer close(r.done)
 
 	if frozen, err := r.OnePass(); err != nil {
+		if errors.Is(err, errRunnerStopping) {
+			return
+		}
 		log.Warn("Freezer: initial pass failed", "err", err)
 	} else if frozen > 0 {
 		log.Info("Freezer: initial pass frozen", "blocks", frozen)
@@ -903,21 +980,34 @@ func (r *Runner) loop() {
 	ticker := time.NewTicker(r.cfg.Interval)
 	defer ticker.Stop()
 	for {
+		// Give shutdown priority over an already-buffered ticker or requested
+		// pass. The second check inside OnePass closes the remaining select race.
 		select {
+		case <-r.quit:
+			return
+		default:
+		}
+		select {
+		case <-r.quit:
+			return
 		case <-ticker.C:
 			if frozen, err := r.OnePass(); err != nil {
+				if errors.Is(err, errRunnerStopping) {
+					return
+				}
 				log.Warn("Freezer: pass failed", "err", err)
 			} else if frozen > 0 {
 				log.Info("Freezer: pass frozen", "blocks", frozen)
 			}
 		case <-r.wake:
 			if frozen, err := r.OnePass(); err != nil {
+				if errors.Is(err, errRunnerStopping) {
+					return
+				}
 				log.Warn("Freezer: requested pass failed", "err", err)
 			} else if frozen > 0 {
 				log.Info("Freezer: requested pass frozen", "blocks", frozen)
 			}
-		case <-r.quit:
-			return
 		}
 	}
 }
@@ -928,14 +1018,17 @@ func (r *Runner) loop() {
 // enough as an unbounded-growth detector. Called once at the end of each
 // pass; cost is O(remaining-block-rows), which is bounded by
 // MarginBlocks + BatchBlocks under steady state.
-func pebbleBlockNamespaceSize(db ethdb.Iteratee) uint64 {
-	it := db.NewIterator(blockNamespacePrefix, nil)
+func (r *Runner) pebbleBlockNamespaceSize() (uint64, error) {
+	it := r.chain.DB().NewIterator(blockNamespacePrefix, nil)
 	defer it.Release()
 	var size uint64
 	for it.Next() {
+		if err := r.checkStopping(); err != nil {
+			return 0, err
+		}
 		size += uint64(len(it.Key()) + len(it.Value()))
 	}
-	return size
+	return size, it.Error()
 }
 
 // blockNamespacePrefix is the `b-` prefix mirrored from

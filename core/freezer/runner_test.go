@@ -40,6 +40,24 @@ type fakeChain struct {
 	blockHashErr  map[uint64]error
 }
 
+// blockingReadChain pauses one phase-1 block read so tests can deliver Stop
+// while ModifyAncients owns an open atomic batch.
+type blockingReadChain struct {
+	ChainSource
+	blockNum uint64
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (c *blockingReadChain) ReadBlockRawStrict(n uint64) ([]byte, bool, error) {
+	if n == c.blockNum {
+		c.once.Do(func() { close(c.entered) })
+		<-c.release
+	}
+	return c.ChainSource.ReadBlockRawStrict(n)
+}
+
 func newFakeChain() *fakeChain {
 	return &fakeChain{
 		db:            memorydb.New(),
@@ -390,6 +408,27 @@ func (w *freezerWriter) TruncateHead(items uint64) (uint64, error) {
 	return w.f.TruncateHead(items)
 }
 func (w *freezerWriter) Sync() error { return w.f.Sync() }
+
+// blockingSyncFreezer pauses only after the real fsync has succeeded. It
+// models shutdown in the intentional recovery window between durable ancient
+// append and hot-row deletion.
+type blockingSyncFreezer struct {
+	FreezerStore
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	syncs   uint64
+}
+
+func (f *blockingSyncFreezer) Sync() error {
+	if err := f.FreezerStore.Sync(); err != nil {
+		return err
+	}
+	f.syncs++
+	f.once.Do(func() { close(f.entered) })
+	<-f.release
+	return nil
+}
 
 // TestOnePass_FreezesToMargin: chain with solidified=N; pass; ancient
 // has 0..N-margin. Locks in the basic happy path.
@@ -1377,6 +1416,184 @@ func TestOnePass_CrashBetweenSyncAndDelete(t *testing.T) {
 	}
 	if got, err := f.Ancient(rawdbAncientBlocks, 5); err != nil || string(got) != string(blockBytes(5)) {
 		t.Fatalf("ancient block #5 corrupted after reconciliation: %x err=%v", got, err)
+	}
+}
+
+func TestRunnerStopRollsBackOpenAncientBatchAndRestartResumes(t *testing.T) {
+	fc := newFakeChain()
+	for n := uint64(0); n < 10; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(9)
+
+	f := newFreezer(t)
+	blocked := &blockingReadChain{
+		ChainSource: fc,
+		blockNum:    3,
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	r := New(blocked, wrapFreezer(f), Config{
+		Enabled:      true,
+		Interval:     time.Hour,
+		MarginBlocks: 0,
+		BatchBlocks:  10,
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-blocked.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for phase-1 block read")
+	}
+
+	// Queue another pass to reproduce the shutdown race where both wake and
+	// quit are ready after the current pass returns.
+	r.RequestPass()
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- r.Stop() }()
+	select {
+	case <-r.pauseCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for runner cancellation")
+	}
+	close(blocked.release)
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not return after releasing phase-1 read")
+	}
+
+	// ModifyAncients must roll all three tables back together. The queued wake
+	// must not start a second pass after cancellation.
+	for _, kind := range []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots} {
+		if got, err := f.AncientCount(kind); err != nil || got != 0 {
+			t.Fatalf("%s count after interrupted batch = %d/%v, want 0/nil", kind, got, err)
+		}
+	}
+	if got := r.Snapshot().PassesCompleted; got != 0 {
+		t.Fatalf("completed passes after interrupted batch = %d, want 0", got)
+	}
+
+	// A fresh runner resumes from AncientCount=0 and freezes the full range.
+	r2 := New(fc, wrapFreezer(f), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  10,
+	})
+	if frozen, err := r2.OnePass(); err != nil || frozen != 10 {
+		t.Fatalf("restart pass = frozen %d err %v, want 10/nil", frozen, err)
+	}
+	for _, kind := range []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots} {
+		if got, err := f.AncientCount(kind); err != nil || got != 10 {
+			t.Fatalf("%s count after restart = %d/%v, want 10/nil", kind, got, err)
+		}
+	}
+}
+
+func TestRunnerStopAfterAncientSyncRestartsFromDurableHead(t *testing.T) {
+	dir := t.TempDir()
+	fc := newFakeChain()
+	for n := uint64(0); n < 10; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(9)
+
+	f1, err := rawdbfreezer.NewFreezer(dir, "", false, 2049, FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	baseStore := &freezerWriter{AncientReader: rawdb.NewFreezerReader(f1), f: f1}
+	blocked := &blockingSyncFreezer{
+		FreezerStore: baseStore,
+		entered:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	r := New(fc, blocked, Config{
+		Enabled:      true,
+		Interval:     time.Hour,
+		MarginBlocks: 0,
+		BatchBlocks:  10,
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-blocked.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ancient fsync")
+	}
+
+	// The ancient append is durable but hot deletion has not begun. Stop must
+	// leave that recoverable overlap intact and ignore the queued second pass.
+	r.RequestPass()
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- r.Stop() }()
+	select {
+	case <-r.pauseCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for runner cancellation")
+	}
+	close(blocked.release)
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not return after durable ancient sync")
+	}
+	if blocked.syncs != 1 {
+		t.Fatalf("ancient sync calls = %d, want 1 (no post-stop pass)", blocked.syncs)
+	}
+	for _, kind := range []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots} {
+		if got, err := f1.AncientCount(kind); err != nil || got != 10 {
+			t.Fatalf("%s durable count before reopen = %d/%v, want 10/nil", kind, got, err)
+		}
+	}
+	if hot, err := fc.db.Get(blockKVKey(9)); err != nil || len(hot) == 0 {
+		t.Fatalf("hot overlap before reopen = len %d err %v, want retained", len(hot), err)
+	}
+	if err := f1.Close(); err != nil {
+		t.Fatalf("close first freezer: %v", err)
+	}
+
+	// Reopen the real freezer files to prove the fsync boundary survives a
+	// process lifetime, then let a fresh runner reconcile hot duplicates.
+	f2, err := rawdbfreezer.NewFreezer(dir, "", false, 2049, FreezerTableSet())
+	if err != nil {
+		t.Fatalf("reopen freezer: %v", err)
+	}
+	t.Cleanup(func() { _ = f2.Close() })
+	store2 := &freezerWriter{AncientReader: rawdb.NewFreezerReader(f2), f: f2}
+	r2 := New(fc, store2, Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  10,
+	})
+	if frozen, err := r2.OnePass(); err != nil || frozen != 0 {
+		t.Fatalf("restart reconciliation = frozen %d err %v, want 0/nil", frozen, err)
+	}
+	if got, err := f2.AncientCount(rawdbAncientBlocks); err != nil || got != 10 {
+		t.Fatalf("ancient count after reconciliation = %d/%v, want 10/nil", got, err)
+	}
+	for n := uint64(0); n < 10; n++ {
+		if hot, err := fc.db.Get(blockKVKey(n)); err == nil && len(hot) > 0 {
+			t.Fatalf("hot block %d remains after restart reconciliation", n)
+		}
+		if root := rawdb.ReadBlockStateRootRaw(fc.db, fc.ReadBlockHashByNumber(n)); root != nil {
+			t.Fatalf("hot state root %d remains after restart reconciliation: %x", n, root)
+		}
+	}
+	if got, err := f2.Ancient(rawdbAncientBlocks, 9); err != nil || string(got) != string(blockBytes(9)) {
+		t.Fatalf("ancient block 9 after restart = %x/%v, want original", got, err)
+	}
+	if stage, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer); err != nil || !ok || stage != 9 {
+		t.Fatalf("ChainFreezer stage after restart = %d ok=%v err=%v, want 9", stage, ok, err)
 	}
 }
 

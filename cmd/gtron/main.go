@@ -1049,8 +1049,9 @@ func gtron(ctx *cli.Context) error {
 			"snapshotDir", stateSnapshotDir)
 	}
 
+	var freezerRunner *chainfreezer.Runner
 	if ancientStore != nil && freezerCfg.Enabled {
-		freezerRunner := chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
+		freezerRunner = chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
 		if freezerRunner != nil {
 			syncService.AddSyncCompleteHook(freezerRunner.RequestPass)
 			if domainLifecycle != nil {
@@ -1152,6 +1153,12 @@ func gtron(ctx *cli.Context) error {
 	<-sigc
 
 	log.Info("Shutting down")
+	// Signal freezer cancellation before draining sync. The lifecycle Stop call
+	// below still joins the goroutine before any store is closed, while safe
+	// rollback/fsync work overlaps the active sync-import drain.
+	if freezerRunner != nil {
+		freezerRunner.BeginStop()
+	}
 	broadcaster.Stop()
 	syncService.Stop()
 	stack.Stop()
