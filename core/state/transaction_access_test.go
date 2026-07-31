@@ -208,6 +208,110 @@ func TestTransactionAccessRecorderCapturesLogicalCellsWithoutMutation(t *testing
 	}
 }
 
+func TestTransactionAccessRecorderSeparatesSettlementAndOrdinaryReads(t *testing.T) {
+	s := newTestStateDB(t)
+	blackhole := testAddr(0x39)
+	s.CreateAccount(blackhole, corepb.AccountType_Normal)
+	s.AddBalance(blackhole, 100)
+	dp := NewDynamicProperties()
+
+	var recorder TransactionAccessRecorder
+	recorder.Reset(16)
+	s.SetTransactionAccessRecorder(&recorder)
+	dp.SetTransactionAccessRecorder(&recorder)
+
+	s.AddSettlementBalance(blackhole, 7)
+	dp.AddBurnTrx(3)
+	dp.AddTransactionFeePool(5)
+	dp.AddTotalTransactionCost(7)
+	dp.AddTotalCreateAccountCost(11)
+	dp.AddTotalCreateWitnessCost(13)
+
+	accountKey := TransactionAccessKey{Kind: TransactionAccessAccount, Address: blackhole}
+	burnKey := TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: "burn_trx_amount"}
+	got := make(map[TransactionAccessKey]TransactionAccessMode)
+	recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+		got[key] = mode
+		return true
+	})
+	if mode := got[accountKey]; mode != TransactionAccessCommutativeRead {
+		t.Fatalf("settlement account mode = %d, want commutative read", mode)
+	}
+	wantBurn := TransactionAccessCommutativeRead | TransactionAccessCommutativeWrite
+	if mode := got[burnKey]; mode != wantBurn {
+		t.Fatalf("burn accumulator mode = %d, want %d", mode, wantBurn)
+	}
+	for _, key := range []string{
+		"transaction_fee_pool",
+		"total_transaction_cost",
+		"total_create_account_cost",
+		"total_create_witness_cost",
+	} {
+		accessKey := TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: key}
+		if mode := got[accessKey]; mode != wantBurn {
+			t.Fatalf("%s accumulator mode = %d, want %d", key, mode, wantBurn)
+		}
+	}
+
+	// A real read of the same cell in the same transaction must survive the
+	// settlement label; normalized validation may ignore only the helper's
+	// internal read-modify-write dependency.
+	_ = s.GetBalance(blackhole)
+	_ = dp.BurnTrxAmount()
+	got = make(map[TransactionAccessKey]TransactionAccessMode)
+	recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+		got[key] = mode
+		return true
+	})
+	if mode := got[accountKey]; mode != TransactionAccessRead|TransactionAccessCommutativeRead {
+		t.Fatalf("mixed account mode = %d", mode)
+	}
+	if mode := got[burnKey]; mode != TransactionAccessRead|wantBurn {
+		t.Fatalf("mixed burn mode = %d", mode)
+	}
+	if got := s.GetBalance(blackhole); got != 107 {
+		t.Fatalf("settlement balance = %d, want 107", got)
+	}
+	if got := dp.BurnTrxAmount(); got != 3 {
+		t.Fatalf("burn amount = %d, want 3", got)
+	}
+}
+
+func TestSettlementMutationsRetainSnapshotRollback(t *testing.T) {
+	s := newTestStateDB(t)
+	blackhole := testAddr(0x3a)
+	s.CreateAccount(blackhole, corepb.AccountType_Normal)
+	s.AddBalance(blackhole, 100)
+	dp := NewDynamicProperties()
+
+	stateSnapshot := s.Snapshot()
+	dynamicSnapshot := dp.Snapshot()
+	s.AddSettlementBalance(blackhole, 9)
+	dp.AddTransactionFeePool(11)
+	dp.AddTotalTransactionCost(13)
+	if got := s.GetBalance(blackhole); got != 109 {
+		t.Fatalf("settlement balance = %d, want 109", got)
+	}
+	if got := dp.TransactionFeePool(); got != 11 {
+		t.Fatalf("fee pool = %d, want 11", got)
+	}
+	if got := dp.TotalTransactionCost(); got != 13 {
+		t.Fatalf("transaction cost = %d, want 13", got)
+	}
+
+	s.RevertToSnapshot(stateSnapshot)
+	dp.RevertToSnapshot(dynamicSnapshot)
+	if got := s.GetBalance(blackhole); got != 100 {
+		t.Fatalf("balance after rollback = %d, want 100", got)
+	}
+	if got := dp.TransactionFeePool(); got != 0 {
+		t.Fatalf("fee pool after rollback = %d, want 0", got)
+	}
+	if got := dp.TotalTransactionCost(); got != 0 {
+		t.Fatalf("transaction cost after rollback = %d, want 0", got)
+	}
+}
+
 func TestTransactionAccessRecorderRejectsPrefixReads(t *testing.T) {
 	s := newTestStateDB(t)
 	account := testAddr(0x41)

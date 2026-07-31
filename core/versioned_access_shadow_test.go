@@ -111,6 +111,61 @@ func TestVersionedAccessShadowBlindWriteOverlapDoesNotInvalidate(t *testing.T) {
 	}
 }
 
+func TestVersionedAccessShadowModelsOrderedSettlementDeltas(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := statedb.DynamicProperties()
+	blackhole := testProcessorAddr(0x71)
+	statedb.CreateAccount(blackhole, corepb.AccountType_Normal)
+	statedb.AddBalance(blackhole, 100)
+
+	var shadow versionedAccessShadow
+	shadow.Prepare(4)
+	tx := types.NewTransactionFromPB(&corepb.Transaction{})
+
+	for i := 0; i < 2; i++ {
+		recordVersionedShadowTx(t, &shadow, statedb, dynProps, i, tx, func() {
+			statedb.AddSettlementBalance(blackhole, 1)
+			dynProps.AddBurnTrx(1)
+		})
+	}
+	// An ordinary read of either accumulator preserves the dependency even if
+	// this transaction also contributes a settlement delta to the same cell.
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 2, tx, func() {
+		_ = statedb.GetBalance(blackhole)
+		statedb.AddSettlementBalance(blackhole, 1)
+		_ = dynProps.BurnTrxAmount()
+		dynProps.AddBurnTrx(1)
+	})
+	// A normal balance addition is not implicitly commutative merely because it
+	// happens to target the blackhole address.
+	recordVersionedShadowTx(t, &shadow, statedb, dynProps, 3, tx, func() {
+		statedb.AddBalance(blackhole, 1)
+	})
+
+	got := shadow.Finish(statedb, dynProps)
+	if got.transactions != 4 || got.firstPassValid != 1 || got.normalizedFirstPassValid != 2 {
+		t.Fatalf("raw/normalized validity = %+v", got)
+	}
+	if got.conflicts != 3 || got.normalizedConflicts != 2 || got.settlementResolvedFirstPass != 1 {
+		t.Fatalf("raw/normalized conflicts = %+v", got)
+	}
+	if got.settlementTaggedTransactions != 3 {
+		t.Fatalf("settlement tagged transactions = %d, want 3", got.settlementTaggedTransactions)
+	}
+	if got.settlementBlackholeConflicts != 2 || got.settlementBurnConflicts != 2 {
+		t.Fatalf("settlement conflict families = %+v", got)
+	}
+	if got.otherFirstPassValid != 1 || got.otherNormalizedFirstPass != 2 {
+		t.Fatalf("normalized class stats = %+v", got)
+	}
+	if got := statedb.GetBalance(blackhole); got != 104 {
+		t.Fatalf("canonical blackhole balance = %d, want 104", got)
+	}
+	if got := dynProps.BurnTrxAmount(); got != 3 {
+		t.Fatalf("canonical burn amount = %d, want 3", got)
+	}
+}
+
 func recordVersionedShadowTx(t *testing.T, shadow *versionedAccessShadow, statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, tx *types.Transaction, execute func()) {
 	t.Helper()
 	mark := statedb.DomainChangeJournalMark()
@@ -165,6 +220,49 @@ func BenchmarkVersionedAccessShadowOverhead(b *testing.B) {
 					stats := shadow.Finish(statedb, dynProps)
 					if stats.firstPassValid != transfers {
 						b.Fatalf("versioned stats = %+v", stats)
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkVersionedAccessShadowSettlementNormalization(b *testing.B) {
+	const transactions = 64
+	tx := types.NewTransactionFromPB(&corepb.Transaction{})
+	for _, observe := range []bool{false, true} {
+		name := "serial_only"
+		if observe {
+			name = "with_normalized_shadow"
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for iteration := 0; iteration < b.N; iteration++ {
+				b.StopTimer()
+				statedb := newTestState(b)
+				dynProps := statedb.DynamicProperties()
+				blackhole := testProcessorAddr(0x72)
+				statedb.CreateAccount(blackhole, corepb.AccountType_Normal)
+				var shadow versionedAccessShadow
+				if observe {
+					shadow.Prepare(transactions)
+				}
+				b.StartTimer()
+				for i := 0; i < transactions; i++ {
+					mark := statedb.DomainChangeJournalMark()
+					if observe {
+						shadow.BeginTransaction(statedb, dynProps)
+					}
+					statedb.AddSettlementBalance(blackhole, 1)
+					dynProps.AddBurnTrx(1)
+					if observe {
+						shadow.ObserveTransaction(i, tx, statedb, dynProps, mark)
+					}
+				}
+				if observe {
+					stats := shadow.Finish(statedb, dynProps)
+					if stats.firstPassValid != 1 || stats.normalizedFirstPassValid != transactions {
+						b.Fatalf("settlement stats = %+v", stats)
 					}
 				}
 			}

@@ -80,6 +80,12 @@ type TransactionAccessMode uint8
 const (
 	TransactionAccessRead TransactionAccessMode = 1 << iota
 	TransactionAccessWrite
+	// TransactionAccessCommutativeRead/Write mark the internal read-modify-write
+	// performed by a protocol settlement accumulator. The canonical serial
+	// mutation is unchanged. P4.3 uses the distinction only to model a future
+	// worker returning a delta that is applied at ordered publication time.
+	TransactionAccessCommutativeRead
+	TransactionAccessCommutativeWrite
 )
 
 // TransactionAccessRecorder is a transaction-scoped, reusable read/write set.
@@ -88,8 +94,10 @@ const (
 // map retains bounded buckets across transactions; arbitrary account-KV keys
 // are copied only on the first unique access in a transaction.
 type TransactionAccessRecorder struct {
-	accesses    map[TransactionAccessKey]TransactionAccessMode
-	unsupported bool
+	accesses             map[TransactionAccessKey]TransactionAccessMode
+	unsupported          bool
+	commutativeScopeKey  TransactionAccessKey
+	commutativeScopeOpen bool
 }
 
 // Reset begins a new transaction capture. capacityHint is used only for the
@@ -107,6 +115,8 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 		clear(r.accesses)
 	}
 	r.unsupported = false
+	r.commutativeScopeKey = TransactionAccessKey{}
+	r.commutativeScopeOpen = false
 }
 
 // Visit visits each unique access in unspecified order. Returning false stops
@@ -143,10 +153,32 @@ func (r *TransactionAccessRecorder) record(key TransactionAccessKey, mode Transa
 	if r == nil {
 		return
 	}
+	if r.commutativeScopeOpen && key == r.commutativeScopeKey {
+		if mode&TransactionAccessRead != 0 {
+			mode = mode&^TransactionAccessRead | TransactionAccessCommutativeRead
+		}
+		if mode&TransactionAccessWrite != 0 {
+			mode = mode&^TransactionAccessWrite | TransactionAccessCommutativeWrite
+		}
+	}
 	if r.accesses == nil {
 		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, 16)
 	}
 	r.accesses[key] |= mode
+}
+
+// beginCommutativeScope reclassifies only the exact logical cell subsequently
+// accessed by a settlement helper. Reads of any other cell remain ordinary
+// dependencies. The returned state must be restored with endCommutativeScope;
+// this explicit pair keeps the hot path allocation-free.
+func (r *TransactionAccessRecorder) beginCommutativeScope(key TransactionAccessKey) (TransactionAccessKey, bool) {
+	previousKey, previousOpen := r.commutativeScopeKey, r.commutativeScopeOpen
+	r.commutativeScopeKey, r.commutativeScopeOpen = key, true
+	return previousKey, previousOpen
+}
+
+func (r *TransactionAccessRecorder) endCommutativeScope(previousKey TransactionAccessKey, previousOpen bool) {
+	r.commutativeScopeKey, r.commutativeScopeOpen = previousKey, previousOpen
 }
 
 func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, logicalKey []byte, mode TransactionAccessMode) {
@@ -248,6 +280,24 @@ func (dp *DynamicProperties) recordDynamicAccess(kind TransactionAccessKind, key
 	if dp != nil && dp.transactionAccess != nil {
 		dp.transactionAccess.record(TransactionAccessKey{Kind: kind, LogicalKey: key}, mode)
 	}
+}
+
+// addCommutativeInt keeps the authoritative serial read-modify-write while
+// labelling its internal dependency as a settlement delta. Any ordinary read
+// of the same key elsewhere in the transaction is recorded separately and
+// therefore still prevents normalized first-pass validation.
+func (dp *DynamicProperties) addCommutativeInt(key string, delta int64) {
+	if dp == nil {
+		return
+	}
+	if recorder := dp.transactionAccess; recorder != nil {
+		accessKey := TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: key}
+		previousKey, previousOpen := recorder.beginCommutativeScope(accessKey)
+		dp.Set(key, dp.readInt(key)+delta)
+		recorder.endCommutativeScope(previousKey, previousOpen)
+		return
+	}
+	dp.Set(key, dp.readInt(key)+delta)
 }
 
 func (dp *DynamicProperties) readInt(key string) int64 {

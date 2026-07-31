@@ -1076,6 +1076,25 @@ func (s *StateDB) AddBalance(addr tcommon.Address, amount int64) {
 	s.recordBalanceTraceChange(addr, amount)
 }
 
+// AddSettlementBalance performs the same canonical serial mutation as
+// AddBalance, but labels the destination-side read-modify-write as a
+// commutative protocol settlement. It is intentionally reserved for fees
+// credited to the blackhole account; ordinary transfers must use AddBalance so
+// their dependency remains versioned normally.
+func (s *StateDB) AddSettlementBalance(addr tcommon.Address, amount int64) {
+	if s == nil {
+		return
+	}
+	if recorder := s.transactionAccess; recorder != nil {
+		key := TransactionAccessKey{Kind: TransactionAccessAccount, Address: addr}
+		previousKey, previousOpen := recorder.beginCommutativeScope(key)
+		s.AddBalance(addr, amount)
+		recorder.endCommutativeScope(previousKey, previousOpen)
+		return
+	}
+	s.AddBalance(addr, amount)
+}
+
 // SubBalance subtracts amount from the account's balance.
 func (s *StateDB) SubBalance(addr tcommon.Address, amount int64) error {
 	obj := s.getStateObject(addr)

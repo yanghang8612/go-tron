@@ -1562,7 +1562,7 @@ func (dp *DynamicProperties) AddBurnTrx(amount int64) {
 	if amount <= 0 {
 		return
 	}
-	dp.Set("burn_trx_amount", dp.readInt("burn_trx_amount")+amount)
+	dp.addCommutativeInt("burn_trx_amount", amount)
 }
 
 func (dp *DynamicProperties) MemoFee() int64     { return dp.readInt("memo_fee") }
@@ -1929,7 +1929,7 @@ func (dp *DynamicProperties) AddTransactionFeePool(amount int64) {
 	if amount <= 0 {
 		return
 	}
-	dp.Set("transaction_fee_pool", dp.readInt("transaction_fee_pool")+amount)
+	dp.addCommutativeInt("transaction_fee_pool", amount)
 }
 
 func (dp *DynamicProperties) TotalTransactionCost() int64 {
@@ -1942,7 +1942,7 @@ func (dp *DynamicProperties) AddTotalTransactionCost(amount int64) {
 	if amount == 0 {
 		return
 	}
-	dp.Set("total_transaction_cost", dp.readInt("total_transaction_cost")+amount)
+	dp.addCommutativeInt("total_transaction_cost", amount)
 }
 
 func (dp *DynamicProperties) TotalCreateAccountCost() int64 {
@@ -1955,7 +1955,7 @@ func (dp *DynamicProperties) AddTotalCreateAccountCost(amount int64) {
 	if amount == 0 {
 		return
 	}
-	dp.Set("total_create_account_cost", dp.readInt("total_create_account_cost")+amount)
+	dp.addCommutativeInt("total_create_account_cost", amount)
 }
 
 // TotalCreateWitnessCost returns the cumulative TRX (in SUN) burned to upgrade
@@ -1972,7 +1972,7 @@ func (dp *DynamicProperties) AddTotalCreateWitnessCost(amount int64) {
 	if amount == 0 {
 		return
 	}
-	dp.Set("total_create_witness_cost", dp.readInt("total_create_witness_cost")+amount)
+	dp.addCommutativeInt("total_create_witness_cost", amount)
 }
 
 func (dp *DynamicProperties) BlockFilledSlotsIndex() int64 {

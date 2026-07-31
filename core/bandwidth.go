@@ -309,7 +309,7 @@ func routeBandwidthFee(statedb *state.StateDB, dynProps *state.DynamicProperties
 		dynProps.AddBurnTrx(fee)
 		return
 	}
-	statedb.AddBalance(statedb.BlackholeAddress(), fee)
+	statedb.AddSettlementBalance(statedb.BlackholeAddress(), fee)
 }
 
 // contractCreatesNewAccount mirrors java-tron's
@@ -488,7 +488,7 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 	if dynProps.AllowBlackHoleOptimization() {
 		dynProps.AddBurnTrx(fee)
 	} else {
-		statedb.AddBalance(statedb.BlackholeAddress(), fee)
+		statedb.AddSettlementBalance(statedb.BlackholeAddress(), fee)
 	}
 	dynProps.AddTotalCreateAccountCost(fee)
 	return BandwidthResult{NetFee: fee}, nil

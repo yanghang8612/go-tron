@@ -145,7 +145,7 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 		ctx.DynProps.AddBurnTrx(bill)
 		return nil
 	}
-	ctx.State.AddBalance(ctx.State.BlackholeAddress(), bill)
+	ctx.State.AddSettlementBalance(ctx.State.BlackholeAddress(), bill)
 	return nil
 }
 

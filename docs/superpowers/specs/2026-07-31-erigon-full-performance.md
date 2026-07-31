@@ -275,6 +275,53 @@ development machine. Live sync profiling is the deployment gate before the
 next slice introduces discard-only workers and full journal/TransactionInfo
 comparison.
 
+#### P4.3: Ordered settlement-delta normalization
+
+The first P4.2 mainnet sample showed that generic OCC alone is not a useful
+worker boundary: shared fee settlement made only 3.86% of transactions valid
+on their block-start attempt. Account and DynamicProperties conflicts appeared
+in 98.8% and 96.5% of conflicted transactions respectively. Starting workers
+at that boundary would spend nearly all execution time replaying.
+
+P4.3 models the Erigon-style separation between transaction execution and
+ordered result application without changing canonical execution. Protocol
+helpers label only their internal read-modify-write as a commutative settlement
+access while continuing to execute the original serial mutation and journal:
+
+- TRX fees credited to the genesis blackhole account;
+- `burn_trx_amount` and `transaction_fee_pool`;
+- cumulative `total_transaction_cost`, `total_create_account_cost`, and
+  `total_create_witness_cost`.
+
+The generic access mode retains ordinary read/write bits independently from
+commutative read/write bits. If an actuator performs a real read of the same
+cell elsewhere in the transaction, both bits remain present and normalized
+validation still rejects a stale worker result. Ordinary transfers to the
+blackhole address are not inferred from the destination address and remain
+normal dependencies.
+
+The following state is deliberately excluded because it is not a blind delta
+at the transaction boundary: public bandwidth usage/time, account resource
+windows, resource weights, transaction-fee-pool block reward subtraction, and
+shielded-pool value (shielded validation reads the current value for bounds).
+The shielded TRC10 fee credit also stays conservative until account-KV
+generation and exact-row settlement are modelled together.
+
+The raw P4.2 validator remains unchanged. A second normalized validator ignores
+only a commutative helper's internal read-version mismatch, installs every
+write version in canonical order, and reports raw versus normalized first-pass
+validity overall and for VM/Transfer/other classes. Separate counters identify
+which settlement family caused a raw conflict and how many transactions become
+publishable under ordered delta application. This is still observe-only: no
+delta is extracted, no worker runs, and no result is published.
+
+On the local 64-transaction shared-settlement benchmark, canonical serial
+execution remained allocation-equivalent. Enabling raw plus normalized shadow
+validation added four allocations per batch and about 0.84 microseconds per
+transaction. Production normalized-validity and CPU evidence is the gate for
+extracting an explicit settlement-delta result and starting discard-only
+workers.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

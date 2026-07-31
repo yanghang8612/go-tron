@@ -25,7 +25,7 @@ func burnFee(ctx *Context, owner common.Address, fee int64) error {
 	if forks.IsActive(forks.AllowBlackholeOptimization, ctx.BlockNumber, ctx.DynProps) {
 		ctx.DynProps.AddBurnTrx(fee)
 	} else {
-		ctx.State.AddBalance(ctx.State.BlackholeAddress(), fee)
+		ctx.State.AddSettlementBalance(ctx.State.BlackholeAddress(), fee)
 	}
 	return nil
 }

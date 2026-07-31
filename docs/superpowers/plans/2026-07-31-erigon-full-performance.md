@@ -61,6 +61,11 @@
   code, metadata, witness, account-KV, and per-key DynamicProperties paths.
 - [x] Validate captured reads against a block-local version map and report
   first-pass validity/conflict families by VM, Transfer, and other contracts.
+- [x] Label only audited commutative fee/cumulative settlement operations and
+  measure raw versus ordered-delta-normalized first-pass validity without
+  changing canonical execution.
+- [ ] Extract normalized settlement writes into explicit per-transaction deltas
+  and apply them at ordered publication after serial-equivalence fixtures pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full
   journals plus TransactionInfo with the serial reference.
 - [ ] Implement a narrow disjoint-transfer speculative executor.
