@@ -1,5 +1,5 @@
 [Unit]
-Description=gtron full node
+Description=gtron mainnet full node
 After=network-online.target
 Wants=network-online.target
 
@@ -8,14 +8,15 @@ Type=simple
 User=java-tron
 Group=java-tron
 WorkingDirectory=/data/gtron/main
+UMask=0027
 
 Environment=ZCASH_PARAMS_DIR=/data/gtron/params
 
-# 32 GiB systemd 硬限制下，为 Pebble 原生内存和进程开销保留余量。
+# Go runtime
 Environment=GOMEMLIMIT=10GiB
 Environment=GOGC=200
 
-# 正常 P2P 同步使用 4 层流水线，降低提交等待。
+# Async commit pipeline
 Environment=GTRON_ASYNC_COMMIT_DEPTH=4
 
 ExecStart=/data/gtron/go-tron/build/bin/gtron \
@@ -60,16 +61,15 @@ SyslogIdentifier=gtron
 
 Restart=always
 RestartSec=10
+
 TimeoutStopSec=300
 KillSignal=SIGTERM
 
 LimitNOFILE=65536
 
-# 服务器为旧版 systemd，仅使用 MemorySoftLimit/MemoryLimit。
+# CentOS 7 / old systemd
 MemorySoftLimit=28G
 MemoryLimit=32G
-
-UMask=0027
 
 [Install]
 WantedBy=multi-user.target
