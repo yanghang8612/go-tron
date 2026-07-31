@@ -47,8 +47,12 @@ func TestCaptureTransactionWriteSetUsesFinalLogicalValues(t *testing.T) {
 	}
 
 	accountKey := TransactionAccessKey{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldBalance}
-	if value, ok := writes[accountKey]; !ok || !value.Exists || len(value.Value) == 0 {
+	if value, ok := writes[accountKey]; !ok || !value.Exists || len(value.Value) != 8 || int64(binary.BigEndian.Uint64(value.Value)) != 17 {
 		t.Fatalf("account balance path = %+v ok=%v", value, ok)
+	}
+	coarseAccountKey := TransactionAccessKey{Kind: TransactionAccessAccount, Address: addr}
+	if _, ok := writes[coarseAccountKey]; ok {
+		t.Fatal("typed scalar write set retained a coarse account post-image")
 	}
 	storageKey := TransactionAccessKey{Kind: TransactionAccessStorage, Address: addr, StorageKey: slot}
 	if value, ok := writes[storageKey]; !ok || !value.Exists || string(value.Value) != string(storageValue[:]) {
@@ -61,6 +65,48 @@ func TestCaptureTransactionWriteSetUsesFinalLogicalValues(t *testing.T) {
 	dynamicKey := TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: "energy_fee"}
 	if value, ok := writes[dynamicKey]; !ok || !value.Exists || len(value.Value) != 8 || int64(binary.BigEndian.Uint64(value.Value)) != 321 {
 		t.Fatalf("dynamic path = %x exists=%v ok=%v", value.Value, value.Exists, ok)
+	}
+}
+
+func TestCaptureTransactionWriteSetIgnoresUnrelatedPriorAccountFields(t *testing.T) {
+	base := newTestStateDB(t)
+	addr := testAddr(0xc4)
+	base.CreateAccount(addr, corepb.AccountType_Normal)
+	base.AddBalance(addr, 100)
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	captureBalance := func(sdb *StateDB, priorNetUsage int64) TransactionWriteSet {
+		t.Helper()
+		if priorNetUsage != 0 {
+			sdb.SetNetUsage(addr, priorNetUsage)
+		}
+		var recorder TransactionAccessRecorder
+		recorder.Reset(8)
+		sdb.SetTransactionAccessRecorder(&recorder)
+		mark := sdb.DomainChangeJournalMark()
+		sdb.AddBalance(addr, 7)
+		sdb.SetTransactionAccessRecorder(nil)
+		writes, known, err := sdb.CaptureTransactionWriteSet(mark, &recorder, NewDynamicProperties())
+		if err != nil || !known {
+			t.Fatalf("capture balance: known=%v err=%v", known, err)
+		}
+		return writes
+	}
+
+	canonical, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalWrites := captureBalance(canonical, 19)
+	workerWrites := captureBalance(worker, 0)
+	if !EqualTransactionWriteSets(canonicalWrites, workerWrites) {
+		t.Fatalf("typed balance write sets differ: canonical=%v worker=%v", canonicalWrites, workerWrites)
 	}
 }
 

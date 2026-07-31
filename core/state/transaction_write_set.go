@@ -48,6 +48,17 @@ func (s *StateDB) CaptureTransactionWriteSet(journalMark int, recorder *Transact
 		})
 	}
 	known = s.VisitTransactionAccessWritesSince(journalMark, func(key TransactionAccessKey) bool {
+		// accountScalarChange is deliberately coarse in the undo journal. When
+		// the inline recorder identified every scalar write, retain only those
+		// typed paths. Including the full Account post-image here would make an
+		// otherwise independent worker depend on unrelated fields changed by an
+		// earlier transaction in the block.
+		if key.Kind == TransactionAccessAccount && recorder != nil {
+			full, fields := recorder.AccountWriteCoverage(key.Address)
+			if fields && !full {
+				return true
+			}
+		}
 		appendTransactionWriteKey(keys, key)
 		return true
 	})
@@ -99,7 +110,7 @@ func boolTransactionWriteValue(value bool) TransactionWriteValue {
 
 func (s *StateDB) transactionWriteValue(key TransactionAccessKey, dynProps *DynamicProperties) (TransactionWriteValue, error) {
 	switch key.Kind {
-	case TransactionAccessAccount, TransactionAccessAccountField:
+	case TransactionAccessAccount:
 		obj := s.getStateObject(key.Address)
 		if obj == nil || obj.deleted {
 			return TransactionWriteValue{}, nil
@@ -109,6 +120,8 @@ func (s *StateDB) transactionWriteValue(key TransactionAccessKey, dynProps *Dyna
 			return TransactionWriteValue{}, fmt.Errorf("capture account %s: %w", key.Address.Hex(), err)
 		}
 		return ownedTransactionWriteValue(exists, encoded), nil
+	case TransactionAccessAccountField:
+		return s.accountFieldTransactionWriteValue(key.Address, key.AccountField)
 	case TransactionAccessWitness:
 		witness := s.GetWitness(key.Address)
 		if witness == nil {
@@ -177,6 +190,50 @@ func (s *StateDB) transactionWriteValue(key TransactionAccessKey, dynProps *Dyna
 		return ownedTransactionWriteValue(true, dynProps.latestBlockHeaderHash[:]), nil
 	default:
 		return TransactionWriteValue{}, fmt.Errorf("capture transaction writes: unsupported kind %d", key.Kind)
+	}
+}
+
+func (s *StateDB) accountFieldTransactionWriteValue(address tcommon.Address, field TransactionAccountField) (TransactionWriteValue, error) {
+	obj := s.getStateObject(address)
+	if obj == nil || obj.deleted || obj.account == nil {
+		return TransactionWriteValue{}, nil
+	}
+	account := obj.account
+	switch field {
+	case TransactionAccountFieldExistence:
+		return ownedTransactionWriteValue(true, nil), nil
+	case TransactionAccountFieldAccountType:
+		return int64TransactionWriteValue(int64(account.Type())), nil
+	case TransactionAccountFieldBalance:
+		return int64TransactionWriteValue(account.Balance()), nil
+	case TransactionAccountFieldAllowance:
+		return int64TransactionWriteValue(account.Allowance()), nil
+	case TransactionAccountFieldLatestWithdrawTime:
+		return int64TransactionWriteValue(account.LatestWithdrawTime()), nil
+	case TransactionAccountFieldNetUsage:
+		return int64TransactionWriteValue(account.NetUsage()), nil
+	case TransactionAccountFieldLatestOperationTime:
+		return int64TransactionWriteValue(account.LatestOperationTime()), nil
+	case TransactionAccountFieldLatestConsumeTime:
+		return int64TransactionWriteValue(account.LatestConsumeTime()), nil
+	case TransactionAccountFieldFreeNetUsage:
+		return int64TransactionWriteValue(account.FreeNetUsage()), nil
+	case TransactionAccountFieldLatestConsumeFreeTime:
+		return int64TransactionWriteValue(account.LatestConsumeFreeTime()), nil
+	case TransactionAccountFieldNetWindow:
+		var encoded [9]byte
+		binary.BigEndian.PutUint64(encoded[:8], uint64(account.RawNetWindowSize()))
+		if account.NetWindowOptimized() {
+			encoded[8] = 1
+		}
+		return ownedTransactionWriteValue(true, encoded[:]), nil
+	case TransactionAccountFieldFrozenResource:
+		// Resource state is currently read-only at this typed path; mutations
+		// are represented by their split AccountKV/full-account paths. Refuse a
+		// future unmodelled write instead of publishing an ambiguous value.
+		return TransactionWriteValue{}, fmt.Errorf("capture account %s: unsupported writable resource field", address.Hex())
+	default:
+		return TransactionWriteValue{}, fmt.Errorf("capture account %s: unsupported field %d", address.Hex(), field)
 	}
 }
 
