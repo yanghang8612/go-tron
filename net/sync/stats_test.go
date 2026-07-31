@@ -33,6 +33,38 @@ func TestStats_InitSessionSetsBothStartTimes(t *testing.T) {
 	}
 }
 
+func TestStatsObserveSpeedUsesRollingWeightedWindow(t *testing.T) {
+	stats := NewStats()
+	now := time.Unix(1_000, 0)
+
+	first := stats.ObserveSpeed(now, 8, 8*time.Second, 2*time.Minute)
+	if first.Samples != 1 || first.Average != 1 || first.Minimum != 1 || first.Maximum != 1 {
+		t.Fatalf("first speed summary = %+v, want one sample at 1 block/s", first)
+	}
+	second := stats.ObserveSpeed(now.Add(time.Minute), 32, 8*time.Second, 2*time.Minute)
+	if second.Samples != 2 || second.Average != 2.5 || second.Minimum != 1 || second.Maximum != 4 {
+		t.Fatalf("second speed summary = %+v, want avg=2.5 min=1 max=4", second)
+	}
+
+	// The first two samples have expired, leaving only the newest interval.
+	latest := stats.ObserveSpeed(now.Add(3*time.Minute+time.Second), 16, 8*time.Second, 2*time.Minute)
+	if latest.Samples != 1 || latest.Average != 2 || latest.Minimum != 2 || latest.Maximum != 2 {
+		t.Fatalf("pruned speed summary = %+v, want one sample at 2 blocks/s", latest)
+	}
+}
+
+func TestStatsInitSessionClearsSpeedHistory(t *testing.T) {
+	stats := NewStats()
+	now := time.Unix(2_000, 0)
+	stats.ObserveSpeed(now, 8, 8*time.Second, SpeedHistoryWindow)
+	stats.InitSession(now.Add(time.Minute))
+
+	summary := stats.ObserveSpeed(now.Add(2*time.Minute), 16, 8*time.Second, SpeedHistoryWindow)
+	if summary.Samples != 1 || summary.Average != 2 || summary.Minimum != 2 || summary.Maximum != 2 {
+		t.Fatalf("speed history survived session reset: %+v", summary)
+	}
+}
+
 func TestStats_AddBlockAccumulates(t *testing.T) {
 	s := NewStats()
 	s.InitSession(time.Unix(0, 0))

@@ -3386,8 +3386,29 @@ class NileSyncSampleTest(unittest.TestCase):
                         "blocks": 12,
                         "txs": 9,
                         "head": 112,
+                        "target": 115,
+                        "progress": 97.39,
                         "remain": 3,
                         "elapsed": "2s",
+                        "blocks/s": 6.25,
+                        "txs/s": 4.5,
+                        "speedWindow": "5m0s",
+                        "avgBlocks/s": 5.75,
+                        "minBlocks/s": 3.25,
+                        "maxBlocks/s": 8.5,
+                        "peers": 3,
+                        "activePeers": 2,
+                        "inflight": 16,
+                        "buffered": 8,
+                        "requested": 16,
+                        "retries": 1,
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "lvl": "debug",
+                        "msg": "Imported chain segment details",
                         "execElapsed": "1500ms",
                         "applyElapsed": "1700ms",
                         "statePrefetchEnqueued": 12,
@@ -3396,8 +3417,6 @@ class NileSyncSampleTest(unittest.TestCase):
                         "statePrefetchHits": 8,
                         "statePrefetchMisses": 3,
                         "statePrefetchErrors": 0,
-                        "blocks/s": 6.25,
-                        "txs/s": 4.5,
                         "slowPhase": "stateCommit",
                         "slowElapsed": "900ms",
                         "slowStateCommitPhase": "flatWrite",
@@ -3454,11 +3473,23 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogSegmentBlocks"], 12)
             self.assertEqual(row["syncLogSegmentTxs"], 9)
             self.assertEqual(row["syncLogSegmentHead"], 112)
+            self.assertEqual(row["syncLogSegmentTarget"], 115)
+            self.assertEqual(row["syncLogSegmentProgress"], 97.39)
             self.assertEqual(row["syncLogSegmentRemain"], 3)
             self.assertEqual(row["syncLogSegmentElapsed"], "2s")
             self.assertEqual(row["syncLogSegmentExecElapsed"], "1500ms")
             self.assertEqual(row["syncLogSegmentApplyElapsed"], "1700ms")
             self.assertEqual(row["syncLogBlocksPerSecond"], 6.25)
+            self.assertEqual(row["syncLogSpeedWindow"], "5m0s")
+            self.assertEqual(row["syncLogAverageBlocksPerSecond"], 5.75)
+            self.assertEqual(row["syncLogMinimumBlocksPerSecond"], 3.25)
+            self.assertEqual(row["syncLogMaximumBlocksPerSecond"], 8.5)
+            self.assertEqual(row["syncLogPeers"], 3)
+            self.assertEqual(row["syncLogActivePeers"], 2)
+            self.assertEqual(row["syncLogInflight"], 16)
+            self.assertEqual(row["syncLogBuffered"], 8)
+            self.assertEqual(row["syncLogRequested"], 16)
+            self.assertEqual(row["syncLogRetries"], 1)
             self.assertEqual(row["syncLogSlowPhase"], "stateCommit")
             self.assertEqual(row["syncLogSlowElapsed"], "900ms")
             self.assertEqual(row["syncLogSlowStateCommitPhase"], "flatWrite")

@@ -38,6 +38,27 @@ type Snapshot struct {
 	TxKinds map[string]int
 }
 
+// SpeedHistoryWindow is the operator-facing rolling interval used for recent
+// sync speed averages and extrema.
+const SpeedHistoryWindow = 5 * time.Minute
+
+// SpeedSummary describes block import speed over a rolling observation
+// window. Average is weighted by each reporting interval's elapsed time;
+// Minimum and Maximum are the slowest and fastest individual report windows.
+type SpeedSummary struct {
+	Window  time.Duration
+	Samples int
+	Average float64
+	Minimum float64
+	Maximum float64
+}
+
+type speedSample struct {
+	at      time.Time
+	blocks  int
+	elapsed time.Duration
+}
+
 // Stats wraps the rolling-window accumulator behind its own mutex. SyncService
 // holds a *Stats and forwards onApplyStats / drain-time bookkeeping into the
 // AddX methods. Emission of the throttled "Imported chain segment" line is
@@ -48,8 +69,9 @@ type Snapshot struct {
 // onApplyStats path is the only writer that does NOT also hold ss.mu, which is
 // safe because Stats serializes its own state.
 type Stats struct {
-	mu  sync.Mutex
-	cur Snapshot
+	mu           sync.Mutex
+	cur          Snapshot
+	speedSamples []speedSample
 }
 
 // NewStats returns a fresh zero-valued accumulator. Both startTime and
@@ -65,6 +87,49 @@ func (s *Stats) InitSession(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cur = Snapshot{StartTime: now, TotalStart: now}
+	s.speedSamples = nil
+}
+
+// ObserveSpeed adds one completed report window and returns recent weighted
+// average, minimum, and maximum block rates. Samples older than window are
+// discarded; the current sample is always retained when its elapsed time is
+// positive.
+func (s *Stats) ObserveSpeed(now time.Time, blocks int, elapsed, window time.Duration) SpeedSummary {
+	if elapsed <= 0 || window <= 0 {
+		return SpeedSummary{Window: window}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.speedSamples = append(s.speedSamples, speedSample{at: now, blocks: blocks, elapsed: elapsed})
+	cutoff := now.Add(-window)
+	first := 0
+	for first < len(s.speedSamples) && s.speedSamples[first].at.Before(cutoff) {
+		first++
+	}
+	if first > 0 {
+		copy(s.speedSamples, s.speedSamples[first:])
+		s.speedSamples = s.speedSamples[:len(s.speedSamples)-first]
+	}
+
+	summary := SpeedSummary{Window: window, Samples: len(s.speedSamples)}
+	var totalBlocks int
+	var totalElapsed time.Duration
+	for i, sample := range s.speedSamples {
+		rate := float64(sample.blocks) * float64(time.Second) / float64(sample.elapsed)
+		if i == 0 || rate < summary.Minimum {
+			summary.Minimum = rate
+		}
+		if i == 0 || rate > summary.Maximum {
+			summary.Maximum = rate
+		}
+		totalBlocks += sample.blocks
+		totalElapsed += sample.elapsed
+	}
+	if totalElapsed > 0 {
+		summary.Average = float64(totalBlocks) * float64(time.Second) / float64(totalElapsed)
+	}
+	return summary
 }
 
 // AddApplyBlock folds one block's per-phase wall-clock breakdown into the

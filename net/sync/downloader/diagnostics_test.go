@@ -32,6 +32,9 @@ func TestNewDiagnosticsSortsPeerState(t *testing.T) {
 	if diag.BlockBufferLen != 3 || diag.RequestedLen != 4 || diag.RetryListLen != 5 {
 		t.Fatalf("counts = %d/%d/%d, want 3/4/5", diag.BlockBufferLen, diag.RequestedLen, diag.RetryListLen)
 	}
+	if diag.PeerCount != 2 || diag.ActivePeerCount != 1 || diag.Inflight != 2 {
+		t.Fatalf("peer counts = %d/%d inflight=%d, want 2/1 inflight=2", diag.PeerCount, diag.ActivePeerCount, diag.Inflight)
+	}
 	want := "peer-a{inflight=0 fetchList=1 pending=0 remain=0 chainRequested=false done=true};" +
 		"peer-b{inflight=2 fetchList=7 pending=1 remain=9 chainRequested=true done=false}"
 	if diag.PeerState != want {
@@ -47,6 +50,9 @@ func TestNewDiagnosticsOmitsEmptyPeerIDs(t *testing.T) {
 	want := "peer{inflight=0 fetchList=0 pending=0 remain=0 chainRequested=false done=true}"
 	if diag.PeerState != want {
 		t.Fatalf("PeerState = %q, want %q", diag.PeerState, want)
+	}
+	if diag.PeerCount != 1 || diag.ActivePeerCount != 0 || diag.Inflight != 0 {
+		t.Fatalf("empty peer ID affected aggregates: %+v", diag)
 	}
 }
 

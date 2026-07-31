@@ -62,6 +62,32 @@ gtron \
 to both sinks. Startup arguments are logged for incident reconstruction after
 secret-bearing flag values have been redacted.
 
+## Sync progress logs
+
+At info level, `Imported chain segment` is a compact operator status line. It
+reports the current and target heights (`head`, `target`, `progress`,
+`remain`), current throughput (`blocks/s`, `txs/s`), the recent five-minute
+speed range (`speedWindow`, `avgBlocks/s`, `minBlocks/s`, `maxBlocks/s`),
+`eta`, and peer/queue health (`peers`, `activePeers`,
+`inflight`, `buffered`, `requested`, `retries`). The `blocks`, `txs`, and
+`elapsed` values describe the latest reporting window, not the whole session.
+The recent average is weighted by elapsed time; minimum and maximum are the
+slowest and fastest individual reporting intervals still inside the window.
+
+Execution-phase, state-commit, mutation, prefetch, transaction-mix, peer-state,
+and staged-import planner fields are emitted separately as `Imported chain
+segment details` at debug level. Enable them only while collecting a sync
+diagnostic sample:
+
+```bash
+gtron ... --log.module net/sync=debug
+```
+
+The normal info configuration does not construct or emit the large detail
+record. Existing parsers can continue matching `Imported chain segment`; the
+Nile sampling script merges an immediately following debug detail record into
+the corresponding summary when debug logging is enabled.
+
 ## Runtime debugging
 
 pprof remains separately controlled by `--pprof.addr` and `--pprof.port`.

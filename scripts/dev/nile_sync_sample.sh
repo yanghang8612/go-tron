@@ -1712,6 +1712,24 @@ def imported_segment_fields_from_line(line):
     fields = parse_logfmt_fields(text)
     return fields if fields else {}
 
+def imported_segment_detail_fields_from_line(line):
+    text = line.strip()
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            msg = obj.get("msg") or obj.get("message") or ""
+            if msg == "Imported chain segment details":
+                return obj
+            return None
+    except Exception:
+        pass
+    if "Imported chain segment details" not in text:
+        return None
+    fields = parse_logfmt_fields(text)
+    return fields if fields else {}
+
 def startup_repair_fields_from_line(line):
     text = line.strip()
     if not text:
@@ -1738,12 +1756,24 @@ def parse_sync_log(path):
         "syncLogSegmentBlocks": -1,
         "syncLogSegmentTxs": -1,
         "syncLogSegmentHead": -1,
+        "syncLogSegmentTarget": -1,
+        "syncLogSegmentProgress": -1.0,
         "syncLogSegmentRemain": -1,
         "syncLogSegmentElapsed": "",
         "syncLogSegmentExecElapsed": "",
         "syncLogSegmentApplyElapsed": "",
         "syncLogBlocksPerSecond": -1.0,
         "syncLogTxsPerSecond": -1.0,
+        "syncLogSpeedWindow": "",
+        "syncLogAverageBlocksPerSecond": -1.0,
+        "syncLogMinimumBlocksPerSecond": -1.0,
+        "syncLogMaximumBlocksPerSecond": -1.0,
+        "syncLogPeers": -1,
+        "syncLogActivePeers": -1,
+        "syncLogInflight": -1,
+        "syncLogBuffered": -1,
+        "syncLogRequested": -1,
+        "syncLogRetries": -1,
         "syncLogSlowPhase": "",
         "syncLogSlowElapsed": "",
         "syncLogSlowStateCommitPhase": "",
@@ -1892,6 +1922,9 @@ def parse_sync_log(path):
         if fields is not None:
             count += 1
             latest = fields
+        detail_fields = imported_segment_detail_fields_from_line(line)
+        if detail_fields is not None and latest is not None:
+            latest.update(detail_fields)
         startup_fields = startup_repair_fields_from_line(line)
         if startup_fields is not None:
             startup_count += 1
@@ -1963,12 +1996,24 @@ def parse_sync_log(path):
         "blocks": "syncLogSegmentBlocks",
         "txs": "syncLogSegmentTxs",
         "head": "syncLogSegmentHead",
+        "target": "syncLogSegmentTarget",
+        "progress": "syncLogSegmentProgress",
         "remain": "syncLogSegmentRemain",
         "elapsed": "syncLogSegmentElapsed",
         "execElapsed": "syncLogSegmentExecElapsed",
         "applyElapsed": "syncLogSegmentApplyElapsed",
         "blocks/s": "syncLogBlocksPerSecond",
         "txs/s": "syncLogTxsPerSecond",
+        "speedWindow": "syncLogSpeedWindow",
+        "avgBlocks/s": "syncLogAverageBlocksPerSecond",
+        "minBlocks/s": "syncLogMinimumBlocksPerSecond",
+        "maxBlocks/s": "syncLogMaximumBlocksPerSecond",
+        "peers": "syncLogPeers",
+        "activePeers": "syncLogActivePeers",
+        "inflight": "syncLogInflight",
+        "buffered": "syncLogBuffered",
+        "requested": "syncLogRequested",
+        "retries": "syncLogRetries",
         "slowPhase": "syncLogSlowPhase",
         "slowElapsed": "syncLogSlowElapsed",
         "slowStateCommitPhase": "syncLogSlowStateCommitPhase",

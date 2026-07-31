@@ -2825,58 +2825,62 @@ func (ss *SyncService) snapshotDiagnosticsLocked() syncdl.Diagnostics {
 // reportSegment emits the throttled "Imported chain segment" summary. Called
 // without ss.mu held.
 func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, head uint64, remain int64, peer *p2p.Peer) {
-	elapsed := time.Since(s.StartTime)
+	now := time.Now()
+	elapsed := now.Sub(s.StartTime)
 	if elapsed <= 0 {
 		elapsed = 1
 	}
 	blocksPerSec := float64(s.Blocks) * float64(time.Second) / float64(elapsed)
 	txsPerSec := float64(s.Txs) * float64(time.Second) / float64(elapsed)
-
+	speed := ss.stats.ObserveSpeed(now, s.Blocks, elapsed, tsync.SpeedHistoryWindow)
+	target := head
+	if remain > 0 && uint64(remain) <= ^uint64(0)-head {
+		target += uint64(remain)
+	}
+	progress := 100.0
+	if target > 0 {
+		progress = float64(head) * 100 / float64(target)
+	}
 	ctx := []any{
+		"head", head,
+		"target", target,
+		"progress", round2(progress),
+		"remain", remain,
 		"blocks", s.Blocks,
 		"txs", s.Txs,
 		"elapsed", ethcommon.PrettyDuration(elapsed),
-		"execElapsed", ethcommon.PrettyDuration(s.ExecElapsed),
-		"applyElapsed", ethcommon.PrettyDuration(s.ApplyStats.Total()),
 		"blocks/s", round2(blocksPerSec),
 		"txs/s", round2(txsPerSec),
-		"head", head,
-		"remain", remain,
+		"speedWindow", ethcommon.PrettyDuration(speed.Window),
+		"avgBlocks/s", round2(speed.Average),
+		"minBlocks/s", round2(speed.Minimum),
+		"maxBlocks/s", round2(speed.Maximum),
+		"peers", diag.PeerCount,
+		"activePeers", diag.ActivePeerCount,
+		"inflight", diag.Inflight,
+		"buffered", diag.BlockBufferLen,
+		"requested", diag.RequestedLen,
+		"retries", diag.RetryListLen,
 	}
-	if phase, elapsed := slowestApplyPhase(s.ApplyStats); phase != "" {
-		ctx = append(ctx, "slowPhase", phase, "slowElapsed", ethcommon.PrettyDuration(elapsed))
-	}
-	if phase, elapsed := slowestStateCommitPhase(s.ApplyStats); phase != "" {
-		ctx = append(ctx, "slowStateCommitPhase", phase, "slowStateCommitElapsed", ethcommon.PrettyDuration(elapsed))
-	}
-	ctx = diag.AppendImportPlanLogFields(ctx)
-	topMutations := s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(3)
-	if topMutations == "" {
-		topMutations = "none"
-	}
-	ctx = append(ctx, "stateMutTop", topMutations)
-	topKVDomains := s.ApplyStats.StateCommitDetail.Mutations.TopKVDomainsString(3)
-	if topKVDomains == "" {
-		topKVDomains = "none"
-	}
-	ctx = append(ctx, "stateMutKVTop", topKVDomains)
-	txTop := tsync.TopTxKindsString(s.TxKinds, 5)
-	if txTop == "" {
-		txTop = "none"
-	}
-	ctx = append(ctx, "txTop", txTop)
 	if blocksPerSec > 0 && remain > 0 {
 		etaSec := float64(remain) / blocksPerSec
 		ctx = append(ctx, "eta", ethcommon.PrettyDuration(time.Duration(etaSec*float64(time.Second))))
 	}
-	if peer != nil {
-		ctx = append(ctx, "peer", peer.ID())
-	}
 	syncLog.Info("Imported chain segment", ctx...)
 
+	// Detailed execution diagnostics are intentionally opt-in. Besides keeping
+	// the normal operator log compact, this guard avoids building a large field
+	// slice on every reporting interval when net/sync debug logging is disabled.
+	if !syncLog.DebugEnabled() {
+		return
+	}
 	detail := []any{
 		"blocks", s.Blocks,
+		"txs", s.Txs,
 		"head", head,
+		"elapsed", ethcommon.PrettyDuration(elapsed),
+		"execElapsed", ethcommon.PrettyDuration(s.ExecElapsed),
+		"applyElapsed", ethcommon.PrettyDuration(s.ApplyStats.Total()),
 		"bufferWaitElapsed", ethcommon.PrettyDuration(s.BufferWaitElapsed),
 		"validate", ethcommon.PrettyDuration(s.ApplyStats.Validate),
 		"execute", ethcommon.PrettyDuration(s.ApplyStats.Execute),
@@ -2917,8 +2921,6 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"stateMutKVPuts", s.ApplyStats.StateCommitDetail.Mutations.KVPutItems,
 		"stateMutKVDeletes", s.ApplyStats.StateCommitDetail.Mutations.KVDeleteItems,
 		"stateMutKVNoops", s.ApplyStats.StateCommitDetail.Mutations.KVNoopItems,
-		"stateMutTop", s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(10),
-		"stateMutKVTop", s.ApplyStats.StateCommitDetail.Mutations.TopKVDomainsString(10),
 		"dpUpdate", ethcommon.PrettyDuration(s.ApplyStats.DPUpdate),
 		"persist", ethcommon.PrettyDuration(s.ApplyStats.Persist),
 		"hooks", ethcommon.PrettyDuration(s.ApplyStats.Hooks),
@@ -2926,7 +2928,29 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"requested", diag.RequestedLen,
 		"retryList", diag.RetryListLen,
 	}
+	if phase, phaseElapsed := slowestApplyPhase(s.ApplyStats); phase != "" {
+		detail = append(detail, "slowPhase", phase, "slowElapsed", ethcommon.PrettyDuration(phaseElapsed))
+	}
+	if phase, phaseElapsed := slowestStateCommitPhase(s.ApplyStats); phase != "" {
+		detail = append(detail, "slowStateCommitPhase", phase, "slowStateCommitElapsed", ethcommon.PrettyDuration(phaseElapsed))
+	}
+	topMutations := s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(10)
+	if topMutations == "" {
+		topMutations = "none"
+	}
+	topKVDomains := s.ApplyStats.StateCommitDetail.Mutations.TopKVDomainsString(10)
+	if topKVDomains == "" {
+		topKVDomains = "none"
+	}
+	txTop := tsync.TopTxKindsString(s.TxKinds, 5)
+	if txTop == "" {
+		txTop = "none"
+	}
+	detail = append(detail, "stateMutTop", topMutations, "stateMutKVTop", topKVDomains, "txTop", txTop)
 	detail = diag.AppendImportPlanLogFields(detail)
+	if peer != nil {
+		detail = append(detail, "peer", peer.ID())
+	}
 	if diag.PeerState != "" {
 		detail = append(detail, "peerState", diag.PeerState)
 	}

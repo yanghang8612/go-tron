@@ -77,34 +77,58 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "Imported chain segment") {
+	var summary, detail string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "Imported chain segment details") {
+			detail = line
+		} else if strings.Contains(line, "Imported chain segment") {
+			summary = line
+		}
+	}
+	if summary == "" {
 		t.Fatalf("expected 'Imported chain segment' summary line, got:\n%s", out)
 	}
 	for _, k := range []string{
+		"head=",
+		"target=",
+		"progress=",
+		"remain=",
 		"blocks=",
 		"txs=",
 		"elapsed=",
-		"execElapsed=",
-		"applyElapsed=",
-		"slowPhase=",
-		"slowElapsed=",
-		"slowStateCommitPhase=",
-		"slowStateCommitElapsed=",
-		"syncStageComplete=",
-		"syncStageCompleted=",
-		"syncStageScheduled=",
-		"stateMutTop=",
-		"stateMutKVTop=",
 		"blocks/s=",
-		"head=",
-		"peer=",
+		"txs/s=",
+		"avgBlocks/s=",
+		"peers=",
+		"activePeers=",
+		"inflight=",
+		"buffered=",
+		"requested=",
+		"retries=",
 	} {
-		if !strings.Contains(out, k) {
-			t.Errorf("missing key %q in summary line:\n%s", k, out)
+		if !strings.Contains(summary, k) {
+			t.Errorf("missing key %q in summary line:\n%s", k, summary)
 		}
 	}
 	for _, k := range []string{
-		"Imported chain segment details",
+		"execElapsed=",
+		"applyElapsed=",
+		"statePrefetchEnqueued=",
+		"slowPhase=",
+		"syncStageComplete=",
+		"stateMutTop=",
+		"peer=",
+	} {
+		if strings.Contains(summary, k) {
+			t.Errorf("diagnostic key %q leaked into compact summary:\n%s", k, summary)
+		}
+	}
+	if detail == "" {
+		t.Fatalf("expected debug detail line, got:\n%s", out)
+	}
+	for _, k := range []string{
+		"execElapsed=",
+		"applyElapsed=",
 		"bufferWaitElapsed=",
 		"validate=",
 		"execute=",
@@ -156,8 +180,45 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"inflight=",
 		"fetchList=",
 	} {
-		if !strings.Contains(out, k) {
-			t.Errorf("missing key %q in summary line:\n%s", k, out)
+		if !strings.Contains(detail, k) {
+			t.Errorf("missing key %q in detail line:\n%s", k, detail)
+		}
+	}
+}
+
+func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
+	var buf bytes.Buffer
+	prev := gtronlog.Root()
+	defer gtronlog.SetDefault(prev)
+	h := gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelInfo)
+	gtronlog.SetDefault(gtronlog.NewLogger(h))
+
+	start := time.Now().Add(-2 * time.Second)
+	(&SyncService{stats: tsync.NewStats()}).reportSegment(tsync.Snapshot{
+		StartTime:   start,
+		TotalStart:  start.Add(-8 * time.Second),
+		Blocks:      20,
+		Txs:         40,
+		TotalBlocks: 80,
+	}, syncdl.NewDiagnostics(3, 4, 1, []syncdl.PeerDiagnostics{
+		{ID: "active", Inflight: 2},
+		{ID: "done", Done: true},
+	}), 90, 10, nil)
+
+	out := buf.String()
+	for _, field := range []string{
+		"head=90", "target=100", "progress=90", "remain=10",
+		"speedWindow=5m0s", "avgBlocks/s=10", "minBlocks/s=10", "maxBlocks/s=10",
+		"peers=2", "activePeers=1", "inflight=2",
+		"buffered=3", "requested=4", "retries=1", "eta=",
+	} {
+		if !strings.Contains(out, field) {
+			t.Errorf("missing operational field %q:\n%s", field, out)
+		}
+	}
+	for _, field := range []string{"Imported chain segment details", "execElapsed=", "stateCommit=", "peerState="} {
+		if strings.Contains(out, field) {
+			t.Errorf("diagnostic field %q emitted at info level:\n%s", field, out)
 		}
 	}
 }

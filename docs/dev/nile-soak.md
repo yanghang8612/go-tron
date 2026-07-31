@@ -211,9 +211,18 @@ endpoint error.
 
 When `--sync-log-file` points at the gtron runtime log, the sampler parses the
 latest `Imported chain segment` summary and emits `syncLog*` fields. These
-include the segment throughput (`syncLogSegmentBlocks`, `syncLogSegmentTxs`,
-`syncLogBlocksPerSecond`, `syncLogTxsPerSecond`, `syncLogSegmentHead`,
-`syncLogSegmentRemain`), the observed stage planner result
+always include the compact operational status: segment throughput
+(`syncLogSegmentBlocks`, `syncLogSegmentTxs`, `syncLogBlocksPerSecond`,
+`syncLogTxsPerSecond`, `syncLogSpeedWindow`,
+`syncLogAverageBlocksPerSecond`, `syncLogMinimumBlocksPerSecond`,
+`syncLogMaximumBlocksPerSecond`), progress
+(`syncLogSegmentHead`, `syncLogSegmentTarget`, `syncLogSegmentProgress`,
+`syncLogSegmentRemain`), and peer/queue health (`syncLogPeers`,
+`syncLogActivePeers`, `syncLogInflight`, `syncLogBuffered`,
+`syncLogRequested`, `syncLogRetries`). When `net/sync=debug` is enabled, the
+sampler merges the immediately following `Imported chain segment details`
+record into the same sample. Those optional diagnostic fields include the
+observed stage planner result
 (`syncLogStageComplete`, `syncLogStageCompleted`, `syncLogStageScheduled`,
 `syncLogStageIncomplete`, `syncLogStageCompletionRatio`,
 `syncLogStageTasksPerBlock`, `syncLogStageCompletedPerBlock`,

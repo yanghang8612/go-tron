@@ -20,6 +20,9 @@ type PeerDiagnostics struct {
 // Diagnostics is the lock-free sync-session snapshot consumed by import
 // summary logging.
 type Diagnostics struct {
+	PeerCount                              int
+	ActivePeerCount                        int
+	Inflight                               int
 	BlockBufferLen                         int
 	RequestedLen                           int
 	RetryListLen                           int
@@ -103,6 +106,11 @@ func NewDiagnostics(blockBufferLen, requestedLen, retryListLen int, peers []Peer
 		if peer.ID == "" {
 			continue
 		}
+		diag.PeerCount++
+		if !peer.Done {
+			diag.ActivePeerCount++
+		}
+		diag.Inflight += peer.Inflight
 		parts = append(parts, fmt.Sprintf("%s{inflight=%d fetchList=%d pending=%d remain=%d chainRequested=%t done=%t}",
 			peer.ID, peer.Inflight, peer.FetchListLen, peer.PendingLen, peer.RemainNum, peer.ChainRequested, peer.Done))
 	}
