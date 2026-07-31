@@ -116,6 +116,18 @@ func TestStateDomainReadersUseAtomicPresenceCapability(t *testing.T) {
 	}
 }
 
+func TestStateReaderClassifiedMissSkipsPresenceProbe(t *testing.T) {
+	reader := &classifiedMissingStateReader{}
+	owner := stateKVTestAddress(0x41, 0x91)
+
+	if generation, ok, err := ReadStateKVGeneration(reader, owner); err != nil || ok || generation != 0 {
+		t.Fatalf("ReadStateKVGeneration = %d/%v/%v, want 0/false/nil", generation, ok, err)
+	}
+	if reader.hasCalls != 0 {
+		t.Fatalf("Has calls = %d, want 0 for classified miss", reader.hasCalls)
+	}
+}
+
 type failingStateDomainReader struct {
 	reader ethdb.KeyValueReader
 	hasErr error
@@ -126,6 +138,29 @@ type atomicPresenceStateReader struct {
 	reader      ethdb.KeyValueReader
 	atomicReads int
 	hasCalls    int
+}
+
+type classifiedMissingStateReader struct {
+	hasCalls int
+}
+
+var errClassifiedStateMissing = errors.New("classified state missing")
+
+func (r *classifiedMissingStateReader) GetNoCopyCached([]byte) ([]byte, error) {
+	return nil, errClassifiedStateMissing
+}
+
+func (r *classifiedMissingStateReader) IsKeyNotFound(err error) bool {
+	return errors.Is(err, errClassifiedStateMissing)
+}
+
+func (r *classifiedMissingStateReader) Has([]byte) (bool, error) {
+	r.hasCalls++
+	return false, nil
+}
+
+func (r *classifiedMissingStateReader) Get([]byte) ([]byte, error) {
+	return nil, errClassifiedStateMissing
 }
 
 func (r *atomicPresenceStateReader) GetWithPresence(key []byte) ([]byte, bool, error) {

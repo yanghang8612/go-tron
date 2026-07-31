@@ -17,6 +17,7 @@ import (
 type countingKeyValueReader struct {
 	ethdb.KeyValueReader
 	gets  int
+	has   int
 	views int
 }
 
@@ -773,6 +774,11 @@ func (r *countingKeyValueReader) Get(key []byte) ([]byte, error) {
 	return r.KeyValueReader.Get(key)
 }
 
+func (r *countingKeyValueReader) Has(key []byte) (bool, error) {
+	r.has++
+	return r.KeyValueReader.Has(key)
+}
+
 func (r *countingKeyValueReader) View(key []byte, fn func([]byte) error) error {
 	r.gets++
 	r.views++
@@ -807,6 +813,29 @@ func TestGetNoCopyCached_CachesConfirmedDurableMiss(t *testing.T) {
 	}
 	if got, err := b.GetNoCopyCached(key); err != nil || string(got) != "updated" {
 		t.Fatalf("overlay read = (%q,%v), want (updated,nil)", got, err)
+	}
+}
+
+func TestHasUsesConfirmedBaseCacheMiss(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	counting := &countingKeyValueReader{KeyValueReader: disk}
+	base := &classifiedMissingReader{countingKeyValueReader: counting}
+	b := New(base)
+	b.SetBaseReadCacheSize(1 << 20)
+	key := []byte("absent-state-row")
+
+	// The cache's two-hit admission policy admits the second observed miss.
+	for i := 0; i < 2; i++ {
+		if value, err := b.GetNoCopyCached(key); value != nil || err != ErrNotFound {
+			t.Fatalf("read %d = (%v,%v), want (nil,ErrNotFound)", i+1, value, err)
+		}
+	}
+	before := counting.has
+	if ok, err := b.Has(key); err != nil || ok {
+		t.Fatalf("Has = %v/%v, want false/nil", ok, err)
+	}
+	if counting.has != before {
+		t.Fatalf("durable Has calls advanced from %d to %d on cached miss", before, counting.has)
 	}
 }
 

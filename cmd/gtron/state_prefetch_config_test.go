@@ -45,6 +45,28 @@ func TestApplyStatePrefetchConfig_DefaultsOff(t *testing.T) {
 	}
 }
 
+func TestApplyStatePrefetchConfig_PreservesNetworkDefault(t *testing.T) {
+	ctx := makeStatePrefetchFlagSet(t, nil)
+	cfg := &params.ChainConfig{StatePrefetchEnabled: true, StatePrefetchWorkers: 4, StatePrefetchLookahead: 8}
+	if err := applyStatePrefetchConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyStatePrefetchConfig: %v", err)
+	}
+	if !cfg.StatePrefetchEnabled || cfg.StatePrefetchWorkers != 4 || cfg.StatePrefetchLookahead != 8 {
+		t.Fatalf("network defaults changed: enabled=%v workers=%d lookahead=%d", cfg.StatePrefetchEnabled, cfg.StatePrefetchWorkers, cfg.StatePrefetchLookahead)
+	}
+}
+
+func TestApplyStatePrefetchConfig_CanDisableNetworkDefault(t *testing.T) {
+	ctx := makeStatePrefetchFlagSet(t, []string{"--state.prefetch.enabled=false"})
+	cfg := &params.ChainConfig{StatePrefetchEnabled: true, StatePrefetchWorkers: 4, StatePrefetchLookahead: 8}
+	if err := applyStatePrefetchConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyStatePrefetchConfig: %v", err)
+	}
+	if cfg.StatePrefetchEnabled {
+		t.Fatal("explicit false did not disable the network default")
+	}
+}
+
 func TestApplyStatePrefetchConfig_TOML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gtron.toml")

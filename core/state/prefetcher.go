@@ -350,7 +350,7 @@ func prefetchLatest(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
 	}
 	switch key.Kind {
 	case PrefetchAccountLatest:
-		_, ok, err := rawdb.ReadStateAccountLatest(db, key.Owner)
+		_, ok, err := rawdb.ReadStateAccountLatestNoCopy(db, key.Owner)
 		return ok, err
 	case PrefetchAccountKVLatest:
 		if !kvdomains.IsRegistered(key.Domain) {
@@ -360,7 +360,7 @@ func prefetchLatest(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
 		if err != nil || !ok {
 			return false, err
 		}
-		_, ok, err = rawdb.ReadStateKVLatest(db, key.Owner, generation, key.Domain, key.Key)
+		_, ok, err = rawdb.ReadStateKVLatestNoCopy(db, key.Owner, generation, key.Domain, key.Key)
 		return ok, err
 	case PrefetchContractStorage:
 		generation, ok, err := prefetchGeneration(db, key)
@@ -372,7 +372,7 @@ func prefetchLatest(db ethdb.KeyValueReader, key PrefetchKey) (bool, error) {
 			return false, err
 		}
 		rowKey := javaStorageRowKey(key.Owner, key.Slot, meta)
-		_, ok, err = rawdb.ReadStateKVLatest(db, key.Owner, generation, kvdomains.ContractStorage, rowKey.Bytes())
+		_, ok, err = rawdb.ReadStateKVLatestNoCopy(db, key.Owner, generation, kvdomains.ContractStorage, rowKey.Bytes())
 		return ok, err
 	case PrefetchContractCode:
 		return prefetchContractCode(db, key.Owner)
@@ -401,7 +401,7 @@ func prefetchGeneration(db ethdb.KeyValueReader, key PrefetchKey) (uint64, bool,
 }
 
 func prefetchContractMetadata(db ethdb.KeyValueReader, owner tcommon.Address, generation uint64) (*contractpb.SmartContract, error) {
-	data, ok, err := rawdb.ReadStateKVLatest(db, owner, generation, kvdomains.ContractMetadata, contractMetaKVKey)
+	data, ok, err := rawdb.ReadStateKVLatestNoCopy(db, owner, generation, kvdomains.ContractMetadata, contractMetaKVKey)
 	if err != nil || !ok || len(data) == 0 {
 		return nil, err
 	}
@@ -413,7 +413,7 @@ func prefetchContractMetadata(db ethdb.KeyValueReader, owner tcommon.Address, ge
 }
 
 func prefetchContractCode(db ethdb.KeyValueReader, owner tcommon.Address) (bool, error) {
-	data, ok, err := rawdb.ReadStateAccountLatest(db, owner)
+	data, ok, err := rawdb.ReadStateAccountLatestNoCopy(db, owner)
 	if err != nil || !ok || len(data) == 0 {
 		return false, err
 	}
@@ -438,7 +438,7 @@ func prefetchContractOriginAccount(db ethdb.KeyValueReader, key PrefetchKey) (bo
 	if !ok {
 		return false, nil
 	}
-	_, ok, err = rawdb.ReadStateAccountLatest(db, origin)
+	_, ok, err = rawdb.ReadStateAccountLatestNoCopy(db, origin)
 	return ok, err
 }
 
@@ -460,7 +460,7 @@ func prefetchExchangeTokenAssets(db ethdb.KeyValueReader, key PrefetchKey) (bool
 		exchangeKVKey(exchangeKVDiscriminatorV2, exchangeID),
 		exchangeKVKey(exchangeKVDiscriminatorV1, exchangeID),
 	} {
-		data, ok, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemExchange, rowKey)
+		data, ok, err := rawdb.ReadStateKVLatestNoCopy(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemExchange, rowKey)
 		if err != nil {
 			return hit, err
 		}
@@ -501,7 +501,7 @@ func prefetchTRC10AssetRows(db ethdb.KeyValueReader, generation uint64, token []
 			}
 			seen[id] = struct{}{}
 		}
-		if _, _, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemAsset, row); err != nil {
+		if _, _, err := rawdb.ReadStateKVLatestNoCopy(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemAsset, row); err != nil {
 			return err
 		}
 	}
@@ -509,7 +509,7 @@ func prefetchTRC10AssetRows(db ethdb.KeyValueReader, generation uint64, token []
 }
 
 func prefetchOwnerIssuedAssetRows(db ethdb.KeyValueReader, owner tcommon.Address) (bool, error) {
-	data, ok, err := rawdb.ReadStateAccountLatest(db, owner)
+	data, ok, err := rawdb.ReadStateAccountLatestNoCopy(db, owner)
 	if err != nil || !ok || len(data) == 0 {
 		return false, err
 	}
@@ -545,7 +545,7 @@ func prefetchMarketMatchOrders(db ethdb.KeyValueReader, key PrefetchKey) (bool, 
 		return false, err
 	}
 
-	priceListData, ok, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemMarket, marketPriceListKVKey(buyToken, sellToken))
+	priceListData, ok, err := rawdb.ReadStateKVLatestNoCopy(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemMarket, marketPriceListKVKey(buyToken, sellToken))
 	if err != nil || !ok || len(priceListData) == 0 {
 		return false, err
 	}
@@ -569,7 +569,7 @@ func prefetchMarketMatchOrders(db ethdb.KeyValueReader, key PrefetchKey) (bool, 
 			break
 		}
 		pk := rawdb.PriceKey(price.GetSellTokenQuantity(), price.GetBuyTokenQuantity())
-		orderBookData, ok, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemMarket, marketOrderBookKVKey(buyToken, sellToken, pk))
+		orderBookData, ok, err := rawdb.ReadStateKVLatestNoCopy(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemMarket, marketOrderBookKVKey(buyToken, sellToken, pk))
 		if err != nil {
 			return hit, err
 		}
@@ -587,7 +587,7 @@ func prefetchMarketMatchOrders(db ethdb.KeyValueReader, key PrefetchKey) (bool, 
 				break
 			}
 			seenOrders[orderKey] = struct{}{}
-			orderData, ok, err := rawdb.ReadStateKVLatest(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemMarket, marketOrderKVKey(orderID))
+			orderData, ok, err := rawdb.ReadStateKVLatestNoCopy(db, tcommon.SystemAccountAddress, generation, kvdomains.SystemMarket, marketOrderKVKey(orderID))
 			if err != nil {
 				return hit, err
 			}

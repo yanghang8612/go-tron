@@ -539,6 +539,16 @@ func isKeyNotFound(base ethdb.KeyValueReader, err error) bool {
 	return ok && classifier.IsKeyNotFound(err)
 }
 
+// IsKeyNotFound exposes the classification already used by the durable-base
+// cache. State accessors use it after an optimistic no-copy Get so a confirmed
+// negative-cache result does not trigger a redundant Has against Pebble.
+func (b *Buffer) IsKeyNotFound(err error) bool {
+	if b == nil {
+		return errors.Is(err, ErrNotFound)
+	}
+	return isKeyNotFound(b.base, err)
+}
+
 // stringKeyWriter is an optional synchronous writer fast path for layer maps,
 // which already own immutable string keys. Implementations must copy key before
 // returning. Pebble batches satisfy it with DeferredBatchOp, copying the string
@@ -1869,6 +1879,15 @@ func (b *Buffer) Has(key []byte) (bool, error) {
 	}
 	if b.base == nil {
 		return false, nil
+	}
+	// A base-cache entry is authoritative after overlay lookup. This includes
+	// negative entries populated by a preceding optimistic Get, which is the
+	// common state-hydration miss path. Avoid reissuing the same Pebble point
+	// lookup as Has merely to confirm the cached result.
+	if cache := view.baseReadCache; cache != nil {
+		if value, cached, _ := cache.getWithEpoch(key); cached {
+			return value != nil, nil
+		}
 	}
 	return b.base.Has(key)
 }

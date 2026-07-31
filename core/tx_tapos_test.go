@@ -2,12 +2,14 @@ package core
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 func testVMKVTaposStore(t testing.TB) (vmKVStore, []byte, []byte) {
@@ -39,6 +41,48 @@ func TestVMKVStoreSplitReadFallback(t *testing.T) {
 	store := vmKVStore{BufferedKVStore: db}
 	if got, err := store.GetNoCopyCachedKeyParts(first, second); err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("fallback split read = (%q,%v), want (%q,nil)", got, err, want)
+	}
+}
+
+type vmKVStateCacheForwardProbe struct {
+	ethdb.KeyValueStore
+	accountReads int
+	kvReads      int
+	missing      error
+}
+
+func (p *vmKVStateCacheForwardProbe) GetNoCopyCachedStateAccountLatest([]byte, tcommon.AccountID) ([]byte, error) {
+	p.accountReads++
+	return []byte("account-envelope"), nil
+}
+
+func (p *vmKVStateCacheForwardProbe) GetNoCopyCachedStateKVLatest([]byte, tcommon.AccountID, uint64, uint16, []byte) ([]byte, error) {
+	p.kvReads++
+	return rawdb.EncodeStateKVLatestValue([]byte("reward-value")), nil
+}
+
+func (p *vmKVStateCacheForwardProbe) IsKeyNotFound(err error) bool {
+	return errors.Is(err, p.missing)
+}
+
+func TestVMKVStoreForwardsStateCacheReads(t *testing.T) {
+	probe := &vmKVStateCacheForwardProbe{KeyValueStore: rawdb.NewMemoryDatabase(), missing: errors.New("missing")}
+	store := vmKVStore{BufferedKVStore: probe}
+	owner := tcommon.BytesToAddress([]byte{0x41, 0x77})
+
+	account, ok, err := rawdb.ReadStateAccountLatestNoCopy(store, owner)
+	if err != nil || !ok || !bytes.Equal(account, []byte("account-envelope")) {
+		t.Fatalf("account latest = %q/%v/%v", account, ok, err)
+	}
+	value, ok, err := rawdb.ReadStateKVLatestNoCopy(store, owner, 3, kvdomains.SystemReward, []byte("reward"))
+	if err != nil || !ok || !bytes.Equal(value, []byte("reward-value")) {
+		t.Fatalf("state kv latest = %q/%v/%v", value, ok, err)
+	}
+	if probe.accountReads != 1 || probe.kvReads != 1 {
+		t.Fatalf("forwarded reads account=%d kv=%d, want 1/1", probe.accountReads, probe.kvReads)
+	}
+	if !store.IsKeyNotFound(probe.missing) {
+		t.Fatal("missing-key classifier was not forwarded")
 	}
 }
 

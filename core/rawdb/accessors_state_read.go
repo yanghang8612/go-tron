@@ -21,6 +21,14 @@ type cachedNoCopyKeyValueReader interface {
 	GetNoCopyCached(key []byte) ([]byte, error)
 }
 
+// keyNotFoundClassifier lets a reader identify its native missing-key error.
+// Layered readers already have to classify durable backend misses before they
+// can safely negative-cache them, so asking the same reader here avoids a
+// second Has point lookup solely to rediscover that classification.
+type keyNotFoundClassifier interface {
+	IsKeyNotFound(error) bool
+}
+
 func readStateNoCopyCached(db ethdb.KeyValueReader, key []byte) ([]byte, error) {
 	if cached, ok := db.(cachedNoCopyKeyValueReader); ok {
 		return cached.GetNoCopyCached(key)
@@ -59,6 +67,9 @@ func readStatePresentNoCopy(db ethdb.KeyValueReader, key []byte, context string)
 func verifyStateReadMiss(db ethdb.KeyValueReader, key []byte, context string, readErr error) ([]byte, bool, error) {
 	if db == nil {
 		return nil, false, fmt.Errorf("rawdb: nil database while reading %s", context)
+	}
+	if classifier, ok := db.(keyNotFoundClassifier); ok && classifier.IsKeyNotFound(readErr) {
+		return nil, false, nil
 	}
 	exists, err := db.Has(key)
 	if err != nil {

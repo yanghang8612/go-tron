@@ -25,6 +25,15 @@ lookahead = 8     # 0 = default
 The default is `enabled = false`. Leaving it off exactly recovers the
 pre-prefetch block execution path.
 
+The 2026-07-31 default-on candidate was rejected before deployment. On the
+Apple M1 Max heavy/hot-state benchmark, the five-sample baseline was roughly
+2.59 ms/block while the 2-4 worker variants were roughly 5.35-5.51 ms/block;
+allocations grew from roughly 16.4k to 47.6k per block. Cold-state latency
+improved substantially, but production profiling showed a 99% Pebble block
+cache hit rate, so the hot-state regression is the relevant rollout gate. The
+session-scoped redesign must remove this worker/key-extraction overhead before
+another default-on attempt.
+
 ## Benchmarking
 
 Run the repeatable ProcessBlock benchmark harness before changing defaults:

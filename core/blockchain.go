@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -3084,6 +3085,63 @@ type vmKVStore struct {
 
 type cachedNoCopyKeyPartsReader interface {
 	GetNoCopyCachedKeyParts(first, second []byte) ([]byte, error)
+}
+
+type cachedNoCopyKeyReader interface {
+	GetNoCopyCached(key []byte) ([]byte, error)
+}
+
+type cachedNoCopyStateAccountLatestReader interface {
+	GetNoCopyCachedStateAccountLatest(prefix []byte, accountID tcommon.AccountID) ([]byte, error)
+}
+
+type cachedNoCopyStateKVLatestReader interface {
+	GetNoCopyCachedStateKVLatest(prefix []byte, accountID tcommon.AccountID, generation uint64, domain uint16, logicalKey []byte) ([]byte, error)
+}
+
+type keyNotFoundClassifier interface {
+	IsKeyNotFound(error) bool
+}
+
+// GetNoCopyCached preserves the blockbuffer's shared durable-state cache
+// through the VM wrapper. State prefetch runs against vmKVStore; without this
+// forwarding method its reads warmed only Pebble's block cache instead of the
+// exact in-process cache probed by canonical execution.
+func (s vmKVStore) GetNoCopyCached(key []byte) ([]byte, error) {
+	if reader, ok := s.BufferedKVStore.(cachedNoCopyKeyReader); ok {
+		return reader.GetNoCopyCached(key)
+	}
+	return s.BufferedKVStore.Get(key)
+}
+
+func (s vmKVStore) GetNoCopyCachedStateAccountLatest(prefix []byte, accountID tcommon.AccountID) ([]byte, error) {
+	if reader, ok := s.BufferedKVStore.(cachedNoCopyStateAccountLatestReader); ok {
+		return reader.GetNoCopyCachedStateAccountLatest(prefix, accountID)
+	}
+	key := make([]byte, 0, len(prefix)+tcommon.AccountIDLength)
+	key = append(key, prefix...)
+	key = append(key, accountID[:]...)
+	return s.BufferedKVStore.Get(key)
+}
+
+func (s vmKVStore) GetNoCopyCachedStateKVLatest(prefix []byte, accountID tcommon.AccountID, generation uint64, domain uint16, logicalKey []byte) ([]byte, error) {
+	if reader, ok := s.BufferedKVStore.(cachedNoCopyStateKVLatestReader); ok {
+		return reader.GetNoCopyCachedStateKVLatest(prefix, accountID, generation, domain, logicalKey)
+	}
+	key := make([]byte, 0, len(prefix)+tcommon.AccountIDLength+10+len(logicalKey))
+	key = append(key, prefix...)
+	key = append(key, accountID[:]...)
+	var numeric [10]byte
+	binary.BigEndian.PutUint64(numeric[:8], generation)
+	binary.BigEndian.PutUint16(numeric[8:], domain)
+	key = append(key, numeric[:]...)
+	key = append(key, logicalKey...)
+	return s.BufferedKVStore.Get(key)
+}
+
+func (s vmKVStore) IsKeyNotFound(err error) bool {
+	classifier, ok := s.BufferedKVStore.(keyNotFoundClassifier)
+	return ok && classifier.IsKeyNotFound(err)
 }
 
 // GetNoCopyCachedKeyParts preserves optional split-read capabilities across
