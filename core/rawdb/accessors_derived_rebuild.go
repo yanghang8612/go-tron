@@ -244,8 +244,11 @@ func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethd
 	if interrupted != nil && interrupted() {
 		return nil, ErrTransactionLookupRebuildInterrupted
 	}
-	stats, err := collector.Load(writer)
+	stats, err := collector.LoadInterruptible(writer, interrupted)
 	if err != nil {
+		if errors.Is(err, etl.ErrLoadInterrupted) {
+			return nil, ErrTransactionLookupRebuildInterrupted
+		}
 		return nil, err
 	}
 	result.ETL = stats

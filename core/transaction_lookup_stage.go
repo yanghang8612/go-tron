@@ -8,6 +8,11 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
 
+// Keep each in-memory tx-hash sort comfortably below the 64 MiB generic ETL
+// default. TxLookup batches can contain around a million transactions; smaller
+// runs bound both stop latency and stable-cache pressure before the k-way load.
+const transactionLookupETLDefaultBufferLimit = 8 << 20
+
 // TransactionLookupStageResult reports one bounded TxLookup stage pass.
 // Advanced is false when the derived index already covers the verified Finish
 // boundary. Rebuilt is nil in that case.
@@ -130,7 +135,11 @@ func (bc *BlockChain) AdvanceTransactionLookupStageInterruptible(maxBlocks uint6
 		toBlock = fromBlock + maxBlocks - 1
 	}
 
-	rebuilt, err := rawdb.RebuildTransactionLookupFromBlocksInterruptible(bc.chaindb, bc.db, fromBlock, toBlock, bc.transactionLookupETLOptions, interrupted)
+	etlOptions := bc.transactionLookupETLOptions
+	if etlOptions.BufferLimit <= 0 {
+		etlOptions.BufferLimit = transactionLookupETLDefaultBufferLimit
+	}
+	rebuilt, err := rawdb.RebuildTransactionLookupFromBlocksInterruptible(bc.chaindb, bc.db, fromBlock, toBlock, etlOptions, interrupted)
 	if err != nil {
 		return TransactionLookupStageResult{}, fmt.Errorf("tx lookup stage: rebuild [%d,%d]: %w", fromBlock, toBlock, err)
 	}

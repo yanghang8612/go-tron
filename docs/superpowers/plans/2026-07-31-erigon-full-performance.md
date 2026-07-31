@@ -50,7 +50,7 @@
 - [x] Move deterministic latest-state key extraction and eligible reads ahead
   of the serial executor.
 - [x] Replace TxLookup stage per-block Has+Get point reads with freezer range
-  reads / one ordered Pebble iterator and make unpublished ETL scans stoppable.
+  reads / one ordered Pebble iterator, bounded sort runs, and stoppable ETL.
 - [ ] Parallelize derived receipt/log/trace encoding behind recoverable stages.
 
 ## P4: Conflict-aware execution

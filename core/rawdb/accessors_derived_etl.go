@@ -48,6 +48,15 @@ func (c *DerivedIndexCollector) Load(db ethdb.KeyValueWriter) (etl.Stats, error)
 	return c.collector.Load(db)
 }
 
+// LoadInterruptible cooperatively aborts a recoverable derived-stage load.
+// Callers must advance their stage watermark only after a successful return.
+func (c *DerivedIndexCollector) LoadInterruptible(db ethdb.KeyValueWriter, interrupted func() bool) (etl.Stats, error) {
+	if c == nil || c.collector == nil {
+		return etl.Stats{}, errors.New("rawdb: nil derived index collector")
+	}
+	return c.collector.LoadInterruptible(db, interrupted)
+}
+
 func (c *DerivedIndexCollector) PutTransactionInfo(txID []byte, info *corepb.TransactionInfo) error {
 	if c == nil || c.collector == nil {
 		return errors.New("rawdb: nil derived index collector")

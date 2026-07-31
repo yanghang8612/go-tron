@@ -25,6 +25,7 @@ const (
 var (
 	ErrCollectorClosed = errors.New("etl: collector closed")
 	ErrCollectorLoaded = errors.New("etl: collector already loaded")
+	ErrLoadInterrupted = errors.New("etl: load interrupted")
 )
 
 // Options configures a Collector. TempDir is a parent directory; Collector
@@ -128,6 +129,15 @@ func (c *Collector) Delete(key []byte) error {
 // Load writes the collected final state to writer in key order. Load can be
 // called once; call Close afterwards to remove temporary run files.
 func (c *Collector) Load(writer ethdb.KeyValueWriter) (Stats, error) {
+	return c.LoadInterruptible(writer, nil)
+}
+
+// LoadInterruptible is Load with a cooperative stop check. A stopped load
+// keeps the collector retryable and never marks it loaded. The target may have
+// received earlier completed batches, matching the collector's existing
+// crash-recovery contract; callers publish their stage watermark only after a
+// successful return and rerun idempotently otherwise.
+func (c *Collector) LoadInterruptible(writer ethdb.KeyValueWriter, interrupted func() bool) (Stats, error) {
 	if writer == nil {
 		return c.stats, errors.New("etl: nil writer")
 	}
@@ -137,14 +147,28 @@ func (c *Collector) Load(writer ethdb.KeyValueWriter) (Stats, error) {
 	if c.loaded {
 		return c.stats, ErrCollectorLoaded
 	}
+	if interrupted != nil && interrupted() {
+		return c.stats, ErrLoadInterrupted
+	}
 	if err := c.spillBuffer(); err != nil {
 		return c.stats, err
 	}
+	if interrupted != nil && interrupted() {
+		return c.stats, ErrLoadInterrupted
+	}
+	loadStartStats := c.stats
 	applier := newApplier(writer, c.opts.BatchSize)
 	defer applier.close()
 
-	if err := c.mergeRuns(applier); err != nil {
+	if err := c.mergeRuns(applier, interrupted); err != nil {
+		if errors.Is(err, ErrLoadInterrupted) {
+			c.stats = loadStartStats
+		}
 		return c.stats, err
+	}
+	if interrupted != nil && interrupted() {
+		c.stats = loadStartStats
+		return c.stats, ErrLoadInterrupted
 	}
 	if err := applier.flush(); err != nil {
 		return c.stats, err
@@ -246,7 +270,7 @@ func (c *Collector) spillBuffer() error {
 	return nil
 }
 
-func (c *Collector) mergeRuns(applier *applier) error {
+func (c *Collector) mergeRuns(applier *applier, interrupted func() bool) error {
 	readers := make([]*runReader, 0, len(c.runFiles))
 	for i, path := range c.runFiles {
 		rr, err := openRunReader(path, i)
@@ -292,7 +316,12 @@ func (c *Collector) mergeRuns(applier *applier) error {
 		return nil
 	}
 
+	var merged uint64
 	for h.Len() > 0 {
+		if merged&1023 == 0 && interrupted != nil && interrupted() {
+			return ErrLoadInterrupted
+		}
+		merged++
 		rr := heap.Pop(&h).(*runReader)
 		e := rr.current
 		if !haveGroup {
@@ -321,7 +350,10 @@ func (c *Collector) mergeRuns(applier *applier) error {
 }
 
 func sortEntries(entries []entry) {
-	sort.SliceStable(entries, func(i, j int) bool {
+	// key+sequence is already a total order, so stability adds no semantics.
+	// The unstable implementation is substantially cheaper for million-row
+	// derived-index runs while preserving latest-operation collapse exactly.
+	sort.Slice(entries, func(i, j int) bool {
 		if cmp := bytes.Compare(entries[i].key, entries[j].key); cmp != 0 {
 			return cmp < 0
 		}

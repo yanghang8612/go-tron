@@ -181,7 +181,8 @@ func TestRebuildTransactionLookupFromBlocksInterruptsBeforePublish(t *testing.T)
 		BufferLimit: 1,
 	}, func() bool {
 		polls++
-		return polls > 1
+		// Let both rows scan and interrupt inside the ETL load boundary.
+		return polls > 3
 	})
 	if !errors.Is(err, ErrTransactionLookupRebuildInterrupted) || result != nil {
 		t.Fatalf("interrupted rebuild result=%+v err=%v", result, err)

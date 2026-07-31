@@ -147,10 +147,18 @@ drain for more than four minutes while rebuilding transaction hashes. The
 stage now reads a contiguous freezer range followed by one ordered `b-` prefix
 iterator for the hot suffix, validates every expected number/protobuf, and
 feeds the existing key-sorted ETL collector without changing its watermark
-semantics. Stop requests interrupt between block rows before ETL publication;
-partial or interrupted scans leave the prior watermark authoritative and are
-safe to rerun. Metrics separate ancient/hot rows, transactions, passes,
-interruptions, and elapsed time under `sync/stage/tx_lookup/`.
+semantics. TxLookup bounds individual in-memory sorts at 8 MiB, and the ETL
+collector uses its existing key-plus-sequence total order with ordinary
+`sort.Slice`; stable sort added cost without changing duplicate collapse.
+Stop requests interrupt between block rows and during k-way ETL merge. Partial
+or interrupted work leaves the prior watermark authoritative and is safe to
+rerun. Metrics separate ancient/hot rows, transactions, passes, interruptions,
+and elapsed time under `sync/stage/tx_lookup/`.
+
+The first sequential-reader production window processed 1,099 hot blocks and
+99,132 transactions in 1.266 seconds (about 78,300 transactions/second), with
+zero stage interruptions or errors. The prior point-read/stable-sort path had
+been observed inside one 4,096-block pass for more than four minutes.
 
 The first implemented slice follows Erigon's separation between pure
 preprocessing and ordered execution without introducing another worker pool:
@@ -887,6 +895,13 @@ fixed-workload comparison. Public-limit fallbacks, publication/preflight
 errors, and sampled info/write/apply/ordered/balance mismatches all remained
 zero. The `rebased` counter added for the next window isolates the exact
 incremental publications from workload mix.
+
+That counter's first window covered 47,877 pre-executed transfers and 14,008
+publications. Of those, 6,468 (46.2%) used an ordered baseline different from
+block start and therefore would have conflicted on the old public usage/time
+paths. Holding this exact workload constant, publication increased from about
+7,540 to 14,008 (85.8%); public-limit, preflight, and publication errors stayed
+zero.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
