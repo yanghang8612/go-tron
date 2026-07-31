@@ -99,8 +99,9 @@ func ApplyTransactionWithResourceSlotAndEnergyFork(statedb *state.StateDB, dynPr
 // applyTransactionScratch owns the per-block actuator objects whose contents
 // are consumed synchronously before processBlock advances to the next tx.
 type applyTransactionScratch struct {
-	context actuator.Context
-	result  actuator.Result
+	context                  actuator.Context
+	result                   actuator.Result
+	dynamicPropertiesChanged bool
 }
 
 func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer) (result *actuator.Result, err error) {
@@ -108,6 +109,9 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 }
 
 func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache, tracer vm.Tracer, scratch *applyTransactionScratch, internalTxArena *vm.InternalTransactionArena, executionLogArena *vm.ExecutionLogArena) (result *actuator.Result, err error) {
+	if scratch != nil {
+		scratch.dynamicPropertiesChanged = false
+	}
 	var revertOnOverflow func()
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -319,6 +323,9 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	result.OwnerFrozenForNet = ownerSnap.FrozenForNet
 	result.OwnerFrozenForEnergy = ownerSnap.FrozenForEnergy
 
+	if scratch != nil {
+		scratch.dynamicPropertiesChanged = dynProps.SnapshotChanged(dpSnap)
+	}
 	dynProps.CommitSnapshot(dpSnap)
 	return result, nil
 }
@@ -786,6 +793,11 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	accountStateMark := statedb.JournalMark()
 	var txScratch applyTransactionScratch
 	transactions := block.Transactions()
+	shadowEnabled := txInfoBatch != nil && validateEnvelope
+	var transferShadow speculativeTransferShadow
+	if shadowEnabled {
+		transferShadow.Prepare(len(transactions))
+	}
 	var txInfoSlots []transactionInfoSlot
 	if txInfoBatch != nil {
 		preparedSlots, preparedInfos := txInfoBatch.prepare(len(transactions))
@@ -854,6 +866,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		result.Logs = nil
 		statedb.FinalizeTransaction()
 		statedb.EndBalanceTraceTransaction(balanceTraceStatus)
+		if shadowEnabled {
+			transferShadow.Observe(tx, statedb, domainChangeMark, txScratch.dynamicPropertiesChanged)
+		}
 		if domainChanges != nil {
 			if err := domainChanges.FlushOrdinal(domainChangeMark, uint64(i)); err != nil {
 				return nil, tcommon.Hash{}, fmt.Errorf("tx %d domain changes: %w", i, err)
@@ -902,6 +917,9 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		// cycleReward stale when the in-block witness set changes.
 		payStandbyWitnessWithSet(db, statedb, dynProps, nil)
 		payTransactionFeeReward(db, statedb, dynProps, witnessAddr)
+	}
+	if shadowEnabled {
+		transferShadow.Publish()
 	}
 
 	return txInfos, javaAccountStateRoot, nil

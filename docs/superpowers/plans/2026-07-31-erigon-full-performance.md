@@ -53,8 +53,12 @@
 
 ## P4: Conflict-aware execution
 
-- [ ] Define the physical/logical transaction read/write-set schema.
-- [ ] Add serial shadow capture and deterministic journal comparison.
+- [x] Define the logical transaction write-cell schema over the authoritative
+  StateDB journal, with conservative unknown-entry handling.
+- [x] Add an observe-only Transfer wave planner using actual serial writes,
+  dynamic-property barriers, and address dependency detection.
+- [ ] Execute eligible waves in discard-only shadow workers and compare full
+  journals plus TransactionInfo with the serial reference.
 - [ ] Implement a narrow disjoint-transfer speculative executor.
 - [ ] Replay conflicts serially and publish only in original transaction order.
 - [ ] Expand eligibility by actuator family using java-tron fixtures and fixed

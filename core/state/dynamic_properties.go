@@ -1297,6 +1297,15 @@ func (dp *DynamicProperties) Snapshot() int {
 	return id
 }
 
+// SnapshotChanged reports whether a real dynamic-property mutation was
+// journaled since snapshot id. Callers must query it before CommitSnapshot:
+// committing a nested transaction compacts duplicate property pre-images into
+// the parent block snapshot, which intentionally loses the per-transaction
+// boundary. This observation is read-only and does not affect rollback.
+func (dp *DynamicProperties) SnapshotChanged(id int) bool {
+	return dp != nil && id >= 0 && id < len(dp.snapshots) && len(dp.journal) > dp.snapshots[id]
+}
+
 // RevertToSnapshot restores every dynamic-property mutation made since id.
 // Like StateDB.RevertToSnapshot, it also discards id and all snapshots nested
 // inside it.

@@ -188,6 +188,48 @@ Initial parallel eligibility will be intentionally narrow: simple transfers
 with disjoint accounts and no shared fee/resource/system keys. Coverage expands
 only with fixture and mainnet replay evidence.
 
+#### P4.1: Authoritative-journal shadow planner
+
+The first implementation slice is observe-only. It copies Erigon's separation
+between transaction-local writes and conflict resolution, but derives the write
+identity from go-tron's existing authoritative undo journal after serial
+execution. It therefore cannot change a block result while the safe subset is
+being measured.
+
+`StateDB.VisitTransactionWritesSince` exposes allocation-free logical write
+cells for account, account creation, account-KV, KV generation, storage, code,
+contract metadata, witness, self-destruct, transient storage, and dynamic
+property mutations. Unknown future journal entries are explicit unsafe cells,
+never silently ignored. DynamicProperties separately reports whether a nested
+transaction snapshot changed a chain-global property before its undo entries
+are compacted into the block snapshot.
+
+The initial Transfer access model has two read/write account cells (owner and
+recipient) plus read-only block/TAPOS/fork configuration. A serially successful
+transfer is shadow-eligible only when:
+
+- both addresses already exist and are distinct;
+- the actual journal contains account writes for both addresses and no other
+  state family or address;
+- no dynamic property changed, which excludes public/free-bandwidth counters,
+  fee-pool/burn counters, and other shared accounting;
+- no account creation, blackhole/system account, multi-sign/memo fee, or
+  unknown write was observed.
+
+Non-transfer transactions and unsafe transfers close the current wave. Address
+overlap between otherwise eligible transfers starts a new wave, preserving
+canonical order. Metrics report candidates, eligible/unsafe transactions,
+barriers, dependencies, wave count, transactions in width-greater-than-one
+waves, and the last block's maximum width. The planner is enabled only on the
+canonical, envelope-validating block path and never runs for RPC replay or
+engine-less fixtures.
+
+This slice deliberately does not run speculative workers. The next gate is to
+execute one shadow wave against an immutable parent snapshot, compare its full
+journal and TransactionInfo with the serial reference, discard it
+unconditionally, and collect mismatch/overhead evidence before any publication
+path exists.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

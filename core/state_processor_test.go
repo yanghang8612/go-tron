@@ -110,7 +110,7 @@ func TestBuildTransactionInfoFromOpcodeLogTopics(t *testing.T) {
 	}
 }
 
-func newTestState(t *testing.T) *state.StateDB {
+func newTestState(t testing.TB) *state.StateDB {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
