@@ -133,6 +133,7 @@ type TransactionAccessRecorder struct {
 	accountFieldWrites   map[tcommon.Address]struct{}
 	commutativeDeltas    map[TransactionAccessKey]int64
 	rawKVWrites          map[TransactionAccessKey]TransactionWriteValue
+	rawKVKeys            map[string]string
 	unsupported          bool
 	commutativeScopeKey  TransactionAccessKey
 	commutativeScopeOpen bool
@@ -312,19 +313,30 @@ func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domai
 	r.accesses[lookup] = mode
 }
 
-func (r *TransactionAccessRecorder) recordRawKV(key []byte, mode TransactionAccessMode) {
+func (r *TransactionAccessRecorder) recordRawKV(key []byte, mode TransactionAccessMode) string {
 	if r == nil {
-		return
+		return ""
 	}
 	if r.accesses == nil {
 		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, 16)
 	}
-	// Raw Context.DB calls are rare compared with typed StateDB accesses. Own
-	// the key on every call: a Go map update may replace the stored string
-	// header with the lookup key, so using a borrowed []byte-to-string view on
-	// repeats could leave the read set aliasing actuator scratch memory.
-	owned := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: string(key)}
-	r.accesses[owned] |= mode
+	// The recorder lives for one block and Reset only starts a new transaction.
+	// Intern raw physical keys across those transactions: TAPOS and BLOCKHASH
+	// repeatedly probe the same small set, so this owns each key once per block
+	// instead of allocating a string for every transaction. The borrowed view is
+	// lookup-only; both maps retain the stable owned string.
+	if r.rawKVKeys == nil {
+		r.rawKVKeys = make(map[string]string, 16)
+	}
+	borrowed := borrowedBytesString(key)
+	stable, ok := r.rawKVKeys[borrowed]
+	if !ok {
+		stable = string(key)
+		r.rawKVKeys[stable] = stable
+	}
+	accessKey := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: stable}
+	r.accesses[accessKey] |= mode
+	return stable
 }
 
 // RecordRawKVRead adds a direct Context.DB read to the transaction's versioned
@@ -340,11 +352,11 @@ func (r *TransactionAccessRecorder) RecordRawKVPut(key, value []byte) {
 	if r == nil {
 		return
 	}
-	r.recordRawKV(key, TransactionAccessWrite)
+	stable := r.recordRawKV(key, TransactionAccessWrite)
 	if r.rawKVWrites == nil {
 		r.rawKVWrites = make(map[TransactionAccessKey]TransactionWriteValue, 4)
 	}
-	writeKey := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: string(key)}
+	writeKey := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: stable}
 	r.rawKVWrites[writeKey] = ownedTransactionWriteValue(true, value)
 }
 
@@ -354,11 +366,11 @@ func (r *TransactionAccessRecorder) RecordRawKVDelete(key []byte) {
 	if r == nil {
 		return
 	}
-	r.recordRawKV(key, TransactionAccessWrite)
+	stable := r.recordRawKV(key, TransactionAccessWrite)
 	if r.rawKVWrites == nil {
 		r.rawKVWrites = make(map[TransactionAccessKey]TransactionWriteValue, 4)
 	}
-	writeKey := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: string(key)}
+	writeKey := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: stable}
 	r.rawKVWrites[writeKey] = TransactionWriteValue{}
 }
 

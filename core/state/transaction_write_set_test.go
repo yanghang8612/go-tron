@@ -214,4 +214,12 @@ func TestCaptureTransactionWriteSetIncludesRawKVPostImages(t *testing.T) {
 	if value, ok := writes[deleted]; !ok || value.Exists || value.Value != nil {
 		t.Fatalf("raw delete = %+v ok=%v", value, ok)
 	}
+	if len(recorder.rawKVKeys) != 2 {
+		t.Fatalf("raw key interner size = %d, want 2", len(recorder.rawKVKeys))
+	}
+	recorder.Reset(8)
+	recorder.RecordRawKVRead([]byte("raw-put"))
+	if len(recorder.rawKVKeys) != 2 {
+		t.Fatalf("raw key interner grew across transaction reset: %d", len(recorder.rawKVKeys))
+	}
 }

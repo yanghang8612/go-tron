@@ -599,6 +599,15 @@ an exercised immutable direct-DB path from an unobserved path. This remains obse
 that adding raw keys preserves the 100% result/WriteSet sample and ordered
 publication can apply every typed family safely.
 
+The first raw-key production sample covered 413,166 transactions and recorded
+416,127 raw read cells (1.007 per transaction), with zero raw writes and zero
+raw conflicts. This confirms the live direct-DB surface is effectively the
+immutable TAPOS/block-index lookup rather than hidden mutable actuator state.
+Across the same deployment, 385/385 sampled workers matched both complete
+TransactionInfo and the combined typed/raw WriteSet. Repeated physical keys are
+interned once per block and reused across transaction recorder resets, avoiding
+one string allocation per TAPOS validation while preserving owned-key lifetime.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
