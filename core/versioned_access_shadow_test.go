@@ -308,6 +308,23 @@ func TestEstimateDependencyDAGTiming(t *testing.T) {
 	}
 }
 
+func TestEstimateDependencyReadyQueueTiming(t *testing.T) {
+	var shadow versionedAccessShadow
+	shadow.Prepare(6)
+	shadow.addDependency(5, 4)
+	timing := estimateDependencyReadyQueueTiming(
+		[]int64{10, 20, 30, 40, 50, 7},
+		shadow.dependencyHeads,
+		shadow.dependencyEdges,
+	)
+	if timing.criticalPathNanos != 57 {
+		t.Fatalf("critical path duration = %d, want 57", timing.criticalPathNanos)
+	}
+	if timing.fourWorkerNanos != 67 {
+		t.Fatalf("ready-queue four-worker duration = %d, want 67", timing.fourWorkerNanos)
+	}
+}
+
 func recordVersionedShadowTx(t *testing.T, shadow *versionedAccessShadow, statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, tx *types.Transaction, execute func()) {
 	t.Helper()
 	mark := statedb.DomainChangeJournalMark()

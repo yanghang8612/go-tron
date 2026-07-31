@@ -76,6 +76,8 @@
 - [x] Weight dependency-ready waves with measured canonical transaction cost
   and report unlimited-worker plus four-worker barrier schedules before worker
   implementation.
+- [x] Preserve exact read-version and previous-sender edges, then simulate an
+  Erigon-style four-worker ready queue without global wave barriers.
 - [ ] Extract normalized settlement writes into explicit per-transaction deltas
   and apply them at ordered publication after serial-equivalence fixtures pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full

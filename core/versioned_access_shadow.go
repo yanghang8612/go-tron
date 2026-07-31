@@ -65,6 +65,8 @@ var (
 	versionedShadowDAGSerialNanosCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/serial_execution_nanos", nil)
 	versionedShadowDAGWaveNanosCounter                        = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/wave_execution_nanos", nil)
 	versionedShadowDAGFourWorkerNanosCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/four_worker_execution_nanos", nil)
+	versionedShadowReadyCriticalNanosCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/ready_queue/critical_path_execution_nanos", nil)
+	versionedShadowReadyFourWorkerNanosCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/ready_queue/four_worker_execution_nanos", nil)
 	versionedShadowTypedResolvedCounter                       = metrics.NewRegisteredCounter("core/versioned_shadow/typed/resolved_first_pass", nil)
 	versionedShadowTypedAccountConflictCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/typed/conflict/account", nil)
 	versionedShadowTypedAccountCoarseConflictCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/typed/account_field/conflict/coarse", nil)
@@ -94,6 +96,8 @@ var (
 	versionedShadowLastDAGSerialNanosGauge                    = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/serial_execution_nanos", nil)
 	versionedShadowLastDAGWaveNanosGauge                      = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/wave_execution_nanos", nil)
 	versionedShadowLastDAGFourWorkerNanosGauge                = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/four_worker_execution_nanos", nil)
+	versionedShadowLastReadyCriticalNanosGauge                = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/ready_queue/critical_path_execution_nanos", nil)
+	versionedShadowLastReadyFourWorkerNanosGauge              = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/ready_queue/four_worker_execution_nanos", nil)
 	versionedShadowLastConflictsGauge                         = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/conflicts", nil)
 	versionedShadowLastUnsupportedGauge                       = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/unsupported", nil)
 	versionedShadowLastMaxDependencyDistanceGauge             = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/max_dependency_distance", nil)
@@ -122,8 +126,11 @@ type versionedAccessShadow struct {
 	lastSenderTx         map[tcommon.Address]int
 	dependencyWaves      []int
 	dependencyWaveWidths []int
+	dependencyHeads      []int
+	dependencyEdges      []transactionDependencyEdge
 	transactionDurations []int64
 	transactionStarted   time.Time
+	lastBarrierTx        int
 	dependencyMinWave    int
 	dependencyMaxWave    int
 	stats                versionedAccessShadowStats
@@ -185,6 +192,8 @@ type versionedAccessShadowStats struct {
 	dependencyDAGSerialNanos             int64
 	dependencyDAGWaveNanos               int64
 	dependencyDAGFourWorkerNanos         int64
+	dependencyDAGReadyCriticalNanos      int64
+	dependencyDAGReadyFourWorkerNanos    int64
 	typedResolvedFirstPass               int64
 	typedAccountConflicts                int64
 	typedAccountCoarseConflicts          int64
@@ -203,6 +212,12 @@ type versionedAccessShadowStats struct {
 	settlementCreateAccountCostConflicts int64
 	settlementCreateWitnessCostConflicts int64
 	maxDependencyDistance                int64
+}
+
+type transactionDependencyEdge struct {
+	predecessor int
+	dependent   int
+	next        int
 }
 
 func (s *versionedAccessShadow) Prepare(transactionCount int) {
@@ -225,8 +240,31 @@ func (s *versionedAccessShadow) Prepare(transactionCount int) {
 	s.lastSenderTx = make(map[tcommon.Address]int, transactionCount/4+1)
 	s.dependencyWaves = make([]int, transactionCount)
 	s.dependencyWaveWidths = make([]int, 0, transactionCount)
+	s.dependencyHeads = make([]int, transactionCount)
+	for txIndex := range s.dependencyHeads {
+		s.dependencyHeads[txIndex] = -1
+	}
+	s.dependencyEdges = make([]transactionDependencyEdge, 0, transactionCount*2)
 	s.transactionDurations = make([]int64, transactionCount)
 	s.dependencyMaxWave = -1
+	s.lastBarrierTx = -1
+}
+
+func (s *versionedAccessShadow) addDependency(txIndex, predecessor int) {
+	if txIndex < 0 || txIndex >= len(s.dependencyHeads) || predecessor < 0 || predecessor >= txIndex {
+		return
+	}
+	for edgeIndex := s.dependencyHeads[txIndex]; edgeIndex >= 0; edgeIndex = s.dependencyEdges[edgeIndex].next {
+		if s.dependencyEdges[edgeIndex].predecessor == predecessor {
+			return
+		}
+	}
+	s.dependencyEdges = append(s.dependencyEdges, transactionDependencyEdge{
+		predecessor: predecessor,
+		dependent:   txIndex,
+		next:        s.dependencyHeads[txIndex],
+	})
+	s.dependencyHeads[txIndex] = len(s.dependencyEdges) - 1
 }
 
 // observeSenderDependency mirrors Erigon's pre-execution prevSenderTx edge:
@@ -250,6 +288,7 @@ func (s *versionedAccessShadow) observeSenderDependency(txIndex int, tx *types.T
 	if previous, ok := s.lastSenderTx[owner]; ok {
 		s.stats.senderDependencyTaggedTransactions++
 		depth = s.senderChainDepths[previous] + 1
+		s.addDependency(txIndex, previous)
 	}
 	s.senderChainDepths[txIndex] = depth
 	s.lastSenderTx[owner] = txIndex
@@ -345,6 +384,9 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	}
 	s.detach(statedb, dynProps)
 	s.stats.transactions++
+	if s.lastBarrierTx >= 0 {
+		s.addDependency(txIndex, s.lastBarrierTx)
+	}
 	owner, hasOwner := s.observeSenderDependency(txIndex, tx)
 	dependencyWave := s.dependencyMinWave
 
@@ -403,6 +445,7 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 			normalizedReadConflict = true
 			if typedPrevious, typedConflictForKey := s.typedPreviousVersion(key, txIndex); typedConflictForKey {
 				typedReadConflict = true
+				s.addDependency(txIndex, typedPrevious)
 				if typedPrevious >= 0 && typedPrevious < len(s.dependencyWaves) {
 					if wave := s.dependencyWaves[typedPrevious] + 1; wave > dependencyWave {
 						dependencyWave = wave
@@ -536,6 +579,10 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	// Unknown/range dependencies are a serial barrier. Later known tasks may
 	// form parallel waves again, but only after this transaction's barrier wave.
 	if unsupported {
+		for predecessor := 0; predecessor < txIndex; predecessor++ {
+			s.addDependency(txIndex, predecessor)
+		}
+		s.lastBarrierTx = txIndex
 		dependencyWave = s.dependencyMaxWave + 1
 		s.dependencyMinWave = dependencyWave + 1
 	}
@@ -775,6 +822,11 @@ type dependencyDAGTiming struct {
 	fourWorkerNanos int64
 }
 
+type dependencyReadyQueueTiming struct {
+	criticalPathNanos int64
+	fourWorkerNanos   int64
+}
+
 // estimateDependencyDAGTiming applies a conservative wave barrier between DAG
 // levels. waveNanos assumes unlimited workers inside a wave. fourWorkerNanos
 // greedily assigns canonical-order transactions to four lanes inside each
@@ -821,6 +873,141 @@ func estimateDependencyDAGTiming(waves []int, durations []int64, waveCount int) 
 	return timing
 }
 
+// estimateDependencyReadyQueueTiming removes the global barrier between DAG
+// levels. It first computes the exact cost-weighted critical path, then runs a
+// canonical-index ready queue on four workers. A dependent becomes runnable
+// only after every directly observed predecessor has completed.
+func estimateDependencyReadyQueueTiming(durations []int64, dependencyHeads []int, edges []transactionDependencyEdge) dependencyReadyQueueTiming {
+	transactionCount := len(durations)
+	if transactionCount == 0 {
+		return dependencyReadyQueueTiming{}
+	}
+	criticalFinishes := make([]int64, transactionCount)
+	indegrees := make([]int, transactionCount)
+	successorHeads := make([]int, transactionCount)
+	for txIndex := range successorHeads {
+		successorHeads[txIndex] = -1
+	}
+	successorNext := make([]int, len(edges))
+	for edgeIndex, edge := range edges {
+		if edge.predecessor < 0 || edge.predecessor >= edge.dependent || edge.dependent >= transactionCount {
+			continue
+		}
+		indegrees[edge.dependent]++
+		successorNext[edgeIndex] = successorHeads[edge.predecessor]
+		successorHeads[edge.predecessor] = edgeIndex
+	}
+	var timing dependencyReadyQueueTiming
+	for txIndex, duration := range durations {
+		if duration < 0 {
+			duration = 0
+		}
+		var readyAt int64
+		if txIndex < len(dependencyHeads) {
+			for edgeIndex := dependencyHeads[txIndex]; edgeIndex >= 0; edgeIndex = edges[edgeIndex].next {
+				predecessor := edges[edgeIndex].predecessor
+				if predecessor >= 0 && predecessor < txIndex && criticalFinishes[predecessor] > readyAt {
+					readyAt = criticalFinishes[predecessor]
+				}
+			}
+		}
+		criticalFinishes[txIndex] = readyAt + duration
+		if criticalFinishes[txIndex] > timing.criticalPathNanos {
+			timing.criticalPathNanos = criticalFinishes[txIndex]
+		}
+	}
+
+	ready := make([]int, 0, transactionCount)
+	pushReady := func(txIndex int) {
+		ready = append(ready, txIndex)
+		for child := len(ready) - 1; child > 0; {
+			parent := (child - 1) / 2
+			if ready[parent] <= ready[child] {
+				break
+			}
+			ready[parent], ready[child] = ready[child], ready[parent]
+			child = parent
+		}
+	}
+	popReady := func() int {
+		root := ready[0]
+		last := ready[len(ready)-1]
+		ready = ready[:len(ready)-1]
+		if len(ready) == 0 {
+			return root
+		}
+		ready[0] = last
+		for parent := 0; ; {
+			left := parent*2 + 1
+			if left >= len(ready) {
+				break
+			}
+			child := left
+			right := left + 1
+			if right < len(ready) && ready[right] < ready[left] {
+				child = right
+			}
+			if ready[parent] <= ready[child] {
+				break
+			}
+			ready[parent], ready[child] = ready[child], ready[parent]
+			parent = child
+		}
+		return root
+	}
+	for txIndex, indegree := range indegrees {
+		if indegree == 0 {
+			pushReady(txIndex)
+		}
+	}
+	runningTx := [4]int{-1, -1, -1, -1}
+	workerFinishes := [4]int64{}
+	completed := 0
+	var now int64
+	for completed < transactionCount {
+		for worker := range runningTx {
+			if runningTx[worker] >= 0 || len(ready) == 0 {
+				continue
+			}
+			readyTx := popReady()
+			duration := durations[readyTx]
+			if duration < 0 {
+				duration = 0
+			}
+			runningTx[worker] = readyTx
+			workerFinishes[worker] = now + duration
+		}
+		nextCompletion := int64(-1)
+		for worker, txIndex := range runningTx {
+			if txIndex >= 0 && (nextCompletion < 0 || workerFinishes[worker] < nextCompletion) {
+				nextCompletion = workerFinishes[worker]
+			}
+		}
+		if nextCompletion < 0 {
+			// A cycle is impossible because every captured edge points backward.
+			// Keep the observer fail-safe if malformed test data violates that.
+			return dependencyReadyQueueTiming{criticalPathNanos: timing.criticalPathNanos}
+		}
+		now = nextCompletion
+		for worker, txIndex := range runningTx {
+			if txIndex < 0 || workerFinishes[worker] != now {
+				continue
+			}
+			runningTx[worker] = -1
+			completed++
+			for edgeIndex := successorHeads[txIndex]; edgeIndex >= 0; edgeIndex = successorNext[edgeIndex] {
+				dependent := edges[edgeIndex].dependent
+				indegrees[dependent]--
+				if indegrees[dependent] == 0 {
+					pushReady(dependent)
+				}
+			}
+		}
+	}
+	timing.fourWorkerNanos = now
+	return timing
+}
+
 func (s *versionedAccessShadow) Finish(statedb *state.StateDB, dynProps *state.DynamicProperties) versionedAccessShadowStats {
 	s.detach(statedb, dynProps)
 	stats := s.stats
@@ -840,6 +1027,9 @@ func (s *versionedAccessShadow) Finish(statedb *state.StateDB, dynProps *state.D
 	stats.dependencyDAGSerialNanos = timing.serialNanos
 	stats.dependencyDAGWaveNanos = timing.waveNanos
 	stats.dependencyDAGFourWorkerNanos = timing.fourWorkerNanos
+	readyTiming := estimateDependencyReadyQueueTiming(s.transactionDurations, s.dependencyHeads, s.dependencyEdges)
+	stats.dependencyDAGReadyCriticalNanos = readyTiming.criticalPathNanos
+	stats.dependencyDAGReadyFourWorkerNanos = readyTiming.fourWorkerNanos
 	return stats
 }
 
@@ -899,6 +1089,8 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowDAGSerialNanosCounter.Inc(stats.dependencyDAGSerialNanos)
 	versionedShadowDAGWaveNanosCounter.Inc(stats.dependencyDAGWaveNanos)
 	versionedShadowDAGFourWorkerNanosCounter.Inc(stats.dependencyDAGFourWorkerNanos)
+	versionedShadowReadyCriticalNanosCounter.Inc(stats.dependencyDAGReadyCriticalNanos)
+	versionedShadowReadyFourWorkerNanosCounter.Inc(stats.dependencyDAGReadyFourWorkerNanos)
 	versionedShadowTypedResolvedCounter.Inc(stats.typedResolvedFirstPass)
 	versionedShadowTypedAccountConflictCounter.Inc(stats.typedAccountConflicts)
 	versionedShadowTypedAccountCoarseConflictCounter.Inc(stats.typedAccountCoarseConflicts)
@@ -928,6 +1120,8 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowLastDAGSerialNanosGauge.Update(stats.dependencyDAGSerialNanos)
 	versionedShadowLastDAGWaveNanosGauge.Update(stats.dependencyDAGWaveNanos)
 	versionedShadowLastDAGFourWorkerNanosGauge.Update(stats.dependencyDAGFourWorkerNanos)
+	versionedShadowLastReadyCriticalNanosGauge.Update(stats.dependencyDAGReadyCriticalNanos)
+	versionedShadowLastReadyFourWorkerNanosGauge.Update(stats.dependencyDAGReadyFourWorkerNanos)
 	versionedShadowLastConflictsGauge.Update(stats.conflicts)
 	versionedShadowLastUnsupportedGauge.Update(stats.unsupported)
 	versionedShadowLastMaxDependencyDistanceGauge.Update(stats.maxDependencyDistance)

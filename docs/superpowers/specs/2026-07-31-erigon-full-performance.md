@@ -492,6 +492,29 @@ four-worker gain justifies worker snapshots, retries, journal comparison, and
 ordered publication. The timing remains observe-only and never affects
 consensus state or transaction results.
 
+The production cost sample covered 99,021 transactions over 926 observed
+blocks in 20 seconds (4,951 transactions/s). Although 33.36% of transactions
+belonged to a parallel wave, measured serial cost was 12.531 seconds versus
+10.626 seconds for the four-worker wave schedule: only 1.179x. Unlimited
+workers reduced it to 10.560 seconds (1.187x). Worker count is therefore not
+the limiting factor under global wave barriers; direct dependency chains are.
+
+#### P4.8: Erigon-style direct-edge ready queue
+
+Wave barriers unnecessarily hold an independent transaction in level N+1
+until every transaction in level N completes. Preserve the exact preceding
+writer for every ordinary typed read, plus Erigon's explicit previous-sender
+edge. Unknown/range transactions depend on every preceding transaction and
+remain a barrier for every successor, retaining conservative correctness.
+
+An observe-only event simulation dispatches the lowest canonical-index ready
+transaction to four workers and releases each dependent when all its direct
+predecessors complete. It also computes the unlimited-worker cost-weighted
+critical path. These metrics distinguish scheduling loss from inherent state
+dependency: the ready queue is the implementation model for discard-only
+workers, while its critical path is the ceiling no worker count can exceed.
+No simulated result is published.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
