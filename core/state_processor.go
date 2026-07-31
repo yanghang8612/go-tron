@@ -835,6 +835,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	var discardShadow *discardShadowBlock
 	var discardCfg discardShadowRunConfig
 	var transferPreexecution *discardShadowPreexecution
+	var senderChainPreexecution *discardShadowPreexecution
 	if shadowEnabled && collectTxInfos {
 		discardShadow = prepareTransferExecutionBlock(statedb, dynProps, block.Number(), options.parallelTransfers)
 		if discardShadow != nil {
@@ -856,6 +857,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				discardCfg.canonicalBalanceTraces = make([]*contractpb.TransactionBalanceTrace, len(transactions))
 			}
 			transferPreexecution = discardShadow.preexecuteTransfers(discardCfg)
+			senderChainPreexecution = discardShadow.preexecuteTransferSenderChains(discardCfg)
 			if options.parallelTransfers {
 				parallelTransferBlocksCounter.Inc(1)
 				if transferPreexecution != nil {
@@ -885,6 +887,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	for i, tx := range transactions {
 		if transferPreexecution != nil {
 			transferPreexecution.validateReadVersion(i, tx, &versionedShadow)
+		}
+		if senderChainPreexecution != nil {
+			senderChainPreexecution.validateReadVersion(i, tx, &versionedShadow)
 		}
 		domainChangeMark := statedb.DomainChangeJournalMark()
 		if domainChanges != nil {
@@ -1016,6 +1021,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	if discardShadow != nil && discardShadow.sampled {
 		discardCfg.canonicalInfos = txInfos
 		_ = discardShadow.finishTransferPreexecution(transferPreexecution, &versionedShadow, discardCfg)
+		_ = discardShadow.finishTransferSenderChains(senderChainPreexecution, &versionedShadow, discardCfg)
 		_ = discardShadow.run(&versionedShadow, discardCfg)
 	}
 

@@ -298,6 +298,55 @@ func TestProcessBlockParallelTransfersMatchesSerial(t *testing.T) {
 	}
 }
 
+func TestProcessBlockSamplesSenderChainForwarding(t *testing.T) {
+	statedb := newTestState(t)
+	for _, id := range []byte{1, 2, 3} {
+		statedb.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+	}
+	statedb.AddBalance(testProcessorAddr(1), 10_000_000)
+	if _, err := statedb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	transactions := []*types.Transaction{
+		makeTestTransferTx(1, 2, 1_000_000),
+		makeTestTransferTx(1, 3, 2_000_000),
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(discardShadowSampleInterval), Timestamp: 3_000,
+		}},
+		Transactions: []*corepb.Transaction{transactions[0].Proto(), transactions[1].Proto()},
+	})
+	forwardedBefore := discardShadowSenderChainForwardedCounter.Snapshot().Count()
+	validatedBefore := discardShadowSenderChainForwardedOKCounter.Snapshot().Count()
+	mismatchBefore := discardShadowSenderChainInfoMismatchesCounter.Snapshot().Count() +
+		discardShadowSenderChainWriteMismatchesCounter.Snapshot().Count() +
+		discardShadowSenderChainBalanceMismatchesCounter.Snapshot().Count()
+	if _, _, err := processBlockWithOptions(
+		statedb, statedb.DynamicProperties(), block, nil, nil, 0,
+		params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+		nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+		processBlockOptions{parallelTransfers: true},
+	); err != nil {
+		t.Fatalf("process sampled sender chain: %v", err)
+	}
+	if forwarded := discardShadowSenderChainForwardedCounter.Snapshot().Count() - forwardedBefore; forwarded != 1 {
+		t.Fatalf("forwarded sender-chain results = %d, want 1", forwarded)
+	}
+	if validated := discardShadowSenderChainForwardedOKCounter.Snapshot().Count() - validatedBefore; validated != 1 {
+		t.Fatalf("validated forwarded results = %d, want 1", validated)
+	}
+	mismatchAfter := discardShadowSenderChainInfoMismatchesCounter.Snapshot().Count() +
+		discardShadowSenderChainWriteMismatchesCounter.Snapshot().Count() +
+		discardShadowSenderChainBalanceMismatchesCounter.Snapshot().Count()
+	if mismatches := mismatchAfter - mismatchBefore; mismatches != 0 {
+		t.Fatalf("sender-chain mismatches = %d, want 0", mismatches)
+	}
+	if balance := statedb.GetBalance(testProcessorAddr(1)); balance != 7_000_000 {
+		t.Fatalf("owner balance = %d, want 7000000", balance)
+	}
+}
+
 func TestProcessBlockParallelTransfersFallsBackWhenPublicNetLimitIsExhausted(t *testing.T) {
 	base := newTestState(t)
 	for _, id := range []byte{1, 2, 3, 4} {

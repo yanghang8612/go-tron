@@ -903,6 +903,37 @@ paths. Holding this exact workload constant, publication increased from about
 7,540 to 14,008 (85.8%); public-limit, preflight, and publication errors stayed
 zero.
 
+#### P4.20: Sender-chain state forwarding
+
+Erigon's previous-sender relation is a scheduling edge, not a reason to reject
+every later transaction from that sender. The next sampled executor therefore
+groups plain Transfers by their immediate valid owner predecessor and assigns
+whole sender chains to workers. A worker executes each chain serially on one
+private StateDB/DynamicProperties copy, installs each verified typed WriteSet
+as the input state for the next member, and reverts the entire chain before
+accepting another job. A non-Transfer transaction from the same owner breaks
+the narrow chain until that actuator family can produce an equivalent carrier.
+
+Every ordinary worker read now carries either block-start provenance or the
+exact earlier transaction index whose forwarded value it consumed. At the
+canonical transaction boundary, the latest typed writer must equal that
+recorded source. An intervening cross-sender balance, resource, storage, or
+dynamic-property write therefore rejects the result and preserves serial
+replay. The direct previous-sender version is checked independently, so a
+missing or replaced chain member also rejects publication.
+
+This increment is observe-only and runs on the existing 1/64 sampled blocks.
+It compares complete TransactionInfo, typed WriteSet, and BalanceTrace against
+canonical serial execution. Valid conditional public-bandwidth reservations
+exclude only `public_net_usage` and `public_net_time` from the raw WriteSet
+comparison because their canonical values are intentionally rebased across
+all sender chains; their admission inputs remain checked by P4.19. Raw-KV
+writes are not forwarded in this first narrow carrier. Metrics under
+`core/versioned_shadow/sender_chain/` expose groups, executed and forwarded
+results, version-valid candidates, fully validated forwarded results, conflict
+classes, mismatches, errors, and wall time. Canonical sender-chain publication
+remains gated on a zero-mismatch production window.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

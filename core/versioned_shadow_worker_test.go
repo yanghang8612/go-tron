@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/binary"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -296,6 +297,115 @@ func TestVersionedShadowValidatesFrozenWorkerReadVersions(t *testing.T) {
 	sender.lastSenderTx[owner] = 0
 	if decision := sender.validateBlockStartReadSet(1, makeTestTransferTx(1, 2, 1), discardShadowTaskResult{}); decision.publishable || !decision.sender {
 		t.Fatalf("same-sender block-start result accepted: %+v", decision)
+	}
+
+	forwarded := base()
+	forwarded.accountFieldVersions[state.TransactionAccountFieldKey{Address: owner, Field: state.TransactionAccountFieldBalance}] = 0
+	forwarded.lastSenderTx[owner] = 0
+	forwardedResult := discardShadowTaskResult{
+		reads: state.TransactionReadSet{Reads: []state.TransactionRead{{
+			Key: key, Mode: state.TransactionAccessRead, ExpectedWriter: 0, HasExpectedWriter: true,
+		}}},
+		senderPredecessor: 0,
+		senderVersioned:   true,
+	}
+	if decision := forwarded.validateBlockStartReadSet(1, makeTestTransferTx(1, 2, 1), forwardedResult); !decision.publishable || decision.readConflict || decision.sender {
+		t.Fatalf("matching sender-chain version rejected: %+v", decision)
+	}
+
+	var stale versionedAccessShadow
+	stale.Prepare(3)
+	stale.accountFieldVersions[state.TransactionAccountFieldKey{Address: owner, Field: state.TransactionAccountFieldBalance}] = 1
+	stale.lastSenderTx[owner] = 1
+	if decision := stale.validateBlockStartReadSet(2, makeTestTransferTx(1, 2, 1), forwardedResult); decision.publishable || !decision.readConflict || !decision.sender {
+		t.Fatalf("intervening sender-chain writer accepted: %+v", decision)
+	}
+}
+
+func TestTransferSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
+	transactions := []*types.Transaction{
+		makeTestTransferTx(1, 2, 1),
+		makeTestTransferTx(3, 4, 1),
+		makeTestTransferTx(1, 5, 1),
+		makeTestTriggerTx(1, testProcessorAddr(9), nil),
+		makeTestTransferTx(1, 6, 1),
+	}
+	chains := transferSenderChains(transactions)
+	if len(chains) != 3 {
+		t.Fatalf("sender chains = %v, want 3", chains)
+	}
+	var joined, afterUnsupported *discardShadowSenderChainTask
+	for chainIndex := range chains {
+		for taskIndex := range chains[chainIndex] {
+			task := &chains[chainIndex][taskIndex]
+			switch task.txIndex {
+			case 2:
+				joined = task
+			case 4:
+				afterUnsupported = task
+			}
+		}
+	}
+	if joined == nil || !joined.senderVersioned || joined.senderPredecessor != 0 {
+		t.Fatalf("same-sender transfer was not chained: %+v", joined)
+	}
+	if afterUnsupported == nil || afterUnsupported.senderVersioned || afterUnsupported.senderPredecessor != 3 {
+		t.Fatalf("chain did not break at non-transfer predecessor: %+v", afterUnsupported)
+	}
+}
+
+func TestSenderChainPreexecutionForwardsTypedState(t *testing.T) {
+	base := newTestState(t)
+	owner := testProcessorAddr(1)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 10_000_000)
+	for _, id := range []byte{2, 3} {
+		base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+	}
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	base.SetDynamicProperties(base.DynamicProperties().Copy())
+	transactions := []*types.Transaction{
+		makeTestTransferTx(1, 2, 1_000_000),
+		makeTestTransferTx(1, 3, 2_000_000),
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(discardShadowSampleInterval), Timestamp: 3_000,
+		}},
+		Transactions: []*corepb.Transaction{transactions[0].Proto(), transactions[1].Proto()},
+	})
+	shadow := &discardShadowBlock{base: base, sampled: true}
+	pre := shadow.preexecuteTransferSenderChains(discardShadowRunConfig{
+		block: block, transactions: transactions, retainInfos: true,
+	})
+	if pre == nil || pre.groups != 1 || len(pre.results) != 2 {
+		t.Fatalf("sender-chain preexecution = %+v", pre)
+	}
+	second := pre.results[pre.resultByTx[1]]
+	if second.err != nil || !second.senderVersioned || second.senderPredecessor != 0 {
+		t.Fatalf("second sender-chain result = %+v", second)
+	}
+	balanceKey := state.TransactionAccessKey{
+		Kind: state.TransactionAccessAccountField, Address: owner, AccountField: state.TransactionAccountFieldBalance,
+	}
+	balanceWrite, ok := second.writes[balanceKey]
+	if !ok || len(balanceWrite.Value) != 8 || int64(binary.BigEndian.Uint64(balanceWrite.Value)) != 7_000_000 {
+		t.Fatalf("forwarded owner balance = %+v", balanceWrite)
+	}
+	readVersioned := false
+	for _, read := range second.reads.Reads {
+		if read.Key == balanceKey && read.HasExpectedWriter && read.ExpectedWriter == 0 {
+			readVersioned = true
+			break
+		}
+	}
+	if !readVersioned {
+		t.Fatalf("second transfer did not retain owner balance version: %+v", second.reads)
+	}
+	if balance := base.GetBalance(owner); balance != 10_000_000 {
+		t.Fatalf("sender-chain worker mutated base balance = %d", balance)
 	}
 }
 

@@ -124,14 +124,20 @@ const (
 // TransactionRead records one logical path consumed by speculative execution.
 // Keys are owned by the source recorder, including LogicalKey strings, so a
 // captured set remains valid after the recorder is reset for another task.
+// HasExpectedWriter is false for a block-start/storage read. When true,
+// ExpectedWriter is the earlier transaction whose published value the worker
+// consumed. This mirrors Erigon's versioned read carrier and lets an ordered
+// publisher distinguish a valid dependency from a stale read.
 type TransactionRead struct {
-	Key  TransactionAccessKey
-	Mode TransactionAccessMode
+	Key               TransactionAccessKey
+	Mode              TransactionAccessMode
+	ExpectedWriter    int
+	HasExpectedWriter bool
 }
 
-// TransactionReadSet is the block-start read-version carrier returned by a
-// speculative worker. Unsupported marks range/unknown reads that cannot be
-// validated by exact logical-key versions and must fall back to serial replay.
+// TransactionReadSet is the version carrier returned by a speculative worker.
+// Unsupported marks range/unknown reads that cannot be validated by exact
+// logical-key versions and must fall back to serial replay.
 type TransactionReadSet struct {
 	Reads       []TransactionRead
 	Unsupported bool

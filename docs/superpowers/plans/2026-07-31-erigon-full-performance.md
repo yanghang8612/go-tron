@@ -115,6 +115,10 @@
   `--exec.parallel-transfers`, and compare canonical throughput/state metrics.
 - [x] Normalize the block-scoped public-bandwidth recovered baseline and usage
   increments so independent free-bandwidth transfers can publish together.
+- [x] Add sampled previous-sender chain workers that forward verified typed
+  state, retain exact read-source versions, and reject intervening writers.
+- [ ] Run the sender-chain TransactionInfo/WriteSet/BalanceTrace production
+  gate, then enable canonical publication for version-valid chain members.
 - [ ] Run the public-bandwidth reservation production gate and compare
   published/conflict ratios plus limit fallbacks over a fixed height window.
 - [ ] Expand eligibility by actuator family using java-tron fixtures and fixed
