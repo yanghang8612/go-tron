@@ -103,6 +103,10 @@ var (
 	parallelTransferPublicNetPublishedCounter        = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/published", nil)
 	parallelTransferPublicNetRebasedCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/rebased", nil)
 	parallelTransferPublicNetLimitFallbackCounter    = metrics.NewRegisteredCounter("core/parallel_transfer/public_net/fallback/limit", nil)
+	parallelTransferChainPreexecutedCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/preexecuted", nil)
+	parallelTransferChainCandidatesCounter           = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/candidates", nil)
+	parallelTransferChainPublishedCounter            = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/published", nil)
+	parallelTransferChainPredFallbackCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/fallback/predecessor", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -342,6 +346,7 @@ type discardShadowReadVersionResult struct {
 	unsupported  bool
 	deltaInvalid bool
 	sender       bool
+	predecessor  bool
 	barrier      bool
 }
 
@@ -1168,6 +1173,7 @@ func (pre *discardShadowPreexecution) resultForTransaction(txIndex int) (*discar
 		}
 		if predecessorResult < 0 || predecessorResult >= len(pre.published) || !pre.published[predecessorResult] {
 			decision.sender = true
+			decision.predecessor = true
 			decision.publishable = false
 		}
 	}

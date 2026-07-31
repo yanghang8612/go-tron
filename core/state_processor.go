@@ -871,6 +871,11 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				if transferPreexecution != nil {
 					parallelTransferPreexecutedCounter.Inc(int64(len(transferPreexecution.results)))
 					parallelTransferPreexecutionNanosCounter.Inc(transferPreexecution.wallNanos)
+					for resultIndex := range transferPreexecution.results {
+						if transferPreexecution.results[resultIndex].senderVersioned {
+							parallelTransferChainPreexecutedCounter.Inc(1)
+						}
+					}
 				}
 			}
 		}
@@ -919,8 +924,14 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				parallelTransferUnavailableFallbackCounter.Inc(1)
 			case !readVersion.publishable:
 				parallelTransferConflictFallbackCounter.Inc(1)
+				if readVersion.predecessor {
+					parallelTransferChainPredFallbackCounter.Inc(1)
+				}
 			default:
 				parallelTransferCandidatesCounter.Inc(1)
+				if preResult.senderVersioned {
+					parallelTransferChainCandidatesCounter.Inc(1)
+				}
 				if preResult.publicNetValid {
 					parallelTransferPublicNetReservationsCounter.Inc(1)
 				}
@@ -958,6 +969,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					return nil, tcommon.Hash{}, err
 				}
 				parallelTransferPublishedCounter.Inc(1)
+				if preResult.senderVersioned {
+					parallelTransferChainPublishedCounter.Inc(1)
+				}
 				transferPreexecution.markPublished(i)
 				if preResult.publicNetValid {
 					parallelTransferPublicNetPublishedCounter.Inc(1)

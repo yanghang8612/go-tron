@@ -451,11 +451,11 @@ func TestSenderChainPublicationRequiresPublishedPredecessor(t *testing.T) {
 		readValidated: []bool{true, true},
 		published:     make([]bool, 2),
 	}
-	if _, decision, found := pre.resultForTransaction(1); !found || decision.publishable || !decision.sender {
+	if _, decision, found := pre.resultForTransaction(1); !found || decision.publishable || !decision.sender || !decision.predecessor {
 		t.Fatalf("dependent result accepted before predecessor publication: found=%v decision=%+v", found, decision)
 	}
 	pre.markPublished(0)
-	if _, decision, found := pre.resultForTransaction(1); !found || !decision.publishable || decision.sender {
+	if _, decision, found := pre.resultForTransaction(1); !found || !decision.publishable || decision.sender || decision.predecessor {
 		t.Fatalf("dependent result rejected after predecessor publication: found=%v decision=%+v", found, decision)
 	}
 }

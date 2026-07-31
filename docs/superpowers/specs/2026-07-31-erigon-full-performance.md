@@ -947,7 +947,9 @@ serial execution invalidates the retained descendants even when their numeric
 writer index still matches. Every 64th block continues to use the independent
 block-start executor plus serial fallbacks and runs the sender-chain observer,
 preserving a continuous production canary instead of comparing published
-results with themselves.
+results with themselves. Dedicated `core/parallel_transfer/sender_chain/`
+counters report pre-executed dependents, version-valid candidates, actual
+publications, and predecessor-fallback cascades so uplift is measured directly.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

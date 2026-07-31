@@ -389,6 +389,9 @@ func TestProcessBlockPublishesVersionedSenderChain(t *testing.T) {
 	}
 	publishedBefore := parallelTransferPublishedCounter.Snapshot().Count()
 	conflictsBefore := parallelTransferConflictFallbackCounter.Snapshot().Count()
+	chainPreexecutedBefore := parallelTransferChainPreexecutedCounter.Snapshot().Count()
+	chainCandidatesBefore := parallelTransferChainCandidatesCounter.Snapshot().Count()
+	chainPublishedBefore := parallelTransferChainPublishedCounter.Snapshot().Count()
 	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true})
 	if err != nil {
 		t.Fatalf("parallel process: %v", err)
@@ -398,6 +401,15 @@ func TestProcessBlockPublishesVersionedSenderChain(t *testing.T) {
 	}
 	if conflicts := parallelTransferConflictFallbackCounter.Snapshot().Count() - conflictsBefore; conflicts != 0 {
 		t.Fatalf("sender-chain conflict fallbacks = %d, want 0", conflicts)
+	}
+	if preexecuted := parallelTransferChainPreexecutedCounter.Snapshot().Count() - chainPreexecutedBefore; preexecuted != 1 {
+		t.Fatalf("preexecuted sender-chain dependents = %d, want 1", preexecuted)
+	}
+	if candidates := parallelTransferChainCandidatesCounter.Snapshot().Count() - chainCandidatesBefore; candidates != 1 {
+		t.Fatalf("sender-chain candidates = %d, want 1", candidates)
+	}
+	if published := parallelTransferChainPublishedCounter.Snapshot().Count() - chainPublishedBefore; published != 1 {
+		t.Fatalf("published sender-chain dependents = %d, want 1", published)
 	}
 	for txIndex := range serialInfos {
 		if !proto.Equal(serialInfos[txIndex], parallelInfos[txIndex]) {
