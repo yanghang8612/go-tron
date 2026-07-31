@@ -58,6 +58,8 @@ var (
 	versionedShadowSenderAllowanceConflictCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/allowance", nil)
 	versionedShadowSenderBandwidthConflictCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/bandwidth", nil)
 	versionedShadowSenderFrozenResourceConflictCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/sender_serialized/account_field/conflict/frozen_resource", nil)
+	versionedShadowDependencyDAGWavesCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/waves", nil)
+	versionedShadowDependencyDAGParallelTransactionsCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/dependency_dag/parallel_transactions", nil)
 	versionedShadowTypedResolvedCounter                       = metrics.NewRegisteredCounter("core/versioned_shadow/typed/resolved_first_pass", nil)
 	versionedShadowTypedAccountConflictCounter                = metrics.NewRegisteredCounter("core/versioned_shadow/typed/conflict/account", nil)
 	versionedShadowTypedAccountCoarseConflictCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/typed/account_field/conflict/coarse", nil)
@@ -81,6 +83,9 @@ var (
 	versionedShadowLastTypedFirstPassValidGauge               = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/typed_first_pass_valid", nil)
 	versionedShadowLastSenderFirstPassValidGauge              = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/sender_serialized_first_pass_valid", nil)
 	versionedShadowLastMaxSenderChainDepthGauge               = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/max_sender_chain_depth", nil)
+	versionedShadowLastDependencyDAGWavesGauge                = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/waves", nil)
+	versionedShadowLastDependencyDAGMaxWidthGauge             = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/max_width", nil)
+	versionedShadowLastDependencyDAGParallelTransactionsGauge = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/dependency_dag/parallel_transactions", nil)
 	versionedShadowLastConflictsGauge                         = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/conflicts", nil)
 	versionedShadowLastUnsupportedGauge                       = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/unsupported", nil)
 	versionedShadowLastMaxDependencyDistanceGauge             = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/max_dependency_distance", nil)
@@ -107,6 +112,10 @@ type versionedAccessShadow struct {
 	transactionHasOwner  []bool
 	senderChainDepths    []int
 	lastSenderTx         map[tcommon.Address]int
+	dependencyWaves      []int
+	dependencyWaveWidths []int
+	dependencyMinWave    int
+	dependencyMaxWave    int
 	stats                versionedAccessShadowStats
 }
 
@@ -160,6 +169,9 @@ type versionedAccessShadowStats struct {
 	senderAllowanceConflicts             int64
 	senderBandwidthConflicts             int64
 	senderFrozenResourceConflicts        int64
+	dependencyDAGWaves                   int64
+	dependencyDAGMaxWidth                int64
+	dependencyDAGParallelTransactions    int64
 	typedResolvedFirstPass               int64
 	typedAccountConflicts                int64
 	typedAccountCoarseConflicts          int64
@@ -198,6 +210,9 @@ func (s *versionedAccessShadow) Prepare(transactionCount int) {
 	s.transactionHasOwner = make([]bool, transactionCount)
 	s.senderChainDepths = make([]int, transactionCount)
 	s.lastSenderTx = make(map[tcommon.Address]int, transactionCount/4+1)
+	s.dependencyWaves = make([]int, transactionCount)
+	s.dependencyWaveWidths = make([]int, 0, transactionCount)
+	s.dependencyMaxWave = -1
 }
 
 // observeSenderDependency mirrors Erigon's pre-execution prevSenderTx edge:
@@ -313,6 +328,7 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	s.detach(statedb, dynProps)
 	s.stats.transactions++
 	owner, hasOwner := s.observeSenderDependency(txIndex, tx)
+	dependencyWave := s.dependencyMinWave
 
 	var (
 		readConflict                        bool
@@ -369,6 +385,11 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 			normalizedReadConflict = true
 			if typedPrevious, typedConflictForKey := s.typedPreviousVersion(key, txIndex); typedConflictForKey {
 				typedReadConflict = true
+				if typedPrevious >= 0 && typedPrevious < len(s.dependencyWaves) {
+					if wave := s.dependencyWaves[typedPrevious] + 1; wave > dependencyWave {
+						dependencyWave = wave
+					}
+				}
 				if !s.writtenBySender(typedPrevious, owner, hasOwner) {
 					senderReadConflict = true
 					switch key.Kind {
@@ -494,6 +515,22 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	})
 
 	unsupported := s.recorder.Unsupported() || !knownWrites
+	// Unknown/range dependencies are a serial barrier. Later known tasks may
+	// form parallel waves again, but only after this transaction's barrier wave.
+	if unsupported {
+		dependencyWave = s.dependencyMaxWave + 1
+		s.dependencyMinWave = dependencyWave + 1
+	}
+	if txIndex >= 0 && txIndex < len(s.dependencyWaves) {
+		s.dependencyWaves[txIndex] = dependencyWave
+	}
+	for len(s.dependencyWaveWidths) <= dependencyWave {
+		s.dependencyWaveWidths = append(s.dependencyWaveWidths, 0)
+	}
+	s.dependencyWaveWidths[dependencyWave]++
+	if dependencyWave > s.dependencyMaxWave {
+		s.dependencyMaxWave = dependencyWave
+	}
 	// Erigon validates versions read by the worker. A blind write overlapping an
 	// earlier write is still publishable in original order; track that overlap
 	// separately, but do not turn it into a false read-version invalidation.
@@ -716,7 +753,20 @@ func (s *versionedAccessShadow) classify(tx *types.Transaction, firstPassValid, 
 
 func (s *versionedAccessShadow) Finish(statedb *state.StateDB, dynProps *state.DynamicProperties) versionedAccessShadowStats {
 	s.detach(statedb, dynProps)
-	return s.stats
+	stats := s.stats
+	for _, width := range s.dependencyWaveWidths {
+		if width == 0 {
+			continue
+		}
+		stats.dependencyDAGWaves++
+		if int64(width) > stats.dependencyDAGMaxWidth {
+			stats.dependencyDAGMaxWidth = int64(width)
+		}
+		if width > 1 {
+			stats.dependencyDAGParallelTransactions += int64(width)
+		}
+	}
+	return stats
 }
 
 func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.DynamicProperties) {
@@ -770,6 +820,8 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowSenderAllowanceConflictCounter.Inc(stats.senderAllowanceConflicts)
 	versionedShadowSenderBandwidthConflictCounter.Inc(stats.senderBandwidthConflicts)
 	versionedShadowSenderFrozenResourceConflictCounter.Inc(stats.senderFrozenResourceConflicts)
+	versionedShadowDependencyDAGWavesCounter.Inc(stats.dependencyDAGWaves)
+	versionedShadowDependencyDAGParallelTransactionsCounter.Inc(stats.dependencyDAGParallelTransactions)
 	versionedShadowTypedResolvedCounter.Inc(stats.typedResolvedFirstPass)
 	versionedShadowTypedAccountConflictCounter.Inc(stats.typedAccountConflicts)
 	versionedShadowTypedAccountCoarseConflictCounter.Inc(stats.typedAccountCoarseConflicts)
@@ -793,6 +845,9 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowLastTypedFirstPassValidGauge.Update(stats.typedFirstPassValid)
 	versionedShadowLastSenderFirstPassValidGauge.Update(stats.senderFirstPassValid)
 	versionedShadowLastMaxSenderChainDepthGauge.Update(stats.maxSenderChainDepth)
+	versionedShadowLastDependencyDAGWavesGauge.Update(stats.dependencyDAGWaves)
+	versionedShadowLastDependencyDAGMaxWidthGauge.Update(stats.dependencyDAGMaxWidth)
+	versionedShadowLastDependencyDAGParallelTransactionsGauge.Update(stats.dependencyDAGParallelTransactions)
 	versionedShadowLastConflictsGauge.Update(stats.conflicts)
 	versionedShadowLastUnsupportedGauge.Update(stats.unsupported)
 	versionedShadowLastMaxDependencyDistanceGauge.Update(stats.maxDependencyDistance)

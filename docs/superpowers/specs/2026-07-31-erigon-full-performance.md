@@ -437,6 +437,36 @@ therefore splits this residual set by account field, storage, account-KV,
 DynamicProperties, and other families; pre-sender balance/resource counts
 cannot identify the cross-sender VM bottleneck.
 
+Residual-family measurement confirmed that no single remaining typed cell can
+be normalized away: across 132,510 transactions, sender-serialized conflicts
+overlapped Account in 67.35%, DynamicProperties in 58.93%, account-KV in
+43.56%, and storage in 24.77%. Shared balance and bandwidth dependencies alone
+remained in 88,632 and 57,500 transactions. This is the dynamic dependency set
+that an Erigon-style scheduler must wait for or retry.
+
+#### P4.6: Dependency-ready DAG measurement
+
+Block-start and sender-only validity are pessimistic bounds for Erigon MVCC.
+Once a worker discovers a dependency or an incarnation validates, a later task
+can run against the now-settled version without waiting for every earlier
+transaction. P4.6 therefore builds an observe-only DAG from the actual typed
+versions seen during canonical execution.
+
+For each ordinary typed read, the observer finds the latest preceding writer
+and places the transaction in the earliest wave after that writer's wave.
+Audited settlement-delta reads do not form edges. Blind writes remain eligible
+for the same wave because ordered publication resolves them. Unsupported range
+reads and unknown journal entries form serial barrier waves; later known tasks
+may become parallel only after the barrier.
+
+Per-block metrics report the number of dependency waves, maximum wave width,
+and transactions that belong to a wave wider than one. These are an attainable
+parallelism bound using already discovered access sets, not a claim that the
+first incarnation knows the future DAG. Sufficient width is the gate for a
+discard-only scheduler that learns dependencies via estimates/retries; narrow
+width means the historical workload itself is serial and worker construction
+would add overhead without useful execution capacity.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

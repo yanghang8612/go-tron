@@ -283,6 +283,9 @@ func TestVersionedAccessShadowModelsErigonSenderDependency(t *testing.T) {
 	if got.transferTypedFirstPass != 1 || got.transferSenderFirstPass != 2 {
 		t.Fatalf("sender dependency class = %+v", got)
 	}
+	if got.dependencyDAGWaves != 2 || got.dependencyDAGMaxWidth != 2 || got.dependencyDAGParallelTransactions != 2 {
+		t.Fatalf("dependency DAG shape = %+v", got)
+	}
 }
 
 func recordVersionedShadowTx(t *testing.T, shadow *versionedAccessShadow, statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, tx *types.Transaction, execute func()) {

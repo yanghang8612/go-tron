@@ -70,6 +70,9 @@
 - [x] Model Erigon's explicit previous-sender execution dependency on top of
   typed versions and measure the remaining cross-sender retry set and sender
   critical-chain depth before starting workers.
+- [x] Build an observe-only dependency-ready DAG from actual typed read/write
+  versions, with unknown/range reads as serial barriers, and report attainable
+  wave width before allocating speculative workers.
 - [ ] Extract normalized settlement writes into explicit per-transaction deltas
   and apply them at ordered publication after serial-equivalence fixtures pass.
 - [ ] Execute eligible waves in discard-only shadow workers and compare full
