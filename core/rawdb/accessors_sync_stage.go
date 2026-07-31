@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -15,6 +16,34 @@ type SyncStagedBlockRow struct {
 	Number uint64
 	Hash   common.Hash
 	Raw    []byte
+}
+
+type syncStagedMetadataViewContext struct {
+	key       []byte
+	number    uint64
+	row       SyncStagedBlockRow
+	consumeFn func([]byte) error
+}
+
+var syncStagedMetadataViewContextPool = sync.Pool{New: func() any {
+	ctx := &syncStagedMetadataViewContext{key: make([]byte, len(syncStagedBlockPrefix)+8)}
+	ctx.consumeFn = ctx.consume
+	return ctx
+}}
+
+func (c *syncStagedMetadataViewContext) prepare(number uint64) {
+	copy(c.key, syncStagedBlockPrefix)
+	binary.BigEndian.PutUint64(c.key[len(syncStagedBlockPrefix):], number)
+	c.number = number
+	c.row = SyncStagedBlockRow{}
+}
+
+func (c *syncStagedMetadataViewContext) consume(data []byte) error {
+	row, err := decodeSyncStagedBlockMetadata(c.number, data)
+	if err == nil {
+		c.row = row
+	}
+	return err
 }
 
 type SyncStagedTailPruneResult struct {
@@ -126,7 +155,7 @@ func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Blo
 		result.StageError = err
 		return result
 	}
-	existing, existingOK, err := ReadSyncStagedBlockRaw(db, result.Number)
+	existing, existingOK, err := ReadSyncStagedBlockMetadata(db, result.Number)
 	if err != nil {
 		result.StageError = fmt.Errorf("rawdb: read existing sync staged block %d: %w", result.Number, err)
 		return result
@@ -186,14 +215,14 @@ func validateSyncStagedBlockRawForProgress(block *types.Block, raw []byte) error
 	if len(raw) == 0 {
 		return nil
 	}
-	wireBlock, err := types.UnmarshalBlock(raw)
+	wireHash, err := types.BlockHashFromRaw(raw)
 	if err != nil {
-		return fmt.Errorf("rawdb: sync staged raw for block %d decode: %w", block.Number(), err)
+		return fmt.Errorf("rawdb: sync staged raw for block %d header: %w", block.Number(), err)
 	}
-	if wireBlock.Number() != block.Number() {
-		return fmt.Errorf("rawdb: sync staged raw key %d contains block %d", block.Number(), wireBlock.Number())
+	wireNumber := binary.BigEndian.Uint64(wireHash[:8])
+	if wireNumber != block.Number() {
+		return fmt.Errorf("rawdb: sync staged raw key %d contains block %d", block.Number(), wireNumber)
 	}
-	wireHash := wireBlock.Hash()
 	blockHash := block.Hash()
 	if wireHash != blockHash {
 		return fmt.Errorf("rawdb: sync staged raw block %d hash %x, want %x", block.Number(), wireHash, blockHash)
@@ -228,6 +257,41 @@ func ReadSyncStagedBlockRaw(db ethdb.KeyValueReader, number uint64) (SyncStagedB
 		return SyncStagedBlockRow{}, false, err
 	}
 	return decodeSyncStagedBlockRow(number, data)
+}
+
+// ReadSyncStagedBlockMetadata reads only the number and canonical hash of one
+// staged block. Pebble exposes its value through a callback-scoped view, so the
+// sync ready-frontier scan can skip both a full transaction-tree unmarshal and
+// a defensive copy of the raw block. Generic readers retain the ordinary
+// presence-coupled fallback.
+func ReadSyncStagedBlockMetadata(db ethdb.KeyValueReader, number uint64) (SyncStagedBlockRow, bool, error) {
+	if db == nil {
+		return SyncStagedBlockRow{}, false, nil
+	}
+	if viewer, ok := db.(interface {
+		View([]byte, func([]byte) error) error
+	}); ok {
+		ctx := syncStagedMetadataViewContextPool.Get().(*syncStagedMetadataViewContext)
+		ctx.prepare(number)
+		err := viewer.View(ctx.key, ctx.consumeFn)
+		row := ctx.row
+		ctx.row = SyncStagedBlockRow{}
+		syncStagedMetadataViewContextPool.Put(ctx)
+		if err == nil {
+			return row, true, nil
+		}
+		if classifier, ok := db.(interface{ IsKeyNotFound(error) bool }); ok && classifier.IsKeyNotFound(err) {
+			return SyncStagedBlockRow{}, false, nil
+		}
+		return SyncStagedBlockRow{}, false, fmt.Errorf("rawdb: read sync staged block metadata %d: %w", number, err)
+	}
+	key := syncStagedBlockKey(number)
+	data, exists, err := readPresentValue(db, key, fmt.Sprintf("sync staged block metadata %d", number))
+	if err != nil || !exists {
+		return SyncStagedBlockRow{}, false, err
+	}
+	row, err := decodeSyncStagedBlockMetadata(number, data)
+	return row, true, err
 }
 
 func IterateSyncStagedBlocksFrom(db ethdb.Iteratee, start uint64, fn func(SyncStagedBlockRow) (bool, error)) error {
@@ -452,7 +516,7 @@ func validateSyncImportReadyProgress(db ethdb.KeyValueReader, deletes []SyncStag
 	if len(deletes) > 0 && ready.BlockNum <= deletes[len(deletes)-1].Number {
 		return fmt.Errorf("rawdb: sync bodies ready progress at block %d must follow imported delete prefix ending at block %d", ready.BlockNum, deletes[len(deletes)-1].Number)
 	}
-	row, ok, err := ReadSyncStagedBlockRaw(db, ready.BlockNum)
+	row, ok, err := ReadSyncStagedBlockMetadata(db, ready.BlockNum)
 	if err != nil {
 		return fmt.Errorf("rawdb: read sync bodies ready staged block %d: %w", ready.BlockNum, err)
 	}
@@ -479,7 +543,7 @@ func validateSyncImportDeleteRows(db ethdb.KeyValueReader, deletes []SyncStagedB
 			})
 			continue
 		}
-		row, ok, err := ReadSyncStagedBlockRaw(db, block.Number)
+		row, ok, err := ReadSyncStagedBlockMetadata(db, block.Number)
 		if err != nil {
 			errs = append(errs, SyncStagedBlockDeleteError{
 				Number: block.Number,
@@ -660,18 +724,24 @@ func DeleteSyncStagedBlocksThrough(db ethdb.KeyValueStore, blockNum uint64) (int
 }
 
 func decodeSyncStagedBlockRow(number uint64, data []byte) (SyncStagedBlockRow, bool, error) {
-	block, err := types.UnmarshalBlock(data)
+	row, err := decodeSyncStagedBlockMetadata(number, data)
 	if err != nil {
 		return SyncStagedBlockRow{}, true, err
 	}
-	if block.Number() != number {
-		return SyncStagedBlockRow{}, true, fmt.Errorf("rawdb: sync staged block key %d contains block %d", number, block.Number())
+	row.Raw = append([]byte(nil), data...)
+	return row, true, nil
+}
+
+func decodeSyncStagedBlockMetadata(number uint64, data []byte) (SyncStagedBlockRow, error) {
+	hash, err := types.BlockHashFromRaw(data)
+	if err != nil {
+		return SyncStagedBlockRow{}, err
 	}
-	return SyncStagedBlockRow{
-		Number: number,
-		Hash:   block.Hash(),
-		Raw:    append([]byte(nil), data...),
-	}, true, nil
+	wireNumber := binary.BigEndian.Uint64(hash[:8])
+	if wireNumber != number {
+		return SyncStagedBlockRow{}, fmt.Errorf("rawdb: sync staged block key %d contains block %d", number, wireNumber)
+	}
+	return SyncStagedBlockRow{Number: number, Hash: hash}, nil
 }
 
 func parseSyncStagedBlockKey(key []byte) (uint64, bool) {

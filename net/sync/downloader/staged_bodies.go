@@ -252,7 +252,7 @@ func PlanStagedBodyReadyProgress(db ethdb.KeyValueReader, start, targetHead uint
 		return result
 	}
 	frontier := FindStagedBodyReadyFrontier(start, targetHead, func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
-		return rawdb.ReadSyncStagedBlockRaw(db, number)
+		return rawdb.ReadSyncStagedBlockMetadata(db, number)
 	})
 	result.Frontier = frontier
 	if !frontier.Have {
@@ -409,7 +409,7 @@ func ReadStagedBodyReadyDrainLimit(db ethdb.KeyValueReader, next uint64) StagedB
 		readErr  error
 	)
 	if ok && row.HasBlockHash && row.BlockNum >= next {
-		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
+		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockMetadata(db, row.BlockNum)
 	}
 	return ValidateStagedBodyReadyDrainLimit(next, row, ok, staged, stagedOK, readErr)
 }
@@ -434,7 +434,7 @@ func ReadStagedBodyProgress(db ethdb.KeyValueReader, stage rawdb.StageID) Staged
 		readErr  error
 	)
 	if ok && row.HasBlockHash {
-		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
+		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockMetadata(db, row.BlockNum)
 	}
 	return ValidateStagedBodyProgress(row, ok, staged, stagedOK, readErr)
 }

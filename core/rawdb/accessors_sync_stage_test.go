@@ -84,6 +84,33 @@ func TestReadSyncStagedBlockUsesAtomicPresenceRead(t *testing.T) {
 	}
 }
 
+func TestReadSyncStagedBlockMetadataUsesValueView(t *testing.T) {
+	block := testSyncStagedBlock(3, common.Hash{0x02})
+	raw, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal staged block: %v", err)
+	}
+	reader := &syncStagedMetadataViewReader{data: raw}
+	row, ok, err := ReadSyncStagedBlockMetadata(reader, block.Number())
+	if err != nil || !ok || row.Number != block.Number() || row.Hash != block.Hash() {
+		t.Fatalf("ReadSyncStagedBlockMetadata = %+v ok=%v err=%v", row, ok, err)
+	}
+	if row.Raw != nil {
+		t.Fatalf("metadata read returned %d raw bytes, want none", len(row.Raw))
+	}
+	if reader.viewCalls != 1 || reader.hasCalls != 0 || reader.getCalls != 0 {
+		t.Fatalf("reader calls view=%d has=%d get=%d, want 1/0/0", reader.viewCalls, reader.hasCalls, reader.getCalls)
+	}
+
+	reader.missing = true
+	if _, ok, err := ReadSyncStagedBlockMetadata(reader, block.Number()); err != nil || ok {
+		t.Fatalf("missing metadata ok=%v err=%v, want clean miss", ok, err)
+	}
+	if reader.viewCalls != 2 || reader.hasCalls != 0 || reader.getCalls != 0 {
+		t.Fatalf("reader calls after miss view=%d has=%d get=%d, want 2/0/0", reader.viewCalls, reader.hasCalls, reader.getCalls)
+	}
+}
+
 func TestDeleteSyncStagedBlockBatch(t *testing.T) {
 	base := NewMemoryDatabase()
 	blocks := []*types.Block{
@@ -1488,6 +1515,76 @@ func testSyncStagedBlock(number uint64, parent common.Hash) *types.Block {
 	})
 }
 
+var (
+	benchmarkSyncStagedMetadataRow  SyncStagedBlockRow
+	benchmarkSyncStagedDecodedBlock *types.Block
+)
+
+func BenchmarkDecodeSyncStagedBlockMetadata(b *testing.B) {
+	const txCount = 256
+	txs := make([]*corepb.Transaction, txCount)
+	for i := range txs {
+		txs[i] = &corepb.Transaction{
+			RawData: &corepb.TransactionRaw{
+				RefBlockBytes: []byte{byte(i >> 8), byte(i)},
+				Data:          bytes.Repeat([]byte{byte(i)}, 132),
+				Timestamp:     int64(i + 1),
+			},
+			Signature: [][]byte{bytes.Repeat([]byte{byte(i + 1)}, 65)},
+		}
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     12_345_678,
+				Timestamp:  1_700_000_000_000,
+				ParentHash: bytes.Repeat([]byte{0x22}, common.HashLength),
+			},
+			WitnessSignature: make([]byte, 65),
+		},
+		Transactions: txs,
+	})
+	raw, err := block.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("header_scan", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(raw)))
+		for b.Loop() {
+			row, err := decodeSyncStagedBlockMetadata(block.Number(), raw)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkSyncStagedMetadataRow = row
+		}
+	})
+	b.Run("metadata_view", func(b *testing.B) {
+		reader := &syncStagedMetadataViewReader{data: raw}
+		b.ReportAllocs()
+		b.SetBytes(int64(len(raw)))
+		for b.Loop() {
+			row, ok, err := ReadSyncStagedBlockMetadata(reader, block.Number())
+			if err != nil || !ok {
+				b.Fatalf("metadata read ok=%v err=%v", ok, err)
+			}
+			benchmarkSyncStagedMetadataRow = row
+		}
+	})
+	b.Run("full_unmarshal", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(raw)))
+		for b.Loop() {
+			decoded, err := types.UnmarshalBlock(raw)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkSyncStagedDecodedBlock = decoded
+		}
+	})
+}
+
 func equalUint64s(a, b []uint64) bool {
 	if len(a) != len(b) {
 		return false
@@ -1506,6 +1603,38 @@ type countingBatchStore struct {
 	directPuts    int
 	directDeletes int
 	batches       int
+}
+
+var errSyncStagedMetadataMissing = errors.New("sync staged metadata missing")
+
+type syncStagedMetadataViewReader struct {
+	data      []byte
+	missing   bool
+	viewCalls int
+	hasCalls  int
+	getCalls  int
+}
+
+func (r *syncStagedMetadataViewReader) View(_ []byte, fn func([]byte) error) error {
+	r.viewCalls++
+	if r.missing {
+		return errSyncStagedMetadataMissing
+	}
+	return fn(r.data)
+}
+
+func (*syncStagedMetadataViewReader) IsKeyNotFound(err error) bool {
+	return errors.Is(err, errSyncStagedMetadataMissing)
+}
+
+func (r *syncStagedMetadataViewReader) Has([]byte) (bool, error) {
+	r.hasCalls++
+	return !r.missing, nil
+}
+
+func (r *syncStagedMetadataViewReader) Get([]byte) ([]byte, error) {
+	r.getCalls++
+	return r.data, nil
 }
 
 func (db *countingBatchStore) Put(key []byte, value []byte) error {
