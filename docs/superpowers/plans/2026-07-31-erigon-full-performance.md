@@ -117,8 +117,10 @@
   increments so independent free-bandwidth transfers can publish together.
 - [x] Add sampled previous-sender chain workers that forward verified typed
   state, retain exact read-source versions, and reject intervening writers.
-- [ ] Run the sender-chain TransactionInfo/WriteSet/BalanceTrace production
-  gate, then enable canonical publication for version-valid chain members.
+- [x] Run the first sender-chain TransactionInfo/WriteSet/BalanceTrace
+  production gate and enable canonical publication on non-sampled blocks.
+- [ ] Validate canonical sender-chain publication ratios and the retained 1/64
+  serial canary over a longer fixed production window.
 - [ ] Run the public-bandwidth reservation production gate and compare
   published/conflict ratios plus limit fallbacks over a fixed height window.
 - [ ] Expand eligibility by actuator family using java-tron fixtures and fixed

@@ -856,8 +856,16 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			if discardShadow.sampled && discardCfg.captureBalanceTrace {
 				discardCfg.canonicalBalanceTraces = make([]*contractpb.TransactionBalanceTrace, len(transactions))
 			}
-			transferPreexecution = discardShadow.preexecuteTransfers(discardCfg)
-			senderChainPreexecution = discardShadow.preexecuteTransferSenderChains(discardCfg)
+			if options.parallelTransfers && !discardShadow.sampled {
+				transferPreexecution = discardShadow.preexecuteTransferSenderChains(discardCfg)
+			} else {
+				// Keep sampled blocks on the independent block-start/serial
+				// canary so sender-chain results retain a production reference.
+				transferPreexecution = discardShadow.preexecuteTransfers(discardCfg)
+			}
+			if discardShadow.sampled {
+				senderChainPreexecution = discardShadow.preexecuteTransferSenderChains(discardCfg)
+			}
 			if options.parallelTransfers {
 				parallelTransferBlocksCounter.Inc(1)
 				if transferPreexecution != nil {
@@ -950,6 +958,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					return nil, tcommon.Hash{}, err
 				}
 				parallelTransferPublishedCounter.Inc(1)
+				transferPreexecution.markPublished(i)
 				if preResult.publicNetValid {
 					parallelTransferPublicNetPublishedCounter.Inc(1)
 					if publicNetOverride.rebased {

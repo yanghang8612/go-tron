@@ -286,6 +286,7 @@ type discardShadowPreexecution struct {
 	resultByTx    []int
 	readVersions  []discardShadowReadVersionResult
 	readValidated []bool
+	published     []bool
 	groups        int
 	wallNanos     int64
 }
@@ -779,6 +780,7 @@ func (shadow *discardShadowBlock) preexecuteTransfers(cfg discardShadowRunConfig
 		resultByTx:    resultByTx,
 		readVersions:  make([]discardShadowReadVersionResult, len(retained)),
 		readValidated: make([]bool, len(retained)),
+		published:     make([]bool, len(retained)),
 		wallNanos:     time.Since(started).Nanoseconds(),
 	}
 }
@@ -884,7 +886,7 @@ func (worker *discardShadowWorker) advanceSenderChain(writes state.TransactionWr
 // used by canonical publication in this phase; sampled serial execution later
 // checks their version provenance and complete observable output.
 func (shadow *discardShadowBlock) preexecuteTransferSenderChains(cfg discardShadowRunConfig) *discardShadowPreexecution {
-	if shadow == nil || shadow.base == nil || !shadow.sampled || cfg.block == nil {
+	if shadow == nil || shadow.base == nil || cfg.block == nil {
 		return nil
 	}
 	chains := transferSenderChains(cfg.transactions)
@@ -894,6 +896,7 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChains(cfg discardShad
 	started := time.Now()
 	workerCount := min(discardShadowWorkerCount, len(chains))
 	workerStates := make([]*state.StateDB, 0, workerCount)
+	workerStates = append(workerStates, shadow.base)
 	for len(workerStates) < workerCount {
 		workerState, err := shadow.base.Copy()
 		if err != nil {
@@ -981,6 +984,7 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChains(cfg discardShad
 		resultByTx:    resultByTx,
 		readVersions:  make([]discardShadowReadVersionResult, len(retained)),
 		readValidated: make([]bool, len(retained)),
+		published:     make([]bool, len(retained)),
 		groups:        len(chains),
 		wallNanos:     time.Since(started).Nanoseconds(),
 	}
@@ -1155,7 +1159,29 @@ func (pre *discardShadowPreexecution) resultForTransaction(txIndex int) (*discar
 	if resultIndex < 0 || resultIndex >= len(pre.results) || resultIndex >= len(pre.readValidated) || !pre.readValidated[resultIndex] {
 		return nil, discardShadowReadVersionResult{}, false
 	}
-	return &pre.results[resultIndex], pre.readVersions[resultIndex], true
+	result := &pre.results[resultIndex]
+	decision := pre.readVersions[resultIndex]
+	if result.senderVersioned {
+		predecessorResult := -1
+		if result.senderPredecessor >= 0 && result.senderPredecessor < len(pre.resultByTx) {
+			predecessorResult = pre.resultByTx[result.senderPredecessor]
+		}
+		if predecessorResult < 0 || predecessorResult >= len(pre.published) || !pre.published[predecessorResult] {
+			decision.sender = true
+			decision.publishable = false
+		}
+	}
+	return result, decision, true
+}
+
+func (pre *discardShadowPreexecution) markPublished(txIndex int) {
+	if pre == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
+		return
+	}
+	resultIndex := pre.resultByTx[txIndex]
+	if resultIndex >= 0 && resultIndex < len(pre.published) {
+		pre.published[resultIndex] = true
+	}
 }
 
 func preexecutedTransferReady(result *discardShadowTaskResult) bool {

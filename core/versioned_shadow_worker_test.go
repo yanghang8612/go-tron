@@ -440,6 +440,26 @@ func TestPreexecutionFreezesReadDecisionBeforeLaterWriter(t *testing.T) {
 	}
 }
 
+func TestSenderChainPublicationRequiresPublishedPredecessor(t *testing.T) {
+	pre := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{
+			{txIndex: 0},
+			{txIndex: 1, senderVersioned: true, senderPredecessor: 0},
+		},
+		resultByTx:    []int{0, 1},
+		readVersions:  []discardShadowReadVersionResult{{publishable: true}, {publishable: true}},
+		readValidated: []bool{true, true},
+		published:     make([]bool, 2),
+	}
+	if _, decision, found := pre.resultForTransaction(1); !found || decision.publishable || !decision.sender {
+		t.Fatalf("dependent result accepted before predecessor publication: found=%v decision=%+v", found, decision)
+	}
+	pre.markPublished(0)
+	if _, decision, found := pre.resultForTransaction(1); !found || !decision.publishable || decision.sender {
+		t.Fatalf("dependent result rejected after predecessor publication: found=%v decision=%+v", found, decision)
+	}
+}
+
 func TestDiscardShadowBlockRunsIndependentTransfersConcurrently(t *testing.T) {
 	canonical := newTestState(t)
 	transactions := make([]*types.Transaction, discardShadowWorkerCount)

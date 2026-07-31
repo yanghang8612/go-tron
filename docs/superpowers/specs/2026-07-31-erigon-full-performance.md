@@ -922,17 +922,32 @@ dynamic-property write therefore rejects the result and preserves serial
 replay. The direct previous-sender version is checked independently, so a
 missing or replaced chain member also rejects publication.
 
-This increment is observe-only and runs on the existing 1/64 sampled blocks.
-It compares complete TransactionInfo, typed WriteSet, and BalanceTrace against
-canonical serial execution. Valid conditional public-bandwidth reservations
+The initial increment is observe-only and runs on the existing 1/64 sampled
+blocks. It compares complete TransactionInfo, typed WriteSet, and BalanceTrace
+against canonical execution. Valid conditional public-bandwidth reservations
 exclude only `public_net_usage` and `public_net_time` from the raw WriteSet
-comparison because their canonical values are intentionally rebased across
-all sender chains; their admission inputs remain checked by P4.19. Raw-KV
-writes are not forwarded in this first narrow carrier. Metrics under
+comparison because their canonical values are intentionally rebased across all
+sender chains; their admission inputs remain checked by P4.19. Raw-KV writes
+are not forwarded in this first narrow carrier. Metrics under
 `core/versioned_shadow/sender_chain/` expose groups, executed and forwarded
 results, version-valid candidates, fully validated forwarded results, conflict
-classes, mismatches, errors, and wall time. Canonical sender-chain publication
-remains gated on a zero-mismatch production window.
+classes, mismatches, errors, and wall time.
+
+The first production gate covered 65 sampled blocks and 217 Transfers. All 129
+version-valid results matched; 59 results consumed same-sender forwarded state
+and 20 of those passed exact version, TransactionInfo, WriteSet, and
+BalanceTrace validation. Read-version conflicts rejected 88 results and the
+explicit sender check rejected seven; info/write/trace mismatches and worker
+errors remained zero.
+
+After this gate, `--exec.parallel-transfers` selects sender-chain workers on
+non-sampled blocks. A dependent result is publishable only if its immediate
+speculative predecessor was itself published; a predecessor that fell back to
+serial execution invalidates the retained descendants even when their numeric
+writer index still matches. Every 64th block continues to use the independent
+block-start executor plus serial fallbacks and runs the sender-chain observer,
+preserving a continuous production canary instead of comparing published
+results with themselves.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
