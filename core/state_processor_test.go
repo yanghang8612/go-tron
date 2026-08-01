@@ -467,12 +467,15 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 		},
 	})
 	blocksBefore := discardShadowRetryActualBlocksCounter.Snapshot().Count()
+	prewarmedBefore := discardShadowRetryActualPrewarmedCounter.Snapshot().Count()
 	jobsBefore := discardShadowRetryActualJobsCounter.Snapshot().Count()
 	executedBefore := discardShadowRetryActualExecutedCounter.Snapshot().Count()
 	readyBefore := discardShadowRetryActualReadyCounter.Snapshot().Count()
 	lateBefore := discardShadowRetryActualLateCounter.Snapshot().Count()
 	staleBefore := discardShadowRetryActualStaleCounter.Snapshot().Count()
 	errorsBefore := discardShadowRetryActualErrorsCounter.Snapshot().Count()
+	prefixRefreshBefore := discardShadowRetryPrefixRefreshCounter.Snapshot().Count()
+	prefixAdvanceBefore := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count()
 	if _, _, err := processBlockWithOptions(
 		statedb, statedb.DynamicProperties(), block, nil, nil, 0,
 		params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
@@ -486,6 +489,15 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	}
 	if jobs := discardShadowRetryActualJobsCounter.Snapshot().Count() - jobsBefore; jobs != 1 {
 		t.Fatalf("actual async jobs = %d, want 1", jobs)
+	}
+	if prewarmed := discardShadowRetryActualPrewarmedCounter.Snapshot().Count() - prewarmedBefore; prewarmed != 1 {
+		t.Fatalf("actual async prewarmed runners = %d, want 1", prewarmed)
+	}
+	if refreshes := discardShadowRetryPrefixRefreshCounter.Snapshot().Count() - prefixRefreshBefore; refreshes != 0 {
+		t.Fatalf("actual async prefix refreshes = %d, want 0", refreshes)
+	}
+	if advances := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count() - prefixAdvanceBefore; advances != 2 {
+		t.Fatalf("actual async prefix advances = %d, want 2", advances)
 	}
 	executed := discardShadowRetryActualExecutedCounter.Snapshot().Count() - executedBefore
 	if executed != 2 {
