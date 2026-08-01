@@ -476,6 +476,8 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	errorsBefore := discardShadowRetryActualErrorsCounter.Snapshot().Count()
 	prefixRefreshBefore := discardShadowRetryPrefixRefreshCounter.Snapshot().Count()
 	prefixAdvanceBefore := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count()
+	actualPrefixRefreshBefore := discardShadowRetryActualPrefixRefreshCounter.Snapshot().Count()
+	actualPrefixAdvanceBefore := discardShadowRetryActualPrefixAdvanceCounter.Snapshot().Count()
 	if _, _, err := processBlockWithOptions(
 		statedb, statedb.DynamicProperties(), block, nil, nil, 0,
 		params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
@@ -498,6 +500,12 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	}
 	if advances := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count() - prefixAdvanceBefore; advances != 2 {
 		t.Fatalf("actual async prefix advances = %d, want 2", advances)
+	}
+	if refreshes := discardShadowRetryActualPrefixRefreshCounter.Snapshot().Count() - actualPrefixRefreshBefore; refreshes != 0 {
+		t.Fatalf("actual-only async prefix refreshes = %d, want 0", refreshes)
+	}
+	if advances := discardShadowRetryActualPrefixAdvanceCounter.Snapshot().Count() - actualPrefixAdvanceBefore; advances != 2 {
+		t.Fatalf("actual-only async prefix advances = %d, want 2", advances)
 	}
 	executed := discardShadowRetryActualExecutedCounter.Snapshot().Count() - executedBefore
 	if executed != 2 {

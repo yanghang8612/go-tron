@@ -1100,7 +1100,9 @@ from block start through exact canonical WriteSets, then uses the same frozen
 raw capability and ownership handoff. This mirrors Erigon's long-lived worker
 state more closely: the conflict boundary performs ordered prefix advancement,
 not a deep StateDB copy. `prewarmed_runners`, prefix refresh/reuse, advance
-count, and `dispatch/prefix_nanos` verify the intended path in production.
+count, copy/advance time, and `dispatch/prefix_nanos` verify the intended path
+in production without mixing the three synchronous reference cohorts into the
+actual-worker prefix measurements.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

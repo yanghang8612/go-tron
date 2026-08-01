@@ -139,6 +139,11 @@ var (
 	discardShadowRetryActualVersionCellsCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/frozen_version_cells", nil)
 	discardShadowRetryActualDispatchNanosCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch_nanos", nil)
 	discardShadowRetryActualPrefixNanosCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/prefix_nanos", nil)
+	discardShadowRetryActualPrefixRefreshCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/prefix_refreshes", nil)
+	discardShadowRetryActualPrefixReuseCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/prefix_reuses", nil)
+	discardShadowRetryActualPrefixAdvanceCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/prefix_advances", nil)
+	discardShadowRetryActualPrefixCopyNanosCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/prefix_copy_nanos", nil)
+	discardShadowRetryActualPrefixAdvanceNsCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/prefix_advance_nanos", nil)
 	discardShadowRetryActualRawFreezeNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/raw_freeze_nanos", nil)
 	discardShadowRetryActualVersionNanosCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/version_snapshot_nanos", nil)
 	discardShadowRetryActualPrewarmedCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/prewarmed_runners", nil)
@@ -469,6 +474,11 @@ type discardShadowSenderRetryStats struct {
 	actualVersionCells int64
 	actualDispatchNs   int64
 	actualPrefixNs     int64
+	actualRefreshes    int64
+	actualReuses       int64
+	actualAdvances     int64
+	actualCopyNs       int64
+	actualAdvanceNs    int64
 	actualRawFreezeNs  int64
 	actualVersionNs    int64
 	actualExecutionNs  int64
@@ -1648,7 +1658,18 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		return
 	}
 	prefixStarted := time.Now()
-	if !retry.ensureSettledPrefix(txIndex-1, statedb, dynProps, versioned, cfg) {
+	prefixRefreshesBefore := retry.stats.prefixRefreshes
+	prefixReusesBefore := retry.stats.prefixReuses
+	prefixAdvancesBefore := retry.stats.prefixAdvances
+	prefixCopyNanosBefore := retry.stats.copyNanos
+	prefixAdvanceNanosBefore := retry.stats.prefixAdvanceNanos
+	prefixReady := retry.ensureSettledPrefix(txIndex-1, statedb, dynProps, versioned, cfg)
+	retry.stats.actualRefreshes += retry.stats.prefixRefreshes - prefixRefreshesBefore
+	retry.stats.actualReuses += retry.stats.prefixReuses - prefixReusesBefore
+	retry.stats.actualAdvances += retry.stats.prefixAdvances - prefixAdvancesBefore
+	retry.stats.actualCopyNs += retry.stats.copyNanos - prefixCopyNanosBefore
+	retry.stats.actualAdvanceNs += retry.stats.prefixAdvanceNanos - prefixAdvanceNanosBefore
+	if !prefixReady {
 		retry.stats.actualPrefixNs += time.Since(prefixStarted).Nanoseconds()
 		return
 	}
@@ -2034,6 +2055,11 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualVersionCellsCounter.Inc(retry.stats.actualVersionCells)
 		discardShadowRetryActualDispatchNanosCounter.Inc(retry.stats.actualDispatchNs)
 		discardShadowRetryActualPrefixNanosCounter.Inc(retry.stats.actualPrefixNs)
+		discardShadowRetryActualPrefixRefreshCounter.Inc(retry.stats.actualRefreshes)
+		discardShadowRetryActualPrefixReuseCounter.Inc(retry.stats.actualReuses)
+		discardShadowRetryActualPrefixAdvanceCounter.Inc(retry.stats.actualAdvances)
+		discardShadowRetryActualPrefixCopyNanosCounter.Inc(retry.stats.actualCopyNs)
+		discardShadowRetryActualPrefixAdvanceNsCounter.Inc(retry.stats.actualAdvanceNs)
 		discardShadowRetryActualRawFreezeNanosCounter.Inc(retry.stats.actualRawFreezeNs)
 		discardShadowRetryActualVersionNanosCounter.Inc(retry.stats.actualVersionNs)
 		discardShadowRetryActualPrewarmedCounter.Inc(retry.stats.actualPrewarmed)
