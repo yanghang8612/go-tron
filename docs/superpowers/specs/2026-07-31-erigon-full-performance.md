@@ -1075,9 +1075,11 @@ reached while it is busy executes serially and invalidates the unfinished
 descendants, preventing a result computed through an unvalidated predecessor
 from being selected. Metrics under `sender_retry/async_actual/` report jobs,
 busy skips, executed/ready/late/stale results, validated/recovered candidates,
-frozen keys/misses, worker time, errors, and finish wait. Production evidence
-from this canary will determine queue depth and whether to add more frozen
-workers before any canonical publication path consumes retry results.
+version rejection classes (read, sender, barrier, unsupported, or invalid
+delta), frozen keys/misses, dispatch/worker time, errors, and finish wait.
+Production evidence from this canary will determine queue depth and whether to
+add more frozen workers before any canonical publication path consumes retry
+results.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

@@ -125,6 +125,12 @@ var (
 	discardShadowRetryActualLateCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/late", nil)
 	discardShadowRetryActualStaleCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/stale", nil)
 	discardShadowRetryActualCandidatesCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/candidates", nil)
+	discardShadowRetryActualRejectedCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/rejected", nil)
+	discardShadowRetryActualReadConflictCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/rejected/read_conflict", nil)
+	discardShadowRetryActualSenderConflictCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/rejected/sender_conflict", nil)
+	discardShadowRetryActualBarrierCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/rejected/barrier", nil)
+	discardShadowRetryActualUnsupportedCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/rejected/unsupported", nil)
+	discardShadowRetryActualDeltaInvalidCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/rejected/delta_invalid", nil)
 	discardShadowRetryActualValidatedCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/validated", nil)
 	discardShadowRetryActualRecoveredCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/recovered", nil)
 	discardShadowRetryActualErrorsCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/errors", nil)
@@ -443,6 +449,12 @@ type discardShadowSenderRetryStats struct {
 	actualLate         int64
 	actualStale        int64
 	actualCandidates   int64
+	actualRejected     int64
+	actualReadConflict int64
+	actualSender       int64
+	actualBarrier      int64
+	actualUnsupported  int64
+	actualDeltaInvalid int64
 	actualValidated    int64
 	actualRecovered    int64
 	actualErrors       int64
@@ -1678,6 +1690,28 @@ func (retry *discardShadowSenderRetry) drainAsyncEvents(boundary int, wait bool)
 	}
 }
 
+func (retry *discardShadowSenderRetry) recordAsyncRetryRejection(decision discardShadowReadVersionResult) {
+	if retry == nil || decision.publishable {
+		return
+	}
+	retry.stats.actualRejected++
+	if decision.readConflict {
+		retry.stats.actualReadConflict++
+	}
+	if decision.sender {
+		retry.stats.actualSender++
+	}
+	if decision.barrier {
+		retry.stats.actualBarrier++
+	}
+	if decision.unsupported {
+		retry.stats.actualUnsupported++
+	}
+	if decision.deltaInvalid {
+		retry.stats.actualDeltaInvalid++
+	}
+}
+
 // projectSenderRetryDeadline asks whether a background worker starting at the
 // recorded conflict boundary would have completed this result before serial
 // canonical execution reached its publication boundary. It uses measured
@@ -1776,6 +1810,9 @@ func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *typ
 			decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
 			newestPublishable = decision.publishable
 		}
+	}
+	if resultAvailable && !decision.publishable {
+		retry.recordAsyncRetryRejection(decision)
 	}
 	if !newestPublishable && txIndex < len(retry.source.senderNext) && retry.source.senderNext[txIndex] >= 0 {
 		if retry.asyncBusy {
@@ -1888,6 +1925,12 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualLateCounter.Inc(retry.stats.actualLate)
 		discardShadowRetryActualStaleCounter.Inc(retry.stats.actualStale)
 		discardShadowRetryActualCandidatesCounter.Inc(retry.stats.actualCandidates)
+		discardShadowRetryActualRejectedCounter.Inc(retry.stats.actualRejected)
+		discardShadowRetryActualReadConflictCounter.Inc(retry.stats.actualReadConflict)
+		discardShadowRetryActualSenderConflictCounter.Inc(retry.stats.actualSender)
+		discardShadowRetryActualBarrierCounter.Inc(retry.stats.actualBarrier)
+		discardShadowRetryActualUnsupportedCounter.Inc(retry.stats.actualUnsupported)
+		discardShadowRetryActualDeltaInvalidCounter.Inc(retry.stats.actualDeltaInvalid)
 		discardShadowRetryActualValidatedCounter.Inc(retry.stats.actualValidated)
 		discardShadowRetryActualRecoveredCounter.Inc(retry.stats.actualRecovered)
 		discardShadowRetryActualErrorsCounter.Inc(retry.stats.actualErrors)

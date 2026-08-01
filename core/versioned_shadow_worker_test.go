@@ -163,6 +163,24 @@ func TestAsyncRetryFrozenRawViewRejectsLiveFallback(t *testing.T) {
 	}
 }
 
+func TestAsyncRetryRejectionMetricsPreserveConflictClasses(t *testing.T) {
+	retry := new(discardShadowSenderRetry)
+	retry.recordAsyncRetryRejection(discardShadowReadVersionResult{
+		readConflict: true,
+		sender:       true,
+		barrier:      true,
+		unsupported:  true,
+		deltaInvalid: true,
+	})
+	retry.recordAsyncRetryRejection(discardShadowReadVersionResult{readConflict: true})
+	retry.recordAsyncRetryRejection(discardShadowReadVersionResult{publishable: true})
+	if retry.stats.actualRejected != 2 || retry.stats.actualReadConflict != 2 ||
+		retry.stats.actualSender != 1 || retry.stats.actualBarrier != 1 ||
+		retry.stats.actualUnsupported != 1 || retry.stats.actualDeltaInvalid != 1 {
+		t.Fatalf("actual rejection stats = %+v", retry.stats)
+	}
+}
+
 func TestClassifyDiscardShadowApplyUnsupported(t *testing.T) {
 	writes := state.TransactionWriteSet{
 		{Kind: state.TransactionAccessAccount, Address: testProcessorAddr(1)}:                                                                 {},
