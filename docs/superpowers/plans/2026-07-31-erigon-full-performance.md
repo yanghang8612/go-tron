@@ -121,8 +121,12 @@
   production gate and enable canonical publication on non-sampled blocks.
 - [x] Add sampled Erigon-style sender incarnations that rebuild a stale suffix
   from the settled canonical prefix and retry again after a later conflict.
-- [ ] Measure recovered work versus StateDB copy/execution cost and complete the
+- [x] Measure recovered work versus StateDB copy/execution cost and complete the
   sender-retry TransactionInfo/WriteSet/BalanceTrace production gate.
+- [x] Replace copy-per-incarnation with a lazy reusable settled-prefix runner,
+  exact ordered WriteSet advancement, and canonical refresh fallback.
+- [ ] Run the settled-prefix reuse production gate and verify copy reduction,
+  prefix advancement coverage, and unchanged serial equivalence.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

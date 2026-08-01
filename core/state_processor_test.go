@@ -376,6 +376,9 @@ func TestProcessBlockSamplesSenderRetryIncarnation(t *testing.T) {
 	candidatesBefore := discardShadowRetryCandidatesCounter.Snapshot().Count()
 	recoveredBefore := discardShadowRetryRecoveredCounter.Snapshot().Count()
 	validatedBefore := discardShadowRetryValidatedCounter.Snapshot().Count()
+	prefixRefreshBefore := discardShadowRetryPrefixRefreshCounter.Snapshot().Count()
+	prefixReuseBefore := discardShadowRetryPrefixReuseCounter.Snapshot().Count()
+	prefixAdvanceBefore := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count()
 	mismatchBefore := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
 		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +
 		discardShadowRetryBalanceMismatchCounter.Snapshot().Count() +
@@ -406,6 +409,15 @@ func TestProcessBlockSamplesSenderRetryIncarnation(t *testing.T) {
 	}
 	if validated := discardShadowRetryValidatedCounter.Snapshot().Count() - validatedBefore; validated != 2 {
 		t.Fatalf("sender retry validated = %d, want 2", validated)
+	}
+	if refreshes := discardShadowRetryPrefixRefreshCounter.Snapshot().Count() - prefixRefreshBefore; refreshes != 1 {
+		t.Fatalf("sender retry prefix refreshes = %d, want 1", refreshes)
+	}
+	if reuses := discardShadowRetryPrefixReuseCounter.Snapshot().Count() - prefixReuseBefore; reuses != 0 {
+		t.Fatalf("sender retry prefix reuses = %d, want 0", reuses)
+	}
+	if advances := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count() - prefixAdvanceBefore; advances != 0 {
+		t.Fatalf("sender retry prefix advances = %d, want 0", advances)
 	}
 	mismatchAfter := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
 		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +
@@ -453,6 +465,9 @@ func TestProcessBlockReincarnatesSenderRetryAfterLaterConflict(t *testing.T) {
 	candidatesBefore := discardShadowRetryCandidatesCounter.Snapshot().Count()
 	recoveredBefore := discardShadowRetryRecoveredCounter.Snapshot().Count()
 	validatedBefore := discardShadowRetryValidatedCounter.Snapshot().Count()
+	prefixRefreshBefore := discardShadowRetryPrefixRefreshCounter.Snapshot().Count()
+	prefixReuseBefore := discardShadowRetryPrefixReuseCounter.Snapshot().Count()
+	prefixAdvanceBefore := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count()
 	mismatchBefore := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
 		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +
 		discardShadowRetryBalanceMismatchCounter.Snapshot().Count() +
@@ -479,6 +494,15 @@ func TestProcessBlockReincarnatesSenderRetryAfterLaterConflict(t *testing.T) {
 	}
 	if validated := discardShadowRetryValidatedCounter.Snapshot().Count() - validatedBefore; validated != 3 {
 		t.Fatalf("sender retry validated = %d, want 3", validated)
+	}
+	if refreshes := discardShadowRetryPrefixRefreshCounter.Snapshot().Count() - prefixRefreshBefore; refreshes != 1 {
+		t.Fatalf("sender retry prefix refreshes = %d, want 1", refreshes)
+	}
+	if reuses := discardShadowRetryPrefixReuseCounter.Snapshot().Count() - prefixReuseBefore; reuses != 1 {
+		t.Fatalf("sender retry prefix reuses = %d, want 1", reuses)
+	}
+	if advances := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count() - prefixAdvanceBefore; advances != 2 {
+		t.Fatalf("sender retry prefix advances = %d, want 2", advances)
 	}
 	mismatchAfter := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
 		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +

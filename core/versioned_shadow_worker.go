@@ -102,6 +102,10 @@ var (
 	discardShadowRetryErrorsCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/errors", nil)
 	discardShadowRetryBudgetSkippedCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/budget_skipped", nil)
 	discardShadowRetryCopyNanosCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/copy_nanos", nil)
+	discardShadowRetryPrefixRefreshCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/prefix/refreshes", nil)
+	discardShadowRetryPrefixReuseCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/prefix/reuses", nil)
+	discardShadowRetryPrefixAdvanceCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/prefix/advances", nil)
+	discardShadowRetryPrefixAdvanceNanosCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/prefix/advance_nanos", nil)
 	discardShadowRetryExecutionNanosCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/execution_nanos", nil)
 	parallelTransferEnabledGauge                     = metrics.NewRegisteredGauge("core/parallel_transfer/enabled", nil)
 	parallelTransferBlocksCounter                    = metrics.NewRegisteredCounter("core/parallel_transfer/blocks", nil)
@@ -292,6 +296,7 @@ type discardShadowTaskResult struct {
 	senderVersioned   bool
 	settledPrefix     int
 	hasSettledPrefix  bool
+	incarnation       uint32
 	err               error
 }
 
@@ -331,31 +336,40 @@ type discardShadowSenderChainStats struct {
 }
 
 type discardShadowSenderRetryStats struct {
-	attempts          int64
-	executed          int64
-	candidates        int64
-	recovered         int64
-	validated         int64
-	infoMismatches    int64
-	writeMismatches   int64
-	balanceMismatches int64
-	errors            int64
-	budgetSkipped     int64
-	copyNanos         int64
-	executionNanos    int64
+	attempts           int64
+	executed           int64
+	candidates         int64
+	recovered          int64
+	validated          int64
+	infoMismatches     int64
+	writeMismatches    int64
+	balanceMismatches  int64
+	errors             int64
+	budgetSkipped      int64
+	copyNanos          int64
+	prefixRefreshes    int64
+	prefixReuses       int64
+	prefixAdvances     int64
+	prefixAdvanceNanos int64
+	executionNanos     int64
 }
 
 // discardShadowSenderRetry holds the newest sampled incarnation for each
 // sender-chain transaction. It never publishes state. At the real canonical
-// boundary it may rebuild a failed suffix from a copy of the now-settled
-// prefix, then freezes the result selected for later serial comparison.
+// boundary it may rebuild a failed suffix from a reusable settled-prefix
+// runner, then freezes the result selected for later serial comparison.
 type discardShadowSenderRetry struct {
-	source     *discardShadowPreexecution
-	results    []discardShadowTaskResult
-	available  []bool
-	selected   []discardShadowTaskResult
-	selectedOK []bool
-	stats      discardShadowSenderRetryStats
+	source         *discardShadowPreexecution
+	results        []discardShadowTaskResult
+	available      []bool
+	selected       []discardShadowTaskResult
+	selectedOK     []bool
+	incarnations   []uint32
+	worker         *discardShadowWorker
+	prefixRaw      discardKVOverlay
+	prefixRecorder state.TransactionAccessRecorder
+	settledThrough int
+	stats          discardShadowSenderRetryStats
 }
 
 type discardShadowPreexecutionStats struct {
@@ -1087,11 +1101,13 @@ func newDiscardShadowSenderRetry(source *discardShadowPreexecution, transactionC
 		return nil
 	}
 	return &discardShadowSenderRetry{
-		source:     source,
-		results:    make([]discardShadowTaskResult, transactionCount),
-		available:  make([]bool, transactionCount),
-		selected:   make([]discardShadowTaskResult, transactionCount),
-		selectedOK: make([]bool, transactionCount),
+		source:         source,
+		results:        make([]discardShadowTaskResult, transactionCount),
+		available:      make([]bool, transactionCount),
+		selected:       make([]discardShadowTaskResult, transactionCount),
+		selectedOK:     make([]bool, transactionCount),
+		incarnations:   make([]uint32, transactionCount),
+		settledThrough: -1,
 	}
 }
 
@@ -1134,11 +1150,86 @@ func senderRetryOwnerPredecessor(versioned *versionedAccessShadow, tx *types.Tra
 	return previous, ok
 }
 
+// refreshSettledPrefix takes one exact copy of the live canonical prefix. It
+// is used lazily for the first retry in a block and as a fallback when an
+// intervening canonical WriteSet contains a family the narrow ordered applier
+// cannot replay yet.
+func (retry *discardShadowSenderRetry) refreshSettledPrefix(target int, statedb *state.StateDB, dynProps *state.DynamicProperties, cfg discardShadowRunConfig) bool {
+	if retry == nil || statedb == nil || dynProps == nil || target < -1 {
+		return false
+	}
+	started := time.Now()
+	prefixState, err := statedb.Copy()
+	retry.stats.copyNanos += time.Since(started).Nanoseconds()
+	retry.stats.prefixRefreshes++
+	if err != nil {
+		retry.worker = nil
+		retry.stats.errors++
+		return false
+	}
+	prefixState.SetDynamicProperties(dynProps.Copy())
+	if cfg.captureBalanceTrace {
+		prefixState.BeginBalanceTrace(int64(cfg.block.Number()), cfg.block.Hash().Bytes(), cfg.block.Timestamp())
+	}
+	retry.prefixRaw.reset()
+	retry.prefixRaw.parent = cfg.db
+	retry.prefixRaw.recorder = &retry.prefixRecorder
+	retry.worker = &discardShadowWorker{
+		state:     prefixState,
+		dynProps:  prefixState.DynamicProperties(),
+		db:        discardKVOverlay{parent: &retry.prefixRaw},
+		forkCache: forks.NewVersionPassCache().BlockScope(),
+	}
+	retry.worker.db.recorder = &retry.worker.recorder
+	retry.settledThrough = target
+	return true
+}
+
+// ensureSettledPrefix advances the reusable retry state through the canonical
+// WriteSets which settled since the previous incarnation. This mirrors
+// Erigon's shared version map: a retry reads the newest validated prefix while
+// avoiding another full StateDB copy. Unsupported prefix writes refresh from
+// the live canonical view, preserving correctness while coverage expands.
+func (retry *discardShadowSenderRetry) ensureSettledPrefix(target int, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) bool {
+	if retry == nil || statedb == nil || dynProps == nil || versioned == nil || target < -1 {
+		return false
+	}
+	if retry.worker == nil {
+		return retry.refreshSettledPrefix(target, statedb, dynProps, cfg)
+	}
+	if target < retry.settledThrough {
+		retry.stats.errors++
+		return false
+	}
+	started := time.Now()
+	for txIndex := retry.settledThrough + 1; txIndex <= target; txIndex++ {
+		if txIndex < 0 || txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
+			txIndex >= len(versioned.transactionWriteSets) {
+			retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
+			return retry.refreshSettledPrefix(target, statedb, dynProps, cfg)
+		}
+		retry.prefixRecorder.Reset(64)
+		retry.prefixRaw.recorder = &retry.prefixRecorder
+		if err := retry.worker.state.ApplyTransactionWriteSet(
+			versioned.transactionWriteSets[txIndex], retry.worker.dynProps, &retry.prefixRaw,
+		); err != nil {
+			retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
+			return retry.refreshSettledPrefix(target, statedb, dynProps, cfg)
+		}
+		retry.worker.state.FinalizeTransaction()
+		retry.settledThrough = txIndex
+		retry.stats.prefixAdvances++
+	}
+	dynProps.CopyInto(retry.worker.dynProps)
+	retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
+	retry.stats.prefixReuses++
+	return true
+}
+
 // retryFrom rebuilds the conflicted transaction and its remaining sender
-// suffix from the real canonical prefix. This sampled implementation is
-// synchronous on purpose: it establishes exact incarnation semantics and
-// measures deep-copy cost before a later stage introduces an asynchronous
-// shared-version worker queue.
+// suffix from the reusable settled canonical prefix. The suffix is isolated by
+// journal snapshots and wholly reverted after its newest incarnations have
+// been retained.
 func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
 	if retry == nil || retry.source == nil || statedb == nil || dynProps == nil || versioned == nil ||
 		txIndex < 0 || txIndex >= len(retry.source.senderTaskOK) || !retry.source.senderTaskOK[txIndex] {
@@ -1153,24 +1244,12 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 		retry.selectedOK[current] = false
 		current = retry.source.senderNext[current]
 	}
-	copyStarted := time.Now()
-	retryState, err := statedb.Copy()
-	retry.stats.copyNanos += time.Since(copyStarted).Nanoseconds()
-	if err != nil {
-		retry.stats.errors++
+	if !retry.ensureSettledPrefix(txIndex-1, statedb, dynProps, versioned, cfg) {
 		return
 	}
-	retryState.SetDynamicProperties(dynProps.Copy())
-	if cfg.captureBalanceTrace {
-		retryState.BeginBalanceTrace(int64(cfg.block.Number()), cfg.block.Hash().Bytes(), cfg.block.Timestamp())
-	}
-	worker := discardShadowWorker{
-		state:     retryState,
-		dynProps:  retryState.DynamicProperties(),
-		db:        discardKVOverlay{parent: cfg.db},
-		forkCache: forks.NewVersionPassCache().BlockScope(),
-	}
-	worker.db.recorder = &worker.recorder
+	worker := retry.worker
+	prefixStateSnapshot := worker.state.Snapshot()
+	prefixDPSnapshot := worker.dynProps.Snapshot()
 	retryCfg := cfg
 	retryCfg.canonicalInfos = nil
 	retryCfg.canonicalWriteSets = nil
@@ -1182,9 +1261,11 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 	first := true
 	for current >= 0 && current < len(cfg.transactions) && retry.source.senderTaskOK[current] && retry.stats.executed < discardShadowRetryMaxExecutions {
 		task := retry.source.senderTasks[current]
+		retry.incarnations[current]++
 		result := worker.execute(current, retryCfg)
 		result.settledPrefix = txIndex - 1
 		result.hasSettledPrefix = true
+		result.incarnation = retry.incarnations[current]
 		if first {
 			if previous, ok := senderRetryOwnerPredecessor(versioned, cfg.transactions[current]); ok {
 				result.senderPredecessor = previous
@@ -1213,6 +1294,10 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 		current = retry.source.senderNext[current]
 	}
 	retry.stats.executionNanos += time.Since(executionStarted).Nanoseconds()
+	worker.state.RevertToSnapshot(prefixStateSnapshot)
+	worker.dynProps.RevertToSnapshot(prefixDPSnapshot)
+	worker.db.reset()
+	worker.db.recorder = &worker.recorder
 }
 
 // observeBoundary validates the newest incarnation against exactly the
@@ -1225,7 +1310,7 @@ func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Tr
 	_, sourceDecision, sourceAvailable := retry.source.observedResultForTransaction(txIndex)
 	decision := discardShadowReadVersionResult{}
 	resultAvailable := false
-	if retry.available[txIndex] {
+	if retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex] {
 		decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
 		resultAvailable = true
 	}
@@ -1301,6 +1386,10 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 	discardShadowRetryErrorsCounter.Inc(retry.stats.errors)
 	discardShadowRetryBudgetSkippedCounter.Inc(retry.stats.budgetSkipped)
 	discardShadowRetryCopyNanosCounter.Inc(retry.stats.copyNanos)
+	discardShadowRetryPrefixRefreshCounter.Inc(retry.stats.prefixRefreshes)
+	discardShadowRetryPrefixReuseCounter.Inc(retry.stats.prefixReuses)
+	discardShadowRetryPrefixAdvanceCounter.Inc(retry.stats.prefixAdvances)
+	discardShadowRetryPrefixAdvanceNanosCounter.Inc(retry.stats.prefixAdvanceNanos)
 	discardShadowRetryExecutionNanosCounter.Inc(retry.stats.executionNanos)
 	return retry.stats
 }

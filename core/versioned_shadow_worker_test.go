@@ -322,6 +322,66 @@ func TestVersionedShadowValidatesFrozenWorkerReadVersions(t *testing.T) {
 	}
 }
 
+func TestSenderRetryReusesAndRefreshesSettledPrefix(t *testing.T) {
+	live := newTestState(t)
+	owner := testProcessorAddr(1)
+	live.CreateAccount(owner, corepb.AccountType_Normal)
+	live.AddBalance(owner, 10_000_000)
+	if _, err := live.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	var versioned versionedAccessShadow
+	versioned.Prepare(3)
+	versioned.EnableWriteSetCapture(3)
+	retry := &discardShadowSenderRetry{settledThrough: -1}
+	if !retry.ensureSettledPrefix(0, live, live.DynamicProperties(), &versioned, discardShadowRunConfig{}) {
+		t.Fatal("initialize settled prefix")
+	}
+	if retry.stats.prefixRefreshes != 1 || retry.stats.prefixReuses != 0 || retry.settledThrough != 0 {
+		t.Fatalf("initial prefix stats = %+v settled=%d", retry.stats, retry.settledThrough)
+	}
+
+	live.AddBalance(owner, 2_000_000)
+	balanceValue := make([]byte, 8)
+	binary.BigEndian.PutUint64(balanceValue, 12_000_000)
+	versioned.transactionWritesOK[1] = true
+	versioned.transactionWriteSets[1] = state.TransactionWriteSet{
+		{
+			Kind:         state.TransactionAccessAccountField,
+			Address:      owner,
+			AccountField: state.TransactionAccountFieldBalance,
+		}: {Exists: true, Value: balanceValue},
+	}
+	if !retry.ensureSettledPrefix(1, live, live.DynamicProperties(), &versioned, discardShadowRunConfig{}) {
+		t.Fatal("advance settled prefix")
+	}
+	if got := retry.worker.state.GetBalance(owner); got != 12_000_000 {
+		t.Fatalf("advanced prefix balance = %d, want 12000000", got)
+	}
+	if retry.stats.prefixRefreshes != 1 || retry.stats.prefixReuses != 1 || retry.stats.prefixAdvances != 1 {
+		t.Fatalf("reused prefix stats = %+v", retry.stats)
+	}
+
+	// Account-KV generation resets are intentionally outside the narrow
+	// ordered applier. The reusable runner must refresh once from canonical
+	// state instead of retaining a partially advanced prefix.
+	live.AddBalance(owner, 3_000_000)
+	versioned.transactionWritesOK[2] = true
+	versioned.transactionWriteSets[2] = state.TransactionWriteSet{
+		{Kind: state.TransactionAccessAccountKVGeneration, Address: owner}: {},
+	}
+	if !retry.ensureSettledPrefix(2, live, live.DynamicProperties(), &versioned, discardShadowRunConfig{}) {
+		t.Fatal("refresh unsupported settled prefix")
+	}
+	if got := retry.worker.state.GetBalance(owner); got != 15_000_000 {
+		t.Fatalf("refreshed prefix balance = %d, want 15000000", got)
+	}
+	if retry.stats.prefixRefreshes != 2 || retry.stats.prefixReuses != 1 || retry.stats.prefixAdvances != 1 || retry.settledThrough != 2 {
+		t.Fatalf("refreshed prefix stats = %+v settled=%d", retry.stats, retry.settledThrough)
+	}
+}
+
 func TestTransferSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
 	transactions := []*types.Transaction{
 		makeTestTransferTx(1, 2, 1),

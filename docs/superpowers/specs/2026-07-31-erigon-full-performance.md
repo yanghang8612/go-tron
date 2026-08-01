@@ -981,6 +981,36 @@ StateDB copy for each retry. To keep this diagnostic from dominating sampled
 blocks, one block is capped at eight copies and 64 retry executions;
 `budget_skipped` records work omitted by that guard.
 
+The first production window covered 12,053 imported blocks and 170 sampled
+sender-chain blocks. The source executor produced 444 valid candidates from
+1,012 results. Seventeen retry attempts executed 100 incarnations and recovered
+89 additional results that all matched canonical TransactionInfo, WriteSet,
+and BalanceTrace; all mismatch and execution-error counters remained zero.
+StateDB copies cost 31.52 ms in total (1.85 ms/attempt), while retry execution
+cost 6.74 ms (67 microseconds/result). The recovered set would increase the
+sampled valid population by 20%, but 339 budget skips showed that copy-per-
+incarnation cannot scale to long sender chains.
+
+#### P4.22: Reusable settled-prefix runner
+
+The next observer replaces copy-per-incarnation with one lazy canonical-prefix
+copy per retrying block. After the first retry, the runner advances that private
+state in canonical order using the exact typed and raw TransactionWriteSets
+already captured by the version map. DynamicProperties are refreshed from the
+live boundary to include block-scoped mutations outside a transaction carrier.
+Each speculative suffix runs inside one outer StateDB/DynamicProperties journal
+snapshot and is wholly reverted, so the advanced prefix remains reusable by
+the next incarnation.
+
+If an intervening WriteSet contains a state family not yet supported by the
+narrow ordered applier, the runner discards the partial view and refreshes once
+from the real canonical prefix. Results carry an explicit monotonically
+increasing incarnation and only the newest incarnation can be selected.
+`sender_retry/prefix/` metrics distinguish full refreshes, reuse events,
+transactions advanced, and advance time. This remains a 1/64 synchronous
+canary; the production scheduler still requires asynchronous workers and a
+retry-priority queue before canonical publication.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
