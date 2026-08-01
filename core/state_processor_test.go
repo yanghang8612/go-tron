@@ -442,6 +442,69 @@ func TestProcessBlockSamplesSenderRetryIncarnation(t *testing.T) {
 	}
 }
 
+func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
+	statedb := newTestState(t)
+	for _, id := range []byte{1, 2, 3, 4, 5} {
+		statedb.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+	}
+	statedb.AddBalance(testProcessorAddr(1), 10_000_000)
+	statedb.AddBalance(testProcessorAddr(3), 10_000_000)
+	if _, err := statedb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	transactions := []*types.Transaction{
+		makeTestTransferTx(1, 2, 1_000_000),
+		makeTestTransferTx(3, 1, 2_000_000),
+		makeTestTransferTx(1, 4, 3_000_000),
+		makeTestTransferTx(1, 5, 1_000_000),
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(discardShadowAsyncRetryOffset), Timestamp: 3_000,
+		}},
+		Transactions: []*corepb.Transaction{
+			transactions[0].Proto(), transactions[1].Proto(), transactions[2].Proto(), transactions[3].Proto(),
+		},
+	})
+	blocksBefore := discardShadowRetryActualBlocksCounter.Snapshot().Count()
+	jobsBefore := discardShadowRetryActualJobsCounter.Snapshot().Count()
+	executedBefore := discardShadowRetryActualExecutedCounter.Snapshot().Count()
+	readyBefore := discardShadowRetryActualReadyCounter.Snapshot().Count()
+	lateBefore := discardShadowRetryActualLateCounter.Snapshot().Count()
+	staleBefore := discardShadowRetryActualStaleCounter.Snapshot().Count()
+	errorsBefore := discardShadowRetryActualErrorsCounter.Snapshot().Count()
+	if _, _, err := processBlockWithOptions(
+		statedb, statedb.DynamicProperties(), block, nil, nil, 0,
+		params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+		nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+		processBlockOptions{parallelTransfers: true},
+	); err != nil {
+		t.Fatalf("process actual async sender retry: %v", err)
+	}
+	if blocks := discardShadowRetryActualBlocksCounter.Snapshot().Count() - blocksBefore; blocks != 1 {
+		t.Fatalf("actual async blocks = %d, want 1", blocks)
+	}
+	if jobs := discardShadowRetryActualJobsCounter.Snapshot().Count() - jobsBefore; jobs != 1 {
+		t.Fatalf("actual async jobs = %d, want 1", jobs)
+	}
+	executed := discardShadowRetryActualExecutedCounter.Snapshot().Count() - executedBefore
+	if executed != 2 {
+		t.Fatalf("actual async executions = %d, want 2", executed)
+	}
+	classified := discardShadowRetryActualReadyCounter.Snapshot().Count() - readyBefore +
+		discardShadowRetryActualLateCounter.Snapshot().Count() - lateBefore +
+		discardShadowRetryActualStaleCounter.Snapshot().Count() - staleBefore
+	if classified != executed {
+		t.Fatalf("actual async classified results = %d, executions = %d", classified, executed)
+	}
+	if errors := discardShadowRetryActualErrorsCounter.Snapshot().Count() - errorsBefore; errors != 0 {
+		t.Fatalf("actual async errors = %d, want 0", errors)
+	}
+	if balance := statedb.GetBalance(testProcessorAddr(1)); balance != 7_000_000 {
+		t.Fatalf("owner balance = %d, want 7000000", balance)
+	}
+}
+
 func TestProcessBlockReincarnatesSenderRetryAfterLaterConflict(t *testing.T) {
 	statedb := newTestState(t)
 	for _, id := range []byte{1, 2, 3, 4, 5, 6, 7} {

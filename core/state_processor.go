@@ -866,7 +866,15 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			}
 			if discardShadow.sampled {
 				senderChainPreexecution = discardShadow.preexecuteTransferSenderChains(discardCfg)
-				senderRetry = newDiscardShadowSenderRetry(senderChainPreexecution, len(transactions))
+				if block.Number()%discardShadowAsyncRetryInterval == discardShadowAsyncRetryOffset {
+					// Use one disjoint quarter of sampled blocks for a real
+					// background retry canary. The other three quarters retain the
+					// synchronous observer and its timing projection as a stable
+					// correctness/performance reference.
+					senderRetry = newDiscardShadowAsyncSenderRetry(senderChainPreexecution, len(transactions))
+				} else {
+					senderRetry = newDiscardShadowSenderRetry(senderChainPreexecution, len(transactions))
+				}
 			}
 			if options.parallelTransfers {
 				parallelTransferBlocksCounter.Inc(1)
@@ -882,6 +890,14 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			}
 		}
 	}
+	// A rejected canonical transaction can return before sampled diagnostics
+	// reach finish(). Always reclaim the block-scoped async worker first; it
+	// owns only frozen inputs, but must not outlive their StateDB/database scope.
+	defer func() {
+		if senderRetry != nil && senderRetry.async {
+			senderRetry.drainAsyncEvents(len(transactions), true)
+		}
+	}()
 	flushDomainChanges := func(txIndex int, mark int) error {
 		if domainChanges != nil {
 			if err := domainChanges.FlushOrdinal(mark, uint64(txIndex)); err != nil {

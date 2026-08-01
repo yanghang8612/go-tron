@@ -1039,6 +1039,46 @@ ready/late/unknown, validated/recovered, ready slack, and lateness. This gate
 determines whether a frozen raw view plus a retry-priority worker queue can
 recover enough work before enabling actual background execution.
 
+The first projection window covered 6,381 blocks and 93 sender-chain samples.
+Twelve retry candidates were classified with no unknown deadlines: seven were
+ready and five late. All seven projected-ready results passed the exact output,
+WriteSet, and BalanceTrace checks. Four of the five late observations were the
+conflicting transaction itself, whose publication deadline is necessarily
+zero; seven of the eight future-suffix results were projected ready. The ready
+results had 15.65 ms total slack, while total lateness was 0.48 ms. This is a
+small sample, but it is sufficient to start a bounded real-concurrency canary.
+
+#### P4.24: Frozen raw capability and actual async retry canary
+
+One disjoint quarter of sampled blocks (height `128 mod 256`) now uses a real
+background sender-retry worker instead of the synchronous retry observer. The
+other three quarters preserve the synchronous implementation and deadline
+projection as an uncontended reference. At a conflict boundary, the canonical
+thread advances one reusable private runner to the settled prefix, clones the
+read-version maps needed by that incarnation, and transfers exclusive worker
+ownership to a goroutine. A fully buffered result channel streams completed
+suffix members back without pacing the worker; the canonical thread polls it
+at every transaction boundary and admits only results that arrived before
+their boundary and still carry the newest incarnation.
+
+The raw database is a strict capability rather than a live parent. Exact raw
+keys recorded by the source pre-execution (normally the Transfer TAPOS row) are
+copied through the settled-prefix overlay before dispatch. Known absence is
+preserved. `Get` or `Has` of an unrecorded key fails and increments
+`frozen_raw_misses`; the goroutine can never fall through to the mutable
+canonical block buffer. Typed state remains the worker's private StateDB copy.
+The worker is always joined on both successful completion and an early
+canonical error, so block-scoped state cannot escape its lifetime.
+
+Only one job owns the reusable runner in this canary. A conflicting boundary
+reached while it is busy executes serially and invalidates the unfinished
+descendants, preventing a result computed through an unvalidated predecessor
+from being selected. Metrics under `sender_retry/async_actual/` report jobs,
+busy skips, executed/ready/late/stale results, validated/recovered candidates,
+frozen keys/misses, worker time, errors, and finish wait. Production evidence
+from this canary will determine queue depth and whether to add more frozen
+workers before any canonical publication path consumes retry results.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

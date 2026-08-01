@@ -129,8 +129,13 @@
   prefix advancement coverage, and unchanged serial equivalence.
 - [x] Add measured async deadline projection for each incarnation and classify
   ready, late, and unknown results at their canonical publication boundary.
-- [ ] Run the async projection production gate and size the frozen-raw-view
+- [x] Run the async projection production gate and size the frozen-raw-view
   worker pool and retry queue from observed ready rate and deadline slack.
+- [x] Freeze exact raw-KV reads at the settled boundary and add a disjoint
+  sampled single-worker async retry canary with strict capability misses,
+  streamed results, incarnation invalidation, and error-path worker joining.
+- [ ] Run the actual async canary production gate and measure ready, late,
+  stale, busy-skip, raw-miss, validation, and finish-wait rates.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

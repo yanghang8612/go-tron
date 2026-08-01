@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -113,6 +114,52 @@ func TestDiscardKVOverlayIsolatesWrites(t *testing.T) {
 	overlay.reset()
 	if got, err := overlay.Get([]byte("stable")); err != nil || string(got) != "parent" {
 		t.Fatalf("reset overlay stable = %q, %v", got, err)
+	}
+}
+
+func TestAsyncRetryFrozenRawViewRejectsLiveFallback(t *testing.T) {
+	parent := ethrawdb.NewMemoryDatabase()
+	if err := parent.Put([]byte("stable"), []byte("at-boundary")); err != nil {
+		t.Fatal(err)
+	}
+	source := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{
+			{reads: state.TransactionReadSet{Reads: []state.TransactionRead{{
+				Key: state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "stable"}, Mode: state.TransactionAccessRead,
+			}}}},
+			{reads: state.TransactionReadSet{Reads: []state.TransactionRead{{
+				Key: state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "missing"}, Mode: state.TransactionAccessRead,
+			}}}},
+		},
+		resultByTx: []int{0, 1},
+		senderNext: []int{1, -1},
+	}
+	retry := &discardShadowSenderRetry{source: source}
+	retry.prefixRaw.parent = parent
+	var recorder state.TransactionAccessRecorder
+	recorder.Reset(8)
+	retry.prefixRaw.recorder = &recorder
+	frozen, keys, err := retry.freezeAsyncRawView(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys != 2 {
+		t.Fatalf("frozen keys = %d, want 2", keys)
+	}
+	if err := parent.Put([]byte("stable"), []byte("later-live-value")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := frozen.Get([]byte("stable")); err != nil || string(got) != "at-boundary" {
+		t.Fatalf("frozen stable = %q, %v", got, err)
+	}
+	if exists, err := frozen.Has([]byte("missing")); err != nil || exists {
+		t.Fatalf("frozen absent key = exists:%v err:%v", exists, err)
+	}
+	if _, err := frozen.Get([]byte("uncaptured")); !errors.Is(err, errDiscardShadowFrozenRawMiss) {
+		t.Fatalf("uncaptured read error = %v", err)
+	}
+	if frozen.misses != 1 {
+		t.Fatalf("frozen misses = %d, want 1", frozen.misses)
 	}
 }
 

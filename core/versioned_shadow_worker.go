@@ -22,6 +22,8 @@ import (
 
 const (
 	discardShadowSampleInterval     = uint64(64)
+	discardShadowAsyncRetryInterval = uint64(256)
+	discardShadowAsyncRetryOffset   = uint64(128)
 	discardShadowWorkerCount        = 4
 	discardShadowRetryMaxAttempts   = int64(8)
 	discardShadowRetryMaxExecutions = int64(64)
@@ -115,6 +117,22 @@ var (
 	discardShadowRetryAsyncRecoveredCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/recovered", nil)
 	discardShadowRetryAsyncReadySlackNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/ready_slack_nanos", nil)
 	discardShadowRetryAsyncLateNanosCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/late_nanos", nil)
+	discardShadowRetryActualBlocksCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/blocks", nil)
+	discardShadowRetryActualJobsCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/jobs", nil)
+	discardShadowRetryActualBusySkippedCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/busy_skipped", nil)
+	discardShadowRetryActualExecutedCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/executed", nil)
+	discardShadowRetryActualReadyCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/ready", nil)
+	discardShadowRetryActualLateCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/late", nil)
+	discardShadowRetryActualStaleCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/stale", nil)
+	discardShadowRetryActualCandidatesCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/candidates", nil)
+	discardShadowRetryActualValidatedCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/validated", nil)
+	discardShadowRetryActualRecoveredCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/recovered", nil)
+	discardShadowRetryActualErrorsCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/errors", nil)
+	discardShadowRetryActualRawKeysCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/frozen_raw_keys", nil)
+	discardShadowRetryActualRawMissCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/frozen_raw_misses", nil)
+	discardShadowRetryActualDispatchNanosCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch_nanos", nil)
+	discardShadowRetryActualExecutionNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/execution_nanos", nil)
+	discardShadowRetryActualFinishWaitNanosCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/finish_wait_nanos", nil)
 	parallelTransferEnabledGauge                     = metrics.NewRegisteredGauge("core/parallel_transfer/enabled", nil)
 	parallelTransferBlocksCounter                    = metrics.NewRegisteredCounter("core/parallel_transfer/blocks", nil)
 	parallelTransferPreexecutedCounter               = metrics.NewRegisteredCounter("core/parallel_transfer/preexecuted", nil)
@@ -197,6 +215,54 @@ type discardKVOverlay struct {
 	recorder *state.TransactionAccessRecorder
 	puts     map[string][]byte
 	deletes  map[string]struct{}
+}
+
+var errDiscardShadowFrozenRawMiss = errors.New("discard shadow frozen raw key was not captured")
+
+// discardShadowFrozenKV is the immutable raw-KV capability handed to a
+// background retry. Every permitted key is copied at the settled canonical
+// boundary. An unexpected key is an execution error instead of falling
+// through to the live block buffer, which may already contain later writes.
+type discardShadowFrozenKV struct {
+	values  map[string][]byte
+	present map[string]bool
+	misses  int64
+}
+
+func (db *discardShadowFrozenKV) Has(key []byte) (bool, error) {
+	if db == nil {
+		return false, errDiscardShadowFrozenRawMiss
+	}
+	present, ok := db.present[string(key)]
+	if !ok {
+		db.misses++
+		return false, errDiscardShadowFrozenRawMiss
+	}
+	return present, nil
+}
+
+func (db *discardShadowFrozenKV) Get(key []byte) ([]byte, error) {
+	if db == nil {
+		return nil, errDiscardShadowFrozenRawMiss
+	}
+	keyString := string(key)
+	present, ok := db.present[keyString]
+	if !ok {
+		db.misses++
+		return nil, errDiscardShadowFrozenRawMiss
+	}
+	if !present {
+		return nil, errors.New("not found")
+	}
+	return append([]byte(nil), db.values[keyString]...), nil
+}
+
+func (db *discardShadowFrozenKV) Put([]byte, []byte) error {
+	return errors.New("discard shadow frozen raw view is read-only")
+}
+
+func (db *discardShadowFrozenKV) Delete([]byte) error {
+	return errors.New("discard shadow frozen raw view is read-only")
 }
 
 func (db *discardKVOverlay) reset() {
@@ -370,6 +436,36 @@ type discardShadowSenderRetryStats struct {
 	asyncRecovered     int64
 	asyncReadySlackNs  int64
 	asyncLateNs        int64
+	actualJobs         int64
+	actualBusySkipped  int64
+	actualExecuted     int64
+	actualReady        int64
+	actualLate         int64
+	actualStale        int64
+	actualCandidates   int64
+	actualValidated    int64
+	actualRecovered    int64
+	actualErrors       int64
+	actualRawKeys      int64
+	actualRawMisses    int64
+	actualDispatchNs   int64
+	actualExecutionNs  int64
+	actualFinishWaitNs int64
+}
+
+type discardShadowAsyncRetryEvent struct {
+	result    *discardShadowTaskResult
+	worker    *discardShadowWorker
+	done      bool
+	nanos     int64
+	rawMisses int64
+}
+
+type discardShadowAsyncRetryTask struct {
+	txIndex           int
+	incarnation       uint32
+	senderPredecessor int
+	senderVersioned   bool
 }
 
 // discardShadowSenderRetry holds the newest sampled incarnation for each
@@ -388,6 +484,9 @@ type discardShadowSenderRetry struct {
 	prefixRaw          discardKVOverlay
 	prefixRecorder     state.TransactionAccessRecorder
 	settledThrough     int
+	async              bool
+	asyncBusy          bool
+	asyncEvents        chan discardShadowAsyncRetryEvent
 	stats              discardShadowSenderRetryStats
 }
 
@@ -1131,6 +1230,87 @@ func newDiscardShadowSenderRetry(source *discardShadowPreexecution, transactionC
 	}
 }
 
+func newDiscardShadowAsyncSenderRetry(source *discardShadowPreexecution, transactionCount int) *discardShadowSenderRetry {
+	retry := newDiscardShadowSenderRetry(source, transactionCount)
+	if retry == nil {
+		return nil
+	}
+	retry.async = true
+	// One job can emit at most the execution budget plus its ownership-return
+	// event. Keeping the channel fully buffered prevents the worker from being
+	// paced by canonical execution while it owns no live mutable state.
+	retry.asyncEvents = make(chan discardShadowAsyncRetryEvent, discardShadowRetryMaxExecutions+1)
+	return retry
+}
+
+func cloneDiscardShadowVersionView(source *versionedAccessShadow) versionedAccessShadow {
+	var clone versionedAccessShadow
+	if source == nil {
+		return clone
+	}
+	clone.versions = make(map[state.TransactionAccessKey]int, len(source.versions))
+	for key, version := range source.versions {
+		clone.versions[key] = version
+	}
+	clone.accountFullVersions = make(map[tcommon.Address]int, len(source.accountFullVersions))
+	for key, version := range source.accountFullVersions {
+		clone.accountFullVersions[key] = version
+	}
+	clone.accountAnyVersions = make(map[tcommon.Address]int, len(source.accountAnyVersions))
+	for key, version := range source.accountAnyVersions {
+		clone.accountAnyVersions[key] = version
+	}
+	clone.accountFieldVersions = make(map[state.TransactionAccountFieldKey]int, len(source.accountFieldVersions))
+	for key, version := range source.accountFieldVersions {
+		clone.accountFieldVersions[key] = version
+	}
+	clone.lastSenderTx = make(map[tcommon.Address]int, len(source.lastSenderTx))
+	for owner, version := range source.lastSenderTx {
+		clone.lastSenderTx[owner] = version
+	}
+	return clone
+}
+
+func (retry *discardShadowSenderRetry) freezeAsyncRawView(txIndex int) (*discardShadowFrozenKV, int, error) {
+	if retry == nil || retry.source == nil {
+		return nil, 0, errors.New("missing async retry source")
+	}
+	keys := make(map[string]struct{}, 4)
+	for current, traversed := txIndex, 0; current >= 0 && current < len(retry.source.senderNext) && traversed < len(retry.source.senderNext); traversed++ {
+		if current < len(retry.source.resultByTx) {
+			resultIndex := retry.source.resultByTx[current]
+			if resultIndex >= 0 && resultIndex < len(retry.source.results) {
+				for _, read := range retry.source.results[resultIndex].reads.Reads {
+					if read.Key.Kind == state.TransactionAccessRawKV && read.Mode&state.TransactionAccessRead != 0 {
+						keys[read.Key.LogicalKey] = struct{}{}
+					}
+				}
+			}
+		}
+		current = retry.source.senderNext[current]
+	}
+	frozen := &discardShadowFrozenKV{
+		values:  make(map[string][]byte, len(keys)),
+		present: make(map[string]bool, len(keys)),
+	}
+	for key := range keys {
+		exists, err := retry.prefixRaw.Has([]byte(key))
+		if err != nil {
+			return nil, 0, err
+		}
+		frozen.present[key] = exists
+		if !exists {
+			continue
+		}
+		value, err := retry.prefixRaw.Get([]byte(key))
+		if err != nil {
+			return nil, 0, err
+		}
+		frozen.values[key] = append([]byte(nil), value...)
+	}
+	return frozen, len(keys), nil
+}
+
 func annotateSenderRetryReadVersions(reads *state.TransactionReadSet, base, forwarded *versionedAccessShadow, txIndex int) {
 	if reads == nil {
 		return
@@ -1323,6 +1503,181 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 	worker.db.recorder = &worker.recorder
 }
 
+func (retry *discardShadowSenderRetry) invalidateAsyncSuffix(txIndex int) []discardShadowAsyncRetryTask {
+	if retry == nil || retry.source == nil || txIndex < 0 || txIndex >= len(retry.available) {
+		return nil
+	}
+	remaining := discardShadowRetryMaxExecutions - retry.stats.executed
+	capacity := 0
+	if remaining > 0 {
+		capacity = min(int(remaining), 8)
+	}
+	tasks := make([]discardShadowAsyncRetryTask, 0, capacity)
+	for current, traversed := txIndex, 0; current >= 0 && current < len(retry.available) && traversed < len(retry.available); traversed++ {
+		if current >= len(retry.source.senderTaskOK) || !retry.source.senderTaskOK[current] {
+			break
+		}
+		retry.available[current] = false
+		retry.selectedOK[current] = false
+		retry.selectedAsyncReady[current] = false
+		retry.incarnations[current]++
+		if int64(len(tasks)) < remaining {
+			task := retry.source.senderTasks[current]
+			tasks = append(tasks, discardShadowAsyncRetryTask{
+				txIndex:           current,
+				incarnation:       retry.incarnations[current],
+				senderPredecessor: task.senderPredecessor,
+				senderVersioned:   task.senderVersioned,
+			})
+		}
+		current = retry.source.senderNext[current]
+	}
+	return tasks
+}
+
+// startAsyncRetry transfers exclusive ownership of the settled-prefix worker
+// to one background job. The job can read only its StateDB copy and the frozen
+// raw-key capability assembled at this boundary. Results are streamed as soon
+// as each sender-chain member finishes; ownership returns in a final event.
+func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
+	if retry == nil || !retry.async || retry.asyncBusy || statedb == nil || dynProps == nil || versioned == nil || retry.asyncEvents == nil {
+		return
+	}
+	dispatchStarted := time.Now()
+	defer func() {
+		retry.stats.actualDispatchNs += time.Since(dispatchStarted).Nanoseconds()
+	}()
+	retry.stats.attempts++
+	tasks := retry.invalidateAsyncSuffix(txIndex)
+	if len(tasks) == 0 {
+		retry.stats.budgetSkipped++
+		return
+	}
+	if !retry.ensureSettledPrefix(txIndex-1, statedb, dynProps, versioned, cfg) {
+		return
+	}
+	frozenRaw, frozenKeys, err := retry.freezeAsyncRawView(txIndex)
+	if err != nil {
+		retry.stats.errors++
+		retry.stats.actualErrors++
+		return
+	}
+	retry.stats.actualRawKeys += int64(frozenKeys)
+	versionView := cloneDiscardShadowVersionView(versioned)
+	if previous, ok := senderRetryOwnerPredecessor(&versionView, cfg.transactions[tasks[0].txIndex]); ok {
+		tasks[0].senderPredecessor = previous
+		tasks[0].senderVersioned = true
+	}
+	worker := retry.worker
+	retry.worker = nil
+	retry.asyncBusy = true
+	retry.stats.actualJobs++
+	worker.db.parent = frozenRaw
+	retryCfg := cfg
+	retryCfg.db = nil
+	retryCfg.canonicalInfos = nil
+	retryCfg.canonicalWriteSets = nil
+	retryCfg.retainInfos = true
+	events := retry.asyncEvents
+	go func() {
+		started := time.Now()
+		prefixStateSnapshot := worker.state.Snapshot()
+		prefixDPSnapshot := worker.dynProps.Snapshot()
+		var forwarded versionedAccessShadow
+		forwarded.Prepare(len(retryCfg.transactions))
+		for _, task := range tasks {
+			result := worker.execute(task.txIndex, retryCfg)
+			result.settledPrefix = txIndex - 1
+			result.hasSettledPrefix = true
+			result.incarnation = task.incarnation
+			result.retryStartTx = txIndex
+			result.senderPredecessor = task.senderPredecessor
+			result.senderVersioned = task.senderVersioned
+			annotateSenderRetryReadVersions(&result.reads, &versionView, &forwarded, task.txIndex)
+			if preexecutedTransferReady(&result) {
+				if advanceErr := worker.advanceSenderChain(result.writes); advanceErr != nil {
+					result.err = advanceErr
+				}
+			}
+			result.retryCompletionNanos = time.Since(started).Nanoseconds()
+			resultCopy := result
+			events <- discardShadowAsyncRetryEvent{result: &resultCopy}
+			if !preexecutedTransferReady(&result) {
+				break
+			}
+			installSenderChainWrites(&forwarded, result.writes, task.txIndex)
+		}
+		worker.state.RevertToSnapshot(prefixStateSnapshot)
+		worker.dynProps.RevertToSnapshot(prefixDPSnapshot)
+		worker.db.reset()
+		worker.db.parent = nil
+		worker.db.recorder = &worker.recorder
+		events <- discardShadowAsyncRetryEvent{
+			worker: worker, done: true, nanos: time.Since(started).Nanoseconds(), rawMisses: frozenRaw.misses,
+		}
+	}()
+}
+
+func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyncRetryEvent, boundary int) {
+	if retry == nil {
+		return
+	}
+	if event.done {
+		retry.worker = event.worker
+		if retry.worker != nil {
+			retry.worker.db.parent = &retry.prefixRaw
+		}
+		retry.asyncBusy = false
+		retry.stats.actualExecutionNs += event.nanos
+		retry.stats.executionNanos += event.nanos
+		retry.stats.actualRawMisses += event.rawMisses
+		return
+	}
+	if event.result == nil {
+		return
+	}
+	result := *event.result
+	retry.stats.executed++
+	retry.stats.actualExecuted++
+	if !preexecutedTransferReady(&result) {
+		retry.stats.errors++
+		retry.stats.actualErrors++
+	}
+	if result.txIndex < 0 || result.txIndex >= len(retry.results) || result.incarnation != retry.incarnations[result.txIndex] {
+		retry.stats.actualStale++
+		return
+	}
+	if result.txIndex < boundary {
+		retry.stats.actualLate++
+		return
+	}
+	retry.results[result.txIndex] = result
+	retry.available[result.txIndex] = true
+	retry.selectedOK[result.txIndex] = false
+	retry.stats.actualReady++
+}
+
+func (retry *discardShadowSenderRetry) drainAsyncEvents(boundary int, wait bool) {
+	if retry == nil || !retry.async {
+		return
+	}
+	if wait && retry.asyncBusy {
+		started := time.Now()
+		for retry.asyncBusy {
+			retry.consumeAsyncEvent(<-retry.asyncEvents, boundary)
+		}
+		retry.stats.actualFinishWaitNs += time.Since(started).Nanoseconds()
+	}
+	for {
+		select {
+		case event := <-retry.asyncEvents:
+			retry.consumeAsyncEvent(event, boundary)
+		default:
+			return
+		}
+	}
+}
+
 // projectSenderRetryDeadline asks whether a background worker starting at the
 // recorded conflict boundary would have completed this result before serial
 // canonical execution reached its publication boundary. It uses measured
@@ -1351,6 +1706,10 @@ func projectSenderRetryDeadline(result discardShadowTaskResult, boundary int, ve
 // and has dependent sender work, it immediately builds a new sampled suffix.
 func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Transaction, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
 	if retry == nil || txIndex < 0 || txIndex >= len(retry.results) {
+		return
+	}
+	if retry.async {
+		retry.observeAsyncBoundary(txIndex, tx, statedb, dynProps, versioned, cfg)
 		return
 	}
 	_, sourceDecision, sourceAvailable := retry.source.observedResultForTransaction(txIndex)
@@ -1396,9 +1755,60 @@ func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Tr
 	retry.stats.candidates++
 }
 
+func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *types.Transaction, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
+	retry.drainAsyncEvents(txIndex, false)
+	_, sourceDecision, sourceAvailable := retry.source.observedResultForTransaction(txIndex)
+	decision := discardShadowReadVersionResult{}
+	resultAvailable := retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex]
+	if resultAvailable {
+		decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
+	}
+	newestPublishable := sourceAvailable && sourceDecision.publishable
+	if resultAvailable {
+		newestPublishable = decision.publishable
+	}
+	if !newestPublishable && retry.asyncBusy {
+		// Give a result that completed while the source version was checked one
+		// final chance at the boundary before declaring the worker busy/late.
+		retry.drainAsyncEvents(txIndex, false)
+		resultAvailable = retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex]
+		if resultAvailable {
+			decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
+			newestPublishable = decision.publishable
+		}
+	}
+	if !newestPublishable && txIndex < len(retry.source.senderNext) && retry.source.senderNext[txIndex] >= 0 {
+		if retry.asyncBusy {
+			// This transaction will now execute canonically. Any unfinished
+			// descendant built through its speculative post-image is stale.
+			_ = retry.invalidateAsyncSuffix(txIndex)
+			retry.stats.actualBusySkipped++
+			return
+		}
+		if retry.stats.attempts >= discardShadowRetryMaxAttempts || retry.stats.executed >= discardShadowRetryMaxExecutions {
+			retry.stats.budgetSkipped++
+			_ = retry.invalidateAsyncSuffix(txIndex)
+			return
+		}
+		retry.startAsyncRetry(txIndex, statedb, dynProps, versioned, cfg)
+		return
+	}
+	if !resultAvailable || !decision.publishable {
+		return
+	}
+	retry.selected[txIndex] = retry.results[txIndex]
+	retry.selectedOK[txIndex] = true
+	retry.selectedAsyncReady[txIndex] = true
+	retry.stats.candidates++
+	retry.stats.actualCandidates++
+}
+
 func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, cfg discardShadowRunConfig) discardShadowSenderRetryStats {
 	if retry == nil || versioned == nil || len(cfg.canonicalInfos) != len(cfg.transactions) {
 		return discardShadowSenderRetryStats{}
+	}
+	if retry.async {
+		retry.drainAsyncEvents(len(cfg.transactions), true)
 	}
 	for txIndex, selected := range retry.selected {
 		if !retry.selectedOK[txIndex] {
@@ -1431,7 +1841,12 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 			if !sourceAccepted {
 				retry.stats.recovered++
 			}
-			if txIndex < len(retry.selectedAsyncReady) && retry.selectedAsyncReady[txIndex] {
+			if retry.async {
+				retry.stats.actualValidated++
+				if !sourceAccepted {
+					retry.stats.actualRecovered++
+				}
+			} else if txIndex < len(retry.selectedAsyncReady) && retry.selectedAsyncReady[txIndex] {
 				retry.stats.asyncValidated++
 				if !sourceAccepted {
 					retry.stats.asyncRecovered++
@@ -1464,6 +1879,24 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 	discardShadowRetryAsyncRecoveredCounter.Inc(retry.stats.asyncRecovered)
 	discardShadowRetryAsyncReadySlackNanosCounter.Inc(retry.stats.asyncReadySlackNs)
 	discardShadowRetryAsyncLateNanosCounter.Inc(retry.stats.asyncLateNs)
+	if retry.async {
+		discardShadowRetryActualBlocksCounter.Inc(1)
+		discardShadowRetryActualJobsCounter.Inc(retry.stats.actualJobs)
+		discardShadowRetryActualBusySkippedCounter.Inc(retry.stats.actualBusySkipped)
+		discardShadowRetryActualExecutedCounter.Inc(retry.stats.actualExecuted)
+		discardShadowRetryActualReadyCounter.Inc(retry.stats.actualReady)
+		discardShadowRetryActualLateCounter.Inc(retry.stats.actualLate)
+		discardShadowRetryActualStaleCounter.Inc(retry.stats.actualStale)
+		discardShadowRetryActualCandidatesCounter.Inc(retry.stats.actualCandidates)
+		discardShadowRetryActualValidatedCounter.Inc(retry.stats.actualValidated)
+		discardShadowRetryActualRecoveredCounter.Inc(retry.stats.actualRecovered)
+		discardShadowRetryActualErrorsCounter.Inc(retry.stats.actualErrors)
+		discardShadowRetryActualRawKeysCounter.Inc(retry.stats.actualRawKeys)
+		discardShadowRetryActualRawMissCounter.Inc(retry.stats.actualRawMisses)
+		discardShadowRetryActualDispatchNanosCounter.Inc(retry.stats.actualDispatchNs)
+		discardShadowRetryActualExecutionNanosCounter.Inc(retry.stats.actualExecutionNs)
+		discardShadowRetryActualFinishWaitNanosCounter.Inc(retry.stats.actualFinishWaitNs)
+	}
 	return retry.stats
 }
 
