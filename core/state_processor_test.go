@@ -313,7 +313,7 @@ func TestProcessBlockSamplesSenderChainForwarding(t *testing.T) {
 	}
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
-			Number: int64(discardShadowSampleInterval), Timestamp: 3_000,
+			Number: int64(discardShadowAsyncRetryInterval), Timestamp: 3_000,
 		}},
 		Transactions: []*corepb.Transaction{transactions[0].Proto(), transactions[1].Proto()},
 	})
@@ -365,7 +365,7 @@ func TestProcessBlockSamplesSenderRetryIncarnation(t *testing.T) {
 	}
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
-			Number: int64(discardShadowSampleInterval), Timestamp: 3_000,
+			Number: int64(discardShadowAsyncRetryInterval), Timestamp: 3_000,
 		}},
 		Transactions: []*corepb.Transaction{
 			transactions[0].Proto(), transactions[1].Proto(), transactions[2].Proto(), transactions[3].Proto(),
@@ -460,7 +460,7 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	}
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
-			Number: int64(discardShadowAsyncRetryOffset), Timestamp: 3_000,
+			Number: int64(discardShadowAsyncRetryFirstOffset), Timestamp: 3_000,
 		}},
 		Transactions: []*corepb.Transaction{
 			transactions[0].Proto(), transactions[1].Proto(), transactions[2].Proto(), transactions[3].Proto(),
@@ -562,7 +562,7 @@ func TestProcessBlockReincarnatesSenderRetryAfterLaterConflict(t *testing.T) {
 	}
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
-			Number: int64(discardShadowSampleInterval), Timestamp: 3_000,
+			Number: int64(discardShadowAsyncRetryInterval), Timestamp: 3_000,
 		}},
 		Transactions: transactionProtos,
 	})

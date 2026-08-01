@@ -1140,6 +1140,21 @@ job from a more recent settled prefix. `lookahead_deferred` measures displaced
 far-suffix work; ready, stale, recovered, job, and dispatch ratios determine
 whether the window should expand, shrink, or become a dynamic heap.
 
+The first bounded-lookahead deployment covered 25 actual blocks and 14 jobs.
+All 28 executions completed with zero stale results, busy skips, errors, raw
+misses, prefix refreshes, or StateDB copies; 11 results arrived before their
+boundary and three fully validated recovered results matched the canonical
+outputs. Every observed job contained only the mandatory conflict transaction
+and one sender successor, so `lookahead_deferred` remained zero and this window
+could not yet exercise the four-task bound.
+
+To accelerate the long-chain gate without consuming retry output canonically,
+three of the four sampled cohorts (`64`, `128`, and `192 mod 256`) now use the
+actual async scheduler. The `0 mod 256` cohort remains on the synchronous
+settled-prefix observer as a fixed correctness and deadline-projection
+reference. This changes only observer coverage: canonical transfer publication
+continues to use the already-gated sender-chain path.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

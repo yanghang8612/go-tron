@@ -14,6 +14,26 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
+func TestDiscardShadowAsyncRetryCohorts(t *testing.T) {
+	tests := []struct {
+		blockNum uint64
+		want     bool
+	}{
+		{blockNum: 0, want: false},
+		{blockNum: 1, want: false},
+		{blockNum: 64, want: true},
+		{blockNum: 128, want: true},
+		{blockNum: 192, want: true},
+		{blockNum: 256, want: false},
+		{blockNum: 320, want: true},
+	}
+	for _, test := range tests {
+		if got := useDiscardShadowAsyncRetry(test.blockNum); got != test.want {
+			t.Fatalf("block %d async retry cohort = %t, want %t", test.blockNum, got, test.want)
+		}
+	}
+}
+
 func TestCompareDiscardShadowInfoSplitsEnergyFields(t *testing.T) {
 	tests := []struct {
 		name string
@@ -683,7 +703,7 @@ func TestSenderChainPreexecutionRetainsSingleChainRetrySpare(t *testing.T) {
 		makeTestTransferTx(1, 3, 2_000_000),
 	}
 	block := types.NewBlockFromPB(&corepb.Block{
-		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(discardShadowAsyncRetryOffset), Timestamp: 3_000}},
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(discardShadowAsyncRetryFirstOffset), Timestamp: 3_000}},
 		Transactions: []*corepb.Transaction{transactions[0].Proto(), transactions[1].Proto()},
 	})
 	shadow := &discardShadowBlock{base: base, sampled: true}
@@ -735,7 +755,7 @@ func TestSenderChainPreexecutionRetainsIndependentRetryPool(t *testing.T) {
 		makeTestTransferTx(7, 12, 2_000),
 	}
 	blockPB := &corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
-		Number: int64(discardShadowAsyncRetryOffset), Timestamp: 3_000,
+		Number: int64(discardShadowAsyncRetryFirstOffset), Timestamp: 3_000,
 	}}}
 	for _, tx := range transactions {
 		blockPB.Transactions = append(blockPB.Transactions, tx.Proto())

@@ -143,6 +143,8 @@
   preserving exclusive ownership and newest-incarnation admission.
 - [x] Prioritize the nearest four sender-chain boundaries per async job instead
   of eagerly executing an entire suffix that later incarnations invalidate.
+- [x] Expand the actual async observer to three sampled cohorts while retaining
+  one fixed synchronous cohort as the production reference.
 - [ ] Run the actual async canary production gate and measure ready, late,
   stale, busy-skip, raw-miss, validation, and finish-wait rates.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-

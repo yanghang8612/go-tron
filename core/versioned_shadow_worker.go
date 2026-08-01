@@ -23,12 +23,22 @@ import (
 const (
 	discardShadowSampleInterval     = uint64(64)
 	discardShadowAsyncRetryInterval = uint64(256)
-	discardShadowAsyncRetryOffset   = uint64(128)
-	discardShadowWorkerCount        = 4
-	discardShadowRetryMaxAttempts   = int64(8)
-	discardShadowRetryMaxExecutions = int64(64)
-	discardShadowRetryLookahead     = int64(4)
+	// Keep one sampled cohort on the synchronous retry observer as a stable
+	// reference. The other three sampled cohorts exercise the real async
+	// scheduler, increasing long-chain coverage without changing canonical
+	// publication.
+	discardShadowAsyncRetryReferenceOffset = uint64(0)
+	discardShadowAsyncRetryFirstOffset     = discardShadowSampleInterval
+	discardShadowWorkerCount               = 4
+	discardShadowRetryMaxAttempts          = int64(8)
+	discardShadowRetryMaxExecutions        = int64(64)
+	discardShadowRetryLookahead            = int64(4)
 )
+
+func useDiscardShadowAsyncRetry(blockNum uint64) bool {
+	return blockNum%discardShadowSampleInterval == 0 &&
+		blockNum%discardShadowAsyncRetryInterval != discardShadowAsyncRetryReferenceOffset
+}
 
 var (
 	discardShadowBlocksCounter                       = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/blocks", nil)
