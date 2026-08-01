@@ -141,7 +141,6 @@ var (
 	discardShadowRetryActualPrefixNanosCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/prefix_nanos", nil)
 	discardShadowRetryActualRawFreezeNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/raw_freeze_nanos", nil)
 	discardShadowRetryActualVersionNanosCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/version_snapshot_nanos", nil)
-	discardShadowRetryActualPrewarmedCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/prewarmed_runners", nil)
 	discardShadowRetryActualExecutionNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/execution_nanos", nil)
 	discardShadowRetryActualFinishWaitNanosCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/finish_wait_nanos", nil)
 	parallelTransferEnabledGauge                     = metrics.NewRegisteredGauge("core/parallel_transfer/enabled", nil)
@@ -405,7 +404,6 @@ type discardShadowPreexecution struct {
 	senderNext    []int
 	groups        int
 	wallNanos     int64
-	retryState    *state.StateDB
 }
 
 type discardShadowSenderChainStats struct {
@@ -473,7 +471,6 @@ type discardShadowSenderRetryStats struct {
 	actualVersionNs    int64
 	actualExecutionNs  int64
 	actualFinishWaitNs int64
-	actualPrewarmed    int64
 }
 
 type discardShadowAsyncRetryEvent struct {
@@ -1094,10 +1091,6 @@ func (worker *discardShadowWorker) advanceSenderChain(writes state.TransactionWr
 // used by canonical publication in this phase; sampled serial execution later
 // checks their version provenance and complete observable output.
 func (shadow *discardShadowBlock) preexecuteTransferSenderChains(cfg discardShadowRunConfig) *discardShadowPreexecution {
-	return shadow.preexecuteTransferSenderChainsWithRetryState(cfg, false)
-}
-
-func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(cfg discardShadowRunConfig, retainRetryState bool) *discardShadowPreexecution {
 	if shadow == nil || shadow.base == nil || cfg.block == nil {
 		return nil
 	}
@@ -1135,24 +1128,10 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(c
 	if len(workerStates) == 0 {
 		return nil
 	}
-	var retryState *state.StateDB
-	retryStateIsWorker := false
-	if retainRetryState {
-		if len(workerStates) > 1 {
-			retryState = workerStates[len(workerStates)-1]
-			retryStateIsWorker = true
-		} else if spare, err := shadow.base.Copy(); err == nil {
-			spare.SetDynamicProperties(shadow.base.DynamicProperties().Copy())
-			retryState = spare
-		}
-	}
 	if cfg.captureBalanceTrace {
 		blockHash := cfg.block.Hash()
 		for _, workerState := range workerStates {
 			workerState.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
-		}
-		if retryState != nil && !retryStateIsWorker {
-			retryState.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
 		}
 	}
 	preCfg := cfg
@@ -1231,7 +1210,6 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(c
 		senderNext:    senderNext,
 		groups:        len(chains),
 		wallNanos:     time.Since(started).Nanoseconds(),
-		retryState:    retryState,
 	}
 }
 
@@ -1282,18 +1260,6 @@ func newDiscardShadowAsyncSenderRetry(source *discardShadowPreexecution, transac
 	// event. Keeping the channel fully buffered prevents the worker from being
 	// paced by canonical execution while it owns no live mutable state.
 	retry.asyncEvents = make(chan discardShadowAsyncRetryEvent, discardShadowRetryMaxExecutions+1)
-	if source.retryState != nil {
-		retry.prefixRaw.recorder = &retry.prefixRecorder
-		retry.worker = &discardShadowWorker{
-			state:     source.retryState,
-			dynProps:  source.retryState.DynamicProperties(),
-			db:        discardKVOverlay{parent: &retry.prefixRaw},
-			forkCache: forks.NewVersionPassCache().BlockScope(),
-		}
-		retry.worker.db.recorder = &retry.worker.recorder
-		retry.stats.actualPrewarmed = 1
-		source.retryState = nil
-	}
 	return retry
 }
 
@@ -1473,10 +1439,6 @@ func (retry *discardShadowSenderRetry) ensureSettledPrefix(target int, statedb *
 	}
 	if retry.worker == nil {
 		return retry.refreshSettledPrefix(target, statedb, dynProps, cfg)
-	}
-	if retry.prefixRaw.parent == nil {
-		retry.prefixRaw.parent = cfg.db
-		retry.prefixRaw.recorder = &retry.prefixRecorder
 	}
 	if target < retry.settledThrough {
 		retry.stats.errors++
@@ -2018,7 +1980,6 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualPrefixNanosCounter.Inc(retry.stats.actualPrefixNs)
 		discardShadowRetryActualRawFreezeNanosCounter.Inc(retry.stats.actualRawFreezeNs)
 		discardShadowRetryActualVersionNanosCounter.Inc(retry.stats.actualVersionNs)
-		discardShadowRetryActualPrewarmedCounter.Inc(retry.stats.actualPrewarmed)
 		discardShadowRetryActualExecutionNanosCounter.Inc(retry.stats.actualExecutionNs)
 		discardShadowRetryActualFinishWaitNanosCounter.Inc(retry.stats.actualFinishWaitNs)
 	}

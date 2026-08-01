@@ -570,50 +570,6 @@ func TestTransferSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
 	}
 }
 
-func TestSenderChainPreexecutionRetainsSingleChainRetrySpare(t *testing.T) {
-	canonical := newTestState(t)
-	for _, id := range []byte{1, 2, 3} {
-		canonical.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
-	}
-	canonical.AddBalance(testProcessorAddr(1), 10_000_000)
-	if _, err := canonical.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	base, err := canonical.Copy()
-	if err != nil {
-		t.Fatal(err)
-	}
-	base.SetDynamicProperties(canonical.DynamicProperties().Copy())
-	transactions := []*types.Transaction{
-		makeTestTransferTx(1, 2, 1_000_000),
-		makeTestTransferTx(1, 3, 2_000_000),
-	}
-	block := types.NewBlockFromPB(&corepb.Block{
-		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(discardShadowAsyncRetryOffset), Timestamp: 3_000}},
-		Transactions: []*corepb.Transaction{transactions[0].Proto(), transactions[1].Proto()},
-	})
-	shadow := &discardShadowBlock{base: base, sampled: true}
-	pre := shadow.preexecuteTransferSenderChainsWithRetryState(discardShadowRunConfig{
-		block: block, transactions: transactions,
-	}, true)
-	if pre == nil || pre.retryState == nil {
-		t.Fatal("single-chain preexecution did not retain a retry spare")
-	}
-	if pre.retryState == shadow.base {
-		t.Fatal("single-chain retry spare aliases the finish canary state")
-	}
-	if balance := pre.retryState.GetBalance(testProcessorAddr(1)); balance != 10_000_000 {
-		t.Fatalf("retry spare owner balance = %d, want block-start balance", balance)
-	}
-	retry := newDiscardShadowAsyncSenderRetry(pre, len(transactions))
-	if retry == nil || retry.worker == nil || retry.stats.actualPrewarmed != 1 {
-		t.Fatalf("prewarmed retry = %+v", retry)
-	}
-	if pre.retryState != nil {
-		t.Fatal("retry spare ownership was not transferred")
-	}
-}
-
 func TestSenderChainPreexecutionForwardsTypedState(t *testing.T) {
 	base := newTestState(t)
 	owner := testProcessorAddr(1)
