@@ -230,13 +230,49 @@ func TestAsyncRetryReservationsBoundConcurrentExecution(t *testing.T) {
 		incarnations:       make([]uint32, transactionCount),
 		asyncScheduled:     discardShadowRetryMaxExecutions - 1,
 	}
-	tasks := retry.invalidateAsyncSuffix(0)
+	tasks, _ := retry.invalidateAsyncSuffix(0, discardShadowRetryLookahead)
 	if len(tasks) != 1 {
 		t.Fatalf("reserved tasks = %d, want 1", len(tasks))
 	}
 	retry.asyncScheduled += int64(len(tasks))
-	if tasks := retry.invalidateAsyncSuffix(1); len(tasks) != 0 {
+	if tasks, _ := retry.invalidateAsyncSuffix(1, discardShadowRetryLookahead); len(tasks) != 0 {
 		t.Fatalf("tasks exceeded global execution reservation: %d", len(tasks))
+	}
+}
+
+func TestAsyncRetryPrioritizesBoundedSenderLookahead(t *testing.T) {
+	const transactionCount = 7
+	source := &discardShadowPreexecution{
+		senderTasks:  make([]discardShadowSenderChainTask, transactionCount),
+		senderTaskOK: make([]bool, transactionCount),
+		senderNext:   make([]int, transactionCount),
+	}
+	for txIndex := 0; txIndex < transactionCount; txIndex++ {
+		source.senderTasks[txIndex] = discardShadowSenderChainTask{txIndex: txIndex}
+		source.senderTaskOK[txIndex] = true
+		source.senderNext[txIndex] = txIndex + 1
+	}
+	source.senderNext[transactionCount-1] = -1
+	retry := &discardShadowSenderRetry{
+		source:             source,
+		available:          make([]bool, transactionCount),
+		selectedOK:         make([]bool, transactionCount),
+		selectedAsyncReady: make([]bool, transactionCount),
+		incarnations:       make([]uint32, transactionCount),
+	}
+	tasks, deferred := retry.invalidateAsyncSuffix(0, discardShadowRetryLookahead)
+	if len(tasks) != int(discardShadowRetryLookahead) || deferred != transactionCount-int64(len(tasks)) {
+		t.Fatalf("lookahead tasks=%d deferred=%d", len(tasks), deferred)
+	}
+	for txIndex := range retry.incarnations {
+		if retry.incarnations[txIndex] != 1 {
+			t.Fatalf("tx %d incarnation = %d, want 1", txIndex, retry.incarnations[txIndex])
+		}
+	}
+	for taskIndex, task := range tasks {
+		if task.txIndex != taskIndex {
+			t.Fatalf("priority task %d tx = %d", taskIndex, task.txIndex)
+		}
 	}
 }
 

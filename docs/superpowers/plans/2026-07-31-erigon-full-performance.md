@@ -141,6 +141,8 @@
   StateDB at the conflict boundary.
 - [x] Expand the actual canary to a bounded pool of clean observer runners,
   preserving exclusive ownership and newest-incarnation admission.
+- [x] Prioritize the nearest four sender-chain boundaries per async job instead
+  of eagerly executing an entire suffix that later incarnations invalidate.
 - [ ] Run the actual async canary production gate and measure ready, late,
   stale, busy-skip, raw-miss, validation, and finish-wait rates.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-

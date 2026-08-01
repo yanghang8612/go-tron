@@ -27,6 +27,7 @@ const (
 	discardShadowWorkerCount        = 4
 	discardShadowRetryMaxAttempts   = int64(8)
 	discardShadowRetryMaxExecutions = int64(64)
+	discardShadowRetryLookahead     = int64(4)
 )
 
 var (
@@ -122,6 +123,7 @@ var (
 	discardShadowRetryActualBusySkippedCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/busy_skipped", nil)
 	discardShadowRetryActualRunnerCapacityCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/runner_capacity", nil)
 	discardShadowRetryActualMaxInflightCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/max_inflight", nil)
+	discardShadowRetryActualDeferredCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/lookahead_deferred", nil)
 	discardShadowRetryActualExecutedCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/executed", nil)
 	discardShadowRetryActualReadyCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/ready", nil)
 	discardShadowRetryActualLateCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/late", nil)
@@ -459,6 +461,7 @@ type discardShadowSenderRetryStats struct {
 	actualBusySkipped  int64
 	actualCapacity     int64
 	actualMaxInflight  int64
+	actualDeferred     int64
 	actualExecuted     int64
 	actualReady        int64
 	actualLate         int64
@@ -1660,19 +1663,23 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 	worker.db.recorder = &worker.recorder
 }
 
-func (retry *discardShadowSenderRetry) invalidateAsyncSuffix(txIndex int) []discardShadowAsyncRetryTask {
+func (retry *discardShadowSenderRetry) invalidateAsyncSuffix(txIndex int, taskLimit int64) ([]discardShadowAsyncRetryTask, int64) {
 	if retry == nil || retry.source == nil || txIndex < 0 || txIndex >= len(retry.available) {
-		return nil
+		return nil, 0
 	}
 	// Concurrent runners reserve from one block-wide execution budget before
 	// launch. Counting only completed events would let overlapping jobs each
 	// reserve the full budget and could also exceed the result-channel bound.
 	remaining := discardShadowRetryMaxExecutions - retry.asyncScheduled
+	if taskLimit >= 0 && taskLimit < remaining {
+		remaining = taskLimit
+	}
 	capacity := 0
 	if remaining > 0 {
 		capacity = min(int(remaining), 8)
 	}
 	tasks := make([]discardShadowAsyncRetryTask, 0, capacity)
+	var deferred int64
 	for current, traversed := txIndex, 0; current >= 0 && current < len(retry.available) && traversed < len(retry.available); traversed++ {
 		if current >= len(retry.source.senderTaskOK) || !retry.source.senderTaskOK[current] {
 			break
@@ -1689,10 +1696,12 @@ func (retry *discardShadowSenderRetry) invalidateAsyncSuffix(txIndex int) []disc
 				senderPredecessor: task.senderPredecessor,
 				senderVersioned:   task.senderVersioned,
 			})
+		} else {
+			deferred++
 		}
 		current = retry.source.senderNext[current]
 	}
-	return tasks
+	return tasks, deferred
 }
 
 // startAsyncRetry transfers exclusive ownership of one idle settled-prefix
@@ -1712,7 +1721,8 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		retry.stats.actualDispatchNs += time.Since(dispatchStarted).Nanoseconds()
 	}()
 	retry.stats.attempts++
-	tasks := retry.invalidateAsyncSuffix(txIndex)
+	tasks, deferred := retry.invalidateAsyncSuffix(txIndex, discardShadowRetryLookahead)
+	retry.stats.actualDeferred += deferred
 	if len(tasks) == 0 {
 		retry.stats.budgetSkipped++
 		return
@@ -1998,13 +2008,13 @@ func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *typ
 		if retry.idleAsyncRunner() == nil {
 			// This transaction will now execute canonically. Any unfinished
 			// descendant built through an older speculative post-image is stale.
-			_ = retry.invalidateAsyncSuffix(txIndex)
+			_, _ = retry.invalidateAsyncSuffix(txIndex, 0)
 			retry.stats.actualBusySkipped++
 			return
 		}
 		if retry.stats.attempts >= discardShadowRetryMaxAttempts || retry.asyncScheduled >= discardShadowRetryMaxExecutions {
 			retry.stats.budgetSkipped++
-			_ = retry.invalidateAsyncSuffix(txIndex)
+			_, _ = retry.invalidateAsyncSuffix(txIndex, 0)
 			return
 		}
 		retry.startAsyncRetry(txIndex, statedb, dynProps, versioned, cfg)
@@ -2106,6 +2116,7 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualBusySkippedCounter.Inc(retry.stats.actualBusySkipped)
 		discardShadowRetryActualRunnerCapacityCounter.Inc(retry.stats.actualCapacity)
 		discardShadowRetryActualMaxInflightCounter.Inc(retry.stats.actualMaxInflight)
+		discardShadowRetryActualDeferredCounter.Inc(retry.stats.actualDeferred)
 		discardShadowRetryActualExecutedCounter.Inc(retry.stats.actualExecuted)
 		discardShadowRetryActualReadyCounter.Inc(retry.stats.actualReady)
 		discardShadowRetryActualLateCounter.Inc(retry.stats.actualLate)

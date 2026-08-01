@@ -1124,6 +1124,22 @@ ownership-return events. `runner_capacity`, `max_inflight`, and `busy_skipped`
 measure whether a later priority queue needs more capacity or only delayed
 rescheduling.
 
+The first pool window covered 53 actual blocks with aggregate capacity 98 and
+50 jobs. Pool exhaustion fell to zero while every runner remained prewarmed;
+there were again zero prefix refreshes, copies, execution errors, or raw misses.
+The remaining waste was incarnation distance rather than capacity: 91 of 254
+completed results were stale because jobs eagerly walked long sender suffixes
+before nearer cross-sender writes created a newer incarnation.
+
+Async jobs now reserve only the nearest four sender-chain transactions. The
+whole suffix is still invalidated immediately, but far descendants are deferred
+until canonical order approaches their publication boundary. This is the first
+bounded incarnation-priority policy: lower transaction indices consume the
+global 64-execution budget first, while later boundaries can create a newer
+job from a more recent settled prefix. `lookahead_deferred` measures displaced
+far-suffix work; ready, stale, recovered, job, and dispatch ratios determine
+whether the window should expand, shrink, or become a dynamic heap.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
