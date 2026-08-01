@@ -136,6 +136,9 @@
   streamed results, incarnation invalidation, and error-path worker joining.
 - [x] Replace actual-retry whole-block version-map clones with compact suffix
   read-version carriers and split dispatch prefix/raw/version timing.
+- [x] Retain a clean sender-chain observer worker as the actual retry's
+  block-start state and advance it by canonical WriteSets instead of copying
+  StateDB at the conflict boundary.
 - [ ] Run the actual async canary production gate and measure ready, late,
   stale, busy-skip, raw-miss, validation, and finish-wait rates.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-

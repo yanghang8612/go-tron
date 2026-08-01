@@ -1091,6 +1091,17 @@ the result conflict and fall back. `frozen_version_cells` plus
 `dispatch/{prefix,raw_freeze,version_snapshot}_nanos` separate the remaining
 StateDB prefix cost from raw and version freezing.
 
+The prefix copy is then removed from the conflict boundary as well. The
+sender-chain observer already owns up to four private block-start StateDBs and
+fully reverts each chain. On actual-async sample blocks it retains one clean
+non-canonical worker (or creates a spare before canonical execution when only
+one observer worker exists). The retry runner advances that prewarmed state
+from block start through exact canonical WriteSets, then uses the same frozen
+raw capability and ownership handoff. This mirrors Erigon's long-lived worker
+state more closely: the conflict boundary performs ordered prefix advancement,
+not a deep StateDB copy. `prewarmed_runners`, prefix refresh/reuse, advance
+count, and `dispatch/prefix_nanos` verify the intended path in production.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

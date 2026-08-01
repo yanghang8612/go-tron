@@ -865,8 +865,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				transferPreexecution = discardShadow.preexecuteTransfers(discardCfg)
 			}
 			if discardShadow.sampled {
-				senderChainPreexecution = discardShadow.preexecuteTransferSenderChains(discardCfg)
-				if block.Number()%discardShadowAsyncRetryInterval == discardShadowAsyncRetryOffset {
+				actualAsyncRetry := block.Number()%discardShadowAsyncRetryInterval == discardShadowAsyncRetryOffset
+				senderChainPreexecution = discardShadow.preexecuteTransferSenderChainsWithRetryState(discardCfg, actualAsyncRetry)
+				if actualAsyncRetry {
 					// Use one disjoint quarter of sampled blocks for a real
 					// background retry canary. The other three quarters retain the
 					// synchronous observer and its timing projection as a stable
