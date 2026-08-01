@@ -745,11 +745,23 @@ func compareDiscardShadowInfo(shadow, canonical *corepb.TransactionInfo) discard
 	if proto.Equal(shadow, canonical) {
 		return 0
 	}
+	// Shadow execution is diagnostic and must never take down canonical block
+	// import. A failed speculative execution has no TransactionInfo; classify
+	// that as a mismatch instead of dereferencing the absent protobuf below.
+	if shadow == nil || canonical == nil {
+		return discardShadowMismatchOtherField
+	}
 	var mismatch discardShadowMismatch
 	if !proto.Equal(shadow.GetReceipt(), canonical.GetReceipt()) {
 		mismatch |= discardShadowMismatchReceipt
-		shadowReceipt := proto.Clone(shadow.GetReceipt()).(*corepb.ResourceReceipt)
-		canonicalReceipt := proto.Clone(canonical.GetReceipt()).(*corepb.ResourceReceipt)
+		shadowReceipt := &corepb.ResourceReceipt{}
+		if receipt := shadow.GetReceipt(); receipt != nil {
+			shadowReceipt = proto.Clone(receipt).(*corepb.ResourceReceipt)
+		}
+		canonicalReceipt := &corepb.ResourceReceipt{}
+		if receipt := canonical.GetReceipt(); receipt != nil {
+			canonicalReceipt = proto.Clone(receipt).(*corepb.ResourceReceipt)
+		}
 		if shadowReceipt.GetOwnerBalance() != canonicalReceipt.GetOwnerBalance() ||
 			shadowReceipt.GetOwnerFreeNetLeft() != canonicalReceipt.GetOwnerFreeNetLeft() ||
 			shadowReceipt.GetOwnerFrozenNetLeft() != canonicalReceipt.GetOwnerFrozenNetLeft() ||
@@ -1527,11 +1539,12 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 			}
 		}
 		result.retryCompletionNanos = time.Since(executionStarted).Nanoseconds()
+		ready := preexecutedTransferReady(&result)
 		retry.results[current] = result
-		retry.available[current] = true
+		retry.available[current] = ready
 		retry.selectedOK[current] = false
 		retry.stats.executed++
-		if !preexecutedTransferReady(&result) {
+		if !ready {
 			retry.stats.errors++
 			break
 		}
@@ -1690,7 +1703,8 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 	result := *event.result
 	retry.stats.executed++
 	retry.stats.actualExecuted++
-	if !preexecutedTransferReady(&result) {
+	ready := preexecutedTransferReady(&result)
+	if !ready {
 		retry.stats.errors++
 		retry.stats.actualErrors++
 	}
@@ -1703,7 +1717,7 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 		return
 	}
 	retry.results[result.txIndex] = result
-	retry.available[result.txIndex] = true
+	retry.available[result.txIndex] = ready
 	retry.selectedOK[result.txIndex] = false
 	retry.stats.actualReady++
 }
@@ -1890,9 +1904,13 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		if !retry.selectedOK[txIndex] {
 			continue
 		}
-		if txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
+		if !preexecutedTransferReady(&selected) || cfg.canonicalInfos[txIndex] == nil ||
+			txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
 			txIndex >= len(versioned.transactionWriteSets) || (cfg.captureBalanceTrace && txIndex >= len(cfg.canonicalBalanceTraces)) {
 			retry.stats.errors++
+			if retry.async {
+				retry.stats.actualErrors++
+			}
 			continue
 		}
 		infoMatch := compareDiscardShadowInfo(selected.info, cfg.canonicalInfos[txIndex]) == 0

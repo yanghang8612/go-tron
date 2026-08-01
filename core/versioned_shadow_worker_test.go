@@ -40,6 +40,16 @@ func TestCompareDiscardShadowInfoSplitsEnergyFields(t *testing.T) {
 	}
 }
 
+func TestCompareDiscardShadowInfoHandlesMissingDiagnosticData(t *testing.T) {
+	canonical := &corepb.TransactionInfo{Receipt: &corepb.ResourceReceipt{EnergyUsage: 1}}
+	if got := compareDiscardShadowInfo(nil, canonical); got != discardShadowMismatchOtherField {
+		t.Fatalf("nil shadow mismatch = %#x, want %#x", got, discardShadowMismatchOtherField)
+	}
+	if got := compareDiscardShadowInfo(&corepb.TransactionInfo{}, canonical); got == 0 || got&discardShadowMismatchReceipt == 0 {
+		t.Fatalf("nil receipt mismatch = %#x, want receipt mismatch", got)
+	}
+}
+
 func TestClassifyDiscardShadowApplyMismatch(t *testing.T) {
 	fieldKey := state.TransactionAccessKey{
 		Kind:         state.TransactionAccessAccountField,
@@ -179,6 +189,24 @@ func TestAsyncRetryRejectionMetricsPreserveConflictClasses(t *testing.T) {
 		retry.stats.actualSender != 1 || retry.stats.actualBarrier != 1 ||
 		retry.stats.actualUnsupported != 1 || retry.stats.actualDeltaInvalid != 1 {
 		t.Fatalf("actual rejection stats = %+v", retry.stats)
+	}
+}
+
+func TestAsyncRetryFailedResultNeverBecomesAvailable(t *testing.T) {
+	retry := &discardShadowSenderRetry{
+		results:      make([]discardShadowTaskResult, 1),
+		available:    make([]bool, 1),
+		selectedOK:   make([]bool, 1),
+		incarnations: []uint32{1},
+	}
+	retry.consumeAsyncEvent(discardShadowAsyncRetryEvent{result: &discardShadowTaskResult{
+		txIndex: 0, incarnation: 1, err: errors.New("speculative execution failed"),
+	}}, 0)
+	if retry.available[0] {
+		t.Fatal("failed async result became available")
+	}
+	if retry.stats.actualExecuted != 1 || retry.stats.actualReady != 1 || retry.stats.actualErrors != 1 {
+		t.Fatalf("async failure stats = %+v", retry.stats)
 	}
 }
 
