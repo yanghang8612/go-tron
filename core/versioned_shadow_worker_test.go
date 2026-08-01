@@ -146,11 +146,12 @@ func TestAsyncRetryFrozenRawViewRejectsLiveFallback(t *testing.T) {
 		senderNext: []int{1, -1},
 	}
 	retry := &discardShadowSenderRetry{source: source}
-	retry.prefixRaw.parent = parent
+	runner := newDiscardShadowRetryRunner(nil)
+	runner.prefixRaw.parent = parent
 	var recorder state.TransactionAccessRecorder
 	recorder.Reset(8)
-	retry.prefixRaw.recorder = &recorder
-	frozen, keys, err := retry.freezeAsyncRawView(0)
+	runner.prefixRaw.recorder = &recorder
+	frozen, keys, err := retry.freezeAsyncRawView(runner, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,6 +208,35 @@ func TestAsyncRetryFailedResultNeverBecomesAvailable(t *testing.T) {
 	}
 	if retry.stats.actualExecuted != 1 || retry.stats.actualReady != 1 || retry.stats.actualErrors != 1 {
 		t.Fatalf("async failure stats = %+v", retry.stats)
+	}
+}
+
+func TestAsyncRetryReservationsBoundConcurrentExecution(t *testing.T) {
+	const transactionCount = 4
+	source := &discardShadowPreexecution{
+		senderTasks:  make([]discardShadowSenderChainTask, transactionCount),
+		senderTaskOK: make([]bool, transactionCount),
+		senderNext:   []int{1, 2, 3, -1},
+	}
+	for txIndex := 0; txIndex < transactionCount; txIndex++ {
+		source.senderTasks[txIndex] = discardShadowSenderChainTask{txIndex: txIndex}
+		source.senderTaskOK[txIndex] = true
+	}
+	retry := &discardShadowSenderRetry{
+		source:             source,
+		available:          make([]bool, transactionCount),
+		selectedOK:         make([]bool, transactionCount),
+		selectedAsyncReady: make([]bool, transactionCount),
+		incarnations:       make([]uint32, transactionCount),
+		asyncScheduled:     discardShadowRetryMaxExecutions - 1,
+	}
+	tasks := retry.invalidateAsyncSuffix(0)
+	if len(tasks) != 1 {
+		t.Fatalf("reserved tasks = %d, want 1", len(tasks))
+	}
+	retry.asyncScheduled += int64(len(tasks))
+	if tasks := retry.invalidateAsyncSuffix(1); len(tasks) != 0 {
+		t.Fatalf("tasks exceeded global execution reservation: %d", len(tasks))
 	}
 }
 
@@ -467,12 +497,12 @@ func TestSenderRetryReusesAndRefreshesSettledPrefix(t *testing.T) {
 	var versioned versionedAccessShadow
 	versioned.Prepare(3)
 	versioned.EnableWriteSetCapture(3)
-	retry := &discardShadowSenderRetry{settledThrough: -1}
+	retry := &discardShadowSenderRetry{runner: newDiscardShadowRetryRunner(nil)}
 	if !retry.ensureSettledPrefix(0, live, live.DynamicProperties(), &versioned, discardShadowRunConfig{}) {
 		t.Fatal("initialize settled prefix")
 	}
-	if retry.stats.prefixRefreshes != 1 || retry.stats.prefixReuses != 0 || retry.settledThrough != 0 {
-		t.Fatalf("initial prefix stats = %+v settled=%d", retry.stats, retry.settledThrough)
+	if retry.stats.prefixRefreshes != 1 || retry.stats.prefixReuses != 0 || retry.runner.settledThrough != 0 {
+		t.Fatalf("initial prefix stats = %+v settled=%d", retry.stats, retry.runner.settledThrough)
 	}
 
 	live.AddBalance(owner, 2_000_000)
@@ -489,7 +519,7 @@ func TestSenderRetryReusesAndRefreshesSettledPrefix(t *testing.T) {
 	if !retry.ensureSettledPrefix(1, live, live.DynamicProperties(), &versioned, discardShadowRunConfig{}) {
 		t.Fatal("advance settled prefix")
 	}
-	if got := retry.worker.state.GetBalance(owner); got != 12_000_000 {
+	if got := retry.runner.worker.state.GetBalance(owner); got != 12_000_000 {
 		t.Fatalf("advanced prefix balance = %d, want 12000000", got)
 	}
 	if retry.stats.prefixRefreshes != 1 || retry.stats.prefixReuses != 1 || retry.stats.prefixAdvances != 1 {
@@ -507,11 +537,11 @@ func TestSenderRetryReusesAndRefreshesSettledPrefix(t *testing.T) {
 	if !retry.ensureSettledPrefix(2, live, live.DynamicProperties(), &versioned, discardShadowRunConfig{}) {
 		t.Fatal("refresh unsupported settled prefix")
 	}
-	if got := retry.worker.state.GetBalance(owner); got != 15_000_000 {
+	if got := retry.runner.worker.state.GetBalance(owner); got != 15_000_000 {
 		t.Fatalf("refreshed prefix balance = %d, want 15000000", got)
 	}
-	if retry.stats.prefixRefreshes != 2 || retry.stats.prefixReuses != 1 || retry.stats.prefixAdvances != 1 || retry.settledThrough != 2 {
-		t.Fatalf("refreshed prefix stats = %+v settled=%d", retry.stats, retry.settledThrough)
+	if retry.stats.prefixRefreshes != 2 || retry.stats.prefixReuses != 1 || retry.stats.prefixAdvances != 1 || retry.runner.settledThrough != 2 {
+		t.Fatalf("refreshed prefix stats = %+v settled=%d", retry.stats, retry.runner.settledThrough)
 	}
 }
 
@@ -624,21 +654,93 @@ func TestSenderChainPreexecutionRetainsSingleChainRetrySpare(t *testing.T) {
 	pre := shadow.preexecuteTransferSenderChainsWithRetryState(discardShadowRunConfig{
 		block: block, transactions: transactions,
 	}, true)
-	if pre == nil || pre.retryState == nil {
+	if pre == nil || len(pre.retryStates) != 1 || pre.retryStates[0] == nil {
 		t.Fatal("single-chain preexecution did not retain a retry spare")
 	}
-	if pre.retryState == shadow.base {
+	if pre.retryStates[0] == shadow.base {
 		t.Fatal("single-chain retry spare aliases the finish canary state")
 	}
-	if balance := pre.retryState.GetBalance(testProcessorAddr(1)); balance != 10_000_000 {
+	if balance := pre.retryStates[0].GetBalance(testProcessorAddr(1)); balance != 10_000_000 {
 		t.Fatalf("retry spare owner balance = %d, want block-start balance", balance)
 	}
 	retry := newDiscardShadowAsyncSenderRetry(pre, len(transactions))
-	if retry == nil || retry.worker == nil || retry.stats.actualPrewarmed != 1 {
+	if retry == nil || len(retry.asyncRunners) != 1 || retry.asyncRunners[0].worker == nil || retry.stats.actualPrewarmed != 1 {
 		t.Fatalf("prewarmed retry = %+v", retry)
 	}
-	if pre.retryState != nil {
+	if pre.retryStates != nil {
 		t.Fatal("retry spare ownership was not transferred")
+	}
+}
+
+func TestSenderChainPreexecutionRetainsIndependentRetryPool(t *testing.T) {
+	canonical := newTestState(t)
+	for id := byte(1); id <= 12; id++ {
+		canonical.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+	}
+	for _, owner := range []byte{1, 3, 5, 7} {
+		canonical.AddBalance(testProcessorAddr(owner), 10_000_000)
+	}
+	if _, err := canonical.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	base, err := canonical.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.SetDynamicProperties(canonical.DynamicProperties().Copy())
+	transactions := []*types.Transaction{
+		makeTestTransferTx(1, 2, 1_000),
+		makeTestTransferTx(3, 4, 1_000),
+		makeTestTransferTx(5, 6, 1_000),
+		makeTestTransferTx(7, 8, 1_000),
+		makeTestTransferTx(1, 9, 2_000),
+		makeTestTransferTx(3, 10, 2_000),
+		makeTestTransferTx(5, 11, 2_000),
+		makeTestTransferTx(7, 12, 2_000),
+	}
+	blockPB := &corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Number: int64(discardShadowAsyncRetryOffset), Timestamp: 3_000,
+	}}}
+	for _, tx := range transactions {
+		blockPB.Transactions = append(blockPB.Transactions, tx.Proto())
+	}
+	shadow := &discardShadowBlock{base: base, sampled: true}
+	pre := shadow.preexecuteTransferSenderChainsWithRetryState(discardShadowRunConfig{
+		block: types.NewBlockFromPB(blockPB), transactions: transactions,
+	}, true)
+	if pre == nil || len(pre.retryStates) != discardShadowWorkerCount-1 {
+		t.Fatalf("prewarmed retry states = %d, want %d", len(pre.retryStates), discardShadowWorkerCount-1)
+	}
+	seen := make(map[*state.StateDB]struct{}, len(pre.retryStates))
+	for _, retryState := range pre.retryStates {
+		if retryState == nil || retryState == shadow.base {
+			t.Fatal("retry pool contains missing or canonical finish state")
+		}
+		if _, duplicate := seen[retryState]; duplicate {
+			t.Fatal("retry pool aliases a StateDB")
+		}
+		seen[retryState] = struct{}{}
+		if balance := retryState.GetBalance(testProcessorAddr(1)); balance != 10_000_000 {
+			t.Fatalf("retry pool state was not reverted: balance=%d", balance)
+		}
+	}
+	retry := newDiscardShadowAsyncSenderRetry(pre, len(transactions))
+	if retry == nil || len(retry.asyncRunners) != discardShadowWorkerCount-1 {
+		t.Fatalf("async runner pool size = %d, want %d", len(retry.asyncRunners), discardShadowWorkerCount-1)
+	}
+	if retry.stats.actualPrewarmed != int64(len(retry.asyncRunners)) || retry.stats.actualCapacity != int64(len(retry.asyncRunners)) {
+		t.Fatalf("runner pool stats = %+v", retry.stats)
+	}
+	for _, runner := range retry.asyncRunners {
+		runner.busy = true
+	}
+	retry.asyncActive = len(retry.asyncRunners)
+	if idle := retry.idleAsyncRunner(); idle != nil {
+		t.Fatal("busy runner pool exposed an idle runner")
+	}
+	retry.consumeAsyncEvent(discardShadowAsyncRetryEvent{runner: retry.asyncRunners[1], done: true}, 0)
+	if retry.asyncActive != len(retry.asyncRunners)-1 || retry.idleAsyncRunner() != retry.asyncRunners[1] {
+		t.Fatal("returned runner ownership was not restored")
 	}
 }
 

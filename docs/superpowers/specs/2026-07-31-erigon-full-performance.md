@@ -1104,6 +1104,26 @@ count, copy/advance time, and `dispatch/prefix_nanos` verify the intended path
 in production without mixing the three synchronous reference cohorts into the
 actual-worker prefix measurements.
 
+The longer single-runner window covered 378 actual sample blocks and 397
+jobs. All 397 prefix preparations reused incremental state with zero refreshes,
+copy time, execution errors, or frozen-raw misses. However, 242 conflict
+boundaries found the runner busy, and 561 of 1,691 streamed results became
+stale after newer incarnations. Prefix advancement consumed 175.89 ms and
+worker execution 144.80 ms; state maintenance was no longer the scaling
+constraint, but one-owner serialization was.
+
+The next canary therefore retains every clean copied sender-chain observer
+state except `shadow.base`, which remains owned by the independent finish
+canary. This yields up to three retry runners without another StateDB copy; a
+single-chain block still creates the existing one safe spare. Each runner owns
+its prefix StateDB, DynamicProperties, raw overlay, recorder, settled cursor,
+and busy bit. Conflicts dispatch to idle runners in canonical order, overlapping
+incarnations remain isolated, and only the newest incarnation can be admitted.
+The shared result channel is sized for both the global execution budget and all
+ownership-return events. `runner_capacity`, `max_inflight`, and `busy_skipped`
+measure whether a later priority queue needs more capacity or only delayed
+rescheduling.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

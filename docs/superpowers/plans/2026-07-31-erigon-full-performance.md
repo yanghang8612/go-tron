@@ -139,6 +139,8 @@
 - [x] Retain a clean sender-chain observer worker as the actual retry's
   block-start state and advance it by canonical WriteSets instead of copying
   StateDB at the conflict boundary.
+- [x] Expand the actual canary to a bounded pool of clean observer runners,
+  preserving exclusive ownership and newest-incarnation admission.
 - [ ] Run the actual async canary production gate and measure ready, late,
   stale, busy-skip, raw-miss, validation, and finish-wait rates.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-

@@ -468,6 +468,8 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	})
 	blocksBefore := discardShadowRetryActualBlocksCounter.Snapshot().Count()
 	prewarmedBefore := discardShadowRetryActualPrewarmedCounter.Snapshot().Count()
+	capacityBefore := discardShadowRetryActualRunnerCapacityCounter.Snapshot().Count()
+	maxInflightBefore := discardShadowRetryActualMaxInflightCounter.Snapshot().Count()
 	jobsBefore := discardShadowRetryActualJobsCounter.Snapshot().Count()
 	executedBefore := discardShadowRetryActualExecutedCounter.Snapshot().Count()
 	readyBefore := discardShadowRetryActualReadyCounter.Snapshot().Count()
@@ -494,6 +496,12 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	}
 	if prewarmed := discardShadowRetryActualPrewarmedCounter.Snapshot().Count() - prewarmedBefore; prewarmed != 1 {
 		t.Fatalf("actual async prewarmed runners = %d, want 1", prewarmed)
+	}
+	if capacity := discardShadowRetryActualRunnerCapacityCounter.Snapshot().Count() - capacityBefore; capacity != 1 {
+		t.Fatalf("actual async runner capacity = %d, want 1", capacity)
+	}
+	if maxInflight := discardShadowRetryActualMaxInflightCounter.Snapshot().Count() - maxInflightBefore; maxInflight != 1 {
+		t.Fatalf("actual async max inflight = %d, want 1", maxInflight)
 	}
 	if refreshes := discardShadowRetryPrefixRefreshCounter.Snapshot().Count() - prefixRefreshBefore; refreshes != 0 {
 		t.Fatalf("actual async prefix refreshes = %d, want 0", refreshes)
