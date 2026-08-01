@@ -125,8 +125,12 @@
   sender-retry TransactionInfo/WriteSet/BalanceTrace production gate.
 - [x] Replace copy-per-incarnation with a lazy reusable settled-prefix runner,
   exact ordered WriteSet advancement, and canonical refresh fallback.
-- [ ] Run the settled-prefix reuse production gate and verify copy reduction,
+- [x] Run the settled-prefix reuse production gate and verify copy reduction,
   prefix advancement coverage, and unchanged serial equivalence.
+- [x] Add measured async deadline projection for each incarnation and classify
+  ready, late, and unknown results at their canonical publication boundary.
+- [ ] Run the async projection production gate and size the frozen-raw-view
+  worker pool and retry queue from observed ready rate and deadline slack.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

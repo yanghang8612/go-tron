@@ -382,6 +382,57 @@ func TestSenderRetryReusesAndRefreshesSettledPrefix(t *testing.T) {
 	}
 }
 
+func TestProjectSenderRetryDeadline(t *testing.T) {
+	versioned := &versionedAccessShadow{transactionDurations: []int64{100, 200, 300}}
+	tests := []struct {
+		name       string
+		result     discardShadowTaskResult
+		boundary   int
+		ready      bool
+		known      bool
+		deadline   int64
+		deltaNanos int64
+	}{
+		{
+			name: "current transaction is necessarily late",
+			result: discardShadowTaskResult{
+				retryStartTx: 1, retryCompletionNanos: 50,
+			},
+			boundary: 1, known: true, deadline: 0, deltaNanos: 50,
+		},
+		{
+			name: "future result reaches boundary",
+			result: discardShadowTaskResult{
+				retryStartTx: 0, retryCompletionNanos: 250,
+			},
+			boundary: 2, ready: true, known: true, deadline: 300, deltaNanos: 50,
+		},
+		{
+			name: "future result misses boundary",
+			result: discardShadowTaskResult{
+				retryStartTx: 0, retryCompletionNanos: 350,
+			},
+			boundary: 2, known: true, deadline: 300, deltaNanos: 50,
+		},
+		{
+			name: "missing canonical duration is unknown",
+			result: discardShadowTaskResult{
+				retryStartTx: 0, retryCompletionNanos: 50,
+			},
+			boundary: 4,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ready, known, deadline, deltaNanos := projectSenderRetryDeadline(test.result, test.boundary, versioned)
+			if ready != test.ready || known != test.known || deadline != test.deadline || deltaNanos != test.deltaNanos {
+				t.Fatalf("projection = ready:%v known:%v deadline:%d delta:%d, want ready:%v known:%v deadline:%d delta:%d",
+					ready, known, deadline, deltaNanos, test.ready, test.known, test.deadline, test.deltaNanos)
+			}
+		})
+	}
+}
+
 func TestTransferSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
 	transactions := []*types.Transaction{
 		makeTestTransferTx(1, 2, 1),

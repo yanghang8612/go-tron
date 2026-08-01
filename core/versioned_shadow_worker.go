@@ -107,6 +107,14 @@ var (
 	discardShadowRetryPrefixAdvanceCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/prefix/advances", nil)
 	discardShadowRetryPrefixAdvanceNanosCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/prefix/advance_nanos", nil)
 	discardShadowRetryExecutionNanosCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/execution_nanos", nil)
+	discardShadowRetryAsyncCandidatesCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/candidates", nil)
+	discardShadowRetryAsyncReadyCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/ready", nil)
+	discardShadowRetryAsyncLateCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/late", nil)
+	discardShadowRetryAsyncUnknownCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/unknown", nil)
+	discardShadowRetryAsyncValidatedCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/validated", nil)
+	discardShadowRetryAsyncRecoveredCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/recovered", nil)
+	discardShadowRetryAsyncReadySlackNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/ready_slack_nanos", nil)
+	discardShadowRetryAsyncLateNanosCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_projection/late_nanos", nil)
 	parallelTransferEnabledGauge                     = metrics.NewRegisteredGauge("core/parallel_transfer/enabled", nil)
 	parallelTransferBlocksCounter                    = metrics.NewRegisteredCounter("core/parallel_transfer/blocks", nil)
 	parallelTransferPreexecutedCounter               = metrics.NewRegisteredCounter("core/parallel_transfer/preexecuted", nil)
@@ -274,30 +282,32 @@ func prepareTransferExecutionBlock(statedb *state.StateDB, dynProps *state.Dynam
 }
 
 type discardShadowTaskResult struct {
-	txIndex           int
-	class             discardShadowTransactionClass
-	mismatch          discardShadowMismatch
-	coreMatch         bool
-	matched           bool
-	writeSetMatch     bool
-	writeSetErr       error
-	applyEligible     bool
-	applyUnsupported  discardShadowApplyUnsupported
-	applyMatch        bool
-	applyMismatch     discardShadowApplyMismatch
-	applyErr          error
-	writes            state.TransactionWriteSet
-	reads             state.TransactionReadSet
-	info              *corepb.TransactionInfo
-	balanceTrace      *contractpb.TransactionBalanceTrace
-	publicNet         state.PublicNetReservation
-	publicNetValid    bool
-	senderPredecessor int
-	senderVersioned   bool
-	settledPrefix     int
-	hasSettledPrefix  bool
-	incarnation       uint32
-	err               error
+	txIndex              int
+	class                discardShadowTransactionClass
+	mismatch             discardShadowMismatch
+	coreMatch            bool
+	matched              bool
+	writeSetMatch        bool
+	writeSetErr          error
+	applyEligible        bool
+	applyUnsupported     discardShadowApplyUnsupported
+	applyMatch           bool
+	applyMismatch        discardShadowApplyMismatch
+	applyErr             error
+	writes               state.TransactionWriteSet
+	reads                state.TransactionReadSet
+	info                 *corepb.TransactionInfo
+	balanceTrace         *contractpb.TransactionBalanceTrace
+	publicNet            state.PublicNetReservation
+	publicNetValid       bool
+	senderPredecessor    int
+	senderVersioned      bool
+	settledPrefix        int
+	hasSettledPrefix     bool
+	incarnation          uint32
+	retryStartTx         int
+	retryCompletionNanos int64
+	err                  error
 }
 
 type discardShadowOrderedApplyStats struct {
@@ -352,6 +362,14 @@ type discardShadowSenderRetryStats struct {
 	prefixAdvances     int64
 	prefixAdvanceNanos int64
 	executionNanos     int64
+	asyncCandidates    int64
+	asyncReady         int64
+	asyncLate          int64
+	asyncUnknown       int64
+	asyncValidated     int64
+	asyncRecovered     int64
+	asyncReadySlackNs  int64
+	asyncLateNs        int64
 }
 
 // discardShadowSenderRetry holds the newest sampled incarnation for each
@@ -359,17 +377,18 @@ type discardShadowSenderRetryStats struct {
 // boundary it may rebuild a failed suffix from a reusable settled-prefix
 // runner, then freezes the result selected for later serial comparison.
 type discardShadowSenderRetry struct {
-	source         *discardShadowPreexecution
-	results        []discardShadowTaskResult
-	available      []bool
-	selected       []discardShadowTaskResult
-	selectedOK     []bool
-	incarnations   []uint32
-	worker         *discardShadowWorker
-	prefixRaw      discardKVOverlay
-	prefixRecorder state.TransactionAccessRecorder
-	settledThrough int
-	stats          discardShadowSenderRetryStats
+	source             *discardShadowPreexecution
+	results            []discardShadowTaskResult
+	available          []bool
+	selected           []discardShadowTaskResult
+	selectedOK         []bool
+	selectedAsyncReady []bool
+	incarnations       []uint32
+	worker             *discardShadowWorker
+	prefixRaw          discardKVOverlay
+	prefixRecorder     state.TransactionAccessRecorder
+	settledThrough     int
+	stats              discardShadowSenderRetryStats
 }
 
 type discardShadowPreexecutionStats struct {
@@ -1101,13 +1120,14 @@ func newDiscardShadowSenderRetry(source *discardShadowPreexecution, transactionC
 		return nil
 	}
 	return &discardShadowSenderRetry{
-		source:         source,
-		results:        make([]discardShadowTaskResult, transactionCount),
-		available:      make([]bool, transactionCount),
-		selected:       make([]discardShadowTaskResult, transactionCount),
-		selectedOK:     make([]bool, transactionCount),
-		incarnations:   make([]uint32, transactionCount),
-		settledThrough: -1,
+		source:             source,
+		results:            make([]discardShadowTaskResult, transactionCount),
+		available:          make([]bool, transactionCount),
+		selected:           make([]discardShadowTaskResult, transactionCount),
+		selectedOK:         make([]bool, transactionCount),
+		selectedAsyncReady: make([]bool, transactionCount),
+		incarnations:       make([]uint32, transactionCount),
+		settledThrough:     -1,
 	}
 }
 
@@ -1242,6 +1262,7 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 	for current, traversed := txIndex, 0; current >= 0 && current < len(retry.available) && traversed < len(retry.available); traversed++ {
 		retry.available[current] = false
 		retry.selectedOK[current] = false
+		retry.selectedAsyncReady[current] = false
 		current = retry.source.senderNext[current]
 	}
 	if !retry.ensureSettledPrefix(txIndex-1, statedb, dynProps, versioned, cfg) {
@@ -1266,6 +1287,7 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 		result.settledPrefix = txIndex - 1
 		result.hasSettledPrefix = true
 		result.incarnation = retry.incarnations[current]
+		result.retryStartTx = txIndex
 		if first {
 			if previous, ok := senderRetryOwnerPredecessor(versioned, cfg.transactions[current]); ok {
 				result.senderPredecessor = previous
@@ -1281,6 +1303,7 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 				result.err = advanceErr
 			}
 		}
+		result.retryCompletionNanos = time.Since(executionStarted).Nanoseconds()
 		retry.results[current] = result
 		retry.available[current] = true
 		retry.selectedOK[current] = false
@@ -1298,6 +1321,29 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 	worker.dynProps.RevertToSnapshot(prefixDPSnapshot)
 	worker.db.reset()
 	worker.db.recorder = &worker.recorder
+}
+
+// projectSenderRetryDeadline asks whether a background worker starting at the
+// recorded conflict boundary would have completed this result before serial
+// canonical execution reached its publication boundary. It uses measured
+// worker completion time and measured canonical transaction durations, so the
+// projection excludes the synchronous observer overhead itself.
+func projectSenderRetryDeadline(result discardShadowTaskResult, boundary int, versioned *versionedAccessShadow) (ready, known bool, deadlineNanos, deltaNanos int64) {
+	if versioned == nil || result.retryCompletionNanos <= 0 || result.retryStartTx < 0 ||
+		boundary < result.retryStartTx || boundary > len(versioned.transactionDurations) {
+		return false, false, 0, 0
+	}
+	for txIndex := result.retryStartTx; txIndex < boundary; txIndex++ {
+		duration := versioned.transactionDurations[txIndex]
+		if duration <= 0 {
+			return false, false, deadlineNanos, 0
+		}
+		deadlineNanos += duration
+	}
+	if result.retryCompletionNanos <= deadlineNanos {
+		return true, true, deadlineNanos, deadlineNanos - result.retryCompletionNanos
+	}
+	return false, true, deadlineNanos, result.retryCompletionNanos - deadlineNanos
 }
 
 // observeBoundary validates the newest incarnation against exactly the
@@ -1334,6 +1380,19 @@ func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Tr
 	}
 	retry.selected[txIndex] = retry.results[txIndex]
 	retry.selectedOK[txIndex] = true
+	ready, known, _, deltaNanos := projectSenderRetryDeadline(retry.results[txIndex], txIndex, versioned)
+	retry.stats.asyncCandidates++
+	switch {
+	case !known:
+		retry.stats.asyncUnknown++
+	case ready:
+		retry.selectedAsyncReady[txIndex] = true
+		retry.stats.asyncReady++
+		retry.stats.asyncReadySlackNs += deltaNanos
+	default:
+		retry.stats.asyncLate++
+		retry.stats.asyncLateNs += deltaNanos
+	}
 	retry.stats.candidates++
 }
 
@@ -1372,6 +1431,12 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 			if !sourceAccepted {
 				retry.stats.recovered++
 			}
+			if txIndex < len(retry.selectedAsyncReady) && retry.selectedAsyncReady[txIndex] {
+				retry.stats.asyncValidated++
+				if !sourceAccepted {
+					retry.stats.asyncRecovered++
+				}
+			}
 		}
 	}
 	discardShadowRetryBlocksCounter.Inc(1)
@@ -1391,6 +1456,14 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 	discardShadowRetryPrefixAdvanceCounter.Inc(retry.stats.prefixAdvances)
 	discardShadowRetryPrefixAdvanceNanosCounter.Inc(retry.stats.prefixAdvanceNanos)
 	discardShadowRetryExecutionNanosCounter.Inc(retry.stats.executionNanos)
+	discardShadowRetryAsyncCandidatesCounter.Inc(retry.stats.asyncCandidates)
+	discardShadowRetryAsyncReadyCounter.Inc(retry.stats.asyncReady)
+	discardShadowRetryAsyncLateCounter.Inc(retry.stats.asyncLate)
+	discardShadowRetryAsyncUnknownCounter.Inc(retry.stats.asyncUnknown)
+	discardShadowRetryAsyncValidatedCounter.Inc(retry.stats.asyncValidated)
+	discardShadowRetryAsyncRecoveredCounter.Inc(retry.stats.asyncRecovered)
+	discardShadowRetryAsyncReadySlackNanosCounter.Inc(retry.stats.asyncReadySlackNs)
+	discardShadowRetryAsyncLateNanosCounter.Inc(retry.stats.asyncLateNs)
 	return retry.stats
 }
 

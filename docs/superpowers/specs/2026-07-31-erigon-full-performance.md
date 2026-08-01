@@ -1011,6 +1011,34 @@ transactions advanced, and advance time. This remains a 1/64 synchronous
 canary; the production scheduler still requires asynchronous workers and a
 retry-priority queue before canonical publication.
 
+The first reuse window covered 7,466 blocks and 113 sampled sender-chain
+blocks. Twenty-six attempts executed 164 incarnations and recovered 62 fully
+validated results with zero errors or output/state/trace mismatches. Seventeen
+attempts refreshed a canonical prefix and nine reused one; the reused runners
+advanced 108 canonical WriteSets in 1.90 ms. Average maintenance for a reused
+attempt was 0.21 ms versus 2.41 ms per full refresh, an 11.4x reduction. The
+remaining 94 budget skips came from synchronous suffix execution rather than
+prefix maintenance.
+
+#### P4.23: Asynchronous deadline projection
+
+A direct goroutine handoff is not yet safe because the retry StateDB is private
+but its actuator raw-KV parent is the live canonical block buffer. A background
+retry could therefore observe raw writes beyond its settled prefix. Until that
+view is frozen or versioned, the canary does not claim real concurrency.
+
+Instead, every incarnation result records its real cumulative worker completion
+time from the conflict boundary. The canonical recorder already measures each
+transaction duration without observer overhead. At the result's publication
+boundary, the scheduler compares worker completion with the sum of canonical
+durations from the conflict through the preceding transaction. Results are
+classified as ready, late, or unknown; only ready results that also pass the
+TransactionInfo, WriteSet, and BalanceTrace gate count as asynchronously
+recoverable. Metrics under `sender_retry/async_projection/` expose candidate,
+ready/late/unknown, validated/recovered, ready slack, and lateness. This gate
+determines whether a frozen raw view plus a retry-priority worker queue can
+recover enough work before enabling actual background execution.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

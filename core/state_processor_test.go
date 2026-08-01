@@ -379,6 +379,10 @@ func TestProcessBlockSamplesSenderRetryIncarnation(t *testing.T) {
 	prefixRefreshBefore := discardShadowRetryPrefixRefreshCounter.Snapshot().Count()
 	prefixReuseBefore := discardShadowRetryPrefixReuseCounter.Snapshot().Count()
 	prefixAdvanceBefore := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count()
+	asyncCandidatesBefore := discardShadowRetryAsyncCandidatesCounter.Snapshot().Count()
+	asyncReadyBefore := discardShadowRetryAsyncReadyCounter.Snapshot().Count()
+	asyncLateBefore := discardShadowRetryAsyncLateCounter.Snapshot().Count()
+	asyncUnknownBefore := discardShadowRetryAsyncUnknownCounter.Snapshot().Count()
 	mismatchBefore := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
 		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +
 		discardShadowRetryBalanceMismatchCounter.Snapshot().Count() +
@@ -418,6 +422,13 @@ func TestProcessBlockSamplesSenderRetryIncarnation(t *testing.T) {
 	}
 	if advances := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count() - prefixAdvanceBefore; advances != 0 {
 		t.Fatalf("sender retry prefix advances = %d, want 0", advances)
+	}
+	asyncCandidates := discardShadowRetryAsyncCandidatesCounter.Snapshot().Count() - asyncCandidatesBefore
+	asyncClassified := discardShadowRetryAsyncReadyCounter.Snapshot().Count() - asyncReadyBefore +
+		discardShadowRetryAsyncLateCounter.Snapshot().Count() - asyncLateBefore +
+		discardShadowRetryAsyncUnknownCounter.Snapshot().Count() - asyncUnknownBefore
+	if asyncCandidates != 2 || asyncClassified != asyncCandidates {
+		t.Fatalf("sender retry async projection candidates=%d classified=%d, want 2", asyncCandidates, asyncClassified)
 	}
 	mismatchAfter := discardShadowRetryInfoMismatchCounter.Snapshot().Count() +
 		discardShadowRetryWriteMismatchCounter.Snapshot().Count() +
