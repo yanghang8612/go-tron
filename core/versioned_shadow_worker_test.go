@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -178,6 +179,45 @@ func TestAsyncRetryRejectionMetricsPreserveConflictClasses(t *testing.T) {
 		retry.stats.actualSender != 1 || retry.stats.actualBarrier != 1 ||
 		retry.stats.actualUnsupported != 1 || retry.stats.actualDeltaInvalid != 1 {
 		t.Fatalf("actual rejection stats = %+v", retry.stats)
+	}
+}
+
+func TestAsyncRetrySnapshotsOnlySuffixReadVersions(t *testing.T) {
+	account := testProcessorAddr(1)
+	fieldAccount := testProcessorAddr(2)
+	readKey := state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "read"}
+	unreadKey := state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "unread"}
+	fieldKey := state.TransactionAccountFieldKey{Address: fieldAccount, Field: state.TransactionAccountFieldBalance}
+	versioned := &versionedAccessShadow{
+		versions:             map[state.TransactionAccessKey]int{readKey: 3, unreadKey: 4},
+		accountAnyVersions:   map[tcommon.Address]int{account: 5},
+		accountFullVersions:  map[tcommon.Address]int{fieldAccount: 6},
+		accountFieldVersions: map[state.TransactionAccountFieldKey]int{fieldKey: 7},
+	}
+	pre := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{{reads: state.TransactionReadSet{Reads: []state.TransactionRead{
+			{Key: readKey, Mode: state.TransactionAccessRead},
+			{Key: state.TransactionAccessKey{Kind: state.TransactionAccessAccount, Address: account}, Mode: state.TransactionAccessRead},
+			{Key: state.TransactionAccessKey{Kind: state.TransactionAccessAccountField, Address: fieldAccount, AccountField: state.TransactionAccountFieldBalance}, Mode: state.TransactionAccessRead},
+		}}}},
+		resultByTx: []int{0},
+		senderNext: []int{-1},
+	}
+	view, cells := snapshotDiscardShadowVersionView(versioned, pre, 0)
+	if cells != 4 {
+		t.Fatalf("frozen version cells = %d, want 4", cells)
+	}
+	if previous, ok := view.typedPreviousVersion(readKey, 10); !ok || previous != 3 {
+		t.Fatalf("read-key version = %d, %v", previous, ok)
+	}
+	if previous, ok := view.typedPreviousVersion(state.TransactionAccessKey{Kind: state.TransactionAccessAccount, Address: account}, 10); !ok || previous != 5 {
+		t.Fatalf("account version = %d, %v", previous, ok)
+	}
+	if previous, ok := view.typedPreviousVersion(state.TransactionAccessKey{Kind: state.TransactionAccessAccountField, Address: fieldAccount, AccountField: state.TransactionAccountFieldBalance}, 10); !ok || previous != 7 {
+		t.Fatalf("field version = %d, %v", previous, ok)
+	}
+	if _, ok := view.typedPreviousVersion(unreadKey, 10); ok {
+		t.Fatal("unread version leaked into compact retry view")
 	}
 }
 

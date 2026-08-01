@@ -136,7 +136,11 @@ var (
 	discardShadowRetryActualErrorsCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/errors", nil)
 	discardShadowRetryActualRawKeysCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/frozen_raw_keys", nil)
 	discardShadowRetryActualRawMissCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/frozen_raw_misses", nil)
+	discardShadowRetryActualVersionCellsCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/frozen_version_cells", nil)
 	discardShadowRetryActualDispatchNanosCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch_nanos", nil)
+	discardShadowRetryActualPrefixNanosCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/prefix_nanos", nil)
+	discardShadowRetryActualRawFreezeNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/raw_freeze_nanos", nil)
+	discardShadowRetryActualVersionNanosCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/dispatch/version_snapshot_nanos", nil)
 	discardShadowRetryActualExecutionNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/execution_nanos", nil)
 	discardShadowRetryActualFinishWaitNanosCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/finish_wait_nanos", nil)
 	parallelTransferEnabledGauge                     = metrics.NewRegisteredGauge("core/parallel_transfer/enabled", nil)
@@ -460,7 +464,11 @@ type discardShadowSenderRetryStats struct {
 	actualErrors       int64
 	actualRawKeys      int64
 	actualRawMisses    int64
+	actualVersionCells int64
 	actualDispatchNs   int64
+	actualPrefixNs     int64
+	actualRawFreezeNs  int64
+	actualVersionNs    int64
 	actualExecutionNs  int64
 	actualFinishWaitNs int64
 }
@@ -1255,32 +1263,55 @@ func newDiscardShadowAsyncSenderRetry(source *discardShadowPreexecution, transac
 	return retry
 }
 
-func cloneDiscardShadowVersionView(source *versionedAccessShadow) versionedAccessShadow {
-	var clone versionedAccessShadow
-	if source == nil {
-		return clone
+// snapshotDiscardShadowVersionView freezes only the version cells the source
+// sender suffix actually read. Transfer branches are stable in the common
+// case, so cloning the entire block version graph at every retry is wasted
+// canonical-thread work. If a retry discovers a new key whose prefix writer
+// was not captured, it carries no expected writer and the publication
+// validator conservatively rejects it when that canonical writer is present.
+func snapshotDiscardShadowVersionView(source *versionedAccessShadow, pre *discardShadowPreexecution, txIndex int) (versionedAccessShadow, int) {
+	view := versionedAccessShadow{
+		versions:             make(map[state.TransactionAccessKey]int, 16),
+		accountFullVersions:  make(map[tcommon.Address]int, 4),
+		accountAnyVersions:   make(map[tcommon.Address]int, 4),
+		accountFieldVersions: make(map[state.TransactionAccountFieldKey]int, 8),
 	}
-	clone.versions = make(map[state.TransactionAccessKey]int, len(source.versions))
-	for key, version := range source.versions {
-		clone.versions[key] = version
+	if source == nil || pre == nil {
+		return view, 0
 	}
-	clone.accountFullVersions = make(map[tcommon.Address]int, len(source.accountFullVersions))
-	for key, version := range source.accountFullVersions {
-		clone.accountFullVersions[key] = version
+	for current, traversed := txIndex, 0; current >= 0 && current < len(pre.senderNext) && traversed < len(pre.senderNext); traversed++ {
+		if current < len(pre.resultByTx) {
+			resultIndex := pre.resultByTx[current]
+			if resultIndex >= 0 && resultIndex < len(pre.results) {
+				for _, read := range pre.results[resultIndex].reads.Reads {
+					if read.Mode&state.TransactionAccessRead == 0 {
+						continue
+					}
+					switch read.Key.Kind {
+					case state.TransactionAccessAccount:
+						if version, ok := source.accountAnyVersions[read.Key.Address]; ok {
+							view.accountAnyVersions[read.Key.Address] = version
+						}
+					case state.TransactionAccessAccountField:
+						if version, ok := source.accountFullVersions[read.Key.Address]; ok {
+							view.accountFullVersions[read.Key.Address] = version
+						}
+						fieldKey := state.TransactionAccountFieldKey{Address: read.Key.Address, Field: read.Key.AccountField}
+						if version, ok := source.accountFieldVersions[fieldKey]; ok {
+							view.accountFieldVersions[fieldKey] = version
+						}
+					default:
+						if version, ok := source.versions[read.Key]; ok {
+							view.versions[read.Key] = version
+						}
+					}
+				}
+			}
+		}
+		current = pre.senderNext[current]
 	}
-	clone.accountAnyVersions = make(map[tcommon.Address]int, len(source.accountAnyVersions))
-	for key, version := range source.accountAnyVersions {
-		clone.accountAnyVersions[key] = version
-	}
-	clone.accountFieldVersions = make(map[state.TransactionAccountFieldKey]int, len(source.accountFieldVersions))
-	for key, version := range source.accountFieldVersions {
-		clone.accountFieldVersions[key] = version
-	}
-	clone.lastSenderTx = make(map[tcommon.Address]int, len(source.lastSenderTx))
-	for owner, version := range source.lastSenderTx {
-		clone.lastSenderTx[owner] = version
-	}
-	return clone
+	cells := len(view.versions) + len(view.accountFullVersions) + len(view.accountAnyVersions) + len(view.accountFieldVersions)
+	return view, cells
 }
 
 func (retry *discardShadowSenderRetry) freezeAsyncRawView(txIndex int) (*discardShadowFrozenKV, int, error) {
@@ -1565,18 +1596,26 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		retry.stats.budgetSkipped++
 		return
 	}
+	prefixStarted := time.Now()
 	if !retry.ensureSettledPrefix(txIndex-1, statedb, dynProps, versioned, cfg) {
+		retry.stats.actualPrefixNs += time.Since(prefixStarted).Nanoseconds()
 		return
 	}
+	retry.stats.actualPrefixNs += time.Since(prefixStarted).Nanoseconds()
+	rawFreezeStarted := time.Now()
 	frozenRaw, frozenKeys, err := retry.freezeAsyncRawView(txIndex)
+	retry.stats.actualRawFreezeNs += time.Since(rawFreezeStarted).Nanoseconds()
 	if err != nil {
 		retry.stats.errors++
 		retry.stats.actualErrors++
 		return
 	}
 	retry.stats.actualRawKeys += int64(frozenKeys)
-	versionView := cloneDiscardShadowVersionView(versioned)
-	if previous, ok := senderRetryOwnerPredecessor(&versionView, cfg.transactions[tasks[0].txIndex]); ok {
+	versionStarted := time.Now()
+	versionView, versionCells := snapshotDiscardShadowVersionView(versioned, retry.source, txIndex)
+	retry.stats.actualVersionNs += time.Since(versionStarted).Nanoseconds()
+	retry.stats.actualVersionCells += int64(versionCells)
+	if previous, ok := senderRetryOwnerPredecessor(versioned, cfg.transactions[tasks[0].txIndex]); ok {
 		tasks[0].senderPredecessor = previous
 		tasks[0].senderVersioned = true
 	}
@@ -1936,7 +1975,11 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualErrorsCounter.Inc(retry.stats.actualErrors)
 		discardShadowRetryActualRawKeysCounter.Inc(retry.stats.actualRawKeys)
 		discardShadowRetryActualRawMissCounter.Inc(retry.stats.actualRawMisses)
+		discardShadowRetryActualVersionCellsCounter.Inc(retry.stats.actualVersionCells)
 		discardShadowRetryActualDispatchNanosCounter.Inc(retry.stats.actualDispatchNs)
+		discardShadowRetryActualPrefixNanosCounter.Inc(retry.stats.actualPrefixNs)
+		discardShadowRetryActualRawFreezeNanosCounter.Inc(retry.stats.actualRawFreezeNs)
+		discardShadowRetryActualVersionNanosCounter.Inc(retry.stats.actualVersionNs)
 		discardShadowRetryActualExecutionNanosCounter.Inc(retry.stats.actualExecutionNs)
 		discardShadowRetryActualFinishWaitNanosCounter.Inc(retry.stats.actualFinishWaitNs)
 	}

@@ -134,6 +134,8 @@
 - [x] Freeze exact raw-KV reads at the settled boundary and add a disjoint
   sampled single-worker async retry canary with strict capability misses,
   streamed results, incarnation invalidation, and error-path worker joining.
+- [x] Replace actual-retry whole-block version-map clones with compact suffix
+  read-version carriers and split dispatch prefix/raw/version timing.
 - [ ] Run the actual async canary production gate and measure ready, late,
   stale, busy-skip, raw-miss, validation, and finish-wait rates.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-

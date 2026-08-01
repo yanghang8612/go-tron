@@ -1081,6 +1081,16 @@ Production evidence from this canary will determine queue depth and whether to
 add more frozen workers before any canonical publication path consumes retry
 results.
 
+The first actual window showed that canonical dispatch, not worker execution,
+was the next local bottleneck: six jobs spent 14.22 ms in dispatch and 1.62 ms
+in the background worker. The next carrier therefore snapshots only version
+cells read by the source sender suffix instead of cloning every typed version
+map accumulated in the block. A retry-only branch that reads a new cell remains
+safe: without a captured expected writer, any canonical prefix writer makes
+the result conflict and fall back. `frozen_version_cells` plus
+`dispatch/{prefix,raw_freeze,version_snapshot}_nanos` separate the remaining
+StateDB prefix cost from raw and version freezing.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
