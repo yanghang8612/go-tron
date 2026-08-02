@@ -196,6 +196,38 @@ func TestWorkerBatchesHotPruneDeletes(t *testing.T) {
 	}
 }
 
+func TestPruneBatchStoreFlushesAtConfiguredLimit(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	keys := [][]byte{[]byte("aaaaaa"), []byte("bbbbbb"), []byte("cccccc")}
+	for _, key := range keys {
+		if err := base.Put(key, []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db := &pruneBatchCountingStore{KeyValueStore: base}
+	store, flush := newPruneBatchStoreWithLimit(db, 10)
+	for _, key := range keys {
+		if err := store.Delete(key); err != nil {
+			t.Fatalf("delete %q: %v", key, err)
+		}
+	}
+	if err := flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if db.directDeletes != 0 {
+		t.Fatalf("direct deletes = %d, want 0", db.directDeletes)
+	}
+	if db.batchWrites != len(keys) {
+		t.Fatalf("batch writes = %d, want %d", db.batchWrites, len(keys))
+	}
+	for _, key := range keys {
+		has, err := base.Has(key)
+		if err != nil || has {
+			t.Fatalf("key %q remains=%t err=%v", key, has, err)
+		}
+	}
+}
+
 func TestWorkerDoesNotAdvancePruneStagesWhenHistoryBatchFails(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	db := &pruneBatchCountingStore{KeyValueStore: base, writeErr: errors.New("injected batch failure")}

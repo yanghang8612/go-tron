@@ -36,9 +36,12 @@ type Stats struct {
 	DeletedStateCodeRows         int
 }
 
+const maxPruneBatchValueSize = 32 << 20
+
 // pruneBatchStore keeps scans on the committed store while directing writes to
-// one batch. Pruning first discovers all target rows, so it never needs to read
-// its own deletes before the batch is committed.
+// bounded batches. Pruning is idempotent and advances progress only after all
+// deletes finish, so committing bounded chunks is safe and avoids Pebble's hard
+// 4 GiB batch limit on unusually large historical passes.
 type pruneBatchStore struct {
 	ethdb.KeyValueReader
 	ethdb.KeyValueWriter
@@ -46,22 +49,70 @@ type pruneBatchStore struct {
 }
 
 func newPruneBatchStore(store Store) (Store, func() error) {
+	return newPruneBatchStoreWithLimit(store, maxPruneBatchValueSize)
+}
+
+func newPruneBatchStoreWithLimit(store Store, limit int) (Store, func() error) {
 	batcher, ok := store.(ethdb.Batcher)
 	if !ok {
 		return store, func() error { return nil }
 	}
-	batch := batcher.NewBatch()
+	writer := &boundedPruneBatchWriter{
+		batch: batcher.NewBatch(),
+		limit: limit,
+	}
 	return pruneBatchStore{
-			KeyValueReader: store,
-			KeyValueWriter: batch,
-			Iteratee:       store,
-		}, func() error {
-			defer batch.Reset()
-			if batch.ValueSize() == 0 {
-				return nil
-			}
-			return batch.Write()
+		KeyValueReader: store,
+		KeyValueWriter: writer,
+		Iteratee:       store,
+	}, writer.Flush
+}
+
+type boundedPruneBatchWriter struct {
+	batch ethdb.Batch
+	limit int
+}
+
+func (w *boundedPruneBatchWriter) Put(key, value []byte) error {
+	if err := w.flushBefore(len(key) + len(value)); err != nil {
+		return err
+	}
+	return w.batch.Put(key, value)
+}
+
+func (w *boundedPruneBatchWriter) Delete(key []byte) error {
+	if err := w.flushBefore(len(key)); err != nil {
+		return err
+	}
+	return w.batch.Delete(key)
+}
+
+func (w *boundedPruneBatchWriter) flushBefore(nextSize int) error {
+	if w == nil || w.batch == nil || w.limit <= 0 || w.batch.ValueSize() == 0 || w.batch.ValueSize()+nextSize <= w.limit {
+		return nil
+	}
+	return w.flush()
+}
+
+func (w *boundedPruneBatchWriter) flush() error {
+	if w == nil || w.batch == nil || w.batch.ValueSize() == 0 {
+		return nil
+	}
+	err := w.batch.Write()
+	w.batch.Reset()
+	return err
+}
+
+func (w *boundedPruneBatchWriter) Flush() error {
+	if w == nil {
+		return nil
+	}
+	defer func() {
+		if w.batch != nil {
+			w.batch.Reset()
 		}
+	}()
+	return w.flush()
 }
 
 func Run(db Store, policy Policy, headNum uint64) (Stats, error) {

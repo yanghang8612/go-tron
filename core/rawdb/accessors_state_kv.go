@@ -377,30 +377,33 @@ func deleteStateKVPrefixByScan(db stateKVLatestStore, prefix []byte) error {
 }
 
 func deleteStateKVPrefixByPointScan(db stateKVLatestStore, prefix []byte) error {
-	for {
-		it := db.NewIterator(prefix, nil)
-		keys := make([][]byte, 0, resetScanBatch)
-		for it.Next() {
-			keys = append(keys, append([]byte(nil), it.Key()...))
-			if len(keys) >= resetScanBatch {
-				break
-			}
-		}
-		err := it.Error()
-		it.Release()
-		if err != nil {
-			return err
-		}
-		if len(keys) == 0 {
-			return nil
-		}
+	// Keep one iterator snapshot for the entire scan. Some pruning callers read
+	// from the committed store while directing deletes into an uncommitted
+	// batch. Reopening the iterator after every chunk would see the same keys
+	// again in that setup and append duplicate deletes forever.
+	it := db.NewIterator(prefix, nil)
+	defer it.Release()
+	keys := make([][]byte, 0, resetScanBatch)
+	flush := func() error {
 		if err := deleteStateKVKeys(db, keys); err != nil {
 			return err
 		}
-		if len(keys) < resetScanBatch {
-			return nil
+		clear(keys)
+		keys = keys[:0]
+		return nil
+	}
+	for it.Next() {
+		keys = append(keys, append([]byte(nil), it.Key()...))
+		if len(keys) >= resetScanBatch {
+			if err := flush(); err != nil {
+				return err
+			}
 		}
 	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return flush()
 }
 
 func deleteStateKVKeys(db stateKVLatestStore, keys [][]byte) error {

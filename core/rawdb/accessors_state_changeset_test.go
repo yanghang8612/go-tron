@@ -2,6 +2,8 @@ package rawdb
 
 import (
 	"bytes"
+	"encoding/binary"
+	"fmt"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -558,6 +560,100 @@ func TestDeleteStateDomainChangesUsesPointDeletes(t *testing.T) {
 	if len(blocks) != 0 {
 		t.Fatalf("inverse blocks survived: %v", blocks)
 	}
+}
+
+func TestDeleteStateDomainChangesDoesNotRescanDeferredDeletes(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{common.AddressPrefixMainnet, 0x01}
+	rows := resetScanBatch + 1
+	for seq := 1; seq <= rows; seq++ {
+		key := make([]byte, 8)
+		binary.BigEndian.PutUint64(key, uint64(seq))
+		if err := WriteStateDomainChange(base, &StateDomainChange{
+			BlockNum:   9,
+			BlockHash:  common.Hash{0x09},
+			TxNum:      uint64(seq),
+			Seq:        uint64(seq),
+			FlatDomain: StateFlatDomainKVLatest,
+			Owner:      owner,
+			Generation: 3,
+			Domain:     kvdomains.SystemReward,
+			Key:        key,
+			PrevExists: true,
+			Prev:       []byte("old"),
+			NextExists: true,
+			Next:       []byte("new"),
+		}); err != nil {
+			t.Fatalf("write change %d: %v", seq, err)
+		}
+	}
+
+	// Reads and iterators deliberately see only base. Deletes remain invisible
+	// until Flush, matching pruning's committed-reader/uncommitted-batch store.
+	deferred := newDeferredDeleteStateStore(base, rows*2+100)
+	if err := DeleteStateDomainChanges(deferred, 9); err != nil {
+		t.Fatalf("delete deferred state changes: %v", err)
+	}
+	if deferred.deleteCalls != rows*2 {
+		t.Fatalf("delete calls = %d, want %d", deferred.deleteCalls, rows*2)
+	}
+	if err := deferred.Flush(); err != nil {
+		t.Fatalf("flush deferred deletes: %v", err)
+	}
+	remaining := 0
+	if err := IterateStateDomainChanges(base, 9, func(*StateDomainChange) (bool, error) {
+		remaining++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate remaining changes: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("remaining state changes = %d", remaining)
+	}
+}
+
+type deferredDeleteStateStore struct {
+	base           ethdb.KeyValueStore
+	pending        ethdb.Batch
+	deleteCalls    int
+	maxDeleteCalls int
+}
+
+func newDeferredDeleteStateStore(base ethdb.KeyValueStore, maxDeleteCalls int) *deferredDeleteStateStore {
+	return &deferredDeleteStateStore{
+		base:           base,
+		pending:        base.NewBatch(),
+		maxDeleteCalls: maxDeleteCalls,
+	}
+}
+
+func (s *deferredDeleteStateStore) Has(key []byte) (bool, error) {
+	return s.base.Has(key)
+}
+
+func (s *deferredDeleteStateStore) Get(key []byte) ([]byte, error) {
+	return s.base.Get(key)
+}
+
+func (s *deferredDeleteStateStore) Put(key, value []byte) error {
+	return s.base.Put(key, value)
+}
+
+func (s *deferredDeleteStateStore) Delete(key []byte) error {
+	s.deleteCalls++
+	if s.maxDeleteCalls > 0 && s.deleteCalls > s.maxDeleteCalls {
+		return fmt.Errorf("deferred delete limit exceeded: %d", s.deleteCalls)
+	}
+	return s.pending.Delete(key)
+}
+
+func (s *deferredDeleteStateStore) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return s.base.NewIterator(prefix, start)
+}
+
+func (s *deferredDeleteStateStore) Flush() error {
+	defer s.pending.Reset()
+	return s.pending.Write()
 }
 
 type rangeDeleteCountingStore struct {
