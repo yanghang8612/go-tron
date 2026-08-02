@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
@@ -293,11 +295,15 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 }
 
 func (b *TronBackend) TriggerConstantContractAt(owner, contractAddr tcommon.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
+	return b.TriggerConstantContractAtContext(context.Background(), owner, contractAddr, data, energyLimit, blockNum)
+}
+
+func (b *TronBackend) TriggerConstantContractAtContext(ctx context.Context, owner, contractAddr tcommon.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
 	block, err := b.GetBlockByNumber(blockNum)
 	if err != nil || block == nil {
 		return nil, fmt.Errorf("block %d not found", blockNum)
 	}
-	session, err := b.archiveStateAt(blockNum)
+	session, err := b.archiveStateAt(blockNum, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -418,6 +424,10 @@ const traceEnergyCap = 500_000_000
 // --history.enabled). A revert is reported through the tracer result (failed/
 // error), not as an RPC error, matching geth.
 func (b *TronBackend) TraceCall(from, to *tcommon.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error) {
+	return b.TraceCallContext(context.Background(), from, to, data, value, blockNumber, cfg)
+}
+
+func (b *TronBackend) TraceCallContext(ctx context.Context, from, to *tcommon.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error) {
 	if to == nil {
 		return nil, fmt.Errorf("debug_traceCall: 'to' address is required")
 	}
@@ -431,7 +441,7 @@ func (b *TronBackend) TraceCall(from, to *tcommon.Address, data []byte, value in
 		return nil, err
 	}
 
-	statedbCopy, dp, block, release, err := b.traceStateContext(blockNumber)
+	statedbCopy, dp, block, release, err := b.traceStateContextContext(ctx, blockNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -459,6 +469,10 @@ func (b *TronBackend) TraceCall(from, to *tcommon.Address, data []byte, value in
 // a concrete number yields a copy of archive state as of that block with the
 // dynprops rooted at that block (so fork gates match the historical block).
 func (b *TronBackend) traceStateContext(blockNumber *uint64) (*state.StateDB, *state.DynamicProperties, *types.Block, func(), error) {
+	return b.traceStateContextContext(context.Background(), blockNumber)
+}
+
+func (b *TronBackend) traceStateContextContext(ctx context.Context, blockNumber *uint64) (*state.StateDB, *state.DynamicProperties, *types.Block, func(), error) {
 	release := func() {}
 	if blockNumber == nil {
 		current := b.chain.CurrentBlock()
@@ -488,7 +502,7 @@ func (b *TronBackend) traceStateContext(blockNumber *uint64) (*state.StateDB, *s
 	if block == nil {
 		return nil, nil, nil, release, fmt.Errorf("block %d not found", num)
 	}
-	session, err := b.archiveStateAt(num)
+	session, err := b.archiveStateAt(num, ctx)
 	if err != nil {
 		return nil, nil, nil, release, err
 	}
@@ -3527,7 +3541,13 @@ var ErrArchiveHistoryPruned = fmt.Errorf("archive history pruned for requested b
 // responsible for the flat-history availability gate (see requireArchive) and
 // must call the returned release function.
 func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64, tcommon.Hash, func(), error) {
-	b.chain.chainmu.Lock()
+	return b.historyReaderAtContext(context.Background())
+}
+
+func (b *TronBackend) historyReaderAtContext(ctx context.Context) (*state.PersistentHistoryReader, uint64, tcommon.Hash, func(), error) {
+	if err := lockMutexContext(ctx, &b.chain.chainmu); err != nil {
+		return nil, 0, tcommon.Hash{}, nil, err
+	}
 	headNum := b.chain.CurrentBlock().Number()
 	root, ok, err := b.chain.stateRootAtBlockStrict(headNum)
 	if err != nil {
@@ -3543,7 +3563,32 @@ func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64,
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("open head state: %w", err)
 	}
-	return state.NewPersistentHistoryReaderWithColdHistory(b.chain.buffer, live, headNum, b.stateColdHistory), headNum, root, b.chain.chainmu.Unlock, nil
+	reader := state.NewPersistentHistoryReaderWithColdHistory(b.chain.buffer, live, headNum, b.stateColdHistory)
+	reader.SetContext(ctx)
+	return reader, headNum, root, b.chain.chainmu.Unlock, nil
+}
+
+func lockMutexContext(ctx context.Context, mu *sync.Mutex) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		if mu.TryLock() {
+			return nil
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 type archiveStateSession struct {
@@ -3561,8 +3606,12 @@ func (s *archiveStateSession) Close() {
 	s.release = nil
 }
 
-func (b *TronBackend) archiveStateAt(blockNum uint64) (*archiveStateSession, error) {
-	reader, headNum, headRoot, releaseHistory, err := b.historyReaderAt()
+func (b *TronBackend) archiveStateAt(blockNum uint64, contexts ...context.Context) (*archiveStateSession, error) {
+	ctx := context.Background()
+	if len(contexts) > 0 && contexts[0] != nil {
+		ctx = contexts[0]
+	}
+	reader, headNum, headRoot, releaseHistory, err := b.historyReaderAtContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -3572,6 +3621,7 @@ func (b *TronBackend) archiveStateAt(blockNum uint64) (*archiveStateSession, err
 		headRoot: headRoot,
 		release:  releaseHistory,
 	}
+	reader.SetHotHistoryBlockRange(blockNum, headNum)
 	if err := b.requireArchive(blockNum, headNum); err != nil {
 		session.Close()
 		return nil, err
@@ -3800,6 +3850,10 @@ func (b *TronBackend) Call(from, to *tcommon.Address, data []byte, value int64) 
 }
 
 func (b *TronBackend) CallAt(from, to *tcommon.Address, data []byte, value int64, blockNum uint64) ([]byte, error) {
+	return b.CallAtContext(context.Background(), from, to, data, value, blockNum)
+}
+
+func (b *TronBackend) CallAtContext(ctx context.Context, from, to *tcommon.Address, data []byte, value int64, blockNum uint64) ([]byte, error) {
 	fromAddr := tcommon.Address{}
 	if from != nil {
 		fromAddr = *from
@@ -3807,7 +3861,7 @@ func (b *TronBackend) CallAt(from, to *tcommon.Address, data []byte, value int64
 	if to == nil {
 		return nil, fmt.Errorf("eth_call: 'to' address is required")
 	}
-	result, err := b.TriggerConstantContractAt(fromAddr, *to, data, 30_000_000, blockNum)
+	result, err := b.TriggerConstantContractAtContext(ctx, fromAddr, *to, data, 30_000_000, blockNum)
 	if err != nil {
 		return nil, err
 	}

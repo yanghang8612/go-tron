@@ -326,26 +326,63 @@ func IterateStateAccountLatestChangeBlocks(db ethdb.Iteratee, owner common.Addre
 }
 
 func IterateStateDomainChangeBlocksByKey(db ethdb.Iteratee, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error {
+	prefix, ok := stateDomainChangeInversePrefixByKey(flatDomain, owner, generation, domain, key)
+	if !ok {
+		return nil
+	}
+	return iterateStateDomainChangeBlocksByInversePrefix(db, prefix, fn)
+}
+
+// IterateStateDomainChangeBlocksByKeyRange walks the exact-key inverse index
+// inside the inclusive block range [fromBlock, toBlock]. The block number is
+// the final big-endian component of an exact inverse key, so this can seek
+// directly to fromBlock instead of revisiting the key's complete history.
+func IterateStateDomainChangeBlocksByKeyRange(db ethdb.Iteratee, fromBlock, toBlock uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error {
+	if fromBlock > toBlock {
+		return nil
+	}
+	prefix, ok := stateDomainChangeInversePrefixByKey(flatDomain, owner, generation, domain, key)
+	if !ok {
+		return nil
+	}
+	return iterateStateDomainChangeBlocksByInversePrefixRange(db, prefix, fromBlock, toBlock, fn)
+}
+
+func stateDomainChangeInversePrefixByKey(flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool) {
 	switch flatDomain {
 	case StateFlatDomainAccountLatest:
-		return IterateStateAccountLatestChangeBlocks(db, owner, fn)
+		return stateChangeInverseKeyPrefix(StateAccountLatestCommitmentKey(owner)), true
 	case StateFlatDomainKVLatest:
-		return IterateStateDomainChangeBlocks(db, owner, generation, domain, key, fn)
+		return stateChangeInverseKeyPrefix(StateKVLatestCommitmentKey(owner, generation, domain, key)), true
 	case StateFlatDomainKVGeneration:
-		return IterateStateKVGenerationChangeBlocks(db, owner, fn)
+		return stateChangeInverseKeyPrefix(StateKVGenerationCommitmentKey(owner)), true
 	default:
-		return nil
+		return nil, false
 	}
 }
 
 // IterateStateDomainChangesByKey walks hot StateDomainChange rows matching one
 // latest-domain logical key inside the tx window (targetTxNum, headTxNum].
 func IterateStateDomainChangesByKey(db StateKVHistoryReader, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*StateDomainChange) (bool, error)) error {
+	return iterateStateDomainChangesByKey(db, 0, ^uint64(0), false, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, fn)
+}
+
+// IterateStateDomainChangesByKeyBlockRange is the block-bounded form used by
+// live archive queries. targetBlock is the state being requested, so only
+// inverse rows in (targetBlock, headBlock] can contribute rollback values.
+func IterateStateDomainChangesByKeyBlockRange(db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*StateDomainChange) (bool, error)) error {
+	if targetBlock >= headBlock {
+		return nil
+	}
+	return iterateStateDomainChangesByKey(db, targetBlock+1, headBlock, true, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, fn)
+}
+
+func iterateStateDomainChangesByKey(db StateKVHistoryReader, fromBlock, toBlock uint64, bounded bool, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*StateDomainChange) (bool, error)) error {
 	if targetTxNum >= headTxNum {
 		return nil
 	}
 	blocks := make(map[uint64]struct{})
-	if err := IterateStateDomainChangeBlocksByKey(db, flatDomain, owner, generation, domain, key, func(blockNum uint64) (bool, error) {
+	collectBlock := func(blockNum uint64) (bool, error) {
 		ok, err := stateBlockIntersectsTxWindow(db, blockNum, targetTxNum, headTxNum)
 		if err != nil {
 			return false, err
@@ -354,7 +391,14 @@ func IterateStateDomainChangesByKey(db StateKVHistoryReader, targetTxNum, headTx
 			blocks[blockNum] = struct{}{}
 		}
 		return true, nil
-	}); err != nil {
+	}
+	var err error
+	if bounded {
+		err = IterateStateDomainChangeBlocksByKeyRange(db, fromBlock, toBlock, flatDomain, owner, generation, domain, key, collectBlock)
+	} else {
+		err = IterateStateDomainChangeBlocksByKey(db, flatDomain, owner, generation, domain, key, collectBlock)
+	}
+	if err != nil {
 		return err
 	}
 	ordered := make([]uint64, 0, len(blocks))
@@ -381,11 +425,30 @@ func IterateStateDomainChangesByKey(db StateKVHistoryReader, targetTxNum, headTx
 // IterateStateDomainChangesByPrefix walks hot KV-latest StateDomainChange rows
 // matching one logical key prefix inside the tx window (targetTxNum, headTxNum].
 func IterateStateDomainChangesByPrefix(db StateKVHistoryReader, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*StateDomainChange) (bool, error)) error {
+	return iterateStateDomainChangesByPrefix(db, 0, ^uint64(0), false, targetTxNum, headTxNum, owner, generation, domain, prefix, fn)
+}
+
+// IterateStateDomainChangesByPrefixBlockRange filters prefix-index candidates
+// to (targetBlock, headBlock] before reading their StateTxRange rows. Unlike an
+// exact key, a logical prefix spans variable key bytes before the block suffix,
+// so Pebble cannot seek by block globally; early filtering still removes the
+// expensive point-read amplification from older history.
+func IterateStateDomainChangesByPrefixBlockRange(db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*StateDomainChange) (bool, error)) error {
+	if targetBlock >= headBlock {
+		return nil
+	}
+	return iterateStateDomainChangesByPrefix(db, targetBlock+1, headBlock, true, targetTxNum, headTxNum, owner, generation, domain, prefix, fn)
+}
+
+func iterateStateDomainChangesByPrefix(db StateKVHistoryReader, fromBlock, toBlock uint64, bounded bool, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*StateDomainChange) (bool, error)) error {
 	if targetTxNum >= headTxNum {
 		return nil
 	}
 	blocks := make(map[uint64]struct{})
 	if err := IterateStateDomainChangeBlocksByPrefix(db, owner, generation, domain, prefix, func(blockNum uint64) (bool, error) {
+		if bounded && (blockNum < fromBlock || blockNum > toBlock) {
+			return true, nil
+		}
 		ok, err := stateBlockIntersectsTxWindow(db, blockNum, targetTxNum, headTxNum)
 		if err != nil {
 			return false, err
@@ -441,6 +504,30 @@ func iterateStateDomainChangeBlocksByInversePrefix(db ethdb.Iteratee, prefix []b
 		blockNum, ok := StateDomainChangeInverseBlockNum(it.Key(), len(prefix))
 		if !ok {
 			continue
+		}
+		cont, err := fn(blockNum)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
+}
+
+func iterateStateDomainChangeBlocksByInversePrefixRange(db ethdb.Iteratee, prefix []byte, fromBlock, toBlock uint64, fn func(blockNum uint64) (bool, error)) error {
+	var start [8]byte
+	binary.BigEndian.PutUint64(start[:], fromBlock)
+	it := db.NewIterator(prefix, start[:])
+	defer it.Release()
+	for it.Next() {
+		blockNum, ok := StateDomainChangeInverseBlockNum(it.Key(), len(prefix))
+		if !ok {
+			continue
+		}
+		if blockNum > toBlock {
+			return nil
 		}
 		cont, err := fn(blockNum)
 		if err != nil {

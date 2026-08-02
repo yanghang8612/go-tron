@@ -61,7 +61,9 @@ type DomainCfg struct {
 	IterateHotHistoryTxRangeChanges   HotHistoryTxRangeChangeIterator
 	IterateHotHistoryBlocks           HotHistoryBlockIterator
 	IterateHotHistoryChanges          HotHistoryChangeIterator
+	IterateHotHistoryBlockRange       HotHistoryBlockRangeChangeIterator
 	IterateHotHistoryPrefix           HotHistoryPrefixIterator
+	IterateHotHistoryPrefixBlockRange HotHistoryPrefixBlockRangeIterator
 	ReadHotAccountLatestAsOf          HotAccountLatestAsOfReader
 	ReadHotKVLatestAsOf               HotKVLatestAsOfReader
 	ReadHotKVGenerationAsOf           HotKVGenerationAsOfReader
@@ -144,7 +146,11 @@ type HotHistoryBlockIterator func(db ethdb.Iteratee, flatDomain rawdb.StateFlatD
 
 type HotHistoryChangeIterator func(db rawdb.StateKVHistoryReader, targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
 
+type HotHistoryBlockRangeChangeIterator func(db rawdb.StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
+
 type HotHistoryPrefixIterator func(db rawdb.StateKVHistoryReader, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
+
+type HotHistoryPrefixBlockRangeIterator func(db rawdb.StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
 
 type HotAccountLatestAsOfReader func(db rawdb.StateKVHistoryReader, owner common.Address, targetTxNum, headTxNum uint64) ([]byte, bool, error)
 
@@ -323,36 +329,38 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			BuildHistory: func(db AggregatorDB, dir string, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
 				return BuildStateDomainChangeHistorySegmentsFromDB(db, dir, fromTxNum, toTxNum, relPath)
 			},
-			IsHistoryBinaryPath:             isStateDomainChangeBinarySegmentPath,
-			IsHistoryCompanionPath:          isStateDomainChangeBinaryCompanionPath,
-			HistoryIndexPath:                stateDomainChangeBinaryIndexPath,
-			HistoryAccessorPath:             stateDomainChangeBinaryAccessorPath,
-			OpenHistory:                     openStateDomainChangeHistoryChanges,
-			WriteHistory:                    writeHistorySegmentFiles,
-			CompactHistory:                  compactStateDomainChangeBinaryHistoryRun,
-			ReadHistoryRange:                readStateDomainChangeHistoryRange,
-			ReadHistoryByKey:                readStateDomainChangeHistoryByKey,
-			IterateHistoryRange:             iterateStateDomainChangeHistoryRange,
-			IterateHistoryByKey:             iterateStateDomainChangeHistoryByKey,
-			WriteHotHistoryRow:              rawdb.WriteStateDomainChangeRow,
-			WriteHotHistoryIndex:            rawdb.WriteStateDomainChangeInverseIndex,
-			WriteHotHistoryTxRange:          rawdb.WriteStateTxRange,
-			ReadHotHistoryTxRange:           rawdb.ReadStateTxRange,
-			IterateHotHistoryTxRanges:       rawdb.IterateStateTxRanges,
-			DeleteHotHistoryTxRange:         rawdb.DeleteStateTxRange,
-			DeleteHotHistoryBlock:           rawdb.DeleteStateDomainChanges,
-			IterateHotHistoryTxRangeChanges: rawdb.IterateStateDomainChangesByTxRange,
-			IterateHotHistoryBlocks:         rawdb.IterateStateDomainChangeBlocksByKey,
-			IterateHotHistoryChanges:        rawdb.IterateStateDomainChangesByKey,
-			IterateHotHistoryPrefix:         rawdb.IterateStateDomainChangesByPrefix,
-			ReadHotAccountLatestAsOf:        rawdb.ReadStateAccountLatestAsOfTxNum,
-			ReadHotKVLatestAsOf:             rawdb.ReadStateKVAsOfTxNum,
-			ReadHotKVGenerationAsOf:         rawdb.ReadStateKVGenerationAsOfTxNum,
-			ReadHotAccountKVAsOf:            rawdb.ReadStateAccountKVAsOfTxNum,
-			IterateHotAccountKVPrefixAsOf:   rawdb.IterateStateAccountKVAsOfPrefixTxNum,
-			CheckHistory:                    CheckStateDomainChangeSegment,
-			CheckHistoryIndex:               CheckStateDomainChangeIndexSegment,
-			CheckHistoryAccessor:            CheckStateDomainChangeAccessorSegment,
+			IsHistoryBinaryPath:               isStateDomainChangeBinarySegmentPath,
+			IsHistoryCompanionPath:            isStateDomainChangeBinaryCompanionPath,
+			HistoryIndexPath:                  stateDomainChangeBinaryIndexPath,
+			HistoryAccessorPath:               stateDomainChangeBinaryAccessorPath,
+			OpenHistory:                       openStateDomainChangeHistoryChanges,
+			WriteHistory:                      writeHistorySegmentFiles,
+			CompactHistory:                    compactStateDomainChangeBinaryHistoryRun,
+			ReadHistoryRange:                  readStateDomainChangeHistoryRange,
+			ReadHistoryByKey:                  readStateDomainChangeHistoryByKey,
+			IterateHistoryRange:               iterateStateDomainChangeHistoryRange,
+			IterateHistoryByKey:               iterateStateDomainChangeHistoryByKey,
+			WriteHotHistoryRow:                rawdb.WriteStateDomainChangeRow,
+			WriteHotHistoryIndex:              rawdb.WriteStateDomainChangeInverseIndex,
+			WriteHotHistoryTxRange:            rawdb.WriteStateTxRange,
+			ReadHotHistoryTxRange:             rawdb.ReadStateTxRange,
+			IterateHotHistoryTxRanges:         rawdb.IterateStateTxRanges,
+			DeleteHotHistoryTxRange:           rawdb.DeleteStateTxRange,
+			DeleteHotHistoryBlock:             rawdb.DeleteStateDomainChanges,
+			IterateHotHistoryTxRangeChanges:   rawdb.IterateStateDomainChangesByTxRange,
+			IterateHotHistoryBlocks:           rawdb.IterateStateDomainChangeBlocksByKey,
+			IterateHotHistoryChanges:          rawdb.IterateStateDomainChangesByKey,
+			IterateHotHistoryBlockRange:       rawdb.IterateStateDomainChangesByKeyBlockRange,
+			IterateHotHistoryPrefix:           rawdb.IterateStateDomainChangesByPrefix,
+			IterateHotHistoryPrefixBlockRange: rawdb.IterateStateDomainChangesByPrefixBlockRange,
+			ReadHotAccountLatestAsOf:          rawdb.ReadStateAccountLatestAsOfTxNum,
+			ReadHotKVLatestAsOf:               rawdb.ReadStateKVAsOfTxNum,
+			ReadHotKVGenerationAsOf:           rawdb.ReadStateKVGenerationAsOfTxNum,
+			ReadHotAccountKVAsOf:              rawdb.ReadStateAccountKVAsOfTxNum,
+			IterateHotAccountKVPrefixAsOf:     rawdb.IterateStateAccountKVAsOfPrefixTxNum,
+			CheckHistory:                      CheckStateDomainChangeSegment,
+			CheckHistoryIndex:                 CheckStateDomainChangeIndexSegment,
+			CheckHistoryAccessor:              CheckStateDomainChangeAccessorSegment,
 		},
 	}
 	reg := DomainRegistry{byDataset: make(map[SegmentDataset]DomainCfg, len(cfgs))}

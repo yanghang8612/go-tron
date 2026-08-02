@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -16,6 +17,17 @@ import (
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+func TestPersistentHistoryReaderHonorsCanceledContext(t *testing.T) {
+	reader := NewPersistentHistoryReader(ethrawdb.NewMemoryDatabase(), nil, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reader.SetContext(ctx)
+	_, err := reader.collectStateDomainChangesByKey(1, 2, rawdb.StateFlatDomainKVLatest, tcommon.Address{0x41, 0x01}, 0, kvdomains.SystemReward, []byte("reward/cancel"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("collect canceled history err = %v, want context.Canceled", err)
+	}
+}
 
 // historyFixture spins up an in-memory disk store and a StateDB that persists
 // through it. Each call to applyBlock mutates the state under flat temporal

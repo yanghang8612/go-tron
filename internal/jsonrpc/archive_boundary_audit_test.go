@@ -13,7 +13,7 @@ import (
 func TestEthAPIBlockTagMethodsUseArchiveBackends(t *testing.T) {
 	file := parseJSONRPCSource(t, "ethapi.go")
 	expected := map[string][]string{
-		"Call":                {"Call", "CallAt"},
+		"Call":                {"Call", "CallAtContext"},
 		"EstimateGas":         {"EstimateGas", "EstimateGasAt"},
 		"GetBalance":          {"GetBalance", "GetBalanceAt"},
 		"GetCode":             {"GetCode", "GetCodeAt"},
@@ -315,6 +315,7 @@ func jsonRPCArchiveBackendMethods() map[string]struct{} {
 	return map[string]struct{}{
 		"Call":              {},
 		"CallAt":            {},
+		"CallAtContext":     {},
 		"EstimateGas":       {},
 		"EstimateGasAt":     {},
 		"GetBalance":        {},

@@ -61,16 +61,16 @@ func TestArchiveStateAtCallersCloseSession(t *testing.T) {
 		"NextMaintenanceTimeAt":                1,
 		"TraceBlock":                           1,
 		"TraceTransaction":                     1,
-		"TriggerConstantContractAt":            1,
+		"TriggerConstantContractAtContext":     1,
 		"accountAtOrNil":                       1,
 		"listAssetsAt":                         1,
-		"traceStateContext":                    1,
+		"traceStateContextContext":             1,
 	}
 	directCloseAllowed := map[string]bool{
 		"EstimateGasAt": true,
 	}
 	releaseHandoffAllowed := map[string]bool{
-		"traceStateContext": true,
+		"traceStateContextContext": true,
 	}
 
 	actualCallers := make(map[string]int)
@@ -124,7 +124,7 @@ func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
 	}
 
 	expected := map[string][]string{
-		"CallAt":                               {"TriggerConstantContractAt"},
+		"CallAt":                               {"CallAtContext"},
 		"CanDelegateResourceAt":                {"archiveStateAt"},
 		"EstimateEnergyAt":                     {"TriggerConstantContractAt"},
 		"EstimateGasAt":                        {"TriggerConstantContractAt", "archiveStateAt"},
@@ -166,7 +166,7 @@ func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
 		"ListProposalsPaginatedAt":             {"ListProposalsAt"},
 		"ListWitnessesAt":                      {"archiveStateAt"},
 		"NextMaintenanceTimeAt":                {"archiveStateAt"},
-		"TriggerConstantContractAt":            {"archiveStateAt"},
+		"TriggerConstantContractAt":            {"TriggerConstantContractAtContext"},
 	}
 
 	actual := make(map[string][]string)
@@ -243,12 +243,12 @@ func archiveStateAtNonDirectReferences(fset *token.FileSet, sourceFile string, f
 		}
 		switch expr := n.(type) {
 		case *ast.SelectorExpr:
-			if expr.Sel.Name == "archiveStateAt" && !isDirectCallFun(parent, expr) {
+			if isArchiveStateAtName(expr.Sel.Name) && !isDirectCallFun(parent, expr) {
 				offenders = append(offenders, fmt.Sprintf("%s:%d: archiveStateAt referenced outside a direct call",
 					sourceFile, fset.Position(expr.Pos()).Line))
 			}
 		case *ast.Ident:
-			if expr.Name == "archiveStateAt" && !isFunctionName(parent, expr) && !isSelectorName(parent, expr) && !isDirectCallFun(parent, expr) {
+			if isArchiveStateAtName(expr.Name) && !isFunctionName(parent, expr) && !isSelectorName(parent, expr) && !isDirectCallFun(parent, expr) {
 				offenders = append(offenders, fmt.Sprintf("%s:%d: archiveStateAt referenced outside a direct call",
 					sourceFile, fset.Position(expr.Pos()).Line))
 			}
@@ -304,12 +304,16 @@ func archiveStateAtAssignments(fset *token.FileSet, body *ast.BlockStmt) []archi
 func isArchiveStateAtCall(call *ast.CallExpr) bool {
 	switch fun := call.Fun.(type) {
 	case *ast.SelectorExpr:
-		return fun.Sel.Name == "archiveStateAt"
+		return isArchiveStateAtName(fun.Sel.Name)
 	case *ast.Ident:
-		return fun.Name == "archiveStateAt"
+		return isArchiveStateAtName(fun.Name)
 	default:
 		return false
 	}
+}
+
+func isArchiveStateAtName(name string) bool {
+	return name == "archiveStateAt"
 }
 
 func isDirectCallFun(parent ast.Node, expr ast.Expr) bool {
@@ -464,12 +468,14 @@ func exprTypeName(expr ast.Expr) string {
 
 func archiveBoundaryCallNames(body *ast.BlockStmt) []string {
 	boundaries := map[string]struct{}{
-		"ListExchangesAt":           {},
-		"ListProposalsAt":           {},
-		"TriggerConstantContractAt": {},
-		"accountAtOrNil":            {},
-		"archiveStateAt":            {},
-		"listAssetsAt":              {},
+		"CallAtContext":                    {},
+		"ListExchangesAt":                  {},
+		"ListProposalsAt":                  {},
+		"TriggerConstantContractAt":        {},
+		"TriggerConstantContractAtContext": {},
+		"accountAtOrNil":                   {},
+		"archiveStateAt":                   {},
+		"listAssetsAt":                     {},
 	}
 	seen := make(map[string]struct{})
 	ast.Inspect(body, func(n ast.Node) bool {

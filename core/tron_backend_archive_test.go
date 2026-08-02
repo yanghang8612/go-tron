@@ -2,11 +2,13 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +25,22 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/tronprotocol/go-tron/vm/tracers"
 )
+
+func TestLockMutexContextReturnsOnCancellation(t *testing.T) {
+	var mu sync.Mutex
+	mu.Lock()
+	defer mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	err := lockMutexContext(ctx, &mu)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("lock canceled mutex err = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("lock cancellation took %s", elapsed)
+	}
+}
 
 // Archive-query RPC surface over flat temporal state history.
 //

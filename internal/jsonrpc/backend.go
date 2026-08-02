@@ -1,6 +1,8 @@
 package jsonrpc
 
 import (
+	"context"
+
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -173,6 +175,7 @@ type Backend interface {
 	// TVM execution (read-only simulation)
 	Call(from, to *common.Address, data []byte, value int64) ([]byte, error)
 	CallAt(from, to *common.Address, data []byte, value int64, blockNum uint64) ([]byte, error)
+	CallAtContext(ctx context.Context, from, to *common.Address, data []byte, value int64, blockNum uint64) ([]byte, error)
 
 	// Tracing (debug namespace). TraceCall replays a read-only call with the
 	// configured tracer (blockNumber nil = head, else archive at that block);
@@ -180,6 +183,7 @@ type Backend interface {
 	// return the tracer's rendered result. TraceBlock re-executes a whole block
 	// from its parent state, returning one result per transaction.
 	TraceCall(from, to *common.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error)
+	TraceCallContext(ctx context.Context, from, to *common.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error)
 	TraceTransaction(hash common.Hash, cfg *tracers.TraceConfig) (interface{}, error)
 	TraceBlock(block *types.Block, cfg *tracers.TraceConfig) ([]BlockTraceResult, error)
 

@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -226,6 +227,11 @@ type PersistentHistoryReader struct {
 	coldHistory StateDomainChangeColdHistory
 	latest      hotStateLatestReader
 	cache       map[reqCacheKey]any
+	ctx         context.Context
+
+	hotHistoryFromBlock uint64
+	hotHistoryToBlock   uint64
+	hotHistoryBounded   bool
 }
 
 // readerDB is the KV surface the reader needs: point Get/Has reads plus
@@ -317,7 +323,45 @@ func NewPersistentHistoryReaderWithColdHistory(db readerDB, live LiveAccountRead
 		coldHistory: coldHistory,
 		latest:      newRegistryHotStateLatestReader(db, snapshots.DefaultDomainRegistry()),
 		cache:       make(map[reqCacheKey]any),
+		ctx:         context.Background(),
 	}
+}
+
+// SetContext attaches request cancellation to this single-use history reader.
+// A canceled JSON-RPC request must release the chain snapshot lock instead of
+// continuing an obsolete history walk in the background.
+func (r *PersistentHistoryReader) SetContext(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.ctx = ctx
+}
+
+func (r *PersistentHistoryReader) contextError() error {
+	if r == nil || r.ctx == nil {
+		return nil
+	}
+	select {
+	case <-r.ctx.Done():
+		return r.ctx.Err()
+	default:
+		return nil
+	}
+}
+
+// SetHotHistoryBlockRange bounds inverse-index walks for this single-use
+// reader. Archive queries only need changes after the requested block and up
+// to the head snapshot captured with the reader.
+func (r *PersistentHistoryReader) SetHotHistoryBlockRange(targetBlock, headBlock uint64) {
+	if r == nil {
+		return
+	}
+	r.hotHistoryFromBlock = targetBlock
+	r.hotHistoryToBlock = headBlock
+	r.hotHistoryBounded = true
 }
 
 // AccountAt returns the account at addr at the end of blockNum.
@@ -973,6 +1017,9 @@ func (r *PersistentHistoryReader) collectStateDomainChangesByKey(targetTxNum, he
 	if r == nil || targetTxNum >= headTxNum {
 		return nil, nil
 	}
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
 	match := func(change *rawdb.StateDomainChange) bool {
 		if change.FlatDomain != flatDomain || change.Owner != owner {
 			return false
@@ -985,6 +1032,9 @@ func (r *PersistentHistoryReader) collectStateDomainChangesByKey(targetTxNum, he
 	seen := make(map[stateDomainChangeKey]struct{})
 	var changes []*rawdb.StateDomainChange
 	add := func(change *rawdb.StateDomainChange) error {
+		if err := r.contextError(); err != nil {
+			return err
+		}
 		if change == nil || change.TxNum <= targetTxNum || change.TxNum > headTxNum || !match(change) {
 			return nil
 		}
@@ -1022,12 +1072,18 @@ func (r *PersistentHistoryReader) collectStateDomainChangesByPrefix(targetTxNum,
 	if r == nil || targetTxNum >= headTxNum {
 		return nil, nil
 	}
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
 	match := func(change *rawdb.StateDomainChange) bool {
 		return historyStateDomainChangeMatchesKVLatestPrefix(change, owner, generation, domain, prefix)
 	}
 	seen := make(map[stateDomainChangeKey]struct{})
 	var changes []*rawdb.StateDomainChange
 	add := func(change *rawdb.StateDomainChange) error {
+		if err := r.contextError(); err != nil {
+			return err
+		}
 		if change == nil || change.TxNum <= targetTxNum || change.TxNum > headTxNum || !match(change) {
 			return nil
 		}
@@ -1069,6 +1125,9 @@ func (r *PersistentHistoryReader) iterateHotStateDomainChangesByKey(targetTxNum,
 	if err != nil {
 		return err
 	}
+	if r.hotHistoryBounded && cfg.IterateHotHistoryBlockRange != nil {
+		return cfg.IterateHotHistoryBlockRange(r.db, r.hotHistoryFromBlock, r.hotHistoryToBlock, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, fn)
+	}
 	if cfg.IterateHotHistoryChanges == nil {
 		return ErrStateDomainHistoryUnavailable
 	}
@@ -1082,6 +1141,9 @@ func (r *PersistentHistoryReader) iterateHotStateDomainChangesByPrefix(targetTxN
 	cfg, err := stateDomainHistoryConfig()
 	if err != nil {
 		return err
+	}
+	if r.hotHistoryBounded && cfg.IterateHotHistoryPrefixBlockRange != nil {
+		return cfg.IterateHotHistoryPrefixBlockRange(r.db, r.hotHistoryFromBlock, r.hotHistoryToBlock, targetTxNum, headTxNum, owner, generation, domain, prefix, fn)
 	}
 	if cfg.IterateHotHistoryPrefix == nil {
 		return ErrStateDomainHistoryUnavailable

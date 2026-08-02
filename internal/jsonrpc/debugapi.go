@@ -1,6 +1,7 @@
 package jsonrpc
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -29,7 +30,7 @@ func NewDebugAPI(backend Backend) *DebugAPI {
 // archive block; config selects the tracer and struct-log toggles (the geth
 // TraceConfig shape). A revert is reported through the tracer result, not as a
 // JSON-RPC error.
-func (d *DebugAPI) TraceCall(tx callArgs, block *string, config *tracers.TraceConfig) (interface{}, error) {
+func (d *DebugAPI) TraceCall(ctx context.Context, tx callArgs, block *string, config *tracers.TraceConfig) (interface{}, error) {
 	if tx.To == "" {
 		return nil, fmt.Errorf("debug_traceCall: 'to' required")
 	}
@@ -49,7 +50,7 @@ func (d *DebugAPI) TraceCall(tx callArgs, block *string, config *tracers.TraceCo
 	if err != nil {
 		return nil, err
 	}
-	return d.backend.TraceCall(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNumber, config)
+	return d.backend.TraceCallContext(ctx, from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNumber, config)
 }
 
 // TraceTransaction serves debug_traceTransaction: re-execute a historical

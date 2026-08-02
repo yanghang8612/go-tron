@@ -1,6 +1,7 @@
 package jsonrpc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -182,7 +183,7 @@ func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, e
 // Call serves eth_call: read-only TVM execution returning the result bytes as
 // 0x-hex. 'to' is required. A numeric block tag executes against archive state;
 // latest/pending uses the live head state.
-func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
+func (e *EthAPI) Call(ctx context.Context, tx callArgs, block *string) (string, error) {
 	if tx.To == "" {
 		return "", fmt.Errorf("eth_call: 'to' required")
 	}
@@ -206,7 +207,7 @@ func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
 	if isLatest {
 		result, err = e.backend.Call(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value))
 	} else {
-		result, err = e.backend.CallAt(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNum)
+		result, err = e.backend.CallAtContext(ctx, from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNum)
 	}
 	if err != nil {
 		return "", err

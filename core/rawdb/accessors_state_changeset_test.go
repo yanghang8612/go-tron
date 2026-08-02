@@ -346,6 +346,49 @@ func TestIterateStateDomainChangesByKeyFiltersTxWindowAndKey(t *testing.T) {
 	}
 }
 
+func TestIterateStateDomainChangesByKeyBlockRangeSeeksPastOldHistory(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x27}
+	for _, blockNum := range []uint64{1, 100, 101} {
+		if err := WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatalf("write range %d: %v", blockNum, err)
+		}
+		if err := WriteStateDomainChange(db, &StateDomainChange{
+			BlockNum:   blockNum,
+			TxNum:      blockNum,
+			Seq:        1,
+			FlatDomain: StateFlatDomainKVLatest,
+			Owner:      owner,
+			Generation: 1,
+			Domain:     kvdomains.SystemReward,
+			Key:        []byte("reward/every-block"),
+			NextExists: true,
+			Next:       []byte{byte(blockNum)},
+		}); err != nil {
+			t.Fatalf("write change %d: %v", blockNum, err)
+		}
+	}
+	// A bounded iterator must neither point-read history before its lower
+	// block bound nor continue beyond its upper bound. Malformed rows on both
+	// sides make an accidental read fail deterministically.
+	if err := db.Put(stateTxRangeKey(1), []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(stateTxRangeKey(101), []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	var got []*StateDomainChange
+	if err := IterateStateDomainChangesByKeyBlockRange(db, 99, 100, 99, 100, StateFlatDomainKVLatest, owner, 1, kvdomains.SystemReward, []byte("reward/every-block"), func(change *StateDomainChange) (bool, error) {
+		got = append(got, change)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate bounded changes: %v", err)
+	}
+	if len(got) != 1 || got[0].BlockNum != 100 {
+		t.Fatalf("bounded changes = %+v, want only block 100", got)
+	}
+}
+
 func TestIterateStateDomainChangesByPrefixFiltersTxWindowAndPrefix(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	owner := common.Address{0x41, 0x26}

@@ -2,6 +2,7 @@ package jsonrpc_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -162,6 +163,9 @@ func (s *stubBackend) CallAt(from, to *common.Address, data []byte, value int64,
 	}
 	return s.callAtResult, nil
 }
+func (s *stubBackend) CallAtContext(_ context.Context, from, to *common.Address, data []byte, value int64, blockNum uint64) ([]byte, error) {
+	return s.CallAt(from, to, data, value, blockNum)
+}
 func (s *stubBackend) TraceCall(from, to *common.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error) {
 	s.gotTraceFrom = from
 	s.gotTraceTo = to
@@ -170,6 +174,9 @@ func (s *stubBackend) TraceCall(from, to *common.Address, data []byte, value int
 	s.gotTraceBlock = blockNumber
 	s.gotTraceCfg = cfg
 	return s.traceResult, nil
+}
+func (s *stubBackend) TraceCallContext(_ context.Context, from, to *common.Address, data []byte, value int64, blockNumber *uint64, cfg *tracers.TraceConfig) (interface{}, error) {
+	return s.TraceCall(from, to, data, value, blockNumber, cfg)
 }
 func (s *stubBackend) TraceTransaction(hash common.Hash, cfg *tracers.TraceConfig) (interface{}, error) {
 	s.gotTraceHash = hash
