@@ -971,6 +971,18 @@ func TestPrunerPassUsesSolidifiedBlockAndBatch(t *testing.T) {
 	}
 }
 
+func TestPrunerCatchupDefaultsUseBoundedLargeBlockWindow(t *testing.T) {
+	pruner := NewPruner(&fakePruneChain{db: rawdb.NewMemoryDatabase()}, PrunerConfig{
+		Policy: FullPolicy(2, 1),
+	})
+	if pruner.cfg.BatchSize != 25_000 {
+		t.Fatalf("default prune batch = %d, want 25000", pruner.cfg.BatchSize)
+	}
+	if pruner.cfg.Interval != time.Minute {
+		t.Fatalf("default prune interval = %s, want 1m", pruner.cfg.Interval)
+	}
+}
+
 func writeAccountLatestEnvelope(t *testing.T, db ethdb.KeyValueWriter, owner common.Address, codeHash common.Hash) {
 	t.Helper()
 	data := accountLatestEnvelopeBytes(t, codeHash)

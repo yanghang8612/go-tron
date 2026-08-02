@@ -16,7 +16,12 @@ var log = gtronlog.NewModule("core/state/pruning")
 
 const (
 	defaultInterval = time.Minute
-	defaultBatch    = 5_000
+	// Keep catch-up pruning busy for most of the one-minute lifecycle interval.
+	// Delete writes are independently capped at 32 MiB by Worker, so increasing
+	// the block selection window raises throughput without recreating an
+	// unbounded Pebble batch. At the live tip the iterator simply stops after the
+	// handful of newly eligible blocks.
+	defaultBatch = 25_000
 )
 
 type ChainSource interface {
@@ -211,6 +216,16 @@ func (p *Pruner) PrunePass() (Stats, error) {
 	p.deletedStateCodeRows.Add(uint64(stats.DeletedStateCodeRows))
 	p.lastSolidifiedBlock.Store(uint64(solidified))
 	p.lastPassDuration.Store(time.Since(start).Nanoseconds())
+	if stats.DeletedTxRanges != 0 || stats.DeletedDomainChangeBlocks != 0 || stats.DeletedCommitmentCheckpoints != 0 || stats.DeletedStateCodeRows != 0 {
+		log.Info("Domain state prune pass completed",
+			"pruneHead", pruneHead,
+			"solidified", solidified,
+			"txRanges", stats.DeletedTxRanges,
+			"changeBlocks", stats.DeletedDomainChangeBlocks,
+			"commitments", stats.DeletedCommitmentCheckpoints,
+			"codeRows", stats.DeletedStateCodeRows,
+			"elapsed", time.Since(start))
+	}
 	return stats, nil
 }
 

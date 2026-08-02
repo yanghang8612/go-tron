@@ -80,6 +80,7 @@ func dbCommand() *cli.Command {
 			dbBenchmarkAncientCommand(),
 			dbMigrateAncientV2Command(),
 			dbDropBalanceTracesCommand(),
+			dbCompactStateHistoryCommand(),
 			{
 				Name:  "rebuild-tx-indexes",
 				Usage: "Rebuild transaction lookups and per-block receipt rows from retained blocks",
