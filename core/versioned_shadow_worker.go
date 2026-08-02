@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/metrics"
@@ -134,6 +135,7 @@ var (
 	discardShadowRetryActualRunnerCapacityCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/runner_capacity", nil)
 	discardShadowRetryActualMaxInflightCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/max_inflight", nil)
 	discardShadowRetryActualDeferredCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/lookahead_deferred", nil)
+	discardShadowRetryActualSupersededCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/superseded_before_execute", nil)
 	discardShadowRetryActualExecutedCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/executed", nil)
 	discardShadowRetryActualReadyCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/ready", nil)
 	discardShadowRetryActualLateCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/late", nil)
@@ -472,6 +474,7 @@ type discardShadowSenderRetryStats struct {
 	actualCapacity     int64
 	actualMaxInflight  int64
 	actualDeferred     int64
+	actualSuperseded   int64
 	actualExecuted     int64
 	actualReady        int64
 	actualLate         int64
@@ -504,11 +507,12 @@ type discardShadowSenderRetryStats struct {
 }
 
 type discardShadowAsyncRetryEvent struct {
-	result    *discardShadowTaskResult
-	runner    *discardShadowRetryRunner
-	done      bool
-	nanos     int64
-	rawMisses int64
+	result     *discardShadowTaskResult
+	runner     *discardShadowRetryRunner
+	done       bool
+	nanos      int64
+	rawMisses  int64
+	superseded int64
 }
 
 // discardShadowRetryRunner owns one independently advanceable canonical-prefix
@@ -541,6 +545,7 @@ type discardShadowSenderRetry struct {
 	selectedOK         []bool
 	selectedAsyncReady []bool
 	incarnations       []uint32
+	asyncIncarnations  []atomic.Uint32
 	runner             *discardShadowRetryRunner
 	async              bool
 	asyncRunners       []*discardShadowRetryRunner
@@ -1345,6 +1350,7 @@ func newDiscardShadowAsyncSenderRetry(source *discardShadowPreexecution, transac
 		return nil
 	}
 	retry.async = true
+	retry.asyncIncarnations = make([]atomic.Uint32, transactionCount)
 	// The global execution budget bounds result events, while every dispatched
 	// job adds one ownership-return event. A fully buffered channel prevents a
 	// runner from being paced by canonical execution.
@@ -1364,6 +1370,11 @@ func newDiscardShadowAsyncSenderRetry(source *discardShadowPreexecution, transac
 	retry.stats.actualCapacity = int64(len(retry.asyncRunners))
 	retry.runner = nil
 	return retry
+}
+
+func (retry *discardShadowSenderRetry) asyncTaskCurrent(task discardShadowAsyncRetryTask) bool {
+	return retry != nil && task.txIndex >= 0 && task.txIndex < len(retry.asyncIncarnations) &&
+		retry.asyncIncarnations[task.txIndex].Load() == task.incarnation
 }
 
 func (retry *discardShadowSenderRetry) idleAsyncRunner() *discardShadowRetryRunner {
@@ -1698,6 +1709,9 @@ func (retry *discardShadowSenderRetry) invalidateAsyncSuffix(txIndex int, taskLi
 		retry.selectedOK[current] = false
 		retry.selectedAsyncReady[current] = false
 		retry.incarnations[current]++
+		if current < len(retry.asyncIncarnations) {
+			retry.asyncIncarnations[current].Store(retry.incarnations[current])
+		}
 		if int64(len(tasks)) < remaining {
 			task := retry.source.senderTasks[current]
 			tasks = append(tasks, discardShadowAsyncRetryTask{
@@ -1792,7 +1806,12 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		prefixDPSnapshot := worker.dynProps.Snapshot()
 		var forwarded versionedAccessShadow
 		forwarded.Prepare(len(retryCfg.transactions))
-		for _, task := range tasks {
+		var superseded int64
+		for taskIndex, task := range tasks {
+			if !retry.asyncTaskCurrent(task) {
+				superseded += int64(len(tasks) - taskIndex)
+				break
+			}
 			result := worker.execute(task.txIndex, retryCfg)
 			result.settledPrefix = txIndex - 1
 			result.hasSettledPrefix = true
@@ -1812,6 +1831,10 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 			if !preexecutedTransferReady(&result) {
 				break
 			}
+			if !retry.asyncTaskCurrent(task) {
+				superseded += int64(len(tasks) - taskIndex - 1)
+				break
+			}
 			installSenderChainWrites(&forwarded, result.writes, task.txIndex)
 		}
 		worker.state.RevertToSnapshot(prefixStateSnapshot)
@@ -1821,6 +1844,7 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		worker.db.recorder = &worker.recorder
 		events <- discardShadowAsyncRetryEvent{
 			runner: runner, done: true, nanos: time.Since(started).Nanoseconds(), rawMisses: frozenRaw.misses,
+			superseded: superseded,
 		}
 	}()
 }
@@ -1830,6 +1854,13 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 		return
 	}
 	if event.done {
+		if event.superseded > 0 {
+			retry.stats.actualSuperseded += event.superseded
+			retry.asyncScheduled -= event.superseded
+			if retry.asyncScheduled < 0 {
+				retry.asyncScheduled = 0
+			}
+		}
 		if event.runner != nil && event.runner.busy {
 			if event.runner.worker != nil {
 				event.runner.worker.db.parent = &event.runner.prefixRaw
@@ -2127,6 +2158,7 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualRunnerCapacityCounter.Inc(retry.stats.actualCapacity)
 		discardShadowRetryActualMaxInflightCounter.Inc(retry.stats.actualMaxInflight)
 		discardShadowRetryActualDeferredCounter.Inc(retry.stats.actualDeferred)
+		discardShadowRetryActualSupersededCounter.Inc(retry.stats.actualSuperseded)
 		discardShadowRetryActualExecutedCounter.Inc(retry.stats.actualExecuted)
 		discardShadowRetryActualReadyCounter.Inc(retry.stats.actualReady)
 		discardShadowRetryActualLateCounter.Inc(retry.stats.actualLate)

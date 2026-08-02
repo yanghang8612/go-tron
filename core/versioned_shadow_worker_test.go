@@ -296,6 +296,50 @@ func TestAsyncRetryPrioritizesBoundedSenderLookahead(t *testing.T) {
 	}
 }
 
+func TestAsyncRetryCancelsSupersededSuffixBeforeExecution(t *testing.T) {
+	const transactionCount = 7
+	source := &discardShadowPreexecution{
+		senderTasks:  make([]discardShadowSenderChainTask, transactionCount),
+		senderTaskOK: make([]bool, transactionCount),
+		senderNext:   make([]int, transactionCount),
+	}
+	for txIndex := 0; txIndex < transactionCount; txIndex++ {
+		source.senderTasks[txIndex] = discardShadowSenderChainTask{txIndex: txIndex}
+		source.senderTaskOK[txIndex] = true
+		source.senderNext[txIndex] = txIndex + 1
+	}
+	source.senderNext[transactionCount-1] = -1
+	retry := newDiscardShadowAsyncSenderRetry(source, transactionCount)
+	if retry == nil {
+		t.Fatal("missing async retry")
+	}
+	tasks, _ := retry.invalidateAsyncSuffix(0, discardShadowRetryLookahead)
+	if len(tasks) != int(discardShadowRetryLookahead) {
+		t.Fatalf("initial tasks = %d", len(tasks))
+	}
+	for _, task := range tasks {
+		if !retry.asyncTaskCurrent(task) {
+			t.Fatalf("initial task %d was already superseded", task.txIndex)
+		}
+	}
+	if invalidated, _ := retry.invalidateAsyncSuffix(1, 0); len(invalidated) != 0 {
+		t.Fatalf("invalidation unexpectedly scheduled %d tasks", len(invalidated))
+	}
+	if !retry.asyncTaskCurrent(tasks[0]) {
+		t.Fatal("prefix task was superseded by descendant invalidation")
+	}
+	for _, task := range tasks[1:] {
+		if retry.asyncTaskCurrent(task) {
+			t.Fatalf("descendant task %d remained current", task.txIndex)
+		}
+	}
+	retry.asyncScheduled = int64(len(tasks))
+	retry.consumeAsyncEvent(discardShadowAsyncRetryEvent{done: true, superseded: int64(len(tasks) - 1)}, 0)
+	if retry.asyncScheduled != 1 || retry.stats.actualSuperseded != int64(len(tasks)-1) {
+		t.Fatalf("reservation=%d superseded=%d", retry.asyncScheduled, retry.stats.actualSuperseded)
+	}
+}
+
 func TestAsyncRetrySnapshotsOnlySuffixReadVersions(t *testing.T) {
 	account := testProcessorAddr(1)
 	fieldAccount := testProcessorAddr(2)

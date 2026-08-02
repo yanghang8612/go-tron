@@ -1155,6 +1155,22 @@ settled-prefix observer as a fixed correctness and deadline-projection
 reference. This changes only observer coverage: canonical transfer publication
 continues to use the already-gated sender-chain path.
 
+The first three-cohort long-chain window covered 41 actual blocks and 60 jobs.
+The four-task window deferred 464 far-suffix tasks and kept runner exhaustion,
+copying, refreshes, raw misses, execution errors, and finish waits at zero.
+However, 46 of 191 completed results were still stale: a worker that had
+already been superseded by a newer suffix incarnation continued executing its
+remaining local tasks until the four-task job ended.
+
+Each async transaction now has a canonical-thread-owned atomic incarnation
+token. A worker checks the token before every sender successor and stops as
+soon as the task is no longer the newest incarnation. The done event returns
+the number of skipped tasks so the block-wide 64-execution reservation can be
+reused safely; `superseded_before_execute` exposes the avoided work. This is the
+bounded-runner equivalent of Erigon's retry heap admitting only the current
+transaction incarnation: an actuator already in progress is allowed to finish,
+but known-stale descendants never start.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
