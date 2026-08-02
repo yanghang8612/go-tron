@@ -44,6 +44,13 @@ func NewPebbleDBWithOptions(path string, cache int, handles int, tune PebbleOpti
 	return pebbledb.New(path, cache, handles, "", false, tune)
 }
 
+// NewPebbleDBReadOnly opens an existing Pebble database without permitting
+// mutations. It is intended for offline diagnostic commands such as db
+// inspect; Pebble still requires the node process to release the database lock.
+func NewPebbleDBReadOnly(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
+	return pebbledb.New(path, cache, handles, "", true, pebbledb.DefaultOptions())
+}
+
 func NewMemoryDatabase() ethdb.KeyValueStore {
 	return memorydb.New()
 }

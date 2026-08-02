@@ -76,6 +76,9 @@ func dbCommand() *cli.Command {
 		Name:  "db",
 		Usage: "Database maintenance utilities",
 		Subcommands: []*cli.Command{
+			dbInspectCommand(),
+			dbBenchmarkAncientCommand(),
+			dbMigrateAncientV2Command(),
 			{
 				Name:  "rebuild-tx-indexes",
 				Usage: "Rebuild transaction lookups and per-block receipt rows from retained blocks",
@@ -254,17 +257,17 @@ func dbFreezerStatusCmd(ctx *cli.Context) error {
 	if repairRecordedAt == "" {
 		repairRecordedAt = "-"
 	}
-	fmt.Printf("Freezer status: datadir=%s readonly=%t head=%d tail=%d tables=%d repairApplied=%t repairTables=%d repairTargetHead=%d repairTargetTail=%d repairRecordedAt=%s\n",
-		stats.Datadir, stats.ReadOnly, stats.Head, stats.Tail, len(stats.Tables),
+	fmt.Printf("Freezer status: datadir=%s readonly=%t head=%d tail=%d v2Coverage=%d tables=%d repairApplied=%t repairTables=%d repairTargetHead=%d repairTargetTail=%d repairRecordedAt=%s\n",
+		stats.Datadir, stats.ReadOnly, stats.Head, stats.Tail, stats.V2Coverage, len(stats.Tables),
 		stats.Repair.Applied, len(stats.Repair.Tables), stats.Repair.TargetHead, stats.Repair.TargetTail, repairRecordedAt)
 	for _, table := range stats.Repair.Tables {
 		fmt.Printf("Freezer repair table: name=%s headBefore=%d headAfter=%d hiddenTailBefore=%d hiddenTailAfter=%d\n",
 			table.Name, table.HeadBefore, table.HeadAfter, table.HiddenTailBefore, table.HiddenTailAfter)
 	}
 	for _, table := range stats.Tables {
-		fmt.Printf("Freezer table: name=%s head=%d physicalTail=%d hiddenTail=%d prunable=%t noSnappy=%t tailFile=%d headFile=%d headBytes=%d visibleSize=%d hiddenSize=%d\n",
+		fmt.Printf("Freezer table: name=%s head=%d physicalTail=%d hiddenTail=%d prunable=%t noSnappy=%t tailFile=%d headFile=%d headBytes=%d visibleSize=%d hiddenSize=%d v2Size=%d\n",
 			table.Name, table.Head, table.PhysicalTail, table.HiddenTail, table.Prunable, table.NoSnappy,
-			table.TailFile, table.HeadFile, table.HeadBytes, table.VisibleSize, table.HiddenSize)
+			table.TailFile, table.HeadFile, table.HeadBytes, table.VisibleSize, table.HiddenSize, table.V2Size)
 	}
 	return nil
 }

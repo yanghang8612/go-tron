@@ -130,6 +130,13 @@ func shouldEnableChainFreezerTailPruner(cfg *params.ChainConfig) bool {
 	return cfg != nil && cfg.EffectiveHistoryMode() == params.HistoryModeMinimal
 }
 
+func validateAncientV2PruneMode(cfg *params.ChainConfig, coverage uint64) error {
+	if coverage == 0 || cfg == nil || cfg.EffectiveHistoryMode() != params.HistoryModeMinimal {
+		return nil
+	}
+	return fmt.Errorf("datadir has local Ancient V2 coverage [0,%d), which is incompatible with minimal-mode freezer tail pruning; use the persisted full/blocks mode or migrate through a verified cold snapshot", coverage)
+}
+
 // shouldEnableChainFreezerSnapshotBuilder keeps the duplicate cold
 // chain-freezer snapshot files limited to minimal mode. Other modes retain the
 // local ancient source, so publishing a second full chain copy would consume
@@ -162,6 +169,25 @@ func domainStatePrunePolicy(cfg *params.ChainConfig, targetReorgWindow uint64) s
 		return statepruning.SnapPolicy(historyWindow, reorgWindow)
 	default:
 		return statepruning.FullPolicy(historyWindow, reorgWindow)
+	}
+}
+
+// domainStatePrunerMaxSyncLag controls whether the background pruner pauses
+// while the node is catching up. Full, blocks, and minimal modes delete hot
+// history solely by their local retention window, so pruning old rows remains
+// safe during sync and prevents a long replay from accumulating an unbounded
+// hot history backlog. Snap mode keeps the catch-up guard because snapshot
+// construction and pruning share substantial I/O and pruning is additionally
+// constrained by verified snapshot coverage.
+func domainStatePrunerMaxSyncLag(cfg *params.ChainConfig, policy statepruning.Policy) uint64 {
+	if cfg == nil {
+		return policy.HistoryWindow
+	}
+	switch cfg.EffectiveHistoryMode() {
+	case params.HistoryModeFull, params.HistoryModeBlocks, params.HistoryModeMinimal:
+		return 0
+	default:
+		return policy.HistoryWindow
 	}
 }
 

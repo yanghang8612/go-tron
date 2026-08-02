@@ -72,6 +72,8 @@ const (
 	defaultInterval         = 30 * time.Second
 	defaultMarginBlocks     = uint64(128)
 	defaultBatchBlocks      = uint64(30_000)
+	defaultV2FrameBlocks    = uint32(64)
+	defaultV2SegmentBlocks  = uint64(65_536)
 	defaultMetricsNamespace = "chain/freezer/"
 )
 
@@ -111,6 +113,18 @@ type Config struct {
 	// so one pass fits comfortably under the Interval ceiling.
 	BatchBlocks uint64
 
+	// V2Enabled incrementally promotes complete V1 ranges into seekable Zstd
+	// segments. Production defaults to enabled; explicit Config literals stay
+	// opt-in unless they set this field.
+	V2Enabled bool
+
+	// V2PromotionAllowed lets the sync coordinator defer compression during an
+	// I/O-sensitive phase without disabling the freezer itself.
+	V2PromotionAllowed func() bool
+
+	V2FrameBlocks   uint32
+	V2SegmentBlocks uint64
+
 	// MetricsNamespace is the go-ethereum metrics prefix used for runner
 	// gauges. Default "chain/freezer/". Tests may override it to avoid
 	// sharing process-global metric names across parallel runners.
@@ -125,6 +139,9 @@ func Default() Config {
 		Interval:         defaultInterval,
 		MarginBlocks:     defaultMarginBlocks,
 		BatchBlocks:      defaultBatchBlocks,
+		V2Enabled:        true,
+		V2FrameBlocks:    defaultV2FrameBlocks,
+		V2SegmentBlocks:  defaultV2SegmentBlocks,
 		MetricsNamespace: defaultMetricsNamespace,
 	}
 }
@@ -152,6 +169,12 @@ func (c Config) applyDefaults() Config {
 	}
 	if c.BatchBlocks == 0 {
 		c.BatchBlocks = defaultBatchBlocks
+	}
+	if c.V2FrameBlocks == 0 {
+		c.V2FrameBlocks = defaultV2FrameBlocks
+	}
+	if c.V2SegmentBlocks == 0 {
+		c.V2SegmentBlocks = defaultV2SegmentBlocks
 	}
 	if c.MetricsNamespace == "" {
 		c.MetricsNamespace = defaultMetricsNamespace
@@ -227,6 +250,11 @@ type FreezerStore interface {
 	rawdb.AncientWriter
 }
 
+type V2Compactor interface {
+	V2Coverage() uint64
+	MigrateV2(rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error)
+}
+
 // Stats is a thread-safe snapshot of runner progress. Operators consume it via
 // Runner.Snapshot, and the runner mirrors the same values into metrics gauges.
 type Stats struct {
@@ -259,7 +287,9 @@ type Stats struct {
 	// `b-<num>` + `tib-<num>` rows after the most recent pass. Sampled
 	// via an iterator pass on the prefix; expensive enough that the
 	// runner samples only at the end of each pass, not per-block.
-	PebbleSizeAfter uint64
+	PebbleSizeAfter   uint64
+	V2Coverage        uint64
+	V2BlocksCompacted uint64
 }
 
 type runnerMetrics struct {
@@ -271,6 +301,8 @@ type runnerMetrics struct {
 	lastPassAt       *metrics.Gauge
 	lastPassDuration *metrics.Gauge
 	pebbleSizeAfter  *metrics.Gauge
+	v2Coverage       *metrics.Gauge
+	v2Blocks         *metrics.Gauge
 }
 
 func newRunnerMetrics(namespace string) runnerMetrics {
@@ -287,6 +319,8 @@ func newRunnerMetrics(namespace string) runnerMetrics {
 			nil,
 		),
 		pebbleSizeAfter: metrics.GetOrRegisterGauge(namespace+"pebble/size", nil),
+		v2Coverage:      metrics.GetOrRegisterGauge(namespace+"v2/coverage", nil),
+		v2Blocks:        metrics.GetOrRegisterGauge(namespace+"v2/blocks", nil),
 	}
 }
 
@@ -313,6 +347,8 @@ func (m runnerMetrics) update(stats Stats) {
 	}
 	m.lastPassDuration.Update(int64(stats.LastPassDuration))
 	m.pebbleSizeAfter.Update(uint64GaugeValue(stats.PebbleSizeAfter))
+	m.v2Coverage.Update(uint64GaugeValue(stats.V2Coverage))
+	m.v2Blocks.Update(uint64GaugeValue(stats.V2BlocksCompacted))
 }
 
 func boolGaugeValue(v bool) int64 {
@@ -349,11 +385,14 @@ type Runner struct {
 
 	// stats fields are atomics so Snapshot is lock-free against the running
 	// goroutine.
-	blocksFrozen     atomic.Uint64
-	passesCompleted  atomic.Uint64
-	lastPassUnixNano atomic.Int64
-	lastPassDuration atomic.Int64 // nanoseconds
-	pebbleSizeAfter  atomic.Uint64
+	blocksFrozen      atomic.Uint64
+	passesCompleted   atomic.Uint64
+	lastPassUnixNano  atomic.Int64
+	lastPassDuration  atomic.Int64 // nanoseconds
+	pebbleSizeAfter   atomic.Uint64
+	v2BlocksCompacted atomic.Uint64
+	v2BacklogWarned   atomic.Bool
+	lastV2Promotion   atomic.Int64
 
 	// reconciled guards the once-per-process crash-leftover sweep in
 	// onePass. See the reconciliation block there.
@@ -497,13 +536,17 @@ func (r *Runner) Snapshot() Stats {
 
 func (r *Runner) snapshot() Stats {
 	stats := Stats{
-		BlocksFrozen:     r.blocksFrozen.Load(),
-		PassesCompleted:  r.passesCompleted.Load(),
-		LastPassDuration: time.Duration(r.lastPassDuration.Load()),
-		PebbleSizeAfter:  r.pebbleSizeAfter.Load(),
+		BlocksFrozen:      r.blocksFrozen.Load(),
+		PassesCompleted:   r.passesCompleted.Load(),
+		LastPassDuration:  time.Duration(r.lastPassDuration.Load()),
+		PebbleSizeAfter:   r.pebbleSizeAfter.Load(),
+		V2BlocksCompacted: r.v2BlocksCompacted.Load(),
 	}
 	if t := r.lastPassUnixNano.Load(); t > 0 {
 		stats.LastPassAt = time.Unix(0, t)
+	}
+	if compactor, ok := r.freezer.(V2Compactor); ok {
+		stats.V2Coverage = compactor.V2Coverage()
 	}
 	// FrozenMin / FrozenMax come straight from the ancient store so the
 	// caller always sees the canonical position even if a concurrent
@@ -516,6 +559,77 @@ func (r *Runner) snapshot() Stats {
 		// FrozenMin = 0 until TruncateTail support arrives.
 	}
 	return stats
+}
+
+// CompactV2Once promotes at most one complete V1 segment. A new node may
+// bootstrap its first segment online; a legacy multi-segment backlog requires
+// one explicit offline migration so an upgrade cannot unexpectedly launch a
+// multi-hundred-GiB rewrite.
+func (r *Runner) CompactV2Once() (uint64, error) {
+	if !r.cfg.Enabled || !r.cfg.V2Enabled {
+		return 0, nil
+	}
+	compactor, ok := r.freezer.(V2Compactor)
+	if !ok {
+		return 0, nil
+	}
+	if r.cfg.V2PromotionAllowed != nil && !r.cfg.V2PromotionAllowed() {
+		return 0, nil
+	}
+	segmentBlocks := r.cfg.V2SegmentBlocks
+	if segmentBlocks == 0 || r.cfg.V2FrameBlocks == 0 || segmentBlocks%uint64(r.cfg.V2FrameBlocks) != 0 {
+		return 0, errors.New("freezer: invalid V2 frame/segment configuration")
+	}
+	head, err := r.freezer.AncientCount(rawdbAncientBlocks)
+	if err != nil {
+		return 0, err
+	}
+	coverage := compactor.V2Coverage()
+	target := head / segmentBlocks * segmentBlocks
+	if target <= coverage {
+		return 0, nil
+	}
+	if coverage == 0 && target > segmentBlocks {
+		if !r.v2BacklogWarned.Swap(true) {
+			log.Warn("Freezer: legacy V1 backlog requires offline V2 migration",
+				"head", head, "completeTarget", target, "segmentBlocks", segmentBlocks)
+		}
+		return 0, nil
+	}
+	result, err := compactor.MigrateV2(rawdbfreezer.V2MigrationOptions{
+		Tables:        []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots},
+		SegmentBlocks: segmentBlocks,
+		FrameBlocks:   r.cfg.V2FrameBlocks,
+		MaxSegments:   1,
+		Online:        true,
+		Context:       r.pauseCtx,
+	})
+	if err != nil {
+		return 0, err
+	}
+	compacted := result.End - result.Start
+	if compacted > 0 {
+		r.v2BlocksCompacted.Add(compacted)
+		log.Info("Freezer: promoted V1 segment to V2",
+			"from", result.Start, "to", result.End,
+			"frameBlocks", result.FrameBlocks,
+			"elapsed", result.Elapsed,
+			"physicalBefore", result.PhysicalBytesBefore,
+			"physicalAfter", result.PhysicalBytesAfter)
+	}
+	return compacted, nil
+}
+
+func (r *Runner) compactV2Scheduled() (uint64, error) {
+	if last := r.lastV2Promotion.Load(); last > 0 && time.Since(time.Unix(0, last)) < r.cfg.Interval {
+		return 0, nil
+	}
+	compacted, err := r.CompactV2Once()
+	if compacted > 0 {
+		r.lastV2Promotion.Store(time.Now().UnixNano())
+		r.updateMetrics()
+	}
+	return compacted, err
 }
 
 func (r *Runner) updateMetrics() {
@@ -976,6 +1090,11 @@ func (r *Runner) loop() {
 	} else if frozen > 0 {
 		log.Info("Freezer: initial pass frozen", "blocks", frozen)
 	}
+	if compacted, err := r.compactV2Scheduled(); err != nil && !errors.Is(err, context.Canceled) {
+		log.Warn("Freezer: initial V2 compaction failed", "err", err)
+	} else if compacted > 0 {
+		log.Info("Freezer: initial V2 compaction complete", "blocks", compacted)
+	}
 
 	ticker := time.NewTicker(r.cfg.Interval)
 	defer ticker.Stop()
@@ -999,6 +1118,11 @@ func (r *Runner) loop() {
 			} else if frozen > 0 {
 				log.Info("Freezer: pass frozen", "blocks", frozen)
 			}
+			if compacted, err := r.compactV2Scheduled(); err != nil && !errors.Is(err, context.Canceled) {
+				log.Warn("Freezer: V2 compaction failed", "err", err)
+			} else if compacted > 0 {
+				log.Info("Freezer: V2 compaction complete", "blocks", compacted)
+			}
 		case <-r.wake:
 			if frozen, err := r.OnePass(); err != nil {
 				if errors.Is(err, errRunnerStopping) {
@@ -1007,6 +1131,11 @@ func (r *Runner) loop() {
 				log.Warn("Freezer: requested pass failed", "err", err)
 			} else if frozen > 0 {
 				log.Info("Freezer: requested pass frozen", "blocks", frozen)
+			}
+			if compacted, err := r.compactV2Scheduled(); err != nil && !errors.Is(err, context.Canceled) {
+				log.Warn("Freezer: requested V2 compaction failed", "err", err)
+			} else if compacted > 0 {
+				log.Info("Freezer: requested V2 compaction complete", "blocks", compacted)
 			}
 		}
 	}

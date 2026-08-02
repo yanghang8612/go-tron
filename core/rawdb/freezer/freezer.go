@@ -90,9 +90,12 @@ type Freezer struct {
 	// the "atomic" (batched) read operations.
 	writeLock  sync.RWMutex
 	writeBatch *freezerBatch
+	v2Mu       sync.RWMutex
+	v2Migrate  sync.Mutex
 
 	readonly      bool
 	tables        map[string]*freezerTable // Data tables for storing everything
+	v2            *v2Store                 // Immutable Zstd segment prefix, if present
 	repairStats   RepairStats
 	repairMetrics freezerRepairMetrics
 	instanceLock  *flock.Flock // File-system lock to prevent double opens
@@ -104,12 +107,13 @@ type Freezer struct {
 // enforced by TruncateTail, and Tables records each table's physical and
 // virtual tail state.
 type Stats struct {
-	Datadir  string
-	ReadOnly bool
-	Head     uint64
-	Tail     uint64
-	Tables   []TableStats
-	Repair   RepairStats
+	Datadir    string
+	ReadOnly   bool
+	Head       uint64
+	Tail       uint64
+	V2Coverage uint64
+	Tables     []TableStats
+	Repair     RepairStats
 }
 
 // RepairStats describes the most recent writable-open repair pass. Applied is
@@ -207,6 +211,7 @@ type TableStats struct {
 	HeadBytes    int64
 	VisibleSize  uint64
 	HiddenSize   uint64
+	V2Size       uint64
 }
 
 // NewFreezer creates a freezer instance for maintaining immutable ordered
@@ -290,6 +295,29 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 		freezer.loadPersistedRepairStats()
 	}
 	freezer.repairMetrics.update(freezer.repairStats, false)
+	freezer.v2, err = openV2Store(datadir)
+	if err != nil {
+		for _, table := range freezer.tables {
+			table.Close()
+		}
+		lock.Unlock()
+		return nil, fmt.Errorf("open ancient V2: %w", err)
+	}
+	if coverage := freezer.v2.coverage; coverage > freezer.head.Load() {
+		freezer.v2.Close()
+		for _, table := range freezer.tables {
+			table.Close()
+		}
+		lock.Unlock()
+		return nil, fmt.Errorf("ancient V2 coverage %d exceeds freezer head %d", coverage, freezer.head.Load())
+	} else if coverage > 0 && freezer.tail.Load() > coverage {
+		freezer.v2.Close()
+		for _, table := range freezer.tables {
+			table.Close()
+		}
+		lock.Unlock()
+		return nil, fmt.Errorf("ancient V2 coverage %d leaves a gap before V1 tail %d", coverage, freezer.tail.Load())
+	}
 
 	// Create the write batch.
 	freezer.writeBatch = newFreezerBatch(freezer)
@@ -300,11 +328,21 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 
 // Close terminates the chain freezer, closing all the data files.
 func (f *Freezer) Close() error {
+	f.v2Migrate.Lock()
+	defer f.v2Migrate.Unlock()
 	f.writeLock.Lock()
 	defer f.writeLock.Unlock()
 
 	var errs []error
 	f.closeOnce.Do(func() {
+		f.v2Mu.Lock()
+		if f.v2 != nil {
+			if err := f.v2.Close(); err != nil {
+				errs = append(errs, err)
+			}
+			f.v2 = nil
+		}
+		f.v2Mu.Unlock()
 		for _, table := range f.tables {
 			if err := table.Close(); err != nil {
 				errs = append(errs, err)
@@ -325,6 +363,45 @@ func (f *Freezer) AncientDatadir() (string, error) {
 // Ancient retrieves an ancient binary blob from the append-only immutable files.
 func (f *Freezer) Ancient(kind string, number uint64) ([]byte, error) {
 	if table := f.tables[kind]; table != nil {
+		f.v2Mu.RLock()
+		store := f.v2
+		if store != nil && store.has(kind, number) {
+			data, err := store.read(kind, number)
+			f.v2Mu.RUnlock()
+			if err == nil {
+				return data, nil
+			}
+			// A published segment can overlap V1 until reclamation. Keep the
+			// verified source as a fallback during that rollback window.
+			if !table.has(number) {
+				return nil, err
+			}
+		} else {
+			f.v2Mu.RUnlock()
+		}
+		return table.Retrieve(number)
+	}
+	return nil, errUnknownTable
+}
+
+// AncientNoCopy returns an immutable view into a decoded V2 frame. Callers must
+// not mutate the returned bytes. V1 data follows the same immutable contract.
+func (f *Freezer) AncientNoCopy(kind string, number uint64) ([]byte, error) {
+	if table := f.tables[kind]; table != nil {
+		f.v2Mu.RLock()
+		store := f.v2
+		if store != nil && store.has(kind, number) {
+			data, err := store.readNoCopy(kind, number)
+			f.v2Mu.RUnlock()
+			if err == nil {
+				return data, nil
+			}
+			if !table.has(number) {
+				return nil, err
+			}
+		} else {
+			f.v2Mu.RUnlock()
+		}
 		return table.Retrieve(number)
 	}
 	return nil, errUnknownTable
@@ -337,10 +414,54 @@ func (f *Freezer) Ancient(kind string, number uint64) ([]byte, error) {
 //     but will otherwise return as many items as fit into maxByteSize.
 //   - if maxBytes is not specified, 'count' items will be returned if they are present.
 func (f *Freezer) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
-	if table := f.tables[kind]; table != nil {
+	table := f.tables[kind]
+	if table == nil {
+		return nil, errUnknownTable
+	}
+	f.v2Mu.RLock()
+	store := f.v2
+	if store == nil || len(store.segments[kind]) == 0 || start >= store.coverage {
+		f.v2Mu.RUnlock()
 		return table.RetrieveItems(start, count, maxBytes)
 	}
-	return nil, errUnknownTable
+	output, err := store.readRange(kind, start, count, maxBytes)
+	coverage := store.coverage
+	f.v2Mu.RUnlock()
+	if err != nil {
+		if table.has(start) {
+			return table.RetrieveItems(start, count, maxBytes)
+		}
+		return nil, err
+	}
+	if uint64(len(output)) == count || start+uint64(len(output)) < coverage {
+		return output, nil
+	}
+	var total uint64
+	for _, data := range output {
+		total += uint64(len(data))
+	}
+	if maxBytes != 0 && total >= maxBytes {
+		return output, nil
+	}
+	var remainingBytes uint64
+	if maxBytes != 0 {
+		remainingBytes = maxBytes - total
+	}
+	suffix, err := table.RetrieveItems(coverage, count-uint64(len(output)), remainingBytes)
+	if err != nil {
+		if len(output) > 0 && errors.Is(err, errOutOfBounds) {
+			return output, nil
+		}
+		return nil, err
+	}
+	for _, data := range suffix {
+		if len(output) > 0 && maxBytes != 0 && total+uint64(len(data)) > maxBytes {
+			break
+		}
+		output = append(output, data)
+		total += uint64(len(data))
+	}
+	return output, nil
 }
 
 // Ancients returns the length of the frozen items.
@@ -375,12 +496,32 @@ func (f *Freezer) HasAncient(kind string, number uint64) (bool, error) {
 	if table == nil {
 		return false, errUnknownTable
 	}
-	return table.has(number), nil
+	f.v2Mu.RLock()
+	hasV2 := f.v2 != nil && f.v2.has(kind, number)
+	f.v2Mu.RUnlock()
+	return table.has(number) || hasV2, nil
 }
 
 // Tail returns the number of first stored item in the freezer.
 func (f *Freezer) Tail() (uint64, error) {
+	if f.V2Coverage() > 0 {
+		return 0, nil
+	}
 	return f.tail.Load(), nil
+}
+
+// V2Coverage is the first block not covered by the contiguous immutable V2
+// segment prefix.
+func (f *Freezer) V2Coverage() uint64 {
+	if f == nil {
+		return 0
+	}
+	f.v2Mu.RLock()
+	defer f.v2Mu.RUnlock()
+	if f.v2 == nil {
+		return 0
+	}
+	return f.v2.coverage
 }
 
 // AncientSize returns the ancient size of the specified category.
@@ -391,7 +532,16 @@ func (f *Freezer) AncientSize(kind string) (uint64, error) {
 	defer f.writeLock.RUnlock()
 
 	if table := f.tables[kind]; table != nil {
-		return table.size()
+		size, err := table.size()
+		if err != nil {
+			return 0, err
+		}
+		f.v2Mu.RLock()
+		if f.v2 != nil {
+			size += f.v2.size(kind)
+		}
+		f.v2Mu.RUnlock()
+		return size, nil
 	}
 	return 0, errUnknownTable
 }
@@ -403,12 +553,13 @@ func (f *Freezer) Stats() (Stats, error) {
 	defer f.writeLock.RUnlock()
 
 	stats := Stats{
-		Datadir:  f.datadir,
-		ReadOnly: f.readonly,
-		Head:     f.head.Load(),
-		Tail:     f.tail.Load(),
-		Tables:   make([]TableStats, 0, len(f.tables)),
-		Repair:   f.repairStats.clone(),
+		Datadir:    f.datadir,
+		ReadOnly:   f.readonly,
+		Head:       f.head.Load(),
+		Tail:       f.tail.Load(),
+		V2Coverage: f.V2Coverage(),
+		Tables:     make([]TableStats, 0, len(f.tables)),
+		Repair:     f.repairStats.clone(),
 	}
 	names := make([]string, 0, len(f.tables))
 	for name := range f.tables {
@@ -422,6 +573,11 @@ func (f *Freezer) Stats() (Stats, error) {
 			return Stats{}, err
 		}
 		tableStats.Name = name
+		f.v2Mu.RLock()
+		if f.v2 != nil {
+			tableStats.V2Size = f.v2.size(name)
+		}
+		f.v2Mu.RUnlock()
 		stats.Tables = append(stats.Tables, tableStats)
 	}
 	return stats, nil
@@ -520,6 +676,9 @@ func (f *Freezer) ModifyAncients(fn func(AncientWriteOp) error) (writeSize int64
 func (f *Freezer) TruncateHead(items uint64) (uint64, error) {
 	if f.readonly {
 		return 0, errReadOnly
+	}
+	if coverage := f.V2Coverage(); items < coverage {
+		return 0, fmt.Errorf("head truncation %d is below immutable V2 coverage %d", items, coverage)
 	}
 	f.writeLock.Lock()
 	defer f.writeLock.Unlock()

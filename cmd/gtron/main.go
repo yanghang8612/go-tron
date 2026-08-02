@@ -615,6 +615,15 @@ func gtron(ctx *cli.Context) error {
 		closeStores()
 		return err
 	}
+	if ancientStore != nil {
+		if err := validateAncientV2PruneMode(chainConfig, ancientStore.V2Coverage()); err != nil {
+			closeStores()
+			return err
+		}
+		if chainConfig.EffectiveHistoryMode() == params.HistoryModeMinimal {
+			freezerCfg.V2Enabled = false
+		}
+	}
 	snapshotCatalogSigningKey, snapshotCatalogSigningEnabled, err := runtimeSnapshotCatalogSigningKey(ctx)
 	if err != nil {
 		closeStores()
@@ -939,7 +948,7 @@ func gtron(ctx *cli.Context) error {
 			Pruner: statepruning.PrunerConfig{
 				Policy:      prunePolicy,
 				SnapshotDir: stateSnapshotDir,
-				MaxSyncLag:  prunePolicy.HistoryWindow,
+				MaxSyncLag:  domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
 			},
 			ChainFreezerBuild: chainFreezerSnapshotBuild,
 			ChainLookupPrune: func() (*statesnapshots.PruneHotChainLookupResult, error) {

@@ -408,6 +408,53 @@ func (w *freezerWriter) TruncateHead(items uint64) (uint64, error) {
 	return w.f.TruncateHead(items)
 }
 func (w *freezerWriter) Sync() error { return w.f.Sync() }
+func (w *freezerWriter) V2Coverage() uint64 {
+	return w.f.V2Coverage()
+}
+func (w *freezerWriter) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
+	return w.f.MigrateV2(options)
+}
+
+func TestCompactV2OncePromotesCompleteAllTableSegment(t *testing.T) {
+	f := newFreezer(t)
+	for number := uint64(0); number < 72; number++ {
+		if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+			if err := op.AppendRaw(rawdbAncientBlocks, number, blockBytes(number)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, number, txInfosBytes(number)); err != nil {
+				return err
+			}
+			return op.AppendRaw(rawdbAncientStateRoots, number, stateRootBytes(number))
+		}); err != nil {
+			t.Fatalf("append %d: %v", number, err)
+		}
+	}
+	r := New(nil, wrapFreezer(f), Config{
+		Enabled:         true,
+		V2Enabled:       true,
+		V2FrameBlocks:   8,
+		V2SegmentBlocks: 64,
+	})
+	compacted, err := r.CompactV2Once()
+	if err != nil {
+		t.Fatalf("CompactV2Once: %v", err)
+	}
+	if compacted != 64 || f.V2Coverage() != 64 {
+		t.Fatalf("compacted=%d coverage=%d, want 64/64", compacted, f.V2Coverage())
+	}
+	for _, kind := range []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots} {
+		for _, number := range []uint64{0, 63, 64, 71} {
+			if _, err := f.Ancient(kind, number); err != nil {
+				t.Fatalf("read %s[%d] after promotion: %v", kind, number, err)
+			}
+		}
+	}
+	stats := r.Snapshot()
+	if stats.V2Coverage != 64 || stats.V2BlocksCompacted != 64 {
+		t.Fatalf("runner stats = %+v", stats)
+	}
+}
 
 // blockingSyncFreezer pauses only after the real fsync has succeeded. It
 // models shutdown in the intentional recovery window between durable ancient

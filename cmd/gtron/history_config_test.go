@@ -463,6 +463,27 @@ func TestShouldEnableChainFreezerTailPruner(t *testing.T) {
 	}
 }
 
+func TestValidateAncientV2PruneMode(t *testing.T) {
+	for _, mode := range []string{
+		params.HistoryModeArchive,
+		params.HistoryModeFull,
+		params.HistoryModeBlocks,
+		params.HistoryModeSnap,
+	} {
+		t.Run(mode, func(t *testing.T) {
+			if err := validateAncientV2PruneMode(&params.ChainConfig{HistoryMode: mode}, 65_536); err != nil {
+				t.Fatalf("validateAncientV2PruneMode: %v", err)
+			}
+		})
+	}
+	if err := validateAncientV2PruneMode(&params.ChainConfig{HistoryMode: params.HistoryModeMinimal}, 65_536); err == nil {
+		t.Fatal("minimal mode accepted local Ancient V2 coverage")
+	}
+	if err := validateAncientV2PruneMode(&params.ChainConfig{HistoryMode: params.HistoryModeMinimal}, 0); err != nil {
+		t.Fatalf("empty V2 coverage rejected: %v", err)
+	}
+}
+
 func TestDomainStatePrunePolicyPreservesOperatorMode(t *testing.T) {
 	tests := []struct {
 		mode string
@@ -513,6 +534,35 @@ func TestDomainStatePrunePolicyUsesModeDefaultWindow(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDomainStatePrunerMaxSyncLag(t *testing.T) {
+	policy := statepruning.FullPolicy(12345, 256)
+	for _, mode := range []string{
+		params.HistoryModeFull,
+		params.HistoryModeBlocks,
+		params.HistoryModeMinimal,
+	} {
+		t.Run(mode+" prunes while catching up", func(t *testing.T) {
+			cfg := &params.ChainConfig{HistoryMode: mode}
+			if got := domainStatePrunerMaxSyncLag(cfg, policy); got != 0 {
+				t.Fatalf("max sync lag = %d, want disabled catch-up gate", got)
+			}
+		})
+	}
+
+	t.Run("snap retains catch-up guard", func(t *testing.T) {
+		cfg := &params.ChainConfig{HistoryMode: params.HistoryModeSnap}
+		if got := domainStatePrunerMaxSyncLag(cfg, policy); got != policy.HistoryWindow {
+			t.Fatalf("max sync lag = %d, want %d", got, policy.HistoryWindow)
+		}
+	})
+
+	t.Run("nil config is conservative", func(t *testing.T) {
+		if got := domainStatePrunerMaxSyncLag(nil, policy); got != policy.HistoryWindow {
+			t.Fatalf("max sync lag = %d, want %d", got, policy.HistoryWindow)
+		}
+	})
 }
 
 func TestDomainStatePrunePolicyCapsReorgWindow(t *testing.T) {
