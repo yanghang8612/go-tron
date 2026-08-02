@@ -79,6 +79,7 @@ func dbCommand() *cli.Command {
 			dbInspectCommand(),
 			dbBenchmarkAncientCommand(),
 			dbMigrateAncientV2Command(),
+			dbDropBalanceTracesCommand(),
 			{
 				Name:  "rebuild-tx-indexes",
 				Usage: "Rebuild transaction lookups and per-block receipt rows from retained blocks",

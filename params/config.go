@@ -39,6 +39,13 @@ type ChainConfig struct {
 	// background pruner. When unset, defaults are mode-specific to match
 	// Erigon's current retention policy. Ignored in archive mode.
 	HistoryPruneWindow uint64
+	// BalanceTraceEnabled enables java-tron-specific BlockBalanceTrace and
+	// AccountTrace capture. It is deliberately independent of flat temporal
+	// state history: Ethereum-compatible historical state queries use
+	// StateDomainChange rows and do not need these denormalized TRON traces.
+	// Production chain configs leave this disabled; the offline balance-trace
+	// replay tool enables it explicitly when rebuilding legacy trace data.
+	BalanceTraceEnabled bool
 }
 
 const DefaultBlockNumForEnergyLimit int64 = 4_727_890

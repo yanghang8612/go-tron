@@ -286,6 +286,7 @@ func TestHistoryReorg_DropsOrphanBranch_DepthSix(t *testing.T) {
 func TestHistoryReorgRemovesOrphanAccountTrace(t *testing.T) {
 	bc, witnessAddr := newHistoryReorgChain(t)
 	defer bc.Close()
+	bc.config.BalanceTraceEnabled = true
 
 	orphanReceiver := testInsertAddr(2)
 	canonicalReceiver := testInsertAddr(3)

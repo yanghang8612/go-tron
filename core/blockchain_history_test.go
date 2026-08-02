@@ -165,12 +165,19 @@ func TestApplyBlock_HistoryEnabledRoutesToBuffer(t *testing.T) {
 	if receiverPost == nil || receiverPost.Balance() != 5_000_000 {
 		t.Fatalf("AccountAt(receiver, 1).Balance = %v, want 5000000", receiverPost)
 	}
+	if trace := rawdb.ReadBlockBalanceTrace(bc.db, 1); trace != nil {
+		t.Fatal("HistoryEnabled unexpectedly persisted TRON BlockBalanceTrace")
+	}
+	if _, ok := rawdb.ReadAccountTrace(bc.db, testInsertAddr(2).Bytes(), 1); ok {
+		t.Fatal("HistoryEnabled unexpectedly persisted TRON AccountTrace")
+	}
 }
 
-func TestApplyBlock_HistoryEnabledWritesBalanceTrace(t *testing.T) {
+func TestApplyBlock_BalanceTraceEnabledWritesBalanceTrace(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	cfg := cloneMainnetChainConfig()
 	cfg.HistoryEnabled = true
+	cfg.BalanceTraceEnabled = true
 	sender := testInsertAddr(1)
 	receiver := testInsertAddr(2)
 	amount := int64(5_000_000)

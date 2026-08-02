@@ -759,7 +759,8 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 }
 
 type processBlockOptions struct {
-	parallelTransfers bool
+	parallelTransfers   bool
+	captureBalanceTrace bool
 }
 
 func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, collectTxInfos bool, traceTxIndex int, traceTracer vm.Tracer, traceForTxOpt ...func(index int, tx *types.Transaction) vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
@@ -852,7 +853,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				energyLimitForkBlockNum: energyLimitForkBlockNum,
 				genesisHash:             genesisHash,
 				transactions:            transactions,
-				captureBalanceTrace:     domainChanges != nil,
+				captureBalanceTrace:     options.captureBalanceTrace,
 			}
 			if discardShadow.sampled && discardCfg.captureBalanceTrace {
 				discardCfg.canonicalBalanceTraces = make([]*contractpb.TransactionBalanceTrace, len(transactions))

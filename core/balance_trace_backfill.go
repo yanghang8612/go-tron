@@ -85,6 +85,7 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 
 	replayGenesis := cloneBalanceTraceBackfillGenesis(genesis)
 	replayGenesis.Config.HistoryEnabled = true
+	replayGenesis.Config.BalanceTraceEnabled = true
 
 	_, replayGenesisHash, err := SetupGenesisBlockWithAncient(replayDB, rawdb.NoopAncient{}, replayGenesis)
 	if err != nil {

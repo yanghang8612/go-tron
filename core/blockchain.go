@@ -1088,6 +1088,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		return fmt.Errorf("async commit failed: %w", *errPtr)
 	}
 	historyEnabled := bc.config != nil && bc.config.HistoryEnabled
+	balanceTraceEnabled := bc.config != nil && bc.config.BalanceTraceEnabled
 	if err := plan.Validate(block, historyEnabled); err != nil {
 		return err
 	}
@@ -1343,13 +1344,15 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		if err != nil {
 			return fmt.Errorf("begin domain change stage: %w", err)
 		}
+	}
+	if balanceTraceEnabled {
 		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
 	}
 	if accountStateRootEnabled {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers})
+		txInfos, javaAccountStateRoot, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers, captureBalanceTrace: balanceTraceEnabled})
 	} else {
-		txInfos, _, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers})
+		txInfos, _, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers, captureBalanceTrace: balanceTraceEnabled})
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
@@ -1563,7 +1566,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		}
 	}
 	var balanceTraceData *blockBalanceTraceData
-	if historyEnabled {
+	if balanceTraceEnabled {
 		trace, accountBalances := statedb.FinishBalanceTrace()
 		if trace != nil {
 			balanceTraceData = &blockBalanceTraceData{
