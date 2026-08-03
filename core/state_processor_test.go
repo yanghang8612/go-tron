@@ -648,8 +648,14 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	writeMismatchesBefore := discardShadowRetryActualPublishedWriteMismatchCounter.Snapshot().Count()
 	captureBlocksBefore := versionedShadowWriteCaptureBlocksCounter.Snapshot().Count()
 	captureTransactionsBefore := versionedShadowWriteCaptureTransactionsCounter.Snapshot().Count()
+	captureFullBefore := versionedShadowWriteCaptureFullTransactionsCounter.Snapshot().Count()
+	captureFilteredBefore := versionedShadowWriteCaptureFilteredTransactionsCounter.Snapshot().Count()
 	captureCellsBefore := versionedShadowWriteCaptureCellsCounter.Snapshot().Count()
 	captureNanosBefore := versionedShadowWriteCaptureNanosCounter.Snapshot().Count()
+	captureFullCellsBefore := versionedShadowWriteCaptureFullCellsCounter.Snapshot().Count()
+	captureFilteredCellsBefore := versionedShadowWriteCaptureFilteredCellsCounter.Snapshot().Count()
+	captureFullNanosBefore := versionedShadowWriteCaptureFullNanosCounter.Snapshot().Count()
+	captureFilteredNanosBefore := versionedShadowWriteCaptureFilteredNanosCounter.Snapshot().Count()
 	captureUnsupportedBefore := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count()
 	captureErrorsBefore := versionedShadowWriteCaptureErrorsCounter.Snapshot().Count()
 	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
@@ -678,11 +684,33 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	if captured := versionedShadowWriteCaptureTransactionsCounter.Snapshot().Count() - captureTransactionsBefore; captured != int64(len(transactions)) {
 		t.Fatalf("write capture transactions = %d, want %d", captured, len(transactions))
 	}
+	fullCaptured := versionedShadowWriteCaptureFullTransactionsCounter.Snapshot().Count() - captureFullBefore
+	filteredCaptured := versionedShadowWriteCaptureFilteredTransactionsCounter.Snapshot().Count() - captureFilteredBefore
+	if blockNumber%discardShadowSampleInterval == 0 {
+		if fullCaptured != int64(len(transactions)) || filteredCaptured != 0 {
+			t.Fatalf("sampled write capture full/filtered = %d/%d, want %d/0", fullCaptured, filteredCaptured, len(transactions))
+		}
+	} else if fullCaptured != 3 || filteredCaptured != int64(len(transactions)-3) {
+		t.Fatalf("ordinary write capture full/filtered = %d/%d, want 3/%d", fullCaptured, filteredCaptured, len(transactions)-3)
+	}
 	if cells := versionedShadowWriteCaptureCellsCounter.Snapshot().Count() - captureCellsBefore; cells <= 0 {
 		t.Fatalf("write capture cells = %d, want > 0", cells)
 	}
 	if nanos := versionedShadowWriteCaptureNanosCounter.Snapshot().Count() - captureNanosBefore; nanos <= 0 {
 		t.Fatalf("write capture nanos = %d, want > 0", nanos)
+	}
+	fullCells := versionedShadowWriteCaptureFullCellsCounter.Snapshot().Count() - captureFullCellsBefore
+	filteredCells := versionedShadowWriteCaptureFilteredCellsCounter.Snapshot().Count() - captureFilteredCellsBefore
+	if cells := versionedShadowWriteCaptureCellsCounter.Snapshot().Count() - captureCellsBefore; fullCells+filteredCells != cells {
+		t.Fatalf("write capture full/filtered cells = %d/%d, total %d", fullCells, filteredCells, cells)
+	}
+	fullNanos := versionedShadowWriteCaptureFullNanosCounter.Snapshot().Count() - captureFullNanosBefore
+	filteredNanos := versionedShadowWriteCaptureFilteredNanosCounter.Snapshot().Count() - captureFilteredNanosBefore
+	if nanos := versionedShadowWriteCaptureNanosCounter.Snapshot().Count() - captureNanosBefore; fullNanos+filteredNanos != nanos {
+		t.Fatalf("write capture full/filtered nanos = %d/%d, total %d", fullNanos, filteredNanos, nanos)
+	}
+	if blockNumber%discardShadowSampleInterval == 0 && (filteredCells != 0 || filteredNanos != 0) {
+		t.Fatalf("sampled filtered write capture cells/nanos = %d/%d, want 0/0", filteredCells, filteredNanos)
 	}
 	if unsupported := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count() - captureUnsupportedBefore; unsupported != 0 {
 		t.Fatalf("write capture unsupported = %d, want 0", unsupported)

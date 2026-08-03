@@ -1154,6 +1154,72 @@ type discardShadowSenderChainTask struct {
 	senderVersioned   bool
 }
 
+// discardShadowRetryWriteFilter is the narrow Transfer counterpart of
+// Erigon's VersionMap value lookup. Prefix transactions only materialize
+// post-images that a possible retry suffix read at block start. Hierarchical
+// Account/AccountField overlap is retained exactly; newly discovered retry
+// reads still fail version validation if an omitted predecessor wrote them.
+type discardShadowRetryWriteFilter struct {
+	exact            map[state.TransactionAccessKey]struct{}
+	accountReads     map[tcommon.Address]struct{}
+	fullAccountReads map[tcommon.Address]struct{}
+}
+
+func (filter *discardShadowRetryWriteFilter) include(key state.TransactionAccessKey) bool {
+	if filter == nil {
+		return true
+	}
+	if _, ok := filter.exact[key]; ok {
+		return true
+	}
+	switch key.Kind {
+	case state.TransactionAccessAccount:
+		_, ok := filter.accountReads[key.Address]
+		return ok
+	case state.TransactionAccessAccountField:
+		_, ok := filter.fullAccountReads[key.Address]
+		return ok
+	default:
+		return false
+	}
+}
+
+func newDiscardShadowRetryWriteCapture(source *discardShadowPreexecution, transactionCount int) (func(state.TransactionAccessKey) bool, []bool) {
+	if source == nil || transactionCount <= 0 {
+		return nil, nil
+	}
+	filter := &discardShadowRetryWriteFilter{
+		exact:            make(map[state.TransactionAccessKey]struct{}, 32),
+		accountReads:     make(map[tcommon.Address]struct{}, 8),
+		fullAccountReads: make(map[tcommon.Address]struct{}, 4),
+	}
+	fullTransactions := make([]bool, transactionCount)
+	for _, result := range source.results {
+		txIndex := result.txIndex
+		if txIndex < 0 || txIndex >= transactionCount || txIndex >= len(source.senderNext) ||
+			(!result.senderVersioned && source.senderNext[txIndex] < 0) {
+			continue
+		}
+		// Any member of a retryable sender chain can become the canonical
+		// carrier, so retain its complete WriteSet for post-publication audit.
+		fullTransactions[txIndex] = true
+		for _, read := range result.reads.Reads {
+			if read.Mode&(state.TransactionAccessRead|state.TransactionAccessCommutativeRead) == 0 {
+				continue
+			}
+			filter.exact[read.Key] = struct{}{}
+			switch read.Key.Kind {
+			case state.TransactionAccessAccount:
+				filter.accountReads[read.Key.Address] = struct{}{}
+				filter.fullAccountReads[read.Key.Address] = struct{}{}
+			case state.TransactionAccessAccountField:
+				filter.accountReads[read.Key.Address] = struct{}{}
+			}
+		}
+	}
+	return filter.include, fullTransactions
+}
+
 // transferSenderChains returns independent scheduling units. A chain may span
 // transactions from other senders, but it is broken when the same sender has
 // an intervening non-Transfer transaction because this narrow executor cannot
@@ -1714,10 +1780,16 @@ func (retry *discardShadowSenderRetry) ensureRunnerSettledPrefix(runner *discard
 			retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
 			return retry.refreshRunnerSettledPrefix(runner, target, statedb, dynProps, cfg)
 		}
+		writes := versioned.transactionWriteSets[txIndex]
+		if len(writes) == 0 {
+			runner.settledThrough = txIndex
+			retry.stats.prefixAdvances++
+			continue
+		}
 		runner.prefixRecorder.Reset(64)
 		runner.prefixRaw.recorder = &runner.prefixRecorder
 		if err := runner.worker.state.ApplyTransactionWriteSet(
-			versioned.transactionWriteSets[txIndex], runner.worker.dynProps, &runner.prefixRaw,
+			writes, runner.worker.dynProps, &runner.prefixRaw,
 		); err != nil {
 			retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
 			return retry.refreshRunnerSettledPrefix(runner, target, statedb, dynProps, cfg)
@@ -1747,10 +1819,16 @@ func advanceAsyncRunnerSettledPrefix(runner *discardShadowRetryRunner, target in
 			txIndex >= len(versioned.transactionWriteSets) {
 			return advances, time.Since(started).Nanoseconds(), errors.New("missing async prefix WriteSet")
 		}
+		writes := versioned.transactionWriteSets[txIndex]
+		if len(writes) == 0 {
+			runner.settledThrough = txIndex
+			advances++
+			continue
+		}
 		runner.prefixRecorder.Reset(64)
 		runner.prefixRaw.recorder = &runner.prefixRecorder
 		if err := runner.worker.state.ApplyTransactionWriteSet(
-			versioned.transactionWriteSets[txIndex], runner.worker.dynProps, &runner.prefixRaw,
+			writes, runner.worker.dynProps, &runner.prefixRaw,
 		); err != nil {
 			return advances, time.Since(started).Nanoseconds(), err
 		}

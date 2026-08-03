@@ -68,6 +68,42 @@ func TestCaptureTransactionWriteSetUsesFinalLogicalValues(t *testing.T) {
 	}
 }
 
+func TestCaptureTransactionWriteSetFilteredProjectsKnownPostImages(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xc5)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.AddBalance(addr, 10)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	dp := NewDynamicProperties()
+	var recorder TransactionAccessRecorder
+	recorder.Reset(8)
+	sdb.SetTransactionAccessRecorder(&recorder)
+	dp.SetTransactionAccessRecorder(&recorder)
+	mark := sdb.DomainChangeJournalMark()
+	sdb.AddBalance(addr, 7)
+	dp.Set("energy_fee", 321)
+	sdb.SetTransactionAccessRecorder(nil)
+	dp.SetTransactionAccessRecorder(nil)
+
+	balanceKey := TransactionAccessKey{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldBalance}
+	writes, known, err := sdb.CaptureTransactionWriteSetFiltered(mark, &recorder, dp, func(key TransactionAccessKey) bool {
+		return key == balanceKey
+	})
+	if err != nil || !known {
+		t.Fatalf("capture filtered writes: known=%v err=%v", known, err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("filtered writes = %v, want one balance cell", writes)
+	}
+	value, ok := writes[balanceKey]
+	if !ok || !value.Exists || len(value.Value) != 8 || int64(binary.BigEndian.Uint64(value.Value)) != 17 {
+		t.Fatalf("filtered balance = %+v ok=%v", value, ok)
+	}
+}
+
 func TestCaptureTransactionWriteSetIgnoresUnrelatedPriorAccountFields(t *testing.T) {
 	base := newTestStateDB(t)
 	addr := testAddr(0xc4)

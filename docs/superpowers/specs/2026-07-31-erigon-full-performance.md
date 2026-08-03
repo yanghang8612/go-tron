@@ -1331,6 +1331,33 @@ captures, and errors from the already measured background prefix replay. The
 next production gate uses those counters to decide whether to compact the
 carrier further or move Transfer reads directly onto shared versioned values.
 
+#### P4.29: Retry-read projected prefix carriers
+
+The first measurement window showed why a compact carrier is required: 65 of
+750 blocks enabled retry capture, materializing 63,505 cells for 6,732
+transactions in 78.3 ms (11.6 microseconds per transaction and 1.20 ms per
+enabled block). Only eleven canonical executions were replaced in that window.
+Even though prefix application is off-thread, full post-image materialization
+remained serial work and cost more than the recovered Transfers.
+
+Ordinary blocks now derive a block-scoped projection from the exact read sets
+of retryable sender chains. Canonical prefix transactions materialize only
+written paths that overlap those reads, including the hierarchical rule that a
+full Account write invalidates a field read and any field write invalidates a
+full Account read. Transactions that are themselves members of a retryable
+sender chain retain complete WriteSets because their result may become the
+canonical publication carrier and still requires a full post-application
+audit. Sampled correctness cohorts also retain full capture.
+
+The full journal is still visited for every projected transaction: an unknown
+write remains a barrier and forces the existing refresh/fallback rather than
+being hidden by the filter. A retry that discovers a branch-dependent read not
+seen at block start is also safe because the unfiltered version map records all
+canonical writers and rejects the omitted stale value at admission. Empty
+projected prefix WriteSets advance the runner's settled index without invoking
+the ordered applier or finalizer. Split full/filtered transaction, cell, and
+nanosecond counters make the reduction directly measurable after deployment.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

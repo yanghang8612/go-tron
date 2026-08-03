@@ -54,6 +54,57 @@ func TestDiscardShadowAsyncRetryPublicationCohort(t *testing.T) {
 	}
 }
 
+func TestDiscardShadowRetryWriteCaptureProjectsReadHierarchy(t *testing.T) {
+	fieldAddress := testProcessorAddr(1)
+	fullAddress := testProcessorAddr(2)
+	ignoredAddress := testProcessorAddr(3)
+	dynamicKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "energy_fee"}
+	fieldKey := state.TransactionAccessKey{
+		Kind: state.TransactionAccessAccountField, Address: fieldAddress,
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	fullKey := state.TransactionAccessKey{Kind: state.TransactionAccessAccount, Address: fullAddress}
+	source := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{
+			{txIndex: 1, reads: state.TransactionReadSet{Reads: []state.TransactionRead{
+				{Key: fieldKey, Mode: state.TransactionAccessRead},
+				{Key: fullKey, Mode: state.TransactionAccessRead},
+				{Key: dynamicKey, Mode: state.TransactionAccessCommutativeRead},
+			}}},
+			{txIndex: 2, reads: state.TransactionReadSet{Reads: []state.TransactionRead{{
+				Key:  state.TransactionAccessKey{Kind: state.TransactionAccessAccount, Address: ignoredAddress},
+				Mode: state.TransactionAccessRead,
+			}}}},
+			{txIndex: 3, senderVersioned: true},
+		},
+		senderNext: []int{-1, 3, -1, -1},
+	}
+	include, fullTransactions := newDiscardShadowRetryWriteCapture(source, 4)
+	if include == nil {
+		t.Fatal("retry write capture filter is nil")
+	}
+	if !fullTransactions[1] || fullTransactions[2] || !fullTransactions[3] {
+		t.Fatalf("full capture transactions = %v, want tx 1 and 3", fullTransactions)
+	}
+	tests := []struct {
+		key  state.TransactionAccessKey
+		want bool
+	}{
+		{key: fieldKey, want: true},
+		{key: state.TransactionAccessKey{Kind: state.TransactionAccessAccount, Address: fieldAddress}, want: true},
+		{key: state.TransactionAccessKey{Kind: state.TransactionAccessAccountField, Address: fieldAddress, AccountField: state.TransactionAccountFieldAllowance}, want: false},
+		{key: fullKey, want: true},
+		{key: state.TransactionAccessKey{Kind: state.TransactionAccessAccountField, Address: fullAddress, AccountField: state.TransactionAccountFieldAllowance}, want: true},
+		{key: dynamicKey, want: true},
+		{key: state.TransactionAccessKey{Kind: state.TransactionAccessAccount, Address: ignoredAddress}, want: false},
+	}
+	for _, test := range tests {
+		if got := include(test.key); got != test.want {
+			t.Fatalf("include(%+v) = %t, want %t", test.key, got, test.want)
+		}
+	}
+}
+
 func TestCompareDiscardShadowInfoSplitsEnergyFields(t *testing.T) {
 	tests := []struct {
 		name string

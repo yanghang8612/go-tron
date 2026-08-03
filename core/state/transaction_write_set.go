@@ -33,6 +33,14 @@ func appendTransactionWriteKey(keys map[TransactionAccessKey]struct{}, key Trans
 // property writes that the StateDB undo journal intentionally stores in a
 // coarser shape. known is false if an unknown journal path is encountered.
 func (s *StateDB) CaptureTransactionWriteSet(journalMark int, recorder *TransactionAccessRecorder, dynProps *DynamicProperties) (writes TransactionWriteSet, known bool, err error) {
+	return s.CaptureTransactionWriteSetFiltered(journalMark, recorder, dynProps, nil)
+}
+
+// CaptureTransactionWriteSetFiltered is CaptureTransactionWriteSet with an
+// optional logical-key projection. The complete journal is still visited so
+// unknown writes remain conservative barriers; only known post-images outside
+// include are skipped. A nil include retains the full write set.
+func (s *StateDB) CaptureTransactionWriteSetFiltered(journalMark int, recorder *TransactionAccessRecorder, dynProps *DynamicProperties, include func(TransactionAccessKey) bool) (writes TransactionWriteSet, known bool, err error) {
 	if s == nil {
 		return nil, false, fmt.Errorf("capture transaction writes: nil state")
 	}
@@ -40,7 +48,7 @@ func (s *StateDB) CaptureTransactionWriteSet(journalMark int, recorder *Transact
 	modes := make(map[TransactionAccessKey]TransactionAccessMode, 16)
 	if recorder != nil {
 		recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
-			if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0 {
+			if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0 && (include == nil || include(key)) {
 				appendTransactionWriteKey(keys, key)
 				modes[key] |= mode
 			}
@@ -59,7 +67,9 @@ func (s *StateDB) CaptureTransactionWriteSet(journalMark int, recorder *Transact
 				return true
 			}
 		}
-		appendTransactionWriteKey(keys, key)
+		if include == nil || include(key) {
+			appendTransactionWriteKey(keys, key)
+		}
 		return true
 	})
 	if !known {

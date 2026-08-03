@@ -887,8 +887,13 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					senderRetry = newDiscardShadowSenderRetry(senderChainPreexecution, len(transactions))
 				}
 			}
-			if discardShadow.sampled || senderRetry != nil {
+			if discardShadow.sampled {
 				versionedShadow.EnableWriteSetCapture(len(transactions))
+			} else if senderRetry != nil {
+				include, fullTransactions := newDiscardShadowRetryWriteCapture(senderRetry.source, len(transactions))
+				versionedShadow.EnableWriteSetCaptureFiltered(len(transactions), include, fullTransactions)
+			}
+			if discardShadow.sampled || senderRetry != nil {
 				if discardCfg.captureBalanceTrace {
 					discardCfg.canonicalBalanceTraces = make([]*contractpb.TransactionBalanceTrace, len(transactions))
 				}

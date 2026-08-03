@@ -163,6 +163,9 @@
   without another preexecution pass or conflict-boundary StateDB copy.
 - [x] Measure ordinary retry WriteSet capture cells/time separately from
   background prefix replay and publication so critical-path cost is visible.
+- [x] Project ordinary canonical WriteSets onto retry-suffix read cells, retain
+  full carriers only for publishable sender members, and skip empty prefix
+  applications while preserving unknown-write barriers.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64
