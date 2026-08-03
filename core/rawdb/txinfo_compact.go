@@ -16,21 +16,28 @@ func CompactAncientV2Record(kind string, _ uint64, data, body []byte) ([]byte, e
 	if kind != ancientTxInfos {
 		return data, nil
 	}
-	hashes, err := transactionHashesFromBlockWire(body)
-	if err != nil {
-		return data, nil
-	}
-	compact, err := compactTransactionInfoIDsForHashes(data, hashes)
+	compact, _, _, err := CompactTransactionInfoIDsForBlock(data, body)
 	if err != nil {
 		return data, nil
 	}
 	return compact, nil
 }
 
-func compactTransactionInfoIDsForHashes(retData []byte, hashes [][sha256.Size]byte) ([]byte, error) {
+// CompactTransactionInfoIDsForBlock validates receipt IDs against transaction
+// hashes derived directly from the matching block wire bytes before removing
+// them. Unexpected historical rows pass through unchanged.
+func CompactTransactionInfoIDsForBlock(retData, blockData []byte) (data []byte, infos, removed int, err error) {
+	hashes, err := transactionHashesFromBlockWire(blockData)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return compactTransactionInfoIDsForHashes(retData, hashes)
+}
+
+func compactTransactionInfoIDsForHashes(retData []byte, hashes [][sha256.Size]byte) (data []byte, infos, removed int, err error) {
 	infoCount, err := countRepeatedBytesField(retData, 3)
 	if err != nil || len(hashes) != infoCount {
-		return retData, err
+		return retData, infoCount, 0, err
 	}
 	matched := true
 	if err := visitTransactionInfoIDs(retData, func(ordinal int, id []byte) error {
@@ -39,12 +46,13 @@ func compactTransactionInfoIDsForHashes(retData []byte, hashes [][sha256.Size]by
 		}
 		return nil
 	}); err != nil {
-		return retData, err
+		return retData, infoCount, 0, err
 	}
 	if !matched || infoCount == 0 {
-		return retData, nil
+		return retData, infoCount, 0, nil
 	}
-	return stripTransactionInfoIDs(retData)
+	compact, removed, err := stripTransactionInfoIDs(retData)
+	return compact, infoCount, removed, err
 }
 
 // transactionHashesFromBlockWire derives transaction IDs without allocating
@@ -163,19 +171,20 @@ func transactionInfoWireID(data []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func stripTransactionInfoIDs(retData []byte) ([]byte, error) {
+func stripTransactionInfoIDs(retData []byte) ([]byte, int, error) {
 	out := make([]byte, 0, len(retData))
 	remaining := retData
+	removed := 0
 	for len(remaining) > 0 {
 		field := remaining
 		number, wireType, tagLen := protowire.ConsumeTag(remaining)
 		if tagLen < 0 {
-			return nil, protowire.ParseError(tagLen)
+			return nil, 0, protowire.ParseError(tagLen)
 		}
 		remaining = remaining[tagLen:]
 		fieldLen := protowire.ConsumeFieldValue(number, wireType, remaining)
 		if fieldLen < 0 {
-			return nil, protowire.ParseError(fieldLen)
+			return nil, 0, protowire.ParseError(fieldLen)
 		}
 		totalLen := tagLen + fieldLen
 		if number != 3 || wireType != protowire.BytesType {
@@ -185,38 +194,49 @@ func stripTransactionInfoIDs(retData []byte) ([]byte, error) {
 		}
 		payload, payloadLen := protowire.ConsumeBytes(remaining)
 		if payloadLen < 0 {
-			return nil, protowire.ParseError(payloadLen)
+			return nil, 0, protowire.ParseError(payloadLen)
 		}
-		compact, err := stripTransactionInfoID(payload)
+		compact, dropped, err := stripTransactionInfoID(payload)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		removed += dropped
 		out = protowire.AppendTag(out, 3, protowire.BytesType)
 		out = protowire.AppendBytes(out, compact)
 		remaining = remaining[fieldLen:]
 	}
-	return out, nil
+	if removed == 0 {
+		return retData, 0, nil
+	}
+	return out, removed, nil
 }
 
-func stripTransactionInfoID(data []byte) ([]byte, error) {
+func stripTransactionInfoID(data []byte) ([]byte, int, error) {
+	original := data
 	out := make([]byte, 0, len(data))
+	removed := 0
 	for len(data) > 0 {
 		field := data
 		number, wireType, tagLen := protowire.ConsumeTag(data)
 		if tagLen < 0 {
-			return nil, protowire.ParseError(tagLen)
+			return nil, 0, protowire.ParseError(tagLen)
 		}
 		data = data[tagLen:]
 		fieldLen := protowire.ConsumeFieldValue(number, wireType, data)
 		if fieldLen < 0 {
-			return nil, protowire.ParseError(fieldLen)
+			return nil, 0, protowire.ParseError(fieldLen)
 		}
 		if number != 1 || wireType != protowire.BytesType {
 			out = append(out, field[:tagLen+fieldLen]...)
+		} else {
+			removed += tagLen + fieldLen
 		}
 		data = data[fieldLen:]
 	}
-	return out, nil
+	if removed == 0 {
+		return original, 0, nil
+	}
+	return out, removed, nil
 }
 
 func countRepeatedBytesField(data []byte, wanted protowire.Number) (int, error) {

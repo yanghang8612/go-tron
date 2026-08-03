@@ -1,6 +1,7 @@
 package freezer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,9 +16,10 @@ import (
 // published V2 tx_infos segments. Transform receives the tx_infos row and its
 // matching bodies row. A manifest replacement is the commit point.
 type V2TxInfoRewriteOptions struct {
-	Context     context.Context
-	MaxSegments uint64
-	Transform   func(number uint64, txInfo, body []byte) (data []byte, removed uint64, err error)
+	Context          context.Context
+	MaxSegments      uint64
+	ProgressInterval time.Duration
+	Transform        func(number uint64, txInfo, body []byte) (data []byte, removed uint64, err error)
 	// Observe runs exactly once per source row before transformation. It is
 	// intended for safe prerequisite work such as upgrading hot reverse indexes.
 	Observe func(number uint64, txInfo, body []byte) error
@@ -28,6 +30,7 @@ type V2TxInfoRewriteOptions struct {
 }
 
 type V2TxInfoRewriteProgress struct {
+	Stage        string
 	Segment      uint64
 	Start        uint64
 	End          uint64
@@ -38,6 +41,7 @@ type V2TxInfoRewriteProgress struct {
 
 type V2TxInfoRewriteResult struct {
 	Segments            uint64
+	RewrittenSegments   uint64
 	Rows                uint64
 	RemovedBytes        uint64
 	PhysicalBytesBefore uint64
@@ -84,8 +88,6 @@ func (f *Freezer) RewriteV2TransactionInfos(options V2TxInfoRewriteOptions) (V2T
 			break
 		}
 		segmentStarted := time.Now()
-		newName := strings.TrimSuffix(v2SegmentName(manifest.Start, manifest.Count), ".gtv2") + "-txidless.gtv2"
-		newPath := filepath.Join(base, "tx_infos", newName)
 
 		f.v2Mu.RLock()
 		source := f.v2
@@ -93,33 +95,121 @@ func (f *Freezer) RewriteV2TransactionInfos(options V2TxInfoRewriteOptions) (V2T
 			f.v2Mu.RUnlock()
 			return result, fmt.Errorf("ancient V2 store does not cover manifest [%d,%d)", manifest.Start, manifest.Start+manifest.Count)
 		}
-		var segmentRemoved uint64
-		readTransformed := func(number uint64, account bool) ([]byte, error) {
+		var (
+			segmentRemoved uint64
+			segmentChanged bool
+			lastProgress   = time.Now()
+		)
+		readSource := func(number uint64) ([]byte, []byte, error) {
 			txInfo, err := source.read("tx_infos", number)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			body, err := source.read("bodies", number)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			if account && options.Observe != nil {
+			return txInfo, body, nil
+		}
+		for number := manifest.Start; number < manifest.Start+manifest.Count; number++ {
+			if err := options.Context.Err(); err != nil {
+				f.v2Mu.RUnlock()
+				return result, err
+			}
+			txInfo, body, err := readSource(number)
+			if err != nil {
+				f.v2Mu.RUnlock()
+				return result, fmt.Errorf("audit ancient V2 tx_infos segment %d row %d: %w", manifest.Start, number, err)
+			}
+			if options.Observe != nil {
 				if err := options.Observe(number, txInfo, body); err != nil {
-					return nil, err
+					f.v2Mu.RUnlock()
+					return result, err
 				}
 			}
 			data, removed, err := options.Transform(number, txInfo, body)
-			if err == nil && account {
-				segmentRemoved += removed
+			if err != nil {
+				f.v2Mu.RUnlock()
+				return result, fmt.Errorf("audit ancient V2 tx_infos segment %d row %d: %w", manifest.Start, number, err)
+			}
+			segmentRemoved += removed
+			if !bytes.Equal(data, txInfo) {
+				segmentChanged = true
+			}
+			if options.Progress != nil && options.ProgressInterval > 0 && time.Since(lastProgress) >= options.ProgressInterval {
+				options.Progress(V2TxInfoRewriteProgress{
+					Stage: "auditing", Segment: result.Segments + 1,
+					Start: manifest.Start, End: manifest.Start + manifest.Count,
+					Rows: number - manifest.Start + 1, RemovedBytes: segmentRemoved,
+					Elapsed: time.Since(segmentStarted),
+				})
+				lastProgress = time.Now()
+			}
+		}
+		f.v2Mu.RUnlock()
+
+		if !segmentChanged {
+			if options.BeforePublish != nil {
+				if err := options.BeforePublish(); err != nil {
+					return result, fmt.Errorf("prepare audited V2 manifest %d: %w", manifest.Start, err)
+				}
+			}
+			manifest.TxInfoIDsCompacted = true
+			if err := publishV2Manifest(base, manifest); err != nil {
+				return result, fmt.Errorf("publish audited V2 manifest %d: %w", manifest.Start, err)
+			}
+			result.Segments++
+			result.Rows += manifest.Count
+			if options.Progress != nil {
+				options.Progress(V2TxInfoRewriteProgress{
+					Stage: "marked", Segment: result.Segments,
+					Start: manifest.Start, End: manifest.Start + manifest.Count,
+					Rows: manifest.Count, Elapsed: time.Since(segmentStarted),
+				})
+			}
+			continue
+		}
+
+		newName := strings.TrimSuffix(v2SegmentName(manifest.Start, manifest.Count), ".gtv2") + "-txidless.gtv2"
+		newPath := filepath.Join(base, "tx_infos", newName)
+		lastProgress = time.Now()
+		var writeRows uint64
+		readTransformed := func(number uint64) ([]byte, error) {
+			txInfo, body, err := readSource(number)
+			if err != nil {
+				return nil, err
+			}
+			data, _, err := options.Transform(number, txInfo, body)
+			writeRows++
+			if options.Progress != nil && options.ProgressInterval > 0 && time.Since(lastProgress) >= options.ProgressInterval {
+				options.Progress(V2TxInfoRewriteProgress{
+					Stage: "rewriting", Segment: result.Segments + 1,
+					Start: manifest.Start, End: manifest.Start + manifest.Count,
+					Rows: writeRows, RemovedBytes: segmentRemoved,
+					Elapsed: time.Since(segmentStarted),
+				})
+				lastProgress = time.Now()
 			}
 			return data, err
 		}
+
+		f.v2Mu.RLock()
+		source = f.v2
+		if source == nil || source.coverage < manifest.Start+manifest.Count {
+			f.v2Mu.RUnlock()
+			return result, fmt.Errorf("ancient V2 store does not cover manifest [%d,%d)", manifest.Start, manifest.Start+manifest.Count)
+		}
 		err = writeV2Segment(newPath, manifest.Start, manifest.Count, manifest.FrameBlocks, func(number uint64) ([]byte, error) {
-			return readTransformed(number, true)
+			return readTransformed(number)
 		})
 		if err == nil {
 			err = verifyV2Segment(options.Context, newPath, "tx_infos", manifest.Start, manifest.Count, func(number uint64) ([]byte, error) {
-				return readTransformed(number, false)
+				txInfo, body, readErr := readSource(number)
+				if readErr != nil {
+					return nil, readErr
+				}
+				data, _, transformErr := options.Transform(number, txInfo, body)
+				return data, transformErr
 			})
 		}
 		f.v2Mu.RUnlock()
@@ -148,11 +238,12 @@ func (f *Freezer) RewriteV2TransactionInfos(options V2TxInfoRewriteOptions) (V2T
 			_ = os.Remove(filepath.Join(base, "tx_infos", oldName))
 		}
 		result.Segments++
+		result.RewrittenSegments++
 		result.Rows += manifest.Count
 		result.RemovedBytes += segmentRemoved
 		if options.Progress != nil {
 			options.Progress(V2TxInfoRewriteProgress{
-				Segment: result.Segments, Start: manifest.Start, End: manifest.Start + manifest.Count,
+				Stage: "rewritten", Segment: result.Segments, Start: manifest.Start, End: manifest.Start + manifest.Count,
 				Rows: manifest.Count, RemovedBytes: segmentRemoved, Elapsed: time.Since(segmentStarted),
 			})
 		}

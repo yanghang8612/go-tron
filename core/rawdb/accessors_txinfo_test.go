@@ -117,8 +117,8 @@ func TestReadTransactionInfoPrefersCanonicalBlockReceiptOverLegacyRow(t *testing
 	if err != nil || !ok || info == nil || info.Fee != 700 {
 		t.Fatalf("ReadTransactionInfoStrict = %+v/%v/%v, want canonical fee 700", info, ok, err)
 	}
-	if !bytes.Equal(info.Id, txHash[:]) {
-		t.Fatalf("ReadTransactionInfoStrict ID = %x, want requested ID %x", info.Id, txHash[:])
+	if len(info.Id) != 0 {
+		t.Fatalf("ReadTransactionInfoStrict ID = %x, want compact empty ID", info.Id)
 	}
 	if got := ReadTransactionInfo(db, txHash[:]); got == nil || got.Fee != 700 {
 		t.Fatalf("ReadTransactionInfo = %+v, want canonical fee 700", got)

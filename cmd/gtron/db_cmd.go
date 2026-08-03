@@ -80,6 +80,7 @@ func dbCommand() *cli.Command {
 			dbBenchmarkAncientCommand(),
 			dbBenchmarkTxIndexCommand(),
 			dbMigrateAncientV2Command(),
+			dbCompactAncientTxInfoV2Command(),
 			dbMigrateTxIndexCommand(),
 			dbDropBalanceTracesCommand(),
 			dbCompactStateHistoryCommand(),

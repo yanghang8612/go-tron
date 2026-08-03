@@ -377,6 +377,73 @@ func TestRewriteV2TransactionInfosRoundTripAndResume(t *testing.T) {
 	}
 }
 
+func TestRewriteV2TransactionInfosMarksUnchangedSegmentWithoutRewrite(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":   {Prunable: true},
+		"tx_infos": {Prunable: true},
+	}
+	freezer, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer freezer.Close()
+	if _, err := freezer.ModifyAncients(func(op AncientWriteOp) error {
+		for number := uint64(0); number < 16; number++ {
+			if err := op.AppendRaw("bodies", number, []byte(fmt.Sprintf("body-%d", number))); err != nil {
+				return err
+			}
+			if err := op.AppendRaw("tx_infos", number, []byte(fmt.Sprintf("receipt-%d", number))); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := freezer.MigrateV2(V2MigrationOptions{
+		Tables: []string{"bodies", "tx_infos"}, SegmentBlocks: 16, FrameBlocks: 4,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(dir, "v2")
+	manifests, err := readV2Manifests(base)
+	if err != nil || len(manifests) != 1 {
+		t.Fatalf("manifests=%+v err=%v", manifests, err)
+	}
+	originalName := manifests[0].Tables["tx_infos"]
+	originalPath := filepath.Join(base, "tx_infos", originalName)
+	originalInfo, err := os.Stat(originalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := freezer.RewriteV2TransactionInfos(V2TxInfoRewriteOptions{
+		Transform: func(_ uint64, txInfo, _ []byte) ([]byte, uint64, error) {
+			return txInfo, 0, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Segments != 1 || result.RewrittenSegments != 0 || result.Rows != 16 || result.RemovedBytes != 0 {
+		t.Fatalf("unchanged audit = %+v", result)
+	}
+	manifests, err = readV2Manifests(base)
+	if err != nil || len(manifests) != 1 {
+		t.Fatalf("updated manifests=%+v err=%v", manifests, err)
+	}
+	if !manifests[0].TxInfoIDsCompacted || manifests[0].Tables["tx_infos"] != originalName {
+		t.Fatalf("updated manifest=%+v", manifests[0])
+	}
+	updatedInfo, err := os.Stat(originalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(originalInfo, updatedInfo) {
+		t.Fatal("unchanged tx_infos segment was replaced")
+	}
+}
+
 func TestFreezerMigrateV2OnlineKeepsConcurrentReadsAvailable(t *testing.T) {
 	dir := t.TempDir()
 	tables := map[string]TableConfig{
