@@ -615,7 +615,7 @@ func (r *PersistentHistoryReader) readStateAccountLatestAsOf(owner tcommon.Addre
 	if err != nil {
 		return nil, false, err
 	}
-	if r.coldHistory == nil {
+	if r.coldHistory == nil && !r.hotHistoryBounded {
 		cfg, err := stateDomainHistoryConfig()
 		if err != nil {
 			return nil, false, err
@@ -655,7 +655,7 @@ func (r *PersistentHistoryReader) readStateKVAsOf(owner tcommon.Address, generat
 }
 
 func (r *PersistentHistoryReader) readStateKVAsOfTxNum(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, targetTxNum, headTxNum uint64) ([]byte, bool, error) {
-	if r.coldHistory == nil {
+	if r.coldHistory == nil && !r.hotHistoryBounded {
 		cfg, err := stateDomainHistoryConfig()
 		if err != nil {
 			return nil, false, err
@@ -720,7 +720,7 @@ func (r *PersistentHistoryReader) readCodeByHashAtBlock(hash tcommon.Hash, block
 }
 
 func (r *PersistentHistoryReader) readStateKVGenerationAsOfTxNum(owner tcommon.Address, targetTxNum, headTxNum uint64) (uint64, bool, error) {
-	if r.coldHistory == nil {
+	if r.coldHistory == nil && !r.hotHistoryBounded {
 		cfg, err := stateDomainHistoryConfig()
 		if err != nil {
 			return 0, false, err
@@ -758,7 +758,7 @@ func (r *PersistentHistoryReader) readStateAccountKVAsOf(owner tcommon.Address, 
 	if err != nil {
 		return nil, false, err
 	}
-	if r.coldHistory == nil {
+	if r.coldHistory == nil && !r.hotHistoryBounded {
 		cfg, err := stateDomainHistoryConfig()
 		if err != nil {
 			return nil, false, err
@@ -862,7 +862,7 @@ func (r *PersistentHistoryReader) readStateAccountKVPrefixAsOf(owner tcommon.Add
 }
 
 func (r *PersistentHistoryReader) readStateAccountKVPrefixAsOfTxNum(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte, targetTxNum, headTxNum uint64, fn func(key, value []byte) (bool, error)) error {
-	if r.coldHistory == nil {
+	if r.coldHistory == nil && !r.hotHistoryBounded {
 		cfg, err := stateDomainHistoryConfig()
 		if err != nil {
 			return err

@@ -27,6 +27,10 @@ type canonicalBlockExecution struct {
 	// execution still writes per-block receipts; the recoverable TxLookup stage
 	// materializes reverse hash rows after the range settles.
 	deferTransactionLookup bool
+	// deferStateHistoryIndex removes unordered latest-key -> block inverse rows
+	// from bulk execution. Authoritative changesets remain inline; the
+	// solidified-only StateHistoryIndex stage rebuilds the derived rows by ETL.
+	deferStateHistoryIndex bool
 	// parentDynProps transfers ownership of the previous block's finalized
 	// dynamic properties into this block under async commit (decision-b), so
 	// execution never reads the lazily-published dynPropsCache or deep-copies the
@@ -80,7 +84,9 @@ func (p *canonicalBlockExecution) BeginDomainChangeStage(writer ethdb.KeyValueWr
 	if p == nil || p.txRange == nil {
 		return nil, nil
 	}
-	return p.state.BeginDomainChangeStage(writer, p.txRange)
+	cfg := state.DefaultStateDomainChangePublicationConfig()
+	cfg.SkipInverseIndex = p.deferStateHistoryIndex
+	return p.state.BeginDomainChangeStageWithConfig(writer, p.txRange, cfg)
 }
 
 func (p *canonicalBlockExecution) Commit(opts state.CommitOptions) (tcommon.Hash, state.CommitStats, error) {
@@ -182,6 +188,25 @@ func (p *canonicalBlockExecution) AdvanceTransactionLookupStage(writer ethdb.Key
 	return nil
 }
 
+// AdvanceStateHistoryIndexStage records inline inverse-index completion after
+// Finish. Bulk sync skips it because its sorted stage advances only through the
+// solidified boundary, keeping direct DB rows out of the rewindable tail.
+func (p *canonicalBlockExecution) AdvanceStateHistoryIndexStage(writer ethdb.KeyValueWriter, block *types.Block) error {
+	if p == nil {
+		return fmt.Errorf("canonical block execution: nil plan")
+	}
+	if block == nil {
+		return fmt.Errorf("canonical block execution: nil block")
+	}
+	if p.deferStateHistoryIndex {
+		return nil
+	}
+	if err := rawdb.WriteStageProgressWithHash(writer, rawdb.StageStateHistoryIndex, block.Number(), block.Hash()); err != nil {
+		return fmt.Errorf("write state history index stage progress: %w", err)
+	}
+	return nil
+}
+
 // canonicalRangeExecutor owns the reusable state surfaces for one canonical
 // range application. InsertBlocks, fork replay, and restart replay should all
 // enter block execution through this object so state opening, txNum planning,
@@ -191,6 +216,7 @@ type canonicalRangeExecutor struct {
 	allowSharedCommit      bool
 	stageHook              StageProgressHook
 	deferTransactionLookup bool
+	deferStateHistoryIndex bool
 	state                  *state.StateDB
 	commit                 *state.CommitScope
 	txRanges               *stateTxRangeAllocator
@@ -250,6 +276,7 @@ func newCanonicalRangeExecutorWithOptions(bc *BlockChain, allowSharedCommit bool
 		allowSharedCommit:      allowSharedCommit,
 		stageHook:              hook,
 		deferTransactionLookup: deferTransactionLookup,
+		deferStateHistoryIndex: deferTransactionLookup && bc != nil && bc.config != nil && bc.config.HistoryEnabled,
 		txInfoBatches:          txInfoBatches,
 	}
 }
@@ -305,6 +332,7 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		pipeline:               newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash(), e.stageHook),
 		parent:                 current,
 		deferTransactionLookup: e.deferTransactionLookup,
+		deferStateHistoryIndex: e.deferStateHistoryIndex,
 		txInfoBatch:            e.txInfoBatches.acquire(),
 		txInfoBatchPool:        e.txInfoBatches,
 	}

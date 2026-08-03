@@ -216,8 +216,14 @@
   coalesced output, disk/compaction bytes, write stalls, and sync throughput.
 - [x] Hoist hot changeset block number/sequence into its physical key and block
   hash into the one-per-block tx-range row, retaining one fork guard per block.
-- [ ] Run the context-hoisted hot-history production gate and compare sampled
+- [x] Run the context-hoisted hot-history production gate and compare sampled
   row fixed bytes plus normalized coalesced/disk/compaction bytes.
+- [x] Add a hash-bound StateHistoryIndex stage which rebuilds solidified
+  latest-key/block inverse rows through a bounded sorted ETL pass.
+- [x] Defer inverse-index publication during bulk sync and serve the short
+  un-solidified suffix through direct block-changeset scans.
+- [ ] Run the derived-index production gate and compare temporal family share,
+  ETL cost, coalesced output, disk/compaction bytes, stalls, and query parity.
 - [ ] Remove next-image fields from the cold binary history format together
   with duplicated block/sequence context after the hot-row production gates.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.

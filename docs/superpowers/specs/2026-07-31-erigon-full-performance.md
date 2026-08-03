@@ -1780,6 +1780,54 @@ changes, preserving the canonical-branch guard without storing or checking the
 same hash on every row. Read-only fallbacks accept both preceding RLP layouts
 during the current test deployment; fresh writes use only the compact layout.
 
+Three post-deploy windows covered 9,024 blocks / 454,823 transactions and
+30,087 sampled changesets. The exact logical result was 142.4 bytes/row, 21.0%
+below P4.37; fixed metadata fell from 75.4 to 36.1 bytes/row, a 52.2%
+reduction. Final coalesced output fell another 15.3% to about 234 KB/block.
+The three windows ran at 37.7 blocks/s and 1,898 tx/s with zero Pebble write
+delay and zero execution/equivalence errors. OS, database, and compaction byte
+totals are not directly comparable because this run drained 2.52 GB of debt
+while P4.37 accumulated 3.33 GB; the exact row result and lower pre-compaction
+output pass the P4.38 gate.
+
+#### P4.39: Erigon-style derived hot-history index stage
+
+After P4.38, production attribution moved from 88.5/11.5% changeset/index to
+74.5/25.4%. The empty-valued latest-key/block inverse rows are now one quarter
+of temporal logical writes even though they are not authoritative for unwind,
+commitment, or cold history construction.
+
+Erigon does not publish this relation as an independently prefixed hot write
+inside canonical execution. Its `InvertedIndexBufferedWriter` collects both
+tx-to-key and key-to-tx relations with ETL, loads them in sorted order, and
+later collates compressed immutable index files. go-tron's next adaptation is
+a recoverable, hash-bound `StateHistoryIndex` stage: sync execution publishes
+only tx ranges and previous-image changesets; after the commit barrier, a
+bounded ETL pass derives inverse rows from solidified changesets. The stage
+watermark advances only after the ordered load succeeds. Recent un-solidified
+blocks remain queryable through a bounded direct changeset tail scan, so a
+same-height fork can still discard their buffered rows without leaving durable
+derived-index residue.
+
+The implemented stage uses the prior solidified boundary as the one-time
+baseline for databases written by the inline-index layout. Every subsequent
+pass is capped by both verified `Finish` and `latest_solidified_block_num`,
+checks each source `StateTxRange` hash against the canonical block hash, sorts
+and duplicate-collapses inverse puts in an 8 MiB bounded ETL collector, and
+publishes its hash-bound watermark only after load succeeds. Interrupted loads
+are idempotently retried from the old watermark. Ordinary producer/gossip
+imports still publish inverse rows and the stage watermark inside their
+rewindable block layer; only the bulk-sync executor defers them.
+
+Archive readers split their bounded `(targetBlock, headBlock]` request at the
+stage watermark: the covered prefix uses exact/prefix inverse seeks, while the
+normally 18--20 block un-solidified suffix scans per-block changeset prefixes.
+This applies even before cold history is installed; bounded readers no longer
+take the legacy hot-only shortcut that assumes every changeset has an inverse
+row. Sync exposes pass, block, change, ETL applied/input/batch, interruption,
+and duration counters under `sync/stage/state_history_index/*` for the P4.39
+production gate.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

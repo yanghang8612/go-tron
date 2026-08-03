@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"reflect"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -587,6 +588,61 @@ func TestReadFirstStateDomainChangeByKeyBlockRangeUsesPrefixSeek(t *testing.T) {
 	}
 	if db.seekCalls != 1 || db.inverseIteratorCalls != 0 {
 		t.Fatalf("seek calls = %d inverse iterator calls = %d, want 1/0", db.seekCalls, db.inverseIteratorCalls)
+	}
+}
+
+func TestStateDomainChangeBlockRangeReadsScanUnindexedStageTail(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x2a}
+	key := []byte("reward/staged-tail")
+	for _, blockNum := range []uint64{1, 2} {
+		if err := WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+		change := &StateDomainChange{
+			BlockNum: blockNum, TxNum: blockNum, Seq: 1,
+			FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 1,
+			Domain: kvdomains.SystemReward, Key: key,
+			PrevExists: true, Prev: []byte{byte(blockNum - 1)},
+		}
+		if blockNum == 1 {
+			if err := WriteStateDomainChange(db, change); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := WriteStateDomainChangeRow(db, change); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteStageProgressWithHash(db, StageStateHistoryIndex, 1, common.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+
+	var exact []uint64
+	if err := IterateStateDomainChangesByKeyBlockRange(db, 0, 2, 0, 2, StateFlatDomainKVLatest, owner, 1, kvdomains.SystemReward, key, func(change *StateDomainChange) (bool, error) {
+		exact = append(exact, change.BlockNum)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(exact, []uint64{1, 2}) {
+		t.Fatalf("exact indexed+tail blocks = %v, want [1 2]", exact)
+	}
+	first, err := ReadFirstStateDomainChangeByKeyBlockRange(db, 1, 2, 1, 2, StateFlatDomainKVLatest, owner, 1, kvdomains.SystemReward, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == nil || first.BlockNum != 2 {
+		t.Fatalf("first unindexed tail change = %+v, want block 2", first)
+	}
+	var prefixed []uint64
+	if err := IterateStateDomainChangesByPrefixBlockRange(db, 0, 2, 0, 2, owner, 1, kvdomains.SystemReward, []byte("reward/staged"), func(change *StateDomainChange) (bool, error) {
+		prefixed = append(prefixed, change.BlockNum)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(prefixed, []uint64{1, 2}) {
+		t.Fatalf("prefix indexed+tail blocks = %v, want [1 2]", prefixed)
 	}
 }
 

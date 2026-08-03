@@ -19,6 +19,7 @@ import (
 var (
 	ErrIncompleteTransactionInfoCoverage   = errors.New("rawdb: incomplete transaction info coverage")
 	ErrTransactionLookupRebuildInterrupted = errors.New("rawdb: transaction lookup rebuild interrupted")
+	ErrStateHistoryIndexRebuildInterrupted = errors.New("rawdb: state history index rebuild interrupted")
 )
 
 type RebuildTransactionDerivedIndexesResult struct {
@@ -46,6 +47,17 @@ type RebuildTransactionLookupResult struct {
 	HotBlocksScanned     uint64
 	TransactionsIndexed  uint64
 	ETL                  etl.Stats
+}
+
+// RebuildStateHistoryIndexResult describes one sorted inverse-index pass over
+// authoritative temporal changesets. ChangesScanned counts journal rows; the
+// ETL Applied count reflects latest-key/block duplicates collapsed before load.
+type RebuildStateHistoryIndexResult struct {
+	FromBlock      uint64
+	ToBlock        uint64
+	BlocksScanned  uint64
+	ChangesScanned uint64
+	ETL            etl.Stats
 }
 
 type RebuildSectionBloomsResult struct {
@@ -251,6 +263,85 @@ func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethd
 	if err != nil {
 		if errors.Is(err, etl.ErrLoadInterrupted) {
 			return nil, ErrTransactionLookupRebuildInterrupted
+		}
+		return nil, err
+	}
+	result.ETL = stats
+	return result, nil
+}
+
+// RebuildStateHistoryIndexInterruptible collects latest-key -> block inverse
+// rows from canonical temporal changesets, then loads them in physical key
+// order. expectedHash binds every StateTxRange source row to the canonical
+// branch before its derived rows are published. A failed or interrupted pass
+// leaves the stage watermark to the caller; partially loaded puts are
+// idempotently overwritten by the next pass.
+func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options, expectedHash func(uint64) (common.Hash, bool, error), interrupted func() bool) (*RebuildStateHistoryIndexResult, error) {
+	if source == nil {
+		return nil, errors.New("rawdb: nil state history source")
+	}
+	if writer == nil {
+		return nil, errors.New("rawdb: nil state history index writer")
+	}
+	if expectedHash == nil {
+		return nil, errors.New("rawdb: nil canonical hash reader")
+	}
+	if toBlock < fromBlock {
+		return nil, fmt.Errorf("rawdb: inverted state history index range [%d,%d]", fromBlock, toBlock)
+	}
+	collector, err := etl.NewCollector(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer collector.Close()
+
+	result := &RebuildStateHistoryIndexResult{FromBlock: fromBlock, ToBlock: toBlock}
+	for blockNum := fromBlock; ; blockNum++ {
+		if interrupted != nil && interrupted() {
+			return nil, ErrStateHistoryIndexRebuildInterrupted
+		}
+		txRange, ok, err := ReadStateTxRange(source, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("rawdb: read state tx range %d during history index rebuild: %w", blockNum, err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("rawdb: missing state tx range %d during history index rebuild", blockNum)
+		}
+		canonicalHash, ok, err := expectedHash(blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("rawdb: read canonical hash %d during history index rebuild: %w", blockNum, err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("rawdb: missing canonical hash %d during history index rebuild", blockNum)
+		}
+		if txRange.BlockNum != blockNum || txRange.BlockHash != canonicalHash {
+			return nil, fmt.Errorf("rawdb: state tx range %d canonical mismatch: row block=%d hash=%x canonical=%x", blockNum, txRange.BlockNum, txRange.BlockHash, canonicalHash)
+		}
+		if err := IterateStateDomainChanges(source, blockNum, func(change *StateDomainChange) (bool, error) {
+			if interrupted != nil && interrupted() {
+				return false, ErrStateHistoryIndexRebuildInterrupted
+			}
+			change.BlockHash = txRange.BlockHash
+			if err := WriteStateDomainChangeInverseIndex(collector, change); err != nil {
+				return false, err
+			}
+			result.ChangesScanned++
+			return true, nil
+		}); err != nil {
+			return nil, err
+		}
+		result.BlocksScanned++
+		if blockNum == toBlock {
+			break
+		}
+	}
+	if interrupted != nil && interrupted() {
+		return nil, ErrStateHistoryIndexRebuildInterrupted
+	}
+	stats, err := collector.LoadInterruptible(writer, interrupted)
+	if err != nil {
+		if errors.Is(err, etl.ErrLoadInterrupted) {
+			return nil, ErrStateHistoryIndexRebuildInterrupted
 		}
 		return nil, err
 	}

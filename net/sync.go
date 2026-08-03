@@ -161,7 +161,10 @@ type SyncService struct {
 // The stage runs after canonical import settlement, so a large restored
 // downloader buffer cannot hold the chain writer lock for an unbounded ETL
 // sort/load.
-const transactionLookupStageBatchBlocks = 4096
+const (
+	transactionLookupStageBatchBlocks = 4096
+	stateHistoryIndexStageBatchBlocks = 4096
+)
 
 var (
 	transactionLookupStagePassesCounter       = metrics.NewRegisteredCounter("sync/stage/tx_lookup/passes", nil)
@@ -171,6 +174,14 @@ var (
 	transactionLookupStageTransactionsCounter = metrics.NewRegisteredCounter("sync/stage/tx_lookup/transactions", nil)
 	transactionLookupStageInterruptedCounter  = metrics.NewRegisteredCounter("sync/stage/tx_lookup/interrupted", nil)
 	transactionLookupStageNanosCounter        = metrics.NewRegisteredCounter("sync/stage/tx_lookup/nanos", nil)
+	stateHistoryIndexStagePassesCounter       = metrics.NewRegisteredCounter("sync/stage/state_history_index/passes", nil)
+	stateHistoryIndexStageBlocksCounter       = metrics.NewRegisteredCounter("sync/stage/state_history_index/blocks", nil)
+	stateHistoryIndexStageChangesCounter      = metrics.NewRegisteredCounter("sync/stage/state_history_index/changes", nil)
+	stateHistoryIndexStageAppliedCounter      = metrics.NewRegisteredCounter("sync/stage/state_history_index/etl_applied", nil)
+	stateHistoryIndexStageInputBytesCounter   = metrics.NewRegisteredCounter("sync/stage/state_history_index/etl_input_bytes", nil)
+	stateHistoryIndexStageBatchWritesCounter  = metrics.NewRegisteredCounter("sync/stage/state_history_index/etl_batch_writes", nil)
+	stateHistoryIndexStageInterruptedCounter  = metrics.NewRegisteredCounter("sync/stage/state_history_index/interrupted", nil)
+	stateHistoryIndexStageNanosCounter        = metrics.NewRegisteredCounter("sync/stage/state_history_index/nanos", nil)
 )
 
 // chainStatusAdapter adapts *core.BlockChain to tsync.ChainStatus by adding
@@ -1830,6 +1841,7 @@ drainLoop:
 	publishPausedPrefix := paused && syncdl.ImportResumePhaseSuffixPrecedesBlock(resumePhases, pauseBlock)
 	resumePublish := ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused && !publishPausedPrefix)
 	if commitBarrier.FinishOK && !paused {
+		ss.advanceStateHistoryIndexStage()
 		ss.advanceTransactionLookupStage()
 	}
 	if !publishPausedPrefix {
@@ -2579,6 +2591,37 @@ func (ss *SyncService) advanceTransactionLookupStage() {
 			transactionLookupStageAncientCounter.Inc(int64(result.Rebuilt.AncientBlocksScanned))
 			transactionLookupStageHotCounter.Inc(int64(result.Rebuilt.HotBlocksScanned))
 			transactionLookupStageTransactionsCounter.Inc(int64(result.Rebuilt.TransactionsIndexed))
+		}
+		ss.requestDrainAgain()
+	}
+}
+
+func (ss *SyncService) advanceStateHistoryIndexStage() {
+	if ss == nil || ss.chain == nil || ss.stopping.Load() {
+		return
+	}
+	started := time.Now()
+	result, err := ss.chain.AdvanceStateHistoryIndexStageInterruptible(stateHistoryIndexStageBatchBlocks, ss.stopping.Load)
+	stateHistoryIndexStageNanosCounter.Inc(time.Since(started).Nanoseconds())
+	if err != nil {
+		if errors.Is(err, rawdb.ErrStateHistoryIndexRebuildInterrupted) && ss.stopping.Load() {
+			stateHistoryIndexStageInterruptedCounter.Inc(1)
+			return
+		}
+		// The inverse index is derived from authoritative changesets. Preserve
+		// canonical import on transient ETL failure; bounded archive reads scan
+		// the unindexed tail until a later drain retries this watermark.
+		syncLog.Warn("Advance state history index stage failed", "err", err)
+		return
+	}
+	if result.Advanced {
+		stateHistoryIndexStagePassesCounter.Inc(1)
+		if result.Rebuilt != nil {
+			stateHistoryIndexStageBlocksCounter.Inc(int64(result.Rebuilt.BlocksScanned))
+			stateHistoryIndexStageChangesCounter.Inc(int64(result.Rebuilt.ChangesScanned))
+			stateHistoryIndexStageAppliedCounter.Inc(int64(result.Rebuilt.ETL.Applied))
+			stateHistoryIndexStageInputBytesCounter.Inc(int64(result.Rebuilt.ETL.InputBytes))
+			stateHistoryIndexStageBatchWritesCounter.Inc(int64(result.Rebuilt.ETL.BatchWrites))
 		}
 		ss.requestDrainAgain()
 	}

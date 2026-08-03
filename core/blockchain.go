@@ -177,6 +177,7 @@ type BlockChain struct {
 	stateCommitScopeHook        func()
 	stateTxRangeSeedHook        func(uint64)
 	transactionLookupETLOptions etl.Options
+	stateHistoryIndexETLOptions etl.Options
 
 	currentBlock atomic.Pointer[types.Block]
 	// archiveHead is the newest block whose async state layer has been fully
@@ -533,6 +534,11 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	// Seed the dynprops cache now that the head is known: rooted keys load from
 	// the system-KV at the head root, derived keys from the buffer.
 	bc.storeDynPropsCache(state.LoadDynamicProperties(buffer, bc.sysKVAt(bc.HeadStateRoot())))
+	if bc.config != nil && bc.config.HistoryEnabled {
+		if err := bc.ensureStateHistoryIndexStageLocked(); err != nil {
+			return nil, err
+		}
+	}
 
 	// Initialize KhaosDB with the current head.
 	bc.khaosDB = NewKhaosDB()
@@ -831,9 +837,9 @@ func (bc *BlockChain) InsertBlocksWithStageHook(blocks []*types.Block, hook Stag
 }
 
 // InsertSyncBlocksWithStageHook applies a bulk-sync range while deferring its
-// rebuildable tx-hash lookup rows. Per-block TransactionRet rows remain
-// durable; canonical insertion never materializes their duplicate `ti-` rows.
-// SyncService must follow each successful range with AdvanceTransactionLookupStage.
+// rebuildable tx-hash lookup and state-history inverse rows. Authoritative
+// TransactionRet and temporal changeset rows remain on the canonical path.
+// SyncService advances both sorted derived stages after the range settles.
 func (bc *BlockChain) InsertSyncBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {
 	return bc.insertBlocksWithStageHook(blocks, hook, true)
 }
@@ -878,6 +884,11 @@ func (bc *BlockChain) insertBlocksLockedModeWithOptions(blocks []*types.Block, s
 	// replay therefore follows the normal writer path instead of branching into
 	// the retired freezer-v2/immutable-index compatibility path.
 	_ = storedReplay
+	if deferTransactionLookup && bc.config != nil && bc.config.HistoryEnabled {
+		if err := bc.ensureStateHistoryIndexStageLocked(); err != nil {
+			return err
+		}
+	}
 	// Parallel immutable preprocessing: start transaction decode/size/sender and
 	// block Merkle/witness work, then overlap later-block jobs with ordered state
 	// execution. Pure cache warming — the serial path (envelope and header
@@ -1711,6 +1722,11 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if err := plan.AdvanceTransactionLookupStage(bc.buffer, block); err != nil {
 		return err
 	}
+	if historyEnabled {
+		if err := plan.AdvanceStateHistoryIndexStage(bc.buffer, block); err != nil {
+			return err
+		}
+	}
 
 	// Promote the buffer layer to the layered stack. Slice 1 introduced the
 	// layered stack; slice 2 adds the flush-at-solidified policy below.
@@ -2270,6 +2286,9 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	}
 	if err := bc.rewindTransactionLookupStageLocked(lcaBlock.Number(), lcaBlock.Hash()); err != nil {
 		return fmt.Errorf("rewind tx lookup stage progress to LCA %d: %w", lcaBlock.Number(), err)
+	}
+	if err := bc.rewindStateHistoryIndexStageLocked(lcaBlock.Number(), lcaBlock.Hash()); err != nil {
+		return fmt.Errorf("rewind state history index stage progress to LCA %d: %w", lcaBlock.Number(), err)
 	}
 
 	// Apply new branch blocks in order LCA+1 → newHead.

@@ -1,0 +1,180 @@
+package core
+
+import (
+	"fmt"
+
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
+)
+
+// State-history inverse keys are substantially smaller than tx-hash lookup
+// rows, but hot contracts can generate many duplicate latest-key/block puts.
+// Keep runs compact so duplicate collapse happens before stable-cache pressure
+// grows, matching Erigon's bounded ETL collectors.
+const stateHistoryIndexETLDefaultBufferLimit = 8 << 20
+
+// StateHistoryIndexStageResult reports one bounded sorted inverse-index pass.
+type StateHistoryIndexStageResult struct {
+	Advanced bool
+	Rebuilt  *rawdb.RebuildStateHistoryIndexResult
+}
+
+// SetStateHistoryIndexETLOptions configures the sorted collector before sync.
+func (bc *BlockChain) SetStateHistoryIndexETLOptions(opts etl.Options) {
+	if bc == nil {
+		return
+	}
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+	bc.stateHistoryIndexETLOptions = opts
+}
+
+// EnsureStateHistoryIndexStage initializes the derived watermark. Databases
+// predating this stage wrote inverse rows inline, but only the solidified prefix
+// is guaranteed durable, so that boundary is the safe compatibility baseline.
+func (bc *BlockChain) EnsureStateHistoryIndexStage() error {
+	if bc == nil {
+		return fmt.Errorf("state history index stage: nil blockchain")
+	}
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+	return bc.ensureStateHistoryIndexStageLocked()
+}
+
+func (bc *BlockChain) ensureStateHistoryIndexStageLocked() error {
+	if bc == nil || bc.db == nil || bc.chaindb == nil || bc.buffer == nil {
+		return fmt.Errorf("state history index stage: unavailable database")
+	}
+	head := bc.CurrentBlock()
+	if head == nil {
+		return fmt.Errorf("state history index stage: nil canonical head")
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(bc.db, rawdb.StageStateHistoryIndex)
+	if err != nil {
+		return fmt.Errorf("state history index stage: read progress: %w", err)
+	}
+	if ok {
+		if row.BlockNum > head.Number() {
+			if err := rawdb.WriteStageProgressWithHash(bc.db, rawdb.StageStateHistoryIndex, head.Number(), head.Hash()); err != nil {
+				return fmt.Errorf("state history index stage: clamp progress to canonical head: %w", err)
+			}
+			return nil
+		}
+		if _, _, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(bc.db, rawdb.StageStateHistoryIndex, bc.readCanonicalHashStrict); err != nil {
+			return fmt.Errorf("state history index stage: verify progress: %w", err)
+		}
+		return nil
+	}
+
+	baseline := uint64(0)
+	if dynProps := bc.cachedDynProps(); dynProps != nil {
+		if solidified := dynProps.LatestSolidifiedBlockNum(); solidified > 0 {
+			baseline = uint64(solidified)
+		}
+	}
+	if baseline > head.Number() {
+		baseline = head.Number()
+	}
+	hash, found, err := bc.readCanonicalHashStrict(baseline)
+	if err != nil {
+		return fmt.Errorf("state history index stage: read baseline hash %d: %w", baseline, err)
+	}
+	if !found {
+		return fmt.Errorf("state history index stage: missing baseline block %d", baseline)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.db, rawdb.StageStateHistoryIndex, baseline, hash); err != nil {
+		return fmt.Errorf("state history index stage: write baseline: %w", err)
+	}
+	return nil
+}
+
+// AdvanceStateHistoryIndexStage materializes a bounded solidified prefix of
+// latest-key -> block inverse rows. It holds chainmu across source validation,
+// ETL load, and watermark publication so no fork can move canonical hashes
+// under the pass. The un-solidified tail remains changeset-only and is served
+// by bounded direct scans.
+func (bc *BlockChain) AdvanceStateHistoryIndexStage(maxBlocks uint64) (StateHistoryIndexStageResult, error) {
+	return bc.AdvanceStateHistoryIndexStageInterruptible(maxBlocks, nil)
+}
+
+func (bc *BlockChain) AdvanceStateHistoryIndexStageInterruptible(maxBlocks uint64, interrupted func() bool) (StateHistoryIndexStageResult, error) {
+	if bc == nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: nil blockchain")
+	}
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+	if bc.closed.Load() {
+		return StateHistoryIndexStageResult{}, ErrBlockChainClosed
+	}
+	if bc.config == nil || !bc.config.HistoryEnabled {
+		return StateHistoryIndexStageResult{}, nil
+	}
+	if err := bc.ensureStateHistoryIndexStageLocked(); err != nil {
+		return StateHistoryIndexStageResult{}, err
+	}
+
+	finishBlock, finishOK, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(bc.buffer, rawdb.StageFinish, bc.readCanonicalHashStrict)
+	if err != nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: verify finish progress: %w", err)
+	}
+	if !finishOK {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: missing finish progress")
+	}
+	targetBlock := finishBlock
+	if dynProps := bc.cachedDynProps(); dynProps != nil {
+		solidified := dynProps.LatestSolidifiedBlockNum()
+		if solidified < 0 {
+			solidified = 0
+		}
+		if uint64(solidified) < targetBlock {
+			targetBlock = uint64(solidified)
+		}
+	}
+	indexedBlock, _, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(bc.db, rawdb.StageStateHistoryIndex, bc.readCanonicalHashStrict)
+	if err != nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: verify index progress: %w", err)
+	}
+	if indexedBlock >= targetBlock {
+		return StateHistoryIndexStageResult{}, nil
+	}
+	fromBlock := indexedBlock + 1
+	toBlock := targetBlock
+	if maxBlocks > 0 && toBlock-fromBlock+1 > maxBlocks {
+		toBlock = fromBlock + maxBlocks - 1
+	}
+
+	etlOptions := bc.stateHistoryIndexETLOptions
+	if etlOptions.BufferLimit <= 0 {
+		etlOptions.BufferLimit = stateHistoryIndexETLDefaultBufferLimit
+	}
+	rebuilt, err := rawdb.RebuildStateHistoryIndexInterruptible(bc.buffer, bc.db, fromBlock, toBlock, etlOptions, bc.readCanonicalHashStrict, interrupted)
+	if err != nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: rebuild [%d,%d]: %w", fromBlock, toBlock, err)
+	}
+	hash, ok, err := bc.readCanonicalHashStrict(toBlock)
+	if err != nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: read canonical hash at %d: %w", toBlock, err)
+	}
+	if !ok {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: canonical block %d disappeared", toBlock)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.db, rawdb.StageStateHistoryIndex, toBlock, hash); err != nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: write progress: %w", err)
+	}
+	return StateHistoryIndexStageResult{Advanced: true, Rebuilt: rebuilt}, nil
+}
+
+func (bc *BlockChain) rewindStateHistoryIndexStageLocked(blockNum uint64, hash tcommon.Hash) error {
+	row, ok, err := rawdb.ReadStageProgressRow(bc.db, rawdb.StageStateHistoryIndex)
+	if err != nil || !ok {
+		return err
+	}
+	if row.BlockNum < blockNum {
+		return nil
+	}
+	if row.BlockNum == blockNum && row.HasBlockHash && row.BlockHash == hash {
+		return nil
+	}
+	return rawdb.WriteStageProgressWithHash(bc.db, rawdb.StageStateHistoryIndex, blockNum, hash)
+}

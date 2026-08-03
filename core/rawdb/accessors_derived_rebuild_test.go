@@ -95,6 +95,45 @@ func TestRebuildTransactionDerivedIndexesFromBlocks(t *testing.T) {
 	}
 }
 
+func TestRebuildStateHistoryIndexRequiresCanonicalTxRange(t *testing.T) {
+	db := NewMemoryChainDB()
+	owner := common.Address{0x41, 0x31}
+	rowHash := common.Hash{0x01}
+	if err := WriteStateTxRange(db, 1, rowHash, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateDomainChangeRow(db, &StateDomainChange{
+		BlockNum: 1, TxNum: 1, Seq: 1,
+		FlatDomain: StateFlatDomainAccountLatest,
+		Owner:      owner,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	canonical := func(uint64) (common.Hash, bool, error) { return common.Hash{0x02}, true, nil }
+	if _, err := RebuildStateHistoryIndexInterruptible(db, db, 1, 1, etl.Options{TempDir: t.TempDir()}, canonical, nil); err == nil || !strings.Contains(err.Error(), "canonical mismatch") {
+		t.Fatalf("canonical mismatch rebuild err = %v", err)
+	}
+	var indexed []uint64
+	if err := IterateStateAccountLatestChangeBlocks(db, owner, func(blockNum uint64) (bool, error) {
+		indexed = append(indexed, blockNum)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(indexed) != 0 {
+		t.Fatalf("mismatched rebuild published indexes %v", indexed)
+	}
+
+	canonical = func(uint64) (common.Hash, bool, error) { return rowHash, true, nil }
+	result, err := RebuildStateHistoryIndexInterruptible(db, db, 1, 1, etl.Options{TempDir: t.TempDir(), BufferLimit: 1}, canonical, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BlocksScanned != 1 || result.ChangesScanned != 1 || result.ETL.Applied != 1 {
+		t.Fatalf("history index rebuild result = %+v", result)
+	}
+}
+
 func TestRebuildTransactionLookupFromBlocksLeavesReceiptIndexesUntouched(t *testing.T) {
 	db := NewMemoryChainDB()
 	block1, infos1 := derivedRebuildTestBlock(t, 1, 2)

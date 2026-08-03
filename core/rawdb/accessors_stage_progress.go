@@ -23,6 +23,11 @@ const (
 	// execution and receipts remain authoritative, so the stage may lag Finish
 	// and be rebuilt from canonical block bodies after interruption.
 	StageTxLookup StageID = "TxLookup"
+	// StageStateHistoryIndex records the highest canonical block whose derived
+	// latest-key -> block inverse rows have been materialized. State changesets
+	// and tx ranges are authoritative; bulk sync may defer this index until the
+	// covered blocks are solidified, then rebuild it with ordered ETL writes.
+	StageStateHistoryIndex StageID = "StateHistoryIndex"
 	// StageSnapshotBuild records the highest canonical source block whose
 	// state-domain history files have been published. It is hash-bound so
 	// snapshot build progress cannot silently cross a same-height fork.
@@ -370,6 +375,7 @@ func StageProgressOrderPairs() []StageProgressOrderPair {
 		{Downstream: StageCommitment, Upstream: StageExecution},
 		{Downstream: StageFinish, Upstream: StageCommitment},
 		{Downstream: StageTxLookup, Upstream: StageFinish, RequireUpstream: true},
+		{Downstream: StageStateHistoryIndex, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageSnapshotBuild, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageSnapshotLatestBuild, Upstream: StageFinish, RequireUpstream: true},
 		{Downstream: StageSnapshotEventLogBuild, Upstream: StageFinish, RequireUpstream: true},
@@ -454,6 +460,7 @@ func KnownStageProgressStages() []StageID {
 		StageCommitment,
 		StageFinish,
 		StageTxLookup,
+		StageStateHistoryIndex,
 		StageSyncInventory,
 		StageSyncBodies,
 		StageSyncBodiesReady,

@@ -20,6 +20,14 @@ type DomainChangeStage struct {
 }
 
 func (s *StateDB) BeginDomainChangeStage(writer ethdb.KeyValueWriter, txRange *rawdb.StateTxRange) (*DomainChangeStage, error) {
+	return s.BeginDomainChangeStageWithConfig(writer, txRange, DefaultStateDomainChangePublicationConfig())
+}
+
+// BeginDomainChangeStageWithConfig starts journal capture with an explicit
+// publication policy. Bulk sync uses this boundary to retain authoritative
+// changeset rows while deferring the rebuildable inverse index to a sorted ETL
+// stage after the block range is committed.
+func (s *StateDB) BeginDomainChangeStageWithConfig(writer ethdb.KeyValueWriter, txRange *rawdb.StateTxRange, cfg StateDomainChangePublicationConfig) (*DomainChangeStage, error) {
 	if s == nil || writer == nil || txRange == nil {
 		return nil, nil
 	}
@@ -29,7 +37,7 @@ func (s *StateDB) BeginDomainChangeStage(writer ethdb.KeyValueWriter, txRange *r
 	s.BeginDomainChangeJournalCapture(writer, txRange.BlockNum, tcommon.Hash(txRange.BlockHash), txRange.BeginTxNum, txRange.EndTxNum)
 	return &DomainChangeStage{
 		state:     s,
-		publisher: defaultStateDomainChangeRunner(writer),
+		publisher: NewStateDomainChangeRunner(writer, cfg),
 		tx:        *txRange,
 	}, nil
 }
@@ -88,6 +96,10 @@ type StateDomainChangePublicationConfig struct {
 	WriteTxRange      func(ethdb.KeyValueWriter, uint64, tcommon.Hash, uint64, uint64) error
 	WriteRow          func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error
 	WriteInverseIndex func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error
+	// SkipInverseIndex is a bulk-sync policy, not a history-disable switch.
+	// Authoritative rows are still written and a hash-bound derived stage later
+	// rebuilds their inverse keys in sorted order.
+	SkipInverseIndex bool
 }
 
 func DefaultStateDomainChangePublicationConfig() StateDomainChangePublicationConfig {
@@ -143,15 +155,17 @@ func (r StateDomainChangeRunner) PublishStateDomainChanges(changes []*rawdb.Stat
 	if r.cfg.Name == "" {
 		return fmt.Errorf("state domain change stage: unnamed publication config")
 	}
-	if r.cfg.WriteRow == nil || r.cfg.WriteInverseIndex == nil {
+	if r.cfg.WriteRow == nil || (!r.cfg.SkipInverseIndex && r.cfg.WriteInverseIndex == nil) {
 		return fmt.Errorf("state domain change stage: incomplete publication config %q", r.cfg.Name)
 	}
 	for _, change := range changes {
 		if err := r.cfg.WriteRow(r.writer, change); err != nil {
 			return err
 		}
-		if err := r.cfg.WriteInverseIndex(r.writer, change); err != nil {
-			return err
+		if !r.cfg.SkipInverseIndex {
+			if err := r.cfg.WriteInverseIndex(r.writer, change); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

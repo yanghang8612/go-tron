@@ -121,6 +121,34 @@ func TestStateDomainChangeRunnerUsesConfiguredPublicationSteps(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeRunnerCanDeferInverseIndex(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	rowCalls := 0
+	cfg := StateDomainChangePublicationConfig{
+		Name: "deferred-history-index",
+		WriteRow: func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error {
+			rowCalls++
+			return nil
+		},
+		WriteInverseIndex: func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error {
+			t.Fatal("deferred publisher invoked inverse index writer")
+			return nil
+		},
+		SkipInverseIndex: true,
+	}
+	change := &rawdb.StateDomainChange{
+		BlockNum: 1, TxNum: 1, Seq: 1,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      tcommon.Address{0x41, 0x44},
+	}
+	if err := NewStateDomainChangeRunner(db, cfg).PublishStateDomainChanges([]*rawdb.StateDomainChange{change}); err != nil {
+		t.Fatal(err)
+	}
+	if rowCalls != 1 {
+		t.Fatalf("row calls = %d, want 1", rowCalls)
+	}
+}
+
 func TestStateDBDomainChangeSetCapturesAccountKVAndStorage(t *testing.T) {
 	disk := ethrawdb.NewMemoryDatabase()
 	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), NewDatabase(disk))

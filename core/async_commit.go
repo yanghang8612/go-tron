@@ -424,6 +424,12 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 		bc.failCommit(job, fmt.Errorf("async commit tx lookup stage block %d: %w", job.block.Number(), err))
 		return
 	}
+	if bc.config != nil && bc.config.HistoryEnabled {
+		if err := job.plan.AdvanceStateHistoryIndexStage(index, job.block); err != nil {
+			bc.failCommit(job, fmt.Errorf("async commit state history index stage block %d: %w", job.block.Number(), err))
+			return
+		}
+	}
 
 	// Promote this block's layer onto the committed stack (FIFO; the worker
 	// commits in fold order, so this is always the oldest in-flight layer).

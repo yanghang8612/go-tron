@@ -30,9 +30,10 @@ import (
 // (switchFork, which Reset()s this shared executor) — never between Insert calls —
 // so the carried executor state is only mutated under chainmu inside Insert.
 type InsertSession struct {
-	bc       *BlockChain
-	executor *canonicalRangeExecutor
-	applied  bool
+	bc                *BlockChain
+	executor          *canonicalRangeExecutor
+	applied           bool
+	historyIndexReady bool
 }
 
 // BeginInsertSession starts a cross-batch insert session sharing one canonical
@@ -42,10 +43,10 @@ func (bc *BlockChain) BeginInsertSession() *InsertSession {
 	return &InsertSession{bc: bc, executor: newCanonicalRangeExecutor(bc, true)}
 }
 
-// BeginSyncInsertSession starts a bulk-sync session whose tx-hash lookup rows
-// are emitted by the recoverable TxLookup stage after canonical execution has
-// finished. Per-block TransactionRet rows remain on the normal synchronous
-// metadata path; all canonical insertion omits duplicate per-tx materialization.
+// BeginSyncInsertSession starts a bulk-sync session whose tx-hash lookup and
+// state-history inverse rows are emitted by recoverable sorted stages after
+// canonical execution has finished. Per-block TransactionRet and authoritative
+// changeset rows remain on the normal canonical path.
 func (bc *BlockChain) BeginSyncInsertSession() *InsertSession {
 	executor := newCanonicalRangeExecutorWithOptions(bc, true, nil, true)
 	executor.enableStateReadAhead()
@@ -90,6 +91,12 @@ func (s *InsertSession) InsertBlocksWithStageHook(blocks []*types.Block, hook St
 	defer s.bc.chainmu.Unlock()
 	if s.bc.closed.Load() {
 		return ErrBlockChainClosed
+	}
+	if s.executor.deferStateHistoryIndex && !s.historyIndexReady {
+		if err := s.bc.ensureStateHistoryIndexStageLocked(); err != nil {
+			return err
+		}
+		s.historyIndexReady = true
 	}
 	// Start signature recovery for the whole batch, then immediately execute the
 	// first block. Workers stay ahead on later blocks while state execution runs;
