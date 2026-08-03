@@ -1545,6 +1545,54 @@ small local result. Mainnet must retain zero unsupported capture, publication
 mismatch, and retry error while reducing P4.32's 6.40-microsecond full-capture
 cost and total critical-path capture time.
 
+The first post-deployment 42-second window imported 1,026 blocks / 98,299
+transactions. Ordinary full capture was recorder-only for 4,405/4,405
+transactions and averaged 3.79 microseconds, 41% below P4.32's 6.40-microsecond
+full baseline. Filtered capture averaged 1.44 microseconds, total capture was
+0.317 ms per enabled block, and 252/252 retry publications matched with zero
+unsupported capture, error, mismatch, or finish wait. This cold window was
+storage-bound: compaction debt grew by 1.42 GB and 28 async-commit backpressure
+events consumed 697 ms.
+
+A following 52-second warm window imported 1,561 blocks / 143,713 transactions
+(30.0 blocks/s and 2,764 tx/s) while Pebble compacted 3.63 GB in / 3.33 GB out
+and reduced debt by 348 MB. Ordinary full recorder capture remained 100%
+covered and averaged 3.86 microseconds; filtered capture averaged 2.11
+microseconds and total capture fell to 0.278 ms per enabled block, 24% below
+P4.32's 0.366-ms window. The complete carrier also reduced observed write
+cells from about 16.8 to 9.5 per transaction by eliminating duplicate journal
+visits. All 137 retry publications matched, with zero unsupported/error/
+mismatch and only one 128-ms commit-backpressure event. Execution is no longer
+the leading measured constraint; sustained compaction write amplification is
+the next alignment target.
+
+#### P4.34: Schema-owned physical-write attribution
+
+A 30-second storage window after P4.33 showed 1.71 million coalesced
+blockbuffer operations, about 2.65 GB of logical database writes, 329 MB of L0
+flush output, 1.50 GB compaction input / 1.46 GB compaction output, and 3.39 GB
+of OS-reported physical writes. The buffer already collapsed 2.55 million
+input operations to those 1.71 million final rows, so another blind merge or
+larger batch cannot explain which data should be removed. Existing metrics did
+not attribute the final rows to commitment branches, latest state, temporal
+history, staged bodies, blocks, or transaction indexes.
+
+Rawdb now owns a low-cardinality physical-key classifier, and blockbuffer
+exports sampled final-operation and logical-byte counters for each schema
+family under `blockbuffer/flush/family/<family>/sampled_{ops,bytes}`. Only one
+of every 32 successfully committed flush groups is scanned; the sampled-group
+counter supplies the denominator. This keeps the diagnostic allocation-free
+and limits its coalesced-flush benchmark overhead to roughly 0.6%, versus about
+8% when every group was classified. It changes neither keys nor values,
+coalescing, batch sizing, WAL behavior, or flush order.
+
+The deployment sample will use family byte shares, rather than extrapolated
+absolute counts, to choose the next change. A commitment-dominated result
+points to Erigon-style branch aggregation/checkpointing; history dominance
+points to earlier append-only cold migration and hot index pruning; staged or
+canonical body dominance points to bypassing the LSM for immutable sequential
+payloads. No storage family is removed solely from aggregate compaction data.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

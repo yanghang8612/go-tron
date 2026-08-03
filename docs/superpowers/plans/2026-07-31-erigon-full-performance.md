@@ -186,6 +186,11 @@
 
 ## P5: Snapshot and cold steady state
 
+- [x] Add allocation-free sampled physical-write attribution by rawdb schema
+  family at the final coalesced blockbuffer/Pebble boundary.
+- [ ] Run the physical-write family production sample and select the first
+  write-amplification reduction from commitment, history, or immutable body
+  ownership evidence.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

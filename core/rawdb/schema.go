@@ -3,10 +3,99 @@ package rawdb
 import (
 	"encoding/binary"
 	"strconv"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+// PhysicalKeyFamily is a low-cardinality classification of persisted rawdb
+// keys. It is intentionally schema-owned: diagnostics outside rawdb must not
+// duplicate physical prefixes merely to attribute write amplification.
+type PhysicalKeyFamily uint8
+
+const (
+	PhysicalKeyFamilyOther PhysicalKeyFamily = iota
+	PhysicalKeyFamilyCommitment
+	PhysicalKeyFamilyAccountLatest
+	PhysicalKeyFamilyKVLatest
+	PhysicalKeyFamilyKVGeneration
+	PhysicalKeyFamilyStateCode
+	PhysicalKeyFamilyStateHistory
+	PhysicalKeyFamilyStagedBody
+	PhysicalKeyFamilyBlockBody
+	PhysicalKeyFamilyTransactionIndex
+	PhysicalKeyFamilyTransactionHistory
+	PhysicalKeyFamilyChainMetadata
+	PhysicalKeyFamilyCount
+)
+
+// PhysicalKeyFamilyName returns the stable metric suffix for a key family.
+func PhysicalKeyFamilyName(family PhysicalKeyFamily) string {
+	switch family {
+	case PhysicalKeyFamilyCommitment:
+		return "commitment"
+	case PhysicalKeyFamilyAccountLatest:
+		return "account_latest"
+	case PhysicalKeyFamilyKVLatest:
+		return "kv_latest"
+	case PhysicalKeyFamilyKVGeneration:
+		return "kv_generation"
+	case PhysicalKeyFamilyStateCode:
+		return "state_code"
+	case PhysicalKeyFamilyStateHistory:
+		return "state_history"
+	case PhysicalKeyFamilyStagedBody:
+		return "staged_body"
+	case PhysicalKeyFamilyBlockBody:
+		return "block_body"
+	case PhysicalKeyFamilyTransactionIndex:
+		return "transaction_index"
+	case PhysicalKeyFamilyTransactionHistory:
+		return "transaction_history"
+	case PhysicalKeyFamilyChainMetadata:
+		return "chain_metadata"
+	default:
+		return "other"
+	}
+}
+
+// ClassifyPhysicalKeyString assigns a rawdb key to one stable storage family.
+// String input lets blockbuffer classify its already-owned immutable map keys
+// without allocating []byte wrappers on the flush path.
+func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
+	switch {
+	case strings.HasPrefix(key, CommitmentBranchKeyPrefix),
+		strings.HasPrefix(key, "state-commitment-domain-v1-"):
+		return PhysicalKeyFamilyCommitment
+	case strings.HasPrefix(key, "state-account-latest-v1-"):
+		return PhysicalKeyFamilyAccountLatest
+	case strings.HasPrefix(key, "state-kv-latest-v2-"):
+		return PhysicalKeyFamilyKVLatest
+	case strings.HasPrefix(key, "state-kv-generation-v2-"):
+		return PhysicalKeyFamilyKVGeneration
+	case strings.HasPrefix(key, "state-code-v1-"):
+		return PhysicalKeyFamilyStateCode
+	case strings.HasPrefix(key, "state-tx-range-v1-"),
+		strings.HasPrefix(key, "state-changeset-v2-"),
+		strings.HasPrefix(key, "state-change-index-v2-"):
+		return PhysicalKeyFamilyStateHistory
+	case strings.HasPrefix(key, "sync-staged-block-v1-"):
+		return PhysicalKeyFamilyStagedBody
+	case strings.HasPrefix(key, "b-"):
+		return PhysicalKeyFamilyBlockBody
+	case strings.HasPrefix(key, "tx-"):
+		return PhysicalKeyFamilyTransactionIndex
+	case strings.HasPrefix(key, "ti-"), strings.HasPrefix(key, "tib-"):
+		return PhysicalKeyFamilyTransactionHistory
+	case key == "LastBlock", key == "LastSolidBlock", key == "total-tx-count",
+		strings.HasPrefix(key, "bh-"), strings.HasPrefix(key, "bnh-"),
+		strings.HasPrefix(key, "bsr-"), strings.HasPrefix(key, stageProgressPrefixString):
+		return PhysicalKeyFamilyChainMetadata
+	default:
+		return PhysicalKeyFamilyOther
+	}
+}
 
 // CommitmentBranchKeyPrefix is exported for the block buffer's commitment
 // parent cache. It is the physical prefix of the only supported staged

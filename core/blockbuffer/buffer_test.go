@@ -881,6 +881,54 @@ func TestFlushLayersRecordsCoalescingMetrics(t *testing.T) {
 	}
 }
 
+func TestFlushLayersRecordsPhysicalFamilyMetricsAfterCoalescing(t *testing.T) {
+	sequenceBefore := flushPhysicalFamilySampleSequence.Swap(0)
+	defer flushPhysicalFamilySampleSequence.Store(sequenceBefore)
+	owner := new(Buffer)
+	commitmentKey := rawdb.CommitmentBranchKeyPrefix + "branch"
+	accountKey := "state-account-latest-v1-owner"
+	blockKey := "b-height"
+	first := newLayer(bufHash(1), 1)
+	owner.putIntoString(first, commitmentKey, []byte("old"))
+	owner.putIntoString(first, accountKey, []byte("account"))
+	second := newLayer(bufHash(2), 2)
+	owner.putIntoString(second, commitmentKey, []byte("new"))
+	owner.putIntoString(second, blockKey, []byte("block"))
+
+	type snapshot struct {
+		family rawdb.PhysicalKeyFamily
+		ops    int64
+		bytes  int64
+	}
+	families := []snapshot{
+		{family: rawdb.PhysicalKeyFamilyCommitment},
+		{family: rawdb.PhysicalKeyFamilyAccountLatest},
+		{family: rawdb.PhysicalKeyFamilyBlockBody},
+	}
+	for i := range families {
+		family := families[i].family
+		families[i].ops = flushFamilyOpsCounters[family].Snapshot().Count()
+		families[i].bytes = flushFamilyBytesCounters[family].Snapshot().Count()
+	}
+
+	if _, err := flushLayers([]*layer{first, second}, rawdb.NewMemoryDatabase()); err != nil {
+		t.Fatal(err)
+	}
+	wantBytes := map[rawdb.PhysicalKeyFamily]int64{
+		rawdb.PhysicalKeyFamilyCommitment:    int64(len(commitmentKey) + len("new")),
+		rawdb.PhysicalKeyFamilyAccountLatest: int64(len(accountKey) + len("account")),
+		rawdb.PhysicalKeyFamilyBlockBody:     int64(len(blockKey) + len("block")),
+	}
+	for _, before := range families {
+		if got := flushFamilyOpsCounters[before.family].Snapshot().Count() - before.ops; got != 1 {
+			t.Fatalf("%s ops delta = %d, want 1", rawdb.PhysicalKeyFamilyName(before.family), got)
+		}
+		if got := flushFamilyBytesCounters[before.family].Snapshot().Count() - before.bytes; got != wantBytes[before.family] {
+			t.Fatalf("%s bytes delta = %d, want %d", rawdb.PhysicalKeyFamilyName(before.family), got, wantBytes[before.family])
+		}
+	}
+}
+
 func TestFlushUpToRecordsSuccessfulCallMetric(t *testing.T) {
 	dst := rawdb.NewMemoryDatabase()
 	b := New(dst)

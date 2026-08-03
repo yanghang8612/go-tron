@@ -72,6 +72,9 @@ var (
 	baseReadCacheWindowAdmissionThrottledCounter = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_throttled", nil)
 	baseReadCacheWindowAdmissionRelaxedCounter   = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_relaxed", nil)
 	baseReadCachePrefetchUsefulCounter           = metrics.NewRegisteredCounter("blockbuffer/base_cache/prefetch/useful_hits", nil)
+	flushFamilyOpsCounters                       = newFlushFamilyCounters("sampled_ops")
+	flushFamilyBytesCounters                     = newFlushFamilyCounters("sampled_bytes")
+	flushFamilySampledGroupsCounter              = metrics.NewRegisteredCounter("blockbuffer/flush/family/sampled_groups", nil)
 	commitmentParentDepthCacheCounters           = [...]*metrics.Counter{
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_5_8/cache_resolved", nil),
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_9_16/cache_resolved", nil),
@@ -85,6 +88,19 @@ var (
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_33_plus/durable_reads", nil),
 	}
 )
+
+const flushPhysicalFamilySampleInterval = uint64(32)
+
+var flushPhysicalFamilySampleSequence atomic.Uint64
+
+func newFlushFamilyCounters(unit string) [rawdb.PhysicalKeyFamilyCount]*metrics.Counter {
+	var counters [rawdb.PhysicalKeyFamilyCount]*metrics.Counter
+	for family := rawdb.PhysicalKeyFamily(0); family < rawdb.PhysicalKeyFamilyCount; family++ {
+		name := "blockbuffer/flush/family/" + rawdb.PhysicalKeyFamilyName(family) + "/" + unit
+		counters[family] = metrics.NewRegisteredCounter(name, nil)
+	}
+	return counters
+}
 
 // layer is a single applyBlock's worth of buffered mutations.
 //
@@ -2626,6 +2642,16 @@ func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushG
 			returnFlushMergedOps(merged)
 			return flushed, err
 		}
+		if flushPhysicalFamilySampleSequence.Add(1)%flushPhysicalFamilySampleInterval == 1 {
+			var families flushPhysicalFamilyStats
+			if merged == nil {
+				families.addLayer(layers[start])
+			} else {
+				families.addMerged(merged.ops)
+			}
+			families.publish()
+			flushFamilySampledGroupsCounter.Inc(1)
+		}
 		outputOps := queuedOps
 		if merged != nil {
 			outputOps = len(merged.ops)
@@ -2831,6 +2857,59 @@ type flushMergedOps struct {
 	ops        map[string]mergedLayerOp
 	promotions [layerShardCount][]mergedPromotion
 	highWater  int
+}
+
+type flushPhysicalFamilyTotal struct {
+	ops   int64
+	bytes int64
+}
+
+type flushPhysicalFamilyStats [rawdb.PhysicalKeyFamilyCount]flushPhysicalFamilyTotal
+
+func (s *flushPhysicalFamilyStats) add(key string, value []byte, deleted bool) {
+	family := rawdb.ClassifyPhysicalKeyString(key)
+	total := &s[family]
+	total.ops++
+	total.bytes += int64(len(key))
+	if !deleted {
+		total.bytes += int64(len(value))
+	}
+}
+
+func (s *flushPhysicalFamilyStats) addLayer(layer *layer) {
+	if layer == nil {
+		return
+	}
+	for i := range layer.shards {
+		shard := &layer.shards[i]
+		shard.mu.RLock()
+		for key, value := range shard.writes {
+			if durable, ok := shard.durableWrites[key]; ok && bytes.Equal(durable, value) {
+				continue
+			}
+			s.add(key, value, false)
+		}
+		for key := range shard.deletes {
+			s.add(key, nil, true)
+		}
+		shard.mu.RUnlock()
+	}
+}
+
+func (s *flushPhysicalFamilyStats) addMerged(ops map[string]mergedLayerOp) {
+	for key, op := range ops {
+		s.add(key, op.value, op.delete)
+	}
+}
+
+func (s *flushPhysicalFamilyStats) publish() {
+	for family, total := range s {
+		if total.ops == 0 {
+			continue
+		}
+		flushFamilyOpsCounters[family].Inc(total.ops)
+		flushFamilyBytesCounters[family].Inc(total.bytes)
+	}
 }
 
 var flushMergedOpsPool = sync.Pool{
