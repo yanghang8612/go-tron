@@ -17,6 +17,7 @@ type DomainChangeStage struct {
 	state     *StateDB
 	publisher StateDomainChangePublisher
 	tx        rawdb.StateTxRange
+	pending   []*rawdb.StateDomainChange
 }
 
 func (s *StateDB) BeginDomainChangeStage(writer ethdb.KeyValueWriter, txRange *rawdb.StateTxRange) (*DomainChangeStage, error) {
@@ -64,14 +65,41 @@ func (s *DomainChangeStage) FlushOrdinal(mark int, ordinal uint64) error {
 	if err != nil {
 		return err
 	}
-	return s.state.publishDomainChangesSince(s.publisher, mark, txNum)
+	return s.collectPending(mark, txNum)
 }
 
 func (s *DomainChangeStage) FlushFinal() error {
 	if s == nil || s.state == nil {
 		return nil
 	}
-	return s.state.publishDomainChangesSince(s.publisher, s.state.changeSet.journalMark, s.tx.EndTxNum)
+	if err := s.collectPending(s.state.changeSet.journalMark, s.tx.EndTxNum); err != nil {
+		return err
+	}
+	if len(s.pending) == 0 {
+		return nil
+	}
+	if s.publisher == nil {
+		return fmt.Errorf("state domain change stage: nil publisher")
+	}
+	if publisher, ok := s.publisher.(StateDomainChangeBlockPublisher); ok {
+		if err := publisher.PublishStateDomainChangeBlock(s.pending); err != nil {
+			return err
+		}
+	} else if err := s.publisher.PublishStateDomainChanges(s.pending); err != nil {
+		return err
+	}
+	s.pending = nil
+	return nil
+}
+
+func (s *DomainChangeStage) collectPending(mark int, txNum uint64) error {
+	changes, err := s.state.collectDomainChangesSince(mark, txNum)
+	if err != nil {
+		return err
+	}
+	s.pending = append(s.pending, changes...)
+	s.state.finishDomainChangeFlush()
+	return nil
 }
 
 func (s *DomainChangeStage) EndTxNum() uint64 {
@@ -87,6 +115,13 @@ type StateDomainChangePublisher interface {
 	PublishStateDomainChanges(changes []*rawdb.StateDomainChange) error
 }
 
+// StateDomainChangeBlockPublisher is the canonical block-final fast path.
+// DomainChangeStage falls back to StateDomainChangePublisher for custom test or
+// repair publishers that intentionally retain the positive-sequence row form.
+type StateDomainChangeBlockPublisher interface {
+	PublishStateDomainChangeBlock(changes []*rawdb.StateDomainChange) error
+}
+
 // StateDomainChangePublicationConfig registers the hot-history publication
 // steps for one temporal history domain. The default config writes rawdb
 // tx-ranges, rows, and inverse indexes; future configs can add or replace
@@ -95,6 +130,7 @@ type StateDomainChangePublicationConfig struct {
 	Name              string
 	WriteTxRange      func(ethdb.KeyValueWriter, uint64, tcommon.Hash, uint64, uint64) error
 	WriteRow          func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error
+	WriteBlock        func(ethdb.KeyValueWriter, []*rawdb.StateDomainChange) error
 	WriteInverseIndex func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error
 	// SkipInverseIndex is a bulk-sync policy, not a history-disable switch.
 	// Authoritative rows are still written and a hash-bound derived stage later
@@ -115,6 +151,7 @@ func StateDomainChangePublicationConfigFromDomain(cfg snapshots.DomainCfg) State
 		Name:              cfg.Name,
 		WriteTxRange:      cfg.WriteHotHistoryTxRange,
 		WriteRow:          cfg.WriteHotHistoryRow,
+		WriteBlock:        cfg.WriteHotHistoryBlock,
 		WriteInverseIndex: cfg.WriteHotHistoryIndex,
 	}
 }
@@ -166,6 +203,36 @@ func (r StateDomainChangeRunner) PublishStateDomainChanges(changes []*rawdb.Stat
 			if err := r.cfg.WriteInverseIndex(r.writer, change); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func (r StateDomainChangeRunner) PublishStateDomainChangeBlock(changes []*rawdb.StateDomainChange) error {
+	if len(changes) == 0 {
+		return nil
+	}
+	if r.writer == nil {
+		return fmt.Errorf("state domain change stage: nil publisher")
+	}
+	if r.cfg.Name == "" {
+		return fmt.Errorf("state domain change stage: unnamed publication config")
+	}
+	if r.cfg.WriteBlock == nil {
+		return r.PublishStateDomainChanges(changes)
+	}
+	if !r.cfg.SkipInverseIndex && r.cfg.WriteInverseIndex == nil {
+		return fmt.Errorf("state domain change stage: incomplete publication config %q", r.cfg.Name)
+	}
+	if err := r.cfg.WriteBlock(r.writer, changes); err != nil {
+		return err
+	}
+	if r.cfg.SkipInverseIndex {
+		return nil
+	}
+	for _, change := range changes {
+		if err := r.cfg.WriteInverseIndex(r.writer, change); err != nil {
+			return err
 		}
 	}
 	return nil

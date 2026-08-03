@@ -60,7 +60,7 @@ func TestDefaultDomainRegistryDrivesSnapshotFamilies(t *testing.T) {
 		history[0].ReadHistoryRange == nil || history[0].ReadHistoryByKey == nil ||
 		history[0].IterateHistoryRange == nil || history[0].IterateHistoryByKey == nil ||
 		history[0].CompactHistory == nil ||
-		history[0].WriteHotHistoryRow == nil || history[0].WriteHotHistoryIndex == nil ||
+		history[0].WriteHotHistoryRow == nil || history[0].WriteHotHistoryBlock == nil || history[0].WriteHotHistoryIndex == nil ||
 		history[0].ReadHotHistoryTxRange == nil || history[0].IterateHotHistoryTxRanges == nil ||
 		history[0].DeleteHotHistoryTxRange == nil ||
 		history[0].DeleteHotHistoryBlock == nil ||

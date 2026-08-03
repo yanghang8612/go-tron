@@ -1933,6 +1933,64 @@ fold. These local measurements establish the format win; the deployment gate
 must still compare normalized commitment/coalesced/physical bytes and verify a
 clean restart with zero commitment/equivalence errors.
 
+The production deployment restarted cleanly on the mixed legacy/new datadir
+and resumed active sync without rebuilding CommitmentDomain. Three windows
+covered 7,013 blocks / 330,447 transactions in 160 seconds (43.83 blocks/s,
+2,065 tx/s) with zero Pebble write delay and zero contract, parallel execution,
+ordered-publication, commitment-stage, or history-stage errors/mismatches. Two
+complete family samples reduced commitment bytes from 563.32 to 556.54 per
+final coalesced operation (1.20%); the unchanged control family, changesets,
+moved only 0.53%. The gain is smaller than the fresh-tree corpus because a
+coalesced commitment operation contains dense hash ancestors and untouched
+legacy leaves are migrated only when their branch changes.
+
+Final coalesced bytes fell 1.91% per transaction across the three windows.
+OS writes fell 28.7% per transaction and compaction bytes fell further, but
+those are directional only: the new windows accumulated 348 MB of compaction
+debt while the paired pre-deploy window drained 470 MB, and restart changed the
+LSM work queue. The exact format/corpus result, normalized commitment sample,
+clean mixed-format restart, and zero-error sync pass P4.41 without claiming a
+large throughput win. The remaining commitment cost is the repeated complete
+dense ancestor branch, not leaf-key bytes. Erigon also merges partial updates
+with the prior branch before writing the hot latest domain, so the next useful
+step is reducing complete-branch write frequency through longer aggregation
+ownership and the cold immutable lifecycle, not persisting a delta chain.
+
+#### P4.42: Block-packed hot changesets
+
+After P4.41, `state_changeset` remained the other dominant hot family: complete
+samples were 36--37% of attributed commitment-plus-history bytes and averaged
+about 177 bytes per final coalesced Put. The encoded previous-image row was
+about 143 bytes, leaving roughly 34 bytes of repeated physical changeset key
+per mutation. Unwind, hot/cold history iteration, inverse-index rebuild, and
+as-of reads all consume a whole candidate block changeset; only the diagnostic
+point accessor addresses a sequence directly. This makes per-row Pebble/WAL
+ownership pure write amplification on canonical sync.
+
+P4.42 extends the Erigon-style buffered previous-value boundary from a
+transaction flush to block finalization. `DomainChangeStage` still captures and
+stamps each successful transaction at its exact txNum, but retains those owned
+changes until the block-final mutation pass succeeds. The default registered
+history domain then emits one versioned RLP block container under sequence zero
+and publishes the same rebuildable inverse keys (or defers them in bulk sync)
+for every logical row. Failed blocks never publish a partial container.
+
+The container records its first sequence and preserves contiguous commit order.
+Positive-sequence rows remain read-compatible for legacy databases, snapshot
+restore, and repair tools. When both representations exist, a positive row has
+the old physical-key overwrite precedence for its sequence; block deletion
+walks the physical union so inverse keys from shadowed rows cannot leak. Direct
+reads prefer a positive repair row and otherwise decode the block container.
+No persisted delta chain or new consensus/state-root behavior is introduced.
+
+A deterministic 128-row account-KV corpus reduced logical key-plus-value bytes
+from 11,408 to 6,971 (38.89%). A 512-row encoding benchmark on Apple M1 Max
+reduced publication time from roughly 143--146 us to 101--103 us, bytes
+allocated from 184 KB to about 171 KB, and allocations from 3,072 to about
+1,550. Production counters expose blocks, rows, encoded/logical bytes, avoided
+Puts, and avoided key bytes; these local results select the implementation but
+do not substitute for the deployment gate.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

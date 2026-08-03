@@ -133,9 +133,9 @@ func (s *StateDB) finishDomainChangeFlush() {
 }
 
 func (s *StateDB) collectJournalDomainChanges(entries []journalChange) ([]*rawdb.StateDomainChange, error) {
-	// Copy journal-owned slices exactly once while constructing the published
-	// changes. This isolates rollback/current-state data from custom publishers;
-	// prepareDomainChange and the rawdb writer must not copy them again.
+	// Copy journal-owned slices exactly once into block-stage ownership. The
+	// values must remain stable across later transactions until the complete
+	// block changeset is encoded by FlushFinal.
 	accounts := make(map[tcommon.Address]accountDomainJournalTouch)
 	kvs := make(map[string]kvDomainJournalTouch)
 	storages := make(map[string]storageDomainJournalTouch)
@@ -366,9 +366,9 @@ func (c *domainChangeSetCapture) prepareDomainChange(change *rawdb.StateDomainCh
 		return nil
 	}
 	c.seq++
-	// All callers construct a fresh change for this capture. Stamp it in place:
-	// cloning Key/Prev/Next here would duplicate large account envelopes before
-	// the synchronous publisher immediately encodes them into owned DB bytes.
+	// All callers construct a fresh, publication-owned change. Stamp it in
+	// place; cloning Key/Prev/Next here would duplicate large account envelopes
+	// retained by the block stage until its final packed write.
 	change.BlockNum = c.blockNum
 	change.BlockHash = c.blockHash
 	change.TxNum = c.txNum

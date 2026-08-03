@@ -34,7 +34,7 @@ func (p *capturingDomainChangePublisher) PublishStateDomainChanges(changes []*ra
 
 func TestDefaultStateDomainChangePublicationConfigUsesRegisteredHistoryDomain(t *testing.T) {
 	cfg := DefaultStateDomainChangePublicationConfig()
-	if cfg.Name != "HistoryDomain" || cfg.WriteTxRange == nil || cfg.WriteRow == nil || cfg.WriteInverseIndex == nil {
+	if cfg.Name != "HistoryDomain" || cfg.WriteTxRange == nil || cfg.WriteRow == nil || cfg.WriteBlock == nil || cfg.WriteInverseIndex == nil {
 		t.Fatalf("default publication config = %+v", cfg)
 	}
 }
@@ -146,6 +146,40 @@ func TestStateDomainChangeRunnerCanDeferInverseIndex(t *testing.T) {
 	}
 	if rowCalls != 1 {
 		t.Fatalf("row calls = %d, want 1", rowCalls)
+	}
+}
+
+func TestStateDomainChangeRunnerPublishesCompleteBlockOnce(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	blockCalls := 0
+	indexCalls := 0
+	cfg := StateDomainChangePublicationConfig{
+		Name: "packed-history",
+		WriteRow: func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error {
+			t.Fatal("complete-block publisher used row writer")
+			return nil
+		},
+		WriteBlock: func(writer ethdb.KeyValueWriter, changes []*rawdb.StateDomainChange) error {
+			if writer != db || len(changes) != 2 {
+				t.Fatalf("block publication writer=%T changes=%d", writer, len(changes))
+			}
+			blockCalls++
+			return nil
+		},
+		WriteInverseIndex: func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error {
+			indexCalls++
+			return nil
+		},
+	}
+	changes := []*rawdb.StateDomainChange{
+		{BlockNum: 3, Seq: 1, FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: testAddr(1)},
+		{BlockNum: 3, Seq: 2, FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: testAddr(2)},
+	}
+	if err := NewStateDomainChangeRunner(db, cfg).PublishStateDomainChangeBlock(changes); err != nil {
+		t.Fatal(err)
+	}
+	if blockCalls != 1 || indexCalls != 2 {
+		t.Fatalf("block calls=%d index calls=%d, want 1/2", blockCalls, indexCalls)
 	}
 }
 
@@ -365,6 +399,12 @@ func TestDomainChangeStagePublishesThroughStageWriter(t *testing.T) {
 	if err := stage.FlushOrdinal(mark, 0); err != nil {
 		t.Fatalf("flush through stage writer: %v", err)
 	}
+	if changes := collectStateDomainChanges(t, stageWriter, 11); len(changes) != 0 {
+		t.Fatalf("transaction flush published partial block history: %+v", changes)
+	}
+	if err := stage.FlushFinal(); err != nil {
+		t.Fatalf("flush final through stage writer: %v", err)
+	}
 
 	changes := collectStateDomainChanges(t, stageWriter, 11)
 	if !hasDomainChange(changes, tcommon.SystemAccountAddress, kvdomains.SystemReward, key, false, nil, false, nil) {
@@ -379,6 +419,66 @@ func TestDomainChangeStagePublishesThroughStageWriter(t *testing.T) {
 	}
 	if len(blocks) != 1 || blocks[0] != 11 {
 		t.Fatalf("stage inverse blocks = %v, want [11]", blocks)
+	}
+}
+
+func TestDomainChangeStageRetriesCompleteBlockPublication(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), NewDatabase(disk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageWriter := ethrawdb.NewMemoryDatabase()
+	beginTxNum, endTxNum, err := rawdb.NextStateTxRange(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writes := 0
+	firstRows := 0
+	wantErr := errors.New("packed publication failed")
+	cfg := DefaultStateDomainChangePublicationConfig()
+	cfg.WriteBlock = func(writer ethdb.KeyValueWriter, changes []*rawdb.StateDomainChange) error {
+		writes++
+		if writes == 1 {
+			firstRows = len(changes)
+			return wantErr
+		}
+		if len(changes) != firstRows {
+			t.Fatalf("retried block rows = %d, want retained %d", len(changes), firstRows)
+		}
+		return rawdb.WriteStateDomainChangeBlockRows(writer, changes)
+	}
+	stage, err := sdb.BeginDomainChangeStageWithConfig(stageWriter, &rawdb.StateTxRange{
+		BlockNum: 12, BlockHash: tcommon.Hash{0x0c}, BeginTxNum: beginTxNum, EndTxNum: endTxNum,
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mark := stage.JournalMark()
+	key := []byte("reward/retry-packed")
+	if err := sdb.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.FlushOrdinal(mark, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.FlushFinal(); !errors.Is(err, wantErr) {
+		t.Fatalf("first complete-block publication error = %v, want %v", err, wantErr)
+	}
+	if err := stage.FlushFinal(); err != nil {
+		t.Fatalf("retry complete-block publication: %v", err)
+	}
+	if writes != 2 {
+		t.Fatalf("block writes = %d, want 2", writes)
+	}
+	changes := collectStateDomainChanges(t, stageWriter, 12)
+	for i, change := range changes {
+		if change.Seq != uint64(i+1) {
+			t.Fatalf("retried packed sequence[%d] = %d", i, change.Seq)
+		}
+	}
+	if len(changes) != firstRows || !hasDomainChange(changes, tcommon.SystemAccountAddress, kvdomains.SystemReward, key, false, nil, false, nil) {
+		t.Fatalf("retried packed changes = %+v", changes)
 	}
 }
 

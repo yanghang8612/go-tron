@@ -30,6 +30,12 @@ var (
 	stateChangeEncodingSamplePrevRows           = metrics.NewRegisteredCounter("state/history/changeset/sample/prev_rows", nil)
 	stateChangeEncodingSampleNextRows           = metrics.NewRegisteredCounter("state/history/changeset/sample/next_rows", nil)
 	stateChangeEncodingSampleOmittedNextRows    = metrics.NewRegisteredCounter("state/history/changeset/sample/omitted_next_rows", nil)
+	stateChangeBlockPackBlocksCounter           = metrics.NewRegisteredCounter("state/history/changeset/block_pack/blocks", nil)
+	stateChangeBlockPackRowsCounter             = metrics.NewRegisteredCounter("state/history/changeset/block_pack/rows", nil)
+	stateChangeBlockPackEncodedBytesCounter     = metrics.NewRegisteredCounter("state/history/changeset/block_pack/encoded_bytes", nil)
+	stateChangeBlockPackLogicalBytesCounter     = metrics.NewRegisteredCounter("state/history/changeset/block_pack/logical_bytes", nil)
+	stateChangeBlockPackWritesAvoidedCounter    = metrics.NewRegisteredCounter("state/history/changeset/block_pack/writes_avoided", nil)
+	stateChangeBlockPackKeyBytesAvoidedCounter  = metrics.NewRegisteredCounter("state/history/changeset/block_pack/key_bytes_avoided", nil)
 )
 
 // NextStateTxRange returns the compact global txNum range for the next block.
@@ -126,6 +132,18 @@ type persistedStateDomainChange struct {
 	Key        []byte
 	PrevExists bool
 	Prev       []byte
+}
+
+const persistedStateDomainChangeBlockVersion = uint8(1)
+
+// persistedStateDomainChangeBlock removes one physical Pebble key per state
+// mutation while preserving the exact transaction/sequence order needed by
+// unwind and temporal reads. Sequence zero in the block prefix owns this
+// container; FirstSeq makes the format self-describing for repair/import tools.
+type persistedStateDomainChangeBlock struct {
+	Version  uint8
+	FirstSeq uint64
+	Rows     []persistedStateDomainChange
 }
 
 // legacyPersistedStateDomainChange is the previous-image-only layout emitted
@@ -238,6 +256,73 @@ func WriteStateDomainChangeRow(db ethdb.KeyValueWriter, change *StateDomainChang
 	return db.Put(stateChangeSetKey(change.BlockNum, change.Seq), data)
 }
 
+// WriteStateDomainChangeBlockRows publishes a complete block's authoritative
+// history as one value. Canonical execution calls this only after every tx and
+// block-final mutation has succeeded, so no reader can observe a partial pack.
+// Positive-sequence single rows remain readable for restart/repair compatibility.
+func WriteStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDomainChange) error {
+	if len(changes) == 0 {
+		return nil
+	}
+	first := changes[0]
+	if first == nil {
+		return errors.New("rawdb: nil StateDomainChange at block pack index 0")
+	}
+	blockNum := first.BlockNum
+	firstSeq := first.Seq
+	if firstSeq == 0 {
+		return fmt.Errorf("rawdb: state domain change block %d starts at reserved sequence zero", blockNum)
+	}
+	rows := make([]persistedStateDomainChange, len(changes))
+	for i, change := range changes {
+		if change == nil {
+			return fmt.Errorf("rawdb: nil StateDomainChange at block pack index %d", i)
+		}
+		if change.BlockNum != blockNum {
+			return fmt.Errorf("rawdb: state domain change block pack crosses blocks %d and %d", blockNum, change.BlockNum)
+		}
+		wantSeq := firstSeq + uint64(i)
+		if wantSeq < firstSeq || change.Seq != wantSeq {
+			return fmt.Errorf("rawdb: state domain change block %d sequence %d at index %d, want %d", blockNum, change.Seq, i, wantSeq)
+		}
+		if err := validateStateDomainChange(change); err != nil {
+			return err
+		}
+		rows[i] = persistedStateDomainChange{
+			TxNum:      change.TxNum,
+			FlatDomain: change.FlatDomain,
+			Owner:      change.Owner,
+			Generation: change.Generation,
+			Domain:     change.Domain,
+			Key:        change.Key,
+			PrevExists: change.PrevExists,
+			Prev:       change.Prev,
+		}
+		observeStateChangeEncodingLazy(change)
+	}
+	data, err := rlp.EncodeToBytes(&persistedStateDomainChangeBlock{
+		Version:  persistedStateDomainChangeBlockVersion,
+		FirstSeq: firstSeq,
+		Rows:     rows,
+	})
+	if err != nil {
+		return err
+	}
+	physicalKey := stateChangeSetKey(blockNum, 0)
+	if err := db.Put(physicalKey, data); err != nil {
+		return err
+	}
+	stateChangeBlockPackBlocksCounter.Inc(1)
+	stateChangeBlockPackRowsCounter.Inc(int64(len(changes)))
+	stateChangeBlockPackEncodedBytesCounter.Inc(int64(len(data)))
+	stateChangeBlockPackLogicalBytesCounter.Inc(int64(len(physicalKey) + len(data)))
+	if avoided := len(changes) - 1; avoided > 0 {
+		stateChangeBlockPackWritesAvoidedCounter.Inc(int64(avoided))
+		stateChangeBlockPackKeyBytesAvoidedCounter.Inc(int64(avoided * len(physicalKey)))
+	}
+	return nil
+}
+
 // observeStateChangeEncoding attributes the encoded previous-image-only row
 // without decoding or allocating. The fixed bucket contains tx/domain/owner
 // metadata, flags, and RLP framing. omitted_next_bytes measures
@@ -248,6 +333,21 @@ func observeStateChangeEncoding(change *StateDomainChange, encoded []byte) {
 	if change == nil || stateChangeEncodingSampleSequence.Add(1)%stateChangeEncodingSampleInterval != 1 {
 		return
 	}
+	observeStateChangeEncodingSample(change, encoded)
+}
+
+func observeStateChangeEncodingLazy(change *StateDomainChange) {
+	if change == nil || stateChangeEncodingSampleSequence.Add(1)%stateChangeEncodingSampleInterval != 1 {
+		return
+	}
+	encoded, err := encodePersistedStateDomainChange(change)
+	if err != nil {
+		return
+	}
+	observeStateChangeEncodingSample(change, encoded)
+}
+
+func observeStateChangeEncodingSample(change *StateDomainChange, encoded []byte) {
 	keyBytes := len(change.Key)
 	prevBytes := len(change.Prev)
 	omittedNextBytes := len(change.Next)
@@ -324,6 +424,39 @@ func decodePersistedStateDomainChange(data []byte, blockNum, seq uint64) (*State
 	return cloneStateDomainChange(&legacy), nil
 }
 
+func decodePersistedStateDomainChangeBlock(data []byte, blockNum uint64) ([]*StateDomainChange, error) {
+	var block persistedStateDomainChangeBlock
+	if err := rlp.DecodeBytes(data, &block); err != nil {
+		return nil, err
+	}
+	if block.Version != persistedStateDomainChangeBlockVersion {
+		return nil, fmt.Errorf("rawdb: unsupported state domain change block version %d", block.Version)
+	}
+	if len(block.Rows) == 0 {
+		return nil, fmt.Errorf("rawdb: empty state domain change block pack for block %d", blockNum)
+	}
+	if block.FirstSeq == 0 || uint64(len(block.Rows)-1) > ^uint64(0)-block.FirstSeq {
+		return nil, fmt.Errorf("rawdb: invalid state domain change block sequence range for block %d", blockNum)
+	}
+	changes := make([]*StateDomainChange, len(block.Rows))
+	for i := range block.Rows {
+		row := &block.Rows[i]
+		changes[i] = &StateDomainChange{
+			BlockNum:   blockNum,
+			TxNum:      row.TxNum,
+			Seq:        block.FirstSeq + uint64(i),
+			FlatDomain: row.FlatDomain,
+			Owner:      row.Owner,
+			Generation: row.Generation,
+			Domain:     row.Domain,
+			Key:        row.Key,
+			PrevExists: row.PrevExists,
+			Prev:       row.Prev,
+		}
+	}
+	return changes, nil
+}
+
 // WriteStateDomainChangeInverseIndex writes the latest-key -> block index for
 // an already materialized StateDomainChange row.
 func WriteStateDomainChangeInverseIndex(db ethdb.KeyValueWriter, change *StateDomainChange) error {
@@ -361,18 +494,125 @@ func validateStateDomainChange(change *StateDomainChange) error {
 }
 
 func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*StateDomainChange, bool, error) {
-	data, ok, err := readPresentValue(db, stateChangeSetKey(blockNum, seq), fmt.Sprintf("state domain change for block %d seq %d", blockNum, seq))
-	if err != nil || !ok {
-		return nil, ok, err
+	// A positive-sequence repair/transition row has the same overwrite
+	// precedence it had before block packs existed.
+	if seq != 0 {
+		data, ok, err := readPresentValue(db, stateChangeSetKey(blockNum, seq), fmt.Sprintf("state domain change for block %d seq %d", blockNum, seq))
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			row, err := decodePersistedStateDomainChange(data, blockNum, seq)
+			if err != nil {
+				return nil, false, err
+			}
+			return row, true, nil
+		}
 	}
-	row, err := decodePersistedStateDomainChange(data, blockNum, seq)
+	packed, packedOK, err := readPresentValue(db, stateChangeSetKey(blockNum, 0), fmt.Sprintf("packed state domain changes for block %d", blockNum))
 	if err != nil {
 		return nil, false, err
 	}
-	return row, true, nil
+	if packedOK {
+		changes, err := decodePersistedStateDomainChangeBlock(packed, blockNum)
+		if err == nil {
+			firstSeq := changes[0].Seq
+			if seq >= firstSeq && seq-firstSeq < uint64(len(changes)) {
+				return changes[seq-firstSeq], true, nil
+			}
+			return nil, false, nil
+		}
+		// Sequence zero was not reserved by the legacy schema. A few repair
+		// and fixture writers used it for an ordinary row, so only treat the
+		// key as a block pack when the versioned container decodes strictly.
+		if seq == 0 {
+			row, legacyErr := decodePersistedStateDomainChange(packed, blockNum, 0)
+			if legacyErr != nil {
+				return nil, false, err
+			}
+			return row, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	prefix := stateChangeSetBlockPrefix(blockNum)
+	it := db.NewIterator(prefix, nil)
+	defer it.Release()
+	var packed []*StateDomainChange
+	var packedExtras []*StateDomainChange
+	for it.Next() {
+		key := it.Key()
+		if !bytes.HasPrefix(key, prefix) || len(key) != len(stateChangeSetPrefix)+16 {
+			continue
+		}
+		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
+		if seq == 0 {
+			changes, err := decodePersistedStateDomainChangeBlock(it.Value(), blockNum)
+			if err == nil {
+				packed = changes
+				continue
+			}
+			row, legacyErr := decodePersistedStateDomainChange(it.Value(), blockNum, 0)
+			if legacyErr != nil {
+				return err
+			}
+			cont, err := fn(row)
+			if err != nil {
+				return err
+			}
+			if !cont {
+				return nil
+			}
+			continue
+		}
+		row, err := decodePersistedStateDomainChange(it.Value(), blockNum, seq)
+		if err != nil {
+			return err
+		}
+		if len(packed) > 0 {
+			firstSeq := packed[0].Seq
+			if seq >= firstSeq && seq-firstSeq < uint64(len(packed)) {
+				// Preserve the old physical-key overwrite rule when a repair or
+				// transition writer adds positive rows beside a block pack.
+				packed[seq-firstSeq] = row
+			} else {
+				packedExtras = append(packedExtras, row)
+			}
+			continue
+		}
+		cont, err := fn(row)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	if len(packedExtras) > 0 {
+		packed = append(packed, packedExtras...)
+		sort.Slice(packed, func(i, j int) bool { return packed[i].Seq < packed[j].Seq })
+	}
+	for _, row := range packed {
+		cont, err := fn(row)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return nil
+}
+
+// iteratePhysicalStateDomainChanges includes shadowed rows from both the block
+// pack and positive-sequence repair representation. Logical readers use the
+// overwrite view above; deletion needs the union so no inverse key survives.
+func iteratePhysicalStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
 	prefix := stateChangeSetBlockPrefix(blockNum)
 	it := db.NewIterator(prefix, nil)
 	defer it.Release()
@@ -382,16 +622,24 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 			continue
 		}
 		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
-		row, err := decodePersistedStateDomainChange(it.Value(), blockNum, seq)
+		if seq == 0 {
+			if changes, err := decodePersistedStateDomainChangeBlock(it.Value(), blockNum); err == nil {
+				for _, change := range changes {
+					cont, err := fn(change)
+					if err != nil || !cont {
+						return err
+					}
+				}
+				continue
+			}
+		}
+		change, err := decodePersistedStateDomainChange(it.Value(), blockNum, seq)
 		if err != nil {
 			return err
 		}
-		cont, err := fn(row)
-		if err != nil {
+		cont, err := fn(change)
+		if err != nil || !cont {
 			return err
-		}
-		if !cont {
-			return nil
 		}
 	}
 	return it.Error()
@@ -431,7 +679,7 @@ func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
 		inverseKeys = inverseKeys[:0]
 		return nil
 	}
-	if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+	if err := iteratePhysicalStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
 		latestKey, err := stateDomainChangeLatestKey(change)
 		if err != nil {
 			return false, err

@@ -231,9 +231,15 @@
 - [x] Shorten CommitmentDomain leaf identities from repeated full physical
   latest-domain keys to their already-computed 32-byte trie paths, while
   retaining read-only decoding and touched-branch migration for legacy rows.
-- [ ] Run the commitment path-leaf production gate and compare sampled
+- [x] Run the commitment path-leaf production gate and compare sampled
   commitment bytes, final coalesced bytes, physical writes, compaction, sync
   throughput, restart recovery, and root/equivalence errors.
+- [x] Retain transaction-ordered previous values until block finalization and
+  publish one versioned block-packed hot changeset value while preserving
+  positive-sequence repair/legacy rows and all temporal read/unwind semantics.
+- [ ] Run the block-packed changeset production gate and compare rows per pack,
+  avoided Put/key bytes, changeset/final-coalesced bytes, disk/compaction bytes,
+  stalls, sync throughput, restart recovery, and archive/unwind errors.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

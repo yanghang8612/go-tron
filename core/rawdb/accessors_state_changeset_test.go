@@ -157,6 +157,177 @@ func TestStateDomainChangeRoundTripAndIteration(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeBlockPackRoundTripAndLogicalBytes(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x19}
+	blocksBefore := stateChangeBlockPackBlocksCounter.Snapshot().Count()
+	rowsBefore := stateChangeBlockPackRowsCounter.Snapshot().Count()
+	encodedBefore := stateChangeBlockPackEncodedBytesCounter.Snapshot().Count()
+	logicalBefore := stateChangeBlockPackLogicalBytesCounter.Snapshot().Count()
+	writesAvoidedBefore := stateChangeBlockPackWritesAvoidedCounter.Snapshot().Count()
+	keysAvoidedBefore := stateChangeBlockPackKeyBytesAvoidedCounter.Snapshot().Count()
+	changes := make([]*StateDomainChange, 128)
+	individualBytes := 0
+	for i := range changes {
+		changes[i] = &StateDomainChange{
+			BlockNum:   19,
+			TxNum:      100 + uint64(i/4),
+			Seq:        uint64(i + 1),
+			FlatDomain: StateFlatDomainKVLatest,
+			Owner:      owner,
+			Generation: 2,
+			Domain:     kvdomains.SystemReward,
+			Key:        []byte(fmt.Sprintf("reward/%03d", i)),
+			PrevExists: true,
+			Prev:       []byte("previous-value"),
+			NextExists: true,
+			Next:       []byte("current-value"),
+		}
+		encoded, err := encodePersistedStateDomainChange(changes[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		individualBytes += len(stateChangeSetKey(19, uint64(i+1))) + len(encoded)
+	}
+	if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
+		t.Fatal(err)
+	}
+	packed, err := db.Get(stateChangeSetKey(19, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	packedBytes := len(stateChangeSetKey(19, 0)) + len(packed)
+	if packedBytes*100 >= individualBytes*80 {
+		t.Fatalf("packed logical bytes = %d, individual = %d, want >20%% reduction", packedBytes, individualBytes)
+	}
+	t.Logf("block pack logical bytes: individual=%d packed=%d reduction=%.2f%%", individualBytes, packedBytes, 100*(1-float64(packedBytes)/float64(individualBytes)))
+	metricChecks := []struct {
+		name      string
+		got, want int64
+	}{
+		{"blocks", stateChangeBlockPackBlocksCounter.Snapshot().Count() - blocksBefore, 1},
+		{"rows", stateChangeBlockPackRowsCounter.Snapshot().Count() - rowsBefore, int64(len(changes))},
+		{"encoded bytes", stateChangeBlockPackEncodedBytesCounter.Snapshot().Count() - encodedBefore, int64(len(packed))},
+		{"logical bytes", stateChangeBlockPackLogicalBytesCounter.Snapshot().Count() - logicalBefore, int64(packedBytes)},
+		{"writes avoided", stateChangeBlockPackWritesAvoidedCounter.Snapshot().Count() - writesAvoidedBefore, int64(len(changes) - 1)},
+		{"key bytes avoided", stateChangeBlockPackKeyBytesAvoidedCounter.Snapshot().Count() - keysAvoidedBefore, int64((len(changes) - 1) * len(stateChangeSetKey(19, 0)))},
+	}
+	for _, check := range metricChecks {
+		if check.got != check.want {
+			t.Fatalf("%s metric delta = %d, want %d", check.name, check.got, check.want)
+		}
+	}
+	if ok, err := db.Has(stateChangeSetKey(19, 1)); err != nil || ok {
+		t.Fatalf("positive-sequence row present after block pack: ok=%v err=%v", ok, err)
+	}
+
+	got, ok, err := ReadStateDomainChange(db, 19, 64)
+	if err != nil || !ok {
+		t.Fatalf("read packed change = ok:%v err:%v", ok, err)
+	}
+	if got.Seq != 64 || got.TxNum != changes[63].TxNum || !bytes.Equal(got.Key, changes[63].Key) || !bytes.Equal(got.Prev, changes[63].Prev) || got.NextExists {
+		t.Fatalf("packed change = %+v", got)
+	}
+	got.Prev[0] = 'x'
+	reread, ok, err := ReadStateDomainChange(db, 19, 64)
+	if err != nil || !ok || bytes.Equal(got.Prev, reread.Prev) {
+		t.Fatalf("packed reread aliases decoded bytes: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := ReadStateDomainChange(db, 19, 129); err != nil || ok {
+		t.Fatalf("out-of-range packed read = ok:%v err:%v", ok, err)
+	}
+	originalKey := append([]byte(nil), changes[63].Key...)
+	if err := WriteStateDomainChangeInverseIndex(db, changes[63]); err != nil {
+		t.Fatal(err)
+	}
+	override := *changes[63]
+	override.Key = []byte("reward/repaired")
+	override.Prev = []byte("repair-previous")
+	if err := WriteStateDomainChange(db, &override); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err = ReadStateDomainChange(db, 19, 64)
+	if err != nil || !ok || !bytes.Equal(got.Key, override.Key) || !bytes.Equal(got.Prev, override.Prev) {
+		t.Fatalf("positive row did not override packed sequence: got=%+v ok=%v err=%v", got, ok, err)
+	}
+
+	var seqs []uint64
+	if err := IterateStateDomainChanges(db, 19, func(change *StateDomainChange) (bool, error) {
+		seqs = append(seqs, change.Seq)
+		if change.Seq == override.Seq && !bytes.Equal(change.Key, override.Key) {
+			t.Fatalf("iteration did not apply packed-row override: %q", change.Key)
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(seqs) != len(changes) || seqs[0] != 1 || seqs[len(seqs)-1] != 128 {
+		t.Fatalf("packed sequences = %v", seqs)
+	}
+	if err := DeleteStateDomainChanges(db, 19); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.Has(stateChangeSetKey(19, 0)); err != nil || ok {
+		t.Fatalf("packed row remains after delete: ok=%v err=%v", ok, err)
+	}
+	for _, key := range [][]byte{originalKey, override.Key} {
+		var blocks []uint64
+		if err := IterateStateDomainChangeBlocks(db, owner, 2, kvdomains.SystemReward, key, func(blockNum uint64) (bool, error) {
+			blocks = append(blocks, blockNum)
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if len(blocks) != 0 {
+			t.Fatalf("inverse blocks remain for %q after packed delete: %v", key, blocks)
+		}
+	}
+}
+
+type discardStateDomainChangeWriter struct{}
+
+func (discardStateDomainChangeWriter) Put([]byte, []byte) error { return nil }
+func (discardStateDomainChangeWriter) Delete([]byte) error      { return nil }
+
+func BenchmarkWriteStateDomainChangeBlockRows(b *testing.B) {
+	const rows = 512
+	changes := make([]*StateDomainChange, rows)
+	owner := common.Address{0x41, 0x21}
+	for i := range changes {
+		changes[i] = &StateDomainChange{
+			BlockNum:   21,
+			TxNum:      1000 + uint64(i/8),
+			Seq:        uint64(i + 1),
+			FlatDomain: StateFlatDomainKVLatest,
+			Owner:      owner,
+			Generation: 3,
+			Domain:     kvdomains.ContractStorage,
+			Key:        []byte(fmt.Sprintf("storage/%04d", i)),
+			PrevExists: true,
+			Prev:       bytes.Repeat([]byte{byte(i)}, 32),
+		}
+	}
+	w := discardStateDomainChangeWriter{}
+	b.Run("individual", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			for _, change := range changes {
+				if err := WriteStateDomainChangeRow(w, change); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
+	b.Run("block-pack", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if err := WriteStateDomainChangeBlockRows(w, changes); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
 func TestWriteStateDomainChangeSamplesEncodingComponents(t *testing.T) {
 	sequenceBefore := stateChangeEncodingSampleSequence.Swap(0)
 	defer stateChangeEncodingSampleSequence.Store(sequenceBefore)

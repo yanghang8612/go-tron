@@ -52,6 +52,7 @@ type DomainCfg struct {
 	IterateHistoryRange               HistoryRangeIterator
 	IterateHistoryByKey               HistoryKeyIterator
 	WriteHotHistoryRow                HotHistoryWriter
+	WriteHotHistoryBlock              HotHistoryBlockWriter
 	WriteHotHistoryIndex              HotHistoryWriter
 	WriteHotHistoryTxRange            HotHistoryTxRangeWriter
 	ReadHotHistoryTxRange             HotHistoryTxRangeReader
@@ -122,6 +123,8 @@ type HistorySnapshotBuilder func(db AggregatorDB, dir string, fromTxNum, toTxNum
 type HistorySnapshotOpener func(dir string, ref SegmentRef) ([]*rawdb.StateDomainChange, error)
 
 type HistorySnapshotWriter func(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange, txRanges ...[]*rawdb.StateTxRange) (SegmentRef, SegmentRef, SegmentRef, error)
+
+type HotHistoryBlockWriter func(db ethdb.KeyValueWriter, changes []*rawdb.StateDomainChange) error
 
 type HistoryCompactor func(dir string, cfg DomainCfg, selection historyCompactionSelection) ([]SegmentRef, error)
 
@@ -344,6 +347,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			IterateHistoryRange:               iterateStateDomainChangeHistoryRange,
 			IterateHistoryByKey:               iterateStateDomainChangeHistoryByKey,
 			WriteHotHistoryRow:                rawdb.WriteStateDomainChangeRow,
+			WriteHotHistoryBlock:              rawdb.WriteStateDomainChangeBlockRows,
 			WriteHotHistoryIndex:              rawdb.WriteStateDomainChangeInverseIndex,
 			WriteHotHistoryTxRange:            rawdb.WriteStateTxRange,
 			ReadHotHistoryTxRange:             rawdb.ReadStateTxRange,

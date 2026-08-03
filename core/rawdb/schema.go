@@ -344,13 +344,15 @@ var (
 	stateTxRangePrefix = []byte("state-tx-range-v1-")
 
 	// stateChangeSetPrefix records pre-values for flat latest-domain writes.
-	// Rows are block-scoped and sequence-ordered in commit order so unwind code
-	// can replay them backwards for a block. The row payload identifies the
+	// New canonical execution stores one block-packed value at sequence zero;
+	// its rows remain sequence-ordered in commit order so unwind code can replay
+	// them backwards. Positive sequence keys are the read-compatible legacy and
+	// single-row form used by transition/repair tools. Each row identifies the
 	// concrete flat domain: account latest, account-KV latest, or account-KV
 	// generation.
 	//
-	// Key:   state-changeset-v2- || blockNum u64 || seq u64
-	// Value: RLP(StateDomainChange)
+	// Key:   state-changeset-v2- || blockNum u64 || seq u64 (0 = block pack)
+	// Value: RLP(block pack) or RLP(StateDomainChange)
 	stateChangeSetPrefix = []byte("state-changeset-v2-")
 
 	// stateChangeInversePrefix indexes StateDomainChange rows by physical
