@@ -44,11 +44,19 @@ func (s *StateDB) CaptureTransactionWriteSetFiltered(journalMark int, recorder *
 	if s == nil {
 		return nil, false, fmt.Errorf("capture transaction writes: nil state")
 	}
-	keys := make(map[TransactionAccessKey]struct{}, 16)
-	modes := make(map[TransactionAccessKey]TransactionAccessMode, 16)
+	var keys map[TransactionAccessKey]struct{}
+	var modes map[TransactionAccessKey]TransactionAccessMode
+	if include == nil {
+		keys = make(map[TransactionAccessKey]struct{}, 16)
+		modes = make(map[TransactionAccessKey]TransactionAccessMode, 16)
+	}
 	if recorder != nil {
 		recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
 			if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0 && (include == nil || include(key)) {
+				if keys == nil {
+					keys = make(map[TransactionAccessKey]struct{}, 4)
+					modes = make(map[TransactionAccessKey]TransactionAccessMode, 4)
+				}
 				appendTransactionWriteKey(keys, key)
 				modes[key] |= mode
 			}
@@ -68,6 +76,9 @@ func (s *StateDB) CaptureTransactionWriteSetFiltered(journalMark int, recorder *
 			}
 		}
 		if include == nil || include(key) {
+			if keys == nil {
+				keys = make(map[TransactionAccessKey]struct{}, 4)
+			}
 			appendTransactionWriteKey(keys, key)
 		}
 		return true

@@ -656,6 +656,7 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	captureFilteredCellsBefore := versionedShadowWriteCaptureFilteredCellsCounter.Snapshot().Count()
 	captureFullNanosBefore := versionedShadowWriteCaptureFullNanosCounter.Snapshot().Count()
 	captureFilteredNanosBefore := versionedShadowWriteCaptureFilteredNanosCounter.Snapshot().Count()
+	captureFilteredEmptyBefore := versionedShadowWriteCaptureFilteredEmptyCounter.Snapshot().Count()
 	captureUnsupportedBefore := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count()
 	captureErrorsBefore := versionedShadowWriteCaptureErrorsCounter.Snapshot().Count()
 	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
@@ -711,6 +712,13 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	}
 	if blockNumber%discardShadowSampleInterval == 0 && (filteredCells != 0 || filteredNanos != 0) {
 		t.Fatalf("sampled filtered write capture cells/nanos = %d/%d, want 0/0", filteredCells, filteredNanos)
+	}
+	filteredEmpty := versionedShadowWriteCaptureFilteredEmptyCounter.Snapshot().Count() - captureFilteredEmptyBefore
+	if blockNumber%discardShadowSampleInterval == 0 && filteredEmpty != 0 {
+		t.Fatalf("sampled filtered empty captures = %d, want 0", filteredEmpty)
+	}
+	if blockNumber%discardShadowSampleInterval != 0 && filteredEmpty == 0 {
+		t.Fatal("ordinary filtered empty captures = 0, want > 0")
 	}
 	if unsupported := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count() - captureUnsupportedBefore; unsupported != 0 {
 		t.Fatalf("write capture unsupported = %d, want 0", unsupported)

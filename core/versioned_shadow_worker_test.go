@@ -95,7 +95,7 @@ func TestDiscardShadowRetryWriteCaptureProjectsReadHierarchy(t *testing.T) {
 		{key: state.TransactionAccessKey{Kind: state.TransactionAccessAccountField, Address: fieldAddress, AccountField: state.TransactionAccountFieldAllowance}, want: false},
 		{key: fullKey, want: true},
 		{key: state.TransactionAccessKey{Kind: state.TransactionAccessAccountField, Address: fullAddress, AccountField: state.TransactionAccountFieldAllowance}, want: true},
-		{key: dynamicKey, want: true},
+		{key: dynamicKey, want: false},
 		{key: state.TransactionAccessKey{Kind: state.TransactionAccessAccount, Address: ignoredAddress}, want: false},
 	}
 	for _, test := range tests {

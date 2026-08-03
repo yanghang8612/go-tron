@@ -41,6 +41,8 @@ var (
 	versionedShadowWriteCaptureFilteredCellsCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/filtered_cells", nil)
 	versionedShadowWriteCaptureFullNanosCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/full_nanos", nil)
 	versionedShadowWriteCaptureFilteredNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/filtered_nanos", nil)
+	versionedShadowWriteCaptureEmptyTransactionsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/empty_transactions", nil)
+	versionedShadowWriteCaptureFilteredEmptyCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/filtered_empty_transactions", nil)
 	versionedShadowWriteCaptureCellsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/cells", nil)
 	versionedShadowWriteCaptureNanosCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/nanos", nil)
 	versionedShadowWriteCaptureUnsupportedCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/unsupported", nil)
@@ -198,6 +200,8 @@ type versionedAccessShadowStats struct {
 	writeCaptureFilteredCells            int64
 	writeCaptureFullNanos                int64
 	writeCaptureFilteredNanos            int64
+	writeCaptureEmptyTransactions        int64
+	writeCaptureFilteredEmpty            int64
 	writeCaptureCells                    int64
 	writeCaptureNanos                    int64
 	writeCaptureUnsupported              int64
@@ -459,6 +463,12 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 			s.transactionWriteSets[txIndex] = writes
 			s.transactionWritesOK[txIndex] = true
 			s.stats.writeCaptureCells += int64(len(writes))
+			if len(writes) == 0 {
+				s.stats.writeCaptureEmptyTransactions++
+				if !fullCapture {
+					s.stats.writeCaptureFilteredEmpty++
+				}
+			}
 			if fullCapture {
 				s.stats.writeCaptureFullCells += int64(len(writes))
 			} else {
@@ -1163,6 +1173,8 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowWriteCaptureFilteredCellsCounter.Inc(stats.writeCaptureFilteredCells)
 	versionedShadowWriteCaptureFullNanosCounter.Inc(stats.writeCaptureFullNanos)
 	versionedShadowWriteCaptureFilteredNanosCounter.Inc(stats.writeCaptureFilteredNanos)
+	versionedShadowWriteCaptureEmptyTransactionsCounter.Inc(stats.writeCaptureEmptyTransactions)
+	versionedShadowWriteCaptureFilteredEmptyCounter.Inc(stats.writeCaptureFilteredEmpty)
 	versionedShadowWriteCaptureCellsCounter.Inc(stats.writeCaptureCells)
 	versionedShadowWriteCaptureNanosCounter.Inc(stats.writeCaptureNanos)
 	versionedShadowWriteCaptureUnsupportedCounter.Inc(stats.writeCaptureUnsupported)

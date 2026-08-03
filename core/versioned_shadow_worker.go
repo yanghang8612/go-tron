@@ -1207,6 +1207,17 @@ func newDiscardShadowRetryWriteCapture(source *discardShadowPreexecution, transa
 			if read.Mode&(state.TransactionAccessRead|state.TransactionAccessCommutativeRead) == 0 {
 				continue
 			}
+			// DynamicProperties and exact raw-KV values are frozen from the
+			// canonical enqueue boundary in their own request carriers. Replaying
+			// them through every intervening prefix WriteSet would duplicate that
+			// authoritative snapshot and add serial materialization work.
+			switch read.Key.Kind {
+			case state.TransactionAccessDynamicInt,
+				state.TransactionAccessDynamicString,
+				state.TransactionAccessDynamicHash,
+				state.TransactionAccessRawKV:
+				continue
+			}
 			filter.exact[read.Key] = struct{}{}
 			switch read.Key.Kind {
 			case state.TransactionAccessAccount:

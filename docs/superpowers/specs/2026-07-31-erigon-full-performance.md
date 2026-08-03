@@ -1358,6 +1358,22 @@ projected prefix WriteSets advance the runner's settled index without invoking
 the ordered applier or finalizer. Split full/filtered transaction, cell, and
 nanosecond counters make the reduction directly measurable after deployment.
 
+The first projected-carrier window reduced average materialized cells from
+9.43 to 2.49 per captured transaction (74%) and capture time from 11.6 to 8.0
+microseconds (31%). Prefix application fell from roughly 17.8 to 3.9
+microseconds per advanced transaction. A subsequent stable 58-second window
+imported 1,696 blocks / 169,442 transactions (29.2 blocks/s and 2,921 tx/s),
+published 24/24 retries without mismatch or error, and measured 3.01
+microseconds per prefix advance.
+
+DynamicProperties and exact raw-KV inputs are already frozen from the canonical
+enqueue boundary into dedicated request carriers. They are therefore excluded
+from non-sender projected prefix WriteSets instead of being materialized and
+replayed a second time. Filtered capture maps are allocated lazily and use a
+smaller initial capacity; empty projected transactions retain their known
+status but allocate no key/mode maps and skip prefix application. Empty counts
+are exported alongside the full/filtered cell and timing split.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
