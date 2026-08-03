@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -346,6 +347,70 @@ func IterateStateDomainChangeBlocksByKeyRange(db ethdb.Iteratee, fromBlock, toBl
 		return nil
 	}
 	return iterateStateDomainChangeBlocksByInversePrefixRange(db, prefix, fromBlock, toBlock, fn)
+}
+
+// ReadFirstStateDomainChangeByKeyBlockRange seeks the earliest matching hot
+// mutation after targetBlock. Layered stores may implement PrefixSeeker so the
+// durable inverse-index prefix is not fully materialized before this one-row
+// point lookup can stop.
+func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*StateDomainChange, error) {
+	if targetBlock >= headBlock || targetTxNum >= headTxNum {
+		return nil, nil
+	}
+	fromBlock := targetBlock + 1
+	for fromBlock <= headBlock {
+		blockNum, ok, err := firstStateDomainChangeBlockByKeyRange(db, fromBlock, headBlock, flatDomain, owner, generation, domain, key)
+		if err != nil || !ok {
+			return nil, err
+		}
+		var first *StateDomainChange
+		if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
+				!stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
+				return true, nil
+			}
+			first = cloneStateDomainChange(change)
+			return false, nil
+		}); err != nil {
+			return nil, err
+		}
+		if first != nil {
+			return first, nil
+		}
+		if blockNum == ^uint64(0) {
+			break
+		}
+		fromBlock = blockNum + 1
+	}
+	return nil, nil
+}
+
+func firstStateDomainChangeBlockByKeyRange(db ethdb.Iteratee, fromBlock, toBlock uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (uint64, bool, error) {
+	prefix, ok := stateDomainChangeInversePrefixByKey(flatDomain, owner, generation, domain, key)
+	if !ok || fromBlock > toBlock {
+		return 0, false, nil
+	}
+	if seeker, ok := db.(pointread.PrefixSeeker); ok {
+		var start [8]byte
+		binary.BigEndian.PutUint64(start[:], fromBlock)
+		foundKey, _, found, err := seeker.SeekPrefix(prefix, start[:])
+		if err != nil || !found {
+			return 0, false, err
+		}
+		blockNum, valid := StateDomainChangeInverseBlockNum(foundKey, len(prefix))
+		if !valid || blockNum > toBlock {
+			return 0, false, nil
+		}
+		return blockNum, true, nil
+	}
+	var blockNum uint64
+	found := false
+	err := iterateStateDomainChangeBlocksByInversePrefixRange(db, prefix, fromBlock, toBlock, func(candidate uint64) (bool, error) {
+		blockNum = candidate
+		found = true
+		return false, nil
+	})
+	return blockNum, found, err
 }
 
 func stateDomainChangeInversePrefixByKey(flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool) {

@@ -108,6 +108,10 @@ func TestReadSnapshotPinsBaseAndLayerTopologyAcrossFlush(t *testing.T) {
 	}) {
 		t.Fatalf("snapshot iterator = %v", got)
 	}
+	key, value, ok, err := snapshot.SeekPrefix([]byte("state/"), nil)
+	if err != nil || !ok || string(key) != "state/base" || string(value) != "base-before" {
+		t.Fatalf("snapshot seek = (%q,%q,%v,%v), want state/base/base-before/true/nil", key, value, ok, err)
+	}
 }
 
 func pendingOwnedPuts(l *layer) int {
@@ -1565,6 +1569,96 @@ func TestBuffer_NewIterator_BaseOnly(t *testing.T) {
 	if !equalEntries(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
+}
+
+func TestBuffer_SeekPrefixStopsAfterFirstVisibleBaseEntry(t *testing.T) {
+	base := &countingIteratorStore{KeyValueStore: rawdb.NewMemoryDatabase()}
+	for i := 1; i <= 2048; i++ {
+		key := []byte(fmt.Sprintf("idx/%04d", i))
+		if err := base.Put(key, []byte("base")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := New(base)
+	b.BeginBlock(bufHash(1), 1)
+	if err := b.Delete([]byte("idx/0001")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put([]byte("idx/0000"), []byte("overlay")); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+
+	key, value, ok, err := b.SeekPrefix([]byte("idx/"), nil)
+	if err != nil || !ok || string(key) != "idx/0000" || string(value) != "overlay" {
+		t.Fatalf("seek = (%q,%q,%v,%v), want idx/0000/overlay/true/nil", key, value, ok, err)
+	}
+	if base.nextCalls != 1 {
+		t.Fatalf("base iterator Next calls = %d, want 1 before earlier overlay row wins", base.nextCalls)
+	}
+
+	base.nextCalls = 0
+	key, value, ok, err = b.SeekPrefix([]byte("idx/"), []byte("1900"))
+	if err != nil || !ok || string(key) != "idx/1900" || string(value) != "base" {
+		t.Fatalf("bounded seek = (%q,%q,%v,%v), want idx/1900/base/true/nil", key, value, ok, err)
+	}
+	if base.nextCalls != 1 {
+		t.Fatalf("bounded base iterator Next calls = %d, want 1", base.nextCalls)
+	}
+}
+
+func BenchmarkBufferPrefixFirst(b *testing.B) {
+	base, err := rawdb.NewPebbleDB(b.TempDir(), 16, 16)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = base.Close() })
+	const entries = 20_000
+	for i := 0; i < entries; i++ {
+		if err := base.Put([]byte(fmt.Sprintf("history/key/%08d", i)), []byte("value")); err != nil {
+			b.Fatal(err)
+		}
+	}
+	buf := New(base)
+	prefix := []byte("history/key/")
+	start := []byte("00010000")
+
+	b.Run("seek-prefix", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			key, _, ok, err := buf.SeekPrefix(prefix, start)
+			if err != nil || !ok || string(key) != "history/key/00010000" {
+				b.Fatalf("seek = (%q,%v,%v)", key, ok, err)
+			}
+		}
+	})
+	b.Run("materialized-iterator-first", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			it := buf.NewIterator(prefix, start)
+			if !it.Next() || string(it.Key()) != "history/key/00010000" {
+				b.Fatalf("iterator first = %q err=%v", it.Key(), it.Error())
+			}
+			it.Release()
+		}
+	})
+}
+
+type countingIteratorStore struct {
+	ethdb.KeyValueStore
+	nextCalls int
+}
+
+func (s *countingIteratorStore) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return &countingNextIterator{Iterator: s.KeyValueStore.NewIterator(prefix, start), calls: &s.nextCalls}
+}
+
+type countingNextIterator struct {
+	ethdb.Iterator
+	calls *int
+}
+
+func (it *countingNextIterator) Next() bool {
+	*it.calls++
+	return it.Iterator.Next()
 }
 
 // NewIterator merges overlay-only keys (no disk hit) into the result.

@@ -563,6 +563,8 @@ type ReadSnapshot struct {
 var _ ethdb.KeyValueReader = (*ReadSnapshot)(nil)
 var _ ethdb.KeyValueWriter = (*ReadSnapshot)(nil)
 var _ ethdb.Iteratee = (*ReadSnapshot)(nil)
+var _ pointread.PrefixSeeker = (*ReadSnapshot)(nil)
+var _ pointread.PrefixSeeker = (*Buffer)(nil)
 
 // NewReadSnapshot captures a stable logical read view. flushMu makes the base
 // sequence and layer topology atomic with respect to FlushUpTo's
@@ -652,6 +654,20 @@ func (s *ReadSnapshot) NewIterator(prefix, start []byte) ethdb.Iterator {
 		overlay.walk(s.view.layers[i], prefix, start)
 	}
 	return finishIteratorWithBase(s.base, overlay, prefix, start)
+}
+
+func (s *ReadSnapshot) SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
+	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
+		return nil, nil, false, ErrNotFound
+	}
+	overlay := newOverlayState()
+	for i := len(s.view.inflight) - 1; i >= 0; i-- {
+		overlay.walk(s.view.inflight[i], prefix, start)
+	}
+	for i := len(s.view.layers) - 1; i >= 0; i-- {
+		overlay.walk(s.view.layers[i], prefix, start)
+	}
+	return seekPrefixWithBase(s.base, overlay, prefix, start)
 }
 
 func (s *ReadSnapshot) NewStateKVLatestIterator(schemaPrefix []byte, accountID common.AccountID, physicalPrefix []byte) ethdb.Iterator {
@@ -2979,6 +2995,21 @@ func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
 	return b.finishIterator(overlay, prefix, start)
 }
 
+// SeekPrefix is the one-row counterpart of NewIterator. It preserves the same
+// newest-layer/tombstone/base semantics without consuming the complete durable
+// prefix before the caller can stop.
+func (b *Buffer) SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
+	view := b.loadReadView()
+	overlay := newOverlayState()
+	for i := len(view.inflight) - 1; i >= 0; i-- {
+		overlay.walk(view.inflight[i], prefix, start)
+	}
+	for i := len(view.layers) - 1; i >= 0; i-- {
+		overlay.walk(view.layers[i], prefix, start)
+	}
+	return seekPrefixWithBase(b.base, overlay, prefix, start)
+}
+
 // NewStateKVLatestIterator is rawdb's optional structured iterator path. It
 // preserves the same physical-key snapshot semantics as NewIterator while
 // narrowing live-layer work to one coarse account bucket. Exact owner,
@@ -3235,6 +3266,61 @@ func finishIteratorWithBase(base ethdb.KeyValueReader, overlay *overlayState, pr
 		return bytes.Compare(entries[i].key, entries[j].key) < 0
 	})
 	return &bufferIterator{entries: entries, idx: -1}
+}
+
+func seekPrefixWithBase(base ethdb.KeyValueReader, overlay *overlayState, prefix, start []byte) (key, value []byte, ok bool, err error) {
+	var overlayKey string
+	var overlayValue []byte
+	overlayOK := false
+	for candidate, op := range overlay.m {
+		if op.deleted || (overlayOK && candidate >= overlayKey) {
+			continue
+		}
+		overlayKey = candidate
+		overlayValue = op.value
+		overlayOK = true
+	}
+
+	var baseKey, baseValue []byte
+	baseOK := false
+	if base != nil {
+		if iter, iterable := base.(ethdb.Iteratee); iterable {
+			it := iter.NewIterator(prefix, start)
+			for it.Next() {
+				candidate := it.Key()
+				candidateString := unsafe.String(unsafe.SliceData(candidate), len(candidate))
+				if overlayOK && overlayKey < candidateString {
+					break
+				}
+				if op, masked := overlay.m[candidateString]; masked {
+					if op.deleted {
+						continue
+					}
+					baseKey = append([]byte(nil), candidate...)
+					baseValue = append([]byte(nil), op.value...)
+					baseOK = true
+					break
+				}
+				baseKey = append([]byte(nil), candidate...)
+				baseValue = append([]byte(nil), it.Value()...)
+				baseOK = true
+				break
+			}
+			err = it.Error()
+			it.Release()
+			if err != nil {
+				return nil, nil, false, err
+			}
+		}
+	}
+
+	if overlayOK && (!baseOK || overlayKey < string(baseKey)) {
+		return []byte(overlayKey), append([]byte(nil), overlayValue...), true, nil
+	}
+	if baseOK {
+		return baseKey, baseValue, true, nil
+	}
+	return nil, nil, false, nil
 }
 
 // bufferIterator is a snapshot iterator returned by Buffer.NewIterator.

@@ -437,6 +437,56 @@ func TestReadStateKVAsOfTxNumStopsAtFirstSubsequentChange(t *testing.T) {
 	}
 }
 
+func TestReadFirstStateDomainChangeByKeyBlockRangeUsesPrefixSeek(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	db := &prefixSeekingHistoryDB{Database: base}
+	owner := common.Address{0x41, 0x29}
+	key := []byte("reward/seek")
+	for _, blockNum := range []uint64{100, 101} {
+		if err := WriteStateDomainChange(db, &StateDomainChange{
+			BlockNum: blockNum, TxNum: blockNum, Seq: 1,
+			FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 1,
+			Domain: kvdomains.SystemReward, Key: key,
+			PrevExists: true, Prev: []byte{byte(blockNum)}, NextExists: true, Next: []byte{byte(blockNum + 1)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	change, err := ReadFirstStateDomainChangeByKeyBlockRange(db, 99, 101, 99, 101, StateFlatDomainKVLatest, owner, 1, kvdomains.SystemReward, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change == nil || change.BlockNum != 100 {
+		t.Fatalf("first change = %+v, want block 100", change)
+	}
+	if db.seekCalls != 1 || db.inverseIteratorCalls != 0 {
+		t.Fatalf("seek calls = %d inverse iterator calls = %d, want 1/0", db.seekCalls, db.inverseIteratorCalls)
+	}
+}
+
+type prefixSeekingHistoryDB struct {
+	ethdb.Database
+	seekCalls            int
+	inverseIteratorCalls int
+}
+
+func (db *prefixSeekingHistoryDB) SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
+	db.seekCalls++
+	it := db.Database.NewIterator(prefix, start)
+	defer it.Release()
+	if !it.Next() {
+		return nil, nil, false, it.Error()
+	}
+	return append([]byte(nil), it.Key()...), append([]byte(nil), it.Value()...), true, nil
+}
+
+func (db *prefixSeekingHistoryDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	if bytes.HasPrefix(prefix, stateChangeInversePrefix) {
+		db.inverseIteratorCalls++
+	}
+	return db.Database.NewIterator(prefix, start)
+}
+
 func TestIterateStateDomainChangesByPrefixFiltersTxWindowAndPrefix(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	owner := common.Address{0x41, 0x26}

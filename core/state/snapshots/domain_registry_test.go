@@ -66,6 +66,7 @@ func TestDefaultDomainRegistryDrivesSnapshotFamilies(t *testing.T) {
 		history[0].DeleteHotHistoryBlock == nil ||
 		history[0].IterateHotHistoryTxRangeChanges == nil ||
 		history[0].IterateHotHistoryBlocks == nil || history[0].IterateHotHistoryChanges == nil ||
+		history[0].ReadHotHistoryFirstBlockRange == nil || history[0].IterateHotHistoryBlockRange == nil ||
 		history[0].IterateHotHistoryPrefix == nil || history[0].ReadHotAccountLatestAsOf == nil ||
 		history[0].ReadHotKVLatestAsOf == nil || history[0].ReadHotKVGenerationAsOf == nil ||
 		history[0].ReadHotAccountKVAsOf == nil ||

@@ -1031,14 +1031,11 @@ func (r *PersistentHistoryReader) firstStateDomainChangeByKey(targetTxNum, headT
 		}
 		return true
 	}
-	if err := r.iterateHotStateDomainChangesByKey(targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, func(change *rawdb.StateDomainChange) (bool, error) {
-		if err := r.contextError(); err != nil {
-			return false, err
-		}
-		return !consider(change), nil
-	}); err != nil {
+	hotFirst, err := r.readFirstHotStateDomainChangeByKey(targetTxNum, headTxNum, flatDomain, owner, generation, domain, key)
+	if err != nil {
 		return nil, err
 	}
+	consider(hotFirst)
 	if r.coldHistory != nil && targetTxNum != ^uint64(0) {
 		fromTxNum := targetTxNum + 1
 		if keyed, ok := r.coldHistory.(StateDomainChangeColdKeyHistory); ok {
@@ -1063,6 +1060,28 @@ func (r *PersistentHistoryReader) firstStateDomainChangeByKey(targetTxNum, headT
 		}
 	}
 	return first, nil
+}
+
+func (r *PersistentHistoryReader) readFirstHotStateDomainChangeByKey(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*rawdb.StateDomainChange, error) {
+	if r == nil || targetTxNum >= headTxNum {
+		return nil, nil
+	}
+	cfg, err := stateDomainHistoryConfig()
+	if err != nil {
+		return nil, err
+	}
+	if r.hotHistoryBounded && cfg.ReadHotHistoryFirstBlockRange != nil {
+		return cfg.ReadHotHistoryFirstBlockRange(r.db, r.hotHistoryFromBlock, r.hotHistoryToBlock, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key)
+	}
+	if cfg.IterateHotHistoryChanges == nil {
+		return nil, ErrStateDomainHistoryUnavailable
+	}
+	var first *rawdb.StateDomainChange
+	err = cfg.IterateHotHistoryChanges(r.db, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, func(change *rawdb.StateDomainChange) (bool, error) {
+		first = cloneHistoryDomainChange(change)
+		return false, nil
+	})
+	return first, err
 }
 
 func (r *PersistentHistoryReader) collectStateDomainChangesByKey(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]*rawdb.StateDomainChange, error) {

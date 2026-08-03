@@ -71,6 +71,14 @@ type KeyValueSnapshotter interface {
 	NewKeyValueSnapshot() (KeyValueSnapshot, error)
 }
 
+// PrefixSeeker returns the first visible key/value pair in the ordered prefix
+// range beginning at prefix+start. Implementations copy key and value before
+// returning them. It is an optional fast path for point-in-history lookups
+// that need one inverted-index row rather than a materialized full iterator.
+type PrefixSeeker interface {
+	SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error)
+}
+
 // CommitmentParentView resolves split physical keys against the parent state
 // visible to one commitment fold. stable reports whether value may be retained
 // after fn returns.
