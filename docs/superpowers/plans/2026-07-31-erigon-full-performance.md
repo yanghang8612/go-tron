@@ -152,6 +152,9 @@
 - [x] Add a block-scoped minimum-transaction incarnation heap which freezes
   raw/version/dynamic inputs at enqueue time, retains requests through runner
   saturation, and drops expired superseded work before dispatch.
+- [x] Move queued canonical-prefix WriteSet advancement onto the exclusively
+  owned background runner and return prefix accounting/errors through its
+  completion event without reading a later live StateDB.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

@@ -246,6 +246,13 @@ var (
 	discardShadowMismatchOtherFieldCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/other", nil)
 )
 
+var (
+	discardShadowRetryActualWorkerPrefixJobsCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/worker/prefix_jobs", nil)
+	discardShadowRetryActualWorkerPrefixAdvanceCounter = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/worker/prefix_advances", nil)
+	discardShadowRetryActualWorkerPrefixNanosCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/worker/prefix_nanos", nil)
+	discardShadowRetryActualWorkerPrefixErrorsCounter  = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/worker/prefix_errors", nil)
+)
+
 // discardKVOverlay isolates rawdb writes performed by actuators. Reads fall
 // through to the canonical block view, while writes remain worker-local and
 // are thrown away after one transaction.
@@ -451,6 +458,13 @@ type discardShadowSenderChainStats struct {
 	errors             int64
 }
 
+type discardShadowAsyncPrefixStats struct {
+	jobs     int64
+	advances int64
+	nanos    int64
+	errors   int64
+}
+
 type discardShadowSenderRetryStats struct {
 	attempts            int64
 	executed            int64
@@ -488,6 +502,7 @@ type discardShadowSenderRetryStats struct {
 	actualQueueDropped  int64
 	actualQueueMaxDepth int64
 	actualQueueWaitNs   int64
+	workerPrefix        discardShadowAsyncPrefixStats
 	actualExecuted      int64
 	actualReady         int64
 	actualLate          int64
@@ -520,12 +535,17 @@ type discardShadowSenderRetryStats struct {
 }
 
 type discardShadowAsyncRetryEvent struct {
-	result     *discardShadowTaskResult
-	runner     *discardShadowRetryRunner
-	done       bool
-	nanos      int64
-	rawMisses  int64
-	superseded int64
+	result             *discardShadowTaskResult
+	runner             *discardShadowRetryRunner
+	done               bool
+	nanos              int64
+	rawMisses          int64
+	superseded         int64
+	dropped            int64
+	prefixAdvances     int64
+	prefixAdvanceNanos int64
+	prefixNanos        int64
+	prefixError        bool
 }
 
 // discardShadowRetryRunner owns one independently advanceable canonical-prefix
@@ -1686,36 +1706,33 @@ func (retry *discardShadowSenderRetry) ensureRunnerSettledPrefix(runner *discard
 }
 
 // advanceAsyncRunnerSettledPrefix consumes only already-captured canonical
-// WriteSets. Unlike the synchronous observer helper, it never refreshes from
-// the live StateDB: a queued request may be dispatched after its original
-// boundary, when the live view already contains later transactions.
-func (retry *discardShadowSenderRetry) advanceAsyncRunnerSettledPrefix(runner *discardShadowRetryRunner, target int, dynProps *state.DynamicProperties, versioned *versionedAccessShadow) bool {
-	if retry == nil || runner == nil || runner.worker == nil || dynProps == nil || versioned == nil || target < runner.settledThrough {
-		return false
+// WriteSets. It runs after the runner ownership handoff and never touches
+// retry-wide stats or the live StateDB, so multiple private runners can advance
+// concurrently without synchronizing with canonical execution.
+func advanceAsyncRunnerSettledPrefix(runner *discardShadowRetryRunner, target int, dynProps *state.DynamicProperties, versioned *versionedAccessShadow) (int64, int64, error) {
+	if runner == nil || runner.worker == nil || dynProps == nil || versioned == nil || target < runner.settledThrough {
+		return 0, 0, errors.New("invalid async prefix input")
 	}
 	started := time.Now()
+	var advances int64
 	for txIndex := runner.settledThrough + 1; txIndex <= target; txIndex++ {
 		if txIndex < 0 || txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
 			txIndex >= len(versioned.transactionWriteSets) {
-			retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
-			return false
+			return advances, time.Since(started).Nanoseconds(), errors.New("missing async prefix WriteSet")
 		}
 		runner.prefixRecorder.Reset(64)
 		runner.prefixRaw.recorder = &runner.prefixRecorder
 		if err := runner.worker.state.ApplyTransactionWriteSet(
 			versioned.transactionWriteSets[txIndex], runner.worker.dynProps, &runner.prefixRaw,
 		); err != nil {
-			retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
-			return false
+			return advances, time.Since(started).Nanoseconds(), err
 		}
 		runner.worker.state.FinalizeTransaction()
 		runner.settledThrough = txIndex
-		retry.stats.prefixAdvances++
+		advances++
 	}
 	dynProps.CopyInto(runner.worker.dynProps)
-	retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
-	retry.stats.prefixReuses++
-	return true
+	return advances, time.Since(started).Nanoseconds(), nil
 }
 
 func (retry *discardShadowSenderRetry) ensureSettledPrefix(target int, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) bool {
@@ -1966,31 +1983,11 @@ func (retry *discardShadowSenderRetry) dispatchAsyncRetryQueue(boundary int, ver
 		heap.Pop(&retry.asyncQueue)
 		retry.stats.actualQueueDequeued++
 		retry.stats.actualQueueWaitNs += time.Since(request.enqueuedAt).Nanoseconds()
-		prefixStarted := time.Now()
-		prefixReusesBefore := retry.stats.prefixReuses
-		prefixAdvancesBefore := retry.stats.prefixAdvances
-		prefixAdvanceNanosBefore := retry.stats.prefixAdvanceNanos
-		prefixReady := retry.advanceAsyncRunnerSettledPrefix(runner, request.txIndex-1, request.dynProps, versioned)
-		retry.stats.actualReuses += retry.stats.prefixReuses - prefixReusesBefore
-		retry.stats.actualAdvances += retry.stats.prefixAdvances - prefixAdvancesBefore
-		retry.stats.actualAdvanceNs += retry.stats.prefixAdvanceNanos - prefixAdvanceNanosBefore
-		retry.stats.actualPrefixNs += time.Since(prefixStarted).Nanoseconds()
-		if !prefixReady {
-			dropped := int64(len(request.tasks))
-			retry.stats.errors++
-			retry.stats.actualErrors++
-			retry.stats.actualQueueDropped += dropped
-			retry.asyncScheduled -= dropped
-			if retry.asyncScheduled < 0 {
-				retry.asyncScheduled = 0
-			}
-			continue
-		}
-		retry.launchAsyncRetryRequest(runner, request, cfg)
+		retry.launchAsyncRetryRequest(runner, request, versioned, cfg)
 	}
 }
 
-func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardShadowRetryRunner, request *discardShadowAsyncRetryRequest, cfg discardShadowRunConfig) {
+func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardShadowRetryRunner, request *discardShadowAsyncRetryRequest, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
 	worker := runner.worker
 	runner.busy = true
 	retry.asyncActive++
@@ -2006,12 +2003,28 @@ func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardSh
 	retryCfg.retainInfos = true
 	events := retry.asyncEvents
 	go func() {
+		prefixStarted := time.Now()
+		prefixAdvances, prefixAdvanceNanos, prefixErr := advanceAsyncRunnerSettledPrefix(
+			runner, request.txIndex-1, request.dynProps, versioned,
+		)
+		prefixNanos := time.Since(prefixStarted).Nanoseconds()
+		if prefixErr != nil {
+			worker.db.reset()
+			worker.db.parent = nil
+			worker.db.recorder = &worker.recorder
+			events <- discardShadowAsyncRetryEvent{
+				runner: runner, done: true, dropped: int64(len(request.tasks)), prefixError: true,
+				prefixAdvances: prefixAdvances, prefixAdvanceNanos: prefixAdvanceNanos, prefixNanos: prefixNanos,
+			}
+			return
+		}
 		started := time.Now()
 		prefixStateSnapshot := worker.state.Snapshot()
 		prefixDPSnapshot := worker.dynProps.Snapshot()
 		var forwarded versionedAccessShadow
 		forwarded.Prepare(len(retryCfg.transactions))
 		var superseded int64
+		var dropped int64
 		for taskIndex, task := range request.tasks {
 			if !retry.asyncTaskCurrent(task) {
 				superseded += int64(len(request.tasks) - taskIndex)
@@ -2034,6 +2047,7 @@ func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardSh
 			resultCopy := result
 			events <- discardShadowAsyncRetryEvent{result: &resultCopy}
 			if !preexecutedTransferReady(&result) {
+				dropped += int64(len(request.tasks) - taskIndex - 1)
 				break
 			}
 			if !retry.asyncTaskCurrent(task) {
@@ -2049,7 +2063,8 @@ func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardSh
 		worker.db.recorder = &worker.recorder
 		events <- discardShadowAsyncRetryEvent{
 			runner: runner, done: true, nanos: time.Since(started).Nanoseconds(), rawMisses: request.frozenRaw.misses,
-			superseded: superseded,
+			superseded: superseded, dropped: dropped, prefixAdvances: prefixAdvances,
+			prefixAdvanceNanos: prefixAdvanceNanos, prefixNanos: prefixNanos,
 		}
 	}()
 }
@@ -2059,9 +2074,31 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 		return
 	}
 	if event.done {
+		retry.stats.workerPrefix.jobs++
+		retry.stats.workerPrefix.advances += event.prefixAdvances
+		retry.stats.workerPrefix.nanos += event.prefixNanos
+		retry.stats.actualAdvances += event.prefixAdvances
+		retry.stats.actualAdvanceNs += event.prefixAdvanceNanos
+		retry.stats.prefixAdvances += event.prefixAdvances
+		retry.stats.prefixAdvanceNanos += event.prefixAdvanceNanos
+		if event.prefixError {
+			retry.stats.workerPrefix.errors++
+			retry.stats.errors++
+			retry.stats.actualErrors++
+		} else {
+			retry.stats.prefixReuses++
+			retry.stats.actualReuses++
+		}
 		if event.superseded > 0 {
 			retry.stats.actualSuperseded += event.superseded
 			retry.asyncScheduled -= event.superseded
+			if retry.asyncScheduled < 0 {
+				retry.asyncScheduled = 0
+			}
+		}
+		if event.dropped > 0 {
+			retry.stats.actualQueueDropped += event.dropped
+			retry.asyncScheduled -= event.dropped
 			if retry.asyncScheduled < 0 {
 				retry.asyncScheduled = 0
 			}
@@ -2379,6 +2416,10 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualQueueDroppedCounter.Inc(retry.stats.actualQueueDropped)
 		discardShadowRetryActualQueueMaxDepthCounter.Inc(retry.stats.actualQueueMaxDepth)
 		discardShadowRetryActualQueueWaitNanosCounter.Inc(retry.stats.actualQueueWaitNs)
+		discardShadowRetryActualWorkerPrefixJobsCounter.Inc(retry.stats.workerPrefix.jobs)
+		discardShadowRetryActualWorkerPrefixAdvanceCounter.Inc(retry.stats.workerPrefix.advances)
+		discardShadowRetryActualWorkerPrefixNanosCounter.Inc(retry.stats.workerPrefix.nanos)
+		discardShadowRetryActualWorkerPrefixErrorsCounter.Inc(retry.stats.workerPrefix.errors)
 		discardShadowRetryActualExecutedCounter.Inc(retry.stats.actualExecuted)
 		discardShadowRetryActualReadyCounter.Inc(retry.stats.actualReady)
 		discardShadowRetryActualLateCounter.Inc(retry.stats.actualLate)

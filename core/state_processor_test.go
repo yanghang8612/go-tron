@@ -475,6 +475,10 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	queueEnqueuedBefore := discardShadowRetryActualQueueEnqueuedCounter.Snapshot().Count()
 	queueDequeuedBefore := discardShadowRetryActualQueueDequeuedCounter.Snapshot().Count()
 	queueDroppedBefore := discardShadowRetryActualQueueDroppedCounter.Snapshot().Count()
+	workerPrefixJobsBefore := discardShadowRetryActualWorkerPrefixJobsCounter.Snapshot().Count()
+	workerPrefixAdvancesBefore := discardShadowRetryActualWorkerPrefixAdvanceCounter.Snapshot().Count()
+	workerPrefixNanosBefore := discardShadowRetryActualWorkerPrefixNanosCounter.Snapshot().Count()
+	workerPrefixErrorsBefore := discardShadowRetryActualWorkerPrefixErrorsCounter.Snapshot().Count()
 	jobsBefore := discardShadowRetryActualJobsCounter.Snapshot().Count()
 	executedBefore := discardShadowRetryActualExecutedCounter.Snapshot().Count()
 	readyBefore := discardShadowRetryActualReadyCounter.Snapshot().Count()
@@ -522,6 +526,18 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	}
 	if dropped := discardShadowRetryActualQueueDroppedCounter.Snapshot().Count() - queueDroppedBefore; dropped != 0 {
 		t.Fatalf("actual async dropped queued tasks = %d, want 0", dropped)
+	}
+	if jobs := discardShadowRetryActualWorkerPrefixJobsCounter.Snapshot().Count() - workerPrefixJobsBefore; jobs != 1 {
+		t.Fatalf("actual async worker prefix jobs = %d, want 1", jobs)
+	}
+	if advances := discardShadowRetryActualWorkerPrefixAdvanceCounter.Snapshot().Count() - workerPrefixAdvancesBefore; advances != 2 {
+		t.Fatalf("actual async worker prefix advances = %d, want 2", advances)
+	}
+	if nanos := discardShadowRetryActualWorkerPrefixNanosCounter.Snapshot().Count() - workerPrefixNanosBefore; nanos <= 0 {
+		t.Fatalf("actual async worker prefix nanos = %d, want > 0", nanos)
+	}
+	if errors := discardShadowRetryActualWorkerPrefixErrorsCounter.Snapshot().Count() - workerPrefixErrorsBefore; errors != 0 {
+		t.Fatalf("actual async worker prefix errors = %d, want 0", errors)
 	}
 	if refreshes := discardShadowRetryPrefixRefreshCounter.Snapshot().Count() - prefixRefreshBefore; refreshes != 0 {
 		t.Fatalf("actual async prefix refreshes = %d, want 0", refreshes)

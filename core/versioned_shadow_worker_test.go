@@ -463,6 +463,38 @@ func TestAsyncRetryQueueDispatchesAfterRunnerReturns(t *testing.T) {
 	}
 }
 
+func TestAsyncRetryWorkerReportsPrefixFailure(t *testing.T) {
+	runner := newDiscardShadowRetryRunner(newTestState(t))
+	retry := &discardShadowSenderRetry{
+		async:          true,
+		asyncRunners:   []*discardShadowRetryRunner{runner},
+		asyncEvents:    make(chan discardShadowAsyncRetryEvent, 2),
+		asyncScheduled: 1,
+	}
+	request := &discardShadowAsyncRetryRequest{
+		txIndex:   1,
+		tasks:     []discardShadowAsyncRetryTask{{txIndex: 1, incarnation: 1}},
+		frozenRaw: &discardShadowFrozenKV{values: make(map[string][]byte), present: make(map[string]bool)},
+		dynProps:  state.NewDynamicProperties(),
+	}
+	var versioned versionedAccessShadow
+	versioned.Prepare(2)
+	retry.launchAsyncRetryRequest(runner, request, &versioned, discardShadowRunConfig{
+		transactions: []*types.Transaction{nil, nil},
+	})
+	retry.drainAsyncEvents(2, true)
+	if retry.asyncActive != 0 || runner.busy {
+		t.Fatalf("failed prefix retained runner ownership: active=%d busy=%t", retry.asyncActive, runner.busy)
+	}
+	if retry.asyncScheduled != 0 || retry.stats.actualQueueDropped != 1 || retry.stats.actualExecuted != 0 {
+		t.Fatalf("failed prefix reservation = scheduled:%d stats:%+v", retry.asyncScheduled, retry.stats)
+	}
+	if retry.stats.workerPrefix.jobs != 1 || retry.stats.workerPrefix.errors != 1 ||
+		retry.stats.actualErrors != 1 || retry.stats.errors != 1 {
+		t.Fatalf("failed prefix metrics = %+v", retry.stats)
+	}
+}
+
 func TestAsyncRetrySnapshotsOnlySuffixReadVersions(t *testing.T) {
 	account := testProcessorAddr(1)
 	fieldAccount := testProcessorAddr(2)

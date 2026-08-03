@@ -1210,6 +1210,40 @@ advancement off the canonical goroutine onto workers backed by a genuinely
 shared MVCC value layer, then compare queue wait and ready ratios before using
 retried results canonically.
 
+The first queued production window covered eight actual blocks. Eleven
+requests were enqueued and all eleven dequeued, with zero saturation enqueues
+or dropped tasks and 18.27 microseconds total queue wait. The workers executed
+31 transactions: of 20 future-suffix results, 19 were ready and one was a stale
+incarnation, while the eleven conflict transactions were the expected
+zero-deadline late results. Three superseded tasks were stopped, one selected
+result matched every canonical carrier, and errors, frozen-raw misses,
+busy-skips, and finish waits remained zero.
+
+#### P4.26: Worker-owned canonical-prefix advancement
+
+Queue dispatch no longer advances a private StateDB on the canonical
+goroutine. Once a compatible runner is selected, ownership is marked busy and
+the goroutine first applies the immutable canonical WriteSets up to the
+request's frozen boundary, installs the frozen DynamicProperties snapshot, and
+then executes the incarnation. The shared block version map is append-only in
+transaction order; every prefix cell read by the worker was finalized before
+the request could be enqueued, and all workers are joined before the map leaves
+block scope.
+
+Prefix accounting is returned only through the runner's completion event, so
+concurrent workers never mutate retry-wide statistics. A failed prefix returns
+runner ownership, drops the unexecuted tasks, and reclaims their global
+execution reservations. `async_actual/worker/prefix_{jobs,advances,nanos,errors}`
+separates background state advancement from canonical dispatch. The older
+`dispatch/prefix_nanos` metric now measures only the rare same-boundary lazy
+copy fallback and should otherwise remain zero.
+
+This removes the measured prefix-replay component from the serial boundary,
+but the runner still materializes a private StateDB view. The next structural
+step is a shared version-value carrier that lets retry execution resolve typed
+reads directly by `(key, txIndex, incarnation)` before canonical publication is
+considered.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
