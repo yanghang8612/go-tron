@@ -952,7 +952,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			domainChangeMark = domainChanges.JournalMark()
 		}
 		if shadowEnabled {
-			versionedShadow.BeginTransaction(statedb, dynProps)
+			versionedShadow.BeginTransaction(i, statedb, dynProps)
 		}
 		if dynProps.ConsensusLogicOptimization() {
 			if err := ValidateTxRetCount(tx); err != nil {

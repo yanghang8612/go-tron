@@ -169,6 +169,8 @@ type TransactionAccessRecorder struct {
 	accountFields        map[TransactionAccountFieldKey]TransactionAccessMode
 	accountFieldWrites   map[tcommon.Address]struct{}
 	writeKeys            []TransactionAccessKey
+	writeKeysDisabled    bool
+	writeKeyInclude      func(TransactionAccessKey) bool
 	commutativeDeltas    map[TransactionAccessKey]int64
 	rawKVWrites          map[TransactionAccessKey]TransactionWriteValue
 	rawKVKeys            map[string]string
@@ -201,6 +203,8 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 	clear(r.rawKVWrites)
 	clear(r.writeKeys)
 	r.writeKeys = r.writeKeys[:0]
+	r.writeKeysDisabled = false
+	r.writeKeyInclude = nil
 	r.unsupported = false
 	r.commutativeScopeKey = TransactionAccessKey{}
 	r.commutativeScopeOpen = false
@@ -297,6 +301,18 @@ func (r *TransactionAccessRecorder) VisitWrites(visit func(TransactionAccessKey,
 			return
 		}
 	}
+}
+
+// ConfigureWriteKeyCapture controls the compact transaction-end write index.
+// Access maps always retain the complete OCC view. Disabling this index removes
+// carrier work from transactions whose block does not need a WriteSet; include
+// lets projected captures retain only keys a retry suffix can consume.
+func (r *TransactionAccessRecorder) ConfigureWriteKeyCapture(enabled bool, include func(TransactionAccessKey) bool) {
+	if r == nil {
+		return
+	}
+	r.writeKeysDisabled = !enabled
+	r.writeKeyInclude = include
 }
 
 func (r *TransactionAccessRecorder) Len() int {
@@ -414,10 +430,15 @@ func (r *TransactionAccessRecorder) record(key TransactionAccessKey, mode Transa
 }
 
 func (r *TransactionAccessRecorder) appendWriteKey(key TransactionAccessKey, previous, next TransactionAccessMode) {
-	const writeModes = TransactionAccessWrite | TransactionAccessCommutativeWrite
-	if previous&writeModes == 0 && next&writeModes != 0 {
+	if r.shouldAppendWriteKey(key, previous, next) {
 		r.writeKeys = append(r.writeKeys, key)
 	}
+}
+
+func (r *TransactionAccessRecorder) shouldAppendWriteKey(key TransactionAccessKey, previous, next TransactionAccessMode) bool {
+	const writeModes = TransactionAccessWrite | TransactionAccessCommutativeWrite
+	return !r.writeKeysDisabled && previous&writeModes == 0 && next&writeModes != 0 &&
+		(r.writeKeyInclude == nil || r.writeKeyInclude(key))
 }
 
 // AccountWriteCoverage lets the journal observer distinguish a full Account
@@ -463,7 +484,7 @@ func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domai
 	if previous, ok := r.accesses[lookup]; ok {
 		next := previous | mode
 		r.accesses[lookup] = next
-		if previous&(TransactionAccessWrite|TransactionAccessCommutativeWrite) == 0 && next&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0 {
+		if r.shouldAppendWriteKey(lookup, previous, next) {
 			// The lookup string may borrow caller scratch. The retained write key
 			// must own its logical key independently of that scratch lifetime.
 			lookup.LogicalKey = string(logicalKey)

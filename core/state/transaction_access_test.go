@@ -107,6 +107,38 @@ func TestTransactionAccessRecorderVisitWritesSkipsReadsAndDeduplicates(t *testin
 		t.Fatal("reset recorder retained a write key")
 		return false
 	})
+
+	recorder.ConfigureWriteKeyCapture(false, nil)
+	recorder.record(account, TransactionAccessWrite)
+	recorder.record(field, TransactionAccessWrite)
+	recorder.VisitWrites(func(TransactionAccessKey, TransactionAccessMode) bool {
+		t.Fatal("disabled write-key capture retained a key")
+		return false
+	})
+	accountSeen := false
+	recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+		if key == account && mode&TransactionAccessWrite != 0 {
+			accountSeen = true
+		}
+		return true
+	})
+	if !accountSeen {
+		t.Fatal("disabled write-key capture removed the OCC write")
+	}
+
+	recorder.Reset(8)
+	recorder.ConfigureWriteKeyCapture(true, func(key TransactionAccessKey) bool { return key == field })
+	recorder.record(account, TransactionAccessWrite)
+	recorder.record(field, TransactionAccessWrite)
+	recorder.recordAccountKV(address, kvdomains.AccountPermissionAux, []byte("owner"), TransactionAccessWrite)
+	projected := make([]TransactionAccessKey, 0, 1)
+	recorder.VisitWrites(func(key TransactionAccessKey, _ TransactionAccessMode) bool {
+		projected = append(projected, key)
+		return true
+	})
+	if len(projected) != 1 || projected[0] != field {
+		t.Fatalf("projected writes = %+v, want only balance field", projected)
+	}
 }
 
 func TestVisitTransactionWritesSinceClassifiesJournal(t *testing.T) {

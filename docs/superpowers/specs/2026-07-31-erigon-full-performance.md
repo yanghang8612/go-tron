@@ -1454,6 +1454,33 @@ estimated debt by about 104 MB, and recorded no write delay; after the carrier
 reductions, sustained compaction and bursty downloader supply remain larger
 whole-node constraints than projected WriteSet capture.
 
+#### P4.32: Projection-aware lazy write carrier
+
+Erigon's current versioned executor keeps independent typed `ReadSet` and
+`WriteSet` structures; per-path write maps are checked out lazily on the first
+write and released at transaction finalization. A transaction that does not
+need an output carrier does not build one. P4.31 still appended write keys for
+every version-observed transaction even though only retry-enabled and sampled
+blocks consume canonical WriteSets, shifting unnecessary slice growth into the
+roughly 90% no-capture path.
+
+The recorder now configures its write-key carrier at `BeginTransaction` using
+the already known block/transaction capture plan. Transactions outside a
+WriteSet-capture block disable the carrier completely while retaining their
+full OCC access maps. Full sender-chain/audit transactions retain every write.
+Ordinary prefix transactions apply the retry-read projection when a key first
+acquires a write bit, so excluded writes never enter the transaction-end slice;
+AccountKV keys that do enter it still own borrowed scratch strings. The final
+capture keeps its include check as a defensive invariant, and any projection
+containing a recorder-incomplete kind still takes the P4.29 journal fallback.
+
+On the local 64-Transfer versioned-shadow benchmark with WriteSet capture
+disabled, five 100-ms samples moved from about 101.4 to 99.6 microseconds per
+block (1.8% lower), 146 to 144 allocations, and roughly 35,733 to 35,460 bytes.
+This is development evidence rather than a production throughput claim; the
+deployment gate compares filtered capture against P4.31's 2.88 microseconds,
+checks recorder-only coverage, and retains the zero mismatch/error requirement.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

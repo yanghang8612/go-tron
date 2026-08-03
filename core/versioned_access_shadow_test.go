@@ -78,11 +78,11 @@ func TestVersionedAccessShadowValidatesReadVersionsAcrossStateFamilies(t *testin
 
 	// Direct Context.DB accesses participate in the same exact-key version map.
 	rawMark := statedb.DomainChangeJournalMark()
-	shadow.BeginTransaction(statedb, dynProps)
+	shadow.BeginTransaction(10, statedb, dynProps)
 	shadow.recorder.RecordRawKVPut([]byte("raw-governance"), []byte("v1"))
 	shadow.ObserveTransaction(10, tx, statedb, dynProps, rawMark)
 	rawMark = statedb.DomainChangeJournalMark()
-	shadow.BeginTransaction(statedb, dynProps)
+	shadow.BeginTransaction(11, statedb, dynProps)
 	shadow.recorder.RecordRawKVRead([]byte("raw-governance"))
 	shadow.ObserveTransaction(11, tx, statedb, dynProps, rawMark)
 
@@ -342,7 +342,7 @@ func recordVersionedShadowTx(t *testing.T, shadow *versionedAccessShadow, stated
 	t.Helper()
 	mark := statedb.DomainChangeJournalMark()
 	journalEndBefore := mark
-	shadow.BeginTransaction(statedb, dynProps)
+	shadow.BeginTransaction(txIndex, statedb, dynProps)
 	execute()
 	journalEnd := statedb.DomainChangeJournalMark()
 	shadow.ObserveTransaction(txIndex, tx, statedb, dynProps, mark)
@@ -378,7 +378,7 @@ func BenchmarkVersionedAccessShadowOverhead(b *testing.B) {
 				for i := 0; i < transfers; i++ {
 					mark := statedb.DomainChangeJournalMark()
 					if observe {
-						shadow.BeginTransaction(statedb, dynProps)
+						shadow.BeginTransaction(i, statedb, dynProps)
 					}
 					if err := statedb.SubBalance(testProcessorAddr(byte(i+1)), 1); err != nil {
 						b.Fatal(err)
@@ -423,7 +423,7 @@ func BenchmarkVersionedAccessShadowSettlementNormalization(b *testing.B) {
 				for i := 0; i < transactions; i++ {
 					mark := statedb.DomainChangeJournalMark()
 					if observe {
-						shadow.BeginTransaction(statedb, dynProps)
+						shadow.BeginTransaction(i, statedb, dynProps)
 					}
 					statedb.AddSettlementBalance(blackhole, 1)
 					dynProps.AddBurnTrx(1)

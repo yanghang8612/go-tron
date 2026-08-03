@@ -361,8 +361,15 @@ func (s *versionedAccessShadow) writtenBySender(txIndex int, owner tcommon.Addre
 		s.transactionHasOwner[txIndex] && s.transactionOwners[txIndex] == owner
 }
 
-func (s *versionedAccessShadow) BeginTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties) {
+func (s *versionedAccessShadow) BeginTransaction(txIndex int, statedb *state.StateDB, dynProps *state.DynamicProperties) {
 	s.recorder.Reset(64)
+	if txIndex < 0 || txIndex >= len(s.transactionWriteSets) {
+		s.recorder.ConfigureWriteKeyCapture(false, nil)
+	} else if s.writeCaptureInclude == nil || (txIndex < len(s.writeCaptureFull) && s.writeCaptureFull[txIndex]) {
+		s.recorder.ConfigureWriteKeyCapture(true, nil)
+	} else {
+		s.recorder.ConfigureWriteKeyCapture(true, s.writeCaptureInclude)
+	}
 	statedb.SetTransactionAccessRecorder(&s.recorder)
 	dynProps.SetTransactionAccessRecorder(&s.recorder)
 	s.transactionStarted = time.Now()
