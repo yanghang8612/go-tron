@@ -1442,6 +1442,18 @@ second write hash table or changing mutation order. The production gate remains
 publication mismatch/error; the expected gain is removal of roughly five out
 of six access-map visits at capture time.
 
+The first high-load 40-second P4.31 window imported 1,312 blocks / 112,727
+transactions (32.8 blocks/s and 2,818 tx/s). Recorder-only capture covered
+8,015/8,015 filtered transactions; 22/22 retry publications matched and
+unsupported capture, capture error, retry error, mismatch, and finish wait all
+remained zero. Filtered capture fell from P4.30's 4.98 to 2.88 microseconds per
+transaction (42% lower), or 51% below P4.29's 5.87-microsecond baseline. Total
+capture fell from 0.57 to 0.36 ms per enabled block, 54% below P4.29's 0.78-ms
+baseline. Pebble concurrently compacted 3.58 GB in / 3.40 GB out, reduced
+estimated debt by about 104 MB, and recorded no write delay; after the carrier
+reductions, sustained compaction and bursty downloader supply remain larger
+whole-node constraints than projected WriteSet capture.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
