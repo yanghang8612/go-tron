@@ -641,6 +641,12 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, secon
 		}
 		s := &l.shards[shard]
 		s.mu.Lock()
+		// The packed branch writer can introduce many generic keys at once.
+		// Invalidate a previously built sorted iterator index once per shard,
+		// rather than checking membership for every emitted branch.
+		if s.prefixBucketIndex != nil {
+			s.prefixBucketIndex.invalidateIteratorKeys()
+		}
 		if !s.commitmentReserved {
 			// Reserve for the number of root-sibling batches the commitment fold
 			// actually started. Historical mainnet blocks commonly touch only one
@@ -698,6 +704,7 @@ func (b *Buffer) putIntoStringOwnedValue(l *layer, key string, value []byte) {
 	s.mu.Lock()
 	l.addBloomString(key)
 	s.trackPrefixBucketKeyBeforeMutation(key)
+	s.trackIteratorKeyBeforeMutation(key)
 	delete(s.deletes, key)
 	if s.writes == nil {
 		s.writes = make(map[string][]byte)
@@ -724,6 +731,7 @@ func (b *Buffer) deleteIntoString(l *layer, key string) {
 	s.mu.Lock()
 	l.addBloomString(key)
 	s.trackPrefixBucketKeyBeforeMutation(key)
+	s.trackIteratorKeyBeforeMutation(key)
 	delete(s.writes, key)
 	if s.deletes == nil {
 		s.deletes = make(map[string]struct{})

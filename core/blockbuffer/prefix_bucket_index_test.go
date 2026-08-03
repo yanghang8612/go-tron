@@ -238,6 +238,48 @@ func TestLayerPrefixBucketIndexEmptyBuildAndIncrementalMutations(t *testing.T) {
 	}
 }
 
+func TestGenericIteratorIndexDoesNotDisableStructuredBucketIndex(t *testing.T) {
+	schema := []byte("state-kv/")
+	accountID := prefixBucketAccountID(0xa5, 0x01)
+	const (
+		generation = uint64(7)
+		domain     = uint16(0x0201)
+	)
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	if err := b.PutStateKVLatest(schema, accountID, generation, domain, []byte("slot/a"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+
+	// A generic scan creates the shared per-shard index holder without knowing
+	// the account-KV schema.
+	physical := appendStateKVLatestKey(nil, schema, accountID, generation, domain, nil)
+	generic, err := collectPrefixBucketIterator(b.NewIterator(physical, nil))
+	if err != nil || len(generic) != 1 {
+		t.Fatalf("generic entries=%v err=%v", generic, err)
+	}
+
+	structured, err := collectPrefixBucketIterator(b.NewStateKVLatestIterator(schema, accountID, physical))
+	if err != nil || len(structured) != 1 {
+		t.Fatalf("structured entries=%v err=%v", structured, err)
+	}
+	if !slices.EqualFunc(structured, generic, func(a, b prefixBucketIteratorEntry) bool {
+		return bytes.Equal(a.key, b.key) && bytes.Equal(a.value, b.value)
+	}) {
+		t.Fatalf("structured entries = %x, generic entries = %x", structured, generic)
+	}
+
+	l := b.inflight[0]
+	shard := l.shardForString(string(generic[0].key))
+	shard.mu.RLock()
+	index := shard.prefixBucketIndex
+	if index == nil || index.prefix != string(schema) || !index.iteratorKeysBuilt || !index.bucketBuilt(accountID[0]) {
+		shard.mu.RUnlock()
+		t.Fatalf("shared index not initialized for both paths: %+v", index)
+	}
+	shard.mu.RUnlock()
+}
+
 func TestStateKVLatestPackedIteratorEquivalentAcrossVersionsAndSchemas(t *testing.T) {
 	schema := []byte{'s', 0x00, 'a', '/'}
 	otherSchema := []byte{'s', 0x00, 'b', '/'}

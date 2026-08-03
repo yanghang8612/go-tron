@@ -1660,6 +1660,150 @@ func TestOverlayStateWalkRangeDoesNotAllocate(t *testing.T) {
 	}
 }
 
+func TestOverlayStateWalkBuildsReusesAndInvalidatesSortedKeyIndex(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	for i := 0; i < 2048; i++ {
+		key := fmt.Sprintf("unrelated/%08d", i)
+		if err := b.Put([]byte(key), []byte("bulk")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for key, value := range map[string]string{
+		"history/a": "a",
+		"history/b": "b",
+		"history/c": "c",
+	} {
+		if err := b.Put([]byte(key), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l := b.inflight[0]
+
+	first := newOverlayState()
+	first.walk(l, []byte("history/a"), nil)
+	if op, ok := first.m["history/a"]; !ok || op.deleted || string(op.value) != "a" || len(first.m) != 1 {
+		t.Fatalf("first prefix result = %+v", first.m)
+	}
+
+	type builtIndex struct {
+		index *layerPrefixBucketIndex
+		data  *string
+	}
+	built := make(map[int]builtIndex)
+	for shardNum := range l.shards {
+		shard := &l.shards[shardNum]
+		shard.mu.RLock()
+		if len(shard.writes)+len(shard.deletes) != 0 {
+			index := shard.prefixBucketIndex
+			if index == nil || !index.iteratorKeysBuilt || !slices.IsSorted(index.iteratorKeys) {
+				shard.mu.RUnlock()
+				t.Fatalf("shard %d iterator index was not built and sorted", shardNum)
+			}
+			built[shardNum] = builtIndex{index: index, data: unsafe.SliceData(index.iteratorKeys)}
+		}
+		shard.mu.RUnlock()
+	}
+
+	second := newOverlayState()
+	second.walk(l, []byte("history/b"), nil)
+	if op, ok := second.m["history/b"]; !ok || op.deleted || string(op.value) != "b" || len(second.m) != 1 {
+		t.Fatalf("second prefix result = %+v", second.m)
+	}
+	for shardNum, before := range built {
+		shard := &l.shards[shardNum]
+		shard.mu.RLock()
+		index := shard.prefixBucketIndex
+		if index != before.index || unsafe.SliceData(index.iteratorKeys) != before.data {
+			shard.mu.RUnlock()
+			t.Fatalf("shard %d rebuilt the sorted index for a second prefix", shardNum)
+		}
+		shard.mu.RUnlock()
+	}
+
+	// Replacing an existing key preserves sorted membership and keeps the index.
+	targetShard := int(layerShardIndexString("history/a"))
+	before := built[targetShard]
+	if err := b.Put([]byte("history/a"), []byte("a2")); err != nil {
+		t.Fatal(err)
+	}
+	shard := &l.shards[targetShard]
+	shard.mu.RLock()
+	if shard.prefixBucketIndex != before.index || !shard.prefixBucketIndex.iteratorKeysBuilt {
+		shard.mu.RUnlock()
+		t.Fatal("existing-key replacement invalidated the sorted index")
+	}
+	shard.mu.RUnlock()
+
+	// A new key invalidates only its shard; the next prefix walk rebuilds it and
+	// must surface the new entry.
+	var newKey string
+	for i := 0; ; i++ {
+		candidate := fmt.Sprintf("history/new-%d", i)
+		if int(layerShardIndexString(candidate)) == targetShard {
+			newKey = candidate
+			break
+		}
+	}
+	if err := b.Put([]byte(newKey), []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	shard.mu.RLock()
+	if shard.prefixBucketIndex.iteratorKeysBuilt {
+		shard.mu.RUnlock()
+		t.Fatal("new key did not invalidate its shard's sorted index")
+	}
+	shard.mu.RUnlock()
+
+	third := newOverlayState()
+	third.walk(l, []byte(newKey), nil)
+	if op, ok := third.m[newKey]; !ok || op.deleted || string(op.value) != "new" || len(third.m) != 1 {
+		t.Fatalf("rebuilt prefix result = %+v", third.m)
+	}
+	shard.mu.RLock()
+	if !shard.prefixBucketIndex.iteratorKeysBuilt {
+		shard.mu.RUnlock()
+		t.Fatal("prefix walk did not rebuild invalidated sorted index")
+	}
+	shard.mu.RUnlock()
+}
+
+func BenchmarkOverlayStateWalkExactPrefix(b *testing.B) {
+	const keyCount = 64 << 10
+	l := newLayer(common.Hash{}, 1)
+	for i := 0; i < keyCount; i++ {
+		key := fmt.Sprintf("history-index/%08d", i)
+		shard := l.shardForString(key)
+		if shard.writes == nil {
+			shard.writes = make(map[string][]byte)
+		}
+		shard.writes[key] = []byte("value")
+	}
+	prefix := fmt.Appendf(nil, "history-index/%08d", keyCount/2)
+
+	// Build the index outside the timed region.
+	newOverlayState().walk(l, prefix, nil)
+	b.Run("indexed", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			newOverlayState().walk(l, prefix, nil)
+		}
+	})
+	b.Run("full_scan_reference", func(b *testing.B) {
+		pfx := string(prefix)
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			overlay := newOverlayState()
+			for shardNum := range l.shards {
+				shard := &l.shards[shardNum]
+				shard.mu.RLock()
+				overlay.walkMapsLocked(shard, pfx, "")
+				shard.mu.RUnlock()
+			}
+		}
+	})
+}
+
 // Regression test for the overlay-start bug: prefix-only entries that sit
 // inside the [prefix+start, prefix\xff) range must still surface (writes) or
 // mask base (tombstones), even when prefix < start in byte order. With the

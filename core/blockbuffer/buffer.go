@@ -139,19 +139,54 @@ type layerShard struct {
 	_                  [3]byte
 }
 
-// layerPrefixBucketIndex is built lazily by structured account-KV iterators.
-// Generic NewIterator retains its exact behavior, while the account-scoped
-// path visits only keys sharing the first account-ID byte instead of scanning
-// every unrelated write in every live layer. The schema prefix is supplied by
-// rawdb, so blockbuffer does not duplicate storage-prefix knowledge.
+// layerPrefixBucketIndex is the lazily allocated per-shard iterator index. Its
+// bucket half lets structured account-KV iterators visit one account-ID bucket;
+// its sorted-key half lets generic prefix iterators binary-search the requested
+// range. Sharing one holder preserves layerShard's one-cache-line footprint.
+// The account schema prefix is supplied by rawdb, so blockbuffer does not
+// duplicate storage-prefix knowledge.
 type layerPrefixBucketIndex struct {
-	prefix  string
-	buckets map[byte][]string
-	built   [4]uint64
+	prefix            string
+	buckets           map[byte][]string
+	built             [4]uint64
+	iteratorKeys      []string
+	iteratorKeysBuilt bool
 }
 
 func newLayerPrefixBucketIndex(prefix string) *layerPrefixBucketIndex {
 	return &layerPrefixBucketIndex{prefix: prefix}
+}
+
+// ensureIteratorKeys builds the generic iterator's sorted union of write and
+// tombstone keys. Callers hold the shard lock. The string slice only retains
+// map-owned immutable key strings, so the index is compact and needs no key
+// byte copies.
+func (i *layerPrefixBucketIndex) ensureIteratorKeys(writes map[string][]byte, deletes map[string]struct{}) {
+	if i == nil || i.iteratorKeysBuilt {
+		return
+	}
+	keys := make([]string, 0, len(writes)+len(deletes))
+	for key := range writes {
+		keys = append(keys, key)
+	}
+	for key := range deletes {
+		// Writes and deletes are mutually exclusive in normal operation. Keep
+		// the index robust for hand-built layers used by tests and diagnostics.
+		if _, exists := writes[key]; !exists {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	i.iteratorKeys = keys
+	i.iteratorKeysBuilt = true
+}
+
+func (i *layerPrefixBucketIndex) invalidateIteratorKeys() {
+	if i == nil || !i.iteratorKeysBuilt {
+		return
+	}
+	i.iteratorKeys = nil
+	i.iteratorKeysBuilt = false
 }
 
 func (i *layerPrefixBucketIndex) bucketBuilt(bucket byte) bool {
@@ -300,6 +335,24 @@ func (s *layerShard) trackPrefixBucketKeyBeforeMutation(key string) {
 	if index.bucketBuilt(bucket) {
 		index.addToBucket(bucket, key)
 	}
+}
+
+// trackIteratorKeyBeforeMutation invalidates the sorted generic-key index only
+// when a mutation introduces a previously unseen key. Changing a write into a
+// tombstone (or replacing its value) preserves membership and therefore keeps
+// the index valid. Callers hold s.mu.
+func (s *layerShard) trackIteratorKeyBeforeMutation(key string) {
+	index := s.prefixBucketIndex
+	if index == nil || !index.iteratorKeysBuilt {
+		return
+	}
+	if _, exists := s.writes[key]; exists {
+		return
+	}
+	if _, exists := s.deletes[key]; exists {
+		return
+	}
+	index.invalidateIteratorKeys()
 }
 
 // bufferReadView is an immutable snapshot of the layer topology used by the
@@ -1022,6 +1075,7 @@ func applyBatchOpToLayer(target *layer, op *bufferBatchOp) {
 	}
 	target.addBloomString(k)
 	s.trackPrefixBucketKeyBeforeMutation(k)
+	s.trackIteratorKeyBeforeMutation(k)
 	if op.delete {
 		delete(s.writes, k)
 		delete(s.durableWrites, k)
@@ -2967,10 +3021,10 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 		return
 	}
 	// prefix/start remain caller-owned and are used only during this synchronous
-	// walk. Read-only string views avoid copying them once per live overlay
-	// layer. After the prefix match, comparing suffixes is equivalent to
-	// comparing k against prefix+start and avoids constructing that joined lower
-	// bound as well.
+	// walk. Each shard lazily builds one sorted union of its write/tombstone keys;
+	// later prefix scans binary-search that index instead of revisiting every
+	// unrelated live key. This is especially important for archive reads, which
+	// issue many exact-prefix scans over the same immutable layer snapshot.
 	var pfx, relativeStart string
 	if len(prefix) != 0 {
 		pfx = unsafe.String(unsafe.SliceData(prefix), len(prefix))
@@ -2978,37 +3032,94 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 	if len(start) != 0 {
 		relativeStart = unsafe.String(unsafe.SliceData(start), len(start))
 	}
-	matches := func(k string) bool {
-		if pfx != "" {
-			if !strings.HasPrefix(k, pfx) {
-				return false
-			}
-			return k[len(pfx):] >= relativeStart
-		}
-		return k >= relativeStart
-	}
+	var lower string
+	lowerReady := false
 	for i := range l.shards {
 		s := &l.shards[i]
 		s.mu.RLock()
-		for k, v := range s.writes {
-			if !matches(k) {
-				continue
-			}
-			if _, set := o.m[k]; set {
-				continue
-			}
-			o.m[k] = overlayOp{value: append([]byte(nil), v...)}
+		if len(s.writes) == 0 && len(s.deletes) == 0 {
+			s.mu.RUnlock()
+			continue
 		}
-		for k := range s.deletes {
-			if !matches(k) {
-				continue
+		if !lowerReady {
+			lower = relativeStart
+			if pfx != "" {
+				lower = pfx
+				if relativeStart != "" {
+					lower += relativeStart
+				}
 			}
-			if _, set := o.m[k]; set {
-				continue
-			}
-			o.m[k] = overlayOp{deleted: true}
+			lowerReady = true
+		}
+		index := s.prefixBucketIndex
+		if index != nil && index.iteratorKeysBuilt {
+			o.walkSortedKeysLocked(s, index.iteratorKeys, pfx, lower)
+			s.mu.RUnlock()
+			continue
 		}
 		s.mu.RUnlock()
+
+		// Upgrade only for the one-time index build. Do not wait behind a flush
+		// holding a shard read lock across disk I/O: in that uncommon case the
+		// current call falls back to the old range-filtered map walk, preserving
+		// NewIterator's lock-free-flush guarantee.
+		if !s.mu.TryLock() {
+			s.mu.RLock()
+			o.walkMapsLocked(s, pfx, relativeStart)
+			s.mu.RUnlock()
+			continue
+		}
+		index = s.prefixBucketIndex
+		if index == nil {
+			index = newLayerPrefixBucketIndex("")
+			s.prefixBucketIndex = index
+		}
+		index.ensureIteratorKeys(s.writes, s.deletes)
+		o.walkSortedKeysLocked(s, index.iteratorKeys, pfx, lower)
+		s.mu.Unlock()
+	}
+}
+
+func (o *overlayState) walkSortedKeysLocked(s *layerShard, keys []string, prefix, lower string) {
+	at := sort.Search(len(keys), func(i int) bool { return keys[i] >= lower })
+	for ; at < len(keys); at++ {
+		key := keys[at]
+		if prefix != "" && !strings.HasPrefix(key, prefix) {
+			break
+		}
+		o.addShardKeyLocked(s, key)
+	}
+}
+
+func (o *overlayState) walkMapsLocked(s *layerShard, prefix, relativeStart string) {
+	matches := func(key string) bool {
+		if prefix == "" {
+			return key >= relativeStart
+		}
+		return strings.HasPrefix(key, prefix) && key[len(prefix):] >= relativeStart
+	}
+	for key := range s.writes {
+		if matches(key) {
+			o.addShardKeyLocked(s, key)
+		}
+	}
+	for key := range s.deletes {
+		if matches(key) {
+			o.addShardKeyLocked(s, key)
+		}
+	}
+}
+
+func (o *overlayState) addShardKeyLocked(s *layerShard, key string) {
+	if _, resolved := o.m[key]; resolved {
+		return
+	}
+	if value, exists := s.writes[key]; exists {
+		o.m[key] = overlayOp{value: append([]byte(nil), value...)}
+		return
+	}
+	if _, deleted := s.deletes[key]; deleted {
+		o.m[key] = overlayOp{deleted: true}
 	}
 }
 
@@ -3028,6 +3139,11 @@ func (o *overlayState) walkPrefixBucket(l *layer, schema string, bucket byte, ph
 			s.prefixBucketIndex = newLayerPrefixBucketIndex(schema)
 		}
 		index := s.prefixBucketIndex
+		if index.prefix == "" {
+			// A generic iterator may have created the shared key-index holder
+			// before the structured account iterator initializes its schema.
+			index.prefix = schema
+		}
 		if index.prefix != schema {
 			s.mu.Unlock()
 			// All shards in a layer are normally initialized by the same
