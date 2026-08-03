@@ -432,13 +432,14 @@ const flushQueueCap = 8
 // cadence produced exactly one Pebble group per flush call and only about six
 // layers per group: the 32 MiB blockbuffer merge bound was never reached. The
 // first 480 ms canary raised this to 18-19 layers but still averaged only about
-// 19 MiB of source data, leaving the output-bounded extension unused. An
-// eight-times larger window should cross that old source boundary while its
-// hot commitment post-images still fit comfortably inside the unchanged final
-// batch cap. Reads resolve retained layers through the buffer, shutdown
-// interrupts the wait immediately, and crash recovery has only this bounded
-// sub-second extra tail.
-const flushCoalesceWait = 960 * time.Millisecond
+// 19 MiB of source data, leaving the output-bounded extension unused. The
+// 960 ms canary reached 40 layers and exercised that path in 46/49 groups, yet
+// its final batch still averaged only about 12 MiB. A sixteen-times larger
+// window uses more of both bounds while projecting comfortably below 32 MiB
+// final / 128 MiB source at the measured import rate. Reads resolve retained
+// layers through the buffer, shutdown interrupts the wait immediately, and
+// crash recovery has only this bounded sub-two-second extra tail.
+const flushCoalesceWait = 1920 * time.Millisecond
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
 func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig) (*BlockChain, error) {

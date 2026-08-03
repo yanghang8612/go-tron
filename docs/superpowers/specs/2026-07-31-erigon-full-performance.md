@@ -1658,6 +1658,24 @@ wait to 960 ms: the observed import rate projects roughly 36-38 layers and
 38 MiB of source data per call, while the measured final output projects only
 about 13 MiB, comfortably below the unchanged 32 MiB final batch cap.
 
+The 960-ms deployment then imported 1,994 blocks / 108,647 transactions in a
+52-second warm window. It reached 40.39 layers/group; 46 of 49 groups crossed
+the old source boundary and admitted 511 additional layers. Final bytes fell
+to 28.56% of input, about 308 KB/block (26.8% below P4.34 and 14.8% below the
+480-ms canary). Final operations fell to about 1,041/block (14.4% below P4.34).
+There was again no Pebble write delay. Relative to the preceding 480-ms warm
+window, OS writes per block fell about 13%, database writes 17%, compaction
+input 17%, and compaction output 21%; both samples still had changing debt, so
+these physical ratios remain directional rather than a fixed-range A/B.
+
+The final group averaged only about 12.5 MiB despite the much larger source
+window, and process memory stayed near 2.1 GiB. The next bounded calibration is
+1,920 ms. At the observed rate it should aggregate roughly 80 layers / 86 MiB
+of source data and remain below both the 32 MiB final-output and 128 MiB source
+bounds. Shutdown still interrupts the timer, caught-up mainnet produces only
+about one block during the interval, and bulk-sync crash replay remains a
+bounded sub-two-second tail.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

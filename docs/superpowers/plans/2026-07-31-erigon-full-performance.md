@@ -197,6 +197,8 @@
   480 ms and expose exact input/output bytes plus extended group/layer counts.
 - [x] Use the 480-ms production canary to verify logical-byte reduction, then
   raise the window to 960 ms so source input crosses the old 32 MiB boundary.
+- [x] Verify the 960-ms output-bounded path and promote it to 1,920 ms while
+  measured final/source sizes remain below the fixed 32/128 MiB caps.
 - [ ] Run the output-bounded aggregation production gate and compare layers per
   group, logical byte reduction, disk/compaction bytes per block, stalls,
   backpressure, and buffered-layer bounds against P4.34.
