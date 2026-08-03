@@ -397,6 +397,46 @@ func TestIterateStateDomainChangesByKeyBlockRangeSeeksPastOldHistory(t *testing.
 	}
 }
 
+func TestReadStateKVAsOfTxNumStopsAtFirstSubsequentChange(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x28}
+	key := []byte("reward/frequent")
+	for _, blockNum := range []uint64{2, 3} {
+		if err := WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatalf("write range %d: %v", blockNum, err)
+		}
+		if err := WriteStateDomainChange(db, &StateDomainChange{
+			BlockNum:   blockNum,
+			TxNum:      blockNum,
+			Seq:        1,
+			FlatDomain: StateFlatDomainKVLatest,
+			Owner:      owner,
+			Generation: 1,
+			Domain:     kvdomains.SystemReward,
+			Key:        key,
+			PrevExists: true,
+			Prev:       []byte{byte(blockNum - 2)},
+			NextExists: true,
+			Next:       []byte{byte(blockNum - 1)},
+		}); err != nil {
+			t.Fatalf("write change %d: %v", blockNum, err)
+		}
+	}
+	// The second block remains in the inverse index but its changeset row is
+	// unreadable. A point-in-time read at tx 1 only needs block 2's Prev and
+	// must stop before touching block 3.
+	if err := db.Put(stateChangeSetKey(3, 1), []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	value, ok, err := ReadStateKVAsOfTxNum(db, owner, 1, kvdomains.SystemReward, key, 1, 3)
+	if err != nil {
+		t.Fatalf("read as of first change: %v", err)
+	}
+	if !ok || !bytes.Equal(value, []byte{0}) {
+		t.Fatalf("value = %x ok=%v, want 00/true", value, ok)
+	}
+}
+
 func TestIterateStateDomainChangesByPrefixFiltersTxWindowAndPrefix(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	owner := common.Address{0x41, 0x26}

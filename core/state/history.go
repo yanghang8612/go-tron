@@ -37,8 +37,8 @@ func stateDomainHistoryConfig() (snapshots.DomainCfg, error) {
 // blockNum == 0 returns the genesis state (no block has yet been applied
 // after genesis from a "state at the end of block 0" perspective; for an
 // archive node that started from genesis the live state at blockNum=0 IS
-// the genesis state, and the inverse-index walk will roll back every block
-// in (0, HEAD] that touched the key).
+// the genesis state, and the history index seeks the first change in
+// (0, HEAD] that touched the key).
 //
 // blockNum >= currentHead short-circuits to a live read.
 //
@@ -219,7 +219,7 @@ type PersistentHistoryReader struct {
 
 	// live resolves the end-of-HEAD account snapshot. Accounts live in the
 	// flat account latest domain plus StateDB's in-memory overlay. live may be
-	// nil — in that case the reader's live-account baseline is "no account
+	// nil — in that case the reader's live-account fallback is "no account
 	// exists", and any AccountAt(addr, N) is answerable only from history rows.
 	live LiveAccountReader
 
@@ -301,11 +301,11 @@ type accountCacheEntry struct {
 // doesn't leak across unrelated queries.
 //
 // `live` is the production state.StateDB or any LiveAccountReader; it
-// resolves the end-of-HEAD account snapshot that the inverse-index walk
-// rolls back from. Pass nil if no live account view is available (the
-// reader will then treat "live" as "no account exists" and reconstruct
-// purely from history rows — useful for tests that target the rollback
-// path in isolation).
+// resolves the end-of-HEAD account snapshot when no later history mutation
+// exists for the requested key. Pass nil if no live account view is available
+// (the reader will then treat "live" as "no account exists" and reconstruct
+// purely from history rows — useful for tests that target the history path in
+// isolation).
 //
 // `db` is the disk-side KV store: it serves per-block AccountDelta /
 // SlotDelta rows, the inverse-index scan, and the live flat latest domains.
@@ -625,20 +625,19 @@ func (r *PersistentHistoryReader) readStateAccountLatestAsOf(owner tcommon.Addre
 		}
 		return cfg.ReadHotAccountLatestAsOf(r.db, owner, targetTxNum, headTxNum)
 	}
-	latest := r.latestAtTxNum(headTxNum)
-	value, exists, err := latest.AccountLatest(owner)
+	if targetTxNum < headTxNum {
+		change, err := r.firstStateDomainChangeByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainAccountLatest, owner, 0, 0, nil)
+		if err != nil {
+			return nil, false, err
+		}
+		if change != nil {
+			value, exists := previousStateDomainValue(change)
+			return value, exists, nil
+		}
+	}
+	value, exists, err := r.latestAtTxNum(headTxNum).AccountLatest(owner)
 	if err != nil {
 		return nil, false, err
-	}
-	if targetTxNum >= headTxNum {
-		return append([]byte(nil), value...), exists, nil
-	}
-	changes, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainAccountLatest, owner, 0, 0, nil)
-	if err != nil {
-		return nil, false, err
-	}
-	for i := len(changes) - 1; i >= 0; i-- {
-		value, exists = previousStateDomainValue(changes[i])
 	}
 	return append([]byte(nil), value...), exists, nil
 }
@@ -666,20 +665,19 @@ func (r *PersistentHistoryReader) readStateKVAsOfTxNum(owner tcommon.Address, ge
 		}
 		return cfg.ReadHotKVLatestAsOf(r.db, owner, generation, domain, key, targetTxNum, headTxNum)
 	}
-	latest := r.latestAtTxNum(headTxNum)
-	value, exists, err := latest.KVLatest(owner, generation, domain, key)
+	if targetTxNum < headTxNum {
+		change, err := r.firstStateDomainChangeByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVLatest, owner, generation, domain, key)
+		if err != nil {
+			return nil, false, err
+		}
+		if change != nil {
+			value, exists := previousStateDomainValue(change)
+			return value, exists, nil
+		}
+	}
+	value, exists, err := r.latestAtTxNum(headTxNum).KVLatest(owner, generation, domain, key)
 	if err != nil {
 		return nil, false, err
-	}
-	if targetTxNum >= headTxNum {
-		return append([]byte(nil), value...), exists, nil
-	}
-	changes, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVLatest, owner, generation, domain, key)
-	if err != nil {
-		return nil, false, err
-	}
-	for i := len(changes) - 1; i >= 0; i-- {
-		value, exists = previousStateDomainValue(changes[i])
 	}
 	return append([]byte(nil), value...), exists, nil
 }
@@ -732,32 +730,23 @@ func (r *PersistentHistoryReader) readStateKVGenerationAsOfTxNum(owner tcommon.A
 		}
 		return cfg.ReadHotKVGenerationAsOf(r.db, owner, targetTxNum, headTxNum)
 	}
-	latest := r.latestAtTxNum(headTxNum)
-	generation, exists, err := latest.KVGeneration(owner)
-	if err != nil {
-		return 0, false, err
-	}
-	if targetTxNum >= headTxNum {
-		return generation, exists, nil
-	}
-	changes, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVGeneration, owner, 0, 0, nil)
-	if err != nil {
-		return 0, false, err
-	}
-	for i := len(changes) - 1; i >= 0; i-- {
-		change := changes[i]
-		if !change.PrevExists {
-			generation = 0
-			exists = false
-			continue
-		}
-		generation, err = rawdb.DecodeStateKVGenerationValue(change.Prev)
+	if targetTxNum < headTxNum {
+		change, err := r.firstStateDomainChangeByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVGeneration, owner, 0, 0, nil)
 		if err != nil {
 			return 0, false, err
 		}
-		exists = true
+		if change != nil {
+			if !change.PrevExists {
+				return 0, false, nil
+			}
+			generation, err := rawdb.DecodeStateKVGenerationValue(change.Prev)
+			if err != nil {
+				return 0, false, err
+			}
+			return generation, true, nil
+		}
 	}
-	return generation, exists, nil
+	return r.latestAtTxNum(headTxNum).KVGeneration(owner)
 }
 
 func (r *PersistentHistoryReader) readStateAccountKVAsOf(owner tcommon.Address, domain kvdomains.KVDomain, key []byte, targetBlock, headBlock uint64) ([]byte, bool, error) {
@@ -1013,6 +1002,69 @@ func (r *PersistentHistoryReader) collectStateAccountKVPrefixChanges(targetTxNum
 	return mergeStateDomainChangeSets(kvChanges, generationChanges), nil
 }
 
+// firstStateDomainChangeByKey implements the point-read equivalent of
+// Erigon's HistorySeek: the earliest mutation in (targetTxNum, headTxNum]
+// stores the value that existed at targetTxNum in Prev. Hot and cold history
+// can overlap around the freeze boundary, so seek both and keep the earlier
+// logical mutation rather than relying on storage-tier precedence.
+func (r *PersistentHistoryReader) firstStateDomainChangeByKey(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*rawdb.StateDomainChange, error) {
+	if r == nil || targetTxNum >= headTxNum {
+		return nil, nil
+	}
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
+	match := func(change *rawdb.StateDomainChange) bool {
+		if change == nil || change.TxNum <= targetTxNum || change.TxNum > headTxNum || change.FlatDomain != flatDomain || change.Owner != owner {
+			return false
+		}
+		return flatDomain != rawdb.StateFlatDomainKVLatest ||
+			(change.Generation == generation && change.Domain == domain && bytes.Equal(change.Key, key))
+	}
+	var first *rawdb.StateDomainChange
+	consider := func(change *rawdb.StateDomainChange) bool {
+		if !match(change) {
+			return false
+		}
+		if first == nil || stateDomainChangeLess(change, first) {
+			first = cloneHistoryDomainChange(change)
+		}
+		return true
+	}
+	if err := r.iterateHotStateDomainChangesByKey(targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, func(change *rawdb.StateDomainChange) (bool, error) {
+		if err := r.contextError(); err != nil {
+			return false, err
+		}
+		return !consider(change), nil
+	}); err != nil {
+		return nil, err
+	}
+	if r.coldHistory != nil && targetTxNum != ^uint64(0) {
+		fromTxNum := targetTxNum + 1
+		if keyed, ok := r.coldHistory.(StateDomainChangeColdKeyHistory); ok {
+			if err := keyed.IterateStateDomainChangesByKey(fromTxNum, headTxNum, flatDomain, owner, generation, domain, key, func(change *rawdb.StateDomainChange) (bool, error) {
+				if err := r.contextError(); err != nil {
+					return false, err
+				}
+				return !consider(change), nil
+			}); err != nil {
+				return nil, err
+			}
+		} else if err := r.coldHistory.IterateStateDomainChanges(fromTxNum, headTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+			if err := r.contextError(); err != nil {
+				return false, err
+			}
+			// The generic compatibility path is not key ordered, so it must
+			// inspect the complete range to select the earliest match.
+			consider(change)
+			return true, nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return first, nil
+}
+
 func (r *PersistentHistoryReader) collectStateDomainChangesByKey(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]*rawdb.StateDomainChange, error) {
 	if r == nil || targetTxNum >= headTxNum {
 		return nil, nil
@@ -1188,14 +1240,18 @@ func mergeStateDomainChangeSets(sets ...[]*rawdb.StateDomainChange) []*rawdb.Sta
 
 func sortStateDomainChanges(changes []*rawdb.StateDomainChange) {
 	sort.Slice(changes, func(i, j int) bool {
-		if changes[i].TxNum != changes[j].TxNum {
-			return changes[i].TxNum < changes[j].TxNum
-		}
-		if changes[i].BlockNum != changes[j].BlockNum {
-			return changes[i].BlockNum < changes[j].BlockNum
-		}
-		return changes[i].Seq < changes[j].Seq
+		return stateDomainChangeLess(changes[i], changes[j])
 	})
+}
+
+func stateDomainChangeLess(a, b *rawdb.StateDomainChange) bool {
+	if a.TxNum != b.TxNum {
+		return a.TxNum < b.TxNum
+	}
+	if a.BlockNum != b.BlockNum {
+		return a.BlockNum < b.BlockNum
+	}
+	return a.Seq < b.Seq
 }
 
 type stateDomainChangeKey struct {

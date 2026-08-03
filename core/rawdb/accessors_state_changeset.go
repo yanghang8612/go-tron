@@ -381,8 +381,8 @@ func iterateStateDomainChangesByKey(db StateKVHistoryReader, fromBlock, toBlock 
 	if targetTxNum >= headTxNum {
 		return nil
 	}
-	blocks := make(map[uint64]struct{})
-	collectBlock := func(blockNum uint64) (bool, error) {
+	stop := false
+	visitBlock := func(blockNum uint64) (bool, error) {
 		// The block-bounded archive path already restricts candidates to
 		// (targetBlock, headBlock]. targetTxNum/headTxNum are the respective
 		// end-of-block boundaries, so every change in those candidate blocks is
@@ -399,24 +399,6 @@ func iterateStateDomainChangesByKey(db StateKVHistoryReader, fromBlock, toBlock 
 				return true, nil
 			}
 		}
-		blocks[blockNum] = struct{}{}
-		return true, nil
-	}
-	var err error
-	if bounded {
-		err = IterateStateDomainChangeBlocksByKeyRange(db, fromBlock, toBlock, flatDomain, owner, generation, domain, key, collectBlock)
-	} else {
-		err = IterateStateDomainChangeBlocksByKey(db, flatDomain, owner, generation, domain, key, collectBlock)
-	}
-	if err != nil {
-		return err
-	}
-	ordered := make([]uint64, 0, len(blocks))
-	for blockNum := range blocks {
-		ordered = append(ordered, blockNum)
-	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
-	for _, blockNum := range ordered {
 		if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
 			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) {
 				return true, nil
@@ -424,12 +406,24 @@ func iterateStateDomainChangesByKey(db StateKVHistoryReader, fromBlock, toBlock 
 			if !stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
 				return true, nil
 			}
-			return fn(change)
+			cont, err := fn(change)
+			if err != nil {
+				return false, err
+			}
+			if !cont {
+				stop = true
+				return false, nil
+			}
+			return true, nil
 		}); err != nil {
-			return err
+			return false, err
 		}
+		return !stop, nil
 	}
-	return nil
+	if bounded {
+		return IterateStateDomainChangeBlocksByKeyRange(db, fromBlock, toBlock, flatDomain, owner, generation, domain, key, visitBlock)
+	}
+	return IterateStateDomainChangeBlocksByKey(db, flatDomain, owner, generation, domain, key, visitBlock)
 }
 
 // IterateStateDomainChangesByPrefix walks hot KV-latest StateDomainChange rows
@@ -699,9 +693,9 @@ func stateBlockIntersectsTxWindow(db ethdb.KeyValueReader, blockNum, targetTxNum
 	return endTxNum > targetTxNum && beginTxNum <= headTxNum, nil
 }
 
-// ReadStateKVAsOf reconstructs one account-KV latest value at the end of
-// targetBlock by starting from the current latest row and rolling back captured
-// block change sets in (targetBlock, headBlock].
+// ReadStateKVAsOf reconstructs one account-KV value at the end of targetBlock.
+// The first subsequent mutation contains that value in Prev; if there is no
+// subsequent mutation, the current latest row is still valid at targetBlock.
 func ReadStateKVAsOf(db stateKVHistoryReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, targetBlock, headBlock uint64) ([]byte, bool, error) {
 	targetTxNum, err := StateTxNumAtBlockEnd(db, targetBlock)
 	if err != nil {
@@ -727,54 +721,43 @@ func ReadStateAccountLatestAsOf(db stateKVHistoryReader, owner common.Address, t
 }
 
 func ReadStateAccountLatestAsOfTxNum(db stateKVHistoryReader, owner common.Address, targetTxNum, headTxNum uint64) ([]byte, bool, error) {
+	if targetTxNum < headTxNum {
+		change, err := firstStateDomainChangeByKey(db, targetTxNum, headTxNum, StateFlatDomainAccountLatest, owner, 0, 0, nil)
+		if err != nil {
+			return nil, false, err
+		}
+		if change != nil {
+			if !change.PrevExists {
+				return nil, false, nil
+			}
+			return append([]byte(nil), change.Prev...), true, nil
+		}
+	}
 	value, exists, err := ReadStateAccountLatest(db, owner)
 	if err != nil {
 		return nil, false, err
 	}
-	if targetTxNum >= headTxNum {
-		return value, exists, nil
-	}
-	changes, err := collectStateDomainChangesByKey(db, targetTxNum, headTxNum, StateFlatDomainAccountLatest, owner, 0, 0, nil)
-	if err != nil {
-		return nil, false, err
-	}
-	for i := len(changes) - 1; i >= 0; i-- {
-		change := changes[i]
-		if change.PrevExists {
-			value = append([]byte(nil), change.Prev...)
-			exists = true
-		} else {
-			value = nil
-			exists = false
-		}
-	}
 	return append([]byte(nil), value...), exists, nil
 }
 
-// ReadStateKVAsOfTxNum reconstructs one account-KV latest value at the end of
-// targetTxNum by starting from the current latest row and rolling back captured
-// domain changes in (targetTxNum, headTxNum].
+// ReadStateKVAsOfTxNum reconstructs one account-KV value at targetTxNum by
+// seeking the first mutation in (targetTxNum, headTxNum].
 func ReadStateKVAsOfTxNum(db stateKVHistoryReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, targetTxNum, headTxNum uint64) ([]byte, bool, error) {
+	if targetTxNum < headTxNum {
+		change, err := firstStateDomainChangeByKey(db, targetTxNum, headTxNum, StateFlatDomainKVLatest, owner, generation, domain, key)
+		if err != nil {
+			return nil, false, err
+		}
+		if change != nil {
+			if !change.PrevExists {
+				return nil, false, nil
+			}
+			return append([]byte(nil), change.Prev...), true, nil
+		}
+	}
 	value, exists, err := ReadStateKVLatest(db, owner, generation, domain, key)
 	if err != nil {
 		return nil, false, err
-	}
-	if targetTxNum >= headTxNum {
-		return value, exists, nil
-	}
-	changes, err := collectStateDomainChangesByKey(db, targetTxNum, headTxNum, StateFlatDomainKVLatest, owner, generation, domain, key)
-	if err != nil {
-		return nil, false, err
-	}
-	for i := len(changes) - 1; i >= 0; i-- {
-		change := changes[i]
-		if change.PrevExists {
-			value = append([]byte(nil), change.Prev...)
-			exists = true
-		} else {
-			value = nil
-			exists = false
-		}
 	}
 	return append([]byte(nil), value...), exists, nil
 }
@@ -792,32 +775,35 @@ func ReadStateKVGenerationAsOf(db stateKVHistoryReader, owner common.Address, ta
 }
 
 func ReadStateKVGenerationAsOfTxNum(db stateKVHistoryReader, owner common.Address, targetTxNum, headTxNum uint64) (uint64, bool, error) {
-	generation, exists, err := ReadStateKVGeneration(db, owner)
-	if err != nil {
-		return 0, false, err
-	}
-	if targetTxNum >= headTxNum {
-		return generation, exists, nil
-	}
-	changes, err := collectStateDomainChangesByKey(db, targetTxNum, headTxNum, StateFlatDomainKVGeneration, owner, 0, 0, nil)
-	if err != nil {
-		return 0, false, err
-	}
-	for i := len(changes) - 1; i >= 0; i-- {
-		change := changes[i]
-		if !change.PrevExists {
-			generation = 0
-			exists = false
-			continue
-		}
-		prev, err := DecodeStateKVGenerationValue(change.Prev)
+	if targetTxNum < headTxNum {
+		change, err := firstStateDomainChangeByKey(db, targetTxNum, headTxNum, StateFlatDomainKVGeneration, owner, 0, 0, nil)
 		if err != nil {
 			return 0, false, err
 		}
-		generation = prev
-		exists = true
+		if change != nil {
+			if !change.PrevExists {
+				return 0, false, nil
+			}
+			generation, err := DecodeStateKVGenerationValue(change.Prev)
+			if err != nil {
+				return 0, false, err
+			}
+			return generation, true, nil
+		}
 	}
-	return generation, exists, nil
+	return ReadStateKVGeneration(db, owner)
+}
+
+// firstStateDomainChangeByKey returns the first mutation after targetTxNum.
+// Its Prev value is the value as of targetTxNum, so point-in-time reads do not
+// need to materialize and replay the key's complete subsequent history.
+func firstStateDomainChangeByKey(db stateKVHistoryReader, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*StateDomainChange, error) {
+	var first *StateDomainChange
+	err := IterateStateDomainChangesByKey(db, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, func(change *StateDomainChange) (bool, error) {
+		first = cloneStateDomainChange(change)
+		return false, nil
+	})
+	return first, err
 }
 
 func collectStateDomainChangesByKey(db stateKVHistoryReader, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]*StateDomainChange, error) {

@@ -686,6 +686,51 @@ func TestStateDomainChangeBinaryTxRangePointLookupUsesLogarithmicReads(t *testin
 	}
 }
 
+func TestStateDomainChangeBinaryV4KeyRangeSeeksTxLowerBound(t *testing.T) {
+	const changeCount = 4096
+	owner := binaryAddress(0xb4)
+	changes := make([]*rawdb.StateDomainChange, changeCount)
+	for i := range changes {
+		txNum := uint64(i + 1)
+		change := binaryStateDomainChange(txNum, txNum, 1, "frequent-key")
+		change.Owner = owner
+		change.Generation = 7
+		changes[i] = change
+	}
+	segmentData, _, accessorEntries, err := encodeStateDomainChangeBinarySegment(1, changeCount, normalizeStateDomainChangesForBinary(changes))
+	if err != nil {
+		t.Fatalf("encode segment: %v", err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessorV4(1, changeCount, accessorEntries)
+	if err != nil {
+		t.Fatalf("encode accessor: %v", err)
+	}
+	header, err := readStateDomainChangeBinaryHeaderAt(bytes.NewReader(accessorData), stateDomainChangeBinaryAccessorMagic)
+	if err != nil {
+		t.Fatalf("read accessor header: %v", err)
+	}
+	countedSegment := &countingStateDomainReaderAt{reader: bytes.NewReader(segmentData)}
+	var got []*rawdb.StateDomainChange
+	err = iterateStateDomainChangeBinarySegmentByAccessorV4Key(
+		countedSegment, uint64(len(segmentData)), bytes.NewReader(accessorData), uint64(len(accessorData)), header,
+		stateDomainChangeBinaryAccessorKey(changes[0]), 4000, changeCount,
+		func(change *rawdb.StateDomainChange) (bool, error) {
+			got = append(got, change)
+			return false, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("seek keyed history: %v", err)
+	}
+	if len(got) != 1 || got[0].TxNum != 4000 {
+		t.Fatalf("changes = %+v, want first tx 4000", got)
+	}
+	t.Logf("key tx lower-bound seek used %d segment reads for %d changes", countedSegment.reads, changeCount)
+	if countedSegment.reads > 40 {
+		t.Fatalf("key tx lower-bound seek used %d segment reads for %d changes, want logarithmic reads", countedSegment.reads, changeCount)
+	}
+}
+
 type countingStateDomainReaderAt struct {
 	reader interface {
 		ReadAt([]byte, int64) (int, error)

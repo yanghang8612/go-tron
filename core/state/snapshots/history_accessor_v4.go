@@ -228,13 +228,27 @@ func iterateStateDomainChangeBinarySegmentByAccessorV4Key(segment io.ReaderAt, s
 	if err != nil || !ok {
 		return err
 	}
-	for i := start; i < header.count; i++ {
-		entry, err := readStateDomainChangeBinaryAccessorV3ExactEntryAt(accessor, layout, i)
+	first, err := readStateDomainChangeBinaryAccessorV3ExactEntryAt(accessor, layout, start)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(first.hash[:], target[:]) {
+		return nil
+	}
+	end, err := stateDomainChangeBinaryAccessorV3ExactUpperBound(accessor, layout, header.count, target)
+	if err != nil {
+		return err
+	}
+	if fromTxNum > header.fromTxNum {
+		start, err = stateDomainChangeBinaryAccessorV3TxLowerBound(segment, segmentSize, accessor, layout, start, end, fromTxNum)
 		if err != nil {
 			return err
 		}
-		if !bytes.Equal(entry.hash[:], target[:]) {
-			return nil
+	}
+	for i := start; i < end; i++ {
+		entry, err := readStateDomainChangeBinaryAccessorV3ExactEntryAt(accessor, layout, i)
+		if err != nil {
+			return err
 		}
 		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, entry.offset, segmentSize)
 		if err != nil {

@@ -317,6 +317,48 @@ func stateDomainChangeBinaryAccessorV3ExactLowerBound(r io.ReaderAt, layout stat
 	return low, low < count, nil
 }
 
+func stateDomainChangeBinaryAccessorV3ExactUpperBound(r io.ReaderAt, layout stateDomainChangeBinaryAccessorV3Layout, count uint64, target [stateDomainChangeBinaryAccessorV3HashSize]byte) (uint64, error) {
+	low, high := uint64(0), count
+	for low < high {
+		mid := low + (high-low)/2
+		entry, err := readStateDomainChangeBinaryAccessorV3ExactEntryAt(r, layout, mid)
+		if err != nil {
+			return 0, err
+		}
+		if bytes.Compare(entry.hash[:], target[:]) <= 0 {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	return low, nil
+}
+
+// stateDomainChangeBinaryAccessorV3TxLowerBound uses the fact that exact
+// accessor entries with the same hash are ordered by segment offset and the
+// segment itself is ordered by txNum/seq. Hash collisions remain in that same
+// monotonic order, so the requested tx lower bound can be found without
+// decoding every older history record for a frequently-mutated key.
+func stateDomainChangeBinaryAccessorV3TxLowerBound(segment io.ReaderAt, segmentSize uint64, accessor io.ReaderAt, layout stateDomainChangeBinaryAccessorV3Layout, low, high, fromTxNum uint64) (uint64, error) {
+	for low < high {
+		mid := low + (high-low)/2
+		entry, err := readStateDomainChangeBinaryAccessorV3ExactEntryAt(accessor, layout, mid)
+		if err != nil {
+			return 0, err
+		}
+		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, entry.offset, segmentSize)
+		if err != nil {
+			return 0, err
+		}
+		if change.TxNum < fromTxNum {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	return low, nil
+}
+
 func stateDomainChangeBinaryAccessorV3GroupLowerBound(r io.ReaderAt, layout stateDomainChangeBinaryAccessorV3Layout, fileSize uint64, target [stateDomainChangeBinaryAccessorV3GroupKeySize]byte) (uint64, bool, error) {
 	low, high := uint64(0), layout.groupCount
 	for low < high {
@@ -344,13 +386,27 @@ func iterateStateDomainChangeBinarySegmentByAccessorV3Key(segment io.ReaderAt, s
 	if err != nil || !ok {
 		return err
 	}
-	for i := start; i < header.count; i++ {
-		entry, err := readStateDomainChangeBinaryAccessorV3ExactEntryAt(accessor, layout, i)
+	first, err := readStateDomainChangeBinaryAccessorV3ExactEntryAt(accessor, layout, start)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(first.hash[:], target[:]) {
+		return nil
+	}
+	end, err := stateDomainChangeBinaryAccessorV3ExactUpperBound(accessor, layout, header.count, target)
+	if err != nil {
+		return err
+	}
+	if fromTxNum > header.fromTxNum {
+		start, err = stateDomainChangeBinaryAccessorV3TxLowerBound(segment, segmentSize, accessor, layout, start, end, fromTxNum)
 		if err != nil {
 			return err
 		}
-		if !bytes.Equal(entry.hash[:], target[:]) {
-			return nil
+	}
+	for i := start; i < end; i++ {
+		entry, err := readStateDomainChangeBinaryAccessorV3ExactEntryAt(accessor, layout, i)
+		if err != nil {
+			return err
 		}
 		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, entry.offset, segmentSize)
 		if err != nil {

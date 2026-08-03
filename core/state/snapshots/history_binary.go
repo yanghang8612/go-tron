@@ -1991,7 +1991,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorFile(dir string, ref Segment
 		return iterateStateDomainChangeBinarySegmentByAccessorV4Key(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupKey, fromTxNum, toTxNum, fn)
 	}
 
-	start, ok, err := stateDomainChangeBinaryAccessorLowerBound(accessorFile, accessorSize, accessorHeader.count, lookupKey)
+	start, ok, err := stateDomainChangeBinaryAccessorKeyTxLowerBound(accessorFile, accessorSize, accessorHeader.count, lookupKey, fromTxNum)
 	if err != nil || !ok {
 		return err
 	}
@@ -2830,6 +2830,26 @@ func stateDomainChangeBinaryAccessorLowerBound(accessor io.ReaderAt, accessorSiz
 			return true
 		}
 		return bytes.Compare(entry.key, lookupKey) >= 0
+	})
+	if foundErr != nil {
+		return 0, false, foundErr
+	}
+	return uint64(i), uint64(i) < count, nil
+}
+
+func stateDomainChangeBinaryAccessorKeyTxLowerBound(accessor io.ReaderAt, accessorSize uint64, count uint64, lookupKey []byte, fromTxNum uint64) (uint64, bool, error) {
+	var foundErr error
+	i := sort.Search(int(count), func(i int) bool {
+		if foundErr != nil {
+			return true
+		}
+		entry, err := readStateDomainChangeBinaryAccessorEntryAtBounded(accessor, uint64(i), accessorSize)
+		if err != nil {
+			foundErr = err
+			return true
+		}
+		cmp := bytes.Compare(entry.key, lookupKey)
+		return cmp > 0 || (cmp == 0 && entry.txNum >= fromTxNum)
 	})
 	if foundErr != nil {
 		return 0, false, foundErr

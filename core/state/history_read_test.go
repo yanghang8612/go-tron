@@ -1622,6 +1622,71 @@ func TestPersistentHistoryReaderUsesKeyedColdHistory(t *testing.T) {
 	}
 }
 
+func TestPersistentHistoryReaderPointReadSeeksFirstColdChange(t *testing.T) {
+	owner := tcommon.BytesToAddress(append([]byte{tcommon.AddressPrefixMainnet}, bytes.Repeat([]byte{0x95}, tcommon.AccountIDLength)...))
+	key := []byte("reward/frequent")
+	cold := &keyedColdHistoryStub{changes: []*rawdb.StateDomainChange{
+		{
+			BlockNum: 2, TxNum: 2, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest,
+			Owner: owner, Generation: 7, Domain: kvdomains.SystemReward, Key: key,
+			PrevExists: true, Prev: []byte("at-target"), NextExists: true, Next: []byte("middle"),
+		},
+		{
+			BlockNum: 3, TxNum: 3, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest,
+			Owner: owner, Generation: 7, Domain: kvdomains.SystemReward, Key: key,
+			PrevExists: true, Prev: []byte("middle"), NextExists: true, Next: []byte("head"),
+		},
+	}}
+	reader := NewPersistentHistoryReaderWithColdHistory(rawdb.NewMemoryDatabase(), nil, 3, cold)
+	reader.latest = &recordingHotStateLatestReader{kv: map[string][]byte{
+		recordingHotLatestKVKey(owner, 7, kvdomains.SystemReward, key): []byte("head"),
+	}}
+
+	value, ok, err := reader.readStateKVAsOfTxNum(owner, 7, kvdomains.SystemReward, key, 1, 3)
+	if err != nil {
+		t.Fatalf("read point history: %v", err)
+	}
+	if !ok || string(value) != "at-target" {
+		t.Fatalf("value = %q ok=%v, want at-target/true", value, ok)
+	}
+	if cold.keyedVisits != 1 {
+		t.Fatalf("cold keyed visits = %d, want 1", cold.keyedVisits)
+	}
+	if len(reader.latest.(*recordingHotStateLatestReader).calls) != 0 {
+		t.Fatalf("latest reads = %v, want none when history seek hits", reader.latest.(*recordingHotStateLatestReader).calls)
+	}
+}
+
+func TestPersistentHistoryReaderPointReadChoosesEarlierColdChangeAcrossOverlap(t *testing.T) {
+	owner := tcommon.BytesToAddress(append([]byte{tcommon.AddressPrefixMainnet}, bytes.Repeat([]byte{0x96}, tcommon.AccountIDLength)...))
+	key := []byte("reward/overlap")
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateTxRange(db, 3, tcommon.Hash{0x03}, 3, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum: 3, TxNum: 3, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner: owner, Generation: 7, Domain: kvdomains.SystemReward, Key: key,
+		PrevExists: true, Prev: []byte("middle"), NextExists: true, Next: []byte("head"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cold := &keyedColdHistoryStub{changes: []*rawdb.StateDomainChange{{
+		BlockNum: 2, TxNum: 2, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner: owner, Generation: 7, Domain: kvdomains.SystemReward, Key: key,
+		PrevExists: true, Prev: []byte("at-target"), NextExists: true, Next: []byte("middle"),
+	}}}
+	reader := NewPersistentHistoryReaderWithColdHistory(db, nil, 3, cold)
+
+	value, ok, err := reader.readStateKVAsOfTxNum(owner, 7, kvdomains.SystemReward, key, 1, 3)
+	if err != nil {
+		t.Fatalf("read overlapping history: %v", err)
+	}
+	if !ok || string(value) != "at-target" {
+		t.Fatalf("value = %q ok=%v, want earliest cold Prev", value, ok)
+	}
+}
+
 func TestPersistentHistoryReaderKeyedHotHistoryUsesInverseIndex(t *testing.T) {
 	owner := tcommon.BytesToAddress(append([]byte{tcommon.AddressPrefixMainnet}, bytes.Repeat([]byte{0x90}, tcommon.AccountIDLength)...))
 	db := rawdb.NewMemoryDatabase()
@@ -1822,6 +1887,7 @@ type keyedColdHistoryStub struct {
 	keyedCalled   bool
 	genericCalled bool
 	keyedCalls    []keyedColdHistoryCall
+	keyedVisits   int
 }
 
 type recordingHotStateLatestReader struct {
@@ -1899,6 +1965,7 @@ func (s *keyedColdHistoryStub) IterateStateDomainChangesByKey(fromTxNum, toTxNum
 		if flatDomain == rawdb.StateFlatDomainKVLatest && (change.Generation != generation || change.Domain != domain || !bytes.Equal(change.Key, key)) {
 			continue
 		}
+		s.keyedVisits++
 		cont, err := fn(change)
 		if err != nil || !cont {
 			return err
