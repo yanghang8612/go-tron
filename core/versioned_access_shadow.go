@@ -43,6 +43,8 @@ var (
 	versionedShadowWriteCaptureFilteredNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/filtered_nanos", nil)
 	versionedShadowWriteCaptureRecorderTransactionsCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/recorder_only_transactions", nil)
 	versionedShadowWriteCaptureRecorderNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/recorder_only_nanos", nil)
+	versionedShadowRecorderFullTxCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/recorder_only_full_transactions", nil)
+	versionedShadowRecorderFullNanosCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/recorder_only_full_nanos", nil)
 	versionedShadowWriteCaptureEmptyTransactionsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/empty_transactions", nil)
 	versionedShadowWriteCaptureFilteredEmptyCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/filtered_empty_transactions", nil)
 	versionedShadowWriteCaptureCellsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/cells", nil)
@@ -206,6 +208,8 @@ type versionedAccessShadowStats struct {
 	writeCaptureFilteredNanos            int64
 	writeCaptureRecorderTransactions     int64
 	writeCaptureRecorderNanos            int64
+	writeCaptureRecorderFullTransactions int64
+	writeCaptureRecorderFullNanos        int64
 	writeCaptureEmptyTransactions        int64
 	writeCaptureFilteredEmpty            int64
 	writeCaptureCells                    int64
@@ -430,19 +434,6 @@ func (s *versionedAccessShadow) installRecordedWrite(key state.TransactionAccess
 	}
 }
 
-func (s *versionedAccessShadow) installJournalWrite(key state.TransactionAccessKey, txIndex int) {
-	if key.Kind != state.TransactionAccessAccount {
-		s.versions[key] = txIndex
-		return
-	}
-	s.rawAccountVersions[key.Address] = txIndex
-	full, fields := s.recorder.AccountWriteCoverage(key.Address)
-	if full || !fields {
-		s.accountFullVersions[key.Address] = txIndex
-		s.accountAnyVersions[key.Address] = txIndex
-	}
-}
-
 func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transaction, statedb *state.StateDB, dynProps *state.DynamicProperties, journalMark int) {
 	if txIndex >= 0 && txIndex < len(s.transactionDurations) && !s.transactionStarted.IsZero() {
 		s.transactionDurations[txIndex] = time.Since(s.transactionStarted).Nanoseconds()
@@ -458,12 +449,12 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 			s.stats.writeCaptureFilteredTransactions++
 		}
 		captureStarted := time.Now()
-		recorderOnly := !fullCapture && s.writeCaptureRecorderOnly
+		recorderOnly := s.writeCaptureRecorderOnly
 		var writes state.TransactionWriteSet
 		var known bool
 		var captureErr error
 		if recorderOnly {
-			writes, known, captureErr = statedb.CaptureTransactionRecorderWriteSetFiltered(&s.recorder, include)
+			writes, known, captureErr = statedb.CaptureTransactionRecorderWriteSetFiltered(&s.recorder, dynProps, include)
 		} else {
 			writes, known, captureErr = statedb.CaptureTransactionWriteSetFiltered(journalMark, &s.recorder, dynProps, include)
 		}
@@ -478,6 +469,10 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 		if recorderOnly {
 			s.stats.writeCaptureRecorderTransactions++
 			s.stats.writeCaptureRecorderNanos += captureNanos
+			if fullCapture {
+				s.stats.writeCaptureRecorderFullTransactions++
+				s.stats.writeCaptureRecorderFullNanos += captureNanos
+			}
 		}
 		switch {
 		case captureErr != nil:
@@ -696,13 +691,7 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 		return true
 	})
 
-	knownWrites := statedb.VisitTransactionAccessWritesSince(journalMark, func(key state.TransactionAccessKey) bool {
-		s.stats.writeCells++
-		recordWriteConflict(key)
-		return true
-	})
-
-	unsupported := s.recorder.Unsupported() || !knownWrites
+	unsupported := s.recorder.Unsupported() || s.recorder.WritesUnsupported()
 	if txIndex >= 0 && txIndex < len(s.transactionSupported) {
 		s.transactionSupported[txIndex] = !unsupported
 	}
@@ -886,14 +875,8 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 
 	// Only after validation do this transaction's serially-authoritative writes
 	// become the latest versions visible to later speculative attempts.
-	s.recorder.Visit(func(key state.TransactionAccessKey, mode state.TransactionAccessMode) bool {
-		if mode&(state.TransactionAccessWrite|state.TransactionAccessCommutativeWrite) != 0 {
-			s.installRecordedWrite(key, txIndex)
-		}
-		return true
-	})
-	statedb.VisitTransactionAccessWritesSince(journalMark, func(key state.TransactionAccessKey) bool {
-		s.installJournalWrite(key, txIndex)
+	s.recorder.VisitWrites(func(key state.TransactionAccessKey, _ state.TransactionAccessMode) bool {
+		s.installRecordedWrite(key, txIndex)
 		return true
 	})
 }
@@ -1200,6 +1183,8 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowWriteCaptureFilteredNanosCounter.Inc(stats.writeCaptureFilteredNanos)
 	versionedShadowWriteCaptureRecorderTransactionsCounter.Inc(stats.writeCaptureRecorderTransactions)
 	versionedShadowWriteCaptureRecorderNanosCounter.Inc(stats.writeCaptureRecorderNanos)
+	versionedShadowRecorderFullTxCounter.Inc(stats.writeCaptureRecorderFullTransactions)
+	versionedShadowRecorderFullNanosCounter.Inc(stats.writeCaptureRecorderFullNanos)
 	versionedShadowWriteCaptureEmptyTransactionsCounter.Inc(stats.writeCaptureEmptyTransactions)
 	versionedShadowWriteCaptureFilteredEmptyCounter.Inc(stats.writeCaptureFilteredEmpty)
 	versionedShadowWriteCaptureCellsCounter.Inc(stats.writeCaptureCells)

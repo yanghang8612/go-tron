@@ -1497,6 +1497,54 @@ Transfer sender/audit WriteSets recorder-complete across their dynamic/raw
 families and remove their full journal scan; at whole-node level, compaction
 bandwidth and commit backpressure remain the larger throughput constraints.
 
+#### P4.33: Complete mutation-time WriteSet
+
+P4.32 optimized the optional retry carrier, but its OCC validator still walked
+the StateDB undo journal twice per transaction: once to discover conflicts and
+again to install versions. Full sender-chain/audit captures also retained the
+journal materialization path. This differed from Erigon's executor, where the
+worker owns a complete typed WriteSet independently of its ReadSet and returns
+that carrier directly to ordered validation/publication.
+
+The transaction recorder now retains one complete first-write-ordered key
+carrier for OCC regardless of whether the block requests post-images. Its
+optional capture carrier is separate: full captures reuse the OCC carrier,
+projected captures append only matching keys, and no-capture transactions build
+no second slice. This deliberately trades P4.32's two-allocation local win for
+removing both transaction-end journal scans from every version-observed
+transaction.
+
+`journal.append` is now the authoritative completion hook for state families
+that did not already record at their typed mutation sites: witness, storage,
+code, contract metadata, self-destruct, and transient storage. Account scalar
+pre-images do not reintroduce a coarse Account key when exact field writes are
+present; AccountKV writes/generation resets deduplicate against their existing
+inline records. DynamicProperties and raw KV keep their direct mutation-time
+post-images. Journaled resource-weight changes are accepted only when the same
+recorder is attached to their DynamicProperties target, preserving the
+commutative delta classification. Unknown journal or inline write kinds mark a
+separate write-unsupported barrier rather than silently producing a partial
+carrier.
+
+Ordinary full sender-chain carriers now take the same recorder-only path as
+filtered prefixes. The 1/64 sampled full capture keeps the combined journal
+path as an independent reference. New
+`recorder_only_full_{transactions,nanos}` counters isolate the removed full
+capture cost. Tests compare full recorder and journal post-images across typed
+account, storage, AccountKV, and DynamicProperties cells, cover every journal
+write family and unknown-write rejection, and exercise both sampled and
+ordinary async retry publication. `go test ./... -p=1`, `go vet ./...`, and the
+targeted race suite pass.
+
+A short local 64-Transfer shadow benchmark measured about 96 microseconds per
+block versus P4.32's roughly 100-microsecond development baseline. Allocation
+count returned from 144 to 146 and bytes from about 35.46 KB to 35.72 KB because
+the complete OCC carrier is now always retained; the production gate therefore
+depends on the eliminated journal walks and full-capture counters, not this
+small local result. Mainnet must retain zero unsupported capture, publication
+mismatch, and retry error while reducing P4.32's 6.40-microsecond full-capture
+cost and total critical-path capture time.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

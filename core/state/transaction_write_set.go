@@ -36,23 +36,22 @@ func (s *StateDB) CaptureTransactionWriteSet(journalMark int, recorder *Transact
 	return s.CaptureTransactionWriteSetFiltered(journalMark, recorder, dynProps, nil)
 }
 
-// CaptureTransactionRecorderWriteSetFiltered materializes projected writes
-// whose kinds have complete inline-recorder coverage. Account paths and
-// Erigon-style AccountKV incarnation paths are registered at their
-// authoritative mutation sites, so a compatible projection can skip the
-// transaction-end undo-journal walk entirely. A nil projection is rejected to
-// keep this narrow fast path from being mistaken for full write-set capture.
-func (s *StateDB) CaptureTransactionRecorderWriteSetFiltered(recorder *TransactionAccessRecorder, include func(TransactionAccessKey) bool) (writes TransactionWriteSet, known bool, err error) {
+// CaptureTransactionRecorderWriteSetFiltered materializes full or projected
+// writes from the complete mutation-time carrier. Journal-only state families
+// are registered by journal.append, while DynamicProperties and raw KV retain
+// their authoritative inline post-images. This skips the undo-journal walk; a
+// nil projection retains the full write set.
+func (s *StateDB) CaptureTransactionRecorderWriteSetFiltered(recorder *TransactionAccessRecorder, dynProps *DynamicProperties, include func(TransactionAccessKey) bool) (writes TransactionWriteSet, known bool, err error) {
 	if s == nil {
 		return nil, false, fmt.Errorf("capture transaction recorder writes: nil state")
 	}
-	if recorder == nil || include == nil {
+	if recorder == nil || recorder.WritesUnsupported() {
 		return nil, false, nil
 	}
 	keys, modes := appendRecorderTransactionWrites(nil, nil, recorder, func(key TransactionAccessKey) bool {
-		return TransactionAccessRecorderCoversWrites(key.Kind) && include(key)
+		return TransactionAccessRecorderCoversWrites(key.Kind) && (include == nil || include(key))
 	})
-	writes, err = s.materializeTransactionWriteSet(keys, modes, recorder, nil)
+	writes, err = s.materializeTransactionWriteSet(keys, modes, recorder, dynProps)
 	return writes, err == nil, err
 }
 
@@ -102,7 +101,7 @@ func appendRecorderTransactionWrites(keys map[TransactionAccessKey]struct{}, mod
 	if recorder == nil {
 		return keys, modes
 	}
-	recorder.VisitWrites(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+	recorder.VisitCaptureWrites(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
 		if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) == 0 || (include != nil && !include(key)) {
 			return true
 		}

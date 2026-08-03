@@ -111,8 +111,16 @@ func TestTransactionAccessRecorderVisitWritesSkipsReadsAndDeduplicates(t *testin
 	recorder.ConfigureWriteKeyCapture(false, nil)
 	recorder.record(account, TransactionAccessWrite)
 	recorder.record(field, TransactionAccessWrite)
+	fullWrites := 0
 	recorder.VisitWrites(func(TransactionAccessKey, TransactionAccessMode) bool {
-		t.Fatal("disabled write-key capture retained a key")
+		fullWrites++
+		return true
+	})
+	if fullWrites != 2 {
+		t.Fatalf("disabled capture OCC writes = %d, want 2", fullWrites)
+	}
+	recorder.VisitCaptureWrites(func(TransactionAccessKey, TransactionAccessMode) bool {
+		t.Fatal("disabled capture retained a projected key")
 		return false
 	})
 	accountSeen := false
@@ -132,7 +140,7 @@ func TestTransactionAccessRecorderVisitWritesSkipsReadsAndDeduplicates(t *testin
 	recorder.record(field, TransactionAccessWrite)
 	recorder.recordAccountKV(address, kvdomains.AccountPermissionAux, []byte("owner"), TransactionAccessWrite)
 	projected := make([]TransactionAccessKey, 0, 1)
-	recorder.VisitWrites(func(key TransactionAccessKey, _ TransactionAccessMode) bool {
+	recorder.VisitCaptureWrites(func(key TransactionAccessKey, _ TransactionAccessMode) bool {
 		projected = append(projected, key)
 		return true
 	})
@@ -210,6 +218,86 @@ func TestVisitTransactionWritesSinceClassifiesJournal(t *testing.T) {
 	})
 	if known || accessWrites != len(wantKinds)-1 {
 		t.Fatalf("versioned writes known=%v count=%d, want false/%d", known, accessWrites, len(wantKinds)-1)
+	}
+}
+
+func TestJournalAppendCompletesRecorderWriteSet(t *testing.T) {
+	var account, witness, contract tcommon.Address
+	account[0], witness[0], contract[0] = 0x41, 0x41, 0x41
+	account[20], witness[20], contract[20] = 1, 2, 3
+	var slot tcommon.Hash
+	slot[31] = 9
+
+	var recorder TransactionAccessRecorder
+	recorder.Reset(16)
+	j := newJournal()
+	j.transactionAccess = &recorder
+
+	// Scalar account setters record their exact field before journaling the
+	// coarse protobuf pre-image. The journal must not reintroduce Account.
+	balance := TransactionAccessKey{Kind: TransactionAccessAccountField, Address: account, AccountField: TransactionAccountFieldBalance}
+	recorder.record(balance, TransactionAccessWrite)
+	j.append(&accountScalarChange{address: account})
+	j.append(accountChange{address: account, prev: []byte{1}})
+	j.append(witnessChange{address: witness})
+	j.append(&storageChange{address: contract, key: slot})
+	j.append(codeChange{address: contract})
+	j.append(contractMetaChange{address: contract})
+	j.append(kvChange{address: account, mapKey: kvCompositeKeyString(kvdomains.AccountPermissionAux, []byte("owner"))})
+	j.append(kvResetChange{address: account})
+	j.append(selfDestructChange{address: contract})
+	j.append(transientStorageChange{tk: transientStorageKey{addr: contract, key: slot}})
+
+	weight := TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: "total_net_weight"}
+	recorder.record(weight, TransactionAccessCommutativeWrite)
+	dp := NewDynamicProperties()
+	dp.SetTransactionAccessRecorder(&recorder)
+	j.append(resourceWeightChange{dp: dp, resource: corepb.ResourceCode_BANDWIDTH})
+
+	got := make(map[TransactionAccessKey]TransactionAccessMode)
+	recorder.VisitWrites(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+		got[key] = mode
+		return true
+	})
+	want := []TransactionAccessKey{
+		balance,
+		{Kind: TransactionAccessWitness, Address: witness},
+		{Kind: TransactionAccessStorage, Address: contract, StorageKey: slot},
+		{Kind: TransactionAccessCode, Address: contract},
+		{Kind: TransactionAccessContractMetadata, Address: contract},
+		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountPermissionAux, LogicalKey: "owner"},
+		{Kind: TransactionAccessAccountKVGeneration, Address: account},
+		{Kind: TransactionAccessSelfDestruct, Address: contract},
+		{Kind: TransactionAccessTransientStorage, Address: contract, StorageKey: slot},
+		weight,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("journal recorder writes = %v, want %v", got, want)
+	}
+	for _, key := range want {
+		if got[key]&(TransactionAccessWrite|TransactionAccessCommutativeWrite) == 0 {
+			t.Fatalf("missing journal recorder write %v (all=%v)", key, got)
+		}
+	}
+	if _, coarse := got[TransactionAccessKey{Kind: TransactionAccessAccount, Address: account}]; coarse {
+		t.Fatal("typed scalar journal pre-image reintroduced a coarse Account write")
+	}
+	if recorder.WritesUnsupported() {
+		t.Fatal("known journal writes marked unsupported")
+	}
+
+	j.append(unknownTransactionJournalChange{})
+	if !recorder.WritesUnsupported() {
+		t.Fatal("unknown journal write was not marked unsupported")
+	}
+	recorder.Reset(16)
+	if recorder.WritesUnsupported() {
+		t.Fatal("write unsupported marker survived transaction reset")
+	}
+	j.transactionAccess = &recorder
+	j.append(resourceWeightChange{dp: NewDynamicProperties(), resource: corepb.ResourceCode_ENERGY})
+	if !recorder.WritesUnsupported() {
+		t.Fatal("resource weight journal without the matching dynamic recorder was accepted")
 	}
 }
 

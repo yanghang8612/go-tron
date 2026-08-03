@@ -279,6 +279,9 @@ type StateDB struct {
 func (s *StateDB) SetTransactionAccessRecorder(recorder *TransactionAccessRecorder) {
 	if s != nil {
 		s.transactionAccess = recorder
+		if s.journal != nil {
+			s.journal.transactionAccess = recorder
+		}
 	}
 }
 

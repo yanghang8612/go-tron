@@ -166,6 +166,15 @@
 - [x] Project ordinary canonical WriteSets onto retry-suffix read cells, retain
   full carriers only for publishable sender members, and skip empty prefix
   applications while preserving unknown-write barriers.
+- [x] Register projected AccountKV and generation writes at mutation time, then
+  index first-write keys so filtered retry carriers avoid journal/read-map
+  scans.
+- [x] Split the complete OCC WriteSet carrier from the optional projected
+  post-image carrier, fill journal-only state families at `journal.append`, and
+  remove both transaction-end journal walks from version validation.
+- [ ] Run the complete mutation-time WriteSet production gate and compare full
+  and filtered recorder capture cost, unsupported writes, retry publication,
+  and sync throughput against P4.32.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

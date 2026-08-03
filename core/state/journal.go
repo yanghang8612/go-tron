@@ -376,7 +376,8 @@ func (e resourceWeightChange) revert(_ map[tcommon.Address]*stateObject, _ map[t
 
 // journal tracks state changes for snapshot/revert.
 type journal struct {
-	entries []journalChange
+	entries           []journalChange
+	transactionAccess *TransactionAccessRecorder
 }
 
 func newJournal() *journal {
@@ -384,6 +385,9 @@ func newJournal() *journal {
 }
 
 func (j *journal) append(entry journalChange) {
+	if j.transactionAccess != nil {
+		j.transactionAccess.recordJournalWrite(entry)
+	}
 	j.entries = append(j.entries, entry)
 }
 

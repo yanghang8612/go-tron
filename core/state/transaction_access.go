@@ -169,12 +169,14 @@ type TransactionAccessRecorder struct {
 	accountFields        map[TransactionAccountFieldKey]TransactionAccessMode
 	accountFieldWrites   map[tcommon.Address]struct{}
 	writeKeys            []TransactionAccessKey
-	writeKeysDisabled    bool
-	writeKeyInclude      func(TransactionAccessKey) bool
+	captureWriteKeys     []TransactionAccessKey
+	captureWritesEnabled bool
+	captureWriteInclude  func(TransactionAccessKey) bool
 	commutativeDeltas    map[TransactionAccessKey]int64
 	rawKVWrites          map[TransactionAccessKey]TransactionWriteValue
 	rawKVKeys            map[string]string
 	unsupported          bool
+	writeUnsupported     bool
 	commutativeScopeKey  TransactionAccessKey
 	commutativeScopeOpen bool
 	publicNetReservation PublicNetReservation
@@ -203,9 +205,12 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 	clear(r.rawKVWrites)
 	clear(r.writeKeys)
 	r.writeKeys = r.writeKeys[:0]
-	r.writeKeysDisabled = false
-	r.writeKeyInclude = nil
+	clear(r.captureWriteKeys)
+	r.captureWriteKeys = r.captureWriteKeys[:0]
+	r.captureWritesEnabled = true
+	r.captureWriteInclude = nil
 	r.unsupported = false
+	r.writeUnsupported = false
 	r.commutativeScopeKey = TransactionAccessKey{}
 	r.commutativeScopeOpen = false
 	r.publicNetReservation = PublicNetReservation{}
@@ -303,16 +308,47 @@ func (r *TransactionAccessRecorder) VisitWrites(visit func(TransactionAccessKey,
 	}
 }
 
-// ConfigureWriteKeyCapture controls the compact transaction-end write index.
-// Access maps always retain the complete OCC view. Disabling this index removes
-// carrier work from transactions whose block does not need a WriteSet; include
-// lets projected captures retain only keys a retry suffix can consume.
+// VisitCaptureWrites visits the write carrier configured for transaction-end
+// post-image capture. Full capture reuses the authoritative OCC write carrier;
+// projected capture keeps a separate, smaller list; disabled capture visits
+// nothing. This mirrors Erigon's complete WriteSet while avoiding a second
+// full slice for blocks that only need a retry projection.
+func (r *TransactionAccessRecorder) VisitCaptureWrites(visit func(TransactionAccessKey, TransactionAccessMode) bool) {
+	if r == nil || visit == nil || !r.captureWritesEnabled {
+		return
+	}
+	if r.captureWriteInclude == nil {
+		r.VisitWrites(visit)
+		return
+	}
+	for _, key := range r.captureWriteKeys {
+		if !visit(key, r.accessMode(key)) {
+			return
+		}
+	}
+}
+
+func (r *TransactionAccessRecorder) accessMode(key TransactionAccessKey) TransactionAccessMode {
+	switch key.Kind {
+	case TransactionAccessAccount:
+		return r.accounts[key.Address]
+	case TransactionAccessAccountField:
+		return r.accountFields[TransactionAccountFieldKey{Address: key.Address, Field: key.AccountField}]
+	default:
+		return r.accesses[key]
+	}
+}
+
+// ConfigureWriteKeyCapture controls only the optional transaction-end capture
+// carrier. The complete writeKeys carrier is always retained for OCC version
+// validation and publication. Full capture reuses it without another slice;
+// include lets projected captures retain only keys a retry suffix can consume.
 func (r *TransactionAccessRecorder) ConfigureWriteKeyCapture(enabled bool, include func(TransactionAccessKey) bool) {
 	if r == nil {
 		return
 	}
-	r.writeKeysDisabled = !enabled
-	r.writeKeyInclude = include
+	r.captureWritesEnabled = enabled
+	r.captureWriteInclude = include
 }
 
 func (r *TransactionAccessRecorder) Len() int {
@@ -326,6 +362,13 @@ func (r *TransactionAccessRecorder) Unsupported() bool {
 	return r != nil && r.unsupported
 }
 
+// WritesUnsupported reports an authoritative mutation whose logical version
+// key cannot be represented. It is separate from Unsupported so range/unknown
+// reads remain distinguishable from write coverage failures.
+func (r *TransactionAccessRecorder) WritesUnsupported() bool {
+	return r != nil && r.writeUnsupported
+}
+
 // TransactionAccessRecorderCoversWrites reports whether every authoritative
 // mutation of kind is registered inline. Projected write capture may skip the
 // undo journal only when every retained kind returns true here.
@@ -333,8 +376,18 @@ func TransactionAccessRecorderCoversWrites(kind TransactionAccessKind) bool {
 	switch kind {
 	case TransactionAccessAccount,
 		TransactionAccessAccountField,
+		TransactionAccessWitness,
+		TransactionAccessStorage,
+		TransactionAccessCode,
+		TransactionAccessContractMetadata,
 		TransactionAccessAccountKV,
-		TransactionAccessAccountKVGeneration:
+		TransactionAccessAccountKVGeneration,
+		TransactionAccessSelfDestruct,
+		TransactionAccessTransientStorage,
+		TransactionAccessDynamicInt,
+		TransactionAccessDynamicString,
+		TransactionAccessDynamicHash,
+		TransactionAccessRawKV:
 		return true
 	default:
 		return false
@@ -381,9 +434,61 @@ func (r *TransactionAccessRecorder) markUnsupported() {
 	}
 }
 
+func (r *TransactionAccessRecorder) markWriteUnsupported() {
+	if r != nil {
+		r.writeUnsupported = true
+	}
+}
+
+// recordJournalWrite completes the inline write set at the authoritative undo
+// boundary. Hot account fields and AccountKV paths normally arrive first from
+// their typed mutation sites and deduplicate here. Journal-only families are
+// added exactly once. Resource weight changes are intentionally omitted: the
+// DynamicProperties mutation records the same cell as a commutative delta.
+func (r *TransactionAccessRecorder) recordJournalWrite(entry journalChange) {
+	if r == nil || entry == nil {
+		return
+	}
+	switch change := entry.(type) {
+	case accountChange:
+		full, fields := r.AccountWriteCoverage(change.address)
+		if !full && !fields {
+			r.record(TransactionAccessKey{Kind: TransactionAccessAccount, Address: change.address}, TransactionAccessWrite)
+		}
+		return
+	case *accountScalarChange:
+		if change == nil {
+			r.markWriteUnsupported()
+			return
+		}
+		full, fields := r.AccountWriteCoverage(change.address)
+		if !full && !fields {
+			r.record(TransactionAccessKey{Kind: TransactionAccessAccount, Address: change.address}, TransactionAccessWrite)
+		}
+		return
+	case resourceWeightChange:
+		if change.dp == nil || change.dp.transactionAccess != r {
+			r.markWriteUnsupported()
+		}
+		return
+	}
+	key, ok := transactionAccessFromWrite(transactionWriteFromJournal(entry))
+	if !ok {
+		r.markWriteUnsupported()
+		return
+	}
+	r.record(key, TransactionAccessWrite)
+}
+
 func (r *TransactionAccessRecorder) record(key TransactionAccessKey, mode TransactionAccessMode) {
 	if r == nil {
 		return
+	}
+	if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0 && !TransactionAccessRecorderCoversWrites(key.Kind) {
+		r.markWriteUnsupported()
+	}
+	if mode&(TransactionAccessRead|TransactionAccessCommutativeRead) != 0 && key.Kind == TransactionAccessUnknown {
+		r.markUnsupported()
 	}
 	if r.commutativeScopeOpen && key == r.commutativeScopeKey {
 		if mode&TransactionAccessRead != 0 {
@@ -430,15 +535,18 @@ func (r *TransactionAccessRecorder) record(key TransactionAccessKey, mode Transa
 }
 
 func (r *TransactionAccessRecorder) appendWriteKey(key TransactionAccessKey, previous, next TransactionAccessMode) {
-	if r.shouldAppendWriteKey(key, previous, next) {
-		r.writeKeys = append(r.writeKeys, key)
+	if !firstWrite(previous, next) {
+		return
+	}
+	r.writeKeys = append(r.writeKeys, key)
+	if r.captureWritesEnabled && r.captureWriteInclude != nil && r.captureWriteInclude(key) {
+		r.captureWriteKeys = append(r.captureWriteKeys, key)
 	}
 }
 
-func (r *TransactionAccessRecorder) shouldAppendWriteKey(key TransactionAccessKey, previous, next TransactionAccessMode) bool {
+func firstWrite(previous, next TransactionAccessMode) bool {
 	const writeModes = TransactionAccessWrite | TransactionAccessCommutativeWrite
-	return !r.writeKeysDisabled && previous&writeModes == 0 && next&writeModes != 0 &&
-		(r.writeKeyInclude == nil || r.writeKeyInclude(key))
+	return previous&writeModes == 0 && next&writeModes != 0
 }
 
 // AccountWriteCoverage lets the journal observer distinguish a full Account
@@ -484,11 +592,14 @@ func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domai
 	if previous, ok := r.accesses[lookup]; ok {
 		next := previous | mode
 		r.accesses[lookup] = next
-		if r.shouldAppendWriteKey(lookup, previous, next) {
+		if firstWrite(previous, next) {
 			// The lookup string may borrow caller scratch. The retained write key
 			// must own its logical key independently of that scratch lifetime.
 			lookup.LogicalKey = string(logicalKey)
 			r.writeKeys = append(r.writeKeys, lookup)
+			if r.captureWritesEnabled && r.captureWriteInclude != nil && r.captureWriteInclude(lookup) {
+				r.captureWriteKeys = append(r.captureWriteKeys, lookup)
+			}
 		}
 		return
 	}

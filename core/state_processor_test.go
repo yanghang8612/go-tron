@@ -658,6 +658,8 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	captureFilteredNanosBefore := versionedShadowWriteCaptureFilteredNanosCounter.Snapshot().Count()
 	captureRecorderTransactionsBefore := versionedShadowWriteCaptureRecorderTransactionsCounter.Snapshot().Count()
 	captureRecorderNanosBefore := versionedShadowWriteCaptureRecorderNanosCounter.Snapshot().Count()
+	captureRecorderFullTransactionsBefore := versionedShadowRecorderFullTxCounter.Snapshot().Count()
+	captureRecorderFullNanosBefore := versionedShadowRecorderFullNanosCounter.Snapshot().Count()
 	captureFilteredEmptyBefore := versionedShadowWriteCaptureFilteredEmptyCounter.Snapshot().Count()
 	captureUnsupportedBefore := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count()
 	captureErrorsBefore := versionedShadowWriteCaptureErrorsCounter.Snapshot().Count()
@@ -717,12 +719,14 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	}
 	recorderTransactions := versionedShadowWriteCaptureRecorderTransactionsCounter.Snapshot().Count() - captureRecorderTransactionsBefore
 	recorderNanos := versionedShadowWriteCaptureRecorderNanosCounter.Snapshot().Count() - captureRecorderNanosBefore
+	recorderFullTransactions := versionedShadowRecorderFullTxCounter.Snapshot().Count() - captureRecorderFullTransactionsBefore
+	recorderFullNanos := versionedShadowRecorderFullNanosCounter.Snapshot().Count() - captureRecorderFullNanosBefore
 	if blockNumber%discardShadowSampleInterval == 0 {
-		if recorderTransactions != 0 || recorderNanos != 0 {
-			t.Fatalf("sampled recorder-only capture transactions/nanos = %d/%d, want 0/0", recorderTransactions, recorderNanos)
+		if recorderTransactions != 0 || recorderNanos != 0 || recorderFullTransactions != 0 || recorderFullNanos != 0 {
+			t.Fatalf("sampled recorder-only capture total/full transactions/nanos = %d/%d %d/%d, want zero", recorderTransactions, recorderNanos, recorderFullTransactions, recorderFullNanos)
 		}
-	} else if recorderTransactions != filteredCaptured || recorderNanos <= 0 {
-		t.Fatalf("ordinary recorder-only capture transactions/nanos = %d/%d, want %d/>0", recorderTransactions, recorderNanos, filteredCaptured)
+	} else if recorderTransactions != int64(len(transactions)) || recorderNanos <= 0 || recorderFullTransactions != fullCaptured || recorderFullNanos <= 0 {
+		t.Fatalf("ordinary recorder-only capture total/full transactions/nanos = %d/%d %d/%d, want %d/>0 %d/>0", recorderTransactions, recorderNanos, recorderFullTransactions, recorderFullNanos, len(transactions), fullCaptured)
 	}
 	filteredEmpty := versionedShadowWriteCaptureFilteredEmptyCounter.Snapshot().Count() - captureFilteredEmptyBefore
 	if blockNumber%discardShadowSampleInterval == 0 && filteredEmpty != 0 {

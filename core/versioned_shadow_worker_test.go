@@ -108,7 +108,7 @@ func TestDiscardShadowRetryWriteCaptureProjectsReadHierarchy(t *testing.T) {
 	}
 }
 
-func TestDiscardShadowRetryWriteCaptureFallsBackForNonAccountReads(t *testing.T) {
+func TestDiscardShadowRetryWriteCaptureUsesRecorderForStorageReads(t *testing.T) {
 	source := &discardShadowPreexecution{
 		results: []discardShadowTaskResult{{
 			txIndex:         0,
@@ -128,8 +128,8 @@ func TestDiscardShadowRetryWriteCaptureFallsBackForNonAccountReads(t *testing.T)
 	if include == nil {
 		t.Fatal("retry write capture filter is nil")
 	}
-	if recorderOnly {
-		t.Fatal("storage projection must retain journal fallback")
+	if !recorderOnly {
+		t.Fatal("storage projection should use the complete recorder path")
 	}
 }
 

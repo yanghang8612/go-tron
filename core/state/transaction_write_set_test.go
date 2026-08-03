@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 
@@ -44,6 +45,19 @@ func TestCaptureTransactionWriteSetUsesFinalLogicalValues(t *testing.T) {
 	writes, known, err := sdb.CaptureTransactionWriteSet(mark, &recorder, dp)
 	if err != nil || !known {
 		t.Fatalf("capture writes: known=%v err=%v", known, err)
+	}
+	recorderWrites, recorderKnown, recorderErr := sdb.CaptureTransactionRecorderWriteSetFiltered(&recorder, dp, nil)
+	if recorderErr != nil || !recorderKnown {
+		t.Fatalf("capture recorder writes: known=%v err=%v", recorderKnown, recorderErr)
+	}
+	if len(recorderWrites) != len(writes) {
+		t.Fatalf("recorder/journal write counts = %d/%d: recorder=%v journal=%v", len(recorderWrites), len(writes), recorderWrites, writes)
+	}
+	for key, want := range writes {
+		got, ok := recorderWrites[key]
+		if !ok || got.Exists != want.Exists || got.Commutative != want.Commutative || !bytes.Equal(got.Value, want.Value) {
+			t.Fatalf("recorder write %v = %+v/%v, journal = %+v", key, got, ok, want)
+		}
 	}
 
 	accountKey := TransactionAccessKey{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldBalance}
@@ -127,7 +141,7 @@ func TestCaptureTransactionRecorderWriteSetFilteredSkipsUnrelatedJournalKinds(t 
 	if err != nil || !known {
 		t.Fatalf("journal capture: known=%v err=%v", known, err)
 	}
-	got, known, err := sdb.CaptureTransactionRecorderWriteSetFiltered(&recorder, include)
+	got, known, err := sdb.CaptureTransactionRecorderWriteSetFiltered(&recorder, nil, include)
 	if err != nil || !known {
 		t.Fatalf("recorder capture: known=%v err=%v", known, err)
 	}
@@ -196,7 +210,7 @@ func TestCaptureTransactionRecorderWriteSetFilteredCoversAccountKVIncarnation(t 
 			if err != nil || !known {
 				t.Fatalf("journal capture: known=%v err=%v", known, err)
 			}
-			got, known, err := sdb.CaptureTransactionRecorderWriteSetFiltered(&recorder, include)
+			got, known, err := sdb.CaptureTransactionRecorderWriteSetFiltered(&recorder, nil, include)
 			if err != nil || !known {
 				t.Fatalf("recorder capture: known=%v err=%v", known, err)
 			}
