@@ -1817,7 +1817,11 @@ and duplicate-collapses inverse puts in an 8 MiB bounded ETL collector, and
 publishes its hash-bound watermark only after load succeeds. Interrupted loads
 are idempotently retried from the old watermark. Ordinary producer/gossip
 imports still publish inverse rows and the stage watermark inside their
-rewindable block layer; only the bulk-sync executor defers them.
+rewindable block layer; only the bulk-sync executor defers them. Sync waits for
+at least 256 solidified blocks before opening an ETL collector (up to 4,096 per
+pass), then forces the final sub-batch suffix at sync completion. Inline import
+advances the watermark only from the immediately preceding hash-bound block, so
+it cannot jump over a failed or deferred stage gap.
 
 Archive readers split their bounded `(targetBlock, headBlock]` request at the
 stage watermark: the covered prefix uses exact/prefix inverse seeks, while the

@@ -191,7 +191,7 @@ func (p *canonicalBlockExecution) AdvanceTransactionLookupStage(writer ethdb.Key
 // AdvanceStateHistoryIndexStage records inline inverse-index completion after
 // Finish. Bulk sync skips it because its sorted stage advances only through the
 // solidified boundary, keeping direct DB rows out of the rewindable tail.
-func (p *canonicalBlockExecution) AdvanceStateHistoryIndexStage(writer ethdb.KeyValueWriter, block *types.Block) error {
+func (p *canonicalBlockExecution) AdvanceStateHistoryIndexStage(reader ethdb.KeyValueReader, writer ethdb.KeyValueWriter, block *types.Block) error {
 	if p == nil {
 		return fmt.Errorf("canonical block execution: nil plan")
 	}
@@ -199,6 +199,16 @@ func (p *canonicalBlockExecution) AdvanceStateHistoryIndexStage(writer ethdb.Key
 		return fmt.Errorf("canonical block execution: nil block")
 	}
 	if p.deferStateHistoryIndex {
+		return nil
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(reader, rawdb.StageStateHistoryIndex)
+	if err != nil {
+		return fmt.Errorf("read state history index stage progress: %w", err)
+	}
+	// Never jump over a failed/deferred suffix merely because import changed
+	// from bulk sync to ordinary gossip. The background stage must fill the gap;
+	// bounded readers scan it directly until then.
+	if !ok || row.BlockNum == ^uint64(0) || row.BlockNum+1 != block.Number() || !row.HasBlockHash || row.BlockHash != block.ParentHash() {
 		return nil
 	}
 	if err := rawdb.WriteStageProgressWithHash(writer, rawdb.StageStateHistoryIndex, block.Number(), block.Hash()); err != nil {

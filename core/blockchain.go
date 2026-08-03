@@ -1723,7 +1723,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		return err
 	}
 	if historyEnabled {
-		if err := plan.AdvanceStateHistoryIndexStage(bc.buffer, block); err != nil {
+		if err := plan.AdvanceStateHistoryIndexStage(bc.buffer, bc.buffer, block); err != nil {
 			return err
 		}
 	}

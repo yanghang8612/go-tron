@@ -95,10 +95,22 @@ func (bc *BlockChain) ensureStateHistoryIndexStageLocked() error {
 // under the pass. The un-solidified tail remains changeset-only and is served
 // by bounded direct scans.
 func (bc *BlockChain) AdvanceStateHistoryIndexStage(maxBlocks uint64) (StateHistoryIndexStageResult, error) {
-	return bc.AdvanceStateHistoryIndexStageInterruptible(maxBlocks, nil)
+	return bc.advanceStateHistoryIndexStageInterruptible(1, maxBlocks, nil)
 }
 
 func (bc *BlockChain) AdvanceStateHistoryIndexStageInterruptible(maxBlocks uint64, interrupted func() bool) (StateHistoryIndexStageResult, error) {
+	return bc.advanceStateHistoryIndexStageInterruptible(1, maxBlocks, interrupted)
+}
+
+// AdvanceStateHistoryIndexStageBatchedInterruptible waits until at least
+// minBlocks are available, then rebuilds at most maxBlocks. Bulk sync uses a
+// non-trivial minimum to amortize collector creation, sorting, and batch sync;
+// the completion boundary calls the ordinary method to drain a final suffix.
+func (bc *BlockChain) AdvanceStateHistoryIndexStageBatchedInterruptible(minBlocks, maxBlocks uint64, interrupted func() bool) (StateHistoryIndexStageResult, error) {
+	return bc.advanceStateHistoryIndexStageInterruptible(minBlocks, maxBlocks, interrupted)
+}
+
+func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxBlocks uint64, interrupted func() bool) (StateHistoryIndexStageResult, error) {
 	if bc == nil {
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: nil blockchain")
 	}
@@ -136,6 +148,9 @@ func (bc *BlockChain) AdvanceStateHistoryIndexStageInterruptible(maxBlocks uint6
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: verify index progress: %w", err)
 	}
 	if indexedBlock >= targetBlock {
+		return StateHistoryIndexStageResult{}, nil
+	}
+	if available := targetBlock - indexedBlock; minBlocks > 1 && available < minBlocks {
 		return StateHistoryIndexStageResult{}, nil
 	}
 	fromBlock := indexedBlock + 1

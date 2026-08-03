@@ -425,7 +425,7 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 		return
 	}
 	if bc.config != nil && bc.config.HistoryEnabled {
-		if err := job.plan.AdvanceStateHistoryIndexStage(index, job.block); err != nil {
+		if err := job.plan.AdvanceStateHistoryIndexStage(bc.buffer, index, job.block); err != nil {
 			bc.failCommit(job, fmt.Errorf("async commit state history index stage block %d: %w", job.block.Number(), err))
 			return
 		}

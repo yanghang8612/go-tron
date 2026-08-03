@@ -163,6 +163,7 @@ type SyncService struct {
 // sort/load.
 const (
 	transactionLookupStageBatchBlocks = 4096
+	stateHistoryIndexStageMinBlocks   = 256
 	stateHistoryIndexStageBatchBlocks = 4096
 )
 
@@ -2597,11 +2598,15 @@ func (ss *SyncService) advanceTransactionLookupStage() {
 }
 
 func (ss *SyncService) advanceStateHistoryIndexStage() {
+	ss.advanceStateHistoryIndexStageWithMinimum(stateHistoryIndexStageMinBlocks, true)
+}
+
+func (ss *SyncService) advanceStateHistoryIndexStageWithMinimum(minBlocks uint64, requestAgain bool) {
 	if ss == nil || ss.chain == nil || ss.stopping.Load() {
 		return
 	}
 	started := time.Now()
-	result, err := ss.chain.AdvanceStateHistoryIndexStageInterruptible(stateHistoryIndexStageBatchBlocks, ss.stopping.Load)
+	result, err := ss.chain.AdvanceStateHistoryIndexStageBatchedInterruptible(minBlocks, stateHistoryIndexStageBatchBlocks, ss.stopping.Load)
 	stateHistoryIndexStageNanosCounter.Inc(time.Since(started).Nanoseconds())
 	if err != nil {
 		if errors.Is(err, rawdb.ErrStateHistoryIndexRebuildInterrupted) && ss.stopping.Load() {
@@ -2623,7 +2628,9 @@ func (ss *SyncService) advanceStateHistoryIndexStage() {
 			stateHistoryIndexStageInputBytesCounter.Inc(int64(result.Rebuilt.ETL.InputBytes))
 			stateHistoryIndexStageBatchWritesCounter.Inc(int64(result.Rebuilt.ETL.BatchWrites))
 		}
-		ss.requestDrainAgain()
+		if requestAgain {
+			ss.requestDrainAgain()
+		}
 	}
 }
 
@@ -3426,6 +3433,9 @@ func (ss *SyncService) tryFindSyncPeer(exclude *p2p.Peer) {
 }
 
 func (ss *SyncService) finishSync() {
+	// Drain a final sub-batch suffix before changing over to ordinary gossip
+	// import. Inline stage progress refuses to jump a deferred gap.
+	ss.advanceStateHistoryIndexStageWithMinimum(1, false)
 	totalBlocks := ss.stats.TotalBlocks()
 	totalStart := ss.stats.TotalStart()
 	if totalStart.IsZero() {
