@@ -165,6 +165,11 @@ const (
 	transactionLookupStageBatchBlocks = 4096
 	stateHistoryIndexStageMinBlocks   = 256
 	stateHistoryIndexStageBatchBlocks = 4096
+	// A deep async InsertSession normally spans every locally available chunk.
+	// Bound it so derived stages cannot lag indefinitely while peers keep the
+	// downloader continuously supplied. This still reuses one executor across
+	// dozens of 100-block chunks and matches the maximum ETL pass size.
+	syncDerivedStageBarrierBlocks = 4096
 )
 
 var (
@@ -1744,6 +1749,8 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 	var resumePhases []syncdl.ImportStagePhasePlan
 	paused := false
 	pauseBlock := uint64(0)
+	sessionAppliedBlocks := uint64(0)
+	rotatedForDerivedStages := false
 drainLoop:
 	for {
 		now := time.Now()
@@ -1793,6 +1800,10 @@ drainLoop:
 			session:                sess,
 			flushLatestAfterInsert: depth == 0,
 		})
+		if applied := importRun.Run.Outcome.Applied; applied > 0 {
+			sessionAppliedBlocks += uint64(applied)
+		}
+		rotateForDerivedStages := sess != nil && !paused && sessionAppliedBlocks >= syncDerivedStageBarrierBlocks
 		importLoop := syncdl.PlanImportBatchDrainLoopFinalization(importRun)
 		if importLoop.HasLastPeer {
 			lastPeer = importLoop.LastPeer
@@ -1810,7 +1821,7 @@ drainLoop:
 			// earlier chunk too; stopping here would drain the worker after every
 			// local chunk and defeat the cross-chunk session. Depth 2 still uses an
 			// unbuffered rendezvous queue, so this does not widen its in-flight cap.
-			if depth > 0 {
+			if depth > 0 && !rotateForDerivedStages {
 				continue drainLoop
 			}
 		} else if depth > 0 && importRun.Run.HasRecord && !importRun.Run.RecordProgressFailed() {
@@ -1818,6 +1829,10 @@ drainLoop:
 			// pending suffix: FIFO commitment means its canonical boundary also
 			// proves the older one has finished.
 			resumePhases = nil
+		}
+		if rotateForDerivedStages {
+			rotatedForDerivedStages = true
+			break drainLoop
 		}
 		if importLoop.StopLoop {
 			break drainLoop
@@ -1847,6 +1862,9 @@ drainLoop:
 	}
 	if !publishPausedPrefix {
 		ss.applyImportResumePhaseDrainContinuation(resumePublish, lastPeer)
+	}
+	if rotatedForDerivedStages && !paused {
+		ss.requestDrainAgain()
 	}
 }
 

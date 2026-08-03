@@ -1821,7 +1821,11 @@ rewindable block layer; only the bulk-sync executor defers them. Sync waits for
 at least 256 solidified blocks before opening an ETL collector (up to 4,096 per
 pass), then forces the final sub-batch suffix at sync completion. Inline import
 advances the watermark only from the immediately preceding hash-bound block, so
-it cannot jump over a failed or deferred stage gap.
+it cannot jump over a failed or deferred stage gap. Deep async sync sessions
+also settle at a 4,096-applied-block checkpoint before immediately resuming;
+continuous peer supply therefore cannot postpone TxLookup/StateHistoryIndex
+publication indefinitely while still retaining executor/commit-scope reuse
+across dozens of local chunks.
 
 Archive readers split their bounded `(targetBlock, headBlock]` request at the
 stage watermark: the covered prefix uses exact/prefix inverse seeks, while the
