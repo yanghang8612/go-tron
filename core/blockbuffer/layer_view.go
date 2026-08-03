@@ -835,26 +835,44 @@ func (v *LayerView) DeleteStateKVLatest(prefix []byte, accountID common.AccountI
 // matching map shard (including the bound in-flight layer, which the worker
 // writes via putInto) is read under its own shard lock via lookup.
 func (v *LayerView) Get(key []byte) ([]byte, error) {
+	value, present, err := v.GetWithPresence(key)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, ErrNotFound
+	}
+	return value, nil
+}
+
+// GetWithPresence is the layer-bound atomic point-read counterpart of Get.
+// It keeps the bound layer and one published committed topology together for
+// rawdb metadata readers used by asynchronous block execution.
+func (v *LayerView) GetWithPresence(key []byte) ([]byte, bool, error) {
 	b := v.b
 	view := b.loadReadView()
 	keyHash := layerBloomHashBytes(key)
 	val, found, tomb := v.l.lookupHash(key, keyHash)
 	if tomb {
-		return nil, ErrNotFound
+		return nil, false, nil
 	}
 	if found {
 		out := append([]byte(nil), val...)
-		return out, nil
+		return out, true, nil
 	}
 	if val, found, tomb = lookupLayersNewest(view.layers, key, keyHash); tomb {
-		return nil, ErrNotFound
+		return nil, false, nil
 	} else if found {
-		return append([]byte(nil), val...), nil
+		return append([]byte(nil), val...), true, nil
 	}
-	if b.base == nil {
-		return nil, ErrNotFound
+	return readBaseWithPresence(b.base, key)
+}
+
+func (v *LayerView) IsKeyNotFound(err error) bool {
+	if errors.Is(err, ErrNotFound) {
+		return true
 	}
-	return b.base.Get(key)
+	return v != nil && v.b != nil && v.b.IsKeyNotFound(err)
 }
 
 // GetNoCopy is Get without the defensive value copy for hits in the bound or
@@ -912,7 +930,7 @@ func (v *LayerView) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 		}
 	}
 	if !cacheBase || cache == nil {
-		return b.base.Get(key)
+		return readBaseValue(b.base, key)
 	}
 	return readBaseIntoCache(b.base, cache, key, cacheEpoch)
 }

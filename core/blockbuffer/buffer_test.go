@@ -36,6 +36,15 @@ type stringKeyWriterProbe struct {
 	genericWrites int
 }
 
+type pointReadFailureReader struct {
+	ethdb.KeyValueReader
+	err error
+}
+
+func (r pointReadFailureReader) Get([]byte) ([]byte, error) {
+	return nil, r.err
+}
+
 func TestLayerShardFitsOneCacheLine(t *testing.T) {
 	if size := unsafe.Sizeof(layerShard{}); size != 64 {
 		t.Fatalf("layerShard size = %d, want 64", size)
@@ -2189,6 +2198,50 @@ func TestBuffer_SatisfiesEthdbInterfaces(t *testing.T) {
 	// Sanity: ErrNotFound is non-nil.
 	if errors.Is(nil, ErrNotFound) {
 		t.Fatal("ErrNotFound check broken")
+	}
+}
+
+func TestBuffer_GetWithPresence(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	if err := base.Put([]byte("base"), []byte("durable")); err != nil {
+		t.Fatal(err)
+	}
+	b := New(base)
+	b.BeginBlock(bufHash(1), 1)
+	if err := b.Put([]byte("overlay"), []byte("buffered")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Delete([]byte("base")); err != nil {
+		t.Fatal(err)
+	}
+
+	checks := []struct {
+		key     string
+		want    string
+		present bool
+	}{
+		{key: "overlay", want: "buffered", present: true},
+		{key: "base", present: false},
+		{key: "missing", present: false},
+	}
+	for _, check := range checks {
+		value, present, err := b.GetWithPresence([]byte(check.key))
+		if err != nil || present != check.present || string(value) != check.want {
+			t.Errorf("GetWithPresence(%q) = %q/%v/%v, want %q/%v/nil", check.key, value, present, err, check.want, check.present)
+		}
+	}
+}
+
+func TestBuffer_GetWithPresenceSurfacesBaseFailure(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	if err := base.Put([]byte("present"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("point read failed")
+	b := New(pointReadFailureReader{KeyValueReader: base, err: wantErr})
+	value, present, err := b.GetWithPresence([]byte("present"))
+	if value != nil || present || !errors.Is(err, wantErr) {
+		t.Fatalf("GetWithPresence = %q/%v/%v, want nil/false/%v", value, present, err, wantErr)
 	}
 }
 

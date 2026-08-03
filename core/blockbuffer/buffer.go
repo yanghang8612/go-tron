@@ -652,22 +652,37 @@ func (b *Buffer) newReadSnapshot(maxBlock *uint64) (*ReadSnapshot, error) {
 	return &ReadSnapshot{view: view, base: base}, nil
 }
 
-func (s *ReadSnapshot) Get(key []byte) ([]byte, error) {
+func (s *ReadSnapshot) GetWithPresence(key []byte) ([]byte, bool, error) {
 	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
-		return nil, ErrNotFound
+		return nil, false, nil
 	}
 	keyHash := layerBloomHashBytes(key)
 	if value, found, tomb := lookupLayersNewest(s.view.inflight, key, keyHash); tomb {
-		return nil, ErrNotFound
+		return nil, false, nil
 	} else if found {
-		return append([]byte(nil), value...), nil
+		return append([]byte(nil), value...), true, nil
 	}
 	if value, found, tomb := lookupLayersNewest(s.view.layers, key, keyHash); tomb {
-		return nil, ErrNotFound
+		return nil, false, nil
 	} else if found {
-		return append([]byte(nil), value...), nil
+		return append([]byte(nil), value...), true, nil
 	}
-	return s.base.Get(key)
+	return readBaseWithPresence(s.base, key)
+}
+
+func (s *ReadSnapshot) Get(key []byte) ([]byte, error) {
+	value, present, err := s.GetWithPresence(key)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, ErrNotFound
+	}
+	return value, nil
+}
+
+func (s *ReadSnapshot) IsKeyNotFound(err error) bool {
+	return errors.Is(err, ErrNotFound)
 }
 
 func (s *ReadSnapshot) Has(key []byte) (bool, error) {
@@ -799,6 +814,14 @@ type keyNotFoundClassifier interface {
 	IsKeyNotFound(error) bool
 }
 
+// valuePresenceReader couples a point value with its presence in one backend
+// view. Pebble implements this directly; layered readers expose the same
+// capability so rawdb metadata reads never have to race a Has/Get pair across
+// a concurrent reorg topology change.
+type valuePresenceReader interface {
+	GetWithPresence(key []byte) ([]byte, bool, error)
+}
+
 func isKeyNotFound(base ethdb.KeyValueReader, err error) bool {
 	if err == nil {
 		return false
@@ -808,6 +831,46 @@ func isKeyNotFound(base ethdb.KeyValueReader, err error) bool {
 	}
 	classifier, ok := base.(keyNotFoundClassifier)
 	return ok && classifier.IsKeyNotFound(err)
+}
+
+// readBaseWithPresence normalizes a backend miss without mistaking a real Get
+// failure for absence. Engines with an atomic point-read capability take that
+// path directly. Generic test/in-memory stores pay a Has verification only
+// after Get returned an unclassified error; successful production reads stay
+// one point lookup.
+func readBaseWithPresence(base ethdb.KeyValueReader, key []byte) ([]byte, bool, error) {
+	if base == nil {
+		return nil, false, nil
+	}
+	if reader, ok := base.(valuePresenceReader); ok {
+		return reader.GetWithPresence(key)
+	}
+	value, err := base.Get(key)
+	if err == nil {
+		return value, true, nil
+	}
+	if isKeyNotFound(base, err) {
+		return nil, false, nil
+	}
+	exists, hasErr := base.Has(key)
+	if hasErr != nil {
+		return nil, false, fmt.Errorf("blockbuffer: verify point-read failure: %w", hasErr)
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
+func readBaseValue(base ethdb.KeyValueReader, key []byte) ([]byte, error) {
+	value, present, err := readBaseWithPresence(base, key)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, ErrNotFound
+	}
+	return value, nil
 }
 
 // IsKeyNotFound exposes the classification already used by the durable-base
@@ -1731,24 +1794,35 @@ func lookupLayersNewest(layers []*layer, key []byte, keyHash uint64) (v []byte, 
 // layer's matching map shard is read under its shard lock via lookup. The
 // (potentially slow) base read therefore runs without holding Buffer.mu.
 func (b *Buffer) Get(key []byte) ([]byte, error) {
+	value, present, err := b.GetWithPresence(key)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, ErrNotFound
+	}
+	return value, nil
+}
+
+// GetWithPresence resolves one immutable topology view and returns absence as
+// data rather than an error. This is the atomic point-read capability rawdb
+// uses for metadata whose overlay can be replaced by switchFork concurrently.
+func (b *Buffer) GetWithPresence(key []byte) ([]byte, bool, error) {
 	view := b.loadReadView()
 	keyHash := layerBloomHashBytes(key)
 	// In-flight layers first, newest-first (the foreground's active layer wins
 	// over an older worker-owned layer), then committed layers newest-first.
 	if v, found, tomb := lookupLayersNewest(view.inflight, key, keyHash); tomb {
-		return nil, ErrNotFound
+		return nil, false, nil
 	} else if found {
-		return append([]byte(nil), v...), nil
+		return append([]byte(nil), v...), true, nil
 	}
 	if v, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
-		return nil, ErrNotFound
+		return nil, false, nil
 	} else if found {
-		return append([]byte(nil), v...), nil
+		return append([]byte(nil), v...), true, nil
 	}
-	if b.base == nil {
-		return nil, ErrNotFound
-	}
-	return b.base.Get(key)
+	return readBaseWithPresence(b.base, key)
 }
 
 // GetNoCopy is Get without the defensive value copy: on a buffer hit it returns
@@ -1793,7 +1867,7 @@ func (b *Buffer) Prefetch(key []byte) ([]byte, error) {
 	}
 	cache := view.baseReadCache
 	if cache == nil {
-		return b.base.Get(key)
+		return readBaseValue(b.base, key)
 	}
 	value, ok, epoch := cache.getForPrefetchWithEpoch(key)
 	if ok {
@@ -1802,7 +1876,7 @@ func (b *Buffer) Prefetch(key []byte) ([]byte, error) {
 		}
 		return value, nil
 	}
-	value, err := b.base.Get(key)
+	value, err := readBaseValue(b.base, key)
 	if err != nil {
 		if isKeyNotFound(b.base, err) {
 			cache.prefetchMissingIfEpoch(key, epoch)
@@ -1850,7 +1924,7 @@ func (b *Buffer) getNoCopy(key []byte, cacheBase bool) ([]byte, error) {
 		}
 	}
 	if !cacheBase || cache == nil {
-		return b.base.Get(key)
+		return readBaseValue(b.base, key)
 	}
 	return readBaseIntoCache(b.base, cache, key, cacheEpoch)
 }
@@ -2115,13 +2189,13 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 		}
 		return out, err
 	}
-	value, err := base.Get(key)
+	value, present, err := readBaseWithPresence(base, key)
 	if err != nil {
-		if isKeyNotFound(base, err) {
-			cache.setMissingIfEpoch(key, epoch)
-			return nil, ErrNotFound
-		}
 		return nil, err
+	}
+	if !present {
+		cache.setMissingIfEpoch(key, epoch)
+		return nil, ErrNotFound
 	}
 	stored, _ := cache.setIfEpoch(key, value, epoch)
 	return stored, nil
@@ -2141,7 +2215,7 @@ func readBaseIntoCachePooledKey(base ethdb.KeyValueReader, cache *baseReadCache,
 		err   error
 	)
 	if cache == nil {
-		value, err = base.Get(pooledKey)
+		value, err = readBaseValue(base, pooledKey)
 	} else {
 		value, err = readBaseIntoCache(base, cache, pooledKey, epoch)
 	}
