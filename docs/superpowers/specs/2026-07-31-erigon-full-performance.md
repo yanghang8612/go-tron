@@ -1481,6 +1481,22 @@ This is development evidence rather than a production throughput claim; the
 deployment gate compares filtered capture against P4.31's 2.88 microseconds,
 checks recorder-only coverage, and retains the zero mismatch/error requirement.
 
+The first high-load 40-second P4.32 window imported 1,248 blocks / 113,583
+transactions (31.2 blocks/s and 2,840 tx/s). All 19,071 filtered captures used
+the recorder-only path and 271/271 retry publications matched; unsupported
+capture, capture/retry error, mismatch, and finish wait remained zero. Filtered
+capture fell from P4.31's 2.88 to 1.93 microseconds per transaction (33% lower),
+67% below P4.29's 5.87-microsecond baseline. The remaining capture cost moved
+to the 7,592 full/audit transactions: they consumed 48.6 ms (6.40 microseconds
+each), more than the 36.8 ms consumed by over twice as many filtered captures.
+
+Pebble simultaneously compacted 6.17 GB in / 4.84 GB out and reduced estimated
+debt by about 1.09 GB. It reported no write delay, but async commit encountered
+two backpressure events totalling 304 ms. The next execution slice should make
+Transfer sender/audit WriteSets recorder-complete across their dynamic/raw
+families and remove their full journal scan; at whole-node level, compaction
+bandwidth and commit backpressure remain the larger throughput constraints.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
