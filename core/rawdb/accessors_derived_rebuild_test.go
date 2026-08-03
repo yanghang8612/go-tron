@@ -166,6 +166,49 @@ func TestRebuildTransactionLookupFromBlocksTransitionsFromAncientToHot(t *testin
 	}
 }
 
+type compactIndexCoveredAncient struct {
+	*fakeAncient
+	coverage uint64
+}
+
+func (a *compactIndexCoveredAncient) TransactionIndexCandidates([32]byte) ([]uint64, error) {
+	return nil, nil
+}
+
+func (a *compactIndexCoveredAncient) TransactionIndexCoverage() uint64 {
+	return a.coverage
+}
+
+func TestRebuildTransactionLookupSkipsCompactIndexCoverage(t *testing.T) {
+	hot := NewMemoryDatabase()
+	ancient := &compactIndexCoveredAncient{fakeAncient: newFakeAncient(), coverage: 2}
+	block1, infos1 := derivedRebuildTestBlock(t, 1, 1)
+	block2, infos2 := derivedRebuildTestBlock(t, 2, 1)
+	encoded1, err := block1.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ancient.put(ancientBlocks, 1, encoded1)
+	db := NewChainDB(hot, ancient)
+	if err := WriteBlock(db, block2); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := RebuildTransactionLookupFromBlocks(db, db, 1, 2, etl.Options{TempDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BlocksScanned != 2 || result.TransactionsIndexed != 1 {
+		t.Fatalf("rebuild result=%+v, want two scanned blocks and one hot-tail index", result)
+	}
+	if got := ReadTransactionIndex(NewChainDB(hot, NoopAncient{}), infos1[0].Id); got != nil {
+		t.Fatalf("covered historical tx row was recreated: %v", got)
+	}
+	if got := ReadTransactionIndex(db, infos2[0].Id); got == nil || *got != 2 {
+		t.Fatalf("hot-tail tx index=%v, want block 2", got)
+	}
+}
+
 func TestRebuildTransactionLookupFromBlocksInterruptsBeforePublish(t *testing.T) {
 	db := NewMemoryChainDB()
 	block1, infos1 := derivedRebuildTestBlock(t, 1, 1)

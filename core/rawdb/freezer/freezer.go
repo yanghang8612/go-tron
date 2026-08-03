@@ -96,6 +96,7 @@ type Freezer struct {
 	readonly      bool
 	tables        map[string]*freezerTable // Data tables for storing everything
 	v2            *v2Store                 // Immutable Zstd segment prefix, if present
+	txIndex       *TransactionIndexStore   // Immutable transaction hash -> location runs
 	repairStats   RepairStats
 	repairMetrics freezerRepairMetrics
 	instanceLock  *flock.Flock // File-system lock to prevent double opens
@@ -318,6 +319,24 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 		lock.Unlock()
 		return nil, fmt.Errorf("ancient V2 coverage %d leaves a gap before V1 tail %d", coverage, freezer.tail.Load())
 	}
+	freezer.txIndex, err = OpenTransactionIndexStore(datadir)
+	if err != nil {
+		freezer.v2.Close()
+		for _, table := range freezer.tables {
+			table.Close()
+		}
+		lock.Unlock()
+		return nil, fmt.Errorf("open ancient transaction index: %w", err)
+	}
+	if coverage := freezer.txIndex.Coverage(); coverage > freezer.V2Coverage() {
+		freezer.txIndex.Close()
+		freezer.v2.Close()
+		for _, table := range freezer.tables {
+			table.Close()
+		}
+		lock.Unlock()
+		return nil, fmt.Errorf("transaction index coverage %d exceeds ancient V2 coverage %d", coverage, freezer.V2Coverage())
+	}
 
 	// Create the write batch.
 	freezer.writeBatch = newFreezerBatch(freezer)
@@ -342,6 +361,12 @@ func (f *Freezer) Close() error {
 			}
 			f.v2 = nil
 		}
+		if f.txIndex != nil {
+			if err := f.txIndex.Close(); err != nil {
+				errs = append(errs, err)
+			}
+			f.txIndex = nil
+		}
 		f.v2Mu.Unlock()
 		for _, table := range f.tables {
 			if err := table.Close(); err != nil {
@@ -353,6 +378,104 @@ func (f *Freezer) Close() error {
 		}
 	})
 	return errors.Join(errs...)
+}
+
+// TransactionIndexCandidates returns truncated-fingerprint matches. Callers
+// must verify the full hash against the canonical block body.
+func (f *Freezer) TransactionIndexCandidates(hash [32]byte) ([]uint64, error) {
+	if f == nil {
+		return nil, nil
+	}
+	f.v2Mu.RLock()
+	defer f.v2Mu.RUnlock()
+	if f.txIndex == nil {
+		return nil, nil
+	}
+	return f.txIndex.Candidates(hash)
+}
+
+func (f *Freezer) TransactionIndexCoverage() uint64 {
+	if f == nil {
+		return 0
+	}
+	f.v2Mu.RLock()
+	defer f.v2Mu.RUnlock()
+	if f.txIndex == nil {
+		return 0
+	}
+	return f.txIndex.Coverage()
+}
+
+// PublishTransactionIndexRun publishes a verified contiguous run and refreshes
+// the live reader before covered hot rows may be removed.
+func (f *Freezer) PublishTransactionIndexRun(result TransactionIndexBuildResult) error {
+	f.v2Migrate.Lock()
+	defer f.v2Migrate.Unlock()
+	if f.readonly {
+		return errReadOnly
+	}
+	if result.EndBlock > f.V2Coverage() {
+		return fmt.Errorf("transaction index end %d exceeds V2 coverage %d", result.EndBlock, f.V2Coverage())
+	}
+	current, err := OpenTransactionIndexStore(f.datadir)
+	if err != nil {
+		return err
+	}
+	if current.Coverage() == result.EndBlock {
+		if err := verifyTransactionIndexBuildResult(f.datadir, result); err != nil {
+			_ = current.Close()
+			return err
+		}
+		f.replaceTransactionIndexStore(current)
+		return nil
+	}
+	if current.Coverage() != result.StartBlock {
+		_ = current.Close()
+		return fmt.Errorf("transaction index publish: live coverage %d does not match run start %d", current.Coverage(), result.StartBlock)
+	}
+	if err := current.Close(); err != nil {
+		return err
+	}
+	if err := PublishTransactionIndexRun(f.datadir, result); err != nil {
+		return err
+	}
+	store, err := OpenTransactionIndexStore(f.datadir)
+	if err != nil {
+		return err
+	}
+	f.replaceTransactionIndexStore(store)
+	return nil
+}
+
+func (f *Freezer) CompactTransactionIndexTail() (bool, error) {
+	f.v2Migrate.Lock()
+	defer f.v2Migrate.Unlock()
+	if f.readonly {
+		return false, errReadOnly
+	}
+	_, obsolete, merged, err := CompactTransactionIndexTail(f.datadir)
+	if err != nil || !merged {
+		return merged, err
+	}
+	store, err := OpenTransactionIndexStore(f.datadir)
+	if err != nil {
+		return false, err
+	}
+	f.replaceTransactionIndexStore(store)
+	for _, path := range obsolete {
+		_ = os.Remove(path)
+	}
+	return true, nil
+}
+
+func (f *Freezer) replaceTransactionIndexStore(store *TransactionIndexStore) {
+	f.v2Mu.Lock()
+	old := f.txIndex
+	f.txIndex = store
+	f.v2Mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 }
 
 // AncientDatadir returns the path of the ancient store.

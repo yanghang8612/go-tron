@@ -15,6 +15,20 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+type compactTransactionIndexAncient struct {
+	rawdb.AncientReader
+	coverage   uint64
+	candidates map[[32]byte][]uint64
+}
+
+func (a *compactTransactionIndexAncient) TransactionIndexCandidates(hash [32]byte) ([]uint64, error) {
+	return append([]uint64(nil), a.candidates[hash]...), nil
+}
+
+func (a *compactTransactionIndexAncient) TransactionIndexCoverage() uint64 {
+	return a.coverage
+}
+
 func TestBlockChainSyncInsertDefersTransactionLookupUntilStage(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	genesis := &params.Genesis{
@@ -101,6 +115,64 @@ func TestBlockChainSyncInsertDefersTransactionLookupUntilStage(t *testing.T) {
 	}
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != block.Number() || !row.HasBlockHash || row.BlockHash != block.Hash() {
 		t.Fatalf("TxLookup progress = %+v ok=%v err=%v, want block 1 hash-bound", row, ok, err)
+	}
+}
+
+func TestBlockMetadataWriterDoesNotRecreateCompactHistoricalIndex(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config: params.MainnetChainConfig,
+		Accounts: []params.GenesisAccount{{
+			Address: testInsertAddr(1),
+			Balance: 99_000_000_000_000_000,
+		}},
+		DynamicProperties: map[string]int64{},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ancient := &compactTransactionIndexAncient{
+		AncientReader: rawdb.NoopAncient{},
+		coverage:      2,
+		candidates:    make(map[[32]byte][]uint64),
+	}
+	bc, err := NewBlockChainWithAncient(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig, ancient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+
+	transfer, err := anypb.New(&contractpb.TransferContract{
+		OwnerAddress: testInsertAddr(1).Bytes(),
+		ToAddress:    testInsertAddr(2).Bytes(),
+		Amount:       5_000_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: 1, Timestamp: 3000, ParentHash: genesisHash[:],
+		}},
+		Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type: corepb.Transaction_Contract_TransferContract, Parameter: transfer,
+			}},
+		}}},
+	})
+	txHash := block.Transactions()[0].Hash()
+	ancient.candidates[txHash] = []uint64{block.Number()}
+	if err := bc.InsertBlock(block); err != nil {
+		t.Fatal(err)
+	}
+	hotKey := append([]byte("tx-"), txHash[:]...)
+	if has, err := diskdb.Has(hotKey); err != nil || has {
+		t.Fatalf("covered tx-* row present=%v err=%v, want absent", has, err)
+	}
+	if got := rawdb.ReadTransactionIndex(bc.ChainDB(), txHash[:]); got == nil || *got != block.Number() {
+		t.Fatalf("cold transaction lookup=%v, want block %d", got, block.Number())
 	}
 }
 

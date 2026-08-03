@@ -495,6 +495,9 @@ func ReadTransactionIndexStrict(db *ChainDB, txHash []byte) (uint64, bool, error
 	if num, ok, err := readHotTransactionIndexStrict(db, txHash); err != nil || ok {
 		return num, ok, err
 	}
+	if num, ok, err := readAncientTransactionIndexStrict(db, txHash); err != nil || ok {
+		return num, ok, err
+	}
 	if db != nil && db.chainIndex != nil && len(txHash) == common.HashLength {
 		var hash common.Hash
 		copy(hash[:], txHash)
@@ -505,6 +508,47 @@ func ReadTransactionIndexStrict(db *ChainDB, txHash []byte) (uint64, bool, error
 		return num, true, nil
 	}
 	return 0, false, nil
+}
+
+func readAncientTransactionIndexStrict(db *ChainDB, txHash []byte) (uint64, bool, error) {
+	if db == nil || db.AncientReader == nil || len(txHash) != common.HashLength {
+		return 0, false, nil
+	}
+	index, ok := db.AncientReader.(AncientTransactionIndexReader)
+	if !ok || index.TransactionIndexCoverage() == 0 {
+		return 0, false, nil
+	}
+	var hash [32]byte
+	copy(hash[:], txHash)
+	candidates, err := index.TransactionIndexCandidates(hash)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, location := range candidates {
+		blockNum := transactionIndexLocationBlock(location)
+		if blockNum >= index.TransactionIndexCoverage() {
+			return 0, false, fmt.Errorf("rawdb: ancient transaction index candidate block %d exceeds coverage %d", blockNum, index.TransactionIndexCoverage())
+		}
+		_, matches, err := transactionIndexInReadableBlock(db, txHash, blockNum)
+		if err != nil {
+			return 0, false, err
+		}
+		if matches {
+			return blockNum, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
+// HasAncientTransactionIndex reports whether an immutable transaction-index
+// run covers blockNum. Replay and derived-index rebuild paths use it to avoid
+// recreating historical tx-* rows after their cold replacement is published.
+func HasAncientTransactionIndex(db *ChainDB, blockNum uint64) bool {
+	if db == nil || db.AncientReader == nil {
+		return false
+	}
+	index, ok := db.AncientReader.(AncientTransactionIndexReader)
+	return ok && blockNum < index.TransactionIndexCoverage()
 }
 
 func readHotTransactionIndexStrict(db ethdb.KeyValueReader, txHash []byte) (uint64, bool, error) {
@@ -526,7 +570,7 @@ func readHotTransactionIndexStrict(db ethdb.KeyValueReader, txHash []byte) (uint
 	if len(data) != 8 {
 		return 0, true, fmt.Errorf("rawdb: transaction index %x has length %d, want 8", txHash, len(data))
 	}
-	return binary.BigEndian.Uint64(data), true, nil
+	return transactionIndexLocationBlock(binary.BigEndian.Uint64(data)), true, nil
 }
 
 // DeleteTransactionInfo removes the per-tx TransactionInfo row for txID.

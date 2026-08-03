@@ -226,6 +226,9 @@ func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethd
 		} else {
 			result.HotBlocksScanned++
 		}
+		if HasAncientTransactionIndex(chain, blockNum) {
+			return nil
+		}
 		for _, tx := range block.Transactions() {
 			if tx == nil {
 				continue

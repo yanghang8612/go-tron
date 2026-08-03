@@ -1834,7 +1834,7 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []by
 	if err := rawdb.WriteTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
 		return fmt.Errorf("write block tx infos: %w", err)
 	}
-	if writeTransactionLookup {
+	if writeTransactionLookup && !rawdb.HasAncientTransactionIndex(bc.chaindb, block.Number()) {
 		for _, tx := range block.Transactions() {
 			hash := tx.Hash()
 			if err := rawdb.WriteTransactionIndex(batch, hash[:], block.Number()); err != nil {

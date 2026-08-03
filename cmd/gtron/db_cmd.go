@@ -78,7 +78,9 @@ func dbCommand() *cli.Command {
 		Subcommands: []*cli.Command{
 			dbInspectCommand(),
 			dbBenchmarkAncientCommand(),
+			dbBenchmarkTxIndexCommand(),
 			dbMigrateAncientV2Command(),
+			dbMigrateTxIndexCommand(),
 			dbDropBalanceTracesCommand(),
 			dbCompactStateHistoryCommand(),
 			{
@@ -1959,7 +1961,7 @@ func dbStageStatusGroup(stage rawdb.StageID) string {
 		return "snapshot"
 	case rawdb.StageSnapshotHotPrune, rawdb.StageSnapshotPrune, rawdb.StageSnapshotChainLookupPrune, rawdb.StageSnapshotSectionBloomPrune, rawdb.StageSnapshotBalanceTracePrune, rawdb.StageSnapshotChainFreezerTailPrune:
 		return "prune"
-	case rawdb.StageChainFreezer, rawdb.StageChainFreezerStateRootPrune:
+	case rawdb.StageChainFreezer, rawdb.StageChainFreezerStateRootPrune, rawdb.StageFreezerTxIndexPrune:
 		return "freezer"
 	default:
 		return "unknown"

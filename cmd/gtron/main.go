@@ -296,6 +296,10 @@ var (
 		Usage: "Maximum blocks frozen per freezer pass",
 		Value: defaultFreezerBatch(),
 	}
+	freezerTxIndexDisableFlag = &cli.BoolFlag{
+		Name:  "freezer.tx-index.disable",
+		Usage: "Disable automatic archival of V2-covered transaction indexes",
+	}
 	syncRestartFromFlag = &cli.Uint64Flag{
 		Name:  "sync.restart-from",
 		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
@@ -401,6 +405,7 @@ var app = &cli.App{
 		freezerIntervalFlag,
 		freezerMarginFlag,
 		freezerBatchFlag,
+		freezerTxIndexDisableFlag,
 		syncRestartFromFlag,
 		syncImportBatchFlag,
 		syncETLTempDirFlag,
@@ -1081,7 +1086,10 @@ func gtron(ctx *cli.Context) error {
 				"ancient", ancientPath,
 				"margin", freezerCfg.MarginBlocks,
 				"batch", freezerCfg.BatchBlocks,
-				"interval", freezerCfg.Interval)
+				"interval", freezerCfg.Interval,
+				"v2", freezerCfg.V2Enabled,
+				"txIndex", freezerCfg.TransactionIndexEnabled,
+				"txIndexPrefixBits", freezerCfg.TransactionIndexPrefixBits)
 		}
 	} else if ancientStore != nil {
 		log.Info("Chain freezer disabled; existing ancient data readable", "ancient", ancientPath)

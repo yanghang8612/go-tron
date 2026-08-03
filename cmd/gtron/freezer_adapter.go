@@ -83,6 +83,22 @@ func (s *freezerStore) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdb
 	return s.f.MigrateV2(options)
 }
 
+func (s *freezerStore) AncientDatadir() (string, error) {
+	return s.f.AncientDatadir()
+}
+
+func (s *freezerStore) TransactionIndexCoverage() uint64 {
+	return s.f.TransactionIndexCoverage()
+}
+
+func (s *freezerStore) PublishTransactionIndexRun(result rawdbfreezer.TransactionIndexBuildResult) error {
+	return s.f.PublishTransactionIndexRun(result)
+}
+
+func (s *freezerStore) CompactTransactionIndexTail() (bool, error) {
+	return s.f.CompactTransactionIndexTail()
+}
+
 func makeFreezerConfig(ctx *cli.Context) chainfreezer.Config {
 	cfg := chainfreezer.Default()
 	cfg.Enabled = !ctx.Bool("freezer.disable")
@@ -95,6 +111,7 @@ func makeFreezerConfig(ctx *cli.Context) chainfreezer.Config {
 	if ctx.IsSet("freezer.batch") {
 		cfg.BatchBlocks = ctx.Uint64("freezer.batch")
 	}
+	cfg.TransactionIndexEnabled = !ctx.Bool("freezer.tx-index.disable")
 	return cfg
 }
 

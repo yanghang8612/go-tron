@@ -595,6 +595,14 @@ func (r freezerReader) Stats() (freezer.Stats, error) {
 	return r.f.Stats()
 }
 
+func (r freezerReader) TransactionIndexCandidates(hash [32]byte) ([]uint64, error) {
+	return r.f.TransactionIndexCandidates(hash)
+}
+
+func (r freezerReader) TransactionIndexCoverage() uint64 {
+	return r.f.TransactionIndexCoverage()
+}
+
 // translateFreezerErr maps the freezer package's internal sentinels to
 // public `core/rawdb` errors. Unknown errors pass through unchanged.
 func translateFreezerErr(err error) error {

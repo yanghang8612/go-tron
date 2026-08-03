@@ -60,6 +60,13 @@ type AncientStatsReader interface {
 	Stats() (freezer.Stats, error)
 }
 
+// AncientTransactionIndexReader is the optional immutable fingerprint index
+// attached to the local ancient store.
+type AncientTransactionIndexReader interface {
+	TransactionIndexCandidates(hash [32]byte) ([]uint64, error)
+	TransactionIndexCoverage() uint64
+}
+
 // AncientWriter exposes the subset of operations needed to migrate hot data
 // into the freezer. Held only by the freezing goroutine (slice 3); the
 // hot-path read code uses `AncientReader` exclusively.
@@ -135,6 +142,32 @@ func NewFallbackAncientReader(readers ...AncientReader) AncientReader {
 
 type fallbackAncientReader struct {
 	readers []AncientReader
+}
+
+func (r fallbackAncientReader) TransactionIndexCandidates(hash [32]byte) ([]uint64, error) {
+	var out []uint64
+	for _, reader := range r.readers {
+		indexed, ok := reader.(AncientTransactionIndexReader)
+		if !ok || indexed.TransactionIndexCoverage() == 0 {
+			continue
+		}
+		candidates, err := indexed.TransactionIndexCandidates(hash)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, candidates...)
+	}
+	return out, nil
+}
+
+func (r fallbackAncientReader) TransactionIndexCoverage() uint64 {
+	var coverage uint64
+	for _, reader := range r.readers {
+		if indexed, ok := reader.(AncientTransactionIndexReader); ok && indexed.TransactionIndexCoverage() > coverage {
+			coverage = indexed.TransactionIndexCoverage()
+		}
+	}
+	return coverage
 }
 
 func (r fallbackAncientReader) Ancient(kind string, number uint64) ([]byte, error) {

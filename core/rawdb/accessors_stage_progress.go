@@ -38,6 +38,10 @@ const (
 	// state_roots table plus the still-hot/cold block hash index retain the
 	// read path, so this stage can advance before chain lookup pruning.
 	StageChainFreezerStateRootPrune StageID = "ChainFreezerStateRootPrune"
+	// StageFreezerTxIndexPrune stores the exclusive block boundary whose
+	// immutable transaction index is published and whose hot tx-* rows have
+	// subsequently been removed.
+	StageFreezerTxIndexPrune StageID = "FreezerTxIndexPrune"
 
 	// StageSyncInventory records the highest block target observed from peer
 	// CHAIN_INVENTORY messages. It is downloader progress, not canonical proof.
@@ -469,6 +473,7 @@ func KnownStageProgressStages() []StageID {
 		StageSnapshotPrune,
 		StageChainFreezer,
 		StageChainFreezerStateRootPrune,
+		StageFreezerTxIndexPrune,
 		StageSnapshotChainLookupPrune,
 		StageSnapshotSectionBloomPrune,
 		StageSnapshotBalanceTracePrune,
