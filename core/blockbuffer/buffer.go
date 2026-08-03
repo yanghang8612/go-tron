@@ -571,6 +571,23 @@ var _ pointread.PrefixSeeker = (*Buffer)(nil)
 // overlay-to-durable handoff: a row is therefore visible from exactly the
 // captured overlay/base combination even after that flush completes.
 func (b *Buffer) NewReadSnapshot() (*ReadSnapshot, error) {
+	return b.newReadSnapshot(nil)
+}
+
+// NewReadSnapshotThrough captures the durable base plus committed buffer
+// layers through maxBlock. In-flight layers and committed layers above the
+// boundary are deliberately excluded, so an archive reader can use the last
+// fully published state while the async commit worker continues promoting
+// newer blocks.
+//
+// The caller must ensure the durable base has not advanced beyond maxBlock.
+// BlockChain does this by capping asynchronous flushes at its published archive
+// head and holding chainmu while it captures the snapshot.
+func (b *Buffer) NewReadSnapshotThrough(maxBlock uint64) (*ReadSnapshot, error) {
+	return b.newReadSnapshot(&maxBlock)
+}
+
+func (b *Buffer) newReadSnapshot(maxBlock *uint64) (*ReadSnapshot, error) {
 	if b == nil || b.base == nil {
 		return nil, ErrReadSnapshotUnsupported
 	}
@@ -588,7 +605,20 @@ func (b *Buffer) NewReadSnapshot() (*ReadSnapshot, error) {
 		return nil, err
 	}
 	view := b.readView.Load()
-	if view == nil {
+	if maxBlock != nil {
+		bounded := &bufferReadView{baseReadCache: b.baseReadCache}
+		if view == nil {
+			view = &bufferReadView{baseReadCache: b.baseReadCache}
+			view.inflight = append(view.inflight, b.inflight...)
+			view.layers = append(view.layers, b.layers...)
+		}
+		for _, l := range view.layers {
+			if l != nil && l.number <= *maxBlock {
+				bounded.layers = append(bounded.layers, l)
+			}
+		}
+		view = bounded
+	} else if view == nil {
 		view = &bufferReadView{baseReadCache: b.baseReadCache}
 		view.inflight = append(view.inflight, b.inflight...)
 		view.layers = append(view.layers, b.layers...)

@@ -763,6 +763,7 @@ func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Ha
 		})
 	}
 	bc.currentBlock.Store(head)
+	bc.archiveHead.Store(head)
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 	bc.khaosDB = NewKhaosDB()
 	bc.khaosDB.Start(head)

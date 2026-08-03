@@ -280,6 +280,13 @@ func (bc *BlockChain) commitAsync(
 		} else {
 			maxFlushable = 0
 		}
+		// CommitInflight and archiveHead publication are separate atomic steps.
+		// Never let the durable base advance through the tiny interval between
+		// them, otherwise a reader pinned to the previous archive head could see
+		// future flat-latest rows from Pebble.
+		if head := bc.archiveReadableHead(); head != nil && int64(head.Number()) < maxFlushable {
+			maxFlushable = int64(head.Number())
+		}
 	}
 	if cutoff > maxFlushable {
 		cutoff = maxFlushable
@@ -424,6 +431,7 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 		bc.failCommit(job, fmt.Errorf("async commit promote layer block %d: %w", job.block.Number(), err))
 		return
 	}
+	bc.archiveHead.Store(job.block)
 }
 
 // failCommit records the first commit-worker error fail-fast and discards the

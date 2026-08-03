@@ -3544,39 +3544,67 @@ func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64,
 	return b.historyReaderAtContext(context.Background())
 }
 
-func (b *TronBackend) historyReaderAtContext(ctx context.Context) (*state.PersistentHistoryReader, uint64, tcommon.Hash, func(), error) {
+func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks ...uint64) (*state.PersistentHistoryReader, uint64, tcommon.Hash, func(), error) {
 	if err := lockMutexContext(ctx, &b.chain.chainmu); err != nil {
 		return nil, 0, tcommon.Hash{}, nil, err
 	}
-	// A deep async-commit session can publish CurrentBlock just before its
-	// worker promotes that block's completed layer. Drain the bounded worker
-	// queue at this capture boundary so the pinned topology is fully immutable
-	// and corresponds exactly to the head/root recorded below.
-	if b.chain.commitPending != nil {
+	// Deep historical requests can pin the last fully promoted archive head
+	// immediately. Only a request for a newer, still-in-flight block must drain
+	// the commit queue to preserve exact block-tag semantics.
+	head := b.chain.archiveReadableHead()
+	if len(requiredBlocks) > 0 && head != nil && requiredBlocks[0] > head.Number() && b.chain.commitPending != nil {
 		b.chain.WaitForCommitSettled()
+		head = b.chain.archiveReadableHead()
 	}
 	if errPtr := b.chain.commitErr.Load(); errPtr != nil {
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("settle archive state snapshot: %w", *errPtr)
 	}
-	headNum := b.chain.CurrentBlock().Number()
+	if head == nil {
+		b.chain.chainmu.Unlock()
+		return nil, 0, tcommon.Hash{}, nil, errors.New("archive state head is unavailable")
+	}
+	headNum := head.Number()
+	var snapshot *blockbuffer.ReadSnapshot
+	snapshot, snapshotErr := b.chain.buffer.NewReadSnapshotThrough(headNum)
+	if errors.Is(snapshotErr, blockbuffer.ErrReadSnapshotUnsupported) && b.chain.commitPending != nil {
+		// Backends without durable MVCC snapshots must retain chainmu for the
+		// whole query. Settle first so their moving Buffer view cannot gain a
+		// layer above the captured head while the query is running.
+		b.chain.WaitForCommitSettled()
+		if errPtr := b.chain.commitErr.Load(); errPtr != nil {
+			b.chain.chainmu.Unlock()
+			return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("settle archive state snapshot: %w", *errPtr)
+		}
+		head = b.chain.archiveReadableHead()
+		headNum = head.Number()
+	}
 	root, ok, err := b.chain.stateRootAtBlockStrict(headNum)
 	if err != nil {
+		if snapshot != nil {
+			_ = snapshot.Close()
+		}
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, err
 	}
 	if !ok {
+		if snapshot != nil {
+			_ = snapshot.Close()
+		}
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("state root for head block %d not available", headNum)
 	}
 	live, err := b.chain.openState(root)
 	if err != nil {
+		if snapshot != nil {
+			_ = snapshot.Close()
+		}
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("open head state: %w", err)
 	}
 	historyDB := stateHistoryReaderDB(b.chain.buffer)
 	release := b.chain.chainmu.Unlock
-	if snapshot, snapshotErr := b.chain.buffer.NewReadSnapshot(); snapshotErr == nil {
+	if snapshotErr == nil {
 		historyDB = snapshot
 		live.SetStateCodeReader(snapshot)
 		live.SetAccountKVIndexStore(snapshot)
@@ -3639,7 +3667,7 @@ func (b *TronBackend) archiveStateAt(blockNum uint64, contexts ...context.Contex
 	if len(contexts) > 0 && contexts[0] != nil {
 		ctx = contexts[0]
 	}
-	reader, headNum, headRoot, releaseHistory, err := b.historyReaderAtContext(ctx)
+	reader, headNum, headRoot, releaseHistory, err := b.historyReaderAtContext(ctx, blockNum)
 	if err != nil {
 		return nil, err
 	}

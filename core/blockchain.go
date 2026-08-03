@@ -178,7 +178,11 @@ type BlockChain struct {
 	stateTxRangeSeedHook        func(uint64)
 	transactionLookupETLOptions etl.Options
 
-	currentBlock   atomic.Pointer[types.Block]
+	currentBlock atomic.Pointer[types.Block]
+	// archiveHead is the newest block whose async state layer has been fully
+	// promoted. Historical readers may lag CurrentBlock briefly, but can capture
+	// this boundary without draining the commit pipeline.
+	archiveHead    atomic.Pointer[types.Block]
 	chainmu        sync.Mutex // serializes block insertion
 	lastInsertNano atomic.Int64
 	closed         atomic.Bool
@@ -512,6 +516,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		return nil, err
 	}
 	bc.currentBlock.Store(head)
+	bc.archiveHead.Store(head)
 	if err := bc.ensureCanonicalStageHead(head); err != nil {
 		return nil, err
 	}
@@ -630,6 +635,20 @@ func syncKeyValueStore(db ethdb.KeyValueStore) error {
 // CurrentBlock returns the head of the canonical chain.
 func (bc *BlockChain) CurrentBlock() *types.Block {
 	return bc.currentBlock.Load()
+}
+
+// archiveReadableHead returns the newest block whose complete state overlay is
+// safe to pin. The synchronous path publishes atomically under chainmu, so its
+// current head is already safe. Async commit publishes archiveHead only after
+// CommitInflight has promoted the block's layer.
+func (bc *BlockChain) archiveReadableHead() *types.Block {
+	if !bc.asyncCommit {
+		return bc.CurrentBlock()
+	}
+	if head := bc.archiveHead.Load(); head != nil {
+		return head
+	}
+	return bc.CurrentBlock()
 }
 
 // GetBlockByNumber retrieves a block by its number.
@@ -1690,6 +1709,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// Promote the buffer layer to the layered stack. Slice 1 introduced the
 	// layered stack; slice 2 adds the flush-at-solidified policy below.
 	bc.buffer.CommitBlock()
+	bc.archiveHead.Store(block)
 
 	// Hand every layer at or below the new solidified-block number to the
 	// async flusher. Layers above solidified stay in memory and remain
@@ -2238,6 +2258,7 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 
 	// Rewind currentBlock to LCA so that applyBlock reads the correct parent root.
 	bc.currentBlock.Store(lcaBlock)
+	bc.archiveHead.Store(lcaBlock)
 	if err := rewindCanonicalStagePipeline(bc.db, lcaBlock.Number(), lcaBlock.Hash()); err != nil {
 		return fmt.Errorf("rewind canonical stage progress to LCA %d: %w", lcaBlock.Number(), err)
 	}

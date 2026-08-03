@@ -1937,6 +1937,128 @@ func TestArchiveQuery_PebbleSnapshotReleasesChainMutexAndPinsHead(t *testing.T) 
 	}
 }
 
+func TestArchiveQuery_PebbleDeepHistoryDoesNotDrainAsyncCommit(t *testing.T) {
+	diskdb, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer diskdb.Close()
+	cfg := cloneMainnetChainConfig()
+	cfg.HistoryEnabled = true
+	witness := testInsertAddr(1)
+	const genesisBalance = int64(99_000_000_000_000_000)
+	genesis := &params.Genesis{
+		Config:    cfg,
+		Timestamp: 0,
+		Accounts:  []params.GenesisAccount{{Address: witness, Balance: genesisBalance}},
+		Witnesses: []params.GenesisWitness{
+			{Address: witness, VoteCount: 1, URL: "test"},
+			{Address: testInsertAddr(20), VoteCount: 1, URL: "sr2"},
+			{Address: testInsertAddr(21), VoteCount: 1, URL: "sr3"},
+		},
+		DynamicProperties: map[string]int64{"next_maintenance_time": 1<<62 - 1},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(diskdb))
+	bc, err := NewBlockChain(diskdb, sdb, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc.SetAsyncCommit(true)
+	defer bc.Close()
+	backend := &TronBackend{chain: bc}
+
+	commitStarted := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseCommit) }) }
+	defer release()
+	SetCommitFoldHookForTest(func(blockNum uint64) error {
+		if blockNum == 1 {
+			close(commitStarted)
+			<-releaseCommit
+		}
+		return nil
+	})
+	defer SetCommitFoldHookForTest(nil)
+
+	insertSession := bc.BeginInsertSession()
+	block := buildTransferBlock(t, 1, 3000, genesisHash, witness, 1_000)
+	if err := insertSession.Insert([]*types.Block{block}); err != nil {
+		t.Fatalf("insert pipelined block: %v", err)
+	}
+	select {
+	case <-commitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("async commit did not reach fold hook")
+	}
+
+	// Block 1 is deliberately still in flight. A query for genesis must pin the
+	// published archive head immediately instead of draining that commit.
+	deepDone := make(chan struct {
+		session *archiveStateSession
+		err     error
+	}, 1)
+	go func() {
+		session, err := backend.archiveStateAt(0)
+		deepDone <- struct {
+			session *archiveStateSession
+			err     error
+		}{session: session, err: err}
+	}()
+	var deep *archiveStateSession
+	select {
+	case result := <-deepDone:
+		if result.err != nil {
+			t.Fatalf("archive genesis while commit pending: %v", result.err)
+		}
+		deep = result.session
+	case <-time.After(time.Second):
+		t.Fatal("deep archive query drained the pending commit")
+	}
+	account, err := deep.reader.AccountAt(witness, 0)
+	if err != nil {
+		deep.Close()
+		t.Fatalf("read pinned genesis account: %v", err)
+	}
+	if account == nil || account.Balance() != genesisBalance {
+		deep.Close()
+		t.Fatalf("pinned genesis account = %v, want balance %d", account, genesisBalance)
+	}
+	deep.Close()
+
+	// Exact access to the in-flight block still waits until it is fully
+	// promoted, preserving explicit block-number semantics.
+	latestDone := make(chan error, 1)
+	go func() {
+		session, err := backend.archiveStateAt(1)
+		if session != nil {
+			session.Close()
+		}
+		latestDone <- err
+	}()
+	select {
+	case err := <-latestDone:
+		t.Fatalf("in-flight archive query returned before promotion: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	release()
+	if err := insertSession.Finish(); err != nil {
+		t.Fatalf("finish pipelined insert: %v", err)
+	}
+	select {
+	case err := <-latestDone:
+		if err != nil {
+			t.Fatalf("archive promoted block: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("archive query did not resume after promotion")
+	}
+}
+
 func TestArchiveExecutionRootUsesSessionHeadRoot(t *testing.T) {
 	want := tcommon.HexToHash("0x1234")
 	b := &TronBackend{}

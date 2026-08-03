@@ -114,6 +114,64 @@ func TestReadSnapshotPinsBaseAndLayerTopologyAcrossFlush(t *testing.T) {
 	}
 }
 
+func TestReadSnapshotThroughExcludesFutureLayers(t *testing.T) {
+	base, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer base.Close()
+
+	buf := New(base)
+	buf.BeginBlock(bufHash(1), 1)
+	if err := buf.Put([]byte("state/value"), []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	buf.CommitBlock()
+
+	buf.BeginBlock(bufHash(2), 2)
+	if err := buf.Put([]byte("state/value"), []byte("two")); err != nil {
+		t.Fatal(err)
+	}
+	if err := buf.Put([]byte("state/future"), []byte("future")); err != nil {
+		t.Fatal(err)
+	}
+
+	assertBlockOne := func(snapshot *ReadSnapshot) {
+		t.Helper()
+		defer snapshot.Close()
+		got, err := snapshot.Get([]byte("state/value"))
+		if err != nil || string(got) != "one" {
+			t.Fatalf("bounded value = (%q,%v), want one", got, err)
+		}
+		if ok, err := snapshot.Has([]byte("state/future")); err != nil || ok {
+			t.Fatalf("bounded future key = (%v,%v), want false/nil", ok, err)
+		}
+	}
+
+	snapshot, err := buf.NewReadSnapshotThrough(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBlockOne(snapshot)
+
+	// The boundary remains effective after the future layer is promoted.
+	buf.CommitBlock()
+	snapshot, err = buf.NewReadSnapshotThrough(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBlockOne(snapshot)
+
+	latest, err := buf.NewReadSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer latest.Close()
+	if got, err := latest.Get([]byte("state/value")); err != nil || string(got) != "two" {
+		t.Fatalf("latest value = (%q,%v), want two", got, err)
+	}
+}
+
 func pendingOwnedPuts(l *layer) int {
 	total := 0
 	for i := range l.shards {
