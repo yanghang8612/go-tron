@@ -161,6 +161,8 @@
 - [x] Reuse ordinary sender-chain publisher states as the bounded retry-worker
   pool and promote ready incarnation results on all opt-in parallel blocks
   without another preexecution pass or conflict-boundary StateDB copy.
+- [x] Measure ordinary retry WriteSet capture cells/time separately from
+  background prefix replay and publication so critical-path cost is visible.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

@@ -1316,6 +1316,21 @@ source incarnation must itself have been canonically published. This matches
 Erigon's rule that validation is incarnation-sensitive and prevents a stale
 sender ancestor from making its descendants look ready.
 
+The first ordinary-block 57-second window imported 1,600 blocks (28.1
+blocks/s) and published 42 retry results with zero fallback, mismatch, or
+error. Background prefix replay consumed 76.6 ms total and end-of-block worker
+wait consumed 2.05 ms. The block range was denser than the preceding sampled
+process; uptime-normalized throughput was about 2,240 transactions/s versus
+1,870 transactions/s before ordinary retries, so there was no initial
+throughput regression after normalization.
+
+Canonical WriteSet materialization is the remaining retry cost on the serial
+path. Metrics under `core/versioned_shadow/write_set_capture/` therefore split
+enabled blocks, transactions, captured cells, nanoseconds, unsupported
+captures, and errors from the already measured background prefix replay. The
+next production gate uses those counters to decide whether to compact the
+carrier further or move Transfer reads directly onto shared versioned values.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

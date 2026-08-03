@@ -646,6 +646,12 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	publishedBefore := discardShadowRetryActualPublishedCounter.Snapshot().Count()
 	writeMatchesBefore := discardShadowRetryActualPublishedWriteOKCounter.Snapshot().Count()
 	writeMismatchesBefore := discardShadowRetryActualPublishedWriteMismatchCounter.Snapshot().Count()
+	captureBlocksBefore := versionedShadowWriteCaptureBlocksCounter.Snapshot().Count()
+	captureTransactionsBefore := versionedShadowWriteCaptureTransactionsCounter.Snapshot().Count()
+	captureCellsBefore := versionedShadowWriteCaptureCellsCounter.Snapshot().Count()
+	captureNanosBefore := versionedShadowWriteCaptureNanosCounter.Snapshot().Count()
+	captureUnsupportedBefore := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count()
+	captureErrorsBefore := versionedShadowWriteCaptureErrorsCounter.Snapshot().Count()
 	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
 	if err != nil {
 		t.Fatalf("parallel process: %v", err)
@@ -665,6 +671,24 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	}
 	if mismatches := discardShadowRetryActualPublishedWriteMismatchCounter.Snapshot().Count() - writeMismatchesBefore; mismatches != 0 {
 		t.Fatalf("async retry published write mismatches = %d, want 0", mismatches)
+	}
+	if blocks := versionedShadowWriteCaptureBlocksCounter.Snapshot().Count() - captureBlocksBefore; blocks != 1 {
+		t.Fatalf("write capture blocks = %d, want 1", blocks)
+	}
+	if captured := versionedShadowWriteCaptureTransactionsCounter.Snapshot().Count() - captureTransactionsBefore; captured != int64(len(transactions)) {
+		t.Fatalf("write capture transactions = %d, want %d", captured, len(transactions))
+	}
+	if cells := versionedShadowWriteCaptureCellsCounter.Snapshot().Count() - captureCellsBefore; cells <= 0 {
+		t.Fatalf("write capture cells = %d, want > 0", cells)
+	}
+	if nanos := versionedShadowWriteCaptureNanosCounter.Snapshot().Count() - captureNanosBefore; nanos <= 0 {
+		t.Fatalf("write capture nanos = %d, want > 0", nanos)
+	}
+	if unsupported := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count() - captureUnsupportedBefore; unsupported != 0 {
+		t.Fatalf("write capture unsupported = %d, want 0", unsupported)
+	}
+	if captureErrors := versionedShadowWriteCaptureErrorsCounter.Snapshot().Count() - captureErrorsBefore; captureErrors != 0 {
+		t.Fatalf("write capture errors = %d, want 0", captureErrors)
 	}
 	for txIndex := range serialInfos {
 		if !proto.Equal(serialInfos[txIndex], parallelInfos[txIndex]) {

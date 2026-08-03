@@ -33,6 +33,12 @@ var (
 	versionedShadowRawKVConflictsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/raw_kv", nil)
 	versionedShadowRawKVReadCellsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/raw_kv/read_cells", nil)
 	versionedShadowRawKVWriteCellsCounter                     = metrics.NewRegisteredCounter("core/versioned_shadow/raw_kv/write_cells", nil)
+	versionedShadowWriteCaptureBlocksCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/blocks", nil)
+	versionedShadowWriteCaptureTransactionsCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/transactions", nil)
+	versionedShadowWriteCaptureCellsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/cells", nil)
+	versionedShadowWriteCaptureNanosCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/nanos", nil)
+	versionedShadowWriteCaptureUnsupportedCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/unsupported", nil)
+	versionedShadowWriteCaptureErrorsCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/errors", nil)
 	versionedShadowOtherConflictsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/conflict/other", nil)
 	versionedShadowVMTransactionsCounter                      = metrics.NewRegisteredCounter("core/versioned_shadow/vm/transactions", nil)
 	versionedShadowVMFirstPassValidCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/vm/first_pass_valid", nil)
@@ -145,6 +151,7 @@ type versionedAccessShadow struct {
 func (s *versionedAccessShadow) EnableWriteSetCapture(transactionCount int) {
 	s.transactionWriteSets = make([]state.TransactionWriteSet, transactionCount)
 	s.transactionWritesOK = make([]bool, transactionCount)
+	s.stats.writeCaptureBlocks = 1
 }
 
 type versionedAccessShadowStats struct {
@@ -169,6 +176,12 @@ type versionedAccessShadowStats struct {
 	rawKVConflicts                       int64
 	rawKVReadCells                       int64
 	rawKVWriteCells                      int64
+	writeCaptureBlocks                   int64
+	writeCaptureTransactions             int64
+	writeCaptureCells                    int64
+	writeCaptureNanos                    int64
+	writeCaptureUnsupported              int64
+	writeCaptureErrors                   int64
 	otherConflicts                       int64
 	vmTransactions                       int64
 	vmFirstPassValid                     int64
@@ -399,10 +412,19 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 	}
 	s.detach(statedb, dynProps)
 	if txIndex >= 0 && txIndex < len(s.transactionWriteSets) {
+		captureStarted := time.Now()
 		writes, known, captureErr := statedb.CaptureTransactionWriteSet(journalMark, &s.recorder, dynProps)
-		if captureErr == nil && known {
+		s.stats.writeCaptureTransactions++
+		s.stats.writeCaptureNanos += time.Since(captureStarted).Nanoseconds()
+		switch {
+		case captureErr != nil:
+			s.stats.writeCaptureErrors++
+		case !known:
+			s.stats.writeCaptureUnsupported++
+		default:
 			s.transactionWriteSets[txIndex] = writes
 			s.transactionWritesOK[txIndex] = true
+			s.stats.writeCaptureCells += int64(len(writes))
 		}
 	}
 	s.stats.transactions++
@@ -1094,6 +1116,12 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowRawKVConflictsCounter.Inc(stats.rawKVConflicts)
 	versionedShadowRawKVReadCellsCounter.Inc(stats.rawKVReadCells)
 	versionedShadowRawKVWriteCellsCounter.Inc(stats.rawKVWriteCells)
+	versionedShadowWriteCaptureBlocksCounter.Inc(stats.writeCaptureBlocks)
+	versionedShadowWriteCaptureTransactionsCounter.Inc(stats.writeCaptureTransactions)
+	versionedShadowWriteCaptureCellsCounter.Inc(stats.writeCaptureCells)
+	versionedShadowWriteCaptureNanosCounter.Inc(stats.writeCaptureNanos)
+	versionedShadowWriteCaptureUnsupportedCounter.Inc(stats.writeCaptureUnsupported)
+	versionedShadowWriteCaptureErrorsCounter.Inc(stats.writeCaptureErrors)
 	versionedShadowOtherConflictsCounter.Inc(stats.otherConflicts)
 	versionedShadowVMTransactionsCounter.Inc(stats.vmTransactions)
 	versionedShadowVMFirstPassValidCounter.Inc(stats.vmFirstPassValid)
