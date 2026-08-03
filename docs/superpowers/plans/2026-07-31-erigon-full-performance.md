@@ -240,6 +240,12 @@
 - [ ] Run the block-packed changeset production gate and compare rows per pack,
   avoided Put/key bytes, changeset/final-coalesced bytes, disk/compaction bytes,
   stalls, sync throughput, restart recovery, and archive/unwind errors.
+- [x] Add a versioned, benefit-gated Snappy envelope for block-packed hot
+  changesets so Pebble WAL and uncompressed hot levels do not retain redundant
+  previous-value structure; pool transient encode/decode buffers safely.
+- [ ] Run the compressed block-pack production gate and compare stored/raw
+  ratio, codec CPU, GC/memory, final coalesced and physical writes, stage lag,
+  stalls, sync throughput, mixed-format restart, and history parity.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

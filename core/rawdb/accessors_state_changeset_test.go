@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"reflect"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -166,6 +168,10 @@ func TestStateDomainChangeBlockPackRoundTripAndLogicalBytes(t *testing.T) {
 	logicalBefore := stateChangeBlockPackLogicalBytesCounter.Snapshot().Count()
 	writesAvoidedBefore := stateChangeBlockPackWritesAvoidedCounter.Snapshot().Count()
 	keysAvoidedBefore := stateChangeBlockPackKeyBytesAvoidedCounter.Snapshot().Count()
+	uncompressedBefore := stateChangeBlockPackUncompressedCounter.Snapshot().Count()
+	compressionSavedBefore := stateChangeBlockPackCompressionSavedCounter.Snapshot().Count()
+	compressedBefore := stateChangeBlockPackCompressedCounter.Snapshot().Count()
+	rawBefore := stateChangeBlockPackRawCounter.Snapshot().Count()
 	changes := make([]*StateDomainChange, 128)
 	individualBytes := 0
 	for i := range changes {
@@ -196,6 +202,13 @@ func TestStateDomainChangeBlockPackRoundTripAndLogicalBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	uncompressed, err := decodeStateDomainChangeBlockStorage(packed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(uncompressed, packed) {
+		t.Fatal("compressible block pack was stored raw")
+	}
 	packedBytes := len(stateChangeSetKey(19, 0)) + len(packed)
 	if packedBytes*100 >= individualBytes*80 {
 		t.Fatalf("packed logical bytes = %d, individual = %d, want >20%% reduction", packedBytes, individualBytes)
@@ -211,6 +224,10 @@ func TestStateDomainChangeBlockPackRoundTripAndLogicalBytes(t *testing.T) {
 		{"logical bytes", stateChangeBlockPackLogicalBytesCounter.Snapshot().Count() - logicalBefore, int64(packedBytes)},
 		{"writes avoided", stateChangeBlockPackWritesAvoidedCounter.Snapshot().Count() - writesAvoidedBefore, int64(len(changes) - 1)},
 		{"key bytes avoided", stateChangeBlockPackKeyBytesAvoidedCounter.Snapshot().Count() - keysAvoidedBefore, int64((len(changes) - 1) * len(stateChangeSetKey(19, 0)))},
+		{"uncompressed bytes", stateChangeBlockPackUncompressedCounter.Snapshot().Count() - uncompressedBefore, int64(len(uncompressed))},
+		{"compression saved", stateChangeBlockPackCompressionSavedCounter.Snapshot().Count() - compressionSavedBefore, int64(len(uncompressed) - len(packed))},
+		{"compressed blocks", stateChangeBlockPackCompressedCounter.Snapshot().Count() - compressedBefore, 1},
+		{"raw blocks", stateChangeBlockPackRawCounter.Snapshot().Count() - rawBefore, 0},
 	}
 	for _, check := range metricChecks {
 		if check.got != check.want {
@@ -282,6 +299,51 @@ func TestStateDomainChangeBlockPackRoundTripAndLogicalBytes(t *testing.T) {
 			t.Fatalf("inverse blocks remain for %q after packed delete: %v", key, blocks)
 		}
 	}
+
+	// The just-deployed v1 block pack had no compression envelope. Keep it
+	// readable so a restart can span the P4.42/P4.43 boundary.
+	rawDB := ethrawdb.NewMemoryDatabase()
+	if err := rawDB.Put(stateChangeSetKey(19, 0), uncompressed); err != nil {
+		t.Fatal(err)
+	}
+	rawRow, ok, err := ReadStateDomainChange(rawDB, 19, 64)
+	if err != nil || !ok || !bytes.Equal(rawRow.Key, changes[63].Key) {
+		t.Fatalf("read uncompressed block pack = %+v ok=%v err=%v", rawRow, ok, err)
+	}
+}
+
+func TestStateDomainChangeBlockCompressedCorruption(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	bad := append(append([]byte(nil), stateDomainChangeBlockEnvelopeMagic[:]...), stateDomainChangeBlockSnappyVersion, 0xff)
+	if err := db.Put(stateChangeSetKey(23, 0), bad); err != nil {
+		t.Fatal(err)
+	}
+	if err := IterateStateDomainChanges(db, 23, func(*StateDomainChange) (bool, error) { return true, nil }); err == nil || !strings.Contains(err.Error(), "compressed state domain change block") {
+		t.Fatalf("compressed corruption error = %v", err)
+	}
+	unknown := append(append([]byte(nil), stateDomainChangeBlockEnvelopeMagic[:]...), 0xff)
+	if _, err := decodeStateDomainChangeBlockStorage(unknown); err == nil || !strings.Contains(err.Error(), "compression version") {
+		t.Fatalf("unknown compression version error = %v", err)
+	}
+	var size [10]byte
+	n := binary.PutUvarint(size[:], stateDomainChangeBlockMaxDecodedBytes+1)
+	bomb := append(append(append([]byte(nil), stateDomainChangeBlockEnvelopeMagic[:]...), stateDomainChangeBlockSnappyVersion), size[:n]...)
+	if _, err := decodeStateDomainChangeBlockStorage(bomb); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("oversize compressed block error = %v", err)
+	}
+}
+
+func TestStateDomainChangeBlockCompressionGate(t *testing.T) {
+	small := bytes.Repeat([]byte{0x11}, stateDomainChangeBlockCompressionMinBytes-1)
+	if got, compressed := encodeStateDomainChangeBlockStorage(small); compressed || !bytes.Equal(got, small) {
+		t.Fatal("sub-threshold state domain change block was compressed")
+	}
+	rng := rand.New(rand.NewSource(42))
+	incompressible := make([]byte, 64<<10)
+	_, _ = rng.Read(incompressible)
+	if got, compressed := encodeStateDomainChangeBlockStorage(incompressible); compressed || !bytes.Equal(got, incompressible) {
+		t.Fatalf("incompressible state domain change block was retained: compressed=%v bytes=%d", compressed, len(got))
+	}
 }
 
 type discardStateDomainChangeWriter struct{}
@@ -294,6 +356,7 @@ func BenchmarkWriteStateDomainChangeBlockRows(b *testing.B) {
 	changes := make([]*StateDomainChange, rows)
 	owner := common.Address{0x41, 0x21}
 	for i := range changes {
+		prev := common.Keccak256([]byte(fmt.Sprintf("storage-prev/%04d", i)))
 		changes[i] = &StateDomainChange{
 			BlockNum:   21,
 			TxNum:      1000 + uint64(i/8),
@@ -304,10 +367,22 @@ func BenchmarkWriteStateDomainChangeBlockRows(b *testing.B) {
 			Domain:     kvdomains.ContractStorage,
 			Key:        []byte(fmt.Sprintf("storage/%04d", i)),
 			PrevExists: true,
-			Prev:       bytes.Repeat([]byte{byte(i)}, 32),
+			Prev:       append([]byte(nil), prev.Bytes()...),
 		}
 	}
 	w := discardStateDomainChangeWriter{}
+	probeDB := ethrawdb.NewMemoryDatabase()
+	if err := WriteStateDomainChangeBlockRows(probeDB, changes); err != nil {
+		b.Fatal(err)
+	}
+	probeStored, err := probeDB.Get(stateChangeSetKey(21, 0))
+	if err != nil {
+		b.Fatal(err)
+	}
+	probeRaw, err := decodeStateDomainChangeBlockStorage(probeStored)
+	if err != nil {
+		b.Fatal(err)
+	}
 	b.Run("individual", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
@@ -320,8 +395,58 @@ func BenchmarkWriteStateDomainChangeBlockRows(b *testing.B) {
 	})
 	b.Run("block-pack", func(b *testing.B) {
 		b.ReportAllocs()
+		b.ReportMetric(100*float64(len(probeStored))/float64(len(probeRaw)), "stored/raw_%")
 		for i := 0; i < b.N; i++ {
 			if err := WriteStateDomainChangeBlockRows(w, changes); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+var benchmarkDecodedStateDomainChanges []*StateDomainChange
+
+func BenchmarkDecodeStateDomainChangeBlockRows(b *testing.B) {
+	const rows = 512
+	changes := make([]*StateDomainChange, rows)
+	owner := common.Address{0x41, 0x31}
+	for i := range changes {
+		prev := common.Keccak256([]byte(fmt.Sprintf("decode-prev/%04d", i)))
+		changes[i] = &StateDomainChange{
+			BlockNum: 31, TxNum: 2000 + uint64(i/8), Seq: uint64(i + 1),
+			FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 3,
+			Domain: kvdomains.ContractStorage, Key: []byte(fmt.Sprintf("storage/%04d", i)),
+			PrevExists: true, Prev: append([]byte(nil), prev.Bytes()...),
+		}
+	}
+	db := ethrawdb.NewMemoryDatabase()
+	if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
+		b.Fatal(err)
+	}
+	compressed, err := db.Get(stateChangeSetKey(31, 0))
+	if err != nil {
+		b.Fatal(err)
+	}
+	raw, err := decodeStateDomainChangeBlockStorage(compressed)
+	if err != nil || bytes.Equal(raw, compressed) {
+		b.Fatalf("prepare compressed benchmark: raw=%d compressed=%d err=%v", len(raw), len(compressed), err)
+	}
+	b.Run("raw", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(100, "stored/raw_%")
+		for i := 0; i < b.N; i++ {
+			benchmarkDecodedStateDomainChanges, err = decodePersistedStateDomainChangeBlock(raw, 31)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("snappy", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(100*float64(len(compressed))/float64(len(raw)), "stored/raw_%")
+		for i := 0; i < b.N; i++ {
+			benchmarkDecodedStateDomainChanges, err = decodePersistedStateDomainChangeBlock(compressed, 31)
+			if err != nil {
 				b.Fatal(err)
 			}
 		}

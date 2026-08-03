@@ -1991,6 +1991,57 @@ allocated from 184 KB to about 171 KB, and allocations from 3,072 to about
 Puts, and avoided key bytes; these local results select the implementation but
 do not substitute for the deployment gate.
 
+The first production canary restarted cleanly on the legacy-row database and
+registered the new writer immediately. Two stable windows covered 5,024 blocks
+and 172,977 transactions in 96.53 seconds (52.05 blocks/s, 1,792 tx/s, 34.43
+transactions/block). They packed 1,711,225 logical rows into 5,063 block values,
+avoiding 1,706,162 Puts (99.70%) and 59.72 MB of repeated physical keys. Against
+the exact same packed payload plus those avoided keys, authoritative changeset
+logical bytes fell 19.10%; this is an exact counterfactual, independent of LSM
+queue state.
+
+Three complete post-deploy family samples reduced the changeset/commitment byte
+ratio from 0.922 in the preceding P4.41 samples to 0.624 (32.3% relative), while
+commitment bytes remained stable at 555.94 bytes per coalesced operation. Final
+coalesced output was 149 KB/block versus 184 KB/block in P4.41, but transaction
+density also fell from 47.1 to 34.4, so this physical result is directional
+rather than a matched-workload claim. The windows drained 948 MB of compaction
+debt and recorded zero Pebble write delay, contract errors, canonical parallel
+publication errors/mismatches, sender-retry errors/mismatches, or history-stage
+interrupts. One independent sender-chain observer error fell back without any
+state/receipt mismatch. Memory held was 4.6 GB with 128 goroutines. A restart
+after packed rows exist plus a longer matched-height window remain before the
+production gate is marked complete.
+
+#### P4.43: Benefit-gated hot changeset compression
+
+Block ownership also creates a compression boundary that did not exist with
+one value per mutation. The production Pebble profile deliberately leaves hot
+levels uncompressed and enables Snappy only at the bottom level, so the P4.42
+pack still enters blockbuffer, WAL, flush, and most compactions at about 148 raw
+bytes per logical row. Repeated owners, typed-domain metadata, RLP framing, and
+protobuf-like previous account images are compressible even when storage words
+themselves are high entropy.
+
+P4.43 wraps eligible packs in an unambiguous versioned Snappy envelope. Packs
+below 1 KiB remain raw, and compression is retained only when stored bytes save
+at least 12.5%, keeping small/incompressible blocks off the codec path. Readers
+accept the new envelope, the uncompressed P4.42 container, and all positive-
+sequence legacy/repair rows. They reject unknown envelope versions, corrupt
+Snappy payloads, and decoded sizes above 128 MiB before allocation. Encode and
+decode scratch buffers are pooled only when the persisted/decoded result owns
+independent bytes; buffers above 4 MiB are left for GC rather than retained.
+
+On a conservative 512-row corpus with high-entropy previous storage words, the
+stored pack was 50.55% of raw. Publication took about 127--130 us versus
+143--147 us for individual rows; compared with the uncompressed P4.42 pack it
+adds roughly 27 us per block. Full-pack decode rose only from about 184--187 us
+to 190--194 us (3--4%), while pooled decoded memory stayed near 382 KB versus
+380 KB raw and added one allocation. The compressed writer retained roughly
+187 KB and 1,551 allocations versus 184 KB / 3,072 for individual rows. These
+numbers pass the local codec gate; stored/raw counters and a production window
+must validate the actual mainnet mix and GC profile.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

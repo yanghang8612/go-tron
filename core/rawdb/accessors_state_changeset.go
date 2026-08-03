@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/golang/snappy"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -36,6 +38,12 @@ var (
 	stateChangeBlockPackLogicalBytesCounter     = metrics.NewRegisteredCounter("state/history/changeset/block_pack/logical_bytes", nil)
 	stateChangeBlockPackWritesAvoidedCounter    = metrics.NewRegisteredCounter("state/history/changeset/block_pack/writes_avoided", nil)
 	stateChangeBlockPackKeyBytesAvoidedCounter  = metrics.NewRegisteredCounter("state/history/changeset/block_pack/key_bytes_avoided", nil)
+	stateChangeBlockPackUncompressedCounter     = metrics.NewRegisteredCounter("state/history/changeset/block_pack/uncompressed_bytes", nil)
+	stateChangeBlockPackCompressionSavedCounter = metrics.NewRegisteredCounter("state/history/changeset/block_pack/compression_saved_bytes", nil)
+	stateChangeBlockPackCompressedCounter       = metrics.NewRegisteredCounter("state/history/changeset/block_pack/compressed_blocks", nil)
+	stateChangeBlockPackRawCounter              = metrics.NewRegisteredCounter("state/history/changeset/block_pack/raw_blocks", nil)
+	stateChangeBlockRawBufferPool               = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+	stateChangeBlockDecodeBufferPool            = sync.Pool{New: func() any { return new([]byte) }}
 )
 
 // NextStateTxRange returns the compact global txNum range for the next block.
@@ -135,6 +143,17 @@ type persistedStateDomainChange struct {
 }
 
 const persistedStateDomainChangeBlockVersion = uint8(1)
+
+const (
+	stateDomainChangeBlockCompressionMinBytes = 1024
+	stateDomainChangeBlockMaxDecodedBytes     = 128 << 20
+	stateDomainChangeBlockPooledBufferMax     = 4 << 20
+	stateDomainChangeBlockSnappyVersion       = byte(1)
+)
+
+// RLP lists always start at 0xc0 or above, so a leading zero is an
+// unambiguous envelope marker beside every uncompressed/legacy representation.
+var stateDomainChangeBlockEnvelopeMagic = [...]byte{0x00, 'g', 't', 'c', 's'}
 
 // persistedStateDomainChangeBlock removes one physical Pebble key per state
 // mutation while preserving the exact transaction/sequence order needed by
@@ -300,13 +319,22 @@ func WriteStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 		}
 		observeStateChangeEncodingLazy(change)
 	}
-	data, err := rlp.EncodeToBytes(&persistedStateDomainChangeBlock{
+	rawBuffer := stateChangeBlockRawBufferPool.Get().(*bytes.Buffer)
+	rawBuffer.Reset()
+	if err := rlp.Encode(rawBuffer, &persistedStateDomainChangeBlock{
 		Version:  persistedStateDomainChangeBlockVersion,
 		FirstSeq: firstSeq,
 		Rows:     rows,
-	})
-	if err != nil {
+	}); err != nil {
+		if rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
+			stateChangeBlockRawBufferPool.Put(rawBuffer)
+		}
 		return err
+	}
+	uncompressedBytes := rawBuffer.Len()
+	data, compressed := encodeStateDomainChangeBlockStorage(rawBuffer.Bytes())
+	if compressed && rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
+		stateChangeBlockRawBufferPool.Put(rawBuffer)
 	}
 	physicalKey := stateChangeSetKey(blockNum, 0)
 	if err := db.Put(physicalKey, data); err != nil {
@@ -316,11 +344,74 @@ func WriteStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 	stateChangeBlockPackRowsCounter.Inc(int64(len(changes)))
 	stateChangeBlockPackEncodedBytesCounter.Inc(int64(len(data)))
 	stateChangeBlockPackLogicalBytesCounter.Inc(int64(len(physicalKey) + len(data)))
+	stateChangeBlockPackUncompressedCounter.Inc(int64(uncompressedBytes))
+	if compressed {
+		stateChangeBlockPackCompressedCounter.Inc(1)
+		stateChangeBlockPackCompressionSavedCounter.Inc(int64(uncompressedBytes - len(data)))
+	} else {
+		stateChangeBlockPackRawCounter.Inc(1)
+	}
 	if avoided := len(changes) - 1; avoided > 0 {
 		stateChangeBlockPackWritesAvoidedCounter.Inc(int64(avoided))
 		stateChangeBlockPackKeyBytesAvoidedCounter.Inc(int64(avoided * len(physicalKey)))
 	}
 	return nil
+}
+
+func encodeStateDomainChangeBlockStorage(raw []byte) ([]byte, bool) {
+	if len(raw) < stateDomainChangeBlockCompressionMinBytes {
+		return raw, false
+	}
+	maxEncoded := snappy.MaxEncodedLen(len(raw))
+	if maxEncoded < 0 {
+		return raw, false
+	}
+	headerLen := len(stateDomainChangeBlockEnvelopeMagic) + 1
+	buf := make([]byte, headerLen+maxEncoded)
+	encoded := snappy.Encode(buf[headerLen:], raw)
+	storedLen := headerLen + len(encoded)
+	// Hot compression must buy at least 12.5%. Smaller wins do not justify
+	// paying decompression on unwind, cold build, and history index rebuild.
+	if storedLen*8 >= len(raw)*7 {
+		return raw, false
+	}
+	copy(buf, stateDomainChangeBlockEnvelopeMagic[:])
+	buf[len(stateDomainChangeBlockEnvelopeMagic)] = stateDomainChangeBlockSnappyVersion
+	return buf[:storedLen], true
+}
+
+func decodeStateDomainChangeBlockStorage(data []byte) ([]byte, error) {
+	payload, _, compressed, err := stateDomainChangeBlockCompressionPayload(data)
+	if err != nil || !compressed {
+		return payload, err
+	}
+	decoded, err := snappy.Decode(nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("rawdb: decode compressed state domain change block: %w", err)
+	}
+	return decoded, nil
+}
+
+func stateDomainChangeBlockCompressionPayload(data []byte) (payload []byte, decodedLen int, compressed bool, err error) {
+	if len(data) < len(stateDomainChangeBlockEnvelopeMagic) || !bytes.Equal(data[:len(stateDomainChangeBlockEnvelopeMagic)], stateDomainChangeBlockEnvelopeMagic[:]) {
+		return data, 0, false, nil
+	}
+	if len(data) == len(stateDomainChangeBlockEnvelopeMagic) {
+		return nil, 0, false, fmt.Errorf("rawdb: truncated state domain change block compression envelope")
+	}
+	version := data[len(stateDomainChangeBlockEnvelopeMagic)]
+	if version != stateDomainChangeBlockSnappyVersion {
+		return nil, 0, false, fmt.Errorf("rawdb: unsupported state domain change block compression version %d", version)
+	}
+	payload = data[len(stateDomainChangeBlockEnvelopeMagic)+1:]
+	decodedLen, err = snappy.DecodedLen(payload)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("rawdb: decode compressed state domain change block length: %w", err)
+	}
+	if decodedLen <= 0 || decodedLen > stateDomainChangeBlockMaxDecodedBytes {
+		return nil, 0, false, fmt.Errorf("rawdb: compressed state domain change block decoded size %d exceeds limit", decodedLen)
+	}
+	return payload, decodedLen, true, nil
 }
 
 // observeStateChangeEncoding attributes the encoded previous-image-only row
@@ -425,9 +516,39 @@ func decodePersistedStateDomainChange(data []byte, blockNum, seq uint64) (*State
 }
 
 func decodePersistedStateDomainChangeBlock(data []byte, blockNum uint64) ([]*StateDomainChange, error) {
-	var block persistedStateDomainChangeBlock
-	if err := rlp.DecodeBytes(data, &block); err != nil {
+	payload, decodedLen, compressed, err := stateDomainChangeBlockCompressionPayload(data)
+	if err != nil {
 		return nil, err
+	}
+	decoded := payload
+	var pooled *[]byte
+	if compressed {
+		pooled = stateChangeBlockDecodeBufferPool.Get().(*[]byte)
+		if cap(*pooled) < decodedLen {
+			*pooled = make([]byte, decodedLen)
+		} else {
+			*pooled = (*pooled)[:decodedLen]
+		}
+		decoded, err = snappy.Decode(*pooled, payload)
+		if err != nil {
+			if cap(*pooled) <= stateDomainChangeBlockPooledBufferMax {
+				*pooled = (*pooled)[:0]
+				stateChangeBlockDecodeBufferPool.Put(pooled)
+			}
+			return nil, fmt.Errorf("rawdb: decode compressed state domain change block: %w", err)
+		}
+	}
+	var block persistedStateDomainChangeBlock
+	if err := rlp.DecodeBytes(decoded, &block); err != nil {
+		if pooled != nil && cap(*pooled) <= stateDomainChangeBlockPooledBufferMax {
+			*pooled = (*pooled)[:0]
+			stateChangeBlockDecodeBufferPool.Put(pooled)
+		}
+		return nil, err
+	}
+	if pooled != nil && cap(*pooled) <= stateDomainChangeBlockPooledBufferMax {
+		*pooled = (*pooled)[:0]
+		stateChangeBlockDecodeBufferPool.Put(pooled)
 	}
 	if block.Version != persistedStateDomainChangeBlockVersion {
 		return nil, fmt.Errorf("rawdb: unsupported state domain change block version %d", block.Version)
