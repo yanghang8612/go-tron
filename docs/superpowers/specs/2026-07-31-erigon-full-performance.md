@@ -1171,6 +1171,45 @@ bounded-runner equivalent of Erigon's retry heap admitting only the current
 transaction incarnation: an actuator already in progress is allowed to finish,
 but known-stale descendants never start.
 
+The first production window with cancellation covered eight actual sample
+blocks and 25 jobs. Of 67 executions, 40 future results arrived before their
+canonical boundary; 25 of the 26 late results were the mandatory zero-deadline
+conflict transactions, and only one result was stale. Atomic checks prevented
+26 additional superseded transactions from starting. All 25 selected results
+matched canonical TransactionInfo, WriteSet, and BalanceTrace; runner busy,
+prefix refresh/copy, frozen-raw miss, execution error, and finish wait remained
+zero. This closes the actual-async observer gate without enabling new canonical
+publication.
+
+#### P4.25: Block-scoped incarnation priority queue
+
+The retry pool now has an Erigon-style minimum-transaction heap in front of
+its fixed runners. A conflict always creates a request even when every runner
+is occupied. Exact raw values, the compact read-version carrier, and a copy of
+DynamicProperties are frozen at the original canonical boundary, so later
+dispatch cannot observe transactions which were not part of that incarnation.
+The private runner reaches the requested prefix only by applying immutable
+canonical WriteSets already captured in the block version map; queued work
+never refreshes from a later live StateDB.
+
+At each canonical boundary, completed workers return ownership and the heap
+dispatches the lowest useful transaction index first. A request whose only
+current tasks are already behind the boundary is removed before execution;
+superseded tokens and unused execution reservations are reclaimed immediately.
+A lazy StateDB copy remains solely as the safe same-boundary fallback when the
+sender-chain observer could not provide a clean prewarmed runner. Metrics under
+`async_actual/queue/` report enqueue/dequeue counts, saturation enqueues,
+dropped tasks, per-block maximum depth, and wait time. The existing
+`busy_skipped` counter is retained as a compatibility signal and should remain
+zero under the queued scheduler.
+
+This queue is still an observe-only bridge. Canonical publication remains on
+the previously gated sender-chain executor, and one synchronous sampled cohort
+remains as an independent reference. The next gate is to move prefix
+advancement off the canonical goroutine onto workers backed by a genuinely
+shared MVCC value layer, then compare queue wait and ready ratios before using
+retried results canonically.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

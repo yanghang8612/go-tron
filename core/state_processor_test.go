@@ -472,6 +472,9 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	maxInflightBefore := discardShadowRetryActualMaxInflightCounter.Snapshot().Count()
 	deferredBefore := discardShadowRetryActualDeferredCounter.Snapshot().Count()
 	supersededBefore := discardShadowRetryActualSupersededCounter.Snapshot().Count()
+	queueEnqueuedBefore := discardShadowRetryActualQueueEnqueuedCounter.Snapshot().Count()
+	queueDequeuedBefore := discardShadowRetryActualQueueDequeuedCounter.Snapshot().Count()
+	queueDroppedBefore := discardShadowRetryActualQueueDroppedCounter.Snapshot().Count()
 	jobsBefore := discardShadowRetryActualJobsCounter.Snapshot().Count()
 	executedBefore := discardShadowRetryActualExecutedCounter.Snapshot().Count()
 	readyBefore := discardShadowRetryActualReadyCounter.Snapshot().Count()
@@ -510,6 +513,15 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	}
 	if superseded := discardShadowRetryActualSupersededCounter.Snapshot().Count() - supersededBefore; superseded != 0 {
 		t.Fatalf("actual async superseded suffix = %d, want 0", superseded)
+	}
+	if enqueued := discardShadowRetryActualQueueEnqueuedCounter.Snapshot().Count() - queueEnqueuedBefore; enqueued != 1 {
+		t.Fatalf("actual async queued requests = %d, want 1", enqueued)
+	}
+	if dequeued := discardShadowRetryActualQueueDequeuedCounter.Snapshot().Count() - queueDequeuedBefore; dequeued != 1 {
+		t.Fatalf("actual async dequeued requests = %d, want 1", dequeued)
+	}
+	if dropped := discardShadowRetryActualQueueDroppedCounter.Snapshot().Count() - queueDroppedBefore; dropped != 0 {
+		t.Fatalf("actual async dropped queued tasks = %d, want 0", dropped)
 	}
 	if refreshes := discardShadowRetryPrefixRefreshCounter.Snapshot().Count() - prefixRefreshBefore; refreshes != 0 {
 		t.Fatalf("actual async prefix refreshes = %d, want 0", refreshes)

@@ -147,8 +147,11 @@
   one fixed synchronous cohort as the production reference.
 - [x] Stop superseded async sender suffixes between transactions with atomic
   incarnation tokens and reclaim their unused execution reservations.
-- [ ] Run the actual async canary production gate and measure ready, late,
+- [x] Run the actual async canary production gate and measure ready, late,
   stale, busy-skip, raw-miss, validation, and finish-wait rates.
+- [x] Add a block-scoped minimum-transaction incarnation heap which freezes
+  raw/version/dynamic inputs at enqueue time, retains requests through runner
+  saturation, and drops expired superseded work before dispatch.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

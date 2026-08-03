@@ -1,6 +1,7 @@
 package core
 
 import (
+	"container/heap"
 	"encoding/binary"
 	"errors"
 	"testing"
@@ -337,6 +338,128 @@ func TestAsyncRetryCancelsSupersededSuffixBeforeExecution(t *testing.T) {
 	retry.consumeAsyncEvent(discardShadowAsyncRetryEvent{done: true, superseded: int64(len(tasks) - 1)}, 0)
 	if retry.asyncScheduled != 1 || retry.stats.actualSuperseded != int64(len(tasks)-1) {
 		t.Fatalf("reservation=%d superseded=%d", retry.asyncScheduled, retry.stats.actualSuperseded)
+	}
+}
+
+func TestAsyncRetryQueueOrdersLowestTransactionFirst(t *testing.T) {
+	queue := new(discardShadowAsyncRetryQueue)
+	for _, txIndex := range []int{11, 3, 7} {
+		heap.Push(queue, &discardShadowAsyncRetryRequest{
+			txIndex: txIndex,
+			tasks:   []discardShadowAsyncRetryTask{{txIndex: txIndex, incarnation: 1}},
+		})
+	}
+	for _, want := range []int{3, 7, 11} {
+		request := heap.Pop(queue).(*discardShadowAsyncRetryRequest)
+		if request.txIndex != want {
+			t.Fatalf("queue tx = %d, want %d", request.txIndex, want)
+		}
+	}
+}
+
+func TestAsyncRetryQueueFreezesBusyBoundaryInputs(t *testing.T) {
+	parent := ethrawdb.NewMemoryDatabase()
+	if err := parent.Put([]byte("stable"), []byte("at-boundary")); err != nil {
+		t.Fatal(err)
+	}
+	source := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{{reads: state.TransactionReadSet{Reads: []state.TransactionRead{{
+			Key: state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "stable"}, Mode: state.TransactionAccessRead,
+		}}}}},
+		resultByTx:   []int{0, -1},
+		senderTasks:  []discardShadowSenderChainTask{{txIndex: 0}, {txIndex: 1}},
+		senderTaskOK: []bool{true, true},
+		senderNext:   []int{1, -1},
+	}
+	retry := newDiscardShadowAsyncSenderRetry(source, 2)
+	if retry == nil {
+		t.Fatal("missing async retry")
+	}
+	for _, runner := range retry.asyncRunners {
+		runner.busy = true
+	}
+	retry.asyncActive = len(retry.asyncRunners)
+	canonical := newTestState(t)
+	var versioned versionedAccessShadow
+	versioned.Prepare(2)
+	retryCfg := discardShadowRunConfig{
+		db: parent, transactions: []*types.Transaction{nil, nil},
+	}
+	retry.enqueueAsyncRetry(0, canonical, canonical.DynamicProperties(), &versioned, retryCfg)
+	if retry.asyncQueue.Len() != 1 || retry.stats.actualQueueBusy != 1 || retry.stats.actualJobs != 0 {
+		t.Fatalf("queued busy retry = queue:%d stats:%+v", retry.asyncQueue.Len(), retry.stats)
+	}
+	if err := parent.Put([]byte("stable"), []byte("later")); err != nil {
+		t.Fatal(err)
+	}
+	request := retry.asyncQueue[0]
+	if got, err := request.frozenRaw.Get([]byte("stable")); err != nil || string(got) != "at-boundary" {
+		t.Fatalf("queued frozen value = %q, %v", got, err)
+	}
+	if request.dynProps == nil || retry.asyncScheduled != 2 || retry.stats.actualQueueMaxDepth != 1 {
+		t.Fatalf("queued request snapshot/reservation = %+v stats:%+v", request, retry.stats)
+	}
+	if tasks, _ := retry.invalidateAsyncSuffix(1, 0); len(tasks) != 0 {
+		t.Fatalf("descendant invalidation scheduled %d tasks", len(tasks))
+	}
+	retry.dispatchAsyncRetryQueue(1, &versioned, retryCfg)
+	if retry.asyncQueue.Len() != 0 || retry.asyncScheduled != 0 || retry.stats.actualQueueDropped != 2 || retry.stats.actualSuperseded != 1 {
+		t.Fatalf("queue cleanup = queue:%d scheduled:%d stats:%+v", retry.asyncQueue.Len(), retry.asyncScheduled, retry.stats)
+	}
+}
+
+func TestAsyncRetryQueueDispatchesAfterRunnerReturns(t *testing.T) {
+	canonical := newTestState(t)
+	for _, id := range []byte{1, 2, 3} {
+		canonical.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+	}
+	canonical.AddBalance(testProcessorAddr(1), 10_000_000)
+	if _, err := canonical.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	base, err := canonical.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.SetDynamicProperties(canonical.DynamicProperties().Copy())
+	transactions := []*types.Transaction{
+		makeTestTransferTx(1, 2, 1_000_000),
+		makeTestTransferTx(1, 3, 2_000_000),
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(discardShadowAsyncRetryFirstOffset), Timestamp: 3_000,
+		}},
+		Transactions: []*corepb.Transaction{transactions[0].Proto(), transactions[1].Proto()},
+	})
+	retryCfg := discardShadowRunConfig{block: block, transactions: transactions}
+	shadow := &discardShadowBlock{base: base, sampled: true}
+	pre := shadow.preexecuteTransferSenderChainsWithRetryState(retryCfg, true)
+	retry := newDiscardShadowAsyncSenderRetry(pre, len(transactions))
+	if retry == nil || len(retry.asyncRunners) != 1 {
+		t.Fatalf("async retry pool = %+v", retry)
+	}
+	runner := retry.asyncRunners[0]
+	runner.busy = true
+	retry.asyncActive = 1
+	var versioned versionedAccessShadow
+	versioned.Prepare(len(transactions))
+	retry.enqueueAsyncRetry(0, canonical, canonical.DynamicProperties(), &versioned, retryCfg)
+	if retry.asyncQueue.Len() != 1 || retry.stats.actualQueueBusy != 1 || retry.stats.actualJobs != 0 {
+		t.Fatalf("busy enqueue = queue:%d stats:%+v", retry.asyncQueue.Len(), retry.stats)
+	}
+	runner.busy = false
+	retry.asyncActive = 0
+	retry.dispatchAsyncRetryQueue(0, &versioned, retryCfg)
+	if retry.asyncQueue.Len() != 0 || retry.stats.actualQueueDequeued != 1 || retry.stats.actualJobs != 1 {
+		t.Fatalf("returned-runner dispatch = queue:%d stats:%+v", retry.asyncQueue.Len(), retry.stats)
+	}
+	retry.drainAsyncEvents(len(transactions), true)
+	if retry.asyncActive != 0 || retry.stats.actualExecuted != 2 || retry.stats.actualErrors != 0 {
+		t.Fatalf("queued execution = active:%d stats:%+v", retry.asyncActive, retry.stats)
+	}
+	if balance := canonical.GetBalance(testProcessorAddr(1)); balance != 10_000_000 {
+		t.Fatalf("queued shadow mutated canonical balance: %d", balance)
 	}
 }
 

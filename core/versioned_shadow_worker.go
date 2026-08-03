@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"container/heap"
 	"encoding/binary"
 	"errors"
 	"sort"
@@ -136,6 +137,12 @@ var (
 	discardShadowRetryActualMaxInflightCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/max_inflight", nil)
 	discardShadowRetryActualDeferredCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/lookahead_deferred", nil)
 	discardShadowRetryActualSupersededCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/superseded_before_execute", nil)
+	discardShadowRetryActualQueueEnqueuedCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/queue/enqueued", nil)
+	discardShadowRetryActualQueueDequeuedCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/queue/dequeued", nil)
+	discardShadowRetryActualQueueBusyCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/queue/enqueued_while_busy", nil)
+	discardShadowRetryActualQueueDroppedCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/queue/dropped", nil)
+	discardShadowRetryActualQueueMaxDepthCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/queue/max_depth", nil)
+	discardShadowRetryActualQueueWaitNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/queue/wait_nanos", nil)
 	discardShadowRetryActualExecutedCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/executed", nil)
 	discardShadowRetryActualReadyCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/ready", nil)
 	discardShadowRetryActualLateCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/late", nil)
@@ -445,65 +452,71 @@ type discardShadowSenderChainStats struct {
 }
 
 type discardShadowSenderRetryStats struct {
-	attempts           int64
-	executed           int64
-	candidates         int64
-	recovered          int64
-	validated          int64
-	infoMismatches     int64
-	writeMismatches    int64
-	balanceMismatches  int64
-	errors             int64
-	budgetSkipped      int64
-	copyNanos          int64
-	prefixRefreshes    int64
-	prefixReuses       int64
-	prefixAdvances     int64
-	prefixAdvanceNanos int64
-	executionNanos     int64
-	asyncCandidates    int64
-	asyncReady         int64
-	asyncLate          int64
-	asyncUnknown       int64
-	asyncValidated     int64
-	asyncRecovered     int64
-	asyncReadySlackNs  int64
-	asyncLateNs        int64
-	actualJobs         int64
-	actualBusySkipped  int64
-	actualCapacity     int64
-	actualMaxInflight  int64
-	actualDeferred     int64
-	actualSuperseded   int64
-	actualExecuted     int64
-	actualReady        int64
-	actualLate         int64
-	actualStale        int64
-	actualCandidates   int64
-	actualRejected     int64
-	actualReadConflict int64
-	actualSender       int64
-	actualBarrier      int64
-	actualUnsupported  int64
-	actualDeltaInvalid int64
-	actualValidated    int64
-	actualRecovered    int64
-	actualErrors       int64
-	actualRawKeys      int64
-	actualRawMisses    int64
-	actualVersionCells int64
-	actualDispatchNs   int64
-	actualPrefixNs     int64
-	actualRefreshes    int64
-	actualReuses       int64
-	actualAdvances     int64
-	actualCopyNs       int64
-	actualAdvanceNs    int64
-	actualRawFreezeNs  int64
-	actualVersionNs    int64
-	actualExecutionNs  int64
-	actualFinishWaitNs int64
-	actualPrewarmed    int64
+	attempts            int64
+	executed            int64
+	candidates          int64
+	recovered           int64
+	validated           int64
+	infoMismatches      int64
+	writeMismatches     int64
+	balanceMismatches   int64
+	errors              int64
+	budgetSkipped       int64
+	copyNanos           int64
+	prefixRefreshes     int64
+	prefixReuses        int64
+	prefixAdvances      int64
+	prefixAdvanceNanos  int64
+	executionNanos      int64
+	asyncCandidates     int64
+	asyncReady          int64
+	asyncLate           int64
+	asyncUnknown        int64
+	asyncValidated      int64
+	asyncRecovered      int64
+	asyncReadySlackNs   int64
+	asyncLateNs         int64
+	actualJobs          int64
+	actualBusySkipped   int64
+	actualCapacity      int64
+	actualMaxInflight   int64
+	actualDeferred      int64
+	actualSuperseded    int64
+	actualQueueEnqueued int64
+	actualQueueDequeued int64
+	actualQueueBusy     int64
+	actualQueueDropped  int64
+	actualQueueMaxDepth int64
+	actualQueueWaitNs   int64
+	actualExecuted      int64
+	actualReady         int64
+	actualLate          int64
+	actualStale         int64
+	actualCandidates    int64
+	actualRejected      int64
+	actualReadConflict  int64
+	actualSender        int64
+	actualBarrier       int64
+	actualUnsupported   int64
+	actualDeltaInvalid  int64
+	actualValidated     int64
+	actualRecovered     int64
+	actualErrors        int64
+	actualRawKeys       int64
+	actualRawMisses     int64
+	actualVersionCells  int64
+	actualDispatchNs    int64
+	actualPrefixNs      int64
+	actualRefreshes     int64
+	actualReuses        int64
+	actualAdvances      int64
+	actualCopyNs        int64
+	actualAdvanceNs     int64
+	actualRawFreezeNs   int64
+	actualVersionNs     int64
+	actualExecutionNs   int64
+	actualFinishWaitNs  int64
+	actualPrewarmed     int64
 }
 
 type discardShadowAsyncRetryEvent struct {
@@ -533,6 +546,47 @@ type discardShadowAsyncRetryTask struct {
 	senderVersioned   bool
 }
 
+// discardShadowAsyncRetryRequest is a retry incarnation frozen at its
+// canonical conflict boundary. Keeping raw/version/dynamic inputs on the
+// request makes it safe to wait in the block-scoped priority queue while the
+// fixed runner pool is busy.
+type discardShadowAsyncRetryRequest struct {
+	txIndex     int
+	tasks       []discardShadowAsyncRetryTask
+	frozenRaw   *discardShadowFrozenKV
+	versionView versionedAccessShadow
+	dynProps    *state.DynamicProperties
+	enqueuedAt  time.Time
+}
+
+type discardShadowAsyncRetryQueue []*discardShadowAsyncRetryRequest
+
+func (queue discardShadowAsyncRetryQueue) Len() int { return len(queue) }
+
+func (queue discardShadowAsyncRetryQueue) Less(left, right int) bool {
+	if queue[left].txIndex != queue[right].txIndex {
+		return queue[left].txIndex < queue[right].txIndex
+	}
+	return queue[left].tasks[0].incarnation > queue[right].tasks[0].incarnation
+}
+
+func (queue discardShadowAsyncRetryQueue) Swap(left, right int) {
+	queue[left], queue[right] = queue[right], queue[left]
+}
+
+func (queue *discardShadowAsyncRetryQueue) Push(value any) {
+	*queue = append(*queue, value.(*discardShadowAsyncRetryRequest))
+}
+
+func (queue *discardShadowAsyncRetryQueue) Pop() any {
+	old := *queue
+	last := len(old) - 1
+	request := old[last]
+	old[last] = nil
+	*queue = old[:last]
+	return request
+}
+
 // discardShadowSenderRetry holds the newest sampled incarnation for each
 // sender-chain transaction. It never publishes state. At the real canonical
 // boundary it may rebuild a failed suffix from a reusable settled-prefix
@@ -552,6 +606,7 @@ type discardShadowSenderRetry struct {
 	asyncActive        int
 	asyncScheduled     int64
 	asyncEvents        chan discardShadowAsyncRetryEvent
+	asyncQueue         discardShadowAsyncRetryQueue
 	stats              discardShadowSenderRetryStats
 }
 
@@ -1389,6 +1444,26 @@ func (retry *discardShadowSenderRetry) idleAsyncRunner() *discardShadowRetryRunn
 	return nil
 }
 
+// idleAsyncRunnerFor returns the most advanced idle runner which has not
+// passed target. Requests enter the heap in transaction order, so preferring
+// the nearest compatible prefix minimizes ordered replay without ever
+// rewinding a private StateDB.
+func (retry *discardShadowSenderRetry) idleAsyncRunnerFor(target int) *discardShadowRetryRunner {
+	if retry == nil {
+		return nil
+	}
+	var best *discardShadowRetryRunner
+	for _, runner := range retry.asyncRunners {
+		if runner == nil || runner.busy || runner.worker == nil || runner.settledThrough > target {
+			continue
+		}
+		if best == nil || runner.settledThrough > best.settledThrough {
+			best = runner
+		}
+	}
+	return best
+}
+
 // snapshotDiscardShadowVersionView freezes only the version cells the source
 // sender suffix actually read. Transfer branches are stable in the common
 // case, so cloning the entire block version graph at every retry is wasted
@@ -1440,8 +1515,8 @@ func snapshotDiscardShadowVersionView(source *versionedAccessShadow, pre *discar
 	return view, cells
 }
 
-func (retry *discardShadowSenderRetry) freezeAsyncRawView(runner *discardShadowRetryRunner, txIndex int) (*discardShadowFrozenKV, int, error) {
-	if retry == nil || retry.source == nil || runner == nil {
+func (retry *discardShadowSenderRetry) freezeAsyncRawViewFrom(parent actuator.BufferedKVStore, txIndex int) (*discardShadowFrozenKV, int, error) {
+	if retry == nil || retry.source == nil {
 		return nil, 0, errors.New("missing async retry source")
 	}
 	keys := make(map[string]struct{}, 4)
@@ -1463,7 +1538,11 @@ func (retry *discardShadowSenderRetry) freezeAsyncRawView(runner *discardShadowR
 		present: make(map[string]bool, len(keys)),
 	}
 	for key := range keys {
-		exists, err := runner.prefixRaw.Has([]byte(key))
+		if parent == nil {
+			frozen.present[key] = false
+			continue
+		}
+		exists, err := parent.Has([]byte(key))
 		if err != nil {
 			return nil, 0, err
 		}
@@ -1471,13 +1550,20 @@ func (retry *discardShadowSenderRetry) freezeAsyncRawView(runner *discardShadowR
 		if !exists {
 			continue
 		}
-		value, err := runner.prefixRaw.Get([]byte(key))
+		value, err := parent.Get([]byte(key))
 		if err != nil {
 			return nil, 0, err
 		}
 		frozen.values[key] = append([]byte(nil), value...)
 	}
 	return frozen, len(keys), nil
+}
+
+func (retry *discardShadowSenderRetry) freezeAsyncRawView(runner *discardShadowRetryRunner, txIndex int) (*discardShadowFrozenKV, int, error) {
+	if runner == nil {
+		return nil, 0, errors.New("missing async retry runner")
+	}
+	return retry.freezeAsyncRawViewFrom(&runner.prefixRaw, txIndex)
 }
 
 func annotateSenderRetryReadVersions(reads *state.TransactionReadSet, base, forwarded *versionedAccessShadow, txIndex int) {
@@ -1588,6 +1674,39 @@ func (retry *discardShadowSenderRetry) ensureRunnerSettledPrefix(runner *discard
 		); err != nil {
 			retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
 			return retry.refreshRunnerSettledPrefix(runner, target, statedb, dynProps, cfg)
+		}
+		runner.worker.state.FinalizeTransaction()
+		runner.settledThrough = txIndex
+		retry.stats.prefixAdvances++
+	}
+	dynProps.CopyInto(runner.worker.dynProps)
+	retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
+	retry.stats.prefixReuses++
+	return true
+}
+
+// advanceAsyncRunnerSettledPrefix consumes only already-captured canonical
+// WriteSets. Unlike the synchronous observer helper, it never refreshes from
+// the live StateDB: a queued request may be dispatched after its original
+// boundary, when the live view already contains later transactions.
+func (retry *discardShadowSenderRetry) advanceAsyncRunnerSettledPrefix(runner *discardShadowRetryRunner, target int, dynProps *state.DynamicProperties, versioned *versionedAccessShadow) bool {
+	if retry == nil || runner == nil || runner.worker == nil || dynProps == nil || versioned == nil || target < runner.settledThrough {
+		return false
+	}
+	started := time.Now()
+	for txIndex := runner.settledThrough + 1; txIndex <= target; txIndex++ {
+		if txIndex < 0 || txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
+			txIndex >= len(versioned.transactionWriteSets) {
+			retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
+			return false
+		}
+		runner.prefixRecorder.Reset(64)
+		runner.prefixRaw.recorder = &runner.prefixRecorder
+		if err := runner.worker.state.ApplyTransactionWriteSet(
+			versioned.transactionWriteSets[txIndex], runner.worker.dynProps, &runner.prefixRaw,
+		); err != nil {
+			retry.stats.prefixAdvanceNanos += time.Since(started).Nanoseconds()
+			return false
 		}
 		runner.worker.state.FinalizeTransaction()
 		runner.settledThrough = txIndex
@@ -1728,22 +1847,16 @@ func (retry *discardShadowSenderRetry) invalidateAsyncSuffix(txIndex int, taskLi
 	return tasks, deferred
 }
 
-// startAsyncRetry transfers exclusive ownership of one idle settled-prefix
-// runner to a background job. Jobs are dispatched in canonical conflict order;
-// separate runners may therefore carry overlapping incarnations, while the
-// monotonically increasing incarnation check admits only the newest result.
-func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
+// enqueueAsyncRetry freezes an incarnation at its original canonical boundary
+// and inserts it into a block-scoped min-transaction heap. This mirrors
+// Erigon's QueueWithRetry rule: earlier retries are dispatched before later
+// work, and runner saturation delays a safe frozen request instead of dropping
+// the opportunity outright.
+func (retry *discardShadowSenderRetry) enqueueAsyncRetry(txIndex int, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
 	if retry == nil || !retry.async || statedb == nil || dynProps == nil || versioned == nil || retry.asyncEvents == nil {
 		return
 	}
-	runner := retry.idleAsyncRunner()
-	if runner == nil {
-		return
-	}
 	dispatchStarted := time.Now()
-	defer func() {
-		retry.stats.actualDispatchNs += time.Since(dispatchStarted).Nanoseconds()
-	}()
 	retry.stats.attempts++
 	tasks, deferred := retry.invalidateAsyncSuffix(txIndex, discardShadowRetryLookahead)
 	retry.stats.actualDeferred += deferred
@@ -1752,29 +1865,14 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		return
 	}
 	retry.asyncScheduled += int64(len(tasks))
-	prefixStarted := time.Now()
-	prefixRefreshesBefore := retry.stats.prefixRefreshes
-	prefixReusesBefore := retry.stats.prefixReuses
-	prefixAdvancesBefore := retry.stats.prefixAdvances
-	prefixCopyNanosBefore := retry.stats.copyNanos
-	prefixAdvanceNanosBefore := retry.stats.prefixAdvanceNanos
-	prefixReady := retry.ensureRunnerSettledPrefix(runner, txIndex-1, statedb, dynProps, versioned, cfg)
-	retry.stats.actualRefreshes += retry.stats.prefixRefreshes - prefixRefreshesBefore
-	retry.stats.actualReuses += retry.stats.prefixReuses - prefixReusesBefore
-	retry.stats.actualAdvances += retry.stats.prefixAdvances - prefixAdvancesBefore
-	retry.stats.actualCopyNs += retry.stats.copyNanos - prefixCopyNanosBefore
-	retry.stats.actualAdvanceNs += retry.stats.prefixAdvanceNanos - prefixAdvanceNanosBefore
-	if !prefixReady {
-		retry.stats.actualPrefixNs += time.Since(prefixStarted).Nanoseconds()
-		return
-	}
-	retry.stats.actualPrefixNs += time.Since(prefixStarted).Nanoseconds()
 	rawFreezeStarted := time.Now()
-	frozenRaw, frozenKeys, err := retry.freezeAsyncRawView(runner, txIndex)
+	frozenRaw, frozenKeys, err := retry.freezeAsyncRawViewFrom(cfg.db, txIndex)
 	retry.stats.actualRawFreezeNs += time.Since(rawFreezeStarted).Nanoseconds()
 	if err != nil {
 		retry.stats.errors++
 		retry.stats.actualErrors++
+		retry.stats.actualQueueDropped += int64(len(tasks))
+		retry.asyncScheduled -= int64(len(tasks))
 		return
 	}
 	retry.stats.actualRawKeys += int64(frozenKeys)
@@ -1786,6 +1884,113 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		tasks[0].senderPredecessor = previous
 		tasks[0].senderVersioned = true
 	}
+	request := &discardShadowAsyncRetryRequest{
+		txIndex:     txIndex,
+		tasks:       tasks,
+		frozenRaw:   frozenRaw,
+		versionView: versionView,
+		dynProps:    dynProps.Copy(),
+		enqueuedAt:  time.Now(),
+	}
+	// A failed observer copy can leave only the lazy fallback runner. Prime it
+	// while we are still at the request's exact boundary; queued dispatch must
+	// never copy a later live StateDB for an earlier transaction.
+	if retry.idleAsyncRunnerFor(txIndex-1) == nil {
+		for _, runner := range retry.asyncRunners {
+			if runner == nil || runner.busy || runner.worker != nil {
+				continue
+			}
+			prefixStarted := time.Now()
+			prefixRefreshesBefore := retry.stats.prefixRefreshes
+			prefixCopyNanosBefore := retry.stats.copyNanos
+			if retry.ensureRunnerSettledPrefix(runner, txIndex-1, statedb, dynProps, versioned, cfg) {
+				retry.stats.actualRefreshes += retry.stats.prefixRefreshes - prefixRefreshesBefore
+				retry.stats.actualCopyNs += retry.stats.copyNanos - prefixCopyNanosBefore
+			}
+			retry.stats.actualPrefixNs += time.Since(prefixStarted).Nanoseconds()
+			break
+		}
+	}
+	if retry.idleAsyncRunnerFor(txIndex-1) == nil {
+		retry.stats.actualQueueBusy++
+	}
+	heap.Push(&retry.asyncQueue, request)
+	retry.stats.actualQueueEnqueued++
+	if depth := int64(retry.asyncQueue.Len()); depth > retry.stats.actualQueueMaxDepth {
+		retry.stats.actualQueueMaxDepth = depth
+	}
+	retry.stats.actualDispatchNs += time.Since(dispatchStarted).Nanoseconds()
+	retry.dispatchAsyncRetryQueue(txIndex, versioned, cfg)
+}
+
+func (retry *discardShadowSenderRetry) dispatchAsyncRetryQueue(boundary int, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
+	if retry == nil || !retry.async || versioned == nil {
+		return
+	}
+	dispatchStarted := time.Now()
+	defer func() {
+		retry.stats.actualDispatchNs += time.Since(dispatchStarted).Nanoseconds()
+	}()
+	for retry.asyncQueue.Len() > 0 {
+		request := retry.asyncQueue[0]
+		if request == nil || len(request.tasks) == 0 {
+			heap.Pop(&retry.asyncQueue)
+			continue
+		}
+		useful := false
+		var superseded int64
+		for _, task := range request.tasks {
+			current := retry.asyncTaskCurrent(task)
+			if !current {
+				superseded++
+			}
+			if current && task.txIndex >= boundary {
+				useful = true
+			}
+		}
+		if !useful {
+			heap.Pop(&retry.asyncQueue)
+			dropped := int64(len(request.tasks))
+			retry.stats.actualSuperseded += superseded
+			retry.stats.actualQueueDropped += dropped
+			retry.asyncScheduled -= dropped
+			if retry.asyncScheduled < 0 {
+				retry.asyncScheduled = 0
+			}
+			continue
+		}
+		runner := retry.idleAsyncRunnerFor(request.txIndex - 1)
+		if runner == nil {
+			return
+		}
+		heap.Pop(&retry.asyncQueue)
+		retry.stats.actualQueueDequeued++
+		retry.stats.actualQueueWaitNs += time.Since(request.enqueuedAt).Nanoseconds()
+		prefixStarted := time.Now()
+		prefixReusesBefore := retry.stats.prefixReuses
+		prefixAdvancesBefore := retry.stats.prefixAdvances
+		prefixAdvanceNanosBefore := retry.stats.prefixAdvanceNanos
+		prefixReady := retry.advanceAsyncRunnerSettledPrefix(runner, request.txIndex-1, request.dynProps, versioned)
+		retry.stats.actualReuses += retry.stats.prefixReuses - prefixReusesBefore
+		retry.stats.actualAdvances += retry.stats.prefixAdvances - prefixAdvancesBefore
+		retry.stats.actualAdvanceNs += retry.stats.prefixAdvanceNanos - prefixAdvanceNanosBefore
+		retry.stats.actualPrefixNs += time.Since(prefixStarted).Nanoseconds()
+		if !prefixReady {
+			dropped := int64(len(request.tasks))
+			retry.stats.errors++
+			retry.stats.actualErrors++
+			retry.stats.actualQueueDropped += dropped
+			retry.asyncScheduled -= dropped
+			if retry.asyncScheduled < 0 {
+				retry.asyncScheduled = 0
+			}
+			continue
+		}
+		retry.launchAsyncRetryRequest(runner, request, cfg)
+	}
+}
+
+func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardShadowRetryRunner, request *discardShadowAsyncRetryRequest, cfg discardShadowRunConfig) {
 	worker := runner.worker
 	runner.busy = true
 	retry.asyncActive++
@@ -1793,7 +1998,7 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		retry.stats.actualMaxInflight = int64(retry.asyncActive)
 	}
 	retry.stats.actualJobs++
-	worker.db.parent = frozenRaw
+	worker.db.parent = request.frozenRaw
 	retryCfg := cfg
 	retryCfg.db = nil
 	retryCfg.canonicalInfos = nil
@@ -1807,19 +2012,19 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		var forwarded versionedAccessShadow
 		forwarded.Prepare(len(retryCfg.transactions))
 		var superseded int64
-		for taskIndex, task := range tasks {
+		for taskIndex, task := range request.tasks {
 			if !retry.asyncTaskCurrent(task) {
-				superseded += int64(len(tasks) - taskIndex)
+				superseded += int64(len(request.tasks) - taskIndex)
 				break
 			}
 			result := worker.execute(task.txIndex, retryCfg)
-			result.settledPrefix = txIndex - 1
+			result.settledPrefix = request.txIndex - 1
 			result.hasSettledPrefix = true
 			result.incarnation = task.incarnation
-			result.retryStartTx = txIndex
+			result.retryStartTx = request.txIndex
 			result.senderPredecessor = task.senderPredecessor
 			result.senderVersioned = task.senderVersioned
-			annotateSenderRetryReadVersions(&result.reads, &versionView, &forwarded, task.txIndex)
+			annotateSenderRetryReadVersions(&result.reads, &request.versionView, &forwarded, task.txIndex)
 			if preexecutedTransferReady(&result) {
 				if advanceErr := worker.advanceSenderChain(result.writes); advanceErr != nil {
 					result.err = advanceErr
@@ -1832,7 +2037,7 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 				break
 			}
 			if !retry.asyncTaskCurrent(task) {
-				superseded += int64(len(tasks) - taskIndex - 1)
+				superseded += int64(len(request.tasks) - taskIndex - 1)
 				break
 			}
 			installSenderChainWrites(&forwarded, result.writes, task.txIndex)
@@ -1843,7 +2048,7 @@ func (retry *discardShadowSenderRetry) startAsyncRetry(txIndex int, statedb *sta
 		worker.db.parent = nil
 		worker.db.recorder = &worker.recorder
 		events <- discardShadowAsyncRetryEvent{
-			runner: runner, done: true, nanos: time.Since(started).Nanoseconds(), rawMisses: frozenRaw.misses,
+			runner: runner, done: true, nanos: time.Since(started).Nanoseconds(), rawMisses: request.frozenRaw.misses,
 			superseded: superseded,
 		}
 	}()
@@ -1903,6 +2108,20 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 func (retry *discardShadowSenderRetry) drainAsyncEvents(boundary int, wait bool) {
 	if retry == nil || !retry.async {
 		return
+	}
+	if wait {
+		for retry.asyncQueue.Len() > 0 {
+			request := heap.Pop(&retry.asyncQueue).(*discardShadowAsyncRetryRequest)
+			if request == nil {
+				continue
+			}
+			dropped := int64(len(request.tasks))
+			retry.stats.actualQueueDropped += dropped
+			retry.asyncScheduled -= dropped
+		}
+		if retry.asyncScheduled < 0 {
+			retry.asyncScheduled = 0
+		}
 	}
 	if wait && retry.asyncActive > 0 {
 		started := time.Now()
@@ -2022,6 +2241,7 @@ func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Tr
 
 func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *types.Transaction, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
 	retry.drainAsyncEvents(txIndex, false)
+	retry.dispatchAsyncRetryQueue(txIndex, versioned, cfg)
 	_, sourceDecision, sourceAvailable := retry.source.observedResultForTransaction(txIndex)
 	decision := discardShadowReadVersionResult{}
 	resultAvailable := retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex]
@@ -2036,6 +2256,7 @@ func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *typ
 		// Give a result that completed while the source version was checked one
 		// final chance at the boundary before declaring the worker busy/late.
 		retry.drainAsyncEvents(txIndex, false)
+		retry.dispatchAsyncRetryQueue(txIndex, versioned, cfg)
 		resultAvailable = retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex]
 		if resultAvailable {
 			decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
@@ -2046,19 +2267,12 @@ func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *typ
 		retry.recordAsyncRetryRejection(decision)
 	}
 	if !newestPublishable && txIndex < len(retry.source.senderNext) && retry.source.senderNext[txIndex] >= 0 {
-		if retry.idleAsyncRunner() == nil {
-			// This transaction will now execute canonically. Any unfinished
-			// descendant built through an older speculative post-image is stale.
-			_, _ = retry.invalidateAsyncSuffix(txIndex, 0)
-			retry.stats.actualBusySkipped++
-			return
-		}
 		if retry.stats.attempts >= discardShadowRetryMaxAttempts || retry.asyncScheduled >= discardShadowRetryMaxExecutions {
 			retry.stats.budgetSkipped++
 			_, _ = retry.invalidateAsyncSuffix(txIndex, 0)
 			return
 		}
-		retry.startAsyncRetry(txIndex, statedb, dynProps, versioned, cfg)
+		retry.enqueueAsyncRetry(txIndex, statedb, dynProps, versioned, cfg)
 		return
 	}
 	if !resultAvailable || !decision.publishable {
@@ -2159,6 +2373,12 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualMaxInflightCounter.Inc(retry.stats.actualMaxInflight)
 		discardShadowRetryActualDeferredCounter.Inc(retry.stats.actualDeferred)
 		discardShadowRetryActualSupersededCounter.Inc(retry.stats.actualSuperseded)
+		discardShadowRetryActualQueueEnqueuedCounter.Inc(retry.stats.actualQueueEnqueued)
+		discardShadowRetryActualQueueDequeuedCounter.Inc(retry.stats.actualQueueDequeued)
+		discardShadowRetryActualQueueBusyCounter.Inc(retry.stats.actualQueueBusy)
+		discardShadowRetryActualQueueDroppedCounter.Inc(retry.stats.actualQueueDropped)
+		discardShadowRetryActualQueueMaxDepthCounter.Inc(retry.stats.actualQueueMaxDepth)
+		discardShadowRetryActualQueueWaitNanosCounter.Inc(retry.stats.actualQueueWaitNs)
 		discardShadowRetryActualExecutedCounter.Inc(retry.stats.actualExecuted)
 		discardShadowRetryActualReadyCounter.Inc(retry.stats.actualReady)
 		discardShadowRetryActualLateCounter.Inc(retry.stats.actualLate)
