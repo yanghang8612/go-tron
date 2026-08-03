@@ -1282,6 +1282,40 @@ TransactionInfo, and require identical committed StateDB roots. Production must
 show zero published WriteSet mismatches/errors before expanding beyond this
 cohort or supporting another actuator family.
 
+The first publication window covered 23,743 imported blocks. Thirteen async
+retry candidates were admitted and all thirteen replaced canonical Transfer
+execution. The independently captured ordered WriteSets matched 13/13;
+publication preflight fallbacks, public-bandwidth admission fallbacks,
+mismatches, errors, and end-of-block worker waits were all zero. Across the
+same window the actual scheduler launched 135 jobs and 284 incarnations: 148
+arrived ready, 135 arrived after their own boundary, and one superseded result
+arrived stale.
+
+#### P4.28: Ordinary-block incarnation scheduling
+
+After the sampled publication gate passed, the same retry priority queue was
+connected to every ordinary block with the opt-in Transfer publisher enabled.
+This does not add another block-start execution pass: the existing canonical
+sender-chain preexecutor transfers its clean worker StateDBs directly to the
+retry scheduler after initial chains finish. Up to four retained workers then
+consume the minimum-transaction retry heap while canonical execution advances.
+The block-start `StateDB` copy count is therefore unchanged, and the first
+conflict still performs no synchronous copy.
+
+Ordinary blocks capture canonical typed WriteSets so background runners can
+advance from their last settled prefix and so published results are audited at
+block end. The sampled layout remains unchanged: `0 mod 256` is the synchronous
+reference, `64` and `128` are non-publishing async observers, and `192` is the
+publishing canary. Disabling the opt-in publisher disables ordinary-block
+retries without disabling those sampled correctness observers.
+
+Retry source admission now also inherits the sender-chain publication edge. A
+forwarded block-start result is not treated as a current baseline merely
+because it names the same predecessor transaction; that predecessor's exact
+source incarnation must itself have been canonically published. This matches
+Erigon's rule that validation is incarnation-sensitive and prevents a stale
+sender ancestor from making its descendants look ready.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

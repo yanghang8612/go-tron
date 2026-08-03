@@ -1292,7 +1292,12 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(c
 	}
 	var retryStates []*state.StateDB
 	if retainRetryState {
-		if len(workerStates) > 1 {
+		if !shadow.sampled {
+			// Ordinary parallel blocks do not run the later discard-only
+			// publisher, so every clean sender-chain worker can be transferred
+			// directly to the incarnation scheduler without another StateDB copy.
+			retryStates = append(retryStates, workerStates...)
+		} else if len(workerStates) > 1 {
 			// shadow.base remains owned by the later independent finish canary.
 			// Every copied observer state is clean after workers.Wait and can
 			// become an independently advanceable retry runner at no extra copy.
@@ -1307,7 +1312,7 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(c
 		for _, workerState := range workerStates {
 			workerState.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
 		}
-		if len(workerStates) == 1 {
+		if shadow.sampled && len(workerStates) == 1 {
 			for _, retryState := range retryStates {
 				retryState.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
 			}
@@ -1393,17 +1398,6 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(c
 	}
 }
 
-func (pre *discardShadowPreexecution) observedResultForTransaction(txIndex int) (*discardShadowTaskResult, discardShadowReadVersionResult, bool) {
-	if pre == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
-		return nil, discardShadowReadVersionResult{}, false
-	}
-	resultIndex := pre.resultByTx[txIndex]
-	if resultIndex < 0 || resultIndex >= len(pre.results) || resultIndex >= len(pre.readValidated) || !pre.readValidated[resultIndex] {
-		return nil, discardShadowReadVersionResult{}, false
-	}
-	return &pre.results[resultIndex], pre.readVersions[resultIndex], true
-}
-
 func newDiscardShadowSenderRetry(source *discardShadowPreexecution, transactionCount int) *discardShadowSenderRetry {
 	if source == nil || transactionCount == 0 || len(source.senderNext) != transactionCount {
 		return nil
@@ -1449,6 +1443,12 @@ func newDiscardShadowRetryRunner(retryState *state.StateDB) *discardShadowRetryR
 func newDiscardShadowAsyncSenderRetry(source *discardShadowPreexecution, transactionCount int) *discardShadowSenderRetry {
 	retry := newDiscardShadowSenderRetry(source, transactionCount)
 	if retry == nil {
+		if source != nil {
+			// Retained clean states have no consumer when the block contains no
+			// sender suffix. Drop them before canonical execution so copied
+			// workers can be reclaimed immediately.
+			source.retryStates = nil
+		}
 		return nil
 	}
 	retry.async = true
@@ -2260,7 +2260,7 @@ func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Tr
 		retry.observeAsyncBoundary(txIndex, tx, statedb, dynProps, versioned, cfg)
 		return
 	}
-	_, sourceDecision, sourceAvailable := retry.source.observedResultForTransaction(txIndex)
+	_, sourceDecision, sourceAvailable := retry.source.resultForTransaction(txIndex)
 	decision := discardShadowReadVersionResult{}
 	resultAvailable := false
 	if retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex] {
@@ -2306,7 +2306,7 @@ func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Tr
 func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *types.Transaction, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
 	retry.drainAsyncEvents(txIndex, false)
 	retry.dispatchAsyncRetryQueue(txIndex, versioned, cfg)
-	_, sourceDecision, sourceAvailable := retry.source.observedResultForTransaction(txIndex)
+	_, sourceDecision, sourceAvailable := retry.source.resultForTransaction(txIndex)
 	decision := discardShadowReadVersionResult{}
 	resultAvailable := retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex]
 	if resultAvailable {
@@ -2316,7 +2316,7 @@ func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *typ
 	if resultAvailable {
 		newestPublishable = decision.publishable
 	}
-	if !newestPublishable && retry.asyncActive > 0 {
+	if retry.asyncActive > 0 && (!newestPublishable || retry.publish && !resultAvailable) {
 		// Give a result that completed while the source version was checked one
 		// final chance at the boundary before declaring the worker busy/late.
 		retry.drainAsyncEvents(txIndex, false)
@@ -2375,7 +2375,8 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		retry.drainAsyncEvents(len(cfg.transactions), true)
 	}
 	for txIndex, selected := range retry.selected {
-		if !retry.selectedOK[txIndex] {
+		published := txIndex < len(retry.selectedPublished) && retry.selectedPublished[txIndex]
+		if !retry.selectedOK[txIndex] && !published {
 			continue
 		}
 		if !preexecutedTransferReady(&selected) || cfg.canonicalInfos[txIndex] == nil ||
@@ -2390,7 +2391,7 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		infoMatch := compareDiscardShadowInfo(selected.info, cfg.canonicalInfos[txIndex]) == 0
 		writeMatch := equalSenderChainWriteSets(selected.writes, versioned.transactionWriteSets[txIndex], selected.publicNetValid)
 		balanceMatch := !cfg.captureBalanceTrace || proto.Equal(selected.balanceTrace, cfg.canonicalBalanceTraces[txIndex])
-		if txIndex < len(retry.selectedPublished) && retry.selectedPublished[txIndex] {
+		if published {
 			if writeMatch {
 				retry.stats.publish.writeMatches++
 			} else {

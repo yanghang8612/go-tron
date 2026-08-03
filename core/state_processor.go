@@ -841,9 +841,10 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	if shadowEnabled && collectTxInfos {
 		discardShadow = prepareTransferExecutionBlock(statedb, dynProps, block.Number(), options.parallelTransfers)
 		if discardShadow != nil {
-			if discardShadow.sampled {
-				versionedShadow.EnableWriteSetCapture(len(transactions))
-			}
+			// Sampled async observers remain independent of canonical enablement.
+			// Ordinary blocks join the incarnation scheduler only when the narrow
+			// Transfer publisher itself is enabled.
+			actualAsyncRetry := useDiscardShadowAsyncRetry(block.Number()) || (options.parallelTransfers && !discardShadow.sampled)
 			discardCfg = discardShadowRunConfig{
 				block:                   block,
 				db:                      db,
@@ -855,18 +856,24 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				transactions:            transactions,
 				captureBalanceTrace:     options.captureBalanceTrace,
 			}
-			if discardShadow.sampled && discardCfg.captureBalanceTrace {
-				discardCfg.canonicalBalanceTraces = make([]*contractpb.TransactionBalanceTrace, len(transactions))
-			}
 			if options.parallelTransfers && !discardShadow.sampled {
-				transferPreexecution = discardShadow.preexecuteTransferSenderChains(discardCfg)
+				// The ordinary canonical publisher already builds sender-chain
+				// workers. Retain their clean block-start states for Erigon-style
+				// retry incarnations instead of running a second preexecution pass
+				// or copying StateDB at the first conflict.
+				transferPreexecution = discardShadow.preexecuteTransferSenderChainsWithRetryState(discardCfg, actualAsyncRetry)
+				if actualAsyncRetry {
+					senderRetry = newDiscardShadowAsyncSenderRetry(transferPreexecution, len(transactions))
+					if senderRetry != nil {
+						senderRetry.publish = true
+					}
+				}
 			} else {
 				// Keep sampled blocks on the independent block-start/serial
 				// canary so sender-chain results retain a production reference.
 				transferPreexecution = discardShadow.preexecuteTransfers(discardCfg)
 			}
 			if discardShadow.sampled {
-				actualAsyncRetry := useDiscardShadowAsyncRetry(block.Number())
 				senderChainPreexecution = discardShadow.preexecuteTransferSenderChainsWithRetryState(discardCfg, actualAsyncRetry)
 				if actualAsyncRetry {
 					// Use three sampled cohorts for the real background retry
@@ -878,6 +885,12 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					}
 				} else {
 					senderRetry = newDiscardShadowSenderRetry(senderChainPreexecution, len(transactions))
+				}
+			}
+			if discardShadow.sampled || senderRetry != nil {
+				versionedShadow.EnableWriteSetCapture(len(transactions))
+				if discardCfg.captureBalanceTrace {
+					discardCfg.canonicalBalanceTraces = make([]*contractpb.TransactionBalanceTrace, len(transactions))
 				}
 			}
 			if options.parallelTransfers {
@@ -974,7 +987,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 						txInfos[i] = retryResult.info
 					}
 					txHash := tx.Hash()
-					if discardShadow != nil && discardShadow.sampled && discardCfg.captureBalanceTrace {
+					if len(discardCfg.canonicalBalanceTraces) == len(transactions) {
 						discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
 					}
 					versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
@@ -1044,7 +1057,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					txInfos[i] = preResult.info
 				}
 				txHash := tx.Hash()
-				if discardShadow != nil && discardShadow.sampled && discardCfg.captureBalanceTrace {
+				if len(discardCfg.canonicalBalanceTraces) == len(transactions) {
 					discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
 				}
 				versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
@@ -1112,7 +1125,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		result.Logs = nil
 		statedb.FinalizeTransaction()
 		statedb.EndBalanceTraceTransaction(balanceTraceStatus)
-		if discardShadow != nil && discardShadow.sampled && discardCfg.captureBalanceTrace {
+		if len(discardCfg.canonicalBalanceTraces) == len(transactions) {
 			discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
 		}
 		if shadowEnabled {
@@ -1126,11 +1139,17 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result, forkPassCache)
 	}
 
-	if discardShadow != nil && discardShadow.sampled {
+	if discardShadow != nil && (discardShadow.sampled || senderRetry != nil) {
 		discardCfg.canonicalInfos = txInfos
+	}
+	if discardShadow != nil && discardShadow.sampled {
 		_ = discardShadow.finishTransferPreexecution(transferPreexecution, &versionedShadow, discardCfg)
 		_ = discardShadow.finishTransferSenderChains(senderChainPreexecution, &versionedShadow, discardCfg)
+	}
+	if senderRetry != nil {
 		_ = senderRetry.finish(&versionedShadow, discardCfg)
+	}
+	if discardShadow != nil && discardShadow.sampled {
 		_ = discardShadow.run(&versionedShadow, discardCfg)
 	}
 

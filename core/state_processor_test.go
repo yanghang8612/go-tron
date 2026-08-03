@@ -574,6 +574,15 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 }
 
 func TestProcessBlockPublishesAsyncSenderRetryCohort(t *testing.T) {
+	testProcessBlockPublishesAsyncSenderRetry(t, discardShadowAsyncPublishOffset)
+}
+
+func TestProcessBlockPublishesAsyncSenderRetryOnOrdinaryBlock(t *testing.T) {
+	testProcessBlockPublishesAsyncSenderRetry(t, discardShadowAsyncPublishOffset+1)
+}
+
+func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64) {
+	t.Helper()
 	base := newTestState(t)
 	for id := byte(1); id <= 250; id++ {
 		base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
@@ -615,7 +624,7 @@ func TestProcessBlockPublishesAsyncSenderRetryCohort(t *testing.T) {
 	}
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
-			Number: int64(discardShadowAsyncPublishOffset), Timestamp: 3_000,
+			Number: int64(blockNumber), Timestamp: 3_000,
 		}},
 		Transactions: transactionProtos,
 	})
@@ -651,7 +660,8 @@ func TestProcessBlockPublishesAsyncSenderRetryCohort(t *testing.T) {
 		t.Fatalf("async retry published results = %d, want 1", published)
 	}
 	if matches := discardShadowRetryActualPublishedWriteOKCounter.Snapshot().Count() - writeMatchesBefore; matches != 1 {
-		t.Fatalf("async retry published write matches = %d, want 1", matches)
+		mismatches := discardShadowRetryActualPublishedWriteMismatchCounter.Snapshot().Count() - writeMismatchesBefore
+		t.Fatalf("async retry published write matches = %d, mismatches = %d, want 1/0", matches, mismatches)
 	}
 	if mismatches := discardShadowRetryActualPublishedWriteMismatchCounter.Snapshot().Count() - writeMismatchesBefore; mismatches != 0 {
 		t.Fatalf("async retry published write mismatches = %d, want 0", mismatches)
