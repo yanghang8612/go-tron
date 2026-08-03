@@ -222,7 +222,7 @@
   latest-key/block inverse rows through a bounded sorted ETL pass.
 - [x] Defer inverse-index publication during bulk sync and serve the short
   un-solidified suffix through direct block-changeset scans.
-- [ ] Run the derived-index production gate and compare temporal family share,
+- [x] Run the derived-index production gate and compare temporal family share,
   ETL cost, coalesced output, disk/compaction bytes, stalls, and query parity.
 - [ ] Remove next-image fields from the cold binary history format together
   with duplicated block/sequence context after the hot-row production gates.

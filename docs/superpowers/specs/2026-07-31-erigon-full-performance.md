@@ -1836,6 +1836,28 @@ row. Sync exposes pass, block, change, ETL applied/input/batch, interruption,
 and duration counters under `sync/stage/state_history_index/*` for the P4.39
 production gate.
 
+After the initial deployment exposed one-collector-per-fragmented-drain
+behavior, the production path was tightened in two steps: require at least 256
+solidified blocks per ordinary pass, and settle a continuously supplied deep
+sync session every 4,096 applied blocks. The final deployment first retired the
+temporary build's 32,768-block index debt, then held a stable one-pass-per-stage
+checkpoint cadence. Two ETL-inclusive windows covered 5,888 imported blocks /
+350,104 transactions while the index stage processed 8,192 source blocks. The
+stage itself sustained 526.7 source blocks/s, collapsed 3.78 million changes to
+2.64 million latest-key/block puts, and consumed about 46.3 KB of collector
+input per source block. Inline inverse-index sampled bytes and operations stayed
+at zero, and Pebble recorded zero write delay.
+
+The combined windows ran at 33.5 blocks/s and 1,989 tx/s. Their blocks were
+18.0% more transaction-dense than P4.38, so physical comparison is normalized
+per transaction: final coalesced output fell 16.3%, OS writes 5.5%, Pebble
+writes 7.6%, compaction input 14.8%, and compaction output 5.7%. Compaction debt
+also drained by 292 MB across the pair. Hot changeset encoding remained stable
+at 138.5 bytes/sample row and online history-tail tests plus the full local
+archive/reorg suite passed. These results pass P4.39; the remaining inverse-key
+storage cost belongs to immutable compressed index construction rather than
+canonical execution.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
