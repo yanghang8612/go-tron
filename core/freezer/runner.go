@@ -660,6 +660,7 @@ func (r *Runner) CompactV2Once() (uint64, error) {
 		MaxSegments:   1,
 		Online:        true,
 		Context:       r.pauseCtx,
+		Transform:     rawdb.CompactAncientV2Record,
 	})
 	if err != nil {
 		return 0, err

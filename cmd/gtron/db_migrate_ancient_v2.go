@@ -8,6 +8,7 @@ import (
 	"time"
 
 	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/urfave/cli/v2"
 )
@@ -102,6 +103,7 @@ func dbMigrateAncientV2Cmd(ctx *cli.Context) error {
 		FrameBlocks:   uint32(frameBlocks),
 		MaxSegments:   ctx.Uint64("max-segments"),
 		KeepV1:        ctx.Bool("keep-v1"),
+		Transform:     rawdb.CompactAncientV2Record,
 		Progress: func(progress rawdbfreezer.V2MigrationProgress) {
 			if progress.Stage == "writing" {
 				fmt.Fprintf(errWriter, "migrating segment=%d table=%s rows=%d/%d range=[%d,%d) elapsed=%s\n",

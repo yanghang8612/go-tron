@@ -117,8 +117,8 @@ func TestReadTransactionInfoPrefersCanonicalBlockReceiptOverLegacyRow(t *testing
 	if err != nil || !ok || info == nil || info.Fee != 700 {
 		t.Fatalf("ReadTransactionInfoStrict = %+v/%v/%v, want canonical fee 700", info, ok, err)
 	}
-	if len(info.Id) != 0 {
-		t.Fatalf("ReadTransactionInfoStrict ID = %x, want compact empty ID", info.Id)
+	if !bytes.Equal(info.Id, txHash[:]) {
+		t.Fatalf("ReadTransactionInfoStrict ID = %x, want requested ID %x", info.Id, txHash[:])
 	}
 	if got := ReadTransactionInfo(db, txHash[:]); got == nil || got.Fee != 700 {
 		t.Fatalf("ReadTransactionInfo = %+v, want canonical fee 700", got)
@@ -577,6 +577,64 @@ func TestWriteCompactTransactionInfosByBlockRejectsMismatchedTimestamp(t *testin
 	}
 	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
 		t.Fatalf("ReadTransactionInfosByBlock after rejected compact write = %+v, want nil", got)
+	}
+}
+
+func TestCompactAncientV2RecordStripsValidatedReceiptMetadata(t *testing.T) {
+	const (
+		blockNum  = uint64(42)
+		timestamp = int64(1_785_733_537_000)
+	)
+	txPB := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: timestamp}}
+	body, err := types.NewBlockFromPB(&corepb.Block{Transactions: []*corepb.Transaction{txPB}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	txHash := types.NewTransactionFromPB(txPB).Hash()
+	original, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber:    int64(blockNum),
+		BlockTimeStamp: timestamp,
+		Transactioninfo: []*corepb.TransactionInfo{{
+			Id:             txHash[:],
+			BlockNumber:    int64(blockNum),
+			BlockTimeStamp: timestamp,
+			Fee:            123,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact, err := CompactAncientV2Record(AncientTxInfosTable, blockNum, original, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compact) >= len(original) {
+		t.Fatalf("compact size = %d, original = %d", len(compact), len(original))
+	}
+	ret := new(corepb.TransactionRet)
+	if err := proto.Unmarshal(compact, ret); err != nil {
+		t.Fatal(err)
+	}
+	if ret.BlockNumber != int64(blockNum) || ret.BlockTimeStamp != timestamp || len(ret.Transactioninfo) != 1 {
+		t.Fatalf("unexpected compact row: %+v", ret)
+	}
+	info := ret.Transactioninfo[0]
+	if len(info.Id) != 0 || info.BlockNumber != int64(blockNum) || info.BlockTimeStamp != timestamp || info.Fee != 123 {
+		t.Fatalf("unexpected compact info: %+v", info)
+	}
+
+	bad := proto.Clone(ret).(*corepb.TransactionRet)
+	bad.Transactioninfo[0].Id = bytes.Repeat([]byte{0xff}, common.HashLength)
+	badData, err := proto.Marshal(bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preserved, err := CompactAncientV2Record(AncientTxInfosTable, blockNum, badData, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(preserved, badData) {
+		t.Fatal("mismatched transaction-info ID was not preserved")
 	}
 }
 

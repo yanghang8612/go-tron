@@ -62,9 +62,18 @@ func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInf
 		return nil, false, err
 	}
 	if info, ok, err := readTransactionInfoFromCanonicalBlock(db, txID); err != nil || ok {
+		populateRequestedTransactionInfoID(info, txID)
 		return info, ok, err
 	}
-	return readLegacyTransactionInfo(db, txID)
+	info, ok, err := readLegacyTransactionInfo(db, txID)
+	populateRequestedTransactionInfoID(info, txID)
+	return info, ok, err
+}
+
+func populateRequestedTransactionInfoID(info *corepb.TransactionInfo, txID []byte) {
+	if info != nil && len(info.Id) == 0 {
+		info.Id = append([]byte(nil), txID...)
+	}
 }
 
 func readTransactionInfoFromCanonicalBlock(db *ChainDB, txID []byte) (*corepb.TransactionInfo, bool, error) {
