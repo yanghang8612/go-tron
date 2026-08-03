@@ -2009,9 +2009,11 @@ rather than a matched-workload claim. The windows drained 948 MB of compaction
 debt and recorded zero Pebble write delay, contract errors, canonical parallel
 publication errors/mismatches, sender-retry errors/mismatches, or history-stage
 interrupts. One independent sender-chain observer error fell back without any
-state/receipt mismatch. Memory held was 4.6 GB with 128 goroutines. A restart
-after packed rows exist plus a longer matched-height window remain before the
-production gate is marked complete.
+state/receipt mismatch. Memory held was 4.6 GB with 128 goroutines. The
+subsequent P4.43 deployment restarted after 70,859 uncompressed block packs
+existed, resumed sync without rebuild, and processed their history/index tail
+without error. That mixed-format restart completes the P4.42 production gate;
+the cross-phase 30-minute and 24-hour soak gates remain separate.
 
 #### P4.43: Benefit-gated hot changeset compression
 
@@ -2042,6 +2044,33 @@ to 190--194 us (3--4%), while pooled decoded memory stayed near 382 KB versus
 numbers pass the local codec gate; stored/raw counters and a production window
 must validate the actual mainnet mix and GC profile.
 
+The production deployment restarted at approximately height 14,752,268 on the
+mixed legacy-row/uncompressed-pack database and immediately resumed canonical
+sync. Two stable windows covered 5,728 blocks / 217,265 transactions in 96.31
+seconds (59.47 blocks/s, 2,256 tx/s, 37.93 transactions/block). All 5,697 new
+packs passed the benefit gate and compressed 2,254,682 rows; zero packs stayed
+raw. Stored payload was 126.65 MB versus 319.23 MB uncompressed (39.67%, a
+60.33% reduction). Together with 78.71 MB of avoided per-row keys, actual pack
+logical bytes were 68.14% below the exact individual-row counterfactual, and
+99.75% of changeset Puts were eliminated.
+
+Final coalesced output was 2,946 bytes/transaction, 32.1% below the P4.42
+two-window canary's 4,339 bytes/transaction even though density was 10.2%
+higher. Three complete family samples reduced changeset/commitment bytes from
+0.624 in P4.42 to 0.204 (67.3%); commitment itself remained stable at 555.63
+bytes per coalesced operation. Compaction debt drained 1.14 GB across the two
+windows, so OS/compaction byte totals remain directional rather than a causal
+codec measurement.
+
+Both windows recorded zero Pebble write delay, contract errors, canonical
+parallel publication errors/mismatches, sender-chain/retry mismatches, history
+interrupts, or compressed-history errors. Held memory ended near 3.93 GB; a
+later snapshot was 4.41 GB held / 1.74 GB used with 117 goroutines. Three
+independent sender-chain observer errors occurred after the fixed windows and
+fell back without a state/receipt mismatch; they are outside the history codec
+path. Exact stored/raw counters, mixed-format restart, normalized family share,
+and clean canonical windows pass P4.43. The longer resource/soak gates remain.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
@@ -2052,6 +2081,17 @@ automatic freezer/history build-merge-prune scheduling.
 The hot Pebble database must reach a bounded steady state. Freezer, derived
 indexes, and state history must keep up with import without monotonic compaction
 debt or hidden hot-history growth.
+
+The versioned production systemd template now selects `--prune.mode snap` for
+the next fresh mainnet sync. The currently running test datadir is persistently
+locked to `full`; changing its flag in place is intentionally rejected because
+full mode has already pruned history that a genesis-covering cold build would
+need. The operational gate must therefore install the template together with a
+new empty datadir (preserving the current directory for rollback), then measure
+the automatic v5 history build, merge, coverage-gated hot prune, and stage lag.
+The deployment watcher only replaces the binary and restarts the installed
+unit, so this datadir/service switch remains an explicit operator action rather
+than an implicit destructive deploy step.
 
 ## Benchmark And Production Acceptance
 

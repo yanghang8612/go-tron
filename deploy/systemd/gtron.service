@@ -21,7 +21,7 @@ Environment=GTRON_ASYNC_COMMIT_DEPTH=4
 
 ExecStart=/data/gtron/go-tron/build/bin/gtron \
     --datadir /data/gtron/main/datadir \
-    --prune.mode full \
+    --prune.mode snap \
     --sync.async-commit \
     --sync.import-batch 32 \
     --p2p.port 18890 \

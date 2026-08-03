@@ -237,15 +237,20 @@
 - [x] Retain transaction-ordered previous values until block finalization and
   publish one versioned block-packed hot changeset value while preserving
   positive-sequence repair/legacy rows and all temporal read/unwind semantics.
-- [ ] Run the block-packed changeset production gate and compare rows per pack,
+- [x] Run the block-packed changeset production gate and compare rows per pack,
   avoided Put/key bytes, changeset/final-coalesced bytes, disk/compaction bytes,
   stalls, sync throughput, restart recovery, and archive/unwind errors.
 - [x] Add a versioned, benefit-gated Snappy envelope for block-packed hot
   changesets so Pebble WAL and uncompressed hot levels do not retain redundant
   previous-value structure; pool transient encode/decode buffers safely.
-- [ ] Run the compressed block-pack production gate and compare stored/raw
+- [x] Run the compressed block-pack production gate and compare stored/raw
   ratio, codec CPU, GC/memory, final coalesced and physical writes, stage lag,
   stalls, sync throughput, mixed-format restart, and history parity.
+- [x] Switch the versioned production systemd template from finite hot-history
+  `full` mode to Erigon-style `snap` mode for the next fresh mainnet sync.
+- [ ] Install the snap-mode service against a new datadir and run the cold v5
+  build/merge/prune gate from genesis without reusing the persisted full-mode
+  retention lock.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
