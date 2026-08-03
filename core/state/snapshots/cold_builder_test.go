@@ -264,6 +264,52 @@ func TestColdBuilderMetricsExposeBuildLagAndPhaseDurations(t *testing.T) {
 	}
 }
 
+func TestColdBuilderDefersFullLatestBuildDuringActiveSync(t *testing.T) {
+	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x76)
+	seedLatestRows(t, db, owner, 50, 50)
+	chain := &coldBuilderChain{db: db, solidified: 50, syncRemaining: 1_000, syncRemainingOK: true}
+	runner := NewRunner(chain, Config{
+		Dir:                          dir,
+		Enabled:                      true,
+		Interval:                     time.Hour,
+		HistoryWindow:                100,
+		LatestBuildBlocks:            10,
+		DeferLatestBuildWhileSyncing: true,
+		MetricsNamespace:             namespace,
+	})
+
+	deferred, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("deferred pass: %v", err)
+	}
+	if !deferred.LatestDeferred || deferred.LatestBuilt {
+		t.Fatalf("deferred pass = %+v, want latest build deferred", deferred)
+	}
+	if stats := runner.Snapshot(); stats.LatestDeferredSync != 1 {
+		t.Fatalf("runner stats = %+v, want one sync deferral", stats)
+	}
+	assertColdRunnerGauge(t, namespace+"latest/deferred/sync", 1)
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || ok {
+		t.Fatalf("latest build stage exists during sync: ok=%v err=%v", ok, err)
+	}
+
+	chain.syncRemainingOK = false
+	built, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("post-sync pass: %v", err)
+	}
+	if !built.LatestBuilt || built.LatestDeferred {
+		t.Fatalf("post-sync pass = %+v, want latest build", built)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || got != 50 {
+		t.Fatalf("latest build stage = %d ok=%v err=%v, want 50", got, ok, err)
+	}
+}
+
 func TestColdBuilderLoopDrainsReadyBatchesWithoutIntervalWait(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -1574,6 +1620,8 @@ func TestColdBuilderSkipsPartialSectionBloomSection(t *testing.T) {
 type coldBuilderChain struct {
 	db              AggregatorDB
 	solidified      int64
+	syncRemaining   uint64
+	syncRemainingOK bool
 	canonicalHashes map[uint64]common.Hash
 	canonicalErrs   map[uint64]error
 }
@@ -1593,6 +1641,10 @@ func (db *coldBuilderSeekRecordingDB) NewIterator(prefix, start []byte) ethdb.It
 func (c *coldBuilderChain) DB() AggregatorDB { return c.db }
 
 func (c *coldBuilderChain) LatestSolidifiedBlockNum() int64 { return c.solidified }
+
+func (c *coldBuilderChain) SyncRemainingBlocks() (uint64, bool) {
+	return c.syncRemaining, c.syncRemainingOK
+}
 
 func (c *coldBuilderChain) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
 	hash, ok, err := c.CanonicalBlockHashStrict(blockNum)
@@ -1755,6 +1807,8 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"lastpass/build/duration",
 		"lastpass/compaction/duration",
 		"lastpass/latest/duration",
+		"latest/deferred/sync",
+		"last/latest_build_block",
 	} {
 		metrics.DefaultRegistry.Unregister(namespace + suffix)
 	}

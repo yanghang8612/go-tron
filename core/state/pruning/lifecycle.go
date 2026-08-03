@@ -108,6 +108,12 @@ func (l *SnapshotLifecycle) Start() error {
 		close(l.done)
 		return err
 	}
+	if l.builder != nil {
+		if err := l.builder.Prepare(); err != nil {
+			close(l.done)
+			return err
+		}
+	}
 	go l.loop()
 	lifecycleLog.Info("Domain state snapshot/prune lifecycle started",
 		"snapshotEnabled", l.builder != nil,
@@ -314,6 +320,17 @@ func (s snapshotChainSource) LatestSolidifiedBlockNum() int64 {
 		return 0
 	}
 	return s.chain.LatestSolidifiedBlockNum()
+}
+
+func (s snapshotChainSource) SyncRemainingBlocks() (uint64, bool) {
+	if s.chain == nil {
+		return 0, false
+	}
+	source, ok := s.chain.(syncRemainingSource)
+	if !ok {
+		return 0, false
+	}
+	return source.SyncRemainingBlocks()
 }
 
 func (s snapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {

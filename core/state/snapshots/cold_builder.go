@@ -45,6 +45,10 @@ type canonicalHashLookupSource interface {
 	CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error)
 }
 
+type syncRemainingSource interface {
+	SyncRemainingBlocks() (uint64, bool)
+}
+
 // Config controls the cold history snapshot builder lifecycle.
 type Config struct {
 	Dir                    string
@@ -61,6 +65,10 @@ type Config struct {
 	// build pass entirely. Latest builds are full-keyspace scans, so all latest
 	// datasets share this single coarse cadence rather than rebuilding every tick.
 	LatestBuildBlocks uint64
+	// DeferLatestBuildWhileSyncing prevents the full-keyspace latest snapshot
+	// scan from competing with an active historical sync session. The regular
+	// lifecycle/sync-complete wake builds it once the importer is idle.
+	DeferLatestBuildWhileSyncing bool
 	// BuildSectionBlooms builds full-section cold section-bloom sidecars once
 	// the state-history cutoff has fully covered the source block section.
 	BuildSectionBlooms bool
@@ -88,6 +96,7 @@ type Config struct {
 type PassResult struct {
 	Built               bool
 	LatestBuilt         bool
+	LatestDeferred      bool
 	Compaction          HistoryCompactionResult
 	FromTxNum           uint64
 	ToTxNum             uint64
@@ -139,6 +148,8 @@ type Stats struct {
 	LastBuildDuration       time.Duration
 	LastCompactionDuration  time.Duration
 	LastLatestDuration      time.Duration
+	LatestDeferredSync      uint64
+	LastLatestBuildBlock    uint64
 }
 
 type coldRunnerMetrics struct {
@@ -159,6 +170,8 @@ type coldRunnerMetrics struct {
 	lastBuildDuration      *metrics.Gauge
 	lastCompactionDuration *metrics.Gauge
 	lastLatestDuration     *metrics.Gauge
+	latestDeferredSync     *metrics.Gauge
+	lastLatestBuildBlock   *metrics.Gauge
 }
 
 func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
@@ -181,6 +194,8 @@ func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 		lastBuildDuration:      metrics.GetOrRegisterGauge(namespace+"lastpass/build/duration", nil),
 		lastCompactionDuration: metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/duration", nil),
 		lastLatestDuration:     metrics.GetOrRegisterGauge(namespace+"lastpass/latest/duration", nil),
+		latestDeferredSync:     metrics.GetOrRegisterGauge(namespace+"latest/deferred/sync", nil),
+		lastLatestBuildBlock:   metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
 	}
 }
 
@@ -212,6 +227,8 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.lastBuildDuration.Update(int64(stats.LastBuildDuration))
 	m.lastCompactionDuration.Update(int64(stats.LastCompactionDuration))
 	m.lastLatestDuration.Update(int64(stats.LastLatestDuration))
+	m.latestDeferredSync.Update(coldSnapshotUintGauge(stats.LatestDeferredSync))
+	m.lastLatestBuildBlock.Update(coldSnapshotUintGauge(stats.LastLatestBuildBlock))
 }
 
 func coldSnapshotUintGauge(value uint64) int64 {
@@ -231,10 +248,12 @@ type Runner struct {
 	quit chan struct{}
 	done chan struct{}
 
-	startOnce sync.Once
-	stopOnce  sync.Once
-	passMu    sync.Mutex
-	startErr  error
+	startOnce   sync.Once
+	stopOnce    sync.Once
+	prepareOnce sync.Once
+	passMu      sync.Mutex
+	startErr    error
+	prepareErr  error
 
 	passesCompleted        atomic.Uint64
 	passErrors             atomic.Uint64
@@ -254,6 +273,7 @@ type Runner struct {
 	lastCompactionDuration atomic.Int64
 	lastLatestDuration     atomic.Int64
 	lastLatestBuildBlock   atomic.Uint64
+	latestDeferredSync     atomic.Uint64
 }
 
 func NewRunner(chain ChainSource, cfg Config) *Runner {
@@ -351,26 +371,13 @@ func (r *Runner) Start() error {
 		if r.done == nil {
 			r.done = make(chan struct{})
 		}
-		if err := r.cfg.validate(); err != nil {
+		if err := r.Prepare(); err != nil {
 			close(r.done)
 			r.startErr = err
 			return
 		}
 		if !r.cfg.Enabled {
 			close(r.done)
-			return
-		}
-		if r.chain == nil || r.chain.DB() == nil {
-			close(r.done)
-			r.startErr = errors.New("snapshots: nil cold builder chain or database")
-			return
-		}
-		// Seed lastLatestBuildBlock from the persisted stage first (survives
-		// restarts); fall back to the current solidified block for fresh nodes
-		// that have never run a latest build (self-heals after the first build).
-		if err := r.seedLatestBuildBlock(); err != nil {
-			close(r.done)
-			r.startErr = err
 			return
 		}
 		go r.loop()
@@ -385,6 +392,33 @@ func (r *Runner) Start() error {
 			"eventLogBuild", r.cfg.BuildEventLogs)
 	})
 	return r.startErr
+}
+
+// Prepare validates the runner and seeds its latest-build cadence watermark.
+// It is shared by the standalone Runner lifecycle and SnapshotLifecycle, which
+// owns the production loop and therefore must not call Runner.Start.
+func (r *Runner) Prepare() error {
+	if r == nil {
+		return nil
+	}
+	r.prepareOnce.Do(func() {
+		if err := r.cfg.validate(); err != nil {
+			r.prepareErr = err
+			return
+		}
+		if !r.cfg.Enabled {
+			return
+		}
+		if r.chain == nil || r.chain.DB() == nil {
+			r.prepareErr = errors.New("snapshots: nil cold builder chain or database")
+			return
+		}
+		// Seed from the hash-bound persisted stage when present; a fresh node
+		// uses its current solidified watermark so the first lifecycle tick does
+		// not launch a redundant full-keyspace latest snapshot scan.
+		r.prepareErr = r.seedLatestBuildBlock()
+	})
+	return r.prepareErr
 }
 
 // Stop implements node.Lifecycle.
@@ -430,6 +464,8 @@ func (r *Runner) Snapshot() Stats {
 		LastBuildDuration:       time.Duration(r.lastBuildDuration.Load()),
 		LastCompactionDuration:  time.Duration(r.lastCompactionDuration.Load()),
 		LastLatestDuration:      time.Duration(r.lastLatestDuration.Load()),
+		LatestDeferredSync:      r.latestDeferredSync.Load(),
+		LastLatestBuildBlock:    r.lastLatestBuildBlock.Load(),
 	}
 }
 
@@ -453,8 +489,9 @@ func (r *Runner) OnePass() (PassResult, error) {
 	}
 	if err == nil {
 		phaseStart = time.Now()
-		built, perr := r.latestPass()
+		built, deferred, perr := r.latestPassWithStatus()
 		result.LatestDuration = time.Since(phaseStart)
+		result.LatestDeferred = deferred
 		if perr != nil {
 			err = perr
 		} else {
@@ -909,6 +946,9 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	if result.Compaction.Merged {
 		r.segmentsCompacted.Add(uint64(result.Compaction.SegmentsMerged))
 	}
+	if result.LatestDeferred {
+		r.latestDeferredSync.Add(1)
+	}
 	var builtBytes uint64
 	for _, ref := range append(append([]SegmentRef(nil), result.Segments...), result.Compaction.Segments...) {
 		if ^uint64(0)-builtBytes < ref.Size {
@@ -1044,39 +1084,51 @@ func (r *Runner) latestBuildWatermark() (block uint64, txNum uint64, ok bool, er
 }
 
 func (r *Runner) latestPass() (bool, error) {
+	built, _, err := r.latestPassWithStatus()
+	return built, err
+}
+
+func (r *Runner) latestPassWithStatus() (built bool, deferred bool, err error) {
 	if r == nil || !r.cfg.Enabled || r.cfg.LatestBuildBlocks == 0 {
-		return false, nil
+		return false, false, nil
 	}
 	db := r.chain.DB()
 	if db == nil {
-		return false, errors.New("snapshots: nil cold builder database")
+		return false, false, errors.New("snapshots: nil cold builder database")
 	}
 	block, txNum, ok, err := r.latestBuildWatermark()
 	if err != nil || !ok {
-		return false, err
+		return false, false, err
 	}
 	prevBlock := r.lastLatestBuildBlock.Load()
 	if prevBlock != 0 && block < prevBlock+r.cfg.LatestBuildBlocks {
-		return false, nil // not enough blocks elapsed
+		return false, false, nil // not enough blocks elapsed
+	}
+	if r.cfg.DeferLatestBuildWhileSyncing {
+		if source, ok := r.chain.(syncRemainingSource); ok {
+			if _, active := source.SyncRemainingBlocks(); active {
+				return false, true, nil
+			}
+		}
 	}
 	var latestBuildHash common.Hash
 	if _, ok := db.(ethdb.KeyValueWriter); ok {
 		latestBuildHash, err = r.snapshotBuildStageBoundaryHash(db, rawdb.StageSnapshotLatestBuild, block)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 	}
 	res, err := NewAggregator(r.cfg.Dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: txNum})
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	r.lastLatestBuildBlock.Store(block)
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {
 		if err := writeSnapshotBuildStage(writer, rawdb.StageSnapshotLatestBuild, block, latestBuildHash); err != nil {
-			return false, err
+			return false, false, err
 		}
 	}
-	return res != nil && len(res.Segments) > 0, nil
+	return res != nil && len(res.Segments) > 0, false, nil
 }
 
 func (r *Runner) loop() {

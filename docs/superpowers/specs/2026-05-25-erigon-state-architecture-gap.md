@@ -668,9 +668,12 @@ Status update:
   (`Aggregator.Build`) had no production caller — only the history pass ran.
   Latest-build watermark persistence landed 2026-05-27 (commit `42f08d4`): a
   forward-only `StageSnapshotLatestBuild` block stage is written after each latest
-  build and seeded on `Runner.Start`, so a restart resumes the cadence gate instead
-  of re-seeding to the current head (fresh nodes still fall back to the head, so no
-  startup full-scan / no migration). The step-aggregator capabilities (collate,
+  build and seeded by an idempotent `Runner.Prepare` phase shared by standalone
+  and composed lifecycles, so a restart resumes the cadence gate instead of
+  re-seeding to the current head (fresh nodes still fall back to the head, so no
+  startup full-scan / no migration). Production also defers the full-keyspace
+  latest scan while historical sync is active and retries through the existing
+  sync-complete lifecycle wake. The step-aggregator capabilities (collate,
   build, publish, prune, compact, watermarks) already run in order under
   `SnapshotLifecycle.OnePass` with shared manifest + `StageSnapshot*` watermarks, so
   #7's Acceptance (resume without guessing; retention explainable by watermarks) is

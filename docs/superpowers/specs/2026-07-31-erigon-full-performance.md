@@ -2175,6 +2175,30 @@ nothing never requeues itself, so a missing/incomplete hot range falls back to
 the normal maintenance interval instead of spinning. Shutdown is preferred
 over queued catch-up work after the currently executing pass returns.
 
+#### P5.4: Remove full latest-state scans from historical import
+
+Unlike Erigon's incremental immutable-domain steps, go-tron's current latest
+snapshot publication scans every latest-state key and replaces the prior file
+family. Its 40,000-block cadence is roughly 33 hours at chain time, but only
+about 13 minutes at a 50-block/s historical import rate. A genesis-to-85M replay
+would therefore expose roughly 2,125 opportunities for a full-state rescan.
+
+The intended startup guard also had a production wiring hole. `Runner.Start`
+seeded the cadence watermark from the hash-bound stage or current solidified
+head, but the composed `SnapshotLifecycle` owns the production goroutine and
+never calls `Runner.Start`. The seed is now an idempotent `Prepare` phase shared
+by both lifecycle forms, so restart and fresh-datadir startup cannot launch an
+unplanned first-tick scan.
+
+Production additionally forwards the sync service's active remaining-block
+signal into the cold builder. When a latest build is due during an active sync
+session, only that full-keyspace phase is deferred; bounded history build,
+publication, compaction, and coverage-gated pruning continue normally. The
+existing sync-complete hook requests another ordered lifecycle pass after the
+importer becomes idle, at which point one latest snapshot is built at the
+solidified watermark. `latest/deferred/sync` counts avoided scans and
+`last/latest_build_block` exposes the seeded or published cadence boundary.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

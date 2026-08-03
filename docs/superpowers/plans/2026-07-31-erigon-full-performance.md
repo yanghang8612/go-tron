@@ -263,6 +263,8 @@
 - [x] Drain verified cold-build backlog through coalesced bounded lifecycle
   passes instead of sleeping one full maintenance interval after every
   5,000-block segment.
+- [x] Prepare the composed production lifecycle's latest-build watermark and
+  defer full-keyspace latest snapshot scans while historical sync is active.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

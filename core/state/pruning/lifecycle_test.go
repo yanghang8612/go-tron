@@ -124,6 +124,90 @@ func TestSnapshotLifecycleAutomaticallyDrainsColdBuildBacklog(t *testing.T) {
 	}
 }
 
+func TestSnapshotLifecycleStartPreparesLatestBuildWatermark(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 50, 50, 50)
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 50}, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:               dir,
+			Enabled:           true,
+			Interval:          time.Hour,
+			HistoryWindow:     100,
+			LatestBuildBlocks: 10,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(100, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+		Interval: time.Hour,
+	})
+	completed := make(chan struct{}, 1)
+	lifecycle.AddPassCompleteHook(func() {
+		select {
+		case completed <- struct{}{}:
+		default:
+		}
+	})
+	if err := lifecycle.Start(); err != nil {
+		t.Fatalf("start lifecycle: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := lifecycle.Stop(); err != nil {
+			t.Errorf("stop lifecycle: %v", err)
+		}
+	})
+	select {
+	case <-completed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for initial lifecycle pass")
+	}
+	if err := lifecycle.Stop(); err != nil {
+		t.Fatalf("stop lifecycle: %v", err)
+	}
+	if got := lifecycle.builder.Snapshot(); got.PassesCompleted != 1 || got.LatestDeferredSync != 0 {
+		t.Fatalf("builder stats = %+v, want one cadence-gated pass", got)
+	}
+	if got := lifecycle.builder.Snapshot().LastLatestBuildBlock; got != 50 {
+		t.Fatalf("prepared latest build block = %d, want 50", got)
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || ok {
+		t.Fatalf("latest build stage exists after prepared initial pass: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestSnapshotLifecycleForwardsActiveSyncToLatestBuilder(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 50, 50, 50)
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{
+		db:              db,
+		solidified:      50,
+		syncRemaining:   1_000,
+		syncRemainingOK: true,
+	}, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:                          dir,
+			Enabled:                      true,
+			HistoryWindow:                100,
+			LatestBuildBlocks:            10,
+			DeferLatestBuildWhileSyncing: true,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(100, 1),
+			SnapshotDir: dir,
+		},
+	})
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !result.Snapshot.LatestDeferred || result.Snapshot.LatestBuilt {
+		t.Fatalf("snapshot result = %+v, want active-sync deferral", result.Snapshot)
+	}
+}
+
 func TestSnapshotLifecyclePublishesCatalogAfterHotPrune(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()

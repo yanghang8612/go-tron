@@ -948,7 +948,8 @@ func gtron(ctx *cli.Context) error {
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.
-				LatestBuildBlocks: statesnapshots.DefaultLatestBuildBlocks,
+				LatestBuildBlocks:            statesnapshots.DefaultLatestBuildBlocks,
+				DeferLatestBuildWhileSyncing: true,
 			},
 			Pruner: statepruning.PrunerConfig{
 				Policy:      prunePolicy,
