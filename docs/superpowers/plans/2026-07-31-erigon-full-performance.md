@@ -155,6 +155,9 @@
 - [x] Move queued canonical-prefix WriteSet advancement onto the exclusively
   owned background runner and return prefix accounting/errors through its
   completion event without reading a later live StateDB.
+- [x] Publish version-valid ready async sender-retry results on one sampled
+  cohort, with public-bandwidth re-admission, typed-write preflight, exact
+  ordered application, serial fallback, and retained observer cohorts.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

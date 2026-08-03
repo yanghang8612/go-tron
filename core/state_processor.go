@@ -873,6 +873,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					// canary. The remaining cohort retains the synchronous observer
 					// and its timing projection as a stable reference.
 					senderRetry = newDiscardShadowAsyncSenderRetry(senderChainPreexecution, len(transactions))
+					if senderRetry != nil {
+						senderRetry.publish = options.parallelTransfers && useDiscardShadowAsyncRetryPublication(block.Number())
+					}
 				} else {
 					senderRetry = newDiscardShadowSenderRetry(senderChainPreexecution, len(transactions))
 				}
@@ -936,6 +939,66 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		if dynProps.ConsensusLogicOptimization() {
 			if err := ValidateTxRetCount(tx); err != nil {
 				return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
+			}
+		}
+		if options.parallelTransfers && senderRetry != nil {
+			if retryResult, found := senderRetry.selectedResultForPublication(i); found {
+				parallelTransferRetryCandidatesCounter.Inc(1)
+				parallelTransferCandidatesCounter.Inc(1)
+				parallelTransferChainCandidatesCounter.Inc(1)
+				if retryResult.publicNetValid {
+					parallelTransferPublicNetReservationsCounter.Inc(1)
+				}
+				publicNetOverride, publicNetAdmitted := overridePublicNetReservation(retryResult, dynProps)
+				switch {
+				case !publicNetAdmitted:
+					parallelTransferRetryPublicNetFallbackCounter.Inc(1)
+					parallelTransferPublicNetLimitFallbackCounter.Inc(1)
+				case statedb.ValidateTransactionWriteSetApply(retryResult.writes, dynProps, transactionDB) != nil:
+					publicNetOverride.restore()
+					parallelTransferRetryPreflightFallbackCounter.Inc(1)
+					parallelTransferPreflightFallbackCounter.Inc(1)
+				default:
+					publishedStarted := time.Now()
+					versionedShadow.recorder.RestoreReadSet(retryResult.reads)
+					publishErr := statedb.ApplyTransactionWriteSetRecorded(retryResult.writes, dynProps, transactionDB, &versionedShadow.recorder)
+					publicNetOverride.restore()
+					if publishErr != nil {
+						parallelTransferRetryErrorsCounter.Inc(1)
+						parallelTransferErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish async sender retry: %w", i, publishErr)
+					}
+					statedb.FinalizeTransaction()
+					statedb.AppendBalanceTraceTransaction(retryResult.balanceTrace)
+					if collectTxInfos {
+						txInfos[i] = retryResult.info
+					}
+					txHash := tx.Hash()
+					if discardShadow != nil && discardShadow.sampled && discardCfg.captureBalanceTrace {
+						discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
+					}
+					versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
+					transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(retryResult.writes))
+					if err := flushDomainChanges(i, domainChangeMark); err != nil {
+						parallelTransferRetryErrorsCounter.Inc(1)
+						parallelTransferErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, err
+					}
+					senderRetry.markPublished(i)
+					parallelTransferRetryPublishedCounter.Inc(1)
+					parallelTransferPublishedCounter.Inc(1)
+					parallelTransferChainPublishedCounter.Inc(1)
+					if retryResult.publicNetValid {
+						parallelTransferPublicNetPublishedCounter.Inc(1)
+						if publicNetOverride.rebased {
+							parallelTransferPublicNetRebasedCounter.Inc(1)
+						}
+					}
+					elapsed := time.Since(publishedStarted).Nanoseconds()
+					parallelTransferRetryPublicationNanosCounter.Inc(elapsed)
+					parallelTransferPublicationNanosCounter.Inc(elapsed)
+					continue
+				}
 			}
 		}
 		if options.parallelTransfers {

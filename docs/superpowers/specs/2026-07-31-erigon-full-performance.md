@@ -1244,6 +1244,44 @@ step is a shared version-value carrier that lets retry execution resolve typed
 reads directly by `(key, txIndex, incarnation)` before canonical publication is
 considered.
 
+The first worker-owned prefix window covered 20 jobs and 384 canonical
+WriteSet advances. All prefix work completed in the background in 6.97 ms with
+zero prefix errors, while canonical `dispatch/prefix_nanos` remained zero.
+Canonical dispatch fell to 1.03 ms total, or 51.5 microseconds per job, versus
+378.9 microseconds per job in the comparable pre-handoff window. Of 31
+future-suffix executions, 30 results were ready, one result was
+late, and none were stale; all nine selected observer results matched their
+serial reference. Queue drops, copies, refreshes, raw misses, busy skips, and
+finish waits remained zero.
+
+#### P4.27: Ordered async-retry publication canary
+
+One sampled cohort (`192 mod 256`) now allows a ready, version-valid async
+sender incarnation to replace canonical Transfer execution. The `64` and
+`128` cohorts retain real async execution followed by independent serial
+comparison, and `0 mod 256` retains the synchronous retry reference. This
+keeps three distinct correctness signals while measuring actual saved serial
+work on one quarter of sampled blocks.
+
+Publication reuses the gated parallel-Transfer path: it repeats public-network
+limit admission against the real ordered DynamicProperties, preflights the
+complete typed WriteSet, restores the worker read set into the canonical
+version recorder, applies writes in transaction order, appends the retained
+BalanceTrace and TransactionInfo, flushes domain changes, and falls back to
+serial execution on any admission or preflight rejection. Metrics under
+`core/parallel_transfer/sender_retry/` report candidates, publications,
+fallbacks, errors, and publication time.
+
+A published result is deliberately excluded from the independent
+TransactionInfo/BalanceTrace validation count because those carriers became
+canonical. The post-application WriteSet is still captured independently and
+compared with the worker carrier under
+`async_actual/published/write_set_{matches,mismatches}`. Tests execute the same
+mixed conflict block serially and through the publication cohort, compare every
+TransactionInfo, and require identical committed StateDB roots. Production must
+show zero published WriteSet mismatches/errors before expanding beyond this
+cohort or supporting another actuator family.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

@@ -475,6 +475,7 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	queueEnqueuedBefore := discardShadowRetryActualQueueEnqueuedCounter.Snapshot().Count()
 	queueDequeuedBefore := discardShadowRetryActualQueueDequeuedCounter.Snapshot().Count()
 	queueDroppedBefore := discardShadowRetryActualQueueDroppedCounter.Snapshot().Count()
+	publishedBefore := parallelTransferRetryPublishedCounter.Snapshot().Count()
 	workerPrefixJobsBefore := discardShadowRetryActualWorkerPrefixJobsCounter.Snapshot().Count()
 	workerPrefixAdvancesBefore := discardShadowRetryActualWorkerPrefixAdvanceCounter.Snapshot().Count()
 	workerPrefixNanosBefore := discardShadowRetryActualWorkerPrefixNanosCounter.Snapshot().Count()
@@ -527,6 +528,9 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	if dropped := discardShadowRetryActualQueueDroppedCounter.Snapshot().Count() - queueDroppedBefore; dropped != 0 {
 		t.Fatalf("actual async dropped queued tasks = %d, want 0", dropped)
 	}
+	if published := parallelTransferRetryPublishedCounter.Snapshot().Count() - publishedBefore; published != 0 {
+		t.Fatalf("non-publication async cohort published %d retries", published)
+	}
 	if jobs := discardShadowRetryActualWorkerPrefixJobsCounter.Snapshot().Count() - workerPrefixJobsBefore; jobs != 1 {
 		t.Fatalf("actual async worker prefix jobs = %d, want 1", jobs)
 	}
@@ -566,6 +570,107 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	}
 	if balance := statedb.GetBalance(testProcessorAddr(1)); balance != 7_000_000 {
 		t.Fatalf("owner balance = %d, want 7000000", balance)
+	}
+}
+
+func TestProcessBlockPublishesAsyncSenderRetryCohort(t *testing.T) {
+	base := newTestState(t)
+	for id := byte(1); id <= 250; id++ {
+		base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+	}
+	base.AddBalance(testProcessorAddr(1), 20_000_000)
+	base.AddBalance(testProcessorAddr(3), 10_000_000)
+	for id := byte(10); id <= 99; id++ {
+		base.AddBalance(testProcessorAddr(id), 1_000_000)
+	}
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+	transactions := []*types.Transaction{
+		makeTestTransferTx(1, 2, 1_000_000),
+		makeTestTransferTx(3, 1, 2_000_000),
+		makeTestTransferTx(1, 4, 3_000_000),
+	}
+	// Leave enough independent canonical work between the conflicted sender
+	// retry and its next publication boundary for the background incarnation
+	// to complete even under the race detector. Production never waits for the
+	// worker: a result that misses its boundary still falls back to serial.
+	for id := byte(10); id <= 99; id++ {
+		transactions = append(transactions, makeTestTransferTx(id, id+140, 1_000))
+	}
+	transactions = append(transactions, makeTestTransferTx(1, 5, 1_000_000))
+	transactionProtos := make([]*corepb.Transaction, len(transactions))
+	for txIndex, tx := range transactions {
+		transactionProtos[txIndex] = tx.Proto()
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(discardShadowAsyncPublishOffset), Timestamp: 3_000,
+		}},
+		Transactions: transactionProtos,
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, nil, nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{captureBalanceTrace: true})
+	if err != nil {
+		t.Fatalf("serial process: %v", err)
+	}
+	retryCandidatesBefore := parallelTransferRetryCandidatesCounter.Snapshot().Count()
+	retryPublishedBefore := parallelTransferRetryPublishedCounter.Snapshot().Count()
+	publishedBefore := discardShadowRetryActualPublishedCounter.Snapshot().Count()
+	writeMatchesBefore := discardShadowRetryActualPublishedWriteOKCounter.Snapshot().Count()
+	writeMismatchesBefore := discardShadowRetryActualPublishedWriteMismatchCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
+	if err != nil {
+		t.Fatalf("parallel process: %v", err)
+	}
+	if candidates := parallelTransferRetryCandidatesCounter.Snapshot().Count() - retryCandidatesBefore; candidates != 1 {
+		t.Fatalf("async retry publication candidates = %d, want 1", candidates)
+	}
+	if published := parallelTransferRetryPublishedCounter.Snapshot().Count() - retryPublishedBefore; published != 1 {
+		t.Fatalf("async retry publications = %d, want 1", published)
+	}
+	if published := discardShadowRetryActualPublishedCounter.Snapshot().Count() - publishedBefore; published != 1 {
+		t.Fatalf("async retry published results = %d, want 1", published)
+	}
+	if matches := discardShadowRetryActualPublishedWriteOKCounter.Snapshot().Count() - writeMatchesBefore; matches != 1 {
+		t.Fatalf("async retry published write matches = %d, want 1", matches)
+	}
+	if mismatches := discardShadowRetryActualPublishedWriteMismatchCounter.Snapshot().Count() - writeMismatchesBefore; mismatches != 0 {
+		t.Fatalf("async retry published write mismatches = %d, want 0", mismatches)
+	}
+	for txIndex := range serialInfos {
+		if !proto.Equal(serialInfos[txIndex], parallelInfos[txIndex]) {
+			t.Fatalf("tx %d info mismatch\nserial=%v\nparallel=%v", txIndex, serialInfos[txIndex], parallelInfos[txIndex])
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
 	}
 }
 

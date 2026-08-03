@@ -35,6 +35,25 @@ func TestDiscardShadowAsyncRetryCohorts(t *testing.T) {
 	}
 }
 
+func TestDiscardShadowAsyncRetryPublicationCohort(t *testing.T) {
+	tests := []struct {
+		blockNum uint64
+		want     bool
+	}{
+		{blockNum: 0, want: false},
+		{blockNum: 64, want: false},
+		{blockNum: 128, want: false},
+		{blockNum: 192, want: true},
+		{blockNum: 256, want: false},
+		{blockNum: 448, want: true},
+	}
+	for _, test := range tests {
+		if got := useDiscardShadowAsyncRetryPublication(test.blockNum); got != test.want {
+			t.Fatalf("block %d async retry publication cohort = %t, want %t", test.blockNum, got, test.want)
+		}
+	}
+}
+
 func TestCompareDiscardShadowInfoSplitsEnergyFields(t *testing.T) {
 	tests := []struct {
 		name string

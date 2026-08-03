@@ -31,6 +31,7 @@ const (
 	// publication.
 	discardShadowAsyncRetryReferenceOffset = uint64(0)
 	discardShadowAsyncRetryFirstOffset     = discardShadowSampleInterval
+	discardShadowAsyncPublishOffset        = 3 * discardShadowSampleInterval
 	discardShadowWorkerCount               = 4
 	discardShadowRetryMaxAttempts          = int64(8)
 	discardShadowRetryMaxExecutions        = int64(64)
@@ -40,6 +41,10 @@ const (
 func useDiscardShadowAsyncRetry(blockNum uint64) bool {
 	return blockNum%discardShadowSampleInterval == 0 &&
 		blockNum%discardShadowAsyncRetryInterval != discardShadowAsyncRetryReferenceOffset
+}
+
+func useDiscardShadowAsyncRetryPublication(blockNum uint64) bool {
+	return useDiscardShadowAsyncRetry(blockNum) && blockNum%discardShadowAsyncRetryInterval == discardShadowAsyncPublishOffset
 }
 
 var (
@@ -244,6 +249,18 @@ var (
 	discardShadowMismatchAddressCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_address", nil)
 	discardShadowMismatchIdentityCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/identity", nil)
 	discardShadowMismatchOtherFieldCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/other", nil)
+)
+
+var (
+	parallelTransferRetryCandidatesCounter                = metrics.NewRegisteredCounter("core/parallel_transfer/sender_retry/candidates", nil)
+	parallelTransferRetryPublishedCounter                 = metrics.NewRegisteredCounter("core/parallel_transfer/sender_retry/published", nil)
+	parallelTransferRetryPreflightFallbackCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/sender_retry/fallback/preflight", nil)
+	parallelTransferRetryPublicNetFallbackCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/sender_retry/fallback/public_net", nil)
+	parallelTransferRetryErrorsCounter                    = metrics.NewRegisteredCounter("core/parallel_transfer/sender_retry/errors", nil)
+	parallelTransferRetryPublicationNanosCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/sender_retry/publication_nanos", nil)
+	discardShadowRetryActualPublishedCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/published", nil)
+	discardShadowRetryActualPublishedWriteOKCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/published/write_set_matches", nil)
+	discardShadowRetryActualPublishedWriteMismatchCounter = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/published/write_set_mismatches", nil)
 )
 
 var (
@@ -465,6 +482,12 @@ type discardShadowAsyncPrefixStats struct {
 	errors   int64
 }
 
+type discardShadowAsyncPublishStats struct {
+	published       int64
+	writeMatches    int64
+	writeMismatches int64
+}
+
 type discardShadowSenderRetryStats struct {
 	attempts            int64
 	executed            int64
@@ -503,6 +526,7 @@ type discardShadowSenderRetryStats struct {
 	actualQueueMaxDepth int64
 	actualQueueWaitNs   int64
 	workerPrefix        discardShadowAsyncPrefixStats
+	publish             discardShadowAsyncPublishStats
 	actualExecuted      int64
 	actualReady         int64
 	actualLate          int64
@@ -617,11 +641,13 @@ type discardShadowSenderRetry struct {
 	available          []bool
 	selected           []discardShadowTaskResult
 	selectedOK         []bool
+	selectedPublished  []bool
 	selectedAsyncReady []bool
 	incarnations       []uint32
 	asyncIncarnations  []atomic.Uint32
 	runner             *discardShadowRetryRunner
 	async              bool
+	publish            bool
 	asyncRunners       []*discardShadowRetryRunner
 	asyncActive        int
 	asyncScheduled     int64
@@ -1398,6 +1424,7 @@ func newDiscardShadowSenderRetry(source *discardShadowPreexecution, transactionC
 		available:          make([]bool, transactionCount),
 		selected:           make([]discardShadowTaskResult, transactionCount),
 		selectedOK:         make([]bool, transactionCount),
+		selectedPublished:  make([]bool, transactionCount),
 		selectedAsyncReady: make([]bool, transactionCount),
 		incarnations:       make([]uint32, transactionCount),
 		runner:             newDiscardShadowRetryRunner(nil),
@@ -2322,6 +2349,24 @@ func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *typ
 	retry.stats.actualCandidates++
 }
 
+func (retry *discardShadowSenderRetry) selectedResultForPublication(txIndex int) (*discardShadowTaskResult, bool) {
+	if retry == nil || !retry.async || !retry.publish || txIndex < 0 || txIndex >= len(retry.selected) ||
+		txIndex >= len(retry.selectedOK) || txIndex >= len(retry.selectedPublished) ||
+		!retry.selectedOK[txIndex] || retry.selectedPublished[txIndex] {
+		return nil, false
+	}
+	result := &retry.selected[txIndex]
+	return result, preexecutedTransferReady(result)
+}
+
+func (retry *discardShadowSenderRetry) markPublished(txIndex int) {
+	if retry == nil || txIndex < 0 || txIndex >= len(retry.selectedPublished) || retry.selectedPublished[txIndex] {
+		return
+	}
+	retry.selectedPublished[txIndex] = true
+	retry.stats.publish.published++
+}
+
 func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, cfg discardShadowRunConfig) discardShadowSenderRetryStats {
 	if retry == nil || versioned == nil || len(cfg.canonicalInfos) != len(cfg.transactions) {
 		return discardShadowSenderRetryStats{}
@@ -2345,6 +2390,22 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		infoMatch := compareDiscardShadowInfo(selected.info, cfg.canonicalInfos[txIndex]) == 0
 		writeMatch := equalSenderChainWriteSets(selected.writes, versioned.transactionWriteSets[txIndex], selected.publicNetValid)
 		balanceMatch := !cfg.captureBalanceTrace || proto.Equal(selected.balanceTrace, cfg.canonicalBalanceTraces[txIndex])
+		if txIndex < len(retry.selectedPublished) && retry.selectedPublished[txIndex] {
+			if writeMatch {
+				retry.stats.publish.writeMatches++
+			} else {
+				retry.stats.publish.writeMismatches++
+				retry.stats.writeMismatches++
+				retry.stats.errors++
+				if retry.async {
+					retry.stats.actualErrors++
+				}
+			}
+			// TransactionInfo and BalanceTrace are the published carriers, so
+			// they are not independent serial-equivalence evidence. Keep the
+			// two observer cohorts responsible for those validation counters.
+			continue
+		}
 		if !infoMatch {
 			retry.stats.infoMismatches++
 		}
@@ -2420,6 +2481,9 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualWorkerPrefixAdvanceCounter.Inc(retry.stats.workerPrefix.advances)
 		discardShadowRetryActualWorkerPrefixNanosCounter.Inc(retry.stats.workerPrefix.nanos)
 		discardShadowRetryActualWorkerPrefixErrorsCounter.Inc(retry.stats.workerPrefix.errors)
+		discardShadowRetryActualPublishedCounter.Inc(retry.stats.publish.published)
+		discardShadowRetryActualPublishedWriteOKCounter.Inc(retry.stats.publish.writeMatches)
+		discardShadowRetryActualPublishedWriteMismatchCounter.Inc(retry.stats.publish.writeMismatches)
 		discardShadowRetryActualExecutedCounter.Inc(retry.stats.actualExecuted)
 		discardShadowRetryActualReadyCounter.Inc(retry.stats.actualReady)
 		discardShadowRetryActualLateCounter.Inc(retry.stats.actualLate)
