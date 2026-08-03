@@ -441,8 +441,8 @@ func TestFreshAccountKVShortcutPreservesHistoryAsOf(t *testing.T) {
 			break
 		}
 	}
-	if firstPut == nil || firstPut.Generation != 0 || firstPut.PrevExists || len(firstPut.Prev) != 0 || !firstPut.NextExists || string(firstPut.Next) != "v1" {
-		t.Fatalf("fresh first-put history = %+v, want generation-0 nil/absent -> v1", firstPut)
+	if firstPut == nil || firstPut.Generation != 0 || firstPut.PrevExists || len(firstPut.Prev) != 0 || firstPut.NextExists {
+		t.Fatalf("fresh first-put history = %+v, want generation-0 absent preimage", firstPut)
 	}
 
 	for _, test := range []struct {

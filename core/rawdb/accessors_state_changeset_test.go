@@ -8,6 +8,7 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -120,7 +121,7 @@ func TestStateDomainChangeRoundTripAndIteration(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("read change = ok:%v err:%v", ok, err)
 	}
-	if got.FlatDomain != StateFlatDomainKVLatest || got.Domain != kvdomains.SystemReward || !bytes.Equal(got.Prev, []byte("old")) || !bytes.Equal(got.Next, []byte("new")) {
+	if got.FlatDomain != StateFlatDomainKVLatest || got.Domain != kvdomains.SystemReward || !bytes.Equal(got.Prev, []byte("old")) || got.NextExists || got.Next != nil {
 		t.Fatalf("change = %+v", got)
 	}
 	got.Prev[0] = 'x'
@@ -176,9 +177,11 @@ func TestWriteStateDomainChangeSamplesEncodingComponents(t *testing.T) {
 	keyBefore := stateChangeEncodingSampleKeyCounter.Snapshot().Count()
 	prevBefore := stateChangeEncodingSamplePrevCounter.Snapshot().Count()
 	nextBefore := stateChangeEncodingSampleNextCounter.Snapshot().Count()
+	omittedNextBefore := stateChangeEncodingSampleOmittedNextCounter.Snapshot().Count()
 	fixedBefore := stateChangeEncodingSampleFixedCounter.Snapshot().Count()
 	prevRowsBefore := stateChangeEncodingSamplePrevRows.Snapshot().Count()
 	nextRowsBefore := stateChangeEncodingSampleNextRows.Snapshot().Count()
+	omittedNextRowsBefore := stateChangeEncodingSampleOmittedNextRows.Snapshot().Count()
 
 	if err := WriteStateDomainChangeRow(db, change); err != nil {
 		t.Fatal(err)
@@ -187,7 +190,14 @@ func TestWriteStateDomainChangeSamplesEncodingComponents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixed := len(encoded) - len(change.Key) - len(change.Prev) - len(change.Next)
+	legacyEncoded, err := rlp.EncodeToBytes(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= len(legacyEncoded) {
+		t.Fatalf("previous-only row = %d bytes, want smaller than legacy %d", len(encoded), len(legacyEncoded))
+	}
+	fixed := len(encoded) - len(change.Key) - len(change.Prev)
 	checks := []struct {
 		name   string
 		before int64
@@ -198,15 +208,38 @@ func TestWriteStateDomainChangeSamplesEncodingComponents(t *testing.T) {
 		{name: "encoded", before: encodedBefore, after: stateChangeEncodingSampleEncodedCounter.Snapshot().Count(), want: int64(len(encoded))},
 		{name: "key", before: keyBefore, after: stateChangeEncodingSampleKeyCounter.Snapshot().Count(), want: int64(len(change.Key))},
 		{name: "prev", before: prevBefore, after: stateChangeEncodingSamplePrevCounter.Snapshot().Count(), want: int64(len(change.Prev))},
-		{name: "next", before: nextBefore, after: stateChangeEncodingSampleNextCounter.Snapshot().Count(), want: int64(len(change.Next))},
+		{name: "next", before: nextBefore, after: stateChangeEncodingSampleNextCounter.Snapshot().Count(), want: 0},
+		{name: "omitted next", before: omittedNextBefore, after: stateChangeEncodingSampleOmittedNextCounter.Snapshot().Count(), want: int64(len(change.Next))},
 		{name: "fixed", before: fixedBefore, after: stateChangeEncodingSampleFixedCounter.Snapshot().Count(), want: int64(fixed)},
 		{name: "prev rows", before: prevRowsBefore, after: stateChangeEncodingSamplePrevRows.Snapshot().Count(), want: 1},
-		{name: "next rows", before: nextRowsBefore, after: stateChangeEncodingSampleNextRows.Snapshot().Count(), want: 1},
+		{name: "next rows", before: nextRowsBefore, after: stateChangeEncodingSampleNextRows.Snapshot().Count(), want: 0},
+		{name: "omitted next rows", before: omittedNextRowsBefore, after: stateChangeEncodingSampleOmittedNextRows.Snapshot().Count(), want: 1},
 	}
 	for _, check := range checks {
 		if got := check.after - check.before; got != check.want {
 			t.Errorf("%s delta = %d, want %d", check.name, got, check.want)
 		}
+	}
+}
+
+func TestReadStateDomainChangeAcceptsLegacyNextImageRow(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	legacy := &StateDomainChange{
+		BlockNum: 12, BlockHash: common.Hash{0x12}, TxNum: 20, Seq: 2,
+		FlatDomain: StateFlatDomainKVLatest, Owner: common.Address{0x41, 0x12},
+		Generation: 3, Domain: kvdomains.ContractStorage, Key: []byte("slot"),
+		PrevExists: true, Prev: []byte("before"), NextExists: true, Next: []byte("after"),
+	}
+	encoded, err := rlp.EncodeToBytes(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(stateChangeSetKey(legacy.BlockNum, legacy.Seq), encoded); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := ReadStateDomainChange(db, legacy.BlockNum, legacy.Seq)
+	if err != nil || !ok || !bytes.Equal(got.Prev, legacy.Prev) || !bytes.Equal(got.Next, legacy.Next) {
+		t.Fatalf("legacy row = %+v/%v/%v", got, ok, err)
 	}
 }
 
@@ -231,7 +264,7 @@ func TestStateDomainChangeRowAndInverseIndexPublishSeparately(t *testing.T) {
 	if err := WriteStateDomainChangeRow(db, change); err != nil {
 		t.Fatalf("write row: %v", err)
 	}
-	if got, ok, err := ReadStateDomainChange(db, 10, 1); err != nil || !ok || !bytes.Equal(got.Next, []byte("new")) {
+	if got, ok, err := ReadStateDomainChange(db, 10, 1); err != nil || !ok || !bytes.Equal(got.Prev, []byte("old")) || got.NextExists {
 		t.Fatalf("read row = %+v ok:%v err:%v", got, ok, err)
 	}
 	var blocks []uint64
@@ -401,7 +434,7 @@ func TestIterateStateDomainChangesByKeyFiltersTxWindowAndKey(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("iterate changes: %v", err)
 	}
-	if len(got) != 1 || got[0].BlockNum != 21 || string(got[0].Next) != "match" {
+	if len(got) != 1 || got[0].BlockNum != 21 || !bytes.Equal(got[0].Key, []byte("reward/a")) {
 		t.Fatalf("changes = %+v, want only block 21 match", got)
 	}
 }

@@ -429,7 +429,7 @@ func TestAccountResourceHotFieldWritesOneHistoryRow(t *testing.T) {
 			resourceChanges = append(resourceChanges, change)
 		}
 	}
-	if len(resourceChanges) != 1 || !resourceChanges[0].PrevExists || !resourceChanges[0].NextExists {
+	if len(resourceChanges) != 1 || !resourceChanges[0].PrevExists || resourceChanges[0].NextExists {
 		t.Fatalf("AccountResource history changes = %+v, want one update", resourceChanges)
 	}
 

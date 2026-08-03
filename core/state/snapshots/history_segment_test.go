@@ -211,8 +211,8 @@ func TestManagerReadsHistoryFromTieredSnapshotDirectory(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read tiered history: %v", err)
 	}
-	if len(changes) != 1 || string(changes[0].Next) != "value" {
-		t.Fatalf("tiered history changes = %+v, want one value", changes)
+	if len(changes) != 1 || changes[0].PrevExists || changes[0].NextExists {
+		t.Fatalf("tiered history changes = %+v, want one absent preimage", changes)
 	}
 }
 

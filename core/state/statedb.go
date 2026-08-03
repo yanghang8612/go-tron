@@ -3607,17 +3607,13 @@ func (s *StateDB) writeAccountLatestChange(addr tcommon.Address, nextExists bool
 	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, next)) {
 		return nil
 	}
-	var nextCopy []byte
-	if nextExists {
-		nextCopy = append([]byte(nil), next...)
-	}
 	return s.changeSet.publishCommitDomainChange(&rawdb.StateDomainChange{
 		FlatDomain: rawdb.StateFlatDomainAccountLatest,
 		Owner:      addr,
 		PrevExists: prevExists,
 		Prev:       prev,
 		NextExists: nextExists,
-		Next:       nextCopy,
+		Next:       next,
 	})
 }
 

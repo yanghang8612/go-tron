@@ -1716,6 +1716,42 @@ node enters its final retention horizon. If fixed metadata dominates, a compact
 schema that derives block/sequence/hash context from the row and tx-range keys
 is the appropriate first reduction.
 
+Two post-deploy component windows then covered 4,390 blocks / 276,883
+transactions and 17,204 sampled changesets. The combined payload was 4.79 MB:
+previous images were 34.4%, next images 34.6%, fixed RLP metadata/framing 28.3%,
+and logical keys 2.8%. A previous image existed on 97.6% of rows and a next
+image on 99.8%. Both windows recorded zero Pebble write delay; combined
+compaction debt changed by only about +233 MB while the node continued syncing.
+
+#### P4.37: Erigon-style previous-image-only hot history
+
+Current Erigon writes a mutation through `DomainBufferedWriter.PutWithPrev`,
+whose history writer receives only `AddPrevValue(key, txNum, prev)`. The new
+value is written once to the latest domain. Erigon unwind restores those
+previous values, and as-of reads use the next mutation's previous image; it
+does not duplicate the forward image into history.
+
+go-tron's unwind and hot/cold as-of readers already have the same previous-image
+semantics. The only non-test consumer of `Next` was the pruning checker. Its
+complete code-hash closure is preserved without `Next`: the current image is
+collected from AccountLatest, while every superseded image is collected from a
+subsequent history row's `Prev`.
+
+New hot changeset rows therefore encode `persistedStateDomainChange`, which
+omits `NextExists` and `Next`. Commit capture may retain a borrowed next slice
+long enough to compare before/after values and attribute omitted bytes, but the
+rawdb writer neither clones nor persists it. This should remove about 34.6% of
+changeset payload bytes, or about 30.6% of temporal logical bytes at the sampled
+family mix, before Pebble write amplification. A read-only legacy RLP fallback
+keeps the currently running test database inspectable during the transition;
+fresh writes never use it, and it can be deleted after the next clean resync.
+
+The first implementation intentionally leaves the cold binary record layout
+unchanged. Production-built cold rows originate from the new hot decoder and
+thus carry no next image (only the empty legacy fields); a later binary-format
+revision can remove those final flag/length bytes together with duplicated
+block context after the hot-write reduction is measured.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

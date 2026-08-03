@@ -294,11 +294,6 @@ func collectStateDomainChangeCodeHashes(refs codeHashRefs, change *rawdb.StateDo
 			return err
 		}
 	}
-	if change.NextExists {
-		if err := collectAccountEnvelopeCodeHash(refs, change.Next, change.TxNum, fmt.Sprintf("state-domain-change next block=%d seq=%d", change.BlockNum, change.Seq)); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

@@ -482,10 +482,6 @@ func (w *accountKVLatestBatch) writeDomainChange(owner tcommon.Address, generati
 	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, nextValue)) {
 		return nil
 	}
-	var next []byte
-	if nextExists {
-		next = append([]byte(nil), nextValue...)
-	}
 	return w.changeSet.publishCommitDomainChange(&rawdb.StateDomainChange{
 		FlatDomain: rawdb.StateFlatDomainKVLatest,
 		Owner:      owner,
@@ -495,7 +491,7 @@ func (w *accountKVLatestBatch) writeDomainChange(owner tcommon.Address, generati
 		PrevExists: prevExists,
 		Prev:       prev,
 		NextExists: nextExists,
-		Next:       next,
+		Next:       nextValue,
 	})
 }
 

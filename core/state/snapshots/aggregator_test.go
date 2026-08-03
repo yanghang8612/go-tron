@@ -113,7 +113,7 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open history segment: %v", err)
 	}
-	if len(historySeg.Changes) != 1 || historySeg.Changes[0].TxNum != 15 || string(historySeg.Changes[0].Next) != "storage-v1" {
+	if len(historySeg.Changes) != 1 || historySeg.Changes[0].TxNum != 15 || string(historySeg.Changes[0].Prev) != "storage-v0" || historySeg.Changes[0].NextExists {
 		t.Fatalf("history changes = %+v", historySeg.Changes)
 	}
 

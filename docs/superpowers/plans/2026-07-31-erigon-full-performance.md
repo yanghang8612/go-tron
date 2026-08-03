@@ -208,8 +208,14 @@
   deferral because changeset payloads dominate temporal logical bytes.
 - [x] Add allocation-free sampled changeset component attribution for previous
   image, next image, logical key, and fixed RLP metadata/framing.
-- [ ] Run the changeset-component production sample and choose unwind-only
-  far-sync rows, compact row encoding, or earlier cold aggregation from evidence.
+- [x] Run the changeset-component production sample and select Erigon-style
+  previous-image-only history because next images are 34.6% of payload bytes.
+- [x] Encode new hot changesets without the forward image, avoid cloning the
+  borrowed next value, and retain a read-only legacy decoder during transition.
+- [ ] Run the previous-image-only production gate and compare changeset bytes,
+  coalesced output, disk/compaction bytes, write stalls, and sync throughput.
+- [ ] Remove next-image fields from the cold binary history format together
+  with duplicated block/sequence context after the hot-row production gate.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

@@ -152,7 +152,7 @@ func TestColdBuilderOnePassBuildsStateDomainChangeHistoryAndManagerReads(t *test
 
 	var got []string
 	if err := mgr.IterateStateDomainChanges(1, 3, func(change *rawdb.StateDomainChange) (bool, error) {
-		got = append(got, string(change.Next))
+		got = append(got, string(change.Prev))
 		return true, nil
 	}); err != nil {
 		t.Fatalf("iterate state domain changes: %v", err)
@@ -1467,7 +1467,7 @@ func coldBuilderOwner(seed byte) common.Address {
 	return common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{seed}, common.AccountIDLength)...))
 }
 
-func writeColdBuilderChange(t *testing.T, db ethdb.KeyValueWriter, owner common.Address, blockNum, txNum uint64, next string) {
+func writeColdBuilderChange(t *testing.T, db ethdb.KeyValueWriter, owner common.Address, blockNum, txNum uint64, prev string) {
 	t.Helper()
 	blockHash := common.Hash{byte(blockNum)}
 	if err := rawdb.WriteStateTxRange(db, blockNum, blockHash, txNum, txNum); err != nil {
@@ -1483,9 +1483,7 @@ func writeColdBuilderChange(t *testing.T, db ethdb.KeyValueWriter, owner common.
 		Domain:     kvdomains.SystemReward,
 		Key:        []byte{byte('k'), byte(blockNum)},
 		PrevExists: true,
-		Prev:       []byte("prev"),
-		NextExists: true,
-		Next:       []byte(next),
+		Prev:       []byte(prev),
 	}); err != nil {
 		t.Fatalf("write change block %d: %v", blockNum, err)
 	}

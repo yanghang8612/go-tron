@@ -485,7 +485,7 @@ func TestDomainRegistryHotHistoryPublicationDispatch(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("iterate hot changes via registry: %v", err)
 	}
-	if len(changes) != 1 || changes[0].BlockNum != 7 || string(changes[0].Next) != "new" {
+	if len(changes) != 1 || changes[0].BlockNum != 7 || string(changes[0].Prev) != "old" || changes[0].NextExists {
 		t.Fatalf("hot changes = %+v", changes)
 	}
 	var txRangeChanges []*rawdb.StateDomainChange

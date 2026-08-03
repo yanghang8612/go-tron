@@ -26,6 +26,8 @@ func TestDBCompactStateHistoryCommandPreservesLiveRows(t *testing.T) {
 		Owner:      owner,
 		Domain:     kvdomains.SystemReward,
 		Key:        []byte("reward/1"),
+		PrevExists: true,
+		Prev:       []byte("before"),
 		NextExists: true,
 		Next:       []byte("live"),
 	}
@@ -65,7 +67,7 @@ func TestDBCompactStateHistoryCommandPreservesLiveRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if got, ok, err := rawdb.ReadStateDomainChange(reopened, 7, 1); err != nil || !ok || !bytes.Equal(got.Next, []byte("live")) {
+	if got, ok, err := rawdb.ReadStateDomainChange(reopened, 7, 1); err != nil || !ok || !bytes.Equal(got.Prev, []byte("before")) || got.NextExists {
 		t.Fatalf("state change after compaction = (%+v, %t, %v)", got, ok, err)
 	}
 	if value, err := reopened.Get([]byte("unrelated")); err != nil || !bytes.Equal(value, []byte("preserved")) {

@@ -175,7 +175,7 @@ func TestTRC10LegacyMirrorNoReadPreservesHistoryPreimage(t *testing.T) {
 	}
 
 	changes := collectStateDomainChanges(t, disk, 2)
-	if !hasDomainChange(changes, addr, kvdomains.AccountAssetV2, []byte("1000001"), true, encodeAccountAuxInt64(77), true, encodeAccountAuxInt64(82)) {
+	if !hasDomainChange(changes, addr, kvdomains.AccountAssetV2, []byte("1000001"), true, encodeAccountAuxInt64(77), false, nil) {
 		t.Fatalf("missing exact V2 mirror history change: %+v", changes)
 	}
 }

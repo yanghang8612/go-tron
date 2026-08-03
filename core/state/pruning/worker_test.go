@@ -578,6 +578,10 @@ func TestCheckerRequiresHistoricalCodeHashCoverage(t *testing.T) {
 	newCode := []byte{0x60, 0x06}
 	oldHash := common.Keccak256(oldCode)
 	newHash := common.Keccak256(newCode)
+	writeAccountLatestEnvelope(t, db, owner, newHash)
+	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+		t.Fatal(err)
+	}
 	if err := rawdb.WriteStateTxRange(db, 2, common.Hash{0x02}, 2, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -685,6 +689,10 @@ func TestCheckerAcceptsHistoricalCodeHashFromColdSnapshots(t *testing.T) {
 	newCode := []byte{0x60, 0x08}
 	oldHash := common.Keccak256(oldCode)
 	newHash := common.Keccak256(newCode)
+	writeAccountLatestEnvelope(t, db, owner, newHash)
+	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+		t.Fatal(err)
+	}
 	if err := rawdb.WriteStateTxRange(db, 2, common.Hash{0x02}, 2, 2); err != nil {
 		t.Fatal(err)
 	}

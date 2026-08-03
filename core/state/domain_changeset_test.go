@@ -165,11 +165,11 @@ func TestStateDBDomainChangeSetCapturesAccountKVAndStorage(t *testing.T) {
 			t.Fatalf("change txNum = %d, want block-final %d", change.TxNum, endTxNum)
 		}
 	}
-	if !hasDomainChange(changes, tcommon.SystemAccountAddress, kvdomains.SystemReward, systemKey, false, nil, true, systemValue) {
+	if !hasDomainChange(changes, tcommon.SystemAccountAddress, kvdomains.SystemReward, systemKey, false, nil, false, nil) {
 		t.Fatalf("system reward change not captured: %+v", changes)
 	}
 	rowKey := sdb.storageRowKey(contract, slot).Bytes()
-	if !hasDomainChange(changes, contract, kvdomains.ContractStorage, rowKey, false, nil, true, slotValue.Bytes()) {
+	if !hasDomainChange(changes, contract, kvdomains.ContractStorage, rowKey, false, nil, false, nil) {
 		t.Fatalf("contract storage change not captured: %+v", changes)
 	}
 
@@ -187,7 +187,7 @@ func TestStateDBDomainChangeSetCapturesAccountKVAndStorage(t *testing.T) {
 		t.Fatalf("second commit: %v", err)
 	}
 	changes = collectStateDomainChanges(t, nextChangeDB, 6)
-	if !hasDomainChange(changes, tcommon.SystemAccountAddress, kvdomains.SystemReward, systemKey, true, systemValue, true, nextValue) {
+	if !hasDomainChange(changes, tcommon.SystemAccountAddress, kvdomains.SystemReward, systemKey, true, systemValue, false, nil) {
 		t.Fatalf("system reward update pre-value not captured: %+v", changes)
 	}
 }
@@ -339,7 +339,7 @@ func TestDomainChangeStagePublishesThroughStageWriter(t *testing.T) {
 	}
 
 	changes := collectStateDomainChanges(t, stageWriter, 11)
-	if !hasDomainChange(changes, tcommon.SystemAccountAddress, kvdomains.SystemReward, key, false, nil, true, value) {
+	if !hasDomainChange(changes, tcommon.SystemAccountAddress, kvdomains.SystemReward, key, false, nil, false, nil) {
 		t.Fatalf("stage writer did not receive system reward change: %+v", changes)
 	}
 	var blocks []uint64
@@ -481,10 +481,10 @@ func TestStateDBJournalDomainChangeCaptureUsesTransactionTxNums(t *testing.T) {
 	if len(kvChanges) != 2 {
 		t.Fatalf("kv changes = %+v, want 2 transaction changes", kvChanges)
 	}
-	if kvChanges[0].TxNum != beginTxNum || kvChanges[0].PrevExists || !kvChanges[0].NextExists || !bytes.Equal(kvChanges[0].Next, []byte("v1")) {
+	if kvChanges[0].TxNum != beginTxNum || kvChanges[0].PrevExists || kvChanges[0].NextExists {
 		t.Fatalf("tx0 change = %+v", kvChanges[0])
 	}
-	if kvChanges[1].TxNum != beginTxNum+1 || !kvChanges[1].PrevExists || !bytes.Equal(kvChanges[1].Prev, []byte("v1")) || !bytes.Equal(kvChanges[1].Next, []byte("v2")) {
+	if kvChanges[1].TxNum != beginTxNum+1 || !kvChanges[1].PrevExists || !bytes.Equal(kvChanges[1].Prev, []byte("v1")) || kvChanges[1].NextExists {
 		t.Fatalf("tx1 change = %+v", kvChanges[1])
 	}
 	got, ok, err := rawdb.ReadStateAccountKVAsOfTxNum(disk, owner, domain, key, beginTxNum, endTxNum)
@@ -540,8 +540,8 @@ func TestStateDBJournalDomainChangeCaptureReadsPendingLatestPreviousValue(t *tes
 	if kvChange == nil {
 		t.Fatalf("missing pending-latest kv domain change in %+v", changes)
 	}
-	if !kvChange.PrevExists || !bytes.Equal(kvChange.Prev, v1) || !kvChange.NextExists || !bytes.Equal(kvChange.Next, v2) {
-		t.Fatalf("pending-latest kv change = %+v, want prev v1 next v2", kvChange)
+	if !kvChange.PrevExists || !bytes.Equal(kvChange.Prev, v1) || kvChange.NextExists {
+		t.Fatalf("pending-latest kv change = %+v, want persisted prev v1 only", kvChange)
 	}
 }
 

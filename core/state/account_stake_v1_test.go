@@ -494,7 +494,7 @@ func TestAccountStakeV1HistoryUsesOnlyChangedRows(t *testing.T) {
 	if len(bandwidthChanges) != 1 || !bytes.Equal(bandwidthChanges[0].Key, accountFrozenBandwidthKey(0)) || bandwidthChanges[0].NextExists {
 		t.Fatalf("frozen-bandwidth history changes = %+v, want one index-0 delete", bandwidthChanges)
 	}
-	if len(tronPowerChanges) != 1 || !bytes.Equal(tronPowerChanges[0].Key, accountTronPowerKey) || !tronPowerChanges[0].PrevExists || !tronPowerChanges[0].NextExists {
+	if len(tronPowerChanges) != 1 || !bytes.Equal(tronPowerChanges[0].Key, accountTronPowerKey) || !tronPowerChanges[0].PrevExists || tronPowerChanges[0].NextExists {
 		t.Fatalf("tron-power history changes = %+v, want one update", tronPowerChanges)
 	}
 

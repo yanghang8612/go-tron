@@ -19,15 +19,17 @@ import (
 const stateChangeEncodingSampleInterval = uint64(128)
 
 var (
-	stateChangeEncodingSampleSequence       atomic.Uint64
-	stateChangeEncodingSampleRowsCounter    = metrics.NewRegisteredCounter("state/history/changeset/sample/rows", nil)
-	stateChangeEncodingSampleEncodedCounter = metrics.NewRegisteredCounter("state/history/changeset/sample/encoded_bytes", nil)
-	stateChangeEncodingSampleKeyCounter     = metrics.NewRegisteredCounter("state/history/changeset/sample/logical_key_bytes", nil)
-	stateChangeEncodingSamplePrevCounter    = metrics.NewRegisteredCounter("state/history/changeset/sample/prev_bytes", nil)
-	stateChangeEncodingSampleNextCounter    = metrics.NewRegisteredCounter("state/history/changeset/sample/next_bytes", nil)
-	stateChangeEncodingSampleFixedCounter   = metrics.NewRegisteredCounter("state/history/changeset/sample/fixed_bytes", nil)
-	stateChangeEncodingSamplePrevRows       = metrics.NewRegisteredCounter("state/history/changeset/sample/prev_rows", nil)
-	stateChangeEncodingSampleNextRows       = metrics.NewRegisteredCounter("state/history/changeset/sample/next_rows", nil)
+	stateChangeEncodingSampleSequence           atomic.Uint64
+	stateChangeEncodingSampleRowsCounter        = metrics.NewRegisteredCounter("state/history/changeset/sample/rows", nil)
+	stateChangeEncodingSampleEncodedCounter     = metrics.NewRegisteredCounter("state/history/changeset/sample/encoded_bytes", nil)
+	stateChangeEncodingSampleKeyCounter         = metrics.NewRegisteredCounter("state/history/changeset/sample/logical_key_bytes", nil)
+	stateChangeEncodingSamplePrevCounter        = metrics.NewRegisteredCounter("state/history/changeset/sample/prev_bytes", nil)
+	stateChangeEncodingSampleNextCounter        = metrics.NewRegisteredCounter("state/history/changeset/sample/next_bytes", nil)
+	stateChangeEncodingSampleOmittedNextCounter = metrics.NewRegisteredCounter("state/history/changeset/sample/omitted_next_bytes", nil)
+	stateChangeEncodingSampleFixedCounter       = metrics.NewRegisteredCounter("state/history/changeset/sample/fixed_bytes", nil)
+	stateChangeEncodingSamplePrevRows           = metrics.NewRegisteredCounter("state/history/changeset/sample/prev_rows", nil)
+	stateChangeEncodingSampleNextRows           = metrics.NewRegisteredCounter("state/history/changeset/sample/next_rows", nil)
+	stateChangeEncodingSampleOmittedNextRows    = metrics.NewRegisteredCounter("state/history/changeset/sample/omitted_next_rows", nil)
 )
 
 // NextStateTxRange returns the compact global txNum range for the next block.
@@ -83,9 +85,11 @@ func (d StateFlatDomain) String() string {
 	}
 }
 
-// StateDomainChange records one mutation in a flat latest domain. Account
-// latest and KV generation Prev/Next values are the physical row payloads; KV
-// latest values are the decoded account-KV payloads, with the latest-row
+// StateDomainChange records one mutation in a flat latest domain. Prev is the
+// history payload used by unwind and as-of reads. Next is transient commit
+// context (and remains populated when decoding legacy rows); new history rows
+// do not persist it because the current image already lives in the latest
+// domain. KV-latest values are semantic account-KV payloads, with the physical
 // presence wrapper applied only when rows or commitment leaves are restored.
 type StateDomainChange struct {
 	BlockNum   uint64
@@ -101,6 +105,25 @@ type StateDomainChange struct {
 	Prev       []byte
 	NextExists bool
 	Next       []byte
+}
+
+// persistedStateDomainChange is the hot-history representation. Like Erigon's
+// DomainBufferedWriter/AddPrevValue path, history stores the value from before
+// the mutation; the current value lives once in the flat latest domain. Keeping
+// Next on StateDomainChange remains useful while commit capture compares the
+// before/after images, but it is intentionally absent from persisted history.
+type persistedStateDomainChange struct {
+	BlockNum   uint64
+	BlockHash  common.Hash
+	TxNum      uint64
+	Seq        uint64
+	FlatDomain StateFlatDomain
+	Owner      common.Address
+	Generation uint64
+	Domain     kvdomains.KVDomain
+	Key        []byte
+	PrevExists bool
+	Prev       []byte
 }
 
 type StateKVHistoryReader interface {
@@ -188,29 +211,28 @@ func WriteStateDomainChangeRow(db ethdb.KeyValueWriter, change *StateDomainChang
 	if err := validateStateDomainChange(change); err != nil {
 		return err
 	}
-	c := cloneStateDomainChange(change)
-	data, err := rlp.EncodeToBytes(c)
+	data, err := encodePersistedStateDomainChange(change)
 	if err != nil {
 		return err
 	}
-	observeStateChangeEncoding(c, data)
-	return db.Put(stateChangeSetKey(c.BlockNum, c.Seq), data)
+	observeStateChangeEncoding(change, data)
+	return db.Put(stateChangeSetKey(change.BlockNum, change.Seq), data)
 }
 
-// observeStateChangeEncoding attributes the existing RLP payload without
-// decoding or allocating on the write path. The sampled fixed bucket contains
-// block/tx/sequence/domain/owner metadata, presence flags, and RLP framing —
-// everything other than the logical key and the two value images. Production
-// uses these shares to choose between a compact row format and an unwind-only
-// far-sync carrier; it does not change the persisted representation.
+// observeStateChangeEncoding attributes the encoded previous-image-only row
+// without decoding or allocating. The fixed bucket contains block/tx/sequence,
+// domain/owner metadata, flags, and RLP framing. omitted_next_bytes measures
+// the transient forward image deliberately excluded from the persisted row;
+// the legacy next_bytes/next_rows counters remain registered at zero so the
+// deployment can be compared directly with the preceding binary.
 func observeStateChangeEncoding(change *StateDomainChange, encoded []byte) {
 	if change == nil || stateChangeEncodingSampleSequence.Add(1)%stateChangeEncodingSampleInterval != 1 {
 		return
 	}
 	keyBytes := len(change.Key)
 	prevBytes := len(change.Prev)
-	nextBytes := len(change.Next)
-	fixedBytes := len(encoded) - keyBytes - prevBytes - nextBytes
+	omittedNextBytes := len(change.Next)
+	fixedBytes := len(encoded) - keyBytes - prevBytes
 	if fixedBytes < 0 {
 		fixedBytes = 0
 	}
@@ -218,14 +240,57 @@ func observeStateChangeEncoding(change *StateDomainChange, encoded []byte) {
 	stateChangeEncodingSampleEncodedCounter.Inc(int64(len(encoded)))
 	stateChangeEncodingSampleKeyCounter.Inc(int64(keyBytes))
 	stateChangeEncodingSamplePrevCounter.Inc(int64(prevBytes))
-	stateChangeEncodingSampleNextCounter.Inc(int64(nextBytes))
+	stateChangeEncodingSampleOmittedNextCounter.Inc(int64(omittedNextBytes))
 	stateChangeEncodingSampleFixedCounter.Inc(int64(fixedBytes))
 	if change.PrevExists {
 		stateChangeEncodingSamplePrevRows.Inc(1)
 	}
 	if change.NextExists {
-		stateChangeEncodingSampleNextRows.Inc(1)
+		stateChangeEncodingSampleOmittedNextRows.Inc(1)
 	}
+}
+
+func encodePersistedStateDomainChange(change *StateDomainChange) ([]byte, error) {
+	return rlp.EncodeToBytes(&persistedStateDomainChange{
+		BlockNum:   change.BlockNum,
+		BlockHash:  change.BlockHash,
+		TxNum:      change.TxNum,
+		Seq:        change.Seq,
+		FlatDomain: change.FlatDomain,
+		Owner:      change.Owner,
+		Generation: change.Generation,
+		Domain:     change.Domain,
+		Key:        change.Key,
+		PrevExists: change.PrevExists,
+		Prev:       change.Prev,
+	})
+}
+
+func decodePersistedStateDomainChange(data []byte) (*StateDomainChange, error) {
+	var row persistedStateDomainChange
+	if err := rlp.DecodeBytes(data, &row); err == nil {
+		return &StateDomainChange{
+			BlockNum:   row.BlockNum,
+			BlockHash:  row.BlockHash,
+			TxNum:      row.TxNum,
+			Seq:        row.Seq,
+			FlatDomain: row.FlatDomain,
+			Owner:      row.Owner,
+			Generation: row.Generation,
+			Domain:     row.Domain,
+			Key:        append([]byte(nil), row.Key...),
+			PrevExists: row.PrevExists,
+			Prev:       append([]byte(nil), row.Prev...),
+		}, nil
+	}
+	// Read-only transition for the currently running test database. Fresh rows
+	// never take this path; once the node is reset, the legacy decoder can be
+	// deleted without another format migration.
+	var legacy StateDomainChange
+	if err := rlp.DecodeBytes(data, &legacy); err != nil {
+		return nil, err
+	}
+	return cloneStateDomainChange(&legacy), nil
 }
 
 // WriteStateDomainChangeInverseIndex writes the latest-key -> block index for
@@ -269,11 +334,11 @@ func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*Stat
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	var row StateDomainChange
-	if err := rlp.DecodeBytes(data, &row); err != nil {
+	row, err := decodePersistedStateDomainChange(data)
+	if err != nil {
 		return nil, false, err
 	}
-	return cloneStateDomainChange(&row), true, nil
+	return row, true, nil
 }
 
 func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
@@ -285,11 +350,11 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 		if !bytes.HasPrefix(key, prefix) {
 			continue
 		}
-		var row StateDomainChange
-		if err := rlp.DecodeBytes(it.Value(), &row); err != nil {
+		row, err := decodePersistedStateDomainChange(it.Value())
+		if err != nil {
 			return err
 		}
-		cont, err := fn(cloneStateDomainChange(&row))
+		cont, err := fn(row)
 		if err != nil {
 			return err
 		}

@@ -137,7 +137,7 @@ func TestRestoreHistoryFromVerifiedManifestRestoresHotRowsAndIndexes(t *testing.
 	}); err != nil {
 		t.Fatalf("IterateStateDomainChangesByKey: %v", err)
 	}
-	if len(keyed) != 1 || keyed[0].TxNum != 10 || string(keyed[0].Next) != "new-a" {
+	if len(keyed) != 1 || keyed[0].TxNum != 10 || string(keyed[0].Prev) != "old-a" || keyed[0].NextExists {
 		t.Fatalf("keyed restored changes = %+v", keyed)
 	}
 }
