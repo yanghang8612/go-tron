@@ -1703,6 +1703,19 @@ first establish byte/operation shares. Only an index-dominated result justifies
 designing a far-sync deferred-index stage; changeset dominance instead points
 to earlier cold segment construction or a sync-specific minimal unwind window.
 
+Three production samples rejected index-only deferral as the primary change.
+Changeset payload rows contributed 88.5% of temporal logical bytes, inverse
+index rows 11.5%, and tx-range rows 0.03%; operation shares were about 69.5%,
+30.5%, and 0.1%. At this height temporal rows also exceeded commitment bytes.
+The next diagnostic samples one of every 128 already-encoded changesets and
+attributes its RLP payload to previous value, next value, logical key, and fixed
+metadata/framing. It adds no encoding or decoding and leaves all writes intact.
+If previous+next images dominate, a far-sync unwind-only representation can
+retain the previous image while omitting forward/history accessors until the
+node enters its final retention horizon. If fixed metadata dominates, a compact
+schema that derives block/sequence/hash context from the row and tx-range keys
+is the appropriate first reduction.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

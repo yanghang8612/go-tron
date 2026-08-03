@@ -152,6 +152,64 @@ func TestStateDomainChangeRoundTripAndIteration(t *testing.T) {
 	}
 }
 
+func TestWriteStateDomainChangeSamplesEncodingComponents(t *testing.T) {
+	sequenceBefore := stateChangeEncodingSampleSequence.Swap(0)
+	defer stateChangeEncodingSampleSequence.Store(sequenceBefore)
+	db := ethrawdb.NewMemoryDatabase()
+	change := &StateDomainChange{
+		BlockNum:   11,
+		BlockHash:  common.Hash{0x11},
+		TxNum:      17,
+		Seq:        3,
+		FlatDomain: StateFlatDomainKVLatest,
+		Owner:      common.Address{0x41, 0x11},
+		Generation: 2,
+		Domain:     kvdomains.ContractStorage,
+		Key:        []byte("slot/key"),
+		PrevExists: true,
+		Prev:       []byte("previous-value"),
+		NextExists: true,
+		Next:       []byte("next-value"),
+	}
+	rowsBefore := stateChangeEncodingSampleRowsCounter.Snapshot().Count()
+	encodedBefore := stateChangeEncodingSampleEncodedCounter.Snapshot().Count()
+	keyBefore := stateChangeEncodingSampleKeyCounter.Snapshot().Count()
+	prevBefore := stateChangeEncodingSamplePrevCounter.Snapshot().Count()
+	nextBefore := stateChangeEncodingSampleNextCounter.Snapshot().Count()
+	fixedBefore := stateChangeEncodingSampleFixedCounter.Snapshot().Count()
+	prevRowsBefore := stateChangeEncodingSamplePrevRows.Snapshot().Count()
+	nextRowsBefore := stateChangeEncodingSampleNextRows.Snapshot().Count()
+
+	if err := WriteStateDomainChangeRow(db, change); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := db.Get(stateChangeSetKey(change.BlockNum, change.Seq))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := len(encoded) - len(change.Key) - len(change.Prev) - len(change.Next)
+	checks := []struct {
+		name   string
+		before int64
+		after  int64
+		want   int64
+	}{
+		{name: "rows", before: rowsBefore, after: stateChangeEncodingSampleRowsCounter.Snapshot().Count(), want: 1},
+		{name: "encoded", before: encodedBefore, after: stateChangeEncodingSampleEncodedCounter.Snapshot().Count(), want: int64(len(encoded))},
+		{name: "key", before: keyBefore, after: stateChangeEncodingSampleKeyCounter.Snapshot().Count(), want: int64(len(change.Key))},
+		{name: "prev", before: prevBefore, after: stateChangeEncodingSamplePrevCounter.Snapshot().Count(), want: int64(len(change.Prev))},
+		{name: "next", before: nextBefore, after: stateChangeEncodingSampleNextCounter.Snapshot().Count(), want: int64(len(change.Next))},
+		{name: "fixed", before: fixedBefore, after: stateChangeEncodingSampleFixedCounter.Snapshot().Count(), want: int64(fixed)},
+		{name: "prev rows", before: prevRowsBefore, after: stateChangeEncodingSamplePrevRows.Snapshot().Count(), want: 1},
+		{name: "next rows", before: nextRowsBefore, after: stateChangeEncodingSampleNextRows.Snapshot().Count(), want: 1},
+	}
+	for _, check := range checks {
+		if got := check.after - check.before; got != check.want {
+			t.Errorf("%s delta = %d, want %d", check.name, got, check.want)
+		}
+	}
+}
+
 func TestStateDomainChangeRowAndInverseIndexPublishSeparately(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	owner := common.Address{0x41, 0x22}

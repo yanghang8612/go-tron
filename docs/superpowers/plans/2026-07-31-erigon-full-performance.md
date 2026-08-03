@@ -204,8 +204,12 @@
   backpressure, and buffered-layer bounds against P4.34.
 - [x] Split state-history physical attribution into tx-range, changeset, and
   inverse-index streams without changing their persisted schema or behavior.
-- [ ] Run the split temporal-write production sample and choose deferred index,
-  earlier cold aggregation, or a minimal far-sync unwind window from evidence.
+- [x] Run the split temporal-write production sample and reject index-only
+  deferral because changeset payloads dominate temporal logical bytes.
+- [x] Add allocation-free sampled changeset component attribution for previous
+  image, next image, logical key, and fixed RLP metadata/framing.
+- [ ] Run the changeset-component production sample and choose unwind-only
+  far-sync rows, compact row encoding, or earlier cold aggregation from evidence.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

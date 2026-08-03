@@ -6,12 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+)
+
+const stateChangeEncodingSampleInterval = uint64(128)
+
+var (
+	stateChangeEncodingSampleSequence       atomic.Uint64
+	stateChangeEncodingSampleRowsCounter    = metrics.NewRegisteredCounter("state/history/changeset/sample/rows", nil)
+	stateChangeEncodingSampleEncodedCounter = metrics.NewRegisteredCounter("state/history/changeset/sample/encoded_bytes", nil)
+	stateChangeEncodingSampleKeyCounter     = metrics.NewRegisteredCounter("state/history/changeset/sample/logical_key_bytes", nil)
+	stateChangeEncodingSamplePrevCounter    = metrics.NewRegisteredCounter("state/history/changeset/sample/prev_bytes", nil)
+	stateChangeEncodingSampleNextCounter    = metrics.NewRegisteredCounter("state/history/changeset/sample/next_bytes", nil)
+	stateChangeEncodingSampleFixedCounter   = metrics.NewRegisteredCounter("state/history/changeset/sample/fixed_bytes", nil)
+	stateChangeEncodingSamplePrevRows       = metrics.NewRegisteredCounter("state/history/changeset/sample/prev_rows", nil)
+	stateChangeEncodingSampleNextRows       = metrics.NewRegisteredCounter("state/history/changeset/sample/next_rows", nil)
 )
 
 // NextStateTxRange returns the compact global txNum range for the next block.
@@ -177,7 +193,39 @@ func WriteStateDomainChangeRow(db ethdb.KeyValueWriter, change *StateDomainChang
 	if err != nil {
 		return err
 	}
+	observeStateChangeEncoding(c, data)
 	return db.Put(stateChangeSetKey(c.BlockNum, c.Seq), data)
+}
+
+// observeStateChangeEncoding attributes the existing RLP payload without
+// decoding or allocating on the write path. The sampled fixed bucket contains
+// block/tx/sequence/domain/owner metadata, presence flags, and RLP framing —
+// everything other than the logical key and the two value images. Production
+// uses these shares to choose between a compact row format and an unwind-only
+// far-sync carrier; it does not change the persisted representation.
+func observeStateChangeEncoding(change *StateDomainChange, encoded []byte) {
+	if change == nil || stateChangeEncodingSampleSequence.Add(1)%stateChangeEncodingSampleInterval != 1 {
+		return
+	}
+	keyBytes := len(change.Key)
+	prevBytes := len(change.Prev)
+	nextBytes := len(change.Next)
+	fixedBytes := len(encoded) - keyBytes - prevBytes - nextBytes
+	if fixedBytes < 0 {
+		fixedBytes = 0
+	}
+	stateChangeEncodingSampleRowsCounter.Inc(1)
+	stateChangeEncodingSampleEncodedCounter.Inc(int64(len(encoded)))
+	stateChangeEncodingSampleKeyCounter.Inc(int64(keyBytes))
+	stateChangeEncodingSamplePrevCounter.Inc(int64(prevBytes))
+	stateChangeEncodingSampleNextCounter.Inc(int64(nextBytes))
+	stateChangeEncodingSampleFixedCounter.Inc(int64(fixedBytes))
+	if change.PrevExists {
+		stateChangeEncodingSamplePrevRows.Inc(1)
+	}
+	if change.NextExists {
+		stateChangeEncodingSampleNextRows.Inc(1)
+	}
 }
 
 // WriteStateDomainChangeInverseIndex writes the latest-key -> block index for
