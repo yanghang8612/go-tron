@@ -238,9 +238,13 @@ Status:
   snapshot if the rebuilt root differs from the signed snapshot boundary root.
   The lower-level restore APIs expose this as an injectable boundary verifier so
   packages that cannot import the commitment engine directly avoid cycles.
-- Binary StateDomainChange history segment v2 now stores an explicit block
-  tx-range table before record payloads, so restore can preserve block ranges
-  even when a block has no state-domain changes. v1 readers remain accepted.
+- Binary StateDomainChange history segment v2 introduced an explicit block
+  tx-range table before record payloads, so restore preserves block ranges even
+  when a block has no state-domain changes. New segments use v5: each record
+  stores only TxNum, logical domain/key identity, and the previous value;
+  BlockNum/BlockHash come from that table, Seq is derived from the block-local
+  TxNum ordinal plus immutable record ordinal, and transient Next is absent.
+  v1/v2 readers remain accepted and compaction stream-transcodes them to v5.
 - Chain-freezer snapshots now have a registered `chain-freezer` manifest family
   and binary segment format for continuous block ranges containing the current
   ancient `bodies`, `tx_infos`, and `state_roots` tables. Strict manifest

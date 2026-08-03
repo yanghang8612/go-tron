@@ -44,6 +44,141 @@ func TestStateDomainChangeBinaryRecordRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeBinaryV5OmitsDuplicatedContextAndNext(t *testing.T) {
+	changes := []*rawdb.StateDomainChange{
+		binaryStateDomainChange(7, 40, 1, "slot/a"),
+		binaryStateDomainChange(7, 41, 2, "slot/b"),
+		binaryStateDomainChange(8, 42, 1, "slot/c"),
+	}
+	txRanges := []*rawdb.StateTxRange{
+		{BlockNum: 7, BlockHash: changes[0].BlockHash, BeginTxNum: 40, EndTxNum: 41},
+		{BlockNum: 8, BlockHash: changes[2].BlockHash, BeginTxNum: 42, EndTxNum: 42},
+	}
+	v5, _, _, err := encodeStateDomainChangeBinarySegment(40, 42, changes, txRanges)
+	if err != nil {
+		t.Fatalf("encode v5 segment: %v", err)
+	}
+	v2 := encodeStateDomainChangeBinarySegmentV2ForTest(t, 40, 42, changes, txRanges)
+	var omitted int
+	for _, change := range changes {
+		// BlockNum(8) + BlockHash(32) + Seq(8) + NextExists(1) +
+		// Next length(4), plus the transient next image itself.
+		omitted += 53 + len(change.Next)
+	}
+	if got := len(v2) - len(v5); got != omitted {
+		t.Fatalf("v5 saved %d bytes, want %d", got, omitted)
+	}
+	if version := binary.BigEndian.Uint32(v5[8:12]); version != stateDomainChangeBinaryVersionV5 {
+		t.Fatalf("segment version = %d, want v5", version)
+	}
+
+	dir := t.TempDir()
+	legacyRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 40, ToTxNum: 42, Path: "history/v2-context.seg"}
+	setStateDomainChangeBinaryRefMetadata(&legacyRef, v2)
+	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, legacyRef.Path), v2); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := readStateDomainChangeBinarySegment(dir, legacyRef)
+	if err != nil {
+		t.Fatalf("read legacy v2 segment: %v", err)
+	}
+	if len(legacy) != len(changes) || legacy[1].Seq != 2 || !legacy[1].NextExists || !bytes.Equal(legacy[1].Next, changes[1].Next) {
+		t.Fatalf("legacy v2 context was not preserved: %+v", legacy)
+	}
+
+	ref := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 40, ToTxNum: 42, Path: "history/v5-context.seg"}
+	segRef, _, err := writeStateDomainChangeBinaryFiles(dir, ref, changes, txRanges)
+	if err != nil {
+		t.Fatalf("write v5 segment: %v", err)
+	}
+	got, err := readStateDomainChangeBinarySegment(dir, segRef)
+	if err != nil {
+		t.Fatalf("read v5 segment: %v", err)
+	}
+	for i, change := range got {
+		want := changes[i]
+		row := txRanges[0]
+		if want.BlockNum == 8 {
+			row = txRanges[1]
+		}
+		wantSeq, err := stateDomainChangeBinaryV5Sequence(row, want.TxNum, uint64(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if change.BlockNum != want.BlockNum || change.BlockHash != want.BlockHash || change.TxNum != want.TxNum || change.Seq != wantSeq {
+			t.Fatalf("change %d context = block %d/%x tx %d seq %d", i, change.BlockNum, change.BlockHash, change.TxNum, change.Seq)
+		}
+		if change.NextExists || len(change.Next) != 0 {
+			t.Fatalf("change %d retained transient next image", i)
+		}
+	}
+}
+
+func TestStateDomainChangeBinaryV5SequenceIsUniqueAcrossSplitBlock(t *testing.T) {
+	dir := t.TempDir()
+	blockHash := common.Hash{0x77}
+	rangeRow := &rawdb.StateTxRange{BlockNum: 7, BlockHash: blockHash, BeginTxNum: 40, EndTxNum: 41}
+	first := binaryStateDomainChange(7, 40, 1, "slot/a")
+	first.BlockHash = blockHash
+	second := binaryStateDomainChange(7, 41, 2, "slot/b")
+	second.BlockHash = blockHash
+
+	firstRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 40, ToTxNum: 40, Path: "history/split-40.seg"}
+	secondRef := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 41, ToTxNum: 41, Path: "history/split-41.seg"}
+	firstRef, _, err := writeStateDomainChangeBinaryFiles(dir, firstRef, []*rawdb.StateDomainChange{first}, []*rawdb.StateTxRange{rangeRow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRef, _, err = writeStateDomainChangeBinaryFiles(dir, secondRef, []*rawdb.StateDomainChange{second}, []*rawdb.StateTxRange{rangeRow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstChanges, err := readStateDomainChangeBinarySegment(dir, firstRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondChanges, err := readStateDomainChangeBinarySegment(dir, secondRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstChanges[0].Seq == secondChanges[0].Seq || firstChanges[0].Seq >= secondChanges[0].Seq {
+		t.Fatalf("split-block sequences = %d, %d; want unique increasing values", firstChanges[0].Seq, secondChanges[0].Seq)
+	}
+}
+
+func encodeStateDomainChangeBinarySegmentV2ForTest(t *testing.T, fromTxNum, toTxNum uint64, changes []*rawdb.StateDomainChange, txRanges []*rawdb.StateTxRange) []byte {
+	t.Helper()
+	data, _, _ := encodeStateDomainChangeBinarySegmentV2IndexesForTest(t, fromTxNum, toTxNum, changes, txRanges)
+	return data
+}
+
+func encodeStateDomainChangeBinarySegmentV2IndexesForTest(t *testing.T, fromTxNum, toTxNum uint64, changes []*rawdb.StateDomainChange, txRanges []*rawdb.StateTxRange) ([]byte, []stateDomainChangeBinaryTxOffset, []stateDomainChangeBinaryAccessorEntry) {
+	t.Helper()
+	var out bytes.Buffer
+	writeStateDomainChangeBinaryHeaderVersion(&out, stateDomainChangeBinarySegmentMagic, fromTxNum, toTxNum, uint64(len(changes)), stateDomainChangeBinaryVersionV2)
+	if err := writeStateDomainChangeBinaryTxRangeTable(&out, txRanges); err != nil {
+		t.Fatal(err)
+	}
+	var index []stateDomainChangeBinaryTxOffset
+	accessor := make([]stateDomainChangeBinaryAccessorEntry, 0, len(changes))
+	for i, change := range changes {
+		payload, err := encodeStateDomainChangeRecord(change)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offset := uint64(out.Len())
+		writeUint32(&out, uint32(len(payload)))
+		out.Write(payload)
+		accessor = append(accessor, stateDomainChangeBinaryAccessorEntry{key: stateDomainChangeBinaryAccessorKey(change), txNum: change.TxNum, seq: change.Seq, offset: offset, recordIndex: uint64(i)})
+		if len(index) == 0 || index[len(index)-1].txNum != change.TxNum {
+			index = append(index, stateDomainChangeBinaryTxOffset{txNum: change.TxNum, offset: offset, recordIndex: uint64(i), count: 1})
+		} else {
+			index[len(index)-1].count++
+		}
+	}
+	return out.Bytes(), index, accessor
+}
+
 func TestStateDomainChangeBinaryV2AccessorCompatibility(t *testing.T) {
 	dir := t.TempDir()
 	ref := SegmentRef{
@@ -115,7 +250,7 @@ func TestStateDomainChangeBinaryV2AccessorCompatibility(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	assertBinaryChangeOrder(t, prefixed, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}, {txNum: 11, seq: 1, key: "slot/b"}})
+	assertBinaryChangeOrder(t, prefixed, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}, {txNum: 11, seq: 2, key: "slot/b"}})
 }
 
 func TestStateDomainChangeBinaryV3AccessorRejectsCountBeyondRecordIndex(t *testing.T) {
@@ -177,7 +312,7 @@ func TestStateDomainChangeBinaryV3AccessorCompatibility(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	assertBinaryChangeOrder(t, got, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}, {txNum: 11, seq: 1, key: "slot/b"}})
+	assertBinaryChangeOrder(t, got, []binaryChangeOrder{{txNum: 10, seq: 1, key: "slot/a"}, {txNum: 11, seq: 2, key: "slot/b"}})
 }
 
 func encodeStateDomainChangeBinaryAccessorV2ForTest(fromTxNum, toTxNum uint64, entries []stateDomainChangeBinaryAccessorEntry) ([]byte, error) {
@@ -259,9 +394,9 @@ func TestStateDomainChangeBinaryFilesRoundTripChecksumSizeAndIndex(t *testing.T)
 	assertBinaryChangeOrder(t, got, []binaryChangeOrder{
 		{txNum: 10, seq: 1, key: "a"},
 		{txNum: 10, seq: 2, key: "b"},
-		{txNum: 11, seq: 1, key: "c"},
-		{txNum: 12, seq: 1, key: "e"},
-		{txNum: 12, seq: 2, key: "d"},
+		{txNum: 11, seq: 3, key: "c"},
+		{txNum: 12, seq: 4, key: "e"},
+		{txNum: 12, seq: 5, key: "d"},
 	})
 
 	index, err := readStateDomainChangeBinaryIndex(dir, idxRef)
@@ -291,9 +426,9 @@ func TestStateDomainChangeBinaryFilesRoundTripChecksumSizeAndIndex(t *testing.T)
 	assertBinaryAccessorOrder(t, accessor, []binaryChangeOrder{
 		{txNum: 10, seq: 1, key: "a"},
 		{txNum: 10, seq: 2, key: "b"},
-		{txNum: 11, seq: 1, key: "c"},
-		{txNum: 12, seq: 2, key: "d"},
-		{txNum: 12, seq: 1, key: "e"},
+		{txNum: 11, seq: 3, key: "c"},
+		{txNum: 12, seq: 5, key: "d"},
+		{txNum: 12, seq: 4, key: "e"},
 	})
 	if accessor[0].offset != recordOffset {
 		t.Fatalf("first accessor offset = %d, want %d", accessor[0].offset, recordOffset)
@@ -435,7 +570,7 @@ func TestStateDomainChangeBinarySegmentCheckStreamsAndValidates(t *testing.T) {
 	unsorted := ref
 	unsorted.Path = "history/state-domain-change-70-71-unsorted.seg"
 	unsortedData, _, _, err := encodeStateDomainChangeBinarySegment(unsorted.FromTxNum, unsorted.ToTxNum, []*rawdb.StateDomainChange{
-		binaryStateDomainChange(70, 70, 2, "b"),
+		binaryStateDomainChange(71, 71, 1, "b"),
 		binaryStateDomainChange(70, 70, 1, "a"),
 	}, nil)
 	if err != nil {
@@ -505,8 +640,8 @@ func TestStateDomainChangeBinaryStableSortAndBytes(t *testing.T) {
 	assertBinaryChangeOrder(t, got, []binaryChangeOrder{
 		{txNum: 20, seq: 1, key: "d"},
 		{txNum: 20, seq: 2, key: "a"},
-		{txNum: 20, seq: 2, key: "b"},
-		{txNum: 21, seq: 1, key: "c"},
+		{txNum: 20, seq: 3, key: "b"},
+		{txNum: 21, seq: 4, key: "c"},
 	})
 }
 
@@ -540,18 +675,18 @@ func TestStateDomainChangeBinaryIndexReadsTxRange(t *testing.T) {
 		t.Fatalf("read tx range through index: %v", err)
 	}
 	assertBinaryChangeOrder(t, got, []binaryChangeOrder{
-		{txNum: 31, seq: 1, key: "b"},
-		{txNum: 31, seq: 2, key: "c"},
-		{txNum: 32, seq: 1, key: "d"},
+		{txNum: 31, seq: 2, key: "b"},
+		{txNum: 31, seq: 3, key: "c"},
+		{txNum: 32, seq: 4, key: "d"},
 	})
 	fileGot, err := readStateDomainChangeBinarySegmentTxRangeByIndexFile(dir, segRef, idxRef, 31, 32)
 	if err != nil {
 		t.Fatalf("read tx range through index file: %v", err)
 	}
 	assertBinaryChangeOrder(t, fileGot, []binaryChangeOrder{
-		{txNum: 31, seq: 1, key: "b"},
-		{txNum: 31, seq: 2, key: "c"},
-		{txNum: 32, seq: 1, key: "d"},
+		{txNum: 31, seq: 2, key: "b"},
+		{txNum: 31, seq: 3, key: "c"},
+		{txNum: 32, seq: 4, key: "d"},
 	})
 }
 
@@ -726,7 +861,9 @@ func TestStateDomainChangeBinaryV4KeyRangeSeeksTxLowerBound(t *testing.T) {
 		t.Fatalf("changes = %+v, want first tx 4000", got)
 	}
 	t.Logf("key tx lower-bound seek used %d segment reads for %d changes", countedSegment.reads, changeCount)
-	if countedSegment.reads > 40 {
+	// v5 also resolves the returned record's BlockNum/BlockHash through the
+	// logarithmic StateTxRange table; 48 bounds both binary searches.
+	if countedSegment.reads > 48 {
 		t.Fatalf("key tx lower-bound seek used %d segment reads for %d changes, want logarithmic reads", countedSegment.reads, changeCount)
 	}
 }

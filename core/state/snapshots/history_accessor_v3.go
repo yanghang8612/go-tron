@@ -340,13 +340,17 @@ func stateDomainChangeBinaryAccessorV3ExactUpperBound(r io.ReaderAt, layout stat
 // monotonic order, so the requested tx lower bound can be found without
 // decoding every older history record for a frequently-mutated key.
 func stateDomainChangeBinaryAccessorV3TxLowerBound(segment io.ReaderAt, segmentSize uint64, accessor io.ReaderAt, layout stateDomainChangeBinaryAccessorV3Layout, low, high, fromTxNum uint64) (uint64, error) {
+	segmentHeader, err := stateDomainChangeBinaryHeaderForReader(segment)
+	if err != nil {
+		return 0, err
+	}
 	for low < high {
 		mid := low + (high-low)/2
 		entry, err := readStateDomainChangeBinaryAccessorV3ExactEntryAt(accessor, layout, mid)
 		if err != nil {
 			return 0, err
 		}
-		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, entry.offset, segmentSize)
+		change, _, err := readStateDomainChangeBinaryRecordFrame(segment, entry.offset, segmentSize, segmentHeader.version, uint64(entry.recordIndex), false)
 		if err != nil {
 			return 0, err
 		}
@@ -408,7 +412,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorV3Key(segment io.ReaderAt, s
 		if err != nil {
 			return err
 		}
-		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, entry.offset, segmentSize)
+		change, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, entry.offset, segmentSize, uint64(entry.recordIndex))
 		if err != nil {
 			return err
 		}
@@ -449,7 +453,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorV3Prefix(segment io.ReaderAt
 		if err != nil {
 			return err
 		}
-		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, record.offset, segmentSize)
+		change, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, record.offset, segmentSize, uint64(record.recordIndex))
 		if err != nil {
 			return err
 		}
@@ -494,7 +498,7 @@ func readStateDomainChangeBinaryAccessorV3Debug(dir string, ref SegmentRef, acce
 		if err != nil {
 			return nil, err
 		}
-		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, exact.offset, segmentSize)
+		change, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, exact.offset, segmentSize, uint64(exact.recordIndex))
 		if err != nil {
 			return nil, err
 		}
@@ -598,7 +602,7 @@ func readStateDomainChangeBinaryRecordAtIndex(segment io.ReaderAt, segmentSize u
 	}
 	offset := entry.offset
 	for i := entry.recordIndex; i <= recordIndex; i++ {
-		change, next, err := readStateDomainChangeBinaryRecordAtBounded(segment, offset, segmentSize)
+		change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, offset, segmentSize, i)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -718,7 +722,7 @@ func iterateStateDomainChangeBinaryRecords(segment io.ReaderAt, segmentSize uint
 		return err
 	}
 	for index := uint64(0); index < header.count; index++ {
-		change, next, err := readStateDomainChangeBinaryRecordAtBounded(segment, offset, segmentSize)
+		change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, offset, segmentSize, index)
 		if err != nil {
 			return err
 		}

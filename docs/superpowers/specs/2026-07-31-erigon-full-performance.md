@@ -1858,6 +1858,42 @@ archive/reorg suite passed. These results pass P4.39; the remaining inverse-key
 storage cost belongs to immutable compressed index construction rather than
 canonical execution.
 
+#### P4.40: Erigon-style previous-value-only cold history
+
+P4.37 and P4.38 removed the forward image and duplicated block context from hot
+Pebble rows, but the cold binary format still repeated `BlockNum`, `BlockHash`,
+`Seq`, and an empty `Next` flag/length in every immutable record. Erigon's
+history values contain the previous value while transaction/block ordering is
+owned by immutable indexes and aggregation metadata, so retaining those fields
+inside every compressed value adds decode and compaction volume without adding
+authority.
+
+StateDomainChange segment v5 now stores only `TxNum`, flat-domain identity,
+owner/generation/domain/key, and `Prev`. The one-per-block `StateTxRange` table
+restores `BlockNum` and `BlockHash`. Cold `Seq` is a deterministic packed value:
+the high 32 bits are `TxNum - block.BeginTxNum`, and the low 32 bits are the
+immutable segment record ordinal plus one. This remains ordered and unique even
+when a history boundary splits one block between segments at different txNum
+values; a dedicated split-block test protects that restore invariant. The v4
+accessor's uint32 record-index bound also bounds the low word.
+
+New in-memory and ETL builders emit v5 directly. Readers retain v1/v2 support
+for existing test data. Compaction no longer copies source payload bytes or
+arithmetically remaps old offsets: it stream-decodes each source record, emits
+one v5 frame at a time, then rebuilds the tx index in one bounded scan and the
+v4 accessor through the existing bounded ETL path. This makes mixed v2/v5
+compaction format-safe and keeps peak conversion memory at one record plus the
+configured ETL buffers.
+
+On the deterministic 20,000-record storage corpus shaped like current
+previous-only hot input, v5 reduced uncompressed segment bytes from 3,102,444
+to 2,042,444 (34.17%). Whole-segment zstd bytes fell from 954,872 to 906,491
+(5.07%); repeated legacy context already compressed well, so the larger gain is
+less logical data to encode, decode, validate, and merge. These are local format
+measurements, not a production throughput claim. The deployment gate must still
+measure cold build/merge duration, segment bytes, cold-stage lag, and concurrent
+sync/Pebble behavior.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

@@ -13,10 +13,10 @@ import (
 func TestStateDomainHistoryRecordReadersUseCompressedOpeners(t *testing.T) {
 	expected := map[string][]string{
 		"checkStateDomainChangeBinarySegment":                        {"openHistorySegmentForRead"},
+		"copyStateDomainChangeBinarySegmentPayload":                  {"openStateDomainChangeBinarySegmentReader"},
 		"iterateStateDomainChangeBinarySegmentByAccessorFile":        {"openHistorySegmentForRead", "openStateDomainChangeBinaryAccessorReader"},
 		"iterateStateDomainChangeBinarySegmentByAccessorPrefixFile":  {"openHistorySegmentForRead", "openStateDomainChangeBinaryAccessorReader"},
 		"iterateStateDomainChangeBinarySegmentTxRangeByIndexFile":    {"openHistorySegmentForRead"},
-		"readStateDomainChangeBinaryRecordAt":                        nil,
 		"readStateDomainChangeBinarySegment":                         {"openHistorySegmentForRead"},
 		"readStateDomainChangeBinarySegmentByAccessorEntries":        {"openHistorySegmentForRead"},
 		"readStateDomainChangeBinarySegmentTxRange":                  {"openHistorySegmentForRead"},
@@ -24,8 +24,8 @@ func TestStateDomainHistoryRecordReadersUseCompressedOpeners(t *testing.T) {
 		"stateDomainChangeBinaryIndexBlockLowerBound":                nil,
 		"validateCompressedHistorySegmentReadable":                   {"openHistorySegmentForRead"},
 		"validateStateDomainChangeBinaryAccessorEntryAgainstSegment": nil,
-		"validateStateDomainChangeBinaryIndexEntryAgainstSegment":    nil,
 		"verifyStateDomainChangeBinaryIndexCoverage":                 nil,
+		"writeCompactedStateDomainChangeBinaryIndex":                 {"openHistorySegmentForRead"},
 	}
 
 	actual := make(map[string][]string)
@@ -70,7 +70,7 @@ func callsStateDomainRecordReader(body *ast.BlockStmt) bool {
 			return true
 		}
 		switch ident.Name {
-		case "readStateDomainChangeBinaryRecordAt", "readStateDomainChangeBinaryRecordAtBounded":
+		case "readStateDomainChangeBinaryRecordAtBoundedIndex":
 			found = true
 			return false
 		default:

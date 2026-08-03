@@ -113,11 +113,11 @@ func TestCompressedHistorySegmentReaderEquivalence(t *testing.T) {
 	// Every accessor offset: the production record reader returns byte-identical
 	// records from the compressed segment and the raw segment.
 	for i, entry := range accessor {
-		wantChange, _, err := readStateDomainChangeBinaryRecordAtBounded(raw, entry.offset, rawSize)
+		wantChange, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(raw, entry.offset, rawSize, uint64(i))
 		if err != nil {
 			t.Fatalf("raw record %d @%d: %v", i, entry.offset, err)
 		}
-		gotChange, _, err := readStateDomainChangeBinaryRecordAtBounded(r, entry.offset, r.UncompressedSize())
+		gotChange, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(r, entry.offset, r.UncompressedSize(), uint64(i))
 		if err != nil {
 			t.Fatalf("compressed record %d @%d: %v", i, entry.offset, err)
 		}
@@ -130,11 +130,11 @@ func TestCompressedHistorySegmentReaderEquivalence(t *testing.T) {
 
 	// And the index offsets (tx-range entry points) resolve identically too.
 	for i, e := range index {
-		wantChange, _, err := readStateDomainChangeBinaryRecordAtBounded(raw, e.offset, rawSize)
+		wantChange, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(raw, e.offset, rawSize, e.recordIndex)
 		if err != nil {
 			t.Fatalf("raw index record %d: %v", i, err)
 		}
-		gotChange, _, err := readStateDomainChangeBinaryRecordAtBounded(r, e.offset, r.UncompressedSize())
+		gotChange, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(r, e.offset, r.UncompressedSize(), e.recordIndex)
 		if err != nil {
 			t.Fatalf("compressed index record %d: %v", i, err)
 		}
@@ -389,8 +389,8 @@ func TestCompressedHistorySegmentFullReadAndCheck(t *testing.T) {
 		t.Fatalf("full read count %d, want %d", len(got), len(normalized))
 	}
 	for i := range got {
-		wEnc, _ := encodeStateDomainChangeRecord(normalized[i])
-		gEnc, _ := encodeStateDomainChangeRecord(got[i])
+		wEnc, _ := encodeStateDomainChangeRecordV5(normalized[i])
+		gEnc, _ := encodeStateDomainChangeRecordV5(got[i])
 		if !bytes.Equal(wEnc, gEnc) {
 			t.Fatalf("full read record %d mismatch", i)
 		}

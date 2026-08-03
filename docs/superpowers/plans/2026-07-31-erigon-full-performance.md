@@ -224,8 +224,10 @@
   un-solidified suffix through direct block-changeset scans.
 - [x] Run the derived-index production gate and compare temporal family share,
   ETL cost, coalesced output, disk/compaction bytes, stalls, and query parity.
-- [ ] Remove next-image fields from the cold binary history format together
+- [x] Remove next-image fields from the cold binary history format together
   with duplicated block/sequence context after the hot-row production gates.
+- [ ] Run the cold-history v5 production gate and compare segment build/merge
+  duration, raw/compressed bytes, cold-stage lag, and sync/compaction impact.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

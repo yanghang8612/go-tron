@@ -78,8 +78,8 @@ func TestCompactHistoryDomainMergesContinuousBinarySegments(t *testing.T) {
 	}
 	assertBinaryChangeOrder(t, got, []binaryChangeOrder{
 		{txNum: 1, seq: 1, key: "a"},
-		{txNum: 2, seq: 1, key: "b"},
-		{txNum: 3, seq: 1, key: "c"},
+		{txNum: 2, seq: 2, key: "b"},
+		{txNum: 3, seq: 3, key: "c"},
 	})
 
 	assertFileExists(t, filepath.Join(dir, historyRef.Path))
@@ -207,7 +207,7 @@ func TestCompactHistoryDomainPreservesRepeatedAccessorKeys(t *testing.T) {
 	}
 	assertBinaryChangeOrder(t, got, []binaryChangeOrder{
 		{txNum: 1, seq: 1, key: "slot/shared"},
-		{txNum: 2, seq: 1, key: "slot/shared"},
+		{txNum: 2, seq: 2, key: "slot/shared"},
 	})
 }
 
@@ -252,7 +252,87 @@ func TestCompactHistoryDomainUpgradesV2AccessorToV4(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("iterate compacted v4 prefix: %v", err)
 	}
-	assertBinaryChangeOrder(t, got, []binaryChangeOrder{{txNum: 1, seq: 1, key: "slot/a"}, {txNum: 2, seq: 1, key: "slot/b"}})
+	assertBinaryChangeOrder(t, got, []binaryChangeOrder{{txNum: 1, seq: 1, key: "slot/a"}, {txNum: 2, seq: 2, key: "slot/b"}})
+}
+
+func TestCompactHistoryDomainTranscodesV2HistoryRecordsToV5(t *testing.T) {
+	dir := t.TempDir()
+	first := binaryStateDomainChange(1, 1, 1, "slot/a")
+	second := binaryStateDomainChange(2, 2, 1, "slot/b")
+	firstRefs := writeCompactionStateDomainChangeSegment(t, dir, 1, 1, first)
+	rewriteStateDomainChangeHistoryAsV2(t, dir, firstRefs, first)
+	refs := append([]SegmentRef{}, firstRefs...)
+	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 2, 2, second)...)
+	if err := PublishManifest(dir, NewManifest(1, 2, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
+	if err != nil {
+		t.Fatalf("compact v2/v5 history: %v", err)
+	}
+	historyRef := compactionRefByKind(t, result, SegmentHistory)
+	reader, _, header, err := openHistorySegmentForRead(dir, historyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reader.Close()
+	if header.version != stateDomainChangeBinaryVersionV5 {
+		t.Fatalf("compacted history version = %d, want v5", header.version)
+	}
+	changes, err := readStateDomainChangeBinarySegment(dir, historyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBinaryChangeOrder(t, changes, []binaryChangeOrder{{txNum: 1, seq: 1, key: "slot/a"}, {txNum: 2, seq: 2, key: "slot/b"}})
+	if changes[0].NextExists || changes[1].NextExists {
+		t.Fatal("compacted v5 history retained transient next images")
+	}
+}
+
+func rewriteStateDomainChangeHistoryAsV2(t *testing.T, dir string, refs []SegmentRef, changes ...*rawdb.StateDomainChange) {
+	t.Helper()
+	normalized := normalizeStateDomainChangesForBinary(changes)
+	var historyRef SegmentRef
+	for _, ref := range refs {
+		if ref.Kind == SegmentHistory {
+			historyRef = ref
+			break
+		}
+	}
+	if historyRef.Path == "" {
+		t.Fatal("history ref not found")
+	}
+	txRanges, err := normalizeStateTxRangesForBinary(historyRef.FromTxNum, historyRef.ToTxNum, normalized, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentData, index, accessor := encodeStateDomainChangeBinarySegmentV2IndexesForTest(t, historyRef.FromTxNum, historyRef.ToTxNum, normalized, txRanges)
+	indexData, err := encodeStateDomainChangeBinaryIndex(historyRef.FromTxNum, historyRef.ToTxNum, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessor(historyRef.FromTxNum, historyRef.ToTxNum, accessor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range refs {
+		var data []byte
+		switch refs[i].Kind {
+		case SegmentHistory:
+			data = segmentData
+		case SegmentInverted:
+			data = indexData
+		case SegmentAccessor:
+			data = accessorData
+		default:
+			continue
+		}
+		if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, refs[i].Path), data); err != nil {
+			t.Fatal(err)
+		}
+		setStateDomainChangeBinaryRefMetadata(&refs[i], data)
+	}
 }
 
 func rewriteStateDomainChangeAccessorAsV2(t *testing.T, dir string, ref *SegmentRef) {

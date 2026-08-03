@@ -261,7 +261,7 @@ func iterateStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, f
 }
 
 func encodeStateDomainChangeBinaryRecordFrame(change *rawdb.StateDomainChange) ([]byte, error) {
-	payload, err := encodeStateDomainChangeRecord(change)
+	payload, err := encodeStateDomainChangeRecordV5(change)
 	if err != nil {
 		return nil, err
 	}
@@ -593,7 +593,7 @@ func buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir string, segmen
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	for recordIndex := uint64(0); recordIndex < header.count; recordIndex++ {
-		change, next, err := readStateDomainChangeBinaryRecordAtBounded(segment, offset, segmentSize)
+		change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, offset, segmentSize, recordIndex)
 		if err != nil {
 			return SegmentRef{}, etl.Stats{}, err
 		}

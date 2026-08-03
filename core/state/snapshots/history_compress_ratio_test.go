@@ -59,9 +59,9 @@ func mixedValue(rng *rand.Rand) []byte {
 	}
 }
 
-// buildHistoryCorpus returns encoded StateDomainChange records grouped into
-// blocks (each block shares BlockNum/BlockHash; records carry sequential
-// TxNum/Seq), for the requested dataset profile. valueFn produces Prev/Next.
+// buildHistoryCorpus returns v5 previous-value-only records for the requested
+// dataset profile. valueFn produces transient before/after images, but v5 emits
+// only Prev; block context, Seq and Next are intentionally absent.
 func buildHistoryCorpus(t *testing.T, blocks, recordsPerBlock int, account bool, valueFn func(*rand.Rand) []byte) [][]byte {
 	t.Helper()
 	rng := rand.New(rand.NewSource(20260602))
@@ -117,7 +117,7 @@ func buildHistoryCorpus(t *testing.T, blocks, recordsPerBlock int, account bool,
 					ch.Prev = valueFn(rng)
 				}
 			}
-			enc, err := encodeStateDomainChangeRecord(ch)
+			enc, err := encodeStateDomainChangeRecordV5(ch)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -229,6 +229,38 @@ func TestHistoryAccessorV4IndexComposition(t *testing.T) {
 	t.Logf("  v4 exact table            = %8d", exactBytes)
 	t.Logf("  v4 prefix groups           = %8d (%d groups)", groupBytes, layout.groupCount)
 	t.Logf("  v4 raw versus v2 zstd     = %.2fx", float64(v2Compressed)/float64(len(accessorData)))
+}
+
+func TestHistoryV5PreviousValueOnlySizeGate(t *testing.T) {
+	changes := normalizeStateDomainChangesForBinary(buildHistoryStructs(400, 50))
+	// Current hot history no longer persists Next, so compare against the actual
+	// legacy-v2 input shape a new cold build would otherwise have emitted.
+	for _, change := range changes {
+		change.NextExists = false
+		change.Next = nil
+	}
+	from, to := uint64(9_000_000), uint64(9_000_399)
+	txRanges, err := normalizeStateTxRangesForBinary(from, to, changes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v5, _, _, err := encodeStateDomainChangeBinarySegment(from, to, changes, txRanges)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2 := encodeStateDomainChangeBinarySegmentV2ForTest(t, from, to, changes, txRanges)
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enc.Close()
+	v2Compressed := len(enc.EncodeAll(v2, nil))
+	v5Compressed := len(enc.EncodeAll(v5, nil))
+	if len(v5) >= len(v2) || v5Compressed >= v2Compressed {
+		t.Fatalf("v5 did not reduce history: raw %d/%d compressed %d/%d", len(v5), len(v2), v5Compressed, v2Compressed)
+	}
+	t.Logf("records=%d raw_v2=%d raw_v5=%d raw_saved=%.2f%% zstd_v2=%d zstd_v5=%d zstd_saved=%.2f%%",
+		len(changes), len(v2), len(v5), 100*(1-float64(len(v5))/float64(len(v2))), v2Compressed, v5Compressed, 100*(1-float64(v5Compressed)/float64(v2Compressed)))
 }
 
 // TestHistoryCompressionRatioGate is the go/no-go measurement (not a pass/fail

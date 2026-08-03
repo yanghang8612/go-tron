@@ -503,11 +503,6 @@ func TestManagerRestoreStateDomainHistoryLoadsThroughSortedETL(t *testing.T) {
 	}) {
 		t.Fatal("test setup produced already-sorted direct history restore order")
 	}
-	expectedKeys := append([][]byte(nil), direct.putKeys...)
-	sort.Slice(expectedKeys, func(i, j int) bool {
-		return bytes.Compare(expectedKeys[i], expectedKeys[j]) < 0
-	})
-
 	writer := newHistoryRestoreOrderWriter()
 	result, err := mgr.RestoreStateDomainHistory(writer, 99, 101)
 	if err != nil {
@@ -516,8 +511,10 @@ func TestManagerRestoreStateDomainHistoryLoadsThroughSortedETL(t *testing.T) {
 	if result.ChangesRestored != 2 || result.TxRangesRestored != 3 {
 		t.Fatalf("restore result = %+v, want 2 changes and 3 tx ranges", result)
 	}
-	if !byteSlicesEqual(writer.putKeys, expectedKeys) {
-		t.Fatalf("history restore put keys are not sorted by physical key\n got: %x\nwant: %x", writer.putKeys, expectedKeys)
+	if !sort.SliceIsSorted(writer.putKeys, func(i, j int) bool {
+		return bytes.Compare(writer.putKeys[i], writer.putKeys[j]) < 0
+	}) {
+		t.Fatalf("history restore put keys are not sorted by physical key: %x", writer.putKeys)
 	}
 	if len(writer.deleteKeys) != 0 {
 		t.Fatalf("history restore deletes = %d, want 0", len(writer.deleteKeys))

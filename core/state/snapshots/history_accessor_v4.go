@@ -250,7 +250,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorV4Key(segment io.ReaderAt, s
 		if err != nil {
 			return err
 		}
-		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, entry.offset, segmentSize)
+		change, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, entry.offset, segmentSize, uint64(entry.recordIndex))
 		if err != nil {
 			return err
 		}
@@ -305,7 +305,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorV4Prefix(segment io.ReaderAt
 		if err != nil {
 			return err
 		}
-		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, record.offset, segmentSize)
+		change, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, record.offset, segmentSize, uint64(record.recordIndex))
 		if err != nil {
 			return err
 		}
@@ -344,7 +344,7 @@ func readStateDomainChangeBinaryAccessorV4Debug(dir string, ref SegmentRef, acce
 		if err != nil {
 			return nil, err
 		}
-		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segment, exact.offset, segmentSize)
+		change, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, exact.offset, segmentSize, uint64(exact.recordIndex))
 		if err != nil {
 			return nil, err
 		}
