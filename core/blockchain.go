@@ -2347,9 +2347,19 @@ func (bc *BlockChain) accountTraceOwnersAtBlock(block *types.Block) (map[tcommon
 	}
 	blockNum := block.Number()
 	blockHash := block.Hash()
+	txRange, ok, err := rawdb.ReadStateTxRange(bc.buffer, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read state tx range for block %d: %w", blockNum, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("missing state tx range for block %d", blockNum)
+	}
+	if txRange.BlockNum != blockNum || txRange.BlockHash != blockHash {
+		return nil, fmt.Errorf("state tx range belongs to block %d (%x), want %d (%x)", txRange.BlockNum, txRange.BlockHash, blockNum, blockHash)
+	}
 	if err := rawdb.IterateStateDomainChanges(bc.buffer, blockNum, func(change *rawdb.StateDomainChange) (bool, error) {
-		if change.BlockNum != blockNum || change.BlockHash != blockHash {
-			return false, fmt.Errorf("state change belongs to block %d (%x), want %d (%x)", change.BlockNum, change.BlockHash, blockNum, blockHash)
+		if change.BlockNum != blockNum {
+			return false, fmt.Errorf("state change belongs to block %d, want %d", change.BlockNum, blockNum)
 		}
 		if change.FlatDomain == rawdb.StateFlatDomainAccountLatest {
 			owners[change.Owner] = struct{}{}

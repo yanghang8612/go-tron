@@ -124,6 +124,9 @@ func TestStateDomainChangeRoundTripAndIteration(t *testing.T) {
 	if got.FlatDomain != StateFlatDomainKVLatest || got.Domain != kvdomains.SystemReward || !bytes.Equal(got.Prev, []byte("old")) || got.NextExists || got.Next != nil {
 		t.Fatalf("change = %+v", got)
 	}
+	if got.BlockNum != change1.BlockNum || got.Seq != change1.Seq || got.BlockHash != (common.Hash{}) {
+		t.Fatalf("derived row context = block:%d seq:%d hash:%x", got.BlockNum, got.Seq, got.BlockHash)
+	}
 	got.Prev[0] = 'x'
 	reread, _, _ := ReadStateDomainChange(db, 9, 1)
 	if bytes.Equal(reread.Prev, got.Prev) {
@@ -197,6 +200,17 @@ func TestWriteStateDomainChangeSamplesEncodingComponents(t *testing.T) {
 	if len(encoded) >= len(legacyEncoded) {
 		t.Fatalf("previous-only row = %d bytes, want smaller than legacy %d", len(encoded), len(legacyEncoded))
 	}
+	priorEncoded, err := rlp.EncodeToBytes(&legacyPersistedStateDomainChange{
+		BlockNum: change.BlockNum, BlockHash: change.BlockHash, TxNum: change.TxNum, Seq: change.Seq,
+		FlatDomain: change.FlatDomain, Owner: change.Owner, Generation: change.Generation,
+		Domain: change.Domain, Key: change.Key, PrevExists: change.PrevExists, Prev: change.Prev,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= len(priorEncoded) {
+		t.Fatalf("context-hoisted row = %d bytes, want smaller than prior previous-only row %d", len(encoded), len(priorEncoded))
+	}
 	fixed := len(encoded) - len(change.Key) - len(change.Prev)
 	checks := []struct {
 		name   string
@@ -240,6 +254,27 @@ func TestReadStateDomainChangeAcceptsLegacyNextImageRow(t *testing.T) {
 	got, ok, err := ReadStateDomainChange(db, legacy.BlockNum, legacy.Seq)
 	if err != nil || !ok || !bytes.Equal(got.Prev, legacy.Prev) || !bytes.Equal(got.Next, legacy.Next) {
 		t.Fatalf("legacy row = %+v/%v/%v", got, ok, err)
+	}
+}
+
+func TestReadStateDomainChangeAcceptsLegacyPreviousOnlyRow(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	legacy := &legacyPersistedStateDomainChange{
+		BlockNum: 13, BlockHash: common.Hash{0x13}, TxNum: 21, Seq: 3,
+		FlatDomain: StateFlatDomainKVLatest, Owner: common.Address{0x41, 0x13},
+		Generation: 4, Domain: kvdomains.ContractStorage, Key: []byte("slot"),
+		PrevExists: true, Prev: []byte("before"),
+	}
+	encoded, err := rlp.EncodeToBytes(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(stateChangeSetKey(legacy.BlockNum, legacy.Seq), encoded); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := ReadStateDomainChange(db, legacy.BlockNum, legacy.Seq)
+	if err != nil || !ok || got.BlockHash != legacy.BlockHash || !bytes.Equal(got.Prev, legacy.Prev) {
+		t.Fatalf("legacy previous-only row = %+v/%v/%v", got, ok, err)
 	}
 }
 
@@ -671,15 +706,15 @@ func TestIterateStateDomainChangesByTxRangeSameBlock(t *testing.T) {
 		}
 	}
 
-	var got []uint64
+	var got []*StateDomainChange
 	if err := IterateStateDomainChangesByTxRange(db, begin+1, begin+1, func(change *StateDomainChange) (bool, error) {
-		got = append(got, change.Seq)
+		got = append(got, cloneStateDomainChange(change))
 		return true, nil
 	}); err != nil {
 		t.Fatalf("iterate tx range: %v", err)
 	}
-	if len(got) != 1 || got[0] != 2 {
-		t.Fatalf("seqs in tx range = %v, want [2]", got)
+	if len(got) != 1 || got[0].Seq != 2 || got[0].BlockNum != 12 || got[0].BlockHash != (common.Hash{0x12}) {
+		t.Fatalf("changes in tx range = %+v, want block 12 hash 12 seq 2", got)
 	}
 }
 

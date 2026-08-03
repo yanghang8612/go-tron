@@ -120,8 +120,8 @@ func TestApplyBlock_HistoryEnabledRoutesToBuffer(t *testing.T) {
 	var sawDynProp bool
 	touchedAccounts := make(map[tcommon.Address]bool)
 	if err := rawdb.IterateStateDomainChanges(bc.buffer, 1, func(change *rawdb.StateDomainChange) (bool, error) {
-		if change.BlockHash != block1.Hash() {
-			t.Fatalf("StateDomainChange block hash = %x, want %x", change.BlockHash, block1.Hash())
+		if change.BlockNum != block1.Number() {
+			t.Fatalf("StateDomainChange block number = %d, want %d", change.BlockNum, block1.Number())
 		}
 		if change.FlatDomain == rawdb.StateFlatDomainAccountLatest {
 			touchedAccounts[change.Owner] = true
@@ -170,6 +170,14 @@ func TestApplyBlock_HistoryEnabledRoutesToBuffer(t *testing.T) {
 	}
 	if _, ok := rawdb.ReadAccountTrace(bc.db, testInsertAddr(2).Bytes(), 1); ok {
 		t.Fatal("HistoryEnabled unexpectedly persisted TRON AccountTrace")
+	}
+	bc.buffer.BeginBlock(tcommon.Hash{0xee}, 2)
+	defer bc.buffer.DiscardActive()
+	if err := rawdb.WriteStateTxRange(bc.buffer, 1, tcommon.Hash{0xff}, txRange.BeginTxNum, txRange.EndTxNum); err != nil {
+		t.Fatalf("replace StateTxRange with wrong branch hash: %v", err)
+	}
+	if _, err := bc.accountTraceOwnersAtBlock(block1); err == nil {
+		t.Fatal("accountTraceOwnersAtBlock accepted changeset block context from the wrong branch")
 	}
 }
 

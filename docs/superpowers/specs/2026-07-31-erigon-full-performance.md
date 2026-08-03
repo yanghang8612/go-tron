@@ -1752,6 +1752,34 @@ thus carry no next image (only the empty legacy fields); a later binary-format
 revision can remove those final flag/length bytes together with duplicated
 block context after the hot-write reduction is measured.
 
+Two stable production windows after deployment covered 4,569 blocks / 246,133
+transactions and 16,750 sampled changesets. Average encoded row size fell from
+278.4 bytes in the paired P4.36 baseline to 180.3 bytes, a 35.2% reduction.
+Normalized per imported block, final coalesced output fell 15.5%, OS and Pebble
+writes both fell about 24.8%, compaction input fell 25.9%, and compaction output
+fell 26.9%. Both windows recorded zero Pebble write delay. Compaction debt rose
+during this sample, so the physical-byte deltas are directional, but the exact
+logical-row result and repeated physical reductions pass the P4.37 gate.
+
+#### P4.38: Hoist common block context out of hot changeset rows
+
+After removing the forward image, fixed metadata and framing account for about
+41.9% of the remaining hot changeset payload. Every row still repeats its block
+number, block hash, and sequence even though the physical key already contains
+`blockNum || seq`, and the one-per-block `StateTxRange` row already owns the
+canonical block hash. Erigon similarly keeps transaction ordering in history
+keys/indexes instead of duplicating block identity in each previous value.
+
+New hot rows therefore persist only tx number, typed latest-domain identity,
+logical key, and previous image. Direct block iteration reconstructs block
+number and sequence from the physical key without another point read. The cold
+builder already scans `StateTxRange`, so tx-range iteration stamps its block
+hash onto each yielded change before encoding immutable history. Fork planning
+reads and validates that same range once per orphan block before scanning its
+changes, preserving the canonical-branch guard without storing or checking the
+same hash on every row. Read-only fallbacks accept both preceding RLP layouts
+during the current test deployment; fresh writes use only the compact layout.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

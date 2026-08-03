@@ -212,10 +212,14 @@
   previous-image-only history because next images are 34.6% of payload bytes.
 - [x] Encode new hot changesets without the forward image, avoid cloning the
   borrowed next value, and retain a read-only legacy decoder during transition.
-- [ ] Run the previous-image-only production gate and compare changeset bytes,
+- [x] Run the previous-image-only production gate and compare changeset bytes,
   coalesced output, disk/compaction bytes, write stalls, and sync throughput.
+- [x] Hoist hot changeset block number/sequence into its physical key and block
+  hash into the one-per-block tx-range row, retaining one fork guard per block.
+- [ ] Run the context-hoisted hot-history production gate and compare sampled
+  row fixed bytes plus normalized coalesced/disk/compaction bytes.
 - [ ] Remove next-image fields from the cold binary history format together
-  with duplicated block/sequence context after the hot-row production gate.
+  with duplicated block/sequence context after the hot-row production gates.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

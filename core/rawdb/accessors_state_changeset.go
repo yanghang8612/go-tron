@@ -89,8 +89,11 @@ func (d StateFlatDomain) String() string {
 // history payload used by unwind and as-of reads. Next is transient commit
 // context (and remains populated when decoding legacy rows); new history rows
 // do not persist it because the current image already lives in the latest
-// domain. KV-latest values are semantic account-KV payloads, with the physical
-// presence wrapper applied only when rows or commitment leaves are restored.
+// domain. BlockNum and Seq are restored from the physical changeset key.
+// BlockHash is block-level context: tx-range iteration restores it from the
+// corresponding StateTxRange row, while direct block iteration leaves it zero.
+// KV-latest values are semantic account-KV payloads, with the physical presence
+// wrapper applied only when rows or commitment leaves are restored.
 type StateDomainChange struct {
 	BlockNum   uint64
 	BlockHash  common.Hash
@@ -112,7 +115,23 @@ type StateDomainChange struct {
 // the mutation; the current value lives once in the flat latest domain. Keeping
 // Next on StateDomainChange remains useful while commit capture compares the
 // before/after images, but it is intentionally absent from persisted history.
+// BlockNum and Seq are encoded in the physical key and BlockHash is stored once
+// in StateTxRange, so none of that common block context is repeated per row.
 type persistedStateDomainChange struct {
+	TxNum      uint64
+	FlatDomain StateFlatDomain
+	Owner      common.Address
+	Generation uint64
+	Domain     kvdomains.KVDomain
+	Key        []byte
+	PrevExists bool
+	Prev       []byte
+}
+
+// legacyPersistedStateDomainChange is the previous-image-only layout emitted
+// before block context was hoisted out of each row. It is read-only transition
+// support for a node that restarts on the preceding test database.
+type legacyPersistedStateDomainChange struct {
 	BlockNum   uint64
 	BlockHash  common.Hash
 	TxNum      uint64
@@ -220,8 +239,8 @@ func WriteStateDomainChangeRow(db ethdb.KeyValueWriter, change *StateDomainChang
 }
 
 // observeStateChangeEncoding attributes the encoded previous-image-only row
-// without decoding or allocating. The fixed bucket contains block/tx/sequence,
-// domain/owner metadata, flags, and RLP framing. omitted_next_bytes measures
+// without decoding or allocating. The fixed bucket contains tx/domain/owner
+// metadata, flags, and RLP framing. omitted_next_bytes measures
 // the transient forward image deliberately excluded from the persisted row;
 // the legacy next_bytes/next_rows counters remain registered at zero so the
 // deployment can be compared directly with the preceding binary.
@@ -252,10 +271,7 @@ func observeStateChangeEncoding(change *StateDomainChange, encoded []byte) {
 
 func encodePersistedStateDomainChange(change *StateDomainChange) ([]byte, error) {
 	return rlp.EncodeToBytes(&persistedStateDomainChange{
-		BlockNum:   change.BlockNum,
-		BlockHash:  change.BlockHash,
 		TxNum:      change.TxNum,
-		Seq:        change.Seq,
 		FlatDomain: change.FlatDomain,
 		Owner:      change.Owner,
 		Generation: change.Generation,
@@ -266,14 +282,13 @@ func encodePersistedStateDomainChange(change *StateDomainChange) ([]byte, error)
 	})
 }
 
-func decodePersistedStateDomainChange(data []byte) (*StateDomainChange, error) {
+func decodePersistedStateDomainChange(data []byte, blockNum, seq uint64) (*StateDomainChange, error) {
 	var row persistedStateDomainChange
 	if err := rlp.DecodeBytes(data, &row); err == nil {
 		return &StateDomainChange{
-			BlockNum:   row.BlockNum,
-			BlockHash:  row.BlockHash,
+			BlockNum:   blockNum,
 			TxNum:      row.TxNum,
-			Seq:        row.Seq,
+			Seq:        seq,
 			FlatDomain: row.FlatDomain,
 			Owner:      row.Owner,
 			Generation: row.Generation,
@@ -281,6 +296,22 @@ func decodePersistedStateDomainChange(data []byte) (*StateDomainChange, error) {
 			Key:        append([]byte(nil), row.Key...),
 			PrevExists: row.PrevExists,
 			Prev:       append([]byte(nil), row.Prev...),
+		}, nil
+	}
+	var prior legacyPersistedStateDomainChange
+	if err := rlp.DecodeBytes(data, &prior); err == nil {
+		return &StateDomainChange{
+			BlockNum:   prior.BlockNum,
+			BlockHash:  prior.BlockHash,
+			TxNum:      prior.TxNum,
+			Seq:        prior.Seq,
+			FlatDomain: prior.FlatDomain,
+			Owner:      prior.Owner,
+			Generation: prior.Generation,
+			Domain:     prior.Domain,
+			Key:        append([]byte(nil), prior.Key...),
+			PrevExists: prior.PrevExists,
+			Prev:       append([]byte(nil), prior.Prev...),
 		}, nil
 	}
 	// Read-only transition for the currently running test database. Fresh rows
@@ -334,7 +365,7 @@ func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*Stat
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	row, err := decodePersistedStateDomainChange(data)
+	row, err := decodePersistedStateDomainChange(data, blockNum, seq)
 	if err != nil {
 		return nil, false, err
 	}
@@ -347,10 +378,11 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 	defer it.Release()
 	for it.Next() {
 		key := it.Key()
-		if !bytes.HasPrefix(key, prefix) {
+		if !bytes.HasPrefix(key, prefix) || len(key) != len(stateChangeSetPrefix)+16 {
 			continue
 		}
-		row, err := decodePersistedStateDomainChange(it.Value())
+		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
+		row, err := decodePersistedStateDomainChange(it.Value(), blockNum, seq)
 		if err != nil {
 			return err
 		}
@@ -381,6 +413,7 @@ func IterateStateDomainChangesByTxRange(db ethdb.Iteratee, fromTxNum, toTxNum ui
 			if change.TxNum < fromTxNum || change.TxNum > toTxNum {
 				return true, nil
 			}
+			change.BlockHash = row.BlockHash
 			return fn(change)
 		}); err != nil {
 			return false, err
