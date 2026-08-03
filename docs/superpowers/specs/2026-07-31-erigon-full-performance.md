@@ -1676,6 +1676,33 @@ bounds. Shutdown still interrupts the timer, caught-up mainnet produces only
 about one block during the interval, and bulk-sync crash replay remains a
 bounded sub-two-second tail.
 
+The 1,920-ms deployment reached the intended ceiling. Its first stable
+52-second window imported 1,950 blocks / 116,750 transactions at 78.68
+layers/group; 24 flush calls produced 25 final groups, proving that at least one
+call hit a fixed source/output bound and split. Final bytes were 25.39% of
+source, about 302 KB/block, and OS writes were about 2.44 MB/block. Compaction
+debt grew by 3.13 GB in that window, then fell by 1.78 GB in the following
+52-second window while importing another 1,613 blocks / 114,151 transactions.
+Neither window recorded Pebble write delay; the debt-draining window had only
+two async-commit backpressure events totalling 141 ms. The output-bounded
+aggregation window therefore stays at 1,920 ms and will not be enlarged.
+
+#### P4.36: Temporal-write attribution before index deferral
+
+The remaining `state_history` family combines three physically and
+semantically different streams: one small block-to-txNum row, block/sequence
+changeset payloads required by unwind, and latest-key/block inverse-index rows
+used by historical keyed reads. Erigon treats history values and their accessors
+as separate aggregation products; delaying an accessor during far-behind staged
+sync can be valid even when the underlying changeset must remain available.
+
+The rawdb classifier now exposes `state_tx_range`, `state_changeset`, and
+`state_change_index` independently at the same sampled final-flush boundary.
+This changes no keys, writes, read paths, or retention policy. Production must
+first establish byte/operation shares. Only an index-dominated result justifies
+designing a far-sync deferred-index stage; changeset dominance instead points
+to earlier cold segment construction or a sync-specific minimal unwind window.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

@@ -21,7 +21,9 @@ const (
 	PhysicalKeyFamilyKVLatest
 	PhysicalKeyFamilyKVGeneration
 	PhysicalKeyFamilyStateCode
-	PhysicalKeyFamilyStateHistory
+	PhysicalKeyFamilyStateTxRange
+	PhysicalKeyFamilyStateChangeSet
+	PhysicalKeyFamilyStateChangeIndex
 	PhysicalKeyFamilyStagedBody
 	PhysicalKeyFamilyBlockBody
 	PhysicalKeyFamilyTransactionIndex
@@ -43,8 +45,12 @@ func PhysicalKeyFamilyName(family PhysicalKeyFamily) string {
 		return "kv_generation"
 	case PhysicalKeyFamilyStateCode:
 		return "state_code"
-	case PhysicalKeyFamilyStateHistory:
-		return "state_history"
+	case PhysicalKeyFamilyStateTxRange:
+		return "state_tx_range"
+	case PhysicalKeyFamilyStateChangeSet:
+		return "state_changeset"
+	case PhysicalKeyFamilyStateChangeIndex:
+		return "state_change_index"
 	case PhysicalKeyFamilyStagedBody:
 		return "staged_body"
 	case PhysicalKeyFamilyBlockBody:
@@ -76,10 +82,12 @@ func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 		return PhysicalKeyFamilyKVGeneration
 	case strings.HasPrefix(key, "state-code-v1-"):
 		return PhysicalKeyFamilyStateCode
-	case strings.HasPrefix(key, "state-tx-range-v1-"),
-		strings.HasPrefix(key, "state-changeset-v2-"),
-		strings.HasPrefix(key, "state-change-index-v2-"):
-		return PhysicalKeyFamilyStateHistory
+	case strings.HasPrefix(key, "state-tx-range-v1-"):
+		return PhysicalKeyFamilyStateTxRange
+	case strings.HasPrefix(key, "state-changeset-v2-"):
+		return PhysicalKeyFamilyStateChangeSet
+	case strings.HasPrefix(key, "state-change-index-v2-"):
+		return PhysicalKeyFamilyStateChangeIndex
 	case strings.HasPrefix(key, "sync-staged-block-v1-"):
 		return PhysicalKeyFamilyStagedBody
 	case strings.HasPrefix(key, "b-"):

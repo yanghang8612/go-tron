@@ -199,9 +199,13 @@
   raise the window to 960 ms so source input crosses the old 32 MiB boundary.
 - [x] Verify the 960-ms output-bounded path and promote it to 1,920 ms while
   measured final/source sizes remain below the fixed 32/128 MiB caps.
-- [ ] Run the output-bounded aggregation production gate and compare layers per
+- [x] Run the output-bounded aggregation production gate and compare layers per
   group, logical byte reduction, disk/compaction bytes per block, stalls,
   backpressure, and buffered-layer bounds against P4.34.
+- [x] Split state-history physical attribution into tx-range, changeset, and
+  inverse-index streams without changing their persisted schema or behavior.
+- [ ] Run the split temporal-write production sample and choose deferred index,
+  earlier cold aggregation, or a minimal far-sync unwind window from evidence.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
