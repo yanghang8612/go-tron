@@ -79,9 +79,12 @@ func TestDiscardShadowRetryWriteCaptureProjectsReadHierarchy(t *testing.T) {
 		},
 		senderNext: []int{-1, 3, -1, -1},
 	}
-	include, fullTransactions := newDiscardShadowRetryWriteCapture(source, 4)
+	include, fullTransactions, recorderOnly := newDiscardShadowRetryWriteCapture(source, 4)
 	if include == nil {
 		t.Fatal("retry write capture filter is nil")
+	}
+	if !recorderOnly {
+		t.Fatal("account-only retry projection should use recorder fast path")
 	}
 	if !fullTransactions[1] || fullTransactions[2] || !fullTransactions[3] {
 		t.Fatalf("full capture transactions = %v, want tx 1 and 3", fullTransactions)
@@ -102,6 +105,31 @@ func TestDiscardShadowRetryWriteCaptureProjectsReadHierarchy(t *testing.T) {
 		if got := include(test.key); got != test.want {
 			t.Fatalf("include(%+v) = %t, want %t", test.key, got, test.want)
 		}
+	}
+}
+
+func TestDiscardShadowRetryWriteCaptureFallsBackForNonAccountReads(t *testing.T) {
+	source := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{{
+			txIndex:         0,
+			senderVersioned: true,
+			reads: state.TransactionReadSet{Reads: []state.TransactionRead{{
+				Key: state.TransactionAccessKey{
+					Kind:       state.TransactionAccessStorage,
+					Address:    testProcessorAddr(4),
+					StorageKey: tcommon.Hash{31: 1},
+				},
+				Mode: state.TransactionAccessRead,
+			}}},
+		}},
+		senderNext: []int{-1},
+	}
+	include, _, recorderOnly := newDiscardShadowRetryWriteCapture(source, 1)
+	if include == nil {
+		t.Fatal("retry write capture filter is nil")
+	}
+	if recorderOnly {
+		t.Fatal("storage projection must retain journal fallback")
 	}
 }
 

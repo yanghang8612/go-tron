@@ -656,6 +656,8 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	captureFilteredCellsBefore := versionedShadowWriteCaptureFilteredCellsCounter.Snapshot().Count()
 	captureFullNanosBefore := versionedShadowWriteCaptureFullNanosCounter.Snapshot().Count()
 	captureFilteredNanosBefore := versionedShadowWriteCaptureFilteredNanosCounter.Snapshot().Count()
+	captureRecorderTransactionsBefore := versionedShadowWriteCaptureRecorderTransactionsCounter.Snapshot().Count()
+	captureRecorderNanosBefore := versionedShadowWriteCaptureRecorderNanosCounter.Snapshot().Count()
 	captureFilteredEmptyBefore := versionedShadowWriteCaptureFilteredEmptyCounter.Snapshot().Count()
 	captureUnsupportedBefore := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count()
 	captureErrorsBefore := versionedShadowWriteCaptureErrorsCounter.Snapshot().Count()
@@ -712,6 +714,15 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	}
 	if blockNumber%discardShadowSampleInterval == 0 && (filteredCells != 0 || filteredNanos != 0) {
 		t.Fatalf("sampled filtered write capture cells/nanos = %d/%d, want 0/0", filteredCells, filteredNanos)
+	}
+	recorderTransactions := versionedShadowWriteCaptureRecorderTransactionsCounter.Snapshot().Count() - captureRecorderTransactionsBefore
+	recorderNanos := versionedShadowWriteCaptureRecorderNanosCounter.Snapshot().Count() - captureRecorderNanosBefore
+	if blockNumber%discardShadowSampleInterval == 0 {
+		if recorderTransactions != 0 || recorderNanos != 0 {
+			t.Fatalf("sampled recorder-only capture transactions/nanos = %d/%d, want 0/0", recorderTransactions, recorderNanos)
+		}
+	} else if recorderTransactions != filteredCaptured || recorderNanos <= 0 {
+		t.Fatalf("ordinary recorder-only capture transactions/nanos = %d/%d, want %d/>0", recorderTransactions, recorderNanos, filteredCaptured)
 	}
 	filteredEmpty := versionedShadowWriteCaptureFilteredEmptyCounter.Snapshot().Count() - captureFilteredEmptyBefore
 	if blockNumber%discardShadowSampleInterval == 0 && filteredEmpty != 0 {

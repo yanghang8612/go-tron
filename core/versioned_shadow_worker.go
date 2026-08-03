@@ -1184,9 +1184,9 @@ func (filter *discardShadowRetryWriteFilter) include(key state.TransactionAccess
 	}
 }
 
-func newDiscardShadowRetryWriteCapture(source *discardShadowPreexecution, transactionCount int) (func(state.TransactionAccessKey) bool, []bool) {
+func newDiscardShadowRetryWriteCapture(source *discardShadowPreexecution, transactionCount int) (func(state.TransactionAccessKey) bool, []bool, bool) {
 	if source == nil || transactionCount <= 0 {
-		return nil, nil
+		return nil, nil, false
 	}
 	filter := &discardShadowRetryWriteFilter{
 		exact:            make(map[state.TransactionAccessKey]struct{}, 32),
@@ -1194,6 +1194,7 @@ func newDiscardShadowRetryWriteCapture(source *discardShadowPreexecution, transa
 		fullAccountReads: make(map[tcommon.Address]struct{}, 4),
 	}
 	fullTransactions := make([]bool, transactionCount)
+	recorderOnly := true
 	for _, result := range source.results {
 		txIndex := result.txIndex
 		if txIndex < 0 || txIndex >= transactionCount || txIndex >= len(source.senderNext) ||
@@ -1218,6 +1219,9 @@ func newDiscardShadowRetryWriteCapture(source *discardShadowPreexecution, transa
 				state.TransactionAccessRawKV:
 				continue
 			}
+			if !state.TransactionAccessRecorderCoversWrites(read.Key.Kind) {
+				recorderOnly = false
+			}
 			filter.exact[read.Key] = struct{}{}
 			switch read.Key.Kind {
 			case state.TransactionAccessAccount:
@@ -1228,7 +1232,7 @@ func newDiscardShadowRetryWriteCapture(source *discardShadowPreexecution, transa
 			}
 		}
 	}
-	return filter.include, fullTransactions
+	return filter.include, fullTransactions, recorderOnly
 }
 
 // transferSenderChains returns independent scheduling units. A chain may span

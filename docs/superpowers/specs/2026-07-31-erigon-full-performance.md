@@ -1374,6 +1374,42 @@ smaller initial capacity; empty projected transactions retain their known
 status but allocate no key/mode maps and skip prefix application. Empty counts
 are exported alongside the full/filtered cell and timing split.
 
+After also removing DynamicProperties/raw-KV cells from the projected carrier,
+a stable 58-second window imported 1,600 blocks / 165,224 transactions (27.6
+blocks/s and 2,849 tx/s) and published 210/210 retries without mismatch or
+error. The 34,959 captured transactions materialized 75,260 cells (2.15 per
+transaction) in 223.7 ms: 8,426 full captures averaged 6.35 cells / 8.06
+microseconds, while 26,533 filtered captures averaged 0.82 cells / 5.87
+microseconds and 4,778 of those were empty. Average capture cost was 6.40
+microseconds per transaction and 0.78 ms per enabled block; prefix application
+averaged 3.62 microseconds per advance.
+
+#### P4.30: Mutation-time projected value carriers
+
+The P4.29 filtered path still walked every undo-journal entry at the transaction
+boundary, even when the retry projection retained no writes. Ordinary Transfer
+retry projections now skip that scan when all retained key families have
+complete inline-recorder coverage. Account/full-account and scalar-field writes
+were already registered at their authoritative mutation sites. AccountKV puts,
+deletes, and Erigon-style generation resets are now registered there as well,
+covering the permission/incarnation reads observed in real Transfer retries.
+
+The supported-kind decision is centralized in the state package rather than
+being inferred by the scheduler. If a retry projection contains storage, code,
+witness, contract metadata, transient storage, or any future unregistered kind,
+capture automatically retains the P4.29 full-journal path. Sender-chain members
+and sampled correctness cohorts also keep full capture for publication audit.
+The optimized path only materializes final values for matching recorder writes;
+it does not copy a worker StateDB, relax version validation, or change canonical
+transaction ordering.
+
+`core/versioned_shadow/write_set_capture/recorder_only_transactions` and
+`recorder_only_nanos` expose the production hit rate and cost independently of
+the existing full/filtered totals. The deployment gate remains zero published
+WriteSet mismatch/error and zero unsupported capture; performance is evaluated
+against P4.29's 5.87-microsecond filtered-capture and 0.78-ms enabled-block
+baselines.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

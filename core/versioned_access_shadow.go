@@ -41,6 +41,8 @@ var (
 	versionedShadowWriteCaptureFilteredCellsCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/filtered_cells", nil)
 	versionedShadowWriteCaptureFullNanosCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/full_nanos", nil)
 	versionedShadowWriteCaptureFilteredNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/filtered_nanos", nil)
+	versionedShadowWriteCaptureRecorderTransactionsCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/recorder_only_transactions", nil)
+	versionedShadowWriteCaptureRecorderNanosCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/recorder_only_nanos", nil)
 	versionedShadowWriteCaptureEmptyTransactionsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/empty_transactions", nil)
 	versionedShadowWriteCaptureFilteredEmptyCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/filtered_empty_transactions", nil)
 	versionedShadowWriteCaptureCellsCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/write_set_capture/cells", nil)
@@ -131,42 +133,44 @@ var (
 // unknown journal entries are counted conservatively and canonical state stays
 // entirely on the existing serial path.
 type versionedAccessShadow struct {
-	recorder             state.TransactionAccessRecorder
-	versions             map[state.TransactionAccessKey]int
-	rawAccountVersions   map[tcommon.Address]int
-	accountFullVersions  map[tcommon.Address]int
-	accountAnyVersions   map[tcommon.Address]int
-	accountFieldVersions map[state.TransactionAccountFieldKey]int
-	transactionOwners    []tcommon.Address
-	transactionHasOwner  []bool
-	senderChainDepths    []int
-	lastSenderTx         map[tcommon.Address]int
-	dependencyWaves      []int
-	dependencyWaveWidths []int
-	dependencyHeads      []int
-	dependencyEdges      []transactionDependencyEdge
-	transactionSupported []bool
-	transactionDurations []int64
-	transactionWriteSets []state.TransactionWriteSet
-	transactionWritesOK  []bool
-	writeCaptureInclude  func(state.TransactionAccessKey) bool
-	writeCaptureFull     []bool
-	transactionStarted   time.Time
-	lastBarrierTx        int
-	dependencyMinWave    int
-	dependencyMaxWave    int
-	stats                versionedAccessShadowStats
+	recorder                 state.TransactionAccessRecorder
+	versions                 map[state.TransactionAccessKey]int
+	rawAccountVersions       map[tcommon.Address]int
+	accountFullVersions      map[tcommon.Address]int
+	accountAnyVersions       map[tcommon.Address]int
+	accountFieldVersions     map[state.TransactionAccountFieldKey]int
+	transactionOwners        []tcommon.Address
+	transactionHasOwner      []bool
+	senderChainDepths        []int
+	lastSenderTx             map[tcommon.Address]int
+	dependencyWaves          []int
+	dependencyWaveWidths     []int
+	dependencyHeads          []int
+	dependencyEdges          []transactionDependencyEdge
+	transactionSupported     []bool
+	transactionDurations     []int64
+	transactionWriteSets     []state.TransactionWriteSet
+	transactionWritesOK      []bool
+	writeCaptureInclude      func(state.TransactionAccessKey) bool
+	writeCaptureFull         []bool
+	writeCaptureRecorderOnly bool
+	transactionStarted       time.Time
+	lastBarrierTx            int
+	dependencyMinWave        int
+	dependencyMaxWave        int
+	stats                    versionedAccessShadowStats
 }
 
 func (s *versionedAccessShadow) EnableWriteSetCapture(transactionCount int) {
-	s.EnableWriteSetCaptureFiltered(transactionCount, nil, nil)
+	s.EnableWriteSetCaptureFiltered(transactionCount, nil, nil, false)
 }
 
-func (s *versionedAccessShadow) EnableWriteSetCaptureFiltered(transactionCount int, include func(state.TransactionAccessKey) bool, fullTransactions []bool) {
+func (s *versionedAccessShadow) EnableWriteSetCaptureFiltered(transactionCount int, include func(state.TransactionAccessKey) bool, fullTransactions []bool, recorderOnly bool) {
 	s.transactionWriteSets = make([]state.TransactionWriteSet, transactionCount)
 	s.transactionWritesOK = make([]bool, transactionCount)
 	s.writeCaptureInclude = include
 	s.writeCaptureFull = fullTransactions
+	s.writeCaptureRecorderOnly = recorderOnly
 	s.stats.writeCaptureBlocks = 1
 }
 
@@ -200,6 +204,8 @@ type versionedAccessShadowStats struct {
 	writeCaptureFilteredCells            int64
 	writeCaptureFullNanos                int64
 	writeCaptureFilteredNanos            int64
+	writeCaptureRecorderTransactions     int64
+	writeCaptureRecorderNanos            int64
 	writeCaptureEmptyTransactions        int64
 	writeCaptureFilteredEmpty            int64
 	writeCaptureCells                    int64
@@ -445,7 +451,15 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 			s.stats.writeCaptureFilteredTransactions++
 		}
 		captureStarted := time.Now()
-		writes, known, captureErr := statedb.CaptureTransactionWriteSetFiltered(journalMark, &s.recorder, dynProps, include)
+		recorderOnly := !fullCapture && s.writeCaptureRecorderOnly
+		var writes state.TransactionWriteSet
+		var known bool
+		var captureErr error
+		if recorderOnly {
+			writes, known, captureErr = statedb.CaptureTransactionRecorderWriteSetFiltered(&s.recorder, include)
+		} else {
+			writes, known, captureErr = statedb.CaptureTransactionWriteSetFiltered(journalMark, &s.recorder, dynProps, include)
+		}
 		captureNanos := time.Since(captureStarted).Nanoseconds()
 		s.stats.writeCaptureTransactions++
 		s.stats.writeCaptureNanos += captureNanos
@@ -453,6 +467,10 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 			s.stats.writeCaptureFullNanos += captureNanos
 		} else {
 			s.stats.writeCaptureFilteredNanos += captureNanos
+		}
+		if recorderOnly {
+			s.stats.writeCaptureRecorderTransactions++
+			s.stats.writeCaptureRecorderNanos += captureNanos
 		}
 		switch {
 		case captureErr != nil:
@@ -1173,6 +1191,8 @@ func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.
 	versionedShadowWriteCaptureFilteredCellsCounter.Inc(stats.writeCaptureFilteredCells)
 	versionedShadowWriteCaptureFullNanosCounter.Inc(stats.writeCaptureFullNanos)
 	versionedShadowWriteCaptureFilteredNanosCounter.Inc(stats.writeCaptureFilteredNanos)
+	versionedShadowWriteCaptureRecorderTransactionsCounter.Inc(stats.writeCaptureRecorderTransactions)
+	versionedShadowWriteCaptureRecorderNanosCounter.Inc(stats.writeCaptureRecorderNanos)
 	versionedShadowWriteCaptureEmptyTransactionsCounter.Inc(stats.writeCaptureEmptyTransactions)
 	versionedShadowWriteCaptureFilteredEmptyCounter.Inc(stats.writeCaptureFilteredEmpty)
 	versionedShadowWriteCaptureCellsCounter.Inc(stats.writeCaptureCells)

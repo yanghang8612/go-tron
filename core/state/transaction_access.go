@@ -284,6 +284,21 @@ func (r *TransactionAccessRecorder) Unsupported() bool {
 	return r != nil && r.unsupported
 }
 
+// TransactionAccessRecorderCoversWrites reports whether every authoritative
+// mutation of kind is registered inline. Projected write capture may skip the
+// undo journal only when every retained kind returns true here.
+func TransactionAccessRecorderCoversWrites(kind TransactionAccessKind) bool {
+	switch kind {
+	case TransactionAccessAccount,
+		TransactionAccessAccountField,
+		TransactionAccessAccountKV,
+		TransactionAccessAccountKVGeneration:
+		return true
+	default:
+		return false
+	}
+}
+
 // CaptureReadSet freezes the exact reads observed by one worker result before
 // its recorder is reused. Ordinary reads participate in version validation;
 // commutative reads are retained so the publisher can audit that their write
@@ -551,6 +566,19 @@ func (s *StateDB) recordAccountKVRead(owner tcommon.Address, domain kvdomains.KV
 	// speculative result from validating against a new namespace.
 	s.transactionAccess.record(TransactionAccessKey{Kind: TransactionAccessAccountKVGeneration, Address: owner}, TransactionAccessRead)
 	s.transactionAccess.recordAccountKV(owner, domain, logicalKey, TransactionAccessRead)
+}
+
+func (s *StateDB) recordAccountKVWrite(owner tcommon.Address, domain kvdomains.KVDomain, logicalKey []byte) {
+	if s == nil || s.transactionAccess == nil {
+		return
+	}
+	s.transactionAccess.recordAccountKV(owner, domain, logicalKey, TransactionAccessWrite)
+}
+
+func (s *StateDB) recordAccountKVGenerationWrite(owner tcommon.Address) {
+	if s != nil && s.transactionAccess != nil {
+		s.transactionAccess.record(TransactionAccessKey{Kind: TransactionAccessAccountKVGeneration, Address: owner}, TransactionAccessWrite)
+	}
 }
 
 func (s *StateDB) recordAccountKVPrefixRead(owner tcommon.Address) {

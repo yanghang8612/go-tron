@@ -104,6 +104,111 @@ func TestCaptureTransactionWriteSetFilteredProjectsKnownPostImages(t *testing.T)
 	}
 }
 
+func TestCaptureTransactionRecorderWriteSetFilteredSkipsUnrelatedJournalKinds(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xc6)
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.AddBalance(addr, 10)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	var recorder TransactionAccessRecorder
+	recorder.Reset(8)
+	sdb.SetTransactionAccessRecorder(&recorder)
+	mark := sdb.DomainChangeJournalMark()
+	sdb.AddBalance(addr, 7)
+	sdb.SetState(addr, tcommon.Hash{31: 1}, tcommon.Hash{31: 2})
+	sdb.SetTransactionAccessRecorder(nil)
+
+	balanceKey := TransactionAccessKey{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldBalance}
+	include := func(key TransactionAccessKey) bool { return key == balanceKey }
+	want, known, err := sdb.CaptureTransactionWriteSetFiltered(mark, &recorder, nil, include)
+	if err != nil || !known {
+		t.Fatalf("journal capture: known=%v err=%v", known, err)
+	}
+	got, known, err := sdb.CaptureTransactionRecorderWriteSetFiltered(&recorder, include)
+	if err != nil || !known {
+		t.Fatalf("recorder capture: known=%v err=%v", known, err)
+	}
+	if len(got) != 1 || len(want) != 1 {
+		t.Fatalf("recorder/journal writes = %v/%v, want one projected cell", got, want)
+	}
+	gotValue, gotOK := got[balanceKey]
+	wantValue, wantOK := want[balanceKey]
+	if !gotOK || !wantOK || gotValue.Exists != wantValue.Exists || string(gotValue.Value) != string(wantValue.Value) {
+		t.Fatalf("recorder balance = %+v/%v, journal = %+v/%v", gotValue, gotOK, wantValue, wantOK)
+	}
+}
+
+func TestCaptureTransactionRecorderWriteSetFilteredCoversAccountKVIncarnation(t *testing.T) {
+	const domain = kvdomains.AccountPermissionAux
+	logicalKey := []byte("owner")
+	addr := testAddr(0xc7)
+	for _, test := range []struct {
+		name   string
+		key    TransactionAccessKey
+		mutate func(*StateDB) error
+	}{
+		{
+			name: "put",
+			key:  TransactionAccessKey{Kind: TransactionAccessAccountKV, Address: addr, KVDomain: domain, LogicalKey: string(logicalKey)},
+			mutate: func(sdb *StateDB) error {
+				return sdb.SetAccountKV(addr, domain, logicalKey, []byte("new"))
+			},
+		},
+		{
+			name: "delete",
+			key:  TransactionAccessKey{Kind: TransactionAccessAccountKV, Address: addr, KVDomain: domain, LogicalKey: string(logicalKey)},
+			mutate: func(sdb *StateDB) error {
+				return sdb.DeleteAccountKV(addr, domain, logicalKey)
+			},
+		},
+		{
+			name: "reset generation",
+			key:  TransactionAccessKey{Kind: TransactionAccessAccountKVGeneration, Address: addr},
+			mutate: func(sdb *StateDB) error {
+				return sdb.ResetAccountKV(addr)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sdb := newTestStateDB(t)
+			sdb.CreateAccount(addr, corepb.AccountType_Contract)
+			if err := sdb.SetAccountKV(addr, domain, logicalKey, []byte("old")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := sdb.Commit(); err != nil {
+				t.Fatal(err)
+			}
+
+			var recorder TransactionAccessRecorder
+			recorder.Reset(8)
+			sdb.SetTransactionAccessRecorder(&recorder)
+			mark := sdb.DomainChangeJournalMark()
+			if err := test.mutate(sdb); err != nil {
+				t.Fatal(err)
+			}
+			sdb.SetTransactionAccessRecorder(nil)
+
+			include := func(key TransactionAccessKey) bool { return key == test.key }
+			want, known, err := sdb.CaptureTransactionWriteSetFiltered(mark, &recorder, nil, include)
+			if err != nil || !known {
+				t.Fatalf("journal capture: known=%v err=%v", known, err)
+			}
+			got, known, err := sdb.CaptureTransactionRecorderWriteSetFiltered(&recorder, include)
+			if err != nil || !known {
+				t.Fatalf("recorder capture: known=%v err=%v", known, err)
+			}
+			gotValue, gotOK := got[test.key]
+			wantValue, wantOK := want[test.key]
+			if len(got) != 1 || len(want) != 1 || !gotOK || !wantOK || gotValue.Exists != wantValue.Exists || string(gotValue.Value) != string(wantValue.Value) {
+				t.Fatalf("recorder value = %+v/%v, journal = %+v/%v", gotValue, gotOK, wantValue, wantOK)
+			}
+		})
+	}
+}
+
 func TestCaptureTransactionWriteSetIgnoresUnrelatedPriorAccountFields(t *testing.T) {
 	base := newTestStateDB(t)
 	addr := testAddr(0xc4)

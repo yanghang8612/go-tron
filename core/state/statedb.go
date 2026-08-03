@@ -1054,6 +1054,7 @@ func (s *StateDB) getOrCreateAccountLoaded(addr tcommon.Address, obj *stateObjec
 	// the java AccountStateRoot. A fresh account (generation 0) records nothing,
 	// matching prior behavior.
 	if nextGeneration > 0 {
+		s.recordAccountKVGenerationWrite(addr)
 		s.journal.append(kvResetChange{
 			address:              addr,
 			prevRoot:             EmptyKVRoot,

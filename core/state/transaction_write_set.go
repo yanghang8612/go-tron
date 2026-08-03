@@ -36,6 +36,26 @@ func (s *StateDB) CaptureTransactionWriteSet(journalMark int, recorder *Transact
 	return s.CaptureTransactionWriteSetFiltered(journalMark, recorder, dynProps, nil)
 }
 
+// CaptureTransactionRecorderWriteSetFiltered materializes projected writes
+// whose kinds have complete inline-recorder coverage. Account paths and
+// Erigon-style AccountKV incarnation paths are registered at their
+// authoritative mutation sites, so a compatible projection can skip the
+// transaction-end undo-journal walk entirely. A nil projection is rejected to
+// keep this narrow fast path from being mistaken for full write-set capture.
+func (s *StateDB) CaptureTransactionRecorderWriteSetFiltered(recorder *TransactionAccessRecorder, include func(TransactionAccessKey) bool) (writes TransactionWriteSet, known bool, err error) {
+	if s == nil {
+		return nil, false, fmt.Errorf("capture transaction recorder writes: nil state")
+	}
+	if recorder == nil || include == nil {
+		return nil, false, nil
+	}
+	keys, modes := appendRecorderTransactionWrites(nil, nil, recorder, func(key TransactionAccessKey) bool {
+		return TransactionAccessRecorderCoversWrites(key.Kind) && include(key)
+	})
+	writes, err = s.materializeTransactionWriteSet(keys, modes, recorder, nil)
+	return writes, err == nil, err
+}
+
 // CaptureTransactionWriteSetFiltered is CaptureTransactionWriteSet with an
 // optional logical-key projection. The complete journal is still visited so
 // unknown writes remain conservative barriers; only known post-images outside
@@ -50,19 +70,7 @@ func (s *StateDB) CaptureTransactionWriteSetFiltered(journalMark int, recorder *
 		keys = make(map[TransactionAccessKey]struct{}, 16)
 		modes = make(map[TransactionAccessKey]TransactionAccessMode, 16)
 	}
-	if recorder != nil {
-		recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
-			if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0 && (include == nil || include(key)) {
-				if keys == nil {
-					keys = make(map[TransactionAccessKey]struct{}, 4)
-					modes = make(map[TransactionAccessKey]TransactionAccessMode, 4)
-				}
-				appendTransactionWriteKey(keys, key)
-				modes[key] |= mode
-			}
-			return true
-		})
-	}
+	keys, modes = appendRecorderTransactionWrites(keys, modes, recorder, include)
 	known = s.VisitTransactionAccessWritesSince(journalMark, func(key TransactionAccessKey) bool {
 		// accountScalarChange is deliberately coarse in the undo journal. When
 		// the inline recorder identified every scalar write, retain only those
@@ -86,12 +94,39 @@ func (s *StateDB) CaptureTransactionWriteSetFiltered(journalMark int, recorder *
 	if !known {
 		return nil, false, nil
 	}
-	writes = make(TransactionWriteSet, len(keys))
+	writes, err = s.materializeTransactionWriteSet(keys, modes, recorder, dynProps)
+	return writes, err == nil, err
+}
+
+func appendRecorderTransactionWrites(keys map[TransactionAccessKey]struct{}, modes map[TransactionAccessKey]TransactionAccessMode, recorder *TransactionAccessRecorder, include func(TransactionAccessKey) bool) (map[TransactionAccessKey]struct{}, map[TransactionAccessKey]TransactionAccessMode) {
+	if recorder == nil {
+		return keys, modes
+	}
+	recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+		if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) == 0 || (include != nil && !include(key)) {
+			return true
+		}
+		if keys == nil {
+			keys = make(map[TransactionAccessKey]struct{}, 4)
+			modes = make(map[TransactionAccessKey]TransactionAccessMode, 4)
+		}
+		appendTransactionWriteKey(keys, key)
+		modes[key] |= mode
+		return true
+	})
+	return keys, modes
+}
+
+func (s *StateDB) materializeTransactionWriteSet(keys map[TransactionAccessKey]struct{}, modes map[TransactionAccessKey]TransactionAccessMode, recorder *TransactionAccessRecorder, dynProps *DynamicProperties) (TransactionWriteSet, error) {
+	writes := make(TransactionWriteSet, len(keys))
 	for key := range keys {
 		if key.Kind == TransactionAccessRawKV {
+			if recorder == nil {
+				return nil, fmt.Errorf("capture raw kv %x: nil recorder", key.LogicalKey)
+			}
 			value, ok := recorder.rawKVWrite(key)
 			if !ok {
-				return nil, false, fmt.Errorf("capture raw kv %x: missing post-image", key.LogicalKey)
+				return nil, fmt.Errorf("capture raw kv %x: missing post-image", key.LogicalKey)
 			}
 			writes[key] = value
 			continue
@@ -107,11 +142,11 @@ func (s *StateDB) CaptureTransactionWriteSetFiltered(journalMark int, recorder *
 		}
 		value, valueErr := s.transactionWriteValue(key, dynProps)
 		if valueErr != nil {
-			return nil, false, valueErr
+			return nil, valueErr
 		}
 		writes[key] = value
 	}
-	return writes, true, nil
+	return writes, nil
 }
 
 func ownedTransactionWriteValue(exists bool, value []byte) TransactionWriteValue {
