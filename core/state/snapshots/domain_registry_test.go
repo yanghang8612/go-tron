@@ -56,15 +56,15 @@ func TestDefaultDomainRegistryDrivesSnapshotFamilies(t *testing.T) {
 	if history[0].Dataset != SegmentDatasetStateDomainChange || history[0].HistoryPath(10, 20) != "history/state-domain-change-10-20.seg" {
 		t.Fatalf("history config = %+v path=%q", history[0], history[0].HistoryPath(10, 20))
 	}
-	if history[0].BuildHistory == nil || history[0].OpenHistory == nil || history[0].WriteHistory == nil ||
+	if history[0].BuildHistory == nil || history[0].BuildHistoryBlockRange == nil || history[0].OpenHistory == nil || history[0].WriteHistory == nil ||
 		history[0].ReadHistoryRange == nil || history[0].ReadHistoryByKey == nil ||
 		history[0].IterateHistoryRange == nil || history[0].IterateHistoryByKey == nil ||
 		history[0].CompactHistory == nil ||
 		history[0].WriteHotHistoryRow == nil || history[0].WriteHotHistoryBlock == nil || history[0].WriteHotHistoryIndex == nil ||
-		history[0].ReadHotHistoryTxRange == nil || history[0].IterateHotHistoryTxRanges == nil ||
+		history[0].ReadHotHistoryTxRange == nil || history[0].IterateHotHistoryTxRanges == nil || history[0].IterateHotHistoryTxRangeBlocks == nil ||
 		history[0].DeleteHotHistoryTxRange == nil ||
 		history[0].DeleteHotHistoryBlock == nil ||
-		history[0].IterateHotHistoryTxRangeChanges == nil ||
+		history[0].IterateHotHistoryTxRangeChanges == nil || history[0].IterateHotHistoryBlockTxChanges == nil ||
 		history[0].IterateHotHistoryBlocks == nil || history[0].IterateHotHistoryChanges == nil ||
 		history[0].ReadHotHistoryFirstBlockRange == nil || history[0].IterateHotHistoryBlockRange == nil ||
 		history[0].IterateHotHistoryPrefix == nil || history[0].ReadHotAccountLatestAsOf == nil ||

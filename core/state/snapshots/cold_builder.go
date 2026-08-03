@@ -449,7 +449,20 @@ func (r *Runner) onePass() (PassResult, error) {
 	}
 
 	toTxNum := cutoffRange.EndTxNum
-	startBlock, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, fromTxNum, cutoffBlock)
+	searchFromBlock := uint64(0)
+	if visibleEnd > 0 {
+		previousBuildBlock, hasPreviousBuild, err := r.verifiedSnapshotBuildStageBlock(db)
+		if err != nil {
+			return PassResult{}, err
+		}
+		if hasPreviousBuild {
+			if previousBuildBlock == ^uint64(0) {
+				return result, nil
+			}
+			searchFromBlock = previousBuildBlock + 1
+		}
+	}
+	startBlock, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, fromTxNum, searchFromBlock, cutoffBlock)
 	if err != nil {
 		return PassResult{}, err
 	}
@@ -489,7 +502,12 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 	}
 
-	refs, err := historyCfg.BuildHistory(db, r.cfg.Dir, fromTxNum, toTxNum, historyCfg.HistoryPath(fromTxNum, toTxNum))
+	var refs []SegmentRef
+	if historyCfg.BuildHistoryBlockRange != nil {
+		refs, err = historyCfg.BuildHistoryBlockRange(db, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, historyCfg.HistoryPath(fromTxNum, toTxNum))
+	} else {
+		refs, err = historyCfg.BuildHistory(db, r.cfg.Dir, fromTxNum, toTxNum, historyCfg.HistoryPath(fromTxNum, toTxNum))
+	}
 	if err != nil {
 		return PassResult{}, err
 	}
@@ -613,6 +631,14 @@ func (r *Runner) snapshotBuildStageCanonicalHash(db AggregatorDB, stage rawdb.St
 
 func (r *Runner) verifiedFinishStageBlock(db AggregatorDB) (uint64, bool, error) {
 	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(db, rawdb.StageFinish, r.canonicalHashLookup(db))
+	if err != nil {
+		return 0, ok, fmt.Errorf("snapshots: %w", err)
+	}
+	return block, ok, nil
+}
+
+func (r *Runner) verifiedSnapshotBuildStageBlock(db AggregatorDB) (uint64, bool, error) {
+	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(db, rawdb.StageSnapshotBuild, r.canonicalHashLookup(db))
 	if err != nil {
 		return 0, ok, fmt.Errorf("snapshots: %w", err)
 	}
@@ -937,15 +963,21 @@ func coldSnapshotVisibleTxEnd(dir string, dataset SegmentDataset) (uint64, error
 	return visibleEnd, nil
 }
 
-func firstHotHistoryTxRangeBlockAtOrAfterTx(cfg DomainCfg, db AggregatorDB, txNum, cutoffBlock uint64) (uint64, bool, error) {
+func firstHotHistoryTxRangeBlockAtOrAfterTx(cfg DomainCfg, db AggregatorDB, txNum, fromBlock, cutoffBlock uint64) (uint64, bool, error) {
 	if cfg.IterateHotHistoryTxRanges == nil {
 		return 0, false, fmt.Errorf("snapshots: %s missing hot history tx-range iterator", cfg.Dataset)
 	}
+	if fromBlock > cutoffBlock {
+		return 0, false, nil
+	}
 	var block uint64
 	var found bool
-	if err := cfg.IterateHotHistoryTxRanges(db, func(row *rawdb.StateTxRange) (bool, error) {
+	visit := func(row *rawdb.StateTxRange) (bool, error) {
 		if row.EndTxNum < row.BeginTxNum {
 			return false, fmt.Errorf("snapshots: state tx range for block %d is inverted", row.BlockNum)
+		}
+		if row.BlockNum < fromBlock {
+			return true, nil
 		}
 		if row.BlockNum > cutoffBlock {
 			return false, nil
@@ -956,7 +988,14 @@ func firstHotHistoryTxRangeBlockAtOrAfterTx(cfg DomainCfg, db AggregatorDB, txNu
 		block = row.BlockNum
 		found = true
 		return false, nil
-	}); err != nil {
+	}
+	var err error
+	if cfg.IterateHotHistoryTxRangeBlocks != nil {
+		err = cfg.IterateHotHistoryTxRangeBlocks(db, fromBlock, cutoffBlock, visit)
+	} else {
+		err = cfg.IterateHotHistoryTxRanges(db, visit)
+	}
+	if err != nil {
 		return 0, false, err
 	}
 	return block, found, nil

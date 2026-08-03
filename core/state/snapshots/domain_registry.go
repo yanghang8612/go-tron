@@ -44,6 +44,7 @@ type DomainCfg struct {
 	IterateHotCommitmentCheckpoints   HotCommitmentCheckpointIterator
 	DeleteHotCommitmentCheckpoint     HotCommitmentCheckpointDeleter
 	BuildHistory                      HistorySnapshotBuilder
+	BuildHistoryBlockRange            HistorySnapshotBlockRangeBuilder
 	OpenHistory                       HistorySnapshotOpener
 	WriteHistory                      HistorySnapshotWriter
 	CompactHistory                    HistoryCompactor
@@ -57,9 +58,11 @@ type DomainCfg struct {
 	WriteHotHistoryTxRange            HotHistoryTxRangeWriter
 	ReadHotHistoryTxRange             HotHistoryTxRangeReader
 	IterateHotHistoryTxRanges         HotHistoryTxRangeIterator
+	IterateHotHistoryTxRangeBlocks    HotHistoryTxRangeBlockIterator
 	DeleteHotHistoryTxRange           HotHistoryTxRangeDeleter
 	DeleteHotHistoryBlock             HotHistoryBlockDeleter
 	IterateHotHistoryTxRangeChanges   HotHistoryTxRangeChangeIterator
+	IterateHotHistoryBlockTxChanges   HotHistoryBlockTxRangeChangeIterator
 	IterateHotHistoryBlocks           HotHistoryBlockIterator
 	IterateHotHistoryChanges          HotHistoryChangeIterator
 	ReadHotHistoryFirstBlockRange     HotHistoryFirstBlockRangeReader
@@ -120,6 +123,8 @@ type HotCommitmentCheckpointDeleter func(db ethdb.KeyValueWriter, blockNum uint6
 
 type HistorySnapshotBuilder func(db AggregatorDB, dir string, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error)
 
+type HistorySnapshotBlockRangeBuilder func(db AggregatorDB, dir string, fromTxNum, toTxNum, fromBlock, toBlock uint64, relPath string) ([]SegmentRef, error)
+
 type HistorySnapshotOpener func(dir string, ref SegmentRef) ([]*rawdb.StateDomainChange, error)
 
 type HistorySnapshotWriter func(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange, txRanges ...[]*rawdb.StateTxRange) (SegmentRef, SegmentRef, SegmentRef, error)
@@ -141,6 +146,10 @@ type HotHistoryWriter func(db ethdb.KeyValueWriter, change *rawdb.StateDomainCha
 type HotHistoryTxRangeWriter func(db ethdb.KeyValueWriter, blockNum uint64, blockHash common.Hash, beginTxNum, endTxNum uint64) error
 
 type HotHistoryTxRangeIterator func(db ethdb.Iteratee, fn func(*rawdb.StateTxRange) (bool, error)) error
+
+type HotHistoryTxRangeBlockIterator func(db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*rawdb.StateTxRange) (bool, error)) error
+
+type HotHistoryBlockTxRangeChangeIterator func(db ethdb.Iteratee, fromBlock, toBlock, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error
 
 type HotHistoryTxRangeDeleter func(db ethdb.KeyValueWriter, blockNum uint64) error
 
@@ -335,6 +344,9 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			BuildHistory: func(db AggregatorDB, dir string, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
 				return BuildStateDomainChangeHistorySegmentsFromDB(db, dir, fromTxNum, toTxNum, relPath)
 			},
+			BuildHistoryBlockRange: func(db AggregatorDB, dir string, fromTxNum, toTxNum, fromBlock, toBlock uint64, relPath string) ([]SegmentRef, error) {
+				return BuildStateDomainChangeHistorySegmentsFromDBByBlockRange(db, dir, fromTxNum, toTxNum, fromBlock, toBlock, relPath)
+			},
 			IsHistoryBinaryPath:               isStateDomainChangeBinarySegmentPath,
 			IsHistoryCompanionPath:            isStateDomainChangeBinaryCompanionPath,
 			HistoryIndexPath:                  stateDomainChangeBinaryIndexPath,
@@ -352,9 +364,11 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			WriteHotHistoryTxRange:            rawdb.WriteStateTxRange,
 			ReadHotHistoryTxRange:             rawdb.ReadStateTxRange,
 			IterateHotHistoryTxRanges:         rawdb.IterateStateTxRanges,
+			IterateHotHistoryTxRangeBlocks:    rawdb.IterateStateTxRangesByBlockRange,
 			DeleteHotHistoryTxRange:           rawdb.DeleteStateTxRange,
 			DeleteHotHistoryBlock:             rawdb.DeleteStateDomainChanges,
 			IterateHotHistoryTxRangeChanges:   rawdb.IterateStateDomainChangesByTxRange,
+			IterateHotHistoryBlockTxChanges:   rawdb.IterateStateDomainChangesByBlockTxRange,
 			IterateHotHistoryBlocks:           rawdb.IterateStateDomainChangeBlocksByKey,
 			IterateHotHistoryChanges:          rawdb.IterateStateDomainChangesByKey,
 			ReadHotHistoryFirstBlockRange:     rawdb.ReadFirstStateDomainChangeByKeyBlockRange,

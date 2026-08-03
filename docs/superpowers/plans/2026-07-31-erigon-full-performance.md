@@ -251,6 +251,12 @@
 - [ ] Install the snap-mode service against a new datadir and run the cold v5
   build/merge/prune gate from genesis without reusing the persisted full-mode
   retention lock.
+- [x] Replace repeated genesis-to-head `StateTxRange` scans in each cold
+  history build with hash-bound `SnapshotBuild` resume plus physical block-key
+  seeks for boundary discovery, record collation, tx-range counting, and
+  tx-range emission.
+- [x] Benchmark the bounded cold-build source on Pebble and verify subsequent
+  lifecycle passes use the previously published block boundary.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

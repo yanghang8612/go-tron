@@ -24,12 +24,21 @@ type stateDomainChangeHistoryBuildResult struct {
 	accessorETL etl.Stats
 }
 
+type stateDomainChangeHistoryBlockRange struct {
+	from uint64
+	to   uint64
+}
+
 // buildStateDomainChangeHistoryBinarySegmentsFromDB writes the production cold
 // history trio without materializing a batch of StateDomainChange rows. The
 // history payload is externally sorted into tx/sequence order; the key accessor
 // is sorted through a second ETL pass so temporary memory is bounded by the
 // collector buffer even when physical hot rows are not tx ordered.
 func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir string, ref SegmentRef, cfg DomainCfg, opts etl.Options) (result stateDomainChangeHistoryBuildResult, err error) {
+	return buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db, dir, ref, cfg, opts, nil)
+}
+
+func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, dir string, ref SegmentRef, cfg DomainCfg, opts etl.Options, blockRange *stateDomainChangeHistoryBlockRange) (result stateDomainChangeHistoryBuildResult, err error) {
 	if ref.Kind == "" {
 		ref.Kind = SegmentHistory
 	}
@@ -45,6 +54,9 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 	if cfg.IterateHotHistoryTxRangeChanges == nil || cfg.IterateHotHistoryTxRanges == nil {
 		return result, errors.New("snapshots: missing state-domain history iterators")
 	}
+	if blockRange != nil && (cfg.IterateHotHistoryBlockTxChanges == nil || cfg.IterateHotHistoryTxRangeBlocks == nil) {
+		return result, errors.New("snapshots: missing bounded state-domain history iterators")
+	}
 
 	if opts.TempDir == "" {
 		opts.TempDir = filepath.Join(dir, "etl")
@@ -54,11 +66,11 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 		return result, fmt.Errorf("snapshots: create state-domain-change history record ETL collector: %w", err)
 	}
 	defer recordCollector.Close()
-	recordCount, err := collectStateDomainChangeHistoryRecords(db, cfg, ref.FromTxNum, ref.ToTxNum, recordCollector)
+	recordCount, err := collectStateDomainChangeHistoryRecords(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, recordCollector)
 	if err != nil {
 		return result, err
 	}
-	txRangeCount, err := countStateDomainChangeHistoryTxRanges(db, cfg, ref.FromTxNum, ref.ToTxNum)
+	txRangeCount, err := countStateDomainChangeHistoryTxRanges(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange)
 	if err != nil {
 		return result, err
 	}
@@ -78,7 +90,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 	if err := writeStateDomainChangeBinaryHeaderTo(segmentTmp, stateDomainChangeBinarySegmentMagic, ref.FromTxNum, ref.ToTxNum, recordCount); err != nil {
 		return result, err
 	}
-	if err := writeStateDomainChangeBinaryTxRangeTableFromDB(segmentTmp, db, cfg, ref.FromTxNum, ref.ToTxNum, txRangeCount); err != nil {
+	if err := writeStateDomainChangeBinaryTxRangeTableFromDB(segmentTmp, db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, txRangeCount); err != nil {
 		return result, err
 	}
 
@@ -168,12 +180,12 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 	return result, nil
 }
 
-func collectStateDomainChangeHistoryRecords(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, collector *etl.Collector) (uint64, error) {
+func collectStateDomainChangeHistoryRecords(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange, collector *etl.Collector) (uint64, error) {
 	if collector == nil {
 		return 0, errors.New("snapshots: nil state-domain-change history record ETL collector")
 	}
 	var count uint64
-	err := cfg.IterateHotHistoryTxRangeChanges(db, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+	err := iterateStateDomainChangeHistoryChanges(db, cfg, fromTxNum, toTxNum, blockRange, func(change *rawdb.StateDomainChange) (bool, error) {
 		if change == nil {
 			return false, errors.New("snapshots: nil state-domain-change history record")
 		}
@@ -196,9 +208,9 @@ func collectStateDomainChangeHistoryRecords(db ethdb.Iteratee, cfg DomainCfg, fr
 	return count, err
 }
 
-func countStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64) (uint64, error) {
+func countStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange) (uint64, error) {
 	var count uint64
-	err := iterateStateDomainChangeHistoryTxRanges(db, cfg, fromTxNum, toTxNum, func(*rawdb.StateTxRange) error {
+	err := iterateStateDomainChangeHistoryTxRanges(db, cfg, fromTxNum, toTxNum, blockRange, func(*rawdb.StateTxRange) error {
 		if count == math.MaxUint64 {
 			return errors.New("snapshots: state-domain-change tx range count overflows")
 		}
@@ -208,14 +220,14 @@ func countStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, fro
 	return count, err
 }
 
-func writeStateDomainChangeBinaryTxRangeTableFromDB(w io.Writer, db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum, count uint64) error {
+func writeStateDomainChangeBinaryTxRangeTableFromDB(w io.Writer, db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange, count uint64) error {
 	var countRaw [8]byte
 	binary.BigEndian.PutUint64(countRaw[:], count)
 	if _, err := w.Write(countRaw[:]); err != nil {
 		return err
 	}
 	var emitted uint64
-	if err := iterateStateDomainChangeHistoryTxRanges(db, cfg, fromTxNum, toTxNum, func(row *rawdb.StateTxRange) error {
+	if err := iterateStateDomainChangeHistoryTxRanges(db, cfg, fromTxNum, toTxNum, blockRange, func(row *rawdb.StateTxRange) error {
 		if emitted >= count {
 			return fmt.Errorf("snapshots: state-domain-change tx range count exceeds preflight count %d", count)
 		}
@@ -233,12 +245,12 @@ func writeStateDomainChangeBinaryTxRangeTableFromDB(w io.Writer, db ethdb.Iterat
 	return nil
 }
 
-func iterateStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, fn func(*rawdb.StateTxRange) error) error {
+func iterateStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange, fn func(*rawdb.StateTxRange) error) error {
 	var (
 		previousBlock uint64
 		havePrevious  bool
 	)
-	return cfg.IterateHotHistoryTxRanges(db, func(row *rawdb.StateTxRange) (bool, error) {
+	return iterateStateDomainChangeHistorySourceTxRanges(db, cfg, blockRange, func(row *rawdb.StateTxRange) (bool, error) {
 		if row == nil {
 			return false, errors.New("snapshots: nil state-domain-change tx range")
 		}
@@ -258,6 +270,26 @@ func iterateStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, f
 		havePrevious = true
 		return true, nil
 	})
+}
+
+func iterateStateDomainChangeHistoryChanges(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	if blockRange == nil {
+		return cfg.IterateHotHistoryTxRangeChanges(db, fromTxNum, toTxNum, fn)
+	}
+	if cfg.IterateHotHistoryBlockTxChanges == nil {
+		return errors.New("snapshots: missing bounded state-domain history change iterator")
+	}
+	return cfg.IterateHotHistoryBlockTxChanges(db, blockRange.from, blockRange.to, fromTxNum, toTxNum, fn)
+}
+
+func iterateStateDomainChangeHistorySourceTxRanges(db ethdb.Iteratee, cfg DomainCfg, blockRange *stateDomainChangeHistoryBlockRange, fn func(*rawdb.StateTxRange) (bool, error)) error {
+	if blockRange == nil {
+		return cfg.IterateHotHistoryTxRanges(db, fn)
+	}
+	if cfg.IterateHotHistoryTxRangeBlocks == nil {
+		return errors.New("snapshots: missing bounded state-domain history tx-range iterator")
+	}
+	return cfg.IterateHotHistoryTxRangeBlocks(db, blockRange.from, blockRange.to, fn)
 }
 
 func encodeStateDomainChangeBinaryRecordFrame(change *rawdb.StateDomainChange) ([]byte, error) {

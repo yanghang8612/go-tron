@@ -3,6 +3,7 @@ package snapshots
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -159,6 +160,53 @@ func TestColdBuilderOnePassBuildsStateDomainChangeHistoryAndManagerReads(t *test
 	}
 	if want := []string{"a", "b", "c"}; !equalStrings(got, want) {
 		t.Fatalf("changes = %v, want %v", got, want)
+	}
+}
+
+func TestColdBuilderSubsequentPassSeeksFromPublishedBlock(t *testing.T) {
+	dir := t.TempDir()
+	store := &coldBuilderSeekRecordingDB{KeyValueStore: rawdb.NewMemoryDatabase()}
+	owner := coldBuilderOwner(0x72)
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeColdBuilderChange(t, store, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, store, blockNum)
+	}
+	runner := NewRunner(&coldBuilderChain{db: store, solidified: 4}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+		BatchBlocks:   1,
+	})
+	first, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if !first.Built || first.FromBlock != 1 || first.ToBlock != 1 {
+		t.Fatalf("first pass = %+v, want block 1", first)
+	}
+
+	store.stateTxRangeStarts = nil
+	second, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if !second.Built || second.FromBlock != 2 || second.ToBlock != 2 {
+		t.Fatalf("second pass = %+v, want block 2", second)
+	}
+	var want [8]byte
+	binary.BigEndian.PutUint64(want[:], 2)
+	seekCount := 0
+	for _, start := range store.stateTxRangeStarts {
+		if bytes.Equal(start, want[:]) {
+			seekCount++
+		}
+	}
+	// Boundary discovery, record collation, tx-range counting, and tx-range
+	// emission must all use the bounded source rather than independently
+	// rescanning the prefix.
+	if seekCount < 4 {
+		t.Fatalf("state tx-range iterator starts = %x, want at least four seek starts %x", store.stateTxRangeStarts, want)
 	}
 }
 
@@ -1397,6 +1445,18 @@ type coldBuilderChain struct {
 	solidified      int64
 	canonicalHashes map[uint64]common.Hash
 	canonicalErrs   map[uint64]error
+}
+
+type coldBuilderSeekRecordingDB struct {
+	ethdb.KeyValueStore
+	stateTxRangeStarts [][]byte
+}
+
+func (db *coldBuilderSeekRecordingDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	if bytes.Equal(prefix, []byte("state-tx-range-v1-")) {
+		db.stateTxRangeStarts = append(db.stateTxRangeStarts, append([]byte(nil), start...))
+	}
+	return db.KeyValueStore.NewIterator(prefix, start)
 }
 
 func (c *coldBuilderChain) DB() AggregatorDB { return c.db }

@@ -231,9 +231,34 @@ func DeleteStateTxRange(db ethdb.KeyValueWriter, blockNum uint64) error {
 }
 
 func IterateStateTxRanges(db ethdb.Iteratee, fn func(*StateTxRange) (bool, error)) error {
-	it := db.NewIterator(stateTxRangePrefix, nil)
+	return iterateStateTxRanges(db, nil, 0, false, fn)
+}
+
+// IterateStateTxRangesByBlockRange seeks directly to fromBlock and walks the
+// inclusive physical block range [fromBlock, toBlock]. Cold history builders
+// already know their block boundaries, so using them avoids rescanning every
+// tx-range row from genesis for each successive immutable segment.
+func IterateStateTxRangesByBlockRange(db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*StateTxRange) (bool, error)) error {
+	if toBlock < fromBlock {
+		return fmt.Errorf("rawdb: inverted state tx block range [%d,%d]", fromBlock, toBlock)
+	}
+	var start [8]byte
+	binary.BigEndian.PutUint64(start[:], fromBlock)
+	return iterateStateTxRanges(db, start[:], toBlock, true, fn)
+}
+
+func iterateStateTxRanges(db ethdb.Iteratee, start []byte, toBlock uint64, bounded bool, fn func(*StateTxRange) (bool, error)) error {
+	it := db.NewIterator(stateTxRangePrefix, start)
 	defer it.Release()
 	for it.Next() {
+		key := it.Key()
+		if !bytes.HasPrefix(key, stateTxRangePrefix) || len(key) != len(stateTxRangePrefix)+8 {
+			continue
+		}
+		blockNum := binary.BigEndian.Uint64(key[len(stateTxRangePrefix):])
+		if bounded && blockNum > toBlock {
+			return nil
+		}
 		var row StateTxRange
 		if err := rlp.DecodeBytes(it.Value(), &row); err != nil {
 			return err
@@ -778,17 +803,36 @@ func IterateStateDomainChangesByTxRange(db ethdb.Iteratee, fromTxNum, toTxNum ui
 		if row.EndTxNum < fromTxNum || row.BeginTxNum > toTxNum {
 			return true, nil
 		}
-		if err := IterateStateDomainChanges(db, row.BlockNum, func(change *StateDomainChange) (bool, error) {
-			if change.TxNum < fromTxNum || change.TxNum > toTxNum {
-				return true, nil
-			}
-			change.BlockHash = row.BlockHash
-			return fn(change)
-		}); err != nil {
-			return false, err
-		}
-		return true, nil
+		return iterateStateDomainChangesForTxRange(db, row, fromTxNum, toTxNum, fn)
 	})
+}
+
+// IterateStateDomainChangesByBlockTxRange is the bounded cold-build form of
+// IterateStateDomainChangesByTxRange. It seeks to fromBlock instead of walking
+// the monotonically growing StateTxRange prefix from genesis on every build.
+func IterateStateDomainChangesByBlockTxRange(db ethdb.Iteratee, fromBlock, toBlock, fromTxNum, toTxNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	if toTxNum < fromTxNum {
+		return fmt.Errorf("rawdb: inverted state domain change tx range [%d,%d]", fromTxNum, toTxNum)
+	}
+	return IterateStateTxRangesByBlockRange(db, fromBlock, toBlock, func(row *StateTxRange) (bool, error) {
+		if row.EndTxNum < fromTxNum || row.BeginTxNum > toTxNum {
+			return true, nil
+		}
+		return iterateStateDomainChangesForTxRange(db, row, fromTxNum, toTxNum, fn)
+	})
+}
+
+func iterateStateDomainChangesForTxRange(db ethdb.Iteratee, row *StateTxRange, fromTxNum, toTxNum uint64, fn func(*StateDomainChange) (bool, error)) (bool, error) {
+	if err := IterateStateDomainChanges(db, row.BlockNum, func(change *StateDomainChange) (bool, error) {
+		if change.TxNum < fromTxNum || change.TxNum > toTxNum {
+			return true, nil
+		}
+		change.BlockHash = row.BlockHash
+		return fn(change)
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {

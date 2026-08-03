@@ -2071,6 +2071,16 @@ fell back without a state/receipt mismatch; they are outside the history codec
 path. Exact stored/raw counters, mixed-format restart, normalized family share,
 and clean canonical windows pass P4.43. The longer resource/soak gates remain.
 
+A subsequent deployment restarted after more than 31,000 compressed packs had
+been published. The new process recovered height 14,788,223 and resumed from
+the existing database. A post-restart 55-second window processed 3,072 blocks /
+105,730 transactions (55.9 blocks/s, 1,922 transactions/s). All 3,101 new packs
+were compressed; stored bytes were 40.8% of raw RLP and the exact packed form,
+including avoided per-row keys, was 67.1% below the individual-row
+counterfactual. Pebble write delay, history interrupts, and every result/write-
+set mismatch stayed zero. One sender-chain observer fallback existed before the
+window and did not increase. This completes compressed-format restart coverage.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
@@ -2092,6 +2102,36 @@ the automatic v5 history build, merge, coverage-gated hot prune, and stage lag.
 The deployment watcher only replaces the binary and restarts the installed
 unit, so this datadir/service switch remains an explicit operator action rather
 than an implicit destructive deploy step.
+
+#### P5.1: Range-seek cold build source
+
+An audit against Erigon's step-oriented `Aggregator.BuildFiles2` and
+`InvertedIndex.collate` paths found a structural cold-build cost in go-tron.
+Erigon builds a known step and seeks its tx-number cursor directly to that
+step's lower bound. Go-tron's cold builder already computed an exact
+`[startBlock, cutoffBlock]`, but discarded it before reading hot history. Each
+5,000-block build then independently walked the complete `StateTxRange` prefix
+for boundary discovery, record collation, tx-range counting, and tx-range
+emission. Repeating that work as the chain grows makes cold construction trend
+toward quadratic metadata scanning.
+
+The cold builder now resumes boundary discovery at the hash-verified
+`SnapshotBuild` stage plus one, and passes the exact block interval through the
+domain registry into all four source iterators. `StateTxRange`'s big-endian
+block suffix becomes the Pebble iterator start, and the physical upper bound
+ends the scan before unrelated rows are decoded. The generic tx-number API is
+unchanged and still scans conservatively; only a builder holding verified block
+bounds may select the fast path. A lifecycle regression test proves that the
+second segment's boundary discovery, record collation, preflight count, and
+emission all seek from the prior published block rather than genesis.
+
+On a Pebble database with 100,000 tx-range rows, reading the final 5,000-row
+window fell from 22.1--22.9 ms and approximately 200,000 allocations to
+1.10--1.13 ms and approximately 10,000 allocations, a 20x improvement matching
+the 20x smaller logical scan. At a 15-million-block mainnet height and the
+current 5,000-block build interval, the steady-state logical metadata scan is
+about 3,000x smaller. The fresh snap-mode production gate must still measure
+complete v5 segment build, compression, merge, prune, and import interference.
 
 ## Benchmark And Production Acceptance
 

@@ -50,6 +50,24 @@ func BuildStateDomainChangeHistorySegmentFromDB(db ethdb.Iteratee, dir string, f
 }
 
 func BuildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+	return buildStateDomainChangeHistorySegmentsFromDB(db, dir, fromTxNum, toTxNum, relPath, nil)
+}
+
+// BuildStateDomainChangeHistorySegmentsFromDBByBlockRange is the production
+// cold-builder entry point. The tx range remains the authoritative segment
+// identity, while the corresponding block range lets physical hot-history
+// iterators seek directly to their first input row.
+func BuildStateDomainChangeHistorySegmentsFromDBByBlockRange(db ethdb.Iteratee, dir string, fromTxNum, toTxNum, fromBlock, toBlock uint64, relPath string) ([]SegmentRef, error) {
+	if toBlock < fromBlock {
+		return nil, fmt.Errorf("snapshots: state-domain-change block range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	return buildStateDomainChangeHistorySegmentsFromDB(db, dir, fromTxNum, toTxNum, relPath, &stateDomainChangeHistoryBlockRange{
+		from: fromBlock,
+		to:   toBlock,
+	})
+}
+
+func buildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string, blockRange *stateDomainChangeHistoryBlockRange) ([]SegmentRef, error) {
 	if db == nil {
 		return nil, errors.New("snapshots: nil database")
 	}
@@ -68,7 +86,7 @@ func BuildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, 
 		Path:      relPath,
 	}
 	if isStateDomainChangeBinarySegmentPath(relPath) {
-		result, err := buildStateDomainChangeHistoryBinarySegmentsFromDB(db, dir, ref, cfg, etl.Options{})
+		result, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db, dir, ref, cfg, etl.Options{}, blockRange)
 		if err != nil {
 			return nil, err
 		}
@@ -76,14 +94,14 @@ func BuildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, 
 	}
 
 	var changes []*rawdb.StateDomainChange
-	if err := cfg.IterateHotHistoryTxRangeChanges(db, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+	if err := iterateStateDomainChangeHistoryChanges(db, cfg, fromTxNum, toTxNum, blockRange, func(change *rawdb.StateDomainChange) (bool, error) {
 		changes = append(changes, cloneStateDomainChangeForSegment(change))
 		return true, nil
 	}); err != nil {
 		return nil, err
 	}
 	var txRanges []*rawdb.StateTxRange
-	if err := cfg.IterateHotHistoryTxRanges(db, func(row *rawdb.StateTxRange) (bool, error) {
+	if err := iterateStateDomainChangeHistorySourceTxRanges(db, cfg, blockRange, func(row *rawdb.StateTxRange) (bool, error) {
 		if row.EndTxNum < fromTxNum || row.BeginTxNum > toTxNum {
 			return true, nil
 		}

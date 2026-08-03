@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -399,6 +400,74 @@ func BenchmarkWriteStateDomainChangeBlockRows(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			if err := WriteStateDomainChangeBlockRows(w, changes); err != nil {
 				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkIterateStateTxRangesTailWindow(b *testing.B) {
+	const (
+		total  = uint64(100_000)
+		window = uint64(5_000)
+	)
+	db, err := NewPebbleDB(b.TempDir(), 64, 64)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	batch := db.NewBatchWithSize(16 << 20)
+	for blockNum := uint64(0); blockNum < total; blockNum++ {
+		if err := WriteStateTxRange(batch, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			b.Fatal(err)
+		}
+		if batch.ValueSize() >= 16<<20 {
+			if err := batch.Write(); err != nil {
+				b.Fatal(err)
+			}
+			batch.Reset()
+		}
+	}
+	if err := batch.Write(); err != nil {
+		b.Fatal(err)
+	}
+	batch.Reset()
+	fromBlock := total - window
+	toBlock := total - 1
+
+	b.Run("prefix-scan", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			rows := uint64(0)
+			if err := IterateStateTxRanges(db, func(row *StateTxRange) (bool, error) {
+				if row.BlockNum < fromBlock {
+					return true, nil
+				}
+				if row.BlockNum > toBlock {
+					return false, nil
+				}
+				rows++
+				return true, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			if rows != window {
+				b.Fatalf("rows = %d, want %d", rows, window)
+			}
+		}
+	})
+	b.Run("bounded-seek", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(float64(total)/float64(window), "logical_scan_reduction_x")
+		for i := 0; i < b.N; i++ {
+			rows := uint64(0)
+			if err := IterateStateTxRangesByBlockRange(db, fromBlock, toBlock, func(*StateTxRange) (bool, error) {
+				rows++
+				return true, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			if rows != window {
+				b.Fatalf("rows = %d, want %d", rows, window)
 			}
 		}
 	})
@@ -1067,6 +1136,32 @@ func TestIterateStateDomainChangesByTxRangeSameBlock(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Seq != 2 || got[0].BlockNum != 12 || got[0].BlockHash != (common.Hash{0x12}) {
 		t.Fatalf("changes in tx range = %+v, want block 12 hash 12 seq 2", got)
+	}
+}
+
+func TestIterateStateTxRangesByBlockRangeSeeksAndStops(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	if err := db.Put(stateTxRangeKey(1), []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	for _, blockNum := range []uint64{2, 3} {
+		if err := WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum*10, blockNum*10+1); err != nil {
+			t.Fatalf("write range %d: %v", blockNum, err)
+		}
+	}
+	if err := db.Put(stateTxRangeKey(4), []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []uint64
+	if err := IterateStateTxRangesByBlockRange(db, 2, 3, func(row *StateTxRange) (bool, error) {
+		got = append(got, row.BlockNum)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate bounded tx ranges: %v", err)
+	}
+	if !slices.Equal(got, []uint64{2, 3}) {
+		t.Fatalf("bounded tx ranges = %v, want [2 3]", got)
 	}
 }
 
