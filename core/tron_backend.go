@@ -3529,12 +3529,12 @@ var ErrArchiveHistoryPruned = fmt.Errorf("archive history pruned for requested b
 //     account view the reader rolls domain changes back from, the same
 //     baseline the live GetBalance/GetCode reads use.
 //
-// The chain mutex is held until the caller finishes the query. StateDB opens
-// against a committed root marker, but latest flat rows are still resolved
-// lazily through the buffer-backed latest domains. Releasing the mutex before
-// AccountAt/CodeAt/StorageAt would let a concurrent InsertBlock advance those
-// latest rows while headNum still points at the older threshold, leaving the
-// new block's writes un-rolled-back in historical answers.
+// Production Pebble nodes pin an immutable blockbuffer + durable MVCC read
+// snapshot while chainmu is held, then release chainmu before returning. The
+// fixed view keeps latest flat rows, temporal rows, and headNum on the same
+// boundary while allowing canonical imports to continue during a long archive
+// scan. Backends without durable snapshot support (notably memorydb tests) keep
+// the legacy chainmu lease until the reader is closed.
 //
 // Callers that serve archive/as-of API requests should use archiveStateAt so
 // range, mode, and prune-window gates cannot be skipped. Direct callers remain
@@ -3547,6 +3547,17 @@ func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64,
 func (b *TronBackend) historyReaderAtContext(ctx context.Context) (*state.PersistentHistoryReader, uint64, tcommon.Hash, func(), error) {
 	if err := lockMutexContext(ctx, &b.chain.chainmu); err != nil {
 		return nil, 0, tcommon.Hash{}, nil, err
+	}
+	// A deep async-commit session can publish CurrentBlock just before its
+	// worker promotes that block's completed layer. Drain the bounded worker
+	// queue at this capture boundary so the pinned topology is fully immutable
+	// and corresponds exactly to the head/root recorded below.
+	if b.chain.commitPending != nil {
+		b.chain.WaitForCommitSettled()
+	}
+	if errPtr := b.chain.commitErr.Load(); errPtr != nil {
+		b.chain.chainmu.Unlock()
+		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("settle archive state snapshot: %w", *errPtr)
 	}
 	headNum := b.chain.CurrentBlock().Number()
 	root, ok, err := b.chain.stateRootAtBlockStrict(headNum)
@@ -3563,9 +3574,26 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context) (*state.Persis
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("open head state: %w", err)
 	}
-	reader := state.NewPersistentHistoryReaderWithColdHistory(b.chain.buffer, live, headNum, b.stateColdHistory)
+	historyDB := stateHistoryReaderDB(b.chain.buffer)
+	release := b.chain.chainmu.Unlock
+	if snapshot, snapshotErr := b.chain.buffer.NewReadSnapshot(); snapshotErr == nil {
+		historyDB = snapshot
+		live.SetStateCodeReader(snapshot)
+		live.SetAccountKVIndexStore(snapshot)
+		b.chain.chainmu.Unlock()
+		release = func() { _ = snapshot.Close() }
+	} else if !errors.Is(snapshotErr, blockbuffer.ErrReadSnapshotUnsupported) {
+		b.chain.chainmu.Unlock()
+		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("snapshot archive state: %w", snapshotErr)
+	}
+	reader := state.NewPersistentHistoryReaderWithColdHistory(historyDB, live, headNum, b.stateColdHistory)
 	reader.SetContext(ctx)
-	return reader, headNum, root, b.chain.chainmu.Unlock, nil
+	return reader, headNum, root, release, nil
+}
+
+type stateHistoryReaderDB interface {
+	ethdb.KeyValueReader
+	ethdb.Iteratee
 }
 
 func lockMutexContext(ctx context.Context, mu *sync.Mutex) error {
@@ -3719,7 +3747,11 @@ func (b *TronBackend) archiveStateTxNumAtBlockEnd(blockNum uint64) (uint64, erro
 // ErrArchiveHistoryDisabled. A non-existent account at that height returns
 // (0, nil) — matching the live GetBalance "no account ⇒ 0" convention.
 func (b *TronBackend) GetBalanceAt(addr tcommon.Address, blockNum uint64) (int64, error) {
-	session, err := b.archiveStateAt(blockNum)
+	return b.GetBalanceAtContext(context.Background(), addr, blockNum)
+}
+
+func (b *TronBackend) GetBalanceAtContext(ctx context.Context, addr tcommon.Address, blockNum uint64) (int64, error) {
+	session, err := b.archiveStateAt(blockNum, ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -3738,7 +3770,11 @@ func (b *TronBackend) GetBalanceAt(addr tcommon.Address, blockNum uint64) (int64
 // Same gating as GetBalanceAt. Returns (nil, nil) for an account that had
 // no code (or did not exist) at that height.
 func (b *TronBackend) GetCodeAt(addr tcommon.Address, blockNum uint64) ([]byte, error) {
-	session, err := b.archiveStateAt(blockNum)
+	return b.GetCodeAtContext(context.Background(), addr, blockNum)
+}
+
+func (b *TronBackend) GetCodeAtContext(ctx context.Context, addr tcommon.Address, blockNum uint64) ([]byte, error) {
+	session, err := b.archiveStateAt(blockNum, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -3751,7 +3787,11 @@ func (b *TronBackend) GetCodeAt(addr tcommon.Address, blockNum uint64) ([]byte, 
 // slot or a non-existent account at that height. Named GetStorageAtBlock
 // (not GetStorageAt) so it doesn't collide with the live single-arg reader.
 func (b *TronBackend) GetStorageAtBlock(addr tcommon.Address, slot tcommon.Hash, blockNum uint64) (tcommon.Hash, error) {
-	session, err := b.archiveStateAt(blockNum)
+	return b.GetStorageAtBlockContext(context.Background(), addr, slot, blockNum)
+}
+
+func (b *TronBackend) GetStorageAtBlockContext(ctx context.Context, addr tcommon.Address, slot tcommon.Hash, blockNum uint64) (tcommon.Hash, error) {
+	session, err := b.archiveStateAt(blockNum, ctx)
 	if err != nil {
 		return tcommon.Hash{}, err
 	}

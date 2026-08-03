@@ -383,13 +383,23 @@ func iterateStateDomainChangesByKey(db StateKVHistoryReader, fromBlock, toBlock 
 	}
 	blocks := make(map[uint64]struct{})
 	collectBlock := func(blockNum uint64) (bool, error) {
-		ok, err := stateBlockIntersectsTxWindow(db, blockNum, targetTxNum, headTxNum)
-		if err != nil {
-			return false, err
+		// The block-bounded archive path already restricts candidates to
+		// (targetBlock, headBlock]. targetTxNum/headTxNum are the respective
+		// end-of-block boundaries, so every change in those candidate blocks is
+		// necessarily inside the tx window. Avoid one StateTxRange Has+Get per
+		// inverse-index hit — frequently updated dynamic properties otherwise
+		// turn a 260k-block query into hundreds of thousands of Pebble point
+		// reads before the actual history row is examined.
+		if !bounded {
+			ok, err := stateBlockIntersectsTxWindow(db, blockNum, targetTxNum, headTxNum)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return true, nil
+			}
 		}
-		if ok {
-			blocks[blockNum] = struct{}{}
-		}
+		blocks[blockNum] = struct{}{}
 		return true, nil
 	}
 	var err error

@@ -57,11 +57,12 @@ type stubBackend struct {
 	// (used to exercise the history-disabled gate at the handler layer).
 	// Otherwise they return the at* values, letting a test assert the
 	// handler routed to the archive path rather than the live one.
-	atErr     error
-	balanceAt int64
-	codeAt    []byte
-	storageAt common.Hash
-	liveErr   error
+	atErr            error
+	balanceAt        int64
+	balanceAtContext func(context.Context, common.Address, uint64) (int64, error)
+	codeAt           []byte
+	storageAt        common.Hash
+	liveErr          error
 
 	// Trace recording (debug namespace): the *At methods capture the parsed
 	// arguments so tests can assert the DebugAPI routed/parsed correctly, and
@@ -107,17 +108,30 @@ func (s *stubBackend) GetBalanceAt(addr common.Address, blockNum uint64) (int64,
 	}
 	return s.balanceAt, nil
 }
+
+func (s *stubBackend) GetBalanceAtContext(ctx context.Context, addr common.Address, blockNum uint64) (int64, error) {
+	if s.balanceAtContext != nil {
+		return s.balanceAtContext(ctx, addr, blockNum)
+	}
+	return s.GetBalanceAt(addr, blockNum)
+}
 func (s *stubBackend) GetCodeAt(addr common.Address, blockNum uint64) ([]byte, error) {
 	if s.atErr != nil {
 		return nil, s.atErr
 	}
 	return s.codeAt, nil
 }
+func (s *stubBackend) GetCodeAtContext(_ context.Context, addr common.Address, blockNum uint64) ([]byte, error) {
+	return s.GetCodeAt(addr, blockNum)
+}
 func (s *stubBackend) GetStorageAtBlock(addr common.Address, slot common.Hash, blockNum uint64) (common.Hash, error) {
 	if s.atErr != nil {
 		return common.Hash{}, s.atErr
 	}
 	return s.storageAt, nil
+}
+func (s *stubBackend) GetStorageAtBlockContext(_ context.Context, addr common.Address, slot common.Hash, blockNum uint64) (common.Hash, error) {
+	return s.GetStorageAtBlock(addr, slot, blockNum)
 }
 func (s *stubBackend) GetBlockByNumber(num uint64) (*types.Block, error) {
 	if s.blockErr != nil {

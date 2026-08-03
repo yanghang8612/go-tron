@@ -2,6 +2,7 @@ package jsonrpc_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 )
 
 // Slice 7 of the State History Index: JSON-RPC archive-query handler tests.
@@ -72,6 +74,23 @@ func TestEthGetBalance_ArchiveBlock(t *testing.T) {
 		if hist["result"] != sunToWeiHex(2_000_000) {
 			t.Errorf("block %v balance = %v, want %v (archive path)", blockArg, hist["result"], sunToWeiHex(2_000_000))
 		}
+	}
+}
+
+func TestEthGetBalance_ArchivePropagatesRequestContext(t *testing.T) {
+	backend := &stubBackend{blockNumber: 100}
+	backend.balanceAtContext = func(ctx context.Context, _ common.Address, blockNum uint64) (int64, error) {
+		if blockNum != 5 {
+			t.Fatalf("blockNum = %d, want 5", blockNum)
+		}
+		return 0, ctx.Err()
+	}
+	api := jsonrpc.NewEthAPI(backend, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	block := "0x5"
+	if _, err := api.GetBalance(ctx, archiveTestAddr, &block); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetBalance canceled context err = %v, want context.Canceled", err)
 	}
 }
 

@@ -350,6 +350,15 @@ type pointReadSnapshot struct {
 	nextReserved      int
 }
 
+// keyValueSnapshot exposes one Pebble sequence through the generic ethdb read
+// surface needed by archive state reconstruction. The snapshot owns the same
+// database lifecycle read lease as pointReadSnapshot, so Database.Close cannot
+// invalidate it while an RPC is still reading.
+type keyValueSnapshot struct {
+	db       *Database
+	snapshot *pebble.Snapshot
+}
+
 type pointReadCursor struct {
 	iter *pebble.Iterator
 }
@@ -360,6 +369,8 @@ var _ pointread.Snapshotter = (*Database)(nil)
 var _ pointread.CapacitySnapshotter = (*Database)(nil)
 var _ pointread.Snapshot = (*pointReadSnapshot)(nil)
 var _ pointread.Cursor = (*pointReadCursor)(nil)
+var _ pointread.KeyValueSnapshotter = (*Database)(nil)
+var _ pointread.KeyValueSnapshot = (*keyValueSnapshot)(nil)
 
 // NewPointReadView acquires one read-side lifecycle lease. Close must be called
 // before Database.Close can complete; normal reads, writes, flushes and
@@ -423,6 +434,79 @@ func (d *Database) newPointReadSnapshot(cursors int) (pointread.Snapshot, error)
 		s.reservedCursors = make([]pointReadCursor, cursors)
 	}
 	return s, nil
+}
+
+// NewKeyValueSnapshot pins one Pebble MVCC sequence for generic point and
+// prefix reads. Archive queries combine this with a pinned blockbuffer layer
+// topology so canonical imports can proceed without changing the query's head
+// baseline.
+func (d *Database) NewKeyValueSnapshot() (pointread.KeyValueSnapshot, error) {
+	d.quitLock.RLock()
+	if d.closed {
+		d.quitLock.RUnlock()
+		return nil, pebble.ErrClosed
+	}
+	return &keyValueSnapshot{db: d, snapshot: d.db.NewSnapshot()}, nil
+}
+
+func (s *keyValueSnapshot) Has(key []byte) (bool, error) {
+	if s == nil || s.snapshot == nil {
+		return false, pebble.ErrClosed
+	}
+	_, closer, err := s.snapshot.Get(key)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if closer != nil {
+		if err := closer.Close(); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func (s *keyValueSnapshot) Get(key []byte) ([]byte, error) {
+	if s == nil || s.snapshot == nil {
+		return nil, pebble.ErrClosed
+	}
+	value, closer, err := s.snapshot.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	defer closer.Close()
+	return append([]byte(nil), value...), nil
+}
+
+func (s *keyValueSnapshot) NewIterator(prefix, start []byte) ethdb.Iterator {
+	if s == nil || s.snapshot == nil {
+		return &pebbleIterator{err: pebble.ErrClosed, released: true}
+	}
+	lower := make([]byte, 0, len(prefix)+len(start))
+	lower = append(lower, prefix...)
+	lower = append(lower, start...)
+	iter, err := s.snapshot.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: upperBound(prefix),
+	})
+	if err != nil {
+		return &pebbleIterator{err: err, released: true}
+	}
+	iter.First()
+	return &pebbleIterator{iter: iter, moved: true}
+}
+
+func (s *keyValueSnapshot) Close() error {
+	if s == nil || s.snapshot == nil {
+		return nil
+	}
+	err := s.snapshot.Close()
+	s.snapshot = nil
+	s.db.quitLock.RUnlock()
+	s.db = nil
+	return err
 }
 
 func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
@@ -1365,6 +1449,7 @@ type pebbleIterator struct {
 	iter     *pebble.Iterator
 	moved    bool
 	released bool
+	err      error
 }
 
 // NewIterator creates a binary-alphabetical iterator over a subset
@@ -1382,6 +1467,9 @@ func (d *Database) NewIterator(prefix []byte, start []byte) ethdb.Iterator {
 // Next moves the iterator to the next key/value pair. It returns whether the
 // iterator is exhausted.
 func (iter *pebbleIterator) Next() bool {
+	if iter == nil || iter.err != nil || iter.iter == nil {
+		return false
+	}
 	if iter.moved {
 		iter.moved = false
 		return iter.iter.Valid()
@@ -1392,6 +1480,15 @@ func (iter *pebbleIterator) Next() bool {
 // Error returns any accumulated error. Exhausting all the key/value pairs
 // is not considered to be an error.
 func (iter *pebbleIterator) Error() error {
+	if iter == nil {
+		return nil
+	}
+	if iter.err != nil {
+		return iter.err
+	}
+	if iter.iter == nil {
+		return nil
+	}
 	return iter.iter.Error()
 }
 
@@ -1399,6 +1496,9 @@ func (iter *pebbleIterator) Error() error {
 // should not modify the contents of the returned slice, and its contents may
 // change on the next call to Next.
 func (iter *pebbleIterator) Key() []byte {
+	if iter == nil || iter.iter == nil {
+		return nil
+	}
 	return iter.iter.Key()
 }
 
@@ -1406,13 +1506,16 @@ func (iter *pebbleIterator) Key() []byte {
 // caller should not modify the contents of the returned slice, and its contents
 // may change on the next call to Next.
 func (iter *pebbleIterator) Value() []byte {
+	if iter == nil || iter.iter == nil {
+		return nil
+	}
 	return iter.iter.Value()
 }
 
 // Release releases associated resources. Release should always succeed and can
 // be called multiple times without causing error.
 func (iter *pebbleIterator) Release() {
-	if !iter.released {
+	if iter != nil && !iter.released && iter.iter != nil {
 		iter.iter.Close()
 		iter.released = true
 	}

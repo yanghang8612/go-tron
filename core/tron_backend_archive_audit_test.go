@@ -34,12 +34,12 @@ func TestArchiveStateAtCallersCloseSession(t *testing.T) {
 		"GetAssetIssueByAccountAt":             1,
 		"GetAssetIssueByIDAt":                  1,
 		"GetAssetIssueByNameAt":                1,
-		"GetBalanceAt":                         1,
+		"GetBalanceAtContext":                  1,
 		"GetBandwidthPricesAt":                 1,
 		"GetBrokerageInfoAt":                   1,
 		"GetBurnTrxAt":                         1,
 		"GetChainParametersAt":                 1,
-		"GetCodeAt":                            1,
+		"GetCodeAtContext":                     1,
 		"GetContractAt":                        1,
 		"GetDelegatedResourceAccountIndexV2At": 1,
 		"GetDelegatedResourceAccountIndexAt":   1,
@@ -54,7 +54,7 @@ func TestArchiveStateAtCallersCloseSession(t *testing.T) {
 		"GetMarketPriceByPairAt":               1,
 		"GetProposalByIDAt":                    1,
 		"GetRewardAt":                          1,
-		"GetStorageAtBlock":                    1,
+		"GetStorageAtBlockContext":             1,
 		"ListExchangesAt":                      1,
 		"ListProposalsAt":                      1,
 		"ListWitnessesAt":                      1,
@@ -125,6 +125,7 @@ func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
 
 	expected := map[string][]string{
 		"CallAt":                               {"CallAtContext"},
+		"CallAtContext":                        {"TriggerConstantContractAtContext"},
 		"CanDelegateResourceAt":                {"archiveStateAt"},
 		"EstimateEnergyAt":                     {"TriggerConstantContractAt"},
 		"EstimateGasAt":                        {"TriggerConstantContractAt", "archiveStateAt"},
@@ -138,13 +139,15 @@ func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
 		"GetAssetIssueListAt":                  {"listAssetsAt"},
 		"GetAssetIssueListPaginatedAt":         {"listAssetsAt"},
 		"GetAvailableUnfreezeCountAt":          {"accountAtOrNil"},
-		"GetBalanceAt":                         {"archiveStateAt"},
+		"GetBalanceAt":                         {"GetBalanceAtContext"},
+		"GetBalanceAtContext":                  {"archiveStateAt"},
 		"GetBandwidthPricesAt":                 {"archiveStateAt"},
 		"GetBrokerageInfoAt":                   {"archiveStateAt"},
 		"GetBurnTrxAt":                         {"archiveStateAt"},
 		"GetCanWithdrawUnfreezeAmountAt":       {"accountAtOrNil"},
 		"GetChainParametersAt":                 {"archiveStateAt"},
-		"GetCodeAt":                            {"archiveStateAt"},
+		"GetCodeAt":                            {"GetCodeAtContext"},
+		"GetCodeAtContext":                     {"archiveStateAt"},
 		"GetContractAt":                        {"archiveStateAt"},
 		"GetDelegatedResourceAccountIndexV2At": {"archiveStateAt"},
 		"GetDelegatedResourceAccountIndexAt":   {"archiveStateAt"},
@@ -159,7 +162,8 @@ func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
 		"GetMarketPriceByPairAt":               {"archiveStateAt"},
 		"GetProposalByIDAt":                    {"archiveStateAt"},
 		"GetRewardAt":                          {"archiveStateAt"},
-		"GetStorageAtBlock":                    {"archiveStateAt"},
+		"GetStorageAtBlock":                    {"GetStorageAtBlockContext"},
+		"GetStorageAtBlockContext":             {"archiveStateAt"},
 		"ListExchangesAt":                      {"archiveStateAt"},
 		"ListExchangesPaginatedAt":             {"ListExchangesAt"},
 		"ListProposalsAt":                      {"archiveStateAt"},
@@ -167,6 +171,7 @@ func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
 		"ListWitnessesAt":                      {"archiveStateAt"},
 		"NextMaintenanceTimeAt":                {"archiveStateAt"},
 		"TriggerConstantContractAt":            {"TriggerConstantContractAtContext"},
+		"TriggerConstantContractAtContext":     {"archiveStateAt"},
 	}
 
 	actual := make(map[string][]string)
@@ -432,7 +437,10 @@ func isPublicBlockBoundArchiveAPI(fn *ast.FuncDecl) bool {
 	if fn == nil || !ast.IsExported(fn.Name.Name) {
 		return false
 	}
-	if !strings.HasSuffix(fn.Name.Name, "At") && !strings.HasSuffix(fn.Name.Name, "AtBlock") {
+	if !strings.HasSuffix(fn.Name.Name, "At") &&
+		!strings.HasSuffix(fn.Name.Name, "AtBlock") &&
+		!strings.HasSuffix(fn.Name.Name, "AtContext") &&
+		!strings.HasSuffix(fn.Name.Name, "AtBlockContext") {
 		return false
 	}
 	return hasUint64ParamNamed(fn.Type.Params, "blockNum")
@@ -469,6 +477,9 @@ func exprTypeName(expr ast.Expr) string {
 func archiveBoundaryCallNames(body *ast.BlockStmt) []string {
 	boundaries := map[string]struct{}{
 		"CallAtContext":                    {},
+		"GetBalanceAtContext":              {},
+		"GetCodeAtContext":                 {},
+		"GetStorageAtBlockContext":         {},
 		"ListExchangesAt":                  {},
 		"ListProposalsAt":                  {},
 		"TriggerConstantContractAt":        {},

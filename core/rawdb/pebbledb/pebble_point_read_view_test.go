@@ -106,6 +106,63 @@ func TestPointReadSnapshotCursorIsStableAndExact(t *testing.T) {
 	}
 }
 
+func TestKeyValueSnapshotPinsPointAndIteratorReads(t *testing.T) {
+	db, err := New(t.TempDir(), 16, 16, "test/kv-snapshot/", false, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Put([]byte("state/a"), []byte("before-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put([]byte("state/b"), []byte("before-b")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := db.NewKeyValueSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+
+	if err := db.Put([]byte("state/a"), []byte("after-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete([]byte("state/b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put([]byte("state/c"), []byte("after-c")); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := snapshot.Get([]byte("state/a")); err != nil || !bytes.Equal(got, []byte("before-a")) {
+		t.Fatalf("snapshot point value = (%q,%v), want before-a", got, err)
+	}
+	if ok, err := snapshot.Has([]byte("state/b")); err != nil || !ok {
+		t.Fatalf("snapshot deleted-key presence = (%v,%v), want true/nil", ok, err)
+	}
+	if ok, err := snapshot.Has([]byte("state/c")); err != nil || ok {
+		t.Fatalf("snapshot future-key presence = (%v,%v), want false/nil", ok, err)
+	}
+
+	it := snapshot.NewIterator([]byte("state/"), nil)
+	defer it.Release()
+	var keys []string
+	var values [][]byte
+	for it.Next() {
+		keys = append(keys, string(it.Key()))
+		values = append(values, append([]byte(nil), it.Value()...))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(keys), "[state/a state/b]"; got != want {
+		t.Fatalf("snapshot iterator keys = %s, want %s", got, want)
+	}
+	if !bytes.Equal(values[0], []byte("before-a")) || !bytes.Equal(values[1], []byte("before-b")) {
+		t.Fatalf("snapshot iterator values = %q", values)
+	}
+}
+
 func TestPointReadSnapshotReservedCursorsAreConcurrentAndExact(t *testing.T) {
 	db, err := New(t.TempDir(), 16, 16, "test/reserved-snapshot/", false, Options{})
 	if err != nil {

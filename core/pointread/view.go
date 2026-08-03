@@ -3,6 +3,8 @@
 // lets engines implement them without reversing package dependencies.
 package pointread
 
+import "github.com/ethereum/go-ethereum/ethdb"
+
 // View holds a storage engine's read-side lifecycle lease across a burst of
 // exact-key lookups. Implementations invoke fn synchronously; value is valid
 // only until fn returns. Get is safe for concurrent use unless an engine
@@ -48,6 +50,25 @@ type Snapshotter interface {
 // bound state for one parallel read session.
 type CapacitySnapshotter interface {
 	NewPointReadSnapshotWithCapacity(cursors int) (Snapshot, error)
+}
+
+// KeyValueSnapshot is a stable point-in-time view that supports both exact
+// reads and ordered prefix iteration. It is intentionally separate from the
+// cursor-oriented Snapshot above: archive state reconstruction needs generic
+// rawdb accessors, while commitment folds know their exact physical prefixes
+// and benefit from reusable cursors.
+type KeyValueSnapshot interface {
+	ethdb.KeyValueReader
+	ethdb.Iteratee
+	Close() error
+}
+
+// KeyValueSnapshotter is an optional durable-store capability used by
+// blockbuffer to pin its base sequence while also pinning one immutable layer
+// topology. Implementations keep the returned view valid until Close even as
+// ordinary writes and compactions continue.
+type KeyValueSnapshotter interface {
+	NewKeyValueSnapshot() (KeyValueSnapshot, error)
 }
 
 // CommitmentParentView resolves split physical keys against the parent state

@@ -1873,6 +1873,70 @@ func TestArchiveQuery_ArchiveStateSessionHoldsChainMutex(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_PebbleSnapshotReleasesChainMutexAndPinsHead(t *testing.T) {
+	diskdb, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer diskdb.Close()
+	cfg := cloneMainnetChainConfig()
+	cfg.HistoryEnabled = true
+	witness := testInsertAddr(1)
+	const genesisBalance = int64(99_000_000_000_000_000)
+	genesis := &params.Genesis{
+		Config:    cfg,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witness, Balance: genesisBalance},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witness, VoteCount: 1, URL: "test"},
+			{Address: testInsertAddr(20), VoteCount: 1, URL: "sr2"},
+			{Address: testInsertAddr(21), VoteCount: 1, URL: "sr3"},
+		},
+		DynamicProperties: map[string]int64{"next_maintenance_time": 1<<62 - 1},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(diskdb))
+	bc, err := NewBlockChain(diskdb, sdb, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+	backend := &TronBackend{chain: bc}
+
+	session, err := backend.archiveStateAt(0)
+	if err != nil {
+		t.Fatalf("archiveStateAt: %v", err)
+	}
+	defer session.Close()
+
+	inserted := make(chan error, 1)
+	go func() {
+		block := buildTransferBlock(t, 1, 3000, genesisHash, witness, 1_000)
+		inserted <- bc.InsertBlock(block)
+	}()
+	select {
+	case err := <-inserted:
+		if err != nil {
+			t.Fatalf("InsertBlock while archive snapshot open: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("InsertBlock blocked behind archive snapshot chainmu")
+	}
+
+	account, err := session.reader.AccountAt(witness, 0)
+	if err != nil {
+		t.Fatalf("snapshot AccountAt(genesis): %v", err)
+	}
+	if account == nil || account.Balance() != genesisBalance {
+		t.Fatalf("snapshot genesis balance = %v, want %d", account, genesisBalance)
+	}
+}
+
 func TestArchiveExecutionRootUsesSessionHeadRoot(t *testing.T) {
 	want := tcommon.HexToHash("0x1234")
 	b := &TronBackend{}

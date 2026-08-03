@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"runtime"
 	"slices"
 	"strings"
@@ -38,6 +39,74 @@ type stringKeyWriterProbe struct {
 func TestLayerShardFitsOneCacheLine(t *testing.T) {
 	if size := unsafe.Sizeof(layerShard{}); size != 64 {
 		t.Fatalf("layerShard size = %d, want 64", size)
+	}
+}
+
+func TestReadSnapshotPinsBaseAndLayerTopologyAcrossFlush(t *testing.T) {
+	base, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer base.Close()
+	if err := base.Put([]byte("state/base"), []byte("base-before")); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := New(base)
+	buf.BeginBlock(bufHash(1), 1)
+	if err := buf.Put([]byte("state/overlay"), []byte("overlay-before")); err != nil {
+		t.Fatal(err)
+	}
+	buf.CommitBlock()
+
+	snapshot, err := buf.NewReadSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+
+	if err := base.Put([]byte("state/base"), []byte("base-after")); err != nil {
+		t.Fatal(err)
+	}
+	buf.BeginBlock(bufHash(2), 2)
+	if err := buf.Put([]byte("state/overlay"), []byte("overlay-after")); err != nil {
+		t.Fatal(err)
+	}
+	if err := buf.Put([]byte("state/future"), []byte("future")); err != nil {
+		t.Fatal(err)
+	}
+	buf.CommitBlock()
+	if err := buf.FlushUpTo(1, base); err != nil {
+		t.Fatal(err)
+	}
+
+	for key, want := range map[string]string{
+		"state/base":    "base-before",
+		"state/overlay": "overlay-before",
+	} {
+		got, err := snapshot.Get([]byte(key))
+		if err != nil || string(got) != want {
+			t.Fatalf("snapshot.Get(%q) = (%q,%v), want %q", key, got, err, want)
+		}
+	}
+	if ok, err := snapshot.Has([]byte("state/future")); err != nil || ok {
+		t.Fatalf("snapshot future key = (%v,%v), want false/nil", ok, err)
+	}
+
+	it := snapshot.NewIterator([]byte("state/"), nil)
+	defer it.Release()
+	got := make(map[string]string)
+	for it.Next() {
+		got[string(it.Key())] = string(it.Value())
+	}
+	if err := it.Error(); err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(got, map[string]string{
+		"state/base":    "base-before",
+		"state/overlay": "overlay-before",
+	}) {
+		t.Fatalf("snapshot iterator = %v", got)
 	}
 }
 

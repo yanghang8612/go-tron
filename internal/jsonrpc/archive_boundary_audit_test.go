@@ -15,9 +15,9 @@ func TestEthAPIBlockTagMethodsUseArchiveBackends(t *testing.T) {
 	expected := map[string][]string{
 		"Call":                {"Call", "CallAtContext"},
 		"EstimateGas":         {"EstimateGas", "EstimateGasAt"},
-		"GetBalance":          {"GetBalance", "GetBalanceAt"},
-		"GetCode":             {"GetCode", "GetCodeAt"},
-		"GetStorageAt":        {"GetStorageAt", "GetStorageAtBlock"},
+		"GetBalance":          {"GetBalance", "GetBalanceAtContext"},
+		"GetCode":             {"GetCode", "GetCodeAtContext"},
+		"GetStorageAt":        {"GetStorageAt", "GetStorageAtBlockContext"},
 		"GetTransactionCount": nil,
 	}
 
@@ -313,17 +313,20 @@ func jsonRPCBackendReceiverEscapes(fset *token.FileSet, sourceFile string, file 
 
 func jsonRPCArchiveBackendMethods() map[string]struct{} {
 	return map[string]struct{}{
-		"Call":              {},
-		"CallAt":            {},
-		"CallAtContext":     {},
-		"EstimateGas":       {},
-		"EstimateGasAt":     {},
-		"GetBalance":        {},
-		"GetBalanceAt":      {},
-		"GetCode":           {},
-		"GetCodeAt":         {},
-		"GetStorageAt":      {},
-		"GetStorageAtBlock": {},
+		"Call":                     {},
+		"CallAt":                   {},
+		"CallAtContext":            {},
+		"EstimateGas":              {},
+		"EstimateGasAt":            {},
+		"GetBalance":               {},
+		"GetBalanceAt":             {},
+		"GetBalanceAtContext":      {},
+		"GetCode":                  {},
+		"GetCodeAt":                {},
+		"GetCodeAtContext":         {},
+		"GetStorageAt":             {},
+		"GetStorageAtBlock":        {},
+		"GetStorageAtBlockContext": {},
 	}
 }
 

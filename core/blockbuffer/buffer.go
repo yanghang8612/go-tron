@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 )
@@ -45,6 +46,12 @@ import (
 // missing keys (memorydb / pebble both return non-nil errors for misses;
 // callers normally check err != nil rather than identity).
 var ErrNotFound = errors.New("blockbuffer: not found")
+
+// ErrReadSnapshotUnsupported reports that the durable base cannot pin an MVCC
+// sequence. Callers that require a cross-operation consistent view must retain
+// their external writer lock or reject the operation instead of silently using
+// the moving Buffer read surface.
+var ErrReadSnapshotUnsupported = errors.New("blockbuffer: durable read snapshot unsupported")
 
 var (
 	flushInputOpsCounter                         = metrics.NewRegisteredCounter("blockbuffer/flush/input/ops", nil)
@@ -481,6 +488,146 @@ type Buffer struct {
 	// treated as 1 (single-active, the default). BeginBlock panics past it,
 	// preserving the legacy double-Begin guard in the default configuration.
 	maxInflight int
+}
+
+// ReadSnapshot pins both halves of one logical Buffer view: the immutable
+// layer topology published at construction time and one MVCC sequence of the
+// durable base. Layer pointers remain alive even if a concurrent flush drops
+// them from Buffer; newer blocks publish new layers that are absent here. A
+// caller must construct the snapshot while its external single-writer lock is
+// held so no in-flight layer is being advanced at the capture boundary.
+//
+// Put/Delete intentionally return an error. StateDB's read-only TVM execution
+// accepts a read/write-shaped latest-index store, but does not persist its dirty
+// overlay; advertising explicit failure is safer than accidentally mutating a
+// snapshot if that invariant ever changes.
+type ReadSnapshot struct {
+	view   *bufferReadView
+	base   pointread.KeyValueSnapshot
+	closed atomic.Bool
+}
+
+var _ ethdb.KeyValueReader = (*ReadSnapshot)(nil)
+var _ ethdb.KeyValueWriter = (*ReadSnapshot)(nil)
+var _ ethdb.Iteratee = (*ReadSnapshot)(nil)
+
+// NewReadSnapshot captures a stable logical read view. flushMu makes the base
+// sequence and layer topology atomic with respect to FlushUpTo's
+// overlay-to-durable handoff: a row is therefore visible from exactly the
+// captured overlay/base combination even after that flush completes.
+func (b *Buffer) NewReadSnapshot() (*ReadSnapshot, error) {
+	if b == nil || b.base == nil {
+		return nil, ErrReadSnapshotUnsupported
+	}
+	factory, ok := b.base.(pointread.KeyValueSnapshotter)
+	if !ok {
+		return nil, ErrReadSnapshotUnsupported
+	}
+
+	b.flushMu.Lock()
+	b.mu.RLock()
+	base, err := factory.NewKeyValueSnapshot()
+	if err != nil {
+		b.mu.RUnlock()
+		b.flushMu.Unlock()
+		return nil, err
+	}
+	view := b.readView.Load()
+	if view == nil {
+		view = &bufferReadView{baseReadCache: b.baseReadCache}
+		view.inflight = append(view.inflight, b.inflight...)
+		view.layers = append(view.layers, b.layers...)
+	}
+	b.mu.RUnlock()
+	b.flushMu.Unlock()
+	return &ReadSnapshot{view: view, base: base}, nil
+}
+
+func (s *ReadSnapshot) Get(key []byte) ([]byte, error) {
+	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
+		return nil, ErrNotFound
+	}
+	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(s.view.inflight, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return append([]byte(nil), value...), nil
+	}
+	if value, found, tomb := lookupLayersNewest(s.view.layers, key, keyHash); tomb {
+		return nil, ErrNotFound
+	} else if found {
+		return append([]byte(nil), value...), nil
+	}
+	return s.base.Get(key)
+}
+
+func (s *ReadSnapshot) Has(key []byte) (bool, error) {
+	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
+		return false, nil
+	}
+	keyHash := layerBloomHashBytes(key)
+	if _, found, tomb := lookupLayersNewest(s.view.inflight, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, nil
+	}
+	if _, found, tomb := lookupLayersNewest(s.view.layers, key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, nil
+	}
+	return s.base.Has(key)
+}
+
+func (*ReadSnapshot) Put([]byte, []byte) error {
+	return errors.New("blockbuffer: write through read snapshot")
+}
+
+func (*ReadSnapshot) Delete([]byte) error {
+	return errors.New("blockbuffer: delete through read snapshot")
+}
+
+func (s *ReadSnapshot) NewIterator(prefix, start []byte) ethdb.Iterator {
+	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
+		return &bufferIterator{err: ErrNotFound}
+	}
+	overlay := newOverlayState()
+	for i := len(s.view.inflight) - 1; i >= 0; i-- {
+		overlay.walk(s.view.inflight[i], prefix, start)
+	}
+	for i := len(s.view.layers) - 1; i >= 0; i-- {
+		overlay.walk(s.view.layers[i], prefix, start)
+	}
+	return finishIteratorWithBase(s.base, overlay, prefix, start)
+}
+
+func (s *ReadSnapshot) NewStateKVLatestIterator(schemaPrefix []byte, accountID common.AccountID, physicalPrefix []byte) ethdb.Iterator {
+	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
+		return &bufferIterator{err: ErrNotFound}
+	}
+	overlay := newOverlayState()
+	schema := string(schemaPrefix)
+	physical := unsafe.String(unsafe.SliceData(physicalPrefix), len(physicalPrefix))
+	for i := len(s.view.inflight) - 1; i >= 0; i-- {
+		overlay.walkPrefixBucket(s.view.inflight[i], schema, accountID[0], physical)
+	}
+	for i := len(s.view.layers) - 1; i >= 0; i-- {
+		overlay.walkPrefixBucket(s.view.layers[i], schema, accountID[0], physical)
+	}
+	return finishIteratorWithBase(s.base, overlay, physicalPrefix, nil)
+}
+
+func (s *ReadSnapshot) Close() error {
+	if s == nil || !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	var err error
+	if s.base != nil {
+		err = s.base.Close()
+	}
+	s.base = nil
+	s.view = nil
+	return err
 }
 
 type bufferBatchOp struct {
@@ -2914,9 +3061,13 @@ func (o *overlayState) walkPrefixBucket(l *layer, schema string, bucket byte, ph
 // (the base store has its own concurrency control; overlay is already a private
 // copy). Shared by Buffer.NewIterator and LayerView.NewIterator.
 func (b *Buffer) finishIterator(overlay *overlayState, prefix, start []byte) ethdb.Iterator {
+	return finishIteratorWithBase(b.base, overlay, prefix, start)
+}
+
+func finishIteratorWithBase(base ethdb.KeyValueReader, overlay *overlayState, prefix, start []byte) ethdb.Iterator {
 	var entries []bufferIteratorEntry
-	if b.base != nil {
-		if iter, ok := b.base.(ethdb.Iteratee); ok {
+	if base != nil {
+		if iter, ok := base.(ethdb.Iteratee); ok {
 			it := iter.NewIterator(prefix, start)
 			for it.Next() {
 				key := it.Key()

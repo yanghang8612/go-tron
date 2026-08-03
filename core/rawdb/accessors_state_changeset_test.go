@@ -371,9 +371,15 @@ func TestIterateStateDomainChangesByKeyBlockRangeSeeksPastOldHistory(t *testing.
 		}
 	}
 	// A bounded iterator must neither point-read history before its lower
-	// block bound nor continue beyond its upper bound. Malformed rows on both
-	// sides make an accidental read fail deterministically.
+	// block bound nor continue beyond its upper bound. It also does not need
+	// StateTxRange for the in-range block: the block bounds already imply that
+	// every candidate change is inside the requested end-of-block tx window.
+	// Malformed rows on all three blocks make any accidental range read fail
+	// deterministically.
 	if err := db.Put(stateTxRangeKey(1), []byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(stateTxRangeKey(100), []byte{0xff}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Put(stateTxRangeKey(101), []byte{0xff}); err != nil {

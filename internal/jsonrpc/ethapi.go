@@ -96,7 +96,7 @@ func (e *EthAPI) Accounts() []string { return []string{} }
 
 // GetBalance serves eth_getBalance: the SUN balance scaled by 1e12 (to wei-like
 // 18-decimal units) as 0x-hex. The optional block tag selects live vs archive.
-func (e *EthAPI) GetBalance(addrHex string, block *string) (string, error) {
+func (e *EthAPI) GetBalance(ctx context.Context, addrHex string, block *string) (string, error) {
 	addr, err := parseCompatibleAddress(addrHex)
 	if err != nil {
 		return "", err
@@ -111,7 +111,7 @@ func (e *EthAPI) GetBalance(addrHex string, block *string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-	} else if balSUN, err = e.backend.GetBalanceAt(addr, blockNum); err != nil {
+	} else if balSUN, err = e.backend.GetBalanceAtContext(ctx, addr, blockNum); err != nil {
 		return "", err
 	}
 	// Multiply by 1e12 using big.Int to avoid int64 overflow for large balances.
@@ -125,7 +125,7 @@ func (e *EthAPI) GetBalance(addrHex string, block *string) (string, error) {
 func (e *EthAPI) GetTransactionCount(_ string, _ *string) string { return "0x0" }
 
 // GetCode serves eth_getCode: the contract bytecode as 0x-hex (live or archive).
-func (e *EthAPI) GetCode(addrHex string, block *string) (string, error) {
+func (e *EthAPI) GetCode(ctx context.Context, addrHex string, block *string) (string, error) {
 	addr, err := parseCompatibleAddress(addrHex)
 	if err != nil {
 		return "", err
@@ -141,7 +141,7 @@ func (e *EthAPI) GetCode(addrHex string, block *string) (string, error) {
 		}
 		return hexBytes(code), nil
 	}
-	code, err := e.backend.GetCodeAt(addr, blockNum)
+	code, err := e.backend.GetCodeAtContext(ctx, addr, blockNum)
 	if err != nil {
 		return "", err
 	}
@@ -151,7 +151,7 @@ func (e *EthAPI) GetCode(addrHex string, block *string) (string, error) {
 // GetStorageAt serves eth_getStorageAt: the 32-byte storage word at the given
 // slot as 0x-hex (live or archive). The slot is right-aligned into 32 bytes,
 // matching the legacy handler.
-func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, error) {
+func (e *EthAPI) GetStorageAt(ctx context.Context, addrHex, slotHex string, block *string) (string, error) {
 	addr, err := parseCompatibleAddress(addrHex)
 	if err != nil {
 		return "", err
@@ -173,7 +173,7 @@ func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, e
 		}
 		return hexBytes(val[:]), nil
 	}
-	val, err := e.backend.GetStorageAtBlock(addr, slot, blockNum)
+	val, err := e.backend.GetStorageAtBlockContext(ctx, addr, slot, blockNum)
 	if err != nil {
 		return "", err
 	}
