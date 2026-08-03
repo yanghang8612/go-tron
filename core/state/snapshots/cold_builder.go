@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -22,6 +23,7 @@ var coldSnapshotLog = gtronlog.NewModule("core/state/snapshots")
 const (
 	defaultColdSnapshotInterval    = time.Minute
 	defaultColdSnapshotBatchBlocks = uint64(5_000)
+	defaultColdSnapshotMetrics     = "state/snapshot/cold/"
 )
 
 // DefaultLatestBuildBlocks is the default latest-snapshot build cadence
@@ -77,46 +79,144 @@ type Config struct {
 	// chain served by that catalog.
 	CatalogSigningKey ed25519.PrivateKey
 	CatalogChain      *ChainIdentity
+	// MetricsNamespace prefixes the cold-build production gauges. Tests may
+	// override it so process-global metric registrations remain isolated.
+	MetricsNamespace string
 }
 
 // PassResult describes a single cold snapshot builder pass.
 type PassResult struct {
-	Built             bool
-	LatestBuilt       bool
-	Compaction        HistoryCompactionResult
-	FromTxNum         uint64
-	ToTxNum           uint64
-	FromBlock         uint64
-	ToBlock           uint64
-	CutoffBlock       uint64
-	SolidifiedBlock   uint64
-	PreviousVisibleTx uint64
-	Segment           SegmentRef
-	Segments          []SegmentRef
-	SectionBloomBuilt bool
-	BalanceTraceBuilt bool
-	EventLogBuilt     bool
-	CatalogPublished  bool
-	Manifest          *Manifest
+	Built               bool
+	LatestBuilt         bool
+	Compaction          HistoryCompactionResult
+	FromTxNum           uint64
+	ToTxNum             uint64
+	FromBlock           uint64
+	ToBlock             uint64
+	CutoffBlock         uint64
+	EligibleCutoffBlock uint64
+	PublishedBlock      uint64
+	SolidifiedBlock     uint64
+	PreviousVisibleTx   uint64
+	Segment             SegmentRef
+	Segments            []SegmentRef
+	SectionBloomBuilt   bool
+	BalanceTraceBuilt   bool
+	EventLogBuilt       bool
+	CatalogPublished    bool
+	Manifest            *Manifest
+	BuildDuration       time.Duration
+	CompactionDuration  time.Duration
+	LatestDuration      time.Duration
 }
 
 // Stats is a thread-safe snapshot of lifecycle progress.
 type Stats struct {
-	PassesCompleted   uint64
-	SegmentsBuilt     uint64
-	SegmentsCompacted uint64
-	LastSolidified    uint64
-	LastCutoffBlock   uint64
-	LastVisibleTxEnd  uint64
-	LastFromTxNum     uint64
-	LastToTxNum       uint64
-	LastPassDuration  time.Duration
+	PassesCompleted         uint64
+	PassErrors              uint64
+	SegmentsBuilt           uint64
+	SegmentsCompacted       uint64
+	BytesBuilt              uint64
+	LastSolidified          uint64
+	LastCutoffBlock         uint64
+	LastEligibleCutoffBlock uint64
+	LastPublishedBlock      uint64
+	LastLagBlocks           uint64
+	LastVisibleTxEnd        uint64
+	LastFromTxNum           uint64
+	LastToTxNum             uint64
+	LastPassDuration        time.Duration
+	LastBuildDuration       time.Duration
+	LastCompactionDuration  time.Duration
+	LastLatestDuration      time.Duration
+}
+
+type coldRunnerMetrics struct {
+	passes                 *metrics.Gauge
+	errors                 *metrics.Gauge
+	segmentsBuilt          *metrics.Gauge
+	segmentsCompacted      *metrics.Gauge
+	bytesBuilt             *metrics.Gauge
+	lastSolidified         *metrics.Gauge
+	lastEligibleCutoff     *metrics.Gauge
+	lastSelectedCutoff     *metrics.Gauge
+	lastPublishedBlock     *metrics.Gauge
+	lagBlocks              *metrics.Gauge
+	lastVisibleTxEnd       *metrics.Gauge
+	lastFromTxNum          *metrics.Gauge
+	lastToTxNum            *metrics.Gauge
+	lastPassDuration       *metrics.Gauge
+	lastBuildDuration      *metrics.Gauge
+	lastCompactionDuration *metrics.Gauge
+	lastLatestDuration     *metrics.Gauge
+}
+
+func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
+	namespace = normalizeColdSnapshotMetricNamespace(namespace)
+	return coldRunnerMetrics{
+		passes:                 metrics.GetOrRegisterGauge(namespace+"passes", nil),
+		errors:                 metrics.GetOrRegisterGauge(namespace+"errors", nil),
+		segmentsBuilt:          metrics.GetOrRegisterGauge(namespace+"segments/built", nil),
+		segmentsCompacted:      metrics.GetOrRegisterGauge(namespace+"segments/compacted", nil),
+		bytesBuilt:             metrics.GetOrRegisterGauge(namespace+"bytes/built", nil),
+		lastSolidified:         metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
+		lastEligibleCutoff:     metrics.GetOrRegisterGauge(namespace+"last/eligible_cutoff_block", nil),
+		lastSelectedCutoff:     metrics.GetOrRegisterGauge(namespace+"last/selected_cutoff_block", nil),
+		lastPublishedBlock:     metrics.GetOrRegisterGauge(namespace+"last/published_block", nil),
+		lagBlocks:              metrics.GetOrRegisterGauge(namespace+"lag/blocks", nil),
+		lastVisibleTxEnd:       metrics.GetOrRegisterGauge(namespace+"last/visible_tx_end", nil),
+		lastFromTxNum:          metrics.GetOrRegisterGauge(namespace+"last/from_tx", nil),
+		lastToTxNum:            metrics.GetOrRegisterGauge(namespace+"last/to_tx", nil),
+		lastPassDuration:       metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
+		lastBuildDuration:      metrics.GetOrRegisterGauge(namespace+"lastpass/build/duration", nil),
+		lastCompactionDuration: metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/duration", nil),
+		lastLatestDuration:     metrics.GetOrRegisterGauge(namespace+"lastpass/latest/duration", nil),
+	}
+}
+
+func normalizeColdSnapshotMetricNamespace(namespace string) string {
+	if namespace == "" {
+		namespace = defaultColdSnapshotMetrics
+	}
+	if !strings.HasSuffix(namespace, "/") {
+		namespace += "/"
+	}
+	return namespace
+}
+
+func (m coldRunnerMetrics) update(stats Stats) {
+	m.passes.Update(coldSnapshotUintGauge(stats.PassesCompleted))
+	m.errors.Update(coldSnapshotUintGauge(stats.PassErrors))
+	m.segmentsBuilt.Update(coldSnapshotUintGauge(stats.SegmentsBuilt))
+	m.segmentsCompacted.Update(coldSnapshotUintGauge(stats.SegmentsCompacted))
+	m.bytesBuilt.Update(coldSnapshotUintGauge(stats.BytesBuilt))
+	m.lastSolidified.Update(coldSnapshotUintGauge(stats.LastSolidified))
+	m.lastEligibleCutoff.Update(coldSnapshotUintGauge(stats.LastEligibleCutoffBlock))
+	m.lastSelectedCutoff.Update(coldSnapshotUintGauge(stats.LastCutoffBlock))
+	m.lastPublishedBlock.Update(coldSnapshotUintGauge(stats.LastPublishedBlock))
+	m.lagBlocks.Update(coldSnapshotUintGauge(stats.LastLagBlocks))
+	m.lastVisibleTxEnd.Update(coldSnapshotUintGauge(stats.LastVisibleTxEnd))
+	m.lastFromTxNum.Update(coldSnapshotUintGauge(stats.LastFromTxNum))
+	m.lastToTxNum.Update(coldSnapshotUintGauge(stats.LastToTxNum))
+	m.lastPassDuration.Update(int64(stats.LastPassDuration))
+	m.lastBuildDuration.Update(int64(stats.LastBuildDuration))
+	m.lastCompactionDuration.Update(int64(stats.LastCompactionDuration))
+	m.lastLatestDuration.Update(int64(stats.LastLatestDuration))
+}
+
+func coldSnapshotUintGauge(value uint64) int64 {
+	const maxInt64GaugeValue = uint64(1<<63 - 1)
+	if value > maxInt64GaugeValue {
+		return int64(maxInt64GaugeValue)
+	}
+	return int64(value)
 }
 
 // Runner builds registered history snapshot segments in the background.
 type Runner struct {
-	chain ChainSource
-	cfg   Config
+	chain   ChainSource
+	cfg     Config
+	metrics coldRunnerMetrics
 
 	quit chan struct{}
 	done chan struct{}
@@ -126,26 +226,37 @@ type Runner struct {
 	passMu    sync.Mutex
 	startErr  error
 
-	passesCompleted      atomic.Uint64
-	segmentsBuilt        atomic.Uint64
-	segmentsCompacted    atomic.Uint64
-	lastSolidified       atomic.Uint64
-	lastCutoffBlock      atomic.Uint64
-	lastVisibleTxEnd     atomic.Uint64
-	lastFromTxNum        atomic.Uint64
-	lastToTxNum          atomic.Uint64
-	lastPassDuration     atomic.Int64
-	lastLatestBuildBlock atomic.Uint64
+	passesCompleted        atomic.Uint64
+	passErrors             atomic.Uint64
+	segmentsBuilt          atomic.Uint64
+	segmentsCompacted      atomic.Uint64
+	bytesBuilt             atomic.Uint64
+	lastSolidified         atomic.Uint64
+	lastCutoffBlock        atomic.Uint64
+	lastEligibleCutoff     atomic.Uint64
+	lastPublishedBlock     atomic.Uint64
+	lastLagBlocks          atomic.Uint64
+	lastVisibleTxEnd       atomic.Uint64
+	lastFromTxNum          atomic.Uint64
+	lastToTxNum            atomic.Uint64
+	lastPassDuration       atomic.Int64
+	lastBuildDuration      atomic.Int64
+	lastCompactionDuration atomic.Int64
+	lastLatestDuration     atomic.Int64
+	lastLatestBuildBlock   atomic.Uint64
 }
 
 func NewRunner(chain ChainSource, cfg Config) *Runner {
 	cfg = cfg.applyDefaults()
-	return &Runner{
-		chain: chain,
-		cfg:   cfg,
-		quit:  make(chan struct{}),
-		done:  make(chan struct{}),
+	runner := &Runner{
+		chain:   chain,
+		cfg:     cfg,
+		metrics: newColdRunnerMetrics(cfg.MetricsNamespace),
+		quit:    make(chan struct{}),
+		done:    make(chan struct{}),
 	}
+	runner.updateMetrics()
+	return runner
 }
 
 func (c Config) applyDefaults() Config {
@@ -163,6 +274,9 @@ func (c Config) applyDefaults() Config {
 	}
 	if c.CompactMaxTxSpan == 0 {
 		c.CompactMaxTxSpan = c.BatchBlocks * uint64(c.CompactMinSegments)
+	}
+	if c.MetricsNamespace == "" {
+		c.MetricsNamespace = defaultColdSnapshotMetrics
 	}
 	if c.CatalogSigningKey != nil {
 		c.CatalogSigningKey = append(ed25519.PrivateKey(nil), c.CatalogSigningKey...)
@@ -289,15 +403,23 @@ func (r *Runner) Snapshot() Stats {
 		return Stats{}
 	}
 	return Stats{
-		PassesCompleted:   r.passesCompleted.Load(),
-		SegmentsBuilt:     r.segmentsBuilt.Load(),
-		SegmentsCompacted: r.segmentsCompacted.Load(),
-		LastSolidified:    r.lastSolidified.Load(),
-		LastCutoffBlock:   r.lastCutoffBlock.Load(),
-		LastVisibleTxEnd:  r.lastVisibleTxEnd.Load(),
-		LastFromTxNum:     r.lastFromTxNum.Load(),
-		LastToTxNum:       r.lastToTxNum.Load(),
-		LastPassDuration:  time.Duration(r.lastPassDuration.Load()),
+		PassesCompleted:         r.passesCompleted.Load(),
+		PassErrors:              r.passErrors.Load(),
+		SegmentsBuilt:           r.segmentsBuilt.Load(),
+		SegmentsCompacted:       r.segmentsCompacted.Load(),
+		BytesBuilt:              r.bytesBuilt.Load(),
+		LastSolidified:          r.lastSolidified.Load(),
+		LastCutoffBlock:         r.lastCutoffBlock.Load(),
+		LastEligibleCutoffBlock: r.lastEligibleCutoff.Load(),
+		LastPublishedBlock:      r.lastPublishedBlock.Load(),
+		LastLagBlocks:           r.lastLagBlocks.Load(),
+		LastVisibleTxEnd:        r.lastVisibleTxEnd.Load(),
+		LastFromTxNum:           r.lastFromTxNum.Load(),
+		LastToTxNum:             r.lastToTxNum.Load(),
+		LastPassDuration:        time.Duration(r.lastPassDuration.Load()),
+		LastBuildDuration:       time.Duration(r.lastBuildDuration.Load()),
+		LastCompactionDuration:  time.Duration(r.lastCompactionDuration.Load()),
+		LastLatestDuration:      time.Duration(r.lastLatestDuration.Load()),
 	}
 }
 
@@ -311,19 +433,25 @@ func (r *Runner) OnePass() (PassResult, error) {
 	defer r.passMu.Unlock()
 
 	start := time.Now()
+	phaseStart := start
 	result, err := r.onePass()
+	result.BuildDuration = time.Since(phaseStart)
 	if err == nil {
+		phaseStart = time.Now()
 		result.Compaction, err = r.compactHistory()
+		result.CompactionDuration = time.Since(phaseStart)
 	}
 	if err == nil {
+		phaseStart = time.Now()
 		built, perr := r.latestPass()
+		result.LatestDuration = time.Since(phaseStart)
 		if perr != nil {
 			err = perr
 		} else {
 			result.LatestBuilt = built
 		}
 	}
-	r.recordPass(result, start)
+	r.recordPass(result, start, err)
 	return result, err
 }
 
@@ -420,8 +548,9 @@ func (r *Runner) onePass() (PassResult, error) {
 		cutoffBlock = finishStage
 	}
 	result := PassResult{
-		SolidifiedBlock: uint64(solidified),
-		CutoffBlock:     cutoffBlock,
+		SolidifiedBlock:     uint64(solidified),
+		CutoffBlock:         cutoffBlock,
+		EligibleCutoffBlock: cutoffBlock,
 	}
 
 	cutoffRange, ok, err := historyCfg.HotHistoryTxRangeForBlock(db, cutoffBlock)
@@ -443,12 +572,6 @@ func (r *Runner) onePass() (PassResult, error) {
 	if visibleEnd == ^uint64(0) {
 		return result, nil
 	}
-	fromTxNum := visibleEnd + 1
-	if fromTxNum > cutoffRange.EndTxNum {
-		return result, nil
-	}
-
-	toTxNum := cutoffRange.EndTxNum
 	searchFromBlock := uint64(0)
 	if visibleEnd > 0 {
 		previousBuildBlock, hasPreviousBuild, err := r.verifiedSnapshotBuildStageBlock(db)
@@ -460,8 +583,15 @@ func (r *Runner) onePass() (PassResult, error) {
 				return result, nil
 			}
 			searchFromBlock = previousBuildBlock + 1
+			result.PublishedBlock = previousBuildBlock
 		}
 	}
+	fromTxNum := visibleEnd + 1
+	if fromTxNum > cutoffRange.EndTxNum {
+		return result, nil
+	}
+
+	toTxNum := cutoffRange.EndTxNum
 	startBlock, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, fromTxNum, searchFromBlock, cutoffBlock)
 	if err != nil {
 		return PassResult{}, err
@@ -571,6 +701,7 @@ func (r *Runner) onePass() (PassResult, error) {
 	result.ToTxNum = toTxNum
 	result.FromBlock = startBlock
 	result.ToBlock = cutoffBlock
+	result.PublishedBlock = cutoffBlock
 	result.Segment = refs[0]
 	result.Segments = append([]SegmentRef(nil), refs...)
 	result.SectionBloomBuilt = sectionBloomBuilt
@@ -757,20 +888,70 @@ func (r *Runner) derivedIndexChainDB() (*rawdb.ChainDB, error) {
 	return nil, errors.New("snapshots: derived index build requires rawdb.ChainDB")
 }
 
-func (r *Runner) recordPass(result PassResult, start time.Time) {
+func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	r.passesCompleted.Add(1)
+	if passErr != nil {
+		r.passErrors.Add(1)
+	}
 	if result.Built {
 		r.segmentsBuilt.Add(1)
 	}
 	if result.Compaction.Merged {
 		r.segmentsCompacted.Add(uint64(result.Compaction.SegmentsMerged))
 	}
-	r.lastSolidified.Store(result.SolidifiedBlock)
-	r.lastCutoffBlock.Store(result.CutoffBlock)
-	r.lastVisibleTxEnd.Store(result.PreviousVisibleTx)
-	r.lastFromTxNum.Store(result.FromTxNum)
-	r.lastToTxNum.Store(result.ToTxNum)
+	var builtBytes uint64
+	for _, ref := range append(append([]SegmentRef(nil), result.Segments...), result.Compaction.Segments...) {
+		if ^uint64(0)-builtBytes < ref.Size {
+			builtBytes = ^uint64(0)
+			break
+		}
+		builtBytes += ref.Size
+	}
+	if builtBytes > 0 {
+		r.bytesBuilt.Add(builtBytes)
+	}
+	publishedBlock := r.lastPublishedBlock.Load()
+	if result.PublishedBlock > 0 {
+		publishedBlock = result.PublishedBlock
+	}
+	if result.Built {
+		publishedBlock = result.ToBlock
+	}
+	lagBlocks := uint64(0)
+	if result.EligibleCutoffBlock > publishedBlock {
+		lagBlocks = result.EligibleCutoffBlock - publishedBlock
+	}
+	visibleTxEnd := r.lastVisibleTxEnd.Load()
+	if result.PreviousVisibleTx > 0 {
+		visibleTxEnd = result.PreviousVisibleTx
+	}
+	if result.Built {
+		visibleTxEnd = result.ToTxNum
+	}
+	if result.SolidifiedBlock > 0 {
+		r.lastSolidified.Store(result.SolidifiedBlock)
+		r.lastCutoffBlock.Store(result.CutoffBlock)
+		r.lastEligibleCutoff.Store(result.EligibleCutoffBlock)
+		r.lastPublishedBlock.Store(publishedBlock)
+		r.lastLagBlocks.Store(lagBlocks)
+		r.lastVisibleTxEnd.Store(visibleTxEnd)
+	}
+	if result.Built {
+		r.lastFromTxNum.Store(result.FromTxNum)
+		r.lastToTxNum.Store(result.ToTxNum)
+	}
 	r.lastPassDuration.Store(int64(time.Since(start)))
+	r.lastBuildDuration.Store(int64(result.BuildDuration))
+	r.lastCompactionDuration.Store(int64(result.CompactionDuration))
+	r.lastLatestDuration.Store(int64(result.LatestDuration))
+	r.updateMetrics()
+}
+
+func (r *Runner) updateMetrics() {
+	if r == nil {
+		return
+	}
+	r.metrics.update(r.Snapshot())
 }
 
 func (r *Runner) compactHistory() (HistoryCompactionResult, error) {

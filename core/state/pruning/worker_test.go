@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statepkg "github.com/tronprotocol/go-tron/core/state"
@@ -943,10 +944,13 @@ func TestPrunerPassUsesSolidifiedBlockAndBatch(t *testing.T) {
 		}
 	}
 	chain := &fakePruneChain{db: db, solidified: 5}
+	namespace := normalizePrunerMetricNamespace("test/state/prune/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterPrunerMetricNamespace(namespace) })
 	pruner := NewPruner(chain, PrunerConfig{
-		Policy:    FullPolicy(2, 1),
-		Interval:  time.Hour,
-		BatchSize: 1,
+		Policy:           FullPolicy(2, 1),
+		Interval:         time.Hour,
+		BatchSize:        1,
+		MetricsNamespace: namespace,
 	})
 	stats, err := pruner.PrunePass()
 	if err != nil {
@@ -957,6 +961,13 @@ func TestPrunerPassUsesSolidifiedBlockAndBatch(t *testing.T) {
 	}
 	if got := pruner.Stats(); got.Passes != 1 || got.LastSolidifiedBlock != 5 {
 		t.Fatalf("pruner stats = %+v", got)
+	}
+	assertPrunerGauge(t, namespace+"passes", 1)
+	assertPrunerGauge(t, namespace+"errors", 0)
+	assertPrunerGauge(t, namespace+"deleted/tx_ranges", 1)
+	assertPrunerGauge(t, namespace+"last/solidified_block", 5)
+	if got := prunerGaugeValue(t, namespace+"lastpass/duration"); got <= 0 {
+		t.Fatalf("lastpass/duration = %d, want positive", got)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotPrune); err != nil || !ok || got != 5 {
 		t.Fatalf("snapshot/prune stage progress = %d ok=%v err=%v, want 5", got, ok, err)
@@ -1563,4 +1574,36 @@ func hasWarning(warnings []string, substr string) bool {
 		}
 	}
 	return false
+}
+
+func assertPrunerGauge(t *testing.T, name string, want int64) {
+	t.Helper()
+	if got := prunerGaugeValue(t, name); got != want {
+		t.Fatalf("gauge %s = %d, want %d", name, got, want)
+	}
+}
+
+func prunerGaugeValue(t *testing.T, name string) int64 {
+	t.Helper()
+	gauge, ok := metrics.DefaultRegistry.Get(name).(*metrics.Gauge)
+	if !ok {
+		t.Fatalf("missing gauge %s", name)
+	}
+	return gauge.Snapshot().Value()
+}
+
+func unregisterPrunerMetricNamespace(namespace string) {
+	for _, suffix := range []string{
+		"passes",
+		"errors",
+		"skipped/catchup",
+		"deleted/tx_ranges",
+		"deleted/domain_change_blocks",
+		"deleted/commitment_checkpoints",
+		"deleted/state_code_rows",
+		"last/solidified_block",
+		"lastpass/duration",
+	} {
+		metrics.DefaultRegistry.Unregister(namespace + suffix)
+	}
 }

@@ -2133,6 +2133,29 @@ current 5,000-block build interval, the steady-state logical metadata scan is
 about 3,000x smaller. The fresh snap-mode production gate must still measure
 complete v5 segment build, compression, merge, prune, and import interference.
 
+#### P5.2: Cold lifecycle production metrics
+
+The cold lifecycle no longer depends on periodic log sampling to show whether
+it can keep up with import. The runner publishes cumulative passes, errors,
+segments built/compacted, and physical segment bytes under
+`state/snapshot/cold/`. Its progress gauges separate the latest solidified and
+eligible cutoff blocks from the per-pass selected cutoff and last published
+block. Their difference is exported directly as `lag/blocks`; a bounded batch
+therefore reports real backlog instead of appearing caught up merely because
+the selected range completed successfully. Total pass, history-build,
+compaction, and latest-snapshot durations are recorded independently in
+nanoseconds.
+
+The coverage-gated hot pruner publishes cumulative passes, errors, catch-up
+skips, and deletion counts for tx ranges, domain-change blocks, commitment
+checkpoints, and state-code rows under `state/prune/`, together with the last
+solidified block and pass duration. These gauges remain registered in `full`
+mode as a deployment regression signal; the fresh `snap` datadir adds the cold
+builder gauges and is the production gate for build/merge/prune throughput.
+Generated-byte accounting includes every newly written history/accessor/index
+segment and any compaction outputs, so it measures actual lifecycle output
+rather than logical source size.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

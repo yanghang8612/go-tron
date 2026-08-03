@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -207,6 +208,59 @@ func TestColdBuilderSubsequentPassSeeksFromPublishedBlock(t *testing.T) {
 	// rescanning the prefix.
 	if seekCount < 4 {
 		t.Fatalf("state tx-range iterator starts = %x, want at least four seek starts %x", store.stateTxRangeStarts, want)
+	}
+}
+
+func TestColdBuilderMetricsExposeBuildLagAndPhaseDurations(t *testing.T) {
+	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x73)
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 4}, Config{
+		Dir:              dir,
+		Enabled:          true,
+		Interval:         time.Hour,
+		HistoryWindow:    1,
+		BatchBlocks:      1,
+		MetricsNamespace: namespace,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("one pass: %v", err)
+	}
+	if !result.Built {
+		t.Fatalf("result = %+v, want built segment", result)
+	}
+	stats := runner.Snapshot()
+	if stats.PassesCompleted != 1 || stats.PassErrors != 0 || stats.SegmentsBuilt != 1 || stats.BytesBuilt == 0 {
+		t.Fatalf("runner counters = %+v", stats)
+	}
+	if stats.LastEligibleCutoffBlock != 3 || stats.LastCutoffBlock != 1 || stats.LastPublishedBlock != 1 || stats.LastLagBlocks != 2 {
+		t.Fatalf("runner progress = %+v", stats)
+	}
+	if stats.LastPassDuration <= 0 || stats.LastBuildDuration <= 0 || stats.LastCompactionDuration <= 0 || stats.LastLatestDuration <= 0 {
+		t.Fatalf("runner durations = %+v", stats)
+	}
+
+	assertColdRunnerGauge(t, namespace+"passes", 1)
+	assertColdRunnerGauge(t, namespace+"errors", 0)
+	assertColdRunnerGauge(t, namespace+"segments/built", 1)
+	assertColdRunnerGauge(t, namespace+"last/eligible_cutoff_block", 3)
+	assertColdRunnerGauge(t, namespace+"last/selected_cutoff_block", 1)
+	assertColdRunnerGauge(t, namespace+"last/published_block", 1)
+	assertColdRunnerGauge(t, namespace+"lag/blocks", 2)
+	if got := coldRunnerGaugeValue(t, namespace+"bytes/built"); got <= 0 {
+		t.Fatalf("bytes/built = %d, want positive", got)
+	}
+	for _, suffix := range []string{"lastpass/duration", "lastpass/build/duration", "lastpass/compaction/duration", "lastpass/latest/duration"} {
+		if got := coldRunnerGaugeValue(t, namespace+suffix); got <= 0 {
+			t.Fatalf("%s = %d, want positive", suffix, got)
+		}
 	}
 }
 
@@ -1575,4 +1629,44 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func assertColdRunnerGauge(t *testing.T, name string, want int64) {
+	t.Helper()
+	if got := coldRunnerGaugeValue(t, name); got != want {
+		t.Fatalf("gauge %s = %d, want %d", name, got, want)
+	}
+}
+
+func coldRunnerGaugeValue(t *testing.T, name string) int64 {
+	t.Helper()
+	gauge, ok := metrics.DefaultRegistry.Get(name).(*metrics.Gauge)
+	if !ok {
+		t.Fatalf("missing gauge %s", name)
+	}
+	return gauge.Snapshot().Value()
+}
+
+func unregisterColdRunnerMetricNamespace(namespace string) {
+	for _, suffix := range []string{
+		"passes",
+		"errors",
+		"segments/built",
+		"segments/compacted",
+		"bytes/built",
+		"last/solidified_block",
+		"last/eligible_cutoff_block",
+		"last/selected_cutoff_block",
+		"last/published_block",
+		"lag/blocks",
+		"last/visible_tx_end",
+		"last/from_tx",
+		"last/to_tx",
+		"lastpass/duration",
+		"lastpass/build/duration",
+		"lastpass/compaction/duration",
+		"lastpass/latest/duration",
+	} {
+		metrics.DefaultRegistry.Unregister(namespace + suffix)
+	}
 }

@@ -257,6 +257,9 @@
   tx-range emission.
 - [x] Benchmark the bounded cold-build source on Pebble and verify subsequent
   lifecycle passes use the previously published block boundary.
+- [x] Export cold build/merge/lag and hot-prune counters plus phase durations
+  so the fresh snap-mode production gate can distinguish import pressure from
+  lifecycle backlog without relying on periodic log lines.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

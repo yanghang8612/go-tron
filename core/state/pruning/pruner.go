@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -21,7 +22,8 @@ const (
 	// the block selection window raises throughput without recreating an
 	// unbounded Pebble batch. At the live tip the iterator simply stops after the
 	// handful of newly eligible blocks.
-	defaultBatch = 25_000
+	defaultBatch                  = 25_000
+	defaultPrunerMetricsNamespace = "state/prune/"
 )
 
 type ChainSource interface {
@@ -58,10 +60,14 @@ type PrunerConfig struct {
 	// sync service can report more than this many blocks remaining. A zero
 	// value disables the catch-up gate.
 	MaxSyncLag uint64
+	// MetricsNamespace prefixes production prune gauges. Tests may override it
+	// to isolate process-global metric registrations.
+	MetricsNamespace string
 }
 
 type PrunerStats struct {
 	Passes                       uint64
+	Errors                       uint64
 	SkippedCatchup               uint64
 	DeletedTxRanges              uint64
 	DeletedDomainChangeBlocks    uint64
@@ -72,14 +78,16 @@ type PrunerStats struct {
 }
 
 type Pruner struct {
-	chain ChainSource
-	cfg   PrunerConfig
+	chain   ChainSource
+	cfg     PrunerConfig
+	metrics prunerMetrics
 
 	quit chan struct{}
 	done chan struct{}
 	once sync.Once
 
 	passes                       atomic.Uint64
+	errors                       atomic.Uint64
 	deletedTxRanges              atomic.Uint64
 	deletedDomainChangeBlocks    atomic.Uint64
 	deletedCommitmentCheckpoints atomic.Uint64
@@ -89,6 +97,63 @@ type Pruner struct {
 	lastPassDuration             atomic.Int64
 }
 
+type prunerMetrics struct {
+	passes                       *metrics.Gauge
+	errors                       *metrics.Gauge
+	skippedCatchup               *metrics.Gauge
+	deletedTxRanges              *metrics.Gauge
+	deletedDomainChangeBlocks    *metrics.Gauge
+	deletedCommitmentCheckpoints *metrics.Gauge
+	deletedStateCodeRows         *metrics.Gauge
+	lastSolidifiedBlock          *metrics.Gauge
+	lastPassDuration             *metrics.Gauge
+}
+
+func newPrunerMetrics(namespace string) prunerMetrics {
+	namespace = normalizePrunerMetricNamespace(namespace)
+	return prunerMetrics{
+		passes:                       metrics.GetOrRegisterGauge(namespace+"passes", nil),
+		errors:                       metrics.GetOrRegisterGauge(namespace+"errors", nil),
+		skippedCatchup:               metrics.GetOrRegisterGauge(namespace+"skipped/catchup", nil),
+		deletedTxRanges:              metrics.GetOrRegisterGauge(namespace+"deleted/tx_ranges", nil),
+		deletedDomainChangeBlocks:    metrics.GetOrRegisterGauge(namespace+"deleted/domain_change_blocks", nil),
+		deletedCommitmentCheckpoints: metrics.GetOrRegisterGauge(namespace+"deleted/commitment_checkpoints", nil),
+		deletedStateCodeRows:         metrics.GetOrRegisterGauge(namespace+"deleted/state_code_rows", nil),
+		lastSolidifiedBlock:          metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
+		lastPassDuration:             metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
+	}
+}
+
+func normalizePrunerMetricNamespace(namespace string) string {
+	if namespace == "" {
+		namespace = defaultPrunerMetricsNamespace
+	}
+	if namespace[len(namespace)-1] != '/' {
+		namespace += "/"
+	}
+	return namespace
+}
+
+func (m prunerMetrics) update(stats PrunerStats) {
+	m.passes.Update(prunerUintGauge(stats.Passes))
+	m.errors.Update(prunerUintGauge(stats.Errors))
+	m.skippedCatchup.Update(prunerUintGauge(stats.SkippedCatchup))
+	m.deletedTxRanges.Update(prunerUintGauge(stats.DeletedTxRanges))
+	m.deletedDomainChangeBlocks.Update(prunerUintGauge(stats.DeletedDomainChangeBlocks))
+	m.deletedCommitmentCheckpoints.Update(prunerUintGauge(stats.DeletedCommitmentCheckpoints))
+	m.deletedStateCodeRows.Update(prunerUintGauge(stats.DeletedStateCodeRows))
+	m.lastSolidifiedBlock.Update(prunerUintGauge(stats.LastSolidifiedBlock))
+	m.lastPassDuration.Update(int64(stats.LastPassDuration))
+}
+
+func prunerUintGauge(value uint64) int64 {
+	const maxInt64GaugeValue = uint64(1<<63 - 1)
+	if value > maxInt64GaugeValue {
+		return int64(maxInt64GaugeValue)
+	}
+	return int64(value)
+}
+
 func NewPruner(chain ChainSource, cfg PrunerConfig) *Pruner {
 	if cfg.Interval <= 0 {
 		cfg.Interval = defaultInterval
@@ -96,12 +161,18 @@ func NewPruner(chain ChainSource, cfg PrunerConfig) *Pruner {
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = defaultBatch
 	}
-	return &Pruner{
-		chain: chain,
-		cfg:   cfg,
-		quit:  make(chan struct{}),
-		done:  make(chan struct{}),
+	if cfg.MetricsNamespace == "" {
+		cfg.MetricsNamespace = defaultPrunerMetricsNamespace
 	}
+	pruner := &Pruner{
+		chain:   chain,
+		cfg:     cfg,
+		metrics: newPrunerMetrics(cfg.MetricsNamespace),
+		quit:    make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	pruner.updateMetrics()
+	return pruner
 }
 
 func (p *Pruner) Start() error {
@@ -155,6 +226,7 @@ func (p *Pruner) Stats() PrunerStats {
 	}
 	return PrunerStats{
 		Passes:                       p.passes.Load(),
+		Errors:                       p.errors.Load(),
 		DeletedTxRanges:              p.deletedTxRanges.Load(),
 		DeletedDomainChangeBlocks:    p.deletedDomainChangeBlocks.Load(),
 		DeletedCommitmentCheckpoints: p.deletedCommitmentCheckpoints.Load(),
@@ -163,6 +235,13 @@ func (p *Pruner) Stats() PrunerStats {
 		LastSolidifiedBlock:          p.lastSolidifiedBlock.Load(),
 		LastPassDuration:             time.Duration(p.lastPassDuration.Load()),
 	}
+}
+
+func (p *Pruner) updateMetrics() {
+	if p == nil {
+		return
+	}
+	p.metrics.update(p.Stats())
 }
 
 func (p *Pruner) loop() {
@@ -181,8 +260,15 @@ func (p *Pruner) loop() {
 	}
 }
 
-func (p *Pruner) PrunePass() (Stats, error) {
+func (p *Pruner) PrunePass() (stats Stats, err error) {
 	start := time.Now()
+	defer func() {
+		p.lastPassDuration.Store(time.Since(start).Nanoseconds())
+		if err != nil {
+			p.errors.Add(1)
+		}
+		p.updateMetrics()
+	}()
 	solidified := p.chain.LatestSolidifiedBlockNum()
 	if solidified < 0 {
 		solidified = 0
@@ -190,7 +276,6 @@ func (p *Pruner) PrunePass() (Stats, error) {
 	if p.shouldSkipForCatchup() {
 		p.skippedCatchup.Add(1)
 		p.lastSolidifiedBlock.Store(uint64(solidified))
-		p.lastPassDuration.Store(time.Since(start).Nanoseconds())
 		return Stats{}, nil
 	}
 	pruneHead := uint64(solidified)
@@ -198,7 +283,7 @@ func (p *Pruner) PrunePass() (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
-	stats, err := Worker{
+	stats, err = Worker{
 		DB:               p.chain.DB(),
 		Policy:           p.cfg.Policy,
 		MaxBlocks:        p.cfg.BatchSize,
@@ -215,7 +300,6 @@ func (p *Pruner) PrunePass() (Stats, error) {
 	p.deletedCommitmentCheckpoints.Add(uint64(stats.DeletedCommitmentCheckpoints))
 	p.deletedStateCodeRows.Add(uint64(stats.DeletedStateCodeRows))
 	p.lastSolidifiedBlock.Store(uint64(solidified))
-	p.lastPassDuration.Store(time.Since(start).Nanoseconds())
 	if stats.DeletedTxRanges != 0 || stats.DeletedDomainChangeBlocks != 0 || stats.DeletedCommitmentCheckpoints != 0 || stats.DeletedStateCodeRows != 0 {
 		log.Info("Domain state prune pass completed",
 			"pruneHead", pruneHead,
