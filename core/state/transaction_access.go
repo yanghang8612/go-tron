@@ -168,6 +168,7 @@ type TransactionAccessRecorder struct {
 	accounts             map[tcommon.Address]TransactionAccessMode
 	accountFields        map[TransactionAccountFieldKey]TransactionAccessMode
 	accountFieldWrites   map[tcommon.Address]struct{}
+	writeKeys            []TransactionAccessKey
 	commutativeDeltas    map[TransactionAccessKey]int64
 	rawKVWrites          map[TransactionAccessKey]TransactionWriteValue
 	rawKVKeys            map[string]string
@@ -198,6 +199,8 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 	clear(r.accountFieldWrites)
 	clear(r.commutativeDeltas)
 	clear(r.rawKVWrites)
+	clear(r.writeKeys)
+	r.writeKeys = r.writeKeys[:0]
 	r.unsupported = false
 	r.commutativeScopeKey = TransactionAccessKey{}
 	r.commutativeScopeOpen = false
@@ -268,6 +271,29 @@ func (r *TransactionAccessRecorder) Visit(visit func(TransactionAccessKey, Trans
 	}
 	for key, mode := range r.accountFields {
 		if !visit(TransactionAccessKey{Kind: TransactionAccessAccountField, Address: key.Address, AccountField: key.Field}, mode) {
+			return
+		}
+	}
+}
+
+// VisitWrites visits only keys whose mode acquired a write bit. record keeps
+// this compact carrier in first-write order, avoiding a scan over the much
+// larger read set when a projected post-image is captured at transaction end.
+func (r *TransactionAccessRecorder) VisitWrites(visit func(TransactionAccessKey, TransactionAccessMode) bool) {
+	if r == nil || visit == nil {
+		return
+	}
+	for _, key := range r.writeKeys {
+		var mode TransactionAccessMode
+		switch key.Kind {
+		case TransactionAccessAccount:
+			mode = r.accounts[key.Address]
+		case TransactionAccessAccountField:
+			mode = r.accountFields[TransactionAccountFieldKey{Address: key.Address, Field: key.AccountField}]
+		default:
+			mode = r.accesses[key]
+		}
+		if !visit(key, mode) {
 			return
 		}
 	}
@@ -356,26 +382,42 @@ func (r *TransactionAccessRecorder) record(key TransactionAccessKey, mode Transa
 		if r.accounts == nil {
 			r.accounts = make(map[tcommon.Address]TransactionAccessMode, 16)
 		}
-		r.accounts[key.Address] |= mode
+		previous := r.accounts[key.Address]
+		next := previous | mode
+		r.accounts[key.Address] = next
+		r.appendWriteKey(key, previous, next)
 		return
 	case TransactionAccessAccountField:
 		if r.accountFields == nil {
 			r.accountFields = make(map[TransactionAccountFieldKey]TransactionAccessMode, 32)
 		}
 		fieldKey := TransactionAccountFieldKey{Address: key.Address, Field: key.AccountField}
-		r.accountFields[fieldKey] |= mode
+		previous := r.accountFields[fieldKey]
+		next := previous | mode
+		r.accountFields[fieldKey] = next
 		if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0 {
 			if r.accountFieldWrites == nil {
 				r.accountFieldWrites = make(map[tcommon.Address]struct{}, 16)
 			}
 			r.accountFieldWrites[key.Address] = struct{}{}
 		}
+		r.appendWriteKey(key, previous, next)
 		return
 	}
 	if r.accesses == nil {
 		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, 16)
 	}
-	r.accesses[key] |= mode
+	previous := r.accesses[key]
+	next := previous | mode
+	r.accesses[key] = next
+	r.appendWriteKey(key, previous, next)
+}
+
+func (r *TransactionAccessRecorder) appendWriteKey(key TransactionAccessKey, previous, next TransactionAccessMode) {
+	const writeModes = TransactionAccessWrite | TransactionAccessCommutativeWrite
+	if previous&writeModes == 0 && next&writeModes != 0 {
+		r.writeKeys = append(r.writeKeys, key)
+	}
 }
 
 // AccountWriteCoverage lets the journal observer distinguish a full Account
@@ -419,21 +461,26 @@ func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domai
 		LogicalKey: borrowedBytesString(logicalKey),
 	}
 	if previous, ok := r.accesses[lookup]; ok {
-		r.accesses[lookup] = previous | mode
+		next := previous | mode
+		r.accesses[lookup] = next
+		if previous&(TransactionAccessWrite|TransactionAccessCommutativeWrite) == 0 && next&(TransactionAccessWrite|TransactionAccessCommutativeWrite) != 0 {
+			// The lookup string may borrow caller scratch. The retained write key
+			// must own its logical key independently of that scratch lifetime.
+			lookup.LogicalKey = string(logicalKey)
+			r.writeKeys = append(r.writeKeys, lookup)
+		}
 		return
 	}
 	// The caller may lend stack/scratch bytes. Own the key only for the first
 	// unique access; the borrowed lookup above makes repeats allocation-free.
 	lookup.LogicalKey = string(logicalKey)
 	r.accesses[lookup] = mode
+	r.appendWriteKey(lookup, 0, mode)
 }
 
 func (r *TransactionAccessRecorder) recordRawKV(key []byte, mode TransactionAccessMode) string {
 	if r == nil {
 		return ""
-	}
-	if r.accesses == nil {
-		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, 16)
 	}
 	// The recorder lives for one block and Reset only starts a new transaction.
 	// Intern raw physical keys across those transactions: TAPOS and BLOCKHASH
@@ -450,7 +497,7 @@ func (r *TransactionAccessRecorder) recordRawKV(key []byte, mode TransactionAcce
 		r.rawKVKeys[stable] = stable
 	}
 	accessKey := TransactionAccessKey{Kind: TransactionAccessRawKV, LogicalKey: stable}
-	r.accesses[accessKey] |= mode
+	r.record(accessKey, mode)
 	return stable
 }
 

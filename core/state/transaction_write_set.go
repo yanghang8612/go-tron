@@ -102,7 +102,7 @@ func appendRecorderTransactionWrites(keys map[TransactionAccessKey]struct{}, mod
 	if recorder == nil {
 		return keys, modes
 	}
-	recorder.Visit(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+	recorder.VisitWrites(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
 		if mode&(TransactionAccessWrite|TransactionAccessCommutativeWrite) == 0 || (include != nil && !include(key)) {
 			return true
 		}

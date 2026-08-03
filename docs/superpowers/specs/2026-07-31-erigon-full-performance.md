@@ -1410,6 +1410,38 @@ WriteSet mismatch/error and zero unsupported capture; performance is evaluated
 against P4.29's 5.87-microsecond filtered-capture and 0.78-ms enabled-block
 baselines.
 
+The first high-load 40-second P4.30 window imported 1,344 blocks / 119,572
+transactions (33.6 blocks/s and 2,989 tx/s). All 8,926 filtered captures used
+the recorder-only path; 65/65 retries published with matching WriteSets and
+there were no capture unsupported/error, retry error, or end-of-block wait
+events. Filtered capture averaged 4.98 microseconds per transaction versus the
+P4.29 5.87-microsecond baseline (15% lower), and total capture averaged 0.57 ms
+per enabled block versus 0.78 ms (27% lower). Prefix application averaged 2.33
+microseconds per advance versus 3.62 microseconds (36% lower). The same window
+compacted 3.48 GB in / 3.29 GB out and added about 280 MB estimated debt without
+a write delay, so Pebble compaction remains the larger whole-node constraint.
+
+#### P4.31: Write-only recorder index
+
+P4.30 removed the undo-journal scan but its recorder capture still called the
+general access visitor, walking reads that cannot contribute a post-image. The
+same production window recorded about 89 read cells and 17 write cells per
+versioned transaction. `TransactionAccessRecorder` now appends a key to a
+reusable write-only slice exactly when that key first acquires an ordinary or
+commutative write bit. Repeated writes update the existing mode without adding
+another slice entry; reset clears retained key references while preserving
+capacity for the next transaction.
+
+Projected and full WriteSet collection now use `VisitWrites`, while read-set
+capture and OCC validation retain the complete typed access maps. AccountKV
+keys that transition from a prior read to a write own the string retained by
+the write slice, so actuator scratch buffers cannot corrupt a later capture.
+This follows Erigon's separate worker ReadSet/WriteSet carrier without adding a
+second write hash table or changing mutation order. The production gate remains
+100% recorder-only hits for ordinary filtered Transfer prefixes and zero
+publication mismatch/error; the expected gain is removal of roughly five out
+of six access-map visits at capture time.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

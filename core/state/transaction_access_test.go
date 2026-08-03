@@ -50,6 +50,65 @@ func TestTransactionAccessRecorderCaptureReadSetSurvivesReset(t *testing.T) {
 	}
 }
 
+func TestTransactionAccessRecorderVisitWritesSkipsReadsAndDeduplicates(t *testing.T) {
+	var address tcommon.Address
+	address[0], address[20] = 0x41, 8
+	account := TransactionAccessKey{Kind: TransactionAccessAccount, Address: address}
+	field := TransactionAccessKey{
+		Kind: TransactionAccessAccountField, Address: address,
+		AccountField: TransactionAccountFieldBalance,
+	}
+	readOnlyField := TransactionAccessKey{
+		Kind: TransactionAccessAccountField, Address: address,
+		AccountField: TransactionAccountFieldAllowance,
+	}
+	readOnly := TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: "energy_fee"}
+
+	var recorder TransactionAccessRecorder
+	recorder.Reset(8)
+	recorder.record(account, TransactionAccessRead)
+	recorder.record(account, TransactionAccessWrite)
+	recorder.record(account, TransactionAccessWrite)
+	recorder.record(field, TransactionAccessRead)
+	recorder.record(field, TransactionAccessWrite)
+	recorder.record(readOnlyField, TransactionAccessRead)
+	recorder.record(readOnly, TransactionAccessRead)
+	recorder.recordAccountKV(address, kvdomains.AccountPermissionAux, []byte("owner"), TransactionAccessRead)
+	recorder.recordAccountKV(address, kvdomains.AccountPermissionAux, []byte("owner"), TransactionAccessWrite)
+	recorder.RecordRawKVPut([]byte("raw"), []byte("value"))
+	recorder.RecordRawKVDelete([]byte("raw"))
+
+	seen := make(map[TransactionAccessKey]TransactionAccessMode)
+	recorder.VisitWrites(func(key TransactionAccessKey, mode TransactionAccessMode) bool {
+		if _, duplicate := seen[key]; duplicate {
+			t.Fatalf("duplicate write key %+v", key)
+		}
+		seen[key] = mode
+		return true
+	})
+	if len(seen) != 4 {
+		t.Fatalf("writes = %+v, want account, account field, account KV, and raw KV", seen)
+	}
+	if mode := seen[account]; mode != TransactionAccessRead|TransactionAccessWrite {
+		t.Fatalf("account mode = %d, want read|write", mode)
+	}
+	if mode := seen[field]; mode != TransactionAccessRead|TransactionAccessWrite {
+		t.Fatalf("account field mode = %d, want read|write", mode)
+	}
+	if _, ok := seen[readOnlyField]; ok {
+		t.Fatal("read-only account field visited as a write")
+	}
+	if _, ok := seen[readOnly]; ok {
+		t.Fatal("read-only dynamic property visited as a write")
+	}
+
+	recorder.Reset(8)
+	recorder.VisitWrites(func(TransactionAccessKey, TransactionAccessMode) bool {
+		t.Fatal("reset recorder retained a write key")
+		return false
+	})
+}
+
 func TestVisitTransactionWritesSinceClassifiesJournal(t *testing.T) {
 	var account, created, witness, contract tcommon.Address
 	account[0], created[0], witness[0], contract[0] = 0x41, 0x41, 0x41, 0x41
