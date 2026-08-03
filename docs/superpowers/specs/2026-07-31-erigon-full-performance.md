@@ -1894,6 +1894,45 @@ measurements, not a production throughput claim. The deployment gate must still
 measure cold build/merge duration, segment bytes, cold-stage lag, and concurrent
 sync/Pebble behavior.
 
+#### P4.41: Erigon-style commitment leaf-key shortening
+
+The post-P4.40 hot-sync window covered 2,460 blocks / 92,931 transactions in 47
+seconds (52.34 blocks/s, 1,977 tx/s) with zero Pebble write delay. Final
+coalesced output was 150.4 KB/block, but physical writes remained 2.30 MB/block
+while compaction drained 470 MB of debt. Within a sampled coalesced flush,
+CommitmentDomain branch rows were 60.1% of attributed bytes and hot changesets
+were 36.7%; latest account/KV rows together were only 3.2%. Commitment was
+therefore the next authoritative write family to reduce.
+
+Erigon's current commitment branch format supports replacing plain leaf keys
+with shortened identities before immutable storage (`BranchData.ReplacePlainKeys`
+and `HasShortenedKeys`). go-tron's commitment tree already addresses every key
+by `keccak256(len || physicalKey)`. Its persisted leaf nevertheless repeated the
+complete 40-plus-byte physical AccountLatest/KVLatest key solely so the next
+fold could hash it back to that same path.
+
+New branches store a distinct path-leaf kind containing the existing 32-byte
+key path plus the 32-byte leaf value hash. The value hash still commits to the
+complete raw key and value; branch/node hashes are unchanged because they have
+always consumed only child value hashes. Key identity and collision descent now
+compare the stored path directly. The format retains the preceding raw-key leaf
+decoder, and any legacy branch touched by a later fold is rewritten with path
+leaves. Restart therefore supports a mixed tree without a whole-database
+migration or a second authoritative keyspace.
+
+The parallel root fold owns path identities in fixed-width branch fields, so
+op sorting/compaction cannot leave buffered branches aliasing transient memory.
+Sequential and parallel folds, rawdb-backed folds, raw-leaf update migration,
+and raw-leaf collision splitting are byte/root-equivalent in tests. On a
+deterministic 4,096-row corpus split evenly between production-shaped account
+and contract-storage keys, encoded commitment branches fell from 447,136 to
+318,112 bytes (28.86%). The production-shaped 256-update parallel BlockBuffer
+benchmark retained roughly the same latency while allocations fell from
+148--157 to 113--123 and allocated bytes from 328--335 KB to 294--310 KB per
+fold. These local measurements establish the format win; the deployment gate
+must still compare normalized commitment/coalesced/physical bytes and verify a
+clean restart with zero commitment/equivalence errors.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

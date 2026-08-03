@@ -80,7 +80,7 @@ type bufferedBranchStore struct {
 	// counts. Overwriting removes it.)
 	//
 	// Map values are pooled pointers rather than BranchData values. BranchData is
-	// roughly 800 bytes; storing it inline makes every map bucket large and forces
+	// kilobyte-scale; storing it inline makes every map bucket large and forces
 	// the runtime to copy those large values again while a growing map evacuates
 	// buckets. A pointer-sized map plus one pool-borrowed destination per distinct
 	// prefix keeps re-PUT overwrite semantics while reusing the large objects

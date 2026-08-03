@@ -228,6 +228,12 @@
   with duplicated block/sequence context after the hot-row production gates.
 - [ ] Run the cold-history v5 production gate and compare segment build/merge
   duration, raw/compressed bytes, cold-stage lag, and sync/compaction impact.
+- [x] Shorten CommitmentDomain leaf identities from repeated full physical
+  latest-domain keys to their already-computed 32-byte trie paths, while
+  retaining read-only decoding and touched-branch migration for legacy rows.
+- [ ] Run the commitment path-leaf production gate and compare sampled
+  commitment bytes, final coalesced bytes, physical writes, compaction, sync
+  throughput, restart recovery, and root/equivalence errors.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

@@ -185,14 +185,16 @@ func returnOpsBuf(bp *[]op) {
 
 // childKind distinguishes the two child types stored in a BranchData node.
 const (
-	kindHash = uint8(0) // 32-byte intermediate hash
-	kindLeaf = uint8(1) // plain key bytes + 32-byte value hash
+	kindHash     = uint8(0) // 32-byte intermediate hash
+	kindLeaf     = uint8(1) // legacy/plain key bytes + 32-byte value hash
+	kindLeafPath = uint8(2) // 32-byte hashed key path + 32-byte value hash
 )
 
 // branchChild holds one present child entry of a hex-trie branch node.
 type branchChild struct {
 	valueHash common.Hash // child hash or leaf value hash, selected by childMask
-	leafKey   string      // immutable key; valid when childMask marks a leaf
+	leafKey   string      // immutable raw key for legacy/plain leaves
+	leafPath  common.Hash // owned path identity when leafPathMask marks this slot
 }
 
 // stableLeafKeyString aliases immutable fold/decoder storage without copying.
@@ -215,7 +217,8 @@ func leafKeyBytes(key string) []byte {
 
 // BranchData represents a hex (16-way) trie branch node.  A branch has up to
 // 16 children indexed by nibble 0–15.  Each present child is either an
-// intermediate hash child or a leaf (key bytes + value hash).
+// intermediate hash child or a leaf (raw key or shortened key path + value
+// hash).
 //
 // Children are stored in a fixed 16-slot array so insertion order never
 // affects encoding — Encode always iterates nibbles low→high.
@@ -227,7 +230,16 @@ type BranchData struct {
 	// after those workers join (unlike embedding atomic.Uint32, whose value must
 	// not copy). The kind bits let encoding and decode cleanup skip hash children.
 	childMask uint32
-	children  [16]branchChild
+	// leafPathMask marks leaf slots whose leafPath contains the already-computed
+	// 32-byte trie path instead of leafKey holding the complete physical
+	// latest-domain key.
+	// Commitment lookup is path-addressed already, so retaining the full key in
+	// every leaf branch repeats 40+ bytes solely to hash it again on the next
+	// collision/update. Erigon likewise shortens plain keys in commitment
+	// branch data. A separate atomic word keeps the parallel root's disjoint
+	// child mutations race-free without changing childMask's presence/kind bits.
+	leafPathMask uint32
+	children     [16]branchChild
 }
 
 func (b *BranchData) presentMask() uint16 {
@@ -239,15 +251,24 @@ func (b *BranchData) leafMask() uint16 {
 	return uint16(bits) &^ uint16(bits>>16)
 }
 
-func (b *BranchData) markLeafChild(nibble uint8) {
+func (b *BranchData) leafPathAt(nibble uint8) bool {
+	return uint16(atomic.LoadUint32(&b.leafPathMask))&(1<<nibble) != 0
+}
+
+func (b *BranchData) markLeafChild(nibble uint8, pathOnly bool) {
 	childBit := uint32(1) << nibble
 	hashBit := childBit << 16
 	for {
 		old := atomic.LoadUint32(&b.childMask)
 		updated := (old | childBit) &^ hashBit
 		if atomic.CompareAndSwapUint32(&b.childMask, old, updated) {
-			return
+			break
 		}
+	}
+	if pathOnly {
+		atomic.OrUint32(&b.leafPathMask, childBit)
+	} else {
+		atomic.AndUint32(&b.leafPathMask, ^childBit)
 	}
 }
 
@@ -256,6 +277,7 @@ func (b *BranchData) markLeafChild(nibble uint8) {
 func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
 	childBit := uint32(1) << nibble
 	atomic.OrUint32(&b.childMask, childBit|(childBit<<16))
+	atomic.AndUint32(&b.leafPathMask, ^childBit)
 	b.children[nibble] = branchChild{
 		valueHash: h,
 	}
@@ -264,22 +286,26 @@ func (b *BranchData) SetHashChild(nibble uint8, h common.Hash) {
 // SetLeafChild marks nibble as a leaf child with the given key and value hash.
 // Overwrites any previous child at that nibble.
 func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash) {
-	b.markLeafChild(nibble)
+	b.markLeafChild(nibble, false)
 	b.children[nibble] = branchChild{
 		leafKey:   string(key),
 		valueHash: valHash,
 	}
 }
 
-// setLeafChildStable is the fold-internal counterpart of SetLeafChild. Its key
-// comes from the synchronous Fold input or an existing BranchData and remains
-// referenced until the branch store has encoded/copied it. Every store in this
-// package obeys that contract, so a second defensive copy only adds allocation
-// without strengthening lifetime.
-func (b *BranchData) setLeafChildStable(nibble uint8, key []byte, valHash common.Hash) {
-	b.markLeafChild(nibble)
+// setLeafChildPath stores the commitment key's 32-byte Keccak path as
+// the leaf identity. The path is copied into the fixed-width child field, so
+// op sorting/compaction and parallel branch buffering cannot alias it. The leaf
+// value hash already commits to the complete raw key, while the trie can only
+// distinguish keys by this path, so no authority is lost by dropping the
+// repeated physical key from branch storage.
+func (b *BranchData) setLeafChildPath(nibble uint8, path []byte, valHash common.Hash) {
+	if len(path) != common.HashLength {
+		panic("commitment_tree: leaf path must be 32 bytes")
+	}
+	b.markLeafChild(nibble, true)
 	b.children[nibble] = branchChild{
-		leafKey:   stableLeafKeyString(key),
+		leafPath:  common.Hash(path),
 		valueHash: valHash,
 	}
 }
@@ -290,17 +316,20 @@ func (b *BranchData) setLeafChildStable(nibble uint8, key []byte, valHash common
 //
 //	[childMask uint16 big-endian]  — bitmask of present nibbles (bit i set ↔ child i present)
 //	for each set bit i in childMask (low→high):
-//	  [kind  1 byte]          0 = hash, 1 = leaf
+//	  [kind  1 byte]          0 = hash, 1 = legacy/plain leaf, 2 = path leaf
 //	  if kind == hash:
 //	    [32-byte hash]
-//	  if kind == leaf:
+//	  if kind == legacy/plain leaf:
 //	    [keyLen binary.Uvarint][key bytes][32-byte valHash]
+//	  if kind == path leaf:
+//	    [32-byte key path][32-byte valHash]
 func (b *BranchData) Encode() []byte {
 	return b.EncodeTo(nil)
 }
 
 func (b *BranchData) encodingLayout() (uint32, int) {
 	childBits := atomic.LoadUint32(&b.childMask)
+	pathMask := uint16(atomic.LoadUint32(&b.leafPathMask))
 	mask := uint16(childBits)
 	// Every present child contributes its kind byte and 32-byte hash. Only leaf
 	// children need variable-length accounting on top of that fixed cost.
@@ -309,7 +338,11 @@ func (b *BranchData) encodingLayout() (uint32, int) {
 		i := uint8(bits.TrailingZeros16(remaining))
 		c := &b.children[i]
 		// The fixed cost above already includes the value hash.
-		size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey)
+		if pathMask&(1<<i) != 0 {
+			size += common.HashLength
+		} else {
+			size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey)
+		}
 	}
 	return childBits, size
 }
@@ -345,11 +378,16 @@ func (b *BranchData) encodeToLayout(dst []byte, childBits uint32, size int) []by
 	// the presence and kind masks, so skip absent slots without rescanning all
 	// 16 entries or reloading childMask.
 	hashMask := uint16(childBits >> 16)
+	pathMask := uint16(atomic.LoadUint32(&b.leafPathMask))
 	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
 		i := uint8(bits.TrailingZeros16(remaining))
 		c := &b.children[i]
 		if hashMask&(1<<i) != 0 {
 			dst = append(dst, kindHash)
+			dst = append(dst, c.valueHash[:]...)
+		} else if pathMask&(1<<i) != 0 {
+			dst = append(dst, kindLeafPath)
+			dst = append(dst, c.leafPath[:]...)
 			dst = append(dst, c.valueHash[:]...)
 		} else {
 			dst = append(dst, kindLeaf)
@@ -401,7 +439,7 @@ func DecodeBranchData(data []byte) (BranchData, error) {
 
 // DecodeBranchDataInto is DecodeBranchData written directly into *dst (zeroed
 // first). Used by GetBranchInto on the bulk-sync hot path to avoid the
-// return-by-value copy of the ~800-byte BranchData struct.
+// return-by-value copy of the fixed, kilobyte-scale BranchData struct.
 func DecodeBranchDataInto(data []byte, dst *BranchData) error {
 	return decodeBranchDataIntoArena(data, dst, nil)
 }
@@ -474,7 +512,7 @@ func decodeBranchDataIntoNoCopy(data []byte, dst *BranchData) error {
 func decodeBranchDataInto(data []byte, dst *BranchData) error {
 	// Decoding overwrites every field of each newly-present child. Clear only
 	// pointer-bearing fields from the previous presence mask instead of
-	// zeroing the whole ~800-byte BranchData (mostly hashes) on every sparse pooled
+	// zeroing the whole kilobyte-scale BranchData (mostly hashes) on every sparse pooled
 	// read. At ten or more children the fixed-size memclr wins over the bit walk
 	// (BenchmarkDecodeBranchDataIntoNoCopyReuse), so retain it for dense nodes.
 	oldBits := atomic.LoadUint32(&dst.childMask)
@@ -485,6 +523,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 		for remaining := oldMask &^ uint16(oldBits>>16); remaining != 0; remaining &= remaining - 1 {
 			i := bits.TrailingZeros16(remaining)
 			dst.children[i].leafKey = ""
+			dst.children[i].leafPath = common.Hash{}
 		}
 	}
 	if len(data) < 2 {
@@ -492,6 +531,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 	}
 	mask := uint16(data[0])<<8 | uint16(data[1])
 	var hashMask uint16
+	var pathMask uint16
 	rest := data[2:]
 	for remaining := mask; remaining != 0; remaining &= remaining - 1 {
 		i := uint8(bits.TrailingZeros16(remaining))
@@ -510,6 +550,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 			}
 			child := &dst.children[i]
 			child.leafKey = ""
+			child.leafPath = common.Hash{}
 			// The checked fixed-width conversion compiles to inline vector moves;
 			// a slice copy otherwise calls runtime.memmove on linux/amd64.
 			child.valueHash = common.Hash(rest[:common.HashLength])
@@ -532,8 +573,20 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 			}
 			child := &dst.children[i]
 			child.leafKey = stableLeafKeyString(key)
+			child.leafPath = common.Hash{}
 			child.valueHash = common.Hash(rest[:common.HashLength])
 			rest = rest[common.HashLength:]
+
+		case kindLeafPath:
+			if len(rest) < 2*common.HashLength {
+				return errors.New("commitment_tree: truncated at path leaf")
+			}
+			child := &dst.children[i]
+			child.leafKey = ""
+			child.leafPath = common.Hash(rest[:common.HashLength])
+			child.valueHash = common.Hash(rest[common.HashLength : 2*common.HashLength])
+			pathMask |= 1 << i
+			rest = rest[2*common.HashLength:]
 
 		default:
 			return errors.New("commitment_tree: unknown child kind byte")
@@ -544,6 +597,7 @@ func decodeBranchDataInto(data []byte, dst *BranchData) error {
 		return errors.New("commitment_tree: trailing bytes after decode")
 	}
 	atomic.StoreUint32(&dst.childMask, uint32(mask)|(uint32(hashMask)<<16))
+	atomic.StoreUint32(&dst.leafPathMask, uint32(pathMask))
 	return nil
 }
 
@@ -579,10 +633,19 @@ func (b *BranchData) leafChildAt(nibble uint8) (key []byte, valHash common.Hash)
 	return leafKeyBytes(c.leafKey), c.valueHash
 }
 
+func (b *BranchData) leafChildIdentityAt(nibble uint8) (identity []byte, pathOnly bool, valHash common.Hash) {
+	c := &b.children[nibble]
+	if b.leafPathAt(nibble) {
+		return c.leafPath[:], true, c.valueHash
+	}
+	return leafKeyBytes(c.leafKey), false, c.valueHash
+}
+
 // clearChild removes any child at nibble.
 func (b *BranchData) clearChild(nibble uint8) {
 	childBit := uint32(1) << nibble
 	atomic.AndUint32(&b.childMask, ^(childBit | (childBit << 16)))
+	atomic.AndUint32(&b.leafPathMask, ^childBit)
 	b.children[nibble] = branchChild{}
 }
 
@@ -939,7 +1002,7 @@ func (t *commitmentTrie) insertIntoEmpty(branch *BranchData, nb uint8, childPref
 		// Deletes into an empty slot are no-ops.
 		return false, nil
 	case 1:
-		branch.setLeafChildStable(nb, puts[0].key, puts[0].valHash)
+		branch.setLeafChildPath(nb, puts[0].path[:], puts[0].valHash)
 		return true, nil
 	default:
 		// Build a fresh child subtree rooted at childPrefix, borrowing the
@@ -962,7 +1025,7 @@ func (t *commitmentTrie) insertIntoEmpty(branch *BranchData, nb uint8, childPref
 
 // applyOnLeaf resolves group against an existing leaf child at nb.
 func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) (bool, error) {
-	existKey, existVH := branch.leafChildAt(nb)
+	existIdentity, existPathOnly, existVH := branch.leafChildIdentityAt(nb)
 
 	// Collect surviving entries under this slot via a small-set linear scan.
 	// The original implementation used map[string]op{}, which heap-allocates
@@ -977,14 +1040,21 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 	// deletes that same leaf, in which case the incoming op already carries its
 	// path (or no path is needed). Only a split with the old leaf still present
 	// needs its path for the recursive sort/descent.
-	survivors = append(survivors, op{key: existKey, valHash: existVH})
-	existingNeedsPath := true
+	existing := op{valHash: existVH}
+	if existPathOnly {
+		copy(existing.path[:], existIdentity)
+	} else {
+		existing.key = existIdentity
+	}
+	survivors = append(survivors, existing)
+	existingNeedsPath := !existPathOnly
 
 	for _, o := range group {
-		// Linear find by raw-key byte equality.
+		// Linear find by raw key for legacy leaves and by the authoritative
+		// hashed trie path for shortened leaves.
 		idx := -1
 		for i := range survivors {
-			if bytes.Equal(survivors[i].key, o.key) {
+			if sameLeafIdentity(survivors[i], o) {
 				idx = i
 				break
 			}
@@ -1018,14 +1088,22 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 	case 1:
 		// Exactly one survivor → leaf child.
 		only := survivors[0]
-		if bytes.Equal(only.key, existKey) && only.valHash == existVH {
+		if sameLeafIdentity(only, existing) && only.valHash == existVH {
 			return false, nil
 		}
-		branch.setLeafChildStable(nb, only.key, only.valHash)
+		if only.path == (common.Hash{}) && len(only.key) != 0 {
+			only.path = t.keyPath(only.key)
+		}
+		branch.setLeafChildPath(nb, only.path[:], only.valHash)
 		return true, nil
 	default:
 		if existingNeedsPath {
-			survivors[0].path = t.keyPath(existKey)
+			for i := range survivors {
+				if len(survivors[i].key) != 0 && bytes.Equal(survivors[i].key, existIdentity) {
+					survivors[i].path = t.keyPath(existIdentity)
+					break
+				}
+			}
 		}
 		// Multiple survivors → build a child subtree in a separate frame.
 		// Keeping the recursive apply/sortOps calls out of this function frame is
@@ -1124,8 +1202,13 @@ func (t *commitmentTrie) linkChild(branch *BranchData, nb uint8, childPrefix []b
 			if err := t.store.DelBranch(childPrefix); err != nil {
 				return err
 			}
-			k, vh := child.leafChildAt(cn)
-			branch.setLeafChildStable(nb, k, vh)
+			identity, pathOnly, vh := child.leafChildIdentityAt(cn)
+			if pathOnly {
+				branch.setLeafChildPath(nb, identity, vh)
+			} else {
+				path := t.keyPath(identity)
+				branch.setLeafChildPath(nb, path[:], vh)
+			}
 			return nil
 		}
 		// Single HASH child is a valid (extension-like) node; keep it.
@@ -1135,6 +1218,17 @@ func (t *commitmentTrie) linkChild(branch *BranchData, nb uint8, childPrefix []b
 	}
 	branch.SetHashChild(nb, t.nodeHash(child))
 	return nil
+}
+
+// sameLeafIdentity compares resolved fold ops without requiring a full raw key
+// in persisted branch leaves. Incoming updates always have both key and path;
+// decoded shortened leaves carry only path. Legacy/plain leaves retain raw-key
+// equality until the containing branch is next rewritten.
+func sameLeafIdentity(a, b op) bool {
+	if len(a.key) != 0 && len(b.key) != 0 {
+		return bytes.Equal(a.key, b.key)
+	}
+	return a.path == b.path
 }
 
 // livePutsInPlace compacts the surviving puts to the front of group after

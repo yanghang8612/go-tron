@@ -101,6 +101,44 @@ func TestBranchDataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBranchDataPathLeafRoundTrip(t *testing.T) {
+	path := keyPath([]byte("state-kv-latest-v1-production-shaped-key"))
+	valHash := common.Hash{0x12, 0x34}
+	var branch BranchData
+	branch.setLeafChildPath(0xa, path[:], valHash)
+
+	encoded := branch.Encode()
+	if got, want := len(encoded), 2+1+common.HashLength+common.HashLength; got != want {
+		t.Fatalf("path-leaf encoded bytes = %d, want %d", got, want)
+	}
+	if encoded[2] != kindLeafPath {
+		t.Fatalf("path-leaf kind = %d, want %d", encoded[2], kindLeafPath)
+	}
+	decoded, err := DecodeBranchData(encoded)
+	if err != nil {
+		t.Fatalf("DecodeBranchData: %v", err)
+	}
+	identity, pathOnly, gotHash := decoded.leafChildIdentityAt(0xa)
+	if !pathOnly || !bytes.Equal(identity, path[:]) || gotHash != valHash {
+		t.Fatalf("decoded path leaf = (pathOnly=%v identity=%x hash=%x)", pathOnly, identity, gotHash)
+	}
+	if !branch.Equal(decoded) {
+		t.Fatal("decoded path branch not Equal to original")
+	}
+}
+
+func TestBranchDataPathLeafRejectsTruncation(t *testing.T) {
+	path := keyPath([]byte("long commitment key"))
+	var branch BranchData
+	branch.setLeafChildPath(1, path[:], common.Hash{0x77})
+	encoded := branch.Encode()
+	for _, cut := range []int{3, len(encoded) - 1} {
+		if _, err := DecodeBranchData(encoded[:cut]); err == nil {
+			t.Fatalf("DecodeBranchData accepted path leaf truncated to %d bytes", cut)
+		}
+	}
+}
+
 func TestBranchDataKindMaskTransitions(t *testing.T) {
 	var branch BranchData
 	branch.SetLeafChild(3, []byte("leaf"), common.Hash{0x11})

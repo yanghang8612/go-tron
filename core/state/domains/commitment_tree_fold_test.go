@@ -2,6 +2,8 @@ package domains
 
 import (
 	"bytes"
+	"encoding/binary"
+	"math/bits"
 	"math/rand"
 	"runtime"
 	"sort"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 // mapBranchStore is an in-memory branchStore test double keyed by the packed
@@ -35,6 +38,128 @@ func (s *mutationCountingBranchStore) DelBranch(prefix []byte) error {
 
 func newMapBranchStore() *mapBranchStore {
 	return &mapBranchStore{m: make(map[string]BranchData)}
+}
+
+func TestFoldMigratesLegacyRawLeafToPathIdentity(t *testing.T) {
+	key := []byte("state-kv-latest-v1-owner-generation-domain-logical-key")
+	oldValue := []byte("old")
+	newValue := []byte("new")
+	path := keyPath(key)
+	nibble := pathNibble(path, 0)
+
+	store := newMapBranchStore()
+	var legacyRoot BranchData
+	legacyRoot.SetLeafChild(nibble, key, leafValueHash(key, oldValue))
+	if err := store.PutBranch(nil, legacyRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := newCommitmentTrie(store).Fold([]Update{{Key: key, Value: newValue}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := leafValueHash(key, newValue); root != want {
+		t.Fatalf("updated singleton root = %x, want %x", root, want)
+	}
+	persisted, ok, err := store.GetBranch(nil)
+	if err != nil || !ok {
+		t.Fatalf("read migrated root: ok=%v err=%v", ok, err)
+	}
+	identity, pathOnly, valueHash := persisted.leafChildIdentityAt(nibble)
+	if !pathOnly || !bytes.Equal(identity, path[:]) || valueHash != root {
+		t.Fatalf("migrated leaf = (pathOnly=%v identity=%x hash=%x), want path=%x hash=%x", pathOnly, identity, valueHash, path, root)
+	}
+}
+
+func TestFoldSplitsLegacyRawLeafUsingStoredKeyPath(t *testing.T) {
+	firstKey := []byte("state-account-latest-v1-first-owner")
+	firstPath := keyPath(firstKey)
+	firstNibble := pathNibble(firstPath, 0)
+	secondKey := []byte("state-kv-latest-v1-second-owner-generation-domain-key")
+	for suffix := 0; pathNibble(keyPath(secondKey), 0) != firstNibble; suffix++ {
+		if suffix > 4096 {
+			t.Fatal("failed to find a same-root-nibble test key")
+		}
+		secondKey = append(secondKey, byte(suffix))
+	}
+
+	store := newMapBranchStore()
+	var legacyRoot BranchData
+	legacyRoot.SetLeafChild(firstNibble, firstKey, leafValueHash(firstKey, []byte("first")))
+	if err := store.PutBranch(nil, legacyRoot); err != nil {
+		t.Fatal(err)
+	}
+	got, err := newCommitmentTrie(store).Fold([]Update{{Key: secondKey, Value: []byte("second")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantStore := newMapBranchStore()
+	want, err := newCommitmentTrie(wantStore).Fold([]Update{
+		{Key: firstKey, Value: []byte("first")},
+		{Key: secondKey, Value: []byte("second")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("legacy split root = %x, fresh path root = %x", got, want)
+	}
+	assertRowSetsEqual(t, store.rowSet(), wantStore.rowSet())
+}
+
+func TestCommitmentPathLeafProductionKeySavings(t *testing.T) {
+	const rows = 4096
+	updates := make([]Update, rows)
+	rawKeyByPath := make(map[string][]byte, rows)
+	for i := range updates {
+		var addressBytes [common.AddressLength]byte
+		addressBytes[0] = common.AddressPrefixMainnet
+		binary.BigEndian.PutUint64(addressBytes[len(addressBytes)-8:], uint64(i+1))
+		owner := common.BytesToAddress(addressBytes[:])
+		var key []byte
+		if i&1 == 0 {
+			key = rawdb.StateAccountLatestCommitmentKey(owner)
+		} else {
+			var slot [32]byte
+			binary.BigEndian.PutUint64(slot[len(slot)-8:], uint64(i))
+			key = rawdb.StateKVLatestCommitmentKey(owner, uint64(i>>10), kvdomains.ContractStorage, slot[:])
+		}
+		value := make([]byte, 8)
+		binary.BigEndian.PutUint64(value, uint64(i*37+11))
+		updates[i] = Update{Key: key, Value: value}
+		path := keyPath(key)
+		rawKeyByPath[string(path[:])] = key
+	}
+
+	store := newMapBranchStore()
+	if _, err := newCommitmentTrie(store).Fold(updates); err != nil {
+		t.Fatal(err)
+	}
+	var compactBytes, legacyBytes, pathLeaves int
+	for _, branch := range store.m {
+		compactBytes += len(branch.Encode())
+		legacy := branch
+		for remaining := branch.leafMask(); remaining != 0; remaining &= remaining - 1 {
+			nibble := uint8(bits.TrailingZeros16(remaining))
+			identity, pathOnly, valueHash := branch.leafChildIdentityAt(nibble)
+			if !pathOnly {
+				continue
+			}
+			rawKey := rawKeyByPath[string(identity)]
+			if len(rawKey) == 0 {
+				t.Fatalf("missing raw key for path %x", identity)
+			}
+			legacy.SetLeafChild(nibble, rawKey, valueHash)
+			pathLeaves++
+		}
+		legacyBytes += len(legacy.Encode())
+	}
+	if compactBytes >= legacyBytes {
+		t.Fatalf("path leaf bytes = %d, legacy raw-key bytes = %d", compactBytes, legacyBytes)
+	}
+	t.Logf("commitment branch corpus: rows=%d branches=%d path_leaves=%d raw_key_bytes=%d path_bytes=%d reduction=%.2f%%",
+		rows, len(store.m), pathLeaves, legacyBytes, compactBytes, 100*float64(legacyBytes-compactBytes)/float64(legacyBytes))
 }
 
 func TestFoldSkipsPersistingByteIdenticalUpdates(t *testing.T) {
