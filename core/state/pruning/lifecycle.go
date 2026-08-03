@@ -244,21 +244,37 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 
 func (l *SnapshotLifecycle) loop() {
 	defer close(l.done)
-	if _, err := l.OnePass(); err != nil {
-		lifecycleLog.Warn("Domain state snapshot/prune initial pass failed", "err", err)
+	runPass := func(reason string) {
+		result, err := l.OnePass()
+		if err != nil {
+			lifecycleLog.Warn("Domain state snapshot/prune pass failed", "reason", reason, "err", err)
+			return
+		}
+		// Erigon's background aggregator drains every ready immutable step in
+		// one run. Preserve go-tron's smaller build/publish/prune transaction
+		// boundary, but coalesce an immediate next pass while verified lag
+		// remains instead of sleeping for a full maintenance interval.
+		if result.Snapshot.NeedsCatchup() {
+			l.RequestPass()
+		}
 	}
+	runPass("initial")
 	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
 	for {
+		// A pass can take longer than the shutdown request. Do not let its
+		// coalesced follow-up win over Stop once the in-flight ordered pass has
+		// completed.
+		select {
+		case <-l.quit:
+			return
+		default:
+		}
 		select {
 		case <-ticker.C:
-			if _, err := l.OnePass(); err != nil {
-				lifecycleLog.Warn("Domain state snapshot/prune pass failed", "err", err)
-			}
+			runPass("interval")
 		case <-l.wake:
-			if _, err := l.OnePass(); err != nil {
-				lifecycleLog.Warn("Domain state snapshot/prune requested pass failed", "err", err)
-			}
+			runPass("requested")
 		case <-l.quit:
 			return
 		}

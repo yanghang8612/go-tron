@@ -264,6 +264,83 @@ func TestColdBuilderMetricsExposeBuildLagAndPhaseDurations(t *testing.T) {
 	}
 }
 
+func TestColdBuilderLoopDrainsReadyBatchesWithoutIntervalWait(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x74)
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 4}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+		BatchBlocks:   1,
+	})
+	if err := runner.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := runner.Stop(); err != nil {
+			t.Errorf("stop: %v", err)
+		}
+	})
+
+	waitColdBuilderStats(t, runner, func(stats Stats) bool {
+		return stats.LastPublishedBlock == 3 && stats.LastLagBlocks == 0
+	})
+	stats := runner.Snapshot()
+	if stats.PassesCompleted != 3 || stats.SegmentsBuilt != 3 {
+		t.Fatalf("runner stats = %+v, want three immediately drained batches", stats)
+	}
+}
+
+func TestColdBuilderLoopStopsCatchupWhenPassMakesNoProgress(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x75)
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 4}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+		BatchBlocks:   1,
+	})
+	first, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if !first.NeedsCatchup() || first.PublishedBlock != 1 || first.EligibleCutoffBlock != 3 {
+		t.Fatalf("first pass = %+v, want one built batch with backlog", first)
+	}
+	// Remove the verified cutoff range after the first publication. The loop's
+	// initial pass now makes no progress and must not keep requeueing itself.
+	if err := rawdb.DeleteStateTxRange(db, 3); err != nil {
+		t.Fatalf("delete cutoff range: %v", err)
+	}
+	if err := runner.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := runner.Stop(); err != nil {
+			t.Errorf("stop: %v", err)
+		}
+	})
+
+	waitColdBuilderStats(t, runner, func(stats Stats) bool { return stats.PassesCompleted >= 2 })
+	time.Sleep(50 * time.Millisecond)
+	stats := runner.Snapshot()
+	if stats.PassesCompleted != 2 || stats.SegmentsBuilt != 1 || stats.LastLagBlocks != 2 {
+		t.Fatalf("runner stats = %+v, want one build, one no-progress pass, and no spin", stats)
+	}
+}
+
 func TestColdBuilderOnePassPublishesSignedCatalog(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -1636,6 +1713,18 @@ func assertColdRunnerGauge(t *testing.T, name string, want int64) {
 	if got := coldRunnerGaugeValue(t, name); got != want {
 		t.Fatalf("gauge %s = %d, want %d", name, got, want)
 	}
+}
+
+func waitColdBuilderStats(t *testing.T, runner *Runner, ready func(Stats) bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if stats := runner.Snapshot(); ready(stats) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for cold builder stats, last = %+v", runner.Snapshot())
 }
 
 func coldRunnerGaugeValue(t *testing.T, name string) int64 {

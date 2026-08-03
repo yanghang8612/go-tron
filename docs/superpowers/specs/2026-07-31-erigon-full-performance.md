@@ -2156,6 +2156,25 @@ Generated-byte accounting includes every newly written history/accessor/index
 segment and any compaction outputs, so it measures actual lifecycle output
 rather than logical source size.
 
+#### P5.3: Continuous bounded backlog drain
+
+Erigon's `Aggregator.BuildFilesInBackground` acquires a single background-build
+slot and loops across every fully written step before starting its merge loop.
+Go-tron's builder intentionally publishes smaller 5,000-block transactions,
+but the lifecycle previously returned to a one-minute ticker after each one.
+A restart with several ready ranges therefore added one minute of artificial
+latency per segment even when storage and CPU were idle.
+
+Each successful bounded pass now compares its published block with the
+hash-verified eligible cutoff captured at pass start. While published coverage
+is behind, the standalone builder and the production ordered lifecycle enqueue
+one coalesced follow-up immediately. Every follow-up still executes the full
+build -> atomic manifest publication -> coverage-gated hot prune sequence; no
+parallel builder or unbounded work queue is introduced. A pass that publishes
+nothing never requeues itself, so a missing/incomplete hot range falls back to
+the normal maintenance interval instead of spinning. Shutdown is preferred
+over queued catch-up work after the currently executing pass returns.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

@@ -67,6 +67,63 @@ func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T)
 	}
 }
 
+func TestSnapshotLifecycleAutomaticallyDrainsColdBuildBacklog(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeSnapPruningChange(t, db, blockNum, blockNum*10, blockNum*10+2)
+	}
+
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 4}, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:           dir,
+			Enabled:       true,
+			Interval:      time.Hour,
+			HistoryWindow: 1,
+			BatchBlocks:   1,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+		Interval: time.Hour,
+	})
+	if err := lifecycle.Start(); err != nil {
+		t.Fatalf("start lifecycle: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := lifecycle.Stop(); err != nil {
+			t.Errorf("stop lifecycle: %v", err)
+		}
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild); err != nil {
+			t.Fatalf("read snapshot build stage: %v", err)
+		} else if ok && progress == 3 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild); err != nil || !ok || progress != 3 {
+		t.Fatalf("snapshot build stage = %d ok=%v err=%v, want 3 without waiting for interval", progress, ok, err)
+	}
+	// StageSnapshotBuild is published inside the builder, before the ordered
+	// prune half of the same lifecycle pass. Stop joins that pass before the
+	// cross-stage counter assertions below.
+	if err := lifecycle.Stop(); err != nil {
+		t.Fatalf("stop lifecycle: %v", err)
+	}
+	if stats := lifecycle.builder.Snapshot(); stats.PassesCompleted != 3 || stats.SegmentsBuilt != 3 || stats.LastLagBlocks != 0 {
+		t.Fatalf("builder stats = %+v, want three drained batches", stats)
+	}
+	if stats := lifecycle.pruner.Stats(); stats.Passes != 3 || stats.Errors != 0 {
+		t.Fatalf("pruner stats = %+v, want one ordered prune per build", stats)
+	}
+}
+
 func TestSnapshotLifecyclePublishesCatalogAfterHotPrune(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()

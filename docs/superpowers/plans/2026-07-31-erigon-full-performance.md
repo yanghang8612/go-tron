@@ -260,6 +260,9 @@
 - [x] Export cold build/merge/lag and hot-prune counters plus phase durations
   so the fresh snap-mode production gate can distinguish import pressure from
   lifecycle backlog without relying on periodic log lines.
+- [x] Drain verified cold-build backlog through coalesced bounded lifecycle
+  passes instead of sleeping one full maintenance interval after every
+  5,000-block segment.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

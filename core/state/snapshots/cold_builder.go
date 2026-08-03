@@ -110,6 +110,16 @@ type PassResult struct {
 	LatestDuration      time.Duration
 }
 
+// NeedsCatchup reports whether a successful bounded history build published
+// less than the verified cutoff that was ready when the pass began. Callers
+// may schedule another pass immediately instead of waiting for the normal
+// maintenance interval. A pass that made no progress never requests another
+// run, which prevents malformed or temporarily incomplete hot ranges from
+// spinning.
+func (r PassResult) NeedsCatchup() bool {
+	return r.Built && r.PublishedBlock < r.EligibleCutoffBlock
+}
+
 // Stats is a thread-safe snapshot of lifecycle progress.
 type Stats struct {
 	PassesCompleted         uint64
@@ -1071,8 +1081,19 @@ func (r *Runner) latestPass() (bool, error) {
 
 func (r *Runner) loop() {
 	defer close(r.done)
+	catchup := make(chan struct{}, 1)
+	scheduleCatchup := func(result PassResult, err error) {
+		if err != nil || !result.NeedsCatchup() {
+			return
+		}
+		select {
+		case catchup <- struct{}{}:
+		default:
+		}
+	}
 
-	if result, err := r.OnePass(); err != nil {
+	result, err := r.OnePass()
+	if err != nil {
 		coldSnapshotLog.Warn("History cold snapshot initial pass failed", "dataset", r.cfg.HistoryDataset, "err", err)
 	} else if result.Built {
 		coldSnapshotLog.Info("History cold snapshot initial pass built",
@@ -1094,38 +1115,49 @@ func (r *Runner) loop() {
 	} else if result.LatestBuilt {
 		coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
 	}
+	scheduleCatchup(result, err)
 
 	ticker := time.NewTicker(r.cfg.Interval)
 	defer ticker.Stop()
 	for {
+		// Prefer shutdown over an already queued catch-up request after a long
+		// build. This keeps Stop bounded to the pass that was in flight when it
+		// was called.
+		select {
+		case <-r.quit:
+			return
+		default:
+		}
 		select {
 		case <-ticker.C:
-			result, err := r.OnePass()
-			if err != nil {
-				coldSnapshotLog.Warn("History cold snapshot pass failed", "dataset", r.cfg.HistoryDataset, "err", err)
-			} else if result.Built {
-				coldSnapshotLog.Info("History cold snapshot pass built",
-					"dataset", r.cfg.HistoryDataset,
-					"fromTx", result.FromTxNum,
-					"toTx", result.ToTxNum,
-					"fromBlock", result.FromBlock,
-					"toBlock", result.ToBlock,
-					"cutoffBlock", result.CutoffBlock,
-					"sectionBloomBuilt", result.SectionBloomBuilt,
-					"balanceTraceBuilt", result.BalanceTraceBuilt,
-					"eventLogBuilt", result.EventLogBuilt)
-			} else if result.Compaction.Merged {
-				coldSnapshotLog.Info("History cold snapshot pass compacted",
-					"dataset", result.Compaction.Dataset,
-					"fromTx", result.Compaction.FromTxNum,
-					"toTx", result.Compaction.ToTxNum,
-					"segments", result.Compaction.SegmentsMerged)
-			} else if result.LatestBuilt {
-				coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
-			}
+		case <-catchup:
 		case <-r.quit:
 			return
 		}
+		result, err := r.OnePass()
+		if err != nil {
+			coldSnapshotLog.Warn("History cold snapshot pass failed", "dataset", r.cfg.HistoryDataset, "err", err)
+		} else if result.Built {
+			coldSnapshotLog.Info("History cold snapshot pass built",
+				"dataset", r.cfg.HistoryDataset,
+				"fromTx", result.FromTxNum,
+				"toTx", result.ToTxNum,
+				"fromBlock", result.FromBlock,
+				"toBlock", result.ToBlock,
+				"cutoffBlock", result.CutoffBlock,
+				"sectionBloomBuilt", result.SectionBloomBuilt,
+				"balanceTraceBuilt", result.BalanceTraceBuilt,
+				"eventLogBuilt", result.EventLogBuilt)
+		} else if result.Compaction.Merged {
+			coldSnapshotLog.Info("History cold snapshot pass compacted",
+				"dataset", result.Compaction.Dataset,
+				"fromTx", result.Compaction.FromTxNum,
+				"toTx", result.Compaction.ToTxNum,
+				"segments", result.Compaction.SegmentsMerged)
+		} else if result.LatestBuilt {
+			coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
+		}
+		scheduleCatchup(result, err)
 	}
 }
 
