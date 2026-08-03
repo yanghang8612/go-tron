@@ -1640,6 +1640,24 @@ production A/B falsifiable: the gate is fewer flush groups, a lower output/input
 byte ratio and lower disk/compaction bytes per imported block without more
 write stalls, backpressure, or unbounded buffered layers.
 
+The 480-ms canary produced two consistent post-restart windows. The first
+imported 1,724 blocks / 86,289 transactions in 47 seconds and increased the
+group population to 19.36 layers; the second imported 1,824 blocks / 91,962
+transactions in 52 seconds at 18.36 layers/group. Final logical bytes were
+33.7-34.5% of source bytes. The warmer window wrote about 361 KB and 1,132
+final operations per block, respectively 14% and 7% below P4.34's approximately
+420 KB / 1,216 operations per block, with zero Pebble write delay.
+
+Physical bytes were not yet comparable: compaction debt fell by 441 MB in the
+first window and grew by 248 MB while 4.88 GB was compacted in the second, so
+the OS-write denominator was dominated by different pre-existing level work.
+More importantly, extended groups remained zero and source input averaged only
+about 19 MiB/group. The canary therefore proved the scheduling mechanism but
+did not exercise the new output-bounded path. The next calibration raises the
+wait to 960 ms: the observed import rate projects roughly 36-38 layers and
+38 MiB of source data per call, while the measured final output projects only
+about 13 MiB, comfortably below the unchanged 32 MiB final batch cap.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
