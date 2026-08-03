@@ -56,8 +56,12 @@ var ErrReadSnapshotUnsupported = errors.New("blockbuffer: durable read snapshot 
 var (
 	flushInputOpsCounter                         = metrics.NewRegisteredCounter("blockbuffer/flush/input/ops", nil)
 	flushOutputOpsCounter                        = metrics.NewRegisteredCounter("blockbuffer/flush/output/ops", nil)
+	flushInputBytesCounter                       = metrics.NewRegisteredCounter("blockbuffer/flush/input/bytes", nil)
+	flushOutputBytesCounter                      = metrics.NewRegisteredCounter("blockbuffer/flush/output/bytes", nil)
 	flushLayersCounter                           = metrics.NewRegisteredCounter("blockbuffer/flush/layers", nil)
 	flushGroupsCounter                           = metrics.NewRegisteredCounter("blockbuffer/flush/groups", nil)
+	flushExtendedGroupsCounter                   = metrics.NewRegisteredCounter("blockbuffer/flush/extended/groups", nil)
+	flushExtendedLayersCounter                   = metrics.NewRegisteredCounter("blockbuffer/flush/extended/layers", nil)
 	flushCallsCounter                            = metrics.NewRegisteredCounter("blockbuffer/flush/calls", nil)
 	commitmentParentOverlayResolvedCounter       = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/overlay/resolved", nil)
 	commitmentParentCacheResolvedCounter         = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/cache/resolved", nil)
@@ -384,11 +388,15 @@ type bufferReadView struct {
 
 const (
 	// The Pebble adapter has bounded reusable batch buffers through 32 MiB. Use
-	// that whole range as the solid-layer merge window: production commitment
-	// writes commonly exceed 1 MiB for one block, so the former 1 MiB limit made
-	// every such layer a single-layer group and defeated cross-block coalescing.
+	// that whole range for the FINAL solid-layer batch. Production commitment
+	// branches are hot full post-images: a 32 MiB stream of source layers often
+	// collapses to only a few MiB. Permit a larger source window, Erigon-style,
+	// while checking every appended layer against the final 32 MiB output. This
+	// preserves the bounded Pebble batch/WAL allocation and atomicity contract.
 	maxFlushBatchValueSize   = 32 << 20
 	maxFlushBatchEncodedSize = 32 << 20
+	maxFlushMergeValueSize   = 128 << 20
+	maxFlushMergeEncodedSize = 128 << 20
 )
 
 func newLayer(hash common.Hash, number uint64) *layer {
@@ -2586,38 +2594,14 @@ func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushG
 
 	flushed := 0
 	for start := 0; start < len(layers); {
-		end := start
-		queuedValueSize := 0
-		queuedEncodedSize := pebbleBatchHeaderSize
-		queuedOps := 0
-		for end < len(layers) {
-			next := sizes[end]
-			if end > start && (queuedValueSize+next.value > maxFlushBatchValueSize ||
-				queuedEncodedSize+next.encoded > maxFlushBatchEncodedSize) {
-				break
-			}
-			queuedValueSize += next.value
-			queuedEncodedSize += next.encoded
-			queuedOps += next.ops
-			end++
-			if queuedValueSize >= maxFlushBatchValueSize || queuedEncodedSize >= maxFlushBatchEncodedSize {
-				break
-			}
-		}
-
-		// A single layer has already coalesced duplicate keys while it was built,
-		// so keep its allocation-free direct write path. Multi-layer groups need
-		// only the newest operation for each physical key: every layer in this
-		// group is solidified and the group is committed atomically, making the
-		// intermediate versions unobservable. This cuts WAL/memtable/compaction
-		// write amplification for hot latest-state and commitment-branch keys.
-		var merged *flushMergedOps
-		if end-start > 1 {
-			merged = borrowFlushMergedOps()
-			mergeLayers(layers[start:end], merged)
-			_, finalEncodedSize := mergedLayerWriteStats(merged.ops)
-			queuedEncodedSize = pebbleBatchHeaderSize + finalEncodedSize
-		}
+		group := selectFlushGroup(layers, sizes, start, flushGroupLimits{
+			batchValue:   maxFlushBatchValueSize,
+			batchEncoded: maxFlushBatchEncodedSize,
+			mergeValue:   maxFlushMergeValueSize,
+			mergeEncoded: maxFlushMergeEncodedSize,
+		})
+		end := group.end
+		merged := group.merged
 
 		// Pebble deliberately drops buffers larger than batchMaxRetainedSize on
 		// Reset. Reusing one large batch therefore made every group after the
@@ -2625,7 +2609,7 @@ func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushG
 		// calculation. Allocate each bounded group at its FINAL encoded size plus
 		// the one-record scratch allowance so every batch performs one final
 		// allocation and no grow/copy cycle.
-		batch := batcher.NewBatchWithSize(queuedEncodedSize + pebbleBatchRecordSlack)
+		batch := batcher.NewBatchWithSize(group.outputEncoded + pebbleBatchRecordSlack)
 		var writeErr error
 		if merged == nil {
 			writeErr = writeLayerSorted(layers[start], batch)
@@ -2652,14 +2636,20 @@ func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushG
 			families.publish()
 			flushFamilySampledGroupsCounter.Inc(1)
 		}
-		outputOps := queuedOps
+		outputOps := group.inputOps
 		if merged != nil {
 			outputOps = len(merged.ops)
 		}
-		flushInputOpsCounter.Inc(int64(queuedOps))
+		flushInputOpsCounter.Inc(int64(group.inputOps))
 		flushOutputOpsCounter.Inc(int64(outputOps))
+		flushInputBytesCounter.Inc(int64(group.inputValue))
+		flushOutputBytesCounter.Inc(int64(group.outputValue))
 		flushLayersCounter.Inc(int64(end - start))
 		flushGroupsCounter.Inc(1)
+		if group.extendedLayers > 0 {
+			flushExtendedGroupsCounter.Inc(1)
+			flushExtendedLayersCounter.Inc(int64(group.extendedLayers))
+		}
 		closeBatch(batch)
 		if observe != nil {
 			observe(layers[start:end], merged)
@@ -2826,6 +2816,100 @@ type layerBatchSize struct {
 	ops     int
 }
 
+type flushGroupLimits struct {
+	batchValue   int
+	batchEncoded int
+	mergeValue   int
+	mergeEncoded int
+}
+
+// flushGroupPlan describes one durable Pebble batch. input* measures all
+// source-layer operations consumed by the group; output* measures the final
+// last-writer-wins rows that enter Pebble. extendedLayers is the number of
+// layers admitted after the legacy final-batch-sized source window filled.
+type flushGroupPlan struct {
+	end            int
+	inputValue     int
+	inputEncoded   int
+	inputOps       int
+	outputValue    int
+	outputEncoded  int
+	extendedLayers int
+	merged         *flushMergedOps
+}
+
+// selectFlushGroup first builds the conventional source window bounded by the
+// final Pebble batch size. It then probes subsequent layers against the live
+// coalesced map and admits them only when both:
+//
+//   - total source bytes remain inside the larger aggregation bound; and
+//   - the resulting final Pebble batch remains inside the original bound.
+//
+// The second condition is evaluated before mutating the map, so an unrelated
+// append-only layer cannot transiently grow the merge map or final WAL batch
+// past the established limit. A one-layer result returns nil merged to retain
+// the allocation-free direct path. The caller owns and must return merged.
+func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits flushGroupLimits) flushGroupPlan {
+	plan := flushGroupPlan{
+		end:           start,
+		inputEncoded:  pebbleBatchHeaderSize,
+		outputEncoded: pebbleBatchHeaderSize,
+	}
+	for plan.end < len(layers) {
+		next := sizes[plan.end]
+		if plan.end > start && (plan.inputValue+next.value > limits.batchValue ||
+			plan.inputEncoded+next.encoded > limits.batchEncoded) {
+			break
+		}
+		plan.inputValue += next.value
+		plan.inputEncoded += next.encoded
+		plan.inputOps += next.ops
+		plan.end++
+		if plan.inputValue >= limits.batchValue || plan.inputEncoded >= limits.batchEncoded {
+			break
+		}
+	}
+	baseEnd := plan.end
+	canProbeExtension := plan.end < len(layers) &&
+		plan.inputValue+sizes[plan.end].value <= limits.mergeValue &&
+		plan.inputEncoded+sizes[plan.end].encoded <= limits.mergeEncoded
+	if plan.end-start > 1 || canProbeExtension {
+		plan.merged = borrowFlushMergedOps()
+		mergeLayers(layers[start:plan.end], plan.merged)
+		outputValue, outputRecords := mergedLayerWriteStats(plan.merged.ops)
+		plan.outputValue = outputValue
+		plan.outputEncoded = pebbleBatchHeaderSize + outputRecords
+
+		for plan.end < len(layers) {
+			next := sizes[plan.end]
+			if plan.inputValue+next.value > limits.mergeValue ||
+				plan.inputEncoded+next.encoded > limits.mergeEncoded {
+				break
+			}
+			valueDelta, encodedDelta := mergedLayerSizeDelta(layers[plan.end], plan.merged.ops)
+			if plan.outputValue+valueDelta > limits.batchValue ||
+				plan.outputEncoded+encodedDelta > limits.batchEncoded {
+				break
+			}
+			mergeLayers(layers[plan.end:plan.end+1], plan.merged)
+			plan.inputValue += next.value
+			plan.inputEncoded += next.encoded
+			plan.inputOps += next.ops
+			plan.outputValue += valueDelta
+			plan.outputEncoded += encodedDelta
+			plan.end++
+		}
+	}
+	plan.extendedLayers = plan.end - baseEnd
+	if plan.end-start == 1 {
+		returnFlushMergedOps(plan.merged)
+		plan.merged = nil
+		plan.outputValue = plan.inputValue
+		plan.outputEncoded = plan.inputEncoded
+	}
+	return plan
+}
+
 // mergedLayerOp is the final operation for one physical key across a bounded
 // group of committed layers. Values and keys borrow the immutable layer maps;
 // flushLayers keeps every source layer alive until the Pebble batch has copied
@@ -2970,15 +3054,58 @@ func mergeLayers(layers []*layer, merged *flushMergedOps) {
 
 func mergedLayerWriteStats(ops map[string]mergedLayerOp) (valueSize, encodedSize int) {
 	for k, op := range ops {
-		if op.delete {
-			valueSize += len(k)
-			encodedSize += 1 + uvarintSize(len(k)) + len(k)
-			continue
-		}
-		valueSize += len(k) + len(op.value)
-		encodedSize += 1 + uvarintSize(len(k)) + len(k) + uvarintSize(len(op.value)) + len(op.value)
+		value, encoded := mergedLayerOpWriteStats(k, op)
+		valueSize += value
+		encodedSize += encoded
 	}
 	return valueSize, encodedSize
+}
+
+func mergedLayerOpWriteStats(key string, op mergedLayerOp) (valueSize, encodedSize int) {
+	if op.delete {
+		return len(key), 1 + uvarintSize(len(key)) + len(key)
+	}
+	return len(key) + len(op.value),
+		1 + uvarintSize(len(key)) + len(key) + uvarintSize(len(op.value)) + len(op.value)
+}
+
+// mergedLayerSizeDelta calculates how one layer would change the final
+// coalesced representation without mutating it. A layer's write and delete
+// maps are disjoint, so every key has exactly one projected transition. This
+// lets selectFlushGroup reject a unique/append-only layer before it can enlarge
+// the live merge map or the final Pebble batch beyond its established cap.
+func mergedLayerSizeDelta(l *layer, existing map[string]mergedLayerOp) (valueDelta, encodedDelta int) {
+	if l == nil {
+		return 0, 0
+	}
+	addTransition := func(key string, next mergedLayerOp, keep bool) {
+		if previous, ok := existing[key]; ok {
+			value, encoded := mergedLayerOpWriteStats(key, previous)
+			valueDelta -= value
+			encodedDelta -= encoded
+		}
+		if keep {
+			value, encoded := mergedLayerOpWriteStats(key, next)
+			valueDelta += value
+			encodedDelta += encoded
+		}
+	}
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.RLock()
+		for key, value := range s.writes {
+			if durable, ok := s.durableWrites[key]; ok && bytes.Equal(durable, value) {
+				addTransition(key, mergedLayerOp{}, false)
+				continue
+			}
+			addTransition(key, mergedLayerOp{value: value, shard: uint8(i)}, true)
+		}
+		for key := range s.deletes {
+			addTransition(key, mergedLayerOp{delete: true, shard: uint8(i)}, true)
+		}
+		s.mu.RUnlock()
+	}
+	return valueDelta, encodedDelta
 }
 
 func writeMergedLayerOps(ops map[string]mergedLayerOp, w ethdb.KeyValueWriter) error {

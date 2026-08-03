@@ -857,6 +857,8 @@ func TestFlushLayersRecordsCoalescingMetrics(t *testing.T) {
 
 	inputBefore := flushInputOpsCounter.Snapshot().Count()
 	outputBefore := flushOutputOpsCounter.Snapshot().Count()
+	inputBytesBefore := flushInputBytesCounter.Snapshot().Count()
+	outputBytesBefore := flushOutputBytesCounter.Snapshot().Count()
 	layersBefore := flushLayersCounter.Snapshot().Count()
 	groupsBefore := flushGroupsCounter.Snapshot().Count()
 
@@ -873,11 +875,105 @@ func TestFlushLayersRecordsCoalescingMetrics(t *testing.T) {
 	if got := flushOutputOpsCounter.Snapshot().Count() - outputBefore; got != 4 {
 		t.Fatalf("output ops delta = %d, want 4", got)
 	}
+	if got := flushInputBytesCounter.Snapshot().Count() - inputBytesBefore; got != 50 {
+		t.Fatalf("input bytes delta = %d, want 50", got)
+	}
+	if got := flushOutputBytesCounter.Snapshot().Count() - outputBytesBefore; got != 44 {
+		t.Fatalf("output bytes delta = %d, want 44", got)
+	}
 	if got := flushLayersCounter.Snapshot().Count() - layersBefore; got != 2 {
 		t.Fatalf("layers delta = %d, want 2", got)
 	}
 	if got := flushGroupsCounter.Snapshot().Count() - groupsBefore; got != 1 {
 		t.Fatalf("groups delta = %d, want 1", got)
+	}
+}
+
+func TestSelectFlushGroupExtendsOnlyWhileFinalBatchFits(t *testing.T) {
+	owner := new(Buffer)
+	first := newLayer(bufHash(1), 1)
+	owner.putIntoString(first, "hot", bytes.Repeat([]byte{0x11}, 80))
+	second := newLayer(bufHash(2), 2)
+	owner.putIntoString(second, "hot", bytes.Repeat([]byte{0x22}, 80))
+
+	layers := []*layer{first, second}
+	sizes := make([]layerBatchSize, len(layers))
+	for i, layer := range layers {
+		value, encoded, ops := layerWriteStats(layer)
+		sizes[i] = layerBatchSize{value: value, encoded: encoded, ops: ops}
+	}
+	limits := flushGroupLimits{
+		batchValue:   90,
+		batchEncoded: 100,
+		mergeValue:   250,
+		mergeEncoded: 260,
+	}
+	plan := selectFlushGroup(layers, sizes, 0, limits)
+	if plan.merged != nil {
+		defer returnFlushMergedOps(plan.merged)
+	}
+	if plan.end != 2 || plan.extendedLayers != 1 {
+		t.Fatalf("extended plan = end %d, extended %d; want 2, 1", plan.end, plan.extendedLayers)
+	}
+	if plan.merged == nil {
+		t.Fatal("extended plan did not retain a coalesced map")
+	}
+	if got := plan.merged.ops["hot"].value; !bytes.Equal(got, bytes.Repeat([]byte{0x22}, 80)) {
+		t.Fatalf("coalesced hot value = %x, want newest value", got)
+	}
+	if plan.inputValue != 166 || plan.outputValue != 83 {
+		t.Fatalf("plan value sizes = input %d, output %d; want 166, 83", plan.inputValue, plan.outputValue)
+	}
+
+	unique := newLayer(bufHash(3), 3)
+	owner.putIntoString(unique, "new", bytes.Repeat([]byte{0x33}, 80))
+	uniqueLayers := []*layer{first, unique}
+	for i, layer := range uniqueLayers {
+		value, encoded, ops := layerWriteStats(layer)
+		sizes[i] = layerBatchSize{value: value, encoded: encoded, ops: ops}
+	}
+	uniquePlan := selectFlushGroup(uniqueLayers, sizes, 0, limits)
+	if uniquePlan.merged != nil {
+		defer returnFlushMergedOps(uniquePlan.merged)
+	}
+	if uniquePlan.end != 1 || uniquePlan.extendedLayers != 0 || uniquePlan.merged != nil {
+		t.Fatalf("unique plan = end %d, extended %d, merged %v; want direct one-layer group",
+			uniquePlan.end, uniquePlan.extendedLayers, uniquePlan.merged != nil)
+	}
+}
+
+func TestMergedLayerSizeDeltaMatchesAppliedLayer(t *testing.T) {
+	owner := new(Buffer)
+	base := newLayer(bufHash(1), 1)
+	owner.putIntoString(base, "hot", []byte("old"))
+	owner.putIntoString(base, "deleted", []byte("remove-me"))
+	owner.putIntoString(base, "durable", []byte("stale"))
+	owner.putIntoString(base, "untouched", []byte("keep"))
+
+	next := newLayer(bufHash(2), 2)
+	owner.putIntoString(next, "hot", []byte("new-value"))
+	owner.deleteIntoString(next, "deleted")
+	owner.putIntoString(next, "new", []byte("added"))
+	durableValue := []byte("already-on-disk")
+	owner.putIntoString(next, "durable", durableValue)
+	durableShard := next.shardForString("durable")
+	durableShard.mu.Lock()
+	durableShard.durableWrites = map[string][]byte{"durable": durableValue}
+	durableShard.mu.Unlock()
+
+	merged := borrowFlushMergedOps()
+	defer returnFlushMergedOps(merged)
+	mergeLayers([]*layer{base}, merged)
+	beforeValue, beforeEncoded := mergedLayerWriteStats(merged.ops)
+	valueDelta, encodedDelta := mergedLayerSizeDelta(next, merged.ops)
+	mergeLayers([]*layer{next}, merged)
+	afterValue, afterEncoded := mergedLayerWriteStats(merged.ops)
+	if beforeValue+valueDelta != afterValue || beforeEncoded+encodedDelta != afterEncoded {
+		t.Fatalf("projected sizes = (%d,%d), applied sizes = (%d,%d)",
+			beforeValue+valueDelta, beforeEncoded+encodedDelta, afterValue, afterEncoded)
+	}
+	if _, ok := merged.ops["durable"]; ok {
+		t.Fatal("already-durable newest value remained in final write set")
 	}
 }
 

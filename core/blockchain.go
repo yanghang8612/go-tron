@@ -427,13 +427,16 @@ func (b *flushBarrier) wait() {
 // guarantees a flush is never lost.
 const flushQueueCap = 8
 
-// flushCoalesceWait gives a caught-up worker one short window to collect newly
-// solidified cutoffs. Mainnet bulk sync applies several blocks inside this
-// interval; waiting through the whole window lets blockbuffer collapse repeated
-// latest-state writes across all of them instead of consistently flushing the
-// first pair. The delay is fully asynchronous, bounded, and interrupted
-// immediately by queue close.
-const flushCoalesceWait = 120 * time.Millisecond
+// flushCoalesceWait gives a caught-up worker one bounded window to collect
+// newly solidified cutoffs. Production attribution showed that the old 120 ms
+// cadence produced exactly one Pebble group per flush call and only about six
+// layers per group: the 32 MiB blockbuffer merge bound was never reached. A
+// four-times larger window retains roughly one half-second of additional final
+// layers during bulk sync and lets their hot commitment post-images collapse
+// before WAL/memtable insertion. Reads still resolve those layers through the
+// buffer, the final batch remains capped at 32 MiB, shutdown interrupts the
+// wait immediately, and crash recovery has only this bounded extra tail.
+const flushCoalesceWait = 480 * time.Millisecond
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
 func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig) (*BlockChain, error) {

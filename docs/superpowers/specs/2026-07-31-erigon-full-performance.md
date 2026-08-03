@@ -1593,6 +1593,53 @@ points to earlier append-only cold migration and hot index pruning; staged or
 canonical body dominance points to bypassing the LSM for immutable sequential
 payloads. No storage family is removed solely from aggregate compaction data.
 
+The first 63-second production sample imported 2,696 blocks / 147,313
+transactions while blockbuffer collapsed 5,063,364 input operations to
+3,279,102 final rows. Fourteen sampled flush groups attributed 70.85% of final
+logical bytes to commitment branches and 25.78% to state history; account
+latest, KV latest, metadata, and other rows together accounted for only 3.37%.
+Commitment and history therefore explain 96.63% of the coalesced write stream.
+Pebble concurrently compacted 4.78 GB in / 4.11 GB out, OS writes reached
+6.48 GB, debt grew by 277 MB, and three backpressure events consumed 491 ms.
+
+Lifetime counters supplied the scheduling detail missing from that short
+window: 5,656 successful flush calls produced exactly 5,656 flush groups for
+33,983 layers (6.01 layers/group). The 32 MiB group boundary never split a
+flush call. Increasing only the Pebble batch limit would consequently leave
+production unchanged; the aggregation opportunity is across the current
+120-ms flush calls.
+
+#### P4.35: Output-bounded solidified aggregation
+
+The local Erigon implementation does encode touched branch slots during the
+fold, but `ApplyDeferredBranchUpdates` merges each partial update with its
+previous value before `DomainPut`; its hot latest domain still receives a
+complete branch representation. Persisting delta chains and replaying them on
+every branch read is therefore neither required for alignment nor acceptable
+without Erigon's immutable-domain aggregation and branch cache. The transferable
+strategy is to retain finalized work briefly and merge it before the hot-store
+write.
+
+Blockbuffer now separates the source aggregation bound from the final Pebble
+batch bound. It first builds the existing 32 MiB window, then may admit more
+solidified layers up to 128 MiB of source data only after projecting that
+layer's exact last-writer-wins size delta. The final batch remains capped at
+32 MiB, so Pebble's pooled allocation, WAL record size, and atomicity contract
+do not grow. Unique append-only history stops the extension; repeated
+commitment post-images can continue collapsing. The direct one-layer path
+remains allocation-free, and already-durable overlay rows retain their removal
+semantics.
+
+The asynchronous flush collection window grows from 120 ms to 480 ms. At the
+observed bulk-sync rate this should increase the merge population from roughly
+six to roughly two dozen solidified layers while retaining only about half a
+second of additional crash-replay tail. Buffered reads remain current, shutdown
+interrupts the wait, and the final batch cap remains unchanged. New exact
+input/output logical-byte counters and extended-group/layer counters make the
+production A/B falsifiable: the gate is fewer flush groups, a lower output/input
+byte ratio and lower disk/compaction bytes per imported block without more
+write stalls, backpressure, or unbounded buffered layers.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

@@ -172,7 +172,7 @@
 - [x] Split the complete OCC WriteSet carrier from the optional projected
   post-image carrier, fill journal-only state families at `journal.append`, and
   remove both transaction-end journal walks from version validation.
-- [ ] Run the complete mutation-time WriteSet production gate and compare full
+- [x] Run the complete mutation-time WriteSet production gate and compare full
   and filtered recorder capture cost, unsupported writes, retry publication,
   and sync throughput against P4.32.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
@@ -188,9 +188,16 @@
 
 - [x] Add allocation-free sampled physical-write attribution by rawdb schema
   family at the final coalesced blockbuffer/Pebble boundary.
-- [ ] Run the physical-write family production sample and select the first
+- [x] Run the physical-write family production sample and select the first
   write-amplification reduction from commitment, history, or immutable body
   ownership evidence.
+- [x] Separate source aggregation from final Pebble batch sizing, project each
+  appended layer's exact coalesced-size delta, and retain the 32 MiB final cap.
+- [x] Increase the bounded async solidified aggregation window from 120 ms to
+  480 ms and expose exact input/output bytes plus extended group/layer counts.
+- [ ] Run the output-bounded aggregation production gate and compare layers per
+  group, logical byte reduction, disk/compaction bytes per block, stalls,
+  backpressure, and buffered-layer bounds against P4.34.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
