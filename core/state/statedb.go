@@ -70,6 +70,11 @@ type StateDB struct {
 	transactionVersionedTxIndex  int
 	transactionVersionedHydrated map[tcommon.Address]struct{}
 	transactionVersionedMissing  map[tcommon.Address]struct{}
+	// transactionVersionedStorageChecked distinguishes task-local dirty slots
+	// from clean cache entries inherited from a reverted retry template. The
+	// latter must be checked once against the immutable canonical prefix before
+	// their cached block-start value is trusted.
+	transactionVersionedStorageChecked map[transactionVersionedStorageKey]struct{}
 
 	// Small encoded logical keys are borrowed only for the duration of a
 	// synchronous account-KV lookup/write. Keeping their backing arrays on the
@@ -2794,9 +2799,27 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 		s.storageObservability.accountMissingZero++
 		return tcommon.Hash{}, false
 	}
-	if slot, ok := obj.storage[key]; ok {
-		s.storageObservability.objectCacheHits++
-		return slot.value, slot.exists
+	slot, cached := obj.storage[key]
+	if cached {
+		if s.transactionVersionedReader == nil {
+			s.storageObservability.objectCacheHits++
+			return slot.value, slot.exists
+		}
+		// Writes made by this task (including post-images forwarded from an
+		// earlier member of its sender chain) always win over the frozen prefix.
+		if _, dirty := obj.dirtyStorage[key]; dirty {
+			s.storageObservability.objectCacheHits++
+			return slot.value, slot.exists
+		}
+		// A prewarmed retry template was previously executed and reverted. Its
+		// clean storage cache can therefore contain a block-start value older
+		// than this retry's canonical prefix. Check such a slot once per reader
+		// binding before accepting the cache hit.
+		versionedKey := transactionVersionedStorageKey{address: addr, key: key}
+		if _, checked := s.transactionVersionedStorageChecked[versionedKey]; checked {
+			s.storageObservability.objectCacheHits++
+			return slot.value, slot.exists
+		}
 	}
 	if obj.created {
 		s.storageObservability.createdZero++
@@ -2806,9 +2829,17 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	// canonical post-images through the shared version floor. Storage has its
 	// own typed access key; routing it through the generic account-KV reader
 	// would miss the writer recorded by SLOAD/SSTORE dependency tracking.
-	if value, exists, versioned := s.readTransactionVersionedStorage(addr, key); versioned {
-		obj.cacheStorageSlot(key, storageSlot{value: value, exists: exists})
-		return value, exists
+	if s.transactionVersionedReader != nil {
+		versionedKey := transactionVersionedStorageKey{address: addr, key: key}
+		s.transactionVersionedStorageChecked[versionedKey] = struct{}{}
+		if value, exists, versioned := s.readTransactionVersionedStorage(addr, key); versioned {
+			obj.cacheStorageSlot(key, storageSlot{value: value, exists: exists})
+			return value, exists
+		}
+	}
+	if cached {
+		s.storageObservability.objectCacheHits++
+		return slot.value, slot.exists
 	}
 	// Load from persistent storage on cache miss.
 	s.storageObservability.coldReads++

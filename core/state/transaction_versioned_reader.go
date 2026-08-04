@@ -9,6 +9,11 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+type transactionVersionedStorageKey struct {
+	address tcommon.Address
+	key     tcommon.Hash
+}
+
 // SetTransactionVersionedValueReader binds a speculative StateDB to one
 // immutable transaction boundary. Local writes made after binding still win:
 // account objects and account-KV dirty rows are consulted before this reader.
@@ -21,10 +26,12 @@ func (s *StateDB) SetTransactionVersionedValueReader(reader TransactionVersioned
 	if reader == nil {
 		s.transactionVersionedHydrated = nil
 		s.transactionVersionedMissing = nil
+		s.transactionVersionedStorageChecked = nil
 		return
 	}
 	s.transactionVersionedHydrated = make(map[tcommon.Address]struct{}, 16)
 	s.transactionVersionedMissing = make(map[tcommon.Address]struct{}, 4)
+	s.transactionVersionedStorageChecked = make(map[transactionVersionedStorageKey]struct{}, 16)
 	s.lastStateObject = nil
 }
 

@@ -163,3 +163,56 @@ func TestTransactionVersionedReaderOverlaysStorage(t *testing.T) {
 		t.Fatalf("versioned storage tombstone = %x exists=%v", got, exists)
 	}
 }
+
+func TestTransactionVersionedReaderOverridesRevertedStorageCache(t *testing.T) {
+	source := newTestStateDB(t)
+	contract := testAddr(44)
+	slot := tcommon.BytesToHash([]byte{1})
+	durable := tcommon.BytesToHash([]byte{2})
+	shared := tcommon.BytesToHash([]byte{3})
+	local := tcommon.BytesToHash([]byte{4})
+	source.CreateAccount(contract, corepb.AccountType_Contract)
+	source.SetState(contract, slot, durable)
+	if _, err := source.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sender-chain workers are reverted to block start before their StateDB is
+	// retained as an async retry template. Journal replay restores the slot but
+	// intentionally leaves the object dirty, so CopyBlockExecutionBase carries
+	// this clean, cached durable value into the retry job.
+	template, err := source.CopyBlockExecutionBase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := template.Snapshot()
+	template.SetState(contract, slot, local)
+	template.RevertToSnapshot(snapshot)
+	obj := template.stateObjects[contract]
+	if obj == nil || !obj.dirty {
+		t.Fatal("reverted template did not retain the dirty object")
+	}
+	if _, dirty := obj.dirtyStorage[slot]; dirty {
+		t.Fatal("reverted slot is still task-local dirty storage")
+	}
+
+	worker, err := template.CopyBlockExecutionBase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.SetTransactionVersionedValueReader(testTransactionVersionedReader{
+		{Kind: TransactionAccessStorage, Address: contract, StorageKey: slot}: {
+			{txIndex: 2, value: TransactionWriteValue{Exists: true, Value: shared.Bytes()}},
+		},
+	}, 3)
+	if got, exists := worker.GetStateWithExist(contract, slot); !exists || got != shared {
+		t.Fatalf("versioned storage behind reverted cache = %x exists=%v, want %x", got, exists, shared)
+	}
+
+	// A write performed by this retry (including a forwarded sender ancestor)
+	// remains authoritative over the immutable canonical prefix value.
+	worker.SetState(contract, slot, local)
+	if got, exists := worker.GetStateWithExist(contract, slot); !exists || got != local {
+		t.Fatalf("task-local storage = %x exists=%v, want %x", got, exists, local)
+	}
+}
