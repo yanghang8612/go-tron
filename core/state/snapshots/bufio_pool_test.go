@@ -2,8 +2,29 @@ package snapshots
 
 import (
 	"bytes"
+	"io"
 	"testing"
 )
+
+type stateDomainChangeHistoryFastPathReader struct {
+	*bytes.Reader
+	writeToCalled bool
+}
+
+func (r *stateDomainChangeHistoryFastPathReader) WriteTo(io.Writer) (int64, error) {
+	r.writeToCalled = true
+	return 0, io.ErrUnexpectedEOF
+}
+
+type stateDomainChangeHistoryFastPathWriter struct {
+	bytes.Buffer
+	readFromCalled bool
+}
+
+func (w *stateDomainChangeHistoryFastPathWriter) ReadFrom(io.Reader) (int64, error) {
+	w.readFromCalled = true
+	return 0, io.ErrUnexpectedEOF
+}
 
 func TestStateDomainChangeHistoryWriterPoolDiscardsAbortedBytes(t *testing.T) {
 	var aborted bytes.Buffer
@@ -57,5 +78,23 @@ func TestStateDomainChangeAccessorGroupOffsetsPoolResetsLength(t *testing.T) {
 	defer releaseStateDomainChangeAccessorGroupOffsets(&offsets)
 	if len(*offsets) != 0 {
 		t.Fatalf("acquired offsets length = %d, want zero", len(*offsets))
+	}
+}
+
+func TestCopyStateDomainChangeHistoryDataUsesPooledBuffer(t *testing.T) {
+	reader := &stateDomainChangeHistoryFastPathReader{Reader: bytes.NewReader([]byte("history payload"))}
+	writer := new(stateDomainChangeHistoryFastPathWriter)
+	n, err := copyStateDomainChangeHistoryData(writer, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != int64(len("history payload")) || writer.String() != "history payload" {
+		t.Fatalf("copied (%d, %q), want (%d, history payload)", n, writer.String(), len("history payload"))
+	}
+	if reader.writeToCalled {
+		t.Fatal("copy used reader WriterTo instead of the pooled buffer")
+	}
+	if writer.readFromCalled {
+		t.Fatal("copy used writer ReadFrom instead of the pooled buffer")
 	}
 }

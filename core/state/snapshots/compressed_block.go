@@ -215,7 +215,7 @@ func (w *compressedBlockWriter) Finish(path string) (err error) {
 	if _, err = out.Write(hdr.Bytes()); err != nil {
 		return err
 	}
-	if _, err = io.Copy(out, w.tmp); err != nil {
+	if _, err = copyStateDomainChangeHistoryData(out, w.tmp); err != nil {
 		return err
 	}
 	return out.Sync()
@@ -299,7 +299,7 @@ func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (er
 			return err
 		}
 	}
-	if _, err = io.Copy(out, w.tmp); err != nil {
+	if _, err = copyStateDomainChangeHistoryData(out, w.tmp); err != nil {
 		return err
 	}
 	return out.Sync()

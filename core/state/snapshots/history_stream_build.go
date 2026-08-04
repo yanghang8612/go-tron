@@ -1014,7 +1014,7 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	if _, err := groupPayloadTmp.Seek(0, io.SeekStart); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
-	if _, err := io.Copy(accessorTmp, groupPayloadTmp); err != nil {
+	if _, err := copyStateDomainChangeHistoryData(accessorTmp, groupPayloadTmp); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	resultRef, err := finalizeStateDomainChangeHistoryFile(dir, accessorRef, accessorTmp, accessorTmpName, false)

@@ -1397,7 +1397,7 @@ func stateDomainChangeBinaryFileMetadata(path string) (uint64, string, error) {
 	}
 	defer file.Close()
 	hash := sha256.New()
-	size, err := io.Copy(hash, file)
+	size, err := copyStateDomainChangeHistoryData(hash, file)
 	if err != nil {
 		return 0, "", err
 	}

@@ -16,6 +16,12 @@ var stateDomainChangeHistoryWriterPool = sync.Pool{
 	},
 }
 
+type stateDomainChangeHistoryCopyBuffer [stateDomainChangeHistoryWriteBufferSize]byte
+
+var stateDomainChangeHistoryCopyBufferPool = sync.Pool{
+	New: func() any { return new(stateDomainChangeHistoryCopyBuffer) },
+}
+
 const stateDomainChangeAccessorGroupOffsetsPoolMaxCapacity = 1 << 20
 
 var stateDomainChangeAccessorGroupOffsetsPool = sync.Pool{
@@ -40,6 +46,42 @@ func releaseStateDomainChangeHistoryWriter(writer **bufio.Writer) {
 	*writer = nil
 	buffered.Reset(nil)
 	stateDomainChangeHistoryWriterPool.Put(buffered)
+}
+
+func copyStateDomainChangeHistoryData(dst io.Writer, src io.Reader) (int64, error) {
+	buffer := stateDomainChangeHistoryCopyBufferPool.Get().(*stateDomainChangeHistoryCopyBuffer)
+	defer stateDomainChangeHistoryCopyBufferPool.Put(buffer)
+
+	// Keep the loop explicit instead of using io.CopyBuffer: optional
+	// WriterTo/ReaderFrom fast paths bypass its caller-provided buffer and the
+	// narrow interface wrappers needed to hide them escape once per copy. This
+	// matches Erigon's pooled temporary-file assembly without per-copy objects.
+	var written int64
+	for {
+		read, readErr := src.Read(buffer[:])
+		if read > 0 {
+			wrote, writeErr := dst.Write(buffer[:read])
+			if wrote < 0 || wrote > read {
+				wrote = 0
+				if writeErr == nil {
+					writeErr = io.ErrShortWrite
+				}
+			}
+			written += int64(wrote)
+			if writeErr != nil {
+				return written, writeErr
+			}
+			if wrote != read {
+				return written, io.ErrShortWrite
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return written, nil
+			}
+			return written, readErr
+		}
+	}
 }
 
 func acquireStateDomainChangeAccessorGroupOffsets() *[]uint64 {
