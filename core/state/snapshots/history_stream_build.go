@@ -908,7 +908,7 @@ func buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir string, segmen
 	}
 	defer collectors.Close()
 
-	segment, segmentSize, header, err := openHistorySegmentForRead(dir, segmentRef)
+	segment, segmentSize, header, err := openHistorySegmentForSequentialRead(dir, segmentRef)
 	if err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}

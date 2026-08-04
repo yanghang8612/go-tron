@@ -140,6 +140,39 @@ func TestCompressedBlockEdgeCases(t *testing.T) {
 	}
 }
 
+func TestCompressedBlockSequentialReaderReusesDecodedBlock(t *testing.T) {
+	dir := t.TempDir()
+	recs := [][]byte{
+		bytes.Repeat([]byte{'a'}, 1024),
+		bytes.Repeat([]byte{'b'}, 1024),
+		bytes.Repeat([]byte{'c'}, 1024),
+	}
+	path, _ := writeCompressedBlockRecords(t, dir, 1, recs)
+	r, err := openCompressedBlockReaderWithCacheLimit(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	var got [1]byte
+	if _, err := r.ReadAt(got[:], 0); err != nil {
+		t.Fatal(err)
+	}
+	if got[0] != 'a' || len(r.cache) != 1 {
+		t.Fatalf("first read = %q with %d cached blocks", got[:], len(r.cache))
+	}
+	first := &r.cache[0].bytes[0]
+	if _, err := r.ReadAt(got[:], int64(r.table[1].uncompressedStart)); err != nil {
+		t.Fatal(err)
+	}
+	if got[0] != 'b' || len(r.cache) != 1 {
+		t.Fatalf("second read = %q with %d cached blocks", got[:], len(r.cache))
+	}
+	if first != &r.cache[0].bytes[0] {
+		t.Fatal("sequential reader allocated a new decoded block instead of reusing the evicted buffer")
+	}
+}
+
 func TestCompressedBlockReaderRejectsOutOfFileBlockBeforeAlloc(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "corrupt.cb")

@@ -319,8 +319,10 @@ type compressedBlockReader struct {
 	fileSize  uint64
 	table     []cbBlock
 
-	mu    sync.Mutex
-	cache []cbCacheEntry // small MRU-ordered decompressed-block cache (front = newest)
+	mu         sync.Mutex
+	cacheLimit int
+	compressed []byte
+	cache      []cbCacheEntry // small MRU-ordered decompressed-block cache (front = newest)
 }
 
 type cbCacheEntry struct {
@@ -335,6 +337,13 @@ type cbCacheEntry struct {
 const cbCacheBlocks = 16
 
 func openCompressedBlockReader(path string) (*compressedBlockReader, error) {
+	return openCompressedBlockReaderWithCacheLimit(path, cbCacheBlocks)
+}
+
+func openCompressedBlockReaderWithCacheLimit(path string, cacheLimit int) (*compressedBlockReader, error) {
+	if cacheLimit < 1 || cacheLimit > cbCacheBlocks {
+		return nil, fmt.Errorf("snapshots: compressed-block cache limit %d outside [1,%d]", cacheLimit, cbCacheBlocks)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -368,12 +377,13 @@ func openCompressedBlockReader(path string) (*compressedBlockReader, error) {
 		return nil, fmt.Errorf("snapshots: unsupported compressed-block version %d", ver)
 	}
 	r := &compressedBlockReader{
-		f:         f,
-		dec:       dec,
-		blockSize: int(binary.BigEndian.Uint32(hdr[12:16])),
-		recCount:  binary.BigEndian.Uint64(hdr[16:24]),
-		dataOff:   binary.BigEndian.Uint64(hdr[40:48]),
-		fileSize:  fileSize,
+		f:          f,
+		dec:        dec,
+		blockSize:  int(binary.BigEndian.Uint32(hdr[12:16])),
+		recCount:   binary.BigEndian.Uint64(hdr[16:24]),
+		dataOff:    binary.BigEndian.Uint64(hdr[40:48]),
+		fileSize:   fileSize,
+		cacheLimit: cacheLimit,
 	}
 	blockCount := binary.BigEndian.Uint64(hdr[24:32])
 	r.uncSize = binary.BigEndian.Uint64(hdr[32:40])
@@ -559,18 +569,29 @@ func (r *compressedBlockReader) blockBytes(i int) ([]byte, error) {
 	if b.compressedLen > compressedBlockMaxAlloc() {
 		return nil, fmt.Errorf("snapshots: compressed-block entry %d compressed length %d exceeds allocation limit", i, b.compressedLen)
 	}
-	comp := make([]byte, int(b.compressedLen))
+	compressedLen := int(b.compressedLen)
+	if cap(r.compressed) < compressedLen {
+		r.compressed = make([]byte, compressedLen)
+	}
+	comp := r.compressed[:compressedLen]
 	if _, err := r.f.ReadAt(comp, int64(compStart)); err != nil {
 		return nil, err
 	}
-	dst, err := r.dec.DecodeAll(comp, make([]byte, 0, int(expectedLen)))
+	var decoded []byte
+	if len(r.cache) >= r.cacheLimit {
+		decoded = r.cache[len(r.cache)-1].bytes[:0]
+	}
+	if uint64(cap(decoded)) < expectedLen {
+		decoded = make([]byte, 0, int(expectedLen))
+	}
+	dst, err := r.dec.DecodeAll(comp, decoded)
 	if err != nil {
 		return nil, err
 	}
 	if uint64(len(dst)) != expectedLen {
 		return nil, fmt.Errorf("snapshots: compressed-block entry %d decoded to %d bytes, want %d", i, len(dst), expectedLen)
 	}
-	if len(r.cache) < cbCacheBlocks {
+	if len(r.cache) < r.cacheLimit {
 		r.cache = append(r.cache, cbCacheEntry{})
 	}
 	copy(r.cache[1:], r.cache[:len(r.cache)-1]) // shift down, evicting the tail

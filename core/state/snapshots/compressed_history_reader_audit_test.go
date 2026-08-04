@@ -22,7 +22,7 @@ func TestStateDomainHistoryRecordReadersUseCompressedOpeners(t *testing.T) {
 		"readStateDomainChangeBinarySegmentTxRange":                  {"openHistorySegmentForRead"},
 		"readStateDomainChangeBinaryTxRangeForBlockByIndexFile":      {"openHistorySegmentForRead"},
 		"stateDomainChangeBinaryIndexBlockLowerBound":                nil,
-		"validateHistorySegmentReadable":                             {"openHistorySegmentForRead"},
+		"validateHistorySegmentReadable":                             {"openHistorySegmentForSequentialRead"},
 		"validateStateDomainChangeBinaryAccessorEntryAgainstSegment": nil,
 		"verifyStateDomainChangeBinaryIndexCoverage":                 nil,
 	}
@@ -82,6 +82,7 @@ func callsStateDomainRecordReader(body *ast.BlockStmt) bool {
 func compressedHistoryOpeners(body *ast.BlockStmt) []string {
 	watched := map[string]struct{}{
 		"openHistorySegmentForRead":                 {},
+		"openHistorySegmentForSequentialRead":       {},
 		"openStateDomainChangeBinaryAccessorReader": {},
 		"openStateDomainChangeBinarySegmentReader":  {},
 	}

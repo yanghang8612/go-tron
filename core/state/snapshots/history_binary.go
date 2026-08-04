@@ -509,7 +509,7 @@ func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentR
 // compressed file, bounded memory), confirming the segment is fully readable
 // and its record frames chain to exactly the logical end.
 func validateHistorySegmentReadable(dir string, segRef SegmentRef) error {
-	reader, logicalSize, header, err := openHistorySegmentForRead(dir, segRef)
+	reader, logicalSize, header, err := openHistorySegmentForSequentialRead(dir, segRef)
 	if err != nil {
 		return err
 	}
@@ -539,7 +539,7 @@ func validateHistorySegmentReadable(dir string, segRef SegmentRef) error {
 // last payload blocks. External/imported files continue through the exhaustive
 // validateHistorySegmentReadable and manifest companion checks.
 func validateTrustedBuiltHistorySegment(dir string, segRef SegmentRef, expectedLogicalEnd, expectedRecords, expectedTxRanges uint64) error {
-	reader, logicalSize, header, err := openHistorySegmentForRead(dir, segRef)
+	reader, logicalSize, header, err := openHistorySegmentForSequentialRead(dir, segRef)
 	if err != nil {
 		return err
 	}
@@ -2756,6 +2756,17 @@ func (r *stateDomainChangeHistoryReader) txRangeForTxNum(txNum uint64) (*rawdb.S
 // returned reader and logicalSize address records at the SAME offsets the .idx /
 // .kv accessors store, so downstream readers are identical for both formats.
 func openHistorySegmentForRead(dir string, ref SegmentRef) (historySegmentReader, uint64, stateDomainChangeBinaryHeader, error) {
+	return openHistorySegmentForReadWithCacheLimit(dir, ref, cbCacheBlocks)
+}
+
+// openHistorySegmentForSequentialRead is the Erigon-style single-pass view:
+// scans retain one decompressed block and recycle it at the next block, while
+// the regular opener keeps its larger MRU for keyed and binary-search reads.
+func openHistorySegmentForSequentialRead(dir string, ref SegmentRef) (historySegmentReader, uint64, stateDomainChangeBinaryHeader, error) {
+	return openHistorySegmentForReadWithCacheLimit(dir, ref, 1)
+}
+
+func openHistorySegmentForReadWithCacheLimit(dir string, ref SegmentRef, compressedCacheLimit int) (historySegmentReader, uint64, stateDomainChangeBinaryHeader, error) {
 	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
 		return nil, 0, stateDomainChangeBinaryHeader{}, fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
 	}
@@ -2786,7 +2797,7 @@ func openHistorySegmentForRead(dir string, ref SegmentRef) (historySegmentReader
 	logicalSize := uint64(stat.Size())
 	if string(magic[:]) == compressedBlockMagic {
 		_ = file.Close() // the codec reopens path itself
-		cr, err := openCompressedBlockReader(path)
+		cr, err := openCompressedBlockReaderWithCacheLimit(path, compressedCacheLimit)
 		if err != nil {
 			return nil, 0, stateDomainChangeBinaryHeader{}, err
 		}
