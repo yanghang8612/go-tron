@@ -106,3 +106,17 @@ func (a *domainPrunerChainSource) SyncRemainingBlocks() (uint64, bool) {
 	}
 	return uint64(remaining), true
 }
+
+func (a *domainPrunerChainSource) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+	if a == nil || a.chain == nil {
+		return rawdb.CommitmentBranchRotation{}, false, nil
+	}
+	return a.chain.BeginCommitmentBranchRotation()
+}
+
+func (a *domainPrunerChainSource) CompleteCommitmentBranchRotation(rotation rawdb.CommitmentBranchRotation, mgr *statesnapshots.Manager) error {
+	if a == nil || a.chain == nil {
+		return nil
+	}
+	return a.chain.CompleteCommitmentBranchRotation(rotation, mgr)
+}

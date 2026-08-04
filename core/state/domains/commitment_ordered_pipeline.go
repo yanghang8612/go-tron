@@ -156,6 +156,7 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 		stats:  stats,
 		result: make(chan OrderedCommitmentResult, 1),
 	}
+	job.store.legacyFallback = p.base.legacyFallback
 	if ops != nil {
 		stats.resolvedOps = uint64(len(*ops))
 	}

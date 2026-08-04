@@ -20,6 +20,7 @@ type rawdbBranchStore struct {
 	keyspace           rawdb.CommitmentBranchKeyspace
 	cold               pointread.CommitmentBranchSnapshotView
 	coldOwned          bool
+	legacyFallback     bool
 	ownedValue         bool
 	readParentBranches bool
 	parentView         pointread.CommitmentParentView
@@ -174,6 +175,23 @@ func newRawdbBranchStoreWithRepair(db CommitmentDB, repair CommitmentSnapshotRep
 	if err != nil {
 		return nil, err
 	}
+	rotation, rotating, err := rawdb.ReadCommitmentBranchRotation(db)
+	if err != nil {
+		return nil, err
+	}
+	if ok && rotating {
+		return nil, errors.New("domains: commitment branch base and rotation markers both present")
+	}
+	if rotating {
+		keyspace, err := rawdb.NewCommitmentBranchDeltaKeyspace(rotation.Generation)
+		if err != nil {
+			return nil, err
+		}
+		store := newRawdbBranchStoreInKeyspace(db, keyspace, nil, false)
+		store.legacyFallback = true
+		commitmentBranchRotationOpenCounter.Inc(1)
+		return store, nil
+	}
 	if !ok {
 		return newRawdbBranchStore(db), nil
 	}
@@ -211,6 +229,10 @@ func newRawdbBranchStoreWithRepair(db CommitmentDB, repair CommitmentSnapshotRep
 	return newRawdbBranchStoreInKeyspace(db, keyspace, view, true), nil
 }
 
+func (s *rawdbBranchStore) hasBaseline() bool {
+	return s.cold != nil || s.legacyFallback
+}
+
 // concurrentSiblingFlushSafe opts in only when the underlying CommitmentDB
 // explicitly advertises concurrent reads and writes. The steady-state sync path
 // uses blockbuffer.Buffer/LayerView, which provide the marker; direct Pebble,
@@ -229,11 +251,11 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 		return BranchData{}, false, err
 	}
 	if ok {
-		if len(encoded) == 0 && s.cold != nil {
+		if len(encoded) == 0 && s.hasBaseline() {
 			commitmentBranchTombstoneCounter.Inc(1)
 			return BranchData{}, false, nil
 		}
-		if s.cold != nil {
+		if s.hasBaseline() {
 			commitmentBranchDeltaHitCounter.Inc(1)
 		}
 		var b BranchData
@@ -242,8 +264,23 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 		}
 		return b, true, nil
 	}
-	if s.cold == nil {
+	if !s.hasBaseline() {
 		return BranchData{}, false, nil
+	}
+	if s.legacyFallback {
+		encoded, ok, err = rawdb.LegacyCommitmentBranchKeyspace().ReadNoCopy(s.db, prefix)
+		if err != nil || !ok {
+			if err == nil {
+				commitmentBranchLegacyMissCounter.Inc(1)
+			}
+			return BranchData{}, ok, err
+		}
+		commitmentBranchLegacyHitCounter.Inc(1)
+		var b BranchData
+		if err := decodeBranchDataIntoNoCopy(encoded, &b); err != nil {
+			return BranchData{}, false, err
+		}
+		return b, true, nil
 	}
 	encoded, ok, err = s.cold.Get(prefix)
 	if err != nil || !ok {
@@ -272,7 +309,7 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 	}
 	decodeView.arena = s.leafKeyArenas[reader]
 	decodeView.tombstone = false
-	decodeView.allowTombstone = s.cold != nil
+	decodeView.allowTombstone = s.hasBaseline()
 	var found bool
 	var err error
 	if s.parentSession != nil {
@@ -296,14 +333,47 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 	if found {
 		if tombstone {
 			commitmentBranchTombstoneCounter.Inc(1)
-		} else if s.cold != nil {
+		} else if s.hasBaseline() {
 			commitmentBranchDeltaHitCounter.Inc(1)
 		}
 		return !tombstone, nil
 	}
-	if s.cold == nil {
+	if !s.hasBaseline() {
 		*dst = BranchData{}
 		return false, nil
+	}
+	if s.legacyFallback {
+		decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
+		decodeView.dst = dst
+		decodeView.arena = s.leafKeyArenas[reader]
+		decodeView.tombstone = false
+		decodeView.allowTombstone = false
+		fallbackReader := reader + maxFoldNibbles + 1
+		var found bool
+		var err error
+		legacy := rawdb.LegacyCommitmentBranchKeyspace()
+		if s.parentSession != nil {
+			found, err = legacy.ViewParentInSession(s.parentSession, fallbackReader, prefix, decodeView.consume)
+		} else if s.parentView != nil {
+			found, err = legacy.ViewParentInView(s.parentView, prefix, decodeView.consume)
+		} else if s.readParentBranches {
+			found, err = legacy.ViewParentNoCopy(s.db, prefix, decodeView.consume)
+		} else {
+			found, err = legacy.ViewNoCopy(s.db, prefix, decodeView.consume)
+		}
+		decodeView.dst = nil
+		decodeView.arena = nil
+		decodeView.allowTombstone = false
+		branchDecodeViewPool.Put(decodeView)
+		if err != nil || !found {
+			if err == nil {
+				commitmentBranchLegacyMissCounter.Inc(1)
+			}
+			*dst = BranchData{}
+			return found, err
+		}
+		commitmentBranchLegacyHitCounter.Inc(1)
+		return true, nil
 	}
 	encoded, ok, err := s.cold.Get(prefix)
 	if err != nil || !ok {
@@ -321,7 +391,11 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 }
 
 func (s *rawdbBranchStore) beginParentRead() error {
-	session, err := rawdb.NewCommitmentParentReadSession(s.db, maxFoldNibbles+1)
+	readers := maxFoldNibbles + 1
+	if s.legacyFallback {
+		readers *= 2
+	}
+	session, err := rawdb.NewCommitmentParentReadSession(s.db, readers)
 	if err != nil {
 		if session != nil {
 			_ = session.Close()
@@ -426,7 +500,7 @@ func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*Branc
 }
 
 func (s *rawdbBranchStore) DelBranch(prefix []byte) error {
-	if s.cold != nil {
+	if s.hasBaseline() {
 		// An explicit empty row shadows a branch that may still exist in the
 		// immutable baseline. Physical absence means "consult cold".
 		return s.keyspace.Write(s.db, prefix, []byte{})
@@ -439,13 +513,24 @@ func (s *rawdbBranchStore) DelBranch(prefix []byte) error {
 // root that reflects exactly the current source rows, with no contribution from
 // branches left over from an earlier (e.g. pre-rewind) tip.
 func (s *rawdbBranchStore) clear() error {
+	base, based, err := rawdb.ReadCommitmentBranchBase(s.db)
+	if err != nil {
+		return err
+	}
+	rotation, rotating, err := rawdb.ReadCommitmentBranchRotation(s.db)
+	if err != nil {
+		return err
+	}
 	// Invalidate the marker before dropping its delta or closing the immutable
 	// view. A crash can therefore only leave an inactive, rebuildable legacy
 	// table; it can never expose a partial delta as a complete branch tree.
 	if err := rawdb.DeleteCommitmentBranchBase(s.db); err != nil {
 		return err
 	}
-	if s.cold != nil {
+	if err := rawdb.DeleteCommitmentBranchRotation(s.db); err != nil {
+		return err
+	}
+	if s.hasBaseline() {
 		if err := s.keyspace.DeleteAll(s.db); err != nil {
 			return err
 		}
@@ -453,6 +538,29 @@ func (s *rawdbBranchStore) clear() error {
 			return err
 		}
 		s.keyspace = rawdb.LegacyCommitmentBranchKeyspace()
+		s.legacyFallback = false
+	}
+	// A legacy constructor may be used by an explicit administrative Rebuild.
+	// It cannot read an immutable base without a source, but it must still erase
+	// that marker's active delta before rebuilding the complete legacy table.
+	var generations [2]uint64
+	if based {
+		generations[0] = base.Generation
+	}
+	if rotating {
+		generations[1] = rotation.Generation
+	}
+	for _, generation := range generations {
+		if generation == 0 {
+			continue
+		}
+		delta, err := rawdb.NewCommitmentBranchDeltaKeyspace(generation)
+		if err != nil {
+			return err
+		}
+		if err := delta.DeleteAll(s.db); err != nil {
+			return err
+		}
 	}
 	return s.keyspace.DeleteAll(s.db)
 }
@@ -480,6 +588,10 @@ type stagedCommitmentStore struct {
 	db    CommitmentDB
 	store *rawdbBranchStore
 	trie  *commitmentTrie
+	// initErr prevents legacy constructors that lack a snapshot source from
+	// silently updating an active immutable-base database. Rebuild remains
+	// available as the explicit destructive recovery path.
+	initErr error
 
 	// asyncParentBranches enables the commit worker's one-shot parent-state
 	// branch reader. branchStateWritten disables it after a rebuild/snapshot
@@ -532,8 +644,45 @@ func CloseLatestCommitmentStore(store LatestCommitmentStore) error {
 	return nil
 }
 
+// VerifyCommitmentBranchSnapshotRoot proves that an immutable branch snapshot's
+// root row derives to expected. Segment checksums and indexes protect bytes and
+// lookup structure; this binds those bytes to the independently snapshotted
+// commitment root before a live rotation can make the snapshot authoritative.
+func VerifyCommitmentBranchSnapshotRoot(view pointread.CommitmentBranchSnapshotView, expected common.Hash) error {
+	if view == nil {
+		return errors.New("domains: nil commitment branch snapshot view")
+	}
+	encoded, ok, err := view.Get(nil)
+	if err != nil {
+		return err
+	}
+	if expected == (common.Hash{}) {
+		if ok {
+			return errors.New("domains: zero commitment root has a snapshot root branch")
+		}
+		return nil
+	}
+	if !ok {
+		return errors.New("domains: commitment snapshot root branch missing")
+	}
+	var root BranchData
+	if err := DecodeBranchDataInto(encoded, &root); err != nil {
+		return err
+	}
+	if derived := rootHash(&root); derived != expected {
+		return fmt.Errorf("domains: commitment snapshot root mismatch: derived %x expected %x", derived, expected)
+	}
+	return nil
+}
+
 func newStagedCommitmentStore(db CommitmentDB) *stagedCommitmentStore {
-	return newStagedCommitmentStoreWithBranchStore(db, newRawdbBranchStore(db))
+	branchStore, err := newRawdbBranchStoreWithRepair(db, CommitmentSnapshotRepair{})
+	if err == nil {
+		return newStagedCommitmentStoreWithBranchStore(db, branchStore)
+	}
+	store := newStagedCommitmentStoreWithBranchStore(db, newRawdbBranchStore(db))
+	store.initErr = err
+	return store
 }
 
 func newStagedCommitmentStoreWithBranchStore(db CommitmentDB, branchStore *rawdbBranchStore) *stagedCommitmentStore {
@@ -569,6 +718,9 @@ func (s *stagedCommitmentStore) WriteRoot(root common.Hash) error {
 // Fold(nil) reads branches only (no latest-domain scan), so this never triggers
 // a bootstrap. The zero root is treated as always present (empty trie).
 func (s *stagedCommitmentStore) RootNodePresent(root common.Hash) (bool, error) {
+	if s.initErr != nil {
+		return false, s.initErr
+	}
 	if root == (common.Hash{}) {
 		return true, nil
 	}
@@ -584,6 +736,9 @@ func (s *stagedCommitmentStore) RootNodePresent(root common.Hash) (bool, error) 
 // from "empty trie" requires the explicit root-branch presence check, since
 // Fold(nil) returns the zero hash in both cases.
 func (s *stagedCommitmentStore) RestoreRootFromNodes() (common.Hash, bool, error) {
+	if s.initErr != nil {
+		return common.Hash{}, false, s.initErr
+	}
 	_, hasRoot, err := s.store.GetBranch(nil)
 	if err != nil {
 		return common.Hash{}, false, err
@@ -616,6 +771,9 @@ func (s *stagedCommitmentStore) RestoreRootFromNodes() (common.Hash, bool, error
 // nil); the orchestrator's Rebuild then clears the branch keyspace before
 // re-folding, so partially-written rows from a failed restore cannot survive.
 func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapshotSource, txNum uint64, expectedRoot common.Hash) (bool, error) {
+	if s.initErr != nil {
+		return false, s.initErr
+	}
 	if source == nil || expectedRoot == (common.Hash{}) {
 		return false, nil
 	}
@@ -739,6 +897,9 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 // Update applies the incremental commitment updates through the fold engine
 // using persisted branch state and writes the resulting root row.
 func (s *stagedCommitmentStore) Update(updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
+	if s.initErr != nil {
+		return common.Hash{}, s.initErr
+	}
 	s.store.readParentBranches = s.asyncParentBranches && !s.branchStateWritten
 	if s.store.readParentBranches {
 		if err := s.store.beginParentRead(); err != nil {

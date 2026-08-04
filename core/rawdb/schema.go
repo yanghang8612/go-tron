@@ -74,6 +74,7 @@ func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 	case strings.HasPrefix(key, CommitmentBranchKeyPrefix),
 		strings.HasPrefix(key, CommitmentBranchDeltaKeyPrefix),
 		key == CommitmentBranchBaseKey,
+		key == CommitmentBranchRotationKey,
 		strings.HasPrefix(key, "state-commitment-domain-v1-"):
 		return PhysicalKeyFamilyCommitment
 	case strings.HasPrefix(key, "state-account-latest-v1-"):
@@ -114,6 +115,7 @@ const (
 	CommitmentBranchKeyPrefix      = "state-commitment-branch-v1-"
 	CommitmentBranchDeltaKeyPrefix = "state-commitment-branch-delta-v1-"
 	CommitmentBranchBaseKey        = "state-commitment-branch-base-v1"
+	CommitmentBranchRotationKey    = "state-commitment-branch-rotation-v1"
 	stageProgressPrefixString      = "stage-progress-v1-"
 	cycleRewardPendingKeyString    = "cycle-reward-pending-v1"
 )
@@ -387,6 +389,7 @@ var (
 	stateCommitmentBranchPrefix      = []byte(CommitmentBranchKeyPrefix)
 	stateCommitmentBranchDeltaPrefix = []byte(CommitmentBranchDeltaKeyPrefix)
 	stateCommitmentBranchBaseKey     = []byte(CommitmentBranchBaseKey)
+	stateCommitmentBranchRotationKey = []byte(CommitmentBranchRotationKey)
 
 	// stateCommitmentEngineStateKey is the singleton row that persists the
 	// rewindable staged-engine state (opaque bytes; the engine defines the

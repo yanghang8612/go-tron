@@ -91,6 +91,7 @@ var resetMutableSingletons = [][]byte{
 	noteCommitmentCountKey,
 	latestPbftBlockNumKey,
 	stateCommitmentBranchBaseKey,
+	stateCommitmentBranchRotationKey,
 }
 
 func deletePrefix(db ethdb.KeyValueStore, prefix []byte) error {

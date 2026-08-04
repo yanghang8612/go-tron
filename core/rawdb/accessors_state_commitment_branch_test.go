@@ -224,6 +224,50 @@ func TestCommitmentBranchBaseRoundTripAndValidation(t *testing.T) {
 	}
 }
 
+func TestCommitmentBranchRotationRoundTrip(t *testing.T) {
+	db := NewMemoryDatabase()
+	want := CommitmentBranchRotation{
+		Generation:    43,
+		SnapshotTxNum: 9002,
+		Root:          common.HexToHash("0xfedcba9876543210"),
+		BlockNum:      8001,
+		BlockHash:     common.Hash{0xab, 0xcd, 0xef},
+	}
+	if err := WriteCommitmentBranchRotation(db, want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := ReadCommitmentBranchRotation(db)
+	if err != nil || !ok || got != want {
+		t.Fatalf("read rotation = %+v ok=%v err=%v, want %+v,true,nil", got, ok, err, want)
+	}
+	if err := DeleteCommitmentBranchRotation(db); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := ReadCommitmentBranchRotation(db); err != nil || ok {
+		t.Fatalf("read deleted rotation ok=%v err=%v", ok, err)
+	}
+	if err := WriteCommitmentBranchRotation(db, CommitmentBranchRotation{}); err == nil {
+		t.Fatal("zero rotation generation accepted")
+	}
+	valid, err := EncodeCommitmentBranchRotation(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, encoded := range [][]byte{
+		nil,
+		valid[:len(valid)-1],
+		append([]byte{commitmentBranchRotationVersion + 1}, valid[1:]...),
+		append([]byte(nil), valid...),
+	} {
+		if len(encoded) == len(valid) && encoded[0] == commitmentBranchRotationVersion {
+			clear(encoded[len(encoded)-common.HashLength:])
+		}
+		if _, err := DecodeCommitmentBranchRotation(encoded); err == nil {
+			t.Fatalf("invalid rotation %x accepted", encoded)
+		}
+	}
+}
+
 func TestDeleteCommitmentBranchesLeavesOtherKeyspaces(t *testing.T) {
 	db := NewMemoryDatabase()
 	if err := WriteCommitmentBranch(db, nil, []byte("root")); err != nil {

@@ -26,6 +26,8 @@ const (
 	defaultColdSnapshotMetrics     = "state/snapshot/cold/"
 )
 
+var ErrCommitmentBranchRotationNotSolidified = errors.New("snapshots: commitment branch rotation boundary is not solidified")
+
 // DefaultLatestBuildBlocks is the default latest-snapshot build cadence
 // (~33h of TRON blocks). Coarse because latest builds full-scan every latest
 // keyspace; CommitmentBranch shares this cadence too.
@@ -47,6 +49,11 @@ type canonicalHashLookupSource interface {
 
 type syncRemainingSource interface {
 	SyncRemainingBlocks() (uint64, bool)
+}
+
+type commitmentBranchRotator interface {
+	BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error)
+	CompleteCommitmentBranchRotation(rawdb.CommitmentBranchRotation, *Manager) error
 }
 
 // Config controls the cold history snapshot builder lifecycle.
@@ -1111,8 +1118,26 @@ func (r *Runner) latestPassWithStatus() (built bool, deferred bool, err error) {
 			}
 		}
 	}
+	var (
+		rotation rawdb.CommitmentBranchRotation
+		rotating bool
+		rotator  commitmentBranchRotator
+	)
+	if source, ok := r.chain.(commitmentBranchRotator); ok {
+		rotator = source
+		rotation, rotating, err = rotator.BeginCommitmentBranchRotation()
+		if err != nil {
+			return false, false, err
+		}
+		if rotating {
+			block = rotation.BlockNum
+			txNum = rotation.SnapshotTxNum
+		}
+	}
 	var latestBuildHash common.Hash
-	if _, ok := db.(ethdb.KeyValueWriter); ok {
+	if rotating {
+		latestBuildHash = rotation.BlockHash
+	} else if _, ok := db.(ethdb.KeyValueWriter); ok {
 		latestBuildHash, err = r.snapshotBuildStageBoundaryHash(db, rawdb.StageSnapshotLatestBuild, block)
 		if err != nil {
 			return false, false, err
@@ -1121,6 +1146,21 @@ func (r *Runner) latestPassWithStatus() (built bool, deferred bool, err error) {
 	res, err := NewAggregator(r.cfg.Dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: txNum})
 	if err != nil {
 		return false, false, err
+	}
+	if rotating {
+		if res == nil || res.Manifest == nil {
+			return false, false, errors.New("snapshots: commitment branch rotation built no manifest")
+		}
+		mgr, openErr := OpenPinnedManager(r.cfg.Dir, res.Manifest)
+		if openErr != nil {
+			return false, false, openErr
+		}
+		if err := rotator.CompleteCommitmentBranchRotation(rotation, mgr); err != nil {
+			if errors.Is(err, ErrCommitmentBranchRotationNotSolidified) {
+				return res != nil && len(res.Segments) > 0, true, nil
+			}
+			return false, false, err
+		}
 	}
 	r.lastLatestBuildBlock.Store(block)
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {

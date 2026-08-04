@@ -962,6 +962,64 @@ func TestRunnerLatestPassCapsWatermarkAtVerifiedFinishStage(t *testing.T) {
 	}
 }
 
+func TestRunnerLatestPassCoordinatesCommitmentBranchRotation(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x88)
+	seedLatestRows(t, db, owner, 10, 10)
+	frozenRoot, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
+	if err != nil || !ok {
+		t.Fatalf("read frozen root ok=%v err=%v", ok, err)
+	}
+	rotation := rawdb.CommitmentBranchRotation{
+		Generation: 1, SnapshotTxNum: 10, Root: frozenRoot, BlockNum: 10, BlockHash: common.Hash{10},
+	}
+	if err := rawdb.WriteCommitmentBranchRotation(db, rotation); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteCommitmentBranch(db, nil, []byte("frozen-root-branch")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, common.Hash{0xcc}); err != nil {
+		t.Fatal(err)
+	}
+	chain := &coldBuilderChain{
+		db: db, solidified: 20, rotation: &rotation,
+		rotationCompleteErr: ErrCommitmentBranchRotationNotSolidified,
+	}
+	runner := NewRunner(chain, Config{
+		Dir: dir, Enabled: true, Interval: time.Hour, HistoryWindow: 1, LatestBuildBlocks: 10,
+	})
+	built, deferred, err := runner.latestPassWithStatus()
+	if err != nil || !built || !deferred {
+		t.Fatalf("deferred rotation pass built=%v deferred=%v err=%v", built, deferred, err)
+	}
+	if chain.rotationBegin != 1 || chain.rotationComplete != 1 {
+		t.Fatalf("rotation calls begin=%d complete=%d", chain.rotationBegin, chain.rotationComplete)
+	}
+	if chain.rotationSnapshotRoot != frozenRoot {
+		t.Fatalf("snapshot root = %x, want frozen %x", chain.rotationSnapshotRoot, frozenRoot)
+	}
+	if got := runner.lastLatestBuildBlock.Load(); got != 0 {
+		t.Fatalf("deferred rotation advanced latest watermark to %d", got)
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || ok {
+		t.Fatalf("deferred rotation wrote latest stage ok=%v err=%v", ok, err)
+	}
+
+	chain.rotationCompleteErr = nil
+	built, deferred, err = runner.latestPassWithStatus()
+	if err != nil || !built || deferred {
+		t.Fatalf("completed rotation pass built=%v deferred=%v err=%v", built, deferred, err)
+	}
+	if got := runner.lastLatestBuildBlock.Load(); got != rotation.BlockNum {
+		t.Fatalf("completed rotation watermark = %d, want %d", got, rotation.BlockNum)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || row.BlockHash != rotation.BlockHash {
+		t.Fatalf("completed rotation stage = %+v ok=%v err=%v", row, ok, err)
+	}
+}
+
 // TestRunnerLatestBuildWatermarkSurvivesRestart proves that the latest-build
 // watermark is persisted to StageSnapshotLatestBuild and that a fresh Runner
 // over the same DB seeds from that persisted value rather than re-seeding to
@@ -1618,12 +1676,17 @@ func TestColdBuilderSkipsPartialSectionBloomSection(t *testing.T) {
 }
 
 type coldBuilderChain struct {
-	db              AggregatorDB
-	solidified      int64
-	syncRemaining   uint64
-	syncRemainingOK bool
-	canonicalHashes map[uint64]common.Hash
-	canonicalErrs   map[uint64]error
+	db                   AggregatorDB
+	solidified           int64
+	syncRemaining        uint64
+	syncRemainingOK      bool
+	canonicalHashes      map[uint64]common.Hash
+	canonicalErrs        map[uint64]error
+	rotation             *rawdb.CommitmentBranchRotation
+	rotationBegin        int
+	rotationComplete     int
+	rotationCompleteErr  error
+	rotationSnapshotRoot common.Hash
 }
 
 type coldBuilderSeekRecordingDB struct {
@@ -1644,6 +1707,27 @@ func (c *coldBuilderChain) LatestSolidifiedBlockNum() int64 { return c.solidifie
 
 func (c *coldBuilderChain) SyncRemainingBlocks() (uint64, bool) {
 	return c.syncRemaining, c.syncRemainingOK
+}
+
+func (c *coldBuilderChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+	c.rotationBegin++
+	if c.rotation == nil {
+		return rawdb.CommitmentBranchRotation{}, false, nil
+	}
+	return *c.rotation, true, nil
+}
+
+func (c *coldBuilderChain) CompleteCommitmentBranchRotation(rotation rawdb.CommitmentBranchRotation, mgr *Manager) error {
+	c.rotationComplete++
+	root, ok, err := mgr.GetCommitmentRoot(rotation.SnapshotTxNum)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("test rotation snapshot root missing")
+	}
+	c.rotationSnapshotRoot = root
+	return c.rotationCompleteErr
 }
 
 func (c *coldBuilderChain) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {

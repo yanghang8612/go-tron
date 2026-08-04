@@ -391,6 +391,33 @@ func TestCommitmentCheckpointSegmentSynthesizesLatestPointer(t *testing.T) {
 	}
 }
 
+func TestCommitmentRootSnapshotUsesFrozenRotationBoundary(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	liveRoot := common.Hash{0xaa}
+	frozenRoot := common.Hash{0xbb}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, liveRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteCommitmentBranchRotation(db, rawdb.CommitmentBranchRotation{
+		Generation: 1, SnapshotTxNum: 77, Root: frozenRoot, BlockNum: 7, BlockHash: common.Hash{0x07},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	ref, err := BuildCommitmentRootSegmentFromDB(db, dir, 1, 77, "commitment/root.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg, err := OpenLatestSegment(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := seg.Get(rawdb.LatestDomainCommitmentRootLogicalKey())
+	if err != nil || !ok || !bytes.Equal(got, frozenRoot.Bytes()) {
+		t.Fatalf("rotation root = %x ok=%v err=%v, want %x", got, ok, err, frozenRoot)
+	}
+}
+
 func TestLatestSegmentRestoreUsesHotStore(t *testing.T) {
 	owner := latestStoreTestAddress(0x35)
 	store := &recordingLatestHotStore{}

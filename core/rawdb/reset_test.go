@@ -23,6 +23,9 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	if err := WriteCommitmentBranchBase(db, CommitmentBranchBase{Generation: 3, SnapshotTxNum: 10, Root: common.Hash{0x11}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := WriteCommitmentBranchRotation(db, CommitmentBranchRotation{Generation: 4, SnapshotTxNum: 11, Root: common.Hash{0x12}, BlockNum: 9, BlockHash: common.Hash{0x13}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := WriteLatestDomainCommitmentRoot(db, common.Hash{0x11}); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +68,9 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	}
 	if _, ok, err := ReadCommitmentBranchBase(db); err != nil || ok {
 		t.Fatalf("commitment base survived reset: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := ReadCommitmentBranchRotation(db); err != nil || ok {
+		t.Fatalf("commitment rotation survived reset: ok=%v err=%v", ok, err)
 	}
 	// Sanity: the root row and latest row are cleared too (already covered, just assert).
 	if _, ok, err := ReadLatestDomainCommitmentRoot(db); err != nil || ok {

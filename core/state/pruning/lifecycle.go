@@ -333,6 +333,32 @@ func (s snapshotChainSource) SyncRemainingBlocks() (uint64, bool) {
 	return source.SyncRemainingBlocks()
 }
 
+func (s snapshotChainSource) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+	if s.chain == nil {
+		return rawdb.CommitmentBranchRotation{}, false, nil
+	}
+	source, ok := s.chain.(interface {
+		BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error)
+	})
+	if !ok {
+		return rawdb.CommitmentBranchRotation{}, false, nil
+	}
+	return source.BeginCommitmentBranchRotation()
+}
+
+func (s snapshotChainSource) CompleteCommitmentBranchRotation(rotation rawdb.CommitmentBranchRotation, mgr *snapshots.Manager) error {
+	if s.chain == nil {
+		return nil
+	}
+	source, ok := s.chain.(interface {
+		CompleteCommitmentBranchRotation(rawdb.CommitmentBranchRotation, *snapshots.Manager) error
+	})
+	if !ok {
+		return nil
+	}
+	return source.CompleteCommitmentBranchRotation(rotation, mgr)
+}
+
 func (s snapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
 	return canonicalBlockHashFromChainSource(s.chain, blockNum)
 }

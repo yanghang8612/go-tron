@@ -185,6 +185,109 @@ func TestStagedImmutableBaseNeverSilentlyFallsBackWithoutSource(t *testing.T) {
 	if _, err := NewStagedCommitmentStoreWithRepair(db, CommitmentSnapshotRepair{}, false); err == nil {
 		t.Fatal("marker-aware store accepted a missing snapshot source")
 	}
+	legacy := NewStagedCommitmentStore(db)
+	if _, err := legacy.Update([]rawdb.StateCommitmentUpdate{
+		rawdb.NewStateCommitmentPut([]byte("must-not-write-legacy"), []byte("value")),
+	}); err == nil {
+		t.Fatal("legacy constructor silently updated an active immutable base")
+	}
+}
+
+func TestRawdbBranchStoreRotationLayersDeltaOverFrozenLegacy(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	var legacyA, legacyB BranchData
+	legacyA.SetHashChild(1, common.Hash{0x11})
+	legacyB.SetLeafChild(2, []byte("legacy-leaf"), common.Hash{0x22})
+	prefixA := []byte{0x01, 0x02}
+	prefixB := []byte{0x03, 0x04}
+	if err := rawdb.WriteCommitmentBranch(disk, prefixA, legacyA.Encode()); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteCommitmentBranch(disk, prefixB, legacyB.Encode()); err != nil {
+		t.Fatal(err)
+	}
+	const generation = uint64(17)
+	if err := rawdb.WriteCommitmentBranchRotation(disk, rawdb.CommitmentBranchRotation{
+		Generation: generation, SnapshotTxNum: 700, Root: common.Hash{0x70}, BlockNum: 50, BlockHash: common.Hash{0x71},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	buffer := blockbuffer.New(disk)
+	buffer.BeginBlock(common.Hash{0x01}, 1)
+	handle, ok := buffer.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	latest, err := NewStagedCommitmentStoreWithRepair(buffer.ViewLayer(handle), CommitmentSnapshotRepair{}, true)
+	if err != nil {
+		t.Fatalf("open rotating store without snapshot source: %v", err)
+	}
+	store := latest.(*stagedCommitmentStore).store
+	if !store.legacyFallback || store.cold != nil {
+		t.Fatal("rotation did not select the frozen legacy baseline")
+	}
+	if err := store.beginParentRead(); err != nil {
+		t.Fatal(err)
+	}
+	var got BranchData
+	if found, err := store.GetBranchInto(prefixA, &got); err != nil || !found || !got.Equal(legacyA) {
+		t.Fatalf("legacy fallback read found=%v err=%v equal=%v", found, err, got.Equal(legacyA))
+	}
+	if err := store.closeParentRead(); err != nil {
+		t.Fatal(err)
+	}
+
+	var updated BranchData
+	updated.SetHashChild(5, common.Hash{0x55})
+	if err := store.PutBranch(prefixA, updated); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DelBranch(prefixB); err != nil {
+		t.Fatal(err)
+	}
+	if err := buffer.CommitInflight(handle); err != nil {
+		t.Fatal(err)
+	}
+	if err := buffer.Flush(disk); err != nil {
+		t.Fatal(err)
+	}
+	if err := CloseLatestCommitmentStore(latest); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := newRawdbBranchStoreWithRepair(disk, CommitmentSnapshotRepair{})
+	if err != nil {
+		t.Fatalf("reopen rotating store: %v", err)
+	}
+	got, found, err := reopened.GetBranch(prefixA)
+	if err != nil || !found || !got.Equal(updated) {
+		t.Fatalf("delta read found=%v err=%v equal=%v", found, err, got.Equal(updated))
+	}
+	if _, found, err := reopened.GetBranch(prefixB); err != nil || found {
+		t.Fatalf("tombstone read found=%v err=%v", found, err)
+	}
+	encoded, found, err := rawdb.ReadCommitmentBranch(disk, prefixB)
+	if err != nil || !found || len(encoded) == 0 {
+		t.Fatalf("frozen legacy row was changed found=%v len=%d err=%v", found, len(encoded), err)
+	}
+}
+
+func TestRawdbBranchStoreRejectsConflictingBaseAndRotation(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteCommitmentBranchBase(db, rawdb.CommitmentBranchBase{
+		Generation: 1, SnapshotTxNum: 10, Root: common.Hash{0x01},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteCommitmentBranchRotation(db, rawdb.CommitmentBranchRotation{
+		Generation: 2, SnapshotTxNum: 11, Root: common.Hash{0x02}, BlockNum: 2, BlockHash: common.Hash{0x03},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newRawdbBranchStoreWithRepair(db, CommitmentSnapshotRepair{}); err == nil {
+		t.Fatal("conflicting base and rotation markers accepted")
+	}
 }
 
 func TestRawdbBranchStoreTransientViewCopiesOnlyRetainedLeafKeys(t *testing.T) {

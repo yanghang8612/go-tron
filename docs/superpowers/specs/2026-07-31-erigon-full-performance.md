@@ -2336,11 +2336,36 @@ multiple ordered in-flight blocks, tombstone shadowing, rebuild cleanup, and an
 inverse-delta unwind followed by forward-root equivalence. Production counters
 separate base opens, hot-delta hits, tombstones, cold hits, and cold misses.
 
-This slice deliberately does not yet publish the marker from the background
-latest builder. Live rotation must first redirect writers to a new generation
-before scanning the prior complete table, then publish and verify the immutable
-baseline before reclaiming that table. That rotation/merge lifecycle and its
-write-amplification gate are the next P4.48 slice.
+The initial live publication half is now implemented. At the latest-snapshot
+cadence, a short chain barrier drains ordered commits and durable flushes,
+freezes the complete legacy branch table at the current canonical head, and
+durably installs a `CommitmentBranchRotation` marker before import resumes.
+The marker binds generation, txNum, root, block number, and block hash. All new
+writes then target that generation's delta; misses fall back to the frozen
+legacy table, while deletes remain explicit tombstones. Parallel folds reserve
+independent cursor lanes for the delta and legacy physical prefixes.
+
+The background builder streams the frozen table while blocks continue through
+the delta. CommitmentRoot snapshot construction reads the rotation root rather
+than the advancing live root. Completion requires the boundary to be
+solidified and still canonical, verifies the published root metadata, opens the
+indexed branch view, and independently derives its root branch. One atomic
+batch then replaces the rotation marker with `CommitmentBranchBase`; only after
+that marker is synced is the legacy table reclaimed. A crash before the swap
+reopens `delta -> legacy`; a crash after it reopens `delta -> snapshot`, even if
+legacy cleanup was interrupted. A non-canonical boundary invalidates the
+rotation and rebuilds complete hot branches from authoritative latest rows.
+The ordered pipeline epoch is invalidated at both marker transitions, and old
+constructors can no longer silently write the ignored legacy namespace.
+
+Integration coverage restarts in the first crash window, imports another block
+while the snapshot is built, publishes the base, injects conflicting leftover
+legacy data to model the second crash window, and proves that the immutable
+snapshot plus live delta still derives the advanced root. Rotation starts,
+resumes, solidification deferrals, rejections, completions, legacy hits/misses,
+and delta/cold reads are separately observable. The remaining P4.48 work is
+periodic next-generation merge of an existing immutable base plus its bounded
+delta, followed by the fresh snap-mode write-amplification production gate.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
