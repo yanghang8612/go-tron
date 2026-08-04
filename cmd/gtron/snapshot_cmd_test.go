@@ -2714,7 +2714,7 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	logsRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getLogs", []any{map[string]any{
 		"fromBlock": "0x1",
 		"toBlock":   "0x1",
-		"address":   "0x" + hex.EncodeToString(logAddress),
+		"address":   "0x" + hex.EncodeToString(logAddress[len(logAddress)-common.AccountIDLength:]),
 		"topics":    []any{"0x" + hex.EncodeToString(logTopic.Bytes())},
 	}})
 	logsResult, ok := logsRPC["result"].([]any)
@@ -2736,7 +2736,7 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	}
 	logsByHashRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getLogs", []any{map[string]any{
 		"blockHash": "0x" + blockHashHex,
-		"address":   "0x" + hex.EncodeToString(logAddress),
+		"address":   "0x" + hex.EncodeToString(logAddress[len(logAddress)-common.AccountIDLength:]),
 		"topics":    []any{"0x" + hex.EncodeToString(logTopic.Bytes())},
 	}})
 	logsByHash, ok := logsByHashRPC["result"].([]any)

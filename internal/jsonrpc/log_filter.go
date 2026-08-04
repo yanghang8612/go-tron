@@ -61,15 +61,11 @@ func logFilterFromArgs(obj logFilterArgs, resolveLatest func() uint64) (LogFilte
 	}
 
 	if len(obj.Address) > 0 && string(obj.Address) != "null" {
-		var addrStr string
-		var addrSlice []string
-		if json.Unmarshal(obj.Address, &addrStr) == nil {
-			filter.Addresses = []common.Address{common.BytesToAddress(common.FromHex(addrStr))}
-		} else if json.Unmarshal(obj.Address, &addrSlice) == nil {
-			for _, a := range addrSlice {
-				filter.Addresses = append(filter.Addresses, common.BytesToAddress(common.FromHex(a)))
-			}
+		addresses, err := parseFilterAddresses(obj.Address)
+		if err != nil {
+			return filter, err
 		}
+		filter.Addresses = addresses
 	}
 
 	if len(obj.Topics) > 0 && string(obj.Topics) != "null" {

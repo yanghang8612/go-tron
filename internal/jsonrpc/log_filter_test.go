@@ -39,9 +39,14 @@ func TestParseLogFilterJSONResolvesSharedFilterShape(t *testing.T) {
 	if filter.BlockHash != nil {
 		t.Fatalf("BlockHash = %x, want nil", *filter.BlockHash)
 	}
+	wantAddress := func(body string) common.Address {
+		var id common.AccountID
+		copy(id[:], common.FromHex(body))
+		return id.Address(common.AddressPrefixMainnet)
+	}
 	if len(filter.Addresses) != 2 ||
-		filter.Addresses[0] != common.BytesToAddress(common.FromHex("0x1111111111111111111111111111111111111111")) ||
-		filter.Addresses[1] != common.BytesToAddress(common.FromHex("0x2222222222222222222222222222222222222222")) {
+		filter.Addresses[0] != wantAddress("0x1111111111111111111111111111111111111111") ||
+		filter.Addresses[1] != wantAddress("0x2222222222222222222222222222222222222222") {
 		t.Fatalf("Addresses = %+v, want parsed address array", filter.Addresses)
 	}
 	if len(filter.Topics) != 3 ||
@@ -95,5 +100,17 @@ func TestParseLogFilterJSONWrapsBlockErrors(t *testing.T) {
 	_, err := parseLogFilterJSON(json.RawMessage(`{"fromBlock":"nope"}`), func() uint64 { return 1 })
 	if err == nil || !strings.Contains(err.Error(), "invalid fromBlock") {
 		t.Fatalf("parseLogFilterJSON invalid fromBlock err = %v, want context", err)
+	}
+}
+
+func TestParseLogFilterJSONRejectsInvalidAddresses(t *testing.T) {
+	for _, raw := range []string{
+		`{"address":"0x1234"}`,
+		`{"address":"0x41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+		`{"address":["0x1111111111111111111111111111111111111111","nope"]}`,
+	} {
+		if _, err := parseLogFilterJSON(json.RawMessage(raw), func() uint64 { return 1 }); err == nil {
+			t.Fatalf("parseLogFilterJSON(%s) accepted invalid address", raw)
+		}
 	}
 }
