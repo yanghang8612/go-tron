@@ -271,6 +271,76 @@ func TestVerifyStateDomainChangeBinaryCompanionsRejectsChecksumMismatch(t *testi
 	}
 }
 
+func TestVerifyStateDomainChangeBinaryCompanionsRejectsLegacySequenceRegression(t *testing.T) {
+	dir := t.TempDir()
+	changes := []*rawdb.StateDomainChange{
+		binaryStateDomainChange(1, 30, 2, "slot/b"),
+		binaryStateDomainChange(1, 30, 1, "slot/a"),
+	}
+	txRanges, err := normalizeStateTxRangesForBinary(30, 30, changes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentData, index, accessor := encodeStateDomainChangeBinarySegmentV2IndexesForTest(t, 30, 30, changes, txRanges)
+	indexData, err := encodeStateDomainChangeBinaryIndex(30, 30, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessor(30, 30, accessor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := []SegmentRef{
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 30, ToTxNum: 30, Path: "history/sequence-regression.seg"},
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentInverted, FromTxNum: 30, ToTxNum: 30, Path: "history/sequence-regression.idx"},
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: 30, ToTxNum: 30, Path: "history/sequence-regression.kv"},
+	}
+	for i, data := range [][]byte{segmentData, indexData, accessorData} {
+		if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, refs[i].Path), data); err != nil {
+			t.Fatal(err)
+		}
+		setStateDomainChangeBinaryRefMetadata(&refs[i], data)
+	}
+	err = verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, refs[0], refs[1], refs[2])
+	if err == nil || !strings.Contains(err.Error(), "entries are not sorted") {
+		t.Fatalf("legacy sequence regression err = %v, want ordering rejection", err)
+	}
+}
+
+func TestVerifyStateDomainChangeBinaryCompanionsRejectsLegacyTrailingBytes(t *testing.T) {
+	dir := t.TempDir()
+	changes := []*rawdb.StateDomainChange{binaryStateDomainChange(1, 30, 1, "slot/a")}
+	txRanges, err := normalizeStateTxRangesForBinary(30, 30, changes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentData, index, accessor := encodeStateDomainChangeBinarySegmentV2IndexesForTest(t, 30, 30, changes, txRanges)
+	segmentData = append(segmentData, 0xff)
+	indexData, err := encodeStateDomainChangeBinaryIndex(30, 30, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessor(30, 30, accessor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := []SegmentRef{
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 30, ToTxNum: 30, Path: "history/trailing-bytes.seg"},
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentInverted, FromTxNum: 30, ToTxNum: 30, Path: "history/trailing-bytes.idx"},
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: 30, ToTxNum: 30, Path: "history/trailing-bytes.kv"},
+	}
+	for i, data := range [][]byte{segmentData, indexData, accessorData} {
+		if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, refs[i].Path), data); err != nil {
+			t.Fatal(err)
+		}
+		setStateDomainChangeBinaryRefMetadata(&refs[i], data)
+	}
+	err = verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, refs[0], refs[1], refs[2])
+	if err == nil || !strings.Contains(err.Error(), "trailing bytes") {
+		t.Fatalf("legacy trailing bytes err = %v, want trailing-byte rejection", err)
+	}
+}
+
 func TestVerifyLoadedManifestFilesRejectsStaleLatestBinaryAccessor(t *testing.T) {
 	dir := t.TempDir()
 	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)

@@ -916,7 +916,10 @@ func validateStateDomainChangeBinaryAccessorEntryAgainstSegment(source stateDoma
 }
 
 func verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir string, historyRef, indexRef, accessorRef SegmentRef) error {
-	if err := CheckStateDomainChangeSegment(dir, historyRef); err != nil {
+	// Index coverage below already walks every history record in physical order.
+	// Keep the independent physical checksum gate here, then fold record framing,
+	// range, ordering, and trailing-byte validation into that one coverage pass.
+	if err := checkStateDomainChangeBinarySegmentChecksum(dir, historyRef); err != nil {
 		return err
 	}
 	if err := CheckStateDomainChangeIndexSegment(dir, indexRef); err != nil {
@@ -999,6 +1002,7 @@ func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef,
 				indexRef.Path, entry.count, entry.recordIndex, recordCount)
 		}
 		offset := entry.offset
+		var previousSeq uint64
 		for j := uint64(0); j < entry.count; j++ {
 			change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, offset, segmentSize, entry.recordIndex+j)
 			if err != nil {
@@ -1007,6 +1011,10 @@ func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef,
 			if change.TxNum != entry.txNum {
 				return fmt.Errorf("snapshots: state-domain-change binary index %q tx %d read segment tx %d", indexRef.Path, entry.txNum, change.TxNum)
 			}
+			if j > 0 && change.Seq < previousSeq {
+				return errors.New("snapshots: state-domain-change entries are not sorted")
+			}
+			previousSeq = change.Seq
 			offset = next
 		}
 		expectedRecordIndex += entry.count
@@ -1014,6 +1022,9 @@ func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef,
 	}
 	if expectedRecordIndex != recordCount {
 		return fmt.Errorf("snapshots: state-domain-change binary index %q missing segment record %d", indexRef.Path, expectedRecordIndex)
+	}
+	if expectedOffset != segmentSize {
+		return fmt.Errorf("snapshots: state-domain-change binary segment %q has %d trailing bytes", historyRef.Path, segmentSize-expectedOffset)
 	}
 	return nil
 }
@@ -1335,29 +1346,8 @@ func checkStateDomainChangeBinaryIndex(dir string, ref SegmentRef) error {
 }
 
 func checkStateDomainChangeBinarySegment(dir string, ref SegmentRef) error {
-	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
-		return fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
-	}
-	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
+	if err := checkStateDomainChangeBinarySegmentChecksum(dir, ref); err != nil {
 		return err
-	}
-	// Checksum streams the physical (possibly compressed) file; record validation
-	// walks the logical view block-by-block via ReadAt — both bounded memory, so
-	// validating a large cold segment during pruning does not spike RAM.
-	if ref.Checksum != "" {
-		f, err := os.Open(filepath.Join(dir, ref.Path))
-		if err != nil {
-			return err
-		}
-		h := sha256.New()
-		_, copyErr := io.Copy(h, f)
-		_ = f.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if got := "sha256:" + hex.EncodeToString(h.Sum(nil)); got != ref.Checksum {
-			return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
-		}
 	}
 	reader, fileSize, header, err := openHistorySegmentForRead(dir, ref)
 	if err != nil {
@@ -1392,6 +1382,35 @@ func checkStateDomainChangeBinarySegment(dir string, ref SegmentRef) error {
 	}
 	if offset != fileSize {
 		return fmt.Errorf("snapshots: state-domain-change binary segment %q has %d trailing bytes", ref.Path, fileSize-offset)
+	}
+	return nil
+}
+
+// checkStateDomainChangeBinarySegmentChecksum validates the immutable physical
+// object identity without decoding its logical record stream. Callers which
+// already cover every record (notably companion verification) can share this
+// gate and avoid a second decompression pass.
+func checkStateDomainChangeBinarySegmentChecksum(dir string, ref SegmentRef) error {
+	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
+		return fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
+	}
+	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
+		return err
+	}
+	if ref.Checksum != "" {
+		f, err := os.Open(filepath.Join(dir, ref.Path))
+		if err != nil {
+			return err
+		}
+		h := sha256.New()
+		_, copyErr := io.Copy(h, f)
+		_ = f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if got := "sha256:" + hex.EncodeToString(h.Sum(nil)); got != ref.Checksum {
+			return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
+		}
 	}
 	return nil
 }

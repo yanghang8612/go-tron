@@ -3545,6 +3545,33 @@ same 16,000-record local benchmark moved from a five-run mean of 798.27 ms to
 admission claim. The deterministic result is removal of one checksum/structure
 pass over all three source files per merge input.
 
+#### P5.13: Fold history structure validation into index coverage
+
+After P5.12, companion verification still decoded the complete history twice.
+The registered history checker first validated every frame, tx range, tx/Seq
+order, and logical end. The immediately following index-coverage proof then
+read every record again in the same physical order to prove contiguous offsets,
+record counts, and txNum ownership. Only the first pass checked Seq ordering and
+the final logical offset, even though both values are already available in the
+second pass.
+
+The verifier now keeps the physical SHA-256 check as an independent immutable-
+object gate, then performs record structure and index coverage in one sequential
+logical scan. Each index entry must begin at the exact next record index and
+offset; every decoded record must match the indexed txNum; Seq must be
+nondecreasing within that txNum; the total record count must match the history
+header; and the final decoded offset must equal the segment's logical size.
+The registered standalone history checker remains unchanged for callers which
+do not also verify companions.
+
+Two adversarial legacy-v2 fixtures update their checksums and sidecars so they
+cannot be rejected by object identity alone. One regresses Seq from 2 to 1
+inside a txNum and the other appends a logical trailing byte; both are rejected
+by the fused coverage pass in twenty consecutive runs. Compressed v5 and legacy
+readers still share the same logical-offset interface. The small warm-cache
+benchmark again overlapped its baseline, so the admitted claim is one fewer
+complete input-history decompression pass, not a local wall-clock percentage.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

@@ -402,5 +402,8 @@
 - [x] Remove duplicate per-file history/index/accessor validation from source
   discovery while retaining the cross-companion verifier's complete checksum,
   structural, and coverage gate before every merge.
+- [x] Fold record framing, tx/Seq ordering, count, and logical-end checks into
+  the sequential index-coverage proof while preserving standalone validation
+  and adversarial legacy-format rejection.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.
