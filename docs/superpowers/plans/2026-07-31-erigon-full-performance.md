@@ -254,8 +254,14 @@
   including TransactionInfo, BalanceTrace, resources, and final state root.
 - [x] Run the small VM canonical-publication production gate before expanding
   the cohort.
-- [ ] Add VM retry incarnations only after the first canonical cohort retains
-  exact production parity.
+- [x] Generalize sender retry readiness/raw forwarding without weakening the
+  existing Transfer policy.
+- [x] Add observe-only settled-prefix VM retry incarnations inside the same
+  1/1024 cohort and compare recovered suffixes with serial execution.
+- [ ] Run the VM retry-incarnation production gate and quantify recovery,
+  exactness, copy/execution cost, and projected async deadlines.
+- [ ] Move validated VM retries to the async shared-version scheduler before
+  allowing retry-result publication.
 
 ## P5: Snapshot and cold steady state
 

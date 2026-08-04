@@ -2715,6 +2715,40 @@ Canonical Transfer simultaneously published 28,128/28,128 candidates and
 retry published 269/269 byte-exact WriteSets with no private-prefix work. The
 small canonical VM cohort therefore passes its production parity gate.
 
+#### P4.55: VM retry-incarnation observer
+
+The first publisher deliberately leaves version-conflicted VM suffixes on the
+serial path. Erigon instead schedules a new transaction incarnation against
+the newest settled prefix, validates that incarnation, and gives earlier
+retries priority before ordered apply. Before allowing VM retry publication,
+go-tron reuses its existing sender-retry state machine as an observe-only
+canary inside the unchanged 1/1024 VM cohort.
+
+The retry engine is now policy-driven rather than Transfer-hard-coded. A
+family supplies its complete readiness predicate and whether sender forwarding
+may include raw KV. Transfer retains zero-energy readiness and conservative
+typed-only forwarding; VM uses full result/applier readiness and the already
+validated transaction/forwarded/parent raw-KV overlay. A conflicted VM
+transaction with a remaining same-sender suffix is re-executed from an exact
+canonical settled-prefix copy, its suffix consumes forwarded post-images, and
+the newest incarnation is version-validated at each original transaction
+boundary. It remains observer-only: the original 1/1024 publisher may publish
+an already-valid source result, but recovered VM incarnations still wait for
+serial execution and are compared afterward.
+
+Dedicated metrics under `core/parallel_vm/retry/observe/` report blocks,
+attempts, executions, candidates, validated/recovered results, mismatch/error
+stages, prefix refresh/reuse/advance cost, execution cost, and projected
+ready/late deadlines. A deterministic integration fixture inserts an external
+balance change between three same-sender VM calls. The original latter two
+results conflict; one settled-prefix retry rebuilds both, validates and
+recovers 2/2 with zero Info/WriteSet mismatch, while the canonical publisher
+still publishes only the unaffected first VM. Serial and canary runs retain
+identical receipts, public/block resource state, and final StateDB root. The
+production gate must demonstrate non-zero recovery with zero mismatch/error
+and quantify synchronous copy/execution plus projected deadline shape before
+moving VM retries onto the async shared-version scheduler.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
