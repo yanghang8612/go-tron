@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 
@@ -616,42 +617,146 @@ func historyCompactionCompanion(candidate historyCompactionCandidate, kind Segme
 	return SegmentRef{}, false
 }
 
-// finalizeCompactedHistoryFile publishes a freshly-built compaction temp as
-// either block-compressed or raw, per CompressHistorySegments — so merges keep
-// the compression that cold builds emit (otherwise retired/merged segments, the
-// archive bulk over time, would silently revert to uncompressed). contentAddress
-// appends the file checksum to the path (the .seg does this; the .kv/.idx derive
-// their path from the .seg). The temp's bytes are the uncompressed logical
-// content, so the published file is byte-addressable at the same offsets.
-func finalizeStateDomainChangeHistoryFile(dir string, ref SegmentRef, tmp *os.File, tmpName string, contentAddress, compress bool) (SegmentRef, error) {
+// stateDomainChangeHistoryTemp writes a history payload either directly to a
+// raw temp (the compatibility gate) or into the seekable streaming compressor.
+// Both variants expose WriteAt because the record and tx-range counts live in
+// the retained fixed header. Finalize publishes only a fully synced, checksummed
+// artifact, preserving the previous failure-atomic rename boundary.
+type stateDomainChangeHistoryTemp struct {
+	dir        string
+	tmpName    string
+	raw        *os.File
+	compressed *compressedBlockStreamWriter
+	finalized  bool
+}
+
+func createStateDomainChangeHistoryTemp(dir, relPath string, compress bool) (*stateDomainChangeHistoryTemp, error) {
 	if !compress {
-		size, checksum, err := closeAndHashStateDomainChangeBinaryTemp(tmp, tmpName)
+		raw, tmpName, err := createStateDomainChangeBinaryTempFile(dir, relPath)
+		if err != nil {
+			return nil, err
+		}
+		return &stateDomainChangeHistoryTemp{dir: dir, tmpName: tmpName, raw: raw}, nil
+	}
+	abs := filepath.Join(dir, relPath)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".*.cb.tmp")
+	if err != nil {
+		return nil, err
+	}
+	tmpName := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return nil, err
+	}
+	stream, err := newCompressedBlockStreamWriter(filepath.Dir(abs), historyCompressChunkSize, historyCompressionConcurrency(runtime.GOMAXPROCS(0)))
+	if err != nil {
+		_ = os.Remove(tmpName)
+		return nil, err
+	}
+	return &stateDomainChangeHistoryTemp{dir: dir, tmpName: tmpName, compressed: stream}, nil
+}
+
+func (w *stateDomainChangeHistoryTemp) Write(p []byte) (int, error) {
+	if w == nil {
+		return 0, errors.New("snapshots: nil state-domain-change history temp")
+	}
+	if w.raw != nil {
+		return w.raw.Write(p)
+	}
+	if w.compressed != nil {
+		return w.compressed.Write(p)
+	}
+	return 0, errors.New("snapshots: state-domain-change history temp is closed")
+}
+
+func (w *stateDomainChangeHistoryTemp) WriteAt(p []byte, off int64) (int, error) {
+	if w == nil {
+		return 0, errors.New("snapshots: nil state-domain-change history temp")
+	}
+	if w.raw != nil {
+		return w.raw.WriteAt(p, off)
+	}
+	if w.compressed != nil {
+		return w.compressed.WriteAt(p, off)
+	}
+	return 0, errors.New("snapshots: state-domain-change history temp is closed")
+}
+
+func (w *stateDomainChangeHistoryTemp) Reset() error {
+	if w == nil {
+		return errors.New("snapshots: nil state-domain-change history temp")
+	}
+	if w.raw != nil {
+		return resetStateDomainChangeHistoryTempFile(w.raw)
+	}
+	if w.compressed != nil {
+		return w.compressed.Reset()
+	}
+	return errors.New("snapshots: state-domain-change history temp is closed")
+}
+
+func (w *stateDomainChangeHistoryTemp) Finalize(ref SegmentRef, contentAddress bool) (SegmentRef, error) {
+	if w == nil || w.finalized {
+		return SegmentRef{}, errors.New("snapshots: state-domain-change history temp is already finalized")
+	}
+	if w.raw != nil {
+		size, checksum, err := closeAndHashStateDomainChangeBinaryTemp(w.raw, w.tmpName)
 		if err != nil {
 			return SegmentRef{}, err
 		}
-		return publishStateDomainChangeBinaryFinal(dir, ref, tmpName, size, checksum, contentAddress)
+		w.raw = nil
+		result, err := publishStateDomainChangeBinaryFinal(w.dir, ref, w.tmpName, size, checksum, contentAddress)
+		if err == nil {
+			w.finalized = true
+		}
+		return result, err
 	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
+	if w.compressed == nil {
+		return SegmentRef{}, errors.New("snapshots: state-domain-change history temp is closed")
+	}
+	if err := w.compressed.Finish(w.tmpName); err != nil {
+		w.compressed = nil
 		return SegmentRef{}, err
 	}
-	if err := tmp.Close(); err != nil {
-		return SegmentRef{}, err
-	}
-	compTmp := tmpName + ".cb"
-	if err := compressFileToFile(dir, compTmp, tmpName, historyCompressChunkSize); err != nil {
-		return SegmentRef{}, err
-	}
-	defer os.Remove(compTmp)
-	size, checksum, err := stateDomainChangeBinaryFileMetadata(compTmp)
+	w.compressed = nil
+	size, checksum, err := stateDomainChangeBinaryFileMetadata(w.tmpName)
 	if err != nil {
 		return SegmentRef{}, err
 	}
-	return publishStateDomainChangeBinaryFinal(dir, ref, compTmp, size, checksum, contentAddress)
+	result, err := publishStateDomainChangeBinaryFinal(w.dir, ref, w.tmpName, size, checksum, contentAddress)
+	if err == nil {
+		w.finalized = true
+	}
+	return result, err
 }
 
-func finalizeCompactedHistoryFile(dir string, ref SegmentRef, tmp *os.File, tmpName string, contentAddress bool) (SegmentRef, error) {
-	return finalizeStateDomainChangeHistoryFile(dir, ref, tmp, tmpName, contentAddress, CompressHistorySegments)
+func (w *stateDomainChangeHistoryTemp) Close() {
+	if w == nil || w.finalized {
+		return
+	}
+	if w.compressed != nil {
+		w.compressed.Abort()
+		w.compressed = nil
+	}
+	if w.raw != nil {
+		_ = w.raw.Close()
+		w.raw = nil
+	}
+	_ = os.Remove(w.tmpName)
+}
+
+// finalizeStateDomainChangeHistoryFile publishes raw index/accessor temps. The
+// compressed history payload uses stateDomainChangeHistoryTemp directly so it
+// never materializes an uncompressed intermediate file.
+func finalizeStateDomainChangeHistoryFile(dir string, ref SegmentRef, tmp *os.File, tmpName string, contentAddress bool) (SegmentRef, error) {
+	size, checksum, err := closeAndHashStateDomainChangeBinaryTemp(tmp, tmpName)
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	return publishStateDomainChangeBinaryFinal(dir, ref, tmpName, size, checksum, contentAddress)
 }
 
 // publishStateDomainChangeBinaryFinal renames src into its final (optionally
@@ -696,13 +801,12 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	defer collectors.Close()
-	tmp, tmpName, err := createStateDomainChangeBinaryTempFile(dir, ref.Path)
+	tmp, err := createStateDomainChangeHistoryTemp(dir, ref.Path, CompressHistorySegments)
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	defer os.Remove(tmpName)
+	defer tmp.Close()
 	defer func() {
-		_ = tmp.Close()
 		if err == nil {
 			return
 		}
@@ -745,7 +849,7 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if err := writeStateDomainChangeBinaryHeaderCount(indexTmp, recordWriter.indexWritten); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	segRef, err = finalizeCompactedHistoryFile(dir, ref, tmp, tmpName, true)
+	segRef, err = tmp.Finalize(ref, true)
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
@@ -762,7 +866,7 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 		AggregationSteps: segRef.AggregationSteps,
 		Path:             stateDomainChangeBinaryIndexPath(segRef.Path),
 	}
-	idxRef, err = finalizeStateDomainChangeHistoryFile(dir, idxRef, indexTmp, indexTmpName, false, false)
+	idxRef, err = finalizeStateDomainChangeHistoryFile(dir, idxRef, indexTmp, indexTmpName, false)
 	if err != nil {
 		return segRef, SegmentRef{}, SegmentRef{}, err
 	}
@@ -792,7 +896,7 @@ func stateDomainChangeBinaryCompactionRecordCount(sources []stateDomainChangeBin
 	return total, nil
 }
 
-func writeStateDomainChangeBinaryCompactionTxRanges(dir string, dst *os.File, sources []stateDomainChangeBinaryCompactionSource) (uint64, error) {
+func writeStateDomainChangeBinaryCompactionTxRanges(dir string, dst stateDomainChangeBinaryWriteAtWriter, sources []stateDomainChangeBinaryCompactionSource) (uint64, error) {
 	if err := writeStateDomainChangeBinaryTxRangeCount(dst, 0); err != nil {
 		return 0, err
 	}

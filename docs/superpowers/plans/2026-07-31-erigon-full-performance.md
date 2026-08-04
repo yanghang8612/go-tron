@@ -438,5 +438,8 @@
 - [x] Compress large cold-history files through an Erigon-style bounded worker
   queue and ordered reducer, retaining deterministic accessor offsets and the
   direct path below the measured parallel break-even size.
+- [x] Feed base collation and compaction directly into the seekable compressed
+  history writer, retaining the patchable first chunk and removing the complete
+  uncompressed temp-file write, sync, reopen, and readback pass.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

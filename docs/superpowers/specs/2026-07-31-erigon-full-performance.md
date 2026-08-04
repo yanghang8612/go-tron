@@ -3865,6 +3865,40 @@ precompiled compaction A/B pairs reduced median time from 132.64 ms to 130.32 ms
 (-1.75%); bounded queue buffers added about 0.11 MB and 48 allocations during
 that merge.
 
+#### P5.25: Direct streaming history compression
+
+P5.24 parallelized the second half of history finalization but still required a
+complete uncompressed temp file. Base collation and compaction first wrote and
+synced every logical history byte, reopened that file, read it a second time,
+compressed it into another temp, and finally deleted the first copy. Erigon's
+collation path instead feeds its segment compressor while records are emitted;
+immutable build output does not make an uncompressed round trip through disk.
+
+The history writer now retains only its first 16 KiB logical chunk, which holds
+the fixed record and tx-range counts that builders backpatch with `WriteAt`.
+Later chunks are compressed immediately into the bounded body temp; once the
+stream crosses the measured 1 MiB parallel threshold, P5.24's worker queue and
+ordered reducer encode subsequent chunks without changing their logical order.
+At finalization the patched first chunk is encoded and prepended to the already
+compressed body while body table offsets are shifted by its compressed length.
+The raw compatibility gate still uses the ordinary temp writer.
+
+This keeps the previous transactional boundary: only a synced, checksummed
+compressed temp is renamed into its content-addressed path. The unordered legacy
+fallback can abort all queued work, remove the body scratch, reset the retained
+prefix, and rebuild through bounded ETL. Tests compare stream output byte for
+byte with canonical whole-blob compression across empty, partial, exact-boundary
+and multi-block inputs, exercise header backpatch and reset, verify scratch
+cleanup, and run the shared encoder/reducer under the race detector.
+
+Against independently compiled P5.24 binaries, ten alternating Pebble A/B pairs
+reduced the sparse 5,000-block base-build median from 48.63 ms to 41.10 ms
+(-15.5%) and the dense median from 52.82 ms to 45.34 ms (-14.1%), with allocation
+counts slightly lower. Seven alternating compaction pairs reduced the median
+from 129.80 ms to 119.13 ms (-8.2%). The direct stream microbenchmark reduced
+the 2 MiB median from 9.81 ms to 8.87 ms with workers and the 8 MiB median from
+21.06 ms to 13.82 ms (1.52x throughput).
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

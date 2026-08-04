@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"sort"
 	"sync"
 
@@ -201,6 +200,85 @@ func (w *compressedBlockWriter) Finish(path string) (err error) {
 	}
 	if _, err = out.Write(hdr.Bytes()); err != nil {
 		return err
+	}
+	if _, err = io.Copy(out, w.tmp); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
+// finishWithPrefix assembles a stream whose first logical chunk stayed in
+// memory so callers could backpatch fixed header fields. The body temp already
+// contains independently compressed later chunks; its compressed offsets are
+// shifted by the encoded prefix length while uncompressed offsets remain those
+// of the original byte stream.
+func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (err error) {
+	defer func() {
+		_ = w.tmp.Close()
+		_ = os.Remove(w.tmpName)
+	}()
+	if w.bufRecs != 0 || len(w.buf) != 0 {
+		return errors.New("snapshots: prefixed compressed writer has buffered records")
+	}
+	if _, err = w.tmp.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+
+	var prefixComp []byte
+	prefixRecords := uint64(0)
+	uncTotal := w.uncTotal
+	if len(prefix) != 0 {
+		prefixComp = w.enc.EncodeAll(prefix, nil)
+		prefixRecords = 1
+		if w.recCount == 0 {
+			uncTotal = uint64(len(prefix))
+		} else if len(w.table) == 0 || w.table[0].uncompressedStart != uint64(len(prefix)) {
+			return errors.New("snapshots: compressed body does not follow retained prefix")
+		}
+	} else if w.recCount != 0 {
+		return errors.New("snapshots: compressed body has no retained prefix")
+	}
+
+	out, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+	}()
+
+	blockCount := uint64(len(w.table)) + prefixRecords
+	dataOffset := uint64(compressedBlockHeaderSize) + blockCount*compressedBlockTableEntry
+	var hdr bytes.Buffer
+	hdr.WriteString(compressedBlockMagic)
+	writeUint32(&hdr, compressedBlockVersion)
+	writeUint32(&hdr, uint32(w.blockSize))
+	writeUint64(&hdr, w.recCount+prefixRecords)
+	writeUint64(&hdr, blockCount)
+	writeUint64(&hdr, uncTotal)
+	writeUint64(&hdr, dataOffset)
+	if prefixRecords != 0 {
+		writeUint64(&hdr, 0)
+		writeUint64(&hdr, 0)
+		writeUint64(&hdr, uint64(len(prefixComp)))
+		writeUint32(&hdr, 1)
+	}
+	shift := uint64(len(prefixComp))
+	for _, b := range w.table {
+		writeUint64(&hdr, b.uncompressedStart)
+		writeUint64(&hdr, b.compressedStart+shift)
+		writeUint64(&hdr, b.compressedLen)
+		writeUint32(&hdr, b.records)
+	}
+	if _, err = out.Write(hdr.Bytes()); err != nil {
+		return err
+	}
+	if len(prefixComp) != 0 {
+		if _, err = out.Write(prefixComp); err != nil {
+			return err
+		}
 	}
 	if _, err = io.Copy(out, w.tmp); err != nil {
 		return err
@@ -667,29 +745,6 @@ func historyCompressionConcurrency(procs int) int {
 	return procs
 }
 
-func historyCompressionConcurrencyForSize(procs int, size int64) int {
-	// At 512 KiB the ordered worker pipeline is slower than direct encoding;
-	// by 2 MiB it is consistently faster. Keep base-step and sparse segments on
-	// the allocation-light path, reserving workers for large/compacted segments.
-	if size >= 0 && size < minParallelHistoryCompressionBytes {
-		return 1
-	}
-	return historyCompressionConcurrency(procs)
-}
-
-// compressFileToFile is the file-backed counterpart to compressBlobToFile. It
-// bounds in-flight memory to workers*2 chunks, compresses chunks in parallel,
-// then reduces results in source order. This is the same producer / worker /
-// ordered-reducer shape used by Erigon's paged segment writer.
-func compressFileToFile(dir, path, src string, chunkSize int) error {
-	size := int64(-1)
-	if info, err := os.Stat(src); err == nil {
-		size = info.Size()
-	}
-	workers := historyCompressionConcurrencyForSize(runtime.GOMAXPROCS(0), size)
-	return compressFileToFileWithWorkers(dir, path, src, chunkSize, workers)
-}
-
 type compressedFileJob struct {
 	seq  uint64
 	data []byte
@@ -701,158 +756,82 @@ type compressedFileResult struct {
 	compressed   []byte
 }
 
-func compressFileToFileWithWorkers(dir, path, src string, chunkSize, workers int) (err error) {
-	if chunkSize <= 0 {
-		chunkSize = 16384
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := in.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-	if info, statErr := in.Stat(); statErr == nil {
-		chunks := int((info.Size() + int64(chunkSize) - 1) / int64(chunkSize))
-		if chunks > 0 && workers > chunks {
-			workers = chunks
-		}
-	}
+// orderedCompressionPipeline accepts owned, fixed-size logical chunks from one
+// writer, encodes them on bounded workers, and appends results to out in input
+// order. The caller owns exactly one additional current chunk; the pool holds
+// the other workers*2-1 chunks, keeping total uncompressed in-flight memory at
+// workers*2 chunks.
+type orderedCompressionPipeline struct {
+	out       *compressedBlockWriter
+	jobs      chan compressedFileJob
+	results   chan compressedFileResult
+	pool      chan []byte
+	done      chan struct{}
+	cancel    sync.Once
+	closeJobs sync.Once
+	workers   sync.WaitGroup
+	reducer   sync.WaitGroup
 
-	w, err := newCompressedBlockWriter(dir, 1)
-	if err != nil {
-		return err
-	}
-	finished := false
-	defer func() {
-		if !finished {
-			_ = w.tmp.Close()
-			_ = os.Remove(w.tmpName)
-		}
-	}()
-
-	if workers == 1 {
-		if err := compressFileSequential(in, w, chunkSize); err != nil {
-			return err
-		}
-	} else if err := compressFileParallel(in, w, chunkSize, workers); err != nil {
-		return err
-	}
-	if err := w.Finish(path); err != nil {
-		return err
-	}
-	finished = true
-	return nil
+	errMu sync.Mutex
+	err   error
+	seq   uint64
 }
 
-func compressFileSequential(in io.Reader, w *compressedBlockWriter, chunkSize int) error {
-	buf := make([]byte, chunkSize)
-	for {
-		n, readErr := io.ReadFull(in, buf)
-		if n > 0 {
-			if _, err := w.Append(buf[:n]); err != nil {
-				return err
-			}
-		}
-		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
-			return nil
-		}
-		if readErr != nil {
-			return readErr
-		}
-	}
-}
-
-func compressFileParallel(in io.Reader, w *compressedBlockWriter, chunkSize, workers int) error {
+func newOrderedCompressionPipeline(out *compressedBlockWriter, chunkSize, workers int) *orderedCompressionPipeline {
 	inFlight := workers * 2
-	jobs := make(chan compressedFileJob, inFlight)
-	results := make(chan compressedFileResult, inFlight)
-	pool := make(chan []byte, inFlight)
-	for range inFlight {
-		pool <- make([]byte, chunkSize)
+	p := &orderedCompressionPipeline{
+		out:     out,
+		jobs:    make(chan compressedFileJob, inFlight),
+		results: make(chan compressedFileResult, inFlight),
+		pool:    make(chan []byte, inFlight),
+		done:    make(chan struct{}),
+	}
+	// The stream writer transfers its current chunk as the final pool member.
+	for i := 1; i < inFlight; i++ {
+		p.pool <- make([]byte, 0, chunkSize)
 	}
 
-	done := make(chan struct{})
-	var cancelOnce sync.Once
-	cancel := func() { cancelOnce.Do(func() { close(done) }) }
-	producerErr := make(chan error, 1)
-	go func() {
-		defer close(jobs)
-		var seq uint64
-		for {
-			var buf []byte
-			select {
-			case buf = <-pool:
-			case <-done:
-				producerErr <- nil
-				return
-			}
-			n, readErr := io.ReadFull(in, buf)
-			if n > 0 {
-				job := compressedFileJob{seq: seq, data: buf[:n]}
-				select {
-				case jobs <- job:
-					seq++
-				case <-done:
-					producerErr <- nil
-					return
-				}
-			} else {
-				pool <- buf
-			}
-			if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
-				producerErr <- nil
-				return
-			}
-			if readErr != nil {
-				producerErr <- readErr
-				return
-			}
-		}
-	}()
-
-	var workerWG sync.WaitGroup
-	workerWG.Add(workers)
+	p.workers.Add(workers)
 	for range workers {
 		go func() {
-			defer workerWG.Done()
+			defer p.workers.Done()
 			for {
 				select {
-				case job, ok := <-jobs:
+				case job, ok := <-p.jobs:
 					if !ok {
 						return
 					}
 					result := compressedFileResult{
 						seq:          job.seq,
 						uncompressed: job.data,
-						compressed:   w.enc.EncodeAll(job.data, nil),
+						compressed:   p.out.enc.EncodeAll(job.data, nil),
 					}
 					select {
-					case results <- result:
-					case <-done:
+					case p.results <- result:
+					case <-p.done:
 						return
 					}
-				case <-done:
+				case <-p.done:
 					return
 				}
 			}
 		}()
 	}
 	go func() {
-		workerWG.Wait()
-		close(results)
+		p.workers.Wait()
+		close(p.results)
 	}()
+	p.reducer.Add(1)
+	go p.reduce()
+	return p
+}
 
-	pending := make(map[uint64]compressedFileResult, inFlight)
+func (p *orderedCompressionPipeline) reduce() {
+	defer p.reducer.Done()
+	pending := make(map[uint64]compressedFileResult, cap(p.results))
 	var next uint64
-	var writeErr error
-	for result := range results {
-		if writeErr != nil {
+	for result := range p.results {
+		if p.Err() != nil {
 			continue
 		}
 		pending[result.seq] = result
@@ -861,28 +840,252 @@ func compressFileParallel(in io.Reader, w *compressedBlockWriter, chunkSize, wor
 			if !ok {
 				break
 			}
-			if err := w.appendEncodedBlock(len(ready.uncompressed), ready.compressed); err != nil {
-				writeErr = err
-				cancel()
+			if err := p.out.appendEncodedBlock(len(ready.uncompressed), ready.compressed); err != nil {
+				p.setError(err)
 				break
 			}
 			delete(pending, next)
-			pool <- ready.uncompressed[:chunkSize]
+			select {
+			case p.pool <- ready.uncompressed[:0]:
+			case <-p.done:
+			}
 			next++
 		}
 	}
-	readErr := <-producerErr
-	cancel()
-	if writeErr != nil {
-		return writeErr
+	if p.Err() == nil && len(pending) != 0 {
+		p.setError(fmt.Errorf("snapshots: streaming compression reducer stopped with %d pending blocks", len(pending)))
 	}
-	if readErr != nil {
-		return readErr
+}
+
+func (p *orderedCompressionPipeline) setError(err error) {
+	if err == nil {
+		return
 	}
-	if len(pending) != 0 {
-		return fmt.Errorf("snapshots: compressed file reducer stopped with %d pending blocks", len(pending))
+	p.errMu.Lock()
+	if p.err == nil {
+		p.err = err
+		p.cancel.Do(func() { close(p.done) })
+	}
+	p.errMu.Unlock()
+}
+
+func (p *orderedCompressionPipeline) Err() error {
+	p.errMu.Lock()
+	defer p.errMu.Unlock()
+	return p.err
+}
+
+func (p *orderedCompressionPipeline) Submit(data []byte) error {
+	if err := p.Err(); err != nil {
+		return err
+	}
+	job := compressedFileJob{seq: p.seq, data: data}
+	select {
+	case p.jobs <- job:
+		p.seq++
+		return nil
+	case <-p.done:
+		return p.Err()
+	}
+}
+
+func (p *orderedCompressionPipeline) Acquire() ([]byte, error) {
+	select {
+	case buf := <-p.pool:
+		return buf, nil
+	case <-p.done:
+		return nil, p.Err()
+	}
+}
+
+func (p *orderedCompressionPipeline) Close() error {
+	p.closeJobs.Do(func() { close(p.jobs) })
+	p.reducer.Wait()
+	return p.Err()
+}
+
+func (p *orderedCompressionPipeline) Abort() {
+	p.cancel.Do(func() { close(p.done) })
+	p.closeJobs.Do(func() { close(p.jobs) })
+	p.reducer.Wait()
+}
+
+// compressedBlockStreamWriter preserves only the first logical chunk for
+// fixed-header WriteAt updates. Every later full chunk is immediately encoded;
+// after the measured break-even size, encoding moves to the ordered worker
+// pipeline above. No complete uncompressed segment is written to disk.
+type compressedBlockStreamWriter struct {
+	dir       string
+	chunkSize int
+	workers   int
+	body      *compressedBlockWriter
+	first     []byte
+	chunk     []byte
+	parallel  *orderedCompressionPipeline
+	logical   uint64
+	bodyStart bool
+	closed    bool
+}
+
+func newCompressedBlockStreamWriter(dir string, chunkSize, workers int) (*compressedBlockStreamWriter, error) {
+	if chunkSize <= 0 {
+		chunkSize = 16384
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	body, err := newCompressedBlockWriter(dir, 1)
+	if err != nil {
+		return nil, err
+	}
+	return &compressedBlockStreamWriter{
+		dir:       dir,
+		chunkSize: chunkSize,
+		workers:   workers,
+		body:      body,
+		first:     make([]byte, 0, chunkSize),
+	}, nil
+}
+
+func (w *compressedBlockStreamWriter) Write(p []byte) (int, error) {
+	if w == nil || w.closed || w.body == nil {
+		return 0, errors.New("snapshots: compressed stream writer is closed")
+	}
+	written := 0
+	if len(w.first) < w.chunkSize {
+		n := w.chunkSize - len(w.first)
+		if n > len(p) {
+			n = len(p)
+		}
+		w.first = append(w.first, p[:n]...)
+		p = p[n:]
+		written += n
+		w.logical += uint64(n)
+		if len(p) == 0 {
+			return written, nil
+		}
+	}
+	if w.chunk == nil {
+		w.chunk = make([]byte, 0, w.chunkSize)
+	}
+	for len(p) != 0 {
+		n := w.chunkSize - len(w.chunk)
+		if n > len(p) {
+			n = len(p)
+		}
+		w.chunk = append(w.chunk, p[:n]...)
+		p = p[n:]
+		written += n
+		w.logical += uint64(n)
+		if len(w.chunk) == w.chunkSize {
+			if err := w.flushChunk(false); err != nil {
+				return written, err
+			}
+		}
+	}
+	return written, nil
+}
+
+func (w *compressedBlockStreamWriter) WriteAt(p []byte, off int64) (int, error) {
+	if w == nil || w.closed || w.body == nil {
+		return 0, errors.New("snapshots: compressed stream writer is closed")
+	}
+	if off < 0 || off > int64(len(w.first)) || int64(len(p)) > int64(len(w.first))-off {
+		return 0, errors.New("snapshots: compressed stream WriteAt is outside retained prefix")
+	}
+	return copy(w.first[int(off):], p), nil
+}
+
+func (w *compressedBlockStreamWriter) flushChunk(final bool) error {
+	if len(w.chunk) == 0 {
+		return nil
+	}
+	if !w.bodyStart {
+		w.body.uncTotal = uint64(len(w.first))
+		w.bodyStart = true
+	}
+	if w.parallel == nil && w.workers > 1 && w.logical >= minParallelHistoryCompressionBytes {
+		w.parallel = newOrderedCompressionPipeline(w.body, w.chunkSize, w.workers)
+	}
+	if w.parallel == nil {
+		comp := w.body.enc.EncodeAll(w.chunk, nil)
+		if err := w.body.appendEncodedBlock(len(w.chunk), comp); err != nil {
+			return err
+		}
+		w.chunk = w.chunk[:0]
+		return nil
+	}
+	if err := w.parallel.Submit(w.chunk); err != nil {
+		return err
+	}
+	w.chunk = nil
+	if !final {
+		chunk, err := w.parallel.Acquire()
+		if err != nil {
+			return err
+		}
+		w.chunk = chunk
 	}
 	return nil
+}
+
+func (w *compressedBlockStreamWriter) Finish(path string) error {
+	if w == nil || w.closed || w.body == nil {
+		return errors.New("snapshots: compressed stream writer is closed")
+	}
+	if err := w.flushChunk(true); err != nil {
+		w.Abort()
+		return err
+	}
+	if w.parallel != nil {
+		if err := w.parallel.Close(); err != nil {
+			w.Abort()
+			return err
+		}
+		w.parallel = nil
+	}
+	body := w.body
+	w.body = nil
+	w.closed = true
+	return body.finishWithPrefix(path, w.first)
+}
+
+func (w *compressedBlockStreamWriter) Reset() error {
+	if w == nil || w.closed {
+		return errors.New("snapshots: compressed stream writer is closed")
+	}
+	w.abortBody()
+	body, err := newCompressedBlockWriter(w.dir, 1)
+	if err != nil {
+		w.closed = true
+		return err
+	}
+	w.body = body
+	w.first = w.first[:0]
+	w.chunk = nil
+	w.logical = 0
+	w.bodyStart = false
+	return nil
+}
+
+func (w *compressedBlockStreamWriter) Abort() {
+	if w == nil || w.closed {
+		return
+	}
+	w.abortBody()
+	w.closed = true
+}
+
+func (w *compressedBlockStreamWriter) abortBody() {
+	if w.parallel != nil {
+		w.parallel.Abort()
+		w.parallel = nil
+	}
+	if w.body != nil {
+		_ = w.body.tmp.Close()
+		_ = os.Remove(w.body.tmpName)
+		w.body = nil
+	}
 }
 
 // BlockAt returns a private copy of the decompressed block containing offset plus

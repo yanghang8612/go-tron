@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"os"
@@ -285,74 +286,129 @@ func TestHistoryCompressionConcurrency(t *testing.T) {
 			t.Fatalf("historyCompressionConcurrency(%d) = %d, want %d", tc.procs, got, tc.want)
 		}
 	}
-	if got := historyCompressionConcurrencyForSize(8, minParallelHistoryCompressionBytes-1); got != 1 {
-		t.Fatalf("small-file compression concurrency = %d, want 1", got)
-	}
-	if got := historyCompressionConcurrencyForSize(8, minParallelHistoryCompressionBytes); got != 4 {
-		t.Fatalf("large-file compression concurrency = %d, want 4", got)
-	}
-	if got := historyCompressionConcurrencyForSize(2, -1); got != 2 {
-		t.Fatalf("unknown-size compression concurrency = %d, want 2", got)
-	}
 }
 
-// TestCompressFileToFileOrderedWorkers proves that parallel encoding only
-// changes when blocks finish, never their table/data order or accessor offsets.
-// Running this test with -race also exercises concurrent use of the shared zstd
-// encoder documented by klauspost/compress.
-func TestCompressFileToFileOrderedWorkers(t *testing.T) {
+func TestCompressedBlockStreamWriterEquivalent(t *testing.T) {
 	const chunkSize = 16 << 10
-	for _, size := range []int{0, 1, chunkSize - 1, chunkSize, 37*chunkSize + 731} {
+	for _, size := range []int{0, 1, chunkSize - 1, chunkSize, chunkSize + 1, 80*chunkSize + 731} {
 		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
 			dir := t.TempDir()
-			src := filepath.Join(dir, "source")
 			payload := make([]byte, size)
-			rng := rand.New(rand.NewSource(int64(size) + 17))
-			for off := 0; off < len(payload); off += 256 {
-				end := off + 256
-				if end > len(payload) {
-					end = len(payload)
-				}
-				copy(payload[off:end], bytes.Repeat([]byte{byte(off / 256)}, end-off))
-				if end-off >= 8 {
-					_, _ = rng.Read(payload[end-8 : end])
-				}
-			}
-			if err := os.WriteFile(src, payload, 0o600); err != nil {
-				t.Fatal(err)
+			rng := rand.New(rand.NewSource(int64(size) + 91))
+			_, _ = rng.Read(payload)
+			for off := 0; off+256 <= len(payload); off += 1024 {
+				copy(payload[off:off+256], bytes.Repeat([]byte{byte(off >> 10)}, 256))
 			}
 
-			serial := filepath.Join(dir, "serial.cb")
-			parallel := filepath.Join(dir, "parallel.cb")
-			if err := compressFileToFileWithWorkers(dir, serial, src, chunkSize, 1); err != nil {
-				t.Fatalf("serial compression: %v", err)
-			}
-			if err := compressFileToFileWithWorkers(dir, parallel, src, chunkSize, 4); err != nil {
-				t.Fatalf("parallel compression: %v", err)
-			}
-			serialData, err := os.ReadFile(serial)
+			stream, err := newCompressedBlockStreamWriter(dir, chunkSize, 4)
 			if err != nil {
 				t.Fatal(err)
 			}
-			parallelData, err := os.ReadFile(parallel)
+			for off := 0; off < len(payload); {
+				n := 1 + (off*31+17)%70001
+				if n > len(payload)-off {
+					n = len(payload) - off
+				}
+				written, err := stream.Write(payload[off : off+n])
+				if err != nil {
+					t.Fatalf("stream write at %d: %v", off, err)
+				}
+				if written != n {
+					t.Fatalf("stream write at %d wrote %d, want %d", off, written, n)
+				}
+				off += n
+			}
+			if len(payload) >= 36 {
+				patch := []byte("count123")
+				if n, err := stream.WriteAt(patch, 28); err != nil || n != len(patch) {
+					t.Fatalf("stream WriteAt = %d, %v", n, err)
+				}
+				copy(payload[28:36], patch)
+			}
+
+			gotPath := filepath.Join(dir, "stream.cb")
+			if err := stream.Finish(gotPath); err != nil {
+				t.Fatalf("finish stream: %v", err)
+			}
+			wantPath := filepath.Join(dir, "blob.cb")
+			if err := compressBlobToFile(dir, wantPath, payload, chunkSize); err != nil {
+				t.Fatalf("compress expected blob: %v", err)
+			}
+			got, err := os.ReadFile(gotPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Equal(parallelData, serialData) {
-				t.Fatalf("parallel output differs from serial: %d versus %d bytes", len(parallelData), len(serialData))
-			}
-			decoded, err := decompressBlockBlob(parallelData)
+			want, err := os.ReadFile(wantPath)
 			if err != nil {
-				t.Fatalf("decompress parallel output: %v", err)
+				t.Fatal(err)
 			}
-			if !bytes.Equal(decoded, payload) {
-				t.Fatal("parallel compression changed source bytes")
+			if !bytes.Equal(got, want) {
+				t.Fatalf("stream output differs from canonical blob compression: %d versus %d bytes", len(got), len(want))
 			}
 		})
 	}
 }
 
-func BenchmarkCompressFileToFileWorkers(b *testing.B) {
+func TestCompressedBlockStreamWriterReset(t *testing.T) {
+	const chunkSize = 16 << 10
+	dir := t.TempDir()
+	stream, err := newCompressedBlockStreamWriter(dir, chunkSize, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Write(bytes.Repeat([]byte("discard"), 200_000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("retained-after-reset"), 80_000)
+	if _, err := stream.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	var patch [8]byte
+	binary.BigEndian.PutUint64(patch[:], 12345)
+	if _, err := stream.WriteAt(patch[:], 28); err != nil {
+		t.Fatal(err)
+	}
+	copy(payload[28:36], patch[:])
+	path := filepath.Join(dir, "reset.cb")
+	if err := stream.Finish(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decompressBlockBlob(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded, payload) {
+		t.Fatal("reset stream retained bytes from discarded generation")
+	}
+}
+
+func TestCompressedHistoryTempAbortRemovesScratch(t *testing.T) {
+	dir := t.TempDir()
+	tmp, err := createStateDomainChangeHistoryTemp(dir, "history/abort.seg", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tmp.Write(bytes.Repeat([]byte("bounded-compressed-history"), 80_000)); err != nil {
+		t.Fatal(err)
+	}
+	finalScratch := tmp.tmpName
+	bodyScratch := tmp.compressed.body.tmpName
+	tmp.Close()
+	for _, path := range []string{finalScratch, bodyScratch} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("aborted compressed history left scratch %q: %v", path, err)
+		}
+	}
+}
+
+func BenchmarkCompressedBlockStreamWriter(b *testing.B) {
 	const chunkSize = 16 << 10
 	dir := b.TempDir()
 	payload := make([]byte, 8<<20)
@@ -369,10 +425,6 @@ func BenchmarkCompressFileToFileWorkers(b *testing.B) {
 	}
 	for _, size := range []int{512 << 10, 2 << 20, 8 << 20} {
 		b.Run(fmt.Sprintf("size=%dKiB", size>>10), func(b *testing.B) {
-			src := filepath.Join(dir, fmt.Sprintf("source-%d", size))
-			if err := os.WriteFile(src, payload[:size], 0o600); err != nil {
-				b.Fatal(err)
-			}
 			for _, workers := range []int{1, 4} {
 				b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
 					out := filepath.Join(dir, fmt.Sprintf("size-%d-workers-%d.cb", size, workers))
@@ -380,7 +432,20 @@ func BenchmarkCompressFileToFileWorkers(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for range b.N {
-						if err := compressFileToFileWithWorkers(dir, out, src, chunkSize, workers); err != nil {
+						stream, err := newCompressedBlockStreamWriter(dir, chunkSize, workers)
+						if err != nil {
+							b.Fatal(err)
+						}
+						for off := 0; off < size; off += 256 << 10 {
+							end := off + 256<<10
+							if end > size {
+								end = size
+							}
+							if _, err := stream.Write(payload[off:end]); err != nil {
+								b.Fatal(err)
+							}
+						}
+						if err := stream.Finish(out); err != nil {
 							b.Fatal(err)
 						}
 					}

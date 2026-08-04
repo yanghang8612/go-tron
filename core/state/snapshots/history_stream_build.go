@@ -65,14 +65,11 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if opts.TempDir == "" {
 		opts.TempDir = filepath.Join(dir, "etl")
 	}
-	segmentTmp, segmentTmpName, err := createStateDomainChangeBinaryTempFile(dir, ref.Path)
+	segmentTmp, err := createStateDomainChangeHistoryTemp(dir, ref.Path, CompressHistorySegments)
 	if err != nil {
 		return result, err
 	}
-	defer func() {
-		_ = segmentTmp.Close()
-		_ = os.Remove(segmentTmpName)
-	}()
+	defer segmentTmp.Close()
 	if err := writeStateDomainChangeBinaryHeaderTo(segmentTmp, stateDomainChangeBinarySegmentMagic, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
 		return result, err
 	}
@@ -123,7 +120,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		// record ETL cost only for those old inputs.
 		accessorCollectors.Close()
 		accessorCollectors = nil
-		if err := resetStateDomainChangeHistoryTempFile(segmentTmp); err != nil {
+		if err := segmentTmp.Reset(); err != nil {
 			return result, fmt.Errorf("snapshots: reset unordered state-domain-change history segment: %w", err)
 		}
 		if err := resetStateDomainChangeHistoryTempFile(indexTmp); err != nil {
@@ -185,7 +182,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		}
 	}()
 
-	segmentRef, err = finalizeStateDomainChangeHistoryFile(dir, ref, segmentTmp, segmentTmpName, true, CompressHistorySegments)
+	segmentRef, err = segmentTmp.Finalize(ref, true)
 	if err != nil {
 		return result, err
 	}
@@ -197,7 +194,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		AggregationSteps: ref.AggregationSteps,
 		Path:             stateDomainChangeBinaryIndexPath(segmentRef.Path),
 	}
-	indexRef, err = finalizeStateDomainChangeHistoryFile(dir, indexRef, indexTmp, indexTmpName, false, false)
+	indexRef, err = finalizeStateDomainChangeHistoryFile(dir, indexRef, indexTmp, indexTmpName, false)
 	if err != nil {
 		return result, err
 	}
@@ -283,6 +280,11 @@ func resetStateDomainChangeHistoryTempFile(file *os.File) error {
 	return err
 }
 
+type stateDomainChangeBinaryWriteAtWriter interface {
+	io.Writer
+	io.WriterAt
+}
+
 func collectStateDomainChangeHistoryRecords(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange, collector *etl.Collector) (uint64, error) {
 	if collector == nil {
 		return 0, errors.New("snapshots: nil state-domain-change history record ETL collector")
@@ -311,7 +313,7 @@ func collectStateDomainChangeHistoryRecords(db ethdb.Iteratee, cfg DomainCfg, fr
 	return count, err
 }
 
-func writeStateDomainChangeBinaryTxRangeTableFromDB(file *os.File, db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange) (uint64, error) {
+func writeStateDomainChangeBinaryTxRangeTableFromDB(file stateDomainChangeBinaryWriteAtWriter, db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange) (uint64, error) {
 	if file == nil {
 		return 0, errors.New("snapshots: nil state-domain-change history file")
 	}
@@ -481,7 +483,7 @@ type stateDomainChangeHistoryRecordWriter struct {
 
 const stateDomainChangeHistoryWriteBufferSize = 256 << 10
 
-func newStateDomainChangeHistoryRecordWriter(segment, index *os.File, accessors *stateDomainChangeBinaryAccessorV4Collectors, ref SegmentRef, expected, segmentOff uint64) *stateDomainChangeHistoryRecordWriter {
+func newStateDomainChangeHistoryRecordWriter(segment io.Writer, index *os.File, accessors *stateDomainChangeBinaryAccessorV4Collectors, ref SegmentRef, expected, segmentOff uint64) *stateDomainChangeHistoryRecordWriter {
 	return &stateDomainChangeHistoryRecordWriter{
 		segment:    bufio.NewWriterSize(segment, stateDomainChangeHistoryWriteBufferSize),
 		index:      bufio.NewWriterSize(index, stateDomainChangeHistoryWriteBufferSize),
@@ -599,7 +601,7 @@ func (w *stateDomainChangeHistoryRecordWriter) flushIndex() error {
 	return nil
 }
 
-func writeStateDomainChangeBinaryHeaderCount(file *os.File, count uint64) error {
+func writeStateDomainChangeBinaryHeaderCount(file io.WriterAt, count uint64) error {
 	if file == nil {
 		return errors.New("snapshots: nil state-domain-change binary file")
 	}
@@ -961,7 +963,7 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	if _, err := io.Copy(accessorTmp, groupPayloadTmp); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
-	resultRef, err := finalizeStateDomainChangeHistoryFile(dir, accessorRef, accessorTmp, accessorTmpName, false, false)
+	resultRef, err := finalizeStateDomainChangeHistoryFile(dir, accessorRef, accessorTmp, accessorTmpName, false)
 	if err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
