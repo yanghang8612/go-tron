@@ -2222,6 +2222,47 @@ under real random reads. If neither improves, the lane scheduler should not be
 credited with a throughput gain and within-block touch streaming remains the
 next design step.
 
+The production gate used a 99-second stable window covering 7,547 blocks and
+215,155 transactions (76.23 blocks/s and 2,173 tx/s). Work shape remained close
+to P4.45 at 249 resolved operations and 1,285 branch hashes per block. The
+pipeline submitted 7,555 jobs, reached the configured maximum of three
+simultaneous folds, and performed one measured fold per block instead of the
+former root-presence fold plus update fold. Queue-inclusive commitment time was
+7.48 ms/block, 35.8% below P4.45's 11.65 ms/block; async backpressure was 0.426
+ms/block versus 1.24 ms/block, a 65.7% reduction. Parent reads resolved 92.88%
+from overlay, 4.61% from cache, and 2.51% from Pebble.
+
+Commitment and pipeline errors stayed zero. Ordered publisher, discard worker,
+state/receipt, WriteSet, and balance-trace mismatches also stayed zero; one new
+sender-chain observer error took its existing safe fallback. A warm 20-second
+profile sampled 51.13 CPU-seconds: persistent commitment lanes accounted for
+20.50%, Pebble compaction 17.76%, parent reads 8.31%, node hashing 8.02%, Keccak
+8.55%, VM 6.42%, and GC marking 4.38%. In-flight utilization, lower fold time,
+lower backpressure, continued sync, and clean equivalence pass P4.46.
+
+#### P4.47: Erigon fastkeccak commitment hashing
+
+After P4.46 removed the per-block split barrier, Keccak became the largest
+individually replaceable commitment cost. The production work shape hashes
+about 558 KB of branch preimage through 4,365 permutations per block, and 89%
+of branch nodes need multiple permutation rounds. The commitment digest is
+internal to go-tron's state root, so its bytes are consensus-sensitive even
+though the implementation is not wire-visible.
+
+Erigon uses `github.com/erigontech/fastkeccak`, with specialized amd64 BMI2 and
+arm64 SHA3 assembly plus a portable legacy-Keccak fallback. Go-tron's pooled
+hasher now uses the same implementation while retaining the destructive `Read`
+path and zero-allocation buffers. Golden inputs at the padding boundary and
+multi-round sizes compare every digest with `x/crypto/sha3` legacy Keccak.
+
+On Apple M1 Max, a full 529-byte 16-child branch digest fell from about 1,417 ns
+to 668 ns (2.12x), while a one-child digest fell from about 373 ns to 173 ns.
+The complete no-op update fold improved from the P4.45 132--134 us range to
+89.6--100.2 us over longer 100-iteration runs. The end-to-end in-memory async
+benchmark remains execution-bound at about 104 ms/150 blocks, so production
+must confirm reduced Keccak CPU and commitment wall/backpressure without any
+root or equivalence mismatch.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

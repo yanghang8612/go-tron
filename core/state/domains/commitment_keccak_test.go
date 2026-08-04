@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"testing"
 
+	fastkeccak "github.com/erigontech/fastkeccak"
 	gethkeccak "github.com/ethereum/go-ethereum/crypto/keccak"
 	"github.com/tronprotocol/go-tron/common"
 	"golang.org/x/crypto/sha3"
@@ -29,7 +30,7 @@ func digestWith(h readableHash, chunks ...[]byte) [32]byte {
 
 func TestCommitmentKeccakMatchesLegacyReference(t *testing.T) {
 	reference := sha3.NewLegacyKeccak256().(readableHash)
-	candidate := gethkeccak.NewLegacyKeccak256().(readableHash)
+	candidate := fastkeccak.NewFastKeccak()
 	rng := rand.New(rand.NewSource(1))
 
 	for _, size := range []int{0, 1, 31, 32, 135, 136, 137, 255, 1024} {
@@ -126,8 +127,37 @@ func BenchmarkCommitmentKeccakGeth(b *testing.B) {
 	})
 }
 
+func BenchmarkCommitmentKeccakErigon(b *testing.B) {
+	benchmarkCommitmentKeccak(b, func() readableHash {
+		return fastkeccak.NewFastKeccak()
+	})
+}
+
 func BenchmarkCommitmentKeccakGethContiguous(b *testing.B) {
 	h := gethkeccak.NewLegacyKeccak256().(readableHash)
+	input := make([]byte, 1+16*(1+32))
+	input[0] = 1
+	for nibble := 0; nibble < 16; nibble++ {
+		off := 1 + nibble*(1+32)
+		input[off] = byte(nibble)
+		_, _ = rand.New(rand.NewSource(int64(nibble + 3))).Read(input[off+1 : off+1+32])
+	}
+	var out [32]byte
+	b.ReportAllocs()
+	b.SetBytes(int64(len(input)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h.Reset()
+		_, _ = h.Write(input)
+		_, _ = h.Read(out[:])
+	}
+	if bytes.Equal(out[:], make([]byte, len(out))) {
+		b.Fatal("unexpected zero digest")
+	}
+}
+
+func BenchmarkCommitmentKeccakErigonContiguous(b *testing.B) {
+	h := fastkeccak.NewFastKeccak()
 	input := make([]byte, 1+16*(1+32))
 	input[0] = 1
 	for nibble := 0; nibble < 16; nibble++ {

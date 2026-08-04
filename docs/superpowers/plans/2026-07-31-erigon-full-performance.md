@@ -187,9 +187,13 @@
 - [x] Add persistent first-nibble commitment owners which may advance across
   blocks independently while root assembly, metadata, stages, heads, and layer
   promotion remain canonically ordered.
-- [ ] Run the ordered commitment pipeline production gate: require more than
+- [x] Run the ordered commitment pipeline production gate: require more than
   one fold in flight, zero commitment/equivalence errors, and compare fold wall
   time plus enqueue backpressure against P4.45.
+- [x] Replace the pooled commitment sponge with Erigon's assembly-accelerated
+  fastkeccak after byte-equivalence and branch-shaped microbenchmarks.
+- [ ] Run the fastkeccak production gate and compare Keccak CPU, fold wall,
+  backpressure, throughput, and all root/equivalence errors against P4.46.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

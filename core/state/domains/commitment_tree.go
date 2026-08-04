@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	gethkeccak "github.com/ethereum/go-ethereum/crypto/keccak"
+	fastkeccak "github.com/erigontech/fastkeccak"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -23,12 +23,12 @@ import (
 // (1 per nodeHash/keyPath/leafValueHash call); the pool turns those into
 // Reset-and-reuse and cuts that source of GC pressure to near zero. sync.Pool
 // is safe across the parallel root's subtrie workers, and each borrow/return
-// cycle remains strictly local to one hash invocation. go-ethereum's hasher is
-// byte-identical to x/crypto's legacy implementation and provides an amd64
-// Keccak-f assembly path, which is the production deployment architecture.
+// cycle remains strictly local to one hash invocation. Erigon's fastkeccak is
+// byte-identical to x/crypto's legacy implementation and provides specialized
+// amd64 and arm64 Keccak-f assembly paths.
 var keccakPool = sync.Pool{
 	New: func() any {
-		return &pooledKeccak{keccakState: gethkeccak.NewLegacyKeccak256().(keccakState)}
+		return &pooledKeccak{keccakState: fastkeccak.NewFastKeccak()}
 	},
 }
 
