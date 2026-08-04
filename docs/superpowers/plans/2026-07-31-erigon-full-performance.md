@@ -262,7 +262,7 @@
   exactness, copy/execution cost, and projected async deadlines.
 - [x] Move VM retries to the async shared-version scheduler in observe-only
   mode, with retained runners and complete queue/timing diagnostics.
-- [ ] Run the actual async VM retry production gate and require non-zero
+- [x] Run the actual async VM retry production gate and require non-zero
   ready/recovered results with zero mismatch/error.
 - [ ] Allow only boundary-ready VM retry descendants into the canonical
   publisher after the async gate passes.

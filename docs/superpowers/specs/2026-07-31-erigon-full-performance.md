@@ -2821,6 +2821,46 @@ StateDB root. The production gate requires non-zero ready and recovered results
 with zero mismatch/error and enough queue/timing data to decide whether only
 ready descendants should enter the canonical VM publisher.
 
+The first production windows exposed a real storage-ordering hole before any
+publication was enabled. A retry could obtain an exact `TransactionAccessStorage`
+post-image from the shared VersionMap, but a retained sender-chain StateDB had
+already executed and reverted an earlier incarnation. Journal replay restored
+the block-start slot while deliberately retaining the object's dirty marker;
+`CopyBlockExecutionBase` consequently copied that clean cached slot into the
+async job, and `GetStateWithExist` accepted it before consulting the versioned
+reader. The diagnostic signature was a same-key Storage value mismatch with
+equal worker/canonical WriteSet shapes. Versioned storage reads now distinguish
+task-local dirty slots from inherited clean cache entries: local and forwarded
+writes still win, while each clean cached slot is checked once against the
+frozen canonical prefix. A regression test recreates the execute/revert/copy
+sequence and proves both the canonical override and subsequent task-local write
+precedence.
+
+The corrected 2026-08-04 mainnet gate passed on commit `96e4c7b6`. The fresh
+process covered 100 widened 1/256 cohorts, 480 retry attempts, 477 jobs, and 820
+returned incarnations. It classified 198 results ready, 562 late, and 60 stale;
+27 boundary-ready candidates were all validated and all 27 recovered a result
+rejected from the original block-start incarnation. Info, WriteSet, and
+BalanceTrace mismatches were zero, including zero public-net-only and zero other
+WriteSet mismatch. All ten error-stage counters (input, execution, contract-ret,
+sender forwarding, missing info, WriteSet capture, apply unsupported, apply
+error, apply mismatch, and finish) were zero, as were shared-state copy errors,
+raw-view misses, invalid public-net carriers, and unsupported/delta-invalid
+rejections. The 111 rejected on-time results were dominated by 109 exact read
+conflicts; barrier counts overlap that total by design.
+
+A 218-second suffix of that gate processed 11,200 blocks and 369,238
+transactions, or 51.38 blocks/s, 1,693.75 tx/s, and 32.97 tx/block. Across the
+whole fresh process the VM retry observer spent 372.012 ms executing, 51.167 ms
+copying shared StateDB bases, 32.198 ms dispatching, 19.315 ms freezing relevant
+version cells, 4.740 ms freezing raw inputs, and 6.304 ms waiting at block finish
+only to reclaim observer workers. The independent canonical VM publisher
+simultaneously published 137 results with zero block-energy, public-net, or
+preflight fallback. This satisfies the P4.56 production gate. P4.57 may now
+admit only descendants whose async result was already present and version-valid
+at their own canonical boundary; late, stale, rejected, or incomplete results
+must retain serial fallback without waiting.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
