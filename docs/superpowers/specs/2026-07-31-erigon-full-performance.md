@@ -3351,10 +3351,14 @@ published manifests, and exact active paths leased by those manifests. It has
 no directory listing and does not expose mutable `manifest.json`, ETL files, or
 unpublished data. GET/HEAD, ETag, immutable cache policy, and native Range
 responses are covered by an end-to-end test which fetches and verifies a full
-catalog through the real listener. The systemd template accepts secrets through
-a protected optional environment file, and the Nginx template preserves Range
-at `/snapshots/`. Official signer/key release remains an operator artifact; no
-private key or unofficial trust root is compiled into the binary.
+catalog through the real listener. Runtime bootstrap now uses that same
+allowlisted listener in its regression, restores Pebble plus freezer, reopens
+the chain at the signed boundary, and imports boundary+1; a separate two-node
+P2P test syncs a restored node through its recent tail. The systemd template
+accepts secrets through a protected optional environment file, and the Nginx
+template preserves Range at `/snapshots/`. Official signer/key release remains
+an operator artifact; no private key or unofficial trust root is compiled into
+the binary.
 
 ## Benchmark And Production Acceptance
 

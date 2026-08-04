@@ -237,13 +237,19 @@ func TestSnapshotFetchCmdDownloadsSignedRemoteSnapshot(t *testing.T) {
 	destDir := filepath.Join(root, "downloaded")
 	dataDir := filepath.Join(root, "datadir")
 	identity, pub, sourceCatalog, refs := writeSnapshotCmdRemoteFetchSource(t, sourceDir)
-	server := httptest.NewServer(http.FileServer(http.Dir(sourceDir)))
-	defer server.Close()
+	server := statesnapshots.NewHTTPServer(statesnapshots.HTTPServerConfig{
+		Addr: "127.0.0.1:0",
+		Dir:  sourceDir,
+	})
+	if err := server.Start(); err != nil {
+		t.Fatalf("start signed snapshot HTTP server: %v", err)
+	}
+	defer server.Stop()
 
 	ctx := makeSnapshotRestoreTestContext(t, []string{
 		"--datadir", dataDir,
 		"--snapshot.dir", destDir,
-		"--snapshot.url", server.URL,
+		"--snapshot.url", "http://" + server.ListenAddr(),
 		"--snapshot.fetch.concurrency", "2",
 		"--snapshot.trusted-key", hex.EncodeToString(pub),
 	})
@@ -523,14 +529,20 @@ func TestRuntimeSnapshotBootstrapFetchesAndRestoresCanonicalBoundary(t *testing.
 	if _, err := statesnapshots.PublishSignedSnapshotCatalog(sourceDir, priv); err != nil {
 		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
 	}
-	server := httptest.NewServer(http.FileServer(http.Dir(sourceDir)))
-	defer server.Close()
+	server := statesnapshots.NewHTTPServer(statesnapshots.HTTPServerConfig{
+		Addr: "127.0.0.1:0",
+		Dir:  sourceDir,
+	})
+	if err := server.Start(); err != nil {
+		t.Fatalf("start signed snapshot HTTP server: %v", err)
+	}
+	defer server.Stop()
 
 	ctx := makeSnapshotRestoreTestContext(t, []string{
 		"--datadir", dataDir,
 		"--snapshot.bootstrap",
 		"--snapshot.dir", destDir,
-		"--snapshot.url", server.URL,
+		"--snapshot.url", "http://" + server.ListenAddr(),
 		"--snapshot.reset",
 		"--snapshot.trusted-key", hex.EncodeToString(pub),
 	})
