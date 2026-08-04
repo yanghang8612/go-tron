@@ -273,6 +273,16 @@ var (
 	parallelVMAsyncRetryValidatedCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/validated", nil)
 	parallelVMAsyncRetryRecoveredCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/recovered", nil)
 	parallelVMAsyncRetryErrorsCounter                = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/errors", nil)
+	parallelVMAsyncRetryInputErrorsCounter           = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/input", nil)
+	parallelVMAsyncRetryExecutionErrorsCounter       = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/execution", nil)
+	parallelVMAsyncRetryContractRetErrorsCounter     = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/contract_ret", nil)
+	parallelVMAsyncRetryForwardErrorsCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/forward", nil)
+	parallelVMAsyncRetryMissingInfoErrorsCounter     = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/missing_info", nil)
+	parallelVMAsyncRetryWriteSetErrorsCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/write_set", nil)
+	parallelVMAsyncRetryApplyUnsupportedCounter      = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/apply_unsupported", nil)
+	parallelVMAsyncRetryApplyErrorsCounter           = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/apply", nil)
+	parallelVMAsyncRetryApplyMismatchCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/apply_mismatch", nil)
+	parallelVMAsyncRetryFinishErrorsCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/finish", nil)
 	parallelVMAsyncRetryBudgetSkippedCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/budget_skipped", nil)
 	parallelVMAsyncRetryInfoMismatchCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/info_mismatches", nil)
 	parallelVMAsyncRetryWriteMismatchCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/write_set_mismatches", nil)
@@ -630,7 +640,18 @@ type discardShadowTaskResult struct {
 	retryStartTx         int
 	retryCompletionNanos int64
 	err                  error
+	errorStage           discardShadowTaskErrorStage
 }
+
+type discardShadowTaskErrorStage uint8
+
+const (
+	discardShadowTaskErrorNone discardShadowTaskErrorStage = iota
+	discardShadowTaskErrorInput
+	discardShadowTaskErrorExecution
+	discardShadowTaskErrorContractRet
+	discardShadowTaskErrorForward
+)
 
 type discardShadowOrderedApplyStats struct {
 	candidates int64
@@ -778,6 +799,16 @@ type discardShadowSenderRetryStats struct {
 	actualValidated     int64
 	actualRecovered     int64
 	actualErrors        int64
+	actualInputErrors   int64
+	actualExecutionErrs int64
+	actualContractErrs  int64
+	actualForwardErrors int64
+	actualMissingInfo   int64
+	actualWriteSetErrs  int64
+	actualApplyRejects  int64
+	actualApplyErrors   int64
+	actualApplyMismatch int64
+	actualFinishErrors  int64
 	actualRawKeys       int64
 	actualRawMisses     int64
 	actualVersionCells  int64
@@ -1715,6 +1746,7 @@ func (shadow *discardShadowBlock) preexecuteSenderChainsWithRetryState(cfg disca
 					if ready(&result) {
 						if err := worker.advanceSenderChainWrites(result.writes, forwardRaw); err != nil {
 							result.err = err
+							result.errorStage = discardShadowTaskErrorForward
 						}
 					}
 					results <- result
@@ -2199,6 +2231,7 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 		if retry.resultReady(&result) {
 			if advanceErr := worker.advanceSenderChainWrites(result.writes, retry.forwardRaw); advanceErr != nil {
 				result.err = advanceErr
+				result.errorStage = discardShadowTaskErrorForward
 			}
 		}
 		result.retryCompletionNanos = time.Since(executionStarted).Nanoseconds()
@@ -2290,6 +2323,7 @@ func (retry *discardShadowSenderRetry) enqueueAsyncRetry(txIndex int, statedb *s
 	if err != nil {
 		retry.stats.errors++
 		retry.stats.actualErrors++
+		retry.stats.actualInputErrors++
 		retry.stats.actualQueueDropped += int64(len(tasks))
 		retry.asyncScheduled -= int64(len(tasks))
 		return
@@ -2321,6 +2355,7 @@ func (retry *discardShadowSenderRetry) enqueueAsyncRetry(txIndex int, statedb *s
 		if err != nil {
 			retry.stats.errors++
 			retry.stats.actualErrors++
+			retry.stats.actualInputErrors++
 			retry.stats.actualQueueDropped += int64(len(tasks))
 			retry.asyncScheduled -= int64(len(tasks))
 			return
@@ -2454,6 +2489,7 @@ func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardSh
 			if retry.resultReady(&result) {
 				if advanceErr := worker.advanceSenderChainWrites(result.writes, retry.forwardRaw); advanceErr != nil {
 					result.err = advanceErr
+					result.errorStage = discardShadowTaskErrorForward
 				}
 			}
 			result.retryCompletionNanos = time.Since(started).Nanoseconds()
@@ -2488,6 +2524,7 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 				retry.stats.sharedStateErrors++
 				retry.stats.errors++
 				retry.stats.actualErrors++
+				retry.stats.actualInputErrors++
 			}
 		} else {
 			retry.stats.workerPrefix.jobs++
@@ -2501,6 +2538,7 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 				retry.stats.workerPrefix.errors++
 				retry.stats.errors++
 				retry.stats.actualErrors++
+				retry.stats.actualInputErrors++
 			} else {
 				retry.stats.prefixReuses++
 				retry.stats.actualReuses++
@@ -2541,6 +2579,7 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 	if !ready {
 		retry.stats.errors++
 		retry.stats.actualErrors++
+		retry.recordAsyncResultError(&result)
 	}
 	if result.txIndex < 0 || result.txIndex >= len(retry.results) || result.incarnation != retry.incarnations[result.txIndex] {
 		retry.stats.actualStale++
@@ -2554,6 +2593,39 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 	retry.available[result.txIndex] = ready
 	retry.selectedOK[result.txIndex] = false
 	retry.stats.actualReady++
+}
+
+func (retry *discardShadowSenderRetry) recordAsyncResultError(result *discardShadowTaskResult) {
+	if retry == nil {
+		return
+	}
+	switch {
+	case result == nil:
+		retry.stats.actualMissingInfo++
+	case result.err != nil:
+		switch result.errorStage {
+		case discardShadowTaskErrorContractRet:
+			retry.stats.actualContractErrs++
+		case discardShadowTaskErrorForward:
+			retry.stats.actualForwardErrors++
+		case discardShadowTaskErrorInput:
+			retry.stats.actualInputErrors++
+		default:
+			retry.stats.actualExecutionErrs++
+		}
+	case result.info == nil:
+		retry.stats.actualMissingInfo++
+	case result.writeSetErr != nil:
+		retry.stats.actualWriteSetErrs++
+	case !result.applyEligible:
+		retry.stats.actualApplyRejects++
+	case result.applyErr != nil:
+		retry.stats.actualApplyErrors++
+	case !result.applyMatch:
+		retry.stats.actualApplyMismatch++
+	default:
+		retry.stats.actualMissingInfo++
+	}
 }
 
 func (retry *discardShadowSenderRetry) drainAsyncEvents(boundary int, wait bool) {
@@ -2772,6 +2844,7 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 			retry.stats.errors++
 			if retry.async {
 				retry.stats.actualErrors++
+				retry.stats.actualFinishErrors++
 			}
 			continue
 		}
@@ -2787,6 +2860,7 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 				retry.stats.errors++
 				if retry.async {
 					retry.stats.actualErrors++
+					retry.stats.actualFinishErrors++
 				}
 			}
 			// TransactionInfo and BalanceTrace are the published carriers, so
@@ -2976,6 +3050,16 @@ func recordVMAsyncSenderRetryStats(stats discardShadowSenderRetryStats) {
 	parallelVMAsyncRetryValidatedCounter.Inc(stats.actualValidated)
 	parallelVMAsyncRetryRecoveredCounter.Inc(stats.actualRecovered)
 	parallelVMAsyncRetryErrorsCounter.Inc(stats.actualErrors)
+	parallelVMAsyncRetryInputErrorsCounter.Inc(stats.actualInputErrors)
+	parallelVMAsyncRetryExecutionErrorsCounter.Inc(stats.actualExecutionErrs)
+	parallelVMAsyncRetryContractRetErrorsCounter.Inc(stats.actualContractErrs)
+	parallelVMAsyncRetryForwardErrorsCounter.Inc(stats.actualForwardErrors)
+	parallelVMAsyncRetryMissingInfoErrorsCounter.Inc(stats.actualMissingInfo)
+	parallelVMAsyncRetryWriteSetErrorsCounter.Inc(stats.actualWriteSetErrs)
+	parallelVMAsyncRetryApplyUnsupportedCounter.Inc(stats.actualApplyRejects)
+	parallelVMAsyncRetryApplyErrorsCounter.Inc(stats.actualApplyErrors)
+	parallelVMAsyncRetryApplyMismatchCounter.Inc(stats.actualApplyMismatch)
+	parallelVMAsyncRetryFinishErrorsCounter.Inc(stats.actualFinishErrors)
 	parallelVMAsyncRetryBudgetSkippedCounter.Inc(stats.budgetSkipped)
 	parallelVMAsyncRetryInfoMismatchCounter.Inc(stats.infoMismatches)
 	parallelVMAsyncRetryWriteMismatchCounter.Inc(stats.writeMismatches)
@@ -4159,7 +4243,7 @@ type discardShadowWorker struct {
 
 func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConfig) discardShadowTaskResult {
 	if txIndex < 0 || txIndex >= len(cfg.transactions) || cfg.block == nil {
-		return discardShadowTaskResult{txIndex: txIndex, err: errors.New("missing shadow transaction input")}
+		return discardShadowTaskResult{txIndex: txIndex, err: errors.New("missing shadow transaction input"), errorStage: discardShadowTaskErrorInput}
 	}
 	compareCanonical := txIndex < len(cfg.canonicalInfos) && cfg.canonicalInfos[txIndex] != nil
 	tx := cfg.transactions[txIndex]
@@ -4200,7 +4284,9 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		&worker.infoSlot.internalTxArena,
 		&worker.infoSlot.executionLogArena,
 	)
+	errorStage := discardShadowTaskErrorExecution
 	if err == nil {
+		errorStage = discardShadowTaskErrorContractRet
 		err = ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet))
 	}
 	if err != nil {
@@ -4208,7 +4294,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		worker.dynProps.SetTransactionAccessRecorder(nil)
 		worker.state.RevertToSnapshot(stateSnapshot)
 		worker.dynProps.RevertToSnapshot(dpSnapshot)
-		return discardShadowTaskResult{txIndex: txIndex, class: class, err: err}
+		return discardShadowTaskResult{txIndex: txIndex, class: class, err: err, errorStage: errorStage}
 	}
 
 	shadowInfo := worker.infoSlot.build(tx, result, cfg.block.Number(), cfg.block.Timestamp(), worker.dynProps.AllowTransactionFeePool())

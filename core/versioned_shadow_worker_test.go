@@ -367,6 +367,63 @@ func TestAsyncRetryFailedResultNeverBecomesAvailable(t *testing.T) {
 	if retry.stats.actualExecuted != 1 || retry.stats.actualReady != 1 || retry.stats.actualErrors != 1 {
 		t.Fatalf("async failure stats = %+v", retry.stats)
 	}
+	if retry.stats.actualExecutionErrs != 1 {
+		t.Fatalf("async failure classification = %+v", retry.stats)
+	}
+}
+
+func TestAsyncRetryResultErrorClassification(t *testing.T) {
+	tests := []struct {
+		name   string
+		result discardShadowTaskResult
+		check  func(discardShadowSenderRetryStats) bool
+	}{
+		{
+			name: "input", result: discardShadowTaskResult{err: errors.New("input"), errorStage: discardShadowTaskErrorInput},
+			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualInputErrors == 1 },
+		},
+		{
+			name: "execution", result: discardShadowTaskResult{err: errors.New("execution"), errorStage: discardShadowTaskErrorExecution},
+			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualExecutionErrs == 1 },
+		},
+		{
+			name: "contract ret", result: discardShadowTaskResult{err: errors.New("contract ret"), errorStage: discardShadowTaskErrorContractRet},
+			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualContractErrs == 1 },
+		},
+		{
+			name: "forward", result: discardShadowTaskResult{err: errors.New("forward"), errorStage: discardShadowTaskErrorForward},
+			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualForwardErrors == 1 },
+		},
+		{
+			name: "missing info", result: discardShadowTaskResult{},
+			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualMissingInfo == 1 },
+		},
+		{
+			name: "write set", result: discardShadowTaskResult{info: new(corepb.TransactionInfo), writeSetErr: errors.New("writes")},
+			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualWriteSetErrs == 1 },
+		},
+		{
+			name: "apply unsupported", result: discardShadowTaskResult{info: new(corepb.TransactionInfo)},
+			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualApplyRejects == 1 },
+		},
+		{
+			name: "apply error", result: discardShadowTaskResult{info: new(corepb.TransactionInfo), applyEligible: true, applyErr: errors.New("apply")},
+			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualApplyErrors == 1 },
+		},
+		{
+			name: "apply mismatch", result: discardShadowTaskResult{info: new(corepb.TransactionInfo), applyEligible: true},
+			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualApplyMismatch == 1 },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			retry := new(discardShadowSenderRetry)
+			retry.recordAsyncResultError(&test.result)
+			if !test.check(retry.stats) {
+				t.Fatalf("classification stats = %+v", retry.stats)
+			}
+		})
+	}
 }
 
 func TestAsyncRetryReservationsBoundConcurrentExecution(t *testing.T) {
@@ -627,7 +684,7 @@ func TestAsyncRetryWorkerReportsPrefixFailure(t *testing.T) {
 		t.Fatalf("failed prefix reservation = scheduled:%d stats:%+v", retry.asyncScheduled, retry.stats)
 	}
 	if retry.stats.sharedStateJobs != 1 || retry.stats.sharedStateErrors != 1 ||
-		retry.stats.actualErrors != 1 || retry.stats.errors != 1 {
+		retry.stats.actualErrors != 1 || retry.stats.actualInputErrors != 1 || retry.stats.errors != 1 {
 		t.Fatalf("failed shared-state metrics = %+v", retry.stats)
 	}
 }
