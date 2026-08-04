@@ -2368,6 +2368,13 @@ func (retry *discardShadowSenderRetry) invalidateAsyncSuffix(txIndex int, taskLi
 		if current >= len(retry.source.senderTaskOK) || !retry.source.senderTaskOK[current] {
 			break
 		}
+		// A result can arrive while its incarnation is current, then become stale
+		// when an earlier conflict invalidates the sender suffix. Account that
+		// terminal here; consumeAsyncEvent only sees results already stale on arrival.
+		if retry.available[current] && retry.results[current].incarnation == retry.incarnations[current] &&
+			retry.results[current].contractRetMismatch {
+			retry.stats.actualRetStale++
+		}
 		retry.available[current] = false
 		retry.selectedOK[current] = false
 		retry.selectedAsyncReady[current] = false

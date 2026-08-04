@@ -690,6 +690,32 @@ func TestAsyncRetryContractRetMismatchVersionClassification(t *testing.T) {
 	}
 }
 
+func TestAsyncRetryContractRetMismatchSupersededAfterArrivalIsStale(t *testing.T) {
+	retry := &discardShadowSenderRetry{
+		source: &discardShadowPreexecution{
+			senderTasks:  []discardShadowSenderChainTask{{txIndex: 0}},
+			senderTaskOK: []bool{true},
+			senderNext:   []int{-1},
+		},
+		results:            []discardShadowTaskResult{{txIndex: 0, incarnation: 1, contractRetMismatch: true}},
+		available:          []bool{true},
+		selectedOK:         make([]bool, 1),
+		selectedAsyncReady: make([]bool, 1),
+		incarnations:       []uint32{1},
+	}
+	tasks, deferred := retry.invalidateAsyncSuffix(0, 1)
+	if len(tasks) != 1 || deferred != 0 || tasks[0].incarnation != 2 {
+		t.Fatalf("replacement tasks = %+v deferred=%d", tasks, deferred)
+	}
+	if retry.available[0] || retry.stats.actualRetStale != 1 {
+		t.Fatalf("superseded mismatch state = available:%t stats:%+v", retry.available[0], retry.stats)
+	}
+	_, _ = retry.invalidateAsyncSuffix(0, 1)
+	if retry.stats.actualRetStale != 1 {
+		t.Fatalf("superseded mismatch counted twice: %+v", retry.stats)
+	}
+}
+
 func TestAsyncRetryReservationsBoundConcurrentExecution(t *testing.T) {
 	const transactionCount = 4
 	source := &discardShadowPreexecution{

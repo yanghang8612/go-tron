@@ -3100,6 +3100,19 @@ Transfer publisher at residue 192. The production gate remains open until this
 build returns non-zero audited residue-64 publication with zero correctness/
 fallback failures and bounded queue and CPU growth.
 
+The first fresh-process P4.59 window proved a real residue-64 publication: one
+height interval containing a residue-64 VM publisher and no legacy residue-zero
+VM publisher advanced the publication audit from 15/15 to 16/16. At observer
+cohort 117 the aggregate publisher remained 31/31 with zero correctness,
+frozen-raw, resource, or Transfer errors. It also exposed a diagnostics-only
+terminal edge: a result-code mismatch may arrive while its incarnation is
+current, then become stale when an earlier conflict invalidates the retained
+sender suffix. The result was already unavailable to publication, but the
+`stale` partition previously counted only results stale at arrival. Suffix
+invalidation now classifies an available mismatch before incrementing its
+incarnation, so total mismatches remain exactly partitioned without weakening
+read-version or publication readiness.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
