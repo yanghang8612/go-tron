@@ -2861,6 +2861,39 @@ admit only descendants whose async result was already present and version-valid
 at their own canonical boundary; late, stale, rejected, or incomplete results
 must retain serial fallback without waiting.
 
+#### P4.57: Boundary-ready async VM retry publication
+
+Canonical publication is enabled first on `block % 1024 == 256`, one quarter of
+the proven retry observer and disjoint from the existing block-start VM
+publisher at `block % 1024 == 0`. The canonical loop performs only a
+non-blocking event drain. `selectedResultForPublication` admits a result only if
+the newest incarnation had already arrived at that transaction's boundary and
+the exact read-version, sender predecessor, barrier, and commutative-delta
+checks all passed. Because retry work is launched only after the conflict
+transaction reaches its own boundary, this publishes descendants only; the
+conflict transaction itself always retains serial execution.
+
+Publication repeats both ordered resource gates against the live prefix.
+Public bandwidth is recovered, limit-checked, and temporarily rebased through
+the existing reservation override. Block energy is derived from the retry's
+retained receipt and the exact current accumulator using the same
+`blockEnergyUsageDelta` function as serial execution; the retry WriteSet must
+not contain that out-of-transaction cell. Full StateDB/raw-KV preflight runs
+before mutation. Any missing resource carrier, limit rejection, version
+conflict, unsupported write family, late result, or unavailable result falls
+through to normal serial execution without waiting.
+
+Dedicated `core/parallel_vm/retry/async_publish/` metrics count selected blocks,
+candidates, publications, block-energy/public-net/preflight fallbacks, fatal
+publication errors, publication time, and post-publication WriteSet audit.
+The deterministic integration fixture inserts unrelated canonical work between
+the conflict and its VM sender descendant, proves the descendant is published
+without a wait, and compares every TransactionInfo, public-bandwidth value,
+block-energy value, balance result, and final StateDB root with serial
+execution. The production gate requires non-zero publications and post-publish
+WriteSet matches with zero mismatch, error, resource fallback, or preflight
+fallback before the cohort is widened.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

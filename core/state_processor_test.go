@@ -517,7 +517,7 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	}
 }
 
-func TestProcessBlockRunsAsyncVMSenderRetryCanary(t *testing.T) {
+func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 	base := newTestState(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
@@ -528,12 +528,15 @@ func TestProcessBlockRunsAsyncVMSenderRetryCanary(t *testing.T) {
 
 	owner := testProcessorAddr(1)
 	funder := testProcessorAddr(3)
+	churnOwner := testProcessorAddr(5)
+	churnRecipient := testProcessorAddr(6)
 	contractAddr := testProcessorAddr(0x80)
-	for _, address := range []tcommon.Address{owner, funder, params.BlackholeAddress} {
+	for _, address := range []tcommon.Address{owner, funder, churnOwner, churnRecipient, params.BlackholeAddress} {
 		base.CreateAccount(address, corepb.AccountType_Normal)
 	}
 	base.AddBalance(owner, 100_000_000)
 	base.AddBalance(funder, 100_000_000)
+	base.AddBalance(churnOwner, 100_000_000)
 	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
 	base.SetContract(contractAddr, &contractpb.SmartContract{
 		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
@@ -558,8 +561,14 @@ func TestProcessBlockRunsAsyncVMSenderRetryCanary(t *testing.T) {
 		makeTestTriggerTx(1, contractAddr, []byte{0x01}),
 		makeTestTransferTx(3, 1, 2_000_000),
 		makeTestTriggerTx(1, contractAddr, []byte{0x02}),
-		makeTestTriggerTx(1, contractAddr, []byte{0x03}),
 	}
+	// The conflict at tx 2 launches a two-result sender suffix. Unrelated
+	// canonical work gives its descendant a deterministic opportunity to finish
+	// before its own boundary without introducing any wait in production code.
+	for range 256 {
+		transactions = append(transactions, makeTestTransferTx(5, 6, 1))
+	}
+	transactions = append(transactions, makeTestTriggerTx(1, contractAddr, []byte{0x03}))
 	transactionProtos := make([]*corepb.Transaction, len(transactions))
 	for txIndex, tx := range transactions {
 		if tx.ContractType() == corepb.Transaction_Contract_TriggerSmartContract {
@@ -570,7 +579,7 @@ func TestProcessBlockRunsAsyncVMSenderRetryCanary(t *testing.T) {
 	}
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
-			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+			Number: int64(vmSenderRetryPublishInterval + vmSenderRetryPublishOffset), Timestamp: 33_000,
 		}},
 		Transactions: transactionProtos,
 	})
@@ -604,6 +613,15 @@ func TestProcessBlockRunsAsyncVMSenderRetryCanary(t *testing.T) {
 	sharedErrorsBefore := parallelVMAsyncRetrySharedErrorsCounter.Snapshot().Count()
 	sharedValueBlocksBefore := versionedShadowSharedValueBlocksCounter.Snapshot().Count()
 	sharedValueHitsBefore := versionedShadowSharedValueHitsCounter.Snapshot().Count()
+	publishBlocksBefore := parallelVMAsyncRetryPublishBlocksCounter.Snapshot().Count()
+	publishCandidatesBefore := parallelVMAsyncRetryPublishCandidatesCounter.Snapshot().Count()
+	retryPublishedBefore := parallelVMAsyncRetryPublishedCounter.Snapshot().Count()
+	publishErrorsBefore := parallelVMAsyncRetryPublishErrorsCounter.Snapshot().Count()
+	publishFallbacksBefore := parallelVMAsyncRetryPublishEnergyFallbackCounter.Snapshot().Count() +
+		parallelVMAsyncRetryPublishNetFallbackCounter.Snapshot().Count() +
+		parallelVMAsyncRetryPublishPreflightCounter.Snapshot().Count()
+	publishWriteOKBefore := parallelVMAsyncRetryPublishWriteOKCounter.Snapshot().Count()
+	publishWriteMismatchBefore := parallelVMAsyncRetryPublishWriteMismatchCounter.Snapshot().Count()
 	mismatchesBefore := parallelVMAsyncRetryInfoMismatchCounter.Snapshot().Count() +
 		parallelVMAsyncRetryWriteMismatchCounter.Snapshot().Count() +
 		parallelVMAsyncRetryBalanceMismatchCounter.Snapshot().Count()
@@ -634,8 +652,8 @@ func TestProcessBlockRunsAsyncVMSenderRetryCanary(t *testing.T) {
 	candidates := parallelVMAsyncRetryCandidatesCounter.Snapshot().Count() - candidatesBefore
 	validated := parallelVMAsyncRetryValidatedCounter.Snapshot().Count() - validatedBefore
 	recovered := parallelVMAsyncRetryRecoveredCounter.Snapshot().Count() - recoveredBefore
-	if candidates != validated || candidates != recovered {
-		t.Fatalf("async VM retry candidates=%d validated=%d recovered=%d", candidates, validated, recovered)
+	if candidates != 1 || validated != 0 || recovered != 0 {
+		t.Fatalf("async VM retry candidates=%d validated=%d recovered=%d, want 1/0/0 for a published result", candidates, validated, recovered)
 	}
 	if failures := parallelVMAsyncRetryErrorsCounter.Snapshot().Count() - errorsBefore; failures != 0 {
 		t.Fatalf("async VM retry errors = %d, want 0", failures)
@@ -664,8 +682,32 @@ func TestProcessBlockRunsAsyncVMSenderRetryCanary(t *testing.T) {
 	if mismatches := mismatchesAfter - mismatchesBefore; mismatches != 0 {
 		t.Fatalf("VM retry mismatches = %d, want 0", mismatches)
 	}
+	if blocks := parallelVMAsyncRetryPublishBlocksCounter.Snapshot().Count() - publishBlocksBefore; blocks != 1 {
+		t.Fatalf("async VM retry publish blocks = %d, want 1", blocks)
+	}
+	if candidates := parallelVMAsyncRetryPublishCandidatesCounter.Snapshot().Count() - publishCandidatesBefore; candidates != 1 {
+		t.Fatalf("async VM retry publish candidates = %d, want 1", candidates)
+	}
+	if published := parallelVMAsyncRetryPublishedCounter.Snapshot().Count() - retryPublishedBefore; published != 1 {
+		t.Fatalf("async VM retry publications = %d, want 1", published)
+	}
+	if failures := parallelVMAsyncRetryPublishErrorsCounter.Snapshot().Count() - publishErrorsBefore; failures != 0 {
+		t.Fatalf("async VM retry publish errors = %d, want 0", failures)
+	}
+	publishFallbacksAfter := parallelVMAsyncRetryPublishEnergyFallbackCounter.Snapshot().Count() +
+		parallelVMAsyncRetryPublishNetFallbackCounter.Snapshot().Count() +
+		parallelVMAsyncRetryPublishPreflightCounter.Snapshot().Count()
+	if fallbacks := publishFallbacksAfter - publishFallbacksBefore; fallbacks != 0 {
+		t.Fatalf("async VM retry publish fallbacks = %d, want 0", fallbacks)
+	}
+	if matches := parallelVMAsyncRetryPublishWriteOKCounter.Snapshot().Count() - publishWriteOKBefore; matches != 1 {
+		t.Fatalf("async VM retry publish write-set matches = %d, want 1", matches)
+	}
+	if mismatches := parallelVMAsyncRetryPublishWriteMismatchCounter.Snapshot().Count() - publishWriteMismatchBefore; mismatches != 0 {
+		t.Fatalf("async VM retry publish write-set mismatches = %d, want 0", mismatches)
+	}
 	if published := parallelVMPublishedCounter.Snapshot().Count() - vmPublishedBefore; published != 1 {
-		t.Fatalf("original VM publications = %d, want 1 before retry publication is enabled", published)
+		t.Fatalf("VM publications = %d, want 1 async retry descendant", published)
 	}
 	for txIndex := range serialInfos {
 		if !proto.Equal(serialInfos[txIndex], parallelInfos[txIndex]) {

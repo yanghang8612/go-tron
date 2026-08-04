@@ -29,6 +29,11 @@ const (
 	// cohort, avoiding two background retry families in the same block while
 	// collecting four times the formal VM publication coverage.
 	vmSenderRetryObserveInterval = discardShadowAsyncRetryInterval
+	// Publish one quarter of the proven async VM retry cohorts. Residue 256 is
+	// disjoint from the existing block-start VM publisher at residue zero, so a
+	// production gate can attribute every canonical result to exactly one path.
+	vmSenderRetryPublishInterval = uint64(1024)
+	vmSenderRetryPublishOffset   = vmSenderRetryObserveInterval
 	// Publish one of every sixteen sampled VM cohorts. The other fifteen keep
 	// running serially as an independent reference while the ordered publisher
 	// gains mainnet exposure.
@@ -61,6 +66,10 @@ func useVMSenderChainPublication(blockNum uint64) bool {
 
 func useVMSenderRetryObservation(blockNum uint64) bool {
 	return blockNum > 0 && blockNum%discardShadowSampleInterval == 0 && blockNum%vmSenderRetryObserveInterval == 0
+}
+
+func useVMSenderRetryPublication(blockNum uint64) bool {
+	return useVMSenderRetryObservation(blockNum) && blockNum%vmSenderRetryPublishInterval == vmSenderRetryPublishOffset
 }
 
 var (
@@ -319,6 +328,16 @@ var (
 	parallelVMAsyncRetrySharedJobsCounter            = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/shared_state/jobs", nil)
 	parallelVMAsyncRetrySharedCopyNanosCounter       = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/shared_state/copy_nanos", nil)
 	parallelVMAsyncRetrySharedErrorsCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/shared_state/errors", nil)
+	parallelVMAsyncRetryPublishBlocksCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/blocks", nil)
+	parallelVMAsyncRetryPublishCandidatesCounter     = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/candidates", nil)
+	parallelVMAsyncRetryPublishedCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/published", nil)
+	parallelVMAsyncRetryPublishEnergyFallbackCounter = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/fallback/block_energy", nil)
+	parallelVMAsyncRetryPublishNetFallbackCounter    = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/fallback/public_net", nil)
+	parallelVMAsyncRetryPublishPreflightCounter      = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/fallback/preflight", nil)
+	parallelVMAsyncRetryPublishErrorsCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/errors", nil)
+	parallelVMAsyncRetryPublishNanosCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/publication_nanos", nil)
+	parallelVMAsyncRetryPublishWriteOKCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/audit/write_set_matches", nil)
+	parallelVMAsyncRetryPublishWriteMismatchCounter  = metrics.NewRegisteredCounter("core/parallel_vm/retry/async_publish/audit/write_set_mismatches", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -3089,6 +3108,8 @@ func recordVMAsyncSenderRetryStats(stats discardShadowSenderRetryStats) {
 	parallelVMAsyncRetrySharedJobsCounter.Inc(stats.sharedStateJobs)
 	parallelVMAsyncRetrySharedCopyNanosCounter.Inc(stats.sharedStateCopyNs)
 	parallelVMAsyncRetrySharedErrorsCounter.Inc(stats.sharedStateErrors)
+	parallelVMAsyncRetryPublishWriteOKCounter.Inc(stats.publish.writeMatches)
+	parallelVMAsyncRetryPublishWriteMismatchCounter.Inc(stats.publish.writeMismatches)
 }
 
 // validateBlockStartReadSet applies Erigon's read-version rule to one retained
@@ -3329,6 +3350,23 @@ func (pre *discardShadowPreexecution) projectBlockEnergyBoundary(txIndex int, dy
 		baseline: baseline,
 		expected: baseline + delta,
 	}
+}
+
+// vmRetryBlockEnergyBoundary derives the serial block accumulator post-image
+// from a boundary-ready retry receipt. Unlike the block-start projection, this
+// is evaluated against the exact live prefix immediately before publication.
+func vmRetryBlockEnergyBoundary(result *discardShadowTaskResult, dynProps *state.DynamicProperties, forkStats forks.ForkStatsReader, prevBlockTime int64, forkPassCache *forks.VersionPassCache) (baseline, expected int64, ok bool) {
+	if !preexecutedResultReady(result) || dynProps == nil || result.info.GetReceipt() == nil {
+		return 0, 0, false
+	}
+	blockEnergyKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "block_energy_usage"}
+	if _, exists := result.writes[blockEnergyKey]; exists {
+		return 0, 0, false
+	}
+	receipt := result.info.GetReceipt()
+	baseline = dynProps.BlockEnergyUsage()
+	delta := blockEnergyUsageDelta(dynProps, forkStats, prevBlockTime, receipt.GetEnergyUsageTotal(), receipt.GetEnergyUsage(), receipt.GetOriginEnergyUsage(), forkPassCache)
+	return baseline, baseline + delta, true
 }
 
 // blockEnergyBoundaryForPublication admits the already projected block-level

@@ -75,6 +75,25 @@ func TestVMSenderRetryObservationCohort(t *testing.T) {
 	}
 }
 
+func TestVMSenderRetryPublicationCohort(t *testing.T) {
+	tests := []struct {
+		blockNum uint64
+		want     bool
+	}{
+		{blockNum: 0, want: false},
+		{blockNum: 256, want: true},
+		{blockNum: 512, want: false},
+		{blockNum: 1_024, want: false},
+		{blockNum: 1_280, want: true},
+		{blockNum: 2_304, want: true},
+	}
+	for _, test := range tests {
+		if got := useVMSenderRetryPublication(test.blockNum); got != test.want {
+			t.Fatalf("block %d VM retry publication cohort = %t, want %t", test.blockNum, got, test.want)
+		}
+	}
+}
+
 func TestVMSenderChainPublicationCohort(t *testing.T) {
 	tests := []struct {
 		blockNum uint64

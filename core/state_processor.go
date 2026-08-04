@@ -893,6 +893,12 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				}
 				if vmAsyncRetry {
 					vmSenderRetry = newDiscardShadowAsyncVMSenderRetry(vmSenderChainPreexecution, len(transactions))
+					if vmSenderRetry != nil {
+						vmSenderRetry.publish = useVMSenderRetryPublication(block.Number())
+						if vmSenderRetry.publish {
+							parallelVMAsyncRetryPublishBlocksCounter.Inc(1)
+						}
+					}
 				}
 				if actualAsyncRetry {
 					// Use three sampled cohorts for the real background retry
@@ -1120,6 +1126,89 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				}
 				parallelTransferPublicationNanosCounter.Inc(time.Since(publishedStarted).Nanoseconds())
 				continue
+			}
+		}
+		if options.parallelTransfers && vmSenderRetry != nil {
+			if retryResult, found := vmSenderRetry.selectedResultForPublication(i); found {
+				parallelVMAsyncRetryPublishCandidatesCounter.Inc(1)
+				parallelVMCandidatesCounter.Inc(1)
+				if retryResult.senderVersioned {
+					parallelVMChainCandidatesCounter.Inc(1)
+				}
+				if retryResult.publicNetValid {
+					parallelVMPublicNetReservationsCounter.Inc(1)
+				}
+				blockEnergyBaseline, blockEnergyExpected, blockEnergyAdmitted := vmRetryBlockEnergyBoundary(
+					retryResult, dynProps, statedb, prevBlockTime, forkPassCache,
+				)
+				switch {
+				case !blockEnergyAdmitted:
+					parallelVMAsyncRetryPublishEnergyFallbackCounter.Inc(1)
+					parallelVMBlockEnergyFallbackCounter.Inc(1)
+				default:
+					publicNetOverride, publicNetAdmitted := overridePublicNetReservation(retryResult, dynProps)
+					if !publicNetAdmitted {
+						parallelVMAsyncRetryPublishNetFallbackCounter.Inc(1)
+						parallelVMPublicNetFallbackCounter.Inc(1)
+						break
+					}
+					if err := statedb.ValidateTransactionWriteSetApply(retryResult.writes, dynProps, transactionDB); err != nil {
+						publicNetOverride.restore()
+						parallelVMAsyncRetryPublishPreflightCounter.Inc(1)
+						parallelVMPreflightFallbackCounter.Inc(1)
+						break
+					}
+					publishedStarted := time.Now()
+					versionedShadow.recorder.RestoreReadSet(retryResult.reads)
+					publishErr := statedb.ApplyTransactionWriteSetRecorded(retryResult.writes, dynProps, transactionDB, &versionedShadow.recorder)
+					publicNetOverride.restore()
+					if publishErr != nil {
+						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
+						parallelVMErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish async VM sender retry: %w", i, publishErr)
+					}
+					statedb.FinalizeTransaction()
+					statedb.AppendBalanceTraceTransaction(retryResult.balanceTrace)
+					if collectTxInfos {
+						txInfos[i] = retryResult.info
+					}
+					txHash := tx.Hash()
+					if len(discardCfg.canonicalBalanceTraces) == len(transactions) {
+						discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
+					}
+					versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
+					transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(retryResult.writes))
+					if err := flushDomainChanges(i, domainChangeMark); err != nil {
+						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
+						parallelVMErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, err
+					}
+					if dynProps.BlockEnergyUsage() != blockEnergyBaseline {
+						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
+						parallelVMErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish async VM retry changed block energy before settlement", i)
+					}
+					if blockEnergyExpected != blockEnergyBaseline {
+						dynProps.SetBlockEnergyUsage(blockEnergyExpected)
+					}
+					vmSenderRetry.markPublished(i)
+					parallelVMAsyncRetryPublishedCounter.Inc(1)
+					parallelVMPublishedCounter.Inc(1)
+					parallelVMBlockEnergyPublishedCounter.Inc(1)
+					if retryResult.senderVersioned {
+						parallelVMChainPublishedCounter.Inc(1)
+					}
+					if retryResult.publicNetValid {
+						parallelVMPublicNetPublishedCounter.Inc(1)
+						if publicNetOverride.rebased {
+							parallelVMPublicNetRebasedCounter.Inc(1)
+						}
+					}
+					elapsed := time.Since(publishedStarted).Nanoseconds()
+					parallelVMAsyncRetryPublishNanosCounter.Inc(elapsed)
+					parallelVMPublicationNanosCounter.Inc(elapsed)
+					continue
+				}
 			}
 		}
 		if vmSenderChainPublication {
