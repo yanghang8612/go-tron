@@ -252,7 +252,7 @@
   exact read versions plus admitted public-net and block-energy carriers.
 - [x] Prove serial equivalence for independent and forwarded VM sender results,
   including TransactionInfo, BalanceTrace, resources, and final state root.
-- [ ] Run the small VM canonical-publication production gate before expanding
+- [x] Run the small VM canonical-publication production gate before expanding
   the cohort.
 - [ ] Add VM retry incarnations only after the first canonical cohort retains
   exact production parity.

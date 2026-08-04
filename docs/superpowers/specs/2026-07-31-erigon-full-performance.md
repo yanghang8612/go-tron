@@ -2672,6 +2672,49 @@ fallback caused by a projection mismatch, continued exact sampled parity, and
 an unchanged canonical block/receipt validation record before expanding the
 cohort or adding VM retry incarnations.
 
+The first publication window correctly preserved canonical state and receipts
+but failed the stricter diagnostic gate. Over 246 seconds it published 78/78
+VM candidates, including seven sender-chain successors and 15 public-net
+reservations, with zero publisher/resource error. However, the independent
+public-net observer reported eight WriteSet mismatches, exactly matching the
+eight actual rebases. The ordered publisher had changed the usage value but
+retained a worker `public_net_time` entry when the canonical setter would omit
+that same-value write. Final state was equal, but WriteSet presence was not;
+the window was therefore rejected rather than treated as success.
+
+The conditional override now reproduces both ordered values and canonical key
+presence. It temporarily inserts or removes `public_net_time` according to the
+exact boundary's stored value, uses an independently owned encoded post-image,
+and restores the worker's original usage/time entries after publication. This
+also tightens the existing Transfer publisher. Unit coverage exercises both
+directions (worker time write becoming a serial no-op, and an absent worker
+time write becoming required), restoration, and a real three-VM publication
+whose two rebases must remain exact in the sampled observer.
+
+The corrected production gate covered 198 seconds, 14,554 blocks, and 456,548
+transactions (73.51 blocks/s and 2,305.8 transactions/s, at 31.37
+transactions/block). Fifteen publication cohorts preexecuted 363 VM results
+and formally published all 62 admitted candidates. Seven were forwarded
+sender-chain successors; all 15 public-net reservations published, including
+eight actual rebases; all 62 block-energy post-images published. Publisher,
+preflight, public-net, and block-energy errors/fallbacks were zero. Another
+298 version-conflicted and three unavailable results safely remained serial.
+Preexecution cost 3.26 ms per cohort and ordered publication averaged 87.3 us
+per published VM transaction.
+
+Across 229 independent sampled blocks in the same window, the observer
+executed 5,579 VM transactions and admitted 1,116 final candidates. Block
+energy matched 1,116/1,116 with zero missing or mismatch. Public bandwidth
+matched 287/287, including 197 projected rebases, again with zero missing,
+limit rejection, or mismatch. Strict comparison accepted 919 candidates and
+the other 197 differed only in their correctly projected public-bandwidth
+cells; other-state, TransactionInfo, and BalanceTrace mismatches were zero.
+The 57 unavailable VM results were all safe independent-execution failures.
+Canonical Transfer simultaneously published 28,128/28,128 candidates and
+11,866/11,866 public-net reservations (8,214 rebased) without error; async
+retry published 269/269 byte-exact WriteSets with no private-prefix work. The
+small canonical VM cohort therefore passes its production parity gate.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
