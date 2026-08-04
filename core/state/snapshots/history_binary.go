@@ -1357,10 +1357,15 @@ func verifyStateDomainChangeBinaryAccessorCoverage(historyRef, accessorRef Segme
 
 func createStateDomainChangeBinaryTempFile(dir, relPath string) (*os.File, string, error) {
 	abs := filepath.Join(dir, relPath)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+	tempDir := filepath.Dir(abs)
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
 		return nil, "", err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".*.tmp")
+	return createStateDomainChangeBinaryTempFileInDir(tempDir, filepath.Base(abs))
+}
+
+func createStateDomainChangeBinaryTempFileInDir(dir, base string) (*os.File, string, error) {
+	tmp, err := os.CreateTemp(dir, "."+base+".*.tmp")
 	if err != nil {
 		return nil, "", err
 	}

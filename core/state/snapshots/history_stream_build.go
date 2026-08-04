@@ -944,12 +944,18 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	if recordCount > math.MaxUint32 {
 		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v4 count %d exceeds uint32 record index", recordCount)
 	}
-	groupPayloadTmp, groupPayloadName, err := createStateDomainChangeBinaryTempFile(dir, accessorRef.Path+".groups")
+	accessorAbs := filepath.Join(dir, accessorRef.Path)
+	accessorDir := filepath.Dir(accessorAbs)
+	if err := os.MkdirAll(accessorDir, 0o755); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	accessorBase := filepath.Base(accessorAbs)
+	groupPayloadTmp, groupPayloadName, err := createStateDomainChangeBinaryTempFileInDir(accessorDir, accessorBase+".groups")
 	if err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	defer func() { _ = groupPayloadTmp.Close(); _ = os.Remove(groupPayloadName) }()
-	groupOffsetsTmp, groupOffsetsName, err := createStateDomainChangeBinaryTempFile(dir, accessorRef.Path+".group-offsets")
+	groupOffsetsTmp, groupOffsetsName, err := createStateDomainChangeBinaryTempFileInDir(accessorDir, accessorBase+".group-offsets")
 	if err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
@@ -973,7 +979,7 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	// exact/group files are private assembly inputs and are never published.
 	// Their buffered writers are flushed above; only the assembled accessor
 	// needs fsync before its atomic rename, matching Erigon's temp-file policy.
-	accessorTmp, accessorTmpName, err := createStateDomainChangeBinaryTempFile(dir, accessorRef.Path)
+	accessorTmp, accessorTmpName, err := createStateDomainChangeBinaryTempFileInDir(accessorDir, accessorBase)
 	if err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
