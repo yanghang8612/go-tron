@@ -355,6 +355,7 @@ func TestBuildStateDomainChangeHistoryStreamsAccessorETL(t *testing.T) {
 	if len(result.refs) != 3 {
 		t.Fatalf("streamed refs = %+v, want history+accessor+index", result.refs)
 	}
+	assertAccessorMatchesPostCompressionRebuild(t, dir, result.refs[0], result.refs[1])
 	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, result.refs[0], result.refs[2], result.refs[1]); err != nil {
 		t.Fatalf("verify streamed companions: %v", err)
 	}

@@ -115,6 +115,11 @@ func TestCompactedAccessorMatchesPostCompressionRebuild(t *testing.T) {
 	}
 	historyRef := compactionRefByKind(t, result, SegmentHistory)
 	streamedRef := compactionRefByKind(t, result, SegmentAccessor)
+	assertAccessorMatchesPostCompressionRebuild(t, dir, historyRef, streamedRef)
+}
+
+func assertAccessorMatchesPostCompressionRebuild(t *testing.T, dir string, historyRef, streamedRef SegmentRef) {
+	t.Helper()
 	rebuiltRef, _, err := buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir, historyRef, SegmentRef{
 		Dataset:          SegmentDatasetStateDomainChange,
 		Kind:             SegmentAccessor,

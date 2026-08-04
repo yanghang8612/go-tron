@@ -108,10 +108,16 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if err := writeStateDomainChangeBinaryHeaderTo(indexTmp, stateDomainChangeBinaryIndexMagic, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
 		return result, err
 	}
+	accessorCollectors, err := newStateDomainChangeBinaryAccessorV4Collectors(opts)
+	if err != nil {
+		return result, err
+	}
+	defer accessorCollectors.Close()
 
 	recordWriter := stateDomainChangeHistoryRecordETLWriter{
 		segment:    segmentTmp,
 		index:      indexTmp,
+		accessors:  accessorCollectors,
 		ref:        ref,
 		expected:   recordCount,
 		segmentOff: recordOffset,
@@ -164,7 +170,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		AggregationSteps: ref.AggregationSteps,
 		Path:             stateDomainChangeBinaryAccessorPath(segmentRef.Path),
 	}
-	accessorRef, result.accessorETL, err = buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir, segmentRef, accessorRef, opts)
+	accessorRef, result.accessorETL, err = accessorCollectors.Build(dir, accessorRef, recordCount)
 	if err != nil {
 		return result, err
 	}
@@ -374,6 +380,7 @@ func stateDomainChangeHistoryRecordETLSortKey(change *rawdb.StateDomainChange, o
 type stateDomainChangeHistoryRecordETLWriter struct {
 	segment      *os.File
 	index        *os.File
+	accessors    *stateDomainChangeBinaryAccessorV4Collectors
 	ref          SegmentRef
 	expected     uint64
 	count        uint64
@@ -414,6 +421,11 @@ func (w *stateDomainChangeHistoryRecordETLWriter) WriteChange(change *rawdb.Stat
 	}
 	if w.previous != nil && compareStateDomainChangeForBinary(w.previous, change) > 0 {
 		return errors.New("snapshots: state-domain-change record ETL rows are not ordered")
+	}
+	if w.accessors != nil {
+		if err := w.accessors.Collect(change, w.segmentOff, w.count); err != nil {
+			return err
+		}
 	}
 	if !w.haveIndex {
 		w.currentIndex = stateDomainChangeBinaryTxOffset{txNum: change.TxNum, offset: w.segmentOff, recordIndex: w.count, count: 1}

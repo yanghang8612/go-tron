@@ -3496,6 +3496,32 @@ P5.9 and P5.10, so no timing gain is claimed from that small local sample; the
 admitted result is the eliminated full decode pass plus byte-equivalent output,
 subject to the fresh snap-mode large-file production gate.
 
+#### P5.11: Streamed accessor collection during base collation
+
+Every new 390,625-txNum aggregation leaf used the same redundant accessor pass
+as compaction. The history record ETL first sorted hot changes into canonical
+tx/sequence order and wrote the uncompressed logical segment plus txNum index.
+After compression, the builder reopened that segment and decoded every record
+again solely to populate the two accessor ETL orders. Unlike a geometric merge,
+this cost occurs for every base leaf, so it directly determines whether the
+cold lifecycle can remain ahead of sustained import.
+
+The shared ordered record writer now owns an optional accessor collector pair.
+Cold collation and compaction both attach the same v4 collectors, so the writer
+validates ordering and range first, records the exact logical offset/index, and
+then emits the history frame and txNum index. The post-compression accessor
+rebuild function remains available as an independent repair and verification
+path, but it is no longer on either normal write path. The mandatory finished-
+segment check still decodes the compressed output before manifest publication.
+
+The existing forced-spill cold-build test now exercises this path with a one-
+byte ETL buffer. It verifies companion coverage and additionally requires the
+streamed accessor to be byte-identical to an independent post-compression
+rebuild; both that case and the compaction equivalent passed twenty consecutive
+runs. Base-leaf output format, manifest ordering, compression, and prune gates
+are unchanged. Large-file wall-clock and lifecycle-lag impact remains assigned
+to the fresh snap-mode production gate.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go
