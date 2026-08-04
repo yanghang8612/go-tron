@@ -178,6 +178,9 @@ type BlockChain struct {
 	stateTxRangeSeedHook        func(uint64)
 	transactionLookupETLOptions etl.Options
 	stateHistoryIndexETLOptions etl.Options
+	// stateHistoryIndexMu serializes snapshot-based history-index passes while
+	// allowing chainmu to be released during their read-only ETL work.
+	stateHistoryIndexMu sync.Mutex
 
 	currentBlock atomic.Pointer[types.Block]
 	// archiveHead is the newest block whose async state layer has been fully
@@ -2127,6 +2130,11 @@ func (bc *BlockChain) WaitForFlushSettled() {
 // and equally self-consistent at the last async-flushed block after a crash,
 // so startup can trust the persisted head without any state rebuild.
 func (bc *BlockChain) Close() error {
+	// A snapshot-based history-index pass writes into bc.db after releasing
+	// chainmu. Join it before closing/flushing the database. The stage always
+	// takes this mutex before chainmu, so preserve that lock order here.
+	bc.stateHistoryIndexMu.Lock()
+	defer bc.stateHistoryIndexMu.Unlock()
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 	if bc.closed.Swap(true) {

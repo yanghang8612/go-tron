@@ -1846,6 +1846,22 @@ row. Sync exposes pass, block, change, ETL applied/input/batch, interruption,
 and duration counters under `sync/stage/state_history_index/*` for the P4.39
 production gate.
 
+A later online concurrency profile showed the range iterator had removed the
+history-read CPU bottleneck but not its queueing delay: six of eight concurrent
+archive requests were waiting in `historyReaderAtContext` for `chainmu`, behind
+either one 32-block sync insertion batch or a 4,096-block history-index ETL
+pass. Sync insertion now retains its range executor and signature prewarm but
+hands `chainmu` back after each fully published block. The history stage now
+captures a committed-layer plus Pebble MVCC snapshot under the lock, performs
+its read-only scan and sorted load without `chainmu`, and reacquires the lock
+only to compare-and-publish the hash-bound watermark. A concurrent rewind or
+inline advance changes the expected progress row and prevents stale watermark
+publication; close is serialized with the stage pass. Non-snapshot test stores
+retain the original locked fallback. This keeps canonical block publication
+atomic while reducing the largest archive-reader exclusion regions from a
+whole sync batch/ETL pass to one block or the two short stage planning/publish
+sections.
+
 After the initial deployment exposed one-collector-per-fragmented-drain
 behavior, the production path was tightened in two steps: require at least 256
 solidified blocks per ordinary pass, and settle a continuously supplied deep

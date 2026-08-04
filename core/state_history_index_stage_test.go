@@ -115,3 +115,71 @@ func TestBlockChainSyncInsertDefersStateHistoryIndexUntilSolidifiedStage(t *test
 		t.Fatalf("StateHistoryIndex progress = %+v ok=%v err=%v", row, ok, err)
 	}
 }
+
+func TestStateHistoryIndexStage_RebuildsPebbleSnapshotWithoutChainLock(t *testing.T) {
+	diskdb, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := cloneMainnetChainConfig()
+	cfg.HistoryEnabled = true
+	genesis := &params.Genesis{
+		Config: cfg,
+		Accounts: []params.GenesisAccount{{
+			Address: testInsertAddr(1),
+			Balance: 99_000_000_000_000_000,
+		}},
+		DynamicProperties: map[string]int64{"next_maintenance_time": 1<<62 - 1},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		diskdb.Close()
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(rawdb.WrapKeyValueStore(diskdb)), cfg)
+	if err != nil {
+		diskdb.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := bc.Close(); err != nil {
+			t.Errorf("close blockchain: %v", err)
+		}
+		if err := diskdb.Close(); err != nil {
+			t.Errorf("close pebble: %v", err)
+		}
+	})
+
+	block := buildTransferBlock(t, 1, 3000, genesisHash, testInsertAddr(1), 5_000_000)
+	if err := bc.InsertSyncBlocksWithStageHook([]*types.Block{block}, nil); err != nil {
+		t.Fatalf("insert sync block: %v", err)
+	}
+	dynProps := bc.cachedDynProps()
+	dynProps.SetLatestSolidifiedBlockNum(int64(block.Number()))
+	bc.storeDynPropsCache(dynProps)
+
+	checkedUnlocked := false
+	result, err := bc.AdvanceStateHistoryIndexStageInterruptible(1, func() bool {
+		if checkedUnlocked {
+			return false
+		}
+		checkedUnlocked = bc.chainmu.TryLock()
+		if checkedUnlocked {
+			bc.chainmu.Unlock()
+		}
+		return false
+	})
+	if err != nil {
+		t.Fatalf("advance state history index: %v", err)
+	}
+	if !checkedUnlocked {
+		t.Fatal("Pebble history-index ETL held chainmu while scanning")
+	}
+	if !result.Advanced || result.Rebuilt == nil || result.Rebuilt.BlocksScanned != 1 {
+		t.Fatalf("history index result = %+v, want one advanced block", result)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageStateHistoryIndex)
+	if err != nil || !ok || row.BlockNum != block.Number() || row.BlockHash != block.Hash() {
+		t.Fatalf("history index progress = %+v ok=%v err=%v", row, ok, err)
+	}
+}

@@ -1,9 +1,11 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
@@ -90,10 +92,10 @@ func (bc *BlockChain) ensureStateHistoryIndexStageLocked() error {
 }
 
 // AdvanceStateHistoryIndexStage materializes a bounded solidified prefix of
-// latest-key -> block inverse rows. It holds chainmu across source validation,
-// ETL load, and watermark publication so no fork can move canonical hashes
-// under the pass. The un-solidified tail remains changeset-only and is served
-// by bounded direct scans.
+// latest-key -> block inverse rows. Pebble-backed chains pin an MVCC source
+// snapshot under chainmu, run the expensive ETL outside it, then reacquire the
+// lock to validate and publish the watermark. The un-solidified tail remains
+// changeset-only and is served by bounded direct scans.
 func (bc *BlockChain) AdvanceStateHistoryIndexStage(maxBlocks uint64) (StateHistoryIndexStageResult, error) {
 	return bc.advanceStateHistoryIndexStageInterruptible(1, maxBlocks, nil)
 }
@@ -114,23 +116,30 @@ func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxB
 	if bc == nil {
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: nil blockchain")
 	}
+	bc.stateHistoryIndexMu.Lock()
+	defer bc.stateHistoryIndexMu.Unlock()
+
 	bc.chainmu.Lock()
-	defer bc.chainmu.Unlock()
 	if bc.closed.Load() {
+		bc.chainmu.Unlock()
 		return StateHistoryIndexStageResult{}, ErrBlockChainClosed
 	}
 	if bc.config == nil || !bc.config.HistoryEnabled {
+		bc.chainmu.Unlock()
 		return StateHistoryIndexStageResult{}, nil
 	}
 	if err := bc.ensureStateHistoryIndexStageLocked(); err != nil {
+		bc.chainmu.Unlock()
 		return StateHistoryIndexStageResult{}, err
 	}
 
 	finishBlock, finishOK, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(bc.buffer, rawdb.StageFinish, bc.readCanonicalHashStrict)
 	if err != nil {
+		bc.chainmu.Unlock()
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: verify finish progress: %w", err)
 	}
 	if !finishOK {
+		bc.chainmu.Unlock()
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: missing finish progress")
 	}
 	targetBlock := finishBlock
@@ -143,14 +152,25 @@ func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxB
 			targetBlock = uint64(solidified)
 		}
 	}
-	indexedBlock, _, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(bc.db, rawdb.StageStateHistoryIndex, bc.readCanonicalHashStrict)
+	indexedRow, indexedOK, err := rawdb.ReadStageProgressRow(bc.db, rawdb.StageStateHistoryIndex)
+	if err == nil && indexedOK {
+		_, _, err = rawdb.ReadVerifiedStageProgressBlockWithHashLookup(bc.db, rawdb.StageStateHistoryIndex, bc.readCanonicalHashStrict)
+	}
 	if err != nil {
+		bc.chainmu.Unlock()
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: verify index progress: %w", err)
 	}
+	if !indexedOK {
+		bc.chainmu.Unlock()
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: missing index progress")
+	}
+	indexedBlock := indexedRow.BlockNum
 	if indexedBlock >= targetBlock {
+		bc.chainmu.Unlock()
 		return StateHistoryIndexStageResult{}, nil
 	}
 	if available := targetBlock - indexedBlock; minBlocks > 1 && available < minBlocks {
+		bc.chainmu.Unlock()
 		return StateHistoryIndexStageResult{}, nil
 	}
 	fromBlock := indexedBlock + 1
@@ -163,9 +183,62 @@ func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxB
 	if etlOptions.BufferLimit <= 0 {
 		etlOptions.BufferLimit = stateHistoryIndexETLDefaultBufferLimit
 	}
-	rebuilt, err := rawdb.RebuildStateHistoryIndexInterruptible(bc.buffer, bc.db, fromBlock, toBlock, etlOptions, bc.readCanonicalHashStrict, interrupted)
+
+	// Capture only committed layers through the planned boundary. Changesets and
+	// tx-range rows are append-only, so a durable base already flushed beyond
+	// toBlock is harmless; excluding in-flight/newer overlay layers makes the
+	// source topology immutable while canonical import continues.
+	snapshot, snapshotErr := bc.buffer.NewReadSnapshotThrough(toBlock)
+	if errors.Is(snapshotErr, blockbuffer.ErrReadSnapshotUnsupported) {
+		// memorydb and minimal test stores cannot pin MVCC. Preserve the original
+		// fully-locked path for those backends.
+		rebuilt, rebuildErr := rawdb.RebuildStateHistoryIndexInterruptible(bc.buffer, bc.db, fromBlock, toBlock, etlOptions, bc.readCanonicalHashStrict, interrupted)
+		if rebuildErr != nil {
+			bc.chainmu.Unlock()
+			return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: rebuild [%d,%d]: %w", fromBlock, toBlock, rebuildErr)
+		}
+		result, publishErr := bc.publishStateHistoryIndexStageLocked(indexedRow, toBlock, rebuilt)
+		bc.chainmu.Unlock()
+		return result, publishErr
+	}
+	if snapshotErr != nil {
+		bc.chainmu.Unlock()
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: snapshot through %d: %w", toBlock, snapshotErr)
+	}
+	bc.chainmu.Unlock()
+
+	rebuilt, err := rawdb.RebuildStateHistoryIndexInterruptible(snapshot, bc.db, fromBlock, toBlock, etlOptions, bc.readCanonicalHashStrict, interrupted)
+	closeErr := snapshot.Close()
 	if err != nil {
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: rebuild [%d,%d]: %w", fromBlock, toBlock, err)
+	}
+	if closeErr != nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: close snapshot: %w", closeErr)
+	}
+
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+	if bc.closed.Load() {
+		return StateHistoryIndexStageResult{}, ErrBlockChainClosed
+	}
+	return bc.publishStateHistoryIndexStageLocked(indexedRow, toBlock, rebuilt)
+}
+
+func (bc *BlockChain) publishStateHistoryIndexStageLocked(indexedRow rawdb.StageProgress, toBlock uint64, rebuilt *rawdb.RebuildStateHistoryIndexResult) (StateHistoryIndexStageResult, error) {
+	currentRow, ok, err := rawdb.ReadStageProgressRow(bc.db, rawdb.StageStateHistoryIndex)
+	if err != nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: re-read progress: %w", err)
+	}
+	if !ok {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: progress disappeared during rebuild")
+	}
+	if currentRow.BlockNum != indexedRow.BlockNum || currentRow.HasBlockHash != indexedRow.HasBlockHash || currentRow.BlockHash != indexedRow.BlockHash {
+		if currentRow.HasBlockHash && currentRow.BlockNum >= toBlock {
+			if _, _, verifyErr := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(bc.db, rawdb.StageStateHistoryIndex, bc.readCanonicalHashStrict); verifyErr == nil {
+				return StateHistoryIndexStageResult{Rebuilt: rebuilt}, nil
+			}
+		}
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: progress changed during rebuild from %d/%x to %d/%x", indexedRow.BlockNum, indexedRow.BlockHash, currentRow.BlockNum, currentRow.BlockHash)
 	}
 	hash, ok, err := bc.readCanonicalHashStrict(toBlock)
 	if err != nil {

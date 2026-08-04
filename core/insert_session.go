@@ -34,6 +34,12 @@ type InsertSession struct {
 	executor          *canonicalRangeExecutor
 	applied           bool
 	historyIndexReady bool
+	// yieldChainLock lets bulk sync hand archive RPCs the canonical lock after
+	// every committed block without giving up the reusable range executor.
+	// Ordinary sessions keep their existing whole-batch atomicity.
+	yieldChainLock bool
+	// chainLockYieldHook is test-only observability for the unlocked handoff.
+	chainLockYieldHook func()
 }
 
 // BeginInsertSession starts a cross-batch insert session sharing one canonical
@@ -50,7 +56,7 @@ func (bc *BlockChain) BeginInsertSession() *InsertSession {
 func (bc *BlockChain) BeginSyncInsertSession() *InsertSession {
 	executor := newCanonicalRangeExecutorWithOptions(bc, true, nil, true)
 	executor.enableStateReadAhead()
-	return &InsertSession{bc: bc, executor: executor}
+	return &InsertSession{bc: bc, executor: executor, yieldChainLock: true}
 }
 
 // PrepareDecodedBlocks starts deterministic state read ahead as soon as a
@@ -75,7 +81,9 @@ func (s *InsertSession) PrepareDecodedBlock(block *types.Block, encodedBytes int
 // for this batch only. On the first failing block it returns an
 // *InsertBlocksError (Index within THIS batch); the caller breaks the batch loop
 // and calls Finish, which closes the scope and surfaces any worker-side commit
-// error.
+// error. Ordinary sessions hold chainmu for the batch; bulk-sync sessions
+// release it after each fully published block so archive readers do not queue
+// behind the downloader's whole local batch.
 func (s *InsertSession) Insert(blocks []*types.Block) error {
 	return s.InsertBlocksWithStageHook(blocks, nil)
 }
@@ -87,17 +95,6 @@ func (s *InsertSession) InsertBlocksWithStageHook(blocks []*types.Block, hook St
 	if len(blocks) == 0 {
 		return nil
 	}
-	s.bc.chainmu.Lock()
-	defer s.bc.chainmu.Unlock()
-	if s.bc.closed.Load() {
-		return ErrBlockChainClosed
-	}
-	if s.executor.deferStateHistoryIndex && !s.historyIndexReady {
-		if err := s.bc.ensureStateHistoryIndexStageLocked(); err != nil {
-			return err
-		}
-		s.historyIndexReady = true
-	}
 	// Start signature recovery for the whole batch, then immediately execute the
 	// first block. Workers stay ahead on later blocks while state execution runs;
 	// sync.Once makes an early serial read wait for only its own recovery. Join
@@ -107,6 +104,55 @@ func (s *InsertSession) InsertBlocksWithStageHook(blocks []*types.Block, hook St
 	prevHook := s.executor.stageHook
 	s.executor.stageHook = hook
 	defer func() { s.executor.stageHook = prevHook }()
+	if !s.yieldChainLock {
+		s.bc.chainmu.Lock()
+		defer s.bc.chainmu.Unlock()
+		if err := s.prepareInsertLocked(); err != nil {
+			return err
+		}
+		return s.insertBlocksLocked(blocks)
+	}
+
+	// Sync is the sole canonical writer, so the executor/state/scope can remain
+	// live while chainmu is handed to read-only archive requests between blocks.
+	// Each block is still fully atomic: validation, execution, metadata, head,
+	// and the readable archive boundary are all published before the unlock.
+	for i, block := range blocks {
+		s.bc.chainmu.Lock()
+		err := s.prepareInsertLocked()
+		if err == nil {
+			err = s.bc.insertBlockLockedWithExecutor(block, s.executor)
+		}
+		s.bc.chainmu.Unlock()
+		if err != nil {
+			var blockNum uint64
+			if block != nil {
+				blockNum = block.Number()
+			}
+			return &InsertBlocksError{Index: i, BlockNumber: blockNum, Err: err}
+		}
+		s.applied = true
+		if i+1 < len(blocks) && s.chainLockYieldHook != nil {
+			s.chainLockYieldHook()
+		}
+	}
+	return nil
+}
+
+func (s *InsertSession) prepareInsertLocked() error {
+	if s.bc.closed.Load() {
+		return ErrBlockChainClosed
+	}
+	if s.executor.deferStateHistoryIndex && !s.historyIndexReady {
+		if err := s.bc.ensureStateHistoryIndexStageLocked(); err != nil {
+			return err
+		}
+		s.historyIndexReady = true
+	}
+	return nil
+}
+
+func (s *InsertSession) insertBlocksLocked(blocks []*types.Block) error {
 	for i, block := range blocks {
 		if err := s.bc.insertBlockLockedWithExecutor(block, s.executor); err != nil {
 			var blockNum uint64

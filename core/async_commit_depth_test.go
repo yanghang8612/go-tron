@@ -259,6 +259,32 @@ func TestInsertSession_CrossBatch_MatchesSync(t *testing.T) {
 	}
 }
 
+func TestSyncInsertSession_YieldsChainLockBetweenBlocks(t *testing.T) {
+	witnessAddr := testInsertAddr(1)
+	blocks, _ := buildSyncBlockSequence(t, witnessAddr, 3)
+	bc := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
+	defer bc.Close()
+
+	session := bc.BeginSyncInsertSession()
+	yields := 0
+	session.chainLockYieldHook = func() {
+		if !bc.chainmu.TryLock() {
+			t.Fatal("sync insert did not release chainmu between blocks")
+		}
+		bc.chainmu.Unlock()
+		yields++
+	}
+	if err := session.Insert(blocks); err != nil {
+		t.Fatalf("sync session insert: %v", err)
+	}
+	if err := session.Finish(); err != nil {
+		t.Fatalf("sync session finish: %v", err)
+	}
+	if yields != len(blocks)-1 {
+		t.Fatalf("chain lock yields = %d, want %d", yields, len(blocks)-1)
+	}
+}
+
 // TestInsertSession_MaintenanceCrossingAcrossBatches is the cross-batch
 // decision-(b) discriminator: a maintenance boundary (where dynamic properties
 // genuinely change) falls inside the SECOND batch of a deep session, so the
