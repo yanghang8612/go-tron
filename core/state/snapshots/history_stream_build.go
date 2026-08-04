@@ -875,21 +875,24 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Collect(change *rawdb.Stat
 	c.keyScratch = appendStateDomainChangeBinaryAccessorLookupKey(c.keyScratch[:0], change.FlatDomain, change.Owner, change.Generation, change.Domain, change.Key)
 	key := c.keyScratch
 	hash := stateDomainChangeBinaryAccessorV3Hash(key)
-	exactValue := make([]byte, stateDomainChangeBinaryAccessorV3ExactEntrySize)
-	copy(exactValue[:stateDomainChangeBinaryAccessorV3HashSize], hash[:])
-	binary.BigEndian.PutUint64(exactValue[stateDomainChangeBinaryAccessorV3HashSize:], offset)
-	binary.BigEndian.PutUint32(exactValue[stateDomainChangeBinaryAccessorV3HashSize+8:], uint32(recordIndex))
-	if err := c.exact.PutOwned(exactValue, exactValue); err != nil {
+	if err := c.exact.PutEncodedKeyAsValue(stateDomainChangeBinaryAccessorV3ExactEntrySize, func(exactValue []byte) {
+		copy(exactValue[:stateDomainChangeBinaryAccessorV3HashSize], hash[:])
+		binary.BigEndian.PutUint64(exactValue[stateDomainChangeBinaryAccessorV3HashSize:], offset)
+		binary.BigEndian.PutUint32(exactValue[stateDomainChangeBinaryAccessorV3HashSize+8:], uint32(recordIndex))
+	}); err != nil {
 		return err
 	}
 	if groupKey, ok := stateDomainChangeBinaryAccessorV3GroupKey(change); ok {
 		entry := stateDomainChangeBinaryAccessorEntry{key: key, txNum: change.TxNum, seq: change.Seq, offset: offset, recordIndex: recordIndex}
-		groupValue := make([]byte, stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV4GroupEntrySize)
-		copy(groupValue[:stateDomainChangeBinaryAccessorV3GroupKeySize], groupKey[:])
-		binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize:stateDomainChangeBinaryAccessorV3GroupKeySize+4], stateDomainChangeBinaryAccessorV4LogicalPrefix(change.Key))
-		binary.BigEndian.PutUint64(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+4:stateDomainChangeBinaryAccessorV3GroupKeySize+12], offset)
-		binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+12:], uint32(recordIndex))
-		if err := c.group.PutOwned(stateDomainChangeBinaryAccessorETLSortKey(entry), groupValue); err != nil {
+		sortKeySize := stateDomainChangeBinaryAccessorETLSortKeySize(entry)
+		groupValueSize := stateDomainChangeBinaryAccessorV3GroupKeySize + stateDomainChangeBinaryAccessorV4GroupEntrySize
+		if err := c.group.PutEncoded(sortKeySize, groupValueSize, func(sortKey, groupValue []byte) {
+			putStateDomainChangeBinaryAccessorETLSortKey(sortKey, entry)
+			copy(groupValue[:stateDomainChangeBinaryAccessorV3GroupKeySize], groupKey[:])
+			binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize:stateDomainChangeBinaryAccessorV3GroupKeySize+4], stateDomainChangeBinaryAccessorV4LogicalPrefix(change.Key))
+			binary.BigEndian.PutUint64(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+4:stateDomainChangeBinaryAccessorV3GroupKeySize+12], offset)
+			binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+12:], uint32(recordIndex))
+		}); err != nil {
 			return err
 		}
 	}
@@ -1049,28 +1052,36 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 // comparison order while appending a unique fixed-width suffix. NUL escaping
 // keeps prefix keys ordered before their extensions, so Collector never merges
 // distinct rows with the same logical accessor key.
-func stateDomainChangeBinaryAccessorETLSortKey(entry stateDomainChangeBinaryAccessorEntry) []byte {
+func stateDomainChangeBinaryAccessorETLSortKeySize(entry stateDomainChangeBinaryAccessorEntry) int {
 	escapedZeroes := 0
 	for _, b := range entry.key {
 		if b == 0 {
 			escapedZeroes++
 		}
 	}
-	out := make([]byte, 0, len(entry.key)+escapedZeroes+34)
+	return len(entry.key) + escapedZeroes + 34
+}
+
+func putStateDomainChangeBinaryAccessorETLSortKey(out []byte, entry stateDomainChangeBinaryAccessorEntry) {
+	offset := 0
 	for _, b := range entry.key {
 		if b == 0 {
-			out = append(out, 0, 0xff)
+			out[offset], out[offset+1] = 0, 0xff
+			offset += 2
 			continue
 		}
-		out = append(out, b)
+		out[offset] = b
+		offset++
 	}
-	out = append(out, 0, 0)
-	var suffix [32]byte
-	binary.BigEndian.PutUint64(suffix[0:8], entry.txNum)
-	binary.BigEndian.PutUint64(suffix[8:16], entry.seq)
-	binary.BigEndian.PutUint64(suffix[16:24], entry.offset)
-	binary.BigEndian.PutUint64(suffix[24:32], entry.recordIndex)
-	return append(out, suffix[:]...)
+	out[offset], out[offset+1] = 0, 0
+	offset += 2
+	binary.BigEndian.PutUint64(out[offset:offset+8], entry.txNum)
+	offset += 8
+	binary.BigEndian.PutUint64(out[offset:offset+8], entry.seq)
+	offset += 8
+	binary.BigEndian.PutUint64(out[offset:offset+8], entry.offset)
+	offset += 8
+	binary.BigEndian.PutUint64(out[offset:offset+8], entry.recordIndex)
 }
 
 type stateDomainChangeBinaryAccessorETLWriter struct {

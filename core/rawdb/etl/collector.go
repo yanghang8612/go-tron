@@ -64,6 +64,7 @@ type Collector struct {
 	dir         string
 	rows        []entry
 	rowBuffer   *[]entry
+	arena       *collectorByteArena
 	bufferBytes int
 	runFiles    []string
 	seq         uint64
@@ -135,6 +136,45 @@ func (c *Collector) PutOwned(key, value []byte) error {
 		value: value,
 		op:    opPut,
 	})
+}
+
+// PutEncoded reserves stable collector-owned storage and invokes encode to
+// populate the key and value directly. The callback-scoped slices must not be
+// retained or resized. This avoids one heap object per derived field while
+// preserving PutOwned for callers which already own their final byte slices.
+func (c *Collector) PutEncoded(keyLen, valueLen int, encode func(key, value []byte)) error {
+	if encode == nil {
+		return errors.New("etl: nil PutEncoded callback")
+	}
+	if err := c.validateAppend(); err != nil {
+		return err
+	}
+	if keyLen < 0 || valueLen < 0 || keyLen > int(^uint(0)>>1)-valueLen {
+		return fmt.Errorf("etl: invalid encoded key/value sizes %d/%d", keyLen, valueLen)
+	}
+	storage := c.allocEncoded(keyLen + valueLen)
+	key := storage[:keyLen:keyLen]
+	value := storage[keyLen : keyLen+valueLen : keyLen+valueLen]
+	encode(key, value)
+	return c.append(entry{key: key, value: value, op: opPut})
+}
+
+// PutEncodedKeyAsValue is PutEncoded for fixed records whose sort key and
+// output value are byte-identical. A single arena view is stored in both entry
+// fields, retaining the existing PutOwned(key, key) memory behavior.
+func (c *Collector) PutEncodedKeyAsValue(size int, encode func(key []byte)) error {
+	if encode == nil {
+		return errors.New("etl: nil PutEncodedKeyAsValue callback")
+	}
+	if err := c.validateAppend(); err != nil {
+		return err
+	}
+	if size < 0 {
+		return fmt.Errorf("etl: invalid encoded key/value size %d", size)
+	}
+	key := c.allocEncoded(size)
+	encode(key)
+	return c.append(entry{key: key, value: key, op: opPut})
 }
 
 // Delete records a key deletion. The key is copied.
@@ -222,14 +262,8 @@ func (c *Collector) Close() error {
 }
 
 func (c *Collector) append(e entry) error {
-	if c.closed {
-		return ErrCollectorClosed
-	}
-	if c.loaded {
-		return ErrCollectorLoaded
-	}
-	if c.seq == ^uint64(0) {
-		return errors.New("etl: sequence overflow")
+	if err := c.validateAppend(); err != nil {
+		return err
 	}
 	c.seq++
 	e.seq = c.seq
@@ -296,6 +330,9 @@ func (c *Collector) spillBuffer() error {
 	c.runFiles = append(c.runFiles, final)
 	clear(c.rows)
 	c.rows = c.rows[:0]
+	if c.arena != nil {
+		c.arena.reset()
+	}
 	c.bufferBytes = 0
 	c.stats.SpilledRuns++
 	return nil
@@ -311,6 +348,29 @@ func (c *Collector) ensureRows() {
 	c.rows = (*c.rowBuffer)[:0]
 }
 
+func (c *Collector) validateAppend() error {
+	if c.closed {
+		return ErrCollectorClosed
+	}
+	if c.loaded {
+		return ErrCollectorLoaded
+	}
+	if c.seq == ^uint64(0) {
+		return errors.New("etl: sequence overflow")
+	}
+	return nil
+}
+
+func (c *Collector) allocEncoded(size int) []byte {
+	if c.arena == nil {
+		c.arena = collectorArenaPool.Get().(*collectorByteArena)
+		c.arena.reset()
+	}
+	storage := c.arena.alloc(size)
+	clear(storage)
+	return storage
+}
+
 // releaseRows drops key/value references before returning reasonably-sized
 // metadata storage to the process-wide pool. The slice capacity is retained
 // across collectors, mirroring Erigon's sortable-buffer lifecycle.
@@ -318,6 +378,7 @@ func (c *Collector) releaseRows() {
 	if c.rowBuffer == nil {
 		c.rows = nil
 		c.bufferBytes = 0
+		c.releaseArena()
 		return
 	}
 	clear(c.rows)
@@ -328,6 +389,19 @@ func (c *Collector) releaseRows() {
 	c.bufferBytes = 0
 	if cap(*buffer) <= collectorRowsPoolMaxCapacity {
 		collectorRowsPool.Put(buffer)
+	}
+	c.releaseArena()
+}
+
+func (c *Collector) releaseArena() {
+	if c.arena == nil {
+		return
+	}
+	arena := c.arena
+	c.arena = nil
+	arena.reset()
+	if arena.capacity <= collectorArenaPoolMaxCapacity {
+		collectorArenaPool.Put(arena)
 	}
 }
 

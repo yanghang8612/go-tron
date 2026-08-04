@@ -67,6 +67,69 @@ func TestCollectorPutCopiesAndPutOwnedTransfers(t *testing.T) {
 	assertValue(t, writer, "b", "two")
 }
 
+func TestCollectorPutEncodedUsesStableArenaStorage(t *testing.T) {
+	collector := newTestCollector(t, Options{BufferLimit: 1 << 20})
+	defer collector.Close()
+
+	var exactStorage []byte
+	if err := collector.PutEncodedKeyAsValue(3, func(key []byte) {
+		exactStorage = key
+		copy(key, "one")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if &collector.rows[0].key[0] != &exactStorage[0] || &collector.rows[0].value[0] != &exactStorage[0] {
+		t.Fatal("PutEncodedKeyAsValue did not retain its single arena view")
+	}
+
+	var encodedKey, encodedValue []byte
+	if err := collector.PutEncoded(1, 3, func(key, value []byte) {
+		encodedKey, encodedValue = key, value
+		copy(key, "b")
+		copy(value, "two")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if &collector.rows[1].key[0] != &encodedKey[0] || &collector.rows[1].value[0] != &encodedValue[0] {
+		t.Fatal("PutEncoded did not retain its arena views")
+	}
+	writer := newRecordingWriter()
+	if _, err := collector.Load(writer); err != nil {
+		t.Fatal(err)
+	}
+	assertValue(t, writer, "b", "two")
+	assertValue(t, writer, "one", "one")
+}
+
+func TestCollectorPutEncodedReusesArenaAcrossSpills(t *testing.T) {
+	collector := newTestCollector(t, Options{BufferLimit: 1})
+	defer collector.Close()
+
+	var first, second *byte
+	if err := collector.PutEncoded(1, 1, func(key, value []byte) {
+		first = &key[0]
+		key[0], value[0] = 'a', '1'
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.PutEncoded(1, 1, func(key, value []byte) {
+		second = &key[0]
+		key[0], value[0] = 'b', '2'
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("collector replaced arena storage between successful spills")
+	}
+
+	writer := newRecordingWriter()
+	if _, err := collector.Load(writer); err != nil {
+		t.Fatal(err)
+	}
+	assertValue(t, writer, "a", "1")
+	assertValue(t, writer, "b", "2")
+}
+
 func TestCollectorSpillsRunsAndMergesDeletes(t *testing.T) {
 	collector := newTestCollector(t, Options{BufferLimit: 1})
 	defer collector.Close()
