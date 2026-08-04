@@ -419,5 +419,8 @@
   ready, then drain every eligible aligned merge once the builder catches up.
 - [x] Stream each base step's bounded transaction-range table once into a
   buffered file and backpatch its count, removing the pre-count Pebble scan.
+- [x] Collate a bounded base step's block-packed state changes with one ordered
+  range iterator and a sequential block/hash join instead of one iterator per
+  block.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

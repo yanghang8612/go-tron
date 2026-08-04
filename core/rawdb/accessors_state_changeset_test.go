@@ -1418,6 +1418,37 @@ func TestIterateStateTxRangesByBlockRangeSeeksAndStops(t *testing.T) {
 	}
 }
 
+func TestIterateStateDomainChangesByBlockTxRangeUsesSingleChangeIterator(t *testing.T) {
+	db := &prefixSeekingHistoryDB{Database: ethrawdb.NewMemoryDatabase()}
+	owner := common.Address{0x41, 0x2a}
+	for blockNum := uint64(10); blockNum <= 12; blockNum++ {
+		if err := WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatalf("write tx range %d: %v", blockNum, err)
+		}
+		if err := WriteStateDomainChange(db, &StateDomainChange{
+			BlockNum: blockNum, TxNum: blockNum, Seq: 1,
+			FlatDomain: StateFlatDomainKVLatest, Owner: owner,
+			Domain: kvdomains.SystemReward, Key: []byte{byte(blockNum)}, NextExists: true, Next: []byte("value"),
+		}); err != nil {
+			t.Fatalf("write change %d: %v", blockNum, err)
+		}
+	}
+
+	var got []*StateDomainChange
+	if err := IterateStateDomainChangesByBlockTxRange(db, 10, 12, 11, 11, func(change *StateDomainChange) (bool, error) {
+		got = append(got, cloneStateDomainChange(change))
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate bounded block/tx range: %v", err)
+	}
+	if len(got) != 1 || got[0].BlockNum != 11 || got[0].TxNum != 11 || got[0].BlockHash != (common.Hash{11}) {
+		t.Fatalf("bounded changes = %+v, want block/tx/hash 11", got)
+	}
+	if db.changeBlockIteratorCalls != 0 || db.changeRangeIteratorCalls != 1 {
+		t.Fatalf("change iterators block=%d range=%d, want 0/1", db.changeBlockIteratorCalls, db.changeRangeIteratorCalls)
+	}
+}
+
 func TestStateDomainChangeRejectsUntypedRows(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	err := WriteStateDomainChange(db, &StateDomainChange{

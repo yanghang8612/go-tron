@@ -920,11 +920,33 @@ func IterateStateDomainChangesByBlockTxRange(db ethdb.Iteratee, fromBlock, toBlo
 	if toTxNum < fromTxNum {
 		return fmt.Errorf("rawdb: inverted state domain change tx range [%d,%d]", fromTxNum, toTxNum)
 	}
-	return IterateStateTxRangesByBlockRange(db, fromBlock, toBlock, func(row *StateTxRange) (bool, error) {
+	type txRangeBlockHash struct {
+		blockNum  uint64
+		blockHash common.Hash
+	}
+	var ranges []txRangeBlockHash
+	if err := IterateStateTxRangesByBlockRange(db, fromBlock, toBlock, func(row *StateTxRange) (bool, error) {
 		if row.EndTxNum < fromTxNum || row.BeginTxNum > toTxNum {
 			return true, nil
 		}
-		return iterateStateDomainChangesForTxRange(db, row, fromTxNum, toTxNum, fn)
+		ranges = append(ranges, txRangeBlockHash{blockNum: row.BlockNum, blockHash: row.BlockHash})
+		return true, nil
+	}); err != nil {
+		return err
+	}
+	if len(ranges) == 0 {
+		return nil
+	}
+	rangeIndex := 0
+	return IterateStateDomainChangesByBlockRange(db, fromBlock, toBlock, func(change *StateDomainChange) (bool, error) {
+		for rangeIndex < len(ranges) && ranges[rangeIndex].blockNum < change.BlockNum {
+			rangeIndex++
+		}
+		if rangeIndex >= len(ranges) || ranges[rangeIndex].blockNum != change.BlockNum || change.TxNum < fromTxNum || change.TxNum > toTxNum {
+			return true, nil
+		}
+		change.BlockHash = ranges[rangeIndex].blockHash
+		return fn(change)
 	})
 }
 

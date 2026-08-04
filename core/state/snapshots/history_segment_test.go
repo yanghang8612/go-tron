@@ -18,20 +18,31 @@ import (
 )
 
 func BenchmarkBuildStateDomainChangeHistoryTxRanges(b *testing.B) {
-	db := rawdb.NewMemoryDatabase()
+	b.Run("sparse", func(b *testing.B) { benchmarkBuildStateDomainChangeHistoryTxRanges(b, false) })
+	b.Run("dense", func(b *testing.B) { benchmarkBuildStateDomainChangeHistoryTxRanges(b, true) })
+}
+
+func benchmarkBuildStateDomainChangeHistoryTxRanges(b *testing.B, dense bool) {
+	db, err := rawdb.NewPebbleDB(b.TempDir(), 64, 64)
+	if err != nil {
+		b.Fatalf("open Pebble: %v", err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
 	const blocks = uint64(5_000)
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5c}, common.AccountIDLength)...))
 	for block := uint64(1); block <= blocks; block++ {
 		if err := rawdb.WriteStateTxRange(db, block, common.Hash{byte(block)}, block, block); err != nil {
 			b.Fatalf("write tx range %d: %v", block, err)
 		}
-	}
-	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5c}, common.AccountIDLength)...))
-	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
-		BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 1, Seq: 1,
-		FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner,
-		Domain: kvdomains.ContractStorage, Key: []byte("slot"), NextExists: true, Next: []byte("value"),
-	}); err != nil {
-		b.Fatal(err)
+		if dense || block == 1 {
+			if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+				BlockNum: block, BlockHash: common.Hash{byte(block)}, TxNum: block, Seq: 1,
+				FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner,
+				Domain: kvdomains.ContractStorage, Key: []byte("slot"), NextExists: true, Next: []byte("value"),
+			}); err != nil {
+				b.Fatalf("write state change %d: %v", block, err)
+			}
+		}
 	}
 	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
 	if !ok {
@@ -47,7 +58,7 @@ func BenchmarkBuildStateDomainChangeHistoryTxRanges(b *testing.B) {
 			b.Fatal(err)
 		}
 		b.StartTimer()
-		_, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db, dir, SegmentRef{
+		_, err = buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db, dir, SegmentRef{
 			Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
 			FromTxNum: 1, ToTxNum: blocks, Path: "history/state-domain-change-1-5000.seg",
 		}, cfg, etl.Options{}, &stateDomainChangeHistoryBlockRange{from: 1, to: blocks})

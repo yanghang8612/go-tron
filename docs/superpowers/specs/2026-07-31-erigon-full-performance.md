@@ -3700,9 +3700,36 @@ proves the production block-bounded tx-range callback is entered exactly once.
 
 Across five local runs of a 5,000-block base-step benchmark, mean build time
 fell from 269.48 ms to 258.96 ms (-3.9%) and mean allocations from 80,917 to
-65,902 (-18.6%). Allocated bytes remained about 1.036 GB because the bounded
-ETL collectors dominate that metric; reducing their fresh-step memory reserve
-is the next independent storage-lifecycle target.
+65,902 (-18.6%). This first fixture used the in-memory database; a subsequent
+allocation profile attributed 97% of its approximately 1.036 GB cumulative
+allocation to per-block iterator snapshots, not to ETL buffer reservation.
+
+#### P5.19: One changeset iterator per base step
+
+The production block-bounded history collation still called
+`IterateStateDomainChanges` separately for every `StateTxRange` row. A default
+5,000-block base step therefore opened, sought, and released as many as 5,000
+Pebble/overlay iterators even though the physical changeset key is already
+ordered by block and sequence. Erigon collates an aggregation step with bounded
+ordered cursors and joins corresponding streams without rebuilding cursor
+state per block.
+
+The bounded block/tx iterator now first streams eligible transaction ranges
+into a compact ordered `(blockNum, blockHash)` slice, then walks the complete
+changeset block interval with the existing single range iterator. A monotonic
+slice cursor attaches the authoritative block hash and filters the txNum window
+without a hash table or random lookup. Packed-block decoding, positive-sequence
+repair overwrite precedence, callback cancellation, corrupt-row propagation,
+and output ordering remain those of the shared logical block-range reader.
+Regression instrumentation requires zero per-block changeset iterators and
+exactly one range iterator.
+
+On real local Pebble, the sparse 5,000-block/one-change case remained within
+the 3% light-workload gate (about +1.8% in the final sample) while allocations
+fell about 35.9%. With one change per block, mean build time fell from 74.30 ms
+to 67.54 ms (-9.1%) and allocations fell about 6.2%. The in-memory fixture's
+former O(blocks-squared) iterator snapshots also disappeared, but that larger
+synthetic gain is not treated as a production throughput claim.
 
 ## Benchmark And Production Acceptance
 
