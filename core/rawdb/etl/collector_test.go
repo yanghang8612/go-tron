@@ -41,6 +41,32 @@ func TestCollectorLoadSortsAndCollapsesLatestOperation(t *testing.T) {
 	assertValue(t, writer, "c", "value-c")
 }
 
+func TestCollectorPutCopiesAndPutOwnedTransfers(t *testing.T) {
+	collector := newTestCollector(t, Options{BufferLimit: 1 << 20})
+	defer collector.Close()
+
+	key, value := []byte("a"), []byte("one")
+	if err := collector.Put(key, value); err != nil {
+		t.Fatal(err)
+	}
+	key[0], value[0] = 'z', 'x'
+
+	ownedKey, ownedValue := []byte("b"), []byte("two")
+	if err := collector.PutOwned(ownedKey, ownedValue); err != nil {
+		t.Fatal(err)
+	}
+	if &collector.rows[1].key[0] != &ownedKey[0] || &collector.rows[1].value[0] != &ownedValue[0] {
+		t.Fatal("PutOwned copied transferred slices")
+	}
+
+	writer := newRecordingWriter()
+	if _, err := collector.Load(writer); err != nil {
+		t.Fatal(err)
+	}
+	assertValue(t, writer, "a", "one")
+	assertValue(t, writer, "b", "two")
+}
+
 func TestCollectorSpillsRunsAndMergesDeletes(t *testing.T) {
 	collector := newTestCollector(t, Options{BufferLimit: 1})
 	defer collector.Close()

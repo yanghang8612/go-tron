@@ -3814,6 +3814,30 @@ allocated bytes fell from 9.32 MB to 5.12 MB (-45.1%). Dense runs fell from
 56.39 ms to 51.14 ms (-9.3%), allocated bytes from 20.96 MB to 15.31 MB
 (-27.0%), and allocations from 185,624 to 145,532 (-21.6%).
 
+#### P5.23: Ownership-transfer ETL frames
+
+After the final-buffer fast path, accessor collation still allocated each exact
+or group sort key and value, passed them to ETL, and immediately cloned both
+slices even though the producer never reused them. Dense base steps paid four
+avoidable clones per state change before sorting. Erigon's collation buffers
+form one owned representation of derived entries rather than retaining both a
+producer copy and a collector copy.
+
+The collector now exposes an explicit `PutOwned` contract for freshly allocated
+final frames. State-history fallback records and v4 exact/group accessors
+transfer their sort keys and values through it, and the escaped accessor sort
+key precomputes its exact capacity so embedded zero bytes cannot trigger a
+second growth allocation. Ordinary `Put` still copies key and value exactly as
+before; a generic derived-index benchmark rejected a proposed combined-copy
+change when Go allocation size classes made it slower, so unrelated ETL users
+retain their measured baseline.
+
+Two alternating runs of precompiled P5.22 and P5.23 benchmark binaries, each
+with 50 iterations, kept the sparse build within the 3% gate at 48.07 ms versus
+48.49 ms (+0.9%). Dense time fell from 53.87 ms to 52.79 ms (-2.0%), allocated
+bytes from 15.31 MB to 14.02 MB (-8.4%), and allocations from 145,530 to 130,528
+(-10.3%).
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

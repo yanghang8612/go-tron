@@ -118,6 +118,18 @@ func (c *Collector) Put(key, value []byte) error {
 	})
 }
 
+// PutOwned records a key/value write by taking ownership of both slices. The
+// caller must not modify either slice after a successful call. It is intended
+// for collation code that has just allocated its final derived key/value and
+// would otherwise pay an immediate redundant copy into the bounded collector.
+func (c *Collector) PutOwned(key, value []byte) error {
+	return c.append(entry{
+		key:   key,
+		value: value,
+		op:    opPut,
+	})
+}
+
 // Delete records a key deletion. The key is copied.
 func (c *Collector) Delete(key []byte) error {
 	return c.append(entry{

@@ -302,7 +302,7 @@ func collectStateDomainChangeHistoryRecords(db ethdb.Iteratee, cfg DomainCfg, fr
 		if err != nil {
 			return false, err
 		}
-		if err := collector.Put(stateDomainChangeHistoryRecordETLSortKey(change, count), value); err != nil {
+		if err := collector.PutOwned(stateDomainChangeHistoryRecordETLSortKey(change, count), value); err != nil {
 			return false, err
 		}
 		count++
@@ -804,7 +804,7 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Collect(change *rawdb.Stat
 	copy(exactValue[:stateDomainChangeBinaryAccessorV3HashSize], hash[:])
 	binary.BigEndian.PutUint64(exactValue[stateDomainChangeBinaryAccessorV3HashSize:], offset)
 	binary.BigEndian.PutUint32(exactValue[stateDomainChangeBinaryAccessorV3HashSize+8:], uint32(recordIndex))
-	if err := c.exact.Put(exactValue, exactValue); err != nil {
+	if err := c.exact.PutOwned(exactValue, exactValue); err != nil {
 		return err
 	}
 	if groupKey, ok := stateDomainChangeBinaryAccessorV3GroupKey(change); ok {
@@ -814,7 +814,7 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Collect(change *rawdb.Stat
 		binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize:stateDomainChangeBinaryAccessorV3GroupKeySize+4], stateDomainChangeBinaryAccessorV4LogicalPrefix(change.Key))
 		binary.BigEndian.PutUint64(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+4:stateDomainChangeBinaryAccessorV3GroupKeySize+12], offset)
 		binary.BigEndian.PutUint32(groupValue[stateDomainChangeBinaryAccessorV3GroupKeySize+12:], uint32(recordIndex))
-		if err := c.group.Put(stateDomainChangeBinaryAccessorETLSortKey(entry), groupValue); err != nil {
+		if err := c.group.PutOwned(stateDomainChangeBinaryAccessorETLSortKey(entry), groupValue); err != nil {
 			return err
 		}
 	}
@@ -973,7 +973,13 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 // keeps prefix keys ordered before their extensions, so Collector never merges
 // distinct rows with the same logical accessor key.
 func stateDomainChangeBinaryAccessorETLSortKey(entry stateDomainChangeBinaryAccessorEntry) []byte {
-	out := make([]byte, 0, len(entry.key)+34)
+	escapedZeroes := 0
+	for _, b := range entry.key {
+		if b == 0 {
+			escapedZeroes++
+		}
+	}
+	out := make([]byte, 0, len(entry.key)+escapedZeroes+34)
 	for _, b := range entry.key {
 		if b == 0 {
 			out = append(out, 0, 0xff)
