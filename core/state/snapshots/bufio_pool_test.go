@@ -40,3 +40,22 @@ func TestStateDomainChangeHistoryWriterPoolDiscardsAbortedBytes(t *testing.T) {
 		t.Fatalf("reused writer output = %q, want committed", got)
 	}
 }
+
+func TestStateDomainChangeAccessorGroupOffsetsPoolResetsLength(t *testing.T) {
+	offsets := acquireStateDomainChangeAccessorGroupOffsets()
+	*offsets = append(*offsets, 1, 2, 3)
+	retained := offsets
+	releaseStateDomainChangeAccessorGroupOffsets(&offsets)
+	if offsets != nil {
+		t.Fatal("released offsets still reachable through caller")
+	}
+	if len(*retained) != 0 {
+		t.Fatalf("released offsets retained length %d", len(*retained))
+	}
+
+	offsets = acquireStateDomainChangeAccessorGroupOffsets()
+	defer releaseStateDomainChangeAccessorGroupOffsets(&offsets)
+	if len(*offsets) != 0 {
+		t.Fatalf("acquired offsets length = %d, want zero", len(*offsets))
+	}
+}

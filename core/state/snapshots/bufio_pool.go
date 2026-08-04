@@ -16,6 +16,12 @@ var stateDomainChangeHistoryWriterPool = sync.Pool{
 	},
 }
 
+const stateDomainChangeAccessorGroupOffsetsPoolMaxCapacity = 1 << 20
+
+var stateDomainChangeAccessorGroupOffsetsPool = sync.Pool{
+	New: func() any { return new([]uint64) },
+}
+
 func acquireStateDomainChangeHistoryWriter(dst io.Writer) *bufio.Writer {
 	writer := stateDomainChangeHistoryWriterPool.Get().(*bufio.Writer)
 	writer.Reset(dst)
@@ -34,4 +40,22 @@ func releaseStateDomainChangeHistoryWriter(writer **bufio.Writer) {
 	*writer = nil
 	buffered.Reset(nil)
 	stateDomainChangeHistoryWriterPool.Put(buffered)
+}
+
+func acquireStateDomainChangeAccessorGroupOffsets() *[]uint64 {
+	offsets := stateDomainChangeAccessorGroupOffsetsPool.Get().(*[]uint64)
+	*offsets = (*offsets)[:0]
+	return offsets
+}
+
+func releaseStateDomainChangeAccessorGroupOffsets(offsets **[]uint64) {
+	if offsets == nil || *offsets == nil {
+		return
+	}
+	buffer := *offsets
+	*offsets = nil
+	*buffer = (*buffer)[:0]
+	if cap(*buffer) <= stateDomainChangeAccessorGroupOffsetsPoolMaxCapacity {
+		stateDomainChangeAccessorGroupOffsetsPool.Put(buffer)
+	}
 }

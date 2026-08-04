@@ -734,7 +734,7 @@ func (w *stateDomainChangeBinaryAccessorV3ExactETLWriter) Release() {
 type stateDomainChangeBinaryAccessorV4GroupETLWriter struct {
 	payloadFile   *os.File
 	payload       *bufio.Writer
-	offsets       *bufio.Writer
+	offsets       *[]uint64
 	payloadOffset uint64
 	groups        uint64
 	records       uint64
@@ -760,11 +760,7 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Put(_ []byte, value []
 		if err := w.finishGroup(); err != nil {
 			return err
 		}
-		var raw [8]byte
-		binary.BigEndian.PutUint64(raw[:], w.payloadOffset)
-		if _, err := w.offsets.Write(raw[:]); err != nil {
-			return err
-		}
+		*w.offsets = append(*w.offsets, w.payloadOffset)
 		if _, err := w.payload.Write(key); err != nil {
 			return err
 		}
@@ -824,7 +820,7 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Finish() error {
 	if err := w.payload.Flush(); err != nil {
 		return err
 	}
-	return w.offsets.Flush()
+	return nil
 }
 
 func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Release() {
@@ -832,7 +828,6 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Release() {
 		return
 	}
 	releaseStateDomainChangeHistoryWriter(&w.payload)
-	releaseStateDomainChangeHistoryWriter(&w.offsets)
 }
 
 type stateDomainChangeBinaryAccessorV4Collectors struct {
@@ -955,15 +950,12 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	defer func() { _ = groupPayloadTmp.Close(); _ = os.Remove(groupPayloadName) }()
-	groupOffsetsTmp, groupOffsetsName, err := createStateDomainChangeBinaryTempFileInDir(accessorDir, accessorBase+".group-offsets")
-	if err != nil {
-		return SegmentRef{}, etl.Stats{}, err
-	}
-	defer func() { _ = groupOffsetsTmp.Close(); _ = os.Remove(groupOffsetsName) }()
+	groupOffsets := acquireStateDomainChangeAccessorGroupOffsets()
+	defer releaseStateDomainChangeAccessorGroupOffsets(&groupOffsets)
 	groupWriter := stateDomainChangeBinaryAccessorV4GroupETLWriter{
 		payloadFile: groupPayloadTmp,
 		payload:     acquireStateDomainChangeHistoryWriter(groupPayloadTmp),
-		offsets:     acquireStateDomainChangeHistoryWriter(groupOffsetsTmp),
+		offsets:     groupOffsets,
 	}
 	defer groupWriter.Release()
 	if _, err := c.group.Load(&groupWriter); err != nil {
@@ -974,6 +966,9 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	}
 	if groupWriter.groups > recordCount || groupWriter.records > recordCount {
 		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v4 groups %d records %d exceed segment count %d", groupWriter.groups, groupWriter.records, recordCount)
+	}
+	if uint64(len(*groupOffsets)) != groupWriter.groups {
+		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v4 group offsets %d, want %d", len(*groupOffsets), groupWriter.groups)
 	}
 
 	// exact/group files are private assembly inputs and are never published.
@@ -1006,15 +1001,8 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	payloadStart := uint64(stateDomainChangeBinaryHeaderSize+stateDomainChangeBinaryAccessorV3HeaderExtra) + recordCount*stateDomainChangeBinaryAccessorV3ExactEntrySize + groupWriter.groups*8
-	if _, err := groupOffsetsTmp.Seek(0, io.SeekStart); err != nil {
-		return SegmentRef{}, etl.Stats{}, err
-	}
-	for i := uint64(0); i < groupWriter.groups; i++ {
+	for _, relative := range *groupOffsets {
 		var raw [8]byte
-		if _, err := io.ReadFull(groupOffsetsTmp, raw[:]); err != nil {
-			return SegmentRef{}, etl.Stats{}, err
-		}
-		relative := binary.BigEndian.Uint64(raw[:])
 		if relative > math.MaxUint64-payloadStart {
 			return SegmentRef{}, etl.Stats{}, errors.New("snapshots: state-domain-change accessor v3 group payload offset overflows")
 		}
