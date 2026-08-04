@@ -388,5 +388,7 @@
   power-of-two-aligned logical steps, a 256-step frozen-file cap, and
   manifest-bound companion step validation so new leaves do not repeatedly
   rewrite the complete merged prefix.
+- [x] Bound each base aggregation step by Erigon's 390,625 txNum target and a
+  5,000-block sparse-history ceiling while retaining whole-block boundaries.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

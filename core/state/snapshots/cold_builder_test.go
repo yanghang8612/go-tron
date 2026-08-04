@@ -75,6 +75,12 @@ func TestColdBuilderConfigDefaultsHistoryDataset(t *testing.T) {
 	if cfg.HistoryDataset != SegmentDatasetStateDomainChange {
 		t.Fatalf("history dataset = %s, want %s", cfg.HistoryDataset, SegmentDatasetStateDomainChange)
 	}
+	if cfg.BatchBlocks != defaultColdSnapshotBatchBlocks || cfg.BatchTxNums != defaultColdSnapshotBatchTxNums {
+		t.Fatalf("cold step defaults = %d blocks/%d txNums, want %d/%d", cfg.BatchBlocks, cfg.BatchTxNums, defaultColdSnapshotBatchBlocks, defaultColdSnapshotBatchTxNums)
+	}
+	if cfg.CompactMaxSteps != defaultCompactionMaxSteps {
+		t.Fatalf("compact max steps = %d, want %d", cfg.CompactMaxSteps, defaultCompactionMaxSteps)
+	}
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate defaulted config: %v", err)
 	}
@@ -208,6 +214,120 @@ func TestColdBuilderSubsequentPassSeeksFromPublishedBlock(t *testing.T) {
 	// rescanning the prefix.
 	if seekCount < 4 {
 		t.Fatalf("state tx-range iterator starts = %x, want at least four seek starts %x", store.stateTxRangeStarts, want)
+	}
+}
+
+func TestColdBuilderCapsBaseStepByTxNumsAtWholeBlockBoundary(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7a)
+	for blockNum := uint64(1); blockNum <= 4; blockNum++ {
+		endTxNum := blockNum * 2
+		writeColdBuilderChange(t, db, owner, blockNum, endTxNum, "previous")
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, endTxNum-1, endTxNum); err != nil {
+			t.Fatalf("write two-tx range for block %d: %v", blockNum, err)
+		}
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 5}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+		BatchBlocks:   100,
+		BatchTxNums:   3,
+	})
+
+	first, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if !first.Built || first.FromBlock != 1 || first.ToBlock != 2 || first.FromTxNum != 1 || first.ToTxNum != 4 {
+		t.Fatalf("first pass = %+v, want whole blocks [1,2] and tx range [1,4]", first)
+	}
+	if first.EligibleCutoffBlock != 4 || !first.NeedsCatchup() {
+		t.Fatalf("first pass = %+v, want eligible cutoff 4 with immediate catch-up", first)
+	}
+	for _, ref := range first.Segments {
+		if ref.Dataset == SegmentDatasetStateDomainChange && ref.AggregationSteps != 1 {
+			t.Fatalf("base step ref = %+v, want one aggregation step", ref)
+		}
+	}
+
+	second, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if !second.Built || second.FromBlock != 3 || second.ToBlock != 4 || second.FromTxNum != 5 || second.ToTxNum != 8 {
+		t.Fatalf("second pass = %+v, want whole blocks [3,4] and tx range [5,8]", second)
+	}
+	if second.NeedsCatchup() {
+		t.Fatalf("second pass still reports catch-up: %+v", second)
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if got := ContiguousHistoryVisibleTxEnd(manifest, SegmentDatasetStateDomainChange, 1); got != 8 {
+		t.Fatalf("contiguous history end = %d, want 8", got)
+	}
+}
+
+func TestColdBuilderTxNumCapNeverSplitsDenseBlock(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7b)
+	writeColdBuilderChange(t, db, owner, 1, 10, "previous")
+	if err := rawdb.WriteStateTxRange(db, 1, common.Hash{1}, 1, 10); err != nil {
+		t.Fatalf("write dense block range: %v", err)
+	}
+	writeColdBuilderCanonicalBlock(t, db, 1)
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+		BatchBlocks:   100,
+		BatchTxNums:   3,
+	})
+
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("one pass: %v", err)
+	}
+	if !result.Built || result.FromBlock != 1 || result.ToBlock != 1 || result.FromTxNum != 1 || result.ToTxNum != 10 {
+		t.Fatalf("result = %+v, want complete dense block [1,10]", result)
+	}
+}
+
+func BenchmarkColdBuilderTxNumCutoffSeek(b *testing.B) {
+	db, err := rawdb.NewPebbleDB(b.TempDir(), 64, 64)
+	if err != nil {
+		b.Fatalf("open Pebble: %v", err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	const (
+		blocks     = uint64(5_000)
+		txPerBlock = uint64(100)
+	)
+	for blockNum := uint64(1); blockNum <= blocks; blockNum++ {
+		beginTxNum := (blockNum-1)*txPerBlock + 1
+		endTxNum := blockNum * txPerBlock
+		if writeErr := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, beginTxNum, endTxNum); writeErr != nil {
+			b.Fatalf("write range %d: %v", blockNum, writeErr)
+		}
+	}
+	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	if !ok {
+		b.Fatal("state-domain-change config missing")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		block, found, err := firstHotHistoryTxRangeBlockAtOrAfterTx(cfg, db, defaultColdSnapshotBatchTxNums, 1, blocks)
+		if err != nil || !found || block != 3_907 {
+			b.Fatalf("cutoff = %d/%v err=%v, want 3907/true/nil", block, found, err)
+		}
 	}
 }
 

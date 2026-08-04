@@ -68,12 +68,14 @@ continues using its immutable manifest and segment lease even while newer cold
 build, merge, and prune passes run.
 
 History entries in the manifest carry `aggregationSteps`. Each newly built
-5,000-block history/accessor/index trio starts at one logical step. Background
-compaction uses Erigon-style power-of-two alignment and copies the summed step
-count to the replacement trio; the default 256-step cap makes completed large
-files immutable while newer tail files continue to merge geometrically.
-Transaction-number ranges remain the read/coverage coordinates and are not
-used as a substitute for the logical block-build step.
+history/accessor/index trio starts at one logical step. A base step ends at the
+first complete block reaching 390,625 txNums or at 5,000 blocks, whichever
+comes first; a block is never split. Background compaction uses Erigon-style
+power-of-two alignment and copies the summed step count to the replacement
+trio. The default 256-step cap makes completed large files immutable while
+newer tail files continue to merge geometrically. Transaction-number ranges
+remain the read/coverage coordinates rather than an assumption that every
+block has the same transaction density.
 
 The built-in listener serves only `snapshot-catalog.json`, immutable published
 manifests, and segment paths leased by those manifests. It rejects directory

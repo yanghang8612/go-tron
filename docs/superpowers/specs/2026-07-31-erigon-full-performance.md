@@ -3395,6 +3395,39 @@ production gate still has to measure whether build plus geometric merge stays
 ahead of sustained import and whether the 256-step cap is appropriate for the
 mainnet segment-size distribution.
 
+#### P5.8: Transaction-bounded base aggregation steps
+
+Geometric merging bounds how often a leaf is rewritten, but its latency and
+scratch-space bound still depends on the size of that leaf. Go-tron previously
+cut every base history segment only at 5,000 blocks. Transaction density is not
+constant across TRON history, so a dense 5,000-block range could make one cold
+build, compression pass, and accessor construction many times larger than an
+early sparse range. The compactor would remain logarithmic while individual
+maintenance pauses and temporary files grew with the densest block window.
+
+Erigon 3.4 defines one aggregation step as 390,625 txNums. Go-tron now applies
+that value as a second base-step bound while preserving its 5,000-block cap.
+The builder finds the first block whose end txNum reaches the target and always
+includes that complete block; it never splits a TRON block merely to hit an
+exact txNum. A single unusually dense block may therefore exceed the target,
+while sparse history cannot expand beyond 5,000 blocks. Both searches use the
+bounded physical `StateTxRange` iterator starting at the verified previous
+publication boundary.
+
+Every such base segment remains one logical `aggregationSteps` leaf. The txNum
+bound controls peak collation/compression/index work and the block bound
+controls metadata and derived-sidecar work; P5.7's power-of-two merger controls
+long-run rewrite amplification. Regression coverage proves that a target
+falling inside a block expands to its end, a block larger than the target stays
+indivisible, immediate catch-up resumes at the next block, and manifest history
+remains contiguous.
+
+On a warm local Pebble database containing the maximum 5,000 candidate block
+ranges at 100 txNums per block, selecting the block that contains txNum 390,625
+took 0.926--0.936 ms across three benchmark runs. The additional bounded seek
+is negligible beside segment collation and is executed only when the candidate
+block range actually exceeds the txNum target.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

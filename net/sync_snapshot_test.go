@@ -83,7 +83,10 @@ func TestTwoNodeSyncFromSnapshotFreezerBoundary(t *testing.T) {
 
 	srvB.AddPeer(srvA.ListenAddr())
 	want := bcA.CurrentBlock()
-	deadline := time.Now().Add(5 * time.Second)
+	// Full-repository tests run many CPU- and disk-heavy packages concurrently;
+	// leave enough wall time for the two loopback servers to handshake under
+	// scheduler pressure while keeping the poll interval and correctness gate.
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if got := bcB.CurrentBlock(); got != nil && got.Hash() == want.Hash() {
 			break

@@ -23,6 +23,9 @@ var coldSnapshotLog = gtronlog.NewModule("core/state/snapshots")
 const (
 	defaultColdSnapshotInterval    = time.Minute
 	defaultColdSnapshotBatchBlocks = uint64(5_000)
+	// Match Erigon's current default aggregation step. TRON still ends a cold
+	// step on a complete block boundary and retains BatchBlocks as a second cap.
+	defaultColdSnapshotBatchTxNums = uint64(390_625)
 	defaultColdSnapshotMetrics     = "state/snapshot/cold/"
 )
 
@@ -58,12 +61,17 @@ type commitmentBranchRotator interface {
 
 // Config controls the cold history snapshot builder lifecycle.
 type Config struct {
-	Dir                    string
-	Enabled                bool
-	HistoryDataset         SegmentDataset
-	Interval               time.Duration
-	HistoryWindow          uint64
-	BatchBlocks            uint64
+	Dir            string
+	Enabled        bool
+	HistoryDataset SegmentDataset
+	Interval       time.Duration
+	HistoryWindow  uint64
+	BatchBlocks    uint64
+	// BatchTxNums bounds one base history step by transaction-number span.
+	// The selected range always includes a complete final block, so a single
+	// dense block may exceed the target. BatchBlocks independently caps sparse
+	// ranges whose txNum frontier advances slowly.
+	BatchTxNums            uint64
 	CompactMaxSteps        uint64
 	RetainObsoleteSegments bool
 	// LatestBuildBlocks is the minimum number of solidified blocks that must
@@ -305,6 +313,9 @@ func (c Config) applyDefaults() Config {
 	if c.BatchBlocks == 0 {
 		c.BatchBlocks = defaultColdSnapshotBatchBlocks
 	}
+	if c.BatchTxNums == 0 {
+		c.BatchTxNums = defaultColdSnapshotBatchTxNums
+	}
 	if c.CompactMaxSteps == 0 {
 		c.CompactMaxSteps = defaultCompactionMaxSteps
 	}
@@ -390,6 +401,7 @@ func (r *Runner) Start() error {
 			"interval", r.cfg.Interval,
 			"historyWindow", r.cfg.HistoryWindow,
 			"batchBlocks", r.cfg.BatchBlocks,
+			"batchTxNums", r.cfg.BatchTxNums,
 			"compactMaxSteps", r.cfg.CompactMaxSteps,
 			"sectionBloomBuild", r.cfg.BuildSectionBlooms,
 			"balanceTraceBuild", r.cfg.BuildBalanceTraces,
@@ -485,16 +497,16 @@ func (r *Runner) OnePass() (PassResult, error) {
 	start := time.Now()
 	phaseStart := start
 	result, err := r.onePass()
-	result.BuildDuration = time.Since(phaseStart)
+	result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
 	if err == nil {
 		phaseStart = time.Now()
 		result.Compaction, err = r.compactHistory()
-		result.CompactionDuration = time.Since(phaseStart)
+		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
 	}
 	if err == nil {
 		phaseStart = time.Now()
 		built, deferred, perr := r.latestPassWithStatus()
-		result.LatestDuration = time.Since(phaseStart)
+		result.LatestDuration = coldSnapshotPhaseDuration(phaseStart)
 		result.LatestDeferred = deferred
 		if perr != nil {
 			err = perr
@@ -504,6 +516,14 @@ func (r *Runner) OnePass() (PassResult, error) {
 	}
 	r.recordPass(result, start, err)
 	return result, err
+}
+
+func coldSnapshotPhaseDuration(start time.Time) time.Duration {
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return time.Nanosecond
+	}
+	return elapsed
 }
 
 // PreflightCatalog verifies an existing manifest identity before a lifecycle
@@ -673,6 +693,31 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 		if batchCutoffBlock != cutoffBlock {
 			cutoffBlock = batchCutoffBlock
+			result.CutoffBlock = cutoffBlock
+			cutoffRange, ok, err = historyCfg.HotHistoryTxRangeForBlock(db, cutoffBlock)
+			if err != nil {
+				return PassResult{}, err
+			}
+			if !ok {
+				return result, nil
+			}
+			if cutoffRange.EndTxNum < cutoffRange.BeginTxNum {
+				return PassResult{}, fmt.Errorf("snapshots: state tx range for block %d is inverted", cutoffBlock)
+			}
+			toTxNum = cutoffRange.EndTxNum
+		}
+	}
+	if r.cfg.BatchTxNums > 0 && toTxNum >= fromTxNum && toTxNum-fromTxNum >= r.cfg.BatchTxNums {
+		targetTxNum := fromTxNum + r.cfg.BatchTxNums - 1
+		if targetTxNum < fromTxNum {
+			targetTxNum = ^uint64(0)
+		}
+		txCutoffBlock, found, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, targetTxNum, startBlock, cutoffBlock)
+		if err != nil {
+			return PassResult{}, err
+		}
+		if found && txCutoffBlock < cutoffBlock {
+			cutoffBlock = txCutoffBlock
 			result.CutoffBlock = cutoffBlock
 			cutoffRange, ok, err = historyCfg.HotHistoryTxRangeForBlock(db, cutoffBlock)
 			if err != nil {
