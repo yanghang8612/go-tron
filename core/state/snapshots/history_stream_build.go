@@ -80,7 +80,11 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	}
 	recordOffset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + txRangeCount*stateDomainChangeBinaryTxRangeSize
 
-	indexTmp, indexTmpName, err := createStateDomainChangeBinaryTempFile(dir, stateDomainChangeBinaryIndexPath(ref.Path))
+	indexPath := stateDomainChangeBinaryIndexPath(ref.Path)
+	indexAbs := filepath.Join(dir, indexPath)
+	// Segment temp creation above already prepared this shared parent; the index
+	// path only replaces the extension, so avoid a second MkdirAll/stat per pack.
+	indexTmp, indexTmpName, err := createStateDomainChangeBinaryTempFileInDir(filepath.Dir(indexAbs), filepath.Base(indexAbs))
 	if err != nil {
 		return result, err
 	}
