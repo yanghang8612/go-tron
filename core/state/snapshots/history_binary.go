@@ -901,6 +901,7 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	recordWriter := newStateDomainChangeHistoryRecordWriter(tmp, indexTmp, collectors, ref, totalRecords, recordOffset)
+	defer recordWriter.Release()
 	for i := range sources {
 		if err := copyStateDomainChangeBinarySegmentPayload(dir, recordWriter, sources[i]); err != nil {
 			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err

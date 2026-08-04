@@ -101,6 +101,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	}()
 
 	recordWriter := newStateDomainChangeHistoryRecordWriter(segmentTmp, indexTmp, accessorCollectors, ref, math.MaxUint64, recordOffset)
+	defer func() { recordWriter.Release() }()
 	streamErr := iterateStateDomainChangeHistoryChanges(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, func(change *rawdb.StateDomainChange) (bool, error) {
 		if change == nil {
 			return false, errors.New("snapshots: nil state-domain-change history record")
@@ -118,6 +119,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		// Positive-sequence legacy and repair rows predate the block-pack order
 		// invariant. Discard the incomplete direct attempt and pay the bounded
 		// record ETL cost only for those old inputs.
+		recordWriter.Release()
 		accessorCollectors.Close()
 		accessorCollectors = nil
 		if err := segmentTmp.Reset(); err != nil {
@@ -319,7 +321,8 @@ func writeStateDomainChangeBinaryTxRangeTableFromDB(file stateDomainChangeBinary
 	if file == nil {
 		return 0, errors.New("snapshots: nil state-domain-change history file")
 	}
-	writer := bufio.NewWriterSize(file, stateDomainChangeHistoryWriteBufferSize)
+	writer := acquireStateDomainChangeHistoryWriter(file)
+	defer releaseStateDomainChangeHistoryWriter(&writer)
 	if err := writeStateDomainChangeBinaryTxRangeCount(writer, 0); err != nil {
 		return 0, err
 	}
@@ -487,8 +490,8 @@ const stateDomainChangeHistoryWriteBufferSize = 256 << 10
 
 func newStateDomainChangeHistoryRecordWriter(segment io.Writer, index *os.File, accessors *stateDomainChangeBinaryAccessorV4Collectors, ref SegmentRef, expected, segmentOff uint64) *stateDomainChangeHistoryRecordWriter {
 	return &stateDomainChangeHistoryRecordWriter{
-		segment:    bufio.NewWriterSize(segment, stateDomainChangeHistoryWriteBufferSize),
-		index:      bufio.NewWriterSize(index, stateDomainChangeHistoryWriteBufferSize),
+		segment:    acquireStateDomainChangeHistoryWriter(segment),
+		index:      acquireStateDomainChangeHistoryWriter(index),
 		accessors:  accessors,
 		ref:        ref,
 		expected:   expected,
@@ -576,6 +579,7 @@ func (w *stateDomainChangeHistoryRecordWriter) Finish() error {
 	if w == nil {
 		return errors.New("snapshots: nil state-domain-change history record writer")
 	}
+	defer w.Release()
 	if err := w.flushIndex(); err != nil {
 		return err
 	}
@@ -589,6 +593,14 @@ func (w *stateDomainChangeHistoryRecordWriter) Finish() error {
 		return err
 	}
 	return nil
+}
+
+func (w *stateDomainChangeHistoryRecordWriter) Release() {
+	if w == nil {
+		return
+	}
+	releaseStateDomainChangeHistoryWriter(&w.segment)
+	releaseStateDomainChangeHistoryWriter(&w.index)
 }
 
 func (w *stateDomainChangeHistoryRecordWriter) flushIndex() error {
@@ -661,7 +673,15 @@ func (w *stateDomainChangeBinaryAccessorV3ExactETLWriter) Finish() error {
 	if w == nil || w.file == nil {
 		return errors.New("snapshots: nil state-domain-change accessor v3 exact ETL writer")
 	}
+	defer w.Release()
 	return w.file.Flush()
+}
+
+func (w *stateDomainChangeBinaryAccessorV3ExactETLWriter) Release() {
+	if w == nil {
+		return
+	}
+	releaseStateDomainChangeHistoryWriter(&w.file)
 }
 
 type stateDomainChangeBinaryAccessorV4GroupETLWriter struct {
@@ -757,6 +777,7 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Finish() error {
 	if w == nil || w.payloadFile == nil || w.payload == nil || w.offsets == nil {
 		return errors.New("snapshots: nil state-domain-change accessor v4 group ETL writer")
 	}
+	defer w.Release()
 	if err := w.finishGroup(); err != nil {
 		return err
 	}
@@ -764,6 +785,14 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Finish() error {
 		return err
 	}
 	return w.offsets.Flush()
+}
+
+func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Release() {
+	if w == nil {
+		return
+	}
+	releaseStateDomainChangeHistoryWriter(&w.payload)
+	releaseStateDomainChangeHistoryWriter(&w.offsets)
 }
 
 type stateDomainChangeBinaryAccessorV4Collectors struct {
@@ -876,9 +905,10 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	}
 	defer func() { _ = exactTmp.Close(); _ = os.Remove(exactTmpName) }()
 	exactWriter := stateDomainChangeBinaryAccessorV3ExactETLWriter{
-		file:     bufio.NewWriterSize(exactTmp, stateDomainChangeHistoryWriteBufferSize),
+		file:     acquireStateDomainChangeHistoryWriter(exactTmp),
 		expected: recordCount,
 	}
+	defer exactWriter.Release()
 	exactStats, err := c.exact.Load(&exactWriter)
 	if err != nil {
 		return SegmentRef{}, etl.Stats{}, err
@@ -905,9 +935,10 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	defer func() { _ = groupOffsetsTmp.Close(); _ = os.Remove(groupOffsetsName) }()
 	groupWriter := stateDomainChangeBinaryAccessorV4GroupETLWriter{
 		payloadFile: groupPayloadTmp,
-		payload:     bufio.NewWriterSize(groupPayloadTmp, stateDomainChangeHistoryWriteBufferSize),
-		offsets:     bufio.NewWriterSize(groupOffsetsTmp, stateDomainChangeHistoryWriteBufferSize),
+		payload:     acquireStateDomainChangeHistoryWriter(groupPayloadTmp),
+		offsets:     acquireStateDomainChangeHistoryWriter(groupOffsetsTmp),
 	}
+	defer groupWriter.Release()
 	if _, err := c.group.Load(&groupWriter); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
