@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
+	tronrawdb "github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -514,6 +515,107 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	}
 	if serialRoot != parallelRoot {
 		t.Fatalf("VM state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
+func TestProcessBlockVMPublisherRetainsCachedCodeAfterHotPrune(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	base, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), state.NewDatabase(diskdb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x82)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	code := []byte{0x60, 0x01, 0x60, 0x02, 0x01, 0x50, 0x00}
+	base.SetCode(contractAddr, code)
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	// Keep code available only through the canonical StateDB caches. This is
+	// the production failure shape that previously let the block-start VM
+	// publisher execute an existing contract as empty code.
+	if err := tronrawdb.DeleteStateCode(diskdb, tcommon.Keccak256(code)); err != nil {
+		t.Fatal(err)
+	}
+	if got := serialState.GetCode(contractAddr); !bytes.Equal(got, code) {
+		t.Fatalf("serial cached code = %x, want %x", got, code)
+	}
+	if got := parallelState.GetCode(contractAddr); !bytes.Equal(got, code) {
+		t.Fatalf("parallel cached code = %x, want %x", got, code)
+	}
+
+	tx := makeTestTriggerTx(1, contractAddr, []byte{0x01})
+	tx.Proto().RawData.FeeLimit = 10_000_000
+	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial VM process: %v", err)
+	}
+	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true})
+	if err != nil {
+		t.Fatalf("parallel VM process: %v", err)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 1 {
+		t.Fatalf("parallel VM publications = %d, want 1", published)
+	}
+	if serialInfos[0].GetReceipt().GetEnergyUsageTotal() == 0 {
+		t.Fatal("serial contract execution consumed no energy")
+	}
+	if !proto.Equal(serialInfos[0], parallelInfos[0]) {
+		t.Fatalf("cached-code VM info mismatch\nserial=%v\nparallel=%v", serialInfos[0], parallelInfos[0])
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("cached-code VM roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
 	}
 }
 

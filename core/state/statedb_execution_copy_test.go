@@ -1,9 +1,11 @@
 package state
 
 import (
+	"bytes"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -75,6 +77,41 @@ func TestStateDBCopyBlockExecutionBaseOmitsCleanObjects(t *testing.T) {
 	}
 	if got := sdb.GetState(dirtyAddr, storageKey); got != pendingStorage {
 		t.Fatalf("copy mutation changed dirty source storage to %x", got)
+	}
+}
+
+func TestStateDBCopyBlockExecutionBaseRetainsCachedContractCode(t *testing.T) {
+	sdb := newTestStateDB(t)
+	contract := testAddr(0x33)
+	code := []byte{0x60, 0x01, 0x60, 0x02, 0x01, 0x50, 0x00}
+
+	sdb.CreateAccount(contract, corepb.AccountType_Contract)
+	sdb.SetCode(contract, code)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.GetCode(contract); !bytes.Equal(got, code) {
+		t.Fatalf("cached source code = %x, want %x", got, code)
+	}
+
+	// Model the live failure shape: the canonical StateDB still owns immutable
+	// cached code while the durable hot row has already moved out of the reader
+	// visible to a speculative execution copy. Dropping the clean state object
+	// must not silently turn a contract call into a successful empty-code call.
+	codeHash := tcommon.Keccak256(code)
+	if err := rawdb.DeleteStateCode(sdb.db.DiskDB(), codeHash); err != nil {
+		t.Fatal(err)
+	}
+	if got := rawdb.ReadStateCode(sdb.db.DiskDB(), codeHash); len(got) != 0 {
+		t.Fatalf("hot code still present: %x", got)
+	}
+
+	cp, err := sdb.CopyBlockExecutionBase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cp.GetCode(contract); !bytes.Equal(got, code) {
+		t.Fatalf("execution-copy code = %x, want cached %x", got, code)
 	}
 }
 

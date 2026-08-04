@@ -33,6 +33,7 @@ var (
 	stateObjectCacheEvictionCounter      = metrics.NewRegisteredCounter("state/account_cache/evictions", nil)
 	stateExecutionCopySourceCounter      = metrics.NewRegisteredCounter("state/copy/execution/source_objects", nil)
 	stateExecutionCopyDirtyCounter       = metrics.NewRegisteredCounter("state/copy/execution/dirty_objects", nil)
+	stateExecutionCopyCachedCodeCounter  = metrics.NewRegisteredCounter("state/copy/execution/cached_code_objects", nil)
 	stateExecutionCopyOmittedCounter     = metrics.NewRegisteredCounter("state/copy/execution/omitted_clean_objects", nil)
 )
 
@@ -3181,9 +3182,31 @@ func (s *StateDB) CopyBlockExecutionBase() (*StateDB, error) {
 		s.copyStateObjectInto(cp, addr, obj)
 		copied++
 	}
+	// Contract code is immutable, but it is not guaranteed to remain available
+	// from the same hot reader for the full lifetime of the cross-block account
+	// cache (for example after its content-addressed row moves to cold history).
+	// The canonical StateDB can still execute from obj.code in that interval.
+	// Preserve the same cached code in speculative block-start views so a clean
+	// contract can never degrade into a successful empty-code call merely because
+	// execution copies otherwise omit clean objects.
+	cachedCode := 0
+	for addr, obj := range s.stateObjects {
+		if obj == nil || obj.dirty || obj.deleted || len(obj.code) == 0 {
+			continue
+		}
+		if _, exists := cp.stateObjects[addr]; exists {
+			continue
+		}
+		if !s.copyCachedCodeStateObjectInto(cp, addr, obj) {
+			continue
+		}
+		copied++
+		cachedCode++
+	}
 	source := len(s.stateObjects)
 	stateExecutionCopySourceCounter.Inc(int64(source))
-	stateExecutionCopyDirtyCounter.Inc(int64(copied))
+	stateExecutionCopyDirtyCounter.Inc(int64(copied - cachedCode))
+	stateExecutionCopyCachedCodeCounter.Inc(int64(cachedCode))
 	stateExecutionCopyOmittedCounter.Inc(int64(source - copied))
 	return cp, nil
 }
@@ -3285,6 +3308,44 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		cp.dirtyObjects[addr] = struct{}{}
 	}
 	cp.stateObjects[addr] = newObj
+}
+
+// copyCachedCodeStateObjectInto retains the minimum clean account envelope
+// needed to execute already-loaded immutable bytecode. Storage and account-KV
+// caches remain lazy; copying those potentially large read caches would undo
+// the purpose of CopyBlockExecutionBase.
+func (s *StateDB) copyCachedCodeStateObjectInto(cp *StateDB, addr tcommon.Address, obj *stateObject) bool {
+	if cp == nil || obj == nil || obj.account == nil || len(obj.code) == 0 {
+		return false
+	}
+	var metaCopy *contractpb.SmartContract
+	if obj.contractMeta != nil {
+		metaCopy = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
+	}
+	data, err := obj.account.Marshal()
+	if err != nil {
+		return false
+	}
+	account, err := types.UnmarshalAccount(data)
+	if err != nil {
+		return false
+	}
+	newObj := acquireStateObject()
+	*newObj = stateObject{
+		address:                  addr,
+		account:                  account,
+		code:                     obj.code,
+		codeHash:                 obj.codeHash,
+		contractMeta:             metaCopy,
+		selfDestructed:           obj.selfDestructed,
+		accountKVRoot:            obj.accountKVRoot,
+		accountKVGeneration:      obj.accountKVGeneration,
+		accountKVGenerationDirty: false,
+		dirtySet:                 cp.dirtyObjects,
+	}
+	newObj.accountProto, _ = account.MarshalStorageCore()
+	cp.stateObjects[addr] = newObj
+	return true
 }
 
 type accountCommitPlan struct {
