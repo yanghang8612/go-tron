@@ -2885,8 +2885,8 @@ func validatePublicNetReservation(reservation state.PublicNetReservation, writes
 
 type publicNetWriteOverride struct {
 	writes      state.TransactionWriteSet
-	oldUsage    int64
-	oldTime     int64
+	oldUsage    state.TransactionWriteValue
+	oldTime     state.TransactionWriteValue
 	timeWritten bool
 	reservation bool
 	rebased     bool
@@ -2913,19 +2913,25 @@ func overridePublicNetReservation(result *discardShadowTaskResult, dynProps *sta
 	timeKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_time"}
 	usageValue := result.writes[usageKey]
 	timeValue, timeWritten := result.writes[timeKey]
+	_, currentTimeStored := dynProps.Get("public_net_time")
 	override := publicNetWriteOverride{
 		writes:      result.writes,
-		oldUsage:    int64(binary.BigEndian.Uint64(usageValue.Value)),
+		oldUsage:    usageValue,
+		oldTime:     timeValue,
 		timeWritten: timeWritten,
 		reservation: true,
 		rebased:     currentUsage != reservation.StartUsage || currentTime != reservation.StartTime,
 	}
-	if timeWritten {
-		override.oldTime = int64(binary.BigEndian.Uint64(timeValue.Value))
-	}
-	binary.BigEndian.PutUint64(usageValue.Value, uint64(recoveredUsage+reservation.Delta))
-	if timeWritten {
-		binary.BigEndian.PutUint64(timeValue.Value, uint64(reservation.ResourceTime))
+	orderedUsage := usageValue
+	orderedUsage.Value = append([]byte(nil), usageValue.Value...)
+	binary.BigEndian.PutUint64(orderedUsage.Value, uint64(recoveredUsage+reservation.Delta))
+	result.writes[usageKey] = orderedUsage
+	if !currentTimeStored || currentTime != reservation.ResourceTime {
+		orderedTime := state.TransactionWriteValue{Exists: true, Value: make([]byte, 8)}
+		binary.BigEndian.PutUint64(orderedTime.Value, uint64(reservation.ResourceTime))
+		result.writes[timeKey] = orderedTime
+	} else {
+		delete(result.writes, timeKey)
 	}
 	return override, true
 }
@@ -2936,11 +2942,11 @@ func (override publicNetWriteOverride) restore() {
 	}
 	usageKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
 	timeKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_time"}
-	usageValue := override.writes[usageKey]
-	binary.BigEndian.PutUint64(usageValue.Value, uint64(override.oldUsage))
+	override.writes[usageKey] = override.oldUsage
 	if override.timeWritten {
-		timeValue := override.writes[timeKey]
-		binary.BigEndian.PutUint64(timeValue.Value, uint64(override.oldTime))
+		override.writes[timeKey] = override.oldTime
+	} else {
+		delete(override.writes, timeKey)
 	}
 }
 

@@ -387,6 +387,12 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	publicNetReservationsBefore := parallelVMPublicNetReservationsCounter.Snapshot().Count()
 	publicNetPublishedBefore := parallelVMPublicNetPublishedCounter.Snapshot().Count()
 	publicNetRebasedBefore := parallelVMPublicNetRebasedCounter.Snapshot().Count()
+	projectionMatchesBefore := discardShadowVMPublicNetProjectionMatchesCounter.Snapshot().Count()
+	projectionMismatchesBefore := discardShadowVMPublicNetProjectionMismatchCounter.Snapshot().Count()
+	projectionMissingBefore := discardShadowVMPublicNetProjectionMissingCounter.Snapshot().Count()
+	energyMatchesBefore := discardShadowVMBlockEnergyMatchesCounter.Snapshot().Count()
+	energyMismatchesBefore := discardShadowVMBlockEnergyMismatchesCounter.Snapshot().Count()
+	energyMissingBefore := discardShadowVMBlockEnergyMissingCounter.Snapshot().Count()
 	errorsBefore := parallelVMErrorsCounter.Snapshot().Count()
 	fallbacksBefore := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
 		parallelVMConflictFallbackCounter.Snapshot().Count() +
@@ -433,6 +439,24 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	}
 	if rebased := parallelVMPublicNetRebasedCounter.Snapshot().Count() - publicNetRebasedBefore; rebased != 2 {
 		t.Fatalf("parallel VM public-net rebases = %d, want 2", rebased)
+	}
+	if matches := discardShadowVMPublicNetProjectionMatchesCounter.Snapshot().Count() - projectionMatchesBefore; matches != 3 {
+		t.Fatalf("parallel VM projected public-net matches = %d, want 3", matches)
+	}
+	if mismatches := discardShadowVMPublicNetProjectionMismatchCounter.Snapshot().Count() - projectionMismatchesBefore; mismatches != 0 {
+		t.Fatalf("parallel VM projected public-net mismatches = %d, want 0", mismatches)
+	}
+	if missing := discardShadowVMPublicNetProjectionMissingCounter.Snapshot().Count() - projectionMissingBefore; missing != 0 {
+		t.Fatalf("parallel VM projected public-net missing = %d, want 0", missing)
+	}
+	if matches := discardShadowVMBlockEnergyMatchesCounter.Snapshot().Count() - energyMatchesBefore; matches != 3 {
+		t.Fatalf("parallel VM projected block-energy matches = %d, want 3", matches)
+	}
+	if mismatches := discardShadowVMBlockEnergyMismatchesCounter.Snapshot().Count() - energyMismatchesBefore; mismatches != 0 {
+		t.Fatalf("parallel VM projected block-energy mismatches = %d, want 0", mismatches)
+	}
+	if missing := discardShadowVMBlockEnergyMissingCounter.Snapshot().Count() - energyMissingBefore; missing != 0 {
+		t.Fatalf("parallel VM projected block-energy missing = %d, want 0", missing)
 	}
 	if failures := parallelVMErrorsCounter.Snapshot().Count() - errorsBefore; failures != 0 {
 		t.Fatalf("parallel VM errors = %d, want 0", failures)

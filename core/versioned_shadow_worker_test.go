@@ -1245,6 +1245,65 @@ func TestVMPublicNetBoundaryProjectionMatchesSerialWrites(t *testing.T) {
 	}
 }
 
+func TestPublicNetWriteOverrideMatchesSerialWritePresence(t *testing.T) {
+	usageKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
+	timeKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_time"}
+	encodeInt := func(value int64) state.TransactionWriteValue {
+		encoded := make([]byte, 8)
+		binary.BigEndian.PutUint64(encoded, uint64(value))
+		return state.TransactionWriteValue{Exists: true, Value: encoded}
+	}
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetPublicNetLimit(1_000)
+	dynProps.SetPublicNetUsage(200)
+	dynProps.SetPublicNetTime(10)
+	result := &discardShadowTaskResult{
+		writes: state.TransactionWriteSet{
+			usageKey: encodeInt(150),
+			timeKey:  encodeInt(10),
+		},
+		publicNetValid: true,
+		publicNet: state.PublicNetReservation{
+			StartUsage: 50, StartTime: 5, RecoveredUsage: 50, ResourceTime: 10, Delta: 100, Limit: 1_000,
+		},
+	}
+	override, admitted := overridePublicNetReservation(result, dynProps)
+	if !admitted || !override.rebased {
+		t.Fatalf("public-net no-op-time override admitted=%t rebased=%t", admitted, override.rebased)
+	}
+	usage, ok := publicNetReservationWriteValue(result.writes, "public_net_usage")
+	if !ok || usage != 300 {
+		t.Fatalf("ordered public-net usage = %d present=%t, want 300/true", usage, ok)
+	}
+	if _, timeWritten := result.writes[timeKey]; timeWritten {
+		t.Fatal("ordered public-net override retained a serial no-op time write")
+	}
+	override.restore()
+	if usage, ok := publicNetReservationWriteValue(result.writes, "public_net_usage"); !ok || usage != 150 {
+		t.Fatalf("restored public-net usage = %d present=%t, want 150/true", usage, ok)
+	}
+	if resourceTime, ok := publicNetReservationWriteValue(result.writes, "public_net_time"); !ok || resourceTime != 10 {
+		t.Fatalf("restored public-net time = %d present=%t, want 10/true", resourceTime, ok)
+	}
+
+	delete(result.writes, timeKey)
+	result.publicNet.StartUsage = 200
+	result.publicNet.StartTime = 10
+	result.publicNet.RecoveredUsage = 200
+	dynProps.SetPublicNetTime(9)
+	override, admitted = overridePublicNetReservation(result, dynProps)
+	if !admitted {
+		t.Fatal("public-net time-changing override was rejected")
+	}
+	if resourceTime, ok := publicNetReservationWriteValue(result.writes, "public_net_time"); !ok || resourceTime != 10 {
+		t.Fatalf("ordered public-net time = %d present=%t, want 10/true", resourceTime, ok)
+	}
+	override.restore()
+	if _, timeWritten := result.writes[timeKey]; timeWritten {
+		t.Fatal("restore retained a time key absent from the worker result")
+	}
+}
+
 func TestVMBlockEnergyBoundaryProjectionMatchesSerialAccumulator(t *testing.T) {
 	stats := forkStatsMem{}
 	passVersion3_6_5(stats, 27)
