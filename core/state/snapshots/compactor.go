@@ -15,13 +15,21 @@ const defaultCompactionMaxSteps = uint64(256)
 
 // CompactionConfig controls history segment compaction.
 type CompactionConfig struct {
-	MaxSteps       uint64
+	MaxSteps uint64
+	// MinSteps defers small merges until an aligned run reaches this logical
+	// span. Zero keeps the normal two-step minimum. Catch-up builders set it to
+	// MaxSteps so fresh sync writes each frozen range once instead of rewriting
+	// the same leaves through every geometric level.
+	MinSteps       uint64
 	DeleteObsolete bool
 }
 
 // HistoryCompactionResult describes a registered history-domain compaction pass.
 type HistoryCompactionResult struct {
-	Merged           bool
+	Merged bool
+	// MergePasses is one for CompactHistoryDomain. Runner summaries may drain
+	// multiple ready ranges and aggregate every emitted output for work metrics.
+	MergePasses      int
 	Dataset          SegmentDataset
 	FromTxNum        uint64
 	ToTxNum          uint64
@@ -52,6 +60,13 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 	if maxSteps == 0 {
 		maxSteps = defaultCompactionMaxSteps
 	}
+	minSteps := cfg.MinSteps
+	if minSteps < 2 {
+		minSteps = 2
+	}
+	if minSteps > maxSteps {
+		minSteps = maxSteps
+	}
 
 	manifest, err := LoadProductionManifest(dir)
 	if err != nil {
@@ -67,7 +82,7 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 	if historyCfg.CompactHistory == nil && (historyCfg.OpenHistory == nil || historyCfg.WriteHistory == nil) {
 		return HistoryCompactionResult{}, fmt.Errorf("snapshots: history domain %s missing compaction codec", historyCfg.Dataset)
 	}
-	selection, ok := selectHistoryCompactionRun(manifest, historyCfg, maxSteps)
+	selection, ok := selectHistoryCompactionRunAtLeast(manifest, historyCfg, minSteps, maxSteps)
 	if !ok {
 		return HistoryCompactionResult{Dataset: historyCfg.Dataset}, nil
 	}
@@ -109,6 +124,7 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 
 	result := HistoryCompactionResult{
 		Merged:           true,
+		MergePasses:      1,
 		Dataset:          historyCfg.Dataset,
 		FromTxNum:        selection.fromTxNum,
 		ToTxNum:          selection.toTxNum,
@@ -125,6 +141,10 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 }
 
 func selectHistoryCompactionRun(manifest *Manifest, cfg DomainCfg, maxSteps uint64) (historyCompactionSelection, bool) {
+	return selectHistoryCompactionRunAtLeast(manifest, cfg, 2, maxSteps)
+}
+
+func selectHistoryCompactionRunAtLeast(manifest *Manifest, cfg DomainCfg, minSteps, maxSteps uint64) (historyCompactionSelection, bool) {
 	if manifest == nil {
 		return historyCompactionSelection{}, false
 	}
@@ -134,6 +154,12 @@ func selectHistoryCompactionRun(manifest *Manifest, cfg DomainCfg, maxSteps uint
 	}
 	if maxSteps == 0 {
 		maxSteps = defaultCompactionMaxSteps
+	}
+	if minSteps < 2 {
+		minSteps = 2
+	}
+	if minSteps > maxSteps {
+		minSteps = maxSteps
 	}
 
 	// Erigon merges the earliest maximally aligned power-of-two step range and
@@ -145,7 +171,7 @@ func selectHistoryCompactionRun(manifest *Manifest, cfg DomainCfg, maxSteps uint
 		for runEnd < len(candidates) && historySegmentsAreContiguous(candidates[runEnd-1].history, candidates[runEnd].history) {
 			runEnd++
 		}
-		if selection, ok := selectAlignedHistoryCompactionRun(candidates[runStart:runEnd], maxSteps); ok {
+		if selection, ok := selectAlignedHistoryCompactionRunAtLeast(candidates[runStart:runEnd], minSteps, maxSteps); ok {
 			return selection, true
 		}
 		runStart = runEnd
@@ -154,6 +180,10 @@ func selectHistoryCompactionRun(manifest *Manifest, cfg DomainCfg, maxSteps uint
 }
 
 func selectAlignedHistoryCompactionRun(candidates []historyCompactionCandidate, maxSteps uint64) (historyCompactionSelection, bool) {
+	return selectAlignedHistoryCompactionRunAtLeast(candidates, 2, maxSteps)
+}
+
+func selectAlignedHistoryCompactionRunAtLeast(candidates []historyCompactionCandidate, minSteps, maxSteps uint64) (historyCompactionSelection, bool) {
 	if len(candidates) < 2 || maxSteps == 0 {
 		return historyCompactionSelection{}, false
 	}
@@ -170,6 +200,10 @@ func selectAlignedHistoryCompactionRun(candidates []historyCompactionCandidate, 
 		span := logicalEnd & (^logicalEnd + 1) // rightmost set bit
 		if span > maxSteps {
 			span = maxSteps
+		}
+		if span < minSteps {
+			boundary[logicalEnd] = i + 1
+			continue
 		}
 		logicalStart := logicalEnd - span
 		start, aligned := boundary[logicalStart]

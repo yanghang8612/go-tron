@@ -3654,6 +3654,34 @@ from 779,569 to 509,371 (-34.7%), and mean allocated bytes from 114.93 MB to
 5.36x faster than the pre-P5.15 baseline; sustained-import and soak gates remain
 production acceptance work rather than a benchmark inference.
 
+#### P5.17: Defer catch-up merge levels
+
+The geometric selector bounded each leaf's rewrite depth, but the lifecycle
+still invoked one merge immediately after every base build. During a fresh
+sync, that eagerly emitted partial 2/4/8/... ranges even though the builder was
+known to have a large backlog. Erigon first collates all ready aggregation
+steps and then runs its merge loop, allowing a complete frozen range to be
+selected without materializing those transient levels.
+
+While a cold-builder pass still has historical catch-up work, history
+compaction now requires the configured maximum logical span (256 steps by
+default). The base segment is still atomically published before hot pruning,
+so crash recovery, manifest leases, and prune coverage do not change; only
+intermediate merge output is deferred. Once the builder has no immediate
+backlog, the runner repeatedly applies the normal aligned selector until every
+eligible range is drained rather than leaving one merge per maintenance
+interval.
+
+The deterministic 1,024-leaf shape rewrote 4,608 logical steps through eager
+compaction and now rewrites exactly 1,024: a 4.5x reduction in compaction
+output. Including the unchanged 1,024 base-leaf writes, total logical history
+emission falls from 5,632 to 2,048 steps (2.75x). Lifecycle regressions verify
+that the first three catch-up leaves remain loose, the fourth directly forms a
+four-step test frozen file, trailing leaves remain visible, and a caught-up
+runner drains two independent ready ranges in one pass. New counters expose
+total merge passes, catch-up deferrals, and last-pass merge count for the fresh
+snap-mode production gate.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

@@ -149,6 +149,8 @@ type Stats struct {
 	PassErrors              uint64
 	SegmentsBuilt           uint64
 	SegmentsCompacted       uint64
+	CompactionMerges        uint64
+	CompactionCatchupDefers uint64
 	BytesBuilt              uint64
 	LastSolidified          uint64
 	LastCutoffBlock         uint64
@@ -161,55 +163,62 @@ type Stats struct {
 	LastPassDuration        time.Duration
 	LastBuildDuration       time.Duration
 	LastCompactionDuration  time.Duration
+	LastCompactionMerges    uint64
 	LastLatestDuration      time.Duration
 	LatestDeferredSync      uint64
 	LastLatestBuildBlock    uint64
 }
 
 type coldRunnerMetrics struct {
-	passes                 *metrics.Gauge
-	errors                 *metrics.Gauge
-	segmentsBuilt          *metrics.Gauge
-	segmentsCompacted      *metrics.Gauge
-	bytesBuilt             *metrics.Gauge
-	lastSolidified         *metrics.Gauge
-	lastEligibleCutoff     *metrics.Gauge
-	lastSelectedCutoff     *metrics.Gauge
-	lastPublishedBlock     *metrics.Gauge
-	lagBlocks              *metrics.Gauge
-	lastVisibleTxEnd       *metrics.Gauge
-	lastFromTxNum          *metrics.Gauge
-	lastToTxNum            *metrics.Gauge
-	lastPassDuration       *metrics.Gauge
-	lastBuildDuration      *metrics.Gauge
-	lastCompactionDuration *metrics.Gauge
-	lastLatestDuration     *metrics.Gauge
-	latestDeferredSync     *metrics.Gauge
-	lastLatestBuildBlock   *metrics.Gauge
+	passes                  *metrics.Gauge
+	errors                  *metrics.Gauge
+	segmentsBuilt           *metrics.Gauge
+	segmentsCompacted       *metrics.Gauge
+	compactionMerges        *metrics.Gauge
+	compactionCatchupDefers *metrics.Gauge
+	bytesBuilt              *metrics.Gauge
+	lastSolidified          *metrics.Gauge
+	lastEligibleCutoff      *metrics.Gauge
+	lastSelectedCutoff      *metrics.Gauge
+	lastPublishedBlock      *metrics.Gauge
+	lagBlocks               *metrics.Gauge
+	lastVisibleTxEnd        *metrics.Gauge
+	lastFromTxNum           *metrics.Gauge
+	lastToTxNum             *metrics.Gauge
+	lastPassDuration        *metrics.Gauge
+	lastBuildDuration       *metrics.Gauge
+	lastCompactionDuration  *metrics.Gauge
+	lastCompactionMerges    *metrics.Gauge
+	lastLatestDuration      *metrics.Gauge
+	latestDeferredSync      *metrics.Gauge
+	lastLatestBuildBlock    *metrics.Gauge
 }
 
 func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 	namespace = normalizeColdSnapshotMetricNamespace(namespace)
 	return coldRunnerMetrics{
-		passes:                 metrics.GetOrRegisterGauge(namespace+"passes", nil),
-		errors:                 metrics.GetOrRegisterGauge(namespace+"errors", nil),
-		segmentsBuilt:          metrics.GetOrRegisterGauge(namespace+"segments/built", nil),
-		segmentsCompacted:      metrics.GetOrRegisterGauge(namespace+"segments/compacted", nil),
-		bytesBuilt:             metrics.GetOrRegisterGauge(namespace+"bytes/built", nil),
-		lastSolidified:         metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
-		lastEligibleCutoff:     metrics.GetOrRegisterGauge(namespace+"last/eligible_cutoff_block", nil),
-		lastSelectedCutoff:     metrics.GetOrRegisterGauge(namespace+"last/selected_cutoff_block", nil),
-		lastPublishedBlock:     metrics.GetOrRegisterGauge(namespace+"last/published_block", nil),
-		lagBlocks:              metrics.GetOrRegisterGauge(namespace+"lag/blocks", nil),
-		lastVisibleTxEnd:       metrics.GetOrRegisterGauge(namespace+"last/visible_tx_end", nil),
-		lastFromTxNum:          metrics.GetOrRegisterGauge(namespace+"last/from_tx", nil),
-		lastToTxNum:            metrics.GetOrRegisterGauge(namespace+"last/to_tx", nil),
-		lastPassDuration:       metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
-		lastBuildDuration:      metrics.GetOrRegisterGauge(namespace+"lastpass/build/duration", nil),
-		lastCompactionDuration: metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/duration", nil),
-		lastLatestDuration:     metrics.GetOrRegisterGauge(namespace+"lastpass/latest/duration", nil),
-		latestDeferredSync:     metrics.GetOrRegisterGauge(namespace+"latest/deferred/sync", nil),
-		lastLatestBuildBlock:   metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
+		passes:                  metrics.GetOrRegisterGauge(namespace+"passes", nil),
+		errors:                  metrics.GetOrRegisterGauge(namespace+"errors", nil),
+		segmentsBuilt:           metrics.GetOrRegisterGauge(namespace+"segments/built", nil),
+		segmentsCompacted:       metrics.GetOrRegisterGauge(namespace+"segments/compacted", nil),
+		compactionMerges:        metrics.GetOrRegisterGauge(namespace+"compaction/merges", nil),
+		compactionCatchupDefers: metrics.GetOrRegisterGauge(namespace+"compaction/deferred/catchup", nil),
+		bytesBuilt:              metrics.GetOrRegisterGauge(namespace+"bytes/built", nil),
+		lastSolidified:          metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
+		lastEligibleCutoff:      metrics.GetOrRegisterGauge(namespace+"last/eligible_cutoff_block", nil),
+		lastSelectedCutoff:      metrics.GetOrRegisterGauge(namespace+"last/selected_cutoff_block", nil),
+		lastPublishedBlock:      metrics.GetOrRegisterGauge(namespace+"last/published_block", nil),
+		lagBlocks:               metrics.GetOrRegisterGauge(namespace+"lag/blocks", nil),
+		lastVisibleTxEnd:        metrics.GetOrRegisterGauge(namespace+"last/visible_tx_end", nil),
+		lastFromTxNum:           metrics.GetOrRegisterGauge(namespace+"last/from_tx", nil),
+		lastToTxNum:             metrics.GetOrRegisterGauge(namespace+"last/to_tx", nil),
+		lastPassDuration:        metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
+		lastBuildDuration:       metrics.GetOrRegisterGauge(namespace+"lastpass/build/duration", nil),
+		lastCompactionDuration:  metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/duration", nil),
+		lastCompactionMerges:    metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/merges", nil),
+		lastLatestDuration:      metrics.GetOrRegisterGauge(namespace+"lastpass/latest/duration", nil),
+		latestDeferredSync:      metrics.GetOrRegisterGauge(namespace+"latest/deferred/sync", nil),
+		lastLatestBuildBlock:    metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
 	}
 }
 
@@ -228,6 +237,8 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.errors.Update(coldSnapshotUintGauge(stats.PassErrors))
 	m.segmentsBuilt.Update(coldSnapshotUintGauge(stats.SegmentsBuilt))
 	m.segmentsCompacted.Update(coldSnapshotUintGauge(stats.SegmentsCompacted))
+	m.compactionMerges.Update(coldSnapshotUintGauge(stats.CompactionMerges))
+	m.compactionCatchupDefers.Update(coldSnapshotUintGauge(stats.CompactionCatchupDefers))
 	m.bytesBuilt.Update(coldSnapshotUintGauge(stats.BytesBuilt))
 	m.lastSolidified.Update(coldSnapshotUintGauge(stats.LastSolidified))
 	m.lastEligibleCutoff.Update(coldSnapshotUintGauge(stats.LastEligibleCutoffBlock))
@@ -240,6 +251,7 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.lastPassDuration.Update(int64(stats.LastPassDuration))
 	m.lastBuildDuration.Update(int64(stats.LastBuildDuration))
 	m.lastCompactionDuration.Update(int64(stats.LastCompactionDuration))
+	m.lastCompactionMerges.Update(coldSnapshotUintGauge(stats.LastCompactionMerges))
 	m.lastLatestDuration.Update(int64(stats.LastLatestDuration))
 	m.latestDeferredSync.Update(coldSnapshotUintGauge(stats.LatestDeferredSync))
 	m.lastLatestBuildBlock.Update(coldSnapshotUintGauge(stats.LastLatestBuildBlock))
@@ -269,25 +281,28 @@ type Runner struct {
 	startErr    error
 	prepareErr  error
 
-	passesCompleted        atomic.Uint64
-	passErrors             atomic.Uint64
-	segmentsBuilt          atomic.Uint64
-	segmentsCompacted      atomic.Uint64
-	bytesBuilt             atomic.Uint64
-	lastSolidified         atomic.Uint64
-	lastCutoffBlock        atomic.Uint64
-	lastEligibleCutoff     atomic.Uint64
-	lastPublishedBlock     atomic.Uint64
-	lastLagBlocks          atomic.Uint64
-	lastVisibleTxEnd       atomic.Uint64
-	lastFromTxNum          atomic.Uint64
-	lastToTxNum            atomic.Uint64
-	lastPassDuration       atomic.Int64
-	lastBuildDuration      atomic.Int64
-	lastCompactionDuration atomic.Int64
-	lastLatestDuration     atomic.Int64
-	lastLatestBuildBlock   atomic.Uint64
-	latestDeferredSync     atomic.Uint64
+	passesCompleted         atomic.Uint64
+	passErrors              atomic.Uint64
+	segmentsBuilt           atomic.Uint64
+	segmentsCompacted       atomic.Uint64
+	compactionMerges        atomic.Uint64
+	compactionCatchupDefers atomic.Uint64
+	bytesBuilt              atomic.Uint64
+	lastSolidified          atomic.Uint64
+	lastCutoffBlock         atomic.Uint64
+	lastEligibleCutoff      atomic.Uint64
+	lastPublishedBlock      atomic.Uint64
+	lastLagBlocks           atomic.Uint64
+	lastVisibleTxEnd        atomic.Uint64
+	lastFromTxNum           atomic.Uint64
+	lastToTxNum             atomic.Uint64
+	lastPassDuration        atomic.Int64
+	lastBuildDuration       atomic.Int64
+	lastCompactionDuration  atomic.Int64
+	lastCompactionMerges    atomic.Uint64
+	lastLatestDuration      atomic.Int64
+	lastLatestBuildBlock    atomic.Uint64
+	latestDeferredSync      atomic.Uint64
 }
 
 func NewRunner(chain ChainSource, cfg Config) *Runner {
@@ -467,6 +482,8 @@ func (r *Runner) Snapshot() Stats {
 		PassErrors:              r.passErrors.Load(),
 		SegmentsBuilt:           r.segmentsBuilt.Load(),
 		SegmentsCompacted:       r.segmentsCompacted.Load(),
+		CompactionMerges:        r.compactionMerges.Load(),
+		CompactionCatchupDefers: r.compactionCatchupDefers.Load(),
 		BytesBuilt:              r.bytesBuilt.Load(),
 		LastSolidified:          r.lastSolidified.Load(),
 		LastCutoffBlock:         r.lastCutoffBlock.Load(),
@@ -479,14 +496,16 @@ func (r *Runner) Snapshot() Stats {
 		LastPassDuration:        time.Duration(r.lastPassDuration.Load()),
 		LastBuildDuration:       time.Duration(r.lastBuildDuration.Load()),
 		LastCompactionDuration:  time.Duration(r.lastCompactionDuration.Load()),
+		LastCompactionMerges:    r.lastCompactionMerges.Load(),
 		LastLatestDuration:      time.Duration(r.lastLatestDuration.Load()),
 		LatestDeferredSync:      r.latestDeferredSync.Load(),
 		LastLatestBuildBlock:    r.lastLatestBuildBlock.Load(),
 	}
 }
 
-// OnePass builds at most one registered history segment, then compacts history,
-// then runs one latest-snapshot build pass if the cadence interval has elapsed.
+// OnePass builds at most one registered history segment, compacts history with
+// catch-up-aware geometric scheduling, then runs one latest-snapshot build pass
+// if the cadence interval has elapsed.
 func (r *Runner) OnePass() (PassResult, error) {
 	if r == nil {
 		return PassResult{}, nil
@@ -500,7 +519,7 @@ func (r *Runner) OnePass() (PassResult, error) {
 	result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
 	if err == nil {
 		phaseStart = time.Now()
-		result.Compaction, err = r.compactHistory()
+		result.Compaction, err = r.compactHistory(result.NeedsCatchup())
 		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
 	}
 	if err == nil {
@@ -1010,6 +1029,10 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	}
 	if result.Compaction.Merged {
 		r.segmentsCompacted.Add(uint64(result.Compaction.SegmentsMerged))
+		r.compactionMerges.Add(uint64(result.Compaction.MergePasses))
+	}
+	if result.NeedsCatchup() && !result.Compaction.Merged {
+		r.compactionCatchupDefers.Add(1)
 	}
 	if result.LatestDeferred {
 		r.latestDeferredSync.Add(1)
@@ -1058,6 +1081,7 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	r.lastPassDuration.Store(int64(time.Since(start)))
 	r.lastBuildDuration.Store(int64(result.BuildDuration))
 	r.lastCompactionDuration.Store(int64(result.CompactionDuration))
+	r.lastCompactionMerges.Store(uint64(result.Compaction.MergePasses))
 	r.lastLatestDuration.Store(int64(result.LatestDuration))
 	r.updateMetrics()
 }
@@ -1069,14 +1093,58 @@ func (r *Runner) updateMetrics() {
 	r.metrics.update(r.Snapshot())
 }
 
-func (r *Runner) compactHistory() (HistoryCompactionResult, error) {
+func (r *Runner) compactHistory(catchingUp bool) (HistoryCompactionResult, error) {
 	if r == nil || !r.cfg.Enabled {
 		return HistoryCompactionResult{}, nil
 	}
-	return CompactHistoryDomain(r.cfg.Dir, r.cfg.HistoryDataset, CompactionConfig{
+	cfg := CompactionConfig{
 		MaxSteps:       r.cfg.CompactMaxSteps,
 		DeleteObsolete: !r.cfg.RetainObsoleteSegments,
-	})
+	}
+	drain := true
+	if catchingUp {
+		// Erigon builds every ready base step before its merge loop. Preserve our
+		// smaller build/publish/prune boundary, but defer intermediate 2/4/... step
+		// rewrites until a full frozen span is available.
+		cfg.MinSteps = r.cfg.CompactMaxSteps
+		drain = false
+	}
+
+	var total HistoryCompactionResult
+	for {
+		result, err := CompactHistoryDomain(r.cfg.Dir, r.cfg.HistoryDataset, cfg)
+		if err != nil {
+			return total, err
+		}
+		if !result.Merged {
+			return total, nil
+		}
+		mergeHistoryCompactionResult(&total, result)
+		if !drain {
+			return total, nil
+		}
+	}
+}
+
+func mergeHistoryCompactionResult(total *HistoryCompactionResult, next HistoryCompactionResult) {
+	if total == nil || !next.Merged {
+		return
+	}
+	if !total.Merged {
+		*total = next
+		total.Segments = append([]SegmentRef(nil), next.Segments...)
+		return
+	}
+	total.MergePasses += next.MergePasses
+	total.FromTxNum = min(total.FromTxNum, next.FromTxNum)
+	total.ToTxNum = max(total.ToTxNum, next.ToTxNum)
+	if ^uint64(0)-total.AggregationSteps < next.AggregationSteps {
+		total.AggregationSteps = ^uint64(0)
+	} else {
+		total.AggregationSteps += next.AggregationSteps
+	}
+	total.SegmentsMerged += next.SegmentsMerged
+	total.Segments = append(total.Segments, next.Segments...)
 }
 
 func (r *Runner) seedLatestBuildBlock() error {
@@ -1252,6 +1320,9 @@ func (r *Runner) loop() {
 			"fromBlock", result.FromBlock,
 			"toBlock", result.ToBlock,
 			"cutoffBlock", result.CutoffBlock,
+			"compactionMergePasses", result.Compaction.MergePasses,
+			"compactionSteps", result.Compaction.AggregationSteps,
+			"compactionSegments", result.Compaction.SegmentsMerged,
 			"sectionBloomBuilt", result.SectionBloomBuilt,
 			"balanceTraceBuilt", result.BalanceTraceBuilt,
 			"eventLogBuilt", result.EventLogBuilt)
@@ -1260,6 +1331,7 @@ func (r *Runner) loop() {
 			"dataset", result.Compaction.Dataset,
 			"fromTx", result.Compaction.FromTxNum,
 			"toTx", result.Compaction.ToTxNum,
+			"mergePasses", result.Compaction.MergePasses,
 			"aggregationSteps", result.Compaction.AggregationSteps,
 			"segments", result.Compaction.SegmentsMerged)
 	} else if result.LatestBuilt {
@@ -1295,6 +1367,9 @@ func (r *Runner) loop() {
 				"fromBlock", result.FromBlock,
 				"toBlock", result.ToBlock,
 				"cutoffBlock", result.CutoffBlock,
+				"compactionMergePasses", result.Compaction.MergePasses,
+				"compactionSteps", result.Compaction.AggregationSteps,
+				"compactionSegments", result.Compaction.SegmentsMerged,
 				"sectionBloomBuilt", result.SectionBloomBuilt,
 				"balanceTraceBuilt", result.BalanceTraceBuilt,
 				"eventLogBuilt", result.EventLogBuilt)
@@ -1303,6 +1378,7 @@ func (r *Runner) loop() {
 				"dataset", result.Compaction.Dataset,
 				"fromTx", result.Compaction.FromTxNum,
 				"toTx", result.Compaction.ToTxNum,
+				"mergePasses", result.Compaction.MergePasses,
 				"aggregationSteps", result.Compaction.AggregationSteps,
 				"segments", result.Compaction.SegmentsMerged)
 		} else if result.LatestBuilt {

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -615,6 +616,40 @@ func TestCompactHistoryDomainSkipsMaxedFrontRun(t *testing.T) {
 	}
 }
 
+func TestCompactHistoryDomainDefersBelowMinimumLogicalSpan(t *testing.T) {
+	dir := t.TempDir()
+	var refs []SegmentRef
+	for txNum := uint64(1); txNum <= 4; txNum++ {
+		refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, txNum, txNum,
+			binaryStateDomainChange(txNum, txNum, 1, fmt.Sprintf("key-%d", txNum)))...)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 4, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+
+	deferred, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{
+		MinSteps: 8,
+		MaxSteps: 8,
+	})
+	if err != nil {
+		t.Fatalf("deferred compaction: %v", err)
+	}
+	if deferred.Merged {
+		t.Fatalf("four-step run merged below eight-step minimum: %+v", deferred)
+	}
+
+	merged, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{
+		MinSteps: 4,
+		MaxSteps: 8,
+	})
+	if err != nil {
+		t.Fatalf("eligible compaction: %v", err)
+	}
+	if !merged.Merged || merged.MergePasses != 1 || merged.AggregationSteps != 4 || merged.SegmentsMerged != 4 {
+		t.Fatalf("merged result = %+v, want one direct four-step merge", merged)
+	}
+}
+
 func TestSelectAlignedHistoryCompactionRunMatchesErigonLevels(t *testing.T) {
 	candidates := func(steps ...uint64) []historyCompactionCandidate {
 		out := make([]historyCompactionCandidate, 0, len(steps))
@@ -723,11 +758,70 @@ func TestAlignedHistoryCompactionBoundsLogicalRewriteAmplification(t *testing.T)
 			t.Fatalf("frozen shape contains %d-step file, want 256: %+v", candidate.history.AggregationSteps, shape)
 		}
 	}
+	if rewrittenSteps != 4_608 {
+		t.Fatalf("eager shape rewrote %d logical steps, want 4608", rewrittenSteps)
+	}
 	// A leaf can participate only in the bounded 2,4,...,256 levels. Direct
 	// outer-range absorption often does better, but it must never exceed that
 	// logarithmic ceiling or approach an ever-growing whole-prefix rewrite.
 	if max := uint64(leaves * 8); rewrittenSteps > max {
 		t.Fatalf("rewritten logical steps = %d, exceed logarithmic ceiling %d", rewrittenSteps, max)
+	}
+}
+
+func TestCatchupHistoryCompactionWritesEachLeafOnce(t *testing.T) {
+	const (
+		leaves   = 1024
+		maxSteps = 256
+	)
+	var (
+		shape          []historyCompactionCandidate
+		rewrittenSteps uint64
+	)
+	for leaf := 1; leaf <= leaves; leaf++ {
+		shape = append(shape, historyCompactionCandidate{history: SegmentRef{
+			FromTxNum:        uint64(leaf),
+			ToTxNum:          uint64(leaf),
+			AggregationSteps: 1,
+		}})
+		selection, ok := selectAlignedHistoryCompactionRunAtLeast(shape, maxSteps, maxSteps)
+		if !ok {
+			continue
+		}
+		var selectedSteps uint64
+		start, end := -1, -1
+		for i, candidate := range shape {
+			if candidate.history.FromTxNum == selection.fromTxNum {
+				start = i
+			}
+			if candidate.history.ToTxNum == selection.toTxNum {
+				end = i + 1
+			}
+		}
+		for _, candidate := range selection.candidates {
+			selectedSteps += candidate.history.effectiveAggregationSteps()
+		}
+		if start < 0 || end <= start || selectedSteps != maxSteps || selection.aggregationSteps != maxSteps {
+			t.Fatalf("catch-up selection = %+v shape=%+v", selection, shape)
+		}
+		rewrittenSteps += selectedSteps
+		merged := historyCompactionCandidate{history: SegmentRef{
+			FromTxNum:        selection.fromTxNum,
+			ToTxNum:          selection.toTxNum,
+			AggregationSteps: selection.aggregationSteps,
+		}}
+		shape = append(append(append([]historyCompactionCandidate(nil), shape[:start]...), merged), shape[end:]...)
+	}
+	if rewrittenSteps != leaves {
+		t.Fatalf("catch-up rewrote %d logical steps, want each of %d leaves exactly once", rewrittenSteps, leaves)
+	}
+	if len(shape) != leaves/maxSteps {
+		t.Fatalf("catch-up shape files = %d, want %d: %+v", len(shape), leaves/maxSteps, shape)
+	}
+	for _, candidate := range shape {
+		if candidate.history.AggregationSteps != maxSteps {
+			t.Fatalf("catch-up shape contains non-frozen file: %+v", shape)
+		}
 	}
 }
 

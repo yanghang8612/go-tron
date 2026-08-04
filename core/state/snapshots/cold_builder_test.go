@@ -5,8 +5,11 @@ import (
 	"crypto/ed25519"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -370,6 +373,9 @@ func TestColdBuilderMetricsExposeBuildLagAndPhaseDurations(t *testing.T) {
 	assertColdRunnerGauge(t, namespace+"passes", 1)
 	assertColdRunnerGauge(t, namespace+"errors", 0)
 	assertColdRunnerGauge(t, namespace+"segments/built", 1)
+	assertColdRunnerGauge(t, namespace+"compaction/merges", 0)
+	assertColdRunnerGauge(t, namespace+"compaction/deferred/catchup", 1)
+	assertColdRunnerGauge(t, namespace+"lastpass/compaction/merges", 0)
 	assertColdRunnerGauge(t, namespace+"last/eligible_cutoff_block", 3)
 	assertColdRunnerGauge(t, namespace+"last/selected_cutoff_block", 1)
 	assertColdRunnerGauge(t, namespace+"last/published_block", 1)
@@ -807,11 +813,12 @@ func TestColdBuilderSecondPassContinuesFromManifestVisibleEnd(t *testing.T) {
 	}
 
 	runner := NewRunner(&coldBuilderChain{db: db, solidified: 6}, Config{
-		Dir:           dir,
-		Enabled:       true,
-		Interval:      time.Hour,
-		HistoryWindow: 1,
-		BatchBlocks:   2,
+		Dir:             dir,
+		Enabled:         true,
+		Interval:        time.Hour,
+		HistoryWindow:   1,
+		BatchBlocks:     2,
+		CompactMaxSteps: 2,
 	})
 	first, err := runner.OnePass()
 	if err != nil {
@@ -920,6 +927,116 @@ func TestColdBuilderCompactsSmallHistorySegments(t *testing.T) {
 	got := runner.Snapshot()
 	if got.SegmentsBuilt != 2 || got.SegmentsCompacted != 2 {
 		t.Fatalf("runner stats = %+v", got)
+	}
+}
+
+func TestColdBuilderCatchupWritesFullFrozenSpanOnce(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x79)
+	for block := uint64(1); block <= 5; block++ {
+		writeColdBuilderChange(t, db, owner, block, block, fmt.Sprintf("key-%d", block))
+		writeColdBuilderCanonicalBlock(t, db, block)
+	}
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 6}, Config{
+		Dir:             dir,
+		Enabled:         true,
+		Interval:        time.Hour,
+		HistoryWindow:   1,
+		BatchBlocks:     1,
+		CompactMaxSteps: 4,
+	})
+
+	for pass := 1; pass <= 3; pass++ {
+		result, err := runner.OnePass()
+		if err != nil {
+			t.Fatalf("catch-up pass %d: %v", pass, err)
+		}
+		if !result.Built || !result.NeedsCatchup() || result.Compaction.Merged {
+			t.Fatalf("catch-up pass %d result = %+v, want unmerged leaf", pass, result)
+		}
+	}
+	fourth, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("fourth catch-up pass: %v", err)
+	}
+	if !fourth.NeedsCatchup() || !fourth.Compaction.Merged || fourth.Compaction.MergePasses != 1 ||
+		fourth.Compaction.AggregationSteps != 4 || fourth.Compaction.SegmentsMerged != 4 {
+		t.Fatalf("fourth result = %+v, want one direct frozen-span merge", fourth)
+	}
+	fifth, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("final catch-up pass: %v", err)
+	}
+	if !fifth.Built || fifth.NeedsCatchup() || fifth.Compaction.Merged {
+		t.Fatalf("final result = %+v, want trailing leaf without rewrite", fifth)
+	}
+
+	manifest, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	var historySteps []uint64
+	for _, ref := range manifest.Segments {
+		if ref.Dataset == SegmentDatasetStateDomainChange && ref.Kind == SegmentHistory {
+			historySteps = append(historySteps, ref.AggregationSteps)
+		}
+	}
+	sort.Slice(historySteps, func(i, j int) bool { return historySteps[i] > historySteps[j] })
+	if !reflect.DeepEqual(historySteps, []uint64{4, 1}) {
+		t.Fatalf("history shape = %v, want frozen four-step file plus one leaf", historySteps)
+	}
+	if got := runner.Snapshot(); got.SegmentsBuilt != 5 || got.SegmentsCompacted != 4 ||
+		got.CompactionMerges != 1 || got.CompactionCatchupDefers != 3 || got.LastCompactionMerges != 0 {
+		t.Fatalf("runner stats = %+v", got)
+	}
+}
+
+func TestColdBuilderDrainsAllReadyCompactionsWhenCaughtUp(t *testing.T) {
+	dir := t.TempDir()
+	var refs []SegmentRef
+	for txNum := uint64(1); txNum <= 8; txNum++ {
+		refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, txNum, txNum,
+			binaryStateDomainChange(txNum, txNum, 1, fmt.Sprintf("key-%d", txNum)))...)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 8, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	runner := NewRunner(&coldBuilderChain{db: rawdb.NewMemoryDatabase()}, Config{
+		Dir:             dir,
+		Enabled:         true,
+		Interval:        time.Hour,
+		BatchBlocks:     1,
+		CompactMaxSteps: 4,
+	})
+
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("drain compactions: %v", err)
+	}
+	if result.Built || !result.Compaction.Merged || result.Compaction.MergePasses != 2 ||
+		result.Compaction.SegmentsMerged != 8 || result.Compaction.AggregationSteps != 8 {
+		t.Fatalf("drain result = %+v, want two direct four-step merges", result)
+	}
+	manifest, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("load drained manifest: %v", err)
+	}
+	var historyRefs int
+	for _, ref := range manifest.Segments {
+		if ref.Dataset == SegmentDatasetStateDomainChange && ref.Kind == SegmentHistory {
+			historyRefs++
+			if ref.AggregationSteps != 4 {
+				t.Fatalf("drained history ref = %+v, want four steps", ref)
+			}
+		}
+	}
+	if historyRefs != 2 {
+		t.Fatalf("drained history refs = %d, want 2: %+v", historyRefs, manifest.Segments)
+	}
+	if got := runner.Snapshot(); got.CompactionMerges != 2 || got.CompactionCatchupDefers != 0 ||
+		got.LastCompactionMerges != 2 || got.SegmentsCompacted != 8 {
+		t.Fatalf("runner drain stats = %+v", got)
 	}
 }
 
@@ -2041,6 +2158,8 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"errors",
 		"segments/built",
 		"segments/compacted",
+		"compaction/merges",
+		"compaction/deferred/catchup",
 		"bytes/built",
 		"last/solidified_block",
 		"last/eligible_cutoff_block",
@@ -2053,6 +2172,7 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"lastpass/duration",
 		"lastpass/build/duration",
 		"lastpass/compaction/duration",
+		"lastpass/compaction/merges",
 		"lastpass/latest/duration",
 		"latest/deferred/sync",
 		"last/latest_build_block",

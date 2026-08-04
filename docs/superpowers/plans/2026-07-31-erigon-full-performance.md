@@ -414,5 +414,8 @@
 - [x] Buffer history/index/accessor segment emission and decode v5 record fields
   as immutable payload views, eliminating per-record file syscalls and redundant
   copies while retaining bounded-memory ETL ordering.
+- [x] Match Erigon's build-then-merge scheduling during historical catch-up:
+  defer intermediate history levels until a full 256-step frozen range is
+  ready, then drain every eligible aligned merge once the builder catches up.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.
