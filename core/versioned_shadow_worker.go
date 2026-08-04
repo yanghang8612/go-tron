@@ -26,10 +26,10 @@ import (
 const (
 	discardShadowSampleInterval     = uint64(64)
 	discardShadowAsyncRetryInterval = uint64(256)
-	// Keep VM retry incarnations on the synchronous Transfer-reference cohort
-	// until the longer frozen-raw gate is clean. This avoids adding a second
-	// background retry family while the remaining raw capability is classified.
-	vmSenderRetryObserveInterval = discardShadowAsyncRetryInterval
+	// Add the first co-scheduled VM retry cohort at residue 64. Residue zero
+	// remains the synchronous Transfer-reference cohort; residue 64 exercises
+	// both async schedulers but is disjoint from the Transfer publisher at 192.
+	vmSenderRetryCoScheduleOffset = discardShadowSampleInterval
 	// Publish the three non-zero residues of the proven async VM retry cohort.
 	// Residue zero remains assigned to the independent block-start VM publisher,
 	// so every canonical result is attributable to exactly one path.
@@ -65,7 +65,11 @@ func useVMSenderChainPublication(blockNum uint64) bool {
 }
 
 func useVMSenderRetryObservation(blockNum uint64) bool {
-	return blockNum > 0 && blockNum%discardShadowSampleInterval == 0 && blockNum%vmSenderRetryObserveInterval == 0
+	if blockNum == 0 || blockNum%discardShadowSampleInterval != 0 {
+		return false
+	}
+	residue := blockNum % discardShadowAsyncRetryInterval
+	return residue == discardShadowAsyncRetryReferenceOffset || residue == vmSenderRetryCoScheduleOffset
 }
 
 func useVMSenderRetryPublication(blockNum uint64) bool {

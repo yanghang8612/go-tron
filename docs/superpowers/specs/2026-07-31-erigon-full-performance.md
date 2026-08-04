@@ -3034,7 +3034,39 @@ non-zero mismatches only when fully accounted for by version rejection or
 late/stale completion. Publication and post-publication audit requirements are
 unchanged.
 
-#### P4.59: First co-scheduled VM retry cohort (held)
+The fresh-process mainnet gate on `4a4ef529` closes P4.58. The accepted window
+reached 261 retry-observer cohorts and 196 publication cohorts, matching the
+expected 3/4 widened-publication ratio at the sample boundary. It scheduled
+1,220 attempts into 1,211 jobs and returned 2,181 incarnations: 569 ready,
+1,464 late, and 148 stale. Seventy-seven results reached boundary candidacy,
+18 validated and recovered an
+originally rejected source, and 59 were published. All 59 post-publication
+WriteSets matched.
+
+Five speculative contract-result mismatches were observed. Three were rejected
+by exact read versions and two completed after their transaction boundary;
+`version_clean` and `invalid` remained zero, so every mismatch belongs to an
+expected optimistic terminal class. General retry errors, frozen-raw misses,
+shared-state errors, Info/WriteSet/BalanceTrace mismatches, publisher errors,
+audit mismatches, and all public-net/block-energy/preflight fallbacks were zero.
+This window crossed both earlier failure points at observer cohorts 87 and 134.
+
+Accumulated retry execution cost was 1,040.704 ms, shared StateDB copies
+140.781 ms, dispatch 82.548 ms, version freezing 48.399 ms, raw freezing
+13.642 ms, and finish wait 18.429 ms. The 59 canonical publications cost
+3.550 ms total, or about 60.2 us each. A separate exact 181-second throughput
+sample processed 11,136 blocks and 338,243 transactions: 61.52 blocks/s,
+1,868.75 tx/s, and 30.37 tx/block.
+
+A 10-second CPU profile contained 23.85 CPU-seconds. The complete sampled
+discard-shadow/version family accounted for 1.17 CPU-seconds (4.91%), including
+0.61 seconds (2.56%) in block-start sender preexecution and 0.18 seconds (0.75%)
+in actual async retry launch work. Pebble compaction consumed 6.97 CPU-seconds
+(29.22%), so storage compaction remains the materially larger CPU bottleneck.
+With correctness, mismatch accounting, publication audit, and overhead gates
+all clean, the held P4.59 co-scheduled canary may now be restored.
+
+#### P4.59: First co-scheduled VM retry cohort
 
 The next canary adds `block % 256 == 64` to VM retry observation and
 publication. The existing residue-zero cohort runs beside the synchronous
@@ -3058,6 +3090,15 @@ baseline before deployment acceptance. Production admission remains blocked on
 a longer P4.58 zero-error gate, followed by non-zero audited co-scheduled VM
 publication, zero mismatch/error or resource fallback, and bounded VM/Transfer
 queue and CPU growth.
+
+After P4.58 closed, the residue-64 cohort was restored unchanged. VM retry
+observation now runs at residues zero and 64 modulo 256. Publication includes
+residue 64 and the residue-zero cohorts not reserved by the independent VM
+block-start publisher at zero modulo 1024. Residue 64 co-schedules the VM and
+Transfer asynchronous workers, but VM publication stays disjoint from the
+Transfer publisher at residue 192. The production gate remains open until this
+build returns non-zero audited residue-64 publication with zero correctness/
+fallback failures and bounded queue and CPU growth.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

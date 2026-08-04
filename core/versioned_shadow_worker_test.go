@@ -63,12 +63,14 @@ func TestVMSenderRetryObservationCohort(t *testing.T) {
 		want     bool
 	}{
 		{blockNum: 0, want: false},
-		{blockNum: 64, want: false},
+		{blockNum: 64, want: true},
+		{blockNum: 128, want: false},
 		{blockNum: 192, want: false},
 		{blockNum: 256, want: true},
+		{blockNum: 320, want: true},
 		{blockNum: 512, want: true},
 		{blockNum: 1024, want: true},
-		{blockNum: 1088, want: false},
+		{blockNum: 1088, want: true},
 	}
 	for _, test := range tests {
 		if got := useVMSenderRetryObservation(test.blockNum); got != test.want {
@@ -83,7 +85,11 @@ func TestVMSenderRetryPublicationCohort(t *testing.T) {
 		want     bool
 	}{
 		{blockNum: 0, want: false},
+		{blockNum: 64, want: true},
+		{blockNum: 128, want: false},
+		{blockNum: 192, want: false},
 		{blockNum: 256, want: true},
+		{blockNum: 320, want: true},
 		{blockNum: 512, want: true},
 		{blockNum: 768, want: true},
 		{blockNum: 1_024, want: false},
@@ -96,6 +102,14 @@ func TestVMSenderRetryPublicationCohort(t *testing.T) {
 	for _, test := range tests {
 		if got := useVMSenderRetryPublication(test.blockNum); got != test.want {
 			t.Fatalf("block %d VM retry publication cohort = %t, want %t", test.blockNum, got, test.want)
+		}
+	}
+}
+
+func TestVMSenderRetryPublicationStaysDisjointFromTransferPublisher(t *testing.T) {
+	for blockNum := uint64(0); blockNum < 4*vmSenderRetryPublishInterval; blockNum += discardShadowSampleInterval {
+		if useVMSenderRetryPublication(blockNum) && useDiscardShadowAsyncRetryPublication(blockNum) {
+			t.Fatalf("block %d enables both VM and Transfer retry publishers", blockNum)
 		}
 	}
 }
