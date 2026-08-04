@@ -408,5 +408,8 @@
 - [x] Fold index txNum range and strict ordering into the same coverage loop,
   preserving checksum/header/size gates and rejecting structurally plausible
   split duplicate-tx entries.
+- [x] Remove merge-time random history reads through source index/accessor
+  sidecars: authenticate immutable inputs, validate companion structure/ranges,
+  then stream the canonical history once and rebuild both derived sidecars.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

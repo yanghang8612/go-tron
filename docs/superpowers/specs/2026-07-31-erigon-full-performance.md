@@ -3593,6 +3593,35 @@ coverage verifier rejected it in twenty consecutive runs, alongside the P5.13
 sequence, trailing-byte, and checksum cases. This removes one complete index
 entry-table pass per verified merge input without weakening its format gate.
 
+#### P5.15: Treat merge sidecars as derived inputs
+
+The remaining compaction profile was dominated by validating source sidecars,
+not by writing the merged segment. Before a merge, the full companion verifier
+walked history in physical order through the txNum index, then followed the
+accessor's hash order back into random compressed history blocks, repeated that
+for KV groups, and finally scanned history again for group coverage. On the
+16,000-record benchmark this accounted for about 70% of sampled CPU time and
+most `pread` calls. Erigon's merge path instead opens immutable segment inputs,
+streams their canonical history, and builds new derived accessors from the
+merged stream.
+
+Compaction now keeps SHA-256 identity checks for history, index, and accessor;
+validates companion format, range, and record-count headers; and then treats
+history as the sole canonical merge input. The existing sequential copy still
+decodes every record, enforces its logical end, streams tx ranges, and builds a
+fresh txNum index and v4 accessor. A structurally valid but semantically wrong
+old sidecar is therefore repaired rather than used to direct merge reads. Full
+cross-file coverage verification is unchanged for snapshot fetch/install,
+explicit manifest verification, and the hot-prune safety gate.
+
+An adversarial test mutates a v4 exact accessor entry to another in-range record
+and refreshes its checksum. Full companion verification rejects the source,
+while compaction rebuilds correct companions whose full verification succeeds;
+the test passed ten consecutive runs. Across five local benchmark runs, mean
+time fell from 767.73 ms to 240.21 ms (3.20x), mean allocations from 3,350,938
+to 779,569 (-76.7%), and mean allocated bytes from 229.93 MB to 114.93 MB
+(-50.0%).
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

@@ -496,6 +496,62 @@ func TestCompactHistoryDomainValidatesAccessorAgainstSegment(t *testing.T) {
 	}
 }
 
+func TestCompactHistoryDomainRepairsStructurallyValidDerivedSidecarMismatch(t *testing.T) {
+	dir := t.TempDir()
+	refs := append([]SegmentRef{},
+		writeCompactionStateDomainChangeSegment(t, dir, 1, 2,
+			binaryStateDomainChange(1, 1, 1, "a"),
+			binaryStateDomainChange(2, 2, 1, "b"))...)
+	refs = append(refs,
+		writeCompactionStateDomainChangeSegment(t, dir, 3, 3,
+			binaryStateDomainChange(3, 3, 1, "c"))...)
+
+	accessorRef := refs[1]
+	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
+	if version := binary.BigEndian.Uint32(data[8:12]); version != stateDomainChangeBinaryVersionV4 {
+		t.Fatalf("accessor version = %d, want v4", version)
+	}
+	// Keep the exact table structurally sorted and every record index in range,
+	// but point its first entry at the other history record. Full installation/
+	// pruning verification must reject it; compaction may repair it because the
+	// history payload, not either derived sidecar, is the canonical merge input.
+	firstRecordIndex := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV3HashSize + 8
+	current := binary.BigEndian.Uint32(data[firstRecordIndex : firstRecordIndex+4])
+	binary.BigEndian.PutUint32(data[firstRecordIndex:firstRecordIndex+4], 1-current)
+	setStateDomainChangeBinaryRefMetadata(&accessorRef, data)
+	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, accessorRef.Path), data); err != nil {
+		t.Fatalf("write semantically mismatched accessor: %v", err)
+	}
+	refs[1] = accessorRef
+	if err := PublishManifest(dir, NewManifest(1, 3, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, refs[0], refs[2], refs[1]); err == nil {
+		t.Fatal("full companion verification accepted semantically mismatched accessor")
+	}
+
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
+	if err != nil {
+		t.Fatalf("compact repairable sidecar mismatch: %v", err)
+	}
+	if !result.Merged {
+		t.Fatalf("compaction did not merge repairable sources: %+v", result)
+	}
+	merged, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("load merged manifest: %v", err)
+	}
+	historyRef := compactionRefByKind(t, result, SegmentHistory)
+	indexRef := compactionRefByKind(t, result, SegmentInverted)
+	mergedAccessorRef := compactionRefByKind(t, result, SegmentAccessor)
+	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, historyRef, indexRef, mergedAccessorRef); err != nil {
+		t.Fatalf("verify rebuilt companions: %v", err)
+	}
+	if merged.Generation != 2 {
+		t.Fatalf("merged manifest = %+v", merged)
+	}
+}
+
 func TestCompactHistoryDomainNoOpWhenRunNotEligible(t *testing.T) {
 	t.Run("not continuous", func(t *testing.T) {
 		dir := t.TempDir()

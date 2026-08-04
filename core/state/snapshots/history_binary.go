@@ -503,11 +503,14 @@ func collectStateDomainChangeBinaryCompactionSources(dir string, selection histo
 		if !ok {
 			return nil, fmt.Errorf("snapshots: state-domain-change history %q missing accessor companion", candidate.history.Path)
 		}
-		// Companion verification begins with the registered structural and
-		// checksum checks for all three files before proving cross-file coverage.
-		// Do not run those same full-file checks separately here: immutable source
-		// segments would otherwise be hashed and decoded twice before every merge.
-		if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, candidate.history, idxRef, accessorRef); err != nil {
+		// History is the canonical merge input; index and accessor files are
+		// derived sidecars which the output rebuilds from that history stream.
+		// Match Erigon's merge path by checking immutable object identity plus
+		// companion headers here instead of randomly reading every history record
+		// through both old sidecars before every merge. The sequential payload copy
+		// below still decodes and validates every source record, while snapshot
+		// installation and hot pruning retain the full cross-file coverage proof.
+		if err := checkStateDomainChangeBinaryCompactionSource(dir, candidate.history, idxRef, accessorRef); err != nil {
 			return nil, err
 		}
 		segmentFile, segmentHeader, segmentSize, err := openStateDomainChangeBinarySegmentReader(dir, candidate.history)
@@ -529,6 +532,55 @@ func collectStateDomainChangeBinaryCompactionSources(dir string, selection histo
 		})
 	}
 	return sources, nil
+}
+
+func checkStateDomainChangeBinaryCompactionSource(dir string, historyRef, indexRef, accessorRef SegmentRef) error {
+	if err := checkStateDomainChangeBinarySegmentChecksum(dir, historyRef); err != nil {
+		return err
+	}
+	if err := checkStateDomainChangeBinaryIndexChecksum(dir, indexRef); err != nil {
+		return err
+	}
+	if err := CheckStateDomainChangeAccessorSegment(dir, accessorRef); err != nil {
+		return err
+	}
+
+	segment, segmentHeader, _, err := openStateDomainChangeBinarySegmentReader(dir, historyRef)
+	if err != nil {
+		return err
+	}
+	if err := segment.Close(); err != nil {
+		return err
+	}
+
+	index, indexHeader, err := openStateDomainChangeBinaryIndexReader(dir, indexRef)
+	if err != nil {
+		return err
+	}
+	if err := index.Close(); err != nil {
+		return err
+	}
+	if indexHeader.fromTxNum != segmentHeader.fromTxNum || indexHeader.toTxNum != segmentHeader.toTxNum {
+		return fmt.Errorf("snapshots: state-domain-change binary index %q range [%d,%d], want segment range [%d,%d]",
+			indexRef.Path, indexHeader.fromTxNum, indexHeader.toTxNum, segmentHeader.fromTxNum, segmentHeader.toTxNum)
+	}
+
+	accessor, accessorHeader, _, err := openStateDomainChangeBinaryAccessorReader(dir, accessorRef)
+	if err != nil {
+		return err
+	}
+	if err := accessor.Close(); err != nil {
+		return err
+	}
+	if accessorHeader.fromTxNum != segmentHeader.fromTxNum || accessorHeader.toTxNum != segmentHeader.toTxNum {
+		return fmt.Errorf("snapshots: state-domain-change binary accessor %q range [%d,%d], want segment range [%d,%d]",
+			accessorRef.Path, accessorHeader.fromTxNum, accessorHeader.toTxNum, segmentHeader.fromTxNum, segmentHeader.toTxNum)
+	}
+	if accessorHeader.count != segmentHeader.count {
+		return fmt.Errorf("snapshots: state-domain-change binary accessor %q count %d, want segment count %d",
+			accessorRef.Path, accessorHeader.count, segmentHeader.count)
+	}
+	return nil
 }
 
 func historyCompactionCompanion(candidate historyCompactionCandidate, kind SegmentKind) (SegmentRef, bool) {
