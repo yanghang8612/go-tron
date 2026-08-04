@@ -3006,6 +3006,34 @@ index, retry start, expected and actual contract-result enum, and transaction
 hash prefix. This distinguishes wall-time OUT_OF_TIME behavior from a
 state-dependent REVERT before choosing the next fix.
 
+The enum diagnostic build `a3221732` reproduced the remaining signature at
+block 17,668,864, transaction index 13, from retry boundary 11. The block
+expected enum 2 (`REVERT`) while speculative execution returned enum 1
+(`SUCCESS`); frozen-raw misses remained zero. This is not an OUT_OF_TIME path.
+It is exactly the kind of outcome an Erigon-style optimistic executor may
+produce from a stale prefix: the output itself can differ before its recorded
+read versions have been checked against ordered predecessor writes.
+
+Contract-result comparison is therefore no longer an execution-stage failure
+for a structurally complete VM retry. The retry retains its read set and
+post-images only long enough to run the exact transaction-boundary version
+check. The ordinary readiness predicate remains false, so such a result cannot
+forward writes to its sender suffix, become a selected publication candidate,
+or reach the ordered publisher. Source preexecution is also required to pass
+the same readiness predicate before it can suppress a newer retry.
+
+The production counters now separate total contract-result mismatches into
+`rejected_by_versions`, `version_clean`, `late`, `stale`, and `invalid` paths.
+A version rejection is expected optimistic-conflict evidence. `late` and
+`stale` results were never eligible at their boundary. `version_clean` means
+the output differed despite an exact read-version match and remains a real
+equivalence failure; `invalid` means the result was not structurally complete
+enough to validate. The widened P4.58 gate therefore requires zero general
+retry errors, frozen-raw misses, `version_clean`, and `invalid`, while allowing
+non-zero mismatches only when fully accounted for by version rejection or
+late/stale completion. Publication and post-publication audit requirements are
+unchanged.
+
 #### P4.59: First co-scheduled VM retry cohort (held)
 
 The next canary adds `block % 256 == 64` to VM retry observation and

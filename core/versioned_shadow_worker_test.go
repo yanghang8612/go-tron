@@ -491,17 +491,6 @@ func TestAsyncRetryResultErrorClassification(t *testing.T) {
 			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualExecutionErrs == 1 },
 		},
 		{
-			name: "contract ret", result: discardShadowTaskResult{
-				txIndex: 7, retryStartTx: 3, err: errors.New("contract ret"), errorStage: discardShadowTaskErrorContractRet,
-				contractRetBlock: 123, contractRetExpected: 1, contractRetActual: 2, contractRetTxHash: 456,
-			},
-			check: func(stats discardShadowSenderRetryStats) bool {
-				return stats.actualContractErrs == 1 && stats.actualContractBlock == 123 &&
-					stats.actualContractTx == 7 && stats.actualContractStart == 3 &&
-					stats.actualContractWant == 1 && stats.actualContractGot == 2 && stats.actualContractHash == 456
-			},
-		},
-		{
 			name: "forward", result: discardShadowTaskResult{err: errors.New("forward"), errorStage: discardShadowTaskErrorForward},
 			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualForwardErrors == 1 },
 		},
@@ -532,6 +521,156 @@ func TestAsyncRetryResultErrorClassification(t *testing.T) {
 			retry.recordAsyncResultError(&test.result)
 			if !test.check(retry.stats) {
 				t.Fatalf("classification stats = %+v", retry.stats)
+			}
+		})
+	}
+}
+
+func TestAsyncRetryContractRetMismatchRemainsValidatableButNotPublishable(t *testing.T) {
+	retry := &discardShadowSenderRetry{
+		async:             true,
+		publish:           true,
+		ready:             preexecutedResultReady,
+		results:           make([]discardShadowTaskResult, 1),
+		available:         make([]bool, 1),
+		selected:          make([]discardShadowTaskResult, 1),
+		selectedOK:        make([]bool, 1),
+		selectedPublished: make([]bool, 1),
+		incarnations:      []uint32{1},
+	}
+	result := discardShadowTaskResult{
+		txIndex: 0, incarnation: 1,
+		info: new(corepb.TransactionInfo), applyEligible: true, applyMatch: true,
+		contractRetMismatch: true, contractRetBlock: 123, contractRetExpected: 2,
+		contractRetActual: 1, contractRetTxHash: 456,
+	}
+	retry.consumeAsyncEvent(discardShadowAsyncRetryEvent{result: &result}, 0)
+	if !retry.available[0] {
+		t.Fatal("contract-result mismatch was discarded before read-version validation")
+	}
+	if retry.resultReady(&retry.results[0]) {
+		t.Fatal("contract-result mismatch became publish-ready")
+	}
+	if retry.stats.actualErrors != 0 || retry.stats.errors != 0 || retry.stats.actualRetMismatches != 1 {
+		t.Fatalf("contract-result mismatch stats = %+v", retry.stats)
+	}
+	if retry.stats.actualContractBlock != 123 || retry.stats.actualContractTx != 0 ||
+		retry.stats.actualContractStart != 0 || retry.stats.actualContractWant != 2 ||
+		retry.stats.actualContractGot != 1 || retry.stats.actualContractHash != 456 {
+		t.Fatalf("contract-result mismatch diagnostics = %+v", retry.stats)
+	}
+	retry.selected[0] = retry.results[0]
+	retry.selectedOK[0] = true
+	if _, ok := retry.selectedResultForPublication(0); ok {
+		t.Fatal("contract-result mismatch was exposed to the ordered publisher")
+	}
+}
+
+func TestAsyncRetryContractRetMismatchTerminalClassification(t *testing.T) {
+	complete := func(incarnation uint32) discardShadowTaskResult {
+		return discardShadowTaskResult{
+			txIndex: 0, incarnation: incarnation,
+			info: new(corepb.TransactionInfo), applyEligible: true, applyMatch: true,
+			contractRetMismatch: true,
+		}
+	}
+	tests := []struct {
+		name     string
+		result   discardShadowTaskResult
+		boundary int
+		check    func(discardShadowSenderRetryStats) bool
+	}{
+		{
+			name: "stale incarnation", result: complete(2), boundary: 0,
+			check: func(stats discardShadowSenderRetryStats) bool {
+				return stats.actualRetStale == 1 && stats.actualStale == 1 && stats.actualErrors == 0
+			},
+		},
+		{
+			name: "late result", result: complete(1), boundary: 1,
+			check: func(stats discardShadowSenderRetryStats) bool {
+				return stats.actualRetLate == 1 && stats.actualLate == 1 && stats.actualErrors == 0
+			},
+		},
+		{
+			name: "invalid result", result: discardShadowTaskResult{
+				txIndex: 0, incarnation: 1, contractRetMismatch: true,
+			}, boundary: 0,
+			check: func(stats discardShadowSenderRetryStats) bool {
+				return stats.actualRetInvalid == 1 && stats.actualErrors == 1
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			retry := &discardShadowSenderRetry{
+				ready:        preexecutedResultReady,
+				results:      make([]discardShadowTaskResult, 1),
+				available:    make([]bool, 1),
+				selectedOK:   make([]bool, 1),
+				incarnations: []uint32{1},
+			}
+			retry.consumeAsyncEvent(discardShadowAsyncRetryEvent{result: &test.result}, test.boundary)
+			if retry.stats.actualRetMismatches != 1 || !test.check(retry.stats) {
+				t.Fatalf("terminal mismatch stats = %+v", retry.stats)
+			}
+		})
+	}
+}
+
+func TestAsyncRetryContractRetMismatchVersionClassification(t *testing.T) {
+	readKey := state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "ordered-write"}
+	tests := []struct {
+		name     string
+		conflict bool
+	}{
+		{name: "version clean"},
+		{name: "rejected by versions", conflict: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := &discardShadowPreexecution{
+				resultByTx: []int{-1, -1},
+				senderNext: []int{-1, -1},
+			}
+			retry := &discardShadowSenderRetry{
+				source:            source,
+				async:             true,
+				publish:           true,
+				ready:             preexecutedResultReady,
+				results:           make([]discardShadowTaskResult, 2),
+				available:         make([]bool, 2),
+				selected:          make([]discardShadowTaskResult, 2),
+				selectedOK:        make([]bool, 2),
+				selectedPublished: make([]bool, 2),
+				incarnations:      []uint32{0, 1},
+			}
+			result := discardShadowTaskResult{
+				txIndex: 1, incarnation: 1,
+				info: new(corepb.TransactionInfo), applyEligible: true, applyMatch: true,
+				contractRetMismatch: true,
+			}
+			if test.conflict {
+				result.reads = state.TransactionReadSet{Reads: []state.TransactionRead{{
+					Key: readKey, Mode: state.TransactionAccessRead,
+				}}}
+			}
+			retry.consumeAsyncEvent(discardShadowAsyncRetryEvent{result: &result}, 0)
+			var versioned versionedAccessShadow
+			versioned.Prepare(2)
+			if test.conflict {
+				versioned.versions[readKey] = 0
+			}
+			retry.observeAsyncBoundary(1, nil, nil, nil, &versioned, discardShadowRunConfig{})
+			if retry.selectedOK[1] {
+				t.Fatal("contract-result mismatch became a selected candidate")
+			}
+			if test.conflict {
+				if retry.stats.actualRetRejected != 1 || retry.stats.actualRetClean != 0 {
+					t.Fatalf("version-rejected stats = %+v", retry.stats)
+				}
+			} else if retry.stats.actualRetClean != 1 || retry.stats.actualRetRejected != 0 {
+				t.Fatalf("version-clean stats = %+v", retry.stats)
 			}
 		})
 	}

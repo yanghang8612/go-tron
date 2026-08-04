@@ -274,8 +274,11 @@
   retries to fall through to the live block buffer.
 - [x] Derive and freeze each retry suffix transaction's exact TAPOS envelope
   key at the settled conflict boundary.
-- [ ] Classify the remaining async contract-ret mismatch as OUT_OF_TIME,
+- [x] Classify the remaining async contract-ret mismatch as OUT_OF_TIME,
   REVERT, or another result without admitting it to publication.
+- [x] Route structurally complete speculative contract-result mismatches through
+  the ordered read-version gate, counting version conflicts as benign rejection
+  while requiring zero version-clean or invalid mismatches.
 - [ ] Add one co-scheduled VM retry residue on Transfer-async blocks while
   keeping the VM and Transfer canonical publishers disjoint.
 - [ ] Run the co-scheduled retry gate with non-zero audited VM publication,

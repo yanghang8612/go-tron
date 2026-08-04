@@ -284,13 +284,18 @@ var (
 	parallelVMAsyncRetryErrorsCounter                = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/errors", nil)
 	parallelVMAsyncRetryInputErrorsCounter           = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/input", nil)
 	parallelVMAsyncRetryExecutionErrorsCounter       = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/execution", nil)
-	parallelVMAsyncRetryContractRetErrorsCounter     = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/contract_ret", nil)
-	parallelVMAsyncRetryContractRetBlockGauge        = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/block", nil)
-	parallelVMAsyncRetryContractRetTxIndexGauge      = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/tx_index", nil)
-	parallelVMAsyncRetryContractRetRetryStartGauge   = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/retry_start", nil)
-	parallelVMAsyncRetryContractRetExpectedGauge     = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/expected", nil)
-	parallelVMAsyncRetryContractRetActualGauge       = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/actual", nil)
-	parallelVMAsyncRetryContractRetTxHashGauge       = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/tx_hash_prefix_u64", nil)
+	parallelVMAsyncRetryContractRetMismatchCounter   = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/contract_ret/mismatches", nil)
+	parallelVMAsyncRetryContractRetRejectedCounter   = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/contract_ret/rejected_by_versions", nil)
+	parallelVMAsyncRetryRetCleanCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/contract_ret/version_clean", nil)
+	parallelVMAsyncRetryContractRetLateCounter       = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/contract_ret/late", nil)
+	parallelVMAsyncRetryContractRetStaleCounter      = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/contract_ret/stale", nil)
+	parallelVMAsyncRetryContractRetInvalidCounter    = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/contract_ret/invalid", nil)
+	parallelVMAsyncRetryContractRetBlockGauge        = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/contract_ret/last/block", nil)
+	parallelVMAsyncRetryContractRetTxIndexGauge      = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/contract_ret/last/tx_index", nil)
+	parallelVMAsyncRetryContractRetRetryStartGauge   = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/contract_ret/last/retry_start", nil)
+	parallelVMAsyncRetryContractRetExpectedGauge     = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/contract_ret/last/expected", nil)
+	parallelVMAsyncRetryContractRetActualGauge       = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/contract_ret/last/actual", nil)
+	parallelVMAsyncRetryContractRetTxHashGauge       = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/contract_ret/last/tx_hash_prefix_u64", nil)
 	parallelVMAsyncRetryForwardErrorsCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/forward", nil)
 	parallelVMAsyncRetryMissingInfoErrorsCounter     = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/missing_info", nil)
 	parallelVMAsyncRetryWriteSetErrorsCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/write_set", nil)
@@ -694,6 +699,7 @@ type discardShadowTaskResult struct {
 	contractRetExpected  int64
 	contractRetActual    int64
 	contractRetTxHash    int64
+	contractRetMismatch  bool
 }
 
 type discardShadowTaskErrorStage uint8
@@ -702,7 +708,6 @@ const (
 	discardShadowTaskErrorNone discardShadowTaskErrorStage = iota
 	discardShadowTaskErrorInput
 	discardShadowTaskErrorExecution
-	discardShadowTaskErrorContractRet
 	discardShadowTaskErrorForward
 )
 
@@ -854,7 +859,12 @@ type discardShadowSenderRetryStats struct {
 	actualErrors        int64
 	actualInputErrors   int64
 	actualExecutionErrs int64
-	actualContractErrs  int64
+	actualRetMismatches int64
+	actualRetRejected   int64
+	actualRetClean      int64
+	actualRetLate       int64
+	actualRetStale      int64
+	actualRetInvalid    int64
 	actualContractBlock int64
 	actualContractTx    int64
 	actualContractStart int64
@@ -2662,21 +2672,43 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 	retry.stats.executed++
 	retry.stats.actualExecuted++
 	ready := retry.resultReady(&result)
-	if !ready {
+	// A VM result-code mismatch can be the consequence of a stale speculative
+	// read. Retain a structurally complete result for the ordered read-version
+	// check, but keep resultReady false so it can never be forwarded or published.
+	validatable := ready || (!retry.recordTransferStats && result.contractRetMismatch && preexecutedResultValidForReadValidation(&result))
+	if result.contractRetMismatch {
+		retry.stats.actualRetMismatches++
+		retry.stats.actualContractBlock = result.contractRetBlock
+		retry.stats.actualContractTx = int64(result.txIndex)
+		retry.stats.actualContractStart = int64(result.retryStartTx)
+		retry.stats.actualContractWant = result.contractRetExpected
+		retry.stats.actualContractGot = result.contractRetActual
+		retry.stats.actualContractHash = result.contractRetTxHash
+	}
+	if !validatable {
+		if result.contractRetMismatch {
+			retry.stats.actualRetInvalid++
+		}
 		retry.stats.errors++
 		retry.stats.actualErrors++
 		retry.recordAsyncResultError(&result)
 	}
 	if result.txIndex < 0 || result.txIndex >= len(retry.results) || result.incarnation != retry.incarnations[result.txIndex] {
 		retry.stats.actualStale++
+		if result.contractRetMismatch && validatable {
+			retry.stats.actualRetStale++
+		}
 		return
 	}
 	if result.txIndex < boundary {
 		retry.stats.actualLate++
+		if result.contractRetMismatch && validatable {
+			retry.stats.actualRetLate++
+		}
 		return
 	}
 	retry.results[result.txIndex] = result
-	retry.available[result.txIndex] = ready
+	retry.available[result.txIndex] = validatable
 	retry.selectedOK[result.txIndex] = false
 	retry.stats.actualReady++
 }
@@ -2690,14 +2722,6 @@ func (retry *discardShadowSenderRetry) recordAsyncResultError(result *discardSha
 		retry.stats.actualMissingInfo++
 	case result.err != nil:
 		switch result.errorStage {
-		case discardShadowTaskErrorContractRet:
-			retry.stats.actualContractErrs++
-			retry.stats.actualContractBlock = result.contractRetBlock
-			retry.stats.actualContractTx = int64(result.txIndex)
-			retry.stats.actualContractStart = int64(result.retryStartTx)
-			retry.stats.actualContractWant = result.contractRetExpected
-			retry.stats.actualContractGot = result.contractRetActual
-			retry.stats.actualContractHash = result.contractRetTxHash
 		case discardShadowTaskErrorForward:
 			retry.stats.actualForwardErrors++
 		case discardShadowTaskErrorInput:
@@ -2811,14 +2835,14 @@ func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Tr
 		retry.observeAsyncBoundary(txIndex, tx, statedb, dynProps, versioned, cfg)
 		return
 	}
-	_, sourceDecision, sourceAvailable := retry.source.resultForTransaction(txIndex)
+	sourceResult, sourceDecision, sourceAvailable := retry.source.resultForTransaction(txIndex)
 	decision := discardShadowReadVersionResult{}
 	resultAvailable := false
 	if retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex] {
 		decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
 		resultAvailable = true
 	}
-	newestPublishable := sourceAvailable && sourceDecision.publishable
+	newestPublishable := sourceAvailable && sourceDecision.publishable && retry.resultReady(sourceResult)
 	if resultAvailable {
 		newestPublishable = decision.publishable
 	}
@@ -2833,7 +2857,7 @@ func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Tr
 			resultAvailable = true
 		}
 	}
-	if !resultAvailable || !decision.publishable {
+	if !resultAvailable || !retry.resultReady(&retry.results[txIndex]) || !decision.publishable {
 		return
 	}
 	retry.selected[txIndex] = retry.results[txIndex]
@@ -2857,15 +2881,16 @@ func (retry *discardShadowSenderRetry) observeBoundary(txIndex int, tx *types.Tr
 func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *types.Transaction, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
 	retry.drainAsyncEvents(txIndex, false)
 	retry.dispatchAsyncRetryQueue(txIndex, versioned, cfg)
-	_, sourceDecision, sourceAvailable := retry.source.resultForTransaction(txIndex)
+	sourceResult, sourceDecision, sourceAvailable := retry.source.resultForTransaction(txIndex)
 	decision := discardShadowReadVersionResult{}
 	resultAvailable := retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex]
+	resultPublishReady := resultAvailable && retry.resultReady(&retry.results[txIndex])
 	if resultAvailable {
 		decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
 	}
-	newestPublishable := sourceAvailable && sourceDecision.publishable
+	newestPublishable := sourceAvailable && sourceDecision.publishable && retry.resultReady(sourceResult)
 	if resultAvailable {
-		newestPublishable = decision.publishable
+		newestPublishable = decision.publishable && resultPublishReady
 	}
 	if retry.asyncActive > 0 && (!newestPublishable || retry.publish && !resultAvailable) {
 		// Give a result that completed while the source version was checked one
@@ -2873,9 +2898,17 @@ func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *typ
 		retry.drainAsyncEvents(txIndex, false)
 		retry.dispatchAsyncRetryQueue(txIndex, versioned, cfg)
 		resultAvailable = retry.available[txIndex] && retry.results[txIndex].incarnation == retry.incarnations[txIndex]
+		resultPublishReady = resultAvailable && retry.resultReady(&retry.results[txIndex])
 		if resultAvailable {
 			decision = versioned.validateBlockStartReadSet(txIndex, tx, retry.results[txIndex])
-			newestPublishable = decision.publishable
+			newestPublishable = decision.publishable && resultPublishReady
+		}
+	}
+	if resultAvailable && retry.results[txIndex].contractRetMismatch {
+		if decision.publishable {
+			retry.stats.actualRetClean++
+		} else {
+			retry.stats.actualRetRejected++
 		}
 	}
 	if resultAvailable && !decision.publishable {
@@ -2890,7 +2923,7 @@ func (retry *discardShadowSenderRetry) observeAsyncBoundary(txIndex int, tx *typ
 		retry.enqueueAsyncRetry(txIndex, statedb, dynProps, versioned, cfg)
 		return
 	}
-	if !resultAvailable || !decision.publishable {
+	if !resultAvailable || !resultPublishReady || !decision.publishable {
 		return
 	}
 	retry.selected[txIndex] = retry.results[txIndex]
@@ -3144,8 +3177,13 @@ func recordVMAsyncSenderRetryStats(stats discardShadowSenderRetryStats) {
 	parallelVMAsyncRetryErrorsCounter.Inc(stats.actualErrors)
 	parallelVMAsyncRetryInputErrorsCounter.Inc(stats.actualInputErrors)
 	parallelVMAsyncRetryExecutionErrorsCounter.Inc(stats.actualExecutionErrs)
-	parallelVMAsyncRetryContractRetErrorsCounter.Inc(stats.actualContractErrs)
-	if stats.actualContractErrs > 0 {
+	parallelVMAsyncRetryContractRetMismatchCounter.Inc(stats.actualRetMismatches)
+	parallelVMAsyncRetryContractRetRejectedCounter.Inc(stats.actualRetRejected)
+	parallelVMAsyncRetryRetCleanCounter.Inc(stats.actualRetClean)
+	parallelVMAsyncRetryContractRetLateCounter.Inc(stats.actualRetLate)
+	parallelVMAsyncRetryContractRetStaleCounter.Inc(stats.actualRetStale)
+	parallelVMAsyncRetryContractRetInvalidCounter.Inc(stats.actualRetInvalid)
+	if stats.actualRetMismatches > 0 {
 		parallelVMAsyncRetryContractRetBlockGauge.Update(stats.actualContractBlock)
 		parallelVMAsyncRetryContractRetTxIndexGauge.Update(stats.actualContractTx)
 		parallelVMAsyncRetryContractRetRetryStartGauge.Update(stats.actualContractStart)
@@ -3544,12 +3582,16 @@ func (pre *discardShadowPreexecution) markPublished(txIndex int) {
 	}
 }
 
-func preexecutedResultReady(result *discardShadowTaskResult) bool {
+func preexecutedResultValidForReadValidation(result *discardShadowTaskResult) bool {
 	if result == nil || result.err != nil || result.info == nil || result.writeSetErr != nil ||
 		!result.applyEligible || result.applyErr != nil || !result.applyMatch {
 		return false
 	}
 	return true
+}
+
+func preexecutedResultReady(result *discardShadowTaskResult) bool {
+	return preexecutedResultValidForReadValidation(result) && !result.contractRetMismatch
 }
 
 func preexecutedTransferReady(result *discardShadowTaskResult) bool {
@@ -4442,27 +4484,24 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		&worker.infoSlot.executionLogArena,
 	)
 	errorStage := discardShadowTaskErrorExecution
-	if err == nil {
-		errorStage = discardShadowTaskErrorContractRet
-		err = ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet))
-	}
 	if err != nil {
 		worker.state.SetTransactionAccessRecorder(nil)
 		worker.dynProps.SetTransactionAccessRecorder(nil)
 		worker.state.RevertToSnapshot(stateSnapshot)
 		worker.dynProps.RevertToSnapshot(dpSnapshot)
-		failed := discardShadowTaskResult{txIndex: txIndex, class: class, err: err, errorStage: errorStage}
-		if errorStage == discardShadowTaskErrorContractRet {
-			failed.contractRetBlock = int64(cfg.block.Number())
-			failed.contractRetExpected = -1
-			if ret := tx.Proto().GetRet(); len(ret) > 0 {
-				failed.contractRetExpected = int64(ret[0].GetContractRet())
-			}
-			failed.contractRetActual = int64(result.ContractRet)
-			hash := tx.Hash()
-			failed.contractRetTxHash = int64(binary.BigEndian.Uint64(hash[:8]))
+		return discardShadowTaskResult{txIndex: txIndex, class: class, err: err, errorStage: errorStage}
+	}
+	contractRetErr := ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet))
+	var contractRetBlock, contractRetExpected, contractRetActual, contractRetTxHash int64
+	if contractRetErr != nil {
+		contractRetBlock = int64(cfg.block.Number())
+		contractRetExpected = -1
+		if ret := tx.Proto().GetRet(); len(ret) > 0 {
+			contractRetExpected = int64(ret[0].GetContractRet())
 		}
-		return failed
+		contractRetActual = int64(result.ContractRet)
+		txHash := tx.Hash()
+		contractRetTxHash = int64(binary.BigEndian.Uint64(txHash[:8]))
 	}
 
 	shadowInfo := worker.infoSlot.build(tx, result, cfg.block.Number(), cfg.block.Timestamp(), worker.dynProps.AllowTransactionFeePool())
@@ -4547,23 +4586,28 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		worker.db.recorder = &worker.recorder
 	}
 	return discardShadowTaskResult{
-		txIndex:          txIndex,
-		class:            class,
-		mismatch:         mismatch,
-		coreMatch:        coreMismatch == 0,
-		matched:          mismatch == 0,
-		writeSetMatch:    writeSetMatch,
-		writeSetErr:      writeSetErr,
-		applyEligible:    applyEligible,
-		applyUnsupported: applyUnsupported,
-		applyMatch:       applyMatch,
-		applyMismatch:    applyMismatch,
-		applyErr:         applyErr,
-		writes:           writes,
-		reads:            reads,
-		info:             retainedInfo,
-		balanceTrace:     balanceTrace,
-		publicNet:        publicNet,
-		publicNetValid:   publicNetValid,
+		txIndex:             txIndex,
+		class:               class,
+		mismatch:            mismatch,
+		coreMatch:           coreMismatch == 0,
+		matched:             mismatch == 0,
+		writeSetMatch:       writeSetMatch,
+		writeSetErr:         writeSetErr,
+		applyEligible:       applyEligible,
+		applyUnsupported:    applyUnsupported,
+		applyMatch:          applyMatch,
+		applyMismatch:       applyMismatch,
+		applyErr:            applyErr,
+		writes:              writes,
+		reads:               reads,
+		info:                retainedInfo,
+		balanceTrace:        balanceTrace,
+		publicNet:           publicNet,
+		publicNetValid:      publicNetValid,
+		contractRetBlock:    contractRetBlock,
+		contractRetExpected: contractRetExpected,
+		contractRetActual:   contractRetActual,
+		contractRetTxHash:   contractRetTxHash,
+		contractRetMismatch: contractRetErr != nil,
 	}
 }
