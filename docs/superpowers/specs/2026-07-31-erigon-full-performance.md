@@ -2779,6 +2779,32 @@ samples to the combined sender-retry family (including the existing Transfer
 async scheduler); the synchronous `retryFrom` path itself accumulated only one
 10 ms sample and was absent from the top hot functions.
 
+#### P4.56: Actual async VM retry observer
+
+The same 1/1024 VM cohort now moves retry execution off the canonical goroutine
+without changing publication. VM sender-chain preexecution retains clean
+block-start StateDB runners. At a conflict boundary the scheduler freezes only
+the suffix's raw-KV reads, relevant version cells, and current dynamic
+properties, then submits up to four same-sender incarnations to the existing
+lowest-transaction-first retry queue. The worker copies a retained execution
+base, reads canonical typed post-images through the shared version floor,
+forwards typed and raw post-images inside its suffix, and returns versioned
+results to the original transaction boundaries.
+
+The canonical loop never waits at a boundary. Results already present and
+version-valid become observer candidates; late or superseded incarnations stay
+on serial execution, and finish waits only to reclaim block-scoped workers for
+diagnostics. Retry publication remains disabled. Dedicated counters under
+`core/parallel_vm/retry/async/` expose attempts/jobs, ready/late/stale results,
+validated/recovered candidates, queue pressure, retained-runner capacity,
+frozen raw/version input size, shared-state copy cost, execution/dispatch/finish
+cost, and all mismatch/error stages. The integration fixture verifies the
+shared-version path, retained runner ownership, complete result classification,
+zero retry publication, and exact serial receipts, resource state, and final
+StateDB root. The production gate requires non-zero ready and recovered results
+with zero mismatch/error and enough queue/timing data to decide whether only
+ready descendants should enter the canonical VM publisher.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

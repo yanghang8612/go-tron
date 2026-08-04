@@ -260,8 +260,12 @@
   1/1024 cohort and compare recovered suffixes with serial execution.
 - [x] Run the VM retry-incarnation production gate and quantify recovery,
   exactness, copy/execution cost, and projected async deadlines.
-- [ ] Move validated VM retries to the async shared-version scheduler before
-  allowing retry-result publication.
+- [x] Move VM retries to the async shared-version scheduler in observe-only
+  mode, with retained runners and complete queue/timing diagnostics.
+- [ ] Run the actual async VM retry production gate and require non-zero
+  ready/recovered results with zero mismatch/error.
+- [ ] Allow only boundary-ready VM retry descendants into the canonical
+  publisher after the async gate passes.
 
 ## P5: Snapshot and cold steady state
 
