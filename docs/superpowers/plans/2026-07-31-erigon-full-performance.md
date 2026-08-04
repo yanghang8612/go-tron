@@ -209,7 +209,7 @@
   immutable commitment lifecycle.
 - [x] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
-- [ ] Run the shared-version retry production gate: require shared-value hits,
+- [x] Run the shared-version retry production gate: require shared-value hits,
   zero private prefix advances/errors, unchanged serial equivalence, and lower
   retry copy/replay cost over a fixed dense window.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

@@ -2431,6 +2431,26 @@ acceptance gate requires positive shared hits, zero async private-prefix
 advances, zero shared-state/equivalence errors, and improved copy/replay cost on
 a fixed dense production window before expanding beyond the Transfer family.
 
+The first two post-deployment windows covered 159.37 measured seconds, 12,683
+blocks, and 331,763 transactions (79.58 blocks/s and 2,081.7 transactions/s;
+workload density 26.16 transactions/block). Across 2,492 shared-state jobs the
+workers executed 5,149 tasks and published 1,094 retry results. They performed
+177,769 version reads with 5,157 exact floor hits; private async prefix jobs and
+advances both remained zero. Lazy job-state copies consumed 128.45 ms total, or
+51.55 microseconds/job. Shared-state, async-retry, parallel-publication,
+commitment-fold, and pipeline errors were all zero, as were TransactionInfo,
+WriteSet, and BalanceTrace mismatches.
+
+The same windows averaged 81.96 MB/s disk writes, 67.45 MB/s compaction input,
+and 61.48 MB/s compaction output. Net estimated compaction debt increased by
+only 77.3 MB and write delay remained zero. Commitment folding averaged 8.36
+ms/block and async-commit backpressure 0.384 ms/block. A 20-second CPU profile
+contained 59.93 CPU-seconds; the shared version-read subtree accounted for 0.09
+CPU-seconds (0.15%) and did not enter the global hot list. The production gate
+therefore passes the structural goal: canonical prefix replay is gone without
+creating a shared-reader CPU hotspot or changing serial equivalence. Longer
+canary and public-bandwidth gates remain separate checklist items.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
