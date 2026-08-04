@@ -881,16 +881,18 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				// VM is the dominant historical-sync family. Every sampled block
 				// retains the serial reference; one narrow cohort may publish only
 				// after the ordered bandwidth and block-energy carriers admit it.
-				vmAsyncRetry := options.parallelTransfers && useVMSenderChainPublication(block.Number())
+				vmAsyncRetry := options.parallelTransfers && useVMSenderRetryObservation(block.Number())
 				vmSenderChainPreexecution = discardShadow.preexecuteVMSenderChains(discardCfg, vmAsyncRetry)
-				if vmAsyncRetry {
+				if options.parallelTransfers && useVMSenderChainPublication(block.Number()) {
 					parallelVMBlocksCounter.Inc(1)
 					if vmSenderChainPreexecution != nil {
 						vmSenderChainPublication = true
-						vmSenderRetry = newDiscardShadowAsyncVMSenderRetry(vmSenderChainPreexecution, len(transactions))
 						parallelVMPreexecutedCounter.Inc(int64(len(vmSenderChainPreexecution.results)))
 						parallelVMPreexecutionNanosCounter.Inc(vmSenderChainPreexecution.wallNanos)
 					}
+				}
+				if vmAsyncRetry {
+					vmSenderRetry = newDiscardShadowAsyncVMSenderRetry(vmSenderChainPreexecution, len(transactions))
 				}
 				if actualAsyncRetry {
 					// Use three sampled cohorts for the real background retry

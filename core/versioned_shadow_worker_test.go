@@ -55,6 +55,26 @@ func TestDiscardShadowAsyncRetryPublicationCohort(t *testing.T) {
 	}
 }
 
+func TestVMSenderRetryObservationCohort(t *testing.T) {
+	tests := []struct {
+		blockNum uint64
+		want     bool
+	}{
+		{blockNum: 0, want: false},
+		{blockNum: 64, want: false},
+		{blockNum: 192, want: false},
+		{blockNum: 256, want: true},
+		{blockNum: 512, want: true},
+		{blockNum: 1024, want: true},
+		{blockNum: 1088, want: false},
+	}
+	for _, test := range tests {
+		if got := useVMSenderRetryObservation(test.blockNum); got != test.want {
+			t.Fatalf("block %d VM retry observation cohort = %t, want %t", test.blockNum, got, test.want)
+		}
+	}
+}
+
 func TestVMSenderChainPublicationCohort(t *testing.T) {
 	tests := []struct {
 		blockNum uint64

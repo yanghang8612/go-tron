@@ -25,6 +25,10 @@ import (
 const (
 	discardShadowSampleInterval     = uint64(64)
 	discardShadowAsyncRetryInterval = uint64(256)
+	// Observe VM retry incarnations on the synchronous Transfer-reference
+	// cohort, avoiding two background retry families in the same block while
+	// collecting four times the formal VM publication coverage.
+	vmSenderRetryObserveInterval = discardShadowAsyncRetryInterval
 	// Publish one of every sixteen sampled VM cohorts. The other fifteen keep
 	// running serially as an independent reference while the ordered publisher
 	// gains mainnet exposure.
@@ -53,6 +57,10 @@ func useDiscardShadowAsyncRetryPublication(blockNum uint64) bool {
 
 func useVMSenderChainPublication(blockNum uint64) bool {
 	return blockNum > 0 && blockNum%discardShadowSampleInterval == 0 && blockNum%vmSenderChainPublishInterval == 0
+}
+
+func useVMSenderRetryObservation(blockNum uint64) bool {
+	return blockNum > 0 && blockNum%discardShadowSampleInterval == 0 && blockNum%vmSenderRetryObserveInterval == 0
 }
 
 var (
@@ -256,6 +264,12 @@ var (
 	parallelVMAsyncRetryLateCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/late", nil)
 	parallelVMAsyncRetryStaleCounter                 = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/stale", nil)
 	parallelVMAsyncRetryCandidatesCounter            = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/candidates", nil)
+	parallelVMAsyncRetryRejectedCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/rejected", nil)
+	parallelVMAsyncRetryReadConflictCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/rejected/read_conflict", nil)
+	parallelVMAsyncRetrySenderConflictCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/rejected/sender", nil)
+	parallelVMAsyncRetryBarrierCounter               = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/rejected/barrier", nil)
+	parallelVMAsyncRetryUnsupportedCounter           = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/rejected/unsupported", nil)
+	parallelVMAsyncRetryDeltaInvalidCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/rejected/delta_invalid", nil)
 	parallelVMAsyncRetryValidatedCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/validated", nil)
 	parallelVMAsyncRetryRecoveredCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/recovered", nil)
 	parallelVMAsyncRetryErrorsCounter                = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/errors", nil)
@@ -2953,6 +2967,12 @@ func recordVMAsyncSenderRetryStats(stats discardShadowSenderRetryStats) {
 	parallelVMAsyncRetryLateCounter.Inc(stats.actualLate)
 	parallelVMAsyncRetryStaleCounter.Inc(stats.actualStale)
 	parallelVMAsyncRetryCandidatesCounter.Inc(stats.actualCandidates)
+	parallelVMAsyncRetryRejectedCounter.Inc(stats.actualRejected)
+	parallelVMAsyncRetryReadConflictCounter.Inc(stats.actualReadConflict)
+	parallelVMAsyncRetrySenderConflictCounter.Inc(stats.actualSender)
+	parallelVMAsyncRetryBarrierCounter.Inc(stats.actualBarrier)
+	parallelVMAsyncRetryUnsupportedCounter.Inc(stats.actualUnsupported)
+	parallelVMAsyncRetryDeltaInvalidCounter.Inc(stats.actualDeltaInvalid)
 	parallelVMAsyncRetryValidatedCounter.Inc(stats.actualValidated)
 	parallelVMAsyncRetryRecoveredCounter.Inc(stats.actualRecovered)
 	parallelVMAsyncRetryErrorsCounter.Inc(stats.actualErrors)
