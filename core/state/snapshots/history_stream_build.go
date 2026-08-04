@@ -58,7 +58,8 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if cfg.IterateHotHistoryTxRangeChanges == nil || cfg.IterateHotHistoryTxRanges == nil {
 		return result, errors.New("snapshots: missing state-domain history iterators")
 	}
-	if blockRange != nil && (cfg.IterateHotHistoryBlockTxChanges == nil || cfg.IterateHotHistoryTxRangeBlocks == nil) {
+	if blockRange != nil && ((cfg.IterateHotHistoryBlockTxChanges == nil && cfg.IterateHotHistoryBlockTxBorrowed == nil) ||
+		(cfg.IterateHotHistoryTxRangeBlocks == nil && cfg.IterateHotHistoryTxRangeBorrowed == nil)) {
 		return result, errors.New("snapshots: missing bounded state-domain history iterators")
 	}
 
@@ -102,11 +103,18 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 
 	recordWriter := newStateDomainChangeHistoryRecordWriter(segmentTmp, indexTmp, accessorCollectors, ref, math.MaxUint64, recordOffset)
 	defer func() { recordWriter.Release() }()
+	borrowedStream := blockRange != nil && cfg.IterateHotHistoryBlockTxBorrowed != nil
 	streamErr := iterateStateDomainChangeHistoryChanges(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, func(change *rawdb.StateDomainChange) (bool, error) {
 		if change == nil {
 			return false, errors.New("snapshots: nil state-domain-change history record")
 		}
-		if err := recordWriter.WriteChange(change); err != nil {
+		var err error
+		if borrowedStream {
+			err = recordWriter.WriteBorrowedChange(change)
+		} else {
+			err = recordWriter.WriteChange(change)
+		}
+		if err != nil {
 			return false, err
 		}
 		return true, nil
@@ -382,8 +390,11 @@ func iterateStateDomainChangeHistoryChanges(db ethdb.Iteratee, cfg DomainCfg, fr
 	if blockRange == nil {
 		return cfg.IterateHotHistoryTxRangeChanges(db, fromTxNum, toTxNum, fn)
 	}
-	if cfg.IterateHotHistoryBlockTxChanges == nil {
+	if cfg.IterateHotHistoryBlockTxChanges == nil && cfg.IterateHotHistoryBlockTxBorrowed == nil {
 		return errors.New("snapshots: missing bounded state-domain history change iterator")
+	}
+	if cfg.IterateHotHistoryBlockTxBorrowed != nil {
+		return cfg.IterateHotHistoryBlockTxBorrowed(db, blockRange.from, blockRange.to, fromTxNum, toTxNum, fn)
 	}
 	return cfg.IterateHotHistoryBlockTxChanges(db, blockRange.from, blockRange.to, fromTxNum, toTxNum, fn)
 }
@@ -392,8 +403,11 @@ func iterateStateDomainChangeHistorySourceTxRanges(db ethdb.Iteratee, cfg Domain
 	if blockRange == nil {
 		return cfg.IterateHotHistoryTxRanges(db, fn)
 	}
-	if cfg.IterateHotHistoryTxRangeBlocks == nil {
+	if cfg.IterateHotHistoryTxRangeBlocks == nil && cfg.IterateHotHistoryTxRangeBorrowed == nil {
 		return errors.New("snapshots: missing bounded state-domain history tx-range iterator")
+	}
+	if cfg.IterateHotHistoryTxRangeBorrowed != nil {
+		return cfg.IterateHotHistoryTxRangeBorrowed(db, blockRange.from, blockRange.to, fn)
 	}
 	return cfg.IterateHotHistoryTxRangeBlocks(db, blockRange.from, blockRange.to, fn)
 }
@@ -516,6 +530,17 @@ func (w *stateDomainChangeHistoryRecordWriter) Put(_ []byte, value []byte) error
 // companion txNum index. Cold builds and compaction both call it directly from
 // their ordered source streams, avoiding a record ETL encode/decode round trip.
 func (w *stateDomainChangeHistoryRecordWriter) WriteChange(change *rawdb.StateDomainChange) error {
+	return w.writeChange(change, false)
+}
+
+// WriteBorrowedChange consumes a callback-scoped row from the canonical block
+// pack iterator. That iterator validates block sequence and txNum order, so the
+// writer must not retain the borrowed pointer for an adjacent-row comparison.
+func (w *stateDomainChangeHistoryRecordWriter) WriteBorrowedChange(change *rawdb.StateDomainChange) error {
+	return w.writeChange(change, true)
+}
+
+func (w *stateDomainChangeHistoryRecordWriter) writeChange(change *rawdb.StateDomainChange, trustedOrder bool) error {
 	if w == nil || w.segment == nil || w.index == nil {
 		return errors.New("snapshots: nil state-domain-change history record writer")
 	}
@@ -528,7 +553,7 @@ func (w *stateDomainChangeHistoryRecordWriter) WriteChange(change *rawdb.StateDo
 	if change.TxNum < w.ref.FromTxNum || change.TxNum > w.ref.ToTxNum {
 		return fmt.Errorf("snapshots: state-domain-change tx %d outside segment range [%d,%d]", change.TxNum, w.ref.FromTxNum, w.ref.ToTxNum)
 	}
-	if w.previous != nil && compareStateDomainChangeForBinary(w.previous, change) > 0 {
+	if !trustedOrder && w.previous != nil && compareStateDomainChangeForBinary(w.previous, change) > 0 {
 		return errStateDomainChangeHistoryRecordsNotOrdered
 	}
 	if w.accessors != nil {
@@ -564,10 +589,14 @@ func (w *stateDomainChangeHistoryRecordWriter) WriteChange(change *rawdb.StateDo
 	}
 	w.segmentOff += uint64(len(frame))
 	w.count++
-	// Both producers keep the decoded row valid until the next WriteChange call.
-	// Retaining it avoids cloning every variable-width field solely for the
-	// adjacent-order check.
-	w.previous = change
+	// Owning producers keep the decoded row valid until the next WriteChange
+	// call, so retain it for the adjacent-order check. Borrowed iteration already
+	// validated order and invalidates the row as soon as this call returns.
+	if trustedOrder {
+		w.previous = nil
+	} else {
+		w.previous = change
+	}
 	return nil
 }
 

@@ -57,10 +57,10 @@ func TestDefaultDomainRegistryDrivesSnapshotFamilies(t *testing.T) {
 		history[0].IterateHistoryRange == nil || history[0].IterateHistoryByKey == nil ||
 		history[0].CompactHistory == nil ||
 		history[0].WriteHotHistoryRow == nil || history[0].WriteHotHistoryBlock == nil || history[0].WriteHotHistoryIndex == nil ||
-		history[0].ReadHotHistoryTxRange == nil || history[0].IterateHotHistoryTxRanges == nil || history[0].IterateHotHistoryTxRangeBlocks == nil ||
+		history[0].ReadHotHistoryTxRange == nil || history[0].IterateHotHistoryTxRanges == nil || history[0].IterateHotHistoryTxRangeBlocks == nil || history[0].IterateHotHistoryTxRangeBorrowed == nil ||
 		history[0].DeleteHotHistoryTxRange == nil ||
 		history[0].DeleteHotHistoryBlock == nil ||
-		history[0].IterateHotHistoryTxRangeChanges == nil || history[0].IterateHotHistoryBlockTxChanges == nil ||
+		history[0].IterateHotHistoryTxRangeChanges == nil || history[0].IterateHotHistoryBlockTxChanges == nil || history[0].IterateHotHistoryBlockTxBorrowed == nil ||
 		history[0].IterateHotHistoryBlocks == nil || history[0].IterateHotHistoryChanges == nil ||
 		history[0].ReadHotHistoryFirstBlockRange == nil || history[0].IterateHotHistoryBlockRange == nil ||
 		history[0].IterateHotHistoryPrefix == nil || history[0].ReadHotAccountLatestAsOf == nil ||

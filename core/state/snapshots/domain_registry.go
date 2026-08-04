@@ -59,10 +59,12 @@ type DomainCfg struct {
 	ReadHotHistoryTxRange             HotHistoryTxRangeReader
 	IterateHotHistoryTxRanges         HotHistoryTxRangeIterator
 	IterateHotHistoryTxRangeBlocks    HotHistoryTxRangeBlockIterator
+	IterateHotHistoryTxRangeBorrowed  HotHistoryTxRangeBlockIterator
 	DeleteHotHistoryTxRange           HotHistoryTxRangeDeleter
 	DeleteHotHistoryBlock             HotHistoryBlockDeleter
 	IterateHotHistoryTxRangeChanges   HotHistoryTxRangeChangeIterator
 	IterateHotHistoryBlockTxChanges   HotHistoryBlockTxRangeChangeIterator
+	IterateHotHistoryBlockTxBorrowed  HotHistoryBlockTxRangeChangeIterator
 	IterateHotHistoryBlocks           HotHistoryBlockIterator
 	IterateHotHistoryChanges          HotHistoryChangeIterator
 	ReadHotHistoryFirstBlockRange     HotHistoryFirstBlockRangeReader
@@ -365,10 +367,12 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			ReadHotHistoryTxRange:             rawdb.ReadStateTxRange,
 			IterateHotHistoryTxRanges:         rawdb.IterateStateTxRanges,
 			IterateHotHistoryTxRangeBlocks:    rawdb.IterateStateTxRangesByBlockRange,
+			IterateHotHistoryTxRangeBorrowed:  rawdb.IterateStateTxRangesByBlockRangeBorrowed,
 			DeleteHotHistoryTxRange:           rawdb.DeleteStateTxRange,
 			DeleteHotHistoryBlock:             rawdb.DeleteStateDomainChanges,
 			IterateHotHistoryTxRangeChanges:   rawdb.IterateStateDomainChangesByTxRange,
 			IterateHotHistoryBlockTxChanges:   rawdb.IterateStateDomainChangesByBlockTxRange,
+			IterateHotHistoryBlockTxBorrowed:  rawdb.IterateStateDomainChangesByBlockTxRangeBorrowed,
 			IterateHotHistoryBlocks:           rawdb.IterateStateDomainChangeBlocksByKey,
 			IterateHotHistoryChanges:          rawdb.IterateStateDomainChangesByKey,
 			ReadHotHistoryFirstBlockRange:     rawdb.ReadFirstStateDomainChangeByKeyBlockRange,

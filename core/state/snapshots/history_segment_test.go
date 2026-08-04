@@ -35,11 +35,12 @@ func benchmarkBuildStateDomainChangeHistoryTxRanges(b *testing.B, dense bool) {
 			b.Fatalf("write tx range %d: %v", block, err)
 		}
 		if dense || block == 1 {
-			if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+			change := &rawdb.StateDomainChange{
 				BlockNum: block, BlockHash: common.Hash{byte(block)}, TxNum: block, Seq: 1,
 				FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner,
 				Domain: kvdomains.ContractStorage, Key: []byte("slot"), NextExists: true, Next: []byte("value"),
-			}); err != nil {
+			}
+			if err := rawdb.WriteStateDomainChangeBlockRows(db, []*rawdb.StateDomainChange{change}); err != nil {
 				b.Fatalf("write state change %d: %v", block, err)
 			}
 		}
@@ -371,26 +372,28 @@ func TestBuildStateDomainChangeHistoryStreamsAccessorETL(t *testing.T) {
 			t.Fatalf("write tx range: %v", err)
 		}
 	}
-	for _, change := range []*rawdb.StateDomainChange{
+	changes := []*rawdb.StateDomainChange{
 		// Fresh block packs are physically ordered by txNum/sequence. Prefix-heavy
 		// keys still force both accessor collectors through their external sort.
 		{BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 10, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00}, NextExists: true, Next: []byte("one")},
 		{BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 11, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00, 0x00}, NextExists: true, Next: []byte("two")},
 		{BlockNum: 2, BlockHash: common.Hash{0x02}, TxNum: 12, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00}, NextExists: true, Next: []byte("three")},
 		{BlockNum: 2, BlockHash: common.Hash{0x02}, TxNum: 13, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x01}, NextExists: true, Next: []byte("four")},
-	} {
-		if err := rawdb.WriteStateDomainChange(db, change); err != nil {
-			t.Fatalf("write state change: %v", err)
-		}
+	}
+	if err := rawdb.WriteStateDomainChangeBlockRows(db, changes[:2]); err != nil {
+		t.Fatalf("write block 1 state changes: %v", err)
+	}
+	if err := rawdb.WriteStateDomainChangeBlockRows(db, changes[2:]); err != nil {
+		t.Fatalf("write block 2 state changes: %v", err)
 	}
 
 	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
 	if !ok {
 		t.Fatal("missing state-domain-change registry")
 	}
-	originalTxRangeIterator := cfg.IterateHotHistoryTxRangeBlocks
+	originalTxRangeIterator := cfg.IterateHotHistoryTxRangeBorrowed
 	var txRangeScans int
-	cfg.IterateHotHistoryTxRangeBlocks = func(db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*rawdb.StateTxRange) (bool, error)) error {
+	cfg.IterateHotHistoryTxRangeBorrowed = func(db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*rawdb.StateTxRange) (bool, error)) error {
 		txRangeScans++
 		return originalTxRangeIterator(db, fromBlock, toBlock, fn)
 	}
@@ -468,6 +471,9 @@ func TestBuildStateDomainChangeHistoryFallsBackForUnorderedHotRows(t *testing.T)
 	if !ok {
 		t.Fatal("missing state-domain-change registry")
 	}
+	// The compatibility fallback intentionally consumes retired standalone rows.
+	// Disable the fresh-schema borrowed iterator for this one transition test.
+	cfg.IterateHotHistoryBlockTxBorrowed = nil
 	result, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db, dir, SegmentRef{
 		Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
 		FromTxNum: 10, ToTxNum: 11, Path: "history/state-domain-change-10-11.seg",

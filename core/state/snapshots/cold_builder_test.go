@@ -2079,7 +2079,7 @@ func writeColdBuilderChange(t *testing.T, db ethdb.KeyValueWriter, owner common.
 	if err := rawdb.WriteStateTxRange(db, blockNum, blockHash, txNum, txNum); err != nil {
 		t.Fatalf("write tx range block %d: %v", blockNum, err)
 	}
-	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+	change := &rawdb.StateDomainChange{
 		BlockNum:   blockNum,
 		BlockHash:  blockHash,
 		TxNum:      txNum,
@@ -2090,7 +2090,8 @@ func writeColdBuilderChange(t *testing.T, db ethdb.KeyValueWriter, owner common.
 		Key:        []byte{byte('k'), byte(blockNum)},
 		PrevExists: true,
 		Prev:       []byte(prev),
-	}); err != nil {
+	}
+	if err := rawdb.WriteStateDomainChangeBlockRows(db, []*rawdb.StateDomainChange{change}); err != nil {
 		t.Fatalf("write change block %d: %v", blockNum, err)
 	}
 }

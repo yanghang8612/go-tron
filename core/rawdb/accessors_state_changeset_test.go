@@ -486,9 +486,26 @@ func BenchmarkIterateStateTxRangesTailWindow(b *testing.B) {
 			}
 		}
 	})
+	b.Run("bounded-borrowed", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(float64(total)/float64(window), "logical_scan_reduction_x")
+		for i := 0; i < b.N; i++ {
+			rows := uint64(0)
+			if err := IterateStateTxRangesByBlockRangeBorrowed(db, fromBlock, toBlock, func(*StateTxRange) (bool, error) {
+				rows++
+				return true, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			if rows != window {
+				b.Fatalf("rows = %d, want %d", rows, window)
+			}
+		}
+	})
 }
 
 var benchmarkDecodedStateDomainChanges []*StateDomainChange
+var benchmarkBorrowedStateDomainChanges uint64
 
 func BenchmarkDecodeStateDomainChangeBlockRows(b *testing.B) {
 	const rows = 512
@@ -533,6 +550,38 @@ func BenchmarkDecodeStateDomainChangeBlockRows(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+		}
+	})
+	b.Run("raw-borrowed", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(100, "stored/raw_%")
+		var scratch StateDomainChange
+		for i := 0; i < b.N; i++ {
+			var seen uint64
+			cont, err := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(raw, 31, &scratch, func(*StateDomainChange) (bool, error) {
+				seen++
+				return true, nil
+			})
+			if err != nil || !cont {
+				b.Fatalf("borrowed decode cont=%v err=%v", cont, err)
+			}
+			benchmarkBorrowedStateDomainChanges = seen
+		}
+	})
+	b.Run("snappy-borrowed", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(100*float64(len(compressed))/float64(len(raw)), "stored/raw_%")
+		var scratch StateDomainChange
+		for i := 0; i < b.N; i++ {
+			var seen uint64
+			cont, err := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(compressed, 31, &scratch, func(*StateDomainChange) (bool, error) {
+				seen++
+				return true, nil
+			})
+			if err != nil || !cont {
+				b.Fatalf("borrowed decode cont=%v err=%v", cont, err)
+			}
+			benchmarkBorrowedStateDomainChanges = seen
 		}
 	})
 }
