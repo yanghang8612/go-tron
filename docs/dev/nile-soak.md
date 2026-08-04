@@ -97,6 +97,13 @@ the sample should also prove `eth_call`, `debug_traceCall`, and
 `eth_estimateGas`; add `--archive-api-trace-block` when the sample should also
 prove `debug_traceBlockByNumber` and
 `debug_traceBlockByHash` against the same historical block.
+Each attempted method has a matching `archiveApiMethodResults` entry with its
+RPC method name, pass/fail result, latency in milliseconds, and a transport,
+JSON-RPC, or result-shape error when it fails. The per-method timeout defaults
+to 15 seconds; use `--archive-api-timeout SECONDS` for expensive block traces
+or a node under heavy sync load. For deep-history acceptance, keep the selected
+block comfortably inside the configured retention boundary so the boundary
+cannot advance past the fixture while the matrix is running.
 The sampler counts only shape-valid JSON-RPC results as successful: block reads
 must return an object, account/code/storage/call reads must return hex strings,
 logs must return a list, and transaction/receipt reads must return objects

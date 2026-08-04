@@ -413,6 +413,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     "0x0",
                     "--archive-api-expected-storage",
                     "0x00",
+                    "--archive-api-timeout",
+                    "7",
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -425,9 +427,13 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["archiveApiExpectedBalance"], "0x00")
             self.assertEqual(row["archiveApiExpectedCode"], "0x0")
             self.assertEqual(row["archiveApiExpectedStorage"], "0x00")
+            self.assertEqual(row["archiveApiTimeoutSeconds"], 7)
             self.assertEqual(row["archiveApiStatus"], "ok")
             self.assertEqual(row["archiveApiChecks"], 24)
             self.assertEqual(row["archiveApiFailures"], 0)
+            self.assertEqual(len(row["archiveApiMethodResults"]), row["archiveApiChecks"])
+            self.assertTrue(all(item["ok"] for item in row["archiveApiMethodResults"]))
+            self.assertTrue(all(item["latencyMillis"] >= 0 for item in row["archiveApiMethodResults"]))
             self.assertTrue(row["archiveApiTraceBlockProbe"])
             self.assertEqual(row["archiveApiBlock"], 99)
             self.assertEqual(row["archiveApiDepthBlocks"], 1)
@@ -581,6 +587,9 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["archiveApiStatus"], "failed")
             self.assertEqual(row["archiveApiChecks"], 17)
             self.assertEqual(row["archiveApiFailures"], 1)
+            failed = [item for item in row["archiveApiMethodResults"] if not item["ok"]]
+            self.assertEqual(len(failed), 1)
+            self.assertTrue(failed[0]["error"])
             self.assertNotIn("eth_getBalance", row["archiveApiMethods"])
             self.assertIn("eth_getCode", row["archiveApiMethods"])
             self.assertIn("eth_getStorageAt", row["archiveApiMethods"])

@@ -874,7 +874,15 @@ Status:
   `eth_getUncleByBlockHashAndIndex`, `eth_getBlockReceipts`,
   `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getLogs`, and
   optional contract `eth_call`, `debug_traceCall`, and `eth_estimateGas`
-  samples, opt-in
+  samples. Each probe now records an `archiveApiMethodResults` entry with its
+  pass/fail result, wall-clock latency, and transport/RPC/shape error, so a
+  failed soak identifies the exact method instead of exposing only an aggregate
+  failure count. Its per-method timeout defaults to 15 seconds and is
+  configurable with `--archive-api-timeout` for heavily loaded sync nodes. Hot
+  and cold `eth_getLogs` rows also render block and
+  transaction hashes from their raw 32-byte values, preventing the hash
+  Stringer from being hex-encoded a second time and keeping logs consistent
+  with block and receipt APIs. Opt-in
   `debug_traceBlockByNumber` /
   `debug_traceBlockByHash` checks for the selected historical block, plus opt-in
   `debug_traceTransaction` checks when a transaction hash is available. When

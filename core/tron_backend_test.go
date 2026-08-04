@@ -1798,11 +1798,21 @@ func TestTronBackend_GetLogsKeepsHotBlockOrderAcrossParallelScan(t *testing.T) {
 	}
 	for i, log := range logs {
 		blockNum := i + 1
+		block, ok, err := rawdb.ReadBlockStrict(bc.ChainDB(), uint64(blockNum))
+		if err != nil || !ok {
+			t.Fatalf("read block %d = (%v,%v)", blockNum, ok, err)
+		}
 		if want := fmt.Sprintf("0x%x", blockNum); log.BlockNumber != want {
 			t.Fatalf("log %d block number = %s, want %s", i, log.BlockNumber, want)
 		}
 		if want := fmt.Sprintf("0x%02x", blockNum); log.Data != want {
 			t.Fatalf("log %d data = %s, want %s", i, log.Data, want)
+		}
+		if want := "0x" + block.Hash().Hex(); log.BlockHash != want {
+			t.Fatalf("log %d block hash = %s, want %s", i, log.BlockHash, want)
+		}
+		if want := "0x" + block.Transactions()[0].Hash().Hex(); log.TransactionHash != want {
+			t.Fatalf("log %d transaction hash = %s, want %s", i, log.TransactionHash, want)
 		}
 	}
 }
@@ -2197,11 +2207,11 @@ func TestTronBackend_GetLogsUsesColdEventLogSegment(t *testing.T) {
 	if got.BlockNumber != "0x1" || got.TransactionIndex != "0x0" || got.LogIndex != "0x0" {
 		t.Fatalf("position = block %s tx %s log %s, want 0x1/0x0/0x0", got.BlockNumber, got.TransactionIndex, got.LogIndex)
 	}
-	if got.BlockHash != fmt.Sprintf("0x%x", block1.Hash()) {
-		t.Fatalf("block hash = %s, want 0x%x", got.BlockHash, block1.Hash())
+	if want := "0x" + block1.Hash().Hex(); got.BlockHash != want {
+		t.Fatalf("block hash = %s, want %s", got.BlockHash, want)
 	}
-	if got.TransactionHash != fmt.Sprintf("0x%x", block1.Transactions()[0].Hash()) {
-		t.Fatalf("tx hash = %s, want 0x%x", got.TransactionHash, block1.Transactions()[0].Hash())
+	if want := "0x" + block1.Transactions()[0].Hash().Hex(); got.TransactionHash != want {
+		t.Fatalf("tx hash = %s, want %s", got.TransactionHash, want)
 	}
 }
 
@@ -2255,7 +2265,7 @@ func TestTronBackend_GetLogsUsesColdEventLogSegmentWithIncompleteHotTransactionI
 		t.Fatalf("GetLogs with incomplete hot TransactionRet returned %d logs, want 1", len(logs))
 	}
 	got := logs[0]
-	if got.Data != "0x3536" || got.TransactionHash != fmt.Sprintf("0x%x", block1.Transactions()[0].Hash()) {
+	if got.Data != "0x3536" || got.TransactionHash != "0x"+block1.Transactions()[0].Hash().Hex() {
 		t.Fatalf("cold log with incomplete hot TransactionRet = %+v, want data 0x3536 and canonical tx hash", got)
 	}
 }
@@ -2304,8 +2314,8 @@ func TestTronBackend_GetLogsBlockHashUsesColdEventLogSegment(t *testing.T) {
 	if len(logs) != 1 {
 		t.Fatalf("GetLogs by blockHash from cold event log segment returned %d logs, want 1", len(logs))
 	}
-	if logs[0].Data != "0x3637" || logs[0].BlockHash != fmt.Sprintf("0x%x", blockHash) {
-		t.Fatalf("log = %+v, want blockHash %x data 0x3637", logs[0], blockHash)
+	if logs[0].Data != "0x3637" || logs[0].BlockHash != "0x"+blockHash.Hex() {
+		t.Fatalf("log = %+v, want blockHash 0x%s data 0x3637", logs[0], blockHash.Hex())
 	}
 }
 
@@ -2415,8 +2425,8 @@ func TestTronBackend_GetLogsBlockHashUsesColdChainIndexAndEventLogSegment(t *tes
 	if len(logs) != 1 {
 		t.Fatalf("GetLogs by blockHash from cold chain/event segments returned %d logs, want 1", len(logs))
 	}
-	if logs[0].Data != "0x4647" || logs[0].BlockHash != fmt.Sprintf("0x%x", blockHash) {
-		t.Fatalf("log = %+v, want blockHash %x data 0x4647", logs[0], blockHash)
+	if logs[0].Data != "0x4647" || logs[0].BlockHash != "0x"+blockHash.Hex() {
+		t.Fatalf("log = %+v, want blockHash 0x%s data 0x4647", logs[0], blockHash.Hex())
 	}
 }
 
@@ -3061,8 +3071,11 @@ func TestJSONRPCGetLogsUsesColdEventLogIndex(t *testing.T) {
 	if !ok {
 		t.Fatalf("eth_getLogs first result = %T %v, want object", result[0], result[0])
 	}
-	if logObj["data"] != "0x01ab" || logObj["blockNumber"] != "0x1" {
-		t.Fatalf("eth_getLogs log = %v, want block1 data 0x01ab", logObj)
+	if logObj["data"] != "0x01ab" ||
+		logObj["blockNumber"] != "0x1" ||
+		logObj["blockHash"] != "0x"+block1.Hash().Hex() ||
+		logObj["transactionHash"] != "0x"+block1.Transactions()[0].Hash().Hex() {
+		t.Fatalf("eth_getLogs log = %v, want block1 canonical data/hash fields", logObj)
 	}
 	if logObj["address"] != "0x"+fmt.Sprintf("%x", logAddress) {
 		t.Fatalf("eth_getLogs address = %v, want 0x%x", logObj["address"], logAddress)

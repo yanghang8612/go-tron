@@ -41,6 +41,7 @@ ARCHIVE_API_EXPECTED_BALANCE=""
 ARCHIVE_API_EXPECTED_CODE=""
 ARCHIVE_API_EXPECTED_STORAGE=""
 ARCHIVE_API_FIXTURE_FILE=""
+ARCHIVE_API_TIMEOUT=15
 
 usage() {
   cat <<'EOF'
@@ -88,6 +89,8 @@ Options:
                               Expected eth_getStorageAt value for archive-api-address/storage-slot at the probe block
   --archive-api-fixture-file FILE
                               Load archiveApi* block/address/storage-slot/expected values from archive_state_fixture_capture.py JSON output
+  --archive-api-timeout SECONDS
+                              Per-method archive JSON-RPC timeout (default: 15)
   -h, --help                 Show this help
 
 Examples:
@@ -221,6 +224,7 @@ while [ "$#" -gt 0 ]; do
     --archive-api-expected-code) ARCHIVE_API_EXPECTED_CODE="${2:?}"; shift 2 ;;
     --archive-api-expected-storage) ARCHIVE_API_EXPECTED_STORAGE="${2:?}"; shift 2 ;;
     --archive-api-fixture-file) load_archive_api_fixture_file "${2:?}"; shift 2 ;;
+    --archive-api-timeout) ARCHIVE_API_TIMEOUT="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -229,6 +233,10 @@ done
 [ -n "$DATADIR" ] || die "--datadir is required"
 case "$START_UNIX" in
   ''|*[!0-9]*) die "--start-unix must be a non-negative integer" ;;
+esac
+case "$ARCHIVE_API_TIMEOUT" in
+  ''|*[!0-9]*) die "--archive-api-timeout must be a positive integer" ;;
+  0) die "--archive-api-timeout must be a positive integer" ;;
 esac
 if [ -n "$OUTPUT" ]; then
   mkdir -p "$(dirname "$OUTPUT")"
@@ -390,7 +398,7 @@ python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$JSONRPC" "$DATADIR" \
   "$ARCHIVE_API_PROBE" "$ARCHIVE_API_BLOCK" "$ARCHIVE_API_ADDRESS" \
   "$ARCHIVE_API_STORAGE_SLOT" "$ARCHIVE_API_CALL_DATA" "$ARCHIVE_API_TRACE_TRANSACTION" \
   "$ARCHIVE_API_TRACE_BLOCK" "$ARCHIVE_API_EXPECTED_BALANCE" "$ARCHIVE_API_EXPECTED_CODE" \
-  "$ARCHIVE_API_EXPECTED_STORAGE" "$ARCHIVE_API_FIXTURE_FILE" \
+  "$ARCHIVE_API_EXPECTED_STORAGE" "$ARCHIVE_API_FIXTURE_FILE" "$ARCHIVE_API_TIMEOUT" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
   "$replay_bytes" "$ancient_files" "$snapshot_files" "$git_commit" "$git_dirty" <<'PY'
 import json
@@ -445,6 +453,7 @@ from pathlib import Path
     archive_api_expected_code,
     archive_api_expected_storage,
     archive_api_fixture_file,
+    archive_api_timeout,
     start_unix,
     total_bytes,
     chaindata_bytes,
@@ -466,18 +475,19 @@ def load_json(path):
     except Exception:
         return {}
 
-def jsonrpc_call(endpoint, method, params=None, request_id=1):
+def jsonrpc_call_detailed(endpoint, method, params=None, request_id=1, timeout_seconds=5):
     payload = json.dumps(
         {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or []},
         separators=(",", ":"),
     )
+    started = time.monotonic()
     try:
         result = subprocess.run(
             [
                 "curl",
                 "-sf",
                 "--max-time",
-                "5",
+                str(timeout_seconds),
                 "-H",
                 "Content-Type: application/json",
                 "--data-binary",
@@ -488,17 +498,25 @@ def jsonrpc_call(endpoint, method, params=None, request_id=1):
             capture_output=True,
             check=False,
         )
-    except OSError:
-        return None, False
+    except OSError as exc:
+        return None, False, 0, f"curl exec: {exc}"
+    elapsed_ms = max(0, round((time.monotonic() - started) * 1000))
     if result.returncode != 0:
-        return None, False
+        detail = result.stderr.strip() or f"curl exit {result.returncode}"
+        return None, False, elapsed_ms, detail
     try:
         response = json.loads(result.stdout)
-    except Exception:
-        return None, False
-    if response.get("error") is not None or "result" not in response:
-        return None, False
-    return response.get("result"), True
+    except Exception as exc:
+        return None, False, elapsed_ms, f"invalid JSON: {exc}"
+    if response.get("error") is not None:
+        return None, False, elapsed_ms, f"JSON-RPC error: {response.get('error')}"
+    if "result" not in response:
+        return None, False, elapsed_ms, "JSON-RPC result missing"
+    return response.get("result"), True, elapsed_ms, ""
+
+def jsonrpc_call(endpoint, method, params=None, request_id=1):
+    result, ok, _, _ = jsonrpc_call_detailed(endpoint, method, params, request_id)
+    return result, ok
 
 def archive_api_probe_values(
     enabled,
@@ -514,6 +532,7 @@ def archive_api_probe_values(
     expected_code,
     expected_storage,
     fixture_file,
+    timeout_seconds,
 ):
     row = {
         "archiveApiStatus": "not-run",
@@ -526,6 +545,7 @@ def archive_api_probe_values(
         "archiveApiTraceTransactionProbe": str(trace_transaction) == "1",
         "archiveApiTraceBlockProbe": str(trace_block) == "1",
         "archiveApiMethods": [],
+        "archiveApiMethodResults": [],
         "archiveApiTxProbe": False,
         "archiveApiTxHash": "",
         "archiveApiTxMethods": [],
@@ -533,6 +553,7 @@ def archive_api_probe_values(
         "archiveApiExpectedCode": expected_code,
         "archiveApiExpectedStorage": expected_storage,
         "archiveApiFixtureFile": fixture_file,
+        "archiveApiTimeoutSeconds": int(timeout_seconds),
     }
     if str(enabled) != "1":
         return row
@@ -959,12 +980,27 @@ def archive_api_probe_values(
     failures = 0
     methods = []
     tx_methods = []
+    method_results = []
     idx = 0
     while idx < len(calls):
         method, params = calls[idx]
         rpc_method = "eth_getLogs" if method == "eth_getLogsFiltered" else method
-        result, ok = jsonrpc_call(endpoint, rpc_method, params, idx + 1)
-        if not ok or not archive_result_ok(method, result, params):
+        result, transport_ok, elapsed_ms, error_detail = jsonrpc_call_detailed(
+            endpoint, rpc_method, params, idx + 1, int(timeout_seconds)
+        )
+        result_ok = transport_ok and archive_result_ok(method, result, params)
+        if transport_ok and not result_ok:
+            error_detail = "result shape or target binding mismatch"
+        method_results.append(
+            {
+                "method": method,
+                "rpcMethod": rpc_method,
+                "ok": result_ok,
+                "latencyMillis": elapsed_ms,
+                "error": error_detail,
+            }
+        )
+        if not result_ok:
             failures += 1
             idx += 1
             continue
@@ -1010,6 +1046,7 @@ def archive_api_probe_values(
     row["archiveApiChecks"] = len(calls)
     row["archiveApiFailures"] = failures
     row["archiveApiMethods"] = methods
+    row["archiveApiMethodResults"] = method_results
     row["archiveApiTxMethods"] = tx_methods
     row["archiveApiStatus"] = "ok" if failures == 0 else "failed"
     return row
@@ -3578,6 +3615,7 @@ archive_api = archive_api_probe_values(
     archive_api_expected_code,
     archive_api_expected_storage,
     archive_api_fixture_file,
+    archive_api_timeout,
 )
 freezer_status = parse_freezer_status(freezer_status_rpc, jsonrpc)
 now = int(time.time())

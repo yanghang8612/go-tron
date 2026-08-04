@@ -4152,9 +4152,9 @@ func scanHotLogsAtBlock(db *rawdb.ChainDB, num uint64, filter jsonrpc.LogFilter)
 				Topics:           topics,
 				Data:             fmt.Sprintf("0x%x", l.Data),
 				BlockNumber:      fmt.Sprintf("0x%x", num),
-				TransactionHash:  fmt.Sprintf("0x%x", txHash),
+				TransactionHash:  "0x" + hex.EncodeToString(txHash[:]),
 				TransactionIndex: fmt.Sprintf("0x%x", txIdx),
-				BlockHash:        fmt.Sprintf("0x%x", blockHash),
+				BlockHash:        "0x" + hex.EncodeToString(blockHash[:]),
 				LogIndex:         fmt.Sprintf("0x%x", thisIndex),
 				Removed:          false,
 			})
@@ -4219,9 +4219,9 @@ func rpcLogFromColdEventLog(row rawdb.EventLog) *jsonrpc.RPCLog {
 		Topics:           rpcLogTopics(log.GetTopics()),
 		Data:             fmt.Sprintf("0x%x", log.GetData()),
 		BlockNumber:      fmt.Sprintf("0x%x", row.BlockNum),
-		TransactionHash:  fmt.Sprintf("0x%x", row.TxHash),
+		TransactionHash:  "0x" + hex.EncodeToString(row.TxHash[:]),
 		TransactionIndex: fmt.Sprintf("0x%x", row.TxIndex),
-		BlockHash:        fmt.Sprintf("0x%x", row.BlockHash),
+		BlockHash:        "0x" + hex.EncodeToString(row.BlockHash[:]),
 		LogIndex:         fmt.Sprintf("0x%x", row.LogIndex),
 		Removed:          false,
 	}

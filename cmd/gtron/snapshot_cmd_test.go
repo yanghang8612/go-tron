@@ -2726,8 +2726,8 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		t.Fatalf("eth_getLogs restored cold log = %T %v, want object", logsResult[0], logsResult[0])
 	}
 	if logObj["data"] != "0x5c5d" ||
-		logObj["blockHash"] != fmt.Sprintf("0x%x", block1.Hash()) ||
-		logObj["transactionHash"] != fmt.Sprintf("0x%x", txHash) {
+		logObj["blockHash"] != "0x"+blockHashHex ||
+		logObj["transactionHash"] != "0x"+txHashHex {
 		t.Fatalf("eth_getLogs restored cold log = %v, want block1 tx log", logObj)
 	}
 	wantLogAddress := "0x" + hex.EncodeToString(logAddress[len(logAddress)-common.AccountIDLength:])
@@ -2748,8 +2748,8 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		t.Fatalf("eth_getLogs restored cold blockHash log = %T %v, want object", logsByHash[0], logsByHash[0])
 	}
 	if logByHash["data"] != "0x5c5d" ||
-		logByHash["blockHash"] != fmt.Sprintf("0x%x", block1.Hash()) ||
-		logByHash["transactionHash"] != fmt.Sprintf("0x%x", txHash) ||
+		logByHash["blockHash"] != "0x"+blockHashHex ||
+		logByHash["transactionHash"] != "0x"+txHashHex ||
 		logByHash["address"] != wantLogAddress {
 		t.Fatalf("eth_getLogs restored cold blockHash log = %v, want block1 tx log", logByHash)
 	}
