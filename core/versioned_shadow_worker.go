@@ -248,6 +248,43 @@ var (
 	parallelVMRetryUnknownCounter                    = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/deadline/unknown", nil)
 	parallelVMRetryReadySlackNanosCounter            = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/deadline/ready_slack_nanos", nil)
 	parallelVMRetryLateNanosCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/deadline/late_nanos", nil)
+	parallelVMAsyncRetryBlocksCounter                = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/blocks", nil)
+	parallelVMAsyncRetryAttemptsCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/attempts", nil)
+	parallelVMAsyncRetryJobsCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/jobs", nil)
+	parallelVMAsyncRetryExecutedCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/executed", nil)
+	parallelVMAsyncRetryReadyCounter                 = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/ready", nil)
+	parallelVMAsyncRetryLateCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/late", nil)
+	parallelVMAsyncRetryStaleCounter                 = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/stale", nil)
+	parallelVMAsyncRetryCandidatesCounter            = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/candidates", nil)
+	parallelVMAsyncRetryValidatedCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/validated", nil)
+	parallelVMAsyncRetryRecoveredCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/recovered", nil)
+	parallelVMAsyncRetryErrorsCounter                = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/errors", nil)
+	parallelVMAsyncRetryBudgetSkippedCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/budget_skipped", nil)
+	parallelVMAsyncRetryInfoMismatchCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/info_mismatches", nil)
+	parallelVMAsyncRetryWriteMismatchCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/write_set_mismatches", nil)
+	parallelVMAsyncRetryBalanceMismatchCounter       = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/balance_trace_mismatches", nil)
+	parallelVMAsyncRetryPrewarmedCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/runners/prewarmed", nil)
+	parallelVMAsyncRetryCapacityCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/runners/capacity", nil)
+	parallelVMAsyncRetryMaxInflightCounter           = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/runners/max_inflight", nil)
+	parallelVMAsyncRetryDeferredCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/deferred", nil)
+	parallelVMAsyncRetrySupersededCounter            = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/superseded", nil)
+	parallelVMAsyncRetryQueueEnqueuedCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/queue/enqueued", nil)
+	parallelVMAsyncRetryQueueDequeuedCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/queue/dequeued", nil)
+	parallelVMAsyncRetryQueueBusyCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/queue/busy", nil)
+	parallelVMAsyncRetryQueueDroppedCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/queue/dropped", nil)
+	parallelVMAsyncRetryQueueMaxDepthCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/queue/max_depth", nil)
+	parallelVMAsyncRetryQueueWaitNanosCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/queue/wait_nanos", nil)
+	parallelVMAsyncRetryRawKeysCounter               = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/raw/keys", nil)
+	parallelVMAsyncRetryRawMissCounter               = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/raw/misses", nil)
+	parallelVMAsyncRetryVersionCellsCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/version/cells", nil)
+	parallelVMAsyncRetryDispatchNanosCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/dispatch_nanos", nil)
+	parallelVMAsyncRetryRawFreezeNanosCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/raw/freeze_nanos", nil)
+	parallelVMAsyncRetryVersionNanosCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/version/nanos", nil)
+	parallelVMAsyncRetryExecutionNanosCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/execution_nanos", nil)
+	parallelVMAsyncRetryFinishWaitNanosCounter       = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/finish_wait_nanos", nil)
+	parallelVMAsyncRetrySharedJobsCounter            = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/shared_state/jobs", nil)
+	parallelVMAsyncRetrySharedCopyNanosCounter       = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/shared_state/copy_nanos", nil)
+	parallelVMAsyncRetrySharedErrorsCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/shared_state/errors", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -1545,8 +1582,8 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(c
 // scheduler to Trigger/CreateSmartContract. Unlike Transfer publication, VM
 // readiness deliberately permits energy-bearing receipts; ordered block
 // resource settlement remains serial and no VM result is published here.
-func (shadow *discardShadowBlock) preexecuteVMSenderChains(cfg discardShadowRunConfig) *discardShadowPreexecution {
-	pre := shadow.preexecuteSenderChainsWithRetryState(cfg, vmSenderChains(cfg.transactions), preexecutedResultReady, true, false)
+func (shadow *discardShadowBlock) preexecuteVMSenderChains(cfg discardShadowRunConfig, retainRetryState bool) *discardShadowPreexecution {
+	pre := shadow.preexecuteSenderChainsWithRetryState(cfg, vmSenderChains(cfg.transactions), preexecutedResultReady, true, retainRetryState)
 	if pre != nil {
 		pre.publicNet = make([]discardShadowPublicNetProjection, len(pre.results))
 		pre.blockEnergy = make([]discardShadowBlockEnergyProjection, len(pre.results))
@@ -1771,7 +1808,15 @@ func newDiscardShadowSharedRetryRunner(blockBase *state.StateDB) *discardShadowR
 }
 
 func newDiscardShadowAsyncSenderRetry(source *discardShadowPreexecution, transactionCount int) *discardShadowSenderRetry {
-	retry := newDiscardShadowSenderRetry(source, transactionCount)
+	return newDiscardShadowAsyncSenderRetryWithPolicy(source, transactionCount, preexecutedTransferReady, false, true)
+}
+
+func newDiscardShadowAsyncVMSenderRetry(source *discardShadowPreexecution, transactionCount int) *discardShadowSenderRetry {
+	return newDiscardShadowAsyncSenderRetryWithPolicy(source, transactionCount, preexecutedResultReady, true, false)
+}
+
+func newDiscardShadowAsyncSenderRetryWithPolicy(source *discardShadowPreexecution, transactionCount int, ready func(*discardShadowTaskResult) bool, forwardRaw, recordTransferStats bool) *discardShadowSenderRetry {
+	retry := newDiscardShadowSenderRetryWithPolicy(source, transactionCount, ready, forwardRaw, recordTransferStats)
 	if retry == nil {
 		if source != nil {
 			// Retained clean states have no consumer when the block contains no
@@ -2862,6 +2907,46 @@ func recordVMSenderRetryStats(stats discardShadowSenderRetryStats) {
 	parallelVMRetryUnknownCounter.Inc(stats.asyncUnknown)
 	parallelVMRetryReadySlackNanosCounter.Inc(stats.asyncReadySlackNs)
 	parallelVMRetryLateNanosCounter.Inc(stats.asyncLateNs)
+}
+
+func recordVMAsyncSenderRetryStats(stats discardShadowSenderRetryStats) {
+	parallelVMAsyncRetryBlocksCounter.Inc(1)
+	parallelVMAsyncRetryAttemptsCounter.Inc(stats.attempts)
+	parallelVMAsyncRetryJobsCounter.Inc(stats.actualJobs)
+	parallelVMAsyncRetryExecutedCounter.Inc(stats.actualExecuted)
+	parallelVMAsyncRetryReadyCounter.Inc(stats.actualReady)
+	parallelVMAsyncRetryLateCounter.Inc(stats.actualLate)
+	parallelVMAsyncRetryStaleCounter.Inc(stats.actualStale)
+	parallelVMAsyncRetryCandidatesCounter.Inc(stats.actualCandidates)
+	parallelVMAsyncRetryValidatedCounter.Inc(stats.actualValidated)
+	parallelVMAsyncRetryRecoveredCounter.Inc(stats.actualRecovered)
+	parallelVMAsyncRetryErrorsCounter.Inc(stats.actualErrors)
+	parallelVMAsyncRetryBudgetSkippedCounter.Inc(stats.budgetSkipped)
+	parallelVMAsyncRetryInfoMismatchCounter.Inc(stats.infoMismatches)
+	parallelVMAsyncRetryWriteMismatchCounter.Inc(stats.writeMismatches)
+	parallelVMAsyncRetryBalanceMismatchCounter.Inc(stats.balanceMismatches)
+	parallelVMAsyncRetryPrewarmedCounter.Inc(stats.actualPrewarmed)
+	parallelVMAsyncRetryCapacityCounter.Inc(stats.actualCapacity)
+	parallelVMAsyncRetryMaxInflightCounter.Inc(stats.actualMaxInflight)
+	parallelVMAsyncRetryDeferredCounter.Inc(stats.actualDeferred)
+	parallelVMAsyncRetrySupersededCounter.Inc(stats.actualSuperseded)
+	parallelVMAsyncRetryQueueEnqueuedCounter.Inc(stats.actualQueueEnqueued)
+	parallelVMAsyncRetryQueueDequeuedCounter.Inc(stats.actualQueueDequeued)
+	parallelVMAsyncRetryQueueBusyCounter.Inc(stats.actualQueueBusy)
+	parallelVMAsyncRetryQueueDroppedCounter.Inc(stats.actualQueueDropped)
+	parallelVMAsyncRetryQueueMaxDepthCounter.Inc(stats.actualQueueMaxDepth)
+	parallelVMAsyncRetryQueueWaitNanosCounter.Inc(stats.actualQueueWaitNs)
+	parallelVMAsyncRetryRawKeysCounter.Inc(stats.actualRawKeys)
+	parallelVMAsyncRetryRawMissCounter.Inc(stats.actualRawMisses)
+	parallelVMAsyncRetryVersionCellsCounter.Inc(stats.actualVersionCells)
+	parallelVMAsyncRetryDispatchNanosCounter.Inc(stats.actualDispatchNs)
+	parallelVMAsyncRetryRawFreezeNanosCounter.Inc(stats.actualRawFreezeNs)
+	parallelVMAsyncRetryVersionNanosCounter.Inc(stats.actualVersionNs)
+	parallelVMAsyncRetryExecutionNanosCounter.Inc(stats.actualExecutionNs)
+	parallelVMAsyncRetryFinishWaitNanosCounter.Inc(stats.actualFinishWaitNs)
+	parallelVMAsyncRetrySharedJobsCounter.Inc(stats.sharedStateJobs)
+	parallelVMAsyncRetrySharedCopyNanosCounter.Inc(stats.sharedStateCopyNs)
+	parallelVMAsyncRetrySharedErrorsCounter.Inc(stats.sharedStateErrors)
 }
 
 // validateBlockStartReadSet applies Erigon's read-version rule to one retained

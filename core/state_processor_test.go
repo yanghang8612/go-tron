@@ -517,7 +517,7 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	}
 }
 
-func TestProcessBlockObservesVMSenderRetryIncarnation(t *testing.T) {
+func TestProcessBlockRunsAsyncVMSenderRetryCanary(t *testing.T) {
 	base := newTestState(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
@@ -587,54 +587,82 @@ func TestProcessBlockObservesVMSenderRetryIncarnation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serial VM retry process: %v", err)
 	}
-	blocksBefore := parallelVMRetryBlocksCounter.Snapshot().Count()
-	attemptsBefore := parallelVMRetryAttemptsCounter.Snapshot().Count()
-	executedBefore := parallelVMRetryExecutedCounter.Snapshot().Count()
-	candidatesBefore := parallelVMRetryCandidatesCounter.Snapshot().Count()
-	validatedBefore := parallelVMRetryValidatedCounter.Snapshot().Count()
-	recoveredBefore := parallelVMRetryRecoveredCounter.Snapshot().Count()
-	errorsBefore := parallelVMRetryErrorsCounter.Snapshot().Count()
-	mismatchesBefore := parallelVMRetryInfoMismatchCounter.Snapshot().Count() +
-		parallelVMRetryWriteMismatchCounter.Snapshot().Count() +
-		parallelVMRetryBalanceMismatchCounter.Snapshot().Count()
-	deadlineBefore := parallelVMRetryReadyCounter.Snapshot().Count() +
-		parallelVMRetryLateCounter.Snapshot().Count() + parallelVMRetryUnknownCounter.Snapshot().Count()
+	blocksBefore := parallelVMAsyncRetryBlocksCounter.Snapshot().Count()
+	attemptsBefore := parallelVMAsyncRetryAttemptsCounter.Snapshot().Count()
+	jobsBefore := parallelVMAsyncRetryJobsCounter.Snapshot().Count()
+	executedBefore := parallelVMAsyncRetryExecutedCounter.Snapshot().Count()
+	readyBefore := parallelVMAsyncRetryReadyCounter.Snapshot().Count()
+	lateBefore := parallelVMAsyncRetryLateCounter.Snapshot().Count()
+	staleBefore := parallelVMAsyncRetryStaleCounter.Snapshot().Count()
+	candidatesBefore := parallelVMAsyncRetryCandidatesCounter.Snapshot().Count()
+	validatedBefore := parallelVMAsyncRetryValidatedCounter.Snapshot().Count()
+	recoveredBefore := parallelVMAsyncRetryRecoveredCounter.Snapshot().Count()
+	errorsBefore := parallelVMAsyncRetryErrorsCounter.Snapshot().Count()
+	prewarmedBefore := parallelVMAsyncRetryPrewarmedCounter.Snapshot().Count()
+	capacityBefore := parallelVMAsyncRetryCapacityCounter.Snapshot().Count()
+	sharedJobsBefore := parallelVMAsyncRetrySharedJobsCounter.Snapshot().Count()
+	sharedErrorsBefore := parallelVMAsyncRetrySharedErrorsCounter.Snapshot().Count()
+	sharedValueBlocksBefore := versionedShadowSharedValueBlocksCounter.Snapshot().Count()
+	sharedValueHitsBefore := versionedShadowSharedValueHitsCounter.Snapshot().Count()
+	mismatchesBefore := parallelVMAsyncRetryInfoMismatchCounter.Snapshot().Count() +
+		parallelVMAsyncRetryWriteMismatchCounter.Snapshot().Count() +
+		parallelVMAsyncRetryBalanceMismatchCounter.Snapshot().Count()
 	vmPublishedBefore := parallelVMPublishedCounter.Snapshot().Count()
 	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true})
 	if err != nil {
 		t.Fatalf("parallel VM retry process: %v", err)
 	}
-	if blocks := parallelVMRetryBlocksCounter.Snapshot().Count() - blocksBefore; blocks != 1 {
-		t.Fatalf("VM retry observer blocks = %d, want 1", blocks)
+	if blocks := parallelVMAsyncRetryBlocksCounter.Snapshot().Count() - blocksBefore; blocks != 1 {
+		t.Fatalf("async VM retry blocks = %d, want 1", blocks)
 	}
-	if attempts := parallelVMRetryAttemptsCounter.Snapshot().Count() - attemptsBefore; attempts != 1 {
-		t.Fatalf("VM retry attempts = %d, want 1", attempts)
+	if attempts := parallelVMAsyncRetryAttemptsCounter.Snapshot().Count() - attemptsBefore; attempts != 1 {
+		t.Fatalf("async VM retry attempts = %d, want 1", attempts)
 	}
-	if executed := parallelVMRetryExecutedCounter.Snapshot().Count() - executedBefore; executed != 2 {
-		t.Fatalf("VM retry executions = %d, want 2", executed)
+	if jobs := parallelVMAsyncRetryJobsCounter.Snapshot().Count() - jobsBefore; jobs != 1 {
+		t.Fatalf("async VM retry jobs = %d, want 1", jobs)
 	}
-	if candidates := parallelVMRetryCandidatesCounter.Snapshot().Count() - candidatesBefore; candidates != 2 {
-		t.Fatalf("VM retry candidates = %d, want 2", candidates)
+	executed := parallelVMAsyncRetryExecutedCounter.Snapshot().Count() - executedBefore
+	if executed != 2 {
+		t.Fatalf("async VM retry executions = %d, want 2", executed)
 	}
-	if validated := parallelVMRetryValidatedCounter.Snapshot().Count() - validatedBefore; validated != 2 {
-		t.Fatalf("VM retry validated = %d, want 2", validated)
+	classified := parallelVMAsyncRetryReadyCounter.Snapshot().Count() - readyBefore +
+		parallelVMAsyncRetryLateCounter.Snapshot().Count() - lateBefore +
+		parallelVMAsyncRetryStaleCounter.Snapshot().Count() - staleBefore
+	if classified != executed {
+		t.Fatalf("async VM retry classifications = %d, executions = %d", classified, executed)
 	}
-	if recovered := parallelVMRetryRecoveredCounter.Snapshot().Count() - recoveredBefore; recovered != 2 {
-		t.Fatalf("VM retry recovered = %d, want 2", recovered)
+	candidates := parallelVMAsyncRetryCandidatesCounter.Snapshot().Count() - candidatesBefore
+	validated := parallelVMAsyncRetryValidatedCounter.Snapshot().Count() - validatedBefore
+	recovered := parallelVMAsyncRetryRecoveredCounter.Snapshot().Count() - recoveredBefore
+	if candidates != validated || candidates != recovered {
+		t.Fatalf("async VM retry candidates=%d validated=%d recovered=%d", candidates, validated, recovered)
 	}
-	if failures := parallelVMRetryErrorsCounter.Snapshot().Count() - errorsBefore; failures != 0 {
-		t.Fatalf("VM retry errors = %d, want 0", failures)
+	if failures := parallelVMAsyncRetryErrorsCounter.Snapshot().Count() - errorsBefore; failures != 0 {
+		t.Fatalf("async VM retry errors = %d, want 0", failures)
 	}
-	mismatchesAfter := parallelVMRetryInfoMismatchCounter.Snapshot().Count() +
-		parallelVMRetryWriteMismatchCounter.Snapshot().Count() +
-		parallelVMRetryBalanceMismatchCounter.Snapshot().Count()
+	if prewarmed := parallelVMAsyncRetryPrewarmedCounter.Snapshot().Count() - prewarmedBefore; prewarmed != 1 {
+		t.Fatalf("async VM retry prewarmed runners = %d, want 1", prewarmed)
+	}
+	if capacity := parallelVMAsyncRetryCapacityCounter.Snapshot().Count() - capacityBefore; capacity != 1 {
+		t.Fatalf("async VM retry runner capacity = %d, want 1", capacity)
+	}
+	if jobs := parallelVMAsyncRetrySharedJobsCounter.Snapshot().Count() - sharedJobsBefore; jobs != 1 {
+		t.Fatalf("async VM retry shared-state jobs = %d, want 1", jobs)
+	}
+	if failures := parallelVMAsyncRetrySharedErrorsCounter.Snapshot().Count() - sharedErrorsBefore; failures != 0 {
+		t.Fatalf("async VM retry shared-state errors = %d, want 0", failures)
+	}
+	if blocks := versionedShadowSharedValueBlocksCounter.Snapshot().Count() - sharedValueBlocksBefore; blocks != 1 {
+		t.Fatalf("async VM retry shared-version blocks = %d, want 1", blocks)
+	}
+	if hits := versionedShadowSharedValueHitsCounter.Snapshot().Count() - sharedValueHitsBefore; hits <= 0 {
+		t.Fatalf("async VM retry shared-version hits = %d, want > 0", hits)
+	}
+	mismatchesAfter := parallelVMAsyncRetryInfoMismatchCounter.Snapshot().Count() +
+		parallelVMAsyncRetryWriteMismatchCounter.Snapshot().Count() +
+		parallelVMAsyncRetryBalanceMismatchCounter.Snapshot().Count()
 	if mismatches := mismatchesAfter - mismatchesBefore; mismatches != 0 {
 		t.Fatalf("VM retry mismatches = %d, want 0", mismatches)
-	}
-	deadlineAfter := parallelVMRetryReadyCounter.Snapshot().Count() +
-		parallelVMRetryLateCounter.Snapshot().Count() + parallelVMRetryUnknownCounter.Snapshot().Count()
-	if classified := deadlineAfter - deadlineBefore; classified != 2 {
-		t.Fatalf("VM retry deadline classifications = %d, want 2", classified)
 	}
 	if published := parallelVMPublishedCounter.Snapshot().Count() - vmPublishedBefore; published != 1 {
 		t.Fatalf("original VM publications = %d, want 1 before retry publication is enabled", published)

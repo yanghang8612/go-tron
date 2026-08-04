@@ -881,12 +881,13 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				// VM is the dominant historical-sync family. Every sampled block
 				// retains the serial reference; one narrow cohort may publish only
 				// after the ordered bandwidth and block-energy carriers admit it.
-				vmSenderChainPreexecution = discardShadow.preexecuteVMSenderChains(discardCfg)
-				if options.parallelTransfers && useVMSenderChainPublication(block.Number()) {
+				vmAsyncRetry := options.parallelTransfers && useVMSenderChainPublication(block.Number())
+				vmSenderChainPreexecution = discardShadow.preexecuteVMSenderChains(discardCfg, vmAsyncRetry)
+				if vmAsyncRetry {
 					parallelVMBlocksCounter.Inc(1)
 					if vmSenderChainPreexecution != nil {
 						vmSenderChainPublication = true
-						vmSenderRetry = newDiscardShadowVMSenderRetry(vmSenderChainPreexecution, len(transactions))
+						vmSenderRetry = newDiscardShadowAsyncVMSenderRetry(vmSenderChainPreexecution, len(transactions))
 						parallelVMPreexecutedCounter.Inc(int64(len(vmSenderChainPreexecution.results)))
 						parallelVMPreexecutionNanosCounter.Inc(vmSenderChainPreexecution.wallNanos)
 					}
@@ -909,7 +910,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				include, fullTransactions, recorderOnly := newDiscardShadowRetryWriteCapture(senderRetry.source, len(transactions))
 				versionedShadow.EnableWriteSetCaptureFiltered(len(transactions), include, fullTransactions, recorderOnly)
 			}
-			if senderRetry != nil && senderRetry.async {
+			if (senderRetry != nil && senderRetry.async) || (vmSenderRetry != nil && vmSenderRetry.async) {
 				// Async incarnations consume immutable canonical post-images directly
 				// from the block-local version carrier instead of replaying every
 				// intervening WriteSet into private prefix states.
@@ -940,6 +941,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	defer func() {
 		if senderRetry != nil && senderRetry.async {
 			senderRetry.drainAsyncEvents(len(transactions), true)
+		}
+		if vmSenderRetry != nil && vmSenderRetry.async {
+			vmSenderRetry.drainAsyncEvents(len(transactions), true)
 		}
 	}()
 	flushDomainChanges := func(txIndex int, mark int) error {
@@ -1274,7 +1278,12 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		_ = senderRetry.finish(&versionedShadow, discardCfg)
 	}
 	if vmSenderRetry != nil {
-		recordVMSenderRetryStats(vmSenderRetry.finish(&versionedShadow, discardCfg))
+		stats := vmSenderRetry.finish(&versionedShadow, discardCfg)
+		if vmSenderRetry.async {
+			recordVMAsyncSenderRetryStats(stats)
+		} else {
+			recordVMSenderRetryStats(stats)
+		}
 	}
 	if discardShadow != nil && discardShadow.sampled {
 		_ = discardShadow.run(&versionedShadow, discardCfg)
