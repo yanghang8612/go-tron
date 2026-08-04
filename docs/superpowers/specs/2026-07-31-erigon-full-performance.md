@@ -3731,6 +3731,39 @@ to 67.54 ms (-9.1%) and allocations fell about 6.2%. The in-memory fixture's
 former O(blocks-squared) iterator snapshots also disappeared, but that larger
 synthetic gain is not treated as a production throughput claim.
 
+#### P5.20: Direct ordered base-record emission
+
+After the iterator join, each base history record still made a complete ETL
+round trip. The builder encoded every decoded hot row into an ETL value, built
+and copied a large sort key, wrote a temporary run, read and allocated both
+fields again, decoded the value, and finally re-encoded the same row into the
+history segment. Erigon's aggregation collation writes an already ordered step
+stream directly to its compressor and builds derived indexes from that stream.
+
+Fresh go-tron block packs are produced by monotonically increasing transaction
+ordinals and mutation sequences. `WriteStateDomainChangeBlockRows` now makes
+nondecreasing txNum an explicit physical invariant in addition to its existing
+contiguous-sequence requirement. The base builder writes a zero record count,
+streams the bounded hot iterator directly through the shared history/index/
+accessor writer, flushes, and backpatches the final segment and txNum-index
+counts. Key-ordered exact and group accessors retain their bounded ETL because
+their order is independent of execution order.
+
+The writer checks the complete canonical comparator between adjacent rows.
+Fresh block-pack publication rejects disorder. If existing positive-sequence
+legacy or repair rows violate that invariant, the builder discards the partial
+temporary direct output and reruns only that range through the bounded record
+ETL before publication; malformed output still cannot be published or pruned.
+Tests prove the ordered path does not instantiate record ETL, cover the legacy
+fallback, hot block-pack rejection, forced accessor spill, compressed and
+uncompressed output, companion verification, and lifecycle publication.
+
+Against the independently checked-out P5.19 binary on local Pebble, five
+10-iteration sparse runs fell from 51.08 ms to 48.21 ms (-5.6%) and allocated
+bytes fell 18.3%. Dense runs fell from 68.44 ms to 63.37 ms (-7.4%), allocated
+bytes from 30.40 MB to 21.46 MB (-29.4%), and allocations from 300,750 to
+200,655 (-33.3%).
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

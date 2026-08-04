@@ -422,5 +422,8 @@
 - [x] Collate a bounded base step's block-packed state changes with one ordered
   range iterator and a sequential block/hash join instead of one iterator per
   block.
+- [x] Stream canonically ordered fresh block-pack records directly into base
+  history/index/accessor writers, eliminating the record ETL encode, spill,
+  read, decode, and re-encode cycle.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

@@ -318,6 +318,7 @@ func WriteStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 		return fmt.Errorf("rawdb: state domain change block %d starts at reserved sequence zero", blockNum)
 	}
 	rows := make([]persistedStateDomainChange, len(changes))
+	previousTxNum := first.TxNum
 	for i, change := range changes {
 		if change == nil {
 			return fmt.Errorf("rawdb: nil StateDomainChange at block pack index %d", i)
@@ -329,9 +330,13 @@ func WriteStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 		if wantSeq < firstSeq || change.Seq != wantSeq {
 			return fmt.Errorf("rawdb: state domain change block %d sequence %d at index %d, want %d", blockNum, change.Seq, i, wantSeq)
 		}
+		if i > 0 && change.TxNum < previousTxNum {
+			return fmt.Errorf("rawdb: state domain change block %d txNum %d at sequence %d follows txNum %d", blockNum, change.TxNum, change.Seq, previousTxNum)
+		}
 		if err := validateStateDomainChange(change); err != nil {
 			return err
 		}
+		previousTxNum = change.TxNum
 		rows[i] = persistedStateDomainChange{
 			TxNum:      change.TxNum,
 			FlatDomain: change.FlatDomain,

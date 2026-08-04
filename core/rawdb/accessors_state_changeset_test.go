@@ -313,6 +313,21 @@ func TestStateDomainChangeBlockPackRoundTripAndLogicalBytes(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeBlockPackRejectsDecreasingTxNums(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x3a}
+	err := WriteStateDomainChangeBlockRows(db, []*StateDomainChange{
+		{BlockNum: 58, TxNum: 101, Seq: 1, FlatDomain: StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.SystemReward, Key: []byte("one")},
+		{BlockNum: 58, TxNum: 100, Seq: 2, FlatDomain: StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.SystemReward, Key: []byte("two")},
+	})
+	if err == nil || !strings.Contains(err.Error(), "txNum 100") {
+		t.Fatalf("decreasing txNum block pack error = %v", err)
+	}
+	if ok, err := db.Has(stateChangeSetKey(58, 0)); err != nil || ok {
+		t.Fatalf("decreasing txNum block pack persisted=%v err=%v", ok, err)
+	}
+}
+
 func TestStateDomainChangeBlockCompressedCorruption(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	bad := append(append([]byte(nil), stateDomainChangeBlockEnvelopeMagic[:]...), stateDomainChangeBlockSnappyVersion, 0xff)

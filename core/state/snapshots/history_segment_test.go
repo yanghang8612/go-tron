@@ -372,13 +372,12 @@ func TestBuildStateDomainChangeHistoryStreamsAccessorETL(t *testing.T) {
 		}
 	}
 	for _, change := range []*rawdb.StateDomainChange{
-		// Hot rows are physically keyed by block/seq. Deliberately place TxNum in
-		// the opposite order so the builder must externally sort records rather
-		// than assuming physical iteration already matches cold-file ordering.
-		{BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 10, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00}, NextExists: true, Next: []byte("one")},
-		{BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 11, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00, 0x00}, NextExists: true, Next: []byte("two")},
-		{BlockNum: 2, BlockHash: common.Hash{0x02}, TxNum: 12, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00}, NextExists: true, Next: []byte("three")},
-		{BlockNum: 2, BlockHash: common.Hash{0x02}, TxNum: 13, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x01}, NextExists: true, Next: []byte("four")},
+		// Fresh block packs are physically ordered by txNum/sequence. Prefix-heavy
+		// keys still force both accessor collectors through their external sort.
+		{BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 10, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00}, NextExists: true, Next: []byte("one")},
+		{BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 11, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00, 0x00}, NextExists: true, Next: []byte("two")},
+		{BlockNum: 2, BlockHash: common.Hash{0x02}, TxNum: 12, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x00}, NextExists: true, Next: []byte("three")},
+		{BlockNum: 2, BlockHash: common.Hash{0x02}, TxNum: 13, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte{0x01}, NextExists: true, Next: []byte("four")},
 	} {
 		if err := rawdb.WriteStateDomainChange(db, change); err != nil {
 			t.Fatalf("write state change: %v", err)
@@ -405,8 +404,8 @@ func TestBuildStateDomainChangeHistoryStreamsAccessorETL(t *testing.T) {
 	if txRangeScans != 1 {
 		t.Fatalf("tx-range scans = %d, want one streamed pass", txRangeScans)
 	}
-	if result.recordETL.SpilledRuns < 2 {
-		t.Fatalf("record ETL spilled %d runs, want forced external spill", result.recordETL.SpilledRuns)
+	if result.recordETL.Collected != 0 || result.recordETL.SpilledRuns != 0 {
+		t.Fatalf("ordered build used record ETL: %+v", result.recordETL)
 	}
 	if result.accessorETL.SpilledRuns < 2 {
 		t.Fatalf("accessor ETL spilled %d runs, want forced external spill", result.accessorETL.SpilledRuns)
@@ -447,6 +446,50 @@ func TestBuildStateDomainChangeHistoryStreamsAccessorETL(t *testing.T) {
 	}
 	if len(prefix) != 3 || prefix[0] != 10 || prefix[1] != 12 || prefix[2] != 11 {
 		t.Fatalf("prefix key txNums = %v, want [10 12 11]", prefix)
+	}
+}
+
+func TestBuildStateDomainChangeHistoryFallsBackForUnorderedHotRows(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5d}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateTxRange(db, 1, common.Hash{0x01}, 10, 11); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []*rawdb.StateDomainChange{
+		{BlockNum: 1, TxNum: 11, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte("first")},
+		{BlockNum: 1, TxNum: 10, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte("second")},
+	} {
+		if err := rawdb.WriteStateDomainChange(db, change); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	if !ok {
+		t.Fatal("missing state-domain-change registry")
+	}
+	result, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db, dir, SegmentRef{
+		Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+		FromTxNum: 10, ToTxNum: 11, Path: "history/state-domain-change-10-11.seg",
+	}, cfg, etl.Options{TempDir: filepath.Join(dir, "etl-scratch"), BufferLimit: 1}, &stateDomainChangeHistoryBlockRange{from: 1, to: 1})
+	if err != nil {
+		t.Fatalf("build unordered hot history through fallback: %v", err)
+	}
+	if result.recordETL.Collected != 2 || result.recordETL.Applied != 2 || result.recordETL.SpilledRuns == 0 {
+		t.Fatalf("record ETL fallback stats = %+v, want two externally sorted rows", result.recordETL)
+	}
+	if len(result.refs) != 3 {
+		t.Fatalf("fallback refs = %+v, want history+accessor+index", result.refs)
+	}
+	changes, err := openStateDomainChangeHistoryChanges(dir, result.refs[0])
+	if err != nil {
+		t.Fatalf("open fallback history: %v", err)
+	}
+	if len(changes) != 2 || changes[0].TxNum != 10 || changes[1].TxNum != 11 {
+		t.Fatalf("fallback txNums = %+v, want [10 11]", changes)
+	}
+	if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, result.refs[0], result.refs[2], result.refs[1]); err != nil {
+		t.Fatalf("verify fallback companions: %v", err)
 	}
 }
 

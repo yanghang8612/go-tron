@@ -16,14 +16,15 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
 
-// stateDomainChangeHistoryBuildResult keeps build-only details out of the
-// public snapshot API while letting tests prove that large accessor inputs spill
-// through the same ETL path production uses.
+// stateDomainChangeHistoryBuildResult keeps build-only accessor details out of
+// the public snapshot API while letting tests prove bounded ETL spill behavior.
 type stateDomainChangeHistoryBuildResult struct {
 	recordETL   etl.Stats
 	refs        []SegmentRef
 	accessorETL etl.Stats
 }
+
+var errStateDomainChangeHistoryRecordsNotOrdered = errors.New("snapshots: state-domain-change history records are not ordered")
 
 type stateDomainChangeHistoryBlockRange struct {
 	from uint64
@@ -31,10 +32,9 @@ type stateDomainChangeHistoryBlockRange struct {
 }
 
 // buildStateDomainChangeHistoryBinarySegmentsFromDB writes the production cold
-// history trio without materializing a batch of StateDomainChange rows. The
-// history payload is externally sorted into tx/sequence order; the key accessor
-// is sorted through a second ETL pass so temporary memory is bounded by the
-// collector buffer even when physical hot rows are not tx ordered.
+// history trio without materializing a batch of StateDomainChange rows. Fresh
+// block packs are already in tx/sequence order and stream directly into the
+// history and txNum index; only key-ordered accessors require bounded ETL.
 func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir string, ref SegmentRef, cfg DomainCfg, opts etl.Options) (result stateDomainChangeHistoryBuildResult, err error) {
 	return buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db, dir, ref, cfg, opts, nil)
 }
@@ -65,15 +65,6 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if opts.TempDir == "" {
 		opts.TempDir = filepath.Join(dir, "etl")
 	}
-	recordCollector, err := etl.NewCollector(opts)
-	if err != nil {
-		return result, fmt.Errorf("snapshots: create state-domain-change history record ETL collector: %w", err)
-	}
-	defer recordCollector.Close()
-	recordCount, err := collectStateDomainChangeHistoryRecords(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, recordCollector)
-	if err != nil {
-		return result, err
-	}
 	segmentTmp, segmentTmpName, err := createStateDomainChangeBinaryTempFile(dir, ref.Path)
 	if err != nil {
 		return result, err
@@ -82,7 +73,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		_ = segmentTmp.Close()
 		_ = os.Remove(segmentTmpName)
 	}()
-	if err := writeStateDomainChangeBinaryHeaderTo(segmentTmp, stateDomainChangeBinarySegmentMagic, ref.FromTxNum, ref.ToTxNum, recordCount); err != nil {
+	if err := writeStateDomainChangeBinaryHeaderTo(segmentTmp, stateDomainChangeBinarySegmentMagic, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
 		return result, err
 	}
 	txRangeCount, err := writeStateDomainChangeBinaryTxRangeTableFromDB(segmentTmp, db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange)
@@ -106,17 +97,78 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if err != nil {
 		return result, err
 	}
-	defer accessorCollectors.Close()
+	defer func() {
+		if accessorCollectors != nil {
+			accessorCollectors.Close()
+		}
+	}()
 
-	recordWriter := newStateDomainChangeHistoryRecordETLWriter(segmentTmp, indexTmp, accessorCollectors, ref, recordCount, recordOffset)
-	result.recordETL, err = recordCollector.Load(recordWriter)
-	if err != nil {
-		return result, fmt.Errorf("snapshots: sort state-domain-change history records: %w", err)
+	recordWriter := newStateDomainChangeHistoryRecordWriter(segmentTmp, indexTmp, accessorCollectors, ref, math.MaxUint64, recordOffset)
+	streamErr := iterateStateDomainChangeHistoryChanges(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, func(change *rawdb.StateDomainChange) (bool, error) {
+		if change == nil {
+			return false, errors.New("snapshots: nil state-domain-change history record")
+		}
+		if err := recordWriter.WriteChange(change); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	if streamErr != nil && !errors.Is(streamErr, errStateDomainChangeHistoryRecordsNotOrdered) {
+		return result, fmt.Errorf("snapshots: stream state-domain-change history records: %w", streamErr)
+	}
+	recordCount := recordWriter.count
+	if errors.Is(streamErr, errStateDomainChangeHistoryRecordsNotOrdered) {
+		// Positive-sequence legacy and repair rows predate the block-pack order
+		// invariant. Discard the incomplete direct attempt and pay the bounded
+		// record ETL cost only for those old inputs.
+		accessorCollectors.Close()
+		accessorCollectors = nil
+		if err := resetStateDomainChangeHistoryTempFile(segmentTmp); err != nil {
+			return result, fmt.Errorf("snapshots: reset unordered state-domain-change history segment: %w", err)
+		}
+		if err := resetStateDomainChangeHistoryTempFile(indexTmp); err != nil {
+			return result, fmt.Errorf("snapshots: reset unordered state-domain-change history index: %w", err)
+		}
+
+		recordCollector, err := etl.NewCollector(opts)
+		if err != nil {
+			return result, fmt.Errorf("snapshots: create state-domain-change history fallback ETL collector: %w", err)
+		}
+		defer recordCollector.Close()
+		recordCount, err = collectStateDomainChangeHistoryRecords(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, recordCollector)
+		if err != nil {
+			return result, err
+		}
+		if err := writeStateDomainChangeBinaryHeaderTo(segmentTmp, stateDomainChangeBinarySegmentMagic, ref.FromTxNum, ref.ToTxNum, recordCount); err != nil {
+			return result, err
+		}
+		txRangeCount, err = writeStateDomainChangeBinaryTxRangeTableFromDB(segmentTmp, db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange)
+		if err != nil {
+			return result, err
+		}
+		recordOffset = uint64(stateDomainChangeBinaryHeaderSize) + 8 + txRangeCount*stateDomainChangeBinaryTxRangeSize
+		if err := writeStateDomainChangeBinaryHeaderTo(indexTmp, stateDomainChangeBinaryIndexMagic, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
+			return result, err
+		}
+		accessorCollectors, err = newStateDomainChangeBinaryAccessorV4Collectors(opts)
+		if err != nil {
+			return result, err
+		}
+		recordWriter = newStateDomainChangeHistoryRecordWriter(segmentTmp, indexTmp, accessorCollectors, ref, recordCount, recordOffset)
+		result.recordETL, err = recordCollector.Load(recordWriter)
+		if err != nil {
+			return result, fmt.Errorf("snapshots: sort fallback state-domain-change history records: %w", err)
+		}
+	} else {
+		recordWriter.expected = recordCount
 	}
 	if err := recordWriter.Finish(); err != nil {
 		return result, err
 	}
-	if err := writeStateDomainChangeBinaryIndexCount(indexTmp, recordWriter.indexWritten); err != nil {
+	if err := writeStateDomainChangeBinaryHeaderCount(segmentTmp, recordCount); err != nil {
+		return result, err
+	}
+	if err := writeStateDomainChangeBinaryHeaderCount(indexTmp, recordWriter.indexWritten); err != nil {
 		return result, err
 	}
 
@@ -176,6 +228,17 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	published = true
 	result.refs = []SegmentRef{segmentRef, accessorRef, indexRef}
 	return result, nil
+}
+
+func resetStateDomainChangeHistoryTempFile(file *os.File) error {
+	if file == nil {
+		return errors.New("snapshots: nil state-domain-change history temp file")
+	}
+	if err := file.Truncate(0); err != nil {
+		return err
+	}
+	_, err := file.Seek(0, io.SeekStart)
+	return err
 }
 
 func collectStateDomainChangeHistoryRecords(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange, collector *etl.Collector) (uint64, error) {
@@ -360,7 +423,7 @@ func stateDomainChangeHistoryRecordETLSortKey(change *rawdb.StateDomainChange, o
 	return out
 }
 
-type stateDomainChangeHistoryRecordETLWriter struct {
+type stateDomainChangeHistoryRecordWriter struct {
 	segment      *bufio.Writer
 	index        *bufio.Writer
 	accessors    *stateDomainChangeBinaryAccessorV4Collectors
@@ -376,8 +439,8 @@ type stateDomainChangeHistoryRecordETLWriter struct {
 
 const stateDomainChangeHistoryWriteBufferSize = 256 << 10
 
-func newStateDomainChangeHistoryRecordETLWriter(segment, index *os.File, accessors *stateDomainChangeBinaryAccessorV4Collectors, ref SegmentRef, expected, segmentOff uint64) *stateDomainChangeHistoryRecordETLWriter {
-	return &stateDomainChangeHistoryRecordETLWriter{
+func newStateDomainChangeHistoryRecordWriter(segment, index *os.File, accessors *stateDomainChangeBinaryAccessorV4Collectors, ref SegmentRef, expected, segmentOff uint64) *stateDomainChangeHistoryRecordWriter {
+	return &stateDomainChangeHistoryRecordWriter{
 		segment:    bufio.NewWriterSize(segment, stateDomainChangeHistoryWriteBufferSize),
 		index:      bufio.NewWriterSize(index, stateDomainChangeHistoryWriteBufferSize),
 		accessors:  accessors,
@@ -387,9 +450,11 @@ func newStateDomainChangeHistoryRecordETLWriter(segment, index *os.File, accesso
 	}
 }
 
-func (w *stateDomainChangeHistoryRecordETLWriter) Put(_ []byte, value []byte) error {
+// Put implements ethdb.KeyValueWriter for the bounded legacy/repair fallback.
+// Fresh block packs bypass it and call WriteChange with decoded rows directly.
+func (w *stateDomainChangeHistoryRecordWriter) Put(_ []byte, value []byte) error {
 	if w == nil || w.segment == nil || w.index == nil {
-		return errors.New("snapshots: nil state-domain-change history record ETL writer")
+		return errors.New("snapshots: nil state-domain-change history record writer")
 	}
 	change, err := decodeStateDomainChangeRecord(value)
 	if err != nil {
@@ -399,10 +464,9 @@ func (w *stateDomainChangeHistoryRecordETLWriter) Put(_ []byte, value []byte) er
 }
 
 // WriteChange emits one already-decoded history row while maintaining the
-// companion txNum index. Cold builds reach this through Put after ETL sorting;
-// compaction can call it directly while streaming ordered source segments and
-// avoid encoding, decoding, and rescanning the merged output for its index.
-func (w *stateDomainChangeHistoryRecordETLWriter) WriteChange(change *rawdb.StateDomainChange) error {
+// companion txNum index. Cold builds and compaction both call it directly from
+// their ordered source streams, avoiding a record ETL encode/decode round trip.
+func (w *stateDomainChangeHistoryRecordWriter) WriteChange(change *rawdb.StateDomainChange) error {
 	if w == nil || w.segment == nil || w.index == nil {
 		return errors.New("snapshots: nil state-domain-change history record writer")
 	}
@@ -416,7 +480,7 @@ func (w *stateDomainChangeHistoryRecordETLWriter) WriteChange(change *rawdb.Stat
 		return fmt.Errorf("snapshots: state-domain-change tx %d outside segment range [%d,%d]", change.TxNum, w.ref.FromTxNum, w.ref.ToTxNum)
 	}
 	if w.previous != nil && compareStateDomainChangeForBinary(w.previous, change) > 0 {
-		return errors.New("snapshots: state-domain-change record ETL rows are not ordered")
+		return errStateDomainChangeHistoryRecordsNotOrdered
 	}
 	if w.accessors != nil {
 		if err := w.accessors.Collect(change, w.segmentOff, w.count); err != nil {
@@ -451,21 +515,20 @@ func (w *stateDomainChangeHistoryRecordETLWriter) WriteChange(change *rawdb.Stat
 	}
 	w.segmentOff += uint64(len(frame))
 	w.count++
-	// Both producers hand ownership of the decoded row to this private writer:
-	// ETL Put creates a fresh row and compaction advances only after WriteChange
-	// returns. Retaining the row until the next comparison avoids cloning every
-	// variable-width field solely for the adjacent-order check.
+	// Both producers keep the decoded row valid until the next WriteChange call.
+	// Retaining it avoids cloning every variable-width field solely for the
+	// adjacent-order check.
 	w.previous = change
 	return nil
 }
 
-func (w *stateDomainChangeHistoryRecordETLWriter) Delete([]byte) error {
-	return errors.New("snapshots: state-domain-change history record ETL writer does not support deletes")
+func (*stateDomainChangeHistoryRecordWriter) Delete([]byte) error {
+	return errors.New("snapshots: state-domain-change history record writer does not support deletes")
 }
 
-func (w *stateDomainChangeHistoryRecordETLWriter) Finish() error {
+func (w *stateDomainChangeHistoryRecordWriter) Finish() error {
 	if w == nil {
-		return errors.New("snapshots: nil state-domain-change history record ETL writer")
+		return errors.New("snapshots: nil state-domain-change history record writer")
 	}
 	if err := w.flushIndex(); err != nil {
 		return err
@@ -482,7 +545,7 @@ func (w *stateDomainChangeHistoryRecordETLWriter) Finish() error {
 	return nil
 }
 
-func (w *stateDomainChangeHistoryRecordETLWriter) flushIndex() error {
+func (w *stateDomainChangeHistoryRecordWriter) flushIndex() error {
 	if !w.haveIndex {
 		return nil
 	}
@@ -494,9 +557,9 @@ func (w *stateDomainChangeHistoryRecordETLWriter) flushIndex() error {
 	return nil
 }
 
-func writeStateDomainChangeBinaryIndexCount(file *os.File, count uint64) error {
+func writeStateDomainChangeBinaryHeaderCount(file *os.File, count uint64) error {
 	if file == nil {
-		return errors.New("snapshots: nil state-domain-change binary index file")
+		return errors.New("snapshots: nil state-domain-change binary file")
 	}
 	var raw [8]byte
 	binary.BigEndian.PutUint64(raw[:], count)

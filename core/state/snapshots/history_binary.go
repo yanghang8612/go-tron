@@ -733,7 +733,7 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if err := writeStateDomainChangeBinaryHeaderTo(indexTmp, stateDomainChangeBinaryIndexMagic, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	recordWriter := newStateDomainChangeHistoryRecordETLWriter(tmp, indexTmp, collectors, ref, totalRecords, recordOffset)
+	recordWriter := newStateDomainChangeHistoryRecordWriter(tmp, indexTmp, collectors, ref, totalRecords, recordOffset)
 	for i := range sources {
 		if err := copyStateDomainChangeBinarySegmentPayload(dir, recordWriter, sources[i]); err != nil {
 			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
@@ -742,7 +742,7 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if err := recordWriter.Finish(); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	if err := writeStateDomainChangeBinaryIndexCount(indexTmp, recordWriter.indexWritten); err != nil {
+	if err := writeStateDomainChangeBinaryHeaderCount(indexTmp, recordWriter.indexWritten); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	segRef, err = finalizeCompactedHistoryFile(dir, ref, tmp, tmpName, true)
@@ -917,7 +917,7 @@ func iterateStateDomainChangeBinaryCompactionTxRanges(dir string, sources []stat
 	return nil
 }
 
-func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChangeHistoryRecordETLWriter, source stateDomainChangeBinaryCompactionSource) error {
+func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChangeHistoryRecordWriter, source stateDomainChangeBinaryCompactionSource) error {
 	if dst == nil {
 		return errors.New("snapshots: nil compacted state-domain-change record writer")
 	}
