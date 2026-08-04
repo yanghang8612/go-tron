@@ -30,6 +30,9 @@ func TestCollectorLoadSortsAndCollapsesLatestOperation(t *testing.T) {
 	if stats.Collected != 6 || stats.Applied != 3 || stats.AppliedPuts != 3 || stats.AppliedDeletes != 0 {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
+	if stats.SpilledRuns != 0 {
+		t.Fatalf("in-memory load spilled %d runs, want none", stats.SpilledRuns)
+	}
 	if got, want := writer.ops, []string{"put:a", "put:b", "put:c"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ops = %v, want %v", got, want)
 	}
@@ -65,6 +68,32 @@ func TestCollectorSpillsRunsAndMergesDeletes(t *testing.T) {
 	assertValue(t, writer, "a", "value-a")
 	assertMissing(t, writer, "b")
 	assertValue(t, writer, "c", "value-c")
+}
+
+func TestCollectorMergesSpilledRunsWithFinalBuffer(t *testing.T) {
+	collector := newTestCollector(t, Options{BufferLimit: 50})
+	defer collector.Close()
+
+	mustPut(t, collector, "a", "old-a")
+	mustPut(t, collector, "b", "value-b")
+	mustPut(t, collector, "c", "value-c")
+	if len(collector.runFiles) == 0 {
+		t.Fatal("collector did not spill its bounded prefix")
+	}
+	mustPut(t, collector, "a", "new-a")
+
+	writer := newRecordingWriter()
+	stats, err := collector.Load(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.SpilledRuns < 2 {
+		t.Fatalf("spilled runs = %d, want prefix plus final buffer", stats.SpilledRuns)
+	}
+	if got, want := writer.ops, []string{"put:a", "put:b", "put:c"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ops = %v, want %v", got, want)
+	}
+	assertValue(t, writer, "a", "new-a")
 }
 
 func TestCollectorUsesBatchesWhenAvailable(t *testing.T) {

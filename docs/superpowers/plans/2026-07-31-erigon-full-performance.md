@@ -429,5 +429,8 @@
   duplicate linear index/accessor self-scans with fixed-layout reopen checks,
   while retaining the full production-reader history replay and offline
   manifest verification.
+- [x] Keep a bounded ETL collector's final sortable buffer in memory when it has
+  produced no earlier disk run, avoiding a one-run spill/readback cycle while
+  preserving external merge behavior after the configured memory limit.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

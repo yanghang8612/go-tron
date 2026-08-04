@@ -150,8 +150,11 @@ func (c *Collector) LoadInterruptible(writer ethdb.KeyValueWriter, interrupted f
 	if interrupted != nil && interrupted() {
 		return c.stats, ErrLoadInterrupted
 	}
-	if err := c.spillBuffer(); err != nil {
-		return c.stats, err
+	inMemory := len(c.runFiles) == 0
+	if !inMemory {
+		if err := c.spillBuffer(); err != nil {
+			return c.stats, err
+		}
 	}
 	if interrupted != nil && interrupted() {
 		return c.stats, ErrLoadInterrupted
@@ -160,11 +163,17 @@ func (c *Collector) LoadInterruptible(writer ethdb.KeyValueWriter, interrupted f
 	applier := newApplier(writer, c.opts.BatchSize)
 	defer applier.close()
 
-	if err := c.mergeRuns(applier, interrupted); err != nil {
-		if errors.Is(err, ErrLoadInterrupted) {
+	var loadErr error
+	if inMemory {
+		loadErr = c.loadRows(applier, interrupted)
+	} else {
+		loadErr = c.mergeRuns(applier, interrupted)
+	}
+	if loadErr != nil {
+		if errors.Is(loadErr, ErrLoadInterrupted) {
 			c.stats = loadStartStats
 		}
-		return c.stats, err
+		return c.stats, loadErr
 	}
 	if interrupted != nil && interrupted() {
 		c.stats = loadStartStats
@@ -174,6 +183,10 @@ func (c *Collector) LoadInterruptible(writer ethdb.KeyValueWriter, interrupted f
 		return c.stats, err
 	}
 	c.stats.BatchWrites += applier.batchWrites
+	if inMemory {
+		c.rows = nil
+		c.bufferBytes = 0
+	}
 	c.loaded = true
 	return c.stats, nil
 }
@@ -347,6 +360,44 @@ func (c *Collector) mergeRuns(applier *applier, interrupted func() bool) error {
 		}
 	}
 	return applyGroup()
+}
+
+// loadRows is the Erigon-style final-buffer fast path: when collection never
+// exceeded its memory bound, sort and apply that buffer directly instead of
+// writing a one-run temporary file and immediately reading it back. Entries
+// remain owned by the collector until Load succeeds so an interrupted attempt
+// can be retried with the same idempotent contract as the disk merge path.
+func (c *Collector) loadRows(applier *applier, interrupted func() bool) error {
+	if len(c.rows) == 0 {
+		return nil
+	}
+	sortEntries(c.rows)
+	var groups uint64
+	for start := 0; start < len(c.rows); {
+		if groups&1023 == 0 && interrupted != nil && interrupted() {
+			return ErrLoadInterrupted
+		}
+		end := start + 1
+		for end < len(c.rows) && bytes.Equal(c.rows[start].key, c.rows[end].key) {
+			end++
+		}
+		winner := c.rows[end-1]
+		if winner.op == opDelete {
+			if err := applier.delete(winner.key); err != nil {
+				return err
+			}
+			c.stats.AppliedDeletes++
+		} else {
+			if err := applier.put(winner.key, winner.value); err != nil {
+				return err
+			}
+			c.stats.AppliedPuts++
+		}
+		c.stats.Applied++
+		groups++
+		start = end
+	}
+	return nil
 }
 
 func sortEntries(entries []entry) {

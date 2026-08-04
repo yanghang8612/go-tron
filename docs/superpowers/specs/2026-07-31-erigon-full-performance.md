@@ -3790,6 +3790,30 @@ bytes fell 1.1%. Dense runs fell from 63.47 ms to 57.09 ms (-10.0%), allocated
 bytes from 21.46 MB to 20.96 MB (-2.3%), and allocations from 200,658 to 185,622
 (-7.5%).
 
+#### P5.22: In-memory final ETL buffer
+
+The bounded ETL collector previously forced its last buffer through a temporary
+run even when collection never reached the configured memory limit. A 5,000-row
+base step therefore sorted the exact and group accessors, wrote each as a run,
+allocated 1 MiB buffered readers, decoded and allocated every run entry again,
+and immediately deleted the temporary files. This behavior made the external
+merge path mandatory for inputs that were already safely bounded in memory.
+
+Erigon's collector calls `flushBuffer(true)` at load time and uses `KeepInRAM`
+when no earlier data provider exists. go-tron's generic ETL now follows the same
+rule: a never-spilled final buffer is sorted and duplicate-collapsed directly
+into the existing applier; if any prefix already exceeded `BufferLimit`, the
+remaining buffer is still spilled and all runs are merged exactly as before.
+Interruption stats remain retryable, successful loads release the retained
+rows, and forced-spill plus mixed disk/final-buffer regressions preserve the
+bounded-memory contract.
+
+Against an independently checked-out P5.21 binary, five local Pebble runs of
+the sparse base build were unchanged at 48.28 ms versus 48.18 ms (-0.2%) while
+allocated bytes fell from 9.32 MB to 5.12 MB (-45.1%). Dense runs fell from
+56.39 ms to 51.14 ms (-9.3%), allocated bytes from 20.96 MB to 15.31 MB
+(-27.0%), and allocations from 185,624 to 145,532 (-21.6%).
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go
