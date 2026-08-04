@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -1223,6 +1224,60 @@ func TestVMPublicNetBoundaryProjectionMatchesSerialWrites(t *testing.T) {
 	pre.projectPublicNetBoundary(0, dynProps)
 	if rejected := pre.publicNet[0]; !rejected.observed || rejected.admitted {
 		t.Fatalf("limit change was not rejected: %+v", rejected)
+	}
+}
+
+func TestVMBlockEnergyBoundaryProjectionMatchesSerialAccumulator(t *testing.T) {
+	stats := forkStatsMem{}
+	passVersion3_6_5(stats, 27)
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetBlockEnergyUsage(40)
+	result := &actuator.Result{
+		EnergyUsageTotal:  1_000,
+		EnergyUsed:        600,
+		OriginEnergyUsage: 100,
+	}
+	pre := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{{
+			txIndex: 0,
+			info: &corepb.TransactionInfo{Receipt: &corepb.ResourceReceipt{
+				EnergyUsageTotal:  result.EnergyUsageTotal,
+				EnergyUsage:       result.EnergyUsed,
+				OriginEnergyUsage: result.OriginEnergyUsage,
+			}},
+			applyEligible: true,
+			applyMatch:    true,
+		}},
+		resultByTx:    []int{0},
+		readVersions:  []discardShadowReadVersionResult{{publishable: true}},
+		readValidated: []bool{true},
+		published:     make([]bool, 1),
+		blockEnergy:   make([]discardShadowBlockEnergyProjection, 1),
+	}
+
+	pre.projectBlockEnergyBoundary(0, dynProps, stats, 0, nil)
+	projection := pre.blockEnergy[0]
+	if !projection.observed || projection.expected != 1_040 || projection.validated {
+		t.Fatalf("VM block-energy projection = %+v", projection)
+	}
+	accumulateBlockEnergyUsage(dynProps, stats, 0, result, nil)
+	pre.validateBlockEnergyBoundary(0, dynProps)
+	projection = pre.blockEnergy[0]
+	if !projection.validated || !projection.match || dynProps.BlockEnergyUsage() != 1_040 {
+		t.Fatalf("VM block-energy validation = %+v, canonical=%d", projection, dynProps.BlockEnergyUsage())
+	}
+	versioned := &versionedAccessShadow{
+		transactionWritesOK:  []bool{true},
+		transactionWriteSets: []state.TransactionWriteSet{{}},
+	}
+	finishStats := (&discardShadowBlock{}).finishVMSenderChains(pre, versioned, discardShadowRunConfig{
+		transactions:   []*types.Transaction{makeTestTriggerTx(1, testProcessorAddr(8), nil)},
+		canonicalInfos: []*corepb.TransactionInfo{pre.results[0].info},
+	})
+	if finishStats.blockEnergyCandidates != 1 || finishStats.blockEnergyObserved != 1 ||
+		finishStats.blockEnergyMatches != 1 || finishStats.blockEnergyMismatches != 0 || finishStats.blockEnergyMissing != 0 {
+		t.Fatalf("VM block-energy finish stats = %+v", finishStats)
 	}
 }
 

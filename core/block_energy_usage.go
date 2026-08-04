@@ -29,15 +29,27 @@ func accumulateBlockEnergyUsage(dp *state.DynamicProperties, forkStats forks.For
 	if dp == nil || result == nil {
 		return
 	}
-	if !dp.AllowAdaptiveEnergy() || result.EnergyUsageTotal <= 0 {
-		return
-	}
-	delta := result.EnergyUsed + result.OriginEnergyUsage
-	if forkPassCache.Pass(forkStats, blockEnergyUsageForkVersion, prevBlockTime, dp.MaintenanceTimeInterval()) {
-		delta = result.EnergyUsageTotal
-	}
+	delta := blockEnergyUsageDelta(dp, forkStats, prevBlockTime, result.EnergyUsageTotal, result.EnergyUsed, result.OriginEnergyUsage, forkPassCache)
 	if delta <= 0 {
 		return
 	}
 	dp.SetBlockEnergyUsage(dp.BlockEnergyUsage() + delta)
+}
+
+// blockEnergyUsageDelta is the shared transaction-boundary rule for canonical
+// accumulation and observe-only parallel-result projection. Keeping the fork
+// decision here prevents the projected carrier from drifting from serial
+// execution as the resource rules evolve.
+func blockEnergyUsageDelta(dp *state.DynamicProperties, forkStats forks.ForkStatsReader, prevBlockTime, energyUsageTotal, energyUsed, originEnergyUsage int64, forkPassCache *forks.VersionPassCache) int64 {
+	if dp == nil || !dp.AllowAdaptiveEnergy() || energyUsageTotal <= 0 {
+		return 0
+	}
+	delta := energyUsed + originEnergyUsage
+	if forkPassCache.Pass(forkStats, blockEnergyUsageForkVersion, prevBlockTime, dp.MaintenanceTimeInterval()) {
+		delta = energyUsageTotal
+	}
+	if delta <= 0 {
+		return 0
+	}
+	return delta
 }

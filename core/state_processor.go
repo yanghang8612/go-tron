@@ -958,6 +958,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		if vmSenderChainPreexecution != nil {
 			vmSenderChainPreexecution.validateReadVersion(i, tx, &versionedShadow)
 			vmSenderChainPreexecution.projectPublicNetBoundary(i, dynProps)
+			vmSenderChainPreexecution.projectBlockEnergyBoundary(i, dynProps, statedb, prevBlockTime, forkPassCache)
 		}
 		if senderRetry != nil {
 			senderRetry.observeBoundary(i, tx, statedb, dynProps, &versionedShadow, discardCfg)
@@ -1157,6 +1158,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		}
 
 		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result, forkPassCache)
+		if vmSenderChainPreexecution != nil {
+			vmSenderChainPreexecution.validateBlockEnergyBoundary(i, dynProps)
+		}
 	}
 
 	if discardShadow != nil && (discardShadow.sampled || senderRetry != nil) {

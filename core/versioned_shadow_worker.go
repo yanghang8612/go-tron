@@ -286,6 +286,11 @@ var (
 	discardShadowVMPublicNetProjectionMatchesCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/write_set_matches", nil)
 	discardShadowVMPublicNetProjectionMismatchCounter  = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/write_set_mismatches", nil)
 	discardShadowVMPublicNetProjectionMissingCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/missing", nil)
+	discardShadowVMBlockEnergyProjectionCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/block_energy/projection/candidates", nil)
+	discardShadowVMBlockEnergyObservedCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/block_energy/projection/observed", nil)
+	discardShadowVMBlockEnergyMatchesCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/block_energy/projection/matches", nil)
+	discardShadowVMBlockEnergyMismatchesCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/block_energy/projection/mismatches", nil)
+	discardShadowVMBlockEnergyMissingCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/block_energy/projection/missing", nil)
 )
 
 var (
@@ -537,6 +542,7 @@ type discardShadowPreexecution struct {
 	wallNanos     int64
 	retryStates   []*state.StateDB
 	publicNet     []discardShadowPublicNetProjection
+	blockEnergy   []discardShadowBlockEnergyProjection
 }
 
 type discardShadowPublicNetProjection struct {
@@ -548,36 +554,48 @@ type discardShadowPublicNetProjection struct {
 	expectedTimeSet bool
 }
 
+type discardShadowBlockEnergyProjection struct {
+	observed  bool
+	expected  int64
+	validated bool
+	match     bool
+}
+
 type discardShadowSenderChainStats struct {
-	groups               int64
-	executed             int64
-	forwarded            int64
-	candidates           int64
-	validated            int64
-	forwardedValidated   int64
-	readConflicts        int64
-	senderConflicts      int64
-	infoMismatches       int64
-	writeMismatches      int64
-	balanceMismatches    int64
-	errors               int64
-	publicNetCandidates  int64
-	publicNetOnly        int64
-	otherWriteMismatch   int64
-	resultErrors         int64
-	missingInfo          int64
-	writeSetErrors       int64
-	applyUnsupported     int64
-	applyErrors          int64
-	applyMismatches      int64
-	readinessRejected    int64
-	publicNetProjected   int64
-	publicNetAdmitted    int64
-	publicNetRebased     int64
-	publicNetRejected    int64
-	projectionMatches    int64
-	projectionMismatches int64
-	projectionMissing    int64
+	groups                int64
+	executed              int64
+	forwarded             int64
+	candidates            int64
+	validated             int64
+	forwardedValidated    int64
+	readConflicts         int64
+	senderConflicts       int64
+	infoMismatches        int64
+	writeMismatches       int64
+	balanceMismatches     int64
+	errors                int64
+	publicNetCandidates   int64
+	publicNetOnly         int64
+	otherWriteMismatch    int64
+	resultErrors          int64
+	missingInfo           int64
+	writeSetErrors        int64
+	applyUnsupported      int64
+	applyErrors           int64
+	applyMismatches       int64
+	readinessRejected     int64
+	publicNetProjected    int64
+	publicNetAdmitted     int64
+	publicNetRebased      int64
+	publicNetRejected     int64
+	projectionMatches     int64
+	projectionMismatches  int64
+	projectionMissing     int64
+	blockEnergyCandidates int64
+	blockEnergyObserved   int64
+	blockEnergyMatches    int64
+	blockEnergyMismatches int64
+	blockEnergyMissing    int64
 }
 
 type discardShadowAsyncPrefixStats struct {
@@ -1478,6 +1496,7 @@ func (shadow *discardShadowBlock) preexecuteVMSenderChains(cfg discardShadowRunC
 	pre := shadow.preexecuteSenderChainsWithRetryState(cfg, vmSenderChains(cfg.transactions), preexecutedResultReady, true, false)
 	if pre != nil {
 		pre.publicNet = make([]discardShadowPublicNetProjection, len(pre.results))
+		pre.blockEnergy = make([]discardShadowBlockEnergyProjection, len(pre.results))
 	}
 	return pre
 }
@@ -2946,6 +2965,51 @@ func (pre *discardShadowPreexecution) projectPublicNetBoundary(txIndex int, dynP
 	projection.expectedTimeSet = !currentTimeStored || currentTime != reservation.ResourceTime
 }
 
+// projectBlockEnergyBoundary derives the block-level adaptive-energy post-image
+// from a retained VM receipt and the exact canonical pre-transaction value.
+// It is observe-only; canonical accumulation still runs through
+// accumulateBlockEnergyUsage after serial execution.
+func (pre *discardShadowPreexecution) projectBlockEnergyBoundary(txIndex int, dynProps *state.DynamicProperties, forkStats forks.ForkStatsReader, prevBlockTime int64, forkPassCache *forks.VersionPassCache) {
+	if pre == nil || dynProps == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
+		return
+	}
+	resultIndex := pre.resultByTx[txIndex]
+	if resultIndex < 0 || resultIndex >= len(pre.results) || resultIndex >= len(pre.readValidated) ||
+		!pre.readValidated[resultIndex] || !pre.readVersions[resultIndex].publishable ||
+		resultIndex >= len(pre.blockEnergy) {
+		return
+	}
+	result := &pre.results[resultIndex]
+	if !preexecutedResultReady(result) || result.info.GetReceipt() == nil {
+		return
+	}
+	receipt := result.info.GetReceipt()
+	delta := blockEnergyUsageDelta(dynProps, forkStats, prevBlockTime, receipt.GetEnergyUsageTotal(), receipt.GetEnergyUsage(), receipt.GetOriginEnergyUsage(), forkPassCache)
+	pre.blockEnergy[resultIndex] = discardShadowBlockEnergyProjection{
+		observed: true,
+		expected: dynProps.BlockEnergyUsage() + delta,
+	}
+}
+
+// validateBlockEnergyBoundary checks the canonical post-image immediately
+// after the serial transaction's block-energy accumulation, before the next
+// transaction can change the accumulator.
+func (pre *discardShadowPreexecution) validateBlockEnergyBoundary(txIndex int, dynProps *state.DynamicProperties) {
+	if pre == nil || dynProps == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
+		return
+	}
+	resultIndex := pre.resultByTx[txIndex]
+	if resultIndex < 0 || resultIndex >= len(pre.blockEnergy) {
+		return
+	}
+	projection := &pre.blockEnergy[resultIndex]
+	if !projection.observed || projection.validated {
+		return
+	}
+	projection.validated = true
+	projection.match = dynProps.BlockEnergyUsage() == projection.expected
+}
+
 func (pre *discardShadowPreexecution) resultForTransaction(txIndex int) (*discardShadowTaskResult, discardShadowReadVersionResult, bool) {
 	if pre == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
 		return nil, discardShadowReadVersionResult{}, false
@@ -3257,6 +3321,11 @@ func (shadow *discardShadowBlock) finishVMSenderChains(pre *discardShadowPreexec
 	discardShadowVMPublicNetProjectionMatchesCounter.Inc(stats.projectionMatches)
 	discardShadowVMPublicNetProjectionMismatchCounter.Inc(stats.projectionMismatches)
 	discardShadowVMPublicNetProjectionMissingCounter.Inc(stats.projectionMissing)
+	discardShadowVMBlockEnergyProjectionCounter.Inc(stats.blockEnergyCandidates)
+	discardShadowVMBlockEnergyObservedCounter.Inc(stats.blockEnergyObserved)
+	discardShadowVMBlockEnergyMatchesCounter.Inc(stats.blockEnergyMatches)
+	discardShadowVMBlockEnergyMismatchesCounter.Inc(stats.blockEnergyMismatches)
+	discardShadowVMBlockEnergyMissingCounter.Inc(stats.blockEnergyMissing)
 	return stats
 }
 
@@ -3327,6 +3396,21 @@ func (shadow *discardShadowBlock) finishSenderChains(pre *discardShadowPreexecut
 		stats.candidates++
 		if result.publicNetValid {
 			stats.publicNetCandidates++
+		}
+		if !ignorePublicNet {
+			stats.blockEnergyCandidates++
+			if resultIndex >= len(pre.blockEnergy) || !pre.blockEnergy[resultIndex].observed {
+				stats.blockEnergyMissing++
+			} else {
+				stats.blockEnergyObserved++
+				if !pre.blockEnergy[resultIndex].validated {
+					stats.blockEnergyMissing++
+				} else if pre.blockEnergy[resultIndex].match {
+					stats.blockEnergyMatches++
+				} else {
+					stats.blockEnergyMismatches++
+				}
+			}
 		}
 		if txIndex < 0 || txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
 			txIndex >= len(versioned.transactionWriteSets) || (cfg.captureBalanceTrace && txIndex >= len(cfg.canonicalBalanceTraces)) {
