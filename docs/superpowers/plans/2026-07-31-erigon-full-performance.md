@@ -384,5 +384,9 @@
 - [x] Verify the allowlisted HTTP host -> resumable fetch -> restore -> Pebble/
   freezer reopen -> recent-tail import path, plus real two-node P2P tail sync in
   regression tests.
+- [x] Replace flat continuous-history compaction with Erigon-style
+  power-of-two-aligned logical steps, a 256-step frozen-file cap, and
+  manifest-bound companion step validation so new leaves do not repeatedly
+  rewrite the complete merged prefix.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

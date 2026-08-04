@@ -541,6 +541,7 @@ func (cfg DomainCfg) historyCompanionRef(manifest *Manifest, historyRef SegmentR
 			ref.Kind == kind &&
 			ref.FromTxNum == historyRef.FromTxNum &&
 			ref.ToTxNum == historyRef.ToTxNum &&
+			ref.effectiveAggregationSteps() == historyRef.effectiveAggregationSteps() &&
 			ref.Path == wantPath {
 			return ref, true
 		}

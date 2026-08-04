@@ -712,8 +712,13 @@ func TestColdBuilderSecondPassContinuesFromManifestVisibleEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load manifest: %v", err)
 	}
-	if manifest.VisibleTxStart != 1 || manifest.VisibleTxEnd != 4 || len(manifest.Segments) != 6 {
+	if manifest.VisibleTxStart != 1 || manifest.VisibleTxEnd != 4 || len(manifest.Segments) != 3 {
 		t.Fatalf("manifest after continuation = %+v", manifest)
+	}
+	for _, ref := range manifest.Segments {
+		if ref.AggregationSteps != 2 {
+			t.Fatalf("continued history aggregation steps = %d, want 2: %+v", ref.AggregationSteps, ref)
+		}
 	}
 }
 
@@ -727,13 +732,12 @@ func TestColdBuilderCompactsSmallHistorySegments(t *testing.T) {
 	writeColdBuilderCanonicalBlock(t, db, 2)
 	chain := &coldBuilderChain{db: db, solidified: 2}
 	runner := NewRunner(chain, Config{
-		Dir:                dir,
-		Enabled:            true,
-		Interval:           time.Hour,
-		HistoryWindow:      1,
-		BatchBlocks:        1,
-		CompactMinSegments: 2,
-		CompactMaxTxSpan:   2,
+		Dir:             dir,
+		Enabled:         true,
+		Interval:        time.Hour,
+		HistoryWindow:   1,
+		BatchBlocks:     1,
+		CompactMaxSteps: 256,
 	})
 
 	first, err := runner.OnePass()
@@ -742,6 +746,11 @@ func TestColdBuilderCompactsSmallHistorySegments(t *testing.T) {
 	}
 	if !first.Built || first.Compaction.Merged {
 		t.Fatalf("first result = %+v", first)
+	}
+	for _, ref := range first.Segments {
+		if ref.AggregationSteps != 1 {
+			t.Fatalf("base history aggregation steps = %d, want 1: %+v", ref.AggregationSteps, ref)
+		}
 	}
 	chain.solidified = 3
 	second, err := runner.OnePass()
@@ -753,6 +762,9 @@ func TestColdBuilderCompactsSmallHistorySegments(t *testing.T) {
 	}
 	if second.Compaction.Dataset != SegmentDatasetStateDomainChange || len(second.Compaction.Segments) != 3 {
 		t.Fatalf("second compaction = %+v", second.Compaction)
+	}
+	if second.Compaction.AggregationSteps != 2 {
+		t.Fatalf("second compaction aggregation steps = %d, want 2", second.Compaction.AggregationSteps)
 	}
 
 	manifest, err := LoadManifest(dir)

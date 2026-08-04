@@ -45,6 +45,9 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if ref.Dataset == "" {
 		ref.Dataset = SegmentDatasetStateDomainChange
 	}
+	if ref.AggregationSteps == 0 {
+		ref.AggregationSteps = 1
+	}
 	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
 		return result, fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
 	}
@@ -142,22 +145,24 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		return result, err
 	}
 	indexRef = SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentInverted,
-		FromTxNum: ref.FromTxNum,
-		ToTxNum:   ref.ToTxNum,
-		Path:      stateDomainChangeBinaryIndexPath(segmentRef.Path),
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentInverted,
+		FromTxNum:        ref.FromTxNum,
+		ToTxNum:          ref.ToTxNum,
+		AggregationSteps: ref.AggregationSteps,
+		Path:             stateDomainChangeBinaryIndexPath(segmentRef.Path),
 	}
 	indexRef, err = finalizeStateDomainChangeHistoryFile(dir, indexRef, indexTmp, indexTmpName, false, false)
 	if err != nil {
 		return result, err
 	}
 	accessorRef = SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentAccessor,
-		FromTxNum: ref.FromTxNum,
-		ToTxNum:   ref.ToTxNum,
-		Path:      stateDomainChangeBinaryAccessorPath(segmentRef.Path),
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentAccessor,
+		FromTxNum:        ref.FromTxNum,
+		ToTxNum:          ref.ToTxNum,
+		AggregationSteps: ref.AggregationSteps,
+		Path:             stateDomainChangeBinaryAccessorPath(segmentRef.Path),
 	}
 	accessorRef, result.accessorETL, err = buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir, segmentRef, accessorRef, opts)
 	if err != nil {

@@ -3360,6 +3360,41 @@ template preserves Range at `/snapshots/`. Official signer/key release remains
 an operator artifact; no private key or unofficial trust root is compiled into
 the binary.
 
+#### P5.7: Erigon-aligned geometric history merges
+
+The original cold-history selector treated every continuous binary history
+file as one flat run. After each new 5,000-block leaf it could select the
+already merged prefix together with the new tail and rewrite the complete
+history again. Its default limit also multiplied a block count by a segment
+count and then compared that value with a transaction-number span. Besides the
+unit mismatch, repeated prefix replacement makes cold-file write amplification
+quadratic as retained history grows.
+
+Erigon instead assigns files to fixed aggregation steps. Its merge window ends
+at the current step boundary, uses the rightmost set bit to select the largest
+power-of-two-aligned range, and caps frozen files at 256 steps. Go-tron now
+records the equivalent logical `aggregationSteps` on each history segment and
+its inverted/accessor companions. A fresh 5,000-block cold build is one step;
+the compactor sums the selected inputs. TRON transaction density can therefore
+vary freely without using transaction numbers as a proxy for block-step size.
+
+The selector now follows the same aligned-window rule and the same 256-step
+default cap. A `2 + 1` layout is already stable; adding the next leaf selects
+`2 + 1 + 1` directly as one 4-step output, so no intermediate 2-step tail is
+written. A 256-step frozen prefix is excluded when two new leaves arrive, and
+two complete 256-step files are never folded into an unbounded object. Missing
+step metadata is interpreted as one leaf only for additive manifest decoding;
+all new base and compacted writers stamp the field, and a companion whose step
+count differs from its history payload cannot satisfy manifest validation.
+
+This changes the structural upper bound from repeated whole-prefix rewriting
+to logarithmic merge participation per leaf while preserving the existing
+atomic manifest integration, published-generation leases, streamed history
+copy, rebuilt indexes, and coverage-gated prune ordering. The fresh snap-mode
+production gate still has to measure whether build plus geometric merge stays
+ahead of sustained import and whether the 256-step cap is appropriate for the
+mainnet segment-size distribution.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

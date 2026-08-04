@@ -22,19 +22,19 @@ func TestCompactHistoryDomainMergesContinuousBinarySegments(t *testing.T) {
 		writeCompactionStateDomainChangeSegment(t, dir, 1, 1, binaryStateDomainChange(1, 1, 1, "a"))...)
 	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 2, 2, binaryStateDomainChange(2, 2, 1, "b"))...)
 	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 3, 3, binaryStateDomainChange(3, 3, 1, "c"))...)
+	setCompactionRefAggregationSteps(refs[:3], 2)
 	if err := PublishManifest(dir, NewManifest(1, 3, refs)); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
 	oldPaths := segmentPaths(refs)
 
 	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{
-		MinSegments:    3,
 		DeleteObsolete: true,
 	})
 	if err != nil {
 		t.Fatalf("compact history domain: %v", err)
 	}
-	if !result.Merged || result.FromTxNum != 1 || result.ToTxNum != 3 || result.SegmentsMerged != 3 {
+	if !result.Merged || result.FromTxNum != 1 || result.ToTxNum != 3 || result.AggregationSteps != 4 || result.SegmentsMerged != 3 {
 		t.Fatalf("result = %+v", result)
 	}
 	historyRef := compactionRefByKind(t, result, SegmentHistory)
@@ -58,6 +58,9 @@ func TestCompactHistoryDomainMergesContinuousBinarySegments(t *testing.T) {
 	manifestHistoryRef := assertSegmentRef(t, manifest, SegmentDatasetStateDomainChange, 0, SegmentHistory)
 	manifestAccessorRef := assertSegmentRef(t, manifest, SegmentDatasetStateDomainChange, 0, SegmentAccessor)
 	manifestIndexRef := assertSegmentRef(t, manifest, SegmentDatasetStateDomainChange, 0, SegmentInverted)
+	if manifestHistoryRef.AggregationSteps != 4 || manifestAccessorRef.AggregationSteps != 4 || manifestIndexRef.AggregationSteps != 4 {
+		t.Fatalf("merged aggregation steps = history:%d accessor:%d index:%d, want 4", manifestHistoryRef.AggregationSteps, manifestAccessorRef.AggregationSteps, manifestIndexRef.AggregationSteps)
+	}
 	if manifestHistoryRef.FromTxNum != 1 || manifestHistoryRef.ToTxNum != 3 || manifestHistoryRef.Path != historyRef.Path {
 		t.Fatalf("history ref = %+v", manifestHistoryRef)
 	}
@@ -115,7 +118,6 @@ func TestCompactHistoryDomainPreservesPublishedInputLeases(t *testing.T) {
 	oldPaths := segmentPaths(refs)
 
 	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{
-		MinSegments:    2,
 		DeleteObsolete: true,
 	})
 	if err != nil {
@@ -163,7 +165,7 @@ func TestCompactHistoryDomainReturnsGenericResult(t *testing.T) {
 		t.Fatalf("publish manifest: %v", err)
 	}
 
-	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
 	if err != nil {
 		t.Fatalf("compact generic history domain: %v", err)
 	}
@@ -213,7 +215,7 @@ func TestCompactHistoryDomainMergesDuplicateBlockTxRanges(t *testing.T) {
 	if err := PublishManifest(dir, NewManifest(10, 11, refs)); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
-	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
 	if err != nil {
 		t.Fatalf("compact split block history: %v", err)
 	}
@@ -248,10 +250,11 @@ func TestCompactHistoryDomainPreservesRepeatedAccessorKeys(t *testing.T) {
 	refs := append([]SegmentRef{}, writeCompactionStateDomainChangeSegment(t, dir, 1, 1, first)...)
 	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 2, 2, second)...)
 	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 3, 3, other)...)
+	setCompactionRefAggregationSteps(refs[:3], 2)
 	if err := PublishManifest(dir, NewManifest(1, 3, refs)); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
-	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 3})
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
 	if err != nil {
 		t.Fatalf("compact history domain: %v", err)
 	}
@@ -295,7 +298,7 @@ func TestCompactHistoryDomainUpgradesV2AccessorToV4(t *testing.T) {
 		t.Fatalf("publish manifest: %v", err)
 	}
 
-	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
 	if err != nil {
 		t.Fatalf("compact mixed v2/v4 history: %v", err)
 	}
@@ -331,7 +334,7 @@ func TestCompactHistoryDomainTranscodesV2HistoryRecordsToV5(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
 	if err != nil {
 		t.Fatalf("compact v2/v5 history: %v", err)
 	}
@@ -439,7 +442,7 @@ func TestCompactHistoryDomainValidatesAccessorAgainstSegment(t *testing.T) {
 	if err := PublishManifest(dir, NewManifest(1, 3, refs)); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
-	_, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{MinSegments: 2})
+	_, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
 	if err == nil || (!strings.Contains(err.Error(), "entry tx/seq") && !strings.Contains(err.Error(), "exact entry")) {
 		t.Fatalf("compact err = %v, want accessor/segment mismatch", err)
 	}
@@ -455,18 +458,17 @@ func TestCompactHistoryDomainNoOpWhenRunNotEligible(t *testing.T) {
 		if err := PublishManifest(dir, NewManifest(1, 5, refs)); err != nil {
 			t.Fatalf("publish manifest: %v", err)
 		}
-		assertCompactionNoOp(t, dir, CompactionConfig{MinSegments: 2, DeleteObsolete: true}, refs)
+		assertCompactionNoOp(t, dir, CompactionConfig{DeleteObsolete: true}, refs)
 	})
 
 	t.Run("insufficient segments", func(t *testing.T) {
 		dir := t.TempDir()
 		refs := append([]SegmentRef{},
 			writeCompactionStateDomainChangeSegment(t, dir, 1, 1, binaryStateDomainChange(1, 1, 1, "a"))...)
-		refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 2, 2, binaryStateDomainChange(2, 2, 1, "b"))...)
-		if err := PublishManifest(dir, NewManifest(1, 2, refs)); err != nil {
+		if err := PublishManifest(dir, NewManifest(1, 1, refs)); err != nil {
 			t.Fatalf("publish manifest: %v", err)
 		}
-		assertCompactionNoOp(t, dir, CompactionConfig{MinSegments: 3, DeleteObsolete: true}, refs)
+		assertCompactionNoOp(t, dir, CompactionConfig{DeleteObsolete: true}, refs)
 	})
 }
 
@@ -478,13 +480,13 @@ func TestCompactHistoryDomainSkipsMaxedFrontRun(t *testing.T) {
 			binaryStateDomainChange(2, 2, 1, "b"))...)
 	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 3, 3, binaryStateDomainChange(3, 3, 1, "c"))...)
 	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 4, 4, binaryStateDomainChange(4, 4, 1, "d"))...)
+	setCompactionRefAggregationSteps(refs[:3], 256)
 	if err := PublishManifest(dir, NewManifest(1, 4, refs)); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
 
 	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{
-		MinSegments:    2,
-		MaxTxSpan:      2,
+		MaxSteps:       256,
 		DeleteObsolete: true,
 	})
 	if err != nil {
@@ -509,6 +511,122 @@ func TestCompactHistoryDomainSkipsMaxedFrontRun(t *testing.T) {
 	}
 }
 
+func TestSelectAlignedHistoryCompactionRunMatchesErigonLevels(t *testing.T) {
+	candidates := func(steps ...uint64) []historyCompactionCandidate {
+		out := make([]historyCompactionCandidate, 0, len(steps))
+		for i, aggregationSteps := range steps {
+			out = append(out, historyCompactionCandidate{history: SegmentRef{
+				FromTxNum:        uint64(i + 1),
+				ToTxNum:          uint64(i + 1),
+				AggregationSteps: aggregationSteps,
+			}})
+		}
+		return out
+	}
+
+	tests := []struct {
+		name       string
+		steps      []uint64
+		wantFrom   uint64
+		wantTo     uint64
+		wantSteps  uint64
+		wantInputs int
+		wantOK     bool
+	}{
+		{name: "large prefix plus leaf is stable", steps: []uint64{2, 1}, wantOK: false},
+		{name: "outer range absorbs inner leaves", steps: []uint64{2, 1, 1}, wantFrom: 1, wantTo: 3, wantSteps: 4, wantInputs: 3, wantOK: true},
+		{name: "four leaves merge directly", steps: []uint64{1, 1, 1, 1}, wantFrom: 1, wantTo: 4, wantSteps: 4, wantInputs: 4, wantOK: true},
+		{name: "frozen prefix is not rewritten", steps: []uint64{256, 1, 1}, wantFrom: 2, wantTo: 3, wantSteps: 2, wantInputs: 2, wantOK: true},
+		{name: "two half frozen files merge", steps: []uint64{128, 128}, wantFrom: 1, wantTo: 2, wantSteps: 256, wantInputs: 2, wantOK: true},
+		{name: "two frozen files stay immutable", steps: []uint64{256, 256}, wantOK: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := selectAlignedHistoryCompactionRun(candidates(test.steps...), 256)
+			if ok != test.wantOK {
+				t.Fatalf("selection ok = %v, want %v: %+v", ok, test.wantOK, got)
+			}
+			if !ok {
+				return
+			}
+			if got.fromTxNum != test.wantFrom || got.toTxNum != test.wantTo || got.aggregationSteps != test.wantSteps || len(got.candidates) != test.wantInputs {
+				t.Fatalf("selection = %+v, want range [%d,%d] steps=%d inputs=%d", got, test.wantFrom, test.wantTo, test.wantSteps, test.wantInputs)
+			}
+		})
+	}
+}
+
+func TestManifestRejectsHistoryCompanionAggregationStepMismatch(t *testing.T) {
+	dir := t.TempDir()
+	refs := writeCompactionStateDomainChangeSegment(t, dir, 1, 1, binaryStateDomainChange(1, 1, 1, "a"))
+	refs[1].AggregationSteps = 2
+	err := PublishManifest(dir, NewManifest(1, 1, refs))
+	if err == nil || !strings.Contains(err.Error(), "missing required accessor") {
+		t.Fatalf("publish mismatched companion steps err = %v, want missing required accessor", err)
+	}
+}
+
+func TestAlignedHistoryCompactionBoundsLogicalRewriteAmplification(t *testing.T) {
+	const leaves = 1024
+	var (
+		shape          []historyCompactionCandidate
+		rewrittenSteps uint64
+	)
+	for leaf := 1; leaf <= leaves; leaf++ {
+		shape = append(shape, historyCompactionCandidate{history: SegmentRef{
+			FromTxNum:        uint64(leaf),
+			ToTxNum:          uint64(leaf),
+			AggregationSteps: 1,
+		}})
+		for {
+			selection, ok := selectAlignedHistoryCompactionRun(shape, 256)
+			if !ok {
+				break
+			}
+			var selectedSteps uint64
+			for _, candidate := range selection.candidates {
+				selectedSteps += candidate.history.effectiveAggregationSteps()
+			}
+			if selectedSteps != selection.aggregationSteps {
+				t.Fatalf("selected steps = %d, want output steps %d", selectedSteps, selection.aggregationSteps)
+			}
+			rewrittenSteps += selectedSteps
+			start, end := -1, -1
+			for i := range shape {
+				if shape[i].history.FromTxNum == selection.fromTxNum {
+					start = i
+				}
+				if shape[i].history.ToTxNum == selection.toTxNum {
+					end = i + 1
+				}
+			}
+			if start < 0 || end <= start {
+				t.Fatalf("selection [%d,%d] missing from shape %+v", selection.fromTxNum, selection.toTxNum, shape)
+			}
+			merged := historyCompactionCandidate{history: SegmentRef{
+				FromTxNum:        selection.fromTxNum,
+				ToTxNum:          selection.toTxNum,
+				AggregationSteps: selection.aggregationSteps,
+			}}
+			shape = append(append(append([]historyCompactionCandidate(nil), shape[:start]...), merged), shape[end:]...)
+		}
+	}
+	if len(shape) != leaves/256 {
+		t.Fatalf("frozen shape files = %d, want %d: %+v", len(shape), leaves/256, shape)
+	}
+	for _, candidate := range shape {
+		if candidate.history.AggregationSteps != 256 {
+			t.Fatalf("frozen shape contains %d-step file, want 256: %+v", candidate.history.AggregationSteps, shape)
+		}
+	}
+	// A leaf can participate only in the bounded 2,4,...,256 levels. Direct
+	// outer-range absorption often does better, but it must never exceed that
+	// logarithmic ceiling or approach an ever-growing whole-prefix rewrite.
+	if max := uint64(leaves * 8); rewrittenSteps > max {
+		t.Fatalf("rewritten logical steps = %d, exceed logarithmic ceiling %d", rewrittenSteps, max)
+	}
+}
+
 func writeCompactionStateDomainChangeSegment(t *testing.T, dir string, fromTxNum, toTxNum uint64, changes ...*rawdb.StateDomainChange) []SegmentRef {
 	t.Helper()
 	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
@@ -522,6 +640,12 @@ func writeCompactionStateDomainChangeSegment(t *testing.T, dir string, fromTxNum
 		t.Fatalf("write state-domain-change segment [%d,%d]: %v", fromTxNum, toTxNum, err)
 	}
 	return []SegmentRef{segRef, accessorRef, idxRef}
+}
+
+func setCompactionRefAggregationSteps(refs []SegmentRef, steps uint64) {
+	for i := range refs {
+		refs[i].AggregationSteps = steps
+	}
 }
 
 func assertCompactionNoOp(t *testing.T, dir string, cfg CompactionConfig, refs []SegmentRef) {

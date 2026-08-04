@@ -98,14 +98,25 @@ type Progress struct {
 }
 
 type SegmentRef struct {
-	Dataset   SegmentDataset     `json:"dataset,omitempty"`
-	Domain    kvdomains.KVDomain `json:"domain,omitempty"`
-	Kind      SegmentKind        `json:"kind"`
-	FromTxNum uint64             `json:"fromTxNum"`
-	ToTxNum   uint64             `json:"toTxNum"`
-	Path      string             `json:"path"`
-	Size      uint64             `json:"size"`
-	Checksum  string             `json:"checksum,omitempty"`
+	Dataset          SegmentDataset     `json:"dataset,omitempty"`
+	Domain           kvdomains.KVDomain `json:"domain,omitempty"`
+	Kind             SegmentKind        `json:"kind"`
+	FromTxNum        uint64             `json:"fromTxNum"`
+	ToTxNum          uint64             `json:"toTxNum"`
+	AggregationSteps uint64             `json:"aggregationSteps,omitempty"`
+	Path             string             `json:"path"`
+	Size             uint64             `json:"size"`
+	Checksum         string             `json:"checksum,omitempty"`
+}
+
+// effectiveAggregationSteps returns the number of base cold-build steps
+// represented by a history file. Zero is treated as one so additive manifests
+// written before the field existed remain a single merge leaf.
+func (seg SegmentRef) effectiveAggregationSteps() uint64 {
+	if seg.AggregationSteps == 0 {
+		return 1
+	}
+	return seg.AggregationSteps
 }
 
 func NewManifest(visibleTxStart, visibleTxEnd uint64, segments []SegmentRef) *Manifest {

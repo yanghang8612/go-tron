@@ -279,12 +279,13 @@ func TestCompactionMergesCompressedSources(t *testing.T) {
 	refs = append(refs, mk(1, 1, many(1, 1, 'a')...)...)
 	refs = append(refs, mk(2, 2, many(2, 2, 'b')...)...)
 	refs = append(refs, mk(3, 3, many(3, 3, 'c')...)...)
+	setCompactionRefAggregationSteps(refs[:3], 2)
 	if err := PublishManifest(dir, NewManifest(1, 3, refs)); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
 
 	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{
-		MinSegments: 3, DeleteObsolete: true,
+		DeleteObsolete: true,
 	})
 	if err != nil {
 		t.Fatalf("compact compressed sources: %v", err)

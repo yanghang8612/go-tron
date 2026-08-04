@@ -67,6 +67,14 @@ active segment formats and checksums, and only then atomically switches
 continues using its immutable manifest and segment lease even while newer cold
 build, merge, and prune passes run.
 
+History entries in the manifest carry `aggregationSteps`. Each newly built
+5,000-block history/accessor/index trio starts at one logical step. Background
+compaction uses Erigon-style power-of-two alignment and copies the summed step
+count to the replacement trio; the default 256-step cap makes completed large
+files immutable while newer tail files continue to merge geometrically.
+Transaction-number ranges remain the read/coverage coordinates and are not
+used as a substitute for the logical block-build step.
+
 The built-in listener serves only `snapshot-catalog.json`, immutable published
 manifests, and segment paths leased by those manifests. It rejects directory
 listings, mutable `manifest.json`, temporary files, and unrelated files. GET,

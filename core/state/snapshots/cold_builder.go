@@ -64,8 +64,7 @@ type Config struct {
 	Interval               time.Duration
 	HistoryWindow          uint64
 	BatchBlocks            uint64
-	CompactMinSegments     int
-	CompactMaxTxSpan       uint64
+	CompactMaxSteps        uint64
 	RetainObsoleteSegments bool
 	// LatestBuildBlocks is the minimum number of solidified blocks that must
 	// elapse between production latest-snapshot builds. 0 disables the latest
@@ -306,11 +305,8 @@ func (c Config) applyDefaults() Config {
 	if c.BatchBlocks == 0 {
 		c.BatchBlocks = defaultColdSnapshotBatchBlocks
 	}
-	if c.CompactMinSegments == 0 {
-		c.CompactMinSegments = 8
-	}
-	if c.CompactMaxTxSpan == 0 {
-		c.CompactMaxTxSpan = c.BatchBlocks * uint64(c.CompactMinSegments)
+	if c.CompactMaxSteps == 0 {
+		c.CompactMaxSteps = defaultCompactionMaxSteps
 	}
 	if c.MetricsNamespace == "" {
 		c.MetricsNamespace = defaultColdSnapshotMetrics
@@ -394,6 +390,7 @@ func (r *Runner) Start() error {
 			"interval", r.cfg.Interval,
 			"historyWindow", r.cfg.HistoryWindow,
 			"batchBlocks", r.cfg.BatchBlocks,
+			"compactMaxSteps", r.cfg.CompactMaxSteps,
 			"sectionBloomBuild", r.cfg.BuildSectionBlooms,
 			"balanceTraceBuild", r.cfg.BuildBalanceTraces,
 			"eventLogBuild", r.cfg.BuildEventLogs)
@@ -1032,8 +1029,7 @@ func (r *Runner) compactHistory() (HistoryCompactionResult, error) {
 		return HistoryCompactionResult{}, nil
 	}
 	return CompactHistoryDomain(r.cfg.Dir, r.cfg.HistoryDataset, CompactionConfig{
-		MinSegments:    r.cfg.CompactMinSegments,
-		MaxTxSpan:      r.cfg.CompactMaxTxSpan,
+		MaxSteps:       r.cfg.CompactMaxSteps,
 		DeleteObsolete: !r.cfg.RetainObsoleteSegments,
 	})
 }
@@ -1219,6 +1215,7 @@ func (r *Runner) loop() {
 			"dataset", result.Compaction.Dataset,
 			"fromTx", result.Compaction.FromTxNum,
 			"toTx", result.Compaction.ToTxNum,
+			"aggregationSteps", result.Compaction.AggregationSteps,
 			"segments", result.Compaction.SegmentsMerged)
 	} else if result.LatestBuilt {
 		coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
@@ -1261,6 +1258,7 @@ func (r *Runner) loop() {
 				"dataset", result.Compaction.Dataset,
 				"fromTx", result.Compaction.FromTxNum,
 				"toTx", result.Compaction.ToTxNum,
+				"aggregationSteps", result.Compaction.AggregationSteps,
 				"segments", result.Compaction.SegmentsMerged)
 		} else if result.LatestBuilt {
 			coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())

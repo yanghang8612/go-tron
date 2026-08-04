@@ -11,23 +11,23 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
-const defaultCompactionMinSegments = 2
+const defaultCompactionMaxSteps = uint64(256)
 
 // CompactionConfig controls history segment compaction.
 type CompactionConfig struct {
-	MinSegments    int
-	MaxTxSpan      uint64
+	MaxSteps       uint64
 	DeleteObsolete bool
 }
 
 // HistoryCompactionResult describes a registered history-domain compaction pass.
 type HistoryCompactionResult struct {
-	Merged         bool
-	Dataset        SegmentDataset
-	FromTxNum      uint64
-	ToTxNum        uint64
-	SegmentsMerged int
-	Segments       []SegmentRef
+	Merged           bool
+	Dataset          SegmentDataset
+	FromTxNum        uint64
+	ToTxNum          uint64
+	AggregationSteps uint64
+	SegmentsMerged   int
+	Segments         []SegmentRef
 }
 
 type historyCompactionCandidate struct {
@@ -36,9 +36,10 @@ type historyCompactionCandidate struct {
 }
 
 type historyCompactionSelection struct {
-	candidates []historyCompactionCandidate
-	fromTxNum  uint64
-	toTxNum    uint64
+	candidates       []historyCompactionCandidate
+	fromTxNum        uint64
+	toTxNum          uint64
+	aggregationSteps uint64
 }
 
 // CompactHistoryDomain merges the frontmost continuous run of binary history
@@ -47,9 +48,9 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 	if dir == "" {
 		return HistoryCompactionResult{}, errors.New("snapshots: compaction directory is empty")
 	}
-	minSegments := cfg.MinSegments
-	if minSegments <= 1 {
-		minSegments = defaultCompactionMinSegments
+	maxSteps := cfg.MaxSteps
+	if maxSteps == 0 {
+		maxSteps = defaultCompactionMaxSteps
 	}
 
 	manifest, err := LoadProductionManifest(dir)
@@ -66,7 +67,7 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 	if historyCfg.CompactHistory == nil && (historyCfg.OpenHistory == nil || historyCfg.WriteHistory == nil) {
 		return HistoryCompactionResult{}, fmt.Errorf("snapshots: history domain %s missing compaction codec", historyCfg.Dataset)
 	}
-	selection, ok := selectHistoryCompactionRun(manifest, historyCfg, minSegments, cfg.MaxTxSpan)
+	selection, ok := selectHistoryCompactionRun(manifest, historyCfg, maxSteps)
 	if !ok {
 		return HistoryCompactionResult{Dataset: historyCfg.Dataset}, nil
 	}
@@ -89,11 +90,12 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 			}
 		}
 		segRef, idxRef, accessorRef, err := historyCfg.WriteHistory(dir, SegmentRef{
-			Dataset:   historyCfg.Dataset,
-			Kind:      SegmentHistory,
-			FromTxNum: selection.fromTxNum,
-			ToTxNum:   selection.toTxNum,
-			Path:      historyCfg.HistoryPath(selection.fromTxNum, selection.toTxNum),
+			Dataset:          historyCfg.Dataset,
+			Kind:             SegmentHistory,
+			FromTxNum:        selection.fromTxNum,
+			ToTxNum:          selection.toTxNum,
+			AggregationSteps: selection.aggregationSteps,
+			Path:             historyCfg.HistoryPath(selection.fromTxNum, selection.toTxNum),
 		}, changes)
 		if err != nil {
 			return HistoryCompactionResult{}, err
@@ -106,12 +108,13 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 	}
 
 	result := HistoryCompactionResult{
-		Merged:         true,
-		Dataset:        historyCfg.Dataset,
-		FromTxNum:      selection.fromTxNum,
-		ToTxNum:        selection.toTxNum,
-		SegmentsMerged: len(selection.candidates),
-		Segments:       refs,
+		Merged:           true,
+		Dataset:          historyCfg.Dataset,
+		FromTxNum:        selection.fromTxNum,
+		ToTxNum:          selection.toTxNum,
+		AggregationSteps: selection.aggregationSteps,
+		SegmentsMerged:   len(selection.candidates),
+		Segments:         refs,
 	}
 	if cfg.DeleteObsolete {
 		if err := deleteObsoleteHistoryCompactionFiles(dir, selection.candidates, refs); err != nil {
@@ -121,42 +124,75 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 	return result, nil
 }
 
-func selectHistoryCompactionRun(manifest *Manifest, cfg DomainCfg, minSegments int, maxTxSpan uint64) (historyCompactionSelection, bool) {
+func selectHistoryCompactionRun(manifest *Manifest, cfg DomainCfg, maxSteps uint64) (historyCompactionSelection, bool) {
 	if manifest == nil {
 		return historyCompactionSelection{}, false
 	}
 	candidates := historyCompactionCandidates(manifest, cfg)
-	if len(candidates) < minSegments {
+	if len(candidates) < 2 {
 		return historyCompactionSelection{}, false
 	}
+	if maxSteps == 0 {
+		maxSteps = defaultCompactionMaxSteps
+	}
 
-	for start := 0; start <= len(candidates)-minSegments; start++ {
-		selected := []historyCompactionCandidate{candidates[start]}
-		fromTxNum := candidates[start].history.FromTxNum
-		toTxNum := candidates[start].history.ToTxNum
-		if txSpanExceedsMax(fromTxNum, toTxNum, maxTxSpan) {
-			continue
+	// Erigon merges the earliest maximally aligned power-of-two step range and
+	// caps immutable files at stepsInFrozenFile. Transaction density varies per
+	// TRON block, so the manifest carries logical aggregation steps rather than
+	// pretending that a block batch is a fixed transaction-number span.
+	for runStart := 0; runStart < len(candidates); {
+		runEnd := runStart + 1
+		for runEnd < len(candidates) && historySegmentsAreContiguous(candidates[runEnd-1].history, candidates[runEnd].history) {
+			runEnd++
 		}
-		for _, candidate := range candidates[start+1:] {
-			if !historySegmentsAreContiguous(selected[len(selected)-1].history, candidate.history) {
-				break
-			}
-			nextToTxNum := candidate.history.ToTxNum
-			if txSpanExceedsMax(fromTxNum, nextToTxNum, maxTxSpan) {
-				break
-			}
-			selected = append(selected, candidate)
-			toTxNum = nextToTxNum
+		if selection, ok := selectAlignedHistoryCompactionRun(candidates[runStart:runEnd], maxSteps); ok {
+			return selection, true
 		}
-		if len(selected) >= minSegments {
-			return historyCompactionSelection{
-				candidates: selected,
-				fromTxNum:  fromTxNum,
-				toTxNum:    toTxNum,
-			}, true
-		}
+		runStart = runEnd
 	}
 	return historyCompactionSelection{}, false
+}
+
+func selectAlignedHistoryCompactionRun(candidates []historyCompactionCandidate, maxSteps uint64) (historyCompactionSelection, bool) {
+	if len(candidates) < 2 || maxSteps == 0 {
+		return historyCompactionSelection{}, false
+	}
+	boundary := map[uint64]int{0: 0}
+	var logicalEnd uint64
+	bestStart, bestEnd := -1, -1
+	var bestLogicalStart, bestSteps uint64
+	for i, candidate := range candidates {
+		steps := candidate.history.effectiveAggregationSteps()
+		if steps > math.MaxUint64-logicalEnd {
+			break
+		}
+		logicalEnd += steps
+		span := logicalEnd & (^logicalEnd + 1) // rightmost set bit
+		if span > maxSteps {
+			span = maxSteps
+		}
+		logicalStart := logicalEnd - span
+		start, aligned := boundary[logicalStart]
+		if aligned && i+1-start >= 2 {
+			// Match Erigon's earliest-first rule while allowing a later endpoint
+			// with the same start to widen and absorb an inner candidate.
+			if bestStart < 0 || logicalStart <= bestLogicalStart {
+				bestStart, bestEnd = start, i+1
+				bestLogicalStart, bestSteps = logicalStart, span
+			}
+		}
+		boundary[logicalEnd] = i + 1
+	}
+	if bestStart < 0 {
+		return historyCompactionSelection{}, false
+	}
+	selected := append([]historyCompactionCandidate(nil), candidates[bestStart:bestEnd]...)
+	return historyCompactionSelection{
+		candidates:       selected,
+		fromTxNum:        selected[0].history.FromTxNum,
+		toTxNum:          selected[len(selected)-1].history.ToTxNum,
+		aggregationSteps: bestSteps,
+	}, true
 }
 
 func historyCompactionCandidates(manifest *Manifest, cfg DomainCfg) []historyCompactionCandidate {
@@ -199,16 +235,6 @@ func historyCompactionCandidates(manifest *Manifest, cfg DomainCfg) []historyCom
 
 func historySegmentsAreContiguous(prev, next SegmentRef) bool {
 	return prev.ToTxNum != math.MaxUint64 && next.FromTxNum == prev.ToTxNum+1
-}
-
-func txSpanExceedsMax(fromTxNum, toTxNum, maxTxSpan uint64) bool {
-	if maxTxSpan == 0 {
-		return false
-	}
-	if toTxNum < fromTxNum {
-		return true
-	}
-	return toTxNum-fromTxNum >= maxTxSpan
 }
 
 func deleteObsoleteHistoryCompactionFiles(dir string, candidates []historyCompactionCandidate, newRefs []SegmentRef) error {

@@ -223,6 +223,9 @@ func writeStateDomainChangeBinaryFilesWithAccessor(dir string, ref SegmentRef, c
 	if ref.Dataset == "" {
 		ref.Dataset = SegmentDatasetStateDomainChange
 	}
+	if ref.AggregationSteps == 0 {
+		ref.AggregationSteps = 1
+	}
 	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
 	}
@@ -255,22 +258,24 @@ func writeStateDomainChangeBinaryFilesWithAccessor(dir string, ref SegmentRef, c
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	idxRef := SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentInverted,
-		FromTxNum: ref.FromTxNum,
-		ToTxNum:   ref.ToTxNum,
-		Path:      stateDomainChangeBinaryIndexPath(segRef.Path),
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentInverted,
+		FromTxNum:        ref.FromTxNum,
+		ToTxNum:          ref.ToTxNum,
+		AggregationSteps: ref.AggregationSteps,
+		Path:             stateDomainChangeBinaryIndexPath(segRef.Path),
 	}
 	if err := validateSegment(idxRef, idxRef.FromTxNum, idxRef.ToTxNum); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	setStateDomainChangeBinaryRefMetadata(&idxRef, indexData)
 	accessorRef := SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentAccessor,
-		FromTxNum: ref.FromTxNum,
-		ToTxNum:   ref.ToTxNum,
-		Path:      stateDomainChangeBinaryAccessorPath(segRef.Path),
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentAccessor,
+		FromTxNum:        ref.FromTxNum,
+		ToTxNum:          ref.ToTxNum,
+		AggregationSteps: ref.AggregationSteps,
+		Path:             stateDomainChangeBinaryAccessorPath(segRef.Path),
 	}
 	if err := validateSegment(accessorRef, accessorRef.FromTxNum, accessorRef.ToTxNum); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
@@ -321,6 +326,9 @@ func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentR
 	}
 	if ref.Dataset == "" {
 		ref.Dataset = SegmentDatasetStateDomainChange
+	}
+	if ref.AggregationSteps == 0 {
+		ref.AggregationSteps = 1
 	}
 	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
@@ -380,19 +388,21 @@ func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentR
 	}
 
 	idxRef := SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentInverted,
-		FromTxNum: ref.FromTxNum,
-		ToTxNum:   ref.ToTxNum,
-		Path:      stateDomainChangeBinaryIndexPath(segRef.Path),
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentInverted,
+		FromTxNum:        ref.FromTxNum,
+		ToTxNum:          ref.ToTxNum,
+		AggregationSteps: ref.AggregationSteps,
+		Path:             stateDomainChangeBinaryIndexPath(segRef.Path),
 	}
 	setStateDomainChangeBinaryRefMetadata(&idxRef, indexData)
 	accessorRef := SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentAccessor,
-		FromTxNum: ref.FromTxNum,
-		ToTxNum:   ref.ToTxNum,
-		Path:      stateDomainChangeBinaryAccessorPath(segRef.Path),
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentAccessor,
+		FromTxNum:        ref.FromTxNum,
+		ToTxNum:          ref.ToTxNum,
+		AggregationSteps: ref.AggregationSteps,
+		Path:             stateDomainChangeBinaryAccessorPath(segRef.Path),
 	}
 
 	// .idx and the v3/v4 exact/group accessor stay uncompressed. The accessor is a
@@ -604,11 +614,12 @@ func publishStateDomainChangeBinaryFinal(dir string, ref SegmentRef, src string,
 
 func writeCompactedStateDomainChangeBinarySegment(dir string, cfg DomainCfg, selection historyCompactionSelection, sources []stateDomainChangeBinaryCompactionSource) (SegmentRef, error) {
 	ref := SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentHistory,
-		FromTxNum: selection.fromTxNum,
-		ToTxNum:   selection.toTxNum,
-		Path:      cfg.HistoryPath(selection.fromTxNum, selection.toTxNum),
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentHistory,
+		FromTxNum:        selection.fromTxNum,
+		ToTxNum:          selection.toTxNum,
+		AggregationSteps: selection.aggregationSteps,
+		Path:             cfg.HistoryPath(selection.fromTxNum, selection.toTxNum),
 	}
 	totalRecords, err := stateDomainChangeBinaryCompactionRecordCount(sources)
 	if err != nil {
@@ -657,11 +668,12 @@ func writeCompactedStateDomainChangeBinarySegment(dir string, cfg DomainCfg, sel
 
 func writeCompactedStateDomainChangeBinaryIndex(dir string, segRef SegmentRef) (SegmentRef, error) {
 	ref := SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentInverted,
-		FromTxNum: segRef.FromTxNum,
-		ToTxNum:   segRef.ToTxNum,
-		Path:      stateDomainChangeBinaryIndexPath(segRef.Path),
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentInverted,
+		FromTxNum:        segRef.FromTxNum,
+		ToTxNum:          segRef.ToTxNum,
+		AggregationSteps: segRef.AggregationSteps,
+		Path:             stateDomainChangeBinaryIndexPath(segRef.Path),
 	}
 	tmp, tmpName, err := createStateDomainChangeBinaryTempFile(dir, ref.Path)
 	if err != nil {
@@ -742,11 +754,12 @@ func writeCompactedStateDomainChangeBinaryIndex(dir string, segRef SegmentRef) (
 
 func writeCompactedStateDomainChangeBinaryAccessor(dir string, segRef SegmentRef, sources []stateDomainChangeBinaryCompactionSource) (SegmentRef, error) {
 	ref := SegmentRef{
-		Dataset:   SegmentDatasetStateDomainChange,
-		Kind:      SegmentAccessor,
-		FromTxNum: segRef.FromTxNum,
-		ToTxNum:   segRef.ToTxNum,
-		Path:      stateDomainChangeBinaryAccessorPath(segRef.Path),
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentAccessor,
+		FromTxNum:        segRef.FromTxNum,
+		ToTxNum:          segRef.ToTxNum,
+		AggregationSteps: segRef.AggregationSteps,
+		Path:             stateDomainChangeBinaryAccessorPath(segRef.Path),
 	}
 	// Rebuild against the compacted history payload instead of remapping the
 	// source accessors. v4 has two independent lookup orders (hash for point
