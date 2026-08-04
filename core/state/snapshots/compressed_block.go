@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -75,6 +76,7 @@ type compressedBlockWriter struct {
 	enc       *zstd.Encoder
 	blockSize int
 	tmp       *os.File
+	tmpWriter *bufio.Writer
 	tmpName   string
 	table     []cbBlock
 	buf       []byte
@@ -97,7 +99,13 @@ func newCompressedBlockWriter(dir string, blockSize int) (*compressedBlockWriter
 	if err != nil {
 		return nil, err
 	}
-	return &compressedBlockWriter{enc: enc, blockSize: blockSize, tmp: tmp, tmpName: tmp.Name()}, nil
+	return &compressedBlockWriter{
+		enc:       enc,
+		blockSize: blockSize,
+		tmp:       tmp,
+		tmpWriter: acquireStateDomainChangeHistoryWriter(tmp),
+		tmpName:   tmp.Name(),
+	}, nil
 }
 
 // Append adds one record and returns its uncompressed offset (the value an
@@ -122,7 +130,7 @@ func (w *compressedBlockWriter) flushBlock() error {
 	}
 	w.encoded = w.enc.EncodeAll(w.buf, w.encoded[:0])
 	comp := w.encoded
-	if _, err := w.tmp.Write(comp); err != nil {
+	if _, err := w.tmpWriter.Write(comp); err != nil {
 		return err
 	}
 	w.table = append(w.table, cbBlock{
@@ -148,7 +156,7 @@ func (w *compressedBlockWriter) appendEncodedBlock(uncompressedLen int, comp []b
 	if w.bufRecs != 0 {
 		return errors.New("snapshots: cannot mix buffered and pre-encoded blocks")
 	}
-	if _, err := w.tmp.Write(comp); err != nil {
+	if _, err := w.tmpWriter.Write(comp); err != nil {
 		return err
 	}
 	w.table = append(w.table, cbBlock{
@@ -166,11 +174,15 @@ func (w *compressedBlockWriter) appendEncodedBlock(uncompressedLen int, comp []b
 // Finish flushes the last partial block and writes the assembled file to path.
 func (w *compressedBlockWriter) Finish(path string) (err error) {
 	defer func() {
+		releaseStateDomainChangeHistoryWriter(&w.tmpWriter)
 		_ = w.tmp.Close()
 		_ = os.Remove(w.tmpName)
 	}()
 	if e := w.flushBlock(); e != nil {
 		return e
+	}
+	if err = w.tmpWriter.Flush(); err != nil {
+		return err
 	}
 	if _, err = w.tmp.Seek(0, io.SeekStart); err != nil {
 		return err
@@ -216,11 +228,15 @@ func (w *compressedBlockWriter) Finish(path string) (err error) {
 // of the original byte stream.
 func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (err error) {
 	defer func() {
+		releaseStateDomainChangeHistoryWriter(&w.tmpWriter)
 		_ = w.tmp.Close()
 		_ = os.Remove(w.tmpName)
 	}()
 	if w.bufRecs != 0 || len(w.buf) != 0 {
 		return errors.New("snapshots: prefixed compressed writer has buffered records")
+	}
+	if err = w.tmpWriter.Flush(); err != nil {
+		return err
 	}
 	if _, err = w.tmp.Seek(0, io.SeekStart); err != nil {
 		return err
@@ -1103,6 +1119,7 @@ func (w *compressedBlockStreamWriter) abortBody() {
 		w.parallel = nil
 	}
 	if w.body != nil {
+		releaseStateDomainChangeHistoryWriter(&w.body.tmpWriter)
 		_ = w.body.tmp.Close()
 		_ = os.Remove(w.body.tmpName)
 		w.body = nil
