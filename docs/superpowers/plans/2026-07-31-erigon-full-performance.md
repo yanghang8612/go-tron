@@ -175,6 +175,10 @@
 - [x] Run the complete mutation-time WriteSet production gate and compare full
   and filtered recorder capture cost, unsupported writes, retry publication,
   and sync throughput against P4.32.
+- [x] Replace block-start full-cache `StateDB.Copy` with an Erigon-style lazy
+  stable latest-domain view that eagerly owns only the current dirty overlay.
+- [ ] Run the lazy block-start copy production gate: verify omission ratio,
+  observer/publisher equivalence, CPU-profile removal, and sync throughput.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

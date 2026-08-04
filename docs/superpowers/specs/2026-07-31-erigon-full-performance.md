@@ -2081,6 +2081,42 @@ counterfactual. Pebble write delay, history interrupts, and every result/write-
 set mismatch stayed zero. One sender-chain observer fallback existed before the
 window and did not increase. This completes compressed-format restart coverage.
 
+#### P4.44: Lazy block-start execution views
+
+A warm profile after P5.4 sampled 53.63 CPU-seconds over 20 wall-seconds. Even
+with canonical parallel transfers disabled, `StateDB.Copy` consumed 4.86
+CPU-seconds (9.06%): 3.14 seconds while preparing the sampled OCC block and
+1.55 seconds while preparing its retry states. The copy serialized and decoded
+every account retained in the four-block working cache, although almost all of
+those accounts were clean and most speculative transactions never touched
+them. This was observable safety-canary cost rather than useful canonical work.
+
+Erigon execution workers share an immutable transaction/domain view and own
+only their private changes. Go-tron's equivalent is the stable flat-latest and
+blockbuffer parent view already shared by ordinary state copies. P4.44 adds a
+narrow block-start copy path which starts with an empty account cache, eagerly
+copies only the source `dirtyObjects` set, and hydrates clean accounts lazily
+from that stable latest view. The ordinary `Copy` path retains its complete
+deep-copy semantics for unrestricted RPC and debug callers.
+
+The lifecycle boundary is explicit: all copy-owned execution must finish before
+the canonical source publishes the block's latest-domain writes. At the current
+call site the only normal pre-copy mutation is `writeHistoryBlockHash`; its
+contract object is dirty and is therefore copied with the exact uncommitted
+balance, account-KV, code, and storage overlay. The dirty set is already the
+commit planner's complete per-block mutation superset. Tests cover lazy clean
+rehydration, preservation of pending balance/storage writes, independent copy
+mutation, ordinary-copy behavior, and race-checked sender retry/publication.
+
+On Apple M1 Max, a 256-account block-start corpus with one dirty account reduced
+copy cost from 251.6--254.6 us, 457.7 KB, and 1,048 allocations to 1.77--1.78 us,
+3.5 KB, and 13 allocations: about 142x less latency and 99.2% fewer allocated
+bytes. Production counters expose source, dirty, and omitted-clean object counts.
+The deployment gate must confirm the expected omission ratio, remove
+`StateDB.Copy` from the warm profile, preserve all observer/publisher equivalence
+counters at zero, and measure end-to-end sync throughput independently of LSM
+compaction state.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

@@ -31,6 +31,9 @@ var (
 	stateObjectCacheAncientReuseCounter  = metrics.NewRegisteredCounter("state/account_cache/reuse/ancient", nil)
 	stateObjectCacheHydrationCounter     = metrics.NewRegisteredCounter("state/account_cache/hydrations", nil)
 	stateObjectCacheEvictionCounter      = metrics.NewRegisteredCounter("state/account_cache/evictions", nil)
+	stateExecutionCopySourceCounter      = metrics.NewRegisteredCounter("state/copy/execution/source_objects", nil)
+	stateExecutionCopyDirtyCounter       = metrics.NewRegisteredCounter("state/copy/execution/dirty_objects", nil)
+	stateExecutionCopyOmittedCounter     = metrics.NewRegisteredCounter("state/copy/execution/omitted_clean_objects", nil)
 )
 
 // storageReadKeyPool keeps the computed 32-byte StorageRow key alive across
@@ -3102,7 +3105,43 @@ func (s *StateDB) Copy() (*StateDB, error) {
 	// physical index would silently execute against an older head. Copy callers
 	// run while the parent execution view is stable, and all mutations below stay
 	// in copy-owned state objects and journals.
-	cp := &StateDB{
+	cp := s.newCopyBase()
+	for addr, obj := range s.stateObjects {
+		s.copyStateObjectInto(cp, addr, obj)
+	}
+	return cp, nil
+}
+
+// CopyBlockExecutionBase creates an independent execution view while omitting
+// clean objects from the source's bounded cross-block account cache. Clean
+// state is already authoritative in the shared latest-domain/blockbuffer read
+// views and is hydrated lazily if the speculative execution actually touches
+// it. Only uncommitted dirty objects need an eager private copy.
+//
+// This is the Erigon-style block-start copy path used by the OCC observers and
+// narrow parallel publisher. The caller must finish every copy-owned execution
+// before publishing the source block's latest-domain writes; ordinary Copy
+// retains its unrestricted deep-copy semantics for RPC/debug callers.
+func (s *StateDB) CopyBlockExecutionBase() (*StateDB, error) {
+	cp := s.newCopyBase()
+	copied := 0
+	for addr := range s.dirtyObjects {
+		obj := s.stateObjects[addr]
+		if obj == nil || !obj.dirty {
+			continue
+		}
+		s.copyStateObjectInto(cp, addr, obj)
+		copied++
+	}
+	source := len(s.stateObjects)
+	stateExecutionCopySourceCounter.Inc(int64(source))
+	stateExecutionCopyDirtyCounter.Inc(int64(copied))
+	stateExecutionCopyOmittedCounter.Inc(int64(source - copied))
+	return cp, nil
+}
+
+func (s *StateDB) newCopyBase() *StateDB {
+	return &StateDB{
 		db:                      s.db,
 		stateObjects:            make(map[tcommon.Address]*stateObject),
 		witnesses:               make(map[tcommon.Address]*types.Witness),
@@ -3122,79 +3161,82 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		commitmentColdHistory:   s.commitmentColdHistory,
 		commitmentColdTxNum:     s.commitmentColdTxNum,
 	}
-	for addr, obj := range s.stateObjects {
-		var metaCopy *contractpb.SmartContract
-		if obj.contractMeta != nil {
-			metaCopy = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
-		}
-		var kvDirtyCopy map[string]kvEntry
-		if len(obj.kvDirty) != 0 {
-			kvDirtyCopy = make(map[string]kvEntry, len(obj.kvDirty))
-		}
-		for k, v := range obj.kvDirty {
-			ec := kvEntry{
-				deleted:    v.deleted,
-				prevExists: v.prevExists,
-				prevLoaded: v.prevLoaded,
-			}
-			if v.val != nil {
-				ec.val = append([]byte{}, v.val...)
-			}
-			if v.prev != nil {
-				ec.prev = append([]byte{}, v.prev...)
-			}
-			kvDirtyCopy[k] = ec
-		}
-		var storageCopy map[tcommon.Hash]storageSlot
-		if len(obj.storage) != 0 {
-			storageCopy = make(map[tcommon.Hash]storageSlot, len(obj.storage))
-		}
-		var dirtyStorageCopy map[tcommon.Hash]storageOrigin
-		if len(obj.dirtyStorage) != 0 {
-			dirtyStorageCopy = make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage))
-		}
-		newObj := acquireStateObject()
-		*newObj = stateObject{
-			address:                  addr,
-			dirty:                    obj.dirty,
-			accountDirty:             obj.accountDirty,
-			deleted:                  obj.deleted,
-			created:                  obj.created,
-			code:                     append([]byte{}, obj.code...),
-			codeHash:                 obj.codeHash,
-			codeDirty:                obj.codeDirty,
-			contractMeta:             metaCopy,
-			contractMetaDirty:        obj.contractMetaDirty,
-			storage:                  storageCopy,
-			storageHighWater:         len(obj.storage),
-			dirtyStorage:             dirtyStorageCopy,
-			dirtyStorageHighWater:    len(obj.dirtyStorage),
-			selfDestructed:           obj.selfDestructed,
-			accountKVRoot:            obj.accountKVRoot,
-			accountKVGeneration:      obj.accountKVGeneration,
-			accountKVGenerationDirty: obj.accountKVGenerationDirty,
-			kvDirty:                  kvDirtyCopy,
-			kvDirtyHighWater:         len(obj.kvDirty),
-		}
-		if obj.account != nil {
-			data, _ := obj.account.Marshal()
-			acc, _ := types.UnmarshalAccount(data)
-			newObj.account = acc
-			newObj.accountProto, _ = acc.MarshalStorageCore()
-		}
-		for k, v := range obj.storage {
-			newObj.storage[k] = v
-		}
-		for k, origin := range obj.dirtyStorage {
-			newObj.dirtyStorage[k] = origin
-		}
-		newObj.dirtySet = cp.dirtyObjects
-		if newObj.dirty {
-			cp.dirtyObjects[addr] = struct{}{}
-		}
-		cp.stateObjects[addr] = newObj
+}
+
+func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *stateObject) {
+	if cp == nil || obj == nil {
+		return
 	}
-	return cp, nil
+	var metaCopy *contractpb.SmartContract
+	if obj.contractMeta != nil {
+		metaCopy = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
+	}
+	var kvDirtyCopy map[string]kvEntry
+	if len(obj.kvDirty) != 0 {
+		kvDirtyCopy = make(map[string]kvEntry, len(obj.kvDirty))
+	}
+	for k, v := range obj.kvDirty {
+		ec := kvEntry{
+			deleted:    v.deleted,
+			prevExists: v.prevExists,
+			prevLoaded: v.prevLoaded,
+		}
+		if v.val != nil {
+			ec.val = append([]byte{}, v.val...)
+		}
+		if v.prev != nil {
+			ec.prev = append([]byte{}, v.prev...)
+		}
+		kvDirtyCopy[k] = ec
+	}
+	var storageCopy map[tcommon.Hash]storageSlot
+	if len(obj.storage) != 0 {
+		storageCopy = make(map[tcommon.Hash]storageSlot, len(obj.storage))
+	}
+	var dirtyStorageCopy map[tcommon.Hash]storageOrigin
+	if len(obj.dirtyStorage) != 0 {
+		dirtyStorageCopy = make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage))
+	}
+	newObj := acquireStateObject()
+	*newObj = stateObject{
+		address:                  addr,
+		dirty:                    obj.dirty,
+		accountDirty:             obj.accountDirty,
+		deleted:                  obj.deleted,
+		created:                  obj.created,
+		code:                     append([]byte{}, obj.code...),
+		codeHash:                 obj.codeHash,
+		codeDirty:                obj.codeDirty,
+		contractMeta:             metaCopy,
+		contractMetaDirty:        obj.contractMetaDirty,
+		storage:                  storageCopy,
+		storageHighWater:         len(obj.storage),
+		dirtyStorage:             dirtyStorageCopy,
+		dirtyStorageHighWater:    len(obj.dirtyStorage),
+		selfDestructed:           obj.selfDestructed,
+		accountKVRoot:            obj.accountKVRoot,
+		accountKVGeneration:      obj.accountKVGeneration,
+		accountKVGenerationDirty: obj.accountKVGenerationDirty,
+		kvDirty:                  kvDirtyCopy,
+		kvDirtyHighWater:         len(obj.kvDirty),
+	}
+	if obj.account != nil {
+		data, _ := obj.account.Marshal()
+		acc, _ := types.UnmarshalAccount(data)
+		newObj.account = acc
+		newObj.accountProto, _ = acc.MarshalStorageCore()
+	}
+	for k, v := range obj.storage {
+		newObj.storage[k] = v
+	}
+	for k, origin := range obj.dirtyStorage {
+		newObj.dirtyStorage[k] = origin
+	}
+	newObj.dirtySet = cp.dirtyObjects
+	if newObj.dirty {
+		cp.dirtyObjects[addr] = struct{}{}
+	}
+	cp.stateObjects[addr] = newObj
 }
 
 type accountCommitPlan struct {

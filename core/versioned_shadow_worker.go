@@ -401,7 +401,7 @@ func prepareTransferExecutionBlock(statedb *state.StateDB, dynProps *state.Dynam
 		return nil
 	}
 	started := time.Now()
-	base, err := statedb.Copy()
+	base, err := statedb.CopyBlockExecutionBase()
 	if err != nil {
 		discardShadowErrorsCounter.Inc(1)
 		return nil
