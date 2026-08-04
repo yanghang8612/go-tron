@@ -255,6 +255,23 @@ var (
 )
 
 var (
+	discardShadowVMSenderChainBlocksCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/blocks", nil)
+	discardShadowVMSenderChainGroupsCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/groups", nil)
+	discardShadowVMSenderChainExecutedCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/executed", nil)
+	discardShadowVMSenderChainForwardedCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/forwarded", nil)
+	discardShadowVMSenderChainCandidatesCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/candidates", nil)
+	discardShadowVMSenderChainValidatedCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/validated", nil)
+	discardShadowVMSenderChainForwardedOKCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/forwarded_validated", nil)
+	discardShadowVMSenderChainReadConflictsCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/read_conflicts", nil)
+	discardShadowVMSenderChainSenderConflictsCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/sender_conflicts", nil)
+	discardShadowVMSenderChainInfoMismatchesCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/info_mismatches", nil)
+	discardShadowVMSenderChainWriteMismatchesCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/write_set_mismatches", nil)
+	discardShadowVMSenderChainBalanceMismatchesCounter = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/balance_trace_mismatches", nil)
+	discardShadowVMSenderChainErrorsCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/errors", nil)
+	discardShadowVMSenderChainWallNanosCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/wall_nanos", nil)
+)
+
+var (
 	parallelTransferRetryCandidatesCounter                = metrics.NewRegisteredCounter("core/parallel_transfer/sender_retry/candidates", nil)
 	parallelTransferRetryPublishedCounter                 = metrics.NewRegisteredCounter("core/parallel_transfer/sender_retry/published", nil)
 	parallelTransferRetryPreflightFallbackCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/sender_retry/fallback/preflight", nil)
@@ -273,14 +290,16 @@ var (
 	discardShadowRetryActualWorkerPrefixErrorsCounter  = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/worker/prefix_errors", nil)
 )
 
-// discardKVOverlay isolates rawdb writes performed by actuators. Reads fall
-// through to the canonical block view, while writes remain worker-local and
-// are thrown away after one transaction.
+// discardKVOverlay isolates rawdb writes performed by actuators. Reads first
+// see the current transaction, then post-images explicitly forwarded by the
+// current sender chain, and finally the immutable canonical block view.
 type discardKVOverlay struct {
-	parent   actuator.BufferedKVStore
-	recorder *state.TransactionAccessRecorder
-	puts     map[string][]byte
-	deletes  map[string]struct{}
+	parent           actuator.BufferedKVStore
+	recorder         *state.TransactionAccessRecorder
+	puts             map[string][]byte
+	deletes          map[string]struct{}
+	forwardedPuts    map[string][]byte
+	forwardedDeletes map[string]struct{}
 }
 
 var errDiscardShadowFrozenRawMiss = errors.New("discard shadow frozen raw key was not captured")
@@ -336,6 +355,33 @@ func (db *discardKVOverlay) reset() {
 	clear(db.deletes)
 }
 
+func (db *discardKVOverlay) resetForwarded() {
+	db.reset()
+	clear(db.forwardedPuts)
+	clear(db.forwardedDeletes)
+}
+
+// forward promotes the current transaction's isolated raw mutations into the
+// sender-chain view. Values remain worker-local and are discarded when that
+// chain finishes.
+func (db *discardKVOverlay) forward() {
+	for key, value := range db.puts {
+		if db.forwardedPuts == nil {
+			db.forwardedPuts = make(map[string][]byte)
+		}
+		db.forwardedPuts[key] = append(db.forwardedPuts[key][:0], value...)
+		delete(db.forwardedDeletes, key)
+	}
+	for key := range db.deletes {
+		if db.forwardedDeletes == nil {
+			db.forwardedDeletes = make(map[string]struct{})
+		}
+		delete(db.forwardedPuts, key)
+		db.forwardedDeletes[key] = struct{}{}
+	}
+	db.reset()
+}
+
 func (db *discardKVOverlay) Has(key []byte) (bool, error) {
 	db.recorder.RecordRawKVRead(key)
 	keyString := string(key)
@@ -343,6 +389,12 @@ func (db *discardKVOverlay) Has(key []byte) (bool, error) {
 		return true, nil
 	}
 	if _, ok := db.deletes[keyString]; ok {
+		return false, nil
+	}
+	if _, ok := db.forwardedPuts[keyString]; ok {
+		return true, nil
+	}
+	if _, ok := db.forwardedDeletes[keyString]; ok {
 		return false, nil
 	}
 	if db.parent == nil {
@@ -358,6 +410,12 @@ func (db *discardKVOverlay) Get(key []byte) ([]byte, error) {
 		return append([]byte(nil), value...), nil
 	}
 	if _, ok := db.deletes[keyString]; ok {
+		return nil, errors.New("not found")
+	}
+	if value, ok := db.forwardedPuts[keyString]; ok {
+		return append([]byte(nil), value...), nil
+	}
+	if _, ok := db.forwardedDeletes[keyString]; ok {
 		return nil, errors.New("not found")
 	}
 	if db.parent == nil {
@@ -1246,11 +1304,21 @@ func newDiscardShadowRetryWriteCapture(source *discardShadowPreexecution, transa
 	return filter.include, fullTransactions, recorderOnly
 }
 
-// transferSenderChains returns independent scheduling units. A chain may span
-// transactions from other senders, but it is broken when the same sender has
-// an intervening non-Transfer transaction because this narrow executor cannot
-// forward that predecessor's state.
-func transferSenderChains(transactions []*types.Transaction) [][]discardShadowSenderChainTask {
+type discardShadowSenderChainFilter func(*types.Transaction) bool
+
+func discardShadowTransferFilter(tx *types.Transaction) bool {
+	return tx != nil && tx.ContractType() == corepb.Transaction_Contract_TransferContract
+}
+
+func discardShadowVMFilter(tx *types.Transaction) bool {
+	return classifyDiscardShadowTransaction(tx) == discardShadowVM
+}
+
+// discardShadowSenderChains returns independent scheduling units for one
+// actuator family. A chain may span transactions from other senders, but it is
+// broken when the same sender has an intervening transaction outside the
+// selected family because that predecessor was not executed by this worker.
+func discardShadowSenderChains(transactions []*types.Transaction, eligible discardShadowSenderChainFilter) [][]discardShadowSenderChainTask {
 	chains := make([][]discardShadowSenderChainTask, 0, discardShadowWorkerCount*2)
 	lastSenderTx := make(map[tcommon.Address]int, len(transactions)/4+1)
 	chainByLastTx := make(map[int]int, len(transactions)/4+1)
@@ -1268,7 +1336,7 @@ func transferSenderChains(transactions []*types.Transaction) [][]discardShadowSe
 		}
 		previous, hasPrevious := lastSenderTx[owner]
 		lastSenderTx[owner] = txIndex
-		if tx.ContractType() != corepb.Transaction_Contract_TransferContract {
+		if eligible == nil || !eligible(tx) {
 			continue
 		}
 		task := discardShadowSenderChainTask{txIndex: txIndex, senderPredecessor: previous}
@@ -1282,6 +1350,14 @@ func transferSenderChains(transactions []*types.Transaction) [][]discardShadowSe
 		chainByLastTx[txIndex] = len(chains) - 1
 	}
 	return chains
+}
+
+func transferSenderChains(transactions []*types.Transaction) [][]discardShadowSenderChainTask {
+	return discardShadowSenderChains(transactions, discardShadowTransferFilter)
+}
+
+func vmSenderChains(transactions []*types.Transaction) [][]discardShadowSenderChainTask {
+	return discardShadowSenderChains(transactions, discardShadowVMFilter)
 }
 
 func annotateSenderChainReadVersions(reads *state.TransactionReadSet, versions *versionedAccessShadow, txIndex int) {
@@ -1306,22 +1382,20 @@ func installSenderChainWrites(versions *versionedAccessShadow, writes state.Tran
 	}
 }
 
-func senderChainWritesForwardable(writes state.TransactionWriteSet) bool {
-	for key := range writes {
-		if key.Kind == state.TransactionAccessRawKV {
-			return false
-		}
-	}
-	return true
+// advanceSenderChain installs one already-verified post-image into the private
+// worker state. Typed StateDB and DynamicProperties writes are journaled;
+// raw-KV mutations are promoted into the worker-local chain overlay.
+func (worker *discardShadowWorker) advanceSenderChain(writes state.TransactionWriteSet) error {
+	return worker.advanceSenderChainWrites(writes, false)
 }
 
-// advanceSenderChain installs one already-verified post-image into the private
-// worker state. It intentionally rejects raw KV writes because discardKVOverlay
-// is transaction-local; typed StateDB and DynamicProperties writes are fully
-// journaled and are reverted at the chain boundary.
-func (worker *discardShadowWorker) advanceSenderChain(writes state.TransactionWriteSet) error {
-	if !senderChainWritesForwardable(writes) {
-		return errors.New("sender-chain raw KV forwarding is unsupported")
+func (worker *discardShadowWorker) advanceSenderChainWrites(writes state.TransactionWriteSet, forwardRaw bool) error {
+	if !forwardRaw {
+		for key := range writes {
+			if key.Kind == state.TransactionAccessRawKV {
+				return errors.New("sender-chain raw KV forwarding is unsupported")
+			}
+		}
 	}
 	worker.applyRecorder.Reset(64)
 	worker.db.reset()
@@ -1330,7 +1404,11 @@ func (worker *discardShadowWorker) advanceSenderChain(writes state.TransactionWr
 		return err
 	}
 	worker.state.FinalizeTransaction()
-	worker.db.reset()
+	if forwardRaw {
+		worker.db.forward()
+	} else {
+		worker.db.reset()
+	}
 	worker.db.recorder = &worker.recorder
 	return nil
 }
@@ -1345,11 +1423,22 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChains(cfg discardShad
 }
 
 func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(cfg discardShadowRunConfig, retainRetryState bool) *discardShadowPreexecution {
+	return shadow.preexecuteSenderChainsWithRetryState(cfg, transferSenderChains(cfg.transactions), preexecutedTransferReady, false, retainRetryState)
+}
+
+// preexecuteVMSenderChains is a sampled, observe-only expansion of the same
+// scheduler to Trigger/CreateSmartContract. Unlike Transfer publication, VM
+// readiness deliberately permits energy-bearing receipts; ordered block
+// resource settlement remains serial and no VM result is published here.
+func (shadow *discardShadowBlock) preexecuteVMSenderChains(cfg discardShadowRunConfig) *discardShadowPreexecution {
+	return shadow.preexecuteSenderChainsWithRetryState(cfg, vmSenderChains(cfg.transactions), preexecutedResultReady, true, false)
+}
+
+func (shadow *discardShadowBlock) preexecuteSenderChainsWithRetryState(cfg discardShadowRunConfig, chains [][]discardShadowSenderChainTask, ready func(*discardShadowTaskResult) bool, forwardRaw, retainRetryState bool) *discardShadowPreexecution {
 	if shadow == nil || shadow.base == nil || cfg.block == nil {
 		return nil
 	}
-	chains := transferSenderChains(cfg.transactions)
-	if len(chains) == 0 {
+	if len(chains) == 0 || ready == nil {
 		return nil
 	}
 	senderTasks := make([]discardShadowSenderChainTask, len(cfg.transactions))
@@ -1429,6 +1518,7 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(c
 			}
 			worker.db.recorder = &worker.recorder
 			for chain := range jobs {
+				worker.db.resetForwarded()
 				stateSnapshot := worker.state.Snapshot()
 				dpSnapshot := worker.dynProps.Snapshot()
 				var versions versionedAccessShadow
@@ -1438,20 +1528,20 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(c
 					result.senderPredecessor = task.senderPredecessor
 					result.senderVersioned = task.senderVersioned
 					annotateSenderChainReadVersions(&result.reads, &versions, task.txIndex)
-					if preexecutedTransferReady(&result) {
-						if err := worker.advanceSenderChain(result.writes); err != nil {
+					if ready(&result) {
+						if err := worker.advanceSenderChainWrites(result.writes, forwardRaw); err != nil {
 							result.err = err
 						}
 					}
 					results <- result
-					if !preexecutedTransferReady(&result) {
+					if !ready(&result) {
 						break
 					}
 					installSenderChainWrites(&versions, result.writes, task.txIndex)
 				}
 				worker.state.RevertToSnapshot(stateSnapshot)
 				worker.dynProps.RevertToSnapshot(dpSnapshot)
-				worker.db.reset()
+				worker.db.resetForwarded()
 				worker.db.recorder = &worker.recorder
 			}
 		}(workerState)
@@ -1912,7 +2002,7 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 	retry.stats.executionNanos += time.Since(executionStarted).Nanoseconds()
 	worker.state.RevertToSnapshot(prefixStateSnapshot)
 	worker.dynProps.RevertToSnapshot(prefixDPSnapshot)
-	worker.db.reset()
+	worker.db.resetForwarded()
 	worker.db.recorder = &worker.recorder
 }
 
@@ -2805,9 +2895,16 @@ func (pre *discardShadowPreexecution) markPublished(txIndex int) {
 	}
 }
 
-func preexecutedTransferReady(result *discardShadowTaskResult) bool {
+func preexecutedResultReady(result *discardShadowTaskResult) bool {
 	if result == nil || result.err != nil || result.info == nil || result.writeSetErr != nil ||
 		!result.applyEligible || result.applyErr != nil || !result.applyMatch {
+		return false
+	}
+	return true
+}
+
+func preexecutedTransferReady(result *discardShadowTaskResult) bool {
+	if !preexecutedResultReady(result) {
 		return false
 	}
 	receipt := result.info.GetReceipt()
@@ -2996,8 +3093,55 @@ func equalSenderChainWriteSets(worker, canonical state.TransactionWriteSet, igno
 // values deliberately depend on transfers from other sender chains and are
 // already revalidated by the publisher-specific path.
 func (shadow *discardShadowBlock) finishTransferSenderChains(pre *discardShadowPreexecution, versioned *versionedAccessShadow, cfg discardShadowRunConfig) discardShadowSenderChainStats {
+	if pre == nil {
+		return discardShadowSenderChainStats{}
+	}
+	stats := shadow.finishSenderChains(pre, versioned, cfg, preexecutedTransferReady, true)
+	discardShadowSenderChainBlocksCounter.Inc(1)
+	discardShadowSenderChainGroupsCounter.Inc(stats.groups)
+	discardShadowSenderChainExecutedCounter.Inc(stats.executed)
+	discardShadowSenderChainForwardedCounter.Inc(stats.forwarded)
+	discardShadowSenderChainCandidatesCounter.Inc(stats.candidates)
+	discardShadowSenderChainValidatedCounter.Inc(stats.validated)
+	discardShadowSenderChainForwardedOKCounter.Inc(stats.forwardedValidated)
+	discardShadowSenderChainReadConflictsCounter.Inc(stats.readConflicts)
+	discardShadowSenderChainSenderConflictsCounter.Inc(stats.senderConflicts)
+	discardShadowSenderChainInfoMismatchesCounter.Inc(stats.infoMismatches)
+	discardShadowSenderChainWriteMismatchesCounter.Inc(stats.writeMismatches)
+	discardShadowSenderChainBalanceMismatchesCounter.Inc(stats.balanceMismatches)
+	discardShadowSenderChainErrorsCounter.Inc(stats.errors)
+	discardShadowSenderChainWallNanosCounter.Inc(pre.wallNanos)
+	return stats
+}
+
+// finishVMSenderChains keeps public bandwidth writes in the exact comparison.
+// The VM canary must expose resource-order differences before a conditional
+// reservation carrier is designed; it cannot inherit Transfer's gated rebase.
+func (shadow *discardShadowBlock) finishVMSenderChains(pre *discardShadowPreexecution, versioned *versionedAccessShadow, cfg discardShadowRunConfig) discardShadowSenderChainStats {
+	if pre == nil {
+		return discardShadowSenderChainStats{}
+	}
+	stats := shadow.finishSenderChains(pre, versioned, cfg, preexecutedResultReady, false)
+	discardShadowVMSenderChainBlocksCounter.Inc(1)
+	discardShadowVMSenderChainGroupsCounter.Inc(stats.groups)
+	discardShadowVMSenderChainExecutedCounter.Inc(stats.executed)
+	discardShadowVMSenderChainForwardedCounter.Inc(stats.forwarded)
+	discardShadowVMSenderChainCandidatesCounter.Inc(stats.candidates)
+	discardShadowVMSenderChainValidatedCounter.Inc(stats.validated)
+	discardShadowVMSenderChainForwardedOKCounter.Inc(stats.forwardedValidated)
+	discardShadowVMSenderChainReadConflictsCounter.Inc(stats.readConflicts)
+	discardShadowVMSenderChainSenderConflictsCounter.Inc(stats.senderConflicts)
+	discardShadowVMSenderChainInfoMismatchesCounter.Inc(stats.infoMismatches)
+	discardShadowVMSenderChainWriteMismatchesCounter.Inc(stats.writeMismatches)
+	discardShadowVMSenderChainBalanceMismatchesCounter.Inc(stats.balanceMismatches)
+	discardShadowVMSenderChainErrorsCounter.Inc(stats.errors)
+	discardShadowVMSenderChainWallNanosCounter.Inc(pre.wallNanos)
+	return stats
+}
+
+func (shadow *discardShadowBlock) finishSenderChains(pre *discardShadowPreexecution, versioned *versionedAccessShadow, cfg discardShadowRunConfig, ready func(*discardShadowTaskResult) bool, ignorePublicNet bool) discardShadowSenderChainStats {
 	var stats discardShadowSenderChainStats
-	if shadow == nil || pre == nil || versioned == nil || len(cfg.canonicalInfos) != len(cfg.transactions) {
+	if shadow == nil || pre == nil || versioned == nil || ready == nil || len(cfg.canonicalInfos) != len(cfg.transactions) {
 		return stats
 	}
 	stats.groups = int64(pre.groups)
@@ -3012,7 +3156,7 @@ func (shadow *discardShadowBlock) finishTransferSenderChains(pre *discardShadowP
 		if result.senderVersioned {
 			stats.forwarded++
 		}
-		if result.err != nil || !preexecutedTransferReady(&result) {
+		if result.err != nil || !ready(&result) {
 			stats.errors++
 			continue
 		}
@@ -3047,7 +3191,7 @@ func (shadow *discardShadowBlock) finishTransferSenderChains(pre *discardShadowP
 			continue
 		}
 		infoMatch := compareDiscardShadowInfo(result.info, cfg.canonicalInfos[txIndex]) == 0
-		writeMatch := equalSenderChainWriteSets(result.writes, versioned.transactionWriteSets[txIndex], result.publicNetValid)
+		writeMatch := equalSenderChainWriteSets(result.writes, versioned.transactionWriteSets[txIndex], ignorePublicNet && result.publicNetValid)
 		balanceMatch := !cfg.captureBalanceTrace || proto.Equal(result.balanceTrace, cfg.canonicalBalanceTraces[txIndex])
 		if !infoMatch {
 			stats.infoMismatches++
@@ -3067,20 +3211,6 @@ func (shadow *discardShadowBlock) finishTransferSenderChains(pre *discardShadowP
 			}
 		}
 	}
-	discardShadowSenderChainBlocksCounter.Inc(1)
-	discardShadowSenderChainGroupsCounter.Inc(stats.groups)
-	discardShadowSenderChainExecutedCounter.Inc(stats.executed)
-	discardShadowSenderChainForwardedCounter.Inc(stats.forwarded)
-	discardShadowSenderChainCandidatesCounter.Inc(stats.candidates)
-	discardShadowSenderChainValidatedCounter.Inc(stats.validated)
-	discardShadowSenderChainForwardedOKCounter.Inc(stats.forwardedValidated)
-	discardShadowSenderChainReadConflictsCounter.Inc(stats.readConflicts)
-	discardShadowSenderChainSenderConflictsCounter.Inc(stats.senderConflicts)
-	discardShadowSenderChainInfoMismatchesCounter.Inc(stats.infoMismatches)
-	discardShadowSenderChainWriteMismatchesCounter.Inc(stats.writeMismatches)
-	discardShadowSenderChainBalanceMismatchesCounter.Inc(stats.balanceMismatches)
-	discardShadowSenderChainErrorsCounter.Inc(stats.errors)
-	discardShadowSenderChainWallNanosCounter.Inc(pre.wallNanos)
 	return stats
 }
 

@@ -837,6 +837,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	var discardCfg discardShadowRunConfig
 	var transferPreexecution *discardShadowPreexecution
 	var senderChainPreexecution *discardShadowPreexecution
+	var vmSenderChainPreexecution *discardShadowPreexecution
 	var senderRetry *discardShadowSenderRetry
 	if shadowEnabled && collectTxInfos {
 		discardShadow = prepareTransferExecutionBlock(statedb, dynProps, block.Number(), options.parallelTransfers)
@@ -875,6 +876,10 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			}
 			if discardShadow.sampled {
 				senderChainPreexecution = discardShadow.preexecuteTransferSenderChainsWithRetryState(discardCfg, actualAsyncRetry)
+				// VM is the dominant historical-sync family. Keep its first
+				// sender-chain expansion observe-only until ordered energy,
+				// bandwidth, and receipt settlement have passed this canary.
+				vmSenderChainPreexecution = discardShadow.preexecuteVMSenderChains(discardCfg)
 				if actualAsyncRetry {
 					// Use three sampled cohorts for the real background retry
 					// canary. The remaining cohort retains the synchronous observer
@@ -949,6 +954,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		}
 		if senderChainPreexecution != nil {
 			senderChainPreexecution.validateReadVersion(i, tx, &versionedShadow)
+		}
+		if vmSenderChainPreexecution != nil {
+			vmSenderChainPreexecution.validateReadVersion(i, tx, &versionedShadow)
 		}
 		if senderRetry != nil {
 			senderRetry.observeBoundary(i, tx, statedb, dynProps, &versionedShadow, discardCfg)
@@ -1156,6 +1164,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	if discardShadow != nil && discardShadow.sampled {
 		_ = discardShadow.finishTransferPreexecution(transferPreexecution, &versionedShadow, discardCfg)
 		_ = discardShadow.finishTransferSenderChains(senderChainPreexecution, &versionedShadow, discardCfg)
+		_ = discardShadow.finishVMSenderChains(vmSenderChainPreexecution, &versionedShadow, discardCfg)
 	}
 	if senderRetry != nil {
 		_ = senderRetry.finish(&versionedShadow, discardCfg)

@@ -1014,6 +1014,123 @@ func TestTransferSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
 	}
 }
 
+func TestVMSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
+	transactions := []*types.Transaction{
+		makeTestTriggerTx(1, testProcessorAddr(8), nil),
+		makeTestTriggerTx(3, testProcessorAddr(8), nil),
+		makeTestTriggerTx(1, testProcessorAddr(8), nil),
+		makeTestTransferTx(1, 2, 1),
+		makeTestTriggerTx(1, testProcessorAddr(8), nil),
+	}
+	chains := vmSenderChains(transactions)
+	if len(chains) != 3 {
+		t.Fatalf("VM sender chains = %v, want 3", chains)
+	}
+	var joined, afterTransfer *discardShadowSenderChainTask
+	for chainIndex := range chains {
+		for taskIndex := range chains[chainIndex] {
+			task := &chains[chainIndex][taskIndex]
+			switch task.txIndex {
+			case 2:
+				joined = task
+			case 4:
+				afterTransfer = task
+			}
+		}
+	}
+	if joined == nil || !joined.senderVersioned || joined.senderPredecessor != 0 {
+		t.Fatalf("same-sender VM transaction was not chained: %+v", joined)
+	}
+	if afterTransfer == nil || afterTransfer.senderVersioned || afterTransfer.senderPredecessor != 3 {
+		t.Fatalf("VM chain did not break at transfer predecessor: %+v", afterTransfer)
+	}
+}
+
+func TestVMSenderChainReadinessAllowsEnergyReceipt(t *testing.T) {
+	result := &discardShadowTaskResult{
+		info:          &corepb.TransactionInfo{Receipt: &corepb.ResourceReceipt{EnergyUsage: 1}},
+		writes:        state.TransactionWriteSet{},
+		applyEligible: true,
+		applyMatch:    true,
+	}
+	if !preexecutedResultReady(result) {
+		t.Fatal("generic sender-chain readiness rejected an energy-bearing VM result")
+	}
+	if preexecutedTransferReady(result) {
+		t.Fatal("transfer publication readiness accepted an energy-bearing result")
+	}
+}
+
+func TestVMSenderChainFinishValidatesEnergyResult(t *testing.T) {
+	tx := makeTestTriggerTx(1, testProcessorAddr(8), nil)
+	info := &corepb.TransactionInfo{Receipt: &corepb.ResourceReceipt{EnergyUsage: 1}}
+	writes := state.TransactionWriteSet{
+		{Kind: state.TransactionAccessRawKV, LogicalKey: "vm-result"}: {Exists: true, Value: []byte("ok")},
+	}
+	pre := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{{
+			txIndex: 0, info: info, writes: writes, applyEligible: true, applyMatch: true,
+		}},
+		resultByTx:    []int{0},
+		readVersions:  []discardShadowReadVersionResult{{publishable: true}},
+		readValidated: []bool{true},
+		published:     make([]bool, 1),
+		groups:        1,
+	}
+	versioned := &versionedAccessShadow{
+		transactionWritesOK: []bool{true},
+		transactionWriteSets: []state.TransactionWriteSet{
+			writes,
+		},
+	}
+	stats := (&discardShadowBlock{}).finishVMSenderChains(pre, versioned, discardShadowRunConfig{
+		transactions:   []*types.Transaction{tx},
+		canonicalInfos: []*corepb.TransactionInfo{info},
+	})
+	if stats.candidates != 1 || stats.validated != 1 || stats.errors != 0 || !pre.published[0] {
+		t.Fatalf("VM sender-chain finish = %+v, published=%v", stats, pre.published)
+	}
+}
+
+func TestSenderChainAdvanceForwardsRawKV(t *testing.T) {
+	workerState := newTestState(t)
+	worker := discardShadowWorker{
+		state:    workerState,
+		dynProps: workerState.DynamicProperties(),
+	}
+	key := state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "sender-chain-raw"}
+	writes := state.TransactionWriteSet{
+		key: {Exists: true, Value: []byte("forwarded")},
+	}
+	if err := worker.advanceSenderChain(writes); err == nil {
+		t.Fatal("transfer sender-chain path unexpectedly accepted raw KV forwarding")
+	}
+	if err := worker.advanceSenderChainWrites(writes, true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := worker.db.Get([]byte(key.LogicalKey))
+	if err != nil || string(got) != "forwarded" {
+		t.Fatalf("forwarded raw value = %q, %v", got, err)
+	}
+	worker.db.reset()
+	got, err = worker.db.Get([]byte(key.LogicalKey))
+	if err != nil || string(got) != "forwarded" {
+		t.Fatalf("transaction reset lost forwarded raw value = %q, %v", got, err)
+	}
+	if err := worker.advanceSenderChainWrites(state.TransactionWriteSet{
+		key: {Exists: false},
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := worker.db.Has([]byte(key.LogicalKey)); err != nil || exists {
+		t.Fatalf("forwarded raw tombstone = exists:%v err:%v", exists, err)
+	}
+	worker.db.resetForwarded()
+	if _, err := worker.db.Get([]byte(key.LogicalKey)); err == nil {
+		t.Fatal("chain reset retained forwarded raw value")
+	}
+}
+
 func TestSenderChainPreexecutionRetainsSingleChainRetrySpare(t *testing.T) {
 	canonical := newTestState(t)
 	for _, id := range []byte{1, 2, 3} {
