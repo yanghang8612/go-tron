@@ -2977,6 +2977,24 @@ eight bytes without weakening the frozen view. VM observation remains on the
 residue-zero Transfer reference cohort until that key is classified and a
 longer zero-error gate passes.
 
+The diagnostic build `cae18568` reproduced the failure at observer cohort 87.
+The missing key had length six and both captured words decoded to
+`74 70 73 2d 27 ed 00 00`: `tps- || 0x27ed`, the RecentBlockStore/TAPOS ring
+slot selected by a transaction's `ref_block_bytes`. TAPOS is a deterministic
+envelope dependency, but the retry freezer previously learned raw keys only
+from completed block-start read sets. A suffix transaction whose earlier
+incarnation did not retain that read could therefore reach mandatory envelope
+validation without its exact TAPOS slot.
+
+The retry freezer now derives the schema-owned TAPOS key directly from every
+suffix transaction and copies its value at the settled conflict boundary. It
+does not preserve a live TAPOS reader: later parent changes cannot affect the
+frozen value, and every unrelated uncaptured raw key remains fail-closed. A
+regression fixture starts with no speculative read result, derives
+`tps- || 0x27ed`, mutates the parent after freezing, and still reads the exact
+boundary value. TAPOS rows are also classified as chain metadata by physical
+write attribution instead of falling into `other`.
+
 #### P4.59: First co-scheduled VM retry cohort (held)
 
 The next canary adds `block % 256 == 64` to VM retry observation and

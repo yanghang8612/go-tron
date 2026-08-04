@@ -25,6 +25,7 @@ func TestClassifyPhysicalKeyString(t *testing.T) {
 		{"ti-hash", PhysicalKeyFamilyTransactionHistory},
 		{"tib-height", PhysicalKeyFamilyTransactionHistory},
 		{"LastBlock", PhysicalKeyFamilyChainMetadata},
+		{"tps-\x27\xed", PhysicalKeyFamilyChainMetadata},
 		{"stage-progress-v1-Finish", PhysicalKeyFamilyChainMetadata},
 		{"dp-energy_fee", PhysicalKeyFamilyOther},
 	}

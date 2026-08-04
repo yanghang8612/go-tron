@@ -2044,12 +2044,20 @@ func snapshotDiscardShadowVersionView(source *versionedAccessShadow, pre *discar
 	return view, cells
 }
 
-func (retry *discardShadowSenderRetry) freezeAsyncRawViewFrom(parent actuator.BufferedKVStore, txIndex int) (*discardShadowFrozenKV, int, error) {
+func (retry *discardShadowSenderRetry) freezeAsyncRawViewFrom(parent actuator.BufferedKVStore, txIndex int, transactions []*types.Transaction) (*discardShadowFrozenKV, int, error) {
 	if retry == nil || retry.source == nil {
 		return nil, 0, errors.New("missing async retry source")
 	}
 	keys := make(map[string]struct{}, 4)
 	for current, traversed := txIndex, 0; current >= 0 && current < len(retry.source.senderNext) && traversed < len(retry.source.senderNext); traversed++ {
+		if current < len(transactions) && transactions[current] != nil {
+			pb := transactions[current].Proto()
+			if pb != nil && pb.RawData != nil {
+				if key := rawdb.TaposRefStorageKeyFromReference(pb.RawData.RefBlockBytes); key != nil {
+					keys[string(key)] = struct{}{}
+				}
+			}
+		}
 		if current < len(retry.source.resultByTx) {
 			resultIndex := retry.source.resultByTx[current]
 			if resultIndex >= 0 && resultIndex < len(retry.source.results) {
@@ -2091,11 +2099,11 @@ func (retry *discardShadowSenderRetry) freezeAsyncRawViewFrom(parent actuator.Bu
 	return frozen, len(keys), nil
 }
 
-func (retry *discardShadowSenderRetry) freezeAsyncRawView(runner *discardShadowRetryRunner, txIndex int) (*discardShadowFrozenKV, int, error) {
+func (retry *discardShadowSenderRetry) freezeAsyncRawView(runner *discardShadowRetryRunner, txIndex int, transactions []*types.Transaction) (*discardShadowFrozenKV, int, error) {
 	if runner == nil {
 		return nil, 0, errors.New("missing async retry runner")
 	}
-	return retry.freezeAsyncRawViewFrom(&runner.prefixRaw, txIndex)
+	return retry.freezeAsyncRawViewFrom(&runner.prefixRaw, txIndex, transactions)
 }
 
 func annotateSenderRetryReadVersions(reads *state.TransactionReadSet, base, forwarded *versionedAccessShadow, txIndex int) {
@@ -2372,7 +2380,7 @@ func (retry *discardShadowSenderRetry) enqueueAsyncRetry(txIndex int, statedb *s
 	}
 	retry.asyncScheduled += int64(len(tasks))
 	rawFreezeStarted := time.Now()
-	frozenRaw, frozenKeys, err := retry.freezeAsyncRawViewFrom(cfg.db, txIndex)
+	frozenRaw, frozenKeys, err := retry.freezeAsyncRawViewFrom(cfg.db, txIndex, cfg.transactions)
 	retry.stats.actualRawFreezeNs += time.Since(rawFreezeStarted).Nanoseconds()
 	if err != nil {
 		retry.stats.errors++

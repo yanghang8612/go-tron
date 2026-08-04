@@ -334,7 +334,7 @@ func TestAsyncRetryFrozenRawViewRejectsLiveFallback(t *testing.T) {
 	var recorder state.TransactionAccessRecorder
 	recorder.Reset(8)
 	runner.prefixRaw.recorder = &recorder
-	frozen, keys, err := retry.freezeAsyncRawView(runner, 0)
+	frozen, keys, err := retry.freezeAsyncRawView(runner, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,6 +367,35 @@ func TestAsyncRetryFrozenRawViewRejectsLiveFallback(t *testing.T) {
 	}
 }
 
+func TestAsyncRetryFrozenRawViewIncludesTAPOSEnvelopeDependencies(t *testing.T) {
+	parent := ethrawdb.NewMemoryDatabase()
+	refBlockBytes := []byte{0x27, 0xed}
+	key := rawdb.TaposRefStorageKeyFromReference(refBlockBytes)
+	if err := parent.Put(key, []byte("boundary")); err != nil {
+		t.Fatal(err)
+	}
+	tx := makeTestTransferTx(1, 2, 1)
+	tx.Proto().RawData.RefBlockBytes = refBlockBytes
+	retry := &discardShadowSenderRetry{source: &discardShadowPreexecution{
+		resultByTx: []int{-1},
+		senderNext: []int{-1},
+	}}
+
+	frozen, keys, err := retry.freezeAsyncRawViewFrom(parent, 0, []*types.Transaction{tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys != 1 {
+		t.Fatalf("frozen keys = %d, want one derived TAPOS key", keys)
+	}
+	if err := parent.Put(key, []byte("laterxxx")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := frozen.Get(key); err != nil || string(got) != "boundary" {
+		t.Fatalf("frozen TAPOS value = %q, %v; want boundary", got, err)
+	}
+}
+
 type frozenRawBlockHashParent struct {
 	ethdb.KeyValueStore
 	hashes map[uint64]tcommon.Hash
@@ -388,7 +417,7 @@ func TestAsyncRetryFrozenRawViewRetainsOnlyImmutableBlockHashCapability(t *testi
 		senderNext: []int{-1},
 	}}
 
-	frozen, keys, err := retry.freezeAsyncRawViewFrom(parent, 0)
+	frozen, keys, err := retry.freezeAsyncRawViewFrom(parent, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -101,7 +101,8 @@ func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 		return PhysicalKeyFamilyTransactionHistory
 	case key == "LastBlock", key == "LastSolidBlock", key == "total-tx-count",
 		strings.HasPrefix(key, "bh-"), strings.HasPrefix(key, "bnh-"),
-		strings.HasPrefix(key, "bsr-"), strings.HasPrefix(key, stageProgressPrefixString):
+		strings.HasPrefix(key, "bsr-"), strings.HasPrefix(key, "tps-"),
+		strings.HasPrefix(key, stageProgressPrefixString):
 		return PhysicalKeyFamilyChainMetadata
 	default:
 		return PhysicalKeyFamilyOther

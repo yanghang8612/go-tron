@@ -25,6 +25,17 @@ func TaposRefStorageKey(blockNum uint64) []byte {
 	return taposKey(ref[:])
 }
 
+// TaposRefStorageKeyFromReference returns the recent-block ring key selected
+// by a transaction's two-byte ref_block_bytes. Speculative execution uses this
+// schema-owned helper to freeze the mandatory envelope dependency even when an
+// earlier incarnation did not retain a completed raw read set.
+func TaposRefStorageKeyFromReference(refBlockBytes []byte) []byte {
+	if len(refBlockBytes) != 2 {
+		return nil
+	}
+	return taposKey(refBlockBytes)
+}
+
 // WriteTaposRef records a block's hash tail (bytes 8..16 of its
 // 32-byte hash) under the 2-byte ref slot derived from its block number.
 // Each new block at the same lower-half number overwrites the previous
