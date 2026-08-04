@@ -2635,6 +2635,43 @@ recorded no sample in `projectBlockEnergyBoundary`, `blockEnergyUsageDelta`, or
 resolution. Both ordered resource carriers now satisfy the observe-only gate
 for a deliberately small canonical VM publication cohort.
 
+#### P4.54: Ordered VM canonical publication cohort
+
+Erigon's parallel executor separates speculative execution from an ordered
+apply loop: only a finalized, version-valid incarnation enters the publish
+queue; the serial owner then advances block gas/receipt state, applies the
+retained writes, and publishes indexes in transaction order. Go-tron's first
+VM publisher follows the same boundary without widening the existing
+eligibility model. Trigger/CreateSmartContract sender chains still execute on
+independent workers, exact read-source validation still occurs at the
+canonical transaction position, and only the ordered loop mutates canonical
+StateDB, DynamicProperties, raw KV, receipt, and BalanceTrace state.
+
+The initial cohort is deliberately sparse: only block numbers divisible by
+1,024 may publish VM results, which is one of every sixteen existing 1/64 VM
+samples. The other fifteen sampled cohorts retain serial execution as a live
+reference. A candidate must pass complete result/applier readiness, exact read
+versions including an actually published sender predecessor, conditional
+public-net admission, full WriteSet preflight, and an unchanged block-energy
+baseline. Publication then applies the retained typed/raw post-images, appends
+the owned balance trace and TransactionInfo, flushes domain changes, and
+advances `block_energy_usage` through the already-proven projected post-image.
+Any pre-mutation rejection falls back to serial execution; an error after
+mutation rejects and rolls back the whole block.
+
+Metrics under `core/parallel_vm/` expose cohort blocks, preexecuted results,
+candidates, publications, sender-chain publications, public-net
+reservation/rebase outcomes, block-energy publications, each fallback stage,
+fatal errors, and publication time. A three-transaction serial-equivalence
+fixture interleaves two independent VM senders and returns to the first sender,
+forcing one forwarded successor and two public-net rebases. All three retained
+VM results publish while TransactionInfo, BalanceTrace, account balances,
+public-net state, block-energy state, and the final StateDB root remain exact.
+The production gate requires zero publisher errors, zero resource-carrier
+fallback caused by a projection mismatch, continued exact sampled parity, and
+an unchanged canonical block/receipt validation record before expanding the
+cohort or adding VM retry incarnations.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

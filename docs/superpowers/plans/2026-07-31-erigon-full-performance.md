@@ -248,8 +248,14 @@
   accumulation without mutating canonical state.
 - [x] Run the VM block-energy projection production gate and require zero
   missing/mismatch across final version-valid VM candidates.
-- [ ] Add ordered VM energy/bandwidth/receipt settlement and retry
-  incarnations only after the observe-only canary defines the safe carrier.
+- [x] Add a deterministic 1/1024-block VM publication cohort that requires
+  exact read versions plus admitted public-net and block-energy carriers.
+- [x] Prove serial equivalence for independent and forwarded VM sender results,
+  including TransactionInfo, BalanceTrace, resources, and final state root.
+- [ ] Run the small VM canonical-publication production gate before expanding
+  the cohort.
+- [ ] Add VM retry incarnations only after the first canonical cohort retains
+  exact production parity.
 
 ## P5: Snapshot and cold steady state
 
