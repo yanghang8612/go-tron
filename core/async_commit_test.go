@@ -529,7 +529,7 @@ func TestAsyncCommit_RealFoldErrorUnwind(t *testing.T) {
 
 // TestAsyncCommit_HeaderVerifyUsesRangeTip is the regression for the production
 // stall "insert block range index 1 block N: invalid block number". Under async
-// commit the serial commit worker publishes bc.CurrentBlock() off the critical
+// commit the ordered scheduler publishes bc.CurrentBlock() off the critical
 // path, so the published head lags the executor's range-local tip by up to one
 // block. Header verification must validate a block's number / parent-hash / slot
 // linkage against the range-local tip (plan.parent), NOT bc.CurrentBlock() —

@@ -2158,6 +2158,70 @@ are updated once per fold, so no atomic operation is added to recursive hashing.
 The production sample will determine whether the next Erigon-style change should
 target durable branch preloading, split scheduling/streaming, or hash work.
 
+The production window covered 4,398 blocks and 108,095 transactions in 65
+seconds (67.66 blocks/s and 1,663 tx/s). It recorded 4,417 changed folds with
+1,090,100 resolved operations: about 247 operations per changed block. All 16
+root splits were active on every changed fold. Per changed block, commitment
+performed about 1,281 branch hashes over 555 KB of preimage and 4,341 estimated
+Keccak permutations, taking 11.65 ms of aggregate fold wall time. Of 5.66
+million branch hashes, 89.1% required multiple Keccak rounds. Parent branch
+lookups resolved about 92% from the blockbuffer overlay, 3.9% from the branch
+cache, and 3.6% from durable Pebble, so blanket durable preloading would target
+only a small minority of reads.
+
+A warm 20-second profile sampled 49.6 CPU-seconds. Commitment root workers
+accounted for 19.74%, parent-session reads 8.45%, branch decoding 8.89%, node
+hashing 6.33%, and Keccak 6.37%; Pebble compaction remained 15.18%. Commitment
+used all 16 splits yet averaged less than one core over wall time because every
+block waited for its slowest split before the next block's split work began.
+Commitment errors and all canonical equivalence counters remained zero. These
+measurements reject blanket preloading and select split scheduling/streaming as
+the next experiment.
+
+#### P4.46: Persistent ordered commitment lanes
+
+Erigon's `StreamingCommitter` keeps top-nibble split state, schedules dirty
+splits independently, and stitches their cells only at the ordered root
+boundary. Go-tron's state capture currently materializes the final update batch
+at block commit rather than emitting stable touches during execution, but its
+bounded multi-layer blockbuffer provides a safe complementary overlap: keep one
+persistent owner for each of the 16 first nibbles and let a lane begin block
+N+1 as soon as that same lane has finished N. Other lanes may still be finishing
+N, while root assembly and block publication remain strictly FIFO.
+
+Each lane carries only its own root child and Keccak worker. A block receives a
+fixed `LayerView`; its parent session exposes committed layers plus only older
+in-flight layers, excluding the bound and newer layers. Per-lane FIFO ordering
+therefore guarantees that an N+1 branch read observes N's finished same-prefix
+write, while nibble-disjoint workers never depend on one another. The first
+block after startup still uses the ordinary fold, retaining root validation,
+snapshot repair, and full rebuild behavior before the persistent lanes are
+seeded. Stores that do not advertise concurrent fixed-layer reads/writes retain
+the serial fallback.
+
+The scheduler owns at most `depth-1` jobs and uses an unbuffered foreground
+handoff, so accepted jobs plus the newest executing layer never exceed the
+blockbuffer's configured depth. Lane completion may be out of order internally;
+metadata durability, head advancement, hooks, stage rows, and layer promotion
+consume result channels in canonical block order. Any lane or publish error
+poisons later work and enters the existing fail-fast discard/unwind path.
+Canonical rewind increments a pipeline epoch after pending commits drain; the
+first new-branch job validates and re-seeds all lane roots from the LCA view,
+preventing an orphan tip from surviving in scheduler-local state. A
+state-changing transfer-fork test covers this boundary rather than relying on
+an unchanged-root empty-block fork.
+
+The local 150-block/80-transfer memory-database comparison measured 165.3 ms
+for synchronous insertion, 104.6 ms for the former asynchronous serial fold,
+and 104.2 ms for the ordered lane pipeline. The 0.4% lane result is effectively
+latency-neutral without Pebble read waits, while allocations fell from about
+330.6K to 325.5K per run. The production gate must therefore establish the
+causal value: pipeline enabled, maximum in-flight folds greater than one,
+unchanged roots/equivalence, and reduced fold wall time or async backpressure
+under real random reads. If neither improves, the lane scheduler should not be
+credited with a throughput gain and within-block touch streaming remains the
+next design step.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

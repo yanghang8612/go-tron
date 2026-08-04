@@ -182,8 +182,14 @@
 - [x] Add fold-local commitment shape metrics without atomics in the recursive
   hash path, covering resolved ops, split/worker utilization, hash bytes/rounds,
   and wall time.
-- [ ] Run the commitment-shape production sample and select durable preloading,
+- [x] Run the commitment-shape production sample and select durable preloading,
   streaming split scheduling, or hash reduction from measured work ratios.
+- [x] Add persistent first-nibble commitment owners which may advance across
+  blocks independently while root assembly, metadata, stages, heads, and layer
+  promotion remain canonically ordered.
+- [ ] Run the ordered commitment pipeline production gate: require more than
+  one fold in flight, zero commitment/equivalence errors, and compare fold wall
+  time plus enqueue backpressure against P4.45.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

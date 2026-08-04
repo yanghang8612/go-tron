@@ -190,6 +190,46 @@ func TestCommitmentParentReadSessionKeepsOverlayAndDurableCut(t *testing.T) {
 	}
 }
 
+func TestCommitmentParentReadSessionIncludesOnlyOlderInflightLayers(t *testing.T) {
+	disk, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer disk.Close()
+
+	prefix := []byte{6, 7, 8}
+	buf := New(disk)
+	buf.SetMaxInflight(4)
+	buf.BeginBlock(bufHash(1), 1)
+	h1, _ := buf.NewestInflight()
+	if err := rawdb.WriteCommitmentBranch(buf.ViewLayer(h1), prefix, []byte("older")); err != nil {
+		t.Fatal(err)
+	}
+	buf.BeginBlock(bufHash(2), 2)
+	h2, _ := buf.NewestInflight()
+	if err := rawdb.WriteCommitmentBranch(buf.ViewLayer(h2), prefix, []byte("bound")); err != nil {
+		t.Fatal(err)
+	}
+	buf.BeginBlock(bufHash(3), 3)
+	h3, _ := buf.NewestInflight()
+	if err := rawdb.WriteCommitmentBranch(buf.ViewLayer(h3), prefix, []byte("newer")); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := buf.ViewLayer(h2).NewCommitmentParentReadSession(17)
+	if err != nil || session == nil {
+		t.Fatalf("NewCommitmentParentReadSession = (%T,%v)", session, err)
+	}
+	defer session.Close()
+	concrete := session.(*commitmentParentReadSession)
+	if len(concrete.inflight) != 1 || concrete.inflight[0] != h1.l {
+		t.Fatalf("older inflight layers = %d, want only block 1", len(concrete.inflight))
+	}
+	if got, found, stable := readSessionBranch(t, session, 6, prefix); !found || !stable || !bytes.Equal(got, []byte("older")) {
+		t.Fatalf("parent branch = (%q,%v,stable=%v), want older", got, found, stable)
+	}
+}
+
 func TestCommitmentParentReadSessionDoesNotWaitForFlushIO(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

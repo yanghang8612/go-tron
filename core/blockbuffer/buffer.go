@@ -522,12 +522,13 @@ func layerShardIndexString(key string) uint32 {
 // in-flight (begun-but-uncommitted) layer at once — `inflight` is an ordered
 // set (oldest→newest). The newest in-flight layer is the foreground's "active"
 // layer; Put/Delete/BeginBlock/DiscardActive operate on it exactly as the
-// single-active model did. When async commit is enabled, a serial commit worker
-// holds a handle to an OLDER in-flight layer (block N) and writes it via
-// ViewLayer/LayerWriter while the foreground writes the newer layer (N+1); the
-// worker promotes its layer with CommitInflight or drops it with DiscardInflight.
-// The two threads target DISJOINT layers and every method takes the applicable
-// locks, so the sharded layer maps and slices stay race-free. With
+// single-active model did. When async commit is enabled, ordered commitment
+// lanes hold handles to OLDER in-flight layers and write them via
+// ViewLayer/LayerWriter while the foreground writes the newest layer. Lanes may
+// work in several block layers concurrently, but each write targets one fixed
+// layer and the scheduler promotes or discards layers in FIFO order. Every
+// method takes the applicable locks, so the sharded layer maps and slices stay
+// race-free. With
 // maxInflight==1 (the default), only one layer is ever in flight; this then
 // degenerates to the single-active model and is byte-identical to it.
 //

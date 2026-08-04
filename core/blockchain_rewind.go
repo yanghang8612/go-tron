@@ -219,6 +219,12 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
+	if bc.commitPending != nil {
+		bc.WaitForCommitSettled()
+	}
+	if errPtr := bc.commitErr.Load(); errPtr != nil {
+		return fmt.Errorf("restart sync: pending async commit failed: %w", *errPtr)
+	}
 
 	current := bc.CurrentBlock()
 	if current == nil {
@@ -763,6 +769,7 @@ func solidifiedBlockFromRootedWitnessState(statedb *state.StateDB) int64 {
 }
 
 func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Hash) error {
+	bc.invalidateOrderedCommitPipeline()
 	bc.genesisWitnesses = bc.genesisWitnesses[:0]
 	for _, gw := range rawdb.ReadGenesisWitnesses(bc.db) {
 		bc.genesisWitnesses = append(bc.genesisWitnesses, consensus.GenesisWitnessInfo{

@@ -47,10 +47,9 @@ func TestResolveCommitPipelineDepth(t *testing.T) {
 	}
 }
 
-// TestSetAsyncCommitDepthSizing verifies the depth resolved at construction sizes
-// the commit queue (cap = D-2, fixed at NewBlockChain so the already-started
-// worker never ranges a stale channel) and that SetAsyncCommit(true) raises the
-// buffer's in-flight cap to D. Depth 2 == today (cap 0, maxInflight 2).
+// TestSetAsyncCommitDepthSizing verifies the depth resolved at construction
+// raises the buffer's in-flight cap to D while retaining one unbuffered handoff;
+// the ordered scheduler itself owns the D-1 pending slots.
 func TestSetAsyncCommitDepthSizing(t *testing.T) {
 	witnessAddr := testInsertAddr(1)
 	for _, tc := range []struct {
@@ -59,9 +58,9 @@ func TestSetAsyncCommitDepthSizing(t *testing.T) {
 		wantCap      int
 	}{
 		{2, 2, 0},
-		{3, 3, 1},
-		{4, 4, 2},
-		{6, 6, 4},
+		{3, 3, 0},
+		{4, 4, 0},
+		{6, 6, 0},
 	} {
 		t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", fmt.Sprint(tc.depth))
 		diskdb := ethrawdb.NewMemoryDatabase()
@@ -85,9 +84,9 @@ func TestSetAsyncCommitDepthSizing(t *testing.T) {
 }
 
 // TestAsyncCommit_Depth4_MatchesSync is the deep-pipeline parity test: a single
-// InsertBlocks range at depth 4 (buffered queue cap 2, maxInflight 4, generalized
-// flush cutoff) must produce byte-identical per-block roots + head vs the
-// synchronous reference. Exercises the buffered queue + generalized cutoff
+// InsertBlocks range at depth 4 (three scheduler-owned pending folds plus one
+// foreground layer) must produce byte-identical per-block roots + head vs the
+// synchronous reference. Exercises the ordered scheduler + generalized cutoff
 // (cross-batch session not involved — single range).
 func TestAsyncCommit_Depth4_MatchesSync(t *testing.T) {
 	witnessAddr := testInsertAddr(1)
@@ -399,8 +398,26 @@ func TestInsertSession_ReorgCrossBatchMatchesSync(t *testing.T) {
 	ref := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
 	genesis := ref.genesisBlock
 	_ = ref.Close()
-	chainA := chainFrom(genesis, witnessAddr, 10, 0)
-	chainB := chainFrom(genesis, witnessAddr, 11, 1) // heavier → eventual winner
+	transferChain := func(length int, timestampOffset, amountBase int64) []*types.Block {
+		blocks := make([]*types.Block, 0, length)
+		parent := genesis
+		for i := 1; i <= length; i++ {
+			number := int64(i)
+			block := buildTransferBlock(t, number, number*3000+timestampOffset, parent.Hash(), witnessAddr, amountBase+number)
+			// Side-branch transactions are first observed while chain A is at its
+			// tip, then replayed from genesis after the fork wins. Give both views a
+			// common valid expiration instead of buildTransferBlock's short ts+1s.
+			block.Proto().Transactions[0].RawData.Expiration = 600_000
+			blocks = append(blocks, block)
+			parent = block
+		}
+		return blocks
+	}
+	// State-changing branches are essential here: an empty-block fork leaves the
+	// root unchanged and cannot detect persistent commitment lanes retaining the
+	// orphan tip after the LCA rewind.
+	chainA := transferChain(3, 0, 100)
+	chainB := transferChain(4, 1, 1_000) // heavier → eventual winner
 
 	// Synchronous reference.
 	syncBC := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
@@ -437,7 +454,7 @@ func TestInsertSession_ReorgCrossBatchMatchesSync(t *testing.T) {
 			defer bc.Close()
 
 			s := bc.BeginInsertSession()
-			if err := s.Insert(chainA[:5]); err != nil {
+			if err := s.Insert(chainA[:2]); err != nil {
 				t.Fatalf("session chain A batch 1: %v", err)
 			}
 			if !tc.async {
@@ -445,7 +462,7 @@ func TestInsertSession_ReorgCrossBatchMatchesSync(t *testing.T) {
 					t.Fatalf("flush session chain A batch 1: %v", err)
 				}
 			}
-			if err := s.Insert(chainA[5:]); err != nil {
+			if err := s.Insert(chainA[2:]); err != nil {
 				t.Fatalf("session chain A batch 2: %v", err)
 			}
 			if !tc.async {

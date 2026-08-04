@@ -270,11 +270,12 @@ type BlockChain struct {
 	// applyBlockWithPlan runs only the foreground half (exec + maintenance +
 	// latest-domain capture into the in-memory scope) and hands the commitment
 	// fold + ordered publish tail (root write, head advance, hooks, CommitBlock,
-	// solidified flush) to a single serial commit worker, so the ~55% commit
-	// cost overlaps the next block's execution. The buffer's multi-active-layer
-	// support (SetMaxInflight(2)) lets the worker write block N's layer while the
-	// foreground writes block N+1's. Mirrors the flush worker lifecycle: a queue,
-	// a cond-var barrier (post/wait), a fail-fast error pointer, and a WaitGroup.
+	// solidified flush) to one scheduler. Its persistent first-nibble owners keep
+	// same-lane block order while allowing different lanes to advance into later
+	// blocks, and publication remains FIFO. The buffer's multi-active-layer
+	// support lets commitment workers write older layers while the foreground
+	// writes the newest. Lifecycle control remains a rendezvous handoff, a
+	// cond-var barrier (post/wait), a fail-fast error pointer, and a WaitGroup.
 	//
 	// With asyncCommit false (the default) the guard in applyBlockWithPlan is not
 	// taken and the synchronous commit path runs unchanged — byte-identical.
@@ -286,6 +287,14 @@ type BlockChain struct {
 	commitWorkerWg    sync.WaitGroup
 	commitClosed      bool
 	commitErr         atomic.Pointer[error]
+	// commitPipelineEpoch changes whenever canonical commitment state is
+	// rewound. The scheduler observes it before accepting the first new-branch
+	// job and re-seeds its persistent lane roots from the rewound store.
+	commitPipelineEpoch atomic.Uint64
+	// orderedCommitPipeline is initialized on for production. Tests and
+	// benchmarks may clear it before insertion to retain the former one-fold-at-
+	// a-time worker as an exact performance/correctness reference.
+	orderedCommitPipeline bool
 	// txInfoBatches survives individual InsertBlocks/range executors. Receipt
 	// slots own reusable VM result arenas and log shells, so scoping this pool
 	// to a short sync batch would discard their warmed high-water storage at
@@ -457,32 +466,31 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	chaindb := rawdb.NewChainDB(db, ancient)
 	buffer := blockbuffer.New(db)
 	buffer.SetBlockHashReader(chainDBBlockHashReader{db: chaindb})
-	// Resolve the async-commit pipeline depth ONCE here and size the commit queue
-	// to depth-2 (the backpressure bound). The commit worker, started below in
-	// this constructor, ranges this exact channel for its lifetime — sizing it
-	// here (not in the later SetAsyncCommit) keeps the worker from ever being
-	// orphaned on a re-made channel. depth-2 == 0 ⇒ the unbuffered rendezvous.
+	// Resolve the async-commit pipeline depth ONCE here. The handoff remains
+	// unbuffered because the ordered scheduler owns the D-1 pending slots itself;
+	// a second buffered queue would exceed the blockbuffer's D in-flight bound.
 	commitDepth := resolveCommitPipelineDepth()
 	bc := &BlockChain{
-		db:                db,
-		chaindb:           chaindb,
-		stateDB:           stateDB,
-		config:            config,
-		fc:                forks.NewForkController(buffer),
-		buffer:            buffer,
-		flushQueue:        make(chan uint64, flushQueueCap),
-		flushPending:      newFlushBarrier(),
-		commitDepth:       commitDepth,
-		commitQueue:       make(chan *commitJob, commitDepth-2),
-		commitPending:     newFlushBarrier(),
-		txInfoBatches:     newTransactionInfoBatchPool(commitDepth),
-		rewardAcctCache:   make(map[tcommon.Address]*state.AccountSnapshot),
-		rewardAcctSeen:    make(map[tcommon.Address]struct{}),
-		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),
-		witnessBlockCache: make(map[tcommon.Address]int64),
-		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
-		proposalCache:     newProposalScanCache(),
-		versionPassCache:  forks.NewVersionPassCache(),
+		db:                    db,
+		chaindb:               chaindb,
+		stateDB:               stateDB,
+		config:                config,
+		fc:                    forks.NewForkController(buffer),
+		buffer:                buffer,
+		flushQueue:            make(chan uint64, flushQueueCap),
+		flushPending:          newFlushBarrier(),
+		commitDepth:           commitDepth,
+		commitQueue:           make(chan *commitJob),
+		commitPending:         newFlushBarrier(),
+		orderedCommitPipeline: true,
+		txInfoBatches:         newTransactionInfoBatchPool(commitDepth),
+		rewardAcctCache:       make(map[tcommon.Address]*state.AccountSnapshot),
+		rewardAcctSeen:        make(map[tcommon.Address]struct{}),
+		rewardAcctAddrs:       make([]tcommon.Address, 0, 128),
+		witnessBlockCache:     make(map[tcommon.Address]int64),
+		forkStatsCache:        make(map[int32][]byte, len(forks.KnownVersions)),
+		proposalCache:         newProposalScanCache(),
+		versionPassCache:      forks.NewVersionPassCache(),
 	}
 	bc.stateForkStatsStore.cache = bc.forkStatsCache
 	bc.stateForkController = forks.NewForkControllerFromStore(&bc.stateForkStatsStore)
@@ -1072,7 +1080,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 
 // headerParentChainReader pins CurrentBlock() to a specific parent block for
 // header verification. Under async commit the published bc.CurrentBlock() is
-// advanced off the critical path by the serial commit worker, so it lags the
+// advanced off the critical path by the ordered commit scheduler, so it lags the
 // executor's range-local tip by up to one block (see range_executor.go tip()).
 // Verifying a block's number / parent-hash / slot linkage against that lagging
 // head spuriously rejects the 2nd+ block of an InsertBlocks range with
@@ -1226,7 +1234,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	//   - the parent-linkage and "ts > parent.ts" checks must run against the
 	//     block's true parent — the range-local executor tip captured in
 	//     `current` (= plan.parent), NOT bc.CurrentBlock(). Under async commit the
-	//     serial commit worker publishes bc.CurrentBlock() off the critical path,
+	//     ordered commit scheduler publishes bc.CurrentBlock() off the critical path,
 	//     so it lags `current` by up to one block; verifying the 2nd+ block of a
 	//     range against that stale head would reject it with ErrInvalidBlockNumber
 	//     (the block-101 sync stall). headerParentChainReader pins CurrentBlock()
@@ -2290,6 +2298,7 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	if err := bc.rewindStateHistoryIndexStageLocked(lcaBlock.Number(), lcaBlock.Hash()); err != nil {
 		return fmt.Errorf("rewind state history index stage progress to LCA %d: %w", lcaBlock.Number(), err)
 	}
+	bc.invalidateOrderedCommitPipeline()
 
 	// Apply new branch blocks in order LCA+1 → newHead.
 	reversed := make([]*types.Block, len(newBranch))

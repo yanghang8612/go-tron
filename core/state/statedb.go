@@ -3991,6 +3991,27 @@ type CapturedCommit struct {
 	repair statedomains.CommitmentSnapshotRepair
 }
 
+type OrderedCommitmentPipeline = statedomains.OrderedCommitmentPipeline
+type OrderedCommitmentResult = statedomains.OrderedCommitmentResult
+
+func NewOrderedCommitmentPipeline(index statedomains.CommitmentDB) (*OrderedCommitmentPipeline, error) {
+	return statedomains.NewOrderedCommitmentPipeline(index)
+}
+
+// SubmitOrdered hands this captured block to the persistent 16-lane ordered
+// commitment scheduler. The CapturedCommit retains its update backing until the
+// caller receives the result and calls Release (the core commit worker does so
+// as part of the ordered publish tail).
+func (c *CapturedCommit) SubmitOrdered(pipeline *OrderedCommitmentPipeline, index statedomains.CommitmentDB) <-chan OrderedCommitmentResult {
+	if c == nil || c.batch == nil {
+		result := make(chan OrderedCommitmentResult, 1)
+		result <- OrderedCommitmentResult{Err: errors.New("state: captured commitment already consumed")}
+		close(result)
+		return result
+	}
+	return pipeline.Submit(index, c.batch.updates)
+}
+
 // Fold runs the captured commitment fold against index and returns the root.
 // A CapturedCommit is single-use; Fold releases its transient update/key
 // storage on both success and failure.

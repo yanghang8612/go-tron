@@ -2,6 +2,7 @@ package domains
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/metrics"
@@ -27,7 +28,14 @@ var (
 	commitmentFoldNodeHashMultiRoundCounter = metrics.NewRegisteredCounter(
 		"state/commitment/fold/node_hash_multi_round", nil,
 	)
+	commitmentPipelineEnabledGauge     = metrics.NewRegisteredGauge("state/commitment/pipeline/enabled", nil)
+	commitmentPipelineJobsCounter      = metrics.NewRegisteredCounter("state/commitment/pipeline/jobs", nil)
+	commitmentPipelineErrorsCounter    = metrics.NewRegisteredCounter("state/commitment/pipeline/errors", nil)
+	commitmentPipelineInflightGauge    = metrics.NewRegisteredGauge("state/commitment/pipeline/inflight", nil)
+	commitmentPipelineMaxInflightGauge = metrics.NewRegisteredGauge("state/commitment/pipeline/max_inflight", nil)
 )
+
+var commitmentPipelineMaxInflight atomic.Int64
 
 // commitmentFoldStats is owned by one Fold invocation. Parallel root workers
 // write to separate sibling instances and the caller merges them after Wait,
@@ -133,4 +141,16 @@ func finishCommitmentFoldStats(s *commitmentFoldStats, failed bool) {
 	commitmentFoldNodeHashOneRoundCounter.Inc(int64(s.oneRoundHashes))
 	commitmentFoldNodeHashMultiRoundCounter.Inc(int64(s.multiRoundHashes))
 	commitmentFoldStatsPool.Put(s)
+}
+
+func observeCommitmentPipelineSubmit(inflight int64) {
+	commitmentPipelineJobsCounter.Inc(1)
+	commitmentPipelineInflightGauge.Update(inflight)
+	for {
+		previous := commitmentPipelineMaxInflight.Load()
+		if inflight <= previous || commitmentPipelineMaxInflight.CompareAndSwap(previous, inflight) {
+			break
+		}
+	}
+	commitmentPipelineMaxInflightGauge.Update(commitmentPipelineMaxInflight.Load())
 }

@@ -16,17 +16,15 @@ import (
 )
 
 // Async-commit pipeline depth D bounds how many blocks the exec foreground may
-// run ahead of the serial commit worker. The buffered commit queue holds D-2
-// jobs (worker processing 1 + queue D-2 + foreground's just-begun layer 1 = D
-// in-flight buffer layers, matching SetMaxInflight(D)); the send blocking on a
-// full queue is the backpressure that keeps BeginBlock from exceeding maxInflight.
+// run ahead of the ordered commitment scheduler. The handoff channel is
+// deliberately unbuffered: the scheduler owns up to D-1 submitted jobs plus the
+// foreground's just-begun layer, exactly matching SetMaxInflight(D). Keeping one
+// source of queueing prevents accepted jobs plus channel capacity from exceeding
+// the blockbuffer bound.
 //
-//   - D == 2  → cap 0 (unbuffered rendezvous), maxInflight 2. InsertSession
-//     still spans contiguous local sync chunks, but this never widens the
-//     in-flight cap.
-//   - D  > 2  → additionally buffers commit jobs and keeps that worker pipeline
-//     filled across chunks (see pipelinedCommit / InsertSession). Enabled
-//     ops-only, never wire-observable.
+// D == 2 retains one submitted fold plus one executing block. D > 2 lets
+// first-nibble lanes advance independently into later blocks. Enabled ops-only,
+// never wire-observable.
 //
 // The depth is resolved ONCE at NewBlockChain (so the commit worker, started in
 // the constructor, ranges a correctly-sized channel and is never orphaned by a
@@ -138,18 +136,160 @@ var commitFoldHook func(blockNum uint64) error
 // clear. TEST-ONLY — production never calls this.
 func SetCommitFoldHookForTest(fn func(blockNum uint64) error) { commitFoldHook = fn }
 
-// startCommitWorker spawns the serial commit goroutine. Like the flush worker
+// startCommitWorker spawns the ordered commit scheduler. Like the flush worker
 // it is started once construction can no longer fail. It is idle (blocked on
 // the channel) until async commit is enabled and a job is enqueued, so it costs
-// nothing when async commit is off.
+// nothing when async commit is off. The first job uses the established serial
+// fold for branch-state validation/repair; later jobs may overlap by root lane.
 func (bc *BlockChain) startCommitWorker() {
 	bc.commitWorkerWg.Add(1)
 	go func() {
 		defer bc.commitWorkerWg.Done()
-		for job := range bc.commitQueue {
+		var pipeline *state.OrderedCommitmentPipeline
+		pipelineEpoch := bc.commitPipelineEpoch.Load()
+		defer func() {
+			if pipeline != nil {
+				pipeline.Close()
+			}
+		}()
+		initializePipeline := func() error {
+			next, err := state.NewOrderedCommitmentPipeline(bc.buffer)
+			if err != nil {
+				return err
+			}
+			pipeline = next
+			return nil
+		}
+		bootstrapPipeline := func(job *commitJob) {
 			bc.runCommitJob(job)
+			if bc.commitErr.Load() != nil {
+				return
+			}
+			if err := initializePipeline(); err != nil {
+				log.Warn("Ordered commitment pipeline unavailable; using serial folds", "err", err)
+			}
+		}
+
+		queue := bc.commitQueue
+		pending := make([]pendingOrderedCommitJob, 0, bc.commitDepth)
+		pipelineDisabled := !bc.orderedCommitPipeline
+		var submissionErr error
+		for queue != nil || len(pending) > 0 {
+			// Bootstrap and validate the persisted branch state through the ordinary
+			// fold once. That retains the established snapshot-repair/rebuild path;
+			// every later block can use the persistent cross-block lane owners.
+			if pipeline == nil && !pipelineDisabled {
+				if queue == nil {
+					break
+				}
+				job, ok := <-queue
+				if !ok {
+					queue = nil
+					continue
+				}
+				pipelineEpoch = bc.commitPipelineEpoch.Load()
+				bootstrapPipeline(job)
+				if bc.commitErr.Load() != nil {
+					pipelineDisabled = true
+					continue
+				}
+				if pipeline == nil {
+					// Safe fallback: ordinary serialized folds retain the exact previous
+					// behavior. This is operational acceleration, never correctness.
+					pipelineDisabled = true
+				}
+				continue
+			}
+			if pipelineDisabled {
+				if queue == nil {
+					break
+				}
+				job, ok := <-queue
+				if !ok {
+					queue = nil
+					continue
+				}
+				bc.runCommitJob(job)
+				continue
+			}
+
+			var front <-chan state.OrderedCommitmentResult
+			if len(pending) > 0 {
+				front = pending[0].result
+			}
+			receiveQueue := queue
+			if len(pending) >= bc.commitDepth-1 {
+				receiveQueue = nil
+			}
+			select {
+			case job, ok := <-receiveQueue:
+				if !ok {
+					queue = nil
+					continue
+				}
+				currentEpoch := bc.commitPipelineEpoch.Load()
+				if currentEpoch != pipelineEpoch {
+					// A canonical rewind is allowed only after WaitForCommitSettled,
+					// therefore no result can still depend on the old lane roots here.
+					pipeline.Close()
+					pipeline = nil
+					pipelineEpoch = currentEpoch
+					if err := initializePipeline(); err != nil {
+						// A normal fork rewind retains an exact LCA root/branch pair and
+						// initializes directly. If an offline reset removed branch state,
+						// run this first new-branch block through the established repair
+						// path, then seed lanes from its verified result.
+						log.Warn("Ordered commitment pipeline reseed requires serial repair", "err", err)
+						bootstrapPipeline(job)
+						if bc.commitErr.Load() != nil || pipeline == nil {
+							pipelineDisabled = true
+						}
+						continue
+					}
+				}
+				var result <-chan state.OrderedCommitmentResult
+				if submissionErr != nil {
+					result = completedOrderedCommitmentResult(submissionErr)
+				} else if commitFoldHook != nil {
+					if err := commitFoldHook(job.block.Number()); err != nil {
+						submissionErr = err
+						result = completedOrderedCommitmentResult(submissionErr)
+					}
+				}
+				if result == nil {
+					result = job.captured.SubmitOrdered(pipeline, &job.index)
+				}
+				pending = append(pending, pendingOrderedCommitJob{job: job, result: result})
+			case result := <-front:
+				entry := pending[0]
+				copy(pending, pending[1:])
+				pending[len(pending)-1] = pendingOrderedCommitJob{}
+				pending = pending[:len(pending)-1]
+				bc.finishCommitJob(entry.job, result.Root, result.Err)
+			}
 		}
 	}()
+}
+
+type pendingOrderedCommitJob struct {
+	job    *commitJob
+	result <-chan state.OrderedCommitmentResult
+}
+
+func completedOrderedCommitmentResult(err error) <-chan state.OrderedCommitmentResult {
+	done := make(chan state.OrderedCommitmentResult, 1)
+	done <- state.OrderedCommitmentResult{Err: err}
+	close(done)
+	return done
+}
+
+// invalidateOrderedCommitPipeline marks a canonical-state discontinuity. The
+// caller first drains pending commits, then mutates/rewinds the blockbuffer. The
+// scheduler revalidates and re-seeds its persistent lane roots before accepting
+// the next job; ordinary forward flushes do not need invalidation because they
+// preserve the same logical commitment state.
+func (bc *BlockChain) invalidateOrderedCommitPipeline() {
+	bc.commitPipelineEpoch.Add(1)
 }
 
 // commitAsync is the async-commit foreground half, invoked from
@@ -157,9 +297,10 @@ func (bc *BlockChain) startCommitWorker() {
 // TAPOS/tx-count) has run. It writes the latest-domain rows into the in-memory
 // scope and captures the commitment-fold inputs WITHOUT folding, snapshots the
 // foreground-mutable state the publish tail will consume, hands the job to the
-// serial commit worker, and runs the (scope-owned, solidified-lagging) latest +
-// buffer-layer flushes itself. Returns once the job is enqueued; the worker
-// produces the root, advances the head, fires hooks, and commits the layer.
+// ordered commit scheduler, and runs the (scope-owned, solidified-lagging)
+// latest + buffer-layer flushes itself. Returns once the scheduler accepts the
+// job; it produces roots concurrently by lane but advances heads, fires hooks,
+// and commits layers strictly in block order.
 //
 // Callers hold chainmu.
 func (bc *BlockChain) commitAsync(
@@ -240,9 +381,10 @@ func (bc *BlockChain) commitAsync(
 	// must land in THIS block's layer rather than whatever layer is newest then.
 	plan.pipeline.SetWriter(&job.index)
 
-	// 5. Hand the fold + publish tail to the serial commit worker (rendezvous;
-	//    bounds the pipeline to depth 2). After this returns the foreground may
-	//    begin the next block's layer.
+	// 5. Hand the fold + publish tail to the ordered commit scheduler. The
+	//    unbuffered handoff has no hidden capacity; the scheduler owns at most
+	//    depth-1 jobs. After this returns the foreground may begin the next
+	//    block's layer.
 	plan.txInfoBatchHandedOff = true
 	capturedHandedOff = true
 	bc.enqueueCommit(job)
@@ -304,8 +446,9 @@ func (bc *BlockChain) commitAsync(
 }
 
 // enqueueCommit posts the pending-commit barrier and hands the job to the
-// worker. The send blocks on the unbuffered queue until the worker receives it
-// (depth-2 backpressure). Callers hold chainmu.
+// scheduler. The send blocks on the unbuffered queue until the scheduler owns
+// the job; its depth-1 pending bound provides backpressure. Callers hold
+// chainmu.
 func (bc *BlockChain) enqueueCommit(job *commitJob) {
 	bc.commitPending.post()
 	if bc.commitClosed || bc.commitQueue == nil {
@@ -327,7 +470,7 @@ func (bc *BlockChain) enqueueCommit(job *commitJob) {
 }
 
 // runCommitJob runs the deferred fold + ordered publish tail for one block on
-// the serial commit worker. It mirrors the synchronous tail of
+// the serial fallback path. It mirrors the synchronous tail of
 // applyBlockWithPlan, writing through a buffer LayerView bound to the block's
 // in-flight layer and consuming the captured snapshots. The first error is
 // recorded fail-fast in commitErr (surfaced by the next applyBlockWithPlan and
@@ -335,13 +478,8 @@ func (bc *BlockChain) enqueueCommit(job *commitJob) {
 //
 // KEEP IN SYNC with applyBlockWithPlan's synchronous commit tail.
 func (bc *BlockChain) runCommitJob(job *commitJob) {
-	defer bc.commitPending.done()
-	defer job.txInfoBatchPool.release(job.txInfoBatch)
-	defer job.captured.Release()
 	if errPtr := bc.commitErr.Load(); errPtr != nil {
-		// A prior commit already failed; do not apply further state. Drop the
-		// layer so it is not left dangling.
-		bc.buffer.DiscardInflight(job.layer)
+		bc.discardCommitJob(job)
 		return
 	}
 
@@ -352,17 +490,37 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 	// production (zero cost).
 	if commitFoldHook != nil {
 		if err := commitFoldHook(job.block.Number()); err != nil {
-			bc.failCommit(job, fmt.Errorf("async commit fold block %d: %w", job.block.Number(), err))
+			bc.finishCommitJob(job, tcommon.Hash{}, err)
 			return
 		}
 	}
 
 	// Fold (the ~55% commit cost), producing this block's internal state root.
 	root, err := job.captured.Fold(index)
-	if err != nil {
-		bc.failCommit(job, fmt.Errorf("async commit fold block %d: %w", job.block.Number(), err))
+	bc.finishCommitJob(job, root, err)
+}
+
+func (bc *BlockChain) discardCommitJob(job *commitJob) {
+	bc.commitPending.done()
+	job.txInfoBatchPool.release(job.txInfoBatch)
+	job.captured.Release()
+	bc.buffer.DiscardInflight(job.layer)
+}
+
+func (bc *BlockChain) finishCommitJob(job *commitJob, root tcommon.Hash, foldErr error) {
+	defer bc.commitPending.done()
+	defer job.txInfoBatchPool.release(job.txInfoBatch)
+	defer job.captured.Release()
+	if errPtr := bc.commitErr.Load(); errPtr != nil {
+		bc.buffer.DiscardInflight(job.layer)
 		return
 	}
+	if foldErr != nil {
+		bc.failCommit(job, fmt.Errorf("async commit fold block %d: %w", job.block.Number(), foldErr))
+		return
+	}
+
+	index := &job.index
 	// Publish StageCommitment only after the fold succeeds.
 	if err := job.plan.finishCommitState(); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit finish state block %d: %w", job.block.Number(), err))

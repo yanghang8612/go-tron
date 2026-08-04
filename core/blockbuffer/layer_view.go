@@ -110,11 +110,18 @@ type LayerView struct {
 
 type commitmentParentView struct {
 	b    *Buffer
+	l    *layer
 	base pointread.View
 }
 
 type commitmentParentReadSession struct {
-	layers       []*layer
+	layers []*layer
+	// inflight contains only layers older than the LayerView bound to this
+	// session. Ordered commitment lanes may publish a finished nibble into an
+	// older block while other nibbles of that block are still folding; the same
+	// nibble in the next block must see those writes without seeing its own or a
+	// newer block's layer.
+	inflight     []*layer
 	cache        *baseReadCache
 	cacheVersion uint64
 	snapshot     pointread.Snapshot
@@ -221,7 +228,7 @@ func (v *LayerView) NewCommitmentParentView() (pointread.CommitmentParentView, e
 	if err != nil {
 		return nil, err
 	}
-	return &commitmentParentView{b: v.b, base: base}, nil
+	return &commitmentParentView{b: v.b, l: v.l, base: base}, nil
 }
 
 func (v *commitmentParentView) GetKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error) {
@@ -246,6 +253,11 @@ func (v *commitmentParentView) GetKeyParts(first, second []byte, fn func(value [
 func (v *commitmentParentView) get(key []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	view := v.b.loadReadView()
 	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(olderInflightLayers(view, v.l), key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, fn(value, true)
+	}
 	if value, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
 		return false, nil
 	} else if found {
@@ -288,11 +300,13 @@ func (v *commitmentParentView) Close() error {
 	err := v.base.Close()
 	v.base = nil
 	v.b = nil
+	v.l = nil
 	return err
 }
 
-// NewCommitmentParentReadSession captures the committed overlay topology and a
-// durable Pebble snapshot as one parent-state cut. Holding b.mu.RLock across
+// NewCommitmentParentReadSession captures the older in-flight layers, committed
+// overlay topology, and a durable Pebble snapshot as one parent-state cut.
+// Holding b.mu.RLock across
 // both captures is sufficient: FlushUpTo cannot drop a layer until it acquires
 // b.mu.Lock. If its durable batch lands before the snapshot, the retained layer
 // merely overlays the same final values/tombstones; if it lands afterwards, the
@@ -301,8 +315,9 @@ func (v *commitmentParentView) Close() error {
 // flush is doing disk I/O instead of serializing the two independent paths.
 //
 // The returned session deliberately excludes this LayerView's bound in-flight
-// layer. Unsupported durable stores return (nil, nil), and rawdb falls back to
-// the ordinary point-read view.
+// layer and all newer layers. Same-nibble lane ordering makes live writes in
+// retained older layers the exact parent version. Unsupported durable stores
+// return (nil, nil), and rawdb falls back to the ordinary point-read view.
 func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.CommitmentParentSession, error) {
 	if readers <= 0 || v == nil || v.b == nil {
 		return nil, nil
@@ -323,9 +338,11 @@ func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.Commi
 	// pointers alive after the old view is replaced.
 	topology := b.readView.Load()
 	var layers []*layer
+	var inflight []*layer
 	cache := b.baseReadCache
 	if topology != nil {
 		layers = topology.layers
+		inflight = olderInflightLayers(topology, v.l)
 		cache = topology.baseReadCache
 	} else if len(b.layers) > 0 {
 		// Preserve Buffer's supported zero-value fallback. Production buffers are
@@ -349,6 +366,7 @@ func (v *LayerView) NewCommitmentParentReadSession(readers int) (pointread.Commi
 	}
 	session := &commitmentParentReadSession{
 		layers:       layers,
+		inflight:     inflight,
 		cache:        cache,
 		cacheVersion: cacheVersion,
 		snapshot:     snapshot,
@@ -383,6 +401,13 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 	trunk := depth >= 0 && depth <= baseReadCacheTrunkDepth
 	depthBucket := commitmentParentDeepDepthBucket(depth)
 	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(s.inflight, key, keyHash); tomb {
+		ctx.overlayResolved++
+		return false, nil
+	} else if found {
+		ctx.overlayResolved++
+		return true, fn(value, true)
+	}
 	if value, found, tomb := lookupLayersNewest(s.layers, key, keyHash); tomb {
 		ctx.overlayResolved++
 		return false, nil
@@ -456,6 +481,7 @@ func (s *commitmentParentReadSession) Close() error {
 	}
 	s.snapshot = nil
 	s.layers = nil
+	s.inflight = nil
 	s.cache = nil
 	var overlayResolved, cacheResolved, durableReads, durableHits, trunkCached, trunkDurable, windowCached uint64
 	var depthCached, depthDurable [4]uint64
@@ -992,12 +1018,12 @@ func (v *LayerView) ViewNoCopyCachedKeyParts(first, second []byte, fn func(value
 }
 
 // ViewCommitmentParentKeyParts is the async commitment fold's parent-state
-// reader. It deliberately skips this view's own in-flight layer and resolves
-// only committed layers plus the durable base. The committing block's layer
-// contains its flat-state writes but no pre-block commitment branches; branch
-// mutations produced by the fold are private to its buffered sibling stores
-// until their disjoint subtries finish. Probing the own layer for every deep
-// branch is therefore a guaranteed locked map miss on the production path.
+// reader. It deliberately skips this view's own and newer in-flight layers and
+// resolves older in-flight commitment writes, committed layers, then the durable
+// base. The committing block's layer contains its flat-state writes but no
+// pre-block commitment branches. Same-nibble ordered folds may publish the exact
+// parent branch into an older in-flight layer before that whole block is ready
+// to promote; all other in-flight layers remain invisible.
 //
 // This narrow method is discovered structurally by rawdb and must not replace
 // ordinary LayerView reads: callers that need read-your-own-writes continue to
@@ -1023,6 +1049,11 @@ func (v *LayerView) viewCommitmentParentKey(key []byte, fn func(value []byte, st
 	b := v.b
 	view := b.loadReadView()
 	keyHash := layerBloomHashBytes(key)
+	if value, found, tomb := lookupLayersNewest(olderInflightLayers(view, v.l), key, keyHash); tomb {
+		return false, nil
+	} else if found {
+		return true, fn(value, true)
+	}
 	if value, found, tomb := lookupLayersNewest(view.layers, key, keyHash); tomb {
 		return false, nil
 	} else if found {
@@ -1042,6 +1073,18 @@ func (v *LayerView) viewCommitmentParentKey(key []byte, fn func(value []byte, st
 		}
 	}
 	return viewBaseIntoCache(b.base, cache, key, cacheEpoch, fn)
+}
+
+func olderInflightLayers(view *bufferReadView, bound *layer) []*layer {
+	if view == nil || bound == nil {
+		return nil
+	}
+	for i, candidate := range view.inflight {
+		if candidate == bound {
+			return view.inflight[:i]
+		}
+	}
+	return nil
 }
 
 func (v *LayerView) viewNoCopyCachedKey(key []byte, fn func(value []byte, stable bool) error) (bool, error) {

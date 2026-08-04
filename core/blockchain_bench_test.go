@@ -93,11 +93,19 @@ func buildTransferChain(numAccounts, numBlocks, txPerBlock int) (*params.Genesis
 //
 //	go test ./core -run '^$' -bench BenchmarkInsertBlocksTransfers -benchtime=4x -cpuprofile /tmp/insert.prof
 func BenchmarkInsertBlocksTransfers(b *testing.B) {
-	benchInsertBlocks(b, statedomains.ParallelFoldMinOps)
+	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, false, false)
 }
-func BenchmarkInsertBlocksTransfersSeqFold(b *testing.B) { benchInsertBlocks(b, 1<<30) }
+func BenchmarkInsertBlocksTransfersSeqFold(b *testing.B) { benchInsertBlocks(b, 1<<30, false, false) }
+func BenchmarkInsertBlocksTransfersAsyncSerial(b *testing.B) {
+	b.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
+	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, true, false)
+}
+func BenchmarkInsertBlocksTransfersAsyncOrdered(b *testing.B) {
+	b.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
+	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, true, true)
+}
 
-func benchInsertBlocks(b *testing.B, foldMinOps int) {
+func benchInsertBlocks(b *testing.B, foldMinOps int, async, ordered bool) {
 	prev := statedomains.ParallelFoldMinOps
 	statedomains.ParallelFoldMinOps = foldMinOps
 	defer func() { statedomains.ParallelFoldMinOps = prev }()
@@ -117,9 +125,19 @@ func benchInsertBlocks(b *testing.B, foldMinOps int) {
 		if err != nil {
 			b.Fatal(err)
 		}
+		bc.orderedCommitPipeline = ordered
+		bc.SetAsyncCommit(async)
 		b.StartTimer()
 		if err := bc.InsertBlocks(blocks); err != nil {
 			b.Fatalf("InsertBlocks: %v", err)
+		}
+		bc.WaitForCommitSettled()
+		if errPtr := bc.commitErr.Load(); errPtr != nil {
+			b.Fatalf("commit: %v", *errPtr)
+		}
+		b.StopTimer()
+		if err := bc.Close(); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
