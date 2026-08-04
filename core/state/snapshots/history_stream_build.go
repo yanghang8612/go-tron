@@ -944,27 +944,6 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	if recordCount > math.MaxUint32 {
 		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v4 count %d exceeds uint32 record index", recordCount)
 	}
-	exactTmp, exactTmpName, err := createStateDomainChangeBinaryTempFile(dir, accessorRef.Path+".exact")
-	if err != nil {
-		return SegmentRef{}, etl.Stats{}, err
-	}
-	defer func() { _ = exactTmp.Close(); _ = os.Remove(exactTmpName) }()
-	exactWriter := stateDomainChangeBinaryAccessorV3ExactETLWriter{
-		file:     acquireStateDomainChangeHistoryWriter(exactTmp),
-		expected: recordCount,
-	}
-	defer exactWriter.Release()
-	exactStats, err := c.exact.Load(&exactWriter)
-	if err != nil {
-		return SegmentRef{}, etl.Stats{}, err
-	}
-	if exactWriter.count != recordCount {
-		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v4 exact entries %d, want %d", exactWriter.count, recordCount)
-	}
-	if err := exactWriter.Finish(); err != nil {
-		return SegmentRef{}, etl.Stats{}, err
-	}
-
 	groupPayloadTmp, groupPayloadName, err := createStateDomainChangeBinaryTempFile(dir, accessorRef.Path+".groups")
 	if err != nil {
 		return SegmentRef{}, etl.Stats{}, err
@@ -1005,10 +984,19 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	if err := writeStateDomainChangeBinaryTxRangeCount(accessorTmp, groupWriter.groups); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
-	if _, err := exactTmp.Seek(0, io.SeekStart); err != nil {
+	exactWriter := stateDomainChangeBinaryAccessorV3ExactETLWriter{
+		file:     acquireStateDomainChangeHistoryWriter(accessorTmp),
+		expected: recordCount,
+	}
+	defer exactWriter.Release()
+	exactStats, err := c.exact.Load(&exactWriter)
+	if err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
-	if _, err := io.Copy(accessorTmp, exactTmp); err != nil {
+	if exactWriter.count != recordCount {
+		return SegmentRef{}, etl.Stats{}, fmt.Errorf("snapshots: state-domain-change accessor v4 exact entries %d, want %d", exactWriter.count, recordCount)
+	}
+	if err := exactWriter.Finish(); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	payloadStart := uint64(stateDomainChangeBinaryHeaderSize+stateDomainChangeBinaryAccessorV3HeaderExtra) + recordCount*stateDomainChangeBinaryAccessorV3ExactEntrySize + groupWriter.groups*8
