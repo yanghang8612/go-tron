@@ -485,11 +485,7 @@ func compactStateDomainChangeBinaryHistoryRun(dir string, cfg DomainCfg, selecti
 	if err != nil {
 		return nil, err
 	}
-	segRef, idxRef, err := writeCompactedStateDomainChangeBinarySegmentAndIndex(dir, cfg, selection, sources)
-	if err != nil {
-		return nil, err
-	}
-	accessorRef, err := writeCompactedStateDomainChangeBinaryAccessor(dir, segRef, sources)
+	segRef, idxRef, accessorRef, err := writeCompactedStateDomainChangeBinaryFiles(dir, cfg, selection, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -608,7 +604,7 @@ func publishStateDomainChangeBinaryFinal(dir string, ref SegmentRef, src string,
 	return ref, nil
 }
 
-func writeCompactedStateDomainChangeBinarySegmentAndIndex(dir string, cfg DomainCfg, selection historyCompactionSelection, sources []stateDomainChangeBinaryCompactionSource) (segRef SegmentRef, idxRef SegmentRef, err error) {
+func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selection historyCompactionSelection, sources []stateDomainChangeBinaryCompactionSource) (segRef SegmentRef, idxRef SegmentRef, accessorRef SegmentRef, err error) {
 	ref := SegmentRef{
 		Dataset:          SegmentDatasetStateDomainChange,
 		Kind:             SegmentHistory,
@@ -619,11 +615,19 @@ func writeCompactedStateDomainChangeBinarySegmentAndIndex(dir string, cfg Domain
 	}
 	totalRecords, err := stateDomainChangeBinaryCompactionRecordCount(sources)
 	if err != nil {
-		return SegmentRef{}, SegmentRef{}, err
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
+	if totalRecords > math.MaxUint32 {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted state-domain-change accessor count %d exceeds uint32 record index", totalRecords)
+	}
+	collectors, err := newStateDomainChangeBinaryAccessorV4Collectors(etl.Options{TempDir: filepath.Join(dir, "etl")})
+	if err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	defer collectors.Close()
 	tmp, tmpName, err := createStateDomainChangeBinaryTempFile(dir, ref.Path)
 	if err != nil {
-		return SegmentRef{}, SegmentRef{}, err
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	defer os.Remove(tmpName)
 	defer func() {
@@ -631,32 +635,32 @@ func writeCompactedStateDomainChangeBinarySegmentAndIndex(dir string, cfg Domain
 		if err == nil {
 			return
 		}
-		for _, output := range []SegmentRef{segRef, idxRef} {
+		for _, output := range []SegmentRef{segRef, idxRef, accessorRef} {
 			if output.Path != "" {
 				_ = os.Remove(filepath.Join(dir, output.Path))
 			}
 		}
 	}()
 	if err := writeStateDomainChangeBinaryHeaderTo(tmp, stateDomainChangeBinarySegmentMagic, ref.FromTxNum, ref.ToTxNum, totalRecords); err != nil {
-		return SegmentRef{}, SegmentRef{}, err
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	txRangeCount, err := writeStateDomainChangeBinaryCompactionTxRanges(dir, tmp, sources)
 	if err != nil {
-		return SegmentRef{}, SegmentRef{}, err
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if txRangeCount > (math.MaxUint64-uint64(stateDomainChangeBinaryHeaderSize)-8)/stateDomainChangeBinaryTxRangeSize {
-		return SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted state-domain-change tx range count %d overflows segment size", txRangeCount)
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted state-domain-change tx range count %d overflows segment size", txRangeCount)
 	}
 	recordOffset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + txRangeCount*stateDomainChangeBinaryTxRangeSize
 
 	indexTmp, indexTmpName, err := createStateDomainChangeBinaryTempFile(dir, stateDomainChangeBinaryIndexPath(ref.Path))
 	if err != nil {
-		return SegmentRef{}, SegmentRef{}, err
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	defer os.Remove(indexTmpName)
 	defer indexTmp.Close()
 	if err := writeStateDomainChangeBinaryHeaderTo(indexTmp, stateDomainChangeBinaryIndexMagic, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
-		return SegmentRef{}, SegmentRef{}, err
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	recordWriter := stateDomainChangeHistoryRecordETLWriter{
 		segment:    tmp,
@@ -666,23 +670,23 @@ func writeCompactedStateDomainChangeBinarySegmentAndIndex(dir string, cfg Domain
 		segmentOff: recordOffset,
 	}
 	for i := range sources {
-		if err := copyStateDomainChangeBinarySegmentPayload(dir, &recordWriter, sources[i]); err != nil {
-			return SegmentRef{}, SegmentRef{}, err
+		if err := copyStateDomainChangeBinarySegmentPayload(dir, &recordWriter, collectors, sources[i]); err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 		}
 	}
 	if err := recordWriter.Finish(); err != nil {
-		return SegmentRef{}, SegmentRef{}, err
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if err := writeStateDomainChangeBinaryIndexCount(indexTmp, recordWriter.indexWritten); err != nil {
-		return SegmentRef{}, SegmentRef{}, err
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	segRef, err = finalizeCompactedHistoryFile(dir, ref, tmp, tmpName, true)
 	if err != nil {
-		return SegmentRef{}, SegmentRef{}, err
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if CompressHistorySegments {
 		if err := validateCompressedHistorySegmentReadable(dir, segRef); err != nil {
-			return segRef, SegmentRef{}, fmt.Errorf("snapshots: compacted compressed segment self-check failed: %w", err)
+			return segRef, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted compressed segment self-check failed: %w", err)
 		}
 	}
 	idxRef = SegmentRef{
@@ -695,13 +699,9 @@ func writeCompactedStateDomainChangeBinarySegmentAndIndex(dir string, cfg Domain
 	}
 	idxRef, err = finalizeStateDomainChangeHistoryFile(dir, idxRef, indexTmp, indexTmpName, false, false)
 	if err != nil {
-		return segRef, SegmentRef{}, err
+		return segRef, SegmentRef{}, SegmentRef{}, err
 	}
-	return segRef, idxRef, nil
-}
-
-func writeCompactedStateDomainChangeBinaryAccessor(dir string, segRef SegmentRef, sources []stateDomainChangeBinaryCompactionSource) (SegmentRef, error) {
-	ref := SegmentRef{
+	accessorRef = SegmentRef{
 		Dataset:          SegmentDatasetStateDomainChange,
 		Kind:             SegmentAccessor,
 		FromTxNum:        segRef.FromTxNum,
@@ -709,13 +709,11 @@ func writeCompactedStateDomainChangeBinaryAccessor(dir string, segRef SegmentRef
 		AggregationSteps: segRef.AggregationSteps,
 		Path:             stateDomainChangeBinaryAccessorPath(segRef.Path),
 	}
-	// Rebuild against the compacted history payload instead of remapping the
-	// source accessors. v4 has two independent lookup orders (hash for point
-	// reads and owner/domain plus logical key for prefix reads), so a bounded
-	// streamed rebuild is both simpler and format-independent for v1/v2 inputs.
-	_ = sources
-	accessor, _, err := buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir, segRef, ref, etl.Options{TempDir: filepath.Join(dir, "etl")})
-	return accessor, err
+	accessorRef, _, err = collectors.Build(dir, accessorRef, totalRecords)
+	if err != nil {
+		return segRef, idxRef, SegmentRef{}, err
+	}
+	return segRef, idxRef, accessorRef, nil
 }
 
 func stateDomainChangeBinaryCompactionRecordCount(sources []stateDomainChangeBinaryCompactionSource) (uint64, error) {
@@ -854,9 +852,12 @@ func iterateStateDomainChangeBinaryCompactionTxRanges(dir string, sources []stat
 	return nil
 }
 
-func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChangeHistoryRecordETLWriter, source stateDomainChangeBinaryCompactionSource) error {
+func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChangeHistoryRecordETLWriter, collectors *stateDomainChangeBinaryAccessorV4Collectors, source stateDomainChangeBinaryCompactionSource) error {
 	if dst == nil {
 		return errors.New("snapshots: nil compacted state-domain-change record writer")
+	}
+	if collectors == nil {
+		return errors.New("snapshots: nil compacted state-domain-change accessor collectors")
 	}
 	if source.segmentSize < source.recordOffset {
 		return fmt.Errorf("snapshots: state-domain-change binary segment %q size %d below record offset %d", source.history.Path, source.segmentSize, source.recordOffset)
@@ -888,6 +889,9 @@ func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChang
 	for recordIndex := uint64(0); recordIndex < header.count; recordIndex++ {
 		change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(reader, offset, logicalSize, recordIndex)
 		if err != nil {
+			return err
+		}
+		if err := collectors.Collect(change, dst.segmentOff, dst.count); err != nil {
 			return err
 		}
 		if err := dst.WriteChange(change); err != nil {

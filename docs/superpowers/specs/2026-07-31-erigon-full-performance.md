@@ -3465,6 +3465,37 @@ segments (4,000 txNums total) improved from a five-run mean of 875.22 ms to
 outside the timed region, while merge, validation, accessor construction, and
 manifest integration remained inside it.
 
+#### P5.10: Streamed accessor collection during history merge
+
+P5.9 left one avoidable full record pass: after validating the compressed
+history output, compaction reopened it and decoded every record again to feed
+the v4 exact-hash and owner/domain-prefix accessor sort orders. Erigon keeps
+post-compression accessor construction as a distinct correctness phase; the
+go-tron format still retains that rebuild path for cold collation, repair, and
+cross-checking. During compaction, however, every source record has already
+been decoded and its final logical output offset is known before the v5 frame
+is written, so rereading the output adds no information.
+
+Accessor v4 collection is now a reusable pair of bounded ETL collectors.
+Normal cold construction can populate it by scanning the finished history
+segment exactly as before. The compactor instead sends each decoded change,
+logical offset, and record index to those same collectors immediately before
+the shared ordered record writer emits the frame and txNum index. Once the
+content-addressed segment path is known, the collectors produce the unchanged
+v4 companion layout. The compressed-read self-check remains independent and
+mandatory, so pruning still cannot trust a segment which the production reader
+cannot decode.
+
+A regression rebuilds the accessor from the final compressed output through
+the old scan path and requires it to be byte-identical to the streamed result;
+twenty consecutive runs passed. This reduces complete merged-output scans from
+two to one without changing source verification, ETL ordering, manifest
+publication, or the compressed history format. The 16,000-record warm-cache
+microbenchmark could not resolve a repeatable wall-clock difference between
+P5.9 and P5.10, so no timing gain is claimed from that small local sample; the
+admitted result is the eliminated full decode pass plus byte-equivalent output,
+subject to the fresh snap-mode large-file production gate.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

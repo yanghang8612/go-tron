@@ -393,5 +393,8 @@
 - [x] Stream merged tx-range rows once and construct the txNum index while
   rewriting history records, avoiding a full decompression pass over every
   newly compacted segment.
+- [x] Feed the unchanged v4 accessor ETL orders directly from the compaction
+  record stream and cross-check byte identity against a post-compression
+  rebuild, leaving only the mandatory compressed-read self-check.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

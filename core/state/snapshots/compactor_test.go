@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -93,6 +95,47 @@ func TestCompactHistoryDomainMergesContinuousBinarySegments(t *testing.T) {
 	assertFileExists(t, filepath.Join(dir, indexRef.Path))
 	for _, path := range oldPaths {
 		assertFileMissing(t, filepath.Join(dir, path))
+	}
+}
+
+func TestCompactedAccessorMatchesPostCompressionRebuild(t *testing.T) {
+	dir := t.TempDir()
+	refs := append([]SegmentRef{}, writeCompactionStateDomainChangeSegment(t, dir, 1, 2,
+		binaryStateDomainChange(1, 1, 1, "alpha"),
+		binaryStateDomainChange(2, 2, 1, "beta"))...)
+	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 3, 4,
+		binaryStateDomainChange(3, 3, 1, "gamma"),
+		binaryStateDomainChange(4, 4, 1, "delta"))...)
+	if err := PublishManifest(dir, NewManifest(1, 4, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
+	if err != nil {
+		t.Fatalf("compact history domain: %v", err)
+	}
+	historyRef := compactionRefByKind(t, result, SegmentHistory)
+	streamedRef := compactionRefByKind(t, result, SegmentAccessor)
+	rebuiltRef, _, err := buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir, historyRef, SegmentRef{
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentAccessor,
+		FromTxNum:        historyRef.FromTxNum,
+		ToTxNum:          historyRef.ToTxNum,
+		AggregationSteps: historyRef.AggregationSteps,
+		Path:             "rebuilt-accessor.kv",
+	}, etl.Options{TempDir: filepath.Join(dir, "rebuilt-etl")})
+	if err != nil {
+		t.Fatalf("rebuild accessor from compacted segment: %v", err)
+	}
+	streamed, err := os.ReadFile(filepath.Join(dir, streamedRef.Path))
+	if err != nil {
+		t.Fatalf("read streamed accessor: %v", err)
+	}
+	rebuilt, err := os.ReadFile(filepath.Join(dir, rebuiltRef.Path))
+	if err != nil {
+		t.Fatalf("read rebuilt accessor: %v", err)
+	}
+	if !bytes.Equal(streamed, rebuilt) {
+		t.Fatalf("streamed accessor differs from post-compression rebuild: streamed=%d rebuilt=%d", len(streamed), len(rebuilt))
 	}
 }
 
