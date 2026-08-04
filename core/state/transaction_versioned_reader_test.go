@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -116,5 +117,49 @@ func TestTransactionVersionedReaderHydratesFullAccountAndDeletion(t *testing.T) 
 	}, 3)
 	if deleted.AccountExists(addr) || deleted.GetBalance(addr) != 0 {
 		t.Fatal("later versioned deletion did not hide the full account")
+	}
+}
+
+func TestTransactionVersionedReaderOverlaysStorage(t *testing.T) {
+	source := newTestStateDB(t)
+	contract := testAddr(43)
+	slot := tcommon.BytesToHash([]byte{1})
+	durable := tcommon.BytesToHash([]byte{2})
+	shared := tcommon.BytesToHash([]byte{3})
+	local := tcommon.BytesToHash([]byte{4})
+	source.CreateAccount(contract, corepb.AccountType_Contract)
+	source.SetState(contract, slot, durable)
+	if _, err := source.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	worker, err := source.CopyBlockExecutionBase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.SetTransactionVersionedValueReader(testTransactionVersionedReader{
+		{Kind: TransactionAccessStorage, Address: contract, StorageKey: slot}: {
+			{txIndex: 2, value: TransactionWriteValue{Exists: true, Value: shared.Bytes()}},
+		},
+	}, 3)
+	if got, exists := worker.GetStateWithExist(contract, slot); !exists || got != shared {
+		t.Fatalf("versioned storage = %x exists=%v, want %x", got, exists, shared)
+	}
+	worker.SetState(contract, slot, local)
+	if got, exists := worker.GetStateWithExist(contract, slot); !exists || got != local {
+		t.Fatalf("task-local storage = %x exists=%v, want %x", got, exists, local)
+	}
+
+	deleted, err := source.CopyBlockExecutionBase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted.SetTransactionVersionedValueReader(testTransactionVersionedReader{
+		{Kind: TransactionAccessStorage, Address: contract, StorageKey: slot}: {
+			{txIndex: 2, value: TransactionWriteValue{}},
+		},
+	}, 3)
+	if got, exists := deleted.GetStateWithExist(contract, slot); exists || got != (tcommon.Hash{}) {
+		t.Fatalf("versioned storage tombstone = %x exists=%v", got, exists)
 	}
 }

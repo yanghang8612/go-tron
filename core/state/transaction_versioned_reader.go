@@ -160,3 +160,16 @@ func (s *StateDB) readTransactionVersionedKVGeneration(owner tcommon.Address) (u
 	}
 	return binary.BigEndian.Uint64(value.Value), true, true
 }
+
+func (s *StateDB) readTransactionVersionedStorage(owner tcommon.Address, key tcommon.Hash) (tcommon.Hash, bool, bool) {
+	value, _, ok := s.readTransactionVersionedValue(TransactionAccessKey{
+		Kind: TransactionAccessStorage, Address: owner, StorageKey: key,
+	})
+	if !ok {
+		return tcommon.Hash{}, false, false
+	}
+	if !value.Exists {
+		return tcommon.Hash{}, false, true
+	}
+	return tcommon.BytesToHash(value.Value), true, true
+}

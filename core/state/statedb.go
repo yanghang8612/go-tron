@@ -2802,6 +2802,14 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 		s.storageObservability.createdZero++
 		return tcommon.Hash{}, false
 	}
+	// Async retry workers start from a clean block-start view and consume exact
+	// canonical post-images through the shared version floor. Storage has its
+	// own typed access key; routing it through the generic account-KV reader
+	// would miss the writer recorded by SLOAD/SSTORE dependency tracking.
+	if value, exists, versioned := s.readTransactionVersionedStorage(addr, key); versioned {
+		obj.cacheStorageSlot(key, storageSlot{value: value, exists: exists})
+		return value, exists
+	}
 	// Load from persistent storage on cache miss.
 	s.storageObservability.coldReads++
 	rowKey := storageReadKeyPool.Get().(*tcommon.Hash)
