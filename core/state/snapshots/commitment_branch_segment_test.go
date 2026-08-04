@@ -100,6 +100,38 @@ func TestCommitmentBranchSegmentRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCommitmentBranchBinaryFamilySmallerThanJSON(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for i := 0; i < 1024; i++ {
+		prefix := []byte{byte(i >> 8), byte(i >> 4 & 15), byte(i & 15)}
+		value := make([]byte, 529) // representative dense 16-child branch size
+		x := uint64(i + 1)
+		for j := range value {
+			x ^= x << 13
+			x ^= x >> 7
+			x ^= x << 17
+			value[j] = byte(x)
+		}
+		if err := rawdb.WriteCommitmentBranch(db, prefix, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	jsonRef, err := BuildCommitmentBranchSegmentFromDB(db, dir, "commitment/branches.json", 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segment, accessor, btree, err := BuildCommitmentBranchSegmentFilesFromDB(db, dir, "commitment/branches.seg", 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryFamilyBytes := segment.Size + accessor.Size + btree.Size
+	if binaryFamilyBytes >= jsonRef.Size {
+		t.Fatalf("binary branch family bytes = %d, want below JSON segment %d", binaryFamilyBytes, jsonRef.Size)
+	}
+	t.Logf("branch snapshot bytes: json=%d binary-family=%d ratio=%.3f", jsonRef.Size, binaryFamilyBytes, float64(binaryFamilyBytes)/float64(jsonRef.Size))
+}
+
 func TestCommitmentBranchSegmentRejectsTrailingJSON(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	seedStagedBranchRows(t, db)
@@ -196,6 +228,20 @@ func TestCommitmentBranchRidesLatestBuild(t *testing.T) {
 	if branchRef.FromTxNum != 1 || branchRef.ToTxNum != 100 {
 		t.Fatalf("branch ref tx range = [%d,%d], want [1,100]", branchRef.FromTxNum, branchRef.ToTxNum)
 	}
+	if filepath.Ext(branchRef.Path) != ".seg" {
+		t.Fatalf("production branch path = %q, want binary .seg", branchRef.Path)
+	}
+	var branchAccessor, branchBTree bool
+	for _, ref := range manifest.Segments {
+		if ref.Dataset != SegmentDatasetCommitmentBranch {
+			continue
+		}
+		branchAccessor = branchAccessor || ref.Kind == SegmentAccessor
+		branchBTree = branchBTree || ref.Kind == SegmentBTree
+	}
+	if !branchAccessor || !branchBTree {
+		t.Fatalf("binary branch companions accessor=%v btree=%v", branchAccessor, branchBTree)
+	}
 
 	// Open the segment and verify rows round-trip.
 	seg, err := OpenCommitmentBranchSegment(dir, branchRef)
@@ -220,6 +266,20 @@ func TestCommitmentBranchRidesLatestBuild(t *testing.T) {
 		if !bytes.Equal(gv, wv) {
 			t.Fatalf("round-trip prefix %x value = %x, want %x", []byte(k), gv, wv)
 		}
+	}
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	for k, wantValue := range want {
+		gotValue, ok, err := mgr.GetCommitmentBranch([]byte(k), 100)
+		if err != nil || !ok || !bytes.Equal(gotValue, wantValue) {
+			t.Fatalf("GetCommitmentBranch(%x) = %x ok=%v err=%v, want %x", []byte(k), gotValue, ok, err, wantValue)
+		}
+	}
+	if value, ok, err := mgr.GetCommitmentBranch([]byte{15, 15, 15}, 100); err != nil || ok || value != nil {
+		t.Fatalf("GetCommitmentBranch(missing) = %x ok=%v err=%v", value, ok, err)
 	}
 }
 
@@ -260,12 +320,15 @@ func TestCommitmentBranchLatestBuildScansBranchKeyspaceOnce(t *testing.T) {
 	db := &countingCommitmentBranchBuildDB{KeyValueStore: rawdb.NewMemoryDatabase()}
 	seedStagedBranchRows(t, db)
 
-	refs, err := buildCommitmentBranchLatest(db, t.TempDir(), 0, 10, 10, "commitment/branches-10-10.json")
+	refs, err := buildCommitmentBranchLatest(db, t.TempDir(), 0, 10, 10, "commitment/branches-10-10.seg")
 	if err != nil {
 		t.Fatalf("build commitment branch latest: %v", err)
 	}
-	if len(refs) != 1 {
-		t.Fatalf("built refs = %d, want 1", len(refs))
+	if len(refs) != 3 {
+		t.Fatalf("built refs = %d, want segment+accessor+btree", len(refs))
+	}
+	if refs[0].Kind != SegmentLatest || refs[1].Kind != SegmentAccessor || refs[2].Kind != SegmentBTree {
+		t.Fatalf("built refs kinds = %q/%q/%q", refs[0].Kind, refs[1].Kind, refs[2].Kind)
 	}
 	if db.iterators != 1 {
 		t.Fatalf("branch builder opened %d iterators, want 1", db.iterators)
@@ -274,7 +337,7 @@ func TestCommitmentBranchLatestBuildScansBranchKeyspaceOnce(t *testing.T) {
 
 func TestCommitmentBranchLatestBuildSkipsEmptyAfterOneScan(t *testing.T) {
 	db := &countingCommitmentBranchBuildDB{KeyValueStore: rawdb.NewMemoryDatabase()}
-	refs, err := buildCommitmentBranchLatest(db, t.TempDir(), 0, 10, 10, "commitment/branches-10-10.json")
+	refs, err := buildCommitmentBranchLatest(db, t.TempDir(), 0, 10, 10, "commitment/branches-10-10.seg")
 	if err != nil {
 		t.Fatalf("build empty commitment branch latest: %v", err)
 	}

@@ -22,9 +22,9 @@ import (
 // branch-row snapshot family. It streams the dedicated
 // state-commitment-branch-v1- keyspace (hex-trie prefix -> encoded BranchData),
 // which the legacy CommitmentNode family (tree/node/ logical keys, 32-byte hash
-// values) cannot represent. It is registered in DefaultDomainRegistry as a
-// single-file (JSON) latest dataset (HasLatest=true, HasLatestAccessor=false,
-// HasLatestBTree=false): one .json file per build, no binary companion files.
+// values) cannot represent. Fresh production builds use the common immutable
+// binary latest family (.seg + .lidx + .bt); the JSON reader remains only for
+// previously produced/manual bootstrap fixtures.
 const SegmentDatasetCommitmentBranch SegmentDataset = "commitment-branch"
 
 // CommitmentBranchSegmentVersion is the on-disk version of a branch segment.
@@ -41,8 +41,9 @@ type commitmentBranchEntry struct {
 // streaming iteration. It retains only the segment location; branch rows stay
 // on disk until Iterate consumes them.
 type CommitmentBranchSegment struct {
-	ref  SegmentRef
-	path string
+	ref    SegmentRef
+	path   string
+	binary bool
 }
 
 // BuildCommitmentBranchSegmentFromDB streams every state-commitment-branch-v1-
@@ -58,8 +59,91 @@ func BuildCommitmentBranchSegmentFromDB(db ethdb.Iteratee, dir, relPath string, 
 	if toTxNum < fromTxNum {
 		return SegmentRef{}, fmt.Errorf("snapshots: branch segment range [%d,%d] is inverted", fromTxNum, toTxNum)
 	}
+	if isLatestBinarySegmentPath(relPath) {
+		return SegmentRef{}, errors.New("snapshots: binary commitment branches require BuildCommitmentBranchSegmentFilesFromDB")
+	}
 	ref, _, err := writeCommitmentBranchSegmentFromDB(db, dir, relPath, fromTxNum, toTxNum, false)
 	return ref, err
+}
+
+// BuildCommitmentBranchSegmentFilesFromDB writes the Erigon-style immutable
+// branch baseline: one sorted binary value segment, an ordinal accessor, and a
+// sparse B-tree. The B-tree is the point-read seam required before hot branch
+// rows can become a bounded delta over immutable state instead of a complete
+// Pebble-owned latest keyspace.
+func BuildCommitmentBranchSegmentFilesFromDB(db ethdb.Iteratee, dir, relPath string, fromTxNum, toTxNum uint64) (SegmentRef, SegmentRef, SegmentRef, error) {
+	if db == nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
+	}
+	if !isLatestBinarySegmentPath(relPath) {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: binary branch segment path %q must end in .seg", relPath)
+	}
+	if toTxNum < fromTxNum {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: branch segment range [%d,%d] is inverted", fromTxNum, toTxNum)
+	}
+	ref, accessor, btree, _, err := writeCommitmentBranchBinarySegmentFilesFromDB(db, dir, relPath, fromTxNum, toTxNum, false)
+	return ref, accessor, btree, err
+}
+
+func writeCommitmentBranchBinarySegmentFilesFromDB(db ethdb.Iteratee, dir, relPath string, fromTxNum, toTxNum uint64, skipEmpty bool) (SegmentRef, SegmentRef, SegmentRef, bool, error) {
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetCommitmentBranch,
+		Kind:      SegmentLatest,
+		FromTxNum: fromTxNum,
+		ToTxNum:   toTxNum,
+		Path:      filepath.ToSlash(relPath),
+	}
+	var rows uint64
+	iter := func(yield func(LatestEntry) error) error {
+		return rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
+			rows++
+			key := encodeCommitmentBranchSnapshotKey(prefix)
+			if err := yield(LatestEntry{Key: key, Value: encoded}); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+	}
+	segment, accessor, btree, err := writeLatestBinarySegmentAndAccessor(dir, ref, iter)
+	if err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, false, err
+	}
+	if rows != 0 || !skipEmpty {
+		return segment, accessor, btree, rows != 0, nil
+	}
+	// The streaming writer learns that the keyspace is empty only after its one
+	// source scan. Do not publish empty branch families; remove the three newly
+	// built content-addressed files just as the legacy writer removed its temp.
+	for _, built := range []SegmentRef{segment, accessor, btree} {
+		if built.Path != "" {
+			if err := os.Remove(filepath.Join(dir, built.Path)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return SegmentRef{}, SegmentRef{}, SegmentRef{}, false, err
+			}
+		}
+	}
+	return SegmentRef{}, SegmentRef{}, SegmentRef{}, false, nil
+}
+
+// Binary latest keys may not be empty because accessors and B-trees use an
+// empty key as an invalid/sentinel value. Prefixing every nibble path with zero
+// gives the root a one-byte key and preserves the exact lexicographic order of
+// all branch prefixes.
+func encodeCommitmentBranchSnapshotKey(prefix []byte) []byte {
+	key := make([]byte, len(prefix)+1)
+	copy(key[1:], prefix)
+	return key
+}
+
+func decodeCommitmentBranchSnapshotKey(key []byte) ([]byte, error) {
+	if len(key) == 0 || key[0] != 0 {
+		return nil, fmt.Errorf("snapshots: invalid commitment branch key %x", key)
+	}
+	for _, nibble := range key[1:] {
+		if nibble >= 16 {
+			return nil, fmt.Errorf("snapshots: invalid commitment branch nibble %x in key %x", nibble, key)
+		}
+	}
+	return key[1:], nil
 }
 
 // writeCommitmentBranchSegmentFromDB streams a branch segment. When skipEmpty
@@ -157,6 +241,12 @@ func OpenCommitmentBranchSegment(dir string, ref SegmentRef) (*CommitmentBranchS
 		return nil, err
 	}
 	path := filepath.Join(dir, ref.Path)
+	if isLatestBinarySegmentPath(ref.Path) {
+		if err := checkLatestBinarySegment(dir, ref); err != nil {
+			return nil, err
+		}
+		return &CommitmentBranchSegment{ref: ref, path: path, binary: true}, nil
+	}
 	if err := streamCommitmentBranchSegment(path, ref, true, nil); err != nil {
 		return nil, err
 	}
@@ -167,6 +257,15 @@ func OpenCommitmentBranchSegment(dir string, ref SegmentRef) (*CommitmentBranchS
 func (s *CommitmentBranchSegment) Iterate(fn func(prefix, encoded []byte) (bool, error)) error {
 	if s == nil || s.path == "" {
 		return nil
+	}
+	if s.binary {
+		return iterateLatestBinaryPrefix(s.path, s.ref, nil, func(key, encoded []byte) (bool, error) {
+			prefix, err := decodeCommitmentBranchSnapshotKey(key)
+			if err != nil {
+				return false, err
+			}
+			return fn(prefix, encoded)
+		})
 	}
 	return streamCommitmentBranchSegment(s.path, s.ref, false, fn)
 }
@@ -362,14 +461,14 @@ func (s *CommitmentBranchSource) IterateCommitmentBranches(txNum uint64, fn func
 // branch keyspace is empty, mirroring Runner.onePass's "no rows, return early"
 // without first walking a large branch keyspace just to detect that it exists.
 func buildCommitmentBranchLatest(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-	ref, hasRows, err := writeCommitmentBranchSegmentFromDB(db, dir, relPath, fromTxNum, toTxNum, true)
+	ref, accessor, btree, hasRows, err := writeCommitmentBranchBinarySegmentFilesFromDB(db, dir, relPath, fromTxNum, toTxNum, true)
 	if err != nil {
 		return nil, err
 	}
 	if !hasRows {
 		return nil, nil
 	}
-	return []SegmentRef{ref}, nil
+	return []SegmentRef{ref, accessor, btree}, nil
 }
 
 // checkCommitmentBranchSegment validates a published branch segment without

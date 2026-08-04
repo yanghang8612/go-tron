@@ -192,8 +192,15 @@
   time plus enqueue backpressure against P4.45.
 - [x] Replace the pooled commitment sponge with Erigon's assembly-accelerated
   fastkeccak after byte-equivalence and branch-shaped microbenchmarks.
-- [ ] Run the fastkeccak production gate and compare Keccak CPU, fold wall,
+- [x] Run the fastkeccak production gate and compare Keccak CPU, fold wall,
   backpressure, throughput, and all root/equivalence errors against P4.46.
+- [x] Replace the JSON CommitmentBranch checkpoint with a sorted immutable
+  binary segment, ordinal accessor, sparse B-tree, and indexed manager point
+  reads; reject the lane-decoded-cache prototype on measured memory/latency.
+- [ ] Add a persistently opened immutable commitment view plus versioned hot
+  overrides/tombstones, retaining hash-bound crash repair and reorg isolation.
+- [ ] Publish/merge immutable commitment deltas and clear covered hot branch
+  rows only after manifest verification, then run the write-amplification gate.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

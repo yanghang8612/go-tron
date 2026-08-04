@@ -19,7 +19,7 @@ type DomainCfg struct {
 	Dataset                           SegmentDataset
 	DomainSpecific                    bool
 	LatestPathStem                    string
-	LatestPathExt                     string // default ".seg"; CommitmentBranch will use ".json"
+	LatestPathExt                     string // default ".seg"
 	HistoryPathStem                   string
 	HasLatest                         bool
 	HasLatestAccessor                 bool
@@ -326,10 +326,10 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			Name:                  "CommitmentBranch",
 			Dataset:               SegmentDatasetCommitmentBranch,
 			LatestPathStem:        "commitment/branch",
-			LatestPathExt:         ".json",
+			LatestPathExt:         ".seg",
 			HasLatest:             true,
-			HasLatestAccessor:     false,
-			HasLatestBTree:        false,
+			HasLatestAccessor:     true,
+			HasLatestBTree:        true,
 			TracksCommitmentFlush: true,
 			BuildLatest:           buildCommitmentBranchLatest,
 			CheckLatest:           checkCommitmentBranchSegment,

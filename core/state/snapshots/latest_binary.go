@@ -2407,6 +2407,8 @@ func latestBinaryDatasetCode(dataset SegmentDataset) (uint16, error) {
 		return 4, nil
 	case SegmentDatasetCommitmentCheckpoint:
 		return 7, nil
+	case SegmentDatasetCommitmentBranch:
+		return 8, nil
 	default:
 		return 0, fmt.Errorf("snapshots: unknown latest binary dataset %q", dataset)
 	}
@@ -2426,6 +2428,8 @@ func latestBinaryDataset(code uint16) (SegmentDataset, error) {
 		return SegmentDatasetCommitmentRoot, nil
 	case 7:
 		return SegmentDatasetCommitmentCheckpoint, nil
+	case 8:
+		return SegmentDatasetCommitmentBranch, nil
 	default:
 		return "", fmt.Errorf("snapshots: unknown latest binary dataset code %d", code)
 	}

@@ -2263,6 +2263,58 @@ benchmark remains execution-bound at about 104 ms/150 blocks, so production
 must confirm reduced Keccak CPU and commitment wall/backpressure without any
 root or equivalence mismatch.
 
+The production binary selected fastkeccak's amd64 BMI2 assembly. A comparable
+20-second warm profile reduced the flat commitment Keccak sample from P4.46's
+4.37 CPU-seconds (8.55%) to 3.14 CPU-seconds (5.43%): 28.1% less absolute CPU
+and 36.5% less profile share despite the later window doing more total work.
+The 155-second gate imported 11,085 blocks / 353,761 transactions (71.52
+blocks/s, 2,282 tx/s, 31.91 tx/block). It performed 11,077 measured folds at
+about 254 resolved operations, 1,310 hashes, 569 KB of preimage, and 4,455
+permutations per fold. All commitment, pipeline, ordered-publication, discard,
+state/receipt, WriteSet, and balance-trace mismatch/error counters remained
+zero; one sender-chain observer error used its existing safe fallback.
+
+Fold time was 8.22 ms and async backpressure 0.578 ms per measured fold, both
+higher than P4.46's unusually clean storage window. The profile explains the
+difference: Pebble compaction rose from 17.76% to 26.83% and parent reads from
+8.31% to 10.73%, while transaction density also increased. The gate therefore
+credits P4.47 only with the directly observed hash-CPU reduction and clean byte
+equivalence, not with an overall throughput gain.
+
+#### P4.48: Binary indexed immutable commitment baseline
+
+Erigon's deferred branch encoder does not leave sparse operands in the hot
+latest domain: `ApplyDeferredBranchUpdates` merges each update with its prior
+branch before `DomainPut`. Go-tron's 1.92-second output-bounded blockbuffer
+already transfers that same last-writer-wins aggregation across roughly 93
+blocks. Production still emits about 556 bytes per final commitment key because
+the surviving value is a complete dense ancestor branch; another delta chain
+or a longer Pebble batch would only move work onto random reads.
+
+The next Erigon storage boundary is instead its immutable domain plus bounded
+hot delta. A first lane-owned decoded-trunk prototype was deliberately rejected:
+depths 1--3 added about 7.2 MiB of allocation per 150-block replay and made the
+median in-memory ordered benchmark roughly 1% slower, while depth four added a
+further 65,536 potential large `BranchData` entries. Copying a 1.3 KiB decoded
+struct cost as much as the overlay lookup and decode it replaced.
+
+The accepted first step replaces the production CommitmentBranch latest
+snapshot's JSON/base64 document with the common immutable binary latest format.
+Each build now emits a sorted `.seg`, ordinal `.lidx`, and sparse `.bt` B-tree;
+the root prefix is encoded with a one-byte sentinel so every indexed key is
+non-empty while nibble ordering is preserved. `Manager.GetCommitmentBranch`
+uses the B-tree point-read path, while streaming iteration remains available
+for bootstrap and repair. JSON reading remains confined to old/manual segment
+fixtures; the fresh snap registry emits only binary files.
+
+On 1,024 incompressible, dense 529-byte branch values, the old JSON file was
+756,818 bytes. The complete binary family including both indexes was 562,664
+bytes, a 25.7% reduction. More importantly, it establishes the indexed
+immutable baseline required by the next step: retain only post-checkpoint
+overrides/tombstones in Pebble, read misses from a persistently opened segment
+view, merge bounded delta segments in the background, and clear hot branch rows
+only after hash-bound publication and crash-safe coverage verification.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

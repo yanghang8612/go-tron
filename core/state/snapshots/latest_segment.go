@@ -535,7 +535,7 @@ func validateLatestStreamRef(ref SegmentRef) error {
 		if !kvdomains.IsRegistered(ref.Domain) {
 			return fmt.Errorf("snapshots: unregistered latest segment domain %#04x", uint16(ref.Domain))
 		}
-	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint:
+	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint, SegmentDatasetCommitmentBranch:
 		if ref.Domain != 0 {
 			return fmt.Errorf("snapshots: %s latest segment must not set kv domain %#04x", dataset, uint16(ref.Domain))
 		}
@@ -950,6 +950,22 @@ func (m *Manager) IterateCommitmentBranches(txNum uint64, fn func(prefix, encode
 	return seg.Iterate(fn)
 }
 
+// GetCommitmentBranch resolves one staged-trie branch from the immutable
+// baseline. Binary production segments use their sparse B-tree, bounding the
+// search to one 128-row block instead of scanning or materializing the full
+// branch snapshot. This is the point-read half of the future hot-delta + cold-
+// baseline view; IterateCommitmentBranches remains the bootstrap/repair path.
+func (m *Manager) GetCommitmentBranch(prefix []byte, txNum uint64) ([]byte, bool, error) {
+	if m == nil {
+		return nil, false, nil
+	}
+	ref, ok := coveringCommitmentBranchRef(m.Manifest(), txNum)
+	if !ok {
+		return nil, false, nil
+	}
+	return m.getLatestValueFromRef(ref, encodeCommitmentBranchSnapshotKey(prefix))
+}
+
 func (m *Manager) GetCode(hash common.Hash, txNum uint64) ([]byte, bool, error) {
 	if hash == (common.Hash{}) {
 		return nil, false, nil
@@ -1352,7 +1368,7 @@ func (s *LatestSegment) Validate() error {
 		if !kvdomains.IsRegistered(s.Domain) {
 			return fmt.Errorf("snapshots: unregistered latest segment domain %#04x", uint16(s.Domain))
 		}
-	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint:
+	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint, SegmentDatasetCommitmentBranch:
 		if s.Domain != 0 {
 			return fmt.Errorf("snapshots: %s latest segment must not set kv domain %#04x", dataset, uint16(s.Domain))
 		}
@@ -1574,6 +1590,13 @@ func validateLatestEntry(dataset SegmentDataset, entry LatestEntry) error {
 		}
 		if _, err := rawdb.DecodeStateCommitmentCheckpointValue(entry.Value); err != nil {
 			return fmt.Errorf("snapshots: decode commitment checkpoint %q: %w", entry.Key, err)
+		}
+	case SegmentDatasetCommitmentBranch:
+		if _, err := decodeCommitmentBranchSnapshotKey(entry.Key); err != nil {
+			return err
+		}
+		if len(entry.Value) == 0 {
+			return errors.New("snapshots: commitment branch has empty value")
 		}
 	default:
 		return fmt.Errorf("snapshots: unknown latest dataset %q", dataset)

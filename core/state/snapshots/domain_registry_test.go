@@ -28,10 +28,6 @@ func TestDefaultDomainRegistryDrivesSnapshotFamilies(t *testing.T) {
 		if cfg.BuildLatest == nil {
 			t.Fatalf("%s missing latest builder", cfg.Dataset)
 		}
-		// CommitmentBranch is a JSON-only single-file dataset: no accessor/btree companions.
-		if !cfg.HasLatestAccessor && !cfg.HasLatestBTree {
-			continue
-		}
 		if !cfg.HasLatestAccessor || !cfg.HasLatestBTree {
 			t.Fatalf("%s latest companion flags accessor=%v btree=%v", cfg.Dataset, cfg.HasLatestAccessor, cfg.HasLatestBTree)
 		}
