@@ -298,6 +298,201 @@ func TestProcessBlockParallelTransfersMatchesSerial(t *testing.T) {
 	}
 }
 
+func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner1 := testProcessorAddr(1)
+	owner2 := testProcessorAddr(3)
+	contract1 := testProcessorAddr(0x80)
+	contract2 := testProcessorAddr(0x81)
+	for _, owner := range []tcommon.Address{owner1, owner2} {
+		base.CreateAccount(owner, corepb.AccountType_Normal)
+		base.AddBalance(owner, 100_000_000)
+	}
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	for _, contract := range []struct {
+		address tcommon.Address
+		origin  tcommon.Address
+	}{{address: contract1, origin: owner1}, {address: contract2, origin: owner2}} {
+		base.CreateAccount(contract.address, corepb.AccountType_Contract)
+		base.SetContract(contract.address, &contractpb.SmartContract{
+			OriginAddress: contract.origin.Bytes(), ContractAddress: contract.address.Bytes(),
+		})
+		base.SetCode(contract.address, []byte{0x60, 0x01, 0x60, 0x02, 0x01, 0x50, 0x00})
+	}
+	// A small non-mutating program still consumes VM energy. Interleaving a
+	// second sender forces the final owner1 result to cross both a forwarded
+	// sender boundary and an independently ordered public-net boundary.
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	transactions := []*types.Transaction{
+		makeTestTriggerTx(1, contract1, []byte{0x01}),
+		makeTestTriggerTx(3, contract2, []byte{0x02}),
+		makeTestTriggerTx(1, contract1, []byte{0x03}),
+	}
+	transactionProtos := make([]*corepb.Transaction, len(transactions))
+	for txIndex, tx := range transactions {
+		tx.Proto().RawData.FeeLimit = 10_000_000
+		tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+		transactionProtos[txIndex] = tx.Proto()
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: transactionProtos,
+	})
+
+	run := func(statedb *state.StateDB, db actuator.BufferedKVStore, options processBlockOptions) ([]*corepb.TransactionInfo, *contractpb.BlockBalanceTrace, map[tcommon.Address]int64, error) {
+		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, db, nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		trace, finalBalances := statedb.FinishBalanceTrace()
+		return infos, trace, finalBalances, processErr
+	}
+	serialInfos, serialTrace, serialFinalBalances, err := run(serialState, ethrawdb.NewMemoryDatabase(), processBlockOptions{captureBalanceTrace: true})
+	if err != nil {
+		t.Fatalf("serial VM process: %v", err)
+	}
+	blocksBefore := parallelVMBlocksCounter.Snapshot().Count()
+	preexecutedBefore := parallelVMPreexecutedCounter.Snapshot().Count()
+	candidatesBefore := parallelVMCandidatesCounter.Snapshot().Count()
+	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	chainCandidatesBefore := parallelVMChainCandidatesCounter.Snapshot().Count()
+	chainPublishedBefore := parallelVMChainPublishedCounter.Snapshot().Count()
+	energyPublishedBefore := parallelVMBlockEnergyPublishedCounter.Snapshot().Count()
+	publicNetReservationsBefore := parallelVMPublicNetReservationsCounter.Snapshot().Count()
+	publicNetPublishedBefore := parallelVMPublicNetPublishedCounter.Snapshot().Count()
+	publicNetRebasedBefore := parallelVMPublicNetRebasedCounter.Snapshot().Count()
+	errorsBefore := parallelVMErrorsCounter.Snapshot().Count()
+	fallbacksBefore := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
+		parallelVMConflictFallbackCounter.Snapshot().Count() +
+		parallelVMPreflightFallbackCounter.Snapshot().Count() +
+		parallelVMPublicNetFallbackCounter.Snapshot().Count() +
+		parallelVMBlockEnergyFallbackCounter.Snapshot().Count()
+	parallelInfos, parallelTrace, parallelFinalBalances, err := run(parallelState, ethrawdb.NewMemoryDatabase(), processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
+	if err != nil {
+		t.Fatalf("parallel VM process: %v", err)
+	}
+	if blocks := parallelVMBlocksCounter.Snapshot().Count() - blocksBefore; blocks != 1 {
+		t.Fatalf("parallel VM blocks = %d, want 1", blocks)
+	}
+	if preexecuted := parallelVMPreexecutedCounter.Snapshot().Count() - preexecutedBefore; preexecuted != 3 {
+		t.Fatalf("parallel VM preexecuted = %d, want 3", preexecuted)
+	}
+	if candidates := parallelVMCandidatesCounter.Snapshot().Count() - candidatesBefore; candidates != 3 {
+		t.Fatalf("parallel VM candidates = %d, want 3 (published=%d unavailable=%d conflict=%d preflight=%d public=%d energy=%d)",
+			candidates,
+			parallelVMPublishedCounter.Snapshot().Count()-publishedBefore,
+			parallelVMUnavailableFallbackCounter.Snapshot().Count(),
+			parallelVMConflictFallbackCounter.Snapshot().Count(),
+			parallelVMPreflightFallbackCounter.Snapshot().Count(),
+			parallelVMPublicNetFallbackCounter.Snapshot().Count(),
+			parallelVMBlockEnergyFallbackCounter.Snapshot().Count())
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 3 {
+		t.Fatalf("parallel VM published = %d, want 3", published)
+	}
+	if candidates := parallelVMChainCandidatesCounter.Snapshot().Count() - chainCandidatesBefore; candidates != 1 {
+		t.Fatalf("parallel VM sender-chain candidates = %d, want 1", candidates)
+	}
+	if published := parallelVMChainPublishedCounter.Snapshot().Count() - chainPublishedBefore; published != 1 {
+		t.Fatalf("parallel VM sender-chain published = %d, want 1", published)
+	}
+	if published := parallelVMBlockEnergyPublishedCounter.Snapshot().Count() - energyPublishedBefore; published != 3 {
+		t.Fatalf("parallel VM block-energy publications = %d, want 3", published)
+	}
+	if reservations := parallelVMPublicNetReservationsCounter.Snapshot().Count() - publicNetReservationsBefore; reservations != 3 {
+		t.Fatalf("parallel VM public-net reservations = %d, want 3", reservations)
+	}
+	if published := parallelVMPublicNetPublishedCounter.Snapshot().Count() - publicNetPublishedBefore; published != 3 {
+		t.Fatalf("parallel VM public-net publications = %d, want 3", published)
+	}
+	if rebased := parallelVMPublicNetRebasedCounter.Snapshot().Count() - publicNetRebasedBefore; rebased != 2 {
+		t.Fatalf("parallel VM public-net rebases = %d, want 2", rebased)
+	}
+	if failures := parallelVMErrorsCounter.Snapshot().Count() - errorsBefore; failures != 0 {
+		t.Fatalf("parallel VM errors = %d, want 0", failures)
+	}
+	fallbacksAfter := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
+		parallelVMConflictFallbackCounter.Snapshot().Count() +
+		parallelVMPreflightFallbackCounter.Snapshot().Count() +
+		parallelVMPublicNetFallbackCounter.Snapshot().Count() +
+		parallelVMBlockEnergyFallbackCounter.Snapshot().Count()
+	if fallbacks := fallbacksAfter - fallbacksBefore; fallbacks != 0 {
+		t.Fatalf("parallel VM fallbacks = %d, want 0", fallbacks)
+	}
+
+	for txIndex := range serialInfos {
+		if !proto.Equal(serialInfos[txIndex], parallelInfos[txIndex]) {
+			t.Fatalf("tx %d info mismatch\nserial=%v\nparallel=%v", txIndex, serialInfos[txIndex], parallelInfos[txIndex])
+		}
+	}
+	if !proto.Equal(serialTrace, parallelTrace) {
+		t.Fatalf("block balance trace mismatch\nserial=%v\nparallel=%v", serialTrace, parallelTrace)
+	}
+	if len(serialFinalBalances) != len(parallelFinalBalances) {
+		t.Fatalf("final balance count serial=%d parallel=%d", len(serialFinalBalances), len(parallelFinalBalances))
+	}
+	for address, serialBalance := range serialFinalBalances {
+		if parallelBalance, ok := parallelFinalBalances[address]; !ok || parallelBalance != serialBalance {
+			t.Fatalf("final balance %s serial=%d parallel=%d present=%t", address.Hex(), serialBalance, parallelBalance, ok)
+		}
+	}
+	for _, address := range []tcommon.Address{owner1, owner2, contract1, contract2} {
+		if serialBalance, parallelBalance := serialState.GetBalance(address), parallelState.GetBalance(address); serialBalance != parallelBalance {
+			t.Fatalf("balance %s serial=%d parallel=%d", address.Hex(), serialBalance, parallelBalance)
+		}
+	}
+	for _, property := range []struct {
+		name     string
+		serial   int64
+		parallel int64
+	}{
+		{name: "public_net_usage", serial: serialState.DynamicProperties().PublicNetUsage(), parallel: parallelState.DynamicProperties().PublicNetUsage()},
+		{name: "public_net_time", serial: serialState.DynamicProperties().PublicNetTime(), parallel: parallelState.DynamicProperties().PublicNetTime()},
+		{name: "block_energy_usage", serial: serialState.DynamicProperties().BlockEnergyUsage(), parallel: parallelState.DynamicProperties().BlockEnergyUsage()},
+	} {
+		if property.serial != property.parallel {
+			t.Fatalf("%s serial=%d parallel=%d", property.name, property.serial, property.parallel)
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("VM state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
 func TestProcessBlockSamplesSenderChainForwarding(t *testing.T) {
 	statedb := newTestState(t)
 	for _, id := range []byte{1, 2, 3} {

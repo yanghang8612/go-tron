@@ -25,6 +25,10 @@ import (
 const (
 	discardShadowSampleInterval     = uint64(64)
 	discardShadowAsyncRetryInterval = uint64(256)
+	// Publish one of every sixteen sampled VM cohorts. The other fifteen keep
+	// running serially as an independent reference while the ordered publisher
+	// gains mainnet exposure.
+	vmSenderChainPublishInterval = uint64(1024)
 	// Keep one sampled cohort on the synchronous retry observer as a stable
 	// reference. The other three sampled cohorts exercise the real async
 	// scheduler, increasing long-chain coverage without changing canonical
@@ -45,6 +49,10 @@ func useDiscardShadowAsyncRetry(blockNum uint64) bool {
 
 func useDiscardShadowAsyncRetryPublication(blockNum uint64) bool {
 	return useDiscardShadowAsyncRetry(blockNum) && blockNum%discardShadowAsyncRetryInterval == discardShadowAsyncPublishOffset
+}
+
+func useVMSenderChainPublication(blockNum uint64) bool {
+	return blockNum > 0 && blockNum%discardShadowSampleInterval == 0 && blockNum%vmSenderChainPublishInterval == 0
 }
 
 var (
@@ -199,6 +207,25 @@ var (
 	parallelTransferChainCandidatesCounter           = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/candidates", nil)
 	parallelTransferChainPublishedCounter            = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/published", nil)
 	parallelTransferChainPredFallbackCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/fallback/predecessor", nil)
+	parallelVMBlocksCounter                          = metrics.NewRegisteredCounter("core/parallel_vm/blocks", nil)
+	parallelVMPreexecutedCounter                     = metrics.NewRegisteredCounter("core/parallel_vm/preexecuted", nil)
+	parallelVMPreexecutionNanosCounter               = metrics.NewRegisteredCounter("core/parallel_vm/preexecution_nanos", nil)
+	parallelVMCandidatesCounter                      = metrics.NewRegisteredCounter("core/parallel_vm/candidates", nil)
+	parallelVMPublishedCounter                       = metrics.NewRegisteredCounter("core/parallel_vm/published", nil)
+	parallelVMUnavailableFallbackCounter             = metrics.NewRegisteredCounter("core/parallel_vm/fallback/unavailable", nil)
+	parallelVMConflictFallbackCounter                = metrics.NewRegisteredCounter("core/parallel_vm/fallback/conflict", nil)
+	parallelVMPreflightFallbackCounter               = metrics.NewRegisteredCounter("core/parallel_vm/fallback/preflight", nil)
+	parallelVMPublicNetFallbackCounter               = metrics.NewRegisteredCounter("core/parallel_vm/fallback/public_net", nil)
+	parallelVMBlockEnergyFallbackCounter             = metrics.NewRegisteredCounter("core/parallel_vm/fallback/block_energy", nil)
+	parallelVMErrorsCounter                          = metrics.NewRegisteredCounter("core/parallel_vm/errors", nil)
+	parallelVMPublicationNanosCounter                = metrics.NewRegisteredCounter("core/parallel_vm/publication_nanos", nil)
+	parallelVMChainCandidatesCounter                 = metrics.NewRegisteredCounter("core/parallel_vm/sender_chain/candidates", nil)
+	parallelVMChainPublishedCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/sender_chain/published", nil)
+	parallelVMChainPredFallbackCounter               = metrics.NewRegisteredCounter("core/parallel_vm/sender_chain/fallback/predecessor", nil)
+	parallelVMPublicNetReservationsCounter           = metrics.NewRegisteredCounter("core/parallel_vm/public_net/reservations", nil)
+	parallelVMPublicNetPublishedCounter              = metrics.NewRegisteredCounter("core/parallel_vm/public_net/published", nil)
+	parallelVMPublicNetRebasedCounter                = metrics.NewRegisteredCounter("core/parallel_vm/public_net/rebased", nil)
+	parallelVMBlockEnergyPublishedCounter            = metrics.NewRegisteredCounter("core/parallel_vm/block_energy/published", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -556,6 +583,7 @@ type discardShadowPublicNetProjection struct {
 
 type discardShadowBlockEnergyProjection struct {
 	observed  bool
+	baseline  int64
 	expected  int64
 	validated bool
 	match     bool
@@ -2985,10 +3013,35 @@ func (pre *discardShadowPreexecution) projectBlockEnergyBoundary(txIndex int, dy
 	}
 	receipt := result.info.GetReceipt()
 	delta := blockEnergyUsageDelta(dynProps, forkStats, prevBlockTime, receipt.GetEnergyUsageTotal(), receipt.GetEnergyUsage(), receipt.GetOriginEnergyUsage(), forkPassCache)
+	baseline := dynProps.BlockEnergyUsage()
 	pre.blockEnergy[resultIndex] = discardShadowBlockEnergyProjection{
 		observed: true,
-		expected: dynProps.BlockEnergyUsage() + delta,
+		baseline: baseline,
+		expected: baseline + delta,
 	}
+}
+
+// blockEnergyBoundaryForPublication admits the already projected block-level
+// resource post-image only while the canonical accumulator is still at the
+// exact pre-transaction value. VM transaction WriteSets must not carry this
+// out-of-transaction accumulator themselves.
+func (pre *discardShadowPreexecution) blockEnergyBoundaryForPublication(txIndex int, dynProps *state.DynamicProperties) (int64, int64, bool) {
+	if pre == nil || dynProps == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
+		return 0, 0, false
+	}
+	resultIndex := pre.resultByTx[txIndex]
+	if resultIndex < 0 || resultIndex >= len(pre.results) || resultIndex >= len(pre.blockEnergy) {
+		return 0, 0, false
+	}
+	projection := pre.blockEnergy[resultIndex]
+	if !projection.observed || projection.validated || dynProps.BlockEnergyUsage() != projection.baseline {
+		return 0, 0, false
+	}
+	blockEnergyKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "block_energy_usage"}
+	if _, exists := pre.results[resultIndex].writes[blockEnergyKey]; exists {
+		return 0, 0, false
+	}
+	return projection.baseline, projection.expected, true
 }
 
 // validateBlockEnergyBoundary checks the canonical post-image immediately
@@ -3008,6 +3061,18 @@ func (pre *discardShadowPreexecution) validateBlockEnergyBoundary(txIndex int, d
 	}
 	projection.validated = true
 	projection.match = dynProps.BlockEnergyUsage() == projection.expected
+}
+
+func (pre *discardShadowPreexecution) blockEnergyBoundaryMatched(txIndex int) bool {
+	if pre == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
+		return false
+	}
+	resultIndex := pre.resultByTx[txIndex]
+	if resultIndex < 0 || resultIndex >= len(pre.blockEnergy) {
+		return false
+	}
+	projection := pre.blockEnergy[resultIndex]
+	return projection.observed && projection.validated && projection.match
 }
 
 func (pre *discardShadowPreexecution) resultForTransaction(txIndex int) (*discardShadowTaskResult, discardShadowReadVersionResult, bool) {

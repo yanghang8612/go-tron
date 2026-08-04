@@ -55,6 +55,24 @@ func TestDiscardShadowAsyncRetryPublicationCohort(t *testing.T) {
 	}
 }
 
+func TestVMSenderChainPublicationCohort(t *testing.T) {
+	tests := []struct {
+		blockNum uint64
+		want     bool
+	}{
+		{blockNum: 0, want: false},
+		{blockNum: 64, want: false},
+		{blockNum: 1_024, want: true},
+		{blockNum: 1_088, want: false},
+		{blockNum: 2_048, want: true},
+	}
+	for _, test := range tests {
+		if got := useVMSenderChainPublication(test.blockNum); got != test.want {
+			t.Fatalf("block %d VM publication cohort = %t, want %t", test.blockNum, got, test.want)
+		}
+	}
+}
+
 func TestDiscardShadowRetryWriteCaptureProjectsReadHierarchy(t *testing.T) {
 	fieldAddress := testProcessorAddr(1)
 	fullAddress := testProcessorAddr(2)
@@ -1258,9 +1276,18 @@ func TestVMBlockEnergyBoundaryProjectionMatchesSerialAccumulator(t *testing.T) {
 
 	pre.projectBlockEnergyBoundary(0, dynProps, stats, 0, nil)
 	projection := pre.blockEnergy[0]
-	if !projection.observed || projection.expected != 1_040 || projection.validated {
+	if !projection.observed || projection.baseline != 40 || projection.expected != 1_040 || projection.validated {
 		t.Fatalf("VM block-energy projection = %+v", projection)
 	}
+	baseline, expected, admitted := pre.blockEnergyBoundaryForPublication(0, dynProps)
+	if !admitted || baseline != 40 || expected != 1_040 {
+		t.Fatalf("VM block-energy publication boundary = %d/%d admitted=%t", baseline, expected, admitted)
+	}
+	dynProps.SetBlockEnergyUsage(41)
+	if _, _, admitted := pre.blockEnergyBoundaryForPublication(0, dynProps); admitted {
+		t.Fatal("VM block-energy publication admitted a changed canonical baseline")
+	}
+	dynProps.SetBlockEnergyUsage(40)
 	accumulateBlockEnergyUsage(dynProps, stats, 0, result, nil)
 	pre.validateBlockEnergyBoundary(0, dynProps)
 	projection = pre.blockEnergy[0]

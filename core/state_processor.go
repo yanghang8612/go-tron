@@ -838,6 +838,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	var transferPreexecution *discardShadowPreexecution
 	var senderChainPreexecution *discardShadowPreexecution
 	var vmSenderChainPreexecution *discardShadowPreexecution
+	var vmSenderChainPublication bool
 	var senderRetry *discardShadowSenderRetry
 	if shadowEnabled && collectTxInfos {
 		discardShadow = prepareTransferExecutionBlock(statedb, dynProps, block.Number(), options.parallelTransfers)
@@ -876,10 +877,18 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			}
 			if discardShadow.sampled {
 				senderChainPreexecution = discardShadow.preexecuteTransferSenderChainsWithRetryState(discardCfg, actualAsyncRetry)
-				// VM is the dominant historical-sync family. Keep its first
-				// sender-chain expansion observe-only until ordered energy,
-				// bandwidth, and receipt settlement have passed this canary.
+				// VM is the dominant historical-sync family. Every sampled block
+				// retains the serial reference; one narrow cohort may publish only
+				// after the ordered bandwidth and block-energy carriers admit it.
 				vmSenderChainPreexecution = discardShadow.preexecuteVMSenderChains(discardCfg)
+				if options.parallelTransfers && useVMSenderChainPublication(block.Number()) {
+					parallelVMBlocksCounter.Inc(1)
+					if vmSenderChainPreexecution != nil {
+						vmSenderChainPublication = true
+						parallelVMPreexecutedCounter.Inc(int64(len(vmSenderChainPreexecution.results)))
+						parallelVMPreexecutionNanosCounter.Inc(vmSenderChainPreexecution.wallNanos)
+					}
+				}
 				if actualAsyncRetry {
 					// Use three sampled cohorts for the real background retry
 					// canary. The remaining cohort retains the synchronous observer
@@ -1099,6 +1108,91 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					}
 				}
 				parallelTransferPublicationNanosCounter.Inc(time.Since(publishedStarted).Nanoseconds())
+				continue
+			}
+		}
+		if vmSenderChainPublication {
+			preResult, readVersion, found := vmSenderChainPreexecution.resultForTransaction(i)
+			switch {
+			case !found:
+			case !preexecutedResultReady(preResult):
+				parallelVMUnavailableFallbackCounter.Inc(1)
+			case !readVersion.publishable:
+				parallelVMConflictFallbackCounter.Inc(1)
+				if readVersion.predecessor {
+					parallelVMChainPredFallbackCounter.Inc(1)
+				}
+			default:
+				parallelVMCandidatesCounter.Inc(1)
+				if preResult.senderVersioned {
+					parallelVMChainCandidatesCounter.Inc(1)
+				}
+				if preResult.publicNetValid {
+					parallelVMPublicNetReservationsCounter.Inc(1)
+				}
+				blockEnergyBaseline, blockEnergyExpected, blockEnergyAdmitted := vmSenderChainPreexecution.blockEnergyBoundaryForPublication(i, dynProps)
+				if !blockEnergyAdmitted {
+					parallelVMBlockEnergyFallbackCounter.Inc(1)
+					break
+				}
+				publicNetOverride, publicNetAdmitted := overridePublicNetReservation(preResult, dynProps)
+				if !publicNetAdmitted {
+					parallelVMPublicNetFallbackCounter.Inc(1)
+					break
+				}
+				if err := statedb.ValidateTransactionWriteSetApply(preResult.writes, dynProps, transactionDB); err != nil {
+					publicNetOverride.restore()
+					parallelVMPreflightFallbackCounter.Inc(1)
+					break
+				}
+				publishedStarted := time.Now()
+				versionedShadow.recorder.RestoreReadSet(preResult.reads)
+				publishErr := statedb.ApplyTransactionWriteSetRecorded(preResult.writes, dynProps, transactionDB, &versionedShadow.recorder)
+				publicNetOverride.restore()
+				if publishErr != nil {
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed VM: %w", i, publishErr)
+				}
+				statedb.FinalizeTransaction()
+				statedb.AppendBalanceTraceTransaction(preResult.balanceTrace)
+				if collectTxInfos {
+					txInfos[i] = preResult.info
+				}
+				txHash := tx.Hash()
+				if len(discardCfg.canonicalBalanceTraces) == len(transactions) {
+					discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
+				}
+				versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
+				transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(preResult.writes))
+				if err := flushDomainChanges(i, domainChangeMark); err != nil {
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, err
+				}
+				if dynProps.BlockEnergyUsage() != blockEnergyBaseline {
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed VM changed block energy before settlement", i)
+				}
+				if blockEnergyExpected != dynProps.BlockEnergyUsage() {
+					dynProps.SetBlockEnergyUsage(blockEnergyExpected)
+				}
+				vmSenderChainPreexecution.validateBlockEnergyBoundary(i, dynProps)
+				if !vmSenderChainPreexecution.blockEnergyBoundaryMatched(i) {
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed VM block energy mismatch", i)
+				}
+				vmSenderChainPreexecution.markPublished(i)
+				parallelVMPublishedCounter.Inc(1)
+				parallelVMBlockEnergyPublishedCounter.Inc(1)
+				if preResult.senderVersioned {
+					parallelVMChainPublishedCounter.Inc(1)
+				}
+				if preResult.publicNetValid {
+					parallelVMPublicNetPublishedCounter.Inc(1)
+					if publicNetOverride.rebased {
+						parallelVMPublicNetRebasedCounter.Inc(1)
+					}
+				}
+				parallelVMPublicationNanosCounter.Inc(time.Since(publishedStarted).Nanoseconds())
 				continue
 			}
 		}
