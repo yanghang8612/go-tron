@@ -29,11 +29,10 @@ const (
 	// cohort, avoiding two background retry families in the same block while
 	// collecting four times the formal VM publication coverage.
 	vmSenderRetryObserveInterval = discardShadowAsyncRetryInterval
-	// Publish one quarter of the proven async VM retry cohorts. Residue 256 is
-	// disjoint from the existing block-start VM publisher at residue zero, so a
-	// production gate can attribute every canonical result to exactly one path.
+	// Publish the three non-zero residues of the proven async VM retry cohort.
+	// Residue zero remains assigned to the independent block-start VM publisher,
+	// so every canonical result is attributable to exactly one path.
 	vmSenderRetryPublishInterval = uint64(1024)
-	vmSenderRetryPublishOffset   = vmSenderRetryObserveInterval
 	// Publish one of every sixteen sampled VM cohorts. The other fifteen keep
 	// running serially as an independent reference while the ordered publisher
 	// gains mainnet exposure.
@@ -69,7 +68,7 @@ func useVMSenderRetryObservation(blockNum uint64) bool {
 }
 
 func useVMSenderRetryPublication(blockNum uint64) bool {
-	return useVMSenderRetryObservation(blockNum) && blockNum%vmSenderRetryPublishInterval == vmSenderRetryPublishOffset
+	return useVMSenderRetryObservation(blockNum) && blockNum%vmSenderRetryPublishInterval != 0
 }
 
 var (

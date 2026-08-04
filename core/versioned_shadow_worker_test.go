@@ -82,9 +82,13 @@ func TestVMSenderRetryPublicationCohort(t *testing.T) {
 	}{
 		{blockNum: 0, want: false},
 		{blockNum: 256, want: true},
-		{blockNum: 512, want: false},
+		{blockNum: 512, want: true},
+		{blockNum: 768, want: true},
 		{blockNum: 1_024, want: false},
 		{blockNum: 1_280, want: true},
+		{blockNum: 1_536, want: true},
+		{blockNum: 1_792, want: true},
+		{blockNum: 2_048, want: false},
 		{blockNum: 2_304, want: true},
 	}
 	for _, test := range tests {
