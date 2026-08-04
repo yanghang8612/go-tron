@@ -341,6 +341,52 @@ func TestVerifyStateDomainChangeBinaryCompanionsRejectsLegacyTrailingBytes(t *te
 	}
 }
 
+func TestVerifyStateDomainChangeBinaryCompanionsRejectsSplitDuplicateTxIndex(t *testing.T) {
+	dir := t.TempDir()
+	changes := []*rawdb.StateDomainChange{
+		binaryStateDomainChange(1, 30, 1, "slot/a"),
+		binaryStateDomainChange(1, 30, 2, "slot/b"),
+	}
+	txRanges, err := normalizeStateTxRangesForBinary(30, 30, changes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentData, _, accessor := encodeStateDomainChangeBinarySegmentV2IndexesForTest(t, 30, 30, changes, txRanges)
+	duplicateIndex := []stateDomainChangeBinaryTxOffset{
+		{txNum: 30, offset: accessor[0].offset, recordIndex: 0, count: 1},
+		{txNum: 30, offset: accessor[1].offset, recordIndex: 1, count: 1},
+	}
+	var indexBuf bytes.Buffer
+	if err := writeStateDomainChangeBinaryHeaderTo(&indexBuf, stateDomainChangeBinaryIndexMagic, 30, 30, uint64(len(duplicateIndex))); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range duplicateIndex {
+		if err := writeStateDomainChangeBinaryIndexEntryTo(&indexBuf, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	indexData := indexBuf.Bytes()
+	accessorData, err := encodeStateDomainChangeBinaryAccessor(30, 30, accessor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := []SegmentRef{
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 30, ToTxNum: 30, Path: "history/split-duplicate-tx.seg"},
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentInverted, FromTxNum: 30, ToTxNum: 30, Path: "history/split-duplicate-tx.idx"},
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: 30, ToTxNum: 30, Path: "history/split-duplicate-tx.kv"},
+	}
+	for i, data := range [][]byte{segmentData, indexData, accessorData} {
+		if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, refs[i].Path), data); err != nil {
+			t.Fatal(err)
+		}
+		setStateDomainChangeBinaryRefMetadata(&refs[i], data)
+	}
+	err = verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, refs[0], refs[1], refs[2])
+	if err == nil || !strings.Contains(err.Error(), "entries are not sorted") {
+		t.Fatalf("split duplicate tx index err = %v, want ordering rejection", err)
+	}
+}
+
 func TestVerifyLoadedManifestFilesRejectsStaleLatestBinaryAccessor(t *testing.T) {
 	dir := t.TempDir()
 	segRef, accessorRef, btreeRef := writeLatestBinaryCompanionManifestForTest(t, dir)

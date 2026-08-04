@@ -922,7 +922,7 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir string, historyRe
 	if err := checkStateDomainChangeBinarySegmentChecksum(dir, historyRef); err != nil {
 		return err
 	}
-	if err := CheckStateDomainChangeIndexSegment(dir, indexRef); err != nil {
+	if err := checkStateDomainChangeBinaryIndexChecksum(dir, indexRef); err != nil {
 		return err
 	}
 	if err := CheckStateDomainChangeAccessorSegment(dir, accessorRef); err != nil {
@@ -980,11 +980,19 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir string, historyRe
 func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset, recordCount uint64, index io.ReaderAt, indexCount uint64) error {
 	expectedRecordIndex := uint64(0)
 	expectedOffset := recordOffset
+	var previousTxNum uint64
 	for i := uint64(0); i < indexCount; i++ {
 		entry, err := readStateDomainChangeBinaryIndexEntryAt(index, i)
 		if err != nil {
 			return err
 		}
+		if entry.txNum < indexRef.FromTxNum || entry.txNum > indexRef.ToTxNum {
+			return fmt.Errorf("snapshots: state-domain-change binary index %q tx %d outside range [%d,%d]", indexRef.Path, entry.txNum, indexRef.FromTxNum, indexRef.ToTxNum)
+		}
+		if i > 0 && entry.txNum <= previousTxNum {
+			return fmt.Errorf("snapshots: state-domain-change binary index %q entries are not sorted", indexRef.Path)
+		}
+		previousTxNum = entry.txNum
 		if entry.recordIndex != expectedRecordIndex {
 			return fmt.Errorf("snapshots: state-domain-change binary index %q entry %d record index %d, want %d", indexRef.Path, i, entry.recordIndex, expectedRecordIndex)
 		}
@@ -1306,24 +1314,14 @@ func readStateDomainChangeBinaryIndex(dir string, ref SegmentRef) ([]stateDomain
 }
 
 func checkStateDomainChangeBinaryIndex(dir string, ref SegmentRef) error {
+	if err := checkStateDomainChangeBinaryIndexChecksum(dir, ref); err != nil {
+		return err
+	}
 	indexFile, header, err := openStateDomainChangeBinaryIndexReader(dir, ref)
 	if err != nil {
 		return err
 	}
 	defer indexFile.Close()
-
-	if ref.Checksum != "" {
-		if _, err := indexFile.Seek(0, io.SeekStart); err != nil {
-			return err
-		}
-		hash := sha256.New()
-		if _, err := io.Copy(hash, indexFile); err != nil {
-			return err
-		}
-		if got := "sha256:" + hex.EncodeToString(hash.Sum(nil)); got != ref.Checksum {
-			return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
-		}
-	}
 
 	var prev stateDomainChangeBinaryTxOffset
 	for i := uint64(0); i < header.count; i++ {
@@ -1341,6 +1339,34 @@ func checkStateDomainChangeBinaryIndex(dir string, ref SegmentRef) error {
 			return fmt.Errorf("snapshots: state-domain-change binary index %q entries are not sorted", ref.Path)
 		}
 		prev = entry
+	}
+	return nil
+}
+
+// checkStateDomainChangeBinaryIndexChecksum validates the immutable index
+// object identity without walking its entry table. Companion coverage already
+// consumes every entry and can enforce the structural invariants in that pass.
+func checkStateDomainChangeBinaryIndexChecksum(dir string, ref SegmentRef) error {
+	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentInverted {
+		return fmt.Errorf("snapshots: state-domain-change binary index %q is %s/%s, want state-domain-change/inverted", ref.Path, ref.Dataset, ref.Kind)
+	}
+	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
+		return err
+	}
+	if ref.Checksum == "" {
+		return nil
+	}
+	indexFile, err := os.Open(filepath.Join(dir, ref.Path))
+	if err != nil {
+		return err
+	}
+	defer indexFile.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, indexFile); err != nil {
+		return err
+	}
+	if got := "sha256:" + hex.EncodeToString(hash.Sum(nil)); got != ref.Checksum {
+		return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
 	}
 	return nil
 }

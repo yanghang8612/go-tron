@@ -405,5 +405,8 @@
 - [x] Fold record framing, tx/Seq ordering, count, and logical-end checks into
   the sequential index-coverage proof while preserving standalone validation
   and adversarial legacy-format rejection.
+- [x] Fold index txNum range and strict ordering into the same coverage loop,
+  preserving checksum/header/size gates and rejecting structurally plausible
+  split duplicate-tx entries.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

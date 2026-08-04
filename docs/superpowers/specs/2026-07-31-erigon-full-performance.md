@@ -3572,6 +3572,27 @@ readers still share the same logical-offset interface. The small warm-cache
 benchmark again overlapped its baseline, so the admitted claim is one fewer
 complete input-history decompression pass, not a local wall-clock percentage.
 
+#### P5.14: Fold index structure validation into coverage
+
+The txNum index had the same remaining two-pass shape. Its standalone checker
+hashed the file and scanned every entry to validate range and strict txNum
+ordering; companion coverage then reopened the index and consumed every entry
+again while proving record index, logical offset, count, and history ownership.
+
+Companion verification now keeps a checksum-only immutable-index gate and
+enforces the range and strict-order invariants in the coverage loop before an
+entry may direct a history read. Header, physical size, version, and declared
+entry count remain validated by the common index opener. Standalone callers
+still receive the original full index checker.
+
+An adversarial v2 fixture splits one valid two-record txNum group into two
+separate consecutive index entries. Their offsets, record indices, counts,
+history payload, accessor, sizes, and checksums are all internally consistent;
+only the required one-entry-per-txNum ordering invariant is violated. The fused
+coverage verifier rejected it in twenty consecutive runs, alongside the P5.13
+sequence, trailing-byte, and checksum cases. This removes one complete index
+entry-table pass per verified merge input without weakening its format gate.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go
