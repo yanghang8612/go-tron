@@ -3291,6 +3291,26 @@ light-block throughput by more than 3% is rejected even if its newer API is
 otherwise correct; irreversible v2-only table formats remain explicitly out of
 scope until this bridge canary passes.
 
+The first bridge deployment restarted cleanly and preserved the existing
+datadir, but its physical-byte canary was rejected before runtime admission. A
+272-second immediately preceding v1 window imported 12,512 blocks and 567,031
+transactions (45.32 tx/block); the first 200-second v2 window imported 6,176
+blocks and 299,633 transactions (48.52 tx/block). Normalized by transaction,
+compaction input rose 70.44%, compaction output 121.06%, disk writes 89.28%,
+and process CPU 9.91%. Estimated debt changed from draining 2.85 MB/s to growing
+0.84 MB/s. Download buffering stayed positive and grew during part of the v2
+window, so the regression was not classified as peer starvation.
+
+The profile and v2 option audit identified a semantic mapping error rather than
+an engine result. Pebble v1 treats the zero-value L6 compression/filter fields
+as its independent defaults. Pebble v2 instead inherits unset L1+ fields from
+the preceding level, so L6 accidentally inherited L5's no-compression and
+Bloom-filter policy. That explains both the doubled output bytes and prominent
+Bloom construction in the profile. L6 is now explicitly Snappy-compressed with
+`NoFilterPolicy`; the test applies Pebble's real option defaults before asserting
+that the bottom level cannot inherit either transient setting. The P5.5 A/B
+remains open until the corrected configuration produces a fresh window.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

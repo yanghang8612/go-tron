@@ -236,7 +236,13 @@ func levelOptions() [7]pebble.LevelOptions {
 		if i < len(levels)-1 {
 			levels[i].Compression = func() *sstable.CompressionProfile { return sstable.NoCompression }
 			levels[i].FilterPolicy = bloom.FilterPolicy(10)
+			continue
 		}
+		// Pebble v2 inherits unset L1+ options from the preceding level.
+		// Explicitly restore the v1 bottom-level semantics instead of letting L6
+		// inherit L5's transient no-compression/Bloom policy.
+		levels[i].Compression = func() *sstable.CompressionProfile { return sstable.SnappyCompression }
+		levels[i].FilterPolicy = pebble.NoFilterPolicy
 	}
 	return levels
 }

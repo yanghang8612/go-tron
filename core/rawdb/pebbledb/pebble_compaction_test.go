@@ -3,6 +3,7 @@ package pebbledb
 import (
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/sstable"
 )
 
@@ -56,15 +57,19 @@ func TestLevelOptionsScaleTargetAndPreserveFilters(t *testing.T) {
 			t.Errorf("level %d lost Bloom filter", i)
 		}
 	}
-	if levels[len(levels)-1].FilterPolicy != nil {
-		t.Fatal("last level unexpectedly has a Bloom filter")
+	// Exercise Pebble v2's L1+ inheritance, not just the pre-default struct.
+	opts := pebble.Options{Levels: levels}
+	opts.EnsureDefaults()
+	levels = opts.Levels
+	if levels[len(levels)-1].FilterPolicy != pebble.NoFilterPolicy {
+		t.Fatal("last level did not explicitly disable its inherited Bloom filter")
 	}
 	for i := 0; i < len(levels)-1; i++ {
 		if levels[i].Compression == nil || levels[i].Compression() != sstable.NoCompression {
 			t.Fatalf("level %d compression is not disabled", i)
 		}
 	}
-	if levels[len(levels)-1].Compression != nil {
-		t.Fatal("bottom-level compression should inherit Pebble default")
+	if levels[len(levels)-1].Compression == nil || levels[len(levels)-1].Compression() != sstable.SnappyCompression {
+		t.Fatal("bottom-level compression is not explicitly Snappy")
 	}
 }
