@@ -269,6 +269,16 @@ var (
 	discardShadowVMSenderChainBalanceMismatchesCounter = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/balance_trace_mismatches", nil)
 	discardShadowVMSenderChainErrorsCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/errors", nil)
 	discardShadowVMSenderChainWallNanosCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/wall_nanos", nil)
+	discardShadowVMSenderChainPublicNetCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/candidates", nil)
+	discardShadowVMSenderChainPublicNetOnlyCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/write_set_mismatches/public_net_only", nil)
+	discardShadowVMSenderChainOtherWriteCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/write_set_mismatches/other", nil)
+	discardShadowVMSenderChainResultErrorsCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/result", nil)
+	discardShadowVMSenderChainMissingInfoCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/missing_info", nil)
+	discardShadowVMSenderChainWriteErrorsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/write_set", nil)
+	discardShadowVMSenderChainApplyUnsupportedCounter  = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/apply_unsupported", nil)
+	discardShadowVMSenderChainApplyErrorsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/apply", nil)
+	discardShadowVMSenderChainApplyMismatchCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/apply_mismatch", nil)
+	discardShadowVMSenderChainReadinessCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/readiness", nil)
 )
 
 var (
@@ -522,18 +532,28 @@ type discardShadowPreexecution struct {
 }
 
 type discardShadowSenderChainStats struct {
-	groups             int64
-	executed           int64
-	forwarded          int64
-	candidates         int64
-	validated          int64
-	forwardedValidated int64
-	readConflicts      int64
-	senderConflicts    int64
-	infoMismatches     int64
-	writeMismatches    int64
-	balanceMismatches  int64
-	errors             int64
+	groups              int64
+	executed            int64
+	forwarded           int64
+	candidates          int64
+	validated           int64
+	forwardedValidated  int64
+	readConflicts       int64
+	senderConflicts     int64
+	infoMismatches      int64
+	writeMismatches     int64
+	balanceMismatches   int64
+	errors              int64
+	publicNetCandidates int64
+	publicNetOnly       int64
+	otherWriteMismatch  int64
+	resultErrors        int64
+	missingInfo         int64
+	writeSetErrors      int64
+	applyUnsupported    int64
+	applyErrors         int64
+	applyMismatches     int64
+	readinessRejected   int64
 }
 
 type discardShadowAsyncPrefixStats struct {
@@ -3136,6 +3156,16 @@ func (shadow *discardShadowBlock) finishVMSenderChains(pre *discardShadowPreexec
 	discardShadowVMSenderChainBalanceMismatchesCounter.Inc(stats.balanceMismatches)
 	discardShadowVMSenderChainErrorsCounter.Inc(stats.errors)
 	discardShadowVMSenderChainWallNanosCounter.Inc(pre.wallNanos)
+	discardShadowVMSenderChainPublicNetCounter.Inc(stats.publicNetCandidates)
+	discardShadowVMSenderChainPublicNetOnlyCounter.Inc(stats.publicNetOnly)
+	discardShadowVMSenderChainOtherWriteCounter.Inc(stats.otherWriteMismatch)
+	discardShadowVMSenderChainResultErrorsCounter.Inc(stats.resultErrors)
+	discardShadowVMSenderChainMissingInfoCounter.Inc(stats.missingInfo)
+	discardShadowVMSenderChainWriteErrorsCounter.Inc(stats.writeSetErrors)
+	discardShadowVMSenderChainApplyUnsupportedCounter.Inc(stats.applyUnsupported)
+	discardShadowVMSenderChainApplyErrorsCounter.Inc(stats.applyErrors)
+	discardShadowVMSenderChainApplyMismatchCounter.Inc(stats.applyMismatches)
+	discardShadowVMSenderChainReadinessCounter.Inc(stats.readinessRejected)
 	return stats
 }
 
@@ -3156,7 +3186,26 @@ func (shadow *discardShadowBlock) finishSenderChains(pre *discardShadowPreexecut
 		if result.senderVersioned {
 			stats.forwarded++
 		}
-		if result.err != nil || !ready(&result) {
+		resultReady := ready(&result)
+		switch {
+		case result.err != nil:
+			stats.resultErrors++
+		case result.info == nil:
+			stats.missingInfo++
+		case result.writeSetErr != nil:
+			stats.writeSetErrors++
+		case !result.applyEligible:
+			stats.applyUnsupported++
+		case result.applyErr != nil:
+			stats.applyErrors++
+		case !result.applyMatch:
+			stats.applyMismatches++
+		case !resultReady:
+			stats.readinessRejected++
+		default:
+			break
+		}
+		if !resultReady {
 			stats.errors++
 			continue
 		}
@@ -3185,6 +3234,9 @@ func (shadow *discardShadowBlock) finishSenderChains(pre *discardShadowPreexecut
 			continue
 		}
 		stats.candidates++
+		if result.publicNetValid {
+			stats.publicNetCandidates++
+		}
 		if txIndex < 0 || txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
 			txIndex >= len(versioned.transactionWriteSets) || (cfg.captureBalanceTrace && txIndex >= len(cfg.canonicalBalanceTraces)) {
 			stats.errors++
@@ -3198,6 +3250,12 @@ func (shadow *discardShadowBlock) finishSenderChains(pre *discardShadowPreexecut
 		}
 		if !writeMatch {
 			stats.writeMismatches++
+			if !ignorePublicNet && result.publicNetValid &&
+				equalSenderChainWriteSets(result.writes, versioned.transactionWriteSets[txIndex], true) {
+				stats.publicNetOnly++
+			} else {
+				stats.otherWriteMismatch++
+			}
 		}
 		if !balanceMatch {
 			stats.balanceMismatches++

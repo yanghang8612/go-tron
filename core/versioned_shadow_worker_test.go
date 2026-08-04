@@ -1092,6 +1092,74 @@ func TestVMSenderChainFinishValidatesEnergyResult(t *testing.T) {
 	}
 }
 
+func TestVMSenderChainFinishClassifiesWriteMismatch(t *testing.T) {
+	publicNetKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
+	rawKey := state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "vm-result"}
+	encodeInt := func(value uint64) state.TransactionWriteValue {
+		encoded := make([]byte, 8)
+		binary.BigEndian.PutUint64(encoded, value)
+		return state.TransactionWriteValue{Exists: true, Value: encoded}
+	}
+	tests := []struct {
+		name            string
+		workerWrites    state.TransactionWriteSet
+		canonicalWrites state.TransactionWriteSet
+		publicNetValid  bool
+		publicNetOnly   int64
+		other           int64
+	}{
+		{
+			name: "public bandwidth only",
+			workerWrites: state.TransactionWriteSet{
+				publicNetKey: encodeInt(10), rawKey: {Exists: true, Value: []byte("same")},
+			},
+			canonicalWrites: state.TransactionWriteSet{
+				publicNetKey: encodeInt(20), rawKey: {Exists: true, Value: []byte("same")},
+			},
+			publicNetValid: true,
+			publicNetOnly:  1,
+		},
+		{
+			name: "other state",
+			workerWrites: state.TransactionWriteSet{
+				rawKey: {Exists: true, Value: []byte("worker")},
+			},
+			canonicalWrites: state.TransactionWriteSet{
+				rawKey: {Exists: true, Value: []byte("canonical")},
+			},
+			other: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			info := &corepb.TransactionInfo{Receipt: &corepb.ResourceReceipt{EnergyUsage: 1}}
+			pre := &discardShadowPreexecution{
+				results: []discardShadowTaskResult{{
+					txIndex: 0, info: info, writes: test.workerWrites, applyEligible: true, applyMatch: true,
+					publicNetValid: test.publicNetValid,
+				}},
+				resultByTx:    []int{0},
+				readVersions:  []discardShadowReadVersionResult{{publishable: true}},
+				readValidated: []bool{true},
+				published:     make([]bool, 1),
+				groups:        1,
+			}
+			versioned := &versionedAccessShadow{
+				transactionWritesOK:  []bool{true},
+				transactionWriteSets: []state.TransactionWriteSet{test.canonicalWrites},
+			}
+			stats := (&discardShadowBlock{}).finishVMSenderChains(pre, versioned, discardShadowRunConfig{
+				transactions:   []*types.Transaction{makeTestTriggerTx(1, testProcessorAddr(8), nil)},
+				canonicalInfos: []*corepb.TransactionInfo{info},
+			})
+			if stats.candidates != 1 || stats.validated != 0 || stats.writeMismatches != 1 ||
+				stats.publicNetOnly != test.publicNetOnly || stats.otherWriteMismatch != test.other {
+				t.Fatalf("VM write mismatch classification = %+v", stats)
+			}
+		})
+	}
+}
+
 func TestSenderChainAdvanceForwardsRawKV(t *testing.T) {
 	workerState := newTestState(t)
 	worker := discardShadowWorker{
