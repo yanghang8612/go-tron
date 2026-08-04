@@ -22,8 +22,14 @@ func TestPublishVerifySignedSnapshotCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
 	}
-	if catalog.ManifestPath != ManifestFile || catalog.ManifestChecksum == "" || catalog.Signature == "" {
+	if catalog.ManifestPath == ManifestFile || catalog.ManifestChecksum == "" || catalog.Signature == "" {
 		t.Fatalf("catalog = %+v", catalog)
+	}
+	if err := validateSnapshotCatalogManifestPath(catalog.ManifestPath); err != nil {
+		t.Fatalf("immutable manifest path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, catalog.ManifestPath)); err != nil {
+		t.Fatalf("stat immutable manifest: %v", err)
 	}
 	loaded, report, err := VerifySignedSnapshotCatalog(dir, identity, []ed25519.PublicKey{pub})
 	if err != nil {
@@ -115,16 +121,17 @@ func TestPublishSignedSnapshotCatalogRejectsStaleSidecar(t *testing.T) {
 	}
 }
 
-func TestVerifySignedSnapshotCatalogRejectsManifestTamper(t *testing.T) {
+func TestVerifySignedSnapshotCatalogRejectsPublishedManifestTamper(t *testing.T) {
 	dir, identity, _ := writeVerifiableHistoryManifest(t)
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if _, err := PublishSignedSnapshotCatalog(dir, priv); err != nil {
+	catalog, err := PublishSignedSnapshotCatalog(dir, priv)
+	if err != nil {
 		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
 	}
-	manifestPath := filepath.Join(dir, ManifestFile)
+	manifestPath := filepath.Join(dir, catalog.ManifestPath)
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)

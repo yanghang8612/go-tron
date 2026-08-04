@@ -8,12 +8,13 @@ import (
 )
 
 type PruneRetiredSegmentFilesResult struct {
-	RetiredSegments    int
-	FilesDeleted       int
-	FilesMissing       int
-	FilesSkippedActive int
-	BytesDeleted       uint64
-	DeletedPaths       []string
+	RetiredSegments       int
+	FilesDeleted          int
+	FilesMissing          int
+	FilesSkippedActive    int
+	FilesSkippedPublished int
+	BytesDeleted          uint64
+	DeletedPaths          []string
 }
 
 type RetiredSegmentFile struct {
@@ -22,12 +23,13 @@ type RetiredSegmentFile struct {
 }
 
 type RetiredSegmentFileInspection struct {
-	RetiredSegments    int
-	FilesPresent       int
-	FilesMissing       int
-	FilesSkippedActive int
-	BytesPresent       uint64
-	PresentFiles       []RetiredSegmentFile
+	RetiredSegments       int
+	FilesPresent          int
+	FilesMissing          int
+	FilesSkippedActive    int
+	FilesSkippedPublished int
+	BytesPresent          uint64
+	PresentFiles          []RetiredSegmentFile
 }
 
 // InspectRetiredSegmentFiles reports physical files that are still present for
@@ -45,9 +47,10 @@ func PruneRetiredSegmentFiles(dir string) (*PruneRetiredSegmentFilesResult, erro
 		return nil, err
 	}
 	result := &PruneRetiredSegmentFilesResult{
-		RetiredSegments:    inspection.RetiredSegments,
-		FilesMissing:       inspection.FilesMissing,
-		FilesSkippedActive: inspection.FilesSkippedActive,
+		RetiredSegments:       inspection.RetiredSegments,
+		FilesMissing:          inspection.FilesMissing,
+		FilesSkippedActive:    inspection.FilesSkippedActive,
+		FilesSkippedPublished: inspection.FilesSkippedPublished,
 	}
 	for _, file := range inspection.PresentFiles {
 		if err := os.Remove(filepath.Join(dir, file.Path)); err != nil {
@@ -76,6 +79,16 @@ func inspectRetiredSegmentFiles(dir, operation string) (*RetiredSegmentFileInspe
 	for _, ref := range manifest.Segments {
 		active[ref.Path] = struct{}{}
 	}
+	publishedActive := make(map[string]struct{})
+	published, err := LoadPublishedSnapshotManifests(dir)
+	if err != nil {
+		return nil, fmt.Errorf("snapshots: load published manifest leases before %s: %w", operation, err)
+	}
+	for _, generation := range published {
+		for _, ref := range generation.Manifest.Segments {
+			publishedActive[ref.Path] = struct{}{}
+		}
+	}
 
 	result := &RetiredSegmentFileInspection{}
 	seenRetired := make(map[string]struct{}, len(manifest.Retired))
@@ -83,6 +96,10 @@ func inspectRetiredSegmentFiles(dir, operation string) (*RetiredSegmentFileInspe
 		result.RetiredSegments++
 		if _, ok := active[ref.Path]; ok {
 			result.FilesSkippedActive++
+			continue
+		}
+		if _, ok := publishedActive[ref.Path]; ok {
+			result.FilesSkippedPublished++
 			continue
 		}
 		if _, ok := seenRetired[ref.Path]; ok {

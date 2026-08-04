@@ -3303,6 +3303,54 @@ Erigon's structural lesson: further compaction reduction should come from
 moving immutable history out of the hot store and reducing logical hot writes,
 not from a storage-engine version change alone.
 
+The production rollback then reopened that same bridge-ratcheted datadir with
+the Pebble v1-only binary. The process generation reset its async counters and
+continued at block 18,079,331 with six syncing peers, 1,785 buffered blocks,
+and no write/publication/state errors or restart loop. A 10-second profile
+contained only `github.com/cockroachdb/pebble` frames and no `/pebble/v2`
+module path. The same generation later reached block 18,121,210 after importing
+42,155 session blocks and 2,048,149 transactions; it had recovered 30 syncing
+peers, held 4,369 buffered blocks, and still reported zero async VM or
+publication errors. This closes the rollback gate on the real datadir rather
+than only the cross-version unit fixture.
+
+#### P5.6: Immutable signed catalog hosting and resumable leases
+
+The existing downloader already retained checksum-bound `.part` files and used
+validated HTTP Range requests, but the hosting side was not generation-safe.
+Each signed catalog pointed at mutable `manifest.json`. A runtime cold pass
+could atomically replace that file after a client fetched the catalog but
+before it fetched the manifest, causing a checksum race. After a later merge,
+the retired-file lifecycle could also unlink a segment still referenced by a
+download already in progress. Signature verification made both failures safe,
+but not resumable or operationally reliable.
+
+Catalog publication now copies the exact verified production manifest bytes to
+`published/manifests/manifest-<generation>-<checksum>.json` before atomically
+switching `snapshot-catalog.json`. The signed payload authenticates that
+immutable relative path and checksum. Fetch writes the immutable object and
+the local root view before publishing its local catalog, so a crash can leave
+only harmless unreferenced downloads, never a catalog whose manifest is
+missing. Legacy root-manifest catalogs remain read-only compatible.
+
+Every published immutable manifest is also a segment-retention lease. Retired
+file inspection combines the live manifest with all unexpired published views,
+so a merge cannot reclaim an object needed by a resumable older download.
+Default GC preserves at least three catalog objects and a 24-hour grace; both
+are explicit runtime flags. Expired manifest leases are removed before the
+subsequent retired-segment pass, bounding obsolete storage without weakening
+the current catalog.
+
+An opt-in dedicated HTTP lifecycle serves only the signed catalog, immutable
+published manifests, and exact active paths leased by those manifests. It has
+no directory listing and does not expose mutable `manifest.json`, ETL files, or
+unpublished data. GET/HEAD, ETag, immutable cache policy, and native Range
+responses are covered by an end-to-end test which fetches and verifies a full
+catalog through the real listener. The systemd template accepts secrets through
+a protected optional environment file, and the Nginx template preserves Range
+at `/snapshots/`. Official signer/key release remains an operator artifact; no
+private key or unofficial trust root is compiled into the binary.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

@@ -91,7 +91,7 @@ not complete.
 | Chain freezer | `core/freezer` plus `core/rawdb/freezer`, `ChainDB` fall-through, and cold `chain-index` sidecars. | Moderate. Old block bodies/tx infos/state roots can be served from freezer, and verified sidecars cover block/tx lookup rows after hot prune. |
 | Staged execution | Hash-bound `Headers/Bodies/Execution/Commitment/Finish`, recoverable `TxLookup`, `InsertBlocks`, `canonicalRangeExecutor`, reusable `CommitScope`. | Partial. Canonical insertion retains one authoritative compact `tib-` receipt row per block instead of duplicate `ti-` rows or per-receipt transaction IDs, block numbers, and timestamps already present in the canonical block/`TransactionRet` header; bulk sync also defers `tx-`, which is caught up from canonical bodies with sorted ETL. Range execution is staged, but this is not yet a full Erigon staged-sync loop. |
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
-| Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
+| Snapshot bootstrapping | Local snapshot build/restore, signed remote fetch, and a Range-capable publication listener exist. | Strong. Catalogs bind immutable generation manifests; resumable downloads retain leased segment views across merge/prune, while signer keys and official URLs remain operator release artifacts. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
 | ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, chain-index sidecar build, rawdb derived-index bulk loads, transaction lookup/info rebuild, section-bloom rebuild, account-trace rebuild, replayed balance-trace backfill, and cold event-log/section-bloom/balance-trace segment builds now use the collector. Snapshot restore/build CLIs expose `--snapshot.etl.*`, and bulk sync exposes `--sync.etl.*` for the deferred TxLookup stage; larger benchmark evidence is still needed. |
 
@@ -215,6 +215,12 @@ Status:
   bounded worker pool (`--snapshot.fetch.concurrency`, default worker count 4).
   `TestFetchRemoteSnapshotDownloadsSegmentsConcurrently` proves multiple
   segment HTTP requests are in flight before final signed-catalog verification.
+- Runtime catalog publication now signs an immutable generation/checksum
+  manifest path instead of mutable `manifest.json`. Published manifests retain
+  their active segment paths as bounded download leases, and the dedicated
+  loopback HTTP lifecycle serves only those allowlisted objects with GET/HEAD,
+  ETag, and Range support. Nginx exposes the listener at `/snapshots/`; catalog
+  retention count and grace are operator-configurable.
 - `VerifyRemoteManifestFiles` now performs the strict pre-install check for a
   snapshot directory: chain identity, registered segment family, checksum, size,
   and format-aware segment validation.
@@ -419,8 +425,9 @@ Needed:
 
 - Mainnet/testnet publication policy: official trusted catalog keys, rotation,
   and release workflow.
-- Production HTTP catalog/segment hosting and official operator defaults;
-  BitTorrent or WebSeed can come later.
+- Official mainnet/testnet signer keys, release ownership, and URL publication;
+  the built-in HTTP/Range seed and operator defaults are implemented, while
+  BitTorrent or additional WebSeeds can come later.
 - Restore pipeline handoff from snapshot/freezer boundary into downloader,
   `SyncService.HandleBlock`, and local two-node P2P tail sync is now covered by
   regression tests. Remaining production work is longer-running soak/metrics

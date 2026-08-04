@@ -62,10 +62,11 @@ func TestFetchRemoteSnapshotRejectsManifestChecksumMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if _, err := PublishSignedSnapshotCatalog(source, priv); err != nil {
+	catalog, err := PublishSignedSnapshotCatalog(source, priv)
+	if err != nil {
 		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
 	}
-	manifestPath := filepath.Join(source, ManifestFile)
+	manifestPath := filepath.Join(source, catalog.ManifestPath)
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
@@ -93,12 +94,13 @@ func TestFetchRemoteSnapshotDoesNotPublishManifestOnSegmentFailure(t *testing.T)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if _, err := PublishSignedSnapshotCatalog(source, priv); err != nil {
+	catalog, err := PublishSignedSnapshotCatalog(source, priv)
+	if err != nil {
 		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rel := strings.TrimPrefix(r.URL.Path, "/")
-		if rel != SnapshotCatalogFile && rel != ManifestFile {
+		if rel != SnapshotCatalogFile && rel != catalog.ManifestPath {
 			http.Error(w, "segment unavailable", http.StatusInternalServerError)
 			return
 		}
@@ -167,7 +169,8 @@ func TestFetchRemoteSnapshotDownloadsSegmentsConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if _, err := PublishSignedSnapshotCatalog(source, priv); err != nil {
+	catalog, err := PublishSignedSnapshotCatalog(source, priv)
+	if err != nil {
 		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
 	}
 
@@ -177,7 +180,7 @@ func TestFetchRemoteSnapshotDownloadsSegmentsConcurrently(t *testing.T) {
 	var releaseOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rel := strings.TrimPrefix(r.URL.Path, "/")
-		if rel != SnapshotCatalogFile && rel != ManifestFile {
+		if rel != SnapshotCatalogFile && rel != catalog.ManifestPath {
 			current := inFlight.Add(1)
 			for {
 				max := maxInFlight.Load()

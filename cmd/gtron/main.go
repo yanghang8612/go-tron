@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -391,6 +392,11 @@ var app = &cli.App{
 		snapshotETLBufferMiBFlag,
 		snapshotETLBatchMiBFlag,
 		snapshotCatalogSigningKeyFileRuntimeFlag,
+		snapshotServeFlag,
+		snapshotServeAddrFlag,
+		snapshotServePortFlag,
+		snapshotCatalogRetainFlag,
+		snapshotCatalogGraceFlag,
 		stateTrieCacheFlag,
 		stateCommitmentCacheFlag,
 		configFileFlag,
@@ -637,6 +643,28 @@ func gtron(ctx *cli.Context) error {
 	if snapshotCatalogSigningEnabled && (chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap || !chainConfig.HistoryEnabled) {
 		closeStores()
 		return errors.New("--snapshot.catalog-signing-key-file requires snap history mode with history capture enabled")
+	}
+	snapshotServeEnabled := ctx.Bool("snapshot.serve")
+	if snapshotServeEnabled && !snapshotCatalogSigningEnabled {
+		closeStores()
+		return errors.New("--snapshot.serve requires --snapshot.catalog-signing-key-file so every hosted generation is signed")
+	}
+	if snapshotServeEnabled {
+		port := ctx.Int("snapshot.serve.port")
+		if port <= 0 || port > 65535 {
+			closeStores()
+			return fmt.Errorf("--snapshot.serve.port must be between 1 and 65535, got %d", port)
+		}
+	}
+	snapshotCatalogRetain := ctx.Int("snapshot.catalog-retain")
+	if snapshotCatalogRetain <= 0 {
+		closeStores()
+		return fmt.Errorf("--snapshot.catalog-retain must be positive, got %d", snapshotCatalogRetain)
+	}
+	snapshotCatalogGrace := ctx.Duration("snapshot.catalog-grace")
+	if snapshotCatalogGrace <= 0 {
+		closeStores()
+		return fmt.Errorf("--snapshot.catalog-grace must be positive, got %s", snapshotCatalogGrace)
 	}
 	var snapshotCatalogChain *statesnapshots.ChainIdentity
 	if snapshotCatalogSigningEnabled {
@@ -885,6 +913,16 @@ func gtron(ctx *cli.Context) error {
 		return err
 	}
 	stack.RegisterLifecycle(p2pServer)
+	if snapshotServeEnabled {
+		addr := strings.TrimSpace(ctx.String("snapshot.serve.addr"))
+		if addr == "" {
+			addr = "127.0.0.1"
+		}
+		stack.RegisterLifecycle(statesnapshots.NewHTTPServer(statesnapshots.HTTPServerConfig{
+			Addr: net.JoinHostPort(addr, strconv.Itoa(ctx.Int("snapshot.serve.port"))),
+			Dir:  stateSnapshotDir,
+		}))
+	}
 	stack.RegisterLifecycle(apiServer)
 	stack.RegisterLifecycle(jrpcServer)
 	if cfg.GRPCPort > 0 {
@@ -994,6 +1032,9 @@ func gtron(ctx *cli.Context) error {
 					}
 					return nil, err
 				}
+				if _, err := statesnapshots.PrunePublishedSnapshotManifests(stateSnapshotDir, snapshotCatalogRetain, snapshotCatalogGrace); err != nil {
+					return nil, err
+				}
 				return statesnapshots.PruneRetiredSegmentFiles(stateSnapshotDir)
 			},
 		})
@@ -1017,6 +1058,8 @@ func gtron(ctx *cli.Context) error {
 			"etlTempDir", snapshotETL.TempDir,
 			"etlBufferBytes", snapshotETL.BufferLimit,
 			"etlBatchBytes", snapshotETL.BatchSize,
+			"catalogRetain", snapshotCatalogRetain,
+			"catalogGrace", snapshotCatalogGrace,
 			"snapshotDir", stateSnapshotDir)
 	} else {
 		log.Info("Domain state pruning disabled", "mode", chainConfig.EffectiveHistoryMode())
@@ -1047,7 +1090,9 @@ func gtron(ctx *cli.Context) error {
 	}
 	if !retiredPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
 		stack.RegisterLifecycle(statesnapshots.NewRetiredPruneLifecycle(statesnapshots.RetiredPruneLifecycleConfig{
-			Dir: stateSnapshotDir,
+			Dir:             stateSnapshotDir,
+			PublishedRetain: snapshotCatalogRetain,
+			PublishedGrace:  snapshotCatalogGrace,
 		}))
 		log.Info("Retired snapshot segment prune lifecycle enabled",
 			"mode", chainConfig.EffectiveHistoryMode(),

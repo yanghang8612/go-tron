@@ -132,10 +132,19 @@ func FetchRemoteSnapshot(ctx context.Context, opts FetchRemoteSnapshotOptions) (
 		return nil, err
 	}
 
-	if err := writeSnapshotBytesAtomic(opts.Dir, SnapshotCatalogFile, catalogBytes); err != nil {
-		return nil, err
+	// Publish the immutable manifest object before the mutable root view, and
+	// publish the signed catalog last. A crash can leave harmless downloaded
+	// objects behind, but can never expose a local catalog whose manifest has
+	// not reached durable storage yet.
+	if catalog.ManifestPath != ManifestFile {
+		if err := writeSnapshotBytesAtomic(opts.Dir, catalog.ManifestPath, manifestBytes); err != nil {
+			return nil, err
+		}
 	}
 	if err := writeSnapshotBytesAtomic(opts.Dir, ManifestFile, manifestBytes); err != nil {
+		return nil, err
+	}
+	if err := writeSnapshotBytesAtomic(opts.Dir, SnapshotCatalogFile, catalogBytes); err != nil {
 		return nil, err
 	}
 
@@ -400,6 +409,9 @@ func fetchSnapshotSegmentFresh(ctx context.Context, client *http.Client, fileURL
 	if err := os.Rename(tmpName, abs); err != nil {
 		return false, 0, err
 	}
+	if err := syncSnapshotDirectory(filepath.Dir(abs)); err != nil {
+		return false, 0, err
+	}
 	cleanup = false
 	return true, uint64(n), nil
 }
@@ -595,7 +607,10 @@ func promoteSnapshotSegmentPartial(file *os.File, partialPath, abs string) error
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(partialPath, abs)
+	if err := os.Rename(partialPath, abs); err != nil {
+		return err
+	}
+	return syncSnapshotDirectory(filepath.Dir(abs))
 }
 
 func snapshotSegmentChecksum(checksum hash.Hash) string {
@@ -666,7 +681,19 @@ func writeSnapshotBytesAtomic(dir, relPath string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, abs)
+	if err := os.Rename(tmpName, abs); err != nil {
+		return err
+	}
+	return syncSnapshotDirectory(filepath.Dir(abs))
+}
+
+func syncSnapshotDirectory(dir string) error {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+	return handle.Sync()
 }
 
 func snapshotRemoteURL(baseURL, relPath string) (string, error) {

@@ -12,6 +12,12 @@ UMask=0027
 
 Environment=ZCASH_PARAMS_DIR=/data/gtron/params
 
+# Optional signed snapshot publisher/HTTP seed settings. Keep this environment
+# file root-owned 0600 and the referenced Ed25519 key root:java-tron 0640; never
+# put key material in ExecStart or this template.
+# See docs/dev/snapshot-bootstrap.md for the exact variables.
+EnvironmentFile=-/etc/gtron/snapshot.env
+
 # Go runtime
 Environment=GOMEMLIMIT=10GiB
 Environment=GOGC=200

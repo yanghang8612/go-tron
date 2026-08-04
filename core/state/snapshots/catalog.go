@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	SnapshotCatalogVersion = 1
-	SnapshotCatalogFile    = "snapshot-catalog.json"
+	SnapshotCatalogVersion               = 1
+	SnapshotCatalogFile                  = "snapshot-catalog.json"
+	SnapshotPublishedDir                 = "published/manifests"
+	snapshotPublishedManifestChecksumLen = 64
 
 	snapshotCatalogSignatureScheme = "ed25519"
 )
@@ -49,7 +51,11 @@ func PublishSignedSnapshotCatalog(dir string, privateKey ed25519.PrivateKey) (*S
 	if len(privateKey) != ed25519.PrivateKeySize {
 		return nil, fmt.Errorf("snapshots: ed25519 private key length %d, want %d", len(privateKey), ed25519.PrivateKeySize)
 	}
-	manifest, err := LoadProductionManifest(dir)
+	manifestData, err := os.ReadFile(filepath.Join(dir, ManifestFile))
+	if err != nil {
+		return nil, err
+	}
+	manifest, err := decodeProductionManifest(manifestData)
 	if err != nil {
 		return nil, err
 	}
@@ -63,14 +69,18 @@ func PublishSignedSnapshotCatalog(dir string, privateKey ed25519.PrivateKey) (*S
 	}); err != nil {
 		return nil, err
 	}
-	manifestChecksum, err := checksumFile(filepath.Join(dir, ManifestFile))
+	manifestChecksum := checksumBytes(manifestData)
+	manifestPath, err := publishedSnapshotManifestPath(manifest.Generation, manifestChecksum)
 	if err != nil {
+		return nil, err
+	}
+	if err := publishImmutableSnapshotManifest(dir, manifestPath, manifestData); err != nil {
 		return nil, err
 	}
 	catalog := &SnapshotCatalog{
 		Version:          SnapshotCatalogVersion,
 		PublishedUnix:    time.Now().Unix(),
-		ManifestPath:     ManifestFile,
+		ManifestPath:     manifestPath,
 		ManifestChecksum: manifestChecksum,
 		VisibleTxStart:   manifest.VisibleTxStart,
 		VisibleTxEnd:     manifest.VisibleTxEnd,
@@ -174,8 +184,8 @@ func (c *SnapshotCatalog) Validate() error {
 	if c.Version != SnapshotCatalogVersion {
 		return fmt.Errorf("snapshots: unsupported snapshot catalog version %d", c.Version)
 	}
-	if c.ManifestPath != ManifestFile {
-		return fmt.Errorf("snapshots: catalog manifestPath %q, want %q", c.ManifestPath, ManifestFile)
+	if err := validateSnapshotCatalogManifestPath(c.ManifestPath); err != nil {
+		return err
 	}
 	if c.ManifestChecksum == "" {
 		return errors.New("snapshots: catalog missing manifest checksum")
@@ -205,6 +215,61 @@ func (c *SnapshotCatalog) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func publishedSnapshotManifestPath(generation uint64, checksum string) (string, error) {
+	digest, ok := snapshotChecksumDigest(checksum)
+	if !ok || len(digest) != snapshotPublishedManifestChecksumLen {
+		return "", fmt.Errorf("snapshots: invalid published manifest checksum %q", checksum)
+	}
+	return filepath.ToSlash(filepath.Join(
+		SnapshotPublishedDir,
+		fmt.Sprintf("manifest-%020d-%s.json", generation, digest),
+	)), nil
+}
+
+func validateSnapshotCatalogManifestPath(path string) error {
+	if path == ManifestFile {
+		// Read-only compatibility for catalogs produced before immutable
+		// generation publication was introduced.
+		return nil
+	}
+	if path == "" || filepath.IsAbs(path) || filepath.Clean(path) != path || hasParentDir(path) {
+		return fmt.Errorf("snapshots: invalid catalog manifestPath %q", path)
+	}
+	dir, base := filepath.Split(path)
+	if filepath.Clean(dir) != SnapshotPublishedDir || !strings.HasPrefix(base, "manifest-") || !strings.HasSuffix(base, ".json") {
+		return fmt.Errorf("snapshots: catalog manifestPath %q is not an immutable published manifest", path)
+	}
+	stem := strings.TrimSuffix(strings.TrimPrefix(base, "manifest-"), ".json")
+	parts := strings.Split(stem, "-")
+	if len(parts) != 2 || len(parts[0]) != 20 || len(parts[1]) != snapshotPublishedManifestChecksumLen {
+		return fmt.Errorf("snapshots: catalog manifestPath %q has an invalid generation name", path)
+	}
+	for _, ch := range parts[0] {
+		if ch < '0' || ch > '9' {
+			return fmt.Errorf("snapshots: catalog manifestPath %q has an invalid generation", path)
+		}
+	}
+	for _, ch := range parts[1] {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			return fmt.Errorf("snapshots: catalog manifestPath %q has an invalid checksum suffix", path)
+		}
+	}
+	return nil
+}
+
+func publishImmutableSnapshotManifest(dir, relPath string, data []byte) error {
+	abs := filepath.Join(dir, relPath)
+	if existing, err := os.ReadFile(abs); err == nil {
+		if string(existing) != string(data) {
+			return fmt.Errorf("snapshots: immutable published manifest %q already contains different bytes", relPath)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return writeSnapshotBytesAtomic(dir, relPath, data)
 }
 
 func (c *SnapshotCatalog) ValidateChainIdentity(expected ChainIdentity) error {
@@ -297,24 +362,7 @@ func writeSnapshotCatalog(dir string, catalog *SnapshotCatalog) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".snapshot-catalog-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, filepath.Join(dir, SnapshotCatalogFile))
+	return writeSnapshotBytesAtomic(dir, SnapshotCatalogFile, data)
 }
 
 func checksumFile(path string) (string, error) {

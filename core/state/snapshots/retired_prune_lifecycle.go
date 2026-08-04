@@ -9,8 +9,10 @@ import (
 const defaultRetiredPruneInterval = time.Minute
 
 type RetiredPruneLifecycleConfig struct {
-	Dir      string
-	Interval time.Duration
+	Dir             string
+	Interval        time.Duration
+	PublishedRetain int
+	PublishedGrace  time.Duration
 }
 
 // RetiredPruneLifecycle periodically reclaims immutable snapshot files that
@@ -26,6 +28,12 @@ type RetiredPruneLifecycle struct {
 func NewRetiredPruneLifecycle(cfg RetiredPruneLifecycleConfig) *RetiredPruneLifecycle {
 	if cfg.Interval <= 0 {
 		cfg.Interval = defaultRetiredPruneInterval
+	}
+	if cfg.PublishedRetain <= 0 {
+		cfg.PublishedRetain = DefaultPublishedSnapshotRetain
+	}
+	if cfg.PublishedGrace <= 0 {
+		cfg.PublishedGrace = DefaultPublishedSnapshotGrace
 	}
 	return &RetiredPruneLifecycle{
 		cfg:  cfg,
@@ -67,6 +75,16 @@ func (l *RetiredPruneLifecycle) OnePass() (*PruneRetiredSegmentFilesResult, erro
 		}
 		return nil, err
 	}
+	published, err := PrunePublishedSnapshotManifests(l.cfg.Dir, l.cfg.PublishedRetain, l.cfg.PublishedGrace)
+	if err != nil {
+		return nil, err
+	}
+	if published.Deleted > 0 {
+		coldSnapshotLog.Info("Expired published snapshot download leases",
+			"inspected", published.Inspected,
+			"retained", published.Retained,
+			"deleted", published.Deleted)
+	}
 	return PruneRetiredSegmentFiles(l.cfg.Dir)
 }
 
@@ -101,5 +119,6 @@ func logRetiredPruneResult(msg string, result *PruneRetiredSegmentFilesResult) {
 		"deleted", result.FilesDeleted,
 		"missing", result.FilesMissing,
 		"skippedActive", result.FilesSkippedActive,
+		"skippedPublished", result.FilesSkippedPublished,
 		"bytesDeleted", result.BytesDeleted)
 }

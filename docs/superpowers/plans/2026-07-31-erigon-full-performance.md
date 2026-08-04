@@ -376,7 +376,11 @@
   disk-write, CPU, and throughput regressions.
 - [x] Restore the admitted Pebble v1 runtime without a datadir reset; the
   already-ratcheted shared bridge format remains readable by v1.
-- [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
+- [x] Productionize signed snapshot catalog hosting and resumable bootstrap
+  with immutable generation manifests, bounded segment leases, a Range-capable
+  allowlisted HTTP lifecycle, and systemd/Nginx operator wiring.
+- [ ] Run a real hosted mainnet snapshot fetch/restore through the public
+  gateway after the fresh snap-mode datadir has published its first catalog.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

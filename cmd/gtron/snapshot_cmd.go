@@ -72,6 +72,35 @@ var (
 		Usage:   "File containing the Ed25519 catalog signing key as a 32-byte seed or 64-byte private key in hex",
 		EnvVars: []string{"GTRON_SNAPSHOT_SIGNING_KEY_FILE"},
 	}
+	snapshotServeFlag = &cli.BoolFlag{
+		Name:    "snapshot.serve",
+		Usage:   "Serve the signed catalog and immutable published snapshot generations over a dedicated HTTP listener",
+		EnvVars: []string{"GTRON_SNAPSHOT_SERVE"},
+	}
+	snapshotServeAddrFlag = &cli.StringFlag{
+		Name:    "snapshot.serve.addr",
+		Usage:   "Snapshot HTTP listener address",
+		Value:   "127.0.0.1",
+		EnvVars: []string{"GTRON_SNAPSHOT_SERVE_ADDR"},
+	}
+	snapshotServePortFlag = &cli.IntFlag{
+		Name:    "snapshot.serve.port",
+		Usage:   "Snapshot HTTP listener port",
+		Value:   6072,
+		EnvVars: []string{"GTRON_SNAPSHOT_SERVE_PORT"},
+	}
+	snapshotCatalogRetainFlag = &cli.IntFlag{
+		Name:    "snapshot.catalog-retain",
+		Usage:   "Minimum number of immutable published catalog generations retained for resumable downloads",
+		Value:   statesnapshots.DefaultPublishedSnapshotRetain,
+		EnvVars: []string{"GTRON_SNAPSHOT_CATALOG_RETAIN"},
+	}
+	snapshotCatalogGraceFlag = &cli.DurationFlag{
+		Name:    "snapshot.catalog-grace",
+		Usage:   "Minimum age before an obsolete published catalog generation and its segment leases may expire",
+		Value:   statesnapshots.DefaultPublishedSnapshotGrace,
+		EnvVars: []string{"GTRON_SNAPSHOT_CATALOG_GRACE"},
+	}
 	snapshotFromBlockFlag = &cli.Uint64Flag{
 		Name:  "snapshot.from-block",
 		Usage: "First chain-freezer block number to snapshot, inclusive",
@@ -408,6 +437,8 @@ func snapshotCommand() *cli.Command {
 				Flags: []cli.Flag{
 					dataDirFlag,
 					snapshotDirFlag,
+					snapshotCatalogRetainFlag,
+					snapshotCatalogGraceFlag,
 				},
 				Action: snapshotPruneRetiredCmd,
 			},
@@ -1338,15 +1369,39 @@ func pruneVerifiedHotSectionBlooms(db *rawdb.ChainDB, dir string, identity state
 func snapshotPruneRetiredCmd(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
 	dir := snapshotDir(ctx, cfg.DataDir)
+	retain := ctx.Int("snapshot.catalog-retain")
+	if retain <= 0 {
+		if ctx.IsSet("snapshot.catalog-retain") {
+			return fmt.Errorf("--snapshot.catalog-retain must be positive, got %d", retain)
+		}
+		retain = statesnapshots.DefaultPublishedSnapshotRetain
+	}
+	grace := ctx.Duration("snapshot.catalog-grace")
+	if grace <= 0 {
+		if ctx.IsSet("snapshot.catalog-grace") {
+			return fmt.Errorf("--snapshot.catalog-grace must be positive, got %s", grace)
+		}
+		grace = statesnapshots.DefaultPublishedSnapshotGrace
+	}
+	published, err := statesnapshots.PrunePublishedSnapshotManifests(
+		dir,
+		retain,
+		grace,
+	)
+	if err != nil {
+		return err
+	}
 	result, err := statesnapshots.PruneRetiredSegmentFiles(dir)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Retired snapshot segments pruned: retired=%d deleted=%d missing=%d skippedActive=%d bytesDeleted=%d\n",
+	fmt.Printf("Retired snapshot segments pruned: publishedExpired=%d retired=%d deleted=%d missing=%d skippedActive=%d skippedPublished=%d bytesDeleted=%d\n",
+		published.Deleted,
 		result.RetiredSegments,
 		result.FilesDeleted,
 		result.FilesMissing,
 		result.FilesSkippedActive,
+		result.FilesSkippedPublished,
 		result.BytesDeleted,
 	)
 	return nil

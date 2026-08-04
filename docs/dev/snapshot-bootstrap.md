@@ -7,8 +7,9 @@ file.
 
 ## Inputs
 
-- Snapshot URL: the HTTP(S) directory containing `snapshot-catalog.json`,
-  `manifest.json`, and all referenced segment files. Pass it with
+- Snapshot URL: the HTTP(S) directory containing `snapshot-catalog.json`, the
+  catalog's checksum-bound immutable manifest under `published/manifests/`,
+  and all referenced segment files. Pass it with
   `--snapshot.url` or set `GTRON_SNAPSHOT_URL` for repeated fetch/bootstrap
   runs.
 - Trusted catalog keys: Ed25519 public keys for snapshot catalogs. Pass them
@@ -35,6 +36,52 @@ export GTRON_SNAPSHOT_TRUSTED_KEY_FILE=/path/to/snapshot-trusted-keys.txt
 # Only needed when the catalog carries forkConfigHash:
 export GTRON_SNAPSHOT_FORK_CONFIG_HASH=sha256:<hex>
 ```
+
+## Publish And Host Immutable Generations
+
+A snap-mode source node can atomically cut signed bootstrap generations and
+serve them from a dedicated loopback HTTP listener:
+
+```bash
+# The service process must be able to read the key without making it public.
+install -o root -g java-tron -m 0640 /secure/catalog-key.hex \
+  /etc/gtron/snapshot-catalog-key.hex
+
+# /etc/gtron/snapshot.env (root:root, mode 0600)
+GTRON_SNAPSHOT_CATALOG_SIGNING_KEY_FILE=/etc/gtron/snapshot-catalog-key.hex
+GTRON_SNAPSHOT_SERVE=true
+GTRON_SNAPSHOT_SERVE_ADDR=127.0.0.1
+GTRON_SNAPSHOT_SERVE_PORT=6072
+
+# Keep at least three generations and never expire an obsolete download lease
+# during its first 24 hours. Increase the grace for slower distribution links.
+GTRON_SNAPSHOT_CATALOG_RETAIN=3
+GTRON_SNAPSHOT_CATALOG_GRACE=24h
+```
+
+`deploy/systemd/gtron.service` reads that optional environment file. When the
+runtime cold lifecycle changes `manifest.json`, publication first copies its
+exact bytes to a generation/checksum-qualified immutable manifest, verifies all
+active segment formats and checksums, and only then atomically switches
+`snapshot-catalog.json`. A downloader that already read the previous catalog
+continues using its immutable manifest and segment lease even while newer cold
+build, merge, and prune passes run.
+
+The built-in listener serves only `snapshot-catalog.json`, immutable published
+manifests, and segment paths leased by those manifests. It rejects directory
+listings, mutable `manifest.json`, temporary files, and unrelated files. GET,
+HEAD, ETag, and HTTP Range are supported; Range is what lets checksum-bound
+`.part` downloads resume. `deploy/nginx/tron-gateway.conf` exposes the loopback
+listener at `/snapshots/`, so the matching bootstrap base URL is:
+
+```bash
+export GTRON_SNAPSHOT_URL=http://3.12.206.71:6060/snapshots
+```
+
+Expired immutable manifests are removed before the retired-segment pass. A
+segment is reclaimable only when it is absent from the live manifest and every
+unexpired published manifest. This bounds old-generation storage without
+allowing an ordinary catalog rotation to invalidate an in-progress download.
 
 ## Trusted Key File
 
@@ -91,7 +138,8 @@ ln -s /cold/gtron/trace "$SNAPSHOT_ROOT/trace"
 ln -s /cold/gtron/log "$SNAPSHOT_ROOT/log"
 ```
 
-- Keep `manifest.json`, `snapshot-catalog.json`, `latest/`, and `commitment/`
+- Keep `manifest.json`, `snapshot-catalog.json`, `published/manifests/`,
+  `latest/`, and `commitment/`
   on the fast snapshot root. `latest/` and `commitment/` participate in normal
   state reads and runtime rebuilds.
 - `history/` contains archive state-history segments and their accessors;
