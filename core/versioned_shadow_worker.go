@@ -14,6 +14,7 @@ import (
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -469,9 +470,10 @@ var errDiscardShadowFrozenRawMiss = errors.New("discard shadow frozen raw key wa
 // boundary. An unexpected key is an execution error instead of falling
 // through to the live block buffer, which may already contain later writes.
 type discardShadowFrozenKV struct {
-	values  map[string][]byte
-	present map[string]bool
-	misses  int64
+	values          map[string][]byte
+	present         map[string]bool
+	blockHashReader rawdb.BlockHashReaderStrict
+	misses          int64
 }
 
 func (db *discardShadowFrozenKV) Has(key []byte) (bool, error) {
@@ -2032,6 +2034,9 @@ func (retry *discardShadowSenderRetry) freezeAsyncRawViewFrom(parent actuator.Bu
 	frozen := &discardShadowFrozenKV{
 		values:  make(map[string][]byte, len(keys)),
 		present: make(map[string]bool, len(keys)),
+	}
+	if reader, ok := parent.(rawdb.BlockHashReaderStrict); ok {
+		frozen.blockHashReader = reader
 	}
 	for key := range keys {
 		if parent == nil {
@@ -4271,11 +4276,43 @@ type discardShadowWorker struct {
 	state         *state.StateDB
 	dynProps      *state.DynamicProperties
 	db            discardKVOverlay
+	blockHashDB   discardKVOverlayBlockHash
 	forkCache     *forks.VersionPassCache
 	scratch       applyTransactionScratch
 	infoSlot      transactionInfoSlot
 	recorder      state.TransactionAccessRecorder
 	applyRecorder state.TransactionAccessRecorder
+}
+
+// discardKVOverlayBlockHash is selected only when the underlying canonical
+// view explicitly exposes the freezer-aware strict reader. Keeping this as a
+// conditional wrapper lets plain/frozen raw KV retain its fail-closed behavior
+// instead of making every overlay advertise a capability it may not have.
+type discardKVOverlayBlockHash struct {
+	*discardKVOverlay
+	reader rawdb.BlockHashReaderStrict
+}
+
+func (db *discardKVOverlayBlockHash) BlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error) {
+	return db.reader.BlockHashByNumberStrict(number)
+}
+
+func (worker *discardShadowWorker) transactionDB() actuator.BufferedKVStore {
+	if worker == nil {
+		return nil
+	}
+	var reader rawdb.BlockHashReaderStrict
+	if parentReader, ok := worker.db.parent.(rawdb.BlockHashReaderStrict); ok {
+		reader = parentReader
+	} else if frozen, ok := worker.db.parent.(*discardShadowFrozenKV); ok {
+		reader = frozen.blockHashReader
+	}
+	if reader == nil {
+		return &worker.db
+	}
+	worker.blockHashDB.discardKVOverlay = &worker.db
+	worker.blockHashDB.reader = reader
+	return &worker.blockHashDB
 }
 
 func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConfig) discardShadowTaskResult {
@@ -4307,7 +4344,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		prevBlockHeadSlot,
 		cfg.block.Timestamp(),
 		cfg.block.Number(),
-		&worker.db,
+		worker.transactionDB(),
 		cfg.activeWitnesses,
 		cfg.energyLimitForkBlockNum,
 		cfg.genesisHash,

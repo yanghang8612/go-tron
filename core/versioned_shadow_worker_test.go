@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -353,6 +355,47 @@ func TestAsyncRetryFrozenRawViewRejectsLiveFallback(t *testing.T) {
 	}
 	if frozen.misses != 1 {
 		t.Fatalf("frozen misses = %d, want 1", frozen.misses)
+	}
+}
+
+type frozenRawBlockHashParent struct {
+	ethdb.KeyValueStore
+	hashes map[uint64]tcommon.Hash
+}
+
+func (db *frozenRawBlockHashParent) BlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error) {
+	hash, ok := db.hashes[number]
+	return hash, ok, nil
+}
+
+func TestAsyncRetryFrozenRawViewRetainsOnlyImmutableBlockHashCapability(t *testing.T) {
+	want := tcommon.HexToHash("0000000000000000000000000000000000000000000000000000000000000042")
+	parent := &frozenRawBlockHashParent{
+		KeyValueStore: ethrawdb.NewMemoryDatabase(),
+		hashes:        map[uint64]tcommon.Hash{42: want},
+	}
+	retry := &discardShadowSenderRetry{source: &discardShadowPreexecution{
+		resultByTx: []int{-1},
+		senderNext: []int{-1},
+	}}
+
+	frozen, keys, err := retry.freezeAsyncRawViewFrom(parent, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys != 0 {
+		t.Fatalf("frozen raw keys = %d, want 0", keys)
+	}
+	worker := discardShadowWorker{db: discardKVOverlay{parent: frozen}}
+	reader, ok := worker.transactionDB().(rawdb.BlockHashReaderStrict)
+	if !ok {
+		t.Fatal("frozen execution DB did not retain the strict block-hash capability")
+	}
+	if got, found, err := reader.BlockHashByNumberStrict(42); err != nil || !found || got != want {
+		t.Fatalf("immutable block hash = %x, %v, %v; want %x, true, nil", got, found, err, want)
+	}
+	if _, err := frozen.Get([]byte("uncaptured")); !errors.Is(err, errDiscardShadowFrozenRawMiss) {
+		t.Fatalf("uncaptured raw read error = %v", err)
 	}
 }
 

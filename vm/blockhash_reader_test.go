@@ -44,6 +44,24 @@ func (f *strictHashReaderKV) BlockHashByNumber(number uint64) (tcommon.Hash, boo
 	return tcommon.Hash{0xFF}, true
 }
 
+type rejectingRawStrictHashReaderKV struct {
+	ethdb.KeyValueStore
+	hash tcommon.Hash
+	err  error
+}
+
+func (f *rejectingRawStrictHashReaderKV) Has([]byte) (bool, error) {
+	return false, f.err
+}
+
+func (f *rejectingRawStrictHashReaderKV) Get([]byte) ([]byte, error) {
+	return nil, f.err
+}
+
+func (f *rejectingRawStrictHashReaderKV) BlockHashByNumberStrict(number uint64) (tcommon.Hash, bool, error) {
+	return f.hash, true, nil
+}
+
 func TestBlockHashOpcodePrefersBlockHashReader(t *testing.T) {
 	pruned := tcommon.HexToHash("0000000000ff842737eddf96785498c824c9752d49254b49887160f4ea17c7b6")
 	db := &hashReaderKV{
@@ -85,6 +103,22 @@ func TestBlockHashOpcodeSurfacesStrictReaderError(t *testing.T) {
 	stack.push(uint256.NewInt(50))
 	if _, err := opBlockHash(nil, tvm.interpreter, nil, nil, stack); !errors.Is(err, wantErr) {
 		t.Fatalf("opBlockHash err = %v, want %v", err, wantErr)
+	}
+}
+
+func TestBlockHashOpcodeDoesNotProbeRawKVBeforeStrictReader(t *testing.T) {
+	want := tcommon.HexToHash("0000000000000000000000000000000000000000000000000000000000000042")
+	db := &rejectingRawStrictHashReaderKV{
+		KeyValueStore: ethrawdb.NewMemoryDatabase(),
+		hash:          want,
+		err:           errors.New("unfrozen raw key"),
+	}
+	tvm := NewTVM(nil, nil, tcommon.Address{}, 100, 0, tcommon.Address{}, 1, TVMConfig{})
+	tvm.SetDB(db)
+
+	got := runBlockHashOpcode(t, tvm, uint256.NewInt(42))
+	if !bytes.Equal(got[:], want.Bytes()) {
+		t.Fatalf("BLOCKHASH via strict reader: got %x want %x", got, want.Bytes())
 	}
 }
 

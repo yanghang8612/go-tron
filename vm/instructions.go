@@ -477,11 +477,11 @@ func tvmBlockHashByNumber(db KVReadWriter, number uint64) (tcommon.Hash, bool, e
 	if db == nil {
 		return tcommon.Hash{}, false, nil
 	}
-	if hash, found, err := rawdb.ReadBlockHashByNumberStrict(db, number); err != nil || found {
-		return hash, found, err
-	}
 	if reader, ok := db.(rawdb.BlockHashReaderStrict); ok {
 		return reader.BlockHashByNumberStrict(number)
+	}
+	if hash, found, err := rawdb.ReadBlockHashByNumberStrict(db, number); err != nil || found {
+		return hash, found, err
 	}
 	if reader, ok := db.(blockHashByNumberReader); ok {
 		hash, found := reader.BlockHashByNumber(number)
