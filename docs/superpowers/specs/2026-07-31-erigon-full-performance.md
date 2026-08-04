@@ -3682,6 +3682,28 @@ runner drains two independent ready ranges in one pass. New counters expose
 total merge passes, catch-up deferrals, and last-pass merge count for the fresh
 snap-mode production gate.
 
+#### P5.18: Single-pass base tx-range emission
+
+Every cold base step previously opened its bounded hot `StateTxRange` source
+twice: once to pre-count rows for the history record offset and again to emit
+the table. This repeated Pebble iterator creation, RLP decoding, row allocation,
+and validation for every frozen batch. Erigon's step collation consumes each
+source once and derives file metadata while writing it.
+
+The base builder now writes a zero count through a 256 KiB sequential buffer,
+streams and validates each bounded range row once, flushes, and backpatches the
+final count in the fixed header slot. The emitted count then determines the
+unchanged first-record offset used by the txNum index. Maximum-size checks,
+record ordering, companion verification, checksums, atomic rename, manifest
+publication, and hot-prune coverage remain unchanged. Regression instrumentation
+proves the production block-bounded tx-range callback is entered exactly once.
+
+Across five local runs of a 5,000-block base-step benchmark, mean build time
+fell from 269.48 ms to 258.96 ms (-3.9%) and mean allocations from 80,917 to
+65,902 (-18.6%). Allocated bytes remained about 1.036 GB because the bounded
+ETL collectors dominate that metric; reducing their fresh-step memory reserve
+is the next independent storage-lifecycle target.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

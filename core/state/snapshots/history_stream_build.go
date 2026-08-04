@@ -74,15 +74,6 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if err != nil {
 		return result, err
 	}
-	txRangeCount, err := countStateDomainChangeHistoryTxRanges(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange)
-	if err != nil {
-		return result, err
-	}
-	if txRangeCount > (math.MaxUint64-uint64(stateDomainChangeBinaryHeaderSize)-8)/stateDomainChangeBinaryTxRangeSize {
-		return result, fmt.Errorf("snapshots: state-domain-change tx range count %d overflows segment size", txRangeCount)
-	}
-	recordOffset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + txRangeCount*stateDomainChangeBinaryTxRangeSize
-
 	segmentTmp, segmentTmpName, err := createStateDomainChangeBinaryTempFile(dir, ref.Path)
 	if err != nil {
 		return result, err
@@ -94,9 +85,11 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if err := writeStateDomainChangeBinaryHeaderTo(segmentTmp, stateDomainChangeBinarySegmentMagic, ref.FromTxNum, ref.ToTxNum, recordCount); err != nil {
 		return result, err
 	}
-	if err := writeStateDomainChangeBinaryTxRangeTableFromDB(segmentTmp, db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, txRangeCount); err != nil {
+	txRangeCount, err := writeStateDomainChangeBinaryTxRangeTableFromDB(segmentTmp, db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange)
+	if err != nil {
 		return result, err
 	}
+	recordOffset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + txRangeCount*stateDomainChangeBinaryTxRangeSize
 
 	indexTmp, indexTmpName, err := createStateDomainChangeBinaryTempFile(dir, stateDomainChangeBinaryIndexPath(ref.Path))
 	if err != nil {
@@ -213,41 +206,37 @@ func collectStateDomainChangeHistoryRecords(db ethdb.Iteratee, cfg DomainCfg, fr
 	return count, err
 }
 
-func countStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange) (uint64, error) {
-	var count uint64
-	err := iterateStateDomainChangeHistoryTxRanges(db, cfg, fromTxNum, toTxNum, blockRange, func(*rawdb.StateTxRange) error {
-		if count == math.MaxUint64 {
-			return errors.New("snapshots: state-domain-change tx range count overflows")
-		}
-		count++
-		return nil
-	})
-	return count, err
-}
-
-func writeStateDomainChangeBinaryTxRangeTableFromDB(w io.Writer, db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange, count uint64) error {
-	var countRaw [8]byte
-	binary.BigEndian.PutUint64(countRaw[:], count)
-	if _, err := w.Write(countRaw[:]); err != nil {
-		return err
+func writeStateDomainChangeBinaryTxRangeTableFromDB(file *os.File, db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange) (uint64, error) {
+	if file == nil {
+		return 0, errors.New("snapshots: nil state-domain-change history file")
 	}
-	var emitted uint64
+	writer := bufio.NewWriterSize(file, stateDomainChangeHistoryWriteBufferSize)
+	if err := writeStateDomainChangeBinaryTxRangeCount(writer, 0); err != nil {
+		return 0, err
+	}
+	const maxCount = (math.MaxUint64 - uint64(stateDomainChangeBinaryHeaderSize) - 8) / stateDomainChangeBinaryTxRangeSize
+	var written uint64
 	if err := iterateStateDomainChangeHistoryTxRanges(db, cfg, fromTxNum, toTxNum, blockRange, func(row *rawdb.StateTxRange) error {
-		if emitted >= count {
-			return fmt.Errorf("snapshots: state-domain-change tx range count exceeds preflight count %d", count)
+		if written >= maxCount {
+			return fmt.Errorf("snapshots: state-domain-change tx range count exceeds maximum %d", maxCount)
 		}
-		if err := writeStateDomainChangeBinaryTxRangeEntry(w, row); err != nil {
+		if err := writeStateDomainChangeBinaryTxRangeEntry(writer, row); err != nil {
 			return err
 		}
-		emitted++
+		written++
 		return nil
 	}); err != nil {
-		return err
+		return 0, err
 	}
-	if emitted != count {
-		return fmt.Errorf("snapshots: state-domain-change tx range count %d, want preflight count %d", emitted, count)
+	if err := writer.Flush(); err != nil {
+		return 0, err
 	}
-	return nil
+	var countRaw [8]byte
+	binary.BigEndian.PutUint64(countRaw[:], written)
+	if _, err := file.WriteAt(countRaw[:], stateDomainChangeBinaryHeaderSize); err != nil {
+		return 0, err
+	}
+	return written, nil
 }
 
 func iterateStateDomainChangeHistoryTxRanges(db ethdb.Iteratee, cfg DomainCfg, fromTxNum, toTxNum uint64, blockRange *stateDomainChangeHistoryBlockRange, fn func(*rawdb.StateTxRange) error) error {

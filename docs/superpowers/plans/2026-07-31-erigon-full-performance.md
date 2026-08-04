@@ -417,5 +417,7 @@
 - [x] Match Erigon's build-then-merge scheduling during historical catch-up:
   defer intermediate history levels until a full 256-step frozen range is
   ready, then drain every eligible aligned merge once the builder catches up.
+- [x] Stream each base step's bounded transaction-range table once into a
+  buffered file and backpatch its count, removing the pre-count Pebble scan.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

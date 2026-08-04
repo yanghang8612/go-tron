@@ -3,17 +3,59 @@ package snapshots
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+func BenchmarkBuildStateDomainChangeHistoryTxRanges(b *testing.B) {
+	db := rawdb.NewMemoryDatabase()
+	const blocks = uint64(5_000)
+	for block := uint64(1); block <= blocks; block++ {
+		if err := rawdb.WriteStateTxRange(db, block, common.Hash{byte(block)}, block, block); err != nil {
+			b.Fatalf("write tx range %d: %v", block, err)
+		}
+	}
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5c}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 1, Seq: 1,
+		FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner,
+		Domain: kvdomains.ContractStorage, Key: []byte("slot"), NextExists: true, Next: []byte("value"),
+	}); err != nil {
+		b.Fatal(err)
+	}
+	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	if !ok {
+		b.Fatal("missing state-domain-change registry")
+	}
+	root := b.TempDir()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		dir := filepath.Join(root, fmt.Sprintf("run-%d", i))
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		_, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db, dir, SegmentRef{
+			Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+			FromTxNum: 1, ToTxNum: blocks, Path: "history/state-domain-change-1-5000.seg",
+		}, cfg, etl.Options{}, &stateDomainChangeHistoryBlockRange{from: 1, to: blocks})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 func TestStateDomainChangeHistorySegmentBuildOpenAndCheck(t *testing.T) {
 	dir := t.TempDir()
@@ -336,12 +378,21 @@ func TestBuildStateDomainChangeHistoryStreamsAccessorETL(t *testing.T) {
 	if !ok {
 		t.Fatal("missing state-domain-change registry")
 	}
-	result, err := buildStateDomainChangeHistoryBinarySegmentsFromDB(db, dir, SegmentRef{
+	originalTxRangeIterator := cfg.IterateHotHistoryTxRangeBlocks
+	var txRangeScans int
+	cfg.IterateHotHistoryTxRangeBlocks = func(db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*rawdb.StateTxRange) (bool, error)) error {
+		txRangeScans++
+		return originalTxRangeIterator(db, fromBlock, toBlock, fn)
+	}
+	result, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db, dir, SegmentRef{
 		Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
 		FromTxNum: 10, ToTxNum: 13, Path: "history/state-domain-change-10-13.seg",
-	}, cfg, etl.Options{TempDir: filepath.Join(dir, "etl-scratch"), BufferLimit: 1})
+	}, cfg, etl.Options{TempDir: filepath.Join(dir, "etl-scratch"), BufferLimit: 1}, &stateDomainChangeHistoryBlockRange{from: 1, to: 2})
 	if err != nil {
 		t.Fatalf("build streamed binary history: %v", err)
+	}
+	if txRangeScans != 1 {
+		t.Fatalf("tx-range scans = %d, want one streamed pass", txRangeScans)
 	}
 	if result.recordETL.SpilledRuns < 2 {
 		t.Fatalf("record ETL spilled %d runs, want forced external spill", result.recordETL.SpilledRuns)

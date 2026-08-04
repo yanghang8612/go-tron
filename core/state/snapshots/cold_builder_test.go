@@ -212,11 +212,10 @@ func TestColdBuilderSubsequentPassSeeksFromPublishedBlock(t *testing.T) {
 			seekCount++
 		}
 	}
-	// Boundary discovery, record collation, tx-range counting, and tx-range
-	// emission must all use the bounded source rather than independently
-	// rescanning the prefix.
-	if seekCount < 4 {
-		t.Fatalf("state tx-range iterator starts = %x, want at least four seek starts %x", store.stateTxRangeStarts, want)
+	// Boundary discovery, record collation, and the single-pass tx-range
+	// emission must all use the bounded source rather than rescanning the prefix.
+	if seekCount < 3 {
+		t.Fatalf("state tx-range iterator starts = %x, want at least three seek starts %x", store.stateTxRangeStarts, want)
 	}
 }
 
