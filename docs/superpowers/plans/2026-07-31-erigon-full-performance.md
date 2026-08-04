@@ -399,5 +399,8 @@
 - [x] Attach the same accessor collectors to base cold collation so every new
   aggregation leaf avoids a post-compression record scan, including forced ETL
   spill and byte-equivalent rebuild coverage.
+- [x] Remove duplicate per-file history/index/accessor validation from source
+  discovery while retaining the cross-companion verifier's complete checksum,
+  structural, and coverage gate before every merge.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

@@ -3522,6 +3522,29 @@ runs. Base-leaf output format, manifest ordering, compression, and prune gates
 are unchanged. Large-file wall-clock and lifecycle-lag impact remains assigned
 to the fresh snap-mode production gate.
 
+#### P5.12: Single companion validation gate per merge input
+
+Compaction source discovery independently ran the structural/checksum checker
+for each history, txNum index, and accessor file, then immediately called the
+cross-companion verifier. That verifier deliberately starts by invoking those
+same three registered checks before proving index and accessor coverage against
+the history payload. Immutable inputs were therefore fully hashed and decoded
+twice before any merge output could be written.
+
+Source discovery now calls only the cross-companion verifier. No validation is
+removed: physical checksums, individual file structure and ordering, history
+readability, index coverage, exact accessor coverage, and prefix-group coverage
+all remain prerequisites to opening the input for copy. This mirrors Erigon's
+separation between one static-file integrity gate and the subsequent merge,
+while preserving go-tron's stronger companion coverage proof.
+
+All compaction rejection tests, including an accessor whose internally valid
+entry points at the wrong history record, passed ten consecutive runs. The
+same 16,000-record local benchmark moved from a five-run mean of 798.27 ms to
+790.08 ms (1.03%); the ranges overlap, so this is directional rather than an
+admission claim. The deterministic result is removal of one checksum/structure
+pass over all three source files per merge input.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

@@ -503,15 +503,10 @@ func collectStateDomainChangeBinaryCompactionSources(dir string, selection histo
 		if !ok {
 			return nil, fmt.Errorf("snapshots: state-domain-change history %q missing accessor companion", candidate.history.Path)
 		}
-		if err := checkStateDomainChangeBinarySegment(dir, candidate.history); err != nil {
-			return nil, err
-		}
-		if err := checkStateDomainChangeBinaryIndex(dir, idxRef); err != nil {
-			return nil, err
-		}
-		if err := checkStateDomainChangeBinaryAccessor(dir, accessorRef); err != nil {
-			return nil, err
-		}
+		// Companion verification begins with the registered structural and
+		// checksum checks for all three files before proving cross-file coverage.
+		// Do not run those same full-file checks separately here: immutable source
+		// segments would otherwise be hashed and decoded twice before every merge.
 		if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, candidate.history, idxRef, accessorRef); err != nil {
 			return nil, err
 		}
