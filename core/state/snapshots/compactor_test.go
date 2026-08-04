@@ -1,6 +1,8 @@
 package snapshots
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -87,6 +90,67 @@ func TestCompactHistoryDomainMergesContinuousBinarySegments(t *testing.T) {
 	assertFileExists(t, filepath.Join(dir, indexRef.Path))
 	for _, path := range oldPaths {
 		assertFileMissing(t, filepath.Join(dir, path))
+	}
+}
+
+func TestCompactHistoryDomainPreservesPublishedInputLeases(t *testing.T) {
+	dir := t.TempDir()
+	refs := append([]SegmentRef{},
+		writeCompactionStateDomainChangeSegment(t, dir, 1, 1, binaryStateDomainChange(1, 1, 1, "a"))...)
+	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 2, 2, binaryStateDomainChange(2, 2, 1, "b"))...)
+	identity := ChainIdentity{ChainID: 1, NetworkID: 2, GenesisHash: strings.Repeat("01", 32)}
+	manifest := NewManifestForChain(1, 2, refs, identity)
+	manifest.PublishedUnix = time.Now().Add(-48 * time.Hour).Unix()
+	if err := PublishManifest(dir, manifest); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	oldCatalog, err := PublishSignedSnapshotCatalog(dir, privateKey)
+	if err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog(old): %v", err)
+	}
+	oldPaths := segmentPaths(refs)
+
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{
+		MinSegments:    2,
+		DeleteObsolete: true,
+	})
+	if err != nil {
+		t.Fatalf("compact history domain: %v", err)
+	}
+	if !result.Merged {
+		t.Fatalf("result = %+v, want merged", result)
+	}
+	for _, path := range oldPaths {
+		assertFileExists(t, filepath.Join(dir, path))
+	}
+	protected, err := PruneRetiredSegmentFiles(dir)
+	if err != nil {
+		t.Fatalf("PruneRetiredSegmentFiles(protected): %v", err)
+	}
+	if protected.FilesDeleted != 0 || protected.FilesSkippedPublished != len(oldPaths) {
+		t.Fatalf("protected prune = %+v, want %d published skips", protected, len(oldPaths))
+	}
+
+	newCatalog, err := PublishSignedSnapshotCatalog(dir, privateKey)
+	if err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog(new): %v", err)
+	}
+	if newCatalog.ManifestPath == oldCatalog.ManifestPath {
+		t.Fatalf("catalog path did not advance: %q", newCatalog.ManifestPath)
+	}
+	if _, err := PrunePublishedSnapshotManifests(dir, 1, time.Hour); err != nil {
+		t.Fatalf("PrunePublishedSnapshotManifests: %v", err)
+	}
+	reclaimed, err := PruneRetiredSegmentFiles(dir)
+	if err != nil {
+		t.Fatalf("PruneRetiredSegmentFiles(reclaimed): %v", err)
+	}
+	if reclaimed.FilesDeleted != len(oldPaths) {
+		t.Fatalf("reclaimed prune = %+v, want %d deleted", reclaimed, len(oldPaths))
 	}
 }
 

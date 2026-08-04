@@ -3336,6 +3336,11 @@ missing. Legacy root-manifest catalogs remain read-only compatible.
 Every published immutable manifest is also a segment-retention lease. Retired
 file inspection combines the live manifest with all unexpired published views,
 so a merge cannot reclaim an object needed by a resumable older download.
+The history compactor applies the same lease set before its immediate obsolete
+input cleanup; this is required because compaction previously bypassed the
+periodic retired-file lifecycle. On first startup after upgrade, catalog
+preflight also converts a valid legacy root-manifest catalog into an immutable
+generation before any build or merge may mutate the root view.
 Default GC preserves at least three catalog objects and a 24-hour grace; both
 are explicit runtime flags. Expired manifest leases are removed before the
 subsequent retired-segment pass, bounding obsolete storage without weakening

@@ -218,6 +218,19 @@ func deleteObsoleteHistoryCompactionFiles(dir string, candidates []historyCompac
 			keep[ref.Path] = struct{}{}
 		}
 	}
+	// A published immutable manifest is an active downloader lease even after
+	// the live manifest has retired its input segments. Compaction may unlink
+	// only files that are absent from every retained catalog generation; the
+	// regular retired-file pass reclaims them after the lease grace expires.
+	published, err := LoadPublishedSnapshotManifests(dir)
+	if err != nil {
+		return fmt.Errorf("snapshots: load published manifest leases before compaction cleanup: %w", err)
+	}
+	for _, generation := range published {
+		for _, ref := range generation.Manifest.Segments {
+			keep[ref.Path] = struct{}{}
+		}
+	}
 	for _, candidate := range candidates {
 		for _, ref := range append([]SegmentRef{candidate.history}, candidate.companions...) {
 			if _, ok := keep[ref.Path]; ok {

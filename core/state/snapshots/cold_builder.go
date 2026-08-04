@@ -528,8 +528,24 @@ func (r *Runner) PreflightCatalog() error {
 		}
 		return err
 	}
-	_, err := EnsureProductionManifestChainIdentity(r.cfg.Dir, *r.cfg.CatalogChain)
-	return err
+	if _, err := EnsureProductionManifestChainIdentity(r.cfg.Dir, *r.cfg.CatalogChain); err != nil {
+		return err
+	}
+	// Upgrade a valid legacy catalog before build/merge can mutate its root
+	// manifest or retire referenced segments. The immutable copy becomes the
+	// first downloader lease and closes the one-pass migration race.
+	catalog, err := LoadSnapshotCatalog(r.cfg.Dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if catalog.ManifestPath == ManifestFile {
+		_, err = PublishSignedSnapshotCatalog(r.cfg.Dir, r.cfg.CatalogSigningKey)
+		return err
+	}
+	return nil
 }
 
 // PublishCatalogIfManifestChanged signs the final manifest view after a

@@ -434,6 +434,37 @@ func TestColdBuilderOnePassPublishesSignedCatalog(t *testing.T) {
 	}
 }
 
+func TestColdBuilderPreflightUpgradesLegacyCatalogBeforeMutation(t *testing.T) {
+	dir, identity, _ := writeVerifiableHistoryManifest(t)
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x6a}, ed25519.SeedSize))
+	legacy := publishUncheckedSignedSnapshotCatalogForTest(t, dir, privateKey)
+	if legacy.ManifestPath != ManifestFile {
+		t.Fatalf("legacy manifest path = %q, want %q", legacy.ManifestPath, ManifestFile)
+	}
+	runner := NewRunner(nil, Config{
+		Dir:               dir,
+		Enabled:           true,
+		CatalogSigningKey: privateKey,
+		CatalogChain:      &identity,
+	})
+	if err := runner.PreflightCatalog(); err != nil {
+		t.Fatalf("PreflightCatalog: %v", err)
+	}
+	upgraded, err := LoadSnapshotCatalog(dir)
+	if err != nil {
+		t.Fatalf("LoadSnapshotCatalog: %v", err)
+	}
+	if upgraded.ManifestPath == ManifestFile {
+		t.Fatalf("catalog remained mutable: %+v", upgraded)
+	}
+	if _, err := os.Stat(filepath.Join(dir, upgraded.ManifestPath)); err != nil {
+		t.Fatalf("immutable manifest: %v", err)
+	}
+	if _, _, err := VerifySignedSnapshotCatalog(dir, identity, []ed25519.PublicKey{privateKey.Public().(ed25519.PublicKey)}); err != nil {
+		t.Fatalf("VerifySignedSnapshotCatalog(upgraded): %v", err)
+	}
+}
+
 func TestColdBuilderOnePassCapsCutoffAtVerifiedFinishStage(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
