@@ -389,6 +389,29 @@ func TestCompressedBlockStreamWriterReset(t *testing.T) {
 	}
 }
 
+func TestCompressedBlockStreamWriterReusesEncodedScratch(t *testing.T) {
+	const chunkSize = 64
+	stream, err := newCompressedBlockStreamWriter(t.TempDir(), chunkSize, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Abort()
+	payload := bytes.Repeat([]byte{0x5a}, chunkSize)
+	if _, err := stream.Write(append(append([]byte(nil), payload...), payload...)); err != nil {
+		t.Fatal(err)
+	}
+	if len(stream.body.encoded) == 0 {
+		t.Fatal("stream writer did not retain encoded output scratch")
+	}
+	base := &stream.body.encoded[0]
+	if _, err := stream.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(stream.body.encoded) == 0 || &stream.body.encoded[0] != base {
+		t.Fatal("stream writer replaced reusable encoded output scratch")
+	}
+}
+
 func TestCompressedHistoryTempAbortRemovesScratch(t *testing.T) {
 	dir := t.TempDir()
 	tmp, err := createStateDomainChangeHistoryTemp(dir, "history/abort.seg", true)

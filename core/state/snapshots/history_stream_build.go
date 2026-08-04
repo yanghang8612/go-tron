@@ -510,6 +510,7 @@ type stateDomainChangeHistoryRecordWriter struct {
 	segmentOff    uint64
 	indexWritten  uint64
 	currentIndex  stateDomainChangeBinaryTxOffset
+	indexScratch  [stateDomainChangeBinaryIndexEntrySize]byte
 	haveIndex     bool
 	previous      *rawdb.StateDomainChange
 	recordScratch []byte
@@ -652,7 +653,8 @@ func (w *stateDomainChangeHistoryRecordWriter) flushIndex() error {
 	if !w.haveIndex {
 		return nil
 	}
-	if err := writeStateDomainChangeBinaryIndexEntryTo(w.index, w.currentIndex); err != nil {
+	putStateDomainChangeBinaryIndexEntry(&w.indexScratch, w.currentIndex)
+	if _, err := w.index.Write(w.indexScratch[:]); err != nil {
 		return err
 	}
 	w.indexWritten++

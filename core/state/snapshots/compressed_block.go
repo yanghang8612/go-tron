@@ -78,6 +78,7 @@ type compressedBlockWriter struct {
 	tmpName   string
 	table     []cbBlock
 	buf       []byte
+	encoded   []byte
 	bufRecs   int
 	uncTotal  uint64
 	compTotal uint64
@@ -119,7 +120,8 @@ func (w *compressedBlockWriter) flushBlock() error {
 	if w.bufRecs == 0 {
 		return nil
 	}
-	comp := w.enc.EncodeAll(w.buf, nil)
+	w.encoded = w.enc.EncodeAll(w.buf, w.encoded[:0])
+	comp := w.encoded
 	if _, err := w.tmp.Write(comp); err != nil {
 		return err
 	}
@@ -228,7 +230,8 @@ func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (er
 	prefixRecords := uint64(0)
 	uncTotal := w.uncTotal
 	if len(prefix) != 0 {
-		prefixComp = w.enc.EncodeAll(prefix, nil)
+		w.encoded = w.enc.EncodeAll(prefix, w.encoded[:0])
+		prefixComp = w.encoded
 		prefixRecords = 1
 		if w.recCount == 0 {
 			uncTotal = uint64(len(prefix))
@@ -760,12 +763,15 @@ type compressedFileResult struct {
 // writer, encodes them on bounded workers, and appends results to out in input
 // order. The caller owns exactly one additional current chunk; the pool holds
 // the other workers*2-1 chunks, keeping total uncompressed in-flight memory at
-// workers*2 chunks.
+// workers*2 chunks. A matching bounded pool of encoded destinations follows
+// each result through the ordered reducer and is reused only after its bytes
+// have been written to the body file.
 type orderedCompressionPipeline struct {
 	out       *compressedBlockWriter
 	jobs      chan compressedFileJob
 	results   chan compressedFileResult
 	pool      chan []byte
+	encoded   chan []byte
 	done      chan struct{}
 	cancel    sync.Once
 	closeJobs sync.Once
@@ -784,11 +790,15 @@ func newOrderedCompressionPipeline(out *compressedBlockWriter, chunkSize, worker
 		jobs:    make(chan compressedFileJob, inFlight),
 		results: make(chan compressedFileResult, inFlight),
 		pool:    make(chan []byte, inFlight),
+		encoded: make(chan []byte, inFlight),
 		done:    make(chan struct{}),
 	}
 	// The stream writer transfers its current chunk as the final pool member.
 	for i := 1; i < inFlight; i++ {
 		p.pool <- make([]byte, 0, chunkSize)
+	}
+	for range inFlight {
+		p.encoded <- nil
 	}
 
 	p.workers.Add(workers)
@@ -801,10 +811,16 @@ func newOrderedCompressionPipeline(out *compressedBlockWriter, chunkSize, worker
 					if !ok {
 						return
 					}
+					var encoded []byte
+					select {
+					case encoded = <-p.encoded:
+					case <-p.done:
+						return
+					}
 					result := compressedFileResult{
 						seq:          job.seq,
 						uncompressed: job.data,
-						compressed:   p.out.enc.EncodeAll(job.data, nil),
+						compressed:   p.out.enc.EncodeAll(job.data, encoded[:0]),
 					}
 					select {
 					case p.results <- result:
@@ -847,6 +863,10 @@ func (p *orderedCompressionPipeline) reduce() {
 			delete(pending, next)
 			select {
 			case p.pool <- ready.uncompressed[:0]:
+			case <-p.done:
+			}
+			select {
+			case p.encoded <- ready.compressed[:0]:
 			case <-p.done:
 			}
 			next++
@@ -1008,7 +1028,8 @@ func (w *compressedBlockStreamWriter) flushChunk(final bool) error {
 		w.parallel = newOrderedCompressionPipeline(w.body, w.chunkSize, w.workers)
 	}
 	if w.parallel == nil {
-		comp := w.body.enc.EncodeAll(w.chunk, nil)
+		w.body.encoded = w.body.enc.EncodeAll(w.chunk, w.body.encoded[:0])
+		comp := w.body.encoded
 		if err := w.body.appendEncodedBlock(len(w.chunk), comp); err != nil {
 			return err
 		}

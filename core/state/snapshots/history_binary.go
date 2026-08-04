@@ -47,6 +47,7 @@ var (
 	stateDomainChangeBinarySegmentMagic  = [8]byte{'g', 't', 's', 'd', 'c', 's', 'e', 'g'}
 	stateDomainChangeBinaryIndexMagic    = [8]byte{'g', 't', 's', 'd', 'c', 'i', 'd', 'x'}
 	stateDomainChangeBinaryAccessorMagic = [8]byte{'g', 't', 's', 'd', 'c', 'k', 'v', '1'}
+	stateDomainChangeBinaryZeroes        [32 * 1024]byte
 )
 
 type stateDomainChangeBinaryHeader struct {
@@ -1419,12 +1420,16 @@ func writeStateDomainChangeBinaryHeaderToVersion(w io.Writer, magic [8]byte, fro
 
 func writeStateDomainChangeBinaryIndexEntryTo(w io.Writer, entry stateDomainChangeBinaryTxOffset) error {
 	var raw [stateDomainChangeBinaryIndexEntrySize]byte
+	putStateDomainChangeBinaryIndexEntry(&raw, entry)
+	_, err := w.Write(raw[:])
+	return err
+}
+
+func putStateDomainChangeBinaryIndexEntry(raw *[stateDomainChangeBinaryIndexEntrySize]byte, entry stateDomainChangeBinaryTxOffset) {
 	binary.BigEndian.PutUint64(raw[0:8], entry.txNum)
 	binary.BigEndian.PutUint64(raw[8:16], entry.offset)
 	binary.BigEndian.PutUint64(raw[16:24], entry.recordIndex)
 	binary.BigEndian.PutUint64(raw[24:32], entry.count)
-	_, err := w.Write(raw[:])
-	return err
 }
 
 func writeStateDomainChangeBinaryAccessorOffsetAt(file *os.File, index, offset uint64) error {
@@ -1459,13 +1464,12 @@ func writeStateDomainChangeBinaryAccessorEntryTo(w io.Writer, entry stateDomainC
 }
 
 func writeZeroes(w io.Writer, n uint64) error {
-	var zero [32 * 1024]byte
 	for n > 0 {
-		chunk := uint64(len(zero))
+		chunk := uint64(len(stateDomainChangeBinaryZeroes))
 		if n < chunk {
 			chunk = n
 		}
-		if _, err := w.Write(zero[:chunk]); err != nil {
+		if _, err := w.Write(stateDomainChangeBinaryZeroes[:chunk]); err != nil {
 			return err
 		}
 		n -= chunk
