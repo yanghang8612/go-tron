@@ -435,5 +435,8 @@
 - [x] Transfer ownership of newly allocated history/accessor ETL frames into the
   bounded collector, removing their redundant key/value clones while keeping
   ordinary ETL `Put` isolation unchanged.
+- [x] Compress large cold-history files through an Erigon-style bounded worker
+  queue and ordered reducer, retaining deterministic accessor offsets and the
+  direct path below the measured parallel break-even size.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

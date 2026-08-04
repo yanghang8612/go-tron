@@ -269,3 +269,123 @@ func TestCompressedBlockConcurrentReads(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestHistoryCompressionConcurrency(t *testing.T) {
+	for _, tc := range []struct {
+		procs int
+		want  int
+	}{
+		{procs: 0, want: 1},
+		{procs: 1, want: 1},
+		{procs: 2, want: 2},
+		{procs: 4, want: 4},
+		{procs: 64, want: 4},
+	} {
+		if got := historyCompressionConcurrency(tc.procs); got != tc.want {
+			t.Fatalf("historyCompressionConcurrency(%d) = %d, want %d", tc.procs, got, tc.want)
+		}
+	}
+	if got := historyCompressionConcurrencyForSize(8, minParallelHistoryCompressionBytes-1); got != 1 {
+		t.Fatalf("small-file compression concurrency = %d, want 1", got)
+	}
+	if got := historyCompressionConcurrencyForSize(8, minParallelHistoryCompressionBytes); got != 4 {
+		t.Fatalf("large-file compression concurrency = %d, want 4", got)
+	}
+	if got := historyCompressionConcurrencyForSize(2, -1); got != 2 {
+		t.Fatalf("unknown-size compression concurrency = %d, want 2", got)
+	}
+}
+
+// TestCompressFileToFileOrderedWorkers proves that parallel encoding only
+// changes when blocks finish, never their table/data order or accessor offsets.
+// Running this test with -race also exercises concurrent use of the shared zstd
+// encoder documented by klauspost/compress.
+func TestCompressFileToFileOrderedWorkers(t *testing.T) {
+	const chunkSize = 16 << 10
+	for _, size := range []int{0, 1, chunkSize - 1, chunkSize, 37*chunkSize + 731} {
+		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
+			dir := t.TempDir()
+			src := filepath.Join(dir, "source")
+			payload := make([]byte, size)
+			rng := rand.New(rand.NewSource(int64(size) + 17))
+			for off := 0; off < len(payload); off += 256 {
+				end := off + 256
+				if end > len(payload) {
+					end = len(payload)
+				}
+				copy(payload[off:end], bytes.Repeat([]byte{byte(off / 256)}, end-off))
+				if end-off >= 8 {
+					_, _ = rng.Read(payload[end-8 : end])
+				}
+			}
+			if err := os.WriteFile(src, payload, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			serial := filepath.Join(dir, "serial.cb")
+			parallel := filepath.Join(dir, "parallel.cb")
+			if err := compressFileToFileWithWorkers(dir, serial, src, chunkSize, 1); err != nil {
+				t.Fatalf("serial compression: %v", err)
+			}
+			if err := compressFileToFileWithWorkers(dir, parallel, src, chunkSize, 4); err != nil {
+				t.Fatalf("parallel compression: %v", err)
+			}
+			serialData, err := os.ReadFile(serial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parallelData, err := os.ReadFile(parallel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(parallelData, serialData) {
+				t.Fatalf("parallel output differs from serial: %d versus %d bytes", len(parallelData), len(serialData))
+			}
+			decoded, err := decompressBlockBlob(parallelData)
+			if err != nil {
+				t.Fatalf("decompress parallel output: %v", err)
+			}
+			if !bytes.Equal(decoded, payload) {
+				t.Fatal("parallel compression changed source bytes")
+			}
+		})
+	}
+}
+
+func BenchmarkCompressFileToFileWorkers(b *testing.B) {
+	const chunkSize = 16 << 10
+	dir := b.TempDir()
+	payload := make([]byte, 8<<20)
+	rng := rand.New(rand.NewSource(77))
+	for off := 0; off < len(payload); off += 256 {
+		end := off + 256
+		if end > len(payload) {
+			end = len(payload)
+		}
+		for i := off; i < end; i++ {
+			payload[i] = byte(off / (256 * 31))
+		}
+		_, _ = rng.Read(payload[end-8 : end])
+	}
+	for _, size := range []int{512 << 10, 2 << 20, 8 << 20} {
+		b.Run(fmt.Sprintf("size=%dKiB", size>>10), func(b *testing.B) {
+			src := filepath.Join(dir, fmt.Sprintf("source-%d", size))
+			if err := os.WriteFile(src, payload[:size], 0o600); err != nil {
+				b.Fatal(err)
+			}
+			for _, workers := range []int{1, 4} {
+				b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
+					out := filepath.Join(dir, fmt.Sprintf("size-%d-workers-%d.cb", size, workers))
+					b.SetBytes(int64(size))
+					b.ReportAllocs()
+					b.ResetTimer()
+					for range b.N {
+						if err := compressFileToFileWithWorkers(dir, out, src, chunkSize, workers); err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+		})
+	}
+}

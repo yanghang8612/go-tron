@@ -3838,6 +3838,33 @@ with 50 iterations, kept the sparse build within the 3% gate at 48.07 ms versus
 bytes from 15.31 MB to 14.02 MB (-8.4%), and allocations from 145,530 to 130,528
 (-10.3%).
 
+#### P5.24: Ordered parallel cold-history compression
+
+Cold history conversion still encoded every independent 16 KiB Zstd block on
+the builder goroutine. The format already makes those blocks independent, but
+their table entries and compressed payload must reach disk in source order so
+existing uncompressed accessor offsets remain valid. Erigon's paged segment
+writer solves the equivalent constraint with a bounded worker queue followed by
+an ordered reducer.
+
+go-tron now uses the same producer / worker / reducer shape for large history
+files. At most `workers*2` source chunks are in flight, workers share the
+concurrency-safe stateless encoder, and one reducer appends completed frames by
+sequence number. The worker count is `min(GOMAXPROCS, 4)`, limiting both memory
+and competition with Pebble compaction. Files below 1 MiB retain the direct
+single-worker path: measured 512 KiB inputs did not amortize goroutine and queue
+setup, while 2 MiB inputs did. Serial and four-worker output is byte-identical
+across empty, partial, exact-boundary, and multi-block cases; race coverage also
+exercises the shared encoder.
+
+Five local 10-iteration compression runs reduced the 8 MiB median from 21.34 ms
+to 11.79 ms (1.81x throughput) and the 2 MiB median from 9.61 ms to 7.85 ms
+(-18.3%). The independent 5,000-block base-build A/B stayed on the small-file
+path and was unchanged at about 53.11 ms versus 53.12 ms. Seven alternating
+precompiled compaction A/B pairs reduced median time from 132.64 ms to 130.32 ms
+(-1.75%); bounded queue buffers added about 0.11 MB and 48 allocations during
+that merge.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

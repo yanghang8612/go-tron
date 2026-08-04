@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sort"
 	"sync"
 
@@ -36,6 +37,8 @@ const (
 	compressedBlockTableEntry          = 8 + 8 + 8 + 4             // = 28
 	CompressedBlockDefaultSize         = 128                       // matches the .bt block size
 	compressedBlockMaxDecodedBlockSize = 256 << 20
+	minParallelHistoryCompressionBytes = 1 << 20
+	maxHistoryCompressionWorkers       = 4
 )
 
 // Shared zstd encoder/decoder. klauspost's EncodeAll/DecodeAll are documented
@@ -130,6 +133,32 @@ func (w *compressedBlockWriter) flushBlock() error {
 	w.compTotal += uint64(len(comp))
 	w.buf = w.buf[:0]
 	w.bufRecs = 0
+	return nil
+}
+
+// appendEncodedBlock is the ordered reducer half of file compression. Encoding
+// may happen out of order in workers, but the block table and temp data must be
+// appended in source order so existing uncompressed accessor offsets remain
+// valid and output stays deterministic.
+func (w *compressedBlockWriter) appendEncodedBlock(uncompressedLen int, comp []byte) error {
+	if uncompressedLen <= 0 {
+		return errors.New("snapshots: cannot append empty encoded block")
+	}
+	if w.bufRecs != 0 {
+		return errors.New("snapshots: cannot mix buffered and pre-encoded blocks")
+	}
+	if _, err := w.tmp.Write(comp); err != nil {
+		return err
+	}
+	w.table = append(w.table, cbBlock{
+		uncompressedStart: w.uncTotal,
+		compressedStart:   w.compTotal,
+		compressedLen:     uint64(len(comp)),
+		records:           1,
+	})
+	w.uncTotal += uint64(uncompressedLen)
+	w.compTotal += uint64(len(comp))
+	w.recCount++
 	return nil
 }
 
@@ -624,12 +653,60 @@ func compressBlobToFile(dir, path string, blob []byte, chunkSize int) error {
 	return w.Finish(path)
 }
 
+// historyCompressionConcurrency follows Erigon's ordered page-compression
+// worker model while reserving CPU for block execution and Pebble compaction.
+// Four encoders are enough to hide this short stage without scaling memory or
+// scheduler pressure with a large host-wide CPU count.
+func historyCompressionConcurrency(procs int) int {
+	if procs < 1 {
+		return 1
+	}
+	if procs > maxHistoryCompressionWorkers {
+		return maxHistoryCompressionWorkers
+	}
+	return procs
+}
+
+func historyCompressionConcurrencyForSize(procs int, size int64) int {
+	// At 512 KiB the ordered worker pipeline is slower than direct encoding;
+	// by 2 MiB it is consistently faster. Keep base-step and sparse segments on
+	// the allocation-light path, reserving workers for large/compacted segments.
+	if size >= 0 && size < minParallelHistoryCompressionBytes {
+		return 1
+	}
+	return historyCompressionConcurrency(procs)
+}
+
 // compressFileToFile is the file-backed counterpart to compressBlobToFile. It
-// keeps one logical block in memory while converting large cold-history files,
-// avoiding a whole-segment allocation during build and compaction.
-func compressFileToFile(dir, path, src string, chunkSize int) (err error) {
+// bounds in-flight memory to workers*2 chunks, compresses chunks in parallel,
+// then reduces results in source order. This is the same producer / worker /
+// ordered-reducer shape used by Erigon's paged segment writer.
+func compressFileToFile(dir, path, src string, chunkSize int) error {
+	size := int64(-1)
+	if info, err := os.Stat(src); err == nil {
+		size = info.Size()
+	}
+	workers := historyCompressionConcurrencyForSize(runtime.GOMAXPROCS(0), size)
+	return compressFileToFileWithWorkers(dir, path, src, chunkSize, workers)
+}
+
+type compressedFileJob struct {
+	seq  uint64
+	data []byte
+}
+
+type compressedFileResult struct {
+	seq          uint64
+	uncompressed []byte
+	compressed   []byte
+}
+
+func compressFileToFileWithWorkers(dir, path, src string, chunkSize, workers int) (err error) {
 	if chunkSize <= 0 {
 		chunkSize = 16384
+	}
+	if workers < 1 {
+		workers = 1
 	}
 	in, err := os.Open(src)
 	if err != nil {
@@ -640,6 +717,12 @@ func compressFileToFile(dir, path, src string, chunkSize int) (err error) {
 			err = closeErr
 		}
 	}()
+	if info, statErr := in.Stat(); statErr == nil {
+		chunks := int((info.Size() + int64(chunkSize) - 1) / int64(chunkSize))
+		if chunks > 0 && workers > chunks {
+			workers = chunks
+		}
+	}
 
 	w, err := newCompressedBlockWriter(dir, 1)
 	if err != nil {
@@ -653,25 +736,152 @@ func compressFileToFile(dir, path, src string, chunkSize int) (err error) {
 		}
 	}()
 
-	buf := make([]byte, chunkSize)
-	for {
-		n, readErr := in.Read(buf)
-		if n > 0 {
-			if _, err := w.Append(buf[:n]); err != nil {
-				return err
-			}
+	if workers == 1 {
+		if err := compressFileSequential(in, w, chunkSize); err != nil {
+			return err
 		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return readErr
-		}
+	} else if err := compressFileParallel(in, w, chunkSize, workers); err != nil {
+		return err
 	}
 	if err := w.Finish(path); err != nil {
 		return err
 	}
 	finished = true
+	return nil
+}
+
+func compressFileSequential(in io.Reader, w *compressedBlockWriter, chunkSize int) error {
+	buf := make([]byte, chunkSize)
+	for {
+		n, readErr := io.ReadFull(in, buf)
+		if n > 0 {
+			if _, err := w.Append(buf[:n]); err != nil {
+				return err
+			}
+		}
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+}
+
+func compressFileParallel(in io.Reader, w *compressedBlockWriter, chunkSize, workers int) error {
+	inFlight := workers * 2
+	jobs := make(chan compressedFileJob, inFlight)
+	results := make(chan compressedFileResult, inFlight)
+	pool := make(chan []byte, inFlight)
+	for range inFlight {
+		pool <- make([]byte, chunkSize)
+	}
+
+	done := make(chan struct{})
+	var cancelOnce sync.Once
+	cancel := func() { cancelOnce.Do(func() { close(done) }) }
+	producerErr := make(chan error, 1)
+	go func() {
+		defer close(jobs)
+		var seq uint64
+		for {
+			var buf []byte
+			select {
+			case buf = <-pool:
+			case <-done:
+				producerErr <- nil
+				return
+			}
+			n, readErr := io.ReadFull(in, buf)
+			if n > 0 {
+				job := compressedFileJob{seq: seq, data: buf[:n]}
+				select {
+				case jobs <- job:
+					seq++
+				case <-done:
+					producerErr <- nil
+					return
+				}
+			} else {
+				pool <- buf
+			}
+			if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+				producerErr <- nil
+				return
+			}
+			if readErr != nil {
+				producerErr <- readErr
+				return
+			}
+		}
+	}()
+
+	var workerWG sync.WaitGroup
+	workerWG.Add(workers)
+	for range workers {
+		go func() {
+			defer workerWG.Done()
+			for {
+				select {
+				case job, ok := <-jobs:
+					if !ok {
+						return
+					}
+					result := compressedFileResult{
+						seq:          job.seq,
+						uncompressed: job.data,
+						compressed:   w.enc.EncodeAll(job.data, nil),
+					}
+					select {
+					case results <- result:
+					case <-done:
+						return
+					}
+				case <-done:
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		workerWG.Wait()
+		close(results)
+	}()
+
+	pending := make(map[uint64]compressedFileResult, inFlight)
+	var next uint64
+	var writeErr error
+	for result := range results {
+		if writeErr != nil {
+			continue
+		}
+		pending[result.seq] = result
+		for {
+			ready, ok := pending[next]
+			if !ok {
+				break
+			}
+			if err := w.appendEncodedBlock(len(ready.uncompressed), ready.compressed); err != nil {
+				writeErr = err
+				cancel()
+				break
+			}
+			delete(pending, next)
+			pool <- ready.uncompressed[:chunkSize]
+			next++
+		}
+	}
+	readErr := <-producerErr
+	cancel()
+	if writeErr != nil {
+		return writeErr
+	}
+	if readErr != nil {
+		return readErr
+	}
+	if len(pending) != 0 {
+		return fmt.Errorf("snapshots: compressed file reducer stopped with %d pending blocks", len(pending))
+	}
 	return nil
 }
 
