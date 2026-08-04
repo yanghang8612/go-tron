@@ -239,8 +239,15 @@
   exact canonical transaction-boundary usage/time/limit without mutating state.
 - [x] Compare projected public-net value and write-presence semantics with the
   serial WriteSet while retaining strict comparison for every other key.
-- [ ] Run the VM public-net projection production gate and require admitted
+- [x] Run the VM public-net projection production gate and require admitted
   projections to match serial writes with zero missing/other mismatches.
+- [x] Share the fork-aware serial block-energy delta rule with the sampled VM
+  observer instead of duplicating adaptive-energy settlement logic.
+- [x] Project retained VM receipt energy at the exact canonical transaction
+  boundary and validate `block_energy_usage` immediately after serial
+  accumulation without mutating canonical state.
+- [ ] Run the VM block-energy projection production gate and require zero
+  missing/mismatch across final version-valid VM candidates.
 - [ ] Add ordered VM energy/bandwidth/receipt settlement and retry
   incarnations only after the observe-only canary defines the safe carrier.
 

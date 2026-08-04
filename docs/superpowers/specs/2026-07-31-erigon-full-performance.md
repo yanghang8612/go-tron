@@ -2566,6 +2566,42 @@ mutated. The production gate requires every admitted projection to match and
 zero missing/non-bandwidth mismatches before a VM publisher may reuse the
 conditional reservation carrier.
 
+The transaction-boundary projection gate covered 122.09 seconds, 8,915
+blocks, and 258,375 transactions (73.02 blocks/s and 2,116.4
+transactions/s). Across 140 sampled blocks the VM observer executed 3,474
+transactions and admitted 741 version candidates. Of those, 618 were already
+strict matches and the remaining 123 differed only in ordered public-bandwidth
+cells. All 197 retained public-bandwidth reservations were admitted at their
+exact serial boundary and all 197 projected WriteSets matched; 123 required a
+rebased starting usage/time. Limit rejection, projection mismatch, missing
+projection, other-state mismatch, TransactionInfo mismatch, and BalanceTrace
+mismatch were all zero. The canonical Transfer/retry paths also reported zero
+errors, establishing the public-bandwidth reservation as a safe ordered VM
+carrier without enabling VM publication.
+
+#### P4.53: Transaction-boundary block-energy projection
+
+VM execution also changes the block-level adaptive-energy accumulator after
+the transaction's state and receipt have been finalized. This write sits
+outside the captured transaction WriteSet, so strict StateDB comparison alone
+cannot prove that a retained VM result can reproduce the same block resource
+boundary. The serial accumulator and observer now share one pure fork-aware
+delta rule: before canonical execution, a version-valid retained VM receipt
+projects the expected `block_energy_usage` post-image from the exact current
+value; immediately after serial accumulation, the observer compares that
+post-image before the next transaction can change it.
+
+The projection preserves java-tron's two tiers exactly: adaptive energy off or
+zero total usage is a no-op; before VERSION_3_6_5 only caller plus origin
+stake-paid energy is added; after the fork the full `energy_usage_total` is
+added. Storage is allocated only for the sampled VM cohort, and canonical VM
+publication remains disabled. Metrics under
+`vm_sender_chain/block_energy/projection/` distinguish final candidates,
+observed and validated projections, exact matches, mismatches, and missing
+boundaries. The production gate requires every observed final candidate to
+match, with zero missing or mismatch, before this block-level carrier can join
+public bandwidth in a small canonical VM publication cohort.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
