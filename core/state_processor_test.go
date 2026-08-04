@@ -517,6 +517,159 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	}
 }
 
+func TestProcessBlockObservesVMSenderRetryIncarnation(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner := testProcessorAddr(1)
+	funder := testProcessorAddr(3)
+	contractAddr := testProcessorAddr(0x80)
+	for _, address := range []tcommon.Address{owner, funder, params.BlackholeAddress} {
+		base.CreateAccount(address, corepb.AccountType_Normal)
+	}
+	base.AddBalance(owner, 100_000_000)
+	base.AddBalance(funder, 100_000_000)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	base.SetCode(contractAddr, []byte{0x60, 0x01, 0x60, 0x02, 0x01, 0x50, 0x00})
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	transactions := []*types.Transaction{
+		makeTestTriggerTx(1, contractAddr, []byte{0x01}),
+		makeTestTransferTx(3, 1, 2_000_000),
+		makeTestTriggerTx(1, contractAddr, []byte{0x02}),
+		makeTestTriggerTx(1, contractAddr, []byte{0x03}),
+	}
+	transactionProtos := make([]*corepb.Transaction, len(transactions))
+	for txIndex, tx := range transactions {
+		if tx.ContractType() == corepb.Transaction_Contract_TriggerSmartContract {
+			tx.Proto().RawData.FeeLimit = 10_000_000
+			tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+		}
+		transactionProtos[txIndex] = tx.Proto()
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: transactionProtos,
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial VM retry process: %v", err)
+	}
+	blocksBefore := parallelVMRetryBlocksCounter.Snapshot().Count()
+	attemptsBefore := parallelVMRetryAttemptsCounter.Snapshot().Count()
+	executedBefore := parallelVMRetryExecutedCounter.Snapshot().Count()
+	candidatesBefore := parallelVMRetryCandidatesCounter.Snapshot().Count()
+	validatedBefore := parallelVMRetryValidatedCounter.Snapshot().Count()
+	recoveredBefore := parallelVMRetryRecoveredCounter.Snapshot().Count()
+	errorsBefore := parallelVMRetryErrorsCounter.Snapshot().Count()
+	mismatchesBefore := parallelVMRetryInfoMismatchCounter.Snapshot().Count() +
+		parallelVMRetryWriteMismatchCounter.Snapshot().Count() +
+		parallelVMRetryBalanceMismatchCounter.Snapshot().Count()
+	deadlineBefore := parallelVMRetryReadyCounter.Snapshot().Count() +
+		parallelVMRetryLateCounter.Snapshot().Count() + parallelVMRetryUnknownCounter.Snapshot().Count()
+	vmPublishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true})
+	if err != nil {
+		t.Fatalf("parallel VM retry process: %v", err)
+	}
+	if blocks := parallelVMRetryBlocksCounter.Snapshot().Count() - blocksBefore; blocks != 1 {
+		t.Fatalf("VM retry observer blocks = %d, want 1", blocks)
+	}
+	if attempts := parallelVMRetryAttemptsCounter.Snapshot().Count() - attemptsBefore; attempts != 1 {
+		t.Fatalf("VM retry attempts = %d, want 1", attempts)
+	}
+	if executed := parallelVMRetryExecutedCounter.Snapshot().Count() - executedBefore; executed != 2 {
+		t.Fatalf("VM retry executions = %d, want 2", executed)
+	}
+	if candidates := parallelVMRetryCandidatesCounter.Snapshot().Count() - candidatesBefore; candidates != 2 {
+		t.Fatalf("VM retry candidates = %d, want 2", candidates)
+	}
+	if validated := parallelVMRetryValidatedCounter.Snapshot().Count() - validatedBefore; validated != 2 {
+		t.Fatalf("VM retry validated = %d, want 2", validated)
+	}
+	if recovered := parallelVMRetryRecoveredCounter.Snapshot().Count() - recoveredBefore; recovered != 2 {
+		t.Fatalf("VM retry recovered = %d, want 2", recovered)
+	}
+	if failures := parallelVMRetryErrorsCounter.Snapshot().Count() - errorsBefore; failures != 0 {
+		t.Fatalf("VM retry errors = %d, want 0", failures)
+	}
+	mismatchesAfter := parallelVMRetryInfoMismatchCounter.Snapshot().Count() +
+		parallelVMRetryWriteMismatchCounter.Snapshot().Count() +
+		parallelVMRetryBalanceMismatchCounter.Snapshot().Count()
+	if mismatches := mismatchesAfter - mismatchesBefore; mismatches != 0 {
+		t.Fatalf("VM retry mismatches = %d, want 0", mismatches)
+	}
+	deadlineAfter := parallelVMRetryReadyCounter.Snapshot().Count() +
+		parallelVMRetryLateCounter.Snapshot().Count() + parallelVMRetryUnknownCounter.Snapshot().Count()
+	if classified := deadlineAfter - deadlineBefore; classified != 2 {
+		t.Fatalf("VM retry deadline classifications = %d, want 2", classified)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - vmPublishedBefore; published != 1 {
+		t.Fatalf("original VM publications = %d, want 1 before retry publication is enabled", published)
+	}
+	for txIndex := range serialInfos {
+		if !proto.Equal(serialInfos[txIndex], parallelInfos[txIndex]) {
+			t.Fatalf("tx %d info mismatch\nserial=%v\nparallel=%v", txIndex, serialInfos[txIndex], parallelInfos[txIndex])
+		}
+	}
+	for _, property := range []struct {
+		name     string
+		serial   int64
+		parallel int64
+	}{
+		{name: "public_net_usage", serial: serialState.DynamicProperties().PublicNetUsage(), parallel: parallelState.DynamicProperties().PublicNetUsage()},
+		{name: "public_net_time", serial: serialState.DynamicProperties().PublicNetTime(), parallel: parallelState.DynamicProperties().PublicNetTime()},
+		{name: "block_energy_usage", serial: serialState.DynamicProperties().BlockEnergyUsage(), parallel: parallelState.DynamicProperties().BlockEnergyUsage()},
+	} {
+		if property.serial != property.parallel {
+			t.Fatalf("%s serial=%d parallel=%d", property.name, property.serial, property.parallel)
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("VM retry state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
 func TestProcessBlockSamplesSenderChainForwarding(t *testing.T) {
 	statedb := newTestState(t)
 	for _, id := range []byte{1, 2, 3} {

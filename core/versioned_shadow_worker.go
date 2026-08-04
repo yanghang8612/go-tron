@@ -226,6 +226,28 @@ var (
 	parallelVMPublicNetPublishedCounter              = metrics.NewRegisteredCounter("core/parallel_vm/public_net/published", nil)
 	parallelVMPublicNetRebasedCounter                = metrics.NewRegisteredCounter("core/parallel_vm/public_net/rebased", nil)
 	parallelVMBlockEnergyPublishedCounter            = metrics.NewRegisteredCounter("core/parallel_vm/block_energy/published", nil)
+	parallelVMRetryBlocksCounter                     = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/blocks", nil)
+	parallelVMRetryAttemptsCounter                   = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/attempts", nil)
+	parallelVMRetryExecutedCounter                   = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/executed", nil)
+	parallelVMRetryCandidatesCounter                 = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/candidates", nil)
+	parallelVMRetryValidatedCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/validated", nil)
+	parallelVMRetryRecoveredCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/recovered", nil)
+	parallelVMRetryErrorsCounter                     = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/errors", nil)
+	parallelVMRetryBudgetSkippedCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/budget_skipped", nil)
+	parallelVMRetryInfoMismatchCounter               = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/info_mismatches", nil)
+	parallelVMRetryWriteMismatchCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/write_set_mismatches", nil)
+	parallelVMRetryBalanceMismatchCounter            = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/balance_trace_mismatches", nil)
+	parallelVMRetryCopyNanosCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/copy_nanos", nil)
+	parallelVMRetryPrefixRefreshCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/prefix/refreshes", nil)
+	parallelVMRetryPrefixReuseCounter                = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/prefix/reuses", nil)
+	parallelVMRetryPrefixAdvanceCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/prefix/advances", nil)
+	parallelVMRetryPrefixAdvanceNanosCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/prefix/advance_nanos", nil)
+	parallelVMRetryExecutionNanosCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/execution_nanos", nil)
+	parallelVMRetryReadyCounter                      = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/deadline/ready", nil)
+	parallelVMRetryLateCounter                       = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/deadline/late", nil)
+	parallelVMRetryUnknownCounter                    = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/deadline/unknown", nil)
+	parallelVMRetryReadySlackNanosCounter            = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/deadline/ready_slack_nanos", nil)
+	parallelVMRetryLateNanosCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/retry/observe/deadline/late_nanos", nil)
 	discardShadowApplyMismatchMissingCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/missing", nil)
 	discardShadowApplyMismatchExtraCounter           = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/extra", nil)
 	discardShadowApplyMismatchPresenceCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/write_set_apply_mismatch_reason/presence", nil)
@@ -791,28 +813,31 @@ func (queue *discardShadowAsyncRetryQueue) Pop() any {
 }
 
 // discardShadowSenderRetry holds the newest sampled incarnation for each
-// sender-chain transaction. It never publishes state. At the real canonical
-// boundary it may rebuild a failed suffix from a reusable settled-prefix
-// runner, then freezes the result selected for later serial comparison.
+// sender-chain transaction. At the real canonical boundary it may rebuild a
+// failed suffix from a reusable settled-prefix runner, then freezes the result
+// for serial comparison or a separately gated publisher.
 type discardShadowSenderRetry struct {
-	source             *discardShadowPreexecution
-	results            []discardShadowTaskResult
-	available          []bool
-	selected           []discardShadowTaskResult
-	selectedOK         []bool
-	selectedPublished  []bool
-	selectedAsyncReady []bool
-	incarnations       []uint32
-	asyncIncarnations  []atomic.Uint32
-	runner             *discardShadowRetryRunner
-	async              bool
-	publish            bool
-	asyncRunners       []*discardShadowRetryRunner
-	asyncActive        int
-	asyncScheduled     int64
-	asyncEvents        chan discardShadowAsyncRetryEvent
-	asyncQueue         discardShadowAsyncRetryQueue
-	stats              discardShadowSenderRetryStats
+	source              *discardShadowPreexecution
+	results             []discardShadowTaskResult
+	available           []bool
+	selected            []discardShadowTaskResult
+	selectedOK          []bool
+	selectedPublished   []bool
+	selectedAsyncReady  []bool
+	incarnations        []uint32
+	asyncIncarnations   []atomic.Uint32
+	runner              *discardShadowRetryRunner
+	async               bool
+	publish             bool
+	ready               func(*discardShadowTaskResult) bool
+	forwardRaw          bool
+	recordTransferStats bool
+	asyncRunners        []*discardShadowRetryRunner
+	asyncActive         int
+	asyncScheduled      int64
+	asyncEvents         chan discardShadowAsyncRetryEvent
+	asyncQueue          discardShadowAsyncRetryQueue
+	stats               discardShadowSenderRetryStats
 }
 
 type discardShadowPreexecutionStats struct {
@@ -1676,7 +1701,18 @@ func (shadow *discardShadowBlock) preexecuteSenderChainsWithRetryState(cfg disca
 }
 
 func newDiscardShadowSenderRetry(source *discardShadowPreexecution, transactionCount int) *discardShadowSenderRetry {
+	return newDiscardShadowSenderRetryWithPolicy(source, transactionCount, preexecutedTransferReady, false, true)
+}
+
+func newDiscardShadowVMSenderRetry(source *discardShadowPreexecution, transactionCount int) *discardShadowSenderRetry {
+	return newDiscardShadowSenderRetryWithPolicy(source, transactionCount, preexecutedResultReady, true, false)
+}
+
+func newDiscardShadowSenderRetryWithPolicy(source *discardShadowPreexecution, transactionCount int, ready func(*discardShadowTaskResult) bool, forwardRaw, recordTransferStats bool) *discardShadowSenderRetry {
 	if source == nil || transactionCount == 0 || len(source.senderNext) != transactionCount {
+		return nil
+	}
+	if ready == nil {
 		return nil
 	}
 	hasSuffix := false
@@ -1690,16 +1726,29 @@ func newDiscardShadowSenderRetry(source *discardShadowPreexecution, transactionC
 		return nil
 	}
 	return &discardShadowSenderRetry{
-		source:             source,
-		results:            make([]discardShadowTaskResult, transactionCount),
-		available:          make([]bool, transactionCount),
-		selected:           make([]discardShadowTaskResult, transactionCount),
-		selectedOK:         make([]bool, transactionCount),
-		selectedPublished:  make([]bool, transactionCount),
-		selectedAsyncReady: make([]bool, transactionCount),
-		incarnations:       make([]uint32, transactionCount),
-		runner:             newDiscardShadowRetryRunner(nil),
+		source:              source,
+		results:             make([]discardShadowTaskResult, transactionCount),
+		available:           make([]bool, transactionCount),
+		selected:            make([]discardShadowTaskResult, transactionCount),
+		selectedOK:          make([]bool, transactionCount),
+		selectedPublished:   make([]bool, transactionCount),
+		selectedAsyncReady:  make([]bool, transactionCount),
+		incarnations:        make([]uint32, transactionCount),
+		runner:              newDiscardShadowRetryRunner(nil),
+		ready:               ready,
+		forwardRaw:          forwardRaw,
+		recordTransferStats: recordTransferStats,
 	}
+}
+
+func (retry *discardShadowSenderRetry) resultReady(result *discardShadowTaskResult) bool {
+	if retry == nil {
+		return false
+	}
+	if retry.ready != nil {
+		return retry.ready(result)
+	}
+	return preexecutedTransferReady(result)
 }
 
 func newDiscardShadowRetryRunner(retryState *state.StateDB) *discardShadowRetryRunner {
@@ -2075,13 +2124,13 @@ func (retry *discardShadowSenderRetry) retryFrom(txIndex int, statedb *state.Sta
 			result.senderVersioned = task.senderVersioned
 		}
 		annotateSenderRetryReadVersions(&result.reads, versioned, &forwarded, current)
-		if preexecutedTransferReady(&result) {
-			if advanceErr := worker.advanceSenderChain(result.writes); advanceErr != nil {
+		if retry.resultReady(&result) {
+			if advanceErr := worker.advanceSenderChainWrites(result.writes, retry.forwardRaw); advanceErr != nil {
 				result.err = advanceErr
 			}
 		}
 		result.retryCompletionNanos = time.Since(executionStarted).Nanoseconds()
-		ready := preexecutedTransferReady(&result)
+		ready := retry.resultReady(&result)
 		retry.results[current] = result
 		retry.available[current] = ready
 		retry.selectedOK[current] = false
@@ -2330,15 +2379,15 @@ func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardSh
 			result.senderPredecessor = task.senderPredecessor
 			result.senderVersioned = task.senderVersioned
 			annotateSenderRetryReadVersions(&result.reads, &request.versionView, &forwarded, task.txIndex)
-			if preexecutedTransferReady(&result) {
-				if advanceErr := worker.advanceSenderChain(result.writes); advanceErr != nil {
+			if retry.resultReady(&result) {
+				if advanceErr := worker.advanceSenderChainWrites(result.writes, retry.forwardRaw); advanceErr != nil {
 					result.err = advanceErr
 				}
 			}
 			result.retryCompletionNanos = time.Since(started).Nanoseconds()
 			resultCopy := result
 			events <- discardShadowAsyncRetryEvent{result: &resultCopy}
-			if !preexecutedTransferReady(&result) {
+			if !retry.resultReady(&result) {
 				dropped += int64(len(request.tasks) - taskIndex - 1)
 				break
 			}
@@ -2416,7 +2465,7 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 	result := *event.result
 	retry.stats.executed++
 	retry.stats.actualExecuted++
-	ready := preexecutedTransferReady(&result)
+	ready := retry.resultReady(&result)
 	if !ready {
 		retry.stats.errors++
 		retry.stats.actualErrors++
@@ -2622,7 +2671,7 @@ func (retry *discardShadowSenderRetry) selectedResultForPublication(txIndex int)
 		return nil, false
 	}
 	result := &retry.selected[txIndex]
-	return result, preexecutedTransferReady(result)
+	return result, retry.resultReady(result)
 }
 
 func (retry *discardShadowSenderRetry) markPublished(txIndex int) {
@@ -2645,7 +2694,7 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		if !retry.selectedOK[txIndex] && !published {
 			continue
 		}
-		if !preexecutedTransferReady(&selected) || cfg.canonicalInfos[txIndex] == nil ||
+		if !retry.resultReady(&selected) || cfg.canonicalInfos[txIndex] == nil ||
 			txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
 			txIndex >= len(versioned.transactionWriteSets) || (cfg.captureBalanceTrace && txIndex >= len(cfg.canonicalBalanceTraces)) {
 			retry.stats.errors++
@@ -2704,6 +2753,9 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 				}
 			}
 		}
+	}
+	if !retry.recordTransferStats {
+		return retry.stats
 	}
 	discardShadowRetryBlocksCounter.Inc(1)
 	discardShadowRetryAttemptsCounter.Inc(retry.stats.attempts)
@@ -2785,6 +2837,31 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetrySharedStateErrorsCounter.Inc(retry.stats.sharedStateErrors)
 	}
 	return retry.stats
+}
+
+func recordVMSenderRetryStats(stats discardShadowSenderRetryStats) {
+	parallelVMRetryBlocksCounter.Inc(1)
+	parallelVMRetryAttemptsCounter.Inc(stats.attempts)
+	parallelVMRetryExecutedCounter.Inc(stats.executed)
+	parallelVMRetryCandidatesCounter.Inc(stats.candidates)
+	parallelVMRetryValidatedCounter.Inc(stats.validated)
+	parallelVMRetryRecoveredCounter.Inc(stats.recovered)
+	parallelVMRetryErrorsCounter.Inc(stats.errors)
+	parallelVMRetryBudgetSkippedCounter.Inc(stats.budgetSkipped)
+	parallelVMRetryInfoMismatchCounter.Inc(stats.infoMismatches)
+	parallelVMRetryWriteMismatchCounter.Inc(stats.writeMismatches)
+	parallelVMRetryBalanceMismatchCounter.Inc(stats.balanceMismatches)
+	parallelVMRetryCopyNanosCounter.Inc(stats.copyNanos)
+	parallelVMRetryPrefixRefreshCounter.Inc(stats.prefixRefreshes)
+	parallelVMRetryPrefixReuseCounter.Inc(stats.prefixReuses)
+	parallelVMRetryPrefixAdvanceCounter.Inc(stats.prefixAdvances)
+	parallelVMRetryPrefixAdvanceNanosCounter.Inc(stats.prefixAdvanceNanos)
+	parallelVMRetryExecutionNanosCounter.Inc(stats.executionNanos)
+	parallelVMRetryReadyCounter.Inc(stats.asyncReady)
+	parallelVMRetryLateCounter.Inc(stats.asyncLate)
+	parallelVMRetryUnknownCounter.Inc(stats.asyncUnknown)
+	parallelVMRetryReadySlackNanosCounter.Inc(stats.asyncReadySlackNs)
+	parallelVMRetryLateNanosCounter.Inc(stats.asyncLateNs)
 }
 
 // validateBlockStartReadSet applies Erigon's read-version rule to one retained

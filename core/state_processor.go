@@ -840,6 +840,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	var vmSenderChainPreexecution *discardShadowPreexecution
 	var vmSenderChainPublication bool
 	var senderRetry *discardShadowSenderRetry
+	var vmSenderRetry *discardShadowSenderRetry
 	if shadowEnabled && collectTxInfos {
 		discardShadow = prepareTransferExecutionBlock(statedb, dynProps, block.Number(), options.parallelTransfers)
 		if discardShadow != nil {
@@ -885,6 +886,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					parallelVMBlocksCounter.Inc(1)
 					if vmSenderChainPreexecution != nil {
 						vmSenderChainPublication = true
+						vmSenderRetry = newDiscardShadowVMSenderRetry(vmSenderChainPreexecution, len(transactions))
 						parallelVMPreexecutedCounter.Inc(int64(len(vmSenderChainPreexecution.results)))
 						parallelVMPreexecutionNanosCounter.Inc(vmSenderChainPreexecution.wallNanos)
 					}
@@ -971,6 +973,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		}
 		if senderRetry != nil {
 			senderRetry.observeBoundary(i, tx, statedb, dynProps, &versionedShadow, discardCfg)
+		}
+		if vmSenderRetry != nil {
+			vmSenderRetry.observeBoundary(i, tx, statedb, dynProps, &versionedShadow, discardCfg)
 		}
 		domainChangeMark := statedb.DomainChangeJournalMark()
 		if domainChanges != nil {
@@ -1267,6 +1272,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	}
 	if senderRetry != nil {
 		_ = senderRetry.finish(&versionedShadow, discardCfg)
+	}
+	if vmSenderRetry != nil {
+		recordVMSenderRetryStats(vmSenderRetry.finish(&versionedShadow, discardCfg))
 	}
 	if discardShadow != nil && discardShadow.sampled {
 		_ = discardShadow.run(&versionedShadow, discardCfg)
