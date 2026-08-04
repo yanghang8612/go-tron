@@ -177,8 +177,13 @@
   and sync throughput against P4.32.
 - [x] Replace block-start full-cache `StateDB.Copy` with an Erigon-style lazy
   stable latest-domain view that eagerly owns only the current dirty overlay.
-- [ ] Run the lazy block-start copy production gate: verify omission ratio,
+- [x] Run the lazy block-start copy production gate: verify omission ratio,
   observer/publisher equivalence, CPU-profile removal, and sync throughput.
+- [x] Add fold-local commitment shape metrics without atomics in the recursive
+  hash path, covering resolved ops, split/worker utilization, hash bytes/rounds,
+  and wall time.
+- [ ] Run the commitment-shape production sample and select durable preloading,
+  streaming split scheduling, or hash reduction from measured work ratios.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

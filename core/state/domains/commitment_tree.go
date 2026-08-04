@@ -676,6 +676,10 @@ func (b *BranchData) nodeHash() common.Hash {
 // fold keeps one per sequential worker, avoiding a sync.Pool round trip for
 // every branch on the recursive path.
 func (b *BranchData) nodeHashWith(h *pooledKeccak) common.Hash {
+	return b.nodeHashWithStats(h, nil)
+}
+
+func (b *BranchData) nodeHashWithStats(h *pooledKeccak, stats *commitmentFoldStats) common.Hash {
 	h.Reset()
 	h.nodeBuf[0] = 0x01
 	off := 1
@@ -687,6 +691,7 @@ func (b *BranchData) nodeHashWith(h *pooledKeccak) common.Hash {
 		copy(h.nodeBuf[off:], c.valueHash[:])
 		off += common.HashLength
 	}
+	stats.observeNodeHashPreimage(uint64(off))
 	_, _ = h.Write(h.nodeBuf[:off])
 	return readKeccakHash(h)
 }
@@ -719,6 +724,10 @@ type commitmentTrie struct {
 	// hasher belongs exclusively to this sequential trie worker. The parallel
 	// root creates a private sub-trie (and hasher) per long-lived worker.
 	hasher *pooledKeccak
+	// foldStats belongs to the current Fold. Sequential work updates it
+	// directly; parallel root workers use sibling-local stats and merge after
+	// joining, so node hashing never performs a process-wide atomic increment.
+	foldStats *commitmentFoldStats
 
 	// parallelMinOps, when > 0, folds the root's 16 first-nibble subtries
 	// concurrently for any Fold with at least this many resolved ops. 0 (the
@@ -744,9 +753,11 @@ func (t *commitmentTrie) keyPath(key []byte) common.Hash {
 
 func (t *commitmentTrie) nodeHash(branch *BranchData) common.Hash {
 	if t.hasher != nil {
-		return branch.nodeHashWith(t.hasher)
+		return branch.nodeHashWithStats(t.hasher, t.foldStats)
 	}
-	return branch.nodeHash()
+	h := borrowKeccak()
+	defer returnKeccak(h)
+	return branch.nodeHashWithStats(h, t.foldStats)
 }
 
 // pathLen is the number of nibbles in a hashed key path (keccak256 → 32 bytes).
@@ -768,7 +779,15 @@ type op struct {
 //
 // Calling Fold with no updates re-derives and returns the current root without
 // modifying the store.
-func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
+func (t *commitmentTrie) Fold(updates []Update) (result common.Hash, err error) {
+	stats := beginCommitmentFoldStats(len(updates))
+	previousStats := t.foldStats
+	t.foldStats = stats
+	defer func() {
+		t.foldStats = previousStats
+		finishCommitmentFoldStats(stats, err != nil)
+	}()
+
 	h := borrowKeccak()
 	previousHasher := t.hasher
 	t.hasher = h
@@ -788,6 +807,7 @@ func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
 	if opsP != nil {
 		ops = *opsP
 	}
+	stats.resolvedOps = uint64(len(ops))
 
 	// Load the root branch (empty prefix), if any.
 	root, hasRoot, err := t.store.GetBranch(nil)
@@ -813,6 +833,7 @@ func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
 		if err != nil {
 			return common.Hash{}, err
 		}
+		stats.changed = changed
 		if changed {
 			if rootPtr == nil {
 				if hasRoot {
@@ -834,7 +855,18 @@ func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
 	if !hasRoot {
 		return common.Hash{}, nil
 	}
-	return rootHashWithHasher(&root, h), nil
+	return t.rootHash(&root), nil
+}
+
+func (t *commitmentTrie) rootHash(root *BranchData) common.Hash {
+	if root.childCount() == 1 {
+		n := root.onlyChildNibble()
+		if root.childKindAt(n) == kindLeaf {
+			_, vh := root.leafChildAt(n)
+			return vh
+		}
+	}
+	return t.nodeHash(root)
 }
 
 // rootHash returns the trie root hash for the root branch. The whole-trie

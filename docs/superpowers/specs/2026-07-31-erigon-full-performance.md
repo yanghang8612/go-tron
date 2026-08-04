@@ -2117,6 +2117,47 @@ The deployment gate must confirm the expected omission ratio, remove
 counters at zero, and measure end-to-end sync throughput independently of LSM
 compaction state.
 
+The production deployment resumed from the existing database after a roughly
+14-second restart window and processed 30,247 blocks / 1,095,055 transactions
+in its first 7.6 minutes. Excluding peer discovery, a 413-second window covered
+27,808 blocks / 1,028,417 transactions (67.33 blocks/s and 2,490 tx/s). The
+result is directional because transaction density and compaction debt differ
+from the pre-deploy profile; the copy counters and profile provide the causal
+measurement.
+
+Across 468 sampled block starts, the source caches contained 8,641,095 account
+objects (18,464 per copy on average); all were clean and omitted. Copy wall time
+was 20.50 ms total, or 43.8 us per block start. All 2,510 speculative executions
+and all 2,510 ordered applications matched canonical results, with zero
+discard-worker, ordered-publication, or state/receipt mismatch. Four rare
+sender-chain observer errors fell back safely; two occurred in the first 10,311
+blocks and two over the next 19,936, with no associated equivalence mismatch.
+
+At 25,959 session blocks, a warm 20-second profile sampled 54.56 CPU-seconds.
+`StateDB.Copy`, `CopyBlockExecutionBase`, and `prepareTransferExecutionBlock`
+had no samples, versus 4.86 CPU-seconds (9.06%) for `StateDB.Copy` before P4.44.
+Commitment apply workers (24.60%), Pebble compaction (15.38%), signature-recovery
+cgo (10.96%), commitment parent reads (9.73%), TVM (6.12%), and GC marking
+(5.00%) are now the visible costs. Exact omission/copy timing, the warm profile,
+continued sync, and clean equivalence counters pass the P4.44 deployment gate.
+
+#### P4.45: Commitment fold shape telemetry
+
+The warm P4.44 profile moved the next visible application bottleneck to
+commitment folding: parent-state reads consumed 9.73% of sampled CPU and branch
+node hashing 7.70%. Existing Erigon-aligned mechanisms already use a stable
+one-snapshot parent view, reserved prefix cursors, adaptive branch caching,
+eight-layer Bloom segments, and a bounded parallel root split. Replacing those
+paths from aggregate CPU samples alone would risk optimizing the wrong shape.
+
+Each fold now accumulates non-atomic local statistics for input/resolved update
+counts, changed/error folds, wall time, parallel active splits/workers, branch hashes,
+hash preimage bytes, and estimated Keccak permutation rounds. Parallel siblings
+write isolated counters and merge only after their workers join; process metrics
+are updated once per fold, so no atomic operation is added to recursive hashing.
+The production sample will determine whether the next Erigon-style change should
+target durable branch preloading, split scheduling/streaming, or hash work.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

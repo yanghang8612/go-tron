@@ -377,6 +377,13 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	// and dynamic load balancing while removing the semaphore allocation and the
 	// excess short-lived goroutines when limit is below the branching factor.
 	workers := min(limit, activeBatches)
+	if t.foldStats != nil {
+		t.foldStats.parallelCalls++
+		t.foldStats.parallelSplits += uint64(activeBatches)
+		t.foldStats.parallelWorkers += uint64(workers)
+	}
+	siblingStats := borrowCommitmentSiblingFoldStats()
+	defer returnCommitmentSiblingFoldStats(siblingStats)
 	wg.Add(workers)
 	for range workers {
 		go func() {
@@ -401,6 +408,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 				// after each claimed group because recursive stores consume it before
 				// applyNibble returns.
 				sub.store = buf
+				sub.foldStats = &(*siblingStats)[nb]
 				nibbleChanged, err := sub.applyNibble(path[:0], 0, branch, nb, group)
 				changed[nb] = nibbleChanged
 				if err == nil && nibbleChanged && concurrentFlush {
@@ -414,6 +422,11 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		}()
 	}
 	wg.Wait()
+	if t.foldStats != nil {
+		for nb := range siblingStats {
+			t.foldStats.merge(&(*siblingStats)[nb])
+		}
+	}
 
 	for nb := 0; nb < maxFoldNibbles; nb++ {
 		if errs[nb] != nil {
