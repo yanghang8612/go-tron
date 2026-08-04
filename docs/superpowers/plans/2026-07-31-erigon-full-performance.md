@@ -258,7 +258,7 @@
   existing Transfer policy.
 - [x] Add observe-only settled-prefix VM retry incarnations inside the same
   1/1024 cohort and compare recovered suffixes with serial execution.
-- [ ] Run the VM retry-incarnation production gate and quantify recovery,
+- [x] Run the VM retry-incarnation production gate and quantify recovery,
   exactness, copy/execution cost, and projected async deadlines.
 - [ ] Move validated VM retries to the async shared-version scheduler before
   allowing retry-result publication.

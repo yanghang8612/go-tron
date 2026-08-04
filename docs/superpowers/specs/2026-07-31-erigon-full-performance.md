@@ -2749,6 +2749,36 @@ production gate must demonstrate non-zero recovery with zero mismatch/error
 and quantify synchronous copy/execution plus projected deadline shape before
 moving VM retries onto the async shared-version scheduler.
 
+The 2026-08-04 mainnet gate passed over an independent 230-second window at
+heights 16,948,498--16,966,102: 17,604 blocks and 547,973 transactions, or
+76.54 blocks/s, 2,382.49 tx/s, and 31.13 tx/block. Seventeen VM cohorts made
+45 retry attempts and executed 232 new incarnations. All 126 candidates were
+validated and all 126 recovered a result rejected from the original
+block-start incarnation. Info, WriteSet, and BalanceTrace mismatches, retry
+errors, and budget skips were all zero. The unchanged canonical VM publisher
+simultaneously published 89/89 candidates with no error or resource/preflight
+fallback; canonical Transfer retry published 715/715 with no error.
+
+The synchronous measurement spent 38.736 ms copying 17 settled prefixes,
+2.912 ms advancing 183 prefix WriteSets, and 55.005 ms executing the retry
+suffixes: 96.654 ms total, 5.69 ms per sampled cohort, or about 5.49 us per
+imported block. The strict no-wait deadline projection classified 10/126
+(7.94%) recovered results ready, with 0.164 ms average slack, and 116/126 late,
+with 0.395 ms average lateness. This is expected to classify the incarnation
+at the conflict boundary as late because the conflict is only known at that
+boundary; the useful non-blocking opportunity is in descendants rebuilt by
+the same suffix job. The next gate therefore moves the observer to the actual
+async shared-version scheduler while retaining serial fallback at every late
+boundary, rather than permitting synchronous retry publication.
+
+The independent 1/64 VM canary remained exact over 275 blocks: block-energy
+projection matched 1,248/1,248, public-net projection matched 388/388, and all
+266 apparent full-WriteSet differences were the already-accounted public-net
+rebases with zero other mismatch. A 20-second CPU profile attributed 0.23% of
+samples to the combined sender-retry family (including the existing Transfer
+async scheduler); the synchronous `retryFrom` path itself accumulated only one
+10 ms sample and was absent from the top hot functions.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
