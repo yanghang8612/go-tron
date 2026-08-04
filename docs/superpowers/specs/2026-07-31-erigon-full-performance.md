@@ -2911,6 +2911,84 @@ therefore adds no visible canonical CPU hotspot. The next widening may enable
 the other two non-zero 256-block residues while retaining residue zero for the
 independent block-start VM publisher.
 
+#### P4.58: Widened async VM retry publication
+
+Commit `bef2f18e` widened boundary-ready async VM retry publication from only
+`block % 1024 == 256` to all three non-zero 256-block residues: 256, 512, and
+768. Residue zero remains assigned to the independent block-start VM publisher,
+so the two canonical paths stay disjoint while retry observation and
+publication retain an exact 3/4 relationship.
+
+The first fresh-process gate correctly failed before the widened cohort was
+accepted. At 24 observer cohorts it reported one frozen raw-view miss and one
+`contract_ret` error. The result never entered the publisher and canonical
+execution fell back to serial, but a zero-error gate cannot treat safe fallback
+as equivalence. The correlated counters and execution path identified a narrow
+capability gap: TVM `BLOCKHASH` first probed a block body as generic raw KV. A
+settled-prefix retry may legitimately take a different branch and request a
+different in-window block number than block-start preexecution recorded, so
+that immutable historical key was absent from the frozen raw set.
+
+Commit `d1ca40a2` preserves only the canonical view's explicit
+freezer-aware `BlockHashByNumberStrict` capability through the retry overlay.
+TVM now prefers that strict capability before probing generic raw KV. The
+wrapper is conditional: plain KV stores continue through the existing raw path,
+and every other uncaptured retry raw key still fails closed rather than reading
+the live block buffer. Repeated VM/core tests prove the strict reader is used
+without a raw probe, the frozen execution DB retains it, and an arbitrary
+uncaptured key remains rejected. The full suite, race tests, `go vet`, native
+build, Linux/amd64 build, and the production cold-archive boundary audit all
+passed.
+
+The corrected 2026-08-04 mainnet gate passed on `d1ca40a2`. A fresh 180-second
+window processed 10,065 blocks and 311,731 transactions, or 55.92 blocks/s,
+1,731.84 tx/s, and 30.97 tx/block. It covered 40 retry-observer cohorts and 30
+publication cohorts, preserving the exact 3/4 ratio. The scheduler accepted
+222 attempts into 216 jobs and returned 363 incarnations: 85 ready, 266 late,
+and 12 stale. Three results reached validation, one recovered an originally
+rejected result, and the widened publisher selected two boundary-ready
+descendants. Both were published and both post-publication WriteSets matched.
+
+Info, WriteSet, and BalanceTrace mismatches were zero. All ten error-stage
+counters were zero, including the repaired contract-ret path; frozen raw misses,
+shared-state errors, invalid public-net carriers, publisher errors, audit
+mismatches, and block-energy/public-net/preflight fallbacks were also zero.
+Retry execution cost 147.109 ms total, shared StateDB copies 25.232 ms, dispatch
+11.803 ms, version freezing 6.404 ms, raw freezing 1.797 ms, and finish-only
+reclamation 2.113 ms. The two canonical publications cost 74.454 us total, or
+37.2 us each.
+
+A separate 10-second CPU profile contained 22.61 CPU-seconds. Actual async
+retry launch work accounted for 0.04 CPU-seconds (0.18%). The complete sampled
+discard-shadow family accounted for 0.48 CPU-seconds (2.12%), dominated by
+0.43 CPU-seconds of the existing block-start sender-chain preexecution; the
+canonical retry publisher remained below an individual 10 ms sample. This
+satisfies P4.58. The next canary should add one VM retry residue that co-runs
+with the Transfer async scheduler but remains disjoint from the Transfer
+publisher, proving queue competition and version arbitration before all sampled
+cohorts are enabled.
+
+#### P4.59: First co-scheduled VM retry cohort
+
+The next canary adds `block % 256 == 64` to VM retry observation and
+publication. The existing residue-zero cohort runs beside the synchronous
+Transfer reference; the new residue runs the VM and Transfer asynchronous
+schedulers together. It remains disjoint from Transfer retry publication at
+residue 192 and from the independent VM block-start publisher at
+`block % 1024 == 0`. Therefore the first co-scheduling gate measures queue and
+CPU interaction without yet admitting two retry publishers in the same block.
+
+The deterministic publication fixture now runs at the new residue with a long
+same-sender Transfer chain between the VM conflict and descendant. It proves
+the co-scheduled path still publishes the boundary-ready VM result with exact
+serial TransactionInfo, resource state, balances, and final root. Cohort tests
+enumerate the new observation/publication residues and prove VM and Transfer
+retry publishers remain disjoint over four complete 1024-block periods. The
+integration test passed 20 repeated runs and three race-enabled runs; the full
+suite, `go vet`, native build, and Linux/amd64 build also passed. Production
+admission requires non-zero audited VM publication, zero mismatch/error or
+resource fallback, and bounded VM/Transfer queue and CPU growth.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

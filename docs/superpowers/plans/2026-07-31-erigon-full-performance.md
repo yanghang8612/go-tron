@@ -266,10 +266,14 @@
   ready/recovered results with zero mismatch/error.
 - [x] Allow only boundary-ready VM retry descendants into the canonical
   publisher after the async gate passes.
-- [ ] Expand async VM retry publication to all three non-zero 256-block
+- [x] Expand async VM retry publication to all three non-zero 256-block
   residues, keeping the 1024-block residue-zero reference publisher disjoint.
-- [ ] Run the widened async VM retry publication gate with non-zero audited
+- [x] Run the widened async VM retry publication gate with non-zero audited
   publications and zero mismatch/error/resource/preflight fallback.
+- [x] Add one co-scheduled VM retry residue on Transfer-async blocks while
+  keeping the VM and Transfer canonical publishers disjoint.
+- [ ] Run the co-scheduled retry gate with non-zero audited VM publication,
+  zero mismatch/error/fallback, and bounded queue/CPU growth.
 
 ## P5: Snapshot and cold steady state
 
