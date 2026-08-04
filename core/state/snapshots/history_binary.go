@@ -174,39 +174,63 @@ func encodeStateDomainChangeRecordV5(change *rawdb.StateDomainChange) ([]byte, e
 }
 
 func decodeStateDomainChangeRecordV5(data []byte) (*rawdb.StateDomainChange, error) {
-	r := bytes.NewReader(data)
 	change := new(rawdb.StateDomainChange)
-	var err error
-	if change.TxNum, err = readUint64(r); err != nil {
-		return nil, err
+	// readStateDomainChangeBinaryRecordFrame owns data for the lifetime of the
+	// returned change, so Key and Prev can safely view that immutable payload.
+	// Parsing the compact v5 layout directly removes a bytes.Reader plus two
+	// field copies per record from sequential cold build/merge scans.
+	const scalarBytes = 8 + 1 + 8 + 2
+	minimum := scalarBytes + len(change.Owner) + 4 + 1 + 4
+	if len(data) < minimum {
+		return nil, io.ErrUnexpectedEOF
 	}
-	domain, err := r.ReadByte()
-	if err != nil {
-		return nil, err
+	offset := 0
+	change.TxNum = binary.BigEndian.Uint64(data[offset : offset+8])
+	offset += 8
+	change.FlatDomain = rawdb.StateFlatDomain(data[offset])
+	offset++
+	copy(change.Owner[:], data[offset:offset+len(change.Owner)])
+	offset += len(change.Owner)
+	change.Generation = binary.BigEndian.Uint64(data[offset : offset+8])
+	offset += 8
+	change.Domain = kvdomains.KVDomain(binary.BigEndian.Uint16(data[offset : offset+2]))
+	offset += 2
+
+	keyLen := uint64(binary.BigEndian.Uint32(data[offset : offset+4]))
+	offset += 4
+	if keyLen > uint64(len(data)-offset) {
+		return nil, io.ErrUnexpectedEOF
 	}
-	change.FlatDomain = rawdb.StateFlatDomain(domain)
-	if _, err := io.ReadFull(r, change.Owner[:]); err != nil {
-		return nil, err
+	if keyLen > 0 {
+		change.Key = data[offset : offset+int(keyLen)]
 	}
-	if change.Generation, err = readUint64(r); err != nil {
-		return nil, err
+	offset += int(keyLen)
+	if offset >= len(data) {
+		return nil, io.ErrUnexpectedEOF
 	}
-	rawDomain, err := readUint16(r)
-	if err != nil {
-		return nil, err
+	switch data[offset] {
+	case 0:
+		change.PrevExists = false
+	case 1:
+		change.PrevExists = true
+	default:
+		return nil, fmt.Errorf("snapshots: invalid boolean byte %d", data[offset])
 	}
-	change.Domain = kvdomains.KVDomain(rawDomain)
-	if change.Key, err = readLengthPrefixedBytes(r); err != nil {
-		return nil, err
+	offset++
+	if len(data)-offset < 4 {
+		return nil, io.ErrUnexpectedEOF
 	}
-	if change.PrevExists, err = readBool(r); err != nil {
-		return nil, err
+	prevLen := uint64(binary.BigEndian.Uint32(data[offset : offset+4]))
+	offset += 4
+	if prevLen > uint64(len(data)-offset) {
+		return nil, io.ErrUnexpectedEOF
 	}
-	if change.Prev, err = readLengthPrefixedBytes(r); err != nil {
-		return nil, err
+	if prevLen > 0 {
+		change.Prev = data[offset : offset+int(prevLen)]
 	}
-	if r.Len() != 0 {
-		return nil, fmt.Errorf("snapshots: state-domain-change v5 record has %d trailing bytes", r.Len())
+	offset += int(prevLen)
+	if offset != len(data) {
+		return nil, fmt.Errorf("snapshots: state-domain-change v5 record has %d trailing bytes", len(data)-offset)
 	}
 	return change, nil
 }
@@ -709,16 +733,9 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if err := writeStateDomainChangeBinaryHeaderTo(indexTmp, stateDomainChangeBinaryIndexMagic, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	recordWriter := stateDomainChangeHistoryRecordETLWriter{
-		segment:    tmp,
-		index:      indexTmp,
-		accessors:  collectors,
-		ref:        ref,
-		expected:   totalRecords,
-		segmentOff: recordOffset,
-	}
+	recordWriter := newStateDomainChangeHistoryRecordETLWriter(tmp, indexTmp, collectors, ref, totalRecords, recordOffset)
 	for i := range sources {
-		if err := copyStateDomainChangeBinarySegmentPayload(dir, &recordWriter, sources[i]); err != nil {
+		if err := copyStateDomainChangeBinarySegmentPayload(dir, recordWriter, sources[i]); err != nil {
 			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 		}
 	}

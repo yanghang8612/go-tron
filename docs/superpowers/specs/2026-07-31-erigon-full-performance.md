@@ -3622,6 +3622,38 @@ time fell from 767.73 ms to 240.21 ms (3.20x), mean allocations from 3,350,938
 to 779,569 (-76.7%), and mean allocated bytes from 229.93 MB to 114.93 MB
 (-50.0%).
 
+#### P5.16: Buffer sequential history-family emission
+
+After removing random source-sidecar reads, half of the remaining profile was
+individual `write(2)` calls. The history record writer emitted one frame per
+file write, the txNum index emitted one entry per write, and the v4 exact/group
+ETL appliers repeated the same pattern. Erigon's segment compressors instead
+consume buffered sequential streams and flush at file/publication boundaries.
+
+History, txNum index, v4 exact, group-offset, and group-payload output now use
+256 KiB buffers. `Finish` flushes history and index before the index-count
+backpatch, and flushes exact/group streams before `Sync`, concatenation, hashing,
+and rename. Group record counts still use an in-place fixed-width backpatch, but
+the payload flush occurs once per logical group rather than once per record.
+This keeps ETL memory bounded and preserves the existing crash-publication
+ordering.
+
+The dominant v5 decoder now parses its compact layout directly and lets Key and
+Prev reference the immutable frame payload owned by the returned change. The
+private record writer retains that decoded row only until the next adjacent
+order comparison, avoiding a second deep copy of every variable-width field.
+A new test covers field round-trip, every truncated payload boundary, invalid
+boolean encoding, and trailing bytes. Existing forced-spill tests continue to
+prove byte-equivalent v4 accessor output, and the compaction/repair sequence
+passed ten consecutive runs.
+
+Across five local runs of the same 16,000-record benchmark, mean compaction time
+fell from the P5.15 baseline of 240.21 ms to 143.20 ms (1.68x), mean allocations
+from 779,569 to 509,371 (-34.7%), and mean allocated bytes from 114.93 MB to
+109.60 MB (-4.6%). Combined with P5.15, the measured local compaction path is
+5.36x faster than the pre-P5.15 baseline; sustained-import and soak gates remain
+production acceptance work rather than a benchmark inference.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

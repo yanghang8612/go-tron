@@ -411,5 +411,8 @@
 - [x] Remove merge-time random history reads through source index/accessor
   sidecars: authenticate immutable inputs, validate companion structure/ranges,
   then stream the canonical history once and rebuild both derived sidecars.
+- [x] Buffer history/index/accessor segment emission and decode v5 record fields
+  as immutable payload views, eliminating per-record file syscalls and redundant
+  copies while retaining bounded-memory ETL ordering.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

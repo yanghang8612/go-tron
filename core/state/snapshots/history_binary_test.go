@@ -114,6 +114,44 @@ func TestStateDomainChangeBinaryV5OmitsDuplicatedContextAndNext(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeBinaryV5RecordViewRoundTripAndBounds(t *testing.T) {
+	want := binaryStateDomainChange(7, 42, 3, "account/key")
+	want.FlatDomain = rawdb.StateFlatDomainKVLatest
+	want.Generation = 9
+	want.Domain = kvdomains.ContractStorage
+	want.PrevExists = true
+	want.Prev = []byte{0x01, 0x02, 0x03}
+
+	payload, err := encodeStateDomainChangeRecordV5(want)
+	if err != nil {
+		t.Fatalf("encode v5 record: %v", err)
+	}
+	got, err := decodeStateDomainChangeRecordV5(payload)
+	if err != nil {
+		t.Fatalf("decode v5 record: %v", err)
+	}
+	if got.TxNum != want.TxNum || got.FlatDomain != want.FlatDomain || got.Owner != want.Owner ||
+		got.Generation != want.Generation || got.Domain != want.Domain || !bytes.Equal(got.Key, want.Key) ||
+		got.PrevExists != want.PrevExists || !bytes.Equal(got.Prev, want.Prev) {
+		t.Fatalf("decoded v5 record mismatch:\ngot  %+v\nwant %+v", got, want)
+	}
+	for end := 0; end < len(payload); end++ {
+		if _, err := decodeStateDomainChangeRecordV5(payload[:end]); err == nil {
+			t.Fatalf("decoded v5 record truncated at %d/%d", end, len(payload))
+		}
+	}
+	withTrailing := append(append([]byte(nil), payload...), 0xff)
+	if _, err := decodeStateDomainChangeRecordV5(withTrailing); err == nil {
+		t.Fatal("decoded v5 record with trailing byte")
+	}
+	badBool := append([]byte(nil), payload...)
+	boolOffset := 8 + 1 + len(want.Owner) + 8 + 2 + 4 + len(want.Key)
+	badBool[boolOffset] = 2
+	if _, err := decodeStateDomainChangeRecordV5(badBool); err == nil {
+		t.Fatal("decoded v5 record with invalid boolean")
+	}
+}
+
 func TestStateDomainChangeBinaryV5SequenceIsUniqueAcrossSplitBlock(t *testing.T) {
 	dir := t.TempDir()
 	blockHash := common.Hash{0x77}
