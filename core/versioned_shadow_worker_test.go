@@ -1160,6 +1160,72 @@ func TestVMSenderChainFinishClassifiesWriteMismatch(t *testing.T) {
 	}
 }
 
+func TestVMPublicNetBoundaryProjectionMatchesSerialWrites(t *testing.T) {
+	usageKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
+	timeKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_time"}
+	rawKey := state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "vm-result"}
+	encodeInt := func(value int64) state.TransactionWriteValue {
+		encoded := make([]byte, 8)
+		binary.BigEndian.PutUint64(encoded, uint64(value))
+		return state.TransactionWriteValue{Exists: true, Value: encoded}
+	}
+	resultWrites := state.TransactionWriteSet{
+		usageKey: encodeInt(150), timeKey: encodeInt(10), rawKey: {Exists: true, Value: []byte("same")},
+	}
+	pre := &discardShadowPreexecution{
+		results: []discardShadowTaskResult{{
+			txIndex: 0, info: &corepb.TransactionInfo{}, writes: resultWrites, applyEligible: true, applyMatch: true,
+			publicNetValid: true,
+			publicNet: state.PublicNetReservation{
+				StartUsage: 50, StartTime: 5, RecoveredUsage: 50, ResourceTime: 10, Delta: 100, Limit: 1_000,
+			},
+		}},
+		resultByTx:    []int{0},
+		readVersions:  []discardShadowReadVersionResult{{publishable: true}},
+		readValidated: []bool{true},
+		publicNet:     make([]discardShadowPublicNetProjection, 1),
+	}
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetPublicNetLimit(1_000)
+	dynProps.SetPublicNetUsage(200)
+	dynProps.SetPublicNetTime(10)
+	pre.projectPublicNetBoundary(0, dynProps)
+	projection := pre.publicNet[0]
+	if !projection.observed || !projection.admitted || !projection.rebased || projection.expectedUsage != 300 || projection.expectedTimeSet {
+		t.Fatalf("VM public-net projection = %+v", projection)
+	}
+	canonical := state.TransactionWriteSet{
+		usageKey: encodeInt(300), rawKey: {Exists: true, Value: []byte("same")},
+	}
+	if !equalProjectedPublicNetWriteSet(resultWrites, canonical, projection) {
+		t.Fatal("projected public-net write set did not match serial no-op timestamp")
+	}
+	canonical[timeKey] = encodeInt(10)
+	if equalProjectedPublicNetWriteSet(resultWrites, canonical, projection) {
+		t.Fatal("projection accepted a serial timestamp write that should be absent")
+	}
+	dynProps.SetPublicNetTime(9)
+	pre.publicNet[0] = discardShadowPublicNetProjection{}
+	pre.projectPublicNetBoundary(0, dynProps)
+	projection = pre.publicNet[0]
+	if !projection.admitted || !projection.expectedTimeSet || projection.expectedTime != 10 {
+		t.Fatalf("timestamp-changing projection = %+v", projection)
+	}
+	canonical = state.TransactionWriteSet{
+		usageKey: encodeInt(projection.expectedUsage), timeKey: encodeInt(10), rawKey: {Exists: true, Value: []byte("same")},
+	}
+	if !equalProjectedPublicNetWriteSet(resultWrites, canonical, projection) {
+		t.Fatal("projected public-net write set did not match serial timestamp update")
+	}
+
+	dynProps.SetPublicNetLimit(999)
+	pre.publicNet[0] = discardShadowPublicNetProjection{}
+	pre.projectPublicNetBoundary(0, dynProps)
+	if rejected := pre.publicNet[0]; !rejected.observed || rejected.admitted {
+		t.Fatalf("limit change was not rejected: %+v", rejected)
+	}
+}
+
 func TestSenderChainAdvanceForwardsRawKV(t *testing.T) {
 	workerState := newTestState(t)
 	worker := discardShadowWorker{

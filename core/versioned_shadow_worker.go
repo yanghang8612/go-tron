@@ -279,6 +279,13 @@ var (
 	discardShadowVMSenderChainApplyErrorsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/apply", nil)
 	discardShadowVMSenderChainApplyMismatchCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/apply_mismatch", nil)
 	discardShadowVMSenderChainReadinessCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/error/readiness", nil)
+	discardShadowVMPublicNetProjectionCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/candidates", nil)
+	discardShadowVMPublicNetAdmittedCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/admitted", nil)
+	discardShadowVMPublicNetRebasedCounter             = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/rebased", nil)
+	discardShadowVMPublicNetLimitRejectedCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/limit_rejected", nil)
+	discardShadowVMPublicNetProjectionMatchesCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/write_set_matches", nil)
+	discardShadowVMPublicNetProjectionMismatchCounter  = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/write_set_mismatches", nil)
+	discardShadowVMPublicNetProjectionMissingCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/vm_sender_chain/public_net/projection/missing", nil)
 )
 
 var (
@@ -529,31 +536,48 @@ type discardShadowPreexecution struct {
 	groups        int
 	wallNanos     int64
 	retryStates   []*state.StateDB
+	publicNet     []discardShadowPublicNetProjection
+}
+
+type discardShadowPublicNetProjection struct {
+	observed        bool
+	admitted        bool
+	rebased         bool
+	expectedUsage   int64
+	expectedTime    int64
+	expectedTimeSet bool
 }
 
 type discardShadowSenderChainStats struct {
-	groups              int64
-	executed            int64
-	forwarded           int64
-	candidates          int64
-	validated           int64
-	forwardedValidated  int64
-	readConflicts       int64
-	senderConflicts     int64
-	infoMismatches      int64
-	writeMismatches     int64
-	balanceMismatches   int64
-	errors              int64
-	publicNetCandidates int64
-	publicNetOnly       int64
-	otherWriteMismatch  int64
-	resultErrors        int64
-	missingInfo         int64
-	writeSetErrors      int64
-	applyUnsupported    int64
-	applyErrors         int64
-	applyMismatches     int64
-	readinessRejected   int64
+	groups               int64
+	executed             int64
+	forwarded            int64
+	candidates           int64
+	validated            int64
+	forwardedValidated   int64
+	readConflicts        int64
+	senderConflicts      int64
+	infoMismatches       int64
+	writeMismatches      int64
+	balanceMismatches    int64
+	errors               int64
+	publicNetCandidates  int64
+	publicNetOnly        int64
+	otherWriteMismatch   int64
+	resultErrors         int64
+	missingInfo          int64
+	writeSetErrors       int64
+	applyUnsupported     int64
+	applyErrors          int64
+	applyMismatches      int64
+	readinessRejected    int64
+	publicNetProjected   int64
+	publicNetAdmitted    int64
+	publicNetRebased     int64
+	publicNetRejected    int64
+	projectionMatches    int64
+	projectionMismatches int64
+	projectionMissing    int64
 }
 
 type discardShadowAsyncPrefixStats struct {
@@ -1451,7 +1475,11 @@ func (shadow *discardShadowBlock) preexecuteTransferSenderChainsWithRetryState(c
 // readiness deliberately permits energy-bearing receipts; ordered block
 // resource settlement remains serial and no VM result is published here.
 func (shadow *discardShadowBlock) preexecuteVMSenderChains(cfg discardShadowRunConfig) *discardShadowPreexecution {
-	return shadow.preexecuteSenderChainsWithRetryState(cfg, vmSenderChains(cfg.transactions), preexecutedResultReady, true, false)
+	pre := shadow.preexecuteSenderChainsWithRetryState(cfg, vmSenderChains(cfg.transactions), preexecutedResultReady, true, false)
+	if pre != nil {
+		pre.publicNet = make([]discardShadowPublicNetProjection, len(pre.results))
+	}
+	return pre
 }
 
 func (shadow *discardShadowBlock) preexecuteSenderChainsWithRetryState(cfg discardShadowRunConfig, chains [][]discardShadowSenderChainTask, ready func(*discardShadowTaskResult) bool, forwardRaw, retainRetryState bool) *discardShadowPreexecution {
@@ -2881,6 +2909,43 @@ func (pre *discardShadowPreexecution) validateReadVersion(txIndex int, tx *types
 	pre.readValidated[resultIndex] = true
 }
 
+// projectPublicNetBoundary evaluates a retained VM reservation against the
+// exact canonical DynamicProperties visible immediately before its serial
+// transaction. It records expected serial write values without mutating the
+// worker result or canonical state.
+func (pre *discardShadowPreexecution) projectPublicNetBoundary(txIndex int, dynProps *state.DynamicProperties) {
+	if pre == nil || dynProps == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
+		return
+	}
+	resultIndex := pre.resultByTx[txIndex]
+	if resultIndex < 0 || resultIndex >= len(pre.results) || resultIndex >= len(pre.readValidated) ||
+		!pre.readValidated[resultIndex] || !pre.readVersions[resultIndex].publishable ||
+		resultIndex >= len(pre.publicNet) {
+		return
+	}
+	result := &pre.results[resultIndex]
+	if !preexecutedResultReady(result) || !result.publicNetValid {
+		return
+	}
+	reservation := result.publicNet
+	projection := &pre.publicNet[resultIndex]
+	projection.observed = true
+	currentUsage := dynProps.PublicNetUsage()
+	currentTime := dynProps.PublicNetTime()
+	_, currentTimeStored := dynProps.Get("public_net_time")
+	publicLimit := dynProps.PublicNetLimit()
+	recoveredUsage := recoverUsageForDP(currentUsage, currentTime, reservation.ResourceTime, dynProps)
+	if publicLimit != reservation.Limit || recoveredUsage < 0 || recoveredUsage > publicLimit ||
+		reservation.Delta <= 0 || reservation.Delta > publicLimit-recoveredUsage {
+		return
+	}
+	projection.admitted = true
+	projection.rebased = currentUsage != reservation.StartUsage || currentTime != reservation.StartTime
+	projection.expectedUsage = recoveredUsage + reservation.Delta
+	projection.expectedTime = reservation.ResourceTime
+	projection.expectedTimeSet = !currentTimeStored || currentTime != reservation.ResourceTime
+}
+
 func (pre *discardShadowPreexecution) resultForTransaction(txIndex int) (*discardShadowTaskResult, discardShadowReadVersionResult, bool) {
 	if pre == nil || txIndex < 0 || txIndex >= len(pre.resultByTx) {
 		return nil, discardShadowReadVersionResult{}, false
@@ -3107,6 +3172,25 @@ func equalSenderChainWriteSets(worker, canonical state.TransactionWriteSet, igno
 	return true
 }
 
+func equalProjectedPublicNetWriteSet(worker, canonical state.TransactionWriteSet, projection discardShadowPublicNetProjection) bool {
+	if !projection.observed || !projection.admitted || !equalSenderChainWriteSets(worker, canonical, true) {
+		return false
+	}
+	usageKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
+	usage, ok := canonical[usageKey]
+	if !ok || !usage.Exists || usage.Commutative || len(usage.Value) != 8 ||
+		int64(binary.BigEndian.Uint64(usage.Value)) != projection.expectedUsage {
+		return false
+	}
+	timeKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_time"}
+	timeValue, timeSet := canonical[timeKey]
+	if !projection.expectedTimeSet {
+		return !timeSet
+	}
+	return timeSet && timeValue.Exists && !timeValue.Commutative && len(timeValue.Value) == 8 &&
+		int64(binary.BigEndian.Uint64(timeValue.Value)) == projection.expectedTime
+}
+
 // finishTransferSenderChains compares only results whose exact read sources
 // still match the serial prefix. public_net_usage/time are excluded from the
 // write comparison when a valid reservation carrier is present: their ordered
@@ -3166,6 +3250,13 @@ func (shadow *discardShadowBlock) finishVMSenderChains(pre *discardShadowPreexec
 	discardShadowVMSenderChainApplyErrorsCounter.Inc(stats.applyErrors)
 	discardShadowVMSenderChainApplyMismatchCounter.Inc(stats.applyMismatches)
 	discardShadowVMSenderChainReadinessCounter.Inc(stats.readinessRejected)
+	discardShadowVMPublicNetProjectionCounter.Inc(stats.publicNetProjected)
+	discardShadowVMPublicNetAdmittedCounter.Inc(stats.publicNetAdmitted)
+	discardShadowVMPublicNetRebasedCounter.Inc(stats.publicNetRebased)
+	discardShadowVMPublicNetLimitRejectedCounter.Inc(stats.publicNetRejected)
+	discardShadowVMPublicNetProjectionMatchesCounter.Inc(stats.projectionMatches)
+	discardShadowVMPublicNetProjectionMismatchCounter.Inc(stats.projectionMismatches)
+	discardShadowVMPublicNetProjectionMissingCounter.Inc(stats.projectionMissing)
 	return stats
 }
 
@@ -3245,6 +3336,27 @@ func (shadow *discardShadowBlock) finishSenderChains(pre *discardShadowPreexecut
 		infoMatch := compareDiscardShadowInfo(result.info, cfg.canonicalInfos[txIndex]) == 0
 		writeMatch := equalSenderChainWriteSets(result.writes, versioned.transactionWriteSets[txIndex], ignorePublicNet && result.publicNetValid)
 		balanceMatch := !cfg.captureBalanceTrace || proto.Equal(result.balanceTrace, cfg.canonicalBalanceTraces[txIndex])
+		if result.publicNetValid && !ignorePublicNet {
+			if resultIndex >= len(pre.publicNet) || !pre.publicNet[resultIndex].observed {
+				stats.projectionMissing++
+			} else {
+				projection := pre.publicNet[resultIndex]
+				stats.publicNetProjected++
+				if !projection.admitted {
+					stats.publicNetRejected++
+				} else {
+					stats.publicNetAdmitted++
+					if projection.rebased {
+						stats.publicNetRebased++
+					}
+					if equalProjectedPublicNetWriteSet(result.writes, versioned.transactionWriteSets[txIndex], projection) {
+						stats.projectionMatches++
+					} else {
+						stats.projectionMismatches++
+					}
+				}
+			}
+		}
 		if !infoMatch {
 			stats.infoMismatches++
 		}

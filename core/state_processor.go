@@ -957,6 +957,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		}
 		if vmSenderChainPreexecution != nil {
 			vmSenderChainPreexecution.validateReadVersion(i, tx, &versionedShadow)
+			vmSenderChainPreexecution.projectPublicNetBoundary(i, dynProps)
 		}
 		if senderRetry != nil {
 			senderRetry.observeBoundary(i, tx, statedb, dynProps, &versionedShadow, discardCfg)
