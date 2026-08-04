@@ -41,7 +41,7 @@ func (bc *BlockChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRot
 	if err := bc.buffer.Flush(bc.db); err != nil {
 		return rawdb.CommitmentBranchRotation{}, false, fmt.Errorf("begin commitment branch rotation: flush buffer: %w", err)
 	}
-	_, based, err := rawdb.ReadCommitmentBranchBase(bc.db)
+	base, based, err := rawdb.ReadCommitmentBranchBase(bc.db)
 	if err != nil {
 		return rawdb.CommitmentBranchRotation{}, false, err
 	}
@@ -49,10 +49,11 @@ func (bc *BlockChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRot
 	if err != nil {
 		return rawdb.CommitmentBranchRotation{}, false, err
 	}
-	if based && rotating {
-		return rawdb.CommitmentBranchRotation{}, false, errors.New("core: commitment branch base and rotation markers both present")
-	}
 	if rotating {
+		if based && (rotation.Generation != base.Generation+1 || rotation.Generation == 0) {
+			return rawdb.CommitmentBranchRotation{}, false,
+				fmt.Errorf("core: rotation generation %d does not follow base %d", rotation.Generation, base.Generation)
+		}
 		bc.buffer.Discard()
 		bc.invalidateOrderedCommitPipeline()
 		commitmentBranchRotationResumeCounter.Inc(1)
@@ -61,17 +62,26 @@ func (bc *BlockChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRot
 	if based {
 		// Idempotently finish the second crash window. Once the base marker is
 		// durable, legacy is never authoritative again and may be reclaimed on
-		// any later lifecycle pass.
-		if err := rawdb.DeleteCommitmentBranches(bc.db); err != nil {
-			return rawdb.CommitmentBranchRotation{}, false, fmt.Errorf("resume commitment branch base cleanup: %w", err)
+		// any later lifecycle pass. Avoid adding an empty range tombstone on
+		// every later periodic rotation once that cleanup is complete.
+		legacyRows, err := rawdb.LegacyCommitmentBranchKeyspace().HasRows(bc.db)
+		if err != nil {
+			return rawdb.CommitmentBranchRotation{}, false, fmt.Errorf("inspect commitment branch base cleanup: %w", err)
 		}
-		if err := syncKeyValueStore(bc.db); err != nil {
-			return rawdb.CommitmentBranchRotation{}, false, fmt.Errorf("sync resumed commitment branch base cleanup: %w", err)
+		if legacyRows {
+			if err := rawdb.DeleteCommitmentBranches(bc.db); err != nil {
+				return rawdb.CommitmentBranchRotation{}, false, fmt.Errorf("resume commitment branch base cleanup: %w", err)
+			}
+			if err := syncKeyValueStore(bc.db); err != nil {
+				return rawdb.CommitmentBranchRotation{}, false, fmt.Errorf("sync resumed commitment branch base cleanup: %w", err)
+			}
 		}
-		// Periodic base+delta merge is the next rotation generation.
-		bc.buffer.Discard()
-		bc.invalidateOrderedCommitPipeline()
-		return rawdb.CommitmentBranchRotation{}, false, nil
+		if err := rawdb.DeleteCommitmentBranchDeltaGenerationsExcept(bc.db, base.Generation); err != nil {
+			return rawdb.CommitmentBranchRotation{}, false, fmt.Errorf("resume commitment branch delta cleanup: %w", err)
+		}
+		if base.Generation == ^uint64(0) {
+			return rawdb.CommitmentBranchRotation{}, false, errors.New("core: commitment branch generation exhausted")
+		}
 	}
 
 	head := bc.CurrentBlock()
@@ -93,13 +103,33 @@ func (bc *BlockChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRot
 		bc.buffer.Discard()
 		return rawdb.CommitmentBranchRotation{}, false, nil
 	}
-	if _, rootBranchOK, err := rawdb.ReadCommitmentBranchNoCopy(bc.db, nil); err != nil {
+	if based {
+		store, err := statedomains.NewStagedCommitmentStoreWithRepair(bc.db, statedomains.CommitmentSnapshotRepair{Source: bc.stateCommitmentColdHistory}, false)
+		if err != nil {
+			return rawdb.CommitmentBranchRotation{}, false, fmt.Errorf("core: open commitment base before rotation: %w", err)
+		}
+		present, presentErr := store.RootNodePresent(root)
+		closeErr := statedomains.CloseLatestCommitmentStore(store)
+		if presentErr != nil {
+			return rawdb.CommitmentBranchRotation{}, false, presentErr
+		}
+		if closeErr != nil {
+			return rawdb.CommitmentBranchRotation{}, false, closeErr
+		}
+		if !present {
+			return rawdb.CommitmentBranchRotation{}, false, errors.New("core: cannot rotate inconsistent commitment base and delta")
+		}
+	} else if _, rootBranchOK, err := rawdb.ReadCommitmentBranchNoCopy(bc.db, nil); err != nil {
 		return rawdb.CommitmentBranchRotation{}, false, err
 	} else if !rootBranchOK {
 		return rawdb.CommitmentBranchRotation{}, false, errors.New("core: cannot rotate missing commitment root branch")
 	}
+	generation := uint64(1)
+	if based {
+		generation = base.Generation + 1
+	}
 	rotation = rawdb.CommitmentBranchRotation{
-		Generation:    1,
+		Generation:    generation,
 		SnapshotTxNum: txNum,
 		Root:          root,
 		BlockNum:      head.Number(),
@@ -127,9 +157,10 @@ func (bc *BlockChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRot
 }
 
 // CompleteCommitmentBranchRotation atomically promotes a verified immutable
-// snapshot, then removes the now-redundant legacy table. A crash before the
-// marker swap resumes delta->legacy; a crash after it resumes delta->snapshot,
-// whether or not legacy cleanup had finished.
+// snapshot, then removes the now-covered legacy table or prior delta. A crash
+// before the marker swap resumes current delta -> frozen delta/legacy -> base;
+// a crash after it resumes current delta -> snapshot, whether or not cleanup
+// had finished.
 func (bc *BlockChain) CompleteCommitmentBranchRotation(rotation rawdb.CommitmentBranchRotation, mgr *snapshots.Manager) error {
 	if bc == nil || bc.db == nil {
 		return errors.New("core: nil blockchain or database")
@@ -154,6 +185,13 @@ func (bc *BlockChain) CompleteCommitmentBranchRotation(rotation rawdb.Commitment
 	}
 	if !ok || stored != rotation {
 		return errors.New("core: commitment branch rotation marker changed before completion")
+	}
+	priorBase, hadBase, err := rawdb.ReadCommitmentBranchBase(bc.db)
+	if err != nil {
+		return err
+	}
+	if hadBase && (rotation.Generation != priorBase.Generation+1 || rotation.Generation == 0) {
+		return fmt.Errorf("core: rotation generation %d does not follow base %d", rotation.Generation, priorBase.Generation)
 	}
 	if solidified := bc.cachedDynProps().LatestSolidifiedBlockNum(); solidified < 0 || uint64(solidified) < rotation.BlockNum {
 		commitmentBranchRotationDeferredCounter.Inc(1)
@@ -195,11 +233,15 @@ func (bc *BlockChain) CompleteCommitmentBranchRotation(rotation rawdb.Commitment
 		return fmt.Errorf("complete commitment branch rotation: sync base marker: %w", err)
 	}
 
-	if err := rawdb.DeleteCommitmentBranches(bc.db); err != nil {
+	if hadBase {
+		if err := rawdb.DeleteCommitmentBranchDeltaGenerationsExcept(bc.db, rotation.Generation); err != nil {
+			return fmt.Errorf("complete commitment branch rotation: remove covered deltas: %w", err)
+		}
+	} else if err := rawdb.DeleteCommitmentBranches(bc.db); err != nil {
 		return fmt.Errorf("complete commitment branch rotation: remove legacy branches: %w", err)
 	}
 	if err := syncKeyValueStore(bc.db); err != nil {
-		return fmt.Errorf("complete commitment branch rotation: sync legacy cleanup: %w", err)
+		return fmt.Errorf("complete commitment branch rotation: sync covered branch cleanup: %w", err)
 	}
 	commitmentBranchRotationCompleteCounter.Inc(1)
 	log.Info("Commitment branch rotation completed", "generation", rotation.Generation,
@@ -236,10 +278,7 @@ func verifyCommitmentBranchRotationSnapshot(mgr *snapshots.Manager, rotation raw
 }
 
 func (bc *BlockChain) rebuildCommitmentBranchesAfterRejectedRotation() error {
-	store, err := statedomains.NewStagedCommitmentStoreWithRepair(bc.db, statedomains.CommitmentSnapshotRepair{}, false)
-	if err != nil {
-		return err
-	}
+	store := statedomains.NewStagedCommitmentStore(bc.db)
 	_, rebuildErr := store.Rebuild()
 	closeErr := statedomains.CloseLatestCommitmentStore(store)
 	if rebuildErr != nil {

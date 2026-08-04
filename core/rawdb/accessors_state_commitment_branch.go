@@ -29,6 +29,16 @@ type CommitmentBranchKeyspace struct {
 	physicalPrefix []byte
 }
 
+// CommitmentBranchIterator exposes logical branch prefixes in sorted order
+// while keeping the physical schema/generation prefix encapsulated by rawdb.
+// Key and Value follow ethdb.Iterator lifetime rules and are invalidated by the
+// next call to Next.
+type CommitmentBranchIterator struct {
+	inner     ethdb.Iterator
+	schemaLen int
+	err       error
+}
+
 func LegacyCommitmentBranchKeyspace() CommitmentBranchKeyspace {
 	return CommitmentBranchKeyspace{physicalPrefix: stateCommitmentBranchPrefix}
 }
@@ -56,6 +66,67 @@ func (s CommitmentBranchKeyspace) key(prefix []byte) []byte {
 	copy(key, schema)
 	copy(key[len(schema):], prefix)
 	return key
+}
+
+func (s CommitmentBranchKeyspace) NewIterator(db ethdb.Iteratee) *CommitmentBranchIterator {
+	schema := s.prefix()
+	return &CommitmentBranchIterator{inner: db.NewIterator(schema, nil), schemaLen: len(schema)}
+}
+
+// HasRows reports whether the logical branch namespace contains any physical
+// row. Lifecycle cleanup uses this guard to avoid emitting a fresh Pebble range
+// tombstone on every periodic rotation after the legacy namespace is empty.
+func (s CommitmentBranchKeyspace) HasRows(db ethdb.Iteratee) (bool, error) {
+	it := s.NewIterator(db)
+	hasRows := it.Next()
+	err := it.Error()
+	it.Release()
+	return hasRows, err
+}
+
+func (it *CommitmentBranchIterator) Next() bool {
+	if it == nil || it.inner == nil || it.err != nil || !it.inner.Next() {
+		return false
+	}
+	if len(it.inner.Key()) < it.schemaLen {
+		it.err = errors.New("rawdb: commitment branch iterator returned a short physical key")
+		return false
+	}
+	return true
+}
+
+func (it *CommitmentBranchIterator) Key() []byte {
+	if it == nil || it.inner == nil || len(it.inner.Key()) < it.schemaLen {
+		return nil
+	}
+	return it.inner.Key()[it.schemaLen:]
+}
+
+func (it *CommitmentBranchIterator) Value() []byte {
+	if it == nil || it.inner == nil {
+		return nil
+	}
+	return it.inner.Value()
+}
+
+func (it *CommitmentBranchIterator) Error() error {
+	if it == nil {
+		return nil
+	}
+	if it.err != nil {
+		return it.err
+	}
+	if it.inner == nil {
+		return nil
+	}
+	return it.inner.Error()
+}
+
+func (it *CommitmentBranchIterator) Release() {
+	if it != nil && it.inner != nil {
+		it.inner.Release()
+		it.inner = nil
+	}
 }
 
 // NewCommitmentParentView returns an optional fold-scoped parent reader. Stores
@@ -334,6 +405,43 @@ func (s CommitmentBranchKeyspace) DeleteAll(db commitmentBranchStore) error {
 		}
 	}
 	return deleteCommitmentBranchesByPointScan(db, prefix)
+}
+
+// DeleteCommitmentBranchDeltaGenerationsExcept reclaims every complete delta
+// namespace except keepGeneration. It is idempotent crash-window cleanup after
+// a new immutable base marker has made older generations unreachable.
+func DeleteCommitmentBranchDeltaGenerationsExcept(db commitmentBranchStore, keepGeneration uint64) error {
+	it := db.NewIterator(stateCommitmentBranchDeltaPrefix, nil)
+	var generations []uint64
+	var last uint64
+	for it.Next() {
+		key := it.Key()
+		if len(key) < len(stateCommitmentBranchDeltaPrefix)+8 {
+			it.Release()
+			return fmt.Errorf("rawdb: short commitment branch delta key length %d", len(key))
+		}
+		generation := binary.BigEndian.Uint64(key[len(stateCommitmentBranchDeltaPrefix) : len(stateCommitmentBranchDeltaPrefix)+8])
+		if generation == keepGeneration || (len(generations) > 0 && generation == last) {
+			continue
+		}
+		generations = append(generations, generation)
+		last = generation
+	}
+	err := it.Error()
+	it.Release()
+	if err != nil {
+		return err
+	}
+	for _, generation := range generations {
+		keyspace, err := NewCommitmentBranchDeltaKeyspace(generation)
+		if err != nil {
+			return err
+		}
+		if err := keyspace.DeleteAll(db); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func deleteCommitmentBranchesByPointScan(db commitmentBranchStore, prefix []byte) error {

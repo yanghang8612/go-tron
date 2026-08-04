@@ -21,6 +21,8 @@ type rawdbBranchStore struct {
 	cold               pointread.CommitmentBranchSnapshotView
 	coldOwned          bool
 	legacyFallback     bool
+	frozenKeyspace     rawdb.CommitmentBranchKeyspace
+	hasFrozenKeyspace  bool
 	ownedValue         bool
 	readParentBranches bool
 	parentView         pointread.CommitmentParentView
@@ -179,13 +181,24 @@ func newRawdbBranchStoreWithRepair(db CommitmentDB, repair CommitmentSnapshotRep
 	if err != nil {
 		return nil, err
 	}
-	if ok && rotating {
-		return nil, errors.New("domains: commitment branch base and rotation markers both present")
-	}
 	if rotating {
 		keyspace, err := rawdb.NewCommitmentBranchDeltaKeyspace(rotation.Generation)
 		if err != nil {
 			return nil, err
+		}
+		if ok {
+			if rotation.Generation != base.Generation+1 || rotation.Generation == 0 {
+				return nil, fmt.Errorf("domains: commitment branch rotation generation %d does not follow base %d", rotation.Generation, base.Generation)
+			}
+			store, err := openRawdbBranchBase(db, repair, base)
+			if err != nil {
+				return nil, err
+			}
+			store.frozenKeyspace = store.keyspace
+			store.hasFrozenKeyspace = true
+			store.keyspace = keyspace
+			commitmentBranchRotationOpenCounter.Inc(1)
+			return store, nil
 		}
 		store := newRawdbBranchStoreInKeyspace(db, keyspace, nil, false)
 		store.legacyFallback = true
@@ -195,6 +208,10 @@ func newRawdbBranchStoreWithRepair(db CommitmentDB, repair CommitmentSnapshotRep
 	if !ok {
 		return newRawdbBranchStore(db), nil
 	}
+	return openRawdbBranchBase(db, repair, base)
+}
+
+func openRawdbBranchBase(db CommitmentDB, repair CommitmentSnapshotRepair, base rawdb.CommitmentBranchBase) (*rawdbBranchStore, error) {
 	if repair.Source == nil {
 		return nil, errors.New("domains: commitment branch base requires snapshot source")
 	}
@@ -230,7 +247,7 @@ func newRawdbBranchStoreWithRepair(db CommitmentDB, repair CommitmentSnapshotRep
 }
 
 func (s *rawdbBranchStore) hasBaseline() bool {
-	return s.cold != nil || s.legacyFallback
+	return s.cold != nil || s.legacyFallback || s.hasFrozenKeyspace
 }
 
 // concurrentSiblingFlushSafe opts in only when the underlying CommitmentDB
@@ -266,6 +283,25 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 	}
 	if !s.hasBaseline() {
 		return BranchData{}, false, nil
+	}
+	if s.hasFrozenKeyspace {
+		encoded, ok, err = s.frozenKeyspace.ReadNoCopy(s.db, prefix)
+		if err != nil {
+			return BranchData{}, false, err
+		}
+		if ok {
+			if len(encoded) == 0 {
+				commitmentBranchFrozenTombstoneCounter.Inc(1)
+				return BranchData{}, false, nil
+			}
+			commitmentBranchFrozenDeltaHitCounter.Inc(1)
+			var b BranchData
+			if err := decodeBranchDataIntoNoCopy(encoded, &b); err != nil {
+				return BranchData{}, false, err
+			}
+			return b, true, nil
+		}
+		commitmentBranchFrozenDeltaMissCounter.Inc(1)
 	}
 	if s.legacyFallback {
 		encoded, ok, err = rawdb.LegacyCommitmentBranchKeyspace().ReadNoCopy(s.db, prefix)
@@ -342,6 +378,43 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 		*dst = BranchData{}
 		return false, nil
 	}
+	if s.hasFrozenKeyspace {
+		decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
+		decodeView.dst = dst
+		decodeView.arena = s.leafKeyArenas[reader]
+		decodeView.tombstone = false
+		decodeView.allowTombstone = true
+		fallbackReader := reader + maxFoldNibbles + 1
+		var found bool
+		var err error
+		if s.parentSession != nil {
+			found, err = s.frozenKeyspace.ViewParentInSession(s.parentSession, fallbackReader, prefix, decodeView.consume)
+		} else if s.parentView != nil {
+			found, err = s.frozenKeyspace.ViewParentInView(s.parentView, prefix, decodeView.consume)
+		} else if s.readParentBranches {
+			found, err = s.frozenKeyspace.ViewParentNoCopy(s.db, prefix, decodeView.consume)
+		} else {
+			found, err = s.frozenKeyspace.ViewNoCopy(s.db, prefix, decodeView.consume)
+		}
+		tombstone := decodeView.tombstone
+		decodeView.dst = nil
+		decodeView.arena = nil
+		decodeView.tombstone = false
+		decodeView.allowTombstone = false
+		branchDecodeViewPool.Put(decodeView)
+		if err != nil {
+			return false, err
+		}
+		if found {
+			if tombstone {
+				commitmentBranchFrozenTombstoneCounter.Inc(1)
+				return false, nil
+			}
+			commitmentBranchFrozenDeltaHitCounter.Inc(1)
+			return true, nil
+		}
+		commitmentBranchFrozenDeltaMissCounter.Inc(1)
+	}
 	if s.legacyFallback {
 		decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
 		decodeView.dst = dst
@@ -392,7 +465,7 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 
 func (s *rawdbBranchStore) beginParentRead() error {
 	readers := maxFoldNibbles + 1
-	if s.legacyFallback {
+	if s.legacyFallback || s.hasFrozenKeyspace {
 		readers *= 2
 	}
 	session, err := rawdb.NewCommitmentParentReadSession(s.db, readers)
@@ -539,6 +612,8 @@ func (s *rawdbBranchStore) clear() error {
 		}
 		s.keyspace = rawdb.LegacyCommitmentBranchKeyspace()
 		s.legacyFallback = false
+		s.frozenKeyspace = rawdb.CommitmentBranchKeyspace{}
+		s.hasFrozenKeyspace = false
 	}
 	// A legacy constructor may be used by an explicit administrative Rebuild.
 	// It cannot read an immutable base without a source, but it must still erase

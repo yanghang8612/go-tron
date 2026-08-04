@@ -322,6 +322,121 @@ func TestCommitmentBranchRidesLatestBuild(t *testing.T) {
 	}
 }
 
+func TestCommitmentBranchLatestBuildStreamsBaseAndFrozenDeltaMerge(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	baseRoot := seedStagedBranchRows(t, db)
+	want := make(map[string][]byte)
+	if err := rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
+		want[string(prefix)] = append([]byte(nil), encoded...)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	agg := NewAggregator(dir)
+	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 100}); err != nil {
+		t.Fatal(err)
+	}
+	const baseGeneration = uint64(9)
+	if err := rawdb.WriteCommitmentBranchBase(db, rawdb.CommitmentBranchBase{
+		Generation: baseGeneration, SnapshotTxNum: 100, Root: baseRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.DeleteCommitmentBranches(db); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := rawdb.NewCommitmentBranchDeltaKeyspace(baseGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	override := []byte("delta-overrides-base")
+	if err := frozen.Write(db, []byte{0x04}, override); err != nil {
+		t.Fatal(err)
+	}
+	if err := frozen.Write(db, []byte{0x04, 0x01}, []byte{}); err != nil {
+		t.Fatal(err)
+	}
+	inserted := []byte("delta-insert")
+	if err := frozen.Write(db, []byte{0x08}, inserted); err != nil {
+		t.Fatal(err)
+	}
+	want[string([]byte{0x04})] = override
+	delete(want, string([]byte{0x04, 0x01}))
+	want[string([]byte{0x08})] = inserted
+
+	rotationRoot := common.Hash{0xaa, 0xbb}
+	if err := rawdb.WriteCommitmentBranchRotation(db, rawdb.CommitmentBranchRotation{
+		Generation: baseGeneration + 1, SnapshotTxNum: 200, Root: rotationRoot,
+		BlockNum: 20, BlockHash: common.Hash{0x20},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := rawdb.NewCommitmentBranchDeltaKeyspace(baseGeneration + 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := current.Write(db, []byte{0x09}, []byte("post-rotation-must-stay-hot")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, common.Hash{0xcc}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 200}); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string][]byte)
+	if err := mgr.IterateCommitmentBranches(200, func(prefix, encoded []byte) (bool, error) {
+		got[string(prefix)] = append([]byte(nil), encoded...)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("merged rows = %d, want %d: %x", len(got), len(want), got)
+	}
+	for key, value := range want {
+		if !bytes.Equal(got[key], value) {
+			t.Fatalf("merged prefix %x = %x, want %x", []byte(key), got[key], value)
+		}
+	}
+	if _, ok := got[string([]byte{0x09})]; ok {
+		t.Fatal("new-generation delta leaked into frozen merge")
+	}
+	if root, ok, err := mgr.GetCommitmentRoot(200); err != nil || !ok || root != rotationRoot {
+		t.Fatalf("merged snapshot root = %x ok=%v err=%v, want %x", root, ok, err, rotationRoot)
+	}
+	// A solidification deferral or restart runs the latest builder again while
+	// both markers remain. The already-published generation must be retained;
+	// its old immutable input has legitimately moved to the retired manifest.
+	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 200}); err != nil {
+		t.Fatalf("resume published branch rotation: %v", err)
+	}
+	mgr, err = OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = make(map[string][]byte)
+	if err := mgr.IterateCommitmentBranches(200, func(prefix, encoded []byte) (bool, error) {
+		got[string(prefix)] = append([]byte(nil), encoded...)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("resumed merged rows = %d, want %d", len(got), len(want))
+	}
+	for key, value := range want {
+		if !bytes.Equal(got[key], value) {
+			t.Fatalf("resumed merged prefix %x = %x, want %x", []byte(key), got[key], value)
+		}
+	}
+}
+
 // TestCommitmentBranchEmptyKeyspaceSkipped verifies that an empty branch
 // keyspace causes BuildLatest to publish no SegmentDatasetCommitmentBranch ref.
 // Other datasets (CommitmentRoot, etc.) may still produce refs; this test only

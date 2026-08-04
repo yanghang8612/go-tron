@@ -143,8 +143,19 @@ func TestCommitmentBranchRotationKeepsLiveDeltaAcrossSnapshotPublish(t *testing.
 	if err := statedomains.CloseLatestCommitmentStore(latest); err != nil {
 		t.Fatal(err)
 	}
-	if _, active, err := bc.BeginCommitmentBranchRotation(); err != nil || active {
-		t.Fatalf("resume base cleanup active=%v err=%v", active, err)
+	bc.SetStateCommitmentColdHistory(mgr)
+	if err := rawdb.WriteStateTxRange(db, block2.Number(), block2.Hash(), 2, 2); err != nil {
+		t.Fatal(err)
+	}
+	rotation2, active, err := bc.BeginCommitmentBranchRotation()
+	if err != nil || !active {
+		t.Fatalf("begin base+delta merge active=%v err=%v", active, err)
+	}
+	if rotation2.Generation != rotation.Generation+1 || rotation2.Root != liveRoot {
+		t.Fatalf("second rotation = %+v, prior generation=%d liveRoot=%x", rotation2, rotation.Generation, liveRoot)
+	}
+	if resumed, active, err := bc.BeginCommitmentBranchRotation(); err != nil || !active || resumed != rotation2 {
+		t.Fatalf("resume base+delta merge = %+v active=%v err=%v, want %+v", resumed, active, err, rotation2)
 	}
 	legacyRows = 0
 	if err := rawdb.IterateCommitmentBranches(db, func(_, _ []byte) (bool, error) {
@@ -155,5 +166,68 @@ func TestCommitmentBranchRotationKeepsLiveDeltaAcrossSnapshotPublish(t *testing.
 	}
 	if legacyRows != 0 {
 		t.Fatalf("resumed base cleanup left %d legacy rows", legacyRows)
+	}
+
+	block3 := buildTestBlock(bc, witness, 9_000)
+	if err := bc.InsertBlock(block3); err != nil {
+		t.Fatal(err)
+	}
+	bc.WaitForCommitSettled()
+	bc.WaitForFlushSettled()
+	liveRoot2, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
+	if err != nil || !ok || liveRoot2 == rotation2.Root {
+		t.Fatalf("read second live root = %x ok=%v err=%v", liveRoot2, ok, err)
+	}
+	result2, err := snapshots.NewAggregator(dir).BuildLatest(db, snapshots.AggregatorBuildOptions{
+		FromTxNum: 1, ToTxNum: rotation2.SnapshotTxNum,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr2, err := snapshots.OpenPinnedManager(dir, result2.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bc.CompleteCommitmentBranchRotation(rotation2, mgr2); err != nil {
+		t.Fatal(err)
+	}
+	base, ok, err = rawdb.ReadCommitmentBranchBase(db)
+	if err != nil || !ok || base.Generation != rotation2.Generation || base.Root != rotation2.Root {
+		t.Fatalf("second base after publish = %+v ok=%v err=%v", base, ok, err)
+	}
+	oldDeltaRows := 0
+	if err := delta.Iterate(db, func(_, _ []byte) (bool, error) {
+		oldDeltaRows++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if oldDeltaRows != 0 {
+		t.Fatalf("covered generation retained %d rows", oldDeltaRows)
+	}
+	newDelta, err := rawdb.NewCommitmentBranchDeltaKeyspace(rotation2.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newDeltaRows := 0
+	if err := newDelta.Iterate(db, func(_, _ []byte) (bool, error) {
+		newDeltaRows++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if newDeltaRows == 0 {
+		t.Fatal("second rotation retained no live delta rows")
+	}
+	latest, err = statedomains.NewStagedCommitmentStoreWithRepair(db, statedomains.CommitmentSnapshotRepair{Source: mgr2}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	present, err = latest.RootNodePresent(liveRoot2)
+	if err != nil || !present {
+		t.Fatalf("second snapshot+delta root present=%v err=%v", present, err)
+	}
+	if err := statedomains.CloseLatestCommitmentStore(latest); err != nil {
+		t.Fatal(err)
 	}
 }

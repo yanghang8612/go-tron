@@ -2363,9 +2363,31 @@ while the snapshot is built, publishes the base, injects conflicting leftover
 legacy data to model the second crash window, and proves that the immutable
 snapshot plus live delta still derives the advanced root. Rotation starts,
 resumes, solidification deferrals, rejections, completions, legacy hits/misses,
-and delta/cold reads are separately observable. The remaining P4.48 work is
-periodic next-generation merge of an existing immutable base plus its bounded
-delta, followed by the fresh snap-mode write-amplification production gate.
+and delta/cold reads are separately observable.
+
+Periodic next-generation merge is now implemented without returning branch
+ownership to Pebble. Starting from an active base generation drains the ordered
+pipeline, freezes that generation's bounded delta, and atomically redirects new
+folds into the consecutive generation. Reads during the build resolve current
+delta, frozen delta/tombstone, then immutable base. The builder pull-iterates the
+old binary segment and frozen Pebble namespace in lexical order, applying delta
+overwrites and tombstones while using bounded row memory; the new generation is
+never included in the checkpoint being constructed.
+
+After root, canonical-boundary, and solidification verification, the base
+marker advances atomically and only the covered generations are reclaimed.
+Both markers are a valid crash/restart state when their generations are
+consecutive. A snapshot that was published before a solidification deferral is
+recognized and retained on the next pass, so recovery does not require its
+already-retired input base. Empty legacy cleanup is also detected before range
+deletion to avoid adding a redundant Pebble tombstone on every later cycle.
+Tests cover ordered current-over-frozen-over-base reads, frozen overrides and
+deletes, streaming merge exclusion of concurrent writes, repeated publication
+after deferral, second-generation promotion, old-delta reclamation, and live
+root derivation from the promoted base plus retained new delta. Separate
+frozen-delta hit, miss, and tombstone counters expose the periodic read path.
+The remaining P4.48 work is the fresh snap-mode write-amplification production
+gate.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

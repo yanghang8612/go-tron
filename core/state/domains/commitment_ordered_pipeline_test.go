@@ -285,6 +285,97 @@ func TestOrderedCommitmentPipelineUsesImmutableBaseDelta(t *testing.T) {
 	}
 }
 
+func TestOrderedCommitmentPipelineUsesNewDeltaOverFrozenDeltaAndBase(t *testing.T) {
+	const (
+		baseTx      = uint64(700)
+		baseGen     = uint64(31)
+		rotationTx  = uint64(800)
+		rotationGen = baseGen + 1
+	)
+	seed := buildRandomPuts(rand.New(rand.NewSource(9494)), 512)
+	referenceDB := rawdb.NewMemoryDatabase()
+	rotationDB := rawdb.NewMemoryDatabase()
+	for _, db := range []CommitmentDB{referenceDB, rotationDB} {
+		if _, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(db), seed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseRoot, _, _ := rawdb.ReadLatestDomainCommitmentRoot(rotationDB)
+	mgr := buildManagerWithBranchSnapshot(t, rotationDB, t.TempDir(), baseTx)
+	if err := rawdb.WriteCommitmentBranchBase(rotationDB, rawdb.CommitmentBranchBase{
+		Generation: baseGen, SnapshotTxNum: baseTx, Root: baseRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.DeleteCommitmentBranches(rotationDB); err != nil {
+		t.Fatal(err)
+	}
+	first := []rawdb.StateCommitmentUpdate{
+		rawdb.NewStateCommitmentDelete(seed[7].Key),
+		rawdb.NewStateCommitmentPut(seed[19].Key, []byte("frozen-delta-update")),
+	}
+	wantRoot, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(referenceDB), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStagedCommitmentStoreWithRepair(rotationDB, CommitmentSnapshotRepair{Source: mgr}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRoot, err := ApplyLatestCommitmentWithStore(store, first)
+	if closeErr := CloseLatestCommitmentStore(store); err == nil {
+		err = closeErr
+	}
+	if err != nil || gotRoot != wantRoot {
+		t.Fatalf("frozen generation root = %x err=%v, want %x", gotRoot, err, wantRoot)
+	}
+	if err := rawdb.WriteCommitmentBranchRotation(rotationDB, rawdb.CommitmentBranchRotation{
+		Generation: rotationGen, SnapshotTxNum: rotationTx, Root: gotRoot,
+		BlockNum: 80, BlockHash: common.Hash{0x80},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := blockbuffer.New(rotationDB)
+	buf.SetMaxInflight(4)
+	pipeline, err := NewOrderedCommitmentPipelineWithRepair(buf, CommitmentSnapshotRepair{Source: mgr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pipeline.Close()
+	second := []rawdb.StateCommitmentUpdate{
+		rawdb.NewStateCommitmentPut(seed[7].Key, []byte("reinsert-after-frozen-tombstone")),
+		rawdb.NewStateCommitmentPut(seed[29].Key, []byte("new-generation-update")),
+	}
+	wantRoot, err = ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(referenceDB), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf.BeginBlock(common.Hash{0x81}, 81)
+	handle, _ := buf.NewestInflight()
+	result := <-pipeline.Submit(buf.ViewLayer(handle), second)
+	if result.Err != nil || result.Root != wantRoot {
+		t.Fatalf("rotating pipeline root = %x err=%v, want %x", result.Root, result.Err, wantRoot)
+	}
+	if err := buf.CommitInflight(handle); err != nil {
+		t.Fatal(err)
+	}
+	newDelta, err := rawdb.NewCommitmentBranchDeltaKeyspace(rotationGen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := 0
+	if err := newDelta.Iterate(buf, func(_, _ []byte) (bool, error) {
+		rows++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rows == 0 {
+		t.Fatal("ordered pipeline wrote no new-generation delta rows")
+	}
+}
+
 func collectCommitmentRows(t *testing.T, db ethdb.Iteratee) map[string][]byte {
 	t.Helper()
 	rows := make(map[string][]byte)

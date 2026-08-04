@@ -273,7 +273,7 @@ func TestRawdbBranchStoreRotationLayersDeltaOverFrozenLegacy(t *testing.T) {
 	}
 }
 
-func TestRawdbBranchStoreRejectsConflictingBaseAndRotation(t *testing.T) {
+func TestRawdbBranchStoreRejectsNonConsecutiveBaseAndRotation(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	if err := rawdb.WriteCommitmentBranchBase(db, rawdb.CommitmentBranchBase{
 		Generation: 1, SnapshotTxNum: 10, Root: common.Hash{0x01},
@@ -281,12 +281,12 @@ func TestRawdbBranchStoreRejectsConflictingBaseAndRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteCommitmentBranchRotation(db, rawdb.CommitmentBranchRotation{
-		Generation: 2, SnapshotTxNum: 11, Root: common.Hash{0x02}, BlockNum: 2, BlockHash: common.Hash{0x03},
+		Generation: 3, SnapshotTxNum: 11, Root: common.Hash{0x02}, BlockNum: 2, BlockHash: common.Hash{0x03},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := newRawdbBranchStoreWithRepair(db, CommitmentSnapshotRepair{}); err == nil {
-		t.Fatal("conflicting base and rotation markers accepted")
+		t.Fatal("non-consecutive base and rotation markers accepted")
 	}
 }
 

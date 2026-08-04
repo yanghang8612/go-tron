@@ -157,6 +157,8 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 		result: make(chan OrderedCommitmentResult, 1),
 	}
 	job.store.legacyFallback = p.base.legacyFallback
+	job.store.frozenKeyspace = p.base.frozenKeyspace
+	job.store.hasFrozenKeyspace = p.base.hasFrozenKeyspace
 	if ops != nil {
 		stats.resolvedOps = uint64(len(*ops))
 	}

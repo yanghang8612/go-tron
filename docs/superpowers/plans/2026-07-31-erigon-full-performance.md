@@ -202,9 +202,11 @@
 - [x] Publish the first immutable commitment baseline with a crash-safe
   generation redirect, canonical/solidified boundary, root verification, and
   post-marker legacy cleanup while import continues through the hot delta.
-- [ ] Merge an active immutable baseline plus bounded delta/tombstones into the
-  next generation, reclaim the covered generation, then run the fresh
-  snap-mode write-amplification gate.
+- [x] Merge an active immutable baseline plus bounded delta/tombstones into the
+  next generation, keep concurrent imports in a new delta, and reclaim the
+  covered generation after verified publication.
+- [ ] Run the fresh snap-mode write-amplification gate for the periodic
+  immutable commitment lifecycle.
 - [ ] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64

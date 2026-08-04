@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -56,6 +57,16 @@ type CommitmentBranchPointView struct {
 	segmentHeader latestBinaryHeader
 	btree         *os.File
 	btreeHeader   latestBinaryBTreeHeader
+}
+
+type commitmentBranchBinaryIterator struct {
+	file   *os.File
+	header latestBinaryHeader
+	index  uint64
+	prev   []byte
+	prefix []byte
+	value  []byte
+	err    error
 }
 
 var _ pointread.CommitmentBranchSnapshotView = (*CommitmentBranchPointView)(nil)
@@ -138,6 +149,19 @@ func BuildCommitmentBranchSegmentFilesFromDB(db ethdb.Iteratee, dir, relPath str
 }
 
 func writeCommitmentBranchBinarySegmentFilesFromDB(db ethdb.Iteratee, dir, relPath string, fromTxNum, toTxNum uint64, skipEmpty bool) (SegmentRef, SegmentRef, SegmentRef, bool, error) {
+	return writeCommitmentBranchBinarySegmentFilesFromIterator(dir, relPath, fromTxNum, toTxNum, skipEmpty, func(yield func(prefix, encoded []byte) error) error {
+		return rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
+			if err := yield(prefix, encoded); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+	})
+}
+
+type commitmentBranchRowIterator func(func(prefix, encoded []byte) error) error
+
+func writeCommitmentBranchBinarySegmentFilesFromIterator(dir, relPath string, fromTxNum, toTxNum uint64, skipEmpty bool, rowsIter commitmentBranchRowIterator) (SegmentRef, SegmentRef, SegmentRef, bool, error) {
 	ref := SegmentRef{
 		Dataset:   SegmentDatasetCommitmentBranch,
 		Kind:      SegmentLatest,
@@ -147,13 +171,10 @@ func writeCommitmentBranchBinarySegmentFilesFromDB(db ethdb.Iteratee, dir, relPa
 	}
 	var rows uint64
 	iter := func(yield func(LatestEntry) error) error {
-		return rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
+		return rowsIter(func(prefix, encoded []byte) error {
 			rows++
 			key := encodeCommitmentBranchSnapshotKey(prefix)
-			if err := yield(LatestEntry{Key: key, Value: encoded}); err != nil {
-				return false, err
-			}
-			return true, nil
+			return yield(LatestEntry{Key: key, Value: encoded})
 		})
 	}
 	segment, accessor, btree, err := writeLatestBinarySegmentAndAccessor(dir, ref, iter)
@@ -174,6 +195,76 @@ func writeCommitmentBranchBinarySegmentFilesFromDB(db ethdb.Iteratee, dir, relPa
 		}
 	}
 	return SegmentRef{}, SegmentRef{}, SegmentRef{}, false, nil
+}
+
+func openCommitmentBranchBinaryIterator(dir string, ref SegmentRef) (*commitmentBranchBinaryIterator, error) {
+	if ref.NormalizedDataset() != SegmentDatasetCommitmentBranch || ref.Kind != SegmentLatest || !isLatestBinarySegmentPath(ref.Path) {
+		return nil, fmt.Errorf("snapshots: commitment branch merge requires a binary latest segment, got %+v", ref)
+	}
+	path := filepath.Join(dir, ref.Path)
+	file, header, err := openLatestBinaryReader(path, ref)
+	if err != nil {
+		return nil, err
+	}
+	if header.dataset != SegmentDatasetCommitmentBranch || header.kind != SegmentLatest {
+		_ = file.Close()
+		return nil, fmt.Errorf("snapshots: commitment branch merge segment %q has dataset/kind %s/%s", ref.Path, header.dataset, header.kind)
+	}
+	return &commitmentBranchBinaryIterator{file: file, header: header}, nil
+}
+
+func (it *commitmentBranchBinaryIterator) Next() bool {
+	if it == nil || it.file == nil || it.err != nil || it.index >= it.header.count {
+		return false
+	}
+	key, frame, err := readLatestBinaryEntryKey(it.file, it.header.fileSize, it.header.compressedValues)
+	if err != nil {
+		it.err = fmt.Errorf("snapshots: read commitment branch merge key %d: %w", it.index, err)
+		return false
+	}
+	if len(it.prev) > 0 && bytes.Compare(it.prev, key) >= 0 {
+		it.err = errors.New("snapshots: commitment branch merge input is not strictly sorted")
+		return false
+	}
+	value, err := readLatestBinaryValueBytes(it.file, frame, it.header.fileSize)
+	if err != nil {
+		it.err = fmt.Errorf("snapshots: read commitment branch merge value %d: %w", it.index, err)
+		return false
+	}
+	if err := validateLatestBinaryEntry(it.header.dataset, key, value); err != nil {
+		it.err = fmt.Errorf("snapshots: validate commitment branch merge entry %d: %w", it.index, err)
+		return false
+	}
+	prefix, err := decodeCommitmentBranchSnapshotKey(key)
+	if err != nil {
+		it.err = err
+		return false
+	}
+	it.prev = key
+	it.prefix = prefix
+	it.value = value
+	it.index++
+	return true
+}
+
+func (it *commitmentBranchBinaryIterator) Key() []byte { return it.prefix }
+
+func (it *commitmentBranchBinaryIterator) Value() []byte { return it.value }
+
+func (it *commitmentBranchBinaryIterator) Error() error {
+	if it == nil {
+		return nil
+	}
+	return it.err
+}
+
+func (it *commitmentBranchBinaryIterator) Close() error {
+	if it == nil || it.file == nil {
+		return nil
+	}
+	err := it.file.Close()
+	it.file = nil
+	return err
 }
 
 // Binary latest keys may not be empty because accessors and B-trees use an
@@ -513,6 +604,35 @@ func (s *CommitmentBranchSource) IterateCommitmentBranches(txNum uint64, fn func
 // branch keyspace is empty, mirroring Runner.onePass's "no rows, return early"
 // without first walking a large branch keyspace just to detect that it exists.
 func buildCommitmentBranchLatest(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+	base, based, err := rawdb.ReadCommitmentBranchBase(db)
+	if err != nil {
+		return nil, err
+	}
+	rotation, rotating, err := rawdb.ReadCommitmentBranchRotation(db)
+	if err != nil {
+		return nil, err
+	}
+	if based && rotating {
+		if rotation.Generation != base.Generation+1 || rotation.Generation == 0 {
+			return nil, fmt.Errorf("snapshots: rotation generation %d does not follow base %d", rotation.Generation, base.Generation)
+		}
+		published, err := commitmentBranchRotationAlreadyPublished(dir, rotation)
+		if err != nil {
+			return nil, err
+		}
+		if published {
+			// Completion can be deferred until the boundary is solidified or the
+			// process can restart after manifest publication. Retain the already
+			// merged family instead of requiring its retired input base again.
+			return nil, nil
+		}
+		return buildMergedCommitmentBranchLatest(db, dir, base, fromTxNum, toTxNum, relPath)
+	}
+	if based {
+		// With no active rotation the current immutable baseline remains the
+		// authoritative branch family. Aggregator.Integrate retains its refs.
+		return nil, nil
+	}
 	ref, accessor, btree, hasRows, err := writeCommitmentBranchBinarySegmentFilesFromDB(db, dir, relPath, fromTxNum, toTxNum, true)
 	if err != nil {
 		return nil, err
@@ -521,6 +641,108 @@ func buildCommitmentBranchLatest(db AggregatorDB, dir string, _ kvdomains.KVDoma
 		return nil, nil
 	}
 	return []SegmentRef{ref, accessor, btree}, nil
+}
+
+func commitmentBranchRotationAlreadyPublished(dir string, rotation rawdb.CommitmentBranchRotation) (bool, error) {
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		return false, fmt.Errorf("snapshots: open commitment branch rotation manifest: %w", err)
+	}
+	ref, ok := commitmentBranchRefAtOrBefore(mgr.Manifest(), rotation.SnapshotTxNum)
+	if !ok || ref.ToTxNum != rotation.SnapshotTxNum {
+		return false, nil
+	}
+	root, ok, err := mgr.GetCommitmentRoot(rotation.SnapshotTxNum)
+	if err != nil {
+		return false, err
+	}
+	if !ok || root != rotation.Root {
+		return false, fmt.Errorf("snapshots: published commitment branch rotation root mismatch at tx %d", rotation.SnapshotTxNum)
+	}
+	return true, nil
+}
+
+func buildMergedCommitmentBranchLatest(db AggregatorDB, dir string, base rawdb.CommitmentBranchBase, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		return nil, fmt.Errorf("snapshots: open prior commitment branch manifest: %w", err)
+	}
+	ref, ok := commitmentBranchRefAtOrBefore(mgr.Manifest(), base.SnapshotTxNum)
+	if !ok || ref.ToTxNum != base.SnapshotTxNum {
+		return nil, fmt.Errorf("snapshots: prior commitment branch base missing at tx %d", base.SnapshotTxNum)
+	}
+	cold, err := openCommitmentBranchBinaryIterator(dir, ref)
+	if err != nil {
+		return nil, err
+	}
+	defer cold.Close()
+	deltaSpace, err := rawdb.NewCommitmentBranchDeltaKeyspace(base.Generation)
+	if err != nil {
+		return nil, err
+	}
+	delta := deltaSpace.NewIterator(db)
+	defer delta.Release()
+
+	segment, accessor, btree, hasRows, err := writeCommitmentBranchBinarySegmentFilesFromIterator(
+		dir, relPath, fromTxNum, toTxNum, true,
+		func(yield func(prefix, encoded []byte) error) error {
+			coldOK := cold.Next()
+			deltaOK := delta.Next()
+			for coldOK || deltaOK {
+				switch {
+				case !deltaOK:
+					if err := yield(cold.Key(), cold.Value()); err != nil {
+						return err
+					}
+					coldOK = cold.Next()
+				case !coldOK:
+					if len(delta.Value()) != 0 {
+						if err := yield(delta.Key(), delta.Value()); err != nil {
+							return err
+						}
+					}
+					deltaOK = delta.Next()
+				default:
+					cmp := bytes.Compare(cold.Key(), delta.Key())
+					switch {
+					case cmp < 0:
+						if err := yield(cold.Key(), cold.Value()); err != nil {
+							return err
+						}
+						coldOK = cold.Next()
+					case cmp > 0:
+						if len(delta.Value()) != 0 {
+							if err := yield(delta.Key(), delta.Value()); err != nil {
+								return err
+							}
+						}
+						deltaOK = delta.Next()
+					default:
+						// The frozen delta is newer than the immutable base. Its
+						// empty value is a tombstone and therefore yields no row.
+						if len(delta.Value()) != 0 {
+							if err := yield(delta.Key(), delta.Value()); err != nil {
+								return err
+							}
+						}
+						coldOK = cold.Next()
+						deltaOK = delta.Next()
+					}
+				}
+			}
+			if err := cold.Error(); err != nil {
+				return err
+			}
+			return delta.Error()
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if !hasRows {
+		return nil, errors.New("snapshots: merged commitment branch baseline is empty")
+	}
+	return []SegmentRef{segment, accessor, btree}, nil
 }
 
 // checkCommitmentBranchSegment validates a published branch segment without

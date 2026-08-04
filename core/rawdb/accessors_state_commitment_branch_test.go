@@ -184,6 +184,72 @@ func TestCommitmentBranchDeltaKeyspacesAreIsolated(t *testing.T) {
 	}
 }
 
+func TestCommitmentBranchIteratorAndGenerationCleanup(t *testing.T) {
+	db := NewMemoryDatabase()
+	legacy := LegacyCommitmentBranchKeyspace()
+	if err := legacy.Write(db, []byte{0x01}, []byte("legacy")); err != nil {
+		t.Fatal(err)
+	}
+	spaces := make(map[uint64]CommitmentBranchKeyspace)
+	for generation := uint64(1); generation <= 3; generation++ {
+		space, err := NewCommitmentBranchDeltaKeyspace(generation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spaces[generation] = space
+		if err := space.Write(db, nil, []byte{byte(generation)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := space.Write(db, []byte{0x02}, []byte{byte(generation), 0x02}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	it := spaces[2].NewIterator(db)
+	var keys [][]byte
+	for it.Next() {
+		keys = append(keys, append([]byte(nil), it.Key()...))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatal(err)
+	}
+	it.Release()
+	if len(keys) != 2 || len(keys[0]) != 0 || !bytes.Equal(keys[1], []byte{0x02}) {
+		t.Fatalf("logical iterator keys = %x", keys)
+	}
+	if hasRows, err := spaces[2].HasRows(db); err != nil || !hasRows {
+		t.Fatalf("generation 2 has rows = %v err=%v", hasRows, err)
+	}
+
+	if err := DeleteCommitmentBranchDeltaGenerationsExcept(db, 2); err != nil {
+		t.Fatal(err)
+	}
+	for generation, space := range spaces {
+		rows := 0
+		if err := space.Iterate(db, func(_, _ []byte) (bool, error) {
+			rows++
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if generation == 2 {
+			want = 2
+		}
+		if rows != want {
+			t.Fatalf("generation %d rows = %d, want %d", generation, rows, want)
+		}
+	}
+	if got, ok, err := legacy.ReadNoCopy(db, []byte{0x01}); err != nil || !ok || string(got) != "legacy" {
+		t.Fatalf("legacy after cleanup = %q ok=%v err=%v", got, ok, err)
+	}
+	if err := spaces[2].DeleteAll(db); err != nil {
+		t.Fatal(err)
+	}
+	if hasRows, err := spaces[2].HasRows(db); err != nil || hasRows {
+		t.Fatalf("empty generation 2 has rows = %v err=%v", hasRows, err)
+	}
+}
+
 func TestCommitmentBranchBaseRoundTripAndValidation(t *testing.T) {
 	db := NewMemoryDatabase()
 	want := CommitmentBranchBase{
