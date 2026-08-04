@@ -2602,6 +2602,29 @@ boundaries. The production gate requires every observed final candidate to
 match, with zero missing or mismatch, before this block-level carrier can join
 public bandwidth in a small canonical VM publication cohort.
 
+The block-energy gate covered 180.00 seconds, 11,580 blocks, and 414,376
+transactions (64.33 blocks/s and 2,302.1 transactions/s, at 35.78
+transactions/block). Across 180 sampled blocks the VM observer executed 5,415
+transactions and admitted 1,108 final version candidates. Every candidate had
+an observed and validated block-energy boundary, and all 1,108 projected
+post-images matched serial accumulation; mismatch and missing counts were
+zero. The public-bandwidth carrier independently admitted and matched all 219
+reservations, including 142 rebased boundaries, with zero rejection, mismatch,
+or missing projection. Strict state/receipt validation accepted 966 candidates;
+the remaining 142 differed only in the already-proven public-bandwidth cells.
+Other-state, TransactionInfo, and BalanceTrace mismatches remained zero.
+
+The independent VM view had 25 execution-stage safe failures and no capture,
+applier, or readiness failures. Canonical Transfer published all 14,156 formal
+candidates without error; its async retry published 304/304 byte-exact
+WriteSets, used 969 shared-state jobs, and performed no private worker-prefix
+job or advance. VM canary wall time was 930.21 ms, or 5.17 ms per sampled
+block and 0.080 ms per imported block. A separate warm 20.11-second CPU profile
+recorded no sample in `projectBlockEnergyBoundary`, `blockEnergyUsageDelta`, or
+`validateBlockEnergyBoundary`, so the added carrier remained below profiler
+resolution. Both ordered resource carriers now satisfy the observe-only gate
+for a deliberately small canonical VM publication cohort.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

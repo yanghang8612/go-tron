@@ -246,7 +246,7 @@
 - [x] Project retained VM receipt energy at the exact canonical transaction
   boundary and validate `block_energy_usage` immediately after serial
   accumulation without mutating canonical state.
-- [ ] Run the VM block-energy projection production gate and require zero
+- [x] Run the VM block-energy projection production gate and require zero
   missing/mismatch across final version-valid VM candidates.
 - [ ] Add ordered VM energy/bandwidth/receipt settlement and retry
   incarnations only after the observe-only canary defines the safe carrier.
