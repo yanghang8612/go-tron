@@ -262,6 +262,16 @@ var (
 	parallelVMAsyncRetryBudgetSkippedCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/budget_skipped", nil)
 	parallelVMAsyncRetryInfoMismatchCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/info_mismatches", nil)
 	parallelVMAsyncRetryWriteMismatchCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/write_set_mismatches", nil)
+	parallelVMAsyncRetryPublicNetMismatchCounter     = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/write_set_mismatches/public_net_only", nil)
+	parallelVMAsyncRetryOtherWriteMismatchCounter    = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/write_set_mismatches/other", nil)
+	parallelVMAsyncRetryInvalidPublicNetCounter      = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/public_net/invalid", nil)
+	parallelVMAsyncRetryLastMismatchKindGauge        = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/last_write_set_mismatch/kind_mask", nil)
+	parallelVMAsyncRetryLastMismatchFieldGauge       = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/last_write_set_mismatch/account_field_mask", nil)
+	parallelVMAsyncRetryLastMismatchShapeGauge       = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/last_write_set_mismatch/shape_mask", nil)
+	parallelVMAsyncRetryLastMismatchPublicNetGauge   = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/last_write_set_mismatch/public_net_valid", nil)
+	parallelVMAsyncRetryLastMismatchDistanceGauge    = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/last_write_set_mismatch/retry_distance", nil)
+	parallelVMAsyncRetryLastMismatchWorkerKeysGauge  = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/last_write_set_mismatch/worker_keys", nil)
+	parallelVMAsyncRetryLastMismatchCanonicalGauge   = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/last_write_set_mismatch/canonical_keys", nil)
 	parallelVMAsyncRetryBalanceMismatchCounter       = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/balance_trace_mismatches", nil)
 	parallelVMAsyncRetryPrewarmedCounter             = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/runners/prewarmed", nil)
 	parallelVMAsyncRetryCapacityCounter              = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/runners/capacity", nil)
@@ -706,6 +716,9 @@ type discardShadowSenderRetryStats struct {
 	validated           int64
 	infoMismatches      int64
 	writeMismatches     int64
+	publicNetMismatches int64
+	otherWriteMismatch  int64
+	invalidPublicNet    int64
 	balanceMismatches   int64
 	errors              int64
 	budgetSkipped       int64
@@ -2772,6 +2785,28 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		}
 		if !writeMatch {
 			retry.stats.writeMismatches++
+			if retry.async && !retry.recordTransferStats {
+				if equalSenderChainWriteSets(selected.writes, versioned.transactionWriteSets[txIndex], true) {
+					retry.stats.publicNetMismatches++
+				} else {
+					retry.stats.otherWriteMismatch++
+				}
+				if !selected.publicNetValid {
+					retry.stats.invalidPublicNet++
+				}
+				kindMask, accountFieldMask, shapeMask := senderChainWriteMismatchMasks(selected, versioned.transactionWriteSets[txIndex])
+				parallelVMAsyncRetryLastMismatchKindGauge.Update(kindMask)
+				parallelVMAsyncRetryLastMismatchFieldGauge.Update(accountFieldMask)
+				parallelVMAsyncRetryLastMismatchShapeGauge.Update(shapeMask)
+				if selected.publicNetValid {
+					parallelVMAsyncRetryLastMismatchPublicNetGauge.Update(1)
+				} else {
+					parallelVMAsyncRetryLastMismatchPublicNetGauge.Update(0)
+				}
+				parallelVMAsyncRetryLastMismatchDistanceGauge.Update(int64(txIndex - selected.retryStartTx))
+				parallelVMAsyncRetryLastMismatchWorkerKeysGauge.Update(int64(len(selected.writes)))
+				parallelVMAsyncRetryLastMismatchCanonicalGauge.Update(int64(len(versioned.transactionWriteSets[txIndex])))
+			}
 		}
 		if !balanceMatch {
 			retry.stats.balanceMismatches++
@@ -2924,6 +2959,9 @@ func recordVMAsyncSenderRetryStats(stats discardShadowSenderRetryStats) {
 	parallelVMAsyncRetryBudgetSkippedCounter.Inc(stats.budgetSkipped)
 	parallelVMAsyncRetryInfoMismatchCounter.Inc(stats.infoMismatches)
 	parallelVMAsyncRetryWriteMismatchCounter.Inc(stats.writeMismatches)
+	parallelVMAsyncRetryPublicNetMismatchCounter.Inc(stats.publicNetMismatches)
+	parallelVMAsyncRetryOtherWriteMismatchCounter.Inc(stats.otherWriteMismatch)
+	parallelVMAsyncRetryInvalidPublicNetCounter.Inc(stats.invalidPublicNet)
 	parallelVMAsyncRetryBalanceMismatchCounter.Inc(stats.balanceMismatches)
 	parallelVMAsyncRetryPrewarmedCounter.Inc(stats.actualPrewarmed)
 	parallelVMAsyncRetryCapacityCounter.Inc(stats.actualCapacity)
@@ -3467,6 +3505,43 @@ func equalSenderChainWriteSets(worker, canonical state.TransactionWriteSet, igno
 		}
 	}
 	return true
+}
+
+const (
+	senderChainMismatchMissing int64 = 1 << iota
+	senderChainMismatchExtra
+	senderChainMismatchPresence
+	senderChainMismatchCommutative
+	senderChainMismatchValue
+)
+
+func senderChainWriteMismatchMasks(result discardShadowTaskResult, canonical state.TransactionWriteSet) (kindMask, accountFieldMask, shapeMask int64) {
+	mark := func(key state.TransactionAccessKey, shape int64) {
+		kindMask |= int64(1) << key.Kind
+		if key.Kind == state.TransactionAccessAccountField {
+			accountFieldMask |= int64(1) << key.AccountField
+		}
+		shapeMask |= shape
+	}
+	for key, workerValue := range result.writes {
+		canonicalValue, ok := canonical[key]
+		switch {
+		case !ok:
+			mark(key, senderChainMismatchExtra)
+		case workerValue.Exists != canonicalValue.Exists:
+			mark(key, senderChainMismatchPresence)
+		case workerValue.Commutative != canonicalValue.Commutative:
+			mark(key, senderChainMismatchCommutative)
+		case !bytes.Equal(workerValue.Value, canonicalValue.Value):
+			mark(key, senderChainMismatchValue)
+		}
+	}
+	for key := range canonical {
+		if _, ok := result.writes[key]; !ok {
+			mark(key, senderChainMismatchMissing)
+		}
+	}
+	return kindMask, accountFieldMask, shapeMask
 }
 
 func equalProjectedPublicNetWriteSet(worker, canonical state.TransactionWriteSet, projection discardShadowPublicNetProjection) bool {

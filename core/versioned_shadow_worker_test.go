@@ -1245,6 +1245,37 @@ func TestVMPublicNetBoundaryProjectionMatchesSerialWrites(t *testing.T) {
 	}
 }
 
+func TestSenderChainWriteMismatchMasks(t *testing.T) {
+	balanceKey := state.TransactionAccessKey{
+		Kind: state.TransactionAccessAccountField, Address: testProcessorAddr(1),
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	publicNetKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
+	rawKey := state.TransactionAccessKey{Kind: state.TransactionAccessRawKV, LogicalKey: "raw"}
+	result := discardShadowTaskResult{writes: state.TransactionWriteSet{
+		balanceKey:   {Exists: true, Value: []byte{1}},
+		publicNetKey: {Exists: true, Value: []byte{2}},
+	}}
+	canonical := state.TransactionWriteSet{
+		balanceKey: {Exists: true, Value: []byte{3}},
+		rawKey:     {Exists: true, Value: []byte{4}},
+	}
+	kinds, fields, shape := senderChainWriteMismatchMasks(result, canonical)
+	wantKinds := int64(1)<<state.TransactionAccessAccountField |
+		int64(1)<<state.TransactionAccessDynamicInt |
+		int64(1)<<state.TransactionAccessRawKV
+	if kinds != wantKinds {
+		t.Fatalf("mismatch kind mask = %#x, want %#x", kinds, wantKinds)
+	}
+	if want := int64(1) << state.TransactionAccountFieldBalance; fields != want {
+		t.Fatalf("mismatch account-field mask = %#x, want %#x", fields, want)
+	}
+	wantShape := senderChainMismatchMissing | senderChainMismatchExtra | senderChainMismatchValue
+	if shape != wantShape {
+		t.Fatalf("mismatch shape mask = %#x, want %#x", shape, wantShape)
+	}
+}
+
 func TestPublicNetWriteOverrideMatchesSerialWritePresence(t *testing.T) {
 	usageKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
 	timeKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_time"}
