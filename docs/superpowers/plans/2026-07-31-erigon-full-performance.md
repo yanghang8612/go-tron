@@ -289,6 +289,9 @@
   latest-key/block inverse rows through a bounded sorted ETL pass.
 - [x] Defer inverse-index publication during bulk sync and serve the short
   un-solidified suffix through direct block-changeset scans.
+- [x] Replace one iterator per unindexed-tail block with one ordered range
+  iterator for exact, batch, and prefix historical reads while preserving
+  block-pack repair and early-stop semantics.
 - [x] Run the derived-index production gate and compare temporal family share,
   ETL cost, coalesced output, disk/compaction bytes, stalls, and query parity.
 - [x] Remove next-image fields from the cold binary history format together

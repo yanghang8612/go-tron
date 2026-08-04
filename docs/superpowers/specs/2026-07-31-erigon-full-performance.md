@@ -1829,7 +1829,17 @@ across dozens of local chunks.
 
 Archive readers split their bounded `(targetBlock, headBlock]` request at the
 stage watermark: the covered prefix uses exact/prefix inverse seeks, while the
-normally 18--20 block un-solidified suffix scans per-block changeset prefixes.
+un-solidified suffix uses one ordered changeset range iterator and filters the
+requested exact keys or prefixes while decoding. The original implementation
+opened one Pebble/blockbuffer iterator per tail block; during fast mainnet sync
+the observed watermark debt reached roughly 2,800 blocks, making iterator setup
+and repeated overlay construction dominate historical RPC CPU. The range form
+preserves the same block-pack repair precedence and early-stop semantics without
+publishing rewind-unsafe inverse keys in canonical execution. A 2,800-block,
+eight-change-per-block local benchmark fell from about 123 ms and 356 MB of
+temporary reads per pass to 8.2 ms and 11.3 MB, roughly 15x faster and 31x
+smaller by bytes allocated (repeat runs remained in the roughly 14--15x
+range).
 This applies even before cold history is installed; bounded readers no longer
 take the legacy hot-only shortcut that assumes every changeset has an inverse
 row. Sync exposes pass, block, change, ETL applied/input/batch, interruption,

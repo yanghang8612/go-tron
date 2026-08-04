@@ -1070,8 +1070,74 @@ func TestReadFirstStateKVChangesByKeysScansUnindexedTailOnce(t *testing.T) {
 			t.Fatalf("first[%q] = %+v", key, change)
 		}
 	}
-	if db.changeBlockIteratorCalls != 1 {
-		t.Fatalf("tail block iterator calls = %d, want 1 for %d keys", db.changeBlockIteratorCalls, len(keys))
+	if db.changeRangeIteratorCalls != 1 || db.changeBlockIteratorCalls != 0 {
+		t.Fatalf("tail range/block iterator calls = %d/%d, want 1/0 for %d keys", db.changeRangeIteratorCalls, db.changeBlockIteratorCalls, len(keys))
+	}
+}
+
+func TestIterateStateDomainChangesByBlockRangePreservesLogicalRowsAndBounds(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	db := &prefixSeekingHistoryDB{Database: base}
+	owner := common.Address{0x41, 0x2e}
+	change := func(blockNum, seq uint64, key, prev string) *StateDomainChange {
+		return &StateDomainChange{
+			BlockNum: blockNum, TxNum: blockNum, Seq: seq,
+			FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 1,
+			Domain: kvdomains.SystemDynamicProperty, Key: []byte(key),
+			PrevExists: true, Prev: []byte(prev),
+		}
+	}
+	if err := WriteStateDomainChangeRow(db, change(1, 1, "before", "block-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateDomainChangeBlockRows(db, []*StateDomainChange{
+		change(2, 1, "one", "packed-one"),
+		change(2, 2, "two", "packed-two"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateDomainChangeRow(db, change(2, 2, "two", "repair-two")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateDomainChangeRow(db, change(2, 4, "four", "extra-four")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateDomainChangeRow(db, change(3, 1, "three", "block-three")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateDomainChangeRow(db, change(4, 1, "after", "block-4")); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	if err := IterateStateDomainChangesByBlockRange(db, 2, 3, func(row *StateDomainChange) (bool, error) {
+		got = append(got, fmt.Sprintf("%d/%d/%s/%s", row.BlockNum, row.Seq, row.Key, row.Prev))
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"2/1/one/packed-one",
+		"2/2/two/repair-two",
+		"2/4/four/extra-four",
+		"3/1/three/block-three",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("range rows = %v, want %v", got, want)
+	}
+	if db.changeRangeIteratorCalls != 1 || db.changeBlockIteratorCalls != 0 {
+		t.Fatalf("range/block iterator calls = %d/%d, want 1/0", db.changeRangeIteratorCalls, db.changeBlockIteratorCalls)
+	}
+
+	seen := 0
+	if err := IterateStateDomainChangesByBlockRange(db, 2, 3, func(*StateDomainChange) (bool, error) {
+		seen++
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != 1 {
+		t.Fatalf("early-stop rows = %d, want 1", seen)
 	}
 }
 
@@ -1122,12 +1188,70 @@ func BenchmarkReadFirstStateKVChangesUnindexedTail(b *testing.B) {
 	})
 }
 
+func BenchmarkIterateStateDomainChangesUnindexedTail(b *testing.B) {
+	const (
+		tailBlocks   = uint64(2_800)
+		rowsPerBlock = 8
+	)
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x2f}
+	for blockNum := uint64(1); blockNum <= tailBlocks; blockNum++ {
+		changes := make([]*StateDomainChange, rowsPerBlock)
+		for row := range changes {
+			changes[row] = &StateDomainChange{
+				BlockNum: blockNum, TxNum: blockNum * rowsPerBlock, Seq: uint64(row + 1),
+				FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 1,
+				Domain:     kvdomains.SystemDynamicProperty,
+				Key:        []byte(fmt.Sprintf("dynamic/%03d", row)),
+				PrevExists: true, Prev: []byte("old"),
+			}
+		}
+		if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
+			b.Fatal(err)
+		}
+	}
+	want := int(tailBlocks) * rowsPerBlock
+	b.Run("iterator-per-block", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			seen := 0
+			for blockNum := uint64(1); blockNum <= tailBlocks; blockNum++ {
+				if err := IterateStateDomainChanges(db, blockNum, func(*StateDomainChange) (bool, error) {
+					seen++
+					return true, nil
+				}); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if seen != want {
+				b.Fatalf("rows = %d, want %d", seen, want)
+			}
+		}
+	})
+	b.Run("range-iterator", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			seen := 0
+			if err := IterateStateDomainChangesByBlockRange(db, 1, tailBlocks, func(*StateDomainChange) (bool, error) {
+				seen++
+				return true, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			if seen != want {
+				b.Fatalf("rows = %d, want %d", seen, want)
+			}
+		}
+	})
+}
+
 type prefixSeekingHistoryDB struct {
 	ethdb.Database
 	seekCalls                int
 	durableSeekCalls         int
 	inverseIteratorCalls     int
 	changeBlockIteratorCalls int
+	changeRangeIteratorCalls int
 }
 
 func (db *prefixSeekingHistoryDB) SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
@@ -1156,6 +1280,9 @@ func (db *prefixSeekingHistoryDB) NewIterator(prefix, start []byte) ethdb.Iterat
 	}
 	if bytes.HasPrefix(prefix, stateChangeSetPrefix) && len(prefix) == len(stateChangeSetPrefix)+8 {
 		db.changeBlockIteratorCalls++
+	}
+	if bytes.Equal(prefix, stateChangeSetPrefix) {
+		db.changeRangeIteratorCalls++
 	}
 	return db.Database.NewIterator(prefix, start)
 }

@@ -755,6 +755,112 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 	return nil
 }
 
+// IterateStateDomainChangesByBlockRange walks the authoritative logical
+// changeset view for every block in the inclusive range [fromBlock, toBlock]
+// with one ordered iterator. Historical reads use this for the unindexed stage
+// tail: opening one iterator for the whole tail avoids rebuilding Pebble and
+// blockbuffer overlay iterator state once per block while preserving the same
+// block-pack/positive-sequence overwrite rules as IterateStateDomainChanges.
+func IterateStateDomainChangesByBlockRange(db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*StateDomainChange) (bool, error)) error {
+	if fromBlock > toBlock {
+		return nil
+	}
+	var start [8]byte
+	binary.BigEndian.PutUint64(start[:], fromBlock)
+	it := db.NewIterator(stateChangeSetPrefix, start[:])
+	defer it.Release()
+
+	var (
+		blockNum     uint64
+		haveBlock    bool
+		packed       []*StateDomainChange
+		packedExtras []*StateDomainChange
+	)
+	flushBlock := func() (bool, error) {
+		if len(packedExtras) > 0 {
+			packed = append(packed, packedExtras...)
+			sort.Slice(packed, func(i, j int) bool { return packed[i].Seq < packed[j].Seq })
+		}
+		for _, row := range packed {
+			cont, err := fn(row)
+			if err != nil || !cont {
+				return cont, err
+			}
+		}
+		packed = nil
+		packedExtras = nil
+		return true, nil
+	}
+
+	for it.Next() {
+		key := it.Key()
+		if !bytes.HasPrefix(key, stateChangeSetPrefix) || len(key) != len(stateChangeSetPrefix)+16 {
+			continue
+		}
+		candidateBlock := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix):])
+		if candidateBlock < fromBlock {
+			continue
+		}
+		if candidateBlock > toBlock {
+			break
+		}
+		if !haveBlock || candidateBlock != blockNum {
+			if haveBlock {
+				cont, err := flushBlock()
+				if err != nil || !cont {
+					return err
+				}
+			}
+			blockNum = candidateBlock
+			haveBlock = true
+		}
+
+		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
+		if seq == 0 {
+			changes, err := decodePersistedStateDomainChangeBlock(it.Value(), blockNum)
+			if err == nil {
+				packed = changes
+				continue
+			}
+			row, legacyErr := decodePersistedStateDomainChange(it.Value(), blockNum, 0)
+			if legacyErr != nil {
+				return err
+			}
+			cont, callbackErr := fn(row)
+			if callbackErr != nil || !cont {
+				return callbackErr
+			}
+			continue
+		}
+
+		row, err := decodePersistedStateDomainChange(it.Value(), blockNum, seq)
+		if err != nil {
+			return err
+		}
+		if len(packed) > 0 {
+			firstSeq := packed[0].Seq
+			if seq >= firstSeq && seq-firstSeq < uint64(len(packed)) {
+				packed[seq-firstSeq] = row
+			} else {
+				packedExtras = append(packedExtras, row)
+			}
+			continue
+		}
+		cont, callbackErr := fn(row)
+		if callbackErr != nil || !cont {
+			return callbackErr
+		}
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	if haveBlock {
+		_, err := flushBlock()
+		return err
+	}
+	return nil
+}
+
 // iteratePhysicalStateDomainChanges includes shadowed rows from both the block
 // pack and positive-sequence repair representation. Logical readers use the
 // overwrite view above; deletion needs the union so no inverse key survives.
@@ -956,24 +1062,19 @@ func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBl
 			}
 			directFrom = indexedHead + 1
 		}
-		for blockNum := directFrom; blockNum <= headBlock; blockNum++ {
-			var first *StateDomainChange
-			if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
-				if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
-					!stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
-					return true, nil
-				}
-				first = cloneStateDomainChange(change)
-				return false, nil
-			}); err != nil {
-				return nil, err
+		var first *StateDomainChange
+		if err := IterateStateDomainChangesByBlockRange(db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
+			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
+				!stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
+				return true, nil
 			}
-			if first != nil {
-				return first, nil
-			}
-			if blockNum == ^uint64(0) {
-				break
-			}
+			first = cloneStateDomainChange(change)
+			return false, nil
+		}); err != nil {
+			return nil, err
+		}
+		if first != nil {
+			return first, nil
 		}
 	}
 	return nil, nil
@@ -1025,26 +1126,21 @@ func ReadFirstStateKVChangesByKeysBlockRange(db StateKVHistoryReader, targetBloc
 		}
 		directFrom = indexedHead + 1
 	}
-	for blockNum := directFrom; blockNum <= headBlock && len(wanted) > 0; blockNum++ {
-		if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
-			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
-				change.FlatDomain != StateFlatDomainKVLatest || change.Owner != owner ||
-				change.Generation != generation || change.Domain != domain {
-				return true, nil
-			}
-			keyString := string(change.Key)
-			if _, ok := wanted[keyString]; !ok {
-				return true, nil
-			}
-			first[keyString] = cloneStateDomainChange(change)
-			delete(wanted, keyString)
-			return len(wanted) > 0, nil
-		}); err != nil {
-			return nil, err
+	if err := IterateStateDomainChangesByBlockRange(db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
+		if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
+			change.FlatDomain != StateFlatDomainKVLatest || change.Owner != owner ||
+			change.Generation != generation || change.Domain != domain {
+			return true, nil
 		}
-		if blockNum == ^uint64(0) {
-			break
+		keyString := string(change.Key)
+		if _, ok := wanted[keyString]; !ok {
+			return true, nil
 		}
+		first[keyString] = cloneStateDomainChange(change)
+		delete(wanted, keyString)
+		return len(wanted) > 0, nil
+	}); err != nil {
+		return nil, err
 	}
 	return first, nil
 }
@@ -1196,16 +1292,13 @@ func iterateStateDomainChangesByKey(db StateKVHistoryReader, fromBlock, toBlock 
 			}
 			directFrom = indexedHead + 1
 		}
-		for blockNum := directFrom; blockNum <= toBlock; blockNum++ {
-			cont, err := visitBlock(blockNum)
-			if err != nil || !cont {
-				return err
+		return IterateStateDomainChangesByBlockRange(db, directFrom, toBlock, func(change *StateDomainChange) (bool, error) {
+			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
+				!stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
+				return true, nil
 			}
-			if blockNum == ^uint64(0) {
-				break
-			}
-		}
-		return nil
+			return fn(change)
+		})
 	}
 	return IterateStateDomainChangeBlocksByKey(db, flatDomain, owner, generation, domain, key, visitBlock)
 }
@@ -1286,28 +1379,13 @@ func iterateStateDomainChangesByPrefix(db StateKVHistoryReader, fromBlock, toBlo
 			}
 			directFrom = indexedHead + 1
 		}
-		for blockNum := directFrom; blockNum <= toBlock; blockNum++ {
-			stop := false
-			if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
-				if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
-					!stateDomainChangeMatchesKVLatestPrefix(change, owner, generation, domain, prefix) {
-					return true, nil
-				}
-				cont, err := fn(change)
-				if !cont && err == nil {
-					stop = true
-				}
-				return cont, err
-			}); err != nil {
-				return err
+		return IterateStateDomainChangesByBlockRange(db, directFrom, toBlock, func(change *StateDomainChange) (bool, error) {
+			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
+				!stateDomainChangeMatchesKVLatestPrefix(change, owner, generation, domain, prefix) {
+				return true, nil
 			}
-			if stop {
-				return nil
-			}
-			if blockNum == ^uint64(0) {
-				break
-			}
-		}
+			return fn(change)
+		})
 	}
 	return nil
 }
