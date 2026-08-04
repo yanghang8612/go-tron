@@ -2894,6 +2894,23 @@ execution. The production gate requires non-zero publications and post-publish
 WriteSet matches with zero mismatch, error, resource fallback, or preflight
 fallback before the cohort is widened.
 
+The 2026-08-04 mainnet gate passed on commit `3797a9b2`. Over 125 seconds it
+processed 6,816 blocks and 233,298 transactions, or 54.53 blocks/s, 1,866.38
+tx/s, and 34.23 tx/block. Eight retry-publication cohorts exposed seven
+boundary-ready descendants; all seven were published and all seven
+post-publication WriteSets matched. Block-energy, public-net, and preflight
+fallbacks were zero, as were publisher errors, audit mismatches, the underlying
+Info/WriteSet/BalanceTrace mismatches, and all ten retry error stages. Total
+publication time was 486.951 us, or 69.6 us per result.
+
+A separate 10-second CPU profile contained 25.88 CPU-seconds. The complete
+sender-retry family accounted for 0.08 CPU-seconds (0.31%); asynchronous retry
+execution accounted for 0.06 CPU-seconds (0.23%), while the canonical
+publication path itself was below an individual 10 ms sample. The narrow gate
+therefore adds no visible canonical CPU hotspot. The next widening may enable
+the other two non-zero 256-block residues while retaining residue zero for the
+independent block-start VM publisher.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

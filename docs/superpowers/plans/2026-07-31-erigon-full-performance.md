@@ -264,8 +264,12 @@
   mode, with retained runners and complete queue/timing diagnostics.
 - [x] Run the actual async VM retry production gate and require non-zero
   ready/recovered results with zero mismatch/error.
-- [ ] Allow only boundary-ready VM retry descendants into the canonical
+- [x] Allow only boundary-ready VM retry descendants into the canonical
   publisher after the async gate passes.
+- [ ] Expand async VM retry publication to all three non-zero 256-block
+  residues, keeping the 1024-block residue-zero reference publisher disjoint.
+- [ ] Run the widened async VM retry publication gate with non-zero audited
+  publications and zero mismatch/error/resource/preflight fallback.
 
 ## P5: Snapshot and cold steady state
 
