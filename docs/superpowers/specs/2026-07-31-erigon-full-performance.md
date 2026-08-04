@@ -2448,8 +2448,58 @@ ms/block and async-commit backpressure 0.384 ms/block. A 20-second CPU profile
 contained 59.93 CPU-seconds; the shared version-read subtree accounted for 0.09
 CPU-seconds (0.15%) and did not enter the global hot list. The production gate
 therefore passes the structural goal: canonical prefix replay is gone without
-creating a shared-reader CPU hotspot or changing serial equivalence. Longer
-canary and public-bandwidth gates remain separate checklist items.
+creating a shared-reader CPU hotspot or changing serial equivalence. The longer
+canary and public-bandwidth gates remained separate at that point.
+
+A later restart-free 182.40-second window completed the longer sender-chain
+gate. The node imported 14,961 blocks and 423,871 transactions, or 82.02
+blocks/s and 2,323.8 transactions/s at 28.33 transactions/block. Canonical
+Transfer publication accepted 17,707 of 17,707 candidates with zero preflight
+or publication errors. Async retry published 576 results from 4,218 shared-
+state jobs while private-prefix jobs remained zero. TransactionInfo, WriteSet,
+BalanceTrace, shared-state, retry, and canonical-publication mismatches/errors
+all remained zero. Five independent sender-chain observer executions used the
+existing safe fallback and did not enter canonical state.
+
+#### P4.50: VM sender-chain execution canary
+
+A fixed 100-block sample at the current historical-sync range contained 3,234
+TriggerSmartContract transactions versus 146 TransferContract transactions;
+TriggerSmartContract represented about 94.5% of all transactions. The existing
+version observer also classified 204,316 of 922,486 VM transactions (22.15%)
+as valid after explicit previous-sender ordering. VM execution is therefore the
+first actuator-family expansion with material upside.
+
+The design follows Erigon's separation between speculative execution and
+ordered finalization. Erigon workers execute against versioned state without
+sharing a mutable block gas pool; the ordered validator consumes gas, builds
+receipt offsets, flushes writes, and prioritizes conflicted incarnations only
+after a version-valid result reaches its transaction boundary. Go-tron's first
+VM phase likewise remains observe-only. It must prove exact state and result
+carriers before energy, bandwidth, receipt, and block-accumulator settlement
+may replace canonical serial execution.
+
+On every sampled 1/64 block, TriggerSmartContract and CreateSmartContract are
+grouped into independent immediate-sender chains. A same-sender non-VM
+predecessor breaks the chain because its state was not executed by that worker.
+Each accepted predecessor forwards typed StateDB and DynamicProperties
+post-images. Raw actuator writes use a three-level worker-local overlay:
+current-transaction mutations, promoted sender-chain mutations, and the
+immutable block-start parent. The promoted layer is cleared at the chain
+boundary. Existing Transfer publication and retry code retains its prior
+conservative raw-KV rejection until this new carrier passes production.
+
+VM readiness accepts energy-bearing receipts, unlike the Transfer publisher's
+zero-energy guard, but never makes a result canonical. At the real serial
+boundary, the canary freezes the version verdict; after block execution it
+compares the complete TransactionInfo, WriteSet, BalanceTrace, predecessor
+acceptance chain, and exact raw/typed values. Public-bandwidth writes remain in
+the VM comparison because no VM reservation/rebase carrier has been gated yet.
+Metrics under `core/versioned_shadow/vm_sender_chain/` report blocks, groups,
+executed and forwarded tasks, candidates, validated and forwarded-validated
+results, read/sender conflicts, all three mismatch families, errors, and wall
+time. Canonical VM publication and VM retry incarnations remain disabled until
+this canary establishes their resource-order requirements.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

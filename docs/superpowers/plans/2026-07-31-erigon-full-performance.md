@@ -212,12 +212,26 @@
 - [x] Run the shared-version retry production gate: require shared-value hits,
   zero private prefix advances/errors, unchanged serial equivalence, and lower
   retry copy/replay cost over a fixed dense window.
-- [ ] Validate canonical sender-chain publication ratios and the retained 1/64
+- [x] Validate canonical sender-chain publication ratios and the retained 1/64
   serial canary over a longer fixed production window.
 - [ ] Run the public-bandwidth reservation production gate and compare
   published/conflict ratios plus limit fallbacks over a fixed height window.
 - [ ] Expand eligibility by actuator family using java-tron fixtures and fixed
   mainnet replay windows.
+- [x] Select Trigger/CreateSmartContract as the next actuator family from a
+  fixed 100-block mainnet workload sample and Erigon's ordered-finalization
+  design, while keeping canonical VM publication disabled.
+- [x] Generalize immediate-sender scheduling to a family predicate and add a
+  sampled 1/64 VM sender-chain preexecutor with exact read-source versions.
+- [x] Add a transaction/forwarded/parent raw-KV overlay so sampled VM chains
+  can consume exact predecessor post-images without changing the existing
+  Transfer publisher's conservative raw-KV admission.
+- [x] Compare VM TransactionInfo, full WriteSet including public bandwidth,
+  BalanceTrace, and forwarded predecessor results under independent metrics.
+- [ ] Run the VM sender-chain production canary and quantify execution,
+  candidate, validation, conflict, mismatch, error, and wall-time ratios.
+- [ ] Add ordered VM energy/bandwidth/receipt settlement and retry
+  incarnations only after the observe-only canary defines the safe carrier.
 
 ## P5: Snapshot and cold steady state
 
