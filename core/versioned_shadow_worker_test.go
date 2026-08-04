@@ -491,8 +491,15 @@ func TestAsyncRetryResultErrorClassification(t *testing.T) {
 			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualExecutionErrs == 1 },
 		},
 		{
-			name: "contract ret", result: discardShadowTaskResult{err: errors.New("contract ret"), errorStage: discardShadowTaskErrorContractRet},
-			check: func(stats discardShadowSenderRetryStats) bool { return stats.actualContractErrs == 1 },
+			name: "contract ret", result: discardShadowTaskResult{
+				txIndex: 7, retryStartTx: 3, err: errors.New("contract ret"), errorStage: discardShadowTaskErrorContractRet,
+				contractRetBlock: 123, contractRetExpected: 1, contractRetActual: 2, contractRetTxHash: 456,
+			},
+			check: func(stats discardShadowSenderRetryStats) bool {
+				return stats.actualContractErrs == 1 && stats.actualContractBlock == 123 &&
+					stats.actualContractTx == 7 && stats.actualContractStart == 3 &&
+					stats.actualContractWant == 1 && stats.actualContractGot == 2 && stats.actualContractHash == 456
+			},
 		},
 		{
 			name: "forward", result: discardShadowTaskResult{err: errors.New("forward"), errorStage: discardShadowTaskErrorForward},

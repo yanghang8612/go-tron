@@ -2995,6 +2995,17 @@ regression fixture starts with no speculative read result, derives
 boundary value. TAPOS rows are also classified as chain metadata by physical
 write attribution instead of falling into `other`.
 
+The TAPOS-frozen build `935c3154` crossed the prior cohort-87 trigger with zero
+raw miss, confirming that repair. Its longer gate remained open: at observer
+cohort 134, three results failed transaction contract-ret validation while raw
+misses, shared-state errors, and Info/WriteSet/BalanceTrace mismatches stayed
+zero. All 39 results admitted to the publisher still matched their audited
+WriteSets with zero publisher error or resource fallback. The next diagnostic
+retains no failed result but records the last mismatch's block, transaction
+index, retry start, expected and actual contract-result enum, and transaction
+hash prefix. This distinguishes wall-time OUT_OF_TIME behavior from a
+state-dependent REVERT before choosing the next fix.
+
 #### P4.59: First co-scheduled VM retry cohort (held)
 
 The next canary adds `block % 256 == 64` to VM retry observation and

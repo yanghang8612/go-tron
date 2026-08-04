@@ -285,6 +285,12 @@ var (
 	parallelVMAsyncRetryInputErrorsCounter           = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/input", nil)
 	parallelVMAsyncRetryExecutionErrorsCounter       = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/execution", nil)
 	parallelVMAsyncRetryContractRetErrorsCounter     = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/contract_ret", nil)
+	parallelVMAsyncRetryContractRetBlockGauge        = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/block", nil)
+	parallelVMAsyncRetryContractRetTxIndexGauge      = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/tx_index", nil)
+	parallelVMAsyncRetryContractRetRetryStartGauge   = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/retry_start", nil)
+	parallelVMAsyncRetryContractRetExpectedGauge     = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/expected", nil)
+	parallelVMAsyncRetryContractRetActualGauge       = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/actual", nil)
+	parallelVMAsyncRetryContractRetTxHashGauge       = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/error/contract_ret_last/tx_hash_prefix_u64", nil)
 	parallelVMAsyncRetryForwardErrorsCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/forward", nil)
 	parallelVMAsyncRetryMissingInfoErrorsCounter     = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/missing_info", nil)
 	parallelVMAsyncRetryWriteSetErrorsCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/error/write_set", nil)
@@ -684,6 +690,10 @@ type discardShadowTaskResult struct {
 	retryCompletionNanos int64
 	err                  error
 	errorStage           discardShadowTaskErrorStage
+	contractRetBlock     int64
+	contractRetExpected  int64
+	contractRetActual    int64
+	contractRetTxHash    int64
 }
 
 type discardShadowTaskErrorStage uint8
@@ -845,6 +855,12 @@ type discardShadowSenderRetryStats struct {
 	actualInputErrors   int64
 	actualExecutionErrs int64
 	actualContractErrs  int64
+	actualContractBlock int64
+	actualContractTx    int64
+	actualContractStart int64
+	actualContractWant  int64
+	actualContractGot   int64
+	actualContractHash  int64
 	actualForwardErrors int64
 	actualMissingInfo   int64
 	actualWriteSetErrs  int64
@@ -2676,6 +2692,12 @@ func (retry *discardShadowSenderRetry) recordAsyncResultError(result *discardSha
 		switch result.errorStage {
 		case discardShadowTaskErrorContractRet:
 			retry.stats.actualContractErrs++
+			retry.stats.actualContractBlock = result.contractRetBlock
+			retry.stats.actualContractTx = int64(result.txIndex)
+			retry.stats.actualContractStart = int64(result.retryStartTx)
+			retry.stats.actualContractWant = result.contractRetExpected
+			retry.stats.actualContractGot = result.contractRetActual
+			retry.stats.actualContractHash = result.contractRetTxHash
 		case discardShadowTaskErrorForward:
 			retry.stats.actualForwardErrors++
 		case discardShadowTaskErrorInput:
@@ -3123,6 +3145,14 @@ func recordVMAsyncSenderRetryStats(stats discardShadowSenderRetryStats) {
 	parallelVMAsyncRetryInputErrorsCounter.Inc(stats.actualInputErrors)
 	parallelVMAsyncRetryExecutionErrorsCounter.Inc(stats.actualExecutionErrs)
 	parallelVMAsyncRetryContractRetErrorsCounter.Inc(stats.actualContractErrs)
+	if stats.actualContractErrs > 0 {
+		parallelVMAsyncRetryContractRetBlockGauge.Update(stats.actualContractBlock)
+		parallelVMAsyncRetryContractRetTxIndexGauge.Update(stats.actualContractTx)
+		parallelVMAsyncRetryContractRetRetryStartGauge.Update(stats.actualContractStart)
+		parallelVMAsyncRetryContractRetExpectedGauge.Update(stats.actualContractWant)
+		parallelVMAsyncRetryContractRetActualGauge.Update(stats.actualContractGot)
+		parallelVMAsyncRetryContractRetTxHashGauge.Update(stats.actualContractHash)
+	}
 	parallelVMAsyncRetryForwardErrorsCounter.Inc(stats.actualForwardErrors)
 	parallelVMAsyncRetryMissingInfoErrorsCounter.Inc(stats.actualMissingInfo)
 	parallelVMAsyncRetryWriteSetErrorsCounter.Inc(stats.actualWriteSetErrs)
@@ -4421,7 +4451,18 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		worker.dynProps.SetTransactionAccessRecorder(nil)
 		worker.state.RevertToSnapshot(stateSnapshot)
 		worker.dynProps.RevertToSnapshot(dpSnapshot)
-		return discardShadowTaskResult{txIndex: txIndex, class: class, err: err, errorStage: errorStage}
+		failed := discardShadowTaskResult{txIndex: txIndex, class: class, err: err, errorStage: errorStage}
+		if errorStage == discardShadowTaskErrorContractRet {
+			failed.contractRetBlock = int64(cfg.block.Number())
+			failed.contractRetExpected = -1
+			if ret := tx.Proto().GetRet(); len(ret) > 0 {
+				failed.contractRetExpected = int64(ret[0].GetContractRet())
+			}
+			failed.contractRetActual = int64(result.ContractRet)
+			hash := tx.Hash()
+			failed.contractRetTxHash = int64(binary.BigEndian.Uint64(hash[:8]))
+		}
+		return failed
 	}
 
 	shadowInfo := worker.infoSlot.build(tx, result, cfg.block.Number(), cfg.block.Timestamp(), worker.dynProps.AllowTransactionFeePool())
