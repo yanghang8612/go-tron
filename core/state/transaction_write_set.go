@@ -22,6 +22,14 @@ type TransactionWriteValue struct {
 // recorder after execution; it does not replace either source of truth.
 type TransactionWriteSet map[TransactionAccessKey]TransactionWriteValue
 
+// TransactionVersionedValueReader exposes immutable canonical post-images to
+// a speculative execution view. Implementations return the newest writer
+// strictly before txIndex. StateDB deliberately consumes only exact point
+// values; range reads remain unsupported and are rejected by OCC validation.
+type TransactionVersionedValueReader interface {
+	ReadTransactionVersionedValue(key TransactionAccessKey, txIndex int) (value TransactionWriteValue, writer int, ok bool)
+}
+
 func appendTransactionWriteKey(keys map[TransactionAccessKey]struct{}, key TransactionAccessKey) {
 	if key.Kind != TransactionAccessUnknown {
 		keys[key] = struct{}{}

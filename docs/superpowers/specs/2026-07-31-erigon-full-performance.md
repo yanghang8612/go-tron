@@ -2389,6 +2389,48 @@ frozen-delta hit, miss, and tombstone counters expose the periodic read path.
 The remaining P4.48 work is the fresh snap-mode write-amplification production
 gate.
 
+#### P4.49: Shared version-value retry state
+
+Erigon's `VersionMap` keeps typed values by logical path and transaction index,
+and its versioned reader resolves the newest writer below the task index before
+falling through to the durable state reader. Go-tron's async incarnation queue
+already matched the scheduling half of that design, but each runner still
+materialized the canonical prefix by applying every captured WriteSet to a
+private `StateDB`. Moving that replay to the worker removed it from the serial
+critical path without removing the duplicate work or mutable prefix ownership.
+
+The block-local OCC carrier now stores immutable non-commutative post-images in
+an append-only shared value map. Reads use strict floor semantics: a retry
+frozen at transaction `n` can consume only writers `< n`, even while canonical
+execution appends later versions concurrently. Account hydration composes the
+latest full-account value with later typed scalar values and KV-generation
+updates; exact account-KV point reads resolve through the same carrier. Local
+task writes and sender-suffix forwarding remain StateDB-local and take
+precedence. DynamicProperties and raw KV retain their existing exact request-
+boundary snapshots, and range reads remain conservative OCC barriers.
+
+Commutative settlement carriers are signed deltas rather than absolute values,
+so they are deliberately excluded from shared floor reads. Their canonical
+ordered-delta validation and publication path is unchanged. This prevents a
+blackhole or fee accumulator delta from being mistaken for a post-image while
+allowing a later ordinary absolute write to enter the shared map normally.
+
+Retained sender-chain states are now immutable block-start templates. Each
+incarnation creates a lazy dirty-only execution view in its background
+goroutine, binds the shared reader to the request's fixed boundary, and then
+executes the bounded sender suffix. The old worker-owned canonical-prefix
+advancement path is no longer used by async jobs; it remains only for the fixed
+synchronous reference cohort. If preexecution cannot retain a template, the
+rare fallback stores an exact boundary copy on the queued request so runner
+saturation cannot cause a later live-state copy.
+
+Metrics under `core/versioned_shadow/shared_values/` report versions, unique
+cells, reads, hits, misses, and skipped commutative deltas. Async metrics under
+`sender_retry/async_actual/shared_state/` report job copies and errors. The
+acceptance gate requires positive shared hits, zero async private-prefix
+advances, zero shared-state/equivalence errors, and improved copy/replay cost on
+a fixed dense production window before expanding beyond the Transfer family.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

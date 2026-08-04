@@ -62,6 +62,15 @@ type StateDB struct {
 	stateObjects map[tcommon.Address]*stateObject
 	witnesses    map[tcommon.Address]*types.Witness
 
+	// transactionVersionedReader is installed only on block-scoped speculative
+	// views. It overlays canonical post-images published before the retry's
+	// frozen transaction boundary without replaying every prefix WriteSet into a
+	// private StateDB. Canonical execution never installs this reader.
+	transactionVersionedReader   TransactionVersionedValueReader
+	transactionVersionedTxIndex  int
+	transactionVersionedHydrated map[tcommon.Address]struct{}
+	transactionVersionedMissing  map[tcommon.Address]struct{}
+
 	// Small encoded logical keys are borrowed only for the duration of a
 	// synchronous account-KV lookup/write. Keeping their backing arrays on the
 	// execution-confined StateDB avoids one tiny heap object per TRC10, asset ID,
@@ -4350,6 +4359,18 @@ func (s *StateDB) getStateObjectWithoutAccess(addr tcommon.Address) *stateObject
 		return obj
 	}
 	if obj, ok := s.stateObjects[addr]; ok {
+		if s.transactionVersionedReader != nil {
+			if _, hydrated := s.transactionVersionedHydrated[addr]; !hydrated {
+				obj = s.hydrateTransactionVersionedAccount(addr, obj)
+				s.transactionVersionedHydrated[addr] = struct{}{}
+				if obj == nil {
+					delete(s.stateObjects, addr)
+					s.transactionVersionedMissing[addr] = struct{}{}
+					return nil
+				}
+				s.stateObjects[addr] = obj
+			}
+		}
 		// Heal objects that entered the cache without a back-pointer (Load*
 		// hydration, journal-revert re-creation) so their next markDirty records.
 		if obj.dirtySet == nil {
@@ -4359,31 +4380,43 @@ func (s *StateDB) getStateObjectWithoutAccess(addr tcommon.Address) *stateObject
 		s.touchRetainedStateObject(obj)
 		return obj
 	}
+	if s.transactionVersionedReader != nil {
+		if _, missing := s.transactionVersionedMissing[addr]; missing {
+			return nil
+		}
+	}
 	data, ok, err := s.readStateAccountLatestForHydration(addr)
-	if err != nil || !ok {
+	var obj *stateObject
+	if err == nil && ok {
+		var envelope StateAccountV3
+		if decodeStateAccountV3Into(data, &envelope) == nil {
+			if acc, decodeErr := types.UnmarshalAccount(envelope.AccountProto); decodeErr == nil {
+				stateObjectCacheHydrationCounter.Inc(1)
+				obj = s.newStateObject(addr, acc)
+				// DecodeStateAccountV2 owns AccountProto. Retain those exact durable bytes as
+				// a potential journal pre-image instead of immediately re-marshaling the
+				// account on its first mutation. A successful block commit releases this
+				// copy if the account stayed read-only.
+				obj.accountProto = envelope.AccountProto
+				obj.accountProtoLoaded = true
+				obj.accountKVRoot = envelope.AccountKVRoot
+				obj.accountKVGeneration = envelope.AccountKVGeneration
+				obj.accountKVGenerationDirty = false
+				obj.codeHash = envelope.CodeHash
+				obj.dirtySet = s.dirtyObjects
+			}
+		}
+	}
+	if s.transactionVersionedReader != nil {
+		obj = s.hydrateTransactionVersionedAccount(addr, obj)
+		s.transactionVersionedHydrated[addr] = struct{}{}
+	}
+	if obj == nil {
+		if s.transactionVersionedReader != nil {
+			s.transactionVersionedMissing[addr] = struct{}{}
+		}
 		return nil
 	}
-	var envelope StateAccountV3
-	if err := decodeStateAccountV3Into(data, &envelope); err != nil {
-		return nil
-	}
-	acc, err := types.UnmarshalAccount(envelope.AccountProto)
-	if err != nil {
-		return nil
-	}
-	stateObjectCacheHydrationCounter.Inc(1)
-	obj := s.newStateObject(addr, acc)
-	// DecodeStateAccountV2 owns AccountProto. Retain those exact durable bytes as
-	// a potential journal pre-image instead of immediately re-marshaling the
-	// account on its first mutation. A successful block commit releases this
-	// copy if the account stayed read-only.
-	obj.accountProto = envelope.AccountProto
-	obj.accountProtoLoaded = true
-	obj.accountKVRoot = envelope.AccountKVRoot
-	obj.accountKVGeneration = envelope.AccountKVGeneration
-	obj.accountKVGenerationDirty = false
-	obj.codeHash = envelope.CodeHash
-	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
 	s.lastStateObject = obj
 	s.loadedAccountProtoObjects = append(s.loadedAccountProtoObjects, obj)

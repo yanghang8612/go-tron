@@ -587,9 +587,9 @@ func TestAsyncRetryWorkerReportsPrefixFailure(t *testing.T) {
 	if retry.asyncScheduled != 0 || retry.stats.actualQueueDropped != 1 || retry.stats.actualExecuted != 0 {
 		t.Fatalf("failed prefix reservation = scheduled:%d stats:%+v", retry.asyncScheduled, retry.stats)
 	}
-	if retry.stats.workerPrefix.jobs != 1 || retry.stats.workerPrefix.errors != 1 ||
+	if retry.stats.sharedStateJobs != 1 || retry.stats.sharedStateErrors != 1 ||
 		retry.stats.actualErrors != 1 || retry.stats.errors != 1 {
-		t.Fatalf("failed prefix metrics = %+v", retry.stats)
+		t.Fatalf("failed shared-state metrics = %+v", retry.stats)
 	}
 }
 
@@ -838,6 +838,39 @@ func TestVersionedShadowValidatesFrozenWorkerReadVersions(t *testing.T) {
 	}
 }
 
+func TestSharedVersionValuesUseStrictFloorAndSkipDeltas(t *testing.T) {
+	key := state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		Address:      testProcessorAddr(1),
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	deltaKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "burn_trx_amount"}
+	values := newTransactionVersionedValues(1)
+	values.install(1, state.TransactionWriteSet{
+		key:      {Exists: true, Value: []byte("one")},
+		deltaKey: {Exists: true, Commutative: true, Value: make([]byte, 8)},
+	})
+	values.install(4, state.TransactionWriteSet{
+		key: {Exists: true, Value: []byte("four")},
+	})
+	if _, _, ok := values.read(key, 1); ok {
+		t.Fatal("floor read included writer at the same transaction index")
+	}
+	if value, writer, ok := values.read(key, 4); !ok || writer != 1 || string(value.Value) != "one" {
+		t.Fatalf("floor before tx4 = value:%q writer:%d ok:%v", value.Value, writer, ok)
+	}
+	if value, writer, ok := values.read(key, 5); !ok || writer != 4 || string(value.Value) != "four" {
+		t.Fatalf("floor before tx5 = value:%q writer:%d ok:%v", value.Value, writer, ok)
+	}
+	if _, _, ok := values.read(deltaKey, 5); ok {
+		t.Fatal("commutative delta was exposed as an absolute shared value")
+	}
+	stats := values.stats()
+	if stats.versions != 2 || stats.cells != 1 || stats.commutativeSkipped != 1 || stats.reads != 4 || stats.hits != 2 || stats.misses != 2 {
+		t.Fatalf("shared version stats = %+v", stats)
+	}
+}
+
 func TestSenderRetryReusesAndRefreshesSettledPrefix(t *testing.T) {
 	live := newTestState(t)
 	owner := testProcessorAddr(1)
@@ -1017,7 +1050,7 @@ func TestSenderChainPreexecutionRetainsSingleChainRetrySpare(t *testing.T) {
 		t.Fatalf("retry spare owner balance = %d, want block-start balance", balance)
 	}
 	retry := newDiscardShadowAsyncSenderRetry(pre, len(transactions))
-	if retry == nil || len(retry.asyncRunners) != 1 || retry.asyncRunners[0].worker == nil || retry.stats.actualPrewarmed != 1 {
+	if retry == nil || len(retry.asyncRunners) != 1 || retry.asyncRunners[0].blockBase == nil || retry.asyncRunners[0].worker != nil || retry.stats.actualPrewarmed != 1 {
 		t.Fatalf("prewarmed retry = %+v", retry)
 	}
 	if pre.retryStates != nil {

@@ -1,6 +1,8 @@
 package core
 
 import (
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/metrics"
@@ -122,7 +124,112 @@ var (
 	versionedShadowLastConflictsGauge                         = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/conflicts", nil)
 	versionedShadowLastUnsupportedGauge                       = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/unsupported", nil)
 	versionedShadowLastMaxDependencyDistanceGauge             = metrics.NewRegisteredGauge("core/versioned_shadow/last_block/max_dependency_distance", nil)
+	versionedShadowSharedValueBlocksCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/shared_values/blocks", nil)
+	versionedShadowSharedValueVersionsCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/shared_values/versions", nil)
+	versionedShadowSharedValueCellsCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/shared_values/cells", nil)
+	versionedShadowSharedValueReadsCounter                    = metrics.NewRegisteredCounter("core/versioned_shadow/shared_values/reads", nil)
+	versionedShadowSharedValueHitsCounter                     = metrics.NewRegisteredCounter("core/versioned_shadow/shared_values/hits", nil)
+	versionedShadowSharedValueMissesCounter                   = metrics.NewRegisteredCounter("core/versioned_shadow/shared_values/misses", nil)
+	versionedShadowSharedValueCommutativeSkippedCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/shared_values/commutative_skipped", nil)
 )
+
+type transactionVersionedValue struct {
+	txIndex  int
+	value    state.TransactionWriteValue
+	previous int
+}
+
+type transactionVersionedValueStats struct {
+	versions           int64
+	cells              int64
+	reads              int64
+	hits               int64
+	misses             int64
+	commutativeSkipped int64
+}
+
+// transactionVersionedValues is the block-local value half of Erigon's
+// VersionMap. Canonical execution appends immutable post-images in transaction
+// order while retry workers perform floor reads against their frozen txIndex.
+// Values alias TransactionWriteSet-owned bytes, which remain immutable for the
+// entire block and outlive every joined worker.
+type transactionVersionedValues struct {
+	mu                 sync.RWMutex
+	heads              map[state.TransactionAccessKey]int
+	values             []transactionVersionedValue
+	commutativeSkipped int64
+	reads              atomic.Int64
+	hits               atomic.Int64
+	misses             atomic.Int64
+}
+
+func newTransactionVersionedValues(capacityHint int) *transactionVersionedValues {
+	if capacityHint < 16 {
+		capacityHint = 16
+	}
+	return &transactionVersionedValues{
+		heads:  make(map[state.TransactionAccessKey]int, capacityHint),
+		values: make([]transactionVersionedValue, 0, capacityHint),
+	}
+}
+
+func (values *transactionVersionedValues) install(txIndex int, writes state.TransactionWriteSet) {
+	if values == nil || txIndex < 0 || len(writes) == 0 {
+		return
+	}
+	values.mu.Lock()
+	defer values.mu.Unlock()
+	for key, value := range writes {
+		if value.Commutative {
+			values.commutativeSkipped++
+			continue
+		}
+		previous := values.heads[key]
+		values.values = append(values.values, transactionVersionedValue{txIndex: txIndex, value: value, previous: previous})
+		values.heads[key] = len(values.values)
+	}
+}
+
+func (values *transactionVersionedValues) read(key state.TransactionAccessKey, txIndex int) (state.TransactionWriteValue, int, bool) {
+	if values == nil {
+		return state.TransactionWriteValue{}, 0, false
+	}
+	values.reads.Add(1)
+	values.mu.RLock()
+	head := values.heads[key]
+	// Canonical installation is ordered. Retry boundaries normally hit the
+	// newest value, so a reverse walk beats a binary search for the short version
+	// chains common in TRON blocks while preserving exact floor semantics.
+	for head > 0 {
+		value := values.values[head-1]
+		if value.txIndex < txIndex {
+			values.mu.RUnlock()
+			values.hits.Add(1)
+			return value.value, value.txIndex, true
+		}
+		head = value.previous
+	}
+	values.mu.RUnlock()
+	values.misses.Add(1)
+	return state.TransactionWriteValue{}, 0, false
+}
+
+func (values *transactionVersionedValues) stats() transactionVersionedValueStats {
+	if values == nil {
+		return transactionVersionedValueStats{}
+	}
+	values.mu.RLock()
+	stats := transactionVersionedValueStats{
+		versions:           int64(len(values.values)),
+		cells:              int64(len(values.heads)),
+		commutativeSkipped: values.commutativeSkipped,
+	}
+	values.mu.RUnlock()
+	stats.reads = values.reads.Load()
+	stats.hits = values.hits.Load()
+	stats.misses = values.misses.Load()
+	return stats
+}
 
 // versionedAccessShadow is P4.2/P4.3's observe-only OCC validator. Canonical
 // serial execution records the exact logical cells each transaction read and
@@ -156,11 +263,26 @@ type versionedAccessShadow struct {
 	writeCaptureInclude      func(state.TransactionAccessKey) bool
 	writeCaptureFull         []bool
 	writeCaptureRecorderOnly bool
+	sharedValues             *transactionVersionedValues
 	transactionStarted       time.Time
 	lastBarrierTx            int
 	dependencyMinWave        int
 	dependencyMaxWave        int
 	stats                    versionedAccessShadowStats
+}
+
+func (s *versionedAccessShadow) EnableSharedVersionValues(transactionCount int) {
+	if s == nil || s.sharedValues != nil {
+		return
+	}
+	s.sharedValues = newTransactionVersionedValues(transactionCount * 4)
+}
+
+func (s *versionedAccessShadow) ReadTransactionVersionedValue(key state.TransactionAccessKey, txIndex int) (state.TransactionWriteValue, int, bool) {
+	if s == nil {
+		return state.TransactionWriteValue{}, 0, false
+	}
+	return s.sharedValues.read(key, txIndex)
 }
 
 func (s *versionedAccessShadow) EnableWriteSetCapture(transactionCount int) {
@@ -482,6 +604,7 @@ func (s *versionedAccessShadow) ObserveTransaction(txIndex int, tx *types.Transa
 		default:
 			s.transactionWriteSets[txIndex] = writes
 			s.transactionWritesOK[txIndex] = true
+			s.sharedValues.install(txIndex, writes)
 			s.stats.writeCaptureCells += int64(len(writes))
 			if len(writes) == 0 {
 				s.stats.writeCaptureEmptyTransactions++
@@ -1151,6 +1274,16 @@ func (s *versionedAccessShadow) Finish(statedb *state.StateDB, dynProps *state.D
 
 func (s *versionedAccessShadow) Publish(statedb *state.StateDB, dynProps *state.DynamicProperties) {
 	stats := s.Finish(statedb, dynProps)
+	if s.sharedValues != nil {
+		shared := s.sharedValues.stats()
+		versionedShadowSharedValueBlocksCounter.Inc(1)
+		versionedShadowSharedValueVersionsCounter.Inc(shared.versions)
+		versionedShadowSharedValueCellsCounter.Inc(shared.cells)
+		versionedShadowSharedValueReadsCounter.Inc(shared.reads)
+		versionedShadowSharedValueHitsCounter.Inc(shared.hits)
+		versionedShadowSharedValueMissesCounter.Inc(shared.misses)
+		versionedShadowSharedValueCommutativeSkippedCounter.Inc(shared.commutativeSkipped)
+	}
 	versionedShadowBlocksCounter.Inc(1)
 	versionedShadowTransactionsCounter.Inc(stats.transactions)
 	versionedShadowFirstPassValidCounter.Inc(stats.firstPassValid)

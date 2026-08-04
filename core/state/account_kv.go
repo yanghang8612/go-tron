@@ -1354,6 +1354,9 @@ func (s *StateDB) setAccountKVLatestView(reader statedomains.LatestReader, itera
 
 func (s *StateDB) readAccountKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	s.recordAccountKVRead(owner, domain, key)
+	if value, exists, ok := s.readTransactionVersionedAccountKV(owner, domain, key); ok {
+		return value, exists, nil
+	}
 	if s != nil && s.accountKVLatestReader != nil {
 		if reader, ok := s.accountKVLatestReader.(accountKVLatestGenerationReader); ok {
 			return reader.KVLatest(owner, generation, domain, key)
@@ -1365,6 +1368,9 @@ func (s *StateDB) readAccountKVLatest(owner tcommon.Address, generation uint64, 
 
 func (s *StateDB) readAccountKVLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	s.recordAccountKVRead(owner, domain, key)
+	if value, exists, ok := s.readTransactionVersionedAccountKV(owner, domain, key); ok {
+		return value, exists, nil
+	}
 	if s != nil && s.accountKVLatestReader != nil {
 		if reader, ok := s.accountKVLatestReader.(accountKVLatestDecodingBorrower); ok {
 			return reader.kvLatestForDecoding(owner, generation, domain, key)
@@ -1410,6 +1416,9 @@ func (s *StateDB) readStateAccountLatestForHydration(owner tcommon.Address) ([]b
 }
 
 func (s *StateDB) readStateKVGeneration(owner tcommon.Address) (uint64, bool, error) {
+	if generation, exists, ok := s.readTransactionVersionedKVGeneration(owner); ok {
+		return generation, exists, nil
+	}
 	if s != nil && s.flatLatestReader != nil {
 		return s.flatLatestReader.KVGeneration(owner)
 	}

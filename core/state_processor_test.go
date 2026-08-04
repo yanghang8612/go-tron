@@ -480,6 +480,11 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	workerPrefixAdvancesBefore := discardShadowRetryActualWorkerPrefixAdvanceCounter.Snapshot().Count()
 	workerPrefixNanosBefore := discardShadowRetryActualWorkerPrefixNanosCounter.Snapshot().Count()
 	workerPrefixErrorsBefore := discardShadowRetryActualWorkerPrefixErrorsCounter.Snapshot().Count()
+	sharedStateJobsBefore := discardShadowRetrySharedStateJobsCounter.Snapshot().Count()
+	sharedStateCopyNanosBefore := discardShadowRetrySharedStateCopyNanosCounter.Snapshot().Count()
+	sharedStateErrorsBefore := discardShadowRetrySharedStateErrorsCounter.Snapshot().Count()
+	sharedValueBlocksBefore := versionedShadowSharedValueBlocksCounter.Snapshot().Count()
+	sharedValueHitsBefore := versionedShadowSharedValueHitsCounter.Snapshot().Count()
 	jobsBefore := discardShadowRetryActualJobsCounter.Snapshot().Count()
 	executedBefore := discardShadowRetryActualExecutedCounter.Snapshot().Count()
 	readyBefore := discardShadowRetryActualReadyCounter.Snapshot().Count()
@@ -531,14 +536,14 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	if published := parallelTransferRetryPublishedCounter.Snapshot().Count() - publishedBefore; published != 0 {
 		t.Fatalf("non-publication async cohort published %d retries", published)
 	}
-	if jobs := discardShadowRetryActualWorkerPrefixJobsCounter.Snapshot().Count() - workerPrefixJobsBefore; jobs != 1 {
-		t.Fatalf("actual async worker prefix jobs = %d, want 1", jobs)
+	if jobs := discardShadowRetryActualWorkerPrefixJobsCounter.Snapshot().Count() - workerPrefixJobsBefore; jobs != 0 {
+		t.Fatalf("actual async worker prefix jobs = %d, want 0", jobs)
 	}
-	if advances := discardShadowRetryActualWorkerPrefixAdvanceCounter.Snapshot().Count() - workerPrefixAdvancesBefore; advances != 2 {
-		t.Fatalf("actual async worker prefix advances = %d, want 2", advances)
+	if advances := discardShadowRetryActualWorkerPrefixAdvanceCounter.Snapshot().Count() - workerPrefixAdvancesBefore; advances != 0 {
+		t.Fatalf("actual async worker prefix advances = %d, want 0", advances)
 	}
-	if nanos := discardShadowRetryActualWorkerPrefixNanosCounter.Snapshot().Count() - workerPrefixNanosBefore; nanos <= 0 {
-		t.Fatalf("actual async worker prefix nanos = %d, want > 0", nanos)
+	if nanos := discardShadowRetryActualWorkerPrefixNanosCounter.Snapshot().Count() - workerPrefixNanosBefore; nanos != 0 {
+		t.Fatalf("actual async worker prefix nanos = %d, want 0", nanos)
 	}
 	if errors := discardShadowRetryActualWorkerPrefixErrorsCounter.Snapshot().Count() - workerPrefixErrorsBefore; errors != 0 {
 		t.Fatalf("actual async worker prefix errors = %d, want 0", errors)
@@ -546,14 +551,29 @@ func TestProcessBlockRunsActualAsyncSenderRetryCanary(t *testing.T) {
 	if refreshes := discardShadowRetryPrefixRefreshCounter.Snapshot().Count() - prefixRefreshBefore; refreshes != 0 {
 		t.Fatalf("actual async prefix refreshes = %d, want 0", refreshes)
 	}
-	if advances := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count() - prefixAdvanceBefore; advances != 2 {
-		t.Fatalf("actual async prefix advances = %d, want 2", advances)
+	if advances := discardShadowRetryPrefixAdvanceCounter.Snapshot().Count() - prefixAdvanceBefore; advances != 0 {
+		t.Fatalf("actual async prefix advances = %d, want 0", advances)
 	}
 	if refreshes := discardShadowRetryActualPrefixRefreshCounter.Snapshot().Count() - actualPrefixRefreshBefore; refreshes != 0 {
 		t.Fatalf("actual-only async prefix refreshes = %d, want 0", refreshes)
 	}
-	if advances := discardShadowRetryActualPrefixAdvanceCounter.Snapshot().Count() - actualPrefixAdvanceBefore; advances != 2 {
-		t.Fatalf("actual-only async prefix advances = %d, want 2", advances)
+	if advances := discardShadowRetryActualPrefixAdvanceCounter.Snapshot().Count() - actualPrefixAdvanceBefore; advances != 0 {
+		t.Fatalf("actual-only async prefix advances = %d, want 0", advances)
+	}
+	if jobs := discardShadowRetrySharedStateJobsCounter.Snapshot().Count() - sharedStateJobsBefore; jobs != 1 {
+		t.Fatalf("actual async shared-state jobs = %d, want 1", jobs)
+	}
+	if nanos := discardShadowRetrySharedStateCopyNanosCounter.Snapshot().Count() - sharedStateCopyNanosBefore; nanos <= 0 {
+		t.Fatalf("actual async shared-state copy nanos = %d, want > 0", nanos)
+	}
+	if errors := discardShadowRetrySharedStateErrorsCounter.Snapshot().Count() - sharedStateErrorsBefore; errors != 0 {
+		t.Fatalf("actual async shared-state errors = %d, want 0", errors)
+	}
+	if blocks := versionedShadowSharedValueBlocksCounter.Snapshot().Count() - sharedValueBlocksBefore; blocks != 1 {
+		t.Fatalf("shared version blocks = %d, want 1", blocks)
+	}
+	if hits := versionedShadowSharedValueHitsCounter.Snapshot().Count() - sharedValueHitsBefore; hits <= 0 {
+		t.Fatalf("shared version hits = %d, want > 0", hits)
 	}
 	executed := discardShadowRetryActualExecutedCounter.Snapshot().Count() - executedBefore
 	if executed != 2 {

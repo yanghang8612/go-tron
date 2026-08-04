@@ -893,6 +893,12 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				include, fullTransactions, recorderOnly := newDiscardShadowRetryWriteCapture(senderRetry.source, len(transactions))
 				versionedShadow.EnableWriteSetCaptureFiltered(len(transactions), include, fullTransactions, recorderOnly)
 			}
+			if senderRetry != nil && senderRetry.async {
+				// Async incarnations consume immutable canonical post-images directly
+				// from the block-local version carrier instead of replaying every
+				// intervening WriteSet into private prefix states.
+				versionedShadow.EnableSharedVersionValues(len(transactions))
+			}
 			if discardShadow.sampled || senderRetry != nil {
 				if discardCfg.captureBalanceTrace {
 					discardCfg.canonicalBalanceTraces = make([]*contractpb.TransactionBalanceTrace, len(transactions))

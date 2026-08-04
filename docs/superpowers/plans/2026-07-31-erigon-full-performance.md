@@ -207,8 +207,11 @@
   covered generation after verified publication.
 - [ ] Run the fresh snap-mode write-amplification gate for the periodic
   immutable commitment lifecycle.
-- [ ] Replace sampled synchronous copies with an asynchronous incarnation-
+- [x] Replace sampled synchronous copies with an asynchronous incarnation-
   priority queue over shared versioned state before canonical enablement.
+- [ ] Run the shared-version retry production gate: require shared-value hits,
+  zero private prefix advances/errors, unchanged serial equivalence, and lower
+  retry copy/replay cost over a fixed dense window.
 - [ ] Validate canonical sender-chain publication ratios and the retained 1/64
   serial canary over a longer fixed production window.
 - [ ] Run the public-bandwidth reservation production gate and compare

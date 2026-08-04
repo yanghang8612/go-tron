@@ -177,6 +177,9 @@ var (
 	discardShadowRetryActualPrewarmedCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/prewarmed_runners", nil)
 	discardShadowRetryActualExecutionNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/execution_nanos", nil)
 	discardShadowRetryActualFinishWaitNanosCounter   = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/finish_wait_nanos", nil)
+	discardShadowRetrySharedStateJobsCounter         = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/shared_state/jobs", nil)
+	discardShadowRetrySharedStateCopyNanosCounter    = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/shared_state/copy_nanos", nil)
+	discardShadowRetrySharedStateErrorsCounter       = metrics.NewRegisteredCounter("core/versioned_shadow/sender_retry/async_actual/shared_state/errors", nil)
 	parallelTransferEnabledGauge                     = metrics.NewRegisteredGauge("core/parallel_transfer/enabled", nil)
 	parallelTransferBlocksCounter                    = metrics.NewRegisteredCounter("core/parallel_transfer/blocks", nil)
 	parallelTransferPreexecutedCounter               = metrics.NewRegisteredCounter("core/parallel_transfer/preexecuted", nil)
@@ -556,6 +559,9 @@ type discardShadowSenderRetryStats struct {
 	actualExecutionNs   int64
 	actualFinishWaitNs  int64
 	actualPrewarmed     int64
+	sharedStateJobs     int64
+	sharedStateCopyNs   int64
+	sharedStateErrors   int64
 }
 
 type discardShadowAsyncRetryEvent struct {
@@ -570,13 +576,17 @@ type discardShadowAsyncRetryEvent struct {
 	prefixAdvanceNanos int64
 	prefixNanos        int64
 	prefixError        bool
+	sharedState        bool
+	sharedStateCopyNs  int64
 }
 
-// discardShadowRetryRunner owns one independently advanceable canonical-prefix
-// view. Canonical execution may touch an idle runner, while a busy runner is
-// exclusively owned by its background incarnation until the done event.
+// discardShadowRetryRunner owns either the reusable private-prefix worker used
+// by the synchronous observer or an immutable block-start template used by the
+// asynchronous shared-version scheduler. A busy async runner is exclusively
+// owned by its incarnation until the done event.
 type discardShadowRetryRunner struct {
 	worker         *discardShadowWorker
+	blockBase      *state.StateDB
 	prefixRaw      discardKVOverlay
 	prefixRecorder state.TransactionAccessRecorder
 	settledThrough int
@@ -600,6 +610,7 @@ type discardShadowAsyncRetryRequest struct {
 	frozenRaw   *discardShadowFrozenKV
 	versionView versionedAccessShadow
 	dynProps    *state.DynamicProperties
+	blockBase   *state.StateDB
 	enqueuedAt  time.Time
 }
 
@@ -1521,6 +1532,10 @@ func newDiscardShadowRetryRunner(retryState *state.StateDB) *discardShadowRetryR
 	return runner
 }
 
+func newDiscardShadowSharedRetryRunner(blockBase *state.StateDB) *discardShadowRetryRunner {
+	return &discardShadowRetryRunner{blockBase: blockBase, settledThrough: -1}
+}
+
 func newDiscardShadowAsyncSenderRetry(source *discardShadowPreexecution, transactionCount int) *discardShadowSenderRetry {
 	retry := newDiscardShadowSenderRetry(source, transactionCount)
 	if retry == nil {
@@ -1540,15 +1555,16 @@ func newDiscardShadowAsyncSenderRetry(source *discardShadowPreexecution, transac
 	retry.asyncEvents = make(chan discardShadowAsyncRetryEvent, int(discardShadowRetryMaxExecutions+discardShadowRetryMaxAttempts))
 	for _, retryState := range source.retryStates {
 		if retryState != nil {
-			retry.asyncRunners = append(retry.asyncRunners, newDiscardShadowRetryRunner(retryState))
+			retry.asyncRunners = append(retry.asyncRunners, newDiscardShadowSharedRetryRunner(retryState))
 		}
 	}
 	retry.stats.actualPrewarmed = int64(len(retry.asyncRunners))
 	source.retryStates = nil
 	if len(retry.asyncRunners) == 0 {
-		// Preserve the safe lazy-copy fallback if observer copies were
-		// unavailable. The runner becomes reusable after its first dispatch.
-		retry.asyncRunners = append(retry.asyncRunners, retry.runner)
+		// Preserve a safe lazy-copy fallback if observer copies were unavailable.
+		// It is refreshed from the exact enqueue boundary and never reused as a
+		// block-start template for a later boundary.
+		retry.asyncRunners = append(retry.asyncRunners, newDiscardShadowSharedRetryRunner(nil))
 	}
 	retry.stats.actualCapacity = int64(len(retry.asyncRunners))
 	retry.runner = nil
@@ -1572,24 +1588,20 @@ func (retry *discardShadowSenderRetry) idleAsyncRunner() *discardShadowRetryRunn
 	return nil
 }
 
-// idleAsyncRunnerFor returns the most advanced idle runner which has not
-// passed target. Requests enter the heap in transaction order, so preferring
-// the nearest compatible prefix minimizes ordered replay without ever
-// rewinding a private StateDB.
-func (retry *discardShadowSenderRetry) idleAsyncRunnerFor(target int) *discardShadowRetryRunner {
+// idleAsyncRunnerFor returns an idle immutable block-start template. Shared
+// version floor reads make the template independent of the requested prefix;
+// no private runner is advanced or rewound between incarnations.
+func (retry *discardShadowSenderRetry) idleAsyncRunnerFor(_ int) *discardShadowRetryRunner {
 	if retry == nil {
 		return nil
 	}
-	var best *discardShadowRetryRunner
 	for _, runner := range retry.asyncRunners {
-		if runner == nil || runner.busy || runner.worker == nil || runner.settledThrough > target {
+		if runner == nil || runner.busy {
 			continue
 		}
-		if best == nil || runner.settledThrough > best.settledThrough {
-			best = runner
-		}
+		return runner
 	}
-	return best
+	return nil
 }
 
 // snapshotDiscardShadowVersionView freezes only the version cells the source
@@ -1819,42 +1831,6 @@ func (retry *discardShadowSenderRetry) ensureRunnerSettledPrefix(runner *discard
 	return true
 }
 
-// advanceAsyncRunnerSettledPrefix consumes only already-captured canonical
-// WriteSets. It runs after the runner ownership handoff and never touches
-// retry-wide stats or the live StateDB, so multiple private runners can advance
-// concurrently without synchronizing with canonical execution.
-func advanceAsyncRunnerSettledPrefix(runner *discardShadowRetryRunner, target int, dynProps *state.DynamicProperties, versioned *versionedAccessShadow) (int64, int64, error) {
-	if runner == nil || runner.worker == nil || dynProps == nil || versioned == nil || target < runner.settledThrough {
-		return 0, 0, errors.New("invalid async prefix input")
-	}
-	started := time.Now()
-	var advances int64
-	for txIndex := runner.settledThrough + 1; txIndex <= target; txIndex++ {
-		if txIndex < 0 || txIndex >= len(versioned.transactionWritesOK) || !versioned.transactionWritesOK[txIndex] ||
-			txIndex >= len(versioned.transactionWriteSets) {
-			return advances, time.Since(started).Nanoseconds(), errors.New("missing async prefix WriteSet")
-		}
-		writes := versioned.transactionWriteSets[txIndex]
-		if len(writes) == 0 {
-			runner.settledThrough = txIndex
-			advances++
-			continue
-		}
-		runner.prefixRecorder.Reset(64)
-		runner.prefixRaw.recorder = &runner.prefixRecorder
-		if err := runner.worker.state.ApplyTransactionWriteSet(
-			writes, runner.worker.dynProps, &runner.prefixRaw,
-		); err != nil {
-			return advances, time.Since(started).Nanoseconds(), err
-		}
-		runner.worker.state.FinalizeTransaction()
-		runner.settledThrough = txIndex
-		advances++
-	}
-	dynProps.CopyInto(runner.worker.dynProps)
-	return advances, time.Since(started).Nanoseconds(), nil
-}
-
 func (retry *discardShadowSenderRetry) ensureSettledPrefix(target int, statedb *state.StateDB, dynProps *state.DynamicProperties, versioned *versionedAccessShadow, cfg discardShadowRunConfig) bool {
 	if retry == nil {
 		return false
@@ -2029,24 +2005,21 @@ func (retry *discardShadowSenderRetry) enqueueAsyncRetry(txIndex int, statedb *s
 		dynProps:    dynProps.Copy(),
 		enqueuedAt:  time.Now(),
 	}
-	// A failed observer copy can leave only the lazy fallback runner. Prime it
-	// while we are still at the request's exact boundary; queued dispatch must
-	// never copy a later live StateDB for an earlier transaction.
-	if retry.idleAsyncRunnerFor(txIndex-1) == nil {
-		for _, runner := range retry.asyncRunners {
-			if runner == nil || runner.busy || runner.worker != nil {
-				continue
-			}
-			prefixStarted := time.Now()
-			prefixRefreshesBefore := retry.stats.prefixRefreshes
-			prefixCopyNanosBefore := retry.stats.copyNanos
-			if retry.ensureRunnerSettledPrefix(runner, txIndex-1, statedb, dynProps, versioned, cfg) {
-				retry.stats.actualRefreshes += retry.stats.prefixRefreshes - prefixRefreshesBefore
-				retry.stats.actualCopyNs += retry.stats.copyNanos - prefixCopyNanosBefore
-			}
-			retry.stats.actualPrefixNs += time.Since(prefixStarted).Nanoseconds()
-			break
+	// If preexecution could not retain a block-start template, freeze one exact
+	// StateDB boundary on the request. This rare fallback is safe even while its
+	// only runner is busy because the queued request owns the copy.
+	if retry.stats.actualPrewarmed == 0 {
+		copyStarted := time.Now()
+		request.blockBase, err = statedb.CopyBlockExecutionBase()
+		retry.stats.actualCopyNs += time.Since(copyStarted).Nanoseconds()
+		if err != nil {
+			retry.stats.errors++
+			retry.stats.actualErrors++
+			retry.stats.actualQueueDropped += int64(len(tasks))
+			retry.asyncScheduled -= int64(len(tasks))
+			return
 		}
+		request.blockBase.SetDynamicProperties(dynProps.Copy())
 	}
 	if retry.idleAsyncRunnerFor(txIndex-1) == nil {
 		retry.stats.actualQueueBusy++
@@ -2108,14 +2081,12 @@ func (retry *discardShadowSenderRetry) dispatchAsyncRetryQueue(boundary int, ver
 }
 
 func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardShadowRetryRunner, request *discardShadowAsyncRetryRequest, versioned *versionedAccessShadow, cfg discardShadowRunConfig) {
-	worker := runner.worker
 	runner.busy = true
 	retry.asyncActive++
 	if int64(retry.asyncActive) > retry.stats.actualMaxInflight {
 		retry.stats.actualMaxInflight = int64(retry.asyncActive)
 	}
 	retry.stats.actualJobs++
-	worker.db.parent = request.frozenRaw
 	retryCfg := cfg
 	retryCfg.db = nil
 	retryCfg.canonicalInfos = nil
@@ -2123,24 +2094,40 @@ func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardSh
 	retryCfg.retainInfos = true
 	events := retry.asyncEvents
 	go func() {
-		prefixStarted := time.Now()
-		prefixAdvances, prefixAdvanceNanos, prefixErr := advanceAsyncRunnerSettledPrefix(
-			runner, request.txIndex-1, request.dynProps, versioned,
-		)
-		prefixNanos := time.Since(prefixStarted).Nanoseconds()
-		if prefixErr != nil {
-			worker.db.reset()
-			worker.db.parent = nil
-			worker.db.recorder = &worker.recorder
+		copyStarted := time.Now()
+		blockBase := runner.blockBase
+		if request.blockBase != nil {
+			blockBase = request.blockBase
+		}
+		if blockBase == nil {
 			events <- discardShadowAsyncRetryEvent{
 				runner: runner, done: true, dropped: int64(len(request.tasks)), prefixError: true,
-				prefixAdvances: prefixAdvances, prefixAdvanceNanos: prefixAdvanceNanos, prefixNanos: prefixNanos,
+				sharedState: true, sharedStateCopyNs: time.Since(copyStarted).Nanoseconds(),
 			}
 			return
 		}
+		jobState, copyErr := blockBase.CopyBlockExecutionBase()
+		copyNanos := time.Since(copyStarted).Nanoseconds()
+		if copyErr != nil {
+			events <- discardShadowAsyncRetryEvent{
+				runner: runner, done: true, dropped: int64(len(request.tasks)), prefixError: true,
+				sharedState: true, sharedStateCopyNs: copyNanos,
+			}
+			return
+		}
+		jobState.SetDynamicProperties(request.dynProps.Copy())
+		jobState.SetTransactionVersionedValueReader(versioned, request.txIndex)
+		if retryCfg.captureBalanceTrace {
+			jobState.BeginBalanceTrace(int64(retryCfg.block.Number()), retryCfg.block.Hash().Bytes(), retryCfg.block.Timestamp())
+		}
+		worker := discardShadowWorker{
+			state:     jobState,
+			dynProps:  jobState.DynamicProperties(),
+			db:        discardKVOverlay{parent: request.frozenRaw},
+			forkCache: forks.NewVersionPassCache().BlockScope(),
+		}
+		worker.db.recorder = &worker.recorder
 		started := time.Now()
-		prefixStateSnapshot := worker.state.Snapshot()
-		prefixDPSnapshot := worker.dynProps.Snapshot()
 		var forwarded versionedAccessShadow
 		forwarded.Prepare(len(retryCfg.transactions))
 		var superseded int64
@@ -2176,15 +2163,9 @@ func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardSh
 			}
 			installSenderChainWrites(&forwarded, result.writes, task.txIndex)
 		}
-		worker.state.RevertToSnapshot(prefixStateSnapshot)
-		worker.dynProps.RevertToSnapshot(prefixDPSnapshot)
-		worker.db.reset()
-		worker.db.parent = nil
-		worker.db.recorder = &worker.recorder
 		events <- discardShadowAsyncRetryEvent{
 			runner: runner, done: true, nanos: time.Since(started).Nanoseconds(), rawMisses: request.frozenRaw.misses,
-			superseded: superseded, dropped: dropped, prefixAdvances: prefixAdvances,
-			prefixAdvanceNanos: prefixAdvanceNanos, prefixNanos: prefixNanos,
+			superseded: superseded, dropped: dropped, sharedState: true, sharedStateCopyNs: copyNanos,
 		}
 	}()
 }
@@ -2194,20 +2175,30 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 		return
 	}
 	if event.done {
-		retry.stats.workerPrefix.jobs++
-		retry.stats.workerPrefix.advances += event.prefixAdvances
-		retry.stats.workerPrefix.nanos += event.prefixNanos
-		retry.stats.actualAdvances += event.prefixAdvances
-		retry.stats.actualAdvanceNs += event.prefixAdvanceNanos
-		retry.stats.prefixAdvances += event.prefixAdvances
-		retry.stats.prefixAdvanceNanos += event.prefixAdvanceNanos
-		if event.prefixError {
-			retry.stats.workerPrefix.errors++
-			retry.stats.errors++
-			retry.stats.actualErrors++
+		if event.sharedState {
+			retry.stats.sharedStateJobs++
+			retry.stats.sharedStateCopyNs += event.sharedStateCopyNs
+			if event.prefixError {
+				retry.stats.sharedStateErrors++
+				retry.stats.errors++
+				retry.stats.actualErrors++
+			}
 		} else {
-			retry.stats.prefixReuses++
-			retry.stats.actualReuses++
+			retry.stats.workerPrefix.jobs++
+			retry.stats.workerPrefix.advances += event.prefixAdvances
+			retry.stats.workerPrefix.nanos += event.prefixNanos
+			retry.stats.actualAdvances += event.prefixAdvances
+			retry.stats.actualAdvanceNs += event.prefixAdvanceNanos
+			retry.stats.prefixAdvances += event.prefixAdvances
+			retry.stats.prefixAdvanceNanos += event.prefixAdvanceNanos
+			if event.prefixError {
+				retry.stats.workerPrefix.errors++
+				retry.stats.errors++
+				retry.stats.actualErrors++
+			} else {
+				retry.stats.prefixReuses++
+				retry.stats.actualReuses++
+			}
 		}
 		if event.superseded > 0 {
 			retry.stats.actualSuperseded += event.superseded
@@ -2224,9 +2215,6 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 			}
 		}
 		if event.runner != nil && event.runner.busy {
-			if event.runner.worker != nil {
-				event.runner.worker.db.parent = &event.runner.prefixRaw
-			}
 			event.runner.busy = false
 			if retry.asyncActive > 0 {
 				retry.asyncActive--
@@ -2607,6 +2595,9 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 		discardShadowRetryActualPrewarmedCounter.Inc(retry.stats.actualPrewarmed)
 		discardShadowRetryActualExecutionNanosCounter.Inc(retry.stats.actualExecutionNs)
 		discardShadowRetryActualFinishWaitNanosCounter.Inc(retry.stats.actualFinishWaitNs)
+		discardShadowRetrySharedStateJobsCounter.Inc(retry.stats.sharedStateJobs)
+		discardShadowRetrySharedStateCopyNanosCounter.Inc(retry.stats.sharedStateCopyNs)
+		discardShadowRetrySharedStateErrorsCounter.Inc(retry.stats.sharedStateErrors)
 	}
 	return retry.stats
 }
