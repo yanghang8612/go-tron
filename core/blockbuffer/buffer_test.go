@@ -123,6 +123,38 @@ func TestReadSnapshotPinsBaseAndLayerTopologyAcrossFlush(t *testing.T) {
 	}
 }
 
+func TestReadSnapshotDurablePrefixSeekBypassesOverlay(t *testing.T) {
+	base, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer base.Close()
+	if err := base.Put([]byte("idx/0002"), []byte("durable")); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := New(base)
+	buf.BeginBlock(bufHash(1), 1)
+	if err := buf.Put([]byte("idx/0001"), []byte("overlay")); err != nil {
+		t.Fatal(err)
+	}
+	buf.CommitBlock()
+	snapshot, err := buf.NewReadSnapshotThrough(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+
+	key, value, ok, err := snapshot.SeekPrefix([]byte("idx/"), nil)
+	if err != nil || !ok || string(key) != "idx/0001" || string(value) != "overlay" {
+		t.Fatalf("logical seek = (%q,%q,%v,%v), want overlay row", key, value, ok, err)
+	}
+	key, value, ok, err = snapshot.SeekDurablePrefix([]byte("idx/"), nil)
+	if err != nil || !ok || string(key) != "idx/0002" || string(value) != "durable" {
+		t.Fatalf("durable seek = (%q,%q,%v,%v), want durable row", key, value, ok, err)
+	}
+}
+
 func TestReadSnapshotThroughExcludesFutureLayers(t *testing.T) {
 	base, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
 	if err != nil {
@@ -1849,6 +1881,49 @@ func BenchmarkBufferPrefixFirst(b *testing.B) {
 				b.Fatalf("iterator first = %q err=%v", it.Key(), it.Error())
 			}
 			it.Release()
+		}
+	})
+}
+
+func BenchmarkReadSnapshotDurablePrefixSeek(b *testing.B) {
+	base, err := rawdb.NewPebbleDB(b.TempDir(), 16, 16)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = base.Close() })
+	if err := base.Put([]byte("idx/target/0001"), []byte("value")); err != nil {
+		b.Fatal(err)
+	}
+	buf := New(base)
+	for blockNum := uint64(1); blockNum <= 256; blockNum++ {
+		buf.BeginBlock(bufHash(byte(blockNum)), blockNum)
+		if err := buf.Put([]byte(fmt.Sprintf("unrelated/%04d", blockNum)), []byte("value")); err != nil {
+			b.Fatal(err)
+		}
+		buf.CommitBlock()
+	}
+	snapshot, err := buf.NewReadSnapshotThrough(256)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = snapshot.Close() })
+	prefix := []byte("idx/target/")
+	b.Run("logical-overlay", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			key, _, ok, err := snapshot.SeekPrefix(prefix, nil)
+			if err != nil || !ok || string(key) != "idx/target/0001" {
+				b.Fatalf("logical seek = %q/%v/%v", key, ok, err)
+			}
+		}
+	})
+	b.Run("durable", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			key, _, ok, err := snapshot.SeekDurablePrefix(prefix, nil)
+			if err != nil || !ok || string(key) != "idx/target/0001" {
+				b.Fatalf("durable seek = %q/%v/%v", key, ok, err)
+			}
 		}
 	})
 }

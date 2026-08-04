@@ -62,6 +62,13 @@ func (v historicalLatestView) KVLatest(owner tcommon.Address, generation uint64,
 	return v.reader.readStateKVAsOf(owner, generation, domain, key, v.blockNum, v.reader.headNum)
 }
 
+func (v historicalLatestView) KVLatestBatch(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte) (map[string][]byte, error) {
+	if v.reader == nil {
+		return map[string][]byte{}, nil
+	}
+	return v.reader.readStateKVBatchAsOf(owner, generation, domain, keys, v.blockNum, v.reader.headNum)
+}
+
 func (v historicalLatestView) DomainIterate(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte, fn statedomains.IterateFunc) error {
 	if v.reader == nil {
 		return nil

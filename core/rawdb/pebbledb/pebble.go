@@ -371,6 +371,7 @@ var _ pointread.Snapshot = (*pointReadSnapshot)(nil)
 var _ pointread.Cursor = (*pointReadCursor)(nil)
 var _ pointread.KeyValueSnapshotter = (*Database)(nil)
 var _ pointread.KeyValueSnapshot = (*keyValueSnapshot)(nil)
+var _ pointread.PrefixSeeker = (*keyValueSnapshot)(nil)
 
 // NewPointReadView acquires one read-side lifecycle lease. Close must be called
 // before Database.Close can complete; normal reads, writes, flushes and
@@ -496,6 +497,15 @@ func (s *keyValueSnapshot) NewIterator(prefix, start []byte) ethdb.Iterator {
 	}
 	iter.First()
 	return &pebbleIterator{iter: iter, moved: true}
+}
+
+func (s *keyValueSnapshot) SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
+	it := s.NewIterator(prefix, start)
+	defer it.Release()
+	if !it.Next() {
+		return nil, nil, false, it.Error()
+	}
+	return append([]byte(nil), it.Key()...), append([]byte(nil), it.Value()...), true, nil
 }
 
 func (s *keyValueSnapshot) Close() error {

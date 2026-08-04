@@ -227,6 +227,7 @@ type PersistentHistoryReader struct {
 	coldHistory StateDomainChangeColdHistory
 	latest      hotStateLatestReader
 	cache       map[reqCacheKey]any
+	txRanges    map[uint64]stateTxRangeCacheEntry
 	ctx         context.Context
 
 	hotHistoryFromBlock uint64
@@ -295,6 +296,11 @@ type accountCacheEntry struct {
 	code    []byte         // nil if no code
 }
 
+type stateTxRangeCacheEntry struct {
+	row rawdb.StateTxRange
+	ok  bool
+}
+
 // NewPersistentHistoryReader builds a reader keyed on the supplied disk
 // store, live-account resolver, and current chain head. The reader is
 // single-use; callers should instantiate one per RPC request so the cache
@@ -323,6 +329,7 @@ func NewPersistentHistoryReaderWithColdHistory(db readerDB, live LiveAccountRead
 		coldHistory: coldHistory,
 		latest:      newRegistryHotStateLatestReader(db, snapshots.DefaultDomainRegistry()),
 		cache:       make(map[reqCacheKey]any),
+		txRanges:    make(map[uint64]stateTxRangeCacheEntry),
 		ctx:         context.Background(),
 	}
 }
@@ -652,6 +659,104 @@ func (r *PersistentHistoryReader) readStateKVAsOf(owner tcommon.Address, generat
 		return nil, false, err
 	}
 	return r.readStateKVAsOfTxNum(owner, generation, domain, key, targetTxNum, headTxNum)
+}
+
+func (r *PersistentHistoryReader) readStateKVBatchAsOf(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte, targetBlock, headBlock uint64) (map[string][]byte, error) {
+	out := make(map[string][]byte, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	targetTxNum, err := r.stateTxNumAtBlockEnd(targetBlock)
+	if err != nil {
+		return nil, err
+	}
+	headTxNum, err := r.stateTxNumAtBlockEnd(headBlock)
+	if err != nil {
+		return nil, err
+	}
+	// Direct/test readers do not carry the block bounds required by the staged
+	// tail optimization. Preserve their established point-read behavior.
+	if !r.hotHistoryBounded {
+		for _, key := range keys {
+			value, ok, err := r.readStateKVAsOfTxNum(owner, generation, domain, key, targetTxNum, headTxNum)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out[string(key)] = value
+			}
+		}
+		return out, nil
+	}
+	hotFirst, err := rawdb.ReadFirstStateKVChangesByKeysBlockRange(r.db, targetBlock, headBlock, targetTxNum, headTxNum, owner, generation, domain, keys)
+	if err != nil {
+		return nil, err
+	}
+	first := make(map[string]*rawdb.StateDomainChange, len(hotFirst))
+	wanted := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		wanted[string(key)] = struct{}{}
+	}
+	for key, change := range hotFirst {
+		first[key] = change
+	}
+	consider := func(change *rawdb.StateDomainChange) bool {
+		if change == nil || change.TxNum <= targetTxNum || change.TxNum > headTxNum ||
+			change.FlatDomain != rawdb.StateFlatDomainKVLatest || change.Owner != owner ||
+			change.Generation != generation || change.Domain != domain {
+			return false
+		}
+		keyString := string(change.Key)
+		if _, ok := wanted[keyString]; !ok {
+			return false
+		}
+		if current := first[keyString]; current == nil || stateDomainChangeLess(change, current) {
+			first[keyString] = cloneHistoryDomainChange(change)
+		}
+		return true
+	}
+	if r.coldHistory != nil && targetTxNum != ^uint64(0) {
+		fromTxNum := targetTxNum + 1
+		if keyed, ok := r.coldHistory.(StateDomainChangeColdKeyHistory); ok {
+			for _, key := range keys {
+				if err := keyed.IterateStateDomainChangesByKey(fromTxNum, headTxNum, rawdb.StateFlatDomainKVLatest, owner, generation, domain, key, func(change *rawdb.StateDomainChange) (bool, error) {
+					if err := r.contextError(); err != nil {
+						return false, err
+					}
+					return !consider(change), nil
+				}); err != nil {
+					return nil, err
+				}
+			}
+		} else if err := r.coldHistory.IterateStateDomainChanges(fromTxNum, headTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+			if err := r.contextError(); err != nil {
+				return false, err
+			}
+			consider(change)
+			return true, nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	latest := r.latestAtTxNum(headTxNum)
+	for _, key := range keys {
+		keyString := string(key)
+		if change := first[keyString]; change != nil {
+			value, exists := previousStateDomainValue(change)
+			if exists {
+				out[keyString] = value
+			}
+			continue
+		}
+		value, exists, err := latest.KVLatest(owner, generation, domain, key)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			out[keyString] = append([]byte(nil), value...)
+		}
+	}
+	return out, nil
 }
 
 func (r *PersistentHistoryReader) readStateKVAsOfTxNum(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, targetTxNum, headTxNum uint64) ([]byte, bool, error) {
@@ -1348,14 +1453,32 @@ func (r *PersistentHistoryReader) stateTxRangeForBlock(blockNum uint64) (*rawdb.
 	if r == nil {
 		return nil, false, nil
 	}
+	if cached, ok := r.txRanges[blockNum]; ok {
+		if !cached.ok {
+			return nil, false, nil
+		}
+		row := cached.row
+		return &row, true, nil
+	}
 	if row, ok, err := snapshots.StateDomainHistoryTxRangeForBlock(r.db, blockNum); err != nil {
 		return nil, false, err
 	} else if ok {
-		return row, true, nil
+		r.txRanges[blockNum] = stateTxRangeCacheEntry{row: *row, ok: true}
+		copy := *row
+		return &copy, true, nil
 	}
 	if cold, ok := r.coldHistory.(StateDomainChangeColdTxRange); ok {
-		return cold.StateTxRangeForBlock(blockNum)
+		row, found, err := cold.StateTxRangeForBlock(blockNum)
+		if err != nil {
+			return nil, false, err
+		}
+		if found {
+			r.txRanges[blockNum] = stateTxRangeCacheEntry{row: *row, ok: true}
+			copy := *row
+			return &copy, true, nil
+		}
 	}
+	r.txRanges[blockNum] = stateTxRangeCacheEntry{}
 	return nil, false, nil
 }
 

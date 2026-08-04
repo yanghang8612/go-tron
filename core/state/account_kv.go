@@ -244,6 +244,10 @@ type accountKVLatestGenerationReader interface {
 	KVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error)
 }
 
+type accountKVLatestGenerationBatchReader interface {
+	KVLatestBatch(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte) (map[string][]byte, error)
+}
+
 type accountKVLatestGenerationIterator interface {
 	KVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error
 }
@@ -1597,6 +1601,7 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 	if obj == nil || obj.deleted {
 		return out, nil
 	}
+	pending := make([][]byte, 0, len(keys))
 	for _, key := range keys {
 		if e, ok := lookupKVEntry(obj.kvDirty, domain, key); ok {
 			if !e.deleted {
@@ -1608,6 +1613,22 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 			recordFreshAccountKVPointReadsAvoided(1)
 			continue
 		}
+		pending = append(pending, key)
+	}
+	if len(pending) == 0 {
+		return out, nil
+	}
+	if reader, ok := s.accountKVLatestReader.(accountKVLatestGenerationBatchReader); ok {
+		values, err := reader.KVLatestBatch(owner, obj.accountKVGeneration, domain, pending)
+		if err != nil {
+			return nil, err
+		}
+		for key, value := range values {
+			out[key] = value
+		}
+		return out, nil
+	}
+	for _, key := range pending {
 		value, ok, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
 			return nil, err

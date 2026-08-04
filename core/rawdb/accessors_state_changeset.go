@@ -925,7 +925,7 @@ func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBl
 		indexedHead = headBlock
 	}
 	for fromBlock <= indexedHead {
-		blockNum, ok, err := firstStateDomainChangeBlockByKeyRange(db, fromBlock, indexedHead, flatDomain, owner, generation, domain, key)
+		blockNum, ok, err := firstStateDomainChangeBlockByKeyRange(db, fromBlock, indexedHead, staged, flatDomain, owner, generation, domain, key)
 		if err != nil || !ok {
 			return nil, err
 		}
@@ -979,6 +979,76 @@ func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBl
 	return nil, nil
 }
 
+// ReadFirstStateKVChangesByKeysBlockRange resolves the earliest mutation for
+// many logical KV keys. The indexed prefix still uses one ordered seek per
+// key, while the unindexed stage tail is scanned once for the whole batch
+// instead of once per key. This is the common shape for historical dynamic
+// properties, where roughly a hundred keys share one owner and domain.
+func ReadFirstStateKVChangesByKeysBlockRange(db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte) (map[string]*StateDomainChange, error) {
+	first := make(map[string]*StateDomainChange, len(keys))
+	if targetBlock >= headBlock || targetTxNum >= headTxNum || len(keys) == 0 {
+		return first, nil
+	}
+	indexedHead, staged, err := stateHistoryIndexedHead(db, headBlock)
+	if err != nil {
+		return nil, err
+	}
+	if !staged {
+		indexedHead = headBlock
+	}
+	wanted := make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		keyString := string(key)
+		if _, exists := wanted[keyString]; !exists {
+			wanted[keyString] = key
+		}
+	}
+	if targetBlock < indexedHead {
+		for keyString, key := range wanted {
+			change, err := ReadFirstStateDomainChangeByKeyBlockRange(db, targetBlock, indexedHead, targetTxNum, headTxNum, StateFlatDomainKVLatest, owner, generation, domain, key)
+			if err != nil {
+				return nil, err
+			}
+			if change != nil {
+				first[keyString] = change
+				delete(wanted, keyString)
+			}
+		}
+	}
+	if !staged || len(wanted) == 0 {
+		return first, nil
+	}
+	directFrom := targetBlock + 1
+	if indexedHead >= directFrom {
+		if indexedHead == ^uint64(0) {
+			return first, nil
+		}
+		directFrom = indexedHead + 1
+	}
+	for blockNum := directFrom; blockNum <= headBlock && len(wanted) > 0; blockNum++ {
+		if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
+				change.FlatDomain != StateFlatDomainKVLatest || change.Owner != owner ||
+				change.Generation != generation || change.Domain != domain {
+				return true, nil
+			}
+			keyString := string(change.Key)
+			if _, ok := wanted[keyString]; !ok {
+				return true, nil
+			}
+			first[keyString] = cloneStateDomainChange(change)
+			delete(wanted, keyString)
+			return len(wanted) > 0, nil
+		}); err != nil {
+			return nil, err
+		}
+		if blockNum == ^uint64(0) {
+			break
+		}
+	}
+	return first, nil
+}
+
 // stateHistoryIndexedHead returns the inclusive inverse-index watermark capped
 // to the query head. Missing stage metadata denotes the legacy all-inline
 // layout; callers retain their existing inverse-only behavior in that case.
@@ -993,14 +1063,27 @@ func stateHistoryIndexedHead(db ethdb.KeyValueReader, headBlock uint64) (uint64,
 	return headBlock, true, nil
 }
 
-func firstStateDomainChangeBlockByKeyRange(db ethdb.Iteratee, fromBlock, toBlock uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (uint64, bool, error) {
+func firstStateDomainChangeBlockByKeyRange(db ethdb.Iteratee, fromBlock, toBlock uint64, durable bool, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (uint64, bool, error) {
 	prefix, ok := stateDomainChangeInversePrefixByKey(flatDomain, owner, generation, domain, key)
 	if !ok || fromBlock > toBlock {
 		return 0, false, nil
 	}
+	var start [8]byte
+	binary.BigEndian.PutUint64(start[:], fromBlock)
+	if durable {
+		if seeker, ok := db.(pointread.DurablePrefixSeeker); ok {
+			foundKey, _, found, err := seeker.SeekDurablePrefix(prefix, start[:])
+			if err != nil || !found {
+				return 0, false, err
+			}
+			blockNum, valid := StateDomainChangeInverseBlockNum(foundKey, len(prefix))
+			if !valid || blockNum > toBlock {
+				return 0, false, nil
+			}
+			return blockNum, true, nil
+		}
+	}
 	if seeker, ok := db.(pointread.PrefixSeeker); ok {
-		var start [8]byte
-		binary.BigEndian.PutUint64(start[:], fromBlock)
 		foundKey, _, found, err := seeker.SeekPrefix(prefix, start[:])
 		if err != nil || !found {
 			return 0, false, err

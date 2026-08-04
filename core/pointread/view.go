@@ -79,6 +79,14 @@ type PrefixSeeker interface {
 	SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error)
 }
 
+// DurablePrefixSeeker is implemented by layered snapshots that can seek the
+// pinned durable base without materialising their in-memory overlay. Callers
+// may use this only for key families whose watermark proves every key in the
+// requested range has already been promoted to the durable store.
+type DurablePrefixSeeker interface {
+	SeekDurablePrefix(prefix, start []byte) (key, value []byte, ok bool, err error)
+}
+
 // CommitmentParentView resolves split physical keys against the parent state
 // visible to one commitment fold. stable reports whether value may be retained
 // after fn returns.

@@ -589,6 +589,7 @@ var _ ethdb.KeyValueReader = (*ReadSnapshot)(nil)
 var _ ethdb.KeyValueWriter = (*ReadSnapshot)(nil)
 var _ ethdb.Iteratee = (*ReadSnapshot)(nil)
 var _ pointread.PrefixSeeker = (*ReadSnapshot)(nil)
+var _ pointread.DurablePrefixSeeker = (*ReadSnapshot)(nil)
 var _ pointread.PrefixSeeker = (*Buffer)(nil)
 
 // NewReadSnapshot captures a stable logical read view. flushMu makes the base
@@ -738,6 +739,20 @@ func (s *ReadSnapshot) SeekPrefix(prefix, start []byte) (key, value []byte, ok b
 		overlay.walk(s.view.layers[i], prefix, start)
 	}
 	return seekPrefixWithBase(s.base, overlay, prefix, start)
+}
+
+// SeekDurablePrefix seeks only the pinned durable MVCC snapshot. It is used by
+// staged derived indexes after their watermark proves the requested range has
+// no overlay-only rows. Keeping this separate from SeekPrefix makes bypassing
+// the logical overlay an explicit, auditable choice by the accessor.
+func (s *ReadSnapshot) SeekDurablePrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
+	if s == nil || s.closed.Load() || s.base == nil {
+		return nil, nil, false, ErrNotFound
+	}
+	if seeker, ok := s.base.(pointread.PrefixSeeker); ok {
+		return seeker.SeekPrefix(prefix, start)
+	}
+	return seekPrefixWithBase(s.base, newOverlayState(), prefix, start)
 }
 
 func (s *ReadSnapshot) NewStateKVLatestIterator(schemaPrefix []byte, accountID common.AccountID, physicalPrefix []byte) ethdb.Iterator {

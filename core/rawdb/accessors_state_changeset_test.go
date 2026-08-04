@@ -956,6 +956,34 @@ func TestReadFirstStateDomainChangeByKeyBlockRangeUsesPrefixSeek(t *testing.T) {
 	}
 }
 
+func TestReadFirstStateDomainChangeByKeyBlockRangeUsesDurableSeekForStagedIndex(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	db := &prefixSeekingHistoryDB{Database: base}
+	owner := common.Address{0x41, 0x2b}
+	key := []byte("reward/durable-seek")
+	if err := WriteStateDomainChange(db, &StateDomainChange{
+		BlockNum: 100, TxNum: 100, Seq: 1,
+		FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 1,
+		Domain: kvdomains.SystemReward, Key: key,
+		PrevExists: true, Prev: []byte("before"), NextExists: true, Next: []byte("after"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStageProgressWithHash(db, StageStateHistoryIndex, 100, common.Hash{100}); err != nil {
+		t.Fatal(err)
+	}
+	change, err := ReadFirstStateDomainChangeByKeyBlockRange(db, 99, 100, 99, 100, StateFlatDomainKVLatest, owner, 1, kvdomains.SystemReward, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change == nil || change.BlockNum != 100 || !bytes.Equal(change.Prev, []byte("before")) {
+		t.Fatalf("first change = %+v, want durable block 100", change)
+	}
+	if db.durableSeekCalls != 1 || db.seekCalls != 0 || db.inverseIteratorCalls != 0 {
+		t.Fatalf("durable/logical/inverse iterator calls = %d/%d/%d, want 1/0/0", db.durableSeekCalls, db.seekCalls, db.inverseIteratorCalls)
+	}
+}
+
 func TestStateDomainChangeBlockRangeReadsScanUnindexedStageTail(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	owner := common.Address{0x41, 0x2a}
@@ -1011,10 +1039,95 @@ func TestStateDomainChangeBlockRangeReadsScanUnindexedStageTail(t *testing.T) {
 	}
 }
 
+func TestReadFirstStateKVChangesByKeysScansUnindexedTailOnce(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	db := &prefixSeekingHistoryDB{Database: base}
+	owner := common.Address{0x41, 0x2c}
+	keys := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
+	changes := make([]*StateDomainChange, 0, len(keys))
+	for i, key := range keys {
+		changes = append(changes, &StateDomainChange{
+			BlockNum: 2, TxNum: 2, Seq: uint64(i + 1),
+			FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 1,
+			Domain: kvdomains.SystemDynamicProperty, Key: key,
+			PrevExists: true, Prev: []byte("old-" + string(key)),
+		})
+	}
+	if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStageProgressWithHash(db, StageStateHistoryIndex, 1, common.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := ReadFirstStateKVChangesByKeysBlockRange(db, 1, 2, 1, 2, owner, 1, kvdomains.SystemDynamicProperty, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		change := first[string(key)]
+		if change == nil || change.BlockNum != 2 || !bytes.Equal(change.Prev, []byte("old-"+string(key))) {
+			t.Fatalf("first[%q] = %+v", key, change)
+		}
+	}
+	if db.changeBlockIteratorCalls != 1 {
+		t.Fatalf("tail block iterator calls = %d, want 1 for %d keys", db.changeBlockIteratorCalls, len(keys))
+	}
+}
+
+func BenchmarkReadFirstStateKVChangesUnindexedTail(b *testing.B) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x2d}
+	const (
+		indexedHead = uint64(1)
+		headBlock   = uint64(64)
+		keyCount    = 128
+	)
+	keys := make([][]byte, keyCount)
+	changes := make([]*StateDomainChange, keyCount)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("dynamic/%03d", i))
+		changes[i] = &StateDomainChange{
+			BlockNum: headBlock, TxNum: headBlock, Seq: uint64(i + 1),
+			FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 1,
+			Domain: kvdomains.SystemDynamicProperty, Key: keys[i],
+			PrevExists: true, Prev: []byte("old"),
+		}
+	}
+	if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
+		b.Fatal(err)
+	}
+	if err := WriteStageProgressWithHash(db, StageStateHistoryIndex, indexedHead, common.Hash{1}); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("point", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			for _, key := range keys {
+				change, err := ReadFirstStateDomainChangeByKeyBlockRange(db, indexedHead, headBlock, indexedHead, headBlock, StateFlatDomainKVLatest, owner, 1, kvdomains.SystemDynamicProperty, key)
+				if err != nil || change == nil {
+					b.Fatalf("point change = %+v err=%v", change, err)
+				}
+			}
+		}
+	})
+	b.Run("batch", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			first, err := ReadFirstStateKVChangesByKeysBlockRange(db, indexedHead, headBlock, indexedHead, headBlock, owner, 1, kvdomains.SystemDynamicProperty, keys)
+			if err != nil || len(first) != len(keys) {
+				b.Fatalf("batch changes = %d err=%v", len(first), err)
+			}
+		}
+	})
+}
+
 type prefixSeekingHistoryDB struct {
 	ethdb.Database
-	seekCalls            int
-	inverseIteratorCalls int
+	seekCalls                int
+	durableSeekCalls         int
+	inverseIteratorCalls     int
+	changeBlockIteratorCalls int
 }
 
 func (db *prefixSeekingHistoryDB) SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
@@ -1027,9 +1140,22 @@ func (db *prefixSeekingHistoryDB) SeekPrefix(prefix, start []byte) (key, value [
 	return append([]byte(nil), it.Key()...), append([]byte(nil), it.Value()...), true, nil
 }
 
+func (db *prefixSeekingHistoryDB) SeekDurablePrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
+	db.durableSeekCalls++
+	it := db.Database.NewIterator(prefix, start)
+	defer it.Release()
+	if !it.Next() {
+		return nil, nil, false, it.Error()
+	}
+	return append([]byte(nil), it.Key()...), append([]byte(nil), it.Value()...), true, nil
+}
+
 func (db *prefixSeekingHistoryDB) NewIterator(prefix, start []byte) ethdb.Iterator {
 	if bytes.HasPrefix(prefix, stateChangeInversePrefix) {
 		db.inverseIteratorCalls++
+	}
+	if bytes.HasPrefix(prefix, stateChangeSetPrefix) && len(prefix) == len(stateChangeSetPrefix)+8 {
+		db.changeBlockIteratorCalls++
 	}
 	return db.Database.NewIterator(prefix, start)
 }

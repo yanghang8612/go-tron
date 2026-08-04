@@ -31,6 +31,33 @@ type countingAccountKVLatestReader struct {
 	found bool
 }
 
+type countingGenerationBatchReader struct {
+	pointReads int
+	batchReads int
+	values     map[string][]byte
+}
+
+func (r *countingGenerationBatchReader) GetLatest(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	return r.KVLatest(owner, 0, domain, key)
+}
+
+func (r *countingGenerationBatchReader) KVLatest(_ tcommon.Address, _ uint64, _ kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	r.pointReads++
+	value, ok := r.values[string(key)]
+	return append([]byte(nil), value...), ok, nil
+}
+
+func (r *countingGenerationBatchReader) KVLatestBatch(_ tcommon.Address, _ uint64, _ kvdomains.KVDomain, keys [][]byte) (map[string][]byte, error) {
+	r.batchReads++
+	out := make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		if value, ok := r.values[string(key)]; ok {
+			out[string(key)] = append([]byte(nil), value...)
+		}
+	}
+	return out, nil
+}
+
 func (r *countingAccountKVLatestReader) GetLatest(_ tcommon.Address, _ kvdomains.KVDomain, _ []byte) ([]byte, bool, error) {
 	r.reads++
 	return append([]byte(nil), r.value...), r.found, nil
@@ -109,6 +136,31 @@ func TestFreshAccountKVSkipsDurablePreimageReads(t *testing.T) {
 	}
 	if got := accountKVFreshPreimageReadsAvoidedCounter.Snapshot().Count() - beforePreimage; got != 2 {
 		t.Fatalf("fresh preimage-read counter delta = %d, want 2", got)
+	}
+}
+
+func TestGetAccountKVBatchUsesGenerationBatchReader(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x15)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	obj := sdb.getStateObject(addr)
+	obj.created = false
+	obj.accountKVGeneration = 7
+	reader := &countingGenerationBatchReader{values: map[string][]byte{
+		"one": []byte("value-one"),
+		"two": []byte("value-two"),
+	}}
+	sdb.setAccountKVLatestView(reader, nil)
+
+	got, err := sdb.GetAccountKVBatch(addr, kvdomains.SystemDynamicProperty, [][]byte{[]byte("one"), []byte("missing"), []byte("two")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got["one"], []byte("value-one")) || !bytes.Equal(got["two"], []byte("value-two")) || len(got) != 2 {
+		t.Fatalf("batch values = %q", got)
+	}
+	if reader.batchReads != 1 || reader.pointReads != 0 {
+		t.Fatalf("batch/point reads = %d/%d, want 1/0", reader.batchReads, reader.pointReads)
 	}
 }
 

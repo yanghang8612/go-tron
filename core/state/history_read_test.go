@@ -29,6 +29,37 @@ func TestPersistentHistoryReaderHonorsCanceledContext(t *testing.T) {
 	}
 }
 
+type countingHistoryReaderDB struct {
+	ethdb.Database
+	gets int
+}
+
+func (db *countingHistoryReaderDB) Get(key []byte) ([]byte, error) {
+	db.gets++
+	return db.Database.Get(key)
+}
+
+func TestPersistentHistoryReaderCachesStateTxRanges(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateTxRange(base, 7, tcommon.Hash{7}, 70, 79); err != nil {
+		t.Fatal(err)
+	}
+	db := &countingHistoryReaderDB{Database: base}
+	reader := NewPersistentHistoryReader(db, nil, 7)
+	for i := 0; i < 2; i++ {
+		txNum, err := reader.stateTxNumAtBlockEnd(7)
+		if err != nil || txNum != 79 {
+			t.Fatalf("read %d txNum = %d err=%v, want 79/nil", i, txNum, err)
+		}
+		if i == 0 && db.gets == 0 {
+			t.Fatal("first tx range read did not reach storage")
+		}
+	}
+	if db.gets != 1 {
+		t.Fatalf("state tx range storage reads = %d, want 1", db.gets)
+	}
+}
+
 // historyFixture spins up an in-memory disk store and a StateDB that persists
 // through it. Each call to applyBlock mutates the state under flat temporal
 // domain capture, flushes journal changes, then Commit()s.
@@ -86,6 +117,77 @@ func (f *historyFixture) pruneHotStateDomainHistory() {
 		if err := rawdb.DeleteStateTxRange(f.disk, blockNum); err != nil {
 			f.t.Fatalf("DeleteStateTxRange block=%d: %v", blockNum, err)
 		}
+	}
+}
+
+func TestPersistentHistoryReaderBatchKVAsOf(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x90)
+	domain := kvdomains.SystemDynamicProperty
+	f.applyBlock(tcommon.Hash{1}, func(s *StateDB) {
+		s.CreateAccount(addr, corepb.AccountType_Normal)
+		for key, value := range map[string]string{"one": "one-v1", "two": "two-v1"} {
+			if err := s.SetAccountKV(addr, domain, []byte(key), []byte(value)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	f.applyBlock(tcommon.Hash{2}, func(s *StateDB) {
+		if err := s.SetAccountKV(addr, domain, []byte("one"), []byte("one-v2")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DeleteAccountKV(addr, domain, []byte("two")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetAccountKV(addr, domain, []byte("three"), []byte("three-v2")); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	reader := f.reader()
+	reader.SetHotHistoryBlockRange(1, 2)
+	got, err := reader.readStateKVBatchAsOf(addr, 0, domain, [][]byte{[]byte("one"), []byte("two"), []byte("three")}, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got["one"], []byte("one-v1")) || !bytes.Equal(got["two"], []byte("two-v1")) {
+		t.Fatalf("historical batch = %q, want block-one values", got)
+	}
+	if _, ok := got["three"]; ok || len(got) != 2 {
+		t.Fatalf("historical batch unexpectedly contains block-two creation: %q", got)
+	}
+}
+
+func TestPersistentHistoryReaderBatchKVAsOfMergesKeyedColdHistory(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	for blockNum := uint64(1); blockNum <= 2; blockNum++ {
+		if err := rawdb.WriteStateTxRange(db, blockNum, tcommon.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner := testAddr(0x91)
+	domain := kvdomains.SystemDynamicProperty
+	cold := &keyedColdHistoryStub{changes: []*rawdb.StateDomainChange{
+		{BlockNum: 2, TxNum: 2, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: 3, Domain: domain, Key: []byte("one"), PrevExists: true, Prev: []byte("one-v1")},
+		{BlockNum: 2, TxNum: 2, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: 3, Domain: domain, Key: []byte("two"), PrevExists: true, Prev: []byte("two-v1")},
+	}}
+	latest := &recordingHotStateLatestReader{kv: map[string][]byte{
+		recordingHotLatestKVKey(owner, 3, domain, []byte("one")):   []byte("one-v2"),
+		recordingHotLatestKVKey(owner, 3, domain, []byte("two")):   []byte("two-v2"),
+		recordingHotLatestKVKey(owner, 3, domain, []byte("three")): []byte("three-v2"),
+	}}
+	reader := NewPersistentHistoryReaderWithColdHistory(db, nil, 2, cold)
+	reader.latest = latest
+	reader.SetHotHistoryBlockRange(1, 2)
+	got, err := reader.readStateKVBatchAsOf(owner, 3, domain, [][]byte{[]byte("one"), []byte("two"), []byte("three")}, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got["one"], []byte("one-v1")) || !bytes.Equal(got["two"], []byte("two-v1")) || !bytes.Equal(got["three"], []byte("three-v2")) {
+		t.Fatalf("cold historical batch = %q", got)
+	}
+	if !cold.keyedCalled || cold.genericCalled || len(cold.keyedCalls) != 3 {
+		t.Fatalf("cold calls keyed=%v generic=%v count=%d, want true/false/3", cold.keyedCalled, cold.genericCalled, len(cold.keyedCalls))
 	}
 }
 
