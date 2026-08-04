@@ -63,14 +63,12 @@ func TestVMSenderRetryObservationCohort(t *testing.T) {
 		want     bool
 	}{
 		{blockNum: 0, want: false},
-		{blockNum: 64, want: true},
-		{blockNum: 128, want: false},
+		{blockNum: 64, want: false},
 		{blockNum: 192, want: false},
 		{blockNum: 256, want: true},
-		{blockNum: 320, want: true},
 		{blockNum: 512, want: true},
 		{blockNum: 1024, want: true},
-		{blockNum: 1088, want: true},
+		{blockNum: 1088, want: false},
 	}
 	for _, test := range tests {
 		if got := useVMSenderRetryObservation(test.blockNum); got != test.want {
@@ -85,11 +83,7 @@ func TestVMSenderRetryPublicationCohort(t *testing.T) {
 		want     bool
 	}{
 		{blockNum: 0, want: false},
-		{blockNum: 64, want: true},
-		{blockNum: 128, want: false},
-		{blockNum: 192, want: false},
 		{blockNum: 256, want: true},
-		{blockNum: 320, want: true},
 		{blockNum: 512, want: true},
 		{blockNum: 768, want: true},
 		{blockNum: 1_024, want: false},
@@ -102,14 +96,6 @@ func TestVMSenderRetryPublicationCohort(t *testing.T) {
 	for _, test := range tests {
 		if got := useVMSenderRetryPublication(test.blockNum); got != test.want {
 			t.Fatalf("block %d VM retry publication cohort = %t, want %t", test.blockNum, got, test.want)
-		}
-	}
-}
-
-func TestVMSenderRetryPublicationStaysDisjointFromTransferPublisher(t *testing.T) {
-	for blockNum := uint64(0); blockNum < 4*vmSenderRetryPublishInterval; blockNum += discardShadowSampleInterval {
-		if useVMSenderRetryPublication(blockNum) && useDiscardShadowAsyncRetryPublication(blockNum) {
-			t.Fatalf("block %d enables both VM and Transfer retry publishers", blockNum)
 		}
 	}
 }
@@ -369,6 +355,15 @@ func TestAsyncRetryFrozenRawViewRejectsLiveFallback(t *testing.T) {
 	}
 	if frozen.misses != 1 {
 		t.Fatalf("frozen misses = %d, want 1", frozen.misses)
+	}
+	if frozen.lastMissFamily != int64(rawdb.PhysicalKeyFamilyOther) || frozen.lastMissLength != int64(len("uncaptured")) {
+		t.Fatalf("last miss family/length = %d/%d, want other/%d", frozen.lastMissFamily, frozen.lastMissLength, len("uncaptured"))
+	}
+	if got := uint64(frozen.lastMissPrefix); got != binary.BigEndian.Uint64([]byte("uncaptur")) {
+		t.Fatalf("last miss prefix = %x, want %x", got, []byte("uncaptur"))
+	}
+	if got := uint64(frozen.lastMissSuffix); got != binary.BigEndian.Uint64([]byte("captured")) {
+		t.Fatalf("last miss suffix = %x, want %x", got, []byte("captured"))
 	}
 }
 

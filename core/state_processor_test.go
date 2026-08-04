@@ -579,7 +579,7 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 	}
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
-			Number: int64(vmSenderRetryPublishInterval + vmSenderRetryCoScheduleOffset), Timestamp: 33_000,
+			Number: int64(vmSenderRetryPublishInterval + vmSenderRetryObserveInterval), Timestamp: 33_000,
 		}},
 		Transactions: transactionProtos,
 	})

@@ -2963,12 +2963,21 @@ retry launch work accounted for 0.04 CPU-seconds (0.18%). The complete sampled
 discard-shadow family accounted for 0.48 CPU-seconds (2.12%), dominated by
 0.43 CPU-seconds of the existing block-start sender-chain preexecution; the
 canonical retry publisher remained below an individual 10 ms sample. This
-satisfies P4.58. The next canary should add one VM retry residue that co-runs
-with the Transfer async scheduler but remains disjoint from the Transfer
-publisher, proving queue competition and version arbitration before all sampled
-cohorts are enabled.
+clean 180-second window was sufficient to continue diagnosis but not to close
+P4.58: the same process's longer window later reached more than 149 observer
+cohorts and reported three execution-stage failures paired exactly with three
+additional frozen raw misses. All 28 results that did enter the publisher still
+matched their post-publication WriteSets, with zero publisher error or resource
+fallback, but safe serial fallback does not satisfy the zero-error gate.
 
-#### P4.59: First co-scheduled VM retry cohort
+The BLOCKHASH fix therefore removed the original contract-ret signature but
+did not cover every conditional raw dependency. P4.58 is reopened. The next
+diagnostic records the last missing key's schema family, length, and first/last
+eight bytes without weakening the frozen view. VM observation remains on the
+residue-zero Transfer reference cohort until that key is classified and a
+longer zero-error gate passes.
+
+#### P4.59: First co-scheduled VM retry cohort (held)
 
 The next canary adds `block % 256 == 64` to VM retry observation and
 publication. The existing residue-zero cohort runs beside the synchronous
@@ -2985,9 +2994,13 @@ serial TransactionInfo, resource state, balances, and final root. Cohort tests
 enumerate the new observation/publication residues and prove VM and Transfer
 retry publishers remain disjoint over four complete 1024-block periods. The
 integration test passed 20 repeated runs and three race-enabled runs; the full
-suite, `go vet`, native build, and Linux/amd64 build also passed. Production
-admission requires non-zero audited VM publication, zero mismatch/error or
-resource fallback, and bounded VM/Transfer queue and CPU growth.
+suite, `go vet`, native build, and Linux/amd64 build also passed. The cohort was
+not admitted: P4.58's longer window exposed the remaining frozen-raw miss after
+this implementation was pushed, so the follow-up restores the residue-zero
+baseline before deployment acceptance. Production admission remains blocked on
+a longer P4.58 zero-error gate, followed by non-zero audited co-scheduled VM
+publication, zero mismatch/error or resource fallback, and bounded VM/Transfer
+queue and CPU growth.
 
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 

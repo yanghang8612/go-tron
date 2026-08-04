@@ -26,10 +26,10 @@ import (
 const (
 	discardShadowSampleInterval     = uint64(64)
 	discardShadowAsyncRetryInterval = uint64(256)
-	// Add the first co-scheduled VM retry cohort at residue 64. Residue zero
-	// remains the synchronous Transfer-reference cohort; residue 64 exercises
-	// both async schedulers but is disjoint from the Transfer publisher at 192.
-	vmSenderRetryCoScheduleOffset = discardShadowSampleInterval
+	// Keep VM retry incarnations on the synchronous Transfer-reference cohort
+	// until the longer frozen-raw gate is clean. This avoids adding a second
+	// background retry family while the remaining raw capability is classified.
+	vmSenderRetryObserveInterval = discardShadowAsyncRetryInterval
 	// Publish the three non-zero residues of the proven async VM retry cohort.
 	// Residue zero remains assigned to the independent block-start VM publisher,
 	// so every canonical result is attributable to exactly one path.
@@ -65,11 +65,7 @@ func useVMSenderChainPublication(blockNum uint64) bool {
 }
 
 func useVMSenderRetryObservation(blockNum uint64) bool {
-	if blockNum == 0 || blockNum%discardShadowSampleInterval != 0 {
-		return false
-	}
-	residue := blockNum % discardShadowAsyncRetryInterval
-	return residue == discardShadowAsyncRetryReferenceOffset || residue == vmSenderRetryCoScheduleOffset
+	return blockNum > 0 && blockNum%discardShadowSampleInterval == 0 && blockNum%vmSenderRetryObserveInterval == 0
 }
 
 func useVMSenderRetryPublication(blockNum uint64) bool {
@@ -323,6 +319,10 @@ var (
 	parallelVMAsyncRetryQueueWaitNanosCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/queue/wait_nanos", nil)
 	parallelVMAsyncRetryRawKeysCounter               = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/raw/keys", nil)
 	parallelVMAsyncRetryRawMissCounter               = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/raw/misses", nil)
+	parallelVMAsyncRetryRawMissFamilyGauge           = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/raw/last_miss/family", nil)
+	parallelVMAsyncRetryRawMissLengthGauge           = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/raw/last_miss/length", nil)
+	parallelVMAsyncRetryRawMissPrefixGauge           = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/raw/last_miss/prefix_u64", nil)
+	parallelVMAsyncRetryRawMissSuffixGauge           = metrics.NewRegisteredGauge("core/parallel_vm/retry/async/raw/last_miss/suffix_u64", nil)
 	parallelVMAsyncRetryVersionCellsCounter          = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/version/cells", nil)
 	parallelVMAsyncRetryDispatchNanosCounter         = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/dispatch_nanos", nil)
 	parallelVMAsyncRetryRawFreezeNanosCounter        = metrics.NewRegisteredCounter("core/parallel_vm/retry/async/raw/freeze_nanos", nil)
@@ -478,6 +478,25 @@ type discardShadowFrozenKV struct {
 	present         map[string]bool
 	blockHashReader rawdb.BlockHashReaderStrict
 	misses          int64
+	lastMissFamily  int64
+	lastMissLength  int64
+	lastMissPrefix  int64
+	lastMissSuffix  int64
+}
+
+func (db *discardShadowFrozenKV) recordMiss(key []byte) {
+	db.misses++
+	db.lastMissFamily = int64(rawdb.ClassifyPhysicalKeyString(string(key)))
+	db.lastMissLength = int64(len(key))
+	var prefix, suffix [8]byte
+	copy(prefix[:], key)
+	tail := key
+	if len(tail) > len(suffix) {
+		tail = tail[len(tail)-len(suffix):]
+	}
+	copy(suffix[:], tail)
+	db.lastMissPrefix = int64(binary.BigEndian.Uint64(prefix[:]))
+	db.lastMissSuffix = int64(binary.BigEndian.Uint64(suffix[:]))
 }
 
 func (db *discardShadowFrozenKV) Has(key []byte) (bool, error) {
@@ -486,7 +505,7 @@ func (db *discardShadowFrozenKV) Has(key []byte) (bool, error) {
 	}
 	present, ok := db.present[string(key)]
 	if !ok {
-		db.misses++
+		db.recordMiss(key)
 		return false, errDiscardShadowFrozenRawMiss
 	}
 	return present, nil
@@ -499,7 +518,7 @@ func (db *discardShadowFrozenKV) Get(key []byte) ([]byte, error) {
 	keyString := string(key)
 	present, ok := db.present[keyString]
 	if !ok {
-		db.misses++
+		db.recordMiss(key)
 		return nil, errDiscardShadowFrozenRawMiss
 	}
 	if !present {
@@ -835,6 +854,10 @@ type discardShadowSenderRetryStats struct {
 	actualFinishErrors  int64
 	actualRawKeys       int64
 	actualRawMisses     int64
+	actualRawMissFamily int64
+	actualRawMissLength int64
+	actualRawMissPrefix int64
+	actualRawMissSuffix int64
 	actualVersionCells  int64
 	actualDispatchNs    int64
 	actualPrefixNs      int64
@@ -859,6 +882,10 @@ type discardShadowAsyncRetryEvent struct {
 	done               bool
 	nanos              int64
 	rawMisses          int64
+	rawMissFamily      int64
+	rawMissLength      int64
+	rawMissPrefix      int64
+	rawMissSuffix      int64
 	superseded         int64
 	dropped            int64
 	prefixAdvances     int64
@@ -2534,6 +2561,8 @@ func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardSh
 		}
 		events <- discardShadowAsyncRetryEvent{
 			runner: runner, done: true, nanos: time.Since(started).Nanoseconds(), rawMisses: request.frozenRaw.misses,
+			rawMissFamily: request.frozenRaw.lastMissFamily, rawMissLength: request.frozenRaw.lastMissLength,
+			rawMissPrefix: request.frozenRaw.lastMissPrefix, rawMissSuffix: request.frozenRaw.lastMissSuffix,
 			superseded: superseded, dropped: dropped, sharedState: true, sharedStateCopyNs: copyNanos,
 		}
 	}()
@@ -2594,6 +2623,12 @@ func (retry *discardShadowSenderRetry) consumeAsyncEvent(event discardShadowAsyn
 		retry.stats.actualExecutionNs += event.nanos
 		retry.stats.executionNanos += event.nanos
 		retry.stats.actualRawMisses += event.rawMisses
+		if event.rawMisses > 0 {
+			retry.stats.actualRawMissFamily = event.rawMissFamily
+			retry.stats.actualRawMissLength = event.rawMissLength
+			retry.stats.actualRawMissPrefix = event.rawMissPrefix
+			retry.stats.actualRawMissSuffix = event.rawMissSuffix
+		}
 		return
 	}
 	if event.result == nil {
@@ -3107,6 +3142,12 @@ func recordVMAsyncSenderRetryStats(stats discardShadowSenderRetryStats) {
 	parallelVMAsyncRetryQueueWaitNanosCounter.Inc(stats.actualQueueWaitNs)
 	parallelVMAsyncRetryRawKeysCounter.Inc(stats.actualRawKeys)
 	parallelVMAsyncRetryRawMissCounter.Inc(stats.actualRawMisses)
+	if stats.actualRawMisses > 0 {
+		parallelVMAsyncRetryRawMissFamilyGauge.Update(stats.actualRawMissFamily)
+		parallelVMAsyncRetryRawMissLengthGauge.Update(stats.actualRawMissLength)
+		parallelVMAsyncRetryRawMissPrefixGauge.Update(stats.actualRawMissPrefix)
+		parallelVMAsyncRetryRawMissSuffixGauge.Update(stats.actualRawMissSuffix)
+	}
 	parallelVMAsyncRetryVersionCellsCounter.Inc(stats.actualVersionCells)
 	parallelVMAsyncRetryDispatchNanosCounter.Inc(stats.actualDispatchNs)
 	parallelVMAsyncRetryRawFreezeNanosCounter.Inc(stats.actualRawFreezeNs)

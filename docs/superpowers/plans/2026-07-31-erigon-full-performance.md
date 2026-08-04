@@ -268,9 +268,11 @@
   publisher after the async gate passes.
 - [x] Expand async VM retry publication to all three non-zero 256-block
   residues, keeping the 1024-block residue-zero reference publisher disjoint.
-- [x] Run the widened async VM retry publication gate with non-zero audited
+- [ ] Run the widened async VM retry publication gate with non-zero audited
   publications and zero mismatch/error/resource/preflight fallback.
-- [x] Add one co-scheduled VM retry residue on Transfer-async blocks while
+- [ ] Classify the remaining frozen raw miss without allowing background
+  retries to fall through to the live block buffer.
+- [ ] Add one co-scheduled VM retry residue on Transfer-async blocks while
   keeping the VM and Transfer canonical publishers disjoint.
 - [ ] Run the co-scheduled retry gate with non-zero audited VM publication,
   zero mismatch/error/fallback, and bounded queue/CPU growth.
