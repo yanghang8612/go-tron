@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 // baseReadCacheShardCount matches the overlay layer sharding. Both caches serve
@@ -326,43 +328,69 @@ func newBaseReadCacheWithTrunk(sizeBytes, trunkDepth int, flushAdmissionPrefix .
 }
 
 func (c *baseReadCache) isOtherKeyBytes(key []byte) bool {
-	if c == nil || c.flushAdmissionPrefix == "" || len(key) < len(c.flushAdmissionPrefix) {
-		return c != nil && c.flushAdmissionPrefix != ""
-	}
-	for i := range c.flushAdmissionPrefix {
-		if key[i] != c.flushAdmissionPrefix[i] {
-			return true
-		}
-	}
-	return false
+	_, commitment := c.commitmentKeyDepthBytes(key)
+	return c != nil && c.flushAdmissionPrefix != "" && !commitment
 }
 
 func (c *baseReadCache) isOtherKeyString(key string) bool {
-	return c != nil && c.flushAdmissionPrefix != "" && !strings.HasPrefix(key, c.flushAdmissionPrefix)
+	_, commitment := c.commitmentKeyDepthString(key)
+	return c != nil && c.flushAdmissionPrefix != "" && !commitment
 }
 
 func (c *baseReadCache) isCommitmentTrunkKey(key []byte) bool {
-	if c == nil || c.trunkDepth < 0 || c.flushAdmissionPrefix == "" || len(key) < len(c.flushAdmissionPrefix) {
-		return false
-	}
-	for i := range c.flushAdmissionPrefix {
-		if key[i] != c.flushAdmissionPrefix[i] {
-			return false
-		}
-	}
-	return len(key)-len(c.flushAdmissionPrefix) <= c.trunkDepth
+	depth, ok := c.commitmentKeyDepthBytes(key)
+	return ok && c.trunkDepth >= 0 && depth <= c.trunkDepth
 }
 
 func (c *baseReadCache) isCommitmentWindowKey(key []byte) bool {
-	if c == nil || c.trunkDepth < 0 || c.flushAdmissionPrefix == "" || len(key) < len(c.flushAdmissionPrefix) {
-		return false
+	depth, ok := c.commitmentKeyDepthBytes(key)
+	return ok && c.trunkDepth >= 0 && depth > c.trunkDepth
+}
+
+// commitmentKeyDepthBytes recognizes both the complete legacy branch table and
+// generation-qualified hot deltas when the cache is configured for the staged
+// commitment family. The eight generation bytes are schema, not trie depth.
+func (c *baseReadCache) commitmentKeyDepthBytes(key []byte) (int, bool) {
+	if c == nil || c.flushAdmissionPrefix == "" {
+		return 0, false
 	}
-	for i := range c.flushAdmissionPrefix {
-		if key[i] != c.flushAdmissionPrefix[i] {
-			return false
+	if c.flushAdmissionPrefix == rawdb.CommitmentBranchKeyPrefix {
+		legacy := []byte(rawdb.CommitmentBranchKeyPrefix)
+		if bytes.HasPrefix(key, legacy) {
+			return len(key) - len(legacy), true
 		}
+		delta := []byte(rawdb.CommitmentBranchDeltaKeyPrefix)
+		schemaLen := len(delta) + 8
+		if len(key) >= schemaLen && bytes.HasPrefix(key, delta) {
+			return len(key) - schemaLen, true
+		}
+		return 0, false
 	}
-	return len(key)-len(c.flushAdmissionPrefix) > c.trunkDepth
+	prefix := []byte(c.flushAdmissionPrefix)
+	if !bytes.HasPrefix(key, prefix) {
+		return 0, false
+	}
+	return len(key) - len(prefix), true
+}
+
+func (c *baseReadCache) commitmentKeyDepthString(key string) (int, bool) {
+	if c == nil || c.flushAdmissionPrefix == "" {
+		return 0, false
+	}
+	if c.flushAdmissionPrefix == rawdb.CommitmentBranchKeyPrefix {
+		if strings.HasPrefix(key, rawdb.CommitmentBranchKeyPrefix) {
+			return len(key) - len(rawdb.CommitmentBranchKeyPrefix), true
+		}
+		schemaLen := len(rawdb.CommitmentBranchDeltaKeyPrefix) + 8
+		if len(key) >= schemaLen && strings.HasPrefix(key, rawdb.CommitmentBranchDeltaKeyPrefix) {
+			return len(key) - schemaLen, true
+		}
+		return 0, false
+	}
+	if !strings.HasPrefix(key, c.flushAdmissionPrefix) {
+		return 0, false
+	}
+	return len(key) - len(c.flushAdmissionPrefix), true
 }
 
 // getWithEpoch returns the key's invalidation-slot generation on a miss. A miss
@@ -515,15 +543,8 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 // flat-latest cache hits shareable while commitment branches gain safe in-place
 // flush refreshes.
 func (c *baseReadCache) scopedRefreshKey(key []byte) bool {
-	if c == nil || c.flushAdmissionPrefix == "" || len(key) < len(c.flushAdmissionPrefix) {
-		return false
-	}
-	for i := range c.flushAdmissionPrefix {
-		if key[i] != c.flushAdmissionPrefix[i] {
-			return false
-		}
-	}
-	return true
+	_, ok := c.commitmentKeyDepthBytes(key)
+	return ok
 }
 
 func (c *baseReadCache) advanceVersion() uint64 {
@@ -711,8 +732,8 @@ func (c *baseReadCache) setFlushedAt(key string, value []byte, shard uint32) {
 func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, value []byte) {
 	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	old, cached := s.entries[key]
-	if !cached && charge <= s.limit && c.flushAdmissionPrefix != "" &&
-		strings.HasPrefix(key, c.flushAdmissionPrefix) && s.admitObservedString(key, false) {
+	_, commitment := c.commitmentKeyDepthString(key)
+	if !cached && charge <= s.limit && commitment && s.admitObservedString(key, false) {
 		// The first durable read already paid for this value and established
 		// frequency evidence. The successful canonical flush supplies the
 		// second observation and a newer immutable value, so retain it now

@@ -2,8 +2,10 @@ package snapshots
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -280,6 +282,43 @@ func TestCommitmentBranchRidesLatestBuild(t *testing.T) {
 	}
 	if value, ok, err := mgr.GetCommitmentBranch([]byte{15, 15, 15}, 100); err != nil || ok || value != nil {
 		t.Fatalf("GetCommitmentBranch(missing) = %x ok=%v err=%v", value, ok, err)
+	}
+
+	view, ok, err := mgr.OpenCommitmentBranchSnapshot(150)
+	if err != nil || !ok {
+		t.Fatalf("OpenCommitmentBranchSnapshot(150) = ok=%v err=%v", ok, err)
+	}
+	if got := view.SnapshotTxNum(); got != 100 {
+		t.Fatalf("point view txNum = %d, want 100", got)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for worker := 0; worker < 16; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for k, wantValue := range want {
+				gotValue, found, err := view.Get([]byte(k))
+				if err != nil || !found || !bytes.Equal(gotValue, wantValue) {
+					errs <- fmt.Errorf("point view Get(%x) = %x found=%v err=%v, want %x", []byte(k), gotValue, found, err, wantValue)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if err := view.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := view.Get(nil); err == nil {
+		t.Fatal("closed commitment point view accepted a read")
+	}
+	if view, ok, err := mgr.OpenCommitmentBranchSnapshot(99); err != nil || ok || view != nil {
+		t.Fatalf("OpenCommitmentBranchSnapshot(before baseline) = view=%v ok=%v err=%v", view, ok, err)
 	}
 }
 

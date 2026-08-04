@@ -2,11 +2,14 @@ package blockbuffer
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"unsafe"
+
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 var baseReadCacheEntryBenchmarkSink *baseReadCacheEntry
@@ -102,6 +105,44 @@ func TestBaseReadCache_CommitmentTrunkAdmitsOnceAndSurvivesTailChurn(t *testing.
 	c.del(trunkKey)
 	if s.trunkUsed != 0 || s.entries[string(trunkKey)] != nil {
 		t.Fatalf("deleted trunk retained accounting=%d entry=%p", s.trunkUsed, s.entries[string(trunkKey)])
+	}
+}
+
+func TestBaseReadCache_CommitmentDeltaGenerationIsSchemaNotDepth(t *testing.T) {
+	c := newBaseReadCacheWithTrunk(1<<20, 4, rawdb.CommitmentBranchKeyPrefix)
+	deltaSchema := make([]byte, len(rawdb.CommitmentBranchDeltaKeyPrefix)+8)
+	copy(deltaSchema, rawdb.CommitmentBranchDeltaKeyPrefix)
+	binary.BigEndian.PutUint64(deltaSchema[len(rawdb.CommitmentBranchDeltaKeyPrefix):], 17)
+
+	for _, test := range []struct {
+		name  string
+		key   []byte
+		depth int
+		trunk bool
+	}{
+		{name: "legacy root", key: []byte(rawdb.CommitmentBranchKeyPrefix), depth: 0, trunk: true},
+		{name: "legacy depth four", key: append([]byte(rawdb.CommitmentBranchKeyPrefix), 1, 2, 3, 4), depth: 4, trunk: true},
+		{name: "delta root", key: append([]byte(nil), deltaSchema...), depth: 0, trunk: true},
+		{name: "delta depth four", key: append(append([]byte(nil), deltaSchema...), 1, 2, 3, 4), depth: 4, trunk: true},
+		{name: "delta depth five", key: append(append([]byte(nil), deltaSchema...), 1, 2, 3, 4, 5), depth: 5, trunk: false},
+	} {
+		depth, ok := c.commitmentKeyDepthBytes(test.key)
+		if !ok || depth != test.depth {
+			t.Fatalf("%s byte depth = %d ok=%v, want %d,true", test.name, depth, ok, test.depth)
+		}
+		stringDepth, stringOK := c.commitmentKeyDepthString(string(test.key))
+		if !stringOK || stringDepth != test.depth {
+			t.Fatalf("%s string depth = %d ok=%v, want %d,true", test.name, stringDepth, stringOK, test.depth)
+		}
+		if got := c.isCommitmentTrunkKey(test.key); got != test.trunk {
+			t.Fatalf("%s trunk = %v, want %v", test.name, got, test.trunk)
+		}
+		if c.isOtherKeyBytes(test.key) || c.isOtherKeyString(string(test.key)) {
+			t.Fatalf("%s classified as non-commitment", test.name)
+		}
+	}
+	if _, ok := c.commitmentKeyDepthBytes([]byte(rawdb.CommitmentBranchBaseKey)); ok {
+		t.Fatal("base marker classified as branch row")
 	}
 }
 

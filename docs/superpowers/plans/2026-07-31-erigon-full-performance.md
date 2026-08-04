@@ -197,7 +197,7 @@
 - [x] Replace the JSON CommitmentBranch checkpoint with a sorted immutable
   binary segment, ordinal accessor, sparse B-tree, and indexed manager point
   reads; reject the lane-decoded-cache prototype on measured memory/latency.
-- [ ] Add a persistently opened immutable commitment view plus versioned hot
+- [x] Add a persistently opened immutable commitment view plus versioned hot
   overrides/tombstones, retaining hash-bound crash repair and reorg isolation.
 - [ ] Publish/merge immutable commitment deltas and clear covered hot branch
   rows only after manifest verification, then run the write-amplification gate.

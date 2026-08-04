@@ -2315,6 +2315,33 @@ overrides/tombstones in Pebble, read misses from a persistently opened segment
 view, merge bounded delta segments in the background, and clear hot branch rows
 only after hash-bound publication and crash-safe coverage verification.
 
+The read/write half of that boundary is now implemented. A fixed-size,
+versioned `CommitmentBranchBase` marker binds an immutable branch snapshot by
+txNum and commitment root to a non-zero hot generation. Marker-aware folds read
+the generation delta first, treat an existing zero-length value as a tombstone,
+and fall back to a persistently opened `.seg/.bt` point view only on physical
+absence. The ordered 16-lane pipeline shares one concurrent `ReaderAt` view for
+its full lifetime; serial folds close their view after use. Root, snapshot tx,
+and B-tree availability are verified before activation, while an unmarked
+database retains the original complete-hot-table path exactly.
+
+All branch puts and sibling batches use the generation-qualified namespace.
+Deletes over an immutable baseline write tombstones so cold branches cannot be
+resurrected. Full rebuild invalidates the marker before removing the delta,
+closes the cold view, and reconstructs a complete legacy table; mutable-state
+reset removes every delta generation and the singleton marker. The
+blockbuffer's fixed trunk/window cache recognizes the eight-byte generation as
+schema rather than trie depth. Race tests cover 16 concurrent immutable reads,
+multiple ordered in-flight blocks, tombstone shadowing, rebuild cleanup, and an
+inverse-delta unwind followed by forward-root equivalence. Production counters
+separate base opens, hot-delta hits, tombstones, cold hits, and cold misses.
+
+This slice deliberately does not yet publish the marker from the background
+latest builder. Live rotation must first redirect writers to a new generation
+before scanning the prior complete table, then publish and verify the immutable
+baseline before reclaiming that table. That rotation/merge lifecycle and its
+write-amplification gate are the next P4.48 slice.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

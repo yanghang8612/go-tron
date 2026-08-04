@@ -3998,6 +3998,10 @@ func NewOrderedCommitmentPipeline(index statedomains.CommitmentDB) (*OrderedComm
 	return statedomains.NewOrderedCommitmentPipeline(index)
 }
 
+func NewOrderedCommitmentPipelineWithRepair(index statedomains.CommitmentDB, repair statedomains.CommitmentSnapshotRepair) (*OrderedCommitmentPipeline, error) {
+	return statedomains.NewOrderedCommitmentPipelineWithRepair(index, repair)
+}
+
 // SubmitOrdered hands this captured block to the persistent 16-lane ordered
 // commitment scheduler. The CapturedCommit retains its update backing until the
 // caller receives the result and calls Release (the core commit worker does so
@@ -4012,6 +4016,15 @@ func (c *CapturedCommit) SubmitOrdered(pipeline *OrderedCommitmentPipeline, inde
 	return pipeline.Submit(index, c.batch.updates)
 }
 
+// Repair returns the immutable snapshot binding captured with this block. The
+// commit worker uses it when opening or reseeding a persistent ordered pipeline.
+func (c *CapturedCommit) Repair() statedomains.CommitmentSnapshotRepair {
+	if c == nil {
+		return statedomains.CommitmentSnapshotRepair{}
+	}
+	return c.repair
+}
+
 // Fold runs the captured commitment fold against index and returns the root.
 // A CapturedCommit is single-use; Fold releases its transient update/key
 // storage on both success and failure.
@@ -4020,9 +4033,19 @@ func (c *CapturedCommit) Fold(index statedomains.CommitmentDB) (tcommon.Hash, er
 		return tcommon.Hash{}, errors.New("state: captured commitment already consumed")
 	}
 	defer c.Release()
-	store := statedomains.NewStagedCommitmentStoreForAsyncFold(index)
-	root, err := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, c.batch.updates, c.repair)
-	return tcommon.Hash(root), err
+	store, err := statedomains.NewStagedCommitmentStoreWithRepair(index, c.repair, true)
+	if err != nil {
+		return tcommon.Hash{}, err
+	}
+	root, applyErr := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, c.batch.updates, c.repair)
+	closeErr := statedomains.CloseLatestCommitmentStore(store)
+	if applyErr != nil {
+		return tcommon.Hash{}, applyErr
+	}
+	if closeErr != nil {
+		return tcommon.Hash{}, closeErr
+	}
+	return tcommon.Hash(root), nil
 }
 
 // Release drops a captured fold without running it. It is idempotent so the
@@ -4079,16 +4102,19 @@ func (s *StateDB) commitmentRepair() statedomains.CommitmentSnapshotRepair {
 // to the committing block's in-flight layer, so the fold writes that block's
 // commitment-branch rows while the foreground writes the next block's layer.
 func FoldLatestCommitment(index statedomains.CommitmentDB, updates []rawdb.StateCommitmentUpdate, repair statedomains.CommitmentSnapshotRepair) (tcommon.Hash, error) {
-	store := statedomains.NewStagedCommitmentStore(index)
-	root, err := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, updates, repair)
-	return tcommon.Hash(root), err
-}
-
-// latestCommitmentStore returns the commitment store for this StateDB's database.
-// The Erigon-style staged store is the only engine; the legacy binary-radix store
-// has been retired.
-func (s *StateDB) latestCommitmentStore(index statedomains.CommitmentDB) statedomains.LatestCommitmentStore {
-	return statedomains.NewStagedCommitmentStore(index)
+	store, err := statedomains.NewStagedCommitmentStoreWithRepair(index, repair, false)
+	if err != nil {
+		return tcommon.Hash{}, err
+	}
+	root, applyErr := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, updates, repair)
+	closeErr := statedomains.CloseLatestCommitmentStore(store)
+	if applyErr != nil {
+		return tcommon.Hash{}, applyErr
+	}
+	if closeErr != nil {
+		return tcommon.Hash{}, closeErr
+	}
+	return tcommon.Hash(root), nil
 }
 
 // SetAccountName sets the account name.

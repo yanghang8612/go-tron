@@ -13,6 +13,16 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	if err := WriteCommitmentBranch(db, []byte{0x0a, 0x0b}, []byte{0x00, 0x00}); err != nil {
 		t.Fatal(err)
 	}
+	delta, err := NewCommitmentBranchDeltaKeyspace(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := delta.Write(db, []byte{0x0c}, []byte{0x01}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCommitmentBranchBase(db, CommitmentBranchBase{Generation: 3, SnapshotTxNum: 10, Root: common.Hash{0x11}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := WriteLatestDomainCommitmentRoot(db, common.Hash{0x11}); err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +52,19 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	}
 	if branchCount != 0 {
 		t.Fatalf("commitment branch rows survived ResetMutableState: %d", branchCount)
+	}
+	deltaCount := 0
+	if err := delta.Iterate(db, func(_, _ []byte) (bool, error) {
+		deltaCount++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if deltaCount != 0 {
+		t.Fatalf("commitment delta rows survived ResetMutableState: %d", deltaCount)
+	}
+	if _, ok, err := ReadCommitmentBranchBase(db); err != nil || ok {
+		t.Fatalf("commitment base survived reset: ok=%v err=%v", ok, err)
 	}
 	// Sanity: the root row and latest row are cleared too (already covered, just assert).
 	if _, ok, err := ReadLatestDomainCommitmentRoot(db); err != nil || ok {

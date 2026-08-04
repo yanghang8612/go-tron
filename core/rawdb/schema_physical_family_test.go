@@ -8,6 +8,8 @@ func TestClassifyPhysicalKeyString(t *testing.T) {
 		want PhysicalKeyFamily
 	}{
 		{"state-commitment-branch-v1-\x01\x02", PhysicalKeyFamilyCommitment},
+		{"state-commitment-branch-delta-v1-\x00\x00\x00\x00\x00\x00\x00\x01\x01\x02", PhysicalKeyFamilyCommitment},
+		{"state-commitment-branch-base-v1", PhysicalKeyFamilyCommitment},
 		{"state-commitment-domain-v1-root", PhysicalKeyFamilyCommitment},
 		{"state-account-latest-v1-owner", PhysicalKeyFamilyAccountLatest},
 		{"state-kv-latest-v2-owner", PhysicalKeyFamilyKVLatest},

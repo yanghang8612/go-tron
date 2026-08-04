@@ -1,6 +1,7 @@
 package domains
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -16,6 +17,9 @@ import (
 // hex-trie nibble path (one byte per nibble, nil for the root).
 type rawdbBranchStore struct {
 	db                 CommitmentDB
+	keyspace           rawdb.CommitmentBranchKeyspace
+	cold               pointread.CommitmentBranchSnapshotView
+	coldOwned          bool
 	ownedValue         bool
 	readParentBranches bool
 	parentView         pointread.CommitmentParentView
@@ -32,9 +36,11 @@ type rawdbBranchStore struct {
 // The callback is strictly synchronous, so dst can be cleared and the context
 // returned immediately after the view call.
 type branchDecodeView struct {
-	dst     *BranchData
-	arena   *[]byte
-	consume func(encoded []byte, stable bool) error
+	dst            *BranchData
+	arena          *[]byte
+	tombstone      bool
+	allowTombstone bool
+	consume        func(encoded []byte, stable bool) error
 }
 
 var branchDecodeViewPool = sync.Pool{
@@ -46,6 +52,11 @@ var branchDecodeViewPool = sync.Pool{
 }
 
 func (v *branchDecodeView) decode(encoded []byte, stable bool) error {
+	if len(encoded) == 0 && v.allowTombstone {
+		*v.dst = BranchData{}
+		v.tombstone = true
+		return nil
+	}
 	if stable {
 		// Immutable overlay values and generic owned Get results live for the
 		// full fold descent, so leaf keys may alias them directly.
@@ -145,7 +156,59 @@ func returnBranchEncodingPlans(plansPtr *[]branchEncodingPlan) {
 }
 
 func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
-	return &rawdbBranchStore{db: db, ownedValue: rawdb.SupportsCommitmentBranchOwnedValue(db)}
+	return newRawdbBranchStoreInKeyspace(db, rawdb.LegacyCommitmentBranchKeyspace(), nil, false)
+}
+
+func newRawdbBranchStoreInKeyspace(db CommitmentDB, keyspace rawdb.CommitmentBranchKeyspace, cold pointread.CommitmentBranchSnapshotView, coldOwned bool) *rawdbBranchStore {
+	return &rawdbBranchStore{
+		db:         db,
+		keyspace:   keyspace,
+		cold:       cold,
+		coldOwned:  coldOwned,
+		ownedValue: rawdb.SupportsCommitmentBranchOwnedValue(db),
+	}
+}
+
+func newRawdbBranchStoreWithRepair(db CommitmentDB, repair CommitmentSnapshotRepair) (*rawdbBranchStore, error) {
+	base, ok, err := rawdb.ReadCommitmentBranchBase(db)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return newRawdbBranchStore(db), nil
+	}
+	if repair.Source == nil {
+		return nil, errors.New("domains: commitment branch base requires snapshot source")
+	}
+	snapshotRoot, rootOK, err := repair.Source.GetCommitmentRoot(base.SnapshotTxNum)
+	if err != nil {
+		return nil, fmt.Errorf("domains: read commitment branch base root: %w", err)
+	}
+	if !rootOK || snapshotRoot != base.Root {
+		return nil, fmt.Errorf("domains: commitment branch base root mismatch at tx %d", base.SnapshotTxNum)
+	}
+	viewer, ok := repair.Source.(pointread.CommitmentBranchSnapshotViewer)
+	if !ok {
+		return nil, errors.New("domains: commitment branch base requires indexed snapshot source")
+	}
+	view, ok, err := viewer.OpenCommitmentBranchSnapshot(base.SnapshotTxNum)
+	if err != nil {
+		return nil, fmt.Errorf("domains: open commitment branch base at tx %d: %w", base.SnapshotTxNum, err)
+	}
+	if !ok || view == nil {
+		return nil, fmt.Errorf("domains: commitment branch base missing at tx %d", base.SnapshotTxNum)
+	}
+	if view.SnapshotTxNum() != base.SnapshotTxNum {
+		_ = view.Close()
+		return nil, fmt.Errorf("domains: commitment branch base tx mismatch: marker %d snapshot %d", base.SnapshotTxNum, view.SnapshotTxNum())
+	}
+	keyspace, err := rawdb.NewCommitmentBranchDeltaKeyspace(base.Generation)
+	if err != nil {
+		_ = view.Close()
+		return nil, err
+	}
+	commitmentBranchBaseOpenCounter.Inc(1)
+	return newRawdbBranchStoreInKeyspace(db, keyspace, view, true), nil
 }
 
 // concurrentSiblingFlushSafe opts in only when the underlying CommitmentDB
@@ -161,12 +224,37 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 	// NoCopy avoids the per-Get defensive copy. The returned BranchData may
 	// borrow leaf-key slices from the owned/immutable encoded value; callers use
 	// it only within the synchronous fold or encode it before returning.
-	encoded, ok, err := rawdb.ReadCommitmentBranchNoCopy(s.db, prefix)
+	encoded, ok, err := s.keyspace.ReadNoCopy(s.db, prefix)
+	if err != nil {
+		return BranchData{}, false, err
+	}
+	if ok {
+		if len(encoded) == 0 && s.cold != nil {
+			commitmentBranchTombstoneCounter.Inc(1)
+			return BranchData{}, false, nil
+		}
+		if s.cold != nil {
+			commitmentBranchDeltaHitCounter.Inc(1)
+		}
+		var b BranchData
+		if err := decodeBranchDataIntoNoCopy(encoded, &b); err != nil {
+			return BranchData{}, false, err
+		}
+		return b, true, nil
+	}
+	if s.cold == nil {
+		return BranchData{}, false, nil
+	}
+	encoded, ok, err = s.cold.Get(prefix)
 	if err != nil || !ok {
+		if err == nil {
+			commitmentBranchColdMissCounter.Inc(1)
+		}
 		return BranchData{}, ok, err
 	}
+	commitmentBranchColdHitCounter.Inc(1)
 	var b BranchData
-	if err := decodeBranchDataIntoNoCopy(encoded, &b); err != nil {
+	if err := DecodeBranchDataInto(encoded, &b); err != nil {
 		return BranchData{}, false, err
 	}
 	return b, true, nil
@@ -183,29 +271,53 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 		reader = int(prefix[0])
 	}
 	decodeView.arena = s.leafKeyArenas[reader]
+	decodeView.tombstone = false
+	decodeView.allowTombstone = s.cold != nil
+	var found bool
+	var err error
 	if s.parentSession != nil {
-		found, err := rawdb.ViewCommitmentParentBranchInSession(s.parentSession, reader, prefix, decodeView.consume)
-		decodeView.dst = nil
-		decodeView.arena = nil
-		branchDecodeViewPool.Put(decodeView)
-		return found, err
+		found, err = s.keyspace.ViewParentInSession(s.parentSession, reader, prefix, decodeView.consume)
+	} else if s.parentView != nil {
+		found, err = s.keyspace.ViewParentInView(s.parentView, prefix, decodeView.consume)
+	} else if s.readParentBranches {
+		found, err = s.keyspace.ViewParentNoCopy(s.db, prefix, decodeView.consume)
+	} else {
+		found, err = s.keyspace.ViewNoCopy(s.db, prefix, decodeView.consume)
 	}
-	if s.parentView != nil {
-		found, err := rawdb.ViewCommitmentParentBranchInView(s.parentView, prefix, decodeView.consume)
-		decodeView.dst = nil
-		decodeView.arena = nil
-		branchDecodeViewPool.Put(decodeView)
-		return found, err
-	}
-	view := rawdb.ViewCommitmentBranchNoCopy
-	if s.readParentBranches {
-		view = rawdb.ViewCommitmentParentBranchNoCopy
-	}
-	found, err := view(s.db, prefix, decodeView.consume)
+	tombstone := decodeView.tombstone
 	decodeView.dst = nil
 	decodeView.arena = nil
+	decodeView.tombstone = false
+	decodeView.allowTombstone = false
 	branchDecodeViewPool.Put(decodeView)
-	return found, err
+	if err != nil {
+		return false, err
+	}
+	if found {
+		if tombstone {
+			commitmentBranchTombstoneCounter.Inc(1)
+		} else if s.cold != nil {
+			commitmentBranchDeltaHitCounter.Inc(1)
+		}
+		return !tombstone, nil
+	}
+	if s.cold == nil {
+		*dst = BranchData{}
+		return false, nil
+	}
+	encoded, ok, err := s.cold.Get(prefix)
+	if err != nil || !ok {
+		if err == nil {
+			commitmentBranchColdMissCounter.Inc(1)
+		}
+		*dst = BranchData{}
+		return ok, err
+	}
+	commitmentBranchColdHitCounter.Inc(1)
+	if err := decodeBranchDataIntoArena(encoded, dst, s.leafKeyArenas[reader]); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *rawdbBranchStore) beginParentRead() error {
@@ -264,7 +376,7 @@ func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
 	// Encode into that final immutable slice and transfer it, avoiding the
 	// scratch-to-layer copy on every branch flushed by the commitment fold.
 	if s.ownedValue {
-		return rawdb.WriteCommitmentBranchOwned(s.db, prefix, b.Encode())
+		return s.keyspace.WriteOwned(s.db, prefix, b.Encode())
 	}
 	// Reuse a pooled encode buffer. The KV writer (pebble batch or direct Put)
 	// copies the value into its own arena during the call, so the buffer is
@@ -272,7 +384,7 @@ func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
 	bp := borrowEncodeBuf()
 	defer returnEncodeBuf(bp)
 	*bp = b.EncodeTo((*bp)[:0])
-	return rawdb.WriteCommitmentBranch(s.db, prefix, *bp)
+	return s.keyspace.Write(s.db, prefix, *bp)
 }
 
 // putBranches encodes one sibling fold's final branches into a single
@@ -310,11 +422,16 @@ func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*Branc
 		arena = plan.branch.encodeToLayout(arena, plan.childBits, plan.size)
 		values[i] = arena[start:len(arena):len(arena)]
 	}
-	return rawdb.WriteCommitmentBranchesOwnedStringsWithBatchCount(s.db, keys, values, batchCount)
+	return s.keyspace.WriteOwnedStringsWithBatchCount(s.db, keys, values, batchCount)
 }
 
 func (s *rawdbBranchStore) DelBranch(prefix []byte) error {
-	return rawdb.DeleteCommitmentBranch(s.db, prefix)
+	if s.cold != nil {
+		// An explicit empty row shadows a branch that may still exist in the
+		// immutable baseline. Physical absence means "consult cold".
+		return s.keyspace.Write(s.db, prefix, []byte{})
+	}
+	return s.keyspace.Delete(s.db, prefix)
 }
 
 // clear removes every persisted branch row in the commitment-branch keyspace.
@@ -322,19 +439,35 @@ func (s *rawdbBranchStore) DelBranch(prefix []byte) error {
 // root that reflects exactly the current source rows, with no contribution from
 // branches left over from an earlier (e.g. pre-rewind) tip.
 func (s *rawdbBranchStore) clear() error {
-	var prefixes [][]byte
-	if err := rawdb.IterateCommitmentBranches(s.db, func(prefix, _ []byte) (bool, error) {
-		prefixes = append(prefixes, append([]byte(nil), prefix...))
-		return true, nil
-	}); err != nil {
+	// Invalidate the marker before dropping its delta or closing the immutable
+	// view. A crash can therefore only leave an inactive, rebuildable legacy
+	// table; it can never expose a partial delta as a complete branch tree.
+	if err := rawdb.DeleteCommitmentBranchBase(s.db); err != nil {
 		return err
 	}
-	for _, prefix := range prefixes {
-		if err := rawdb.DeleteCommitmentBranch(s.db, prefix); err != nil {
+	if s.cold != nil {
+		if err := s.keyspace.DeleteAll(s.db); err != nil {
 			return err
 		}
+		if err := s.close(); err != nil {
+			return err
+		}
+		s.keyspace = rawdb.LegacyCommitmentBranchKeyspace()
 	}
-	return nil
+	return s.keyspace.DeleteAll(s.db)
+}
+
+func (s *rawdbBranchStore) close() error {
+	if s == nil || s.cold == nil {
+		return nil
+	}
+	var err error
+	if s.coldOwned {
+		err = s.cold.Close()
+	}
+	s.cold = nil
+	s.coldOwned = false
+	return err
 }
 
 // stagedCommitmentStore is the LatestCommitmentStore implementation backed by the
@@ -376,8 +509,34 @@ func NewStagedCommitmentStoreForAsyncFold(db CommitmentDB) LatestCommitmentStore
 	return store
 }
 
+// NewStagedCommitmentStoreWithRepair opens a generation-specific hot delta
+// over its hash-bound immutable branch snapshot when a base marker is present.
+// Without a marker it is byte-for-byte equivalent to the legacy complete hot
+// table. The returned store owns any opened snapshot view and must be closed.
+func NewStagedCommitmentStoreWithRepair(db CommitmentDB, repair CommitmentSnapshotRepair, asyncParentBranches bool) (LatestCommitmentStore, error) {
+	branchStore, err := newRawdbBranchStoreWithRepair(db, repair)
+	if err != nil {
+		return nil, err
+	}
+	store := newStagedCommitmentStoreWithBranchStore(db, branchStore)
+	store.asyncParentBranches = asyncParentBranches
+	return store, nil
+}
+
+// CloseLatestCommitmentStore releases resources owned by stores constructed
+// with NewStagedCommitmentStoreWithRepair. Other implementations are a no-op.
+func CloseLatestCommitmentStore(store LatestCommitmentStore) error {
+	if closer, ok := store.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 func newStagedCommitmentStore(db CommitmentDB) *stagedCommitmentStore {
-	branchStore := newRawdbBranchStore(db)
+	return newStagedCommitmentStoreWithBranchStore(db, newRawdbBranchStore(db))
+}
+
+func newStagedCommitmentStoreWithBranchStore(db CommitmentDB, branchStore *rawdbBranchStore) *stagedCommitmentStore {
 	trie := newCommitmentTrie(branchStore)
 	// Opt into the parallel root fold for production commits. The keccak-bound
 	// fold runs single-threaded otherwise; splitting the 16 first-nibble subtries
@@ -389,6 +548,13 @@ func newStagedCommitmentStore(db CommitmentDB) *stagedCommitmentStore {
 		store: branchStore,
 		trie:  trie,
 	}
+}
+
+func (s *stagedCommitmentStore) Close() error {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	return s.store.close()
 }
 
 func (s *stagedCommitmentStore) ReadRoot() (common.Hash, bool, error) {
@@ -451,6 +617,14 @@ func (s *stagedCommitmentStore) RestoreRootFromNodes() (common.Hash, bool, error
 // re-folding, so partially-written rows from a failed restore cannot survive.
 func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapshotSource, txNum uint64, expectedRoot common.Hash) (bool, error) {
 	if source == nil || expectedRoot == (common.Hash{}) {
+		return false, nil
+	}
+	// A marker-aware store already reads this indexed snapshot in place. If its
+	// hash-bound view failed root validation, decline the copying repair and let
+	// the orchestrator rebuild from authoritative latest rows. Copying into the
+	// ignored legacy namespace could neither repair the active view nor be made
+	// crash-atomic without a separate generation switch.
+	if s.store.cold != nil {
 		return false, nil
 	}
 	branchSource, ok := source.(CommitmentBranchSnapshotSource)

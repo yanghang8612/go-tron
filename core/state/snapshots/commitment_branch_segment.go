@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -44,6 +45,57 @@ type CommitmentBranchSegment struct {
 	ref    SegmentRef
 	path   string
 	binary bool
+}
+
+// CommitmentBranchPointView owns open segment and B-tree descriptors. Both
+// lookup paths use ReaderAt exclusively, so all 16 ordered commitment lanes may
+// share one view without cursor locks or per-block open/close work.
+type CommitmentBranchPointView struct {
+	txNum         uint64
+	segment       *os.File
+	segmentHeader latestBinaryHeader
+	btree         *os.File
+	btreeHeader   latestBinaryBTreeHeader
+}
+
+var _ pointread.CommitmentBranchSnapshotView = (*CommitmentBranchPointView)(nil)
+
+func (v *CommitmentBranchPointView) Get(prefix []byte) ([]byte, bool, error) {
+	if v == nil || v.segment == nil || v.btree == nil {
+		return nil, false, errors.New("snapshots: closed commitment branch point view")
+	}
+	return readLatestBinaryValueByBTreeReaders(
+		v.segment,
+		v.segmentHeader,
+		v.btree,
+		v.btreeHeader,
+		encodeCommitmentBranchSnapshotKey(prefix),
+	)
+}
+
+func (v *CommitmentBranchPointView) SnapshotTxNum() uint64 {
+	if v == nil {
+		return 0
+	}
+	return v.txNum
+}
+
+func (v *CommitmentBranchPointView) Close() error {
+	if v == nil {
+		return nil
+	}
+	var first error
+	if v.segment != nil {
+		first = v.segment.Close()
+		v.segment = nil
+	}
+	if v.btree != nil {
+		if err := v.btree.Close(); first == nil {
+			first = err
+		}
+		v.btree = nil
+	}
+	return first
 }
 
 // BuildCommitmentBranchSegmentFromDB streams every state-commitment-branch-v1-

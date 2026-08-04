@@ -33,6 +33,7 @@ type OrderedCommitmentResult struct {
 // reads/writes (the production blockbuffer LayerView does). Close is valid only
 // after all returned result channels have completed.
 type OrderedCommitmentPipeline struct {
+	base      *rawdbBranchStore
 	lanes     [maxFoldNibbles]chan orderedCommitmentLaneTask
 	laneWG    sync.WaitGroup
 	failed    atomic.Pointer[error]
@@ -65,6 +66,14 @@ type orderedCommitmentJob struct {
 // commit worker constructs it after one ordinary fold has completed, retaining
 // the existing rebuild/snapshot-repair path for startup and corruption checks.
 func NewOrderedCommitmentPipeline(db CommitmentDB) (*OrderedCommitmentPipeline, error) {
+	return NewOrderedCommitmentPipelineWithRepair(db, CommitmentSnapshotRepair{})
+}
+
+// NewOrderedCommitmentPipelineWithRepair opens and retains an immutable branch
+// baseline for the lifetime of the 16 lane owners when the persisted base
+// marker activates one. Every submitted block writes only to that marker's hot
+// delta generation.
+func NewOrderedCommitmentPipelineWithRepair(db CommitmentDB, repair CommitmentSnapshotRepair) (*OrderedCommitmentPipeline, error) {
 	if db == nil {
 		return nil, ErrNilCommitmentStore
 	}
@@ -72,7 +81,16 @@ func NewOrderedCommitmentPipeline(db CommitmentDB) (*OrderedCommitmentPipeline, 
 	if err != nil {
 		return nil, err
 	}
-	store := newRawdbBranchStore(db)
+	store, err := newRawdbBranchStoreWithRepair(db, repair)
+	if err != nil {
+		return nil, err
+	}
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = store.close()
+		}
+	}()
 	var root BranchData
 	hasRoot, err := store.GetBranchInto(nil, &root)
 	if err != nil {
@@ -92,7 +110,7 @@ func NewOrderedCommitmentPipeline(db CommitmentDB) (*OrderedCommitmentPipeline, 
 		return nil, errors.New("domains: commitment root row missing")
 	}
 
-	p := new(OrderedCommitmentPipeline)
+	p := &OrderedCommitmentPipeline{base: store}
 	for nb := range p.lanes {
 		p.lanes[nb] = make(chan orderedCommitmentLaneTask, 16)
 		var laneRoot BranchData
@@ -101,6 +119,7 @@ func NewOrderedCommitmentPipeline(db CommitmentDB) (*OrderedCommitmentPipeline, 
 		go p.runLane(uint8(nb), laneRoot, p.lanes[nb])
 	}
 	commitmentPipelineEnabledGauge.Update(1)
+	closeOnError = false
 	return p, nil
 }
 
@@ -132,7 +151,7 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 		return completedOrderedCommitmentResult(OrderedCommitmentResult{Err: err})
 	}
 	job := &orderedCommitmentJob{
-		store:  newRawdbBranchStore(db),
+		store:  newRawdbBranchStoreInKeyspace(db, p.base.keyspace, p.base.cold, false),
 		ops:    ops,
 		stats:  stats,
 		result: make(chan OrderedCommitmentResult, 1),
@@ -336,6 +355,7 @@ func (p *OrderedCommitmentPipeline) Close() {
 			close(lane)
 		}
 		p.laneWG.Wait()
+		_ = p.base.close()
 		commitmentPipelineEnabledGauge.Update(0)
 	})
 }

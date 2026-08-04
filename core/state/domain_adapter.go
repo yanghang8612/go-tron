@@ -694,9 +694,20 @@ func (d *DomainCommitmentState) ComputeCommitment(ctx context.Context, blockNum,
 		defer batch.release()
 		updates = batch.updates
 	}
-	store := d.state.latestCommitmentStore(index)
-	root, err := statedomains.ApplyLatestCommitmentWithStore(store, updates)
-	return tcommon.Hash(root), err
+	repair := d.state.commitmentRepair()
+	store, err := statedomains.NewStagedCommitmentStoreWithRepair(index, repair, false)
+	if err != nil {
+		return tcommon.Hash{}, err
+	}
+	root, applyErr := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, updates, repair)
+	closeErr := statedomains.CloseLatestCommitmentStore(store)
+	if applyErr != nil {
+		return tcommon.Hash{}, applyErr
+	}
+	if closeErr != nil {
+		return tcommon.Hash{}, closeErr
+	}
+	return tcommon.Hash(root), nil
 }
 
 func contextError(ctx context.Context) error {

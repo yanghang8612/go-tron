@@ -41,14 +41,14 @@ func applyAccountBlock(t *testing.T, db CommitmentDB, store LatestCommitmentStor
 
 		// 2. Write the StateDomainChange for the unwind path.
 		change := &rawdb.StateDomainChange{
-			BlockNum:    blockNum,
-			Seq:         uint64(i),
-			FlatDomain:  rawdb.StateFlatDomainAccountLatest,
-			Owner:       op.owner,
-			PrevExists:  op.prevVal != nil,
-			Prev:        op.prevVal,
-			NextExists:  op.nextVal != nil,
-			Next:        op.nextVal,
+			BlockNum:   blockNum,
+			Seq:        uint64(i),
+			FlatDomain: rawdb.StateFlatDomainAccountLatest,
+			Owner:      op.owner,
+			PrevExists: op.prevVal != nil,
+			Prev:       op.prevVal,
+			NextExists: op.nextVal != nil,
+			Next:       op.nextVal,
 		}
 		if err := rawdb.WriteStateDomainChange(db, change); err != nil {
 			t.Fatalf("block %d op %d WriteStateDomainChange: %v", blockNum, i, err)
@@ -344,4 +344,65 @@ func TestUnwindCommitmentMatchesFromScratchRebuild(t *testing.T) {
 		t.Fatalf("assertion 3 (forward-commit equivalence): rewound store root %x != fresh store root %x", r1, r2)
 	}
 	t.Logf("assertion 3 PASS: forward root=%x", r1)
+}
+
+func TestUnwindCommitmentAcrossImmutableBaseDelta(t *testing.T) {
+	const (
+		baseBlock  = uint64(3)
+		txNum      = uint64(30)
+		generation = uint64(19)
+	)
+	db := rawdb.NewMemoryDatabase()
+	legacy := newStagedCommitmentStore(db)
+	currentVal := make(map[common.Address][]byte)
+	baseRoot := seedEarlyBlocks(t, db, legacy, currentVal)
+	mgr := buildManagerWithBranchSnapshot(t, db, t.TempDir(), txNum)
+	if err := rawdb.WriteCommitmentBranchBase(db, rawdb.CommitmentBranchBase{
+		Generation: generation, SnapshotTxNum: txNum, Root: baseRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.DeleteCommitmentBranches(db); err != nil {
+		t.Fatal(err)
+	}
+	repair := CommitmentSnapshotRepair{Source: mgr, TxNum: txNum}
+	store, err := NewStagedCommitmentStoreWithRepair(db, repair, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = CloseLatestCommitmentStore(store) }()
+
+	postBase := []acctOp{
+		{owner: common.Address{0x41, 1}, prevVal: currentVal[common.Address{0x41, 1}], nextVal: []byte("acct-01-v4")},
+		{owner: common.Address{0x41, 32}, prevVal: currentVal[common.Address{0x41, 32}], nextVal: nil},
+		{owner: common.Address{0x42, 1}, prevVal: nil, nextVal: []byte("new-after-base")},
+	}
+	applyAccountBlock(t, db, store, 4, postBase)
+	got, err := UnwindCommitment(db, store, 4, baseBlock, baseRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != baseRoot {
+		t.Fatalf("layered unwind root %x, want %x", got, baseRoot)
+	}
+	if base, ok, err := rawdb.ReadCommitmentBranchBase(db); err != nil || !ok || base.Generation != generation {
+		t.Fatalf("base marker after unwind = %+v ok=%v err=%v", base, ok, err)
+	}
+
+	// A subsequent forward update must start from the rewound layered state and
+	// match a conventional complete-table replay at the same base block.
+	freshDB := rawdb.NewMemoryDatabase()
+	freshStore := newStagedCommitmentStore(freshDB)
+	freshValues := make(map[common.Address][]byte)
+	if root := seedEarlyBlocks(t, freshDB, freshStore, freshValues); root != baseRoot {
+		t.Fatalf("fresh base root %x, want %x", root, baseRoot)
+	}
+	next := []acctOp{{
+		owner: common.Address{0x41, 10}, prevVal: []byte("acct-10-v1"), nextVal: []byte("acct-10-forward"),
+	}}
+	layeredRoot := applyAccountBlock(t, db, store, 5, next)
+	freshRoot := applyAccountBlock(t, freshDB, freshStore, 5, next)
+	if layeredRoot != freshRoot {
+		t.Fatalf("forward root after layered unwind %x, want %x", layeredRoot, freshRoot)
+	}
 }

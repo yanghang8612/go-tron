@@ -724,6 +724,17 @@ func readLatestBinaryValueByBTreeFile(dir, path string, ref SegmentRef, btreeRef
 	if err := validateLatestBinaryCompanionMatchesSegment(path, ref, segHeader, btreeHeader.latestBinaryAccessorHeader, SegmentBTree); err != nil {
 		return nil, false, err
 	}
+	return readLatestBinaryValueByBTreeReaders(segFile, segHeader, btreeFile, btreeHeader, key)
+}
+
+// readLatestBinaryValueByBTreeReaders is the descriptor-owning counterpart of
+// readLatestBinaryValueByBTreeFile. It performs only concurrent-safe ReadAt
+// calls and therefore supports one persistently opened immutable view shared by
+// all commitment lanes.
+func readLatestBinaryValueByBTreeReaders(segFile io.ReaderAt, segHeader latestBinaryHeader, btreeFile io.ReaderAt, btreeHeader latestBinaryBTreeHeader, key []byte) ([]byte, bool, error) {
+	if len(key) == 0 {
+		return nil, false, nil
+	}
 	entry, ok, err := latestBinaryBTreeFloor(segFile, btreeFile, btreeHeader.count, key, btreeHeader.fileSize)
 	if err != nil || !ok {
 		return nil, false, err

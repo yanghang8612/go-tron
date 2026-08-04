@@ -185,6 +185,106 @@ func TestOrderedCommitmentPipelineRequiresConcurrentLayer(t *testing.T) {
 	}
 }
 
+func TestOrderedCommitmentPipelineUsesImmutableBaseDelta(t *testing.T) {
+	const (
+		txNum      = uint64(500)
+		generation = uint64(11)
+	)
+	seed := buildRandomPuts(rand.New(rand.NewSource(9393)), 512)
+	referenceDB := rawdb.NewMemoryDatabase()
+	pipelineDB := rawdb.NewMemoryDatabase()
+	for _, db := range []CommitmentDB{referenceDB, pipelineDB} {
+		if _, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(db), seed); err != nil {
+			t.Fatalf("seed commitment: %v", err)
+		}
+	}
+	baseRoot, ok, err := rawdb.ReadLatestDomainCommitmentRoot(pipelineDB)
+	if err != nil || !ok {
+		t.Fatalf("read base root ok=%v err=%v", ok, err)
+	}
+	mgr := buildManagerWithBranchSnapshot(t, pipelineDB, t.TempDir(), txNum)
+	if err := rawdb.WriteCommitmentBranchBase(pipelineDB, rawdb.CommitmentBranchBase{
+		Generation: generation, SnapshotTxNum: txNum, Root: baseRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.DeleteCommitmentBranches(pipelineDB); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := blockbuffer.New(pipelineDB)
+	buf.SetMaxInflight(4)
+	repair := CommitmentSnapshotRepair{Source: mgr, TxNum: txNum}
+	pipeline, err := NewOrderedCommitmentPipelineWithRepair(buf, repair)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pipeline.Close()
+
+	type pendingBlock struct {
+		handle blockbuffer.InflightHandle
+		result <-chan OrderedCommitmentResult
+		want   common.Hash
+	}
+	pending := make([]pendingBlock, 0, 3)
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		updates := make([]rawdb.StateCommitmentUpdate, 0, 65)
+		for i := 0; i < 64; i++ {
+			seedIndex := (int(blockNum)*83 + i*29) % len(seed)
+			updates = append(updates, rawdb.NewStateCommitmentPut(
+				seed[seedIndex].Key,
+				[]byte{byte(blockNum), byte(i), 0xa5},
+			))
+		}
+		if blockNum == 2 {
+			updates = append(updates, rawdb.NewStateCommitmentDelete(seed[7].Key))
+		}
+		want, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(referenceDB), updates)
+		if err != nil {
+			t.Fatalf("reference block %d: %v", blockNum, err)
+		}
+		buf.BeginBlock(common.Hash{byte(blockNum)}, blockNum)
+		handle, ok := buf.NewestInflight()
+		if !ok {
+			t.Fatalf("block %d has no inflight layer", blockNum)
+		}
+		pending = append(pending, pendingBlock{
+			handle: handle,
+			result: pipeline.Submit(buf.ViewLayer(handle), updates),
+			want:   want,
+		})
+	}
+	for i, block := range pending {
+		result := <-block.result
+		if result.Err != nil {
+			t.Fatalf("pipeline block %d: %v", i+1, result.Err)
+		}
+		if result.Root != block.want {
+			t.Fatalf("pipeline block %d root = %x, want %x", i+1, result.Root, block.want)
+		}
+		if err := buf.CommitInflight(block.handle); err != nil {
+			t.Fatalf("commit block %d: %v", i+1, err)
+		}
+	}
+	if legacyRows := len(collectCommitmentRows(t, buf)); legacyRows != 0 {
+		t.Fatalf("ordered pipeline repopulated %d legacy rows", legacyRows)
+	}
+	delta, err := rawdb.NewCommitmentBranchDeltaKeyspace(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deltaRows := 0
+	if err := delta.Iterate(buf, func(_, _ []byte) (bool, error) {
+		deltaRows++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if deltaRows == 0 {
+		t.Fatal("ordered pipeline wrote no delta rows")
+	}
+}
+
 func collectCommitmentRows(t *testing.T, db ethdb.Iteratee) map[string][]byte {
 	t.Helper()
 	rows := make(map[string][]byte)

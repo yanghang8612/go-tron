@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 )
 
 func TestCommitmentBranchRoundTrip(t *testing.T) {
@@ -110,6 +111,116 @@ func TestCommitmentBranchMissing(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("missing engine state read: expected not found")
+	}
+}
+
+func TestCommitmentBranchDeltaKeyspacesAreIsolated(t *testing.T) {
+	db := NewMemoryDatabase()
+	legacy := LegacyCommitmentBranchKeyspace()
+	gen7, err := NewCommitmentBranchDeltaKeyspace(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen8, err := NewCommitmentBranchDeltaKeyspace(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewCommitmentBranchDeltaKeyspace(0); err == nil {
+		t.Fatal("zero delta generation accepted")
+	}
+
+	prefix := []byte{0x0a, 0x0b}
+	if err := legacy.Write(db, prefix, []byte("legacy")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gen7.Write(db, prefix, []byte("seven")); err != nil {
+		t.Fatal(err)
+	}
+	// An existing zero-length value is the layered-store tombstone. It must be
+	// distinguishable from a physically absent row.
+	if err := gen8.Write(db, prefix, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name  string
+		space CommitmentBranchKeyspace
+		want  []byte
+	}{
+		{name: "legacy", space: legacy, want: []byte("legacy")},
+		{name: "generation 7", space: gen7, want: []byte("seven")},
+		{name: "generation 8 tombstone", space: gen8, want: []byte{}},
+	} {
+		got, ok, err := test.space.ReadNoCopy(db, prefix)
+		if err != nil || !ok || !bytes.Equal(got, test.want) {
+			t.Fatalf("%s read = %q ok=%v err=%v, want %q,true,nil", test.name, got, ok, err, test.want)
+		}
+	}
+
+	seen := 0
+	if err := gen7.Iterate(db, func(gotPrefix, encoded []byte) (bool, error) {
+		seen++
+		if !bytes.Equal(gotPrefix, prefix) || !bytes.Equal(encoded, []byte("seven")) {
+			t.Fatalf("iterate = %x/%q", gotPrefix, encoded)
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != 1 {
+		t.Fatalf("generation 7 count = %d, want 1", seen)
+	}
+	if err := gen7.DeleteAll(db); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := gen7.ReadNoCopy(db, prefix); err != nil || ok {
+		t.Fatalf("deleted generation read ok=%v err=%v", ok, err)
+	}
+	if got, ok, err := legacy.ReadNoCopy(db, prefix); err != nil || !ok || !bytes.Equal(got, []byte("legacy")) {
+		t.Fatalf("legacy after generation delete = %q ok=%v err=%v", got, ok, err)
+	}
+	if got, ok, err := gen8.ReadNoCopy(db, prefix); err != nil || !ok || len(got) != 0 {
+		t.Fatalf("generation 8 after generation delete = %q ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestCommitmentBranchBaseRoundTripAndValidation(t *testing.T) {
+	db := NewMemoryDatabase()
+	want := CommitmentBranchBase{
+		Generation:    42,
+		SnapshotTxNum: 9001,
+		Root:          common.HexToHash("0x0123456789abcdef"),
+	}
+	if err := WriteCommitmentBranchBase(db, want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := ReadCommitmentBranchBase(db)
+	if err != nil || !ok || got != want {
+		t.Fatalf("read base = %+v ok=%v err=%v, want %+v,true,nil", got, ok, err, want)
+	}
+	if err := DeleteCommitmentBranchBase(db); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := ReadCommitmentBranchBase(db); err != nil || ok {
+		t.Fatalf("read deleted base ok=%v err=%v", ok, err)
+	}
+
+	if _, err := EncodeCommitmentBranchBase(CommitmentBranchBase{}); err == nil {
+		t.Fatal("zero base generation accepted")
+	}
+	valid, err := EncodeCommitmentBranchBase(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, encoded := range [][]byte{
+		nil,
+		valid[:len(valid)-1],
+		append([]byte{commitmentBranchBaseVersion + 1}, valid[1:]...),
+		append([]byte{commitmentBranchBaseVersion}, make([]byte, len(valid)-1)...),
+	} {
+		if _, err := DecodeCommitmentBranchBase(encoded); err == nil {
+			t.Fatalf("invalid base %x accepted", encoded)
+		}
 	}
 }
 

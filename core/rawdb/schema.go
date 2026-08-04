@@ -72,6 +72,8 @@ func PhysicalKeyFamilyName(family PhysicalKeyFamily) string {
 func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 	switch {
 	case strings.HasPrefix(key, CommitmentBranchKeyPrefix),
+		strings.HasPrefix(key, CommitmentBranchDeltaKeyPrefix),
+		key == CommitmentBranchBaseKey,
 		strings.HasPrefix(key, "state-commitment-domain-v1-"):
 		return PhysicalKeyFamilyCommitment
 	case strings.HasPrefix(key, "state-account-latest-v1-"):
@@ -105,13 +107,15 @@ func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 	}
 }
 
-// CommitmentBranchKeyPrefix is exported for the block buffer's commitment
-// parent cache. It is the physical prefix of the only supported staged
-// commitment branch format.
+// Commitment branch prefixes are exported for blockbuffer's physical-family
+// classifier and parent cache. The legacy v1 keyspace remains the default until
+// a hash-bound base marker activates a generation-specific hot delta.
 const (
-	CommitmentBranchKeyPrefix   = "state-commitment-branch-v1-"
-	stageProgressPrefixString   = "stage-progress-v1-"
-	cycleRewardPendingKeyString = "cycle-reward-pending-v1"
+	CommitmentBranchKeyPrefix      = "state-commitment-branch-v1-"
+	CommitmentBranchDeltaKeyPrefix = "state-commitment-branch-delta-v1-"
+	CommitmentBranchBaseKey        = "state-commitment-branch-base-v1"
+	stageProgressPrefixString      = "stage-progress-v1-"
+	cycleRewardPendingKeyString    = "cycle-reward-pending-v1"
 )
 
 var (
@@ -380,7 +384,9 @@ var (
 	//
 	// Key:   state-commitment-branch-v1- || hex-trie prefix bytes
 	// Value: BranchData.Encode() bytes
-	stateCommitmentBranchPrefix = []byte(CommitmentBranchKeyPrefix)
+	stateCommitmentBranchPrefix      = []byte(CommitmentBranchKeyPrefix)
+	stateCommitmentBranchDeltaPrefix = []byte(CommitmentBranchDeltaKeyPrefix)
+	stateCommitmentBranchBaseKey     = []byte(CommitmentBranchBaseKey)
 
 	// stateCommitmentEngineStateKey is the singleton row that persists the
 	// rewindable staged-engine state (opaque bytes; the engine defines the

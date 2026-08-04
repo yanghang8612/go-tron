@@ -17,6 +17,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -928,6 +929,24 @@ func coveringCommitmentBranchRef(manifest *Manifest, txNum uint64) (SegmentRef, 
 	return best, found
 }
 
+func commitmentBranchRefAtOrBefore(manifest *Manifest, txNum uint64) (SegmentRef, bool) {
+	if manifest == nil {
+		return SegmentRef{}, false
+	}
+	var best SegmentRef
+	found := false
+	for _, ref := range manifest.Segments {
+		if ref.NormalizedDataset() != SegmentDatasetCommitmentBranch || ref.Kind != SegmentLatest || ref.ToTxNum > txNum {
+			continue
+		}
+		if !found || ref.ToTxNum > best.ToTxNum {
+			best = ref
+			found = true
+		}
+	}
+	return best, found
+}
+
 // IterateCommitmentBranches serves snapshotted staged branch rows for txNum from
 // the current manifest's covering CommitmentBranch segment, or yields nothing
 // (declining cleanly to Rebuild) when none covers txNum. Resolving against
@@ -964,6 +983,50 @@ func (m *Manager) GetCommitmentBranch(prefix []byte, txNum uint64) ([]byte, bool
 		return nil, false, nil
 	}
 	return m.getLatestValueFromRef(ref, encodeCommitmentBranchSnapshotKey(prefix))
+}
+
+// OpenCommitmentBranchSnapshot opens the newest immutable branch baseline at
+// or before txNum and retains its segment/B-tree descriptors for concurrent
+// commitment-lane reads. JSON/manual snapshots intentionally decline this hot
+// capability; they remain available only through streaming repair.
+func (m *Manager) OpenCommitmentBranchSnapshot(txNum uint64) (pointread.CommitmentBranchSnapshotView, bool, error) {
+	if m == nil {
+		return nil, false, nil
+	}
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return nil, false, err
+	}
+	ref, ok := commitmentBranchRefAtOrBefore(manifest, txNum)
+	if !ok || !isLatestBinarySegmentPath(ref.Path) {
+		return nil, false, nil
+	}
+	btreeRef, ok := latestBinaryBTreeRef(manifest, ref)
+	if !ok {
+		return nil, false, fmt.Errorf("snapshots: commitment branch %q missing B-tree", ref.Path)
+	}
+	path := filepath.Join(m.dir, ref.Path)
+	segment, segmentHeader, err := openLatestBinaryReader(path, ref)
+	if err != nil {
+		return nil, false, err
+	}
+	btree, btreeHeader, err := openLatestBinaryBTreeReader(m.dir, btreeRef)
+	if err != nil {
+		_ = segment.Close()
+		return nil, false, err
+	}
+	if err := validateLatestBinaryCompanionMatchesSegment(path, ref, segmentHeader, btreeHeader.latestBinaryAccessorHeader, SegmentBTree); err != nil {
+		_ = segment.Close()
+		_ = btree.Close()
+		return nil, false, err
+	}
+	return &CommitmentBranchPointView{
+		txNum:         ref.ToTxNum,
+		segment:       segment,
+		segmentHeader: segmentHeader,
+		btree:         btree,
+		btreeHeader:   btreeHeader,
+	}, true, nil
 }
 
 func (m *Manager) GetCode(hash common.Hash, txNum uint64) ([]byte, bool, error) {

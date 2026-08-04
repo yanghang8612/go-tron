@@ -605,7 +605,13 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 	if err != nil {
 		return err
 	}
-	store := domains.NewStagedCommitmentStore(bc.db)
+	store, err := domains.NewStagedCommitmentStoreWithRepair(bc.db, domains.CommitmentSnapshotRepair{
+		Source: bc.stateCommitmentColdHistory,
+	}, false)
+	if err != nil {
+		return fmt.Errorf("open commitment store for unwind %d->%d: %w", currentHead, height, err)
+	}
+	defer func() { _ = domains.CloseLatestCommitmentStore(store) }()
 	if _, err := domains.UnwindCommitment(bc.db, store, currentHead, height, expectedRoot); err != nil {
 		return fmt.Errorf("commitment unwind %d->%d: %w", currentHead, height, err)
 	}

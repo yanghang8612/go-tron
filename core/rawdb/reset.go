@@ -66,6 +66,7 @@ var resetMutablePrefixes = [][]byte{
 	stateChangeSetPrefix,
 	stateChangeInversePrefix,
 	stateCommitmentBranchPrefix,
+	stateCommitmentBranchDeltaPrefix,
 	stateCommitmentDomainPrefix,
 	stateKVGenerationPrefix,
 	sectionBloomPrefix,
@@ -89,6 +90,7 @@ var resetMutableSingletons = [][]byte{
 	genesisWitnessesKey,
 	noteCommitmentCountKey,
 	latestPbftBlockNumKey,
+	stateCommitmentBranchBaseKey,
 }
 
 func deletePrefix(db ethdb.KeyValueStore, prefix []byte) error {

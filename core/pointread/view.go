@@ -107,3 +107,19 @@ type CommitmentParentSession interface {
 type CommitmentParentSessioner interface {
 	NewCommitmentParentReadSession(readers int) (CommitmentParentSession, error)
 }
+
+// CommitmentBranchSnapshotView is a persistently opened immutable commitment
+// baseline. Returned values are owned by the caller, and Get is safe for
+// concurrent lane use. Callers must finish all reads before Close.
+type CommitmentBranchSnapshotView interface {
+	Get(prefix []byte) (encoded []byte, ok bool, err error)
+	SnapshotTxNum() uint64
+	Close() error
+}
+
+// CommitmentBranchSnapshotViewer opens the newest hash-bound immutable branch
+// baseline at or before txNum. The bool is false when no indexed baseline is
+// available; implementations must not silently substitute an unindexed scan.
+type CommitmentBranchSnapshotViewer interface {
+	OpenCommitmentBranchSnapshot(txNum uint64) (CommitmentBranchSnapshotView, bool, error)
+}

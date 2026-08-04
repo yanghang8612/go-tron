@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -20,6 +21,43 @@ type commitmentParentKeyPartsViewer interface {
 	ViewCommitmentParentKeyParts(first, second []byte, fn func(value []byte, stable bool) error) (bool, error)
 }
 
+// CommitmentBranchKeyspace identifies one physical staged-branch namespace.
+// Its zero value and LegacyCommitmentBranchKeyspace both address the original
+// complete hot table. A non-zero delta generation is never constructed from
+// arbitrary bytes, keeping schema ownership inside rawdb.
+type CommitmentBranchKeyspace struct {
+	physicalPrefix []byte
+}
+
+func LegacyCommitmentBranchKeyspace() CommitmentBranchKeyspace {
+	return CommitmentBranchKeyspace{physicalPrefix: stateCommitmentBranchPrefix}
+}
+
+func NewCommitmentBranchDeltaKeyspace(generation uint64) (CommitmentBranchKeyspace, error) {
+	if generation == 0 {
+		return CommitmentBranchKeyspace{}, errors.New("rawdb: zero commitment branch delta generation")
+	}
+	prefix := make([]byte, len(stateCommitmentBranchDeltaPrefix)+8)
+	copy(prefix, stateCommitmentBranchDeltaPrefix)
+	binary.BigEndian.PutUint64(prefix[len(stateCommitmentBranchDeltaPrefix):], generation)
+	return CommitmentBranchKeyspace{physicalPrefix: prefix}, nil
+}
+
+func (s CommitmentBranchKeyspace) prefix() []byte {
+	if len(s.physicalPrefix) == 0 {
+		return stateCommitmentBranchPrefix
+	}
+	return s.physicalPrefix
+}
+
+func (s CommitmentBranchKeyspace) key(prefix []byte) []byte {
+	schema := s.prefix()
+	key := make([]byte, len(schema)+len(prefix))
+	copy(key, schema)
+	copy(key[len(schema):], prefix)
+	return key
+}
+
 // NewCommitmentParentView returns an optional fold-scoped parent reader. Stores
 // that do not expose the capability keep the ordinary per-key path.
 func NewCommitmentParentView(db ethdb.KeyValueReader) (pointread.CommitmentParentView, error) {
@@ -33,10 +71,14 @@ func NewCommitmentParentView(db ethdb.KeyValueReader) (pointread.CommitmentParen
 // ViewCommitmentParentBranchInView is the fold-scoped counterpart of
 // ViewCommitmentParentBranchNoCopy.
 func ViewCommitmentParentBranchInView(view pointread.CommitmentParentView, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
+	return LegacyCommitmentBranchKeyspace().ViewParentInView(view, prefix, fn)
+}
+
+func (s CommitmentBranchKeyspace) ViewParentInView(view pointread.CommitmentParentView, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
 	if view == nil {
 		return false, errors.New("rawdb: nil commitment parent view")
 	}
-	return view.GetKeyParts(stateCommitmentBranchPrefix, prefix, fn)
+	return view.GetKeyParts(s.prefix(), prefix, fn)
 }
 
 // NewCommitmentParentReadSession asks a capable layered reader for a stable,
@@ -52,10 +94,14 @@ func NewCommitmentParentReadSession(db ethdb.KeyValueReader, readers int) (point
 // ViewCommitmentParentBranchInSession reads one logical branch prefix through
 // a previously captured parent-state session.
 func ViewCommitmentParentBranchInSession(session pointread.CommitmentParentSession, reader int, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
+	return LegacyCommitmentBranchKeyspace().ViewParentInSession(session, reader, prefix, fn)
+}
+
+func (s CommitmentBranchKeyspace) ViewParentInSession(session pointread.CommitmentParentSession, reader int, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
 	if session == nil {
 		return false, errors.New("rawdb: nil commitment parent session")
 	}
-	return session.ViewKeyParts(reader, stateCommitmentBranchPrefix, prefix, fn)
+	return session.ViewKeyParts(reader, s.prefix(), prefix, fn)
 }
 
 // keyPartsWriter is an optional writer fast path for layered stores whose
@@ -104,10 +150,14 @@ func SupportsCommitmentBranchOwnedValue(db ethdb.KeyValueWriter) bool {
 // usually much shorter than the previous 128-byte scratch object. Layered
 // writers can implement keyPartsWriter and avoid that intermediate key.
 func WriteCommitmentBranch(db ethdb.KeyValueWriter, prefix []byte, encoded []byte) error {
+	return LegacyCommitmentBranchKeyspace().Write(db, prefix, encoded)
+}
+
+func (s CommitmentBranchKeyspace) Write(db ethdb.KeyValueWriter, prefix []byte, encoded []byte) error {
 	if writer, ok := db.(keyPartsWriter); ok {
-		return writer.PutKeyParts(stateCommitmentBranchPrefix, prefix, encoded)
+		return writer.PutKeyParts(s.prefix(), prefix, encoded)
 	}
-	return db.Put(commitmentBranchKey(prefix), encoded)
+	return db.Put(s.key(prefix), encoded)
 }
 
 // WriteCommitmentBranchOwned is WriteCommitmentBranch for a freshly allocated
@@ -115,10 +165,14 @@ func WriteCommitmentBranch(db ethdb.KeyValueWriter, prefix []byte, encoded []byt
 // layered writer retains encoded directly; all other writers fall back to the
 // normal copying path. The caller must not mutate encoded after this call.
 func WriteCommitmentBranchOwned(db ethdb.KeyValueWriter, prefix []byte, encoded []byte) error {
+	return LegacyCommitmentBranchKeyspace().WriteOwned(db, prefix, encoded)
+}
+
+func (s CommitmentBranchKeyspace) WriteOwned(db ethdb.KeyValueWriter, prefix []byte, encoded []byte) error {
 	if writer, ok := db.(keyPartsOwnedValueWriter); ok {
-		return writer.PutKeyPartsOwnedValue(stateCommitmentBranchPrefix, prefix, encoded)
+		return writer.PutKeyPartsOwnedValue(s.prefix(), prefix, encoded)
 	}
-	return WriteCommitmentBranch(db, prefix, encoded)
+	return s.Write(db, prefix, encoded)
 }
 
 // WriteCommitmentBranchOwnedString is the batch-flush form of
@@ -126,10 +180,14 @@ func WriteCommitmentBranchOwned(db ethdb.KeyValueWriter, prefix []byte, encoded 
 // string prefix directly into their map key; generic writers retain the normal
 // []byte API and copy semantics through the fallback.
 func WriteCommitmentBranchOwnedString(db ethdb.KeyValueWriter, prefix string, encoded []byte) error {
+	return LegacyCommitmentBranchKeyspace().WriteOwnedString(db, prefix, encoded)
+}
+
+func (s CommitmentBranchKeyspace) WriteOwnedString(db ethdb.KeyValueWriter, prefix string, encoded []byte) error {
 	if writer, ok := db.(keyPartsStringOwnedValueWriter); ok {
-		return writer.PutKeyPartsStringOwnedValue(stateCommitmentBranchPrefix, prefix, encoded)
+		return writer.PutKeyPartsStringOwnedValue(s.prefix(), prefix, encoded)
 	}
-	return WriteCommitmentBranchOwned(db, []byte(prefix), encoded)
+	return s.WriteOwned(db, []byte(prefix), encoded)
 }
 
 // WriteCommitmentBranchesOwnedStrings is the sibling-fold batch form of
@@ -145,17 +203,21 @@ func WriteCommitmentBranchesOwnedStrings(db ethdb.KeyValueWriter, prefixes []str
 // active root-sibling batches to layered writers so their first map allocation
 // can reserve for the real fold fan-out rather than the maximum of 16.
 func WriteCommitmentBranchesOwnedStringsWithBatchCount(db ethdb.KeyValueWriter, prefixes []string, encoded [][]byte, batchCount int) error {
+	return LegacyCommitmentBranchKeyspace().WriteOwnedStringsWithBatchCount(db, prefixes, encoded, batchCount)
+}
+
+func (s CommitmentBranchKeyspace) WriteOwnedStringsWithBatchCount(db ethdb.KeyValueWriter, prefixes []string, encoded [][]byte, batchCount int) error {
 	if len(prefixes) != len(encoded) {
 		return errors.New("rawdb: commitment branch batch length mismatch")
 	}
 	if writer, ok := db.(keyPartsStringsOwnedValuesBatchWriter); ok {
-		return writer.PutKeyPartsStringsOwnedValuesWithBatchCount(stateCommitmentBranchPrefix, prefixes, encoded, batchCount)
+		return writer.PutKeyPartsStringsOwnedValuesWithBatchCount(s.prefix(), prefixes, encoded, batchCount)
 	}
 	if writer, ok := db.(keyPartsStringsOwnedValuesWriter); ok {
-		return writer.PutKeyPartsStringsOwnedValues(stateCommitmentBranchPrefix, prefixes, encoded)
+		return writer.PutKeyPartsStringsOwnedValues(s.prefix(), prefixes, encoded)
 	}
 	for i, prefix := range prefixes {
-		if err := WriteCommitmentBranchOwnedString(db, prefix, encoded[i]); err != nil {
+		if err := s.WriteOwnedString(db, prefix, encoded[i]); err != nil {
 			return err
 		}
 	}
@@ -183,14 +245,18 @@ func ReadCommitmentBranch(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool,
 // bytes immediately (decodes and copies the leaf-key field) before any further
 // DB access, so it can use this variant to skip the per-Get heap copy.
 func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool, error) {
+	return LegacyCommitmentBranchKeyspace().ReadNoCopy(db, prefix)
+}
+
+func (s CommitmentBranchKeyspace) ReadNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool, error) {
 	if reader, ok := db.(cachedNoCopyKeyPartsReader); ok {
-		raw, err := reader.GetNoCopyCachedKeyParts(stateCommitmentBranchPrefix, prefix)
+		raw, err := reader.GetNoCopyCachedKeyParts(s.prefix(), prefix)
 		if err != nil {
-			return verifyStateReadMiss(db, commitmentBranchKey(prefix), fmt.Sprintf("commitment branch %x", prefix), err)
+			return verifyStateReadMiss(db, s.key(prefix), fmt.Sprintf("commitment branch %x", prefix), err)
 		}
 		return raw, true, nil
 	}
-	key := commitmentBranchKey(prefix)
+	key := s.key(prefix)
 	return readValueThenVerifyMiss(db, key, fmt.Sprintf("commitment branch %x", prefix), func(key []byte) ([]byte, error) {
 		return readStateNoCopyCached(db, key)
 	})
@@ -203,11 +269,15 @@ func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte,
 // decoder consume a cold Pebble value before its closer is released instead of
 // allocating a full encoded-value copy solely for lifetime extension.
 func ViewCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
+	return LegacyCommitmentBranchKeyspace().ViewNoCopy(db, prefix, fn)
+}
+
+func (s CommitmentBranchKeyspace) ViewNoCopy(db ethdb.KeyValueReader, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
 	if viewer, ok := db.(cachedNoCopyKeyPartsViewer); ok {
-		return viewer.ViewNoCopyCachedKeyParts(stateCommitmentBranchPrefix, prefix, fn)
+		return viewer.ViewNoCopyCachedKeyParts(s.prefix(), prefix, fn)
 	}
 
-	encoded, ok, err := ReadCommitmentBranchNoCopy(db, prefix)
+	encoded, ok, err := s.ReadNoCopy(db, prefix)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -220,18 +290,26 @@ func ViewCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte, fn func(
 // and resolves the parent state directly. Generic readers retain the ordinary
 // lookup semantics.
 func ViewCommitmentParentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
+	return LegacyCommitmentBranchKeyspace().ViewParentNoCopy(db, prefix, fn)
+}
+
+func (s CommitmentBranchKeyspace) ViewParentNoCopy(db ethdb.KeyValueReader, prefix []byte, fn func(encoded []byte, stable bool) error) (bool, error) {
 	if viewer, ok := db.(commitmentParentKeyPartsViewer); ok {
-		return viewer.ViewCommitmentParentKeyParts(stateCommitmentBranchPrefix, prefix, fn)
+		return viewer.ViewCommitmentParentKeyParts(s.prefix(), prefix, fn)
 	}
-	return ViewCommitmentBranchNoCopy(db, prefix, fn)
+	return s.ViewNoCopy(db, prefix, fn)
 }
 
 // DeleteCommitmentBranch removes the branch row for prefix.
 func DeleteCommitmentBranch(db ethdb.KeyValueWriter, prefix []byte) error {
+	return LegacyCommitmentBranchKeyspace().Delete(db, prefix)
+}
+
+func (s CommitmentBranchKeyspace) Delete(db ethdb.KeyValueWriter, prefix []byte) error {
 	if writer, ok := db.(keyPartsWriter); ok {
-		return writer.DeleteKeyParts(stateCommitmentBranchPrefix, prefix)
+		return writer.DeleteKeyParts(s.prefix(), prefix)
 	}
-	return db.Delete(commitmentBranchKey(prefix))
+	return db.Delete(s.key(prefix))
 }
 
 type commitmentBranchStore interface {
@@ -243,19 +321,24 @@ type commitmentBranchStore interface {
 // Pebble uses one range tombstone; generic stores fall back to bounded point
 // deletion so fresh-database rebuilds do not retain the retired branch state.
 func DeleteCommitmentBranches(db commitmentBranchStore) error {
+	return LegacyCommitmentBranchKeyspace().DeleteAll(db)
+}
+
+func (s CommitmentBranchKeyspace) DeleteAll(db commitmentBranchStore) error {
+	prefix := s.prefix()
 	if deleter, ok := db.(ethdb.KeyValueRangeDeleter); ok {
-		if err := deleter.DeleteRange(stateCommitmentBranchPrefix, prefixUpperBound(stateCommitmentBranchPrefix)); err == nil {
+		if err := deleter.DeleteRange(prefix, prefixUpperBound(prefix)); err == nil {
 			return nil
 		} else if !errors.Is(err, ethdb.ErrTooManyKeys) {
 			return err
 		}
 	}
-	return deleteCommitmentBranchesByPointScan(db)
+	return deleteCommitmentBranchesByPointScan(db, prefix)
 }
 
-func deleteCommitmentBranchesByPointScan(db commitmentBranchStore) error {
+func deleteCommitmentBranchesByPointScan(db commitmentBranchStore, prefix []byte) error {
 	for {
-		it := db.NewIterator(stateCommitmentBranchPrefix, nil)
+		it := db.NewIterator(prefix, nil)
 		keys := make([][]byte, 0, resetScanBatch)
 		for it.Next() {
 			keys = append(keys, append([]byte(nil), it.Key()...))
@@ -304,8 +387,13 @@ func deleteCommitmentBranchKeys(db commitmentBranchStore, keys [][]byte) error {
 // key with stateCommitmentBranchPrefix stripped).  Iteration stops when fn
 // returns (false, nil) or an error.
 func IterateCommitmentBranches(db ethdb.Iteratee, fn func(prefix, encoded []byte) (bool, error)) error {
-	schemaLen := len(stateCommitmentBranchPrefix)
-	it := db.NewIterator(stateCommitmentBranchPrefix, nil)
+	return LegacyCommitmentBranchKeyspace().Iterate(db, fn)
+}
+
+func (s CommitmentBranchKeyspace) Iterate(db ethdb.Iteratee, fn func(prefix, encoded []byte) (bool, error)) error {
+	schema := s.prefix()
+	schemaLen := len(schema)
+	it := db.NewIterator(schema, nil)
 	defer it.Release()
 	for it.Next() {
 		physKey := it.Key()

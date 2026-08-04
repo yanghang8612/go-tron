@@ -152,8 +152,8 @@ func (bc *BlockChain) startCommitWorker() {
 				pipeline.Close()
 			}
 		}()
-		initializePipeline := func() error {
-			next, err := state.NewOrderedCommitmentPipeline(bc.buffer)
+		initializePipeline := func(repair state.CommitmentSnapshotRepair) error {
+			next, err := state.NewOrderedCommitmentPipelineWithRepair(bc.buffer, repair)
 			if err != nil {
 				return err
 			}
@@ -161,11 +161,12 @@ func (bc *BlockChain) startCommitWorker() {
 			return nil
 		}
 		bootstrapPipeline := func(job *commitJob) {
+			repair := job.captured.Repair()
 			bc.runCommitJob(job)
 			if bc.commitErr.Load() != nil {
 				return
 			}
-			if err := initializePipeline(); err != nil {
+			if err := initializePipeline(repair); err != nil {
 				log.Warn("Ordered commitment pipeline unavailable; using serial folds", "err", err)
 			}
 		}
@@ -234,7 +235,7 @@ func (bc *BlockChain) startCommitWorker() {
 					pipeline.Close()
 					pipeline = nil
 					pipelineEpoch = currentEpoch
-					if err := initializePipeline(); err != nil {
+					if err := initializePipeline(job.captured.Repair()); err != nil {
 						// A normal fork rewind retains an exact LCA root/branch pair and
 						// initializes directly. If an offline reset removed branch state,
 						// run this first new-branch block through the established repair

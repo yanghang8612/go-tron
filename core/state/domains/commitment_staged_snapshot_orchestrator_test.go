@@ -21,14 +21,14 @@ func buildManagerWithBranchSnapshot(t *testing.T, db CommitmentDB, dir string, t
 	if err != nil {
 		t.Fatalf("build commitment root snapshot: %v", err)
 	}
-	branchRef, err := snapshots.BuildCommitmentBranchSegmentFromDB(db, dir, "commitment/branches-snap.json", txNum, txNum)
+	branchRef, branchAccessorRef, branchBTreeRef, err := snapshots.BuildCommitmentBranchSegmentFilesFromDB(db, dir, "commitment/branches-snap.seg", txNum, txNum)
 	if err != nil {
 		t.Fatalf("build commitment branch snapshot: %v", err)
 	}
 	// Include branchRef in the manifest so Manager.IterateCommitmentBranches
 	// finds it via coveringCommitmentBranchRef.
 	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(txNum, txNum, []snapshots.SegmentRef{
-		rootRef, rootAccessorRef, rootBTreeRef, branchRef,
+		rootRef, rootAccessorRef, rootBTreeRef, branchRef, branchAccessorRef, branchBTreeRef,
 	})); err != nil {
 		t.Fatalf("publish manifest: %v", err)
 	}
@@ -339,5 +339,152 @@ func TestStagedColdRestoreUsesSnapshotNotRebuild(t *testing.T) {
 	// ======================================================================
 	if r1 != r2 {
 		t.Fatalf("snapshot-restore root %x != rebuild root %x — restore path is incorrect", r1, r2)
+	}
+}
+
+func TestStagedImmutableBaseDeltaAndTombstone(t *testing.T) {
+	const (
+		txNum      = uint64(100)
+		generation = uint64(7)
+	)
+	owner := common.Address{0x41, 0x7a}
+	key1 := []byte("slot/one")
+	key2 := []byte("slot/two")
+
+	seed := func(t *testing.T, db CommitmentDB) {
+		t.Helper()
+		if err := rawdb.WriteStateKVGeneration(db, owner, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, key1, []byte("v1")); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, key2, []byte("keep")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update := rawdb.NewStateCommitmentPut(
+		rawdb.StateKVLatestCommitmentKey(owner, 0, kvdomains.ContractStorage, key1),
+		rawdb.EncodeStateKVLatestValue([]byte("v2")),
+	)
+
+	db := rawdb.NewMemoryDatabase()
+	seed(t, db)
+	baseRoot, err := newStagedCommitmentStore(db).Rebuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := buildManagerWithBranchSnapshot(t, db, t.TempDir(), txNum)
+	if err := rawdb.WriteCommitmentBranchBase(db, rawdb.CommitmentBranchBase{
+		Generation: generation, SnapshotTxNum: txNum, Root: baseRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.DeleteCommitmentBranches(db); err != nil {
+		t.Fatal(err)
+	}
+
+	repair := CommitmentSnapshotRepair{Source: mgr, TxNum: txNum}
+	latest, err := NewStagedCommitmentStoreWithRepair(db, repair, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := latest.(*stagedCommitmentStore)
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close layered store: %v", err)
+		}
+	}()
+	if present, err := store.RootNodePresent(baseRoot); err != nil || !present {
+		t.Fatalf("immutable root present=%v err=%v", present, err)
+	}
+
+	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, key1, []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	gotRoot, err := applyLatestCommitmentWithRepair(store, []rawdb.StateCommitmentUpdate{update}, repair)
+	if err != nil {
+		t.Fatal(err)
+	}
+	referenceDB := rawdb.NewMemoryDatabase()
+	seed(t, referenceDB)
+	if _, err := newStagedCommitmentStore(referenceDB).Rebuild(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(referenceDB, owner, 0, kvdomains.ContractStorage, key1, []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	wantRoot, err := applyLatestCommitment(NewStagedCommitmentStore(referenceDB), []rawdb.StateCommitmentUpdate{update})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRoot != wantRoot {
+		t.Fatalf("layered root %x, want %x", gotRoot, wantRoot)
+	}
+
+	delta, err := rawdb.NewCommitmentBranchDeltaKeyspace(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deltaRows := 0
+	if err := delta.Iterate(db, func(_, _ []byte) (bool, error) {
+		deltaRows++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if deltaRows == 0 {
+		t.Fatal("incremental fold wrote no generation delta rows")
+	}
+	if legacyRows := len(collectCommitmentRows(t, db)); legacyRows != 0 {
+		t.Fatalf("incremental fold repopulated %d legacy rows", legacyRows)
+	}
+
+	var coldPrefix []byte
+	if err := mgr.IterateCommitmentBranches(txNum, func(prefix, _ []byte) (bool, error) {
+		coldPrefix = append([]byte(nil), prefix...)
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if coldPrefix == nil {
+		// nil is a valid root prefix, so use an explicit iterator count to
+		// distinguish it from no snapshot rows.
+		if _, ok, err := store.store.GetBranch(nil); err != nil || !ok {
+			t.Fatalf("cold root lookup ok=%v err=%v", ok, err)
+		}
+	}
+	if err := store.store.DelBranch(coldPrefix); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.store.GetBranch(coldPrefix); err != nil || ok {
+		t.Fatalf("tombstoned cold branch ok=%v err=%v", ok, err)
+	}
+	if encoded, ok, err := delta.ReadNoCopy(db, coldPrefix); err != nil || !ok || len(encoded) != 0 {
+		t.Fatalf("delta tombstone = %x ok=%v err=%v", encoded, ok, err)
+	}
+
+	rebuilt, err := store.Rebuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt != wantRoot {
+		t.Fatalf("rebuilt root %x, want %x", rebuilt, wantRoot)
+	}
+	if _, ok, err := rawdb.ReadCommitmentBranchBase(db); err != nil || ok {
+		t.Fatalf("base marker survived rebuild ok=%v err=%v", ok, err)
+	}
+	deltaRows = 0
+	if err := delta.Iterate(db, func(_, _ []byte) (bool, error) {
+		deltaRows++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if deltaRows != 0 {
+		t.Fatalf("delta rows after rebuild = %d", deltaRows)
+	}
+	if legacyRows := len(collectCommitmentRows(t, db)); legacyRows == 0 {
+		t.Fatal("rebuild did not restore complete legacy branch table")
 	}
 }

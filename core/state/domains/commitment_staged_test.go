@@ -175,6 +175,18 @@ func TestRawdbBranchStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStagedImmutableBaseNeverSilentlyFallsBackWithoutSource(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteCommitmentBranchBase(db, rawdb.CommitmentBranchBase{
+		Generation: 1, SnapshotTxNum: 10, Root: common.Hash{0x01},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStagedCommitmentStoreWithRepair(db, CommitmentSnapshotRepair{}, false); err == nil {
+		t.Fatal("marker-aware store accepted a missing snapshot source")
+	}
+}
+
 func TestRawdbBranchStoreTransientViewCopiesOnlyRetainedLeafKeys(t *testing.T) {
 	disk := rawdb.NewMemoryDatabase()
 	prefix := []byte{0x0d, 0x0e}
