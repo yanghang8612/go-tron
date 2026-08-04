@@ -3113,6 +3113,26 @@ invalidation now classifies an available mismatch before incrementing its
 incarnation, so total mismatches remain exactly partitioned without weakening
 read-version or publication readiness.
 
+The corrected production gate then ran through 319 VM observer cohorts and 279
+publication cohorts. It produced 1,818 VM jobs and 112 canonical publications;
+all 112 completed the post-publication write-set audit. Two contract-result
+mismatches closed exactly as one version rejection plus one late result, with
+zero version-clean, invalid, or stale mismatch. Frozen-raw, TransactionInfo,
+write-set, balance-trace, publisher, resource, preflight, and Transfer errors
+all remained zero. Transfer completed 9,031 jobs and 4,014 audited publications
+without an error. Normalized Transfer queue-busy, maximum-depth, and dropped
+rates improved about 5%, 10%, and 13% respectively from the P4.58 process;
+VM queue growth remained bounded at small absolute rates.
+
+Across an exact 181-second interval P4.59 imported 11,104 blocks and 321,388
+transactions: 61.35 blocks/s and 1,775.62 transactions/s. Block throughput was
+0.28% below P4.58 while transactions per block changed from 30.37 to 28.94, so
+there is no measured light-block regression. A 10-second profile contained
+25.96 CPU-seconds. The full discard-shadow/version family used 0.68 seconds
+(2.62%), block-start preexecution 0.28 seconds (1.08%), and actual async launch
+0.05 seconds (0.19%). Pebble compaction used 8.30 seconds (31.97%), making the
+storage runtime the next measured cost after the co-scheduled retry gate closed.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a
@@ -3230,6 +3250,46 @@ existing sync-complete hook requests another ordered lifecycle pass after the
 importer becomes idle, at which point one latest snapshot is built at the
 solidified watermark. `latest/deferred/sync` counts avoided scans and
 `last/latest_build_block` exposes the seeded or published cadence boundary.
+
+#### P5.5: Revertible Pebble v2 runtime bridge
+
+Erigon does not tune an LSM to retain the complete historical working set. Its
+MDBX hot database is paired with step-oriented immutable domain/history files,
+and the aggregator moves completed steps through build, merge, publication,
+and pruning. P5.1--P5.4 implement that structural boundary for go-tron, but the
+currently running full-mode datadir still profiles Pebble compaction at 31.97%
+of CPU. Replacing the hot store with MDBX would combine a storage-engine rewrite
+with a schema and transaction-model rewrite, making the next production result
+impossible to attribute.
+
+Current go-ethereum provides a smaller independent canary: Pebble v2.1.4 is
+used for new databases, while an existing v1 database can ratchet its manifest
+to `FormatFlushableIngest`, the oldest format understood by both runtimes.
+Go-tron now uses that v2 runtime while retaining the measured 256-MiB memtable,
+8-MiB target-file ramp, 1-GiB dynamic base, uncompressed transient levels,
+bounded quota-aware compaction concurrency, pooled large batches, full-key
+Bloom comparer, pinned snapshots, and per-level metrics. The v2 API migration
+maps target sizes, compression profiles, compaction concurrency, manual
+compaction context, file-cache metrics, and table-byte counters without changing
+logical key/value behavior.
+
+A writable open detects a legacy `FormatMostCompatible` directory through a
+v2-then-v1 format probe, opens it briefly with v1, ratchets only the shared
+format marker, closes it, and verifies a v2 open before normal startup. It does
+not rewrite SSTables. A read-only diagnostic open refuses this mutation with an
+actionable error. Fresh databases start directly at the same bridge format.
+Regression tests create a legacy v1 database, cross the bridge, read through
+v2, and reopen/read it through v1, proving that a binary rollback does not
+require restoring the datadir.
+
+The production A/B keeps the existing data, cache, LSM targets, service limits,
+and sampling intervals fixed. Admission requires clean restart/equivalence and
+no write stalls, then compares normalized compaction input/output and CPU,
+estimated-debt slope, disk bytes, blocks/s, transactions/s, and transaction
+density against P4.59. A runtime that increases compaction cost or regresses
+light-block throughput by more than 3% is rejected even if its newer API is
+otherwise correct; irreversible v2-only table formats remain explicitly out of
+scope until this bridge canary passes.
 
 ## Benchmark And Production Acceptance
 

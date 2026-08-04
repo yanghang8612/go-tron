@@ -281,7 +281,7 @@
   while requiring zero version-clean or invalid mismatches.
 - [x] Add one co-scheduled VM retry residue on Transfer-async blocks while
   keeping the VM and Transfer canonical publishers disjoint.
-- [ ] Run the co-scheduled retry gate with non-zero audited VM publication,
+- [x] Run the co-scheduled retry gate with non-zero audited VM publication,
   zero mismatch/error/fallback, and bounded queue/CPU growth.
 
 ## P5: Snapshot and cold steady state
@@ -368,6 +368,15 @@
   5,000-block segment.
 - [x] Prepare the composed production lifecycle's latest-build watermark and
   defer full-keyspace latest snapshot scans while historical sync is active.
+- [x] Audit Erigon's MDBX-plus-step-file boundary and current go-ethereum's
+  Pebble v2 bridge, then select a revertible runtime-only Pebble canary rather
+  than an unbounded hot-store rewrite.
+- [x] Move the chaindata runtime to Pebble v2 while ratcheting legacy v1
+  databases only to the shared `FormatFlushableIngest` bridge and preserving
+  go-tron's batch, point-read, compaction, and metrics tuning.
+- [ ] Run the Pebble v2 production A/B on the existing datadir and compare
+  compaction CPU/input/output, estimated debt, stalls, disk writes, sync
+  throughput, restart recovery, and database equivalence against P4.59.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.

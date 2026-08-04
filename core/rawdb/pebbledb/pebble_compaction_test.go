@@ -3,7 +3,7 @@ package pebbledb
 import (
 	"testing"
 
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2/sstable"
 )
 
 func TestCompactionConcurrencyReservesForegroundCPU(t *testing.T) {
@@ -43,13 +43,14 @@ func TestDefaultLBaseReducesBulkSyncLevelMultiplier(t *testing.T) {
 
 func TestLevelOptionsScaleTargetAndPreserveFilters(t *testing.T) {
 	const base = int64(8 << 20)
-	levels := levelOptions(base)
+	levels := levelOptions()
+	targets := targetFileSizes(base)
 	if len(levels) != 7 {
 		t.Fatalf("levels = %d, want 7", len(levels))
 	}
 	for i, level := range levels {
-		if want := base << i; level.TargetFileSize != want {
-			t.Errorf("level %d target = %d, want %d", i, level.TargetFileSize, want)
+		if want := base << i; targets[i] != want {
+			t.Errorf("level %d target = %d, want %d", i, targets[i], want)
 		}
 		if i < len(levels)-1 && level.FilterPolicy == nil {
 			t.Errorf("level %d lost Bloom filter", i)
@@ -59,11 +60,11 @@ func TestLevelOptionsScaleTargetAndPreserveFilters(t *testing.T) {
 		t.Fatal("last level unexpectedly has a Bloom filter")
 	}
 	for i := 0; i < len(levels)-1; i++ {
-		if levels[i].Compression != pebble.NoCompression {
-			t.Fatalf("level %d compression = %v, want none", i, levels[i].Compression)
+		if levels[i].Compression == nil || levels[i].Compression() != sstable.NoCompression {
+			t.Fatalf("level %d compression is not disabled", i)
 		}
 	}
-	if levels[len(levels)-1].Compression != pebble.DefaultCompression {
-		t.Fatalf("bottom-level compression = %v, want Pebble default", levels[len(levels)-1].Compression)
+	if levels[len(levels)-1].Compression != nil {
+		t.Fatal("bottom-level compression should inherit Pebble default")
 	}
 }
