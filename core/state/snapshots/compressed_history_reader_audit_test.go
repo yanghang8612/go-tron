@@ -22,7 +22,7 @@ func TestStateDomainHistoryRecordReadersUseCompressedOpeners(t *testing.T) {
 		"readStateDomainChangeBinarySegmentTxRange":                  {"openHistorySegmentForRead"},
 		"readStateDomainChangeBinaryTxRangeForBlockByIndexFile":      {"openHistorySegmentForRead"},
 		"stateDomainChangeBinaryIndexBlockLowerBound":                nil,
-		"validateCompressedHistorySegmentReadable":                   {"openHistorySegmentForRead"},
+		"validateHistorySegmentReadable":                             {"openHistorySegmentForRead"},
 		"validateStateDomainChangeBinaryAccessorEntryAgainstSegment": nil,
 		"verifyStateDomainChangeBinaryIndexCoverage":                 nil,
 	}

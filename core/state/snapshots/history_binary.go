@@ -456,7 +456,7 @@ func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentR
 	// delete hot rows whose only cold copy can't be read back — data loss. This
 	// catches any writer/codec edge case at build time (bounded memory: ReadAt
 	// decompresses one block at a time), so a bad segment never gets published.
-	if err := validateCompressedHistorySegmentReadable(dir, segRef); err != nil {
+	if err := validateHistorySegmentReadable(dir, segRef); err != nil {
 		_ = os.Remove(finalAbs)
 		_ = os.Remove(accessorAbs)
 		_ = os.Remove(filepath.Join(dir, idxRef.Path))
@@ -465,11 +465,11 @@ func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentR
 	return segRef, idxRef, accessorRef, nil
 }
 
-// validateCompressedHistorySegmentReadable walks every record of a written
-// history segment through the production ReadAt decode path (block-by-block,
-// bounded memory), confirming the segment is fully readable and its record
-// frames chain to exactly the logical end.
-func validateCompressedHistorySegmentReadable(dir string, segRef SegmentRef) error {
+// validateHistorySegmentReadable walks every record of a written history
+// segment through the production ReadAt decode path (block-by-block for a
+// compressed file, bounded memory), confirming the segment is fully readable
+// and its record frames chain to exactly the logical end.
+func validateHistorySegmentReadable(dir string, segRef SegmentRef) error {
 	reader, logicalSize, header, err := openHistorySegmentForRead(dir, segRef)
 	if err != nil {
 		return err
@@ -750,7 +750,7 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	if CompressHistorySegments {
-		if err := validateCompressedHistorySegmentReadable(dir, segRef); err != nil {
+		if err := validateHistorySegmentReadable(dir, segRef); err != nil {
 			return segRef, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted compressed segment self-check failed: %w", err)
 		}
 	}

@@ -3764,6 +3764,32 @@ bytes fell 18.3%. Dense runs fell from 68.44 ms to 63.37 ms (-7.4%), allocated
 bytes from 30.40 MB to 21.46 MB (-29.4%), and allocations from 300,750 to
 200,655 (-33.3%).
 
+#### P5.21: Trusted derived-file build validation
+
+After collation completed, the base builder linearly reread all three finished
+files before returning. The history pass is necessary because hot pruning
+trusts manifest coverage: it exercises compressed blocks, record framing, and
+the tx-range hydration path that becomes the only cold copy. The index and v4
+accessor passes, however, repeated invariants already enforced while writing:
+the history writer emits a strictly increasing txNum index with exact counts,
+and the bounded ETL writers reject unsorted exact/group rows and count or layout
+overflow before their files are finalized.
+
+Erigon similarly treats successful collation/build writers as trusted and opens
+their finished artifacts for the next build/integration stage instead of
+replaying every derived entry immediately. go-tron now retains the complete
+history replay, then reopens the new index and accessor to verify immutable
+size, range, header count, version, and complete fixed layout in O(1). The
+standalone `VerifyManifestFiles` path and companion semantic verifier remain
+unchanged for imported, repaired, or later-audited files; only redundant checks
+inside the same trusted build transaction are removed.
+
+Against an independently checked-out P5.20 binary, five local Pebble runs of
+the sparse benchmark were unchanged at 49.98 ms (+0.01% noise) while allocated
+bytes fell 1.1%. Dense runs fell from 63.47 ms to 57.09 ms (-10.0%), allocated
+bytes from 21.46 MB to 20.96 MB (-2.3%), and allocations from 200,658 to 185,622
+(-7.5%).
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

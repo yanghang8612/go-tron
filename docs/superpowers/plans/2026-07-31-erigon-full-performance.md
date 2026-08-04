@@ -425,5 +425,9 @@
 - [x] Stream canonically ordered fresh block-pack records directly into base
   history/index/accessor writers, eliminating the record ETL encode, spill,
   read, decode, and re-encode cycle.
+- [x] Trust the ordered derived-file writers after a successful build and replace
+  duplicate linear index/accessor self-scans with fixed-layout reopen checks,
+  while retaining the full production-reader history replay and offline
+  manifest verification.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

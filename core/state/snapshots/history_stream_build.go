@@ -214,20 +214,62 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		return result, err
 	}
 
-	// Hot pruning trusts manifest coverage. Validate every finished companion
-	// before returning so an unreadable or malformed trio can never be published.
-	if err := checkStateDomainChangeBinarySegment(dir, segmentRef); err != nil {
-		return result, fmt.Errorf("snapshots: state-domain-change history segment self-check: %w", err)
-	}
-	if err := checkStateDomainChangeBinaryIndex(dir, indexRef); err != nil {
-		return result, fmt.Errorf("snapshots: state-domain-change history index self-check: %w", err)
-	}
-	if err := checkStateDomainChangeBinaryAccessor(dir, accessorRef); err != nil {
-		return result, fmt.Errorf("snapshots: state-domain-change history accessor self-check: %w", err)
+	// Hot pruning trusts manifest coverage. Replay the history through its
+	// production reader, then reopen the derived files and validate their fixed
+	// layout. Their ETL writers already checked every ordered row while emitting
+	// them, so rescanning those same rows here would duplicate build work.
+	if err := validateBuiltStateDomainChangeBinaryFiles(dir, segmentRef, indexRef, accessorRef, recordWriter.indexWritten, recordCount); err != nil {
+		return result, err
 	}
 	published = true
 	result.refs = []SegmentRef{segmentRef, accessorRef, indexRef}
 	return result, nil
+}
+
+func validateBuiltStateDomainChangeBinaryFiles(dir string, segmentRef, indexRef, accessorRef SegmentRef, indexCount, recordCount uint64) error {
+	if err := validateHistorySegmentReadable(dir, segmentRef); err != nil {
+		return fmt.Errorf("snapshots: state-domain-change history segment self-check: %w", err)
+	}
+	index, indexHeader, err := openStateDomainChangeBinaryIndexReader(dir, indexRef)
+	if err != nil {
+		return fmt.Errorf("snapshots: state-domain-change history index self-check: %w", err)
+	}
+	if err := index.Close(); err != nil {
+		return fmt.Errorf("snapshots: close state-domain-change history index self-check: %w", err)
+	}
+	if indexHeader.count != indexCount {
+		return fmt.Errorf("snapshots: state-domain-change history index count %d, want %d", indexHeader.count, indexCount)
+	}
+	accessor, accessorHeader, accessorSize, err := openStateDomainChangeBinaryAccessorReader(dir, accessorRef)
+	if err != nil {
+		return fmt.Errorf("snapshots: state-domain-change history accessor self-check: %w", err)
+	}
+	if accessorHeader.count != recordCount {
+		_ = accessor.Close()
+		return fmt.Errorf("snapshots: state-domain-change history accessor count %d, want %d", accessorHeader.count, recordCount)
+	}
+	if accessorHeader.version != stateDomainChangeBinaryVersionV4 {
+		_ = accessor.Close()
+		return fmt.Errorf("snapshots: state-domain-change history accessor version %d, want %d", accessorHeader.version, stateDomainChangeBinaryVersionV4)
+	}
+	layout, err := stateDomainChangeBinaryAccessorV4LayoutAt(accessor, accessorSize, accessorHeader)
+	if err == nil {
+		if layout.groupCount == 0 {
+			if accessorSize != layout.groupPayloadStart {
+				err = fmt.Errorf("snapshots: state-domain-change history accessor has %d trailing bytes", accessorSize-layout.groupPayloadStart)
+			}
+		} else {
+			_, err = readStateDomainChangeBinaryAccessorV4GroupMetaAt(accessor, layout, layout.groupCount-1, accessorSize)
+		}
+	}
+	if err != nil {
+		_ = accessor.Close()
+		return fmt.Errorf("snapshots: state-domain-change history accessor layout self-check: %w", err)
+	}
+	if err := accessor.Close(); err != nil {
+		return fmt.Errorf("snapshots: close state-domain-change history accessor self-check: %w", err)
+	}
+	return nil
 }
 
 func resetStateDomainChangeHistoryTempFile(file *os.File) error {

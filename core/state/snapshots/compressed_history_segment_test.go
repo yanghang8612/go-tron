@@ -340,7 +340,7 @@ func TestCompressedHistorySegmentSelfCheckCatchesCorruption(t *testing.T) {
 		t.Fatalf("write (and its own self-check) failed on valid input: %v", err)
 	}
 	// A valid segment passes the explicit check.
-	if err := validateCompressedHistorySegmentReadable(dir, segC); err != nil {
+	if err := validateHistorySegmentReadable(dir, segC); err != nil {
 		t.Fatalf("self-check rejected a valid segment: %v", err)
 	}
 	// Corrupt bytes inside the first compressed block; the ReadAt walk must fail.
@@ -356,7 +356,7 @@ func TestCompressedHistorySegmentSelfCheckCatchesCorruption(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateCompressedHistorySegmentReadable(dir, segC); err == nil {
+	if err := validateHistorySegmentReadable(dir, segC); err == nil {
 		t.Fatal("self-check accepted a corrupted compressed segment — pruning could delete hot rows backed by it")
 	}
 }

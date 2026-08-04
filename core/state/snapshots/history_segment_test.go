@@ -535,6 +535,58 @@ func TestBuildStateDomainChangeHistoryStreamHonorsCompressionGate(t *testing.T) 
 	}
 }
 
+func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptTailGroup(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5e}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateTxRange(db, 1, common.Hash{0x01}, 10, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum: 1, BlockHash: common.Hash{0x01}, TxNum: 10, Seq: 1,
+		FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner,
+		Domain: kvdomains.ContractStorage, Key: []byte("slot"), NextExists: true, Next: []byte("value"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 10, "history/state-domain-change-10-10.seg")
+	if err != nil {
+		t.Fatalf("build history: %v", err)
+	}
+	accessorPath := filepath.Join(dir, refs[1].Path)
+	accessor, header, accessorSize, err := openStateDomainChangeBinaryAccessorReader(dir, refs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, err := stateDomainChangeBinaryAccessorV4LayoutAt(accessor, accessorSize, header)
+	if err != nil {
+		_ = accessor.Close()
+		t.Fatal(err)
+	}
+	groupOffset, err := readStateDomainChangeBinaryAccessorV3GroupOffsetAt(accessor, layout, layout.groupCount-1)
+	if closeErr := accessor.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(accessorPath, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := file.WriteAt(make([]byte, 8), int64(groupOffset+stateDomainChangeBinaryAccessorV3GroupKeySize))
+	closeErr := file.Close()
+	if writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err := validateBuiltStateDomainChangeBinaryFiles(dir, refs[0], refs[2], refs[1], 1, 1); err == nil {
+		t.Fatal("corrupt built accessor tail group passed layout self-check")
+	}
+}
+
 func TestManagerRestoreStateDomainHistoryLoadsThroughSortedETL(t *testing.T) {
 	dir := t.TempDir()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5a}, common.AccountIDLength)...))
