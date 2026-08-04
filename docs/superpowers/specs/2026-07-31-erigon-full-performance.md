@@ -2501,6 +2501,38 @@ results, read/sender conflicts, all three mismatch families, errors, and wall
 time. Canonical VM publication and VM retry incarnations remain disabled until
 this canary establishes their resource-order requirements.
 
+The first restart-free production window covered 182.13 seconds, 13,936
+blocks, and 405,331 transactions (76.52 blocks/s and 2,225.5 transactions/s).
+Across 217 sampled blocks, the canary executed 5,212 VM transactions in 3,141
+sender groups. Version validation admitted 984 candidates and full equivalence
+accepted 841 (85.47% of candidates and 16.13% of executions), including 134
+forwarded sender successors. All 143 rejected candidates had identical
+TransactionInfo and BalanceTrace with a WriteSet difference; there were no
+generic discard-worker mismatches. Twenty-eight unavailable executions fell
+back safely. The canary consumed 812.15 ms total wall time, or 3.74 ms per
+sampled block and 0.058 ms amortized per imported block. Canonical Transfer and
+async-retry publication remained error-free.
+
+A warm 20-second CPU profile contained 59.38 CPU-seconds. The combined
+sender-chain/discard-worker focus accounted for 0.88 CPU-seconds (1.48%) and
+did not enter the global hot list. The dominant process costs remained CGO,
+fastkeccak, syscalls, memory movement, Snappy, and commitment assembly.
+
+#### P4.51: VM mismatch attribution
+
+The first canary's exact equality shape strongly implicates the two ordered
+public-bandwidth cells, but canonical publication requires direct evidence.
+The VM observer therefore splits candidate WriteSet mismatches into those
+which become exact after excluding only `public_net_usage` and
+`public_net_time`, and all other state mismatches. It separately counts valid
+public-bandwidth reservations at candidate boundaries. Unavailable executions
+are split into result, missing-info, WriteSet-capture, unsupported-applier,
+applier-error, applier-mismatch, and family-readiness stages. These remain
+diagnostic counters; no comparison exception or canonical VM publication is
+enabled. The next production gate requires zero non-bandwidth state mismatch
+before reusing the already-gated conditional public-net rebase and designing
+ordered VM energy/block-usage settlement.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

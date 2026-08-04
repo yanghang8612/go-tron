@@ -228,8 +228,13 @@
   Transfer publisher's conservative raw-KV admission.
 - [x] Compare VM TransactionInfo, full WriteSet including public bandwidth,
   BalanceTrace, and forwarded predecessor results under independent metrics.
-- [ ] Run the VM sender-chain production canary and quantify execution,
+- [x] Run the VM sender-chain production canary and quantify execution,
   candidate, validation, conflict, mismatch, error, and wall-time ratios.
+- [x] Split VM candidate WriteSet mismatches into public-bandwidth-only versus
+  other state and classify unavailable results by execution/capture/applier
+  stage before designing canonical publication.
+- [ ] Run the VM mismatch-classification production gate and require zero
+  non-bandwidth state mismatches before adding an ordered resource carrier.
 - [ ] Add ordered VM energy/bandwidth/receipt settlement and retry
   incarnations only after the observe-only canary defines the safe carrier.
 
