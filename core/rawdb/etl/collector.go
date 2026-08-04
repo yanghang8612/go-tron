@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 )
@@ -20,12 +21,17 @@ const (
 	defaultBatchSize   = ethdb.IdealBatchSize
 	runFileMagic       = "gtronetl1"
 	runEntryHeaderSize = 17
+	// Keep at most one default-buffer-sized entry array in each pool item.
+	// Larger one-off collectors are released to the garbage collector rather
+	// than pinning an unexpectedly large backing array for future work.
+	collectorRowsPoolMaxCapacity = 1 << 20
 )
 
 var (
 	ErrCollectorClosed = errors.New("etl: collector closed")
 	ErrCollectorLoaded = errors.New("etl: collector already loaded")
 	ErrLoadInterrupted = errors.New("etl: load interrupted")
+	collectorRowsPool  = sync.Pool{New: func() any { return new([]entry) }}
 )
 
 // Options configures a Collector. TempDir is a parent directory; Collector
@@ -57,6 +63,7 @@ type Collector struct {
 	opts        Options
 	dir         string
 	rows        []entry
+	rowBuffer   *[]entry
 	bufferBytes int
 	runFiles    []string
 	seq         uint64
@@ -195,10 +202,7 @@ func (c *Collector) LoadInterruptible(writer ethdb.KeyValueWriter, interrupted f
 		return c.stats, err
 	}
 	c.stats.BatchWrites += applier.batchWrites
-	if inMemory {
-		c.rows = nil
-		c.bufferBytes = 0
-	}
+	c.releaseRows()
 	c.loaded = true
 	return c.stats, nil
 }
@@ -209,7 +213,7 @@ func (c *Collector) Close() error {
 		return nil
 	}
 	c.closed = true
-	c.rows = nil
+	c.releaseRows()
 	c.runFiles = nil
 	if c.dir == "" {
 		return nil
@@ -229,6 +233,7 @@ func (c *Collector) append(e entry) error {
 	}
 	c.seq++
 	e.seq = c.seq
+	c.ensureRows()
 	c.rows = append(c.rows, e)
 	size := len(e.key) + len(e.value) + runEntryHeaderSize
 	c.bufferBytes += size
@@ -289,10 +294,41 @@ func (c *Collector) spillBuffer() error {
 	}
 	ok = true
 	c.runFiles = append(c.runFiles, final)
-	c.rows = nil
+	clear(c.rows)
+	c.rows = c.rows[:0]
 	c.bufferBytes = 0
 	c.stats.SpilledRuns++
 	return nil
+}
+
+// ensureRows lazily borrows the sortable entry metadata buffer. Collectors
+// which are created but never used allocate no row storage.
+func (c *Collector) ensureRows() {
+	if c.rowBuffer != nil {
+		return
+	}
+	c.rowBuffer = collectorRowsPool.Get().(*[]entry)
+	c.rows = (*c.rowBuffer)[:0]
+}
+
+// releaseRows drops key/value references before returning reasonably-sized
+// metadata storage to the process-wide pool. The slice capacity is retained
+// across collectors, mirroring Erigon's sortable-buffer lifecycle.
+func (c *Collector) releaseRows() {
+	if c.rowBuffer == nil {
+		c.rows = nil
+		c.bufferBytes = 0
+		return
+	}
+	clear(c.rows)
+	buffer := c.rowBuffer
+	*buffer = c.rows[:0]
+	c.rows = nil
+	c.rowBuffer = nil
+	c.bufferBytes = 0
+	if cap(*buffer) <= collectorRowsPoolMaxCapacity {
+		collectorRowsPool.Put(buffer)
+	}
 }
 
 func (c *Collector) mergeRuns(applier *applier, interrupted func() bool) error {

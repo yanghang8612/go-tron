@@ -96,6 +96,49 @@ func TestCollectorSpillsRunsAndMergesDeletes(t *testing.T) {
 	assertValue(t, writer, "c", "value-c")
 }
 
+func TestCollectorRetainsEntryBufferAcrossSpills(t *testing.T) {
+	collector := newTestCollector(t, Options{BufferLimit: 1})
+	defer collector.Close()
+
+	mustPut(t, collector, "a", "value-a")
+	if collector.rowBuffer == nil || len(collector.rows) != 0 || cap(collector.rows) == 0 {
+		t.Fatalf("entry buffer after spill = ptr %p len %d cap %d", collector.rowBuffer, len(collector.rows), cap(collector.rows))
+	}
+	buffer := collector.rowBuffer
+	capacity := cap(collector.rows)
+	mustPut(t, collector, "b", "value-b")
+	if collector.rowBuffer != buffer {
+		t.Fatal("collector replaced its entry buffer between spills")
+	}
+	if len(collector.rows) != 0 || cap(collector.rows) != capacity {
+		t.Fatalf("entry buffer after second spill = len %d cap %d, want len 0 cap %d", len(collector.rows), cap(collector.rows), capacity)
+	}
+}
+
+func TestCollectorSuccessfulLoadReleasesEntryBuffer(t *testing.T) {
+	collector := newTestCollector(t, Options{BufferLimit: 1 << 20})
+	defer collector.Close()
+
+	key, value := []byte("a"), []byte("value-a")
+	if err := collector.PutOwned(key, value); err != nil {
+		t.Fatal(err)
+	}
+	buffer := collector.rowBuffer
+	if buffer == nil {
+		t.Fatal("collector did not acquire an entry buffer")
+	}
+	if _, err := collector.Load(newRecordingWriter()); err != nil {
+		t.Fatal(err)
+	}
+	if collector.rowBuffer != nil || collector.rows != nil {
+		t.Fatalf("loaded collector retained entry buffer: ptr %p rows %v", collector.rowBuffer, collector.rows)
+	}
+	entries := (*buffer)[:cap(*buffer)]
+	if entries[0].key != nil || entries[0].value != nil {
+		t.Fatal("released entry buffer retained key/value references")
+	}
+}
+
 func TestCollectorMergesSpilledRunsWithFinalBuffer(t *testing.T) {
 	collector := newTestCollector(t, Options{BufferLimit: 50})
 	defer collector.Close()
