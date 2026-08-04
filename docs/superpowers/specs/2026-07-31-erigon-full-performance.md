@@ -2533,6 +2533,39 @@ enabled. The next production gate requires zero non-bandwidth state mismatch
 before reusing the already-gated conditional public-net rebase and designing
 ordered VM energy/block-usage settlement.
 
+The attribution gate covered 122.56 seconds, 8,123 blocks, and 254,595
+transactions (66.28 blocks/s and 2,077.3 transactions/s). Across 126 sampled
+blocks the VM observer executed 3,408 transactions and admitted 592 version
+candidates. Of these, 498 were already strict matches and all remaining 94
+were public-bandwidth-only; other-state, TransactionInfo, and BalanceTrace
+mismatches were zero. All 28 unavailable results were execution-stage failures
+against the independent block-start/sender-chain view. WriteSet capture,
+applier support, applier execution, and readiness errors were zero. Canonical
+Transfer published 17,651 results without error during the same window.
+
+#### P4.52: Transaction-boundary public-net projection
+
+Classification proves that ignoring the two global cells recovers equality,
+but canonical publication must reproduce their values and write-presence
+semantics. Immediately after version validation and before serial execution,
+the observer now evaluates each valid VM reservation against the canonical
+`public_net_usage`, `public_net_time`, and limit at that exact transaction
+boundary. It applies java-tron's recovery and limit formula in memory, records
+whether admission succeeds and whether the baseline was rebased, and predicts
+the ordered usage value. It predicts a time write only when the canonical
+setter would change the current value; this preserves the serial WriteSet's
+no-op omission rather than accepting a merely state-equivalent extra write.
+
+After serial execution, the finish observer requires every non-public-net key
+to remain byte-exact and compares the projected usage/time values, presence,
+commutative flags, and widths with the canonical WriteSet. Metrics under
+`vm_sender_chain/public_net/projection/` report candidates, admitted, rebased,
+limit-rejected, matches, mismatches, and missing boundary projections. This is
+still observe-only: neither the retained VM result nor canonical state is
+mutated. The production gate requires every admitted projection to match and
+zero missing/non-bandwidth mismatches before a VM publisher may reuse the
+conditional reservation carrier.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

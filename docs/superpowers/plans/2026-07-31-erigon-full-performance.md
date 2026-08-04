@@ -233,8 +233,14 @@
 - [x] Split VM candidate WriteSet mismatches into public-bandwidth-only versus
   other state and classify unavailable results by execution/capture/applier
   stage before designing canonical publication.
-- [ ] Run the VM mismatch-classification production gate and require zero
+- [x] Run the VM mismatch-classification production gate and require zero
   non-bandwidth state mismatches before adding an ordered resource carrier.
+- [x] Project each version-valid VM public-bandwidth reservation against the
+  exact canonical transaction-boundary usage/time/limit without mutating state.
+- [x] Compare projected public-net value and write-presence semantics with the
+  serial WriteSet while retaining strict comparison for every other key.
+- [ ] Run the VM public-net projection production gate and require admitted
+  projections to match serial writes with zero missing/other mismatches.
 - [ ] Add ordered VM energy/bandwidth/receipt settlement and retry
   incarnations only after the observe-only canary defines the safe carrier.
 
