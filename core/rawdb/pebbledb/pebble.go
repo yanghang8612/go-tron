@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-// Package pebbledb is a tuned fork of go-ethereum's Pebble wrapper. It follows
-// geth's Pebble v2 bridge while retaining go-tron's measured sync deviations:
+// Package pebbledb is a minimal fork of go-ethereum's ethdb/pebble package
+// (v1.17.2) with one targeted deviation in New():
 //
 //   - MemTableSize is bumped from cache/(2*memTableNumber) (~32 MiB at cache=256 MiB)
 //     to a configurable value (default 256 MiB) so the WAL/memtable absorbs more
@@ -40,7 +40,7 @@
 //     CPU; relaxing it trades a little read amp for fewer compactions.
 //   - L0StopWritesThreshold is explicitly set to 64 (Pebble default 12) so transient
 //     L0 bursts don't stall the producer / sync writers.
-//   - The maximum compaction concurrency uses half of the quota-aware GOMAXPROCS budget
+//   - MaxConcurrentCompactions uses half of the quota-aware GOMAXPROCS budget
 //     instead of the host-wide NumCPU count so sync retains foreground CPU.
 //   - Additional compaction slots use Pebble's conservative L0-depth and debt
 //     thresholds instead of activating the entire budget during routine debt.
@@ -48,7 +48,9 @@
 // Everything else — async writes (pebble.NoSync),
 // MemTableStopWritesThreshold=memTableNumber*2, the bloom filters, the metrics
 // gatherer, and the public *Database surface — is
-// stays compatible with the upstream wrapper's public database semantics.
+// copied verbatim from the upstream file. Diffing this file against
+// $(go env GOPATH)/pkg/mod/github.com/ethereum/go-ethereum@<ver>/ethdb/pebble/pebble.go
+// should produce a small, localized delta in New().
 //
 // Background: CPU profiles from Nile initial sync show Pebble compaction and
 // SyncFileRange dominating wall time after account-KV read caching. The numbers
@@ -58,19 +60,16 @@ package pebbledb
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/pebble/v2"
-	"github.com/cockroachdb/pebble/v2/bloom"
-	"github.com/cockroachdb/pebble/v2/sstable"
+	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/bloom"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
@@ -230,29 +229,16 @@ func DefaultOptions() Options {
 	}
 }
 
-func levelOptions() [7]pebble.LevelOptions {
-	var levels [7]pebble.LevelOptions
+func levelOptions(baseTarget int64) []pebble.LevelOptions {
+	levels := make([]pebble.LevelOptions, 7)
 	for i := range levels {
+		levels[i].TargetFileSize = baseTarget << i
 		if i < len(levels)-1 {
-			levels[i].Compression = func() *sstable.CompressionProfile { return sstable.NoCompression }
+			levels[i].Compression = pebble.NoCompression
 			levels[i].FilterPolicy = bloom.FilterPolicy(10)
-			continue
 		}
-		// Pebble v2 inherits unset L1+ options from the preceding level.
-		// Explicitly restore the v1 bottom-level semantics instead of letting L6
-		// inherit L5's transient no-compression/Bloom policy.
-		levels[i].Compression = func() *sstable.CompressionProfile { return sstable.SnappyCompression }
-		levels[i].FilterPolicy = pebble.NoFilterPolicy
 	}
 	return levels
-}
-
-func targetFileSizes(baseTarget int64) [7]int64 {
-	var targets [7]int64
-	for i := range targets {
-		targets[i] = baseTarget << i
-	}
-	return targets
 }
 
 // compactionConcurrency reserves roughly half of the Go execution budget for
@@ -724,24 +710,6 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	if tune.L0StopWritesThreshold == 0 {
 		tune.L0StopWritesThreshold = defaults.L0StopWritesThreshold
 	}
-	// Pebble v1 created a missing database directory as a side effect of Open.
-	// Pebble v2's format probe requires the path to exist first, so preserve the
-	// public wrapper behavior explicitly for writable databases only.
-	if !readonly {
-		if err := os.MkdirAll(file, 0o700); err != nil {
-			return nil, fmt.Errorf("create Pebble database directory: %w", err)
-		}
-	}
-	if needsV1, err := needsPebbleV1(file); err != nil {
-		return nil, err
-	} else if needsV1 {
-		if readonly {
-			return nil, fmt.Errorf("legacy Pebble database %s requires a writable v2 bridge upgrade", file)
-		}
-		if err := upgradePebbleV1(file, tune); err != nil {
-			return nil, fmt.Errorf("upgrade Pebble database for v2: %w", err)
-		}
-	}
 	logger := log.New("database", file)
 	logger.Info("Allocated cache and file handles",
 		"cache", common.StorageSize(cache*1024*1024),
@@ -751,7 +719,6 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		"lbase_max", common.StorageSize(tune.LBaseMaxBytes),
 		"l0_compact", tune.L0CompactionThreshold,
 		"l0_stop", tune.L0StopWritesThreshold,
-		"version", "v2",
 	)
 
 	// The max memtable size is limited by the uint32 offsets stored in
@@ -808,7 +775,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 
 		// The size of memory table(as well as the write buffer).
 		// Note, there may have more than two memory tables in the system.
-		MemTableSize: uint64(memTableSize),
+		MemTableSize: memTableSize,
 
 		// MemTableStopWritesThreshold places a hard limit on the number
 		// of the existent MemTables(including the frozen one).
@@ -825,18 +792,15 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		// Scale against the scheduler's quota-aware CPU budget while reserving
 		// capacity for foreground sync. Flush jobs may temporarily add one more
 		// background task; automatic compactions remain bounded here.
-		CompactionConcurrencyRange: func() (int, int) {
-			return 1, maxConcurrentCompactions()
-		},
+		MaxConcurrentCompactions: maxConcurrentCompactions,
 
 		// Per-level options. Options for at least one level must be specified. The
 		// options for the last level are used for all subsequent levels.
 		// Full-sync state writes benefit from fewer, larger SSTables. Bloom
 		// filters remain enabled through L5; as before, L6 omits one because
 		// Pebble does not use it for read efficiency there.
-		Levels:          levelOptions(),
-		TargetFileSizes: targetFileSizes(tune.TargetFileSizeBytes),
-		ReadOnly:        readonly,
+		Levels:   levelOptions(tune.TargetFileSizeBytes),
+		ReadOnly: readonly,
 		EventListener: &pebble.EventListener{
 			CompactionBegin: db.onCompactionBegin,
 			CompactionEnd:   db.onCompactionEnd,
@@ -868,19 +832,14 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 
 		// go-tron deviation: explicitly raise the write-stall trigger above
 		// Pebble's default of 12 so that transient L0 bursts don't throttle
-		// foreground writers when the bounded compaction pool can drain them.
+		// foreground writers when MaxConcurrentCompactions can drain them.
 		L0StopWritesThreshold: tune.L0StopWritesThreshold,
-
-		// Keep the on-disk format at the oldest version understood by both
-		// Pebble v1 and v2. The runtime upgrade is therefore independently
-		// revertible while its compaction cost is measured in production.
-		FormatMajorVersion: pebbleV2BridgeFormat,
 	}
 	// Disable seek compaction explicitly. Check https://github.com/ethereum/go-ethereum/pull/20130
 	// for more details.
 	opt.Experimental.ReadSamplingMultiplier = -1
 
-	// The maximum concurrency is still capped by CompactionConcurrencyRange. Keep
+	// The maximum concurrency is still capped by MaxConcurrentCompactions. Keep
 	// routine debt on one worker so foreground commitment reads and block
 	// execution retain CPU and disk bandwidth; scale to the second worker when
 	// either L0 read amplification or total debt becomes substantial.
@@ -1159,7 +1118,7 @@ func (d *Database) Compact(start []byte, limit []byte) error {
 	if limit == nil {
 		limit = ethdb.MaximumKey
 	}
-	return d.db.Compact(context.Background(), start, limit, true) // Parallelization is preferred
+	return d.db.Compact(start, limit, true) // Parallelization is preferred
 }
 
 // Path returns the path to the database directory.
@@ -1218,10 +1177,10 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 		compTimes[i%2] = compTime
 
 		for _, levelMetrics := range stats.Levels {
-			nWrite += int64(levelMetrics.TableBytesCompacted)
-			nWrite += int64(levelMetrics.TableBytesFlushed)
-			compWrite += int64(levelMetrics.TableBytesCompacted)
-			compRead += int64(levelMetrics.TableBytesRead)
+			nWrite += int64(levelMetrics.BytesCompacted)
+			nWrite += int64(levelMetrics.BytesFlushed)
+			compWrite += int64(levelMetrics.BytesCompacted)
+			compRead += int64(levelMetrics.BytesRead)
 		}
 
 		nWrite += int64(stats.WAL.BytesWritten)
@@ -1260,8 +1219,8 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 		d.liveMemTablesGauge.Update(stats.MemTable.Count)
 		d.zombieMemTablesGauge.Update(stats.MemTable.ZombieCount)
 		d.estimatedCompDebtGauge.Update(int64(stats.Compact.EstimatedDebt))
-		d.tableCacheHitGauge.Update(stats.FileCache.Hits)
-		d.tableCacheMissGauge.Update(stats.FileCache.Misses)
+		d.tableCacheHitGauge.Update(stats.TableCache.Hits)
+		d.tableCacheMissGauge.Update(stats.TableCache.Misses)
 		d.blockCacheHitGauge.Update(stats.BlockCache.Hits)
 		d.blockCacheMissGauge.Update(stats.BlockCache.Misses)
 		d.filterHitGauge.Update(stats.Filter.Hits)
@@ -1281,13 +1240,13 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 				d.levelFlushBytesGauge = append(d.levelFlushBytesGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("level/%v/flush/write", i), nil))
 				d.levelFlushTablesGauge = append(d.levelFlushTablesGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("level/%v/flush/tables", i), nil))
 			}
-			d.levelsGauge[i].Update(level.TablesCount)
-			d.levelSizeGauge[i].Update(level.TablesSize)
+			d.levelsGauge[i].Update(level.NumFiles)
+			d.levelSizeGauge[i].Update(level.Size)
 			d.levelSublevelsGauge[i].Update(int64(level.Sublevels))
-			d.levelCompReadGauge[i].Update(int64(level.TableBytesRead))
-			d.levelCompWriteGauge[i].Update(int64(level.TableBytesCompacted))
+			d.levelCompReadGauge[i].Update(int64(level.BytesRead))
+			d.levelCompWriteGauge[i].Update(int64(level.BytesCompacted))
 			d.levelCompTablesGauge[i].Update(int64(level.TablesCompacted))
-			d.levelFlushBytesGauge[i].Update(int64(level.TableBytesFlushed))
+			d.levelFlushBytesGauge[i].Update(int64(level.BytesFlushed))
 			d.levelFlushTablesGauge[i].Update(int64(level.TablesFlushed))
 		}
 

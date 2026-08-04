@@ -23,13 +23,12 @@ type PebbleOptions = pebbledb.Options
 //   - L0CompactionThreshold is relaxed to 8 (go-eth uses 2 to cap compaction
 //     debt; that pegged background-compaction CPU under our sync workload).
 //   - L0StopWritesThreshold is raised to 64 (Pebble default 12) so transient
-//     L0 bursts don't stall foreground writers when the bounded compaction pool
+//     L0 bursts don't stall foreground writers when MaxConcurrentCompactions
 //     can drain them.
 //
-// The runtime is Pebble v2. Legacy v1 databases are ratcheted only to the
-// v1/v2-shared FormatFlushableIngest bridge, so the prior binary can still open
-// them. Async writes, MemTableStopWritesThreshold=8, the per-level target-file
-// ramp, bloom filters, and the metrics surface follow the upstream wrapper.
+// Everything else — async writes (pebble.NoSync), MaxConcurrentCompactions=NumCPU,
+// MemTableStopWritesThreshold=8, the per-level TargetFileSize ramp, bloom
+// filters, and the metrics surface — matches the upstream go-ethereum wrapper.
 func NewPebbleDB(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
 	return pebbledb.New(path, cache, handles, "", false, pebbledb.DefaultOptions())
 }

@@ -3251,65 +3251,57 @@ importer becomes idle, at which point one latest snapshot is built at the
 solidified watermark. `latest/deferred/sync` counts avoided scans and
 `last/latest_build_block` exposes the seeded or published cadence boundary.
 
-#### P5.5: Revertible Pebble v2 runtime bridge
+#### P5.5: Pebble v2 runtime canary and rejection
 
 Erigon does not tune an LSM to retain the complete historical working set. Its
 MDBX hot database is paired with step-oriented immutable domain/history files,
 and the aggregator moves completed steps through build, merge, publication,
 and pruning. P5.1--P5.4 implement that structural boundary for go-tron, but the
-currently running full-mode datadir still profiles Pebble compaction at 31.97%
-of CPU. Replacing the hot store with MDBX would combine a storage-engine rewrite
-with a schema and transaction-model rewrite, making the next production result
-impossible to attribute.
+running full-mode datadir still profiled Pebble compaction at 31.97% of CPU.
+Replacing the hot store with MDBX would combine a storage-engine rewrite with a
+schema and transaction-model rewrite, so the next bounded experiment followed
+current go-ethereum's Pebble v2.1.4 bridge instead.
 
-Current go-ethereum provides a smaller independent canary: Pebble v2.1.4 is
-used for new databases, while an existing v1 database can ratchet its manifest
-to `FormatFlushableIngest`, the oldest format understood by both runtimes.
-Go-tron now uses that v2 runtime while retaining the measured 256-MiB memtable,
-8-MiB target-file ramp, 1-GiB dynamic base, uncompressed transient levels,
-bounded quota-aware compaction concurrency, pooled large batches, full-key
-Bloom comparer, pinned snapshots, and per-level metrics. The v2 API migration
-maps target sizes, compression profiles, compaction concurrency, manual
-compaction context, file-cache metrics, and table-byte counters without changing
-logical key/value behavior.
+The canary retained go-tron's measured memtable, target-file ramp, dynamic base,
+transient-level compression, compaction concurrency, pooled batches, point-read
+snapshots, and metrics. A legacy v1 database was ratcheted only to
+`FormatFlushableIngest`, the oldest format understood by both Pebble v1 and v2;
+the operation changed the manifest marker without rewriting SSTables. Tests
+crossed the bridge, read through v2, and reopened the same database through v1,
+making production rollback independent of a datadir restore.
 
-A writable open detects a legacy `FormatMostCompatible` directory through a
-v2-then-v1 format probe, opens it briefly with v1, ratchets only the shared
-format marker, closes it, and verifies a v2 open before normal startup. It does
-not rewrite SSTables. A read-only diagnostic open refuses this mutation with an
-actionable error. Fresh databases start directly at the same bridge format.
-Regression tests create a legacy v1 database, cross the bridge, read through
-v2, and reopen/read it through v1, proving that a binary rollback does not
-require restoring the datadir.
+The first v2 deployment restarted cleanly but exposed an API-semantic mapping
+error. Pebble v1 treats zero-value L6 compression/filter fields as independent
+defaults, whereas v2 inherits unset L1+ fields from the preceding level. L6
+therefore inherited L5's no-compression and Bloom-filter policy. Against a
+272-second immediately preceding v1 window with 45.32 transactions/block, the
+first 200-second v2 window had 48.52 transactions/block but raised normalized
+compaction input 70.44%, compaction output 121.06%, disk writes 89.28%, and
+process CPU 9.91%. Estimated debt changed from draining 2.85 MB/s to growing
+0.84 MB/s. The profile's Bloom construction and doubled output bytes identified
+the mapping error; explicitly selecting Snappy plus `NoFilterPolicy` for L6
+removed most of it.
 
-The production A/B keeps the existing data, cache, LSM targets, service limits,
-and sampling intervals fixed. Admission requires clean restart/equivalence and
-no write stalls, then compares normalized compaction input/output and CPU,
-estimated-debt slope, disk bytes, blocks/s, transactions/s, and transaction
-density against P4.59. A runtime that increases compaction cost or regresses
-light-block throughput by more than 3% is rejected even if its newer API is
-otherwise correct; irreversible v2-only table formats remain explicitly out of
-scope until this bridge canary passes.
+The corrected runtime still failed admission. A 213-second window imported
+8,608 blocks and 360,281 transactions (40.41 blocks/s, 1,691.46 transactions/s,
+41.85 transactions/block). Relative to the nearby v1 window's 12,512 blocks and
+567,031 transactions (46.00 blocks/s, 2,084.67 transactions/s), normalized
+compaction input remained 13.85% higher, output 12.05% higher, Pebble-accounted
+disk writes 11.80% higher, OS writes 6.33% higher, and process CPU per
+transaction 16.43% higher. Throughput was lower by 12.15% per block and 18.86%
+per transaction. Peer count rose from 17 to 20 and buffered blocks stayed above
+2,000 throughout, so downloader starvation does not explain the result.
+Compaction debt drained 1.78 MB/s and write stalls plus all execution,
+publication, frozen-raw, resource, and equivalence errors remained zero, but a
+10-second profile still attributed 31.70% of CPU to Pebble v2. This exceeds the
+3% regression gate without reducing the target bottleneck.
 
-The first bridge deployment restarted cleanly and preserved the existing
-datadir, but its physical-byte canary was rejected before runtime admission. A
-272-second immediately preceding v1 window imported 12,512 blocks and 567,031
-transactions (45.32 tx/block); the first 200-second v2 window imported 6,176
-blocks and 299,633 transactions (48.52 tx/block). Normalized by transaction,
-compaction input rose 70.44%, compaction output 121.06%, disk writes 89.28%,
-and process CPU 9.91%. Estimated debt changed from draining 2.85 MB/s to growing
-0.84 MB/s. Download buffering stayed positive and grew during part of the v2
-window, so the regression was not classified as peer starvation.
-
-The profile and v2 option audit identified a semantic mapping error rather than
-an engine result. Pebble v1 treats the zero-value L6 compression/filter fields
-as its independent defaults. Pebble v2 instead inherits unset L1+ fields from
-the preceding level, so L6 accidentally inherited L5's no-compression and
-Bloom-filter policy. That explains both the doubled output bytes and prominent
-Bloom construction in the profile. L6 is now explicitly Snappy-compressed with
-`NoFilterPolicy`; the test applies Pebble's real option defaults before asserting
-that the bottom level cannot inherit either transient setting. The P5.5 A/B
-remains open until the corrected configuration produces a fresh window.
+Pebble v2 was therefore rejected and its runtime/dependencies removed. The
+deployed shared bridge format remains directly readable by the restored Pebble
+v1 code, so rollback needs no data conversion or reset. The result reinforces
+Erigon's structural lesson: further compaction reduction should come from
+moving immutable history out of the hot store and reducing logical hot writes,
+not from a storage-engine version change alone.
 
 ## Benchmark And Production Acceptance
 

@@ -37,6 +37,35 @@ func TestExactPointComparerReopensDefaultDatabase(t *testing.T) {
 	}
 }
 
+func TestPebbleV1ReopensSharedV2BridgeFormat(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "bridge")
+	old, err := pebble.Open(dir, &pebble.Options{Comparer: exactPointComparer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Set([]byte("bridge-key"), []byte("bridge-value"), pebble.Sync); err != nil {
+		old.Close()
+		t.Fatal(err)
+	}
+	if err := old.RatchetFormatMajorVersion(pebble.FormatFlushableIngest); err != nil {
+		old.Close()
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := New(dir, 16, 16, "test/bridge-reopen/", false, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	value, err := db.Get([]byte("bridge-key"))
+	if err != nil || !bytes.Equal(value, []byte("bridge-value")) {
+		t.Fatalf("bridge value = (%q,%v)", value, err)
+	}
+}
+
 func TestGetWithPresence(t *testing.T) {
 	db, err := New(t.TempDir(), 16, 16, "test/get-with-presence/", false, Options{})
 	if err != nil {

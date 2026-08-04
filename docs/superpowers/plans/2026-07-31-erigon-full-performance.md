@@ -369,14 +369,13 @@
 - [x] Prepare the composed production lifecycle's latest-build watermark and
   defer full-keyspace latest snapshot scans while historical sync is active.
 - [x] Audit Erigon's MDBX-plus-step-file boundary and current go-ethereum's
-  Pebble v2 bridge, then select a revertible runtime-only Pebble canary rather
-  than an unbounded hot-store rewrite.
-- [x] Move the chaindata runtime to Pebble v2 while ratcheting legacy v1
-  databases only to the shared `FormatFlushableIngest` bridge and preserving
-  go-tron's batch, point-read, compaction, and metrics tuning.
-- [ ] Run the Pebble v2 production A/B on the existing datadir and compare
-  compaction CPU/input/output, estimated debt, stalls, disk writes, sync
-  throughput, restart recovery, and database equivalence against P4.59.
+  Pebble v2 bridge, then implement a revertible runtime-only canary rather than
+  an unbounded hot-store rewrite.
+- [x] Run the Pebble v2 production A/B, diagnose and correct L6 option
+  inheritance, then reject the corrected runtime on normalized compaction,
+  disk-write, CPU, and throughput regressions.
+- [x] Restore the admitted Pebble v1 runtime without a datadir reset; the
+  already-ratcheted shared bridge format remains readable by v1.
 - [ ] Productionize signed snapshot catalog hosting and resumable bootstrap.
 - [ ] Verify recent-tail execution and restart after restore.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
