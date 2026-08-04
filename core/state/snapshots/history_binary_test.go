@@ -152,6 +152,49 @@ func TestStateDomainChangeBinaryV5RecordViewRoundTripAndBounds(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeBinaryV5FrameScratchReuse(t *testing.T) {
+	change := binaryStateDomainChange(7, 42, 3, "account/key")
+	change.PrevExists = true
+	change.Prev = []byte{0x01, 0x02, 0x03}
+	scratch := make([]byte, 0, 512)
+	base := &scratch[:cap(scratch)][0]
+
+	frame, err := appendStateDomainChangeBinaryRecordFrame(scratch, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if &frame[0] != base {
+		t.Fatal("record frame did not use supplied scratch storage")
+	}
+	if got, want := int(binary.BigEndian.Uint32(frame[:4])), len(frame)-4; got != want {
+		t.Fatalf("record frame payload size = %d, want %d", got, want)
+	}
+	decoded, err := decodeStateDomainChangeRecordV5(frame[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.PrevExists || !bytes.Equal(decoded.Prev, change.Prev) {
+		t.Fatalf("first decoded previous value = exists %t value %x", decoded.PrevExists, decoded.Prev)
+	}
+
+	change.PrevExists = false
+	change.Prev = nil
+	frame, err = appendStateDomainChangeBinaryRecordFrame(frame[:0], change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if &frame[0] != base {
+		t.Fatal("record frame replaced reusable scratch storage")
+	}
+	decoded, err = decodeStateDomainChangeRecordV5(frame[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.PrevExists || len(decoded.Prev) != 0 {
+		t.Fatalf("reused frame retained previous value = exists %t value %x", decoded.PrevExists, decoded.Prev)
+	}
+}
+
 func TestStateDomainChangeBinaryV5SequenceIsUniqueAcrossSplitBlock(t *testing.T) {
 	dir := t.TempDir()
 	blockHash := common.Hash{0x77}

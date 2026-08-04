@@ -155,23 +155,60 @@ func decodeStateDomainChangeRecord(data []byte) (*rawdb.StateDomainChange, error
 // BlockNum, BlockHash and Seq are reconstructed from segment metadata and the
 // immutable record ordinal by readStateDomainChangeBinaryRecordAtBoundedIndex.
 func encodeStateDomainChangeRecordV5(change *rawdb.StateDomainChange) ([]byte, error) {
+	size, err := stateDomainChangeRecordV5Size(change)
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, size)
+	putStateDomainChangeRecordV5(payload, change)
+	return payload, nil
+}
+
+func stateDomainChangeRecordV5Size(change *rawdb.StateDomainChange) (int, error) {
 	if change == nil {
-		return nil, errors.New("snapshots: nil state-domain-change record")
+		return 0, errors.New("snapshots: nil state-domain-change record")
 	}
-	var buf bytes.Buffer
-	writeUint64(&buf, change.TxNum)
-	buf.WriteByte(byte(change.FlatDomain))
-	buf.Write(change.Owner[:])
-	writeUint64(&buf, change.Generation)
-	writeUint16(&buf, uint16(change.Domain))
-	if err := writeLengthPrefixedBytes(&buf, change.Key); err != nil {
-		return nil, err
+	if uint64(len(change.Key)) > math.MaxUint32 {
+		return 0, fmt.Errorf("snapshots: byte field is too large: %d bytes", len(change.Key))
 	}
-	writeBool(&buf, change.PrevExists)
-	if err := writeLengthPrefixedBytes(&buf, change.Prev); err != nil {
-		return nil, err
+	if uint64(len(change.Prev)) > math.MaxUint32 {
+		return 0, fmt.Errorf("snapshots: byte field is too large: %d bytes", len(change.Prev))
 	}
-	return buf.Bytes(), nil
+	const scalarBytes = 8 + 1 + 8 + 2 + 4 + 1 + 4
+	size := uint64(scalarBytes+len(change.Owner)) + uint64(len(change.Key)) + uint64(len(change.Prev))
+	if size > math.MaxUint32 || size > uint64(^uint(0)>>1) {
+		return 0, fmt.Errorf("snapshots: state-domain-change record is too large: %d bytes", size)
+	}
+	return int(size), nil
+}
+
+// putStateDomainChangeRecordV5 writes the fixed v5 layout into an exactly-sized
+// destination. Callers that stream many records can retain and grow one frame
+// buffer instead of allocating a payload and then copying it into a frame.
+func putStateDomainChangeRecordV5(dst []byte, change *rawdb.StateDomainChange) {
+	offset := 0
+	binary.BigEndian.PutUint64(dst[offset:offset+8], change.TxNum)
+	offset += 8
+	dst[offset] = byte(change.FlatDomain)
+	offset++
+	copy(dst[offset:offset+len(change.Owner)], change.Owner[:])
+	offset += len(change.Owner)
+	binary.BigEndian.PutUint64(dst[offset:offset+8], change.Generation)
+	offset += 8
+	binary.BigEndian.PutUint16(dst[offset:offset+2], uint16(change.Domain))
+	offset += 2
+	binary.BigEndian.PutUint32(dst[offset:offset+4], uint32(len(change.Key)))
+	offset += 4
+	copy(dst[offset:offset+len(change.Key)], change.Key)
+	offset += len(change.Key)
+	dst[offset] = 0
+	if change.PrevExists {
+		dst[offset] = 1
+	}
+	offset++
+	binary.BigEndian.PutUint32(dst[offset:offset+4], uint32(len(change.Prev)))
+	offset += 4
+	copy(dst[offset:], change.Prev)
 }
 
 func decodeStateDomainChangeRecordV5(data []byte) (*rawdb.StateDomainChange, error) {
@@ -962,12 +999,18 @@ func writeStateDomainChangeBinaryCompactionTxRanges(dir string, dst stateDomainC
 	if err := writeStateDomainChangeBinaryTxRangeCount(dst, 0); err != nil {
 		return 0, err
 	}
-	var written uint64
+	var (
+		written  uint64
+		entryRaw [stateDomainChangeBinaryTxRangeSize]byte
+	)
 	if err := iterateMergedStateDomainChangeBinaryCompactionTxRanges(dir, sources, func(row *rawdb.StateTxRange) error {
 		if written == math.MaxUint64 {
 			return errors.New("snapshots: compacted state-domain-change tx range count overflows")
 		}
-		if err := writeStateDomainChangeBinaryTxRangeEntry(dst, row); err != nil {
+		if err := putStateDomainChangeBinaryTxRangeEntry(&entryRaw, row); err != nil {
+			return err
+		}
+		if _, err := dst.Write(entryRaw[:]); err != nil {
 			return err
 		}
 		written++
@@ -2270,11 +2313,15 @@ func writeStateDomainChangeBinaryTxRangeTable(w io.Writer, txRanges []*rawdb.Sta
 	if err := writeStateDomainChangeBinaryTxRangeCount(w, uint64(len(txRanges))); err != nil {
 		return err
 	}
+	var raw [stateDomainChangeBinaryTxRangeSize]byte
 	for i, row := range txRanges {
 		if row == nil {
 			return fmt.Errorf("snapshots: nil state tx range entry %d", i)
 		}
-		if err := writeStateDomainChangeBinaryTxRangeEntry(w, row); err != nil {
+		if err := putStateDomainChangeBinaryTxRangeEntry(&raw, row); err != nil {
+			return err
+		}
+		if _, err := w.Write(raw[:]); err != nil {
 			return err
 		}
 	}
@@ -2288,20 +2335,18 @@ func writeStateDomainChangeBinaryTxRangeCount(w io.Writer, count uint64) error {
 	return err
 }
 
-func writeStateDomainChangeBinaryTxRangeEntry(w io.Writer, row *rawdb.StateTxRange) error {
+func putStateDomainChangeBinaryTxRangeEntry(raw *[stateDomainChangeBinaryTxRangeSize]byte, row *rawdb.StateTxRange) error {
 	if row == nil {
 		return errors.New("snapshots: nil state tx range entry")
 	}
 	if row.EndTxNum < row.BeginTxNum {
 		return fmt.Errorf("snapshots: state tx range for block %d is inverted", row.BlockNum)
 	}
-	var raw [stateDomainChangeBinaryTxRangeSize]byte
 	binary.BigEndian.PutUint64(raw[0:8], row.BlockNum)
 	copy(raw[8:8+common.HashLength], row.BlockHash[:])
 	binary.BigEndian.PutUint64(raw[8+common.HashLength:16+common.HashLength], row.BeginTxNum)
 	binary.BigEndian.PutUint64(raw[16+common.HashLength:24+common.HashLength], row.EndTxNum)
-	_, err := w.Write(raw[:])
-	return err
+	return nil
 }
 
 func decodeStateDomainChangeBinaryTxRangeTable(ref SegmentRef, header stateDomainChangeBinaryHeader, data []byte) ([]*rawdb.StateTxRange, []byte, error) {
@@ -3261,8 +3306,20 @@ func stateDomainChangeBinaryAccessorLookupPrefix(owner common.Address, generatio
 }
 
 func stateDomainChangeBinaryAccessorLookupKey(flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) []byte {
+	return appendStateDomainChangeBinaryAccessorLookupKey(nil, flatDomain, owner, generation, domain, key)
+}
+
+func appendStateDomainChangeBinaryAccessorLookupKey(out []byte, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) []byte {
 	id := owner.AccountID()
-	out := make([]byte, 0, 1+len(id)+8+2+len(key))
+	required := 1 + len(id)
+	if flatDomain == rawdb.StateFlatDomainKVLatest {
+		required += 8 + 2 + len(key)
+	}
+	if cap(out) < required {
+		out = make([]byte, 0, required)
+	} else {
+		out = out[:0]
+	}
 	out = append(out, byte(flatDomain))
 	out = append(out, id[:]...)
 	if flatDomain == rawdb.StateFlatDomainKVLatest {

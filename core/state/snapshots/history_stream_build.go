@@ -335,12 +335,18 @@ func writeStateDomainChangeBinaryTxRangeTableFromDB(file stateDomainChangeBinary
 		return 0, err
 	}
 	const maxCount = (math.MaxUint64 - uint64(stateDomainChangeBinaryHeaderSize) - 8) / stateDomainChangeBinaryTxRangeSize
-	var written uint64
+	var (
+		written uint64
+		raw     [stateDomainChangeBinaryTxRangeSize]byte
+	)
 	if err := iterateStateDomainChangeHistoryTxRanges(db, cfg, fromTxNum, toTxNum, blockRange, func(row *rawdb.StateTxRange) error {
 		if written >= maxCount {
 			return fmt.Errorf("snapshots: state-domain-change tx range count exceeds maximum %d", maxCount)
 		}
-		if err := writeStateDomainChangeBinaryTxRangeEntry(writer, row); err != nil {
+		if err := putStateDomainChangeBinaryTxRangeEntry(&raw, row); err != nil {
+			return err
+		}
+		if _, err := writer.Write(raw[:]); err != nil {
 			return err
 		}
 		written++
@@ -412,18 +418,26 @@ func iterateStateDomainChangeHistorySourceTxRanges(db ethdb.Iteratee, cfg Domain
 	return cfg.IterateHotHistoryTxRangeBlocks(db, blockRange.from, blockRange.to, fn)
 }
 
-func encodeStateDomainChangeBinaryRecordFrame(change *rawdb.StateDomainChange) ([]byte, error) {
-	payload, err := encodeStateDomainChangeRecordV5(change)
+func appendStateDomainChangeBinaryRecordFrame(dst []byte, change *rawdb.StateDomainChange) ([]byte, error) {
+	payloadSize, err := stateDomainChangeRecordV5Size(change)
 	if err != nil {
 		return nil, err
 	}
-	if uint64(len(payload)) > math.MaxUint32 {
-		return nil, fmt.Errorf("snapshots: state-domain-change record is too large: %d bytes", len(payload))
+	frameSize := 4 + payloadSize
+	start := len(dst)
+	if cap(dst)-start < frameSize {
+		capacity := cap(dst) * 2
+		if capacity < start+frameSize {
+			capacity = start + frameSize
+		}
+		grown := make([]byte, start, capacity)
+		copy(grown, dst)
+		dst = grown
 	}
-	frame := make([]byte, 4+len(payload))
-	binary.BigEndian.PutUint32(frame[:4], uint32(len(payload)))
-	copy(frame[4:], payload)
-	return frame, nil
+	dst = dst[:start+frameSize]
+	binary.BigEndian.PutUint32(dst[start:start+4], uint32(payloadSize))
+	putStateDomainChangeRecordV5(dst[start+4:], change)
+	return dst, nil
 }
 
 func encodeStateDomainChangeBinaryAccessorEntryFrame(entry stateDomainChangeBinaryAccessorEntry) ([]byte, error) {
@@ -487,17 +501,18 @@ func stateDomainChangeHistoryRecordETLSortKey(change *rawdb.StateDomainChange, o
 }
 
 type stateDomainChangeHistoryRecordWriter struct {
-	segment      *bufio.Writer
-	index        *bufio.Writer
-	accessors    *stateDomainChangeBinaryAccessorV4Collectors
-	ref          SegmentRef
-	expected     uint64
-	count        uint64
-	segmentOff   uint64
-	indexWritten uint64
-	currentIndex stateDomainChangeBinaryTxOffset
-	haveIndex    bool
-	previous     *rawdb.StateDomainChange
+	segment       *bufio.Writer
+	index         *bufio.Writer
+	accessors     *stateDomainChangeBinaryAccessorV4Collectors
+	ref           SegmentRef
+	expected      uint64
+	count         uint64
+	segmentOff    uint64
+	indexWritten  uint64
+	currentIndex  stateDomainChangeBinaryTxOffset
+	haveIndex     bool
+	previous      *rawdb.StateDomainChange
+	recordScratch []byte
 }
 
 const stateDomainChangeHistoryWriteBufferSize = 256 << 10
@@ -577,10 +592,11 @@ func (w *stateDomainChangeHistoryRecordWriter) writeChange(change *rawdb.StateDo
 		w.haveIndex = true
 	}
 
-	frame, err := encodeStateDomainChangeBinaryRecordFrame(change)
+	frame, err := appendStateDomainChangeBinaryRecordFrame(w.recordScratch[:0], change)
 	if err != nil {
 		return err
 	}
+	w.recordScratch = frame
 	if _, err := w.segment.Write(frame); err != nil {
 		return err
 	}
@@ -733,15 +749,12 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Put(_ []byte, value []
 	if len(value) != stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV4GroupEntrySize {
 		return fmt.Errorf("snapshots: state-domain-change accessor v4 group value size %d, want %d", len(value), stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV4GroupEntrySize)
 	}
-	var key [stateDomainChangeBinaryAccessorV3GroupKeySize]byte
-	copy(key[:], value[:stateDomainChangeBinaryAccessorV3GroupKeySize])
-	prefix := binary.BigEndian.Uint32(value[stateDomainChangeBinaryAccessorV3GroupKeySize : stateDomainChangeBinaryAccessorV3GroupKeySize+4])
+	key := value[:stateDomainChangeBinaryAccessorV3GroupKeySize]
 	offset := binary.BigEndian.Uint64(value[stateDomainChangeBinaryAccessorV3GroupKeySize+4 : stateDomainChangeBinaryAccessorV3GroupKeySize+12])
-	recordIndex := binary.BigEndian.Uint32(value[stateDomainChangeBinaryAccessorV3GroupKeySize+12:])
 	if offset < stateDomainChangeBinaryHeaderSize {
 		return fmt.Errorf("snapshots: state-domain-change accessor v3 group record offset %d is invalid", offset)
 	}
-	if !w.haveGroup || !bytes.Equal(w.currentKey[:], key[:]) {
+	if !w.haveGroup || !bytes.Equal(w.currentKey[:], key) {
 		if err := w.finishGroup(); err != nil {
 			return err
 		}
@@ -750,7 +763,7 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Put(_ []byte, value []
 		if _, err := w.offsets.Write(raw[:]); err != nil {
 			return err
 		}
-		if _, err := w.payload.Write(key[:]); err != nil {
+		if _, err := w.payload.Write(key); err != nil {
 			return err
 		}
 		w.countOffset = int64(w.payloadOffset + stateDomainChangeBinaryAccessorV3GroupKeySize)
@@ -758,16 +771,12 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Put(_ []byte, value []
 			return err
 		}
 		w.payloadOffset += stateDomainChangeBinaryAccessorV3GroupKeySize + 8
-		w.currentKey = key
+		copy(w.currentKey[:], key)
 		w.currentCount = 0
 		w.haveGroup = true
 		w.groups++
 	}
-	var raw [stateDomainChangeBinaryAccessorV4GroupEntrySize]byte
-	binary.BigEndian.PutUint32(raw[0:4], prefix)
-	binary.BigEndian.PutUint64(raw[4:12], offset)
-	binary.BigEndian.PutUint32(raw[12:], recordIndex)
-	if _, err := w.payload.Write(raw[:]); err != nil {
+	if _, err := w.payload.Write(value[stateDomainChangeBinaryAccessorV3GroupKeySize:]); err != nil {
 		return err
 	}
 	w.payloadOffset += stateDomainChangeBinaryAccessorV4GroupEntrySize
@@ -825,8 +834,9 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Release() {
 }
 
 type stateDomainChangeBinaryAccessorV4Collectors struct {
-	exact *etl.Collector
-	group *etl.Collector
+	exact      *etl.Collector
+	group      *etl.Collector
+	keyScratch []byte
 }
 
 func newStateDomainChangeBinaryAccessorV4Collectors(opts etl.Options) (*stateDomainChangeBinaryAccessorV4Collectors, error) {
@@ -860,7 +870,8 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Collect(change *rawdb.Stat
 	if recordIndex > math.MaxUint32 {
 		return fmt.Errorf("snapshots: state-domain-change accessor v4 record index %d exceeds uint32", recordIndex)
 	}
-	key := stateDomainChangeBinaryAccessorKey(change)
+	c.keyScratch = appendStateDomainChangeBinaryAccessorLookupKey(c.keyScratch[:0], change.FlatDomain, change.Owner, change.Generation, change.Domain, change.Key)
+	key := c.keyScratch
 	hash := stateDomainChangeBinaryAccessorV3Hash(key)
 	exactValue := make([]byte, stateDomainChangeBinaryAccessorV3ExactEntrySize)
 	copy(exactValue[:stateDomainChangeBinaryAccessorV3HashSize], hash[:])
