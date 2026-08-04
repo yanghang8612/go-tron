@@ -3899,6 +3899,43 @@ from 129.80 ms to 119.13 ms (-8.2%). The direct stream microbenchmark reduced
 the 2 MiB median from 9.81 ms to 8.87 ms with workers and the 8 MiB median from
 21.06 ms to 13.82 ms (1.52x throughput).
 
+#### P5.26: Trusted history build reopen
+
+After P5.25 removed the uncompressed file round trip, a successful base build
+still decoded the complete history again before publishing its manifest. That
+pass revalidated tx-range ordering, record framing/order/count and logical end
+even though the same build transaction had just enforced each invariant while
+emitting the table and records. Compaction did the same full replay over its new
+output after already decoding every source record and writing an exact known
+count. Erigon trusts a successful collation/compressor output at this boundary
+and reserves exhaustive semantic verification for external snapshot inputs and
+offline audits.
+
+Fresh base and compaction output now use a narrowly scoped trusted reopen. The
+compressed reader still validates the complete physical block table, increasing
+logical offsets, contiguous compressed offsets, physical file coverage and
+declared uncompressed extent. The trusted layer additionally requires the
+current history version, exact writer-observed logical end, exact record count,
+exact tx-range count and minimum record framing space, then decodes payload
+bytes at the first-record boundary, logical midpoint and final byte. Index and
+accessor fixed-layout reopens remain unchanged.
+
+The trust does not extend to downloaded, restored, pre-existing or compaction
+input files. Manifest verification still checks physical checksums, validates
+every tx-range, decodes every history record, proves index coverage and compares
+every accessor entry against its history record. Corruption tests bind all
+writer facts, damage a sampled compressed body block, require both trusted and
+exhaustive validators to reject it, and retain the existing full-record
+corruption suite.
+
+Against independently compiled P5.25 binaries, ten alternating Pebble A/B pairs
+reduced the dense base-build median from 45.80 ms to 43.70 ms (-4.6%), allocated
+bytes from 14.03 MB to 10.60 MB (-24.5%) and allocations from about 130,537 to
+95,408 (-26.9%). Sparse median time fell from 40.30 ms to 38.89 ms (-3.5%),
+allocated bytes by 18.4% and allocations by 28.4%. Seven alternating compaction
+pairs reduced median time from 118.35 ms to 113.13 ms (-4.4%), allocated bytes
+by 7.9% and allocations by 19.3%.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

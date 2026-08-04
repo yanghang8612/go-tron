@@ -211,11 +211,13 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		return result, err
 	}
 
-	// Hot pruning trusts manifest coverage. Replay the history through its
-	// production reader, then reopen the derived files and validate their fixed
-	// layout. Their ETL writers already checked every ordered row while emitting
-	// them, so rescanning those same rows here would duplicate build work.
-	if err := validateBuiltStateDomainChangeBinaryFiles(dir, segmentRef, indexRef, accessorRef, recordWriter.indexWritten, recordCount); err != nil {
+	// Hot pruning trusts manifest coverage. Reopen the just-built history through
+	// its production reader and bind its complete compressed layout plus sampled
+	// payload blocks to the writer's exact logical end/counts. The writer already
+	// checked every tx-range and record while emitting; imported/offline files
+	// still receive the exhaustive replay. Derived writers similarly validate
+	// every ordered row, so their trusted check only reopens fixed layouts.
+	if err := validateBuiltStateDomainChangeBinaryFiles(dir, segmentRef, indexRef, accessorRef, recordWriter.segmentOff, recordWriter.indexWritten, recordCount, txRangeCount); err != nil {
 		return result, err
 	}
 	published = true
@@ -223,8 +225,8 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	return result, nil
 }
 
-func validateBuiltStateDomainChangeBinaryFiles(dir string, segmentRef, indexRef, accessorRef SegmentRef, indexCount, recordCount uint64) error {
-	if err := validateHistorySegmentReadable(dir, segmentRef); err != nil {
+func validateBuiltStateDomainChangeBinaryFiles(dir string, segmentRef, indexRef, accessorRef SegmentRef, logicalEnd, indexCount, recordCount, txRangeCount uint64) error {
+	if err := validateTrustedBuiltHistorySegment(dir, segmentRef, logicalEnd, recordCount, txRangeCount); err != nil {
 		return fmt.Errorf("snapshots: state-domain-change history segment self-check: %w", err)
 	}
 	index, indexHeader, err := openStateDomainChangeBinaryIndexReader(dir, indexRef)

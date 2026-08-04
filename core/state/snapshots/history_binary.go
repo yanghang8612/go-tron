@@ -493,6 +493,69 @@ func validateHistorySegmentReadable(dir string, segRef SegmentRef) error {
 	return nil
 }
 
+// validateTrustedBuiltHistorySegment reopens a segment emitted by the current
+// build transaction without replaying invariants already enforced by its tx-
+// range and record writers. The compressed opener validates the complete block
+// table and physical coverage; this layer binds it to the exact logical end and
+// row counts observed while writing, then decodes representative first/middle/
+// last payload blocks. External/imported files continue through the exhaustive
+// validateHistorySegmentReadable and manifest companion checks.
+func validateTrustedBuiltHistorySegment(dir string, segRef SegmentRef, expectedLogicalEnd, expectedRecords, expectedTxRanges uint64) error {
+	reader, logicalSize, header, err := openHistorySegmentForRead(dir, segRef)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	if header.version != stateDomainChangeBinarySegmentVersion {
+		return fmt.Errorf("snapshots: trusted history version %d, want %d", header.version, stateDomainChangeBinarySegmentVersion)
+	}
+	if header.count != expectedRecords {
+		return fmt.Errorf("snapshots: trusted history record count %d, want %d", header.count, expectedRecords)
+	}
+	if logicalSize != expectedLogicalEnd {
+		return fmt.Errorf("snapshots: trusted history logical size %d, want writer end %d", logicalSize, expectedLogicalEnd)
+	}
+	txRangeCount, payloadOffset, err := stateDomainChangeBinaryTxRangeTableBoundsAt(reader, logicalSize, segRef, header)
+	if err != nil {
+		return err
+	}
+	if txRangeCount != expectedTxRanges {
+		return fmt.Errorf("snapshots: trusted history tx-range count %d, want %d", txRangeCount, expectedTxRanges)
+	}
+	if header.count > (math.MaxUint64-payloadOffset)/4 {
+		return fmt.Errorf("snapshots: trusted history record count %d overflows logical size", header.count)
+	}
+	if minEnd := payloadOffset + header.count*4; minEnd > logicalSize {
+		return fmt.Errorf("snapshots: trusted history minimum record end %d exceeds logical size %d", minEnd, logicalSize)
+	}
+	if logicalSize > math.MaxInt64 {
+		return fmt.Errorf("snapshots: trusted history logical size %d exceeds int64", logicalSize)
+	}
+
+	positions := []uint64{logicalSize / 2}
+	if header.count != 0 {
+		positions = append(positions, payloadOffset)
+	}
+	if logicalSize != 0 {
+		positions = append(positions, logicalSize-1)
+	}
+	seen := make(map[uint64]struct{}, len(positions))
+	var one [1]byte
+	for _, pos := range positions {
+		if pos >= logicalSize {
+			continue
+		}
+		if _, ok := seen[pos]; ok {
+			continue
+		}
+		seen[pos] = struct{}{}
+		if _, err := reader.ReadAt(one[:], int64(pos)); err != nil {
+			return fmt.Errorf("snapshots: trusted history sample at %d: %w", pos, err)
+		}
+	}
+	return nil
+}
+
 type stateDomainChangeBinaryCompactionSource struct {
 	history       SegmentRef
 	accessor      SegmentRef
@@ -853,10 +916,8 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	if CompressHistorySegments {
-		if err := validateHistorySegmentReadable(dir, segRef); err != nil {
-			return segRef, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted compressed segment self-check failed: %w", err)
-		}
+	if err := validateTrustedBuiltHistorySegment(dir, segRef, recordWriter.segmentOff, totalRecords, txRangeCount); err != nil {
+		return segRef, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted history self-check failed: %w", err)
 	}
 	idxRef = SegmentRef{
 		Dataset:          SegmentDatasetStateDomainChange,

@@ -441,5 +441,8 @@
 - [x] Feed base collation and compaction directly into the seekable compressed
   history writer, retaining the patchable first chunk and removing the complete
   uncompressed temp-file write, sync, reopen, and readback pass.
+- [x] Replace the exhaustive replay of a just-built history output with a
+  writer-bound trusted reopen of its complete compressed layout, exact counts/
+  logical end and sampled payload blocks, retaining full external audits.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

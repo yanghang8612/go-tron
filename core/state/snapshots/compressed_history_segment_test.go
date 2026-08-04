@@ -361,6 +361,79 @@ func TestCompressedHistorySegmentSelfCheckCatchesCorruption(t *testing.T) {
 	}
 }
 
+func TestValidateTrustedBuiltHistorySegmentBindsWriterFactsAndSamplesBody(t *testing.T) {
+	changes := buildHistoryStructs(120, 40)
+	baseRef := SegmentRef{
+		Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+		FromTxNum: 9_000_000, ToTxNum: 9_000_119, Path: "trusted.seg",
+	}
+	dir := t.TempDir()
+	seg, _, _, err := writeStateDomainChangeBinaryCompressedSegmentFiles(dir, baseRef, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, logicalSize, header, err := openHistorySegmentForRead(dir, seg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txRangeCount, _, err := stateDomainChangeBinaryTxRangeTableBoundsAt(reader, logicalSize, seg, header)
+	if closeErr := reader.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTrustedBuiltHistorySegment(dir, seg, logicalSize, header.count, txRangeCount); err != nil {
+		t.Fatalf("trusted validator rejected valid output: %v", err)
+	}
+	for name, facts := range map[string][3]uint64{
+		"logical-end": {logicalSize + 1, header.count, txRangeCount},
+		"records":     {logicalSize, header.count + 1, txRangeCount},
+		"tx-ranges":   {logicalSize, header.count, txRangeCount + 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateTrustedBuiltHistorySegment(dir, seg, facts[0], facts[1], facts[2]); err == nil {
+				t.Fatal("trusted validator accepted mismatched writer facts")
+			}
+		})
+	}
+
+	path := filepath.Join(dir, seg.Path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockCount := binary.BigEndian.Uint64(data[24:32])
+	target := logicalSize / 2
+	var targetBlock uint64
+	for i := uint64(1); i < blockCount; i++ {
+		off := compressedBlockHeaderSize + i*compressedBlockTableEntry
+		if binary.BigEndian.Uint64(data[off:off+8]) > target {
+			break
+		}
+		targetBlock = i
+	}
+	entry := compressedBlockHeaderSize + targetBlock*compressedBlockTableEntry
+	dataOffset := binary.BigEndian.Uint64(data[40:48])
+	compressedStart := binary.BigEndian.Uint64(data[entry+8 : entry+16])
+	compressedLen := binary.BigEndian.Uint64(data[entry+16 : entry+24])
+	start := dataOffset + compressedStart
+	end := start + compressedLen
+	if end > start+64 {
+		end = start + 64
+	}
+	clear(data[start:end])
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTrustedBuiltHistorySegment(dir, seg, logicalSize, header.count, txRangeCount); err == nil {
+		t.Fatal("trusted validator accepted corruption in sampled body block")
+	}
+	if err := validateHistorySegmentReadable(dir, seg); err == nil {
+		t.Fatal("exhaustive validator accepted corruption in sampled body block")
+	}
+}
+
 // TestCompressedHistorySegmentFullReadAndCheck proves the whole-segment readers
 // and the integrity checkers accept a compressed segment: the full read
 // decompresses + decodes byte-identically, and both the seg and .kv checkers pass

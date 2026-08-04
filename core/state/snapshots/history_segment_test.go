@@ -582,7 +582,18 @@ func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptTailGroup(t *tes
 	if closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	if err := validateBuiltStateDomainChangeBinaryFiles(dir, refs[0], refs[2], refs[1], 1, 1); err == nil {
+	history, logicalSize, historyHeader, err := openHistorySegmentForRead(dir, refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	txRangeCount, _, err := stateDomainChangeBinaryTxRangeTableBoundsAt(history, logicalSize, refs[0], historyHeader)
+	if closeErr := history.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBuiltStateDomainChangeBinaryFiles(dir, refs[0], refs[2], refs[1], logicalSize, 1, historyHeader.count, txRangeCount); err == nil {
 		t.Fatal("corrupt built accessor tail group passed layout self-check")
 	}
 }
