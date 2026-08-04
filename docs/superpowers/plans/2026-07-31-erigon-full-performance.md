@@ -390,5 +390,8 @@
   rewrite the complete merged prefix.
 - [x] Bound each base aggregation step by Erigon's 390,625 txNum target and a
   5,000-block sparse-history ceiling while retaining whole-block boundaries.
+- [x] Stream merged tx-range rows once and construct the txNum index while
+  rewriting history records, avoiding a full decompression pass over every
+  newly compacted segment.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

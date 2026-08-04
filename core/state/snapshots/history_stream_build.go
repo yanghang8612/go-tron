@@ -388,12 +388,26 @@ func (w *stateDomainChangeHistoryRecordETLWriter) Put(_ []byte, value []byte) er
 	if w == nil || w.segment == nil || w.index == nil {
 		return errors.New("snapshots: nil state-domain-change history record ETL writer")
 	}
-	if w.count >= w.expected {
-		return fmt.Errorf("snapshots: state-domain-change history emitted more than %d records", w.expected)
-	}
 	change, err := decodeStateDomainChangeRecord(value)
 	if err != nil {
 		return err
+	}
+	return w.WriteChange(change)
+}
+
+// WriteChange emits one already-decoded history row while maintaining the
+// companion txNum index. Cold builds reach this through Put after ETL sorting;
+// compaction can call it directly while streaming ordered source segments and
+// avoid encoding, decoding, and rescanning the merged output for its index.
+func (w *stateDomainChangeHistoryRecordETLWriter) WriteChange(change *rawdb.StateDomainChange) error {
+	if w == nil || w.segment == nil || w.index == nil {
+		return errors.New("snapshots: nil state-domain-change history record writer")
+	}
+	if change == nil {
+		return errors.New("snapshots: nil state-domain-change history record")
+	}
+	if w.count >= w.expected {
+		return fmt.Errorf("snapshots: state-domain-change history emitted more than %d records", w.expected)
 	}
 	if change.TxNum < w.ref.FromTxNum || change.TxNum > w.ref.ToTxNum {
 		return fmt.Errorf("snapshots: state-domain-change tx %d outside segment range [%d,%d]", change.TxNum, w.ref.FromTxNum, w.ref.ToTxNum)

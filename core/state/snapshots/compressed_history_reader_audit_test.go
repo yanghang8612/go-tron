@@ -25,7 +25,6 @@ func TestStateDomainHistoryRecordReadersUseCompressedOpeners(t *testing.T) {
 		"validateCompressedHistorySegmentReadable":                   {"openHistorySegmentForRead"},
 		"validateStateDomainChangeBinaryAccessorEntryAgainstSegment": nil,
 		"verifyStateDomainChangeBinaryIndexCoverage":                 nil,
-		"writeCompactedStateDomainChangeBinaryIndex":                 {"openHistorySegmentForRead"},
 	}
 
 	actual := make(map[string][]string)

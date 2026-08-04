@@ -3428,6 +3428,43 @@ took 0.926--0.936 ms across three benchmark runs. The additional bounded seek
 is negligible beside segment collation and is executed only when the candidate
 block range actually exceeds the txNum target.
 
+#### P5.9: Single-pass history merge index construction
+
+The first geometric compactor bounded rewrite amplification but still made
+avoidable passes over every merge. It walked all source tx-range tables once
+to count the merged rows and again to emit them. After streaming the record
+payload into a new segment and compressing it, it decompressed the complete
+output once for readability validation, a second time to reconstruct the
+txNum index, and a third time to feed the sorted accessor builders. These
+passes were bounded, but their CPU and read volume scaled with every merged
+file and directly competed with canonical import.
+
+The merge writer now reserves the tx-range count, streams and coalesces the
+source tables once, then patches the final count in place. Its existing
+transaction-ordered record writer is shared with cold collation: as each
+already-decoded source record is re-encoded to v5, the writer emits the txNum
+index entry at the exact logical output offset. Compression preserves those
+logical offsets, so the index can be finalized beside the content-addressed
+segment without reopening or decompressing that output.
+
+This reduces tx-range source traversal from two passes to one and complete
+merged-output record scans from three to two. The remaining passes have
+different correctness or ordering responsibilities: the compressed-read
+self-check prevents an unreadable file from reaching prune coverage, and the
+accessor scan feeds two bounded ETL sort orders. Compaction remains one-record
+bounded outside those collectors, and the same record writer validates global
+tx/sequence ordering across source boundaries. The next independent step is
+to feed the accessor collectors during this merge stream, after this smaller
+single-pass-index change clears its build and production gates.
+
+On the local Apple M1 Max benchmark, merging two compressed 8,000-record
+segments (4,000 txNums total) improved from a five-run mean of 875.22 ms to
+839.92 ms, a 4.03% reduction. Mean allocated bytes fell from 259.93 MB to
+255.46 MB (1.72%), and allocations fell from 4.102 million to 3.970 million
+(3.22%). Each sample used five fixed compactions; source construction was
+outside the timed region, while merge, validation, accessor construction, and
+manifest integration remained inside it.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go
