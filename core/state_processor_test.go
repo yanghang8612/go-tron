@@ -352,6 +352,119 @@ func TestProcessBlockParallelTransfersMatchesSerial(t *testing.T) {
 	}
 }
 
+func TestProcessBlockParallelTransfersPreservesRepeatedRecipientBalance(t *testing.T) {
+	base := newTestState(t)
+	for _, id := range []byte{1, 2, 3} {
+		base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+	}
+	base.AddBalance(testProcessorAddr(1), 11_708)
+	base.SetAllowance(testProcessorAddr(1), 38_047_331_075)
+	base.AddBalance(testProcessorAddr(2), 401_984_861)
+	base.AddBalance(testProcessorAddr(3), 1_000_000_000_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	contractAddr := testProcessorAddr(0x80)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: testProcessorAddr(3).Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	base.SetCode(contractAddr, []byte{0x00})
+	base.DynamicProperties().SetAllowCreationOfContracts(true)
+	base.DynamicProperties().SetAllowAdaptiveEnergy(true)
+	base.DynamicProperties().SetAllowBlackHoleOptimization(true)
+	base.DynamicProperties().SetLatestBlockHeaderTimestamp(100_000_000)
+	base.DynamicProperties().SetPublicNetUsage(1_000)
+	base.DynamicProperties().SetPublicNetTime(0)
+	passVersion3_6_5(base, 27)
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	amounts := []int64{1_000_000_000, 1_000_000_000, 1_000_000_000, 5_000_000_000, 12_000_000_000, 5_000_000_000, 12_000_000_000}
+	transferIndices := []int{8, 38, 80, 81, 90, 95, 100}
+	transactions := make([]*corepb.Transaction, 129)
+	for i := range transactions {
+		trigger := makeTestTriggerTx(3, contractAddr, nil).Proto()
+		trigger.RawData.Expiration = 100_060_000
+		trigger.RawData.FeeLimit = 10_000_000
+		trigger.Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+		transactions[i] = trigger
+	}
+	withdraw, err := anypb.New(&contractpb.WithdrawBalanceContract{OwnerAddress: testProcessorAddr(1).Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transactions[6] = &corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Expiration: 100_060_000,
+		Contract: []*corepb.Transaction_Contract{{
+			Type: corepb.Transaction_Contract_WithdrawBalanceContract, Parameter: withdraw,
+		}},
+	}}
+	for i, amount := range amounts {
+		transactions[transferIndices[i]] = makeTestTransferTx(1, 2, amount).Proto()
+		transactions[transferIndices[i]].RawData.Expiration = 100_060_000
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: 32, Timestamp: 100_003_000,
+		}},
+		Transactions: transactions,
+	})
+	run := func(statedb *state.StateDB, db actuator.BufferedKVStore, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, db, nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	serialInfos, err := run(serialState, ethrawdb.NewMemoryDatabase(), processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial process: %v", err)
+	}
+	publishedBefore := parallelTransferPublishedCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, ethrawdb.NewMemoryDatabase(), processBlockOptions{parallelTransfers: true})
+	if err != nil {
+		t.Fatalf("parallel process: %v", err)
+	}
+	if published := parallelTransferPublishedCounter.Snapshot().Count() - publishedBefore; published != 0 {
+		t.Fatalf("cross-family sender suffix published %d transfers, want serial fallback", published)
+	}
+	for i := range serialInfos {
+		if !proto.Equal(serialInfos[i], parallelInfos[i]) {
+			t.Fatalf("tx %d info mismatch\nserial=%v\nparallel=%v", i, serialInfos[i], parallelInfos[i])
+		}
+	}
+	for _, id := range []byte{1, 2} {
+		address := testProcessorAddr(id)
+		if serial, parallel := serialState.GetBalance(address), parallelState.GetBalance(address); serial != parallel {
+			t.Fatalf("account %d balance serial=%d parallel=%d", id, serial, parallel)
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
 func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	base := newTestState(t)
 	dynProps := base.DynamicProperties()

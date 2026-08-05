@@ -1638,13 +1638,17 @@ func discardShadowVMFilter(tx *types.Transaction) bool {
 }
 
 // discardShadowSenderChains returns independent scheduling units for one
-// actuator family. A chain may span transactions from other senders, but it is
-// broken when the same sender has an intervening transaction outside the
-// selected family because that predecessor was not executed by this worker.
+// actuator family. A chain may span transactions from other senders. Once the
+// same sender executes a transaction outside the selected family, however, its
+// remaining family suffix stays on the canonical serial path. Starting a new
+// speculative chain after that boundary would require an asynchronous prefix
+// rebuild; a late retry can otherwise publish a post-image that omits earlier
+// same-sender writes.
 func discardShadowSenderChains(transactions []*types.Transaction, eligible discardShadowSenderChainFilter) [][]discardShadowSenderChainTask {
 	chains := make([][]discardShadowSenderChainTask, 0, discardShadowWorkerCount*2)
 	lastSenderTx := make(map[tcommon.Address]int, len(transactions)/4+1)
 	chainByLastTx := make(map[int]int, len(transactions)/4+1)
+	serialSuffix := make(map[tcommon.Address]bool, len(transactions)/8+1)
 	for txIndex, tx := range transactions {
 		if tx == nil || tx.Contract() == nil {
 			continue
@@ -1660,6 +1664,10 @@ func discardShadowSenderChains(transactions []*types.Transaction, eligible disca
 		previous, hasPrevious := lastSenderTx[owner]
 		lastSenderTx[owner] = txIndex
 		if eligible == nil || !eligible(tx) {
+			serialSuffix[owner] = true
+			continue
+		}
+		if serialSuffix[owner] {
 			continue
 		}
 		task := discardShadowSenderChainTask{txIndex: txIndex, senderPredecessor: previous}

@@ -1404,8 +1404,8 @@ func TestTransferSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
 		makeTestTransferTx(1, 6, 1),
 	}
 	chains := transferSenderChains(transactions)
-	if len(chains) != 3 {
-		t.Fatalf("sender chains = %v, want 3", chains)
+	if len(chains) != 2 {
+		t.Fatalf("sender chains = %v, want 2", chains)
 	}
 	var joined, afterUnsupported *discardShadowSenderChainTask
 	for chainIndex := range chains {
@@ -1422,8 +1422,8 @@ func TestTransferSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
 	if joined == nil || !joined.senderVersioned || joined.senderPredecessor != 0 {
 		t.Fatalf("same-sender transfer was not chained: %+v", joined)
 	}
-	if afterUnsupported == nil || afterUnsupported.senderVersioned || afterUnsupported.senderPredecessor != 3 {
-		t.Fatalf("chain did not break at non-transfer predecessor: %+v", afterUnsupported)
+	if afterUnsupported != nil {
+		t.Fatalf("post-VM transfer escaped the serial suffix: %+v", afterUnsupported)
 	}
 }
 
@@ -1436,8 +1436,8 @@ func TestVMSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
 		makeTestTriggerTx(1, testProcessorAddr(8), nil),
 	}
 	chains := vmSenderChains(transactions)
-	if len(chains) != 3 {
-		t.Fatalf("VM sender chains = %v, want 3", chains)
+	if len(chains) != 2 {
+		t.Fatalf("VM sender chains = %v, want 2", chains)
 	}
 	var joined, afterTransfer *discardShadowSenderChainTask
 	for chainIndex := range chains {
@@ -1454,8 +1454,8 @@ func TestVMSenderChainsFollowImmediateSenderPredecessor(t *testing.T) {
 	if joined == nil || !joined.senderVersioned || joined.senderPredecessor != 0 {
 		t.Fatalf("same-sender VM transaction was not chained: %+v", joined)
 	}
-	if afterTransfer == nil || afterTransfer.senderVersioned || afterTransfer.senderPredecessor != 3 {
-		t.Fatalf("VM chain did not break at transfer predecessor: %+v", afterTransfer)
+	if afterTransfer != nil {
+		t.Fatalf("post-transfer VM transaction escaped the serial suffix: %+v", afterTransfer)
 	}
 }
 
