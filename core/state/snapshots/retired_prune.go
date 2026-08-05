@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -35,14 +36,24 @@ type RetiredSegmentFileInspection struct {
 // InspectRetiredSegmentFiles reports physical files that are still present for
 // manifest-retired segment refs without deleting anything.
 func InspectRetiredSegmentFiles(dir string) (*RetiredSegmentFileInspection, error) {
-	return inspectRetiredSegmentFiles(dir, "retired inspect")
+	return inspectRetiredSegmentFiles(context.Background(), dir, "retired inspect")
 }
 
 // PruneRetiredSegmentFiles removes physical files referenced only by the
 // manifest's retired list. It leaves manifest.json and snapshot-catalog.json
 // untouched so already signed catalogs keep authenticating the active view.
 func PruneRetiredSegmentFiles(dir string) (*PruneRetiredSegmentFilesResult, error) {
-	inspection, err := inspectRetiredSegmentFiles(dir, "retired prune")
+	return PruneRetiredSegmentFilesContext(context.Background(), dir)
+}
+
+// PruneRetiredSegmentFilesContext is the cancellable lifecycle variant. A
+// cancellation during active-view verification returns before any retired file
+// is removed, preserving the deletion gate's all-or-nothing safety property.
+func PruneRetiredSegmentFilesContext(ctx context.Context, dir string) (*PruneRetiredSegmentFilesResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	inspection, err := inspectRetiredSegmentFiles(ctx, dir, "retired prune")
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +64,9 @@ func PruneRetiredSegmentFiles(dir string) (*PruneRetiredSegmentFilesResult, erro
 		FilesSkippedPublished: inspection.FilesSkippedPublished,
 	}
 	for _, file := range inspection.PresentFiles {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		if err := os.Remove(filepath.Join(dir, file.Path)); err != nil {
 			return result, fmt.Errorf("snapshots: remove retired segment %q: %w", file.Path, err)
 		}
@@ -63,7 +77,13 @@ func PruneRetiredSegmentFiles(dir string) (*PruneRetiredSegmentFilesResult, erro
 	return result, nil
 }
 
-func inspectRetiredSegmentFiles(dir, operation string) (*RetiredSegmentFileInspection, error) {
+func inspectRetiredSegmentFiles(ctx context.Context, dir, operation string) (*RetiredSegmentFileInspection, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if dir == "" {
 		return nil, errors.New("snapshots: retired segment prune directory is empty")
 	}
@@ -93,6 +113,9 @@ func inspectRetiredSegmentFiles(dir, operation string) (*RetiredSegmentFileInspe
 
 	seenRetired := make(map[string]struct{}, len(manifest.Retired))
 	for _, ref := range manifest.Retired {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if _, ok := active[ref.Path]; ok {
 			result.FilesSkippedActive++
 			continue
@@ -129,7 +152,7 @@ func inspectRetiredSegmentFiles(dir, operation string) (*RetiredSegmentFileInspe
 	// sync into an O(number of active history records) maintenance loop. Keep
 	// the strict preflight immediately before returning deletion candidates.
 	if len(result.PresentFiles) > 0 {
-		if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{}); err != nil {
+		if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{Context: ctx}); err != nil {
 			return nil, fmt.Errorf("snapshots: active segment preflight failed before %s: %w", operation, err)
 		}
 	}

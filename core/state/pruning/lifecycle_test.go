@@ -2,6 +2,7 @@ package pruning
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"strings"
 	"sync/atomic"
@@ -526,7 +527,7 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 				AccountTracesDeleted: 2,
 			}, nil
 		},
-		RetiredPrune: func() (*snapshots.PruneRetiredSegmentFilesResult, error) {
+		RetiredPrune: func(context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error) {
 			sawBalanceTraceBeforeRetiredPrune = balanceTraceRan
 			return &snapshots.PruneRetiredSegmentFilesResult{
 				RetiredSegments: 3,
@@ -615,7 +616,7 @@ func TestSnapshotLifecycleRequestPassCoalesces(t *testing.T) {
 			Policy:   FullPolicy(2, 1),
 			Interval: time.Hour,
 		},
-		RetiredPrune: func() (*snapshots.PruneRetiredSegmentFilesResult, error) {
+		RetiredPrune: func(context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error) {
 			pass := int(passes.Add(1))
 			entered <- pass
 			if pass == 2 {
@@ -644,6 +645,47 @@ func TestSnapshotLifecycleRequestPassCoalesces(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if got := passes.Load(); got != 3 {
 		t.Fatalf("lifecycle passes = %d, want initial pass plus two coalesced requested passes", got)
+	}
+}
+
+func TestSnapshotLifecycleStopCancelsRetiredPrune(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	entered := make(chan struct{})
+	exited := make(chan struct{})
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 2}, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:   FullPolicy(2, 1),
+			Interval: time.Hour,
+		},
+		RetiredPrune: func(ctx context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error) {
+			close(entered)
+			<-ctx.Done()
+			close(exited)
+			return nil, ctx.Err()
+		},
+	})
+	if err := lifecycle.Start(); err != nil {
+		t.Fatalf("start lifecycle: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for retired prune")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- lifecycle.Stop() }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("stop lifecycle: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle Stop did not cancel retired prune")
+	}
+	select {
+	case <-exited:
+	default:
+		t.Fatal("retired prune did not observe lifecycle cancellation")
 	}
 }
 

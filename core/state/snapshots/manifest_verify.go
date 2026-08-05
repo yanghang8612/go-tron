@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 )
 
 type VerifyManifestOptions struct {
+	Context           context.Context
 	ExpectedChain     *ChainIdentity
 	CheckRetired      bool
 	RequireRegistered bool
@@ -305,6 +307,13 @@ func manifestHasLatestDataset(manifest *Manifest, dataset SegmentDataset) bool {
 // rooted at dir. This is useful for callers that fetched a manifest object from
 // a catalog and have already performed signature/authentication checks.
 func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManifestOptions) (*ManifestVerificationReport, error) {
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: nil manifest")
 	}
@@ -321,6 +330,9 @@ func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManife
 	}
 	report := &ManifestVerificationReport{}
 	for _, ref := range manifest.Segments {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := verifyManifestSegmentRef(dir, ref, opts); err != nil {
 			return nil, err
 		}
@@ -332,7 +344,7 @@ func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManife
 	if err := verifyManifestStateDomainHistorySidecars(dir, manifest); err != nil {
 		return nil, err
 	}
-	if err := verifyManifestLatestBinarySidecars(dir, manifest); err != nil {
+	if err := verifyManifestLatestBinarySidecarsContext(ctx, dir, manifest); err != nil {
 		return nil, err
 	}
 	if err := verifyManifestEventLogSidecars(dir, manifest); err != nil {
@@ -340,6 +352,9 @@ func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManife
 	}
 	if opts.CheckRetired {
 		for _, ref := range manifest.Retired {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if err := verifyManifestSegmentRef(dir, ref, opts); err != nil {
 				return nil, err
 			}
@@ -408,23 +423,33 @@ func verifyManifestStateDomainHistorySidecars(dir string, manifest *Manifest) er
 }
 
 func verifyManifestLatestBinarySidecars(dir string, manifest *Manifest) error {
+	return verifyManifestLatestBinarySidecarsContext(context.Background(), dir, manifest)
+}
+
+func verifyManifestLatestBinarySidecarsContext(ctx context.Context, dir string, manifest *Manifest) error {
 	if manifest == nil {
 		return nil
 	}
 	registry := DefaultDomainRegistry()
 	for _, ref := range manifest.Segments {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		cfg, ok := registry.ConfigForRef(ref)
 		if !ok || ref.Kind != SegmentLatest || !cfg.HasLatest || !isLatestBinarySegmentPath(ref.Path) {
 			continue
 		}
-		if err := verifyManifestLatestBinarySidecarSet(dir, manifest, cfg, ref); err != nil {
+		if err := verifyManifestLatestBinarySidecarSet(ctx, dir, manifest, cfg, ref); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func verifyManifestLatestBinarySidecarSet(dir string, manifest *Manifest, cfg DomainCfg, ref SegmentRef) error {
+func verifyManifestLatestBinarySidecarSet(ctx context.Context, dir string, manifest *Manifest, cfg DomainCfg, ref SegmentRef) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := CheckLatestSegment(dir, ref); err != nil {
 		return err
 	}
@@ -449,7 +474,7 @@ func verifyManifestLatestBinarySidecarSet(dir string, manifest *Manifest, cfg Do
 			if err := validateLatestBinaryAccessorMatchesSegment(path, ref, segHeader, accessorHeader); err != nil {
 				return err
 			}
-			if err := verifyLatestBinaryAccessorOffsetsAgainstSegment(path, segFile, segHeader, accessorFile, accessorHeader); err != nil {
+			if err := verifyLatestBinaryAccessorOffsetsAgainstSegmentContext(ctx, path, segFile, segHeader, accessorFile, accessorHeader); err != nil {
 				return err
 			}
 		}
@@ -470,7 +495,7 @@ func verifyManifestLatestBinarySidecarSet(dir string, manifest *Manifest, cfg Do
 		if err := validateLatestBinaryCompanionMatchesSegment(path, ref, segHeader, btreeHeader.latestBinaryAccessorHeader, SegmentBTree); err != nil {
 			return err
 		}
-		if err := verifyLatestBinaryBTreeAgainstSegment(path, segFile, segHeader, btreeFile, btreeHeader); err != nil {
+		if err := verifyLatestBinaryBTreeAgainstSegmentContext(ctx, path, segFile, segHeader, btreeFile, btreeHeader); err != nil {
 			return err
 		}
 	}

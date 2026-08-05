@@ -2,7 +2,10 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,6 +135,97 @@ func TestLatestBinarySegmentCompressesValuesWithAccessorReads(t *testing.T) {
 	if err != nil || !ok || !bytes.Equal(got, value) {
 		t.Fatalf("btree read compressed latest value = %d bytes ok=%v err=%v, want %d bytes", len(got), ok, err, len(value))
 	}
+}
+
+func TestVerifyLatestBinaryBTreeUsesWindowedSegmentReads(t *testing.T) {
+	dir := t.TempDir()
+	owner := latestBinaryAddress(0x46)
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetKVLatest,
+		Domain:    kvdomains.SystemDynamicProperty,
+		Kind:      SegmentLatest,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Path:      "latest/windowed-verification.seg",
+	}
+	const entries = 4_096
+	segRef, accessorRef, btreeRef, err := writeLatestBinarySegmentAndAccessor(dir, ref, func(yield func(LatestEntry) error) error {
+		for i := uint64(0); i < entries; i++ {
+			var suffix [8]byte
+			binary.BigEndian.PutUint64(suffix[:], i)
+			if err := yield(LatestEntry{
+				Key:   AccountKVSnapshotKey(owner, 7, suffix[:]),
+				Value: bytes.Repeat([]byte{byte(i)}, 32),
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("write latest binary companions: %v", err)
+	}
+	segment, segmentHeader, err := openLatestBinaryReader(filepath.Join(dir, segRef.Path), segRef)
+	if err != nil {
+		t.Fatalf("open latest binary segment: %v", err)
+	}
+	defer segment.Close()
+	accessor, accessorHeader, err := openLatestBinaryAccessorReader(dir, accessorRef)
+	if err != nil {
+		t.Fatalf("open latest binary accessor: %v", err)
+	}
+	defer accessor.Close()
+	btree, btreeHeader, err := openLatestBinaryBTreeReader(dir, btreeRef)
+	if err != nil {
+		t.Fatalf("open latest binary btree: %v", err)
+	}
+	defer btree.Close()
+
+	countedSegment := &countingLatestBinaryReaderAt{ReaderAt: segment}
+	countedAccessor := &countingLatestBinaryReaderAt{ReaderAt: accessor}
+	if err := verifyLatestBinaryAccessorOffsetsAgainstSegment(segRef.Path, countedSegment, segmentHeader, countedAccessor, accessorHeader); err != nil {
+		t.Fatalf("verify latest binary accessor: %v", err)
+	}
+	if countedSegment.reads >= entries/64 || countedAccessor.reads >= entries/64 {
+		t.Fatalf("accessor verification ReadAt calls segment=%d accessor=%d for %d entries, want each below %d", countedSegment.reads, countedAccessor.reads, entries, entries/64)
+	}
+	t.Logf("accessor verification ReadAt calls: segment=%d accessor=%d entries=%d", countedSegment.reads, countedAccessor.reads, entries)
+	countedSegment.reads = 0
+	if err := verifyLatestBinaryBTreeAgainstSegment(segRef.Path, countedSegment, segmentHeader, btree, btreeHeader); err != nil {
+		t.Fatalf("verify latest binary btree: %v", err)
+	}
+	if countedSegment.reads >= entries/64 {
+		t.Fatalf("btree verification segment ReadAt calls = %d for %d entries, want fewer than %d windowed reads", countedSegment.reads, entries, entries/64)
+	}
+	t.Logf("btree verification segment ReadAt calls: segment=%d entries=%d", countedSegment.reads, entries)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelingSegment := &cancelingLatestBinaryReaderAt{ReaderAt: segment, cancel: cancel}
+	err = verifyLatestBinaryBTreeAgainstSegmentContext(ctx, segRef.Path, cancelingSegment, segmentHeader, btree, btreeHeader)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled btree verification err = %v, want context.Canceled", err)
+	}
+}
+
+type countingLatestBinaryReaderAt struct {
+	io.ReaderAt
+	reads int
+}
+
+func (r *countingLatestBinaryReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	r.reads++
+	return r.ReaderAt.ReadAt(p, off)
+}
+
+type cancelingLatestBinaryReaderAt struct {
+	io.ReaderAt
+	cancel context.CancelFunc
+}
+
+func (r *cancelingLatestBinaryReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := r.ReaderAt.ReadAt(p, off)
+	r.cancel()
+	return n, err
 }
 
 func TestLatestBinarySegmentWriterWithoutAccessor(t *testing.T) {

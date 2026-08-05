@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
@@ -1039,7 +1040,7 @@ func gtron(ctx *cli.Context) error {
 			ChainLookupPrune:  chainLookupPrune,
 			SectionBloomPrune: sectionBloomPrune,
 			BalanceTracePrune: balanceTracePrune,
-			RetiredPrune: func() (*statesnapshots.PruneRetiredSegmentFilesResult, error) {
+			RetiredPrune: func(ctx context.Context) (*statesnapshots.PruneRetiredSegmentFilesResult, error) {
 				if _, err := statesnapshots.LoadProductionManifest(stateSnapshotDir); err != nil {
 					if os.IsNotExist(err) {
 						return nil, nil
@@ -1049,7 +1050,7 @@ func gtron(ctx *cli.Context) error {
 				if _, err := statesnapshots.PrunePublishedSnapshotManifests(stateSnapshotDir, snapshotCatalogRetain, snapshotCatalogGrace); err != nil {
 					return nil, err
 				}
-				return statesnapshots.PruneRetiredSegmentFiles(stateSnapshotDir)
+				return statesnapshots.PruneRetiredSegmentFilesContext(ctx, stateSnapshotDir)
 			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)

@@ -1,6 +1,8 @@
 package pruning
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -29,7 +31,7 @@ type SnapshotLifecycleConfig struct {
 type ChainLookupPruneFunc func() (*snapshots.PruneHotChainLookupResult, error)
 type SectionBloomPruneFunc func() (*snapshots.PruneHotSectionBloomResult, error)
 type BalanceTracePruneFunc func() (*snapshots.PruneHotBalanceTraceResult, error)
-type RetiredPruneFunc func() (*snapshots.PruneRetiredSegmentFilesResult, error)
+type RetiredPruneFunc func(context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error)
 type ChainFreezerBuildFunc func() (snapshots.ChainFreezerSnapshotPassResult, error)
 
 // SnapshotLifecyclePass is the result of one ordered lifecycle pass.
@@ -56,6 +58,8 @@ type SnapshotLifecycle struct {
 	retiredPrune      RetiredPruneFunc
 
 	interval time.Duration
+	ctx      context.Context
+	cancel   context.CancelFunc
 	wake     chan struct{}
 	quit     chan struct{}
 	done     chan struct{}
@@ -66,6 +70,7 @@ type SnapshotLifecycle struct {
 }
 
 func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *SnapshotLifecycle {
+	ctx, cancel := context.WithCancel(context.Background())
 	interval := cfg.Interval
 	if interval <= 0 {
 		interval = cfg.Pruner.Interval
@@ -90,6 +95,8 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 		balanceTracePrune: cfg.BalanceTracePrune,
 		retiredPrune:      cfg.RetiredPrune,
 		interval:          interval,
+		ctx:               ctx,
+		cancel:            cancel,
 		wake:              make(chan struct{}, 1),
 		quit:              make(chan struct{}),
 		done:              make(chan struct{}),
@@ -132,7 +139,10 @@ func (l *SnapshotLifecycle) Stop() error {
 	if l == nil {
 		return nil
 	}
-	l.once.Do(func() { close(l.quit) })
+	l.once.Do(func() {
+		l.cancel()
+		close(l.quit)
+	})
 	<-l.done
 	lifecycleLog.Info("Domain state snapshot/prune lifecycle stopped")
 	return nil
@@ -182,6 +192,7 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		return SnapshotLifecyclePass{}, nil
 	}
 	var out SnapshotLifecyclePass
+	var stopErr error
 	if l.builder != nil {
 		if err := l.builder.PreflightCatalog(); err != nil {
 			return out, err
@@ -228,11 +239,18 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		out.BalanceTracePrune = result
 	}
 	if l.retiredPrune != nil {
-		result, err := l.retiredPrune()
+		result, err := l.retiredPrune(l.ctx)
 		if err != nil {
-			return out, err
+			if !errors.Is(err, context.Canceled) || l.ctx.Err() == nil {
+				return out, err
+			}
+			// Retired-file inspection is read-only until its final deletion
+			// loop, so it is safe to cancel during shutdown. Still publish any
+			// manifest changes made by the ordered build/prune stages above.
+			stopErr = err
+		} else {
+			out.RetiredPrune = result
 		}
-		out.RetiredPrune = result
 	}
 	if l.builder != nil {
 		published, err := l.builder.PublishCatalogIfManifestChanged()
@@ -244,6 +262,9 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			lifecycleLog.Info("Signed snapshot catalog published")
 		}
 	}
+	if stopErr != nil {
+		return out, stopErr
+	}
 	l.notifyPassComplete()
 	return out, nil
 }
@@ -253,6 +274,9 @@ func (l *SnapshotLifecycle) loop() {
 	runPass := func(reason string) {
 		result, err := l.OnePass()
 		if err != nil {
+			if errors.Is(err, context.Canceled) && l.ctx.Err() != nil {
+				return
+			}
 			lifecycleLog.Warn("Domain state snapshot/prune pass failed", "reason", reason, "err", err)
 			return
 		}
