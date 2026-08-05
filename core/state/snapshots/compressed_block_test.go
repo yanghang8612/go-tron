@@ -188,6 +188,28 @@ func TestStateDomainChangeHistoryCompressionChunkPool(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeHistoryEncodedChunkPool(t *testing.T) {
+	encoder, _, err := cbCodec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := acquireStateDomainChangeHistoryEncodedChunk(encoder, historyCompressChunkSize)
+	if cap(encoded) < encoder.MaxEncodedSize(historyCompressChunkSize) {
+		t.Fatalf("encoded chunk capacity %d below maximum %d", cap(encoded), encoder.MaxEncodedSize(historyCompressChunkSize))
+	}
+	encoded = encoder.EncodeAll(bytes.Repeat([]byte{0xa5}, historyCompressChunkSize), encoded[:0])
+	releaseStateDomainChangeHistoryEncodedChunk(&encoded, historyCompressChunkSize)
+	if encoded != nil {
+		t.Fatal("released encoded chunk still reachable through caller")
+	}
+
+	encoded = acquireStateDomainChangeHistoryEncodedChunk(encoder, historyCompressChunkSize)
+	defer releaseStateDomainChangeHistoryEncodedChunk(&encoded, historyCompressChunkSize)
+	if len(encoded) != 0 || cap(encoded) != stateDomainChangeHistoryEncodedChunkCapacity {
+		t.Fatalf("reused encoded chunk len/cap = %d/%d, want 0/%d", len(encoded), cap(encoded), stateDomainChangeHistoryEncodedChunkCapacity)
+	}
+}
+
 func TestCompressedBlockReaderRejectsOutOfFileBlockBeforeAlloc(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "corrupt.cb")

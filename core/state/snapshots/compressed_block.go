@@ -43,8 +43,16 @@ const (
 
 type stateDomainChangeHistoryCompressionChunk [historyCompressChunkSize]byte
 
+const stateDomainChangeHistoryEncodedChunkCapacity = historyCompressChunkSize + 64
+
+type stateDomainChangeHistoryEncodedChunk [stateDomainChangeHistoryEncodedChunkCapacity]byte
+
 var stateDomainChangeHistoryCompressionChunkPool = sync.Pool{
 	New: func() any { return new(stateDomainChangeHistoryCompressionChunk) },
+}
+
+var stateDomainChangeHistoryEncodedChunkPool = sync.Pool{
+	New: func() any { return new(stateDomainChangeHistoryEncodedChunk) },
 }
 
 func acquireStateDomainChangeHistoryCompressionChunk(chunkSize int) []byte {
@@ -62,6 +70,24 @@ func releaseStateDomainChangeHistoryCompressionChunk(chunk *[]byte, chunkSize in
 	*chunk = nil
 	if chunkSize == historyCompressChunkSize && cap(buffer) == historyCompressChunkSize {
 		stateDomainChangeHistoryCompressionChunkPool.Put((*stateDomainChangeHistoryCompressionChunk)(buffer[:historyCompressChunkSize]))
+	}
+}
+
+func acquireStateDomainChangeHistoryEncodedChunk(encoder *zstd.Encoder, chunkSize int) []byte {
+	if encoder == nil || chunkSize != historyCompressChunkSize || encoder.MaxEncodedSize(chunkSize) > stateDomainChangeHistoryEncodedChunkCapacity {
+		return nil
+	}
+	return stateDomainChangeHistoryEncodedChunkPool.Get().(*stateDomainChangeHistoryEncodedChunk)[:0]
+}
+
+func releaseStateDomainChangeHistoryEncodedChunk(encoded *[]byte, chunkSize int) {
+	if encoded == nil || *encoded == nil {
+		return
+	}
+	buffer := *encoded
+	*encoded = nil
+	if chunkSize == historyCompressChunkSize && cap(buffer) == stateDomainChangeHistoryEncodedChunkCapacity {
+		stateDomainChangeHistoryEncodedChunkPool.Put((*stateDomainChangeHistoryEncodedChunk)(buffer[:stateDomainChangeHistoryEncodedChunkCapacity]))
 	}
 }
 
@@ -861,7 +887,7 @@ func newOrderedCompressionPipeline(out *compressedBlockWriter, chunkSize, worker
 		p.pool <- acquireStateDomainChangeHistoryCompressionChunk(chunkSize)
 	}
 	for range inFlight {
-		p.encoded <- nil
+		p.encoded <- acquireStateDomainChangeHistoryEncodedChunk(out.enc, chunkSize)
 	}
 
 	p.workers.Add(workers)
@@ -984,7 +1010,7 @@ func (p *orderedCompressionPipeline) Acquire() ([]byte, error) {
 func (p *orderedCompressionPipeline) Close() error {
 	p.closeJobs.Do(func() { close(p.jobs) })
 	p.reducer.Wait()
-	p.releaseAvailableChunks()
+	p.releaseAvailableBuffers()
 	return p.Err()
 }
 
@@ -992,21 +1018,21 @@ func (p *orderedCompressionPipeline) Abort() {
 	p.cancel.Do(func() { close(p.done) })
 	p.closeJobs.Do(func() { close(p.jobs) })
 	p.reducer.Wait()
-	p.releaseAvailableChunks()
+	p.releaseAvailableBuffers()
 }
 
-// releaseAvailableChunks runs only after workers and the ordered reducer have
-// joined. Buffers present in pool are idle and uniquely owned here; buffers
-// abandoned in queued jobs/results on an error remain for GC rather than risk
-// returning storage that another goroutine may still reference.
-func (p *orderedCompressionPipeline) releaseAvailableChunks() {
-	for {
-		select {
-		case chunk := <-p.pool:
-			releaseStateDomainChangeHistoryCompressionChunk(&chunk, p.chunkSize)
-		default:
-			return
-		}
+// releaseAvailableBuffers runs only after workers and the ordered reducer have
+// joined. Buffers present in the channels are idle and uniquely owned here;
+// buffers abandoned in queued jobs/results on an error remain for GC rather
+// than risk returning storage that another goroutine may still reference.
+func (p *orderedCompressionPipeline) releaseAvailableBuffers() {
+	for len(p.pool) != 0 {
+		chunk := <-p.pool
+		releaseStateDomainChangeHistoryCompressionChunk(&chunk, p.chunkSize)
+	}
+	for len(p.encoded) != 0 {
+		buffer := <-p.encoded
+		releaseStateDomainChangeHistoryEncodedChunk(&buffer, p.chunkSize)
 	}
 }
 
@@ -1038,6 +1064,7 @@ func newCompressedBlockStreamWriter(dir string, chunkSize, workers int) (*compre
 	if err != nil {
 		return nil, err
 	}
+	body.encoded = acquireStateDomainChangeHistoryEncodedChunk(body.enc, chunkSize)
 	return &compressedBlockStreamWriter{
 		dir:       dir,
 		chunkSize: chunkSize,
@@ -1152,6 +1179,7 @@ func (w *compressedBlockStreamWriter) Finish(path string) error {
 	w.first = nil
 	releaseStateDomainChangeHistoryCompressionChunk(&w.chunk, w.chunkSize)
 	defer releaseStateDomainChangeHistoryCompressionChunk(&first, w.chunkSize)
+	defer releaseStateDomainChangeHistoryEncodedChunk(&body.encoded, w.chunkSize)
 	return body.finishWithPrefix(path, first)
 }
 
@@ -1165,6 +1193,7 @@ func (w *compressedBlockStreamWriter) Reset() error {
 		w.closed = true
 		return err
 	}
+	body.encoded = acquireStateDomainChangeHistoryEncodedChunk(body.enc, w.chunkSize)
 	w.body = body
 	w.first = w.first[:0]
 	if w.chunk != nil {
@@ -1191,6 +1220,7 @@ func (w *compressedBlockStreamWriter) abortBody() {
 		w.parallel = nil
 	}
 	if w.body != nil {
+		releaseStateDomainChangeHistoryEncodedChunk(&w.body.encoded, w.chunkSize)
 		releaseStateDomainChangeHistoryWriter(&w.body.tmpWriter)
 		_ = w.body.tmp.Close()
 		_ = os.Remove(w.body.tmpName)
