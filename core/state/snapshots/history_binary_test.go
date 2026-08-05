@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ func TestStateDomainChangeBinaryRecordRoundTrip(t *testing.T) {
 	}
 }
 
-func TestStateDomainChangeBinaryAccessorV4GroupWriterBackfillsCounts(t *testing.T) {
+func TestStateDomainChangeBinaryAccessorV4GroupWriterAssemblesCounts(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "groups-*.tmp")
 	if err != nil {
 		t.Fatal(err)
@@ -52,9 +53,8 @@ func TestStateDomainChangeBinaryAccessorV4GroupWriterBackfillsCounts(t *testing.
 	defer file.Close()
 	offsets := make([]uint64, 0, 2)
 	writer := stateDomainChangeBinaryAccessorV4GroupETLWriter{
-		payloadFile: file,
-		payload:     acquireStateDomainChangeHistoryWriter(file),
-		offsets:     &offsets,
+		payload: acquireStateDomainChangeHistoryWriter(file),
+		offsets: &offsets,
 	}
 	put := func(group byte, recordOffset uint64) {
 		t.Helper()
@@ -73,17 +73,56 @@ func TestStateDomainChangeBinaryAccessorV4GroupWriterBackfillsCounts(t *testing.
 	if err := writer.Finish(); err != nil {
 		t.Fatalf("finish group writer: %v", err)
 	}
-	data, err := os.ReadFile(file.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
 	wantOffsets := []uint64{0, stateDomainChangeBinaryAccessorV3GroupKeySize + 8 + 2*stateDomainChangeBinaryAccessorV4GroupEntrySize}
 	if !reflect.DeepEqual(offsets, wantOffsets) {
 		t.Fatalf("group offsets = %v, want %v", offsets, wantOffsets)
 	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	var assembled bytes.Buffer
+	if _, err := copyStateDomainChangeBinaryAccessorV4GroupPayload(&assembled, file, offsets, writer.payloadOffset); err != nil {
+		t.Fatalf("assemble group payload: %v", err)
+	}
+	data := assembled.Bytes()
 	for i, want := range []uint64{2, 3} {
 		countOffset := offsets[i] + stateDomainChangeBinaryAccessorV3GroupKeySize
 		if got := binary.BigEndian.Uint64(data[countOffset : countOffset+8]); got != want {
+			t.Fatalf("group %d count = %d, want %d", i, got, want)
+		}
+	}
+}
+
+func TestStateDomainChangeBinaryAccessorV4GroupCopyPatchesSplitCount(t *testing.T) {
+	headerSize := uint64(stateDomainChangeBinaryAccessorV3GroupKeySize + 8)
+	entrySize := uint64(stateDomainChangeBinaryAccessorV4GroupEntrySize)
+	bufferBoundary := uint64(stateDomainChangeHistoryWriteBufferSize)
+	offsets := []uint64{0, headerSize + entrySize}
+	var middleCount uint64
+	for middleCount = 1; ; middleCount++ {
+		thirdStart := offsets[1] + headerSize + middleCount*entrySize
+		countStart := thirdStart + stateDomainChangeBinaryAccessorV3GroupKeySize
+		if countStart < bufferBoundary && countStart+8 > bufferBoundary {
+			offsets = append(offsets, thirdStart)
+			break
+		}
+		if countStart >= bufferBoundary {
+			t.Fatal("could not place a group count across the copy buffer boundary")
+		}
+	}
+	payloadSize := offsets[2] + headerSize + entrySize
+	payload := bytes.Repeat([]byte{0xa5}, int(payloadSize))
+	var assembled bytes.Buffer
+	written, err := copyStateDomainChangeBinaryAccessorV4GroupPayload(&assembled, bytes.NewReader(payload), offsets, payloadSize)
+	if err != nil {
+		t.Fatalf("assemble split-count group payload: %v", err)
+	}
+	if uint64(written) != payloadSize {
+		t.Fatalf("assembled payload size = %d, want %d", written, payloadSize)
+	}
+	for i, want := range []uint64{1, middleCount, 1} {
+		countOffset := offsets[i] + stateDomainChangeBinaryAccessorV3GroupKeySize
+		if got := binary.BigEndian.Uint64(assembled.Bytes()[countOffset : countOffset+8]); got != want {
 			t.Fatalf("group %d count = %d, want %d", i, got, want)
 		}
 	}

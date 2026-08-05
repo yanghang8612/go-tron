@@ -717,7 +717,6 @@ func (w *stateDomainChangeBinaryAccessorV3ExactETLWriter) Release() {
 }
 
 type stateDomainChangeBinaryAccessorV4GroupETLWriter struct {
-	payloadFile   *os.File
 	payload       *bufio.Writer
 	offsets       *[]uint64
 	payloadOffset uint64
@@ -729,7 +728,7 @@ type stateDomainChangeBinaryAccessorV4GroupETLWriter struct {
 }
 
 func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Put(_ []byte, value []byte) error {
-	if w == nil || w.payloadFile == nil || w.payload == nil || w.offsets == nil {
+	if w == nil || w.payload == nil || w.offsets == nil {
 		return errors.New("snapshots: nil state-domain-change accessor v3 group ETL writer")
 	}
 	if len(value) != stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV4GroupEntrySize {
@@ -777,42 +776,12 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) finishGroup() error {
 	return nil
 }
 
-func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) patchGroupCounts() error {
-	if w == nil || w.payloadFile == nil || w.offsets == nil {
-		return errors.New("snapshots: nil state-domain-change accessor v4 group count writer")
-	}
-	var raw [8]byte
-	for i, start := range *w.offsets {
-		next := w.payloadOffset
-		if i+1 < len(*w.offsets) {
-			next = (*w.offsets)[i+1]
-		}
-		entriesStart := start + stateDomainChangeBinaryAccessorV3GroupKeySize + 8
-		if entriesStart < start || next < entriesStart {
-			return fmt.Errorf("snapshots: state-domain-change accessor v4 group %d has invalid payload range [%d,%d)", i, start, next)
-		}
-		entriesSize := next - entriesStart
-		if entriesSize == 0 || entriesSize%stateDomainChangeBinaryAccessorV4GroupEntrySize != 0 {
-			return fmt.Errorf("snapshots: state-domain-change accessor v4 group %d payload size %d is invalid", i, entriesSize)
-		}
-		countOffset := start + stateDomainChangeBinaryAccessorV3GroupKeySize
-		if countOffset < start || countOffset > math.MaxInt64 {
-			return fmt.Errorf("snapshots: state-domain-change accessor v4 group %d count offset %d is invalid", i, countOffset)
-		}
-		binary.BigEndian.PutUint64(raw[:], entriesSize/stateDomainChangeBinaryAccessorV4GroupEntrySize)
-		if _, err := w.payloadFile.WriteAt(raw[:], int64(countOffset)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (*stateDomainChangeBinaryAccessorV4GroupETLWriter) Delete([]byte) error {
 	return errors.New("snapshots: state-domain-change accessor v4 group ETL writer does not support deletes")
 }
 
 func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Finish() error {
-	if w == nil || w.payloadFile == nil || w.payload == nil || w.offsets == nil {
+	if w == nil || w.payload == nil || w.offsets == nil {
 		return errors.New("snapshots: nil state-domain-change accessor v4 group ETL writer")
 	}
 	defer w.Release()
@@ -822,10 +791,7 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Finish() error {
 	if err := w.payload.Flush(); err != nil {
 		return err
 	}
-	// Group offsets already delimit fixed-width record arrays. Backfill every
-	// count after the one sequential payload flush instead of flushing at every
-	// group boundary; no parallel per-group count buffer is needed.
-	return w.patchGroupCounts()
+	return nil
 }
 
 func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Release() {
@@ -833,6 +799,104 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Release() {
 		return
 	}
 	releaseStateDomainChangeHistoryWriter(&w.payload)
+}
+
+// copyStateDomainChangeBinaryAccessorV4GroupPayload turns the buffered count
+// placeholders into their fixed-width values while the private group file is
+// copied into the final accessor. The temp file and final output therefore
+// remain sequential; no group-sized memory buffer or random pwrite is needed.
+func copyStateDomainChangeBinaryAccessorV4GroupPayload(dst io.Writer, src io.Reader, offsets []uint64, payloadSize uint64) (int64, error) {
+	if payloadSize > math.MaxInt64 {
+		return 0, fmt.Errorf("snapshots: state-domain-change accessor v4 group payload size %d exceeds int64", payloadSize)
+	}
+	if len(offsets) == 0 {
+		if payloadSize != 0 {
+			return 0, fmt.Errorf("snapshots: state-domain-change accessor v4 group payload has size %d without groups", payloadSize)
+		}
+	} else if offsets[0] != 0 {
+		return 0, fmt.Errorf("snapshots: state-domain-change accessor v4 first group offset %d, want 0", offsets[0])
+	}
+	for i, start := range offsets {
+		next := payloadSize
+		if i+1 < len(offsets) {
+			next = offsets[i+1]
+		}
+		entriesStart := start + stateDomainChangeBinaryAccessorV3GroupKeySize + 8
+		if entriesStart < start || next < entriesStart {
+			return 0, fmt.Errorf("snapshots: state-domain-change accessor v4 group %d has invalid payload range [%d,%d)", i, start, next)
+		}
+		entriesSize := next - entriesStart
+		if entriesSize == 0 || entriesSize%stateDomainChangeBinaryAccessorV4GroupEntrySize != 0 {
+			return 0, fmt.Errorf("snapshots: state-domain-change accessor v4 group %d payload size %d is invalid", i, entriesSize)
+		}
+	}
+
+	buffer := stateDomainChangeHistoryCopyBufferPool.Get().(*stateDomainChangeHistoryCopyBuffer)
+	defer stateDomainChangeHistoryCopyBufferPool.Put(buffer)
+	var (
+		copied     uint64
+		groupIndex int
+		rawCount   [8]byte
+	)
+	for {
+		read, readErr := src.Read(buffer[:])
+		if read > 0 {
+			if copied > payloadSize || uint64(read) > payloadSize-copied {
+				return int64(copied), fmt.Errorf("snapshots: state-domain-change accessor v4 group payload exceeds size %d", payloadSize)
+			}
+			chunkEnd := copied + uint64(read)
+			for groupIndex < len(offsets) {
+				countStart := offsets[groupIndex] + stateDomainChangeBinaryAccessorV3GroupKeySize
+				countEnd := countStart + 8
+				if countStart >= chunkEnd {
+					break
+				}
+				if countEnd <= copied {
+					groupIndex++
+					continue
+				}
+				next := payloadSize
+				if groupIndex+1 < len(offsets) {
+					next = offsets[groupIndex+1]
+				}
+				entriesStart := countEnd
+				binary.BigEndian.PutUint64(rawCount[:], (next-entriesStart)/stateDomainChangeBinaryAccessorV4GroupEntrySize)
+				patchStart := max(copied, countStart)
+				patchEnd := min(chunkEnd, countEnd)
+				copy(buffer[patchStart-copied:patchEnd-copied], rawCount[patchStart-countStart:patchEnd-countStart])
+				if patchEnd < countEnd {
+					break
+				}
+				groupIndex++
+			}
+			wrote, writeErr := dst.Write(buffer[:read])
+			if wrote < 0 || wrote > read {
+				wrote = 0
+				if writeErr == nil {
+					writeErr = io.ErrShortWrite
+				}
+			}
+			copied += uint64(wrote)
+			if writeErr != nil {
+				return int64(copied), writeErr
+			}
+			if wrote != read {
+				return int64(copied), io.ErrShortWrite
+			}
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				return int64(copied), readErr
+			}
+			if copied != payloadSize {
+				return int64(copied), fmt.Errorf("snapshots: state-domain-change accessor v4 group payload size %d, want %d", copied, payloadSize)
+			}
+			if groupIndex != len(offsets) {
+				return int64(copied), fmt.Errorf("snapshots: state-domain-change accessor v4 patched groups %d, want %d", groupIndex, len(offsets))
+			}
+			return int64(copied), nil
+		}
+	}
 }
 
 type stateDomainChangeBinaryAccessorV4Collectors struct {
@@ -958,9 +1022,8 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	groupOffsets := acquireStateDomainChangeAccessorGroupOffsets()
 	defer releaseStateDomainChangeAccessorGroupOffsets(&groupOffsets)
 	groupWriter := stateDomainChangeBinaryAccessorV4GroupETLWriter{
-		payloadFile: groupPayloadTmp,
-		payload:     acquireStateDomainChangeHistoryWriter(groupPayloadTmp),
-		offsets:     groupOffsets,
+		payload: acquireStateDomainChangeHistoryWriter(groupPayloadTmp),
+		offsets: groupOffsets,
 	}
 	defer groupWriter.Release()
 	if _, err := c.group.Load(&groupWriter); err != nil {
@@ -1022,7 +1085,7 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	if _, err := groupPayloadTmp.Seek(0, io.SeekStart); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
-	if _, err := copyStateDomainChangeHistoryData(tailWriter, groupPayloadTmp); err != nil {
+	if _, err := copyStateDomainChangeBinaryAccessorV4GroupPayload(tailWriter, groupPayloadTmp, *groupOffsets, groupWriter.payloadOffset); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	if err := tailWriter.Flush(); err != nil {
