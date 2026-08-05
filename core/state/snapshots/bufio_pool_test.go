@@ -98,3 +98,31 @@ func TestCopyStateDomainChangeHistoryDataUsesPooledBuffer(t *testing.T) {
 		t.Fatal("copy used writer ReadFrom instead of the pooled buffer")
 	}
 }
+
+func TestStateDomainChangeAccessorValidationReaderKeepsTwoWindows(t *testing.T) {
+	data := make([]byte, 3*stateDomainChangeAccessorValidationWindowSize)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	source := &countingStateDomainReaderAt{reader: bytes.NewReader(data)}
+	reader := acquireStateDomainChangeAccessorValidationReader(source, uint64(len(data)))
+	defer releaseStateDomainChangeAccessorValidationReader(&reader)
+
+	var got [16]byte
+	for i := 0; i < 1_000; i++ {
+		for _, off := range []int64{
+			int64(i * 32),
+			int64(2*stateDomainChangeAccessorValidationWindowSize + i*32),
+		} {
+			if _, err := reader.ReadAt(got[:], off); err != nil {
+				t.Fatalf("ReadAt(%d): %v", off, err)
+			}
+			if want := data[off : off+int64(len(got))]; !bytes.Equal(got[:], want) {
+				t.Fatalf("ReadAt(%d) = %x, want %x", off, got, want)
+			}
+		}
+	}
+	if source.reads != 2 {
+		t.Fatalf("alternating validation reads used %d source reads, want 2 windows", source.reads)
+	}
+}

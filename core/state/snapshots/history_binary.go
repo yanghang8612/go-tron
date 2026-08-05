@@ -1820,11 +1820,18 @@ func checkStateDomainChangeBinaryAccessor(dir string, ref SegmentRef) error {
 			return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
 		}
 	}
+	if (header.version == stateDomainChangeBinaryVersionV3 || header.version == stateDomainChangeBinaryVersionV4) && fileSize > math.MaxInt64 {
+		return fmt.Errorf("snapshots: state-domain-change binary accessor %q logical size %d exceeds int64", ref.Path, fileSize)
+	}
 	if header.version == stateDomainChangeBinaryVersionV3 {
-		return checkStateDomainChangeBinaryAccessorV3(accessorFile, fileSize, header)
+		buffered := acquireStateDomainChangeAccessorValidationReader(accessorFile, fileSize)
+		defer releaseStateDomainChangeAccessorValidationReader(&buffered)
+		return checkStateDomainChangeBinaryAccessorV3(buffered, fileSize, header)
 	}
 	if header.version == stateDomainChangeBinaryVersionV4 {
-		return checkStateDomainChangeBinaryAccessorV4(accessorFile, fileSize, header)
+		buffered := acquireStateDomainChangeAccessorValidationReader(accessorFile, fileSize)
+		defer releaseStateDomainChangeAccessorValidationReader(&buffered)
+		return checkStateDomainChangeBinaryAccessorV4(buffered, fileSize, header)
 	}
 
 	offsetTableLen := header.count * 8
