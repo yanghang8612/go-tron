@@ -818,16 +818,14 @@ func (w *stateDomainChangeHistoryTemp) Finalize(ref SegmentRef, contentAddress b
 	if w.compressed == nil {
 		return SegmentRef{}, errors.New("snapshots: state-domain-change history temp is closed")
 	}
-	if err := w.compressed.Finish(w.tmpName); err != nil {
+	metadata, err := w.compressed.FinishWithMetadata(w.tmpName)
+	if err != nil {
 		w.compressed = nil
 		return SegmentRef{}, err
 	}
 	w.compressed = nil
-	size, checksum, err := stateDomainChangeBinaryFileMetadata(w.tmpName)
-	if err != nil {
-		return SegmentRef{}, err
-	}
-	result, err := publishStateDomainChangeBinaryFinal(w.dir, ref, w.tmpName, size, checksum, contentAddress)
+	checksum := "sha256:" + hex.EncodeToString(metadata.checksum[:])
+	result, err := publishStateDomainChangeBinaryFinal(w.dir, ref, w.tmpName, metadata.size, checksum, contentAddress)
 	if err == nil {
 		w.finalized = true
 	}

@@ -2,9 +2,11 @@ package snapshots
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"sort"
@@ -162,6 +164,26 @@ type compressedBlockWriter struct {
 	recCount  uint64
 }
 
+type compressedBlockFileMetadata struct {
+	size     uint64
+	checksum [sha256.Size]byte
+}
+
+type compressedBlockMetadataWriter struct {
+	dst    io.Writer
+	digest hash.Hash
+	size   uint64
+}
+
+func (w *compressedBlockMetadataWriter) Write(p []byte) (int, error) {
+	n, err := w.dst.Write(p)
+	if n > 0 {
+		_, _ = w.digest.Write(p[:n])
+		w.size += uint64(n)
+	}
+	return n, err
+}
+
 func newCompressedBlockWriter(dir string, blockSize int) (*compressedBlockWriter, error) {
 	if blockSize <= 0 {
 		blockSize = CompressedBlockDefaultSize
@@ -295,7 +317,14 @@ func (w *compressedBlockWriter) Finish(path string) (err error) {
 // contains independently compressed later chunks; its compressed offsets are
 // shifted by the encoded prefix length while uncompressed offsets remain those
 // of the original byte stream.
-func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (err error) {
+func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) error {
+	return w.finishWithPrefixMetadata(path, prefix, nil)
+}
+
+func (w *compressedBlockWriter) finishWithPrefixMetadata(path string, prefix []byte, metadata *compressedBlockFileMetadata) (err error) {
+	if metadata != nil {
+		*metadata = compressedBlockFileMetadata{}
+	}
 	defer func() {
 		releaseStateDomainChangeHistoryBlockTable(&w.table)
 		releaseStateDomainChangeHistoryWriter(&w.tmpWriter)
@@ -337,10 +366,16 @@ func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (er
 			err = cerr
 		}
 	}()
+	finalOut := io.Writer(out)
+	var metadataWriter *compressedBlockMetadataWriter
+	if metadata != nil {
+		metadataWriter = &compressedBlockMetadataWriter{dst: out, digest: sha256.New()}
+		finalOut = metadataWriter
+	}
 
 	// The body writer is idle after Flush. Repoint its pooled buffer at the final
 	// file for metadata instead of borrowing a second large bufio.Writer.
-	w.tmpWriter.Reset(out)
+	w.tmpWriter.Reset(finalOut)
 	if err = writeCompressedBlockHeaderAndTable(w.tmpWriter, w.blockSize, w.recCount+prefixRecords, uncTotal, w.table, uint64(len(prefixComp)), prefixRecords != 0); err != nil {
 		return err
 	}
@@ -349,14 +384,21 @@ func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (er
 	}
 	releaseStateDomainChangeHistoryWriter(&w.tmpWriter)
 	if len(prefixComp) != 0 {
-		if _, err = out.Write(prefixComp); err != nil {
+		if _, err = finalOut.Write(prefixComp); err != nil {
 			return err
 		}
 	}
-	if _, err = copyStateDomainChangeHistoryData(out, w.tmp); err != nil {
+	if _, err = copyStateDomainChangeHistoryData(finalOut, w.tmp); err != nil {
 		return err
 	}
-	return out.Sync()
+	if err = out.Sync(); err != nil {
+		return err
+	}
+	if metadata != nil {
+		metadata.size = metadataWriter.size
+		copy(metadata.checksum[:], metadataWriter.digest.Sum(nil))
+	}
+	return nil
 }
 
 // writeCompressedBlockHeaderAndTable emits the fixed metadata straight into a
@@ -1217,6 +1259,16 @@ func (w *compressedBlockStreamWriter) flushChunk(final bool) error {
 }
 
 func (w *compressedBlockStreamWriter) Finish(path string) error {
+	return w.finish(path, nil)
+}
+
+func (w *compressedBlockStreamWriter) FinishWithMetadata(path string) (compressedBlockFileMetadata, error) {
+	var metadata compressedBlockFileMetadata
+	err := w.finish(path, &metadata)
+	return metadata, err
+}
+
+func (w *compressedBlockStreamWriter) finish(path string, metadata *compressedBlockFileMetadata) error {
 	if w == nil || w.closed || w.body == nil {
 		return errors.New("snapshots: compressed stream writer is closed")
 	}
@@ -1239,7 +1291,7 @@ func (w *compressedBlockStreamWriter) Finish(path string) error {
 	releaseStateDomainChangeHistoryCompressionChunk(&w.chunk, w.chunkSize)
 	defer releaseStateDomainChangeHistoryCompressionChunk(&first, w.chunkSize)
 	defer releaseStateDomainChangeHistoryEncodedChunk(&body.encoded, w.chunkSize)
-	return body.finishWithPrefix(path, first)
+	return body.finishWithPrefixMetadata(path, first, metadata)
 }
 
 func (w *compressedBlockStreamWriter) Reset() error {

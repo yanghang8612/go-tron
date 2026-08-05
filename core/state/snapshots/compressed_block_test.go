@@ -3,6 +3,7 @@ package snapshots
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"os"
@@ -474,6 +475,34 @@ func TestCompressedBlockStreamWriterReset(t *testing.T) {
 	}
 	if !bytes.Equal(decoded, payload) {
 		t.Fatal("reset stream retained bytes from discarded generation")
+	}
+}
+
+func TestCompressedBlockStreamWriterMetadata(t *testing.T) {
+	const chunkSize = 16 << 10
+	dir := t.TempDir()
+	stream, err := newCompressedBlockStreamWriter(dir, chunkSize, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("streamed-metadata"), 200_000)
+	if _, err := stream.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "metadata.cb")
+	metadata, err := stream.FinishWithMetadata(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, checksum, err := stateDomainChangeBinaryFileMetadata(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.size != size {
+		t.Fatalf("streamed metadata size = %d, want %d", metadata.size, size)
+	}
+	if got := "sha256:" + hex.EncodeToString(metadata.checksum[:]); got != checksum {
+		t.Fatalf("streamed metadata checksum = %s, want %s", got, checksum)
 	}
 }
 
