@@ -10,6 +10,16 @@ import (
 )
 
 func BenchmarkStateDomainHistoryCompaction(b *testing.B) {
+	benchmarkStateDomainHistoryCompaction(b, benchmarkWriteStateDomainHistorySegment)
+}
+
+func BenchmarkStateDomainCompressedHistoryCompaction(b *testing.B) {
+	benchmarkStateDomainHistoryCompaction(b, benchmarkWriteCompressedStateDomainHistorySegment)
+}
+
+type benchmarkStateDomainHistorySegmentWriter func(b *testing.B, dir string, fromTxNum, toTxNum uint64, changes []*rawdb.StateDomainChange) []SegmentRef
+
+func benchmarkStateDomainHistoryCompaction(b *testing.B, writeSegment benchmarkStateDomainHistorySegmentWriter) {
 	const (
 		txNumsPerSegment = 2_000
 		recordsPerTxNum  = 4
@@ -25,8 +35,8 @@ func BenchmarkStateDomainHistoryCompaction(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		refs := append([]SegmentRef{}, benchmarkWriteStateDomainHistorySegment(b, dir, 1, txNumsPerSegment, first)...)
-		refs = append(refs, benchmarkWriteStateDomainHistorySegment(b, dir, txNumsPerSegment+1, txNumsPerSegment*2, second)...)
+		refs := append([]SegmentRef{}, writeSegment(b, dir, 1, txNumsPerSegment, first)...)
+		refs = append(refs, writeSegment(b, dir, txNumsPerSegment+1, txNumsPerSegment*2, second)...)
 		if err := PublishManifest(dir, NewManifest(1, txNumsPerSegment*2, refs)); err != nil {
 			b.Fatal(err)
 		}
@@ -58,6 +68,21 @@ func benchmarkStateDomainHistoryChanges(fromTxNum, toTxNum, recordsPerTxNum uint
 func benchmarkWriteStateDomainHistorySegment(b *testing.B, dir string, fromTxNum, toTxNum uint64, changes []*rawdb.StateDomainChange) []SegmentRef {
 	b.Helper()
 	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: fromTxNum,
+		ToTxNum:   toTxNum,
+		Path:      filepath.ToSlash(stateDomainChangeHistorySegmentPath(fromTxNum, toTxNum)),
+	}, changes)
+	if err != nil {
+		b.Fatal(err)
+	}
+	return []SegmentRef{segRef, accessorRef, idxRef}
+}
+
+func benchmarkWriteCompressedStateDomainHistorySegment(b *testing.B, dir string, fromTxNum, toTxNum uint64, changes []*rawdb.StateDomainChange) []SegmentRef {
+	b.Helper()
+	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryCompressedSegmentFiles(dir, SegmentRef{
 		Dataset:   SegmentDatasetStateDomainChange,
 		Kind:      SegmentHistory,
 		FromTxNum: fromTxNum,

@@ -214,14 +214,25 @@ func putStateDomainChangeRecordV5(dst []byte, change *rawdb.StateDomainChange) {
 
 func decodeStateDomainChangeRecordV5(data []byte) (*rawdb.StateDomainChange, error) {
 	change := new(rawdb.StateDomainChange)
-	// readStateDomainChangeBinaryRecordFrame owns data for the lifetime of the
-	// returned change, so Key and Prev can safely view that immutable payload.
+	if err := decodeStateDomainChangeRecordV5Into(change, data); err != nil {
+		return nil, err
+	}
+	return change, nil
+}
+
+func decodeStateDomainChangeRecordV5Into(change *rawdb.StateDomainChange, data []byte) error {
+	if change == nil {
+		return errors.New("snapshots: nil state-domain-change v5 decode destination")
+	}
+	*change = rawdb.StateDomainChange{}
+	// Callers retain data for the lifetime of the decoded change, so Key and Prev
+	// can safely view that immutable payload.
 	// Parsing the compact v5 layout directly removes a bytes.Reader plus two
 	// field copies per record from sequential cold build/merge scans.
 	const scalarBytes = 8 + 1 + 8 + 2
 	minimum := scalarBytes + len(change.Owner) + 4 + 1 + 4
 	if len(data) < minimum {
-		return nil, io.ErrUnexpectedEOF
+		return io.ErrUnexpectedEOF
 	}
 	offset := 0
 	change.TxNum = binary.BigEndian.Uint64(data[offset : offset+8])
@@ -238,14 +249,14 @@ func decodeStateDomainChangeRecordV5(data []byte) (*rawdb.StateDomainChange, err
 	keyLen := uint64(binary.BigEndian.Uint32(data[offset : offset+4]))
 	offset += 4
 	if keyLen > uint64(len(data)-offset) {
-		return nil, io.ErrUnexpectedEOF
+		return io.ErrUnexpectedEOF
 	}
 	if keyLen > 0 {
 		change.Key = data[offset : offset+int(keyLen)]
 	}
 	offset += int(keyLen)
 	if offset >= len(data) {
-		return nil, io.ErrUnexpectedEOF
+		return io.ErrUnexpectedEOF
 	}
 	switch data[offset] {
 	case 0:
@@ -253,25 +264,25 @@ func decodeStateDomainChangeRecordV5(data []byte) (*rawdb.StateDomainChange, err
 	case 1:
 		change.PrevExists = true
 	default:
-		return nil, fmt.Errorf("snapshots: invalid boolean byte %d", data[offset])
+		return fmt.Errorf("snapshots: invalid boolean byte %d", data[offset])
 	}
 	offset++
 	if len(data)-offset < 4 {
-		return nil, io.ErrUnexpectedEOF
+		return io.ErrUnexpectedEOF
 	}
 	prevLen := uint64(binary.BigEndian.Uint32(data[offset : offset+4]))
 	offset += 4
 	if prevLen > uint64(len(data)-offset) {
-		return nil, io.ErrUnexpectedEOF
+		return io.ErrUnexpectedEOF
 	}
 	if prevLen > 0 {
 		change.Prev = data[offset : offset+int(prevLen)]
 	}
 	offset += int(prevLen)
 	if offset != len(data) {
-		return nil, fmt.Errorf("snapshots: state-domain-change v5 record has %d trailing bytes", len(data)-offset)
+		return fmt.Errorf("snapshots: state-domain-change v5 record has %d trailing bytes", len(data)-offset)
 	}
-	return change, nil
+	return nil
 }
 
 func writeStateDomainChangeBinaryFiles(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange, txRanges ...[]*rawdb.StateTxRange) (SegmentRef, SegmentRef, error) {
@@ -1144,8 +1155,23 @@ func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChang
 	// not leak duplicated block/hash/seq/next fields into merged cold history,
 	// without rescanning the newly compressed output to build its index.
 	offset := recordOffset
+	var v5Payloads [2][]byte
+	var v5Changes [2]rawdb.StateDomainChange
 	for recordIndex := uint64(0); recordIndex < header.count; recordIndex++ {
-		change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(reader, offset, logicalSize, recordIndex)
+		var (
+			change *rawdb.StateDomainChange
+			next   uint64
+		)
+		if header.version == stateDomainChangeBinaryVersionV5 {
+			// The writer retains only the immediately previous row for its order
+			// check. Ping-pong two payload/change slots so Key and Prev remain
+			// immutable across that comparison without allocating per record.
+			slot := int(recordIndex & 1)
+			v5Payloads[slot], next, err = readStateDomainChangeBinaryRecordV5FrameInto(reader, offset, logicalSize, recordIndex, v5Payloads[slot], &v5Changes[slot])
+			change = &v5Changes[slot]
+		} else {
+			change, next, err = readStateDomainChangeBinaryRecordAtBoundedIndex(reader, offset, logicalSize, recordIndex)
+		}
 		if err != nil {
 			return err
 		}
@@ -3205,29 +3231,7 @@ func readStateDomainChangeBinaryRecordFrame(r io.ReaderAt, offset, fileSize uint
 	if version == stateDomainChangeBinaryVersionV5 {
 		change, err = decodeStateDomainChangeRecordV5(payload)
 		if err == nil {
-			if recordIndex == math.MaxUint64 {
-				return nil, 0, errors.New("snapshots: v5 state-domain-change record requires record index")
-			}
-			if hydrateBlock {
-				var row *rawdb.StateTxRange
-				if contextual, ok := r.(*stateDomainChangeHistoryReader); ok {
-					row, err = contextual.txRangeForTxNum(change.TxNum)
-				} else {
-					header, headerErr := readStateDomainChangeBinaryHeaderAt(r, stateDomainChangeBinarySegmentMagic)
-					if headerErr != nil {
-						return nil, 0, headerErr
-					}
-					ref := SegmentRef{FromTxNum: header.fromTxNum, ToTxNum: header.toTxNum}
-					row, err = findStateDomainChangeBinaryTxRangeForTxNum(r, fileSize, ref, header, change.TxNum)
-				}
-				if err == nil {
-					change.BlockNum = row.BlockNum
-					change.BlockHash = row.BlockHash
-					change.Seq, err = stateDomainChangeBinaryV5Sequence(row, change.TxNum, recordIndex)
-				}
-			} else {
-				change.Seq = recordIndex + 1
-			}
+			err = hydrateStateDomainChangeBinaryRecordV5(r, fileSize, recordIndex, hydrateBlock, change)
 		}
 	} else {
 		change, err = decodeStateDomainChangeRecord(payload)
@@ -3236,6 +3240,69 @@ func readStateDomainChangeBinaryRecordFrame(r io.ReaderAt, offset, fileSize uint
 		return nil, 0, err
 	}
 	return change, offset + 4 + uint64(length), nil
+}
+
+func readStateDomainChangeBinaryRecordV5FrameInto(r io.ReaderAt, offset, fileSize, recordIndex uint64, payload []byte, change *rawdb.StateDomainChange) ([]byte, uint64, error) {
+	if offset > math.MaxInt64 {
+		return payload, 0, fmt.Errorf("snapshots: state-domain-change record offset too large: %d", offset)
+	}
+	if offset > fileSize || fileSize-offset < 4 {
+		return payload, 0, io.ErrUnexpectedEOF
+	}
+	var prefix [4]byte
+	if _, err := r.ReadAt(prefix[:], int64(offset)); err != nil {
+		return payload, 0, err
+	}
+	length := binary.BigEndian.Uint32(prefix[:])
+	if uint64(length) > fileSize-offset-4 {
+		return payload, 0, io.ErrUnexpectedEOF
+	}
+	if cap(payload) < int(length) {
+		payload = make([]byte, length)
+	} else {
+		payload = payload[:length]
+	}
+	if _, err := r.ReadAt(payload, int64(offset)+4); err != nil {
+		return payload, 0, err
+	}
+	if err := decodeStateDomainChangeRecordV5Into(change, payload); err != nil {
+		return payload, 0, err
+	}
+	if err := hydrateStateDomainChangeBinaryRecordV5(r, fileSize, recordIndex, true, change); err != nil {
+		return payload, 0, err
+	}
+	return payload, offset + 4 + uint64(length), nil
+}
+
+func hydrateStateDomainChangeBinaryRecordV5(r io.ReaderAt, fileSize, recordIndex uint64, hydrateBlock bool, change *rawdb.StateDomainChange) error {
+	if recordIndex == math.MaxUint64 {
+		return errors.New("snapshots: v5 state-domain-change record requires record index")
+	}
+	if !hydrateBlock {
+		change.Seq = recordIndex + 1
+		return nil
+	}
+	var (
+		row *rawdb.StateTxRange
+		err error
+	)
+	if contextual, ok := r.(*stateDomainChangeHistoryReader); ok {
+		row, err = contextual.txRangeForTxNum(change.TxNum)
+	} else {
+		header, headerErr := readStateDomainChangeBinaryHeaderAt(r, stateDomainChangeBinarySegmentMagic)
+		if headerErr != nil {
+			return headerErr
+		}
+		ref := SegmentRef{FromTxNum: header.fromTxNum, ToTxNum: header.toTxNum}
+		row, err = findStateDomainChangeBinaryTxRangeForTxNum(r, fileSize, ref, header, change.TxNum)
+	}
+	if err != nil {
+		return err
+	}
+	change.BlockNum = row.BlockNum
+	change.BlockHash = row.BlockHash
+	change.Seq, err = stateDomainChangeBinaryV5Sequence(row, change.TxNum, recordIndex)
+	return err
 }
 
 // stateDomainChangeBinaryV5Sequence creates a stable hot-row sequence without

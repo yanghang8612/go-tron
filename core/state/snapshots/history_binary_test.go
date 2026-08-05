@@ -195,6 +195,45 @@ func TestStateDomainChangeBinaryV5FrameScratchReuse(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeBinaryV5DecodeIntoResetsBorrowedViews(t *testing.T) {
+	first := binaryStateDomainChange(7, 42, 3, "account/first")
+	first.PrevExists = true
+	first.Prev = []byte{0x01, 0x02, 0x03}
+	firstPayload, err := encodeStateDomainChangeRecordV5(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var decoded rawdb.StateDomainChange
+	if err := decodeStateDomainChangeRecordV5Into(&decoded, firstPayload); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.PrevExists || !bytes.Equal(decoded.Key, first.Key) || !bytes.Equal(decoded.Prev, first.Prev) {
+		t.Fatalf("first decode = %+v", decoded)
+	}
+	firstPayload[len(firstPayload)-1] = 0x7f
+	if decoded.Prev[len(decoded.Prev)-1] != 0x7f {
+		t.Fatal("decoded previous value does not borrow the immutable payload")
+	}
+
+	second := binaryStateDomainChange(8, 43, 1, "b")
+	second.PrevExists = false
+	second.Prev = nil
+	secondPayload, err := encodeStateDomainChangeRecordV5(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := decodeStateDomainChangeRecordV5Into(&decoded, secondPayload); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.BlockNum != 0 || decoded.BlockHash != (common.Hash{}) || decoded.Seq != 0 || decoded.NextExists || len(decoded.Next) != 0 {
+		t.Fatalf("reused decode retained derived/legacy fields: %+v", decoded)
+	}
+	if decoded.PrevExists || len(decoded.Prev) != 0 || !bytes.Equal(decoded.Key, second.Key) {
+		t.Fatalf("second decode retained first payload fields: %+v", decoded)
+	}
+}
+
 func TestStateDomainChangeBinaryV5SequenceIsUniqueAcrossSplitBlock(t *testing.T) {
 	dir := t.TempDir()
 	blockHash := common.Hash{0x77}
