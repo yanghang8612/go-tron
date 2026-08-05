@@ -173,6 +173,59 @@ func TestRepairMainnetCreateTransferFailureOvercharge(t *testing.T) {
 	}
 }
 
+func TestRepairMainnetParallelVMMissedPayment(t *testing.T) {
+	statedb := newTestState(t)
+	statedb.CreateAccount(mainnetParallelVMMissedPaymentRecipient, corepb.AccountType_Normal)
+	statedb.AddBalance(mainnetParallelVMMissedPaymentRecipient, mainnetParallelVMMissedPaymentBadBalance)
+	statedb.CreateAccount(mainnetParallelVMMissedPaymentContract, corepb.AccountType_Contract)
+	statedb.AddBalance(mainnetParallelVMMissedPaymentContract, mainnetParallelVMMissedPaymentContractBalance)
+	statedb.CreateAccount(mainnetParallelVMMissedPaymentPayer, corepb.AccountType_Normal)
+	statedb.AddBalance(mainnetParallelVMMissedPaymentPayer, mainnetParallelVMMissedPaymentPayerBalance)
+	blackhole := statedb.BlackholeAddress()
+	statedb.CreateAccount(blackhole, corepb.AccountType_Normal)
+	statedb.AddBalance(blackhole, mainnetParallelVMMissedPaymentBlackholeBalance)
+	snapshot := statedb.Snapshot()
+
+	if repaired := repairMainnetParallelVMMissedPayment(
+		statedb,
+		mainnetParallelVMMissedPaymentRepairBlock,
+		mainnetParallelVMMissedPaymentRepairBlockID,
+	); !repaired {
+		t.Fatal("legacy missed-payment balance was not repaired")
+	}
+	if got := statedb.GetBalance(mainnetParallelVMMissedPaymentRecipient); got != mainnetParallelVMMissedPaymentCanonicalBalance {
+		t.Fatalf("repaired balance = %d, want %d", got, mainnetParallelVMMissedPaymentCanonicalBalance)
+	}
+	if got := statedb.GetBalance(mainnetParallelVMMissedPaymentContract); got != mainnetParallelVMMissedPaymentContractBalance-mainnetParallelVMMissedPaymentAmount {
+		t.Fatalf("repaired contract balance = %d", got)
+	}
+	if got := statedb.GetBalance(mainnetParallelVMMissedPaymentPayer); got != mainnetParallelVMMissedPaymentPayerBalance-mainnetParallelVMMissedPaymentEnergyFee {
+		t.Fatalf("repaired payer balance = %d", got)
+	}
+	if got := statedb.GetBalance(blackhole); got != mainnetParallelVMMissedPaymentBlackholeBalance+mainnetParallelVMMissedPaymentEnergyFee {
+		t.Fatalf("repaired blackhole balance = %d", got)
+	}
+	if repaired := repairMainnetParallelVMMissedPayment(
+		statedb,
+		mainnetParallelVMMissedPaymentRepairBlock,
+		mainnetParallelVMMissedPaymentRepairBlockID,
+	); repaired {
+		t.Fatal("canonical balance must not be repaired twice")
+	}
+
+	statedb.RevertToSnapshot(snapshot)
+	if got := statedb.GetBalance(mainnetParallelVMMissedPaymentRecipient); got != mainnetParallelVMMissedPaymentBadBalance {
+		t.Fatalf("balance after block snapshot rollback = %d, want %d", got, mainnetParallelVMMissedPaymentBadBalance)
+	}
+	if repaired := repairMainnetParallelVMMissedPayment(
+		statedb,
+		mainnetParallelVMMissedPaymentRepairBlock,
+		tcommon.Hash{0xff},
+	); repaired {
+		t.Fatal("non-canonical block hash activated the repair")
+	}
+}
+
 func testProcessorAddr(b byte) tcommon.Address {
 	var addr tcommon.Address
 	addr[0] = 0x41

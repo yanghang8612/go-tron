@@ -132,6 +132,33 @@ func TestVMSenderChainPublicationCohort(t *testing.T) {
 	}
 }
 
+func TestPreexecutedVMEntryCodeFingerprintRejectsMismatchedBase(t *testing.T) {
+	contractAddr := testProcessorAddr(0x71)
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+
+	workerState := newTestState(t)
+	workerState.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	addr, hash, ok := captureVMEntryCodeFingerprint(workerState, tx)
+	if !ok || addr != contractAddr {
+		t.Fatalf("worker fingerprint = %s/%t, want %s/true", addr.Hex(), ok, contractAddr.Hex())
+	}
+	preResult := &discardShadowTaskResult{
+		vmEntryCodeAddress: addr,
+		vmEntryCodeHash:    hash,
+		hasVMEntryCodeHash: true,
+	}
+	if !preexecutedVMEntryCodeMatches(workerState, preResult) {
+		t.Fatal("unchanged worker entry code did not match")
+	}
+
+	canonicalState := newTestState(t)
+	canonicalState.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	canonicalState.SetCode(contractAddr, []byte{0x00}) // STOP
+	if preexecutedVMEntryCodeMatches(canonicalState, preResult) {
+		t.Fatal("empty-code speculative base matched canonical contract bytecode")
+	}
+}
+
 func TestDiscardShadowRetryWriteCaptureProjectsReadHierarchy(t *testing.T) {
 	fieldAddress := testProcessorAddr(1)
 	fullAddress := testProcessorAddr(2)

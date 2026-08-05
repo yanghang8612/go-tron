@@ -25,9 +25,17 @@ import (
 var ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 
 const (
-	mainnetCreateTransferFailureRepairBlock      = uint64(12_978_262)
-	mainnetCreateTransferFailureBadBalance       = int64(2_115_378)
-	mainnetCreateTransferFailureCanonicalBalance = int64(6_320_008)
+	mainnetCreateTransferFailureRepairBlock        = uint64(12_978_262)
+	mainnetCreateTransferFailureBadBalance         = int64(2_115_378)
+	mainnetCreateTransferFailureCanonicalBalance   = int64(6_320_008)
+	mainnetParallelVMMissedPaymentRepairBlock      = uint64(18_414_381)
+	mainnetParallelVMMissedPaymentBadBalance       = int64(67_007_277)
+	mainnetParallelVMMissedPaymentCanonicalBalance = int64(78_834_028)
+	mainnetParallelVMMissedPaymentContractBalance  = int64(2_533_557_004_363)
+	mainnetParallelVMMissedPaymentPayerBalance     = int64(664_136_885_514)
+	mainnetParallelVMMissedPaymentBlackholeBalance = int64(-9_223_234_026_935_214_473)
+	mainnetParallelVMMissedPaymentAmount           = int64(11_826_751)
+	mainnetParallelVMMissedPaymentEnergyFee        = int64(85_360)
 )
 
 var (
@@ -35,6 +43,19 @@ var (
 	mainnetCreateTransferFailurePayer         = tcommon.Address{
 		0x41, 0x1e, 0x03, 0xe4, 0x33, 0xaa, 0x39, 0xf4, 0xee, 0x45, 0xc6,
 		0x4e, 0x78, 0x94, 0xac, 0x41, 0x6f, 0x0a, 0x82, 0x05, 0xfc,
+	}
+	mainnetParallelVMMissedPaymentRepairBlockID = tcommon.HexToHash("000000000118fb2ded825760c49c8d2588e04dcc283a12cf7d957413f7defed8")
+	mainnetParallelVMMissedPaymentRecipient     = tcommon.Address{
+		0x41, 0x9f, 0x9e, 0x5e, 0xc2, 0xcc, 0xfb, 0xf8, 0xca, 0x53, 0x25,
+		0x50, 0xc8, 0x39, 0x43, 0x12, 0xc8, 0x6a, 0x5b, 0x70, 0x87,
+	}
+	mainnetParallelVMMissedPaymentContract = tcommon.Address{
+		0x41, 0xa0, 0x61, 0x13, 0x7c, 0x9f, 0xcb, 0xa2, 0xff, 0x96, 0x58,
+		0x66, 0x0d, 0x49, 0xc1, 0x2b, 0x5c, 0x09, 0x1f, 0xe5, 0x85,
+	}
+	mainnetParallelVMMissedPaymentPayer = tcommon.Address{
+		0x41, 0x98, 0x56, 0x2b, 0x38, 0x71, 0x53, 0x3e, 0x85, 0x3d, 0x6c,
+		0xbc, 0xfc, 0x51, 0x11, 0x97, 0xb5, 0x94, 0x30, 0x47, 0xc0,
 	}
 )
 
@@ -60,6 +81,35 @@ func repairMainnetCreateTransferFailureOvercharge(statedb *state.StateDB, blockN
 		mainnetCreateTransferFailurePayer,
 		mainnetCreateTransferFailureCanonicalBalance-mainnetCreateTransferFailureBadBalance,
 	)
+	return true
+}
+
+// repairMainnetParallelVMMissedPayment heals the one state materialized by the
+// pre-fix speculative VM publisher. Mainnet block 18,402,304 tx
+// 1f63de3942... called groupPayment and java-tron transferred 11,826,751 sun to
+// the recipient. The speculative block-start view hydrated the entry contract
+// with an empty code edge and published a zero-energy SUCCESS instead. Serial
+// replay of the same transaction consumes 8,536 energy and performs the
+// transfer. The drift becomes fatal at block 18,414,381 tx 6186f5fe1b... .
+//
+// A clean/fixed replay already has the canonical balance and takes no action.
+// The exact block ID and exact legacy balance make the repair network-specific,
+// idempotent, and inert for forks or independently modified state.
+func repairMainnetParallelVMMissedPayment(statedb *state.StateDB, blockNum uint64, blockID tcommon.Hash) bool {
+	if statedb == nil || blockNum != mainnetParallelVMMissedPaymentRepairBlock || blockID != mainnetParallelVMMissedPaymentRepairBlockID {
+		return false
+	}
+	blackhole := statedb.BlackholeAddress()
+	if statedb.GetBalance(mainnetParallelVMMissedPaymentRecipient) != mainnetParallelVMMissedPaymentBadBalance ||
+		statedb.GetBalance(mainnetParallelVMMissedPaymentContract) != mainnetParallelVMMissedPaymentContractBalance ||
+		statedb.GetBalance(mainnetParallelVMMissedPaymentPayer) != mainnetParallelVMMissedPaymentPayerBalance ||
+		statedb.GetBalance(blackhole) != mainnetParallelVMMissedPaymentBlackholeBalance {
+		return false
+	}
+	statedb.AddBalance(mainnetParallelVMMissedPaymentRecipient, mainnetParallelVMMissedPaymentAmount)
+	statedb.AddBalance(mainnetParallelVMMissedPaymentContract, -mainnetParallelVMMissedPaymentAmount)
+	statedb.AddBalance(mainnetParallelVMMissedPaymentPayer, -mainnetParallelVMMissedPaymentEnergyFee)
+	statedb.AddSettlementBalance(blackhole, mainnetParallelVMMissedPaymentEnergyFee)
 	return true
 }
 
@@ -788,6 +838,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		}
 	}()
 	repairMainnetCreateTransferFailureOvercharge(statedb, block.Number(), block.Hash())
+	repairMainnetParallelVMMissedPayment(statedb, block.Number(), block.Hash())
 
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)
@@ -1145,6 +1196,12 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				case !blockEnergyAdmitted:
 					parallelVMAsyncRetryPublishEnergyFallbackCounter.Inc(1)
 					parallelVMBlockEnergyFallbackCounter.Inc(1)
+				case !preexecutedVMEntryCodeMatches(statedb, retryResult):
+					// A version-clean read can still originate from a stale or
+					// incomplete block-start base. Fall back to authoritative serial
+					// execution when the entry bytecode edge differs.
+					parallelVMAsyncRetryPublishPreflightCounter.Inc(1)
+					parallelVMPreflightFallbackCounter.Inc(1)
 				default:
 					publicNetOverride, publicNetAdmitted := overridePublicNetReservation(retryResult, dynProps)
 					if !publicNetAdmitted {
@@ -1222,6 +1279,8 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				if readVersion.predecessor {
 					parallelVMChainPredFallbackCounter.Inc(1)
 				}
+			case !preexecutedVMEntryCodeMatches(statedb, preResult):
+				parallelVMPreflightFallbackCounter.Inc(1)
 			default:
 				parallelVMCandidatesCounter.Inc(1)
 				if preResult.senderVersioned {

@@ -704,6 +704,38 @@ type discardShadowTaskResult struct {
 	contractRetActual    int64
 	contractRetTxHash    int64
 	contractRetMismatch  bool
+	vmEntryCodeAddress   tcommon.Address
+	vmEntryCodeHash      tcommon.Hash
+	hasVMEntryCodeHash   bool
+}
+
+// captureVMEntryCodeFingerprint records the code edge consumed by a speculative
+// top-level TriggerSmartContract. Typed read-version validation proves that no
+// earlier transaction changed the code cell, but it does not prove that the
+// worker's block-start copy and the canonical StateDB hydrated the same base
+// value. Keeping this small fingerprint closes that gap without retaining the
+// bytecode itself.
+func captureVMEntryCodeFingerprint(statedb *state.StateDB, tx *types.Transaction) (tcommon.Address, tcommon.Hash, bool) {
+	if statedb == nil || tx == nil || tx.ContractType() != corepb.Transaction_Contract_TriggerSmartContract {
+		return tcommon.Address{}, tcommon.Hash{}, false
+	}
+	msg, err := tx.DecodedContract()
+	if err != nil {
+		return tcommon.Address{}, tcommon.Hash{}, false
+	}
+	trigger, ok := msg.(*contractpb.TriggerSmartContract)
+	if !ok || len(trigger.ContractAddress) != tcommon.AddressLength {
+		return tcommon.Address{}, tcommon.Hash{}, false
+	}
+	addr := tcommon.BytesToAddress(trigger.ContractAddress)
+	return addr, statedb.GetCodeHash(addr), true
+}
+
+func preexecutedVMEntryCodeMatches(statedb *state.StateDB, result *discardShadowTaskResult) bool {
+	if result == nil || !result.hasVMEntryCodeHash {
+		return true
+	}
+	return statedb != nil && statedb.GetCodeHash(result.vmEntryCodeAddress) == result.vmEntryCodeHash
 }
 
 type discardShadowTaskErrorStage uint8
@@ -4468,6 +4500,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	worker.infoSlot.internalTxArena.Reset()
 	worker.infoSlot.executionLogArena.Reset()
 	worker.state.BeginBalanceTraceTransaction(tx.Hash().Bytes(), tx.ContractType().String())
+	vmEntryCodeAddress, vmEntryCodeHash, hasVMEntryCodeHash := captureVMEntryCodeFingerprint(worker.state, tx)
 
 	prevBlockTime := worker.dynProps.LatestBlockHeaderTimestamp()
 	prevBlockHeadSlot := HeadSlot(prevBlockTime, cfg.genesisTimestamp)
@@ -4620,5 +4653,8 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		contractRetActual:   contractRetActual,
 		contractRetTxHash:   contractRetTxHash,
 		contractRetMismatch: contractRetErr != nil,
+		vmEntryCodeAddress:  vmEntryCodeAddress,
+		vmEntryCodeHash:     vmEntryCodeHash,
+		hasVMEntryCodeHash:  hasVMEntryCodeHash,
 	}
 }
