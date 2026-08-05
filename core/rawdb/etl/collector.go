@@ -10,7 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -24,7 +24,8 @@ const (
 	// Keep at most one default-buffer-sized entry array in each pool item.
 	// Larger one-off collectors are released to the garbage collector rather
 	// than pinning an unexpectedly large backing array for future work.
-	collectorRowsPoolMaxCapacity = 1 << 20
+	collectorRowsPoolMaxCapacity  = 1 << 20
+	collectorOrderPoolMaxCapacity = 1 << 20
 )
 
 var (
@@ -32,6 +33,7 @@ var (
 	ErrCollectorLoaded = errors.New("etl: collector already loaded")
 	ErrLoadInterrupted = errors.New("etl: load interrupted")
 	collectorRowsPool  = sync.Pool{New: func() any { return new([]entry) }}
+	collectorOrderPool = sync.Pool{New: func() any { return new([]uint32) }}
 )
 
 // Options configures a Collector. TempDir is a parent directory; Collector
@@ -291,7 +293,11 @@ func (c *Collector) spillBuffer() error {
 	if len(c.rows) == 0 {
 		return nil
 	}
-	sortEntries(c.rows)
+	order, err := sortedEntryOrder(c.rows)
+	if err != nil {
+		return err
+	}
+	defer releaseEntryOrder(&order)
 	final := filepath.Join(c.dir, fmt.Sprintf("run-%06d.dat", len(c.runFiles)))
 	tmp, err := os.CreateTemp(c.dir, ".run-*.tmp")
 	if err != nil {
@@ -310,7 +316,8 @@ func (c *Collector) spillBuffer() error {
 		_ = tmp.Close()
 		return err
 	}
-	for _, e := range c.rows {
+	for _, row := range *order {
+		e := c.rows[row]
 		if err := writeRunEntry(w, e); err != nil {
 			_ = tmp.Close()
 			return err
@@ -493,17 +500,21 @@ func (c *Collector) loadRows(applier *applier, interrupted func() bool) error {
 	if len(c.rows) == 0 {
 		return nil
 	}
-	sortEntries(c.rows)
+	order, err := sortedEntryOrder(c.rows)
+	if err != nil {
+		return err
+	}
+	defer releaseEntryOrder(&order)
 	var groups uint64
-	for start := 0; start < len(c.rows); {
+	for start := 0; start < len(*order); {
 		if groups&1023 == 0 && interrupted != nil && interrupted() {
 			return ErrLoadInterrupted
 		}
 		end := start + 1
-		for end < len(c.rows) && bytes.Equal(c.rows[start].key, c.rows[end].key) {
+		for end < len(*order) && bytes.Equal(c.rows[(*order)[start]].key, c.rows[(*order)[end]].key) {
 			end++
 		}
-		winner := c.rows[end-1]
+		winner := c.rows[(*order)[end-1]]
 		if winner.op == opDelete {
 			if err := applier.delete(winner.key); err != nil {
 				return err
@@ -522,16 +533,48 @@ func (c *Collector) loadRows(applier *applier, interrupted func() bool) error {
 	return nil
 }
 
-func sortEntries(entries []entry) {
-	// key+sequence is already a total order, so stability adds no semantics.
-	// The unstable implementation is substantially cheaper for million-row
-	// derived-index runs while preserving latest-operation collapse exactly.
-	sort.Slice(entries, func(i, j int) bool {
-		if cmp := bytes.Compare(entries[i].key, entries[j].key); cmp != 0 {
-			return cmp < 0
+// sortedEntryOrder keeps the 64-byte entry metadata stationary and lets pdqsort
+// move compact row numbers, mirroring Erigon's entryLoc sorting cost while
+// preserving PutOwned's slice-ownership contract.
+func sortedEntryOrder(entries []entry) (*[]uint32, error) {
+	if uint64(len(entries)) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("etl: entry count %d exceeds compact sort order", len(entries))
+	}
+	order := collectorOrderPool.Get().(*[]uint32)
+	if cap(*order) < len(entries) {
+		*order = make([]uint32, len(entries))
+	} else {
+		*order = (*order)[:len(entries)]
+	}
+	for i := range entries {
+		(*order)[i] = uint32(i)
+	}
+	slices.SortFunc(*order, func(left, right uint32) int {
+		a, b := &entries[left], &entries[right]
+		if cmp := bytes.Compare(a.key, b.key); cmp != 0 {
+			return cmp
 		}
-		return entries[i].seq < entries[j].seq
+		if a.seq < b.seq {
+			return -1
+		}
+		if a.seq > b.seq {
+			return 1
+		}
+		return 0
 	})
+	return order, nil
+}
+
+func releaseEntryOrder(order **[]uint32) {
+	if order == nil || *order == nil {
+		return
+	}
+	buffer := *order
+	*order = nil
+	*buffer = (*buffer)[:0]
+	if cap(*buffer) <= collectorOrderPoolMaxCapacity {
+		collectorOrderPool.Put(buffer)
+	}
 }
 
 func writeRunEntry(w io.Writer, e entry) error {

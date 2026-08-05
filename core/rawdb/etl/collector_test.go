@@ -178,6 +178,37 @@ func TestCollectorRetainsEntryBufferAcrossSpills(t *testing.T) {
 	}
 }
 
+func TestSortedEntryOrderUsesKeyThenSequenceAndResetsPool(t *testing.T) {
+	entries := []entry{
+		{key: []byte("b"), seq: 1},
+		{key: []byte("a"), seq: 2},
+		{key: []byte("a"), seq: 1},
+	}
+	order, err := sortedEntryOrder(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := append([]uint32(nil), (*order)...), []uint32{2, 1, 0}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sorted row order = %v, want %v", got, want)
+	}
+	retained := order
+	releaseEntryOrder(&order)
+	if order != nil {
+		t.Fatal("released sort order still reachable through caller")
+	}
+	if len(*retained) != 0 {
+		t.Fatalf("released sort order retained length %d", len(*retained))
+	}
+	order, err = sortedEntryOrder(entries[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseEntryOrder(&order)
+	if len(*order) != 1 || (*order)[0] != 0 {
+		t.Fatalf("reacquired sort order = %v, want [0]", *order)
+	}
+}
+
 func TestCollectorSuccessfulLoadReleasesEntryBuffer(t *testing.T) {
 	collector := newTestCollector(t, Options{BufferLimit: 1 << 20})
 	defer collector.Close()
