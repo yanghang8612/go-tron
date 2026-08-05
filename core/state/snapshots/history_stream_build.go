@@ -983,14 +983,15 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	defer func() { _ = accessorTmp.Close(); _ = os.Remove(accessorTmpName) }()
-	if err := writeStateDomainChangeBinaryHeaderToVersion(accessorTmp, stateDomainChangeBinaryAccessorMagic, accessorRef.FromTxNum, accessorRef.ToTxNum, recordCount, stateDomainChangeBinaryVersionV4); err != nil {
+	metadataWriter := newSnapshotMetadataWriter(accessorTmp)
+	if err := writeStateDomainChangeBinaryHeaderToVersion(metadataWriter, stateDomainChangeBinaryAccessorMagic, accessorRef.FromTxNum, accessorRef.ToTxNum, recordCount, stateDomainChangeBinaryVersionV4); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
-	if err := writeStateDomainChangeBinaryTxRangeCount(accessorTmp, groupWriter.groups); err != nil {
+	if err := writeStateDomainChangeBinaryTxRangeCount(metadataWriter, groupWriter.groups); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	exactWriter := stateDomainChangeBinaryAccessorV3ExactETLWriter{
-		file:     acquireStateDomainChangeHistoryWriter(accessorTmp),
+		file:     acquireStateDomainChangeHistoryWriter(metadataWriter),
 		expected: recordCount,
 	}
 	defer exactWriter.Release()
@@ -1004,24 +1005,30 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 	if err := exactWriter.Finish(); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
+	tailWriter := acquireStateDomainChangeHistoryWriter(metadataWriter)
+	defer releaseStateDomainChangeHistoryWriter(&tailWriter)
 	payloadStart := uint64(stateDomainChangeBinaryHeaderSize+stateDomainChangeBinaryAccessorV3HeaderExtra) + recordCount*stateDomainChangeBinaryAccessorV3ExactEntrySize + groupWriter.groups*8
+	var raw [8]byte
 	for _, relative := range *groupOffsets {
-		var raw [8]byte
 		if relative > math.MaxUint64-payloadStart {
 			return SegmentRef{}, etl.Stats{}, errors.New("snapshots: state-domain-change accessor v3 group payload offset overflows")
 		}
 		binary.BigEndian.PutUint64(raw[:], payloadStart+relative)
-		if _, err := accessorTmp.Write(raw[:]); err != nil {
+		if _, err := tailWriter.Write(raw[:]); err != nil {
 			return SegmentRef{}, etl.Stats{}, err
 		}
 	}
 	if _, err := groupPayloadTmp.Seek(0, io.SeekStart); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
-	if _, err := copyStateDomainChangeHistoryData(accessorTmp, groupPayloadTmp); err != nil {
+	if _, err := copyStateDomainChangeHistoryData(tailWriter, groupPayloadTmp); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
-	resultRef, err := finalizeStateDomainChangeHistoryFile(dir, accessorRef, accessorTmp, accessorTmpName, false)
+	if err := tailWriter.Flush(); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	releaseStateDomainChangeHistoryWriter(&tailWriter)
+	resultRef, err := finalizeStateDomainChangeHistoryFileWithMetadata(dir, accessorRef, accessorTmp, accessorTmpName, metadataWriter.Metadata(), false)
 	if err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}

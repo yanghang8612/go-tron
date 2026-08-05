@@ -164,24 +164,38 @@ type compressedBlockWriter struct {
 	recCount  uint64
 }
 
-type compressedBlockFileMetadata struct {
+type snapshotFileMetadata struct {
 	size     uint64
 	checksum [sha256.Size]byte
 }
 
-type compressedBlockMetadataWriter struct {
+type snapshotMetadataWriter struct {
 	dst    io.Writer
 	digest hash.Hash
 	size   uint64
 }
 
-func (w *compressedBlockMetadataWriter) Write(p []byte) (int, error) {
+func newSnapshotMetadataWriter(dst io.Writer) *snapshotMetadataWriter {
+	return &snapshotMetadataWriter{dst: dst, digest: sha256.New()}
+}
+
+func (w *snapshotMetadataWriter) Write(p []byte) (int, error) {
 	n, err := w.dst.Write(p)
 	if n > 0 {
 		_, _ = w.digest.Write(p[:n])
 		w.size += uint64(n)
 	}
 	return n, err
+}
+
+func (w *snapshotMetadataWriter) Metadata() snapshotFileMetadata {
+	var metadata snapshotFileMetadata
+	if w == nil || w.digest == nil {
+		return metadata
+	}
+	metadata.size = w.size
+	copy(metadata.checksum[:], w.digest.Sum(nil))
+	return metadata
 }
 
 func newCompressedBlockWriter(dir string, blockSize int) (*compressedBlockWriter, error) {
@@ -321,9 +335,9 @@ func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) err
 	return w.finishWithPrefixMetadata(path, prefix, nil)
 }
 
-func (w *compressedBlockWriter) finishWithPrefixMetadata(path string, prefix []byte, metadata *compressedBlockFileMetadata) (err error) {
+func (w *compressedBlockWriter) finishWithPrefixMetadata(path string, prefix []byte, metadata *snapshotFileMetadata) (err error) {
 	if metadata != nil {
-		*metadata = compressedBlockFileMetadata{}
+		*metadata = snapshotFileMetadata{}
 	}
 	defer func() {
 		releaseStateDomainChangeHistoryBlockTable(&w.table)
@@ -367,9 +381,9 @@ func (w *compressedBlockWriter) finishWithPrefixMetadata(path string, prefix []b
 		}
 	}()
 	finalOut := io.Writer(out)
-	var metadataWriter *compressedBlockMetadataWriter
+	var metadataWriter *snapshotMetadataWriter
 	if metadata != nil {
-		metadataWriter = &compressedBlockMetadataWriter{dst: out, digest: sha256.New()}
+		metadataWriter = newSnapshotMetadataWriter(out)
 		finalOut = metadataWriter
 	}
 
@@ -395,8 +409,7 @@ func (w *compressedBlockWriter) finishWithPrefixMetadata(path string, prefix []b
 		return err
 	}
 	if metadata != nil {
-		metadata.size = metadataWriter.size
-		copy(metadata.checksum[:], metadataWriter.digest.Sum(nil))
+		*metadata = metadataWriter.Metadata()
 	}
 	return nil
 }
@@ -1262,13 +1275,13 @@ func (w *compressedBlockStreamWriter) Finish(path string) error {
 	return w.finish(path, nil)
 }
 
-func (w *compressedBlockStreamWriter) FinishWithMetadata(path string) (compressedBlockFileMetadata, error) {
-	var metadata compressedBlockFileMetadata
+func (w *compressedBlockStreamWriter) FinishWithMetadata(path string) (snapshotFileMetadata, error) {
+	var metadata snapshotFileMetadata
 	err := w.finish(path, &metadata)
 	return metadata, err
 }
 
-func (w *compressedBlockStreamWriter) finish(path string, metadata *compressedBlockFileMetadata) error {
+func (w *compressedBlockStreamWriter) finish(path string, metadata *snapshotFileMetadata) error {
 	if w == nil || w.closed || w.body == nil {
 		return errors.New("snapshots: compressed stream writer is closed")
 	}

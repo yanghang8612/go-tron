@@ -858,6 +858,14 @@ func finalizeStateDomainChangeHistoryFile(dir string, ref SegmentRef, tmp *os.Fi
 	return publishStateDomainChangeBinaryFinal(dir, ref, tmpName, size, checksum, contentAddress)
 }
 
+func finalizeStateDomainChangeHistoryFileWithMetadata(dir string, ref SegmentRef, tmp *os.File, tmpName string, metadata snapshotFileMetadata, contentAddress bool) (SegmentRef, error) {
+	if err := syncAndCloseStateDomainChangeBinaryTemp(tmp); err != nil {
+		return SegmentRef{}, err
+	}
+	checksum := "sha256:" + hex.EncodeToString(metadata.checksum[:])
+	return publishStateDomainChangeBinaryFinal(dir, ref, tmpName, metadata.size, checksum, contentAddress)
+}
+
 // publishStateDomainChangeBinaryFinal renames src into its final (optionally
 // content-addressed) path and stamps the ref's path/size/checksum.
 func publishStateDomainChangeBinaryFinal(dir string, ref SegmentRef, src string, size uint64, checksum string, contentAddress bool) (SegmentRef, error) {
@@ -1371,14 +1379,21 @@ func createStateDomainChangeBinaryTempFileInDir(dir, base string) (*os.File, str
 }
 
 func closeAndHashStateDomainChangeBinaryTemp(file *os.File, tmpName string) (uint64, string, error) {
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return 0, "", err
-	}
-	if err := file.Close(); err != nil {
+	if err := syncAndCloseStateDomainChangeBinaryTemp(file); err != nil {
 		return 0, "", err
 	}
 	return stateDomainChangeBinaryFileMetadata(tmpName)
+}
+
+func syncAndCloseStateDomainChangeBinaryTemp(file *os.File) error {
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func publishStateDomainChangeBinaryTemp(tmpName, finalAbs string) error {
