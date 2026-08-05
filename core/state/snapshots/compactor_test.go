@@ -825,7 +825,7 @@ func TestCatchupHistoryCompactionWritesEachLeafOnce(t *testing.T) {
 	}
 }
 
-func writeCompactionStateDomainChangeSegment(t *testing.T, dir string, fromTxNum, toTxNum uint64, changes ...*rawdb.StateDomainChange) []SegmentRef {
+func writeCompactionStateDomainChangeSegment(t testing.TB, dir string, fromTxNum, toTxNum uint64, changes ...*rawdb.StateDomainChange) []SegmentRef {
 	t.Helper()
 	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
 		Dataset:   SegmentDatasetStateDomainChange,

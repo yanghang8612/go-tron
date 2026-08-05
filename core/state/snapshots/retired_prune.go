@@ -71,8 +71,9 @@ func inspectRetiredSegmentFiles(dir, operation string) (*RetiredSegmentFileInspe
 	if err != nil {
 		return nil, err
 	}
-	if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{}); err != nil {
-		return nil, fmt.Errorf("snapshots: active segment preflight failed before %s: %w", operation, err)
+	result := &RetiredSegmentFileInspection{RetiredSegments: len(manifest.Retired)}
+	if len(manifest.Retired) == 0 {
+		return result, nil
 	}
 
 	active := make(map[string]struct{}, len(manifest.Segments))
@@ -90,10 +91,8 @@ func inspectRetiredSegmentFiles(dir, operation string) (*RetiredSegmentFileInspe
 		}
 	}
 
-	result := &RetiredSegmentFileInspection{}
 	seenRetired := make(map[string]struct{}, len(manifest.Retired))
 	for _, ref := range manifest.Retired {
-		result.RetiredSegments++
 		if _, ok := active[ref.Path]; ok {
 			result.FilesSkippedActive++
 			continue
@@ -123,6 +122,16 @@ func inspectRetiredSegmentFiles(dir, operation string) (*RetiredSegmentFileInspe
 		size := uint64(stat.Size())
 		result.BytesPresent += size
 		result.PresentFiles = append(result.PresentFiles, RetiredSegmentFile{Path: ref.Path, Size: size})
+	}
+	// Full companion verification is a deletion gate, not a periodic scrub.
+	// SnapshotLifecycle calls this after every bounded catch-up build, so doing
+	// an active-view scan when there is nothing to delete turns incremental
+	// sync into an O(number of active history records) maintenance loop. Keep
+	// the strict preflight immediately before returning deletion candidates.
+	if len(result.PresentFiles) > 0 {
+		if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{}); err != nil {
+			return nil, fmt.Errorf("snapshots: active segment preflight failed before %s: %w", operation, err)
+		}
 	}
 	return result, nil
 }
