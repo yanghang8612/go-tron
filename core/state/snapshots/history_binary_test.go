@@ -1137,6 +1137,43 @@ func TestStateDomainChangeBinaryV4KeyRangeSeeksTxLowerBound(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeBinaryV4CoverageBuffersAccessorReads(t *testing.T) {
+	const changeCount = 8192
+	owner := binaryAddress(0xb5)
+	changes := make([]*rawdb.StateDomainChange, changeCount)
+	for i := range changes {
+		txNum := uint64(i + 1)
+		change := binaryStateDomainChange(txNum, txNum, 1, "frequent-key")
+		change.Owner = owner
+		change.Generation = 7
+		changes[i] = change
+	}
+	segmentData, _, accessorEntries, err := encodeStateDomainChangeBinarySegment(1, changeCount, normalizeStateDomainChangesForBinary(changes))
+	if err != nil {
+		t.Fatalf("encode segment: %v", err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessorV4(1, changeCount, accessorEntries)
+	if err != nil {
+		t.Fatalf("encode accessor: %v", err)
+	}
+	header, err := readStateDomainChangeBinaryHeaderAt(bytes.NewReader(accessorData), stateDomainChangeBinaryAccessorMagic)
+	if err != nil {
+		t.Fatalf("read accessor header: %v", err)
+	}
+	countedAccessor := &countingStateDomainReaderAt{reader: bytes.NewReader(accessorData)}
+	if err := verifyStateDomainChangeBinaryAccessorV4Coverage(
+		SegmentRef{Path: "history/state-domain-change-buffered.kv"},
+		bytes.NewReader(segmentData), uint64(len(segmentData)), changeCount,
+		countedAccessor, uint64(len(accessorData)), header,
+	); err != nil {
+		t.Fatalf("verify v4 coverage: %v", err)
+	}
+	t.Logf("v4 coverage used %d accessor reads for %d changes", countedAccessor.reads, changeCount)
+	if countedAccessor.reads > 8 {
+		t.Fatalf("v4 coverage used %d accessor reads for %d changes, want bounded window reads", countedAccessor.reads, changeCount)
+	}
+}
+
 type countingStateDomainReaderAt struct {
 	reader interface {
 		ReadAt([]byte, int64) (int, error)
