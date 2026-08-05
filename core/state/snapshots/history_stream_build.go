@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -200,27 +201,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if err != nil {
 		return result, err
 	}
-	indexRef = SegmentRef{
-		Dataset:          SegmentDatasetStateDomainChange,
-		Kind:             SegmentInverted,
-		FromTxNum:        ref.FromTxNum,
-		ToTxNum:          ref.ToTxNum,
-		AggregationSteps: ref.AggregationSteps,
-		Path:             stateDomainChangeBinaryIndexPath(segmentRef.Path),
-	}
-	indexRef, err = finalizeStateDomainChangeHistoryFile(dir, indexRef, indexTmp, indexTmpName, false)
-	if err != nil {
-		return result, err
-	}
-	accessorRef = SegmentRef{
-		Dataset:          SegmentDatasetStateDomainChange,
-		Kind:             SegmentAccessor,
-		FromTxNum:        ref.FromTxNum,
-		ToTxNum:          ref.ToTxNum,
-		AggregationSteps: ref.AggregationSteps,
-		Path:             stateDomainChangeBinaryAccessorPath(segmentRef.Path),
-	}
-	accessorRef, result.accessorETL, err = accessorCollectors.Build(dir, accessorRef, recordCount)
+	indexRef, accessorRef, result.accessorETL, err = finalizeStateDomainChangeBinaryCompanions(dir, segmentRef, indexTmp, indexTmpName, accessorCollectors, recordCount)
 	if err != nil {
 		return result, err
 	}
@@ -1033,6 +1014,49 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) Build(dir string, accessor
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	return resultRef, exactStats, nil
+}
+
+// finalizeStateDomainChangeBinaryCompanions publishes the independently built
+// txNum index and v4 accessor in parallel after the canonical history payload
+// is durable. Both outputs remain derived from the same ordered record stream;
+// callers remove either published sidecar if its sibling fails.
+func finalizeStateDomainChangeBinaryCompanions(dir string, historyRef SegmentRef, indexTmp *os.File, indexTmpName string, collectors *stateDomainChangeBinaryAccessorV4Collectors, recordCount uint64) (indexRef, accessorRef SegmentRef, accessorStats etl.Stats, err error) {
+	indexRef = SegmentRef{
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentInverted,
+		FromTxNum:        historyRef.FromTxNum,
+		ToTxNum:          historyRef.ToTxNum,
+		AggregationSteps: historyRef.AggregationSteps,
+		Path:             stateDomainChangeBinaryIndexPath(historyRef.Path),
+	}
+	accessorRef = SegmentRef{
+		Dataset:          SegmentDatasetStateDomainChange,
+		Kind:             SegmentAccessor,
+		FromTxNum:        historyRef.FromTxNum,
+		ToTxNum:          historyRef.ToTxNum,
+		AggregationSteps: historyRef.AggregationSteps,
+		Path:             stateDomainChangeBinaryAccessorPath(historyRef.Path),
+	}
+
+	var indexErr, accessorErr error
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		indexRef, indexErr = finalizeStateDomainChangeHistoryFile(dir, indexRef, indexTmp, indexTmpName, false)
+	}()
+	go func() {
+		defer workers.Done()
+		accessorRef, accessorStats, accessorErr = collectors.Build(dir, accessorRef, recordCount)
+	}()
+	workers.Wait()
+	if indexErr != nil {
+		return indexRef, accessorRef, accessorStats, indexErr
+	}
+	if accessorErr != nil {
+		return indexRef, accessorRef, accessorStats, accessorErr
+	}
+	return indexRef, accessorRef, accessorStats, nil
 }
 
 // stateDomainChangeBinaryAccessorETLSortKey preserves the binary accessor's

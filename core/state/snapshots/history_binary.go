@@ -964,29 +964,9 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if err := validateTrustedBuiltHistorySegment(dir, segRef, recordWriter.segmentOff, totalRecords, txRangeCount); err != nil {
 		return segRef, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted history self-check failed: %w", err)
 	}
-	idxRef = SegmentRef{
-		Dataset:          SegmentDatasetStateDomainChange,
-		Kind:             SegmentInverted,
-		FromTxNum:        segRef.FromTxNum,
-		ToTxNum:          segRef.ToTxNum,
-		AggregationSteps: segRef.AggregationSteps,
-		Path:             stateDomainChangeBinaryIndexPath(segRef.Path),
-	}
-	idxRef, err = finalizeStateDomainChangeHistoryFile(dir, idxRef, indexTmp, indexTmpName, false)
+	idxRef, accessorRef, _, err = finalizeStateDomainChangeBinaryCompanions(dir, segRef, indexTmp, indexTmpName, collectors, totalRecords)
 	if err != nil {
-		return segRef, SegmentRef{}, SegmentRef{}, err
-	}
-	accessorRef = SegmentRef{
-		Dataset:          SegmentDatasetStateDomainChange,
-		Kind:             SegmentAccessor,
-		FromTxNum:        segRef.FromTxNum,
-		ToTxNum:          segRef.ToTxNum,
-		AggregationSteps: segRef.AggregationSteps,
-		Path:             stateDomainChangeBinaryAccessorPath(segRef.Path),
-	}
-	accessorRef, _, err = collectors.Build(dir, accessorRef, totalRecords)
-	if err != nil {
-		return segRef, idxRef, SegmentRef{}, err
+		return segRef, idxRef, accessorRef, err
 	}
 	return segRef, idxRef, accessorRef, nil
 }
