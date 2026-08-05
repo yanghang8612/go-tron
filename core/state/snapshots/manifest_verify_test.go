@@ -206,6 +206,67 @@ func TestVerifyLoadedManifestFilesRejectsStaleStateDomainAccessor(t *testing.T) 
 	}
 }
 
+func TestVerifyLoadedManifestFilesRejectsV4GroupRecordsOutOfLookupOrder(t *testing.T) {
+	dir := t.TempDir()
+	owner := binaryAddress(0xd4)
+	first := binaryStateDomainChange(1, 10, 1, "slot/shared")
+	second := binaryStateDomainChange(2, 11, 1, "slot/shared")
+	for _, change := range []*rawdb.StateDomainChange{first, second} {
+		change.Owner = owner
+		change.Generation = 3
+		change.Domain = kvdomains.ContractStorage
+	}
+	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 10,
+		ToTxNum:   11,
+		Path:      "history/state-domain-change-v4-group-order-10-11.seg",
+	}, []*rawdb.StateDomainChange{first, second})
+	if err != nil {
+		t.Fatalf("write state-domain history: %v", err)
+	}
+
+	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
+	reader := bytes.NewReader(data)
+	header, err := readStateDomainChangeBinaryHeaderAt(reader, stateDomainChangeBinaryAccessorMagic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.version != stateDomainChangeBinaryVersionV4 {
+		t.Fatalf("accessor version = %d, want v4", header.version)
+	}
+	layout, err := stateDomainChangeBinaryAccessorV4LayoutAt(reader, uint64(len(data)), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.groupCount != 1 {
+		t.Fatalf("group count = %d, want 1", layout.groupCount)
+	}
+	group, err := readStateDomainChangeBinaryAccessorV4GroupMetaAt(reader, layout, 0, uint64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.count != 2 {
+		t.Fatalf("group record count = %d, want 2", group.count)
+	}
+	firstStart := int(group.recordsStart)
+	secondStart := firstStart + stateDomainChangeBinaryAccessorV4GroupEntrySize
+	firstRecord := append([]byte(nil), data[firstStart:secondStart]...)
+	copy(data[firstStart:secondStart], data[secondStart:secondStart+stateDomainChangeBinaryAccessorV4GroupEntrySize])
+	copy(data[secondStart:secondStart+stateDomainChangeBinaryAccessorV4GroupEntrySize], firstRecord)
+
+	setStateDomainChangeBinaryRefMetadata(&accessorRef, data)
+	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, accessorRef.Path), data); err != nil {
+		t.Fatalf("write reordered accessor: %v", err)
+	}
+	manifest := NewManifest(10, 11, []SegmentRef{segRef, idxRef, accessorRef})
+	_, err = VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
+	if err == nil || !strings.Contains(err.Error(), "lookup order") {
+		t.Fatalf("VerifyLoadedManifestFiles reordered accessor err = %v, want lookup-order mismatch", err)
+	}
+}
+
 func TestVerifyLoadedManifestFilesRejectsStaleStateDomainIndex(t *testing.T) {
 	dir := t.TempDir()
 	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{

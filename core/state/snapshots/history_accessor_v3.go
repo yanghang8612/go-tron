@@ -713,6 +713,12 @@ func verifyStateDomainChangeBinaryAccessorV3Coverage(historyRef, accessorRef Seg
 }
 
 func iterateStateDomainChangeBinaryRecords(segment io.ReaderAt, segmentSize uint64, fn func(uint64, *rawdb.StateDomainChange) error) error {
+	return iterateStateDomainChangeBinaryRecordsWithOffset(segment, segmentSize, func(recordIndex, _ uint64, change *rawdb.StateDomainChange) error {
+		return fn(recordIndex, change)
+	})
+}
+
+func iterateStateDomainChangeBinaryRecordsWithOffset(segment io.ReaderAt, segmentSize uint64, fn func(uint64, uint64, *rawdb.StateDomainChange) error) error {
 	header, err := readStateDomainChangeBinaryHeaderAt(segment, stateDomainChangeBinarySegmentMagic)
 	if err != nil {
 		return err
@@ -722,11 +728,12 @@ func iterateStateDomainChangeBinaryRecords(segment io.ReaderAt, segmentSize uint
 		return err
 	}
 	for index := uint64(0); index < header.count; index++ {
+		recordOffset := offset
 		change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, offset, segmentSize, index)
 		if err != nil {
 			return err
 		}
-		if err := fn(index, change); err != nil {
+		if err := fn(index, recordOffset, change); err != nil {
 			return err
 		}
 		offset = next

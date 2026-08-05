@@ -1321,7 +1321,7 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir string, historyRe
 		return verifyStateDomainChangeBinaryAccessorV3Coverage(historyRef, accessorRef, segment, segmentSize, segmentHeader.count, indexFile, indexHeader.count, accessorFile, accessorSize, accessorHeader)
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV4 {
-		return verifyStateDomainChangeBinaryAccessorV4Coverage(historyRef, accessorRef, segment, segmentSize, segmentHeader.count, indexFile, indexHeader.count, accessorFile, accessorSize, accessorHeader)
+		return verifyStateDomainChangeBinaryAccessorV4Coverage(accessorRef, segment, segmentSize, segmentHeader.count, accessorFile, accessorSize, accessorHeader)
 	}
 	return verifyStateDomainChangeBinaryAccessorCoverage(historyRef, accessorRef, segment, segmentSize, recordOffset, segmentHeader.count, accessorFile, accessorSize, accessorHeader.count)
 }

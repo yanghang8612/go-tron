@@ -34,6 +34,17 @@ type stateDomainChangeBinaryAccessorV4GroupIndexEntry struct {
 	recordIndex uint32
 }
 
+type stateDomainChangeBinaryAccessorV4ExactProof struct {
+	hash   [stateDomainChangeBinaryAccessorV3HashSize]byte
+	offset uint64
+}
+
+type stateDomainChangeBinaryAccessorV4GroupProof struct {
+	entry         stateDomainChangeBinaryAccessorV4GroupIndexEntry
+	groupIndex    uint32
+	needsOrderKey bool
+}
+
 func stateDomainChangeBinaryAccessorV4LogicalPrefix(key []byte) uint32 {
 	var prefix [4]byte
 	copy(prefix[:], key)
@@ -401,7 +412,7 @@ func checkStateDomainChangeBinaryAccessorV4(accessor io.ReaderAt, accessorSize u
 	return nil
 }
 
-func verifyStateDomainChangeBinaryAccessorV4Coverage(historyRef, accessorRef SegmentRef, segment io.ReaderAt, segmentSize, recordCount uint64, index io.ReaderAt, indexCount uint64, accessor io.ReaderAt, accessorSize uint64, header stateDomainChangeBinaryHeader) error {
+func verifyStateDomainChangeBinaryAccessorV4Coverage(accessorRef SegmentRef, segment io.ReaderAt, segmentSize, recordCount uint64, accessor io.ReaderAt, accessorSize uint64, header stateDomainChangeBinaryHeader) error {
 	if err := checkStateDomainChangeBinaryAccessorV4(accessor, accessorSize, header); err != nil {
 		return err
 	}
@@ -414,6 +425,13 @@ func verifyStateDomainChangeBinaryAccessorV4Coverage(historyRef, accessorRef Seg
 	}
 	words := (recordCount + 63) / 64
 	exactSeen, groupSeen := make([]uint64, words), make([]uint64, words)
+	// The exact and group tables are lookup-sorted rather than record-sorted. Build
+	// compact record-indexed proofs first so compressed history is decoded once in
+	// physical order instead of repeatedly seeking to effectively random blocks.
+	exactByRecord := make([]stateDomainChangeBinaryAccessorV4ExactProof, recordCount)
+	groupOrdinalByRecord := make([]uint32, recordCount)
+	groupKeys := make([][stateDomainChangeBinaryAccessorV3GroupKeySize]byte, 0, layout.groupCount)
+	var groupProofs []stateDomainChangeBinaryAccessorV4GroupProof
 	mark := func(seen []uint64, recordIndex uint32, kind string) error {
 		n := uint64(recordIndex)
 		if n >= recordCount || seen[n/64]&(uint64(1)<<(n%64)) != 0 {
@@ -430,22 +448,18 @@ func verifyStateDomainChangeBinaryAccessorV4Coverage(historyRef, accessorRef Seg
 		if err := mark(exactSeen, exact.recordIndex, "exact"); err != nil {
 			return err
 		}
-		change, offset, err := readStateDomainChangeBinaryRecordAtIndex(segment, segmentSize, index, indexCount, uint64(exact.recordIndex))
-		if err != nil {
-			return err
-		}
-		hash := stateDomainChangeBinaryAccessorV3Hash(stateDomainChangeBinaryAccessorKey(change))
-		if exact.offset != offset || !bytes.Equal(hash[:], exact.hash[:]) {
-			return fmt.Errorf("snapshots: state-domain-change accessor %q exact entry %d does not match segment", accessorRef.Path, i)
-		}
+		exactByRecord[exact.recordIndex] = stateDomainChangeBinaryAccessorV4ExactProof{hash: exact.hash, offset: exact.offset}
 	}
 	for i := uint64(0); i < layout.groupCount; i++ {
+		if i > math.MaxUint32 {
+			return fmt.Errorf("snapshots: state-domain-change accessor %q has too many groups", accessorRef.Path)
+		}
 		group, err := readStateDomainChangeBinaryAccessorV4GroupMetaAt(accessor, layout, i, accessorSize)
 		if err != nil {
 			return err
 		}
-		var previousKey []byte
-		var previousOffset uint64
+		groupKeys = append(groupKeys, group.key)
+		var previousPrefix uint32
 		for j := uint64(0); j < group.count; j++ {
 			record, err := readStateDomainChangeBinaryAccessorV4GroupRecordAt(accessor, group, j)
 			if err != nil {
@@ -454,23 +468,57 @@ func verifyStateDomainChangeBinaryAccessorV4Coverage(historyRef, accessorRef Seg
 			if err := mark(groupSeen, record.recordIndex, "group"); err != nil {
 				return err
 			}
-			change, offset, err := readStateDomainChangeBinaryRecordAtIndex(segment, segmentSize, index, indexCount, uint64(record.recordIndex))
-			if err != nil {
-				return err
+			if len(groupProofs) == math.MaxUint32 {
+				return fmt.Errorf("snapshots: state-domain-change accessor %q has too many group records", accessorRef.Path)
 			}
-			groupKey, ok := stateDomainChangeBinaryAccessorV3GroupKey(change)
-			accessorKey := stateDomainChangeBinaryAccessorKey(change)
-			if !ok || !bytes.Equal(group.key[:], groupKey[:]) || record.offset != offset || record.prefix != stateDomainChangeBinaryAccessorV4LogicalPrefix(change.Key) || (j > 0 && (bytes.Compare(previousKey, accessorKey) > 0 || (bytes.Equal(previousKey, accessorKey) && previousOffset >= record.offset))) {
-				return fmt.Errorf("snapshots: state-domain-change accessor %q group %d record %d does not match segment", accessorRef.Path, i, j)
+			proof := stateDomainChangeBinaryAccessorV4GroupProof{entry: record, groupIndex: uint32(i)}
+			if j > 0 && previousPrefix == record.prefix {
+				groupProofs[len(groupProofs)-1].needsOrderKey = true
+				proof.needsOrderKey = true
 			}
-			previousKey = append(previousKey[:0], accessorKey...)
-			previousOffset = record.offset
+			groupProofs = append(groupProofs, proof)
+			groupOrdinalByRecord[record.recordIndex] = uint32(len(groupProofs))
+			previousPrefix = record.prefix
 		}
 	}
-	return iterateStateDomainChangeBinaryRecords(segment, segmentSize, func(recordIndex uint64, change *rawdb.StateDomainChange) error {
-		if change.FlatDomain == rawdb.StateFlatDomainKVLatest && groupSeen[recordIndex/64]&(uint64(1)<<(recordIndex%64)) == 0 {
+	orderKeys := make(map[uint32][]byte)
+	if err := iterateStateDomainChangeBinaryRecordsWithOffset(segment, segmentSize, func(recordIndex, offset uint64, change *rawdb.StateDomainChange) error {
+		exact := exactByRecord[recordIndex]
+		hash := stateDomainChangeBinaryAccessorV3Hash(stateDomainChangeBinaryAccessorKey(change))
+		if exact.offset != offset || !bytes.Equal(hash[:], exact.hash[:]) {
+			return fmt.Errorf("snapshots: state-domain-change accessor %q exact entry for record %d does not match segment", accessorRef.Path, recordIndex)
+		}
+		ordinal := groupOrdinalByRecord[recordIndex]
+		if change.FlatDomain == rawdb.StateFlatDomainKVLatest && ordinal == 0 {
 			return fmt.Errorf("snapshots: state-domain-change accessor %q is missing KV-latest group record %d", accessorRef.Path, recordIndex)
 		}
+		if ordinal == 0 {
+			return nil
+		}
+		proofIndex := ordinal - 1
+		proof := groupProofs[proofIndex]
+		groupKey, ok := stateDomainChangeBinaryAccessorV3GroupKey(change)
+		if !ok || !bytes.Equal(groupKeys[proof.groupIndex][:], groupKey[:]) || proof.entry.offset != offset || proof.entry.prefix != stateDomainChangeBinaryAccessorV4LogicalPrefix(change.Key) {
+			return fmt.Errorf("snapshots: state-domain-change accessor %q group record %d does not match segment", accessorRef.Path, proofIndex)
+		}
+		if proof.needsOrderKey {
+			orderKeys[proofIndex] = append([]byte(nil), stateDomainChangeBinaryAccessorKey(change)...)
+		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	// Prefix ordering proves lookup ordering unless adjacent entries have the same
+	// four-byte prefix. Retain full keys only for those ties and check them here.
+	for i := uint32(1); uint64(i) < uint64(len(groupProofs)); i++ {
+		previous, current := groupProofs[i-1], groupProofs[i]
+		if previous.groupIndex != current.groupIndex || previous.entry.prefix != current.entry.prefix {
+			continue
+		}
+		previousKey, currentKey := orderKeys[i-1], orderKeys[i]
+		if cmp := bytes.Compare(previousKey, currentKey); cmp > 0 || (cmp == 0 && previous.entry.offset >= current.entry.offset) {
+			return fmt.Errorf("snapshots: state-domain-change accessor %q group %d records are not in lookup order", accessorRef.Path, current.groupIndex)
+		}
+	}
+	return nil
 }
