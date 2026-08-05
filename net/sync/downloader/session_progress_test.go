@@ -1097,6 +1097,28 @@ func TestPlanSessionResetSchedulesCanonicalCleanup(t *testing.T) {
 	}
 }
 
+func TestPlanSessionQuiesceDefersStagedBodyCleanup(t *testing.T) {
+	plan := PlanSessionQuiesce()
+	want := []SessionResetStepAction{
+		SessionResetStopPeerTimers,
+		SessionResetDeactivateSession,
+		SessionResetClearLegacyFetchState,
+		SessionResetAdvanceFetchSequence,
+		SessionResetStopLegacyFetchTimer,
+		SessionResetClearPeerState,
+		SessionResetClearBlockTracking,
+		SessionResetClearTarget,
+		SessionResetResetBufferWait,
+	}
+	var got []SessionResetStepAction
+	for _, step := range plan.Steps {
+		got = append(got, step.Action)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("session quiesce steps = %+v, want %+v", got, want)
+	}
+}
+
 func TestApplySessionResetPlan(t *testing.T) {
 	applier := new(recordingSessionResetApplier)
 	result := ApplySessionResetPlan(SessionResetPlan{Steps: []SessionResetStep{

@@ -322,9 +322,18 @@ func (ss *SyncService) Stop() {
 		ss.watchdog.Stop()
 	}
 	ss.mu.Lock()
-	ss.doReset()
+	// Quiesce the session before joining the drain, but retain staged bodies.
+	// The active drain may already own an off-lock batch and still needs those
+	// rows to atomically publish its imported progress. Deleting them here races
+	// that publication and leaves the sync-stage cursor behind the canonical
+	// head even though the block commit itself succeeded.
+	syncdl.ApplySessionResetPlan(syncdl.PlanSessionQuiesce(), syncSessionResetApplier{service: ss})
 	ss.mu.Unlock()
 	ss.waitForDrain()
+	// No new bodies can enter after stopping is set, and the sole drain owner is
+	// now gone, so durable staged-body cleanup can no longer invalidate an
+	// in-flight imported-progress proof.
+	ss.deleteAllSyncBodies()
 }
 
 type syncProgressWindow struct {

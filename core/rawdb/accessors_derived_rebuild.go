@@ -275,7 +275,9 @@ func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethd
 // order. expectedHash binds every StateTxRange source row to the canonical
 // branch before its derived rows are published. A failed or interrupted pass
 // leaves the stage watermark to the caller; partially loaded puts are
-// idempotently overwritten by the next pass.
+// idempotently overwritten by the next pass. Keep the source scans range-based:
+// per-block iterators repeatedly rebuild block-buffer snapshot overlays while
+// catching up, turning this stage into the dominant early-sync CPU cost.
 func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options, expectedHash func(uint64) (common.Hash, bool, error), interrupted func() bool) (*RebuildStateHistoryIndexResult, error) {
 	if source == nil {
 		return nil, errors.New("rawdb: nil state history source")
@@ -295,45 +297,57 @@ func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer e
 	}
 	defer collector.Close()
 
+	blockCount := toBlock - fromBlock + 1
+	if blockCount == 0 || blockCount > uint64(^uint(0)>>1) {
+		return nil, fmt.Errorf("rawdb: state history index range [%d,%d] is too large", fromBlock, toBlock)
+	}
+	blockHashes := make([]common.Hash, int(blockCount))
 	result := &RebuildStateHistoryIndexResult{FromBlock: fromBlock, ToBlock: toBlock}
-	for blockNum := fromBlock; ; blockNum++ {
+	if err := IterateStateTxRangesByBlockRangeBorrowed(source, fromBlock, toBlock, func(txRange *StateTxRange) (bool, error) {
 		if interrupted != nil && interrupted() {
-			return nil, ErrStateHistoryIndexRebuildInterrupted
+			return false, ErrStateHistoryIndexRebuildInterrupted
 		}
-		txRange, ok, err := ReadStateTxRange(source, blockNum)
+		expectedBlock := fromBlock + result.BlocksScanned
+		if txRange.BlockNum != expectedBlock {
+			if txRange.BlockNum > expectedBlock {
+				return false, fmt.Errorf("rawdb: missing state tx range %d during history index rebuild", expectedBlock)
+			}
+			return false, fmt.Errorf("rawdb: state tx ranges are not ordered at block %d during history index rebuild", txRange.BlockNum)
+		}
+		canonicalHash, ok, err := expectedHash(txRange.BlockNum)
 		if err != nil {
-			return nil, fmt.Errorf("rawdb: read state tx range %d during history index rebuild: %w", blockNum, err)
+			return false, fmt.Errorf("rawdb: read canonical hash %d during history index rebuild: %w", txRange.BlockNum, err)
 		}
 		if !ok {
-			return nil, fmt.Errorf("rawdb: missing state tx range %d during history index rebuild", blockNum)
+			return false, fmt.Errorf("rawdb: missing canonical hash %d during history index rebuild", txRange.BlockNum)
 		}
-		canonicalHash, ok, err := expectedHash(blockNum)
-		if err != nil {
-			return nil, fmt.Errorf("rawdb: read canonical hash %d during history index rebuild: %w", blockNum, err)
+		if txRange.BlockHash != canonicalHash {
+			return false, fmt.Errorf("rawdb: state tx range %d canonical mismatch: row block=%d hash=%x canonical=%x", txRange.BlockNum, txRange.BlockNum, txRange.BlockHash, canonicalHash)
 		}
-		if !ok {
-			return nil, fmt.Errorf("rawdb: missing canonical hash %d during history index rebuild", blockNum)
-		}
-		if txRange.BlockNum != blockNum || txRange.BlockHash != canonicalHash {
-			return nil, fmt.Errorf("rawdb: state tx range %d canonical mismatch: row block=%d hash=%x canonical=%x", blockNum, txRange.BlockNum, txRange.BlockHash, canonicalHash)
-		}
-		if err := IterateStateDomainChanges(source, blockNum, func(change *StateDomainChange) (bool, error) {
-			if interrupted != nil && interrupted() {
-				return false, ErrStateHistoryIndexRebuildInterrupted
-			}
-			change.BlockHash = txRange.BlockHash
-			if err := WriteStateDomainChangeInverseIndex(collector, change); err != nil {
-				return false, err
-			}
-			result.ChangesScanned++
-			return true, nil
-		}); err != nil {
-			return nil, err
-		}
+		blockHashes[result.BlocksScanned] = txRange.BlockHash
 		result.BlocksScanned++
-		if blockNum == toBlock {
-			break
+		return true, nil
+	}); err != nil {
+		return nil, err
+	}
+	if result.BlocksScanned != blockCount {
+		return nil, fmt.Errorf("rawdb: missing state tx range %d during history index rebuild", fromBlock+result.BlocksScanned)
+	}
+	if err := IterateStateDomainChangesByBlockRange(source, fromBlock, toBlock, func(change *StateDomainChange) (bool, error) {
+		if interrupted != nil && interrupted() {
+			return false, ErrStateHistoryIndexRebuildInterrupted
 		}
+		if change.BlockNum < fromBlock || change.BlockNum > toBlock {
+			return false, fmt.Errorf("rawdb: state domain change block %d outside history index rebuild range [%d,%d]", change.BlockNum, fromBlock, toBlock)
+		}
+		change.BlockHash = blockHashes[change.BlockNum-fromBlock]
+		if err := WriteStateDomainChangeInverseIndex(collector, change); err != nil {
+			return false, err
+		}
+		result.ChangesScanned++
+		return true, nil
+	}); err != nil {
+		return nil, err
 	}
 	if interrupted != nil && interrupted() {
 		return nil, ErrStateHistoryIndexRebuildInterrupted

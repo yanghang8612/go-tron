@@ -134,6 +134,77 @@ func TestRebuildStateHistoryIndexRequiresCanonicalTxRange(t *testing.T) {
 	}
 }
 
+func TestRebuildStateHistoryIndexUsesSingleRangeIteratorAcrossEmptyBlocks(t *testing.T) {
+	db := &prefixSeekingHistoryDB{Database: WrapKeyValueStore(NewMemoryDatabase())}
+	owners := []common.Address{{0x41, 0x41}, {0x41, 0x44}}
+	hashes := make(map[uint64]common.Hash)
+	for blockNum := uint64(1); blockNum <= 4; blockNum++ {
+		hash := common.Hash{byte(blockNum)}
+		hashes[blockNum] = hash
+		if err := WriteStateTxRange(db, blockNum, hash, blockNum, blockNum); err != nil {
+			t.Fatalf("write state tx range %d: %v", blockNum, err)
+		}
+	}
+	for index, blockNum := range []uint64{1, 4} {
+		if err := WriteStateDomainChangeRow(db, &StateDomainChange{
+			BlockNum: blockNum, TxNum: blockNum, Seq: 1,
+			FlatDomain: StateFlatDomainAccountLatest,
+			Owner:      owners[index],
+		}); err != nil {
+			t.Fatalf("write state change block %d: %v", blockNum, err)
+		}
+	}
+	canonicalCalls := 0
+	canonical := func(blockNum uint64) (common.Hash, bool, error) {
+		canonicalCalls++
+		return hashes[blockNum], true, nil
+	}
+	result, err := RebuildStateHistoryIndexInterruptible(db, db, 1, 4, etl.Options{
+		TempDir:     t.TempDir(),
+		BufferLimit: 1,
+	}, canonical, nil)
+	if err != nil {
+		t.Fatalf("rebuild state history range: %v", err)
+	}
+	if result.BlocksScanned != 4 || result.ChangesScanned != 2 || result.ETL.Applied != 2 {
+		t.Fatalf("history index rebuild result = %+v, want four blocks/two changes", result)
+	}
+	if canonicalCalls != 4 {
+		t.Fatalf("canonical hash calls = %d, want 4", canonicalCalls)
+	}
+	if db.changeRangeIteratorCalls != 1 || db.changeBlockIteratorCalls != 0 {
+		t.Fatalf("change range/block iterators = %d/%d, want 1/0", db.changeRangeIteratorCalls, db.changeBlockIteratorCalls)
+	}
+	for index, owner := range owners {
+		var indexed []uint64
+		if err := IterateStateAccountLatestChangeBlocks(db, owner, func(blockNum uint64) (bool, error) {
+			indexed = append(indexed, blockNum)
+			return true, nil
+		}); err != nil {
+			t.Fatalf("read owner %d inverse index: %v", index, err)
+		}
+		wantBlock := []uint64{1, 4}[index]
+		if len(indexed) != 1 || indexed[0] != wantBlock {
+			t.Fatalf("owner %d inverse index = %v, want [%d]", index, indexed, wantBlock)
+		}
+	}
+}
+
+func TestRebuildStateHistoryIndexRejectsMissingTxRangeInsideBatch(t *testing.T) {
+	db := NewMemoryChainDB()
+	for _, blockNum := range []uint64{1, 3} {
+		if err := WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	canonical := func(blockNum uint64) (common.Hash, bool, error) {
+		return common.Hash{byte(blockNum)}, true, nil
+	}
+	if _, err := RebuildStateHistoryIndexInterruptible(db, db, 1, 3, etl.Options{TempDir: t.TempDir()}, canonical, nil); err == nil || !strings.Contains(err.Error(), "missing state tx range 2") {
+		t.Fatalf("missing middle tx range rebuild err = %v", err)
+	}
+}
+
 func TestRebuildTransactionLookupFromBlocksLeavesReceiptIndexesUntouched(t *testing.T) {
 	db := NewMemoryChainDB()
 	block1, infos1 := derivedRebuildTestBlock(t, 1, 2)

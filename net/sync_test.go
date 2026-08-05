@@ -42,6 +42,63 @@ func TestSyncServiceStopConsumesInboundBlocks(t *testing.T) {
 	}
 }
 
+func TestSyncServiceStopDefersStagedBodyCleanupUntilDrainStops(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+	if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+	ss.drainMu.Lock()
+	ss.draining = true
+	ss.drainMu.Unlock()
+
+	stopped := make(chan struct{})
+	go func() {
+		ss.Stop()
+		close(stopped)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ss.mu.Lock()
+		quiesced := !ss.syncing
+		ss.mu.Unlock()
+		if quiesced {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("sync service did not quiesce")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || !ok {
+		t.Fatalf("staged block while drain active ok=%v err=%v, want retained", ok, err)
+	}
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before the active drain exited")
+	default:
+	}
+
+	ss.drainMu.Lock()
+	ss.draining = false
+	ss.drainCond.Broadcast()
+	ss.drainMu.Unlock()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after the active drain exited")
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+		t.Fatalf("staged block after Stop ok=%v err=%v, want deleted", ok, err)
+	}
+}
+
 func TestSyncServiceRestoresInventoryTargetProgress(t *testing.T) {
 	bc := makeTestChain(t)
 	if err := rawdb.WriteStageProgress(bc.DB(), rawdb.StageSyncInventory, 500); err != nil {

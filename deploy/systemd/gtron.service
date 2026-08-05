@@ -1,5 +1,5 @@
 [Unit]
-Description=gtron mainnet full node
+Description=gtron mainnet snap node
 After=network-online.target
 Wants=network-online.target
 
@@ -10,6 +10,7 @@ Group=java-tron
 WorkingDirectory=/data/gtron/main
 UMask=0027
 
+Environment=TZ=Asia/Shanghai
 Environment=ZCASH_PARAMS_DIR=/data/gtron/params
 
 # Optional signed snapshot publisher/HTTP seed settings. Keep this environment
@@ -32,6 +33,7 @@ ExecStart=/data/gtron/go-tron/build/bin/gtron \
     --sync.import-batch 32 \
     --p2p.port 18890 \
     --external.ip 3.12.206.71 \
+    --exec.parallel-transfers \
     --http.port 8090 \
     --jsonrpc.port 8545 \
     --grpc.port 50051 \

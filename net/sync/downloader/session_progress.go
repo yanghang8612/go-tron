@@ -681,6 +681,15 @@ func PlanSessionReset() SessionResetPlan {
 	return SessionResetPlan{}.withSteps()
 }
 
+// PlanSessionQuiesce returns the in-memory cleanup schedule used while an
+// active drain is still leaving its off-lock import section. Staged bodies are
+// deliberately retained until the drain has published progress for the batch
+// it already owns; the caller performs the durable staged-body cleanup after
+// joining the drain.
+func PlanSessionQuiesce() SessionResetPlan {
+	return SessionResetPlan{}.withQuiesceSteps()
+}
+
 // ApplyLocalDrainRunPlan resolves the downloader-owned local drain run plan
 // into the caller's loop branch while preserving the staged-body drain batch.
 func ApplyLocalDrainRunPlan(plan LocalDrainRunPlan) LocalDrainRunApplyResult {
@@ -940,6 +949,12 @@ func (p LocalDrainEntryPlan) withSteps() LocalDrainEntryPlan {
 }
 
 func (p SessionResetPlan) withSteps() SessionResetPlan {
+	p = p.withQuiesceSteps()
+	p.Steps = append(p.Steps, SessionResetStep{Action: SessionResetDeleteStagedBodies})
+	return p
+}
+
+func (p SessionResetPlan) withQuiesceSteps() SessionResetPlan {
 	p.Steps = []SessionResetStep{
 		{Action: SessionResetStopPeerTimers},
 		{Action: SessionResetDeactivateSession},
@@ -950,7 +965,6 @@ func (p SessionResetPlan) withSteps() SessionResetPlan {
 		{Action: SessionResetClearBlockTracking},
 		{Action: SessionResetClearTarget},
 		{Action: SessionResetResetBufferWait},
-		{Action: SessionResetDeleteStagedBodies},
 	}
 	return p
 }
