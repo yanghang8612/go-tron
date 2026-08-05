@@ -435,6 +435,48 @@ func TestColdBuilderDefersFullLatestBuildDuringActiveSync(t *testing.T) {
 	}
 }
 
+func TestColdBuilderDefersHistoryAndCompactionWhileFarBehind(t *testing.T) {
+	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x78)
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	chain := &coldBuilderChain{db: db, solidified: 3, syncRemaining: 100, syncRemainingOK: true}
+	runner := NewRunner(chain, Config{
+		Dir:                           dir,
+		Enabled:                       true,
+		HistoryWindow:                 1,
+		LatestBuildBlocks:             0,
+		DeferHistoryBuildWhileSyncing: true,
+		MetricsNamespace:              namespace,
+	})
+
+	deferred, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("deferred history pass: %v", err)
+	}
+	if !deferred.HistoryDeferred || deferred.Built || deferred.Compaction.Merged {
+		t.Fatalf("deferred pass = %+v, want history and compaction deferred", deferred)
+	}
+	if stats := runner.Snapshot(); stats.HistoryDeferredSync != 1 || stats.SegmentsBuilt != 0 || stats.SegmentsCompacted != 0 {
+		t.Fatalf("runner stats = %+v, want one history sync deferral", stats)
+	}
+	assertColdRunnerGauge(t, namespace+"history/deferred/sync", 1)
+
+	chain.syncRemaining = 1
+	built, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("near-tip history pass: %v", err)
+	}
+	if !built.Built || built.HistoryDeferred {
+		t.Fatalf("near-tip pass = %+v, want bounded cold build", built)
+	}
+}
+
 func TestColdBuilderLoopDrainsReadyBatchesWithoutIntervalWait(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -2175,6 +2217,7 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"lastpass/compaction/merges",
 		"lastpass/latest/duration",
 		"latest/deferred/sync",
+		"history/deferred/sync",
 		"last/latest_build_block",
 	} {
 		metrics.DefaultRegistry.Unregister(namespace + suffix)

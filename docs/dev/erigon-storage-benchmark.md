@@ -278,7 +278,7 @@ per-table bounds, or a virtual tail past the append head, the harness writes a
 same fail-after-row behavior if canonical/sync/snapshot/prune stage rows are
 hash-mismatched, out of order, or claim cold coverage that the local manifest
 cannot prove. It also fails when the persisted prune mode contradicts stage
-progress, such as an `archive` datadir with hot-prune/lookup-prune/tail-prune
+progress, such as an `archive` datadir with lookup-prune/tail-prune
 stages or a non-`minimal` datadir with freezer-tail prune progress; the same
 mode/stage contradiction is rejected during node startup before services are
 registered. It also warns when retired snapshot files still occupy disk after

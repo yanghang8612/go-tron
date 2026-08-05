@@ -1041,6 +1041,14 @@ func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
 			},
 		},
 		{
+			stage:   rawdb.StageSnapshotHotPrune,
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotHotPrune,
+				BlockNum: 15,
+			},
+		},
+		{
 			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
 			present: true,
 			progress: rawdb.StageProgress{
@@ -1069,7 +1077,8 @@ func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
 	if !got.SignedColdPrune {
 		t.Fatalf("SignedColdPrune = false, want true")
 	}
-	if got.ColdFreezerToBlock != 20 ||
+	if got.StateHotPruneToTxNum != 15 ||
+		got.ColdFreezerToBlock != 20 ||
 		got.DerivedIndexToBlock != 17 ||
 		got.ChainLookupPruneToBlock != 18 ||
 		got.TailPrunedThroughBlock != 12 ||
@@ -1080,6 +1089,7 @@ func TestDBStoragePruneEvidenceFromStageRows(t *testing.T) {
 
 	got = dbStoragePruneEvidenceFromStageRows(nil)
 	if got.SignedColdPrune ||
+		got.StateHotPruneToTxNum != -1 ||
 		got.ColdFreezerToBlock != -1 ||
 		got.DerivedIndexToBlock != -1 ||
 		got.ChainLookupPruneToBlock != -1 ||
@@ -1115,6 +1125,7 @@ func TestDBStorageAlertsCmdPrometheusOK(t *testing.T) {
 		fmt.Sprintf(`gtron_storage_alert_snapshot_retired_files{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_mode_info{datadir="%s",mode="unknown",persisted="false"} 1`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_signed_cold_prune{datadir="%s"} 0`, dbPrometheusLabelValue(dataDir)),
+		fmt.Sprintf(`gtron_storage_state_hot_prune_txnum{datadir="%s"} -1`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="coldFreezerToBlock"} 4`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="derivedIndexToBlock"} -1`, dbPrometheusLabelValue(dataDir)),
 		fmt.Sprintf(`gtron_storage_prune_boundary_block{datadir="%s",field="chainLookupPruneToBlock"} -1`, dbPrometheusLabelValue(dataDir)),
@@ -1514,7 +1525,7 @@ func TestDBStorageAlertsCmdJSONReportsDetails(t *testing.T) {
 	if report.ModeStatus != "ok" || report.ModeIssues != 0 || report.PruneMode != "unknown" || report.PruneModePersisted {
 		t.Fatalf("unexpected mode alert fields: %+v", report)
 	}
-	if report.SignedColdPrune || report.ColdFreezerToBlock != 4 || report.DerivedIndexToBlock != -1 || report.ChainLookupPruneToBlock != -1 || report.TailPrunedThroughBlock != -1 {
+	if report.SignedColdPrune || report.StateHotPruneToTxNum != -1 || report.ColdFreezerToBlock != 4 || report.DerivedIndexToBlock != -1 || report.ChainLookupPruneToBlock != -1 || report.TailPrunedThroughBlock != -1 {
 		t.Fatalf("unexpected prune evidence fields: %+v", report)
 	}
 	if len(report.StageVerifyDetails) != report.StageIssues {
@@ -1564,8 +1575,8 @@ func TestDBStorageAlertsCmdJSONReportsArchiveModePruneConflict(t *testing.T) {
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
 		t.Fatalf("WriteStageProgress Finish: %v", err)
 	}
-	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotHotPrune, block4.Number()); err != nil {
-		t.Fatalf("WriteStageProgress SnapshotHotPrune: %v", err)
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, block4.Number()); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close pebble: %v", err)
@@ -1589,7 +1600,7 @@ func TestDBStorageAlertsCmdJSONReportsArchiveModePruneConflict(t *testing.T) {
 		t.Fatalf("mode alert details = %+v issues=%d", report.ModeAlertDetails, report.ModeIssues)
 	}
 	detail := report.ModeAlertDetails[0]
-	if detail.Severity != "critical" || detail.Kind != "archive-prune-stage" || !strings.Contains(detail.Detail, string(rawdb.StageSnapshotHotPrune)) {
+	if detail.Severity != "critical" || detail.Kind != "archive-prune-stage" || !strings.Contains(detail.Detail, string(rawdb.StageSnapshotChainLookupPrune)) {
 		t.Fatalf("unexpected mode alert detail: %+v", detail)
 	}
 }

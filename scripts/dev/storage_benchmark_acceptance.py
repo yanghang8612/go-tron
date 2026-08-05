@@ -1218,6 +1218,7 @@ def check_positive_forbidden(row, field, reason):
 
 
 PRUNE_BOUNDARY_INTEGER_FIELDS = (
+    "stateHotPruneToTxNum",
     "coldFreezerToBlock",
     "derivedIndexToBlock",
     "chainLookupPruneToBlock",

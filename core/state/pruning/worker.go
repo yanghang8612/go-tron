@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -126,7 +127,7 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 	if err := w.Policy.Validate(); err != nil {
 		return Stats{}, err
 	}
-	if w.Policy.Mode == ModeArchive {
+	if w.Policy.Mode == ModeArchive && w.Policy.HistoryWindow == 0 {
 		return Stats{}, nil
 	}
 	var stats Stats
@@ -142,13 +143,13 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 	hotStats, err := historyCfg.PruneHotHistory(historyStore, snapshots.HotHistoryPruneOptions{
 		MaxBlocks: w.MaxBlocks,
 		Decide: func(row *rawdb.StateTxRange) (snapshots.HotHistoryPruneDecision, error) {
-			if w.Policy.RetainHistory(row.BlockNum, headNum) {
+			if w.Policy.RetainHotHistory(row.BlockNum, headNum) {
 				return snapshots.HotHistoryPruneDecision{}, nil
 			}
 			switch w.Policy.Mode {
 			case ModeFull, ModeBlocks, ModeMinimal:
 				return snapshots.HotHistoryPruneDecision{DeleteTxRange: true, DeleteHistoryBlock: true}, nil
-			case ModeSnap:
+			case ModeSnap, ModeArchive:
 				if !coverage.covers(row.BeginTxNum, row.EndTxNum) {
 					return snapshots.HotHistoryPruneDecision{}, nil
 				}
@@ -324,7 +325,7 @@ type snapshotTxRange struct {
 type snapshotTxCoverage []snapshotTxRange
 
 func (w Worker) snapshotStateDomainChangeCoverage() (snapshotTxCoverage, error) {
-	if w.Policy.Mode != ModeSnap || w.SnapshotDir == "" {
+	if (w.Policy.Mode != ModeSnap && w.Policy.Mode != ModeArchive) || w.SnapshotDir == "" {
 		return nil, nil
 	}
 	manifest, err := snapshots.LoadProductionManifest(w.SnapshotDir)
@@ -344,6 +345,12 @@ func (w Worker) snapshotStateDomainChangeCoverage() (snapshotTxCoverage, error) 
 		}
 		coverage = append(coverage, snapshotTxRange{from: ref.FromTxNum, to: ref.ToTxNum})
 	}
+	sort.Slice(coverage, func(i, j int) bool {
+		if coverage[i].from != coverage[j].from {
+			return coverage[i].from < coverage[j].from
+		}
+		return coverage[i].to < coverage[j].to
+	})
 	return coverage, nil
 }
 

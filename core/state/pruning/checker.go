@@ -155,12 +155,12 @@ func (c Checker) Check(headNum uint64) (CheckReport, error) {
 		if row.EndTxNum < row.BeginTxNum {
 			return false, fmt.Errorf("pruning: state tx range for block %d is inverted", row.BlockNum)
 		}
-		if !c.Policy.RetainHistory(row.BlockNum, headNum) {
+		if !c.Policy.RetainHotHistory(row.BlockNum, headNum) {
 			if c.Policy.Mode == ModeFull || c.Policy.Mode == ModeBlocks || c.Policy.Mode == ModeMinimal {
 				report.Warnings = append(report.Warnings, fmt.Sprintf("state tx range for prunable block %d is still present", row.BlockNum))
 				return true, nil
 			}
-			if c.Policy.Mode == ModeSnap {
+			if c.Policy.Mode == ModeSnap || c.Policy.Mode == ModeArchive {
 				report.RetainedTxRanges++
 				blockChanges, err := countHotHistoryChangesInTxRange(historyCfg, c.DB, row.BeginTxNum, row.EndTxNum, func() {
 					report.RetainedDomainChanges++

@@ -187,9 +187,9 @@ func (p *Pruner) Start() error {
 		close(p.done)
 		return err
 	}
-	if p.cfg.Policy.Mode == ModeArchive {
+	if p.cfg.Policy.Mode == ModeArchive && p.cfg.Policy.HistoryWindow == 0 {
 		close(p.done)
-		log.Info("Domain state pruner disabled", "mode", ModeArchive)
+		log.Info("Domain state pruner disabled", "mode", ModeArchive, "reason", "cold history policy not configured")
 		return nil
 	}
 	go p.loop()

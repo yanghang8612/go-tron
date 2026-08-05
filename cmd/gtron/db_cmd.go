@@ -318,6 +318,7 @@ type dbStorageAlertsJSON struct {
 	PruneMode                    string                    `json:"pruneMode"`
 	PruneModePersisted           bool                      `json:"pruneModePersisted"`
 	SignedColdPrune              bool                      `json:"signedColdPrune"`
+	StateHotPruneToTxNum         int64                     `json:"stateHotPruneToTxNum"`
 	ColdFreezerToBlock           int64                     `json:"coldFreezerToBlock"`
 	DerivedIndexToBlock          int64                     `json:"derivedIndexToBlock"`
 	ChainLookupPruneToBlock      int64                     `json:"chainLookupPruneToBlock"`
@@ -336,6 +337,7 @@ type dbStorageAlertsJSON struct {
 
 type dbStoragePruneEvidence struct {
 	SignedColdPrune          bool
+	StateHotPruneToTxNum     int64
 	ColdFreezerToBlock       int64
 	DerivedIndexToBlock      int64
 	ChainLookupPruneToBlock  int64
@@ -346,6 +348,7 @@ type dbStoragePruneEvidence struct {
 
 func dbStoragePruneEvidenceFromStageRows(rows []dbStageStatusRow) dbStoragePruneEvidence {
 	evidence := dbStoragePruneEvidence{
+		StateHotPruneToTxNum:     -1,
 		ColdFreezerToBlock:       -1,
 		DerivedIndexToBlock:      -1,
 		ChainLookupPruneToBlock:  -1,
@@ -359,6 +362,8 @@ func dbStoragePruneEvidenceFromStageRows(rows []dbStageStatusRow) dbStoragePrune
 		}
 		value := int64(row.progress.BlockNum)
 		switch row.stage {
+		case rawdb.StageSnapshotHotPrune:
+			evidence.StateHotPruneToTxNum = value
 		case rawdb.StageChainFreezer:
 			evidence.ColdFreezerToBlock = value
 		case rawdb.StageSnapshotEventLogBuild:
@@ -511,6 +516,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		PruneMode:                    pruneMode,
 		PruneModePersisted:           pruneModePersisted,
 		SignedColdPrune:              pruneEvidence.SignedColdPrune,
+		StateHotPruneToTxNum:         pruneEvidence.StateHotPruneToTxNum,
 		ColdFreezerToBlock:           pruneEvidence.ColdFreezerToBlock,
 		DerivedIndexToBlock:          pruneEvidence.DerivedIndexToBlock,
 		ChainLookupPruneToBlock:      pruneEvidence.ChainLookupPruneToBlock,
@@ -554,9 +560,9 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		fmt.Printf(" stagePipelineNext=%s stagePipelineNextStatus=%s stagePipelineNextTarget=%d stagePipelineNextUpstream=%s stagePipelineNextCurrent=%d",
 			next.Stage, next.Status, next.TargetBlock, next.Upstream, next.CurrentBlock)
 	}
-	fmt.Printf(" modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t signedColdPrune=%t coldFreezerToBlock=%d derivedIndexToBlock=%d chainLookupPruneToBlock=%d tailPrunedThroughBlock=%d balanceTracePruneToBlock=%d sectionBloomPruneToBlock=%d snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
+	fmt.Printf(" modeStatus=%s modeIssues=%d pruneMode=%s pruneModePersisted=%t signedColdPrune=%t stateHotPruneToTxNum=%d coldFreezerToBlock=%d derivedIndexToBlock=%d chainLookupPruneToBlock=%d tailPrunedThroughBlock=%d balanceTracePruneToBlock=%d sectionBloomPruneToBlock=%d snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
 		modeStatus, len(modeIssues), pruneMode, pruneModePersisted,
-		pruneEvidence.SignedColdPrune, pruneEvidence.ColdFreezerToBlock, pruneEvidence.DerivedIndexToBlock,
+		pruneEvidence.SignedColdPrune, pruneEvidence.StateHotPruneToTxNum, pruneEvidence.ColdFreezerToBlock, pruneEvidence.DerivedIndexToBlock,
 		pruneEvidence.ChainLookupPruneToBlock, pruneEvidence.TailPrunedThroughBlock, pruneEvidence.BalanceTracePruneToBlock,
 		pruneEvidence.SectionBloomPruneToBlock,
 		snapshotStatus, len(snapshotIssues), snapshotInspection.RetiredSegments, snapshotInspection.FilesPresent,
@@ -656,6 +662,9 @@ func dbWriteStorageAlertsPrometheus(w io.Writer, report dbStorageAlertsJSON) {
 		signedColdPrune = 1
 	}
 	fmt.Fprintf(w, "gtron_storage_signed_cold_prune{%s} %d\n", labels, signedColdPrune)
+	fmt.Fprintln(w, "# HELP gtron_storage_state_hot_prune_txnum Highest state-history txNum whose duplicate hot rows were pruned behind verified cold coverage.")
+	fmt.Fprintln(w, "# TYPE gtron_storage_state_hot_prune_txnum gauge")
+	fmt.Fprintf(w, "gtron_storage_state_hot_prune_txnum{%s} %d\n", labels, report.StateHotPruneToTxNum)
 	fmt.Fprintln(w, "# HELP gtron_storage_prune_boundary_block Storage prune and cold-stage boundary fields exported by storage-alerts.")
 	fmt.Fprintln(w, "# TYPE gtron_storage_prune_boundary_block gauge")
 	for _, boundary := range []struct {

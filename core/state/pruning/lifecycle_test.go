@@ -67,6 +67,54 @@ func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T)
 	}
 }
 
+func TestArchiveLifecycleBuildsColdHistoryBeforePruningDuplicateHotRows(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 2}, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:           dir,
+			Enabled:       true,
+			Interval:      time.Hour,
+			HistoryWindow: 1,
+		},
+		Pruner: PrunerConfig{
+			Policy:      ArchiveColdPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+	})
+
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("archive lifecycle pass: %v", err)
+	}
+	if !result.Snapshot.Built || result.Prune.DeletedDomainChangeBlocks != 1 || result.Prune.DeletedTxRanges != 0 {
+		t.Fatalf("archive lifecycle result = %+v", result)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || ok {
+		t.Fatalf("archive duplicate hot change survived ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 1); err != nil || !ok {
+		t.Fatalf("archive tx range missing after prune ok=%v err=%v", ok, err)
+	}
+	mgr, err := snapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open archive cold manager: %v", err)
+	}
+	var coldChanges int
+	if err := mgr.IterateStateDomainChanges(10, 12, func(change *rawdb.StateDomainChange) (bool, error) {
+		coldChanges++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("read archive cold history: %v", err)
+	}
+	if coldChanges != 1 {
+		t.Fatalf("cold history changes = %d, want 1", coldChanges)
+	}
+}
+
 func TestSnapshotLifecycleAutomaticallyDrainsColdBuildBacklog(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()

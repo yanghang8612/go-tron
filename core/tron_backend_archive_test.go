@@ -2345,7 +2345,7 @@ func TestArchiveQuery_BlocksAndMinimalModesUsePruneWindowGate(t *testing.T) {
 func TestArchiveQuery_UsesColdStateDomainChangeSnapshots(t *testing.T) {
 	b, witness, recipient := archiveBackend(t)
 	bc := b.chain
-	bc.config.HistoryMode = params.HistoryModeSnap
+	bc.config.HistoryMode = params.HistoryModeArchive
 	bc.config.HistoryPruneWindow = 1
 
 	const numBlocks = 4
@@ -2466,7 +2466,7 @@ func TestArchiveQuery_UsesColdStateDomainChangeSnapshots(t *testing.T) {
 func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain
-	bc.config.HistoryMode = params.HistoryModeSnap
+	bc.config.HistoryMode = params.HistoryModeArchive
 	bc.config.HistoryPruneWindow = 1
 
 	const numBlocks = 4
@@ -2707,7 +2707,7 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 func TestArchiveQuery_ContractRecreateStorageGenerationUsesColdStateDomainChangeSnapshots(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain
-	bc.config.HistoryMode = params.HistoryModeSnap
+	bc.config.HistoryMode = params.HistoryModeArchive
 	bc.config.HistoryPruneWindow = 1
 
 	const numBlocks = 5

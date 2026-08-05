@@ -104,7 +104,7 @@ func TestApplyHistoryConfig_TOML(t *testing.T) {
 	body := `# operator config
 [history]
 mode = "archive"
-prune_window = 12345  # ignored in archive mode but kept for symmetry
+prune_window = 12345  # hot duplicate retention; cold history remains permanent
 `
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write toml: %v", err)
@@ -337,9 +337,9 @@ func TestShouldEnableDomainStatePruner(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "archive never prunes",
+			name: "archive prunes only verified cold duplicates",
 			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeArchive, HistoryEnabled: true},
-			want: false,
+			want: true,
 		},
 		{
 			name: "snap history capture needs pruning",
@@ -504,7 +504,7 @@ func TestDomainStatePrunePolicyPreservesOperatorMode(t *testing.T) {
 			if policy.Mode != tt.want {
 				t.Fatalf("policy mode = %q, want %q", policy.Mode, tt.want)
 			}
-			if tt.want != statepruning.ModeArchive && (policy.HistoryWindow != 10 || policy.ReorgWindow != 3) {
+			if policy.HistoryWindow != 10 || policy.ReorgWindow != 3 {
 				t.Fatalf("policy windows = history:%d reorg:%d, want 10/3", policy.HistoryWindow, policy.ReorgWindow)
 			}
 		})
@@ -613,7 +613,7 @@ func TestEnsureHistoryPruneModeLockedRejectsModeChange(t *testing.T) {
 	}
 }
 
-func TestEnsureHistoryPruneModeLockedRejectsArchivePruneStage(t *testing.T) {
+func TestEnsureHistoryPruneModeLockedAllowsArchiveColdHistoryPruneStages(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	if err := rawdb.WriteHistoryPruneMode(db, params.HistoryModeArchive); err != nil {
 		t.Fatalf("write prune mode: %v", err)
@@ -621,13 +621,27 @@ func TestEnsureHistoryPruneModeLockedRejectsArchivePruneStage(t *testing.T) {
 	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotHotPrune, 12); err != nil {
 		t.Fatalf("write hot prune stage: %v", err)
 	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotPrune, 12); err != nil {
+		t.Fatalf("write prune stage: %v", err)
+	}
+
+	if err := ensureHistoryPruneModeLocked(db, params.HistoryModeArchive); err != nil {
+		t.Fatalf("archive cold-history prune stages rejected: %v", err)
+	}
+}
+
+func TestEnsureHistoryPruneModeLockedRejectsArchiveChainLookupPruneStage(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteHistoryPruneMode(db, params.HistoryModeArchive); err != nil {
+		t.Fatalf("write prune mode: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 12); err != nil {
+		t.Fatalf("write chain lookup prune stage: %v", err)
+	}
 
 	err := ensureHistoryPruneModeLocked(db, params.HistoryModeArchive)
-	if err == nil {
-		t.Fatal("expected archive prune stage conflict")
-	}
-	if !strings.Contains(err.Error(), "archive-prune-stage") || !strings.Contains(err.Error(), string(rawdb.StageSnapshotHotPrune)) {
-		t.Fatalf("unexpected archive prune conflict error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "archive-prune-stage") || !strings.Contains(err.Error(), string(rawdb.StageSnapshotChainLookupPrune)) {
+		t.Fatalf("archive chain lookup prune conflict error = %v", err)
 	}
 }
 

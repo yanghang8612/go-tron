@@ -226,7 +226,13 @@ func PublishManifest(dir string, manifest *Manifest) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, filepath.Join(dir, ManifestFile))
+	if err := os.Rename(tmpName, filepath.Join(dir, ManifestFile)); err != nil {
+		return err
+	}
+	// The manifest is the publication boundary for cold coverage. Persist the
+	// directory entry after the atomic rename before a caller may use that
+	// coverage to delete duplicate hot rows.
+	return syncSnapshotDir(dir)
 }
 
 func (m *Manifest) Validate() error {

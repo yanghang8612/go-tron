@@ -107,7 +107,7 @@ func shouldEnableDomainStatePruner(cfg *params.ChainConfig) bool {
 		return false
 	}
 	switch cfg.EffectiveHistoryMode() {
-	case params.HistoryModeFull, params.HistoryModeSnap, params.HistoryModeBlocks, params.HistoryModeMinimal:
+	case params.HistoryModeFull, params.HistoryModeSnap, params.HistoryModeArchive, params.HistoryModeBlocks, params.HistoryModeMinimal:
 	default:
 		return false
 	}
@@ -160,7 +160,7 @@ func domainStatePrunePolicy(cfg *params.ChainConfig, targetReorgWindow uint64) s
 	}
 	switch mode {
 	case params.HistoryModeArchive:
-		return statepruning.ArchivePolicy()
+		return statepruning.ArchiveColdPolicy(historyWindow, reorgWindow)
 	case params.HistoryModeBlocks:
 		return statepruning.BlocksPolicy(historyWindow, reorgWindow)
 	case params.HistoryModeMinimal:
@@ -178,7 +178,9 @@ func domainStatePrunePolicy(cfg *params.ChainConfig, targetReorgWindow uint64) s
 // safe during sync and prevents a long replay from accumulating an unbounded
 // hot history backlog. Snap mode keeps the catch-up guard because snapshot
 // construction and pruning share substantial I/O and pruning is additionally
-// constrained by verified snapshot coverage.
+// constrained by verified snapshot coverage. Archive uses the same guard: its
+// logical history remains complete in cold files, and cold construction must
+// not compete with a far-behind importer.
 func domainStatePrunerMaxSyncLag(cfg *params.ChainConfig, policy statepruning.Policy) uint64 {
 	if cfg == nil {
 		return policy.HistoryWindow
@@ -274,8 +276,6 @@ func historyPruneModeConflictStages(mode string) []rawdb.StageID {
 
 func historyPruneModeArchiveForbiddenStages() []rawdb.StageID {
 	return []rawdb.StageID{
-		rawdb.StageSnapshotHotPrune,
-		rawdb.StageSnapshotPrune,
 		rawdb.StageSnapshotChainLookupPrune,
 		rawdb.StageSnapshotSectionBloomPrune,
 		rawdb.StageSnapshotBalanceTracePrune,

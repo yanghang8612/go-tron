@@ -226,7 +226,7 @@ var (
 	}
 	snapshotCatalogSigningKeyFileRuntimeFlag = &cli.StringFlag{
 		Name:    "snapshot.catalog-signing-key-file",
-		Usage:   "File with the Ed25519 key used to sign each newly published runtime cold snapshot catalog (snap mode only)",
+		Usage:   "File with the Ed25519 key used to sign each newly published runtime cold snapshot catalog (snap/archive modes)",
 		EnvVars: []string{"GTRON_SNAPSHOT_CATALOG_SIGNING_KEY_FILE"},
 	}
 	stateTrieCacheFlag = &cli.IntFlag{
@@ -640,9 +640,11 @@ func gtron(ctx *cli.Context) error {
 		closeStores()
 		return err
 	}
-	if snapshotCatalogSigningEnabled && (chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap || !chainConfig.HistoryEnabled) {
+	snapshotCatalogHistoryMode := chainConfig.EffectiveHistoryMode()
+	if snapshotCatalogSigningEnabled && (!chainConfig.HistoryEnabled ||
+		(snapshotCatalogHistoryMode != params.HistoryModeSnap && snapshotCatalogHistoryMode != params.HistoryModeArchive)) {
 		closeStores()
-		return errors.New("--snapshot.catalog-signing-key-file requires snap history mode with history capture enabled")
+		return errors.New("--snapshot.catalog-signing-key-file requires snap or archive history mode with history capture enabled")
 	}
 	snapshotServeEnabled := ctx.Bool("snapshot.serve")
 	if snapshotServeEnabled && !snapshotCatalogSigningEnabled {
@@ -970,32 +972,15 @@ func gtron(ctx *cli.Context) error {
 	}
 	if shouldEnableDomainStatePruner(chainConfig) {
 		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
+		historyMode := chainConfig.EffectiveHistoryMode()
+		coldStateSnapshotsEnabled := (historyMode == params.HistoryModeSnap || historyMode == params.HistoryModeArchive) && chainConfig.HistoryEnabled
+		buildDerivedSnapshots := historyMode == params.HistoryModeSnap
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
-		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
-			Snapshot: statesnapshots.Config{
-				Dir:                stateSnapshotDir,
-				Enabled:            chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
-				HistoryDataset:     historyDataset,
-				HistoryWindow:      prunePolicy.HistoryWindow,
-				ETL:                snapshotETL,
-				BuildSectionBlooms: true,
-				BuildBalanceTraces: true,
-				BuildEventLogs:     true,
-				CatalogSigningKey:  snapshotCatalogSigningKey,
-				CatalogChain:       snapshotCatalogChain,
-				// LatestBuildBlocks controls how often latest-dataset snapshots
-				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
-				// datasets share this single coarse cadence. Operators may tune it.
-				LatestBuildBlocks:            statesnapshots.DefaultLatestBuildBlocks,
-				DeferLatestBuildWhileSyncing: true,
-			},
-			Pruner: statepruning.PrunerConfig{
-				Policy:      prunePolicy,
-				SnapshotDir: stateSnapshotDir,
-				MaxSyncLag:  domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
-			},
-			ChainFreezerBuild: chainFreezerSnapshotBuild,
-			ChainLookupPrune: func() (*statesnapshots.PruneHotChainLookupResult, error) {
+		var chainLookupPrune statepruning.ChainLookupPruneFunc
+		var sectionBloomPrune statepruning.SectionBloomPruneFunc
+		var balanceTracePrune statepruning.BalanceTracePruneFunc
+		if shouldEnableChainLookupPruner(chainConfig) {
+			chainLookupPrune = func() (*statesnapshots.PruneHotChainLookupResult, error) {
 				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
 				if err != nil {
 					if os.IsNotExist(err) {
@@ -1004,8 +989,8 @@ func gtron(ctx *cli.Context) error {
 					return nil, err
 				}
 				return statesnapshots.PruneHotChainLookupsWithProgress(rawdb.NewChainDB(db, ancientReader), stateSnapshotDir, manifest)
-			},
-			SectionBloomPrune: func() (*statesnapshots.PruneHotSectionBloomResult, error) {
+			}
+			sectionBloomPrune = func() (*statesnapshots.PruneHotSectionBloomResult, error) {
 				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
 				if err != nil {
 					if os.IsNotExist(err) {
@@ -1014,8 +999,8 @@ func gtron(ctx *cli.Context) error {
 					return nil, err
 				}
 				return statesnapshots.PruneHotSectionBloomsWithProgress(rawdb.NewChainDB(db, ancientReader), stateSnapshotDir, manifest)
-			},
-			BalanceTracePrune: func() (*statesnapshots.PruneHotBalanceTraceResult, error) {
+			}
+			balanceTracePrune = func() (*statesnapshots.PruneHotBalanceTraceResult, error) {
 				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
 				if err != nil {
 					if os.IsNotExist(err) {
@@ -1024,7 +1009,36 @@ func gtron(ctx *cli.Context) error {
 					return nil, err
 				}
 				return statesnapshots.PruneHotBalanceTracesWithProgress(db, stateSnapshotDir, manifest)
+			}
+		}
+		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
+			Snapshot: statesnapshots.Config{
+				Dir:                stateSnapshotDir,
+				Enabled:            coldStateSnapshotsEnabled,
+				HistoryDataset:     historyDataset,
+				HistoryWindow:      prunePolicy.HistoryWindow,
+				ETL:                snapshotETL,
+				BuildSectionBlooms: buildDerivedSnapshots,
+				BuildBalanceTraces: buildDerivedSnapshots,
+				BuildEventLogs:     buildDerivedSnapshots,
+				CatalogSigningKey:  snapshotCatalogSigningKey,
+				CatalogChain:       snapshotCatalogChain,
+				// LatestBuildBlocks controls how often latest-dataset snapshots
+				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
+				// datasets share this single coarse cadence. Operators may tune it.
+				LatestBuildBlocks:             statesnapshots.DefaultLatestBuildBlocks,
+				DeferLatestBuildWhileSyncing:  true,
+				DeferHistoryBuildWhileSyncing: historyMode == params.HistoryModeArchive,
 			},
+			Pruner: statepruning.PrunerConfig{
+				Policy:      prunePolicy,
+				SnapshotDir: stateSnapshotDir,
+				MaxSyncLag:  domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
+			},
+			ChainFreezerBuild: chainFreezerSnapshotBuild,
+			ChainLookupPrune:  chainLookupPrune,
+			SectionBloomPrune: sectionBloomPrune,
+			BalanceTracePrune: balanceTracePrune,
 			RetiredPrune: func() (*statesnapshots.PruneRetiredSegmentFilesResult, error) {
 				if _, err := statesnapshots.LoadProductionManifest(stateSnapshotDir); err != nil {
 					if os.IsNotExist(err) {
@@ -1040,17 +1054,17 @@ func gtron(ctx *cli.Context) error {
 		})
 		stack.RegisterLifecycle(domainLifecycle)
 		syncService.AddSyncCompleteHook(domainLifecycle.RequestPass)
-		chainLookupPruneLifecycleWired = true
-		sectionBloomPruneLifecycleWired = true
-		balanceTracePruneLifecycleWired = true
+		chainLookupPruneLifecycleWired = chainLookupPrune != nil
+		sectionBloomPruneLifecycleWired = sectionBloomPrune != nil
+		balanceTracePruneLifecycleWired = balanceTracePrune != nil
 		retiredPruneLifecycleWired = true
 		log.Info("Domain state snapshot/prune lifecycle enabled",
 			"mode", prunePolicy.Mode,
-			"snapshotEnabled", chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
+			"snapshotEnabled", coldStateSnapshotsEnabled,
 			"chainFreezerBuild", chainFreezerSnapshotBuild != nil,
-			"chainLookupPrune", true,
-			"sectionBloomPrune", true,
-			"balanceTracePrune", true,
+			"chainLookupPrune", chainLookupPrune != nil,
+			"sectionBloomPrune", sectionBloomPrune != nil,
+			"balanceTracePrune", balanceTracePrune != nil,
 			"retiredPrune", true,
 			"dataset", historyDataset,
 			"historyWindow", prunePolicy.HistoryWindow,

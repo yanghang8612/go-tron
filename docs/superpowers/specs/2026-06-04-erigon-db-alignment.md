@@ -1634,9 +1634,11 @@ Status:
   use mode-aware finite state-history retention windows for hot
   `StateDomainChange`/`StateTxRange` pruning, and the Worker/Checker paths now
   enforce and audit that retention without collapsing their mode labels.
-  The default window follows Erigon v3.5.0: `full`, `blocks`, and go-tron's
-  `snap` default to 262,144 recent blocks, while `minimal` defaults to 100,000
-  recent blocks; an explicit `prune_window` still overrides all finite modes.
+  The default hot window follows Erigon v3.5.0: `full`, `blocks`, go-tron's
+  `snap`, and `archive` default to 262,144 recent blocks, while `minimal`
+  defaults to 100,000 recent blocks; an explicit `prune_window` overrides the
+  hot window. Archive's logical retention remains unbounded because older rows
+  may be removed only after verified immutable state-history coverage exists.
   Archive/as-of state queries also apply the same local history-window gate for
   `full`, `blocks`, and `minimal`, so requests below the retained floor fail
   with `ErrArchiveHistoryPruned` instead of reconstructing from incomplete or
@@ -1663,12 +1665,18 @@ Status:
   segments whose on-disk checker succeeds; if a manifest advertises a covered
   range but the history file is missing or corrupt, pruning aborts before
   deleting the hot `StateDomainChange` rows.
-- `archive` keeps every temporal state row and auto-enables history capture.
+- `archive` auto-enables history capture and keeps every logical temporal-state
+  row queryable. It now runs the same ordered cold build/verify/hot-prune
+  lifecycle as `snap`, but deletes only old duplicate `StateDomainChange` and
+  inverse rows after continuous `.seg/.idx/.kv` coverage passes format-aware
+  verification. It deliberately retains hot `StateTxRange`, code, latest,
+  commitment, block, and derived-index rows in this MVP.
 - The selected mode is persisted in rawdb as `history-prune-mode-v1`; startup
   rejects incompatible mode changes for an existing datadir and also rejects
-  mode/stage contradictions before services start, e.g. `archive` datadirs
-  with hot-prune/lookup-prune/tail-prune progress or non-`minimal` datadirs
-  with freezer-tail prune progress.
+  mode/stage contradictions before services start. Archive permits state
+  `SnapshotHotPrune`/`SnapshotPrune` progress, but rejects lookup, bloom, trace,
+  and freezer-tail prune progress; non-`minimal` datadirs reject freezer-tail
+  prune progress.
 - Chain lookup pruning is already wired for `full`, `blocks`, `minimal`, and
   `snap` once verified chain-freezer/index snapshot coverage exists; both the
   domain lifecycle hook and the standalone lifecycle enforce readable
@@ -1711,8 +1719,8 @@ Status:
   thresholds. Its optional
   `--require-prune-mode-semantics` gate also checks the Erigon-style mode
   matrix directly: persisted prune mode evidence must be present and match the
-  sampled mode, `archive` rows must not show hot/cold prune progress, and
-  `blocks`/`full`/`snap` rows must not show freezer-tail pruning.
+  sampled mode, `archive` rows must not show lookup/derived/freezer-tail prune
+  progress, and `blocks`/`full`/`snap` rows must not show freezer-tail pruning.
 
 Remaining:
 

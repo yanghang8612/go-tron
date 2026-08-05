@@ -19,7 +19,10 @@ type Policy struct {
 	Mode Mode
 
 	// HistoryWindow is the number of recent blocks whose domain history must be
-	// retained. Archive mode ignores it and keeps all history.
+	// retained in the hot database. In archive mode a zero value keeps the
+	// legacy no-prune behaviour; a positive value permits pruning only after an
+	// immutable, verified cold history copy covers the same rows. Archive's
+	// logical history retention is therefore still unbounded.
 	HistoryWindow uint64
 
 	// ReorgWindow is the minimum recent range that must retain enough latest
@@ -30,6 +33,13 @@ type Policy struct {
 
 func ArchivePolicy() Policy {
 	return Policy{Mode: ModeArchive}
+}
+
+// ArchiveColdPolicy retains complete logical history while bounding duplicate
+// hot history to historyWindow blocks. Rows outside the window may be removed
+// only after the Worker verifies matching immutable snapshot coverage.
+func ArchiveColdPolicy(historyWindow, reorgWindow uint64) Policy {
+	return Policy{Mode: ModeArchive, HistoryWindow: historyWindow, ReorgWindow: reorgWindow}
 }
 
 func FullPolicy(historyWindow, reorgWindow uint64) Policy {
@@ -51,6 +61,17 @@ func SnapPolicy(historyWindow, reorgWindow uint64) Policy {
 func (p Policy) Validate() error {
 	switch p.Mode {
 	case ModeArchive:
+		// Preserve ArchivePolicy() as the explicit legacy/no-prune policy used by
+		// offline checks and callers that have no cold lifecycle configured.
+		if p.HistoryWindow == 0 {
+			return nil
+		}
+		if p.ReorgWindow == 0 {
+			return errors.New("pruning: archive cold history reorg window must be positive")
+		}
+		if p.HistoryWindow < p.ReorgWindow {
+			return fmt.Errorf("pruning: archive hot history window %d is smaller than reorg window %d", p.HistoryWindow, p.ReorgWindow)
+		}
 		return nil
 	case ModeFull, ModeBlocks, ModeMinimal, ModeSnap:
 		if p.HistoryWindow == 0 {
@@ -70,6 +91,20 @@ func (p Policy) Validate() error {
 
 func (p Policy) RetainHistory(blockNum, headNum uint64) bool {
 	if p.Mode == ModeArchive {
+		return true
+	}
+	if blockNum > headNum {
+		return true
+	}
+	return headNum-blockNum < p.HistoryWindow
+}
+
+// RetainHotHistory reports whether a history row must remain in the mutable
+// database. It differs from RetainHistory only for archive cold policies:
+// archive retains the logical row forever, but the verified immutable copy may
+// become its sole physical representation outside the hot window.
+func (p Policy) RetainHotHistory(blockNum, headNum uint64) bool {
+	if p.Mode == ModeArchive && p.HistoryWindow == 0 {
 		return true
 	}
 	if blockNum > headNum {

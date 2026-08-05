@@ -776,7 +776,7 @@ row keeps both aggregate counts and detail arrays:
 `signedColdPrune`, `coldFreezerToBlock`, `chainLookupPruneToBlock`,
 `tailPrunedThroughBlock`, `balanceTracePruneToBlock`, and
 `sectionBloomPruneToSection`. `modeAlertDetails` flags persisted prune-mode
-conflicts such as `archive` datadirs with hot-prune or tail-prune progress. Do
+conflicts such as `archive` datadirs with lookup-prune or tail-prune progress. Do
 not enable that flag against a live Pebble datadir unless the DB can be opened
 by the diagnostic command. Captured `stage-status` files also populate
 `stageStagedBodyIssueRows` and `stageStagedBodyIssueDetails` when downloader

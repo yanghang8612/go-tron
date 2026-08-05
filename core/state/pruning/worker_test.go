@@ -3,9 +3,11 @@ package pruning
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -340,6 +342,131 @@ func TestWorkerSnapPrunesHotChangesWithSnapshotCoverageAndKeepsTxRange(t *testin
 	}
 	if len(report.Warnings) != 0 || report.RetainedTxRanges != 1 || report.RetainedDomainChanges != 0 {
 		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestWorkerArchivePrunesOnlyVerifiedColdDuplicateChanges(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	oldChange, _, _ := writeSnapPruningChange(t, db, 1, 10, 12)
+	recentChange, _, _ := writeSnapPruningChange(t, db, 4, 40, 42)
+
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := Worker{DB: db, Policy: ArchiveColdPolicy(3, 2), SnapshotDir: dir}.PruneTo(5)
+	if err != nil {
+		t.Fatalf("archive cold prune: %v", err)
+	}
+	if stats.DeletedDomainChangeBlocks != 1 || stats.DeletedTxRanges != 0 {
+		t.Fatalf("stats = %+v, want one duplicate change block and no tx range deletes", stats)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, oldChange.BlockNum, oldChange.Seq); err != nil || ok {
+		t.Fatalf("covered old domain change survived ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, oldChange.BlockNum); err != nil || !ok {
+		t.Fatalf("archive block/tx mapping was pruned ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, recentChange.BlockNum, recentChange.Seq); err != nil || !ok {
+		t.Fatalf("recent hot domain change missing ok=%v err=%v", ok, err)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHotPrune); err != nil || !ok || got != 12 {
+		t.Fatalf("archive hot-prune stage = %d ok=%v err=%v, want 12", got, ok, err)
+	}
+	report, err := Check(db, ArchiveColdPolicy(3, 2), 5, dir)
+	if err != nil {
+		t.Fatalf("archive check after prune: %v", err)
+	}
+	if len(report.Warnings) != 0 || report.RetainedTxRanges != 2 || report.RetainedDomainChanges != 1 {
+		t.Fatalf("archive post-prune report = %+v", report)
+	}
+}
+
+func TestWorkerArchivePreservesHotChangesWhenColdCompanionIsCorrupt(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	change, _, _ := writeSnapPruningChange(t, db, 1, 10, 12)
+
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range refs {
+		if ref.Kind == snapshots.SegmentAccessor {
+			corruptSnapshotFile(t, dir, ref)
+			break
+		}
+	}
+
+	stats, err := Worker{DB: db, Policy: ArchiveColdPolicy(3, 2), SnapshotDir: dir}.PruneTo(5)
+	if err == nil || !strings.Contains(err.Error(), "accessor") {
+		t.Fatalf("archive prune stats=%+v err=%v, want corrupt accessor error", stats, err)
+	}
+	if _, ok, readErr := rawdb.ReadStateDomainChange(db, change.BlockNum, change.Seq); readErr != nil || !ok {
+		t.Fatalf("hot change deleted after failed cold verification ok=%v err=%v", ok, readErr)
+	}
+	if _, ok, readErr := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHotPrune); readErr != nil || ok {
+		t.Fatalf("hot-prune stage advanced after failed verification ok=%v err=%v", ok, readErr)
+	}
+}
+
+func TestWorkerArchiveConcurrentColdReadsDuringHotPrune(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	change, _, _ := writeSnapPruningChange(t, db, 1, 10, 12)
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := snapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 100; i++ {
+			count := 0
+			if err := mgr.IterateStateDomainChanges(10, 12, func(got *rawdb.StateDomainChange) (bool, error) {
+				count++
+				return true, nil
+			}); err != nil {
+				errCh <- err
+				return
+			}
+			if count != 1 {
+				errCh <- fmt.Errorf("cold change count %d, want 1", count)
+				return
+			}
+		}
+	}()
+	close(start)
+	if _, err := (Worker{DB: db, Policy: ArchiveColdPolicy(3, 2), SnapshotDir: dir}).PruneTo(5); err != nil {
+		t.Fatalf("archive prune: %v", err)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, change.BlockNum, change.Seq); err != nil || ok {
+		t.Fatalf("duplicate hot change survived ok=%v err=%v", ok, err)
 	}
 }
 

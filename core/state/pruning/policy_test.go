@@ -6,6 +6,9 @@ func TestPolicyValidate(t *testing.T) {
 	if err := ArchivePolicy().Validate(); err != nil {
 		t.Fatalf("archive validate: %v", err)
 	}
+	if err := ArchiveColdPolicy(100, 20).Validate(); err != nil {
+		t.Fatalf("archive cold validate: %v", err)
+	}
 	if err := FullPolicy(100, 20).Validate(); err != nil {
 		t.Fatalf("full validate: %v", err)
 	}
@@ -24,6 +27,9 @@ func TestPolicyValidate(t *testing.T) {
 	if err := FullPolicy(10, 20).Validate(); err == nil {
 		t.Fatal("history window below reorg window accepted")
 	}
+	if err := ArchiveColdPolicy(10, 20).Validate(); err == nil {
+		t.Fatal("archive hot history window below reorg window accepted")
+	}
 	if err := (Policy{Mode: Mode("bad")}).Validate(); err == nil {
 		t.Fatal("unknown mode accepted")
 	}
@@ -35,6 +41,10 @@ func TestPolicyHistoryAndReorgRetention(t *testing.T) {
 		if !archive.RetainHistory(block, 100) || !archive.RetainReorgData(block, 100) {
 			t.Fatalf("archive did not retain block %d", block)
 		}
+	}
+	archiveCold := ArchiveColdPolicy(10, 3)
+	if !archiveCold.RetainHistory(0, 100) || !archiveCold.RetainHotHistory(91, 100) || archiveCold.RetainHotHistory(90, 100) {
+		t.Fatal("archive logical/hot history retention boundary wrong")
 	}
 
 	full := FullPolicy(10, 3)

@@ -83,6 +83,11 @@ type Config struct {
 	// scan from competing with an active historical sync session. The regular
 	// lifecycle/sync-complete wake builds it once the importer is idle.
 	DeferLatestBuildWhileSyncing bool
+	// DeferHistoryBuildWhileSyncing prevents history compression, companion
+	// index construction, and derived sidecar work from competing with a node
+	// that is farther behind than HistoryWindow. The ordered lifecycle drains
+	// the bounded backlog immediately once sync enters the recent hot window.
+	DeferHistoryBuildWhileSyncing bool
 	// BuildSectionBlooms builds full-section cold section-bloom sidecars once
 	// the state-history cutoff has fully covered the source block section.
 	BuildSectionBlooms bool
@@ -109,6 +114,7 @@ type Config struct {
 // PassResult describes a single cold snapshot builder pass.
 type PassResult struct {
 	Built               bool
+	HistoryDeferred     bool
 	LatestBuilt         bool
 	LatestDeferred      bool
 	Compaction          HistoryCompactionResult
@@ -166,6 +172,7 @@ type Stats struct {
 	LastCompactionMerges    uint64
 	LastLatestDuration      time.Duration
 	LatestDeferredSync      uint64
+	HistoryDeferredSync     uint64
 	LastLatestBuildBlock    uint64
 }
 
@@ -191,6 +198,7 @@ type coldRunnerMetrics struct {
 	lastCompactionMerges    *metrics.Gauge
 	lastLatestDuration      *metrics.Gauge
 	latestDeferredSync      *metrics.Gauge
+	historyDeferredSync     *metrics.Gauge
 	lastLatestBuildBlock    *metrics.Gauge
 }
 
@@ -218,6 +226,7 @@ func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 		lastCompactionMerges:    metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/merges", nil),
 		lastLatestDuration:      metrics.GetOrRegisterGauge(namespace+"lastpass/latest/duration", nil),
 		latestDeferredSync:      metrics.GetOrRegisterGauge(namespace+"latest/deferred/sync", nil),
+		historyDeferredSync:     metrics.GetOrRegisterGauge(namespace+"history/deferred/sync", nil),
 		lastLatestBuildBlock:    metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
 	}
 }
@@ -254,6 +263,7 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.lastCompactionMerges.Update(coldSnapshotUintGauge(stats.LastCompactionMerges))
 	m.lastLatestDuration.Update(int64(stats.LastLatestDuration))
 	m.latestDeferredSync.Update(coldSnapshotUintGauge(stats.LatestDeferredSync))
+	m.historyDeferredSync.Update(coldSnapshotUintGauge(stats.HistoryDeferredSync))
 	m.lastLatestBuildBlock.Update(coldSnapshotUintGauge(stats.LastLatestBuildBlock))
 }
 
@@ -303,6 +313,7 @@ type Runner struct {
 	lastLatestDuration      atomic.Int64
 	lastLatestBuildBlock    atomic.Uint64
 	latestDeferredSync      atomic.Uint64
+	historyDeferredSync     atomic.Uint64
 }
 
 func NewRunner(chain ChainSource, cfg Config) *Runner {
@@ -499,6 +510,7 @@ func (r *Runner) Snapshot() Stats {
 		LastCompactionMerges:    r.lastCompactionMerges.Load(),
 		LastLatestDuration:      time.Duration(r.lastLatestDuration.Load()),
 		LatestDeferredSync:      r.latestDeferredSync.Load(),
+		HistoryDeferredSync:     r.historyDeferredSync.Load(),
 		LastLatestBuildBlock:    r.lastLatestBuildBlock.Load(),
 	}
 }
@@ -517,7 +529,7 @@ func (r *Runner) OnePass() (PassResult, error) {
 	phaseStart := start
 	result, err := r.onePass()
 	result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
-	if err == nil {
+	if err == nil && !result.HistoryDeferred {
 		phaseStart = time.Now()
 		result.Compaction, err = r.compactHistory(result.NeedsCatchup())
 		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
@@ -657,6 +669,14 @@ func (r *Runner) onePass() (PassResult, error) {
 		SolidifiedBlock:     uint64(solidified),
 		CutoffBlock:         cutoffBlock,
 		EligibleCutoffBlock: cutoffBlock,
+	}
+	if r.cfg.DeferHistoryBuildWhileSyncing {
+		if source, ok := r.chain.(syncRemainingSource); ok {
+			if remaining, active := source.SyncRemainingBlocks(); active && remaining > r.cfg.HistoryWindow {
+				result.HistoryDeferred = true
+				return result, nil
+			}
+		}
 	}
 
 	cutoffRange, ok, err := historyCfg.HotHistoryTxRangeForBlock(db, cutoffBlock)
@@ -1036,6 +1056,9 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	}
 	if result.LatestDeferred {
 		r.latestDeferredSync.Add(1)
+	}
+	if result.HistoryDeferred {
+		r.historyDeferredSync.Add(1)
 	}
 	var builtBytes uint64
 	for _, ref := range append(append([]SegmentRef(nil), result.Segments...), result.Compaction.Segments...) {
