@@ -210,6 +210,24 @@ func TestStateDomainChangeHistoryEncodedChunkPool(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeHistoryBlockTablePool(t *testing.T) {
+	table := acquireStateDomainChangeHistoryBlockTable()
+	if len(table) != 0 || cap(table) != stateDomainChangeHistoryBlockTableCapacity {
+		t.Fatalf("acquired block table len/cap = %d/%d, want 0/%d", len(table), cap(table), stateDomainChangeHistoryBlockTableCapacity)
+	}
+	table = append(table, cbBlock{uncompressedStart: 42})
+	releaseStateDomainChangeHistoryBlockTable(&table)
+	if table != nil {
+		t.Fatal("released block table still reachable through caller")
+	}
+
+	table = acquireStateDomainChangeHistoryBlockTable()
+	defer releaseStateDomainChangeHistoryBlockTable(&table)
+	if len(table) != 0 || cap(table) != stateDomainChangeHistoryBlockTableCapacity {
+		t.Fatalf("reused block table len/cap = %d/%d, want 0/%d", len(table), cap(table), stateDomainChangeHistoryBlockTableCapacity)
+	}
+}
+
 func TestCompressedBlockReaderRejectsOutOfFileBlockBeforeAlloc(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "corrupt.cb")
@@ -360,7 +378,7 @@ func TestHistoryCompressionConcurrency(t *testing.T) {
 
 func TestCompressedBlockStreamWriterEquivalent(t *testing.T) {
 	const chunkSize = 16 << 10
-	for _, size := range []int{0, 1, chunkSize - 1, chunkSize, chunkSize + 1, 80*chunkSize + 731} {
+	for _, size := range []int{0, 1, chunkSize - 1, chunkSize, chunkSize + 1, (stateDomainChangeHistoryBlockTableCapacity+1)*chunkSize + 731} {
 		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
 			dir := t.TempDir()
 			payload := make([]byte, size)

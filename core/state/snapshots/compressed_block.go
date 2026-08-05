@@ -2,7 +2,6 @@ package snapshots
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -119,9 +118,35 @@ type cbBlock struct {
 	records           uint32
 }
 
+// The common base-step and lower compaction outputs fit in this 16 KiB table.
+// Larger frozen files grow normally and are deliberately not retained by the
+// pool, keeping cached build metadata bounded per concurrent writer.
+const stateDomainChangeHistoryBlockTableCapacity = (8 << 20) / historyCompressChunkSize
+
+type stateDomainChangeHistoryBlockTable [stateDomainChangeHistoryBlockTableCapacity]cbBlock
+
+var stateDomainChangeHistoryBlockTablePool = sync.Pool{
+	New: func() any { return new(stateDomainChangeHistoryBlockTable) },
+}
+
+func acquireStateDomainChangeHistoryBlockTable() []cbBlock {
+	return stateDomainChangeHistoryBlockTablePool.Get().(*stateDomainChangeHistoryBlockTable)[:0]
+}
+
+func releaseStateDomainChangeHistoryBlockTable(table *[]cbBlock) {
+	if table == nil || *table == nil {
+		return
+	}
+	blocks := *table
+	*table = nil
+	if cap(blocks) == stateDomainChangeHistoryBlockTableCapacity {
+		stateDomainChangeHistoryBlockTablePool.Put((*stateDomainChangeHistoryBlockTable)(blocks[:stateDomainChangeHistoryBlockTableCapacity]))
+	}
+}
+
 // compressedBlockWriter accumulates opaque records, compressing them one block at
 // a time into a temp file, and assembles the final file on Finish. Peak memory is
-// one uncompressed block plus the in-memory block table (~28 bytes per block).
+// one uncompressed block plus the in-memory block table (~32 bytes per block).
 type compressedBlockWriter struct {
 	enc       *zstd.Encoder
 	blockSize int
@@ -155,6 +180,7 @@ func newCompressedBlockWriter(dir string, blockSize int) (*compressedBlockWriter
 		tmp:       tmp,
 		tmpWriter: acquireStateDomainChangeHistoryWriter(tmp),
 		tmpName:   tmp.Name(),
+		table:     acquireStateDomainChangeHistoryBlockTable(),
 	}, nil
 }
 
@@ -224,6 +250,7 @@ func (w *compressedBlockWriter) appendEncodedBlock(uncompressedLen int, comp []b
 // Finish flushes the last partial block and writes the assembled file to path.
 func (w *compressedBlockWriter) Finish(path string) (err error) {
 	defer func() {
+		releaseStateDomainChangeHistoryBlockTable(&w.table)
 		releaseStateDomainChangeHistoryWriter(&w.tmpWriter)
 		_ = w.tmp.Close()
 		_ = os.Remove(w.tmpName)
@@ -247,24 +274,16 @@ func (w *compressedBlockWriter) Finish(path string) (err error) {
 		}
 	}()
 
-	dataOffset := uint64(compressedBlockHeaderSize) + uint64(len(w.table))*compressedBlockTableEntry
-	var hdr bytes.Buffer
-	hdr.WriteString(compressedBlockMagic)
-	writeUint32(&hdr, compressedBlockVersion)
-	writeUint32(&hdr, uint32(w.blockSize))
-	writeUint64(&hdr, w.recCount)
-	writeUint64(&hdr, uint64(len(w.table)))
-	writeUint64(&hdr, w.uncTotal)
-	writeUint64(&hdr, dataOffset)
-	for _, b := range w.table {
-		writeUint64(&hdr, b.uncompressedStart)
-		writeUint64(&hdr, b.compressedStart)
-		writeUint64(&hdr, b.compressedLen)
-		writeUint32(&hdr, b.records)
-	}
-	if _, err = out.Write(hdr.Bytes()); err != nil {
+	// The body writer is idle after Flush. Repoint its pooled buffer at the final
+	// file for metadata instead of borrowing a second large bufio.Writer.
+	w.tmpWriter.Reset(out)
+	if err = writeCompressedBlockHeaderAndTable(w.tmpWriter, w.blockSize, w.recCount, w.uncTotal, w.table, 0, false); err != nil {
 		return err
 	}
+	if err = w.tmpWriter.Flush(); err != nil {
+		return err
+	}
+	releaseStateDomainChangeHistoryWriter(&w.tmpWriter)
 	if _, err = copyStateDomainChangeHistoryData(out, w.tmp); err != nil {
 		return err
 	}
@@ -278,6 +297,7 @@ func (w *compressedBlockWriter) Finish(path string) (err error) {
 // of the original byte stream.
 func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (err error) {
 	defer func() {
+		releaseStateDomainChangeHistoryBlockTable(&w.table)
 		releaseStateDomainChangeHistoryWriter(&w.tmpWriter)
 		_ = w.tmp.Close()
 		_ = os.Remove(w.tmpName)
@@ -318,32 +338,16 @@ func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (er
 		}
 	}()
 
-	blockCount := uint64(len(w.table)) + prefixRecords
-	dataOffset := uint64(compressedBlockHeaderSize) + blockCount*compressedBlockTableEntry
-	var hdr bytes.Buffer
-	hdr.WriteString(compressedBlockMagic)
-	writeUint32(&hdr, compressedBlockVersion)
-	writeUint32(&hdr, uint32(w.blockSize))
-	writeUint64(&hdr, w.recCount+prefixRecords)
-	writeUint64(&hdr, blockCount)
-	writeUint64(&hdr, uncTotal)
-	writeUint64(&hdr, dataOffset)
-	if prefixRecords != 0 {
-		writeUint64(&hdr, 0)
-		writeUint64(&hdr, 0)
-		writeUint64(&hdr, uint64(len(prefixComp)))
-		writeUint32(&hdr, 1)
-	}
-	shift := uint64(len(prefixComp))
-	for _, b := range w.table {
-		writeUint64(&hdr, b.uncompressedStart)
-		writeUint64(&hdr, b.compressedStart+shift)
-		writeUint64(&hdr, b.compressedLen)
-		writeUint32(&hdr, b.records)
-	}
-	if _, err = out.Write(hdr.Bytes()); err != nil {
+	// The body writer is idle after Flush. Repoint its pooled buffer at the final
+	// file for metadata instead of borrowing a second large bufio.Writer.
+	w.tmpWriter.Reset(out)
+	if err = writeCompressedBlockHeaderAndTable(w.tmpWriter, w.blockSize, w.recCount+prefixRecords, uncTotal, w.table, uint64(len(prefixComp)), prefixRecords != 0); err != nil {
 		return err
 	}
+	if err = w.tmpWriter.Flush(); err != nil {
+		return err
+	}
+	releaseStateDomainChangeHistoryWriter(&w.tmpWriter)
 	if len(prefixComp) != 0 {
 		if _, err = out.Write(prefixComp); err != nil {
 			return err
@@ -353,6 +357,59 @@ func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) (er
 		return err
 	}
 	return out.Sync()
+}
+
+// writeCompressedBlockHeaderAndTable emits the fixed metadata straight into a
+// pooled buffered writer. Emitting the final fixed-width encoding directly
+// avoids allocating and growing a second whole-table buffer during every finish.
+func writeCompressedBlockHeaderAndTable(out io.Writer, blockSize int, recCount, uncTotal uint64, table []cbBlock, prefixCompressedLen uint64, hasPrefix bool) error {
+	blockCount := uint64(len(table))
+	if hasPrefix {
+		blockCount++
+	}
+	tableLen, err := compressedBlockTableLen(blockCount)
+	if err != nil {
+		return err
+	}
+	dataOffset, overflow := checkedAdd(compressedBlockHeaderSize, tableLen)
+	if overflow {
+		return errors.New("snapshots: compressed-block data offset overflows")
+	}
+
+	var header [compressedBlockHeaderSize]byte
+	copy(header[:8], compressedBlockMagic)
+	binary.BigEndian.PutUint32(header[8:12], compressedBlockVersion)
+	binary.BigEndian.PutUint32(header[12:16], uint32(blockSize))
+	binary.BigEndian.PutUint64(header[16:24], recCount)
+	binary.BigEndian.PutUint64(header[24:32], blockCount)
+	binary.BigEndian.PutUint64(header[32:40], uncTotal)
+	binary.BigEndian.PutUint64(header[40:48], dataOffset)
+	if _, err := out.Write(header[:]); err != nil {
+		return err
+	}
+
+	var entry [compressedBlockTableEntry]byte
+	if hasPrefix {
+		binary.BigEndian.PutUint64(entry[16:24], prefixCompressedLen)
+		binary.BigEndian.PutUint32(entry[24:28], 1)
+		if _, err := out.Write(entry[:]); err != nil {
+			return err
+		}
+	}
+	for _, block := range table {
+		compressedStart, overflow := checkedAdd(block.compressedStart, prefixCompressedLen)
+		if overflow {
+			return errors.New("snapshots: compressed-block data position overflows")
+		}
+		binary.BigEndian.PutUint64(entry[0:8], block.uncompressedStart)
+		binary.BigEndian.PutUint64(entry[8:16], compressedStart)
+		binary.BigEndian.PutUint64(entry[16:24], block.compressedLen)
+		binary.BigEndian.PutUint32(entry[24:28], block.records)
+		if _, err := out.Write(entry[:]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // compressedBlockReader serves records by uncompressed offset, decompressing the
@@ -813,6 +870,8 @@ func compressBlobToFile(dir, path string, blob []byte, chunkSize int) error {
 			end = len(blob)
 		}
 		if _, err := w.Append(blob[off:end]); err != nil {
+			releaseStateDomainChangeHistoryBlockTable(&w.table)
+			releaseStateDomainChangeHistoryWriter(&w.tmpWriter)
 			_ = w.tmp.Close()
 			_ = os.Remove(w.tmpName)
 			return err
@@ -1221,6 +1280,7 @@ func (w *compressedBlockStreamWriter) abortBody() {
 	}
 	if w.body != nil {
 		releaseStateDomainChangeHistoryEncodedChunk(&w.body.encoded, w.chunkSize)
+		releaseStateDomainChangeHistoryBlockTable(&w.body.table)
 		releaseStateDomainChangeHistoryWriter(&w.body.tmpWriter)
 		_ = w.body.tmp.Close()
 		_ = os.Remove(w.body.tmpName)
