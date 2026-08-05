@@ -829,6 +829,7 @@ type compressedFileResult struct {
 // have been written to the body file.
 type orderedCompressionPipeline struct {
 	out       *compressedBlockWriter
+	chunkSize int
 	jobs      chan compressedFileJob
 	results   chan compressedFileResult
 	pool      chan []byte
@@ -847,16 +848,17 @@ type orderedCompressionPipeline struct {
 func newOrderedCompressionPipeline(out *compressedBlockWriter, chunkSize, workers int) *orderedCompressionPipeline {
 	inFlight := workers * 2
 	p := &orderedCompressionPipeline{
-		out:     out,
-		jobs:    make(chan compressedFileJob, inFlight),
-		results: make(chan compressedFileResult, inFlight),
-		pool:    make(chan []byte, inFlight),
-		encoded: make(chan []byte, inFlight),
-		done:    make(chan struct{}),
+		out:       out,
+		chunkSize: chunkSize,
+		jobs:      make(chan compressedFileJob, inFlight),
+		results:   make(chan compressedFileResult, inFlight),
+		pool:      make(chan []byte, inFlight),
+		encoded:   make(chan []byte, inFlight),
+		done:      make(chan struct{}),
 	}
 	// The stream writer transfers its current chunk as the final pool member.
 	for i := 1; i < inFlight; i++ {
-		p.pool <- make([]byte, 0, chunkSize)
+		p.pool <- acquireStateDomainChangeHistoryCompressionChunk(chunkSize)
 	}
 	for range inFlight {
 		p.encoded <- nil
@@ -982,6 +984,7 @@ func (p *orderedCompressionPipeline) Acquire() ([]byte, error) {
 func (p *orderedCompressionPipeline) Close() error {
 	p.closeJobs.Do(func() { close(p.jobs) })
 	p.reducer.Wait()
+	p.releaseAvailableChunks()
 	return p.Err()
 }
 
@@ -989,6 +992,22 @@ func (p *orderedCompressionPipeline) Abort() {
 	p.cancel.Do(func() { close(p.done) })
 	p.closeJobs.Do(func() { close(p.jobs) })
 	p.reducer.Wait()
+	p.releaseAvailableChunks()
+}
+
+// releaseAvailableChunks runs only after workers and the ordered reducer have
+// joined. Buffers present in pool are idle and uniquely owned here; buffers
+// abandoned in queued jobs/results on an error remain for GC rather than risk
+// returning storage that another goroutine may still reference.
+func (p *orderedCompressionPipeline) releaseAvailableChunks() {
+	for {
+		select {
+		case chunk := <-p.pool:
+			releaseStateDomainChangeHistoryCompressionChunk(&chunk, p.chunkSize)
+		default:
+			return
+		}
+	}
 }
 
 // compressedBlockStreamWriter preserves only the first logical chunk for
