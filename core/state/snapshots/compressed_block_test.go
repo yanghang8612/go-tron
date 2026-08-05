@@ -174,6 +174,58 @@ func TestCompressedBlockSequentialReaderReusesDecodedBlock(t *testing.T) {
 	}
 }
 
+func TestCompressedBlockRecordFrameBorrowsContainedAndCopiesSplitPayload(t *testing.T) {
+	const chunkSize = 64
+	frame := func(payload []byte) []byte {
+		out := make([]byte, 4+len(payload))
+		binary.BigEndian.PutUint32(out[:4], uint32(len(payload)))
+		copy(out[4:], payload)
+		return out
+	}
+	contained := bytes.Repeat([]byte{0x11}, 52) // frame ends at logical offset 56
+	split := bytes.Repeat([]byte{0x22}, 20)     // frame [56,80) crosses offset 64
+	tail := bytes.Repeat([]byte{0x33}, 12)
+	blob := append(frame(contained), frame(split)...)
+	blob = append(blob, frame(tail)...)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "frames.cb")
+	if err := compressBlobToFile(dir, path, blob, chunkSize); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openCompressedBlockReaderWithCacheLimit(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	payload, next, borrowed, err := reader.ReadRecordFrameAt(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !borrowed || next != 56 || !bytes.Equal(payload, contained) {
+		t.Fatalf("contained frame = borrowed %t next %d len %d", borrowed, next, len(payload))
+	}
+	scratch := make([]byte, 0, 32)
+	scratchStart := &scratch[:cap(scratch)][0]
+	payload, next, borrowed, err = reader.ReadRecordFrameAt(next, scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if borrowed || next != 80 || !bytes.Equal(payload, split) {
+		t.Fatalf("split frame = borrowed %t next %d len %d", borrowed, next, len(payload))
+	}
+	if &payload[0] != scratchStart {
+		t.Fatal("split frame did not reuse caller scratch")
+	}
+	payload, next, borrowed, err = reader.ReadRecordFrameAt(next, scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !borrowed || next != uint64(len(blob)) || !bytes.Equal(payload, tail) {
+		t.Fatalf("tail frame = borrowed %t next %d len %d", borrowed, next, len(payload))
+	}
+}
+
 func TestStateDomainChangeHistoryCompressionChunkPool(t *testing.T) {
 	chunk := acquireStateDomainChangeHistoryCompressionChunk(historyCompressChunkSize)
 	chunk = append(chunk, bytes.Repeat([]byte{0x5a}, historyCompressChunkSize)...)

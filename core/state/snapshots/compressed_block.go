@@ -804,6 +804,10 @@ func (r *compressedBlockReader) ReadAt(p []byte, off int64) (int, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.readAtLocked(p, uoff)
+}
+
+func (r *compressedBlockReader) readAtLocked(p []byte, uoff uint64) (int, error) {
 	n := 0
 	for n < len(p) {
 		cur := uoff + uint64(n)
@@ -825,6 +829,62 @@ func (r *compressedBlockReader) ReadAt(p []byte, off int64) (int, error) {
 		n += copy(p[n:], blk[intra:])
 	}
 	return n, nil
+}
+
+// ReadRecordFrameAt reads one uint32-length-prefixed logical record. Frames
+// contained by one decoded block borrow that cache entry directly, matching an
+// Erigon Getter.Next-style sequential view. A frame crossing block boundaries
+// is copied into scratch, which is returned for reuse by the next call.
+//
+// A borrowed payload is valid only until the next reader operation. Callers
+// must consume it synchronously and must not modify it.
+func (r *compressedBlockReader) ReadRecordFrameAt(offset uint64, scratch []byte) (payload []byte, next uint64, borrowed bool, err error) {
+	if r == nil {
+		return scratch, 0, false, errors.New("snapshots: nil compressed-block record reader")
+	}
+	if offset > r.uncSize || r.uncSize-offset < 4 {
+		return scratch, 0, false, io.ErrUnexpectedEOF
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	i := r.findBlock(offset)
+	if i < 0 {
+		return scratch, 0, false, fmt.Errorf("snapshots: no compressed block for record offset %d", offset)
+	}
+	blk, err := r.blockBytes(i)
+	if err != nil {
+		return scratch, 0, false, err
+	}
+	intra := offset - r.table[i].uncompressedStart
+	var prefix [4]byte
+	if intra <= uint64(len(blk)) && uint64(len(blk))-intra >= uint64(len(prefix)) {
+		copy(prefix[:], blk[intra:intra+uint64(len(prefix))])
+	} else if _, err := r.readAtLocked(prefix[:], offset); err != nil {
+		return scratch, 0, false, err
+	}
+	length := uint64(binary.BigEndian.Uint32(prefix[:]))
+	frameSize, overflow := checkedAdd(4, length)
+	if overflow || frameSize > r.uncSize-offset {
+		return scratch, 0, false, io.ErrUnexpectedEOF
+	}
+	next = offset + frameSize
+	if intra <= uint64(len(blk)) && frameSize <= uint64(len(blk))-intra {
+		start := intra + 4
+		return blk[start : start+length], next, true, nil
+	}
+	if length > compressedBlockMaxAlloc() {
+		return scratch, 0, false, fmt.Errorf("snapshots: compressed-block record length %d exceeds allocation limit", length)
+	}
+	if cap(scratch) < int(length) {
+		scratch = make([]byte, length)
+	} else {
+		scratch = scratch[:length]
+	}
+	if _, err := r.readAtLocked(scratch, offset+4); err != nil {
+		return scratch, 0, false, err
+	}
+	return scratch, next, false, nil
 }
 
 // UncompressedSize returns the total uncompressed logical size, i.e. the value a

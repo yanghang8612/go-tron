@@ -13,7 +13,7 @@ import (
 func TestStateDomainHistoryRecordReadersUseCompressedOpeners(t *testing.T) {
 	expected := map[string][]string{
 		"checkStateDomainChangeBinarySegment":                        {"openHistorySegmentForRead"},
-		"copyStateDomainChangeBinarySegmentPayload":                  {"openStateDomainChangeBinarySegmentReader"},
+		"copyStateDomainChangeBinarySegmentPayload":                  {"openStateDomainChangeBinarySegmentSequentialReader"},
 		"iterateStateDomainChangeBinarySegmentByAccessorFile":        {"openHistorySegmentForRead", "openStateDomainChangeBinaryAccessorReader"},
 		"iterateStateDomainChangeBinarySegmentByAccessorPrefixFile":  {"openHistorySegmentForRead", "openStateDomainChangeBinaryAccessorReader"},
 		"iterateStateDomainChangeBinarySegmentTxRangeByIndexFile":    {"openHistorySegmentForRead"},
@@ -81,10 +81,11 @@ func callsStateDomainRecordReader(body *ast.BlockStmt) bool {
 
 func compressedHistoryOpeners(body *ast.BlockStmt) []string {
 	watched := map[string]struct{}{
-		"openHistorySegmentForRead":                 {},
-		"openHistorySegmentForSequentialRead":       {},
-		"openStateDomainChangeBinaryAccessorReader": {},
-		"openStateDomainChangeBinarySegmentReader":  {},
+		"openHistorySegmentForRead":                          {},
+		"openHistorySegmentForSequentialRead":                {},
+		"openStateDomainChangeBinaryAccessorReader":          {},
+		"openStateDomainChangeBinarySegmentReader":           {},
+		"openStateDomainChangeBinarySegmentSequentialReader": {},
 	}
 	seen := make(map[string]struct{})
 	ast.Inspect(body, func(node ast.Node) bool {

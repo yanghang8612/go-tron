@@ -1131,7 +1131,7 @@ func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChang
 	if source.segmentSize < source.recordOffset {
 		return fmt.Errorf("snapshots: state-domain-change binary segment %q size %d below record offset %d", source.history.Path, source.segmentSize, source.recordOffset)
 	}
-	reader, header, logicalSize, err := openStateDomainChangeBinarySegmentReader(dir, source.history)
+	reader, header, logicalSize, err := openStateDomainChangeBinarySegmentSequentialReader(dir, source.history)
 	if err != nil {
 		return err
 	}
@@ -1149,6 +1149,36 @@ func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChang
 	if recordOffset != source.recordOffset {
 		return fmt.Errorf("snapshots: state-domain-change binary segment %q record offset %d, want %d", source.history.Path, recordOffset, source.recordOffset)
 	}
+	var (
+		compressedRecords *compressedBlockReader
+		rangeReader       historySegmentReader
+		rangeCursor       *stateDomainChangeTxRangeCursor
+	)
+	if header.version == stateDomainChangeBinaryVersionV5 {
+		if contextual, ok := reader.(*stateDomainChangeHistoryReader); ok {
+			compressedRecords, _ = contextual.historySegmentReader.(*compressedBlockReader)
+		}
+		if compressedRecords != nil {
+			var rangeHeader stateDomainChangeBinaryHeader
+			var rangeSize uint64
+			rangeReader, rangeHeader, rangeSize, err = openStateDomainChangeBinarySegmentSequentialReader(dir, source.history)
+			if err != nil {
+				return err
+			}
+			defer rangeReader.Close()
+			if rangeHeader != header || rangeSize != logicalSize {
+				return fmt.Errorf("snapshots: state-domain-change binary segment %q changed while opening compaction range reader", source.history.Path)
+			}
+			rangeSource := io.ReaderAt(rangeReader)
+			if contextual, ok := rangeReader.(*stateDomainChangeHistoryReader); ok {
+				rangeSource = contextual.historySegmentReader
+			}
+			rangeCursor, err = newStateDomainChangeTxRangeCursor(rangeSource, rangeSize, source.history, rangeHeader)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	// Stream-decode every source version and emit v5 frames plus txNum index
 	// entries. This keeps
 	// compaction O(one record) in memory while ensuring legacy v1/v2 segments do
@@ -1157,12 +1187,34 @@ func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChang
 	offset := recordOffset
 	var v5Payloads [2][]byte
 	var v5Changes [2]rawdb.StateDomainChange
+	var compressedV5Scratch []byte
+	var compressedV5Change rawdb.StateDomainChange
 	for recordIndex := uint64(0); recordIndex < header.count; recordIndex++ {
 		var (
 			change *rawdb.StateDomainChange
 			next   uint64
 		)
-		if header.version == stateDomainChangeBinaryVersionV5 {
+		borrowedV5 := false
+		if compressedRecords != nil {
+			var payload []byte
+			var borrowed bool
+			payload, next, borrowed, err = compressedRecords.ReadRecordFrameAt(offset, compressedV5Scratch)
+			if err == nil {
+				if !borrowed {
+					compressedV5Scratch = payload
+				}
+				err = decodeStateDomainChangeRecordV5Into(&compressedV5Change, payload)
+			}
+			if err == nil {
+				var row *rawdb.StateTxRange
+				row, err = rangeCursor.txRangeForTxNum(compressedV5Change.TxNum)
+				if err == nil {
+					err = hydrateStateDomainChangeBinaryRecordV5FromRange(row, recordIndex, &compressedV5Change)
+				}
+			}
+			change = &compressedV5Change
+			borrowedV5 = true
+		} else if header.version == stateDomainChangeBinaryVersionV5 {
 			// The writer retains only the immediately previous row for its order
 			// check. Ping-pong two payload/change slots so Key and Prev remain
 			// immutable across that comparison without allocating per record.
@@ -1175,8 +1227,14 @@ func copyStateDomainChangeBinarySegmentPayload(dir string, dst *stateDomainChang
 		if err != nil {
 			return err
 		}
-		if err := dst.WriteChange(change); err != nil {
-			return err
+		if borrowedV5 {
+			if err := dst.WriteBorrowedV5Change(change); err != nil {
+				return err
+			}
+		} else {
+			if err := dst.WriteChange(change); err != nil {
+				return err
+			}
 		}
 		offset = next
 	}
@@ -2526,16 +2584,33 @@ func findStateDomainChangeBinaryTxRangeForTxNum(r io.ReaderAt, fileSize uint64, 
 }
 
 func readStateDomainChangeBinaryTxRangeAt(r io.ReaderAt, ref SegmentRef, index uint64) (*rawdb.StateTxRange, error) {
-	offset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + index*stateDomainChangeBinaryTxRangeSize
-	var raw [stateDomainChangeBinaryTxRangeSize]byte
-	if _, err := r.ReadAt(raw[:], int64(offset)); err != nil {
-		return nil, err
-	}
-	row := decodeStateDomainChangeBinaryTxRange(raw[:])
-	if err := validateStateDomainChangeBinaryTxRange(ref, row, index, nil); err != nil {
+	row := new(rawdb.StateTxRange)
+	if err := readStateDomainChangeBinaryTxRangeAtInto(r, ref, index, row); err != nil {
 		return nil, err
 	}
 	return row, nil
+}
+
+func readStateDomainChangeBinaryTxRangeAtInto(r io.ReaderAt, ref SegmentRef, index uint64, row *rawdb.StateTxRange) error {
+	if row == nil {
+		return errors.New("snapshots: nil state-domain-change tx range target")
+	}
+	offset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + index*stateDomainChangeBinaryTxRangeSize
+	var raw [stateDomainChangeBinaryTxRangeSize]byte
+	var err error
+	if compressed, ok := r.(*compressedBlockReader); ok {
+		_, err = compressed.ReadAt(raw[:], int64(offset))
+	} else {
+		_, err = r.ReadAt(raw[:], int64(offset))
+	}
+	if err != nil {
+		return err
+	}
+	decodeStateDomainChangeBinaryTxRangeInto(row, raw[:])
+	if err := validateStateDomainChangeBinaryTxRange(ref, row, index, nil); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateStateDomainChangeBinaryTxRangeTableAt(r io.ReaderAt, fileSize uint64, ref SegmentRef, header stateDomainChangeBinaryHeader) (uint64, error) {
@@ -2598,13 +2673,16 @@ func iterateStateDomainChangeBinaryTxRanges(dir string, ref SegmentRef, fn func(
 }
 
 func decodeStateDomainChangeBinaryTxRange(raw []byte) *rawdb.StateTxRange {
-	row := &rawdb.StateTxRange{
-		BlockNum:   binary.BigEndian.Uint64(raw[0:8]),
-		BeginTxNum: binary.BigEndian.Uint64(raw[8+common.HashLength : 16+common.HashLength]),
-		EndTxNum:   binary.BigEndian.Uint64(raw[16+common.HashLength : 24+common.HashLength]),
-	}
-	copy(row.BlockHash[:], raw[8:8+common.HashLength])
+	row := new(rawdb.StateTxRange)
+	decodeStateDomainChangeBinaryTxRangeInto(row, raw)
 	return row
+}
+
+func decodeStateDomainChangeBinaryTxRangeInto(row *rawdb.StateTxRange, raw []byte) {
+	row.BlockNum = binary.BigEndian.Uint64(raw[0:8])
+	row.BeginTxNum = binary.BigEndian.Uint64(raw[8+common.HashLength : 16+common.HashLength])
+	row.EndTxNum = binary.BigEndian.Uint64(raw[16+common.HashLength : 24+common.HashLength])
+	copy(row.BlockHash[:], raw[8:8+common.HashLength])
 }
 
 func validateStateDomainChangeBinaryTxRange(ref SegmentRef, row *rawdb.StateTxRange, index uint64, previous []*rawdb.StateTxRange) error {
@@ -2718,6 +2796,77 @@ type stateDomainChangeHistoryReader struct {
 	lastIndex   uint64
 	rangeCount  uint64
 	rangesReady bool
+}
+
+// stateDomainChangeTxRangeCursor is the compaction-only, single-threaded
+// counterpart of stateDomainChangeHistoryReader.txRangeForTxNum. It reuses two
+// fixed rows and reads the independent range stream directly, avoiding a mutex
+// and one heap object for every block crossed by a sequential record scan.
+type stateDomainChangeTxRangeCursor struct {
+	reader  io.ReaderAt
+	ref     SegmentRef
+	count   uint64
+	index   uint64
+	current rawdb.StateTxRange
+	scratch rawdb.StateTxRange
+	have    bool
+}
+
+func newStateDomainChangeTxRangeCursor(reader io.ReaderAt, logicalSize uint64, ref SegmentRef, header stateDomainChangeBinaryHeader) (*stateDomainChangeTxRangeCursor, error) {
+	count, _, err := stateDomainChangeBinaryTxRangeTableBoundsAt(reader, logicalSize, ref, header)
+	if err != nil {
+		return nil, err
+	}
+	return &stateDomainChangeTxRangeCursor{reader: reader, ref: ref, count: count}, nil
+}
+
+func (c *stateDomainChangeTxRangeCursor) txRangeForTxNum(txNum uint64) (*rawdb.StateTxRange, error) {
+	if c == nil || c.reader == nil {
+		return nil, errors.New("snapshots: nil state-domain-change tx range cursor")
+	}
+	if c.have && txNum >= c.current.BeginTxNum && txNum <= c.current.EndTxNum {
+		return &c.current, nil
+	}
+	low := uint64(0)
+	if c.have && txNum > c.current.EndTxNum {
+		low = c.index + 1
+		if low < c.count {
+			if err := readStateDomainChangeBinaryTxRangeAtInto(c.reader, c.ref, low, &c.scratch); err != nil {
+				return nil, err
+			}
+			if txNum >= c.scratch.BeginTxNum && txNum <= c.scratch.EndTxNum {
+				c.current = c.scratch
+				c.index = low
+				c.have = true
+				return &c.current, nil
+			}
+		}
+	}
+	high := c.count
+	for low < high {
+		mid := low + (high-low)/2
+		if err := readStateDomainChangeBinaryTxRangeAtInto(c.reader, c.ref, mid, &c.scratch); err != nil {
+			return nil, err
+		}
+		if c.scratch.EndTxNum < txNum {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	if low >= c.count {
+		return nil, fmt.Errorf("snapshots: state-domain-change tx %d is not covered by StateTxRange", txNum)
+	}
+	if err := readStateDomainChangeBinaryTxRangeAtInto(c.reader, c.ref, low, &c.scratch); err != nil {
+		return nil, err
+	}
+	if txNum < c.scratch.BeginTxNum || txNum > c.scratch.EndTxNum {
+		return nil, fmt.Errorf("snapshots: state-domain-change tx %d is not covered by StateTxRange", txNum)
+	}
+	c.current = c.scratch
+	c.index = low
+	c.have = true
+	return &c.current, nil
 }
 
 func (r *stateDomainChangeHistoryReader) txRangeForTxNum(txNum uint64) (*rawdb.StateTxRange, error) {
@@ -2848,12 +2997,22 @@ func openHistorySegmentForReadWithCacheLimit(dir string, ref SegmentRef, compres
 	}, logicalSize, header, nil
 }
 
-// openStateDomainChangeBinarySegmentReader is the compaction-facing opener; it
-// now delegates to the magic-dispatching openHistorySegmentForRead so compaction
-// reads compressed segment sources transparently, then adds the record-table
-// sanity checks over the logical size.
 func openStateDomainChangeBinarySegmentReader(dir string, ref SegmentRef) (historySegmentReader, stateDomainChangeBinaryHeader, uint64, error) {
-	reader, logicalSize, header, err := openHistorySegmentForRead(dir, ref)
+	return openStateDomainChangeBinarySegmentReaderWithCacheLimit(dir, ref, cbCacheBlocks)
+}
+
+// openStateDomainChangeBinarySegmentSequentialReader gives compaction streams
+// one recycled decoded block. Record frames and StateTxRange rows use separate
+// readers, so neither sequential stream can evict the other's hot block.
+func openStateDomainChangeBinarySegmentSequentialReader(dir string, ref SegmentRef) (historySegmentReader, stateDomainChangeBinaryHeader, uint64, error) {
+	return openStateDomainChangeBinarySegmentReaderWithCacheLimit(dir, ref, 1)
+}
+
+// openStateDomainChangeBinarySegmentReaderWithCacheLimit delegates to the
+// magic-dispatching history opener, then applies record-table sanity checks to
+// the uncompressed logical size.
+func openStateDomainChangeBinarySegmentReaderWithCacheLimit(dir string, ref SegmentRef, compressedCacheLimit int) (historySegmentReader, stateDomainChangeBinaryHeader, uint64, error) {
+	reader, logicalSize, header, err := openHistorySegmentForReadWithCacheLimit(dir, ref, compressedCacheLimit)
 	if err != nil {
 		return nil, stateDomainChangeBinaryHeader{}, 0, err
 	}
@@ -3299,8 +3458,19 @@ func hydrateStateDomainChangeBinaryRecordV5(r io.ReaderAt, fileSize, recordIndex
 	if err != nil {
 		return err
 	}
+	return hydrateStateDomainChangeBinaryRecordV5FromRange(row, recordIndex, change)
+}
+
+func hydrateStateDomainChangeBinaryRecordV5FromRange(row *rawdb.StateTxRange, recordIndex uint64, change *rawdb.StateDomainChange) error {
+	if change == nil {
+		return errors.New("snapshots: nil v5 state-domain-change record")
+	}
+	if row == nil {
+		return errors.New("snapshots: nil v5 state-domain-change tx range")
+	}
 	change.BlockNum = row.BlockNum
 	change.BlockHash = row.BlockHash
+	var err error
 	change.Seq, err = stateDomainChangeBinaryV5Sequence(row, change.TxNum, recordIndex)
 	return err
 }

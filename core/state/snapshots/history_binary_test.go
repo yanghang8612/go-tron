@@ -3,6 +3,7 @@ package snapshots
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -125,6 +126,70 @@ func TestStateDomainChangeBinaryAccessorV4GroupCopyPatchesSplitCount(t *testing.
 		if got := binary.BigEndian.Uint64(assembled.Bytes()[countOffset : countOffset+8]); got != want {
 			t.Fatalf("group %d count = %d, want %d", i, got, want)
 		}
+	}
+}
+
+func TestStateDomainChangeHistoryRecordWriterRejectsBorrowedV5OrderRegression(t *testing.T) {
+	index, err := os.CreateTemp(t.TempDir(), "history-index-*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer index.Close()
+	var segment bytes.Buffer
+	writer := newStateDomainChangeHistoryRecordWriter(&segment, index, nil, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 1,
+		ToTxNum:   1,
+	}, 2, stateDomainChangeBinaryHeaderSize)
+	defer writer.Release()
+	first := binaryStateDomainChange(1, 1, 2, "b")
+	second := binaryStateDomainChange(1, 1, 1, "a")
+	if err := writer.WriteBorrowedV5Change(first); err != nil {
+		t.Fatalf("write first borrowed v5 change: %v", err)
+	}
+	if err := writer.WriteBorrowedV5Change(second); !errors.Is(err, errStateDomainChangeHistoryRecordsNotOrdered) {
+		t.Fatalf("write regressing borrowed v5 change error = %v", err)
+	}
+}
+
+func TestStateDomainChangeTxRangeCursorSeeksThenAdvances(t *testing.T) {
+	rows := []*rawdb.StateTxRange{
+		{BlockNum: 1, BlockHash: common.Hash{1}, BeginTxNum: 10, EndTxNum: 19},
+		{BlockNum: 2, BlockHash: common.Hash{2}, BeginTxNum: 20, EndTxNum: 29},
+		{BlockNum: 3, BlockHash: common.Hash{3}, BeginTxNum: 30, EndTxNum: 39},
+	}
+	blob := make([]byte, stateDomainChangeBinaryHeaderSize+8+len(rows)*stateDomainChangeBinaryTxRangeSize)
+	binary.BigEndian.PutUint64(blob[stateDomainChangeBinaryHeaderSize:], uint64(len(rows)))
+	offset := stateDomainChangeBinaryHeaderSize + 8
+	for i, row := range rows {
+		var raw [stateDomainChangeBinaryTxRangeSize]byte
+		if err := putStateDomainChangeBinaryTxRangeEntry(&raw, row); err != nil {
+			t.Fatal(err)
+		}
+		copy(blob[offset+i*stateDomainChangeBinaryTxRangeSize:], raw[:])
+	}
+	ref := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 10, ToTxNum: 39, Path: "cursor.seg"}
+	cursor, err := newStateDomainChangeTxRangeCursor(bytes.NewReader(blob), uint64(len(blob)), ref, stateDomainChangeBinaryHeader{
+		version: stateDomainChangeBinaryVersionV5, fromTxNum: 10, toTxNum: 39,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		txNum uint64
+		block uint64
+	}{{25, 2}, {26, 2}, {35, 3}} {
+		row, err := cursor.txRangeForTxNum(tc.txNum)
+		if err != nil {
+			t.Fatalf("tx %d: %v", tc.txNum, err)
+		}
+		if row.BlockNum != tc.block {
+			t.Fatalf("tx %d block = %d, want %d", tc.txNum, row.BlockNum, tc.block)
+		}
+	}
+	if _, err := cursor.txRangeForTxNum(5); err == nil {
+		t.Fatal("cursor accepted tx before its first range")
 	}
 }
 

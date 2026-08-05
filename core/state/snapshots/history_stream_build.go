@@ -486,19 +486,22 @@ func stateDomainChangeHistoryRecordETLSortKey(change *rawdb.StateDomainChange, o
 }
 
 type stateDomainChangeHistoryRecordWriter struct {
-	segment       *bufio.Writer
-	index         *bufio.Writer
-	accessors     *stateDomainChangeBinaryAccessorV4Collectors
-	ref           SegmentRef
-	expected      uint64
-	count         uint64
-	segmentOff    uint64
-	indexWritten  uint64
-	currentIndex  stateDomainChangeBinaryTxOffset
-	indexScratch  [stateDomainChangeBinaryIndexEntrySize]byte
-	haveIndex     bool
-	previous      *rawdb.StateDomainChange
-	recordScratch []byte
+	segment        *bufio.Writer
+	index          *bufio.Writer
+	accessors      *stateDomainChangeBinaryAccessorV4Collectors
+	ref            SegmentRef
+	expected       uint64
+	count          uint64
+	segmentOff     uint64
+	indexWritten   uint64
+	currentIndex   stateDomainChangeBinaryTxOffset
+	indexScratch   [stateDomainChangeBinaryIndexEntrySize]byte
+	haveIndex      bool
+	previous       *rawdb.StateDomainChange
+	previousV5Tx   uint64
+	previousV5Seq  uint64
+	havePreviousV5 bool
+	recordScratch  []byte
 }
 
 const stateDomainChangeHistoryWriteBufferSize = 256 << 10
@@ -541,6 +544,33 @@ func (w *stateDomainChangeHistoryRecordWriter) WriteBorrowedChange(change *rawdb
 	return w.writeChange(change, true)
 }
 
+// WriteBorrowedV5Change consumes a decoded v5 row whose variable-width fields
+// borrow a sequential decompressor cache. V5 derives a unique Seq for every
+// record, so the leading (TxNum, Seq) pair is a complete adjacent-order check;
+// retaining Key/Prev views past this call is unnecessary.
+func (w *stateDomainChangeHistoryRecordWriter) WriteBorrowedV5Change(change *rawdb.StateDomainChange) error {
+	if w == nil {
+		return errors.New("snapshots: nil borrowed v5 state-domain-change history writer")
+	}
+	if change == nil {
+		return errors.New("snapshots: nil borrowed v5 state-domain-change history record")
+	}
+	if w.previous != nil {
+		if compareStateDomainChangeForBinary(w.previous, change) > 0 {
+			return errStateDomainChangeHistoryRecordsNotOrdered
+		}
+	} else if w.havePreviousV5 && (change.TxNum < w.previousV5Tx || change.TxNum == w.previousV5Tx && change.Seq <= w.previousV5Seq) {
+		return errStateDomainChangeHistoryRecordsNotOrdered
+	}
+	if err := w.writeChange(change, true); err != nil {
+		return err
+	}
+	w.previousV5Tx = change.TxNum
+	w.previousV5Seq = change.Seq
+	w.havePreviousV5 = true
+	return nil
+}
+
 func (w *stateDomainChangeHistoryRecordWriter) writeChange(change *rawdb.StateDomainChange, trustedOrder bool) error {
 	if w == nil || w.segment == nil || w.index == nil {
 		return errors.New("snapshots: nil state-domain-change history record writer")
@@ -554,8 +584,13 @@ func (w *stateDomainChangeHistoryRecordWriter) writeChange(change *rawdb.StateDo
 	if change.TxNum < w.ref.FromTxNum || change.TxNum > w.ref.ToTxNum {
 		return fmt.Errorf("snapshots: state-domain-change tx %d outside segment range [%d,%d]", change.TxNum, w.ref.FromTxNum, w.ref.ToTxNum)
 	}
-	if !trustedOrder && w.previous != nil && compareStateDomainChangeForBinary(w.previous, change) > 0 {
-		return errStateDomainChangeHistoryRecordsNotOrdered
+	if !trustedOrder {
+		if w.previous != nil && compareStateDomainChangeForBinary(w.previous, change) > 0 {
+			return errStateDomainChangeHistoryRecordsNotOrdered
+		}
+		if w.previous == nil && w.havePreviousV5 && (change.TxNum < w.previousV5Tx || change.TxNum == w.previousV5Tx && change.Seq <= w.previousV5Seq) {
+			return errStateDomainChangeHistoryRecordsNotOrdered
+		}
 	}
 	if w.accessors != nil {
 		if err := w.accessors.Collect(change, w.segmentOff, w.count); err != nil {
@@ -596,8 +631,10 @@ func (w *stateDomainChangeHistoryRecordWriter) writeChange(change *rawdb.StateDo
 	// validated order and invalidates the row as soon as this call returns.
 	if trustedOrder {
 		w.previous = nil
+		w.havePreviousV5 = false
 	} else {
 		w.previous = change
+		w.havePreviousV5 = false
 	}
 	return nil
 }
