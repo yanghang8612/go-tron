@@ -44,6 +44,51 @@ func TestStateDomainChangeBinaryRecordRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeBinaryAccessorV4GroupWriterBackfillsCounts(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "groups-*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	offsets := make([]uint64, 0, 2)
+	writer := stateDomainChangeBinaryAccessorV4GroupETLWriter{
+		payloadFile: file,
+		payload:     acquireStateDomainChangeHistoryWriter(file),
+		offsets:     &offsets,
+	}
+	put := func(group byte, recordOffset uint64) {
+		t.Helper()
+		value := make([]byte, stateDomainChangeBinaryAccessorV3GroupKeySize+stateDomainChangeBinaryAccessorV4GroupEntrySize)
+		value[stateDomainChangeBinaryAccessorV3GroupKeySize-1] = group
+		binary.BigEndian.PutUint64(value[stateDomainChangeBinaryAccessorV3GroupKeySize+4:], recordOffset)
+		if err := writer.Put(nil, value); err != nil {
+			t.Fatalf("put group %d: %v", group, err)
+		}
+	}
+	put(1, stateDomainChangeBinaryHeaderSize)
+	put(1, stateDomainChangeBinaryHeaderSize+1)
+	put(2, stateDomainChangeBinaryHeaderSize+2)
+	put(2, stateDomainChangeBinaryHeaderSize+3)
+	put(2, stateDomainChangeBinaryHeaderSize+4)
+	if err := writer.Finish(); err != nil {
+		t.Fatalf("finish group writer: %v", err)
+	}
+	data, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOffsets := []uint64{0, stateDomainChangeBinaryAccessorV3GroupKeySize + 8 + 2*stateDomainChangeBinaryAccessorV4GroupEntrySize}
+	if !reflect.DeepEqual(offsets, wantOffsets) {
+		t.Fatalf("group offsets = %v, want %v", offsets, wantOffsets)
+	}
+	for i, want := range []uint64{2, 3} {
+		countOffset := offsets[i] + stateDomainChangeBinaryAccessorV3GroupKeySize
+		if got := binary.BigEndian.Uint64(data[countOffset : countOffset+8]); got != want {
+			t.Fatalf("group %d count = %d, want %d", i, got, want)
+		}
+	}
+}
+
 func TestStateDomainChangeBinaryV5OmitsDuplicatedContextAndNext(t *testing.T) {
 	changes := []*rawdb.StateDomainChange{
 		binaryStateDomainChange(7, 40, 1, "slot/a"),

@@ -726,7 +726,6 @@ type stateDomainChangeBinaryAccessorV4GroupETLWriter struct {
 	haveGroup     bool
 	currentKey    [stateDomainChangeBinaryAccessorV3GroupKeySize]byte
 	currentCount  uint64
-	countOffset   int64
 }
 
 func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Put(_ []byte, value []byte) error {
@@ -749,7 +748,6 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Put(_ []byte, value []
 		if _, err := w.payload.Write(key); err != nil {
 			return err
 		}
-		w.countOffset = int64(w.payloadOffset + stateDomainChangeBinaryAccessorV3GroupKeySize)
 		if err := writeZeroes(w.payload, 8); err != nil {
 			return err
 		}
@@ -775,18 +773,37 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) finishGroup() error {
 	if w.currentCount == 0 {
 		return errors.New("snapshots: state-domain-change accessor v4 group has no records")
 	}
-	var raw [8]byte
-	binary.BigEndian.PutUint64(raw[:], w.currentCount)
-	// The count lives behind buffered payload bytes. Flush at group boundaries
-	// before the one fixed-width backpatch; the number of groups is far smaller
-	// than the number of records, so record emission remains fully buffered.
-	if err := w.payload.Flush(); err != nil {
-		return err
-	}
-	if _, err := w.payloadFile.WriteAt(raw[:], w.countOffset); err != nil {
-		return err
-	}
 	w.haveGroup = false
+	return nil
+}
+
+func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) patchGroupCounts() error {
+	if w == nil || w.payloadFile == nil || w.offsets == nil {
+		return errors.New("snapshots: nil state-domain-change accessor v4 group count writer")
+	}
+	var raw [8]byte
+	for i, start := range *w.offsets {
+		next := w.payloadOffset
+		if i+1 < len(*w.offsets) {
+			next = (*w.offsets)[i+1]
+		}
+		entriesStart := start + stateDomainChangeBinaryAccessorV3GroupKeySize + 8
+		if entriesStart < start || next < entriesStart {
+			return fmt.Errorf("snapshots: state-domain-change accessor v4 group %d has invalid payload range [%d,%d)", i, start, next)
+		}
+		entriesSize := next - entriesStart
+		if entriesSize == 0 || entriesSize%stateDomainChangeBinaryAccessorV4GroupEntrySize != 0 {
+			return fmt.Errorf("snapshots: state-domain-change accessor v4 group %d payload size %d is invalid", i, entriesSize)
+		}
+		countOffset := start + stateDomainChangeBinaryAccessorV3GroupKeySize
+		if countOffset < start || countOffset > math.MaxInt64 {
+			return fmt.Errorf("snapshots: state-domain-change accessor v4 group %d count offset %d is invalid", i, countOffset)
+		}
+		binary.BigEndian.PutUint64(raw[:], entriesSize/stateDomainChangeBinaryAccessorV4GroupEntrySize)
+		if _, err := w.payloadFile.WriteAt(raw[:], int64(countOffset)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -805,7 +822,10 @@ func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Finish() error {
 	if err := w.payload.Flush(); err != nil {
 		return err
 	}
-	return nil
+	// Group offsets already delimit fixed-width record arrays. Backfill every
+	// count after the one sequential payload flush instead of flushing at every
+	// group boundary; no parallel per-group count buffer is needed.
+	return w.patchGroupCounts()
 }
 
 func (w *stateDomainChangeBinaryAccessorV4GroupETLWriter) Release() {
