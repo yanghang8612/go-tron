@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
@@ -3629,22 +3628,35 @@ func lockMutexContext(ctx context.Context, mu *sync.Mutex) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for {
-		if mu.TryLock() {
-			return nil
-		}
-		timer := time.NewTimer(10 * time.Millisecond)
+	if mu.TryLock() {
+		return nil
+	}
+
+	// A polling TryLock waiter is invisible to sync.Mutex's starvation/fairness
+	// queue. During bulk sync the importer can therefore unlock one completed
+	// block and immediately reacquire for the next block before a 10 ms polling
+	// timer wakes, starving archive RPCs across many otherwise-available handoff
+	// points. Queue a real Lock waiter instead. The unbuffered handoff transfers
+	// ownership to this caller; if the context wins first, cancelled tells the
+	// queued goroutine to release the mutex as soon as it acquires it.
+	acquired := make(chan struct{})
+	cancelled := make(chan struct{})
+	go func() {
+		mu.Lock()
 		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return ctx.Err()
-		case <-timer.C:
+		case acquired <- struct{}{}:
+			// Ownership is transferred to the receiving caller.
+		case <-cancelled:
+			mu.Unlock()
 		}
+	}()
+
+	select {
+	case <-acquired:
+		return nil
+	case <-ctx.Done():
+		close(cancelled)
+		return ctx.Err()
 	}
 }
 

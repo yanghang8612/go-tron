@@ -29,7 +29,6 @@ import (
 func TestLockMutexContextReturnsOnCancellation(t *testing.T) {
 	var mu sync.Mutex
 	mu.Lock()
-	defer mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	started := time.Now()
@@ -39,6 +38,66 @@ func TestLockMutexContextReturnsOnCancellation(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("lock cancellation took %s", elapsed)
+	}
+
+	// The cancelled queued waiter must release the mutex after the current
+	// owner unlocks; it must not leak ownership in its cleanup goroutine.
+	mu.Unlock()
+	locked := make(chan struct{})
+	go func() {
+		mu.Lock()
+		close(locked)
+		mu.Unlock()
+	}()
+	select {
+	case <-locked:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled mutex waiter retained the lock")
+	}
+}
+
+func TestLockMutexContextQueuesForMutexHandoff(t *testing.T) {
+	var mu sync.Mutex
+	mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result := make(chan error, 1)
+	acquired := make(chan struct{})
+	go func() {
+		err := lockMutexContext(ctx, &mu)
+		if err == nil {
+			close(acquired)
+			mu.Unlock()
+		}
+		result <- err
+	}()
+
+	// Keep the mutex contended long enough for lockMutexContext's slow path to
+	// enqueue. Repeated immediate unlock/relock cycles model adjacent sync blocks:
+	// a real waiter receives a fairness handoff instead of polling between them.
+	time.Sleep(20 * time.Millisecond)
+	for i := 0; i < 64; i++ {
+		mu.Unlock()
+		mu.Lock()
+		select {
+		case <-acquired:
+			mu.Unlock()
+			if err := <-result; err != nil {
+				t.Fatalf("queued mutex lock: %v", err)
+			}
+			return
+		default:
+		}
+	}
+	mu.Unlock()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("queued mutex lock: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued mutex waiter was not handed the lock")
 	}
 }
 

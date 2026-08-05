@@ -1862,6 +1862,19 @@ atomic while reducing the largest archive-reader exclusion regions from a
 whole sync batch/ETL pass to one block or the two short stage planning/publish
 sections.
 
+The first per-block-handoff deployment still showed 1.55--6.52 second latency
+across eight concurrent historical calls even though sync continued normally.
+Its goroutine dump exposed a lock-scheduler mismatch rather than another long
+critical section: `lockMutexContext` retried `TryLock` on a 10 ms timer, so its
+RPC waiters never entered `sync.Mutex`'s fairness queue and the importer could
+release one block then immediately reacquire for the next before any timer
+woke. Contended context-aware acquisition now queues a real `Lock` waiter; an
+unbuffered ownership handoff returns the acquired mutex to the request, while a
+request whose context wins first makes the queued waiter release immediately
+after acquisition. The uncontended path retains the allocation-free `TryLock`
+fast path. This makes the per-block unlock an actual waiter handoff rather than
+only a theoretical polling window.
+
 After the initial deployment exposed one-collector-per-fragmented-drain
 behavior, the production path was tightened in two steps: require at least 256
 solidified blocks per ordinary pass, and settle a continuously supplied deep
