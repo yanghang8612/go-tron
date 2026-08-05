@@ -173,6 +173,21 @@ func TestCompressedBlockSequentialReaderReusesDecodedBlock(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeHistoryCompressionChunkPool(t *testing.T) {
+	chunk := acquireStateDomainChangeHistoryCompressionChunk(historyCompressChunkSize)
+	chunk = append(chunk, bytes.Repeat([]byte{0x5a}, historyCompressChunkSize)...)
+	releaseStateDomainChangeHistoryCompressionChunk(&chunk, historyCompressChunkSize)
+	if chunk != nil {
+		t.Fatal("released compression chunk still reachable through caller")
+	}
+
+	chunk = acquireStateDomainChangeHistoryCompressionChunk(historyCompressChunkSize)
+	defer releaseStateDomainChangeHistoryCompressionChunk(&chunk, historyCompressChunkSize)
+	if len(chunk) != 0 || cap(chunk) != historyCompressChunkSize {
+		t.Fatalf("reused compression chunk len/cap = %d/%d, want 0/%d", len(chunk), cap(chunk), historyCompressChunkSize)
+	}
+}
+
 func TestCompressedBlockReaderRejectsOutOfFileBlockBeforeAlloc(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "corrupt.cb")

@@ -41,6 +41,30 @@ const (
 	maxHistoryCompressionWorkers       = 4
 )
 
+type stateDomainChangeHistoryCompressionChunk [historyCompressChunkSize]byte
+
+var stateDomainChangeHistoryCompressionChunkPool = sync.Pool{
+	New: func() any { return new(stateDomainChangeHistoryCompressionChunk) },
+}
+
+func acquireStateDomainChangeHistoryCompressionChunk(chunkSize int) []byte {
+	if chunkSize != historyCompressChunkSize {
+		return make([]byte, 0, chunkSize)
+	}
+	return stateDomainChangeHistoryCompressionChunkPool.Get().(*stateDomainChangeHistoryCompressionChunk)[:0]
+}
+
+func releaseStateDomainChangeHistoryCompressionChunk(chunk *[]byte, chunkSize int) {
+	if chunk == nil || *chunk == nil {
+		return
+	}
+	buffer := *chunk
+	*chunk = nil
+	if chunkSize == historyCompressChunkSize && cap(buffer) == historyCompressChunkSize {
+		stateDomainChangeHistoryCompressionChunkPool.Put((*stateDomainChangeHistoryCompressionChunk)(buffer[:historyCompressChunkSize]))
+	}
+}
+
 // Shared zstd encoder/decoder. klauspost's EncodeAll/DecodeAll are documented
 // safe for concurrent use; the decoder is built with concurrency 0 so DecodeAll
 // stays single-allocation per call and goroutine-safe.
@@ -1000,7 +1024,7 @@ func newCompressedBlockStreamWriter(dir string, chunkSize, workers int) (*compre
 		chunkSize: chunkSize,
 		workers:   workers,
 		body:      body,
-		first:     make([]byte, 0, chunkSize),
+		first:     acquireStateDomainChangeHistoryCompressionChunk(chunkSize),
 	}, nil
 }
 
@@ -1023,7 +1047,7 @@ func (w *compressedBlockStreamWriter) Write(p []byte) (int, error) {
 		}
 	}
 	if w.chunk == nil {
-		w.chunk = make([]byte, 0, w.chunkSize)
+		w.chunk = acquireStateDomainChangeHistoryCompressionChunk(w.chunkSize)
 	}
 	for len(p) != 0 {
 		n := w.chunkSize - len(w.chunk)
@@ -1105,7 +1129,11 @@ func (w *compressedBlockStreamWriter) Finish(path string) error {
 	body := w.body
 	w.body = nil
 	w.closed = true
-	return body.finishWithPrefix(path, w.first)
+	first := w.first
+	w.first = nil
+	releaseStateDomainChangeHistoryCompressionChunk(&w.chunk, w.chunkSize)
+	defer releaseStateDomainChangeHistoryCompressionChunk(&first, w.chunkSize)
+	return body.finishWithPrefix(path, first)
 }
 
 func (w *compressedBlockStreamWriter) Reset() error {
@@ -1120,7 +1148,9 @@ func (w *compressedBlockStreamWriter) Reset() error {
 	}
 	w.body = body
 	w.first = w.first[:0]
-	w.chunk = nil
+	if w.chunk != nil {
+		w.chunk = w.chunk[:0]
+	}
 	w.logical = 0
 	w.bodyStart = false
 	return nil
@@ -1131,6 +1161,8 @@ func (w *compressedBlockStreamWriter) Abort() {
 		return
 	}
 	w.abortBody()
+	releaseStateDomainChangeHistoryCompressionChunk(&w.first, w.chunkSize)
+	releaseStateDomainChangeHistoryCompressionChunk(&w.chunk, w.chunkSize)
 	w.closed = true
 }
 
