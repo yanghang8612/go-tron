@@ -101,6 +101,21 @@ func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	if err := CheckEventLogIndexSegment(dir, indexRef); err != nil {
 		t.Fatalf("CheckEventLogIndexSegment: %v", err)
 	}
+	rebuiltIndexRef, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref}, "log/rebuilt-event-log-index-1-2.idx")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	fastIndex, err := os.ReadFile(filepath.Join(dir, indexRef.Path))
+	if err != nil {
+		t.Fatalf("read fresh event-log index: %v", err)
+	}
+	rebuiltIndex, err := os.ReadFile(filepath.Join(dir, rebuiltIndexRef.Path))
+	if err != nil {
+		t.Fatalf("read rebuilt event-log index: %v", err)
+	}
+	if !bytes.Equal(fastIndex, rebuiltIndex) || indexRef.Checksum != rebuiltIndexRef.Checksum {
+		t.Fatalf("fresh event-log index differs from verified rebuild: bytes_equal=%v checksum=%q rebuilt_checksum=%q", bytes.Equal(fastIndex, rebuiltIndex), indexRef.Checksum, rebuiltIndexRef.Checksum)
+	}
 	indexStats, err := InspectEventLogIndexes(dir)
 	if err != nil {
 		t.Fatalf("InspectEventLogIndexes: %v", err)
@@ -501,6 +516,55 @@ func TestBuildEventLogSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	if len(rows) != 2 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x18}) || !bytes.Equal(rows[1].Log.GetData(), []byte{0x19}) {
 		t.Fatalf("ETL event-log rows = %+v, want two ordered rows", rows)
 	}
+}
+
+func BenchmarkFreshEventLogIndexVsVerifiedRebuild(b *testing.B) {
+	const (
+		blocks       = 5_000
+		logsPerBlock = 10
+	)
+	rows := make([]EventLog, 0, blocks*logsPerBlock)
+	for blockNum := uint64(1); blockNum <= blocks; blockNum++ {
+		for logIndex := uint64(0); logIndex < logsPerBlock; logIndex++ {
+			ordinal := (blockNum-1)*logsPerBlock + logIndex
+			var address common.Address
+			binary.BigEndian.PutUint64(address[len(address)-8:], ordinal%4096)
+			var topic common.Hash
+			binary.BigEndian.PutUint64(topic[len(topic)-8:], ordinal%8192)
+			rows = append(rows, EventLog{
+				BlockNum: blockNum,
+				TxIndex:  logIndex,
+				LogIndex: logIndex,
+				Address:  address,
+				Log: &corepb.TransactionInfo_Log{
+					Address: address[:],
+					Topics:  [][]byte{topic[:]},
+					Data:    []byte{byte(ordinal)},
+				},
+			})
+		}
+	}
+	dir := b.TempDir()
+	build, err := buildEventLogSegmentFromReaderWithOptions(eventLogRowsReader{rows: rows}, dir, EventLogSegmentPath(1, blocks), 1, blocks, RestoreETLOptions{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("fresh-postings", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := writeFreshEventLogIndexSegment(dir, build, "log/benchmark-fresh.idx"); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("verified-rebuild", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{build.Ref}, "log/benchmark-rebuilt.idx"); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func TestEventLogManagerIteratesContinuousSegmentsWithFilter(t *testing.T) {

@@ -120,6 +120,16 @@ type eventLogIndexEntry struct {
 type EventLogFilter = rawdb.EventLogFilter
 type EventLog = rawdb.EventLog
 
+// eventLogSegmentBuild retains the exact lookup postings already assembled by
+// the trusted segment writer. A same-transaction segment-level sidecar can
+// collapse those row postings to the new segment start without reopening,
+// decoding, validating, and sorting the immutable file a second time.
+type eventLogSegmentBuild struct {
+	Ref             SegmentRef
+	addressPostings map[string][]uint64
+	topicPostings   map[string][]uint64
+}
+
 func EventLogSegmentPath(fromBlock, toBlock uint64) string {
 	return fmt.Sprintf("log/event-log-%d-%d.seg", fromBlock, toBlock)
 }
@@ -133,14 +143,19 @@ func BuildEventLogSegmentFromChain(chain *rawdb.ChainDB, dir, relPath string, fr
 }
 
 func BuildEventLogSegmentFromChainWithOptions(chain *rawdb.ChainDB, dir, relPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) (SegmentRef, error) {
+	build, err := buildEventLogSegmentFromChainWithOptions(chain, dir, relPath, fromBlock, toBlock, opts)
+	return build.Ref, err
+}
+
+func buildEventLogSegmentFromChainWithOptions(chain *rawdb.ChainDB, dir, relPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) (eventLogSegmentBuild, error) {
 	if chain == nil {
-		return SegmentRef{}, errors.New("snapshots: nil chain database")
+		return eventLogSegmentBuild{}, errors.New("snapshots: nil chain database")
 	}
 	if dir == "" {
-		return SegmentRef{}, errors.New("snapshots: event log segment directory is empty")
+		return eventLogSegmentBuild{}, errors.New("snapshots: event log segment directory is empty")
 	}
 	if toBlock < fromBlock {
-		return SegmentRef{}, fmt.Errorf("snapshots: event log range [%d,%d] is inverted", fromBlock, toBlock)
+		return eventLogSegmentBuild{}, fmt.Errorf("snapshots: event log range [%d,%d] is inverted", fromBlock, toBlock)
 	}
 	if relPath == "" {
 		relPath = EventLogSegmentPath(fromBlock, toBlock)
@@ -153,18 +168,18 @@ func BuildEventLogSegmentFromChainWithOptions(chain *rawdb.ChainDB, dir, relPath
 		Path:      filepath.ToSlash(relPath),
 	}
 	if err := validateSegmentRef(ref); err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
 	collector, err := etl.NewCollector(opts.collectorOptions())
 	if err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
 	defer collector.Close()
 	rowCount, err := collectEventLogRowsToETL(chain, fromBlock, toBlock, collector)
 	if err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
-	return writeEventLogSegmentFromETL(dir, ref, collector, rowCount)
+	return writeEventLogSegmentBuildFromETL(dir, ref, collector, rowCount)
 }
 
 func BuildEventLogSegmentFromReader(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
@@ -172,21 +187,26 @@ func BuildEventLogSegmentFromReader(reader rawdb.EventLogReader, dir, relPath st
 }
 
 func BuildEventLogSegmentFromReaderWithOptions(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) (SegmentRef, error) {
+	build, err := buildEventLogSegmentFromReaderWithOptions(reader, dir, relPath, fromBlock, toBlock, opts)
+	return build.Ref, err
+}
+
+func buildEventLogSegmentFromReaderWithOptions(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) (eventLogSegmentBuild, error) {
 	if reader == nil {
-		return SegmentRef{}, errors.New("snapshots: nil event log reader")
+		return eventLogSegmentBuild{}, errors.New("snapshots: nil event log reader")
 	}
 	if dir == "" {
-		return SegmentRef{}, errors.New("snapshots: event log segment directory is empty")
+		return eventLogSegmentBuild{}, errors.New("snapshots: event log segment directory is empty")
 	}
 	if toBlock < fromBlock {
-		return SegmentRef{}, fmt.Errorf("snapshots: event log range [%d,%d] is inverted", fromBlock, toBlock)
+		return eventLogSegmentBuild{}, fmt.Errorf("snapshots: event log range [%d,%d] is inverted", fromBlock, toBlock)
 	}
 	covered, err := reader.EventLogRangeCovered(fromBlock, toBlock)
 	if err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
 	if !covered {
-		return SegmentRef{}, fmt.Errorf("snapshots: event log reader does not cover range [%d,%d]", fromBlock, toBlock)
+		return eventLogSegmentBuild{}, fmt.Errorf("snapshots: event log reader does not cover range [%d,%d]", fromBlock, toBlock)
 	}
 	if relPath == "" {
 		relPath = EventLogSegmentPath(fromBlock, toBlock)
@@ -199,18 +219,18 @@ func BuildEventLogSegmentFromReaderWithOptions(reader rawdb.EventLogReader, dir,
 		Path:      filepath.ToSlash(relPath),
 	}
 	if err := validateSegmentRef(ref); err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
 	collector, err := etl.NewCollector(opts.collectorOptions())
 	if err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
 	defer collector.Close()
 	rowCount, err := collectEventLogRowsFromReaderToETL(reader, fromBlock, toBlock, collector)
 	if err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
-	return writeEventLogSegmentFromETL(dir, ref, collector, rowCount)
+	return writeEventLogSegmentBuildFromETL(dir, ref, collector, rowCount)
 }
 
 func BuildEventLogIndexSegmentFromEventLogSegments(dir string, eventRefs []SegmentRef, relPath string) (SegmentRef, error) {
@@ -1311,7 +1331,7 @@ func collectEventLogRowsToETL(chain *rawdb.ChainDB, fromBlock, toBlock uint64, c
 				if err != nil {
 					return 0, err
 				}
-				if err := collector.Put(eventLogETLKey(entry), eventLogETLValue(entry, raw)); err != nil {
+				if err := putEventLogETLRow(collector, entry, raw); err != nil {
 					return 0, err
 				}
 				rowCount++
@@ -1350,7 +1370,7 @@ func collectEventLogRowsFromReaderToETL(reader rawdb.EventLogReader, fromBlock, 
 		if err != nil {
 			return false, err
 		}
-		if err := collector.Put(eventLogETLKey(entry), eventLogETLValue(entry, raw)); err != nil {
+		if err := putEventLogETLRow(collector, entry, raw); err != nil {
 			return false, err
 		}
 		rowCount++
@@ -1390,10 +1410,10 @@ func validateEventLogPayload(entry eventLogIndexEntry, log *corepb.TransactionIn
 	return nil
 }
 
-func writeEventLogSegmentFromETL(dir string, ref SegmentRef, collector *etl.Collector, rowCount uint64) (SegmentRef, error) {
+func writeEventLogSegmentBuildFromETL(dir string, ref SegmentRef, collector *etl.Collector, rowCount uint64) (eventLogSegmentBuild, error) {
 	writer, err := newEventLogSegmentETLWriter(dir, ref, rowCount)
 	if err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
 	finalized := false
 	defer func() {
@@ -1402,14 +1422,60 @@ func writeEventLogSegmentFromETL(dir string, ref SegmentRef, collector *etl.Coll
 		}
 	}()
 	if _, err := collector.Load(writer); err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
 	out, err := writer.finalize()
 	if err != nil {
-		return SegmentRef{}, err
+		return eventLogSegmentBuild{}, err
 	}
 	finalized = true
-	return out, nil
+	return eventLogSegmentBuild{
+		Ref:             out,
+		addressPostings: writer.addressPostings,
+		topicPostings:   writer.topicPostings,
+	}, nil
+}
+
+// writeFreshEventLogIndexSegment builds the segment-level lookup sidecar from
+// the postings retained by the just-finished event-log writer. This trust is
+// intentionally scoped to one build transaction; external/pre-existing event
+// segments continue through BuildEventLogIndexSegmentFromEventLogSegments and
+// its exhaustive source verification.
+func writeFreshEventLogIndexSegment(dir string, build eventLogSegmentBuild, relPath string) (SegmentRef, error) {
+	if err := validateEventLogRef(build.Ref); err != nil {
+		return SegmentRef{}, err
+	}
+	if relPath == "" {
+		relPath = EventLogIndexSegmentPath(build.Ref.FromTxNum, build.Ref.ToTxNum)
+	}
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLogIndex,
+		FromTxNum: build.Ref.FromTxNum,
+		ToTxNum:   build.Ref.ToTxNum,
+		Path:      filepath.ToSlash(relPath),
+	}
+	if err := validateSegmentRef(ref); err != nil {
+		return SegmentRef{}, err
+	}
+	if err := collapseEventLogPostingsToSegmentStart(build.addressPostings, build.Ref.FromTxNum); err != nil {
+		return SegmentRef{}, err
+	}
+	if err := collapseEventLogPostingsToSegmentStart(build.topicPostings, build.Ref.FromTxNum); err != nil {
+		return SegmentRef{}, err
+	}
+	return writeEventLogIndexSegment(dir, ref, build.addressPostings, build.topicPostings)
+}
+
+func collapseEventLogPostingsToSegmentStart(postings map[string][]uint64, segmentStart uint64) error {
+	for key, rows := range postings {
+		if len(rows) == 0 {
+			return fmt.Errorf("snapshots: event log lookup key %x has no row postings", key)
+		}
+		rows[0] = segmentStart
+		postings[key] = rows[:1]
+	}
+	return nil
 }
 
 type eventLogSegmentETLWriter struct {
@@ -1590,21 +1656,27 @@ func (w *eventLogSegmentETLWriter) abort() {
 	}
 }
 
-func eventLogETLKey(entry eventLogIndexEntry) []byte {
-	key := make([]byte, eventLogETLKeySize)
+func putEventLogETLRow(collector *etl.Collector, entry eventLogIndexEntry, rawLog []byte) error {
+	if collector == nil {
+		return errors.New("snapshots: nil event log ETL collector")
+	}
+	return collector.PutEncoded(eventLogETLKeySize, eventLogETLValueHeaderSize+len(rawLog), func(key, value []byte) {
+		encodeEventLogETLKey(key, entry)
+		encodeEventLogETLValue(value, entry, rawLog)
+	})
+}
+
+func encodeEventLogETLKey(key []byte, entry eventLogIndexEntry) {
 	binary.BigEndian.PutUint64(key[0:8], entry.blockNum)
 	binary.BigEndian.PutUint64(key[8:16], entry.txIndex)
 	binary.BigEndian.PutUint64(key[16:24], entry.logIndex)
-	return key
 }
 
-func eventLogETLValue(entry eventLogIndexEntry, rawLog []byte) []byte {
-	value := make([]byte, eventLogETLValueHeaderSize+len(rawLog))
+func encodeEventLogETLValue(value []byte, entry eventLogIndexEntry, rawLog []byte) {
 	copy(value[0:common.HashLength], entry.txHash[:])
 	copy(value[common.HashLength:common.HashLength*2], entry.blockHash[:])
-	copy(value[common.HashLength*2:eventLogETLValueHeaderSize], entry.address.Bytes())
+	copy(value[common.HashLength*2:eventLogETLValueHeaderSize], entry.address[:])
 	copy(value[eventLogETLValueHeaderSize:], rawLog)
-	return value
 }
 
 func eventLogEntryFromETLKeyValue(key, value []byte) (eventLogIndexEntry, error) {
@@ -1660,7 +1732,7 @@ func collectEventLogIndexPostingsToETL(seg *EventLogSegment, collector *etl.Coll
 		if err != nil {
 			return err
 		}
-		if err := collector.Put(eventLogIndexETLKey(eventLogIndexETLKindAddress, eventLogAddressLookupKey(entry.address), segmentStart), nil); err != nil {
+		if err := collector.PutOwned(eventLogIndexETLKey(eventLogIndexETLKindAddress, eventLogAddressLookupKey(entry.address), segmentStart), nil); err != nil {
 			return err
 		}
 		log, err := seg.readLog(entry)
@@ -1670,7 +1742,7 @@ func collectEventLogIndexPostingsToETL(seg *EventLogSegment, collector *etl.Coll
 		for position, rawTopic := range log.GetTopics() {
 			var topic common.Hash
 			copy(topic[:], rawTopic)
-			if err := collector.Put(eventLogIndexETLKey(eventLogIndexETLKindTopic, eventLogTopicLookupKey(uint64(position), topic), segmentStart), nil); err != nil {
+			if err := collector.PutOwned(eventLogIndexETLKey(eventLogIndexETLKindTopic, eventLogTopicLookupKey(uint64(position), topic), segmentStart), nil); err != nil {
 				return err
 			}
 		}

@@ -816,15 +816,16 @@ func (r *Runner) onePass() (PassResult, error) {
 	}
 	eventLogBuilt := false
 	if r.cfg.BuildEventLogs {
-		ref, err := BuildEventLogSegmentFromChainWithOptions(chainDB, r.cfg.Dir, EventLogSegmentPath(startBlock, cutoffBlock), startBlock, cutoffBlock, r.cfg.ETL)
+		build, err := buildEventLogSegmentFromChainWithOptions(chainDB, r.cfg.Dir, EventLogSegmentPath(startBlock, cutoffBlock), startBlock, cutoffBlock, r.cfg.ETL)
 		if err != nil {
 			return PassResult{}, err
 		}
+		ref := build.Ref
 		refs = append(refs, ref)
 		// Keep the lookup sidecar aligned with this immutable event segment.
 		// Existing adjacent indexes remain active in the manifest; rebuilding a
 		// chain-wide index on every catch-up step makes historical sync quadratic.
-		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(r.cfg.Dir, []SegmentRef{ref}, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum), r.cfg.ETL)
+		indexRef, err := writeFreshEventLogIndexSegment(r.cfg.Dir, build, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum))
 		if err != nil {
 			return PassResult{}, err
 		}

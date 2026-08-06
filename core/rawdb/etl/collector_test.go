@@ -1,10 +1,14 @@
 package etl
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -206,6 +210,90 @@ func TestSortedEntryOrderUsesKeyThenSequenceAndResetsPool(t *testing.T) {
 	defer releaseEntryOrder(&order)
 	if len(*order) != 1 || (*order)[0] != 0 {
 		t.Fatalf("reacquired sort order = %v, want [0]", *order)
+	}
+}
+
+func TestSortedEntryOrderRadixMatchesComparisonOrder(t *testing.T) {
+	rng := rand.New(rand.NewSource(91))
+	entries := make([]entry, 10_000)
+	sequences := rng.Perm(len(entries))
+	for i := range entries {
+		keyLen := rng.Intn(80)
+		entries[i].key = make([]byte, keyLen)
+		_, _ = rng.Read(entries[i].key)
+		if i > 0 && i%7 == 0 {
+			entries[i].key = append(entries[i].key[:0], entries[i-1].key...)
+		}
+		entries[i].seq = uint64(sequences[i] + 1)
+	}
+	want := make([]uint32, len(entries))
+	for i := range want {
+		want[i] = uint32(i)
+	}
+	sortEntryOrderComparison(want, entries)
+	got, err := sortedEntryOrder(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseEntryOrder(&got)
+	if !slices.Equal(*got, want) {
+		for i := range want {
+			if (*got)[i] != want[i] {
+				t.Fatalf("radix order differs at %d: got row %d key=%x seq=%d, want row %d key=%x seq=%d", i, (*got)[i], entries[(*got)[i]].key, entries[(*got)[i]].seq, want[i], entries[want[i]].key, entries[want[i]].seq)
+			}
+		}
+	}
+}
+
+func TestSortedEntryOrderRadixOrdersLargeDuplicateGroupBySequence(t *testing.T) {
+	entries := make([]entry, 512)
+	for i := range entries {
+		entries[i] = entry{key: []byte("same-long-snapshot-accessor-key"), seq: uint64(len(entries) - i)}
+	}
+	order, err := sortedEntryOrder(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseEntryOrder(&order)
+	for i, row := range *order {
+		if got, want := entries[row].seq, uint64(i+1); got != want {
+			t.Fatalf("duplicate key sequence at %d = %d, want %d", i, got, want)
+		}
+	}
+}
+
+func BenchmarkSortedEntryOrder(b *testing.B) {
+	for _, size := range []int{10_000, 250_000} {
+		b.Run(fmt.Sprintf("rows=%d", size), func(b *testing.B) {
+			entries := make([]entry, size)
+			for i := range entries {
+				key := make([]byte, 49)
+				key[0] = byte(i % 9)
+				binary.BigEndian.PutUint64(key[1:9], uint64((i*104729)%size))
+				copy(key[9:], bytes.Repeat([]byte{byte(i % 251)}, 40))
+				entries[i] = entry{key: key, seq: uint64(i + 1)}
+			}
+			for _, algorithm := range []string{"comparison", "radix"} {
+				b.Run(algorithm, func(b *testing.B) {
+					b.ReportAllocs()
+					for range b.N {
+						if algorithm == "radix" {
+							order, err := sortedEntryOrder(entries)
+							if err != nil {
+								b.Fatal(err)
+							}
+							releaseEntryOrder(&order)
+							continue
+						}
+						order := make([]uint32, len(entries))
+						for i := range order {
+							order[i] = uint32(i)
+						}
+						sortEntryOrderComparison(order, entries)
+					}
+				})
+			}
+		})
 	}
 }
 

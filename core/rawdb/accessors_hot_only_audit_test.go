@@ -1264,7 +1264,7 @@ func TestProductionEventLogCoverageChecksStayOnAuditedBoundaries(t *testing.T) {
 			"snapshotBuildEventLogsCmd":           {},
 		},
 		"core/state/snapshots/event_log_segment.go": {
-			"BuildEventLogSegmentFromReaderWithOptions": {},
+			"buildEventLogSegmentFromReaderWithOptions": {},
 			"EventLogIndexedRangeCovered":               {},
 			"EventLogRangeCoveredForFilter":             {},
 		},

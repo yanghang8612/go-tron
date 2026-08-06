@@ -269,11 +269,12 @@ func (a *Aggregator) BuildEventLogsWithOptions(chain *rawdb.ChainDB, fromBlock, 
 	if toBlock < fromBlock {
 		return nil, fmt.Errorf("snapshots: event log block range [%d,%d] is inverted", fromBlock, toBlock)
 	}
-	ref, err := BuildEventLogSegmentFromChainWithOptions(chain, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts)
+	build, err := buildEventLogSegmentFromChainWithOptions(chain, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts)
 	if err != nil {
 		return nil, err
 	}
-	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, []SegmentRef{ref}, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum), opts)
+	ref := build.Ref
+	indexRef, err := writeFreshEventLogIndexSegment(a.dir, build, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum))
 	if err != nil {
 		return nil, err
 	}
@@ -303,11 +304,12 @@ func (a *Aggregator) BuildEventLogsFromReaderWithOptions(reader rawdb.EventLogRe
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
-	ref, err := BuildEventLogSegmentFromReaderWithOptions(reader, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts)
+	build, err := buildEventLogSegmentFromReaderWithOptions(reader, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts)
 	if err != nil {
 		return nil, err
 	}
-	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, []SegmentRef{ref}, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum), opts)
+	ref := build.Ref
+	indexRef, err := writeFreshEventLogIndexSegment(a.dir, build, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum))
 	if err != nil {
 		return nil, err
 	}
@@ -364,12 +366,13 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 		refs = append(refs, ref)
 	}
 	if opts.EventLogs {
-		ref, err := BuildEventLogSegmentFromChainWithOptions(chain, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts.ETL)
+		build, err := buildEventLogSegmentFromChainWithOptions(chain, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts.ETL)
 		if err != nil {
 			return nil, err
 		}
+		ref := build.Ref
 		refs = append(refs, ref)
-		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, []SegmentRef{ref}, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum), opts.ETL)
+		indexRef, err := writeFreshEventLogIndexSegment(a.dir, build, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum))
 		if err != nil {
 			return nil, err
 		}

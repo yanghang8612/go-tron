@@ -29,11 +29,18 @@ const (
 )
 
 var (
-	ErrCollectorClosed = errors.New("etl: collector closed")
-	ErrCollectorLoaded = errors.New("etl: collector already loaded")
-	ErrLoadInterrupted = errors.New("etl: load interrupted")
-	collectorRowsPool  = sync.Pool{New: func() any { return new([]entry) }}
-	collectorOrderPool = sync.Pool{New: func() any { return new([]uint32) }}
+	ErrCollectorClosed        = errors.New("etl: collector closed")
+	ErrCollectorLoaded        = errors.New("etl: collector already loaded")
+	ErrLoadInterrupted        = errors.New("etl: load interrupted")
+	collectorRowsPool         = sync.Pool{New: func() any { return new([]entry) }}
+	collectorOrderPool        = sync.Pool{New: func() any { return new([]uint32) }}
+	collectorOrderScratchPool = sync.Pool{New: func() any { return new([]uint32) }}
+	collectorRadixRangePool   = sync.Pool{New: func() any { return new([]entryOrderRange) }}
+)
+
+const (
+	radixEntryOrderMin                 = 128
+	collectorRadixRangePoolMaxCapacity = 1 << 16
 )
 
 // Options configures a Collector. TempDir is a parent directory; Collector
@@ -533,9 +540,11 @@ func (c *Collector) loadRows(applier *applier, interrupted func() bool) error {
 	return nil
 }
 
-// sortedEntryOrder keeps the 64-byte entry metadata stationary and lets pdqsort
-// move compact row numbers, mirroring Erigon's entryLoc sorting cost while
-// preserving PutOwned's slice-ownership contract.
+// sortedEntryOrder keeps the 64-byte entry metadata stationary and moves
+// compact row numbers. Large buffers use a stable MSD radix pass over the key
+// bytes, avoiding repeated bytes.Compare calls on the long shared prefixes
+// used by snapshot accessors. Equal-key rows retain sequence ordering so the
+// collector's latest-operation collapse contract is unchanged.
 func sortedEntryOrder(entries []entry) (*[]uint32, error) {
 	if uint64(len(entries)) > uint64(^uint32(0)) {
 		return nil, fmt.Errorf("etl: entry count %d exceeds compact sort order", len(entries))
@@ -549,7 +558,23 @@ func sortedEntryOrder(entries []entry) (*[]uint32, error) {
 	for i := range entries {
 		(*order)[i] = uint32(i)
 	}
-	slices.SortFunc(*order, func(left, right uint32) int {
+	if len(entries) < radixEntryOrderMin {
+		sortEntryOrderComparison(*order, entries)
+		return order, nil
+	}
+	scratch := collectorOrderScratchPool.Get().(*[]uint32)
+	if cap(*scratch) < len(entries) {
+		*scratch = make([]uint32, len(entries))
+	} else {
+		*scratch = (*scratch)[:len(entries)]
+	}
+	radixSortEntryOrder(*order, *scratch, entries)
+	releaseEntryOrderBuffer(scratch, collectorOrderScratchPool.Put)
+	return order, nil
+}
+
+func sortEntryOrderComparison(order []uint32, entries []entry) {
+	slices.SortFunc(order, func(left, right uint32) int {
 		a, b := &entries[left], &entries[right]
 		if cmp := bytes.Compare(a.key, b.key); cmp != 0 {
 			return cmp
@@ -562,7 +587,116 @@ func sortedEntryOrder(entries []entry) (*[]uint32, error) {
 		}
 		return 0
 	})
-	return order, nil
+}
+
+type entryOrderRange struct {
+	lo    int
+	hi    int
+	depth int
+}
+
+// radixSortEntryOrder performs a stable lexicographic MSD radix sort. Bucket
+// zero represents end-of-key and therefore sorts before every byte value,
+// preserving bytes.Compare's prefix ordering. Small partitions fall back to
+// pdqsort; all-equal terminal partitions need only order their sequence.
+func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
+	stackBuffer := collectorRadixRangePool.Get().(*[]entryOrderRange)
+	stack := append((*stackBuffer)[:0], entryOrderRange{hi: len(order)})
+	defer func() {
+		*stackBuffer = stack[:0]
+		if cap(*stackBuffer) <= collectorRadixRangePoolMaxCapacity {
+			collectorRadixRangePool.Put(stackBuffer)
+		}
+	}()
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		current := stack[last]
+		stack = stack[:last]
+		for {
+			length := current.hi - current.lo
+			if length < 2 {
+				break
+			}
+			if length < radixEntryOrderMin {
+				sortEntryOrderComparison(order[current.lo:current.hi], entries)
+				break
+			}
+			var counts [257]int
+			nonEmpty := 0
+			onlyBucket := 0
+			for _, row := range order[current.lo:current.hi] {
+				key := entries[row].key
+				bucket := 0
+				if current.depth < len(key) {
+					bucket = int(key[current.depth]) + 1
+				}
+				if counts[bucket] == 0 {
+					nonEmpty++
+					onlyBucket = bucket
+				}
+				counts[bucket]++
+			}
+			if nonEmpty == 1 {
+				if onlyBucket == 0 {
+					slices.SortFunc(order[current.lo:current.hi], func(left, right uint32) int {
+						a, b := entries[left].seq, entries[right].seq
+						if a < b {
+							return -1
+						}
+						if a > b {
+							return 1
+						}
+						return 0
+					})
+					break
+				}
+				current.depth++
+				continue
+			}
+
+			var starts [257]int
+			next := current.lo
+			for bucket, count := range counts {
+				starts[bucket] = next
+				next += count
+			}
+			positions := starts
+			for _, row := range order[current.lo:current.hi] {
+				key := entries[row].key
+				bucket := 0
+				if current.depth < len(key) {
+					bucket = int(key[current.depth]) + 1
+				}
+				scratch[positions[bucket]] = row
+				positions[bucket]++
+			}
+			copy(order[current.lo:current.hi], scratch[current.lo:current.hi])
+
+			if counts[0] > 1 {
+				lo, hi := starts[0], starts[0]+counts[0]
+				slices.SortFunc(order[lo:hi], func(left, right uint32) int {
+					a, b := entries[left].seq, entries[right].seq
+					if a < b {
+						return -1
+					}
+					if a > b {
+						return 1
+					}
+					return 0
+				})
+			}
+			for bucket := 256; bucket >= 1; bucket-- {
+				if counts[bucket] > 1 {
+					stack = append(stack, entryOrderRange{
+						lo:    starts[bucket],
+						hi:    starts[bucket] + counts[bucket],
+						depth: current.depth + 1,
+					})
+				}
+			}
+			break
+		}
+	}
 }
 
 func releaseEntryOrder(order **[]uint32) {
@@ -571,9 +705,13 @@ func releaseEntryOrder(order **[]uint32) {
 	}
 	buffer := *order
 	*order = nil
+	releaseEntryOrderBuffer(buffer, collectorOrderPool.Put)
+}
+
+func releaseEntryOrderBuffer(buffer *[]uint32, put func(any)) {
 	*buffer = (*buffer)[:0]
 	if cap(*buffer) <= collectorOrderPoolMaxCapacity {
-		collectorOrderPool.Put(buffer)
+		put(buffer)
 	}
 }
 

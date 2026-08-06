@@ -3949,6 +3949,47 @@ allocated bytes by 18.4% and allocations by 28.4%. Seven alternating compaction
 pairs reduced median time from 118.35 ms to 113.13 ms (-4.4%), allocated bytes
 by 7.9% and allocations by 19.3%.
 
+#### P5.27: Fused event-log sidecars and radix ETL ordering
+
+The first snap-mode production profiles after incremental event-log-index
+publication exposed two remaining forms of repeated derived work. A newly
+built event-log segment already accumulated exact address and positional-topic
+row postings while validating and writing its payload, but the lifecycle then
+reopened that same immutable file, exhaustively verified every payload and
+lookup entry, decoded every log again, and passed the same keys through a
+second ETL sort to produce the segment-start sidecar. In the same profiles,
+generic ETL comparison sorting spent several CPU seconds repeatedly comparing
+the long shared prefixes of state-history accessor keys.
+
+The trusted event-log build transaction now retains the writer-owned posting
+maps after the segment has been synced, checksummed, and renamed. It collapses
+each populated row-posting list in place to the new segment start and writes
+the byte-identical event-log-index sidecar directly. This trust is as narrow as
+P5.26: downloaded, restored, pre-existing, merged, and explicitly rebuilt
+event-log inputs continue through exhaustive `CheckEventLogSegment` source
+verification. Manifest/offline verification and the hot-prune coverage gate
+are unchanged. Event-log ETL rows additionally encode directly into the
+collector-owned arena instead of allocating and immediately cloning separate
+key/value frames.
+
+Large generic ETL buffers now sort compact row ordinals with a stable MSD radix
+pass over key bytes. End-of-key is the first bucket, preserving
+`bytes.Compare` prefix ordering, while equal-key terminal groups retain the
+required sequence order for latest-operation collapse. Small partitions keep
+the existing pdqsort comparator. A randomized variable-length/duplicate-key
+cross-check requires exact row-order equality with the comparison sorter, and
+all existing spill, merge, interruption, and derived-file byte-equivalence
+tests remain authoritative.
+
+On the local Apple M1 Max benchmark, a 50,000-log single-segment sidecar fell
+from roughly 375 ms and 136 MB allocated on the exhaustive rebuild path to
+10.7 ms and 2.9 MB when reusing fresh writer postings. The 250,000-row,
+49-byte-key ETL ordering benchmark fell from roughly 56 ms to 24.6 ms. These
+microbenchmarks establish removed work and output identity; the next snap-mode
+deployment must compare SnapshotLifecycle CPU, `pread` volume, lifecycle lag,
+Pebble compaction interference, and canonical transaction throughput over the
+same dense block window.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

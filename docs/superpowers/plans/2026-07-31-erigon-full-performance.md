@@ -444,5 +444,14 @@
 - [x] Replace the exhaustive replay of a just-built history output with a
   writer-bound trusted reopen of its complete compressed layout, exact counts/
   logical end and sampled payload blocks, retaining full external audits.
+- [x] Build a fresh event-log segment and its segment-start sidecar from the
+  writer's shared address/topic postings, while retaining exhaustive checks for
+  every external or pre-existing source segment.
+- [x] Encode event-log ETL rows directly into collector-owned arena storage and
+  replace large comparison sorts with byte-equivalent stable MSD radix ordering
+  over compact row ordinals.
+- [ ] Run the fused event-log/radix-ETL production gate and compare snapshot
+  build/check CPU, `pread` volume, lifecycle lag, allocations, and sync
+  transactions/second over a fixed dense window.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.
