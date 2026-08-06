@@ -4011,10 +4011,21 @@ reader. Header parsing uses `bufio.Reader.Peek`, removing its per-row escaped
 allocation. The 1 MiB run readers and writers are process-pooled and reset on
 every checkout/return.
 
+The first deployed compaction profile then made the in-memory radix pass the
+new largest snapshot cost. A single bucket previously advanced one byte and
+rescanned the whole partition, which is pathological for encoded accessor keys
+with long shared prefixes. The sorter now probes the last and middle rows, then
+computes the verified range-wide common continuation with eight-byte XORs and
+jumps directly to the first differing byte. Prefix/end-of-key ordering remains
+identical to `bytes.Compare`.
+
 Against the exact P5.27 parent on the Apple M1 Max, merging 250,000 interleaved
 49-byte keys across 35 spill runs fell from 49.4--50.3 ms, 62.7 MB, and 750,284
 allocations to 30.5--31.4 ms, about 1.0 MB, and 253 allocations. That is roughly
 38% less wall time, 98.4% fewer allocated bytes, and 99.97% fewer allocations.
+On the 250,000-row, 32-byte-shared-prefix ordering benchmark, the deployed
+radix pass fell a further 61--63%, from 30.4--32.2 ms to 11.6--12.2 ms; the
+mixed-prefix benchmark also improved about 20%.
 The byte-order, latest-operation collapse, interruption/retry, truncated-input,
 and batch semantics remain unchanged and are covered by the ETL and downstream
 snapshot suites.

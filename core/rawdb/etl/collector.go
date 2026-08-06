@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"slices"
@@ -668,7 +669,7 @@ func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
 					})
 					break
 				}
-				current.depth++
+				current.depth = sharedEntryKeyPrefixDepth(order[current.lo:current.hi], entries, current.depth+1)
 				continue
 			}
 
@@ -715,6 +716,50 @@ func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
 			break
 		}
 	}
+}
+
+// sharedEntryKeyPrefixDepth skips a range's common continuation after the
+// radix pass has proved that every key contains the same byte at start-1. A
+// last/middle-row probe keeps the common one-byte case O(1); only a candidate
+// longer prefix triggers the full range scan. Eight-byte comparisons avoid
+// revisiting long encoded accessor prefixes one byte and one full pass at a
+// time.
+func sharedEntryKeyPrefixDepth(order []uint32, entries []entry, start int) int {
+	if len(order) < 2 {
+		return start
+	}
+	reference := entries[order[0]].key
+	depth := commonKeyPrefixDepth(reference, entries[order[len(order)-1]].key, start, len(reference))
+	if depth == start {
+		return start
+	}
+	depth = commonKeyPrefixDepth(reference, entries[order[len(order)/2]].key, start, depth)
+	if depth == start {
+		return start
+	}
+	for _, row := range order[1:] {
+		depth = commonKeyPrefixDepth(reference, entries[row].key, start, depth)
+		if depth == start {
+			return start
+		}
+	}
+	return depth
+}
+
+func commonKeyPrefixDepth(left, right []byte, start, limit int) int {
+	limit = min(limit, len(right))
+	index := start
+	for index+8 <= limit {
+		difference := binary.LittleEndian.Uint64(left[index:index+8]) ^ binary.LittleEndian.Uint64(right[index:index+8])
+		if difference != 0 {
+			return index + bits.TrailingZeros64(difference)/8
+		}
+		index += 8
+	}
+	for index < limit && left[index] == right[index] {
+		index++
+	}
+	return index
 }
 
 func releaseEntryOrder(order **[]uint32) {

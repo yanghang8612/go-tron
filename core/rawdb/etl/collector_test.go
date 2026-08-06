@@ -327,6 +327,33 @@ func TestSortedEntryOrderRadixOrdersLargeDuplicateGroupBySequence(t *testing.T) 
 	}
 }
 
+func TestSortedEntryOrderRadixLongSharedPrefixMatchesComparison(t *testing.T) {
+	rng := rand.New(rand.NewSource(441))
+	entries := make([]entry, 20_000)
+	sequences := rng.Perm(len(entries))
+	for i := range entries {
+		key := bytes.Repeat([]byte{0x5a}, 32+rng.Intn(64))
+		_, _ = rng.Read(key[32:])
+		if i > 0 && i%11 == 0 {
+			key = append(key[:0], entries[i-1].key...)
+		}
+		entries[i] = entry{key: key, seq: uint64(sequences[i] + 1)}
+	}
+	want := make([]uint32, len(entries))
+	for i := range want {
+		want[i] = uint32(i)
+	}
+	sortEntryOrderComparison(want, entries)
+	got, err := sortedEntryOrder(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseEntryOrder(&got)
+	if !slices.Equal(*got, want) {
+		t.Fatal("shared-prefix radix order differs from comparison order")
+	}
+}
+
 func BenchmarkSortedEntryOrder(b *testing.B) {
 	for _, size := range []int{10_000, 250_000} {
 		b.Run(fmt.Sprintf("rows=%d", size), func(b *testing.B) {
@@ -357,6 +384,37 @@ func BenchmarkSortedEntryOrder(b *testing.B) {
 						sortEntryOrderComparison(order, entries)
 					}
 				})
+			}
+		})
+	}
+}
+
+func BenchmarkSortedEntryOrderSharedPrefix(b *testing.B) {
+	const rows = 250_000
+	entries := make([]entry, rows)
+	for i := range entries {
+		key := bytes.Repeat([]byte{0x5a}, 49)
+		binary.BigEndian.PutUint64(key[32:40], uint64((i*104729)%rows))
+		key[48] = byte(i % 251)
+		entries[i] = entry{key: key, seq: uint64(i + 1)}
+	}
+	for _, algorithm := range []string{"comparison", "radix"} {
+		b.Run(algorithm, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				if algorithm == "radix" {
+					order, err := sortedEntryOrder(entries)
+					if err != nil {
+						b.Fatal(err)
+					}
+					releaseEntryOrder(&order)
+					continue
+				}
+				order := make([]uint32, len(entries))
+				for i := range order {
+					order[i] = uint32(i)
+				}
+				sortEntryOrderComparison(order, entries)
 			}
 		})
 	}

@@ -453,6 +453,8 @@
 - [x] Replace external ETL heap pop/push merge with a prefix-cached tournament
   tree, reusable run-row buffers, zero-allocation header parsing, and pooled
   1 MiB run I/O buffers.
+- [x] Skip verified range-wide shared key prefixes in eight-byte chunks during
+  radix ordering instead of rescanning every row once per identical byte.
 - [ ] Run the fused event-log/radix-ETL production gate and compare snapshot
   build/check CPU, `pread` volume, lifecycle lag, allocations, and sync
   transactions/second over a fixed dense window.
