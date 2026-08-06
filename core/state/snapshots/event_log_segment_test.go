@@ -165,6 +165,83 @@ func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	}
 }
 
+func TestAggregatorBuildEventLogsKeepsSegmentLocalIndexes(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	address := eventLogTestAddress(0x31)
+	topic := common.Hash{0xcc}
+	for blockNum := uint64(1); blockNum <= 2; blockNum++ {
+		block, infos := eventLogTestBlock(t, blockNum, []*corepb.TransactionInfo_Log{{
+			Address: address,
+			Topics:  [][]byte{topic[:]},
+			Data:    []byte{byte(blockNum)},
+		}})
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(db, blockNum, infos); err != nil {
+			t.Fatalf("WriteTransactionInfosByBlock %d: %v", blockNum, err)
+		}
+	}
+
+	aggregator := NewAggregator(dir)
+	if _, err := aggregator.BuildEventLogs(db, 1, 1); err != nil {
+		t.Fatalf("BuildEventLogs 1: %v", err)
+	}
+	second, err := aggregator.BuildEventLogs(db, 2, 2)
+	if err != nil {
+		t.Fatalf("BuildEventLogs 2: %v", err)
+	}
+	indexes := eventLogIndexRefs(second.Manifest)
+	if len(indexes) != 2 || indexes[0].FromTxNum != 1 || indexes[0].ToTxNum != 1 || indexes[1].FromTxNum != 2 || indexes[1].ToTxNum != 2 {
+		t.Fatalf("incremental indexes = %+v, want [1,1] and [2,2]", indexes)
+	}
+	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyManifestFiles incremental: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager incremental: %v", err)
+	}
+	if covered, err := mgr.EventLogIndexedRangeCovered(1, 2); err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered incremental = %v/%v, want true/nil", covered, err)
+	}
+	var rows []EventLog
+	if err := mgr.IterateEventLogs(1, 2, EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(address)},
+		Topics:    [][]common.Hash{{topic}},
+	}, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs incremental: %v", err)
+	}
+	if len(rows) != 2 || rows[0].BlockNum != 1 || rows[1].BlockNum != 2 {
+		t.Fatalf("incremental indexed rows = %+v, want blocks 1 and 2", rows)
+	}
+
+	merged, err := aggregator.BuildEventLogs(db, 1, 2)
+	if err != nil {
+		t.Fatalf("BuildEventLogs merged: %v", err)
+	}
+	indexes = eventLogIndexRefs(merged.Manifest)
+	if len(indexes) != 1 || indexes[0].FromTxNum != 1 || indexes[0].ToTxNum != 2 {
+		t.Fatalf("merged indexes = %+v, want [1,2]", indexes)
+	}
+	retiredIndexes := 0
+	for _, ref := range merged.Manifest.Retired {
+		if ref.Kind == SegmentEventLogIndex {
+			retiredIndexes++
+		}
+	}
+	if retiredIndexes != 2 {
+		t.Fatalf("retired event indexes = %d, want 2", retiredIndexes)
+	}
+	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyManifestFiles merged: %v", err)
+	}
+}
+
 func TestBuildEventLogSegmentFromReaderMaterializesColdRows(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")

@@ -821,11 +821,10 @@ func (r *Runner) onePass() (PassResult, error) {
 			return PassResult{}, err
 		}
 		refs = append(refs, ref)
-		eventRefs, err := aggregator.eventLogRefsAfterIntegrating([]SegmentRef{ref})
-		if err != nil {
-			return PassResult{}, err
-		}
-		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(r.cfg.Dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum), r.cfg.ETL)
+		// Keep the lookup sidecar aligned with this immutable event segment.
+		// Existing adjacent indexes remain active in the manifest; rebuilding a
+		// chain-wide index on every catch-up step makes historical sync quadratic.
+		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(r.cfg.Dir, []SegmentRef{ref}, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum), r.cfg.ETL)
 		if err != nil {
 			return PassResult{}, err
 		}

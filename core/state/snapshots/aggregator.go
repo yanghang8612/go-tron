@@ -273,11 +273,7 @@ func (a *Aggregator) BuildEventLogsWithOptions(chain *rawdb.ChainDB, fromBlock, 
 	if err != nil {
 		return nil, err
 	}
-	eventRefs, err := a.eventLogRefsAfterIntegrating([]SegmentRef{ref})
-	if err != nil {
-		return nil, err
-	}
-	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum), opts)
+	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, []SegmentRef{ref}, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum), opts)
 	if err != nil {
 		return nil, err
 	}
@@ -311,11 +307,7 @@ func (a *Aggregator) BuildEventLogsFromReaderWithOptions(reader rawdb.EventLogRe
 	if err != nil {
 		return nil, err
 	}
-	eventRefs, err := a.eventLogRefsAfterIntegrating([]SegmentRef{ref})
-	if err != nil {
-		return nil, err
-	}
-	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum), opts)
+	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, []SegmentRef{ref}, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum), opts)
 	if err != nil {
 		return nil, err
 	}
@@ -377,11 +369,7 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 			return nil, err
 		}
 		refs = append(refs, ref)
-		eventRefs, err := a.eventLogRefsAfterIntegrating([]SegmentRef{ref})
-		if err != nil {
-			return nil, err
-		}
-		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum), opts.ETL)
+		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, []SegmentRef{ref}, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum), opts.ETL)
 		if err != nil {
 			return nil, err
 		}
@@ -442,26 +430,6 @@ func eventLogBuildStageProgress(db any, manifest *Manifest) (rawdb.StageProgress
 		BlockHash:    hash,
 		HasBlockHash: true,
 	}, true, nil
-}
-
-func (a *Aggregator) eventLogRefsAfterIntegrating(newEventRefs []SegmentRef) ([]SegmentRef, error) {
-	refs := make([]SegmentRef, 0, len(newEventRefs))
-	if old, err := LoadProductionManifest(a.dir); err == nil {
-		for _, ref := range eventLogRefs(old) {
-			if segmentOverlapsAnyFamily(ref, newEventRefs) {
-				continue
-			}
-			refs = append(refs, ref)
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	}
-	refs = append(refs, newEventRefs...)
-	sortSegments(refs)
-	if len(refs) == 0 {
-		return nil, errors.New("snapshots: no event-log segments available for index build")
-	}
-	return refs, nil
 }
 
 func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRef) (*Manifest, error) {

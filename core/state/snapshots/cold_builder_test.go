@@ -1639,6 +1639,75 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	}
 }
 
+func TestColdBuilderCatchupKeepsEventLogIndexesSegmentLocal(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x4a)
+	address := eventLogTestAddress(0x6a)
+	topic := common.Hash{0xca}
+	for blockNum := uint64(1); blockNum <= 2; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		block, infos := coldBuilderEventLogBlock(t, blockNum, []*corepb.TransactionInfo_Log{{
+			Address: address,
+			Topics:  [][]byte{topic[:]},
+			Data:    []byte{byte(blockNum)},
+		}})
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(db, blockNum, infos); err != nil {
+			t.Fatalf("WriteTransactionInfosByBlock %d: %v", blockNum, err)
+		}
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 3}, Config{
+		Dir:            dir,
+		Enabled:        true,
+		Interval:       time.Hour,
+		HistoryWindow:  1,
+		BatchBlocks:    1,
+		BuildEventLogs: true,
+	})
+	for pass := uint64(1); pass <= 2; pass++ {
+		result, err := runner.OnePass()
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if !result.Built || !result.EventLogBuilt || result.FromBlock != pass || result.ToBlock != pass {
+			t.Fatalf("pass %d result = %+v, want one event-log block", pass, result)
+		}
+	}
+
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	indexes := eventLogIndexRefs(manifest)
+	if len(indexes) != 2 || indexes[0].FromTxNum != 1 || indexes[0].ToTxNum != 1 || indexes[1].FromTxNum != 2 || indexes[1].ToTxNum != 2 {
+		t.Fatalf("catch-up indexes = %+v, want [1,1] and [2,2]", indexes)
+	}
+	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	var rows []EventLog
+	if err := mgr.IterateEventLogs(1, 2, EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(address)},
+		Topics:    [][]common.Hash{{topic}},
+	}, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(rows) != 2 || rows[0].BlockNum != 1 || rows[1].BlockNum != 2 {
+		t.Fatalf("catch-up rows = %+v, want blocks 1 and 2", rows)
+	}
+}
+
 func TestColdBuilderWritesEventLogStageFromAncientBlock(t *testing.T) {
 	dir := t.TempDir()
 	hot := rawdb.NewMemoryDatabase()
