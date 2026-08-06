@@ -84,6 +84,37 @@ func TestFindStagedBodyReadyFrontierWithoutReader(t *testing.T) {
 	}
 }
 
+func TestExtendStagedBodyReadyFrontierScansOnlySuffix(t *testing.T) {
+	rows := map[uint64]rawdb.SyncStagedBlockRow{
+		4: {Number: 4, Hash: tcommon.Hash{0x04}},
+		5: {Number: 5, Hash: tcommon.Hash{0x05}},
+	}
+	var reads []uint64
+	got := ExtendStagedBodyReadyFrontier(rawdb.SyncStagedBlockRow{Number: 3, Hash: tcommon.Hash{0x03}}, 0, func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
+		reads = append(reads, number)
+		return stagedBodyMapReader(rows)(number)
+	})
+	if !reflect.DeepEqual(reads, []uint64{4, 5, 6}) {
+		t.Fatalf("suffix reads = %v, want [4 5 6]", reads)
+	}
+	if !got.Have || got.Number != 5 || got.Hash != (tcommon.Hash{0x05}) || got.NextMissing != 6 || got.Error != nil {
+		t.Fatalf("frontier = %+v, want block5 next6 without error", got)
+	}
+}
+
+func TestExtendStagedBodyReadyFrontierKeepsValidatedPrefixOnFirstReadError(t *testing.T) {
+	readErr := errors.New("boom")
+	got := ExtendStagedBodyReadyFrontier(rawdb.SyncStagedBlockRow{Number: 3, Hash: tcommon.Hash{0x03}}, 0, func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
+		if number != 4 {
+			t.Fatalf("read block %d, want only block4", number)
+		}
+		return rawdb.SyncStagedBlockRow{}, false, readErr
+	})
+	if !got.Have || got.Number != 3 || got.Hash != (tcommon.Hash{0x03}) || got.ErrorAt != 4 || !errors.Is(got.Error, readErr) || got.NextMissing != 4 {
+		t.Fatalf("frontier = %+v, want validated block3 with error at 4", got)
+	}
+}
+
 func TestStagedBodyAcceptanceFailureCoversStageProgressAndReady(t *testing.T) {
 	stageErr := errors.New("stage write")
 	progressReadErr := errors.New("progress read")
@@ -265,14 +296,14 @@ func TestRefreshStagedBodyReadyProgressAfterStage(t *testing.T) {
 			stagedNum: 4,
 			setup: func(t *testing.T, db ethdb.KeyValueStore) {
 				t.Helper()
-				writeTestStagedBlocks(t, db, 2, 3, 4)
+				writeTestStagedBlocks(t, db, 2, 3, 4, 5, 6)
 				block3 := testBufferedBlock(3)
 				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, 3, block3.Hash()); err != nil {
 					t.Fatalf("write ready progress: %v", err)
 				}
 			},
 			refreshed: true,
-			frontier:  4,
+			frontier:  6,
 			haveRow:   true,
 		},
 		{

@@ -241,6 +241,33 @@ func FindStagedBodyReadyFrontier(start, targetHead uint64, read StagedBodyReader
 	}
 }
 
+// ExtendStagedBodyReadyFrontier scans only the suffix after a previously
+// validated ready frontier. The persisted ready row is a durable assertion
+// that its prefix was contiguous when published, so steady-state staging does
+// not need to rescan that prefix for every newly accepted body. Full scans are
+// still used when the ready row is missing or invalid and during recovery.
+func ExtendStagedBodyReadyFrontier(prefix rawdb.SyncStagedBlockRow, targetHead uint64, read StagedBodyReader) StagedBodyReadyFrontier {
+	frontier := StagedBodyReadyFrontier{
+		Have:   true,
+		Number: prefix.Number,
+		Hash:   prefix.Hash,
+	}
+	if prefix.Number == ^uint64(0) {
+		return frontier
+	}
+	suffix := FindStagedBodyReadyFrontier(prefix.Number+1, targetHead, read)
+	if suffix.Have {
+		return suffix
+	}
+	// A gap or read error at the first suffix row must not discard the
+	// already-validated prefix. Preserve the suffix diagnostics while keeping
+	// the durable frontier unchanged.
+	suffix.Have = true
+	suffix.Number = prefix.Number
+	suffix.Hash = prefix.Hash
+	return suffix
+}
+
 // PlanStagedBodyReadyProgress recomputes the SyncBodiesReady frontier without
 // writing it. Callers that have already advanced the canonical head can use
 // this plan to fold the ready update into the same database batch as their
@@ -307,6 +334,20 @@ func RefreshStagedBodyReadyProgress(db ethdb.KeyValueStore, start, targetHead ui
 	return result
 }
 
+// extendStagedBodyReadyProgress advances a validated persisted ready frontier
+// by scanning only its newly reachable suffix.
+func extendStagedBodyReadyProgress(db ethdb.KeyValueStore, ready StagedBodyReadyLimit, targetHead uint64) StagedBodyReadyProgressRefresh {
+	frontier := ExtendStagedBodyReadyFrontier(ready.StagedRow, targetHead, func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
+		return rawdb.ReadSyncStagedBlockMetadata(db, number)
+	})
+	result := StagedBodyReadyProgressRefresh{
+		Frontier: frontier,
+		Updated:  true,
+	}
+	result.WriteError = rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, frontier.Number, frontier.Hash)
+	return result
+}
+
 // RefreshStagedBodyReadyProgressAfterStage refreshes SyncBodiesReady only when
 // the newly staged body can start or extend the persisted contiguous frontier.
 // Invalid existing ready rows still force a refresh so restart/drain state is
@@ -325,7 +366,11 @@ func RefreshStagedBodyReadyProgressAfterStage(db ethdb.KeyValueStore, start, tar
 		return result
 	}
 	result.Refreshed = true
-	result.Refresh = RefreshStagedBodyReadyProgress(db, start, targetHead)
+	if ready.Valid() {
+		result.Refresh = extendStagedBodyReadyProgress(db, ready, targetHead)
+	} else {
+		result.Refresh = RefreshStagedBodyReadyProgress(db, start, targetHead)
+	}
 	return result
 }
 
