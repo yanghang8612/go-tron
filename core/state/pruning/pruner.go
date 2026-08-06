@@ -80,9 +80,10 @@ type PrunerStats struct {
 }
 
 type Pruner struct {
-	chain   ChainSource
-	cfg     PrunerConfig
-	metrics prunerMetrics
+	chain                     ChainSource
+	cfg                       PrunerConfig
+	metrics                   prunerMetrics
+	coverageVerificationCache *snapshotCoverageVerificationCache
 
 	quit chan struct{}
 	done chan struct{}
@@ -167,11 +168,12 @@ func NewPruner(chain ChainSource, cfg PrunerConfig) *Pruner {
 		cfg.MetricsNamespace = defaultPrunerMetricsNamespace
 	}
 	pruner := &Pruner{
-		chain:   chain,
-		cfg:     cfg,
-		metrics: newPrunerMetrics(cfg.MetricsNamespace),
-		quit:    make(chan struct{}),
-		done:    make(chan struct{}),
+		chain:                     chain,
+		cfg:                       cfg,
+		metrics:                   newPrunerMetrics(cfg.MetricsNamespace),
+		coverageVerificationCache: newSnapshotCoverageVerificationCache(),
+		quit:                      make(chan struct{}),
+		done:                      make(chan struct{}),
 	}
 	pruner.updateMetrics()
 	return pruner
@@ -296,12 +298,13 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		return Stats{}, err
 	}
 	stats, err = Worker{
-		DB:               p.chain.DB(),
-		Policy:           p.cfg.Policy,
-		MaxBlocks:        p.cfg.BatchSize,
-		SnapshotDir:      p.cfg.SnapshotDir,
-		PruneHeadHash:    pruneHeadHash,
-		PruneHeadHasHash: pruneHeadHasHash,
+		DB:                        p.chain.DB(),
+		Policy:                    p.cfg.Policy,
+		MaxBlocks:                 p.cfg.BatchSize,
+		SnapshotDir:               p.cfg.SnapshotDir,
+		PruneHeadHash:             pruneHeadHash,
+		PruneHeadHasHash:          pruneHeadHasHash,
+		coverageVerificationCache: p.coverageVerificationCache,
 	}.PruneToContext(ctx, pruneHead)
 	if err != nil {
 		return Stats{}, err

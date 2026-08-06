@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -671,18 +672,31 @@ func CheckRegisteredSegment(dir string, ref SegmentRef) (bool, error) {
 // VerifyHistorySegmentWithCompanions verifies a history segment and the
 // registered binary sidecars needed to read it after hot history is pruned.
 func VerifyHistorySegmentWithCompanions(dir string, manifest *Manifest, ref SegmentRef) error {
+	return VerifyHistorySegmentWithCompanionsContext(context.Background(), dir, manifest, ref)
+}
+
+// VerifyHistorySegmentWithCompanionsContext verifies the immutable history
+// object and every required read sidecar while allowing lifecycle shutdown to
+// interrupt long record-by-record audits.
+func VerifyHistorySegmentWithCompanionsContext(ctx context.Context, dir string, manifest *Manifest, ref SegmentRef) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
 	if !ok || !cfg.HasHistory || ref.Kind != SegmentHistory {
 		return fmt.Errorf("snapshots: segment %q has no registered history checker for %s/%s", ref.Path, ref.NormalizedDataset(), ref.Kind)
 	}
-	checked, err := CheckRegisteredSegment(dir, ref)
-	if err != nil {
-		return err
-	}
-	if !checked {
-		return fmt.Errorf("snapshots: segment %q has no registered checker for %s/%s", ref.Path, ref.NormalizedDataset(), ref.Kind)
-	}
 	if !cfg.IsHistoryBinarySegmentPath(ref.Path) {
+		checked, err := CheckRegisteredSegment(dir, ref)
+		if err != nil {
+			return err
+		}
+		if !checked {
+			return fmt.Errorf("snapshots: segment %q has no registered checker for %s/%s", ref.Path, ref.NormalizedDataset(), ref.Kind)
+		}
 		return nil
 	}
 	if !cfg.HasHistoryInvertedIndex && !cfg.HasHistoryAccessor {
@@ -711,7 +725,17 @@ func VerifyHistorySegmentWithCompanions(dir string, manifest *Manifest, ref Segm
 		if !cfg.HasHistoryInvertedIndex || !cfg.HasHistoryAccessor {
 			return fmt.Errorf("snapshots: binary %s history %q missing registered state-domain companion configuration", cfg.Dataset, ref.Path)
 		}
-		return verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, ref, idxRef, accessorRef)
+		// Companion coverage consumes every history record and validates framing,
+		// ordering, offsets, and the physical checksum. Running the generic
+		// history checker first would decode the same large segment twice.
+		return verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx, dir, ref, idxRef, accessorRef)
+	}
+	checked, err := CheckRegisteredSegment(dir, ref)
+	if err != nil {
+		return err
+	}
+	if !checked {
+		return fmt.Errorf("snapshots: segment %q has no registered checker for %s/%s", ref.Path, ref.NormalizedDataset(), ref.Kind)
 	}
 	for _, companionRef := range companionRefs {
 		checked, err := CheckRegisteredSegment(dir, companionRef)

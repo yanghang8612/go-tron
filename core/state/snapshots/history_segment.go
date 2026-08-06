@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -232,6 +233,10 @@ func CheckStateDomainChangeIndexSegment(dir string, ref SegmentRef) error {
 
 func CheckStateDomainChangeAccessorSegment(dir string, ref SegmentRef) error {
 	return checkStateDomainChangeBinaryAccessor(dir, ref)
+}
+
+func CheckStateDomainChangeAccessorSegmentContext(ctx context.Context, dir string, ref SegmentRef) error {
+	return checkStateDomainChangeBinaryAccessorContext(ctx, dir, ref)
 }
 
 func CheckStateDomainChangeSegment(dir string, ref SegmentRef) error {

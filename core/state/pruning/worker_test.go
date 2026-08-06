@@ -543,6 +543,71 @@ func TestWorkerSnapRequiresReadableSnapshotCompanions(t *testing.T) {
 	}
 }
 
+func TestWorkerSnapshotCoverageContextCancelsVerification(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 10, 12)
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &cancelAfterChecksContext{}
+	// Pass the outer coverage and verification entry checks, then cancel from
+	// the checksum reader inside companion verification.
+	ctx.remaining.Store(4)
+	_, err = (Worker{Policy: SnapPolicy(3, 2), SnapshotDir: dir}).snapshotStateDomainChangeCoverageContext(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("snapshot coverage error = %v, want context.Canceled", err)
+	}
+}
+
+func TestWorkerSnapshotCoverageCacheReusesAndInvalidatesFileIdentity(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 10, 12)
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := newSnapshotCoverageVerificationCache()
+	worker := Worker{Policy: SnapPolicy(3, 2), SnapshotDir: dir, coverageVerificationCache: cache}
+	if _, err := worker.snapshotStateDomainChangeCoverageContext(context.Background()); err != nil {
+		t.Fatalf("initial coverage verification: %v", err)
+	}
+	// A cache hit performs the two outer cancellation checks but no checksum or
+	// record reads. Without reuse, the third check in contextReader would cancel.
+	ctx := &cancelAfterChecksContext{}
+	ctx.remaining.Store(2)
+	if _, err := worker.snapshotStateDomainChangeCoverageContext(ctx); err != nil {
+		t.Fatalf("cached coverage verification: %v", err)
+	}
+
+	var accessorPath string
+	for _, ref := range refs {
+		if ref.Kind == snapshots.SegmentAccessor {
+			accessorPath = filepath.Join(dir, ref.Path)
+			break
+		}
+	}
+	if accessorPath == "" {
+		t.Fatal("fixture has no accessor companion")
+	}
+	if err := os.WriteFile(accessorPath, []byte("changed accessor identity"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.snapshotStateDomainChangeCoverageContext(context.Background()); err == nil {
+		t.Fatal("changed accessor identity reused cached verification")
+	}
+}
+
 func TestCheckerValidatesSnapshotSegmentsAndCodeHashes(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
