@@ -201,7 +201,7 @@ func TestVerifyLoadedManifestFilesRejectsStaleStateDomainAccessor(t *testing.T) 
 
 	manifest = NewManifest(10, 11, []SegmentRef{segRef, idxRef, accessorRef})
 	_, err = VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
-	if err == nil || (!strings.Contains(err.Error(), "key mismatch") && !strings.Contains(err.Error(), "exact entry")) {
+	if err == nil || (!strings.Contains(err.Error(), "key mismatch") && !strings.Contains(err.Error(), "exact entry") && !strings.Contains(err.Error(), "semantic coverage mismatch")) {
 		t.Fatalf("VerifyLoadedManifestFiles stale accessor err = %v, want companion mismatch", err)
 	}
 }
@@ -262,7 +262,7 @@ func TestVerifyLoadedManifestFilesRejectsV4GroupRecordsOutOfLookupOrder(t *testi
 	}
 	manifest := NewManifest(10, 11, []SegmentRef{segRef, idxRef, accessorRef})
 	_, err = VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true})
-	if err == nil || !strings.Contains(err.Error(), "lookup order") {
+	if err == nil || (!strings.Contains(err.Error(), "lookup order") && !strings.Contains(err.Error(), "semantic coverage mismatch")) {
 		t.Fatalf("VerifyLoadedManifestFiles reordered accessor err = %v, want lookup-order mismatch", err)
 	}
 }

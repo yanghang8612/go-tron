@@ -13,12 +13,18 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
 
 var log = gtronlog.NewModule("core/state/pruning")
 
 const (
 	defaultInterval = time.Minute
+	// Sync can become active after the lifecycle's initial pass has already
+	// crossed its one-shot catch-up check. Poll while the read/verification
+	// phase is running so startup peer discovery cannot leave a multi-minute
+	// semantic audit competing with the importer.
+	pruneCatchupPollInterval = 250 * time.Millisecond
 	// Keep catch-up pruning busy for most of the one-minute lifecycle interval.
 	// Delete writes are independently capped at 32 MiB by Worker, so increasing
 	// the block selection window raises throughput without recreating an
@@ -27,6 +33,8 @@ const (
 	defaultBatch                  = 25_000
 	defaultPrunerMetricsNamespace = "state/prune/"
 )
+
+var errPruneDeferredForCatchup = errors.New("pruning: deferred for sync catch-up")
 
 type ChainSource interface {
 	DB() ethdb.KeyValueStore
@@ -71,6 +79,12 @@ type PrunerStats struct {
 	Passes                       uint64
 	Errors                       uint64
 	SkippedCatchup               uint64
+	CanceledCatchup              uint64
+	VerificationMemoryHits       uint64
+	VerificationPersistentHits   uint64
+	VerificationFull             uint64
+	VerificationTrusted          uint64
+	VerificationCacheEntries     uint64
 	DeletedTxRanges              uint64
 	DeletedDomainChangeBlocks    uint64
 	DeletedCommitmentCheckpoints uint64
@@ -96,6 +110,7 @@ type Pruner struct {
 	deletedCommitmentCheckpoints atomic.Uint64
 	deletedStateCodeRows         atomic.Uint64
 	skippedCatchup               atomic.Uint64
+	canceledCatchup              atomic.Uint64
 	lastSolidifiedBlock          atomic.Uint64
 	lastPassDuration             atomic.Int64
 }
@@ -104,6 +119,12 @@ type prunerMetrics struct {
 	passes                       *metrics.Gauge
 	errors                       *metrics.Gauge
 	skippedCatchup               *metrics.Gauge
+	canceledCatchup              *metrics.Gauge
+	verificationMemoryHits       *metrics.Gauge
+	verificationPersistentHits   *metrics.Gauge
+	verificationFull             *metrics.Gauge
+	verificationTrusted          *metrics.Gauge
+	verificationCacheEntries     *metrics.Gauge
 	deletedTxRanges              *metrics.Gauge
 	deletedDomainChangeBlocks    *metrics.Gauge
 	deletedCommitmentCheckpoints *metrics.Gauge
@@ -118,6 +139,12 @@ func newPrunerMetrics(namespace string) prunerMetrics {
 		passes:                       metrics.GetOrRegisterGauge(namespace+"passes", nil),
 		errors:                       metrics.GetOrRegisterGauge(namespace+"errors", nil),
 		skippedCatchup:               metrics.GetOrRegisterGauge(namespace+"skipped/catchup", nil),
+		canceledCatchup:              metrics.GetOrRegisterGauge(namespace+"verification/canceled/catchup", nil),
+		verificationMemoryHits:       metrics.GetOrRegisterGauge(namespace+"verification/memory_hits", nil),
+		verificationPersistentHits:   metrics.GetOrRegisterGauge(namespace+"verification/persisted_hits", nil),
+		verificationFull:             metrics.GetOrRegisterGauge(namespace+"verification/full", nil),
+		verificationTrusted:          metrics.GetOrRegisterGauge(namespace+"verification/trusted", nil),
+		verificationCacheEntries:     metrics.GetOrRegisterGauge(namespace+"verification/cache_entries", nil),
 		deletedTxRanges:              metrics.GetOrRegisterGauge(namespace+"deleted/tx_ranges", nil),
 		deletedDomainChangeBlocks:    metrics.GetOrRegisterGauge(namespace+"deleted/domain_change_blocks", nil),
 		deletedCommitmentCheckpoints: metrics.GetOrRegisterGauge(namespace+"deleted/commitment_checkpoints", nil),
@@ -141,6 +168,12 @@ func (m prunerMetrics) update(stats PrunerStats) {
 	m.passes.Update(prunerUintGauge(stats.Passes))
 	m.errors.Update(prunerUintGauge(stats.Errors))
 	m.skippedCatchup.Update(prunerUintGauge(stats.SkippedCatchup))
+	m.canceledCatchup.Update(prunerUintGauge(stats.CanceledCatchup))
+	m.verificationMemoryHits.Update(prunerUintGauge(stats.VerificationMemoryHits))
+	m.verificationPersistentHits.Update(prunerUintGauge(stats.VerificationPersistentHits))
+	m.verificationFull.Update(prunerUintGauge(stats.VerificationFull))
+	m.verificationTrusted.Update(prunerUintGauge(stats.VerificationTrusted))
+	m.verificationCacheEntries.Update(prunerUintGauge(stats.VerificationCacheEntries))
 	m.deletedTxRanges.Update(prunerUintGauge(stats.DeletedTxRanges))
 	m.deletedDomainChangeBlocks.Update(prunerUintGauge(stats.DeletedDomainChangeBlocks))
 	m.deletedCommitmentCheckpoints.Update(prunerUintGauge(stats.DeletedCommitmentCheckpoints))
@@ -171,9 +204,12 @@ func NewPruner(chain ChainSource, cfg PrunerConfig) *Pruner {
 		chain:                     chain,
 		cfg:                       cfg,
 		metrics:                   newPrunerMetrics(cfg.MetricsNamespace),
-		coverageVerificationCache: newSnapshotCoverageVerificationCache(),
+		coverageVerificationCache: newSnapshotCoverageVerificationCache(cfg.SnapshotDir),
 		quit:                      make(chan struct{}),
 		done:                      make(chan struct{}),
+	}
+	if err := pruner.coverageVerificationCache.LoadError(); err != nil {
+		log.Warn("Ignoring invalid domain snapshot verification cache", "err", err)
 	}
 	pruner.updateMetrics()
 	return pruner
@@ -228,6 +264,7 @@ func (p *Pruner) Stats() PrunerStats {
 	if p == nil {
 		return PrunerStats{}
 	}
+	verification := p.coverageVerificationCache.Stats()
 	return PrunerStats{
 		Passes:                       p.passes.Load(),
 		Errors:                       p.errors.Load(),
@@ -236,6 +273,12 @@ func (p *Pruner) Stats() PrunerStats {
 		DeletedCommitmentCheckpoints: p.deletedCommitmentCheckpoints.Load(),
 		DeletedStateCodeRows:         p.deletedStateCodeRows.Load(),
 		SkippedCatchup:               p.skippedCatchup.Load(),
+		CanceledCatchup:              p.canceledCatchup.Load(),
+		VerificationMemoryHits:       verification.MemoryHits,
+		VerificationPersistentHits:   verification.PersistentHits,
+		VerificationFull:             verification.FullVerified,
+		VerificationTrusted:          verification.TrustedRecorded,
+		VerificationCacheEntries:     verification.Entries,
 		LastSolidifiedBlock:          p.lastSolidifiedBlock.Load(),
 		LastPassDuration:             time.Duration(p.lastPassDuration.Load()),
 	}
@@ -268,6 +311,41 @@ func (p *Pruner) PrunePass() (stats Stats, err error) {
 	return p.PrunePassContext(context.Background())
 }
 
+// RecordTrustedSnapshotSegments carries the local builder/compactor's narrow
+// trust boundary into the immediately following hot-prune gate. Only exact
+// state-domain history refs still active in the final production manifest are
+// recorded. A restart re-hashes all three immutable objects before reusing the
+// durable record; external or changed refs still require the full audit.
+func (p *Pruner) RecordTrustedSnapshotSegments(refs []snapshots.SegmentRef) error {
+	if p == nil || p.coverageVerificationCache == nil || p.cfg.SnapshotDir == "" || len(refs) == 0 {
+		return nil
+	}
+	manifest, err := snapshots.LoadProductionManifest(p.cfg.SnapshotDir)
+	if err != nil {
+		return err
+	}
+	active := make(map[snapshots.SegmentRef]struct{}, len(manifest.Segments))
+	for _, ref := range manifest.Segments {
+		active[ref] = struct{}{}
+	}
+	for _, ref := range refs {
+		if ref.NormalizedDataset() != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
+			continue
+		}
+		if _, ok := active[ref]; !ok {
+			continue
+		}
+		key, err := snapshotHistoryVerificationKeyFor(p.cfg.SnapshotDir, manifest, ref)
+		if err != nil {
+			return fmt.Errorf("pruning: record trusted state-domain history %q: %w", ref.Path, err)
+		}
+		if err := p.coverageVerificationCache.addTrusted(key); err != nil {
+			return fmt.Errorf("pruning: persist trusted state-domain history %q: %w", ref.Path, err)
+		}
+	}
+	return nil
+}
+
 // PrunePassContext runs one prune pass that can be interrupted while it is
 // still in a read/plan phase. Lifecycle shutdown uses this path so a historical
 // CodeDomain reference scan cannot hold process exit open for minutes.
@@ -292,20 +370,31 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		p.lastSolidifiedBlock.Store(uint64(solidified))
 		return Stats{}, nil
 	}
+	workCtx, stopCatchupWatch := p.contextWithCatchupCancellation(ctx)
+	defer stopCatchupWatch()
 	pruneHead := uint64(solidified)
 	pruneHead, pruneHeadHash, pruneHeadHasHash, err := p.pruneHeadWithVerifiedBoundary(pruneHead)
 	if err != nil {
 		return Stats{}, err
 	}
 	stats, err = Worker{
-		DB:                        p.chain.DB(),
-		Policy:                    p.cfg.Policy,
-		MaxBlocks:                 p.cfg.BatchSize,
-		SnapshotDir:               p.cfg.SnapshotDir,
-		PruneHeadHash:             pruneHeadHash,
-		PruneHeadHasHash:          pruneHeadHasHash,
-		coverageVerificationCache: p.coverageVerificationCache,
+		DB:                          p.chain.DB(),
+		Policy:                      p.cfg.Policy,
+		MaxBlocks:                   p.cfg.BatchSize,
+		SnapshotDir:                 p.cfg.SnapshotDir,
+		PruneHeadHash:               pruneHeadHash,
+		PruneHeadHasHash:            pruneHeadHasHash,
+		coverageVerificationCache:   p.coverageVerificationCache,
+		coverageVerificationContext: workCtx,
+		coverageVerificationDone:    stopCatchupWatch,
 	}.PruneToContext(ctx, pruneHead)
+	stopCatchupWatch()
+	if err != nil && errors.Is(err, context.Canceled) && errors.Is(context.Cause(workCtx), errPruneDeferredForCatchup) {
+		p.skippedCatchup.Add(1)
+		p.canceledCatchup.Add(1)
+		p.lastSolidifiedBlock.Store(uint64(solidified))
+		return Stats{}, nil
+	}
 	if err != nil {
 		return Stats{}, err
 	}
@@ -411,4 +500,63 @@ func (p *Pruner) shouldSkipForCatchup() bool {
 		return false
 	}
 	return remaining > p.cfg.MaxSyncLag
+}
+
+type pruneCatchupCancellation struct {
+	mu      sync.Mutex
+	stopped bool
+	stop    chan struct{}
+	done    chan struct{}
+	cancel  context.CancelCauseFunc
+}
+
+func (p *Pruner) contextWithCatchupCancellation(parent context.Context) (context.Context, func()) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if p == nil || p.cfg.MaxSyncLag == 0 {
+		return parent, func() {}
+	}
+	if _, ok := p.chain.(syncRemainingSource); !ok {
+		return parent, func() {}
+	}
+	ctx, cancel := context.WithCancelCause(parent)
+	watch := &pruneCatchupCancellation{
+		stop:   make(chan struct{}),
+		done:   make(chan struct{}),
+		cancel: cancel,
+	}
+	go func() {
+		defer close(watch.done)
+		ticker := time.NewTicker(pruneCatchupPollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if !p.shouldSkipForCatchup() {
+					continue
+				}
+				watch.mu.Lock()
+				if !watch.stopped {
+					watch.cancel(errPruneDeferredForCatchup)
+				}
+				watch.mu.Unlock()
+				return
+			case <-watch.stop:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ctx, func() {
+		watch.mu.Lock()
+		if !watch.stopped {
+			watch.stopped = true
+			close(watch.stop)
+		}
+		watch.mu.Unlock()
+		<-watch.done
+		cancel(nil)
+	}
 }

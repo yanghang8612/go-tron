@@ -4030,6 +4030,69 @@ The byte-order, latest-operation collapse, interruption/retry, truncated-input,
 and batch semantics remain unchanged and are covered by the ETL and downstream
 snapshot suites.
 
+#### P5.29: Catch-up-safe persistent and bounded snapshot verification
+
+The first long-running snap-mode deployment exposed a different hot-prune
+safety cost. A 30.2-second profile consumed 414.25 CPU-seconds (13.7 of 16
+cores), with Go marking and scanning accounting for 74.75%. The live heap was
+11.99 GiB; `verifyStateDomainChangeBinaryAccessorV4Coverage` retained 10.13
+GiB through record-indexed exact/group proof arrays and a 4.49 GiB map of full
+keys sharing the accessor's four-byte prefix. The configured 10 GiB soft Go
+memory limit was below that irreducible live set, so the collector could not
+reach its target and continuously rescanned the heap. Over the same dense
+window import fell to about 16.1 blocks/s and 2,009 transactions/s from the
+preceding approximately 36.7 blocks/s and 3,958 transactions/s.
+
+Storage was not saturated: excluding `iostat`'s since-boot first row, the data
+NVMe averaged roughly 45% utilization, queue depth 1.1, and 1--1.5 ms await,
+while Pebble reported zero write-delay events. The verifier was running even
+though sync had become active with roughly 79.9 million blocks remaining. The
+pruner checked catch-up only once at pass entry; startup peer discovery could
+therefore report no active session, let the audit begin, and provide no way to
+cancel it once the downloader became active.
+
+The prune pass now keeps a catch-up watcher for its complete read/verification
+phase. Every 250 ms it rechecks the sync service; exceeding the configured lag
+cancels checksum reads, history decoding, or ETL merge through the existing
+context path. This cancellation is counted as a catch-up deferral rather than a
+prune error, and a dedicated metric distinguishes in-flight cancellations from
+passes skipped at entry.
+
+Successful semantic coverage is now durable and content-addressed. The private
+cache records the exact state-history/index/accessor `SegmentRef` triple only
+after a complete audit or the trusted local builder/compactor transaction.
+Publication and cache replacement are fsync-plus-atomic-rename boundaries. An
+in-process hit still uses file identity to avoid repeated work in every minute
+pass; after restart, a durable hit must recompute SHA-256 and size for all three
+objects before it can be promoted into that fast cache. A changed checksum,
+range, aggregation-step count, companion path, size, or malformed cache entry
+falls back to the full gate or is rejected. Tests corrupt an accessor while
+preserving its size and mtime and require the restart path to reject it by
+checksum.
+
+Fresh base and compaction outputs already enforce canonical record ordering and
+build the v4 companions from the same writer-owned stream. The composed
+lifecycle now records only those exact outputs which remain active in the final
+manifest, extending P5.26's narrow trusted-build boundary to the immediately
+following hot prune. Downloaded, restored, pre-existing, or changed triples are
+never admitted through this route.
+
+The remaining first-time external audit no longer constructs arrays or maps
+proportional to every history record. Index coverage decodes the canonical
+history once and feeds the existing exact/group accessor collectors. Their
+64 MiB bounded buffers spill through the tournament ETL merge; deterministic
+v4 output is streamed into a SHA-256 sink and must equal the immutable
+accessor's size and checksum. The group directory offsets and private group
+payload are sequential temp files as well, removing the last one-offset-per-
+group heap slice; only those files and bounded ETL runs reach disk, and no
+second multi-gigabyte accessor is materialized. Forced-spill and cancellation
+regressions prove byte-identical metadata and cleanup, while all adversarial
+stale/reordered companion tests remain rejected. Production metrics now expose
+memory, persistent, full, and trusted verification paths plus cache entry
+count. The deployment gate must show that active catch-up performs no long
+semantic audit, Go heap/GC returns to the importer baseline, and restart uses
+checksum-only promotion without weakening snapshot/prune correctness.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

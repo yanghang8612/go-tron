@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -1269,6 +1270,21 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir string, historyRe
 	return verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(context.Background(), dir, historyRef, indexRef, accessorRef)
 }
 
+func verifyStateDomainChangeBinaryCompanionChecksumsContext(ctx context.Context, dir string, historyRef, indexRef, accessorRef SegmentRef) error {
+	for _, ref := range []SegmentRef{historyRef, indexRef, accessorRef} {
+		if strings.TrimSpace(ref.Checksum) == "" {
+			return fmt.Errorf("snapshots: segment %q has no checksum for cached semantic verification", ref.Path)
+		}
+	}
+	if err := checkStateDomainChangeBinarySegmentChecksumContext(ctx, dir, historyRef); err != nil {
+		return err
+	}
+	if err := checkStateDomainChangeBinaryIndexChecksumContext(ctx, dir, indexRef); err != nil {
+		return err
+	}
+	return checkStateDomainChangeBinaryAccessorChecksumContext(ctx, dir, accessorRef)
+}
+
 func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Context, dir string, historyRef, indexRef, accessorRef SegmentRef) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1285,7 +1301,7 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 	if err := checkStateDomainChangeBinaryIndexChecksumContext(ctx, dir, indexRef); err != nil {
 		return err
 	}
-	if err := CheckStateDomainChangeAccessorSegmentContext(ctx, dir, accessorRef); err != nil {
+	if err := checkStateDomainChangeBinaryAccessorChecksumContext(ctx, dir, accessorRef); err != nil {
 		return err
 	}
 
@@ -1327,20 +1343,43 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 	if accessorHeader.count != segmentHeader.count {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q count %d, want segment count %d", accessorRef.Path, accessorHeader.count, segmentHeader.count)
 	}
+	if accessorHeader.version != stateDomainChangeBinaryVersionV4 {
+		// V4 is rebuilt deterministically below; byte-identical output proves its
+		// complete structure and semantics in one gate. Legacy layouts retain the
+		// standalone structural scan before their older coverage algorithms.
+		if err := CheckStateDomainChangeAccessorSegmentContext(ctx, dir, accessorRef); err != nil {
+			return err
+		}
+	}
 
+	if accessorHeader.version == stateDomainChangeBinaryVersionV4 {
+		collectors, scratch, err := newStateDomainChangeAccessorVerificationCollectors(dir)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			collectors.Close()
+			_ = os.RemoveAll(scratch)
+		}()
+		if err := verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader.count, indexReader, indexHeader.count, collectors.Collect); err != nil {
+			return err
+		}
+		return verifyStateDomainChangeBinaryAccessorV4CollectedContext(ctx, scratch, accessorRef, segmentHeader.count, accessorReader, accessorSize, accessorHeader, collectors)
+	}
 	if err := verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader.count, indexReader, indexHeader.count); err != nil {
 		return err
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV3 {
 		return verifyStateDomainChangeBinaryAccessorV3Coverage(historyRef, accessorRef, segmentReader, segmentSize, segmentHeader.count, indexReader, indexHeader.count, accessorReader, accessorSize, accessorHeader)
 	}
-	if accessorHeader.version == stateDomainChangeBinaryVersionV4 {
-		return verifyStateDomainChangeBinaryAccessorV4Coverage(accessorRef, segmentReader, segmentSize, segmentHeader.count, accessorReader, accessorSize, accessorHeader)
-	}
 	return verifyStateDomainChangeBinaryAccessorCoverage(historyRef, accessorRef, segmentReader, segmentSize, recordOffset, segmentHeader.count, accessorReader, accessorSize, accessorHeader.count)
 }
 
 func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset, recordCount uint64, index io.ReaderAt, indexCount uint64) error {
+	return verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef, segment, segmentSize, recordOffset, recordCount, index, indexCount, nil)
+}
+
+func verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset, recordCount uint64, index io.ReaderAt, indexCount uint64, visit func(*rawdb.StateDomainChange, uint64, uint64) error) error {
 	expectedRecordIndex := uint64(0)
 	expectedOffset := recordOffset
 	var previousTxNum uint64
@@ -1375,7 +1414,8 @@ func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef,
 		offset := entry.offset
 		var previousSeq uint64
 		for j := uint64(0); j < entry.count; j++ {
-			change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, offset, segmentSize, entry.recordIndex+j)
+			recordIndex := entry.recordIndex + j
+			change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, offset, segmentSize, recordIndex)
 			if err != nil {
 				return err
 			}
@@ -1386,6 +1426,11 @@ func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef,
 				return errors.New("snapshots: state-domain-change entries are not sorted")
 			}
 			previousSeq = change.Seq
+			if visit != nil {
+				if err := visit(change, offset, recordIndex); err != nil {
+					return err
+				}
+			}
 			offset = next
 		}
 		expectedRecordIndex += entry.count
@@ -1747,6 +1792,11 @@ func checkStateDomainChangeBinaryIndexChecksumContext(ctx context.Context, dir s
 		return err
 	}
 	defer indexFile.Close()
+	if info, err := indexFile.Stat(); err != nil {
+		return err
+	} else if ref.Size != 0 && uint64(info.Size()) != ref.Size {
+		return fmt.Errorf("snapshots: segment %q size %d, want %d", ref.Path, info.Size(), ref.Size)
+	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, contextReader{ctx: ctx, r: indexFile}); err != nil {
 		return err
@@ -1817,6 +1867,13 @@ func checkStateDomainChangeBinarySegmentChecksumContext(ctx context.Context, dir
 		f, err := os.Open(filepath.Join(dir, ref.Path))
 		if err != nil {
 			return err
+		}
+		if info, statErr := f.Stat(); statErr != nil {
+			_ = f.Close()
+			return statErr
+		} else if ref.Size != 0 && uint64(info.Size()) != ref.Size {
+			_ = f.Close()
+			return fmt.Errorf("snapshots: segment %q size %d, want %d", ref.Path, info.Size(), ref.Size)
 		}
 		h := sha256.New()
 		_, copyErr := io.Copy(h, contextReader{ctx: ctx, r: f})
@@ -1914,6 +1971,29 @@ func readStateDomainChangeBinaryAccessor(dir string, ref SegmentRef) ([]stateDom
 
 func checkStateDomainChangeBinaryAccessor(dir string, ref SegmentRef) error {
 	return checkStateDomainChangeBinaryAccessorContext(context.Background(), dir, ref)
+}
+
+func checkStateDomainChangeBinaryAccessorChecksumContext(ctx context.Context, dir string, ref SegmentRef) error {
+	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentAccessor {
+		return fmt.Errorf("snapshots: state-domain-change binary accessor %q is %s/%s, want state-domain-change/accessor", ref.Path, ref.Dataset, ref.Kind)
+	}
+	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
+		return err
+	}
+	if strings.TrimSpace(ref.Checksum) == "" {
+		return fmt.Errorf("snapshots: segment %q has no checksum", ref.Path)
+	}
+	size, checksum, err := stateDomainChangeBinaryFileMetadataContext(ctx, filepath.Join(dir, ref.Path))
+	if err != nil {
+		return err
+	}
+	if ref.Size != 0 && size != ref.Size {
+		return fmt.Errorf("snapshots: segment %q size %d, want %d", ref.Path, size, ref.Size)
+	}
+	if checksum != ref.Checksum {
+		return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, checksum, ref.Checksum)
+	}
+	return nil
 }
 
 func checkStateDomainChangeBinaryAccessorContext(ctx context.Context, dir string, ref SegmentRef) error {

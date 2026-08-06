@@ -3,6 +3,7 @@ package pruning
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -565,6 +566,32 @@ func TestWorkerSnapshotCoverageContextCancelsVerification(t *testing.T) {
 	}
 }
 
+func TestWorkerCatchupCancellationStopsAtVerificationBoundary(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	oldChange, _, _ := writeSnapPruningChange(t, db, 1, 10, 12)
+	_, _, _ = writeSnapPruningChange(t, db, 4, 40, 42)
+	verificationCtx, cancelVerification := context.WithCancel(context.Background())
+	worker := Worker{
+		DB:                          db,
+		Policy:                      FullPolicy(3, 2),
+		coverageVerificationContext: verificationCtx,
+		coverageVerificationDone:    cancelVerification,
+	}
+	stats, err := worker.PruneToContext(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("prune after verification boundary: %v", err)
+	}
+	if !errors.Is(verificationCtx.Err(), context.Canceled) {
+		t.Fatalf("verification context error = %v, want context.Canceled", verificationCtx.Err())
+	}
+	if stats.DeletedTxRanges != 1 || stats.DeletedDomainChangeBlocks != 1 {
+		t.Fatalf("prune stats after verification context closed = %+v", stats)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, oldChange.BlockNum); err != nil || ok {
+		t.Fatalf("old tx range after verification context closed ok=%v err=%v, want deleted", ok, err)
+	}
+}
+
 func TestWorkerSnapshotCoverageCacheReusesAndInvalidatesFileIdentity(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
@@ -577,10 +604,13 @@ func TestWorkerSnapshotCoverageCacheReusesAndInvalidatesFileIdentity(t *testing.
 		t.Fatal(err)
 	}
 
-	cache := newSnapshotCoverageVerificationCache()
+	cache := newSnapshotCoverageVerificationCache(dir)
 	worker := Worker{Policy: SnapPolicy(3, 2), SnapshotDir: dir, coverageVerificationCache: cache}
 	if _, err := worker.snapshotStateDomainChangeCoverageContext(context.Background()); err != nil {
 		t.Fatalf("initial coverage verification: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, snapshotCoverageVerificationCacheFile)); err != nil {
+		t.Fatalf("persistent verification cache: %v", err)
 	}
 	// A cache hit performs the two outer cancellation checks but no checksum or
 	// record reads. Without reuse, the third check in contextReader would cancel.
@@ -605,6 +635,160 @@ func TestWorkerSnapshotCoverageCacheReusesAndInvalidatesFileIdentity(t *testing.
 	}
 	if _, err := worker.snapshotStateDomainChangeCoverageContext(context.Background()); err == nil {
 		t.Fatal("changed accessor identity reused cached verification")
+	}
+}
+
+func TestWorkerSnapshotCoveragePersistentCacheRehashesAfterRestart(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 10, 12)
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	first := newSnapshotCoverageVerificationCache(dir)
+	worker := Worker{Policy: SnapPolicy(3, 2), SnapshotDir: dir, coverageVerificationCache: first}
+	if _, err := worker.snapshotStateDomainChangeCoverageContext(context.Background()); err != nil {
+		t.Fatalf("initial full verification: %v", err)
+	}
+	if got := first.Stats(); got.FullVerified != 1 || got.Entries != 1 {
+		t.Fatalf("initial verification cache stats = %+v", got)
+	}
+
+	restarted := newSnapshotCoverageVerificationCache(dir)
+	if err := restarted.LoadError(); err != nil {
+		t.Fatalf("reload verification cache: %v", err)
+	}
+	worker.coverageVerificationCache = restarted
+	if _, err := worker.snapshotStateDomainChangeCoverageContext(context.Background()); err != nil {
+		t.Fatalf("persistent checksum reuse: %v", err)
+	}
+	if got := restarted.Stats(); got.PersistentHits != 1 || got.FullVerified != 0 {
+		t.Fatalf("restarted verification cache stats = %+v", got)
+	}
+
+	var accessor snapshots.SegmentRef
+	for _, ref := range refs {
+		if ref.Kind == snapshots.SegmentAccessor {
+			accessor = ref
+			break
+		}
+	}
+	path := filepath.Join(dir, accessor.Path)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 0xff
+	if err := os.WriteFile(path, data, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	// A fresh process has no timestamp shortcut. Even when size and mtime are
+	// restored, the durable semantic record is accepted only after SHA-256.
+	restarted = newSnapshotCoverageVerificationCache(dir)
+	worker.coverageVerificationCache = restarted
+	if _, err := worker.snapshotStateDomainChangeCoverageContext(context.Background()); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("tampered persistent-cache object error = %v, want checksum mismatch", err)
+	}
+}
+
+func TestWorkerSnapshotCoverageMalformedPersistentCacheFallsBackToFullVerification(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 10, 12)
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := snapshots.LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var history snapshots.SegmentRef
+	for _, ref := range refs {
+		if ref.Kind == snapshots.SegmentHistory {
+			history = ref
+			break
+		}
+	}
+	key, err := snapshotHistoryVerificationKeyFor(dir, manifest, history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := snapshotHistoryVerificationRecordFor(key)
+	invalid := valid
+	invalid.Accessor.Checksum = "sha256:invalid"
+	data, err := json.Marshal(snapshotCoverageVerificationDisk{
+		Version: snapshotCoverageVerificationCacheVersion,
+		Entries: []snapshotHistoryVerificationRecord{valid, invalid},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, snapshotCoverageVerificationCacheFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := newSnapshotCoverageVerificationCache(dir)
+	if cache.LoadError() == nil {
+		t.Fatal("malformed persistent verification cache loaded without error")
+	}
+	if got := cache.Stats(); got.Entries != 0 {
+		t.Fatalf("malformed persistent verification cache retained partial entries: %+v", got)
+	}
+	worker := Worker{Policy: SnapPolicy(3, 2), SnapshotDir: dir, coverageVerificationCache: cache}
+	if _, err := worker.snapshotStateDomainChangeCoverageContext(context.Background()); err != nil {
+		t.Fatalf("full verification fallback: %v", err)
+	}
+	if got := cache.Stats(); got.FullVerified != 1 || got.PersistentHits != 0 || got.Entries != 1 {
+		t.Fatalf("fallback verification cache stats = %+v", got)
+	}
+}
+
+func TestPrunerRecordsTrustedLocalSnapshotForRestart(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 10, 12)
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+	pruner := NewPruner(&fakePruneChain{db: db, solidified: 1}, PrunerConfig{
+		Policy:      SnapPolicy(3, 2),
+		SnapshotDir: dir,
+	})
+	if err := pruner.RecordTrustedSnapshotSegments(refs); err != nil {
+		t.Fatalf("record trusted snapshot: %v", err)
+	}
+	if got := pruner.coverageVerificationCache.Stats(); got.TrustedRecorded != 1 || got.Entries != 1 {
+		t.Fatalf("trusted verification cache stats = %+v", got)
+	}
+
+	restarted := newSnapshotCoverageVerificationCache(dir)
+	worker := Worker{Policy: SnapPolicy(3, 2), SnapshotDir: dir, coverageVerificationCache: restarted}
+	if _, err := worker.snapshotStateDomainChangeCoverageContext(context.Background()); err != nil {
+		t.Fatalf("restart trusted checksum reuse: %v", err)
+	}
+	if got := restarted.Stats(); got.PersistentHits != 1 || got.FullVerified != 0 {
+		t.Fatalf("trusted restart verification cache stats = %+v", got)
 	}
 }
 
@@ -1389,6 +1573,30 @@ func TestPrunerSkipsWhileSyncLagExceedsThreshold(t *testing.T) {
 	}
 }
 
+func TestPrunerCatchupWatchCancelsAfterSyncBecomesActive(t *testing.T) {
+	chain := &atomicSyncPruneChain{db: rawdb.NewMemoryDatabase(), solidified: 100}
+	pruner := NewPruner(chain, PrunerConfig{
+		Policy:     SnapPolicy(262_144, 128),
+		Interval:   time.Hour,
+		MaxSyncLag: 262_144,
+	})
+	ctx, stop := pruner.contextWithCatchupCancellation(context.Background())
+	defer stop()
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("catch-up watch started canceled: %v", err)
+	}
+	chain.syncRemaining.Store(80_000_000)
+	chain.syncActive.Store(true)
+	select {
+	case <-ctx.Done():
+		if !errors.Is(context.Cause(ctx), errPruneDeferredForCatchup) {
+			t.Fatalf("catch-up cancellation cause = %v", context.Cause(ctx))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("catch-up watch did not cancel after sync became active")
+	}
+}
+
 func TestPrunerCapsHeadAtFinishStageProgress(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	for blockNum := uint64(1); blockNum <= 10; blockNum++ {
@@ -1678,6 +1886,21 @@ type fakePruneChain struct {
 	syncRemainingOK bool
 	canonicalHashes map[uint64]common.Hash
 	canonicalErrs   map[uint64]error
+}
+
+type atomicSyncPruneChain struct {
+	db            ethdb.KeyValueStore
+	solidified    int64
+	syncRemaining atomic.Uint64
+	syncActive    atomic.Bool
+}
+
+func (f *atomicSyncPruneChain) DB() ethdb.KeyValueStore { return f.db }
+
+func (f *atomicSyncPruneChain) LatestSolidifiedBlockNum() int64 { return f.solidified }
+
+func (f *atomicSyncPruneChain) SyncRemainingBlocks() (uint64, bool) {
+	return f.syncRemaining.Load(), f.syncActive.Load()
 }
 
 func (f *fakePruneChain) DB() ethdb.KeyValueStore { return f.db }

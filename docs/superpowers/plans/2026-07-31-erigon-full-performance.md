@@ -455,6 +455,19 @@
   1 MiB run I/O buffers.
 - [x] Skip verified range-wide shared key prefixes in eight-byte chunks during
   radix ordering instead of rescanning every row once per identical byte.
+- [x] Cancel an in-flight hot-prune snapshot audit when sync becomes active and
+  exceeds the catch-up threshold, instead of checking downloader state only at
+  pass entry.
+- [x] Persist exact history/index/accessor semantic-verification records and
+  require size plus SHA-256 reauthentication before every restart reuse.
+- [x] Carry the trusted local base-build/compaction transaction into the next
+  hot-prune gate only for exact outputs still active in the final manifest.
+- [x] Replace record-proportional v4 proof arrays and full-key maps with bounded
+  ETL reconstruction streamed into a checksum sink, including forced-spill and
+  cancellation coverage.
+- [ ] Run the catch-up-safe verification production gate and compare Go heap,
+  GC CPU, checksum-only restart time, in-flight cancellation metrics, and sync
+  transactions/second against the 10 GiB live-verifier incident.
 - [ ] Run the fused event-log/radix-ETL production gate and compare snapshot
   build/check CPU, `pread` volume, lifecycle lag, allocations, and sync
   transactions/second over a fixed dense window.

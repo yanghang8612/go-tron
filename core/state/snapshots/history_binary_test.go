@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -1169,8 +1171,65 @@ func TestStateDomainChangeBinaryV4CoverageBuffersAccessorReads(t *testing.T) {
 		t.Fatalf("verify v4 coverage: %v", err)
 	}
 	t.Logf("v4 coverage used %d accessor reads for %d changes", countedAccessor.reads, changeCount)
-	if countedAccessor.reads > 8 {
+	if countedAccessor.reads > 16 {
 		t.Fatalf("v4 coverage used %d accessor reads for %d changes, want bounded window reads", countedAccessor.reads, changeCount)
+	}
+}
+
+func TestStateDomainChangeBinaryV4ExpectedMetadataSpillsAndCancels(t *testing.T) {
+	const changeCount = 2048
+	owner := binaryAddress(0xb6)
+	changes := make([]*rawdb.StateDomainChange, changeCount)
+	for i := range changes {
+		change := binaryStateDomainChange(uint64(i+1), uint64(i+1), 1, fmt.Sprintf("slot/%08d/shared-prefix", i))
+		change.Owner = owner
+		change.Generation = 7
+		change.Domain = kvdomains.ContractStorage
+		changes[i] = change
+	}
+	_, _, entries, err := encodeStateDomainChangeBinarySegment(1, changeCount, normalizeStateDomainChangesForBinary(changes))
+	if err != nil {
+		t.Fatalf("encode segment: %v", err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessorV4(1, changeCount, entries)
+	if err != nil {
+		t.Fatalf("encode accessor: %v", err)
+	}
+
+	newCollectors := func() *stateDomainChangeBinaryAccessorV4Collectors {
+		collectors, err := newStateDomainChangeBinaryAccessorV4Collectors(etl.Options{TempDir: t.TempDir(), BufferLimit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, change := range changes {
+			if err := collectors.Collect(change, entries[i].offset, uint64(i)); err != nil {
+				collectors.Close()
+				t.Fatal(err)
+			}
+		}
+		return collectors
+	}
+
+	collectors := newCollectors()
+	metadata, stats, err := collectors.ExpectedMetadataContext(context.Background(), t.TempDir(), SegmentRef{FromTxNum: 1, ToTxNum: changeCount, Path: "expected.kv"}, changeCount)
+	collectors.Close()
+	if err != nil {
+		t.Fatalf("build expected metadata: %v", err)
+	}
+	if stats.SpilledRuns == 0 {
+		t.Fatalf("expected metadata ETL stats = %+v, want forced spill", stats)
+	}
+	if got := "sha256:" + fmt.Sprintf("%x", metadata.checksum[:]); metadata.size != uint64(len(accessorData)) || got != checksumBytes(accessorData) {
+		t.Fatalf("expected metadata = %d/%s, want %d/%s", metadata.size, got, len(accessorData), checksumBytes(accessorData))
+	}
+
+	collectors = newCollectors()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err = collectors.ExpectedMetadataContext(ctx, t.TempDir(), SegmentRef{FromTxNum: 1, ToTxNum: changeCount, Path: "expected.kv"}, changeCount)
+	collectors.Close()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled expected metadata error = %v, want context.Canceled", err)
 	}
 }
 

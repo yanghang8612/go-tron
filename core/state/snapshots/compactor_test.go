@@ -492,7 +492,7 @@ func TestCompactHistoryDomainValidatesAccessorAgainstSegment(t *testing.T) {
 		t.Fatalf("publish manifest: %v", err)
 	}
 	_, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
-	if err == nil || (!strings.Contains(err.Error(), "entry tx/seq") && !strings.Contains(err.Error(), "exact entry")) {
+	if err == nil || (!strings.Contains(err.Error(), "entry tx/seq") && !strings.Contains(err.Error(), "exact entry") && !strings.Contains(err.Error(), "semantic coverage mismatch")) {
 		t.Fatalf("compact err = %v, want accessor/segment mismatch", err)
 	}
 }

@@ -675,6 +675,34 @@ func VerifyHistorySegmentWithCompanions(dir string, manifest *Manifest, ref Segm
 	return VerifyHistorySegmentWithCompanionsContext(context.Background(), dir, manifest, ref)
 }
 
+// VerifyHistorySegmentCompanionChecksumsContext re-authenticates the physical
+// history/index/accessor objects without repeating their semantic coverage
+// proof. It is intentionally restricted to the state-domain binary triple and
+// requires strong checksums for every object. The pruning lifecycle uses it
+// only after loading a content-addressed proof written by an earlier complete
+// audit or by the trusted local build transaction.
+func VerifyHistorySegmentCompanionChecksumsContext(ctx context.Context, dir string, manifest *Manifest, ref SegmentRef) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
+	if !ok || cfg.Dataset != SegmentDatasetStateDomainChange || !cfg.HasHistory || ref.Kind != SegmentHistory || !cfg.IsHistoryBinarySegmentPath(ref.Path) {
+		return fmt.Errorf("snapshots: segment %q has no checksum-only state-domain history verifier", ref.Path)
+	}
+	indexRef, ok := cfg.HistoryIndexRef(manifest, ref)
+	if !ok {
+		return fmt.Errorf("snapshots: binary %s history %q missing required index %q", cfg.Dataset, ref.Path, cfg.HistoryIndexPathFor(ref.Path))
+	}
+	accessorRef, ok := cfg.HistoryAccessorRef(manifest, ref)
+	if !ok {
+		return fmt.Errorf("snapshots: binary %s history %q missing required accessor %q", cfg.Dataset, ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
+	}
+	return verifyStateDomainChangeBinaryCompanionChecksumsContext(ctx, dir, ref, indexRef, accessorRef)
+}
+
 // VerifyHistorySegmentWithCompanionsContext verifies the immutable history
 // object and every required read sidecar while allowing lifecycle shutdown to
 // interrupt long record-by-record audits.

@@ -210,6 +210,10 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			return out, err
 		}
 		out.Snapshot = result
+		trusted := append(append([]snapshots.SegmentRef(nil), result.Segments...), result.Compaction.Segments...)
+		if err := l.pruner.RecordTrustedSnapshotSegments(trusted); err != nil {
+			return out, err
+		}
 	}
 	if l.chainFreezerBuild != nil {
 		result, err := l.chainFreezerBuild()

@@ -5,9 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
-	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -32,7 +31,9 @@ type Worker struct {
 	PruneHeadHash    common.Hash
 	PruneHeadHasHash bool
 
-	coverageVerificationCache *snapshotCoverageVerificationCache
+	coverageVerificationCache   *snapshotCoverageVerificationCache
+	coverageVerificationContext context.Context
+	coverageVerificationDone    func()
 }
 
 type Stats struct {
@@ -150,7 +151,14 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 		return Stats{}, nil
 	}
 	var stats Stats
-	coverage, err := w.snapshotStateDomainChangeCoverageContext(ctx)
+	coverageCtx := ctx
+	if w.coverageVerificationContext != nil {
+		coverageCtx = w.coverageVerificationContext
+	}
+	coverage, err := w.snapshotStateDomainChangeCoverageContext(coverageCtx)
+	if w.coverageVerificationDone != nil {
+		w.coverageVerificationDone()
+	}
 	if err != nil {
 		return Stats{}, err
 	}
@@ -422,8 +430,18 @@ func (w Worker) snapshotStateDomainChangeCoverageContext(ctx context.Context) (s
 		}
 		activeCacheKeys[cacheKey] = struct{}{}
 		if w.coverageVerificationCache == nil || !w.coverageVerificationCache.contains(cacheKey) {
-			if err := snapshots.VerifyHistorySegmentWithCompanionsContext(ctx, w.SnapshotDir, manifest, ref); err != nil {
-				return nil, fmt.Errorf("pruning: verify state-domain history coverage %q: %w", ref.Path, err)
+			persisted := w.coverageVerificationCache != nil && w.coverageVerificationCache.persistentCandidate(cacheKey)
+			if persisted {
+				if err := snapshots.VerifyHistorySegmentCompanionChecksumsContext(ctx, w.SnapshotDir, manifest, ref); err != nil {
+					return nil, fmt.Errorf("pruning: recheck cached state-domain history coverage %q: %w", ref.Path, err)
+				}
+			} else {
+				started := time.Now()
+				log.Info("Verifying domain snapshot history before hot prune", "path", ref.Path, "size", ref.Size)
+				if err := snapshots.VerifyHistorySegmentWithCompanionsContext(ctx, w.SnapshotDir, manifest, ref); err != nil {
+					return nil, fmt.Errorf("pruning: verify state-domain history coverage %q: %w", ref.Path, err)
+				}
+				log.Info("Verified domain snapshot history before hot prune", "path", ref.Path, "elapsed", time.Since(started))
 			}
 			verifiedKey, err := snapshotHistoryVerificationKeyFor(w.SnapshotDir, manifest, ref)
 			if err != nil {
@@ -433,13 +451,19 @@ func (w Worker) snapshotStateDomainChangeCoverageContext(ctx context.Context) (s
 				return nil, fmt.Errorf("pruning: state-domain history coverage %q changed while being verified", ref.Path)
 			}
 			if w.coverageVerificationCache != nil {
-				w.coverageVerificationCache.add(cacheKey)
+				if persisted {
+					w.coverageVerificationCache.promotePersistent(cacheKey)
+				} else if err := w.coverageVerificationCache.addFull(cacheKey); err != nil {
+					return nil, fmt.Errorf("pruning: persist state-domain history verification %q: %w", ref.Path, err)
+				}
 			}
 		}
 		coverage = append(coverage, snapshotTxRange{from: ref.FromTxNum, to: ref.ToTxNum})
 	}
 	if w.coverageVerificationCache != nil {
-		w.coverageVerificationCache.retain(activeCacheKeys)
+		if err := w.coverageVerificationCache.retain(activeCacheKeys); err != nil {
+			return nil, fmt.Errorf("pruning: retain active state-domain history verifications: %w", err)
+		}
 	}
 	sort.Slice(coverage, func(i, j int) bool {
 		if coverage[i].from != coverage[j].from {
@@ -448,102 +472,6 @@ func (w Worker) snapshotStateDomainChangeCoverageContext(ctx context.Context) (s
 		return coverage[i].to < coverage[j].to
 	})
 	return coverage, nil
-}
-
-type snapshotFileIdentity struct {
-	size        int64
-	modUnixNano int64
-}
-
-type snapshotHistoryVerificationKey struct {
-	history      snapshots.SegmentRef
-	index        snapshots.SegmentRef
-	accessor     snapshots.SegmentRef
-	historyFile  snapshotFileIdentity
-	indexFile    snapshotFileIdentity
-	accessorFile snapshotFileIdentity
-}
-
-type snapshotCoverageVerificationCache struct {
-	mu       sync.Mutex
-	verified map[snapshotHistoryVerificationKey]struct{}
-}
-
-func newSnapshotCoverageVerificationCache() *snapshotCoverageVerificationCache {
-	return &snapshotCoverageVerificationCache{verified: make(map[snapshotHistoryVerificationKey]struct{})}
-}
-
-func (c *snapshotCoverageVerificationCache) contains(key snapshotHistoryVerificationKey) bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	_, ok := c.verified[key]
-	c.mu.Unlock()
-	return ok
-}
-
-func (c *snapshotCoverageVerificationCache) add(key snapshotHistoryVerificationKey) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.verified[key] = struct{}{}
-	c.mu.Unlock()
-}
-
-func (c *snapshotCoverageVerificationCache) retain(active map[snapshotHistoryVerificationKey]struct{}) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	for key := range c.verified {
-		if _, ok := active[key]; !ok {
-			delete(c.verified, key)
-		}
-	}
-	c.mu.Unlock()
-}
-
-func snapshotHistoryVerificationKeyFor(dir string, manifest *snapshots.Manifest, history snapshots.SegmentRef) (snapshotHistoryVerificationKey, error) {
-	key := snapshotHistoryVerificationKey{history: history}
-	var err error
-	if key.historyFile, err = snapshotVerificationFileIdentity(dir, history); err != nil {
-		return snapshotHistoryVerificationKey{}, err
-	}
-	cfg, ok := snapshots.DefaultDomainRegistry().ConfigForRef(history)
-	if !ok || !cfg.IsHistoryBinarySegmentPath(history.Path) {
-		return key, nil
-	}
-	if cfg.HasHistoryInvertedIndex {
-		var found bool
-		key.index, found = cfg.HistoryIndexRef(manifest, history)
-		if !found {
-			return snapshotHistoryVerificationKey{}, fmt.Errorf("missing history index companion")
-		}
-		if key.indexFile, err = snapshotVerificationFileIdentity(dir, key.index); err != nil {
-			return snapshotHistoryVerificationKey{}, err
-		}
-	}
-	if cfg.HasHistoryAccessor {
-		var found bool
-		key.accessor, found = cfg.HistoryAccessorRef(manifest, history)
-		if !found {
-			return snapshotHistoryVerificationKey{}, fmt.Errorf("missing history accessor companion")
-		}
-		if key.accessorFile, err = snapshotVerificationFileIdentity(dir, key.accessor); err != nil {
-			return snapshotHistoryVerificationKey{}, err
-		}
-	}
-	return key, nil
-}
-
-func snapshotVerificationFileIdentity(dir string, ref snapshots.SegmentRef) (snapshotFileIdentity, error) {
-	info, err := os.Stat(filepath.Join(dir, ref.Path))
-	if err != nil {
-		return snapshotFileIdentity{}, err
-	}
-	return snapshotFileIdentity{size: info.Size(), modUnixNano: info.ModTime().UnixNano()}, nil
 }
 
 func (c snapshotTxCoverage) covers(from, to uint64) bool {
