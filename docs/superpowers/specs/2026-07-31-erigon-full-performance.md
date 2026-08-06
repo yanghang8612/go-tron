@@ -3990,6 +3990,35 @@ deployment must compare SnapshotLifecycle CPU, `pread` volume, lifecycle lag,
 Pebble compaction interference, and canonical transaction throughput over the
 same dense block window.
 
+#### P5.28: Allocation-free tournament merge for spilled ETL runs
+
+A deployment-gate profile of the preceding P5.27 binary caught a large cold
+snapshot pass that the earlier samples missed. Over 30 seconds the process used
+93.30 CPU-seconds; external ETL `mergeRuns` accounted for 31.44 seconds
+(33.70%). The generic heap selected each row with both a pop and push, and its
+comparison, up, and down paths together consumed about one fifth of total CPU.
+Every decoded run row also allocated a header, key, and value, while every pass
+allocated one 1 MiB buffered reader per spill run.
+
+Spilled-run merge now uses a specialized tournament winner tree. Advancing one
+run updates one leaf and performs one comparison per tree level instead of two
+heap traversals. Each reader caches the first 16 key bytes as two big-endian
+words; a full `bytes.Compare` remains authoritative when prefixes match, and
+sequence plus run ordinal retain the previous deterministic tie order. Run
+readers reuse their key/value storage, while the merge copies only the current
+duplicate group's winning key/value into stable buffers before advancing a
+reader. Header parsing uses `bufio.Reader.Peek`, removing its per-row escaped
+allocation. The 1 MiB run readers and writers are process-pooled and reset on
+every checkout/return.
+
+Against the exact P5.27 parent on the Apple M1 Max, merging 250,000 interleaved
+49-byte keys across 35 spill runs fell from 49.4--50.3 ms, 62.7 MB, and 750,284
+allocations to 30.5--31.4 ms, about 1.0 MB, and 253 allocations. That is roughly
+38% less wall time, 98.4% fewer allocated bytes, and 99.97% fewer allocations.
+The byte-order, latest-operation collapse, interruption/retry, truncated-input,
+and batch semantics remain unchanged and are covered by the ETL and downstream
+snapshot suites.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

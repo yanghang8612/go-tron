@@ -3,7 +3,6 @@ package etl
 import (
 	"bufio"
 	"bytes"
-	"container/heap"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -21,6 +20,7 @@ const (
 	defaultBatchSize   = ethdb.IdealBatchSize
 	runFileMagic       = "gtronetl1"
 	runEntryHeaderSize = 17
+	runIOBufferSize    = 1 << 20
 	// Keep at most one default-buffer-sized entry array in each pool item.
 	// Larger one-off collectors are released to the garbage collector rather
 	// than pinning an unexpectedly large backing array for future work.
@@ -29,6 +29,7 @@ const (
 )
 
 var (
+	emptyRunReader            = bytes.NewReader(nil)
 	ErrCollectorClosed        = errors.New("etl: collector closed")
 	ErrCollectorLoaded        = errors.New("etl: collector already loaded")
 	ErrLoadInterrupted        = errors.New("etl: load interrupted")
@@ -36,6 +37,8 @@ var (
 	collectorOrderPool        = sync.Pool{New: func() any { return new([]uint32) }}
 	collectorOrderScratchPool = sync.Pool{New: func() any { return new([]uint32) }}
 	collectorRadixRangePool   = sync.Pool{New: func() any { return new([]entryOrderRange) }}
+	collectorRunReaderPool    = sync.Pool{New: func() any { return bufio.NewReaderSize(emptyRunReader, runIOBufferSize) }}
+	collectorRunWriterPool    = sync.Pool{New: func() any { return bufio.NewWriterSize(io.Discard, runIOBufferSize) }}
 )
 
 const (
@@ -318,7 +321,12 @@ func (c *Collector) spillBuffer() error {
 		}
 	}()
 
-	w := bufio.NewWriterSize(tmp, 1<<20)
+	w := collectorRunWriterPool.Get().(*bufio.Writer)
+	w.Reset(tmp)
+	defer func() {
+		w.Reset(io.Discard)
+		collectorRunWriterPool.Put(w)
+	}()
 	if _, err := w.WriteString(runFileMagic); err != nil {
 		_ = tmp.Close()
 		return err
@@ -431,32 +439,33 @@ func (c *Collector) mergeRuns(applier *applier, interrupted func() bool) error {
 	}
 	defer closeRunReaders(readers)
 
-	h := make(runHeap, 0, len(readers))
 	for _, rr := range readers {
 		if err := rr.next(); err != nil {
 			return err
 		}
-		if rr.has {
-			heap.Push(&h, rr)
-		}
 	}
+	// Advancing one run changes one tournament leaf and costs one comparison
+	// per level. The former heap pop plus push traversed the same levels twice.
+	tournament := newRunTournament(readers)
 
 	var (
-		haveGroup bool
-		groupKey  []byte
-		winner    entry
+		haveGroup   bool
+		groupKey    []byte
+		winnerValue []byte
+		winnerOp    opKind
+		winnerSeq   uint64
 	)
 	applyGroup := func() error {
 		if !haveGroup {
 			return nil
 		}
-		if winner.op == opDelete {
-			if err := applier.delete(winner.key); err != nil {
+		if winnerOp == opDelete {
+			if err := applier.delete(groupKey); err != nil {
 				return err
 			}
 			c.stats.AppliedDeletes++
 		} else {
-			if err := applier.put(winner.key, winner.value); err != nil {
+			if err := applier.put(groupKey, winnerValue); err != nil {
 				return err
 			}
 			c.stats.AppliedPuts++
@@ -464,36 +473,45 @@ func (c *Collector) mergeRuns(applier *applier, interrupted func() bool) error {
 		c.stats.Applied++
 		return nil
 	}
+	setWinner := func(e entry) {
+		// Readers reuse their key/value buffers on next(), so retain only the
+		// current duplicate group's eventual output in two stable buffers.
+		groupKey = append(groupKey[:0], e.key...)
+		winnerValue = append(winnerValue[:0], e.value...)
+		winnerOp = e.op
+		winnerSeq = e.seq
+	}
+	updateWinner := func(e entry) {
+		winnerValue = append(winnerValue[:0], e.value...)
+		winnerOp = e.op
+		winnerSeq = e.seq
+	}
 
 	var merged uint64
-	for h.Len() > 0 {
+	for tournament.winner() != nil {
 		if merged&1023 == 0 && interrupted != nil && interrupted() {
 			return ErrLoadInterrupted
 		}
 		merged++
-		rr := heap.Pop(&h).(*runReader)
+		rr := tournament.winner()
 		e := rr.current
 		if !haveGroup {
 			haveGroup = true
-			groupKey = e.key
-			winner = e
+			setWinner(e)
 		} else if bytes.Equal(groupKey, e.key) {
-			if e.seq > winner.seq {
-				winner = e
+			if e.seq > winnerSeq {
+				updateWinner(e)
 			}
 		} else {
 			if err := applyGroup(); err != nil {
 				return err
 			}
-			groupKey = e.key
-			winner = e
+			setWinner(e)
 		}
 		if err := rr.next(); err != nil {
 			return err
 		}
-		if rr.has {
-			heap.Push(&h, rr)
-		}
+		tournament.update(rr.index)
 	}
 	return applyGroup()
 }
@@ -734,11 +752,14 @@ func writeRunEntry(w io.Writer, e entry) error {
 	return err
 }
 
-func readRunEntry(r io.Reader) (entry, error) {
-	var header [runEntryHeaderSize]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		if errors.Is(err, io.EOF) {
+func readRunEntryReuse(r *bufio.Reader, keyBuffer, valueBuffer *[]byte) (entry, error) {
+	header, err := r.Peek(runEntryHeaderSize)
+	if err != nil {
+		if errors.Is(err, io.EOF) && len(header) == 0 {
 			return entry{}, io.EOF
+		}
+		if errors.Is(err, io.EOF) {
+			return entry{}, io.ErrUnexpectedEOF
 		}
 		return entry{}, err
 	}
@@ -751,23 +772,38 @@ func readRunEntry(r io.Reader) (entry, error) {
 	}
 	keyLen := binary.BigEndian.Uint32(header[9:13])
 	valueLen := binary.BigEndian.Uint32(header[13:17])
-	e.key = make([]byte, keyLen)
+	if _, err := r.Discard(runEntryHeaderSize); err != nil {
+		return entry{}, err
+	}
+	*keyBuffer = resizeRunEntryBuffer(*keyBuffer, int(keyLen))
+	e.key = *keyBuffer
 	if _, err := io.ReadFull(r, e.key); err != nil {
 		return entry{}, err
 	}
-	e.value = make([]byte, valueLen)
+	*valueBuffer = resizeRunEntryBuffer(*valueBuffer, int(valueLen))
+	e.value = *valueBuffer
 	if _, err := io.ReadFull(r, e.value); err != nil {
 		return entry{}, err
 	}
 	return e, nil
 }
 
+func resizeRunEntryBuffer(buffer []byte, size int) []byte {
+	if cap(buffer) < size {
+		return make([]byte, size)
+	}
+	return buffer[:size]
+}
+
 type runReader struct {
-	index   int
-	file    *os.File
-	reader  *bufio.Reader
-	current entry
-	has     bool
+	index    int
+	file     *os.File
+	reader   *bufio.Reader
+	current  entry
+	prefix   [2]uint64
+	keyBuf   []byte
+	valueBuf []byte
+	has      bool
 }
 
 func openRunReader(path string, index int) (*runReader, error) {
@@ -776,16 +812,19 @@ func openRunReader(path string, index int) (*runReader, error) {
 		return nil, err
 	}
 	rr := &runReader{
-		index:  index,
-		file:   file,
-		reader: bufio.NewReaderSize(file, 1<<20),
+		index: index,
+		file:  file,
 	}
+	rr.reader = collectorRunReaderPool.Get().(*bufio.Reader)
+	rr.reader.Reset(file)
 	magic := make([]byte, len(runFileMagic))
 	if _, err := io.ReadFull(rr.reader, magic); err != nil {
+		releaseRunReader(rr.reader)
 		_ = file.Close()
 		return nil, err
 	}
 	if string(magic) != runFileMagic {
+		releaseRunReader(rr.reader)
 		_ = file.Close()
 		return nil, fmt.Errorf("etl: invalid run file %q", path)
 	}
@@ -793,7 +832,7 @@ func openRunReader(path string, index int) (*runReader, error) {
 }
 
 func (r *runReader) next() error {
-	e, err := readRunEntry(r.reader)
+	e, err := readRunEntryReuse(r.reader, &r.keyBuf, &r.valueBuf)
 	if errors.Is(err, io.EOF) {
 		r.has = false
 		return nil
@@ -802,45 +841,128 @@ func (r *runReader) next() error {
 		return err
 	}
 	r.current = e
+	r.prefix = entryKeyPrefix(e.key)
 	r.has = true
 	return nil
 }
 
 func closeRunReaders(readers []*runReader) {
 	for _, rr := range readers {
-		if rr != nil && rr.file != nil {
+		if rr == nil {
+			continue
+		}
+		if rr.reader != nil {
+			releaseRunReader(rr.reader)
+			rr.reader = nil
+		}
+		if rr.file != nil {
 			_ = rr.file.Close()
+			rr.file = nil
 		}
 	}
 }
 
-type runHeap []*runReader
-
-func (h runHeap) Len() int { return len(h) }
-
-func (h runHeap) Less(i, j int) bool {
-	left, right := h[i].current, h[j].current
-	if cmp := bytes.Compare(left.key, right.key); cmp != 0 {
-		return cmp < 0
-	}
-	if left.seq != right.seq {
-		return left.seq < right.seq
-	}
-	return h[i].index < h[j].index
+func releaseRunReader(reader *bufio.Reader) {
+	reader.Reset(emptyRunReader)
+	collectorRunReaderPool.Put(reader)
 }
 
-func (h runHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
-
-func (h *runHeap) Push(x any) {
-	*h = append(*h, x.(*runReader))
+// runTournament is a compact winner tree over sorted spill runs. Cached
+// big-endian key prefixes resolve the common case without calling bytes.Compare;
+// the full comparator remains authoritative for shared or short prefixes.
+type runTournament struct {
+	readers  []*runReader
+	leafBase int
+	tree     []int
 }
 
-func (h *runHeap) Pop() any {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[:n-1]
-	return x
+func newRunTournament(readers []*runReader) *runTournament {
+	leafBase := 1
+	for leafBase < len(readers) {
+		leafBase <<= 1
+	}
+	t := &runTournament{
+		readers:  readers,
+		leafBase: leafBase,
+		tree:     make([]int, leafBase*2),
+	}
+	for i := range t.tree {
+		t.tree[i] = -1
+	}
+	for i, rr := range readers {
+		if rr.has {
+			t.tree[leafBase+i] = i
+		}
+	}
+	for node := leafBase - 1; node > 0; node-- {
+		t.tree[node] = t.pick(t.tree[node*2], t.tree[node*2+1])
+	}
+	return t
+}
+
+func (t *runTournament) winner() *runReader {
+	if t == nil || len(t.tree) < 2 || t.tree[1] < 0 {
+		return nil
+	}
+	return t.readers[t.tree[1]]
+}
+
+func (t *runTournament) update(readerIndex int) {
+	leaf := t.leafBase + readerIndex
+	if t.readers[readerIndex].has {
+		t.tree[leaf] = readerIndex
+	} else {
+		t.tree[leaf] = -1
+	}
+	for node := leaf >> 1; node > 0; node >>= 1 {
+		t.tree[node] = t.pick(t.tree[node*2], t.tree[node*2+1])
+	}
+}
+
+func (t *runTournament) pick(leftIndex, rightIndex int) int {
+	if leftIndex < 0 {
+		return rightIndex
+	}
+	if rightIndex < 0 {
+		return leftIndex
+	}
+	left, right := t.readers[leftIndex], t.readers[rightIndex]
+	if left.prefix[0] != right.prefix[0] {
+		if left.prefix[0] < right.prefix[0] {
+			return leftIndex
+		}
+		return rightIndex
+	}
+	if left.prefix[1] != right.prefix[1] {
+		if left.prefix[1] < right.prefix[1] {
+			return leftIndex
+		}
+		return rightIndex
+	}
+	if cmp := bytes.Compare(left.current.key, right.current.key); cmp != 0 {
+		if cmp < 0 {
+			return leftIndex
+		}
+		return rightIndex
+	}
+	if left.current.seq != right.current.seq {
+		if left.current.seq < right.current.seq {
+			return leftIndex
+		}
+		return rightIndex
+	}
+	if left.index < right.index {
+		return leftIndex
+	}
+	return rightIndex
+}
+
+func entryKeyPrefix(key []byte) (prefix [2]uint64) {
+	limit := min(len(key), 16)
+	for i := 0; i < limit; i++ {
+		prefix[i>>3] |= uint64(key[i]) << (56 - uint(i&7)*8)
+	}
+	return prefix
 }
 
 type applier struct {

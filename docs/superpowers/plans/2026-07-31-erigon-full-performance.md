@@ -450,6 +450,9 @@
 - [x] Encode event-log ETL rows directly into collector-owned arena storage and
   replace large comparison sorts with byte-equivalent stable MSD radix ordering
   over compact row ordinals.
+- [x] Replace external ETL heap pop/push merge with a prefix-cached tournament
+  tree, reusable run-row buffers, zero-allocation header parsing, and pooled
+  1 MiB run I/O buffers.
 - [ ] Run the fused event-log/radix-ETL production gate and compare snapshot
   build/check CPU, `pread` volume, lifecycle lag, allocations, and sync
   transactions/second over a fixed dense window.

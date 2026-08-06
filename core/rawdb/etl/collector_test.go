@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"reflect"
@@ -163,6 +164,70 @@ func TestCollectorSpillsRunsAndMergesDeletes(t *testing.T) {
 	assertValue(t, writer, "c", "value-c")
 }
 
+func TestCollectorSpilledRunRejectsTruncatedHeader(t *testing.T) {
+	collector := newTestCollector(t, Options{BufferLimit: 1})
+	defer collector.Close()
+
+	mustPut(t, collector, "a", "value-a")
+	if len(collector.runFiles) != 1 {
+		t.Fatalf("spilled runs = %d, want 1", len(collector.runFiles))
+	}
+	if err := os.Truncate(collector.runFiles[0], int64(len(runFileMagic)+3)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collector.Load(newRecordingWriter()); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("truncated run load err = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+}
+
+func TestCollectorSpilledTournamentMatchesInMemory(t *testing.T) {
+	inMemory := newTestCollector(t, Options{BufferLimit: 64 << 20})
+	spilled := newTestCollector(t, Options{BufferLimit: 16 << 10})
+	defer inMemory.Close()
+	defer spilled.Close()
+
+	rng := rand.New(rand.NewSource(317))
+	for i := 0; i < 20_000; i++ {
+		key := []byte(fmt.Sprintf("shared-prefix-%02d-%04d", rng.Intn(16), rng.Intn(2_000)))
+		if rng.Intn(7) == 0 {
+			if err := inMemory.Delete(key); err != nil {
+				t.Fatal(err)
+			}
+			if err := spilled.Delete(key); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		value := make([]byte, rng.Intn(96))
+		_, _ = rng.Read(value)
+		if err := inMemory.Put(key, value); err != nil {
+			t.Fatal(err)
+		}
+		if err := spilled.Put(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	wantWriter, gotWriter := newRecordingWriter(), newRecordingWriter()
+	wantStats, err := inMemory.Load(wantWriter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStats, err := spilled.Load(gotWriter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotStats.SpilledRuns < 2 {
+		t.Fatalf("spilled runs = %d, want multiple tournament leaves", gotStats.SpilledRuns)
+	}
+	if gotStats.Applied != wantStats.Applied || gotStats.AppliedPuts != wantStats.AppliedPuts || gotStats.AppliedDeletes != wantStats.AppliedDeletes {
+		t.Fatalf("spilled applied stats = %+v, in-memory = %+v", gotStats, wantStats)
+	}
+	if !reflect.DeepEqual(gotWriter.ops, wantWriter.ops) || !reflect.DeepEqual(gotWriter.data, wantWriter.data) {
+		t.Fatal("spilled tournament output differs from in-memory ordering/collapse")
+	}
+}
+
 func TestCollectorRetainsEntryBufferAcrossSpills(t *testing.T) {
 	collector := newTestCollector(t, Options{BufferLimit: 1})
 	defer collector.Close()
@@ -297,6 +362,40 @@ func BenchmarkSortedEntryOrder(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectorSpilledRunMerge(b *testing.B) {
+	const rows = 250_000
+	collector := newTestCollector(b, Options{BufferLimit: 600_000})
+	b.Cleanup(func() { _ = collector.Close() })
+	for i := 0; i < rows; i++ {
+		key := make([]byte, 49)
+		key[0] = byte(i % 9)
+		binary.BigEndian.PutUint64(key[1:9], uint64((i*104729)%rows))
+		copy(key[9:], bytes.Repeat([]byte{byte(i % 251)}, 40))
+		value := make([]byte, 16)
+		binary.BigEndian.PutUint64(value, uint64(i))
+		if err := collector.PutOwned(key, value); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := collector.spillBuffer(); err != nil {
+		b.Fatal(err)
+	}
+	runCount := len(collector.runFiles)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.ReportMetric(float64(runCount), "runs")
+	for range b.N {
+		if err := collector.mergeRuns(newApplier(discardWriter{}, 1<<20), nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+type discardWriter struct{}
+
+func (discardWriter) Put([]byte, []byte) error { return nil }
+func (discardWriter) Delete([]byte) error      { return nil }
+
 func TestCollectorSuccessfulLoadReleasesEntryBuffer(t *testing.T) {
 	collector := newTestCollector(t, Options{BufferLimit: 1 << 20})
 	defer collector.Close()
@@ -424,7 +523,7 @@ func TestCollectorLifecycle(t *testing.T) {
 	}
 }
 
-func newTestCollector(t *testing.T, opts Options) *Collector {
+func newTestCollector(t testing.TB, opts Options) *Collector {
 	t.Helper()
 	opts.TempDir = t.TempDir()
 	collector, err := NewCollector(opts)
