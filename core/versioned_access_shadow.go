@@ -271,6 +271,54 @@ type versionedAccessShadow struct {
 	stats                    versionedAccessShadowStats
 }
 
+var versionedAccessShadowPool = sync.Pool{
+	New: func() any { return new(versionedAccessShadow) },
+}
+
+func acquireVersionedAccessShadow(transactionCount int) *versionedAccessShadow {
+	shadow := versionedAccessShadowPool.Get().(*versionedAccessShadow)
+	shadow.Prepare(transactionCount)
+	return shadow
+}
+
+func releaseVersionedAccessShadow(shadow *versionedAccessShadow) {
+	if shadow == nil {
+		return
+	}
+	const (
+		maxPooledTransactions = 4 * 1024
+		maxPooledVersionCells = 128 * 1024
+		maxPooledEdges        = 64 * 1024
+	)
+	versionCells := len(shadow.versions) + len(shadow.rawAccountVersions) + len(shadow.accountFullVersions) +
+		len(shadow.accountAnyVersions) + len(shadow.accountFieldVersions)
+	poolable := cap(shadow.transactionOwners) <= maxPooledTransactions &&
+		versionCells <= maxPooledVersionCells && cap(shadow.dependencyEdges) <= maxPooledEdges
+	// Drop block-owned references before pooling. The reusable buckets and
+	// backing arrays remain, but no write sets, filter closures, interned raw
+	// keys, or worker-visible post-images survive the block boundary.
+	clear(shadow.versions)
+	clear(shadow.rawAccountVersions)
+	clear(shadow.accountFullVersions)
+	clear(shadow.accountAnyVersions)
+	clear(shadow.accountFieldVersions)
+	clear(shadow.lastSenderTx)
+	clear(shadow.transactionWriteSets)
+	shadow.transactionWriteSets = shadow.transactionWriteSets[:0]
+	shadow.transactionWritesOK = shadow.transactionWritesOK[:0]
+	shadow.writeCaptureInclude = nil
+	shadow.writeCaptureFull = nil
+	shadow.writeCaptureRecorderOnly = false
+	shadow.sharedValues = nil
+	shadow.transactionStarted = time.Time{}
+	shadow.recorder.ResetBlock(64)
+	shadow.recorder.ConfigureWriteKeyCapture(false, nil)
+	if !poolable {
+		return
+	}
+	versionedAccessShadowPool.Put(shadow)
+}
+
 func (s *versionedAccessShadow) EnableSharedVersionValues(transactionCount int) {
 	if s == nil || s.sharedValues != nil {
 		return
@@ -290,8 +338,8 @@ func (s *versionedAccessShadow) EnableWriteSetCapture(transactionCount int) {
 }
 
 func (s *versionedAccessShadow) EnableWriteSetCaptureFiltered(transactionCount int, include func(state.TransactionAccessKey) bool, fullTransactions []bool, recorderOnly bool) {
-	s.transactionWriteSets = make([]state.TransactionWriteSet, transactionCount)
-	s.transactionWritesOK = make([]bool, transactionCount)
+	s.transactionWriteSets = resizeVersionedShadowSlice(s.transactionWriteSets, transactionCount)
+	s.transactionWritesOK = resizeVersionedShadowSlice(s.transactionWritesOK, transactionCount)
 	s.writeCaptureInclude = include
 	s.writeCaptureFull = fullTransactions
 	s.writeCaptureRecorderOnly = recorderOnly
@@ -412,26 +460,57 @@ func (s *versionedAccessShadow) Prepare(transactionCount int) {
 	if hint > maxVersionHint {
 		hint = maxVersionHint
 	}
-	s.versions = make(map[state.TransactionAccessKey]int, hint)
-	s.rawAccountVersions = make(map[tcommon.Address]int, hint/4)
-	s.accountFullVersions = make(map[tcommon.Address]int, hint/8)
-	s.accountAnyVersions = make(map[tcommon.Address]int, hint/4)
-	s.accountFieldVersions = make(map[state.TransactionAccountFieldKey]int, hint/2)
-	s.transactionOwners = make([]tcommon.Address, transactionCount)
-	s.transactionHasOwner = make([]bool, transactionCount)
-	s.senderChainDepths = make([]int, transactionCount)
-	s.lastSenderTx = make(map[tcommon.Address]int, transactionCount/4+1)
-	s.dependencyWaves = make([]int, transactionCount)
-	s.dependencyWaveWidths = make([]int, 0, transactionCount)
-	s.dependencyHeads = make([]int, transactionCount)
+	s.versions = clearVersionedShadowMap(s.versions, hint)
+	s.rawAccountVersions = clearVersionedShadowMap(s.rawAccountVersions, hint/4)
+	s.accountFullVersions = clearVersionedShadowMap(s.accountFullVersions, hint/8)
+	s.accountAnyVersions = clearVersionedShadowMap(s.accountAnyVersions, hint/4)
+	s.accountFieldVersions = clearVersionedShadowMap(s.accountFieldVersions, hint/2)
+	s.transactionOwners = resizeVersionedShadowSlice(s.transactionOwners, transactionCount)
+	s.transactionHasOwner = resizeVersionedShadowSlice(s.transactionHasOwner, transactionCount)
+	s.senderChainDepths = resizeVersionedShadowSlice(s.senderChainDepths, transactionCount)
+	s.lastSenderTx = clearVersionedShadowMap(s.lastSenderTx, transactionCount/4+1)
+	s.dependencyWaves = resizeVersionedShadowSlice(s.dependencyWaves, transactionCount)
+	s.dependencyWaveWidths = s.dependencyWaveWidths[:0]
+	s.dependencyHeads = resizeVersionedShadowSlice(s.dependencyHeads, transactionCount)
 	for txIndex := range s.dependencyHeads {
 		s.dependencyHeads[txIndex] = -1
 	}
-	s.dependencyEdges = make([]transactionDependencyEdge, 0, transactionCount*2)
-	s.transactionSupported = make([]bool, transactionCount)
-	s.transactionDurations = make([]int64, transactionCount)
+	s.dependencyEdges = s.dependencyEdges[:0]
+	if cap(s.dependencyEdges) < transactionCount*2 {
+		s.dependencyEdges = make([]transactionDependencyEdge, 0, transactionCount*2)
+	}
+	s.transactionSupported = resizeVersionedShadowSlice(s.transactionSupported, transactionCount)
+	s.transactionDurations = resizeVersionedShadowSlice(s.transactionDurations, transactionCount)
+	clear(s.transactionWriteSets)
+	s.transactionWriteSets = s.transactionWriteSets[:0]
+	s.transactionWritesOK = s.transactionWritesOK[:0]
+	s.writeCaptureInclude = nil
+	s.writeCaptureFull = nil
+	s.writeCaptureRecorderOnly = false
+	s.sharedValues = nil
+	s.transactionStarted = time.Time{}
+	s.recorder.ResetBlock(64)
+	s.recorder.ConfigureWriteKeyCapture(false, nil)
+	s.stats = versionedAccessShadowStats{}
+	s.dependencyMinWave = 0
 	s.dependencyMaxWave = -1
 	s.lastBarrierTx = -1
+}
+
+func clearVersionedShadowMap[K comparable, V any](values map[K]V, capacityHint int) map[K]V {
+	if values == nil {
+		return make(map[K]V, capacityHint)
+	}
+	clear(values)
+	return values
+}
+
+func resizeVersionedShadowSlice[T any](values []T, length int) []T {
+	clear(values[:cap(values)])
+	if cap(values) < length {
+		return make([]T, length)
+	}
+	return values[:length]
 }
 
 func (s *versionedAccessShadow) addDependency(txIndex, predecessor int) {

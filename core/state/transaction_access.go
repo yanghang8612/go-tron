@@ -218,6 +218,15 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 	r.publicNetValid = true
 }
 
+// ResetBlock begins a new block while retaining the recorder's map buckets.
+// Raw KV key interning is transaction-safe to retain within one block, but its
+// strings must not be kept alive when a block-scoped recorder is pooled for a
+// later block.
+func (r *TransactionAccessRecorder) ResetBlock(capacityHint int) {
+	r.Reset(capacityHint)
+	clear(r.rawKVKeys)
+}
+
 // RecordPublicNetReservation retains the conditional global-bandwidth update
 // made by the authoritative serial bandwidth processor. Recording more than
 // one non-identical reservation in a transaction is rejected conservatively.

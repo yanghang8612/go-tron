@@ -648,6 +648,46 @@ func TestSnapshotLifecycleRequestPassCoalesces(t *testing.T) {
 	}
 }
 
+func TestSnapshotLifecycleDefersRetiredPruneWhileSyncing(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain := &fakePruneChain{
+		db:              db,
+		solidified:      2,
+		syncRemaining:   1_000,
+		syncRemainingOK: true,
+	}
+	var calls int
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:   FullPolicy(2, 1),
+			Interval: time.Hour,
+		},
+		DeferRetiredPruneWhileSyncing: true,
+		RetiredPrune: func(context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error) {
+			calls++
+			return &snapshots.PruneRetiredSegmentFilesResult{FilesDeleted: 1}, nil
+		},
+	})
+
+	deferred, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("syncing lifecycle pass: %v", err)
+	}
+	if !deferred.RetiredDeferred || deferred.RetiredPrune != nil || calls != 0 {
+		t.Fatalf("syncing retired prune = result:%+v calls:%d, want deferred", deferred, calls)
+	}
+
+	chain.syncRemaining = 0
+	chain.syncRemainingOK = false
+	completed, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("completed-sync lifecycle pass: %v", err)
+	}
+	if completed.RetiredDeferred || completed.RetiredPrune == nil || completed.RetiredPrune.FilesDeleted != 1 || calls != 1 {
+		t.Fatalf("completed-sync retired prune = result:%+v calls:%d, want one execution", completed, calls)
+	}
+}
+
 func TestSnapshotLifecycleStopCancelsRetiredPrune(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	entered := make(chan struct{})

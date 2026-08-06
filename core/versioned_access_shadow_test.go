@@ -2,6 +2,7 @@ package core
 
 import (
 	"testing"
+	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -10,6 +11,79 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+func TestVersionedAccessShadowPrepareReusesAndClearsBlockState(t *testing.T) {
+	var shadow versionedAccessShadow
+	shadow.Prepare(8)
+
+	key := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "stale"}
+	shadow.versions[key] = 7
+	shadow.rawAccountVersions[testProcessorAddr(1)] = 6
+	shadow.accountFullVersions[testProcessorAddr(2)] = 5
+	shadow.accountAnyVersions[testProcessorAddr(3)] = 4
+	shadow.accountFieldVersions[state.TransactionAccountFieldKey{
+		Address: testProcessorAddr(4),
+		Field:   state.TransactionAccountFieldBalance,
+	}] = 3
+	shadow.transactionOwners[0] = testProcessorAddr(1)
+	shadow.transactionHasOwner[0] = true
+	shadow.senderChainDepths[0] = 2
+	shadow.lastSenderTx[testProcessorAddr(1)] = 0
+	shadow.dependencyWaves[0] = 2
+	shadow.dependencyWaveWidths = append(shadow.dependencyWaveWidths, 1)
+	shadow.dependencyHeads[0] = 0
+	shadow.dependencyEdges = append(shadow.dependencyEdges, transactionDependencyEdge{predecessor: 0, dependent: 1})
+	shadow.transactionSupported[0] = true
+	shadow.transactionDurations[0] = 99
+	shadow.EnableWriteSetCaptureFiltered(8, func(state.TransactionAccessKey) bool { return true }, []bool{true}, true)
+	shadow.transactionWriteSets[0] = state.TransactionWriteSet{key: {}}
+	shadow.transactionWritesOK[0] = true
+	shadow.EnableSharedVersionValues(8)
+	shadow.transactionStarted = time.Now()
+	shadow.lastBarrierTx = 3
+	shadow.dependencyMinWave = 4
+	shadow.dependencyMaxWave = 5
+	shadow.stats.transactions = 8
+
+	owners := &shadow.transactionOwners[0]
+	shadow.Prepare(4)
+
+	if got := &shadow.transactionOwners[0]; got != owners {
+		t.Fatal("transaction owner backing array was not reused")
+	}
+	if len(shadow.versions) != 0 || len(shadow.rawAccountVersions) != 0 || len(shadow.accountFullVersions) != 0 ||
+		len(shadow.accountAnyVersions) != 0 || len(shadow.accountFieldVersions) != 0 || len(shadow.lastSenderTx) != 0 {
+		t.Fatal("version maps retained entries from the previous block")
+	}
+	for i := range shadow.transactionOwners {
+		if shadow.transactionOwners[i] != (tcommon.Address{}) || shadow.transactionHasOwner[i] || shadow.senderChainDepths[i] != 0 ||
+			shadow.dependencyWaves[i] != 0 || shadow.dependencyHeads[i] != -1 || shadow.transactionSupported[i] || shadow.transactionDurations[i] != 0 {
+			t.Fatalf("transaction metadata %d retained previous block state", i)
+		}
+	}
+	if len(shadow.dependencyWaveWidths) != 0 || len(shadow.dependencyEdges) != 0 || len(shadow.transactionWriteSets) != 0 ||
+		len(shadow.transactionWritesOK) != 0 || shadow.writeCaptureInclude != nil || shadow.writeCaptureFull != nil ||
+		shadow.writeCaptureRecorderOnly || shadow.sharedValues != nil || !shadow.transactionStarted.IsZero() {
+		t.Fatal("optional block state was not released")
+	}
+	if shadow.lastBarrierTx != -1 || shadow.dependencyMinWave != 0 || shadow.dependencyMaxWave != -1 || shadow.stats != (versionedAccessShadowStats{}) {
+		t.Fatal("scalar block state was not reset")
+	}
+
+	if allocs := testing.AllocsPerRun(100, func() { shadow.Prepare(4) }); allocs != 0 {
+		t.Fatalf("warm Prepare allocated %.1f objects per block", allocs)
+	}
+}
+
+func BenchmarkVersionedAccessShadowPrepareReuse(b *testing.B) {
+	var shadow versionedAccessShadow
+	shadow.Prepare(256)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		shadow.Prepare(256)
+	}
+}
 
 func TestVersionedAccessShadowValidatesReadVersionsAcrossStateFamilies(t *testing.T) {
 	statedb := newTestState(t)

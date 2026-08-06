@@ -859,10 +859,11 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	transactions := block.Transactions()
 	shadowEnabled := txInfoBatch != nil && (validateEnvelope || options.parallelTransfers)
 	var transferShadow speculativeTransferShadow
-	var versionedShadow versionedAccessShadow
+	var versionedShadow *versionedAccessShadow
 	if shadowEnabled {
 		transferShadow.Prepare(len(transactions))
-		versionedShadow.Prepare(len(transactions))
+		versionedShadow = acquireVersionedAccessShadow(len(transactions))
+		defer releaseVersionedAccessShadow(versionedShadow)
 		defer versionedShadow.Finish(statedb, dynProps)
 	}
 	transactionDB := db
@@ -1024,21 +1025,21 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 
 	for i, tx := range transactions {
 		if transferPreexecution != nil {
-			transferPreexecution.validateReadVersion(i, tx, &versionedShadow)
+			transferPreexecution.validateReadVersion(i, tx, versionedShadow)
 		}
 		if senderChainPreexecution != nil {
-			senderChainPreexecution.validateReadVersion(i, tx, &versionedShadow)
+			senderChainPreexecution.validateReadVersion(i, tx, versionedShadow)
 		}
 		if vmSenderChainPreexecution != nil {
-			vmSenderChainPreexecution.validateReadVersion(i, tx, &versionedShadow)
+			vmSenderChainPreexecution.validateReadVersion(i, tx, versionedShadow)
 			vmSenderChainPreexecution.projectPublicNetBoundary(i, dynProps)
 			vmSenderChainPreexecution.projectBlockEnergyBoundary(i, dynProps, statedb, prevBlockTime, forkPassCache)
 		}
 		if senderRetry != nil {
-			senderRetry.observeBoundary(i, tx, statedb, dynProps, &versionedShadow, discardCfg)
+			senderRetry.observeBoundary(i, tx, statedb, dynProps, versionedShadow, discardCfg)
 		}
 		if vmSenderRetry != nil {
-			vmSenderRetry.observeBoundary(i, tx, statedb, dynProps, &versionedShadow, discardCfg)
+			vmSenderRetry.observeBoundary(i, tx, statedb, dynProps, versionedShadow, discardCfg)
 		}
 		domainChangeMark := statedb.DomainChangeJournalMark()
 		if domainChanges != nil {
@@ -1420,15 +1421,15 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		discardCfg.canonicalInfos = txInfos
 	}
 	if discardShadow != nil && discardShadow.sampled {
-		_ = discardShadow.finishTransferPreexecution(transferPreexecution, &versionedShadow, discardCfg)
-		_ = discardShadow.finishTransferSenderChains(senderChainPreexecution, &versionedShadow, discardCfg)
-		_ = discardShadow.finishVMSenderChains(vmSenderChainPreexecution, &versionedShadow, discardCfg)
+		_ = discardShadow.finishTransferPreexecution(transferPreexecution, versionedShadow, discardCfg)
+		_ = discardShadow.finishTransferSenderChains(senderChainPreexecution, versionedShadow, discardCfg)
+		_ = discardShadow.finishVMSenderChains(vmSenderChainPreexecution, versionedShadow, discardCfg)
 	}
 	if senderRetry != nil {
-		_ = senderRetry.finish(&versionedShadow, discardCfg)
+		_ = senderRetry.finish(versionedShadow, discardCfg)
 	}
 	if vmSenderRetry != nil {
-		stats := vmSenderRetry.finish(&versionedShadow, discardCfg)
+		stats := vmSenderRetry.finish(versionedShadow, discardCfg)
 		if vmSenderRetry.async {
 			recordVMAsyncSenderRetryStats(stats)
 		} else {
@@ -1436,7 +1437,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		}
 	}
 	if discardShadow != nil && discardShadow.sampled {
-		_ = discardShadow.run(&versionedShadow, discardCfg)
+		_ = discardShadow.run(versionedShadow, discardCfg)
 	}
 
 	if parentAccountStateRoot != nil {

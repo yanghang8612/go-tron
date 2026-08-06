@@ -1040,6 +1040,10 @@ func gtron(ctx *cli.Context) error {
 			ChainLookupPrune:  chainLookupPrune,
 			SectionBloomPrune: sectionBloomPrune,
 			BalanceTracePrune: balanceTracePrune,
+			// Retired-file deletion verifies the complete active manifest first.
+			// Keep that CPU/IO-heavy safety gate off the historical import path;
+			// AddSyncCompleteHook below wakes the lifecycle as soon as sync ends.
+			DeferRetiredPruneWhileSyncing: true,
 			RetiredPrune: func(ctx context.Context) (*statesnapshots.PruneRetiredSegmentFilesResult, error) {
 				if _, err := statesnapshots.LoadProductionManifest(stateSnapshotDir); err != nil {
 					if os.IsNotExist(err) {

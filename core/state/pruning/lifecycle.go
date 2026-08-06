@@ -25,7 +25,11 @@ type SnapshotLifecycleConfig struct {
 	SectionBloomPrune SectionBloomPruneFunc
 	BalanceTracePrune BalanceTracePruneFunc
 	RetiredPrune      RetiredPruneFunc
-	Interval          time.Duration
+	// DeferRetiredPruneWhileSyncing postpones the full active-manifest
+	// verification and retired-file deletion gate while historical sync is
+	// active. The sync-complete lifecycle wake runs it once the importer is idle.
+	DeferRetiredPruneWhileSyncing bool
+	Interval                      time.Duration
 }
 
 type ChainLookupPruneFunc func() (*snapshots.PruneHotChainLookupResult, error)
@@ -43,6 +47,7 @@ type SnapshotLifecyclePass struct {
 	SectionBloomPrune *snapshots.PruneHotSectionBloomResult
 	BalanceTracePrune *snapshots.PruneHotBalanceTraceResult
 	RetiredPrune      *snapshots.PruneRetiredSegmentFilesResult
+	RetiredDeferred   bool
 }
 
 // SnapshotLifecycle owns the state snapshot builder/compactor and hot pruner
@@ -56,6 +61,7 @@ type SnapshotLifecycle struct {
 	sectionBloomPrune SectionBloomPruneFunc
 	balanceTracePrune BalanceTracePruneFunc
 	retiredPrune      RetiredPruneFunc
+	deferRetiredPrune bool
 
 	interval time.Duration
 	ctx      context.Context
@@ -94,6 +100,7 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 		sectionBloomPrune: cfg.SectionBloomPrune,
 		balanceTracePrune: cfg.BalanceTracePrune,
 		retiredPrune:      cfg.RetiredPrune,
+		deferRetiredPrune: cfg.DeferRetiredPruneWhileSyncing,
 		interval:          interval,
 		ctx:               ctx,
 		cancel:            cancel,
@@ -129,6 +136,7 @@ func (l *SnapshotLifecycle) Start() error {
 		"sectionBloomPrune", l.sectionBloomPrune != nil,
 		"balanceTracePrune", l.balanceTracePrune != nil,
 		"retiredPrune", l.retiredPrune != nil,
+		"deferRetiredPruneWhileSyncing", l.deferRetiredPrune,
 		"mode", l.pruner.cfg.Policy.Mode,
 		"interval", l.interval,
 		"snapshotDir", l.pruner.cfg.SnapshotDir)
@@ -238,7 +246,12 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		}
 		out.BalanceTracePrune = result
 	}
-	if l.retiredPrune != nil {
+	if l.retiredPrune != nil && l.deferRetiredPrune && l.pruner != nil {
+		if source, ok := l.pruner.chain.(syncRemainingSource); ok {
+			_, out.RetiredDeferred = source.SyncRemainingBlocks()
+		}
+	}
+	if l.retiredPrune != nil && !out.RetiredDeferred {
 		result, err := l.retiredPrune(l.ctx)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) || l.ctx.Err() == nil {

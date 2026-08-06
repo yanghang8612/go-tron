@@ -50,6 +50,20 @@ func TestTransactionAccessRecorderCaptureReadSetSurvivesReset(t *testing.T) {
 	}
 }
 
+func TestTransactionAccessRecorderResetBlockDropsRawKVInterns(t *testing.T) {
+	var recorder TransactionAccessRecorder
+	recorder.Reset(4)
+	recorder.RecordRawKVRead([]byte("block-owned-key"))
+	if len(recorder.rawKVKeys) != 1 {
+		t.Fatalf("raw KV intern count = %d, want 1", len(recorder.rawKVKeys))
+	}
+
+	recorder.ResetBlock(4)
+	if len(recorder.rawKVKeys) != 0 || recorder.Len() != 0 {
+		t.Fatalf("block reset retained raw keys=%d accesses=%d", len(recorder.rawKVKeys), recorder.Len())
+	}
+}
+
 func TestTransactionAccessRecorderVisitWritesSkipsReadsAndDeduplicates(t *testing.T) {
 	var address tcommon.Address
 	address[0], address[20] = 0x41, 8
