@@ -2,12 +2,14 @@ package pruning
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1061,6 +1063,80 @@ func TestWorkerSnapPreservesHotCodeWithoutCodeDomainCoverage(t *testing.T) {
 	if got := rawdb.ReadStateCode(db, hash); got == nil {
 		t.Fatal("hot code wrongly pruned despite no CodeDomain snapshot coverage")
 	}
+}
+
+func TestWorkerSnapSkipsHistoryScanWithoutHotCodeRows(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(1, 1, nil)); err != nil {
+		t.Fatalf("publish empty manifest: %v", err)
+	}
+	if err := rawdb.WriteStateTxRange(db, 1, common.Hash{0x01}, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum:   1,
+		BlockHash:  common.Hash{0x01},
+		TxNum:      1,
+		Seq:        1,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		PrevExists: true,
+		Prev:       []byte("invalid account envelope that must not be decoded"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := (Worker{DB: db, Policy: SnapPolicy(2, 1), SnapshotDir: dir}).pruneStateCodeRows(db, 1)
+	if err != nil {
+		t.Fatalf("empty CodeDomain prune: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("deleted code rows = %d, want 0", deleted)
+	}
+}
+
+func TestCheckerHistoryCodeHashCollectionHonorsContext(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5a}, common.AccountIDLength)...))
+	for txNum := uint64(1); txNum <= 3; txNum++ {
+		if err := rawdb.WriteStateTxRange(db, txNum, common.Hash{byte(txNum)}, txNum, txNum); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+			BlockNum:   txNum,
+			BlockHash:  common.Hash{byte(txNum)},
+			TxNum:      txNum,
+			Seq:        1,
+			FlatDomain: rawdb.StateFlatDomainAccountLatest,
+			Owner:      owner,
+			PrevExists: true,
+			Prev:       accountLatestEnvelopeBytes(t, common.Hash{byte(txNum)}),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx := &cancelAfterChecksContext{}
+	ctx.remaining.Store(2)
+	err := (Checker{DB: db}).collectHistoryCodeHashesContext(ctx, make(codeHashRefs))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("history collection error = %v, want context.Canceled", err)
+	}
+}
+
+type cancelAfterChecksContext struct {
+	remaining atomic.Int64
+}
+
+func (c *cancelAfterChecksContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *cancelAfterChecksContext) Done() <-chan struct{}       { return nil }
+func (c *cancelAfterChecksContext) Value(any) any               { return nil }
+
+func (c *cancelAfterChecksContext) Err() error {
+	if c.remaining.Add(-1) < 0 {
+		return context.Canceled
+	}
+	return nil
 }
 
 func TestPrunerPassUsesSolidifiedBlockAndBatch(t *testing.T) {

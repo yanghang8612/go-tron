@@ -1,6 +1,8 @@
 package pruning
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -261,10 +263,20 @@ func (p *Pruner) loop() {
 }
 
 func (p *Pruner) PrunePass() (stats Stats, err error) {
+	return p.PrunePassContext(context.Background())
+}
+
+// PrunePassContext runs one prune pass that can be interrupted while it is
+// still in a read/plan phase. Lifecycle shutdown uses this path so a historical
+// CodeDomain reference scan cannot hold process exit open for minutes.
+func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	start := time.Now()
 	defer func() {
 		p.lastPassDuration.Store(time.Since(start).Nanoseconds())
-		if err != nil {
+		if err != nil && !(errors.Is(err, context.Canceled) && ctx.Err() != nil) {
 			p.errors.Add(1)
 		}
 		p.updateMetrics()
@@ -290,7 +302,7 @@ func (p *Pruner) PrunePass() (stats Stats, err error) {
 		SnapshotDir:      p.cfg.SnapshotDir,
 		PruneHeadHash:    pruneHeadHash,
 		PruneHeadHasHash: pruneHeadHasHash,
-	}.PruneTo(pruneHead)
+	}.PruneToContext(ctx, pruneHead)
 	if err != nil {
 		return Stats{}, err
 	}

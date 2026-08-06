@@ -1,6 +1,7 @@
 package pruning
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -121,6 +122,20 @@ func Run(db Store, policy Policy, headNum uint64) (Stats, error) {
 }
 
 func (w Worker) PruneTo(headNum uint64) (Stats, error) {
+	return w.PruneToContext(context.Background(), headNum)
+}
+
+// PruneToContext runs one bounded prune pass and stops before starting the
+// next mutation phase when ctx is cancelled. The expensive CodeDomain
+// reference scan also observes ctx while iterating account and history rows,
+// which keeps graceful shutdown from waiting for a full-chain scan.
+func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
 	if w.DB == nil {
 		return Stats{}, errors.New("pruning: nil database")
 	}
@@ -143,6 +158,9 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 	hotStats, err := historyCfg.PruneHotHistory(historyStore, snapshots.HotHistoryPruneOptions{
 		MaxBlocks: w.MaxBlocks,
 		Decide: func(row *rawdb.StateTxRange) (snapshots.HotHistoryPruneDecision, error) {
+			if err := ctx.Err(); err != nil {
+				return snapshots.HotHistoryPruneDecision{}, err
+			}
 			if w.Policy.RetainHotHistory(row.BlockNum, headNum) {
 				return snapshots.HotHistoryPruneDecision{}, nil
 			}
@@ -174,8 +192,11 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 			return Stats{}, fmt.Errorf("pruning: write snapshot/hot-prune stage progress: %w", err)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
 	codeStore, flushCode := newPruneBatchStore(w.DB)
-	deletedCodeRows, err := w.pruneStateCodeRows(codeStore, headNum)
+	deletedCodeRows, err := w.pruneStateCodeRowsContext(ctx, codeStore, headNum)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -194,6 +215,9 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 	checkpointStore, flushCheckpoints := newPruneBatchStore(w.DB)
 	var commitmentBlocks []uint64
 	if err := checkpointCfg.IterateHotCommitmentCheckpoints(checkpointStore, func(cp *rawdb.StateCommitmentCheckpoint) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if !w.Policy.RetainReorgData(cp.BlockNum, headNum) {
 			commitmentBlocks = append(commitmentBlocks, cp.BlockNum)
 		}
@@ -233,8 +257,18 @@ func (w Worker) hotHistoryDomainConfig() (snapshots.DomainCfg, error) {
 }
 
 func (w Worker) pruneStateCodeRows(db Store, headNum uint64) (int, error) {
+	return w.pruneStateCodeRowsContext(context.Background(), db, headNum)
+}
+
+func (w Worker) pruneStateCodeRowsContext(ctx context.Context, db Store, headNum uint64) (int, error) {
 	if w.Policy.Mode != ModeSnap || w.SnapshotDir == "" {
 		return 0, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	mgr, err := snapshots.OpenManager(w.SnapshotDir)
 	if err != nil {
@@ -264,8 +298,29 @@ func (w Worker) pruneStateCodeRows(db Store, headNum uint64) (int, error) {
 	if codeCfg.IterateHotCode == nil || codeCfg.DeleteHotCode == nil {
 		return 0, errors.New("pruning: missing CodeDomain lifecycle hooks")
 	}
+	// Code references only matter for hashes that still have a hot CodeDomain
+	// row. Once all eligible rows have been moved behind snapshot coverage,
+	// avoid rescanning the entire account history on every lifecycle pass.
+	hotCodeRows := 0
+	if err := codeCfg.IterateHotCode(db, func(row rawdb.StateCodeRow) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if isMeaningfulCodeHash(row.Hash) {
+			hotCodeRows++
+		}
+		return true, nil
+	}); err != nil {
+		return 0, err
+	}
+	if hotCodeRows == 0 {
+		return 0, nil
+	}
 	refs := make(codeHashRefs)
 	if err := accountCfg.IterateHotAccountLatest(db, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		hash, err := decodeAccountEnvelopeCodeHash(row.Value, fmt.Sprintf("account latest %x", row.Owner))
 		if err != nil {
 			return false, err
@@ -275,12 +330,15 @@ func (w Worker) pruneStateCodeRows(db Store, headNum uint64) (int, error) {
 	}); err != nil {
 		return 0, err
 	}
-	if err := (Checker{DB: db, SnapshotDir: w.SnapshotDir}).collectHistoryCodeHashes(refs); err != nil {
+	if err := (Checker{DB: db, SnapshotDir: w.SnapshotDir}).collectHistoryCodeHashesContext(ctx, refs); err != nil {
 		return 0, err
 	}
 
 	var deleteHashes []common.Hash
 	if err := codeCfg.IterateHotCode(db, func(row rawdb.StateCodeRow) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if !isMeaningfulCodeHash(row.Hash) {
 			return true, nil
 		}

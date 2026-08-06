@@ -1,6 +1,7 @@
 package pruning
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -260,11 +261,24 @@ func (refs codeHashRefs) add(hash common.Hash, txNum uint64) {
 }
 
 func (c Checker) collectHistoryCodeHashes(refs codeHashRefs) error {
+	return c.collectHistoryCodeHashesContext(context.Background(), refs)
+}
+
+func (c Checker) collectHistoryCodeHashesContext(ctx context.Context, refs codeHashRefs) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	cfg, ok := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetStateDomainChange)
 	if !ok {
 		return errors.New("pruning: missing state-domain history config")
 	}
 	if err := cfg.IterateHotHistoryChangesByTxRange(c.DB, 0, ^uint64(0), func(change *rawdb.StateDomainChange) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		return true, collectStateDomainChangeCodeHashes(refs, change)
 	}); err != nil {
 		return err
@@ -281,6 +295,9 @@ func (c Checker) collectHistoryCodeHashes(refs codeHashRefs) error {
 		return nil
 	}
 	return mgr.IterateStateDomainChanges(manifest.VisibleTxStart, manifest.VisibleTxEnd, func(change *rawdb.StateDomainChange) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		return true, collectStateDomainChangeCodeHashes(refs, change)
 	})
 }

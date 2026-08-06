@@ -219,7 +219,7 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		out.ChainFreezerBuild = result
 	}
 	if l.pruner != nil {
-		stats, err := l.pruner.PrunePass()
+		stats, err := l.pruner.PrunePassContext(l.ctx)
 		if err != nil {
 			return out, err
 		}

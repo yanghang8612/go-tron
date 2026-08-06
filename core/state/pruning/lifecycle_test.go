@@ -151,7 +151,7 @@ func TestSnapshotLifecycleAutomaticallyDrainsColdBuildBacklog(t *testing.T) {
 	for time.Now().Before(deadline) {
 		if progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild); err != nil {
 			t.Fatalf("read snapshot build stage: %v", err)
-		} else if ok && progress == 3 {
+		} else if ok && progress == 3 && lifecycle.pruner.Stats().Passes == 3 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -160,8 +160,8 @@ func TestSnapshotLifecycleAutomaticallyDrainsColdBuildBacklog(t *testing.T) {
 		t.Fatalf("snapshot build stage = %d ok=%v err=%v, want 3 without waiting for interval", progress, ok, err)
 	}
 	// StageSnapshotBuild is published inside the builder, before the ordered
-	// prune half of the same lifecycle pass. Stop joins that pass before the
-	// cross-stage counter assertions below.
+	// prune half of the same lifecycle pass. Wait for both halves above: Stop is
+	// allowed to cancel an in-flight prune scan during graceful shutdown.
 	if err := lifecycle.Stop(); err != nil {
 		t.Fatalf("stop lifecycle: %v", err)
 	}
