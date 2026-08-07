@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -74,6 +75,15 @@ type Config struct {
 	BatchTxNums            uint64
 	CompactMaxSteps        uint64
 	RetainObsoleteSegments bool
+	// CatchupBuildMinInterval rate-limits history collation while sync is
+	// active and the remaining snapshot lag fits in one configured block batch.
+	// Large backlogs still drain immediately; zero preserves the unthrottled
+	// behavior used by offline tooling and package-level tests.
+	CatchupBuildMinInterval time.Duration
+	// HeavyWorkGate prevents history/accessor construction from overlapping
+	// optional freezer compression and index maintenance in the same process.
+	// Losing non-blocking admission defers the pass to its normal cadence.
+	HeavyWorkGate *maintenance.HeavyWorkGate
 	// LatestBuildBlocks is the minimum number of solidified blocks that must
 	// elapse between production latest-snapshot builds. 0 disables the latest
 	// build pass entirely. Latest builds are full-keyspace scans, so all latest
@@ -115,6 +125,8 @@ type Config struct {
 type PassResult struct {
 	Built               bool
 	HistoryDeferred     bool
+	HistoryRateLimited  bool
+	HistoryGateDeferred bool
 	LatestBuilt         bool
 	LatestDeferred      bool
 	Compaction          HistoryCompactionResult
@@ -173,6 +185,8 @@ type Stats struct {
 	LastLatestDuration      time.Duration
 	LatestDeferredSync      uint64
 	HistoryDeferredSync     uint64
+	HistoryRateLimitedSync  uint64
+	HistoryGateDeferred     uint64
 	LastLatestBuildBlock    uint64
 }
 
@@ -199,6 +213,8 @@ type coldRunnerMetrics struct {
 	lastLatestDuration      *metrics.Gauge
 	latestDeferredSync      *metrics.Gauge
 	historyDeferredSync     *metrics.Gauge
+	historyRateLimitedSync  *metrics.Gauge
+	historyGateDeferred     *metrics.Gauge
 	lastLatestBuildBlock    *metrics.Gauge
 }
 
@@ -227,6 +243,8 @@ func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 		lastLatestDuration:      metrics.GetOrRegisterGauge(namespace+"lastpass/latest/duration", nil),
 		latestDeferredSync:      metrics.GetOrRegisterGauge(namespace+"latest/deferred/sync", nil),
 		historyDeferredSync:     metrics.GetOrRegisterGauge(namespace+"history/deferred/sync", nil),
+		historyRateLimitedSync:  metrics.GetOrRegisterGauge(namespace+"history/deferred/rate_limit", nil),
+		historyGateDeferred:     metrics.GetOrRegisterGauge(namespace+"history/deferred/resource", nil),
 		lastLatestBuildBlock:    metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
 	}
 }
@@ -264,6 +282,8 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.lastLatestDuration.Update(int64(stats.LastLatestDuration))
 	m.latestDeferredSync.Update(coldSnapshotUintGauge(stats.LatestDeferredSync))
 	m.historyDeferredSync.Update(coldSnapshotUintGauge(stats.HistoryDeferredSync))
+	m.historyRateLimitedSync.Update(coldSnapshotUintGauge(stats.HistoryRateLimitedSync))
+	m.historyGateDeferred.Update(coldSnapshotUintGauge(stats.HistoryGateDeferred))
 	m.lastLatestBuildBlock.Update(coldSnapshotUintGauge(stats.LastLatestBuildBlock))
 }
 
@@ -314,6 +334,9 @@ type Runner struct {
 	lastLatestBuildBlock    atomic.Uint64
 	latestDeferredSync      atomic.Uint64
 	historyDeferredSync     atomic.Uint64
+	historyRateLimitedSync  atomic.Uint64
+	historyGateDeferred     atomic.Uint64
+	lastHistoryBuildAt      atomic.Int64
 }
 
 func NewRunner(chain ChainSource, cfg Config) *Runner {
@@ -428,6 +451,8 @@ func (r *Runner) Start() error {
 			"historyWindow", r.cfg.HistoryWindow,
 			"batchBlocks", r.cfg.BatchBlocks,
 			"batchTxNums", r.cfg.BatchTxNums,
+			"catchupBuildMinInterval", r.cfg.CatchupBuildMinInterval,
+			"sharedHeavyWorkGate", r.cfg.HeavyWorkGate != nil,
 			"compactMaxSteps", r.cfg.CompactMaxSteps,
 			"sectionBloomBuild", r.cfg.BuildSectionBlooms,
 			"balanceTraceBuild", r.cfg.BuildBalanceTraces,
@@ -511,6 +536,8 @@ func (r *Runner) Snapshot() Stats {
 		LastLatestDuration:      time.Duration(r.lastLatestDuration.Load()),
 		LatestDeferredSync:      r.latestDeferredSync.Load(),
 		HistoryDeferredSync:     r.historyDeferredSync.Load(),
+		HistoryRateLimitedSync:  r.historyRateLimitedSync.Load(),
+		HistoryGateDeferred:     r.historyGateDeferred.Load(),
 		LastLatestBuildBlock:    r.lastLatestBuildBlock.Load(),
 	}
 }
@@ -725,6 +752,11 @@ func (r *Runner) onePass() (PassResult, error) {
 	if !ok {
 		return result, nil
 	}
+	if r.historyBuildRateLimited(time.Now()) {
+		result.HistoryDeferred = true
+		result.HistoryRateLimited = true
+		return result, nil
+	}
 	if r.cfg.BatchBlocks > 0 {
 		batchCutoffBlock := startBlock + r.cfg.BatchBlocks - 1
 		if batchCutoffBlock < startBlock || batchCutoffBlock > cutoffBlock {
@@ -774,6 +806,13 @@ func (r *Runner) onePass() (PassResult, error) {
 	if fromTxNum > toTxNum {
 		return result, nil
 	}
+	releaseHeavyWork, admitted := r.cfg.HeavyWorkGate.TryAcquire()
+	if !admitted {
+		result.HistoryDeferred = true
+		result.HistoryGateDeferred = true
+		return result, nil
+	}
+	defer releaseHeavyWork()
 
 	var snapshotBuildHash common.Hash
 	if _, ok := db.(ethdb.KeyValueWriter); ok {
@@ -874,6 +913,27 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 	}
 	return result, nil
+}
+
+func (r *Runner) historyBuildRateLimited(now time.Time) bool {
+	if r == nil || r.cfg.CatchupBuildMinInterval <= 0 {
+		return false
+	}
+	source, ok := r.chain.(syncRemainingSource)
+	if !ok {
+		return false
+	}
+	if _, active := source.SyncRemainingBlocks(); !active {
+		return false
+	}
+	last := r.lastHistoryBuildAt.Load()
+	if last <= 0 || now.Sub(time.Unix(0, last)) >= r.cfg.CatchupBuildMinInterval {
+		return false
+	}
+	// Never rate-limit a backlog larger than one complete block batch. This
+	// preserves the cold builder's ability to catch up after downtime while
+	// smoothing the steady-state one-step bursts observed during sync.
+	return r.lastLagBlocks.Load() <= r.cfg.BatchBlocks
 }
 
 func writeSnapshotBuildStage(writer ethdb.KeyValueWriter, stage rawdb.StageID, block uint64, hash common.Hash) error {
@@ -1046,6 +1106,7 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	}
 	if result.Built {
 		r.segmentsBuilt.Add(1)
+		r.lastHistoryBuildAt.Store(time.Now().UnixNano())
 	}
 	if result.Compaction.Merged {
 		r.segmentsCompacted.Add(uint64(result.Compaction.SegmentsMerged))
@@ -1057,7 +1118,11 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	if result.LatestDeferred {
 		r.latestDeferredSync.Add(1)
 	}
-	if result.HistoryDeferred {
+	if result.HistoryRateLimited {
+		r.historyRateLimitedSync.Add(1)
+	} else if result.HistoryGateDeferred {
+		r.historyGateDeferred.Add(1)
+	} else if result.HistoryDeferred {
 		r.historyDeferredSync.Add(1)
 	}
 	var builtBytes uint64

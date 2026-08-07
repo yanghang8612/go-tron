@@ -173,6 +173,48 @@ func TestSnapshotLifecycleAutomaticallyDrainsColdBuildBacklog(t *testing.T) {
 	}
 }
 
+func TestSnapshotLifecycleRateLimitedWakeSkipsRemainingMaintenance(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeSnapPruningChange(t, db, blockNum, blockNum*10, blockNum*10+2)
+	}
+	chain := &fakePruneChain{db: db, solidified: 4, syncRemaining: 100, syncRemainingOK: true}
+	chainFreezerBuilds := 0
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:                     dir,
+			Enabled:                 true,
+			HistoryWindow:           1,
+			BatchBlocks:             2,
+			CatchupBuildMinInterval: time.Hour,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			SnapshotDir: dir,
+		},
+		ChainFreezerBuild: func() (snapshots.ChainFreezerSnapshotPassResult, error) {
+			chainFreezerBuilds++
+			return snapshots.ChainFreezerSnapshotPassResult{}, nil
+		},
+	})
+	first, err := lifecycle.OnePass()
+	if err != nil || !first.Snapshot.Built || !first.Snapshot.NeedsCatchup() {
+		t.Fatalf("first lifecycle pass = %+v err=%v", first, err)
+	}
+	prunePasses := lifecycle.pruner.Stats().Passes
+	second, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("rate-limited lifecycle pass: %v", err)
+	}
+	if !second.Snapshot.HistoryRateLimited || second.Snapshot.Built {
+		t.Fatalf("rate-limited lifecycle pass = %+v", second)
+	}
+	if chainFreezerBuilds != 1 || lifecycle.pruner.Stats().Passes != prunePasses {
+		t.Fatalf("downstream maintenance ran after rate limit: freezer=%d prune=%d/%d", chainFreezerBuilds, lifecycle.pruner.Stats().Passes, prunePasses)
+	}
+}
+
 func TestSnapshotLifecycleStartPreparesLatestBuildWatermark(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()

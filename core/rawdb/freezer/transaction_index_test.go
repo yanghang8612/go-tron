@@ -1,11 +1,32 @@
 package freezer
 
 import (
+	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestBuildTransactionIndexRunHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	path := filepath.Join(t.TempDir(), "canceled.gtxi")
+	_, err := BuildTransactionIndexRun(path, TransactionIndexBuildOptions{
+		Context:    ctx,
+		PrefixBits: 8,
+		StartBlock: 1,
+		EndBlock:   2,
+		Iterate:    transactionIndexTestIterator(nil),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled build error = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("canceled build published destination: %v", err)
+	}
+}
 
 func transactionIndexTestIterator(entries []TransactionIndexEntry) TransactionIndexIterator {
 	return func(yield func(TransactionIndexEntry) error) error {
@@ -48,6 +69,11 @@ func TestTransactionIndexRunRoundTrip(t *testing.T) {
 	}
 	if err := run.Verify(); err != nil {
 		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := run.VerifyContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("VerifyContext canceled error = %v", err)
 	}
 	for i := 0; i < len(entries); i += 31 {
 		locations, err := run.Candidates(entries[i].Hash)

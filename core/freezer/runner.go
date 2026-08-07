@@ -49,6 +49,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
@@ -64,6 +65,7 @@ var log = gtronlog.NewModule("core/freezer")
 // have already crossed the explicit fsync barrier. The loop suppresses warning
 // logs for this error and exits.
 var errRunnerStopping = errors.New("freezer runner stopping")
+var errHeavyMaintenanceDeferred = errors.New("freezer: heavy maintenance deferred for active sync")
 
 // Defaults applied when Config fields are zero. They mirror the spec's
 // recommended production values: 30-second cadence, 128-block margin
@@ -72,14 +74,17 @@ var errRunnerStopping = errors.New("freezer runner stopping")
 // fresh-install backlog in under an hour, small enough that one pass
 // can't dominate Pebble's compaction queue).
 const (
-	defaultInterval          = 30 * time.Second
-	defaultMarginBlocks      = uint64(128)
-	defaultBatchBlocks       = uint64(30_000)
-	defaultV2FrameBlocks     = uint32(64)
-	defaultV2SegmentBlocks   = uint64(65_536)
-	defaultTxIndexPrefixBits = uint32(20)
-	txIndexDeleteBatchBytes  = 16 << 20
-	defaultMetricsNamespace  = "chain/freezer/"
+	defaultInterval                     = 30 * time.Second
+	defaultMarginBlocks                 = uint64(128)
+	defaultBatchBlocks                  = uint64(30_000)
+	defaultV2FrameBlocks                = uint32(64)
+	defaultV2SegmentBlocks              = uint64(65_536)
+	defaultTxIndexPrefixBits            = uint32(20)
+	defaultCatchupMaintenanceInterval   = 5 * time.Minute
+	defaultHeavyMaintenanceStartupDelay = time.Minute
+	heavyMaintenancePollInterval        = 250 * time.Millisecond
+	txIndexDeleteBatchBytes             = 16 << 20
+	defaultMetricsNamespace             = "chain/freezer/"
 )
 
 // Config governs the freezing pass cadence and batch sizing.
@@ -126,6 +131,17 @@ type Config struct {
 	// V2PromotionAllowed lets the sync coordinator defer compression during an
 	// I/O-sensitive phase without disabling the freezer itself.
 	V2PromotionAllowed func() bool
+	// SyncActive and CatchupMaintenanceInterval turn V2 promotion and immutable
+	// transaction-index work into a bounded catch-up duty cycle. Base freezing
+	// remains active so Pebble block rows cannot grow without bound.
+	SyncActive                 func() bool
+	CatchupMaintenanceInterval time.Duration
+	// HeavyMaintenanceStartupDelay gives peer discovery enough time to expose
+	// an active historical sync before the first optional compression/index job.
+	HeavyMaintenanceStartupDelay time.Duration
+	// HeavyWorkGate prevents optional freezer work from overlapping snapshot
+	// history/accessor construction in the same process.
+	HeavyWorkGate *maintenance.HeavyWorkGate
 
 	V2FrameBlocks   uint32
 	V2SegmentBlocks uint64
@@ -146,16 +162,18 @@ type Config struct {
 // operator overrides have been supplied.
 func Default() Config {
 	return Config{
-		Enabled:                    true,
-		Interval:                   defaultInterval,
-		MarginBlocks:               defaultMarginBlocks,
-		BatchBlocks:                defaultBatchBlocks,
-		V2Enabled:                  true,
-		V2FrameBlocks:              defaultV2FrameBlocks,
-		V2SegmentBlocks:            defaultV2SegmentBlocks,
-		TransactionIndexEnabled:    true,
-		TransactionIndexPrefixBits: defaultTxIndexPrefixBits,
-		MetricsNamespace:           defaultMetricsNamespace,
+		Enabled:                      true,
+		Interval:                     defaultInterval,
+		MarginBlocks:                 defaultMarginBlocks,
+		BatchBlocks:                  defaultBatchBlocks,
+		V2Enabled:                    true,
+		V2FrameBlocks:                defaultV2FrameBlocks,
+		V2SegmentBlocks:              defaultV2SegmentBlocks,
+		TransactionIndexEnabled:      true,
+		TransactionIndexPrefixBits:   defaultTxIndexPrefixBits,
+		CatchupMaintenanceInterval:   defaultCatchupMaintenanceInterval,
+		HeavyMaintenanceStartupDelay: defaultHeavyMaintenanceStartupDelay,
+		MetricsNamespace:             defaultMetricsNamespace,
 	}
 }
 
@@ -318,27 +336,35 @@ type Stats struct {
 	// TransactionIndexCoverage is the first block not covered by an immutable
 	// index run. TransactionIndexPruned is the exclusive hot-row deletion
 	// cursor and must never advance beyond coverage.
-	TransactionIndexCoverage     uint64
-	TransactionIndexPruned       uint64
-	TransactionIndexRowsArchived uint64
-	TransactionIndexRowsPruned   uint64
+	TransactionIndexCoverage         uint64
+	TransactionIndexPruned           uint64
+	TransactionIndexRowsArchived     uint64
+	TransactionIndexRowsPruned       uint64
+	V2CatchupDeferred                uint64
+	V2ResourceDeferred               uint64
+	TransactionIndexCatchupDeferred  uint64
+	TransactionIndexResourceDeferred uint64
 }
 
 type runnerMetrics struct {
-	frozenMin         *metrics.Gauge
-	frozenMax         *metrics.Gauge
-	frozenHas         *metrics.Gauge
-	blocksFrozen      *metrics.Gauge
-	passesCompleted   *metrics.Gauge
-	lastPassAt        *metrics.Gauge
-	lastPassDuration  *metrics.Gauge
-	pebbleSizeAfter   *metrics.Gauge
-	v2Coverage        *metrics.Gauge
-	v2Blocks          *metrics.Gauge
-	txIndexCoverage   *metrics.Gauge
-	txIndexPruned     *metrics.Gauge
-	txIndexArchived   *metrics.Gauge
-	txIndexRowsPruned *metrics.Gauge
+	frozenMin               *metrics.Gauge
+	frozenMax               *metrics.Gauge
+	frozenHas               *metrics.Gauge
+	blocksFrozen            *metrics.Gauge
+	passesCompleted         *metrics.Gauge
+	lastPassAt              *metrics.Gauge
+	lastPassDuration        *metrics.Gauge
+	pebbleSizeAfter         *metrics.Gauge
+	v2Coverage              *metrics.Gauge
+	v2Blocks                *metrics.Gauge
+	txIndexCoverage         *metrics.Gauge
+	txIndexPruned           *metrics.Gauge
+	txIndexArchived         *metrics.Gauge
+	txIndexRowsPruned       *metrics.Gauge
+	v2CatchupDeferred       *metrics.Gauge
+	v2ResourceDeferred      *metrics.Gauge
+	txIndexCatchupDeferred  *metrics.Gauge
+	txIndexResourceDeferred *metrics.Gauge
 }
 
 func newRunnerMetrics(namespace string) runnerMetrics {
@@ -354,13 +380,17 @@ func newRunnerMetrics(namespace string) runnerMetrics {
 			namespace+"lastpass/duration",
 			nil,
 		),
-		pebbleSizeAfter:   metrics.GetOrRegisterGauge(namespace+"pebble/size", nil),
-		v2Coverage:        metrics.GetOrRegisterGauge(namespace+"v2/coverage", nil),
-		v2Blocks:          metrics.GetOrRegisterGauge(namespace+"v2/blocks", nil),
-		txIndexCoverage:   metrics.GetOrRegisterGauge(namespace+"txindex/coverage", nil),
-		txIndexPruned:     metrics.GetOrRegisterGauge(namespace+"txindex/pruned", nil),
-		txIndexArchived:   metrics.GetOrRegisterGauge(namespace+"txindex/rows/archived", nil),
-		txIndexRowsPruned: metrics.GetOrRegisterGauge(namespace+"txindex/rows/pruned", nil),
+		pebbleSizeAfter:         metrics.GetOrRegisterGauge(namespace+"pebble/size", nil),
+		v2Coverage:              metrics.GetOrRegisterGauge(namespace+"v2/coverage", nil),
+		v2Blocks:                metrics.GetOrRegisterGauge(namespace+"v2/blocks", nil),
+		txIndexCoverage:         metrics.GetOrRegisterGauge(namespace+"txindex/coverage", nil),
+		txIndexPruned:           metrics.GetOrRegisterGauge(namespace+"txindex/pruned", nil),
+		txIndexArchived:         metrics.GetOrRegisterGauge(namespace+"txindex/rows/archived", nil),
+		txIndexRowsPruned:       metrics.GetOrRegisterGauge(namespace+"txindex/rows/pruned", nil),
+		v2CatchupDeferred:       metrics.GetOrRegisterGauge(namespace+"v2/deferred/catchup", nil),
+		v2ResourceDeferred:      metrics.GetOrRegisterGauge(namespace+"v2/deferred/resource", nil),
+		txIndexCatchupDeferred:  metrics.GetOrRegisterGauge(namespace+"txindex/deferred/catchup", nil),
+		txIndexResourceDeferred: metrics.GetOrRegisterGauge(namespace+"txindex/deferred/resource", nil),
 	}
 }
 
@@ -393,6 +423,10 @@ func (m runnerMetrics) update(stats Stats) {
 	m.txIndexPruned.Update(uint64GaugeValue(stats.TransactionIndexPruned))
 	m.txIndexArchived.Update(uint64GaugeValue(stats.TransactionIndexRowsArchived))
 	m.txIndexRowsPruned.Update(uint64GaugeValue(stats.TransactionIndexRowsPruned))
+	m.v2CatchupDeferred.Update(uint64GaugeValue(stats.V2CatchupDeferred))
+	m.v2ResourceDeferred.Update(uint64GaugeValue(stats.V2ResourceDeferred))
+	m.txIndexCatchupDeferred.Update(uint64GaugeValue(stats.TransactionIndexCatchupDeferred))
+	m.txIndexResourceDeferred.Update(uint64GaugeValue(stats.TransactionIndexResourceDeferred))
 }
 
 func boolGaugeValue(v bool) int64 {
@@ -429,17 +463,24 @@ type Runner struct {
 
 	// stats fields are atomics so Snapshot is lock-free against the running
 	// goroutine.
-	blocksFrozen        atomic.Uint64
-	passesCompleted     atomic.Uint64
-	lastPassUnixNano    atomic.Int64
-	lastPassDuration    atomic.Int64 // nanoseconds
-	pebbleSizeAfter     atomic.Uint64
-	v2BlocksCompacted   atomic.Uint64
-	v2BacklogWarned     atomic.Bool
-	lastV2Promotion     atomic.Int64
-	txIndexRowsArchived atomic.Uint64
-	txIndexRowsPruned   atomic.Uint64
-	txIndexLegacyWarned atomic.Bool
+	blocksFrozen                  atomic.Uint64
+	passesCompleted               atomic.Uint64
+	lastPassUnixNano              atomic.Int64
+	lastPassDuration              atomic.Int64 // nanoseconds
+	pebbleSizeAfter               atomic.Uint64
+	v2BlocksCompacted             atomic.Uint64
+	v2BacklogWarned               atomic.Bool
+	lastV2Promotion               atomic.Int64
+	txIndexRowsArchived           atomic.Uint64
+	txIndexRowsPruned             atomic.Uint64
+	txIndexLegacyWarned           atomic.Bool
+	v2CatchupDeferred             atomic.Uint64
+	v2ResourceDeferred            atomic.Uint64
+	txIndexCatchupDeferred        atomic.Uint64
+	txIndexResourceDeferred       atomic.Uint64
+	lastV2CatchupMaintenance      atomic.Int64
+	lastTxIndexCatchupMaintenance atomic.Int64
+	startedAt                     time.Time
 
 	// reconciled guards the once-per-process crash-leftover sweep in
 	// onePass. See the reconciliation block there.
@@ -475,6 +516,7 @@ func New(chain ChainSource, fz FreezerStore, cfg Config) *Runner {
 		done:        make(chan struct{}),
 		pauseCtx:    ctx,
 		pauseCancel: cancel,
+		startedAt:   time.Now(),
 	}
 	r.updateMetrics()
 	return r
@@ -496,7 +538,10 @@ func (r *Runner) Start() error {
 	log.Info("Freezer runner started",
 		"interval", r.cfg.Interval,
 		"margin", r.cfg.MarginBlocks,
-		"batch", r.cfg.BatchBlocks)
+		"batch", r.cfg.BatchBlocks,
+		"catchupMaintenanceInterval", r.cfg.CatchupMaintenanceInterval,
+		"heavyMaintenanceStartupDelay", r.cfg.HeavyMaintenanceStartupDelay,
+		"sharedHeavyWorkGate", r.cfg.HeavyWorkGate != nil)
 	return nil
 }
 
@@ -583,13 +628,17 @@ func (r *Runner) Snapshot() Stats {
 
 func (r *Runner) snapshot() Stats {
 	stats := Stats{
-		BlocksFrozen:                 r.blocksFrozen.Load(),
-		PassesCompleted:              r.passesCompleted.Load(),
-		LastPassDuration:             time.Duration(r.lastPassDuration.Load()),
-		PebbleSizeAfter:              r.pebbleSizeAfter.Load(),
-		V2BlocksCompacted:            r.v2BlocksCompacted.Load(),
-		TransactionIndexRowsArchived: r.txIndexRowsArchived.Load(),
-		TransactionIndexRowsPruned:   r.txIndexRowsPruned.Load(),
+		BlocksFrozen:                     r.blocksFrozen.Load(),
+		PassesCompleted:                  r.passesCompleted.Load(),
+		LastPassDuration:                 time.Duration(r.lastPassDuration.Load()),
+		PebbleSizeAfter:                  r.pebbleSizeAfter.Load(),
+		V2BlocksCompacted:                r.v2BlocksCompacted.Load(),
+		TransactionIndexRowsArchived:     r.txIndexRowsArchived.Load(),
+		TransactionIndexRowsPruned:       r.txIndexRowsPruned.Load(),
+		V2CatchupDeferred:                r.v2CatchupDeferred.Load(),
+		V2ResourceDeferred:               r.v2ResourceDeferred.Load(),
+		TransactionIndexCatchupDeferred:  r.txIndexCatchupDeferred.Load(),
+		TransactionIndexResourceDeferred: r.txIndexResourceDeferred.Load(),
 	}
 	if t := r.lastPassUnixNano.Load(); t > 0 {
 		stats.LastPassAt = time.Unix(0, t)
@@ -618,6 +667,123 @@ func (r *Runner) snapshot() Stats {
 	return stats
 }
 
+type heavyMaintenanceKind uint8
+
+const (
+	heavyMaintenanceV2 heavyMaintenanceKind = iota + 1
+	heavyMaintenanceTxIndex
+)
+
+type heavyMaintenanceLease struct {
+	ctx     context.Context
+	release func()
+}
+
+func (l *heavyMaintenanceLease) Close() {
+	if l != nil && l.release != nil {
+		l.release()
+	}
+}
+
+func (r *Runner) beginHeavyMaintenance(kind heavyMaintenanceKind, lastCatchup *atomic.Int64) (*heavyMaintenanceLease, bool) {
+	if r == nil {
+		return nil, false
+	}
+	now := time.Now()
+	if r.cfg.HeavyMaintenanceStartupDelay > 0 && now.Sub(r.startedAt) < r.cfg.HeavyMaintenanceStartupDelay {
+		r.recordHeavyMaintenanceDeferred(kind, false)
+		return nil, false
+	}
+	active := r.cfg.SyncActive != nil && r.cfg.SyncActive()
+	if active && r.cfg.CatchupMaintenanceInterval > 0 {
+		if last := lastCatchup.Load(); last > 0 && now.Sub(time.Unix(0, last)) < r.cfg.CatchupMaintenanceInterval {
+			r.recordHeavyMaintenanceDeferred(kind, false)
+			return nil, false
+		}
+	}
+	releaseGate, ok := r.cfg.HeavyWorkGate.TryAcquire()
+	if !ok {
+		r.recordHeavyMaintenanceDeferred(kind, true)
+		return nil, false
+	}
+	// Recheck after admission so a sync transition cannot consume an old
+	// catch-up token while this task waited behind another maintenance stage.
+	now = time.Now()
+	active = r.cfg.SyncActive != nil && r.cfg.SyncActive()
+	if active && r.cfg.CatchupMaintenanceInterval > 0 {
+		if last := lastCatchup.Load(); last > 0 && now.Sub(time.Unix(0, last)) < r.cfg.CatchupMaintenanceInterval {
+			releaseGate()
+			r.recordHeavyMaintenanceDeferred(kind, false)
+			return nil, false
+		}
+		lastCatchup.Store(now.UnixNano())
+	}
+
+	ctx := r.pauseCtx
+	stopWatch := func() {}
+	// A task explicitly admitted from the catch-up budget may finish its one
+	// bounded transaction. A task which began while idle is canceled if peer
+	// discovery turns sync on underneath it.
+	if !active && r.cfg.SyncActive != nil {
+		var cancel context.CancelCauseFunc
+		ctx, cancel = context.WithCancelCause(r.pauseCtx)
+		stop := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			ticker := time.NewTicker(heavyMaintenancePollInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if r.cfg.SyncActive() {
+						cancel(errHeavyMaintenanceDeferred)
+						return
+					}
+				case <-stop:
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		var stopOnce sync.Once
+		stopWatch = func() {
+			stopOnce.Do(func() { close(stop) })
+			<-done
+			cancel(nil)
+		}
+	}
+	return &heavyMaintenanceLease{
+		ctx: ctx,
+		release: func() {
+			stopWatch()
+			releaseGate()
+		},
+	}, true
+}
+
+func (r *Runner) recordHeavyMaintenanceDeferred(kind heavyMaintenanceKind, resource bool) {
+	if r == nil {
+		return
+	}
+	switch kind {
+	case heavyMaintenanceV2:
+		if resource {
+			r.v2ResourceDeferred.Add(1)
+		} else {
+			r.v2CatchupDeferred.Add(1)
+		}
+	case heavyMaintenanceTxIndex:
+		if resource {
+			r.txIndexResourceDeferred.Add(1)
+		} else {
+			r.txIndexCatchupDeferred.Add(1)
+		}
+	}
+	r.updateMetrics()
+}
+
 // CompactV2Once promotes at most one complete V1 segment. A new node may
 // bootstrap its first segment online; a legacy multi-segment backlog requires
 // one explicit offline migration so an upgrade cannot unexpectedly launch a
@@ -626,11 +792,25 @@ func (r *Runner) CompactV2Once() (uint64, error) {
 	if !r.cfg.Enabled || !r.cfg.V2Enabled {
 		return 0, nil
 	}
-	compactor, ok := r.freezer.(V2Compactor)
+	if r.cfg.V2PromotionAllowed != nil && !r.cfg.V2PromotionAllowed() {
+		return 0, nil
+	}
+	lease, ok := r.beginHeavyMaintenance(heavyMaintenanceV2, &r.lastV2CatchupMaintenance)
 	if !ok {
 		return 0, nil
 	}
-	if r.cfg.V2PromotionAllowed != nil && !r.cfg.V2PromotionAllowed() {
+	defer lease.Close()
+	compacted, err := r.compactV2OnceContext(lease.ctx)
+	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(lease.ctx), errHeavyMaintenanceDeferred) {
+		r.recordHeavyMaintenanceDeferred(heavyMaintenanceV2, false)
+		return 0, nil
+	}
+	return compacted, err
+}
+
+func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
+	compactor, ok := r.freezer.(V2Compactor)
+	if !ok {
 		return 0, nil
 	}
 	segmentBlocks := r.cfg.V2SegmentBlocks
@@ -659,7 +839,7 @@ func (r *Runner) CompactV2Once() (uint64, error) {
 		FrameBlocks:   r.cfg.V2FrameBlocks,
 		MaxSegments:   1,
 		Online:        true,
-		Context:       r.pauseCtx,
+		Context:       ctx,
 		Transform:     rawdb.CompactAncientV2Record,
 	})
 	if err != nil {
@@ -700,6 +880,20 @@ func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 	if !r.cfg.Enabled || !r.cfg.V2Enabled || !r.cfg.TransactionIndexEnabled {
 		return false, nil
 	}
+	lease, ok := r.beginHeavyMaintenance(heavyMaintenanceTxIndex, &r.lastTxIndexCatchupMaintenance)
+	if !ok {
+		return false, nil
+	}
+	defer lease.Close()
+	changed, err := r.maintainTransactionIndexOnceContext(lease.ctx)
+	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(lease.ctx), errHeavyMaintenanceDeferred) {
+		r.recordHeavyMaintenanceDeferred(heavyMaintenanceTxIndex, false)
+		return false, nil
+	}
+	return changed, err
+}
+
+func (r *Runner) maintainTransactionIndexOnceContext(ctx context.Context) (bool, error) {
 	v2, ok := r.freezer.(V2Compactor)
 	if !ok {
 		return false, nil
@@ -725,11 +919,11 @@ func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 		if end > coverage {
 			end = coverage
 		}
-		entries, err := r.collectTransactionIndexEntries(pruned, end)
+		entries, err := r.collectTransactionIndexEntriesContext(ctx, pruned, end)
 		if err != nil {
 			return false, err
 		}
-		if err := r.deleteHotTransactionIndexes(entries); err != nil {
+		if err := r.deleteHotTransactionIndexesContext(ctx, entries); err != nil {
 			return false, err
 		}
 		if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune, end); err != nil {
@@ -745,6 +939,9 @@ func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 		log.Info("Freezer: pruned archived hot transaction indexes", "from", pruned, "to", end, "rows", len(entries))
 		return true, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if merged, err := index.CompactTransactionIndexTail(); err != nil {
 		return false, err
 	} else if merged {
@@ -755,7 +952,7 @@ func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 		return false, nil
 	}
 	end := coverage + r.cfg.V2SegmentBlocks
-	entries, err := r.collectTransactionIndexEntries(coverage, end)
+	entries, err := r.collectTransactionIndexEntriesContext(ctx, coverage, end)
 	if err != nil {
 		return false, err
 	}
@@ -764,7 +961,7 @@ func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 		return false, err
 	}
 	runPath := rawdbfreezer.TransactionIndexRunPath(path, coverage, end)
-	result, recovered, err := buildOrRecoverOnlineTransactionIndex(runPath, coverage, end, r.cfg.TransactionIndexPrefixBits, entries)
+	result, recovered, err := buildOrRecoverOnlineTransactionIndexContext(ctx, runPath, coverage, end, r.cfg.TransactionIndexPrefixBits, entries)
 	if err != nil {
 		return false, err
 	}
@@ -814,10 +1011,20 @@ func (r *Runner) transactionIndexPruneProgress(coverage uint64) (uint64, bool, e
 }
 
 func (r *Runner) collectTransactionIndexEntries(start, end uint64) ([]rawdbfreezer.TransactionIndexEntry, error) {
+	return r.collectTransactionIndexEntriesContext(context.Background(), start, end)
+}
+
+func (r *Runner) collectTransactionIndexEntriesContext(ctx context.Context, start, end uint64) ([]rawdbfreezer.TransactionIndexEntry, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	started := time.Now()
 	lastProgress := started
 	entries := make([]rawdbfreezer.TransactionIndexEntry, 0, (end-start)*32)
 	for number := start; number < end; number++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := r.checkStopping(); err != nil {
 			return nil, err
 		}
@@ -851,12 +1058,22 @@ func (r *Runner) collectTransactionIndexEntries(start, end uint64) ([]rawdbfreez
 }
 
 func buildOrRecoverOnlineTransactionIndex(path string, start, end uint64, prefixBits uint32, entries []rawdbfreezer.TransactionIndexEntry) (rawdbfreezer.TransactionIndexBuildResult, bool, error) {
+	return buildOrRecoverOnlineTransactionIndexContext(context.Background(), path, start, end, prefixBits, entries)
+}
+
+func buildOrRecoverOnlineTransactionIndexContext(ctx context.Context, path string, start, end uint64, prefixBits uint32, entries []rawdbfreezer.TransactionIndexEntry) (rawdbfreezer.TransactionIndexBuildResult, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return rawdbfreezer.TransactionIndexBuildResult{}, false, err
+	}
 	if run, err := rawdbfreezer.OpenTransactionIndexRun(path); err == nil {
 		defer run.Close()
 		if run.StartBlock() != start || run.EndBlock() != end || run.PrefixBits() != prefixBits || run.Rows() != uint64(len(entries)) {
 			return rawdbfreezer.TransactionIndexBuildResult{}, false, fmt.Errorf("online transaction index run %q has incompatible metadata", path)
 		}
-		if err := run.Verify(); err != nil {
+		if err := run.VerifyContext(ctx); err != nil {
 			return rawdbfreezer.TransactionIndexBuildResult{}, false, err
 		}
 		return rawdbfreezer.TransactionIndexBuildResult{Path: path, Rows: run.Rows(), StartBlock: start, EndBlock: end, PrefixBits: prefixBits, FileBytes: run.Size()}, true, nil
@@ -864,6 +1081,7 @@ func buildOrRecoverOnlineTransactionIndex(path string, start, end uint64, prefix
 		return rawdbfreezer.TransactionIndexBuildResult{}, false, err
 	}
 	result, err := rawdbfreezer.BuildTransactionIndexRun(path, rawdbfreezer.TransactionIndexBuildOptions{
+		Context:    ctx,
 		PrefixBits: prefixBits,
 		StartBlock: start,
 		EndBlock:   end,
@@ -880,6 +1098,13 @@ func buildOrRecoverOnlineTransactionIndex(path string, start, end uint64, prefix
 }
 
 func (r *Runner) deleteHotTransactionIndexes(entries []rawdbfreezer.TransactionIndexEntry) error {
+	return r.deleteHotTransactionIndexesContext(context.Background(), entries)
+}
+
+func (r *Runner) deleteHotTransactionIndexesContext(ctx context.Context, entries []rawdbfreezer.TransactionIndexEntry) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	batch := r.chain.DB().NewBatchWithSize(txIndexDeleteBatchBytes)
 	defer batch.Reset()
 	flush := func() error {
@@ -893,6 +1118,9 @@ func (r *Runner) deleteHotTransactionIndexes(entries []rawdbfreezer.TransactionI
 		return nil
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := r.checkStopping(); err != nil {
 			return err
 		}

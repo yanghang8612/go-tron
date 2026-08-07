@@ -20,6 +20,7 @@ import (
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
 	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/producer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
@@ -44,11 +45,25 @@ import (
 )
 
 const (
-	domainStateReorgWindow uint64 = 128
-	gtronVersion                  = "0.3.0-dev"
+	domainStateReorgWindow       uint64 = 128
+	gtronVersion                        = "0.3.0-dev"
+	runtimeSnapshotETLBuffer            = 256 << 20
+	snapshotCatchupBuildInterval        = time.Minute
 )
 
 var metricsOnce sync.Once
+
+func applyRuntimeSnapshotETLDefaults(opts statesnapshots.RestoreETLOptions) statesnapshots.RestoreETLOptions {
+	if opts.BufferLimit == 0 {
+		// Production history builds own two independently sorted accessor
+		// streams. The 64 MiB library default forced dozens of NVMe spill runs
+		// in dense mainnet windows despite a low live heap. Four times the
+		// per-collector buffer remains comfortably below the service memory
+		// budget and materially shortens the external tournament merge.
+		opts.BufferLimit = runtimeSnapshotETLBuffer
+	}
+	return opts
+}
 
 func enableMetrics() {
 	metricsOnce.Do(func() {
@@ -534,6 +549,7 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	snapshotETL = applyRuntimeSnapshotETLDefaults(snapshotETL)
 	if err := validateSyncImportBatch(cfg.SyncImportBatch); err != nil {
 		return err
 	}
@@ -961,6 +977,7 @@ func gtron(ctx *cli.Context) error {
 	sectionBloomPruneLifecycleWired := false
 	balanceTracePruneLifecycleWired := false
 	retiredPruneLifecycleWired := false
+	heavyWorkGate := maintenance.NewHeavyWorkGate()
 	var domainLifecycle *statepruning.SnapshotLifecycle
 	var chainFreezerSnapshotBuild statepruning.ChainFreezerBuildFunc
 	if shouldEnableChainFreezerSnapshotBuilder(chainConfig, ancientStore != nil, freezerCfg.Enabled) {
@@ -1014,16 +1031,18 @@ func gtron(ctx *cli.Context) error {
 		}
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
-				Dir:                stateSnapshotDir,
-				Enabled:            coldStateSnapshotsEnabled,
-				HistoryDataset:     historyDataset,
-				HistoryWindow:      prunePolicy.HistoryWindow,
-				ETL:                snapshotETL,
-				BuildSectionBlooms: buildDerivedSnapshots,
-				BuildBalanceTraces: buildDerivedSnapshots,
-				BuildEventLogs:     buildDerivedSnapshots,
-				CatalogSigningKey:  snapshotCatalogSigningKey,
-				CatalogChain:       snapshotCatalogChain,
+				Dir:                     stateSnapshotDir,
+				Enabled:                 coldStateSnapshotsEnabled,
+				HistoryDataset:          historyDataset,
+				HistoryWindow:           prunePolicy.HistoryWindow,
+				ETL:                     snapshotETL,
+				CatchupBuildMinInterval: snapshotCatchupBuildInterval,
+				HeavyWorkGate:           heavyWorkGate,
+				BuildSectionBlooms:      buildDerivedSnapshots,
+				BuildBalanceTraces:      buildDerivedSnapshots,
+				BuildEventLogs:          buildDerivedSnapshots,
+				CatalogSigningKey:       snapshotCatalogSigningKey,
+				CatalogChain:            snapshotCatalogChain,
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.
@@ -1077,6 +1096,8 @@ func gtron(ctx *cli.Context) error {
 			"etlTempDir", snapshotETL.TempDir,
 			"etlBufferBytes", snapshotETL.BufferLimit,
 			"etlBatchBytes", snapshotETL.BatchSize,
+			"catchupBuildMinInterval", snapshotCatchupBuildInterval,
+			"sharedHeavyWorkGate", true,
 			"catalogRetain", snapshotCatalogRetain,
 			"catalogGrace", snapshotCatalogGrace,
 			"snapshotDir", stateSnapshotDir)
@@ -1140,6 +1161,8 @@ func gtron(ctx *cli.Context) error {
 
 	var freezerRunner *chainfreezer.Runner
 	if ancientStore != nil && freezerCfg.Enabled {
+		freezerCfg.SyncActive = syncService.IsSyncing
+		freezerCfg.HeavyWorkGate = heavyWorkGate
 		freezerRunner = chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
 		if freezerRunner != nil {
 			syncService.AddSyncCompleteHook(freezerRunner.RequestPass)

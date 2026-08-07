@@ -2900,6 +2900,17 @@ func TestSnapshotETLOptionsDefaultsAndOverflow(t *testing.T) {
 	}
 }
 
+func TestApplyRuntimeSnapshotETLDefaultsRaisesOnlyUnsetBuffer(t *testing.T) {
+	defaults := applyRuntimeSnapshotETLDefaults(statesnapshots.RestoreETLOptions{})
+	if defaults.BufferLimit != runtimeSnapshotETLBuffer {
+		t.Fatalf("runtime snapshot ETL buffer = %d, want %d", defaults.BufferLimit, runtimeSnapshotETLBuffer)
+	}
+	explicit := applyRuntimeSnapshotETLDefaults(statesnapshots.RestoreETLOptions{BufferLimit: 12 << 20, BatchSize: 3 << 20})
+	if explicit.BufferLimit != 12<<20 || explicit.BatchSize != 3<<20 {
+		t.Fatalf("explicit runtime snapshot ETL options changed: %+v", explicit)
+	}
+}
+
 func TestSnapshotETLEnvironmentAliases(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("GTRON_SNAPSHOT_ETL_TEMPDIR", tempDir)

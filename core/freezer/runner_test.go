@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
@@ -394,6 +396,17 @@ type freezerWriter struct {
 	f *rawdbfreezer.Freezer
 }
 
+type blockingV2Freezer struct {
+	*freezerWriter
+	started chan struct{}
+}
+
+func (f *blockingV2Freezer) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
+	close(f.started)
+	<-options.Context.Done()
+	return rawdbfreezer.V2MigrationResult{}, options.Context.Err()
+}
+
 func wrapFreezer(f *rawdbfreezer.Freezer) FreezerStore {
 	return &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f}
 }
@@ -465,6 +478,113 @@ func TestCompactV2OncePromotesCompleteAllTableSegment(t *testing.T) {
 	stats := r.Snapshot()
 	if stats.V2Coverage != 64 || stats.V2BlocksCompacted != 64 {
 		t.Fatalf("runner stats = %+v", stats)
+	}
+}
+
+func TestCompactV2OnceUsesBoundedCatchupDutyCycle(t *testing.T) {
+	f := newFreezer(t)
+	appendRange := func(from, to uint64) {
+		for number := from; number < to; number++ {
+			if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+				if err := op.AppendRaw(rawdbAncientBlocks, number, blockBytes(number)); err != nil {
+					return err
+				}
+				if err := op.AppendRaw(rawdbAncientTxInfos, number, txInfosBytes(number)); err != nil {
+					return err
+				}
+				return op.AppendRaw(rawdbAncientStateRoots, number, stateRootBytes(number))
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	appendRange(0, 64)
+	r := New(nil, wrapFreezer(f), Config{
+		Enabled:                    true,
+		V2Enabled:                  true,
+		V2FrameBlocks:              8,
+		V2SegmentBlocks:            64,
+		SyncActive:                 func() bool { return true },
+		CatchupMaintenanceInterval: time.Hour,
+	})
+	if compacted, err := r.CompactV2Once(); err != nil || compacted != 64 {
+		t.Fatalf("first catch-up V2 = %d err=%v", compacted, err)
+	}
+	appendRange(64, 128)
+	if compacted, err := r.CompactV2Once(); err != nil || compacted != 0 {
+		t.Fatalf("rate-limited catch-up V2 = %d err=%v", compacted, err)
+	}
+	if got := r.Snapshot(); got.V2CatchupDeferred != 1 || got.V2BlocksCompacted != 64 {
+		t.Fatalf("catch-up V2 stats = %+v", got)
+	}
+}
+
+func TestCompactV2OnceCancelsWhenSyncStarts(t *testing.T) {
+	f := newFreezer(t)
+	for number := uint64(0); number < 64; number++ {
+		if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+			if err := op.AppendRaw(rawdbAncientBlocks, number, blockBytes(number)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, number, txInfosBytes(number)); err != nil {
+				return err
+			}
+			return op.AppendRaw(rawdbAncientStateRoots, number, stateRootBytes(number))
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var syncing atomic.Bool
+	store := &blockingV2Freezer{
+		freezerWriter: &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f},
+		started:       make(chan struct{}),
+	}
+	r := New(nil, store, Config{
+		Enabled:                    true,
+		V2Enabled:                  true,
+		V2FrameBlocks:              8,
+		V2SegmentBlocks:            64,
+		SyncActive:                 syncing.Load,
+		CatchupMaintenanceInterval: time.Hour,
+	})
+	result := make(chan error, 1)
+	go func() {
+		_, err := r.CompactV2Once()
+		result <- err
+	}()
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		t.Fatal("V2 migration did not start")
+	}
+	syncing.Store(true)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("dynamically deferred V2: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("V2 migration did not cancel after sync started")
+	}
+	if got := r.Snapshot(); got.V2CatchupDeferred != 1 || got.V2BlocksCompacted != 0 {
+		t.Fatalf("dynamic V2 deferral stats = %+v", got)
+	}
+}
+
+func TestCompactV2OnceDefersWhenHeavyWorkGateBusy(t *testing.T) {
+	f := newFreezer(t)
+	gate := maintenance.NewHeavyWorkGate()
+	release, ok := gate.TryAcquire()
+	if !ok {
+		t.Fatal("hold maintenance gate")
+	}
+	defer release()
+	r := New(nil, wrapFreezer(f), Config{Enabled: true, V2Enabled: true, HeavyWorkGate: gate})
+	if compacted, err := r.CompactV2Once(); err != nil || compacted != 0 {
+		t.Fatalf("resource-deferred V2 = %d err=%v", compacted, err)
+	}
+	if got := r.Snapshot(); got.V2ResourceDeferred != 1 {
+		t.Fatalf("resource-deferred V2 stats = %+v", got)
 	}
 }
 
@@ -1960,6 +2080,16 @@ func unregisterRunnerMetricNamespace(namespace string) {
 		"lastpass/time",
 		"lastpass/duration",
 		"pebble/size",
+		"v2/coverage",
+		"v2/blocks",
+		"v2/deferred/catchup",
+		"v2/deferred/resource",
+		"txindex/coverage",
+		"txindex/pruned",
+		"txindex/rows/archived",
+		"txindex/rows/pruned",
+		"txindex/deferred/catchup",
+		"txindex/deferred/resource",
 	} {
 		metrics.DefaultRegistry.Unregister(namespace + suffix)
 	}

@@ -473,11 +473,29 @@
   and retain all fallback files on any authentication failure.
 - [x] Collapse manifest state-history validation into one joint companion gate
   so the default exhaustive path no longer decodes every history record twice.
+- [x] Coordinate cold history/accessor construction, ancient V2 promotion, and
+  immutable transaction-index maintenance through one non-blocking process-wide
+  heavy-work gate while leaving canonical import and base freezing independent.
+- [x] Give V2 and transaction-index stages separate five-minute active-sync
+  budgets, a startup discovery grace, and cancellation when sync begins under
+  work which was admitted while idle.
+- [x] Rate-limit near-tip cold-history builds to one 5,000-block pass per minute
+  during active sync while preserving immediate multi-batch backlog drain and
+  stopping deferred lifecycle wakes before later optional stages.
+- [x] Raise the production accessor ETL buffer to 256 MiB per collector only
+  when unset, preserving explicit operator and offline-tool values.
+- [x] Export stage-specific catch-up/resource deferral metrics and cover gate
+  exclusion, bounded duty cycles, dynamic cancellation, lifecycle short-circuit,
+  and transaction-index context propagation in regression tests.
 - [ ] Run the catch-up-safe verification production gate and compare Go heap,
   GC CPU, checksum-only restart time, in-flight cancellation metrics, and sync
   transactions/second against the 10 GiB live-verifier incident.
 - [ ] Run the fused event-log/radix-ETL production gate and compare snapshot
   build/check CPU, `pread` volume, lifecycle lag, allocations, and sync
   transactions/second over a fixed dense window.
+- [ ] Run the coordinated-maintenance P5.31 production gate and compare
+  blocks/s, transactions/s, process read/write bandwidth, ETL merge CPU,
+  freezer/snapshot coverage rates, deferral counters, debt, and write stalls
+  against the P5.30 fixed dense window.
 - [ ] Tune freezer/history build-merge-prune throughput above sustained import.
 - [ ] Run the 30-minute resource gate and 24-hour mainnet soak gate.

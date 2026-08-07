@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
@@ -474,6 +475,89 @@ func TestColdBuilderDefersHistoryAndCompactionWhileFarBehind(t *testing.T) {
 	}
 	if !built.Built || built.HistoryDeferred {
 		t.Fatalf("near-tip pass = %+v, want bounded cold build", built)
+	}
+}
+
+func TestColdBuilderRateLimitsNearBatchCatchupDuringSync(t *testing.T) {
+	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x79)
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	chain := &coldBuilderChain{db: db, solidified: 4, syncRemaining: 100, syncRemainingOK: true}
+	runner := NewRunner(chain, Config{
+		Dir:                     dir,
+		Enabled:                 true,
+		HistoryWindow:           1,
+		BatchBlocks:             2,
+		CatchupBuildMinInterval: time.Hour,
+		MetricsNamespace:        namespace,
+	})
+
+	first, err := runner.OnePass()
+	if err != nil || !first.Built || !first.NeedsCatchup() {
+		t.Fatalf("first bounded pass = %+v err=%v", first, err)
+	}
+	deferred, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("rate-limited pass: %v", err)
+	}
+	if !deferred.HistoryDeferred || !deferred.HistoryRateLimited || deferred.Built {
+		t.Fatalf("rate-limited pass = %+v", deferred)
+	}
+	if stats := runner.Snapshot(); stats.HistoryRateLimitedSync != 1 || stats.HistoryDeferredSync != 0 {
+		t.Fatalf("rate-limit stats = %+v", stats)
+	}
+	assertColdRunnerGauge(t, namespace+"history/deferred/rate_limit", 1)
+
+	chain.syncRemainingOK = false
+	final, err := runner.OnePass()
+	if err != nil || !final.Built || final.HistoryDeferred {
+		t.Fatalf("post-sync pass = %+v err=%v", final, err)
+	}
+}
+
+func TestColdBuilderDefersWhenHeavyWorkGateIsBusy(t *testing.T) {
+	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7a)
+	writeColdBuilderChange(t, db, owner, 1, 1, "previous")
+	writeColdBuilderCanonicalBlock(t, db, 1)
+	gate := maintenance.NewHeavyWorkGate()
+	release, ok := gate.TryAcquire()
+	if !ok {
+		t.Fatal("hold maintenance gate")
+	}
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
+		Dir:              dir,
+		Enabled:          true,
+		HistoryWindow:    1,
+		HeavyWorkGate:    gate,
+		MetricsNamespace: namespace,
+	})
+
+	deferred, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("resource-deferred pass: %v", err)
+	}
+	if !deferred.HistoryDeferred || !deferred.HistoryGateDeferred || deferred.Built {
+		t.Fatalf("resource-deferred pass = %+v", deferred)
+	}
+	if stats := runner.Snapshot(); stats.HistoryGateDeferred != 1 || stats.HistoryDeferredSync != 0 {
+		t.Fatalf("resource-deferred stats = %+v", stats)
+	}
+	assertColdRunnerGauge(t, namespace+"history/deferred/resource", 1)
+
+	release()
+	built, err := runner.OnePass()
+	if err != nil || !built.Built {
+		t.Fatalf("pass after gate release = %+v err=%v", built, err)
 	}
 }
 
@@ -2287,6 +2371,8 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"lastpass/latest/duration",
 		"latest/deferred/sync",
 		"history/deferred/sync",
+		"history/deferred/rate_limit",
+		"history/deferred/resource",
 		"last/latest_build_block",
 	} {
 		metrics.DefaultRegistry.Unregister(namespace + suffix)

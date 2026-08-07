@@ -216,6 +216,13 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		if err := l.pruner.RecordTrustedSnapshotSegments(trusted); err != nil {
 			return out, err
 		}
+		// A rate/resource-deferred history pass made no manifest progress. Avoid
+		// running chain-freezer snapshot generation and the remaining optional
+		// prune stages on a wake which exists only because another background
+		// task advanced or catch-up work was coalesced.
+		if result.HistoryRateLimited || result.HistoryGateDeferred {
+			return out, nil
+		}
 	}
 	if l.chainFreezerBuild != nil {
 		result, err := l.chainFreezerBuild()

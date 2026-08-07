@@ -3,6 +3,7 @@ package freezer
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -46,6 +47,7 @@ type TransactionIndexIterator func(yield func(TransactionIndexEntry) error) erro
 
 // TransactionIndexBuildOptions configures an immutable transaction-index run.
 type TransactionIndexBuildOptions struct {
+	Context    context.Context
 	PrefixBits uint32
 	StartBlock uint64
 	EndBlock   uint64
@@ -83,6 +85,12 @@ type TransactionIndexRun struct {
 // and publishes it with an atomic rename. The destination must not exist.
 func BuildTransactionIndexRun(path string, opts TransactionIndexBuildOptions) (TransactionIndexBuildResult, error) {
 	var result TransactionIndexBuildResult
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
+	if err := opts.Context.Err(); err != nil {
+		return result, err
+	}
 	if opts.Iterate == nil {
 		return result, errors.New("transaction index: iterator is required")
 	}
@@ -183,6 +191,11 @@ func BuildTransactionIndexRun(path string, opts TransactionIndexBuildOptions) (T
 		return nil
 	}
 	if err := visitTransactionIndexEntries(opts.Iterate, prefixBits, func(prefix uint32, fingerprint uint64, entry TransactionIndexEntry) error {
+		if rows&4095 == 0 {
+			if err := opts.Context.Err(); err != nil {
+				return err
+			}
+		}
 		block := transactionIndexLocationBlock(entry.Location)
 		if block < opts.StartBlock || block >= opts.EndBlock {
 			return fmt.Errorf("location block %d is outside run range [%d,%d)", block, opts.StartBlock, opts.EndBlock)
@@ -203,6 +216,9 @@ func BuildTransactionIndexRun(path string, opts TransactionIndexBuildOptions) (T
 		return nil
 	}); err != nil {
 		return result, fmt.Errorf("transaction index build: %w", err)
+	}
+	if err := opts.Context.Err(); err != nil {
+		return result, err
 	}
 	if err := flushBucket(); err != nil {
 		return result, err
@@ -240,10 +256,16 @@ func BuildTransactionIndexRun(path string, opts TransactionIndexBuildOptions) (T
 	if _, err := file.WriteAt(header, 0); err != nil {
 		return result, err
 	}
+	if err := opts.Context.Err(); err != nil {
+		return result, err
+	}
 	if err := file.Sync(); err != nil {
 		return result, err
 	}
 	if err := file.Close(); err != nil {
+		return result, err
+	}
+	if err := opts.Context.Err(); err != nil {
 		return result, err
 	}
 	if err := atomicRename(tempName, path); err != nil {
@@ -397,11 +419,25 @@ func (r *TransactionIndexRun) Candidates(hash [32]byte) ([]uint64, error) {
 
 // Verify reads and checksums every non-empty bucket.
 func (r *TransactionIndexRun) Verify() error {
+	return r.VerifyContext(context.Background())
+}
+
+// VerifyContext reads and checksums every non-empty bucket while allowing
+// online maintenance to yield promptly when historical sync starts.
+func (r *TransactionIndexRun) VerifyContext(ctx context.Context) error {
 	if r == nil || r.file == nil {
 		return errors.New("transaction index: closed reader")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var rows uint64
 	for prefix := 0; prefix < len(r.directory)-1; prefix++ {
+		if prefix&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		fingerprints, _, err := r.readBucket(uint32(prefix))
 		if err != nil {
 			return fmt.Errorf("transaction index bucket %d: %w", prefix, err)

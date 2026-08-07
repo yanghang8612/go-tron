@@ -4135,6 +4135,68 @@ Tests cover the peer-discovery race, persistent restart reuse, same-process
 tampering with unchanged file length, cancellation accounting, and retention
 of every retired fallback file when active-view authentication fails.
 
+#### P5.31: Coordinated catch-up maintenance budget
+
+After P5.30 removed the remaining retired verifier, a 40.15-second production
+sample sustained approximately 55.6 blocks/s and 2,477 transactions/s at 4.04
+CPU cores, a 1.41 GiB sampled heap, and 9.55% GC CPU. The importer was no
+longer CPU- or memory-bound, but three independent optional lifecycle workers
+still competed with it: cold snapshot lifecycle used 17.43 CPU-seconds, the
+state-domain v4 accessor ETL build used 16.90 CPU-seconds, and chain-freezer
+maintenance used 17.83 CPU-seconds (11.62 in transaction indexing and 4.83 in
+V2 migration). Process I/O averaged roughly 220 MiB/s read and 117 MiB/s write.
+Pebble compaction used another 22.84 CPU-seconds, but produced no write delay
+and reduced debt from 1.70 GiB to 1.02 GiB, so suppressing base freezing or
+Pebble compaction would only move the bottleneck into unbounded hot-store debt.
+
+Production now uses one process-wide, non-blocking heavy-maintenance gate for
+cold history/accessor construction, ancient V2 promotion, and immutable
+transaction-index maintenance. A task which loses admission records a resource
+deferral and retries on its normal lifecycle wake; it never waits in a hidden
+queue. This prevents the measured large sequential readers and writers from
+overlapping while leaving canonical import, Pebble compaction, and the base
+30-second V1 freezer pass independent. Base freezing must continue during sync
+because its bounded delete ranges are what prevent canonical block rows from
+accumulating indefinitely in Pebble.
+
+During active historical sync, optional V2 and transaction-index stages each
+receive one bounded transaction every five minutes. They have separate clocks,
+so neither stage can starve the other; a one-minute startup grace lets peer
+discovery expose catch-up before either begins. Work admitted while the node
+appeared idle is watched every 250 ms and canceled through the existing V2 and
+transaction-index contexts if sync starts underneath it. Transaction-index
+collection, immutable build, verification, hot-row deletion, and final
+publication boundaries all honor cancellation. A task explicitly admitted by
+the active-sync budget may finish its one crash-safe transaction.
+
+Cold history still drains a backlog larger than one 5,000-block aggregation
+batch without sleeping. Once its previous lag fits in one batch, successful
+builds are spaced by one minute while sync remains active; resource- and
+rate-deferred lifecycle wakes stop before chain-freezer snapshot generation or
+later optional pruning stages. At the sampled 55.6 blocks/s, this gives the
+cold builder 83.3 blocks/s of steady capacity. One 65,536-block freezer stage
+transaction per five minutes gives V2 218 blocks/s; transaction indexing needs
+publish, prune, and amortized tail-merge actions, leaving approximately 72.8
+blocks/s, still above the measured importer. These are throughput budgets, not
+permanent deferrals, and full-speed maintenance resumes when sync becomes idle.
+
+The production cold-history ETL buffer rises from the library's 64 MiB default
+to 256 MiB per accessor collector when the operator has not supplied an
+explicit value. The two collectors therefore have a bounded approximately
+512 MiB aggregate arena budget, well below the 10 GiB Go memory limit and the
+post-verifier live heap, while substantially reducing NVMe spill-run count and
+tournament-merge input. Offline commands and explicit operator settings retain
+their existing values.
+
+Metrics distinguish catch-up and shared-resource deferrals for both freezer
+stages (`chain/freezer/{v2,txindex}/deferred/{catchup,resource}`) and expose
+cold-history rate/resource deferrals under
+`state/snapshot/cold/history/deferred/{rate_limit,resource}`. The deployment
+gate must verify that base freezer lag remains bounded, optional stage coverage
+continues to advance at or above import, no write stalls appear, ETL merge CPU
+and process read/write bandwidth fall, and canonical blocks/s plus
+transactions/s improve over the P5.30 fixed dense window.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go
