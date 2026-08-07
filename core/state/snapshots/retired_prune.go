@@ -33,10 +33,15 @@ type RetiredSegmentFileInspection struct {
 	PresentFiles          []RetiredSegmentFile
 }
 
+// ActiveManifestVerifier is the destructive retired-file gate. Implementations
+// must authenticate every active object and all required sidecar semantics
+// before the caller may remove any retired fallback object.
+type ActiveManifestVerifier func(context.Context, string, *Manifest) error
+
 // InspectRetiredSegmentFiles reports physical files that are still present for
 // manifest-retired segment refs without deleting anything.
 func InspectRetiredSegmentFiles(dir string) (*RetiredSegmentFileInspection, error) {
-	return inspectRetiredSegmentFiles(context.Background(), dir, "retired inspect")
+	return inspectRetiredSegmentFiles(context.Background(), dir, "retired inspect", nil)
 }
 
 // PruneRetiredSegmentFiles removes physical files referenced only by the
@@ -50,10 +55,17 @@ func PruneRetiredSegmentFiles(dir string) (*PruneRetiredSegmentFilesResult, erro
 // cancellation during active-view verification returns before any retired file
 // is removed, preserving the deletion gate's all-or-nothing safety property.
 func PruneRetiredSegmentFilesContext(ctx context.Context, dir string) (*PruneRetiredSegmentFilesResult, error) {
+	return PruneRetiredSegmentFilesContextWithVerifier(ctx, dir, nil)
+}
+
+// PruneRetiredSegmentFilesContextWithVerifier lets the composed lifecycle
+// supply a content-addressed active-view verifier while preserving the same
+// all-or-nothing deletion boundary as the exhaustive default.
+func PruneRetiredSegmentFilesContextWithVerifier(ctx context.Context, dir string, verifyActive ActiveManifestVerifier) (*PruneRetiredSegmentFilesResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	inspection, err := inspectRetiredSegmentFiles(ctx, dir, "retired prune")
+	inspection, err := inspectRetiredSegmentFiles(ctx, dir, "retired prune", verifyActive)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +89,7 @@ func PruneRetiredSegmentFilesContext(ctx context.Context, dir string) (*PruneRet
 	return result, nil
 }
 
-func inspectRetiredSegmentFiles(ctx context.Context, dir, operation string) (*RetiredSegmentFileInspection, error) {
+func inspectRetiredSegmentFiles(ctx context.Context, dir, operation string, verifyActive ActiveManifestVerifier) (*RetiredSegmentFileInspection, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -152,7 +164,13 @@ func inspectRetiredSegmentFiles(ctx context.Context, dir, operation string) (*Re
 	// sync into an O(number of active history records) maintenance loop. Keep
 	// the strict preflight immediately before returning deletion candidates.
 	if len(result.PresentFiles) > 0 {
-		if _, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{Context: ctx}); err != nil {
+		var err error
+		if verifyActive != nil {
+			err = verifyActive(ctx, dir, manifest)
+		} else {
+			_, err = VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{Context: ctx})
+		}
+		if err != nil {
 			return nil, fmt.Errorf("snapshots: active segment preflight failed before %s: %w", operation, err)
 		}
 	}

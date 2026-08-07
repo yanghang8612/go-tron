@@ -527,7 +527,7 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 				AccountTracesDeleted: 2,
 			}, nil
 		},
-		RetiredPrune: func(context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error) {
+		RetiredPrune: func(context.Context, snapshots.ActiveManifestVerifier) (*snapshots.PruneRetiredSegmentFilesResult, error) {
 			sawBalanceTraceBeforeRetiredPrune = balanceTraceRan
 			return &snapshots.PruneRetiredSegmentFilesResult{
 				RetiredSegments: 3,
@@ -616,7 +616,7 @@ func TestSnapshotLifecycleRequestPassCoalesces(t *testing.T) {
 			Policy:   FullPolicy(2, 1),
 			Interval: time.Hour,
 		},
-		RetiredPrune: func(context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error) {
+		RetiredPrune: func(context.Context, snapshots.ActiveManifestVerifier) (*snapshots.PruneRetiredSegmentFilesResult, error) {
 			pass := int(passes.Add(1))
 			entered <- pass
 			if pass == 2 {
@@ -663,7 +663,7 @@ func TestSnapshotLifecycleDefersRetiredPruneWhileSyncing(t *testing.T) {
 			Interval: time.Hour,
 		},
 		DeferRetiredPruneWhileSyncing: true,
-		RetiredPrune: func(context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error) {
+		RetiredPrune: func(context.Context, snapshots.ActiveManifestVerifier) (*snapshots.PruneRetiredSegmentFilesResult, error) {
 			calls++
 			return &snapshots.PruneRetiredSegmentFilesResult{FilesDeleted: 1}, nil
 		},
@@ -688,6 +688,57 @@ func TestSnapshotLifecycleDefersRetiredPruneWhileSyncing(t *testing.T) {
 	}
 }
 
+func TestSnapshotLifecycleCancelsRetiredPruneWhenSyncBecomesActive(t *testing.T) {
+	chain := &atomicSyncPruneChain{db: rawdb.NewMemoryDatabase(), solidified: 2}
+	entered := make(chan struct{})
+	var sawVerifier atomic.Bool
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:   FullPolicy(2, 1),
+			Interval: time.Hour,
+		},
+		DeferRetiredPruneWhileSyncing: true,
+		RetiredPrune: func(ctx context.Context, verifyActive snapshots.ActiveManifestVerifier) (*snapshots.PruneRetiredSegmentFilesResult, error) {
+			sawVerifier.Store(verifyActive != nil)
+			close(entered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	result := make(chan SnapshotLifecyclePass, 1)
+	errResult := make(chan error, 1)
+	go func() {
+		pass, err := lifecycle.OnePass()
+		result <- pass
+		errResult <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retired prune did not start")
+	}
+	chain.syncRemaining.Store(80_000_000)
+	chain.syncActive.Store(true)
+	select {
+	case err := <-errResult:
+		if err != nil {
+			t.Fatalf("catch-up-deferred lifecycle pass: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("retired prune was not canceled after sync became active")
+	}
+	pass := <-result
+	if !pass.RetiredDeferred || pass.RetiredPrune != nil {
+		t.Fatalf("retired pass after dynamic catch-up = %+v, want deferred", pass)
+	}
+	if !sawVerifier.Load() {
+		t.Fatal("retired prune did not receive active-manifest verifier")
+	}
+	if got := lifecycle.pruner.Stats(); got.RetiredVerificationCanceled != 1 {
+		t.Fatalf("retired verification stats = %+v, want one catch-up cancellation", got)
+	}
+}
+
 func TestSnapshotLifecycleStopCancelsRetiredPrune(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	entered := make(chan struct{})
@@ -697,7 +748,7 @@ func TestSnapshotLifecycleStopCancelsRetiredPrune(t *testing.T) {
 			Policy:   FullPolicy(2, 1),
 			Interval: time.Hour,
 		},
-		RetiredPrune: func(ctx context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error) {
+		RetiredPrune: func(ctx context.Context, _ snapshots.ActiveManifestVerifier) (*snapshots.PruneRetiredSegmentFilesResult, error) {
 			close(entered)
 			<-ctx.Done()
 			close(exited)

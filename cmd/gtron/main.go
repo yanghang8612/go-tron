@@ -1044,7 +1044,7 @@ func gtron(ctx *cli.Context) error {
 			// Keep that CPU/IO-heavy safety gate off the historical import path;
 			// AddSyncCompleteHook below wakes the lifecycle as soon as sync ends.
 			DeferRetiredPruneWhileSyncing: true,
-			RetiredPrune: func(ctx context.Context) (*statesnapshots.PruneRetiredSegmentFilesResult, error) {
+			RetiredPrune: func(ctx context.Context, verifyActive statesnapshots.ActiveManifestVerifier) (*statesnapshots.PruneRetiredSegmentFilesResult, error) {
 				if _, err := statesnapshots.LoadProductionManifest(stateSnapshotDir); err != nil {
 					if os.IsNotExist(err) {
 						return nil, nil
@@ -1054,7 +1054,7 @@ func gtron(ctx *cli.Context) error {
 				if _, err := statesnapshots.PrunePublishedSnapshotManifests(stateSnapshotDir, snapshotCatalogRetain, snapshotCatalogGrace); err != nil {
 					return nil, err
 				}
-				return statesnapshots.PruneRetiredSegmentFilesContext(ctx, stateSnapshotDir)
+				return statesnapshots.PruneRetiredSegmentFilesContextWithVerifier(ctx, stateSnapshotDir, verifyActive)
 			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)

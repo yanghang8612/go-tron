@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"os"
@@ -14,6 +15,46 @@ import (
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+func TestVerifyLoadedManifestFilesDelegatesStateHistoryWithCallerContext(t *testing.T) {
+	dir := t.TempDir()
+	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 10,
+		ToTxNum:   11,
+		Path:      "history/state-domain-change-10-11.seg",
+	}, []*rawdb.StateDomainChange{
+		binaryStateDomainChange(1, 10, 1, "slot/a"),
+		binaryStateDomainChange(2, 11, 1, "slot/b"),
+	})
+	if err != nil {
+		t.Fatalf("write state-domain history: %v", err)
+	}
+	manifest := NewManifest(10, 11, []SegmentRef{segRef, idxRef, accessorRef})
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "caller")
+	calls := 0
+	report, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{
+		Context: ctx,
+		StateDomainHistoryVerifier: func(got context.Context, _ string, _ *Manifest, ref SegmentRef) error {
+			calls++
+			if got.Value(contextKey{}) != "caller" {
+				t.Fatal("state-history verifier did not receive caller context")
+			}
+			if ref.Path != segRef.Path {
+				t.Fatalf("delegated ref = %q, want %q", ref.Path, segRef.Path)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("VerifyLoadedManifestFiles: %v", err)
+	}
+	if calls != 1 || report.ActiveSegments != 3 {
+		t.Fatalf("delegated calls/report = %d/%+v, want one call and three active refs", calls, report)
+	}
+}
 
 func TestVerifyRemoteManifestFiles(t *testing.T) {
 	dir, identity := writeVerifiableBranchManifest(t)

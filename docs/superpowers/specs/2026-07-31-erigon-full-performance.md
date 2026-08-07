@@ -4093,6 +4093,48 @@ count. The deployment gate must show that active catch-up performs no long
 semantic audit, Go heap/GC returns to the importer baseline, and restart uses
 checksum-only promotion without weakening snapshot/prune correctness.
 
+#### P5.30: Catch-up-safe retired-file deletion gate
+
+The first P5.29 production deployment removed the hot-prune heap storm and
+restored approximately 51.9 blocks/s and 3,343 transactions/s. Go CPU fell to
+3.70 cores, GC share to 9.34%, and the sampled live heap to 1.75 GiB. A second
+40-second profile nevertheless found one remaining lifecycle verifier using
+39.91 CPU-seconds, or 26.85% of total process CPU. The stack was the retired-
+segment deletion preflight walking roughly 57 million state-history records.
+
+This path had a separate startup race: it checked sync activity only before
+entering the retired stage, so peer discovery could become active after the
+check and leave the audit consuming one core for its full duration. It also
+dropped the caller's context in the state-domain sidecar helper and did not
+reuse P5.29's content-addressed proof cache. Manifest verification first ran
+the registered history checker and then the cross-file companion checker,
+decoding the same immutable history twice.
+
+The retired stage now owns a 250 ms sync-active watcher for the entire
+inspection, active-view verification, and deletion operation. Becoming active
+cancels the state-history reader through the original lifecycle context and is
+reported as a normal retired deferral, with a dedicated cancellation metric,
+instead of a lifecycle failure. Unlike hot pruning's lag threshold, any active
+sync session defers optional retired-file cleanup. Entry-time deferral remains
+as the zero-work fast path.
+
+Immediately before deletion, the active manifest uses the same exact history/
+index/accessor proof cache as hot pruning. A durable restart hit rehashes all
+three files before promotion; a same-process memory or trusted-builder hit is
+also rehashed at this destructive boundary. File identity is recomputed after
+authentication so replacement during verification is rejected. A miss still
+runs the complete cancellable semantic proof and records it durably. Only when
+the whole active manifest succeeds are inactive cache entries retired and old
+fallback files eligible for removal.
+
+The default offline manifest verifier remains exhaustive but delegates each
+binary state-history triple directly to its single joint checksum, structure,
+index, and accessor-coverage gate. This preserves strict checksum and
+registered-sidecar failures while removing the redundant first history decode.
+Tests cover the peer-discovery race, persistent restart reuse, same-process
+tampering with unchanged file length, cancellation accounting, and retention
+of every retired fallback file when active-view authentication fails.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

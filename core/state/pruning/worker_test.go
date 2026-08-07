@@ -612,10 +612,11 @@ func TestWorkerSnapshotCoverageCacheReusesAndInvalidatesFileIdentity(t *testing.
 	if _, err := os.Stat(filepath.Join(dir, snapshotCoverageVerificationCacheFile)); err != nil {
 		t.Fatalf("persistent verification cache: %v", err)
 	}
-	// A cache hit performs the two outer cancellation checks but no checksum or
-	// record reads. Without reuse, the third check in contextReader would cancel.
+	// A cache hit performs the two outer checks plus the shared verifier entry
+	// check, but no checksum or record reads. Without reuse, the next check in a
+	// context reader would cancel.
 	ctx := &cancelAfterChecksContext{}
-	ctx.remaining.Store(2)
+	ctx.remaining.Store(3)
 	if _, err := worker.snapshotStateDomainChangeCoverageContext(ctx); err != nil {
 		t.Fatalf("cached coverage verification: %v", err)
 	}
@@ -789,6 +790,97 @@ func TestPrunerRecordsTrustedLocalSnapshotForRestart(t *testing.T) {
 	}
 	if got := restarted.Stats(); got.PersistentHits != 1 || got.FullVerified != 0 {
 		t.Fatalf("trusted restart verification cache stats = %+v", got)
+	}
+}
+
+func TestRetiredPruneUsesPersistentStateHistoryVerification(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 1, 3)
+	_, _, _ = writeSnapPruningChange(t, db, 10, 10, 12)
+	retiredRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 3, "history/state-domain-change-retired.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-active.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := snapshots.NewManifest(10, 12, activeRefs)
+	manifest.Retired = retiredRefs
+	if err := snapshots.PublishManifest(dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	first := NewPruner(&fakePruneChain{db: db, solidified: 10}, PrunerConfig{Policy: SnapPolicy(3, 2), SnapshotDir: dir})
+	if err := first.RecordTrustedSnapshotSegments(activeRefs); err != nil {
+		t.Fatalf("record trusted active snapshot: %v", err)
+	}
+
+	restarted := NewPruner(&fakePruneChain{db: db, solidified: 10}, PrunerConfig{Policy: SnapPolicy(3, 2), SnapshotDir: dir})
+	result, err := snapshots.PruneRetiredSegmentFilesContextWithVerifier(context.Background(), dir, restarted.verifyActiveSnapshotManifest)
+	if err != nil {
+		t.Fatalf("retired prune with persistent verification: %v", err)
+	}
+	if result.FilesDeleted != len(retiredRefs) {
+		t.Fatalf("retired prune result = %+v, want %d deleted files", result, len(retiredRefs))
+	}
+	if got := restarted.Stats(); got.RetiredVerificationPersistentHits != 1 || got.RetiredVerificationFull != 0 {
+		t.Fatalf("retired persistent verification stats = %+v", got)
+	}
+	for _, ref := range retiredRefs {
+		if _, err := os.Stat(filepath.Join(dir, ref.Path)); !os.IsNotExist(err) {
+			t.Fatalf("retired file %q still present or stat failed: %v", ref.Path, err)
+		}
+	}
+}
+
+func TestRetiredPruneReauthenticatesTrustedMemoryHitBeforeDelete(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 1, 3)
+	_, _, _ = writeSnapPruningChange(t, db, 10, 10, 12)
+	retiredRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 3, "history/state-domain-change-retired.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-active.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := snapshots.NewManifest(10, 12, activeRefs)
+	manifest.Retired = retiredRefs
+	if err := snapshots.PublishManifest(dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	pruner := NewPruner(&fakePruneChain{db: db, solidified: 10}, PrunerConfig{Policy: SnapPolicy(3, 2), SnapshotDir: dir})
+	if err := pruner.RecordTrustedSnapshotSegments(activeRefs); err != nil {
+		t.Fatalf("record trusted active snapshot: %v", err)
+	}
+	var accessor snapshots.SegmentRef
+	for _, ref := range activeRefs {
+		if ref.Kind == snapshots.SegmentAccessor {
+			accessor = ref
+			break
+		}
+	}
+	path := filepath.Join(dir, accessor.Path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 0xff
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = snapshots.PruneRetiredSegmentFilesContextWithVerifier(context.Background(), dir, pruner.verifyActiveSnapshotManifest)
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("tampered trusted active snapshot error = %v, want checksum mismatch", err)
+	}
+	for _, ref := range retiredRefs {
+		if _, err := os.Stat(filepath.Join(dir, ref.Path)); err != nil {
+			t.Fatalf("retired fallback %q removed after failed active gate: %v", ref.Path, err)
+		}
 	}
 }
 

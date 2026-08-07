@@ -17,12 +17,20 @@ import (
 )
 
 type VerifyManifestOptions struct {
-	Context           context.Context
-	ExpectedChain     *ChainIdentity
-	CheckRetired      bool
-	RequireRegistered bool
-	RequireChecksums  bool
+	Context       context.Context
+	ExpectedChain *ChainIdentity
+	// StateDomainHistoryVerifier replaces the default exhaustive verifier for
+	// state-domain history/index/accessor triples. The callback owns physical
+	// authentication as well as semantic coverage; delegated refs are therefore
+	// not checked individually before the callback runs. This is used by the
+	// local lifecycle to reuse its content-addressed verification cache.
+	StateDomainHistoryVerifier StateDomainHistoryVerifier
+	CheckRetired               bool
+	RequireRegistered          bool
+	RequireChecksums           bool
 }
+
+type StateDomainHistoryVerifier func(context.Context, string, *Manifest, SegmentRef) error
 
 type ManifestVerificationReport struct {
 	ActiveSegments  int
@@ -329,19 +337,28 @@ func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManife
 		}
 	}
 	report := &ManifestVerificationReport{}
+	// Binary state history is checked as one authenticated triple below. Running
+	// its three registered checkers first would decode the history twice and the
+	// second pass is the only one that can prove companion coverage.
+	delegatedStateDomainPaths := delegatedStateDomainHistoryPaths(manifest)
 	for _, ref := range manifest.Segments {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if err := verifyManifestSegmentRef(dir, ref, opts); err != nil {
-			return nil, err
+		if opts.RequireChecksums && strings.TrimSpace(ref.Checksum) == "" {
+			return nil, fmt.Errorf("snapshots: segment %q missing required checksum", ref.Path)
+		}
+		if _, delegated := delegatedStateDomainPaths[ref.Path]; !delegated {
+			if err := verifyManifestSegmentRef(dir, ref, opts); err != nil {
+				return nil, err
+			}
 		}
 		report.ActiveSegments++
 	}
 	if err := verifyManifestChainFreezerSidecars(dir, manifest); err != nil {
 		return nil, err
 	}
-	if err := verifyManifestStateDomainHistorySidecars(dir, manifest); err != nil {
+	if err := verifyManifestStateDomainHistorySidecarsContext(ctx, dir, manifest, opts.StateDomainHistoryVerifier); err != nil {
 		return nil, err
 	}
 	if err := verifyManifestLatestBinarySidecarsContext(ctx, dir, manifest); err != nil {
@@ -398,11 +415,21 @@ func verifyManifestChainFreezerSidecars(dir string, manifest *Manifest) error {
 }
 
 func verifyManifestStateDomainHistorySidecars(dir string, manifest *Manifest) error {
+	return verifyManifestStateDomainHistorySidecarsContext(context.Background(), dir, manifest, nil)
+}
+
+func verifyManifestStateDomainHistorySidecarsContext(ctx context.Context, dir string, manifest *Manifest, verifier StateDomainHistoryVerifier) error {
 	if manifest == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	registry := DefaultDomainRegistry()
 	for _, ref := range manifest.Segments {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		cfg, ok := registry.ConfigForRef(ref)
 		if !ok || ref.Kind != SegmentHistory || !cfg.IsHistoryBinarySegmentPath(ref.Path) {
 			continue
@@ -415,11 +442,39 @@ func verifyManifestStateDomainHistorySidecars(dir string, manifest *Manifest) er
 		if !ok {
 			return fmt.Errorf("snapshots: binary %s history %q missing required accessor %q", cfg.Dataset, ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
 		}
-		if err := verifyStateDomainChangeBinaryCompanionsAgainstSegment(dir, ref, idxRef, accessorRef); err != nil {
+		if verifier != nil {
+			if err := verifier(ctx, dir, manifest, ref); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx, dir, ref, idxRef, accessorRef); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func delegatedStateDomainHistoryPaths(manifest *Manifest) map[string]struct{} {
+	if manifest == nil {
+		return nil
+	}
+	paths := make(map[string]struct{})
+	registry := DefaultDomainRegistry()
+	for _, ref := range manifest.Segments {
+		cfg, ok := registry.ConfigForRef(ref)
+		if !ok || ref.Kind != SegmentHistory || !cfg.IsHistoryBinarySegmentPath(ref.Path) {
+			continue
+		}
+		paths[ref.Path] = struct{}{}
+		if companion, ok := cfg.HistoryIndexRef(manifest, ref); ok {
+			paths[companion.Path] = struct{}{}
+		}
+		if companion, ok := cfg.HistoryAccessorRef(manifest, ref); ok {
+			paths[companion.Path] = struct{}{}
+		}
+	}
+	return paths
 }
 
 func verifyManifestLatestBinarySidecars(dir string, manifest *Manifest) error {

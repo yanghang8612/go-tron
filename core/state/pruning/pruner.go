@@ -76,21 +76,25 @@ type PrunerConfig struct {
 }
 
 type PrunerStats struct {
-	Passes                       uint64
-	Errors                       uint64
-	SkippedCatchup               uint64
-	CanceledCatchup              uint64
-	VerificationMemoryHits       uint64
-	VerificationPersistentHits   uint64
-	VerificationFull             uint64
-	VerificationTrusted          uint64
-	VerificationCacheEntries     uint64
-	DeletedTxRanges              uint64
-	DeletedDomainChangeBlocks    uint64
-	DeletedCommitmentCheckpoints uint64
-	DeletedStateCodeRows         uint64
-	LastSolidifiedBlock          uint64
-	LastPassDuration             time.Duration
+	Passes                            uint64
+	Errors                            uint64
+	SkippedCatchup                    uint64
+	CanceledCatchup                   uint64
+	VerificationMemoryHits            uint64
+	VerificationPersistentHits        uint64
+	VerificationFull                  uint64
+	VerificationTrusted               uint64
+	VerificationCacheEntries          uint64
+	RetiredVerificationMemoryHits     uint64
+	RetiredVerificationPersistentHits uint64
+	RetiredVerificationFull           uint64
+	RetiredVerificationCanceled       uint64
+	DeletedTxRanges                   uint64
+	DeletedDomainChangeBlocks         uint64
+	DeletedCommitmentCheckpoints      uint64
+	DeletedStateCodeRows              uint64
+	LastSolidifiedBlock               uint64
+	LastPassDuration                  time.Duration
 }
 
 type Pruner struct {
@@ -103,54 +107,66 @@ type Pruner struct {
 	done chan struct{}
 	once sync.Once
 
-	passes                       atomic.Uint64
-	errors                       atomic.Uint64
-	deletedTxRanges              atomic.Uint64
-	deletedDomainChangeBlocks    atomic.Uint64
-	deletedCommitmentCheckpoints atomic.Uint64
-	deletedStateCodeRows         atomic.Uint64
-	skippedCatchup               atomic.Uint64
-	canceledCatchup              atomic.Uint64
-	lastSolidifiedBlock          atomic.Uint64
-	lastPassDuration             atomic.Int64
+	passes                            atomic.Uint64
+	errors                            atomic.Uint64
+	deletedTxRanges                   atomic.Uint64
+	deletedDomainChangeBlocks         atomic.Uint64
+	deletedCommitmentCheckpoints      atomic.Uint64
+	deletedStateCodeRows              atomic.Uint64
+	skippedCatchup                    atomic.Uint64
+	canceledCatchup                   atomic.Uint64
+	retiredVerificationMemoryHits     atomic.Uint64
+	retiredVerificationPersistentHits atomic.Uint64
+	retiredVerificationFull           atomic.Uint64
+	retiredVerificationCanceled       atomic.Uint64
+	lastSolidifiedBlock               atomic.Uint64
+	lastPassDuration                  atomic.Int64
 }
 
 type prunerMetrics struct {
-	passes                       *metrics.Gauge
-	errors                       *metrics.Gauge
-	skippedCatchup               *metrics.Gauge
-	canceledCatchup              *metrics.Gauge
-	verificationMemoryHits       *metrics.Gauge
-	verificationPersistentHits   *metrics.Gauge
-	verificationFull             *metrics.Gauge
-	verificationTrusted          *metrics.Gauge
-	verificationCacheEntries     *metrics.Gauge
-	deletedTxRanges              *metrics.Gauge
-	deletedDomainChangeBlocks    *metrics.Gauge
-	deletedCommitmentCheckpoints *metrics.Gauge
-	deletedStateCodeRows         *metrics.Gauge
-	lastSolidifiedBlock          *metrics.Gauge
-	lastPassDuration             *metrics.Gauge
+	passes                            *metrics.Gauge
+	errors                            *metrics.Gauge
+	skippedCatchup                    *metrics.Gauge
+	canceledCatchup                   *metrics.Gauge
+	verificationMemoryHits            *metrics.Gauge
+	verificationPersistentHits        *metrics.Gauge
+	verificationFull                  *metrics.Gauge
+	verificationTrusted               *metrics.Gauge
+	verificationCacheEntries          *metrics.Gauge
+	retiredVerificationMemoryHits     *metrics.Gauge
+	retiredVerificationPersistentHits *metrics.Gauge
+	retiredVerificationFull           *metrics.Gauge
+	retiredVerificationCanceled       *metrics.Gauge
+	deletedTxRanges                   *metrics.Gauge
+	deletedDomainChangeBlocks         *metrics.Gauge
+	deletedCommitmentCheckpoints      *metrics.Gauge
+	deletedStateCodeRows              *metrics.Gauge
+	lastSolidifiedBlock               *metrics.Gauge
+	lastPassDuration                  *metrics.Gauge
 }
 
 func newPrunerMetrics(namespace string) prunerMetrics {
 	namespace = normalizePrunerMetricNamespace(namespace)
 	return prunerMetrics{
-		passes:                       metrics.GetOrRegisterGauge(namespace+"passes", nil),
-		errors:                       metrics.GetOrRegisterGauge(namespace+"errors", nil),
-		skippedCatchup:               metrics.GetOrRegisterGauge(namespace+"skipped/catchup", nil),
-		canceledCatchup:              metrics.GetOrRegisterGauge(namespace+"verification/canceled/catchup", nil),
-		verificationMemoryHits:       metrics.GetOrRegisterGauge(namespace+"verification/memory_hits", nil),
-		verificationPersistentHits:   metrics.GetOrRegisterGauge(namespace+"verification/persisted_hits", nil),
-		verificationFull:             metrics.GetOrRegisterGauge(namespace+"verification/full", nil),
-		verificationTrusted:          metrics.GetOrRegisterGauge(namespace+"verification/trusted", nil),
-		verificationCacheEntries:     metrics.GetOrRegisterGauge(namespace+"verification/cache_entries", nil),
-		deletedTxRanges:              metrics.GetOrRegisterGauge(namespace+"deleted/tx_ranges", nil),
-		deletedDomainChangeBlocks:    metrics.GetOrRegisterGauge(namespace+"deleted/domain_change_blocks", nil),
-		deletedCommitmentCheckpoints: metrics.GetOrRegisterGauge(namespace+"deleted/commitment_checkpoints", nil),
-		deletedStateCodeRows:         metrics.GetOrRegisterGauge(namespace+"deleted/state_code_rows", nil),
-		lastSolidifiedBlock:          metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
-		lastPassDuration:             metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
+		passes:                            metrics.GetOrRegisterGauge(namespace+"passes", nil),
+		errors:                            metrics.GetOrRegisterGauge(namespace+"errors", nil),
+		skippedCatchup:                    metrics.GetOrRegisterGauge(namespace+"skipped/catchup", nil),
+		canceledCatchup:                   metrics.GetOrRegisterGauge(namespace+"verification/canceled/catchup", nil),
+		verificationMemoryHits:            metrics.GetOrRegisterGauge(namespace+"verification/memory_hits", nil),
+		verificationPersistentHits:        metrics.GetOrRegisterGauge(namespace+"verification/persisted_hits", nil),
+		verificationFull:                  metrics.GetOrRegisterGauge(namespace+"verification/full", nil),
+		verificationTrusted:               metrics.GetOrRegisterGauge(namespace+"verification/trusted", nil),
+		verificationCacheEntries:          metrics.GetOrRegisterGauge(namespace+"verification/cache_entries", nil),
+		retiredVerificationMemoryHits:     metrics.GetOrRegisterGauge(namespace+"retired/verification/memory_hits", nil),
+		retiredVerificationPersistentHits: metrics.GetOrRegisterGauge(namespace+"retired/verification/persisted_hits", nil),
+		retiredVerificationFull:           metrics.GetOrRegisterGauge(namespace+"retired/verification/full", nil),
+		retiredVerificationCanceled:       metrics.GetOrRegisterGauge(namespace+"retired/verification/canceled/catchup", nil),
+		deletedTxRanges:                   metrics.GetOrRegisterGauge(namespace+"deleted/tx_ranges", nil),
+		deletedDomainChangeBlocks:         metrics.GetOrRegisterGauge(namespace+"deleted/domain_change_blocks", nil),
+		deletedCommitmentCheckpoints:      metrics.GetOrRegisterGauge(namespace+"deleted/commitment_checkpoints", nil),
+		deletedStateCodeRows:              metrics.GetOrRegisterGauge(namespace+"deleted/state_code_rows", nil),
+		lastSolidifiedBlock:               metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
+		lastPassDuration:                  metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
 	}
 }
 
@@ -174,6 +190,10 @@ func (m prunerMetrics) update(stats PrunerStats) {
 	m.verificationFull.Update(prunerUintGauge(stats.VerificationFull))
 	m.verificationTrusted.Update(prunerUintGauge(stats.VerificationTrusted))
 	m.verificationCacheEntries.Update(prunerUintGauge(stats.VerificationCacheEntries))
+	m.retiredVerificationMemoryHits.Update(prunerUintGauge(stats.RetiredVerificationMemoryHits))
+	m.retiredVerificationPersistentHits.Update(prunerUintGauge(stats.RetiredVerificationPersistentHits))
+	m.retiredVerificationFull.Update(prunerUintGauge(stats.RetiredVerificationFull))
+	m.retiredVerificationCanceled.Update(prunerUintGauge(stats.RetiredVerificationCanceled))
 	m.deletedTxRanges.Update(prunerUintGauge(stats.DeletedTxRanges))
 	m.deletedDomainChangeBlocks.Update(prunerUintGauge(stats.DeletedDomainChangeBlocks))
 	m.deletedCommitmentCheckpoints.Update(prunerUintGauge(stats.DeletedCommitmentCheckpoints))
@@ -266,21 +286,25 @@ func (p *Pruner) Stats() PrunerStats {
 	}
 	verification := p.coverageVerificationCache.Stats()
 	return PrunerStats{
-		Passes:                       p.passes.Load(),
-		Errors:                       p.errors.Load(),
-		DeletedTxRanges:              p.deletedTxRanges.Load(),
-		DeletedDomainChangeBlocks:    p.deletedDomainChangeBlocks.Load(),
-		DeletedCommitmentCheckpoints: p.deletedCommitmentCheckpoints.Load(),
-		DeletedStateCodeRows:         p.deletedStateCodeRows.Load(),
-		SkippedCatchup:               p.skippedCatchup.Load(),
-		CanceledCatchup:              p.canceledCatchup.Load(),
-		VerificationMemoryHits:       verification.MemoryHits,
-		VerificationPersistentHits:   verification.PersistentHits,
-		VerificationFull:             verification.FullVerified,
-		VerificationTrusted:          verification.TrustedRecorded,
-		VerificationCacheEntries:     verification.Entries,
-		LastSolidifiedBlock:          p.lastSolidifiedBlock.Load(),
-		LastPassDuration:             time.Duration(p.lastPassDuration.Load()),
+		Passes:                            p.passes.Load(),
+		Errors:                            p.errors.Load(),
+		DeletedTxRanges:                   p.deletedTxRanges.Load(),
+		DeletedDomainChangeBlocks:         p.deletedDomainChangeBlocks.Load(),
+		DeletedCommitmentCheckpoints:      p.deletedCommitmentCheckpoints.Load(),
+		DeletedStateCodeRows:              p.deletedStateCodeRows.Load(),
+		SkippedCatchup:                    p.skippedCatchup.Load(),
+		CanceledCatchup:                   p.canceledCatchup.Load(),
+		VerificationMemoryHits:            verification.MemoryHits,
+		VerificationPersistentHits:        verification.PersistentHits,
+		VerificationFull:                  verification.FullVerified,
+		VerificationTrusted:               verification.TrustedRecorded,
+		VerificationCacheEntries:          verification.Entries,
+		RetiredVerificationMemoryHits:     p.retiredVerificationMemoryHits.Load(),
+		RetiredVerificationPersistentHits: p.retiredVerificationPersistentHits.Load(),
+		RetiredVerificationFull:           p.retiredVerificationFull.Load(),
+		RetiredVerificationCanceled:       p.retiredVerificationCanceled.Load(),
+		LastSolidifiedBlock:               p.lastSolidifiedBlock.Load(),
+		LastPassDuration:                  time.Duration(p.lastPassDuration.Load()),
 	}
 }
 
@@ -344,6 +368,51 @@ func (p *Pruner) RecordTrustedSnapshotSegments(refs []snapshots.SegmentRef) erro
 		}
 	}
 	return nil
+}
+
+// verifyActiveSnapshotManifest is the retired-file deletion gate. All active
+// families retain their normal manifest checks; state-domain history triples
+// additionally reuse the same content-addressed semantic proof as hot pruning.
+// A destructive gate always re-hashes a same-process memory hit immediately
+// before allowing old fallback files to be removed.
+func (p *Pruner) verifyActiveSnapshotManifest(ctx context.Context, dir string, manifest *snapshots.Manifest) error {
+	if p == nil || p.coverageVerificationCache == nil {
+		_, err := snapshots.VerifyLoadedManifestFiles(dir, manifest, snapshots.VerifyManifestOptions{Context: ctx})
+		return err
+	}
+	active := make(map[snapshotHistoryVerificationKey]struct{})
+	_, err := snapshots.VerifyLoadedManifestFiles(dir, manifest, snapshots.VerifyManifestOptions{
+		Context: ctx,
+		StateDomainHistoryVerifier: func(ctx context.Context, dir string, manifest *snapshots.Manifest, ref snapshots.SegmentRef) error {
+			key, route, err := p.coverageVerificationCache.verifyHistory(ctx, dir, manifest, ref, true, "retired active-view gate")
+			if err != nil {
+				return err
+			}
+			active[key] = struct{}{}
+			switch route {
+			case snapshotHistoryVerificationMemory:
+				p.retiredVerificationMemoryHits.Add(1)
+			case snapshotHistoryVerificationPersistent:
+				p.retiredVerificationPersistentHits.Add(1)
+			case snapshotHistoryVerificationFull:
+				p.retiredVerificationFull.Add(1)
+			}
+			return nil
+		},
+	})
+	if err == nil {
+		err = p.coverageVerificationCache.retain(active)
+	}
+	p.updateMetrics()
+	return err
+}
+
+func (p *Pruner) recordRetiredVerificationCanceled() {
+	if p == nil {
+		return
+	}
+	p.retiredVerificationCanceled.Add(1)
+	p.updateMetrics()
 }
 
 // PrunePassContext runs one prune pass that can be interrupted while it is
@@ -502,6 +571,18 @@ func (p *Pruner) shouldSkipForCatchup() bool {
 	return remaining > p.cfg.MaxSyncLag
 }
 
+func (p *Pruner) syncActive() bool {
+	if p == nil {
+		return false
+	}
+	source, ok := p.chain.(syncRemainingSource)
+	if !ok {
+		return false
+	}
+	_, active := source.SyncRemainingBlocks()
+	return active
+}
+
 type pruneCatchupCancellation struct {
 	mu      sync.Mutex
 	stopped bool
@@ -511,13 +592,42 @@ type pruneCatchupCancellation struct {
 }
 
 func (p *Pruner) contextWithCatchupCancellation(parent context.Context) (context.Context, func()) {
-	if parent == nil {
-		parent = context.Background()
-	}
 	if p == nil || p.cfg.MaxSyncLag == 0 {
+		if parent == nil {
+			parent = context.Background()
+		}
 		return parent, func() {}
 	}
 	if _, ok := p.chain.(syncRemainingSource); !ok {
+		if parent == nil {
+			parent = context.Background()
+		}
+		return parent, func() {}
+	}
+	return contextWithPruneCancellation(parent, p.shouldSkipForCatchup, errPruneDeferredForCatchup)
+}
+
+func (p *Pruner) contextWithSyncActiveCancellation(parent context.Context, cause error) (context.Context, func()) {
+	if p == nil {
+		if parent == nil {
+			parent = context.Background()
+		}
+		return parent, func() {}
+	}
+	if _, ok := p.chain.(syncRemainingSource); !ok {
+		if parent == nil {
+			parent = context.Background()
+		}
+		return parent, func() {}
+	}
+	return contextWithPruneCancellation(parent, p.syncActive, cause)
+}
+
+func contextWithPruneCancellation(parent context.Context, shouldCancel func() bool, cause error) (context.Context, func()) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if shouldCancel == nil {
 		return parent, func() {}
 	}
 	ctx, cancel := context.WithCancelCause(parent)
@@ -533,12 +643,12 @@ func (p *Pruner) contextWithCatchupCancellation(parent context.Context) (context
 		for {
 			select {
 			case <-ticker.C:
-				if !p.shouldSkipForCatchup() {
+				if !shouldCancel() {
 					continue
 				}
 				watch.mu.Lock()
 				if !watch.stopped {
-					watch.cancel(errPruneDeferredForCatchup)
+					watch.cancel(cause)
 				}
 				watch.mu.Unlock()
 				return

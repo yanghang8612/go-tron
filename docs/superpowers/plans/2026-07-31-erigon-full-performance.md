@@ -465,6 +465,14 @@
 - [x] Replace record-proportional v4 proof arrays and full-key maps with bounded
   ETL reconstruction streamed into a checksum sink, including forced-spill and
   cancellation coverage.
+- [x] Cancel the retired-file active-view gate when any sync session becomes
+  active, propagate its context through state-history verification, and count
+  the interruption as a normal deferred cleanup.
+- [x] Reuse exact persistent/trusted state-history proofs for retired deletion,
+  but rehash every history/index/accessor triple at the destructive boundary
+  and retain all fallback files on any authentication failure.
+- [x] Collapse manifest state-history validation into one joint companion gate
+  so the default exhaustive path no longer decodes every history record twice.
 - [ ] Run the catch-up-safe verification production gate and compare Go heap,
   GC CPU, checksum-only restart time, in-flight cancellation metrics, and sync
   transactions/second against the 10 GiB live-verifier incident.

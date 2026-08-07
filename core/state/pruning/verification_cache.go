@@ -2,6 +2,7 @@ package pruning
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
@@ -59,6 +61,14 @@ type snapshotCoverageVerificationCacheStats struct {
 	TrustedRecorded uint64
 	Entries         uint64
 }
+
+type snapshotHistoryVerificationRoute uint8
+
+const (
+	snapshotHistoryVerificationFull snapshotHistoryVerificationRoute = iota + 1
+	snapshotHistoryVerificationMemory
+	snapshotHistoryVerificationPersistent
+)
 
 type snapshotCoverageVerificationCache struct {
 	mu         sync.Mutex
@@ -200,6 +210,76 @@ func (c *snapshotCoverageVerificationCache) Stats() snapshotCoverageVerification
 	stats := c.stats
 	stats.Entries = uint64(len(c.persistent))
 	return stats
+}
+
+// verifyHistory authenticates one immutable history/index/accessor triple and
+// records the exact file identity used by the in-process fast path. Destructive
+// callers set reauthenticateMemory so even a same-process trusted build is
+// checksum-bound immediately before retired fallback files are removed.
+func (c *snapshotCoverageVerificationCache) verifyHistory(ctx context.Context, dir string, manifest *snapshots.Manifest, ref snapshots.SegmentRef, reauthenticateMemory bool, operation string) (snapshotHistoryVerificationKey, snapshotHistoryVerificationRoute, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return snapshotHistoryVerificationKey{}, 0, err
+	}
+	if operation == "" {
+		operation = "snapshot verification"
+	}
+	key, err := snapshotHistoryVerificationKeyFor(dir, manifest, ref)
+	if err != nil {
+		return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: identify state-domain history %q: %w", operation, ref.Path, err)
+	}
+	if c != nil && c.contains(key) {
+		if reauthenticateMemory {
+			if err := snapshots.VerifyHistorySegmentCompanionChecksumsContext(ctx, dir, manifest, ref); err != nil {
+				return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: recheck in-memory state-domain history %q: %w", operation, ref.Path, err)
+			}
+			if err := verifySnapshotHistoryIdentityUnchanged(dir, manifest, ref, key, operation); err != nil {
+				return snapshotHistoryVerificationKey{}, 0, err
+			}
+		}
+		return key, snapshotHistoryVerificationMemory, nil
+	}
+
+	persisted := c != nil && c.persistentCandidate(key)
+	if persisted {
+		if err := snapshots.VerifyHistorySegmentCompanionChecksumsContext(ctx, dir, manifest, ref); err != nil {
+			return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: recheck cached state-domain history %q: %w", operation, ref.Path, err)
+		}
+	} else {
+		started := time.Now()
+		log.Info("Verifying domain snapshot history", "operation", operation, "path", ref.Path, "size", ref.Size)
+		if err := snapshots.VerifyHistorySegmentWithCompanionsContext(ctx, dir, manifest, ref); err != nil {
+			return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: verify state-domain history %q: %w", operation, ref.Path, err)
+		}
+		log.Info("Verified domain snapshot history", "operation", operation, "path", ref.Path, "elapsed", time.Since(started))
+	}
+	if err := verifySnapshotHistoryIdentityUnchanged(dir, manifest, ref, key, operation); err != nil {
+		return snapshotHistoryVerificationKey{}, 0, err
+	}
+	if c == nil {
+		return key, snapshotHistoryVerificationFull, nil
+	}
+	if persisted {
+		c.promotePersistent(key)
+		return key, snapshotHistoryVerificationPersistent, nil
+	}
+	if err := c.addFull(key); err != nil {
+		return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: persist state-domain history verification %q: %w", operation, ref.Path, err)
+	}
+	return key, snapshotHistoryVerificationFull, nil
+}
+
+func verifySnapshotHistoryIdentityUnchanged(dir string, manifest *snapshots.Manifest, ref snapshots.SegmentRef, want snapshotHistoryVerificationKey, operation string) error {
+	got, err := snapshotHistoryVerificationKeyFor(dir, manifest, ref)
+	if err != nil {
+		return fmt.Errorf("%s: re-identify state-domain history %q: %w", operation, ref.Path, err)
+	}
+	if got != want {
+		return fmt.Errorf("%s: state-domain history %q changed while being verified", operation, ref.Path)
+	}
+	return nil
 }
 
 func (c *snapshotCoverageVerificationCache) load() error {

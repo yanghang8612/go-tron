@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -424,40 +423,11 @@ func (w Worker) snapshotStateDomainChangeCoverageContext(ctx context.Context) (s
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		cacheKey, err := snapshotHistoryVerificationKeyFor(w.SnapshotDir, manifest, ref)
+		cacheKey, _, err := w.coverageVerificationCache.verifyHistory(ctx, w.SnapshotDir, manifest, ref, false, "hot prune coverage")
 		if err != nil {
-			return nil, fmt.Errorf("pruning: identify state-domain history coverage %q: %w", ref.Path, err)
+			return nil, err
 		}
 		activeCacheKeys[cacheKey] = struct{}{}
-		if w.coverageVerificationCache == nil || !w.coverageVerificationCache.contains(cacheKey) {
-			persisted := w.coverageVerificationCache != nil && w.coverageVerificationCache.persistentCandidate(cacheKey)
-			if persisted {
-				if err := snapshots.VerifyHistorySegmentCompanionChecksumsContext(ctx, w.SnapshotDir, manifest, ref); err != nil {
-					return nil, fmt.Errorf("pruning: recheck cached state-domain history coverage %q: %w", ref.Path, err)
-				}
-			} else {
-				started := time.Now()
-				log.Info("Verifying domain snapshot history before hot prune", "path", ref.Path, "size", ref.Size)
-				if err := snapshots.VerifyHistorySegmentWithCompanionsContext(ctx, w.SnapshotDir, manifest, ref); err != nil {
-					return nil, fmt.Errorf("pruning: verify state-domain history coverage %q: %w", ref.Path, err)
-				}
-				log.Info("Verified domain snapshot history before hot prune", "path", ref.Path, "elapsed", time.Since(started))
-			}
-			verifiedKey, err := snapshotHistoryVerificationKeyFor(w.SnapshotDir, manifest, ref)
-			if err != nil {
-				return nil, fmt.Errorf("pruning: re-identify state-domain history coverage %q: %w", ref.Path, err)
-			}
-			if verifiedKey != cacheKey {
-				return nil, fmt.Errorf("pruning: state-domain history coverage %q changed while being verified", ref.Path)
-			}
-			if w.coverageVerificationCache != nil {
-				if persisted {
-					w.coverageVerificationCache.promotePersistent(cacheKey)
-				} else if err := w.coverageVerificationCache.addFull(cacheKey); err != nil {
-					return nil, fmt.Errorf("pruning: persist state-domain history verification %q: %w", ref.Path, err)
-				}
-			}
-		}
 		coverage = append(coverage, snapshotTxRange{from: ref.FromTxNum, to: ref.ToTxNum})
 	}
 	if w.coverageVerificationCache != nil {

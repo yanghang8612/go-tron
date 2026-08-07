@@ -14,6 +14,8 @@ import (
 
 var lifecycleLog = gtronlog.NewModule("core/state/lifecycle")
 
+var errRetiredPruneDeferredForCatchup = errors.New("pruning: retired-file verification deferred for sync catch-up")
+
 // SnapshotLifecycleConfig wires the Erigon-style cold/hot lifecycle together:
 // build and publish cold history files, compact old history files, then prune
 // hot data covered by the visible snapshot view.
@@ -35,7 +37,7 @@ type SnapshotLifecycleConfig struct {
 type ChainLookupPruneFunc func() (*snapshots.PruneHotChainLookupResult, error)
 type SectionBloomPruneFunc func() (*snapshots.PruneHotSectionBloomResult, error)
 type BalanceTracePruneFunc func() (*snapshots.PruneHotBalanceTraceResult, error)
-type RetiredPruneFunc func(context.Context) (*snapshots.PruneRetiredSegmentFilesResult, error)
+type RetiredPruneFunc func(context.Context, snapshots.ActiveManifestVerifier) (*snapshots.PruneRetiredSegmentFilesResult, error)
 type ChainFreezerBuildFunc func() (snapshots.ChainFreezerSnapshotPassResult, error)
 
 // SnapshotLifecyclePass is the result of one ordered lifecycle pass.
@@ -251,20 +253,32 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		out.BalanceTracePrune = result
 	}
 	if l.retiredPrune != nil && l.deferRetiredPrune && l.pruner != nil {
-		if source, ok := l.pruner.chain.(syncRemainingSource); ok {
-			_, out.RetiredDeferred = source.SyncRemainingBlocks()
-		}
+		out.RetiredDeferred = l.pruner.syncActive()
 	}
 	if l.retiredPrune != nil && !out.RetiredDeferred {
-		result, err := l.retiredPrune(l.ctx)
+		retiredCtx := l.ctx
+		stopRetiredWatch := func() {}
+		if l.deferRetiredPrune && l.pruner != nil {
+			retiredCtx, stopRetiredWatch = l.pruner.contextWithSyncActiveCancellation(l.ctx, errRetiredPruneDeferredForCatchup)
+		}
+		var verifyActive snapshots.ActiveManifestVerifier
+		if l.pruner != nil {
+			verifyActive = l.pruner.verifyActiveSnapshotManifest
+		}
+		result, err := l.retiredPrune(retiredCtx, verifyActive)
+		stopRetiredWatch()
 		if err != nil {
-			if !errors.Is(err, context.Canceled) || l.ctx.Err() == nil {
+			if errors.Is(err, context.Canceled) && errors.Is(context.Cause(retiredCtx), errRetiredPruneDeferredForCatchup) {
+				out.RetiredDeferred = true
+				l.pruner.recordRetiredVerificationCanceled()
+			} else if !errors.Is(err, context.Canceled) || l.ctx.Err() == nil {
 				return out, err
+			} else {
+				// Retired-file inspection is read-only until its final deletion
+				// loop, so it is safe to cancel during shutdown. Still publish any
+				// manifest changes made by the ordered build/prune stages above.
+				stopErr = err
 			}
-			// Retired-file inspection is read-only until its final deletion
-			// loop, so it is safe to cancel during shutdown. Still publish any
-			// manifest changes made by the ordered build/prune stages above.
-			stopErr = err
 		} else {
 			out.RetiredPrune = result
 		}
