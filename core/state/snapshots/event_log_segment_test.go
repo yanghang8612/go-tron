@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -411,8 +413,8 @@ func TestBuildEventLogSegmentFromChainRejectsMalformedTopicLength(t *testing.T) 
 	}
 
 	_, err := BuildEventLogSegmentFromChain(db, t.TempDir(), "", 1, 1)
-	if err == nil || !strings.Contains(err.Error(), "event log ETL row 0 topic 0 length 1") {
-		t.Fatalf("BuildEventLogSegmentFromChain malformed topic err = %v, want ETL topic length error", err)
+	if err == nil || !strings.Contains(err.Error(), "ordered event log row topic 0 length 1") {
+		t.Fatalf("BuildEventLogSegmentFromChain malformed topic err = %v, want ordered topic length error", err)
 	}
 }
 
@@ -467,7 +469,7 @@ func TestEventLogIndexLookupStatsAddRecomputesDistribution(t *testing.T) {
 	}
 }
 
-func TestBuildEventLogSegmentWithOptionsUsesETLScratch(t *testing.T) {
+func TestOrderedChainEventLogBuildMatchesETL(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "snapshot")
 	db := rawdb.NewMemoryChainDB()
@@ -492,8 +494,39 @@ func TestBuildEventLogSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildEventLogSegmentFromChainWithOptions: %v", err)
 	}
-	if _, err := os.Stat(etlTemp); err != nil {
-		t.Fatalf("ETL temp parent stat: %v", err)
+	if _, err := os.Stat(etlTemp); !os.IsNotExist(err) {
+		t.Fatalf("ordered chain build unexpectedly used ETL scratch: %v", err)
+	}
+	legacyDir := filepath.Join(root, "legacy")
+	collector, err := etl.NewCollector(RestoreETLOptions{TempDir: etlTemp, BufferLimit: 1}.collectorOptions())
+	if err != nil {
+		t.Fatalf("NewCollector: %v", err)
+	}
+	defer collector.Close()
+	rowCount, err := collectEventLogRowsToETL(db, 1, 1, collector)
+	if err != nil {
+		t.Fatalf("collectEventLogRowsToETL: %v", err)
+	}
+	legacyBuild, err := writeEventLogSegmentBuildFromETL(legacyDir, SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLog,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Path:      "log/event-log-1-1.seg",
+	}, collector, rowCount)
+	if err != nil {
+		t.Fatalf("writeEventLogSegmentBuildFromETL: %v", err)
+	}
+	directBytes, err := os.ReadFile(filepath.Join(dir, ref.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyBytes, err := os.ReadFile(filepath.Join(legacyDir, legacyBuild.Ref.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(directBytes, legacyBytes) || ref.Checksum != legacyBuild.Ref.Checksum {
+		t.Fatalf("ordered and ETL event-log segments differ: bytes=%v checksum=%q/%q", bytes.Equal(directBytes, legacyBytes), ref.Checksum, legacyBuild.Ref.Checksum)
 	}
 	if err := CheckEventLogSegment(dir, ref); err != nil {
 		t.Fatalf("CheckEventLogSegment: %v", err)
@@ -514,7 +547,7 @@ func TestBuildEventLogSegmentWithOptionsUsesETLScratch(t *testing.T) {
 		t.Fatalf("IterateLogs: %v", err)
 	}
 	if len(rows) != 2 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x18}) || !bytes.Equal(rows[1].Log.GetData(), []byte{0x19}) {
-		t.Fatalf("ETL event-log rows = %+v, want two ordered rows", rows)
+		t.Fatalf("ordered event-log rows = %+v, want two ordered rows", rows)
 	}
 }
 
@@ -562,6 +595,77 @@ func BenchmarkFreshEventLogIndexVsVerifiedRebuild(b *testing.B) {
 		for range b.N {
 			if _, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{build.Ref}, "log/benchmark-rebuilt.idx"); err != nil {
 				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkOrderedChainEventLogBuildVsETL(b *testing.B) {
+	const (
+		blocks       = 1_000
+		logsPerBlock = 10
+	)
+	db := rawdb.NewMemoryChainDB()
+	for blockNum := uint64(1); blockNum <= blocks; blockNum++ {
+		logs := make([]*corepb.TransactionInfo_Log, 0, logsPerBlock)
+		for logIndex := uint64(0); logIndex < logsPerBlock; logIndex++ {
+			ordinal := (blockNum-1)*logsPerBlock + logIndex
+			address := eventLogTestAddress(byte(ordinal))
+			var topic common.Hash
+			binary.BigEndian.PutUint64(topic[len(topic)-8:], ordinal%2048)
+			logs = append(logs, &corepb.TransactionInfo_Log{
+				Address: address,
+				Topics:  [][]byte{topic[:]},
+				Data:    bytes.Repeat([]byte{byte(ordinal)}, 64),
+			})
+		}
+		block, infos := eventLogTestBlock(b, blockNum, logs)
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			b.Fatal(err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(db, blockNum, infos); err != nil {
+			b.Fatal(err)
+		}
+	}
+	dir := b.TempDir()
+	newRef := func(path string) SegmentRef {
+		return SegmentRef{
+			Dataset:   SegmentDatasetEventLog,
+			Kind:      SegmentEventLog,
+			FromTxNum: 1,
+			ToTxNum:   blocks,
+			Path:      path,
+		}
+	}
+	b.Run("ordered-direct", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			rows, err := collectOrderedEventLogRows(db, 1, blocks)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := writeEventLogSegmentBuildFromOrderedRows(dir, newRef(fmt.Sprintf("log/ordered-%d.seg", i)), rows); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("sorting-etl", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			collector, err := etl.NewCollector(RestoreETLOptions{BufferLimit: 64 << 20}.collectorOptions())
+			if err != nil {
+				b.Fatal(err)
+			}
+			rowCount, err := collectEventLogRowsToETL(db, 1, blocks, collector)
+			if err == nil {
+				_, err = writeEventLogSegmentBuildFromETL(dir, newRef(fmt.Sprintf("log/etl-%d.seg", i)), collector, rowCount)
+			}
+			closeErr := collector.Close()
+			if err != nil {
+				b.Fatal(err)
+			}
+			if closeErr != nil {
+				b.Fatal(closeErr)
 			}
 		}
 	})
@@ -1966,7 +2070,7 @@ func (a eventLogTestAncient) HasAncient(kind string, number uint64) (bool, error
 	return ok, nil
 }
 
-func eventLogTestBlock(t *testing.T, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {
+func eventLogTestBlock(t testing.TB, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {
 	t.Helper()
 	txPB := &corepb.Transaction{
 		RawData: &corepb.TransactionRaw{

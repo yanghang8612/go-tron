@@ -93,16 +93,28 @@ type ChainFreezerTailPruner interface {
 }
 
 type ChainFreezerTailPruneApplyResult struct {
-	Plan            ChainFreezerTailPrunePlan
-	Applied         bool
-	StageRepaired   bool
-	OldTail         uint64
-	NewTail         uint64
-	PrunedTailFiles uint64
+	Plan             ChainFreezerTailPrunePlan
+	Applied          bool
+	StageRepaired    bool
+	ResourceDeferred bool
+	OldTail          uint64
+	NewTail          uint64
+	PrunedTailFiles  uint64
 }
 
 type chainFreezerTailFilePruner interface {
 	PruneTailFiles() (uint64, error)
+}
+
+type chainFreezerV1Tailer interface {
+	V1Tail() uint64
+}
+
+func chainFreezerTailForPruning(freezer ChainFreezerTailPruner) (uint64, error) {
+	if tailer, ok := freezer.(chainFreezerV1Tailer); ok {
+		return tailer.V1Tail(), nil
+	}
+	return freezer.Tail()
 }
 
 type chainFreezerRangeCoverer interface {
@@ -230,7 +242,7 @@ func ApplyChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, freezer ChainFree
 	if freezer == nil {
 		return nil, errors.New("snapshots: nil chain freezer tail pruner")
 	}
-	currentTail, err := freezer.Tail()
+	currentTail, err := chainFreezerTailForPruning(freezer)
 	if err != nil {
 		return nil, err
 	}

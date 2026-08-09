@@ -955,7 +955,7 @@ func appendChainFreezerTestRows(t *testing.T, f *rawdbfreezer.Freezer, from, to 
 	}
 }
 
-func writeChainFreezerSegmentRowsForTest(t *testing.T, dir, relPath string, from, to uint64, rows []chainFreezerRow) SegmentRef {
+func writeChainFreezerSegmentRowsForTest(t testing.TB, dir, relPath string, from, to uint64, rows []chainFreezerRow) SegmentRef {
 	t.Helper()
 	if relPath == "" {
 		relPath = ChainFreezerSegmentPath(from, to)

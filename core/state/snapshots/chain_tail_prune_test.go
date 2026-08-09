@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 )
@@ -64,6 +65,34 @@ func TestNewChainFreezerTailPruneLifecycleNormalizesRetainBlocks(t *testing.T) {
 	})
 	if l.cfg.RetainBlocks != ChainFreezerTailMinRetainBlocks {
 		t.Fatalf("lifecycle retain blocks = %d, want %d", l.cfg.RetainBlocks, ChainFreezerTailMinRetainBlocks)
+	}
+}
+
+func TestChainFreezerTailPruneLifecycleDefersWhenHeavyWorkGateBusy(t *testing.T) {
+	f := openChainFreezerSizedTestStore(t, filepath.Join(t.TempDir(), "ancient"), 128)
+	defer f.Close()
+	appendChainFreezerTailPruneBlockRows(t, f, 12)
+	db := rawdb.NewMemoryDatabase()
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageChainFreezer, 10)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotChainLookupPrune, 10)
+	writeChainTailPruneDependencyStage(t, db, rawdb.StageSnapshotEventLogBuild, 10)
+	gate := maintenance.NewHeavyWorkGate()
+	release, ok := gate.TryAcquire()
+	if !ok {
+		t.Fatal("hold heavy-work gate")
+	}
+	defer release()
+	lifecycle := NewChainFreezerTailPruneLifecycle(db, f, newChainTailPruneTestAncient(), ChainFreezerTailPruneLifecycleConfig{
+		RetainBlocks:  4,
+		HeadBlock:     func() uint64 { return chainTailPruneHeadForRetentionTail(8) },
+		HeavyWorkGate: gate,
+	})
+	result, err := lifecycle.OnePass()
+	if err != nil || result == nil || !result.ResourceDeferred || result.Applied {
+		t.Fatalf("deferred tail-prune pass = %+v/%v", result, err)
+	}
+	if tail := f.V1Tail(); tail != 0 {
+		t.Fatalf("V1 tail = %d after deferred pass, want 0", tail)
 	}
 }
 

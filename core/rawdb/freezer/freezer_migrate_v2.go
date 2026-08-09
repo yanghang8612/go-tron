@@ -61,6 +61,8 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	var result V2MigrationResult
 	f.v2Migrate.Lock()
 	defer f.v2Migrate.Unlock()
+	f.tailMutation.Lock()
+	defer f.tailMutation.Unlock()
 	if f.readonly {
 		return result, errReadOnly
 	}
@@ -119,7 +121,7 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	// A crash after publishing a manifest but before V1 tail reclamation leaves
 	// safe duplicate data. Reconcile it before writing the next segment.
 	if !options.KeepV1 && f.tail.Load() < start {
-		if _, err := f.TruncateTail(start); err != nil {
+		if _, err := f.truncateTailLocked(start); err != nil {
 			return result, fmt.Errorf("ancient V2 reconcile V1 tail: %w", err)
 		}
 		if _, err := f.PruneTailFiles(); err != nil {
@@ -127,7 +129,7 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 		}
 	}
 	if f.tail.Load() > start {
-		return result, fmt.Errorf("ancient V2 coverage %d is behind V1 tail %d", start, f.tail.Load())
+		return result, fmt.Errorf("%w: coverage %d is behind V1 tail %d", ErrV2SourcePruned, start, f.tail.Load())
 	}
 
 	head := f.head.Load()
@@ -234,7 +236,7 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			f.replaceV2Store(newStore)
 		}
 		if !options.KeepV1 {
-			if _, err := f.TruncateTail(end); err != nil {
+			if _, err := f.truncateTailLocked(end); err != nil {
 				return result, fmt.Errorf("reclaim V1 through %d: %w", end, err)
 			}
 			if _, err := f.PruneTailFiles(); err != nil {

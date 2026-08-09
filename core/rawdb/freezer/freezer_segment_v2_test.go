@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestV2SegmentRoundTripAndChecksum(t *testing.T) {
@@ -525,6 +526,72 @@ func TestFreezerMigrateV2OnlineKeepsConcurrentReadsAvailable(t *testing.T) {
 	}
 	if result.End != rows || freezer.V2Coverage() != rows {
 		t.Fatalf("result=%+v coverage=%d", result, freezer.V2Coverage())
+	}
+}
+
+func TestFreezerMigrateV2SerializesExternalTailPrune(t *testing.T) {
+	dir := t.TempDir()
+	freezer, err := NewFreezer(dir, "", false, 2049, map[string]TableConfig{"bodies": {Prunable: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer freezer.Close()
+	if _, err := freezer.ModifyAncients(func(op AncientWriteOp) error {
+		for number := uint64(0); number < 64; number++ {
+			if err := op.AppendRaw("bodies", number, bytes.Repeat([]byte{byte(number)}, 128)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	migrated := make(chan error, 1)
+	go func() {
+		_, err := freezer.MigrateV2(V2MigrationOptions{
+			Tables:        []string{"bodies"},
+			SegmentBlocks: 64,
+			FrameBlocks:   8,
+			Online:        true,
+			Transform: func(_ string, _ uint64, data, _ []byte) ([]byte, error) {
+				once.Do(func() {
+					close(started)
+					<-release
+				})
+				return data, nil
+			},
+		})
+		migrated <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("V2 migration did not begin")
+	}
+
+	pruned := make(chan error, 1)
+	go func() {
+		_, err := freezer.TruncateTail(32)
+		pruned <- err
+	}()
+	select {
+	case err := <-pruned:
+		t.Fatalf("tail prune completed during V2 source read: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-migrated; err != nil {
+		t.Fatalf("MigrateV2: %v", err)
+	}
+	if err := <-pruned; err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if coverage, tail := freezer.V2Coverage(), freezer.V1Tail(); coverage != 64 || tail != 64 {
+		t.Fatalf("coverage/tail = %d/%d, want 64/64", coverage, tail)
 	}
 }
 

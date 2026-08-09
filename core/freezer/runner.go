@@ -82,6 +82,7 @@ const (
 	defaultTxIndexPrefixBits            = uint32(20)
 	defaultCatchupMaintenanceInterval   = 5 * time.Minute
 	defaultHeavyMaintenanceStartupDelay = time.Minute
+	defaultHeavyMaintenanceErrorBackoff = 30 * time.Minute
 	heavyMaintenancePollInterval        = 250 * time.Millisecond
 	txIndexDeleteBatchBytes             = 16 << 20
 	defaultMetricsNamespace             = "chain/freezer/"
@@ -139,6 +140,10 @@ type Config struct {
 	// HeavyMaintenanceStartupDelay gives peer discovery enough time to expose
 	// an active historical sync before the first optional compression/index job.
 	HeavyMaintenanceStartupDelay time.Duration
+	// HeavyMaintenanceErrorBackoff prevents a persistent immutable-build error
+	// from rebuilding the same large segment on every scheduler tick. Zero
+	// keeps immediate retries for explicit test/tool configurations.
+	HeavyMaintenanceErrorBackoff time.Duration
 	// HeavyWorkGate prevents optional freezer work from overlapping snapshot
 	// history/accessor construction in the same process.
 	HeavyWorkGate *maintenance.HeavyWorkGate
@@ -173,6 +178,7 @@ func Default() Config {
 		TransactionIndexPrefixBits:   defaultTxIndexPrefixBits,
 		CatchupMaintenanceInterval:   defaultCatchupMaintenanceInterval,
 		HeavyMaintenanceStartupDelay: defaultHeavyMaintenanceStartupDelay,
+		HeavyMaintenanceErrorBackoff: defaultHeavyMaintenanceErrorBackoff,
 		MetricsNamespace:             defaultMetricsNamespace,
 	}
 }
@@ -289,6 +295,13 @@ type V2Compactor interface {
 	MigrateV2(rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error)
 }
 
+// V2SourceTailer exposes the mutable V1 tail independently of the freezer's
+// composite logical tail. Once this advances past V2 coverage, online V2
+// promotion has no local source for the gap and must stop retrying.
+type V2SourceTailer interface {
+	V1Tail() uint64
+}
+
 // TransactionIndexCompactor is optional so lightweight ancient test stores
 // and deployments without the compact index keep working unchanged.
 type TransactionIndexCompactor interface {
@@ -336,14 +349,19 @@ type Stats struct {
 	// TransactionIndexCoverage is the first block not covered by an immutable
 	// index run. TransactionIndexPruned is the exclusive hot-row deletion
 	// cursor and must never advance beyond coverage.
-	TransactionIndexCoverage         uint64
-	TransactionIndexPruned           uint64
-	TransactionIndexRowsArchived     uint64
-	TransactionIndexRowsPruned       uint64
-	V2CatchupDeferred                uint64
-	V2ResourceDeferred               uint64
-	TransactionIndexCatchupDeferred  uint64
-	TransactionIndexResourceDeferred uint64
+	TransactionIndexCoverage             uint64
+	TransactionIndexPruned               uint64
+	TransactionIndexRowsArchived         uint64
+	TransactionIndexRowsPruned           uint64
+	V2CatchupDeferred                    uint64
+	V2ResourceDeferred                   uint64
+	V2ErrorBackoffDeferred               uint64
+	V2SourcePrunedDeferred               uint64
+	V2Errors                             uint64
+	TransactionIndexCatchupDeferred      uint64
+	TransactionIndexResourceDeferred     uint64
+	TransactionIndexErrorBackoffDeferred uint64
+	TransactionIndexErrors               uint64
 }
 
 type runnerMetrics struct {
@@ -363,8 +381,13 @@ type runnerMetrics struct {
 	txIndexRowsPruned       *metrics.Gauge
 	v2CatchupDeferred       *metrics.Gauge
 	v2ResourceDeferred      *metrics.Gauge
+	v2ErrorBackoffDeferred  *metrics.Gauge
+	v2SourcePrunedDeferred  *metrics.Gauge
+	v2Errors                *metrics.Gauge
 	txIndexCatchupDeferred  *metrics.Gauge
 	txIndexResourceDeferred *metrics.Gauge
+	txIndexErrorDeferred    *metrics.Gauge
+	txIndexErrors           *metrics.Gauge
 }
 
 func newRunnerMetrics(namespace string) runnerMetrics {
@@ -389,8 +412,13 @@ func newRunnerMetrics(namespace string) runnerMetrics {
 		txIndexRowsPruned:       metrics.GetOrRegisterGauge(namespace+"txindex/rows/pruned", nil),
 		v2CatchupDeferred:       metrics.GetOrRegisterGauge(namespace+"v2/deferred/catchup", nil),
 		v2ResourceDeferred:      metrics.GetOrRegisterGauge(namespace+"v2/deferred/resource", nil),
+		v2ErrorBackoffDeferred:  metrics.GetOrRegisterGauge(namespace+"v2/deferred/error_backoff", nil),
+		v2SourcePrunedDeferred:  metrics.GetOrRegisterGauge(namespace+"v2/deferred/source_pruned", nil),
+		v2Errors:                metrics.GetOrRegisterGauge(namespace+"v2/errors", nil),
 		txIndexCatchupDeferred:  metrics.GetOrRegisterGauge(namespace+"txindex/deferred/catchup", nil),
 		txIndexResourceDeferred: metrics.GetOrRegisterGauge(namespace+"txindex/deferred/resource", nil),
+		txIndexErrorDeferred:    metrics.GetOrRegisterGauge(namespace+"txindex/deferred/error_backoff", nil),
+		txIndexErrors:           metrics.GetOrRegisterGauge(namespace+"txindex/errors", nil),
 	}
 }
 
@@ -425,8 +453,13 @@ func (m runnerMetrics) update(stats Stats) {
 	m.txIndexRowsPruned.Update(uint64GaugeValue(stats.TransactionIndexRowsPruned))
 	m.v2CatchupDeferred.Update(uint64GaugeValue(stats.V2CatchupDeferred))
 	m.v2ResourceDeferred.Update(uint64GaugeValue(stats.V2ResourceDeferred))
+	m.v2ErrorBackoffDeferred.Update(uint64GaugeValue(stats.V2ErrorBackoffDeferred))
+	m.v2SourcePrunedDeferred.Update(uint64GaugeValue(stats.V2SourcePrunedDeferred))
+	m.v2Errors.Update(uint64GaugeValue(stats.V2Errors))
 	m.txIndexCatchupDeferred.Update(uint64GaugeValue(stats.TransactionIndexCatchupDeferred))
 	m.txIndexResourceDeferred.Update(uint64GaugeValue(stats.TransactionIndexResourceDeferred))
+	m.txIndexErrorDeferred.Update(uint64GaugeValue(stats.TransactionIndexErrorBackoffDeferred))
+	m.txIndexErrors.Update(uint64GaugeValue(stats.TransactionIndexErrors))
 }
 
 func boolGaugeValue(v bool) int64 {
@@ -476,10 +509,18 @@ type Runner struct {
 	txIndexLegacyWarned           atomic.Bool
 	v2CatchupDeferred             atomic.Uint64
 	v2ResourceDeferred            atomic.Uint64
+	v2ErrorBackoffDeferred        atomic.Uint64
+	v2SourcePrunedDeferred        atomic.Uint64
+	v2SourcePrunedWarned          atomic.Bool
+	v2Errors                      atomic.Uint64
 	txIndexCatchupDeferred        atomic.Uint64
 	txIndexResourceDeferred       atomic.Uint64
+	txIndexErrorBackoffDeferred   atomic.Uint64
+	txIndexErrors                 atomic.Uint64
 	lastV2CatchupMaintenance      atomic.Int64
 	lastTxIndexCatchupMaintenance atomic.Int64
+	lastV2MaintenanceError        atomic.Int64
+	lastTxIndexMaintenanceError   atomic.Int64
 	startedAt                     time.Time
 
 	// reconciled guards the once-per-process crash-leftover sweep in
@@ -541,6 +582,7 @@ func (r *Runner) Start() error {
 		"batch", r.cfg.BatchBlocks,
 		"catchupMaintenanceInterval", r.cfg.CatchupMaintenanceInterval,
 		"heavyMaintenanceStartupDelay", r.cfg.HeavyMaintenanceStartupDelay,
+		"heavyMaintenanceErrorBackoff", r.cfg.HeavyMaintenanceErrorBackoff,
 		"sharedHeavyWorkGate", r.cfg.HeavyWorkGate != nil)
 	return nil
 }
@@ -628,17 +670,22 @@ func (r *Runner) Snapshot() Stats {
 
 func (r *Runner) snapshot() Stats {
 	stats := Stats{
-		BlocksFrozen:                     r.blocksFrozen.Load(),
-		PassesCompleted:                  r.passesCompleted.Load(),
-		LastPassDuration:                 time.Duration(r.lastPassDuration.Load()),
-		PebbleSizeAfter:                  r.pebbleSizeAfter.Load(),
-		V2BlocksCompacted:                r.v2BlocksCompacted.Load(),
-		TransactionIndexRowsArchived:     r.txIndexRowsArchived.Load(),
-		TransactionIndexRowsPruned:       r.txIndexRowsPruned.Load(),
-		V2CatchupDeferred:                r.v2CatchupDeferred.Load(),
-		V2ResourceDeferred:               r.v2ResourceDeferred.Load(),
-		TransactionIndexCatchupDeferred:  r.txIndexCatchupDeferred.Load(),
-		TransactionIndexResourceDeferred: r.txIndexResourceDeferred.Load(),
+		BlocksFrozen:                         r.blocksFrozen.Load(),
+		PassesCompleted:                      r.passesCompleted.Load(),
+		LastPassDuration:                     time.Duration(r.lastPassDuration.Load()),
+		PebbleSizeAfter:                      r.pebbleSizeAfter.Load(),
+		V2BlocksCompacted:                    r.v2BlocksCompacted.Load(),
+		TransactionIndexRowsArchived:         r.txIndexRowsArchived.Load(),
+		TransactionIndexRowsPruned:           r.txIndexRowsPruned.Load(),
+		V2CatchupDeferred:                    r.v2CatchupDeferred.Load(),
+		V2ResourceDeferred:                   r.v2ResourceDeferred.Load(),
+		V2ErrorBackoffDeferred:               r.v2ErrorBackoffDeferred.Load(),
+		V2SourcePrunedDeferred:               r.v2SourcePrunedDeferred.Load(),
+		V2Errors:                             r.v2Errors.Load(),
+		TransactionIndexCatchupDeferred:      r.txIndexCatchupDeferred.Load(),
+		TransactionIndexResourceDeferred:     r.txIndexResourceDeferred.Load(),
+		TransactionIndexErrorBackoffDeferred: r.txIndexErrorBackoffDeferred.Load(),
+		TransactionIndexErrors:               r.txIndexErrors.Load(),
 	}
 	if t := r.lastPassUnixNano.Load(); t > 0 {
 		stats.LastPassAt = time.Unix(0, t)
@@ -674,6 +721,14 @@ const (
 	heavyMaintenanceTxIndex
 )
 
+type heavyMaintenanceDeferral uint8
+
+const (
+	heavyMaintenanceDeferredCatchup heavyMaintenanceDeferral = iota + 1
+	heavyMaintenanceDeferredResource
+	heavyMaintenanceDeferredErrorBackoff
+)
+
 type heavyMaintenanceLease struct {
 	ctx     context.Context
 	release func()
@@ -685,25 +740,31 @@ func (l *heavyMaintenanceLease) Close() {
 	}
 }
 
-func (r *Runner) beginHeavyMaintenance(kind heavyMaintenanceKind, lastCatchup *atomic.Int64) (*heavyMaintenanceLease, bool) {
+func (r *Runner) beginHeavyMaintenance(kind heavyMaintenanceKind, lastCatchup, lastError *atomic.Int64) (*heavyMaintenanceLease, bool) {
 	if r == nil {
 		return nil, false
 	}
 	now := time.Now()
+	if r.cfg.HeavyMaintenanceErrorBackoff > 0 {
+		if failedAt := lastError.Load(); failedAt > 0 && now.Sub(time.Unix(0, failedAt)) < r.cfg.HeavyMaintenanceErrorBackoff {
+			r.recordHeavyMaintenanceDeferred(kind, heavyMaintenanceDeferredErrorBackoff)
+			return nil, false
+		}
+	}
 	if r.cfg.HeavyMaintenanceStartupDelay > 0 && now.Sub(r.startedAt) < r.cfg.HeavyMaintenanceStartupDelay {
-		r.recordHeavyMaintenanceDeferred(kind, false)
+		r.recordHeavyMaintenanceDeferred(kind, heavyMaintenanceDeferredCatchup)
 		return nil, false
 	}
 	active := r.cfg.SyncActive != nil && r.cfg.SyncActive()
 	if active && r.cfg.CatchupMaintenanceInterval > 0 {
 		if last := lastCatchup.Load(); last > 0 && now.Sub(time.Unix(0, last)) < r.cfg.CatchupMaintenanceInterval {
-			r.recordHeavyMaintenanceDeferred(kind, false)
+			r.recordHeavyMaintenanceDeferred(kind, heavyMaintenanceDeferredCatchup)
 			return nil, false
 		}
 	}
 	releaseGate, ok := r.cfg.HeavyWorkGate.TryAcquire()
 	if !ok {
-		r.recordHeavyMaintenanceDeferred(kind, true)
+		r.recordHeavyMaintenanceDeferred(kind, heavyMaintenanceDeferredResource)
 		return nil, false
 	}
 	// Recheck after admission so a sync transition cannot consume an old
@@ -713,7 +774,7 @@ func (r *Runner) beginHeavyMaintenance(kind heavyMaintenanceKind, lastCatchup *a
 	if active && r.cfg.CatchupMaintenanceInterval > 0 {
 		if last := lastCatchup.Load(); last > 0 && now.Sub(time.Unix(0, last)) < r.cfg.CatchupMaintenanceInterval {
 			releaseGate()
-			r.recordHeavyMaintenanceDeferred(kind, false)
+			r.recordHeavyMaintenanceDeferred(kind, heavyMaintenanceDeferredCatchup)
 			return nil, false
 		}
 		lastCatchup.Store(now.UnixNano())
@@ -763,21 +824,27 @@ func (r *Runner) beginHeavyMaintenance(kind heavyMaintenanceKind, lastCatchup *a
 	}, true
 }
 
-func (r *Runner) recordHeavyMaintenanceDeferred(kind heavyMaintenanceKind, resource bool) {
+func (r *Runner) recordHeavyMaintenanceDeferred(kind heavyMaintenanceKind, reason heavyMaintenanceDeferral) {
 	if r == nil {
 		return
 	}
 	switch kind {
 	case heavyMaintenanceV2:
-		if resource {
+		switch reason {
+		case heavyMaintenanceDeferredResource:
 			r.v2ResourceDeferred.Add(1)
-		} else {
+		case heavyMaintenanceDeferredErrorBackoff:
+			r.v2ErrorBackoffDeferred.Add(1)
+		default:
 			r.v2CatchupDeferred.Add(1)
 		}
 	case heavyMaintenanceTxIndex:
-		if resource {
+		switch reason {
+		case heavyMaintenanceDeferredResource:
 			r.txIndexResourceDeferred.Add(1)
-		} else {
+		case heavyMaintenanceDeferredErrorBackoff:
+			r.txIndexErrorBackoffDeferred.Add(1)
+		default:
 			r.txIndexCatchupDeferred.Add(1)
 		}
 	}
@@ -795,17 +862,59 @@ func (r *Runner) CompactV2Once() (uint64, error) {
 	if r.cfg.V2PromotionAllowed != nil && !r.cfg.V2PromotionAllowed() {
 		return 0, nil
 	}
-	lease, ok := r.beginHeavyMaintenance(heavyMaintenanceV2, &r.lastV2CatchupMaintenance)
+	if compactor, ok := r.freezer.(V2Compactor); ok {
+		if tailer, ok := r.freezer.(V2SourceTailer); ok {
+			coverage, tail := compactor.V2Coverage(), tailer.V1Tail()
+			if tail > coverage {
+				r.recordV2SourcePruned(coverage, tail)
+				return 0, nil
+			}
+		}
+	}
+	lease, ok := r.beginHeavyMaintenance(heavyMaintenanceV2, &r.lastV2CatchupMaintenance, &r.lastV2MaintenanceError)
 	if !ok {
 		return 0, nil
 	}
 	defer lease.Close()
 	compacted, err := r.compactV2OnceContext(lease.ctx)
 	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(lease.ctx), errHeavyMaintenanceDeferred) {
-		r.recordHeavyMaintenanceDeferred(heavyMaintenanceV2, false)
+		r.recordHeavyMaintenanceDeferred(heavyMaintenanceV2, heavyMaintenanceDeferredCatchup)
 		return 0, nil
 	}
+	if err != nil {
+		if errors.Is(err, rawdbfreezer.ErrV2SourcePruned) {
+			coverage, tail := uint64(0), uint64(0)
+			if compactor, ok := r.freezer.(V2Compactor); ok {
+				coverage = compactor.V2Coverage()
+			}
+			if tailer, ok := r.freezer.(V2SourceTailer); ok {
+				tail = tailer.V1Tail()
+			}
+			r.lastV2MaintenanceError.Store(0)
+			r.recordV2SourcePruned(coverage, tail)
+			return 0, nil
+		}
+		r.lastV2MaintenanceError.Store(time.Now().UnixNano())
+		r.v2Errors.Add(1)
+		r.updateMetrics()
+	} else {
+		r.lastV2MaintenanceError.Store(0)
+	}
 	return compacted, err
+}
+
+func (r *Runner) recordV2SourcePruned(coverage, tail uint64) {
+	if r == nil {
+		return
+	}
+	r.v2SourcePrunedDeferred.Add(1)
+	if !r.v2SourcePrunedWarned.Swap(true) {
+		log.Info("Freezer: online V2 promotion disabled because its V1 source was pruned",
+			"v2Coverage", coverage,
+			"v1Tail", tail,
+			"hint", "cold snapshots remain authoritative for the pruned gap; use an offline rebuild to extend V2")
+	}
+	r.updateMetrics()
 }
 
 func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
@@ -880,15 +989,22 @@ func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 	if !r.cfg.Enabled || !r.cfg.V2Enabled || !r.cfg.TransactionIndexEnabled {
 		return false, nil
 	}
-	lease, ok := r.beginHeavyMaintenance(heavyMaintenanceTxIndex, &r.lastTxIndexCatchupMaintenance)
+	lease, ok := r.beginHeavyMaintenance(heavyMaintenanceTxIndex, &r.lastTxIndexCatchupMaintenance, &r.lastTxIndexMaintenanceError)
 	if !ok {
 		return false, nil
 	}
 	defer lease.Close()
 	changed, err := r.maintainTransactionIndexOnceContext(lease.ctx)
 	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(lease.ctx), errHeavyMaintenanceDeferred) {
-		r.recordHeavyMaintenanceDeferred(heavyMaintenanceTxIndex, false)
+		r.recordHeavyMaintenanceDeferred(heavyMaintenanceTxIndex, heavyMaintenanceDeferredCatchup)
 		return false, nil
+	}
+	if err != nil {
+		r.lastTxIndexMaintenanceError.Store(time.Now().UnixNano())
+		r.txIndexErrors.Add(1)
+		r.updateMetrics()
+	} else {
+		r.lastTxIndexMaintenanceError.Store(0)
 	}
 	return changed, err
 }

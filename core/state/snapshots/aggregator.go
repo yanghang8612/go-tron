@@ -160,19 +160,14 @@ func (a *Aggregator) BuildChainFreezerWithOptions(reader rawdb.AncientReader, fr
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
-	freezerRef, err := BuildChainFreezerSegmentFromAncient(reader, a.dir, ChainFreezerSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	refs, err := buildChainFreezerCompanionSegmentsFromAncient(reader, a.dir,
+		ChainFreezerSegmentPath(fromBlock, toBlock),
+		ChainFreezerAccessorSegmentPath(fromBlock, toBlock),
+		ChainIndexSegmentPath(fromBlock, toBlock),
+		fromBlock, toBlock, opts.ETL)
 	if err != nil {
 		return nil, err
 	}
-	accessorRef, err := BuildChainFreezerAccessorSegmentFromChainFreezerSegment(a.dir, freezerRef, ChainFreezerAccessorSegmentPath(fromBlock, toBlock))
-	if err != nil {
-		return nil, err
-	}
-	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegmentWithOptions(a.dir, freezerRef, ChainIndexSegmentPath(fromBlock, toBlock), opts.ETL)
-	if err != nil {
-		return nil, err
-	}
-	refs := []SegmentRef{freezerRef, accessorRef, indexRef}
 	visibleStart, visibleEnd := uint64(0), uint64(0)
 	if old, err := LoadProductionManifest(a.dir); err == nil {
 		visibleStart = old.VisibleTxStart
@@ -439,6 +434,24 @@ func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRe
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
+	var old *Manifest
+	if manifest, err := LoadProductionManifest(a.dir); err == nil {
+		old = manifest
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return a.integrateWithManifest(visibleStart, visibleEnd, refs, old)
+}
+
+// integrateWithManifest publishes refs on top of an already authenticated
+// production manifest. The cold lifecycle loads the manifest once per pass and
+// reuses it for visible-history, section-bloom, and integration decisions;
+// generic callers should continue to use Integrate so they observe the latest
+// on-disk generation themselves.
+func (a *Aggregator) integrateWithManifest(visibleStart, visibleEnd uint64, refs []SegmentRef, old *Manifest) (*Manifest, error) {
+	if a == nil || a.dir == "" {
+		return nil, errors.New("snapshots: nil aggregator or empty directory")
+	}
 	if visibleEnd < visibleStart {
 		return nil, fmt.Errorf("snapshots: aggregate range [%d,%d] is inverted", visibleStart, visibleEnd)
 	}
@@ -452,7 +465,7 @@ func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRe
 	var retired []SegmentRef
 	var progress *Progress
 	var chain *ChainIdentity
-	if old, err := LoadProductionManifest(a.dir); err == nil {
+	if old != nil {
 		visibleStart = min(visibleStart, old.VisibleTxStart)
 		visibleEnd = max(visibleEnd, old.VisibleTxEnd)
 		generation = old.Generation + 1
@@ -466,8 +479,6 @@ func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRe
 				segments = append(segments, ref)
 			}
 		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
 	}
 	manifest := NewManifest(visibleStart, visibleEnd, segments)
 	manifest.Generation = generation

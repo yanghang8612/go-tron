@@ -49,6 +49,8 @@ const (
 	gtronVersion                        = "0.3.0-dev"
 	runtimeSnapshotETLBuffer            = 256 << 20
 	snapshotCatchupBuildInterval        = time.Minute
+	heavyWorkRecoveryCooldown           = 15 * time.Second
+	heavyWorkCooldownMinDuration        = 250 * time.Millisecond
 )
 
 var metricsOnce sync.Once
@@ -977,14 +979,21 @@ func gtron(ctx *cli.Context) error {
 	sectionBloomPruneLifecycleWired := false
 	balanceTracePruneLifecycleWired := false
 	retiredPruneLifecycleWired := false
-	heavyWorkGate := maintenance.NewHeavyWorkGate()
+	heavyWorkGate := maintenance.NewHeavyWorkGateWithCooldownAfter(heavyWorkRecoveryCooldown, heavyWorkCooldownMinDuration)
 	var domainLifecycle *statepruning.SnapshotLifecycle
 	var chainFreezerSnapshotBuild statepruning.ChainFreezerBuildFunc
+	var chainFreezerVerificationCache *statesnapshots.ChainFreezerVerificationCache
 	if shouldEnableChainFreezerSnapshotBuilder(chainConfig, ancientStore != nil, freezerCfg.Enabled) {
+		chainFreezerVerificationCache = statesnapshots.NewChainFreezerVerificationCache(stateSnapshotDir)
+		if err := chainFreezerVerificationCache.LoadError(); err != nil {
+			log.Warn("Chain-freezer verification cache ignored; full verification will rebuild it", "err", err)
+		}
 		chainFreezerSnapshotBuild = func() (statesnapshots.ChainFreezerSnapshotPassResult, error) {
 			return statesnapshots.BuildChainFreezerSnapshotPass(ancientStore, bc.ChainDB(), statesnapshots.ChainFreezerSnapshotConfig{
-				Dir:            stateSnapshotDir,
-				BuildEventLogs: true,
+				Dir:               stateSnapshotDir,
+				BuildEventLogs:    true,
+				HeavyWorkGate:     heavyWorkGate,
+				VerificationCache: chainFreezerVerificationCache,
 			})
 		}
 	}
@@ -1031,18 +1040,19 @@ func gtron(ctx *cli.Context) error {
 		}
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
-				Dir:                     stateSnapshotDir,
-				Enabled:                 coldStateSnapshotsEnabled,
-				HistoryDataset:          historyDataset,
-				HistoryWindow:           prunePolicy.HistoryWindow,
-				ETL:                     snapshotETL,
-				CatchupBuildMinInterval: snapshotCatchupBuildInterval,
-				HeavyWorkGate:           heavyWorkGate,
-				BuildSectionBlooms:      buildDerivedSnapshots,
-				BuildBalanceTraces:      buildDerivedSnapshots,
-				BuildEventLogs:          buildDerivedSnapshots,
-				CatalogSigningKey:       snapshotCatalogSigningKey,
-				CatalogChain:            snapshotCatalogChain,
+				Dir:                        stateSnapshotDir,
+				Enabled:                    coldStateSnapshotsEnabled,
+				HistoryDataset:             historyDataset,
+				HistoryWindow:              prunePolicy.HistoryWindow,
+				ETL:                        snapshotETL,
+				CatchupBuildMinInterval:    snapshotCatchupBuildInterval,
+				HeavyWorkGate:              heavyWorkGate,
+				BuildSectionBlooms:         buildDerivedSnapshots,
+				BuildBalanceTraces:         buildDerivedSnapshots,
+				BuildEventLogs:             buildDerivedSnapshots,
+				ColdChainVerificationCache: chainFreezerVerificationCache,
+				CatalogSigningKey:          snapshotCatalogSigningKey,
+				CatalogChain:               snapshotCatalogChain,
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.
@@ -1097,6 +1107,8 @@ func gtron(ctx *cli.Context) error {
 			"etlBufferBytes", snapshotETL.BufferLimit,
 			"etlBatchBytes", snapshotETL.BatchSize,
 			"catchupBuildMinInterval", snapshotCatchupBuildInterval,
+			"heavyWorkRecoveryCooldown", heavyWorkRecoveryCooldown,
+			"heavyWorkCooldownMinDuration", heavyWorkCooldownMinDuration,
 			"sharedHeavyWorkGate", true,
 			"catalogRetain", snapshotCatalogRetain,
 			"catalogGrace", snapshotCatalogGrace,
@@ -1141,7 +1153,8 @@ func gtron(ctx *cli.Context) error {
 	if ancientStore != nil && shouldEnableChainFreezerTailPruner(chainConfig) {
 		retainBlocks := statesnapshots.EffectiveChainFreezerTailRetainBlocks(chainConfig.EffectiveHistoryPruneWindow())
 		chainFreezerTailLifecycle := statesnapshots.NewChainFreezerTailPruneLifecycle(bc.ChainDB(), ancientStore, stateSnapshotManager, statesnapshots.ChainFreezerTailPruneLifecycleConfig{
-			RetainBlocks: retainBlocks,
+			RetainBlocks:  retainBlocks,
+			HeavyWorkGate: heavyWorkGate,
 			HeadBlock: func() uint64 {
 				if head := bc.CurrentBlock(); head != nil {
 					return head.Number()

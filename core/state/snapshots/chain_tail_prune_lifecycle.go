@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -20,9 +21,10 @@ const (
 )
 
 type ChainFreezerTailPruneLifecycleConfig struct {
-	RetainBlocks uint64
-	Interval     time.Duration
-	HeadBlock    func() uint64
+	RetainBlocks  uint64
+	Interval      time.Duration
+	HeadBlock     func() uint64
+	HeavyWorkGate *maintenance.HeavyWorkGate
 }
 
 type ChainFreezerTailPruneLifecycle struct {
@@ -109,6 +111,33 @@ func (l *ChainFreezerTailPruneLifecycle) OnePass() (*ChainFreezerTailPruneApplyR
 	if l == nil || l.db == nil || l.freezer == nil || l.cold == nil || l.cfg.RetainBlocks == 0 || l.cfg.HeadBlock == nil {
 		return nil, nil
 	}
+	currentTail, err := chainFreezerTailForPruning(l.freezer)
+	if err != nil {
+		return nil, err
+	}
+	ancientHead, err := l.freezer.AncientCount(rawdb.AncientBlocksTable)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := PlanChainFreezerTailPruneFromDB(l.db, currentTail, ancientHead, l.cfg.HeadBlock(), l.cfg.RetainBlocks)
+	if err != nil {
+		return nil, err
+	}
+	// Stage repair is metadata-only. Acquire the process-wide heavy-work lease
+	// only when this pass can actually advance and reclaim the mutable V1 tail.
+	if !plan.CanPrune {
+		return ApplyChainFreezerTailPruneFromDB(l.db, l.freezer, l.cold, l.cfg.HeadBlock(), l.cfg.RetainBlocks)
+	}
+	release, ok := l.cfg.HeavyWorkGate.TryAcquire()
+	if !ok {
+		return &ChainFreezerTailPruneApplyResult{
+			Plan:             plan,
+			ResourceDeferred: true,
+			OldTail:          currentTail,
+			NewTail:          currentTail,
+		}, nil
+	}
+	defer release()
 	return ApplyChainFreezerTailPruneFromDB(l.db, l.freezer, l.cold, l.cfg.HeadBlock(), l.cfg.RetainBlocks)
 }
 

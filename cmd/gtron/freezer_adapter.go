@@ -79,6 +79,10 @@ func (s *freezerStore) V2Coverage() uint64 {
 	return s.f.V2Coverage()
 }
 
+func (s *freezerStore) V1Tail() uint64 {
+	return s.f.V1Tail()
+}
+
 func (s *freezerStore) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
 	return s.f.MigrateV2(options)
 }

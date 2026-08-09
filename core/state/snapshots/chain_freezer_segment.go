@@ -95,6 +95,12 @@ func ChainFreezerSegmentPath(fromBlock, toBlock uint64) string {
 }
 
 func BuildChainFreezerSegmentFromAncient(reader rawdb.AncientReader, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
+	return buildChainFreezerSegmentFromAncient(reader, dir, relPath, fromBlock, toBlock, nil)
+}
+
+type chainFreezerBuildObserver func(chainFreezerRow, validatedChainFreezerRow, uint64) error
+
+func buildChainFreezerSegmentFromAncient(reader rawdb.AncientReader, dir, relPath string, fromBlock, toBlock uint64, observe chainFreezerBuildObserver) (SegmentRef, error) {
 	if reader == nil {
 		return SegmentRef{}, errors.New("snapshots: nil ancient reader")
 	}
@@ -130,7 +136,8 @@ func BuildChainFreezerSegmentFromAncient(reader rawdb.AncientReader, dir, relPat
 	hash := sha256.New()
 	counter := &countingWriter{w: io.MultiWriter(tmp, hash)}
 	buf := bufio.NewWriter(counter)
-	if err := writeChainFreezerHeader(buf, fromBlock, toBlock, count); err != nil {
+	logical := &countingWriter{w: buf}
+	if err := writeChainFreezerHeader(logical, fromBlock, toBlock, count); err != nil {
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	}
@@ -156,21 +163,29 @@ func BuildChainFreezerSegmentFromAncient(reader rawdb.AncientReader, dir, relPat
 			txInfosRaw:   txInfosRaw,
 			stateRootRaw: stateRootRaw,
 		}
-		if _, err := validateChainFreezerRowPayload(row, "chain-freezer segment build"); err != nil {
+		verified, err := validateChainFreezerRowPayload(row, "chain-freezer segment build")
+		if err != nil {
 			_ = tmp.Close()
 			return SegmentRef{}, err
 		}
-		if err := writeChainFreezerBytes(buf, row.blockRaw); err != nil {
+		rowOffset := logical.n
+		if err := writeChainFreezerBytes(logical, row.blockRaw); err != nil {
 			_ = tmp.Close()
 			return SegmentRef{}, fmt.Errorf("snapshots: write freezer block %d body: %w", n, err)
 		}
-		if err := writeChainFreezerBytes(buf, row.txInfosRaw); err != nil {
+		if err := writeChainFreezerBytes(logical, row.txInfosRaw); err != nil {
 			_ = tmp.Close()
 			return SegmentRef{}, fmt.Errorf("snapshots: write freezer block %d tx infos: %w", n, err)
 		}
-		if err := writeChainFreezerBytes(buf, row.stateRootRaw); err != nil {
+		if err := writeChainFreezerBytes(logical, row.stateRootRaw); err != nil {
 			_ = tmp.Close()
 			return SegmentRef{}, fmt.Errorf("snapshots: write freezer block %d state root: %w", n, err)
+		}
+		if observe != nil {
+			if err := observe(row, verified, rowOffset); err != nil {
+				_ = tmp.Close()
+				return SegmentRef{}, err
+			}
 		}
 		if n == toBlock {
 			break
@@ -180,6 +195,10 @@ func BuildChainFreezerSegmentFromAncient(reader rawdb.AncientReader, dir, relPat
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	}
+	if counter.n != logical.n {
+		_ = tmp.Close()
+		return SegmentRef{}, fmt.Errorf("snapshots: chain-freezer physical size %d does not match logical size %d", counter.n, logical.n)
+	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return SegmentRef{}, err
@@ -188,7 +207,7 @@ func BuildChainFreezerSegmentFromAncient(reader rawdb.AncientReader, dir, relPat
 		return SegmentRef{}, err
 	}
 
-	ref.Size = counter.n
+	ref.Size = logical.n
 	ref.Checksum = "sha256:" + hex.EncodeToString(hash.Sum(nil))
 	ref.Path = contentAddressedSnapshotPath(ref.Path, ref.Checksum)
 	finalAbs := filepath.Join(dir, ref.Path)
@@ -835,11 +854,20 @@ func verifyChainFreezerSegmentAlreadyInstalled(store rawdb.AncientReader, dir st
 }
 
 func iterateChainFreezerSegmentRows(dir string, ref SegmentRef, fn func(chainFreezerRow) error) error {
+	if fn == nil {
+		return errors.New("snapshots: nil chain-freezer row iterator")
+	}
+	return iterateChainFreezerSegmentRowsWithOffset(dir, ref, func(_ uint64, row chainFreezerRow) error {
+		return fn(row)
+	})
+}
+
+func iterateChainFreezerSegmentRowsWithOffset(dir string, ref SegmentRef, fn func(uint64, chainFreezerRow) error) error {
 	if err := validateSegmentRef(ref); err != nil {
 		return err
 	}
 	if fn == nil {
-		return errors.New("snapshots: nil chain-freezer row iterator")
+		return errors.New("snapshots: nil chain-freezer offset row iterator")
 	}
 	file, err := os.Open(filepath.Join(dir, ref.Path))
 	if err != nil {
@@ -867,11 +895,12 @@ func iterateChainFreezerSegmentRows(dir string, ref SegmentRef, fn func(chainFre
 	}
 	offset := uint64(chainFreezerHeaderSize)
 	for i := uint64(0); i < count; i++ {
-		row, nextOffset, err := readChainFreezerSegmentRowAtWithNext(file, offset, fromBlock+i, fileSize)
+		rowOffset := offset
+		row, nextOffset, err := readChainFreezerSegmentRowAtWithNext(file, rowOffset, fromBlock+i, fileSize)
 		if err != nil {
 			return err
 		}
-		if err := fn(row); err != nil {
+		if err := fn(rowOffset, row); err != nil {
 			return err
 		}
 		offset = nextOffset

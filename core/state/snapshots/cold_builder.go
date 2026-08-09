@@ -108,6 +108,11 @@ type Config struct {
 	// BuildEventLogs builds registered cold event-log sidecars for the same
 	// block range as each newly published state-history segment.
 	BuildEventLogs bool
+	// ColdChainVerificationCache carries the exact locally built event-log and
+	// index pair into the chain-freezer lifecycle's semantic-proof cache. Only
+	// outputs active in the newly published manifest are recorded; a restart
+	// still authenticates their complete SHA-256 identities.
+	ColdChainVerificationCache *ChainFreezerVerificationCache
 	// ETL configures sorted scratch ingestion for derived cold sidecar builds
 	// launched by this lifecycle pass. Zero values preserve collector defaults.
 	ETL RestoreETLOptions
@@ -717,7 +722,11 @@ func (r *Runner) onePass() (PassResult, error) {
 		return PassResult{}, fmt.Errorf("snapshots: state tx range for block %d is inverted", cutoffBlock)
 	}
 
-	visibleEnd, err := coldSnapshotVisibleTxEnd(r.cfg.Dir, r.cfg.HistoryDataset)
+	productionManifest, err := loadOptionalProductionManifest(r.cfg.Dir)
+	if err != nil {
+		return PassResult{}, err
+	}
+	visibleEnd, err := coldSnapshotVisibleTxEndFromManifest(productionManifest, r.cfg.HistoryDataset)
 	if err != nil {
 		return PassResult{}, err
 	}
@@ -854,26 +863,27 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 	}
 	eventLogBuilt := false
+	var eventLogRef, eventLogIndexRef SegmentRef
 	if r.cfg.BuildEventLogs {
 		build, err := buildEventLogSegmentFromChainWithOptions(chainDB, r.cfg.Dir, EventLogSegmentPath(startBlock, cutoffBlock), startBlock, cutoffBlock, r.cfg.ETL)
 		if err != nil {
 			return PassResult{}, err
 		}
-		ref := build.Ref
-		refs = append(refs, ref)
+		eventLogRef = build.Ref
+		refs = append(refs, eventLogRef)
 		// Keep the lookup sidecar aligned with this immutable event segment.
 		// Existing adjacent indexes remain active in the manifest; rebuilding a
 		// chain-wide index on every catch-up step makes historical sync quadratic.
-		indexRef, err := writeFreshEventLogIndexSegment(r.cfg.Dir, build, EventLogIndexSegmentPath(ref.FromTxNum, ref.ToTxNum))
+		eventLogIndexRef, err = writeFreshEventLogIndexSegment(r.cfg.Dir, build, EventLogIndexSegmentPath(eventLogRef.FromTxNum, eventLogRef.ToTxNum))
 		if err != nil {
 			return PassResult{}, err
 		}
-		refs = append(refs, indexRef)
+		refs = append(refs, eventLogIndexRef)
 		eventLogBuilt = true
 	}
 	sectionBloomBuilt := false
 	if r.cfg.BuildSectionBlooms {
-		sectionRefs, err := r.sectionBloomPass(db, cutoffBlock)
+		sectionRefs, err := r.sectionBloomPassWithManifest(db, cutoffBlock, productionManifest)
 		if err != nil {
 			return PassResult{}, err
 		}
@@ -882,9 +892,18 @@ func (r *Runner) onePass() (PassResult, error) {
 			sectionBloomBuilt = true
 		}
 	}
-	manifest, err := aggregator.Integrate(fromTxNum, toTxNum, refs)
+	manifest, err := aggregator.integrateWithManifest(fromTxNum, toTxNum, refs, productionManifest)
 	if err != nil {
 		return PassResult{}, err
+	}
+	if eventLogBuilt {
+		eventRefs := []SegmentRef{eventLogRef, eventLogIndexRef}
+		if err := requireBuiltSegmentsActive(manifest, eventRefs); err != nil {
+			return PassResult{}, fmt.Errorf("snapshots: authenticate cold-builder event-log range [%d,%d]: %w", startBlock, cutoffBlock, err)
+		}
+		if err := r.cfg.ColdChainVerificationCache.recordTrustedEventLogs(r.cfg.Dir, eventLogIndexRef, []SegmentRef{eventLogRef}); err != nil {
+			return PassResult{}, fmt.Errorf("snapshots: record trusted cold-builder event-log range [%d,%d]: %w", startBlock, cutoffBlock, err)
+		}
 	}
 	result.Built = true
 	result.FromTxNum = fromTxNum
@@ -1034,6 +1053,14 @@ func (r *Runner) balanceTracePass(chain *rawdb.ChainDB, db AggregatorDB, fromBlo
 }
 
 func (r *Runner) sectionBloomPass(db AggregatorDB, cutoffBlock uint64) ([]SegmentRef, error) {
+	manifest, err := loadOptionalProductionManifest(r.cfg.Dir)
+	if err != nil {
+		return nil, err
+	}
+	return r.sectionBloomPassWithManifest(db, cutoffBlock, manifest)
+}
+
+func (r *Runner) sectionBloomPassWithManifest(db AggregatorDB, cutoffBlock uint64, manifest *Manifest) ([]SegmentRef, error) {
 	if r == nil || !r.cfg.BuildSectionBlooms {
 		return nil, nil
 	}
@@ -1043,18 +1070,18 @@ func (r *Runner) sectionBloomPass(db AggregatorDB, cutoffBlock uint64) ([]Segmen
 	if cutoffBlock < rawdb.SectionBloomBlockPerSection-1 {
 		return nil, nil
 	}
-	manifest, err := LoadProductionManifest(r.cfg.Dir)
-	if err != nil && !os.IsNotExist(err) {
+	maxSection := cutoffBlock / rawdb.SectionBloomBlockPerSection
+	covered, err := sectionBloomFullSectionCoverage(manifest, maxSection)
+	if err != nil {
 		return nil, err
 	}
-	maxSection := cutoffBlock / rawdb.SectionBloomBlockPerSection
 	for section := uint64(0); section <= maxSection; section++ {
 		fromBlock := section * rawdb.SectionBloomBlockPerSection
 		toBlock := sectionBloomSectionEndBlock(section)
 		if toBlock > cutoffBlock {
 			break
 		}
-		if sectionBloomManifestCoversFullSection(manifest, section) {
+		if covered[section] {
 			continue
 		}
 		ref, err := BuildSectionBloomSegmentFromDBWithOptions(db, r.cfg.Dir, SectionBloomSegmentPath(fromBlock, toBlock), fromBlock, toBlock, r.cfg.ETL)
@@ -1064,6 +1091,52 @@ func (r *Runner) sectionBloomPass(db AggregatorDB, cutoffBlock uint64) ([]Segmen
 		return []SegmentRef{ref}, nil
 	}
 	return nil, nil
+}
+
+// sectionBloomFullSectionCoverage reduces the manifest to one compact coverage
+// vector in O(manifest segments + chain sections). The old hot path called
+// sectionBloomRefs for every section, rescanning and sorting the complete
+// manifest thousands of times on mainnet.
+func sectionBloomFullSectionCoverage(manifest *Manifest, maxSection uint64) ([]bool, error) {
+	maxInt := uint64(^uint(0) >> 1)
+	if maxSection > maxInt-2 {
+		return nil, fmt.Errorf("snapshots: section bloom coverage %d exceeds addressable memory", maxSection)
+	}
+	delta := make([]int64, int(maxSection)+2)
+	blocksPerSection := uint64(rawdb.SectionBloomBlockPerSection)
+	if manifest != nil {
+		for _, ref := range manifest.Segments {
+			if ref.Kind != SegmentSectionBloom || ref.normalizedDataset() != SegmentDatasetSectionBloom {
+				continue
+			}
+			first := ref.FromTxNum / blocksPerSection
+			if ref.FromTxNum%blocksPerSection != 0 {
+				first++
+			}
+			last := ref.ToTxNum / blocksPerSection
+			if ref.ToTxNum%blocksPerSection != blocksPerSection-1 {
+				if last == 0 {
+					continue
+				}
+				last--
+			}
+			if first > last || first > maxSection {
+				continue
+			}
+			if last > maxSection {
+				last = maxSection
+			}
+			delta[int(first)]++
+			delta[int(last)+1]--
+		}
+	}
+	covered := make([]bool, int(maxSection)+1)
+	var active int64
+	for section := range covered {
+		active += delta[section]
+		covered[section] = active > 0
+	}
+	return covered, nil
 }
 
 func sectionBloomManifestCoversFullSection(manifest *Manifest, section uint64) bool {
@@ -1477,12 +1550,27 @@ func (r *Runner) loop() {
 }
 
 func coldSnapshotVisibleTxEnd(dir string, dataset SegmentDataset) (uint64, error) {
+	manifest, err := loadOptionalProductionManifest(dir)
+	if err != nil {
+		return 0, err
+	}
+	return coldSnapshotVisibleTxEndFromManifest(manifest, dataset)
+}
+
+func loadOptionalProductionManifest(dir string) (*Manifest, error) {
 	manifest, err := LoadProductionManifest(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, nil
+			return nil, nil
 		}
-		return 0, err
+		return nil, err
+	}
+	return manifest, nil
+}
+
+func coldSnapshotVisibleTxEndFromManifest(manifest *Manifest, dataset SegmentDataset) (uint64, error) {
+	if manifest == nil {
+		return 0, nil
 	}
 	visibleEnd := ContiguousHistoryVisibleTxEnd(manifest, dataset, 1)
 	if manifest.Progress != nil && manifest.Progress.HistoryBuildTxNum > visibleEnd {

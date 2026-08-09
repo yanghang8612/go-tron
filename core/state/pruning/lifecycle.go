@@ -216,11 +216,11 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		if err := l.pruner.RecordTrustedSnapshotSegments(trusted); err != nil {
 			return out, err
 		}
-		// A rate/resource-deferred history pass made no manifest progress. Avoid
-		// running chain-freezer snapshot generation and the remaining optional
-		// prune stages on a wake which exists only because another background
-		// task advanced or catch-up work was coalesced.
-		if result.HistoryRateLimited || result.HistoryGateDeferred {
+		// A resource-deferred history pass means another heavy stage owns the
+		// shared admission window. A rate-limited pass, however, deliberately
+		// leaves capacity for chain-freezer snapshots and ordered pruning, whose
+		// own lazy gate prevents overlap and starts a recovery cooldown.
+		if result.HistoryGateDeferred {
 			return out, nil
 		}
 	}

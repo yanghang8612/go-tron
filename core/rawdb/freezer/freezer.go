@@ -54,6 +54,12 @@ var (
 	// errSymlinkDatadir is returned if the ancient directory specified by user
 	// is a symbolic link.
 	errSymlinkDatadir = errors.New("symbolic link datadir is not supported")
+
+	// ErrV2SourcePruned reports that immutable V2 coverage can no longer be
+	// extended from the local V1 tables because their virtual tail has already
+	// advanced past the published V2 prefix. Cold snapshots may still serve the
+	// missing history, but an online V1-to-V2 migration cannot reconstruct it.
+	ErrV2SourcePruned = errors.New("ancient V2 source has been pruned")
 )
 
 // AncientWriteOp is implemented by the batch handed to `ModifyAncients`.
@@ -92,6 +98,10 @@ type Freezer struct {
 	writeBatch *freezerBatch
 	v2Mu       sync.RWMutex
 	v2Migrate  sync.Mutex
+	// tailMutation prevents an external snapshot tail-prune from advancing the
+	// V1 source while MigrateV2 is writing and verifying a segment. MigrateV2
+	// uses truncateTailLocked for its own post-publication reclamation.
+	tailMutation sync.Mutex
 
 	readonly      bool
 	tables        map[string]*freezerTable // Data tables for storing everything
@@ -633,6 +643,17 @@ func (f *Freezer) Tail() (uint64, error) {
 	return f.tail.Load(), nil
 }
 
+// V1Tail returns the virtual tail of the mutable V1 tables even when an
+// immutable V2 prefix makes Tail report the composite store's logical tail.
+// Callers deciding whether V1 can still source an online V2 migration must use
+// this value instead of Tail.
+func (f *Freezer) V1Tail() uint64 {
+	if f == nil {
+		return 0
+	}
+	return f.tail.Load()
+}
+
 // V2Coverage is the first block not covered by the contiguous immutable V2
 // segment prefix.
 func (f *Freezer) V2Coverage() uint64 {
@@ -825,6 +846,15 @@ func (f *Freezer) TruncateHead(items uint64) (uint64, error) {
 // new tail in table metadata. Call PruneTailFiles to reclaim fully-hidden data
 // shards from disk.
 func (f *Freezer) TruncateTail(items uint64) (uint64, error) {
+	f.tailMutation.Lock()
+	defer f.tailMutation.Unlock()
+	return f.truncateTailLocked(items)
+}
+
+// truncateTailLocked advances the V1 virtual tail while the caller owns
+// tailMutation. Keeping this separate lets MigrateV2 serialize the complete
+// write/verify/publish/reclaim transaction against external tail pruning.
+func (f *Freezer) truncateTailLocked(items uint64) (uint64, error) {
 	if f.readonly {
 		return 0, errReadOnly
 	}

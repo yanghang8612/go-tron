@@ -401,10 +401,21 @@ type blockingV2Freezer struct {
 	started chan struct{}
 }
 
+type failingV2Freezer struct {
+	*freezerWriter
+	calls atomic.Uint64
+	err   error
+}
+
 func (f *blockingV2Freezer) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
 	close(f.started)
 	<-options.Context.Done()
 	return rawdbfreezer.V2MigrationResult{}, options.Context.Err()
+}
+
+func (f *failingV2Freezer) MigrateV2(rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
+	f.calls.Add(1)
+	return rawdbfreezer.V2MigrationResult{}, f.err
 }
 
 func wrapFreezer(f *rawdbfreezer.Freezer) FreezerStore {
@@ -423,6 +434,9 @@ func (w *freezerWriter) TruncateHead(items uint64) (uint64, error) {
 func (w *freezerWriter) Sync() error { return w.f.Sync() }
 func (w *freezerWriter) V2Coverage() uint64 {
 	return w.f.V2Coverage()
+}
+func (w *freezerWriter) V1Tail() uint64 {
+	return w.f.V1Tail()
 }
 func (w *freezerWriter) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
 	return w.f.MigrateV2(options)
@@ -585,6 +599,108 @@ func TestCompactV2OnceDefersWhenHeavyWorkGateBusy(t *testing.T) {
 	}
 	if got := r.Snapshot(); got.V2ResourceDeferred != 1 {
 		t.Fatalf("resource-deferred V2 stats = %+v", got)
+	}
+}
+
+func TestCompactV2OnceBacksOffAfterPersistentError(t *testing.T) {
+	namespace := "test/freezer/v2-error-backoff/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	f := newFreezer(t)
+	for number := uint64(0); number < 64; number++ {
+		if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+			if err := op.AppendRaw(rawdbAncientBlocks, number, blockBytes(number)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, number, txInfosBytes(number)); err != nil {
+				return err
+			}
+			return op.AppendRaw(rawdbAncientStateRoots, number, stateRootBytes(number))
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantErr := errors.New("persistent V2 failure")
+	store := &failingV2Freezer{
+		freezerWriter: &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f},
+		err:           wantErr,
+	}
+	r := New(nil, store, Config{
+		Enabled:                      true,
+		V2Enabled:                    true,
+		V2FrameBlocks:                8,
+		V2SegmentBlocks:              64,
+		HeavyMaintenanceErrorBackoff: time.Hour,
+		MetricsNamespace:             namespace,
+	})
+	if compacted, err := r.CompactV2Once(); compacted != 0 || !errors.Is(err, wantErr) {
+		t.Fatalf("first V2 attempt = %d/%v, want persistent error", compacted, err)
+	}
+	if compacted, err := r.CompactV2Once(); compacted != 0 || err != nil {
+		t.Fatalf("backed-off V2 attempt = %d/%v", compacted, err)
+	}
+	stats := r.Snapshot()
+	if store.calls.Load() != 1 || stats.V2Errors != 1 || stats.V2ErrorBackoffDeferred != 1 {
+		t.Fatalf("V2 error backoff calls=%d stats=%+v", store.calls.Load(), stats)
+	}
+	if got := runnerGaugeValue(t, namespace+"v2/errors"); got != 1 {
+		t.Fatalf("v2/errors = %d, want 1", got)
+	}
+	if got := runnerGaugeValue(t, namespace+"v2/deferred/error_backoff"); got != 1 {
+		t.Fatalf("v2/deferred/error_backoff = %d, want 1", got)
+	}
+}
+
+func TestCompactV2OnceStopsWhenV1SourceWasPruned(t *testing.T) {
+	namespace := "test/freezer/v2-source-pruned/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	f := newFreezer(t)
+	for number := uint64(0); number < 128; number++ {
+		if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+			if err := op.AppendRaw(rawdbAncientBlocks, number, blockBytes(number)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, number, txInfosBytes(number)); err != nil {
+				return err
+			}
+			return op.AppendRaw(rawdbAncientStateRoots, number, stateRootBytes(number))
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if result, err := f.MigrateV2(rawdbfreezer.V2MigrationOptions{
+		Tables:        []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots},
+		SegmentBlocks: 64,
+		FrameBlocks:   8,
+		MaxSegments:   1,
+		Online:        true,
+	}); err != nil || result.End != 64 {
+		t.Fatalf("seed V2 coverage = %+v/%v, want end 64", result, err)
+	}
+	if _, err := f.TruncateTail(80); err != nil {
+		t.Fatalf("advance V1 tail beyond V2: %v", err)
+	}
+	store := &failingV2Freezer{
+		freezerWriter: &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f},
+		err:           errors.New("migration must not run"),
+	}
+	r := New(nil, store, Config{
+		Enabled:          true,
+		V2Enabled:        true,
+		V2FrameBlocks:    8,
+		V2SegmentBlocks:  64,
+		MetricsNamespace: namespace,
+	})
+	if compacted, err := r.CompactV2Once(); err != nil || compacted != 0 {
+		t.Fatalf("source-pruned V2 attempt = %d/%v, want no-op", compacted, err)
+	}
+	stats := r.Snapshot()
+	if store.calls.Load() != 0 || stats.V2SourcePrunedDeferred != 1 || stats.V2Errors != 0 {
+		t.Fatalf("source-pruned calls=%d stats=%+v", store.calls.Load(), stats)
+	}
+	if got := runnerGaugeValue(t, namespace+"v2/deferred/source_pruned"); got != 1 {
+		t.Fatalf("v2/deferred/source_pruned = %d, want 1", got)
 	}
 }
 
@@ -2084,12 +2200,17 @@ func unregisterRunnerMetricNamespace(namespace string) {
 		"v2/blocks",
 		"v2/deferred/catchup",
 		"v2/deferred/resource",
+		"v2/deferred/error_backoff",
+		"v2/deferred/source_pruned",
+		"v2/errors",
 		"txindex/coverage",
 		"txindex/pruned",
 		"txindex/rows/archived",
 		"txindex/rows/pruned",
 		"txindex/deferred/catchup",
 		"txindex/deferred/resource",
+		"txindex/deferred/error_backoff",
+		"txindex/errors",
 	} {
 		metrics.DefaultRegistry.Unregister(namespace + suffix)
 	}
@@ -2110,7 +2231,7 @@ func TestNew_NilFreezer(t *testing.T) {
 func TestDefault_AppliesNonZero(t *testing.T) {
 	t.Parallel()
 	d := Default()
-	if d.Interval <= 0 || d.MarginBlocks == 0 || d.BatchBlocks == 0 {
+	if d.Interval <= 0 || d.MarginBlocks == 0 || d.BatchBlocks == 0 || d.HeavyMaintenanceErrorBackoff <= 0 {
 		t.Fatalf("Default zero field: %+v", d)
 	}
 	// applyDefaults on a zero Config matches Default() apart from Enabled

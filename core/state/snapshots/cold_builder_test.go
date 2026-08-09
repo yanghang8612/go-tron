@@ -1656,12 +1656,14 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
 	}
 	etlTemp := filepath.Join(dir, "etl-scratch")
+	verificationCache := NewChainFreezerVerificationCache(dir)
 
 	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
-		Dir:            dir,
-		Enabled:        true,
-		HistoryWindow:  1,
-		BuildEventLogs: true,
+		Dir:                        dir,
+		Enabled:                    true,
+		HistoryWindow:              1,
+		BuildEventLogs:             true,
+		ColdChainVerificationCache: verificationCache,
 		ETL: RestoreETLOptions{
 			TempDir:     etlTemp,
 			BufferLimit: 1,
@@ -1671,8 +1673,8 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnePass: %v", err)
 	}
-	if _, err := os.Stat(etlTemp); err != nil {
-		t.Fatalf("ETL temp parent stat: %v", err)
+	if _, err := os.Stat(etlTemp); !os.IsNotExist(err) {
+		t.Fatalf("ordered cold/event-log build unexpectedly used ETL scratch: %v", err)
 	}
 	if !result.Built || !result.EventLogBuilt || result.FromBlock != 1 || result.ToBlock != 1 {
 		t.Fatalf("result = %+v, want history+event-log build over block 1", result)
@@ -1689,6 +1691,27 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	}
 	if !haveEventLog || !haveEventLogIndex {
 		t.Fatalf("segments = %+v, want event-log and event-log-index segments with history", result.Segments)
+	}
+	stats := verificationCache.Stats()
+	if stats.EventTrustedRecorded != 1 || stats.EventFullVerified != 0 || stats.EventEntries != 1 {
+		t.Fatalf("trusted cold-builder event stats = %+v", stats)
+	}
+	eventHead, err := verifiedIndexedEventLogHeadWithCache(dir, result.Manifest, verificationCache)
+	if err != nil || eventHead != 2 {
+		t.Fatalf("trusted event head = %d/%v, want 2/nil", eventHead, err)
+	}
+	stats = verificationCache.Stats()
+	if stats.EventMemoryHits != 1 || stats.EventFullVerified != 0 {
+		t.Fatalf("trusted event reuse stats = %+v", stats)
+	}
+	restartedCache := NewChainFreezerVerificationCache(dir)
+	eventHead, err = verifiedIndexedEventLogHeadWithCache(dir, result.Manifest, restartedCache)
+	if err != nil || eventHead != 2 {
+		t.Fatalf("restart trusted event head = %d/%v, want 2/nil", eventHead, err)
+	}
+	stats = restartedCache.Stats()
+	if stats.EventPersistentHits != 1 || stats.EventFullVerified != 0 || stats.EventEntries != 1 {
+		t.Fatalf("restart trusted event stats = %+v", stats)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 1 {
 		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 1", got, ok, err)
@@ -2146,6 +2169,73 @@ func TestColdBuilderSkipsPartialSectionBloomSection(t *testing.T) {
 	}
 	if got := rawdb.ReadSectionBloom(db, 0, 42); got == nil {
 		t.Fatal("hot section bloom was removed despite no full-section cold coverage")
+	}
+}
+
+func TestSectionBloomFullSectionCoverageMatchesReference(t *testing.T) {
+	blocksPerSection := uint64(rawdb.SectionBloomBlockPerSection)
+	manifest := NewManifest(0, 1, nil)
+	for i := uint64(0); i < 128; i++ {
+		from := i * blocksPerSection
+		if i%3 == 1 {
+			from++
+		}
+		to := (i + 1 + i%7) * blocksPerSection
+		if i%4 == 0 {
+			to--
+		}
+		manifest.Segments = append(manifest.Segments, SegmentRef{
+			Dataset:   SegmentDatasetSectionBloom,
+			Kind:      SegmentSectionBloom,
+			FromTxNum: from,
+			ToTxNum:   to,
+			Path:      fmt.Sprintf("log/coverage-%d.seg", i),
+		})
+	}
+	manifest.Segments = append(manifest.Segments, SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLog,
+		FromTxNum: 0,
+		ToTxNum:   256 * blocksPerSection,
+		Path:      "log/not-a-bloom.seg",
+	})
+
+	const maxSection = uint64(255)
+	covered, err := sectionBloomFullSectionCoverage(manifest, maxSection)
+	if err != nil {
+		t.Fatalf("sectionBloomFullSectionCoverage: %v", err)
+	}
+	if len(covered) != int(maxSection)+1 {
+		t.Fatalf("coverage len = %d, want %d", len(covered), maxSection+1)
+	}
+	for section := uint64(0); section <= maxSection; section++ {
+		want := sectionBloomManifestCoversFullSection(manifest, section)
+		if covered[section] != want {
+			t.Fatalf("section %d coverage = %v, want %v", section, covered[section], want)
+		}
+	}
+}
+
+func BenchmarkSectionBloomFullSectionCoverage(b *testing.B) {
+	blocksPerSection := uint64(rawdb.SectionBloomBlockPerSection)
+	manifest := NewManifest(0, 1, nil)
+	for i := uint64(0); i < 2_000; i++ {
+		manifest.Segments = append(manifest.Segments, SegmentRef{
+			Dataset:   SegmentDatasetSectionBloom,
+			Kind:      SegmentSectionBloom,
+			FromTxNum: i * blocksPerSection,
+			ToTxNum:   (i+4)*blocksPerSection - 1,
+			Path:      fmt.Sprintf("log/benchmark-%d.seg", i),
+		})
+	}
+	const maxSection = uint64(5_999)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		covered, err := sectionBloomFullSectionCoverage(manifest, maxSection)
+		if err != nil || len(covered) != int(maxSection)+1 {
+			b.Fatalf("coverage len=%d err=%v", len(covered), err)
+		}
 	}
 }
 

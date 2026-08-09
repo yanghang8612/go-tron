@@ -173,7 +173,7 @@ func TestSnapshotLifecycleAutomaticallyDrainsColdBuildBacklog(t *testing.T) {
 	}
 }
 
-func TestSnapshotLifecycleRateLimitedWakeSkipsRemainingMaintenance(t *testing.T) {
+func TestSnapshotLifecycleRateLimitedWakeRunsRemainingMaintenance(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
 	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
@@ -210,8 +210,8 @@ func TestSnapshotLifecycleRateLimitedWakeSkipsRemainingMaintenance(t *testing.T)
 	if !second.Snapshot.HistoryRateLimited || second.Snapshot.Built {
 		t.Fatalf("rate-limited lifecycle pass = %+v", second)
 	}
-	if chainFreezerBuilds != 1 || lifecycle.pruner.Stats().Passes != prunePasses {
-		t.Fatalf("downstream maintenance ran after rate limit: freezer=%d prune=%d/%d", chainFreezerBuilds, lifecycle.pruner.Stats().Passes, prunePasses)
+	if chainFreezerBuilds != 2 || lifecycle.pruner.Stats().Passes != prunePasses+1 {
+		t.Fatalf("downstream maintenance skipped after rate limit: freezer=%d prune=%d/%d", chainFreezerBuilds, lifecycle.pruner.Stats().Passes, prunePasses)
 	}
 }
 

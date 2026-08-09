@@ -4197,6 +4197,269 @@ continues to advance at or above import, no write stalls appear, ETL merge CPU
 and process read/write bandwidth fall, and canonical blocks/s plus
 transactions/s improve over the P5.30 fixed dense window.
 
+#### P5.32: Linear snapshot planning and source-aware freezer maintenance
+
+The deployed P5.31 sample processed a materially denser mainnet window than
+P5.30: about 97 transactions/block versus 44.6. Over 70 seconds it sustained
+35.7 blocks/s and 3,466 transactions/s at 3.03 CPU cores, approximately 65
+MiB/s process reads and 69 MiB/s writes. Although raw blocks/s was lower,
+transactions/s rose about 40%, transactions/s/core rose about 87%, CPU fell
+about 25%, reads fell about 70%, and writes fell about 41%. Pebble had no write
+stalls and used about 0.46 core, so the remaining drops were discrete optional
+maintenance bursts rather than device saturation or canonical execution.
+
+An 85-second profile covering a complete cold pass found 20.69 CPU-seconds in
+snapshot construction. Section-bloom planning alone used 5.74 CPU-seconds,
+with 5.38 seconds flat in repeated manifest reference selection: every chain
+section filtered and sorted the complete manifest again. The pass also loaded
+and authenticated the same production manifest independently for visible
+history, section blooms, and final integration. The cold runner now loads that
+manifest once and passes the authenticated object through those decisions.
+Section-bloom coverage is reduced with one difference vector in O(manifest
+segments + chain sections), preserving the former rule that one segment must
+cover a complete section. With 2,000 references and 6,000 sections, the new
+benchmark takes 18.0--19.5 microseconds, 55,296 bytes, and two allocations on
+an Apple M1 Max; this replaces the deployed 5.38-second planning hotspot.
+
+The same profile showed chain-freezer snapshot work and V2 migration starting
+back-to-back after state-history publication. The process-wide gate now also
+covers chain-freezer/event-log cold construction and actual V1 tail reclaim.
+After any admitted job lasting at least 250 ms, a 15-second importer-only
+recovery window begins at release. Cheap readiness and no-op leases do not
+renew the cooldown, avoiding starvation when V2 or transaction indexes are
+already current. A rate-limited state-history pass may use its deliberately
+idle budget for the ordered chain-freezer stage; a resource-deferred pass still
+short-circuits because another heavy job owns the window.
+
+The V2 profile consumed 6.38 CPU-seconds without moving coverage. Persisted
+bounds explained the failure: V2 coverage was 11,468,800 while the mutable V1
+tail had advanced to 11,534,336 after verified cold snapshots took ownership
+of that prefix. Online V2 cannot reconstruct the missing V1 interval. Worse,
+tail pruning could advance concurrently after migration's initial check, so a
+segment could be written and verified before failing or losing its source.
+The freezer now serializes the complete V2 write/verify/publish/reclaim
+transaction against external V1 tail mutation. It exposes the mutable V1
+source tail separately from the composite logical tail used by readers, and
+the tail pruner uses the V1 value so it does not re-verify an already-pruned
+genesis-to-tail range on every pass.
+
+When the mutable V1 source tail exceeds V2 coverage, the online runner treats
+the condition as a stable source-pruned deferral rather than an error or a
+reason to guess a new coverage boundary. Verified cold snapshots remain
+authoritative for the gap; extending V2 requires an explicit offline rebuild
+from a complete source. `chain/freezer/v2/deferred/source_pruned` exposes this
+state. Ordinary
+V2 and transaction-index failures increment stage error gauges and enter a
+30-minute production retry backoff, preventing a persistent large-build error
+from repeating on every scheduler tick. Race tests block V2 mid-transform and
+prove tail mutation cannot complete until publication is safe; source-pruned
+tests prove the migrator is never invoked and V2 coverage is never fabricated.
+
+The P5.32 production gate must show zero V2 segment-build CPU at the existing
+source-pruned bounds, no repeated full-tail cold verification, no overlap or
+back-to-back burst among state snapshots, chain snapshots, tail reclaim, V2,
+and transaction indexing, and continued bounded cold/freezer lag. Compare
+transactions/s and transactions/core as the primary measures across changing
+block density, with blocks/s, process I/O, Pebble debt/stalls, heap, GC, and
+stage deferral counters as supporting evidence.
+
+#### P5.33: Ordered event collation and fused chain-freezer verification
+
+P5.32 removes avoidable planning and impossible V2 work, leaving the admitted
+chain snapshot transaction itself as the next bounded maintenance target. Two
+costs were mechanical rather than consensus work. Canonical event logs were
+already produced in strict block/transaction/log order, but were encoded into
+the generic sorting ETL collector, sorted or spilled, decoded, and encoded into
+the final segment. The final writer then issued one payload write plus one
+fixed-index `WriteAt` per row and decoded each freshly encoded log again to
+construct address/topic postings.
+
+The ChainDB path now validates and marshals each canonical log once, preserves
+that source order directly, and constructs fresh lookup postings while the
+protobuf value is live. It bypasses only the redundant sorting handoff; the
+generic `EventLogReader` path retains bounded external ETL because its caller
+does not promise canonical ordering. Direct and ETL paths share the same final
+writer, file format, validation rules, content addressing, and lookup-index
+construction. A byte-identity regression builds the same input through both
+paths and requires identical segment bytes and checksum. Payload writes and
+fixed-index writes are independently batched in approximately 1 MiB buffers,
+reducing per-log syscalls without changing offsets or crash-safe publication.
+
+On an Apple M1 Max with 10,000 synthetic logs, the current direct path had a
+20.5 ms median versus 22.8 ms for the sorting ETL path and used about 122,661
+allocations versus 192,471. Relative to the pre-change ETL writer's measured
+51.9--54.2 ms, the combined direct collation and batched emission reduced the
+median wall time by about 61%. Both current paths benefit from batched output;
+the remaining direct-path advantage measures the avoided ETL row ownership,
+ordering, and decode work rather than syscall batching alone.
+
+The chain-freezer lifecycle had a similar multiplicative verification cost.
+For every immutable range it first checked and decoded the freezer segment,
+then the accessor verifier checked and decoded it again with random row reads,
+then the chain-index verifier checked and decoded it again. The lifecycle now
+authenticates the freezer, index, and optional accessor independently, opens
+their verified fixed layouts, and performs one sequential freezer replay. Each
+validated block proves its exact accessor byte offset, block-hash lookup, and
+every transaction-hash lookup in the same callback; final block and transaction
+counts must match the index header. Standalone strict/offline verifiers remain
+unchanged, and a structurally valid stale accessor is explicitly rejected.
+
+For a 10,000-block zero-transaction segment, the legacy three-gate benchmark
+took 189--193 ms, allocated about 40.3 MiB, and made about 443,763 allocations.
+The fused gate took 92.3--93.2 ms, allocated about 13.3 MiB, and made about
+203,702 allocations: roughly 2.05x faster, 67% fewer allocated bytes, and 54%
+fewer allocations. The production gate must verify that event-log build and
+chain-freezer verification CPU/read bandwidth fall, no format or lookup parity
+errors occur, heavy-work leases shorten, and the recovered maintenance budget
+appears as improved sync transactions/second rather than additional overlapping
+optional work.
+
+#### P5.34: Content-addressed cold-chain verification proofs
+
+P5.33 removes multiplicative work inside one chain-freezer triple, but the
+lifecycle still recomputed the complete semantic proof for every immutable
+segment from genesis on every wake. At the default 5,000-block boundary a full
+mainnet history contains thousands of triples. Event-log coverage repeated the
+same pattern: it checked every event segment, then the index verifier checked
+and decoded those sources again to reconstruct segment-start postings. A
+bounded one-segment improvement therefore could not remove the cumulative
+prefix cost as cold coverage grew.
+
+The chain-freezer lifecycle now owns one process-local and durable proof cache
+for exact freezer/index/optional-accessor triples plus exact event-index/source
+sets. Durable records contain complete normalized `SegmentRef` values, including
+range, size, checksum, and content-addressed path, but deliberately exclude file
+timestamps. The first encounter executes the full P5.33 semantic proof. A
+same-process hit may bypass replay only when every file still has the recorded
+size and mtime. After restart, a durable hit must read and SHA-256 authenticate
+every exact object before promotion into the memory route. Any identity change,
+checksum mismatch, companion-set change, malformed JSON, unknown field, invalid
+range, or missing strong checksum falls back to or fails through the strict
+path; legacy local refs without strong metadata remain exhaustively verified
+and are never cached.
+
+Proof publication is one atomic temp-write, file sync, rename, and directory
+sync after a complete contiguous prefix, rather than one JSON rewrite per
+segment. Only records still active in the successfully verified manifest are
+retained. A partial or corrupt cache is advisory: startup reports its load
+error, discards every decoded record, runs the full gates, and replaces the
+file only after the whole prefix succeeds. Chain and event records share this
+transaction without allowing either retention pass to discard the other
+family. Tests cover full, memory, restart, same-size tampering, malformed-cache
+repair, and combined chain/event persistence.
+
+The event first-time route also folds segment validation and segment-start
+posting derivation into one source walk. It authenticates the file, validates
+the complete row/payload and embedded v2 lookup layout, and derives the global
+address/topic keys from those already validated maps. The standalone offline
+checker is unchanged. More importantly, V1 tail advancement remains outside
+the advisory lifecycle cache: immediately before destructive reclamation the
+manager independently checks chain-freezer, chain-index, and indexed event-log
+coverage, so an in-memory proof alone can never authorize deletion.
+
+On an Apple M1 Max, a 10,000-block zero-transaction freezer triple took about
+93--95 ms for the full joint semantic gate, 0.54--0.71 ms for restart checksum
+promotion, and 40--46 microseconds for a same-process identity hit. For 10,000
+synthetic event logs, the old two-stage prefix route took about 121--124 ms;
+the fused first-time semantic route took 63--65 ms, restart checksum promotion
+took 1.27--1.97 ms, and a memory hit took 41--67 microseconds. Absolute restart
+time remains proportional to physical cold bytes because SHA-256 reauthentication
+is intentional; steady lifecycle cost is proportional only to segment count and
+metadata stats.
+
+Production gauges expose freezer `memory_hits`, `persistent_hits`, `full`,
+`cache_entries`, and `load_errors` under
+`state/snapshot/chain_freezer/verification/`, with matching event counters under
+the `event_log/` child. The deployment gate must show one bounded full or
+restart-authentication transition followed by memory hits, no repeating
+genesis-to-head semantic CPU, no cache-load errors, shorter heavy-work leases,
+unchanged tail-prune safety, and improved transactions/second during dense
+historical import.
+
+#### P5.35: Single-source chain companions and trusted build handoff
+
+P5.34 removes repeated verification after a segment exists, but the production
+chain builder still performed the same redundant reads before publication. It
+first validated ancient rows and wrote the freezer, then reopened and decoded
+the complete freezer to discover accessor offsets, and reopened and decoded it
+again to collect block and transaction hashes for the index. The very next
+lifecycle pass also treated these locally derived companions as external input
+and ran a full semantic proof before the new durable cache record existed.
+
+The production builder now emits the freezer through a logical byte-counting
+buffer and reports each already validated row, its decoded block, and its exact
+pre-write offset to one observer. That observer appends the accessor offset and
+transfers the block/transaction hash keys into the bounded index ETL collector.
+After the freezer is synced and content-addressed, the accessor and index are
+finished directly from those writer facts. Standalone freezer, accessor, and
+index builders keep their independent reopen-and-verify behavior for offline or
+external callers. Any companion failure leaves the production manifest
+unchanged, so completed but unreferenced content-addressed objects cannot become
+visible chain coverage.
+
+The lifecycle carries this narrow local-build trust boundary into P5.34's proof
+cache. It accepts only the dedicated builder's exact one-freezer, one-accessor,
+one-index or one-event, one-event-index result, rejects duplicate, missing, or
+unexpected kinds, and requires every exact `SegmentRef` to remain active in the
+new production manifest. The chain writer has already validated every ancient
+row and derived both sidecars from that live value; the event writer has already
+validated canonical ChainDB logs and derived its fresh postings from the same
+values. These exact sets may therefore enter the same-process identity route
+without another semantic replay. A process restart still SHA-256 authenticates
+every object before promotion, external/pre-existing segments still require the
+full joint proof, and destructive V1 tail reclamation retains its independent
+strict gate.
+
+A byte-equivalence regression requires all three fused chain outputs to match
+the standalone builders in size, SHA-256, and contents, then runs the complete
+joint semantic verifier over the fused set. On an Apple M1 Max with 10,000
+zero-transaction blocks, five samples of the standalone multi-scan path took
+75.8--78.3 ms, allocated about 24.6 MiB, and made about 220,211 allocations.
+The fused path took 23.4--25.0 ms, allocated 8.4--8.9 MiB, and made about 90,149
+allocations: roughly 3.1x faster, about 65% fewer allocated bytes, and 59% fewer
+allocations. Lifecycle tests additionally require zero full proofs immediately
+after a trusted chain/event build, a memory hit on the next pass, and a checksum
+route after restart.
+
+New `trusted_recorded` gauges live beside the P5.34 chain and event verification
+counters. The production gate must show chain-freezer build CPU and read bytes
+fall, each newly published chain/event companion set increment the corresponding
+trusted counter, ordinary follow-up passes use memory identity, the first restart
+uses checksums rather than full replay, no cache-load or lookup-parity errors
+occur, and shorter heavy-work leases improve dense-window sync throughput.
+
+#### P5.36: Production cold-event trusted handoff
+
+The P5.35 trust route initially covered event files emitted by the
+chain-freezer snapshot pass, but production snap mode normally emits those
+files earlier in the cold-history Runner so event coverage advances in the same
+transaction as state history. The later chain-freezer pass therefore found the
+event prefix already present, treated it as pre-existing input, and performed a
+full P5.34 semantic proof. The direct event writer had already validated every
+canonical log and built the sidecar from its live address/topic postings, so
+this replay was redundant on the dominant production path.
+
+The process now constructs one chain/event verification cache and shares it
+between the cold-history Runner and chain-freezer lifecycle. After the Runner
+has atomically integrated history, event-log, and event-index refs, it requires
+the exact event pair to remain active in that new production manifest and only
+then records the same narrow trusted local-build proof used by P5.35. A missing,
+retired, changed, or unexpected output cannot enter the cache. The subsequent
+chain pass observes unchanged size/mtime and uses the memory route; after
+restart it still reads and SHA-256 authenticates both objects before promotion.
+External or legacy event segments retain the full semantic proof, and tail
+reclamation retains its independent strict gate.
+
+Regression coverage executes the real cold-history event build and requires
+`event_log/trusted_recorded=1`, `event_log/full=0`, then one memory hit in the
+following verification and one persistent checksum hit after reconstructing
+the cache. Based on the P5.34 10,000-log benchmark, this removes a 63--65 ms
+semantic replay from every freshly published event segment and replaces it with
+roughly 41--67 microseconds of same-process identity checks; the intentional
+restart route remains approximately 1.27--1.97 ms. The production gate must
+confirm those counter transitions on the actual cold-history path and measure
+the recovered lifecycle CPU/read bandwidth and sync transactions/second.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

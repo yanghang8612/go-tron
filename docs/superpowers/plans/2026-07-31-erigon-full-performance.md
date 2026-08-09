@@ -487,6 +487,71 @@
 - [x] Export stage-specific catch-up/resource deferral metrics and cover gate
   exclusion, bounded duty cycles, dynamic cancellation, lifecycle short-circuit,
   and transaction-index context propagation in regression tests.
+- [x] Profile the deployed P5.31 binary through a complete cold-snapshot pass
+  and separate transaction density, importer efficiency, Pebble compaction,
+  snapshot phases, and freezer phases from raw blocks/second.
+- [x] Load the authenticated production manifest once per cold-history pass and
+  replace per-section manifest filter/sort scans with one linear section-bloom
+  coverage reduction.
+- [x] Extend the shared heavy-work admission window to chain-freezer/event-log
+  cold builds and V1 tail reclamation, with a 15-second importer recovery
+  cooldown after jobs lasting at least 250 ms.
+- [x] Serialize V2 source reads/publication with external V1 tail advancement,
+  expose the mutable V1 source tail, and stop online promotion when snapshot
+  pruning has irreversibly moved that tail beyond V2 coverage.
+- [x] Add persistent-error backoff plus source-pruned/error/deferral metrics for
+  V2 and transaction-index maintenance, including race and recovery tests.
+- [x] Stream canonically ordered ChainDB event logs directly into the immutable
+  segment writer, retaining the generic sorting ETL path for external readers
+  and byte-equivalent output coverage.
+- [x] Batch event-log payload and fixed-index writes in bounded 1 MiB buffers,
+  and reuse already validated protobuf values to construct fresh lookup
+  postings without a second decode.
+- [x] Authenticate each chain-freezer/index/accessor triple once and prove both
+  sidecars during one sequential freezer replay, eliminating duplicate freezer
+  checksum/decode passes and accessor random rereads.
+- [x] Persist content-addressed chain-freezer and event-log companion proofs,
+  use size/mtime identity within one process, and require complete SHA-256
+  reauthentication before every restart promotion.
+- [x] Batch proof-cache publication once per verified prefix, reject malformed
+  or stale caches with an exhaustive fallback, and retain independent strict
+  verification at the destructive V1 tail-prune boundary.
+- [x] Fuse event-log segment validation with segment-start posting derivation so
+  first-time event-index verification no longer decodes every payload in a
+  separate pre-pass.
+- [x] Build each chain-freezer segment, exact row-offset accessor, and block/tx
+  hash index from one validated ancient-row stream instead of writing and then
+  reopening the freezer twice.
+- [x] Carry the trusted local chain/event build transaction into the persistent
+  companion-proof cache only for exact outputs active in the newly published
+  production manifest.
+- [x] Require byte-identical fused/standalone companion output, complete joint
+  semantic verification, same-process memory reuse, and restart SHA-256 reuse
+  in regression and allocation benchmarks.
+- [x] Share the chain/event verification cache with the production cold-history
+  Runner and register its freshly built event-log/index pair only after exact
+  manifest activation.
+- [x] Prove the cold-history event handoff performs no full semantic replay,
+  uses the memory route in the following lifecycle stage, and retains checksum
+  authentication after restart.
+- [ ] Run the P5.36 production gate and verify cold-history event publications
+  increment `event_log/trusted_recorded`, the following chain pass increments
+  `event_log/memory_hits` without `event_log/full`, and lifecycle CPU/read bytes
+  fall over a fixed dense window.
+- [ ] Run the P5.35 production gate and compare chain-freezer build CPU/read
+  bandwidth, trusted-record counters, full verification routes, heavy-work
+  lease duration, and sync transactions/second over a fixed dense window.
+- [ ] Run the P5.34 production gate and verify steady passes use memory-identity
+  routes, the first restart uses checksum routes, cache load errors remain zero,
+  full-prefix semantic CPU disappears, and destructive tail pruning still
+  rejects any changed cold object.
+- [ ] Run the P5.33 production gate and compare event-log build CPU/syscalls,
+  chain-freezer verification CPU/read bandwidth, lifecycle lease duration,
+  deferral counters, and sync transactions/second over a fixed dense window.
+- [ ] Run the P5.32 production gate and verify section-bloom CPU disappears,
+  V2 source-pruned attempts consume no segment-build CPU, optional jobs remain
+  spaced, snapshot/freezer coverage advances, and dense transactions/core plus
+  process read/write bandwidth improve over the P5.31 deployment.
 - [ ] Run the catch-up-safe verification production gate and compare Go heap,
   GC CPU, checksum-only restart time, in-flight cancellation metrics, and sync
   transactions/second against the 10 GiB live-verifier incident.

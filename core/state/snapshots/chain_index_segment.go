@@ -59,6 +59,84 @@ func ChainIndexSegmentPath(fromBlock, toBlock uint64) string {
 	return fmt.Sprintf("chain/index-%d-%d.idx", fromBlock, toBlock)
 }
 
+// buildChainFreezerCompanionSegmentsFromAncient constructs the canonical
+// freezer, row-offset accessor, and hash index from one validated ancient-row
+// stream. Standalone builders retain their independent source-verification
+// behavior for offline callers and externally supplied segments.
+func buildChainFreezerCompanionSegmentsFromAncient(reader rawdb.AncientReader, dir, freezerPath, accessorPath, indexPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) ([]SegmentRef, error) {
+	if reader == nil {
+		return nil, errors.New("snapshots: nil ancient reader")
+	}
+	expectedBlocks, err := chainFreezerRowCount(fromBlock, toBlock)
+	if err != nil {
+		return nil, err
+	}
+	maxInt := uint64(^uint(0) >> 1)
+	if expectedBlocks > maxInt {
+		return nil, fmt.Errorf("snapshots: chain-freezer companion rows %d exceed addressable memory", expectedBlocks)
+	}
+	collector, err := etl.NewCollector(opts.collectorOptions())
+	if err != nil {
+		return nil, fmt.Errorf("snapshots: create fused chain-index ETL collector: %w", err)
+	}
+	defer collector.Close()
+	offsets := make([]uint64, 0, int(expectedBlocks))
+	freezerRef, err := buildChainFreezerSegmentFromAncient(reader, dir, freezerPath, fromBlock, toBlock, func(row chainFreezerRow, verified validatedChainFreezerRow, rowOffset uint64) error {
+		offsets = append(offsets, rowOffset)
+		block := verified.block
+		if err := collector.PutOwned(chainIndexBlockETLKey(block.Hash(), row.blockNum), nil); err != nil {
+			return err
+		}
+		for i, tx := range block.Transactions() {
+			if uint64(i) > uint64(^uint32(0)) {
+				return fmt.Errorf("snapshots: block %d transaction index %d exceeds uint32", row.blockNum, i)
+			}
+			if err := collector.PutOwned(chainIndexTxETLKey(tx.Hash(), row.blockNum, uint32(i)), nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if uint64(len(offsets)) != expectedBlocks {
+		return nil, fmt.Errorf("snapshots: fused chain-freezer offsets %d, want %d", len(offsets), expectedBlocks)
+	}
+	if accessorPath == "" {
+		accessorPath = ChainFreezerAccessorSegmentPath(fromBlock, toBlock)
+	}
+	accessorRef := SegmentRef{
+		Dataset:   SegmentDatasetChainFreezer,
+		Kind:      SegmentChainFreezerAccessor,
+		FromTxNum: fromBlock,
+		ToTxNum:   toBlock,
+		Path:      accessorPath,
+	}
+	if err := validateSegmentRef(accessorRef); err != nil {
+		return nil, err
+	}
+	accessorRef, err = writeChainFreezerAccessorSegment(dir, accessorRef, offsets)
+	if err != nil {
+		return nil, err
+	}
+	if indexPath == "" {
+		indexPath = ChainIndexSegmentPath(fromBlock, toBlock)
+	}
+	indexRef := SegmentRef{
+		Dataset:   SegmentDatasetChainFreezer,
+		Kind:      SegmentChainIndex,
+		FromTxNum: fromBlock,
+		ToTxNum:   toBlock,
+		Path:      indexPath,
+	}
+	indexRef, err = writeChainIndexSegmentFromETL(dir, indexRef, collector, expectedBlocks)
+	if err != nil {
+		return nil, err
+	}
+	return []SegmentRef{freezerRef, accessorRef, indexRef}, nil
+}
+
 func BuildChainIndexSegmentFromChainFreezerSegment(dir string, freezerRef SegmentRef, relPath string) (SegmentRef, error) {
 	return BuildChainIndexSegmentFromChainFreezerSegmentWithOptions(dir, freezerRef, relPath, RestoreETLOptions{})
 }
