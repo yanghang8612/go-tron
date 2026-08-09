@@ -15,8 +15,11 @@ import (
 const splitReadKeyStackSize = 128
 
 const (
-	defaultCommitmentParentReaders   = 32
-	maxPooledCommitmentParentReaders = 64
+	// 17 foreground readers (16 nibble lanes + root) plus 16 independent
+	// read-ahead readers. A rotating branch generation doubles both sets for its
+	// frozen/legacy fallback keyspace.
+	defaultCommitmentParentReaders   = 33
+	maxPooledCommitmentParentReaders = 66
 )
 
 var splitReadKeyPool = sync.Pool{
@@ -144,6 +147,7 @@ type commitmentParentReadContext struct {
 	key       []byte
 	epoch     baseReadCacheEpoch
 	cacheable bool
+	prefetch  bool
 	fn        func(value []byte, stable bool) error
 	callback  func(value []byte) error
 
@@ -159,6 +163,11 @@ type commitmentParentReadContext struct {
 	windowCached    uint64
 	depthCached     [4]uint64
 	depthDurable    [4]uint64
+	prefetchPlanned uint64
+	prefetchOverlay uint64
+	prefetchCache   uint64
+	prefetchDurable uint64
+	prefetchHits    uint64
 }
 
 func newCommitmentParentReadContext() any {
@@ -185,6 +194,7 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.key = nil
 		ctx.epoch = baseReadCacheEpoch{}
 		ctx.cacheable = false
+		ctx.prefetch = false
 		ctx.fn = nil
 		ctx.overlayResolved = 0
 		ctx.cacheResolved = 0
@@ -195,6 +205,11 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.windowCached = 0
 		ctx.depthCached = [4]uint64{}
 		ctx.depthDurable = [4]uint64{}
+		ctx.prefetchPlanned = 0
+		ctx.prefetchOverlay = 0
+		ctx.prefetchCache = 0
+		ctx.prefetchDurable = 0
+		ctx.prefetchHits = 0
 		commitmentParentReadContextPool.Put(ctx)
 		contexts[i] = nil
 	}
@@ -203,7 +218,14 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 func (ctx *commitmentParentReadContext) consume(value []byte) error {
 	s := ctx.session
 	if ctx.cacheable && s.cache.version.Load() == s.cacheVersion {
-		s.cache.storeIfEpoch(ctx.key, value, ctx.epoch)
+		if ctx.prefetch {
+			s.cache.prefetchIfEpoch(ctx.key, value, ctx.epoch)
+		} else {
+			s.cache.storeIfEpoch(ctx.key, value, ctx.epoch)
+		}
+	}
+	if ctx.prefetch {
+		return nil
 	}
 	return ctx.fn(value, false)
 }
@@ -212,6 +234,7 @@ var _ pointread.CommitmentParentViewer = (*LayerView)(nil)
 var _ pointread.CommitmentParentView = (*commitmentParentView)(nil)
 var _ pointread.CommitmentParentSessioner = (*LayerView)(nil)
 var _ pointread.CommitmentParentSession = (*commitmentParentReadSession)(nil)
+var _ pointread.CommitmentParentPrefetchSession = (*commitmentParentReadSession)(nil)
 
 // NewCommitmentParentView holds the durable engine's lifecycle read lease for
 // one fold. It deliberately does not pin a Pebble snapshot or reuse iterators:
@@ -395,6 +418,80 @@ func (s *commitmentParentReadSession) ViewKeyParts(reader int, first, second []b
 	return s.view(reader, first, key, fn)
 }
 
+// PrefetchKeyParts resolves a predicted parent branch without decoding it. A
+// durable result is force-admitted through the bounded cache with a prefetch
+// marker; the foreground ViewKeyParts hit clears that marker and supplies the
+// ordinary CLOCK credit. Reader ownership and snapshot semantics are identical
+// to ViewKeyParts.
+func (s *commitmentParentReadSession) PrefetchKeyParts(reader int, first, second []byte) (bool, error) {
+	if s == nil || s.snapshot == nil || reader < 0 || reader >= len(s.cursors) {
+		return false, errors.New("blockbuffer: invalid commitment parent prefetch reader")
+	}
+	total := len(first) + len(second)
+	if total > splitReadKeyStackSize {
+		key := make([]byte, 0, total)
+		key = append(key, first...)
+		key = append(key, second...)
+		return s.prefetchKey(reader, first, key)
+	}
+	start := reader * splitReadKeyStackSize
+	key := (*s.keyScratch)[start : start+total]
+	n := copy(key, first)
+	copy(key[n:], second)
+	return s.prefetchKey(reader, first, key)
+}
+
+func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []byte) (bool, error) {
+	ctx := s.readContexts[reader]
+	ctx.prefetchPlanned++
+	keyHash := layerBloomHashBytes(key)
+	if _, found, tomb := lookupLayersNewest(s.inflight, key, keyHash); tomb {
+		ctx.prefetchOverlay++
+		return false, nil
+	} else if found {
+		ctx.prefetchOverlay++
+		return true, nil
+	}
+	if _, found, tomb := lookupLayersNewest(s.layers, key, keyHash); tomb {
+		ctx.prefetchOverlay++
+		return false, nil
+	} else if found {
+		ctx.prefetchOverlay++
+		return true, nil
+	}
+	cached, present, cacheEpoch, cacheable := s.cache.probeAtVersionForPrefetch(key, s.cacheVersion)
+	if cached {
+		ctx.prefetchCache++
+		return present, nil
+	}
+	cursor := s.cursors[reader]
+	if cursor == nil {
+		var err error
+		cursor, err = s.snapshot.NewCursor(keyPrefix)
+		if err != nil {
+			return false, err
+		}
+		s.cursors[reader] = cursor
+	}
+	ctx.key = key
+	ctx.epoch = cacheEpoch
+	ctx.cacheable = cacheable
+	ctx.prefetch = true
+	ctx.prefetchDurable++
+	found, err := cursor.View(key, ctx.callback)
+	if found {
+		ctx.prefetchHits++
+	}
+	ctx.key = nil
+	ctx.epoch = baseReadCacheEpoch{}
+	ctx.cacheable = false
+	ctx.prefetch = false
+	if err == nil && !found && cacheable && s.cache.version.Load() == s.cacheVersion {
+		s.cache.prefetchMissingIfEpoch(key, cacheEpoch)
+	}
+	return found, err
+}
+
 func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn func(value []byte, stable bool) error) (bool, error) {
 	ctx := s.readContexts[reader]
 	depth := len(key) - len(keyPrefix)
@@ -484,6 +581,7 @@ func (s *commitmentParentReadSession) Close() error {
 	s.inflight = nil
 	s.cache = nil
 	var overlayResolved, cacheResolved, durableReads, durableHits, trunkCached, trunkDurable, windowCached uint64
+	var prefetchPlanned, prefetchOverlay, prefetchCache, prefetchDurable, prefetchHits uint64
 	var depthCached, depthDurable [4]uint64
 	for _, ctx := range s.readContexts {
 		overlayResolved += ctx.overlayResolved
@@ -493,6 +591,11 @@ func (s *commitmentParentReadSession) Close() error {
 		trunkCached += ctx.trunkCached
 		trunkDurable += ctx.trunkDurable
 		windowCached += ctx.windowCached
+		prefetchPlanned += ctx.prefetchPlanned
+		prefetchOverlay += ctx.prefetchOverlay
+		prefetchCache += ctx.prefetchCache
+		prefetchDurable += ctx.prefetchDurable
+		prefetchHits += ctx.prefetchHits
 		for bucket := range depthCached {
 			depthCached[bucket] += ctx.depthCached[bucket]
 			depthDurable[bucket] += ctx.depthDurable[bucket]
@@ -505,6 +608,11 @@ func (s *commitmentParentReadSession) Close() error {
 	commitmentParentTrunkCacheCounter.Inc(int64(trunkCached))
 	commitmentParentTrunkDurableCounter.Inc(int64(trunkDurable))
 	commitmentParentWindowCacheCounter.Inc(int64(windowCached))
+	commitmentParentPrefetchPlannedCounter.Inc(int64(prefetchPlanned))
+	commitmentParentPrefetchOverlayCounter.Inc(int64(prefetchOverlay))
+	commitmentParentPrefetchCacheCounter.Inc(int64(prefetchCache))
+	commitmentParentPrefetchDurableCounter.Inc(int64(prefetchDurable))
+	commitmentParentPrefetchDurableHitCounter.Inc(int64(prefetchHits))
 	for bucket := range depthCached {
 		commitmentParentDepthCacheCounters[bucket].Inc(int64(depthCached[bucket]))
 		commitmentParentDepthDurableCounters[bucket].Inc(int64(depthDurable[bucket]))

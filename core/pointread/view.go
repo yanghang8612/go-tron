@@ -110,6 +110,15 @@ type CommitmentParentSession interface {
 	Close() error
 }
 
+// CommitmentParentPrefetchSession is the optional read-ahead extension of a
+// stable parent session. A caller assigns every reader index exclusively, just
+// like CommitmentParentSession. Implementations may retain a bounded copy of a
+// durable result, but must preserve the parent session's snapshot/version cut.
+// The returned bool reports whether the key existed in that cut.
+type CommitmentParentPrefetchSession interface {
+	PrefetchKeyParts(reader int, first, second []byte) (bool, error)
+}
+
 // CommitmentParentSessioner is discovered structurally by rawdb. Unsupported
 // stores simply omit this interface and retain ordinary point reads.
 type CommitmentParentSessioner interface {

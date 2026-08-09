@@ -175,6 +175,16 @@ func (s CommitmentBranchKeyspace) ViewParentInSession(session pointread.Commitme
 	return session.ViewKeyParts(reader, s.prefix(), prefix, fn)
 }
 
+// PrefetchParentInSession schedules one exact physical branch lookup through a
+// capable parent session. Callers retain the logical trie prefix while rawdb
+// owns the active legacy/delta schema prefix.
+func (s CommitmentBranchKeyspace) PrefetchParentInSession(session pointread.CommitmentParentPrefetchSession, reader int, prefix []byte) (bool, error) {
+	if session == nil {
+		return false, errors.New("rawdb: nil commitment parent prefetch session")
+	}
+	return session.PrefetchKeyParts(reader, s.prefix(), prefix)
+}
+
 // keyPartsWriter is an optional writer fast path for layered stores whose
 // native key is a string. It lets them join the fixed schema prefix and trie
 // path directly into their owned key instead of allocating an intermediate

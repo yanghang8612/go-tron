@@ -33,19 +33,34 @@ type OrderedCommitmentResult struct {
 // reads/writes (the production blockbuffer LayerView does). Close is valid only
 // after all returned result channels have completed.
 type OrderedCommitmentPipeline struct {
-	base      *rawdbBranchStore
-	lanes     [maxFoldNibbles]chan orderedCommitmentLaneTask
-	laneWG    sync.WaitGroup
-	failed    atomic.Pointer[error]
-	closed    atomic.Bool
-	inflight  atomic.Int64
-	closeOnce sync.Once
+	base          *rawdbBranchStore
+	lanes         [maxFoldNibbles]chan orderedCommitmentLaneTask
+	prefetchLanes [maxFoldNibbles]chan orderedCommitmentPrefetchTask
+	laneWG        sync.WaitGroup
+	prefetchWG    sync.WaitGroup
+	failed        atomic.Pointer[error]
+	closed        atomic.Bool
+	inflight      atomic.Int64
+	closeOnce     sync.Once
 }
 
 type orderedCommitmentLaneTask struct {
 	job *orderedCommitmentJob
 	nb  uint8
 	ops []op
+}
+
+type orderedCommitmentPrefetchTask struct {
+	store  *rawdbBranchStore
+	result *orderedCommitmentPrefetchResult
+	nb     uint8
+	depth  int
+	ops    []op
+}
+
+type orderedCommitmentPrefetchResult struct {
+	done   sync.WaitGroup
+	active bool
 }
 
 type orderedCommitmentJob struct {
@@ -59,7 +74,13 @@ type orderedCommitmentJob struct {
 	err          atomic.Pointer[error]
 	done         sync.WaitGroup
 	result       chan OrderedCommitmentResult
+	prefetch     [maxFoldNibbles]orderedCommitmentPrefetchResult
 }
+
+// CommitmentParentPrefetchDepth is the first trie level outside the cache's
+// fixed depth-0..4 trunk. Setting it to zero disables ordered-pipeline
+// read-ahead without changing commitment bytes or scheduling semantics.
+var CommitmentParentPrefetchDepth = 5
 
 // NewOrderedCommitmentPipeline verifies the currently visible persisted root
 // once, then seeds all 16 lane owners from that root branch. The production
@@ -113,10 +134,13 @@ func NewOrderedCommitmentPipelineWithRepair(db CommitmentDB, repair CommitmentSn
 	p := &OrderedCommitmentPipeline{base: store}
 	for nb := range p.lanes {
 		p.lanes[nb] = make(chan orderedCommitmentLaneTask, 16)
+		p.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 16)
 		var laneRoot BranchData
 		copyCommitmentLane(&laneRoot, &root, uint8(nb))
 		p.laneWG.Add(1)
 		go p.runLane(uint8(nb), laneRoot, p.lanes[nb])
+		p.prefetchWG.Add(1)
+		go p.runPrefetchLane(p.prefetchLanes[nb])
 	}
 	commitmentPipelineEnabledGauge.Update(1)
 	closeOnError = false
@@ -194,6 +218,27 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 		stats.parallelWorkers = uint64(job.activeSplits)
 	}
 
+	// Start one read-ahead stream per active lane before queueing the foreground
+	// work. With async commit depth >1 these goroutines warm the next block's
+	// first non-trunk branches while the persistent lane owners finish its
+	// predecessor. Every stream owns separate snapshot cursors and is joined by
+	// its lane before the session can close.
+	prefetchDepth := CommitmentParentPrefetchDepth
+	if prefetchDepth > 0 && job.store.supportsParentPrefetch() {
+		for nb := range p.lanes {
+			if counts[nb] == 0 {
+				continue
+			}
+			group := (*ops)[starts[nb] : starts[nb]+counts[nb]]
+			result := &job.prefetch[nb]
+			result.active = true
+			result.done.Add(1)
+			p.prefetchLanes[nb] <- orderedCommitmentPrefetchTask{
+				store: job.store, result: result, nb: uint8(nb), depth: prefetchDepth, ops: group,
+			}
+		}
+	}
+
 	job.done.Add(maxFoldNibbles)
 	observeCommitmentPipelineSubmit(p.inflight.Add(1))
 	for nb := range p.lanes {
@@ -214,6 +259,9 @@ func (p *OrderedCommitmentPipeline) runLane(nb uint8, root BranchData, tasks <-c
 	var path [pathLen]byte
 	for task := range tasks {
 		job := task.job
+		if prefetched := &job.prefetch[nb]; prefetched.active {
+			prefetched.done.Wait()
+		}
 		if failed := p.failed.Load(); failed != nil {
 			job.setError(*failed)
 			job.done.Done()
@@ -241,6 +289,19 @@ func (p *OrderedCommitmentPipeline) runLane(nb uint8, root BranchData, tasks <-c
 		}
 		copyCommitmentLane(&job.root, &root, nb)
 		job.done.Done()
+	}
+}
+
+func (p *OrderedCommitmentPipeline) runPrefetchLane(tasks <-chan orderedCommitmentPrefetchTask) {
+	defer p.prefetchWG.Done()
+	for task := range tasks {
+		// Read-ahead is speculative. An unused predicted row must never make a
+		// valid fold fail; the authoritative foreground cursor retries any branch
+		// it actually needs and reports the error through the normal pipeline.
+		if err := task.store.prefetchParentLane(task.nb, task.ops, task.depth); err != nil {
+			commitmentPipelinePrefetchErrorsCounter.Inc(1)
+		}
+		task.result.done.Done()
 	}
 }
 
@@ -357,7 +418,11 @@ func (p *OrderedCommitmentPipeline) Close() {
 		for _, lane := range p.lanes {
 			close(lane)
 		}
+		for _, lane := range p.prefetchLanes {
+			close(lane)
+		}
 		p.laneWG.Wait()
+		p.prefetchWG.Wait()
 		_ = p.base.close()
 		commitmentPipelineEnabledGauge.Update(0)
 	})

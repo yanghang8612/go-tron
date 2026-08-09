@@ -16,17 +16,23 @@ import (
 // BranchData.Encode and decoded with DecodeBranchData; the prefix is the
 // hex-trie nibble path (one byte per nibble, nil for the root).
 type rawdbBranchStore struct {
-	db                 CommitmentDB
-	keyspace           rawdb.CommitmentBranchKeyspace
-	cold               pointread.CommitmentBranchSnapshotView
-	coldOwned          bool
-	legacyFallback     bool
-	frozenKeyspace     rawdb.CommitmentBranchKeyspace
-	hasFrozenKeyspace  bool
-	ownedValue         bool
-	readParentBranches bool
-	parentView         pointread.CommitmentParentView
-	parentSession      pointread.CommitmentParentSession
+	db                         CommitmentDB
+	keyspace                   rawdb.CommitmentBranchKeyspace
+	cold                       pointread.CommitmentBranchSnapshotView
+	coldOwned                  bool
+	legacyFallback             bool
+	frozenKeyspace             rawdb.CommitmentBranchKeyspace
+	hasFrozenKeyspace          bool
+	ownedValue                 bool
+	readParentBranches         bool
+	parentView                 pointread.CommitmentParentView
+	parentSession              pointread.CommitmentParentSession
+	parentPrefetchBase         int
+	parentFallbackPrefetchBase int
+	// Each persistent prefetch lane exclusively owns one path scratch region.
+	// Keeping it on the fold store prevents the interface call from forcing a
+	// fresh pathLen-byte heap object for every block/lane plan.
+	parentPrefetchPaths [maxFoldNibbles][pathLen]byte
 	// One fold-scoped leaf-key arena per exclusive parent reader. Decoder output
 	// may be value-copied into sibling buffers, so arenas remain immutable until
 	// all parallel work and flushes finish and closeParentRead returns them.
@@ -463,10 +469,81 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 	return true, nil
 }
 
+// prefetchParentLane predicts the first branch outside the fixed commitment
+// cache trunk for every distinct path in one ordered lane. Ops are already
+// sorted by full hash, so equal prefixes are contiguous and deduplicate without
+// a map or heap allocation. The read-ahead does not decode values: the normal
+// fold remains the sole authority for branch kinds and mutations.
+func (s *rawdbBranchStore) prefetchParentLane(nb uint8, ops []op, depth int) error {
+	prefetch, ok := s.parentSession.(pointread.CommitmentParentPrefetchSession)
+	if !ok || len(ops) == 0 || depth <= 0 {
+		return nil
+	}
+	if depth > pathLen {
+		depth = pathLen
+	}
+	current := &s.parentPrefetchPaths[nb]
+	var previous [pathLen]byte
+	havePrevious := false
+	for i := range ops {
+		if pathNibble(ops[i].path, 0) != nb {
+			return fmt.Errorf("domains: commitment prefetch lane %d received path in lane %d", nb, pathNibble(ops[i].path, 0))
+		}
+		for d := 0; d < depth; d++ {
+			current[d] = pathNibble(ops[i].path, d)
+		}
+		same := havePrevious
+		for d := 0; same && d < depth; d++ {
+			same = current[d] == previous[d]
+		}
+		if same {
+			continue
+		}
+		copy(previous[:depth], current[:depth])
+		havePrevious = true
+
+		found, err := s.keyspace.PrefetchParentInSession(prefetch, s.parentPrefetchBase+int(nb), current[:depth])
+		if err != nil {
+			return err
+		}
+		if found || s.parentFallbackPrefetchBase < 0 {
+			continue
+		}
+		fallback := rawdb.LegacyCommitmentBranchKeyspace()
+		if s.hasFrozenKeyspace {
+			fallback = s.frozenKeyspace
+		}
+		if _, err := fallback.PrefetchParentInSession(prefetch, s.parentFallbackPrefetchBase+int(nb), current[:depth]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *rawdbBranchStore) supportsParentPrefetch() bool {
+	if s == nil {
+		return false
+	}
+	_, ok := s.parentSession.(pointread.CommitmentParentPrefetchSession)
+	return ok
+}
+
 func (s *rawdbBranchStore) beginParentRead() error {
-	readers := maxFoldNibbles + 1
-	if s.legacyFallback || s.hasFrozenKeyspace {
+	const ordinaryReaders = maxFoldNibbles + 1
+	hasFallback := s.legacyFallback || s.hasFrozenKeyspace
+	readers := ordinaryReaders
+	if hasFallback {
 		readers *= 2
+	}
+	// The 16 optional read-ahead cursors are disjoint from the foreground lane
+	// cursors. A future block may prefetch while the same lane is still folding
+	// its predecessor, and Pebble cursors are intentionally single-owner.
+	s.parentPrefetchBase = readers
+	readers += maxFoldNibbles
+	s.parentFallbackPrefetchBase = -1
+	if hasFallback {
+		s.parentFallbackPrefetchBase = readers
+		readers += maxFoldNibbles
 	}
 	session, err := rawdb.NewCommitmentParentReadSession(s.db, readers)
 	if err != nil {

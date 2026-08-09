@@ -8,8 +8,52 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
+
+type recordedCommitmentPrefetch struct {
+	reader int
+	first  []byte
+	second []byte
+}
+
+type recordingCommitmentParentSession struct {
+	prefetches []recordedCommitmentPrefetch
+}
+
+type countingCommitmentParentSession struct {
+	prefetches uint64
+}
+
+func (*recordingCommitmentParentSession) ViewKeyParts(int, []byte, []byte, func([]byte, bool) error) (bool, error) {
+	return false, nil
+}
+
+func (*recordingCommitmentParentSession) Close() error { return nil }
+
+func (s *recordingCommitmentParentSession) PrefetchKeyParts(reader int, first, second []byte) (bool, error) {
+	s.prefetches = append(s.prefetches, recordedCommitmentPrefetch{
+		reader: reader,
+		first:  append([]byte(nil), first...),
+		second: append([]byte(nil), second...),
+	})
+	return false, nil
+}
+
+var _ pointread.CommitmentParentSession = (*recordingCommitmentParentSession)(nil)
+var _ pointread.CommitmentParentPrefetchSession = (*recordingCommitmentParentSession)(nil)
+
+func (*countingCommitmentParentSession) ViewKeyParts(int, []byte, []byte, func([]byte, bool) error) (bool, error) {
+	return false, nil
+}
+
+func (*countingCommitmentParentSession) Close() error { return nil }
+
+func (s *countingCommitmentParentSession) PrefetchKeyParts(int, []byte, []byte) (bool, error) {
+	s.prefetches++
+	return false, nil
+}
 
 func TestOrderedCommitmentPipelineMatchesSequentialAcrossInflightBlocks(t *testing.T) {
 	seed := buildRandomPuts(rand.New(rand.NewSource(8181)), 2_000)
@@ -89,6 +133,115 @@ func TestOrderedCommitmentPipelineMatchesSequentialAcrossInflightBlocks(t *testi
 		if got := gotRows[key]; !bytes.Equal(got, want) {
 			t.Fatalf("branch %x = %x, want %x", key, got, want)
 		}
+	}
+}
+
+func TestCommitmentParentLanePrefetchesDistinctFirstNonTrunkPrefixes(t *testing.T) {
+	session := new(recordingCommitmentParentSession)
+	store := &rawdbBranchStore{
+		keyspace:                   rawdb.LegacyCommitmentBranchKeyspace(),
+		parentSession:              session,
+		parentPrefetchBase:         40,
+		parentFallbackPrefetchBase: -1,
+	}
+	ops := []op{
+		{path: common.Hash{0x12, 0x34, 0x50}},
+		{path: common.Hash{0x12, 0x34, 0x5f}}, // same first five nibbles
+		{path: common.Hash{0x12, 0x34, 0x60}},
+	}
+	if err := store.prefetchParentLane(1, ops, 5); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(session.prefetches); got != 2 {
+		t.Fatalf("prefetch calls = %d, want 2 distinct prefixes", got)
+	}
+	wantPrefixes := [][]byte{{1, 2, 3, 4, 5}, {1, 2, 3, 4, 6}}
+	for i, call := range session.prefetches {
+		if call.reader != 41 {
+			t.Fatalf("prefetch %d reader = %d, want 41", i, call.reader)
+		}
+		if !bytes.Equal(call.first, []byte(rawdb.CommitmentBranchKeyPrefix)) {
+			t.Fatalf("prefetch %d physical prefix = %x", i, call.first)
+		}
+		if !bytes.Equal(call.second, wantPrefixes[i]) {
+			t.Fatalf("prefetch %d trie prefix = %x, want %x", i, call.second, wantPrefixes[i])
+		}
+	}
+}
+
+func BenchmarkCommitmentParentLanePrefetchPlan(b *testing.B) {
+	const opCount = 1024
+	ops := make([]op, opCount)
+	for i := range ops {
+		prefix := i / 4 // four adjacent ops share each predicted depth-five row
+		ops[i].path[0] = 0x10 | byte(prefix>>12)
+		ops[i].path[1] = byte(prefix >> 4)
+		ops[i].path[2] = byte(prefix << 4)
+		ops[i].path[common.HashLength-1] = byte(i)
+	}
+	session := new(countingCommitmentParentSession)
+	store := &rawdbBranchStore{
+		keyspace:                   rawdb.LegacyCommitmentBranchKeyspace(),
+		parentSession:              session,
+		parentPrefetchBase:         40,
+		parentFallbackPrefetchBase: -1,
+	}
+	b.ReportAllocs()
+	b.ReportMetric(opCount/4, "physical_reads/op")
+	b.ResetTimer()
+	for b.Loop() {
+		if err := store.prefetchParentLane(1, ops, 5); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestOrderedCommitmentPipelinePrefetchPreservesPebbleRoot(t *testing.T) {
+	seed := buildRandomPuts(rand.New(rand.NewSource(8282)), 2_048)
+	referenceDB := rawdb.NewMemoryDatabase()
+	pebbleDB, err := rawdb.NewPebbleDB(t.TempDir(), 64, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pebbleDB.Close()
+	for _, db := range []CommitmentDB{referenceDB, pebbleDB} {
+		if _, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(db), seed); err != nil {
+			t.Fatalf("seed commitment: %v", err)
+		}
+	}
+
+	buf := blockbuffer.New(pebbleDB)
+	buf.SetMaxInflight(2)
+	// A smaller test trie branches densely at depth two. Mirror production's
+	// first-level-outside-trunk relationship without constructing millions of
+	// seed rows merely to make depth five dense.
+	buf.SetBaseReadCacheSizeWithTrunk(16<<20, 1, rawdb.CommitmentBranchKeyPrefix)
+	oldDepth := CommitmentParentPrefetchDepth
+	CommitmentParentPrefetchDepth = 2
+	defer func() { CommitmentParentPrefetchDepth = oldDepth }()
+	pipeline, err := NewOrderedCommitmentPipeline(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pipeline.Close()
+
+	updates := make([]rawdb.StateCommitmentUpdate, 0, 256)
+	for i := 0; i < 256; i++ {
+		entry := seed[(i*37+11)%len(seed)]
+		updates = append(updates, rawdb.NewStateCommitmentPut(entry.Key, []byte{0x82, byte(i)}))
+	}
+	want, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(referenceDB), updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf.BeginBlock(common.Hash{0x82}, 1)
+	handle, _ := buf.NewestInflight()
+	result := <-pipeline.Submit(buf.ViewLayer(handle), updates)
+	if result.Err != nil || result.Root != want {
+		t.Fatalf("prefetched pipeline root = %x err=%v, want %x", result.Root, result.Err, want)
+	}
+	if err := buf.CommitInflight(handle); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -428,3 +428,85 @@ func TestCommitmentParentReadSessionReaderScratchIsolated(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestCommitmentParentReadSessionPrefetchAdmitsPresentAndMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		present bool
+	}{
+		{name: "present", present: true},
+		{name: "missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disk, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer disk.Close()
+			prefix := []byte{5, 1, 2, 3, 4}
+			if tc.present {
+				if err := rawdb.WriteCommitmentBranch(disk, prefix, []byte("durable-branch")); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			buf := New(disk)
+			buf.SetBaseReadCacheSizeWithTrunk(1<<20, 4, rawdb.CommitmentBranchKeyPrefix)
+			buf.BeginBlock(bufHash(1), 1)
+			handle, _ := buf.NewestInflight()
+			session, err := buf.ViewLayer(handle).NewCommitmentParentReadSession(2)
+			if err != nil || session == nil {
+				t.Fatalf("NewCommitmentParentReadSession = (%T,%v)", session, err)
+			}
+			prefetch := session.(pointread.CommitmentParentPrefetchSession)
+			plannedBefore := commitmentParentPrefetchPlannedCounter.Snapshot().Count()
+			prefetchDurableBefore := commitmentParentPrefetchDurableCounter.Snapshot().Count()
+			prefetchHitsBefore := commitmentParentPrefetchDurableHitCounter.Snapshot().Count()
+			cacheBefore := commitmentParentCacheResolvedCounter.Snapshot().Count()
+			durableBefore := commitmentParentDurableReadsCounter.Snapshot().Count()
+			usefulBefore := baseReadCachePrefetchUsefulCounter.Snapshot().Count()
+			commitmentUsefulBefore := commitmentParentPrefetchUsefulCounter.Snapshot().Count()
+
+			found, err := rawdb.LegacyCommitmentBranchKeyspace().PrefetchParentInSession(prefetch, 0, prefix)
+			if err != nil || found != tc.present {
+				t.Fatalf("PrefetchParentInSession = (%v,%v), want (%v,nil)", found, err, tc.present)
+			}
+			got, found, stable := readSessionBranch(t, session, 1, prefix)
+			if found != tc.present {
+				t.Fatalf("foreground found = %v, want %v", found, tc.present)
+			}
+			if tc.present && (stable || !bytes.Equal(got, []byte("durable-branch"))) {
+				t.Fatalf("foreground branch = (%q,stable=%v)", got, stable)
+			}
+			if err := session.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			if got := commitmentParentPrefetchPlannedCounter.Snapshot().Count() - plannedBefore; got != 1 {
+				t.Fatalf("prefetch planned delta = %d, want 1", got)
+			}
+			if got := commitmentParentPrefetchDurableCounter.Snapshot().Count() - prefetchDurableBefore; got != 1 {
+				t.Fatalf("prefetch durable delta = %d, want 1", got)
+			}
+			wantDurableHits := int64(0)
+			if tc.present {
+				wantDurableHits = 1
+			}
+			if got := commitmentParentPrefetchDurableHitCounter.Snapshot().Count() - prefetchHitsBefore; got != wantDurableHits {
+				t.Fatalf("prefetch durable-hit delta = %d, want %d", got, wantDurableHits)
+			}
+			if got := commitmentParentCacheResolvedCounter.Snapshot().Count() - cacheBefore; got != 1 {
+				t.Fatalf("foreground cache delta = %d, want 1", got)
+			}
+			if got := commitmentParentDurableReadsCounter.Snapshot().Count() - durableBefore; got != 0 {
+				t.Fatalf("foreground durable delta = %d, want 0", got)
+			}
+			if got := baseReadCachePrefetchUsefulCounter.Snapshot().Count() - usefulBefore; got != 1 {
+				t.Fatalf("useful prefetch delta = %d, want 1", got)
+			}
+			if got := commitmentParentPrefetchUsefulCounter.Snapshot().Count() - commitmentUsefulBefore; got != 1 {
+				t.Fatalf("commitment useful prefetch delta = %d, want 1", got)
+			}
+		})
+	}
+}

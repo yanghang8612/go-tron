@@ -534,6 +534,16 @@
 - [x] Prove the cold-history event handoff performs no full semantic replay,
   uses the memory route in the following lifecycle stage, and retains checksum
   authentication after restart.
+- [x] Add depth-five ordered commitment parent read-ahead on sixteen persistent
+  lanes, deduplicated directly from hash-sorted ops with bounded cache
+  admission and no per-plan allocation.
+- [x] Preserve the parent snapshot/overlay/version cut with separate prefetch
+  cursors, keep speculative errors non-authoritative, and cover present,
+  missing, prefix-deduplication, Pebble-root, race, and allocation behavior.
+- [ ] Run the P5.37 production gate and compare foreground durable reads,
+  planned/useful prefetch ratio, `pread` delay, NVMe queue/utilization,
+  commitment and GC CPU, heap, and fixed-density transactions/s against the
+  deployed P5.36 sample.
 - [ ] Run the P5.36 production gate and verify cold-history event publications
   increment `event_log/trusted_recorded`, the following chain pass increments
   `event_log/memory_hits` without `event_log/full`, and lifecycle CPU/read bytes

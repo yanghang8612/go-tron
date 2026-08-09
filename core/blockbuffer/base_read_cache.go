@@ -270,15 +270,15 @@ func (e *baseReadCacheEntry) consumeReference() bool {
 	}
 }
 
-func (e *baseReadCacheEntry) recordUsefulPrefetch() {
+func (e *baseReadCacheEntry) recordUsefulPrefetch() bool {
 	for {
 		state := e.references.Load()
 		if state&baseReadCachePrefetchedReference == 0 {
-			return
+			return false
 		}
 		if e.references.CompareAndSwap(state, state&^baseReadCachePrefetchedReference) {
 			baseReadCachePrefetchUsefulCounter.Inc(1)
-			return
+			return true
 		}
 	}
 }
@@ -462,6 +462,34 @@ func (c *baseReadCache) getAtVersion(key []byte, maxVersion uint64) (value []byt
 	return nil, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true
 }
 
+// probeAtVersionForPrefetch is the ownership-free counterpart of
+// getAtVersion. A planned read-ahead only needs presence: it must neither expose
+// the resident value backing nor consume the prefetched marker that an eventual
+// foreground fold hit uses to measure usefulness.
+func (c *baseReadCache) probeAtVersionForPrefetch(key []byte, maxVersion uint64) (cached, present bool, epoch baseReadCacheEpoch, cacheable bool) {
+	if c == nil {
+		return false, false, baseReadCacheEpoch{}, false
+	}
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	s.mu.RLock()
+	e, ok := s.entries[string(key)]
+	if ok {
+		if e.version <= maxVersion {
+			e.reference()
+			present = e.value != nil
+			s.mu.RUnlock()
+			return true, present, baseReadCacheEpoch{}, false
+		}
+		s.mu.RUnlock()
+		// The resident row belongs to a flush newer than this session's Pebble
+		// snapshot. Read the pinned snapshot, but never replace the newer row.
+		return false, false, baseReadCacheEpoch{}, false
+	}
+	s.mu.RUnlock()
+	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
+	return false, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true
+}
+
 // viewWithEpoch is the callback counterpart of getWithEpoch. A hit in the
 // configured read-before-write namespace stays protected by the shard read
 // lock until fn returns and is reported as stable=false; other immutable cache
@@ -509,7 +537,9 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 	if ok {
 		if e.version <= maxVersion {
 			e.reference()
-			e.recordUsefulPrefetch()
+			if e.recordUsefulPrefetch() {
+				commitmentParentPrefetchUsefulCounter.Inc(1)
+			}
 			windowHit = e.window
 			if windowHit {
 				// Only the commitment-session path needs admission feedback. Keeping

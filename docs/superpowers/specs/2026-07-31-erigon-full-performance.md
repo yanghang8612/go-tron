@@ -4460,6 +4460,56 @@ restart route remains approximately 1.27--1.97 ms. The production gate must
 confirm those counter transitions on the actual cold-history path and measure
 the recovered lifecycle CPU/read bandwidth and sync transactions/second.
 
+#### P5.37: Ordered commitment parent read-ahead
+
+After deploying P5.36, a 45-second mainnet sample sustained about 92.7 blocks/s
+and an estimated 2,360 transactions/s at height 17.6 million. Cold maintenance
+had fallen to roughly 0.23 core, but commitment/blockbuffer stacks consumed
+31.9% of sampled CPU and Pebble/SST/VFS stacks consumed 30.4%. A five-second
+trace attributed 2.84 seconds of `pread` delay to the ordered commitment lanes'
+parent-branch cursor path. Live heap attribution also showed that the bounded
+base cache already retained hundreds of MiB of encoded branches, so simply
+raising the cache or admitting every scanned depth would trade I/O for more GC
+and resident memory without removing the serial pointer-chase.
+
+The ordered pipeline now predicts exactly one level per touched path: depth 5,
+the first branch outside the fixed depth-0..4 commitment trunk. Hash-sorted ops
+make equal five-nibble prefixes contiguous, so each lane deduplicates its plan
+with one linear, allocation-free pass. Sixteen persistent prefetch lanes run
+ahead of the sixteen authoritative fold lanes. With async commit depth greater
+than one, a future block can issue its bounded point reads while the same fold
+lane finishes the predecessor, increasing NVMe queue depth without scanning
+unrelated trie rows or creating per-block goroutines.
+
+This does not restore P1's rejected transaction/account per-block rollout: it
+runs only after commitment updates and hashes already exist, creates no new
+workers or extraction maps per block, and is absent when the backend cannot
+provide the snapshot-scoped parent-session extension.
+
+Prefetch cursors are separate single-owner readers in the same Pebble snapshot
+and immutable overlay topology as foreground cursors. A result enters the
+existing byte-bounded cache through the prefetch admission marker; an actual
+fold hit clears the marker and earns normal CLOCK credit, while unused rows
+remain first eviction candidates. Overlay values and tombstones still win
+before cache/durable state, and the cache version plus per-key invalidation
+epoch reject a fill racing a newer flush. Speculative I/O errors are counted but
+never fail a fold: the authoritative cursor retries a branch only if traversal
+actually needs it. Baseline delta misses may also prefetch the rotating
+frozen/legacy fallback with a distinct cursor.
+
+Regression coverage requires present and missing prefetches to eliminate the
+corresponding foreground durable lookup, counts a useful prefetch only on the
+real fold hit, verifies prefix deduplication and reader isolation, and compares
+the complete root against a sequential reference over a real Pebble snapshot.
+The 1,024-op/256-prefix planner benchmark on Apple M1 Max takes about 8.9
+microseconds with zero bytes and zero allocations per plan. Production exposes
+planned, overlay/cache-resolved, durable-read, durable-hit, useful-hit, and
+speculative-error counters. The deployment gate must compare foreground
+durable reads, prefetch usefulness, `pread` delay, NVMe queue/utilization,
+commitment CPU, GC CPU, heap, and fixed-density transactions/s; read-ahead is a
+loss if durable reads rise materially without a matching foreground-hit or
+throughput gain.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go
