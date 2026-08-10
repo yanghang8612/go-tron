@@ -23,6 +23,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/producer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawdbetl "github.com/tronprotocol/go-tron/core/rawdb/etl"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/state"
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
@@ -618,6 +619,18 @@ func gtron(ctx *cli.Context) error {
 		ancientReader = rawdb.NewFreezerReader(ancientStore)
 	}
 	stateSnapshotDir := snapshotDir(ctx, cfg.DataDir)
+	if snapshotETL.TempDir == "" {
+		stats, cleanupErr := rawdbetl.CleanupStaleCollectors(filepath.Join(stateSnapshotDir, "etl"))
+		if cleanupErr != nil {
+			log.Warn("Failed to clean stale snapshot ETL scratch", "dir", filepath.Join(stateSnapshotDir, "etl"), "err", cleanupErr)
+		} else if stats.Directories != 0 {
+			log.Info("Cleaned stale snapshot ETL scratch",
+				"dir", filepath.Join(stateSnapshotDir, "etl"),
+				"directories", stats.Directories,
+				"files", stats.Files,
+				"bytes", stats.Bytes)
+		}
+	}
 	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
 	if err != nil {
 		closeStores()

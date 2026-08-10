@@ -57,8 +57,8 @@ func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T)
 	if err != nil {
 		t.Fatalf("load manifest: %v", err)
 	}
-	if manifest.Progress == nil || manifest.Progress.HistoryBuildTxNum != 12 || manifest.Progress.HotPruneTxNum != 12 {
-		t.Fatalf("manifest progress = %+v, want history/hot-prune at 12", manifest.Progress)
+	if manifest.Progress == nil || manifest.Progress.HistoryBuildTxNum != 12 || manifest.Progress.HotPruneTxNum != 12 || manifest.Progress.HotPruneBlockNum != 1 {
+		t.Fatalf("manifest progress = %+v, want history/hot-prune at block 1 tx 12", manifest.Progress)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHistory); err != nil || !ok || got != 12 {
 		t.Fatalf("snapshot history stage = %d ok=%v err=%v, want 12", got, ok, err)

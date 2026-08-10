@@ -348,6 +348,64 @@ func TestWorkerSnapPrunesHotChangesWithSnapshotCoverageAndKeepsTxRange(t *testin
 	}
 }
 
+func TestWorkerSnapResumesHotHistoryPruneAfterPersistedBlockCursor(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	for _, blockNum := range []uint64{1, 2} {
+		writeSnapPruningChange(t, db, blockNum, blockNum*10, blockNum*10+2)
+	}
+
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 22, "history/state-domain-change-10-22.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 22, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := Worker{DB: db, Policy: SnapPolicy(1, 1), SnapshotDir: dir, MaxBlocks: 1}
+	first, err := worker.PruneTo(5)
+	if err != nil {
+		t.Fatalf("first snap prune: %v", err)
+	}
+	if first.DeletedDomainChangeBlocks != 1 {
+		t.Fatalf("first stats = %+v, want one deleted change block", first)
+	}
+	manifest, err := snapshots.LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Progress == nil || manifest.Progress.HotPruneBlockNum != 1 || manifest.Progress.HotPruneTxNum != 12 {
+		t.Fatalf("first progress = %+v, want block 1 tx 12", manifest.Progress)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || ok {
+		t.Fatalf("block 1 change survived ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 2, 1); err != nil || !ok {
+		t.Fatalf("block 2 change missing before resume ok=%v err=%v", ok, err)
+	}
+
+	second, err := (Worker{DB: db, Policy: SnapPolicy(1, 1), SnapshotDir: dir, MaxBlocks: 1}).PruneTo(5)
+	if err != nil {
+		t.Fatalf("resumed snap prune: %v", err)
+	}
+	if second.DeletedDomainChangeBlocks != 1 {
+		t.Fatalf("second stats = %+v, want next deleted change block", second)
+	}
+	manifest, err = snapshots.LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Progress == nil || manifest.Progress.HotPruneBlockNum != 2 || manifest.Progress.HotPruneTxNum != 22 {
+		t.Fatalf("second progress = %+v, want block 2 tx 22", manifest.Progress)
+	}
+	for _, blockNum := range []uint64{1, 2} {
+		if _, ok, err := rawdb.ReadStateTxRange(db, blockNum); err != nil || !ok {
+			t.Fatalf("snap tx range %d should remain ok=%v err=%v", blockNum, ok, err)
+		}
+	}
+}
+
 func TestWorkerArchivePrunesOnlyVerifiedColdDuplicateChanges(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()

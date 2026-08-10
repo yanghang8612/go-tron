@@ -13,13 +13,15 @@ type HotHistoryPruneDecision struct {
 }
 
 type HotHistoryPruneOptions struct {
-	MaxBlocks int
-	Decide    func(*rawdb.StateTxRange) (HotHistoryPruneDecision, error)
+	MaxBlocks  int
+	StartBlock uint64
+	Decide     func(*rawdb.StateTxRange) (HotHistoryPruneDecision, error)
 }
 
 type HotHistoryPruneStats struct {
 	DeletedTxRanges          int
 	DeletedHistoryBlocks     int
+	MaxDeletedHistoryBlock   uint64
 	MaxDeletedHistoryBlockTx uint64
 }
 
@@ -46,7 +48,7 @@ func (cfg DomainCfg) PruneHotHistory(db rawdb.StateKVLatestStore, opts HotHistor
 	}
 
 	var blocks []hotHistoryPruneBlock
-	if err := cfg.IterateHotHistoryTxRanges(db, func(row *rawdb.StateTxRange) (bool, error) {
+	visit := func(row *rawdb.StateTxRange) (bool, error) {
 		if row == nil {
 			return false, errors.New("snapshots: nil hot history tx range")
 		}
@@ -71,7 +73,16 @@ func (cfg DomainCfg) PruneHotHistory(db rawdb.StateKVLatestStore, opts HotHistor
 			return false, nil
 		}
 		return true, nil
-	}); err != nil {
+	}
+	var err error
+	if opts.StartBlock == 0 {
+		err = cfg.IterateHotHistoryTxRanges(db, visit)
+	} else if cfg.IterateHotHistoryTxRangeBlocks == nil {
+		return HotHistoryPruneStats{}, fmt.Errorf("snapshots: %s missing ranged hot history tx-range iterator", cfg.Dataset)
+	} else {
+		err = cfg.IterateHotHistoryTxRangeBlocks(db, opts.StartBlock, ^uint64(0), visit)
+	}
+	if err != nil {
 		return HotHistoryPruneStats{}, err
 	}
 
@@ -82,6 +93,7 @@ func (cfg DomainCfg) PruneHotHistory(db rawdb.StateKVLatestStore, opts HotHistor
 				return HotHistoryPruneStats{}, err
 			}
 			stats.DeletedHistoryBlocks++
+			stats.MaxDeletedHistoryBlock = max(stats.MaxDeletedHistoryBlock, block.blockNum)
 			stats.MaxDeletedHistoryBlockTx = max(stats.MaxDeletedHistoryBlockTx, block.endTxNum)
 		}
 		if block.deleteTxRange {

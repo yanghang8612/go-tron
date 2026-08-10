@@ -176,17 +176,16 @@ func domainStatePrunePolicy(cfg *params.ChainConfig, targetReorgWindow uint64) s
 // while the node is catching up. Full, blocks, and minimal modes delete hot
 // history solely by their local retention window, so pruning old rows remains
 // safe during sync and prevents a long replay from accumulating an unbounded
-// hot history backlog. Snap mode keeps the catch-up guard because snapshot
-// construction and pruning share substantial I/O and pruning is additionally
-// constrained by verified snapshot coverage. Archive uses the same guard: its
-// logical history remains complete in cold files, and cold construction must
-// not compete with a far-behind importer.
+// hot history backlog. Snap mode is also safe because it only deletes history
+// already covered by verified, published cold segments. Archive keeps the
+// catch-up guard so cold construction does not compete with a far-behind
+// importer unless the operator explicitly chooses snap mode.
 func domainStatePrunerMaxSyncLag(cfg *params.ChainConfig, policy statepruning.Policy) uint64 {
 	if cfg == nil {
 		return policy.HistoryWindow
 	}
 	switch cfg.EffectiveHistoryMode() {
-	case params.HistoryModeFull, params.HistoryModeBlocks, params.HistoryModeMinimal:
+	case params.HistoryModeFull, params.HistoryModeBlocks, params.HistoryModeMinimal, params.HistoryModeSnap:
 		return 0
 	default:
 		return policy.HistoryWindow

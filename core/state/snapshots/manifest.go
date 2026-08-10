@@ -95,6 +95,7 @@ type Progress struct {
 	AccessorBuildTxNum   uint64 `json:"accessorBuildTxNum,omitempty"`
 	CommitmentFlushTxNum uint64 `json:"commitmentFlushTxNum,omitempty"`
 	HotPruneTxNum        uint64 `json:"hotPruneTxNum,omitempty"`
+	HotPruneBlockNum     uint64 `json:"hotPruneBlockNum,omitempty"`
 }
 
 type SegmentRef struct {

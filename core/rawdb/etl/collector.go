@@ -115,7 +115,7 @@ func NewCollector(opts Options) (*Collector, error) {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp(parent, "gtron-etl-*")
+	dir, err := os.MkdirTemp(parent, collectorTempPrefix+"*")
 	if err != nil {
 		return nil, err
 	}

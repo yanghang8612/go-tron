@@ -542,6 +542,7 @@ func TestDomainStatePrunerMaxSyncLag(t *testing.T) {
 		params.HistoryModeFull,
 		params.HistoryModeBlocks,
 		params.HistoryModeMinimal,
+		params.HistoryModeSnap,
 	} {
 		t.Run(mode+" prunes while catching up", func(t *testing.T) {
 			cfg := &params.ChainConfig{HistoryMode: mode}
@@ -551,8 +552,8 @@ func TestDomainStatePrunerMaxSyncLag(t *testing.T) {
 		})
 	}
 
-	t.Run("snap retains catch-up guard", func(t *testing.T) {
-		cfg := &params.ChainConfig{HistoryMode: params.HistoryModeSnap}
+	t.Run("archive retains catch-up guard", func(t *testing.T) {
+		cfg := &params.ChainConfig{HistoryMode: params.HistoryModeArchive}
 		if got := domainStatePrunerMaxSyncLag(cfg, policy); got != policy.HistoryWindow {
 			t.Fatalf("max sync lag = %d, want %d", got, policy.HistoryWindow)
 		}

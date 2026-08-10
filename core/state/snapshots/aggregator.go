@@ -491,7 +491,7 @@ func (a *Aggregator) integrateWithManifest(visibleStart, visibleEnd uint64, refs
 	return manifest, nil
 }
 
-func UpdateHotPruneProgress(dir string, txNum uint64) error {
+func UpdateHotPruneProgress(dir string, blockNum, txNum uint64) error {
 	if dir == "" {
 		return nil
 	}
@@ -507,6 +507,7 @@ func UpdateHotPruneProgress(dir string, txNum uint64) error {
 		progress = new(Progress)
 	}
 	progress.HotPruneTxNum = max(progress.HotPruneTxNum, txNum)
+	progress.HotPruneBlockNum = max(progress.HotPruneBlockNum, blockNum)
 	manifest.Progress = progress
 	return PublishManifest(dir, manifest)
 }
@@ -691,6 +692,7 @@ func mergeProgress(base, update *Progress) *Progress {
 	out.AccessorBuildTxNum = max(out.AccessorBuildTxNum, update.AccessorBuildTxNum)
 	out.CommitmentFlushTxNum = max(out.CommitmentFlushTxNum, update.CommitmentFlushTxNum)
 	out.HotPruneTxNum = max(out.HotPruneTxNum, update.HotPruneTxNum)
+	out.HotPruneBlockNum = max(out.HotPruneBlockNum, update.HotPruneBlockNum)
 	return &out
 }
 

@@ -166,8 +166,13 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 		return Stats{}, err
 	}
 	historyStore, flushHistory := newPruneBatchStore(w.DB)
+	hotPruneStartBlock, err := w.hotHistoryPruneStartBlock()
+	if err != nil {
+		return Stats{}, err
+	}
 	hotStats, err := historyCfg.PruneHotHistory(historyStore, snapshots.HotHistoryPruneOptions{
-		MaxBlocks: w.MaxBlocks,
+		MaxBlocks:  w.MaxBlocks,
+		StartBlock: hotPruneStartBlock,
 		Decide: func(row *rawdb.StateTxRange) (snapshots.HotHistoryPruneDecision, error) {
 			if err := ctx.Err(); err != nil {
 				return snapshots.HotHistoryPruneDecision{}, err
@@ -196,7 +201,7 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	stats.DeletedTxRanges = hotStats.DeletedTxRanges
 	stats.DeletedDomainChangeBlocks = hotStats.DeletedHistoryBlocks
 	if hotStats.MaxDeletedHistoryBlockTx != 0 && w.SnapshotDir != "" {
-		if err := snapshots.UpdateHotPruneProgress(w.SnapshotDir, hotStats.MaxDeletedHistoryBlockTx); err != nil {
+		if err := snapshots.UpdateHotPruneProgress(w.SnapshotDir, hotStats.MaxDeletedHistoryBlock, hotStats.MaxDeletedHistoryBlockTx); err != nil {
 			return Stats{}, err
 		}
 		if err := newRawDBStageProgressStore(w.DB).Write(rawdb.StageSnapshotHotPrune, hotStats.MaxDeletedHistoryBlockTx); err != nil {
@@ -249,6 +254,26 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 		return Stats{}, fmt.Errorf("pruning: write snapshot/prune stage progress: %w", err)
 	}
 	return stats, nil
+}
+
+func (w Worker) hotHistoryPruneStartBlock() (uint64, error) {
+	if (w.Policy.Mode != ModeSnap && w.Policy.Mode != ModeArchive) || w.SnapshotDir == "" {
+		return 0, nil
+	}
+	manifest, err := snapshots.LoadProductionManifest(w.SnapshotDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if manifest.Progress == nil || manifest.Progress.HotPruneBlockNum == 0 {
+		return 0, nil
+	}
+	if manifest.Progress.HotPruneBlockNum == ^uint64(0) {
+		return manifest.Progress.HotPruneBlockNum, nil
+	}
+	return manifest.Progress.HotPruneBlockNum + 1, nil
 }
 
 func (w Worker) writeSnapshotPruneProgress(headNum uint64) error {
