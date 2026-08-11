@@ -1494,6 +1494,85 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	}
 }
 
+func TestSnapshotEventLogSpaceBenchmarkCmdIsReadOnlyAndDoesNotOpenChaindata(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	block, txHash, _ := snapshotCmdBlockWithTx(t, 1)
+	address := []byte{0x41, 0x22, 0x23, 0x24, 0x25}
+	topic := common.Hash{0x91}
+	if err := rawdb.WriteBlock(source, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(source, 1, []*corepb.TransactionInfo{{
+		Id:          txHash[:],
+		BlockNumber: 1,
+		Log: []*corepb.TransactionInfo_Log{{
+			Address: address,
+			Topics:  [][]byte{topic[:]},
+			Data:    bytes.Repeat([]byte{0x55}, 256),
+		}},
+	}}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	result, err := statesnapshots.NewAggregator(snapshotDir).BuildEventLogs(source, 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogs: %v", err)
+	}
+	manifestBefore, err := os.ReadFile(filepath.Join(snapshotDir, statesnapshots.ManifestFile))
+	if err != nil {
+		t.Fatalf("read manifest before: %v", err)
+	}
+	segmentBefore := make(map[string][]byte)
+	for _, ref := range result.Manifest.Segments {
+		segmentBefore[ref.Path], err = os.ReadFile(filepath.Join(snapshotDir, ref.Path))
+		if err != nil {
+			t.Fatalf("read segment %s before: %v", ref.Path, err)
+		}
+	}
+
+	locked, err := openPebbleDB(makeSnapshotRestoreTestContext(t, nil), chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("open locked chaindata: %v", err)
+	}
+	defer locked.Close()
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.event-log.sample-segments", "1",
+	})
+	output, err := captureDBCmdStdout(t, func() error {
+		return snapshotEventLogSpaceBenchmarkCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("snapshotEventLogSpaceBenchmarkCmd with locked chaindata: %v", err)
+	}
+	var inspection statesnapshots.EventLogSpaceInspection
+	if err := json.Unmarshal([]byte(output), &inspection); err != nil {
+		t.Fatalf("decode benchmark JSON: %v\n%s", err, output)
+	}
+	if inspection.SampledEventSegments != 1 || inspection.Duplicates.Rows != 1 || len(inspection.Candidates) != 6 {
+		t.Fatalf("inspection = %+v", inspection)
+	}
+	manifestAfter, err := os.ReadFile(filepath.Join(snapshotDir, statesnapshots.ManifestFile))
+	if err != nil {
+		t.Fatalf("read manifest after: %v", err)
+	}
+	if !bytes.Equal(manifestBefore, manifestAfter) {
+		t.Fatal("event-log space benchmark modified manifest")
+	}
+	for path, before := range segmentBefore {
+		after, err := os.ReadFile(filepath.Join(snapshotDir, path))
+		if err != nil {
+			t.Fatalf("read segment %s after: %v", path, err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Fatalf("event-log space benchmark modified %s", path)
+		}
+	}
+}
+
 func TestSnapshotBuildEventLogsCmdFromColdRematerializesSegment(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "datadir")
@@ -2858,6 +2937,7 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		snapshotETLTempDirFlag,
 		snapshotETLBufferMiBFlag,
 		snapshotETLBatchMiBFlag,
+		snapshotEventLogSampleSegmentsFlag,
 	}
 	set := flag.NewFlagSet("snapshot-restore-test", flag.ContinueOnError)
 	for _, f := range app.Flags {

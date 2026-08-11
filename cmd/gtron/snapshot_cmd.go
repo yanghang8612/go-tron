@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -127,6 +128,11 @@ var (
 		Name:    "snapshot.etl.batch",
 		Usage:   "Snapshot ETL output batch size in MiB (0 = default)",
 		EnvVars: []string{"GTRON_SNAPSHOT_ETL_BATCH"},
+	}
+	snapshotEventLogSampleSegmentsFlag = &cli.Uint64Flag{
+		Name:  "snapshot.event-log.sample-segments",
+		Usage: "Evenly sample this many whole active event-log segments (0 = scan all)",
+		Value: 16,
 	}
 )
 
@@ -361,6 +367,16 @@ func snapshotCommand() *cli.Command {
 					snapshotDirFlag,
 				},
 				Action: snapshotEventLogIndexStatsCmd,
+			},
+			{
+				Name:  "event-log-space-benchmark",
+				Usage: "Inspect active event-log physical layout and simulate space candidates without opening chaindata",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					snapshotDirFlag,
+					snapshotEventLogSampleSegmentsFlag,
+				},
+				Action: snapshotEventLogSpaceBenchmarkCmd,
 			},
 			{
 				Name:  "prune-chain-lookups",
@@ -1467,6 +1483,21 @@ func snapshotEventLogIndexStatsCmd(ctx *cli.Context) error {
 		)
 	}
 	return nil
+}
+
+func snapshotEventLogSpaceBenchmarkCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	dir := snapshotDir(ctx, cfg.DataDir)
+	inspection, err := statesnapshots.InspectEventLogSpace(dir, statesnapshots.EventLogSpaceInspectOptions{
+		SampleSegments: ctx.Uint64("snapshot.event-log.sample-segments"),
+		Context:        contextOrBackground(ctx),
+	})
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(inspection)
 }
 
 func snapshotRestoreVerificationOptions(db ethdb.KeyValueStore) statesnapshots.RestoreVerifiedSnapshotOptions {
