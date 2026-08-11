@@ -398,7 +398,7 @@ func validateEventLogV3SourceRow(row EventLog, fromBlock, toBlock uint64) error 
 	if row.Log == nil {
 		return fmt.Errorf("snapshots: V3 source row block=%d tx=%d log=%d has nil protobuf", row.BlockNum, row.TxIndex, row.LogIndex)
 	}
-	if !bytes.Equal(row.Log.GetAddress(), row.Address[:]) {
+	if eventLogAddress(row.Log.GetAddress()) != row.Address {
 		return fmt.Errorf("snapshots: V3 source row block=%d tx=%d log=%d address mismatch", row.BlockNum, row.TxIndex, row.LogIndex)
 	}
 	for _, topic := range row.Log.GetTopics() {

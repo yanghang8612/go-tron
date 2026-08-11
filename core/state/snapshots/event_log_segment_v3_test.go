@@ -116,6 +116,29 @@ func TestEventLogV3AllowsAddressOnlyLogWithEmptyStrippedPayload(t *testing.T) {
 	}
 }
 
+func TestEventLogV3NormalizesTwentyByteTVMAddress(t *testing.T) {
+	dir := t.TempDir()
+	rawAddress := bytes.Repeat([]byte{0x73}, common.AddressLength-1)
+	address := common.BytesToAddress(rawAddress)
+	row := EventLog{BlockNum: 1, TxHash: common.Hash{1}, BlockHash: common.Hash{2}, Address: address, Log: &corepb.TransactionInfo_Log{Address: rawAddress, Data: []byte{1}}}
+	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogV3SegmentFromReader 20-byte address: %v", err)
+	}
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seg.Close()
+	var got EventLog
+	if err := seg.IterateLogs(1, 1, EventLogFilter{}, func(row EventLog) (bool, error) { got = row; return true, nil }); err != nil {
+		t.Fatalf("IterateLogs 20-byte address: %v", err)
+	}
+	if got.Address != address || eventLogAddress(got.Log.GetAddress()) != address {
+		t.Fatalf("normalized address = %x payload=%x, want %x", got.Address, got.Log.GetAddress(), address)
+	}
+}
+
 func TestMigrateEventLogsV3BuildOnlyThenPublish(t *testing.T) {
 	dir := t.TempDir()
 	addr := common.BytesToAddress(eventLogTestAddress(0x51))
