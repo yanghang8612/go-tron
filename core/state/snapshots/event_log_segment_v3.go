@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -29,7 +30,18 @@ const (
 	eventLogV3LookupFrameRows  = 1024
 	eventLogV3LookupFrameEntry = 32
 	eventLogV3LookupKeyTail    = 28
+
+	// Lookup V2 keeps the V3 outer segment format while replacing the fixed
+	// key and per-1024-posting directories with front-coded key blocks and one
+	// delta-varint stream per key. The marker is local to each lookup section,
+	// so readers remain compatible with already-published V3 files.
+	eventLogV3LookupV2HeaderSize = 56
+	eventLogV3LookupV2BlockKeys  = 128
+	eventLogV3LookupV2BlockTail  = 24
+	eventLogV3LookupV2StoredRaw  = uint32(1 << 31)
 )
+
+var eventLogV3LookupV2Magic = [8]byte{'g', 't', 'e', 'v', 'l', 'i', '2', '\n'}
 
 type eventLogV3Header struct {
 	fromBlock, toBlock, rowCount           uint64
@@ -57,6 +69,9 @@ type eventLogV3Reader struct {
 	cachePayload      uint64
 	cachePayloadBytes []byte
 	cachePayloadValid bool
+	cacheAddressBlock uint64
+	cacheAddressKeys  [][]byte
+	cacheAddressValid bool
 }
 
 type eventLogV3Frame struct {
@@ -83,6 +98,7 @@ type eventLogV3LookupKey struct {
 	firstFrame   uint64
 	frameCount   uint32
 	postingCount uint64
+	checksum     uint32
 }
 
 type eventLogV3LookupFrame struct {
@@ -100,6 +116,34 @@ type eventLogV3LookupBuild struct {
 	data    *os.File
 	name    string
 	dataLen uint64
+	keyData *os.File
+	keyName string
+	keyLen  uint64
+	blocks  []eventLogV3LookupV2Block
+}
+
+type eventLogV3LookupV2Block struct {
+	firstKey []byte
+	dataOff  uint64
+	dataLen  uint32
+	rawLen   uint32
+	checksum uint32
+	keyCount uint32
+}
+
+type eventLogV3LookupV2Header struct {
+	keySize, blockKeys      uint32
+	keyCount, blockCount    uint64
+	blockDirLen, keyDataLen uint64
+	postingDataLen          uint64
+}
+
+type eventLogV3LookupV2Record struct {
+	key          []byte
+	postingOff   uint64
+	postingLen   uint64
+	postingCount uint64
+	checksum     uint32
 }
 
 type eventLogV3ChainReader struct {
@@ -227,7 +271,11 @@ func InspectEventLogV3Physical(dir string, ref SegmentRef) (EventLogV3PhysicalSt
 	// One row frame and one payload frame plus their directory entries and
 	// direct block/tx/address dictionary reads. Filesystem block amplification
 	// is intentionally not guessed here.
-	out.MaxPointReadBytes = eventLogV3FrameDirEntry + out.MaxRowFrameReadBytes + (8 + common.HashLength) + common.HashLength + (eventLogAddressLookupKeySize + eventLogV3LookupKeyTail) + eventLogV3FrameDirEntry + out.MaxPayloadFrameRead
+	addressDictionaryRead, err := maxEventLogV3LookupKeyAtRead(seg.file, h.addressIndexOffset, h.addressIndexLength, seg.size, eventLogAddressLookupKeySize)
+	if err != nil {
+		return EventLogV3PhysicalStats{}, err
+	}
+	out.MaxPointReadBytes = eventLogV3FrameDirEntry + out.MaxRowFrameReadBytes + (8 + common.HashLength) + common.HashLength + addressDictionaryRead + eventLogV3FrameDirEntry + out.MaxPayloadFrameRead
 	out.MaxAddressLookupRead, err = maxEventLogV3LookupRead(seg.file, h.addressIndexOffset, h.addressIndexLength, seg.size, eventLogAddressLookupKeySize)
 	if err != nil {
 		return EventLogV3PhysicalStats{}, err
@@ -240,7 +288,38 @@ func InspectEventLogV3Physical(dir string, ref SegmentRef) (EventLogV3PhysicalSt
 	return out, nil
 }
 
+func maxEventLogV3LookupKeyAtRead(file io.ReaderAt, offset, length, size uint64, keySize int) (uint64, error) {
+	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	if err != nil {
+		return 0, err
+	}
+	if !compact {
+		return uint64(keySize + eventLogV3LookupKeyTail), nil
+	}
+	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+	if err != nil {
+		return 0, err
+	}
+	entrySize := uint64(keySize + eventLogV3LookupV2BlockTail)
+	var maximum uint64
+	for i := uint64(0); i < h.blockCount; i++ {
+		block, err := readEventLogV3LookupV2Block(file, offset, h, i)
+		if err != nil {
+			return 0, err
+		}
+		maximum = max(maximum, entrySize+uint64(block.dataLen&^eventLogV3LookupV2StoredRaw))
+	}
+	return maximum, nil
+}
+
 func maxEventLogV3LookupRead(file io.ReaderAt, offset, length, size uint64, keySize int) (uint64, error) {
+	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	if err != nil {
+		return 0, err
+	}
+	if compact {
+		return maxEventLogV3LookupV2Read(file, offset, length, size, keySize)
+	}
 	keys, frames, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
 	if err != nil {
 		return 0, err
@@ -275,6 +354,33 @@ func maxEventLogV3LookupRead(file io.ReaderAt, offset, length, size uint64, keyS
 	return maximum, nil
 }
 
+func maxEventLogV3LookupV2Read(file io.ReaderAt, offset, length, size uint64, keySize int) (uint64, error) {
+	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+	if err != nil {
+		return 0, err
+	}
+	entrySize := uint64(keySize + eventLogV3LookupV2BlockTail)
+	var searchReads uint64
+	for n := h.blockCount; n > 0; n >>= 1 {
+		searchReads += entrySize
+	}
+	var maximum uint64
+	for i := uint64(0); i < h.blockCount; i++ {
+		block, err := readEventLogV3LookupV2Block(file, offset, h, i)
+		if err != nil {
+			return 0, err
+		}
+		records, storedBytes, err := readEventLogV3LookupV2Records(file, offset, length, h, block)
+		if err != nil {
+			return 0, err
+		}
+		for _, record := range records {
+			maximum = max(maximum, searchReads+entrySize+storedBytes+record.postingLen)
+		}
+	}
+	return maximum, nil
+}
+
 func (b *eventLogV3LookupBuild) close() {
 	if b == nil {
 		return
@@ -285,9 +391,18 @@ func (b *eventLogV3LookupBuild) close() {
 	if b.name != "" {
 		_ = os.Remove(b.name)
 	}
+	if b.keyData != nil {
+		_ = b.keyData.Close()
+	}
+	if b.keyName != "" {
+		_ = os.Remove(b.keyName)
+	}
 }
 
 func (b *eventLogV3LookupBuild) length() uint64 {
+	if b.keyData != nil {
+		return eventLogV3LookupV2HeaderSize + uint64(len(b.blocks))*(b.keySize+eventLogV3LookupV2BlockTail) + b.keyLen + b.dataLen
+	}
 	return eventLogV3LookupHeaderSize + uint64(len(b.keys))*(b.keySize+eventLogV3LookupKeyTail) + uint64(len(b.frames))*eventLogV3LookupFrameEntry + b.dataLen
 }
 
@@ -651,7 +766,15 @@ func buildEventLogV3Lookup(dir, base string, keySize int, postings map[string][]
 	if err != nil {
 		return nil, err
 	}
-	b := &eventLogV3LookupBuild{keySize: uint64(keySize), data: data, name: name}
+	keyData, keyName, err := createStateDomainChangeBinaryTempFileInDir(dir, base+"-keys")
+	if err != nil {
+		_ = data.Close()
+		_ = os.Remove(name)
+		return nil, err
+	}
+	b := &eventLogV3LookupBuild{keySize: uint64(keySize), data: data, name: name, keyData: keyData, keyName: keyName}
+	postingWriter := bufio.NewWriterSize(data, 1<<20)
+	var postingOffset uint64
 	keys := make([]string, 0, len(postings))
 	for key := range postings {
 		if len(key) != keySize {
@@ -663,31 +786,32 @@ func buildEventLogV3Lookup(dir, base string, keySize int, postings map[string][]
 	sort.Strings(keys)
 	for _, key := range keys {
 		values := postings[key]
-		entry := eventLogV3LookupKey{key: []byte(key), firstFrame: uint64(len(b.frames)), postingCount: uint64(len(values))}
-		for start := 0; start < len(values); start += eventLogV3LookupFrameRows {
-			end := min(start+eventLogV3LookupFrameRows, len(values))
-			chunk := values[start:end]
-			raw := make([]byte, 0, len(chunk)*2)
-			for i, value := range chunk {
-				if i == 0 {
-					raw = binary.AppendUvarint(raw, value)
-				} else {
-					raw = binary.AppendUvarint(raw, value-chunk[i-1])
+		raw := make([]byte, 0, len(values)*2)
+		for i, value := range values {
+			if i == 0 {
+				raw = binary.AppendUvarint(raw, value)
+			} else {
+				if value <= values[i-1] {
+					b.close()
+					return nil, fmt.Errorf("snapshots: V3 lookup postings for %x are not strictly ordered", []byte(key))
 				}
+				raw = binary.AppendUvarint(raw, value-values[i-1])
 			}
-			off, err := data.Seek(0, io.SeekCurrent)
-			if err != nil {
-				b.close()
-				return nil, err
-			}
-			if _, err := data.Write(raw); err != nil {
-				b.close()
-				return nil, err
-			}
-			b.frames = append(b.frames, eventLogV3LookupFrame{dataOff: uint64(off), dataLen: uint32(len(raw)), count: uint32(len(chunk)), first: chunk[0], checksum: crc32.ChecksumIEEE(raw)})
-			entry.frameCount++
 		}
-		b.keys = append(b.keys, entry)
+		if uint64(len(raw)) > math.MaxUint32 {
+			b.close()
+			return nil, errors.New("snapshots: V3 lookup posting stream exceeds uint32 length limit")
+		}
+		if _, err := postingWriter.Write(raw); err != nil {
+			b.close()
+			return nil, err
+		}
+		b.keys = append(b.keys, eventLogV3LookupKey{key: []byte(key), firstFrame: postingOffset, frameCount: uint32(len(raw)), postingCount: uint64(len(values)), checksum: crc32.ChecksumIEEE(raw)})
+		postingOffset += uint64(len(raw))
+	}
+	if err := postingWriter.Flush(); err != nil {
+		b.close()
+		return nil, err
 	}
 	stat, err := data.Stat()
 	if err != nil {
@@ -695,7 +819,66 @@ func buildEventLogV3Lookup(dir, base string, keySize int, postings map[string][]
 		return nil, err
 	}
 	b.dataLen = uint64(stat.Size())
+	if b.dataLen != postingOffset {
+		b.close()
+		return nil, errors.New("snapshots: V3 compact lookup posting length mismatch")
+	}
+	for start := 0; start < len(b.keys); start += eventLogV3LookupV2BlockKeys {
+		end := min(start+eventLogV3LookupV2BlockKeys, len(b.keys))
+		raw := encodeEventLogV3LookupV2KeyBlock(b.keys[start:end])
+		if len(raw) >= int(eventLogV3LookupV2StoredRaw) {
+			b.close()
+			return nil, errors.New("snapshots: V3 compact lookup key block exceeds uint32 length limit")
+		}
+		// Front coding removes the repeated position/prefix bytes without adding
+		// one Zstd setup per small key block. The reader understands compressed
+		// blocks too, leaving that option available for a measured future writer.
+		stored := raw
+		storedLen := uint32(len(raw)) | eventLogV3LookupV2StoredRaw
+		off, err := keyData.Seek(0, io.SeekCurrent)
+		if err != nil {
+			b.close()
+			return nil, err
+		}
+		if _, err := keyData.Write(stored); err != nil {
+			b.close()
+			return nil, err
+		}
+		b.blocks = append(b.blocks, eventLogV3LookupV2Block{firstKey: append([]byte(nil), b.keys[start].key...), dataOff: uint64(off), dataLen: storedLen, rawLen: uint32(len(raw)), checksum: crc32.ChecksumIEEE(raw), keyCount: uint32(end - start)})
+	}
+	keyStat, err := keyData.Stat()
+	if err != nil {
+		b.close()
+		return nil, err
+	}
+	b.keyLen = uint64(keyStat.Size())
 	return b, nil
+}
+
+func encodeEventLogV3LookupV2KeyBlock(keys []eventLogV3LookupKey) []byte {
+	var raw []byte
+	var previous []byte
+	for _, key := range keys {
+		prefix := commonPrefixLength(previous, key.key)
+		raw = binary.AppendUvarint(raw, uint64(prefix))
+		raw = append(raw, key.key[prefix:]...)
+		raw = binary.AppendUvarint(raw, key.firstFrame)
+		raw = binary.AppendUvarint(raw, uint64(key.frameCount))
+		raw = binary.AppendUvarint(raw, key.postingCount)
+		raw = binary.BigEndian.AppendUint32(raw, key.checksum)
+		previous = key.key
+	}
+	return raw
+}
+
+func commonPrefixLength(a, b []byte) int {
+	limit := min(len(a), len(b))
+	for i := 0; i < limit; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return limit
 }
 
 func writeEventLogV3File(dst *os.File, h eventLogV3Header, blocks []eventLogV3Block, txHashes []common.Hash, rowFrames []eventLogV3Frame, rowData *os.File, payloadFrames []eventLogV3Frame, payloadData *os.File, address, topic *eventLogV3LookupBuild) error {
@@ -767,6 +950,9 @@ func writeEventLogV3FrameDir(w io.Writer, frames []eventLogV3Frame, dataBase uin
 }
 
 func writeEventLogV3Lookup(w *os.File, sectionOffset uint64, b *eventLogV3LookupBuild) error {
+	if b.keyData != nil {
+		return writeEventLogV3LookupV2(w, sectionOffset, b)
+	}
 	if err := binary.Write(w, binary.BigEndian, uint64(len(b.keys))); err != nil {
 		return err
 	}
@@ -796,6 +982,41 @@ func writeEventLogV3Lookup(w *os.File, sectionOffset uint64, b *eventLogV3Lookup
 		if _, err := w.Write(raw[:]); err != nil {
 			return err
 		}
+	}
+	return copyEventLogV3Temp(w, b.data)
+}
+
+func writeEventLogV3LookupV2(w *os.File, sectionOffset uint64, b *eventLogV3LookupBuild) error {
+	var header [eventLogV3LookupV2HeaderSize]byte
+	copy(header[:8], eventLogV3LookupV2Magic[:])
+	binary.BigEndian.PutUint32(header[8:12], uint32(b.keySize))
+	binary.BigEndian.PutUint32(header[12:16], eventLogV3LookupV2BlockKeys)
+	binary.BigEndian.PutUint64(header[16:24], uint64(len(b.keys)))
+	binary.BigEndian.PutUint64(header[24:32], uint64(len(b.blocks)))
+	blockDirLen := uint64(len(b.blocks)) * (b.keySize + eventLogV3LookupV2BlockTail)
+	binary.BigEndian.PutUint64(header[32:40], blockDirLen)
+	binary.BigEndian.PutUint64(header[40:48], b.keyLen)
+	binary.BigEndian.PutUint64(header[48:56], b.dataLen)
+	if _, err := w.Write(header[:]); err != nil {
+		return err
+	}
+	keyDataBase := sectionOffset + eventLogV3LookupV2HeaderSize + blockDirLen
+	for _, block := range b.blocks {
+		if _, err := w.Write(block.firstKey); err != nil {
+			return err
+		}
+		var tail [eventLogV3LookupV2BlockTail]byte
+		binary.BigEndian.PutUint64(tail[0:8], keyDataBase+block.dataOff)
+		binary.BigEndian.PutUint32(tail[8:12], block.dataLen)
+		binary.BigEndian.PutUint32(tail[12:16], block.rawLen)
+		binary.BigEndian.PutUint32(tail[16:20], block.checksum)
+		binary.BigEndian.PutUint32(tail[20:24], block.keyCount)
+		if _, err := w.Write(tail[:]); err != nil {
+			return err
+		}
+	}
+	if err := copyEventLogV3Temp(w, b.keyData); err != nil {
+		return err
 	}
 	return copyEventLogV3Temp(w, b.data)
 }
@@ -995,9 +1216,8 @@ func (s *EventLogSegment) materializeEventLogV3(row eventLogV3Row) (EventLog, er
 	if _, err := s.file.ReadAt(txHash[:], int64(s.v3.header.txDictOffset+8+row.txID*common.HashLength)); err != nil {
 		return EventLog{}, err
 	}
-	addressEntrySize := uint64(eventLogAddressLookupKeySize + eventLogV3LookupKeyTail)
-	addressRaw := make([]byte, eventLogAddressLookupKeySize)
-	if _, err := s.file.ReadAt(addressRaw, int64(s.v3.header.addressIndexOffset+eventLogV3LookupHeaderSize+row.addressID*addressEntrySize)); err != nil {
+	addressRaw, err := s.readEventLogV3Address(row.addressID)
+	if err != nil {
 		return EventLog{}, err
 	}
 	address := common.BytesToAddress(addressRaw)
@@ -1041,6 +1261,88 @@ func (s *EventLogSegment) materializeEventLogV3(row eventLogV3Row) (EventLog, er
 		return EventLog{}, err
 	}
 	return EventLog{BlockNum: blockNum, TxIndex: row.txIndex, LogIndex: row.logIndex, TxHash: txHash, BlockHash: blockHash, Address: address, Log: &log}, nil
+}
+
+func (s *EventLogSegment) readEventLogV3Address(index uint64) ([]byte, error) {
+	offset, length := s.v3.header.addressIndexOffset, s.v3.header.addressIndexLength
+	compact, err := isEventLogV3LookupV2(s.file, offset, length, s.size)
+	if err != nil {
+		return nil, err
+	}
+	if !compact {
+		return readEventLogV3LookupKeyAt(s.file, offset, length, s.size, eventLogAddressLookupKeySize, index)
+	}
+	h, err := readEventLogV3LookupV2Header(s.file, offset, length, s.size, eventLogAddressLookupKeySize)
+	if err != nil {
+		return nil, err
+	}
+	if index >= h.keyCount {
+		return nil, errors.New("snapshots: V3 compact lookup key index outside directory")
+	}
+	blockIndex := index / uint64(h.blockKeys)
+	if !s.v3.cacheAddressValid || s.v3.cacheAddressBlock != blockIndex {
+		block, err := readEventLogV3LookupV2Block(s.file, offset, h, blockIndex)
+		if err != nil {
+			return nil, err
+		}
+		records, _, err := readEventLogV3LookupV2Records(s.file, offset, length, h, block)
+		if err != nil {
+			return nil, err
+		}
+		keys := make([][]byte, len(records))
+		for i := range records {
+			keys[i] = records[i].key
+		}
+		s.v3.cacheAddressBlock, s.v3.cacheAddressKeys, s.v3.cacheAddressValid = blockIndex, keys, true
+	}
+	within := index % uint64(h.blockKeys)
+	if within >= uint64(len(s.v3.cacheAddressKeys)) {
+		return nil, errors.New("snapshots: V3 compact lookup address index outside block")
+	}
+	return s.v3.cacheAddressKeys[within], nil
+}
+
+func readEventLogV3LookupKeyAt(file io.ReaderAt, offset, length, size uint64, keySize int, index uint64) ([]byte, error) {
+	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	if err != nil {
+		return nil, err
+	}
+	if !compact {
+		keys, _, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
+		if err != nil {
+			return nil, err
+		}
+		if index >= keys {
+			return nil, errors.New("snapshots: V3 lookup key index outside directory")
+		}
+		entrySize := uint64(keySize + eventLogV3LookupKeyTail)
+		key := make([]byte, keySize)
+		if _, err := file.ReadAt(key, int64(offset+eventLogV3LookupHeaderSize+index*entrySize)); err != nil {
+			return nil, err
+		}
+		return key, nil
+	}
+	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+	if err != nil {
+		return nil, err
+	}
+	if index >= h.keyCount {
+		return nil, errors.New("snapshots: V3 compact lookup key index outside directory")
+	}
+	blockIndex := index / uint64(h.blockKeys)
+	block, err := readEventLogV3LookupV2Block(file, offset, h, blockIndex)
+	if err != nil {
+		return nil, err
+	}
+	records, _, err := readEventLogV3LookupV2Records(file, offset, length, h, block)
+	if err != nil {
+		return nil, err
+	}
+	within := index % uint64(h.blockKeys)
+	if within >= uint64(len(records)) {
+		return nil, errors.New("snapshots: V3 compact lookup key index outside block")
+	}
+	return records[within].key, nil
 }
 
 func (s *EventLogSegment) iterateEventLogV3FullScan(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
@@ -1130,7 +1432,240 @@ func (s *EventLogSegment) lookupEventLogV3CandidateRows(filter EventLogFilter) (
 	return candidates, have, nil
 }
 
+func isEventLogV3LookupV2(file io.ReaderAt, offset, length, size uint64) (bool, error) {
+	if length < 8 || offset > size || length > size-offset || offset > math.MaxInt64 {
+		return false, errors.New("snapshots: invalid V3 lookup bounds")
+	}
+	var magic [8]byte
+	if _, err := file.ReadAt(magic[:], int64(offset)); err != nil {
+		return false, err
+	}
+	return magic == eventLogV3LookupV2Magic, nil
+}
+
+func readEventLogV3LookupV2Header(file io.ReaderAt, offset, length, size uint64, wantKeySize int) (eventLogV3LookupV2Header, error) {
+	if length < eventLogV3LookupV2HeaderSize || offset > size || length > size-offset || offset > math.MaxInt64 {
+		return eventLogV3LookupV2Header{}, errors.New("snapshots: invalid V3 compact lookup bounds")
+	}
+	var raw [eventLogV3LookupV2HeaderSize]byte
+	if _, err := file.ReadAt(raw[:], int64(offset)); err != nil {
+		return eventLogV3LookupV2Header{}, err
+	}
+	if !bytes.Equal(raw[:8], eventLogV3LookupV2Magic[:]) {
+		return eventLogV3LookupV2Header{}, errors.New("snapshots: invalid V3 compact lookup magic")
+	}
+	h := eventLogV3LookupV2Header{
+		keySize: binary.BigEndian.Uint32(raw[8:12]), blockKeys: binary.BigEndian.Uint32(raw[12:16]),
+		keyCount: binary.BigEndian.Uint64(raw[16:24]), blockCount: binary.BigEndian.Uint64(raw[24:32]),
+		blockDirLen: binary.BigEndian.Uint64(raw[32:40]), keyDataLen: binary.BigEndian.Uint64(raw[40:48]),
+		postingDataLen: binary.BigEndian.Uint64(raw[48:56]),
+	}
+	if h.keySize != uint32(wantKeySize) || h.blockKeys != eventLogV3LookupV2BlockKeys {
+		return eventLogV3LookupV2Header{}, errors.New("snapshots: unsupported V3 compact lookup framing")
+	}
+	wantBlocks := ceilDiv(h.keyCount, uint64(h.blockKeys))
+	if h.blockCount != wantBlocks {
+		return eventLogV3LookupV2Header{}, errors.New("snapshots: invalid V3 compact lookup block count")
+	}
+	dirLen, overflow := checkedMul(h.blockCount, uint64(h.keySize)+eventLogV3LookupV2BlockTail)
+	if overflow || dirLen != h.blockDirLen {
+		return eventLogV3LookupV2Header{}, errors.New("snapshots: invalid V3 compact lookup directory length")
+	}
+	total, overflow := checkedAdd(eventLogV3LookupV2HeaderSize, h.blockDirLen)
+	if overflow {
+		return eventLogV3LookupV2Header{}, errors.New("snapshots: V3 compact lookup length overflow")
+	}
+	total, overflow = checkedAdd(total, h.keyDataLen)
+	if overflow {
+		return eventLogV3LookupV2Header{}, errors.New("snapshots: V3 compact lookup length overflow")
+	}
+	total, overflow = checkedAdd(total, h.postingDataLen)
+	if overflow || total != length {
+		return eventLogV3LookupV2Header{}, errors.New("snapshots: invalid V3 compact lookup section length")
+	}
+	return h, nil
+}
+
+func readEventLogV3LookupV2Block(file io.ReaderAt, offset uint64, h eventLogV3LookupV2Header, index uint64) (eventLogV3LookupV2Block, error) {
+	if index >= h.blockCount {
+		return eventLogV3LookupV2Block{}, errors.New("snapshots: V3 compact lookup block outside directory")
+	}
+	entrySize := uint64(h.keySize) + eventLogV3LookupV2BlockTail
+	entryOff := offset + eventLogV3LookupV2HeaderSize + index*entrySize
+	raw := make([]byte, entrySize)
+	if _, err := file.ReadAt(raw, int64(entryOff)); err != nil {
+		return eventLogV3LookupV2Block{}, err
+	}
+	tail := raw[h.keySize:]
+	block := eventLogV3LookupV2Block{
+		firstKey: append([]byte(nil), raw[:h.keySize]...), dataOff: binary.BigEndian.Uint64(tail[0:8]),
+		dataLen: binary.BigEndian.Uint32(tail[8:12]), rawLen: binary.BigEndian.Uint32(tail[12:16]),
+		checksum: binary.BigEndian.Uint32(tail[16:20]), keyCount: binary.BigEndian.Uint32(tail[20:24]),
+	}
+	if block.keyCount == 0 || block.keyCount > h.blockKeys {
+		return eventLogV3LookupV2Block{}, errors.New("snapshots: invalid V3 compact lookup key count")
+	}
+	maxRawLen := uint64(block.keyCount) * (uint64(h.keySize) + 4*binary.MaxVarintLen64 + 4)
+	if uint64(block.rawLen) > maxRawLen {
+		return eventLogV3LookupV2Block{}, errors.New("snapshots: V3 compact lookup key block decoded length is excessive")
+	}
+	return block, nil
+}
+
+func readEventLogV3LookupV2Records(file io.ReaderAt, offset, length uint64, h eventLogV3LookupV2Header, block eventLogV3LookupV2Block) ([]eventLogV3LookupV2Record, uint64, error) {
+	keyDataStart := offset + eventLogV3LookupV2HeaderSize + h.blockDirLen
+	postingStart := keyDataStart + h.keyDataLen
+	storedLen := uint64(block.dataLen &^ eventLogV3LookupV2StoredRaw)
+	if block.dataOff < keyDataStart || block.dataOff > postingStart || storedLen > postingStart-block.dataOff {
+		return nil, 0, errors.New("snapshots: V3 compact lookup key block outside key data")
+	}
+	stored, err := readEventLogPayloadAt(file, block.dataOff, storedLen, postingStart)
+	if err != nil {
+		return nil, 0, err
+	}
+	decoded := stored
+	if block.dataLen&eventLogV3LookupV2StoredRaw == 0 {
+		_, dec, err := cbCodec()
+		if err != nil {
+			return nil, 0, err
+		}
+		decoded, err = dec.DecodeAll(stored, make([]byte, 0, int(block.rawLen)))
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	if uint64(len(decoded)) != uint64(block.rawLen) || crc32.ChecksumIEEE(decoded) != block.checksum {
+		return nil, 0, errors.New("snapshots: V3 compact lookup key block checksum mismatch")
+	}
+	br := bytes.NewReader(decoded)
+	records := make([]eventLogV3LookupV2Record, 0, block.keyCount)
+	var previous []byte
+	for i := uint32(0); i < block.keyCount; i++ {
+		prefix, err := binary.ReadUvarint(br)
+		if err != nil || prefix > uint64(len(previous)) || prefix > uint64(h.keySize) {
+			return nil, 0, errors.New("snapshots: invalid V3 compact lookup key prefix")
+		}
+		suffixLen := int(h.keySize) - int(prefix)
+		key := make([]byte, h.keySize)
+		copy(key, previous[:prefix])
+		if _, err := io.ReadFull(br, key[prefix:prefix+uint64(suffixLen)]); err != nil {
+			return nil, 0, err
+		}
+		postingOff, err := binary.ReadUvarint(br)
+		if err != nil {
+			return nil, 0, err
+		}
+		postingLen, err := binary.ReadUvarint(br)
+		if err != nil {
+			return nil, 0, err
+		}
+		postingCount, err := binary.ReadUvarint(br)
+		if err != nil {
+			return nil, 0, err
+		}
+		var checksumRaw [4]byte
+		if _, err := io.ReadFull(br, checksumRaw[:]); err != nil {
+			return nil, 0, err
+		}
+		if postingOff > h.postingDataLen || postingLen > h.postingDataLen-postingOff || postingStart+postingOff+postingLen > offset+length {
+			return nil, 0, errors.New("snapshots: V3 compact lookup postings outside section")
+		}
+		if postingCount > postingLen {
+			return nil, 0, errors.New("snapshots: V3 compact lookup posting count exceeds encoded bytes")
+		}
+		if i == 0 && !bytes.Equal(key, block.firstKey) {
+			return nil, 0, errors.New("snapshots: V3 compact lookup first key mismatch")
+		}
+		if i > 0 && bytes.Compare(previous, key) >= 0 {
+			return nil, 0, errors.New("snapshots: V3 compact lookup keys not sorted")
+		}
+		records = append(records, eventLogV3LookupV2Record{key: key, postingOff: postingOff, postingLen: postingLen, postingCount: postingCount, checksum: binary.BigEndian.Uint32(checksumRaw[:])})
+		previous = key
+	}
+	if br.Len() != 0 {
+		return nil, 0, errors.New("snapshots: V3 compact lookup key block trailing bytes")
+	}
+	return records, storedLen, nil
+}
+
+func readEventLogV3LookupV2Rows(file io.ReaderAt, offset, length, size uint64, keySize int, want []byte) ([]uint64, error) {
+	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+	if err != nil {
+		return nil, err
+	}
+	lo, hi := uint64(0), h.blockCount
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		block, err := readEventLogV3LookupV2Block(file, offset, h, mid)
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Compare(block.firstKey, want) <= 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo == 0 {
+		return nil, nil
+	}
+	block, err := readEventLogV3LookupV2Block(file, offset, h, lo-1)
+	if err != nil {
+		return nil, err
+	}
+	records, _, err := readEventLogV3LookupV2Records(file, offset, length, h, block)
+	if err != nil {
+		return nil, err
+	}
+	idx := sort.Search(len(records), func(i int) bool { return bytes.Compare(records[i].key, want) >= 0 })
+	if idx == len(records) || !bytes.Equal(records[idx].key, want) {
+		return nil, nil
+	}
+	record := records[idx]
+	return readEventLogV3LookupV2RecordRows(file, offset, length, h, record)
+}
+
+func readEventLogV3LookupV2RecordRows(file io.ReaderAt, offset, length uint64, h eventLogV3LookupV2Header, record eventLogV3LookupV2Record) ([]uint64, error) {
+	postingStart := offset + eventLogV3LookupV2HeaderSize + h.blockDirLen + h.keyDataLen
+	raw, err := readEventLogPayloadAt(file, postingStart+record.postingOff, record.postingLen, offset+length)
+	if err != nil {
+		return nil, err
+	}
+	if crc32.ChecksumIEEE(raw) != record.checksum {
+		return nil, errors.New("snapshots: V3 compact lookup posting checksum mismatch")
+	}
+	rows := make([]uint64, 0, record.postingCount)
+	br := bytes.NewReader(raw)
+	var previous uint64
+	for i := uint64(0); i < record.postingCount; i++ {
+		value, err := binary.ReadUvarint(br)
+		if err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			if value == 0 || math.MaxUint64-previous < value {
+				return nil, errors.New("snapshots: V3 compact lookup posting delta invalid")
+			}
+			value += previous
+		}
+		rows = append(rows, value)
+		previous = value
+	}
+	if br.Len() != 0 {
+		return nil, errors.New("snapshots: V3 compact lookup posting trailing bytes")
+	}
+	return rows, nil
+}
+
 func readEventLogV3LookupCounts(file io.ReaderAt, offset, length, size uint64, keySize int) (uint64, uint64, error) {
+	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	if err != nil {
+		return 0, 0, err
+	}
+	if compact {
+		h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+		return h.keyCount, h.blockCount, err
+	}
 	if length < eventLogV3LookupHeaderSize || offset+length > size {
 		return 0, 0, errors.New("snapshots: invalid V3 lookup bounds")
 	}
@@ -1143,6 +1678,13 @@ func readEventLogV3LookupCounts(file io.ReaderAt, offset, length, size uint64, k
 }
 
 func readEventLogV3LookupRows(file io.ReaderAt, offset, length, size uint64, keySize int, want []byte) ([]uint64, error) {
+	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	if err != nil {
+		return nil, err
+	}
+	if compact {
+		return readEventLogV3LookupV2Rows(file, offset, length, size, keySize, want)
+	}
 	keys, frames, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
 	if err != nil {
 		return nil, err
@@ -1300,6 +1842,57 @@ func checkEventLogV3Segment(file *os.File, ref SegmentRef, header eventLogHeader
 }
 
 func readAllEventLogV3Lookup(file io.ReaderAt, offset, length, size uint64, keySize int) (map[string][]uint64, error) {
+	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	if err != nil {
+		return nil, err
+	}
+	if compact {
+		h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string][]uint64, h.keyCount)
+		var previous []byte
+		expectedKeyOff := offset + eventLogV3LookupV2HeaderSize + h.blockDirLen
+		var expectedPostingOff uint64
+		for i := uint64(0); i < h.blockCount; i++ {
+			block, err := readEventLogV3LookupV2Block(file, offset, h, i)
+			if err != nil {
+				return nil, err
+			}
+			storedLen := uint64(block.dataLen &^ eventLogV3LookupV2StoredRaw)
+			if block.dataOff != expectedKeyOff {
+				return nil, errors.New("snapshots: V3 compact lookup key blocks are not contiguous")
+			}
+			expectedKeyOff += storedLen
+			records, _, err := readEventLogV3LookupV2Records(file, offset, length, h, block)
+			if err != nil {
+				return nil, err
+			}
+			for _, record := range records {
+				if len(previous) != 0 && bytes.Compare(previous, record.key) >= 0 {
+					return nil, errors.New("snapshots: V3 compact lookup blocks not strictly sorted")
+				}
+				if record.postingOff != expectedPostingOff {
+					return nil, errors.New("snapshots: V3 compact lookup postings are not contiguous")
+				}
+				expectedPostingOff += record.postingLen
+				rows, err := readEventLogV3LookupV2RecordRows(file, offset, length, h, record)
+				if err != nil {
+					return nil, err
+				}
+				out[string(record.key)] = rows
+				previous = record.key
+			}
+		}
+		if uint64(len(out)) != h.keyCount {
+			return nil, errors.New("snapshots: V3 compact lookup key count mismatch")
+		}
+		if expectedKeyOff != offset+eventLogV3LookupV2HeaderSize+h.blockDirLen+h.keyDataLen || expectedPostingOff != h.postingDataLen {
+			return nil, errors.New("snapshots: V3 compact lookup data coverage mismatch")
+		}
+		return out, nil
+	}
 	keys, _, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
 	if err != nil {
 		return nil, err
@@ -1326,6 +1919,13 @@ func readAllEventLogV3Lookup(file io.ReaderAt, offset, length, size uint64, keyS
 }
 
 func readEventLogV3LookupKeys(file io.ReaderAt, offset, length, size uint64, keySize int) ([][]byte, error) {
+	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	if err != nil {
+		return nil, err
+	}
+	if compact {
+		return readEventLogV3LookupV2Keys(file, offset, length, size, keySize)
+	}
 	count, _, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
 	if err != nil {
 		return nil, err
@@ -1343,6 +1943,36 @@ func readEventLogV3LookupKeys(file io.ReaderAt, offset, length, size uint64, key
 		}
 		keys = append(keys, key)
 		previous = key
+	}
+	return keys, nil
+}
+
+func readEventLogV3LookupV2Keys(file io.ReaderAt, offset, length, size uint64, keySize int) ([][]byte, error) {
+	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([][]byte, 0, h.keyCount)
+	var previous []byte
+	for i := uint64(0); i < h.blockCount; i++ {
+		block, err := readEventLogV3LookupV2Block(file, offset, h, i)
+		if err != nil {
+			return nil, err
+		}
+		records, _, err := readEventLogV3LookupV2Records(file, offset, length, h, block)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			if len(previous) != 0 && bytes.Compare(previous, record.key) >= 0 {
+				return nil, errors.New("snapshots: V3 compact lookup blocks not strictly sorted")
+			}
+			keys = append(keys, record.key)
+			previous = record.key
+		}
+	}
+	if uint64(len(keys)) != h.keyCount {
+		return nil, errors.New("snapshots: V3 compact lookup key count mismatch")
 	}
 	return keys, nil
 }

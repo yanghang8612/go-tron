@@ -19,6 +19,26 @@ contiguous sections:
 7. address dictionary plus framed delta-varint row postings;
 8. topic-key dictionary plus framed delta-varint row postings.
 
+Newly written V3 files use the `gtevli2\n` lookup sub-format for sections 7
+and 8. It groups 128 sorted keys per independently checksummed key block,
+front-codes the keys, and stores one checksummed delta-varint posting stream per
+key. This removes the old fixed
+28-byte metadata tail per key and 32-byte directory entry per 1,024 postings.
+The outer segment remains V3: the reader detects the lookup marker separately
+for each section and continues to read already-published V3 sections in the
+original fixed-directory layout. Mixed old/new V3 files therefore remain valid
+in one manifest and no migration is required for correctness.
+
+Key blocks are seekable: a lookup binary-searches the small block directory and
+decodes at most one 128-key block before reading the selected posting
+stream. Posting CRCs and the exhaustive semantic index verification are
+unchanged. On the checked-in 100,000 pseudo-random-topic benchmark (including
+16 hot 4,096-row topics), lookup storage fell from 10,361,567 bytes to
+4,495,829 bytes (56.61%). A high-common-prefix 4,096-singleton regression fell
+from 417,680 bytes to 52,264 bytes (87.49%). These figures isolate lookup
+storage; whole-segment savings
+depend on the address/topic cardinality and payload share.
+
 Rows reference the block, transaction, and address dictionaries. The address is
 removed from the stored `TransactionInfo_Log` protobuf and restored during a
 read. Oversized single protobufs get a dedicated payload frame. Each row,
@@ -26,7 +46,9 @@ payload, and posting frame has a CRC32; the content-addressed file and manifest
 retain the whole-file SHA-256 checksum.
 
 One random row lookup reads at most one row frame and one payload frame plus
-their directories and the three direct dictionary entries. Migration JSON
+their directories and the three dictionary entries. A compact address
+dictionary lookup additionally reads and decodes at most one 128-key
+block; `maxPointReadBytes` includes that bound. Migration JSON
 reports the measured physical maximum as `v3Physical.maxPointReadBytes` and
 `v3Physical.maxPointDecompressBytes`. It separately reports the hottest single
 address/topic lookup bounds; filesystem block amplification is not guessed.
