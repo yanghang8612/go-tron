@@ -159,46 +159,90 @@ func openV2Store(ancientDir string) (*v2Store, error) {
 	}
 	sort.Slice(manifests, func(i, j int) bool { return manifests[i].Start < manifests[j].Start })
 	expected := uint64(0)
-	var tableSet map[string]struct{}
 	for _, manifest := range manifests {
 		if manifest.Start != expected {
 			store.Close()
 			return nil, fmt.Errorf("ancient V2 manifest gap: start %d, want %d", manifest.Start, expected)
 		}
-		if tableSet == nil {
-			tableSet = make(map[string]struct{}, len(manifest.Tables))
-			for kind := range manifest.Tables {
-				tableSet[kind] = struct{}{}
-			}
-		} else {
-			if len(manifest.Tables) != len(tableSet) {
-				store.Close()
-				return nil, fmt.Errorf("ancient V2 manifest at %d changes table set", manifest.Start)
-			}
-			for kind := range tableSet {
-				if _, ok := manifest.Tables[kind]; !ok {
-					store.Close()
-					return nil, fmt.Errorf("ancient V2 manifest at %d misses table %s", manifest.Start, kind)
-				}
-			}
+		readers, err := openV2ManifestReaders(base, manifest)
+		if err != nil {
+			store.Close()
+			return nil, err
 		}
-		for kind, name := range manifest.Tables {
-			reader, err := openV2Segment(filepath.Join(base, kind, name), kind)
-			if err != nil {
-				store.Close()
-				return nil, err
-			}
-			if reader.start != manifest.Start || reader.count != manifest.Count || reader.frameBlocks != manifest.FrameBlocks {
-				reader.Close()
-				store.Close()
-				return nil, fmt.Errorf("ancient V2 segment %s does not match manifest", reader.path)
-			}
-			store.segments[kind] = append(store.segments[kind], reader)
+		if err := store.installManifestReaders(manifest, readers); err != nil {
+			closeV2SegmentReaders(readers)
+			store.Close()
+			return nil, err
 		}
-		expected += manifest.Count
+		expected = store.coverage
 	}
-	store.coverage = expected
 	return store, nil
+}
+
+// openV2ManifestReaders opens and validates only the files referenced by one
+// already-published manifest. Keeping this separate from openV2Store lets an
+// online migration install the newly committed segment without rescanning and
+// reopening every historical manifest and segment file.
+func openV2ManifestReaders(base string, manifest v2Manifest) (map[string]*v2SegmentReader, error) {
+	if manifest.Version != v2Version || manifest.Count == 0 || len(manifest.Tables) == 0 {
+		return nil, fmt.Errorf("invalid ancient V2 manifest at %d", manifest.Start)
+	}
+	readers := make(map[string]*v2SegmentReader, len(manifest.Tables))
+	for kind, name := range manifest.Tables {
+		reader, err := openV2Segment(filepath.Join(base, kind, name), kind)
+		if err != nil {
+			closeV2SegmentReaders(readers)
+			return nil, err
+		}
+		if reader.start != manifest.Start || reader.count != manifest.Count || reader.frameBlocks != manifest.FrameBlocks {
+			_ = reader.Close()
+			closeV2SegmentReaders(readers)
+			return nil, fmt.Errorf("ancient V2 segment %s does not match manifest", reader.path)
+		}
+		readers[kind] = reader
+	}
+	return readers, nil
+}
+
+func closeV2SegmentReaders(readers map[string]*v2SegmentReader) {
+	for _, reader := range readers {
+		_ = reader.Close()
+	}
+}
+
+// installManifestReaders appends one fully opened segment family to the
+// in-memory immutable prefix. The caller must exclude concurrent access to the
+// store. Ownership of readers transfers to the store only on success.
+func (s *v2Store) installManifestReaders(manifest v2Manifest, readers map[string]*v2SegmentReader) error {
+	if s == nil {
+		return errors.New("ancient V2 store is closed")
+	}
+	if manifest.Start != s.coverage {
+		return fmt.Errorf("ancient V2 manifest gap: start %d, want %d", manifest.Start, s.coverage)
+	}
+	if len(readers) != len(manifest.Tables) {
+		return fmt.Errorf("ancient V2 manifest at %d opened %d tables, want %d", manifest.Start, len(readers), len(manifest.Tables))
+	}
+	if len(s.segments) != 0 {
+		if len(manifest.Tables) != len(s.segments) {
+			return fmt.Errorf("ancient V2 manifest at %d changes table set", manifest.Start)
+		}
+		for kind := range s.segments {
+			if _, ok := manifest.Tables[kind]; !ok {
+				return fmt.Errorf("ancient V2 manifest at %d misses table %s", manifest.Start, kind)
+			}
+		}
+	}
+	for kind := range manifest.Tables {
+		if readers[kind] == nil {
+			return fmt.Errorf("ancient V2 manifest at %d has no open reader for table %s", manifest.Start, kind)
+		}
+	}
+	for kind, reader := range readers {
+		s.segments[kind] = append(s.segments[kind], reader)
+	}
+	s.coverage += manifest.Count
+	return nil
 }
 
 func newV2Decoder() (*zstd.Decoder, error) {

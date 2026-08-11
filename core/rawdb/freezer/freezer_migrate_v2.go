@@ -5,6 +5,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -347,11 +348,9 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			transactionIndexCoverage = end
 		}
 		if options.Online {
-			newStore, err := openV2Store(f.datadir)
-			if err != nil {
-				return result, fmt.Errorf("reload ancient V2 after segment %d: %w", start, err)
+			if err := f.installV2Manifest(manifest); err != nil {
+				return result, fmt.Errorf("install ancient V2 after segment %d: %w", start, err)
 			}
-			f.replaceV2Store(newStore)
 			if buildTransactionIndex {
 				newIndex, err := OpenTransactionIndexStore(f.datadir)
 				if err != nil {
@@ -491,6 +490,33 @@ func (f *Freezer) replaceV2Store(store *v2Store) {
 	if oldStore != nil {
 		_ = oldStore.Close()
 	}
+}
+
+// installV2Manifest makes one newly published segment family visible to
+// concurrent readers without rebuilding the complete V2 store. Segment files
+// are opened and validated before taking v2Mu; under the lock the append is
+// infallible after continuity/table-set checks, so readers observe either the
+// old prefix or the complete extended prefix. V1 reclamation happens only
+// after this method returns successfully.
+func (f *Freezer) installV2Manifest(manifest v2Manifest) error {
+	base := filepath.Join(f.datadir, "v2")
+	readers, err := openV2ManifestReaders(base, manifest)
+	if err != nil {
+		return err
+	}
+	f.v2Mu.Lock()
+	store := f.v2
+	if store == nil {
+		err = errors.New("ancient V2 store is closed")
+	} else {
+		err = store.installManifestReaders(manifest, readers)
+	}
+	f.v2Mu.Unlock()
+	if err != nil {
+		closeV2SegmentReaders(readers)
+		return err
+	}
+	return nil
 }
 
 func verifyV2Segment(ctx context.Context, path, kind string, start, count uint64, readV1 func(uint64) ([]byte, error)) error {

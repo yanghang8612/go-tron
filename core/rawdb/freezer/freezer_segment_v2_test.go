@@ -728,6 +728,155 @@ func TestFreezerMigrateV2OnlineKeepsConcurrentReadsAvailable(t *testing.T) {
 	}
 }
 
+func TestFreezerMigrateV2OnlineInstallsManyManifestsIncrementally(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":      {Prunable: true},
+		"tx_infos":    {Prunable: true},
+		"state_roots": {NoSnappy: true, Prunable: true},
+	}
+	freezer, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		segmentBlocks = uint64(8)
+		segmentCount  = uint64(64)
+		rows          = segmentBlocks * segmentCount
+	)
+	if _, err := freezer.ModifyAncients(func(op AncientWriteOp) error {
+		for number := uint64(0); number < rows; number++ {
+			for kind := range tables {
+				value := []byte(fmt.Sprintf("%s-%06d", kind, number))
+				if err := op.AppendRaw(kind, number, value); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := freezer.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		firstStore   *v2Store
+		firstReaders = make(map[string]*v2SegmentReader)
+	)
+	result, err := freezer.MigrateV2(V2MigrationOptions{
+		Tables:        []string{"bodies", "tx_infos", "state_roots"},
+		SegmentBlocks: segmentBlocks,
+		FrameBlocks:   4,
+		Online:        true,
+		Progress: func(progress V2MigrationProgress) {
+			if progress.Stage != "complete" || progress.Segment != 1 {
+				return
+			}
+			freezer.v2Mu.RLock()
+			defer freezer.v2Mu.RUnlock()
+			firstStore = freezer.v2
+			for kind := range tables {
+				firstReaders[kind] = freezer.v2.segments[kind][0]
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("online migration: %v", err)
+	}
+	if result.Segments != segmentCount || result.End != rows {
+		t.Fatalf("migration result=%+v", result)
+	}
+
+	freezer.v2Mu.RLock()
+	if freezer.v2 != firstStore {
+		freezer.v2Mu.RUnlock()
+		t.Fatal("online migration replaced the V2 store instead of extending it")
+	}
+	var installed []*v2SegmentReader
+	for kind := range tables {
+		segments := freezer.v2.segments[kind]
+		if len(segments) != int(segmentCount) {
+			freezer.v2Mu.RUnlock()
+			t.Fatalf("%s segments=%d, want %d", kind, len(segments), segmentCount)
+		}
+		if segments[0] != firstReaders[kind] || segments[0].file == nil {
+			freezer.v2Mu.RUnlock()
+			t.Fatalf("%s first reader was reopened or closed", kind)
+		}
+		installed = append(installed, segments...)
+	}
+	freezer.v2Mu.RUnlock()
+
+	for number := uint64(0); number < rows; number += segmentBlocks {
+		for kind := range tables {
+			got, err := freezer.Ancient(kind, number)
+			want := []byte(fmt.Sprintf("%s-%06d", kind, number))
+			if err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("read %s[%d]=%q want=%q err=%v", kind, number, got, want, err)
+			}
+		}
+	}
+	if err := freezer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, reader := range installed {
+		if reader.file != nil {
+			t.Fatalf("segment reader %s remained open after freezer close", reader.path)
+		}
+	}
+}
+
+func BenchmarkV2StoreInstallAtHighManifestCount(b *testing.B) {
+	const manifestCount = uint64(256)
+	base := filepath.Join(b.TempDir(), "v2")
+	tables := []string{"bodies", "tx_infos", "state_roots"}
+	writeManifestFiles := func(manifest v2Manifest) {
+		b.Helper()
+		for _, kind := range tables {
+			name := v2SegmentName(manifest.Start, manifest.Count)
+			manifest.Tables[kind] = name
+			path := filepath.Join(base, kind, name)
+			if err := writeV2Segment(path, manifest.Start, manifest.Count, manifest.FrameBlocks, func(number uint64) ([]byte, error) {
+				return []byte(fmt.Sprintf("%s-%d", kind, number)), nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	for start := uint64(0); start < manifestCount; start++ {
+		manifest := v2Manifest{Version: v2Version, Start: start, Count: 1, FrameBlocks: 1, Tables: make(map[string]string, len(tables))}
+		writeManifestFiles(manifest)
+		if err := publishV2Manifest(base, manifest); err != nil {
+			b.Fatal(err)
+		}
+	}
+	next := v2Manifest{Version: v2Version, Start: manifestCount, Count: 1, FrameBlocks: 1, Tables: make(map[string]string, len(tables))}
+	writeManifestFiles(next)
+
+	b.Run("incremental", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			readers, err := openV2ManifestReaders(base, next)
+			if err != nil {
+				b.Fatal(err)
+			}
+			closeV2SegmentReaders(readers)
+		}
+	})
+	b.Run("full-reload-256", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			store, err := openV2Store(filepath.Dir(base))
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
 func TestFreezerMigrateV2SerializesExternalTailPrune(t *testing.T) {
 	dir := t.TempDir()
 	freezer, err := NewFreezer(dir, "", false, 2049, map[string]TableConfig{"bodies": {Prunable: true}})
