@@ -2,6 +2,10 @@
 Description=gtron mainnet snap node
 After=network-online.target
 Wants=network-online.target
+# Bound repeated startup failures instead of continuously reopening a damaged
+# or incompatible database. CentOS 7's systemd uses StartLimitInterval.
+StartLimitInterval=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -30,7 +34,6 @@ ExecStart=/data/gtron/go-tron/build/bin/gtron \
     --datadir /data/gtron/main/datadir \
     --prune.mode snap \
     --sync.async-commit \
-    --sync.import-batch 32 \
     --p2p.port 18890 \
     --external.ip 3.12.206.71 \
     --exec.parallel-transfers \
@@ -43,40 +46,32 @@ ExecStart=/data/gtron/go-tron/build/bin/gtron \
     --metrics.addr 127.0.0.1 \
     --metrics.port 6071 \
     --maxpeers 30 \
-    --db.cache 16384 \
+    --db.cache 8192 \
     --db.handles 8192 \
-    --db.memtable 256 \
-    --db.target-file-size 8 \
-    --db.lbase-max-size 1024 \
-    --db.l0.compact 8 \
-    --db.l0.stop 64 \
     --state.trie.cache 128 \
-    --state.commitment.cache 512 \
-    --log.format terminal \
-    --verbosity 3 \
     --log.file /data/gtron/main/gtron.log \
-    --log.file.format terminal \
-    --log.file.verbosity 3 \
-    --log.file.max-size 100 \
-    --log.file.max-backups 3 \
-    --log.file.max-age 28 \
-    --log.file.compress
+    --log.file.format terminal
 
 # 控制台日志交给 journald；命令行格式文件由 gtron 自身轮转。
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=gtron
 
-Restart=always
-RestartSec=10
+# A clean operator/systemd stop must stay stopped for maintenance. Deployment
+# jobs explicitly start the service again; only unexpected exits auto-restart.
+Restart=on-failure
+RestartSec=15
 
-TimeoutStopSec=300
+# Large snapshot/ETL passes need time to cancel and close Pebble cleanly.
+TimeoutStopSec=600
 KillSignal=SIGTERM
 
-LimitNOFILE=65536
+LimitNOFILE=131072
 
 # CentOS 7 / old systemd
-MemorySoftLimit=28G
+# 10 GiB Go heap + 8 GiB Pebble cache leaves room for memtables, mmap, ETL,
+# goroutine stacks and filesystem cache below the 32 GiB hard limit.
+MemorySoftLimit=24G
 MemoryLimit=32G
 
 [Install]

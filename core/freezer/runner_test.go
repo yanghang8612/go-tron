@@ -495,6 +495,46 @@ func TestCompactV2OncePromotesCompleteAllTableSegment(t *testing.T) {
 	}
 }
 
+func TestCompactV2OnceBootstrapsBoundedFreshSyncBacklog(t *testing.T) {
+	f := newFreezer(t)
+	for number := uint64(0); number < 200; number++ {
+		if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+			if err := op.AppendRaw(rawdbAncientBlocks, number, blockBytes(number)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, number, txInfosBytes(number)); err != nil {
+				return err
+			}
+			return op.AppendRaw(rawdbAncientStateRoots, number, stateRootBytes(number))
+		}); err != nil {
+			t.Fatalf("append %d: %v", number, err)
+		}
+	}
+	r := New(nil, wrapFreezer(f), Config{
+		Enabled:                    true,
+		V2Enabled:                  true,
+		V2FrameBlocks:              8,
+		V2SegmentBlocks:            64,
+		SyncActive:                 func() bool { return true },
+		CatchupMaintenanceInterval: time.Hour,
+	})
+	compacted, err := r.CompactV2Once()
+	if err != nil {
+		t.Fatalf("CompactV2Once: %v", err)
+	}
+	if compacted != 64 || f.V2Coverage() != 64 {
+		t.Fatalf("compacted=%d coverage=%d, want one bounded bootstrap segment 64/64", compacted, f.V2Coverage())
+	}
+	if head, err := f.Ancients(); err != nil || head != 200 {
+		t.Fatalf("ancient head=%d err=%v, want 200", head, err)
+	}
+	for _, number := range []uint64{0, 63, 64, 127, 128, 199} {
+		if _, err := f.Ancient(rawdbAncientBlocks, number); err != nil {
+			t.Fatalf("read bodies[%d] after bounded bootstrap: %v", number, err)
+		}
+	}
+}
+
 func TestCompactV2OnceUsesBoundedCatchupDutyCycle(t *testing.T) {
 	f := newFreezer(t)
 	appendRange := func(from, to uint64) {

@@ -502,7 +502,6 @@ type Runner struct {
 	lastPassDuration              atomic.Int64 // nanoseconds
 	pebbleSizeAfter               atomic.Uint64
 	v2BlocksCompacted             atomic.Uint64
-	v2BacklogWarned               atomic.Bool
 	lastV2Promotion               atomic.Int64
 	txIndexRowsArchived           atomic.Uint64
 	txIndexRowsPruned             atomic.Uint64
@@ -851,10 +850,10 @@ func (r *Runner) recordHeavyMaintenanceDeferred(kind heavyMaintenanceKind, reaso
 	r.updateMetrics()
 }
 
-// CompactV2Once promotes at most one complete V1 segment. A new node may
-// bootstrap its first segment online; a legacy multi-segment backlog requires
-// one explicit offline migration so an upgrade cannot unexpectedly launch a
-// multi-hundred-GiB rewrite.
+// CompactV2Once promotes at most one complete V1 segment. The one-segment
+// limit, heavy-work gate, catch-up duty cycle and cancellation keep every
+// invocation bounded even when a fast fresh sync has accumulated multiple
+// complete segments before its first maintenance window.
 func (r *Runner) CompactV2Once() (uint64, error) {
 	if !r.cfg.Enabled || !r.cfg.V2Enabled {
 		return 0, nil
@@ -933,13 +932,6 @@ func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
 	coverage := compactor.V2Coverage()
 	target := head / segmentBlocks * segmentBlocks
 	if target <= coverage {
-		return 0, nil
-	}
-	if coverage == 0 && target > segmentBlocks {
-		if !r.v2BacklogWarned.Swap(true) {
-			log.Warn("Freezer: legacy V1 backlog requires offline V2 migration",
-				"head", head, "completeTarget", target, "segmentBlocks", segmentBlocks)
-		}
 		return 0, nil
 	}
 	result, err := compactor.MigrateV2(rawdbfreezer.V2MigrationOptions{
