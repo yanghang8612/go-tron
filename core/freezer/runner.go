@@ -1002,7 +1002,7 @@ func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
 		maxSegments = configured
 	}
 	batchStarted := time.Now()
-	result, err := compactor.MigrateV2(rawdbfreezer.V2MigrationOptions{
+	migration := rawdbfreezer.V2MigrationOptions{
 		Tables:        []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots},
 		SegmentBlocks: segmentBlocks,
 		FrameBlocks:   r.cfg.V2FrameBlocks,
@@ -1011,7 +1011,12 @@ func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
 		Online:        true,
 		Context:       ctx,
 		Transform:     rawdb.CompactAncientV2Record,
-	})
+	}
+	if r.cfg.TransactionIndexEnabled {
+		migration.TransactionIndexEntries = rawdb.AncientTransactionIndexEntries
+		migration.TransactionIndexPrefixBits = r.cfg.TransactionIndexPrefixBits
+	}
+	result, err := compactor.MigrateV2(migration)
 	resultEnd := result.End
 	if resultEnd < result.Start {
 		resultEnd = result.Start
@@ -1028,6 +1033,9 @@ func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
 	}
 	if compacted > 0 {
 		r.v2BlocksCompacted.Add(compacted)
+		if result.TransactionIndexRows > 0 {
+			r.txIndexRowsArchived.Add(result.TransactionIndexRows)
+		}
 		log.Info("Freezer: promoted V1 segments to V2",
 			"from", result.Start, "to", result.End,
 			"segments", result.Segments,
@@ -1036,6 +1044,9 @@ func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
 			"budget", r.cfg.V2CatchupTimeBudget,
 			"budgetExhausted", result.BudgetExhausted,
 			"frameBlocks", result.FrameBlocks,
+			"transactionIndexRuns", result.TransactionIndexRuns,
+			"transactionIndexRows", result.TransactionIndexRows,
+			"transactionIndexSpilledRuns", result.TransactionIndexSpilledRuns,
 			"elapsed", batchElapsed,
 			"physicalBefore", result.PhysicalBytesBefore,
 			"physicalAfter", result.PhysicalBytesAfter)

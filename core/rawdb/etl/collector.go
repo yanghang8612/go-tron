@@ -86,6 +86,16 @@ type Collector struct {
 	closed      bool
 }
 
+// Stats returns a snapshot of collector accounting. In particular,
+// SpilledRuns lets bounded-memory callers verify that large inputs used the
+// external-sort path before consuming the ordered stream.
+func (c *Collector) Stats() Stats {
+	if c == nil {
+		return Stats{}
+	}
+	return c.stats
+}
+
 type opKind uint8
 
 const (
@@ -203,6 +213,24 @@ func (c *Collector) Delete(key []byte) error {
 func (c *Collector) Load(writer ethdb.KeyValueWriter) (Stats, error) {
 	return c.LoadInterruptible(writer, nil)
 }
+
+// Iterate emits the collector's final key-ordered stream without materializing
+// it in a database. Key/value slices are callback-scoped and may be reused on
+// the next call. Duplicate keys retain Collector's normal latest-write-wins
+// semantics. Iterate consumes the collector exactly like Load.
+func (c *Collector) Iterate(visit func(key, value []byte) error) (Stats, error) {
+	if visit == nil {
+		return c.Stats(), errors.New("etl: nil iterate callback")
+	}
+	return c.Load(streamWriter{visit: visit})
+}
+
+type streamWriter struct {
+	visit func(key, value []byte) error
+}
+
+func (w streamWriter) Put(key, value []byte) error { return w.visit(key, value) }
+func (w streamWriter) Delete([]byte) error         { return errors.New("etl: delete in ordered stream") }
 
 // LoadInterruptible is Load with a cooperative stop check. A stopped load
 // keeps the collector retryable and never marks it loaded. The target may have

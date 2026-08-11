@@ -948,11 +948,15 @@ func TestOnlineTransactionIndexPublishesPrunesAndMerges(t *testing.T) {
 	if compacted, err := r.CompactV2Once(); err != nil || compacted != 4 {
 		t.Fatalf("first V2=%d err=%v", compacted, err)
 	}
-	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
-		t.Fatalf("publish changed=%v err=%v", changed, err)
-	}
 	if got := fz.TransactionIndexCoverage(); got != 4 {
-		t.Fatalf("coverage after publish=%d, want 4", got)
+		t.Fatalf("coverage after fused V2 publish=%d, want 4", got)
+	}
+	chainDBBeforePrune := rawdb.NewChainDB(fc.db, rawdb.NewFreezerReader(fz))
+	for i, hash := range hashes {
+		wantBlock := uint64(i / 2)
+		if got := rawdb.ReadTransactionIndex(chainDBBeforePrune, hash[:]); got == nil || *got != wantBlock {
+			t.Fatalf("hot fallback before prune %d=%v, want %d", i, got, wantBlock)
+		}
 	}
 	ancientDir, err := fz.AncientDatadir()
 	if err != nil {
@@ -1013,7 +1017,7 @@ func TestOnlineTransactionIndexPublishesPrunesAndMerges(t *testing.T) {
 	if compacted, err := r.CompactV2Once(); err != nil || compacted != 4 {
 		t.Fatalf("second V2=%d err=%v", compacted, err)
 	}
-	for step := 0; step < 3; step++ {
+	for step := 0; step < 2; step++ {
 		if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
 			t.Fatalf("maintenance step %d changed=%v err=%v", step, changed, err)
 		}

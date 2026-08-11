@@ -732,3 +732,30 @@ func (b *recordingBatch) Replay(w ethdb.KeyValueWriter) error {
 }
 
 func (b *recordingBatch) Close() {}
+
+func TestCollectorIterateExternalSort(t *testing.T) {
+	collector, err := NewCollector(Options{TempDir: t.TempDir(), BufferLimit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	for _, key := range []string{"c", "a", "b"} {
+		if err := collector.Put([]byte(key), []byte("v-"+key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	stats, err := collector.Iterate(func(key, value []byte) error {
+		got = append(got, string(key)+"="+string(value))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a=v-a", "b=v-b", "c=v-c"}; !slices.Equal(got, want) {
+		t.Fatalf("ordered stream=%v, want %v", got, want)
+	}
+	if stats.SpilledRuns == 0 || stats.Applied != 3 {
+		t.Fatalf("stats=%+v", stats)
+	}
+}

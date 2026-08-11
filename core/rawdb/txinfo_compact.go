@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -32,6 +33,26 @@ func CompactTransactionInfoIDsForBlock(retData, blockData []byte) (data []byte, 
 		return nil, 0, 0, err
 	}
 	return compactTransactionInfoIDsForHashes(retData, hashes)
+}
+
+// AncientTransactionIndexEntries derives immutable index rows directly from
+// the canonical block wire encoding. It deliberately shares the lightweight
+// transaction-ID parser used by receipt compaction, avoiding allocation of a
+// complete Block/Transaction protobuf graph during Ancient V2 migration.
+func AncientTransactionIndexEntries(blockNum uint64, blockData []byte) ([]rawdbfreezer.TransactionIndexEntry, error) {
+	hashes, err := transactionHashesFromBlockWire(blockData)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]rawdbfreezer.TransactionIndexEntry, len(hashes))
+	for ordinal, hash := range hashes {
+		location, err := EncodeTransactionLocation(blockNum, ordinal)
+		if err != nil {
+			return nil, err
+		}
+		entries[ordinal] = rawdbfreezer.TransactionIndexEntry{Hash: hash, Location: location}
+	}
+	return entries, nil
 }
 
 func compactTransactionInfoIDsForHashes(retData []byte, hashes [][sha256.Size]byte) (data []byte, infos, removed int, err error) {

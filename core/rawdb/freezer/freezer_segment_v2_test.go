@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
 
 func TestV2SegmentRoundTripAndChecksum(t *testing.T) {
@@ -276,6 +278,203 @@ func TestFreezerMigrateV2RoundTripResumeAndAppend(t *testing.T) {
 		}
 	}
 	if err := freezer.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFreezerMigrateV2BuildsAndPublishesTransactionIndex(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":      {Prunable: true},
+		"tx_infos":    {Prunable: true},
+		"state_roots": {NoSnappy: true, Prunable: true},
+	}
+	f, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.ModifyAncients(func(op AncientWriteOp) error {
+		for number := uint64(0); number < 64; number++ {
+			for _, kind := range []string{"bodies", "tx_infos", "state_roots"} {
+				if err := op.AppendRaw(kind, number, []byte{byte(number), byte(number >> 8)}); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	result, err := f.MigrateV2(V2MigrationOptions{
+		Tables:                         []string{"bodies", "tx_infos", "state_roots"},
+		SegmentBlocks:                  64,
+		FrameBlocks:                    8,
+		Online:                         true,
+		TransactionIndexPrefixBits:     8,
+		TransactionIndexETLBufferBytes: 1024,
+		TransactionIndexEntries: func(number uint64, _ []byte) ([]TransactionIndexEntry, error) {
+			calls++
+			var hash [32]byte
+			binary.BigEndian.PutUint64(hash[24:], number+1)
+			return []TransactionIndexEntry{{Hash: hash, Location: transactionLocationMarker | number<<transactionLocationOrdinalBits}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 64 {
+		t.Fatalf("body callback calls=%d, want 64", calls)
+	}
+	if result.TransactionIndexRuns != 1 || result.TransactionIndexRows != 64 || result.TransactionIndexSpilledRuns == 0 || f.TransactionIndexCoverage() != 64 {
+		t.Fatalf("fused index result=%+v coverage=%d", result, f.TransactionIndexCoverage())
+	}
+	var hash [32]byte
+	binary.BigEndian.PutUint64(hash[24:], 43)
+	candidates, err := f.TransactionIndexCandidates(hash)
+	found := false
+	for _, candidate := range candidates {
+		if transactionIndexLocationBlock(candidate) == 42 {
+			found = true
+			break
+		}
+	}
+	if err != nil || !found {
+		t.Fatalf("candidates=%v err=%v", candidates, err)
+	}
+}
+
+func TestFreezerMigrateV2IndexPublishFailureKeepsV1(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":      {Prunable: true},
+		"tx_infos":    {Prunable: true},
+		"state_roots": {NoSnappy: true, Prunable: true},
+	}
+	f, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ModifyAncients(func(op AncientWriteOp) error {
+		for number := uint64(0); number < 64; number++ {
+			for _, kind := range []string{"bodies", "tx_infos", "state_roots"} {
+				if err := op.AppendRaw(kind, number, []byte{byte(number)}); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("index publication blocked")
+	_, err = f.MigrateV2(V2MigrationOptions{
+		Tables:                     []string{"bodies", "tx_infos", "state_roots"},
+		SegmentBlocks:              64,
+		FrameBlocks:                8,
+		Online:                     true,
+		TransactionIndexPrefixBits: 8,
+		TransactionIndexEntries: func(number uint64, _ []byte) ([]TransactionIndexEntry, error) {
+			var hash [32]byte
+			binary.BigEndian.PutUint64(hash[24:], number+1)
+			return []TransactionIndexEntry{{Hash: hash, Location: transactionLocationMarker | number<<transactionLocationOrdinalBits}}, nil
+		},
+		BeforeTransactionIndexPublish: func() error { return injected },
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("migration error=%v, want injected failure", err)
+	}
+	if tail := f.V1Tail(); tail != 0 {
+		t.Fatalf("V1 tail=%d after failed index publish, want 0", tail)
+	}
+	if got, err := f.tables["bodies"].Retrieve(7); err != nil || len(got) == 0 {
+		t.Fatalf("V1 body unavailable after failed publication: %x %v", got, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err = NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if f.V2Coverage() != 64 || f.TransactionIndexCoverage() != 0 || f.V1Tail() != 0 {
+		t.Fatalf("reopen coverage v2=%d index=%d tail=%d", f.V2Coverage(), f.TransactionIndexCoverage(), f.V1Tail())
+	}
+	if got, err := f.Ancient("bodies", 7); err != nil || len(got) == 0 {
+		t.Fatalf("published V2 body unavailable after recovery: %x %v", got, err)
+	}
+	collector, err := etl.NewCollector(etl.Options{TempDir: t.TempDir(), BufferLimit: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	for number := uint64(0); number < 64; number++ {
+		var hash [32]byte
+		binary.BigEndian.PutUint64(hash[24:], number+1)
+		location := transactionLocationMarker | number<<transactionLocationOrdinalBits
+		if err := collector.PutEncoded(40, 0, func(key, _ []byte) {
+			copy(key[:32], hash[:])
+			binary.BigEndian.PutUint64(key[32:], location)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runPath := TransactionIndexRunPath(dir, 0, 64)
+	recoveredResult, recovered, err := buildOrRecoverTransactionIndexRun(context.Background(), runPath, 0, 64, 8, collector)
+	if err != nil || !recovered {
+		t.Fatalf("recover unpublished fused run: recovered=%v err=%v", recovered, err)
+	}
+	if err := PublishTransactionIndexRun(dir, recoveredResult); err != nil {
+		t.Fatalf("publish recovered fused run: %v", err)
+	}
+	index, err := OpenTransactionIndexStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer index.Close()
+	if index.Coverage() != 64 {
+		t.Fatalf("recovered index coverage=%d, want 64", index.Coverage())
+	}
+}
+
+func TestFusedTransactionIndexExternalSortLargeSample(t *testing.T) {
+	const rows = 200_000
+	collector, err := etl.NewCollector(etl.Options{TempDir: t.TempDir(), BufferLimit: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	for i := uint64(0); i < rows; i++ {
+		var hash [32]byte
+		hash[0] = byte(i)
+		binary.BigEndian.PutUint64(hash[24:], i+1)
+		location := transactionLocationMarker | (i%64)<<transactionLocationOrdinalBits
+		if err := collector.PutEncoded(40, 0, func(key, _ []byte) {
+			copy(key[:32], hash[:])
+			binary.BigEndian.PutUint64(key[32:], location)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if collector.Stats().SpilledRuns == 0 {
+		t.Fatal("large fused-index sample did not use external-sort spill runs")
+	}
+	path := TransactionIndexRunPath(t.TempDir(), 0, 64)
+	result, recovered, err := buildOrRecoverTransactionIndexRun(context.Background(), path, 0, 64, 8, collector)
+	if err != nil || recovered {
+		t.Fatalf("large fused-index build: recovered=%v err=%v", recovered, err)
+	}
+	if result.Rows != rows {
+		t.Fatalf("large fused-index rows=%d, want %d", result.Rows, rows)
+	}
+	run, err := OpenTransactionIndexRun(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+	if err := run.Verify(); err != nil {
 		t.Fatal(err)
 	}
 }

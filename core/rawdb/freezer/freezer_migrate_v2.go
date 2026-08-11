@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
+
+const fusedTransactionIndexETLBufferBytes = 32 << 20
 
 // V2MigrationOptions controls conversion of prunable V1 tables into immutable
 // Zstd segments. Online installs each published segment before reclaiming its
@@ -35,6 +40,24 @@ type V2MigrationOptions struct {
 	// corresponding V1 bodies row when kind == "tx_infos", and nil for other
 	// tables. It must be deterministic because verification invokes it again.
 	Transform func(kind string, number uint64, data, body []byte) ([]byte, error)
+	// TransactionIndexEntries enables fused immutable transaction-index
+	// construction. It is called while the bodies V1 row is already in memory,
+	// avoiding a second segment scan. Fusion is attempted only when the current
+	// transaction-index coverage equals the V2 segment start; older databases
+	// with an index gap keep using the independent resumable backfill path.
+	TransactionIndexEntries    func(number uint64, body []byte) ([]TransactionIndexEntry, error)
+	TransactionIndexPrefixBits uint32
+	// TransactionIndexETL* bound fused-index sorting memory and place spill
+	// files. The default 32 MiB encoded-input buffer keeps total collector
+	// working memory below roughly 128 MiB while allowing arbitrarily large
+	// segments to spill to disk.
+	TransactionIndexETLTempDir     string
+	TransactionIndexETLBufferBytes int
+	// BeforeTransactionIndexPublish is an optional prerequisite hook. It runs
+	// after the V2 manifest is durable but before the transaction-index manifest
+	// is published. Returning an error leaves V1 data intact and is safe to
+	// resume; primarily useful for callers that need an external commit barrier.
+	BeforeTransactionIndexPublish func() error
 }
 
 type V2MigrationProgress struct {
@@ -50,17 +73,20 @@ type V2MigrationProgress struct {
 }
 
 type V2MigrationResult struct {
-	Start               uint64
-	End                 uint64
-	Head                uint64
-	Segments            uint64
-	FrameBlocks         uint32
-	SegmentBlocks       uint64
-	KeptV1              bool
-	PhysicalBytesBefore uint64
-	PhysicalBytesAfter  uint64
-	Elapsed             time.Duration
-	BudgetExhausted     bool
+	Start                       uint64
+	End                         uint64
+	Head                        uint64
+	Segments                    uint64
+	FrameBlocks                 uint32
+	SegmentBlocks               uint64
+	KeptV1                      bool
+	PhysicalBytesBefore         uint64
+	PhysicalBytesAfter          uint64
+	TransactionIndexRuns        uint64
+	TransactionIndexRows        uint64
+	TransactionIndexSpilledRuns uint64
+	Elapsed                     time.Duration
+	BudgetExhausted             bool
 }
 
 func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, error) {
@@ -151,6 +177,7 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	}
 	base := filepath.Join(f.datadir, "v2")
 	removeOrphanV2Temps(base)
+	transactionIndexCoverage := f.TransactionIndexCoverage()
 	for start < target && (options.MaxSegments == 0 || result.Segments < options.MaxSegments) {
 		// Do not interrupt an in-flight segment merely because its estimate was
 		// imperfect. Publication and V1 reclamation form the crash-safe unit, so
@@ -175,6 +202,34 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			manifest.TxInfoIDsCompacted = true
 		}
 		var unpublished []string
+		// Only append a fused run when it continues the currently published
+		// immutable index. A pre-existing gap is intentionally left to the
+		// independent backfill path instead of creating an unpublishable run.
+		buildTransactionIndex := options.TransactionIndexEntries != nil && transactionIndexCoverage == start
+		var transactionIndexCollector *etl.Collector
+		if buildTransactionIndex {
+			tempDir := options.TransactionIndexETLTempDir
+			if tempDir == "" {
+				tempDir = filepath.Join(f.datadir, transactionIndexDirectoryName, "etl")
+			}
+			if _, err := etl.CleanupStaleCollectors(tempDir); err != nil {
+				return result, fmt.Errorf("clean fused transaction-index ETL scratch: %w", err)
+			}
+			bufferBytes := options.TransactionIndexETLBufferBytes
+			if bufferBytes <= 0 {
+				bufferBytes = fusedTransactionIndexETLBufferBytes
+			}
+			var err error
+			transactionIndexCollector, err = etl.NewCollector(etl.Options{TempDir: tempDir, BufferLimit: bufferBytes})
+			if err != nil {
+				return result, fmt.Errorf("create fused transaction-index ETL collector: %w", err)
+			}
+			defer func() {
+				if transactionIndexCollector != nil {
+					_ = transactionIndexCollector.Close()
+				}
+			}()
+		}
 		cleanupUnpublished := func() {
 			for _, path := range unpublished {
 				_ = os.Remove(path)
@@ -203,6 +258,21 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				data, err = f.transformV2MigrationRecord(options, kind, number, data)
 				if err != nil {
 					return nil, err
+				}
+				if buildTransactionIndex && kind == "bodies" {
+					entries, err := options.TransactionIndexEntries(number, data)
+					if err != nil {
+						return nil, fmt.Errorf("collect transaction index for body %d: %w", number, err)
+					}
+					for _, entry := range entries {
+						entry := entry
+						if err := transactionIndexCollector.PutEncoded(40, 0, func(key, _ []byte) {
+							copy(key[:32], entry.Hash[:])
+							binary.BigEndian.PutUint64(key[32:], entry.Location)
+						}); err != nil {
+							return nil, err
+						}
+					}
 				}
 				if options.Progress != nil && time.Since(lastProgress) >= 30*time.Second {
 					options.Progress(V2MigrationProgress{
@@ -237,16 +307,58 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			}
 			manifest.Tables[kind] = name
 		}
+		var transactionIndexResult TransactionIndexBuildResult
+		if buildTransactionIndex {
+			path := TransactionIndexRunPath(f.datadir, start, start+count)
+			var recovered bool
+			var err error
+			transactionIndexResult, recovered, err = buildOrRecoverTransactionIndexRun(options.Context, path, start, start+count, options.TransactionIndexPrefixBits, transactionIndexCollector)
+			if err != nil {
+				cleanupUnpublished()
+				return result, fmt.Errorf("build fused transaction index [%d,%d): %w", start, start+count, err)
+			}
+			if transactionIndexResult.Rows != transactionIndexCollector.Stats().Collected {
+				cleanupUnpublished()
+				return result, fmt.Errorf("build fused transaction index [%d,%d): wrote %d rows from %d collected entries", start, start+count, transactionIndexResult.Rows, transactionIndexCollector.Stats().Collected)
+			}
+			result.TransactionIndexSpilledRuns += uint64(transactionIndexCollector.Stats().SpilledRuns)
+			if err := transactionIndexCollector.Close(); err != nil {
+				cleanupUnpublished()
+				return result, fmt.Errorf("close fused transaction-index ETL collector: %w", err)
+			}
+			transactionIndexCollector = nil
+			_ = recovered // Recovery and a fresh build have identical publication semantics.
+		}
 		if err := publishV2Manifest(base, manifest); err != nil {
 			return result, fmt.Errorf("publish ancient V2 segment %d: %w", start, err)
 		}
 		end := start + count
+		if buildTransactionIndex {
+			if options.BeforeTransactionIndexPublish != nil {
+				if err := options.BeforeTransactionIndexPublish(); err != nil {
+					return result, fmt.Errorf("publish fused transaction index [%d,%d): prerequisite: %w", start, end, err)
+				}
+			}
+			if err := PublishTransactionIndexRun(f.datadir, transactionIndexResult); err != nil {
+				return result, fmt.Errorf("publish fused transaction index [%d,%d): %w", start, end, err)
+			}
+			result.TransactionIndexRuns++
+			result.TransactionIndexRows += transactionIndexResult.Rows
+			transactionIndexCoverage = end
+		}
 		if options.Online {
 			newStore, err := openV2Store(f.datadir)
 			if err != nil {
 				return result, fmt.Errorf("reload ancient V2 after segment %d: %w", start, err)
 			}
 			f.replaceV2Store(newStore)
+			if buildTransactionIndex {
+				newIndex, err := OpenTransactionIndexStore(f.datadir)
+				if err != nil {
+					return result, fmt.Errorf("reload transaction index after segment %d: %w", start, err)
+				}
+				f.replaceTransactionIndexStore(newIndex)
+			}
 		}
 		if !options.KeepV1 {
 			if _, err := f.truncateTailLocked(end); err != nil {
@@ -280,10 +392,59 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			return result, fmt.Errorf("reload ancient V2: %w", err)
 		}
 		f.replaceV2Store(newStore)
+		if result.TransactionIndexRuns > 0 {
+			newIndex, err := OpenTransactionIndexStore(f.datadir)
+			if err != nil {
+				return result, fmt.Errorf("reload fused transaction index: %w", err)
+			}
+			f.replaceTransactionIndexStore(newIndex)
+		}
 	}
 	result.PhysicalBytesAfter = f.selectedPhysicalBytes(options.Tables)
 	result.Elapsed = time.Since(started)
 	return result, nil
+}
+
+func buildOrRecoverTransactionIndexRun(ctx context.Context, path string, start, end uint64, prefixBits uint32, collector *etl.Collector) (TransactionIndexBuildResult, bool, error) {
+	expectedRows := collector.Stats().Collected
+	if run, err := OpenTransactionIndexRun(path); err == nil {
+		defer run.Close()
+		if run.StartBlock() != start || run.EndBlock() != end || (prefixBits != 0 && run.PrefixBits() != prefixBits) || run.Rows() != expectedRows {
+			return TransactionIndexBuildResult{}, false, fmt.Errorf("existing run %q has incompatible metadata", path)
+		}
+		if err := run.VerifyContext(ctx); err != nil {
+			return TransactionIndexBuildResult{}, false, err
+		}
+		return TransactionIndexBuildResult{Path: path, Rows: run.Rows(), StartBlock: start, EndBlock: end, PrefixBits: run.PrefixBits(), FileBytes: run.Size()}, true, nil
+	} else if !os.IsNotExist(err) {
+		return TransactionIndexBuildResult{}, false, err
+	}
+	result, err := BuildTransactionIndexRun(path, TransactionIndexBuildOptions{
+		Context:    ctx,
+		PrefixBits: prefixBits,
+		StartBlock: start,
+		EndBlock:   end,
+		Iterate: func(yield func(TransactionIndexEntry) error) error {
+			var previous [32]byte
+			seen := false
+			_, err := collector.Iterate(func(key, _ []byte) error {
+				if len(key) != 40 {
+					return fmt.Errorf("fused transaction-index ETL key length %d, want 40", len(key))
+				}
+				var entry TransactionIndexEntry
+				copy(entry.Hash[:], key[:32])
+				entry.Location = binary.BigEndian.Uint64(key[32:])
+				if seen && bytes.Equal(previous[:], entry.Hash[:]) {
+					return fmt.Errorf("duplicate transaction hash %x in ancient V2 range [%d,%d)", entry.Hash, start, end)
+				}
+				previous = entry.Hash
+				seen = true
+				return yield(entry)
+			})
+			return err
+		},
+	})
+	return result, false, err
 }
 
 func (f *Freezer) transformV2MigrationRecord(options V2MigrationOptions, kind string, number uint64, data []byte) ([]byte, error) {
