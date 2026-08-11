@@ -516,6 +516,7 @@ func TestCompactV2OnceBootstrapsBoundedFreshSyncBacklog(t *testing.T) {
 		V2Enabled:                  true,
 		V2FrameBlocks:              8,
 		V2SegmentBlocks:            64,
+		V2CatchupMaxSegments:       1,
 		SyncActive:                 func() bool { return true },
 		CatchupMaintenanceInterval: time.Hour,
 	})

@@ -2,10 +2,6 @@
 Description=gtron mainnet snap node
 After=network-online.target
 Wants=network-online.target
-# Bound repeated startup failures instead of continuously reopening a damaged
-# or incompatible database. CentOS 7's systemd uses StartLimitInterval.
-StartLimitInterval=300
-StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -13,6 +9,11 @@ User=java-tron
 Group=java-tron
 WorkingDirectory=/data/gtron/main
 UMask=0027
+
+# Bound repeated startup failures instead of continuously reopening a damaged
+# or incompatible database. systemd 219 (CentOS 7) accepts these in [Service].
+StartLimitInterval=300
+StartLimitBurst=5
 
 Environment=TZ=Asia/Shanghai
 Environment=ZCASH_PARAMS_DIR=/data/gtron/params
