@@ -22,10 +22,15 @@ type V2MigrationOptions struct {
 	SegmentBlocks uint64
 	FrameBlocks   uint32
 	MaxSegments   uint64
-	KeepV1        bool
-	Online        bool
-	Context       context.Context
-	Progress      func(V2MigrationProgress)
+	// TimeBudget is a soft wall-clock limit. It is checked only between fully
+	// published segments, so a segment that has started is either committed
+	// through its fsync/publication boundary or rolled back by the existing
+	// context cancellation path. Zero disables the limit.
+	TimeBudget time.Duration
+	KeepV1     bool
+	Online     bool
+	Context    context.Context
+	Progress   func(V2MigrationProgress)
 	// Transform optionally rewrites a row before compression. body is the
 	// corresponding V1 bodies row when kind == "tx_infos", and nil for other
 	// tables. It must be deterministic because verification invokes it again.
@@ -55,6 +60,7 @@ type V2MigrationResult struct {
 	PhysicalBytesBefore uint64
 	PhysicalBytesAfter  uint64
 	Elapsed             time.Duration
+	BudgetExhausted     bool
 }
 
 func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, error) {
@@ -146,6 +152,13 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	base := filepath.Join(f.datadir, "v2")
 	removeOrphanV2Temps(base)
 	for start < target && (options.MaxSegments == 0 || result.Segments < options.MaxSegments) {
+		// Do not interrupt an in-flight segment merely because its estimate was
+		// imperfect. Publication and V1 reclamation form the crash-safe unit, so
+		// the budget is deliberately enforced at the next segment boundary.
+		if result.Segments > 0 && options.TimeBudget > 0 && time.Since(started) >= options.TimeBudget {
+			result.BudgetExhausted = true
+			break
+		}
 		if err := options.Context.Err(); err != nil {
 			return result, err
 		}

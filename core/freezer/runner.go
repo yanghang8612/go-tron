@@ -79,6 +79,8 @@ const (
 	defaultBatchBlocks                  = uint64(30_000)
 	defaultV2FrameBlocks                = uint32(64)
 	defaultV2SegmentBlocks              = uint64(65_536)
+	defaultV2CatchupTimeBudget          = 45 * time.Second
+	defaultV2CatchupMaxSegments         = uint64(16)
 	defaultTxIndexPrefixBits            = uint32(20)
 	defaultCatchupMaintenanceInterval   = 5 * time.Minute
 	defaultHeavyMaintenanceStartupDelay = time.Minute
@@ -150,6 +152,13 @@ type Config struct {
 
 	V2FrameBlocks   uint32
 	V2SegmentBlocks uint64
+	// V2CatchupTimeBudget and V2CatchupMaxSegments bound one admitted V2
+	// maintenance lease. The runner sizes the batch from the current backlog;
+	// the freezer checks the soft time budget only between crash-safe segment
+	// publications. This lets fast historical sync convert several small
+	// segments per catch-up slot without letting one pass run unbounded.
+	V2CatchupTimeBudget  time.Duration
+	V2CatchupMaxSegments uint64
 
 	// TransactionIndexEnabled moves V2-covered tx-* rows into immutable
 	// fingerprint runs. Publication is completed and verified before hot rows
@@ -174,6 +183,8 @@ func Default() Config {
 		V2Enabled:                    true,
 		V2FrameBlocks:                defaultV2FrameBlocks,
 		V2SegmentBlocks:              defaultV2SegmentBlocks,
+		V2CatchupTimeBudget:          defaultV2CatchupTimeBudget,
+		V2CatchupMaxSegments:         defaultV2CatchupMaxSegments,
 		TransactionIndexEnabled:      true,
 		TransactionIndexPrefixBits:   defaultTxIndexPrefixBits,
 		CatchupMaintenanceInterval:   defaultCatchupMaintenanceInterval,
@@ -212,6 +223,12 @@ func (c Config) applyDefaults() Config {
 	}
 	if c.V2SegmentBlocks == 0 {
 		c.V2SegmentBlocks = defaultV2SegmentBlocks
+	}
+	if c.V2CatchupTimeBudget <= 0 {
+		c.V2CatchupTimeBudget = defaultV2CatchupTimeBudget
+	}
+	if c.V2CatchupMaxSegments == 0 {
+		c.V2CatchupMaxSegments = defaultV2CatchupMaxSegments
 	}
 	if c.TransactionIndexPrefixBits == 0 {
 		c.TransactionIndexPrefixBits = defaultTxIndexPrefixBits
@@ -343,9 +360,14 @@ type Stats struct {
 	// `b-<num>` + `tib-<num>` rows after the most recent pass. Sampled
 	// via an iterator pass on the prefix; expensive enough that the
 	// runner samples only at the end of each pass, not per-block.
-	PebbleSizeAfter   uint64
-	V2Coverage        uint64
-	V2BlocksCompacted uint64
+	PebbleSizeAfter     uint64
+	V2Coverage          uint64
+	V2BlocksCompacted   uint64
+	V2BacklogBlocks     uint64
+	V2BacklogSegments   uint64
+	V2LastBatchSegments uint64
+	V2LastBatchDuration time.Duration
+	V2BudgetExhausted   uint64
 	// TransactionIndexCoverage is the first block not covered by an immutable
 	// index run. TransactionIndexPruned is the exclusive hot-row deletion
 	// cursor and must never advance beyond coverage.
@@ -375,6 +397,11 @@ type runnerMetrics struct {
 	pebbleSizeAfter         *metrics.Gauge
 	v2Coverage              *metrics.Gauge
 	v2Blocks                *metrics.Gauge
+	v2BacklogBlocks         *metrics.Gauge
+	v2BacklogSegments       *metrics.Gauge
+	v2LastBatchSegments     *metrics.Gauge
+	v2LastBatchDuration     *metrics.Gauge
+	v2BudgetExhausted       *metrics.Gauge
 	txIndexCoverage         *metrics.Gauge
 	txIndexPruned           *metrics.Gauge
 	txIndexArchived         *metrics.Gauge
@@ -406,6 +433,11 @@ func newRunnerMetrics(namespace string) runnerMetrics {
 		pebbleSizeAfter:         metrics.GetOrRegisterGauge(namespace+"pebble/size", nil),
 		v2Coverage:              metrics.GetOrRegisterGauge(namespace+"v2/coverage", nil),
 		v2Blocks:                metrics.GetOrRegisterGauge(namespace+"v2/blocks", nil),
+		v2BacklogBlocks:         metrics.GetOrRegisterGauge(namespace+"v2/backlog/blocks", nil),
+		v2BacklogSegments:       metrics.GetOrRegisterGauge(namespace+"v2/backlog/segments", nil),
+		v2LastBatchSegments:     metrics.GetOrRegisterGauge(namespace+"v2/batch/segments", nil),
+		v2LastBatchDuration:     metrics.GetOrRegisterGauge(namespace+"v2/batch/duration", nil),
+		v2BudgetExhausted:       metrics.GetOrRegisterGauge(namespace+"v2/batch/budget_exhausted", nil),
 		txIndexCoverage:         metrics.GetOrRegisterGauge(namespace+"txindex/coverage", nil),
 		txIndexPruned:           metrics.GetOrRegisterGauge(namespace+"txindex/pruned", nil),
 		txIndexArchived:         metrics.GetOrRegisterGauge(namespace+"txindex/rows/archived", nil),
@@ -447,6 +479,11 @@ func (m runnerMetrics) update(stats Stats) {
 	m.pebbleSizeAfter.Update(uint64GaugeValue(stats.PebbleSizeAfter))
 	m.v2Coverage.Update(uint64GaugeValue(stats.V2Coverage))
 	m.v2Blocks.Update(uint64GaugeValue(stats.V2BlocksCompacted))
+	m.v2BacklogBlocks.Update(uint64GaugeValue(stats.V2BacklogBlocks))
+	m.v2BacklogSegments.Update(uint64GaugeValue(stats.V2BacklogSegments))
+	m.v2LastBatchSegments.Update(uint64GaugeValue(stats.V2LastBatchSegments))
+	m.v2LastBatchDuration.Update(int64(stats.V2LastBatchDuration))
+	m.v2BudgetExhausted.Update(uint64GaugeValue(stats.V2BudgetExhausted))
 	m.txIndexCoverage.Update(uint64GaugeValue(stats.TransactionIndexCoverage))
 	m.txIndexPruned.Update(uint64GaugeValue(stats.TransactionIndexPruned))
 	m.txIndexArchived.Update(uint64GaugeValue(stats.TransactionIndexRowsArchived))
@@ -502,6 +539,9 @@ type Runner struct {
 	lastPassDuration              atomic.Int64 // nanoseconds
 	pebbleSizeAfter               atomic.Uint64
 	v2BlocksCompacted             atomic.Uint64
+	v2LastBatchSegments           atomic.Uint64
+	v2LastBatchDuration           atomic.Int64
+	v2BudgetExhausted             atomic.Uint64
 	lastV2Promotion               atomic.Int64
 	txIndexRowsArchived           atomic.Uint64
 	txIndexRowsPruned             atomic.Uint64
@@ -580,6 +620,8 @@ func (r *Runner) Start() error {
 		"margin", r.cfg.MarginBlocks,
 		"batch", r.cfg.BatchBlocks,
 		"catchupMaintenanceInterval", r.cfg.CatchupMaintenanceInterval,
+		"v2CatchupTimeBudget", r.cfg.V2CatchupTimeBudget,
+		"v2CatchupMaxSegments", r.cfg.V2CatchupMaxSegments,
 		"heavyMaintenanceStartupDelay", r.cfg.HeavyMaintenanceStartupDelay,
 		"heavyMaintenanceErrorBackoff", r.cfg.HeavyMaintenanceErrorBackoff,
 		"sharedHeavyWorkGate", r.cfg.HeavyWorkGate != nil)
@@ -674,6 +716,9 @@ func (r *Runner) snapshot() Stats {
 		LastPassDuration:                     time.Duration(r.lastPassDuration.Load()),
 		PebbleSizeAfter:                      r.pebbleSizeAfter.Load(),
 		V2BlocksCompacted:                    r.v2BlocksCompacted.Load(),
+		V2LastBatchSegments:                  r.v2LastBatchSegments.Load(),
+		V2LastBatchDuration:                  time.Duration(r.v2LastBatchDuration.Load()),
+		V2BudgetExhausted:                    r.v2BudgetExhausted.Load(),
 		TransactionIndexRowsArchived:         r.txIndexRowsArchived.Load(),
 		TransactionIndexRowsPruned:           r.txIndexRowsPruned.Load(),
 		V2CatchupDeferred:                    r.v2CatchupDeferred.Load(),
@@ -691,6 +736,13 @@ func (r *Runner) snapshot() Stats {
 	}
 	if compactor, ok := r.freezer.(V2Compactor); ok {
 		stats.V2Coverage = compactor.V2Coverage()
+		if count, err := r.freezer.AncientCount(rawdbAncientBlocks); err == nil {
+			target := count / r.cfg.V2SegmentBlocks * r.cfg.V2SegmentBlocks
+			if target > stats.V2Coverage {
+				stats.V2BacklogBlocks = target - stats.V2Coverage
+				stats.V2BacklogSegments = stats.V2BacklogBlocks / r.cfg.V2SegmentBlocks
+			}
+		}
 	}
 	if compactor, ok := r.freezer.(TransactionIndexCompactor); ok {
 		stats.TransactionIndexCoverage = compactor.TransactionIndexCoverage()
@@ -850,10 +902,10 @@ func (r *Runner) recordHeavyMaintenanceDeferred(kind heavyMaintenanceKind, reaso
 	r.updateMetrics()
 }
 
-// CompactV2Once promotes at most one complete V1 segment. The one-segment
-// limit, heavy-work gate, catch-up duty cycle and cancellation keep every
-// invocation bounded even when a fast fresh sync has accumulated multiple
-// complete segments before its first maintenance window.
+// CompactV2Once promotes a backlog-sized but bounded batch of complete V1
+// segments. Admission, error backoff and the shared HeavyWorkGate are owned by
+// the runner; the freezer enforces the time budget between crash-safe segment
+// publication boundaries.
 func (r *Runner) CompactV2Once() (uint64, error) {
 	if !r.cfg.Enabled || !r.cfg.V2Enabled {
 		return 0, nil
@@ -878,7 +930,13 @@ func (r *Runner) CompactV2Once() (uint64, error) {
 	compacted, err := r.compactV2OnceContext(lease.ctx)
 	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(lease.ctx), errHeavyMaintenanceDeferred) {
 		r.recordHeavyMaintenanceDeferred(heavyMaintenanceV2, heavyMaintenanceDeferredCatchup)
-		return 0, nil
+		return compacted, nil
+	}
+	if errors.Is(err, context.Canceled) && r.pauseCtx.Err() != nil {
+		// Shutdown is control flow. Any earlier segments in this batch have
+		// already crossed their publication/fsync boundaries and are reflected
+		// in compacted; the canceled in-flight segment was never published.
+		return compacted, err
 	}
 	if err != nil {
 		if errors.Is(err, rawdbfreezer.ErrV2SourcePruned) {
@@ -898,6 +956,7 @@ func (r *Runner) CompactV2Once() (uint64, error) {
 		r.updateMetrics()
 	} else {
 		r.lastV2MaintenanceError.Store(0)
+		r.updateMetrics()
 	}
 	return compacted, err
 }
@@ -932,31 +991,56 @@ func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
 	coverage := compactor.V2Coverage()
 	target := head / segmentBlocks * segmentBlocks
 	if target <= coverage {
+		r.v2LastBatchSegments.Store(0)
+		r.v2LastBatchDuration.Store(0)
 		return 0, nil
 	}
+	backlogBlocks := target - coverage
+	backlogSegments := backlogBlocks / segmentBlocks
+	maxSegments := backlogSegments
+	if configured := r.cfg.V2CatchupMaxSegments; configured > 0 && maxSegments > configured {
+		maxSegments = configured
+	}
+	batchStarted := time.Now()
 	result, err := compactor.MigrateV2(rawdbfreezer.V2MigrationOptions{
 		Tables:        []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots},
 		SegmentBlocks: segmentBlocks,
 		FrameBlocks:   r.cfg.V2FrameBlocks,
-		MaxSegments:   1,
+		MaxSegments:   maxSegments,
+		TimeBudget:    r.cfg.V2CatchupTimeBudget,
 		Online:        true,
 		Context:       ctx,
 		Transform:     rawdb.CompactAncientV2Record,
 	})
-	if err != nil {
-		return 0, err
+	resultEnd := result.End
+	if resultEnd < result.Start {
+		resultEnd = result.Start
 	}
-	compacted := result.End - result.Start
+	compacted := resultEnd - result.Start
+	batchElapsed := result.Elapsed
+	if batchElapsed <= 0 {
+		batchElapsed = time.Since(batchStarted)
+	}
+	r.v2LastBatchSegments.Store(result.Segments)
+	r.v2LastBatchDuration.Store(int64(batchElapsed))
+	if result.BudgetExhausted {
+		r.v2BudgetExhausted.Add(1)
+	}
 	if compacted > 0 {
 		r.v2BlocksCompacted.Add(compacted)
-		log.Info("Freezer: promoted V1 segment to V2",
+		log.Info("Freezer: promoted V1 segments to V2",
 			"from", result.Start, "to", result.End,
+			"segments", result.Segments,
+			"backlogBefore", backlogSegments,
+			"backlogAfter", (target-result.End)/segmentBlocks,
+			"budget", r.cfg.V2CatchupTimeBudget,
+			"budgetExhausted", result.BudgetExhausted,
 			"frameBlocks", result.FrameBlocks,
-			"elapsed", result.Elapsed,
+			"elapsed", batchElapsed,
 			"physicalBefore", result.PhysicalBytesBefore,
 			"physicalAfter", result.PhysicalBytesAfter)
 	}
-	return compacted, nil
+	return compacted, err
 }
 
 func (r *Runner) compactV2Scheduled() (uint64, error) {
