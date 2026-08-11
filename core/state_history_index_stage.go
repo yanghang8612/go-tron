@@ -10,13 +10,11 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
 
-// State-history inverse keys are substantially smaller than tx-hash lookup
-// rows, but hot contracts can generate many duplicate latest-key/block puts.
-// Keep runs compact so duplicate collapse happens before stable-cache pressure
-// grows, matching Erigon's bounded ETL collectors.
+// Keep posting runs compact so duplicate latest-key/block candidates collapse
+// before stable-cache pressure grows, matching Erigon's bounded ETL collectors.
 const stateHistoryIndexETLDefaultBufferLimit = 8 << 20
 
-// StateHistoryIndexStageResult reports one bounded sorted inverse-index pass.
+// StateHistoryIndexStageResult reports one bounded posting-256 pass.
 type StateHistoryIndexStageResult struct {
 	Advanced bool
 	Rebuilt  *rawdb.RebuildStateHistoryIndexResult
@@ -32,9 +30,8 @@ func (bc *BlockChain) SetStateHistoryIndexETLOptions(opts etl.Options) {
 	bc.stateHistoryIndexETLOptions = opts
 }
 
-// EnsureStateHistoryIndexStage initializes the derived watermark. Databases
-// predating this stage wrote inverse rows inline, but only the solidified prefix
-// is guaranteed durable, so that boundary is the safe compatibility baseline.
+// EnsureStateHistoryIndexStage initializes the derived watermark at genesis.
+// The posting index has one fresh-sync format and is built forward from block 1.
 func (bc *BlockChain) EnsureStateHistoryIndexStage() error {
 	if bc == nil {
 		return fmt.Errorf("state history index stage: nil blockchain")
@@ -70,14 +67,6 @@ func (bc *BlockChain) ensureStateHistoryIndexStageLocked() error {
 	}
 
 	baseline := uint64(0)
-	if dynProps := bc.cachedDynProps(); dynProps != nil {
-		if solidified := dynProps.LatestSolidifiedBlockNum(); solidified > 0 {
-			baseline = uint64(solidified)
-		}
-	}
-	if baseline > head.Number() {
-		baseline = head.Number()
-	}
 	hash, found, err := bc.readCanonicalHashStrict(baseline)
 	if err != nil {
 		return fmt.Errorf("state history index stage: read baseline hash %d: %w", baseline, err)
@@ -92,7 +81,7 @@ func (bc *BlockChain) ensureStateHistoryIndexStageLocked() error {
 }
 
 // AdvanceStateHistoryIndexStage materializes a bounded solidified prefix of
-// latest-key -> block inverse rows. Pebble-backed chains pin an MVCC source
+// hash -> block posting rows. Pebble-backed chains pin an MVCC source
 // snapshot under chainmu, run the expensive ETL outside it, then reacquire the
 // lock to validate and publish the watermark. The un-solidified tail remains
 // changeset-only and is served by bounded direct scans.

@@ -2205,7 +2205,7 @@ func writeSnapPruningChange(t *testing.T, db ethdb.KeyValueWriter, blockNum, beg
 	if err := rawdb.WriteStateDomainChangeBlockRows(db, []*rawdb.StateDomainChange{change}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteStateDomainChangeInverseIndex(db, change); err != nil {
+	if err := rawdb.WriteStateDomainChangePostingIndex(db, change); err != nil {
 		t.Fatal(err)
 	}
 	return change, owner, key

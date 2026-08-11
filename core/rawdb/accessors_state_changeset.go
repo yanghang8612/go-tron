@@ -14,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/golang/snappy"
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -278,12 +277,12 @@ func WriteStateDomainChange(db ethdb.KeyValueWriter, change *StateDomainChange) 
 	if err := WriteStateDomainChangeRow(db, change); err != nil {
 		return err
 	}
-	return WriteStateDomainChangeInverseIndex(db, change)
+	return WriteStateDomainChangePostingIndex(db, change)
 }
 
 // WriteStateDomainChangeRow writes the block-scoped temporal mutation row
-// without publishing its latest-key inverse index. Staged publishers use this
-// with WriteStateDomainChangeInverseIndex so hot history row and accessor
+// without publishing its latest-key posting index. Staged publishers use this
+// with WriteStateDomainChangePostingIndex so hot history row and accessor
 // publication are explicit domain-stage steps.
 func WriteStateDomainChangeRow(db ethdb.KeyValueWriter, change *StateDomainChange) error {
 	if change == nil {
@@ -608,9 +607,10 @@ func decodePersistedStateDomainChangeBlock(data []byte, blockNum uint64) ([]*Sta
 	return changes, nil
 }
 
-// WriteStateDomainChangeInverseIndex writes the latest-key -> block index for
-// an already materialized StateDomainChange row.
-func WriteStateDomainChangeInverseIndex(db ethdb.KeyValueWriter, change *StateDomainChange) error {
+// WriteStateDomainChangePostingIndex writes the compact exact-key candidate
+// index for an already materialized StateDomainChange row. Live canonical
+// blocks use one immutable frame; bulk sync combines frames in its stage.
+func WriteStateDomainChangePostingIndex(db ethdb.KeyValueWriter, change *StateDomainChange) error {
 	if change == nil {
 		return errors.New("rawdb: nil StateDomainChange")
 	}
@@ -621,7 +621,7 @@ func WriteStateDomainChangeInverseIndex(db ethdb.KeyValueWriter, change *StateDo
 	if err != nil {
 		return err
 	}
-	return db.Put(stateChangeInverseKey(latestKey, change.BlockNum), nil)
+	return writeStateChangePostingIndex(db, latestKey, change.BlockNum)
 }
 
 func validateStateDomainChange(change *StateDomainChange) error {
@@ -868,7 +868,7 @@ func IterateStateDomainChangesByBlockRange(db ethdb.Iteratee, fromBlock, toBlock
 
 // iteratePhysicalStateDomainChanges includes shadowed rows from both the block
 // pack and positive-sequence repair representation. Logical readers use the
-// overwrite view above; deletion needs the union so no inverse key survives.
+// overwrite view above; deletion needs the union so no live posting survives.
 func iteratePhysicalStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
 	prefix := stateChangeSetBlockPrefix(blockNum)
 	it := db.NewIterator(prefix, nil)
@@ -969,31 +969,16 @@ func iterateStateDomainChangesForTxRange(db ethdb.Iteratee, row *StateTxRange, f
 }
 
 func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
-	inverseKeys := make([][]byte, 0, resetScanBatch)
-	flushInverse := func() error {
-		if err := deleteStateKVKeys(db, inverseKeys); err != nil {
-			return err
-		}
-		inverseKeys = inverseKeys[:0]
-		return nil
-	}
 	if err := iteratePhysicalStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
 		latestKey, err := stateDomainChangeLatestKey(change)
 		if err != nil {
 			return false, err
 		}
-		key := stateChangeInverseKey(latestKey, change.BlockNum)
-		inverseKeys = append(inverseKeys, key)
-		if len(inverseKeys) >= resetScanBatch {
-			if err := flushInverse(); err != nil {
-				return false, err
-			}
+		if err := deleteLiveStateChangePosting(db, latestKey, change.BlockNum); err != nil {
+			return false, err
 		}
 		return true, nil
 	}); err != nil {
-		return err
-	}
-	if err := flushInverse(); err != nil {
 		return err
 	}
 	// Domain pruning deletes a small per-block prefix repeatedly while a node
@@ -1004,47 +989,41 @@ func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
 }
 
 func IterateStateDomainChangeBlocks(db ethdb.Iteratee, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error {
-	prefix := stateChangeInverseKeyPrefix(StateKVLatestCommitmentKey(owner, generation, domain, key))
-	return iterateStateDomainChangeBlocksByInversePrefix(db, prefix, fn)
+	return iterateStateDomainChangePostingBlocks(db, StateKVLatestCommitmentKey(owner, generation, domain, key), 0, ^uint64(0), fn)
 }
 
 func IterateStateKVGenerationChangeBlocks(db ethdb.Iteratee, owner common.Address, fn func(blockNum uint64) (bool, error)) error {
-	prefix := stateChangeInverseKeyPrefix(StateKVGenerationCommitmentKey(owner))
-	return iterateStateDomainChangeBlocksByInversePrefix(db, prefix, fn)
+	return iterateStateDomainChangePostingBlocks(db, StateKVGenerationCommitmentKey(owner), 0, ^uint64(0), fn)
 }
 
 func IterateStateAccountLatestChangeBlocks(db ethdb.Iteratee, owner common.Address, fn func(blockNum uint64) (bool, error)) error {
-	prefix := stateChangeInverseKeyPrefix(StateAccountLatestCommitmentKey(owner))
-	return iterateStateDomainChangeBlocksByInversePrefix(db, prefix, fn)
+	return iterateStateDomainChangePostingBlocks(db, StateAccountLatestCommitmentKey(owner), 0, ^uint64(0), fn)
 }
 
 func IterateStateDomainChangeBlocksByKey(db ethdb.Iteratee, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error {
-	prefix, ok := stateDomainChangeInversePrefixByKey(flatDomain, owner, generation, domain, key)
+	latestKey, ok := stateDomainChangeLatestKeyByKey(flatDomain, owner, generation, domain, key)
 	if !ok {
 		return nil
 	}
-	return iterateStateDomainChangeBlocksByInversePrefix(db, prefix, fn)
+	return iterateStateDomainChangePostingBlocks(db, latestKey, 0, ^uint64(0), fn)
 }
 
-// IterateStateDomainChangeBlocksByKeyRange walks the exact-key inverse index
-// inside the inclusive block range [fromBlock, toBlock]. The block number is
-// the final big-endian component of an exact inverse key, so this can seek
-// directly to fromBlock instead of revisiting the key's complete history.
+// IterateStateDomainChangeBlocksByKeyRange walks exact-key posting candidates
+// inside the inclusive block range [fromBlock, toBlock].
 func IterateStateDomainChangeBlocksByKeyRange(db ethdb.Iteratee, fromBlock, toBlock uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error {
 	if fromBlock > toBlock {
 		return nil
 	}
-	prefix, ok := stateDomainChangeInversePrefixByKey(flatDomain, owner, generation, domain, key)
+	latestKey, ok := stateDomainChangeLatestKeyByKey(flatDomain, owner, generation, domain, key)
 	if !ok {
 		return nil
 	}
-	return iterateStateDomainChangeBlocksByInversePrefixRange(db, prefix, fromBlock, toBlock, fn)
+	return iterateStateDomainChangePostingBlocks(db, latestKey, fromBlock, toBlock, fn)
 }
 
 // ReadFirstStateDomainChangeByKeyBlockRange seeks the earliest matching hot
-// mutation after targetBlock. Layered stores may implement PrefixSeeker so the
-// durable inverse-index prefix is not fully materialized before this one-row
-// point lookup can stop.
+// mutation after targetBlock. The posting reader stops after the first exact
+// candidate whose original latest key matches the changeset.
 func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*StateDomainChange, error) {
 	if targetBlock >= headBlock || targetTxNum >= headTxNum {
 		return nil, nil
@@ -1172,9 +1151,9 @@ func ReadFirstStateKVChangesByKeysBlockRange(db StateKVHistoryReader, targetBloc
 	return first, nil
 }
 
-// stateHistoryIndexedHead returns the inclusive inverse-index watermark capped
-// to the query head. Missing stage metadata denotes the legacy all-inline
-// layout; callers retain their existing inverse-only behavior in that case.
+// stateHistoryIndexedHead returns the inclusive posting-index watermark capped
+// to the query head. Missing stage metadata denotes a standalone/all-inline
+// writer whose posting rows are immediately visible.
 func stateHistoryIndexedHead(db ethdb.KeyValueReader, headBlock uint64) (uint64, bool, error) {
 	row, ok, err := ReadStageProgressRow(db, StageStateHistoryIndex)
 	if err != nil || !ok {
@@ -1186,58 +1165,60 @@ func stateHistoryIndexedHead(db ethdb.KeyValueReader, headBlock uint64) (uint64,
 	return headBlock, true, nil
 }
 
-func firstStateDomainChangeBlockByKeyRange(db ethdb.Iteratee, fromBlock, toBlock uint64, durable bool, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (uint64, bool, error) {
-	prefix, ok := stateDomainChangeInversePrefixByKey(flatDomain, owner, generation, domain, key)
+func firstStateDomainChangeBlockByKeyRange(db ethdb.Iteratee, fromBlock, toBlock uint64, _ bool, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (uint64, bool, error) {
+	latestKey, ok := stateDomainChangeLatestKeyByKey(flatDomain, owner, generation, domain, key)
 	if !ok || fromBlock > toBlock {
 		return 0, false, nil
 	}
-	var start [8]byte
-	binary.BigEndian.PutUint64(start[:], fromBlock)
-	if durable {
-		if seeker, ok := db.(pointread.DurablePrefixSeeker); ok {
-			foundKey, _, found, err := seeker.SeekDurablePrefix(prefix, start[:])
-			if err != nil || !found {
-				return 0, false, err
-			}
-			blockNum, valid := StateDomainChangeInverseBlockNum(foundKey, len(prefix))
-			if !valid || blockNum > toBlock {
-				return 0, false, nil
-			}
-			return blockNum, true, nil
-		}
-	}
-	if seeker, ok := db.(pointread.PrefixSeeker); ok {
-		foundKey, _, found, err := seeker.SeekPrefix(prefix, start[:])
-		if err != nil || !found {
-			return 0, false, err
-		}
-		blockNum, valid := StateDomainChangeInverseBlockNum(foundKey, len(prefix))
-		if !valid || blockNum > toBlock {
-			return 0, false, nil
-		}
-		return blockNum, true, nil
-	}
-	var blockNum uint64
+	var first uint64
 	found := false
-	err := iterateStateDomainChangeBlocksByInversePrefixRange(db, prefix, fromBlock, toBlock, func(candidate uint64) (bool, error) {
-		blockNum = candidate
+	err := iterateStateDomainChangePostingBlocks(db, latestKey, fromBlock, toBlock, func(blockNum uint64) (bool, error) {
+		first = blockNum
 		found = true
 		return false, nil
 	})
-	return blockNum, found, err
+	return first, found, err
 }
 
-func stateDomainChangeInversePrefixByKey(flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool) {
+func stateDomainChangeLatestKeyByKey(flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool) {
 	switch flatDomain {
 	case StateFlatDomainAccountLatest:
-		return stateChangeInverseKeyPrefix(StateAccountLatestCommitmentKey(owner)), true
+		return StateAccountLatestCommitmentKey(owner), true
 	case StateFlatDomainKVLatest:
-		return stateChangeInverseKeyPrefix(StateKVLatestCommitmentKey(owner, generation, domain, key)), true
+		return StateKVLatestCommitmentKey(owner, generation, domain, key), true
 	case StateFlatDomainKVGeneration:
-		return stateChangeInverseKeyPrefix(StateKVGenerationCommitmentKey(owner)), true
+		return StateKVGenerationCommitmentKey(owner), true
 	default:
 		return nil, false
 	}
+}
+
+func iterateStateDomainChangePostingBlocks(db ethdb.Iteratee, latestKey []byte, fromBlock, toBlock uint64, fn func(uint64) (bool, error)) error {
+	return iterateStateChangePostingCandidates(db, latestKey, fromBlock, toBlock, func(blockNum uint64) (bool, error) {
+		// SHA-256 is only a candidate selector. The changeset's reconstructed
+		// original latest key is the authoritative collision check.
+		matches, err := stateDomainChangeBlockMatchesLatestKey(db, blockNum, latestKey)
+		if err != nil || !matches {
+			return err == nil, err
+		}
+		return fn(blockNum)
+	})
+}
+
+func stateDomainChangeBlockMatchesLatestKey(db ethdb.Iteratee, blockNum uint64, latestKey []byte) (bool, error) {
+	found := false
+	err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+		candidate, err := stateDomainChangeLatestKey(change)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Equal(candidate, latestKey) {
+			found = true
+			return false, nil
+		}
+		return true, nil
+	})
+	return found, err
 }
 
 // IterateStateDomainChangesByKey walks hot StateDomainChange rows matching one
@@ -1248,7 +1229,7 @@ func IterateStateDomainChangesByKey(db StateKVHistoryReader, targetTxNum, headTx
 
 // IterateStateDomainChangesByKeyBlockRange is the block-bounded form used by
 // live archive queries. targetBlock is the state being requested, so only
-// inverse rows in (targetBlock, headBlock] can contribute rollback values.
+// posting candidates in (targetBlock, headBlock] can contribute rollback values.
 func IterateStateDomainChangesByKeyBlockRange(db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*StateDomainChange) (bool, error)) error {
 	if targetBlock >= headBlock {
 		return nil
@@ -1266,7 +1247,7 @@ func iterateStateDomainChangesByKey(db StateKVHistoryReader, fromBlock, toBlock 
 		// (targetBlock, headBlock]. targetTxNum/headTxNum are the respective
 		// end-of-block boundaries, so every change in those candidate blocks is
 		// necessarily inside the tx window. Avoid one StateTxRange Has+Get per
-		// inverse-index hit — frequently updated dynamic properties otherwise
+		// posting-index hit — frequently updated dynamic properties otherwise
 		// turn a 260k-block query into hundreds of thousands of Pebble point
 		// reads before the actual history row is examined.
 		if !bounded {
@@ -1327,7 +1308,22 @@ func iterateStateDomainChangesByKey(db StateKVHistoryReader, fromBlock, toBlock 
 			return fn(change)
 		})
 	}
-	return IterateStateDomainChangeBlocksByKey(db, flatDomain, owner, generation, domain, key, visitBlock)
+	indexedHead, staged, err := stateHistoryIndexedHead(db, ^uint64(0))
+	if err != nil {
+		return err
+	}
+	if !staged {
+		return IterateStateDomainChangeBlocksByKey(db, flatDomain, owner, generation, domain, key, visitBlock)
+	}
+	if err := IterateStateDomainChangeBlocksByKeyRange(db, 0, indexedHead, flatDomain, owner, generation, domain, key, visitBlock); err != nil || stop {
+		return err
+	}
+	return IterateStateDomainChangesByTxRange(db, targetTxNum+1, headTxNum, func(change *StateDomainChange) (bool, error) {
+		if change.BlockNum <= indexedHead || !stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
+			return true, nil
+		}
+		return fn(change)
+	})
 }
 
 // IterateStateDomainChangesByPrefix walks hot KV-latest StateDomainChange rows
@@ -1363,10 +1359,16 @@ func iterateStateDomainChangesByPrefix(db StateKVHistoryReader, fromBlock, toBlo
 		if !staged {
 			indexedHead = toBlock
 		}
+	} else {
+		var err error
+		indexedHead, staged, err = stateHistoryIndexedHead(db, ^uint64(0))
+		if err != nil {
+			return err
+		}
 	}
 	blocks := make(map[uint64]struct{})
 	if err := IterateStateDomainChangeBlocksByPrefix(db, owner, generation, domain, prefix, func(blockNum uint64) (bool, error) {
-		if bounded && (blockNum < fromBlock || blockNum > indexedHead) {
+		if staged && (blockNum < fromBlock || blockNum > indexedHead) {
 			return true, nil
 		}
 		ok, err := stateBlockIntersectsTxWindow(db, blockNum, targetTxNum, headTxNum)
@@ -1398,7 +1400,15 @@ func iterateStateDomainChangesByPrefix(db StateKVHistoryReader, fromBlock, toBlo
 			return err
 		}
 	}
-	if bounded && staged {
+	if staged {
+		if !bounded {
+			return IterateStateDomainChangesByTxRange(db, targetTxNum+1, headTxNum, func(change *StateDomainChange) (bool, error) {
+				if change.BlockNum <= indexedHead || !stateDomainChangeMatchesKVLatestPrefix(change, owner, generation, domain, prefix) {
+					return true, nil
+				}
+				return fn(change)
+			})
+		}
 		directFrom := fromBlock
 		if indexedHead >= directFrom {
 			if indexedHead == ^uint64(0) {
@@ -1433,82 +1443,38 @@ func stateDomainChangeMatchesKey(change *StateDomainChange, flatDomain StateFlat
 	}
 }
 
-func iterateStateDomainChangeBlocksByInversePrefix(db ethdb.Iteratee, prefix []byte, fn func(blockNum uint64) (bool, error)) error {
-	it := db.NewIterator(prefix, nil)
-	defer it.Release()
-	for it.Next() {
-		blockNum, ok := StateDomainChangeInverseBlockNum(it.Key(), len(prefix))
-		if !ok {
-			continue
-		}
-		cont, err := fn(blockNum)
-		if err != nil {
-			return err
-		}
-		if !cont {
-			return nil
-		}
-	}
-	return it.Error()
-}
-
-func iterateStateDomainChangeBlocksByInversePrefixRange(db ethdb.Iteratee, prefix []byte, fromBlock, toBlock uint64, fn func(blockNum uint64) (bool, error)) error {
-	var start [8]byte
-	binary.BigEndian.PutUint64(start[:], fromBlock)
-	it := db.NewIterator(prefix, start[:])
-	defer it.Release()
-	for it.Next() {
-		blockNum, ok := StateDomainChangeInverseBlockNum(it.Key(), len(prefix))
-		if !ok {
-			continue
-		}
-		if blockNum > toBlock {
-			return nil
-		}
-		cont, err := fn(blockNum)
-		if err != nil {
-			return err
-		}
-		if !cont {
-			return nil
-		}
-	}
-	return it.Error()
-}
-
 func IterateStateDomainChangeBlocksByPrefix(db ethdb.Iteratee, owner common.Address, generation uint64, domain kvdomains.KVDomain, keyPrefix []byte, fn func(blockNum uint64) (bool, error)) error {
-	prefix := stateChangeInverseKeyPrefix(StateKVLatestCommitmentKey(owner, generation, domain, keyPrefix))
-	it := db.NewIterator(prefix, nil)
-	defer it.Release()
+	latestPrefix := StateKVLatestCommitmentKey(owner, generation, domain, keyPrefix)
 	seen := make(map[uint64]struct{})
-	for it.Next() {
-		if !bytes.HasPrefix(it.Key(), prefix) {
-			continue
-		}
-		if len(it.Key()) < len(prefix)+8 {
-			continue
-		}
-		blockNum := binary.BigEndian.Uint64(it.Key()[len(it.Key())-8:])
+	stopped := false
+	visit := func(blockNum uint64) (bool, error) {
 		if _, ok := seen[blockNum]; ok {
-			continue
+			return true, nil
 		}
 		seen[blockNum] = struct{}{}
 		cont, err := fn(blockNum)
-		if err != nil {
-			return err
-		}
 		if !cont {
+			stopped = true
+		}
+		return cont, err
+	}
+	directoryPrefix := append(append([]byte(nil), stateChangeKeyDirectoryPrefix...), latestPrefix...)
+	it := db.NewIterator(directoryPrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		if stopped {
 			return nil
+		}
+		physical := it.Key()
+		if !bytes.HasPrefix(physical, directoryPrefix) {
+			continue
+		}
+		latestKey := physical[len(stateChangeKeyDirectoryPrefix):]
+		if err := iterateStateDomainChangePostingBlocks(db, latestKey, 0, ^uint64(0), visit); err != nil {
+			return err
 		}
 	}
 	return it.Error()
-}
-
-func StateDomainChangeInverseBlockNum(key []byte, prefixLen int) (uint64, bool) {
-	if len(key) != prefixLen+8 {
-		return 0, false
-	}
-	return binary.BigEndian.Uint64(key[prefixLen:]), true
 }
 
 func stateDomainChangeLatestKey(change *StateDomainChange) ([]byte, error) {

@@ -34,7 +34,7 @@ func (p *capturingDomainChangePublisher) PublishStateDomainChanges(changes []*ra
 
 func TestDefaultStateDomainChangePublicationConfigUsesRegisteredHistoryDomain(t *testing.T) {
 	cfg := DefaultStateDomainChangePublicationConfig()
-	if cfg.Name != "HistoryDomain" || cfg.WriteTxRange == nil || cfg.WriteRow == nil || cfg.WriteBlock == nil || cfg.WriteInverseIndex == nil {
+	if cfg.Name != "HistoryDomain" || cfg.WriteTxRange == nil || cfg.WriteRow == nil || cfg.WriteBlock == nil || cfg.WritePostingIndex == nil {
 		t.Fatalf("default publication config = %+v", cfg)
 	}
 }
@@ -88,7 +88,7 @@ func TestStateDomainChangeRunnerUsesConfiguredPublicationSteps(t *testing.T) {
 			calls = append(calls, "row")
 			return nil
 		},
-		WriteInverseIndex: func(writer ethdb.KeyValueWriter, change *rawdb.StateDomainChange) error {
+		WritePostingIndex: func(writer ethdb.KeyValueWriter, change *rawdb.StateDomainChange) error {
 			if writer != db {
 				t.Fatalf("index writer mismatch")
 			}
@@ -130,11 +130,11 @@ func TestStateDomainChangeRunnerCanDeferInverseIndex(t *testing.T) {
 			rowCalls++
 			return nil
 		},
-		WriteInverseIndex: func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error {
+		WritePostingIndex: func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error {
 			t.Fatal("deferred publisher invoked inverse index writer")
 			return nil
 		},
-		SkipInverseIndex: true,
+		SkipPostingIndex: true,
 	}
 	change := &rawdb.StateDomainChange{
 		BlockNum: 1, TxNum: 1, Seq: 1,
@@ -166,7 +166,7 @@ func TestStateDomainChangeRunnerPublishesCompleteBlockOnce(t *testing.T) {
 			blockCalls++
 			return nil
 		},
-		WriteInverseIndex: func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error {
+		WritePostingIndex: func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error {
 			indexCalls++
 			return nil
 		},

@@ -120,6 +120,44 @@ func (f *historyFixture) pruneHotStateDomainHistory() {
 	}
 }
 
+func TestPersistentHistoryReaderUsesPostingIndexForExactAndPrefixState(t *testing.T) {
+	f := newHistoryFixture(t)
+	owner := testAddr(0x8f)
+	domain := kvdomains.SystemReward
+	f.applyBlock(tcommon.Hash{1}, func(s *StateDB) {
+		s.CreateAccount(owner, corepb.AccountType_Normal)
+		if err := s.SetAccountKV(owner, domain, []byte("reward/a"), []byte("a-v1")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetAccountKV(owner, domain, []byte("reward/b"), []byte("b-v1")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{2}, func(s *StateDB) {
+		if err := s.SetAccountKV(owner, domain, []byte("reward/a"), []byte("a-v2")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DeleteAccountKV(owner, domain, []byte("reward/b")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	reader := f.reader()
+	value, ok, err := reader.AccountKVAt(owner, domain, []byte("reward/a"), 1)
+	if err != nil || !ok || string(value) != "a-v1" {
+		t.Fatalf("posting exact history = (%q,%t,%v)", value, ok, err)
+	}
+	entries := make(map[string]string)
+	if err := reader.AccountKVPrefixAt(owner, domain, []byte("reward/"), 1, func(key, value []byte) (bool, error) {
+		entries[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if entries["reward/a"] != "a-v1" || entries["reward/b"] != "b-v1" || len(entries) != 2 {
+		t.Fatalf("posting prefix history = %v", entries)
+	}
+}
+
 func TestPersistentHistoryReaderBatchKVAsOf(t *testing.T) {
 	f := newHistoryFixture(t)
 	addr := testAddr(0x90)

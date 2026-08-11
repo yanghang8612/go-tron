@@ -26,7 +26,7 @@ func (s *StateDB) BeginDomainChangeStage(writer ethdb.KeyValueWriter, txRange *r
 
 // BeginDomainChangeStageWithConfig starts journal capture with an explicit
 // publication policy. Bulk sync uses this boundary to retain authoritative
-// changeset rows while deferring the rebuildable inverse index to a sorted ETL
+// changeset rows while deferring the rebuildable posting index to a sorted ETL
 // stage after the block range is committed.
 func (s *StateDB) BeginDomainChangeStageWithConfig(writer ethdb.KeyValueWriter, txRange *rawdb.StateTxRange, cfg StateDomainChangePublicationConfig) (*DomainChangeStage, error) {
 	if s == nil || writer == nil || txRange == nil {
@@ -124,18 +124,18 @@ type StateDomainChangeBlockPublisher interface {
 
 // StateDomainChangePublicationConfig registers the hot-history publication
 // steps for one temporal history domain. The default config writes rawdb
-// tx-ranges, rows, and inverse indexes; future configs can add or replace
+// tx-ranges, rows, and posting indexes; future configs can add or replace
 // accessors without changing execution journal capture.
 type StateDomainChangePublicationConfig struct {
 	Name              string
 	WriteTxRange      func(ethdb.KeyValueWriter, uint64, tcommon.Hash, uint64, uint64) error
 	WriteRow          func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error
 	WriteBlock        func(ethdb.KeyValueWriter, []*rawdb.StateDomainChange) error
-	WriteInverseIndex func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error
-	// SkipInverseIndex is a bulk-sync policy, not a history-disable switch.
+	WritePostingIndex func(ethdb.KeyValueWriter, *rawdb.StateDomainChange) error
+	// SkipPostingIndex is a bulk-sync policy, not a history-disable switch.
 	// Authoritative rows are still written and a hash-bound derived stage later
-	// rebuilds their inverse keys in sorted order.
-	SkipInverseIndex bool
+	// rebuilds their posting frames in sorted order.
+	SkipPostingIndex bool
 }
 
 func DefaultStateDomainChangePublicationConfig() StateDomainChangePublicationConfig {
@@ -152,7 +152,7 @@ func StateDomainChangePublicationConfigFromDomain(cfg snapshots.DomainCfg) State
 		WriteTxRange:      cfg.WriteHotHistoryTxRange,
 		WriteRow:          cfg.WriteHotHistoryRow,
 		WriteBlock:        cfg.WriteHotHistoryBlock,
-		WriteInverseIndex: cfg.WriteHotHistoryIndex,
+		WritePostingIndex: cfg.WriteHotHistoryIndex,
 	}
 }
 
@@ -192,15 +192,15 @@ func (r StateDomainChangeRunner) PublishStateDomainChanges(changes []*rawdb.Stat
 	if r.cfg.Name == "" {
 		return fmt.Errorf("state domain change stage: unnamed publication config")
 	}
-	if r.cfg.WriteRow == nil || (!r.cfg.SkipInverseIndex && r.cfg.WriteInverseIndex == nil) {
+	if r.cfg.WriteRow == nil || (!r.cfg.SkipPostingIndex && r.cfg.WritePostingIndex == nil) {
 		return fmt.Errorf("state domain change stage: incomplete publication config %q", r.cfg.Name)
 	}
 	for _, change := range changes {
 		if err := r.cfg.WriteRow(r.writer, change); err != nil {
 			return err
 		}
-		if !r.cfg.SkipInverseIndex {
-			if err := r.cfg.WriteInverseIndex(r.writer, change); err != nil {
+		if !r.cfg.SkipPostingIndex {
+			if err := r.cfg.WritePostingIndex(r.writer, change); err != nil {
 				return err
 			}
 		}
@@ -221,17 +221,17 @@ func (r StateDomainChangeRunner) PublishStateDomainChangeBlock(changes []*rawdb.
 	if r.cfg.WriteBlock == nil {
 		return r.PublishStateDomainChanges(changes)
 	}
-	if !r.cfg.SkipInverseIndex && r.cfg.WriteInverseIndex == nil {
+	if !r.cfg.SkipPostingIndex && r.cfg.WritePostingIndex == nil {
 		return fmt.Errorf("state domain change stage: incomplete publication config %q", r.cfg.Name)
 	}
 	if err := r.cfg.WriteBlock(r.writer, changes); err != nil {
 		return err
 	}
-	if r.cfg.SkipInverseIndex {
+	if r.cfg.SkipPostingIndex {
 		return nil
 	}
 	for _, change := range changes {
-		if err := r.cfg.WriteInverseIndex(r.writer, change); err != nil {
+		if err := r.cfg.WritePostingIndex(r.writer, change); err != nil {
 			return err
 		}
 	}

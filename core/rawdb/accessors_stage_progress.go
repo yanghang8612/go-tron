@@ -24,7 +24,7 @@ const (
 	// and be rebuilt from canonical block bodies after interruption.
 	StageTxLookup StageID = "TxLookup"
 	// StageStateHistoryIndex records the highest canonical block whose derived
-	// latest-key -> block inverse rows have been materialized. State changesets
+	// hash -> block posting rows have been materialized. State changesets
 	// and tx ranges are authoritative; bulk sync may defer this index until the
 	// covered blocks are solidified, then rebuild it with ordered ETL writes.
 	StageStateHistoryIndex StageID = "StateHistoryIndex"

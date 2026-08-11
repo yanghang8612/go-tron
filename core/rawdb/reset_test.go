@@ -36,6 +36,17 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	if err := WriteHistoryPruneMode(db, "archive"); err != nil {
 		t.Fatal(err)
 	}
+	hash := stateChangePostingHash([]byte("latest"))
+	posting, err := encodeStateChangePosting([]uint64{9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(stateChangePostingKey(hash, 9), posting); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(stateChangeKeyDirectoryKey([]byte("latest")), nil); err != nil {
+		t.Fatal(err)
+	}
 	staged := testSyncStagedBlock(1, common.Hash{0x01})
 	if err := WriteSyncStagedBlock(db, staged); err != nil {
 		t.Fatal(err)
@@ -81,5 +92,13 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	}
 	if _, ok, err := ReadSyncStagedBlock(db, staged.Number()); err != nil || ok {
 		t.Fatalf("sync staged block survived reset: ok=%v err=%v", ok, err)
+	}
+	for _, prefix := range [][]byte{stateChangePostingPrefix, stateChangeKeyDirectoryPrefix} {
+		it := db.NewIterator(prefix, nil)
+		hasRow := it.Next()
+		it.Release()
+		if hasRow {
+			t.Fatalf("state change posting prefix %q survived reset", prefix)
+		}
 	}
 }

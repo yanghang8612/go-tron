@@ -49,14 +49,16 @@ type RebuildTransactionLookupResult struct {
 	ETL                  etl.Stats
 }
 
-// RebuildStateHistoryIndexResult describes one sorted inverse-index pass over
-// authoritative temporal changesets. ChangesScanned counts journal rows; the
-// ETL Applied count reflects latest-key/block duplicates collapsed before load.
+// RebuildStateHistoryIndexResult describes one posting-256 pass over
+// authoritative temporal changesets. ChangesScanned counts journal rows;
+// PostingRows counts immutable frames after latest-key/block deduplication.
 type RebuildStateHistoryIndexResult struct {
 	FromBlock      uint64
 	ToBlock        uint64
 	BlocksScanned  uint64
 	ChangesScanned uint64
+	DirectoryRows  uint64
+	PostingRows    uint64
 	ETL            etl.Stats
 }
 
@@ -270,9 +272,9 @@ func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethd
 	return result, nil
 }
 
-// RebuildStateHistoryIndexInterruptible collects latest-key -> block inverse
-// rows from canonical temporal changesets, then loads them in physical key
-// order. expectedHash binds every StateTxRange source row to the canonical
+// RebuildStateHistoryIndexInterruptible collects hash -> block postings and a
+// logical-key directory from canonical temporal changesets, then loads them in
+// physical key order. expectedHash binds every StateTxRange source row to the canonical
 // branch before its derived rows are published. A failed or interrupted pass
 // leaves the stage watermark to the caller; partially loaded puts are
 // idempotently overwritten by the next pass. Keep the source scans range-based:
@@ -291,7 +293,7 @@ func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer e
 	if toBlock < fromBlock {
 		return nil, fmt.Errorf("rawdb: inverted state history index range [%d,%d]", fromBlock, toBlock)
 	}
-	collector, err := etl.NewCollector(opts)
+	collector, err := newStateChangePostingCollector(fromBlock, toBlock, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +343,7 @@ func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer e
 			return false, fmt.Errorf("rawdb: state domain change block %d outside history index rebuild range [%d,%d]", change.BlockNum, fromBlock, toBlock)
 		}
 		change.BlockHash = blockHashes[change.BlockNum-fromBlock]
-		if err := WriteStateDomainChangeInverseIndex(collector, change); err != nil {
+		if err := collector.Collect(change); err != nil {
 			return false, err
 		}
 		result.ChangesScanned++
@@ -352,14 +354,13 @@ func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer e
 	if interrupted != nil && interrupted() {
 		return nil, ErrStateHistoryIndexRebuildInterrupted
 	}
-	stats, err := collector.LoadInterruptible(writer, interrupted)
+	build, err := collector.Load(writer, interrupted)
 	if err != nil {
-		if errors.Is(err, etl.ErrLoadInterrupted) {
-			return nil, ErrStateHistoryIndexRebuildInterrupted
-		}
 		return nil, err
 	}
-	result.ETL = stats
+	result.DirectoryRows = build.DirectoryRows
+	result.PostingRows = build.PostingRows
+	result.ETL = build.ETL
 	return result, nil
 }
 

@@ -228,7 +228,7 @@ func writeStateHistoryRestoreBenchRows(w ethdb.KeyValueWriter, changes []*rawdb.
 		if err := rawdb.WriteStateDomainChangeRow(w, change); err != nil {
 			return err
 		}
-		if err := rawdb.WriteStateDomainChangeInverseIndex(w, change); err != nil {
+		if err := rawdb.WriteStateDomainChangePostingIndex(w, change); err != nil {
 			return err
 		}
 	}

@@ -363,7 +363,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			IterateHistoryByKey:               iterateStateDomainChangeHistoryByKey,
 			WriteHotHistoryRow:                rawdb.WriteStateDomainChangeRow,
 			WriteHotHistoryBlock:              rawdb.WriteStateDomainChangeBlockRows,
-			WriteHotHistoryIndex:              rawdb.WriteStateDomainChangeInverseIndex,
+			WriteHotHistoryIndex:              rawdb.WriteStateDomainChangePostingIndex,
 			WriteHotHistoryTxRange:            rawdb.WriteStateTxRange,
 			ReadHotHistoryTxRange:             rawdb.ReadStateTxRange,
 			IterateHotHistoryTxRanges:         rawdb.IterateStateTxRanges,

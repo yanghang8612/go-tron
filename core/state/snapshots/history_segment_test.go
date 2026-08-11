@@ -664,7 +664,7 @@ func TestManagerRestoreStateDomainHistoryLoadsThroughSortedETL(t *testing.T) {
 		if err := rawdb.WriteStateDomainChangeRow(direct, change); err != nil {
 			t.Fatalf("capture change row key: %v", err)
 		}
-		if err := rawdb.WriteStateDomainChangeInverseIndex(direct, change); err != nil {
+		if err := rawdb.WriteStateDomainChangePostingIndex(direct, change); err != nil {
 			t.Fatalf("capture inverse index key: %v", err)
 		}
 	}
@@ -692,7 +692,7 @@ func TestManagerRestoreStateDomainHistoryLoadsThroughSortedETL(t *testing.T) {
 		t.Fatalf("history restore put keys are not sorted by physical key: %x", writer.putKeys)
 	}
 	if len(writer.deleteKeys) != 0 {
-		t.Fatalf("history restore deletes = %d, want 0", len(writer.deleteKeys))
+		t.Fatalf("history restore deletes = %d, want none for the single fresh-sync format", len(writer.deleteKeys))
 	}
 
 	etlTemp := filepath.Join(t.TempDir(), "etl-scratch")

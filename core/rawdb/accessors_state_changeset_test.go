@@ -255,7 +255,7 @@ func TestStateDomainChangeBlockPackRoundTripAndLogicalBytes(t *testing.T) {
 		t.Fatalf("out-of-range packed read = ok:%v err:%v", ok, err)
 	}
 	originalKey := append([]byte(nil), changes[63].Key...)
-	if err := WriteStateDomainChangeInverseIndex(db, changes[63]); err != nil {
+	if err := WriteStateDomainChangePostingIndex(db, changes[63]); err != nil {
 		t.Fatal(err)
 	}
 	override := *changes[63]
@@ -742,7 +742,7 @@ func TestStateDomainChangeRowAndInverseIndexPublishSeparately(t *testing.T) {
 	if len(blocks) != 0 {
 		t.Fatalf("row-only publish created inverse blocks %v", blocks)
 	}
-	if err := WriteStateDomainChangeInverseIndex(db, change); err != nil {
+	if err := WriteStateDomainChangePostingIndex(db, change); err != nil {
 		t.Fatalf("write inverse index: %v", err)
 	}
 	if err := IterateStateDomainChangeBlocks(db, owner, 4, kvdomains.SystemReward, []byte("reward/split"), func(blockNum uint64) (bool, error) {
@@ -993,7 +993,7 @@ func TestReadStateKVAsOfTxNumStopsAtFirstSubsequentChange(t *testing.T) {
 	}
 }
 
-func TestReadFirstStateDomainChangeByKeyBlockRangeUsesPrefixSeek(t *testing.T) {
+func TestReadFirstStateDomainChangeByKeyBlockRangeUsesPostingIterator(t *testing.T) {
 	base := ethrawdb.NewMemoryDatabase()
 	db := &prefixSeekingHistoryDB{Database: base}
 	owner := common.Address{0x41, 0x29}
@@ -1015,12 +1015,12 @@ func TestReadFirstStateDomainChangeByKeyBlockRangeUsesPrefixSeek(t *testing.T) {
 	if change == nil || change.BlockNum != 100 {
 		t.Fatalf("first change = %+v, want block 100", change)
 	}
-	if db.seekCalls != 1 || db.inverseIteratorCalls != 0 {
-		t.Fatalf("seek calls = %d inverse iterator calls = %d, want 1/0", db.seekCalls, db.inverseIteratorCalls)
+	if db.seekCalls != 0 || db.inverseIteratorCalls != 1 {
+		t.Fatalf("seek calls = %d posting iterator calls = %d, want 0/1", db.seekCalls, db.inverseIteratorCalls)
 	}
 }
 
-func TestReadFirstStateDomainChangeByKeyBlockRangeUsesDurableSeekForStagedIndex(t *testing.T) {
+func TestReadFirstStateDomainChangeByKeyBlockRangeUsesPostingForStagedIndex(t *testing.T) {
 	base := ethrawdb.NewMemoryDatabase()
 	db := &prefixSeekingHistoryDB{Database: base}
 	owner := common.Address{0x41, 0x2b}
@@ -1043,8 +1043,8 @@ func TestReadFirstStateDomainChangeByKeyBlockRangeUsesDurableSeekForStagedIndex(
 	if change == nil || change.BlockNum != 100 || !bytes.Equal(change.Prev, []byte("before")) {
 		t.Fatalf("first change = %+v, want durable block 100", change)
 	}
-	if db.durableSeekCalls != 1 || db.seekCalls != 0 || db.inverseIteratorCalls != 0 {
-		t.Fatalf("durable/logical/inverse iterator calls = %d/%d/%d, want 1/0/0", db.durableSeekCalls, db.seekCalls, db.inverseIteratorCalls)
+	if db.durableSeekCalls != 0 || db.seekCalls != 0 || db.inverseIteratorCalls != 1 {
+		t.Fatalf("durable/logical/posting iterator calls = %d/%d/%d, want 0/0/1", db.durableSeekCalls, db.seekCalls, db.inverseIteratorCalls)
 	}
 }
 
@@ -1066,8 +1066,16 @@ func TestStateDomainChangeBlockRangeReadsScanUnindexedStageTail(t *testing.T) {
 			if err := WriteStateDomainChange(db, change); err != nil {
 				t.Fatal(err)
 			}
-		} else if err := WriteStateDomainChangeRow(db, change); err != nil {
-			t.Fatal(err)
+		} else {
+			if err := WriteStateDomainChangeRow(db, change); err != nil {
+				t.Fatal(err)
+			}
+			// Simulate an interrupted stage that loaded a deterministic posting
+			// beyond its still-published watermark. Readers must ignore it as an
+			// index row and serve the block exactly once from the changeset tail.
+			if err := WriteStateDomainChangePostingIndex(db, change); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err := WriteStageProgressWithHash(db, StageStateHistoryIndex, 1, common.Hash{1}); err != nil {
@@ -1100,6 +1108,16 @@ func TestStateDomainChangeBlockRangeReadsScanUnindexedStageTail(t *testing.T) {
 	}
 	if !reflect.DeepEqual(prefixed, []uint64{1, 2}) {
 		t.Fatalf("prefix indexed+tail blocks = %v, want [1 2]", prefixed)
+	}
+	var unbounded []uint64
+	if err := IterateStateDomainChangesByKey(db, 0, 2, StateFlatDomainKVLatest, owner, 1, kvdomains.SystemReward, key, func(change *StateDomainChange) (bool, error) {
+		unbounded = append(unbounded, change.BlockNum)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(unbounded, []uint64{1, 2}) {
+		t.Fatalf("unbounded indexed+tail blocks = %v, want [1 2]", unbounded)
 	}
 }
 
@@ -1339,7 +1357,7 @@ func (db *prefixSeekingHistoryDB) SeekDurablePrefix(prefix, start []byte) (key, 
 }
 
 func (db *prefixSeekingHistoryDB) NewIterator(prefix, start []byte) ethdb.Iterator {
-	if bytes.HasPrefix(prefix, stateChangeInversePrefix) {
+	if bytes.HasPrefix(prefix, stateChangePostingPrefix) {
 		db.inverseIteratorCalls++
 	}
 	if bytes.HasPrefix(prefix, stateChangeSetPrefix) && len(prefix) == len(stateChangeSetPrefix)+8 {

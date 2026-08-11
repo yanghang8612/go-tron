@@ -27,20 +27,22 @@ var (
 )
 
 type compactStateHistoryOutput struct {
-	ChaindataPath          string  `json:"chaindata_path"`
-	CompactedChangeSets    bool    `json:"compacted_changesets"`
-	CompactedChangeIndex   bool    `json:"compacted_change_index"`
-	PhysicalBytesBefore    uint64  `json:"physical_bytes_before"`
-	PhysicalBytesAfter     uint64  `json:"physical_bytes_after"`
-	ReclaimedPhysicalBytes uint64  `json:"reclaimed_physical_bytes"`
-	ElapsedSeconds         float64 `json:"elapsed_seconds"`
+	ChaindataPath             string  `json:"chaindata_path"`
+	CompactedChangeSets       bool    `json:"compacted_changesets"`
+	CompactedPostingIndex     bool    `json:"compacted_posting_index"`
+	StalePostingRowsDeleted   uint64  `json:"stale_posting_rows_deleted"`
+	StaleDirectoryRowsDeleted uint64  `json:"stale_directory_rows_deleted"`
+	PhysicalBytesBefore       uint64  `json:"physical_bytes_before"`
+	PhysicalBytesAfter        uint64  `json:"physical_bytes_after"`
+	ReclaimedPhysicalBytes    uint64  `json:"reclaimed_physical_bytes"`
+	ElapsedSeconds            float64 `json:"elapsed_seconds"`
 }
 
 func dbCompactStateHistoryCommand() *cli.Command {
 	return &cli.Command{
 		Name:        "compact-state-history",
 		Usage:       "Reclaim SST space left by pruned hot state history",
-		Description: "The node using this datadir must be stopped. This command does not delete live rows; it only compacts state-changeset-v2-* and state-change-index-v2-* tombstones.",
+		Description: "The node using this datadir must be stopped. This command removes only stale posting frames/directories, then compacts state-history tombstones without deleting live history.",
 		Flags: []cli.Flag{
 			dataDirFlag,
 			dbCacheFlag,
@@ -86,12 +88,20 @@ func dbCompactStateHistoryCmd(ctx *cli.Context) error {
 		errWriter = os.Stderr
 	}
 	started := time.Now()
-	changeSetStart, changeSetLimit, changeIndexStart, changeIndexLimit := rawdb.StateHistoryKeyspaceBounds()
+	postingPrune, err := rawdb.PruneStaleStateChangePostingIndex(db)
+	if err != nil {
+		return fmt.Errorf("prune stale state change postings: %w", err)
+	}
+	changeSetStart, changeSetLimit := rawdb.StateHistoryKeyspaceBounds()
 	if err := compactKeyRangeWithHeartbeat(db, "state-changeset-v2-*", changeSetStart, changeSetLimit, ctx.Duration("progress"), errWriter); err != nil {
 		return fmt.Errorf("compact state changesets: %w", err)
 	}
-	if err := compactKeyRangeWithHeartbeat(db, "state-change-index-v2-*", changeIndexStart, changeIndexLimit, ctx.Duration("progress"), errWriter); err != nil {
-		return fmt.Errorf("compact state change index: %w", err)
+	postingStart, postingLimit, directoryStart, directoryLimit := rawdb.StateHistoryPostingKeyspaceBounds()
+	if err := compactKeyRangeWithHeartbeat(db, "state-change-posting-v3-*", postingStart, postingLimit, ctx.Duration("progress"), errWriter); err != nil {
+		return fmt.Errorf("compact state change postings: %w", err)
+	}
+	if err := compactKeyRangeWithHeartbeat(db, "state-change-keys-v3-*", directoryStart, directoryLimit, ctx.Duration("progress"), errWriter); err != nil {
+		return fmt.Errorf("compact state change key directory: %w", err)
 	}
 	if err := db.Close(); err != nil {
 		return fmt.Errorf("close chaindata after state history compaction: %w", err)
@@ -106,13 +116,15 @@ func dbCompactStateHistoryCmd(ctx *cli.Context) error {
 		reclaimed = physicalBefore - physicalAfter
 	}
 	result := compactStateHistoryOutput{
-		ChaindataPath:          path,
-		CompactedChangeSets:    true,
-		CompactedChangeIndex:   true,
-		PhysicalBytesBefore:    physicalBefore,
-		PhysicalBytesAfter:     physicalAfter,
-		ReclaimedPhysicalBytes: reclaimed,
-		ElapsedSeconds:         time.Since(started).Seconds(),
+		ChaindataPath:             path,
+		CompactedChangeSets:       true,
+		CompactedPostingIndex:     true,
+		StalePostingRowsDeleted:   postingPrune.PostingRowsDeleted,
+		StaleDirectoryRowsDeleted: postingPrune.DirectoryRowsDeleted,
+		PhysicalBytesBefore:       physicalBefore,
+		PhysicalBytesAfter:        physicalAfter,
+		ReclaimedPhysicalBytes:    reclaimed,
+		ElapsedSeconds:            time.Since(started).Seconds(),
 	}
 	writer := ctx.App.Writer
 	if writer == nil {

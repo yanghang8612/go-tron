@@ -848,7 +848,7 @@ func (bc *BlockChain) InsertBlocksWithStageHook(blocks []*types.Block, hook Stag
 }
 
 // InsertSyncBlocksWithStageHook applies a bulk-sync range while deferring its
-// rebuildable tx-hash lookup and state-history inverse rows. Authoritative
+// rebuildable tx-hash lookup and state-history posting rows. Authoritative
 // TransactionRet and temporal changeset rows remain on the canonical path.
 // SyncService advances both sorted derived stages after the range settles.
 func (bc *BlockChain) InsertSyncBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {

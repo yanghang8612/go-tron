@@ -89,7 +89,8 @@ func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 		return PhysicalKeyFamilyStateTxRange
 	case strings.HasPrefix(key, "state-changeset-v2-"):
 		return PhysicalKeyFamilyStateChangeSet
-	case strings.HasPrefix(key, "state-change-index-v2-"):
+	case strings.HasPrefix(key, "state-change-posting-v3-"),
+		strings.HasPrefix(key, "state-change-keys-v3-"):
 		return PhysicalKeyFamilyStateChangeIndex
 	case strings.HasPrefix(key, "sync-staged-block-v1-"):
 		return PhysicalKeyFamilyStagedBody
@@ -362,13 +363,21 @@ var (
 	// Value: RLP(block pack) or RLP(StateDomainChange)
 	stateChangeSetPrefix = []byte("state-changeset-v2-")
 
-	// stateChangeInversePrefix indexes StateDomainChange rows by physical
-	// latest-domain row key. It lets GetAsOf find blocks that touched one
-	// latest row without scanning every block changeset.
+	// stateChangePostingPrefix is the compact exact-key history index. The
+	// SHA-256 digest narrows a lookup to candidate blocks; readers must still
+	// compare the original latest key reconstructed from the authoritative
+	// changeset before reporting a match.
 	//
-	// Key:   state-change-index-v2- || latest_row_key || blockNum u64
+	// Key:   state-change-posting-v3- || sha256(latest_row_key) || firstBlock u64
+	// Value: version byte || count uvarint || ascending block deltas uvarint
+	stateChangePostingPrefix = []byte("state-change-posting-v3-")
+
+	// stateChangeKeyDirectoryPrefix retains logical-prefix history queries
+	// without repeating the original latest key once per changed block.
+	//
+	// Key:   state-change-keys-v3- || latest_row_key
 	// Value: empty
-	stateChangeInversePrefix = []byte("state-change-index-v2-")
+	stateChangeKeyDirectoryPrefix = []byte("state-change-keys-v3-")
 
 	// stateCommitmentDomainPrefix is the independent physical commitment
 	// domain, modelled after Erigon's CommitmentDomain. Rows are opaque to
@@ -789,19 +798,6 @@ func stateCommitmentDomainKey(logicalKey []byte) []byte {
 
 func stateCommitmentDomainLogicalPrefix(logicalPrefix []byte) []byte {
 	return append(append([]byte{}, stateCommitmentDomainPrefix...), logicalPrefix...)
-}
-
-func stateChangeInverseKey(latestKey []byte, blockNum uint64) []byte {
-	k := stateChangeInverseKeyPrefix(latestKey)
-	var b [8]byte
-	binary.BigEndian.PutUint64(b[:], blockNum)
-	return append(k, b[:]...)
-}
-
-func stateChangeInverseKeyPrefix(latestKey []byte) []byte {
-	k := make([]byte, 0, len(stateChangeInversePrefix)+len(latestKey))
-	k = append(k, stateChangeInversePrefix...)
-	return append(k, latestKey...)
 }
 
 // sectionBloomKey builds the section-bloom key: java-tron encodes the

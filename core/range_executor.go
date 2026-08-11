@@ -27,9 +27,9 @@ type canonicalBlockExecution struct {
 	// execution still writes per-block receipts; the recoverable TxLookup stage
 	// materializes reverse hash rows after the range settles.
 	deferTransactionLookup bool
-	// deferStateHistoryIndex removes unordered latest-key -> block inverse rows
-	// from bulk execution. Authoritative changesets remain inline; the
-	// solidified-only StateHistoryIndex stage rebuilds the derived rows by ETL.
+	// deferStateHistoryIndex removes posting/directory rows from bulk execution.
+	// Authoritative changesets remain inline; the solidified-only
+	// StateHistoryIndex stage rebuilds packed frames by ETL.
 	deferStateHistoryIndex bool
 	// parentDynProps transfers ownership of the previous block's finalized
 	// dynamic properties into this block under async commit (decision-b), so
@@ -85,7 +85,7 @@ func (p *canonicalBlockExecution) BeginDomainChangeStage(writer ethdb.KeyValueWr
 		return nil, nil
 	}
 	cfg := state.DefaultStateDomainChangePublicationConfig()
-	cfg.SkipInverseIndex = p.deferStateHistoryIndex
+	cfg.SkipPostingIndex = p.deferStateHistoryIndex
 	return p.state.BeginDomainChangeStageWithConfig(writer, p.txRange, cfg)
 }
 
@@ -188,7 +188,7 @@ func (p *canonicalBlockExecution) AdvanceTransactionLookupStage(writer ethdb.Key
 	return nil
 }
 
-// AdvanceStateHistoryIndexStage records inline inverse-index completion after
+// AdvanceStateHistoryIndexStage records inline posting-index completion after
 // Finish. Bulk sync skips it because its sorted stage advances only through the
 // solidified boundary, keeping direct DB rows out of the rewindable tail.
 func (p *canonicalBlockExecution) AdvanceStateHistoryIndexStage(reader ethdb.KeyValueReader, writer ethdb.KeyValueWriter, block *types.Block) error {

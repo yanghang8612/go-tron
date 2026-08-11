@@ -50,7 +50,7 @@ func (bc *BlockChain) BeginInsertSession() *InsertSession {
 }
 
 // BeginSyncInsertSession starts a bulk-sync session whose tx-hash lookup and
-// state-history inverse rows are emitted by recoverable sorted stages after
+// state-history posting rows are emitted by recoverable sorted stages after
 // canonical execution has finished. Per-block TransactionRet and authoritative
 // changeset rows remain on the normal canonical path.
 func (bc *BlockChain) BeginSyncInsertSession() *InsertSession {

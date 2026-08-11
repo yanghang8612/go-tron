@@ -58,7 +58,7 @@ func TestDBCompactStateHistoryCommandPreservesLiveRows(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("decode report: %v\noutput: %s", err, stdout.String())
 	}
-	if !report.CompactedChangeSets || !report.CompactedChangeIndex {
+	if !report.CompactedChangeSets || !report.CompactedPostingIndex {
 		t.Fatalf("unexpected report: %+v", report)
 	}
 
