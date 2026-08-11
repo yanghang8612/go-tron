@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1570,6 +1571,58 @@ func TestSnapshotEventLogSpaceBenchmarkCmdIsReadOnlyAndDoesNotOpenChaindata(t *t
 		if !bytes.Equal(before, after) {
 			t.Fatalf("event-log space benchmark modified %s", path)
 		}
+	}
+}
+
+func TestSnapshotMigrateEventLogsV3CommandBuildOnlyWithLockedChaindata(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	block, txHash, _ := snapshotCmdBlockWithTx(t, 1)
+	address := append([]byte{0x41}, bytes.Repeat([]byte{0x22}, common.AddressLength-1)...)
+	topic := common.Hash{0x92}
+	if err := rawdb.WriteBlock(source, block); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(source, 1, []*corepb.TransactionInfo{{
+		Id: txHash[:], BlockNumber: 1,
+		Log: []*corepb.TransactionInfo_Log{{Address: address, Topics: [][]byte{topic[:]}, Data: bytes.Repeat([]byte{0x66}, 1024)}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := statesnapshots.NewAggregator(snapshotDir).BuildEventLogs(source, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	before, err := statesnapshots.LoadProductionManifest(snapshotDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := openPebbleDB(makeSnapshotRestoreTestContext(t, nil), chainDataDir(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locked.Close()
+	app := &cli.App{Commands: []*cli.Command{snapshotCommand()}}
+	output, err := captureDBCmdStdout(t, func() error {
+		return app.Run([]string{"gtron", "snapshot", "migrate-event-logs-v3", "--datadir", dataDir, "--snapshot.dir", snapshotDir, "--snapshot.from-block", "1", "--snapshot.event-log.merge", "1"})
+	})
+	if err != nil {
+		t.Fatalf("migrate-event-logs-v3: %v", err)
+	}
+	var result statesnapshots.EventLogV3MigrationResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode command output %q: %v", output, err)
+	}
+	if result.Published || result.SourceSegments != 1 || result.V3MainBytes == 0 {
+		t.Fatalf("command result = %+v", result)
+	}
+	after, err := statesnapshots.LoadProductionManifest(snapshotDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Generation != before.Generation || !reflect.DeepEqual(after.Segments, before.Segments) {
+		t.Fatalf("build-only command changed manifest")
 	}
 }
 

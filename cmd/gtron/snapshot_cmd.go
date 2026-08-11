@@ -134,6 +134,15 @@ var (
 		Usage: "Evenly sample this many whole active event-log segments (0 = scan all)",
 		Value: 16,
 	}
+	snapshotEventLogV3MergeFlag = &cli.Uint64Flag{
+		Name:  "snapshot.event-log.merge",
+		Usage: "Number of consecutive active event-log segments to merge when --snapshot.to-block is omitted",
+		Value: 8,
+	}
+	snapshotEventLogV3PublishFlag = &cli.BoolFlag{
+		Name:  "publish",
+		Usage: "Atomically publish the verified V3 segment pair into manifest.json (otherwise build and verify only)",
+	}
 )
 
 func snapshotCommand() *cli.Command {
@@ -377,6 +386,19 @@ func snapshotCommand() *cli.Command {
 					snapshotEventLogSampleSegmentsFlag,
 				},
 				Action: snapshotEventLogSpaceBenchmarkCmd,
+			},
+			{
+				Name:  "migrate-event-logs-v3",
+				Usage: "Rewrite consecutive active event-log segments as an experimental V3 main segment without opening chaindata",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					snapshotDirFlag,
+					snapshotFromBlockFlag,
+					snapshotToBlockFlag,
+					snapshotEventLogV3MergeFlag,
+					snapshotEventLogV3PublishFlag,
+				},
+				Action: snapshotMigrateEventLogsV3Cmd,
 			},
 			{
 				Name:  "prune-chain-lookups",
@@ -1498,6 +1520,26 @@ func snapshotEventLogSpaceBenchmarkCmd(ctx *cli.Context) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(inspection)
+}
+
+func snapshotMigrateEventLogsV3Cmd(ctx *cli.Context) error {
+	if !ctx.IsSet("snapshot.from-block") {
+		return errors.New("snapshot V3 migration requires --snapshot.from-block at an active event-log segment boundary")
+	}
+	cfg := makeConfig(ctx)
+	result, err := statesnapshots.MigrateEventLogsV3(snapshotDir(ctx, cfg.DataDir), statesnapshots.EventLogV3MigrationOptions{
+		FromBlock:  ctx.Uint64("snapshot.from-block"),
+		ToBlock:    ctx.Uint64("snapshot.to-block"),
+		ToBlockSet: ctx.IsSet("snapshot.to-block"),
+		Merge:      ctx.Uint64("snapshot.event-log.merge"),
+		Publish:    ctx.Bool("publish"),
+	})
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(result)
 }
 
 func snapshotRestoreVerificationOptions(db ethdb.KeyValueStore) statesnapshots.RestoreVerifiedSnapshotOptions {

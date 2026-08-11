@@ -664,6 +664,9 @@ func InspectEventLogSpaceFromManifest(dir string, manifest *Manifest, opts Event
 func inspectEventLogSegment(ctx context.Context, seg *EventLogSegment, acc *eventLogCandidateAccumulator, globalRow *uint64, previousBlockHash *common.Hash, haveBlockHash *bool, previousTxHash *common.Hash, haveTxHash *bool, distinctAddresses map[common.Address]struct{}) (EventLogSegmentSpaceStats, eventLogExactDistribution, eventLogExactDistribution, error) {
 	var payloadDist, topicDist eventLogExactDistribution
 	header := seg.header
+	if header.version == EventLogSegmentV3Version {
+		return inspectEventLogV3Space(ctx, seg, acc, globalRow, previousBlockHash, haveBlockHash, previousTxHash, haveTxHash, distinctAddresses)
+	}
 	stats := EventLogSegmentSpaceStats{
 		Path:      seg.ref.Path,
 		Version:   header.version,
@@ -734,6 +737,76 @@ func inspectEventLogSegment(ctx context.Context, seg *EventLogSegment, acc *even
 	stats.Duplicates.RepeatedAddresses = stats.Duplicates.Rows - stats.Duplicates.DistinctAddresses
 	stats.PayloadSizes = payloadDist.summary()
 	stats.TopicCounts = topicDist.summary()
+	return stats, payloadDist, topicDist, nil
+}
+
+func inspectEventLogV3Space(ctx context.Context, seg *EventLogSegment, acc *eventLogCandidateAccumulator, globalRow *uint64, previousBlockHash *common.Hash, haveBlockHash *bool, previousTxHash *common.Hash, haveTxHash *bool, distinctAddresses map[common.Address]struct{}) (EventLogSegmentSpaceStats, eventLogExactDistribution, eventLogExactDistribution, error) {
+	h := seg.header.v3
+	var payloadDist, topicDist eventLogExactDistribution
+	stats := EventLogSegmentSpaceStats{
+		Path: seg.ref.Path, Version: EventLogSegmentV3Version, FromBlock: h.fromBlock, ToBlock: h.toBlock, Rows: h.rowCount,
+		Physical: EventLogPhysicalBytes{
+			MainSegment: seg.size, Header: eventLogV3HeaderSize,
+			FixedRowIndex:           h.blockDictLength + h.txDictLength + h.rowDirLength + h.rowDataLength,
+			ProtobufPayload:         h.payloadDirLength + h.payloadDataLength,
+			EmbeddedAddressPostings: h.addressIndexLength,
+			EmbeddedTopicPostings:   h.topicIndexLength,
+			Total:                   seg.size,
+		},
+	}
+	stats.Duplicates.Rows = h.rowCount
+	segmentAddresses := make(map[common.Address]struct{})
+	for i := uint64(0); i < h.rowCount; i++ {
+		if i&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return EventLogSegmentSpaceStats{}, payloadDist, topicDist, err
+			}
+		}
+		encoded, err := seg.readEventLogV3Row(i)
+		if err != nil {
+			return EventLogSegmentSpaceStats{}, payloadDist, topicDist, err
+		}
+		row, err := seg.materializeEventLogV3(encoded)
+		if err != nil {
+			return EventLogSegmentSpaceStats{}, payloadDist, topicDist, err
+		}
+		stripped := proto.Clone(row.Log).(*corepb.TransactionInfo_Log)
+		stripped.Address = nil
+		raw, err := proto.Marshal(stripped)
+		if err != nil {
+			return EventLogSegmentSpaceStats{}, payloadDist, topicDist, err
+		}
+		entry := eventLogIndexEntry{blockNum: row.BlockNum, txIndex: row.TxIndex, logIndex: row.LogIndex, txHash: row.TxHash, blockHash: row.BlockHash, address: row.Address, length: uint64(len(raw))}
+		payloadDist.add(entry.length)
+		topicDist.add(uint64(len(row.Log.GetTopics())))
+		if row.BlockHash == (common.Hash{}) {
+			stats.Duplicates.ZeroBlockHashes++
+		}
+		if !*haveBlockHash || row.BlockHash != *previousBlockHash {
+			stats.Duplicates.DistinctBlockHashes++
+			*previousBlockHash = row.BlockHash
+			*haveBlockHash = true
+		}
+		if row.TxHash == (common.Hash{}) {
+			stats.Duplicates.ZeroTxHashes++
+		}
+		if !*haveTxHash || row.TxHash != *previousTxHash {
+			stats.Duplicates.DistinctTxHashes++
+			*previousTxHash = row.TxHash
+			*haveTxHash = true
+		}
+		distinctAddresses[row.Address] = struct{}{}
+		segmentAddresses[row.Address] = struct{}{}
+		if err := acc.add(*globalRow, entry, row.Log); err != nil {
+			return EventLogSegmentSpaceStats{}, payloadDist, topicDist, err
+		}
+		*globalRow++
+	}
+	stats.Duplicates.RepeatedBlockHashes = stats.Duplicates.Rows - stats.Duplicates.DistinctBlockHashes
+	stats.Duplicates.RepeatedTxHashes = stats.Duplicates.Rows - stats.Duplicates.DistinctTxHashes
+	stats.Duplicates.DistinctAddresses = uint64(len(segmentAddresses))
+	stats.Duplicates.RepeatedAddresses = stats.Duplicates.Rows - stats.Duplicates.DistinctAddresses
+	stats.PayloadSizes, stats.TopicCounts = payloadDist.summary(), topicDist.summary()
 	return stats, payloadDist, topicDist, nil
 }
 

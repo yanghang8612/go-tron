@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	EventLogSegmentVersion = 2
-	EventLogIndexVersion   = 1
+	EventLogSegmentVersion   = 2
+	EventLogSegmentV3Version = 3
+	EventLogIndexVersion     = 1
 
 	eventLogHeaderV1Size    = 8 + 8 + 8 + 8 + 8 + 8
 	eventLogHeaderV2Size    = 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8
@@ -42,6 +43,7 @@ const (
 var (
 	eventLogMagicV1    = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '1', '\n'}
 	eventLogMagicV2    = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '2', '\n'}
+	eventLogMagicV3    = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '3', '\n'}
 	eventLogIndexMagic = [8]byte{'g', 't', 'e', 'v', 'l', 'x', '1', '\n'}
 )
 
@@ -50,6 +52,7 @@ type EventLogSegment struct {
 	file   *os.File
 	header eventLogHeader
 	size   uint64
+	v3     *eventLogV3Reader
 }
 
 type EventLogIndexSegment struct {
@@ -96,6 +99,7 @@ type eventLogHeader struct {
 	addressIndexLength uint64
 	topicIndexOffset   uint64
 	topicIndexLength   uint64
+	v3                 *eventLogV3Header
 }
 
 type eventLogIndexHeader struct {
@@ -336,6 +340,9 @@ func CheckEventLogSegment(dir string, ref SegmentRef) error {
 	if err := validateEventLogHeader(ref, header, fileSize); err != nil {
 		return err
 	}
+	if header.version == EventLogSegmentV3Version {
+		return checkEventLogV3Segment(file, ref, header, fileSize)
+	}
 	return checkEventLogIndex(file, ref, header, fileSize)
 }
 
@@ -362,6 +369,9 @@ func checkEventLogSegmentPayload(dir string, ref SegmentRef) error {
 	fileSize := uint64(stat.Size())
 	if err := validateEventLogHeader(ref, header, fileSize); err != nil {
 		return err
+	}
+	if header.version == EventLogSegmentV3Version {
+		return checkEventLogV3Segment(file, ref, header, fileSize)
 	}
 	_, _, err = checkEventLogPayloadIndex(file, ref, header, fileSize)
 	return err
@@ -563,7 +573,15 @@ func OpenEventLogSegment(dir string, ref SegmentRef) (*EventLogSegment, error) {
 		_ = file.Close()
 		return nil, err
 	}
-	return &EventLogSegment{ref: ref, file: file, header: header, size: uint64(stat.Size())}, nil
+	segment := &EventLogSegment{ref: ref, file: file, header: header, size: uint64(stat.Size())}
+	if header.version == EventLogSegmentV3Version {
+		segment.v3, err = openEventLogV3Reader(file, *header.v3, segment.size)
+		if err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+	}
+	return segment, nil
 }
 
 func OpenEventLogIndexSegment(dir string, ref SegmentRef) (*EventLogIndexSegment, error) {
@@ -717,6 +735,9 @@ func (s *EventLogSegment) iterateLogsFullScan(fromBlock, toBlock uint64, filter 
 	if toBlock < fromBlock {
 		return nil
 	}
+	if s.header.version == 3 {
+		return s.iterateEventLogV3FullScan(fromBlock, toBlock, filter, fn)
+	}
 	for i := uint64(0); i < s.header.rowCount; i++ {
 		entry, err := readEventLogIndexEntryAt(s.file, eventLogIndexEntryOffset(s.header, i))
 		if err != nil {
@@ -798,6 +819,9 @@ func (s *EventLogIndexSegment) CandidateSegmentStarts(filter EventLogFilter) ([]
 }
 
 func (s *EventLogSegment) iterateLogsByLookupIndexes(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (bool, error) {
+	if s.header.version == 3 {
+		return s.iterateEventLogV3ByLookup(fromBlock, toBlock, filter, fn)
+	}
 	candidates, ok, err := s.lookupEventLogCandidateRows(filter)
 	if err != nil || !ok {
 		return ok, err
@@ -840,6 +864,9 @@ func (s *EventLogSegment) iterateLogsByLookupIndexes(fromBlock, toBlock uint64, 
 }
 
 func (s *EventLogSegment) lookupEventLogCandidateRows(filter EventLogFilter) ([]uint64, bool, error) {
+	if s.header.version == 3 {
+		return s.lookupEventLogV3CandidateRows(filter)
+	}
 	if s.header.addressIndexOffset == 0 && s.header.topicIndexOffset == 0 {
 		return nil, false, nil
 	}
@@ -1769,6 +1796,9 @@ func (w *eventLogSegmentETLWriter) finalize() (SegmentRef, error) {
 	if err := os.Rename(w.tmpName, finalAbs); err != nil {
 		return SegmentRef{}, err
 	}
+	if err := syncSnapshotDir(filepath.Dir(finalAbs)); err != nil {
+		return SegmentRef{}, err
+	}
 	w.tmpName = ""
 	return ref, nil
 }
@@ -1866,6 +1896,19 @@ func collectEventLogIndexPostings(seg *EventLogSegment, addressPostings, topicPo
 		return errors.New("snapshots: nil event log segment for index build")
 	}
 	segmentStart := seg.ref.FromTxNum
+	if seg.header.version == EventLogSegmentV3Version {
+		return seg.iterateLogsFullScan(seg.ref.FromTxNum, seg.ref.ToTxNum, EventLogFilter{}, func(row EventLog) (bool, error) {
+			addressKey := string(eventLogAddressLookupKey(row.Address))
+			addressPostings[addressKey] = appendEventLogSegmentPosting(addressPostings[addressKey], segmentStart)
+			for position, rawTopic := range row.Log.GetTopics() {
+				var topic common.Hash
+				copy(topic[:], rawTopic)
+				topicKey := string(eventLogTopicLookupKey(uint64(position), topic))
+				topicPostings[topicKey] = appendEventLogSegmentPosting(topicPostings[topicKey], segmentStart)
+			}
+			return true, nil
+		})
+	}
 	for i := uint64(0); i < seg.header.rowCount; i++ {
 		entry, err := readEventLogIndexEntryAt(seg.file, eventLogIndexEntryOffset(seg.header, i))
 		if err != nil {
@@ -1892,6 +1935,45 @@ func collectEventLogIndexPostings(seg *EventLogSegment, addressPostings, topicPo
 // index. The former verifier called CheckEventLogSegment and then reopened and
 // decoded every payload again through collectEventLogIndexPostings.
 func collectVerifiedEventLogSegmentPostings(dir string, ref SegmentRef, addressPostings, topicPostings map[string][]uint64) error {
+	if err := validateEventLogRef(ref); err != nil {
+		return err
+	}
+	probeFile, err := os.Open(filepath.Join(dir, ref.Path))
+	if err != nil {
+		return err
+	}
+	probeHeader, headerErr := readEventLogHeader(probeFile)
+	_ = probeFile.Close()
+	if headerErr != nil {
+		return headerErr
+	}
+	if probeHeader.version == EventLogSegmentV3Version {
+		if err := CheckEventLogSegment(dir, ref); err != nil {
+			return err
+		}
+		seg, err := OpenEventLogSegment(dir, ref)
+		if err != nil {
+			return err
+		}
+		addressKeys, err := readEventLogV3LookupKeys(seg.file, seg.v3.header.addressIndexOffset, seg.v3.header.addressIndexLength, seg.size, eventLogAddressLookupKeySize)
+		if err == nil {
+			var topicKeys [][]byte
+			topicKeys, err = readEventLogV3LookupKeys(seg.file, seg.v3.header.topicIndexOffset, seg.v3.header.topicIndexLength, seg.size, eventLogTopicLookupKeySize)
+			if err == nil {
+				for _, key := range addressKeys {
+					addressPostings[string(key)] = appendEventLogSegmentPosting(addressPostings[string(key)], ref.FromTxNum)
+				}
+				for _, key := range topicKeys {
+					topicPostings[string(key)] = appendEventLogSegmentPosting(topicPostings[string(key)], ref.FromTxNum)
+				}
+			}
+		}
+		closeErr := seg.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
+	}
 	if err := validateEventLogRef(ref); err != nil {
 		return err
 	}
@@ -1945,6 +2027,27 @@ func collectEventLogIndexPostingsToETL(seg *EventLogSegment, collector *etl.Coll
 		return errors.New("snapshots: nil event log segment for index build")
 	}
 	segmentStart := seg.ref.FromTxNum
+	if seg.header.version == EventLogSegmentV3Version {
+		addressKeys, err := readEventLogV3LookupKeys(seg.file, seg.v3.header.addressIndexOffset, seg.v3.header.addressIndexLength, seg.size, eventLogAddressLookupKeySize)
+		if err != nil {
+			return err
+		}
+		topicKeys, err := readEventLogV3LookupKeys(seg.file, seg.v3.header.topicIndexOffset, seg.v3.header.topicIndexLength, seg.size, eventLogTopicLookupKeySize)
+		if err != nil {
+			return err
+		}
+		for _, key := range addressKeys {
+			if err := collector.PutOwned(eventLogIndexETLKey(eventLogIndexETLKindAddress, key, segmentStart), nil); err != nil {
+				return err
+			}
+		}
+		for _, key := range topicKeys {
+			if err := collector.PutOwned(eventLogIndexETLKey(eventLogIndexETLKindTopic, key, segmentStart), nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i := uint64(0); i < seg.header.rowCount; i++ {
 		entry, err := readEventLogIndexEntryAt(seg.file, eventLogIndexEntryOffset(seg.header, i))
 		if err != nil {
@@ -2103,6 +2206,9 @@ func writeEventLogIndexSegment(dir string, ref SegmentRef, addressPostings, topi
 	if err := os.Rename(tmpName, finalAbs); err != nil {
 		return SegmentRef{}, err
 	}
+	if err := syncSnapshotDir(filepath.Dir(finalAbs)); err != nil {
+		return SegmentRef{}, err
+	}
 	return ref, nil
 }
 
@@ -2187,6 +2293,12 @@ func validateEventLogIndexRef(ref SegmentRef) error {
 }
 
 func validateEventLogHeader(ref SegmentRef, header eventLogHeader, fileSize uint64) error {
+	if header.version == EventLogSegmentV3Version {
+		if header.v3 == nil || header.headerSize != eventLogV3HeaderSize {
+			return fmt.Errorf("snapshots: event log segment %q has invalid V3 header", ref.Path)
+		}
+		return validateEventLogV3Header(ref, *header.v3, fileSize)
+	}
 	if header.fromBlock != ref.FromTxNum || header.toBlock != ref.ToTxNum {
 		return fmt.Errorf("snapshots: event log segment %q range [%d,%d], want [%d,%d]", ref.Path, header.fromBlock, header.toBlock, ref.FromTxNum, ref.ToTxNum)
 	}
@@ -3043,6 +3155,19 @@ func readEventLogHeader(r io.Reader) (eventLogHeader, error) {
 			addressIndexLength: binary.BigEndian.Uint64(raw[56:64]),
 			topicIndexOffset:   binary.BigEndian.Uint64(raw[64:72]),
 			topicIndexLength:   binary.BigEndian.Uint64(raw[72:80]),
+		}, nil
+	case eventLogMagicV3:
+		v3, err := readEventLogV3HeaderRest(r)
+		if err != nil {
+			return eventLogHeader{}, err
+		}
+		return eventLogHeader{
+			version:    3,
+			headerSize: eventLogV3HeaderSize,
+			fromBlock:  v3.fromBlock,
+			toBlock:    v3.toBlock,
+			rowCount:   v3.rowCount,
+			v3:         &v3,
 		}, nil
 	default:
 		return eventLogHeader{}, errors.New("snapshots: invalid event log segment magic")
