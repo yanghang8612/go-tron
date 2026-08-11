@@ -15,19 +15,21 @@ type EventLogV3MigrationOptions struct {
 }
 
 type EventLogV3MigrationResult struct {
-	SourceGeneration uint64                  `json:"sourceGeneration"`
-	Published        bool                    `json:"published"`
-	Generation       uint64                  `json:"generation"`
-	FromBlock        uint64                  `json:"fromBlock"`
-	ToBlock          uint64                  `json:"toBlock"`
-	SourceSegments   int                     `json:"sourceSegments"`
-	SourceMainBytes  uint64                  `json:"sourceMainBytes"`
-	SourceIndexBytes uint64                  `json:"sourceIndexBytes"`
-	V3MainBytes      uint64                  `json:"v3MainBytes"`
-	V3IndexBytes     uint64                  `json:"v3IndexBytes"`
-	MainSavingsBytes int64                   `json:"mainSavingsBytes"`
-	V3Physical       EventLogV3PhysicalStats `json:"v3Physical"`
-	Segments         []SegmentRef            `json:"segments"`
+	SourceGeneration    uint64                  `json:"sourceGeneration"`
+	Published           bool                    `json:"published"`
+	Generation          uint64                  `json:"generation"`
+	FromBlock           uint64                  `json:"fromBlock"`
+	ToBlock             uint64                  `json:"toBlock"`
+	SourceSegments      int                     `json:"sourceSegments"`
+	SourceMainBytes     uint64                  `json:"sourceMainBytes"`
+	SourceIndexBytes    uint64                  `json:"sourceIndexBytes"`
+	V3MainBytes         uint64                  `json:"v3MainBytes"`
+	V3IndexBytes        uint64                  `json:"v3IndexBytes"`
+	PreservedIndexes    int                     `json:"preservedIndexSegments"`
+	PreservedIndexBytes uint64                  `json:"preservedIndexBytes"`
+	MainSavingsBytes    int64                   `json:"mainSavingsBytes"`
+	V3Physical          EventLogV3PhysicalStats `json:"v3Physical"`
+	Segments            []SegmentRef            `json:"segments"`
 }
 
 // MigrateEventLogsV3 rewrites exact active segment boundaries from one pinned
@@ -49,11 +51,19 @@ func MigrateEventLogsV3(dir string, opts EventLogV3MigrationOptions) (*EventLogV
 		return nil, err
 	}
 	fromBlock, toBlock := sources[0].FromTxNum, sources[len(sources)-1].ToTxNum
+	var overlappingIndexes []SegmentRef
 	for _, indexRef := range eventLogIndexRefs(manifest) {
 		if indexRef.ToTxNum < fromBlock || indexRef.FromTxNum > toBlock {
 			continue
 		}
-		if indexRef.FromTxNum < fromBlock || indexRef.ToTxNum > toBlock {
+		overlappingIndexes = append(overlappingIndexes, indexRef)
+	}
+	preserveIndexes := len(sources) == 1 && len(overlappingIndexes) > 0
+	if !preserveIndexes {
+		for _, indexRef := range overlappingIndexes {
+			if indexRef.FromTxNum >= fromBlock && indexRef.ToTxNum <= toBlock {
+				continue
+			}
 			return nil, fmt.Errorf("snapshots: event-log-index %q crosses migration range [%d,%d]; migrate its full [%d,%d] range", indexRef.Path, fromBlock, toBlock, indexRef.FromTxNum, indexRef.ToTxNum)
 		}
 	}
@@ -65,12 +75,21 @@ func MigrateEventLogsV3(dir string, opts EventLogV3MigrationOptions) (*EventLogV
 	if err != nil {
 		return nil, err
 	}
-	indexRef, err := writeFreshEventLogV3Index(dir, v3Ref, EventLogIndexSegmentPath(fromBlock, toBlock))
-	if err != nil {
-		return nil, err
-	}
-	if err := verifyEventLogIndexSegmentAgainstEventLogs(dir, indexRef, []SegmentRef{v3Ref}); err != nil {
-		return nil, fmt.Errorf("snapshots: verify V3 migration companion: %w", err)
+	publishRefs := []SegmentRef{v3Ref}
+	var indexRef SegmentRef
+	if preserveIndexes {
+		if err := verifyEventLogSegmentCandidateKeysEqual(dir, sources[0], v3Ref); err != nil {
+			return nil, fmt.Errorf("snapshots: cannot preserve crossing event-log-index: %w", err)
+		}
+	} else {
+		indexRef, err = writeFreshEventLogV3Index(dir, v3Ref, EventLogIndexSegmentPath(fromBlock, toBlock))
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyEventLogIndexSegmentAgainstEventLogs(dir, indexRef, []SegmentRef{v3Ref}); err != nil {
+			return nil, fmt.Errorf("snapshots: verify V3 migration companion: %w", err)
+		}
+		publishRefs = append(publishRefs, indexRef)
 	}
 	result := &EventLogV3MigrationResult{
 		SourceGeneration: manifest.Generation,
@@ -80,12 +99,17 @@ func MigrateEventLogsV3(dir string, opts EventLogV3MigrationOptions) (*EventLogV
 		SourceSegments:   len(sources),
 		V3MainBytes:      v3Ref.Size,
 		V3IndexBytes:     indexRef.Size,
-		Segments:         []SegmentRef{v3Ref, indexRef},
+		Segments:         append([]SegmentRef(nil), publishRefs...),
 	}
 	for _, ref := range sources {
 		result.SourceMainBytes += ref.Size
 	}
-	for _, ref := range eventLogIndexRefs(manifest) {
+	for _, ref := range overlappingIndexes {
+		if preserveIndexes {
+			result.PreservedIndexes++
+			result.PreservedIndexBytes += ref.Size
+			continue
+		}
 		if ref.FromTxNum >= fromBlock && ref.ToTxNum <= toBlock {
 			result.SourceIndexBytes += ref.Size
 		}
@@ -105,13 +129,52 @@ func MigrateEventLogsV3(dir string, opts EventLogV3MigrationOptions) (*EventLogV
 	if current.Generation != manifest.Generation || !reflect.DeepEqual(current.Segments, manifest.Segments) {
 		return nil, fmt.Errorf("snapshots: production manifest changed during V3 build (started generation %d, now %d); immutable outputs were left unreferenced and the migration is safe to rerun", manifest.Generation, current.Generation)
 	}
-	published, err := NewAggregator(dir).integrateWithManifest(fromBlock, toBlock, []SegmentRef{v3Ref, indexRef}, current)
+	published, err := NewAggregator(dir).integrateWithManifest(fromBlock, toBlock, publishRefs, current)
 	if err != nil {
 		return nil, err
 	}
 	result.Published = true
 	result.Generation = published.Generation
 	return result, nil
+}
+
+func verifyEventLogSegmentCandidateKeysEqual(dir string, source, candidate SegmentRef) error {
+	sourceAddress, sourceTopic, err := verifiedEventLogSegmentCandidateKeys(dir, source)
+	if err != nil {
+		return err
+	}
+	candidateAddress, candidateTopic, err := verifiedEventLogSegmentCandidateKeys(dir, candidate)
+	if err != nil {
+		return err
+	}
+	if !sameEventLogCandidateKeys(sourceAddress, candidateAddress) {
+		return errors.New("address candidate keys changed")
+	}
+	if !sameEventLogCandidateKeys(sourceTopic, candidateTopic) {
+		return errors.New("topic candidate keys changed")
+	}
+	return nil
+}
+
+func verifiedEventLogSegmentCandidateKeys(dir string, ref SegmentRef) (map[string][]uint64, map[string][]uint64, error) {
+	address := make(map[string][]uint64)
+	topic := make(map[string][]uint64)
+	if err := collectVerifiedEventLogSegmentPostings(dir, ref, address, topic); err != nil {
+		return nil, nil, err
+	}
+	return address, topic, nil
+}
+
+func sameEventLogCandidateKeys(a, b map[string][]uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key := range a {
+		if _, ok := b[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func selectEventLogV3MigrationSources(manifest *Manifest, opts EventLogV3MigrationOptions) ([]SegmentRef, error) {

@@ -191,6 +191,74 @@ func TestMigrateEventLogsV3BuildOnlyThenPublish(t *testing.T) {
 	}
 }
 
+func TestMigrateSingleEventLogV3PreservesCrossingGlobalIndex(t *testing.T) {
+	dir := t.TempDir()
+	addr := common.BytesToAddress(eventLogTestAddress(0x61))
+	topic := common.Hash{0xe1}
+	rows1 := []EventLog{eventLogV3TestRow(1, 0, 0, addr, common.Hash{1}, common.Hash{21}, topic, []byte("one"))}
+	rows2 := []EventLog{eventLogV3TestRow(2, 0, 0, addr, common.Hash{2}, common.Hash{22}, topic, []byte("two"))}
+	ref1, err := BuildEventLogSegmentFromReader(eventLogRowsReader{rows: rows1}, dir, "", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref2, err := BuildEventLogSegmentFromReader(eventLogRowsReader{rows: rows2}, dir, "", 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	globalIndex, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref1, ref2}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := NewManifest(1, 2, []SegmentRef{ref1, ref2, globalIndex})
+	manifest.Generation = 11
+	if err := PublishManifest(dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := MigrateEventLogsV3(dir, EventLogV3MigrationOptions{FromBlock: 1, ToBlock: 1, ToBlockSet: true, Publish: true})
+	if err != nil {
+		t.Fatalf("single V3 migration with crossing index: %v", err)
+	}
+	if !result.Published || result.PreservedIndexes != 1 || result.PreservedIndexBytes != globalIndex.Size || result.V3IndexBytes != 0 || len(result.Segments) != 1 {
+		t.Fatalf("migration result = %+v", result)
+	}
+	active, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeIndexes := eventLogIndexRefs(active)
+	if len(activeIndexes) != 1 || activeIndexes[0] != globalIndex {
+		t.Fatalf("global index was not preserved: %+v", activeIndexes)
+	}
+	activeLogs := eventLogRefs(active)
+	if len(activeLogs) != 2 {
+		t.Fatalf("active event logs = %+v", activeLogs)
+	}
+	first, err := OpenEventLogSegment(dir, activeLogs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.header.version != EventLogSegmentV3Version {
+		t.Fatalf("first version = %d", first.header.version)
+	}
+	_ = first.Close()
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blocks []uint64
+	err = mgr.IterateEventLogs(1, 2, EventLogFilter{Addresses: []common.Address{addr}, Topics: [][]common.Hash{{topic}}}, func(row EventLog) (bool, error) {
+		blocks = append(blocks, row.BlockNum)
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("filtered query through preserved global index: %v", err)
+	}
+	if !equalUint64Slices(blocks, []uint64{1, 2}) {
+		t.Fatalf("blocks = %v", blocks)
+	}
+}
+
 func eventLogV3TestRow(block, tx, log uint64, address common.Address, txHash, blockHash, topic common.Hash, data []byte) EventLog {
 	return EventLog{
 		BlockNum: block, TxIndex: tx, LogIndex: log, TxHash: txHash, BlockHash: blockHash, Address: address,
