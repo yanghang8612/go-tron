@@ -102,6 +102,78 @@ type eventLogV3LookupBuild struct {
 	dataLen uint64
 }
 
+type eventLogV3ChainReader struct {
+	chain *rawdb.ChainDB
+}
+
+func (r eventLogV3ChainReader) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	if r.chain == nil {
+		return false, errors.New("snapshots: nil V3 event-log chain database")
+	}
+	return toBlock >= fromBlock, nil
+}
+
+func (r eventLogV3ChainReader) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
+	if r.chain == nil {
+		return errors.New("snapshots: nil V3 event-log chain database")
+	}
+	if toBlock < fromBlock {
+		return fmt.Errorf("snapshots: V3 chain event-log range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	for blockNum := fromBlock; ; blockNum++ {
+		block, ok, err := rawdb.ReadBlockStrict(r.chain, blockNum)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("snapshots: missing block %d during V3 event-log build", blockNum)
+		}
+		blockHash := block.Hash()
+		txs := block.Transactions()
+		infos, _, err := rawdb.ReadTransactionInfosByBlockStrict(r.chain, blockNum)
+		if err != nil {
+			return err
+		}
+		if err := rawdb.ValidateTransactionInfosForBlock(blockNum, txs, infos, "V3 event-log segment build"); err != nil {
+			return err
+		}
+		logIndex := uint64(0)
+		for txIndex, info := range infos {
+			txHash := common.Hash{}
+			if txIndex < len(txs) {
+				txHash = txs[txIndex].Hash()
+			} else if len(info.Id) == common.HashLength {
+				copy(txHash[:], info.Id)
+			}
+			for _, log := range info.GetLog() {
+				if log == nil {
+					continue
+				}
+				address := eventLogAddress(log.GetAddress())
+				row := EventLog{BlockNum: blockNum, TxIndex: uint64(txIndex), LogIndex: logIndex, TxHash: txHash, BlockHash: blockHash, Address: address, Log: log}
+				logIndex++
+				if !eventLogAddressMatches(filter, address) || !eventLogTopicsMatch(filter.Topics, log.GetTopics()) {
+					continue
+				}
+				cont, err := fn(row)
+				if err != nil || !cont {
+					return err
+				}
+			}
+		}
+		if blockNum == toBlock {
+			return nil
+		}
+	}
+}
+
+func BuildEventLogV3SegmentFromChain(chain *rawdb.ChainDB, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
+	if chain == nil {
+		return SegmentRef{}, errors.New("snapshots: nil chain database")
+	}
+	return BuildEventLogV3SegmentFromReader(eventLogV3ChainReader{chain: chain}, dir, relPath, fromBlock, toBlock)
+}
+
 type EventLogV3PhysicalStats struct {
 	HeaderBytes             uint64 `json:"headerBytes"`
 	BlockDictionaryBytes    uint64 `json:"blockDictionaryBytes"`

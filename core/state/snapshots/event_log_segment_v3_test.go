@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -136,6 +137,88 @@ func TestEventLogV3NormalizesTwentyByteTVMAddress(t *testing.T) {
 	}
 	if got.Address != address || eventLogAddress(got.Log.GetAddress()) != address {
 		t.Fatalf("normalized address = %x payload=%x, want %x", got.Address, got.Log.GetAddress(), address)
+	}
+}
+
+func TestEventLogBuildVersionSelectionPreservesLegacyDefault(t *testing.T) {
+	address := common.BytesToAddress(eventLogTestAddress(0x43))
+	row := eventLogV3TestRow(1, 0, 0, address, common.Hash{1}, common.Hash{2}, common.Hash{3}, []byte("payload"))
+	reader := eventLogRowsReader{rows: []EventLog{row}}
+
+	legacyDir := t.TempDir()
+	legacy, err := NewAggregator(legacyDir).BuildEventLogsFromReader(reader, 1, 1)
+	if err != nil {
+		t.Fatalf("legacy BuildEventLogsFromReader: %v", err)
+	}
+	legacySegment, err := OpenEventLogSegment(legacyDir, eventLogRefs(legacy.Manifest)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyVersion := legacySegment.header.version
+	_ = legacySegment.Close()
+	if legacyVersion != EventLogSegmentVersion {
+		t.Fatalf("legacy API version = %d, want V2", legacyVersion)
+	}
+
+	v3Dir := t.TempDir()
+	v3, err := NewAggregator(v3Dir).BuildEventLogsFromReaderWithBuildOptions(reader, 1, 1, EventLogBuildOptions{Version: EventLogSegmentV3Version})
+	if err != nil {
+		t.Fatalf("V3 BuildEventLogsFromReaderWithBuildOptions: %v", err)
+	}
+	v3Segment, err := OpenEventLogSegment(v3Dir, eventLogRefs(v3.Manifest)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3Version := v3Segment.header.version
+	_ = v3Segment.Close()
+	if v3Version != EventLogSegmentV3Version {
+		t.Fatalf("explicit API version = %d, want V3", v3Version)
+	}
+	if len(eventLogIndexRefs(v3.Manifest)) != 1 {
+		t.Fatalf("V3 manifest has no external event-log-index companion: %+v", v3.Manifest.Segments)
+	}
+	if _, err := NewAggregator(t.TempDir()).BuildEventLogsFromReaderWithBuildOptions(reader, 1, 1, EventLogBuildOptions{Version: 4}); err == nil {
+		t.Fatal("unsupported event-log version was accepted")
+	}
+}
+
+func TestBuildEventLogV3DirectlyFromChainNormalizesTVMAddress(t *testing.T) {
+	dir := t.TempDir()
+	chain := rawdb.NewMemoryChainDB()
+	rawAddress := bytes.Repeat([]byte{0x74}, common.AddressLength-1)
+	topic := common.Hash{0xd4}
+	block, infos := coldBuilderEventLogBlock(t, 1, []*corepb.TransactionInfo_Log{{
+		Address: rawAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte("direct-v3"),
+	}})
+	if err := rawdb.WriteBlock(chain, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(chain, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	result, err := NewAggregator(dir).BuildEventLogsWithBuildOptions(chain, 1, 1, EventLogBuildOptions{Version: EventLogSegmentV3Version})
+	if err != nil {
+		t.Fatalf("BuildEventLogsWithBuildOptions: %v", err)
+	}
+	if len(eventLogRefs(result.Manifest)) != 1 || len(eventLogIndexRefs(result.Manifest)) != 1 {
+		t.Fatalf("direct V3 refs = %+v", result.Manifest.Segments)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	normalized := common.BytesToAddress(rawAddress)
+	var got []EventLog
+	if err := mgr.IterateEventLogs(1, 1, EventLogFilter{Addresses: []common.Address{normalized}, Topics: [][]common.Hash{{topic}}}, func(row EventLog) (bool, error) {
+		got = append(got, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(got) != 1 || got[0].Address != normalized || !bytes.Equal(got[0].Log.GetData(), []byte("direct-v3")) {
+		t.Fatalf("direct V3 rows = %+v", got)
 	}
 }
 

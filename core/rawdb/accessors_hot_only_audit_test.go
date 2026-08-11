@@ -1268,6 +1268,9 @@ func TestProductionEventLogCoverageChecksStayOnAuditedBoundaries(t *testing.T) {
 			"EventLogIndexedRangeCovered":               {},
 			"EventLogRangeCoveredForFilter":             {},
 		},
+		"core/state/snapshots/event_log_segment_v3.go": {
+			"BuildEventLogV3SegmentFromReader": {},
+		},
 	})
 	if len(offenders) > 0 {
 		t.Fatalf("production event-log coverage checks must stay behind audited snapshot boundaries; API queries should use IterateCoveredEventLogs:\n%s", strings.Join(offenders, "\n"))

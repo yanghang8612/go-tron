@@ -34,8 +34,9 @@ type ChainFreezerSnapshotConfig struct {
 	// BuildEventLogs keeps the indexed event-log archive continuously aligned
 	// with chain-freezer coverage. This is required before minimal-mode tail
 	// reclamation may hide historical local freezer rows.
-	BuildEventLogs bool
-	ETL            RestoreETLOptions
+	BuildEventLogs  bool
+	EventLogVersion uint32
+	ETL             RestoreETLOptions
 	// HeavyWorkGate serializes chain/event cold-segment verification and
 	// construction with state-history snapshots and optional freezer
 	// maintenance. Short no-op passes release before the production gate's
@@ -163,7 +164,7 @@ func BuildChainFreezerSnapshotPass(source ChainFreezerSnapshotSource, chain *raw
 		eventFrom = 1
 	}
 	eventTo := result.ColdHead - 1
-	built, err := NewAggregator(cfg.Dir).BuildEventLogsWithOptions(chain, eventFrom, eventTo, cfg.ETL)
+	built, err := NewAggregator(cfg.Dir).BuildEventLogsWithBuildOptions(chain, eventFrom, eventTo, EventLogBuildOptions{Version: cfg.EventLogVersion, ETL: cfg.ETL})
 	if err != nil {
 		return result, fmt.Errorf("snapshots: build event-log range [%d,%d]: %w", eventFrom, eventTo, err)
 	}

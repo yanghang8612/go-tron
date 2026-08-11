@@ -1431,6 +1431,27 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	if report.ActiveSegments != 2 {
 		t.Fatalf("active segments = %d, want 2", report.ActiveSegments)
 	}
+	manifest, err := statesnapshots.LoadProductionManifest(snapshotDir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	var eventLogPath string
+	for _, ref := range manifest.Segments {
+		if ref.Kind == statesnapshots.SegmentEventLog {
+			eventLogPath = ref.Path
+			break
+		}
+	}
+	if eventLogPath == "" {
+		t.Fatal("manifest has no event-log segment")
+	}
+	rawSegment, err := os.ReadFile(filepath.Join(snapshotDir, eventLogPath))
+	if err != nil {
+		t.Fatalf("read event-log segment: %v", err)
+	}
+	if len(rawSegment) < 8 || string(rawSegment[:8]) != "gtevlg3\n" {
+		t.Fatalf("event-log does not use V3 magic")
+	}
 	mgr, err := statesnapshots.OpenManager(snapshotDir)
 	if err != nil {
 		t.Fatalf("OpenManager: %v", err)
@@ -2991,6 +3012,7 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		snapshotETLBufferMiBFlag,
 		snapshotETLBatchMiBFlag,
 		snapshotEventLogSampleSegmentsFlag,
+		snapshotEventLogVersionFlag,
 	}
 	set := flag.NewFlagSet("snapshot-restore-test", flag.ContinueOnError)
 	for _, f := range app.Flags {
@@ -3002,6 +3024,20 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		t.Fatalf("parse flags: %v", err)
 	}
 	return cli.NewContext(app, set, nil)
+}
+
+func TestSnapshotEventLogBuildVersionDefaultsToV3AndAllowsRollback(t *testing.T) {
+	version, err := snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, nil))
+	if err != nil || version != statesnapshots.EventLogSegmentV3Version {
+		t.Fatalf("default event-log version = %d/%v, want V3", version, err)
+	}
+	version, err = snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, []string{"--snapshot.event-log.version", "2"}))
+	if err != nil || version != statesnapshots.EventLogSegmentVersion {
+		t.Fatalf("rollback event-log version = %d/%v, want V2", version, err)
+	}
+	if _, err := snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, []string{"--snapshot.event-log.version", "4"})); err == nil {
+		t.Fatal("unsupported event-log version was accepted")
+	}
 }
 
 func TestSnapshotETLOptions(t *testing.T) {
@@ -3106,6 +3142,7 @@ func restoreSnapshotTestCLIFlagState() func() {
 	snapshotCatalogSigningKeyValue, snapshotCatalogSigningKeyHasBeenSet := snapshotCatalogSigningKeyFlag.Value, snapshotCatalogSigningKeyFlag.HasBeenSet
 	snapshotCatalogSigningKeyFileValue, snapshotCatalogSigningKeyFileHasBeenSet := snapshotCatalogSigningKeyFileFlag.Value, snapshotCatalogSigningKeyFileFlag.HasBeenSet
 	snapshotCatalogSigningKeyFileRuntimeValue, snapshotCatalogSigningKeyFileRuntimeHasBeenSet := snapshotCatalogSigningKeyFileRuntimeFlag.Value, snapshotCatalogSigningKeyFileRuntimeFlag.HasBeenSet
+	snapshotEventLogVersionValue, snapshotEventLogVersionHasBeenSet := snapshotEventLogVersionFlag.Value, snapshotEventLogVersionFlag.HasBeenSet
 	return func() {
 		snapshotURLFlag.Value, snapshotURLFlag.HasBeenSet = snapshotURLValue, snapshotURLHasBeenSet
 		snapshotTrustedCatalogKeyFlag.HasBeenSet = snapshotTrustedCatalogKeyHasBeenSet
@@ -3114,6 +3151,7 @@ func restoreSnapshotTestCLIFlagState() func() {
 		snapshotCatalogSigningKeyFlag.Value, snapshotCatalogSigningKeyFlag.HasBeenSet = snapshotCatalogSigningKeyValue, snapshotCatalogSigningKeyHasBeenSet
 		snapshotCatalogSigningKeyFileFlag.Value, snapshotCatalogSigningKeyFileFlag.HasBeenSet = snapshotCatalogSigningKeyFileValue, snapshotCatalogSigningKeyFileHasBeenSet
 		snapshotCatalogSigningKeyFileRuntimeFlag.Value, snapshotCatalogSigningKeyFileRuntimeFlag.HasBeenSet = snapshotCatalogSigningKeyFileRuntimeValue, snapshotCatalogSigningKeyFileRuntimeHasBeenSet
+		snapshotEventLogVersionFlag.Value, snapshotEventLogVersionFlag.HasBeenSet = snapshotEventLogVersionValue, snapshotEventLogVersionHasBeenSet
 	}
 }
 

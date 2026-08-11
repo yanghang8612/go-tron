@@ -410,6 +410,7 @@ var app = &cli.App{
 		snapshotETLTempDirFlag,
 		snapshotETLBufferMiBFlag,
 		snapshotETLBatchMiBFlag,
+		snapshotEventLogVersionFlag,
 		snapshotCatalogSigningKeyFileRuntimeFlag,
 		snapshotServeFlag,
 		snapshotServeAddrFlag,
@@ -619,6 +620,12 @@ func gtron(ctx *cli.Context) error {
 		ancientReader = rawdb.NewFreezerReader(ancientStore)
 	}
 	stateSnapshotDir := snapshotDir(ctx, cfg.DataDir)
+	eventLogVersion, err := snapshotEventLogBuildVersion(ctx)
+	if err != nil {
+		closeStores()
+		return err
+	}
+	log.Info("Event-log snapshot writer configured", "version", eventLogVersion)
 	if snapshotETL.TempDir == "" {
 		stats, cleanupErr := rawdbetl.CleanupStaleCollectors(filepath.Join(stateSnapshotDir, "etl"))
 		if cleanupErr != nil {
@@ -1005,6 +1012,7 @@ func gtron(ctx *cli.Context) error {
 			return statesnapshots.BuildChainFreezerSnapshotPass(ancientStore, bc.ChainDB(), statesnapshots.ChainFreezerSnapshotConfig{
 				Dir:               stateSnapshotDir,
 				BuildEventLogs:    true,
+				EventLogVersion:   eventLogVersion,
 				HeavyWorkGate:     heavyWorkGate,
 				VerificationCache: chainFreezerVerificationCache,
 			})
@@ -1063,6 +1071,7 @@ func gtron(ctx *cli.Context) error {
 				BuildSectionBlooms:         buildDerivedSnapshots,
 				BuildBalanceTraces:         buildDerivedSnapshots,
 				BuildEventLogs:             buildDerivedSnapshots,
+				EventLogVersion:            eventLogVersion,
 				ColdChainVerificationCache: chainFreezerVerificationCache,
 				CatalogSigningKey:          snapshotCatalogSigningKey,
 				CatalogChain:               snapshotCatalogChain,

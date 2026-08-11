@@ -1,4 +1,4 @@
-# Event-log V3 experiment
+# Event-log V3 snapshots
 
 V3 targets the main `event-log` segment (about 95.79% of the measured active
 event-log footprint). The external `event-log-index` companion remains V1 and
@@ -30,6 +30,52 @@ their directories and the three direct dictionary entries. Migration JSON
 reports the measured physical maximum as `v3Physical.maxPointReadBytes` and
 `v3Physical.maxPointDecompressBytes`. It separately reports the hottest single
 address/topic lookup bounds; filesystem block amplification is not guessed.
+
+## Fresh syncs
+
+When cold event-log construction is enabled, new node runs write V3 main
+event-log segments directly. The runtime default is
+`--snapshot.event-log.version 3`; the equivalent environment variable is
+`GTRON_SNAPSHOT_EVENT_LOG_VERSION=3`. The cold lifecycle reads canonical blocks
+and `TransactionInfo` rows in two streaming passes, writes the V3 main segment,
+derives its V1 external companion from the verified embedded dictionaries, and
+only then atomically publishes both refs in the next manifest generation. It
+does not create an intermediate V2 event-log segment.
+
+The direct writer is used by both incremental state-snapshot catch-up in `snap`
+mode and the chain-freezer snapshot lifecycle in `minimal` mode. Restarting a
+node resumes at the first range not covered by the pinned production manifest;
+already published V1/V2/V3 ranges remain readable and adjacent new ranges may
+use V3.
+
+For an explicit fresh-sync configuration:
+
+```bash
+./build/bin/gtron \
+  --datadir /data/gtron/main/datadir \
+  --prune.mode snap \
+  --snapshot.event-log.version 3 \
+  <the remaining normal mainnet arguments>
+```
+
+V3 is the default, but keeping the flag in the service command makes the chosen
+format visible. To stop creating new V3 segments without changing existing
+immutable refs, restart with `--snapshot.event-log.version 2`. This is a writer
+selection only; the reader always supports mixed V1/V2/V3 manifests.
+
+The manual builders use the same selection and default:
+
+```bash
+./build/bin/gtron snapshot build-event-logs \
+  --snapshot.dir <snapshot-dir> \
+  --snapshot.from-block <from> --snapshot.to-block <to> \
+  --snapshot.event-log.version 3
+```
+
+On a measured 283,399,461-byte mainnet V2 segment, direct V3 construction
+produced 60,514,272 physical bytes (78.647% smaller) and completed its exhaustive
+verification in about 59 seconds on the test node. This is evidence for the
+selected writer, not a promise that every segment will have the same ratio.
 
 ## Migration command
 
@@ -90,9 +136,10 @@ using immutable old refs until they reload the atomically renamed manifest.
 Old active refs move to `retired`; they are not deleted by this command. Do not
 run retired-file pruning until V3 has passed production query and latency
 validation. Re-running the same migration is safe because outputs are
-content-addressed. V1/V2 readers remain available, and `snapshot build-event-logs
---from-cold` can rematerialize a selected range with the V2 writer if rollback is
-needed before old retired files are pruned.
+content-addressed. V1/V2 readers remain available, and
+`snapshot build-event-logs --from-cold` can rematerialize a selected range with
+the V2 writer if rollback is needed before old retired files are pruned. Pass
+`--snapshot.event-log.version 2` explicitly to select the legacy writer.
 
 After publication, resample the active layout and exercise archive filters:
 

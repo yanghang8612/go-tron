@@ -769,6 +769,7 @@ func TestBuildChainFreezerSnapshotPassBuildsIndexedEventLogs(t *testing.T) {
 		Dir:               snapshotDir,
 		BatchBlocks:       2,
 		BuildEventLogs:    true,
+		EventLogVersion:   EventLogSegmentV3Version,
 		VerificationCache: cache,
 	})
 	if err != nil {
@@ -776,6 +777,23 @@ func TestBuildChainFreezerSnapshotPassBuildsIndexedEventLogs(t *testing.T) {
 	}
 	if !result.Built || !result.EventLogBuilt || result.EventLogFromBlock != 1 || result.EventLogToBlock != 1 {
 		t.Fatalf("result = %+v, want chain and indexed event-log build through block 1", result)
+	}
+	manifest, err := LoadProductionManifest(snapshotDir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	logs := eventLogRefs(manifest)
+	if len(logs) != 1 {
+		t.Fatalf("event-log refs = %+v, want one V3 segment", logs)
+	}
+	segment, err := OpenEventLogSegment(snapshotDir, logs[0])
+	if err != nil {
+		t.Fatalf("OpenEventLogSegment: %v", err)
+	}
+	version := segment.header.version
+	_ = segment.Close()
+	if version != EventLogSegmentV3Version {
+		t.Fatalf("event-log version = %d, want V3", version)
 	}
 	stats := cache.Stats()
 	if stats.TrustedRecorded != 1 || stats.EventTrustedRecorded != 1 || stats.FullVerified != 0 || stats.EventFullVerified != 0 || stats.Entries != 1 || stats.EventEntries != 1 {

@@ -1767,15 +1767,19 @@ func TestColdBuilderCatchupKeepsEventLogIndexesSegmentLocal(t *testing.T) {
 		}
 	}
 
-	runner := NewRunner(&coldBuilderChain{db: db, solidified: 3}, Config{
-		Dir:            dir,
-		Enabled:        true,
-		Interval:       time.Hour,
-		HistoryWindow:  1,
-		BatchBlocks:    1,
-		BuildEventLogs: true,
-	})
+	cfg := Config{
+		Dir:             dir,
+		Enabled:         true,
+		Interval:        time.Hour,
+		HistoryWindow:   1,
+		BatchBlocks:     1,
+		BuildEventLogs:  true,
+		EventLogVersion: EventLogSegmentV3Version,
+	}
 	for pass := uint64(1); pass <= 2; pass++ {
+		// Recreate the lifecycle on every pass to exercise manifest/stage resume
+		// exactly as a node restart during a genesis catch-up would.
+		runner := NewRunner(&coldBuilderChain{db: db, solidified: 3}, cfg)
 		result, err := runner.OnePass()
 		if err != nil {
 			t.Fatalf("pass %d: %v", pass, err)
@@ -1792,6 +1796,21 @@ func TestColdBuilderCatchupKeepsEventLogIndexesSegmentLocal(t *testing.T) {
 	indexes := eventLogIndexRefs(manifest)
 	if len(indexes) != 2 || indexes[0].FromTxNum != 1 || indexes[0].ToTxNum != 1 || indexes[1].FromTxNum != 2 || indexes[1].ToTxNum != 2 {
 		t.Fatalf("catch-up indexes = %+v, want [1,1] and [2,2]", indexes)
+	}
+	logs := eventLogRefs(manifest)
+	if len(logs) != 2 {
+		t.Fatalf("catch-up event logs = %+v, want two V3 segments", logs)
+	}
+	for _, ref := range logs {
+		segment, err := OpenEventLogSegment(dir, ref)
+		if err != nil {
+			t.Fatalf("OpenEventLogSegment(%s): %v", ref.Path, err)
+		}
+		version := segment.header.version
+		_ = segment.Close()
+		if version != EventLogSegmentV3Version {
+			t.Fatalf("event-log %s version = %d, want V3", ref.Path, version)
+		}
 	}
 	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
 		t.Fatalf("VerifyManifestFiles: %v", err)

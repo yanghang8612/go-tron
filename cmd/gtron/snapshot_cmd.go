@@ -134,6 +134,12 @@ var (
 		Usage: "Evenly sample this many whole active event-log segments (0 = scan all)",
 		Value: 16,
 	}
+	snapshotEventLogVersionFlag = &cli.UintFlag{
+		Name:    "snapshot.event-log.version",
+		Usage:   "Main event-log snapshot writer version: 2 (legacy) or 3 (dictionary + framed Zstd)",
+		Value:   statesnapshots.EventLogSegmentV3Version,
+		EnvVars: []string{"GTRON_SNAPSHOT_EVENT_LOG_VERSION"},
+	}
 	snapshotEventLogV3MergeFlag = &cli.Uint64Flag{
 		Name:  "snapshot.event-log.merge",
 		Usage: "Number of consecutive active event-log segments to merge when --snapshot.to-block is omitted",
@@ -338,6 +344,7 @@ func snapshotCommand() *cli.Command {
 					snapshotETLTempDirFlag,
 					snapshotETLBufferMiBFlag,
 					snapshotETLBatchMiBFlag,
+					snapshotEventLogVersionFlag,
 				},
 				Action: snapshotBuildEventLogsCmd,
 			},
@@ -365,6 +372,7 @@ func snapshotCommand() *cli.Command {
 					snapshotETLTempDirFlag,
 					snapshotETLBufferMiBFlag,
 					snapshotETLBatchMiBFlag,
+					snapshotEventLogVersionFlag,
 				},
 				Action: snapshotBuildDerivedIndexesCmd,
 			},
@@ -980,6 +988,10 @@ func snapshotBuildEventLogsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	eventLogVersion, err := snapshotEventLogBuildVersion(ctx)
+	if err != nil {
+		return err
+	}
 	var result *statesnapshots.AggregatorBuildResult
 	if ctx.Bool("snapshot.from-cold") {
 		mgr, err := statesnapshots.OpenManager(dir)
@@ -989,7 +1001,7 @@ func snapshotBuildEventLogsCmd(ctx *cli.Context) error {
 		if err := requireSnapshotColdCoverage("event-log", fromBlock, toBlock, mgr.EventLogRangeCovered); err != nil {
 			return err
 		}
-		result, err = statesnapshots.NewAggregator(dir).BuildEventLogsFromReaderWithOptions(mgr, fromBlock, toBlock, etlOpts)
+		result, err = statesnapshots.NewAggregator(dir).BuildEventLogsFromReaderWithBuildOptions(mgr, fromBlock, toBlock, statesnapshots.EventLogBuildOptions{Version: eventLogVersion, ETL: etlOpts})
 		if err != nil {
 			return err
 		}
@@ -1011,7 +1023,7 @@ func snapshotBuildEventLogsCmd(ctx *cli.Context) error {
 	}
 	defer closeAncient()
 
-	result, err = statesnapshots.NewAggregator(dir).BuildEventLogsWithOptions(rawdb.NewChainDB(db, ancientReader), fromBlock, toBlock, etlOpts)
+	result, err = statesnapshots.NewAggregator(dir).BuildEventLogsWithBuildOptions(rawdb.NewChainDB(db, ancientReader), fromBlock, toBlock, statesnapshots.EventLogBuildOptions{Version: eventLogVersion, ETL: etlOpts})
 	if err != nil {
 		return err
 	}
@@ -1061,8 +1073,12 @@ func snapshotBuildDerivedIndexesCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	eventLogVersion, err := snapshotEventLogBuildVersion(ctx)
+	if err != nil {
+		return err
+	}
 	if ctx.Bool("snapshot.from-cold") {
-		result, err := snapshotBuildDerivedIndexesFromCold(dir, fromBlock, toBlock, etlOpts)
+		result, err := snapshotBuildDerivedIndexesFromCold(dir, fromBlock, toBlock, eventLogVersion, etlOpts)
 		if err != nil {
 			return err
 		}
@@ -1103,10 +1119,11 @@ func snapshotBuildDerivedIndexesCmd(ctx *cli.Context) error {
 	}
 
 	result, err := statesnapshots.NewAggregator(dir).BuildDerivedIndexes(chainDB, fromBlock, toBlock, statesnapshots.AggregatorBuildDerivedOptions{
-		BalanceTraces: true,
-		SectionBlooms: true,
-		EventLogs:     true,
-		ETL:           etlOpts,
+		BalanceTraces:   true,
+		SectionBlooms:   true,
+		EventLogs:       true,
+		EventLogVersion: eventLogVersion,
+		ETL:             etlOpts,
 	})
 	if err != nil {
 		return err
@@ -1134,7 +1151,7 @@ func snapshotBuildDerivedIndexesCmd(ctx *cli.Context) error {
 	return nil
 }
 
-func snapshotBuildDerivedIndexesFromCold(dir string, fromBlock, toBlock uint64, etlOpts statesnapshots.RestoreETLOptions) (*statesnapshots.AggregatorBuildResult, error) {
+func snapshotBuildDerivedIndexesFromCold(dir string, fromBlock, toBlock uint64, eventLogVersion uint32, etlOpts statesnapshots.RestoreETLOptions) (*statesnapshots.AggregatorBuildResult, error) {
 	mgr, err := statesnapshots.OpenManager(dir)
 	if err != nil {
 		return nil, err
@@ -1159,7 +1176,7 @@ func snapshotBuildDerivedIndexesFromCold(dir string, fromBlock, toBlock uint64, 
 			return aggregator.BuildSectionBloomsFromReaderWithOptions(mgr, fromBlock, toBlock, etlOpts)
 		},
 		func() (*statesnapshots.AggregatorBuildResult, error) {
-			return aggregator.BuildEventLogsFromReaderWithOptions(mgr, fromBlock, toBlock, etlOpts)
+			return aggregator.BuildEventLogsFromReaderWithBuildOptions(mgr, fromBlock, toBlock, statesnapshots.EventLogBuildOptions{Version: eventLogVersion, ETL: etlOpts})
 		},
 	} {
 		result, err := build()
@@ -1562,6 +1579,14 @@ func contextOrBackground(ctx *cli.Context) context.Context {
 		return ctx.Context
 	}
 	return context.Background()
+}
+
+func snapshotEventLogBuildVersion(ctx *cli.Context) (uint32, error) {
+	version := uint32(ctx.Uint("snapshot.event-log.version"))
+	if version != statesnapshots.EventLogSegmentVersion && version != statesnapshots.EventLogSegmentV3Version {
+		return 0, fmt.Errorf("--snapshot.event-log.version must be 2 or 3, got %d", version)
+	}
+	return version, nil
 }
 
 func snapshotDir(ctx *cli.Context, dataDir string) string {

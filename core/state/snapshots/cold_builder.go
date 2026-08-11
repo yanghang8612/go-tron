@@ -108,6 +108,9 @@ type Config struct {
 	// BuildEventLogs builds registered cold event-log sidecars for the same
 	// block range as each newly published state-history segment.
 	BuildEventLogs bool
+	// EventLogVersion selects the main event-log writer. Zero/2 retains the
+	// legacy V2 writer; 3 writes dictionary/framed V3 segments directly.
+	EventLogVersion uint32
 	// ColdChainVerificationCache carries the exact locally built event-log and
 	// index pair into the chain-freezer lifecycle's semantic-proof cache. Only
 	// outputs active in the newly published manifest are recorded; a restart
@@ -865,20 +868,18 @@ func (r *Runner) onePass() (PassResult, error) {
 	eventLogBuilt := false
 	var eventLogRef, eventLogIndexRef SegmentRef
 	if r.cfg.BuildEventLogs {
-		build, err := buildEventLogSegmentFromChainWithOptions(chainDB, r.cfg.Dir, EventLogSegmentPath(startBlock, cutoffBlock), startBlock, cutoffBlock, r.cfg.ETL)
+		eventRefs, err := buildEventLogPairFromChain(chainDB, r.cfg.Dir, startBlock, cutoffBlock, EventLogBuildOptions{Version: r.cfg.EventLogVersion, ETL: r.cfg.ETL})
 		if err != nil {
 			return PassResult{}, err
 		}
-		eventLogRef = build.Ref
-		refs = append(refs, eventLogRef)
+		eventLogRef, eventLogIndexRef, err = eventLogBuildCompanions(eventRefs)
+		if err != nil {
+			return PassResult{}, err
+		}
+		refs = append(refs, eventRefs...)
 		// Keep the lookup sidecar aligned with this immutable event segment.
 		// Existing adjacent indexes remain active in the manifest; rebuilding a
 		// chain-wide index on every catch-up step makes historical sync quadratic.
-		eventLogIndexRef, err = writeFreshEventLogIndexSegment(r.cfg.Dir, build, EventLogIndexSegmentPath(eventLogRef.FromTxNum, eventLogRef.ToTxNum))
-		if err != nil {
-			return PassResult{}, err
-		}
-		refs = append(refs, eventLogIndexRef)
 		eventLogBuilt = true
 	}
 	sectionBloomBuilt := false
