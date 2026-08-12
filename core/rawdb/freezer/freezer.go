@@ -355,6 +355,17 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 		lock.Unlock()
 		return nil, fmt.Errorf("transaction index coverage %d exceeds ancient V2 coverage %d", coverage, freezer.V2Coverage())
 	}
+	if !readonly {
+		cleanup, cleanupErr := cleanupUnreferencedTransactionIndexRuns(datadir, freezer.txIndex)
+		if cleanupErr != nil {
+			// Orphan cleanup is a space-reclamation repair. A transient unlink or
+			// directory-sync error must not make an otherwise valid index unusable;
+			// regular index maintenance retries the same cleanup.
+			gtronlog.Warn("Could not clean unreferenced transaction index runs", "database", datadir, "err", cleanupErr)
+		} else if cleanup.Files > 0 {
+			gtronlog.Info("Cleaned unreferenced transaction index runs", "database", datadir, "files", cleanup.Files, "bytes", cleanup.Bytes)
+		}
+	}
 
 	// Create the write batch.
 	freezer.writeBatch = newFreezerBatch(freezer)
@@ -471,17 +482,38 @@ func (f *Freezer) CompactTransactionIndexTail() (bool, error) {
 	if f.readonly {
 		return false, errReadOnly
 	}
-	_, obsolete, merged, err := CompactTransactionIndexTail(f.datadir)
+	// Reconcile the in-memory view only when necessary. A previous pass may
+	// have published a new manifest and then failed before reloading it; using
+	// that stale view as a deletion authority could remove the newly selected
+	// merged run. Avoid reopening the multi-megabyte run directories on every
+	// healthy maintenance pass.
+	current := f.txIndex
+	if err := validateSelectedTransactionIndexStore(f.datadir, current); err != nil {
+		current, err = OpenTransactionIndexStore(f.datadir)
+		if err != nil {
+			return false, err
+		}
+		if current.Coverage() > f.V2Coverage() {
+			_ = current.Close()
+			return false, fmt.Errorf("transaction index coverage %d exceeds ancient V2 coverage %d", current.Coverage(), f.V2Coverage())
+		}
+		f.replaceTransactionIndexStore(current)
+	}
+	cleanup, err := cleanupUnreferencedTransactionIndexRuns(f.datadir, current)
+	if err != nil {
+		return false, err
+	}
+	_, _, merged, err := CompactTransactionIndexTail(f.datadir)
 	if err != nil || !merged {
-		return merged, err
+		return cleanup.Files > 0, err
 	}
 	store, err := OpenTransactionIndexStore(f.datadir)
 	if err != nil {
 		return false, err
 	}
 	f.replaceTransactionIndexStore(store)
-	for _, path := range obsolete {
-		_ = os.Remove(path)
+	if _, err := cleanupUnreferencedTransactionIndexRuns(f.datadir, store); err != nil {
+		return true, err
 	}
 	return true, nil
 }

@@ -3,6 +3,7 @@ package freezer
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -67,6 +68,113 @@ func TestCompactTransactionIndexTailGeometricMerge(t *testing.T) {
 		}
 		if len(locations) != 1 || locations[0] != want.location {
 			t.Fatalf("candidate %x=%v, want [%d]", want.hash[:8], locations, want.location)
+		}
+	}
+}
+
+func TestTransactionIndexOrphanCleanupRecoversPublishedMergeCrash(t *testing.T) {
+	dir := t.TempDir()
+	var obsolete []string
+	for segment := uint64(0); segment < 2; segment++ {
+		start, end := segment*10, segment*10+10
+		path := TransactionIndexRunPath(dir, start, end)
+		result, err := BuildTransactionIndexRun(path, TransactionIndexBuildOptions{
+			PrefixBits: 8,
+			StartBlock: start,
+			EndBlock:   end,
+			Iterate: transactionIndexTestIterator([]TransactionIndexEntry{{
+				Hash:     [32]byte{byte(segment + 1)},
+				Location: start,
+			}}),
+		})
+		if err != nil {
+			t.Fatalf("build segment %d: %v", segment, err)
+		}
+		if err := PublishTransactionIndexRun(dir, result); err != nil {
+			t.Fatalf("publish segment %d: %v", segment, err)
+		}
+		obsolete = append(obsolete, path)
+	}
+	stale, err := OpenTransactionIndexStore(dir)
+	if err != nil {
+		t.Fatalf("open pre-merge store: %v", err)
+	}
+	defer stale.Close()
+	if _, returnedObsolete, merged, err := CompactTransactionIndexTail(dir); err != nil || !merged {
+		t.Fatalf("publish merged manifest: merged=%v err=%v", merged, err)
+	} else if len(returnedObsolete) != len(obsolete) {
+		t.Fatalf("obsolete paths=%v, want %v", returnedObsolete, obsolete)
+	}
+	if _, err := cleanupUnreferencedTransactionIndexRuns(dir, stale); err == nil {
+		t.Fatal("orphan cleanup accepted a pre-merge selected store")
+	}
+	// Model an abrupt exit after manifest publication: the caller never gets a
+	// chance to unlink returnedObsolete. Reopening selects only the merged run.
+	for _, path := range obsolete {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("crash orphan %q missing before recovery: %v", path, err)
+		}
+	}
+	selected, err := OpenTransactionIndexStore(dir)
+	if err != nil {
+		t.Fatalf("reopen selected store: %v", err)
+	}
+	defer selected.Close()
+	if selected.Coverage() != 20 || len(selected.runs) != 1 {
+		t.Fatalf("selected coverage/runs=%d/%d, want 20/1", selected.Coverage(), len(selected.runs))
+	}
+
+	// A complete run beyond manifest coverage may be an interrupted future
+	// build. It must survive cleanup so a later publication can recover it.
+	futurePath := TransactionIndexRunPath(dir, 20, 30)
+	if _, err := BuildTransactionIndexRun(futurePath, TransactionIndexBuildOptions{
+		PrefixBits: 8,
+		StartBlock: 20,
+		EndBlock:   30,
+		Iterate: transactionIndexTestIterator([]TransactionIndexEntry{{
+			Hash:     [32]byte{3},
+			Location: 20,
+		}}),
+	}); err != nil {
+		t.Fatalf("build future recovery run: %v", err)
+	}
+	unknownPath := filepath.Join(filepath.Dir(futurePath), "operator-note.gtxi")
+	if err := os.WriteFile(unknownPath, []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanup, err := cleanupUnreferencedTransactionIndexRuns(dir, selected)
+	if err != nil {
+		t.Fatalf("clean crash orphans: %v", err)
+	}
+	if cleanup.Files != 2 || cleanup.Bytes == 0 {
+		t.Fatalf("cleanup=%+v, want two non-empty obsolete runs", cleanup)
+	}
+	for _, path := range obsolete {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("obsolete run %q survived cleanup: %v", path, err)
+		}
+	}
+	for _, path := range []string{selected.runs[0].Path(), futurePath, unknownPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("protected run %q removed: %v", path, err)
+		}
+	}
+}
+
+func TestParseTransactionIndexRunFilenameStrict(t *testing.T) {
+	valid := "00000000000000000001-00000000000000000002.gtxi"
+	if start, end, ok := parseTransactionIndexRunFilename(valid); !ok || start != 1 || end != 2 {
+		t.Fatalf("parse valid run=%d/%d/%v", start, end, ok)
+	}
+	for _, name := range []string{
+		"1-2.gtxi",
+		"00000000000000000002-00000000000000000001.gtxi",
+		"00000000000000000001-00000000000000000002.gtxi.bak",
+		"0000000000000000000x-00000000000000000002.gtxi",
+	} {
+		if _, _, ok := parseTransactionIndexRunFilename(name); ok {
+			t.Fatalf("accepted non-canonical run filename %q", name)
 		}
 	}
 }

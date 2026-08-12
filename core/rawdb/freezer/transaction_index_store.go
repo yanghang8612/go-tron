@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 const (
@@ -34,6 +35,11 @@ type TransactionIndexStore struct {
 	base     string
 	runs     []*TransactionIndexRun
 	coverage uint64
+}
+
+type transactionIndexOrphanCleanupResult struct {
+	Files int
+	Bytes uint64
 }
 
 // TransactionIndexRunPath returns the canonical destination for a run. The
@@ -85,6 +91,127 @@ func OpenTransactionIndexStore(ancientDir string) (*TransactionIndexStore, error
 	}
 	store.coverage = expectedStart
 	return store, nil
+}
+
+// cleanupUnreferencedTransactionIndexRuns removes immutable runs made obsolete
+// by an already-published manifest. The selected store must have opened and
+// validated every manifest entry before this destructive step is reached.
+//
+// A run extending beyond the published coverage is an interrupted/future build
+// and is deliberately retained for recovery. Unknown names and non-regular
+// entries are also left untouched.
+func cleanupUnreferencedTransactionIndexRuns(ancientDir string, selected *TransactionIndexStore) (transactionIndexOrphanCleanupResult, error) {
+	var result transactionIndexOrphanCleanupResult
+	if selected == nil || selected.Coverage() == 0 {
+		return result, nil
+	}
+	if err := validateSelectedTransactionIndexStore(ancientDir, selected); err != nil {
+		return result, err
+	}
+	runsDir := filepath.Join(ancientDir, transactionIndexDirectoryName, transactionIndexRunsDirectory)
+	entries, err := os.ReadDir(runsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil {
+		return result, fmt.Errorf("transaction index orphan cleanup: read runs: %w", err)
+	}
+	active := make(map[string]struct{}, len(selected.runs))
+	for _, run := range selected.runs {
+		active[filepath.Base(run.Path())] = struct{}{}
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if _, ok := active[name]; ok {
+			continue
+		}
+		_, end, ok := parseTransactionIndexRunFilename(name)
+		if !ok || end > selected.Coverage() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return result, fmt.Errorf("transaction index orphan cleanup: stat %q: %w", name, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(runsDir, name)); err != nil {
+			return result, fmt.Errorf("transaction index orphan cleanup: remove %q: %w", name, err)
+		}
+		result.Files++
+		if info.Size() > 0 {
+			result.Bytes += uint64(info.Size())
+		}
+	}
+	if result.Files > 0 {
+		if err := syncDir(runsDir); err != nil {
+			return result, fmt.Errorf("transaction index orphan cleanup: sync runs directory: %w", err)
+		}
+	}
+	return result, nil
+}
+
+func validateSelectedTransactionIndexStore(ancientDir string, selected *TransactionIndexStore) error {
+	if selected == nil {
+		return errors.New("transaction index orphan cleanup: selected store is nil")
+	}
+	wantBase := filepath.Clean(filepath.Join(ancientDir, transactionIndexDirectoryName))
+	if filepath.Clean(selected.base) != wantBase {
+		return errors.New("transaction index orphan cleanup: selected store belongs to another database")
+	}
+	manifest, err := readTransactionIndexManifest(filepath.Join(ancientDir, transactionIndexDirectoryName))
+	if errors.Is(err, os.ErrNotExist) && len(selected.runs) == 0 && selected.Coverage() == 0 {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("transaction index orphan cleanup: read selected manifest: %w", err)
+	}
+	if err := validateTransactionIndexManifest(manifest); err != nil {
+		return err
+	}
+	if len(manifest.Runs) != len(selected.runs) {
+		return errors.New("transaction index orphan cleanup: selected store is stale")
+	}
+	for i, declared := range manifest.Runs {
+		run := selected.runs[i]
+		if run == nil || filepath.Base(run.Path()) != declared.File || run.StartBlock() != declared.StartBlock ||
+			run.EndBlock() != declared.EndBlock || run.Rows() != declared.Rows {
+			return errors.New("transaction index orphan cleanup: selected store does not match manifest")
+		}
+	}
+	if len(manifest.Runs) == 0 {
+		if selected.Coverage() != 0 {
+			return errors.New("transaction index orphan cleanup: empty manifest has non-zero selected coverage")
+		}
+		return nil
+	}
+	if selected.Coverage() != manifest.Runs[len(manifest.Runs)-1].EndBlock {
+		return errors.New("transaction index orphan cleanup: selected coverage does not match manifest")
+	}
+	return nil
+}
+
+func parseTransactionIndexRunFilename(name string) (uint64, uint64, bool) {
+	const (
+		digits = 20
+		suffix = ".gtxi"
+	)
+	if len(name) != digits+1+digits+len(suffix) || name[digits] != '-' || name[len(name)-len(suffix):] != suffix {
+		return 0, 0, false
+	}
+	start, err := strconv.ParseUint(name[:digits], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	end, err := strconv.ParseUint(name[digits+1:digits+1+digits], 10, 64)
+	if err != nil || end <= start {
+		return 0, 0, false
+	}
+	if filepath.Base(TransactionIndexRunPath("", start, end)) != name {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 // PublishTransactionIndexRun appends one durable, already-built run to the
