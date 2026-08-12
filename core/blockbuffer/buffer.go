@@ -130,8 +130,16 @@ func newFlushFamilyCounters(unit string) [rawdb.PhysicalKeyFamilyCount]*metrics.
 type layer struct {
 	blockHash common.Hash
 	number    uint64
-	bloom     atomic.Pointer[layerBloom]
-	segment   atomic.Pointer[layerBloomSegment]
+	// owner/state are guarded by the owning Buffer.mu and make queued-batch
+	// target classification constant-time. A range-owned batch can contain
+	// thousands of operations while mainnet keeps roughly 20 committed layers;
+	// rescanning both topology slices for every operation was pure bookkeeping
+	// on the block-import hot path. owner also rejects handles originating from
+	// another Buffer without relying on pointer scans.
+	owner   *Buffer
+	state   layerState
+	bloom   atomic.Pointer[layerBloom]
+	segment atomic.Pointer[layerBloomSegment]
 	// ownedKeyArena packs commitment physical keys across sibling batches.
 	// Reservations are disjoint before the caller copies bytes, so the lock is
 	// never held with a shard lock and concurrent fold workers can populate
@@ -141,6 +149,14 @@ type layer struct {
 	ownedKeyArenaBatches int
 	shards               [layerShardCount]layerShard
 }
+
+type layerState uint8
+
+const (
+	layerDetached layerState = iota
+	layerInflight
+	layerCommitted
+)
 
 const layerShardCount = 16
 
@@ -1325,7 +1341,7 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 		// release it.
 		for i := range b.ops {
 			target := b.ops[i].target
-			if target != nil && !b.parent.layerPendingLocked(target) {
+			if target != nil && b.parent.layerStateLocked(target) == layerDetached {
 				return len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
 			}
 		}
@@ -1348,14 +1364,15 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 			keptSize += bufferBatchOpSize(*op)
 			continue
 		}
-		if !b.parent.layerPendingLocked(target) {
+		state := b.parent.layerStateLocked(target)
+		if state == layerDetached {
 			if dropStale {
 				releaseBatchOpReservation(op)
 				continue
 			}
 			return len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
 		}
-		if !b.parent.layerCommittedLocked(target) || !matchCommitted(target) {
+		if state != layerCommitted || !matchCommitted(target) {
 			kept = append(kept, *op)
 			keptSize += bufferBatchOpSize(*op)
 			continue
@@ -1476,45 +1493,38 @@ func (b *Buffer) NewestCommittedNumber() (uint64, bool) {
 }
 
 func (b *Buffer) layerPendingLocked(target *layer) bool {
-	if b == nil || target == nil {
-		return false
-	}
-	for _, l := range b.inflight {
-		if l == target {
-			return true
-		}
-	}
-	for _, l := range b.layers {
-		if l == target {
-			return true
-		}
-	}
-	return false
+	return b.layerStateLocked(target) != layerDetached
 }
 
 // layerInflightLocked reports whether target is currently an in-flight layer.
 func (b *Buffer) layerInflightLocked(target *layer) bool {
+	return b.layerStateLocked(target) == layerInflight
+}
+
+// layerStateLocked classifies a queued batch target in O(1) for every
+// production layer. The slice walk is retained only for hand-built, unowned
+// layers used by low-level tests and diagnostic helpers.
+func (b *Buffer) layerStateLocked(target *layer) layerState {
 	if b == nil || target == nil {
-		return false
+		return layerDetached
+	}
+	if target.owner != nil {
+		if target.owner != b {
+			return layerDetached
+		}
+		return target.state
 	}
 	for _, l := range b.inflight {
 		if l == target {
-			return true
+			return layerInflight
 		}
-	}
-	return false
-}
-
-func (b *Buffer) layerCommittedLocked(target *layer) bool {
-	if b == nil || target == nil {
-		return false
 	}
 	for _, l := range b.layers {
 		if l == target {
-			return true
+			return layerCommitted
 		}
 	}
-	return false
+	return layerDetached
 }
 
 // BeginBlock opens a fresh active layer for the given block hash and number.
@@ -1528,7 +1538,10 @@ func (b *Buffer) BeginBlock(hash common.Hash, number uint64) {
 	if len(b.inflight) >= b.effectiveMaxInflight() {
 		panic("blockbuffer: BeginBlock would exceed maxInflight in-flight layers")
 	}
-	b.inflight = append(b.inflight, newLayer(hash, number))
+	l := newLayer(hash, number)
+	l.owner = b
+	l.state = layerInflight
+	b.inflight = append(b.inflight, l)
 	b.publishReadViewLocked()
 }
 
@@ -1555,6 +1568,7 @@ func (b *Buffer) promoteOldestInflightLocked() {
 	copy(b.inflight, b.inflight[1:])
 	b.inflight[len(b.inflight)-1] = nil
 	b.inflight = b.inflight[:len(b.inflight)-1]
+	l.state = layerCommitted
 	b.layers = append(b.layers, l)
 	b.buildNewestLayerBloomSegmentLocked()
 	b.publishReadViewLocked()
@@ -1567,6 +1581,7 @@ func (b *Buffer) DiscardActive() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if n := len(b.inflight); n > 0 {
+		b.inflight[n-1].state = layerDetached
 		b.inflight[n-1] = nil
 		b.inflight = b.inflight[:n-1]
 		b.publishReadViewLocked()
@@ -1688,6 +1703,7 @@ func (b *Buffer) DiscardInflight(h InflightHandle) {
 	defer b.mu.Unlock()
 	for i, l := range b.inflight {
 		if l == h.l {
+			l.state = layerDetached
 			copy(b.inflight[i:], b.inflight[i+1:])
 			b.inflight[len(b.inflight)-1] = nil
 			b.inflight = b.inflight[:len(b.inflight)-1]
@@ -1706,6 +1722,7 @@ func (b *Buffer) DiscardBlock(hash common.Hash) {
 	out := b.layers[:0]
 	for _, l := range b.layers {
 		if l.blockHash == hash {
+			l.state = layerDetached
 			continue
 		}
 		out = append(out, l)
@@ -1724,10 +1741,12 @@ func (b *Buffer) Discard() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for i := range b.inflight {
+		b.inflight[i].state = layerDetached
 		b.inflight[i] = nil
 	}
 	b.inflight = b.inflight[:0]
 	for i := range b.layers {
+		b.layers[i].state = layerDetached
 		b.layers[i] = nil
 	}
 	b.layers = b.layers[:0]
@@ -2511,6 +2530,7 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 		b.promoteBaseReadCacheLayer(l)
 	}
 	for i := range b.layers {
+		b.layers[i].state = layerDetached
 		b.layers[i] = nil
 	}
 	b.layers = b.layers[:0]
@@ -2632,6 +2652,9 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 	defer b.mu.Unlock()
 	if n > len(b.layers) {
 		n = len(b.layers)
+	}
+	for i := 0; i < n; i++ {
+		b.layers[i].state = layerDetached
 	}
 	copy(b.layers, b.layers[n:])
 	for i := len(b.layers) - n; i < len(b.layers); i++ {

@@ -102,6 +102,28 @@ func benchmarkBranchEncodingLayoutScan(branch *BranchData) (uint32, int) {
 	return childBits, size
 }
 
+func BenchmarkBranchPoolReturnLeafReferences(b *testing.B) {
+	var template BranchData
+	for nibble := uint8(0); nibble < 16; nibble++ {
+		var hash common.Hash
+		hash[0] = nibble + 1
+		if nibble&1 == 0 {
+			template.SetLeafChild(nibble, []byte{nibble, nibble + 1}, hash)
+		} else {
+			template.SetHashChild(nibble, hash)
+		}
+	}
+	branch := borrowBranch()
+	b.Cleanup(func() { returnBranch(branch) })
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		*branch = template
+		returnBranch(branch)
+		branch = borrowBranch()
+	}
+}
+
 func BenchmarkDecodeBranchDataIntoCopiedLeafKeys(b *testing.B) {
 	for _, leaves := range []int{1, 4, 16} {
 		b.Run(strconv.Itoa(leaves), func(b *testing.B) {

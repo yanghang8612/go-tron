@@ -742,6 +742,54 @@ func BenchmarkBufferBatchWriteOwnedValues(b *testing.B) {
 	benchmarkBufferBatchWrite(b, true)
 }
 
+// BenchmarkBufferBatchWriteCommittedPendingLayers models the range-owned
+// latest-state batch at mainnet's usual unsolidified depth. Every operation is
+// captured against the newest of 20 committed layers, so the benchmark covers
+// both stale-target validation and committed-target classification before the
+// writes are published into the layer shards.
+func BenchmarkBufferBatchWriteCommittedPendingLayers(b *testing.B) {
+	const (
+		layers = 20
+		ops    = 4096
+	)
+	keys := make([]string, ops)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("state-kv-latest-v2-benchmark-%08d", i)
+	}
+	value := []byte("encoded-latest-value")
+	b.ReportAllocs()
+	b.SetBytes(int64(ops * (len(keys[0]) + len(value))))
+	b.ResetTimer()
+	for b.Loop() {
+		b.StopTimer()
+		buffer := New(rawdb.NewMemoryDatabase())
+		for number := 1; number <= layers; number++ {
+			buffer.BeginBlock(bufHash(byte(number)), uint64(number))
+			buffer.CommitBlock()
+		}
+		target := buffer.layers[len(buffer.layers)-1]
+		batch := &bufferBatch{
+			parent: buffer,
+			ops:    make([]bufferBatchOp, ops),
+		}
+		var shardCounts [layerShardCount]int
+		for i, key := range keys {
+			batch.ops[i] = bufferBatchOp{key: key, value: value, target: target}
+			shardCounts[layerShardIndexString(key)]++
+		}
+		for shard, count := range shardCounts {
+			if count != 0 {
+				target.shards[shard].writes = make(map[string][]byte, count)
+			}
+		}
+		b.StartTimer()
+		remaining, err := batch.WriteCommitted(false)
+		if err != nil || remaining != 0 {
+			b.Fatalf("WriteCommitted = remaining %d err %v", remaining, err)
+		}
+	}
+}
+
 func benchmarkBufferBatchWrite(b *testing.B, ownedValues bool) {
 	buffer := New(rawdb.NewMemoryDatabase())
 	buffer.BeginBlock(bufHash(1), 1)
@@ -1177,6 +1225,58 @@ func TestBufferBatchRejectsWriteAfterCapturedLayerDropped(t *testing.T) {
 		t.Fatalf("batch write after captured layer drop err = %v, want target layer rejection", err)
 	}
 	mustNotFound(t, b, []byte("k1"))
+}
+
+func TestBufferLayerStateTracksLifecycleAndOwnership(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1), 1)
+	h, ok := b.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+
+	b.mu.RLock()
+	if got := b.layerStateLocked(h.l); got != layerInflight {
+		b.mu.RUnlock()
+		t.Fatalf("new layer state = %d, want in-flight", got)
+	}
+	b.mu.RUnlock()
+
+	foreign := New(rawdb.NewMemoryDatabase())
+	foreign.mu.RLock()
+	if got := foreign.layerStateLocked(h.l); got != layerDetached {
+		foreign.mu.RUnlock()
+		t.Fatalf("foreign layer state = %d, want detached", got)
+	}
+	foreign.mu.RUnlock()
+	if err := foreign.CommitInflight(h); err == nil {
+		t.Fatal("foreign buffer accepted in-flight handle")
+	}
+
+	batch := b.NewBatch()
+	if err := batch.Put([]byte("queued"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+	b.mu.RLock()
+	if got := b.layerStateLocked(h.l); got != layerCommitted {
+		b.mu.RUnlock()
+		t.Fatalf("promoted layer state = %d, want committed", got)
+	}
+	b.mu.RUnlock()
+
+	if err := b.FlushUpTo(1, rawdb.NewMemoryDatabase()); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.RLock()
+	if got := b.layerStateLocked(h.l); got != layerDetached {
+		b.mu.RUnlock()
+		t.Fatalf("flushed layer state = %d, want detached", got)
+	}
+	b.mu.RUnlock()
+	if err := batch.Write(); err == nil || !strings.Contains(err.Error(), "target layer is no longer pending") {
+		t.Fatalf("queued write after flush err = %v, want stale-target rejection", err)
+	}
 }
 
 func TestBufferBatchWriteUpToAppliesOnlyEligibleCommittedLayers(t *testing.T) {

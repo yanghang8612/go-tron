@@ -101,6 +101,23 @@ func TestBranchDataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClearBranchForPoolDropsLeafReferences(t *testing.T) {
+	var branch BranchData
+	branch.SetLeafChild(2, []byte("arena-backed-leaf"), common.Hash{1})
+	branch.setLeafChildPath(7, bytes.Repeat([]byte{0x0a}, common.HashLength), common.Hash{2})
+	branch.SetHashChild(12, common.Hash{3})
+
+	clearBranchForPool(&branch)
+	if branch.presentMask() != 0 || branch.leafMask() != 0 {
+		t.Fatalf("pooled branch retained masks: child=%x leaf=%x", branch.presentMask(), branch.leafMask())
+	}
+	for nibble := range branch.children {
+		if branch.children[nibble].leafKey != "" {
+			t.Fatalf("pooled branch retained leaf key at nibble %d", nibble)
+		}
+	}
+}
+
 func TestBranchDataPathLeafRoundTrip(t *testing.T) {
 	path := keyPath([]byte("state-kv-latest-v1-production-shaped-key"))
 	valHash := common.Hash{0x12, 0x34}

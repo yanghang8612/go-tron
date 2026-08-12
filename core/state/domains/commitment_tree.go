@@ -141,7 +141,26 @@ func returnBranch(b *BranchData) {
 	if b == nil {
 		return
 	}
+	clearBranchForPool(b)
 	branchPool.Put(b)
+}
+
+func clearBranchForPool(b *BranchData) {
+	// Pooled branches otherwise retain leaf-key backing storage until the pool
+	// is cleared by a later GC. A fold can decode those strings from a large
+	// shared arena, so a handful of idle BranchData objects may pin the complete
+	// arena and make the mark phase resolve every retained leaf pointer. Clear
+	// only the pointer-bearing live leaf slots; hashes/path leaves are fixed-width
+	// values.
+	// Path-only leaves carry no string. Excluding them makes the current rooted
+	// state format's common return path just two mask loads/stores.
+	legacyLeaves := b.leafMask() &^ uint16(atomic.LoadUint32(&b.leafPathMask))
+	for remaining := legacyLeaves; remaining != 0; remaining &= remaining - 1 {
+		nibble := bits.TrailingZeros16(remaining)
+		b.children[nibble].leafKey = ""
+	}
+	atomic.StoreUint32(&b.childMask, 0)
+	atomic.StoreUint32(&b.leafPathMask, 0)
 }
 
 // opsBufPool reuses op slices for Fold's resolved updates and apply's
