@@ -158,7 +158,7 @@ func TestDomainRegistryHotLatestReaders(t *testing.T) {
 		t.Fatalf("kv rows = %d, want 1", kvRows)
 	}
 	codeCfg, ok := registry.Dataset(SegmentDatasetCode)
-	if !ok || codeCfg.ReadHotCode == nil || codeCfg.IterateHotCode == nil || codeCfg.DeleteHotCode == nil {
+	if !ok || codeCfg.ReadHotCode == nil || codeCfg.IterateHotCode == nil || codeCfg.IterateHotCodeHashes == nil || codeCfg.DeleteHotCode == nil {
 		t.Fatalf("code hot reader missing: %+v", codeCfg)
 	}
 	gotCode, ok, err := codeCfg.ReadHotCode(db, codeHash)
@@ -177,6 +177,19 @@ func TestDomainRegistryHotLatestReaders(t *testing.T) {
 	}
 	if codeRows != 1 {
 		t.Fatalf("code rows = %d, want 1", codeRows)
+	}
+	var codeHashes int
+	if err := codeCfg.IterateHotCodeHashes(db, func(hash common.Hash) (bool, error) {
+		codeHashes++
+		if hash != codeHash {
+			t.Fatalf("code hash = %x, want %x", hash, codeHash)
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate code hashes: %v", err)
+	}
+	if codeHashes != 1 {
+		t.Fatalf("code hashes = %d, want 1", codeHashes)
 	}
 	if err := codeCfg.DeleteHotCode(db, codeHash); err != nil {
 		t.Fatalf("delete code through registry: %v", err)

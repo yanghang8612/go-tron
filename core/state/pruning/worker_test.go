@@ -1590,6 +1590,31 @@ func TestCodeHashRefsKeepEarliestMeaningfulReference(t *testing.T) {
 	}
 }
 
+func TestCollectStateDomainChangeCodeHashFiltersNonHotHashes(t *testing.T) {
+	wantedHash := common.Hash{0x10}
+	otherHash := common.Hash{0x20}
+	refs := make(codeHashRefs)
+	wanted := map[common.Hash]struct{}{wantedHash: {}}
+	change := &rawdb.StateDomainChange{
+		BlockNum: 10, TxNum: 61, Seq: 2,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		PrevExists: true, Prev: accountLatestEnvelopeBytes(t, otherHash),
+	}
+	if err := collectStateDomainChangeCodeHashesFiltered(refs, wanted, change); err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("filtered refs = %+v, want empty", refs)
+	}
+	change.Prev = accountLatestEnvelopeBytes(t, wantedHash)
+	if err := collectStateDomainChangeCodeHashesFiltered(refs, wanted, change); err != nil {
+		t.Fatal(err)
+	}
+	if got := refs[wantedHash]; got != 61 || len(refs) != 1 {
+		t.Fatalf("filtered refs = %+v, want wanted hash at tx 61", refs)
+	}
+}
+
 func TestCollectHotHistoryCodeHashesFallsBackForStandaloneRows(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	hash := common.Hash{0x24}

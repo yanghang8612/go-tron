@@ -313,7 +313,8 @@ func (w Worker) pruneStateCodeRowsContext(ctx context.Context, db Store, headNum
 		}
 		return 0, err
 	}
-	if mgr.Manifest() == nil {
+	manifest := mgr.Manifest()
+	if manifest == nil {
 		return 0, nil
 	}
 	headTxNum, err := snapshots.StateDomainHistoryTxNumAtBlockEnd(db, headNum)
@@ -331,25 +332,27 @@ func (w Worker) pruneStateCodeRowsContext(ctx context.Context, db Store, headNum
 	if err != nil {
 		return 0, err
 	}
-	if codeCfg.IterateHotCode == nil || codeCfg.DeleteHotCode == nil {
+	if codeCfg.IterateHotCodeHashes == nil || codeCfg.DeleteHotCode == nil {
 		return 0, errors.New("pruning: missing CodeDomain lifecycle hooks")
 	}
 	// Code references only matter for hashes that still have a hot CodeDomain
 	// row. Once all eligible rows have been moved behind snapshot coverage,
 	// avoid rescanning the entire account history on every lifecycle pass.
-	hotCodeRows := 0
-	if err := codeCfg.IterateHotCode(db, func(row rawdb.StateCodeRow) (bool, error) {
+	var hotCodeHashes []common.Hash
+	hotCodeSet := make(map[common.Hash]struct{})
+	if err := codeCfg.IterateHotCodeHashes(db, func(hash common.Hash) (bool, error) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		if isMeaningfulCodeHash(row.Hash) {
-			hotCodeRows++
+		if isMeaningfulCodeHash(hash) {
+			hotCodeHashes = append(hotCodeHashes, hash)
+			hotCodeSet[hash] = struct{}{}
 		}
 		return true, nil
 	}); err != nil {
 		return 0, err
 	}
-	if hotCodeRows == 0 {
+	if len(hotCodeHashes) == 0 {
 		return 0, nil
 	}
 	refs := make(codeHashRefs)
@@ -361,38 +364,71 @@ func (w Worker) pruneStateCodeRowsContext(ctx context.Context, db Store, headNum
 		if err != nil {
 			return false, fmt.Errorf("pruning: decode account latest %x: %w", row.Owner, err)
 		}
-		refs.add(hash, headTxNum)
+		if _, ok := hotCodeSet[hash]; ok {
+			refs.add(hash, headTxNum)
+		}
 		return true, nil
 	}); err != nil {
 		return 0, err
 	}
-	if err := (Checker{DB: db, SnapshotDir: w.SnapshotDir}).collectHistoryCodeHashesContext(ctx, refs); err != nil {
+	collector := Checker{DB: db, SnapshotDir: w.SnapshotDir}
+	historyCfg, ok := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetStateDomainChange)
+	if !ok {
+		return 0, errors.New("pruning: missing state-domain history config")
+	}
+	if err := collectHotHistoryCodeHashesFiltered(ctx, historyCfg, db, refs, hotCodeSet); err != nil {
 		return 0, err
 	}
 
-	var deleteHashes []common.Hash
-	if err := codeCfg.IterateHotCode(db, func(row rawdb.StateCodeRow) (bool, error) {
+	// CodeDomain is immutable and GetCodeAtOrBefore keeps older segments
+	// visible. Coverage at the earliest possible reference therefore covers
+	// every later reference and lets the common case skip cold-history decode.
+	fullyCovered := make(map[common.Hash]struct{})
+	coldWanted := make(map[common.Hash]struct{})
+	for _, hash := range hotCodeHashes {
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return 0, err
 		}
-		if !isMeaningfulCodeHash(row.Hash) {
-			return true, nil
+		earliest := manifest.VisibleTxStart
+		if hotTxNum, ok := refs[hash]; ok && hotTxNum < earliest {
+			earliest = hotTxNum
 		}
-		earliestTxNum, referenced := refs[row.Hash]
+		covered, err := codeHashAvailableInSnapshot(mgr, hash, earliest)
+		if err != nil {
+			return 0, err
+		}
+		if covered {
+			fullyCovered[hash] = struct{}{}
+		} else {
+			coldWanted[hash] = struct{}{}
+		}
+	}
+	if len(coldWanted) != 0 {
+		if err := collector.collectColdHistoryCodeHashesFilteredContext(ctx, refs, coldWanted, mgr); err != nil {
+			return 0, err
+		}
+	}
+
+	deleteHashes := hotCodeHashes[:0]
+	for _, hash := range hotCodeHashes {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if _, covered := fullyCovered[hash]; covered {
+			deleteHashes = append(deleteHashes, hash)
+			continue
+		}
+		earliestTxNum, referenced := refs[hash]
 		if !referenced {
 			earliestTxNum = headTxNum
 		}
-		covered, err := codeHashAvailableInSnapshot(mgr, row.Hash, earliestTxNum)
+		covered, err := codeHashAvailableInSnapshot(mgr, hash, earliestTxNum)
 		if err != nil {
-			return false, err
+			return 0, err
 		}
-		if !covered {
-			return true, nil
+		if covered {
+			deleteHashes = append(deleteHashes, hash)
 		}
-		deleteHashes = append(deleteHashes, row.Hash)
-		return true, nil
-	}); err != nil {
-		return 0, err
 	}
 	for _, hash := range deleteHashes {
 		if err := codeCfg.DeleteHotCode(db, hash); err != nil {

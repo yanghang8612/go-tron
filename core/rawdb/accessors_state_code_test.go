@@ -40,6 +40,76 @@ func TestStateCodeReadWrite(t *testing.T) {
 	}
 }
 
+func TestIterateStateCodeHashes(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	want := make(map[common.Hash]struct{})
+	for _, code := range [][]byte{{0x60, 0x01}, {0x60, 0x02, 0x00}} {
+		hash := common.Keccak256(code)
+		if err := WriteStateCode(db, hash, code); err != nil {
+			t.Fatal(err)
+		}
+		want[hash] = struct{}{}
+	}
+	got := make(map[common.Hash]struct{})
+	if err := IterateStateCodeHashes(db, func(hash common.Hash) (bool, error) {
+		got[hash] = struct{}{}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("code hashes = %x, want %x", got, want)
+	}
+	for hash := range want {
+		if _, ok := got[hash]; !ok {
+			t.Fatalf("missing code hash %x in %x", hash, got)
+		}
+	}
+}
+
+var benchmarkStateCodeRows int
+
+func BenchmarkIterateStateCodeKeys(b *testing.B) {
+	const (
+		rows     = 256
+		codeSize = 4096
+	)
+	db := ethrawdb.NewMemoryDatabase()
+	for i := 0; i < rows; i++ {
+		code := bytes.Repeat([]byte{byte(i), byte(i >> 8), 0x60, 0x00}, codeSize/4)
+		hash := common.Keccak256(code)
+		if err := WriteStateCode(db, hash, code); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.Run("owning-rows", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			seen := 0
+			if err := IterateStateCode(db, func(StateCodeRow) (bool, error) {
+				seen++
+				return true, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			benchmarkStateCodeRows = seen
+		}
+	})
+	b.Run("hashes-only", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			seen := 0
+			if err := IterateStateCodeHashes(db, func(common.Hash) (bool, error) {
+				seen++
+				return true, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			benchmarkStateCodeRows = seen
+		}
+	})
+}
+
 func TestStateCodeRejectsMismatchedHash(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	if err := WriteStateCode(db, common.Hash{0x01}, []byte{0x60, 0x00}); err == nil {

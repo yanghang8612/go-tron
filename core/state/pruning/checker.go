@@ -282,6 +282,10 @@ func (c Checker) collectHistoryCodeHashes(refs codeHashRefs) error {
 }
 
 func (c Checker) collectHistoryCodeHashesContext(ctx context.Context, refs codeHashRefs) error {
+	return c.collectHistoryCodeHashesFilteredContext(ctx, refs, nil)
+}
+
+func (c Checker) collectHistoryCodeHashesFilteredContext(ctx context.Context, refs codeHashRefs, wanted map[common.Hash]struct{}) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -292,15 +296,22 @@ func (c Checker) collectHistoryCodeHashesContext(ctx context.Context, refs codeH
 	if !ok {
 		return errors.New("pruning: missing state-domain history config")
 	}
-	if err := collectHotHistoryCodeHashes(ctx, cfg, c.DB, refs); err != nil {
+	if err := collectHotHistoryCodeHashesFiltered(ctx, cfg, c.DB, refs, wanted); err != nil {
 		return err
 	}
+	return c.collectColdHistoryCodeHashesFilteredContext(ctx, refs, wanted, nil)
+}
+
+func (c Checker) collectColdHistoryCodeHashesFilteredContext(ctx context.Context, refs codeHashRefs, wanted map[common.Hash]struct{}, mgr *snapshots.Manager) error {
 	if c.SnapshotDir == "" {
 		return nil
 	}
-	mgr, err := snapshots.OpenManager(c.SnapshotDir)
-	if err != nil {
-		return err
+	if mgr == nil {
+		var err error
+		mgr, err = snapshots.OpenManager(c.SnapshotDir)
+		if err != nil {
+			return err
+		}
 	}
 	manifest := mgr.Manifest()
 	if manifest == nil {
@@ -310,7 +321,7 @@ func (c Checker) collectHistoryCodeHashesContext(ctx context.Context, refs codeH
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		return true, collectStateDomainChangeCodeHashes(refs, change)
+		return true, collectStateDomainChangeCodeHashesFiltered(refs, wanted, change)
 	})
 }
 
@@ -320,12 +331,16 @@ func (c Checker) collectHistoryCodeHashesContext(ctx context.Context, refs codeH
 // Borrowed results stay isolated until the scan succeeds, so falling back after
 // a mixed block-pack/repair block cannot retain a shadowed code reference.
 func collectHotHistoryCodeHashes(ctx context.Context, cfg snapshots.DomainCfg, db ethdb.Iteratee, refs codeHashRefs) error {
+	return collectHotHistoryCodeHashesFiltered(ctx, cfg, db, refs, nil)
+}
+
+func collectHotHistoryCodeHashesFiltered(ctx context.Context, cfg snapshots.DomainCfg, db ethdb.Iteratee, refs codeHashRefs, wanted map[common.Hash]struct{}) error {
 	collectInto := func(dst codeHashRefs) func(*rawdb.StateDomainChange) (bool, error) {
 		return func(change *rawdb.StateDomainChange) (bool, error) {
 			if err := ctx.Err(); err != nil {
 				return false, err
 			}
-			return true, collectStateDomainChangeCodeHashes(dst, change)
+			return true, collectStateDomainChangeCodeHashesFiltered(dst, wanted, change)
 		}
 	}
 	if cfg.IterateHotHistoryBlockTxBorrowed != nil {
@@ -343,6 +358,10 @@ func collectHotHistoryCodeHashes(ctx context.Context, cfg snapshots.DomainCfg, d
 }
 
 func collectStateDomainChangeCodeHashes(refs codeHashRefs, change *rawdb.StateDomainChange) error {
+	return collectStateDomainChangeCodeHashesFiltered(refs, nil, change)
+}
+
+func collectStateDomainChangeCodeHashesFiltered(refs codeHashRefs, wanted map[common.Hash]struct{}, change *rawdb.StateDomainChange) error {
 	if change == nil || change.FlatDomain != rawdb.StateFlatDomainAccountLatest {
 		return nil
 	}
@@ -351,7 +370,11 @@ func collectStateDomainChangeCodeHashes(refs codeHashRefs, change *rawdb.StateDo
 		if err != nil {
 			return fmt.Errorf("pruning: decode state-domain-change prev block=%d seq=%d: %w", change.BlockNum, change.Seq, err)
 		}
-		refs.add(hash, change.TxNum)
+		if wanted == nil {
+			refs.add(hash, change.TxNum)
+		} else if _, ok := wanted[hash]; ok {
+			refs.add(hash, change.TxNum)
+		}
 	}
 	return nil
 }

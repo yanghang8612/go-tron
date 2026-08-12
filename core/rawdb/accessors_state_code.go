@@ -160,3 +160,27 @@ func IterateStateCode(db ethdb.Iteratee, fn func(StateCodeRow) (bool, error)) er
 	}
 	return it.Error()
 }
+
+// IterateStateCodeHashes walks immutable code keys without copying bytecode.
+// It is intended for lifecycle decisions that only need the content hash.
+func IterateStateCodeHashes(db ethdb.Iteratee, fn func(common.Hash) (bool, error)) error {
+	if db == nil || fn == nil {
+		return nil
+	}
+	it := db.NewIterator(stateCodePrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		hash, ok := DecodeStateCodeKey(it.Key())
+		if !ok {
+			continue
+		}
+		cont, err := fn(hash)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
+}

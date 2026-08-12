@@ -38,6 +38,7 @@ type DomainCfg struct {
 	IterateHotKVGeneration            HotKVGenerationIterator
 	ReadHotCode                       HotCodeReader
 	IterateHotCode                    HotCodeIterator
+	IterateHotCodeHashes              HotCodeHashIterator
 	DeleteHotCode                     HotCodeDeleter
 	IterateHotCommitmentDomain        HotCommitmentDomainIterator
 	WriteHotCommitmentCheckpoint      HotCommitmentCheckpointWriter
@@ -111,6 +112,8 @@ type HotKVGenerationIterator func(db ethdb.Iteratee, ownerPrefix []byte, fn func
 type HotCodeReader func(db ethdb.KeyValueReader, hash common.Hash) ([]byte, bool, error)
 
 type HotCodeIterator func(db ethdb.Iteratee, fn func(rawdb.StateCodeRow) (bool, error)) error
+
+type HotCodeHashIterator func(db ethdb.Iteratee, fn func(common.Hash) (bool, error)) error
 
 type HotCodeDeleter func(db ethdb.KeyValueWriter, hash common.Hash) error
 
@@ -285,9 +288,10 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				}
 				return []SegmentRef{latest, btree}, nil
 			},
-			ReadHotCode:    readHotStateCode,
-			IterateHotCode: rawdb.IterateStateCode,
-			DeleteHotCode:  rawdb.DeleteStateCode,
+			ReadHotCode:          readHotStateCode,
+			IterateHotCode:       rawdb.IterateStateCode,
+			IterateHotCodeHashes: rawdb.IterateStateCodeHashes,
+			DeleteHotCode:        rawdb.DeleteStateCode,
 		},
 		{
 			Name:                  "CommitmentRoot",
