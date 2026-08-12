@@ -15,7 +15,10 @@ type HotHistoryPruneDecision struct {
 type HotHistoryPruneOptions struct {
 	MaxBlocks  int
 	StartBlock uint64
-	Decide     func(*rawdb.StateTxRange) (HotHistoryPruneDecision, error)
+	// Decide synchronously classifies one fixed-size tx range. Pass the row by
+	// value so borrowed iteration cannot leak an ephemeral callback pointer and
+	// does not force one heap allocation per scanned block.
+	Decide func(rawdb.StateTxRange) (HotHistoryPruneDecision, error)
 }
 
 type HotHistoryPruneStats struct {
@@ -55,8 +58,7 @@ func (cfg DomainCfg) PruneHotHistory(db rawdb.StateKVLatestStore, opts HotHistor
 		if row.EndTxNum < row.BeginTxNum {
 			return false, fmt.Errorf("snapshots: hot history tx range for block %d is inverted", row.BlockNum)
 		}
-		rowCopy := *row
-		decision, err := opts.Decide(&rowCopy)
+		decision, err := opts.Decide(*row)
 		if err != nil {
 			return false, err
 		}

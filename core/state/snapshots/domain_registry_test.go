@@ -342,7 +342,7 @@ func TestDomainRegistryHotHistoryPruneRunnerOwnsTxRangeMetadata(t *testing.T) {
 
 	stats, err := cfg.PruneHotHistory(db, HotHistoryPruneOptions{
 		MaxBlocks: 1,
-		Decide: func(row *rawdb.StateTxRange) (HotHistoryPruneDecision, error) {
+		Decide: func(row rawdb.StateTxRange) (HotHistoryPruneDecision, error) {
 			return HotHistoryPruneDecision{DeleteTxRange: true, DeleteHistoryBlock: true}, nil
 		},
 	})
@@ -406,7 +406,7 @@ func TestPruneHotHistoryPrefersBorrowedTxRanges(t *testing.T) {
 	stats, err := cfg.PruneHotHistory(db, HotHistoryPruneOptions{
 		StartBlock: 7,
 		MaxBlocks:  1,
-		Decide: func(row *rawdb.StateTxRange) (HotHistoryPruneDecision, error) {
+		Decide: func(row rawdb.StateTxRange) (HotHistoryPruneDecision, error) {
 			if row.BlockNum != 7 || row.BlockHash != (common.Hash{7}) || row.BeginTxNum != 70 || row.EndTxNum != 72 {
 				t.Fatalf("borrowed prune row = %+v", row)
 			}

@@ -173,7 +173,7 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	hotStats, err := historyCfg.PruneHotHistory(historyStore, snapshots.HotHistoryPruneOptions{
 		MaxBlocks:  w.MaxBlocks,
 		StartBlock: hotPruneStartBlock,
-		Decide: func(row *rawdb.StateTxRange) (snapshots.HotHistoryPruneDecision, error) {
+		Decide: func(row rawdb.StateTxRange) (snapshots.HotHistoryPruneDecision, error) {
 			if err := ctx.Err(); err != nil {
 				return snapshots.HotHistoryPruneDecision{}, err
 			}
