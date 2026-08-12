@@ -357,9 +357,9 @@ func (w Worker) pruneStateCodeRowsContext(ctx context.Context, db Store, headNum
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		hash, err := decodeAccountEnvelopeCodeHash(row.Value, fmt.Sprintf("account latest %x", row.Owner))
+		hash, err := decodeAccountEnvelopeCodeHash(row.Value)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("pruning: decode account latest %x: %w", row.Owner, err)
 		}
 		refs.add(hash, headTxNum)
 		return true, nil
@@ -378,25 +378,16 @@ func (w Worker) pruneStateCodeRowsContext(ctx context.Context, db Store, headNum
 		if !isMeaningfulCodeHash(row.Hash) {
 			return true, nil
 		}
-		txNums := refs[row.Hash]
-		if len(txNums) == 0 {
-			covered, err := codeHashAvailableInSnapshot(mgr, row.Hash, headTxNum)
-			if err != nil {
-				return false, err
-			}
-			if covered {
-				deleteHashes = append(deleteHashes, row.Hash)
-			}
-			return true, nil
+		earliestTxNum, referenced := refs[row.Hash]
+		if !referenced {
+			earliestTxNum = headTxNum
 		}
-		for txNum := range txNums {
-			covered, err := codeHashAvailableInSnapshot(mgr, row.Hash, txNum)
-			if err != nil {
-				return false, err
-			}
-			if !covered {
-				return true, nil
-			}
+		covered, err := codeHashAvailableInSnapshot(mgr, row.Hash, earliestTxNum)
+		if err != nil {
+			return false, err
+		}
+		if !covered {
+			return true, nil
 		}
 		deleteHashes = append(deleteHashes, row.Hash)
 		return true, nil

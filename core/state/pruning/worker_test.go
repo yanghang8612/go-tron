@@ -1327,6 +1327,36 @@ func TestWorkerSnapPrunesHistoricalStateCodeCoveredByCodeDomain(t *testing.T) {
 	}
 }
 
+func TestWorkerSnapKeepsCodeWhenSnapshotStartsAfterEarliestReference(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	code := []byte{0x60, 0x2a}
+	hash := common.Keccak256(code)
+	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
+		t.Fatal(err)
+	}
+	writeCodeHashHistoryBlockPack(t, db, 2, 2, 1, hash)
+	writeCodeHashHistoryBlockPack(t, db, 5, 5, 1, hash)
+	codeRef, codeAccessorRef, codeBTreeRef, err := snapshots.BuildCodeSegmentFilesFromDB(db, dir, 5, 5, "latest/code-5-5.seg")
+	if err != nil {
+		t.Fatalf("build later code snapshot: %v", err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(5, 5, []snapshots.SegmentRef{codeRef, codeAccessorRef, codeBTreeRef})); err != nil {
+		t.Fatalf("publish later code snapshot: %v", err)
+	}
+
+	deleted, err := (Worker{DB: db, Policy: SnapPolicy(2, 1), SnapshotDir: dir}).pruneStateCodeRows(db, 5)
+	if err != nil {
+		t.Fatalf("prune code with late snapshot: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("deleted code rows = %d, want zero without earliest-reference coverage", deleted)
+	}
+	if got := rawdb.ReadStateCode(db, hash); !bytes.Equal(got, code) {
+		t.Fatalf("hot code after late snapshot = %x, want %x", got, code)
+	}
+}
+
 func TestWorkerSnapRejectsCorruptColdCodeSnapshot(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
@@ -1523,6 +1553,175 @@ func TestCheckerHistoryCodeHashCollectionHonorsContext(t *testing.T) {
 	}
 }
 
+func TestCollectHotHistoryCodeHashesUsesBorrowedBlockPacks(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	hash := common.Hash{0x42}
+	writeCodeHashHistoryBlockPack(t, db, 7, 70, 4, hash)
+	cfg, ok := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetStateDomainChange)
+	if !ok {
+		t.Fatal("missing state-domain history config")
+	}
+	cfg.IterateHotHistoryTxRangeChanges = func(ethdb.Iteratee, uint64, uint64, func(*rawdb.StateDomainChange) (bool, error)) error {
+		return errors.New("owning history iterator unexpectedly used")
+	}
+	refs := make(codeHashRefs)
+	err := collectHotHistoryCodeHashes(context.Background(), cfg, db, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if earliest, ok := refs[hash]; !ok || earliest != 70 {
+		t.Fatalf("borrowed code hash earliest ref = %d/%v, want 70/true", earliest, ok)
+	}
+}
+
+func TestCodeHashRefsKeepEarliestMeaningfulReference(t *testing.T) {
+	hash := common.Hash{0x7a}
+	refs := make(codeHashRefs)
+	refs.add(hash, 90)
+	refs.add(hash, 30)
+	refs.add(hash, 60)
+	refs.add(common.Hash{}, 1)
+	refs.add(emptyCodeHash, 1)
+	if earliest, ok := refs[hash]; !ok || earliest != 30 {
+		t.Fatalf("earliest code reference = %d/%v, want 30/true", earliest, ok)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("meaningful code refs = %v, want only %x", refs, hash)
+	}
+}
+
+func TestCollectHotHistoryCodeHashesFallsBackForStandaloneRows(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	hash := common.Hash{0x24}
+	if err := rawdb.WriteStateTxRange(db, 3, common.Hash{3}, 30, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChangeRow(db, &rawdb.StateDomainChange{
+		BlockNum: 3, TxNum: 30, Seq: 1,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      common.Address{common.AddressPrefixMainnet, 3},
+		PrevExists: true, Prev: accountLatestEnvelopeBytes(t, hash),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, ok := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetStateDomainChange)
+	if !ok {
+		t.Fatal("missing state-domain history config")
+	}
+	owned := cfg.IterateHotHistoryTxRangeChanges
+	ownedCalls := 0
+	cfg.IterateHotHistoryTxRangeChanges = func(db ethdb.Iteratee, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+		ownedCalls++
+		return owned(db, fromTxNum, toTxNum, fn)
+	}
+	refs := make(codeHashRefs)
+	err := collectHotHistoryCodeHashes(context.Background(), cfg, db, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if earliest, ok := refs[hash]; ownedCalls != 1 || !ok || earliest != 30 {
+		t.Fatalf("legacy fallback calls=%d earliest=%d/%v, want 1 and 30/true", ownedCalls, earliest, ok)
+	}
+}
+
+func TestCollectHotHistoryCodeHashesFallbackDiscardsShadowedPackedReference(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	packedHash := common.Hash{0x31}
+	repairHash := common.Hash{0x32}
+	writeCodeHashHistoryBlockPack(t, db, 7, 70, 4, packedHash)
+	if err := rawdb.WriteStateDomainChangeRow(db, &rawdb.StateDomainChange{
+		BlockNum: 7, TxNum: 70, Seq: 1,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      common.Address{common.AddressPrefixMainnet, 7, 0},
+		PrevExists: true, Prev: accountLatestEnvelopeBytes(t, repairHash),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, ok := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetStateDomainChange)
+	if !ok {
+		t.Fatal("missing state-domain history config")
+	}
+	refs := make(codeHashRefs)
+	if err := collectHotHistoryCodeHashes(context.Background(), cfg, db, refs); err != nil {
+		t.Fatal(err)
+	}
+	if packedEarliest, packedOK := refs[packedHash]; !packedOK || packedEarliest != 71 {
+		t.Fatalf("packed earliest ref = %d/%v, want 71/true after repair shadow", packedEarliest, packedOK)
+	}
+	if repairEarliest, repairOK := refs[repairHash]; !repairOK || repairEarliest != 70 {
+		t.Fatalf("repair earliest ref = %d/%v, want 70/true", repairEarliest, repairOK)
+	}
+}
+
+var benchmarkCollectedCodeHashRefs int
+
+func BenchmarkCollectHotHistoryCodeHashes(b *testing.B) {
+	const (
+		blocks       = 128
+		rowsPerBlock = 64
+	)
+	db := rawdb.NewMemoryDatabase()
+	hash := common.Hash{0x77}
+	for block := uint64(1); block <= blocks; block++ {
+		writeCodeHashHistoryBlockPack(b, db, block, block*rowsPerBlock, rowsPerBlock, hash)
+	}
+	cfg, ok := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetStateDomainChange)
+	if !ok {
+		b.Fatal("missing state-domain history config")
+	}
+	for _, benchmark := range []struct {
+		name     string
+		borrowed bool
+	}{
+		{name: "owned", borrowed: false},
+		{name: "borrowed", borrowed: true},
+	} {
+		b.Run(benchmark.name, func(b *testing.B) {
+			benchCfg := cfg
+			if !benchmark.borrowed {
+				benchCfg.IterateHotHistoryBlockTxBorrowed = nil
+			}
+			warmRefs := make(codeHashRefs)
+			warmRefs.add(hash, blocks*rowsPerBlock+1)
+			if err := collectHotHistoryCodeHashes(context.Background(), benchCfg, db, warmRefs); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ReportMetric(blocks*rowsPerBlock, "changes/op")
+			b.ResetTimer()
+			var refs codeHashRefs
+			for i := 0; i < b.N; i++ {
+				refs = make(codeHashRefs)
+				refs.add(hash, blocks*rowsPerBlock+1)
+				if err := collectHotHistoryCodeHashes(context.Background(), benchCfg, db, refs); err != nil {
+					b.Fatal(err)
+				}
+			}
+			benchmarkCollectedCodeHashRefs = len(refs)
+		})
+	}
+}
+
+func writeCodeHashHistoryBlockPack(t testing.TB, db ethdb.KeyValueWriter, blockNum, firstTxNum, rows uint64, hash common.Hash) {
+	t.Helper()
+	if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, firstTxNum, firstTxNum+rows-1); err != nil {
+		t.Fatal(err)
+	}
+	changes := make([]*rawdb.StateDomainChange, rows)
+	prev := accountLatestEnvelopeBytes(t, hash)
+	for i := range changes {
+		changes[i] = &rawdb.StateDomainChange{
+			BlockNum: blockNum, TxNum: firstTxNum + uint64(i), Seq: uint64(i + 1),
+			FlatDomain: rawdb.StateFlatDomainAccountLatest,
+			Owner:      common.Address{common.AddressPrefixMainnet, byte(blockNum), byte(i)},
+			PrevExists: true, Prev: prev,
+		}
+	}
+	if err := rawdb.WriteStateDomainChangeBlockRows(db, changes); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type cancelAfterChecksContext struct {
 	remaining atomic.Int64
 }
@@ -1612,7 +1811,7 @@ func writeAccountLatestEnvelope(t *testing.T, db ethdb.KeyValueWriter, owner com
 	}
 }
 
-func accountLatestEnvelopeBytes(t *testing.T, codeHash common.Hash) []byte {
+func accountLatestEnvelopeBytes(t testing.TB, codeHash common.Hash) []byte {
 	t.Helper()
 	data, err := (&statepkg.StateAccountV2{
 		Version:  statepkg.StateAccountVersion,

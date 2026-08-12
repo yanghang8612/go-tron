@@ -221,8 +221,22 @@ func TestIterateStateDomainChangesByBlockTxRangeBorrowedRejectsStandaloneRows(t 
 		t.Fatal(err)
 	}
 	err := IterateStateDomainChangesByBlockTxRangeBorrowed(db, 1, 1, 1, 1, func(*StateDomainChange) (bool, error) { return true, nil })
-	if err == nil || !strings.Contains(err.Error(), "standalone") {
+	if !errors.Is(err, ErrStateDomainChangeBorrowedLegacyRows) {
 		t.Fatalf("standalone row error = %v", err)
+	}
+}
+
+func TestIterateStateDomainChangesByBlockTxRangeBorrowedRejectsLegacySequenceZeroRow(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	if err := WriteStateTxRange(db, 1, common.Hash{1}, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateDomainChangeRow(db, borrowedStateDomainChangeTestRow(1, 0, 1)); err != nil {
+		t.Fatal(err)
+	}
+	err := IterateStateDomainChangesByBlockTxRangeBorrowed(db, 1, 1, 1, 1, borrowedStateDomainChangeNoop)
+	if !errors.Is(err, ErrStateDomainChangeBorrowedLegacyRows) {
+		t.Fatalf("legacy sequence-zero row error = %v", err)
 	}
 }
 

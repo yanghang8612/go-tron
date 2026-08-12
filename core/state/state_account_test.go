@@ -16,6 +16,7 @@ type stateAccountV2Reference StateAccountV2
 
 var stateAccountV2DecodeSink *StateAccountV2
 var stateAccountV2DecodeIntoSink StateAccountV2
+var stateAccountV2CodeHashSink tcommon.Hash
 
 func decodeStateAccountV2Reference(data []byte) (*StateAccountV2, error) {
 	v := new(stateAccountV2Reference)
@@ -150,6 +151,30 @@ func TestStateAccountV2RoundTrip(t *testing.T) {
 	}
 }
 
+func TestDecodeStateAccountCodeHashAllocatesNothing(t *testing.T) {
+	want := tcommon.Hash{0x33, 0x44}
+	encoded, err := (&StateAccountV2{
+		Version:             StateAccountVersion,
+		AccountProto:        bytes.Repeat([]byte{0x5a}, 512),
+		AccountKVRoot:       tcommon.Hash{0x11, 0x22},
+		AccountKVGeneration: 7,
+		CodeHash:            want,
+	}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got tcommon.Hash
+	allocs := testing.AllocsPerRun(100, func() {
+		got, err = DecodeStateAccountCodeHash(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 || got != want {
+		t.Fatalf("code hash = %x, allocs = %.2f; want %x and zero", got, allocs, want)
+	}
+}
+
 func TestStateAccountV2DirectDecodeMatchesGenericRLP(t *testing.T) {
 	var accountRoot, codeHash tcommon.Hash
 	for i := range accountRoot {
@@ -187,6 +212,10 @@ func TestStateAccountV2DirectDecodeMatchesGenericRLP(t *testing.T) {
 		if gotErr != nil || wantErr != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("valid case %d mismatch: got=(%+v,%v) want=(%+v,%v)", i, got, gotErr, want, wantErr)
 		}
+		extracted, extractErr := DecodeStateAccountCodeHash(encoded)
+		if extractErr != nil || extracted != codeHash {
+			t.Fatalf("valid case %d code hash = %x, %v; want %x", i, extracted, extractErr, codeHash)
+		}
 	}
 
 	// Compare acceptance and decoded values against the former generic decoder
@@ -213,6 +242,13 @@ func TestStateAccountV2DirectDecodeMatchesGenericRLP(t *testing.T) {
 		}
 		if gotErr == nil && !reflect.DeepEqual(got, want) {
 			t.Fatalf("corpus case %d value mismatch for %x: got=%+v want=%+v", i, encoded, got, want)
+		}
+		extracted, extractErr := DecodeStateAccountCodeHash(encoded)
+		if (extractErr == nil) != (gotErr == nil) {
+			t.Fatalf("corpus case %d code hash acceptance mismatch for %x: extract=%v full=%v", i, encoded, extractErr, gotErr)
+		}
+		if extractErr == nil && extracted != got.CodeHash {
+			t.Fatalf("corpus case %d code hash = %x, want %x", i, extracted, got.CodeHash)
 		}
 	}
 }
@@ -242,6 +278,15 @@ func BenchmarkStateAccountV2Decode(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			err = decodeStateAccountV3Into(encoded, &stateAccountV2DecodeIntoSink)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("code-hash", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			stateAccountV2CodeHashSink, err = DecodeStateAccountCodeHash(encoded)
 			if err != nil {
 				b.Fatal(err)
 			}

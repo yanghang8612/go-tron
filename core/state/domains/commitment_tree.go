@@ -120,12 +120,24 @@ func returnEncodeBuf(bp *[]byte) {
 // (PutBranch copies the value, DelBranch only uses the prefix) and never
 // retains the pointer past return. Recursive descent borrows separate objects
 // per level, and sync.Pool is safe across the parallel root's workers.
-var branchPool = sync.Pool{
-	New: func() any { return new(BranchData) },
-}
+var branchPool sync.Pool
+
+// BranchData is a fixed, pointer-bearing structure whose leaf strings are
+// cleared before pooling. Allocate cold pool misses in stable slabs: recursive
+// fold descent still borrows ordinary *BranchData pointers, while the GC tracks
+// one object per slab instead of one object per trie level/worker. sync.Pool may
+// discard the spare interior pointers at any GC, bounding idle retention.
+const branchPoolBatchSize = 8
 
 func borrowBranch() *BranchData {
-	return branchPool.Get().(*BranchData)
+	if pooled := branchPool.Get(); pooled != nil {
+		return pooled.(*BranchData)
+	}
+	batch := new([branchPoolBatchSize]BranchData)
+	for i := 1; i < len(batch); i++ {
+		branchPool.Put(&batch[i])
+	}
+	return &batch[0]
 }
 
 // borrowEmptyBranch returns a zeroed branch for callers constructing a new

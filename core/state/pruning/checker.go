@@ -71,7 +71,12 @@ func (c Checker) Check(headNum uint64) (CheckReport, error) {
 		if err != nil {
 			return false, err
 		}
-		return true, collectAccountEnvelopeCodeHash(codeHashes, row.Value, txNum, fmt.Sprintf("account latest %x", row.Owner))
+		hash, err := decodeAccountEnvelopeCodeHash(row.Value)
+		if err != nil {
+			return false, fmt.Errorf("pruning: decode account latest %x: %w", row.Owner, err)
+		}
+		codeHashes.add(hash, txNum)
+		return true, nil
 	}); err != nil {
 		return CheckReport{}, err
 	}
@@ -141,7 +146,7 @@ func (c Checker) Check(headNum uint64) (CheckReport, error) {
 		return CheckReport{}, err
 	}
 	report.ReferencedCodeHashes = len(codeHashes)
-	if err := c.checkReferencedCodeHashes(codeHashes, headNum); err != nil {
+	if err := c.checkReferencedCodeHashes(codeHashes); err != nil {
 		return CheckReport{}, err
 	}
 	coverage, err := (Worker{Policy: c.Policy, SnapshotDir: c.SnapshotDir}).snapshotStateDomainChangeCoverage()
@@ -236,7 +241,7 @@ func CheckCodeHashes(db ethdb.KeyValueReader, hashes []common.Hash) error {
 		return errors.New("pruning: missing CodeDomain hot reader")
 	}
 	for _, hash := range hashes {
-		if hash == (common.Hash{}) || hash == common.Keccak256(nil) {
+		if hash == (common.Hash{}) || hash == emptyCodeHash {
 			continue
 		}
 		if code, ok, err := codeCfg.ReadHotCode(db, hash); err != nil {
@@ -248,16 +253,28 @@ func CheckCodeHashes(db ethdb.KeyValueReader, hashes []common.Hash) error {
 	return nil
 }
 
-type codeHashRefs map[common.Hash]map[uint64]struct{}
+// codeHashRefs records the earliest state txNum that references each immutable,
+// content-addressed code hash. CodeDomain snapshot visibility is monotonic: a
+// segment visible at the earliest reference remains visible at every later
+// reference, while coverage that starts later cannot satisfy that earliest
+// historical account image.
+type codeHashRefs map[common.Hash]uint64
+
+var emptyCodeHash = common.Keccak256(nil)
 
 func (refs codeHashRefs) add(hash common.Hash, txNum uint64) {
 	if !isMeaningfulCodeHash(hash) {
 		return
 	}
-	if refs[hash] == nil {
-		refs[hash] = make(map[uint64]struct{})
+	if earliest, ok := refs[hash]; !ok || txNum < earliest {
+		refs[hash] = txNum
 	}
-	refs[hash][txNum] = struct{}{}
+}
+
+func (refs codeHashRefs) merge(other codeHashRefs) {
+	for hash, txNum := range other {
+		refs.add(hash, txNum)
+	}
 }
 
 func (c Checker) collectHistoryCodeHashes(refs codeHashRefs) error {
@@ -275,12 +292,7 @@ func (c Checker) collectHistoryCodeHashesContext(ctx context.Context, refs codeH
 	if !ok {
 		return errors.New("pruning: missing state-domain history config")
 	}
-	if err := cfg.IterateHotHistoryChangesByTxRange(c.DB, 0, ^uint64(0), func(change *rawdb.StateDomainChange) (bool, error) {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		return true, collectStateDomainChangeCodeHashes(refs, change)
-	}); err != nil {
+	if err := collectHotHistoryCodeHashes(ctx, cfg, c.DB, refs); err != nil {
 		return err
 	}
 	if c.SnapshotDir == "" {
@@ -302,52 +314,63 @@ func (c Checker) collectHistoryCodeHashesContext(ctx context.Context, refs codeH
 	})
 }
 
+// collectHotHistoryCodeHashes uses the allocation-bounded current block-pack
+// reader for the common case. Databases written by the retired standalone-row
+// schema retain the owning reader's overwrite and compatibility semantics.
+// Borrowed results stay isolated until the scan succeeds, so falling back after
+// a mixed block-pack/repair block cannot retain a shadowed code reference.
+func collectHotHistoryCodeHashes(ctx context.Context, cfg snapshots.DomainCfg, db ethdb.Iteratee, refs codeHashRefs) error {
+	collectInto := func(dst codeHashRefs) func(*rawdb.StateDomainChange) (bool, error) {
+		return func(change *rawdb.StateDomainChange) (bool, error) {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			return true, collectStateDomainChangeCodeHashes(dst, change)
+		}
+	}
+	if cfg.IterateHotHistoryBlockTxBorrowed != nil {
+		borrowedRefs := make(codeHashRefs)
+		err := cfg.IterateHotHistoryBlockTxBorrowed(db, 0, ^uint64(0), 0, ^uint64(0), collectInto(borrowedRefs))
+		if err == nil {
+			refs.merge(borrowedRefs)
+			return nil
+		}
+		if !errors.Is(err, rawdb.ErrStateDomainChangeBorrowedLegacyRows) {
+			return err
+		}
+	}
+	return cfg.IterateHotHistoryChangesByTxRange(db, 0, ^uint64(0), collectInto(refs))
+}
+
 func collectStateDomainChangeCodeHashes(refs codeHashRefs, change *rawdb.StateDomainChange) error {
 	if change == nil || change.FlatDomain != rawdb.StateFlatDomainAccountLatest {
 		return nil
 	}
 	if change.PrevExists {
-		if err := collectAccountEnvelopeCodeHash(refs, change.Prev, change.TxNum, fmt.Sprintf("state-domain-change prev block=%d seq=%d", change.BlockNum, change.Seq)); err != nil {
-			return err
+		hash, err := decodeAccountEnvelopeCodeHash(change.Prev)
+		if err != nil {
+			return fmt.Errorf("pruning: decode state-domain-change prev block=%d seq=%d: %w", change.BlockNum, change.Seq, err)
 		}
+		refs.add(hash, change.TxNum)
 	}
 	return nil
 }
 
-func collectAccountEnvelopeCodeHash(refs codeHashRefs, data []byte, txNum uint64, source string) error {
-	hash, err := decodeAccountEnvelopeCodeHash(data, source)
-	if err != nil {
-		return err
-	}
-	refs.add(hash, txNum)
-	return nil
+func decodeAccountEnvelopeCodeHash(data []byte) (common.Hash, error) {
+	return statepkg.DecodeStateAccountCodeHash(data)
 }
 
-func decodeAccountEnvelopeCodeHash(data []byte, source string) (common.Hash, error) {
-	envelope, err := statepkg.DecodeStateAccountV2(data)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("pruning: decode %s: %w", source, err)
-	}
-	return envelope.CodeHash, nil
-}
-
-func (c Checker) checkReferencedCodeHashes(hashes codeHashRefs, headNum uint64) error {
+func (c Checker) checkReferencedCodeHashes(hashes codeHashRefs) error {
 	if len(hashes) == 0 {
 		return nil
 	}
 	var codeSnapshots *snapshots.Manager
-	var codeSnapshotTxNum uint64
 	if c.SnapshotDir != "" {
 		mgr, err := snapshots.OpenManager(c.SnapshotDir)
 		if err != nil {
 			return err
 		}
 		codeSnapshots = mgr
-		txNum, err := snapshots.StateDomainHistoryTxNumAtBlockEnd(c.DB, headNum)
-		if err != nil {
-			return err
-		}
-		codeSnapshotTxNum = txNum
 	}
 	codeCfg, err := latestDomainConfig(snapshots.SegmentDatasetCode)
 	if err != nil {
@@ -356,8 +379,8 @@ func (c Checker) checkReferencedCodeHashes(hashes codeHashRefs, headNum uint64) 
 	if codeCfg.ReadHotCode == nil {
 		return errors.New("pruning: missing CodeDomain hot reader")
 	}
-	for hash, txNums := range hashes {
-		covered, err := codeHashCoveredInSnapshots(codeSnapshots, hash, txNums, codeSnapshotTxNum)
+	for hash, earliestTxNum := range hashes {
+		covered, err := codeHashAvailableInSnapshot(codeSnapshots, hash, earliestTxNum)
 		if err != nil {
 			return err
 		}
@@ -374,23 +397,10 @@ func (c Checker) checkReferencedCodeHashes(hashes codeHashRefs, headNum uint64) 
 	return nil
 }
 
-func codeHashCoveredInSnapshots(mgr *snapshots.Manager, hash common.Hash, txNums map[uint64]struct{}, fallbackTxNum uint64) (bool, error) {
+func codeHashAvailableInSnapshot(mgr *snapshots.Manager, hash common.Hash, txNum uint64) (bool, error) {
 	if mgr == nil {
 		return false, nil
 	}
-	if len(txNums) == 0 {
-		return codeHashAvailableInSnapshot(mgr, hash, fallbackTxNum)
-	}
-	for txNum := range txNums {
-		covered, err := codeHashAvailableInSnapshot(mgr, hash, txNum)
-		if err != nil || !covered {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-func codeHashAvailableInSnapshot(mgr *snapshots.Manager, hash common.Hash, txNum uint64) (bool, error) {
 	code, ok, err := mgr.GetCodeAtOrBefore(hash, txNum)
 	if err != nil {
 		return false, err
@@ -399,7 +409,7 @@ func codeHashAvailableInSnapshot(mgr *snapshots.Manager, hash common.Hash, txNum
 }
 
 func isMeaningfulCodeHash(hash common.Hash) bool {
-	return hash != (common.Hash{}) && hash != common.Keccak256(nil)
+	return hash != (common.Hash{}) && hash != emptyCodeHash
 }
 
 func (c Checker) checkSnapshots(report *CheckReport) error {

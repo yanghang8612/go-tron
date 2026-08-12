@@ -174,6 +174,73 @@ func DecodeStateAccountV3(data []byte) (*StateAccountV3, error) {
 	return v, nil
 }
 
+type borrowedStateAccountV3Fields struct {
+	version             uint64
+	accountProto        []byte
+	accountKVRoot       []byte
+	accountKVGeneration uint64
+	codeHash            []byte
+}
+
+// splitStateAccountV3 validates the complete envelope while borrowing its byte
+// fields from data. Callers decide which fields require an owned copy.
+func splitStateAccountV3(data []byte) (borrowedStateAccountV3Fields, error) {
+	var fields borrowedStateAccountV3Fields
+	content, trailing, err := rlp.SplitList(data)
+	if err != nil {
+		return fields, fmt.Errorf("decode StateAccountV3: %w", err)
+	}
+	if len(trailing) != 0 {
+		return fields, fmt.Errorf("decode StateAccountV3: trailing bytes")
+	}
+	fields.version, content, err = rlp.SplitUint64(content)
+	if err != nil {
+		return fields, fmt.Errorf("decode StateAccountV3 version: %w", err)
+	}
+	fields.accountProto, content, err = rlp.SplitString(content)
+	if err != nil {
+		return fields, fmt.Errorf("decode StateAccountV3 account: %w", err)
+	}
+	fields.accountKVRoot, content, err = rlp.SplitString(content)
+	if err != nil {
+		return fields, fmt.Errorf("decode StateAccountV3 account root: %w", err)
+	}
+	if len(fields.accountKVRoot) != tcommon.HashLength {
+		return fields, fmt.Errorf("decode StateAccountV3 account root: got %d bytes, want %d", len(fields.accountKVRoot), tcommon.HashLength)
+	}
+	fields.accountKVGeneration, content, err = rlp.SplitUint64(content)
+	if err != nil {
+		return fields, fmt.Errorf("decode StateAccountV3 generation: %w", err)
+	}
+	fields.codeHash, content, err = rlp.SplitString(content)
+	if err != nil {
+		return fields, fmt.Errorf("decode StateAccountV3 code hash: %w", err)
+	}
+	if len(fields.codeHash) != tcommon.HashLength {
+		return fields, fmt.Errorf("decode StateAccountV3 code hash: got %d bytes, want %d", len(fields.codeHash), tcommon.HashLength)
+	}
+	if len(content) != 0 {
+		return fields, fmt.Errorf("decode StateAccountV3: too many list elements")
+	}
+	if fields.version != StateAccountVersion {
+		return fields, fmt.Errorf("unsupported StateAccountV3 version %d (want %d)", fields.version, StateAccountVersion)
+	}
+	return fields, nil
+}
+
+// DecodeStateAccountCodeHash validates a flat account-latest envelope and
+// returns only its code hash without copying the variable-width account core.
+// Pruning uses this while scanning historical previous images.
+func DecodeStateAccountCodeHash(data []byte) (tcommon.Hash, error) {
+	fields, err := splitStateAccountV3(data)
+	if err != nil {
+		return tcommon.Hash{}, err
+	}
+	var codeHash tcommon.Hash
+	copy(codeHash[:], fields.codeHash)
+	return codeHash, nil
+}
+
 // decodeStateAccountV3Into is the caller-owned counterpart used by hot account
 // hydration. AccountProto still receives its own durable copy: data may alias a
 // pending blockbuffer layer or its bounded base-read cache and is guaranteed to
@@ -181,54 +248,19 @@ func DecodeStateAccountV3(data []byte) (*StateAccountV3, error) {
 // caller storage avoids a second heap object without weakening that ownership
 // boundary.
 func decodeStateAccountV3Into(data []byte, dst *StateAccountV3) error {
-	content, trailing, err := rlp.SplitList(data)
+	fields, err := splitStateAccountV3(data)
 	if err != nil {
-		return fmt.Errorf("decode StateAccountV3: %w", err)
+		return err
 	}
-	if len(trailing) != 0 {
-		return fmt.Errorf("decode StateAccountV3: trailing bytes")
-	}
-	version, content, err := rlp.SplitUint64(content)
-	if err != nil {
-		return fmt.Errorf("decode StateAccountV3 version: %w", err)
-	}
-	accountProto, content, err := rlp.SplitString(content)
-	if err != nil {
-		return fmt.Errorf("decode StateAccountV3 account: %w", err)
-	}
-	accountKVRoot, content, err := rlp.SplitString(content)
-	if err != nil {
-		return fmt.Errorf("decode StateAccountV3 account root: %w", err)
-	}
-	if len(accountKVRoot) != tcommon.HashLength {
-		return fmt.Errorf("decode StateAccountV3 account root: got %d bytes, want %d", len(accountKVRoot), tcommon.HashLength)
-	}
-	accountKVGeneration, content, err := rlp.SplitUint64(content)
-	if err != nil {
-		return fmt.Errorf("decode StateAccountV3 generation: %w", err)
-	}
-	codeHash, content, err := rlp.SplitString(content)
-	if err != nil {
-		return fmt.Errorf("decode StateAccountV3 code hash: %w", err)
-	}
-	if len(codeHash) != tcommon.HashLength {
-		return fmt.Errorf("decode StateAccountV3 code hash: got %d bytes, want %d", len(codeHash), tcommon.HashLength)
-	}
-	if len(content) != 0 {
-		return fmt.Errorf("decode StateAccountV3: too many list elements")
-	}
-	if version != StateAccountVersion {
-		return fmt.Errorf("unsupported StateAccountV3 version %d (want %d)", version, StateAccountVersion)
-	}
-	ownedAccountProto := make([]byte, len(accountProto))
-	copy(ownedAccountProto, accountProto)
+	ownedAccountProto := make([]byte, len(fields.accountProto))
+	copy(ownedAccountProto, fields.accountProto)
 	*dst = StateAccountV3{
-		Version:             version,
+		Version:             fields.version,
 		AccountProto:        ownedAccountProto,
-		AccountKVGeneration: accountKVGeneration,
+		AccountKVGeneration: fields.accountKVGeneration,
 	}
-	copy(dst.AccountKVRoot[:], accountKVRoot)
-	copy(dst.CodeHash[:], codeHash)
+	copy(dst.AccountKVRoot[:], fields.accountKVRoot)
+	copy(dst.CodeHash[:], fields.codeHash)
 	return nil
 }
 

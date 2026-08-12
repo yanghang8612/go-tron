@@ -13,6 +13,12 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
+// ErrStateDomainChangeBorrowedLegacyRows reports that a borrowed block-pack
+// scan encountered a retired standalone history row. Callers that must support
+// databases written by the transition schema can fall back to the owning
+// iterator without hiding corruption or callback errors.
+var ErrStateDomainChangeBorrowedLegacyRows = errors.New("rawdb: borrowed state domain change scan encountered legacy rows")
+
 // IterateStateTxRangesByBlockRangeBorrowed walks the current fixed-field
 // tx-range rows without reflection decoding. The callback pointer is reused and
 // is valid only until fn returns.
@@ -62,9 +68,9 @@ func IterateStateTxRangesByBlockRangeBorrowed(db ethdb.Iteratee, fromBlock, toBl
 // are valid only until fn returns. Callers that retain a change must copy it.
 //
 // Fresh canonical execution writes exactly one sequence-zero block pack per
-// block. Standalone positive-sequence rows belong to the retired transition
-// schema and are deliberately rejected here; owning history readers retain
-// their compatibility behavior outside this performance-critical path.
+// block. Standalone rows belong to the retired transition schema and return
+// ErrStateDomainChangeBorrowedLegacyRows; owning history readers retain their
+// compatibility and repair-overwrite behavior for callers that fall back.
 func IterateStateDomainChangesByBlockTxRangeBorrowed(db ethdb.Iteratee, fromBlock, toBlock, fromTxNum, toTxNum uint64, fn func(*StateDomainChange) (bool, error)) error {
 	if db == nil {
 		return errors.New("rawdb: nil state domain change database")
@@ -97,6 +103,25 @@ func IterateStateDomainChangesByBlockTxRangeBorrowed(db ethdb.Iteratee, fromBloc
 		previousBlock uint64
 	)
 	var scratch StateDomainChange
+	visit := func(change *StateDomainChange) (bool, error) {
+		if change.TxNum < fromTxNum || change.TxNum > toTxNum {
+			return true, nil
+		}
+		if havePrevious && (change.TxNum < previousTxNum ||
+			(change.TxNum == previousTxNum && (change.Seq < previousSeq ||
+				(change.Seq == previousSeq && change.BlockNum <= previousBlock)))) {
+			return false, fmt.Errorf("rawdb: borrowed state domain changes are not ordered at block %d sequence %d txNum %d", change.BlockNum, change.Seq, change.TxNum)
+		}
+		change.BlockHash = rangeHash
+		cont, err := fn(change)
+		if err == nil && cont {
+			havePrevious = true
+			previousTxNum = change.TxNum
+			previousSeq = change.Seq
+			previousBlock = change.BlockNum
+		}
+		return cont, err
+	}
 	for changeIt.Next() {
 		key := changeIt.Key()
 		if !bytes.HasPrefix(key, stateChangeSetPrefix) || len(key) != len(stateChangeSetPrefix)+16 {
@@ -111,7 +136,7 @@ func IterateStateDomainChangesByBlockTxRangeBorrowed(db ethdb.Iteratee, fromBloc
 		}
 		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
 		if seq != 0 {
-			return fmt.Errorf("rawdb: standalone state domain change row at block %d sequence %d is unsupported by borrowed block-pack iteration", blockNum, seq)
+			return fmt.Errorf("%w at block %d sequence %d", ErrStateDomainChangeBorrowedLegacyRows, blockNum, seq)
 		}
 		for !haveRange || rangeBlock < blockNum {
 			if !rangeIt.Next() {
@@ -148,26 +173,16 @@ func IterateStateDomainChangesByBlockTxRangeBorrowed(db ethdb.Iteratee, fromBloc
 		if rangeBlock != blockNum || rangeEnd < fromTxNum || rangeBegin > toTxNum {
 			continue
 		}
-		cont, err := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(changeIt.Value(), blockNum, &scratch, func(change *StateDomainChange) (bool, error) {
-			if change.TxNum < fromTxNum || change.TxNum > toTxNum {
-				return true, nil
-			}
-			if havePrevious && (change.TxNum < previousTxNum ||
-				(change.TxNum == previousTxNum && (change.Seq < previousSeq ||
-					(change.Seq == previousSeq && change.BlockNum <= previousBlock)))) {
-				return false, fmt.Errorf("rawdb: borrowed state domain changes are not ordered at block %d sequence %d txNum %d", change.BlockNum, change.Seq, change.TxNum)
-			}
-			change.BlockHash = rangeHash
-			cont, err := fn(change)
-			if err == nil && cont {
-				havePrevious = true
-				previousTxNum = change.TxNum
-				previousSeq = change.Seq
-				previousBlock = change.BlockNum
-			}
-			return cont, err
-		})
+		value := changeIt.Value()
+		cont, err := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(value, blockNum, &scratch, visit)
 		if err != nil {
+			// Sequence zero was an ordinary row before block packs reserved it.
+			// Probe the owning transition decoder only on this exceptional path
+			// so current-schema corruption remains distinguishable from legacy
+			// input and is never silently retried.
+			if _, legacyErr := decodePersistedStateDomainChange(value, blockNum, 0); legacyErr == nil {
+				return fmt.Errorf("%w at block %d sequence 0", ErrStateDomainChangeBorrowedLegacyRows, blockNum)
+			}
 			return err
 		}
 		if !cont {

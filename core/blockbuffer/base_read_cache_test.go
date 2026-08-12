@@ -14,9 +14,38 @@ import (
 
 var baseReadCacheEntryBenchmarkSink *baseReadCacheEntry
 
+func BenchmarkBaseReadCacheEntryAllocation(b *testing.B) {
+	const entriesPerOp = 1024
+	entries := make([]*baseReadCacheEntry, entriesPerOp)
+	b.ReportAllocs()
+	b.ReportMetric(entriesPerOp, "entries/op")
+	for range b.N {
+		var shard baseReadCacheShard
+		for i := range entries {
+			entries[i] = shard.takeEntry()
+		}
+	}
+	baseReadCacheEntryBenchmarkSink = entries[len(entries)-1]
+}
+
 func TestBaseReadCacheEntryStaysInEightyByteClass(t *testing.T) {
 	if got := unsafe.Sizeof(baseReadCacheEntry{}); got != 80 {
 		t.Fatalf("baseReadCacheEntry size = %d, want 80", got)
+	}
+}
+
+func TestBaseReadCacheEntryBatchReturnsDistinctStableEntries(t *testing.T) {
+	var shard baseReadCacheShard
+	entries := make(map[*baseReadCacheEntry]struct{}, baseReadCacheEntryBatchSize)
+	for range baseReadCacheEntryBatchSize {
+		entry := shard.takeEntry()
+		if _, duplicate := entries[entry]; duplicate {
+			t.Fatalf("entry batch returned duplicate pointer %p", entry)
+		}
+		entries[entry] = struct{}{}
+	}
+	if len(entries) != baseReadCacheEntryBatchSize || shard.freeEntryCount != 0 {
+		t.Fatalf("entry batch size/free = %d/%d, want %d/0", len(entries), shard.freeEntryCount, baseReadCacheEntryBatchSize)
 	}
 }
 
@@ -832,6 +861,7 @@ func TestBaseReadCache_EvictionReusesEntryMetadata(t *testing.T) {
 	if first == nil {
 		t.Fatal("first entry was not admitted")
 	}
+	freeAfterFirst := s.freeEntryCount
 	testBaseReadCacheSet(c, keys[1], value)
 	if _, ok := s.entries[string(keys[0])]; ok {
 		t.Fatal("first entry survived a one-entry cache eviction")
@@ -843,8 +873,8 @@ func TestBaseReadCache_EvictionReusesEntryMetadata(t *testing.T) {
 	if first.key != string(keys[2]) || string(first.value) != string(value) || !first.live {
 		t.Fatalf("recycled entry = {key:%q value:%q live:%v}", first.key, first.value, first.live)
 	}
-	if s.freeEntryCount != 1 {
-		t.Fatalf("free entry count = %d, want the evicted second entry", s.freeEntryCount)
+	if s.freeEntryCount != freeAfterFirst {
+		t.Fatalf("free entry count = %d, want steady batch reserve %d", s.freeEntryCount, freeAfterFirst)
 	}
 }
 

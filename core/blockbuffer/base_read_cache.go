@@ -22,10 +22,19 @@ const baseReadCacheShardCount = layerShardCount
 // more memory than configured.
 const baseReadCacheEntryOverhead = 64
 
-// Recycled entry metadata is outside the payload byte budget. Keep enough per
-// shard to absorb steady eviction churn and stale-token compaction without
-// retaining an unbounded historical high-water mark after the cache empties.
-const baseReadCacheMaxFreeEntries = 2048
+// Allocate stable entry metadata in modest slabs. Maps, CLOCK queues and the
+// free list still hold ordinary *baseReadCacheEntry pointers, but one heap
+// object now owns many adjacent 80-byte entries. This materially reduces GC
+// object count and findObject work without changing payload ownership or the
+// configured byte budget. Interior pointers keep a slab alive while any of its
+// entries remain resident or recyclable.
+const baseReadCacheEntryBatchSize = 64
+
+// Recycled entry metadata is outside the payload byte budget. One slab-sized
+// reserve per shard absorbs steady eviction churn; the small cap also bounds
+// whole-slab retention after the cache empties, even if free pointers happen to
+// come from different slabs.
+const baseReadCacheMaxFreeEntries = baseReadCacheEntryBatchSize
 
 // baseReadCacheMaxReferenceCredit lets repeated resident hits accumulate a
 // small amount of CLOCK protection. A single bit loses frequency information:
@@ -902,7 +911,13 @@ func cloneBaseReadCacheValueInto(value, storage []byte, maxCapacity int) []byte 
 func (s *baseReadCacheShard) takeEntry() *baseReadCacheEntry {
 	entry := s.freeEntries
 	if entry == nil {
-		return new(baseReadCacheEntry)
+		batch := new([baseReadCacheEntryBatchSize]baseReadCacheEntry)
+		for i := 1; i < len(batch); i++ {
+			batch[i].nextFree = s.freeEntries
+			s.freeEntries = &batch[i]
+		}
+		s.freeEntryCount += len(batch) - 1
+		return &batch[0]
 	}
 	s.freeEntries = entry.nextFree
 	s.freeEntryCount--
