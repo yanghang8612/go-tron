@@ -383,46 +383,46 @@ func deleteStateKVPrefixByPointScan(db stateKVLatestStore, prefix []byte) error 
 	// again in that setup and append duplicate deletes forever.
 	it := db.NewIterator(prefix, nil)
 	defer it.Release()
-	keys := make([][]byte, 0, resetScanBatch)
-	flush := func() error {
-		if err := deleteStateKVKeys(db, keys); err != nil {
-			return err
-		}
-		clear(keys)
-		keys = keys[:0]
-		return nil
-	}
-	for it.Next() {
-		keys = append(keys, append([]byte(nil), it.Key()...))
-		if len(keys) >= resetScanBatch {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-	}
-	if err := it.Error(); err != nil {
-		return err
-	}
-	return flush()
-}
-
-func deleteStateKVKeys(db stateKVLatestStore, keys [][]byte) error {
-	if len(keys) == 0 {
-		return nil
-	}
+	// Delete and batch implementations synchronously copy the key before
+	// returning. Feed the iterator view directly into the writer instead of
+	// first allocating an owned copy for every history row. A native store gets
+	// a bounded batch; layered pruning stores already direct Delete into their
+	// own bounded writer and intentionally need not expose Batcher.
 	if batcher, ok := db.(ethdb.Batcher); ok {
 		batch := batcher.NewBatch()
-		for _, key := range keys {
-			if err := batch.Delete(key); err != nil {
+		defer batch.Reset()
+		pending := 0
+		flush := func() error {
+			if pending == 0 {
+				return nil
+			}
+			if err := batch.Write(); err != nil {
 				return err
 			}
+			batch.Reset()
+			pending = 0
+			return nil
 		}
-		return batch.Write()
+		for it.Next() {
+			if err := batch.Delete(it.Key()); err != nil {
+				return err
+			}
+			pending++
+			if pending >= resetScanBatch {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+		}
+		if err := it.Error(); err != nil {
+			return err
+		}
+		return flush()
 	}
-	for _, key := range keys {
-		if err := db.Delete(key); err != nil {
+	for it.Next() {
+		if err := db.Delete(it.Key()); err != nil {
 			return err
 		}
 	}
-	return nil
+	return it.Error()
 }

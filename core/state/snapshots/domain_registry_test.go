@@ -380,6 +380,50 @@ func TestDomainRegistryHotHistoryPruneRunnerOwnsTxRangeMetadata(t *testing.T) {
 	}
 }
 
+func TestPruneHotHistoryPrefersBorrowedTxRanges(t *testing.T) {
+	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	if !ok {
+		t.Fatal("missing state-domain-change history config")
+	}
+	db := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateTxRange(db, 7, common.Hash{7}, 70, 72); err != nil {
+		t.Fatal(err)
+	}
+	borrowed := cfg.IterateHotHistoryTxRangeBorrowed
+	var gotFrom, gotTo uint64
+	cfg.IterateHotHistoryTxRangeBorrowed = func(db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*rawdb.StateTxRange) (bool, error)) error {
+		gotFrom, gotTo = fromBlock, toBlock
+		return borrowed(db, fromBlock, toBlock, fn)
+	}
+	cfg.IterateHotHistoryTxRanges = func(ethdb.Iteratee, func(*rawdb.StateTxRange) (bool, error)) error {
+		t.Fatal("owning full-range iterator called")
+		return nil
+	}
+	cfg.IterateHotHistoryTxRangeBlocks = func(ethdb.Iteratee, uint64, uint64, func(*rawdb.StateTxRange) (bool, error)) error {
+		t.Fatal("owning bounded iterator called")
+		return nil
+	}
+	stats, err := cfg.PruneHotHistory(db, HotHistoryPruneOptions{
+		StartBlock: 7,
+		MaxBlocks:  1,
+		Decide: func(row *rawdb.StateTxRange) (HotHistoryPruneDecision, error) {
+			if row.BlockNum != 7 || row.BlockHash != (common.Hash{7}) || row.BeginTxNum != 70 || row.EndTxNum != 72 {
+				t.Fatalf("borrowed prune row = %+v", row)
+			}
+			return HotHistoryPruneDecision{DeleteTxRange: true}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotFrom != 7 || gotTo != ^uint64(0) {
+		t.Fatalf("borrowed bounds = [%d,%d], want [7,max]", gotFrom, gotTo)
+	}
+	if stats.DeletedTxRanges != 1 {
+		t.Fatalf("stats = %+v, want one tx range deleted", stats)
+	}
+}
+
 func TestDomainRegistryHotHistoryPublicationDispatch(t *testing.T) {
 	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
 	if !ok {

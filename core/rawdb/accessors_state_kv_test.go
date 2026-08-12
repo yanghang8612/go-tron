@@ -2,11 +2,80 @@ package rawdb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+type discardPointDeleteStore struct {
+	ethdb.KeyValueReader
+	ethdb.Iteratee
+}
+
+func (discardPointDeleteStore) Put([]byte, []byte) error { return nil }
+func (discardPointDeleteStore) Delete([]byte) error      { return nil }
+
+type noBatchStateKVStore struct{ db ethdb.KeyValueStore }
+
+func (s noBatchStateKVStore) Has(key []byte) (bool, error)   { return s.db.Has(key) }
+func (s noBatchStateKVStore) Get(key []byte) ([]byte, error) { return s.db.Get(key) }
+func (s noBatchStateKVStore) Put(key, value []byte) error    { return s.db.Put(key, value) }
+func (s noBatchStateKVStore) Delete(key []byte) error        { return s.db.Delete(key) }
+func (s noBatchStateKVStore) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return s.db.NewIterator(prefix, start)
+}
+
+func BenchmarkDeleteStateKVPrefixByPointScan(b *testing.B) {
+	const rows = 100_000
+	base, err := NewPebbleDB(b.TempDir(), 64, 64)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = base.Close() })
+	prefix := []byte("point-scan/")
+	batch := base.NewBatchWithSize(rows * (len(prefix) + 8))
+	for i := uint64(0); i < rows; i++ {
+		key := make([]byte, len(prefix)+8)
+		copy(key, prefix)
+		binary.BigEndian.PutUint64(key[len(prefix):], i)
+		if err := batch.Put(key, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		b.Fatal(err)
+	}
+	batch.Reset()
+	db := discardPointDeleteStore{KeyValueReader: base, Iteratee: base}
+	b.Run("owned-iterator-keys", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			it := db.NewIterator(prefix, nil)
+			for it.Next() {
+				if err := db.Delete(append([]byte(nil), it.Key()...)); err != nil {
+					it.Release()
+					b.Fatal(err)
+				}
+			}
+			if err := it.Error(); err != nil {
+				it.Release()
+				b.Fatal(err)
+			}
+			it.Release()
+		}
+	})
+	b.Run("borrowed-iterator-keys", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if err := deleteStateKVPrefixByPointScan(db, prefix); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
 
 func TestStateKVLatestReadWriteEmptyAndAccountID(t *testing.T) {
 	db := NewMemoryDatabase()
@@ -66,6 +135,27 @@ func TestStateKVLatestDeletePrefix(t *testing.T) {
 	}
 	if got, ok, err := ReadStateKVLatest(db, owner, 1, kvdomains.SystemMarket, []byte("book/old")); err != nil || !ok || string(got) != "old" {
 		t.Fatalf("new generation = %q ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestStateKVLatestDeletePrefixPointScanMutatesLiveStore(t *testing.T) {
+	base := NewMemoryDatabase()
+	db := noBatchStateKVStore{db: base}
+	owner := stateKVTestAddress(0x41, 0x34)
+	mustWriteStateKVLatest(t, db, owner, 0, kvdomains.SystemMarket, []byte("book/1"), []byte("1"))
+	mustWriteStateKVLatest(t, db, owner, 0, kvdomains.SystemMarket, []byte("book/2"), []byte("2"))
+	mustWriteStateKVLatest(t, db, owner, 0, kvdomains.SystemMarket, []byte("price/1"), []byte("p"))
+
+	if err := DeleteStateKVLatestPrefix(db, owner, 0, kvdomains.SystemMarket, []byte("book/")); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range [][]byte{[]byte("book/1"), []byte("book/2")} {
+		if _, ok, err := ReadStateKVLatest(db, owner, 0, kvdomains.SystemMarket, key); err != nil || ok {
+			t.Fatalf("%s after point scan delete ok=%v err=%v", key, ok, err)
+		}
+	}
+	if got, ok, err := ReadStateKVLatest(db, owner, 0, kvdomains.SystemMarket, []byte("price/1")); err != nil || !ok || string(got) != "p" {
+		t.Fatalf("unrelated price row = %q ok=%v err=%v", got, ok, err)
 	}
 }
 

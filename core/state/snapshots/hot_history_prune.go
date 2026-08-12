@@ -75,7 +75,13 @@ func (cfg DomainCfg) PruneHotHistory(db rawdb.StateKVLatestStore, opts HotHistor
 		return true, nil
 	}
 	var err error
-	if opts.StartBlock == 0 {
+	// Pruning never retains callback rows: visit copies the fixed fields it
+	// needs into the delete plan below. Prefer the borrowed iterator for both
+	// the initial pass and resumed passes so the hot loop does not reflection-
+	// decode and allocate one StateTxRange for every physical row it examines.
+	if cfg.IterateHotHistoryTxRangeBorrowed != nil {
+		err = cfg.IterateHotHistoryTxRangeBorrowed(db, opts.StartBlock, ^uint64(0), visit)
+	} else if opts.StartBlock == 0 {
 		err = cfg.IterateHotHistoryTxRanges(db, visit)
 	} else if cfg.IterateHotHistoryTxRangeBlocks == nil {
 		return HotHistoryPruneStats{}, fmt.Errorf("snapshots: %s missing ranged hot history tx-range iterator", cfg.Dataset)
