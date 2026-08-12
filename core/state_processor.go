@@ -178,6 +178,15 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 			panic(recovered)
 		}
 	}()
+	stateFailure := func(stage string) error {
+		if stateErr := statedb.Error(); stateErr != nil {
+			return fmt.Errorf("%s: rooted state access failed: %w", stage, stateErr)
+		}
+		return nil
+	}
+	if err := stateFailure("transaction start"); err != nil {
+		return nil, err
+	}
 	if err := ValidateContractCount(tx); err != nil {
 		return nil, err
 	}
@@ -302,8 +311,12 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	}
 
 	if validate {
-		if err := act.Validate(ctx); err != nil {
-			return nil, fmt.Errorf("validate: %w", err)
+		validateErr := act.Validate(ctx)
+		if err := stateFailure("validate"); err != nil {
+			return nil, err
+		}
+		if validateErr != nil {
+			return nil, fmt.Errorf("validate: %w", validateErr)
 		}
 	}
 
@@ -324,23 +337,39 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	ownerSnap := captureOwnerResourceSnapshot(statedb, dynProps, extractSender(tx), resourceTime)
 
 	bwResult, err := consumeBandwidthWithResourceTimeAndSizes(statedb, dynProps, tx, prevBlockTime, resourceTime, wireSizes)
+	if stateErr := stateFailure("bandwidth"); stateErr != nil {
+		revertTx()
+		return nil, stateErr
+	}
 	if err != nil {
 		revertTx()
 		return nil, fmt.Errorf("bandwidth: %w", err)
 	}
 
 	multiSignFee, err := actuator.ConsumeMultiSignFee(ctx)
+	if stateErr := stateFailure("multi-sign fee"); stateErr != nil {
+		revertTx()
+		return nil, stateErr
+	}
 	if err != nil {
 		revertTx()
 		return nil, fmt.Errorf("multi-sign fee: %w", err)
 	}
 	memoFee, err := actuator.ConsumeMemoFee(ctx)
+	if stateErr := stateFailure("memo fee"); stateErr != nil {
+		revertTx()
+		return nil, stateErr
+	}
 	if err != nil {
 		revertTx()
 		return nil, fmt.Errorf("memo fee: %w", err)
 	}
 
 	result, err = act.Execute(ctx)
+	if stateErr := stateFailure("execute"); stateErr != nil {
+		revertTx()
+		return nil, stateErr
+	}
 	if err != nil {
 		revertTx()
 		return nil, fmt.Errorf("execute: %w", err)
@@ -360,6 +389,10 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 		revertTx()
 		return nil, fmt.Errorf("pay energy bill: %w", err)
 	}
+	if stateErr := stateFailure("pay energy bill"); stateErr != nil {
+		revertTx()
+		return nil, stateErr
+	}
 
 	result.NetUsage = bwResult.NetUsage
 	result.NetFee = bwResult.NetFee
@@ -377,6 +410,10 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 
 	if scratch != nil {
 		scratch.dynamicPropertiesChanged = dynProps.SnapshotChanged(dpSnap)
+	}
+	if stateErr := stateFailure("transaction finalize"); stateErr != nil {
+		revertTx()
+		return nil, stateErr
 	}
 	dynProps.CommitSnapshot(dpSnap)
 	return result, nil

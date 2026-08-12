@@ -1477,7 +1477,12 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 // getAccountKVForDecoding borrows immutable state bytes for immediate package-
 // internal decoding. Callers must neither mutate nor retain the returned slice.
 // GetAccountKV remains the owning public API.
-func (s *StateDB) getAccountKVForDecoding(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+func (s *StateDB) getAccountKVForDecoding(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) (value []byte, exists bool, err error) {
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read rooted account kv %s domain=%d key=%x", owner.Hex(), domain, key), err)
+		}
+	}()
 	s.recordAccountKVRead(owner, domain, key)
 	if !kvdomains.IsRegistered(domain) {
 		return nil, false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
@@ -1694,7 +1699,13 @@ func (s *StateDB) IterateAccountKV(owner tcommon.Address, domain kvdomains.KVDom
 
 // SetAccountKV stages a generic-KV write for owner (creating the account if absent).
 func (s *StateDB) SetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte) error {
-	return s.setAccountKV(owner, domain, key, value, true)
+	if err := s.Error(); err != nil {
+		return err
+	}
+	if err := s.setAccountKV(owner, domain, key, value, true); err != nil {
+		return s.recordStateError(fmt.Sprintf("write rooted account kv %s domain=%d key=%x", owner.Hex(), domain, key), err)
+	}
+	return nil
 }
 
 // setAccountKVWrappedOwned stages a value that is already encoded as
@@ -1702,17 +1713,29 @@ func (s *StateDB) SetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 // storage into the dirty overlay instead of copying value into kvEntryArena a
 // second time. Callers must not mutate wrapped after this call.
 func (s *StateDB) setAccountKVWrappedOwned(owner tcommon.Address, domain kvdomains.KVDomain, key, wrapped []byte) error {
-	if len(wrapped) == 0 || wrapped[0] != kvPresencePrefix {
-		return fmt.Errorf("account kv: invalid owned value wrapper")
+	if err := s.Error(); err != nil {
+		return err
 	}
-	return s.setAccountKVPrepared(owner, domain, key, wrapped[1:], wrapped, true)
+	if len(wrapped) == 0 || wrapped[0] != kvPresencePrefix {
+		return s.recordStateError("write rooted account kv owned value", fmt.Errorf("account kv: invalid owned value wrapper"))
+	}
+	if err := s.setAccountKVPrepared(owner, domain, key, wrapped[1:], wrapped, true); err != nil {
+		return s.recordStateError(fmt.Sprintf("write rooted account kv %s domain=%d key=%x", owner.Hex(), domain, key), err)
+	}
+	return nil
 }
 
 // SetAccountKVFinal stages a block-final generic-KV write without appending a
 // transaction-snapshot journal entry. Use only after transaction execution is
 // complete; ordinary actuator/VM paths must keep using SetAccountKV.
 func (s *StateDB) SetAccountKVFinal(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte) error {
-	return s.setAccountKV(owner, domain, key, value, false)
+	if err := s.Error(); err != nil {
+		return err
+	}
+	if err := s.setAccountKV(owner, domain, key, value, false); err != nil {
+		return s.recordStateError(fmt.Sprintf("write final rooted account kv %s domain=%d key=%x", owner.Hex(), domain, key), err)
+	}
+	return nil
 }
 
 func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte, journal bool) error {
@@ -1895,9 +1918,17 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 }
 
 // DeleteAccountKV stages a tombstone for owner's (domain,key).
-func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) error {
+func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) (err error) {
+	defer func() {
+		if err != nil && s.Error() == nil {
+			err = s.recordStateError(fmt.Sprintf("delete rooted account kv %s domain=%d key=%x", owner.Hex(), domain, key), err)
+		}
+	}()
+	if err := s.Error(); err != nil {
+		return err
+	}
 	if !kvdomains.IsRegistered(domain) {
-		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+		return s.recordStateError("delete rooted account kv", fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain)))
 	}
 	obj := s.getStateObject(owner)
 	if obj == nil {
@@ -1946,7 +1977,15 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 // DeleteAccountKVPrefix stages tombstones for every visible key under
 // owner/domain/prefix. It uses the physical latest-state index for committed
 // rows and the dirty overlay for same-block writes.
-func (s *StateDB) DeleteAccountKVPrefix(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte) error {
+func (s *StateDB) DeleteAccountKVPrefix(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte) (err error) {
+	if err := s.Error(); err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil && s.Error() == nil {
+			err = s.recordStateError(fmt.Sprintf("delete rooted account kv prefix %s domain=%d prefix=%x", owner.Hex(), domain, prefix), err)
+		}
+	}()
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}

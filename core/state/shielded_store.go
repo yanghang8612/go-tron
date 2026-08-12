@@ -7,13 +7,17 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	shieldpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/proto"
 )
 
 func (s *StateDB) readSystemShielded(key []byte) ([]byte, bool) {
 	raw, ok, err := s.readSystemShieldedWithError(key)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read system shielded key=%x", key), err)
+		return nil, false
+	}
+	if !ok {
 		return nil, false
 	}
 	return raw, true
@@ -46,11 +50,15 @@ func (s *StateDB) WriteNullifier(nullifier []byte) error {
 }
 
 func (s *StateDB) NoteCommitmentCount() int64 {
-	data, ok := s.readSystemShielded(rawdb.NoteCommitmentCountStateKey())
-	if !ok || len(data) != 8 {
+	count, ok, err := s.NoteCommitmentCountStrict()
+	if err != nil {
+		s.recordStateError("read note commitment count", err)
 		return 0
 	}
-	return int64(binary.BigEndian.Uint64(data))
+	if !ok {
+		return 0
+	}
+	return count
 }
 
 func (s *StateDB) NoteCommitmentCountStrict() (int64, bool, error) {
@@ -65,7 +73,10 @@ func (s *StateDB) NoteCommitmentCountStrict() (int64, bool, error) {
 }
 
 func (s *StateDB) AppendNoteCommitment(commitment []byte) error {
-	idx := s.NoteCommitmentCount()
+	idx, _, err := s.NoteCommitmentCountStrict()
+	if err != nil {
+		return err
+	}
 	if err := s.writeSystemShielded(rawdb.NoteCommitmentStateKey(idx), commitment); err != nil {
 		return err
 	}
@@ -87,11 +98,15 @@ func (s *StateDB) ReadNoteCommitmentStrict(index int64) ([]byte, bool, error) {
 }
 
 func (s *StateDB) ReadZKProofResult(txID []byte) (bool, bool) {
-	data, ok := s.readSystemShielded(rawdb.ZKProofStateKey(txID))
-	if !ok || len(data) == 0 {
+	result, ok, err := s.ReadZKProofResultStrict(txID)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read zk proof result %x", txID), err)
 		return false, false
 	}
-	return data[0] == 0x01, true
+	if !ok {
+		return false, false
+	}
+	return result, true
 }
 
 func (s *StateDB) ReadZKProofResultStrict(txID []byte) (bool, bool, error) {
@@ -101,6 +116,9 @@ func (s *StateDB) ReadZKProofResultStrict(txID []byte) (bool, bool, error) {
 	}
 	if len(data) != 1 {
 		return false, false, fmt.Errorf("decode zk proof result %x: length %d, want 1", txID, len(data))
+	}
+	if data[0] > 1 {
+		return false, true, fmt.Errorf("decode zk proof result %x: non-canonical value %d", txID, data[0])
 	}
 	return data[0] == 0x01, true, nil
 }
@@ -114,7 +132,7 @@ func (s *StateDB) WriteZKProofResult(txID []byte, ok bool) error {
 }
 
 func (s *StateDB) WriteIncrMerkleTree(root []byte, tree *shieldpb.IncrementalMerkleTree) error {
-	data, err := proto.Marshal(tree)
+	data, err := statecodec.Marshal(tree)
 	if err != nil {
 		return err
 	}
@@ -122,7 +140,15 @@ func (s *StateDB) WriteIncrMerkleTree(root []byte, tree *shieldpb.IncrementalMer
 }
 
 func (s *StateDB) ReadIncrMerkleTree(root []byte) *shieldpb.IncrementalMerkleTree {
-	return decodeShieldedMerkleTree(s.readSystemShielded(rawdb.IncrMerkleTreeStateKey(root)))
+	tree, ok, err := s.ReadIncrMerkleTreeStrict(root)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read incremental merkle tree %x", root), err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	return tree
 }
 
 func (s *StateDB) ReadIncrMerkleTreeStrict(root []byte) (*shieldpb.IncrementalMerkleTree, bool, error) {
@@ -134,7 +160,11 @@ func (s *StateDB) ReadIncrMerkleTreeStrict(root []byte) (*shieldpb.IncrementalMe
 }
 
 func (s *StateDB) HasIncrMerkleTree(root []byte) bool {
-	_, ok := s.readSystemShielded(rawdb.IncrMerkleTreeStateKey(root))
+	_, ok, err := s.ReadIncrMerkleTreeStrict(root)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("check incremental merkle tree %x", root), err)
+		return false
+	}
 	return ok
 }
 
@@ -144,7 +174,15 @@ func (s *StateDB) HasIncrMerkleTreeStrict(root []byte) (bool, error) {
 }
 
 func (s *StateDB) ReadLastMerkleTree() *shieldpb.IncrementalMerkleTree {
-	return decodeShieldedMerkleTree(s.readSystemShielded(rawdb.IncrMerkleLastTreeStateKey()))
+	tree, ok, err := s.ReadLastMerkleTreeStrict()
+	if err != nil {
+		s.recordStateError("read last incremental merkle tree", err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	return tree
 }
 
 func (s *StateDB) ReadLastMerkleTreeStrict() (*shieldpb.IncrementalMerkleTree, bool, error) {
@@ -156,7 +194,7 @@ func (s *StateDB) ReadLastMerkleTreeStrict() (*shieldpb.IncrementalMerkleTree, b
 }
 
 func (s *StateDB) WriteLastMerkleTree(tree *shieldpb.IncrementalMerkleTree) error {
-	data, err := proto.Marshal(tree)
+	data, err := statecodec.Marshal(tree)
 	if err != nil {
 		return err
 	}
@@ -164,7 +202,15 @@ func (s *StateDB) WriteLastMerkleTree(tree *shieldpb.IncrementalMerkleTree) erro
 }
 
 func (s *StateDB) ReadCurrentMerkleTree() *shieldpb.IncrementalMerkleTree {
-	return decodeShieldedMerkleTree(s.readSystemShielded(rawdb.IncrMerkleCurrentTreeStateKey()))
+	tree, ok, err := s.ReadCurrentMerkleTreeStrict()
+	if err != nil {
+		s.recordStateError("read current incremental merkle tree", err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	return tree
 }
 
 func (s *StateDB) ReadCurrentMerkleTreeStrict() (*shieldpb.IncrementalMerkleTree, bool, error) {
@@ -176,7 +222,7 @@ func (s *StateDB) ReadCurrentMerkleTreeStrict() (*shieldpb.IncrementalMerkleTree
 }
 
 func (s *StateDB) WriteCurrentMerkleTree(tree *shieldpb.IncrementalMerkleTree) error {
-	data, err := proto.Marshal(tree)
+	data, err := statecodec.Marshal(tree)
 	if err != nil {
 		return err
 	}
@@ -188,8 +234,12 @@ func (s *StateDB) DeleteCurrentMerkleTree() error {
 }
 
 func (s *StateDB) ReadMerkleTreeRootByBlock(blockNum int64) []byte {
-	data, ok := s.readSystemShielded(rawdb.MerkleTreeIndexStateKey(blockNum))
-	if !ok || len(data) == 0 {
+	data, ok, err := s.ReadMerkleTreeRootByBlockStrict(blockNum)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read merkle tree root by block %d", blockNum), err)
+		return nil
+	}
+	if !ok {
 		return nil
 	}
 	return data
@@ -210,26 +260,18 @@ func (s *StateDB) WriteMerkleTreeRootByBlock(blockNum int64, root []byte) error 
 	return s.writeSystemShielded(rawdb.MerkleTreeIndexStateKey(blockNum), root)
 }
 
-func decodeShieldedMerkleTree(data []byte, ok bool) *shieldpb.IncrementalMerkleTree {
-	tree, exists, err := decodeShieldedMerkleTreeStrict("", data, ok)
-	if err != nil || !exists {
-		return nil
+func decodeShieldedMerkleTreeStrict(context string, data []byte, ok bool) (*shieldpb.IncrementalMerkleTree, bool, error) {
+	if !ok {
+		return nil, false, nil
 	}
 	if len(data) == 0 {
-		return nil
-	}
-	return tree
-}
-
-func decodeShieldedMerkleTreeStrict(context string, data []byte, ok bool) (*shieldpb.IncrementalMerkleTree, bool, error) {
-	if !ok || len(data) == 0 {
-		if !ok {
-			return nil, false, nil
+		if context == "" {
+			context = "decode shielded merkle tree"
 		}
-		return &shieldpb.IncrementalMerkleTree{}, true, nil
+		return nil, true, fmt.Errorf("%s: empty value", context)
 	}
 	var tree shieldpb.IncrementalMerkleTree
-	if err := proto.Unmarshal(data, &tree); err != nil {
+	if err := statecodec.Unmarshal(data, &tree); err != nil {
 		if context == "" {
 			context = "decode shielded merkle tree"
 		}

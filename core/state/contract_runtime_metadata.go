@@ -5,13 +5,15 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // ContractRuntimeMetadata is the immutable subset of SmartContract needed by
 // transaction validation, energy accounting and TVM call setup. The full
-// protobuf (including ABI entries) remains available through GetContract.
+// generated message API (including ABI entries) remains available through
+// GetContract; durable rows use the native state codec.
 type ContractRuntimeMetadata struct {
 	OriginAddress              tcommon.Address
 	ConsumeUserResourcePercent int64
@@ -41,6 +43,14 @@ func contractRuntimeMetadataFromProto(addr tcommon.Address, meta *contractpb.Sma
 // transaction hash used by java-tron's storage-key layout. ABI, bytecode and
 // other length-delimited fields are skipped without allocating.
 func decodeContractRuntimeMetadata(addr tcommon.Address, data []byte) (ContractRuntimeMetadata, error) {
+	if statecodec.IsNative(data) {
+		meta := new(contractpb.SmartContract)
+		if err := statecodec.Unmarshal(data, meta); err != nil {
+			return ContractRuntimeMetadata{}, err
+		}
+		decoded, _ := contractRuntimeMetadataFromProto(addr, meta)
+		return decoded, nil
+	}
 	var (
 		meta    ContractRuntimeMetadata
 		trxHash []byte

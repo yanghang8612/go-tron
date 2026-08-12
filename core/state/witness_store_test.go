@@ -36,6 +36,21 @@ func BenchmarkWitnessCapsuleStateKeyCached(b *testing.B) {
 	}
 }
 
+func TestGetWitnessCorruptCapsulePoisonsStateDB(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := tcommon.Address{0x41, 0x6f}
+	sdb.GetOrCreateAccount(addr)
+	if err := sdb.SetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessCapsuleStateKey(addr), []byte{0x80}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.GetWitness(addr); got != nil {
+		t.Fatalf("corrupt witness = %+v, want nil", got)
+	}
+	if sdb.Error() == nil {
+		t.Fatal("corrupt witness capsule did not poison StateDB")
+	}
+}
+
 func TestWitnessBrokerageAnchorAndFlatLatest(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := tcommon.Address{0x41, 0x01}

@@ -9,9 +9,9 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/proto"
 )
 
 var storageRowKeyBenchmarkSink tcommon.Hash
@@ -119,7 +119,7 @@ func TestStorageRowKeyFromFlatLatestUsesTypedMetadataReader(t *testing.T) {
 			0x0d, 0x0e, 0x0f, 0x10,
 		},
 	}
-	metaBytes, err := proto.Marshal(meta)
+	metaBytes, err := statecodec.Marshal(meta)
 	if err != nil {
 		t.Fatal(err)
 	}

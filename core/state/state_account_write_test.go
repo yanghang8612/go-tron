@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -15,7 +16,7 @@ func TestAppendAccountLatestObjectPreparedOwnsProtoInFinalArena(t *testing.T) {
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)
 	sdb.AddBalance(addr, 987654)
 	obj := sdb.getStateObject(addr)
-	wantProto, err := obj.account.MarshalStorageCore()
+	wantProto, err := obj.account.MarshalStorageCoreV4()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,19 +45,23 @@ func TestAppendAccountLatestObjectPreparedOwnsProtoInFinalArena(t *testing.T) {
 	}
 }
 
-func TestAppendAccountLatestObjectPreparedOneByteProtoFallback(t *testing.T) {
+func TestAppendAccountLatestObjectPreparedMinimumV4Core(t *testing.T) {
 	account := types.NewAccountFromPB(&corepb.Account{})
 	account.Proto().ProtoReflect().SetUnknown([]byte{0x08})
 	obj := &stateObject{account: account, accountKVRoot: EmptyKVRoot}
+	wantProto, err := account.MarshalStorageCoreV4()
+	if err != nil {
+		t.Fatal(err)
+	}
 	encodedSize, protoSize, exists, err := accountLatestObjectEncodedSize(obj)
-	if err != nil || !exists || protoSize != 1 || !bytes.Equal(obj.accountProto, []byte{0x08}) {
+	if err != nil || !exists || protoSize != len(wantProto) {
 		t.Fatalf("size fallback = encoded:%d proto:%d exists:%v cache:%x err:%v", encodedSize, protoSize, exists, obj.accountProto, err)
 	}
 	got, exists, err := appendAccountLatestObjectPrepared(make([]byte, 0, encodedSize), obj, true, protoSize)
 	if err != nil || !exists {
 		t.Fatalf("append fallback: exists=%v err=%v", exists, err)
 	}
-	want := appendStateAccountV2Fields(nil, StateAccountVersion, []byte{0x08}, EmptyKVRoot, 0, obj.codeHash)
+	want := appendStateAccountV2Fields(nil, StateAccountVersion, wantProto, EmptyKVRoot, 0, obj.codeHash)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("one-byte envelope = %x, want %x", got, want)
 	}
@@ -85,5 +90,27 @@ func TestCommitWritesV2Envelope(t *testing.T) {
 	}
 	if v.Version != StateAccountVersion {
 		t.Fatalf("version = %d", v.Version)
+	}
+}
+
+func TestCorruptRootedAccountPoisonsStateAndBlocksCommit(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x12)
+	if err := rawdb.WriteStateAccountLatest(sdb.accountKVIndex(), addr, []byte{0x80}); err != nil {
+		t.Fatal(err)
+	}
+
+	if sdb.AccountExists(addr) {
+		t.Fatal("corrupt rooted account was reported as existing")
+	}
+	if err := sdb.Error(); err == nil || !strings.Contains(err.Error(), "decode rooted account envelope") {
+		t.Fatalf("state error = %v, want rooted account decode failure", err)
+	}
+
+	// Even a caller that mistakes the semantic nil for absence cannot publish an
+	// empty replacement over the corrupt durable account.
+	sdb.CreateAccountWithTime(addr, corepb.AccountType_Normal, 123)
+	if _, err := sdb.Commit(); err == nil || !strings.Contains(err.Error(), "prior read failure") {
+		t.Fatalf("commit error = %v, want fail-closed state error", err)
 	}
 }

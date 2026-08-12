@@ -441,7 +441,7 @@ func main() {
 			if derr != nil {
 				return true, nil
 			}
-			acct, aerr := types.UnmarshalAccount(env.AccountProto)
+			acct, aerr := types.UnmarshalAccountStorageCoreV4(env.AccountProto)
 			if aerr != nil || acct == nil {
 				return true, nil
 			}
@@ -474,7 +474,7 @@ func main() {
 			if derr != nil {
 				return true, nil
 			}
-			acct, aerr := types.UnmarshalAccount(env.AccountProto)
+			acct, aerr := types.UnmarshalAccountStorageCoreV4(env.AccountProto)
 			if aerr != nil || acct == nil {
 				return true, nil
 			}

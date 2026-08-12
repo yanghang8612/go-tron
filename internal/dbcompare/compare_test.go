@@ -810,13 +810,13 @@ func address(last byte) []byte {
 
 func writeGtronAccount(t *testing.T, db ethdb.KeyValueWriter, account *corepb.Account) {
 	t.Helper()
-	protoBytes, err := proto.Marshal(account)
+	storageCore, err := types.NewAccountFromPB(account).MarshalStorageCoreV4()
 	if err != nil {
 		t.Fatal(err)
 	}
 	envelope, err := (&state.StateAccountV2{
 		Version:       state.StateAccountVersion,
-		AccountProto:  protoBytes,
+		AccountProto:  storageCore,
 		AccountKVRoot: state.EmptyKVRoot,
 	}).Encode()
 	if err != nil {

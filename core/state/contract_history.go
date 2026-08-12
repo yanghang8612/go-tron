@@ -5,8 +5,8 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/proto"
 )
 
 // ContractAt reconstructs contract metadata at addr at the end of blockNum.
@@ -16,7 +16,7 @@ func (r *PersistentHistoryReader) ContractAt(addr tcommon.Address, blockNum uint
 		return nil, err
 	}
 	sc := &contractpb.SmartContract{}
-	if err := proto.Unmarshal(raw, sc); err != nil {
+	if err := statecodec.Unmarshal(raw, sc); err != nil {
 		return nil, fmt.Errorf("decode contract metadata at block %d: %w", blockNum, err)
 	}
 	return sc, nil

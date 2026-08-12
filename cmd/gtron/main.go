@@ -320,6 +320,10 @@ var (
 		Name:  "freezer.tx-index.disable",
 		Usage: "Disable automatic archival of V2-covered transaction indexes",
 	}
+	freezerDirectV2DisableFlag = &cli.BoolFlag{
+		Name:  "freezer.direct-v2.disable",
+		Usage: "Disable direct Ancient V2 publication; an existing direct-only layout pauses instead of falling back to V1",
+	}
 	syncRestartFromFlag = &cli.Uint64Flag{
 		Name:  "sync.restart-from",
 		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
@@ -432,6 +436,7 @@ var app = &cli.App{
 		freezerMarginFlag,
 		freezerBatchFlag,
 		freezerTxIndexDisableFlag,
+		freezerDirectV2DisableFlag,
 		syncRestartFromFlag,
 		syncImportBatchFlag,
 		syncETLTempDirFlag,

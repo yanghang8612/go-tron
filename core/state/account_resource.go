@@ -7,8 +7,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/runtime/protoiface"
 )
 
 var accountResourceKey = []byte{0x00}
@@ -19,10 +17,15 @@ func clearAccountResourceProto(pb *corepb.Account) {
 	}
 }
 
-func (s *StateDB) materializeAccountResource(obj *stateObject) error {
+func (s *StateDB) materializeAccountResource(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize account resource %s", obj.address.Hex()), err)
+		}
+	}()
 	// State-object caches outlive one transaction. Re-emit the logical point
 	// dependency even when the protobuf row is already materialized so every
 	// transaction receives the same read set as a cold lookup.
@@ -37,11 +40,11 @@ func (s *StateDB) materializeAccountResource(obj *stateObject) error {
 		return err
 	}
 	if exists {
-		var resource corepb.Account_AccountResource
-		if err := proto.Unmarshal(value, &resource); err != nil {
+		resource, err := decodeAccountResource(value)
+		if err != nil {
 			return fmt.Errorf("decode account resource: %w", err)
 		}
-		pb.AccountResource = &resource
+		pb.AccountResource = resource
 	}
 	obj.accountResourceLoaded = true
 	return nil
@@ -59,44 +62,15 @@ func (s *StateDB) writeAccountResource(obj *stateObject) error {
 		obj.accountResourceLoaded = true
 		return nil
 	}
-	// The dirty KV overlay owns immutable values in kvEntryArena. Reserve the
-	// final presence wrapper and marshal directly behind it so the protobuf
-	// result does not allocate once only to be copied into the arena. Generated
-	// deterministic MarshalAppend remains authoritative for every known and
-	// unknown field.
-	wrapped, err := s.marshalAccountResourceWrapped(resource)
+	value, err := appendAccountResource(s.accountRowMarshalScratch[:0], resource)
 	if err != nil {
 		return err
 	}
-	if err := s.setAccountKVWrappedOwned(obj.address, kvdomains.AccountResourceAux, accountResourceKey, wrapped); err != nil {
+	if err := s.SetAccountKV(obj.address, kvdomains.AccountResourceAux, accountResourceKey, value); err != nil {
 		return err
 	}
 	obj.accountResourceLoaded = true
 	return nil
-}
-
-func (s *StateDB) marshalAccountResourceWrapped(resource *corepb.Account_AccountResource) ([]byte, error) {
-	message := resource.ProtoReflect()
-	methods := message.ProtoMethods()
-	if methods != nil && methods.Size != nil && methods.Marshal != nil &&
-		methods.Flags&protoiface.SupportMarshalDeterministic != 0 {
-		flags := protoiface.MarshalDeterministic
-		sized := methods.Size(protoiface.SizeInput{Message: message, Flags: flags})
-		wrapped := s.kvEntryArena.alloc(1 + sized.Size)
-		wrapped[0] = kvPresencePrefix
-		out, err := methods.Marshal(protoiface.MarshalInput{
-			Message: message,
-			Buf:     wrapped[:1],
-			Flags:   flags | protoiface.MarshalUseCachedSize,
-		})
-		return out.Buf, err
-	}
-
-	// Generated protobuf messages normally take the direct method path above.
-	// Retain the public deterministic encoder as a schema/runtime fallback.
-	wrapped := s.kvEntryArena.alloc(1 + proto.Size(resource))
-	wrapped[0] = kvPresencePrefix
-	return (proto.MarshalOptions{Deterministic: true}).MarshalAppend(wrapped[:1], resource)
 }
 
 func (s *StateDB) mutateAccountResource(obj *stateObject, mutate func(*corepb.Account_AccountResource)) error {
@@ -264,9 +238,9 @@ func decodeHistoricalAccountResource(key, value []byte) (*corepb.Account_Account
 	if !bytes.Equal(key, accountResourceKey) {
 		return nil, fmt.Errorf("account resource key %x, want %x", key, accountResourceKey)
 	}
-	var resource corepb.Account_AccountResource
-	if err := proto.Unmarshal(value, &resource); err != nil {
+	resource, err := decodeAccountResource(value)
+	if err != nil {
 		return nil, fmt.Errorf("decode historical account resource: %w", err)
 	}
-	return &resource, nil
+	return resource, nil
 }

@@ -421,23 +421,22 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 
 	newPublicUsage := recoveredPublicUsage + txSize
 	if dynProps.AllowSameTokenName() {
-		asset.PublicFreeAssetNetUsage = newPublicUsage
-		asset.PublicLatestFreeNetTime = resourceTime
-		if err := statedb.WriteAssetIssue(tokenID, asset); err != nil {
+		if err := statedb.WriteAssetIssueBandwidth(tokenID, newPublicUsage, resourceTime); err != nil {
 			return false, err
 		}
 	} else {
-		if legacy := statedb.ReadAssetIssueByName(c.AssetName); legacy != nil {
-			legacy.PublicFreeAssetNetUsage = newPublicUsage
-			legacy.PublicLatestFreeNetTime = resourceTime
-			if err := statedb.WriteAssetIssueByName(c.AssetName, legacy); err != nil {
+		// Before AllowSameTokenName java-tron keeps the mandatory legacy name
+		// row and, once the migration mirror exists, the ID-keyed V2 row in
+		// lockstep. Their mutable public-bandwidth counters are separate fixed
+		// rows now, so charging no longer decodes and rewrites either metadata
+		// object.
+		if statedb.HasAssetIssueByName(c.AssetName) {
+			if err := statedb.WriteAssetIssueBandwidthByName(c.AssetName, newPublicUsage, resourceTime); err != nil {
 				return false, err
 			}
 		}
-		if v2 := statedb.ReadAssetIssue(tokenID); v2 != nil {
-			v2.PublicFreeAssetNetUsage = newPublicUsage
-			v2.PublicLatestFreeNetTime = resourceTime
-			if err := statedb.WriteAssetIssue(tokenID, v2); err != nil {
+		if statedb.HasAssetIssue(tokenID) {
+			if err := statedb.WriteAssetIssueBandwidth(tokenID, newPublicUsage, resourceTime); err != nil {
 				return false, err
 			}
 		}

@@ -1658,8 +1658,8 @@ func TestEventLogRangeCoveredForFilterRejectsStaleEmptyIndex(t *testing.T) {
 		Addresses: []common.Address{common.BytesToAddress(addr)},
 		Topics:    [][]common.Hash{{topic}},
 	})
-	if err == nil || covered || !strings.Contains(err.Error(), "missing candidate event-log segment") {
-		t.Fatalf("EventLogRangeCoveredForFilter stale empty index = %v/%v, want false/missing-candidate error", covered, err)
+	if err == nil || covered || !strings.Contains(err.Error(), "lookup keys") {
+		t.Fatalf("EventLogRangeCoveredForFilter stale empty index = %v/%v, want false/verification error", covered, err)
 	}
 	seen := 0
 	covered, err = mgr.IterateCoveredEventLogs(1, 1, EventLogFilter{
@@ -1669,8 +1669,8 @@ func TestEventLogRangeCoveredForFilterRejectsStaleEmptyIndex(t *testing.T) {
 		seen++
 		return true, nil
 	})
-	if err != nil || !covered || seen != 1 {
-		t.Fatalf("IterateCoveredEventLogs stale empty index = covered %v rows %d err %v, want true/1/nil", covered, seen, err)
+	if err == nil || covered || seen != 0 {
+		t.Fatalf("IterateCoveredEventLogs stale empty index = covered %v rows %d err %v, want false/0/error", covered, seen, err)
 	}
 	covered, err = mgr.EventLogIndexedRangeCovered(1, 1)
 	if err == nil || covered {
@@ -1678,7 +1678,7 @@ func TestEventLogRangeCoveredForFilterRejectsStaleEmptyIndex(t *testing.T) {
 	}
 }
 
-func TestManagerIterateCoveredEventLogsFallsBackToPayloadScanWhenSegmentLookupStale(t *testing.T) {
+func TestManagerIterateCoveredEventLogsRejectsStaleSegmentLookup(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
 	addr := eventLogTestAddress(0x4c)
@@ -1725,15 +1725,15 @@ func TestManagerIterateCoveredEventLogsFallsBackToPayloadScanWhenSegmentLookupSt
 		rows = append(rows, row)
 		return true, nil
 	})
-	if err != nil || !covered {
-		t.Fatalf("IterateCoveredEventLogs stale segment lookup = covered %v err %v, want true/nil", covered, err)
+	if err == nil || covered {
+		t.Fatalf("IterateCoveredEventLogs stale segment lookup = covered %v err %v, want false/error", covered, err)
 	}
-	if len(rows) != 1 || rows[0].BlockNum != 1 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x0c}) {
-		t.Fatalf("IterateCoveredEventLogs stale segment lookup rows = %+v, want block1 payload", rows)
+	if len(rows) != 0 {
+		t.Fatalf("IterateCoveredEventLogs stale segment lookup rows = %+v, want none", rows)
 	}
 }
 
-func TestManagerIterateCoveredEventLogsFallsBackWhenGlobalAndSegmentLookupsStale(t *testing.T) {
+func TestManagerIterateCoveredEventLogsRejectsStaleGlobalAndSegmentLookups(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
 	addr := eventLogTestAddress(0x4d)
@@ -1775,23 +1775,23 @@ func TestManagerIterateCoveredEventLogsFallsBackWhenGlobalAndSegmentLookupsStale
 		Topics:    [][]common.Hash{{topic}},
 	}
 	covered, err := mgr.EventLogRangeCoveredForFilter(1, 1, filter)
-	if err == nil || covered || !strings.Contains(err.Error(), "missing candidate event-log segment") {
-		t.Fatalf("EventLogRangeCoveredForFilter combined stale lookup = %v/%v, want false/missing-candidate error", covered, err)
+	if err == nil || covered || !strings.Contains(err.Error(), "lookup keys") {
+		t.Fatalf("EventLogRangeCoveredForFilter combined stale lookup = %v/%v, want false/verification error", covered, err)
 	}
 	var rows []EventLog
 	covered, err = mgr.IterateCoveredEventLogs(1, 1, filter, func(row EventLog) (bool, error) {
 		rows = append(rows, row)
 		return true, nil
 	})
-	if err != nil || !covered {
-		t.Fatalf("IterateCoveredEventLogs combined stale lookup = covered %v err %v, want true/nil", covered, err)
+	if err == nil || covered {
+		t.Fatalf("IterateCoveredEventLogs combined stale lookup = covered %v err %v, want false/error", covered, err)
 	}
-	if len(rows) != 1 || rows[0].BlockNum != 1 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x0d}) {
-		t.Fatalf("IterateCoveredEventLogs combined stale lookup rows = %+v, want block1 payload", rows)
+	if len(rows) != 0 {
+		t.Fatalf("IterateCoveredEventLogs combined stale lookup rows = %+v, want none", rows)
 	}
 }
 
-func TestEventLogRangeCoveredForFilterSkipsMissingNonCandidateSegment(t *testing.T) {
+func TestEventLogRangeCoveredForFilterRejectsMissingNonCandidateCompanion(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
 	addr := eventLogTestAddress(0x48)
@@ -1843,18 +1843,18 @@ func TestEventLogRangeCoveredForFilterSkipsMissingNonCandidateSegment(t *testing
 		Topics:    [][]common.Hash{{topic}},
 	}
 	covered, err := mgr.EventLogRangeCoveredForFilter(1, 2, filter)
-	if err != nil || !covered {
-		t.Fatalf("EventLogRangeCoveredForFilter missing non-candidate = %v/%v, want true/nil", covered, err)
+	if err == nil || !errors.Is(err, os.ErrNotExist) || covered {
+		t.Fatalf("EventLogRangeCoveredForFilter missing non-candidate = %v/%v, want false/not-exist error", covered, err)
 	}
 	seen := 0
 	if err := mgr.IterateEventLogs(1, 2, filter, func(EventLog) (bool, error) {
 		seen++
 		return true, nil
-	}); err != nil {
-		t.Fatalf("IterateEventLogs missing non-candidate: %v", err)
+	}); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("IterateEventLogs missing non-candidate = %v, want not-exist error", err)
 	}
-	if seen != 1 {
-		t.Fatalf("IterateEventLogs rows = %d, want 1 candidate row", seen)
+	if seen != 0 {
+		t.Fatalf("IterateEventLogs rows = %d, want no rows before verification", seen)
 	}
 	covered, err = mgr.EventLogIndexedRangeCovered(1, 2)
 	if err == nil || !errors.Is(err, os.ErrNotExist) || covered {
@@ -1918,26 +1918,26 @@ func TestEventLogIndexedRangeCoveredRejectsPartialIndex(t *testing.T) {
 		Topics:    [][]common.Hash{{topic}},
 	}
 	covered, err := mgr.EventLogRangeCoveredForFilter(1, 2, filter)
-	if err == nil || covered || !strings.Contains(err.Error(), "missing candidate event-log segment") {
-		t.Fatalf("EventLogRangeCoveredForFilter partial index = %v/%v, want false/missing-candidate error", covered, err)
+	if err == nil || covered || !strings.Contains(err.Error(), "want [1 2]") {
+		t.Fatalf("EventLogRangeCoveredForFilter partial index = %v/%v, want false/verification error", covered, err)
 	}
 	coveredRows := 0
 	covered, err = mgr.IterateCoveredEventLogs(1, 2, filter, func(EventLog) (bool, error) {
 		coveredRows++
 		return true, nil
 	})
-	if err != nil || !covered || coveredRows != 2 {
-		t.Fatalf("IterateCoveredEventLogs partial index = covered %v rows %d err %v, want true/2/nil", covered, coveredRows, err)
+	if err == nil || covered || coveredRows != 0 {
+		t.Fatalf("IterateCoveredEventLogs partial index = covered %v rows %d err %v, want false/0/error", covered, coveredRows, err)
 	}
 	seen := 0
 	if err := mgr.IterateEventLogs(1, 2, filter, func(EventLog) (bool, error) {
 		seen++
 		return true, nil
-	}); err != nil {
-		t.Fatalf("IterateEventLogs partial index fallback: %v", err)
+	}); err == nil {
+		t.Fatal("IterateEventLogs partial index unexpectedly fell back")
 	}
-	if seen != 2 {
-		t.Fatalf("IterateEventLogs rows = %d, want 2 fallback rows", seen)
+	if seen != 0 {
+		t.Fatalf("IterateEventLogs rows = %d, want none before verification", seen)
 	}
 	covered, err = mgr.EventLogIndexedRangeCovered(1, 2)
 	if err == nil || covered {

@@ -302,6 +302,9 @@ func TestExchangeStoreStrictSurfacesCorruptProtobuf(t *testing.T) {
 	if got := sdb.ReadExchange(1); got != nil {
 		t.Fatalf("compat ReadExchange corrupt protobuf = %+v, want nil", got)
 	}
+	if sdb.Error() == nil {
+		t.Fatal("compat ReadExchange corrupt value did not poison StateDB")
+	}
 	if got, ok, err := sdb.ReadExchangeStrict(1); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode exchange 1") {
 		t.Fatalf("strict ReadExchange corrupt protobuf = %+v/%v/%v, want decode error", got, ok, err)
 	}

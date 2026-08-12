@@ -1,7 +1,6 @@
 package state
 
 import (
-	"bytes"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -46,7 +45,7 @@ func TestStateDBCopyPreservesPendingAccountResourceLatestView(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resource, err := proto.Marshal(&corepb.Account_AccountResource{EnergyUsage: 77})
+	resource, err := encodeAccountResource(&corepb.Account_AccountResource{EnergyUsage: 77})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +64,7 @@ func TestStateDBCopyPreservesPendingAccountResourceLatestView(t *testing.T) {
 	}
 }
 
-func TestAccountResourceArenaMarshalMatchesDeterministicProto(t *testing.T) {
+func TestAccountResourceNativeCodecPreservesFields(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0xaf)
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)
@@ -89,10 +88,6 @@ func TestAccountResourceArenaMarshalMatchesDeterministicProto(t *testing.T) {
 	resource.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01})
 	obj.account.Proto().AccountResource = resource
 
-	want, err := (proto.MarshalOptions{Deterministic: true}).Marshal(resource)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := sdb.writeAccountResource(obj); err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +95,15 @@ func TestAccountResourceArenaMarshalMatchesDeterministicProto(t *testing.T) {
 	if err != nil || !exists {
 		t.Fatalf("get resource row: exists=%t err=%v", exists, err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("resource wire mismatch:\n got  %x\n want %x", got, want)
+	if !isVersionedAccountRow(got) {
+		t.Fatalf("resource row is not native: %x", got)
+	}
+	decoded, err := decodeAccountResource(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(decoded, resource) {
+		t.Fatalf("resource round trip = %+v, want %+v", decoded, resource)
 	}
 }
 
@@ -128,10 +130,7 @@ func TestAccountResourcePersistsOutsideAccountEnvelopeAndLoadsLazily(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stored corepb.Account
-	if err := proto.Unmarshal(envelope.AccountProto, &stored); err != nil {
-		t.Fatal(err)
-	}
+	stored := decodeStoredAccountCore(t, envelope)
 	if stored.AccountResource != nil {
 		t.Fatalf("split AccountResource leaked into account envelope: %+v", stored.AccountResource)
 	}
@@ -139,8 +138,8 @@ func TestAccountResourcePersistsOutsideAccountEnvelopeAndLoadsLazily(t *testing.
 	if err != nil || !exists {
 		t.Fatalf("read AccountResource row: exists=%v err=%v", exists, err)
 	}
-	var resource corepb.Account_AccountResource
-	if err := proto.Unmarshal(value, &resource); err != nil {
+	resource, err := decodeAccountResource(value)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if resource.EnergyUsage != 10 || resource.LatestConsumeTimeForEnergy != 20 || resource.EnergyWindowSize != 30 || !resource.EnergyWindowOptimized {

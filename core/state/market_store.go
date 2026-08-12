@@ -8,7 +8,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 // Market (DEX) order state is rooted into the reserved system account's
@@ -47,8 +46,9 @@ import (
 //	mpl:   tag || sellTokenID || '|' || buyTokenID
 //	mpi:   tag
 //
-// Values reuse the existing proto wire format (proto.Marshal) and the 8-byte
-// big-endian count verbatim — no new on-disk encoding lineage is introduced.
+// Message-shaped values use versioned, hand-written deterministic encodings.
+// Protobuf wire values are rejected. Pair price counts remain fixed 8-byte
+// big-endian values.
 //
 // Point and pair-order-list RPCs address known keys, so the Keccak256-hashed KV
 // keys (which preclude a prefix scan) are never walked. MarketOrderListByPair is
@@ -110,15 +110,15 @@ func marketPairIndexKVKey() []byte {
 }
 
 // ReadMarketOrder returns the rooted MarketOrder for orderID, or nil if absent.
-// A KV/unmarshal error is swallowed to nil, matching the prior rawdb reader (its
-// callers treat nil as "no order").
+// Corruption retains the compatibility return shape but poisons the StateDB so
+// transaction and commit boundaries cannot treat it as a semantic miss.
 func (s *StateDB) ReadMarketOrder(orderID []byte) *corepb.MarketOrder {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketOrderKVKey(orderID))
-	if err != nil || !ok || len(raw) == 0 {
+	o, ok, err := s.ReadMarketOrderStrict(orderID)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read market order %x", orderID), err)
 		return nil
 	}
-	o := &corepb.MarketOrder{}
-	if err := proto.Unmarshal(raw, o); err != nil {
+	if !ok {
 		return nil
 	}
 	return o
@@ -128,11 +128,14 @@ func (s *StateDB) ReadMarketOrder(orderID []byte) *corepb.MarketOrder {
 // distinguishes missing rows from unreadable or malformed rooted data.
 func (s *StateDB) ReadMarketOrderStrict(orderID []byte) (*corepb.MarketOrder, bool, error) {
 	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketOrderKVKey(orderID))
-	if err != nil || !ok || len(raw) == 0 {
+	if err != nil || !ok {
 		return nil, ok, err
 	}
-	o := &corepb.MarketOrder{}
-	if err := proto.Unmarshal(raw, o); err != nil {
+	if len(raw) == 0 {
+		return nil, true, fmt.Errorf("decode market order: empty value")
+	}
+	o, err := decodeMarketOrder(raw)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode market order: %w", err)
 	}
 	return o, true, nil
@@ -141,21 +144,24 @@ func (s *StateDB) ReadMarketOrderStrict(orderID []byte) (*corepb.MarketOrder, bo
 // MarketOrderAt reconstructs a rooted MarketOrder at the end of blockNum.
 func (r *PersistentHistoryReader) MarketOrderAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
 	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketOrderKVKey(orderID), blockNum)
-	if err != nil || !ok || len(raw) == 0 {
+	if err != nil || !ok {
 		return nil, err
 	}
-	o := &corepb.MarketOrder{}
-	if err := proto.Unmarshal(raw, o); err != nil {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("decode market order at block %d: empty value", blockNum)
+	}
+	o, err := decodeMarketOrder(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode market order at block %d: %w", blockNum, err)
 	}
 	return o, nil
 }
 
 // WriteMarketOrder stages a MarketOrder keyed by orderID. The error is non-nil
-// only for a proto marshal failure or an unregistered domain (a programmer
+// only for a codec failure or an unregistered domain (a programmer
 // error), since SystemMarket is registered at init.
 func (s *StateDB) WriteMarketOrder(orderID []byte, order *corepb.MarketOrder) error {
-	data, err := proto.Marshal(order)
+	data, err := encodeMarketOrder(order)
 	if err != nil {
 		return err
 	}
@@ -163,16 +169,17 @@ func (s *StateDB) WriteMarketOrder(orderID []byte, order *corepb.MarketOrder) er
 }
 
 // ReadMarketAccountOrder returns the rooted MarketAccountOrder for ownerAddr. As
-// with the prior rawdb reader it never returns nil: an absent or malformed entry
-// yields a zero-value struct with OwnerAddress set, because callers mutate the
-// result in place (e.g. mao.TotalCount++).
+// with the prior rawdb reader it never returns nil: an absent entry yields a
+// zero-value struct with OwnerAddress set, because callers mutate the result in
+// place (e.g. mao.TotalCount++). Corruption also returns that compatibility
+// value, but records a sticky state error before doing so.
 func (s *StateDB) ReadMarketAccountOrder(ownerAddr []byte) *corepb.MarketAccountOrder {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketAccountOrderKVKey(ownerAddr))
-	if err != nil || !ok || len(raw) == 0 {
+	mao, ok, err := s.ReadMarketAccountOrderStrict(ownerAddr)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read market account order %x", ownerAddr), err)
 		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}
 	}
-	mao := &corepb.MarketAccountOrder{}
-	if err := proto.Unmarshal(raw, mao); err != nil {
+	if !ok {
 		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}
 	}
 	return mao
@@ -186,11 +193,14 @@ func (s *StateDB) ReadMarketAccountOrderStrict(ownerAddr []byte) (*corepb.Market
 	if err != nil {
 		return nil, false, err
 	}
-	if !ok || len(raw) == 0 {
-		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}, ok, nil
+	if !ok {
+		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}, false, nil
 	}
-	mao := &corepb.MarketAccountOrder{}
-	if err := proto.Unmarshal(raw, mao); err != nil {
+	if len(raw) == 0 {
+		return nil, true, fmt.Errorf("decode market account order: empty value")
+	}
+	mao, err := decodeMarketAccountOrder(raw)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode market account order: %w", err)
 	}
 	return mao, true, nil
@@ -204,11 +214,14 @@ func (r *PersistentHistoryReader) MarketAccountOrderAt(ownerAddr []byte, blockNu
 	if err != nil {
 		return nil, err
 	}
-	if !ok || len(raw) == 0 {
+	if !ok {
 		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}, nil
 	}
-	mao := &corepb.MarketAccountOrder{}
-	if err := proto.Unmarshal(raw, mao); err != nil {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("decode market account order at block %d: empty value", blockNum)
+	}
+	mao, err := decodeMarketAccountOrder(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode market account order at block %d: %w", blockNum, err)
 	}
 	return mao, nil
@@ -216,7 +229,7 @@ func (r *PersistentHistoryReader) MarketAccountOrderAt(ownerAddr []byte, blockNu
 
 // WriteMarketAccountOrder stages a MarketAccountOrder keyed by owner address.
 func (s *StateDB) WriteMarketAccountOrder(ownerAddr []byte, mao *corepb.MarketAccountOrder) error {
-	data, err := proto.Marshal(mao)
+	data, err := encodeMarketAccountOrder(mao)
 	if err != nil {
 		return err
 	}
@@ -226,12 +239,12 @@ func (s *StateDB) WriteMarketAccountOrder(ownerAddr []byte, mao *corepb.MarketAc
 // ReadMarketOrderBook returns the rooted MarketOrderIdList for the (sellToken,
 // buyToken, priceKey) triple, or nil if absent (callers nil-check).
 func (s *StateDB) ReadMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]byte) *corepb.MarketOrderIdList {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk))
-	if err != nil || !ok || len(raw) == 0 {
+	list, ok, err := s.ReadMarketOrderBookStrict(sellTokenID, buyTokenID, pk)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read market order book %q/%q/%x", sellTokenID, buyTokenID, pk), err)
 		return nil
 	}
-	list := &corepb.MarketOrderIdList{}
-	if err := proto.Unmarshal(raw, list); err != nil {
+	if !ok {
 		return nil
 	}
 	return list
@@ -241,11 +254,14 @@ func (s *StateDB) ReadMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]byt
 // distinguishes missing rows from unreadable or malformed rooted data.
 func (s *StateDB) ReadMarketOrderBookStrict(sellTokenID, buyTokenID []byte, pk [16]byte) (*corepb.MarketOrderIdList, bool, error) {
 	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk))
-	if err != nil || !ok || len(raw) == 0 {
+	if err != nil || !ok {
 		return nil, ok, err
 	}
-	list := &corepb.MarketOrderIdList{}
-	if err := proto.Unmarshal(raw, list); err != nil {
+	if len(raw) == 0 {
+		return nil, true, fmt.Errorf("decode market order book: empty value")
+	}
+	list, err := decodeMarketOrderBook(raw)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode market order book: %w", err)
 	}
 	return list, true, nil
@@ -255,11 +271,14 @@ func (s *StateDB) ReadMarketOrderBookStrict(sellTokenID, buyTokenID []byte, pk [
 // of blockNum, surfacing malformed archive payloads as data errors.
 func (r *PersistentHistoryReader) MarketOrderBookAt(sellTokenID, buyTokenID []byte, pk [16]byte, blockNum uint64) (*corepb.MarketOrderIdList, error) {
 	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketOrderBookKVKey(sellTokenID, buyTokenID, pk), blockNum)
-	if err != nil || !ok || len(raw) == 0 {
+	if err != nil || !ok {
 		return nil, err
 	}
-	list := &corepb.MarketOrderIdList{}
-	if err := proto.Unmarshal(raw, list); err != nil {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("decode market order book at block %d: empty value", blockNum)
+	}
+	list, err := decodeMarketOrderBook(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode market order book at block %d: %w", blockNum, err)
 	}
 	return list, nil
@@ -267,7 +286,7 @@ func (r *PersistentHistoryReader) MarketOrderBookAt(sellTokenID, buyTokenID []by
 
 // WriteMarketOrderBook stages a MarketOrderIdList for a price level.
 func (s *StateDB) WriteMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]byte, list *corepb.MarketOrderIdList) error {
-	data, err := proto.Marshal(list)
+	data, err := encodeMarketOrderBook(list)
 	if err != nil {
 		return err
 	}
@@ -280,10 +299,15 @@ func (s *StateDB) DeleteMarketOrderBook(sellTokenID, buyTokenID []byte, pk [16]b
 }
 
 // ReadMarketPairPriceCount returns the distinct-price count for a pair (zero if
-// absent or malformed), mirroring java-tron MarketPairToPriceStore.getPriceNum.
+// absent). Malformed rows retain the zero compatibility result while poisoning
+// the StateDB.
 func (s *StateDB) ReadMarketPairPriceCount(sellTokenID, buyTokenID []byte) int64 {
 	count, ok, err := s.ReadMarketPairPriceCountStrict(sellTokenID, buyTokenID)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read market pair price count %q/%q", sellTokenID, buyTokenID), err)
+		return 0
+	}
+	if !ok {
 		return 0
 	}
 	return count
@@ -354,15 +378,16 @@ func (s *StateDB) DecrementMarketPairPriceCount(sellTokenID, buyTokenID []byte) 
 }
 
 // ReadMarketPriceList returns the rooted MarketPriceList for a pair. As with the
-// prior rawdb reader it never returns nil: an absent or malformed entry yields a
-// zero-value struct with the token ids set, because callers append to it in place.
+// prior rawdb reader it never returns nil: an absent entry yields a zero-value
+// struct with the token ids set, because callers append to it in place.
+// Corruption retains that shape while poisoning the StateDB.
 func (s *StateDB) ReadMarketPriceList(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID))
-	if err != nil || !ok || len(raw) == 0 {
+	pl, ok, err := s.ReadMarketPriceListStrict(sellTokenID, buyTokenID)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read market price list %q/%q", sellTokenID, buyTokenID), err)
 		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}
 	}
-	pl := &corepb.MarketPriceList{}
-	if err := proto.Unmarshal(raw, pl); err != nil {
+	if !ok {
 		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}
 	}
 	return pl
@@ -376,11 +401,14 @@ func (s *StateDB) ReadMarketPriceListStrict(sellTokenID, buyTokenID []byte) (*co
 	if err != nil {
 		return nil, false, err
 	}
-	if !ok || len(raw) == 0 {
-		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}, ok, nil
+	if !ok {
+		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}, false, nil
 	}
-	pl := &corepb.MarketPriceList{}
-	if err := proto.Unmarshal(raw, pl); err != nil {
+	if len(raw) == 0 {
+		return nil, true, fmt.Errorf("decode market price list: empty value")
+	}
+	pl, err := decodeMarketPriceList(raw)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode market price list: %w", err)
 	}
 	return pl, true, nil
@@ -394,11 +422,14 @@ func (r *PersistentHistoryReader) MarketPriceListAt(sellTokenID, buyTokenID []by
 	if err != nil {
 		return nil, err
 	}
-	if !ok || len(raw) == 0 {
+	if !ok {
 		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}, nil
 	}
-	pl := &corepb.MarketPriceList{}
-	if err := proto.Unmarshal(raw, pl); err != nil {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("decode market price list at block %d: empty value", blockNum)
+	}
+	pl, err := decodeMarketPriceList(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode market price list at block %d: %w", blockNum, err)
 	}
 	return pl, nil
@@ -413,7 +444,7 @@ func (s *StateDB) WriteMarketPriceList(sellTokenID, buyTokenID []byte, pl *corep
 	if err != nil {
 		return err
 	}
-	data, err := proto.Marshal(pl)
+	data, err := encodeMarketPriceList(pl)
 	if err != nil {
 		return err
 	}
@@ -427,11 +458,12 @@ func (s *StateDB) WriteMarketPriceList(sellTokenID, buyTokenID []byte, pl *corep
 }
 
 // ReadMarketPairList returns the rooted materialized list of market pairs.
-// Absent or malformed rows are treated as an empty list, matching the legacy
-// live-reader convention used by the other market helpers.
+// Absent rows are treated as an empty list. Malformed rows retain that return
+// shape while poisoning the StateDB.
 func (s *StateDB) ReadMarketPairList() *corepb.MarketOrderPairList {
 	list, _, err := s.ReadMarketPairListStrict()
 	if err != nil {
+		s.recordStateError("read market pair index", err)
 		return &corepb.MarketOrderPairList{}
 	}
 	return list
@@ -444,11 +476,14 @@ func (s *StateDB) ReadMarketPairListStrict() (*corepb.MarketOrderPairList, bool,
 	if err != nil {
 		return nil, false, err
 	}
-	if !ok || len(raw) == 0 {
+	if !ok {
 		return &corepb.MarketOrderPairList{}, false, nil
 	}
-	list := &corepb.MarketOrderPairList{}
-	if err := proto.Unmarshal(raw, list); err != nil {
+	if len(raw) == 0 {
+		return nil, true, fmt.Errorf("decode market pair index: empty value")
+	}
+	list, err := decodeMarketPairList(raw)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode market pair index: %w", err)
 	}
 	return list, true, nil
@@ -461,11 +496,14 @@ func (r *PersistentHistoryReader) MarketPairListAt(blockNum uint64) (*corepb.Mar
 	if err != nil {
 		return nil, err
 	}
-	if !ok || len(raw) == 0 {
+	if !ok {
 		return &corepb.MarketOrderPairList{}, nil
 	}
-	list := &corepb.MarketOrderPairList{}
-	if err := proto.Unmarshal(raw, list); err != nil {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("decode market pair list at block %d: empty value", blockNum)
+	}
+	list, err := decodeMarketPairList(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode market pair list at block %d: %w", blockNum, err)
 	}
 	return list, nil
@@ -475,7 +513,7 @@ func (s *StateDB) writeMarketPairListIndex(list *corepb.MarketOrderPairList) err
 	if len(list.GetOrderPair()) == 0 {
 		return s.SystemKVDelete(kvdomains.SystemMarket, marketPairIndexKVKey())
 	}
-	data, err := proto.Marshal(list)
+	data, err := encodeMarketPairList(list)
 	if err != nil {
 		return err
 	}

@@ -37,8 +37,15 @@ type V2MigrationOptions struct {
 	Online     bool
 	Context    context.Context
 	Progress   func(V2MigrationProgress)
+	// Source and SourceHead enable fresh-sync direct V2 publication. Source
+	// reads canonical hot rows without first copying them into V1; SourceHead is
+	// the exclusive, complete-segment boundary available from that source.
+	// Direct publication is accepted only when V1 has no live suffix and V2 is
+	// already the complete logical ancient prefix.
+	Source     func(kind string, number uint64) ([]byte, error)
+	SourceHead uint64
 	// Transform optionally rewrites a row before compression. body is the
-	// corresponding V1 bodies row when kind == "tx_infos", and nil for other
+	// corresponding source bodies row when kind == "tx_infos", and nil for other
 	// tables. It must be deterministic because verification invokes it again.
 	Transform func(kind string, number uint64, data, body []byte) ([]byte, error)
 	// TransactionIndexEntries enables fused immutable transaction-index
@@ -92,10 +99,15 @@ type V2MigrationResult struct {
 
 func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, error) {
 	var result V2MigrationResult
+	direct := options.Source != nil
 	f.v2Migrate.Lock()
 	defer f.v2Migrate.Unlock()
 	f.tailMutation.Lock()
 	defer f.tailMutation.Unlock()
+	if direct {
+		f.writeLock.Lock()
+		defer f.writeLock.Unlock()
+	}
 	if f.readonly {
 		return result, errReadOnly
 	}
@@ -117,6 +129,9 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	}
 	if options.Context == nil {
 		options.Context = context.Background()
+	}
+	if direct && (!options.Online || options.KeepV1) {
+		return result, errors.New("ancient V2: direct source requires online publication without V1 retention")
 	}
 	if options.SegmentBlocks%uint64(options.FrameBlocks) != 0 {
 		return result, fmt.Errorf("ancient V2: segment blocks %d must be divisible by frame blocks %d", options.SegmentBlocks, options.FrameBlocks)
@@ -145,6 +160,25 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 
 	started := time.Now()
 	start := f.V2Coverage()
+	if direct {
+		recoveredEnd, recovered, err := f.recoverPublishedDirectV2(options, start)
+		if err != nil {
+			return result, err
+		}
+		if recovered {
+			return V2MigrationResult{
+				Start:               start,
+				End:                 recoveredEnd,
+				Head:                options.SourceHead,
+				Segments:            1,
+				FrameBlocks:         options.FrameBlocks,
+				SegmentBlocks:       options.SegmentBlocks,
+				PhysicalBytesBefore: f.selectedPhysicalBytes(options.Tables),
+				PhysicalBytesAfter:  f.selectedPhysicalBytes(options.Tables),
+				Elapsed:             time.Since(started),
+			}, nil
+		}
+	}
 	result.Start = start
 	result.FrameBlocks = options.FrameBlocks
 	result.SegmentBlocks = options.SegmentBlocks
@@ -153,7 +187,11 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 
 	// A crash after publishing a manifest but before V1 tail reclamation leaves
 	// safe duplicate data. Reconcile it before writing the next segment.
-	if !options.KeepV1 && f.tail.Load() < start {
+	if direct {
+		if !f.canAppendV2DirectLocked(start) {
+			return result, fmt.Errorf("ancient V2: direct append at %d requires a fully reclaimed V1 suffix", start)
+		}
+	} else if !options.KeepV1 && f.tail.Load() < start {
 		if _, err := f.truncateTailLocked(start); err != nil {
 			return result, fmt.Errorf("ancient V2 reconcile V1 tail: %w", err)
 		}
@@ -161,15 +199,20 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			return result, fmt.Errorf("ancient V2 reconcile V1 files: %w", err)
 		}
 	}
-	if f.tail.Load() > start {
+	if !direct && f.tail.Load() > start {
 		return result, fmt.Errorf("%w: coverage %d is behind V1 tail %d", ErrV2SourcePruned, start, f.tail.Load())
 	}
 
-	head := f.head.Load()
-	for _, kind := range options.Tables {
-		if count := f.tables[kind].items.Load(); count < head {
-			head = count
+	head := options.SourceHead
+	if !direct {
+		head = f.head.Load()
+		for _, kind := range options.Tables {
+			if count := f.tables[kind].items.Load(); count < head {
+				head = count
+			}
 		}
+	} else if head <= start {
+		return result, fmt.Errorf("ancient V2: direct source head %d must exceed coverage %d", head, start)
 	}
 	result.Head = head
 	target := head / options.SegmentBlocks * options.SegmentBlocks
@@ -178,6 +221,7 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	}
 	base := filepath.Join(f.datadir, "v2")
 	removeOrphanV2Temps(base)
+	sourceReader := readSourceForKind(options, f, direct)
 	transactionIndexCoverage := f.TransactionIndexCoverage()
 	for start < target && (options.MaxSegments == 0 || result.Segments < options.MaxSegments) {
 		// Do not interrupt an in-flight segment merely because its estimate was
@@ -239,12 +283,17 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 		for _, kind := range options.Tables {
 			name := v2SegmentName(start, count)
 			path := filepath.Join(base, kind, name)
-			table := f.tables[kind]
 			lastProgress := time.Now()
-			readV1 := func(number uint64) ([]byte, error) {
-				data, err := table.Retrieve(number)
+			readSource := func(number uint64) ([]byte, error) {
+				var data []byte
+				var err error
+				if direct {
+					data, err = options.Source(kind, number)
+				} else {
+					data, err = f.tables[kind].Retrieve(number)
+				}
 				if err != nil {
-					return nil, fmt.Errorf("read V1 %s[%d]: %w", kind, number, err)
+					return nil, fmt.Errorf("read ancient V2 source %s[%d]: %w", kind, number, err)
 				}
 				return data, nil
 			}
@@ -252,11 +301,11 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				if err := options.Context.Err(); err != nil {
 					return nil, err
 				}
-				data, err := readV1(number)
+				data, err := readSource(number)
 				if err != nil {
 					return nil, err
 				}
-				data, err = f.transformV2MigrationRecord(options, kind, number, data)
+				data, err = f.transformV2MigrationRecord(options, kind, number, data, sourceReader)
 				if err != nil {
 					return nil, err
 				}
@@ -296,11 +345,11 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				return result, fmt.Errorf("write ancient V2 %s segment %d: %w", kind, start, err)
 			}
 			readExpected := func(number uint64) ([]byte, error) {
-				data, err := readV1(number)
+				data, err := readSource(number)
 				if err != nil {
 					return nil, err
 				}
-				return f.transformV2MigrationRecord(options, kind, number, data)
+				return f.transformV2MigrationRecord(options, kind, number, data, sourceReader)
 			}
 			if err := verifyV2Segment(options.Context, path, kind, start, count, readExpected); err != nil {
 				cleanupUnpublished()
@@ -348,18 +397,24 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			transactionIndexCoverage = end
 		}
 		if options.Online {
-			if err := f.installV2Manifest(manifest); err != nil {
+			var newIndex *TransactionIndexStore
+			if buildTransactionIndex {
+				openedIndex, err := OpenTransactionIndexStore(f.datadir)
+				if err != nil {
+					return result, fmt.Errorf("prepare transaction index after segment %d: %w", start, err)
+				}
+				newIndex = openedIndex
+			}
+			if err := f.installV2ManifestState(manifest, newIndex, end, direct); err != nil {
+				if newIndex != nil {
+					_ = newIndex.Close()
+				}
 				return result, fmt.Errorf("install ancient V2 after segment %d: %w", start, err)
 			}
-			if buildTransactionIndex {
-				newIndex, err := OpenTransactionIndexStore(f.datadir)
-				if err != nil {
-					return result, fmt.Errorf("reload transaction index after segment %d: %w", start, err)
-				}
-				f.replaceTransactionIndexStore(newIndex)
-			}
+		} else if direct {
+			f.head.Store(end)
 		}
-		if !options.KeepV1 {
+		if !direct && !options.KeepV1 {
 			if _, err := f.truncateTailLocked(end); err != nil {
 				return result, fmt.Errorf("reclaim V1 through %d: %w", end, err)
 			}
@@ -446,20 +501,77 @@ func buildOrRecoverTransactionIndexRun(ctx context.Context, path string, start, 
 	return result, false, err
 }
 
-func (f *Freezer) transformV2MigrationRecord(options V2MigrationOptions, kind string, number uint64, data []byte) ([]byte, error) {
+func readSourceForKind(options V2MigrationOptions, f *Freezer, direct bool) func(string, uint64) ([]byte, error) {
+	if direct {
+		return options.Source
+	}
+	return func(kind string, number uint64) ([]byte, error) {
+		table := f.tables[kind]
+		if table == nil {
+			return nil, fmt.Errorf("ancient V2: unknown source table %s", kind)
+		}
+		return table.Retrieve(number)
+	}
+}
+
+// recoverPublishedDirectV2 handles the narrow same-process crash window where
+// the immutable manifest reached disk but the live store was not installed.
+// A manifest is the commit marker, so retrying must adopt it instead of
+// rewriting or deleting any of its referenced segment files.
+func (f *Freezer) recoverPublishedDirectV2(options V2MigrationOptions, start uint64) (uint64, bool, error) {
+	manifestPath := filepath.Join(f.datadir, "v2", "manifests", v2ManifestName(start, options.SegmentBlocks))
+	if _, err := os.Stat(manifestPath); errors.Is(err, os.ErrNotExist) {
+		return start, false, nil
+	} else if err != nil {
+		return start, false, fmt.Errorf("stat published ancient V2 manifest %d: %w", start, err)
+	}
+	expectedEnd := start + options.SegmentBlocks
+	if expectedEnd < start || options.SourceHead != expectedEnd {
+		return start, false, fmt.Errorf("ancient V2: published direct segment [%d,%d) does not match source head %d", start, expectedEnd, options.SourceHead)
+	}
+	newStore, err := openV2Store(f.datadir)
+	if err != nil {
+		return start, false, fmt.Errorf("recover published ancient V2 segment %d: %w", start, err)
+	}
+	if newStore.coverage != expectedEnd {
+		_ = newStore.Close()
+		return start, false, fmt.Errorf("recover published ancient V2 coverage %d, want %d", newStore.coverage, expectedEnd)
+	}
+	newIndex, err := OpenTransactionIndexStore(f.datadir)
+	if err != nil {
+		_ = newStore.Close()
+		return start, false, fmt.Errorf("recover published transaction index: %w", err)
+	}
+	if newIndex.Coverage() > expectedEnd {
+		_ = newIndex.Close()
+		_ = newStore.Close()
+		return start, false, fmt.Errorf("recover transaction index coverage %d exceeds V2 coverage %d", newIndex.Coverage(), expectedEnd)
+	}
+
+	f.v2Mu.Lock()
+	oldStore, oldIndex := f.v2, f.txIndex
+	f.v2, f.txIndex = newStore, newIndex
+	f.head.Store(expectedEnd)
+	f.v2Mu.Unlock()
+	if oldIndex != nil {
+		_ = oldIndex.Close()
+	}
+	if oldStore != nil {
+		_ = oldStore.Close()
+	}
+	return expectedEnd, true, nil
+}
+
+func (f *Freezer) transformV2MigrationRecord(options V2MigrationOptions, kind string, number uint64, data []byte, readSource func(string, uint64) ([]byte, error)) ([]byte, error) {
 	if options.Transform == nil {
 		return data, nil
 	}
 	var body []byte
 	if kind == "tx_infos" {
-		table := f.tables["bodies"]
-		if table == nil {
-			return nil, fmt.Errorf("ancient V2: bodies table required to transform tx_infos")
-		}
 		var err error
-		body, err = table.Retrieve(number)
+		body, err = readSource("bodies", number)
 		if err != nil {
-			return nil, fmt.Errorf("read V1 bodies[%d] for transform: %w", number, err)
+			return nil, fmt.Errorf("read source bodies[%d] for transform: %w", number, err)
 		}
 	}
 	return options.Transform(kind, number, data, body)
@@ -499,22 +611,39 @@ func (f *Freezer) replaceV2Store(store *v2Store) {
 // old prefix or the complete extended prefix. V1 reclamation happens only
 // after this method returns successfully.
 func (f *Freezer) installV2Manifest(manifest v2Manifest) error {
+	return f.installV2ManifestState(manifest, nil, 0, false)
+}
+
+// installV2ManifestState makes the complete published state visible under one
+// v2Mu critical section. When direct is true, readers therefore cannot observe
+// new V2 coverage with an old transaction-index store or logical head.
+func (f *Freezer) installV2ManifestState(manifest v2Manifest, index *TransactionIndexStore, logicalHead uint64, direct bool) error {
 	base := filepath.Join(f.datadir, "v2")
 	readers, err := openV2ManifestReaders(base, manifest)
 	if err != nil {
 		return err
 	}
+	var oldIndex *TransactionIndexStore
 	f.v2Mu.Lock()
 	store := f.v2
 	if store == nil {
 		err = errors.New("ancient V2 store is closed")
 	} else {
 		err = store.installManifestReaders(manifest, readers)
+		if err == nil && index != nil {
+			oldIndex, f.txIndex = f.txIndex, index
+		}
+		if err == nil && direct {
+			f.head.Store(logicalHead)
+		}
 	}
 	f.v2Mu.Unlock()
 	if err != nil {
 		closeV2SegmentReaders(readers)
 		return err
+	}
+	if oldIndex != nil {
+		_ = oldIndex.Close()
 	}
 	return nil
 }

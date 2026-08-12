@@ -51,13 +51,20 @@ type chainFreezerVerificationRecord struct {
 // eventLogVerificationRecord binds one event-log lookup sidecar to the exact
 // ordered source segments from which its address/topic postings were proven.
 type eventLogVerificationRecord struct {
-	Index  SegmentRef   `json:"index"`
-	Events []SegmentRef `json:"events"`
+	Index       SegmentRef   `json:"index"`
+	Events      []SegmentRef `json:"events"`
+	IdentityKey string       `json:"identity,omitempty"`
 }
 
 type eventLogVerificationKey struct {
 	recordKey   string
 	identityKey string
+}
+
+type eventLogVerificationFlight struct {
+	done chan struct{}
+	key  eventLogVerificationKey
+	err  error
 }
 
 type chainFreezerVerificationDisk struct {
@@ -76,6 +83,7 @@ type ChainFreezerVerificationCacheStats struct {
 	EventPersistentHits  uint64
 	EventFullVerified    uint64
 	EventEntries         uint64
+	EventPersistErrors   uint64
 	TrustedRecorded      uint64
 	EventTrustedRecorded uint64
 }
@@ -98,6 +106,7 @@ type chainFreezerVerificationMetrics struct {
 	eventPersistentHits  *metrics.Gauge
 	eventFullVerified    *metrics.Gauge
 	eventEntries         *metrics.Gauge
+	eventPersistErrors   *metrics.Gauge
 	trustedRecorded      *metrics.Gauge
 	eventTrustedRecorded *metrics.Gauge
 }
@@ -108,16 +117,18 @@ type chainFreezerVerificationMetrics struct {
 // re-hashes every object before it may replace the complete protobuf/lookup
 // replay.
 type ChainFreezerVerificationCache struct {
-	mu              sync.Mutex
-	dir             string
-	verified        map[chainFreezerVerificationKey]struct{}
-	persistent      map[chainFreezerVerificationRecord]struct{}
-	eventVerified   map[eventLogVerificationKey]struct{}
-	eventPersistent map[string]eventLogVerificationRecord
-	dirty           bool
-	loadErr         error
-	stats           ChainFreezerVerificationCacheStats
-	metrics         chainFreezerVerificationMetrics
+	mu                 sync.Mutex
+	dir                string
+	verified           map[chainFreezerVerificationKey]struct{}
+	persistent         map[chainFreezerVerificationRecord]struct{}
+	eventVerified      map[eventLogVerificationKey]struct{}
+	eventPersistent    map[string]eventLogVerificationRecord
+	eventFlights       map[eventLogVerificationKey]*eventLogVerificationFlight
+	dirty              bool
+	eventPersistWarned bool
+	loadErr            error
+	stats              ChainFreezerVerificationCacheStats
+	metrics            chainFreezerVerificationMetrics
 }
 
 func NewChainFreezerVerificationCache(dir string) *ChainFreezerVerificationCache {
@@ -127,6 +138,7 @@ func NewChainFreezerVerificationCache(dir string) *ChainFreezerVerificationCache
 		persistent:      make(map[chainFreezerVerificationRecord]struct{}),
 		eventVerified:   make(map[eventLogVerificationKey]struct{}),
 		eventPersistent: make(map[string]eventLogVerificationRecord),
+		eventFlights:    make(map[eventLogVerificationKey]*eventLogVerificationFlight),
 		metrics: chainFreezerVerificationMetrics{
 			memoryHits:           metrics.GetOrRegisterGauge(chainFreezerVerificationMetricsPrefix+"memory_hits", nil),
 			persistentHits:       metrics.GetOrRegisterGauge(chainFreezerVerificationMetricsPrefix+"persistent_hits", nil),
@@ -137,6 +149,7 @@ func NewChainFreezerVerificationCache(dir string) *ChainFreezerVerificationCache
 			eventPersistentHits:  metrics.GetOrRegisterGauge(chainFreezerVerificationMetricsPrefix+"event_log/persistent_hits", nil),
 			eventFullVerified:    metrics.GetOrRegisterGauge(chainFreezerVerificationMetricsPrefix+"event_log/full", nil),
 			eventEntries:         metrics.GetOrRegisterGauge(chainFreezerVerificationMetricsPrefix+"event_log/cache_entries", nil),
+			eventPersistErrors:   metrics.GetOrRegisterGauge(chainFreezerVerificationMetricsPrefix+"event_log/persist_errors", nil),
 			trustedRecorded:      metrics.GetOrRegisterGauge(chainFreezerVerificationMetricsPrefix+"trusted_recorded", nil),
 			eventTrustedRecorded: metrics.GetOrRegisterGauge(chainFreezerVerificationMetricsPrefix+"event_log/trusted_recorded", nil),
 		},
@@ -286,7 +299,7 @@ func (c *ChainFreezerVerificationCache) commit(active map[chainFreezerVerificati
 	return nil
 }
 
-func (c *ChainFreezerVerificationCache) verifyEventLogIndex(dir string, indexRef SegmentRef, eventRefs []SegmentRef) (eventLogVerificationKey, chainFreezerVerificationRoute, error) {
+func (c *ChainFreezerVerificationCache) verifyEventLogIndex(dir string, indexRef SegmentRef, eventRefs []SegmentRef) (resultKey eventLogVerificationKey, resultRoute chainFreezerVerificationRoute, resultErr error) {
 	if c == nil {
 		if err := verifyEventLogIndexSegmentAgainstEventLogs(dir, indexRef, eventRefs); err != nil {
 			return eventLogVerificationKey{}, 0, err
@@ -319,12 +332,41 @@ func (c *ChainFreezerVerificationCache) verifyEventLogIndex(dir string, indexRef
 		c.mu.Unlock()
 		return key, chainFreezerVerificationMemory, nil
 	}
+	if c.eventFlights == nil {
+		c.eventFlights = make(map[eventLogVerificationKey]*eventLogVerificationFlight)
+	}
+	if flight := c.eventFlights[key]; flight != nil {
+		c.mu.Unlock()
+		<-flight.done
+		if flight.err == nil {
+			c.mu.Lock()
+			c.stats.EventMemoryHits++
+			c.mu.Unlock()
+			return flight.key, chainFreezerVerificationMemory, nil
+		}
+		return eventLogVerificationKey{}, 0, flight.err
+	}
+	flight := &eventLogVerificationFlight{done: make(chan struct{})}
+	c.eventFlights[key] = flight
 	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		flight.key, flight.err = resultKey, resultErr
+		delete(c.eventFlights, key)
+		close(flight.done)
+		c.mu.Unlock()
+	}()
 
 	c.mu.Lock()
-	_, persistentHit := c.eventPersistent[key.recordKey]
+	persistentRecord, persistentHit := c.eventPersistent[key.recordKey]
 	c.mu.Unlock()
 	if persistentHit {
+		// A persistent proof avoids rebuilding and semantically comparing the
+		// routing index, but it cannot replace content authentication after a
+		// restart. Size+mtime is only an optimization identity: disk corruption
+		// can preserve both, and V3 block/transaction dictionaries are read
+		// directly rather than protected by frame CRCs. Re-hash every companion
+		// before admitting the proof into this process's memory cache.
 		if err := verifyEventLogCompanionChecksums(dir, record); err != nil {
 			return eventLogVerificationKey{}, 0, err
 		}
@@ -342,7 +384,12 @@ func (c *ChainFreezerVerificationCache) verifyEventLogIndex(dir string, indexRef
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.eventVerified[key] = struct{}{}
+	record.IdentityKey = key.identityKey
 	if persistentHit {
+		if persistentRecord.IdentityKey != record.IdentityKey {
+			c.eventPersistent[key.recordKey] = record
+			c.dirty = true
+		}
 		c.stats.EventPersistentHits++
 		return key, chainFreezerVerificationPersistent, nil
 	}
@@ -425,11 +472,15 @@ func (c *ChainFreezerVerificationCache) recordTrustedEventLogs(dir string, index
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	record.IdentityKey = key.identityKey
 	c.eventVerified[key] = struct{}{}
-	if _, ok := c.eventPersistent[key.recordKey]; !ok {
+	if previous, ok := c.eventPersistent[key.recordKey]; !ok {
 		if len(c.eventPersistent) >= maxChainFreezerVerificationCacheEntries {
 			return fmt.Errorf("snapshots: event-log verification cache entries exceed limit %d", maxChainFreezerVerificationCacheEntries)
 		}
+		c.eventPersistent[key.recordKey] = record
+		c.dirty = true
+	} else if previous.IdentityKey != record.IdentityKey {
 		c.eventPersistent[key.recordKey] = record
 		c.dirty = true
 	}
@@ -446,6 +497,44 @@ func (c *ChainFreezerVerificationCache) persistPendingLocked() error {
 	}
 	c.updateMetricsLocked()
 	return nil
+}
+
+// persistPending records newly completed semantic proofs without pruning
+// unrelated cache entries. Query planning verifies only the companion sets
+// touched by one request, so commitEventLogs (which replaces the complete
+// active set) would be too destructive here.
+func (c *ChainFreezerVerificationCache) persistPending() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.persistPendingLocked()
+}
+
+// persistPendingAdvisory keeps a completed in-memory proof usable even when
+// the optional cache file cannot be refreshed. Snapshot correctness never
+// depends on this file, so disk-full, read-only, or transient fsync failures
+// must not turn an otherwise valid JSON-RPC query into an error.
+func (c *ChainFreezerVerificationCache) persistPendingAdvisory() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	err := c.persistPendingLocked()
+	shouldWarn := false
+	if err != nil {
+		c.stats.EventPersistErrors++
+		shouldWarn = !c.eventPersistWarned
+		c.eventPersistWarned = true
+		c.updateMetricsLocked()
+	} else {
+		c.eventPersistWarned = false
+	}
+	c.mu.Unlock()
+	if shouldWarn {
+		coldSnapshotLog.Warn("Could not persist advisory event-log verification cache", "err", err)
+	}
 }
 
 func (c *ChainFreezerVerificationCache) load() error {
@@ -577,6 +666,7 @@ func (c *ChainFreezerVerificationCache) updateMetricsLocked() {
 	c.metrics.eventPersistentHits.Update(coldSnapshotUintGauge(c.stats.EventPersistentHits))
 	c.metrics.eventFullVerified.Update(coldSnapshotUintGauge(c.stats.EventFullVerified))
 	c.metrics.eventEntries.Update(coldSnapshotUintGauge(uint64(len(c.eventPersistent))))
+	c.metrics.eventPersistErrors.Update(coldSnapshotUintGauge(c.stats.EventPersistErrors))
 	c.metrics.trustedRecorded.Update(coldSnapshotUintGauge(c.stats.TrustedRecorded))
 	c.metrics.eventTrustedRecorded.Update(coldSnapshotUintGauge(c.stats.EventTrustedRecorded))
 }
@@ -715,6 +805,7 @@ func eventLogVerificationRecordFor(indexRef SegmentRef, eventRefs []SegmentRef) 
 
 func normalizeEventLogVerificationRecord(record eventLogVerificationRecord) eventLogVerificationRecord {
 	record.Index.Checksum = strings.ToLower(strings.TrimSpace(record.Index.Checksum))
+	record.IdentityKey = strings.TrimSpace(record.IdentityKey)
 	record.Events = append([]SegmentRef(nil), record.Events...)
 	for i := range record.Events {
 		record.Events[i].Checksum = strings.ToLower(strings.TrimSpace(record.Events[i].Checksum))
@@ -753,11 +844,18 @@ func validateEventLogVerificationRecord(record eventLogVerificationRecord) error
 	if !eventLogRangeCoveredByRefs(record.Events, record.Index.FromTxNum, record.Index.ToTxNum) {
 		return fmt.Errorf("event-log index %q source coverage is incomplete", record.Index.Path)
 	}
+	if len(record.IdentityKey) > 1<<20 {
+		return fmt.Errorf("event-log index %q identity is too large", record.Index.Path)
+	}
 	return nil
 }
 
 func eventLogVerificationRecordKey(record eventLogVerificationRecord) (string, error) {
-	data, err := json.Marshal(normalizeEventLogVerificationRecord(record))
+	record = normalizeEventLogVerificationRecord(record)
+	// File identity selects the fast restart path but is not part of the
+	// semantic companion-set key.
+	record.IdentityKey = ""
+	data, err := json.Marshal(record)
 	if err != nil {
 		return "", err
 	}

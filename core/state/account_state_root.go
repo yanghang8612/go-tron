@@ -23,7 +23,10 @@ func (s *StateDB) JournalMark() int {
 // JavaAccountStateRoot updates java-tron's lightweight account-state trie from
 // account changes recorded since mark. The trie value is AccountStateEntity:
 // Account{address,balance,allowance}; it deliberately excludes full Account
-// fields and changes outside the tx loop such as block rewards.
+// fields and changes outside the tx loop such as block rewards. Unlike rooted
+// flat-state values, this protobuf byte sequence is itself the java-tron
+// consensus hash input. Replacing its codec would change the account-state root
+// and is therefore intentionally outside the native-storage migration.
 func (s *StateDB) JavaAccountStateRoot(parentRoot tcommon.Hash, mark int) (tcommon.Hash, error) {
 	originRoot := normalizeJavaAccountRoot(parentRoot)
 	touched := make(map[tcommon.Address]struct{})

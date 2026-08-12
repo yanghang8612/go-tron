@@ -120,7 +120,11 @@ func (s *StateDB) readAddressListStrict(key []byte, label string) ([]tcommon.Add
 // ReadActiveWitnesses returns the rooted active witness list (nil if unset). A
 // KV error is swallowed to nil, matching the prior rawdb reader and 3b's Load.
 func (s *StateDB) ReadActiveWitnesses() []tcommon.Address {
-	v, _, _ := s.ReadActiveWitnessesStrict()
+	v, _, err := s.ReadActiveWitnessesStrict()
+	if err != nil {
+		s.recordStateError("read active witness list", err)
+		return nil
+	}
 	return v
 }
 
@@ -140,7 +144,11 @@ func (s *StateDB) WriteActiveWitnesses(addrs []tcommon.Address) error {
 // ReadWitnessIndex returns the rooted witness index (nil if unset). KV error
 // swallowed to nil — drop-in for the prior rawdb reader's consumers.
 func (s *StateDB) ReadWitnessIndex() []tcommon.Address {
-	v, _, _ := s.ReadWitnessIndexStrict()
+	v, _, err := s.ReadWitnessIndexStrict()
+	if err != nil {
+		s.recordStateError("read witness index", err)
+		return nil
+	}
 	return v
 }
 

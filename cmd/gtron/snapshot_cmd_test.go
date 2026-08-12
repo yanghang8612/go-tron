@@ -26,6 +26,7 @@ import (
 	corestate "github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	jsonrpcapi "github.com/tronprotocol/go-tron/internal/jsonrpc"
@@ -3283,7 +3284,7 @@ func snapshotCmdAccountEnvelopeWithGeneration(t *testing.T, addr common.Address,
 	if len(allowance) == 1 {
 		account.SetAllowance(allowance[0])
 	}
-	accountRaw, err := proto.Marshal(account.Proto())
+	accountRaw, err := account.MarshalStorageCoreV4()
 	if err != nil {
 		t.Fatalf("marshal account: %v", err)
 	}
@@ -3315,7 +3316,7 @@ func snapshotCmdContractMetaKey() []byte {
 
 func snapshotCmdContractMetadata(t *testing.T, addr common.Address, name string, bytecode []byte) []byte {
 	t.Helper()
-	raw, err := proto.Marshal(&contractpb.SmartContract{
+	raw, err := statecodec.Marshal(&contractpb.SmartContract{
 		ContractAddress: addr.Bytes(),
 		Name:            name,
 		Bytecode:        bytecode,

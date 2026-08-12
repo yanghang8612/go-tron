@@ -1,14 +1,26 @@
 package state
 
 import (
-	"bytes"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
 )
+
+func TestVotesCompatReaderPoisonsStateDBOnCorruption(t *testing.T) {
+	sdb := newTestStateDB(t)
+	voter := wsAddr(7)
+	if err := sdb.SystemKVPut(kvdomains.WitnessVoteState, votesStoreKey(voter), []byte{0x80}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.ReadVotes(voter); got != nil {
+		t.Fatalf("corrupt votes = %+v, want nil", got)
+	}
+	if sdb.Error() == nil {
+		t.Fatal("corrupt votes did not poison StateDB")
+	}
+}
 
 // makeVotes builds a corepb.Votes with a single new-vote entry for target.
 func makeVotes(voter, target tcommon.Address, count int64) *corepb.Votes {
@@ -71,159 +83,6 @@ func TestVotesStoreFillsAddress(t *testing.T) {
 	if got == nil || tcommon.BytesToAddress(got.Address) != v {
 		t.Fatalf("Address not auto-filled: %+v", got)
 	}
-}
-
-func TestUnmarshalVotesOwnedEquivalentAndOwned(t *testing.T) {
-	want := &corepb.Votes{
-		Address: bytes.Repeat([]byte{0x41}, 21),
-		OldVotes: []*corepb.Vote{
-			{VoteAddress: bytes.Repeat([]byte{0x42}, 21), VoteCount: 7},
-		},
-		NewVotes: []*corepb.Vote{
-			{VoteAddress: bytes.Repeat([]byte{0x43}, 21), VoteCount: 11},
-			{VoteAddress: bytes.Repeat([]byte{0x44}, 21), VoteCount: 13},
-		},
-	}
-	data, err := proto.Marshal(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := unmarshalVotesOwned(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !proto.Equal(got, want) {
-		t.Fatalf("owned votes differ\ngot:  %v\nwant: %v", got, want)
-	}
-	clear(data)
-	if !proto.Equal(got, want) {
-		t.Fatal("decoded votes alias the wire input")
-	}
-}
-
-func FuzzUnmarshalVotesOwnedEquivalent(f *testing.F) {
-	for _, votes := range []*corepb.Votes{
-		{},
-		makeVotes(wsAddr(1), wsAddr(9), 10),
-	} {
-		data, err := proto.Marshal(votes)
-		if err != nil {
-			f.Fatal(err)
-		}
-		f.Add(data)
-	}
-	f.Add([]byte{0x1a, 0x05, 0x01})
-	f.Add(protowire.AppendVarint(protowire.AppendTag(nil, 100, protowire.VarintType), 1))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		want := new(corepb.Votes)
-		genericErr := proto.Unmarshal(data, want)
-		got, directErr := unmarshalVotesOwned(data)
-		if (genericErr == nil) != (directErr == nil) {
-			t.Fatalf("error mismatch: generic=%v direct=%v data=%x", genericErr, directErr, data)
-		}
-		if genericErr == nil && !proto.Equal(got, want) {
-			t.Fatalf("decoded votes mismatch\ngot:  %v\nwant: %v\ndata: %x", got, want, data)
-		}
-	})
-}
-
-var benchmarkVotesSink *corepb.Votes
-var benchmarkVoteSink *corepb.Vote
-
-func FuzzUnmarshalVoteOwnedEquivalent(f *testing.F) {
-	for _, vote := range []*corepb.Vote{
-		{},
-		{VoteAddress: bytes.Repeat([]byte{0x41}, tcommon.AddressLength), VoteCount: 11},
-		{VoteAddress: bytes.Repeat([]byte{0x42}, 128), VoteCount: -1},
-	} {
-		data, err := proto.Marshal(vote)
-		if err != nil {
-			f.Fatal(err)
-		}
-		f.Add(data)
-	}
-	f.Add([]byte{0x0a, 0x05, 0x01})
-	f.Add(protowire.AppendVarint(protowire.AppendTag(nil, 100, protowire.VarintType), 1))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		want := new(corepb.Vote)
-		genericErr := proto.Unmarshal(data, want)
-		got, directErr := unmarshalVoteOwned(data)
-		if (genericErr == nil) != (directErr == nil) {
-			t.Fatalf("error mismatch: generic=%v direct=%v data=%x", genericErr, directErr, data)
-		}
-		if genericErr == nil && !proto.Equal(got, want) {
-			t.Fatalf("decoded vote mismatch\ngot:  %v\nwant: %v\ndata: %x", got, want, data)
-		}
-	})
-}
-
-func BenchmarkUnmarshalVoteOwned(b *testing.B) {
-	vote := &corepb.Vote{
-		VoteAddress: bytes.Repeat([]byte{0x41}, tcommon.AddressLength),
-		VoteCount:   11,
-	}
-	payload, err := proto.Marshal(vote)
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.Run("Owned", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			benchmarkVoteSink, err = unmarshalVoteOwned(payload)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-	b.Run("Protobuf", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			vote := new(corepb.Vote)
-			err = proto.Unmarshal(payload, vote)
-			if err != nil {
-				b.Fatal(err)
-			}
-			benchmarkVoteSink = vote
-		}
-	})
-}
-
-func BenchmarkUnmarshalVotesOwned(b *testing.B) {
-	votes := &corepb.Votes{Address: bytes.Repeat([]byte{0x41}, 21)}
-	for index := range 10 {
-		votes.OldVotes = append(votes.OldVotes, &corepb.Vote{
-			VoteAddress: bytes.Repeat([]byte{byte(index + 1)}, 21),
-			VoteCount:   int64(index + 1),
-		})
-		votes.NewVotes = append(votes.NewVotes, &corepb.Vote{
-			VoteAddress: bytes.Repeat([]byte{byte(index + 11)}, 21),
-			VoteCount:   int64(index + 11),
-		})
-	}
-	payload, err := proto.Marshal(votes)
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.Run("Owned", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			benchmarkVotesSink, err = unmarshalVotesOwned(payload)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-	b.Run("Protobuf", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			votes := new(corepb.Votes)
-			err = proto.Unmarshal(payload, votes)
-			if err != nil {
-				b.Fatal(err)
-			}
-			benchmarkVotesSink = votes
-		}
-	})
 }
 
 // TestVotesStoreAnchorRewindAndDrain is the state-layer gate for vote rooting:

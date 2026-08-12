@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"strconv"
 	"testing"
-	"unsafe"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -51,10 +50,7 @@ func TestAccountPermissionsPersistOutsideAccountEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stored corepb.Account
-	if err := proto.Unmarshal(envelope.AccountProto, &stored); err != nil {
-		t.Fatal(err)
-	}
+	stored := decodeStoredAccountCore(t, envelope)
 	if stored.OwnerPermission != nil || stored.WitnessPermission != nil || len(stored.ActivePermission) != 0 {
 		t.Fatalf("split permissions leaked into account envelope: %+v", &stored)
 	}
@@ -72,12 +68,12 @@ func TestAccountPermissionsPersistOutsideAccountEnvelope(t *testing.T) {
 		if readErr != nil || !exists {
 			t.Fatalf("read permission row %x: exists=%v err=%v", test.key, exists, readErr)
 		}
-		var got corepb.Permission
-		if err := proto.Unmarshal(value, &got); err != nil {
+		got, err := decodeAccountPermissionValue(value)
+		if err != nil {
 			t.Fatalf("decode permission row %x: %v", test.key, err)
 		}
-		if !proto.Equal(&got, test.want) {
-			t.Fatalf("permission row %x = %+v, want %+v", test.key, &got, test.want)
+		if !proto.Equal(got, test.want) {
+			t.Fatalf("permission row %x = %+v, want %+v", test.key, got, test.want)
 		}
 	}
 
@@ -524,7 +520,7 @@ func BenchmarkDecodeAccountPermissionRow(b *testing.B) {
 		}()},
 	} {
 		b.Run(fixture.name, func(b *testing.B) {
-			value, err := proto.MarshalOptions{Deterministic: true}.Marshal(fixture.permission)
+			value, err := encodeAccountPermission(fixture.permission)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -545,7 +541,7 @@ func BenchmarkDecodeAccountPermissionRow(b *testing.B) {
 	}
 }
 
-func TestDecodeAccountPermissionRowOwnsCoalescedBytes(t *testing.T) {
+func TestDecodeAccountPermissionRowOwnsBytes(t *testing.T) {
 	permission := splitTestPermission(corepb.Permission_Active, 2, "active-arena", 0x84)
 	permission.Operations = bytes.Repeat([]byte{0xa5}, 32)
 	permission.Keys[0].Address = append([]byte{0x41}, bytes.Repeat([]byte{0x84}, 20)...)
@@ -556,128 +552,21 @@ func TestDecodeAccountPermissionRowOwnsCoalescedBytes(t *testing.T) {
 	permission.Keys[1].ProtoReflect().SetUnknown(protowire.AppendVarint(protowire.AppendTag(nil, 99, protowire.VarintType), 7))
 	permission.ProtoReflect().SetUnknown(protowire.AppendBytes(protowire.AppendTag(nil, 100, protowire.BytesType), []byte("future")))
 
-	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(permission)
+	raw, err := encodeAccountPermission(permission)
 	if err != nil {
-		t.Fatal(err)
-	}
-	want := new(corepb.Permission)
-	if err := proto.Unmarshal(raw, want); err != nil {
 		t.Fatal(err)
 	}
 	got, _, err := decodeAccountPermissionRow(accountActivePermissionKey(2), raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !proto.Equal(got, want) {
-		t.Fatalf("decoded permission mismatch\n got: %v\nwant: %v", got, want)
+	if !proto.Equal(got, permission) {
+		t.Fatalf("decoded permission mismatch\n got: %v\nwant: %v", got, permission)
 	}
-
-	parts := []struct {
-		name  string
-		start uintptr
-		len   int
-	}{
-		{name: "permission name", start: uintptr(unsafe.Pointer(unsafe.StringData(got.PermissionName))), len: len(got.PermissionName)},
-		{name: "operations", start: uintptr(unsafe.Pointer(unsafe.SliceData(got.Operations))), len: len(got.Operations)},
-		{name: "first address", start: uintptr(unsafe.Pointer(unsafe.SliceData(got.Keys[0].Address))), len: len(got.Keys[0].Address)},
-		{name: "second address", start: uintptr(unsafe.Pointer(unsafe.SliceData(got.Keys[1].Address))), len: len(got.Keys[1].Address)},
-	}
-	for index := 1; index < len(parts); index++ {
-		if parts[index].start != parts[index-1].start+uintptr(parts[index-1].len) {
-			t.Fatalf("%s does not immediately follow %s in the owned arena", parts[index].name, parts[index-1].name)
-		}
-	}
-	for _, key := range got.Keys {
-		if cap(key.Address) != len(key.Address) {
-			t.Fatalf("address capacity %d, want owned span %d", cap(key.Address), len(key.Address))
-		}
-	}
-	if cap(got.Operations) != len(got.Operations) {
-		t.Fatalf("operations capacity %d, want owned span %d", cap(got.Operations), len(got.Operations))
-	}
-
 	for index := range raw {
 		raw[index] ^= 0xff
 	}
-	if !proto.Equal(got, want) {
-		t.Fatal("decoded permission aliases its input wire buffer")
+	if got.PermissionName != permission.PermissionName || !bytes.Equal(got.Operations, permission.Operations) || !bytes.Equal(got.Keys[0].Address, permission.Keys[0].Address) {
+		t.Fatal("decoded permission aliases the rooted-state input buffer")
 	}
-}
-
-func TestDecodeAccountPermissionDuplicateBytesKeepLastValue(t *testing.T) {
-	keyRaw := protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), []byte("first-address"))
-	keyRaw = protowire.AppendBytes(protowire.AppendTag(keyRaw, 1, protowire.BytesType), []byte("last-address"))
-	keyRaw = protowire.AppendVarint(protowire.AppendTag(keyRaw, 2, protowire.VarintType), 3)
-
-	raw := protowire.AppendBytes(protowire.AppendTag(nil, 3, protowire.BytesType), []byte("first-name"))
-	raw = protowire.AppendBytes(protowire.AppendTag(raw, 6, protowire.BytesType), []byte("first-operations"))
-	raw = protowire.AppendBytes(protowire.AppendTag(raw, 3, protowire.BytesType), []byte("last-name"))
-	raw = protowire.AppendBytes(protowire.AppendTag(raw, 6, protowire.BytesType), []byte("last-operations"))
-	raw = protowire.AppendBytes(protowire.AppendTag(raw, 7, protowire.BytesType), keyRaw)
-
-	want := new(corepb.Permission)
-	if err := proto.Unmarshal(raw, want); err != nil {
-		t.Fatal(err)
-	}
-	got, err := decodeAccountPermission(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !proto.Equal(got, want) {
-		t.Fatalf("duplicate-field mismatch\n got: %v\nwant: %v", got, want)
-	}
-	if got.PermissionName != "last-name" || string(got.Operations) != "last-operations" || len(got.Keys) != 1 || string(got.Keys[0].Address) != "last-address" {
-		t.Fatalf("last values not retained: %v", got)
-	}
-}
-
-func TestDecodeAccountPermissionMalformedMatchesGeneratedError(t *testing.T) {
-	for _, raw := range [][]byte{
-		{0x80},
-		protowire.AppendBytes(protowire.AppendTag(nil, 3, protowire.BytesType), []byte{0xff}),
-		protowire.AppendBytes(protowire.AppendTag(nil, 7, protowire.BytesType), []byte{0x80}),
-	} {
-		want := new(corepb.Permission)
-		wantErr := proto.Unmarshal(raw, want)
-		_, gotErr := decodeAccountPermission(raw)
-		if wantErr == nil || gotErr == nil {
-			t.Fatalf("malformed %x errors: optimized=%v generated=%v", raw, gotErr, wantErr)
-		}
-		if gotErr.Error() != wantErr.Error() {
-			t.Fatalf("malformed %x error mismatch: optimized=%q generated=%q", raw, gotErr, wantErr)
-		}
-	}
-}
-
-func FuzzDecodeAccountPermissionRowEquivalent(f *testing.F) {
-	for _, permission := range []*corepb.Permission{
-		splitTestPermission(corepb.Permission_Owner, 0, "owner", 0x81),
-		func() *corepb.Permission {
-			permission := splitTestPermission(corepb.Permission_Active, 2, "active", 0x82)
-			permission.Operations = make([]byte, 32)
-			permission.Keys = append(permission.Keys, &corepb.Key{Address: []byte{0x41, 0x83}, Weight: 2})
-			return permission
-		}(),
-	} {
-		data, err := proto.MarshalOptions{Deterministic: true}.Marshal(permission)
-		if err != nil {
-			f.Fatal(err)
-		}
-		f.Add(data)
-	}
-	f.Add([]byte{0x3a, 0x05, 0x0a})
-	f.Add(protowire.AppendBytes(protowire.AppendTag(nil, 99, protowire.BytesType), []byte("future")))
-	f.Add([]byte{0x9b, 0x06, 0x08, 0x01, 0x9c, 0x06})
-
-	f.Fuzz(func(t *testing.T, data []byte) {
-		want := new(corepb.Permission)
-		genericErr := proto.Unmarshal(data, want)
-		got, _, directErr := decodeAccountPermissionRow(accountOwnerPermissionKey, data)
-		if (genericErr != nil) != (directErr != nil) {
-			t.Fatalf("error mismatch: generic=%v direct=%v data=%x", genericErr, directErr, data)
-		}
-		if genericErr == nil && !proto.Equal(got, want) {
-			t.Fatalf("decoded permission mismatch\ngot:  %v\nwant: %v\ndata: %x", got, want, data)
-		}
-	})
 }

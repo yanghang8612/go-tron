@@ -56,8 +56,8 @@ func decodeAccountFrozenBandwidthEntry(key, value []byte) (*corepb.Account_Froze
 	if len(key) != 4 {
 		return nil, fmt.Errorf("account frozen-bandwidth key length %d, want 4", len(key))
 	}
-	entry := new(corepb.Account_Frozen)
-	if err := proto.Unmarshal(value, entry); err != nil {
+	entry, err := decodeAccountFrozen(value)
+	if err != nil {
 		return nil, fmt.Errorf("decode account frozen-bandwidth %x: %w", key, err)
 	}
 	return entry, nil
@@ -67,11 +67,11 @@ func decodeAccountTronPower(key, value []byte) (*corepb.Account_Frozen, error) {
 	if !bytes.Equal(key, accountTronPowerKey) {
 		return nil, fmt.Errorf("account tron-power key %x, want %x", key, accountTronPowerKey)
 	}
-	var entry corepb.Account_Frozen
-	if err := proto.Unmarshal(value, &entry); err != nil {
+	entry, err := decodeAccountFrozen(value)
+	if err != nil {
 		return nil, fmt.Errorf("decode account tron-power: %w", err)
 	}
-	return &entry, nil
+	return entry, nil
 }
 
 func clearAccountStakeV1Proto(pb *corepb.Account) {
@@ -166,10 +166,15 @@ func cacheAccountTronPowerOwned(obj *stateObject, entry *corepb.Account_Frozen) 
 	obj.accountTronPowerLoaded = true
 }
 
-func (s *StateDB) accountFrozenBandwidthRows(obj *stateObject) ([]accountFrozenBandwidthRow, error) {
+func (s *StateDB) accountFrozenBandwidthRows(obj *stateObject) (_ []accountFrozenBandwidthRow, err error) {
 	if obj == nil || obj.account == nil {
 		return nil, nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read account frozen bandwidth %s", obj.address.Hex()), err)
+		}
+	}()
 	rows := make([]accountFrozenBandwidthRow, 0, 2)
 	// Historical partial unfreezes delete only the expired physical row so
 	// temporal history records exactly that mutation. The remaining indexes may
@@ -189,10 +194,15 @@ func (s *StateDB) accountFrozenBandwidthRows(obj *stateObject) ([]accountFrozenB
 	return rows, nil
 }
 
-func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (accountFrozenBandwidthRow, bool, error) {
+func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (_ accountFrozenBandwidthRow, _ bool, err error) {
 	if obj == nil || obj.account == nil {
 		return accountFrozenBandwidthRow{}, false, nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read account frozen bandwidth %s index=%d", obj.address.Hex(), index), err)
+		}
+	}()
 	key := s.accountUint32Key(index)
 	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
 	if err != nil || !exists {
@@ -229,10 +239,15 @@ func (s *StateDB) accountFrozenBandwidthFastRows(obj *stateObject) ([]accountFro
 	return []accountFrozenBandwidthRow{first}, nil
 }
 
-func (s *StateDB) accountTronPower(obj *stateObject) (*corepb.Account_Frozen, bool, error) {
+func (s *StateDB) accountTronPower(obj *stateObject) (_ *corepb.Account_Frozen, _ bool, err error) {
 	if obj == nil || obj.account == nil {
 		return nil, false, nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read account tron power %s", obj.address.Hex()), err)
+		}
+	}()
 	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountTronPowerAux, accountTronPowerKey)
 	if err != nil || !exists {
 		return nil, exists, err
@@ -244,10 +259,15 @@ func (s *StateDB) accountTronPower(obj *stateObject) (*corepb.Account_Frozen, bo
 	return entry, true, nil
 }
 
-func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) error {
+func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil || obj.accountFrozenBandwidthLoaded {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize account frozen bandwidth %s", obj.address.Hex()), err)
+		}
+	}()
 	rows, err := s.accountFrozenBandwidthRows(obj)
 	if err != nil {
 		clearAccountFrozenBandwidthCache(obj)
@@ -266,10 +286,15 @@ func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) error {
 // fallback for migrated or synthetic states that contain a second physical
 // row, so callers on the consensus hot path avoid a prefix scan without
 // weakening compatibility handling.
-func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) error {
+func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize account frozen bandwidth %s", obj.address.Hex()), err)
+		}
+	}()
 	// Reproduce the two compatibility point probes on cache hits. The cache is
 	// block-scoped while transaction access capture is transaction-scoped.
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
@@ -295,10 +320,15 @@ func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) error 
 // enforced MAX_FROZEN_NUMBER == 1, so pre-Stake-2.0 resource accounting does
 // not need the index-1 compatibility probe used by the general fast loader.
 // Full account materialization and mutation paths retain the sparse-row scan.
-func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) error {
+func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize canonical account frozen bandwidth %s", obj.address.Hex()), err)
+		}
+	}()
 	// The materialized value can come from an earlier transaction. Keep the
 	// current transaction dependent on the canonical physical row as well.
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
@@ -318,10 +348,15 @@ func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) e
 	return nil
 }
 
-func (s *StateDB) materializeAccountTronPower(obj *stateObject) error {
+func (s *StateDB) materializeAccountTronPower(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil || obj.accountTronPowerLoaded {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize account tron power %s", obj.address.Hex()), err)
+		}
+	}()
 	tronPower, exists, err := s.accountTronPower(obj)
 	if err != nil {
 		obj.account.Proto().TronPower = nil
@@ -378,7 +413,7 @@ func (s *StateDB) writeAccountFrozenBandwidthReplacing(obj *stateObject, existin
 		if entry == nil {
 			continue
 		}
-		value, err := proto.MarshalOptions{Deterministic: true}.Marshal(entry)
+		value, err := appendAccountFrozen(s.accountRowMarshalScratch[:0], entry)
 		if err != nil {
 			return err
 		}
@@ -579,7 +614,7 @@ func (s *StateDB) writeAccountTronPower(obj *stateObject, entry *corepb.Account_
 		cacheAccountTronPower(obj, nil)
 		return nil
 	}
-	value, err := proto.MarshalOptions{Deterministic: true}.Marshal(entry)
+	value, err := appendAccountFrozen(s.accountRowMarshalScratch[:0], entry)
 	if err != nil {
 		return err
 	}

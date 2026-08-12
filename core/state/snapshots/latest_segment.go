@@ -40,12 +40,13 @@ type LatestSegment struct {
 }
 
 type Manager struct {
-	dir          string
-	mu           sync.RWMutex
-	manifest     *Manifest
-	manifestInfo os.FileInfo
-	pinned       bool
-	cache        map[string]*LatestSegment
+	dir                    string
+	mu                     sync.RWMutex
+	manifest               *Manifest
+	manifestInfo           os.FileInfo
+	pinned                 bool
+	cache                  map[string]*LatestSegment
+	chainVerificationCache *ChainFreezerVerificationCache
 }
 
 func AccountSnapshotKey(owner common.Address) []byte {
@@ -790,7 +791,13 @@ func OpenManager(dir string) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{dir: dir, manifest: manifest, manifestInfo: info, cache: make(map[string]*LatestSegment)}, nil
+	return &Manager{
+		dir:                    dir,
+		manifest:               manifest,
+		manifestInfo:           info,
+		cache:                  make(map[string]*LatestSegment),
+		chainVerificationCache: NewChainFreezerVerificationCache(dir),
+	}, nil
 }
 
 func OpenPinnedManager(dir string, manifest *Manifest) (*Manager, error) {
@@ -800,7 +807,13 @@ func OpenPinnedManager(dir string, manifest *Manifest) (*Manager, error) {
 	if err := manifest.ValidateProduction(); err != nil {
 		return nil, err
 	}
-	return &Manager{dir: dir, manifest: cloneManifest(manifest), pinned: true, cache: make(map[string]*LatestSegment)}, nil
+	return &Manager{
+		dir:                    dir,
+		manifest:               cloneManifest(manifest),
+		pinned:                 true,
+		cache:                  make(map[string]*LatestSegment),
+		chainVerificationCache: NewChainFreezerVerificationCache(dir),
+	}, nil
 }
 
 func (m *Manager) Manifest() *Manifest {

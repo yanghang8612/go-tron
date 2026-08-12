@@ -7,7 +7,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 // Phase 3d roots the Bancor exchange store into the reserved system account's
@@ -31,9 +30,8 @@ import (
 //	V1 key: 0x00 || u64-BE(id)
 //	V2 key: 0x01 || u64-BE(id)
 //
-// The value encoding reuses the existing Exchange proto wire format verbatim
-// (proto.Marshal), so no new on-disk encoding lineage is introduced — a rooted
-// record is byte-identical to what the flat bucket held.
+// Values use a versioned, hand-written deterministic encoding. Legacy protobuf
+// rows remain readable and are upgraded on their next write.
 //
 // Enumeration (ListExchanges) cannot prefix-scan the KV trie because its keys
 // are Keccak256(domain||key) hashes; instead it walks ids 1..latestExchangeNum,
@@ -53,37 +51,41 @@ func exchangeKVKey(discriminator byte, id int64) []byte {
 	return k
 }
 
-// readExchange resolves one exchange leg, swallowing a KV error to nil to match
-// the prior rawdb reader's defensive behavior (read sites treat nil as absent).
+// readExchange resolves one exchange leg. Missing rows retain the legacy nil
+// shape; unreadable or malformed rows poison the StateDB so callers cannot turn
+// corruption into a semantic miss.
 func (s *StateDB) readExchange(discriminator byte, id int64) *corepb.Exchange {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemExchange, exchangeKVKey(discriminator, id))
-	if err != nil || !ok || len(raw) == 0 {
+	ex, ok, err := s.readExchangeStrict(discriminator, id)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read exchange discriminator=%d id=%d", discriminator, id), err)
 		return nil
 	}
-	ex, err := unmarshalExchange(raw)
-	if err != nil {
+	if !ok {
 		return nil
 	}
 	return ex
 }
 
 func (s *StateDB) readExchangeStrict(discriminator byte, id int64) (*corepb.Exchange, bool, error) {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemExchange, exchangeKVKey(discriminator, id))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemExchange, exchangeKVKey(discriminator, id))
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	ex := &corepb.Exchange{}
-	if err := proto.Unmarshal(raw, ex); err != nil {
+	if len(raw) == 0 {
+		return nil, true, fmt.Errorf("decode exchange %d: empty value", id)
+	}
+	ex, err := decodeExchange(raw)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode exchange %d: %w", id, err)
 	}
 	return ex, true, nil
 }
 
 // writeExchange stages one exchange leg into the system-KV. The error is non-nil
-// only for a proto marshal failure or an unregistered domain (a programmer
+// only for a codec failure or an unregistered domain (a programmer
 // error), since SystemExchange is registered at init.
 func (s *StateDB) writeExchange(discriminator byte, ex *corepb.Exchange) error {
-	data, err := proto.Marshal(ex)
+	data, err := encodeExchange(ex)
 	if err != nil {
 		return err
 	}
@@ -114,11 +116,14 @@ func (s *StateDB) ReadExchangeV2Strict(id int64) (*corepb.Exchange, bool, error)
 
 func (r *PersistentHistoryReader) readExchangeAt(discriminator byte, id int64, blockNum uint64) (*corepb.Exchange, error) {
 	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemExchange, exchangeKVKey(discriminator, id), blockNum)
-	if err != nil || !ok || len(raw) == 0 {
+	if err != nil || !ok {
 		return nil, err
 	}
-	ex := &corepb.Exchange{}
-	if err := proto.Unmarshal(raw, ex); err != nil {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("decode exchange %d at block %d: empty value", id, blockNum)
+	}
+	ex, err := decodeExchange(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode exchange %d at block %d: %w", id, blockNum, err)
 	}
 	return ex, nil

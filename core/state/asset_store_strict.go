@@ -7,20 +7,32 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/proto"
 )
 
 // Strict and historical asset accessors are kept separate from asset_store.go
 // so the sync hot path can retain its specialized low-allocation decoder while
 // API/archive paths surface malformed rows instead of folding them into misses.
 func (s *StateDB) readAssetMetaStrict(key []byte, context string) (*contractpb.AssetIssueContract, bool, error) {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemAsset, key)
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, key)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	c := new(contractpb.AssetIssueContract)
-	if err := proto.Unmarshal(raw, c); err != nil {
+	c, err := decodeAssetIssue(raw)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode %s: %w", context, err)
+	}
+	if hotKey := assetBandwidthKey(key); hotKey != nil {
+		hotRaw, hotOK, hotErr := s.systemKVGetForDecoding(kvdomains.SystemAsset, hotKey)
+		if hotErr != nil {
+			return nil, true, hotErr
+		}
+		if hotOK {
+			usage, latest, err := decodeAssetBandwidth(hotRaw)
+			if err != nil {
+				return nil, true, fmt.Errorf("decode %s bandwidth: %w", context, err)
+			}
+			c.PublicFreeAssetNetUsage, c.PublicLatestFreeNetTime = usage, latest
+		}
 	}
 	return c, true, nil
 }
@@ -30,26 +42,26 @@ func (s *StateDB) ReadAssetIssueStrict(tokenID int64) (*contractpb.AssetIssueCon
 }
 
 func (s *StateDB) ReadAssetIssueByNameStrict(name []byte) (*contractpb.AssetIssueContract, bool, error) {
-	return s.readAssetMetaStrict(assetBytesKey(assetLegacyTag, name), fmt.Sprintf("legacy asset issue name %q", string(name)))
+	return s.readAssetMetaStrict(s.assetBytesKey(assetLegacyTag, name), fmt.Sprintf("legacy asset issue name %q", string(name)))
 }
 
 func (s *StateDB) readAssetScalarStrict(key []byte, context string) (int64, bool, error) {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemAsset, key)
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, key)
 	if err != nil || !ok {
 		return 0, ok, err
 	}
-	if len(raw) < 8 {
-		return 0, true, fmt.Errorf("decode %s: value length %d, want at least 8", context, len(raw))
+	if len(raw) != 8 {
+		return 0, true, fmt.Errorf("decode %s: value length %d, want 8", context, len(raw))
 	}
-	return int64(binary.BigEndian.Uint64(raw[:8])), true, nil
+	return int64(binary.BigEndian.Uint64(raw)), true, nil
 }
 
 func (s *StateDB) ReadAssetNameIndexStrict(name []byte) (int64, bool, error) {
-	return s.readAssetScalarStrict(assetBytesKey(assetNameIndexTag, name), fmt.Sprintf("asset name index %q", string(name)))
+	return s.readAssetScalarStrict(s.assetBytesKey(assetNameIndexTag, name), fmt.Sprintf("asset name index %q", string(name)))
 }
 
 func (s *StateDB) ReadAssetOwnerIndexStrict(ownerAddr []byte) (int64, bool, error) {
-	return s.readAssetScalarStrict(assetBytesKey(assetOwnerIndexTag, ownerAddr), fmt.Sprintf("asset owner index %x", ownerAddr))
+	return s.readAssetScalarStrict(s.assetBytesKey(assetOwnerIndexTag, ownerAddr), fmt.Sprintf("asset owner index %x", ownerAddr))
 }
 
 func (s *StateDB) ReadAssetIssueTimeStrict(tokenID int64) (int64, bool, error) {
@@ -96,9 +108,22 @@ func (r *PersistentHistoryReader) readAssetMetaAt(key []byte, blockNum uint64) (
 	if err != nil || !ok || len(raw) == 0 {
 		return nil, err
 	}
-	c := new(contractpb.AssetIssueContract)
-	if err := proto.Unmarshal(raw, c); err != nil {
+	c, err := decodeAssetIssue(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode asset metadata at block %d: %w", blockNum, err)
+	}
+	if hotKey := assetBandwidthKey(key); hotKey != nil {
+		hotRaw, hotOK, hotErr := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemAsset, hotKey, blockNum)
+		if hotErr != nil {
+			return nil, hotErr
+		}
+		if hotOK {
+			usage, latest, err := decodeAssetBandwidth(hotRaw)
+			if err != nil {
+				return nil, fmt.Errorf("decode asset bandwidth at block %d: %w", blockNum, err)
+			}
+			c.PublicFreeAssetNetUsage, c.PublicLatestFreeNetTime = usage, latest
+		}
 	}
 	return c, nil
 }

@@ -5,8 +5,8 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 // This file roots java-tron's VotesStore into the reserved system account's
@@ -17,16 +17,15 @@ import (
 // folds the old/new deltas into the witness vote counts, then clears the whole
 // store. Two logical keys live in the domain:
 //
-//   - votesStoreKey(voter): one proto-encoded corepb.Votes per voter — the
-//     same bytes the old flat `v-` accessor wrote.
+//   - votesStoreKey(voter): one versioned native corepb.Votes-shaped record per
+//     voter. Legacy flat/rooted protobuf bytes remain read-compatible.
 //   - votesStoreIndexKey: the enumeration of every voter that wrote a record
 //     this epoch, iterated by the drain — encoded as the shared address-list
 //     format (4-byte BE count || N×AddressLength), bit-for-bit identical to the
 //     old flat `v-index` accessor.
 //
-// No new encoding lineage is introduced: the record codec is corepb.Votes and
-// the index codec is encodeAddressList/decodeAddressList (shared with the
-// witness schedule).
+// The record codec is statecodec and the index codec is
+// encodeAddressList/decodeAddressList (shared with the witness schedule).
 var votesStoreIndexKey = []byte("VotesIndex")
 
 // votesStoreKey maps a voter address to its logical key within the
@@ -44,6 +43,7 @@ func votesStoreKey(addr tcommon.Address) []byte {
 func (s *StateDB) ReadVotes(addr tcommon.Address) *corepb.Votes {
 	votes, _, err := s.ReadVotesStrict(addr)
 	if err != nil {
+		s.recordStateError(fmt.Sprintf("read votes %s", addr.Hex()), err)
 		return nil
 	}
 	return votes
@@ -53,11 +53,14 @@ func (s *StateDB) ReadVotes(addr tcommon.Address) *corepb.Votes {
 // missing rows from unreadable or malformed rooted data.
 func (s *StateDB) ReadVotesStrict(addr tcommon.Address) (*corepb.Votes, bool, error) {
 	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, votesStoreKey(addr))
-	if err != nil || !ok || len(raw) == 0 {
+	if err != nil || !ok {
 		return nil, ok, err
 	}
+	if len(raw) == 0 {
+		return nil, true, fmt.Errorf("decode votes: empty value")
+	}
 	votes := &corepb.Votes{}
-	if err := proto.Unmarshal(raw, votes); err != nil {
+	if err := statecodec.Unmarshal(raw, votes); err != nil {
 		return nil, true, fmt.Errorf("decode votes: %w", err)
 	}
 	return votes, true, nil
@@ -77,7 +80,7 @@ func (s *StateDB) WriteVotes(addr tcommon.Address, votes *corepb.Votes) error {
 	if len(votes.Address) == 0 {
 		votes.Address = addr.Bytes()
 	}
-	data, err := proto.Marshal(votes)
+	data, err := statecodec.Marshal(votes)
 	if err != nil {
 		return err
 	}
@@ -98,6 +101,7 @@ func (s *StateDB) DeleteVotes(addr tcommon.Address) error {
 func (s *StateDB) ReadVotesIndex() []tcommon.Address {
 	voters, _, err := s.ReadVotesIndexStrict()
 	if err != nil {
+		s.recordStateError("read votes index", err)
 		return nil
 	}
 	return voters

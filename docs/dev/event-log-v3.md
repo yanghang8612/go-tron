@@ -19,15 +19,18 @@ contiguous sections:
 7. address dictionary plus framed delta-varint row postings;
 8. topic-key dictionary plus framed delta-varint row postings.
 
-Newly written V3 files use the `gtevli2\n` lookup sub-format for sections 7
-and 8. It groups 128 sorted keys per independently checksummed key block,
-front-codes the keys, and stores one checksummed delta-varint posting stream per
-key. This removes the old fixed
+Freshly synchronized V3 files use the strict `gtevli3\n` lookup sub-format for
+sections 7 and 8. It groups 128 sorted keys per independently checksummed key
+block, front-codes the keys, and stores one checksummed delta-varint posting
+stream per key. The 64-byte lookup header and every block-directory entry are
+also checksummed, including the `firstKey` values used by binary search. This
+removes the old fixed
 28-byte metadata tail per key and 32-byte directory entry per 1,024 postings.
-The outer segment remains V3: the reader detects the lookup marker separately
-for each section and continues to read already-published V3 sections in the
-original fixed-directory layout. Mixed old/new V3 files therefore remain valid
-in one manifest and no migration is required for correctness.
+The outer segment remains V3, but its lookup marker is no longer a format
+probe: missing, legacy, or damaged lookup magic is a hard integrity error. This
+fresh-genesis format intentionally does not read V3 files written with the old
+fixed-directory or `gtevli2` lookup layout; rebuild those snapshots before
+starting the new binary.
 
 Key blocks are seekable: a lookup binary-searches the small block directory and
 decodes at most one 128-key block before reading the selected posting
@@ -67,8 +70,9 @@ does not create an intermediate V2 event-log segment.
 The direct writer is used by both incremental state-snapshot catch-up in `snap`
 mode and the chain-freezer snapshot lifecycle in `minimal` mode. Restarting a
 node resumes at the first range not covered by the pinned production manifest;
-already published V1/V2/V3 ranges remain readable and adjacent new ranges may
-use V3.
+already published ranges in the current format remain readable and adjacent new
+ranges may use V3. Pre-`gtevli3` V3 ranges must not be retained across this
+fresh-sync upgrade.
 
 For an explicit fresh-sync configuration:
 

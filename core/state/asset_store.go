@@ -3,13 +3,11 @@ package state
 import (
 	"encoding/binary"
 	"errors"
-	"unicode/utf8"
+	"fmt"
+	"strconv"
 
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // TRC10 asset records are rooted into the reserved system account's SystemAsset
@@ -40,31 +38,19 @@ import (
 //	assetOwnerIndexTag|| owner-21B         (owner -> id)
 //	assetIssueTimeTag || u64-BE(tokenID)   (issue time)
 //
-// The value encoding reuses the existing wire formats verbatim — proto.Marshal
-// for the AssetIssueContract metadata, 8-byte big-endian for the id/time
-// scalars — so a rooted record is byte-identical to what the flat bucket held;
-// no new on-disk encoding lineage is introduced.
+// Metadata uses the versioned, hand-written hot-value codec. The two mutable
+// public bandwidth counters are split into V2/legacy rows (tags 0x06/0x07), so
+// bandwidth charging need not rewrite static issuance metadata. Rooted asset
+// rows are native-only; protobuf wire values are rejected.
 const (
-	assetV2Tag         byte = 0x01
-	assetLegacyTag     byte = 0x02
-	assetNameIndexTag  byte = 0x03
-	assetOwnerIndexTag byte = 0x04
-	assetIssueTimeTag  byte = 0x05
+	assetV2Tag              byte = 0x01
+	assetLegacyTag          byte = 0x02
+	assetNameIndexTag       byte = 0x03
+	assetOwnerIndexTag      byte = 0x04
+	assetIssueTimeTag       byte = 0x05
+	assetV2BandwidthTag     byte = 0x06
+	assetLegacyBandwidthTag byte = 0x07
 )
-
-const (
-	assetIssueOwnerBytes = iota
-	assetIssueNameBytes
-	assetIssueAbbrBytes
-	assetIssueDescriptionBytes
-	assetIssueURLBytes
-	assetIssueByteFieldCount
-)
-
-// Recent mainnet records in the sync hot path use at most 110 combined bytes
-// across these fields. Unusually large historical descriptions or URLs fall
-// back to an exact dynamic arena.
-const assetIssueInlineByteArenaSize = 128
 
 // assetIDKey is the owned form used by asynchronous prefetch plans. The
 // execution hot path uses StateDB.assetIDKey and its reusable scratch buffer.
@@ -74,216 +60,19 @@ func assetIDKey(tag byte, tokenID int64) []byte {
 	binary.BigEndian.PutUint64(k[1:], uint64(tokenID))
 	return k
 }
-
-type decodedAssetIssue struct {
-	contract  contractpb.AssetIssueContract
-	byteArena [assetIssueInlineByteArenaSize]byte
-}
-
-var assetIssueByteArenaLayoutOK = verifyAssetIssueByteArenaLayout()
-
-// verifyAssetIssueByteArenaLayout ties the allocation reserve below to the
-// generated AssetIssueContract schema. A future protobuf regeneration that
-// changes the relevant field shapes falls back to ordinary proto.Unmarshal.
-func verifyAssetIssueByteArenaLayout() bool {
-	fields := (&contractpb.AssetIssueContract{}).ProtoReflect().Descriptor().Fields()
-	return fields.Len() == 19 &&
-		assetIssueFieldShape(fields, 1, protoreflect.BytesKind, false) &&
-		assetIssueFieldShape(fields, 2, protoreflect.BytesKind, false) &&
-		assetIssueFieldShape(fields, 3, protoreflect.BytesKind, false) &&
-		assetIssueFieldShape(fields, 4, protoreflect.Int64Kind, false) &&
-		assetIssueFieldShape(fields, 5, protoreflect.MessageKind, true) &&
-		assetIssueFieldShape(fields, 6, protoreflect.Int32Kind, false) &&
-		assetIssueFieldShape(fields, 7, protoreflect.Int32Kind, false) &&
-		assetIssueFieldShape(fields, 8, protoreflect.Int32Kind, false) &&
-		assetIssueFieldShape(fields, 9, protoreflect.Int64Kind, false) &&
-		assetIssueFieldShape(fields, 10, protoreflect.Int64Kind, false) &&
-		assetIssueFieldShape(fields, 11, protoreflect.Int64Kind, false) &&
-		assetIssueFieldShape(fields, 16, protoreflect.Int32Kind, false) &&
-		assetIssueFieldShape(fields, 20, protoreflect.BytesKind, false) &&
-		assetIssueFieldShape(fields, 21, protoreflect.BytesKind, false) &&
-		assetIssueFieldShape(fields, 22, protoreflect.Int64Kind, false) &&
-		assetIssueFieldShape(fields, 23, protoreflect.Int64Kind, false) &&
-		assetIssueFieldShape(fields, 24, protoreflect.Int64Kind, false) &&
-		assetIssueFieldShape(fields, 25, protoreflect.Int64Kind, false) &&
-		assetIssueFieldShape(fields, 41, protoreflect.StringKind, false)
-}
-
-func assetIssueFieldShape(fields protoreflect.FieldDescriptors, number protoreflect.FieldNumber, kind protoreflect.Kind, list bool) bool {
-	field := fields.ByNumber(number)
-	return field != nil && field.Kind() == kind && field.IsList() == list
-}
-
-func assetIssueByteFieldIndex(number protowire.Number) int {
-	switch number {
-	case 1:
-		return assetIssueOwnerBytes
-	case 2:
-		return assetIssueNameBytes
-	case 3:
-		return assetIssueAbbrBytes
-	case 20:
-		return assetIssueDescriptionBytes
-	case 21:
-		return assetIssueURLBytes
-	default:
-		return -1
-	}
-}
-
-func setAssetIssueBytes(c *contractpb.AssetIssueContract, index int, field []byte) {
-	switch index {
-	case assetIssueOwnerBytes:
-		c.OwnerAddress = field
-	case assetIssueNameBytes:
-		c.Name = field
-	case assetIssueAbbrBytes:
-		c.Abbr = field
-	case assetIssueDescriptionBytes:
-		c.Description = field
-	case assetIssueURLBytes:
-		c.Url = field
-	}
-}
-
-// decodeAssetIssueArena decodes the scalar and nested fields directly while
-// temporarily borrowing the five bytes fields from raw. Once the envelope is
-// complete, their final (last-occurrence) values are copied into one owned
-// arena. This retains protobuf ownership and duplicate-field semantics while
-// replacing five small allocations with one. Unknown fields remain owned and
-// receive the same tag canonicalization as the generated decoder. Malformed or
-// group-bearing envelopes fall back to that decoder, retaining its recursion
-// limits and exact errors on the cold path.
-func decodeAssetIssueArena(raw []byte) (*contractpb.AssetIssueContract, error) {
-	decoded := new(decodedAssetIssue)
-	c := &decoded.contract
-	var byteValues [assetIssueByteFieldCount][]byte
-	var byteSeen [assetIssueByteFieldCount]bool
-	var unknown []byte
-	for data := raw; len(data) != 0; {
-		number, wireType, tagSize := protowire.ConsumeTag(data)
-		if tagSize < 0 || !number.IsValid() || wireType == protowire.StartGroupType || wireType == protowire.EndGroupType {
-			return decodeAssetIssueGenerated(raw)
-		}
-		valueSize := protowire.ConsumeFieldValue(number, wireType, data[tagSize:])
-		if valueSize < 0 {
-			return decodeAssetIssueGenerated(raw)
-		}
-		fieldSize := tagSize + valueSize
-		fieldData := data[:fieldSize]
-		known := true
-		switch {
-		case wireType == protowire.BytesType && assetIssueByteFieldIndex(number) >= 0:
-			value, _ := protowire.ConsumeBytes(fieldData[tagSize:])
-			index := assetIssueByteFieldIndex(number)
-			byteValues[index] = value
-			byteSeen[index] = true
-		case number == 4 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.TotalSupply = int64(value)
-		case number == 5 && wireType == protowire.BytesType:
-			value, _ := protowire.ConsumeBytes(fieldData[tagSize:])
-			frozen := &contractpb.AssetIssueContract_FrozenSupply{}
-			if err := proto.Unmarshal(value, frozen); err != nil {
-				return nil, err
-			}
-			c.FrozenSupply = append(c.FrozenSupply, frozen)
-		case number == 6 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.TrxNum = int32(value)
-		case number == 7 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.Precision = int32(value)
-		case number == 8 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.Num = int32(value)
-		case number == 9 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.StartTime = int64(value)
-		case number == 10 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.EndTime = int64(value)
-		case number == 11 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.Order = int64(value)
-		case number == 16 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.VoteScore = int32(value)
-		case number == 22 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.FreeAssetNetLimit = int64(value)
-		case number == 23 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.PublicFreeAssetNetLimit = int64(value)
-		case number == 24 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.PublicFreeAssetNetUsage = int64(value)
-		case number == 25 && wireType == protowire.VarintType:
-			value, _ := protowire.ConsumeVarint(fieldData[tagSize:])
-			c.PublicLatestFreeNetTime = int64(value)
-		case number == 41 && wireType == protowire.BytesType:
-			value, _ := protowire.ConsumeBytes(fieldData[tagSize:])
-			if !utf8.Valid(value) {
-				return nil, errors.New("proto: field protocol.AssetIssueContract.id contains invalid UTF-8")
-			}
-			c.Id = string(value)
-		default:
-			known = false
-		}
-		if !known {
-			unknown = protowire.AppendTag(unknown, number, wireType)
-			unknown = append(unknown, fieldData[tagSize:]...)
-		}
-		data = data[fieldSize:]
-	}
-	if len(unknown) != 0 {
-		c.ProtoReflect().SetUnknown(unknown)
-	}
-	total := 0
-	for _, value := range byteValues {
-		// The selected last occurrences are disjoint regions of raw.
-		if len(value) > len(raw)-total {
-			return nil, errors.New("asset issue byte fields exceed wire envelope")
-		}
-		total += len(value)
-	}
-	if total != 0 {
-		var arena []byte
-		if total <= len(decoded.byteArena) {
-			arena = decoded.byteArena[:total]
-		} else {
-			arena = make([]byte, total)
-		}
-		offset := 0
-		for index, value := range byteValues {
-			start := offset
-			offset += len(value)
-			field := arena[start:offset:offset]
-			copy(field, value)
-			setAssetIssueBytes(c, index, field)
-		}
-	}
-	for index, seen := range byteSeen {
-		if seen && len(byteValues[index]) == 0 {
-			setAssetIssueBytes(c, index, []byte{})
-		}
-	}
-	return c, nil
-}
-
-func decodeAssetIssueGenerated(raw []byte) (*contractpb.AssetIssueContract, error) {
-	c := &contractpb.AssetIssueContract{}
-	if err := proto.Unmarshal(raw, c); err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
 func decodeAssetIssue(raw []byte) (*contractpb.AssetIssueContract, error) {
-	if assetIssueByteArenaLayoutOK {
-		return decodeAssetIssueArena(raw)
+	return decodeAssetIssueNative(raw)
+}
+
+// decodeAssetIssueID extracts the numeric ID without materializing the message,
+// but still validates the complete native row. A valid ID prefix must never
+// turn truncated or otherwise non-canonical metadata into an existing asset.
+func decodeAssetIssueID(raw []byte) (int64, error) {
+	id, err := validateAssetIssueNativeID(raw)
+	if err != nil {
+		return 0, err
 	}
-	return decodeAssetIssueGenerated(raw)
+	return strconv.ParseInt(string(id), 10, 64)
 }
 
 // assetIDKey builds a transient tag||u64-BE(id) logical key (V2 metadata,
@@ -305,36 +94,147 @@ func assetBytesKey(tag byte, raw []byte) []byte {
 	return k
 }
 
-// readAssetMeta resolves one AssetIssueContract leg, swallowing a KV error to
-// nil to match the prior rawdb reader's defensive behavior (read sites treat
-// nil as absent).
+// assetBytesKey builds the execution-hot, transient form without allocation
+// for protocol-valid asset names (at most 32 bytes) and owner addresses. The
+// generic owned helper above remains for historical readers and oversized
+// defensive inputs.
+func (s *StateDB) assetBytesKey(tag byte, raw []byte) []byte {
+	if len(raw)+1 > len(s.assetBytesKeyScratch) {
+		return assetBytesKey(tag, raw)
+	}
+	k := s.assetBytesKeyScratch[:len(raw)+1]
+	k[0] = tag
+	copy(k[1:], raw)
+	return k
+}
+
+// readAssetMeta resolves one AssetIssueContract leg. The public compatibility
+// shape still returns nil on failure, but malformed or unreadable rooted state
+// poisons the StateDB so consensus execution cannot treat corruption as absence.
 func (s *StateDB) readAssetMeta(key []byte) *contractpb.AssetIssueContract {
 	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, key)
-	if err != nil || !ok || len(raw) == 0 {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read asset metadata key=%x", key), err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	if len(raw) == 0 {
+		s.recordStateError(fmt.Sprintf("decode asset metadata key=%x", key), errors.New("empty value"))
 		return nil
 	}
 	c, err := decodeAssetIssue(raw)
 	if err != nil {
+		s.recordStateError(fmt.Sprintf("decode asset metadata key=%x", key), err)
 		return nil
+	}
+	if hotKey := assetBandwidthKey(key); hotKey != nil {
+		hotRaw, hotOK, hotErr := s.systemKVGetForDecoding(kvdomains.SystemAsset, hotKey)
+		if hotErr != nil {
+			s.recordStateError(fmt.Sprintf("read asset bandwidth key=%x", hotKey), hotErr)
+			return nil
+		}
+		if hotOK {
+			usage, latest, decodeErr := decodeAssetBandwidth(hotRaw)
+			if decodeErr != nil {
+				s.recordStateError(fmt.Sprintf("decode asset bandwidth key=%x", hotKey), decodeErr)
+				return nil
+			}
+			c.PublicFreeAssetNetUsage = usage
+			c.PublicLatestFreeNetTime = latest
+		}
 	}
 	return c
 }
 
 // writeAssetMeta stages one AssetIssueContract leg into the system-KV. The error
-// is non-nil only for a proto marshal failure or an unregistered domain (a
+// is non-nil only for a codec failure or an unregistered domain (a
 // programmer error), since SystemAsset is registered at init.
 func (s *StateDB) writeAssetMeta(key []byte, c *contractpb.AssetIssueContract) error {
-	data, err := proto.Marshal(c)
+	data, err := encodeAssetIssue(c)
 	if err != nil {
 		return err
 	}
-	return s.SystemKVPut(kvdomains.SystemAsset, key, data)
+	if err := s.SystemKVPut(kvdomains.SystemAsset, key, data); err != nil {
+		return err
+	}
+	hotKey := assetBandwidthKey(key)
+	if hotKey == nil {
+		return nil
+	}
+	return s.SystemKVPut(kvdomains.SystemAsset, hotKey, encodeAssetBandwidth(c.PublicFreeAssetNetUsage, c.PublicLatestFreeNetTime))
+}
+
+func assetBandwidthKey(metadataKey []byte) []byte {
+	if len(metadataKey) == 0 {
+		return nil
+	}
+	hotTag := byte(0)
+	switch metadataKey[0] {
+	case assetV2Tag:
+		hotTag = assetV2BandwidthTag
+	case assetLegacyTag:
+		hotTag = assetLegacyBandwidthTag
+	default:
+		return nil
+	}
+	key := append([]byte(nil), metadataKey...)
+	key[0] = hotTag
+	return key
+}
+
+func encodeAssetBandwidth(usage, latest int64) []byte {
+	data := make([]byte, 17)
+	data[0] = 1
+	binary.BigEndian.PutUint64(data[1:9], uint64(usage))
+	binary.BigEndian.PutUint64(data[9:17], uint64(latest))
+	return data
+}
+
+func decodeAssetBandwidth(data []byte) (int64, int64, error) {
+	if len(data) != 17 || data[0] != 1 {
+		return 0, 0, fmt.Errorf("invalid asset bandwidth value length/version")
+	}
+	return int64(binary.BigEndian.Uint64(data[1:9])), int64(binary.BigEndian.Uint64(data[9:17])), nil
+}
+
+// WriteAssetIssueBandwidth updates only the two mutable public-bandwidth
+// counters, without rewriting static issuance metadata.
+func (s *StateDB) WriteAssetIssueBandwidth(tokenID, usage, latest int64) error {
+	return s.SystemKVPut(kvdomains.SystemAsset, s.assetIDKey(assetV2BandwidthTag, tokenID), encodeAssetBandwidth(usage, latest))
+}
+
+// WriteAssetIssueBandwidthByName is the legacy name-keyed counterpart.
+func (s *StateDB) WriteAssetIssueBandwidthByName(name []byte, usage, latest int64) error {
+	return s.SystemKVPut(kvdomains.SystemAsset, s.assetBytesKey(assetLegacyBandwidthTag, name), encodeAssetBandwidth(usage, latest))
 }
 
 // ReadAssetIssue returns the rooted V2 (ID-keyed) AssetIssueContract for
 // tokenID, or nil if absent. Mirrors java-tron AssetIssueV2Store.
 func (s *StateDB) ReadAssetIssue(tokenID int64) *contractpb.AssetIssueContract {
 	return s.readAssetMeta(s.assetIDKey(assetV2Tag, tokenID))
+}
+
+// HasAssetIssue reports whether the V2 metadata row exists and has a valid
+// native layout without materializing it. java-tron's TransferAssetActuator
+// validates this leg with AssetIssueV2Store.has() and consumes no metadata
+// fields; the structural scan keeps that hot-path shape while failing closed on
+// go-tron's internal rooted-state encoding.
+func (s *StateDB) HasAssetIssue(tokenID int64) bool {
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, s.assetIDKey(assetV2Tag, tokenID))
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read asset issue id %d", tokenID), err)
+		return false
+	}
+	if !ok {
+		return false
+	}
+	if err := validateAssetIssueNative(raw); err != nil {
+		s.recordStateError(fmt.Sprintf("decode asset issue id %d", tokenID), err)
+		return false
+	}
+	return true
 }
 
 // WriteAssetIssue stages the V2 (ID-keyed) AssetIssueContract for tokenID.
@@ -345,40 +245,89 @@ func (s *StateDB) WriteAssetIssue(tokenID int64, c *contractpb.AssetIssueContrac
 // ReadAssetIssueByName returns the rooted legacy (name-keyed) AssetIssueContract,
 // or nil if absent. Mirrors java-tron's pre-AllowSameTokenName AssetIssueStore.
 func (s *StateDB) ReadAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
-	return s.readAssetMeta(assetBytesKey(assetLegacyTag, name))
+	return s.readAssetMeta(s.assetBytesKey(assetLegacyTag, name))
+}
+
+// HasAssetIssueByName probes the legacy metadata leg without decoding it.
+// It is used only by the pre-AllowSameTokenName bandwidth mirror path, where
+// a defensive name-index fallback must not create an orphan legacy hot row.
+func (s *StateDB) HasAssetIssueByName(name []byte) bool {
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, s.assetBytesKey(assetLegacyTag, name))
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read legacy asset issue name %q", string(name)), err)
+		return false
+	}
+	if !ok {
+		return false
+	}
+	if err := validateAssetIssueNative(raw); err != nil {
+		s.recordStateError(fmt.Sprintf("decode legacy asset issue name %q", string(name)), err)
+		return false
+	}
+	return true
+}
+
+// ReadAssetIssueIDByName reads the numeric id from the legacy name-keyed row
+// without materializing the full AssetIssueContract. It is the narrow read
+// needed by pre-AllowSameTokenName balance routing.
+func (s *StateDB) ReadAssetIssueIDByName(name []byte) (int64, bool, error) {
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, s.assetBytesKey(assetLegacyTag, name))
+	if err != nil {
+		return 0, false, s.recordStateError(fmt.Sprintf("read legacy asset issue name %q", string(name)), err)
+	}
+	if !ok {
+		return 0, false, nil
+	}
+	if len(raw) == 0 {
+		return 0, true, s.recordStateError(fmt.Sprintf("decode legacy asset issue name %q", string(name)), errors.New("empty value"))
+	}
+	id, decodeErr := decodeAssetIssueID(raw)
+	if decodeErr != nil {
+		return 0, true, s.recordStateError(fmt.Sprintf("decode legacy asset issue name %q", string(name)), decodeErr)
+	}
+	return id, true, nil
 }
 
 // WriteAssetIssueByName stages the legacy (name-keyed) AssetIssueContract.
 func (s *StateDB) WriteAssetIssueByName(name []byte, c *contractpb.AssetIssueContract) error {
-	return s.writeAssetMeta(assetBytesKey(assetLegacyTag, name), c)
+	return s.writeAssetMeta(s.assetBytesKey(assetLegacyTag, name), c)
 }
 
 // ReadAssetNameIndex returns the token id registered for name, and whether it
-// exists. A KV error or short value reads as not-found, matching the prior
-// rawdb reader.
+// exists. A KV error or value that is not exactly one int64 reads as not-found;
+// accepting a valid prefix plus trailing bytes would create a second durable
+// representation for the same rooted scalar.
 func (s *StateDB) ReadAssetNameIndex(name []byte) (int64, bool) {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, assetBytesKey(assetNameIndexTag, name))
-	if err != nil || !ok || len(raw) < 8 {
+	id, ok, err := s.ReadAssetNameIndexStrict(name)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read asset name index %q", string(name)), err)
 		return 0, false
 	}
-	return int64(binary.BigEndian.Uint64(raw[:8])), true
+	if !ok {
+		return 0, false
+	}
+	return id, true
 }
 
 // WriteAssetNameIndex stages a name -> token id mapping.
 func (s *StateDB) WriteAssetNameIndex(name []byte, tokenID int64) error {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, uint64(tokenID))
-	return s.SystemKVPut(kvdomains.SystemAsset, assetBytesKey(assetNameIndexTag, name), buf)
+	return s.SystemKVPut(kvdomains.SystemAsset, s.assetBytesKey(assetNameIndexTag, name), buf)
 }
 
 // ReadAssetOwnerIndex returns the token id issued by ownerAddr (21-byte TRON
 // address), and whether it exists.
 func (s *StateDB) ReadAssetOwnerIndex(ownerAddr []byte) (int64, bool) {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, assetBytesKey(assetOwnerIndexTag, ownerAddr))
-	if err != nil || !ok || len(raw) < 8 {
+	id, ok, err := s.ReadAssetOwnerIndexStrict(ownerAddr)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read asset owner index %x", ownerAddr), err)
 		return 0, false
 	}
-	return int64(binary.BigEndian.Uint64(raw[:8])), true
+	if !ok {
+		return 0, false
+	}
+	return id, true
 }
 
 // WriteAssetOwnerIndex stages an ownerAddr -> token id mapping, enforcing
@@ -386,17 +335,21 @@ func (s *StateDB) ReadAssetOwnerIndex(ownerAddr []byte) (int64, bool) {
 func (s *StateDB) WriteAssetOwnerIndex(ownerAddr []byte, tokenID int64) error {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, uint64(tokenID))
-	return s.SystemKVPut(kvdomains.SystemAsset, assetBytesKey(assetOwnerIndexTag, ownerAddr), buf)
+	return s.SystemKVPut(kvdomains.SystemAsset, s.assetBytesKey(assetOwnerIndexTag, ownerAddr), buf)
 }
 
 // ReadAssetIssueTime returns the issuance block timestamp (ms) for tokenID, or 0
 // if absent.
 func (s *StateDB) ReadAssetIssueTime(tokenID int64) int64 {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, s.assetIDKey(assetIssueTimeTag, tokenID))
-	if err != nil || !ok || len(raw) < 8 {
+	issueTime, ok, err := s.ReadAssetIssueTimeStrict(tokenID)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read asset issue time %d", tokenID), err)
 		return 0
 	}
-	return int64(binary.BigEndian.Uint64(raw[:8]))
+	if !ok {
+		return 0
+	}
+	return issueTime
 }
 
 // WriteAssetIssueTime stages the issuance block timestamp (ms) for tokenID.

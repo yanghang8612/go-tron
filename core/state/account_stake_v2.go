@@ -8,7 +8,6 @@ import (
 
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 const accountFrozenV2ValueLength = 12
@@ -64,14 +63,14 @@ func decodeAccountUnfrozenV2Row(key, value []byte) (accountUnfrozenV2Row, error)
 	if len(key) != 8 {
 		return accountUnfrozenV2Row{}, fmt.Errorf("account unfrozen-v2 key length %d, want 8", len(key))
 	}
-	var entry corepb.Account_UnFreezeV2
-	if err := proto.Unmarshal(value, &entry); err != nil {
+	entry, err := decodeAccountUnfrozenV2(value)
+	if err != nil {
 		return accountUnfrozenV2Row{}, fmt.Errorf("decode account unfrozen-v2 %x: %w", key, err)
 	}
 	return accountUnfrozenV2Row{
 		key:   append([]byte(nil), key...),
 		seq:   binary.BigEndian.Uint64(key),
-		entry: &entry,
+		entry: entry,
 	}, nil
 }
 
@@ -123,10 +122,15 @@ func cachedAccountFrozenV2Point(obj *stateObject, resource corepb.ResourceCode) 
 	return obj.accountFrozenV2PointAmounts[slot], obj.accountFrozenV2PointExists&bit != 0, true
 }
 
-func (s *StateDB) accountFrozenV2Rows(obj *stateObject) ([]accountFrozenV2Row, error) {
+func (s *StateDB) accountFrozenV2Rows(obj *stateObject) (_ []accountFrozenV2Row, err error) {
 	if obj == nil || obj.account == nil {
 		return nil, nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read account frozen-v2 %s", obj.address.Hex()), err)
+		}
+	}()
 	rows := make([]accountFrozenV2Row, 0, 3)
 	if err := s.IterateAccountKV(obj.address, kvdomains.AccountFrozenV2Aux, nil, func(key, value []byte) (bool, error) {
 		row, err := decodeAccountFrozenV2Row(key, value)
@@ -142,10 +146,15 @@ func (s *StateDB) accountFrozenV2Rows(obj *stateObject) ([]accountFrozenV2Row, e
 	return rows, nil
 }
 
-func (s *StateDB) accountUnfrozenV2Rows(obj *stateObject) ([]accountUnfrozenV2Row, error) {
+func (s *StateDB) accountUnfrozenV2Rows(obj *stateObject) (_ []accountUnfrozenV2Row, err error) {
 	if obj == nil || obj.account == nil {
 		return nil, nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read account unfrozen-v2 %s", obj.address.Hex()), err)
+		}
+	}()
 	rows := make([]accountUnfrozenV2Row, 0, 32)
 	if err := s.IterateAccountKV(obj.address, kvdomains.AccountUnfrozenV2Aux, nil, func(key, value []byte) (bool, error) {
 		row, err := decodeAccountUnfrozenV2Row(key, value)
@@ -161,10 +170,15 @@ func (s *StateDB) accountUnfrozenV2Rows(obj *stateObject) ([]accountUnfrozenV2Ro
 	return rows, nil
 }
 
-func (s *StateDB) materializeAccountStakeV2(obj *stateObject) error {
+func (s *StateDB) materializeAccountStakeV2(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil || obj.accountStakeV2Loaded {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize account stake-v2 %s", obj.address.Hex()), err)
+		}
+	}()
 	frozen, err := s.accountFrozenV2Rows(obj)
 	if err != nil {
 		clearAccountStakeV2Proto(obj.account.Proto())
@@ -201,10 +215,15 @@ func (s *StateDB) invalidateAccountStakeV2(obj *stateObject) {
 	clearAccountFrozenV2PointCache(obj)
 }
 
-func (s *StateDB) accountFrozenV2Amount(obj *stateObject, resource corepb.ResourceCode) (int64, bool, error) {
+func (s *StateDB) accountFrozenV2Amount(obj *stateObject, resource corepb.ResourceCode) (_ int64, _ bool, err error) {
 	if obj == nil || obj.account == nil {
 		return 0, false, nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read account frozen-v2 %s resource=%s", obj.address.Hex(), resource), err)
+		}
+	}()
 	key := accountFrozenV2Key(resource)
 	// Point caches survive transaction boundaries. Record the physical row
 	// before consulting them so a cache hit cannot hide a predecessor write.
@@ -312,7 +331,7 @@ func (s *StateDB) addAccountUnfrozenV2(obj *stateObject, resource corepb.Resourc
 		seq = last + 1
 	}
 	entry := &corepb.Account_UnFreezeV2{Type: resource, UnfreezeAmount: amount, UnfreezeExpireTime: expireTime}
-	value, err := proto.MarshalOptions{Deterministic: true}.Marshal(entry)
+	value, err := appendAccountUnfrozenV2(s.accountRowMarshalScratch[:0], entry)
 	if err != nil {
 		return err
 	}

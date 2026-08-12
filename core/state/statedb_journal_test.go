@@ -555,7 +555,7 @@ func BenchmarkJournalAccountMapRichRepeatedSnapshot(b *testing.B) {
 func BenchmarkJournalAccountMapRichCached(b *testing.B) {
 	addr := testAddr(0x86)
 	obj := newMapRichJournalAccount(addr, 64)
-	cached, err := obj.account.MarshalStorageCore()
+	cached, err := obj.account.MarshalStorageCoreV4()
 	if err != nil {
 		b.Fatal(err)
 	}

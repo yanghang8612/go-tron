@@ -83,6 +83,9 @@ func TestGetStateDoesNotCacheReadError(t *testing.T) {
 	if _, cached := sdb.getStateObject(addr).storage[slot]; cached {
 		t.Fatal("transient read error populated the storage cache")
 	}
+	if sdb.Error() == nil {
+		t.Fatal("storage read error did not poison StateDB")
+	}
 }
 
 func TestSetStateUsesCachedMissingOrigin(t *testing.T) {

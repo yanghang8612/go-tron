@@ -36,6 +36,14 @@ func NewContractState(cycle int64) *ContractState {
 	return &ContractState{pb: &contractpb.ContractState{UpdateCycle: cycle}}
 }
 
+// NewContractStateFromPB wraps an already decoded durable-state message.
+func NewContractStateFromPB(pb *contractpb.ContractState) *ContractState {
+	if pb == nil {
+		pb = new(contractpb.ContractState)
+	}
+	return &ContractState{pb: pb}
+}
+
 // NewContractStateFromBytes decodes a protobuf-serialized ContractState.
 func NewContractStateFromBytes(data []byte) (*ContractState, error) {
 	pb := &contractpb.ContractState{}
@@ -52,9 +60,9 @@ func (c *ContractState) Bytes() ([]byte, error) {
 
 func (c *ContractState) Proto() *contractpb.ContractState { return c.pb }
 
-func (c *ContractState) EnergyUsage() int64    { return c.pb.EnergyUsage }
-func (c *ContractState) EnergyFactor() int64   { return c.pb.EnergyFactor }
-func (c *ContractState) UpdateCycle() int64    { return c.pb.UpdateCycle }
+func (c *ContractState) EnergyUsage() int64      { return c.pb.EnergyUsage }
+func (c *ContractState) EnergyFactor() int64     { return c.pb.EnergyFactor }
+func (c *ContractState) UpdateCycle() int64      { return c.pb.UpdateCycle }
 func (c *ContractState) SetEnergyFactor(v int64) { c.pb.EnergyFactor = v }
 func (c *ContractState) SetUpdateCycle(v int64)  { c.pb.UpdateCycle = v }
 func (c *ContractState) AddEnergyUsage(v int64)  { c.pb.EnergyUsage += v }

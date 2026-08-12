@@ -1267,8 +1267,8 @@ func TestArchiveQuery_DelegationIndexRejectsMalformedHistory(t *testing.T) {
 		t.Fatalf("WriteStateKVLatest malformed legacy delegation index: %v", err)
 	}
 	_, err = readDelegatedResourceAccountIndexAt(reader, from, 1)
-	if err == nil || !strings.Contains(err.Error(), "cannot parse invalid wire-format data") {
-		t.Fatalf("readDelegatedResourceAccountIndexAt malformed error = %v, want proto decode error", err)
+	if err == nil || !strings.Contains(err.Error(), "non-native rooted-state value") {
+		t.Fatalf("readDelegatedResourceAccountIndexAt malformed error = %v, want native codec rejection", err)
 	}
 }
 

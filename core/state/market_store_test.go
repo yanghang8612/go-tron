@@ -224,10 +224,14 @@ func TestMarketStoreStrictSurfacesMalformedProtobuf(t *testing.T) {
 	if got := sdb.ReadMarketOrder(orderID); got != nil {
 		t.Fatalf("compat malformed order = %+v, want nil", got)
 	}
+	if sdb.Error() == nil {
+		t.Fatal("compat malformed order did not poison StateDB")
+	}
 	if got, ok, err := sdb.ReadMarketOrderStrict(orderID); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode market order") {
 		t.Fatalf("strict malformed order = %+v ok=%v err=%v, want decode error", got, ok, err)
 	}
 
+	sdb = newTestStateDB(t)
 	if err := sdb.SystemKVPut(kvdomains.SystemMarket, marketAccountOrderKVKey(owner), []byte{0x80}); err != nil {
 		t.Fatalf("write malformed account order: %v", err)
 	}
@@ -238,6 +242,7 @@ func TestMarketStoreStrictSurfacesMalformedProtobuf(t *testing.T) {
 		t.Fatalf("strict malformed account order = %+v ok=%v err=%v, want decode error", got, ok, err)
 	}
 
+	sdb = newTestStateDB(t)
 	if err := sdb.SystemKVPut(kvdomains.SystemMarket, marketOrderBookKVKey(sell, buy, pk), []byte{0x80}); err != nil {
 		t.Fatalf("write malformed order book: %v", err)
 	}
@@ -248,6 +253,7 @@ func TestMarketStoreStrictSurfacesMalformedProtobuf(t *testing.T) {
 		t.Fatalf("strict malformed order book = %+v ok=%v err=%v, want decode error", got, ok, err)
 	}
 
+	sdb = newTestStateDB(t)
 	if err := sdb.SystemKVPut(kvdomains.SystemMarket, marketPriceListKVKey(sell, buy), []byte{0x80}); err != nil {
 		t.Fatalf("write malformed price list: %v", err)
 	}

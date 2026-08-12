@@ -807,6 +807,9 @@ func (a *Account) AppendStorageCore(dst []byte) ([]byte, error) {
 }
 
 func UnmarshalAccount(data []byte) (*Account, error) {
+	if IsAccountStorageCoreV4(data) {
+		return UnmarshalAccountStorageCoreV4(data)
+	}
 	decoded := new(decodedAccount)
 	decoded.account.pb = &decoded.pb
 	err, handled := unmarshalAccountDirectFieldsInto(

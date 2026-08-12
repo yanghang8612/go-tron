@@ -6,9 +6,9 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 // WitnessIndexAt reconstructs the registered witness index at the end of
@@ -36,11 +36,11 @@ func (r *PersistentHistoryReader) WitnessAt(addr tcommon.Address, blockNum uint6
 	if err != nil || !ok || len(raw) == 0 {
 		return nil, err
 	}
-	w, err := types.UnmarshalWitness(raw)
-	if err != nil {
+	pb := new(corepb.Witness)
+	if err := statecodec.Unmarshal(raw, pb); err != nil {
 		return nil, fmt.Errorf("decode witness at block %d: %w", blockNum, err)
 	}
-	return w, nil
+	return types.NewWitnessFromPB(pb), nil
 }
 
 // VotesIndexAt reconstructs the pending vote-state voter index at the end of
@@ -61,7 +61,7 @@ func (r *PersistentHistoryReader) VotesAt(addr tcommon.Address, blockNum uint64)
 		return nil, err
 	}
 	votes := &corepb.Votes{}
-	if err := proto.Unmarshal(raw, votes); err != nil {
+	if err := statecodec.Unmarshal(raw, votes); err != nil {
 		return nil, fmt.Errorf("decode votes at block %d: %w", blockNum, err)
 	}
 	return votes, nil

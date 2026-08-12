@@ -77,12 +77,12 @@ func decodeProposalIndexStrict(data []byte) ([]int64, error) {
 // absent or on a decode/KV error, matching the prior rawdb reader's defensive
 // behavior).
 func (s *StateDB) ReadProposal(id int64) *rawdb.Proposal {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemProposal, proposalStoreKey(id))
-	if err != nil || !ok || len(raw) == 0 {
+	p, ok, err := s.ReadProposalStrict(id)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read proposal %d", id), err)
 		return nil
 	}
-	p := &rawdb.Proposal{}
-	if err := json.Unmarshal(raw, p); err != nil {
+	if !ok {
 		return nil
 	}
 	return p
@@ -91,9 +91,12 @@ func (s *StateDB) ReadProposal(id int64) *rawdb.Proposal {
 // ReadProposalStrict resolves a proposal record from the rooted system-KV and
 // surfaces storage/corruption errors. Missing rows return (nil, false, nil).
 func (s *StateDB) ReadProposalStrict(id int64) (*rawdb.Proposal, bool, error) {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemProposal, proposalStoreKey(id))
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemProposal, proposalStoreKey(id))
 	if err != nil || !ok {
 		return nil, ok, err
+	}
+	if len(raw) == 0 {
+		return nil, true, fmt.Errorf("decode proposal %d: empty value", id)
 	}
 	p := &rawdb.Proposal{}
 	if err := json.Unmarshal(raw, p); err != nil {
@@ -129,17 +132,21 @@ func (s *StateDB) WriteProposal(id int64, p *rawdb.Proposal) error {
 // ReadProposalIndex returns the rooted proposal index (nil if unset). KV error
 // swallowed to nil — drop-in for the prior rawdb reader's consumers.
 func (s *StateDB) ReadProposalIndex() []int64 {
-	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemProposal, proposalStoreIndexKey)
-	if err != nil || !ok {
+	ids, ok, err := s.ReadProposalIndexStrict()
+	if err != nil {
+		s.recordStateError("read proposal index", err)
 		return nil
 	}
-	return decodeProposalIndex(raw)
+	if !ok {
+		return nil
+	}
+	return ids
 }
 
 // ReadProposalIndexStrict returns the rooted proposal id index and surfaces
 // storage/corruption errors. Missing rows return (nil, false, nil).
 func (s *StateDB) ReadProposalIndexStrict() ([]int64, bool, error) {
-	raw, ok, err := s.SystemKVGet(kvdomains.SystemProposal, proposalStoreIndexKey)
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemProposal, proposalStoreIndexKey)
 	if err != nil || !ok {
 		return nil, ok, err
 	}

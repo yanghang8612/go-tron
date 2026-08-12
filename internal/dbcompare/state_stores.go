@@ -464,7 +464,7 @@ func (c *comparer) compareDelegation(gtron ethdb.KeyValueStore, sdb *state.State
 		category := delegationRowCategory(key)
 		var cycle int64
 		var addr []byte
-		if category == "reward" || category == "brokerage" {
+		if category == "reward" || category == "brokerage" || category == "account-vote" {
 			var suffix string
 			var err error
 			cycle, addr, suffix, err = parseDelegationCycleKey(key)
@@ -474,6 +474,9 @@ func (c *comparer) compareDelegation(gtron ethdb.KeyValueStore, sdb *state.State
 			if suffix != category {
 				return nil, false, fmt.Errorf("delegation category %q does not match suffix %q", category, suffix)
 			}
+		}
+		if category == "account-vote" {
+			return sdb.ReadCycleAccountVoteStrict(cycle, addr)
 		}
 		if category == "brokerage" && cycle == -1 {
 			brokerage, ok := currentBrokerage[tcommon.BytesToAddress(addr)]

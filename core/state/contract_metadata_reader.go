@@ -5,6 +5,9 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // ReadCommittedContractMetadataBytes reads serialized contract metadata from
@@ -18,7 +21,16 @@ func ReadCommittedContractMetadataBytes(db ethdb.KeyValueReader, addr tcommon.Ad
 	if !ok {
 		generation = 0
 	}
-	return rawdb.ReadStateKVLatest(db, addr, generation, kvdomains.ContractMetadata, contractMetaKVKey)
+	data, ok, err := rawdb.ReadStateKVLatest(db, addr, generation, kvdomains.ContractMetadata, contractMetaKVKey)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	meta := new(contractpb.SmartContract)
+	if err := statecodec.Unmarshal(data, meta); err != nil {
+		return nil, true, err
+	}
+	data, err = proto.Marshal(meta)
+	return data, true, err
 }
 
 // ReadCommittedAccountCodeHash reads the code-hash edge stored in the flat

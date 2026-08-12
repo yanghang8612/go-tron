@@ -13,6 +13,8 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 var benchmarkCycleReward int64
@@ -96,7 +98,10 @@ func TestRewardStoreRoundTripAcrossRoot(t *testing.T) {
 	addr := testAddr(0x45).Bytes()
 	decimalOfVI := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 	vi := new(big.Int).Mul(big.NewInt(9), decimalOfVI)
-	snap := []byte{0x01, 0x02, 0x03}
+	snap, err := proto.Marshal(&corepb.Account{Address: addr, Votes: []*corepb.Vote{{VoteAddress: testAddr(0x46).Bytes(), VoteCount: 7}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := statedb.WriteCycleReward(8, addr, 123); err != nil {
 		t.Fatal(err)
@@ -226,6 +231,9 @@ func TestRewardStoreStrictBatchSurfacesMalformedReward(t *testing.T) {
 	}
 	if got := statedb.ReadCycleRewards(8, []tcommon.Address{addr}); len(got) != 0 {
 		t.Fatalf("legacy ReadCycleRewards malformed = %v, want empty map", got)
+	}
+	if statedb.Error() == nil {
+		t.Fatal("malformed cycle reward did not poison StateDB")
 	}
 }
 

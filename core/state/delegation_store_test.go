@@ -155,6 +155,9 @@ func TestDelegationIndexStrictRejectsMalformedBytes(t *testing.T) {
 	if got := statedb.ReadDelegationIndex(from); got != nil {
 		t.Fatalf("legacy delegation index = %v, want nil for malformed bytes", got)
 	}
+	if statedb.Error() == nil {
+		t.Fatal("malformed delegation index did not poison StateDB")
+	}
 	_, err := statedb.ReadDelegationIndexStrict(from)
 	if err == nil || !strings.Contains(err.Error(), "malformed length") {
 		t.Fatalf("strict delegation index error = %v, want malformed length", err)
@@ -179,9 +182,7 @@ func TestDelegatedResourceStrictRejectsMalformedJSON(t *testing.T) {
 		t.Fatalf("strict aggregate delegation = %+v/%v/%v, want decode error", got, ok, err)
 	}
 
-	if err := statedb.DeleteDelegatedResourceLegacy(from, to); err != nil {
-		t.Fatal(err)
-	}
+	statedb = newTestStateDB(t)
 	if err := statedb.SystemKVPut(kvdomains.SystemDelegation, rawdb.DelegatedResourceV2StateKey(from, to, true), []byte("{")); err != nil {
 		t.Fatalf("write malformed v2 delegation: %v", err)
 	}
@@ -217,9 +218,7 @@ func TestDrAccountIndexStrictRejectsMalformedProto(t *testing.T) {
 		t.Fatalf("legacy undelegate malformed index error = %v, want decode error", err)
 	}
 
-	if err := statedb.SystemKVDelete(kvdomains.SystemDelegation, rawdb.DrAccountIndexLegacyStateKey(from.Bytes())); err != nil {
-		t.Fatal(err)
-	}
+	statedb = newTestStateDB(t)
 	if err := statedb.SystemKVPut(kvdomains.SystemDelegation, rawdb.DrAccountIndexStateKey(rawdb.DrAccIdxV2From, from.Bytes(), to.Bytes()), []byte{0x80}); err != nil {
 		t.Fatalf("write malformed directional index: %v", err)
 	}

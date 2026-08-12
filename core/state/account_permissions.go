@@ -8,7 +8,6 @@ import (
 	common "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -28,7 +27,7 @@ func decodeAccountPermissionRow(key, value []byte) (*corepb.Permission, byte, er
 	if len(key) != 1 && !(len(key) == 5 && key[0] == accountActivePermissionRoot[0]) {
 		return nil, 0, fmt.Errorf("account permission key %x has invalid length/type", key)
 	}
-	permission, err := decodeAccountPermission(value)
+	permission, err := decodeAccountPermissionValue(value)
 	if err != nil {
 		return nil, 0, fmt.Errorf("decode account permission %x: %w", key, err)
 	}
@@ -92,7 +91,12 @@ func (s *StateDB) WitnessPermissionAddress(addr common.Address) common.Address {
 // The returned permission is read-only. Pending writes and deletes are visible
 // because the decoding read merges the StateDB dirty overlay with the latest
 // store while retaining the public GetAccountKV ownership boundary.
-func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.Permission, error) {
+func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (_ *corepb.Permission, err error) {
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read account permission %s id=%d", addr.Hex(), id), err)
+		}
+	}()
 	var key []byte
 	switch id {
 	case 0:
@@ -161,10 +165,15 @@ func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (*corepb.
 	return permission, nil
 }
 
-func (s *StateDB) materializeAccountPermissions(obj *stateObject) error {
+func (s *StateDB) materializeAccountPermissions(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil || obj.accountPermissionsLoaded {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize account permissions %s", obj.address.Hex()), err)
+		}
+	}()
 	pb := obj.account.Proto()
 	clearAccountPermissionProto(pb)
 	if err := s.IterateAccountKV(obj.address, kvdomains.AccountPermissionAux, nil, func(key, value []byte) (bool, error) {
@@ -201,7 +210,7 @@ func (s *StateDB) writeAccountPermissionRow(obj *stateObject, key []byte, permis
 	if permission == nil {
 		return s.DeleteAccountKV(obj.address, kvdomains.AccountPermissionAux, key)
 	}
-	value, err := proto.MarshalOptions{Deterministic: true}.Marshal(permission)
+	value, err := appendAccountPermission(s.accountRowMarshalScratch[:0], permission)
 	if err != nil {
 		return err
 	}

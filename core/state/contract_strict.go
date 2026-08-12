@@ -5,9 +5,9 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/types"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/proto"
 )
 
 // GetStateStrict is the archive/query counterpart of GetState. It preserves
@@ -100,11 +100,11 @@ func (s *StateDB) ReadContractStateStrict(addr tcommon.Address) (*types.Contract
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	cs, err := types.NewContractStateFromBytes(data)
-	if err != nil {
+	pb := new(contractpb.ContractState)
+	if err := statecodec.Unmarshal(data, pb); err != nil {
 		return nil, true, fmt.Errorf("decode contract state %s: %w", addr.Hex(), err)
 	}
-	return cs, true, nil
+	return types.NewContractStateFromPB(pb), true, nil
 }
 
 func (s *StateDB) ReadContractABIStrict(addr tcommon.Address) (*contractpb.SmartContract_ABI, bool, error) {
@@ -117,7 +117,7 @@ func (s *StateDB) ReadContractABIStrict(addr tcommon.Address) (*contractpb.Smart
 		return nil, ok, err
 	}
 	var abi contractpb.SmartContract_ABI
-	if err := proto.Unmarshal(data, &abi); err != nil {
+	if err := statecodec.Unmarshal(data, &abi); err != nil {
 		return nil, true, fmt.Errorf("decode contract abi %s: %w", addr.Hex(), err)
 	}
 	return &abi, true, nil

@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -61,7 +62,11 @@ func accountIdIndexKVKey(accountID []byte) []byte {
 // nil if none. A KV error is swallowed to nil, matching the prior rawdb reader.
 func (s *StateDB) ReadAccountNameIndex(accountName []byte) []byte {
 	raw, ok, err := s.ReadAccountNameIndexStrict(accountName)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read account name index %q", string(accountName)), err)
+		return nil
+	}
+	if !ok {
 		return nil
 	}
 	return raw
@@ -74,8 +79,14 @@ func (s *StateDB) ReadAccountNameIndex(accountName []byte) []byte {
 // index row.
 func (s *StateDB) BlackholeAddress() tcommon.Address {
 	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAccountIndex, blackholeAccountNameIndexKey[:])
-	if err == nil && ok && len(raw) == tcommon.AddressLength {
+	if err != nil {
+		return params.BlackholeAddress
+	}
+	if ok && len(raw) == tcommon.AddressLength {
 		return tcommon.BytesToAddress(raw)
+	}
+	if ok {
+		s.recordStateError("decode blackhole account name index", fmt.Errorf("length %d, want %d", len(raw), tcommon.AddressLength))
 	}
 	return params.BlackholeAddress
 }
@@ -84,8 +95,12 @@ func (s *StateDB) BlackholeAddress() tcommon.Address {
 // java-tron AccountIndexStore.has, used by AccountUpdateActuator's uniqueness
 // precheck.
 func (s *StateDB) HasAccountNameIndex(accountName []byte) bool {
-	_, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAccountIndex, accountNameIndexKVKey(accountName))
-	return err == nil && ok
+	ok, err := s.HasAccountNameIndexStrict(accountName)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("check account name index %q", string(accountName)), err)
+		return false
+	}
+	return ok
 }
 
 // WriteAccountNameIndex stages a name->owner mapping. The error is non-nil only
@@ -104,7 +119,11 @@ func (s *StateDB) DeleteAccountNameIndex(accountName []byte) error {
 // (case-insensitive), or nil if none. KV error swallowed to nil.
 func (s *StateDB) ReadAccountIdIndex(accountID []byte) []byte {
 	raw, ok, err := s.ReadAccountIdIndexStrict(accountID)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read account id index %q", string(accountID)), err)
+		return nil
+	}
+	if !ok {
 		return nil
 	}
 	return raw
@@ -114,8 +133,12 @@ func (s *StateDB) ReadAccountIdIndex(accountID []byte) []byte {
 // Mirrors java-tron AccountIdIndexStore.has, used by SetAccountIdActuator's
 // uniqueness precheck.
 func (s *StateDB) HasAccountIdIndex(accountID []byte) bool {
-	_, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID))
-	return err == nil && ok
+	ok, err := s.HasAccountIdIndexStrict(accountID)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("check account id index %q", string(accountID)), err)
+		return false
+	}
+	return ok
 }
 
 // WriteAccountIdIndex stages an id->owner mapping (id lower-cased internally).

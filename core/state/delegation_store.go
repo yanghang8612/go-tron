@@ -4,17 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"google.golang.org/protobuf/proto"
-
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func (s *StateDB) readSystemDelegation(key []byte) ([]byte, bool) {
 	raw, ok, err := s.readSystemDelegationWithError(key)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read system delegation key=%x", key), err)
+		return nil, false
+	}
+	if !ok {
 		return nil, false
 	}
 	return raw, true
@@ -110,11 +113,16 @@ func (s *StateDB) ReadDelegatedResourceV2Strict(from, to tcommon.Address, locked
 
 func (s *StateDB) readDelegatedResourceByKey(key []byte) *rawdb.DelegatedResource {
 	data, ok := s.readSystemDelegation(key)
-	if !ok || len(data) == 0 {
+	if !ok {
+		return nil
+	}
+	if len(data) == 0 {
+		s.recordStateError(fmt.Sprintf("decode delegated resource key=%x", key), fmt.Errorf("empty value"))
 		return nil
 	}
 	dr := &rawdb.DelegatedResource{}
 	if err := json.Unmarshal(data, dr); err != nil {
+		s.recordStateError(fmt.Sprintf("decode delegated resource key=%x", key), err)
 		return nil
 	}
 	return dr
@@ -199,10 +207,14 @@ func (s *StateDB) WriteDelegationIndex(from tcommon.Address, receivers []tcommon
 
 func (s *StateDB) ReadDelegationIndex(from tcommon.Address) []tcommon.Address {
 	data, ok := s.readSystemDelegation(rawdb.DelegationIndexStateKey(from))
-	if !ok || len(data) == 0 {
+	if !ok {
+		return nil
+	}
+	if len(data) == 0 {
 		return nil
 	}
 	if len(data)%tcommon.AddressLength != 0 {
+		s.recordStateError(fmt.Sprintf("decode delegation index %s", from.Hex()), fmt.Errorf("length %d, want multiple of %d", len(data), tcommon.AddressLength))
 		return nil
 	}
 	count := len(data) / tcommon.AddressLength
@@ -231,11 +243,16 @@ func (s *StateDB) ReadDelegationIndexStrict(from tcommon.Address) ([]tcommon.Add
 
 func (s *StateDB) ReadDrAccountIndexLegacy(account []byte) *corepb.DelegatedResourceAccountIndex {
 	data, ok := s.readSystemDelegation(rawdb.DrAccountIndexLegacyStateKey(account))
-	if !ok || len(data) == 0 {
+	if !ok {
 		return nil
 	}
-	rec, err := rawdb.DecodeDrAccountIndexLegacy(data)
-	if err != nil {
+	if len(data) == 0 {
+		s.recordStateError(fmt.Sprintf("decode dr account index legacy %x", account), fmt.Errorf("empty value"))
+		return nil
+	}
+	rec := new(corepb.DelegatedResourceAccountIndex)
+	if err := statecodec.Unmarshal(data, rec); err != nil {
+		s.recordStateError(fmt.Sprintf("decode dr account index legacy %x", account), err)
 		return nil
 	}
 	return rec
@@ -246,7 +263,7 @@ func (s *StateDB) ReadDrAccountIndexLegacyStrict(account []byte) (*corepb.Delega
 }
 
 func (s *StateDB) writeDrAccountIndexLegacy(account []byte, rec *corepb.DelegatedResourceAccountIndex) error {
-	data, err := proto.Marshal(rec)
+	data, err := statecodec.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("dr account index: marshal legacy: %w", err)
 	}
@@ -339,7 +356,7 @@ func (s *StateDB) WriteDrAccountIndexDelegate(v2 bool, from, to []byte, timestam
 		fromDir, toDir = rawdb.DrAccIdxV2From, rawdb.DrAccIdxV2To
 	}
 
-	fromPayload, err := proto.Marshal(&corepb.DelegatedResourceAccountIndex{
+	fromPayload, err := statecodec.Marshal(&corepb.DelegatedResourceAccountIndex{
 		Account:   append([]byte(nil), to...),
 		Timestamp: timestamp,
 	})
@@ -350,7 +367,7 @@ func (s *StateDB) WriteDrAccountIndexDelegate(v2 bool, from, to []byte, timestam
 		return err
 	}
 
-	toPayload, err := proto.Marshal(&corepb.DelegatedResourceAccountIndex{
+	toPayload, err := statecodec.Marshal(&corepb.DelegatedResourceAccountIndex{
 		Account:   append([]byte(nil), from...),
 		Timestamp: timestamp,
 	})
@@ -376,11 +393,16 @@ func (s *StateDB) WriteDrAccountIndexUnDelegate(v2 bool, from, to []byte) error 
 
 func (s *StateDB) ReadDrAccountIndexEntry(dir rawdb.DrAccIdxDirection, anchor, counterparty []byte) *corepb.DelegatedResourceAccountIndex {
 	data, ok := s.readSystemDelegation(rawdb.DrAccountIndexStateKey(dir, anchor, counterparty))
-	if !ok || len(data) == 0 {
+	if !ok {
+		return nil
+	}
+	if len(data) == 0 {
+		s.recordStateError(fmt.Sprintf("decode dr account index entry dir=%d anchor=%x counterparty=%x", dir, anchor, counterparty), fmt.Errorf("empty value"))
 		return nil
 	}
 	var rec corepb.DelegatedResourceAccountIndex
-	if err := proto.Unmarshal(data, &rec); err != nil {
+	if err := statecodec.Unmarshal(data, &rec); err != nil {
+		s.recordStateError(fmt.Sprintf("decode dr account index entry dir=%d anchor=%x counterparty=%x", dir, anchor, counterparty), err)
 		return nil
 	}
 	return &rec
@@ -396,7 +418,7 @@ func (s *StateDB) readDrAccountIndexByKeyStrict(key []byte, context string) (*co
 		return nil, ok, err
 	}
 	var rec corepb.DelegatedResourceAccountIndex
-	if err := proto.Unmarshal(data, &rec); err != nil {
+	if err := statecodec.Unmarshal(data, &rec); err != nil {
 		return nil, true, fmt.Errorf("decode %s: %w", context, err)
 	}
 	return &rec, true, nil
@@ -407,7 +429,7 @@ func (s *StateDB) IterateDrAccountIndex(dir rawdb.DrAccIdxDirection, anchor []by
 	return s.IterateAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, prefix, func(key, value []byte) (bool, error) {
 		counterparty := append([]byte(nil), key[len(prefix):]...)
 		var rec corepb.DelegatedResourceAccountIndex
-		if err := proto.Unmarshal(value, &rec); err != nil {
+		if err := statecodec.Unmarshal(value, &rec); err != nil {
 			return false, fmt.Errorf("dr account index: decode %x: %w", key, err)
 		}
 		if err := fn(counterparty, &rec); err != nil {

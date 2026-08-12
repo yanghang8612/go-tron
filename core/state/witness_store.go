@@ -2,11 +2,14 @@ package state
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func (s *StateDB) witnessCapsuleStateKey(addr tcommon.Address) []byte {
@@ -27,11 +30,11 @@ func (s *StateDB) readWitnessCapsule(addr tcommon.Address) (*types.Witness, erro
 	if err != nil || !ok {
 		return nil, err
 	}
-	w, err := types.UnmarshalWitness(raw)
-	if err != nil {
+	pb := new(corepb.Witness)
+	if err := statecodec.Unmarshal(raw, pb); err != nil {
 		return nil, err
 	}
-	return w, nil
+	return types.NewWitnessFromPB(pb), nil
 }
 
 // SetWitnessCapsule stages a full witness capsule in the witness-owned
@@ -44,7 +47,7 @@ func (s *StateDB) SetWitnessCapsule(w *types.Witness) error {
 	addr := w.Address()
 	s.journalWitness(addr)
 	s.witnesses[addr] = w.Copy()
-	data, err := w.Marshal()
+	data, err := statecodec.Marshal(w.Proto())
 	if err != nil {
 		return err
 	}
@@ -61,10 +64,17 @@ func (s *StateDB) ReadWitnessLatestBlock(addr tcommon.Address) int64 {
 		return w.LatestBlockNum()
 	}
 	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.WitnessCapsule, rawdb.WitnessLatestBlockStateKey(addr))
-	if err == nil && ok && len(raw) == 8 {
-		return int64(binary.BigEndian.Uint64(raw))
+	if err != nil {
+		return 0
 	}
-	return 0
+	if !ok {
+		return 0
+	}
+	if len(raw) != 8 {
+		s.recordStateError(fmt.Sprintf("decode witness latest block %s", addr.Hex()), fmt.Errorf("length %d, want 8", len(raw)))
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(raw))
 }
 
 // WriteWitnessLatestBlock stages the native rooted latest-produced-block cursor.
@@ -78,7 +88,11 @@ func (s *StateDB) WriteWitnessLatestBlock(addr tcommon.Address, num int64) error
 // UpdateBrokerage. Missing rows default to java-tron's DEFAULT_BROKERAGE (20).
 func (s *StateDB) ReadWitnessBrokerage(addr tcommon.Address) int64 {
 	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.WitnessCapsule, rawdb.WitnessBrokerageStateKey(addr))
-	if err != nil || !ok || len(raw) != 8 {
+	if err != nil || !ok {
+		return int64(rawdb.DefaultBrokerage)
+	}
+	if len(raw) != 8 {
+		s.recordStateError(fmt.Sprintf("decode witness brokerage %s", addr.Hex()), fmt.Errorf("length %d, want 8", len(raw)))
 		return int64(rawdb.DefaultBrokerage)
 	}
 	return int64(binary.BigEndian.Uint64(raw))

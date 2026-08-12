@@ -51,6 +51,41 @@ func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
 	return cli.NewContext(app, set, nil)
 }
 
+func makeFreezerConfigFlagSet(t *testing.T, argv []string) *cli.Context {
+	t.Helper()
+	app := cli.NewApp()
+	app.Flags = []cli.Flag{
+		freezerDisableFlag,
+		freezerIntervalFlag,
+		freezerMarginFlag,
+		freezerBatchFlag,
+		freezerTxIndexDisableFlag,
+		freezerDirectV2DisableFlag,
+	}
+	set := flag.NewFlagSet("freezer-test", flag.ContinueOnError)
+	for _, cliFlag := range app.Flags {
+		if err := cliFlag.Apply(set); err != nil {
+			t.Fatalf("apply freezer flag: %v", err)
+		}
+	}
+	if err := set.Parse(argv); err != nil {
+		t.Fatalf("parse freezer argv: %v", err)
+	}
+	return cli.NewContext(app, set, nil)
+}
+
+func TestMakeFreezerConfigDirectV2KillSwitch(t *testing.T) {
+	cfg := makeFreezerConfig(makeFreezerConfigFlagSet(t, nil))
+	if !cfg.Enabled || !cfg.V2Enabled || !cfg.DirectV2 || !cfg.TransactionIndexEnabled {
+		t.Fatalf("default freezer config does not use direct V2: %+v", cfg)
+	}
+
+	cfg = makeFreezerConfig(makeFreezerConfigFlagSet(t, []string{"--freezer.direct-v2.disable"}))
+	if cfg.DirectV2 {
+		t.Fatalf("direct V2 kill switch was ignored: %+v", cfg)
+	}
+}
+
 func TestMakeConfigSyncImportBatchDefault(t *testing.T) {
 	cfg := makeConfig(makeNodeConfigFlagSet(t, nil))
 	if cfg.SyncImportBatch != tsync.MaxImportBatch {

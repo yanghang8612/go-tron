@@ -978,6 +978,7 @@ func dbFreezerAlertChainDB(db ethdb.KeyValueStore, freezer *rawdbfreezer.Freezer
 
 func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage rawdb.StageProgress, hasChainFreezerStage bool, tailPruneStage rawdb.StageProgress, hasTailPruneStage bool) []dbFreezerAlertIssue {
 	var issues []dbFreezerAlertIssue
+	directV2 := stats.Head > 0 && stats.Tail == 0 && stats.V2Coverage == stats.Head
 	add := func(severity, kind, format string, args ...interface{}) {
 		issues = append(issues, dbFreezerAlertIssue{
 			severity: severity,
@@ -1006,10 +1007,12 @@ func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage rawdb.Stag
 			add("critical", "chain-freezer-stage-ahead", "%s=%d exceeds freezer max block %d", rawdb.StageChainFreezer, chainFreezerStage.BlockNum, stats.Head-1)
 		case chainFreezerStage.BlockNum < stats.Tail:
 			add("critical", "chain-freezer-stage-behind-tail", "%s=%d is below freezer visible tail %d", rawdb.StageChainFreezer, chainFreezerStage.BlockNum, stats.Tail)
+		case chainFreezerStage.BlockNum < stats.Head-1:
+			add("critical", "chain-freezer-stage-behind-head", "%s=%d is below freezer max block %d; hot frozen rows may still need reconciliation", rawdb.StageChainFreezer, chainFreezerStage.BlockNum, stats.Head-1)
 		}
 	}
 	if stats.Tail == 0 {
-		if hasTailPruneStage {
+		if hasTailPruneStage && !directV2 {
 			add("critical", "tail-prune-stage-without-hidden-tail", "%s=%d but freezer tail is 0", rawdb.StageSnapshotChainFreezerTailPrune, tailPruneStage.BlockNum)
 		}
 	} else if !hasTailPruneStage {
@@ -1026,7 +1029,7 @@ func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage rawdb.Stag
 		}
 	}
 	for _, table := range stats.Tables {
-		if table.Head != stats.Head {
+		if table.Head != stats.Head && !(directV2 && table.Head == table.HiddenTail && table.Head <= stats.Head) {
 			add("critical", "table-head-mismatch", "table %s head=%d freezerHead=%d", table.Name, table.Head, stats.Head)
 		}
 		if table.HiddenTail > table.Head {

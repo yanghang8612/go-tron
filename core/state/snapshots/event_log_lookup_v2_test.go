@@ -1,13 +1,17 @@
 package snapshots
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -66,27 +70,19 @@ func TestEventLogV3CompactLookupSpaceAndFilterSemantics(t *testing.T) {
 	t.Logf("topic lookup bytes: compact=%d legacy=%d saving=%.1f%%", compactTopicBytes, legacyTopicBytes, 100*(1-float64(compactTopicBytes)/float64(legacyTopicBytes)))
 }
 
-func TestEventLogV3ReaderAcceptsLegacyLookupSection(t *testing.T) {
+func TestEventLogV3ReaderRejectsLegacyLookupSection(t *testing.T) {
 	postings := map[string][]uint64{
 		string(makeLookupTestKey(eventLogTopicLookupKeySize, 1)): {1, 4, 9},
 		string(makeLookupTestKey(eventLogTopicLookupKeySize, 2)): {2, 7},
 	}
 	file, length := writeLegacyEventLogV3LookupForTest(t, eventLogTopicLookupKeySize, postings)
 	defer file.Close()
-	keys, frames, err := readEventLogV3LookupCounts(file, 0, length, length, eventLogTopicLookupKeySize)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if keys != 2 || frames != 2 {
-		t.Fatalf("legacy lookup counts = %d/%d, want 2/2", keys, frames)
+	if _, _, err := readEventLogV3LookupCounts(file, 0, length, length, eventLogTopicLookupKeySize); err == nil {
+		t.Fatal("fresh V3 reader accepted legacy lookup section")
 	}
 	wantKey := makeLookupTestKey(eventLogTopicLookupKeySize, 1)
-	rows, err := readEventLogV3LookupRows(file, 0, length, length, eventLogTopicLookupKeySize, wantKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 3 || rows[0] != 1 || rows[1] != 4 || rows[2] != 9 {
-		t.Fatalf("legacy lookup rows = %v", rows)
+	if _, err := readEventLogV3LookupRows(file, 0, length, length, eventLogTopicLookupKeySize, wantKey, 10); err == nil {
+		t.Fatal("fresh V3 lookup accepted legacy posting rows")
 	}
 }
 
@@ -128,6 +124,227 @@ func TestEventLogV3CompactLookupRejectsCorruptKeyBlock(t *testing.T) {
 	ref.Checksum = ""
 	if err := CheckEventLogSegment(dir, ref); err == nil {
 		t.Fatal("CheckEventLogSegment accepted corrupt compact lookup key block")
+	}
+}
+
+func TestEventLogV3CompactLookupRejectsCorruptMagic(t *testing.T) {
+	dir := t.TempDir()
+	address := common.BytesToAddress(eventLogTestAddress(0x63))
+	row := eventLogV3TestRow(1, 0, 0, address, common.Hash{1}, common.Hash{2}, common.Hash{3}, []byte("payload"))
+	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := readEventLogHeader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var one [1]byte
+	if _, err := file.ReadAt(one[:], int64(header.v3.addressIndexOffset)); err != nil {
+		t.Fatal(err)
+	}
+	one[0] ^= 1
+	if _, err := file.WriteAt(one[:], int64(header.v3.addressIndexOffset)); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ref.Checksum = ""
+	if seg, err := OpenEventLogSegment(dir, ref); err == nil {
+		_ = seg.Close()
+		t.Fatal("OpenEventLogSegment accepted corrupt compact lookup magic")
+	}
+}
+
+func TestEventLogV3CompactLookupRejectsCorruptHeader(t *testing.T) {
+	dir := t.TempDir()
+	address := common.BytesToAddress(eventLogTestAddress(0x65))
+	row := eventLogV3TestRow(1, 0, 0, address, common.Hash{1}, common.Hash{2}, common.Hash{3}, []byte("payload"))
+	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := readEventLogHeader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var one [1]byte
+	fieldOffset := header.v3.topicIndexOffset + 16
+	if _, err := file.ReadAt(one[:], int64(fieldOffset)); err != nil {
+		t.Fatal(err)
+	}
+	one[0] ^= 1
+	if _, err := file.WriteAt(one[:], int64(fieldOffset)); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ref.Checksum = ""
+	if seg, err := OpenEventLogSegment(dir, ref); err == nil {
+		_ = seg.Close()
+		t.Fatal("OpenEventLogSegment accepted compact lookup header checksum mismatch")
+	}
+}
+
+func TestEventLogV3CompactLookupRejectsCorruptDirectoryFirstKey(t *testing.T) {
+	dir := t.TempDir()
+	address := common.BytesToAddress(eventLogTestAddress(0x64))
+	rows := make([]EventLog, 0, eventLogV3LookupV2BlockKeys+1)
+	for i := uint64(0); i <= eventLogV3LookupV2BlockKeys; i++ {
+		var topic, txHash common.Hash
+		binary.BigEndian.PutUint64(topic[common.HashLength-8:], i+1)
+		binary.BigEndian.PutUint64(txHash[common.HashLength-8:], i+1)
+		rows = append(rows, eventLogV3TestRow(1, i, i, address, txHash, common.Hash{2}, topic, []byte("payload")))
+	}
+	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := readEventLogHeader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entrySize := uint64(eventLogTopicLookupKeySize + eventLogV3LookupV2BlockTail)
+	secondFirstKey := header.v3.topicIndexOffset + eventLogV3LookupV2HeaderSize + entrySize
+	var one [1]byte
+	if _, err := file.ReadAt(one[:], int64(secondFirstKey)); err != nil {
+		t.Fatal(err)
+	}
+	one[0] ^= 1
+	if _, err := file.WriteAt(one[:], int64(secondFirstKey)); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ref.Checksum = ""
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seg.Close()
+	var topic common.Hash
+	binary.BigEndian.PutUint64(topic[common.HashLength-8:], eventLogV3LookupV2BlockKeys+1)
+	if err := seg.IterateLogs(1, 1, EventLogFilter{Topics: [][]common.Hash{{topic}}}, func(EventLog) (bool, error) {
+		return true, nil
+	}); err == nil {
+		t.Fatal("IterateLogs silently accepted corrupt compact lookup firstKey")
+	}
+}
+
+func TestEventLogV3CompactLookupPostingCountBound(t *testing.T) {
+	record := eventLogV3LookupV2Record{postingCount: 11}
+	if _, err := readEventLogV3LookupV2RecordRows(bytes.NewReader(nil), 0, 0, eventLogV3LookupV2Header{}, record, 10); err == nil {
+		t.Fatal("compact lookup accepted posting count above segment row count")
+	}
+}
+
+func TestEventLogV3SegmentConcurrentQueriesAndClose(t *testing.T) {
+	dir := t.TempDir()
+	rows := make([]EventLog, 0, 512)
+	topics := make([]common.Hash, 512)
+	for i := range topics {
+		var address common.Address
+		var txHash common.Hash
+		binary.BigEndian.PutUint64(address[common.AddressLength-8:], uint64(i+1))
+		binary.BigEndian.PutUint64(topics[i][common.HashLength-8:], uint64(i+1))
+		binary.BigEndian.PutUint64(txHash[common.HashLength-8:], uint64(i+1))
+		rows = append(rows, eventLogV3TestRow(1, uint64(i), uint64(i), address, txHash, common.Hash{2}, topics[i], make([]byte, 256)))
+	}
+	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const goroutines = 8
+	errs := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		g := g
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for n := 0; n < 50; n++ {
+				index := (g*73 + n*97) % len(rows)
+				seen := 0
+				err := seg.IterateLogs(1, 1, EventLogFilter{Topics: [][]common.Hash{{topics[index]}}}, func(row EventLog) (bool, error) {
+					seen++
+					if row.TxIndex != uint64(index) {
+						return false, fmt.Errorf("tx index %d, want %d", row.TxIndex, index)
+					}
+					return true, nil
+				})
+				if err != nil || seen != 1 {
+					errs <- fmt.Errorf("query %d: seen=%d err=%w", index, seen, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	iterateDone := make(chan error, 1)
+	go func() {
+		iterateDone <- seg.IterateLogs(1, 1, EventLogFilter{}, func(EventLog) (bool, error) {
+			close(entered)
+			<-release
+			return false, nil
+		})
+	}()
+	<-entered
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- seg.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close blocked behind active callback")
+	}
+	close(release)
+	if err := <-iterateDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := seg.IterateLogs(1, 1, EventLogFilter{}, func(EventLog) (bool, error) { return true, nil }); err == nil {
+		t.Fatal("IterateLogs accepted a closed segment")
+	}
+
+	callbackClosed, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := callbackClosed.IterateLogs(1, 1, EventLogFilter{}, func(EventLog) (bool, error) {
+		return false, callbackClosed.Close()
+	}); err != nil {
+		t.Fatalf("callback close deadlocked or failed: %v", err)
+	}
+	if err := callbackClosed.IterateLogs(1, 1, EventLogFilter{}, func(EventLog) (bool, error) { return true, nil }); err == nil {
+		t.Fatal("callback-closed segment accepted another iteration")
 	}
 }
 

@@ -24,7 +24,7 @@ func BenchmarkAccountFrozenBandwidthRowAtDirty(b *testing.B) {
 	sdb := newTestStateDB(b)
 	addr := testAddr(0xa3)
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)
-	value, err := proto.Marshal(&corepb.Account_Frozen{FrozenBalance: 11, ExpireTime: 22})
+	value, err := encodeAccountFrozen(&corepb.Account_Frozen{FrozenBalance: 11, ExpireTime: 22})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -173,10 +173,7 @@ func TestAccountStakeV1PersistsOutsideAccountEnvelopeAndPreservesOrder(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stored corepb.Account
-	if err := proto.Unmarshal(envelope.AccountProto, &stored); err != nil {
-		t.Fatal(err)
-	}
+	stored := decodeStoredAccountCore(t, envelope)
 	if len(stored.Frozen) != 0 || stored.TronPower != nil {
 		t.Fatalf("split Stake V1 leaked into account envelope: frozen=%+v tronPower=%+v", stored.Frozen, stored.TronPower)
 	}
@@ -442,7 +439,7 @@ func TestAccountStakeV1DirectKVWriteInvalidatesMaterializedField(t *testing.T) {
 		t.Fatalf("initial materialized bandwidth = %+v", got)
 	}
 	replacement := &corepb.Account_Frozen{FrozenBalance: 33, ExpireTime: 44}
-	value, err := proto.MarshalOptions{Deterministic: true}.Marshal(replacement)
+	value, err := encodeAccountFrozen(replacement)
 	if err != nil {
 		t.Fatal(err)
 	}

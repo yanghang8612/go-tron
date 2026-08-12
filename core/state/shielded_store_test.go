@@ -157,11 +157,14 @@ func TestShieldedStoreReadIncrMerkleTreeStrictSurfacesCorruptPayload(t *testing.
 	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.IncrMerkleTreeStateKey(root), []byte{0x80}); err != nil {
 		t.Fatalf("write corrupt shielded tree: %v", err)
 	}
-	if !sdb.HasIncrMerkleTree(root) {
-		t.Fatal("root should be present")
+	if sdb.HasIncrMerkleTree(root) {
+		t.Fatal("corrupt tree must not satisfy the existence predicate")
 	}
 	if got := sdb.ReadIncrMerkleTree(root); got != nil {
 		t.Fatalf("compat ReadIncrMerkleTree corrupt payload = %v, want nil", got)
+	}
+	if sdb.Error() == nil {
+		t.Fatal("corrupt shielded tree did not poison StateDB")
 	}
 	got, ok, err := sdb.ReadIncrMerkleTreeStrict(root)
 	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode incremental merkle tree") {
@@ -184,16 +187,18 @@ func TestShieldedStoreStrictReadersSurfaceCorruptRows(t *testing.T) {
 		t.Fatalf("NoteCommitmentCountStrict corrupt ok=%v err=%v, want length error", ok, err)
 	}
 
+	sdb = newTestStateDB(t)
 	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.ZKProofStateKey(txID), []byte{0x01, 0x02}); err != nil {
 		t.Fatal(err)
 	}
-	if ok, exists := sdb.ReadZKProofResult(txID); !exists || !ok {
-		t.Fatalf("compat ReadZKProofResult corrupt row = %v/%v, want first-byte true", ok, exists)
+	if ok, exists := sdb.ReadZKProofResult(txID); exists || ok {
+		t.Fatalf("compat ReadZKProofResult corrupt row = %v/%v, want fail-closed false/false", ok, exists)
 	}
 	if _, ok, err := sdb.ReadZKProofResultStrict(txID); err == nil || ok || !strings.Contains(err.Error(), "length 2, want 1") {
 		t.Fatalf("ReadZKProofResultStrict corrupt ok=%v err=%v, want length error", ok, err)
 	}
 
+	sdb = newTestStateDB(t)
 	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.IncrMerkleLastTreeStateKey(), []byte{0x80}); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +209,7 @@ func TestShieldedStoreStrictReadersSurfaceCorruptRows(t *testing.T) {
 		t.Fatalf("ReadLastMerkleTreeStrict corrupt = %v/%v/%v, want decode error", got, ok, err)
 	}
 
+	sdb = newTestStateDB(t)
 	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.IncrMerkleCurrentTreeStateKey(), []byte{0x80}); err != nil {
 		t.Fatal(err)
 	}
@@ -214,16 +220,18 @@ func TestShieldedStoreStrictReadersSurfaceCorruptRows(t *testing.T) {
 		t.Fatalf("ReadCurrentMerkleTreeStrict corrupt = %v/%v/%v, want decode error", got, ok, err)
 	}
 
+	sdb = newTestStateDB(t)
 	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.MerkleTreeIndexStateKey(9), []byte{0x01}); err != nil {
 		t.Fatal(err)
 	}
-	if got := sdb.ReadMerkleTreeRootByBlock(9); !bytes.Equal(got, []byte{0x01}) {
-		t.Fatalf("compat ReadMerkleTreeRootByBlock corrupt row = %x, want raw", got)
+	if got := sdb.ReadMerkleTreeRootByBlock(9); got != nil {
+		t.Fatalf("compat ReadMerkleTreeRootByBlock corrupt row = %x, want nil", got)
 	}
 	if got, ok, err := sdb.ReadMerkleTreeRootByBlockStrict(9); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "length 1, want 32") {
 		t.Fatalf("ReadMerkleTreeRootByBlockStrict corrupt = %x/%v/%v, want length error", got, ok, err)
 	}
 
+	sdb = newTestStateDB(t)
 	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.MerkleTreeIndexStateKey(10), blockRoot); err != nil {
 		t.Fatal(err)
 	}

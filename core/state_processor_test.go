@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -12,6 +13,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	tronrawdb "github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -245,6 +247,25 @@ func makeTestTransferTx(from, to byte, amount int64) *types.Transaction {
 			Expiration: 60_000,
 			Contract: []*corepb.Transaction_Contract{{
 				Type:      corepb.Transaction_Contract_TransferContract,
+				Parameter: param,
+			}},
+		},
+	})
+}
+
+func makeTestTransferAssetTx(from, to byte, assetName []byte, amount int64) *types.Transaction {
+	contract := &contractpb.TransferAssetContract{
+		OwnerAddress: testProcessorAddr(from).Bytes(),
+		ToAddress:    testProcessorAddr(to).Bytes(),
+		AssetName:    append([]byte(nil), assetName...),
+		Amount:       amount,
+	}
+	param, _ := anypb.New(contract)
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TransferAssetContract,
 				Parameter: param,
 			}},
 		},
@@ -1829,6 +1850,89 @@ func TestApplyTransaction_ValidationFails(t *testing.T) {
 	_, err := ApplyTransaction(statedb, dynProps, tx, 3000, 3000, 1, nil, nil, true, false)
 	if err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestApplyTransaction_SurfacesCorruptRootedAccount(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	statedb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), state.NewDatabase(disk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, recipient := testProcessorAddr(1), testProcessorAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 1_000_000)
+	if err := tronrawdb.WriteStateAccountLatest(disk, recipient, []byte{0x80}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ApplyTransaction(statedb, state.NewDynamicProperties(), makeTestTransferTx(1, 2, 100), 3000, 3000, 1, nil, nil, true, false)
+	if err == nil || !strings.Contains(err.Error(), "rooted state access failed") || !strings.Contains(err.Error(), "decode rooted account envelope") {
+		t.Fatalf("apply error = %v, want rooted account corruption", err)
+	}
+}
+
+func TestApplyTransactionRejectsTruncatedLegacyAssetForNewRecipient(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	assetName := []byte("TRUNC")
+	owner, recipient := testProcessorAddr(1), testProcessorAddr(2)
+	statedb := newTestState(t)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 10_000_000)
+	statedb.SetTRC10BalanceLegacyAndV2(owner, assetName, tokenID, 500)
+	asset := &contractpb.AssetIssueContract{
+		Id:           "1000001",
+		OwnerAddress: owner.Bytes(),
+		Name:         assetName,
+	}
+	if err := statedb.WriteAssetIssueByName(assetName, asset); err != nil {
+		t.Fatal(err)
+	}
+	legacyKey := append([]byte{0x02}, assetName...)
+	raw, ok, err := statedb.SystemKVGet(kvdomains.SystemAsset, legacyKey)
+	if err != nil || !ok || len(raw) < 2 {
+		t.Fatalf("legacy metadata: ok=%v len=%d err=%v", ok, len(raw), err)
+	}
+	if err := statedb.SystemKVPut(kvdomains.SystemAsset, legacyKey, append([]byte(nil), raw[:len(raw)-1]...)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ApplyTransaction(statedb, state.NewDynamicProperties(), makeTestTransferAssetTx(1, 2, assetName, 100), 3000, 3000, 1, nil, nil, true, false)
+	if err == nil || !strings.Contains(err.Error(), "rooted state access failed") || !strings.Contains(err.Error(), "decode legacy asset issue") {
+		t.Fatalf("apply error = %v, want truncated asset corruption", err)
+	}
+	if statedb.AccountExists(recipient) {
+		t.Fatal("failed transfer created the recipient")
+	}
+}
+
+func TestApplyTransactionRejectsCorruptExistingWitness(t *testing.T) {
+	owner := testProcessorAddr(1)
+	statedb := newTestState(t)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 10_000_000)
+	key := tronrawdb.WitnessCapsuleStateKey(owner)
+	corrupt := []byte{0x80}
+	if err := statedb.SetAccountKV(owner, kvdomains.WitnessCapsule, key, corrupt); err != nil {
+		t.Fatal(err)
+	}
+	contract := &contractpb.WitnessCreateContract{OwnerAddress: owner.Bytes(), Url: []byte("https://witness.invalid")}
+	param, _ := anypb.New(contract)
+	tx := types.NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Expiration: 60_000,
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_WitnessCreateContract,
+			Parameter: param,
+		}},
+	}})
+
+	_, err := ApplyTransaction(statedb, state.NewDynamicProperties(), tx, 3000, 3000, 1, nil, nil, true, false)
+	if err == nil || !strings.Contains(err.Error(), "rooted state access failed") || !strings.Contains(err.Error(), "read witness") {
+		t.Fatalf("apply error = %v, want witness corruption", err)
+	}
+	raw, ok, readErr := statedb.GetAccountKV(owner, kvdomains.WitnessCapsule, key)
+	if readErr != nil || !ok || !bytes.Equal(raw, corrupt) {
+		t.Fatalf("witness row after rejection = %x ok=%v err=%v", raw, ok, readErr)
 	}
 }
 

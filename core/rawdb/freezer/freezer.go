@@ -315,12 +315,20 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 		return nil, fmt.Errorf("open ancient V2: %w", err)
 	}
 	if coverage := freezer.v2.coverage; coverage > freezer.head.Load() {
-		freezer.v2.Close()
-		for _, table := range freezer.tables {
-			table.Close()
+		// Fresh-sync direct V2 leaves the legacy V1 tables fully reclaimed at
+		// their last head. The immutable manifest prefix is then the durable
+		// logical head and survives a crash without separate metadata.
+		for kind, table := range freezer.tables {
+			if table.itemHidden.Load() != table.items.Load() {
+				freezer.v2.Close()
+				for _, opened := range freezer.tables {
+					opened.Close()
+				}
+				lock.Unlock()
+				return nil, fmt.Errorf("ancient V2 coverage %d exceeds live V1 table %s head %d tail %d", coverage, kind, table.items.Load(), table.itemHidden.Load())
+			}
 		}
-		lock.Unlock()
-		return nil, fmt.Errorf("ancient V2 coverage %d exceeds freezer head %d", coverage, freezer.head.Load())
+		freezer.head.Store(coverage)
 	} else if coverage > 0 && freezer.tail.Load() > coverage {
 		freezer.v2.Close()
 		for _, table := range freezer.tables {
@@ -616,7 +624,11 @@ func (f *Freezer) AncientCount(kind string) (uint64, error) {
 	if !ok {
 		return 0, errUnknownTable
 	}
-	return table.items.Load(), nil
+	count := table.items.Load()
+	if coverage := f.V2Coverage(); coverage > count {
+		count = coverage
+	}
+	return count, nil
 }
 
 // HasAncient returns true if the named table has an entry at the given number.
@@ -651,6 +663,24 @@ func (f *Freezer) V1Tail() uint64 {
 	if f == nil {
 		return 0
 	}
+	f.writeLock.RLock()
+	defer f.writeLock.RUnlock()
+	logicalHead := f.head.Load()
+	direct := false
+	for _, table := range f.tables {
+		if logicalHead > table.items.Load() && table.itemHidden.Load() == table.items.Load() {
+			direct = true
+			continue
+		}
+		direct = false
+		break
+	}
+	if direct {
+		// There is no mutable V1 suffix to prune. Reporting the logical head
+		// prevents the cold-snapshot tail pruner from repeatedly targeting
+		// nonexistent legacy rows.
+		return logicalHead
+	}
 	return f.tail.Load()
 }
 
@@ -666,6 +696,31 @@ func (f *Freezer) V2Coverage() uint64 {
 		return 0
 	}
 	return f.v2.coverage
+}
+
+// CanAppendV2Direct reports whether start is the complete logical ancient
+// head and every legacy V1 table has no visible suffix. In that state a fresh
+// sync may publish the next immutable segment directly from canonical hot
+// rows without first materializing another V1 copy.
+func (f *Freezer) CanAppendV2Direct(start uint64) bool {
+	if f == nil || f.readonly {
+		return false
+	}
+	f.writeLock.RLock()
+	defer f.writeLock.RUnlock()
+	return f.canAppendV2DirectLocked(start)
+}
+
+func (f *Freezer) canAppendV2DirectLocked(start uint64) bool {
+	if f.head.Load() != start || f.V2Coverage() != start {
+		return false
+	}
+	for _, table := range f.tables {
+		if table.items.Load() > start || table.itemHidden.Load() != table.items.Load() {
+			return false
+		}
+	}
+	return true
 }
 
 // AncientSize returns the ancient size of the specified category.
@@ -788,6 +843,11 @@ func (f *Freezer) ModifyAncients(fn func(AncientWriteOp) error) (writeSize int64
 	}
 	f.writeLock.Lock()
 	defer f.writeLock.Unlock()
+	for _, table := range f.tables {
+		if f.head.Load() > table.items.Load() {
+			return 0, errors.New("ancient freezer is in direct V2 mode; V1 append is disabled")
+		}
+	}
 
 	// Roll back all tables to the starting position in case of error.
 	prevItem := f.head.Load()

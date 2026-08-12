@@ -478,6 +478,9 @@ func TestStateDBContractRuntimeStateStrictSurfacesCorruptPayload(t *testing.T) {
 	if got := sdb.ReadContractState(addr); got != nil {
 		t.Fatalf("compat ReadContractState corrupt payload = %v, want nil", got)
 	}
+	if sdb.Error() == nil {
+		t.Fatal("corrupt contract runtime state did not poison StateDB")
+	}
 	got, ok, err := sdb.ReadContractStateStrict(addr)
 	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode contract state") {
 		t.Fatalf("ReadContractStateStrict corrupt payload = %v/%v/%v, want decode error", got, ok, err)
@@ -584,6 +587,9 @@ func TestStateDBContractABIStrictSurfacesCorruptPayload(t *testing.T) {
 
 	if got := sdb.ReadContractABI(addr); got != nil {
 		t.Fatalf("compat ReadContractABI corrupt payload = %v, want nil", got)
+	}
+	if sdb.Error() == nil {
+		t.Fatal("corrupt contract ABI did not poison StateDB")
 	}
 	got, ok, err := sdb.ReadContractABIStrict(addr)
 	if err == nil || !ok || got != nil || !strings.Contains(err.Error(), "decode contract abi") {

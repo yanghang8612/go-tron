@@ -12,10 +12,9 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/types"
-	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/proto"
 )
 
 var ErrStateDomainHistoryUnavailable = errors.New("flat state domain history unavailable")
@@ -551,14 +550,13 @@ func (r *PersistentHistoryReader) accountAndCodeFromStateDomain(addr tcommon.Add
 	if err != nil {
 		return accountCacheEntry{}, false, err
 	}
-	var pb corepb.Account
-	if err := proto.Unmarshal(envelope.AccountProto, &pb); err != nil {
+	acc, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
+	if err != nil {
 		return accountCacheEntry{}, false, err
 	}
-	if err := r.materializeHistoricalAccountAux(&pb, addr, envelope.AccountKVGeneration, blockNum); err != nil {
+	if err := r.materializeHistoricalAccountAux(acc.Proto(), addr, envelope.AccountKVGeneration, blockNum); err != nil {
 		return accountCacheEntry{}, false, err
 	}
-	acc := types.NewAccountFromPB(&pb)
 	var code []byte
 	if envelope.CodeHash != (tcommon.Hash{}) {
 		code, err = r.readCodeByHashAtBlock(envelope.CodeHash, blockNum)
@@ -593,7 +591,7 @@ func (r *PersistentHistoryReader) storageFromStateDomain(addr tcommon.Address, s
 		return tcommon.Hash{}, false, err
 	} else if ok && len(data) > 0 {
 		var sc contractpb.SmartContract
-		if err := proto.Unmarshal(data, &sc); err != nil {
+		if err := statecodec.Unmarshal(data, &sc); err != nil {
 			return tcommon.Hash{}, false, fmt.Errorf("decode contract metadata for storage key %s at block %d: %w", addr.Hex(), blockNum, err)
 		}
 		meta = &sc
@@ -1521,11 +1519,10 @@ func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) (
 	if !ok {
 		return accountCacheEntry{}, nil
 	}
-	var pb corepb.Account
-	if err := proto.Unmarshal(envelope.AccountProto, &pb); err != nil {
+	acc, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
+	if err != nil {
 		return accountCacheEntry{}, fmt.Errorf("decode live account proto %s: %w", addr.Hex(), err)
 	}
-	acc := types.NewAccountFromPB(&pb)
 	var code []byte
 	if envelope.CodeHash != (tcommon.Hash{}) {
 		hotCode, err := r.readCodeByHashAtBlock(envelope.CodeHash, r.headNum)

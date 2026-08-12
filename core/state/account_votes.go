@@ -7,7 +7,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 func accountVoteKey(index uint32) []byte {
@@ -20,7 +19,7 @@ func decodeAccountVoteRow(key, value []byte) (uint32, *corepb.Vote, error) {
 	if len(key) != 4 {
 		return 0, nil, fmt.Errorf("account vote key length %d, want 4", len(key))
 	}
-	vote, err := unmarshalVoteOwned(value)
+	vote, err := decodeAccountVote(value)
 	if err != nil {
 		return 0, nil, fmt.Errorf("decode account vote %x: %w", key, err)
 	}
@@ -33,10 +32,15 @@ func clearAccountVotesProto(pb *corepb.Account) {
 	}
 }
 
-func (s *StateDB) materializeAccountVotes(obj *stateObject) error {
+func (s *StateDB) materializeAccountVotes(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil || obj.accountVotesLoaded {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize account votes %s", obj.address.Hex()), err)
+		}
+	}()
 	votes := make([]*corepb.Vote, 0, params.MaxVoteNumber)
 	// VoteWitnessContract is consensus-limited to MaxVoteNumber entries and
 	// writeAccountVotes persists each entry in its bounded numeric slot. Point
@@ -83,13 +87,7 @@ func (s *StateDB) writeAccountVotes(obj *stateObject, votes []*corepb.Vote) erro
 		if vote == nil {
 			continue
 		}
-		// SetAccountKV synchronously copies value into the StateDB's immutable
-		// block arena. Reuse StateDB-owned scratch for the transient protobuf
-		// encoding rather than allocating a second owned byte slice for every
-		// vote row. MarshalAppend preserves the generated codec's exact wire
-		// behavior, including unknown fields and negative int64 values; unusually
-		// large messages simply grow beyond the common 64-byte scratch capacity.
-		value, err := proto.MarshalOptions{Deterministic: true}.MarshalAppend(s.accountVoteMarshalScratch[:0], vote)
+		value, err := appendAccountVote(s.accountRowMarshalScratch[:0], vote)
 		if err != nil {
 			return err
 		}

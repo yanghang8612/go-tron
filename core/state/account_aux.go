@@ -197,7 +197,15 @@ func accountAuxMap(pb *corepb.Account, domain kvdomains.KVDomain, create bool) m
 	return *values
 }
 
-func (s *StateDB) accountAuxValue(addr tcommon.Address, domain kvdomains.KVDomain, key []byte) (int64, bool, error) {
+func (s *StateDB) accountAuxValue(addr tcommon.Address, domain kvdomains.KVDomain, key []byte) (value int64, exists bool, err error) {
+	if err := s.Error(); err != nil {
+		return 0, false, err
+	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read account auxiliary state %s domain=%d key=%x", addr.Hex(), domain, key), err)
+		}
+	}()
 	s.recordAccountKVRead(addr, domain, key)
 	if isTRC10BalanceDomain(domain) {
 		obj := s.getStateObject(addr)
@@ -234,17 +242,24 @@ func (s *StateDB) accountAuxValue(addr tcommon.Address, domain kvdomains.KVDomai
 		cacheTRC10PointValue(obj, domain, key, decoded, true)
 		return decoded, true, nil
 	}
-	value, ok, err := s.getAccountKVForDecoding(addr, domain, key)
+	raw, ok, err := s.getAccountKVForDecoding(addr, domain, key)
 	if err != nil || !ok {
 		return 0, ok, err
 	}
-	decoded, err := decodeAccountAuxInt64(value)
+	decoded, err := decodeAccountAuxInt64(raw)
 	return decoded, true, err
 }
 
-func (s *StateDB) setAccountAuxValue(addr tcommon.Address, domain kvdomains.KVDomain, key []byte, value int64) error {
+func (s *StateDB) setAccountAuxValue(addr tcommon.Address, domain kvdomains.KVDomain, key []byte, value int64) (err error) {
+	if err := s.Error(); err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("write account auxiliary state %s domain=%d key=%x", addr.Hex(), domain, key), err)
+		}
+	}()
 	encoded := encodeAccountAuxInt64(value)
-	var err error
 	if obj := s.stateObjects[addr]; isTRC10BalanceDomain(domain) && obj != nil {
 		if previous, exists, cached := trc10PointValue(obj, domain, key); cached {
 			var previousEncoded []byte
@@ -276,8 +291,16 @@ func (s *StateDB) setAccountAuxValue(addr tcommon.Address, domain kvdomains.KVDo
 // use this only when protocol arithmetic requires writing the resulting value;
 // an already-equal durable row may receive a redundant write when history is
 // disabled.
-func (s *StateDB) setAccountAuxValueUnconditional(addr tcommon.Address, domain kvdomains.KVDomain, key []byte, value int64) error {
-	if err := s.setAccountKVWithPrev(addr, domain, key, encodeAccountAuxInt64(value), true, nil, false, false); err != nil {
+func (s *StateDB) setAccountAuxValueUnconditional(addr tcommon.Address, domain kvdomains.KVDomain, key []byte, value int64) (err error) {
+	if err := s.Error(); err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("write account auxiliary state %s domain=%d key=%x", addr.Hex(), domain, key), err)
+		}
+	}()
+	if err = s.setAccountKVWithPrev(addr, domain, key, encodeAccountAuxInt64(value), true, nil, false, false); err != nil {
 		return err
 	}
 	if obj := s.stateObjects[addr]; obj != nil && obj.account != nil {
@@ -287,10 +310,15 @@ func (s *StateDB) setAccountAuxValueUnconditional(addr tcommon.Address, domain k
 	return nil
 }
 
-func (s *StateDB) materializeAccountAux(obj *stateObject) error {
+func (s *StateDB) materializeAccountAux(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil || obj.accountMapsLoaded {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize account auxiliary state %s", obj.address.Hex()), err)
+		}
+	}()
 	pb := obj.account.Proto()
 	clearAccountAuxProto(pb)
 	for _, domain := range accountAuxDomains {

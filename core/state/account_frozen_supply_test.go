@@ -42,10 +42,7 @@ func TestAccountFrozenSupplyPersistsOutsideAccountEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stored corepb.Account
-	if err := proto.Unmarshal(envelope.AccountProto, &stored); err != nil {
-		t.Fatal(err)
-	}
+	stored := decodeStoredAccountCore(t, envelope)
 	if len(stored.FrozenSupply) != 0 {
 		t.Fatalf("split frozen supply leaked into account envelope: %+v", stored.FrozenSupply)
 	}

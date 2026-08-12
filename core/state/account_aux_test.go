@@ -7,7 +7,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 var trc10BalanceBenchmarkSink int64
@@ -31,6 +30,34 @@ func TestFreshTRC10PointReadSkipsDurableGeneration(t *testing.T) {
 	}
 	if got := index.getsByDomain[kvdomains.AccountAssetV2]; got != 0 {
 		t.Fatalf("fresh TRC10 read/write durable reads = %d, want 0", got)
+	}
+}
+
+func TestTRC10BalanceCorruptionPoisonsStateAndCannotBeOverwritten(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x98)
+	const tokenID = int64(1_000_001)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	key := []byte("1000001")
+	malformed := []byte{1}
+	if err := sdb.SetAccountKV(addr, kvdomains.AccountAssetV2, key, malformed); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sdb.GetTRC10Balance(addr, tokenID); got != 0 {
+		t.Fatalf("malformed balance = %d, want fail-closed zero", got)
+	}
+	if sdb.Error() == nil {
+		t.Fatal("malformed TRC10 balance did not poison the StateDB")
+	}
+
+	sdb.SetTRC10Balance(addr, tokenID, 99)
+	raw, ok, err := sdb.GetAccountKV(addr, kvdomains.AccountAssetV2, key)
+	if err != nil || !ok {
+		t.Fatalf("read malformed row after rejected overwrite: ok=%v err=%v", ok, err)
+	}
+	if string(raw) != string(malformed) {
+		t.Fatalf("malformed row was overwritten after sticky error: got %x want %x", raw, malformed)
 	}
 }
 
@@ -199,13 +226,10 @@ func TestTRC10MapsPersistOutsideAccountEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Version != 3 {
-		t.Fatalf("account version = %d, want 3", envelope.Version)
+	if envelope.Version != StateAccountVersion {
+		t.Fatalf("account version = %d, want %d", envelope.Version, StateAccountVersion)
 	}
-	var stored corepb.Account
-	if err := proto.Unmarshal(envelope.AccountProto, &stored); err != nil {
-		t.Fatal(err)
-	}
+	stored := decodeStoredAccountCore(t, envelope)
 	if len(stored.Asset)+len(stored.AssetV2)+len(stored.FreeAssetNetUsage)+len(stored.FreeAssetNetUsageV2)+len(stored.LatestAssetOperationTime)+len(stored.LatestAssetOperationTimeV2) != 0 {
 		t.Fatalf("split maps leaked into account envelope: %+v", &stored)
 	}

@@ -213,10 +213,10 @@ func (s *stateObject) deterministicAccountProto() ([]byte, error) {
 	if s == nil || s.account == nil {
 		return nil, nil
 	}
-	if s.accountProto != nil {
+	if s.accountProto != nil && types.IsAccountStorageCoreV4(s.accountProto) {
 		return s.accountProto, nil
 	}
-	data, err := s.account.MarshalStorageCore()
+	data, err := s.account.MarshalStorageCoreV4()
 	if err != nil {
 		return nil, err
 	}

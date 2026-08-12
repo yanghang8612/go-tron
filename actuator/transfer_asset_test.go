@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -80,21 +81,26 @@ func TestTransferAssetExecute_AssetNameAsLiteralName(t *testing.T) {
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate must accept literal name: %v", err)
 	}
-	validatedAsset := act.assetCache.resolved
-	if validatedAsset == nil || validatedAsset.Asset == nil {
-		t.Fatal("validate did not retain resolved asset metadata")
+	if act.validated.tokenID != tokenID {
+		t.Fatalf("validate did not retain resolved token ID: got %d", act.validated.tokenID)
 	}
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("execute must succeed with literal name: %v", err)
 	}
-	if act.assetCache.resolved != validatedAsset {
-		t.Fatal("execute decoded asset metadata again instead of reusing validate result")
+	if act.validated.matches(ctx) {
+		t.Fatal("execute did not consume the successful validation plan")
 	}
 	if got := statedb.GetTRC10Balance(owner, tokenID); got != 21_000_000-100 {
 		t.Errorf("owner balance after transfer: got %d want %d", got, 21_000_000-100)
 	}
 	if got := statedb.GetTRC10Balance(to, tokenID); got != 100 {
 		t.Errorf("recipient balance: got %d want 100", got)
+	}
+	if got := statedb.GetTRC10BalanceByName(owner, []byte(tokenName)); got != 21_000_000-100 {
+		t.Errorf("owner legacy balance after transfer: got %d want %d", got, 21_000_000-100)
+	}
+	if got := statedb.GetTRC10BalanceByName(to, []byte(tokenName)); got != 100 {
+		t.Errorf("recipient legacy balance: got %d want 100", got)
 	}
 }
 
@@ -191,6 +197,44 @@ func TestTransferAssetValidate_UnknownToken(t *testing.T) {
 	act := &TransferAssetActuator{}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for unknown token")
+	}
+}
+
+func TestTransferAssetRejectsCorruptRecipientBalanceWithoutOverwrite(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	recipient := makeTestAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(recipient, corepb.AccountType_Normal)
+	statedb.SetTRC10Balance(owner, tokenID, 500)
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Id: strconv.FormatInt(tokenID, 10), Name: []byte("T")}); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte(strconv.FormatInt(tokenID, 10))
+	malformed := []byte{1}
+	if err := statedb.SetAccountKV(recipient, kvdomains.AccountAssetV2, key, malformed); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := setupContext(t, statedb, makeTransferAssetTx(1, 2, tokenID, 100))
+	ctx.DynProps.SetAllowSameTokenName(true)
+	act := new(TransferAssetActuator)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("validation accepted a corrupt recipient TRC10 balance")
+	}
+	if statedb.Error() == nil {
+		t.Fatal("corrupt recipient balance did not poison StateDB")
+	}
+	if _, err := act.Execute(ctx); err == nil {
+		t.Fatal("execute accepted a StateDB poisoned by recipient balance corruption")
+	}
+	raw, ok, err := statedb.GetAccountKV(recipient, kvdomains.AccountAssetV2, key)
+	if err != nil || !ok {
+		t.Fatalf("read recipient row after rejected transfer: ok=%v err=%v", ok, err)
+	}
+	if string(raw) != string(malformed) {
+		t.Fatalf("corrupt recipient row was overwritten: got %x want %x", raw, malformed)
 	}
 }
 
@@ -308,5 +352,138 @@ func TestTransferAssetExecute_CreatesRecipient(t *testing.T) {
 	}
 	if got := statedb.GetTRC10Balance(to, tokenID); got != 500_000 {
 		t.Fatalf("recipient TRC10 balance: want 500000, got %d", got)
+	}
+}
+
+func TestTransferAssetExecute_RechecksCreateAccountFeeAfterValidate(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 100)
+	statedb.SetTRC10Balance(owner, tokenID, 1_000)
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := setupContext(t, statedb, makeTransferAssetTx(1, 9, tokenID, 100))
+	ctx.DynProps.SetAllowSameTokenName(true)
+	ctx.DynProps.Set("create_new_account_fee_in_system_contract", int64(100))
+	act := &TransferAssetActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.SubBalance(owner, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := act.Execute(ctx); err == nil {
+		t.Fatal("execute accepted a create-account fee no longer covered after validation")
+	}
+	if statedb.AccountExists(makeTestAddr(9)) {
+		t.Fatal("recipient was created before the fee recheck")
+	}
+}
+
+func TestTransferAssetExecute_ConsumedPlanCannotGoStale(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+	owner, to := makeTestAddr(1), makeTestAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(to, corepb.AccountType_Normal)
+	statedb.SetTRC10Balance(owner, tokenID, 1_000)
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := setupContext(t, statedb, makeTransferAssetTx(1, 2, tokenID, 100))
+	ctx.DynProps.SetAllowSameTokenName(true)
+	act := &TransferAssetActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// A non-canonical second Execute must take the direct path and reread the
+	// balances rather than replaying the consumed validation snapshot.
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := statedb.GetTRC10Balance(owner, tokenID); got != 800 {
+		t.Fatalf("owner after two executions: got %d, want 800", got)
+	}
+	if got := statedb.GetTRC10Balance(to, tokenID); got != 200 {
+		t.Fatalf("recipient after two executions: got %d, want 200", got)
+	}
+}
+
+func TestTransferAssetDirectExecute_RejectsSelfTransfer(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.SetTRC10Balance(owner, tokenID, 1_000)
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := setupContext(t, statedb, makeTransferAssetTx(1, 1, tokenID, 100))
+	ctx.DynProps.SetAllowSameTokenName(true)
+	if _, err := (&TransferAssetActuator{}).Execute(ctx); err == nil {
+		t.Fatal("direct Execute accepted a self-transfer")
+	}
+	if got := statedb.GetTRC10Balance(owner, tokenID); got != 1_000 {
+		t.Fatalf("self-transfer changed balance: got %d, want 1000", got)
+	}
+}
+
+func TestTransferAssetDirectExecute_RejectsNegativeAmountBeforeCreatingRecipient(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+	owner, to := makeTestAddr(1), makeTestAddr(9)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 1_000_000)
+	statedb.SetTRC10Balance(owner, tokenID, 1_000)
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := setupContext(t, statedb, makeTransferAssetTx(1, 9, tokenID, -100))
+	ctx.DynProps.SetAllowSameTokenName(true)
+	if _, err := (&TransferAssetActuator{}).Execute(ctx); err == nil {
+		t.Fatal("direct Execute accepted a negative amount")
+	}
+	if statedb.AccountExists(to) {
+		t.Fatal("negative direct transfer created the recipient")
+	}
+	if got := statedb.GetTRC10Balance(owner, tokenID); got != 1_000 {
+		t.Fatalf("owner balance changed to %d", got)
+	}
+}
+
+func TestTransferAssetExecute_ReusesResultSink(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+	owner, to := makeTestAddr(1), makeTestAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(to, corepb.AccountType_Normal)
+	statedb.SetTRC10Balance(owner, tokenID, 1_000)
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := setupContext(t, statedb, makeTransferAssetTx(1, 2, tokenID, 100))
+	ctx.DynProps.SetAllowSameTokenName(true)
+	sink := &Result{Fee: 99, ContractRet: -1, EnergyUsageTotal: 77}
+	ctx.ResultSink = sink
+	result, err := (&TransferAssetActuator{}).Execute(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != sink {
+		t.Fatal("execute allocated a result instead of reusing ResultSink")
+	}
+	if result.Fee != 0 || result.ContractRet != 1 || result.EnergyUsageTotal != 0 {
+		t.Fatalf("result sink was not cleared and populated: %+v", result)
 	}
 }

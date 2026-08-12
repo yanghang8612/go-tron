@@ -100,6 +100,9 @@ func TestProposalIndexAppendRejectsCorruptLength(t *testing.T) {
 	if got := sdb.ReadProposalIndex(); got != nil {
 		t.Fatalf("ReadProposalIndex corrupt length = %v, want nil", got)
 	}
+	if sdb.Error() == nil {
+		t.Fatal("corrupt proposal index did not poison StateDB")
+	}
 	if got, ok, err := sdb.ReadProposalIndexStrict(); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "length 3 is not a multiple of 8") {
 		t.Fatalf("ReadProposalIndexStrict corrupt length = %v ok=%v err=%v, want nil true length error", got, ok, err)
 	}

@@ -945,6 +945,47 @@ func TestDBFreezerAlertIssuesDetectTailPruneStageInvariants(t *testing.T) {
 	}
 }
 
+func TestDBFreezerAlertIssuesAcceptDirectV2PhysicalHeads(t *testing.T) {
+	stats := rawdbfreezer.Stats{
+		Head:       65536,
+		Tail:       0,
+		V2Coverage: 65536,
+		Tables: []rawdbfreezer.TableStats{
+			{Name: rawdb.AncientBlocksTable, Head: 0, HiddenTail: 0, Prunable: true, V2Size: 1024},
+			{Name: rawdb.AncientTxInfosTable, Head: 0, HiddenTail: 0, Prunable: true, V2Size: 1024},
+			{Name: rawdb.AncientStateRootsTable, Head: 0, HiddenTail: 0, Prunable: true, V2Size: 1024},
+		},
+	}
+	issues := dbFreezerAlertIssues(
+		stats,
+		rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 65535, HasBlockHash: true, BlockHash: common.Hash{0x44}}, true,
+		rawdb.StageProgress{Stage: rawdb.StageSnapshotChainFreezerTailPrune, BlockNum: 65535, HasBlockHash: true, BlockHash: common.Hash{0x44}}, true,
+	)
+	for _, issue := range issues {
+		if issue.kind == "table-head-mismatch" || issue.kind == "tail-prune-stage-without-hidden-tail" {
+			t.Fatalf("direct V2 produced false critical issue: %+v", issues)
+		}
+	}
+}
+
+func TestDBFreezerAlertIssuesDetectChainFreezerStageBehindHead(t *testing.T) {
+	stats := rawdbfreezer.Stats{Head: 131072, Tail: 0, V2Coverage: 131072}
+	issues := dbFreezerAlertIssues(
+		stats,
+		rawdb.StageProgress{Stage: rawdb.StageChainFreezer, BlockNum: 65535, HasBlockHash: true, BlockHash: common.Hash{0x55}}, true,
+		rawdb.StageProgress{}, false,
+	)
+	found := false
+	for _, issue := range issues {
+		if issue.kind == "chain-freezer-stage-behind-head" && issue.severity == "critical" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing behind-head issue: %+v", issues)
+	}
+}
+
 func TestDBStorageAlertsCmdOK(t *testing.T) {
 	dataDir := t.TempDir()
 	f := openDBCmdFreezer(t, dataDir)

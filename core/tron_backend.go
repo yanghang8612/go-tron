@@ -23,6 +23,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
@@ -1645,7 +1646,7 @@ func readDelegatedResourceAccountIndexAt(reader *state.PersistentHistoryReader, 
 		return nil, err
 	}
 	idx := &corepb.DelegatedResourceAccountIndex{}
-	if err := proto.Unmarshal(data, idx); err != nil {
+	if err := statecodec.Unmarshal(data, idx); err != nil {
 		return nil, err
 	}
 	return idx, nil

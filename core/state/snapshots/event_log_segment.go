@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -48,11 +49,16 @@ var (
 )
 
 type EventLogSegment struct {
-	ref    SegmentRef
-	file   *os.File
-	header eventLogHeader
-	size   uint64
-	v3     *eventLogV3Reader
+	ref         SegmentRef
+	file        *os.File
+	header      eventLogHeader
+	size        uint64
+	v3          *eventLogV3Reader
+	lifecycleMu sync.Mutex
+	cacheMu     sync.Mutex
+	closed      bool
+	activeReads uint64
+	closeErr    error
 }
 
 type EventLogIndexSegment struct {
@@ -483,74 +489,6 @@ func verifyEventLogIndexSegmentAgainstEventLogs(dir string, indexRef SegmentRef,
 	return compareEventLogLookupIndexMaps(indexRef, "topic", expectedTopic, actualTopic)
 }
 
-func verifyEventLogIndexCandidatesForFilter(dir string, indexRef SegmentRef, eventRefs []SegmentRef, fromBlock, toBlock uint64, filter EventLogFilter, candidateStarts []uint64) error {
-	if !eventLogRangeCoveredByRefs(eventRefs, indexRef.FromTxNum, indexRef.ToTxNum) {
-		return fmt.Errorf("snapshots: event-log-index segment %q has no continuous event-log coverage for block range [%d,%d]",
-			indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
-	}
-	refsByStart := make(map[uint64]SegmentRef, len(eventRefs))
-	for _, ref := range eventRefs {
-		refsByStart[ref.FromTxNum] = ref
-	}
-	candidateSet := make(map[uint64]struct{}, len(candidateStarts))
-	for _, start := range candidateStarts {
-		candidateSet[start] = struct{}{}
-		ref, ok := refsByStart[start]
-		if ok {
-			if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
-				continue
-			}
-			if err := CheckEventLogSegment(dir, ref); err != nil {
-				return err
-			}
-			continue
-		}
-		if start >= fromBlock && start <= toBlock {
-			return fmt.Errorf("snapshots: event-log-index %q points to missing event-log segment starting at block %d", indexRef.Path, start)
-		}
-	}
-	for _, ref := range eventRefs {
-		if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
-			continue
-		}
-		if ref.FromTxNum < indexRef.FromTxNum || ref.ToTxNum > indexRef.ToTxNum {
-			return fmt.Errorf("snapshots: event-log segment %q range [%d,%d] crosses event-log-index %q range [%d,%d]",
-				ref.Path, ref.FromTxNum, ref.ToTxNum, indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
-		}
-		if _, ok := candidateSet[ref.FromTxNum]; ok {
-			continue
-		}
-		seg, err := OpenEventLogSegment(dir, ref)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
-		}
-		hasMatch, matchErr := eventLogSegmentHasFilterMatch(seg, fromBlock, toBlock, filter)
-		closeErr := seg.Close()
-		if matchErr != nil {
-			return matchErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if hasMatch {
-			return fmt.Errorf("snapshots: event-log-index %q missing candidate event-log segment %q for filter", indexRef.Path, ref.Path)
-		}
-	}
-	return nil
-}
-
-func eventLogSegmentHasFilterMatch(seg *EventLogSegment, fromBlock, toBlock uint64, filter EventLogFilter) (bool, error) {
-	matched := false
-	err := seg.iterateLogsFullScan(fromBlock, toBlock, filter, func(EventLog) (bool, error) {
-		matched = true
-		return false, nil
-	})
-	return matched, err
-}
-
 func OpenEventLogSegment(dir string, ref SegmentRef) (*EventLogSegment, error) {
 	if err := validateEventLogRef(ref); err != nil {
 		return nil, err
@@ -610,10 +548,54 @@ func OpenEventLogIndexSegment(dir string, ref SegmentRef) (*EventLogIndexSegment
 }
 
 func (s *EventLogSegment) Close() error {
-	if s == nil || s.file == nil {
+	if s == nil {
 		return nil
 	}
-	return s.file.Close()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return s.closeErr
+	}
+	s.closed = true
+	// A callback is allowed to close its own segment. Mark it closed so no
+	// new iteration can start, but defer the physical close until the last
+	// active reader exits; waiting here would self-deadlock that callback.
+	if s.activeReads > 0 {
+		return nil
+	}
+	return s.closeFileLocked()
+}
+
+func (s *EventLogSegment) closeFileLocked() error {
+	if s.file == nil {
+		return s.closeErr
+	}
+	s.closeErr = s.file.Close()
+	s.file = nil
+	return s.closeErr
+}
+
+func (s *EventLogSegment) beginRead() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.file == nil || s.closed {
+		return errors.New("snapshots: closed event log segment")
+	}
+	s.activeReads++
+	return nil
+}
+
+func (s *EventLogSegment) endRead() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.activeReads == 0 {
+		return errors.New("snapshots: event log segment reader underflow")
+	}
+	s.activeReads--
+	if s.closed && s.activeReads == 0 {
+		return s.closeFileLocked()
+	}
+	return nil
 }
 
 func (s *EventLogIndexSegment) Close() error {
@@ -705,10 +687,18 @@ func (s *EventLogIndexLookupStats) add(other EventLogIndexLookupStats) {
 	s.AveragePostingsPerKeyMilli = eventLogAveragePostingsPerKeyMilli(s.Keys, s.Postings)
 }
 
-func (s *EventLogSegment) IterateLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
-	if s == nil || s.file == nil {
+func (s *EventLogSegment) IterateLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (err error) {
+	if s == nil {
 		return errors.New("snapshots: nil event log segment")
 	}
+	if err := s.beginRead(); err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := s.endRead(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
 	if toBlock < fromBlock {
 		return fmt.Errorf("snapshots: event log iterate range [%d,%d] is inverted", fromBlock, toBlock)
 	}
@@ -1040,9 +1030,6 @@ func (m *Manager) eventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock ui
 	refs := eventLogRefs(manifest)
 	plans, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
 	if err != nil {
-		if eventLogRangeCoveredByRefs(refs, fromBlock, toBlock) {
-			return refs, nil
-		}
 		return nil, err
 	}
 	if !indexed {
@@ -1068,12 +1055,6 @@ func (m *Manager) coveredEventLogRefsForQuery(manifest *Manifest, fromBlock, toB
 	refs := eventLogRefs(manifest)
 	plans, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
 	if err != nil {
-		if eventLogRangeCoveredByRefs(refs, fromBlock, toBlock) {
-			if err := checkCoveredEventLogPayloads(m.dir, refs, fromBlock, toBlock); err != nil {
-				return nil, false, false, err
-			}
-			return refs, true, true, nil
-		}
 		return nil, false, false, err
 	}
 	if indexed {
@@ -1089,18 +1070,13 @@ func (m *Manager) coveredEventLogRefsForQuery(manifest *Manifest, fromBlock, toB
 			if _, ok := candidates[ref.FromTxNum]; !ok {
 				continue
 			}
-			if err := CheckEventLogSegment(m.dir, ref); err != nil {
-				if !eventLogRangeCoveredByRefs(refs, fromBlock, toBlock) {
-					return nil, false, false, err
-				}
-				if payloadErr := checkCoveredEventLogPayloads(m.dir, refs, fromBlock, toBlock); payloadErr != nil {
-					return nil, false, false, payloadErr
-				}
-				return refs, true, true, nil
-			}
 			out = append(out, ref)
 		}
 		return out, true, false, nil
+	}
+	companionsVerified, err := m.verifyEventLogCompanionsForRange(manifest, refs, fromBlock, toBlock)
+	if err != nil {
+		return nil, false, false, err
 	}
 
 	next := fromBlock
@@ -1113,11 +1089,13 @@ func (m *Manager) coveredEventLogRefsForQuery(manifest *Manifest, fromBlock, toB
 		if ref.FromTxNum > next {
 			return nil, false, false, nil
 		}
-		if err := CheckEventLogSegment(m.dir, ref); err != nil {
-			if payloadErr := checkEventLogSegmentPayload(m.dir, ref); payloadErr != nil {
-				return nil, false, false, payloadErr
+		if !companionsVerified {
+			if err := CheckEventLogSegment(m.dir, ref); err != nil {
+				if payloadErr := checkEventLogSegmentPayload(m.dir, ref); payloadErr != nil {
+					return nil, false, false, payloadErr
+				}
+				forceFullScan = true
 			}
-			forceFullScan = true
 		}
 		out = append(out, ref)
 		if ref.ToTxNum >= toBlock {
@@ -1153,9 +1131,11 @@ func (m *Manager) eventLogIndexQueryPlans(manifest *Manifest, refs []SegmentRef,
 		if queryTo < queryFrom {
 			continue
 		}
-		if err := CheckEventLogIndexSegment(m.dir, indexRef); err != nil {
+		companions := eventLogRefsForIndex(refs, indexRef)
+		if _, _, err := m.chainVerificationCache.verifyEventLogIndex(m.dir, indexRef, companions); err != nil {
 			return nil, false, err
 		}
+		m.chainVerificationCache.persistPendingAdvisory()
 		index, err := OpenEventLogIndexSegment(m.dir, indexRef)
 		if err != nil {
 			return nil, false, err
@@ -1171,9 +1151,6 @@ func (m *Manager) eventLogIndexQueryPlans(manifest *Manifest, refs []SegmentRef,
 		if !used {
 			return nil, false, nil
 		}
-		if err := verifyEventLogIndexCandidatesForFilter(m.dir, indexRef, refs, queryFrom, queryTo, filter, starts); err != nil {
-			return nil, false, err
-		}
 		plans = append(plans, eventLogIndexQueryPlan{
 			starts: starts,
 		})
@@ -1186,6 +1163,36 @@ func (m *Manager) eventLogIndexQueryPlans(manifest *Manifest, refs []SegmentRef,
 		nextBlock = queryTo + 1
 	}
 	return nil, false, nil
+}
+
+// verifyEventLogCompanionsForRange establishes one cached semantic proof for
+// every immutable index/event companion set covering the requested range. It
+// is also used by unfiltered queries: after the first proof, the query streams
+// the selected payload once instead of running CheckEventLogSegment and then
+// reopening the same segment for delivery on every request.
+func (m *Manager) verifyEventLogCompanionsForRange(manifest *Manifest, refs []SegmentRef, fromBlock, toBlock uint64) (bool, error) {
+	next := fromBlock
+	for _, indexRef := range eventLogIndexRefs(manifest) {
+		if indexRef.ToTxNum < next {
+			continue
+		}
+		if indexRef.FromTxNum > next {
+			return false, nil
+		}
+		companions := eventLogRefsForIndex(refs, indexRef)
+		if _, _, err := m.chainVerificationCache.verifyEventLogIndex(m.dir, indexRef, companions); err != nil {
+			return false, err
+		}
+		m.chainVerificationCache.persistPendingAdvisory()
+		if indexRef.ToTxNum >= toBlock {
+			return true, nil
+		}
+		if indexRef.ToTxNum == ^uint64(0) {
+			return false, nil
+		}
+		next = indexRef.ToTxNum + 1
+	}
+	return false, nil
 }
 
 func eventLogIndexCandidateStartSet(plans []eventLogIndexQueryPlan) map[uint64]struct{} {
@@ -1262,9 +1269,11 @@ func (m *Manager) EventLogIndexedRangeCovered(fromBlock, toBlock uint64) (bool, 
 		if indexRef.FromTxNum > next {
 			return false, nil
 		}
-		if err := verifyEventLogIndexSegmentAgainstEventLogs(m.dir, indexRef, refs); err != nil {
+		companions := eventLogRefsForIndex(refs, indexRef)
+		if _, _, err := m.chainVerificationCache.verifyEventLogIndex(m.dir, indexRef, companions); err != nil {
 			return false, err
 		}
+		m.chainVerificationCache.persistPendingAdvisory()
 		if indexRef.ToTxNum >= toBlock {
 			return true, nil
 		}
@@ -1291,26 +1300,15 @@ func (m *Manager) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filte
 		return false, err
 	}
 	refs := eventLogRefs(manifest)
-	plans, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
+	_, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
 	if err != nil {
 		return false, err
 	}
 	if indexed {
-		candidateStarts := eventLogIndexCandidateStartSet(plans)
-		if len(candidateStarts) == 0 {
-			return true, nil
-		}
-		for _, ref := range refs {
-			if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
-				continue
-			}
-			if _, ok := candidateStarts[ref.FromTxNum]; !ok {
-				continue
-			}
-			if err := CheckEventLogSegment(m.dir, ref); err != nil {
-				return false, err
-			}
-		}
+		// The cached companion proof already established that every posting
+		// resolves to the exact manifest event-segment set. Planning above only
+		// performed immutable-index lookups; no candidate or non-candidate needs
+		// another segment audit for a coverage answer.
 		return true, nil
 	}
 	return m.EventLogRangeCovered(fromBlock, toBlock)
@@ -2224,6 +2222,20 @@ func eventLogRefs(manifest *Manifest) []SegmentRef {
 	}
 	sortSegments(refs)
 	return refs
+}
+
+// eventLogRefsForIndex selects the exact immutable companion set for one
+// external index. eventLogRefs already returns range-sorted refs, so binary
+// search avoids copying and sorting the entire snapshot catalog on every RPC.
+func eventLogRefsForIndex(refs []SegmentRef, indexRef SegmentRef) []SegmentRef {
+	start := sort.Search(len(refs), func(i int) bool {
+		return refs[i].ToTxNum >= indexRef.FromTxNum
+	})
+	end := start
+	for end < len(refs) && refs[end].FromTxNum <= indexRef.ToTxNum {
+		end++
+	}
+	return refs[start:end]
 }
 
 func eventLogIndexRefs(manifest *Manifest) []SegmentRef {

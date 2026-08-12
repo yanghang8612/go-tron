@@ -10,6 +10,9 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // CycleRewardSink can intercept block-final writes to the current-cycle reward
@@ -31,7 +34,11 @@ func (s *StateDB) readSystemRewardWithError(key []byte) ([]byte, bool, error) {
 
 func (s *StateDB) readSystemReward(key []byte) ([]byte, bool) {
 	raw, ok, err := s.readSystemRewardWithError(key)
-	return raw, ok && err == nil
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read system reward key=%x", key), err)
+		return nil, false
+	}
+	return raw, ok
 }
 
 // readSystemRewardForDecoding borrows immutable bytes for immediate scalar or
@@ -52,8 +59,12 @@ func (s *StateDB) ReadCycleReward(cycle int64, addr []byte) int64 {
 	key := rawdb.AppendCycleRewardStateKey(s.delegRewardKeyScratch[:0], cycle, addr)
 	raw, ok := s.readSystemRewardForDecoding(key)
 	base := int64(0)
-	if ok && len(raw) == 8 {
-		base = int64(binary.BigEndian.Uint64(raw))
+	if ok {
+		if len(raw) != 8 {
+			s.recordStateError(fmt.Sprintf("decode cycle reward cycle=%d addr=%x", cycle, addr), fmt.Errorf("length %d, want 8", len(raw)))
+		} else {
+			base = int64(binary.BigEndian.Uint64(raw))
+		}
 	}
 	if s.cycleRewardSink != nil {
 		if pending, ok := s.cycleRewardSink.PendingCycleReward(cycle, tcommon.BytesToAddress(addr)); ok {
@@ -80,6 +91,7 @@ func (s *StateDB) ReadCycleRewardStrict(cycle int64, addr []byte) (int64, bool, 
 func (s *StateDB) ReadCycleRewards(cycle int64, addrs []tcommon.Address) map[tcommon.Address]int64 {
 	out, err := s.ReadCycleRewardsStrict(cycle, addrs)
 	if err != nil {
+		s.recordStateError(fmt.Sprintf("read cycle rewards cycle=%d", cycle), err)
 		return make(map[tcommon.Address]int64, len(addrs))
 	}
 	return out
@@ -134,15 +146,22 @@ func (s *StateDB) writeCycleRewardFinalWithPrev(key, prev []byte, prevExists boo
 	return s.setAccountKVFinalWithPrev(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, prev, buf[:], prevExists)
 }
 
-func decodeCycleReward(raw []byte, exists bool) int64 {
-	if !exists || len(raw) != 8 {
-		return 0
+func decodeCycleReward(raw []byte, exists bool) (int64, error) {
+	if !exists {
+		return 0, nil
 	}
-	return int64(binary.BigEndian.Uint64(raw))
+	if len(raw) != 8 {
+		return 0, fmt.Errorf("state: decode cycle reward: length %d, want 8", len(raw))
+	}
+	return int64(binary.BigEndian.Uint64(raw)), nil
 }
 
 func (s *StateDB) AddCycleReward(cycle int64, addr []byte, delta int64) error {
-	return s.WriteCycleReward(cycle, addr, s.ReadCycleReward(cycle, addr)+delta)
+	current, _, err := s.ReadCycleRewardStrict(cycle, addr)
+	if err != nil {
+		return err
+	}
+	return s.WriteCycleReward(cycle, addr, current+delta)
 }
 
 func (s *StateDB) AddCycleRewardFinal(cycle int64, addr []byte, delta int64) error {
@@ -157,7 +176,11 @@ func (s *StateDB) AddCycleRewardFinal(cycle int64, addr []byte, delta int64) err
 	if err != nil {
 		return err
 	}
-	return s.writeCycleRewardFinalWithPrev(key, raw, exists, decodeCycleReward(raw, exists)+delta)
+	current, err := decodeCycleReward(raw, exists)
+	if err != nil {
+		return err
+	}
+	return s.writeCycleRewardFinalWithPrev(key, raw, exists, current+delta)
 }
 
 func (s *StateDB) AddCycleRewards(cycle int64, deltas map[tcommon.Address]int64) error {
@@ -202,7 +225,11 @@ func (s *StateDB) addCycleRewards(cycle int64, deltas map[tcommon.Address]int64,
 		var err error
 		key := keys[i]
 		raw, exists := current[string(key)]
-		next := decodeCycleReward(raw, exists) + deltas[addr]
+		base, err := decodeCycleReward(raw, exists)
+		if err != nil {
+			return err
+		}
+		next := base + deltas[addr]
 		if final {
 			err = s.writeCycleRewardFinalWithPrev(key, raw, exists, next)
 		} else {
@@ -217,7 +244,11 @@ func (s *StateDB) addCycleRewards(cycle int64, deltas map[tcommon.Address]int64,
 
 func (s *StateDB) ReadCycleVote(cycle int64, addr []byte) int64 {
 	value, ok, err := s.ReadCycleVoteStrict(cycle, addr)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read cycle vote cycle=%d addr=%x", cycle, addr), err)
+		return rawdb.RewardRemark
+	}
+	if !ok {
 		return rawdb.RewardRemark
 	}
 	return value
@@ -236,7 +267,11 @@ func (s *StateDB) WriteCycleVote(cycle int64, addr []byte, value int64) error {
 
 func (s *StateDB) ReadWitnessVI(cycle int64, addr []byte) *big.Int {
 	value, ok, err := s.ReadWitnessVIStrict(cycle, addr)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read witness VI cycle=%d addr=%x", cycle, addr), err)
+		return new(big.Int)
+	}
+	if !ok {
 		return new(big.Int)
 	}
 	return value
@@ -259,7 +294,11 @@ func (s *StateDB) WriteWitnessVI(cycle int64, addr []byte, vi *big.Int) error {
 
 func (s *StateDB) ReadCycleBrokerage(cycle int64, addr []byte) int {
 	value, ok, err := s.ReadCycleBrokerageStrict(cycle, addr)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read cycle brokerage cycle=%d addr=%x", cycle, addr), err)
+		return rawdb.DefaultBrokerage
+	}
+	if !ok {
 		return rawdb.DefaultBrokerage
 	}
 	return value
@@ -301,23 +340,51 @@ func (s *StateDB) WriteCycleBrokerage(cycle int64, addr []byte, rate int) error 
 
 func (s *StateDB) ReadCycleAccountVote(cycle int64, addr []byte) []byte {
 	raw, ok, err := s.ReadCycleAccountVoteStrict(cycle, addr)
-	if err != nil || !ok || len(raw) == 0 {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read cycle account vote cycle=%d addr=%x", cycle, addr), err)
+		return nil
+	}
+	if !ok || len(raw) == 0 {
 		return nil
 	}
 	return raw
 }
 
 func (s *StateDB) ReadCycleAccountVoteStrict(cycle int64, addr []byte) ([]byte, bool, error) {
-	return s.readSystemRewardWithError(rawdb.CycleAccountVoteStateKey(cycle, addr))
+	raw, ok, err := s.readSystemRewardWithError(rawdb.CycleAccountVoteStateKey(cycle, addr))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	account := new(corepb.Account)
+	if err := statecodec.Unmarshal(raw, account); err != nil {
+		return nil, true, fmt.Errorf("state: decode cycle account vote: %w", err)
+	}
+	data, err := proto.Marshal(account)
+	if err != nil {
+		return nil, true, fmt.Errorf("state: encode cycle account vote API value: %w", err)
+	}
+	return data, true, nil
 }
 
-func (s *StateDB) WriteCycleAccountVote(cycle int64, addr, proto []byte) error {
-	return s.writeSystemReward(rawdb.CycleAccountVoteStateKey(cycle, addr), proto)
+func (s *StateDB) WriteCycleAccountVote(cycle int64, addr, data []byte) error {
+	account := new(corepb.Account)
+	if err := proto.Unmarshal(data, account); err != nil {
+		return fmt.Errorf("state: decode cycle account vote API value: %w", err)
+	}
+	native, err := statecodec.Marshal(account)
+	if err != nil {
+		return err
+	}
+	return s.writeSystemReward(rawdb.CycleAccountVoteStateKey(cycle, addr), native)
 }
 
 func (s *StateDB) ReadBeginCycle(addr []byte) int64 {
 	value, ok, err := s.ReadBeginCycleStrict(addr)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read begin cycle addr=%x", addr), err)
+		return 0
+	}
+	if !ok {
 		return 0
 	}
 	return value
@@ -336,7 +403,11 @@ func (s *StateDB) WriteBeginCycle(addr []byte, cycle int64) error {
 
 func (s *StateDB) ReadEndCycle(addr []byte) int64 {
 	value, ok, err := s.ReadEndCycleStrict(addr)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read end cycle addr=%x", addr), err)
+		return rawdb.RewardRemark
+	}
+	if !ok {
 		return rawdb.RewardRemark
 	}
 	return value

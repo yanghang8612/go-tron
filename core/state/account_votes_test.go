@@ -68,7 +68,7 @@ func BenchmarkMaterializeAccountVotesDirty(b *testing.B) {
 	addr := testAddr(0x92)
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)
 	vote := &corepb.Vote{VoteAddress: testAddr(0x93).Bytes(), VoteCount: 11}
-	value, err := proto.Marshal(vote)
+	value, err := encodeAccountVote(vote)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -112,10 +112,7 @@ func TestAccountVotesPersistOutsideAccountEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stored corepb.Account
-	if err := proto.Unmarshal(envelope.AccountProto, &stored); err != nil {
-		t.Fatal(err)
-	}
+	stored := decodeStoredAccountCore(t, envelope)
 	if len(stored.Votes) != 0 {
 		t.Fatalf("split votes leaked into account envelope: %+v", stored.Votes)
 	}
@@ -124,12 +121,12 @@ func TestAccountVotesPersistOutsideAccountEnvelope(t *testing.T) {
 		if readErr != nil || !exists {
 			t.Fatalf("read vote row %d: exists=%v err=%v", index, exists, readErr)
 		}
-		var got corepb.Vote
-		if err := proto.Unmarshal(value, &got); err != nil {
+		got, err := decodeAccountVote(value)
+		if err != nil {
 			t.Fatalf("decode vote row %d: %v", index, err)
 		}
-		if !proto.Equal(&got, want) {
-			t.Fatalf("vote row %d = %+v, want %+v", index, &got, want)
+		if !proto.Equal(got, want) {
+			t.Fatalf("vote row %d = %+v, want %+v", index, got, want)
 		}
 	}
 
@@ -175,7 +172,7 @@ func TestAccountVotesUseBoundedPointReadsAndPreserveSparseSlots(t *testing.T) {
 	first := splitTestVote(0x73, 11)
 	last := splitTestVote(0x74, 22)
 	for index, vote := range map[uint32]*corepb.Vote{0: first, 29: last} {
-		value, err := proto.MarshalOptions{Deterministic: true}.Marshal(vote)
+		value, err := encodeAccountVote(vote)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -252,10 +249,7 @@ func TestStateDBCopyKeepsSplitFieldsOutOfAccountEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stored corepb.Account
-	if err := proto.Unmarshal(envelope.AccountProto, &stored); err != nil {
-		t.Fatal(err)
-	}
+	stored := decodeStoredAccountCore(t, envelope)
 	if len(stored.AssetV2) != 0 || stored.OwnerPermission != nil || len(stored.Votes) != 0 || stored.AccountResource != nil || len(stored.Frozen) != 0 || stored.TronPower != nil {
 		t.Fatalf("copied account leaked split fields into envelope: %+v", &stored)
 	}

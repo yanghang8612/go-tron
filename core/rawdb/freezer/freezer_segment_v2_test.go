@@ -136,6 +136,234 @@ func TestV2CompressedBufferPoolIsStrictlyBounded(t *testing.T) {
 	}
 }
 
+func TestFreezerDirectV2PersistsLogicalHeadWithoutV1(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":      {Prunable: true},
+		"tx_infos":    {Prunable: true},
+		"state_roots": {NoSnappy: true, Prunable: true},
+	}
+	want := make(map[string][][]byte, len(tables))
+	for kind := range tables {
+		want[kind] = make([][]byte, 64)
+		for number := uint64(0); number < 64; number++ {
+			want[kind][number] = []byte(fmt.Sprintf("%s-direct-%d", kind, number))
+		}
+	}
+	f, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.CanAppendV2Direct(0) {
+		t.Fatal("fresh freezer did not accept direct V2 at genesis")
+	}
+	result, err := f.MigrateV2(V2MigrationOptions{
+		Tables:        []string{"bodies", "tx_infos", "state_roots"},
+		SegmentBlocks: 64,
+		FrameBlocks:   8,
+		MaxSegments:   1,
+		Online:        true,
+		SourceHead:    64,
+		Source: func(kind string, number uint64) ([]byte, error) {
+			return want[kind][number], nil
+		},
+	})
+	if err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if result.End != 64 || result.Segments != 1 || f.V2Coverage() != 64 {
+		_ = f.Close()
+		t.Fatalf("direct result=%+v coverage=%d", result, f.V2Coverage())
+	}
+	for kind, table := range f.tables {
+		if table.items.Load() != 0 || table.itemHidden.Load() != 0 {
+			_ = f.Close()
+			t.Fatalf("direct V2 materialized V1 %s head=%d tail=%d", kind, table.items.Load(), table.itemHidden.Load())
+		}
+	}
+	if _, err := f.ModifyAncients(func(AncientWriteOp) error { return nil }); err == nil {
+		_ = f.Close()
+		t.Fatal("V1 append remained enabled after direct V2 advanced the logical head")
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if count, err := reopened.AncientCount("bodies"); err != nil || count != 64 || reopened.head.Load() != 64 {
+		t.Fatalf("reopened direct head count=%d logical=%d err=%v", count, reopened.head.Load(), err)
+	}
+	if !reopened.CanAppendV2Direct(64) {
+		t.Fatal("reopened freezer cannot continue direct V2")
+	}
+	if tail := reopened.V1Tail(); tail != 64 {
+		t.Fatalf("reopened direct V1 tail=%d, want logical head 64", tail)
+	}
+	for kind := range tables {
+		for _, number := range []uint64{0, 31, 63} {
+			got, err := reopened.Ancient(kind, number)
+			if err != nil || !bytes.Equal(got, want[kind][number]) {
+				t.Fatalf("reopened %s[%d]=%q err=%v, want %q", kind, number, got, err, want[kind][number])
+			}
+		}
+	}
+}
+
+func TestFreezerDirectV2RecoversManifestPublishedBeforeLiveInstall(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":      {Prunable: true},
+		"tx_infos":    {Prunable: true},
+		"state_roots": {NoSnappy: true, Prunable: true},
+	}
+	f, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("stop after V2 manifest")
+	options := V2MigrationOptions{
+		Tables:        []string{"bodies", "tx_infos", "state_roots"},
+		SegmentBlocks: 64,
+		FrameBlocks:   8,
+		MaxSegments:   1,
+		Online:        true,
+		SourceHead:    64,
+		Source: func(kind string, number uint64) ([]byte, error) {
+			return []byte(fmt.Sprintf("%s-%d", kind, number)), nil
+		},
+		TransactionIndexPrefixBits: 8,
+		TransactionIndexEntries: func(number uint64, _ []byte) ([]TransactionIndexEntry, error) {
+			var hash [32]byte
+			binary.BigEndian.PutUint64(hash[24:], number+1)
+			return []TransactionIndexEntry{{Hash: hash, Location: number}}, nil
+		},
+		BeforeTransactionIndexPublish: func() error { return stop },
+	}
+	_, err = f.MigrateV2(options)
+	if !errors.Is(err, stop) {
+		_ = f.Close()
+		t.Fatalf("direct interrupted err=%v, want %v", err, stop)
+	}
+	if f.V2Coverage() != 0 || f.head.Load() != 0 {
+		_ = f.Close()
+		t.Fatalf("failed live install advanced coverage/head to %d/%d", f.V2Coverage(), f.head.Load())
+	}
+	// Retry without restarting the process. The durable manifest is the commit
+	// marker, so recovery must adopt its files without invoking the source or
+	// deleting/replacing any manifest-referenced segment.
+	options.Source = func(kind string, number uint64) ([]byte, error) {
+		return nil, fmt.Errorf("source unexpectedly reread during recovery: %s[%d]", kind, number)
+	}
+	options.BeforeTransactionIndexPublish = func() error {
+		return errors.New("transaction-index publication unexpectedly retried")
+	}
+	result, err := f.MigrateV2(options)
+	if err != nil {
+		_ = f.Close()
+		t.Fatalf("same-process recovery: %v", err)
+	}
+	if result.Start != 0 || result.End != 64 || result.Segments != 1 || f.V2Coverage() != 64 || f.head.Load() != 64 {
+		_ = f.Close()
+		t.Fatalf("same-process recovery result=%+v coverage=%d head=%d", result, f.V2Coverage(), f.head.Load())
+	}
+	for _, kind := range []string{"bodies", "tx_infos", "state_roots"} {
+		if got, err := f.Ancient(kind, 63); err != nil || string(got) != kind+"-63" {
+			_ = f.Close()
+			t.Fatalf("same-process recovered %s[63]=%q err=%v", kind, got, err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.V2Coverage() != 64 || reopened.head.Load() != 64 || !reopened.CanAppendV2Direct(64) {
+		t.Fatalf("recovered coverage=%d head=%d direct=%t, want 64/64/true", reopened.V2Coverage(), reopened.head.Load(), reopened.CanAppendV2Direct(64))
+	}
+	for _, kind := range []string{"bodies", "tx_infos", "state_roots"} {
+		if got, err := reopened.Ancient(kind, 63); err != nil || string(got) != kind+"-63" {
+			t.Fatalf("recovered %s[63]=%q err=%v", kind, got, err)
+		}
+	}
+}
+
+func TestFreezerDirectV2SourceFailureLeavesNoPublishedSegmentAndRetries(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":      {Prunable: true},
+		"tx_infos":    {Prunable: true},
+		"state_roots": {NoSnappy: true, Prunable: true},
+	}
+	f, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	sourceErr := errors.New("injected direct source failure")
+	fail := true
+	options := V2MigrationOptions{
+		Tables:        []string{"bodies", "tx_infos", "state_roots"},
+		SegmentBlocks: 64,
+		FrameBlocks:   8,
+		MaxSegments:   1,
+		Online:        true,
+		SourceHead:    64,
+		Source: func(kind string, number uint64) ([]byte, error) {
+			if fail && kind == "tx_infos" && number == 17 {
+				return nil, sourceErr
+			}
+			return []byte(fmt.Sprintf("%s-retry-%d", kind, number)), nil
+		},
+	}
+	if _, err := f.MigrateV2(options); !errors.Is(err, sourceErr) {
+		t.Fatalf("direct source failure err=%v, want %v", err, sourceErr)
+	}
+	if coverage, head := f.V2Coverage(), f.head.Load(); coverage != 0 || head != 0 {
+		t.Fatalf("failed source advanced coverage/head to %d/%d", coverage, head)
+	}
+	manifests, err := filepath.Glob(filepath.Join(dir, "v2", "manifests", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifests) != 0 {
+		t.Fatalf("failed source published manifests: %v", manifests)
+	}
+	for kind := range tables {
+		segments, err := filepath.Glob(filepath.Join(dir, "v2", kind, "*.gtv2"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(segments) != 0 {
+			t.Fatalf("failed source left published %s segments: %v", kind, segments)
+		}
+	}
+
+	fail = false
+	result, err := f.MigrateV2(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.End != 64 || result.Segments != 1 || f.V2Coverage() != 64 || f.head.Load() != 64 {
+		t.Fatalf("retry result=%+v coverage=%d head=%d", result, f.V2Coverage(), f.head.Load())
+	}
+	for kind := range tables {
+		got, err := f.Ancient(kind, 17)
+		if err != nil || string(got) != kind+"-retry-17" {
+			t.Fatalf("retried %s[17]=%q err=%v", kind, got, err)
+		}
+	}
+}
+
 func TestFreezerMigrateV2RoundTripResumeAndAppend(t *testing.T) {
 	dir := t.TempDir()
 	tables := map[string]TableConfig{

@@ -39,12 +39,6 @@ func TestStorageReadMetricsBatchOnSuccessfulCommit(t *testing.T) {
 		t.Fatalf("cold missing = (%x,%v), want (zero,false)", got, exists)
 	}
 
-	reader.err = errors.New("temporary")
-	if got, exists := sdb.GetStateWithExist(addr, tcommon.Hash{0x03}); exists || got != (tcommon.Hash{}) {
-		t.Fatalf("cold error = (%x,%v), want (zero,false)", got, exists)
-	}
-	reader.err = nil
-
 	createdAddr := testAddr(0xb1)
 	sdb.CreateAccount(createdAddr, corepb.AccountType_Contract)
 	if got, exists := sdb.GetStateWithExist(createdAddr, tcommon.Hash{0x04}); exists || got != (tcommon.Hash{}) {
@@ -55,11 +49,11 @@ func TestStorageReadMetricsBatchOnSuccessfulCommit(t *testing.T) {
 	}
 
 	m := sdb.storageObservability
-	if m.calls() != 6 || m.objectCacheHits != 1 || m.createdZero != 1 || m.accountMissingZero != 1 || m.coldReads != 3 {
-		t.Fatalf("read outcomes = %+v calls=%d, want calls/hit/created/account-missing/cold 6/1/1/1/3", m, m.calls())
+	if m.calls() != 5 || m.objectCacheHits != 1 || m.createdZero != 1 || m.accountMissingZero != 1 || m.coldReads != 2 {
+		t.Fatalf("read outcomes = %+v calls=%d, want calls/hit/created/account-missing/cold 5/1/1/1/2", m, m.calls())
 	}
-	if m.coldFound != 1 || m.coldMissing != 1 || m.coldErrors != 1 {
-		t.Fatalf("cold outcomes found/missing/error = %d/%d/%d, want 1/1/1", m.coldFound, m.coldMissing, m.coldErrors)
+	if m.coldFound != 1 || m.coldMissing != 1 || m.coldErrors != 0 {
+		t.Fatalf("cold outcomes found/missing/error = %d/%d/%d, want 1/1/0", m.coldFound, m.coldMissing, m.coldErrors)
 	}
 	// Registered counters remain untouched until the successful commit boundary.
 	if got := storageReadCallsCounter.Snapshot().Count() - beforeCalls; got != 0 {
@@ -76,19 +70,34 @@ func TestStorageReadMetricsBatchOnSuccessfulCommit(t *testing.T) {
 		got  int64
 		want int64
 	}{
-		{"calls", storageReadCallsCounter.Snapshot().Count() - beforeCalls, 6},
+		{"calls", storageReadCallsCounter.Snapshot().Count() - beforeCalls, 5},
 		{"object hits", storageReadObjectCacheHitCounter.Snapshot().Count() - beforeHits, 1},
 		{"created zero", storageReadCreatedZeroCounter.Snapshot().Count() - beforeCreated, 1},
 		{"account missing zero", storageReadAccountMissingZeroCounter.Snapshot().Count() - beforeAccountMissing, 1},
-		{"cold", storageReadColdCounter.Snapshot().Count() - beforeCold, 3},
+		{"cold", storageReadColdCounter.Snapshot().Count() - beforeCold, 2},
 		{"cold found", storageReadColdFoundCounter.Snapshot().Count() - beforeFound, 1},
 		{"cold missing", storageReadColdMissingCounter.Snapshot().Count() - beforeMissing, 1},
-		{"cold errors", storageReadColdErrorCounter.Snapshot().Count() - beforeErrors, 1},
+		{"cold errors", storageReadColdErrorCounter.Snapshot().Count() - beforeErrors, 0},
 	}
 	for _, check := range checks {
 		if check.got != check.want {
 			t.Errorf("%s delta = %d, want %d", check.name, check.got, check.want)
 		}
+	}
+}
+
+func TestStorageReadErrorPoisonsCommit(t *testing.T) {
+	sdb, reader, addr := stateWithStorageReader(t)
+	reader.err = errors.New("temporary")
+	if got, exists := sdb.GetStateWithExist(addr, tcommon.Hash{0x03}); exists || got != (tcommon.Hash{}) {
+		t.Fatalf("cold error = (%x,%v), want fail-closed zero,false", got, exists)
+	}
+	if sdb.Error() == nil {
+		t.Fatal("storage read error did not poison StateDB")
+	}
+	reader.err = nil
+	if _, err := sdb.Commit(); err == nil {
+		t.Fatal("commit succeeded after rooted storage read failure")
 	}
 }
 

@@ -2495,10 +2495,6 @@ func TestTronBackend_GetLogsUsesColdEventLogIndexForFilteredCoverage(t *testing.
 	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, 2); len(infos) != 0 {
 		t.Fatalf("hot block2 tx infos still present: %+v", infos)
 	}
-	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
-		t.Fatalf("remove unrelated event-log segment: %v", err)
-	}
-
 	from, to := uint64(1), uint64(2)
 	backend := &TronBackend{chain: bc}
 	logs, err := backend.GetLogs(jsonrpc.LogFilter{
@@ -2823,7 +2819,7 @@ func TestTronBackend_GetLogsUsesCoveredColdEventLogBoundary(t *testing.T) {
 	}
 }
 
-func TestTronBackend_GetLogsFallsBackToColdEventLogScanWhenIndexMissing(t *testing.T) {
+func TestTronBackend_GetLogsRejectsMissingColdEventLogIndex(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
 	logAddress := bytes20(0x42)
@@ -2867,24 +2863,18 @@ func TestTronBackend_GetLogsFallsBackToColdEventLogScanWhenIndexMissing(t *testi
 
 	from, to := uint64(1), uint64(1)
 	backend := &TronBackend{chain: bc}
-	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+	_, err = backend.GetLogs(jsonrpc.LogFilter{
 		FromBlock: &from,
 		ToBlock:   &to,
 		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
 		Topics:    [][]tcommon.Hash{{topic}},
 	})
-	if err != nil {
-		t.Fatalf("GetLogs with missing cold event-log index: %v", err)
-	}
-	if len(logs) != 1 {
-		t.Fatalf("GetLogs with missing cold event-log index returned %d logs, want 1", len(logs))
-	}
-	if logs[0].Data != "0x4243" || logs[0].Address != fmt.Sprintf("0x%x", logAddress) {
-		t.Fatalf("log = %+v, want cold fallback log", logs[0])
+	if err == nil {
+		t.Fatal("GetLogs accepted a manifest with a missing cold event-log index")
 	}
 }
 
-func TestTronBackend_GetLogsFallsBackToColdEventLogScanWhenIndexCorrupt(t *testing.T) {
+func TestTronBackend_GetLogsRejectsCorruptColdEventLogIndex(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
 	logAddress := bytes20(0x43)
@@ -2928,20 +2918,14 @@ func TestTronBackend_GetLogsFallsBackToColdEventLogScanWhenIndexCorrupt(t *testi
 
 	from, to := uint64(1), uint64(1)
 	backend := &TronBackend{chain: bc}
-	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+	_, err = backend.GetLogs(jsonrpc.LogFilter{
 		FromBlock: &from,
 		ToBlock:   &to,
 		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
 		Topics:    [][]tcommon.Hash{{topic}},
 	})
-	if err != nil {
-		t.Fatalf("GetLogs with corrupt cold event-log index: %v", err)
-	}
-	if len(logs) != 1 {
-		t.Fatalf("GetLogs with corrupt cold event-log index returned %d logs, want 1", len(logs))
-	}
-	if logs[0].Data != "0x4344" || logs[0].Address != fmt.Sprintf("0x%x", logAddress) {
-		t.Fatalf("log = %+v, want cold fallback log", logs[0])
+	if err == nil {
+		t.Fatal("GetLogs accepted a manifest with a corrupt cold event-log index")
 	}
 }
 
@@ -3012,10 +2996,6 @@ func TestJSONRPCGetLogsUsesColdEventLogIndex(t *testing.T) {
 	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, 2); len(infos) != 0 {
 		t.Fatalf("hot block2 tx infos still present: %+v", infos)
 	}
-	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
-		t.Fatalf("remove unrelated event-log segment: %v", err)
-	}
-
 	backend := &TronBackend{chain: bc}
 	from, to := uint64(1), uint64(2)
 	directLogs, err := backend.GetLogs(jsonrpc.LogFilter{
@@ -3186,10 +3166,6 @@ func TestJSONRPCGetLogsColdEventLogIndexParsesComplexFilter(t *testing.T) {
 	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, block2.Number()); len(infos) != 0 {
 		t.Fatalf("hot block2 tx infos still present: %+v", infos)
 	}
-	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
-		t.Fatalf("remove unrelated event-log segment: %v", err)
-	}
-
 	backend := &recordingLogBackend{TronBackend: &TronBackend{chain: bc}}
 	rpcServer := jsonrpc.NewServer(backend, 0)
 	defer rpcServer.Stop()

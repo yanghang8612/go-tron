@@ -196,6 +196,9 @@ func TestWitnessScheduleStrictSurfacesMalformedIndexes(t *testing.T) {
 	if got := sdb.ReadWitnessIndex(); got != nil {
 		t.Fatalf("compat malformed witness index = %v, want nil", got)
 	}
+	if sdb.Error() == nil {
+		t.Fatal("compat malformed witness index did not poison StateDB")
+	}
 	if got, ok, err := sdb.ReadWitnessIndexStrict(); err == nil || !ok || got != nil || !strings.Contains(err.Error(), "witness index") {
 		t.Fatalf("strict malformed witness index = %v ok=%v err=%v, want decode error", got, ok, err)
 	}
@@ -203,6 +206,7 @@ func TestWitnessScheduleStrictSurfacesMalformedIndexes(t *testing.T) {
 		t.Fatalf("AppendWitnessIndex malformed index err = %v, want decode error", err)
 	}
 
+	sdb = newTestStateDB(t)
 	if err := sdb.SystemKVPut(kvdomains.SystemWitnessSchedule, witnessScheduleActiveKey, truncated); err != nil {
 		t.Fatalf("write malformed active witnesses: %v", err)
 	}

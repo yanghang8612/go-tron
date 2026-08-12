@@ -290,18 +290,52 @@ func readAncientBlockStateRootRawStrict(db *ChainDB, hash common.Hash, number ui
 // requires a verified chain-index sidecar. This helper stays narrow so the
 // freezer writer only deletes rows it copied in the same pass.
 //
-// Implementation: two DeleteRange calls — one per prefix — wrapping the
-// half-open `[prefix||lo, prefix||(hi+1))` window. Pebble turns each into
-// a range tombstone (O(1) on the write path, compacted away later).
-// Memory-backed stores (memorydb, blockbuffer) also implement
-// DeleteRange so tests exercise the same code path.
+// Implementation: one atomic batch containing two DeleteRange calls — one per
+// prefix — wrapping the half-open `[prefix||lo, prefix||(hi+1))` window.
+// Keeping both tombstones in the same commit prevents a crash from deleting
+// b-* while permanently leaving tib-* behind. Stores without batch support
+// use the same two range deletes as a compatibility fallback.
 //
 // hi is INCLUSIVE: a caller wanting "every block strictly below cutoff"
 // passes (lo, cutoff-1). Returns silently when lo > hi (no rows to drop).
-func DeleteFrozenBlockRange(db ethdb.KeyValueRangeDeleter, lo, hi uint64) error {
+func DeleteFrozenBlockRange(db ethdb.KeyValueStore, lo, hi uint64) error {
+	if db == nil {
+		return errors.New("rawdb: nil database while deleting frozen block range")
+	}
 	if lo > hi {
 		return nil
 	}
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatch()
+		defer batch.Reset()
+		if err := deleteFrozenBlockRows(batch, lo, hi); err != nil {
+			return err
+		}
+		return batch.Write()
+	}
+	return deleteFrozenBlockRows(db, lo, hi)
+}
+
+// HasHotFrozenBlockRows probes only the canonical Pebble rows for a frozen
+// block boundary. It deliberately does not consult ancient fallbacks: the
+// freezer runner uses it to detect duplicate b-* or tib-* rows left after an
+// interrupted hot cleanup.
+func HasHotFrozenBlockRows(db ethdb.KeyValueReader, number uint64) (block, txInfos bool, err error) {
+	if db == nil {
+		return false, false, errors.New("rawdb: nil database while probing frozen hot rows")
+	}
+	block, err = db.Has(blockKey(number))
+	if err != nil {
+		return false, false, err
+	}
+	txInfos, err = db.Has(txInfoBlockKey(number))
+	if err != nil {
+		return false, false, err
+	}
+	return block, txInfos, nil
+}
+
+func deleteFrozenBlockRanges(db ethdb.KeyValueRangeDeleter, lo, hi uint64) error {
 	endBlock := hi + 1
 	// When hi == MaxUint64 the +1 overflows; that's only reachable via a
 	// caller passing the sentinel, which the slice-3 runner never does.
@@ -391,7 +425,7 @@ func DeleteFrozenBlockStateRoots(db ethdb.KeyValueStore, blockHashes []common.Ha
 
 func deleteFrozenBlockRows(writer ethdb.KeyValueWriter, lo, hi uint64) error {
 	if rangeDeleter, ok := writer.(ethdb.KeyValueRangeDeleter); ok {
-		return DeleteFrozenBlockRange(rangeDeleter, lo, hi)
+		return deleteFrozenBlockRanges(rangeDeleter, lo, hi)
 	}
 	for number := lo; ; number++ {
 		if err := writer.Delete(blockKey(number)); err != nil {
@@ -421,4 +455,16 @@ func BlockRangeBounds(lo, hi uint64) (start, limit []byte) {
 		endBlock = hi
 	}
 	return blockKey(lo), blockKey(endBlock)
+}
+
+// TxInfoBlockRangeBounds returns the prefix-encoded `tib-<num>` half-open key
+// bounds covering [lo, hi]. The freezer compacts this range independently from
+// b-* because the two keyspaces are not adjacent and transaction receipts are
+// commonly the larger of the two datasets.
+func TxInfoBlockRangeBounds(lo, hi uint64) (start, limit []byte) {
+	endBlock := hi + 1
+	if endBlock < hi {
+		endBlock = hi
+	}
+	return txInfoBlockKey(lo), txInfoBlockKey(endBlock)
 }

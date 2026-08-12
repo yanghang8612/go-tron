@@ -7,11 +7,38 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+type countingBatchDB struct {
+	ethdb.KeyValueStore
+	batches int
+	writes  int
+}
+
+type countingWriteBatch struct {
+	ethdb.Batch
+	db *countingBatchDB
+}
+
+func (db *countingBatchDB) NewBatch() ethdb.Batch {
+	db.batches++
+	return &countingWriteBatch{Batch: db.KeyValueStore.NewBatch(), db: db}
+}
+
+func (db *countingBatchDB) NewBatchWithSize(size int) ethdb.Batch {
+	db.batches++
+	return &countingWriteBatch{Batch: db.KeyValueStore.NewBatchWithSize(size), db: db}
+}
+
+func (b *countingWriteBatch) Write() error {
+	b.db.writes++
+	return b.Batch.Write()
+}
 
 // fakeAncient is a deterministic, in-memory AncientReader that lets the
 // slice-2 fall-through tests assert "the ancient table was consulted"
@@ -243,6 +270,47 @@ func TestDeleteFrozenBlockRangeWithStateRoots(t *testing.T) {
 		if root := ReadBlockStateRootRaw(db, block.Hash()); root != nil {
 			t.Fatalf("hot state root %d survived frozen delete: %x", number, root)
 		}
+	}
+}
+
+func TestDeleteFrozenBlockRangeCommitsBothPrefixesInOneBatch(t *testing.T) {
+	base := NewMemoryDatabase()
+	db := &countingBatchDB{KeyValueStore: base}
+	for number := uint64(0); number < 2; number++ {
+		if err := db.Put(blockKey(number), []byte{1}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Put(txInfoBlockKey(number), []byte{2}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := DeleteFrozenBlockRange(db, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if db.batches != 1 || db.writes != 1 {
+		t.Fatalf("delete used batches/writes=%d/%d, want 1/1", db.batches, db.writes)
+	}
+	for number := uint64(0); number < 2; number++ {
+		if _, err := db.Get(blockKey(number)); err == nil {
+			t.Fatalf("block %d survived", number)
+		}
+		if _, err := db.Get(txInfoBlockKey(number)); err == nil {
+			t.Fatalf("tx info %d survived", number)
+		}
+	}
+}
+
+func TestFrozenBlockCompactionBoundsCoverDistinctPrefixes(t *testing.T) {
+	blockStart, blockLimit := BlockRangeBounds(7, 9)
+	txStart, txLimit := TxInfoBlockRangeBounds(7, 9)
+	if !bytes.Equal(blockStart, blockKey(7)) || !bytes.Equal(blockLimit, blockKey(10)) {
+		t.Fatalf("block bounds=%x..%x", blockStart, blockLimit)
+	}
+	if !bytes.Equal(txStart, txInfoBlockKey(7)) || !bytes.Equal(txLimit, txInfoBlockKey(10)) {
+		t.Fatalf("tx-info bounds=%x..%x", txStart, txLimit)
+	}
+	if bytes.Equal(blockStart, txStart) || bytes.Equal(blockLimit, txLimit) {
+		t.Fatal("block and tx-info compaction ranges unexpectedly overlap")
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -59,6 +60,11 @@ const maxStateObjectCachedStorageSlots = 4096
 // commits backed by a CommitmentDomain root.
 type StateDB struct {
 	db *Database
+	// dbErr is the first durable-state read/decode failure observed by this
+	// execution view. Getters whose public signatures cannot return an error must
+	// never turn corruption into a semantic miss: they record it here, and the
+	// transaction/commit boundaries fail closed before publishing mutations.
+	dbErr error
 
 	stateObjects map[tcommon.Address]*stateObject
 	witnesses    map[tcommon.Address]*types.Witness
@@ -83,17 +89,17 @@ type StateDB struct {
 	// vote index, or frozen-row access. Writers own composite keys before return.
 	trc10TokenKeyScratch    [20]byte
 	assetIDKeyScratch       [9]byte
+	assetBytesKeyScratch    [33]byte
 	accountUint32KeyScratch [4]byte
 	// Witness capsule keys are address-dependent but the witness set is tiny and
 	// stable across a replay range. Cache one immutable fixed key per observed
 	// witness so repeated lookups do not allocate a 23-byte temporary that
 	// escapes through the generic account-KV reader interface.
 	witnessCapsuleKeys map[tcommon.Address]*[rawdb.WitnessCapsuleStateKeyLength]byte
-	// A corepb.Vote normally encodes to at most 35 bytes (21-byte address plus
-	// tags, lengths, and a 10-byte signed count). writeAccountVotes marshals into
+	// Account-local native rows normally fit in 64 bytes. Writers encode into
 	// this execution-confined buffer before SetAccountKV copies the bytes into
-	// its block arena, avoiding one short-lived protobuf allocation per row.
-	accountVoteMarshalScratch [64]byte
+	// its block arena, avoiding one short-lived allocation per hot row.
+	accountRowMarshalScratch [64]byte
 	// Standard cycle reward keys are at most 46 bytes (dl- + cycle +
 	// separators + a 21-byte address + account-vote). The public APIs still
 	// accept arbitrary address slices; append grows beyond this scratch when
@@ -738,6 +744,35 @@ func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 	}, nil
 }
 
+// Error returns the first durable-state access error observed by this view.
+// It intentionally survives journal reverts: reverting mutations cannot repair
+// a corrupt or unreadable rooted row.
+func (s *StateDB) Error() error {
+	if s == nil {
+		return nil
+	}
+	return s.dbErr
+}
+
+func (s *StateDB) setError(err error) {
+	if s != nil && err != nil && s.dbErr == nil {
+		s.dbErr = err
+	}
+}
+
+// recordStateError makes a durable-state read, decode or write failure sticky
+// while returning the same contextual error to strict callers. State mutations
+// may be journal-reverted, but a corrupt or unreadable rooted row cannot be
+// repaired by continuing the transaction with a zero-value substitute.
+func (s *StateDB) recordStateError(context string, err error) error {
+	if err == nil {
+		return nil
+	}
+	wrapped := fmt.Errorf("%s: %w", context, err)
+	s.setError(wrapped)
+	return wrapped
+}
+
 // NewFlat is an explicit alias for New. New databases have only one state
 // layout: flat latest domains plus CommitmentDomain.
 func NewFlat(root tcommon.Hash, db *Database) (*StateDB, error) {
@@ -1198,10 +1233,47 @@ func (s *StateDB) setTRC10BalanceLegacyAndV2Changed(addr tcommon.Address, name [
 }
 
 func (s *StateDB) GetTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, allowSameTokenName bool) int64 {
+	value, _ := s.GetTRC10BalanceFinalStrict(addr, name, tokenID, allowSameTokenName)
+	return value
+}
+
+// GetTRC10BalanceFinalStrict is the consensus-path balance reader. Unlike the
+// compatibility getter, it surfaces malformed split rows directly while also
+// poisoning the StateDB so transaction boundaries cannot continue execution.
+func (s *StateDB) GetTRC10BalanceFinalStrict(addr tcommon.Address, name []byte, tokenID int64, allowSameTokenName bool) (int64, error) {
+	var domain kvdomains.KVDomain
+	var key []byte
 	if allowSameTokenName {
-		return s.GetTRC10Balance(addr, tokenID)
+		domain = kvdomains.AccountAssetV2
+		key = s.trc10TokenKey(tokenID)
+	} else {
+		domain = kvdomains.AccountAsset
+		key = name
 	}
-	return s.GetTRC10BalanceByName(addr, name)
+	value, _, err := s.accountAuxValue(addr, domain, key)
+	return value, err
+}
+
+// SetTRC10BalanceFinal writes an already-computed final balance without first
+// reading the current balance again. Callers that validated the arithmetic can
+// therefore carry the same read through execution. Before
+// AllowSameTokenName, the legacy name-keyed value remains authoritative and
+// the V2 id-keyed value is updated as java-tron's mandatory migration mirror.
+func (s *StateDB) SetTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, amount int64, allowSameTokenName bool) {
+	_ = s.SetTRC10BalanceFinalStrict(addr, name, tokenID, amount, allowSameTokenName)
+}
+
+// SetTRC10BalanceFinalStrict is the error-returning execution counterpart used
+// by TransferAsset. Before AllowSameTokenName both authoritative and mirror
+// legs remain transaction-journaled, but no write error is discarded.
+func (s *StateDB) SetTRC10BalanceFinalStrict(addr tcommon.Address, name []byte, tokenID int64, amount int64, allowSameTokenName bool) error {
+	if allowSameTokenName {
+		return s.setAccountAuxValue(addr, kvdomains.AccountAssetV2, s.trc10TokenKey(tokenID), amount)
+	}
+	if err := s.setAccountAuxValue(addr, kvdomains.AccountAsset, name, amount); err != nil {
+		return err
+	}
+	return s.setAccountAuxValueUnconditional(addr, kvdomains.AccountAssetV2, s.trc10TokenKey(tokenID), amount)
 }
 
 func (s *StateDB) AddTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, amount int64, allowSameTokenName bool) {
@@ -1645,7 +1717,11 @@ func (s *StateDB) GetWitness(addr tcommon.Address) *types.Witness {
 		return w
 	}
 	w, err := s.readWitnessCapsule(addr)
-	if err != nil || w == nil {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read witness %s", addr.Hex()), err)
+		return nil
+	}
+	if w == nil {
 		return nil
 	}
 	s.witnesses[addr] = w.Copy()
@@ -2933,14 +3009,23 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 func (s *StateDB) loadContract(obj *stateObject) *contractpb.SmartContract {
 	if obj.contractMeta == nil && !obj.contractMetaDirty {
 		data, ok, err := s.getAccountKVForDecoding(obj.address, kvdomains.ContractMetadata, contractMetaKVKey)
-		if err == nil && ok && len(data) > 0 {
+		if err != nil {
+			s.recordStateError(fmt.Sprintf("read contract metadata %s", obj.address.Hex()), err)
+			return nil
+		}
+		if ok && len(data) == 0 {
+			s.recordStateError(fmt.Sprintf("decode contract metadata %s", obj.address.Hex()), errors.New("empty value"))
+			return nil
+		}
+		if ok {
 			var sc contractpb.SmartContract
-			if err := proto.Unmarshal(data, &sc); err == nil {
-				obj.contractMeta = &sc
-				// A prior transient read/unmarshal failure may have derived the
-				// legacy nil-metadata layout. Loading metadata changes that layout.
-				obj.invalidateStorageKeyLayout()
+			if err := statecodec.Unmarshal(data, &sc); err != nil {
+				s.recordStateError(fmt.Sprintf("decode contract metadata %s", obj.address.Hex()), err)
+				return nil
 			}
+			obj.contractMeta = &sc
+			// Loading metadata changes the derived storage-key layout.
+			obj.invalidateStorageKeyLayout()
 		}
 	}
 	return obj.contractMeta
@@ -2969,7 +3054,16 @@ func (s *StateDB) GetContractMetadataBytes(addr tcommon.Address) ([]byte, bool, 
 		recordFreshAccountKVPointReadsAvoided(1)
 		return nil, false, nil
 	}
-	return s.readAccountKVLatest(addr, obj.accountKVGeneration, kvdomains.ContractMetadata, contractMetaKVKey)
+	data, ok, err := s.readAccountKVLatest(addr, obj.accountKVGeneration, kvdomains.ContractMetadata, contractMetaKVKey)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var meta contractpb.SmartContract
+	if err := statecodec.Unmarshal(data, &meta); err != nil {
+		return nil, true, err
+	}
+	data, err = proto.Marshal(&meta)
+	return data, true, err
 }
 
 // SetContract stores contract metadata at addr.
@@ -3000,14 +3094,23 @@ func (s *StateDB) ReadContractState(addr tcommon.Address) *types.ContractState {
 		return nil
 	}
 	data, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractRuntimeState, contractStateKVKey)
-	if err != nil || !ok || len(data) == 0 {
-		return nil
-	}
-	cs, err := types.NewContractStateFromBytes(data)
 	if err != nil {
+		s.recordStateError(fmt.Sprintf("read contract runtime state %s", addr.Hex()), err)
 		return nil
 	}
-	return cs
+	if !ok {
+		return nil
+	}
+	if len(data) == 0 {
+		s.recordStateError(fmt.Sprintf("decode contract runtime state %s", addr.Hex()), errors.New("empty value"))
+		return nil
+	}
+	pb := new(contractpb.ContractState)
+	if err := statecodec.Unmarshal(data, pb); err != nil {
+		s.recordStateError(fmt.Sprintf("decode contract runtime state %s", addr.Hex()), err)
+		return nil
+	}
+	return types.NewContractStateFromPB(pb)
 }
 
 // WriteContractState stores the per-contract dynamic-energy runtime state.
@@ -3015,7 +3118,7 @@ func (s *StateDB) WriteContractState(addr tcommon.Address, cs *types.ContractSta
 	if cs == nil {
 		return nil
 	}
-	data, err := cs.Bytes()
+	data, err := statecodec.Marshal(cs.Proto())
 	if err != nil {
 		return err
 	}
@@ -3029,11 +3132,20 @@ func (s *StateDB) ReadContractABI(addr tcommon.Address) *contractpb.SmartContrac
 		return nil
 	}
 	data, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractABI, contractABIKVKey)
-	if err != nil || !ok {
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read contract ABI %s", addr.Hex()), err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	if len(data) == 0 {
+		s.recordStateError(fmt.Sprintf("decode contract ABI %s", addr.Hex()), errors.New("empty value"))
 		return nil
 	}
 	var abi contractpb.SmartContract_ABI
-	if err := proto.Unmarshal(data, &abi); err != nil {
+	if err := statecodec.Unmarshal(data, &abi); err != nil {
+		s.recordStateError(fmt.Sprintf("decode contract ABI %s", addr.Hex()), err)
 		return nil
 	}
 	return &abi
@@ -3044,7 +3156,7 @@ func (s *StateDB) WriteContractABI(addr tcommon.Address, abi *contractpb.SmartCo
 	if abi == nil {
 		return s.DeleteAccountKV(addr, kvdomains.ContractABI, contractABIKVKey)
 	}
-	data, err := proto.Marshal(abi)
+	data, err := statecodec.Marshal(abi)
 	if err != nil {
 		return err
 	}
@@ -3214,6 +3326,7 @@ func (s *StateDB) CopyBlockExecutionBase() (*StateDB, error) {
 func (s *StateDB) newCopyBase() *StateDB {
 	return &StateDB{
 		db:                      s.db,
+		dbErr:                   s.dbErr,
 		stateObjects:            make(map[tcommon.Address]*stateObject),
 		witnesses:               make(map[tcommon.Address]*types.Witness),
 		dirtyWitnesses:          make(map[tcommon.Address]struct{}),
@@ -3295,7 +3408,7 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		data, _ := obj.account.Marshal()
 		acc, _ := types.UnmarshalAccount(data)
 		newObj.account = acc
-		newObj.accountProto, _ = acc.MarshalStorageCore()
+		newObj.accountProto, _ = acc.MarshalStorageCoreV4()
 	}
 	for k, v := range obj.storage {
 		newObj.storage[k] = v
@@ -3343,7 +3456,7 @@ func (s *StateDB) copyCachedCodeStateObjectInto(cp *StateDB, addr tcommon.Addres
 		accountKVGenerationDirty: false,
 		dirtySet:                 cp.dirtyObjects,
 	}
-	newObj.accountProto, _ = account.MarshalStorageCore()
+	newObj.accountProto, _ = account.MarshalStorageCoreV4()
 	cp.stateObjects[addr] = newObj
 	return true
 }
@@ -3485,7 +3598,7 @@ func (s *StateDB) prepareAccountCommitPlanWithArena(addr tcommon.Address, obj *s
 				return err
 			}
 		} else {
-			metaBytes, err := proto.Marshal(obj.contractMeta)
+			metaBytes, err := statecodec.Marshal(obj.contractMeta)
 			if err != nil {
 				return fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
 			}
@@ -3610,10 +3723,17 @@ func accountLatestObjectEncodedSize(obj *stateObject) (encodedSize, accountProto
 	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
 		return 0, 0, false, nil
 	}
-	if obj.accountProto != nil {
+	if obj.accountProto != nil && types.IsAccountStorageCoreV4(obj.accountProto) {
 		return stateAccountV2EncodedSize(StateAccountVersion, obj.accountProto, obj.accountKVGeneration), len(obj.accountProto), true, nil
 	}
-	accountProtoSize = obj.account.StorageCoreSize()
+	// A cached non-native core is an internal invariant violation. Re-encode the
+	// authoritative in-memory account rather than copying it into rooted state.
+	obj.accountProto = nil
+	obj.accountProtoLoaded = false
+	accountProtoSize, err = obj.account.StorageCoreV4Size()
+	if err != nil {
+		return 0, 0, false, err
+	}
 	if accountProtoSize == 1 {
 		// RLP encodes a one-byte string differently when the byte is below 0x80.
 		// Structured Account protobufs do not normally reach this case; retain the
@@ -3661,9 +3781,11 @@ func appendAccountLatestObjectPrepared(dst []byte, obj *stateObject, flatRoot bo
 	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
 		return dst, false, nil
 	}
-	if obj.accountProto != nil {
+	if obj.accountProto != nil && types.IsAccountStorageCoreV4(obj.accountProto) {
 		return appendAccountLatestObjectFromProto(dst, obj, obj.accountProto, flatRoot), true, nil
 	}
+	obj.accountProto = nil
+	obj.accountProtoLoaded = false
 	if accountProtoSize == 1 {
 		// accountLatestObjectEncodedSize materializes and caches this exceptional
 		// value so the byte-aware ordinary path above handles its RLP encoding.
@@ -3676,7 +3798,7 @@ func appendAccountLatestObjectPrepared(dst []byte, obj *stateObject, flatRoot bo
 	dst = appendStateAccountV2StorageCorePrefix(dst, StateAccountVersion, accountProtoSize, obj.accountKVGeneration)
 	protoStart := len(dst)
 	var err error
-	dst, err = obj.account.AppendStorageCore(dst)
+	dst, err = obj.account.AppendStorageCoreV4(dst)
 	if err != nil {
 		return dst, false, err
 	}
@@ -3881,6 +4003,9 @@ func (s *StateDB) CommitWithStatsOptions(opts CommitOptions) (tcommon.Hash, Comm
 
 func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope) (tcommon.Hash, CommitStats, error) {
 	var stats CommitStats
+	if err := s.Error(); err != nil {
+		return tcommon.Hash{}, stats, fmt.Errorf("state commit blocked by prior read failure: %w", err)
+	}
 	last := time.Now()
 	mark := func(phase *time.Duration) {
 		now := time.Now()
@@ -4487,24 +4612,30 @@ func (s *StateDB) getStateObjectWithoutAccess(addr tcommon.Address) *stateObject
 	}
 	data, ok, err := s.readStateAccountLatestForHydration(addr)
 	var obj *stateObject
-	if err == nil && ok {
+	if err != nil {
+		s.setError(fmt.Errorf("read rooted account %s: %w", addr.Hex(), err))
+	} else if ok {
 		var envelope StateAccountV3
-		if decodeStateAccountV3Into(data, &envelope) == nil {
-			if acc, decodeErr := types.UnmarshalAccount(envelope.AccountProto); decodeErr == nil {
-				stateObjectCacheHydrationCounter.Inc(1)
-				obj = s.newStateObject(addr, acc)
-				// DecodeStateAccountV2 owns AccountProto. Retain those exact durable bytes as
-				// a potential journal pre-image instead of immediately re-marshaling the
-				// account on its first mutation. A successful block commit releases this
-				// copy if the account stayed read-only.
-				obj.accountProto = envelope.AccountProto
-				obj.accountProtoLoaded = true
-				obj.accountKVRoot = envelope.AccountKVRoot
-				obj.accountKVGeneration = envelope.AccountKVGeneration
-				obj.accountKVGenerationDirty = false
-				obj.codeHash = envelope.CodeHash
-				obj.dirtySet = s.dirtyObjects
-			}
+		if decodeErr := decodeStateAccountV3Into(data, &envelope); decodeErr != nil {
+			s.setError(fmt.Errorf("decode rooted account envelope %s: %w", addr.Hex(), decodeErr))
+		} else if acc, decodeErr := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto); decodeErr != nil {
+			s.setError(fmt.Errorf("decode rooted account core %s: %w", addr.Hex(), decodeErr))
+		} else if acc.Address() != addr {
+			s.setError(fmt.Errorf("rooted account address mismatch: key %s, value %s", addr.Hex(), acc.Address().Hex()))
+		} else {
+			stateObjectCacheHydrationCounter.Inc(1)
+			obj = s.newStateObject(addr, acc)
+			// DecodeStateAccountV2 owns AccountProto. Retain those exact durable bytes as
+			// a potential journal pre-image instead of immediately re-marshaling the
+			// account on its first mutation. A successful block commit releases this
+			// copy if the account stayed read-only.
+			obj.accountProto = envelope.AccountProto
+			obj.accountProtoLoaded = true
+			obj.accountKVRoot = envelope.AccountKVRoot
+			obj.accountKVGeneration = envelope.AccountKVGeneration
+			obj.accountKVGenerationDirty = false
+			obj.codeHash = envelope.CodeHash
+			obj.dirtySet = s.dirtyObjects
 		}
 	}
 	if s.transactionVersionedReader != nil {

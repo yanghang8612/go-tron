@@ -8,7 +8,6 @@ import (
 
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 type accountFrozenSupplyRow struct {
@@ -27,14 +26,14 @@ func decodeAccountFrozenSupplyRow(key, value []byte) (accountFrozenSupplyRow, er
 	if len(key) != 4 {
 		return accountFrozenSupplyRow{}, fmt.Errorf("account frozen-supply key length %d, want 4", len(key))
 	}
-	var entry corepb.Account_Frozen
-	if err := proto.Unmarshal(value, &entry); err != nil {
+	entry, err := decodeAccountFrozen(value)
+	if err != nil {
 		return accountFrozenSupplyRow{}, fmt.Errorf("decode account frozen-supply %x: %w", key, err)
 	}
 	return accountFrozenSupplyRow{
 		key:   append([]byte(nil), key...),
 		index: binary.BigEndian.Uint32(key),
-		entry: &entry,
+		entry: entry,
 	}, nil
 }
 
@@ -44,10 +43,15 @@ func clearAccountFrozenSupplyProto(pb *corepb.Account) {
 	}
 }
 
-func (s *StateDB) accountFrozenSupplyRows(obj *stateObject) ([]accountFrozenSupplyRow, error) {
+func (s *StateDB) accountFrozenSupplyRows(obj *stateObject) (_ []accountFrozenSupplyRow, err error) {
 	if obj == nil || obj.account == nil {
 		return nil, nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("read account frozen supply %s", obj.address.Hex()), err)
+		}
+	}()
 	rows := make([]accountFrozenSupplyRow, 0, 10)
 	if err := s.IterateAccountKV(obj.address, kvdomains.AccountFrozenSupplyAux, nil, func(key, value []byte) (bool, error) {
 		row, err := decodeAccountFrozenSupplyRow(key, value)
@@ -63,10 +67,15 @@ func (s *StateDB) accountFrozenSupplyRows(obj *stateObject) ([]accountFrozenSupp
 	return rows, nil
 }
 
-func (s *StateDB) materializeAccountFrozenSupply(obj *stateObject) error {
+func (s *StateDB) materializeAccountFrozenSupply(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil || obj.accountFrozenSupplyLoaded {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = s.recordStateError(fmt.Sprintf("materialize account frozen supply %s", obj.address.Hex()), err)
+		}
+	}()
 	rows, err := s.accountFrozenSupplyRows(obj)
 	if err != nil {
 		clearAccountFrozenSupplyProto(obj.account.Proto())
@@ -118,7 +127,7 @@ func (s *StateDB) addAccountFrozenSupply(obj *stateObject, entries []*corepb.Acc
 		if entry == nil {
 			continue
 		}
-		value, err := proto.MarshalOptions{Deterministic: true}.Marshal(entry)
+		value, err := appendAccountFrozen(s.accountRowMarshalScratch[:0], entry)
 		if err != nil {
 			return err
 		}

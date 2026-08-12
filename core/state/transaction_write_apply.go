@@ -169,7 +169,7 @@ func decodeTransactionAccountCreate(key TransactionAccessKey, value TransactionW
 	if envelope.AccountKVGeneration != 0 {
 		return nil, nil, fmt.Errorf("apply transaction writes: account %s generation %d is not a fresh creation", key.Address.Hex(), envelope.AccountKVGeneration)
 	}
-	account, err := types.UnmarshalAccount(envelope.AccountProto)
+	account, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
 	if err != nil {
 		return nil, nil, fmt.Errorf("apply transaction writes: account %s proto: %w", key.Address.Hex(), err)
 	}

@@ -8,13 +8,13 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
 
-// StateAccountVersion is the only flat account-latest envelope version this
-// build reads or writes. Version 3 stores a slim AccountProto; its six TRC10
+// StateAccountVersion is the flat account-latest envelope version written by
+// this build. Version 4 stores a slim, explicitly encoded account core; its six TRC10
 // maps, Owner/Witness/Active permissions, votes, Stake V1/V2 fields, frozen
 // supply, and AccountResource live in account-local KV domains.
-// Fresh/replayed databases only: v2 envelopes are intentionally not migrated
-// or accepted.
-const StateAccountVersion uint64 = 3
+// Databases must be built from genesis by this codec; older protobuf-backed
+// account envelopes are deliberately rejected.
+const StateAccountVersion uint64 = 4
 
 // EmptyKVRoot is retained in the account envelope for compatibility with older
 // in-process callers. Flat-state commits write this value instead of rebuilding
@@ -23,8 +23,8 @@ var EmptyKVRoot = tcommon.Hash(ethtypes.EmptyRootHash)
 
 // StateAccountV3 is the internal, versioned, RLP-encoded value stored in the
 // flat account latest domain. It never leaks onto the wire, into blocks or
-// transactions, or into RPC responses. The java-tron account serialization is
-// unchanged and lives in AccountProto.
+// transactions, or into RPC responses. AccountProto is a historical field name:
+// v3 contains protobuf while v4 contains the internal non-protobuf core codec.
 type StateAccountV3 struct {
 	Version             uint64
 	AccountProto        []byte
@@ -164,8 +164,8 @@ func encodedSizeLen(size int) int {
 	return n
 }
 
-// DecodeStateAccountV3 parses a flat account-latest envelope and enforces the
-// v3-only disk schema.
+// DecodeStateAccountV3 parses the current flat account-latest envelope. The
+// source name is retained for API stability, but only version 4 is accepted.
 func DecodeStateAccountV3(data []byte) (*StateAccountV3, error) {
 	v := new(StateAccountV3)
 	if err := decodeStateAccountV3Into(data, v); err != nil {

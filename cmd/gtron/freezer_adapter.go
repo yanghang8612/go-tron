@@ -79,6 +79,10 @@ func (s *freezerStore) V2Coverage() uint64 {
 	return s.f.V2Coverage()
 }
 
+func (s *freezerStore) CanAppendV2Direct(start uint64) bool {
+	return s.f.CanAppendV2Direct(start)
+}
+
 func (s *freezerStore) V1Tail() uint64 {
 	return s.f.V1Tail()
 }
@@ -116,6 +120,7 @@ func makeFreezerConfig(ctx *cli.Context) chainfreezer.Config {
 		cfg.BatchBlocks = ctx.Uint64("freezer.batch")
 	}
 	cfg.TransactionIndexEnabled = !ctx.Bool("freezer.tx-index.disable")
+	cfg.DirectV2 = !ctx.Bool("freezer.direct-v2.disable")
 	return cfg
 }
 

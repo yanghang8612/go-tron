@@ -9,8 +9,8 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestContractAtSurfacesCorruptMetadata(t *testing.T) {
@@ -157,7 +157,7 @@ func mustContractHistoryAccountEnvelope(t *testing.T, generation uint64) []byte 
 
 func mustContractHistoryMetadata(t *testing.T, addr tcommon.Address, name string, bytecode []byte) []byte {
 	t.Helper()
-	raw, err := proto.Marshal(&contractpb.SmartContract{
+	raw, err := statecodec.Marshal(&contractpb.SmartContract{
 		ContractAddress: addr.Bytes(),
 		Name:            name,
 		Bytecode:        bytecode,

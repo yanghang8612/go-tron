@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -58,11 +59,17 @@ func (s *StateDB) hydrateTransactionVersionedAccount(addr tcommon.Address, obj *
 			return nil
 		}
 		var envelope StateAccountV3
-		if decodeStateAccountV3Into(value.Value, &envelope) != nil {
+		if err := decodeStateAccountV3Into(value.Value, &envelope); err != nil {
+			s.setError(fmt.Errorf("decode transaction-versioned account envelope %s from writer %d: %w", addr.Hex(), writer, err))
 			return nil
 		}
-		account, err := types.UnmarshalAccount(envelope.AccountProto)
-		if err != nil || account.Address() != addr {
+		account, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
+		if err != nil {
+			s.setError(fmt.Errorf("decode transaction-versioned account core %s from writer %d: %w", addr.Hex(), writer, err))
+			return nil
+		}
+		if account.Address() != addr {
+			s.setError(fmt.Errorf("transaction-versioned account address mismatch: key %s, value %s, writer %d", addr.Hex(), account.Address().Hex(), writer))
 			return nil
 		}
 		obj = s.newStateObject(addr, account)
