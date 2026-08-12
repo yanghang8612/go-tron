@@ -1524,6 +1524,44 @@ func TestWorkerSnapSkipsHistoryScanWithoutHotCodeRows(t *testing.T) {
 	}
 }
 
+func TestWorkerSnapSkipsHistoryScanWithoutHeadCodeCoverage(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	code := []byte{0x60, 0x77}
+	hash := common.Keccak256(code)
+	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(1, 1, nil)); err != nil {
+		t.Fatalf("publish empty manifest: %v", err)
+	}
+	if err := rawdb.WriteStateTxRange(db, 1, common.Hash{0x01}, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum:   1,
+		BlockHash:  common.Hash{0x01},
+		TxNum:      1,
+		Seq:        1,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		PrevExists: true,
+		Prev:       []byte("invalid account envelope that must not be decoded"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := (Worker{DB: db, Policy: SnapPolicy(2, 1), SnapshotDir: dir}).pruneStateCodeRows(db, 1)
+	if err != nil {
+		t.Fatalf("uncovered CodeDomain prune: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("deleted code rows = %d, want 0", deleted)
+	}
+	if got := rawdb.ReadStateCode(db, hash); !bytes.Equal(got, code) {
+		t.Fatalf("uncovered hot code = %x, want %x", got, code)
+	}
+}
+
 func TestCheckerHistoryCodeHashCollectionHonorsContext(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5a}, common.AccountIDLength)...))

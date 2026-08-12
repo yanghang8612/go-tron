@@ -355,6 +355,32 @@ func (w Worker) pruneStateCodeRowsContext(ctx context.Context, db Store, headNum
 	if len(hotCodeHashes) == 0 {
 		return 0, nil
 	}
+	// A hot code row with no CodeDomain snapshot visible at the current head
+	// cannot be deleted regardless of its account-history references. Gate the
+	// expensive full history scan on that necessary condition. This matters in
+	// VM-heavy sync ranges where new bytecode arrives continuously but latest
+	// snapshots lag behind the head: without the gate, every lifecycle pass
+	// rescans all hot history only to reach the same uncovered result.
+	coveredHotCodeHashes := hotCodeHashes[:0]
+	coveredHotCodeSet := make(map[common.Hash]struct{})
+	for _, hash := range hotCodeHashes {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		covered, err := codeHashAvailableInSnapshot(mgr, hash, headTxNum)
+		if err != nil {
+			return 0, err
+		}
+		if covered {
+			coveredHotCodeHashes = append(coveredHotCodeHashes, hash)
+			coveredHotCodeSet[hash] = struct{}{}
+		}
+	}
+	if len(coveredHotCodeHashes) == 0 {
+		return 0, nil
+	}
+	hotCodeHashes = coveredHotCodeHashes
+	hotCodeSet = coveredHotCodeSet
 	refs := make(codeHashRefs)
 	if err := accountCfg.IterateHotAccountLatest(db, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
 		if err := ctx.Err(); err != nil {
