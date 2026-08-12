@@ -95,12 +95,28 @@ func (cfg DomainCfg) PruneHotHistory(db rawdb.StateKVLatestStore, opts HotHistor
 	}
 
 	var stats HotHistoryPruneStats
+	if cfg.DeleteHotHistoryBlocks != nil {
+		deleteBlocks := make([]uint64, 0, len(blocks))
+		for _, block := range blocks {
+			if block.deleteHistoryBlock {
+				deleteBlocks = append(deleteBlocks, block.blockNum)
+			}
+		}
+		if len(deleteBlocks) > 0 {
+			if err := cfg.DeleteHotHistoryBlocks(db, deleteBlocks); err != nil {
+				return HotHistoryPruneStats{}, err
+			}
+		}
+		stats.DeletedHistoryBlocks = len(deleteBlocks)
+	}
 	for _, block := range blocks {
-		if block.deleteHistoryBlock {
+		if block.deleteHistoryBlock && cfg.DeleteHotHistoryBlocks == nil {
 			if err := cfg.DeleteHotHistoryBlock(db, block.blockNum); err != nil {
 				return HotHistoryPruneStats{}, err
 			}
 			stats.DeletedHistoryBlocks++
+		}
+		if block.deleteHistoryBlock {
 			stats.MaxDeletedHistoryBlock = max(stats.MaxDeletedHistoryBlock, block.blockNum)
 			stats.MaxDeletedHistoryBlockTx = max(stats.MaxDeletedHistoryBlockTx, block.endTxNum)
 		}

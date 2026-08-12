@@ -988,6 +988,107 @@ func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
 	return deleteStateKVPrefixByPointScan(db, stateChangeSetBlockPrefix(blockNum))
 }
 
+// DeleteStateDomainChangeBlocks deletes an increasing set of physical history
+// blocks with one changeset iterator. Pruning normally removes thousands of
+// adjacent current-schema block packs; opening and seeking a new iterator for
+// every block makes Pebble repeat the same table/index work. The scan still
+// visits the physical union of packed and standalone repair rows so inverse
+// posting cleanup has exactly the same semantics as DeleteStateDomainChanges.
+func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) error {
+	if len(blockNums) == 0 {
+		return nil
+	}
+	for i := 1; i < len(blockNums); i++ {
+		if blockNums[i] <= blockNums[i-1] {
+			return fmt.Errorf("rawdb: state domain change delete blocks are not strictly increasing at %d after %d", blockNums[i], blockNums[i-1])
+		}
+	}
+	// The prune runner supplies a dense prefix. Keep the exported helper safe
+	// for repair callers with widely separated blocks: scanning every physical
+	// changeset between sparse endpoints would be worse than precise seeks.
+	spanMinusOne := blockNums[len(blockNums)-1] - blockNums[0]
+	if spanMinusOne > uint64(len(blockNums))*4 {
+		for _, blockNum := range blockNums {
+			if err := DeleteStateDomainChanges(db, blockNum); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	var start [8]byte
+	binary.BigEndian.PutUint64(start[:], blockNums[0])
+	it := db.NewIterator(stateChangeSetPrefix, start[:])
+	defer it.Release()
+	var (
+		blockIndex        int
+		scratch           StateDomainChange
+		latestKeyScratch  []byte
+		postingKeyScratch []byte
+	)
+	deletePosting := func(change *StateDomainChange) (bool, error) {
+		latestKey, err := appendStateDomainChangeLatestKey(latestKeyScratch[:0], change)
+		if err != nil {
+			return false, err
+		}
+		latestKeyScratch = latestKey
+		postingKeyScratch, err = deleteLiveStateChangePostingWithScratch(db, latestKey, change.BlockNum, postingKeyScratch)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	for it.Next() {
+		key := it.Key()
+		if !bytes.HasPrefix(key, stateChangeSetPrefix) || len(key) != len(stateChangeSetPrefix)+16 {
+			continue
+		}
+		blockNum := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix):])
+		for blockIndex < len(blockNums) && blockNums[blockIndex] < blockNum {
+			blockIndex++
+		}
+		if blockIndex >= len(blockNums) {
+			break
+		}
+		if blockNums[blockIndex] != blockNum {
+			continue
+		}
+		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
+		value := it.Value()
+		if seq == 0 {
+			if _, err := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(value, blockNum, &scratch, deletePosting); err == nil {
+				// KeyValueWriter.Delete must consume/copy the iterator key before
+				// returning. This matches the point-scan delete path and avoids
+				// retaining one copied key per history row.
+				if err := db.Delete(key); err != nil {
+					return err
+				}
+				continue
+			} else if row, legacyErr := decodePersistedStateDomainChange(value, blockNum, 0); legacyErr == nil {
+				if _, callbackErr := deletePosting(row); callbackErr != nil {
+					return callbackErr
+				}
+			} else {
+				return err
+			}
+		} else {
+			row, err := decodePersistedStateDomainChange(value, blockNum, seq)
+			if err != nil {
+				return err
+			}
+			if _, err := deletePosting(row); err != nil {
+				return err
+			}
+		}
+		if err := db.Delete(key); err != nil {
+			return err
+		}
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func IterateStateDomainChangeBlocks(db ethdb.Iteratee, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error {
 	return iterateStateDomainChangePostingBlocks(db, StateKVLatestCommitmentKey(owner, generation, domain, key), 0, ^uint64(0), fn)
 }
@@ -1478,19 +1579,27 @@ func IterateStateDomainChangeBlocksByPrefix(db ethdb.Iteratee, owner common.Addr
 }
 
 func stateDomainChangeLatestKey(change *StateDomainChange) ([]byte, error) {
+	return appendStateDomainChangeLatestKey(nil, change)
+}
+
+// appendStateDomainChangeLatestKey appends the physical latest-domain key to
+// dst. History-index builders reuse caller-owned scratch and copy the final key
+// directly into their ETL arenas instead of allocating multiple transient key
+// objects per source change.
+func appendStateDomainChangeLatestKey(dst []byte, change *StateDomainChange) ([]byte, error) {
 	if change == nil {
 		return nil, errors.New("rawdb: nil StateDomainChange")
 	}
 	switch change.FlatDomain {
 	case StateFlatDomainAccountLatest:
-		return StateAccountLatestCommitmentKey(change.Owner), nil
+		return AppendStateAccountLatestCommitmentKey(dst, change.Owner), nil
 	case StateFlatDomainKVLatest:
 		if !kvdomains.IsRegistered(change.Domain) {
 			return nil, fmt.Errorf("rawdb: unregistered change KV domain %#04x", uint16(change.Domain))
 		}
-		return StateKVLatestCommitmentKey(change.Owner, change.Generation, change.Domain, change.Key), nil
+		return AppendStateKVLatestCommitmentKey(dst, change.Owner, change.Generation, change.Domain, change.Key), nil
 	case StateFlatDomainKVGeneration:
-		return StateKVGenerationCommitmentKey(change.Owner), nil
+		return AppendStateKVGenerationCommitmentKey(dst, change.Owner), nil
 	default:
 		return nil, fmt.Errorf("rawdb: unknown state flat domain %d", uint8(change.FlatDomain))
 	}

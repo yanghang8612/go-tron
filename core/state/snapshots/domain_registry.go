@@ -64,6 +64,7 @@ type DomainCfg struct {
 	IterateHotHistoryTxRangeBorrowed  HotHistoryTxRangeBlockIterator
 	DeleteHotHistoryTxRange           HotHistoryTxRangeDeleter
 	DeleteHotHistoryBlock             HotHistoryBlockDeleter
+	DeleteHotHistoryBlocks            HotHistoryBlocksDeleter
 	IterateHotHistoryTxRangeChanges   HotHistoryTxRangeChangeIterator
 	IterateHotHistoryBlockTxChanges   HotHistoryBlockTxRangeChangeIterator
 	IterateHotHistoryBlockTxBorrowed  HotHistoryBlockTxRangeChangeIterator
@@ -160,6 +161,8 @@ type HotHistoryBlockTxRangeChangeIterator func(db ethdb.Iteratee, fromBlock, toB
 type HotHistoryTxRangeDeleter func(db ethdb.KeyValueWriter, blockNum uint64) error
 
 type HotHistoryBlockDeleter func(db rawdb.StateKVLatestStore, blockNum uint64) error
+
+type HotHistoryBlocksDeleter func(db rawdb.StateKVLatestStore, blockNums []uint64) error
 
 type HotHistoryBlockIterator func(db ethdb.Iteratee, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error
 
@@ -375,6 +378,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			IterateHotHistoryTxRangeBorrowed:  rawdb.IterateStateTxRangesByBlockRangeBorrowed,
 			DeleteHotHistoryTxRange:           rawdb.DeleteStateTxRange,
 			DeleteHotHistoryBlock:             rawdb.DeleteStateDomainChanges,
+			DeleteHotHistoryBlocks:            rawdb.DeleteStateDomainChangeBlocks,
 			IterateHotHistoryTxRangeChanges:   rawdb.IterateStateDomainChangesByTxRange,
 			IterateHotHistoryBlockTxChanges:   rawdb.IterateStateDomainChangesByBlockTxRange,
 			IterateHotHistoryBlockTxBorrowed:  rawdb.IterateStateDomainChangesByBlockTxRangeBorrowed,

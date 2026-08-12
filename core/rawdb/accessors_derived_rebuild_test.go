@@ -9,11 +9,61 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
+
+var rebuildStateHistoryIndexBenchmarkRows uint64
+
+func BenchmarkRebuildStateHistoryIndex(b *testing.B) {
+	const (
+		blocks       = 128
+		rowsPerBlock = 64
+	)
+	source := NewMemoryDatabase()
+	hashes := make(map[uint64]common.Hash, blocks)
+	for blockNum := uint64(1); blockNum <= blocks; blockNum++ {
+		hash := common.Hash{byte(blockNum), byte(blockNum >> 8)}
+		hashes[blockNum] = hash
+		firstTxNum := (blockNum-1)*rowsPerBlock + 1
+		if err := WriteStateTxRange(source, blockNum, hash, firstTxNum, firstTxNum+rowsPerBlock-1); err != nil {
+			b.Fatal(err)
+		}
+		changes := make([]*StateDomainChange, rowsPerBlock)
+		for i := range changes {
+			changes[i] = &StateDomainChange{
+				BlockNum: blockNum, TxNum: firstTxNum + uint64(i), Seq: uint64(i + 1),
+				FlatDomain: StateFlatDomainKVLatest,
+				Owner:      common.Address{common.AddressPrefixMainnet, byte(blockNum), byte(i)},
+				Generation: blockNum,
+				Domain:     kvdomains.SystemReward,
+				Key:        []byte{byte(i), byte(i >> 8)},
+			}
+		}
+		if err := WriteStateDomainChangeBlockRows(source, changes); err != nil {
+			b.Fatal(err)
+		}
+	}
+	canonical := func(blockNum uint64) (common.Hash, bool, error) {
+		hash, ok := hashes[blockNum]
+		return hash, ok, nil
+	}
+	opts := etl.Options{TempDir: b.TempDir(), BufferLimit: 64 << 20}
+	b.ReportAllocs()
+	b.ReportMetric(blocks*rowsPerBlock, "changes/op")
+	b.ResetTimer()
+	for b.Loop() {
+		writer := NewMemoryDatabase()
+		result, err := RebuildStateHistoryIndexInterruptible(source, writer, 1, blocks, opts, canonical, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		rebuildStateHistoryIndexBenchmarkRows = result.ChangesScanned
+	}
+}
 
 func TestRebuildTransactionDerivedIndexesFromBlocks(t *testing.T) {
 	db := NewMemoryChainDB()
@@ -172,8 +222,10 @@ func TestRebuildStateHistoryIndexUsesSingleRangeIteratorAcrossEmptyBlocks(t *tes
 	if canonicalCalls != 4 {
 		t.Fatalf("canonical hash calls = %d, want 4", canonicalCalls)
 	}
-	if db.changeRangeIteratorCalls != 1 || db.changeBlockIteratorCalls != 0 {
-		t.Fatalf("change range/block iterators = %d/%d, want 1/0", db.changeRangeIteratorCalls, db.changeBlockIteratorCalls)
+	// These transition-schema standalone rows make the borrowed probe discard
+	// its partial collector and replay one owning range iterator.
+	if db.changeRangeIteratorCalls != 2 || db.changeBlockIteratorCalls != 0 {
+		t.Fatalf("change range/block iterators = %d/%d, want borrowed probe + owning fallback", db.changeRangeIteratorCalls, db.changeBlockIteratorCalls)
 	}
 	for index, owner := range owners {
 		var indexed []uint64
@@ -202,6 +254,58 @@ func TestRebuildStateHistoryIndexRejectsMissingTxRangeInsideBatch(t *testing.T) 
 	}
 	if _, err := RebuildStateHistoryIndexInterruptible(db, db, 1, 3, etl.Options{TempDir: t.TempDir()}, canonical, nil); err == nil || !strings.Contains(err.Error(), "missing state tx range 2") {
 		t.Fatalf("missing middle tx range rebuild err = %v", err)
+	}
+}
+
+func TestRebuildStateHistoryIndexLegacyFallbackDiscardsShadowedPackedRows(t *testing.T) {
+	db := NewMemoryDatabase()
+	hash := common.Hash{0x51}
+	if err := WriteStateTxRange(db, 1, hash, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	packedOwner := common.Address{common.AddressPrefixMainnet, 0x51}
+	repairOwner := common.Address{common.AddressPrefixMainnet, 0x52}
+	untouchedOwner := common.Address{common.AddressPrefixMainnet, 0x53}
+	packed := []*StateDomainChange{
+		{BlockNum: 1, TxNum: 1, Seq: 1, FlatDomain: StateFlatDomainAccountLatest, Owner: packedOwner},
+		{BlockNum: 1, TxNum: 2, Seq: 2, FlatDomain: StateFlatDomainAccountLatest, Owner: untouchedOwner},
+	}
+	if err := WriteStateDomainChangeBlockRows(db, packed); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStateDomainChangeRow(db, &StateDomainChange{
+		BlockNum: 1, TxNum: 1, Seq: 1,
+		FlatDomain: StateFlatDomainAccountLatest,
+		Owner:      repairOwner,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	canonical := func(uint64) (common.Hash, bool, error) { return hash, true, nil }
+	result, err := RebuildStateHistoryIndexInterruptible(db, db, 1, 1, etl.Options{TempDir: t.TempDir()}, canonical, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChangesScanned != 2 {
+		t.Fatalf("changes scanned = %d, want repaired logical view of two", result.ChangesScanned)
+	}
+	for _, tc := range []struct {
+		owner common.Address
+		want  []uint64
+	}{
+		{owner: packedOwner, want: nil},
+		{owner: repairOwner, want: []uint64{1}},
+		{owner: untouchedOwner, want: []uint64{1}},
+	} {
+		var got []uint64
+		if err := IterateStateAccountLatestChangeBlocks(db, tc.owner, func(blockNum uint64) (bool, error) {
+			got = append(got, blockNum)
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			t.Fatalf("owner %x blocks = %v, want %v", tc.owner, got, tc.want)
+		}
 	}
 }
 

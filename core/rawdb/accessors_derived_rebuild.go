@@ -293,12 +293,6 @@ func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer e
 	if toBlock < fromBlock {
 		return nil, fmt.Errorf("rawdb: inverted state history index range [%d,%d]", fromBlock, toBlock)
 	}
-	collector, err := newStateChangePostingCollector(fromBlock, toBlock, opts)
-	if err != nil {
-		return nil, err
-	}
-	defer collector.Close()
-
 	blockCount := toBlock - fromBlock + 1
 	if blockCount == 0 || blockCount > uint64(^uint(0)>>1) {
 		return nil, fmt.Errorf("rawdb: state history index range [%d,%d] is too large", fromBlock, toBlock)
@@ -335,7 +329,12 @@ func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer e
 	if result.BlocksScanned != blockCount {
 		return nil, fmt.Errorf("rawdb: missing state tx range %d during history index rebuild", fromBlock+result.BlocksScanned)
 	}
-	if err := IterateStateDomainChangesByBlockRange(source, fromBlock, toBlock, func(change *StateDomainChange) (bool, error) {
+	collector, err := newStateChangePostingCollector(fromBlock, toBlock, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { collector.Close() }()
+	collect := func(change *StateDomainChange) (bool, error) {
 		if interrupted != nil && interrupted() {
 			return false, ErrStateHistoryIndexRebuildInterrupted
 		}
@@ -348,7 +347,23 @@ func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer e
 		}
 		result.ChangesScanned++
 		return true, nil
-	}); err != nil {
+	}
+	// Fresh databases contain one block pack per block. Borrowing those rows
+	// avoids reflection decode and per-field ownership for this derived-index
+	// build. A transition database may still contain standalone/repair rows;
+	// discard all partial ETL state before replaying the owning logical view so
+	// shadowed packed rows can never leak into the rebuilt index.
+	err = IterateStateDomainChangesByBlockTxRangeBorrowed(source, fromBlock, toBlock, 0, ^uint64(0), collect)
+	if errors.Is(err, ErrStateDomainChangeBorrowedLegacyRows) {
+		collector.Close()
+		collector, err = newStateChangePostingCollector(fromBlock, toBlock, opts)
+		if err != nil {
+			return nil, err
+		}
+		result.ChangesScanned = 0
+		err = IterateStateDomainChangesByBlockRange(source, fromBlock, toBlock, collect)
+	}
+	if err != nil {
 		return nil, err
 	}
 	if interrupted != nil && interrupted() {

@@ -1597,6 +1597,144 @@ func TestDeleteStateDomainChangesUsesPointDeletes(t *testing.T) {
 	}
 }
 
+func BenchmarkDeleteStateDomainChangesBlockRange(b *testing.B) {
+	const (
+		blocks       = 256
+		rowsPerBlock = 16
+	)
+	b.ReportAllocs()
+	b.ReportMetric(blocks*rowsPerBlock, "changes/op")
+	for b.Loop() {
+		b.StopTimer()
+		db := ethrawdb.NewMemoryDatabase()
+		for blockNum := uint64(1); blockNum <= blocks; blockNum++ {
+			changes := make([]*StateDomainChange, rowsPerBlock)
+			for i := range changes {
+				changes[i] = &StateDomainChange{
+					BlockNum: blockNum, TxNum: blockNum*rowsPerBlock + uint64(i), Seq: uint64(i + 1),
+					FlatDomain: StateFlatDomainKVLatest,
+					Owner:      common.Address{common.AddressPrefixMainnet, byte(blockNum), byte(i)},
+					Generation: blockNum,
+					Domain:     kvdomains.SystemReward,
+					Key:        []byte{byte(i)},
+				}
+			}
+			if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
+				b.Fatal(err)
+			}
+		}
+		blockNums := make([]uint64, blocks)
+		for i := range blockNums {
+			blockNums[i] = uint64(i + 1)
+		}
+		b.StartTimer()
+		if err := DeleteStateDomainChangeBlocks(db, blockNums); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestDeleteStateDomainChangeBlocksHandlesPackedRepairLegacyAndSparseSelection(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owners := []common.Address{
+		{common.AddressPrefixMainnet, 0x61},
+		{common.AddressPrefixMainnet, 0x62},
+		{common.AddressPrefixMainnet, 0x63},
+		{common.AddressPrefixMainnet, 0x64},
+		{common.AddressPrefixMainnet, 0x65},
+		{common.AddressPrefixMainnet, 0x66},
+	}
+	packedOne := []*StateDomainChange{
+		{BlockNum: 1, TxNum: 1, Seq: 1, FlatDomain: StateFlatDomainAccountLatest, Owner: owners[0]},
+		{BlockNum: 1, TxNum: 2, Seq: 2, FlatDomain: StateFlatDomainAccountLatest, Owner: owners[1]},
+	}
+	if err := WriteStateDomainChangeBlockRows(db, packedOne); err != nil {
+		t.Fatal(err)
+	}
+	repair := &StateDomainChange{BlockNum: 1, TxNum: 1, Seq: 1, FlatDomain: StateFlatDomainAccountLatest, Owner: owners[2]}
+	if err := WriteStateDomainChangeRow(db, repair); err != nil {
+		t.Fatal(err)
+	}
+	packedTwo := []*StateDomainChange{
+		{BlockNum: 2, TxNum: 3, Seq: 1, FlatDomain: StateFlatDomainAccountLatest, Owner: owners[3]},
+	}
+	if err := WriteStateDomainChangeBlockRows(db, packedTwo); err != nil {
+		t.Fatal(err)
+	}
+	legacyThree := &StateDomainChange{BlockNum: 3, TxNum: 4, Seq: 0, FlatDomain: StateFlatDomainAccountLatest, Owner: owners[4]}
+	if err := WriteStateDomainChangeRow(db, legacyThree); err != nil {
+		t.Fatal(err)
+	}
+	packedFour := []*StateDomainChange{
+		{BlockNum: 4, TxNum: 5, Seq: 1, FlatDomain: StateFlatDomainAccountLatest, Owner: owners[5]},
+	}
+	if err := WriteStateDomainChangeBlockRows(db, packedFour); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range append(append(append(packedOne, repair), legacyThree), packedFour...) {
+		if err := WriteStateDomainChangePostingIndex(db, change); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, change := range packedTwo {
+		if err := WriteStateDomainChangePostingIndex(db, change); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := DeleteStateDomainChangeBlocks(db, []uint64{1, 3}); err != nil {
+		t.Fatal(err)
+	}
+	for _, blockNum := range []uint64{1, 3} {
+		rows := 0
+		if err := iteratePhysicalStateDomainChanges(db, blockNum, func(*StateDomainChange) (bool, error) {
+			rows++
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 0 {
+			t.Fatalf("deleted block %d retained %d physical changes", blockNum, rows)
+		}
+	}
+	for _, blockNum := range []uint64{2, 4} {
+		rows := 0
+		if err := IterateStateDomainChanges(db, blockNum, func(*StateDomainChange) (bool, error) {
+			rows++
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 1 {
+			t.Fatalf("unselected block %d rows = %d, want 1", blockNum, rows)
+		}
+	}
+	for _, change := range append(append(packedOne, repair), legacyThree) {
+		postingKey := stateChangePostingKey(stateChangePostingHash(mustStateDomainChangeLatestKey(t, change)), change.BlockNum)
+		if has, err := db.Has(postingKey); err != nil || has {
+			t.Fatalf("deleted posting %x present=%v err=%v", postingKey, has, err)
+		}
+	}
+}
+
+func TestDeleteStateDomainChangeBlocksRejectsUnorderedSelection(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	if err := DeleteStateDomainChangeBlocks(db, []uint64{2, 2}); err == nil {
+		t.Fatal("duplicate delete selection accepted")
+	}
+	if err := DeleteStateDomainChangeBlocks(db, []uint64{2, 1}); err == nil {
+		t.Fatal("descending delete selection accepted")
+	}
+}
+
+func mustStateDomainChangeLatestKey(t testing.TB, change *StateDomainChange) []byte {
+	t.Helper()
+	key, err := stateDomainChangeLatestKey(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
 func TestDeleteStateDomainChangesDoesNotRescanDeferredDeletes(t *testing.T) {
 	base := ethrawdb.NewMemoryDatabase()
 	owner := common.Address{common.AddressPrefixMainnet, 0x01}
