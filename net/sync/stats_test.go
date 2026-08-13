@@ -195,10 +195,11 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 	mut2.AccountUpdates = 40
 	mut2.KVPutItems = 20
 	s.AddApplyBlock(core.ApplyStats{
-		Validate:    1 * time.Millisecond,
-		Execute:     2 * time.Millisecond,
-		Maintenance: 3 * time.Millisecond,
-		StateCommit: 4 * time.Millisecond,
+		Validate:         1 * time.Millisecond,
+		Execute:          2 * time.Millisecond,
+		EnergyUsageTotal: 1_000,
+		Maintenance:      3 * time.Millisecond,
+		StateCommit:      4 * time.Millisecond,
 		StateCommitDetail: state.CommitStats{
 			Prepare:               time.Millisecond,
 			KVCompute:             2 * time.Millisecond,
@@ -215,10 +216,11 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 		Hooks:    7 * time.Millisecond,
 	})
 	s.AddApplyBlock(core.ApplyStats{
-		Validate:    10 * time.Millisecond,
-		Execute:     20 * time.Millisecond,
-		Maintenance: 30 * time.Millisecond,
-		StateCommit: 40 * time.Millisecond,
+		Validate:         10 * time.Millisecond,
+		Execute:          20 * time.Millisecond,
+		EnergyUsageTotal: 20_000,
+		Maintenance:      30 * time.Millisecond,
+		StateCommit:      40 * time.Millisecond,
 		StateCommitDetail: state.CommitStats{
 			Prepare:               10 * time.Millisecond,
 			KVCompute:             20 * time.Millisecond,
@@ -236,10 +238,11 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 	})
 	got := s.CurrentSnapshot().ApplyStats
 	want := core.ApplyStats{
-		Validate:    11 * time.Millisecond,
-		Execute:     22 * time.Millisecond,
-		Maintenance: 33 * time.Millisecond,
-		StateCommit: 44 * time.Millisecond,
+		Validate:         11 * time.Millisecond,
+		Execute:          22 * time.Millisecond,
+		EnergyUsageTotal: 21_000,
+		Maintenance:      33 * time.Millisecond,
+		StateCommit:      44 * time.Millisecond,
 		StateCommitDetail: state.CommitStats{
 			Prepare:               11 * time.Millisecond,
 			KVCompute:             22 * time.Millisecond,

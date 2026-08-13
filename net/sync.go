@@ -292,8 +292,8 @@ func watchdogLog(peer *p2p.Peer, head uint64, stalledFor time.Duration) {
 		"stalledFor", ethcommon.PrettyDuration(stalledFor))
 }
 
-// onApplyStats folds one block's per-phase wall-clock breakdown into the
-// rolling window. Fires synchronously from applyBlock on the importing
+// onApplyStats folds one block's execution telemetry into the rolling window.
+// Fires synchronously from applyBlock on the importing
 // goroutine — during sync that is drainBufferedBlocks; during normal
 // operation it is the broadcast/producer path. Stats owns its own mutex
 // so no ss.mu acquisition here; this matters because the producer path
@@ -3066,6 +3066,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	}
 	blocksPerSec := float64(s.Blocks) * float64(time.Second) / float64(elapsed)
 	txsPerSec := float64(s.Txs) * float64(time.Second) / float64(elapsed)
+	energyPerSec := float64(s.ApplyStats.EnergyUsageTotal) * float64(time.Second) / float64(elapsed)
 	ss.stats.RecordSpeed(now, s.Blocks, elapsed)
 	_ = remain // retained in the report payload for compatibility with downloader scheduling
 	txTop := tsync.TopTxKindsString(s.TxKinds, 5)
@@ -3087,6 +3088,8 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"elapsed", ethcommon.PrettyDuration(elapsed),
 		"blocks/s", round2(blocksPerSec),
 		"txs/s", round2(txsPerSec),
+		"energy", formatCompactEnergy(float64(s.ApplyStats.EnergyUsageTotal)),
+		"energy/s", formatCompactEnergy(energyPerSec),
 		"txTop", txTop,
 		"stateMutTop", stateMutTop,
 		"stateMutKVTop", stateMutKVTop,
@@ -3115,6 +3118,8 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"bufferWaitElapsed", ethcommon.PrettyDuration(s.BufferWaitElapsed),
 		"validate", ethcommon.PrettyDuration(s.ApplyStats.Validate),
 		"execute", ethcommon.PrettyDuration(s.ApplyStats.Execute),
+		"energy", formatCompactEnergy(float64(s.ApplyStats.EnergyUsageTotal)),
+		"energy/s", formatCompactEnergy(energyPerSec),
 		"maintenance", ethcommon.PrettyDuration(s.ApplyStats.Maintenance),
 		"stateCommit", ethcommon.PrettyDuration(s.ApplyStats.StateCommit),
 		"stateCommitMeasured", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.Total()),
@@ -3188,6 +3193,21 @@ func round2(f float64) float64 {
 	// Trim to 2 decimals for log readability without depending on a printf
 	// format directive (slog handlers print floats with full precision).
 	return float64(int64(f*100+0.5)) / 100
+}
+
+func formatCompactEnergy(value float64) string {
+	abs := value
+	if abs < 0 {
+		abs = -abs
+	}
+	switch {
+	case abs >= 1_000_000_000:
+		return fmt.Sprintf("%.2fB", value/1_000_000_000)
+	case abs >= 1_000_000:
+		return fmt.Sprintf("%.2fM", value/1_000_000)
+	default:
+		return fmt.Sprintf("%g", round2(value))
+	}
 }
 
 func slowestApplyPhase(s core.ApplyStats) (string, time.Duration) {

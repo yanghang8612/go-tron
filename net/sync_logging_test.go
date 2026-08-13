@@ -95,6 +95,8 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"elapsed=",
 		"blocks/s=",
 		"txs/s=",
+		"energy=",
+		"energy/s=",
 		"txTop=",
 		"stateMutTop=",
 		"stateMutKVTop=",
@@ -138,6 +140,8 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"bufferWaitElapsed=",
 		"validate=",
 		"execute=",
+		"energy=",
+		"energy/s=",
 		"maintenance=",
 		"stateCommit=",
 		"stateCommitMeasured=",
@@ -208,7 +212,7 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 		TotalBlocks: 80,
 		TotalTxs:    160,
 		TxKinds:     map[string]int{"TransferContract": 40},
-		ApplyStats: core.ApplyStats{StateCommitDetail: state.CommitStats{
+		ApplyStats: core.ApplyStats{EnergyUsageTotal: 6_000_000_000, StateCommitDetail: state.CommitStats{
 			Mutations: state.CommitMutationStats{StoragePuts: 12, AccountUpdates: 8},
 		}},
 	}, syncdl.NewDiagnostics(3, 4, 1, []syncdl.PeerDiagnostics{
@@ -225,6 +229,7 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 	}
 	for _, field := range []string{
 		"head=90", "blocks=20", "txs=40", "blocks/s=10", "txs/s=20",
+		"energy=6.00B", "energy/s=",
 		`txTop="TransferContract=40"`, `stateMutTop="storagePut=12,accountUpdate=8"`, "stateMutKVTop=none",
 		"peers=2", "activePeers=1", "inflight=2",
 		"buffered=3", "requested=4", "retries=1",
@@ -236,6 +241,25 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 	for _, field := range []string{"Imported chain segment details", "execElapsed=", "stateCommit=", "peerState="} {
 		if strings.Contains(out, field) {
 			t.Errorf("diagnostic field %q emitted at info level:\n%s", field, out)
+		}
+	}
+}
+
+func TestFormatCompactEnergy(t *testing.T) {
+	for _, tc := range []struct {
+		value float64
+		want  string
+	}{
+		{0, "0"},
+		{999_999.125, "999999.13"},
+		{1_000_000, "1.00M"},
+		{18_436_725, "18.44M"},
+		{1_000_000_000, "1.00B"},
+		{18_436_725_910, "18.44B"},
+		{-2_304_014_432.64, "-2.30B"},
+	} {
+		if got := formatCompactEnergy(tc.value); got != tc.want {
+			t.Errorf("formatCompactEnergy(%v) = %q, want %q", tc.value, got, tc.want)
 		}
 	}
 }

@@ -25,10 +25,10 @@ type Snapshot struct {
 	TotalBlocks       int           // session-wide block count
 	TotalTxs          int           // session-wide transaction count
 
-	// ApplyStats is the per-phase wall-clock breakdown reported by
+	// ApplyStats is the per-block execution telemetry reported by
 	// BlockChain.applyBlock via the AddApplyStatsHook callback. Summing across
-	// every block applied in the window lets the summary line tell us *which*
-	// phase is the bottleneck.
+	// every block applied in the window lets the summary line expose both phase
+	// bottlenecks and work rates such as energy per second.
 	ApplyStats core.ApplyStats
 
 	// TxKinds counts the transactions applied in the window by contract type
@@ -271,8 +271,8 @@ func summarizeSpeedSamples(samples []speedSample, from, to, coverageStart time.T
 	return summary
 }
 
-// AddApplyBlock folds one block's per-phase wall-clock breakdown into the
-// rolling window. Fires synchronously from applyBlock on the importing
+// AddApplyBlock folds one block's execution telemetry into the rolling window.
+// Fires synchronously from applyBlock on the importing
 // goroutine — during sync that is drainBufferedBlocks; during normal
 // operation it is the broadcast/producer path.
 func (s *Stats) AddApplyBlock(a core.ApplyStats) {
@@ -280,6 +280,7 @@ func (s *Stats) AddApplyBlock(a core.ApplyStats) {
 	defer s.mu.Unlock()
 	s.cur.ApplyStats.Validate += a.Validate
 	s.cur.ApplyStats.Execute += a.Execute
+	s.cur.ApplyStats.EnergyUsageTotal += a.EnergyUsageTotal
 	s.cur.ApplyStats.Maintenance += a.Maintenance
 	s.cur.ApplyStats.StateCommit += a.StateCommit
 	s.cur.ApplyStats.StateCommitDetail.Add(a.StateCommitDetail)

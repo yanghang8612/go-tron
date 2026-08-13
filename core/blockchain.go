@@ -62,7 +62,8 @@ func (e *InsertBlocksError) Unwrap() error {
 	return e.Err
 }
 
-// ApplyStats reports per-phase wall-clock time spent inside applyBlock.
+// ApplyStats reports execution telemetry collected inside applyBlock: phase
+// wall-clock time plus non-duration work counters such as VM energy usage.
 //
 // Subscribers should treat ApplyStats as read-only. The fields are exported so
 // callers (sync summary line, future metrics surface) can aggregate without
@@ -84,14 +85,30 @@ func (e *InsertBlocksError) Unwrap() error {
 //     buffer flushBufferUpToSolidified that lands committed layers on disk.
 //   - Hooks: post-apply callback fan-out (PBFT, broadcaster, etc.).
 type ApplyStats struct {
-	Validate          time.Duration
-	Execute           time.Duration
+	Validate time.Duration
+	Execute  time.Duration
+
+	// EnergyUsageTotal is the sum of receipt.energy_usage_total for every
+	// successfully executed transaction in the applied block. It is telemetry
+	// only; unlike the duration fields it is a work counter, not part of Total.
+	EnergyUsageTotal int64
+
 	Maintenance       time.Duration
 	StateCommit       time.Duration
 	StateCommitDetail state.CommitStats
 	DPUpdate          time.Duration
 	Persist           time.Duration
 	Hooks             time.Duration
+}
+
+func transactionInfosEnergyUsageTotal(infos []*corepb.TransactionInfo) int64 {
+	var total int64
+	for _, info := range infos {
+		if info != nil && info.GetReceipt() != nil {
+			total += info.GetReceipt().GetEnergyUsageTotal()
+		}
+	}
+	return total
 }
 
 // Total returns the sum of every phase.
@@ -311,7 +328,7 @@ type BlockChain struct {
 	maintHooks  []func(*types.Block, []tcommon.Address) // fired after a maintenance block
 
 	applyStatsHookMu sync.Mutex
-	applyStatsHooks  []func(*types.Block, ApplyStats) // fired after each successful applyBlock with per-phase wall-clock breakdown
+	applyStatsHooks  []func(*types.Block, ApplyStats) // fired after each successful applyBlock with per-block execution telemetry
 }
 
 // SetEngine wires the consensus engine used for header verification in
@@ -1404,6 +1421,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
+	stats.EnergyUsageTotal = transactionInfosEnergyUsageTotal(txInfos)
 
 	// Promote CURRENT_TREE to LAST_TREE + index by root + blockNum after
 	// every block, matching java-tron Manager.processBlock. This keeps the
