@@ -22,6 +22,55 @@ const stateChangePostingValueVersion byte = 1
 
 func stateChangePostingHash(latestKey []byte) [sha256.Size]byte { return sha256.Sum256(latestKey) }
 
+const stateChangePostingDedupeSlots = 64
+const stateChangePostingDedupeWays = 4
+
+// stateChangePostingDeduper is a bounded four-way exact cache for repeated
+// latest keys inside one block. Set overflow replaces an entry and may only
+// reduce the hit rate; equality is still checked, so required work is never
+// suppressed and lookup remains bounded on high-cardinality blocks.
+type stateChangePostingDeduper struct {
+	hashes [stateChangePostingDedupeSlots][sha256.Size]byte
+	stamps [stateChangePostingDedupeSlots]uint32
+	epoch  uint32
+}
+
+func (d *stateChangePostingDeduper) Reset() {
+	d.epoch++
+	if d.epoch == 0 {
+		d.stamps = [stateChangePostingDedupeSlots]uint32{}
+		d.epoch = 1
+	}
+}
+
+func (d *stateChangePostingDeduper) Seen(hash [sha256.Size]byte) bool {
+	if d.epoch == 0 {
+		d.Reset()
+	}
+	set := int(binary.BigEndian.Uint16(hash[:2])) & (stateChangePostingDedupeSlots/stateChangePostingDedupeWays - 1)
+	base := set * stateChangePostingDedupeWays
+	empty := -1
+	for way := 0; way < stateChangePostingDedupeWays; way++ {
+		slot := base + way
+		if d.stamps[slot] != d.epoch {
+			if empty < 0 {
+				empty = slot
+			}
+			continue
+		}
+		if d.hashes[slot] == hash {
+			return true
+		}
+	}
+	slot := empty
+	if slot < 0 {
+		slot = base + int(hash[2])&(stateChangePostingDedupeWays-1)
+	}
+	d.hashes[slot] = hash
+	d.stamps[slot] = d.epoch
+	return false
+}
+
 func stateChangePostingKey(hash [sha256.Size]byte, firstBlock uint64) []byte {
 	key := make([]byte, 0, len(stateChangePostingPrefix)+sha256.Size+8)
 	return appendStateChangePostingKey(key, hash, firstBlock)
@@ -30,9 +79,7 @@ func stateChangePostingKey(hash [sha256.Size]byte, firstBlock uint64) []byte {
 func appendStateChangePostingKey(dst []byte, hash [sha256.Size]byte, firstBlock uint64) []byte {
 	dst = append(dst, stateChangePostingPrefix...)
 	dst = append(dst, hash[:]...)
-	var block [8]byte
-	binary.BigEndian.PutUint64(block[:], firstBlock)
-	return append(dst, block[:]...)
+	return binary.BigEndian.AppendUint64(dst, firstBlock)
 }
 
 func stateChangePostingHashPrefix(hash [sha256.Size]byte) []byte {
@@ -105,19 +152,25 @@ func writeStateChangePostingIndex(db ethdb.KeyValueWriter, latestKey []byte, blo
 	return db.Put(stateChangePostingKey(stateChangePostingHash(latestKey), blockNum), value)
 }
 
-// deleteLiveStateChangePostingByHash is the pruning fast path. The caller can
-// reuse keyScratch across a block, and singleton live postings are validated
-// without materializing the general []uint64 representation. Packed frames
-// are finalized history and remain immutable; pruning merely removes their
-// authoritative changesets, after which readers reject stale candidates.
+// deleteLiveStateChangePosting deletes only a single-block live frame. Packed
+// frames are finalized history and remain immutable; pruning merely removes
+// their authoritative changesets, after which readers reject stale candidates.
+func deleteLiveStateChangePosting(db StateKVLatestStore, latestKey []byte, blockNum uint64) error {
+	_, err := deleteLiveStateChangePostingWithScratch(db, latestKey, blockNum, nil)
+	return err
+}
+
+func deleteLiveStateChangePostingWithScratch(db StateKVLatestStore, latestKey []byte, blockNum uint64, keyScratch []byte) ([]byte, error) {
+	return deleteLiveStateChangePostingByHash(db, stateChangePostingHash(latestKey), blockNum, keyScratch)
+}
+
+// deleteLiveStateChangePostingByHash lets a block-level prune plan deduplicate
+// repeated latest keys before point reads and reuse one physical-key buffer.
 func deleteLiveStateChangePostingByHash(db StateKVLatestStore, hash [sha256.Size]byte, blockNum uint64, keyScratch []byte) ([]byte, error) {
 	key := appendStateChangePostingKey(keyScratch[:0], hash, blockNum)
-	value, exists, err := readPresentValue(db, key, "state change posting")
+	value, exists, err := readLiveStateChangePosting(db, key, blockNum)
 	if err != nil || !exists {
-		if err != nil {
-			return key, fmt.Errorf("rawdb: read state change posting at block %d: %w", blockNum, err)
-		}
-		return key, nil
+		return key, err
 	}
 	singleton, err := isSingletonStateChangePosting(blockNum, value)
 	if err != nil {
@@ -149,6 +202,37 @@ func isSingletonStateChangePosting(firstBlock uint64, value []byte) (bool, error
 		return false, err
 	}
 	return false, nil
+}
+
+// readLiveStateChangePosting keeps success and miss paths allocation-free apart
+// from the posting key itself. Prune scans invoke this for every historical
+// change, while the formatted block context is only useful on an actual read
+// error.
+func readLiveStateChangePosting(db StateKVLatestStore, key []byte, blockNum uint64) ([]byte, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("rawdb: nil database while reading state change posting at block %d", blockNum)
+	}
+	if reader, ok := db.(interface {
+		GetWithPresence([]byte) ([]byte, bool, error)
+	}); ok {
+		value, exists, err := reader.GetWithPresence(key)
+		if err != nil {
+			return nil, false, fmt.Errorf("rawdb: read state change posting at block %d: %w", blockNum, err)
+		}
+		return value, exists, nil
+	}
+	exists, err := db.Has(key)
+	if err != nil {
+		return nil, false, fmt.Errorf("rawdb: read state change posting at block %d presence: %w", blockNum, err)
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	value, err := db.Get(key)
+	if err != nil {
+		return nil, false, fmt.Errorf("rawdb: read state change posting at block %d: %w", blockNum, err)
+	}
+	return append([]byte(nil), value...), true, nil
 }
 
 // iterateStateChangePostingCandidates walks hash candidates in block order.
@@ -195,9 +279,10 @@ type StateChangePostingBuildResult struct {
 }
 
 type stateChangePostingCollector struct {
-	postings  *etl.Collector
-	directory *etl.Collector
-	result    StateChangePostingBuildResult
+	postings         *etl.Collector
+	directory        *etl.Collector
+	latestKeyScratch []byte
+	result           StateChangePostingBuildResult
 }
 
 func newStateChangePostingCollector(fromBlock, toBlock uint64, opts etl.Options) (*stateChangePostingCollector, error) {
@@ -219,18 +304,22 @@ func (c *stateChangePostingCollector) Close() {
 }
 
 func (c *stateChangePostingCollector) Collect(change *StateDomainChange) error {
-	latestKey, err := stateDomainChangeLatestKey(change)
+	latestKey, err := appendStateDomainChangeLatestKey(c.latestKeyScratch[:0], change)
 	if err != nil {
 		return err
 	}
+	c.latestKeyScratch = latestKey
 	hash := stateChangePostingHash(latestKey)
-	sortKey := make([]byte, sha256.Size+8)
-	copy(sortKey, hash[:])
-	binary.BigEndian.PutUint64(sortKey[sha256.Size:], change.BlockNum)
-	if err := c.postings.PutOwned(sortKey, nil); err != nil {
+	if err := c.postings.PutEncoded(sha256.Size+8, 0, func(sortKey, _ []byte) {
+		copy(sortKey, hash[:])
+		binary.BigEndian.PutUint64(sortKey[sha256.Size:], change.BlockNum)
+	}); err != nil {
 		return err
 	}
-	if err := c.directory.Put(stateChangeKeyDirectoryKey(latestKey), nil); err != nil {
+	if err := c.directory.PutEncoded(len(stateChangeKeyDirectoryPrefix)+len(latestKey), 0, func(key, _ []byte) {
+		copy(key, stateChangeKeyDirectoryPrefix)
+		copy(key[len(stateChangeKeyDirectoryPrefix):], latestKey)
+	}); err != nil {
 		return err
 	}
 	c.result.SourceRows++

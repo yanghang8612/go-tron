@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"reflect"
@@ -66,6 +67,28 @@ func TestSingletonStateChangePostingValidation(t *testing.T) {
 		}
 	}); allocs != 0 {
 		t.Fatalf("singleton posting validation allocated %.2f objects, want zero", allocs)
+	}
+}
+
+func TestStateChangePostingDeduperIsExactAndResets(t *testing.T) {
+	var d stateChangePostingDeduper
+	hashes := make([][sha256.Size]byte, 16)
+	for i := range hashes {
+		hashes[i] = sha256.Sum256([]byte{byte(i)})
+		if d.Seen(hashes[i]) {
+			t.Fatalf("fresh hash %d reported as seen", i)
+		}
+	}
+	for i := range hashes {
+		if !d.Seen(hashes[i]) {
+			t.Fatalf("repeated hash %d was not retained", i)
+		}
+	}
+	d.Reset()
+	for i := range hashes {
+		if d.Seen(hashes[i]) {
+			t.Fatalf("reset hash %d reported as seen", i)
+		}
 	}
 }
 
