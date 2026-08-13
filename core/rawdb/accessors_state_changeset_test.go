@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -1595,6 +1596,112 @@ func TestDeleteStateDomainChangesUsesPointDeletes(t *testing.T) {
 	if len(blocks) != 0 {
 		t.Fatalf("inverse blocks survived: %v", blocks)
 	}
+}
+
+func TestDeleteStateDomainChangesDeduplicatesBlockPostings(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	db := &postingReadCountingStore{KeyValueStore: base}
+	owner := common.Address{common.AddressPrefixMainnet, 0x61}
+	const (
+		rows       = 512
+		uniqueKeys = 16
+	)
+	changes := make([]*StateDomainChange, rows)
+	for i := range changes {
+		changes[i] = &StateDomainChange{
+			BlockNum: 29, TxNum: 100 + uint64(i/8), Seq: uint64(i + 1),
+			FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 7,
+			Domain: kvdomains.ContractStorage, Key: []byte(fmt.Sprintf("slot/%02d", i%uniqueKeys)),
+			PrevExists: true, Prev: []byte("old"),
+		}
+	}
+	if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range changes {
+		if err := WriteStateDomainChangePostingIndex(db, change); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.postingPresenceReads = 0
+	if err := DeleteStateDomainChanges(db, 29); err != nil {
+		t.Fatal(err)
+	}
+	if db.postingPresenceReads != uniqueKeys {
+		t.Fatalf("posting point reads = %d, want %d unique keys for %d changes", db.postingPresenceReads, uniqueKeys, rows)
+	}
+	if ok, err := db.Has(stateChangeSetKey(29, 0)); err != nil || ok {
+		t.Fatalf("packed changeset survived: ok=%v err=%v", ok, err)
+	}
+}
+
+func BenchmarkPlanStateDomainChangePostingDeletes(b *testing.B) {
+	const (
+		rows       = 512
+		uniqueKeys = 16
+	)
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{common.AddressPrefixMainnet, 0x62}
+	changes := make([]*StateDomainChange, rows)
+	for i := range changes {
+		changes[i] = &StateDomainChange{
+			BlockNum: 30, TxNum: 100 + uint64(i/8), Seq: uint64(i + 1),
+			FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 7,
+			Domain: kvdomains.ContractStorage, Key: []byte(fmt.Sprintf("slot/%02d", i%uniqueKeys)),
+			PrevExists: true, Prev: bytes.Repeat([]byte{byte(i)}, 32),
+		}
+	}
+	if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("owning-per-row", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			hashes := make(map[[sha256.Size]byte]struct{})
+			if err := iteratePhysicalStateDomainChanges(db, 30, func(change *StateDomainChange) (bool, error) {
+				latestKey, err := stateDomainChangeLatestKey(change)
+				if err != nil {
+					return false, err
+				}
+				hashes[stateChangePostingHash(latestKey)] = struct{}{}
+				return true, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			benchmarkBorrowedStateDomainChanges = uint64(len(hashes))
+		}
+	})
+	b.Run("borrowed-reused-key", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			hashes := make(map[[sha256.Size]byte]struct{})
+			latestKey := make([]byte, 0, 128)
+			if err := iteratePhysicalStateDomainChangesBorrowed(db, 30, func(change *StateDomainChange) (bool, error) {
+				var err error
+				latestKey, err = appendStateDomainChangeLatestKey(latestKey[:0], change)
+				if err != nil {
+					return false, err
+				}
+				hashes[stateChangePostingHash(latestKey)] = struct{}{}
+				return true, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			benchmarkBorrowedStateDomainChanges = uint64(len(hashes))
+		}
+	})
+}
+
+type postingReadCountingStore struct {
+	ethdb.KeyValueStore
+	postingPresenceReads int
+}
+
+func (s *postingReadCountingStore) Has(key []byte) (bool, error) {
+	if bytes.HasPrefix(key, stateChangePostingPrefix) {
+		s.postingPresenceReads++
+	}
+	return s.KeyValueStore.Has(key)
 }
 
 func TestDeleteStateDomainChangesDoesNotRescanDeferredDeletes(t *testing.T) {

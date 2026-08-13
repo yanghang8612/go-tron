@@ -36,6 +36,39 @@ func TestStateChangePostingEncodingRoundTripAndRejectsMalformed(t *testing.T) {
 	}
 }
 
+func TestSingletonStateChangePostingValidation(t *testing.T) {
+	value, err := encodeStateChangePosting([]uint64{17})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if singleton, err := isSingletonStateChangePosting(17, value); err != nil || !singleton {
+		t.Fatalf("singleton = %v, err = %v", singleton, err)
+	}
+	packed, err := encodeStateChangePosting([]uint64{17, 19})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if singleton, err := isSingletonStateChangePosting(17, packed); err != nil || singleton {
+		t.Fatalf("packed singleton = %v, err = %v", singleton, err)
+	}
+	for _, malformed := range [][]byte{
+		append(append([]byte(nil), value...), 0),
+		{stateChangePostingValueVersion, 2, 0},
+	} {
+		if _, err := isSingletonStateChangePosting(17, malformed); err == nil {
+			t.Fatalf("accepted malformed singleton posting %x", malformed)
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		singleton, err := isSingletonStateChangePosting(17, value)
+		if err != nil || !singleton {
+			t.Fatalf("singleton = %v, err = %v", singleton, err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("singleton posting validation allocated %.2f objects, want zero", allocs)
+	}
+}
+
 func TestStateChangePostingLiveExactAndPrefix(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	owner := common.Address{common.AddressPrefixMainnet, 0x33}

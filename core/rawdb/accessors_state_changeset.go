@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -902,6 +903,68 @@ func iteratePhysicalStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn fu
 	return it.Error()
 }
 
+// iteratePhysicalStateDomainChangesBorrowed is the pruning counterpart of the
+// owning compatibility iterator above. Current sequence-zero block packs are
+// decoded into one reusable row whose byte fields alias the iterator value.
+// Retired standalone rows still take the owning transition decoder so restart
+// compatibility and repair-row union semantics remain unchanged.
+func iteratePhysicalStateDomainChangesBorrowed(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	prefix := stateChangeSetBlockPrefix(blockNum)
+	it := db.NewIterator(prefix, nil)
+	defer it.Release()
+	var scratch StateDomainChange
+	for it.Next() {
+		key := it.Key()
+		if !bytes.HasPrefix(key, prefix) || len(key) != len(stateChangeSetPrefix)+16 {
+			continue
+		}
+		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
+		if seq == 0 {
+			var callbackErr error
+			sawPackRow := false
+			cont, packErr := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(it.Value(), blockNum, &scratch, func(change *StateDomainChange) (bool, error) {
+				sawPackRow = true
+				var keepGoing bool
+				keepGoing, callbackErr = fn(change)
+				return keepGoing, callbackErr
+			})
+			if callbackErr != nil {
+				return callbackErr
+			}
+			if packErr == nil {
+				if !cont {
+					return nil
+				}
+				continue
+			}
+			// A malformed pack must not be reinterpreted after callbacks have
+			// observed any of its rows. Before the first row, sequence zero may
+			// still be an ordinary row written by the transition schema.
+			if sawPackRow {
+				return packErr
+			}
+			change, legacyErr := decodePersistedStateDomainChange(it.Value(), blockNum, 0)
+			if legacyErr != nil {
+				return packErr
+			}
+			cont, err := fn(change)
+			if err != nil || !cont {
+				return err
+			}
+			continue
+		}
+		change, err := decodePersistedStateDomainChange(it.Value(), blockNum, seq)
+		if err != nil {
+			return err
+		}
+		cont, err := fn(change)
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return it.Error()
+}
+
 // IterateStateDomainChangesByTxRange walks StateDomainChange rows whose
 // TxNum is inside [fromTxNum, toTxNum]. StateTxRange rows provide the block to
 // txNum mapping, so callers can build txNum-native history files without
@@ -969,17 +1032,30 @@ func iterateStateDomainChangesForTxRange(db ethdb.Iteratee, row *StateTxRange, f
 }
 
 func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
-	if err := iteratePhysicalStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
-		latestKey, err := stateDomainChangeLatestKey(change)
+	// A block records every mutation, but its posting index contains only one
+	// candidate per physical latest key. Collapse repeated writes before doing
+	// point reads/deletes; smart-contract blocks frequently touch the same slot
+	// many times across transactions.
+	postingHashes := make(map[[sha256.Size]byte]struct{})
+	latestKeyScratch := make([]byte, 0, 128)
+	if err := iteratePhysicalStateDomainChangesBorrowed(db, blockNum, func(change *StateDomainChange) (bool, error) {
+		var err error
+		latestKeyScratch, err = appendStateDomainChangeLatestKey(latestKeyScratch[:0], change)
 		if err != nil {
 			return false, err
 		}
-		if err := deleteLiveStateChangePosting(db, latestKey, change.BlockNum); err != nil {
-			return false, err
-		}
+		postingHashes[stateChangePostingHash(latestKeyScratch)] = struct{}{}
 		return true, nil
 	}); err != nil {
 		return err
+	}
+	postingKeyScratch := make([]byte, 0, len(stateChangePostingPrefix)+sha256.Size+8)
+	for hash := range postingHashes {
+		var err error
+		postingKeyScratch, err = deleteLiveStateChangePostingByHash(db, hash, blockNum, postingKeyScratch)
+		if err != nil {
+			return err
+		}
 	}
 	// Domain pruning deletes a small per-block prefix repeatedly while a node
 	// is syncing. Use point deletes here: Pebble range tombstones are excellent
@@ -1478,19 +1554,23 @@ func IterateStateDomainChangeBlocksByPrefix(db ethdb.Iteratee, owner common.Addr
 }
 
 func stateDomainChangeLatestKey(change *StateDomainChange) ([]byte, error) {
+	return appendStateDomainChangeLatestKey(nil, change)
+}
+
+func appendStateDomainChangeLatestKey(dst []byte, change *StateDomainChange) ([]byte, error) {
 	if change == nil {
 		return nil, errors.New("rawdb: nil StateDomainChange")
 	}
 	switch change.FlatDomain {
 	case StateFlatDomainAccountLatest:
-		return StateAccountLatestCommitmentKey(change.Owner), nil
+		return AppendStateAccountLatestCommitmentKey(dst, change.Owner), nil
 	case StateFlatDomainKVLatest:
 		if !kvdomains.IsRegistered(change.Domain) {
 			return nil, fmt.Errorf("rawdb: unregistered change KV domain %#04x", uint16(change.Domain))
 		}
-		return StateKVLatestCommitmentKey(change.Owner, change.Generation, change.Domain, change.Key), nil
+		return AppendStateKVLatestCommitmentKey(dst, change.Owner, change.Generation, change.Domain, change.Key), nil
 	case StateFlatDomainKVGeneration:
-		return StateKVGenerationCommitmentKey(change.Owner), nil
+		return AppendStateKVGenerationCommitmentKey(dst, change.Owner), nil
 	default:
 		return nil, fmt.Errorf("rawdb: unknown state flat domain %d", uint8(change.FlatDomain))
 	}

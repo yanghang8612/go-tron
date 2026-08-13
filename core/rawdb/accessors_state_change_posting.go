@@ -23,11 +23,16 @@ const stateChangePostingValueVersion byte = 1
 func stateChangePostingHash(latestKey []byte) [sha256.Size]byte { return sha256.Sum256(latestKey) }
 
 func stateChangePostingKey(hash [sha256.Size]byte, firstBlock uint64) []byte {
-	key := make([]byte, len(stateChangePostingPrefix)+sha256.Size+8)
-	copy(key, stateChangePostingPrefix)
-	copy(key[len(stateChangePostingPrefix):], hash[:])
-	binary.BigEndian.PutUint64(key[len(key)-8:], firstBlock)
-	return key
+	key := make([]byte, 0, len(stateChangePostingPrefix)+sha256.Size+8)
+	return appendStateChangePostingKey(key, hash, firstBlock)
+}
+
+func appendStateChangePostingKey(dst []byte, hash [sha256.Size]byte, firstBlock uint64) []byte {
+	dst = append(dst, stateChangePostingPrefix...)
+	dst = append(dst, hash[:]...)
+	var block [8]byte
+	binary.BigEndian.PutUint64(block[:], firstBlock)
+	return append(dst, block[:]...)
 }
 
 func stateChangePostingHashPrefix(hash [sha256.Size]byte) []byte {
@@ -100,23 +105,50 @@ func writeStateChangePostingIndex(db ethdb.KeyValueWriter, latestKey []byte, blo
 	return db.Put(stateChangePostingKey(stateChangePostingHash(latestKey), blockNum), value)
 }
 
-// deleteLiveStateChangePosting deletes only a single-block live frame. Packed
-// frames are finalized history and remain immutable; pruning merely removes
-// their authoritative changesets, after which readers reject stale candidates.
-func deleteLiveStateChangePosting(db StateKVLatestStore, latestKey []byte, blockNum uint64) error {
-	key := stateChangePostingKey(stateChangePostingHash(latestKey), blockNum)
-	value, exists, err := readPresentValue(db, key, fmt.Sprintf("state change posting at block %d", blockNum))
+// deleteLiveStateChangePostingByHash is the pruning fast path. The caller can
+// reuse keyScratch across a block, and singleton live postings are validated
+// without materializing the general []uint64 representation. Packed frames
+// are finalized history and remain immutable; pruning merely removes their
+// authoritative changesets, after which readers reject stale candidates.
+func deleteLiveStateChangePostingByHash(db StateKVLatestStore, hash [sha256.Size]byte, blockNum uint64, keyScratch []byte) ([]byte, error) {
+	key := appendStateChangePostingKey(keyScratch[:0], hash, blockNum)
+	value, exists, err := readPresentValue(db, key, "state change posting")
 	if err != nil || !exists {
-		return err
+		if err != nil {
+			return key, fmt.Errorf("rawdb: read state change posting at block %d: %w", blockNum, err)
+		}
+		return key, nil
 	}
-	blocks, err := decodeStateChangePosting(blockNum, value)
+	singleton, err := isSingletonStateChangePosting(blockNum, value)
 	if err != nil {
-		return err
+		return key, err
 	}
-	if len(blocks) == 1 && blocks[0] == blockNum {
-		return db.Delete(key)
+	if singleton {
+		return key, db.Delete(key)
 	}
-	return nil
+	return key, nil
+}
+
+func isSingletonStateChangePosting(firstBlock uint64, value []byte) (bool, error) {
+	if len(value) < 2 || value[0] != stateChangePostingValueVersion {
+		return false, fmt.Errorf("rawdb: malformed state change posting version/length %d", len(value))
+	}
+	count, n := binary.Uvarint(value[1:])
+	if n <= 0 || count == 0 || count > uint64(StateChangePostingFrameRows) {
+		return false, errors.New("rawdb: malformed state change posting count")
+	}
+	if count == 1 {
+		if off := 1 + n; off != len(value) {
+			return false, fmt.Errorf("rawdb: trailing state change posting bytes %d", len(value)-off)
+		}
+		return true, nil
+	}
+	// Packed immutable frames are uncommon on this live-delete path. Retain
+	// full validation for them, including delta overflow and trailing bytes.
+	if _, err := decodeStateChangePosting(firstBlock, value); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // iterateStateChangePostingCandidates walks hash candidates in block order.
