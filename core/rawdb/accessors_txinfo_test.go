@@ -117,10 +117,10 @@ func TestReadTransactionInfoPrefersCanonicalBlockReceiptOverLegacyRow(t *testing
 	if err != nil || !ok || info == nil || info.Fee != 700 {
 		t.Fatalf("ReadTransactionInfoStrict = %+v/%v/%v, want canonical fee 700", info, ok, err)
 	}
-	if len(info.Id) != 0 {
-		t.Fatalf("ReadTransactionInfoStrict ID = %x, want compact empty ID", info.Id)
+	if !bytes.Equal(info.Id, txHash[:]) {
+		t.Fatalf("ReadTransactionInfoStrict ID = %x, want reconstructed %x", info.Id, txHash)
 	}
-	if got := ReadTransactionInfo(db, txHash[:]); got == nil || got.Fee != 700 {
+	if got := ReadTransactionInfo(db, txHash[:]); got == nil || got.Fee != 700 || !bytes.Equal(got.Id, txHash[:]) {
 		t.Fatalf("ReadTransactionInfo = %+v, want canonical fee 700", got)
 	}
 	failingLegacy := NewChainDB(failingTxInfoHotStore{
@@ -195,7 +195,7 @@ func TestReadTransactionInfoUsesColdTxPositionWhenInfoIDMissing(t *testing.T) {
 	})
 
 	got := ReadTransactionInfo(db, txID)
-	if got == nil || got.Fee != 200 {
+	if got == nil || got.Fee != 200 || !bytes.Equal(got.Id, txID) {
 		t.Fatalf("ReadTransactionInfo via cold tx position = %+v, want fee 200", got)
 	}
 }
@@ -225,7 +225,7 @@ func TestReadTransactionInfoColdPositionChecksReadableBlockBody(t *testing.T) {
 	})
 
 	got := ReadTransactionInfo(db, txHash2[:])
-	if got == nil || got.Fee != 200 {
+	if got == nil || got.Fee != 200 || !bytes.Equal(got.Id, txHash2[:]) {
 		t.Fatalf("ReadTransactionInfo checked cold tx position = %+v, want fee 200", got)
 	}
 }
@@ -279,10 +279,10 @@ func TestReadTransactionInfoUsesReadableBlockPositionWhenInfoIDMissing(t *testin
 	}
 
 	got, ok, err := ReadTransactionInfoStrict(db, txHash2[:])
-	if err != nil || !ok || got == nil || got.Fee != 200 {
+	if err != nil || !ok || got == nil || got.Fee != 200 || !bytes.Equal(got.Id, txHash2[:]) {
 		t.Fatalf("ReadTransactionInfoStrict via readable block = %+v ok %v err %v, want fee 200", got, ok, err)
 	}
-	if got := ReadTransactionInfo(db, txHash2[:]); got == nil || got.Fee != 200 {
+	if got := ReadTransactionInfo(db, txHash2[:]); got == nil || got.Fee != 200 || !bytes.Equal(got.Id, txHash2[:]) {
 		t.Fatalf("ReadTransactionInfo via readable block = %+v, want fee 200", got)
 	}
 }

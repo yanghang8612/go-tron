@@ -36,55 +36,6 @@ func availableAccountEnergy(acct *types.Account, dp *state.DynamicProperties) in
 	return calculateGlobalResourceLimitV1(frozen, totalLimit, totalWeight, harden)
 }
 
-// ownerResourceSnapshot holds the pre-execution balance and bandwidth state of
-// a transaction's fee-payer (owner). Captured per-tx for cross-impl diagnostics
-// and surfaced in TransactionInfo.ResourceReceipt — non-consensus, never hashed.
-// The "left" values are post-recovery available bandwidth; the timestamps and
-// frozen sums are the recovery/limit inputs, so a stalled re-sync can be diffed
-// against java-tron without re-running gtron with extra logging.
-type ownerResourceSnapshot struct {
-	Balance                int64
-	FreeNetLeft            int64
-	FrozenNetLeft          int64
-	NetLastConsumeTime     int64
-	FreeNetLastConsumeTime int64
-	FrozenForNet           int64
-	FrozenForEnergy        int64
-}
-
-// captureOwnerResourceSnapshot reads the owner's balance and bandwidth state at
-// execution start. It mirrors consumeBandwidth's recovery math (so the "left"
-// values match what the bandwidth charge will see) but mutates nothing. A
-// missing account yields the zero snapshot.
-func captureOwnerResourceSnapshot(statedb *state.StateDB, dp *state.DynamicProperties, owner tcommon.Address, resourceTime int64) ownerResourceSnapshot {
-	if !statedb.AccountExists(owner) {
-		return ownerResourceSnapshot{}
-	}
-	var frozenNet, frozenEnergy int64
-	if dp != nil && dp.SupportUnfreezeDelay() {
-		frozenNet, frozenEnergy, _ = statedb.GetAccountFrozenResourceTotals(owner)
-	} else {
-		frozenNet, frozenEnergy, _ = statedb.GetAccountFrozenResourceTotalsV1(owner)
-	}
-	snap := ownerResourceSnapshot{
-		Balance:                statedb.GetBalance(owner),
-		NetLastConsumeTime:     statedb.GetLatestConsumeTime(owner),
-		FreeNetLastConsumeTime: statedb.GetLatestConsumeFreeTime(owner),
-		FrozenForNet:           frozenNet,
-		FrozenForEnergy:        frozenEnergy,
-	}
-
-	frozenLimit := availableAccountNetForFrozen(frozenNet, dp)
-	frozenUsed := recoverUsageForDP(statedb.GetNetUsage(owner), snap.NetLastConsumeTime, resourceTime, dp)
-	snap.FrozenNetLeft = max(0, frozenLimit-frozenUsed)
-
-	freeLimit := dp.FreeNetLimit()
-	freeUsed := recoverUsageForDP(statedb.GetFreeNetUsage(owner), snap.FreeNetLastConsumeTime, resourceTime, dp)
-	snap.FreeNetLeft = max(0, freeLimit-freeUsed)
-
-	return snap
-}
-
 // frozenForNet sums the frozen balances that contribute to an account's net
 // (bandwidth) limit, matching availableAccountNet's java
 // AccountCapsule.getAllFrozenBalanceForBandwidth sources.

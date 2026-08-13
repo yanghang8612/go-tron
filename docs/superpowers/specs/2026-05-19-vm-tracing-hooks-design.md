@@ -128,8 +128,8 @@ go-ethereum's hook set is EVM/account-centric. TRON adds:
 - **DPoS**: votes mutate witness counters; tracers need visibility
 - **Shielded**: cm append events for shielded-aware tracers
 - **Energy billing**: `OnEnergyBill` fires once per tx with the
-  caller/origin split (mirrors java-tron's receipt.callerEnergyLeft /
-  originEnergyLeft surface)
+  caller/origin split. VM-start energy-left values remain execution-only
+  carriers for java-tron-compatible billing and are not persisted in receipts.
 
 ## Wiring
 

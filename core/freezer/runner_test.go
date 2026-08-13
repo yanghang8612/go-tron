@@ -1338,7 +1338,7 @@ func TestOnlineTransactionIndexPublishesPrunesAndMerges(t *testing.T) {
 		if got := rawdb.ReadTransactionIndex(chainDB, hash[:]); got == nil || *got != wantBlock {
 			t.Fatalf("historical transaction index %d=%v, want %d", i, got, wantBlock)
 		}
-		if got := rawdb.ReadTransactionInfo(chainDB, hash[:]); got == nil || len(got.Id) != 0 {
+		if got := rawdb.ReadTransactionInfo(chainDB, hash[:]); got == nil || tcommon.BytesToHash(got.Id) != hash {
 			t.Fatalf("historical transaction info %d=%+v", i, got)
 		}
 	}

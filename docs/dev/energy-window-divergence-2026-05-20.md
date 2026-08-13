@@ -295,8 +295,8 @@ Operational runbook for this specific node:
 2. Start from an empty Nile DB, or from a trusted snapshot produced before the
    first observed divergence (`19,541,561`; clean genesis replay is preferred).
 3. Run a binary built from current `origin/master` or a later commit that includes
-   `86aa564`, `684b952`, `2bc1ccc`, and the VM `originEnergyLeft` receipt-cache
-   path.
+   `86aa564`, `684b952`, `2bc1ccc`, and the VM-start `originEnergyLeft`
+   execution-carrier path.
 4. After replay reaches `19,716,962`, verify the failed transfer
    `e78c527291df957205a90512a1e6b336c9cfadbe9f1698af2d7c013e65bac4c1` is present
    and the public receipt reports `net_usage=269` with no fee.

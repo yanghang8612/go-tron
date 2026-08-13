@@ -167,6 +167,9 @@ func TestAsyncCommit_Depth4_TransactionInfoBatchOwnership(t *testing.T) {
 		if len(infos) != len(txs) {
 			t.Fatalf("block %d infos = %d, want %d", block.Number(), len(infos), len(txs))
 		}
+		if err := rawdb.PopulateTransactionInfoIDsForBlock(block.Number(), txs, infos, "async commit ownership test"); err != nil {
+			t.Fatalf("block %d populate tx ids: %v", block.Number(), err)
+		}
 		for i, tx := range txs {
 			wantID := tx.Hash()
 			info := infos[i]
@@ -180,7 +183,7 @@ func TestAsyncCommit_Depth4_TransactionInfoBatchOwnership(t *testing.T) {
 				t.Fatalf("block %d tx %d info block = %d", block.Number(), i, info.BlockNumber)
 			}
 			indexed := rawdb.ReadTransactionInfo(bc.chaindb, wantID[:])
-			if indexed == nil || indexed.BlockNumber != int64(block.Number()) {
+			if indexed == nil || indexed.BlockNumber != int64(block.Number()) || tcommon.BytesToHash(indexed.Id) != wantID {
 				t.Fatalf("block %d tx %d per-tx index mismatch: %+v", block.Number(), i, indexed)
 			}
 		}

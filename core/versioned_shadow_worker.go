@@ -399,8 +399,6 @@ var (
 	discardShadowMismatchEnergyTotalCounter          = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_usage_total", nil)
 	discardShadowMismatchReceiptBandwidthCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_bandwidth", nil)
 	discardShadowMismatchReceiptResultCounter        = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_core_result", nil)
-	discardShadowMismatchOwnerDiagnosticCounter      = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_owner_diagnostic", nil)
-	discardShadowMismatchEnergyDiagnosticCounter     = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/receipt_energy_diagnostic", nil)
 	discardShadowMismatchFeeCounter                  = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/fee", nil)
 	discardShadowMismatchResultCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_result", nil)
 	discardShadowMismatchLogsCounter                 = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/logs", nil)
@@ -1244,8 +1242,6 @@ const (
 	discardShadowMismatchIdentity
 	discardShadowMismatchOtherField
 	discardShadowMismatchReceiptCore
-	discardShadowMismatchOwnerDiagnostic
-	discardShadowMismatchEnergyDiagnostic
 	discardShadowMismatchReceiptEnergy
 	discardShadowMismatchReceiptBandwidth
 	discardShadowMismatchReceiptResult
@@ -1299,52 +1295,6 @@ func compareDiscardShadowInfo(shadow, canonical *corepb.TransactionInfo) discard
 		canonicalReceipt := &corepb.ResourceReceipt{}
 		if receipt := canonical.GetReceipt(); receipt != nil {
 			canonicalReceipt = proto.Clone(receipt).(*corepb.ResourceReceipt)
-		}
-		if shadowReceipt.GetOwnerBalance() != canonicalReceipt.GetOwnerBalance() ||
-			shadowReceipt.GetOwnerFreeNetLeft() != canonicalReceipt.GetOwnerFreeNetLeft() ||
-			shadowReceipt.GetOwnerFrozenNetLeft() != canonicalReceipt.GetOwnerFrozenNetLeft() ||
-			shadowReceipt.GetOwnerNetLastConsumeTime() != canonicalReceipt.GetOwnerNetLastConsumeTime() ||
-			shadowReceipt.GetOwnerFreeNetLastConsumeTime() != canonicalReceipt.GetOwnerFreeNetLastConsumeTime() ||
-			shadowReceipt.GetOwnerFrozenForNet() != canonicalReceipt.GetOwnerFrozenForNet() ||
-			shadowReceipt.GetOwnerFrozenForEnergy() != canonicalReceipt.GetOwnerFrozenForEnergy() {
-			mismatch |= discardShadowMismatchOwnerDiagnostic
-		}
-		if shadowReceipt.GetOriginEnergyLeft() != canonicalReceipt.GetOriginEnergyLeft() ||
-			shadowReceipt.GetCallerEnergyLeft() != canonicalReceipt.GetCallerEnergyLeft() ||
-			shadowReceipt.GetOriginEnergyWindow() != canonicalReceipt.GetOriginEnergyWindow() ||
-			shadowReceipt.GetCallerEnergyWindow() != canonicalReceipt.GetCallerEnergyWindow() ||
-			shadowReceipt.GetCallerEnergyLimit() != canonicalReceipt.GetCallerEnergyLimit() ||
-			shadowReceipt.GetOriginEnergyLimit() != canonicalReceipt.GetOriginEnergyLimit() ||
-			shadowReceipt.GetOriginFrozenForEnergy() != canonicalReceipt.GetOriginFrozenForEnergy() ||
-			shadowReceipt.GetCallerEnergyUsagePre() != canonicalReceipt.GetCallerEnergyUsagePre() ||
-			shadowReceipt.GetOriginEnergyUsagePre() != canonicalReceipt.GetOriginEnergyUsagePre() ||
-			shadowReceipt.GetCallerEnergyLastConsumeTime() != canonicalReceipt.GetCallerEnergyLastConsumeTime() ||
-			shadowReceipt.GetOriginEnergyLastConsumeTime() != canonicalReceipt.GetOriginEnergyLastConsumeTime() ||
-			shadowReceipt.GetTotalEnergyWeight() != canonicalReceipt.GetTotalEnergyWeight() ||
-			shadowReceipt.GetTotalEnergyCurrentLimit() != canonicalReceipt.GetTotalEnergyCurrentLimit() {
-			mismatch |= discardShadowMismatchEnergyDiagnostic
-		}
-		for _, receipt := range []*corepb.ResourceReceipt{shadowReceipt, canonicalReceipt} {
-			receipt.OwnerBalance = 0
-			receipt.OwnerFreeNetLeft = 0
-			receipt.OwnerFrozenNetLeft = 0
-			receipt.OwnerNetLastConsumeTime = 0
-			receipt.OwnerFreeNetLastConsumeTime = 0
-			receipt.OwnerFrozenForNet = 0
-			receipt.OwnerFrozenForEnergy = 0
-			receipt.OriginEnergyLeft = 0
-			receipt.CallerEnergyLeft = 0
-			receipt.OriginEnergyWindow = 0
-			receipt.CallerEnergyWindow = 0
-			receipt.CallerEnergyLimit = 0
-			receipt.OriginEnergyLimit = 0
-			receipt.OriginFrozenForEnergy = 0
-			receipt.CallerEnergyUsagePre = 0
-			receipt.OriginEnergyUsagePre = 0
-			receipt.CallerEnergyLastConsumeTime = 0
-			receipt.OriginEnergyLastConsumeTime = 0
-			receipt.TotalEnergyWeight = 0
-			receipt.TotalEnergyCurrentLimit = 0
 		}
 		if !proto.Equal(shadowReceipt, canonicalReceipt) {
 			mismatch |= discardShadowMismatchReceiptCore
@@ -4226,12 +4176,6 @@ func (shadow *discardShadowBlock) run(versioned *versionedAccessShadow, cfg disc
 			if result.mismatch&discardShadowMismatchReceiptResult != 0 {
 				discardShadowMismatchReceiptResultCounter.Inc(1)
 			}
-			if result.mismatch&discardShadowMismatchOwnerDiagnostic != 0 {
-				discardShadowMismatchOwnerDiagnosticCounter.Inc(1)
-			}
-			if result.mismatch&discardShadowMismatchEnergyDiagnostic != 0 {
-				discardShadowMismatchEnergyDiagnosticCounter.Inc(1)
-			}
 			if result.mismatch&discardShadowMismatchFee != 0 {
 				discardShadowMismatchFeeCounter.Inc(1)
 			}
@@ -4565,7 +4509,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	if compareCanonical {
 		mismatch = compareDiscardShadowInfo(shadowInfo, cfg.canonicalInfos[txIndex])
 	}
-	coreMismatch := mismatch &^ (discardShadowMismatchReceipt | discardShadowMismatchOwnerDiagnostic | discardShadowMismatchEnergyDiagnostic)
+	coreMismatch := mismatch &^ discardShadowMismatchReceipt
 	vm.ReleaseExecutionLogs(result.Logs)
 	result.Logs = nil
 	worker.state.FinalizeTransaction()

@@ -558,9 +558,10 @@ and discarded at the transaction boundary. Each worker owns its StateDB,
 DynamicProperties, fork cache, result scratch, VM arenas, and balance trace.
 State and dynamic-property snapshots are reverted after every task.
 
-The comparison boundary is the complete TransactionInfo protobuf, including
-receipt, result, logs, internal transactions, fees, return data, and diagnostic
-resource fields. Metrics report sampled blocks, candidates, executions,
+At the time of this experiment the comparison boundary was the complete
+TransactionInfo protobuf, including receipt, result, logs, internal
+transactions, fees, return data, and the now-retired diagnostic resource
+fields. Metrics report sampled blocks, candidates, executions,
 matches, mismatches, errors, state-copy time, and parallel execution wall time.
 Canonical state and receipts remain authoritative regardless of comparison
 outcome. Journal value comparison and non-zero-indegree predecessor materialization

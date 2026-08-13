@@ -135,8 +135,8 @@ func ReadTransactionInfosRawStrict(db ethdb.KeyValueReader, number uint64) ([]by
 }
 
 // WriteTransactionInfosRaw stores a pre-marshalled `corepb.TransactionRet`
-// blob under `tib-<num>` without decoding or validating it. Normal block
-// execution and backfill paths must use WriteTransactionInfosByBlock instead;
+// blob under `tib-<num>` without decoding or validating it. Normal execution
+// and backfill paths must use one of the validated typed writers instead;
 // this helper exists for raw snapshot/freezer replay and corruption fixtures
 // that intentionally need to preserve bytes at the schema boundary.
 func WriteTransactionInfosRaw(db ethdb.KeyValueWriter, number uint64, data []byte) error {

@@ -284,7 +284,7 @@ type ChainSource interface {
 	// ReadTransactionInfosRawStrict returns the marshalled
 	// `corepb.TransactionRet` bytes under `tib-<num>`, or nil if absent.
 	// Empty blocks (no transactions) still have a row written by
-	// applyBlock — see core.WriteTransactionInfosByBlock — so nil only
+	// applyBlock through the compact typed writer, so nil only
 	// occurs in test fakes; the freezer pass treats nil as "no rows" and
 	// appends an empty byte slice to preserve the per-num cardinality of
 	// the ancient table.

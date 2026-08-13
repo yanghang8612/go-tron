@@ -328,15 +328,7 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	}
 	revertOnOverflow = revertTx
 
-	resourceTime := ctx.ResourceTime()
-	// Diagnostic (cross-impl parity), non-consensus: snapshot the owner's
-	// balance + bandwidth state at execution start — before bandwidth is
-	// consumed — so a stalled Nile re-sync can be diffed against java-tron
-	// without re-running gtron with extra logging. Read-only; assigned onto
-	// result after Execute. Owner-less txs (e.g. shielded) snapshot to zero.
-	ownerSnap := captureOwnerResourceSnapshot(statedb, dynProps, extractSender(tx), resourceTime)
-
-	bwResult, err := consumeBandwidthWithResourceTimeAndSizes(statedb, dynProps, tx, prevBlockTime, resourceTime, wireSizes)
+	bwResult, err := consumeBandwidthWithResourceTimeAndSizes(statedb, dynProps, tx, prevBlockTime, ctx.ResourceTime(), wireSizes)
 	if stateErr := stateFailure("bandwidth"); stateErr != nil {
 		revertTx()
 		return nil, stateErr
@@ -399,15 +391,6 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	result.NetFeeForBandwidth = bwResult.NetFeeForBandwidth
 	result.Fee += multiSignFee + memoFee
 
-	// Owner diagnostic snapshot taken at execution start (see above).
-	result.OwnerBalance = ownerSnap.Balance
-	result.OwnerFreeNetLeft = ownerSnap.FreeNetLeft
-	result.OwnerFrozenNetLeft = ownerSnap.FrozenNetLeft
-	result.OwnerNetLastConsumeTime = ownerSnap.NetLastConsumeTime
-	result.OwnerFreeNetLastConsumeTime = ownerSnap.FreeNetLastConsumeTime
-	result.OwnerFrozenForNet = ownerSnap.FrozenForNet
-	result.OwnerFrozenForEnergy = ownerSnap.FrozenForEnergy
-
 	if scratch != nil {
 		scratch.dynamicPropertiesChanged = dynProps.SnapshotChanged(dpSnap)
 	}
@@ -423,16 +406,15 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 // in one allocation. Each slot owns its ID and repeated-contract-result cell,
 // preserving per-TransactionInfo mutation isolation.
 type transactionInfoSlot struct {
-	info                 corepb.TransactionInfo
-	receipt              corepb.ResourceReceipt
-	id                   tcommon.Hash
-	contractAddress      [tcommon.AddressLength]byte
-	contractResult       [1][]byte
-	internalTxArena      vm.InternalTransactionArena
-	executionLogArena    vm.ExecutionLogArena
-	logs                 []*transactionInfoLogSlot
-	logPointers          []*corepb.TransactionInfo_Log
-	internalTransactions []*corepb.InternalTransaction
+	info              corepb.TransactionInfo
+	receipt           corepb.ResourceReceipt
+	id                tcommon.Hash
+	contractAddress   [tcommon.AddressLength]byte
+	contractResult    [1][]byte
+	internalTxArena   vm.InternalTransactionArena
+	executionLogArena vm.ExecutionLogArena
+	logs              []*transactionInfoLogSlot
+	logPointers       []*corepb.TransactionInfo_Log
 }
 
 // transactionInfoLogSlot owns the stable-address protobuf shell and slice
@@ -541,37 +523,6 @@ func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.R
 		EnergyUsageTotal:  result.EnergyUsageTotal,
 		NetUsage:          result.NetUsage,
 		NetFee:            result.NetFee,
-		// Diagnostic (cross-impl parity): available energy of origin/caller
-		// at contract execution start; set unconditionally in vm_actuator.
-		OriginEnergyLeft: result.OriginEnergyLeft,
-		CallerEnergyLeft: result.CallerEnergyLeft,
-		// Diagnostic (cross-impl parity), non-consensus. Owner* are the
-		// fee-payer's balance/bandwidth state at exec start (set for every
-		// tx type in applyTransaction); *EnergyWindow are the origin/caller
-		// energy recovery windows (set for VM txs in vm_actuator).
-		OwnerBalance:                result.OwnerBalance,
-		OwnerFreeNetLeft:            result.OwnerFreeNetLeft,
-		OwnerFrozenNetLeft:          result.OwnerFrozenNetLeft,
-		OwnerNetLastConsumeTime:     result.OwnerNetLastConsumeTime,
-		OwnerFreeNetLastConsumeTime: result.OwnerFreeNetLastConsumeTime,
-		OwnerFrozenForNet:           result.OwnerFrozenForNet,
-		OwnerFrozenForEnergy:        result.OwnerFrozenForEnergy,
-		OriginEnergyWindow:          result.OriginEnergyWindow,
-		CallerEnergyWindow:          result.CallerEnergyWindow,
-		// Diagnostic (cross-impl parity), non-consensus — fields 20-28.
-		// Decompose the energy bill: recovered = *_energy_limit -
-		// *_energy_left, limit = floor(frozen_for_energy/TRX *
-		// TotalEnergyCurrentLimit/TotalEnergyWeight). Set for VM txs in
-		// vm_actuator at execution start.
-		CallerEnergyLimit:           result.CallerEnergyLimit,
-		OriginEnergyLimit:           result.OriginEnergyLimit,
-		OriginFrozenForEnergy:       result.OriginFrozenForEnergy,
-		CallerEnergyUsagePre:        result.CallerEnergyUsagePre,
-		OriginEnergyUsagePre:        result.OriginEnergyUsagePre,
-		CallerEnergyLastConsumeTime: result.CallerEnergyLastConsumeTime,
-		OriginEnergyLastConsumeTime: result.OriginEnergyLastConsumeTime,
-		TotalEnergyWeight:           result.TotalEnergyWeight,
-		TotalEnergyCurrentLimit:     result.TotalEnergyCurrentLimit,
 	}
 	info := &slot.info
 	*info = corepb.TransactionInfo{
@@ -657,11 +608,6 @@ func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.R
 	if len(slot.logPointers) > 0 {
 		info.Log = slot.logPointers[:len(slot.logPointers):len(slot.logPointers)]
 	}
-	slot.setInternalTransactions(result.InternalTransactions)
-	if len(slot.internalTransactions) > 0 {
-		info.InternalTransactions = slot.internalTransactions[:len(slot.internalTransactions):len(slot.internalTransactions)]
-	}
-
 	if result.ContractRet > 1 {
 		info.Result = corepb.TransactionInfo_FAILED
 		if len(result.ResMessage) > 0 {
@@ -778,19 +724,6 @@ func (slot *transactionInfoSlot) prepareLogs(n int) {
 		}
 		slot.logPointers = slot.logPointers[:n]
 	}
-}
-
-func (slot *transactionInfoSlot) setInternalTransactions(txs []*corepb.InternalTransaction) {
-	oldLen := len(slot.internalTransactions)
-	if cap(slot.internalTransactions) < len(txs) {
-		slot.internalTransactions = make([]*corepb.InternalTransaction, len(txs))
-	} else {
-		if len(txs) < oldLen {
-			clear(slot.internalTransactions[len(txs):oldLen])
-		}
-		slot.internalTransactions = slot.internalTransactions[:len(txs)]
-	}
-	copy(slot.internalTransactions, txs)
 }
 
 // ProcessBlock executes all transactions in a block and pays the block reward.

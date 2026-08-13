@@ -454,32 +454,17 @@ func accountEnergyLimit(ctx *Context, account common.Address, feeLimit, callValu
 }
 
 func accountEnergyLimitWithFixRatio(ctx *Context, account common.Address, feeLimit, callValue int64, result *Result) int64 {
-	acct, frozen := accountEnergyResourceView(ctx.State, ctx.DynProps, account)
+	acct, _ := accountEnergyResourceView(ctx.State, ctx.DynProps, account)
 	if acct == nil {
 		return 0
 	}
 	sunPerEnergy := vmEnergyFee(ctx)
 	leftFrozenEnergy := availableAccountEnergyForBill(ctx.State, ctx.DynProps, account, ctx.ResourceTime())
-	// Diagnostic (cross-impl parity): record caller available energy at exec
-	// start unconditionally (incl. pre-Stake-2.0). Billing still gates its reads
-	// on vmReceiptEnergyLeftMode, so this only populates the receipt field.
+	// Carry the exact VM-start value into billing. Re-reading after VM execution
+	// can observe a different recovery state.
 	if result != nil {
 		result.CallerEnergyLeft = leftFrozenEnergy
 		result.HasCallerEnergyLeft = true
-		// Diagnostic: caller energy recovery window (slots) at exec start. The
-		// window is the per-account state that drifts in energy-window forks;
-		// recovery reads but never persists it, so this is the pristine value.
-		result.CallerEnergyWindow = acct.EnergyWindowSize()
-		// Diagnostic (fields 20/23/25/27/28): decompose the caller bill. limit
-		// splits CallerEnergyLeft into recovered = limit - left; usage_pre and
-		// last_consume_time are the recovery inputs; total_energy_{weight,
-		// current_limit} are the global limit factors. caller_frozen_for_energy
-		// is already owner_frozen_for_energy (field 17).
-		result.CallerEnergyLimit = calcAccountEnergyLimitFromFrozen(frozen, ctx.DynProps)
-		result.CallerEnergyUsagePre = ctx.State.GetEnergyUsage(account)
-		result.CallerEnergyLastConsumeTime = ctx.State.GetLatestConsumeTimeForEnergy(account)
-		result.TotalEnergyWeight = ctx.DynProps.TotalEnergyWeight()
-		result.TotalEnergyCurrentLimit = ctx.DynProps.TotalEnergyCurrentLimit()
 	}
 	if callValue < 0 {
 		callValue = 0
@@ -582,21 +567,11 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 	}
 
 	originEnergyLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime())
-	// Diagnostic (cross-impl parity): record origin available energy at exec
-	// start unconditionally (incl. pre-Stake-2.0). Billing still gates its reads.
+	// Carry the exact VM-start value into billing for the same reason as the
+	// caller value above.
 	if result != nil {
 		result.OriginEnergyLeft = originEnergyLeft
 		result.HasOriginEnergyLeft = true
-		// Diagnostic: origin energy recovery window (slots) at exec start.
-		// Fields 21/22/24/26: origin limit (the 17,227,485-vs-486 value),
-		// origin frozen-for-energy (limit numerator), and the recovery inputs.
-		result.OriginEnergyUsagePre = ctx.State.GetEnergyUsage(origin)
-		result.OriginEnergyLastConsumeTime = ctx.State.GetLatestConsumeTimeForEnergy(origin)
-		if originAcct, originFrozen := accountEnergyResourceView(ctx.State, ctx.DynProps, origin); originAcct != nil {
-			result.OriginEnergyWindow = originAcct.EnergyWindowSize()
-			result.OriginEnergyLimit = calcAccountEnergyLimitFromFrozen(originFrozen, ctx.DynProps)
-			result.OriginFrozenForEnergy = originFrozen
-		}
 	}
 
 	var originEnergyLimit int64

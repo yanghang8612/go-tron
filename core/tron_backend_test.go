@@ -1626,8 +1626,8 @@ func TestJSONRPCGetTransactionReceiptUsesColdTxPositionAfterHotPrune(t *testing.
 	bc.ChainDB().SetChainIndexReader(mgr)
 	backend := &TronBackend{chain: bc}
 	gotInfo, err := backend.GetTransactionInfo(txHash2)
-	if err != nil || gotInfo == nil || len(gotInfo.Id) != 0 || gotInfo.GetReceipt().GetEnergyUsageTotal() != 77 {
-		t.Fatalf("GetTransactionInfo cold tx-position receipt = %+v/%v, want empty-id receipt resolved by tx position", gotInfo, err)
+	if err != nil || gotInfo == nil || !bytes.Equal(gotInfo.Id, txHash2[:]) || gotInfo.GetReceipt().GetEnergyUsageTotal() != 77 {
+		t.Fatalf("GetTransactionInfo cold tx-position receipt = %+v/%v, want reconstructed-id receipt", gotInfo, err)
 	}
 
 	rpcServer := jsonrpc.NewServer(backend, 0)

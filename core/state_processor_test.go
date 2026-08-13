@@ -1821,26 +1821,6 @@ func TestApplyTransaction_Transfer(t *testing.T) {
 	}
 }
 
-func TestApplyTransaction_CapturesOwnerSnapshot(t *testing.T) {
-	statedb := newTestState(t)
-	dynProps := state.NewDynamicProperties()
-
-	statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
-	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
-	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
-
-	tx := makeTestTransferTx(1, 2, 300_000)
-	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 3000, 1, nil, nil, true, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The diagnostic snapshot is taken at execution start, so it must report the
-	// owner's pre-transfer balance (1_000_000) — NOT the post-transfer 700_000.
-	if result.OwnerBalance != 1_000_000 {
-		t.Fatalf("OwnerBalance = %d, want 1000000 (pre-tx snapshot, not post-transfer 700000)", result.OwnerBalance)
-	}
-}
-
 func TestApplyTransaction_ValidationFails(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
@@ -2569,62 +2549,6 @@ func TestBuildTransactionInfo_IncludesEmptyVMContractResult(t *testing.T) {
 	}
 }
 
-func TestBuildTransactionInfo_DiagnosticReceiptFields(t *testing.T) {
-	tx := makeTestTransferTx(1, 2, 100)
-	result := &actuator.Result{
-		ContractRet:                 int32(corepb.Transaction_Result_SUCCESS),
-		OwnerBalance:                5_000_000,
-		OwnerFreeNetLeft:            400,
-		OwnerFrozenNetLeft:          700,
-		OwnerNetLastConsumeTime:     111,
-		OwnerFreeNetLastConsumeTime: 222,
-		OwnerFrozenForNet:           1_000_000,
-		OwnerFrozenForEnergy:        2_000_000,
-		OriginEnergyWindow:          28_800,
-		CallerEnergyWindow:          14_400,
-		CallerEnergyLimit:           3_300,
-		OriginEnergyLimit:           17_227_485,
-		OriginFrozenForEnergy:       62_826_000_000,
-		CallerEnergyUsagePre:        1_234,
-		OriginEnergyUsagePre:        17_225_691,
-		CallerEnergyLastConsumeTime: 551_787_654,
-		OriginEnergyLastConsumeTime: 551_787_600,
-		TotalEnergyWeight:           328_216_199,
-		TotalEnergyCurrentLimit:     90_000_000_000,
-	}
-
-	r := buildTransactionInfo(tx, result, 1, 3000, false).Receipt
-	checks := []struct {
-		name string
-		got  int64
-		want int64
-	}{
-		{"OwnerBalance", r.GetOwnerBalance(), 5_000_000},
-		{"OwnerFreeNetLeft", r.GetOwnerFreeNetLeft(), 400},
-		{"OwnerFrozenNetLeft", r.GetOwnerFrozenNetLeft(), 700},
-		{"OwnerNetLastConsumeTime", r.GetOwnerNetLastConsumeTime(), 111},
-		{"OwnerFreeNetLastConsumeTime", r.GetOwnerFreeNetLastConsumeTime(), 222},
-		{"OwnerFrozenForNet", r.GetOwnerFrozenForNet(), 1_000_000},
-		{"OwnerFrozenForEnergy", r.GetOwnerFrozenForEnergy(), 2_000_000},
-		{"OriginEnergyWindow", r.GetOriginEnergyWindow(), 28_800},
-		{"CallerEnergyWindow", r.GetCallerEnergyWindow(), 14_400},
-		{"CallerEnergyLimit", r.GetCallerEnergyLimit(), 3_300},
-		{"OriginEnergyLimit", r.GetOriginEnergyLimit(), 17_227_485},
-		{"OriginFrozenForEnergy", r.GetOriginFrozenForEnergy(), 62_826_000_000},
-		{"CallerEnergyUsagePre", r.GetCallerEnergyUsagePre(), 1_234},
-		{"OriginEnergyUsagePre", r.GetOriginEnergyUsagePre(), 17_225_691},
-		{"CallerEnergyLastConsumeTime", r.GetCallerEnergyLastConsumeTime(), 551_787_654},
-		{"OriginEnergyLastConsumeTime", r.GetOriginEnergyLastConsumeTime(), 551_787_600},
-		{"TotalEnergyWeight", r.GetTotalEnergyWeight(), 328_216_199},
-		{"TotalEnergyCurrentLimit", r.GetTotalEnergyCurrentLimit(), 90_000_000_000},
-	}
-	for _, c := range checks {
-		if c.got != c.want {
-			t.Errorf("receipt.%s = %d, want %d", c.name, c.got, c.want)
-		}
-	}
-}
-
 func TestBuildTransactionInfo_NonVMReceiptShapeMatchesJavaTron(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 	result := &actuator.Result{
@@ -2687,19 +2611,14 @@ func TestBuildTransactionInfo_VMReceiptAndLogShapeMatchesJavaTron(t *testing.T) 
 	if len(info.Log[0].Topics) != 1 || string(info.Log[0].Topics[0]) != string([]byte{0x01}) {
 		t.Fatalf("log topics: got %x, want 01", info.Log[0].Topics)
 	}
-	if len(info.InternalTransactions) != 1 {
-		t.Fatalf("internal_transactions: got %d, want 1", len(info.InternalTransactions))
-	}
-	if string(info.InternalTransactions[0].Note) != "call" {
-		t.Fatalf("internal transaction note: got %q, want call", info.InternalTransactions[0].Note)
+	if len(info.InternalTransactions) != 0 {
+		t.Fatalf("internal_transactions: got %d, want omitted by default", len(info.InternalTransactions))
 	}
 }
 
 func TestTransactionInfoSlotReuseClearsVariableFields(t *testing.T) {
 	contractAddr := testProcessorAddr(2)
 	tx := makeTestTriggerTx(1, contractAddr, nil)
-	internalA := &corepb.InternalTransaction{Note: []byte("a")}
-	internalB := &corepb.InternalTransaction{Note: []byte("b")}
 	slot := new(transactionInfoSlot)
 
 	first := &actuator.Result{
@@ -2708,11 +2627,11 @@ func TestTransactionInfoSlotReuseClearsVariableFields(t *testing.T) {
 			{Address: contractAddr, Topics: [][]byte{{0x01}, {0x02}}, Data: []byte{0xa1}},
 			{Address: contractAddr, Topics: [][]byte{{0x03}}, Data: []byte{0xa2}},
 		},
-		InternalTransactions: []*corepb.InternalTransaction{internalA, internalB},
+		InternalTransactions: []*corepb.InternalTransaction{{Note: []byte("a")}},
 	}
 	info := slot.build(tx, first, 1, 3000, false)
-	if len(info.Log) != 2 || len(info.InternalTransactions) != 2 {
-		t.Fatalf("first build shape: logs=%d internal=%d", len(info.Log), len(info.InternalTransactions))
+	if len(info.Log) != 2 || info.InternalTransactions != nil {
+		t.Fatalf("first build shape: logs=%d internal=%v", len(info.Log), info.InternalTransactions)
 	}
 
 	info = slot.build(tx, &actuator.Result{ContractRet: int32(corepb.Transaction_Result_SUCCESS)}, 2, 6000, false)
@@ -2727,7 +2646,7 @@ func TestTransactionInfoSlotReuseClearsVariableFields(t *testing.T) {
 			Address: nonMainnet,
 			Data:    []byte{0xb1},
 		}},
-		InternalTransactions: []*corepb.InternalTransaction{internalB},
+		InternalTransactions: []*corepb.InternalTransaction{{Note: []byte("b")}},
 	}
 	info = slot.build(tx, third, 3, 9000, false)
 	if len(info.Log) != 1 || len(info.Log[0].Topics) != 0 || len(info.Log[0].Address) != tcommon.AddressLength {
@@ -2736,10 +2655,10 @@ func TestTransactionInfoSlotReuseClearsVariableFields(t *testing.T) {
 	if !bytes.Equal(info.Log[0].Address, nonMainnet[:]) {
 		t.Fatalf("non-mainnet log address = %x, want %x", info.Log[0].Address, nonMainnet)
 	}
-	if len(info.InternalTransactions) != 1 || info.InternalTransactions[0] != internalB {
-		t.Fatalf("third build internal transactions = %+v", info.InternalTransactions)
+	if info.InternalTransactions != nil {
+		t.Fatalf("third build internal transactions = %+v, want omitted", info.InternalTransactions)
 	}
-	if cap(info.Log) != len(info.Log) || cap(info.InternalTransactions) != len(info.InternalTransactions) {
+	if cap(info.Log) != len(info.Log) {
 		t.Fatal("receipt repeated fields expose spare reusable capacity")
 	}
 }

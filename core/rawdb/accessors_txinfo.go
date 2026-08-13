@@ -106,6 +106,7 @@ func readTransactionInfoFromCanonicalBlock(db *ChainDB, txID []byte) (*corepb.Tr
 		if int(lookup.TxIndex) < len(infos) {
 			info := infos[lookup.TxIndex]
 			if len(info.GetId()) == 0 && transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
+				info.Id = append([]byte(nil), txID...)
 				return info, true, nil
 			}
 			if err := validateTransactionInfoIDForKey(txID, info, "read transaction info by cold position"); err != nil {
@@ -262,6 +263,9 @@ func transactionInfoByReadableBlockPosition(db *ChainDB, txID []byte, blockNum u
 		hash := tx.Hash()
 		if !bytes.Equal(hash[:], txID) {
 			continue
+		}
+		if len(infos[txIndex].Id) == 0 {
+			infos[txIndex].Id = append([]byte(nil), txID...)
 		}
 		return infos[txIndex], true, nil
 	}

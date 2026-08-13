@@ -183,18 +183,17 @@ func TestTransferExecute_ReusesAndClearsResultSink(t *testing.T) {
 	seedAccount(statedb, makeTestAddr(2), 5_000_000)
 
 	sink := &Result{
-		Fee:                         99,
-		EnergyUsageTotal:            88,
-		CancelUnfreezeV2Amount:      map[string]int64{"BANDWIDTH": 77},
-		ContractResult:              []byte{1, 2, 3},
-		Logs:                        []vm.Log{{}},
-		InternalTransactions:        []*corepb.InternalTransaction{{}},
-		ContractResultPresent:       true,
-		NetFeeForBandwidth:          true,
-		HasCallerEnergyLeft:         true,
-		HasOriginEnergyLeft:         true,
-		ExchangeReceivedAmount:      66,
-		CallerEnergyLastConsumeTime: 55,
+		Fee:                    99,
+		EnergyUsageTotal:       88,
+		CancelUnfreezeV2Amount: map[string]int64{"BANDWIDTH": 77},
+		ContractResult:         []byte{1, 2, 3},
+		Logs:                   []vm.Log{{}},
+		InternalTransactions:   []*corepb.InternalTransaction{{}},
+		ContractResultPresent:  true,
+		NetFeeForBandwidth:     true,
+		HasCallerEnergyLeft:    true,
+		HasOriginEnergyLeft:    true,
+		ExchangeReceivedAmount: 66,
 	}
 	ctx := setupContext(t, statedb, makeTransferTx(1, 2, 3_000_000))
 	ctx.ResultSink = sink
