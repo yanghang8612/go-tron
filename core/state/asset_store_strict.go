@@ -21,7 +21,7 @@ func (s *StateDB) readAssetMetaStrict(key []byte, context string) (*contractpb.A
 	if err != nil {
 		return nil, true, fmt.Errorf("decode %s: %w", context, err)
 	}
-	if hotKey := assetBandwidthKey(key); hotKey != nil {
+	if hotKey := s.assetBandwidthKey(key); hotKey != nil {
 		hotRaw, hotOK, hotErr := s.systemKVGetForDecoding(kvdomains.SystemAsset, hotKey)
 		if hotErr != nil {
 			return nil, true, hotErr

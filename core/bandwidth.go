@@ -369,11 +369,11 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 		return false, fmt.Errorf("failed to unmarshal TransferAssetContract: unexpected parameter type %T", msg)
 	}
 
-	asset, tokenID, err := resolveBandwidthAsset(statedb, dynProps, c.AssetName)
+	asset, err := resolveBandwidthAsset(statedb, dynProps, c.AssetName)
 	if err != nil {
 		return false, err
 	}
-	tokenIDStr := strconv.FormatInt(tokenID, 10)
+	tokenIDStr := strconv.FormatInt(asset.TokenID, 10)
 
 	recoveredPublicUsage := recoverUsageForDP(asset.PublicFreeAssetNetUsage, asset.PublicLatestFreeNetTime, resourceTime, dynProps)
 	if txSize > asset.PublicFreeAssetNetLimit-recoveredPublicUsage {
@@ -394,7 +394,7 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 		return false, nil
 	}
 
-	issuer := tcommon.BytesToAddress(asset.OwnerAddress)
+	issuer := tcommon.Address(asset.Owner)
 	if !statedb.AccountExists(issuer) {
 		return false, nil
 	}
@@ -421,7 +421,7 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 
 	newPublicUsage := recoveredPublicUsage + txSize
 	if dynProps.AllowSameTokenName() {
-		if err := statedb.WriteAssetIssueBandwidth(tokenID, newPublicUsage, resourceTime); err != nil {
+		if err := statedb.WriteAssetIssueBandwidth(asset.TokenID, newPublicUsage, resourceTime); err != nil {
 			return false, err
 		}
 	} else {
@@ -435,8 +435,8 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 				return false, err
 			}
 		}
-		if statedb.HasAssetIssue(tokenID) {
-			if err := statedb.WriteAssetIssueBandwidth(tokenID, newPublicUsage, resourceTime); err != nil {
+		if statedb.HasAssetIssue(asset.TokenID) {
+			if err := statedb.WriteAssetIssueBandwidth(asset.TokenID, newPublicUsage, resourceTime); err != nil {
 				return false, err
 			}
 		}
@@ -444,32 +444,36 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 	return true, nil
 }
 
-func resolveBandwidthAsset(statedb *state.StateDB, dynProps *state.DynamicProperties, assetName []byte) (*contractpb.AssetIssueContract, int64, error) {
+func resolveBandwidthAsset(statedb *state.StateDB, dynProps *state.DynamicProperties, assetName []byte) (state.AssetBandwidthView, error) {
 	if dynProps.AllowSameTokenName() {
 		tokenID, err := strconv.ParseInt(string(assetName), 10, 64)
 		if err != nil {
-			return nil, 0, fmt.Errorf("invalid asset_name: not a numeric ID")
+			return state.AssetBandwidthView{}, fmt.Errorf("invalid asset_name: not a numeric ID")
 		}
-		asset := statedb.ReadAssetIssue(tokenID)
-		if asset == nil {
-			return nil, 0, fmt.Errorf("asset [%s] does not exist", assetName)
-		}
-		return asset, tokenID, nil
-	}
-	if asset := statedb.ReadAssetIssueByName(assetName); asset != nil {
-		tokenID, err := strconv.ParseInt(asset.Id, 10, 64)
+		asset, ok, err := statedb.ReadAssetBandwidthView(tokenID)
 		if err != nil {
-			return nil, 0, fmt.Errorf("invalid legacy asset ID")
+			return state.AssetBandwidthView{}, err
 		}
-		return asset, tokenID, nil
+		if !ok {
+			return state.AssetBandwidthView{}, fmt.Errorf("asset [%s] does not exist", assetName)
+		}
+		return asset, nil
+	}
+	if asset, ok, err := statedb.ReadAssetBandwidthViewByName(assetName); err != nil {
+		return state.AssetBandwidthView{}, err
+	} else if ok {
+		return asset, nil
 	}
 	if tokenID, ok := statedb.ReadAssetNameIndex(assetName); ok {
-		asset := statedb.ReadAssetIssue(tokenID)
-		if asset != nil {
-			return asset, tokenID, nil
+		asset, exists, err := statedb.ReadAssetBandwidthView(tokenID)
+		if err != nil {
+			return state.AssetBandwidthView{}, err
+		}
+		if exists {
+			return asset, nil
 		}
 	}
-	return nil, 0, fmt.Errorf("asset [%s] does not exist", assetName)
+	return state.AssetBandwidthView{}, fmt.Errorf("asset [%s] does not exist", assetName)
 }
 
 // consumeBandwidthForCreateNewAccount charges bandwidth for txs that

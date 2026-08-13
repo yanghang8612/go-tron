@@ -2,6 +2,7 @@ package state
 
 import (
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -11,12 +12,14 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
 
 const (
 	defaultStateReadAheadQueueBlocks = 64
 	defaultStateReadAheadQueueBytes  = 16 << 20
+	maxTransferAssetPrefetchRows     = 128
 	maxStateReadAheadWorkers         = 4
 )
 
@@ -308,20 +311,47 @@ type stateReadAheadTarget struct {
 	contract bool
 }
 
+type stateReadAheadTransferAsset struct {
+	owner     tcommon.Address
+	to        tcommon.Address
+	assetName []byte
+}
+
+type stateReadAheadKVTarget struct {
+	address    tcommon.Address
+	generation uint64
+	domain     kvdomains.KVDomain
+	key        string
+}
+
 func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
-	targets := stateReadAheadTargets(job.block)
+	targets, assetTransfers := stateReadAheadTargets(job.block)
+	assetAccounts := make(map[tcommon.Address]struct{}, len(assetTransfers)*2+1)
+	if len(assetTransfers) > 0 {
+		assetAccounts[tcommon.SystemAccountAddress] = struct{}{}
+		for _, transfer := range assetTransfers {
+			assetAccounts[transfer.owner] = struct{}{}
+			assetAccounts[transfer.to] = struct{}{}
+		}
+	}
+	envelopes := make(map[tcommon.Address]StateAccountV3, len(targets))
 	for _, target := range targets {
 		if job.epoch != p.epoch.Load() {
 			return false
 		}
 		encoded, ok, err := rawdb.PrefetchStateAccountLatest(p.db, target.address)
 		p.recordRow(ok, err)
-		if err != nil || !ok || !target.contract {
+		_, assetAccount := assetAccounts[target.address]
+		if err != nil || !ok || (!target.contract && !assetAccount) {
 			continue
 		}
 		envelope, err := DecodeStateAccountV2(encoded)
 		if err != nil {
 			p.recordError()
+			continue
+		}
+		envelopes[target.address] = *envelope
+		if !target.contract {
 			continue
 		}
 		_, ok, err = rawdb.PrefetchStateKVLatest(p.db, target.address, envelope.AccountKVGeneration, kvdomains.ContractMetadata, contractMetaKVKey)
@@ -330,6 +360,53 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 			_, ok, err = rawdb.PrefetchStateCode(p.db, envelope.CodeHash)
 			p.recordRow(ok, err)
 		}
+	}
+	if len(assetTransfers) == 0 {
+		return true
+	}
+	// TransferAsset reads predictable point rows after opening the owner and
+	// recipient account envelopes. Warm both legacy name-keyed rows and, for a
+	// numeric wire name, the post-AllowSameTokenName ID-keyed rows. The fork
+	// decision remains exclusively on the canonical path; an unnecessary
+	// prefetch merely admits an unused immutable cache entry.
+	seenKV := make(map[stateReadAheadKVTarget]struct{}, len(assetTransfers)*8)
+	prefetchKV := func(address tcommon.Address, domain kvdomains.KVDomain, key []byte) {
+		envelope, ok := envelopes[address]
+		if !ok {
+			return
+		}
+		target := stateReadAheadKVTarget{address: address, generation: envelope.AccountKVGeneration, domain: domain, key: string(key)}
+		if _, exists := seenKV[target]; exists {
+			return
+		}
+		if len(seenKV) >= maxTransferAssetPrefetchRows {
+			return
+		}
+		seenKV[target] = struct{}{}
+		_, present, err := rawdb.PrefetchStateKVLatest(p.db, address, envelope.AccountKVGeneration, domain, key)
+		p.recordRow(present, err)
+	}
+	for _, transfer := range assetTransfers {
+		legacyMeta := assetBytesKey(assetLegacyTag, transfer.assetName)
+		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, legacyMeta)
+		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBandwidthKey(legacyMeta))
+		prefetchKV(transfer.owner, kvdomains.AccountAsset, transfer.assetName)
+		prefetchKV(transfer.to, kvdomains.AccountAsset, transfer.assetName)
+		prefetchKV(transfer.owner, kvdomains.AccountFreeAssetNetUsage, transfer.assetName)
+		prefetchKV(transfer.owner, kvdomains.AccountAssetOperationTime, transfer.assetName)
+
+		tokenID, err := strconv.ParseInt(string(transfer.assetName), 10, 64)
+		if err != nil {
+			continue
+		}
+		v2Meta := assetIDKey(assetV2Tag, tokenID)
+		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, v2Meta)
+		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBandwidthKey(v2Meta))
+		tokenKey := strconv.FormatInt(tokenID, 10)
+		prefetchKV(transfer.owner, kvdomains.AccountAssetV2, []byte(tokenKey))
+		prefetchKV(transfer.to, kvdomains.AccountAssetV2, []byte(tokenKey))
+		prefetchKV(transfer.owner, kvdomains.AccountFreeAssetNetUsageV2, []byte(tokenKey))
+		prefetchKV(transfer.owner, kvdomains.AccountAssetOperationTimeV2, []byte(tokenKey))
 	}
 	return true
 }
@@ -355,12 +432,14 @@ func (p *StateReadAhead) recordError() {
 	stateReadAheadErrorsCounter.Inc(1)
 }
 
-func stateReadAheadTargets(block *types.Block) []stateReadAheadTarget {
+func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateReadAheadTransferAsset) {
 	if block == nil {
-		return nil
+		return nil, nil
 	}
+	transactions := block.Transactions()
 	index := make(map[tcommon.Address]int)
-	targets := make([]stateReadAheadTarget, 0, len(block.Transactions())*2+1)
+	targets := make([]stateReadAheadTarget, 0, len(transactions)*2+1)
+	assetTransfers := make([]stateReadAheadTransferAsset, 0)
 	add := func(raw []byte, contract bool) {
 		if len(raw) != tcommon.AddressLength {
 			return
@@ -379,7 +458,7 @@ func stateReadAheadTargets(block *types.Block) []stateReadAheadTarget {
 
 	witness := block.WitnessAddress()
 	add(witness[:], false)
-	for _, tx := range block.Transactions() {
+	for _, tx := range transactions {
 		message, err := tx.DecodedContract()
 		if err != nil || message == nil {
 			continue
@@ -405,6 +484,14 @@ func stateReadAheadTargets(block *types.Block) []stateReadAheadTarget {
 		if value, ok := message.(interface{ GetTransparentToAddress() []byte }); ok {
 			add(value.GetTransparentToAddress(), false)
 		}
+		if transfer, ok := message.(*contractpb.TransferAssetContract); ok && len(transfer.OwnerAddress) == tcommon.AddressLength && len(transfer.ToAddress) == tcommon.AddressLength {
+			owner := tcommon.BytesToAddress(transfer.OwnerAddress)
+			to := tcommon.BytesToAddress(transfer.ToAddress)
+			if owner.ValidPrefix() && to.ValidPrefix() {
+				assetTransfers = append(assetTransfers, stateReadAheadTransferAsset{owner: owner, to: to, assetName: transfer.AssetName})
+				add(tcommon.SystemAccountAddress[:], false)
+			}
+		}
 	}
-	return targets
+	return targets, assetTransfers
 }

@@ -259,6 +259,34 @@ func TestHasAssetIssueRejectsMalformedNativeValue(t *testing.T) {
 	}
 }
 
+func TestAssetBandwidthViewFailsClosedAndUsesV2KeyID(t *testing.T) {
+	const id = int64(1_000_777)
+	sdb := newTestStateDB(t)
+	asset := testAssetIssueContract()
+	asset.Id = "non-numeric-v2-id"
+	if err := sdb.WriteAssetIssue(id, asset); err != nil {
+		t.Fatal(err)
+	}
+	view, ok, err := sdb.ReadAssetBandwidthView(id)
+	if err != nil || !ok {
+		t.Fatalf("v2 bandwidth view: ok=%v err=%v", ok, err)
+	}
+	if view.TokenID != id {
+		t.Fatalf("v2 key token ID = %d, want %d", view.TokenID, id)
+	}
+
+	corrupt := newTestStateDB(t)
+	if err := corrupt.SystemKVPut(kvdomains.SystemAsset, assetIDKey(assetV2Tag, id), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := corrupt.ReadAssetBandwidthView(id); err == nil || !ok {
+		t.Fatalf("malformed bandwidth view: ok=%v err=%v", ok, err)
+	}
+	if corrupt.Error() == nil {
+		t.Fatal("malformed bandwidth view did not poison the StateDB")
+	}
+}
+
 func TestAssetIssueIDFastPathValidatesCompleteNativeRow(t *testing.T) {
 	sdb := newTestStateDB(t)
 	asset := testAssetIssueContract()

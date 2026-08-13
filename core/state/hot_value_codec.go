@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 	"unicode/utf8"
 
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -360,6 +361,114 @@ func decodeAssetIssueNative(raw []byte) (*contractpb.AssetIssueContract, error) 
 		return nil, err
 	}
 	return c, d.finish()
+}
+
+// assetBandwidthView is the allocation-free consensus subset consumed by the
+// bandwidth processor. The owner is copied into a fixed-width address because
+// the native metadata row returned by a no-copy reader may be invalidated by
+// the next database operation.
+type assetBandwidthView struct {
+	tokenID                 int64
+	tokenIDValid            bool
+	owner                   [21]byte
+	freeAssetNetLimit       int64
+	publicFreeAssetNetLimit int64
+}
+
+// decodeAssetBandwidthView validates the complete native AssetIssue layout
+// while materializing only the fields used by BandwidthProcessor. Keeping the
+// full structural scan preserves the fail-closed behavior of the normal asset
+// decoder without allocating a protobuf message, its byte fields, or frozen
+// supply entries.
+func decodeAssetBandwidthView(raw []byte) (assetBandwidthView, error) {
+	var view assetBandwidthView
+	payload, err := hotPayload(raw, hotAsset)
+	if err != nil {
+		return view, err
+	}
+	d := hotDecoder{raw: payload}
+	id, err := d.bytesView()
+	if err != nil {
+		return view, err
+	}
+	if !utf8.Valid(id) {
+		return view, errors.New("invalid UTF-8 asset id")
+	}
+	view.tokenID, err = strconv.ParseInt(string(id), 10, 64)
+	view.tokenIDValid = err == nil
+	owner, err := d.bytesView()
+	if err != nil {
+		return view, err
+	}
+	if len(owner) > len(view.owner) {
+		owner = owner[len(owner)-len(view.owner):]
+	}
+	copy(view.owner[len(view.owner)-len(owner):], owner)
+	for range 2 { // name, abbreviation
+		if _, err := d.bytesView(); err != nil {
+			return view, err
+		}
+	}
+	if _, err := d.i64(); err != nil { // total supply
+		return view, err
+	}
+	frozenCount, err := d.count()
+	if err != nil {
+		return view, err
+	}
+	if frozenCount > d.remaining()/17 {
+		return view, errors.New("asset frozen supply count exceeds payload")
+	}
+	for range frozenCount {
+		if _, err := d.i64(); err != nil {
+			return view, err
+		}
+		if _, err := d.i64(); err != nil {
+			return view, err
+		}
+		if _, err := d.bytesView(); err != nil { // nested unknown fields
+			return view, err
+		}
+	}
+	for range 3 { // trx_num, precision, num
+		if _, err := d.i32(); err != nil {
+			return view, err
+		}
+	}
+	for range 3 { // start_time, end_time, order
+		if _, err := d.i64(); err != nil {
+			return view, err
+		}
+	}
+	if _, err := d.i32(); err != nil { // vote_score
+		return view, err
+	}
+	for range 2 { // description, URL
+		if _, err := d.bytesView(); err != nil {
+			return view, err
+		}
+	}
+	if view.freeAssetNetLimit, err = d.i64(); err != nil {
+		return view, err
+	}
+	if view.publicFreeAssetNetLimit, err = d.i64(); err != nil {
+		return view, err
+	}
+	usage, err := d.i64()
+	if err != nil {
+		return view, err
+	}
+	latest, err := d.i64()
+	if err != nil {
+		return view, err
+	}
+	if usage != 0 || latest != 0 {
+		return view, errors.New("non-canonical asset metadata bandwidth placeholders")
+	}
+	if _, err := d.bytesView(); err != nil { // top-level unknown fields
+		return view, err
+	}
+	return view, d.finish()
 }
 
 // validateAssetIssueNative validates the complete hot AssetIssue layout without

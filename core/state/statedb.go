@@ -87,10 +87,11 @@ type StateDB struct {
 	// synchronous account-KV lookup/write. Keeping their backing arrays on the
 	// execution-confined StateDB avoids one tiny heap object per TRC10, asset ID,
 	// vote index, or frozen-row access. Writers own composite keys before return.
-	trc10TokenKeyScratch    [20]byte
-	assetIDKeyScratch       [9]byte
-	assetBytesKeyScratch    [33]byte
-	accountUint32KeyScratch [4]byte
+	trc10TokenKeyScratch     [20]byte
+	assetIDKeyScratch        [9]byte
+	assetBytesKeyScratch     [33]byte
+	assetBandwidthKeyScratch [33]byte
+	accountUint32KeyScratch  [4]byte
 	// Witness capsule keys are address-dependent but the witness set is tiny and
 	// stable across a replay range. Cache one immutable fixed key per observed
 	// witness so repeated lookups do not allocate a 23-byte temporary that

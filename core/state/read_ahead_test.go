@@ -105,6 +105,76 @@ func TestStateReadAheadWarmsCanonicalAccountAndContractReads(t *testing.T) {
 	}
 }
 
+func TestStateReadAheadWarmsTransferAssetPointReads(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	owner := readAheadAddress(0x51)
+	to := readAheadAddress(0x52)
+	witness := readAheadAddress(0x53)
+	const generation = uint64(9)
+	for _, addr := range []tcommon.Address{owner, to, witness, tcommon.SystemAccountAddress} {
+		encoded, err := (&StateAccountV3{Version: StateAccountVersion, AccountKVGeneration: generation}).Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateAccountLatest(disk, addr, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assetName := []byte("DENSE")
+	asset := testAssetIssueContract()
+	asset.Name = assetName
+	metadata, err := encodeAssetIssue(asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyMeta := assetBytesKey(assetLegacyTag, assetName)
+	rows := []struct {
+		address tcommon.Address
+		domain  kvdomains.KVDomain
+		key     []byte
+		value   []byte
+	}{
+		{tcommon.SystemAccountAddress, kvdomains.SystemAsset, legacyMeta, metadata},
+		{tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBandwidthKey(legacyMeta), encodeAssetBandwidth(3, 4)},
+		{owner, kvdomains.AccountAsset, assetName, encodeAccountAuxInt64(100)},
+		{to, kvdomains.AccountAsset, assetName, encodeAccountAuxInt64(20)},
+		{owner, kvdomains.AccountFreeAssetNetUsage, assetName, encodeAccountAuxInt64(5)},
+		{owner, kvdomains.AccountAssetOperationTime, assetName, encodeAccountAuxInt64(6)},
+	}
+	for _, row := range rows {
+		if err := rawdb.WriteStateKVLatest(disk, row.address, generation, row.domain, row.key, row.value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	base := &readAheadCountingReader{KeyValueReader: disk}
+	buffer := blockbuffer.New(base)
+	buffer.SetBaseReadCacheSize(1 << 20)
+	prefetcher := NewStateReadAhead(buffer, StateReadAheadConfig{Workers: 1, QueueBlocks: 4, QueueBytes: 1 << 20})
+	prefetcher.Start()
+	prefetcher.EnqueueBlocks([]*types.Block{readAheadTransferAssetBlock(t, owner, to, witness, assetName)})
+	prefetcher.Wait()
+	defer prefetcher.Close()
+
+	readsAfterWarmup := base.gets.Load()
+	if readsAfterWarmup != 10 {
+		t.Fatalf("durable warmup reads = %d, want 4 account rows + 6 TransferAsset point rows", readsAfterWarmup)
+	}
+	for _, row := range rows {
+		if _, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, row.address, generation, row.domain, row.key); err != nil || !ok {
+			t.Fatalf("prefetched row address=%s domain=%#x key=%x ok=%t err=%v", row.address.Hex(), row.domain, row.key, ok, err)
+		}
+	}
+	if got := base.gets.Load(); got != readsAfterWarmup {
+		t.Fatalf("canonical TransferAsset reads reached durable base after warmup: before=%d after=%d", readsAfterWarmup, got)
+	}
+	stats := prefetcher.Stats()
+	if stats.Rows != 10 || stats.Present != 10 || stats.Missing != 0 || stats.Errors != 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+}
+
 func TestStateReadAheadResetRejectsQueuedAndInFlightForkWork(t *testing.T) {
 	disk := rawdb.NewMemoryDatabase()
 	base := &readAheadBlockingReader{
@@ -179,5 +249,19 @@ func readAheadTestBlock(t *testing.T, owner, to, contract, witness tcommon.Addre
 			{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{Type: corepb.Transaction_Contract_TransferContract, Parameter: transfer}}}},
 			{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{Type: corepb.Transaction_Contract_TriggerSmartContract, Parameter: trigger}}}},
 		},
+	})
+}
+
+func readAheadTransferAssetBlock(t *testing.T, owner, to, witness tcommon.Address, assetName []byte) *types.Block {
+	t.Helper()
+	transfer, err := anypb.New(&contractpb.TransferAssetContract{OwnerAddress: owner.Bytes(), ToAddress: to.Bytes(), AssetName: assetName, Amount: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, WitnessAddress: witness.Bytes()}},
+		Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{
+			Type: corepb.Transaction_Contract_TransferAssetContract, Parameter: transfer,
+		}}}}},
 	})
 }

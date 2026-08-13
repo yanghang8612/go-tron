@@ -10,6 +10,20 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
+// AssetBandwidthView is the fixed-size subset of AssetIssueContract consumed
+// by BandwidthProcessor. It avoids materializing immutable issuance metadata
+// on every TransferAsset transaction while retaining full native-row
+// validation and the separately rooted mutable public-usage counters.
+type AssetBandwidthView struct {
+	TokenID                 int64
+	Owner                   [21]byte
+	FreeAssetNetLimit       int64
+	PublicFreeAssetNetLimit int64
+	PublicFreeAssetNetUsage int64
+	PublicLatestFreeNetTime int64
+	tokenIDValid            bool
+}
+
 // TRC10 asset records are rooted into the reserved system account's SystemAsset
 // KV so they rewind with the full state root, replacing the flat
 // `ast-`/`astl-`/`astn-`/`asto-`/`asti-` rawdb buckets. The five java-tron
@@ -62,6 +76,56 @@ func assetIDKey(tag byte, tokenID int64) []byte {
 }
 func decodeAssetIssue(raw []byte) (*contractpb.AssetIssueContract, error) {
 	return decodeAssetIssueNative(raw)
+}
+
+func (s *StateDB) readAssetBandwidthView(key []byte) (AssetBandwidthView, bool, error) {
+	var out AssetBandwidthView
+	raw, ok, err := s.systemKVGetForDecoding(kvdomains.SystemAsset, key)
+	if err != nil {
+		return out, false, s.recordStateError(fmt.Sprintf("read asset bandwidth view key=%x", key), err)
+	}
+	if !ok {
+		return out, ok, err
+	}
+	view, err := decodeAssetBandwidthView(raw)
+	if err != nil {
+		return out, true, s.recordStateError(fmt.Sprintf("decode asset bandwidth view key=%x", key), err)
+	}
+	out.TokenID = view.tokenID
+	out.tokenIDValid = view.tokenIDValid
+	out.Owner = view.owner
+	out.FreeAssetNetLimit = view.freeAssetNetLimit
+	out.PublicFreeAssetNetLimit = view.publicFreeAssetNetLimit
+	if hotKey := s.assetBandwidthKey(key); hotKey != nil {
+		hotRaw, hotOK, hotErr := s.systemKVGetForDecoding(kvdomains.SystemAsset, hotKey)
+		if hotErr != nil {
+			return out, true, s.recordStateError(fmt.Sprintf("read asset bandwidth row key=%x", hotKey), hotErr)
+		}
+		if hotOK {
+			out.PublicFreeAssetNetUsage, out.PublicLatestFreeNetTime, err = decodeAssetBandwidth(hotRaw)
+			if err != nil {
+				return out, true, s.recordStateError(fmt.Sprintf("decode asset bandwidth row key=%x", hotKey), err)
+			}
+		}
+	}
+	return out, true, nil
+}
+
+func (s *StateDB) ReadAssetBandwidthView(tokenID int64) (AssetBandwidthView, bool, error) {
+	view, ok, err := s.readAssetBandwidthView(s.assetIDKey(assetV2Tag, tokenID))
+	view.TokenID = tokenID
+	return view, ok, err
+}
+
+func (s *StateDB) ReadAssetBandwidthViewByName(name []byte) (AssetBandwidthView, bool, error) {
+	view, ok, err := s.readAssetBandwidthView(s.assetBytesKey(assetLegacyTag, name))
+	if err != nil || !ok {
+		return view, ok, err
+	}
+	if !view.tokenIDValid {
+		return view, true, s.recordStateError(fmt.Sprintf("decode legacy asset issue name %q", string(name)), errors.New("invalid legacy asset ID"))
+	}
+	return view, true, nil
 }
 
 // decodeAssetIssueID extracts the numeric ID without materializing the message,
@@ -129,7 +193,7 @@ func (s *StateDB) readAssetMeta(key []byte) *contractpb.AssetIssueContract {
 		s.recordStateError(fmt.Sprintf("decode asset metadata key=%x", key), err)
 		return nil
 	}
-	if hotKey := assetBandwidthKey(key); hotKey != nil {
+	if hotKey := s.assetBandwidthKey(key); hotKey != nil {
 		hotRaw, hotOK, hotErr := s.systemKVGetForDecoding(kvdomains.SystemAsset, hotKey)
 		if hotErr != nil {
 			s.recordStateError(fmt.Sprintf("read asset bandwidth key=%x", hotKey), hotErr)
@@ -159,7 +223,7 @@ func (s *StateDB) writeAssetMeta(key []byte, c *contractpb.AssetIssueContract) e
 	if err := s.SystemKVPut(kvdomains.SystemAsset, key, data); err != nil {
 		return err
 	}
-	hotKey := assetBandwidthKey(key)
+	hotKey := s.assetBandwidthKey(key)
 	if hotKey == nil {
 		return nil
 	}
@@ -180,6 +244,31 @@ func assetBandwidthKey(metadataKey []byte) []byte {
 		return nil
 	}
 	key := append([]byte(nil), metadataKey...)
+	key[0] = hotTag
+	return key
+}
+
+// assetBandwidthKey builds the execution-hot transient form in StateDB-owned
+// scratch. Metadata and bandwidth keys use separate scratch buffers, so a
+// caller may derive the latter while the former is still borrowed.
+func (s *StateDB) assetBandwidthKey(metadataKey []byte) []byte {
+	if len(metadataKey) == 0 {
+		return nil
+	}
+	if len(metadataKey) > len(s.assetBandwidthKeyScratch) {
+		return assetBandwidthKey(metadataKey)
+	}
+	hotTag := byte(0)
+	switch metadataKey[0] {
+	case assetV2Tag:
+		hotTag = assetV2BandwidthTag
+	case assetLegacyTag:
+		hotTag = assetLegacyBandwidthTag
+	default:
+		return nil
+	}
+	key := s.assetBandwidthKeyScratch[:len(metadataKey)]
+	copy(key, metadataKey)
 	key[0] = hotTag
 	return key
 }

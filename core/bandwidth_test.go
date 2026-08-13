@@ -367,6 +367,53 @@ func TestConsumeBandwidth_TransferAssetUsesAssetAccountNet(t *testing.T) {
 	}
 }
 
+func TestResolveBandwidthAssetNarrowViewForkRouting(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+	issuer := testProcessorAddr(9)
+	const tokenID = int64(1_000_321)
+	assetName := []byte("NARROW")
+	asset := &contractpb.AssetIssueContract{
+		Id:                      strconv.FormatInt(tokenID, 10),
+		Name:                    assetName,
+		OwnerAddress:            issuer.Bytes(),
+		FreeAssetNetLimit:       123,
+		PublicFreeAssetNetLimit: 456,
+	}
+	if err := statedb.WriteAssetIssueByName(assetName, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.WriteAssetIssue(tokenID, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.WriteAssetNameIndex(assetName, tokenID); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.WriteAssetIssueBandwidthByName(assetName, 7, 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.WriteAssetIssueBandwidth(tokenID, 7, 8); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy, err := resolveBandwidthAsset(statedb, dynProps, assetName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.TokenID != tokenID || tcommon.Address(legacy.Owner) != issuer || legacy.FreeAssetNetLimit != 123 || legacy.PublicFreeAssetNetLimit != 456 || legacy.PublicFreeAssetNetUsage != 7 || legacy.PublicLatestFreeNetTime != 8 {
+		t.Fatalf("legacy bandwidth view = %+v", legacy)
+	}
+
+	dynProps.SetAllowSameTokenName(true)
+	v2, err := resolveBandwidthAsset(statedb, dynProps, []byte(strconv.FormatInt(tokenID, 10)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2 != legacy {
+		t.Fatalf("v2 bandwidth view = %+v, legacy = %+v", v2, legacy)
+	}
+}
+
 func TestConsumeBandwidth_BurnTRX(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()

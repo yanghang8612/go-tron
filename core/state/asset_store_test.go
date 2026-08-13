@@ -9,6 +9,7 @@ import (
 
 var assetIssueBenchmarkSink *contractpb.AssetIssueContract
 var assetIssueIDBenchmarkSink int64
+var assetBandwidthViewBenchmarkSink assetBandwidthView
 
 func testAssetIssueContract() *contractpb.AssetIssueContract {
 	return &contractpb.AssetIssueContract{
@@ -54,6 +55,15 @@ func BenchmarkDecodeAssetIssueNative(b *testing.B) {
 			}
 		}
 	})
+	b.Run("BandwidthView", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			assetBandwidthViewBenchmarkSink, err = decodeAssetBandwidthView(raw)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 	b.Run("ValidateOnly", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
@@ -62,4 +72,23 @@ func BenchmarkDecodeAssetIssueNative(b *testing.B) {
 			}
 		}
 	})
+}
+
+func TestDecodeAssetBandwidthViewMatchesFullAsset(t *testing.T) {
+	asset := testAssetIssueContract()
+	raw, err := encodeAssetIssue(asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := decodeAssetBandwidthView(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.tokenID != 1_000_001 || !bytes.Equal(view.owner[:], asset.OwnerAddress) ||
+		view.freeAssetNetLimit != asset.FreeAssetNetLimit || view.publicFreeAssetNetLimit != asset.PublicFreeAssetNetLimit {
+		t.Fatalf("bandwidth view = %+v, asset = %+v", view, asset)
+	}
+	if _, err := decodeAssetBandwidthView(raw[:len(raw)-1]); err == nil {
+		t.Fatal("truncated asset metadata was accepted")
+	}
 }
