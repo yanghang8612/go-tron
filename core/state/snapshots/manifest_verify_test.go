@@ -204,9 +204,14 @@ func TestVerifyLoadedManifestFilesRejectsStaleStateDomainAccessor(t *testing.T) 
 	}
 
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if binary.BigEndian.Uint32(data[8:12]) >= stateDomainChangeBinaryVersionV3 {
+	if version := binary.BigEndian.Uint32(data[8:12]); version >= stateDomainChangeBinaryVersionV3 {
 		firstRecordIndex := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV3HashSize + 8
-		secondRecordIndex := firstRecordIndex + stateDomainChangeBinaryAccessorV3ExactEntrySize
+		exactEntrySize := stateDomainChangeBinaryAccessorV3ExactEntrySize
+		if version == stateDomainChangeBinaryVersionV5 {
+			firstRecordIndex = stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV5FingerprintSize + stateDomainChangeBinaryAccessorV5OffsetSize
+			exactEntrySize = stateDomainChangeBinaryAccessorV5ExactEntrySize
+		}
+		secondRecordIndex := firstRecordIndex + exactEntrySize
 		if secondRecordIndex+4 > len(data) {
 			t.Fatalf("accessor data length = %d, want two v3 exact entries", len(data))
 		}
@@ -247,7 +252,7 @@ func TestVerifyLoadedManifestFilesRejectsStaleStateDomainAccessor(t *testing.T) 
 	}
 }
 
-func TestVerifyLoadedManifestFilesRejectsV4GroupRecordsOutOfLookupOrder(t *testing.T) {
+func TestVerifyLoadedManifestFilesRejectsV5GroupRecordsOutOfLookupOrder(t *testing.T) {
 	dir := t.TempDir()
 	owner := binaryAddress(0xd4)
 	first := binaryStateDomainChange(1, 10, 1, "slot/shared")
@@ -262,7 +267,7 @@ func TestVerifyLoadedManifestFilesRejectsV4GroupRecordsOutOfLookupOrder(t *testi
 		Kind:      SegmentHistory,
 		FromTxNum: 10,
 		ToTxNum:   11,
-		Path:      "history/state-domain-change-v4-group-order-10-11.seg",
+		Path:      "history/state-domain-change-v5-group-order-10-11.seg",
 	}, []*rawdb.StateDomainChange{first, second})
 	if err != nil {
 		t.Fatalf("write state-domain history: %v", err)
@@ -274,17 +279,17 @@ func TestVerifyLoadedManifestFilesRejectsV4GroupRecordsOutOfLookupOrder(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if header.version != stateDomainChangeBinaryVersionV4 {
-		t.Fatalf("accessor version = %d, want v4", header.version)
+	if header.version != stateDomainChangeBinaryVersionV5 {
+		t.Fatalf("accessor version = %d, want v5", header.version)
 	}
-	layout, err := stateDomainChangeBinaryAccessorV4LayoutAt(reader, uint64(len(data)), header)
+	layout, err := stateDomainChangeBinaryAccessorV5LayoutAt(reader, uint64(len(data)), header)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if layout.groupCount != 1 {
 		t.Fatalf("group count = %d, want 1", layout.groupCount)
 	}
-	group, err := readStateDomainChangeBinaryAccessorV4GroupMetaAt(reader, layout, 0, uint64(len(data)))
+	group, err := readStateDomainChangeBinaryAccessorV5GroupMetaAt(reader, layout, 0, uint64(len(data)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,10 +297,10 @@ func TestVerifyLoadedManifestFilesRejectsV4GroupRecordsOutOfLookupOrder(t *testi
 		t.Fatalf("group record count = %d, want 2", group.count)
 	}
 	firstStart := int(group.recordsStart)
-	secondStart := firstStart + stateDomainChangeBinaryAccessorV4GroupEntrySize
+	secondStart := firstStart + stateDomainChangeBinaryAccessorV5GroupEntrySize
 	firstRecord := append([]byte(nil), data[firstStart:secondStart]...)
-	copy(data[firstStart:secondStart], data[secondStart:secondStart+stateDomainChangeBinaryAccessorV4GroupEntrySize])
-	copy(data[secondStart:secondStart+stateDomainChangeBinaryAccessorV4GroupEntrySize], firstRecord)
+	copy(data[firstStart:secondStart], data[secondStart:secondStart+stateDomainChangeBinaryAccessorV5GroupEntrySize])
+	copy(data[secondStart:secondStart+stateDomainChangeBinaryAccessorV5GroupEntrySize], firstRecord)
 
 	setStateDomainChangeBinaryRefMetadata(&accessorRef, data)
 	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, accessorRef.Path), data); err != nil {

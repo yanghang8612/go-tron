@@ -4511,6 +4511,89 @@ commitment CPU, GC CPU, heap, and fixed-density transactions/s; read-ahead is a
 loss if durable reads rise materially without a matching foreground-hit or
 throughput gain.
 
+#### P5.38: Compact state-history accessor for fresh-genesis sync
+
+The compressed v5 history segment had already removed current values and
+repeated block context, but its random-read `.kv` companion still used the v4
+layout: a 128-bit key hash, 64-bit logical segment offset, and 32-bit record
+ordinal for every history row. KV prefix groups repeated another 64-bit offset
+and 32-bit ordinal per row. On the 20,000-row high-cardinality corpus used by
+the storage regression, that uncompressed accessor occupied 881,516 bytes,
+almost half of the 1,844,723-byte production `.seg + .idx + .kv` trio.
+
+Fresh builds now emit accessor v5. Exact entries carry a 64-bit SHA-256
+fingerprint, a 48-bit logical offset, and a 32-bit ordinal (18 bytes instead of
+28); prefix-group entries carry a 32-bit logical-key prefix, the same 48-bit
+offset, and the ordinal (14 bytes instead of 16). A single history object is
+therefore capped at 256 TiB and the writer rejects overflow instead of
+truncating. The fingerprint is only a candidate selector: every positive lookup
+rereads the immutable history row and compares its complete logical key before
+returning it. A collision can add candidate reads but cannot create a false
+history result. Prefix queries retain their complete-key verification as well.
+
+The accessor remains uncompressed because it is a random-read structure; zstd
+would save sequential bytes while imposing block decompression on historical
+point queries. Streaming construction and semantic verification use the same
+bounded ETL external sort as v4, so peak heap remains independent of chain
+history size. Exact lower-bound lookup decodes only `TxNum` during binary
+search and hydrates `StateTxRange` block context only for returned rows, keeping
+the 4,096-mutation regression at 43 segment reads.
+
+On the high-cardinality corpus, v5 reduces raw `.kv` bytes from 881,516 to
+641,516 (27.23%) and the complete production trio from 1,844,723 to 1,604,723
+(13.01%). This is a worst-case unique-key result and does not depend on repeated
+hot keys. The deployment target is a new datadir synchronized from genesis, so
+all newly published state-history accessors use v5 without an offline migration
+or a compatibility-size tail. Regression coverage forces ETL spills, requires
+byte-identical in-memory and streaming encoders, injects a fingerprint collision
+to prove full-key verification, rejects malformed offsets and companion
+metadata, and retains readers for prior versions as a non-production recovery
+aid.
+
+#### P5.39: Erigon-style key-oriented state history
+
+P5.38 reduced the width of each row-oriented accessor entry, but every cold
+history row still repeated its complete logical key in `.seg`, and KV prefix
+support repeated another position in `.kv`. That is the wrong scaling axis for
+contract storage: a hot slot can change many times while its account,
+generation, domain, and storage key remain identical.
+
+Fresh-genesis builds now emit state-history v6. Each immutable `.seg` row keeps
+only `keyID`, `txNum`, and the previous-value marker/value. The `.kv` companion
+owns one front-coded, lexicographically sorted key dictionary (128 keys per
+block) and one posting list per key. A posting is the exact `(txNum, 48-bit
+logical offset, 32-bit record ordinal)` needed for an as-of seek. Exact-key
+queries binary-search one dictionary block and then the key's posting list;
+prefix queries walk only matching dictionary keys. Selected postings still
+reread and verify the history row, so the index cannot manufacture a result.
+The `.idx` transaction-order companion remains unchanged.
+
+The history and dictionary are one atomic logical object: both headers carry
+the same SHA-256 commitment over the length-delimited sorted key sequence.
+Open, manifest verification, and post-build validation reject a missing or
+stale companion before interpreting any `keyID`. The `.kv` file is therefore
+not a disposable derived index in v6; publication and retirement always handle
+the complete `.seg + .idx + .kv` trio.
+
+Construction is bounded and disk-backed. Pass one external-sorts distinct keys
+into a temporary dictionary. Pass two streams chronological history rows and
+external-sorts postings. A transient 96-bit fingerprint table provides O(1)
+key-to-ID assignment while it fits within 512 MiB; larger dictionaries fall
+back to exact block-search on the disk dictionary. A detected fingerprint
+collision fails the build rather than assigning the wrong ID. Compaction uses
+the same two-pass writer and publishes v6, so a fresh sync never creates a
+row-oriented cold tail.
+
+On the 20,000-row high-cardinality corpus, where every row has a distinct key,
+the complete production trio falls from 1,604,723 bytes in v5 to 1,399,996
+bytes in v6 (12.76%). With 256 repeated hot keys, it falls from 1,605,575 to
+619,546 bytes (61.41%). The first figure is the worst-case guardrail; real
+contract histories should move toward the second as slots are updated across
+many transactions. Regression coverage forces ETL spills, exercises exact and
+prefix/as-of lookups, verifies compaction output, corrupts directory metadata,
+and swaps a structurally valid stale dictionary to prove the cross-file
+commitment fails closed.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

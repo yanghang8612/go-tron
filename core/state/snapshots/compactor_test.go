@@ -121,7 +121,7 @@ func TestCompactedAccessorMatchesPostCompressionRebuild(t *testing.T) {
 
 func assertAccessorMatchesPostCompressionRebuild(t *testing.T, dir string, historyRef, streamedRef SegmentRef) {
 	t.Helper()
-	rebuiltRef, _, err := buildStateDomainChangeBinaryAccessorV4FromHistorySegment(dir, historyRef, SegmentRef{
+	rebuiltRef, _, err := buildStateDomainChangeBinaryAccessorFromHistorySegment(dir, historyRef, SegmentRef{
 		Dataset:          SegmentDatasetStateDomainChange,
 		Kind:             SegmentAccessor,
 		FromTxNum:        historyRef.FromTxNum,
@@ -327,7 +327,7 @@ func TestCompactHistoryDomainPreservesRepeatedAccessorKeys(t *testing.T) {
 	})
 }
 
-func TestCompactHistoryDomainUpgradesV2AccessorToV4(t *testing.T) {
+func TestCompactHistoryDomainUpgradesV2AccessorToV6(t *testing.T) {
 	dir := t.TempDir()
 	owner := binaryAddress(0xef)
 	first := binaryStateDomainChange(1, 1, 1, "slot/a")
@@ -353,8 +353,8 @@ func TestCompactHistoryDomainUpgradesV2AccessorToV4(t *testing.T) {
 	}
 	accessorRef := compactionRefByKind(t, result, SegmentAccessor)
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if got := binary.BigEndian.Uint32(data[8:12]); got != stateDomainChangeBinaryVersionV4 {
-		t.Fatalf("compacted accessor version = %d, want %d", got, stateDomainChangeBinaryVersionV4)
+	if got := binary.BigEndian.Uint32(data[8:12]); got != stateDomainChangeBinaryVersionV6 {
+		t.Fatalf("compacted accessor version = %d, want %d", got, stateDomainChangeBinaryVersionV6)
 	}
 
 	mgr, err := OpenManager(dir)
@@ -366,12 +366,12 @@ func TestCompactHistoryDomainUpgradesV2AccessorToV4(t *testing.T) {
 		got = append(got, change)
 		return true, nil
 	}); err != nil {
-		t.Fatalf("iterate compacted v4 prefix: %v", err)
+		t.Fatalf("iterate compacted v5 prefix: %v", err)
 	}
 	assertBinaryChangeOrder(t, got, []binaryChangeOrder{{txNum: 1, seq: 1, key: "slot/a"}, {txNum: 2, seq: 2, key: "slot/b"}})
 }
 
-func TestCompactHistoryDomainTranscodesV2HistoryRecordsToV5(t *testing.T) {
+func TestCompactHistoryDomainTranscodesV2HistoryRecordsToV6(t *testing.T) {
 	dir := t.TempDir()
 	first := binaryStateDomainChange(1, 1, 1, "slot/a")
 	second := binaryStateDomainChange(2, 2, 1, "slot/b")
@@ -393,8 +393,8 @@ func TestCompactHistoryDomainTranscodesV2HistoryRecordsToV5(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = reader.Close()
-	if header.version != stateDomainChangeBinaryVersionV5 {
-		t.Fatalf("compacted history version = %d, want v5", header.version)
+	if header.version != stateDomainChangeBinaryVersionV6 {
+		t.Fatalf("compacted history version = %d, want v6", header.version)
 	}
 	changes, err := readStateDomainChangeBinarySegment(dir, historyRef)
 	if err != nil {
@@ -474,8 +474,11 @@ func TestCompactHistoryDomainValidatesAccessorAgainstSegment(t *testing.T) {
 	refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, 3, 3, binaryStateDomainChange(3, 3, 1, "b"))...)
 	accessorRef := refs[1]
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if binary.BigEndian.Uint32(data[8:12]) >= stateDomainChangeBinaryVersionV3 {
+	if version := binary.BigEndian.Uint32(data[8:12]); version >= stateDomainChangeBinaryVersionV3 {
 		recordIndexOffset := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV3HashSize + 8
+		if version == stateDomainChangeBinaryVersionV5 {
+			recordIndexOffset = stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV5FingerprintSize + stateDomainChangeBinaryAccessorV5OffsetSize
+		}
 		binary.BigEndian.PutUint32(data[recordIndexOffset:recordIndexOffset+4], 1)
 	} else {
 		entryOffset := binary.BigEndian.Uint64(data[stateDomainChangeBinaryHeaderSize : stateDomainChangeBinaryHeaderSize+8])
@@ -509,14 +512,14 @@ func TestCompactHistoryDomainRepairsStructurallyValidDerivedSidecarMismatch(t *t
 
 	accessorRef := refs[1]
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if version := binary.BigEndian.Uint32(data[8:12]); version != stateDomainChangeBinaryVersionV4 {
-		t.Fatalf("accessor version = %d, want v4", version)
+	if version := binary.BigEndian.Uint32(data[8:12]); version != stateDomainChangeBinaryVersionV5 {
+		t.Fatalf("accessor version = %d, want v5", version)
 	}
 	// Keep the exact table structurally sorted and every record index in range,
 	// but point its first entry at the other history record. Full installation/
 	// pruning verification must reject it; compaction may repair it because the
 	// history payload, not either derived sidecar, is the canonical merge input.
-	firstRecordIndex := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV3HashSize + 8
+	firstRecordIndex := stateDomainChangeBinaryHeaderSize + stateDomainChangeBinaryAccessorV3HeaderExtra + stateDomainChangeBinaryAccessorV5FingerprintSize + stateDomainChangeBinaryAccessorV5OffsetSize
 	current := binary.BigEndian.Uint32(data[firstRecordIndex : firstRecordIndex+4])
 	binary.BigEndian.PutUint32(data[firstRecordIndex:firstRecordIndex+4], 1-current)
 	setStateDomainChangeBinaryRefMetadata(&accessorRef, data)

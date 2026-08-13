@@ -1132,10 +1132,55 @@ func TestStateDomainChangeBinaryV4KeyRangeSeeksTxLowerBound(t *testing.T) {
 		t.Fatalf("changes = %+v, want first tx 4000", got)
 	}
 	t.Logf("key tx lower-bound seek used %d segment reads for %d changes", countedSegment.reads, changeCount)
-	// v5 also resolves the returned record's BlockNum/BlockHash through the
+	// v4 also resolves the returned record's BlockNum/BlockHash through the
 	// logarithmic StateTxRange table; 48 bounds both binary searches.
 	if countedSegment.reads > 48 {
 		t.Fatalf("key tx lower-bound seek used %d segment reads for %d changes, want logarithmic reads", countedSegment.reads, changeCount)
+	}
+}
+
+func TestStateDomainChangeBinaryV5KeyRangeSeeksTxLowerBound(t *testing.T) {
+	const changeCount = 4096
+	owner := binaryAddress(0xc7)
+	changes := make([]*rawdb.StateDomainChange, changeCount)
+	for i := range changes {
+		txNum := uint64(i + 1)
+		change := binaryStateDomainChange(txNum, txNum, 1, "frequent-key")
+		change.Owner = owner
+		change.Generation = 7
+		changes[i] = change
+	}
+	segmentData, _, accessorEntries, err := encodeStateDomainChangeBinarySegment(1, changeCount, normalizeStateDomainChangesForBinary(changes))
+	if err != nil {
+		t.Fatalf("encode segment: %v", err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessorV5(1, changeCount, accessorEntries)
+	if err != nil {
+		t.Fatalf("encode accessor: %v", err)
+	}
+	header, err := readStateDomainChangeBinaryHeaderAt(bytes.NewReader(accessorData), stateDomainChangeBinaryAccessorMagic)
+	if err != nil {
+		t.Fatalf("read accessor header: %v", err)
+	}
+	countedSegment := &countingStateDomainReaderAt{reader: bytes.NewReader(segmentData)}
+	var got []*rawdb.StateDomainChange
+	err = iterateStateDomainChangeBinarySegmentByAccessorV5Key(
+		countedSegment, uint64(len(segmentData)), bytes.NewReader(accessorData), uint64(len(accessorData)), header,
+		stateDomainChangeBinaryAccessorKey(changes[0]), 4000, changeCount,
+		func(change *rawdb.StateDomainChange) (bool, error) {
+			got = append(got, change)
+			return false, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("seek keyed history: %v", err)
+	}
+	if len(got) != 1 || got[0].TxNum != 4000 {
+		t.Fatalf("changes = %+v, want first tx 4000", got)
+	}
+	t.Logf("v5 key tx lower-bound seek used %d segment reads for %d changes", countedSegment.reads, changeCount)
+	if countedSegment.reads > 48 {
+		t.Fatalf("v5 key tx lower-bound seek used %d segment reads for %d changes, want logarithmic reads", countedSegment.reads, changeCount)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 func TestStateDomainHistoryRecordReadersUseCompressedOpeners(t *testing.T) {
 	expected := map[string][]string{
 		"checkStateDomainChangeBinarySegment":                        {"openHistorySegmentForRead"},
+		"collectStateDomainChangeBinarySegmentV6Keys":                {"openStateDomainChangeBinarySegmentSequentialReader"},
 		"copyStateDomainChangeBinarySegmentPayload":                  {"openStateDomainChangeBinarySegmentSequentialReader"},
 		"iterateStateDomainChangeBinarySegmentByAccessorFile":        {"openHistorySegmentForRead", "openStateDomainChangeBinaryAccessorReader"},
 		"iterateStateDomainChangeBinarySegmentByAccessorPrefixFile":  {"openHistorySegmentForRead", "openStateDomainChangeBinaryAccessorReader"},

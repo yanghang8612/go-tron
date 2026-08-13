@@ -29,13 +29,14 @@ const (
 	stateDomainChangeBinaryVersionV3 = uint32(3)
 	stateDomainChangeBinaryVersionV4 = uint32(4)
 	stateDomainChangeBinaryVersionV5 = uint32(5)
+	stateDomainChangeBinaryVersionV6 = uint32(6)
 
 	// Segment v5 follows Erigon's history/value split: immutable history rows
 	// contain the transaction ordinal, logical key and previous value only.
 	// Block identity is stored once in the StateTxRange table, record order is
 	// carried by the index/accessor record ordinal, and the current value remains
-	// in the flat latest domain. Index v2 and accessor v4 are independent file
-	// formats and deliberately keep their existing versions.
+	// in the flat latest domain. Index v2 is an independent file format. Fresh
+	// builds use accessor v5; older accessor versions remain readable.
 	stateDomainChangeBinarySegmentVersion = stateDomainChangeBinaryVersionV5
 	stateDomainChangeBinaryIndexVersion   = stateDomainChangeBinaryVersionV2
 
@@ -557,8 +558,8 @@ func validateTrustedBuiltHistorySegment(dir string, segRef SegmentRef, expectedL
 		return err
 	}
 	defer reader.Close()
-	if header.version != stateDomainChangeBinarySegmentVersion {
-		return fmt.Errorf("snapshots: trusted history version %d, want %d", header.version, stateDomainChangeBinarySegmentVersion)
+	if header.version != stateDomainChangeBinaryVersionV5 && header.version != stateDomainChangeBinaryVersionV6 {
+		return fmt.Errorf("snapshots: trusted history version %d is not a current cold format", header.version)
 	}
 	if header.count != expectedRecords {
 		return fmt.Errorf("snapshots: trusted history record count %d, want %d", header.count, expectedRecords)
@@ -916,11 +917,19 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if totalRecords > math.MaxUint32 {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted state-domain-change accessor count %d exceeds uint32 record index", totalRecords)
 	}
-	collectors, err := newStateDomainChangeBinaryAccessorV4Collectors(etl.Options{TempDir: filepath.Join(dir, "etl")})
+	v6Build, err := newStateDomainChangeV6Build(etl.Options{TempDir: filepath.Join(dir, "etl")}, dir, ref.Path)
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	defer collectors.Close()
+	defer v6Build.Close()
+	for i := range sources {
+		if err := collectStateDomainChangeBinarySegmentV6Keys(dir, v6Build, sources[i]); err != nil {
+			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+		}
+	}
+	if err := v6Build.FinishDictionary(); err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
 	tmp, err := createStateDomainChangeHistoryTemp(dir, ref.Path, CompressHistorySegments)
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
@@ -936,7 +945,10 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 			}
 		}
 	}()
-	if err := writeStateDomainChangeBinaryHeaderTo(tmp, stateDomainChangeBinarySegmentMagic, ref.FromTxNum, ref.ToTxNum, totalRecords); err != nil {
+	if err := writeStateDomainChangeBinaryHeaderToVersion(tmp, stateDomainChangeBinarySegmentMagic, ref.FromTxNum, ref.ToTxNum, totalRecords, stateDomainChangeBinaryVersionV6); err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	if err := writeStateDomainChangeBinaryV6DictionaryCommitment(tmp, v6Build.dictionaryDigest); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	txRangeCount, err := writeStateDomainChangeBinaryCompactionTxRanges(dir, tmp, sources)
@@ -946,7 +958,7 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if txRangeCount > (math.MaxUint64-uint64(stateDomainChangeBinaryHeaderSize)-8)/stateDomainChangeBinaryTxRangeSize {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted state-domain-change tx range count %d overflows segment size", txRangeCount)
 	}
-	recordOffset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + txRangeCount*stateDomainChangeBinaryTxRangeSize
+	recordOffset := stateDomainChangeBinaryTxRangeTableStart(stateDomainChangeBinaryVersionV6) + 8 + txRangeCount*stateDomainChangeBinaryTxRangeSize
 
 	indexTmp, indexTmpName, err := createStateDomainChangeBinaryTempFile(dir, stateDomainChangeBinaryIndexPath(ref.Path))
 	if err != nil {
@@ -957,7 +969,7 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if err := writeStateDomainChangeBinaryHeaderTo(indexTmp, stateDomainChangeBinaryIndexMagic, ref.FromTxNum, ref.ToTxNum, 0); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	recordWriter := newStateDomainChangeHistoryRecordWriter(tmp, indexTmp, collectors, ref, totalRecords, recordOffset)
+	recordWriter := newStateDomainChangeHistoryRecordWriterV6(tmp, indexTmp, v6Build, ref, totalRecords, recordOffset)
 	defer recordWriter.Release()
 	for i := range sources {
 		if err := copyStateDomainChangeBinarySegmentPayload(dir, recordWriter, sources[i]); err != nil {
@@ -977,11 +989,40 @@ func writeCompactedStateDomainChangeBinaryFiles(dir string, cfg DomainCfg, selec
 	if err := validateTrustedBuiltHistorySegment(dir, segRef, recordWriter.segmentOff, totalRecords, txRangeCount); err != nil {
 		return segRef, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compacted history self-check failed: %w", err)
 	}
-	idxRef, accessorRef, _, err = finalizeStateDomainChangeBinaryCompanions(dir, segRef, indexTmp, indexTmpName, collectors, totalRecords)
+	idxRef, accessorRef, _, err = finalizeStateDomainChangeBinaryCompanionsV6(dir, segRef, indexTmp, indexTmpName, v6Build, totalRecords)
 	if err != nil {
 		return segRef, idxRef, accessorRef, err
 	}
 	return segRef, idxRef, accessorRef, nil
+}
+
+func collectStateDomainChangeBinarySegmentV6Keys(dir string, build *stateDomainChangeV6Build, source stateDomainChangeBinaryCompactionSource) error {
+	reader, header, logicalSize, err := openStateDomainChangeBinarySegmentSequentialReader(dir, source.history)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	if header != source.segmentHeader || logicalSize != source.segmentSize {
+		return fmt.Errorf("snapshots: state-domain-change source %q changed while collecting V6 keys", source.history.Path)
+	}
+	_, offset, err := stateDomainChangeBinaryTxRangeTableBoundsAt(reader, logicalSize, source.history, header)
+	if err != nil {
+		return err
+	}
+	for i := uint64(0); i < header.count; i++ {
+		change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(reader, offset, logicalSize, i)
+		if err != nil {
+			return err
+		}
+		if err := build.CollectKey(change); err != nil {
+			return err
+		}
+		offset = next
+	}
+	if offset != logicalSize {
+		return fmt.Errorf("snapshots: state-domain-change source %q has trailing bytes", source.history.Path)
+	}
+	return nil
 }
 
 func stateDomainChangeBinaryCompactionRecordCount(sources []stateDomainChangeBinaryCompactionSource) (uint64, error) {
@@ -1020,7 +1061,7 @@ func writeStateDomainChangeBinaryCompactionTxRanges(dir string, dst stateDomainC
 	}
 	var raw [8]byte
 	binary.BigEndian.PutUint64(raw[:], written)
-	if _, err := dst.WriteAt(raw[:], stateDomainChangeBinaryHeaderSize); err != nil {
+	if _, err := dst.WriteAt(raw[:], int64(stateDomainChangeBinaryTxRangeTableStart(stateDomainChangeBinaryVersionV6))); err != nil {
 		return 0, err
 	}
 	return written, nil
@@ -1098,7 +1139,7 @@ func iterateStateDomainChangeBinaryCompactionTxRanges(dir string, sources []stat
 		}
 		var previousBlock uint64
 		for i := uint64(0); i < count; i++ {
-			offset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + i*stateDomainChangeBinaryTxRangeSize
+			offset := stateDomainChangeBinaryTxRangeTableStart(header.version) + 8 + i*stateDomainChangeBinaryTxRangeSize
 			var raw [stateDomainChangeBinaryTxRangeSize]byte
 			if _, err := reader.ReadAt(raw[:], int64(offset)); err != nil {
 				_ = reader.Close()
@@ -1334,7 +1375,12 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 	if err != nil {
 		return err
 	}
-	defer accessorFile.Close()
+	accessorOwned := true
+	defer func() {
+		if accessorOwned {
+			_ = accessorFile.Close()
+		}
+	}()
 	accessorReader := contextReaderAt{ctx: ctx, r: accessorFile}
 	if accessorHeader.fromTxNum != segmentHeader.fromTxNum || accessorHeader.toTxNum != segmentHeader.toTxNum {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q range [%d,%d], want segment range [%d,%d]",
@@ -1343,8 +1389,8 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 	if accessorHeader.count != segmentHeader.count {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q count %d, want segment count %d", accessorRef.Path, accessorHeader.count, segmentHeader.count)
 	}
-	if accessorHeader.version != stateDomainChangeBinaryVersionV4 {
-		// V4 is rebuilt deterministically below; byte-identical output proves its
+	if accessorHeader.version != stateDomainChangeBinaryVersionV4 && accessorHeader.version != stateDomainChangeBinaryVersionV5 {
+		// Current accessors are rebuilt deterministically below; byte-identical output proves their
 		// complete structure and semantics in one gate. Legacy layouts retain the
 		// standalone structural scan before their older coverage algorithms.
 		if err := CheckStateDomainChangeAccessorSegmentContext(ctx, dir, accessorRef); err != nil {
@@ -1352,8 +1398,14 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 		}
 	}
 
-	if accessorHeader.version == stateDomainChangeBinaryVersionV4 {
-		collectors, scratch, err := newStateDomainChangeAccessorVerificationCollectors(dir)
+	if accessorHeader.version == stateDomainChangeBinaryVersionV4 || accessorHeader.version == stateDomainChangeBinaryVersionV5 {
+		var collectors *stateDomainChangeBinaryAccessorV4Collectors
+		var scratch string
+		if accessorHeader.version == stateDomainChangeBinaryVersionV5 {
+			collectors, scratch, err = newStateDomainChangeAccessorV5VerificationCollectors(dir)
+		} else {
+			collectors, scratch, err = newStateDomainChangeAccessorVerificationCollectors(dir)
+		}
 		if err != nil {
 			return err
 		}
@@ -1371,6 +1423,23 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV3 {
 		return verifyStateDomainChangeBinaryAccessorV3Coverage(historyRef, accessorRef, segmentReader, segmentSize, segmentHeader.count, indexReader, indexHeader.count, accessorReader, accessorSize, accessorHeader)
+	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV6 {
+		v6Header, err := decodeStateDomainChangeBinaryAccessorV6Header(accessorReader, accessorSize)
+		if err != nil {
+			return err
+		}
+		segmentDigest, err := readStateDomainChangeBinaryV6DictionaryCommitment(segmentReader)
+		if err != nil {
+			return err
+		}
+		if segmentDigest != v6Header.dictionaryDigest {
+			return errors.New("snapshots: V6 history/accessor dictionary commitment mismatch")
+		}
+		if err := checkStateDomainChangeBinaryAccessorV6(accessorReader, accessorSize); err != nil {
+			return err
+		}
+		return verifyStateDomainChangeBinaryAccessorV6Coverage(segmentReader, segmentSize, accessorReader, accessorSize)
 	}
 	return verifyStateDomainChangeBinaryAccessorCoverage(historyRef, accessorRef, segmentReader, segmentSize, recordOffset, segmentHeader.count, accessorReader, accessorSize, accessorHeader.count)
 }
@@ -1915,6 +1984,12 @@ func readStateDomainChangeBinaryAccessor(dir string, ref SegmentRef) ([]stateDom
 	if header.version == stateDomainChangeBinaryVersionV4 {
 		return readStateDomainChangeBinaryAccessorV4Debug(dir, ref, accessorFile, fileSize, header)
 	}
+	if header.version == stateDomainChangeBinaryVersionV5 {
+		return readStateDomainChangeBinaryAccessorV5Debug(dir, ref, accessorFile, fileSize, header)
+	}
+	if header.version == stateDomainChangeBinaryVersionV6 {
+		return readStateDomainChangeBinaryAccessorV6Debug(accessorFile, fileSize)
+	}
 	offsetTableLen := header.count * 8
 	minOffset := uint64(stateDomainChangeBinaryHeaderSize) + offsetTableLen
 	if fileSize < minOffset {
@@ -2021,7 +2096,7 @@ func checkStateDomainChangeBinaryAccessorContext(ctx context.Context, dir string
 			return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
 		}
 	}
-	if (header.version == stateDomainChangeBinaryVersionV3 || header.version == stateDomainChangeBinaryVersionV4) && fileSize > math.MaxInt64 {
+	if (header.version == stateDomainChangeBinaryVersionV3 || header.version == stateDomainChangeBinaryVersionV4 || header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6) && fileSize > math.MaxInt64 {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q logical size %d exceeds int64", ref.Path, fileSize)
 	}
 	if header.version == stateDomainChangeBinaryVersionV3 {
@@ -2033,6 +2108,14 @@ func checkStateDomainChangeBinaryAccessorContext(ctx context.Context, dir string
 		buffered := acquireStateDomainChangeAccessorValidationReader(accessorReader, fileSize)
 		defer releaseStateDomainChangeAccessorValidationReader(&buffered)
 		return checkStateDomainChangeBinaryAccessorV4(buffered, fileSize, header)
+	}
+	if header.version == stateDomainChangeBinaryVersionV5 {
+		buffered := acquireStateDomainChangeAccessorValidationReader(accessorReader, fileSize)
+		defer releaseStateDomainChangeAccessorValidationReader(&buffered)
+		return checkStateDomainChangeBinaryAccessorV5(buffered, fileSize, header)
+	}
+	if header.version == stateDomainChangeBinaryVersionV6 {
+		return checkStateDomainChangeBinaryAccessorV6(accessorReader, fileSize)
 	}
 
 	offsetTableLen := header.count * 8
@@ -2308,7 +2391,12 @@ func iterateStateDomainChangeBinarySegmentByAccessorFile(dir string, ref Segment
 	if err != nil {
 		return err
 	}
-	defer accessorFile.Close()
+	accessorOwned := true
+	defer func() {
+		if accessorOwned {
+			_ = accessorFile.Close()
+		}
+	}()
 	if accessorHeader.fromTxNum != ref.FromTxNum || accessorHeader.toTxNum != ref.ToTxNum {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q range [%d,%d], want [%d,%d]", accessorRef.Path, accessorHeader.fromTxNum, accessorHeader.toTxNum, ref.FromTxNum, ref.ToTxNum)
 	}
@@ -2317,6 +2405,18 @@ func iterateStateDomainChangeBinarySegmentByAccessorFile(dir string, ref Segment
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV4 {
 		return iterateStateDomainChangeBinarySegmentByAccessorV4Key(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupKey, fromTxNum, toTxNum, fn)
+	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV5 {
+		return iterateStateDomainChangeBinarySegmentByAccessorV5Key(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupKey, fromTxNum, toTxNum, fn)
+	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV6 {
+		if history, ok := segmentFile.(*stateDomainChangeHistoryReader); ok {
+			if err := history.attachV6Accessor(accessorFile, accessorSize); err != nil {
+				return err
+			}
+			accessorOwned = false
+		}
+		return iterateStateDomainChangeBinarySegmentByAccessorV6Key(segmentFile, segmentSize, accessorFile, accessorSize, lookupKey, fromTxNum, toTxNum, fn)
 	}
 
 	start, ok, err := stateDomainChangeBinaryAccessorKeyTxLowerBound(accessorFile, accessorSize, accessorHeader.count, lookupKey, fromTxNum)
@@ -2378,7 +2478,12 @@ func iterateStateDomainChangeBinarySegmentByAccessorPrefixFile(dir string, ref S
 	if err != nil {
 		return err
 	}
-	defer accessorFile.Close()
+	accessorOwned := true
+	defer func() {
+		if accessorOwned {
+			_ = accessorFile.Close()
+		}
+	}()
 	if accessorHeader.fromTxNum != ref.FromTxNum || accessorHeader.toTxNum != ref.ToTxNum {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q range [%d,%d], want [%d,%d]", accessorRef.Path, accessorHeader.fromTxNum, accessorHeader.toTxNum, ref.FromTxNum, ref.ToTxNum)
 	}
@@ -2387,6 +2492,18 @@ func iterateStateDomainChangeBinarySegmentByAccessorPrefixFile(dir string, ref S
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV4 {
 		return iterateStateDomainChangeBinarySegmentByAccessorV4Prefix(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupPrefix, fromTxNum, toTxNum, fn)
+	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV5 {
+		return iterateStateDomainChangeBinarySegmentByAccessorV5Prefix(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupPrefix, fromTxNum, toTxNum, fn)
+	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV6 {
+		if history, ok := segmentFile.(*stateDomainChangeHistoryReader); ok {
+			if err := history.attachV6Accessor(accessorFile, accessorSize); err != nil {
+				return err
+			}
+			accessorOwned = false
+		}
+		return iterateStateDomainChangeBinarySegmentByAccessorV6Prefix(segmentFile, segmentSize, accessorFile, accessorSize, lookupPrefix, fromTxNum, toTxNum, fn)
 	}
 
 	start, ok, err := stateDomainChangeBinaryAccessorLowerBound(accessorFile, accessorSize, accessorHeader.count, lookupPrefix)
@@ -2474,7 +2591,7 @@ func encodeStateDomainChangeBinarySegment(fromTxNum, toTxNum uint64, changes []*
 		return nil, nil, nil, err
 	}
 	var buf bytes.Buffer
-	writeStateDomainChangeBinaryHeader(&buf, stateDomainChangeBinarySegmentMagic, fromTxNum, toTxNum, uint64(len(changes)))
+	writeStateDomainChangeBinaryHeaderVersion(&buf, stateDomainChangeBinarySegmentMagic, fromTxNum, toTxNum, uint64(len(changes)), stateDomainChangeBinaryVersionV5)
 	if err := writeStateDomainChangeBinaryTxRangeTable(&buf, txRanges); err != nil {
 		return nil, nil, nil, err
 	}
@@ -2563,8 +2680,14 @@ func decodeStateDomainChangeBinaryTxRangeTable(ref SegmentRef, header stateDomai
 	if header.version == stateDomainChangeBinaryVersionV1 {
 		return nil, data, nil
 	}
-	if header.version != stateDomainChangeBinaryVersionV2 && header.version != stateDomainChangeBinaryVersionV5 {
+	if header.version != stateDomainChangeBinaryVersionV2 && header.version != stateDomainChangeBinaryVersionV5 && header.version != stateDomainChangeBinaryVersionV6 {
 		return nil, nil, fmt.Errorf("snapshots: unsupported state-domain-change binary version %d", header.version)
+	}
+	if header.version == stateDomainChangeBinaryVersionV6 {
+		if len(data) < stateDomainChangeBinaryV6DictionaryCommitmentSize {
+			return nil, nil, io.ErrUnexpectedEOF
+		}
+		data = data[stateDomainChangeBinaryV6DictionaryCommitmentSize:]
 	}
 	if len(data) < 8 {
 		return nil, nil, io.ErrUnexpectedEOF
@@ -2603,25 +2726,34 @@ func stateDomainChangeBinaryTxRangeTableBoundsAt(r io.ReaderAt, fileSize uint64,
 	if header.version == stateDomainChangeBinaryVersionV1 {
 		return 0, stateDomainChangeBinaryHeaderSize, nil
 	}
-	if header.version != stateDomainChangeBinaryVersionV2 && header.version != stateDomainChangeBinaryVersionV5 {
+	if header.version != stateDomainChangeBinaryVersionV2 && header.version != stateDomainChangeBinaryVersionV5 && header.version != stateDomainChangeBinaryVersionV6 {
 		return 0, 0, fmt.Errorf("snapshots: unsupported state-domain-change binary version %d", header.version)
 	}
-	if fileSize < uint64(stateDomainChangeBinaryHeaderSize)+8 {
+	tableStart := stateDomainChangeBinaryTxRangeTableStart(header.version)
+	if fileSize < tableStart+8 {
 		return 0, 0, io.ErrUnexpectedEOF
 	}
 	var countRaw [8]byte
-	if _, err := r.ReadAt(countRaw[:], stateDomainChangeBinaryHeaderSize); err != nil {
+	if _, err := r.ReadAt(countRaw[:], int64(tableStart)); err != nil {
 		return 0, 0, err
 	}
 	count := binary.BigEndian.Uint64(countRaw[:])
-	if count > (math.MaxUint64-uint64(stateDomainChangeBinaryHeaderSize)-8)/stateDomainChangeBinaryTxRangeSize {
+	if count > (math.MaxUint64-tableStart-8)/stateDomainChangeBinaryTxRangeSize {
 		return 0, 0, fmt.Errorf("snapshots: state-domain-change tx range count %d overflows size", count)
 	}
-	payloadOffset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + count*stateDomainChangeBinaryTxRangeSize
+	payloadOffset := tableStart + 8 + count*stateDomainChangeBinaryTxRangeSize
 	if payloadOffset > fileSize {
 		return 0, 0, io.ErrUnexpectedEOF
 	}
 	return count, payloadOffset, nil
+}
+
+func stateDomainChangeBinaryTxRangeTableStart(version uint32) uint64 {
+	start := uint64(stateDomainChangeBinaryHeaderSize)
+	if version == stateDomainChangeBinaryVersionV6 {
+		start += stateDomainChangeBinaryV6DictionaryCommitmentSize
+	}
+	return start
 }
 
 // findStateDomainChangeBinaryTxRangeForBlock performs a point lookup in the
@@ -2643,7 +2775,7 @@ func findStateDomainChangeBinaryTxRangeForBlock(r io.ReaderAt, fileSize uint64, 
 	low, high := uint64(0), count
 	for low < high {
 		mid := low + (high-low)/2
-		row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, mid)
+		row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, header.version, mid)
 		if err != nil {
 			return nil, true, false, err
 		}
@@ -2656,7 +2788,7 @@ func findStateDomainChangeBinaryTxRangeForBlock(r io.ReaderAt, fileSize uint64, 
 	if low == count {
 		return nil, true, false, nil
 	}
-	row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, low)
+	row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, header.version, low)
 	if err != nil {
 		return nil, true, false, err
 	}
@@ -2677,7 +2809,7 @@ func findStateDomainChangeBinaryTxRangeForTxNum(r io.ReaderAt, fileSize uint64, 
 	low, high := uint64(0), count
 	for low < high {
 		mid := low + (high-low)/2
-		row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, mid)
+		row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, header.version, mid)
 		if err != nil {
 			return nil, err
 		}
@@ -2690,7 +2822,7 @@ func findStateDomainChangeBinaryTxRangeForTxNum(r io.ReaderAt, fileSize uint64, 
 	if low >= count {
 		return nil, fmt.Errorf("snapshots: state-domain-change tx %d is not covered by StateTxRange", txNum)
 	}
-	row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, low)
+	row, err := readStateDomainChangeBinaryTxRangeAt(r, ref, header.version, low)
 	if err != nil {
 		return nil, err
 	}
@@ -2700,19 +2832,19 @@ func findStateDomainChangeBinaryTxRangeForTxNum(r io.ReaderAt, fileSize uint64, 
 	return row, nil
 }
 
-func readStateDomainChangeBinaryTxRangeAt(r io.ReaderAt, ref SegmentRef, index uint64) (*rawdb.StateTxRange, error) {
+func readStateDomainChangeBinaryTxRangeAt(r io.ReaderAt, ref SegmentRef, version uint32, index uint64) (*rawdb.StateTxRange, error) {
 	row := new(rawdb.StateTxRange)
-	if err := readStateDomainChangeBinaryTxRangeAtInto(r, ref, index, row); err != nil {
+	if err := readStateDomainChangeBinaryTxRangeAtInto(r, ref, version, index, row); err != nil {
 		return nil, err
 	}
 	return row, nil
 }
 
-func readStateDomainChangeBinaryTxRangeAtInto(r io.ReaderAt, ref SegmentRef, index uint64, row *rawdb.StateTxRange) error {
+func readStateDomainChangeBinaryTxRangeAtInto(r io.ReaderAt, ref SegmentRef, version uint32, index uint64, row *rawdb.StateTxRange) error {
 	if row == nil {
 		return errors.New("snapshots: nil state-domain-change tx range target")
 	}
-	offset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + index*stateDomainChangeBinaryTxRangeSize
+	offset := stateDomainChangeBinaryTxRangeTableStart(version) + 8 + index*stateDomainChangeBinaryTxRangeSize
 	var raw [stateDomainChangeBinaryTxRangeSize]byte
 	var err error
 	if compressed, ok := r.(*compressedBlockReader); ok {
@@ -2747,7 +2879,7 @@ func iterateStateDomainChangeBinaryTxRangeTableAt(r io.ReaderAt, fileSize uint64
 	}
 	var previousBlock uint64
 	for i := uint64(0); i < count; i++ {
-		offset := uint64(stateDomainChangeBinaryHeaderSize) + 8 + i*stateDomainChangeBinaryTxRangeSize
+		offset := stateDomainChangeBinaryTxRangeTableStart(header.version) + 8 + i*stateDomainChangeBinaryTxRangeSize
 		var raw [stateDomainChangeBinaryTxRangeSize]byte
 		if _, err := r.ReadAt(raw[:], int64(offset)); err != nil {
 			return 0, err
@@ -2843,7 +2975,7 @@ func encodeStateDomainChangeBinaryIndex(fromTxNum, toTxNum uint64, index []state
 }
 
 func encodeStateDomainChangeBinaryAccessor(fromTxNum, toTxNum uint64, entries []stateDomainChangeBinaryAccessorEntry) ([]byte, error) {
-	return encodeStateDomainChangeBinaryAccessorV4(fromTxNum, toTxNum, entries)
+	return encodeStateDomainChangeBinaryAccessorV5(fromTxNum, toTxNum, entries)
 }
 
 func decodeStateDomainChangeBinaryHeader(data []byte, magic [8]byte) (stateDomainChangeBinaryHeader, []byte, error) {
@@ -2854,7 +2986,7 @@ func decodeStateDomainChangeBinaryHeader(data []byte, magic [8]byte) (stateDomai
 		return stateDomainChangeBinaryHeader{}, nil, errors.New("snapshots: invalid state-domain-change binary magic")
 	}
 	version := binary.BigEndian.Uint32(data[8:12])
-	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 {
+	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 && version != stateDomainChangeBinaryVersionV6 {
 		return stateDomainChangeBinaryHeader{}, nil, fmt.Errorf("snapshots: unsupported state-domain-change binary version %d", version)
 	}
 	return stateDomainChangeBinaryHeader{
@@ -2898,6 +3030,10 @@ type historySegmentReader interface {
 	io.Closer
 }
 
+type stateDomainChangeBinaryV6KeyResolver interface {
+	v6Key(keyID uint32) ([]byte, error)
+}
+
 // stateDomainChangeHistoryReader retains the segment header and a one-row
 // StateTxRange cache. Sequential archive scans therefore restore block context
 // with one fixed-width table read per block, while random accessor reads fall
@@ -2907,12 +3043,128 @@ type stateDomainChangeHistoryReader struct {
 	header      stateDomainChangeBinaryHeader
 	logicalSize uint64
 	ref         SegmentRef
+	dir         string
 
 	mu          sync.Mutex
 	lastRange   *rawdb.StateTxRange
 	lastIndex   uint64
 	rangeCount  uint64
 	rangesReady bool
+	v6Accessor  historySegmentReader
+	v6Size      uint64
+	v6Header    stateDomainChangeBinaryAccessorV6Header
+	v6Ready     bool
+	v6KeyCache  map[int][]stateDomainChangeBinaryAccessorV6Record
+	v6CacheFIFO []int
+}
+
+func (r *stateDomainChangeHistoryReader) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var accessorErr error
+	if r.v6Accessor != nil {
+		accessorErr = r.v6Accessor.Close()
+		r.v6Accessor = nil
+	}
+	segmentErr := r.historySegmentReader.Close()
+	if segmentErr != nil {
+		return segmentErr
+	}
+	return accessorErr
+}
+
+func (r *stateDomainChangeHistoryReader) v6Key(keyID uint32) ([]byte, error) {
+	if r == nil || r.header.version != stateDomainChangeBinaryVersionV6 {
+		return nil, errors.New("snapshots: V6 key requested from non-V6 history reader")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.v6Accessor == nil {
+		accessorRef := SegmentRef{
+			Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor,
+			FromTxNum: r.ref.FromTxNum, ToTxNum: r.ref.ToTxNum,
+			AggregationSteps: r.ref.AggregationSteps, Path: stateDomainChangeBinaryAccessorPath(r.ref.Path),
+		}
+		accessor, header, size, err := openStateDomainChangeBinaryAccessorReader(r.dir, accessorRef)
+		if err != nil {
+			return nil, err
+		}
+		if header.version != stateDomainChangeBinaryVersionV6 {
+			_ = accessor.Close()
+			return nil, fmt.Errorf("snapshots: V6 history accessor has version %d", header.version)
+		}
+		r.v6Accessor, r.v6Size = accessor, size
+	}
+	if !r.v6Ready {
+		v6Header, err := decodeStateDomainChangeBinaryAccessorV6Header(r.v6Accessor, r.v6Size)
+		if err != nil {
+			return nil, err
+		}
+		segmentDigest, err := readStateDomainChangeBinaryV6DictionaryCommitment(r.historySegmentReader)
+		if err != nil {
+			return nil, err
+		}
+		if segmentDigest != v6Header.dictionaryDigest {
+			return nil, errors.New("snapshots: V6 history/accessor dictionary commitment mismatch")
+		}
+		r.v6Header = v6Header
+		r.v6Ready = true
+		r.v6KeyCache = make(map[int][]stateDomainChangeBinaryAccessorV6Record)
+	}
+	if uint64(keyID) >= r.v6Header.keyCount {
+		return nil, errors.New("snapshots: V6 accessor key id outside dictionary")
+	}
+	blockIndex := int(keyID / stateDomainChangeBinaryAccessorV6BlockKeys)
+	records, ok := r.v6KeyCache[blockIndex]
+	if !ok {
+		block, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(r.v6Accessor, r.v6Header, uint64(blockIndex))
+		if err != nil {
+			return nil, err
+		}
+		records, err = stateDomainChangeBinaryAccessorV6ReadBlock(r.v6Accessor, r.v6Size, r.v6Header, block, uint32(blockIndex*stateDomainChangeBinaryAccessorV6BlockKeys))
+		if err != nil {
+			return nil, err
+		}
+		if len(r.v6CacheFIFO) >= stateDomainChangeV6DictionaryCacheBlocks {
+			delete(r.v6KeyCache, r.v6CacheFIFO[0])
+			r.v6CacheFIFO = r.v6CacheFIFO[1:]
+		}
+		r.v6KeyCache[blockIndex] = records
+		r.v6CacheFIFO = append(r.v6CacheFIFO, blockIndex)
+	}
+	within := int(keyID % stateDomainChangeBinaryAccessorV6BlockKeys)
+	if within >= len(records) {
+		return nil, errors.New("snapshots: V6 accessor key id outside block")
+	}
+	return records[within].key, nil
+}
+
+func (r *stateDomainChangeHistoryReader) attachV6Accessor(accessor historySegmentReader, size uint64) error {
+	if r == nil || accessor == nil || r.header.version != stateDomainChangeBinaryVersionV6 {
+		return errors.New("snapshots: invalid V6 history/accessor attachment")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.v6Accessor != nil {
+		return errors.New("snapshots: V6 history accessor is already attached")
+	}
+	h, err := decodeStateDomainChangeBinaryAccessorV6Header(accessor, size)
+	if err != nil {
+		return err
+	}
+	digest, err := readStateDomainChangeBinaryV6DictionaryCommitment(r.historySegmentReader)
+	if err != nil {
+		return err
+	}
+	if digest != h.dictionaryDigest {
+		return errors.New("snapshots: V6 history/accessor dictionary commitment mismatch")
+	}
+	r.v6Accessor, r.v6Size, r.v6Header, r.v6Ready = accessor, size, h, true
+	r.v6KeyCache = make(map[int][]stateDomainChangeBinaryAccessorV6Record)
+	return nil
 }
 
 // stateDomainChangeTxRangeCursor is the compaction-only, single-threaded
@@ -2922,6 +3174,7 @@ type stateDomainChangeHistoryReader struct {
 type stateDomainChangeTxRangeCursor struct {
 	reader  io.ReaderAt
 	ref     SegmentRef
+	version uint32
 	count   uint64
 	index   uint64
 	current rawdb.StateTxRange
@@ -2934,7 +3187,7 @@ func newStateDomainChangeTxRangeCursor(reader io.ReaderAt, logicalSize uint64, r
 	if err != nil {
 		return nil, err
 	}
-	return &stateDomainChangeTxRangeCursor{reader: reader, ref: ref, count: count}, nil
+	return &stateDomainChangeTxRangeCursor{reader: reader, ref: ref, version: header.version, count: count}, nil
 }
 
 func (c *stateDomainChangeTxRangeCursor) txRangeForTxNum(txNum uint64) (*rawdb.StateTxRange, error) {
@@ -2948,7 +3201,7 @@ func (c *stateDomainChangeTxRangeCursor) txRangeForTxNum(txNum uint64) (*rawdb.S
 	if c.have && txNum > c.current.EndTxNum {
 		low = c.index + 1
 		if low < c.count {
-			if err := readStateDomainChangeBinaryTxRangeAtInto(c.reader, c.ref, low, &c.scratch); err != nil {
+			if err := readStateDomainChangeBinaryTxRangeAtInto(c.reader, c.ref, c.version, low, &c.scratch); err != nil {
 				return nil, err
 			}
 			if txNum >= c.scratch.BeginTxNum && txNum <= c.scratch.EndTxNum {
@@ -2962,7 +3215,7 @@ func (c *stateDomainChangeTxRangeCursor) txRangeForTxNum(txNum uint64) (*rawdb.S
 	high := c.count
 	for low < high {
 		mid := low + (high-low)/2
-		if err := readStateDomainChangeBinaryTxRangeAtInto(c.reader, c.ref, mid, &c.scratch); err != nil {
+		if err := readStateDomainChangeBinaryTxRangeAtInto(c.reader, c.ref, c.version, mid, &c.scratch); err != nil {
 			return nil, err
 		}
 		if c.scratch.EndTxNum < txNum {
@@ -2974,7 +3227,7 @@ func (c *stateDomainChangeTxRangeCursor) txRangeForTxNum(txNum uint64) (*rawdb.S
 	if low >= c.count {
 		return nil, fmt.Errorf("snapshots: state-domain-change tx %d is not covered by StateTxRange", txNum)
 	}
-	if err := readStateDomainChangeBinaryTxRangeAtInto(c.reader, c.ref, low, &c.scratch); err != nil {
+	if err := readStateDomainChangeBinaryTxRangeAtInto(c.reader, c.ref, c.version, low, &c.scratch); err != nil {
 		return nil, err
 	}
 	if txNum < c.scratch.BeginTxNum || txNum > c.scratch.EndTxNum {
@@ -3003,7 +3256,7 @@ func (r *stateDomainChangeHistoryReader) txRangeForTxNum(txNum uint64) (*rawdb.S
 	// The dominant path is a forward record scan. Advance one table row before
 	// falling back to binary search so each new block costs one small ReadAt.
 	if r.lastRange != nil && txNum > r.lastRange.EndTxNum && r.lastIndex+1 < r.rangeCount {
-		next, err := readStateDomainChangeBinaryTxRangeAt(r.historySegmentReader, r.ref, r.lastIndex+1)
+		next, err := readStateDomainChangeBinaryTxRangeAt(r.historySegmentReader, r.ref, r.header.version, r.lastIndex+1)
 		if err != nil {
 			return nil, err
 		}
@@ -3016,7 +3269,7 @@ func (r *stateDomainChangeHistoryReader) txRangeForTxNum(txNum uint64) (*rawdb.S
 	low, high := uint64(0), r.rangeCount
 	for low < high {
 		mid := low + (high-low)/2
-		row, err := readStateDomainChangeBinaryTxRangeAt(r.historySegmentReader, r.ref, mid)
+		row, err := readStateDomainChangeBinaryTxRangeAt(r.historySegmentReader, r.ref, r.header.version, mid)
 		if err != nil {
 			return nil, err
 		}
@@ -3029,7 +3282,7 @@ func (r *stateDomainChangeHistoryReader) txRangeForTxNum(txNum uint64) (*rawdb.S
 	if low >= r.rangeCount {
 		return nil, fmt.Errorf("snapshots: state-domain-change tx %d is not covered by StateTxRange", txNum)
 	}
-	row, err := readStateDomainChangeBinaryTxRangeAt(r.historySegmentReader, r.ref, low)
+	row, err := readStateDomainChangeBinaryTxRangeAt(r.historySegmentReader, r.ref, r.header.version, low)
 	if err != nil {
 		return nil, err
 	}
@@ -3111,6 +3364,7 @@ func openHistorySegmentForReadWithCacheLimit(dir string, ref SegmentRef, compres
 		header:               header,
 		logicalSize:          logicalSize,
 		ref:                  ref,
+		dir:                  dir,
 	}, logicalSize, header, nil
 }
 
@@ -3251,6 +3505,16 @@ func openStateDomainChangeBinaryAccessorReader(dir string, ref SegmentRef) (hist
 		if _, err := stateDomainChangeBinaryAccessorV4LayoutAt(reader, logicalSize, header); err != nil {
 			_ = reader.Close()
 			return nil, stateDomainChangeBinaryHeader{}, 0, fmt.Errorf("snapshots: state-domain-change binary accessor %q v4 layout: %w", ref.Path, err)
+		}
+	} else if header.version == stateDomainChangeBinaryVersionV5 {
+		if _, err := stateDomainChangeBinaryAccessorV5LayoutAt(reader, logicalSize, header); err != nil {
+			_ = reader.Close()
+			return nil, stateDomainChangeBinaryHeader{}, 0, fmt.Errorf("snapshots: state-domain-change binary accessor %q v5 layout: %w", ref.Path, err)
+		}
+	} else if header.version == stateDomainChangeBinaryVersionV6 {
+		if _, err := decodeStateDomainChangeBinaryAccessorV6Header(reader, logicalSize); err != nil {
+			_ = reader.Close()
+			return nil, stateDomainChangeBinaryHeader{}, 0, fmt.Errorf("snapshots: state-domain-change binary accessor %q v6 layout: %w", ref.Path, err)
 		}
 	} else if minSize := uint64(stateDomainChangeBinaryHeaderSize) + header.count*8; logicalSize < minSize {
 		_ = reader.Close()
@@ -3504,7 +3768,25 @@ func readStateDomainChangeBinaryRecordFrame(r io.ReaderAt, offset, fileSize uint
 	}
 	var change *rawdb.StateDomainChange
 	var err error
-	if version == stateDomainChangeBinaryVersionV5 {
+	if version == stateDomainChangeBinaryVersionV6 {
+		keyID, decoded, decodeErr := decodeStateDomainChangeRecordV6(payload)
+		change, err = decoded, decodeErr
+		if err == nil {
+			contextual, ok := r.(stateDomainChangeBinaryV6KeyResolver)
+			if !ok {
+				err = errors.New("snapshots: V6 state-domain-change record requires contextual history reader")
+			} else {
+				var key []byte
+				key, err = contextual.v6Key(keyID)
+				if err == nil {
+					err = decodeStateDomainChangeBinaryAccessorKey(key, change)
+				}
+			}
+		}
+		if err == nil {
+			err = hydrateStateDomainChangeBinaryRecordV5(r, fileSize, recordIndex, hydrateBlock, change)
+		}
+	} else if version == stateDomainChangeBinaryVersionV5 {
 		change, err = decodeStateDomainChangeRecordV5(payload)
 		if err == nil {
 			err = hydrateStateDomainChangeBinaryRecordV5(r, fileSize, recordIndex, hydrateBlock, change)

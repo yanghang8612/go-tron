@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"context"
+	"errors"
 	"io"
 )
 
@@ -20,6 +21,19 @@ func (r contextReaderAt) ReadAt(p []byte, off int64) (int, error) {
 		}
 	}
 	return r.r.ReadAt(p, off)
+}
+
+func (r contextReaderAt) v6Key(keyID uint32) ([]byte, error) {
+	if r.ctx != nil {
+		if err := r.ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	resolver, ok := r.r.(stateDomainChangeBinaryV6KeyResolver)
+	if !ok {
+		return nil, errors.New("snapshots: V6 key resolver is unavailable")
+	}
+	return resolver.v6Key(keyID)
 }
 
 type contextReader struct {

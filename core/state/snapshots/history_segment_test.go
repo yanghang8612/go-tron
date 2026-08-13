@@ -416,6 +416,9 @@ func TestBuildStateDomainChangeHistoryStreamsAccessorETL(t *testing.T) {
 	if result.accessorETL.Applied != 4 {
 		t.Fatalf("accessor ETL applied %d entries, want 4", result.accessorETL.Applied)
 	}
+	if result.keyETL.SpilledRuns == 0 || result.keyETL.Applied != 3 {
+		t.Fatalf("V6 key dictionary ETL stats = %+v, want three distinct externally sorted keys", result.keyETL)
+	}
 	if len(result.refs) != 3 {
 		t.Fatalf("streamed refs = %+v, want history+accessor+index", result.refs)
 	}
@@ -541,7 +544,7 @@ func TestBuildStateDomainChangeHistoryStreamHonorsCompressionGate(t *testing.T) 
 	}
 }
 
-func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptTailGroup(t *testing.T) {
+func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptV6Directory(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5e}, common.AccountIDLength)...))
@@ -560,16 +563,21 @@ func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptTailGroup(t *tes
 		t.Fatalf("build history: %v", err)
 	}
 	accessorPath := filepath.Join(dir, refs[1].Path)
-	accessor, header, accessorSize, err := openStateDomainChangeBinaryAccessorReader(dir, refs[1])
+	accessor, header, _, err := openStateDomainChangeBinaryAccessorReader(dir, refs[1])
 	if err != nil {
 		t.Fatal(err)
 	}
-	layout, err := stateDomainChangeBinaryAccessorV4LayoutAt(accessor, accessorSize, header)
-	if err != nil {
+	if header.version != stateDomainChangeBinaryVersionV6 {
 		_ = accessor.Close()
-		t.Fatal(err)
+		t.Fatalf("accessor version = %d, want V6", header.version)
 	}
-	groupOffset, err := readStateDomainChangeBinaryAccessorV3GroupOffsetAt(accessor, layout, layout.groupCount-1)
+	var offsetRaw [8]byte
+	_, err = accessor.ReadAt(offsetRaw[:], stateDomainChangeBinaryAccessorV6HeaderSize)
+	entryOffset := int64(binary.BigEndian.Uint64(offsetRaw[:]))
+	var keyLenRaw [2]byte
+	if err == nil {
+		_, err = accessor.ReadAt(keyLenRaw[:], entryOffset)
+	}
 	if closeErr := accessor.Close(); err == nil {
 		err = closeErr
 	}
@@ -580,7 +588,8 @@ func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptTailGroup(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, writeErr := file.WriteAt(make([]byte, 8), int64(groupOffset+stateDomainChangeBinaryAccessorV3GroupKeySize))
+	directoryTail := entryOffset + 2 + int64(binary.BigEndian.Uint16(keyLenRaw[:]))
+	_, writeErr := file.WriteAt([]byte{0xff}, directoryTail)
 	closeErr := file.Close()
 	if writeErr != nil {
 		t.Fatal(writeErr)
@@ -600,7 +609,7 @@ func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptTailGroup(t *tes
 		t.Fatal(err)
 	}
 	if err := validateBuiltStateDomainChangeBinaryFiles(dir, refs[0], refs[2], refs[1], logicalSize, 1, historyHeader.count, txRangeCount); err == nil {
-		t.Fatal("corrupt built accessor tail group passed layout self-check")
+		t.Fatal("corrupt built accessor V6 directory passed layout self-check")
 	}
 }
 
@@ -794,7 +803,7 @@ func TestManagerIteratesStateDomainChangesByPrefixStopsCallbackBeforeReadingRest
 	}
 }
 
-func TestManagerIteratesStateDomainChangesByPrefixV4SeeksPastEarlierGroupRecords(t *testing.T) {
+func TestManagerIteratesStateDomainChangesByPrefixV5SeeksPastEarlierGroupRecords(t *testing.T) {
 	dir := t.TempDir()
 	owner := binaryAddress(0x5c)
 	changes := make([]*rawdb.StateDomainChange, 0, 128)
@@ -811,13 +820,13 @@ func TestManagerIteratesStateDomainChangesByPrefixV4SeeksPastEarlierGroupRecords
 		Kind:      SegmentHistory,
 		FromTxNum: 1,
 		ToTxNum:   128,
-		Path:      "history/state-domain-change-prefix-v4-seek.seg",
+		Path:      "history/state-domain-change-prefix-v5-seek.seg",
 	}, changes)
 	if err != nil {
 		t.Fatalf("write binary history: %v", err)
 	}
-	if data := mustReadFile(t, filepath.Join(dir, accessorRef.Path)); binary.BigEndian.Uint32(data[8:12]) != stateDomainChangeBinaryVersionV4 {
-		t.Fatalf("accessor version = %d, want %d", binary.BigEndian.Uint32(data[8:12]), stateDomainChangeBinaryVersionV4)
+	if data := mustReadFile(t, filepath.Join(dir, accessorRef.Path)); binary.BigEndian.Uint32(data[8:12]) != stateDomainChangeBinaryVersionV5 {
+		t.Fatalf("accessor version = %d, want %d", binary.BigEndian.Uint32(data[8:12]), stateDomainChangeBinaryVersionV5)
 	}
 	segRef = corruptStateDomainChangeBinaryRecordFrameLength(t, dir, segRef, idxRef, 0)
 	if err := PublishManifest(dir, NewManifest(1, 128, []SegmentRef{segRef, accessorRef, idxRef})); err != nil {
@@ -832,10 +841,10 @@ func TestManagerIteratesStateDomainChangesByPrefixV4SeeksPastEarlierGroupRecords
 		got = append(got, change)
 		return true, nil
 	}); err != nil {
-		t.Fatalf("v4 prefix seek read corrupt earlier record: %v", err)
+		t.Fatalf("v5 prefix seek read corrupt earlier record: %v", err)
 	}
 	if len(got) != 1 || !bytes.Equal(got[0].Key, []byte{0x7f, 0x01}) {
-		t.Fatalf("v4 prefix result = %+v, want key 7f01", got)
+		t.Fatalf("v5 prefix result = %+v, want key 7f01", got)
 	}
 }
 

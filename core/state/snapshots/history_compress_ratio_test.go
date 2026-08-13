@@ -182,13 +182,14 @@ func zstdBlockCompress(t *testing.T, records [][]byte, blockSize int) (raw, comp
 	return raw, compressed
 }
 
-// TestHistoryAccessorV4IndexComposition reports the current v4 accessor against
-// the legacy v2 ordered-key format. v4 keeps a 128-bit hash + offset + record
-// index exact table and a KV-latest owner/generation/domain prefix group with a
-// 4-byte logical-key seek prefix, then
-// verifies all resolved records against the history segment. It is intentionally
+// TestHistoryAccessorV5IndexComposition reports the current v5 accessor against
+// v4 and the legacy v2 ordered-key format. V5 keeps a collision-safe 64-bit
+// candidate fingerprint, a 48-bit segment-local offset and a uint32 record
+// index. KV prefix entries use the same compact position and retain their
+// 4-byte logical-key seek prefix. Both lookup paths verify every resolved
+// record against the history segment. It is intentionally
 // not an MPHF/recsplit estimate: this test records the real emitted layout.
-func TestHistoryAccessorV4IndexComposition(t *testing.T) {
+func TestHistoryAccessorV5IndexComposition(t *testing.T) {
 	changes := buildHistoryStructs(400, 50)
 	from, to := uint64(9_000_000), uint64(9_000_399)
 	normalized := normalizeStateDomainChangesForBinary(changes)
@@ -204,15 +205,20 @@ func TestHistoryAccessorV4IndexComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	v4Data, err := encodeStateDomainChangeBinaryAccessorV4(from, to, accessor)
+	if err != nil {
+		t.Fatal(err)
+	}
 	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer enc.Close()
 	v2Compressed := len(enc.EncodeAll(legacyV2, nil))
-	v4Compressed := len(enc.EncodeAll(accessorData, nil))
-	layout, err := stateDomainChangeBinaryAccessorV4LayoutAt(bytes.NewReader(accessorData), uint64(len(accessorData)), stateDomainChangeBinaryHeader{
-		version:   stateDomainChangeBinaryVersionV4,
+	v4Compressed := len(enc.EncodeAll(v4Data, nil))
+	v5Compressed := len(enc.EncodeAll(accessorData, nil))
+	layout, err := stateDomainChangeBinaryAccessorV5LayoutAt(bytes.NewReader(accessorData), uint64(len(accessorData)), stateDomainChangeBinaryHeader{
+		version:   stateDomainChangeBinaryVersionV5,
 		fromTxNum: from,
 		toTxNum:   to,
 		count:     uint64(len(accessor)),
@@ -220,15 +226,20 @@ func TestHistoryAccessorV4IndexComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exactBytes := uint64(len(accessor)) * stateDomainChangeBinaryAccessorV3ExactEntrySize
+	exactBytes := uint64(len(accessor)) * stateDomainChangeBinaryAccessorV5ExactEntrySize
 	groupBytes := uint64(len(accessorData)) - layout.groupPayloadStart
+	if len(accessorData) >= len(v4Data) {
+		t.Fatalf("v5 accessor size %d did not improve v4 size %d", len(accessorData), len(v4Data))
+	}
 	t.Logf("entries=%d", len(accessor))
 	t.Logf("  v2 ordered .kv zstd       = %8d", v2Compressed)
-	t.Logf("  v4 raw .kv                = %8d", len(accessorData))
+	t.Logf("  v4 raw .kv                = %8d", len(v4Data))
 	t.Logf("  v4 zstd .kv               = %8d", v4Compressed)
-	t.Logf("  v4 exact table            = %8d", exactBytes)
-	t.Logf("  v4 prefix groups           = %8d (%d groups)", groupBytes, layout.groupCount)
-	t.Logf("  v4 raw versus v2 zstd     = %.2fx", float64(v2Compressed)/float64(len(accessorData)))
+	t.Logf("  v5 raw .kv                = %8d", len(accessorData))
+	t.Logf("  v5 zstd .kv               = %8d", v5Compressed)
+	t.Logf("  v5 exact table            = %8d", exactBytes)
+	t.Logf("  v5 prefix groups          = %8d (%d groups)", groupBytes, layout.groupCount)
+	t.Logf("  v5 raw saving vs v4       = %.2f%%", 100*(1-float64(len(accessorData))/float64(len(v4Data))))
 }
 
 func TestHistoryV5PreviousValueOnlySizeGate(t *testing.T) {

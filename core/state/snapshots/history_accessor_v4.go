@@ -463,6 +463,14 @@ func verifyStateDomainChangeBinaryAccessorV4CollectedContext(ctx context.Context
 }
 
 func newStateDomainChangeAccessorVerificationCollectors(snapshotDir string) (*stateDomainChangeBinaryAccessorV4Collectors, string, error) {
+	return newStateDomainChangeAccessorVerificationCollectorsVersion(snapshotDir, stateDomainChangeBinaryVersionV4)
+}
+
+func newStateDomainChangeAccessorV5VerificationCollectors(snapshotDir string) (*stateDomainChangeBinaryAccessorV4Collectors, string, error) {
+	return newStateDomainChangeAccessorVerificationCollectorsVersion(snapshotDir, stateDomainChangeBinaryVersionV5)
+}
+
+func newStateDomainChangeAccessorVerificationCollectorsVersion(snapshotDir string, version uint32) (*stateDomainChangeBinaryAccessorV4Collectors, string, error) {
 	parent := ""
 	if snapshotDir != "" {
 		parent = filepath.Join(snapshotDir, "etl")
@@ -474,7 +482,7 @@ func newStateDomainChangeAccessorVerificationCollectors(snapshotDir string) (*st
 	if err != nil {
 		return nil, "", err
 	}
-	collectors, err := newStateDomainChangeBinaryAccessorV4Collectors(etl.Options{TempDir: scratch})
+	collectors, err := newStateDomainChangeBinaryAccessorCollectors(etl.Options{TempDir: scratch}, version)
 	if err != nil {
 		_ = os.RemoveAll(scratch)
 		return nil, "", err
