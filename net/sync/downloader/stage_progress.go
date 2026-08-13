@@ -431,31 +431,37 @@ func NewImportBatchStagePlan(schedules []ImportStageSchedule) ImportBatchStagePl
 	if len(schedules) == 0 {
 		return ImportBatchStagePlan{}
 	}
-	plan := ImportBatchStagePlan{
-		Schedules:  append([]ImportStageSchedule(nil), schedules...),
-		Bodies:     make([]ImportStageTask, 0, len(schedules)),
-		Execution:  make([]ImportStageTask, 0, len(schedules)),
-		Commitment: make([]ImportStageTask, 0, len(schedules)),
-		Finish:     make([]ImportStageTask, 0, len(schedules)),
-		PostBody:   make([]ImportStageTask, 0, len(schedules)*3),
-		Tasks:      make([]ImportStageTask, 0, len(schedules)*4),
+	valid := 0
+	for _, schedule := range schedules {
+		if len(schedule.Tasks) != 0 {
+			valid++
+		}
 	}
+	plan := ImportBatchStagePlan{Schedules: append([]ImportStageSchedule(nil), schedules...)}
+	if valid == 0 {
+		return plan
+	}
+	// Every derived phase/task view points into one immutable, phase-ordered
+	// arena. The plan already exposes these slices as read-only schedule data;
+	// defensive accessor methods still clone before returning to callers.
+	plan.Tasks = make([]ImportStageTask, valid*4)
+	plan.Bodies = plan.Tasks[:valid]
+	plan.Execution = plan.Tasks[valid : valid*2]
+	plan.Commitment = plan.Tasks[valid*2 : valid*3]
+	plan.Finish = plan.Tasks[valid*3:]
+	plan.PostBody = plan.Tasks[valid:]
+	index := 0
 	for _, schedule := range schedules {
 		if len(schedule.Tasks) == 0 {
 			continue
 		}
-		plan.Bodies = append(plan.Bodies, schedule.Body)
-		plan.Execution = append(plan.Execution, schedule.Execution)
-		plan.Commitment = append(plan.Commitment, schedule.Commitment)
-		plan.Finish = append(plan.Finish, schedule.Finish)
+		plan.Bodies[index] = schedule.Body
+		plan.Execution[index] = schedule.Execution
+		plan.Commitment[index] = schedule.Commitment
+		plan.Finish[index] = schedule.Finish
+		index++
 	}
 	plan.Phases = newImportStagePhasePlans(plan)
-	for _, phase := range plan.Phases {
-		if phase.Phase != ImportStagePhaseBodies {
-			plan.PostBody = append(plan.PostBody, phase.Tasks...)
-		}
-		plan.Tasks = append(plan.Tasks, phase.Tasks...)
-	}
 	return plan
 }
 
@@ -679,9 +685,14 @@ func (p ImportBatchStagePlan) TasksForPhase(phase ImportStagePhase) []ImportStag
 func newImportStagePhasePlans(plan ImportBatchStagePlan) []ImportStagePhasePlan {
 	phases := make([]ImportStagePhasePlan, 0, 4)
 	for _, spec := range importStageSpecs {
-		phasePlan, ok := newImportStagePhasePlan(spec.Phase, spec.CanonicalStage, spec.SyncStage, plan.tasksForPhase(spec.Phase))
-		if ok {
-			phases = append(phases, phasePlan)
+		tasks := plan.tasksForPhase(spec.Phase)
+		if len(tasks) != 0 {
+			phases = append(phases, ImportStagePhasePlan{
+				Phase:          spec.Phase,
+				CanonicalStage: spec.CanonicalStage,
+				SyncStage:      spec.SyncStage,
+				Tasks:          tasks,
+			})
 		}
 	}
 	return phases
@@ -723,9 +734,19 @@ func cloneImportStagePhasePlanList(source []ImportStagePhasePlan) []ImportStageP
 	if len(source) == 0 {
 		return nil
 	}
-	out := make([]ImportStagePhasePlan, 0, len(source))
+	taskCount := 0
 	for _, phase := range source {
-		out = append(out, cloneImportStagePhasePlan(phase))
+		taskCount += len(phase.Tasks)
+	}
+	out := make([]ImportStagePhasePlan, len(source))
+	tasks := make([]ImportStageTask, taskCount)
+	offset := 0
+	for i, phase := range source {
+		out[i] = phase
+		end := offset + len(phase.Tasks)
+		copy(tasks[offset:end], phase.Tasks)
+		out[i].Tasks = tasks[offset:end:end]
+		offset = end
 	}
 	return out
 }

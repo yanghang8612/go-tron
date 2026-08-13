@@ -155,6 +155,23 @@ func PopFetchBatch(candidates []types.BlockID, max int, accept BlockFilter) (bat
 // accepted block IDs, keeps accepted overflow in Remaining, and drops rejected
 // entries. Remaining may reuse fetchList's backing array.
 func PlanNextFetchBatch(fetchList []types.BlockID, max int, classify FetchCandidateClassifier) NextFetchBatchPlan {
+	plan := planNextFetchBatch(fetchList, max, classify, true)
+	if len(fetchList) == 0 || max <= 0 {
+		return plan
+	}
+	return plan.withSteps()
+}
+
+// DrainNextFetchBatch is the allocation-light execution form of
+// PlanNextFetchBatch. It preserves the same classification and queue ordering,
+// but omits diagnostic decisions and declarative apply steps when the caller
+// can replace its queue directly under the same lock.
+func DrainNextFetchBatch(fetchList []types.BlockID, max int, classify FetchCandidateClassifier) (batch, remaining []types.BlockID) {
+	plan := planNextFetchBatch(fetchList, max, classify, false)
+	return plan.Batch, plan.Remaining
+}
+
+func planNextFetchBatch(fetchList []types.BlockID, max int, classify FetchCandidateClassifier, recordDecisions bool) NextFetchBatchPlan {
 	plan := NextFetchBatchPlan{}
 	if len(fetchList) == 0 || max <= 0 {
 		plan.Remaining = fetchList
@@ -162,17 +179,22 @@ func PlanNextFetchBatch(fetchList []types.BlockID, max int, classify FetchCandid
 	}
 	plan.Batch = make([]types.BlockID, 0, max)
 	plan.Remaining = fetchList[:0]
+	if recordDecisions {
+		plan.Decisions = make([]FetchCandidatePlan, 0, len(fetchList))
+	}
 	for _, bid := range fetchList {
 		var facts FetchCandidateFacts
 		if classify != nil {
 			facts = classify(bid)
 		}
 		decision := ClassifyFetchCandidate(facts)
-		plan.Decisions = append(plan.Decisions, FetchCandidatePlan{
-			ID:       bid,
-			Facts:    facts,
-			Decision: decision,
-		})
+		if recordDecisions {
+			plan.Decisions = append(plan.Decisions, FetchCandidatePlan{
+				ID:       bid,
+				Facts:    facts,
+				Decision: decision,
+			})
+		}
 		if decision == FetchCandidateDeferred {
 			plan.Remaining = append(plan.Remaining, bid)
 			continue
@@ -189,7 +211,7 @@ func PlanNextFetchBatch(fetchList []types.BlockID, max int, classify FetchCandid
 	if len(plan.Remaining) == 0 {
 		plan.Remaining = nil
 	}
-	return plan.withSteps()
+	return plan
 }
 
 // AssignRetryCandidates partitions a retry list into entries assigned to the

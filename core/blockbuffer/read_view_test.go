@@ -102,3 +102,31 @@ func TestBufferZeroValueReadViewFallback(t *testing.T) {
 		t.Fatal("zero-value buffer unexpectedly found missing key")
 	}
 }
+
+func TestBufferReadViewRemainsImmutableAcrossDiscardAndAppend(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.SetMaxInflight(2)
+	b.BeginBlock([32]byte{1}, 1)
+	b.BeginBlock([32]byte{2}, 2)
+	old := b.loadReadView()
+	second := old.inflight[1]
+	b.DiscardActive()
+	b.BeginBlock([32]byte{3}, 3)
+	if len(old.inflight) != 2 || old.inflight[1] != second || old.inflight[1].blockHash != [32]byte{2} {
+		t.Fatal("discard followed by append rewrote an older published view")
+	}
+}
+
+func BenchmarkBufferReadViewPublication(b *testing.B) {
+	buffer := New(rawdb.NewMemoryDatabase())
+	buffer.layers = make([]*layer, 1024)
+	for i := range buffer.layers {
+		buffer.layers[i] = newLayer([32]byte{byte(i)}, uint64(i))
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		buffer.mu.Lock()
+		buffer.publishReadViewLocked()
+		buffer.mu.Unlock()
+	}
+}

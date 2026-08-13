@@ -998,18 +998,21 @@ func (b *Buffer) BlockHashByNumberStrict(number uint64) (common.Hash, bool, erro
 // shard locks.
 func (*Buffer) ConcurrentReadWriteSafe() {}
 
-// publishReadViewLocked publishes copies of the topology slices. The layer
-// pointers themselves are stable: dropping a layer only removes the owning
-// slice reference, while a reader that already loaded an older view keeps the
-// layer alive until that read completes. Caller holds b.mu for every mutation
-// after construction (construction itself is single-threaded).
+// publishReadViewLocked publishes the immutable topology slices. Structural
+// mutators append beyond a previously published length or replace/subslice with
+// capacity clamped before a future append, so an older view is never rewritten.
+// This avoids copying the entire pending-layer topology twice per imported
+// block. The layer pointers themselves remain stable and keep dropped layers
+// alive until readers of an older view complete.
 func (b *Buffer) publishReadViewLocked() {
-	view := &bufferReadView{baseReadCache: b.baseReadCache}
-	if len(b.inflight) > 0 {
-		view.inflight = append([]*layer(nil), b.inflight...)
+	view := &bufferReadView{
+		baseReadCache: b.baseReadCache,
 	}
-	if len(b.layers) > 0 {
-		view.layers = append([]*layer(nil), b.layers...)
+	if len(b.inflight) != 0 {
+		view.inflight = b.inflight[:len(b.inflight):len(b.inflight)]
+	}
+	if len(b.layers) != 0 {
+		view.layers = b.layers[:len(b.layers):len(b.layers)]
 	}
 	b.readView.Store(view)
 }
@@ -1565,9 +1568,12 @@ func (b *Buffer) CommitBlock() {
 func (b *Buffer) promoteOldestInflightLocked() {
 	l := b.inflight[0]
 	l.buildBloom()
-	copy(b.inflight, b.inflight[1:])
-	b.inflight[len(b.inflight)-1] = nil
-	b.inflight = b.inflight[:len(b.inflight)-1]
+	if len(b.inflight) == 1 {
+		b.inflight = nil
+	} else {
+		// Clamp capacity so the next append cannot overwrite an older view.
+		b.inflight = b.inflight[1:len(b.inflight):len(b.inflight)]
+	}
 	l.state = layerCommitted
 	b.layers = append(b.layers, l)
 	b.buildNewestLayerBloomSegmentLocked()
@@ -1582,8 +1588,11 @@ func (b *Buffer) DiscardActive() {
 	defer b.mu.Unlock()
 	if n := len(b.inflight); n > 0 {
 		b.inflight[n-1].state = layerDetached
-		b.inflight[n-1] = nil
-		b.inflight = b.inflight[:n-1]
+		if n == 1 {
+			b.inflight = nil
+		} else {
+			b.inflight = b.inflight[: n-1 : n-1]
+		}
 		b.publishReadViewLocked()
 	}
 }
@@ -1704,9 +1713,10 @@ func (b *Buffer) DiscardInflight(h InflightHandle) {
 	for i, l := range b.inflight {
 		if l == h.l {
 			l.state = layerDetached
-			copy(b.inflight[i:], b.inflight[i+1:])
-			b.inflight[len(b.inflight)-1] = nil
-			b.inflight = b.inflight[:len(b.inflight)-1]
+			remaining := make([]*layer, 0, len(b.inflight)-1)
+			remaining = append(remaining, b.inflight[:i]...)
+			remaining = append(remaining, b.inflight[i+1:]...)
+			b.inflight = remaining
 			b.publishReadViewLocked()
 			return
 		}
@@ -1719,17 +1729,23 @@ func (b *Buffer) DiscardInflight(h InflightHandle) {
 func (b *Buffer) DiscardBlock(hash common.Hash) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := b.layers[:0]
+	match := -1
+	for i, l := range b.layers {
+		if l.blockHash == hash {
+			match = i
+			break
+		}
+	}
+	if match < 0 {
+		return
+	}
+	out := make([]*layer, 0, len(b.layers)-1)
 	for _, l := range b.layers {
 		if l.blockHash == hash {
 			l.state = layerDetached
 			continue
 		}
 		out = append(out, l)
-	}
-	// Zero the now-unused tail to avoid retaining dropped layers.
-	for i := len(out); i < len(b.layers); i++ {
-		b.layers[i] = nil
 	}
 	b.layers = out
 	b.publishReadViewLocked()
@@ -1742,14 +1758,12 @@ func (b *Buffer) Discard() {
 	defer b.mu.Unlock()
 	for i := range b.inflight {
 		b.inflight[i].state = layerDetached
-		b.inflight[i] = nil
 	}
-	b.inflight = b.inflight[:0]
+	b.inflight = nil
 	for i := range b.layers {
 		b.layers[i].state = layerDetached
-		b.layers[i] = nil
 	}
-	b.layers = b.layers[:0]
+	b.layers = nil
 	if b.baseReadCache != nil {
 		b.baseReadCache.clear()
 	}
@@ -2531,9 +2545,8 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 	}
 	for i := range b.layers {
 		b.layers[i].state = layerDetached
-		b.layers[i] = nil
 	}
-	b.layers = b.layers[:0]
+	b.layers = nil
 	b.publishReadViewLocked()
 	return nil
 }
@@ -2656,11 +2669,13 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 	for i := 0; i < n; i++ {
 		b.layers[i].state = layerDetached
 	}
-	copy(b.layers, b.layers[n:])
-	for i := len(b.layers) - n; i < len(b.layers); i++ {
-		b.layers[i] = nil
+	if n == len(b.layers) {
+		b.layers = nil
+	} else {
+		// Keep the suffix immutable and force the next append onto fresh storage,
+		// preserving any reader that still owns the pre-flush view.
+		b.layers = b.layers[n:len(b.layers):len(b.layers)]
 	}
-	b.layers = b.layers[:len(b.layers)-n]
 	b.publishReadViewLocked()
 }
 

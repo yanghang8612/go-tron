@@ -1531,7 +1531,7 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState, effectiveTipNum u
 	if len(ps.fetchList) == 0 {
 		return nil
 	}
-	plan := syncdl.PlanNextFetchBatch(ps.fetchList, maxFetchBatch, func(bid types.BlockID) syncdl.FetchCandidateFacts {
+	batch, remaining := syncdl.DrainNextFetchBatch(ps.fetchList, maxFetchBatch, func(bid types.BlockID) syncdl.FetchCandidateFacts {
 		if stopHeight, configured := ss.configuredStopHeight(); configured && bid.Num > stopHeight {
 			return syncdl.FetchCandidateFacts{KnownOrRequested: true}
 		}
@@ -1547,8 +1547,8 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState, effectiveTipNum u
 		}
 		return facts
 	})
-	syncdl.ApplyNextFetchBatchPlan(plan, syncNextFetchBatchApplier{peerState: ps})
-	return plan.Batch
+	ps.fetchList = remaining
+	return batch
 }
 
 func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
@@ -2311,14 +2311,6 @@ func (a syncRetryAssignmentApplier) AppendAssignedRetries(ids []types.BlockID) {
 
 func (a syncRetryAssignmentApplier) ReplaceRetryList(ids []types.BlockID) {
 	a.service.retryList = ids
-}
-
-type syncNextFetchBatchApplier struct {
-	peerState *syncPeerState
-}
-
-func (a syncNextFetchBatchApplier) ReplaceFetchList(ids []types.BlockID) {
-	a.peerState.fetchList = ids
 }
 
 type syncPostInventorySettlementApplier struct {

@@ -130,6 +130,52 @@ func TestPlanNextFetchBatchKeepsDeferredCandidates(t *testing.T) {
 	}
 }
 
+func TestDrainNextFetchBatchMatchesPlannerWithoutDiagnostics(t *testing.T) {
+	candidates := []types.BlockID{queueID(1), queueID(2), queueID(3), queueID(4)}
+	classify := func(bid types.BlockID) FetchCandidateFacts {
+		switch bid.Num {
+		case 2:
+			return FetchCandidateFacts{Deferred: true}
+		case 3:
+			return FetchCandidateFacts{KnownOrRequested: true}
+		default:
+			return FetchCandidateFacts{ReservedPath: true}
+		}
+	}
+	batch, remaining := DrainNextFetchBatch(candidates, 1, classify)
+	if got, want := blockNums(batch), []uint64{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("batch nums = %v, want %v", got, want)
+	}
+	if got, want := blockNums(remaining), []uint64{2, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("remaining nums = %v, want %v", got, want)
+	}
+}
+
+func BenchmarkNextFetchBatchPlanning(b *testing.B) {
+	const candidates = 128
+	seed := make([]types.BlockID, candidates)
+	for i := range seed {
+		seed[i] = queueID(uint64(i + 1))
+	}
+	classify := func(bid types.BlockID) FetchCandidateFacts {
+		return FetchCandidateFacts{ReservedPath: bid.Num%7 != 0, Deferred: bid.Num%7 == 0}
+	}
+	b.Run("diagnostic", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			queue := append([]types.BlockID(nil), seed...)
+			_ = PlanNextFetchBatch(queue, 64, classify)
+		}
+	})
+	b.Run("drain", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			queue := append([]types.BlockID(nil), seed...)
+			_, _ = DrainNextFetchBatch(queue, 64, classify)
+		}
+	})
+}
+
 func TestPlanNextFetchBatchKeepsCandidatesWhenMaxInvalid(t *testing.T) {
 	candidates := []types.BlockID{queueID(1)}
 	got := PlanNextFetchBatch(candidates, 0, func(types.BlockID) FetchCandidateFacts {
