@@ -104,3 +104,48 @@ func TestHeavyWorkGateShortLeaseDoesNotStartCooldown(t *testing.T) {
 		t.Fatal("long lease did not start cooldown")
 	}
 }
+
+func TestHeavyWorkGatePerLeaseCooldownOverride(t *testing.T) {
+	now := time.Unix(3_000, 0)
+	gate := NewHeavyWorkGateWithCooldown(15 * time.Second)
+	gate.now = func() time.Time { return now }
+
+	release, ok := gate.TryAcquireWithCooldown(3 * time.Second)
+	if !ok {
+		t.Fatal("override acquisition failed")
+	}
+	release()
+	if got := gate.CooldownRemaining(); got != 3*time.Second {
+		t.Fatalf("override cooldown remaining = %s, want 3s", got)
+	}
+	if _, ok := gate.TryAcquire(); ok {
+		t.Fatal("default acquisition bypassed existing override cooldown")
+	}
+	now = now.Add(3 * time.Second)
+	release, ok = gate.TryAcquire()
+	if !ok {
+		t.Fatal("default acquisition failed after override cooldown")
+	}
+	release()
+	if got := gate.CooldownRemaining(); got != 15*time.Second {
+		t.Fatalf("default cooldown remaining = %s, want 15s", got)
+	}
+}
+
+func TestHeavyWorkGateOverrideWorksWithNoDefaultCooldown(t *testing.T) {
+	now := time.Unix(4_000, 0)
+	gate := NewHeavyWorkGate()
+	gate.now = func() time.Time { return now }
+
+	release, ok := gate.TryAcquireWithCooldown(time.Second)
+	if !ok {
+		t.Fatal("override acquisition failed")
+	}
+	release()
+	if got := gate.CooldownRemaining(); got != time.Second {
+		t.Fatalf("override cooldown remaining = %s, want 1s", got)
+	}
+	if _, ok := gate.TryAcquire(); ok {
+		t.Fatal("gate ignored override cooldown without a default")
+	}
+}

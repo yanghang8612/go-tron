@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"hash/maphash"
 	"io"
 	"math"
 	"os"
@@ -43,6 +44,7 @@ type stateDomainChangeV6Build struct {
 	keyScratch       []byte
 	keyTable         []byte
 	keyMask          uint64
+	keyHashSeed      maphash.Seed
 	dictionaryDigest [sha256.Size]byte
 }
 
@@ -71,7 +73,10 @@ func newStateDomainChangeV6Build(opts etl.Options, dir, base string) (*stateDoma
 		_ = postings.Close()
 		return nil, err
 	}
-	return &stateDomainChangeV6Build{opts: opts, keys: keys, postings: postings, dictionary: dictionary, dictName: dictName, cache: make(map[int][][]byte)}, nil
+	return &stateDomainChangeV6Build{
+		opts: opts, keys: keys, postings: postings, dictionary: dictionary,
+		dictName: dictName, cache: make(map[int][][]byte), keyHashSeed: maphash.MakeSeed(),
+	}, nil
 }
 
 func (b *stateDomainChangeV6Build) Close() {
@@ -100,7 +105,9 @@ func (b *stateDomainChangeV6Build) CollectKey(change *rawdb.StateDomainChange) e
 	if len(b.keyScratch) > math.MaxUint16 {
 		return fmt.Errorf("snapshots: V6 logical key length %d exceeds uint16", len(b.keyScratch))
 	}
-	return b.keys.Put(b.keyScratch, nil)
+	return b.keys.PutEncoded(len(b.keyScratch), 0, func(key, _ []byte) {
+		copy(key, b.keyScratch)
+	})
 }
 
 type stateDomainChangeV6DictionaryWriter struct {
@@ -245,7 +252,7 @@ func (b *stateDomainChangeV6Build) buildKeyTable() error {
 		if !useTable {
 			return nil
 		}
-		token := sha256.Sum256(key)
+		token := stateDomainChangeV6BuildKeyToken(b.keyHashSeed, key)
 		slot := binary.LittleEndian.Uint64(token[:8]) & b.keyMask
 		for probes := uint64(0); probes <= b.keyMask; probes++ {
 			off := slot * 16
@@ -255,7 +262,7 @@ func (b *stateDomainChangeV6Build) buildKeyTable() error {
 				binary.BigEndian.PutUint32(b.keyTable[off+12:off+16], keyID+1)
 				return nil
 			}
-			if bytes.Equal(b.keyTable[off:off+12], token[:12]) {
+			if bytes.Equal(b.keyTable[off:off+12], token[:]) {
 				return errors.New("snapshots: V6 logical-key fingerprint collision")
 			}
 			slot = (slot + 1) & b.keyMask
@@ -317,7 +324,7 @@ func (b *stateDomainChangeV6Build) KeyID(key []byte) (uint32, error) {
 		return 0, errors.New("snapshots: nil V6 dictionary")
 	}
 	if len(b.keyTable) != 0 {
-		token := sha256.Sum256(key)
+		token := stateDomainChangeV6BuildKeyToken(b.keyHashSeed, key)
 		slot := binary.LittleEndian.Uint64(token[:8]) & b.keyMask
 		for probes := uint64(0); probes <= b.keyMask; probes++ {
 			off := slot * 16
@@ -325,7 +332,7 @@ func (b *stateDomainChangeV6Build) KeyID(key []byte) (uint32, error) {
 			if id == 0 {
 				break
 			}
-			if bytes.Equal(b.keyTable[off:off+12], token[:12]) {
+			if bytes.Equal(b.keyTable[off:off+12], token[:]) {
 				return id - 1, nil
 			}
 			slot = (slot + 1) & b.keyMask
@@ -354,14 +361,25 @@ func (b *stateDomainChangeV6Build) CollectPosting(keyID uint32, txNum, offset, r
 	if b == nil || b.postings == nil || recordIndex > math.MaxUint32 || offset > stateDomainChangeBinaryAccessorV5MaxOffset {
 		return errors.New("snapshots: invalid V6 posting")
 	}
-	var key [8]byte
-	binary.BigEndian.PutUint32(key[:4], keyID)
-	binary.BigEndian.PutUint32(key[4:], uint32(recordIndex))
-	var value [stateDomainChangeBinaryAccessorV6PostingSize]byte
-	binary.BigEndian.PutUint64(value[:8], txNum)
-	_ = putStateDomainChangeBinaryAccessorV5Offset(value[8:14], offset)
-	binary.BigEndian.PutUint32(value[14:18], uint32(recordIndex))
-	return b.postings.Put(key[:], value[:])
+	return b.postings.PutEncoded(8, stateDomainChangeBinaryAccessorV6PostingSize, func(key, value []byte) {
+		binary.BigEndian.PutUint32(key[:4], keyID)
+		binary.BigEndian.PutUint32(key[4:], uint32(recordIndex))
+		binary.BigEndian.PutUint64(value[:8], txNum)
+		_ = putStateDomainChangeBinaryAccessorV5Offset(value[8:14], offset)
+		binary.BigEndian.PutUint32(value[14:18], uint32(recordIndex))
+	})
+}
+
+// stateDomainChangeV6BuildKeyToken is an ephemeral build-time fingerprint.
+// The table never reaches the published file, so a per-process randomized hash
+// avoids the much more expensive cryptographic SHA-256 on every history row.
+// The independent CRC supplies the same 96-bit collision guard used by the old
+// table; an actual collision still fails the build instead of misassigning an
+// accessor key ID.
+func stateDomainChangeV6BuildKeyToken(seed maphash.Seed, key []byte) (token [12]byte) {
+	binary.LittleEndian.PutUint64(token[:8], maphash.Bytes(seed, key))
+	binary.BigEndian.PutUint32(token[8:], crc32.ChecksumIEEE(key))
+	return token
 }
 
 type stateDomainChangeV6PostingWriter struct {

@@ -88,6 +88,11 @@ type Config struct {
 	// ordered SnapshotLifecycle still runs freezer/prune maintenance after every
 	// published batch. Zero preserves the fixed-interval behavior.
 	CatchupUnthrottledLagBlocks uint64
+	// CatchupHeavyWorkCooldown shortens the recovery window installed after an
+	// accelerated history build. It does not bypass a lease or cooldown already
+	// in force. Zero keeps the HeavyWorkGate default, which preserves the normal
+	// recovery window near the tip and for every other maintenance subsystem.
+	CatchupHeavyWorkCooldown time.Duration
 	// HeavyWorkGate prevents history/accessor construction from overlapping
 	// optional freezer compression and index maintenance in the same process.
 	// Losing non-blocking admission defers the pass to its normal cadence.
@@ -181,22 +186,24 @@ func (r PassResult) NeedsCatchup() bool {
 
 // Stats is a thread-safe snapshot of lifecycle progress.
 type Stats struct {
-	PassesCompleted          uint64
-	PassErrors               uint64
-	SegmentsBuilt            uint64
-	SegmentsCompacted        uint64
-	CompactionMerges         uint64
-	CompactionCatchupDefers  uint64
-	BytesBuilt               uint64
-	LastSolidified           uint64
-	LastCutoffBlock          uint64
-	LastEligibleCutoffBlock  uint64
-	LastPublishedBlock       uint64
-	LastLagBlocks            uint64
-	LastVisibleTxEnd         uint64
-	LastFromTxNum            uint64
-	LastToTxNum              uint64
-	LastPassDuration         time.Duration
+	PassesCompleted         uint64
+	PassErrors              uint64
+	SegmentsBuilt           uint64
+	SegmentsCompacted       uint64
+	CompactionMerges        uint64
+	CompactionCatchupDefers uint64
+	BytesBuilt              uint64
+	LastSolidified          uint64
+	LastCutoffBlock         uint64
+	LastEligibleCutoffBlock uint64
+	LastPublishedBlock      uint64
+	LastLagBlocks           uint64
+	LastVisibleTxEnd        uint64
+	LastFromTxNum           uint64
+	LastToTxNum             uint64
+	LastPassDuration        time.Duration
+	// LastBuildDuration is the duration of the most recent successful history
+	// build, not the eligibility-check latency of a later deferred pass.
 	LastBuildDuration        time.Duration
 	LastCompactionDuration   time.Duration
 	LastCompactionMerges     uint64
@@ -417,6 +424,9 @@ func (c Config) validate() error {
 	if c.BatchBlocks == 0 {
 		return errors.New("snapshots: cold builder batch blocks is zero")
 	}
+	if c.CatchupHeavyWorkCooldown < 0 {
+		return fmt.Errorf("snapshots: invalid catch-up heavy-work cooldown %s", c.CatchupHeavyWorkCooldown)
+	}
 	if c.HistoryDataset == "" {
 		c.HistoryDataset = SegmentDatasetStateDomainChange
 	}
@@ -475,6 +485,7 @@ func (r *Runner) Start() error {
 			"batchBlocks", r.cfg.BatchBlocks,
 			"batchTxNums", r.cfg.BatchTxNums,
 			"catchupBuildMinInterval", r.cfg.CatchupBuildMinInterval,
+			"catchupHeavyWorkCooldown", r.cfg.CatchupHeavyWorkCooldown,
 			"sharedHeavyWorkGate", r.cfg.HeavyWorkGate != nil,
 			"compactMaxSteps", r.cfg.CompactMaxSteps,
 			"sectionBloomBuild", r.cfg.BuildSectionBlooms,
@@ -852,7 +863,13 @@ func (r *Runner) onePass() (PassResult, error) {
 	if fromTxNum > toTxNum {
 		return result, nil
 	}
-	releaseHeavyWork, admitted := r.cfg.HeavyWorkGate.TryAcquire()
+	var releaseHeavyWork func()
+	var admitted bool
+	if result.HistoryAccelerated && r.cfg.CatchupHeavyWorkCooldown > 0 {
+		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquireWithCooldown(r.cfg.CatchupHeavyWorkCooldown)
+	} else {
+		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquire()
+	}
 	if !admitted {
 		result.HistoryDeferred = true
 		result.HistoryGateDeferred = true
@@ -1291,7 +1308,13 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 		r.lastToTxNum.Store(result.ToTxNum)
 	}
 	r.lastPassDuration.Store(int64(time.Since(start)))
-	r.lastBuildDuration.Store(int64(result.BuildDuration))
+	// A rate/resource-deferred pass only measured a cheap eligibility check.
+	// Preserve the duration of the last successful history build instead of
+	// overwriting it with that no-op latency, which made the production metric
+	// look three orders of magnitude faster than the actual cold build.
+	if result.Built {
+		r.lastBuildDuration.Store(int64(result.BuildDuration))
+	}
 	r.lastCompactionDuration.Store(int64(result.CompactionDuration))
 	r.lastCompactionMerges.Store(uint64(result.Compaction.MergePasses))
 	r.lastLatestDuration.Store(int64(result.LatestDuration))

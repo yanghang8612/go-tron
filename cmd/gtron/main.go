@@ -46,12 +46,13 @@ import (
 )
 
 const (
-	domainStateReorgWindow       uint64 = 128
-	gtronVersion                        = "0.3.0-dev"
-	runtimeSnapshotETLBuffer            = 256 << 20
-	snapshotCatchupBuildInterval        = time.Minute
-	heavyWorkRecoveryCooldown           = 15 * time.Second
-	heavyWorkCooldownMinDuration        = 250 * time.Millisecond
+	domainStateReorgWindow           uint64 = 128
+	gtronVersion                            = "0.3.0-dev"
+	runtimeSnapshotETLBuffer                = 256 << 20
+	snapshotCatchupBuildInterval            = time.Minute
+	snapshotCatchupHeavyWorkCooldown        = 3 * time.Second
+	heavyWorkRecoveryCooldown               = 15 * time.Second
+	heavyWorkCooldownMinDuration            = 250 * time.Millisecond
 )
 
 var metricsOnce sync.Once
@@ -1079,6 +1080,7 @@ func gtron(ctx *cli.Context) error {
 				ETL:                         snapshotETL,
 				CatchupBuildMinInterval:     snapshotCatchupBuildInterval,
 				CatchupUnthrottledLagBlocks: prunePolicy.HistoryWindow,
+				CatchupHeavyWorkCooldown:    snapshotCatchupHeavyWorkCooldown,
 				HeavyWorkGate:               heavyWorkGate,
 				BuildSectionBlooms:          buildDerivedSnapshots,
 				BuildBalanceTraces:          buildDerivedSnapshots,
@@ -1144,6 +1146,7 @@ func gtron(ctx *cli.Context) error {
 			"etlBatchBytes", snapshotETL.BatchSize,
 			"catchupBuildMinInterval", snapshotCatchupBuildInterval,
 			"catchupUnthrottledLagBlocks", prunePolicy.HistoryWindow,
+			"catchupHeavyWorkCooldown", snapshotCatchupHeavyWorkCooldown,
 			"heavyWorkRecoveryCooldown", heavyWorkRecoveryCooldown,
 			"heavyWorkCooldownMinDuration", heavyWorkCooldownMinDuration,
 			"sharedHeavyWorkGate", true,

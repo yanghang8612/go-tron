@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
@@ -486,6 +487,13 @@ func stateDomainChangeBinaryAccessorV6PostingAt(r io.ReaderAt, h stateDomainChan
 	if _, err := r.ReadAt(raw[:], int64(off)); err != nil {
 		return stateDomainChangeBinaryAccessorV6Posting{}, err
 	}
+	return decodeStateDomainChangeBinaryAccessorV6Posting(raw[:])
+}
+
+func decodeStateDomainChangeBinaryAccessorV6Posting(raw []byte) (stateDomainChangeBinaryAccessorV6Posting, error) {
+	if len(raw) != stateDomainChangeBinaryAccessorV6PostingSize {
+		return stateDomainChangeBinaryAccessorV6Posting{}, errors.New("snapshots: invalid V6 accessor posting size")
+	}
 	offset, err := stateDomainChangeBinaryAccessorV5Offset(raw[8:14])
 	if err != nil {
 		return stateDomainChangeBinaryAccessorV6Posting{}, err
@@ -625,6 +633,10 @@ func checkStateDomainChangeBinaryAccessorV6(r io.ReaderAt, fileSize uint64) erro
 	}
 	var keyCount, postingCount uint64
 	var previous []byte
+	postingBase := uint64(stateDomainChangeBinaryAccessorV6HeaderSize) + h.blockDirLen + h.keyDataLen
+	postingReader := bufio.NewReaderSize(io.NewSectionReader(r, int64(postingBase), int64(h.postingLen)), 1<<20)
+	var postingRaw [stateDomainChangeBinaryAccessorV6PostingSize]byte
+	var expectedPostingOff uint64
 	for blockIndex, block := range blocks {
 		records, err := stateDomainChangeBinaryAccessorV6ReadBlock(r, fileSize, h, block, uint32(blockIndex*stateDomainChangeBinaryAccessorV6BlockKeys))
 		if err != nil {
@@ -634,9 +646,15 @@ func checkStateDomainChangeBinaryAccessorV6(r io.ReaderAt, fileSize uint64) erro
 			if previous != nil && bytes.Compare(previous, record.key) >= 0 {
 				return errors.New("snapshots: V6 accessor dictionary is not sorted")
 			}
+			if record.postingOff != expectedPostingOff {
+				return errors.New("snapshots: V6 accessor postings are not contiguous")
+			}
 			var last stateDomainChangeBinaryAccessorV6Posting
 			for i := uint32(0); i < record.postings; i++ {
-				posting, err := stateDomainChangeBinaryAccessorV6PostingAt(r, h, record, i)
+				if _, err := io.ReadFull(postingReader, postingRaw[:]); err != nil {
+					return err
+				}
+				posting, err := decodeStateDomainChangeBinaryAccessorV6Posting(postingRaw[:])
 				if err != nil {
 					return err
 				}
@@ -649,12 +667,16 @@ func checkStateDomainChangeBinaryAccessorV6(r io.ReaderAt, fileSize uint64) erro
 				last = posting
 			}
 			postingCount += uint64(record.postings)
+			expectedPostingOff += uint64(record.postings) * stateDomainChangeBinaryAccessorV6PostingSize
 			keyCount++
 			previous = record.key
 		}
 	}
 	if keyCount != h.keyCount || postingCount != h.recordCount {
 		return fmt.Errorf("snapshots: V6 accessor counts keys=%d/%d postings=%d/%d", keyCount, h.keyCount, postingCount, h.recordCount)
+	}
+	if expectedPostingOff != h.postingLen {
+		return errors.New("snapshots: V6 accessor posting length mismatch")
 	}
 	return nil
 }

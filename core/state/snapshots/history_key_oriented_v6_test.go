@@ -2,13 +2,40 @@ package snapshots
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"hash/crc32"
+	"hash/maphash"
 	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
+
+var stateDomainChangeV6TokenBenchmarkSink uint64
+
+func BenchmarkStateDomainChangeV6BuildKeyToken(b *testing.B) {
+	key := bytes.Repeat([]byte("state-domain-owner-generation-key/"), 3)
+	b.Run("sha256-96", func(b *testing.B) {
+		b.ReportAllocs()
+		var sink uint64
+		for i := 0; i < b.N; i++ {
+			token := sha256.Sum256(key)
+			sink ^= binary.LittleEndian.Uint64(token[:8])
+		}
+		stateDomainChangeV6TokenBenchmarkSink = sink
+	})
+	b.Run("maphash-crc96", func(b *testing.B) {
+		b.ReportAllocs()
+		seed := maphash.MakeSeed()
+		var sink uint64
+		for i := 0; i < b.N; i++ {
+			token := stateDomainChangeV6BuildKeyToken(seed, key)
+			sink ^= binary.LittleEndian.Uint64(token[:8])
+		}
+		stateDomainChangeV6TokenBenchmarkSink = sink
+	})
+}
 
 func TestStateDomainChangeKeyOrientedV6RoundTripAndLookups(t *testing.T) {
 	changes := normalizeStateDomainChangesForBinary(buildHistoryStructs(80, 12))
@@ -156,6 +183,27 @@ func TestStateDomainChangeKeyOrientedV6LookupReadsLogarithmicDirectory(t *testin
 	}
 	if reader.reads > 48 {
 		t.Fatalf("V6 lookup used %d accessor reads for %d keys, want logarithmic directory reads", reader.reads, count)
+	}
+}
+
+func TestStateDomainChangeKeyOrientedV6CheckStreamsPostings(t *testing.T) {
+	const count = 32_768
+	entries := make([]stateDomainChangeBinaryAccessorEntry, count)
+	for i := range entries {
+		entries[i] = stateDomainChangeBinaryAccessorEntry{
+			key: []byte("shared-key"), txNum: uint64(i), offset: uint64(i + 1), recordIndex: uint64(i),
+		}
+	}
+	accessor, _, err := encodeStateDomainChangeBinaryAccessorV6(0, count-1, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &countingStateDomainReaderAt{reader: bytes.NewReader(accessor)}
+	if err := checkStateDomainChangeBinaryAccessorV6(reader, uint64(len(accessor))); err != nil {
+		t.Fatal(err)
+	}
+	if reader.reads > 32 {
+		t.Fatalf("V6 check used %d reads for %d postings, want buffered sequential reads", reader.reads, count)
 	}
 }
 

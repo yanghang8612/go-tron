@@ -59,6 +59,25 @@ func (g *HeavyWorkGate) TryAcquire() (release func(), ok bool) {
 	if g == nil {
 		return func() {}, true
 	}
+	return g.tryAcquire(g.cooldown)
+}
+
+// TryAcquireWithCooldown is TryAcquire with a per-lease recovery window. It
+// is intended for bounded catch-up work whose backlog is large enough to use a
+// shorter recovery window than ordinary background maintenance. The override
+// only controls the cooldown installed when this lease is released: an active
+// lease and any recovery window already in force are still honored.
+func (g *HeavyWorkGate) TryAcquireWithCooldown(cooldown time.Duration) (release func(), ok bool) {
+	if g == nil {
+		return func() {}, true
+	}
+	if cooldown < 0 {
+		cooldown = 0
+	}
+	return g.tryAcquire(cooldown)
+}
+
+func (g *HeavyWorkGate) tryAcquire(recoveryCooldown time.Duration) (release func(), ok bool) {
 	now := g.currentTime()
 	if g.coolingDown(now) {
 		return nil, false
@@ -76,8 +95,8 @@ func (g *HeavyWorkGate) TryAcquire() (release func(), ok bool) {
 		return func() {
 			once.Do(func() {
 				now := g.currentTime()
-				if g.cooldown > 0 && now.Sub(acquiredAt) >= g.cooldownAfter {
-					g.nextAllowed.Store(now.Add(g.cooldown).UnixNano())
+				if recoveryCooldown > 0 && now.Sub(acquiredAt) >= g.cooldownAfter {
+					g.nextAllowed.Store(now.Add(recoveryCooldown).UnixNano())
 				}
 				<-g.token
 			})
@@ -95,7 +114,7 @@ func (g *HeavyWorkGate) currentTime() time.Time {
 }
 
 func (g *HeavyWorkGate) coolingDown(now time.Time) bool {
-	if g == nil || g.cooldown <= 0 {
+	if g == nil {
 		return false
 	}
 	return now.UnixNano() < g.nextAllowed.Load()
@@ -106,7 +125,7 @@ func (g *HeavyWorkGate) coolingDown(now time.Time) bool {
 // the gate is not cooling down; an independently active lease has no known
 // completion time and should still be retried on the caller's normal cadence.
 func (g *HeavyWorkGate) CooldownRemaining() time.Duration {
-	if g == nil || g.cooldown <= 0 {
+	if g == nil {
 		return 0
 	}
 	remaining := time.Unix(0, g.nextAllowed.Load()).Sub(g.currentTime())

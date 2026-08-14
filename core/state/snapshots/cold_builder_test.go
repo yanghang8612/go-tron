@@ -608,6 +608,87 @@ func TestColdBuilderDefersWhenHeavyWorkGateIsBusy(t *testing.T) {
 	}
 }
 
+func TestColdBuilderAcceleratedBuildUsesShortRecoveryCooldown(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7c)
+	for blockNum := uint64(1); blockNum <= 4; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	gate := maintenance.NewHeavyWorkGateWithCooldown(time.Hour)
+	runner := NewRunner(&coldBuilderChain{
+		db:              db,
+		solidified:      5,
+		syncRemaining:   100,
+		syncRemainingOK: true,
+	}, Config{
+		Dir:                         dir,
+		Enabled:                     true,
+		HistoryWindow:               1,
+		BatchBlocks:                 1,
+		CatchupUnthrottledLagBlocks: 1,
+		CatchupHeavyWorkCooldown:    20 * time.Millisecond,
+		HeavyWorkGate:               gate,
+	})
+
+	first, err := runner.OnePass()
+	if err != nil || !first.Built || !first.HistoryAccelerated {
+		t.Fatalf("first accelerated pass = %+v err=%v", first, err)
+	}
+	deferred, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("cooldown-deferred pass: %v", err)
+	}
+	if !deferred.HistoryGateDeferred || deferred.HistoryRetryAfter <= 0 || deferred.HistoryRetryAfter > 20*time.Millisecond {
+		t.Fatalf("cooldown-deferred pass = %+v, want retry within 20ms", deferred)
+	}
+	time.Sleep(deferred.HistoryRetryAfter + 5*time.Millisecond)
+	second, err := runner.OnePass()
+	if err != nil || !second.Built || !second.HistoryAccelerated {
+		t.Fatalf("second accelerated pass = %+v err=%v", second, err)
+	}
+}
+
+func TestColdBuilderDeferredPassPreservesLastSuccessfulBuildDuration(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7d)
+	for blockNum := uint64(1); blockNum <= 2; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	gate := maintenance.NewHeavyWorkGate()
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 3}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		HistoryWindow: 1,
+		BatchBlocks:   1,
+		HeavyWorkGate: gate,
+	})
+
+	first, err := runner.OnePass()
+	if err != nil || !first.Built {
+		t.Fatalf("successful pass = %+v err=%v", first, err)
+	}
+	want := runner.Snapshot().LastBuildDuration
+	if want <= 0 {
+		t.Fatalf("successful build duration = %s, want positive", want)
+	}
+	release, ok := gate.TryAcquire()
+	if !ok {
+		t.Fatal("hold maintenance gate")
+	}
+	deferred, err := runner.OnePass()
+	release()
+	if err != nil || !deferred.HistoryGateDeferred || deferred.Built {
+		t.Fatalf("deferred pass = %+v err=%v", deferred, err)
+	}
+	if got := runner.Snapshot().LastBuildDuration; got != want {
+		t.Fatalf("last successful build duration = %s after deferred pass, want %s", got, want)
+	}
+}
+
 func TestColdBuilderLoopDrainsReadyBatchesWithoutIntervalWait(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()

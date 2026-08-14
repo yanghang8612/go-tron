@@ -675,13 +675,15 @@ func collectStateDomainChangeBinaryCompactionSources(dir string, selection histo
 }
 
 func checkStateDomainChangeBinaryCompactionSource(dir string, historyRef, indexRef, accessorRef SegmentRef) error {
+	// History is the only canonical merge input, so protect it with a complete
+	// physical checksum. The index is not read by the merge and only needs the
+	// range header gate below. Keep the accessor's structural check because its
+	// key/posting invariants are an independent corruption signal; V6 performs
+	// that check as one buffered sequential stream rather than one pread per row.
 	if err := checkStateDomainChangeBinarySegmentChecksum(dir, historyRef); err != nil {
 		return err
 	}
-	if err := checkStateDomainChangeBinaryIndexChecksum(dir, indexRef); err != nil {
-		return err
-	}
-	if err := CheckStateDomainChangeAccessorSegment(dir, accessorRef); err != nil {
+	if err := checkStateDomainChangeBinaryAccessorLayoutContext(context.Background(), dir, accessorRef); err != nil {
 		return err
 	}
 
@@ -2072,6 +2074,14 @@ func checkStateDomainChangeBinaryAccessorChecksumContext(ctx context.Context, di
 }
 
 func checkStateDomainChangeBinaryAccessorContext(ctx context.Context, dir string, ref SegmentRef) error {
+	return checkStateDomainChangeBinaryAccessorValidationContext(ctx, dir, ref, true)
+}
+
+func checkStateDomainChangeBinaryAccessorLayoutContext(ctx context.Context, dir string, ref SegmentRef) error {
+	return checkStateDomainChangeBinaryAccessorValidationContext(ctx, dir, ref, false)
+}
+
+func checkStateDomainChangeBinaryAccessorValidationContext(ctx context.Context, dir string, ref SegmentRef, verifyChecksum bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -2087,7 +2097,7 @@ func checkStateDomainChangeBinaryAccessorContext(ctx context.Context, dir string
 	defer accessorFile.Close()
 	accessorReader := contextReaderAt{ctx: ctx, r: accessorFile}
 
-	if ref.Checksum != "" {
+	if verifyChecksum && ref.Checksum != "" {
 		_, got, err := stateDomainChangeBinaryFileMetadataContext(ctx, filepath.Join(dir, ref.Path))
 		if err != nil {
 			return err
