@@ -69,6 +69,42 @@ func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T)
 	}
 }
 
+func TestSnapshotLifecycleRunsStateChangeIndexSweepOnlyAfterCatchupIsIdle(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	chain := &fakePruneChain{db: db, solidified: 2, syncRemaining: 100, syncRemainingOK: true}
+	var calls int
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir: dir, Enabled: true, Interval: time.Hour, HistoryWindow: 1,
+		},
+		Pruner: PrunerConfig{
+			Policy: SnapPolicy(1, 1), Interval: time.Hour, SnapshotDir: dir,
+		},
+		StateChangeIndexPrune: func(context.Context) (*rawdb.StateChangePostingPruneResult, error) {
+			calls++
+			return &rawdb.StateChangePostingPruneResult{PostingRowsDeleted: 1}, nil
+		},
+	})
+	deferred, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deferred.StateChangeIndexDeferred || deferred.StateChangeIndexPrune != nil || calls != 0 {
+		t.Fatalf("active-sync sweep = result:%+v calls:%d, want deferred", deferred, calls)
+	}
+	chain.syncRemaining = 0
+	chain.syncRemainingOK = false
+	completed, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.StateChangeIndexDeferred || completed.StateChangeIndexPrune == nil || calls != 1 {
+		t.Fatalf("idle caught-up sweep = result:%+v calls:%d, want one run", completed, calls)
+	}
+}
+
 func TestArchiveLifecycleBuildsColdHistoryBeforePruningDuplicateHotRows(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()

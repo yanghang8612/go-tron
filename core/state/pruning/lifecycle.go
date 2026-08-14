@@ -15,6 +15,7 @@ import (
 var lifecycleLog = gtronlog.NewModule("core/state/lifecycle")
 
 var errRetiredPruneDeferredForCatchup = errors.New("pruning: retired-file verification deferred for sync catch-up")
+var errStateChangeIndexPruneDeferredForCatchup = errors.New("pruning: state-change index sweep deferred for sync catch-up")
 
 // SnapshotLifecycleConfig wires the Erigon-style cold/hot lifecycle together:
 // build and publish cold history files, compact old history files, then prune
@@ -26,7 +27,11 @@ type SnapshotLifecycleConfig struct {
 	ChainLookupPrune  ChainLookupPruneFunc
 	SectionBloomPrune SectionBloomPruneFunc
 	BalanceTracePrune BalanceTracePruneFunc
-	RetiredPrune      RetiredPruneFunc
+	// StateChangeIndexPrune performs the infrequent sequential reclamation of
+	// immutable posting frames after cold history and hot pruning have caught
+	// up. It is never admitted while historical sync is active.
+	StateChangeIndexPrune StateChangeIndexPruneFunc
+	RetiredPrune          RetiredPruneFunc
 	// DeferRetiredPruneWhileSyncing postpones the full active-manifest
 	// verification and retired-file deletion gate while historical sync is
 	// active. The sync-complete lifecycle wake runs it once the importer is idle.
@@ -37,33 +42,37 @@ type SnapshotLifecycleConfig struct {
 type ChainLookupPruneFunc func() (*snapshots.PruneHotChainLookupResult, error)
 type SectionBloomPruneFunc func() (*snapshots.PruneHotSectionBloomResult, error)
 type BalanceTracePruneFunc func() (*snapshots.PruneHotBalanceTraceResult, error)
+type StateChangeIndexPruneFunc func(context.Context) (*rawdb.StateChangePostingPruneResult, error)
 type RetiredPruneFunc func(context.Context, snapshots.ActiveManifestVerifier) (*snapshots.PruneRetiredSegmentFilesResult, error)
 type ChainFreezerBuildFunc func() (snapshots.ChainFreezerSnapshotPassResult, error)
 
 // SnapshotLifecyclePass is the result of one ordered lifecycle pass.
 type SnapshotLifecyclePass struct {
-	Snapshot          snapshots.PassResult
-	ChainFreezerBuild snapshots.ChainFreezerSnapshotPassResult
-	Prune             Stats
-	ChainLookupPrune  *snapshots.PruneHotChainLookupResult
-	SectionBloomPrune *snapshots.PruneHotSectionBloomResult
-	BalanceTracePrune *snapshots.PruneHotBalanceTraceResult
-	RetiredPrune      *snapshots.PruneRetiredSegmentFilesResult
-	RetiredDeferred   bool
+	Snapshot                 snapshots.PassResult
+	ChainFreezerBuild        snapshots.ChainFreezerSnapshotPassResult
+	Prune                    Stats
+	ChainLookupPrune         *snapshots.PruneHotChainLookupResult
+	SectionBloomPrune        *snapshots.PruneHotSectionBloomResult
+	BalanceTracePrune        *snapshots.PruneHotBalanceTraceResult
+	StateChangeIndexPrune    *rawdb.StateChangePostingPruneResult
+	StateChangeIndexDeferred bool
+	RetiredPrune             *snapshots.PruneRetiredSegmentFilesResult
+	RetiredDeferred          bool
 }
 
 // SnapshotLifecycle owns the state snapshot builder/compactor and hot pruner
 // under one node.Lifecycle, so their progress advances in one ordered pass
 // instead of via independent background loops.
 type SnapshotLifecycle struct {
-	builder           *snapshots.Runner
-	pruner            *Pruner
-	chainFreezerBuild ChainFreezerBuildFunc
-	chainLookupPrune  ChainLookupPruneFunc
-	sectionBloomPrune SectionBloomPruneFunc
-	balanceTracePrune BalanceTracePruneFunc
-	retiredPrune      RetiredPruneFunc
-	deferRetiredPrune bool
+	builder               *snapshots.Runner
+	pruner                *Pruner
+	chainFreezerBuild     ChainFreezerBuildFunc
+	chainLookupPrune      ChainLookupPruneFunc
+	sectionBloomPrune     SectionBloomPruneFunc
+	balanceTracePrune     BalanceTracePruneFunc
+	stateChangeIndexPrune StateChangeIndexPruneFunc
+	retiredPrune          RetiredPruneFunc
+	deferRetiredPrune     bool
 
 	interval time.Duration
 	ctx      context.Context
@@ -95,20 +104,21 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 		builder = snapshots.NewRunner(snapshotChainSource{chain: chain}, cfg.Snapshot)
 	}
 	return &SnapshotLifecycle{
-		builder:           builder,
-		pruner:            NewPruner(chain, cfg.Pruner),
-		chainFreezerBuild: cfg.ChainFreezerBuild,
-		chainLookupPrune:  cfg.ChainLookupPrune,
-		sectionBloomPrune: cfg.SectionBloomPrune,
-		balanceTracePrune: cfg.BalanceTracePrune,
-		retiredPrune:      cfg.RetiredPrune,
-		deferRetiredPrune: cfg.DeferRetiredPruneWhileSyncing,
-		interval:          interval,
-		ctx:               ctx,
-		cancel:            cancel,
-		wake:              make(chan struct{}, 1),
-		quit:              make(chan struct{}),
-		done:              make(chan struct{}),
+		builder:               builder,
+		pruner:                NewPruner(chain, cfg.Pruner),
+		chainFreezerBuild:     cfg.ChainFreezerBuild,
+		chainLookupPrune:      cfg.ChainLookupPrune,
+		sectionBloomPrune:     cfg.SectionBloomPrune,
+		balanceTracePrune:     cfg.BalanceTracePrune,
+		stateChangeIndexPrune: cfg.StateChangeIndexPrune,
+		retiredPrune:          cfg.RetiredPrune,
+		deferRetiredPrune:     cfg.DeferRetiredPruneWhileSyncing,
+		interval:              interval,
+		ctx:                   ctx,
+		cancel:                cancel,
+		wake:                  make(chan struct{}, 1),
+		quit:                  make(chan struct{}),
+		done:                  make(chan struct{}),
 	}
 }
 
@@ -137,6 +147,7 @@ func (l *SnapshotLifecycle) Start() error {
 		"chainLookupPrune", l.chainLookupPrune != nil,
 		"sectionBloomPrune", l.sectionBloomPrune != nil,
 		"balanceTracePrune", l.balanceTracePrune != nil,
+		"stateChangeIndexPrune", l.stateChangeIndexPrune != nil,
 		"retiredPrune", l.retiredPrune != nil,
 		"deferRetiredPruneWhileSyncing", l.deferRetiredPrune,
 		"mode", l.pruner.cfg.Policy.Mode,
@@ -237,6 +248,37 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			return out, err
 		}
 		out.Prune = stats
+	}
+	// Packed posting frames are immutable and intentionally remain after the
+	// per-block hot changeset prune. Sweep them only after the cold builder has
+	// reached its verified cutoff and network catch-up is idle. If sync becomes
+	// active during the scan, cancel promptly; partial frame deletions are
+	// idempotent and the durable manifest cursor advances only on full success.
+	if l.stateChangeIndexPrune != nil && l.builder != nil &&
+		!out.Snapshot.HistoryDeferred && !out.Snapshot.HistoryGateDeferred &&
+		out.Snapshot.EligibleCutoffBlock > 0 &&
+		out.Snapshot.PublishedBlock >= out.Snapshot.EligibleCutoffBlock {
+		out.StateChangeIndexDeferred = l.pruner != nil && l.pruner.syncActive()
+		if !out.StateChangeIndexDeferred {
+			pruneCtx := l.ctx
+			stopPruneWatch := func() {}
+			if l.pruner != nil {
+				pruneCtx, stopPruneWatch = l.pruner.contextWithSyncActiveCancellation(l.ctx, errStateChangeIndexPruneDeferredForCatchup)
+			}
+			result, err := l.stateChangeIndexPrune(pruneCtx)
+			stopPruneWatch()
+			if err != nil {
+				if errors.Is(err, context.Canceled) && errors.Is(context.Cause(pruneCtx), errStateChangeIndexPruneDeferredForCatchup) {
+					out.StateChangeIndexDeferred = true
+				} else if !errors.Is(err, context.Canceled) || l.ctx.Err() == nil {
+					return out, err
+				} else {
+					stopErr = err
+				}
+			} else {
+				out.StateChangeIndexPrune = result
+			}
+		}
 	}
 	if l.chainLookupPrune != nil {
 		result, err := l.chainLookupPrune()

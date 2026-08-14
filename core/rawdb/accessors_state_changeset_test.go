@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -1603,35 +1604,50 @@ func BenchmarkDeleteStateDomainChangesBlockRange(b *testing.B) {
 		blocks       = 256
 		rowsPerBlock = 16
 	)
-	b.ReportAllocs()
-	b.ReportMetric(blocks*rowsPerBlock, "changes/op")
-	for b.Loop() {
-		b.StopTimer()
-		db := ethrawdb.NewMemoryDatabase()
-		for blockNum := uint64(1); blockNum <= blocks; blockNum++ {
-			changes := make([]*StateDomainChange, rowsPerBlock)
-			for i := range changes {
-				changes[i] = &StateDomainChange{
-					BlockNum: blockNum, TxNum: blockNum*rowsPerBlock + uint64(i), Seq: uint64(i + 1),
-					FlatDomain: StateFlatDomainKVLatest,
-					Owner:      common.Address{common.AddressPrefixMainnet, byte(blockNum), byte(i)},
-					Generation: blockNum,
-					Domain:     kvdomains.SystemReward,
-					Key:        []byte{byte(i)},
+	for _, tc := range []struct {
+		name   string
+		staged bool
+	}{
+		{name: "point-read-tail"},
+		{name: "indexed-watermark", staged: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ReportMetric(blocks*rowsPerBlock, "changes/op")
+			for b.Loop() {
+				b.StopTimer()
+				db := ethrawdb.NewMemoryDatabase()
+				for blockNum := uint64(1); blockNum <= blocks; blockNum++ {
+					changes := make([]*StateDomainChange, rowsPerBlock)
+					for i := range changes {
+						changes[i] = &StateDomainChange{
+							BlockNum: blockNum, TxNum: blockNum*rowsPerBlock + uint64(i), Seq: uint64(i + 1),
+							FlatDomain: StateFlatDomainKVLatest,
+							Owner:      common.Address{common.AddressPrefixMainnet, byte(blockNum), byte(i)},
+							Generation: blockNum,
+							Domain:     kvdomains.SystemReward,
+							Key:        []byte{byte(i)},
+						}
+					}
+					if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if tc.staged {
+					if err := WriteStageProgressWithHash(db, StageStateHistoryIndex, blocks, common.Hash{1}); err != nil {
+						b.Fatal(err)
+					}
+				}
+				blockNums := make([]uint64, blocks)
+				for i := range blockNums {
+					blockNums[i] = uint64(i + 1)
+				}
+				b.StartTimer()
+				if err := DeleteStateDomainChangeBlocks(db, blockNums); err != nil {
+					b.Fatal(err)
 				}
 			}
-			if err := WriteStateDomainChangeBlockRows(db, changes); err != nil {
-				b.Fatal(err)
-			}
-		}
-		blockNums := make([]uint64, blocks)
-		for i := range blockNums {
-			blockNums[i] = uint64(i + 1)
-		}
-		b.StartTimer()
-		if err := DeleteStateDomainChangeBlocks(db, blockNums); err != nil {
-			b.Fatal(err)
-		}
+		})
 	}
 }
 
@@ -1770,6 +1786,52 @@ func TestDeleteStateDomainChangeBlocksDeduplicatesBlockPostings(t *testing.T) {
 	}
 	if ok, err := db.Has(stateChangeSetKey(29, 0)); err != nil || ok {
 		t.Fatalf("packed changeset survived: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestDeleteStateDomainChangeBlocksSkipsIndexedPostingPointReads(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	db := &postingReadCountingStore{KeyValueStore: base}
+	owner := common.Address{common.AddressPrefixMainnet, 0x69}
+	changes := []*StateDomainChange{
+		{BlockNum: 1, TxNum: 1, Seq: 1, FlatDomain: StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte("indexed")},
+		{BlockNum: 2, TxNum: 2, Seq: 1, FlatDomain: StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractStorage, Key: []byte("tail")},
+	}
+	for _, change := range changes {
+		if err := WriteStateDomainChangeBlockRows(db, []*StateDomainChange{change}); err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteStateDomainChangePostingIndex(db, change); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteStageProgressWithHash(db, StageStateHistoryIndex, 1, common.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+	db.postingPresenceReads = 0
+	if err := DeleteStateDomainChangeBlocks(db, []uint64{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if db.postingPresenceReads != 1 {
+		t.Fatalf("posting point reads = %d, want only the unindexed tail", db.postingPresenceReads)
+	}
+	indexedPosting := stateChangePostingKey(stateChangePostingHash(mustStateDomainChangeLatestKey(t, changes[0])), 1)
+	if ok, err := db.Has(indexedPosting); err != nil || !ok {
+		t.Fatalf("indexed packed posting should await ordered sweep: ok=%v err=%v", ok, err)
+	}
+	tailPosting := stateChangePostingKey(stateChangePostingHash(mustStateDomainChangeLatestKey(t, changes[1])), 2)
+	if ok, err := db.Has(tailPosting); err != nil || ok {
+		t.Fatalf("unindexed singleton posting survived: ok=%v err=%v", ok, err)
+	}
+	if got := collectPostingTestBlocks(t, db, owner, []byte("indexed")); len(got) != 0 {
+		t.Fatalf("stale indexed candidate escaped authoritative changeset check: %v", got)
+	}
+	stats, err := PruneStaleStateChangePostingIndexThroughContext(context.Background(), db, 1)
+	if err != nil || stats.PostingRowsDeleted != 1 {
+		t.Fatalf("ordered posting sweep = (%+v,%v), want one stale frame", stats, err)
+	}
+	if ok, err := db.Has(indexedPosting); err != nil || ok {
+		t.Fatalf("indexed posting survived ordered sweep: ok=%v err=%v", ok, err)
 	}
 }
 

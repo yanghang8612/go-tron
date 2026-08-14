@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -204,6 +205,16 @@ func TestPruneStaleStateChangePostingIndexDeletesOnlyFullyStaleFrames(t *testing
 	stats, err = PruneStaleStateChangePostingIndex(db)
 	if err != nil || stats.PostingRowsDeleted != 1 || stats.DirectoryRowsDeleted != 1 {
 		t.Fatalf("stale frame prune = (%+v,%v)", stats, err)
+	}
+}
+
+func TestPruneStaleStateChangePostingIndexThroughContextHonorsCancellation(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stats, err := PruneStaleStateChangePostingIndexThroughContext(ctx, db, 100)
+	if !errors.Is(err, context.Canceled) || stats != (StateChangePostingPruneResult{}) {
+		t.Fatalf("canceled sweep = (%+v,%v), want zero/context.Canceled", stats, err)
 	}
 }
 

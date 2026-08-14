@@ -90,12 +90,13 @@ type ChainIdentity struct {
 }
 
 type Progress struct {
-	LatestBuildTxNum     uint64 `json:"latestBuildTxNum,omitempty"`
-	HistoryBuildTxNum    uint64 `json:"historyBuildTxNum,omitempty"`
-	AccessorBuildTxNum   uint64 `json:"accessorBuildTxNum,omitempty"`
-	CommitmentFlushTxNum uint64 `json:"commitmentFlushTxNum,omitempty"`
-	HotPruneTxNum        uint64 `json:"hotPruneTxNum,omitempty"`
-	HotPruneBlockNum     uint64 `json:"hotPruneBlockNum,omitempty"`
+	LatestBuildTxNum              uint64 `json:"latestBuildTxNum,omitempty"`
+	HistoryBuildTxNum             uint64 `json:"historyBuildTxNum,omitempty"`
+	AccessorBuildTxNum            uint64 `json:"accessorBuildTxNum,omitempty"`
+	CommitmentFlushTxNum          uint64 `json:"commitmentFlushTxNum,omitempty"`
+	HotPruneTxNum                 uint64 `json:"hotPruneTxNum,omitempty"`
+	HotPruneBlockNum              uint64 `json:"hotPruneBlockNum,omitempty"`
+	StateChangeIndexPruneBlockNum uint64 `json:"stateChangeIndexPruneBlockNum,omitempty"`
 }
 
 type SegmentRef struct {

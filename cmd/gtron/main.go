@@ -1065,6 +1065,11 @@ func gtron(ctx *cli.Context) error {
 				return statesnapshots.PruneHotBalanceTracesWithProgress(db, stateSnapshotDir, manifest)
 			}
 		}
+		stateChangeIndexPruner := statepruning.StateChangeIndexPruner{
+			DB:            db,
+			SnapshotDir:   stateSnapshotDir,
+			HeavyWorkGate: heavyWorkGate,
+		}
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
 				Dir:                         stateSnapshotDir,
@@ -1094,10 +1099,11 @@ func gtron(ctx *cli.Context) error {
 				SnapshotDir: stateSnapshotDir,
 				MaxSyncLag:  domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
 			},
-			ChainFreezerBuild: chainFreezerSnapshotBuild,
-			ChainLookupPrune:  chainLookupPrune,
-			SectionBloomPrune: sectionBloomPrune,
-			BalanceTracePrune: balanceTracePrune,
+			ChainFreezerBuild:     chainFreezerSnapshotBuild,
+			ChainLookupPrune:      chainLookupPrune,
+			SectionBloomPrune:     sectionBloomPrune,
+			BalanceTracePrune:     balanceTracePrune,
+			StateChangeIndexPrune: stateChangeIndexPruner.OnePass,
 			// Retired-file deletion verifies the complete active manifest first.
 			// Keep that CPU/IO-heavy safety gate off the historical import path;
 			// AddSyncCompleteHook below wakes the lifecycle as soon as sync ends.
@@ -1128,6 +1134,7 @@ func gtron(ctx *cli.Context) error {
 			"chainLookupPrune", chainLookupPrune != nil,
 			"sectionBloomPrune", sectionBloomPrune != nil,
 			"balanceTracePrune", balanceTracePrune != nil,
+			"stateChangeIndexPrune", true,
 			"retiredPrune", true,
 			"dataset", historyDataset,
 			"historyWindow", prunePolicy.HistoryWindow,

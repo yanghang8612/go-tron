@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -469,11 +470,41 @@ type StateChangePostingPruneResult struct {
 // frames. Mixed live/stale frames remain unchanged and are filtered exactly by
 // the mandatory changeset collision check.
 func PruneStaleStateChangePostingIndex(db ethdb.KeyValueStore) (StateChangePostingPruneResult, error) {
+	return pruneStaleStateChangePostingIndex(context.Background(), db, 0, false)
+}
+
+// PruneStaleStateChangePostingIndexContext is the cancellable form used by
+// online maintenance when no authoritative prune watermark is available.
+func PruneStaleStateChangePostingIndexContext(ctx context.Context, db ethdb.KeyValueStore) (StateChangePostingPruneResult, error) {
+	return pruneStaleStateChangePostingIndex(ctx, db, 0, false)
+}
+
+// PruneStaleStateChangePostingIndexThroughContext reclaims immutable posting
+// frames after hot StateDomainChanges have durably been pruned through the
+// inclusive block watermark. Frames ending at or below the watermark can be
+// deleted by one sequential scan without random changeset reads. A frame that
+// crosses the watermark is retained if any newer authoritative changeset is
+// still live.
+func PruneStaleStateChangePostingIndexThroughContext(ctx context.Context, db ethdb.KeyValueStore, prunedThrough uint64) (StateChangePostingPruneResult, error) {
+	return pruneStaleStateChangePostingIndex(ctx, db, prunedThrough, true)
+}
+
+func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueStore, prunedThrough uint64, hasPruneWatermark bool) (StateChangePostingPruneResult, error) {
 	var result StateChangePostingPruneResult
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	postingIt := db.NewIterator(stateChangePostingPrefix, nil)
 	batch := db.NewBatch()
 	defer batch.Close()
 	for postingIt.Next() {
+		if err := ctx.Err(); err != nil {
+			postingIt.Release()
+			return result, err
+		}
 		key := postingIt.Key()
 		if len(key) != len(stateChangePostingPrefix)+sha256.Size+8 {
 			postingIt.Release()
@@ -488,25 +519,40 @@ func PruneStaleStateChangePostingIndex(db ethdb.KeyValueStore) (StateChangePosti
 		}
 		wantHash := key[len(stateChangePostingPrefix) : len(stateChangePostingPrefix)+sha256.Size]
 		live := false
-		for _, blockNum := range blocks {
-			err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
-				latestKey, err := stateDomainChangeLatestKey(change)
+		// Hot-prune progress advances only after all authoritative changesets in
+		// the covered prefix have been deleted. Trust that durable boundary and
+		// reserve point/range reads for the at most one crossing frame per hash.
+		if !hasPruneWatermark || blocks[len(blocks)-1] > prunedThrough {
+			for _, blockNum := range blocks {
+				if hasPruneWatermark && blockNum <= prunedThrough {
+					continue
+				}
+				if err := ctx.Err(); err != nil {
+					postingIt.Release()
+					return result, err
+				}
+				err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+					if err := ctx.Err(); err != nil {
+						return false, err
+					}
+					latestKey, err := stateDomainChangeLatestKey(change)
+					if err != nil {
+						return false, err
+					}
+					hash := stateChangePostingHash(latestKey)
+					if bytes.Equal(hash[:], wantHash) {
+						live = true
+						return false, nil
+					}
+					return true, nil
+				})
 				if err != nil {
-					return false, err
+					postingIt.Release()
+					return result, err
 				}
-				hash := stateChangePostingHash(latestKey)
-				if bytes.Equal(hash[:], wantHash) {
-					live = true
-					return false, nil
+				if live {
+					break
 				}
-				return true, nil
-			})
-			if err != nil {
-				postingIt.Release()
-				return result, err
-			}
-			if live {
-				break
 			}
 		}
 		if !live {
@@ -536,6 +582,10 @@ func PruneStaleStateChangePostingIndex(db ethdb.KeyValueStore) (StateChangePosti
 
 	directoryIt := db.NewIterator(stateChangeKeyDirectoryPrefix, nil)
 	for directoryIt.Next() {
+		if err := ctx.Err(); err != nil {
+			directoryIt.Release()
+			return result, err
+		}
 		key := directoryIt.Key()
 		if !bytes.HasPrefix(key, stateChangeKeyDirectoryPrefix) || len(key) == len(stateChangeKeyDirectoryPrefix) {
 			directoryIt.Release()

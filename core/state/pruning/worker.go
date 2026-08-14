@@ -54,6 +54,29 @@ type pruneBatchStore struct {
 	ethdb.Iteratee
 }
 
+// GetWithPresence preserves the atomic point-read capability of the committed
+// store. The bounded prune writer intentionally exposes committed reads only:
+// prune deletes are idempotent and callers must not make correctness depend on
+// whether an earlier bounded batch has already been flushed. Without this
+// forwarding method, hot-history pruning falls back to Has+Get for every live
+// posting row and doubles Pebble point reads on the success path.
+func (s pruneBatchStore) GetWithPresence(key []byte) ([]byte, bool, error) {
+	if reader, ok := s.KeyValueReader.(interface {
+		GetWithPresence([]byte) ([]byte, bool, error)
+	}); ok {
+		return reader.GetWithPresence(key)
+	}
+	exists, err := s.KeyValueReader.Has(key)
+	if err != nil || !exists {
+		return nil, false, err
+	}
+	value, err := s.KeyValueReader.Get(key)
+	if err != nil {
+		return nil, false, err
+	}
+	return value, true, nil
+}
+
 func newPruneBatchStore(store Store) (Store, func() error) {
 	return newPruneBatchStoreWithLimit(store, maxPruneBatchValueSize)
 }

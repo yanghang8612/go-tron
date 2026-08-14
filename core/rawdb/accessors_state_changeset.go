@@ -1032,6 +1032,20 @@ func iterateStateDomainChangesForTxRange(db ethdb.Iteratee, row *StateTxRange, f
 }
 
 func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
+	indexedHead, staged, err := stateHistoryIndexedHead(db, blockNum)
+	if err != nil {
+		return err
+	}
+	return deleteStateDomainChanges(db, blockNum, staged && blockNum <= indexedHead)
+}
+
+func deleteStateDomainChanges(db stateKVLatestStore, blockNum uint64, skipPostingDelete bool) error {
+	if skipPostingDelete {
+		// The derived posting stage and verified cold-history prune gate already
+		// cover this block. No value decoding is needed to remove the physical
+		// changeset rows themselves.
+		return deleteStateKVPrefixByPointScan(db, stateChangeSetBlockPrefix(blockNum))
+	}
 	// A block records every mutation, but its posting index contains only one
 	// candidate per physical latest key. Collapse repeated writes before doing
 	// point reads/deletes; smart-contract blocks frequently touch the same slot
@@ -1041,6 +1055,9 @@ func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
 	latestKeyScratch := make([]byte, 0, 128)
 	postingKeyScratch := make([]byte, 0, len(stateChangePostingPrefix)+sha256.Size+8)
 	if err := iteratePhysicalStateDomainChangesBorrowed(db, blockNum, func(change *StateDomainChange) (bool, error) {
+		if skipPostingDelete {
+			return true, nil
+		}
 		var err error
 		latestKeyScratch, err = appendStateDomainChangeLatestKey(latestKeyScratch[:0], change)
 		if err != nil {
@@ -1080,13 +1097,17 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 			return fmt.Errorf("rawdb: state domain change delete blocks are not strictly increasing at %d after %d", blockNums[i], blockNums[i-1])
 		}
 	}
+	indexedHead, staged, err := stateHistoryIndexedHead(db, blockNums[len(blockNums)-1])
+	if err != nil {
+		return err
+	}
 	// The prune runner supplies a dense prefix. Keep the exported helper safe
 	// for repair callers with widely separated blocks: scanning every physical
 	// changeset between sparse endpoints would be worse than precise seeks.
 	spanMinusOne := blockNums[len(blockNums)-1] - blockNums[0]
 	if spanMinusOne > uint64(len(blockNums))*4 {
 		for _, blockNum := range blockNums {
-			if err := DeleteStateDomainChanges(db, blockNum); err != nil {
+			if err := deleteStateDomainChanges(db, blockNum, staged && blockNum <= indexedHead); err != nil {
 				return err
 			}
 		}
@@ -1106,6 +1127,15 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 		havePostingBlock  bool
 	)
 	deletePosting := func(change *StateDomainChange) (bool, error) {
+		// StateHistoryIndex is a rebuildable accelerator. At or below its
+		// published watermark bulk sync wrote immutable packed posting frames;
+		// point-probing each changed key cannot shrink those frames and dominated
+		// online prune I/O. Leave them for the sequential stale-frame sweep and
+		// delete only the authoritative changeset here. Query readers already
+		// validate every posting candidate against that changeset.
+		if staged && change.BlockNum <= indexedHead {
+			return true, nil
+		}
 		if !havePostingBlock || postingBlock != change.BlockNum {
 			postingBlock = change.BlockNum
 			havePostingBlock = true
@@ -1139,6 +1169,15 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 			break
 		}
 		if blockNums[blockIndex] != blockNum {
+			continue
+		}
+		if staged && blockNum <= indexedHead {
+			// Packed index frames are immutable and cleaned by the ordered sweep.
+			// Delete the authoritative physical row directly without decoding every
+			// change solely to discover that no posting point-read is required.
+			if err := db.Delete(key); err != nil {
+				return err
+			}
 			continue
 		}
 		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])

@@ -234,6 +234,35 @@ func TestPruneBatchStoreFlushesAtConfiguredLimit(t *testing.T) {
 	}
 }
 
+func TestPruneBatchStoreForwardsAtomicPresenceReads(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	if err := base.Put([]byte("present"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	db := &prunePresenceCountingStore{KeyValueStore: base}
+	store, flush := newPruneBatchStoreWithLimit(db, 1024)
+	reader, ok := store.(interface {
+		GetWithPresence([]byte) ([]byte, bool, error)
+	})
+	if !ok {
+		t.Fatal("prune batch store lost GetWithPresence")
+	}
+	value, present, err := reader.GetWithPresence([]byte("present"))
+	if err != nil || !present || !bytes.Equal(value, []byte("value")) {
+		t.Fatalf("present read = %q/%v/%v", value, present, err)
+	}
+	value, present, err = reader.GetWithPresence([]byte("missing"))
+	if err != nil || present || value != nil {
+		t.Fatalf("missing read = %q/%v/%v", value, present, err)
+	}
+	if db.presenceReads != 2 || db.hasReads != 0 || db.getReads != 0 {
+		t.Fatalf("presence/has/get reads = %d/%d/%d, want 2/0/0", db.presenceReads, db.hasReads, db.getReads)
+	}
+	if err := flush(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWorkerDoesNotAdvancePruneStagesWhenHistoryBatchFails(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	db := &pruneBatchCountingStore{KeyValueStore: base, writeErr: errors.New("injected batch failure")}
@@ -1903,6 +1932,33 @@ type pruneBatchCountingStore struct {
 	batchWrites   int
 	directDeletes int
 	writeErr      error
+}
+
+type prunePresenceCountingStore struct {
+	ethdb.KeyValueStore
+	presenceReads int
+	hasReads      int
+	getReads      int
+}
+
+func (db *prunePresenceCountingStore) GetWithPresence(key []byte) ([]byte, bool, error) {
+	db.presenceReads++
+	present, err := db.KeyValueStore.Has(key)
+	if err != nil || !present {
+		return nil, present, err
+	}
+	value, err := db.KeyValueStore.Get(key)
+	return value, err == nil, err
+}
+
+func (db *prunePresenceCountingStore) Has(key []byte) (bool, error) {
+	db.hasReads++
+	return db.KeyValueStore.Has(key)
+}
+
+func (db *prunePresenceCountingStore) Get(key []byte) ([]byte, error) {
+	db.getReads++
+	return db.KeyValueStore.Get(key)
 }
 
 func (db *pruneBatchCountingStore) Delete(key []byte) error {

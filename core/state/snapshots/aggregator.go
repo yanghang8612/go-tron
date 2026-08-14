@@ -621,6 +621,30 @@ func UpdateHotPruneProgress(dir string, blockNum, txNum uint64) error {
 	return PublishManifest(dir, manifest)
 }
 
+// UpdateStateChangeIndexPruneProgress records the inclusive authoritative hot
+// history boundary covered by the latest full stale-posting sweep. Keeping the
+// cursor in the snapshot manifest makes the maintenance restart-safe without
+// turning a rebuildable accelerator into a canonical execution stage.
+func UpdateStateChangeIndexPruneProgress(dir string, blockNum uint64) error {
+	if dir == "" {
+		return nil
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	progress := cloneProgress(manifest.Progress)
+	if progress == nil {
+		progress = new(Progress)
+	}
+	progress.StateChangeIndexPruneBlockNum = max(progress.StateChangeIndexPruneBlockNum, blockNum)
+	manifest.Progress = progress
+	return PublishManifest(dir, manifest)
+}
+
 func WriteManifestProgressStages(db ethdb.KeyValueWriter, progress *Progress) error {
 	if db == nil {
 		return nil
@@ -802,6 +826,7 @@ func mergeProgress(base, update *Progress) *Progress {
 	out.CommitmentFlushTxNum = max(out.CommitmentFlushTxNum, update.CommitmentFlushTxNum)
 	out.HotPruneTxNum = max(out.HotPruneTxNum, update.HotPruneTxNum)
 	out.HotPruneBlockNum = max(out.HotPruneBlockNum, update.HotPruneBlockNum)
+	out.StateChangeIndexPruneBlockNum = max(out.StateChangeIndexPruneBlockNum, update.StateChangeIndexPruneBlockNum)
 	return &out
 }
 
