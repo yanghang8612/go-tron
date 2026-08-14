@@ -928,6 +928,7 @@ func gtron(ctx *cli.Context) error {
 			Inflight:              status.Inflight,
 			BufferedBlocks:        status.BufferedBlocks,
 			BufferedBytes:         status.BufferedBytes,
+			FetchBackpressured:    status.FetchBackpressured,
 			RequestedBlocks:       status.RequestedBlocks,
 			RetryBlocks:           status.RetryBlocks,
 			RetainedDecodedBlocks: status.RetainedDecodedBlocks,

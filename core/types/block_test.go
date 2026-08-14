@@ -324,6 +324,8 @@ func TestUnmarshalBlockReservedOwnsByteValues(t *testing.T) {
 	block := blockDecodeReserveTestBlock(3)
 	for i, transaction := range block.Proto().Transactions {
 		transaction.RawData.Scripts = []byte{byte(i + 11), byte(i + 12)}
+		transaction.RawData.Contract[0].Provider = []byte{byte(i + 21), byte(i + 22)}
+		transaction.RawData.Contract[0].ContractName = []byte{byte(i + 31), byte(i + 32)}
 	}
 	wire, err := block.Marshal()
 	if err != nil {
@@ -333,6 +335,7 @@ func TestUnmarshalBlockReservedOwnsByteValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantBlock := proto.Clone(got.Proto()).(*corepb.Block)
 	want := make([][]byte, len(got.Proto().Transactions))
 	wantData := make([][]byte, len(got.Proto().Transactions))
 	wantScripts := make([][]byte, len(got.Proto().Transactions))
@@ -342,7 +345,15 @@ func TestUnmarshalBlockReservedOwnsByteValues(t *testing.T) {
 		wantScripts[i] = bytes.Clone(transaction.RawData.Scripts)
 	}
 	clear(wire)
+	if !proto.Equal(got.Proto(), wantBlock) {
+		t.Fatal("decoded block byte values alias the input wire buffer")
+	}
 	for i, transaction := range got.Proto().Transactions {
+		for j, signature := range transaction.Signature {
+			if cap(signature) != len(signature) {
+				t.Fatalf("transaction %d signature %d exposes adjacent arena capacity", i, j)
+			}
+		}
 		if value := transaction.RawData.Contract[0].Parameter.Value; !bytes.Equal(value, want[i]) {
 			t.Fatalf("transaction %d Any value aliases wire input: got %x, want %x", i, value, want[i])
 		}
@@ -358,6 +369,10 @@ func TestUnmarshalBlockReservedOwnsByteValues(t *testing.T) {
 		if cap(transaction.RawData.Scripts) != len(transaction.RawData.Scripts) {
 			t.Fatalf("transaction %d raw scripts expose adjacent arena capacity", i)
 		}
+		contract := transaction.RawData.Contract[0]
+		if cap(contract.Provider) != len(contract.Provider) || cap(contract.ContractName) != len(contract.ContractName) {
+			t.Fatalf("transaction %d contract metadata exposes adjacent arena capacity", i)
+		}
 	}
 }
 
@@ -366,6 +381,9 @@ func TestUnmarshalBlockBorrowedAliasesImmutableByteValues(t *testing.T) {
 	tx := block.Proto().Transactions[0]
 	tx.RawData.Data = []byte("unique-borrowed-raw-data")
 	tx.RawData.Scripts = []byte("unique-borrowed-script-data")
+	tx.Signature = [][]byte{[]byte("unique-borrowed-signature-value")}
+	tx.RawData.Contract[0].Provider = []byte("unique-borrowed-provider-value")
+	tx.RawData.Contract[0].ContractName = []byte("unique-borrowed-contract-name")
 	tx.RawData.Contract[0].Parameter.Value = []byte("unique-borrowed-contract-value")
 	wire, err := block.Marshal()
 	if err != nil {
@@ -384,8 +402,11 @@ func TestUnmarshalBlockBorrowedAliasesImmutableByteValues(t *testing.T) {
 
 	decoded := got.Proto().Transactions[0]
 	for name, value := range map[string][]byte{
+		"signature":      decoded.Signature[0],
 		"raw data":       decoded.RawData.Data,
 		"raw scripts":    decoded.RawData.Scripts,
+		"provider":       decoded.RawData.Contract[0].Provider,
+		"contract name":  decoded.RawData.Contract[0].ContractName,
 		"contract value": decoded.RawData.Contract[0].Parameter.Value,
 	} {
 		if cap(value) != len(value) {

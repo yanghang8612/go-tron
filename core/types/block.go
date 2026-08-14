@@ -61,9 +61,6 @@ type decodedWireTransaction struct {
 	signatureSlot [1][]byte
 	resultSlot    [1]*corepb.Transaction_Result
 	contractSlot  [1]*corepb.Transaction_Contract
-	// signature owns the canonical first r||s||v value. Historical longer
-	// values and additional signatures retain separate exact-size storage.
-	signature [65]byte
 	// Canonical transactions carry a 2-byte block-number suffix and an 8-byte
 	// block-hash slice. Keep both in the already coallocated transaction wrapper;
 	// historical/non-canonical lengths fall back to independent owned copies.
@@ -475,6 +472,7 @@ func unmarshalBlockReservedMode(data []byte, ownByteValues bool) (*Block, error)
 		transactions = make([]decodedWireTransaction, txCount)
 	}
 	transactionIndex := 0
+	ownedByteValuesSize := 0
 
 	var unknown []byte
 	for len(data) != 0 {
@@ -502,6 +500,9 @@ func unmarshalBlockReservedMode(data []byte, ownByteValues bool) (*Block, error)
 			}
 			transactionIndex++
 			decoded.pb.Transactions = append(decoded.pb.Transactions, tx)
+			if ownByteValues {
+				ownedByteValuesSize += blockTransactionBorrowedByteValuesSize(tx)
+			}
 			continue
 		}
 		if decoded.pb.BlockHeader == nil {
@@ -516,7 +517,7 @@ func unmarshalBlockReservedMode(data []byte, ownByteValues bool) (*Block, error)
 	}
 	appendProtoUnknown(&decoded.pb, unknown)
 	if ownByteValues {
-		ownBlockByteValues(&decoded.pb)
+		ownBlockByteValues(&decoded.pb, ownedByteValuesSize)
 	}
 	return &decoded.block, nil
 }
@@ -588,14 +589,10 @@ func unmarshalBlockTransactionReserved(data []byte, decoded *decodedWireTransact
 				return nil, err
 			}
 		case 2:
-			var owned []byte
-			if len(decoded.tx.Signature) == 0 && len(value) == len(decoded.signature) {
-				owned = decoded.signature[:len(value):len(value)]
-				copy(owned, value)
-			} else {
-				owned = append([]byte(nil), value...)
-			}
-			decoded.tx.Signature = append(decoded.tx.Signature, owned)
+			// Borrow until ownBlockByteValues coalesces signatures with the other
+			// allocation-sensitive byte fields. UnmarshalBlockBorrowed retains the
+			// immutable wire buffer instead.
+			decoded.tx.Signature = append(decoded.tx.Signature, value[:len(value):len(value)])
 		case 5:
 			var result *corepb.Transaction_Result
 			if len(decoded.tx.Ret) == 0 {
@@ -746,7 +743,10 @@ func unmarshalTransactionContractReservedMode(data []byte, contract *corepb.Tran
 			if !ok {
 				return errors.New("malformed transaction contract bytes field")
 			}
-			owned := append([]byte(nil), value...)
+			owned := value[:len(value):len(value)]
+			if !borrowValue {
+				owned = append([]byte(nil), value...)
+			}
 			if field == 3 {
 				contract.Provider = owned
 			} else {
@@ -808,30 +808,54 @@ func unmarshalAnyReserved(data []byte, parameter *anypb.Any, borrowValue bool) e
 	return nil
 }
 
-// ownBlockByteValues replaces the temporary input-buffer views installed for
-// TransactionRaw data/scripts and contract Any values with one exact-size arena
-// owned by the decoded block. It runs before unmarshalBlockReserved returns, so
-// callers never observe or retain borrowed wire bytes. Capacity-clamping keeps
-// adjacent values isolated if a caller later appends to one field.
-func ownBlockByteValues(block *corepb.Block) {
+// blockTransactionBorrowedByteValuesSize returns the exact arena contribution
+// for one fully decoded transaction. Computing it while that transaction is hot
+// avoids a separate whole-block object-graph walk before ownership transfer.
+func blockTransactionBorrowedByteValuesSize(transaction *corepb.Transaction) int {
 	total := 0
-	for _, transaction := range block.Transactions {
-		if transaction.RawData == nil {
+	for _, signature := range transaction.Signature {
+		total += len(signature)
+	}
+	if transaction.RawData == nil {
+		return total
+	}
+	raw := transaction.RawData
+	total += len(raw.Data) + len(raw.Scripts)
+	for _, contract := range raw.Contract {
+		if contract == nil {
 			continue
 		}
-		total += len(transaction.RawData.Data) + len(transaction.RawData.Scripts)
-		for _, contract := range transaction.RawData.Contract {
-			if contract.Parameter != nil {
-				total += len(contract.Parameter.Value)
-			}
+		total += len(contract.Provider) + len(contract.ContractName)
+		if contract.Parameter != nil {
+			total += len(contract.Parameter.Value)
 		}
 	}
+	return total
+}
+
+// ownBlockByteValues replaces the temporary input-buffer views installed for
+// transaction signatures, TransactionRaw data/scripts and contract byte values
+// with one exact-size arena owned by the decoded block. It runs before
+// unmarshalBlockReserved returns, so callers never observe or retain borrowed
+// wire bytes. Capacity-clamping keeps adjacent values isolated if a caller later
+// appends to one field.
+func ownBlockByteValues(block *corepb.Block, total int) {
 	if total == 0 {
 		return
 	}
 	arena := make([]byte, total)
 	offset := 0
 	for _, transaction := range block.Transactions {
+		for i, signature := range transaction.Signature {
+			if len(signature) == 0 {
+				continue
+			}
+			end := offset + len(signature)
+			owned := arena[offset:end:end]
+			copy(owned, signature)
+			transaction.Signature[i] = owned
+			offset = end
+		}
 		if transaction.RawData == nil {
 			continue
 		}
@@ -851,14 +875,30 @@ func ownBlockByteValues(block *corepb.Block) {
 			offset = end
 		}
 		for _, contract := range raw.Contract {
-			if contract.Parameter == nil || len(contract.Parameter.Value) == 0 {
+			if contract == nil {
 				continue
 			}
-			end := offset + len(contract.Parameter.Value)
-			owned := arena[offset:end:end]
-			copy(owned, contract.Parameter.Value)
-			contract.Parameter.Value = owned
-			offset = end
+			if len(contract.Provider) != 0 {
+				end := offset + len(contract.Provider)
+				owned := arena[offset:end:end]
+				copy(owned, contract.Provider)
+				contract.Provider = owned
+				offset = end
+			}
+			if len(contract.ContractName) != 0 {
+				end := offset + len(contract.ContractName)
+				owned := arena[offset:end:end]
+				copy(owned, contract.ContractName)
+				contract.ContractName = owned
+				offset = end
+			}
+			if contract.Parameter != nil && len(contract.Parameter.Value) != 0 {
+				end := offset + len(contract.Parameter.Value)
+				owned := arena[offset:end:end]
+				copy(owned, contract.Parameter.Value)
+				contract.Parameter.Value = owned
+				offset = end
+			}
 		}
 	}
 }
@@ -1116,11 +1156,12 @@ func UnmarshalBlockOwned(data []byte) (*Block, error) {
 	return block, nil
 }
 
-// UnmarshalBlockBorrowed decodes a block while borrowing calldata-like byte
-// fields from immutable data. The caller must keep data immutable for the
-// returned block's lifetime; Block retains the backing allocation explicitly.
-// It is intended for the V2 freezer's immutable record views during one-shot
-// stored replay. Malformed/legacy fallback decoding remains independently owned.
+// UnmarshalBlockBorrowed decodes a block while borrowing allocation-sensitive
+// transaction byte fields from immutable data. The caller must keep data
+// immutable for the returned block's lifetime; Block retains the backing
+// allocation explicitly. It is intended for immutable freezer record views
+// during one-shot stored replay. Malformed/legacy fallback decoding remains
+// independently owned.
 func UnmarshalBlockBorrowed(data []byte) (*Block, error) {
 	block, err := unmarshalBlockReservedMode(data, false)
 	if err != nil {

@@ -642,3 +642,52 @@ func TestTransactionAccessRecorderRejectsPrefixReads(t *testing.T) {
 		t.Fatal("prefix read was not marked unsupported")
 	}
 }
+
+var transactionAccessRecorderBenchmarkSink int
+
+func TestTransactionAccessRecorderDropsOversizeWorkspaces(t *testing.T) {
+	var recorder TransactionAccessRecorder
+	recorder.Reset(64)
+	if recorder.accesses != nil {
+		t.Fatal("Reset eagerly allocated the generic access map")
+	}
+	recorder.accesses = make(map[TransactionAccessKey]TransactionAccessMode, maxRetainedRecorderAccesses+1)
+	for i := 0; i <= maxRetainedRecorderAccesses; i++ {
+		recorder.accesses[TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: string(rune(i))}] = TransactionAccessRead
+	}
+	recorder.writeKeys = make([]TransactionAccessKey, maxRetainedRecorderWriteKeys+1)
+	recorder.Reset(64)
+	if recorder.accesses != nil {
+		t.Fatal("oversize access map was retained")
+	}
+	if recorder.writeKeys != nil {
+		t.Fatal("oversize write-key carrier was retained")
+	}
+
+	recorder.record(TransactionAccessKey{Kind: TransactionAccessDynamicInt, LogicalKey: "next"}, TransactionAccessRead)
+	if got := recorder.Len(); got != 1 {
+		t.Fatalf("recorder length after rebuild = %d, want 1", got)
+	}
+}
+
+func BenchmarkTransactionAccessRecorderReset(b *testing.B) {
+	var recorder TransactionAccessRecorder
+	owner := tcommon.Address{0x41, 0x01}
+	keys := make([]TransactionAccessKey, 256)
+	for i := range keys {
+		keys[i] = TransactionAccessKey{
+			Kind:       TransactionAccessAccountKV,
+			Address:    owner,
+			LogicalKey: string(rune(i)),
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		recorder.Reset(64)
+		for _, key := range keys {
+			recorder.record(key, TransactionAccessRead|TransactionAccessWrite)
+		}
+		transactionAccessRecorderBenchmarkSink = recorder.Len()
+	}
+}

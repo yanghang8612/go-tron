@@ -478,17 +478,17 @@ func TestColdBuilderDefersHistoryAndCompactionWhileFarBehind(t *testing.T) {
 	}
 }
 
-func TestColdBuilderRateLimitsNearBatchCatchupDuringSync(t *testing.T) {
+func TestColdBuilderRateLimitsLargeBacklogDuringSync(t *testing.T) {
 	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
 	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := coldBuilderOwner(0x79)
-	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+	for blockNum := uint64(1); blockNum <= 6; blockNum++ {
 		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
 		writeColdBuilderCanonicalBlock(t, db, blockNum)
 	}
-	chain := &coldBuilderChain{db: db, solidified: 4, syncRemaining: 100, syncRemainingOK: true}
+	chain := &coldBuilderChain{db: db, solidified: 7, syncRemaining: 100, syncRemainingOK: true}
 	runner := NewRunner(chain, Config{
 		Dir:                     dir,
 		Enabled:                 true,
@@ -501,6 +501,9 @@ func TestColdBuilderRateLimitsNearBatchCatchupDuringSync(t *testing.T) {
 	first, err := runner.OnePass()
 	if err != nil || !first.Built || !first.NeedsCatchup() {
 		t.Fatalf("first bounded pass = %+v err=%v", first, err)
+	}
+	if lag := first.EligibleCutoffBlock - first.PublishedBlock; lag <= 2 {
+		t.Fatalf("first bounded pass lag = %d, want backlog larger than one batch", lag)
 	}
 	deferred, err := runner.OnePass()
 	if err != nil {

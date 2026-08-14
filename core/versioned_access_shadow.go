@@ -297,12 +297,12 @@ func releaseVersionedAccessShadow(shadow *versionedAccessShadow) {
 	// Drop block-owned references before pooling. The reusable buckets and
 	// backing arrays remain, but no write sets, filter closures, interned raw
 	// keys, or worker-visible post-images survive the block boundary.
-	clear(shadow.versions)
-	clear(shadow.rawAccountVersions)
-	clear(shadow.accountFullVersions)
-	clear(shadow.accountAnyVersions)
-	clear(shadow.accountFieldVersions)
-	clear(shadow.lastSenderTx)
+	shadow.versions = clearVersionedShadowMapForPool(shadow.versions, 16*1024)
+	shadow.rawAccountVersions = clearVersionedShadowMapForPool(shadow.rawAccountVersions, 4*1024)
+	shadow.accountFullVersions = clearVersionedShadowMapForPool(shadow.accountFullVersions, 2*1024)
+	shadow.accountAnyVersions = clearVersionedShadowMapForPool(shadow.accountAnyVersions, 4*1024)
+	shadow.accountFieldVersions = clearVersionedShadowMapForPool(shadow.accountFieldVersions, 8*1024)
+	shadow.lastSenderTx = clearVersionedShadowMapForPool(shadow.lastSenderTx, maxPooledTransactions)
 	clear(shadow.transactionWriteSets)
 	shadow.transactionWriteSets = shadow.transactionWriteSets[:0]
 	shadow.transactionWritesOK = shadow.transactionWritesOK[:0]
@@ -500,6 +500,24 @@ func (s *versionedAccessShadow) Prepare(transactionCount int) {
 func clearVersionedShadowMap[K comparable, V any](values map[K]V, capacityHint int) map[K]V {
 	if values == nil {
 		return make(map[K]V, capacityHint)
+	}
+	// A small block should not inherit and repeatedly clear a hash table grown
+	// by an exceptional predecessor. Length is a conservative proxy for bucket
+	// size; rebuilding above four times the new hint bounds retained scan work.
+	maxRetained := capacityHint * 4
+	if maxRetained < 64 {
+		maxRetained = 64
+	}
+	if len(values) > maxRetained {
+		return make(map[K]V, capacityHint)
+	}
+	clear(values)
+	return values
+}
+
+func clearVersionedShadowMapForPool[K comparable, V any](values map[K]V, maxRetained int) map[K]V {
+	if len(values) > maxRetained {
+		return nil
 	}
 	clear(values)
 	return values

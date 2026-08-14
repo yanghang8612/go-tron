@@ -42,6 +42,11 @@ const (
 // before far-ahead requests are parked.
 const MaxBufferedRunaheadBytes = 512 << 20
 
+// ResumeBufferedRunaheadBytes is the low-water mark for global fetch
+// backpressure. Keeping it below MaxBufferedRunaheadBytes prevents every small
+// drain from reopening all peer fetch slots and immediately refilling the heap.
+const ResumeBufferedRunaheadBytes = 256 << 20
+
 // MinFetchRequestInterval stays just below java-tron's 3/s FETCH_INV_DATA
 // limiter while preserving a one-request-at-a-time contract per peer.
 const MinFetchRequestInterval = 400 * time.Millisecond

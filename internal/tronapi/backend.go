@@ -36,6 +36,7 @@ type SyncInfo struct {
 	Inflight              int    `json:"inflight"`
 	BufferedBlocks        int    `json:"bufferedBlocks"`
 	BufferedBytes         int64  `json:"bufferedBytes"`
+	FetchBackpressured    bool   `json:"fetchBackpressured"`
 	RequestedBlocks       int    `json:"requestedBlocks"`
 	RetryBlocks           int    `json:"retryBlocks"`
 	RetainedDecodedBlocks int    `json:"retainedDecodedBlocks"`

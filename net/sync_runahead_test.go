@@ -1,6 +1,7 @@
 package net
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -134,6 +135,71 @@ func TestFetchResumesBeyondStripAfterBufferDrains(t *testing.T) {
 	ss.mu.Unlock()
 	if len(out) != 1 || out[0].chain || len(out[0].blocks) != 1 || out[0].blocks[0] != far {
 		t.Fatalf("parked bid should be requested after the buffer drains, got %+v", out)
+	}
+}
+
+func TestFetchBackpressureUsesHysteresis(t *testing.T) {
+	ss := NewSyncService(makeTestChain(t), nil)
+	ss.mu.Lock()
+	ss.bufferedBytes = maxBufferedRunaheadBytes
+	if !ss.updateFetchBackpressureLocked() {
+		t.Fatal("high-water mark did not enable fetch backpressure")
+	}
+	ss.bufferedBytes = resumeBufferedRunaheadBytes + 1
+	if !ss.updateFetchBackpressureLocked() {
+		t.Fatal("backpressure reopened above the low-water mark")
+	}
+	ss.bufferedBytes = resumeBufferedRunaheadBytes
+	if ss.updateFetchBackpressureLocked() {
+		t.Fatal("low-water mark did not release fetch backpressure")
+	}
+	ss.mu.Unlock()
+}
+
+func TestFetchBackpressureGrantsOnlyOnePeerRefill(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	peer1, closePeer1 := testPeer(t, "backpressure-one")
+	defer closePeer1()
+	peer2, closePeer2 := testPeer(t, "backpressure-two")
+	defer closePeer2()
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps1, _ := ss.addPeerStateLocked(peer1)
+	ps2, _ := ss.addPeerStateLocked(peer2)
+	ps1.lastInventoryNum = 2
+	ps2.lastInventoryNum = 2
+	ps1.fetchList = []types.BlockID{runaheadBid(1)}
+	ps2.fetchList = []types.BlockID{runaheadBid(2)}
+	ss.bufferedBytes = maxBufferedRunaheadBytes
+	out := ss.fillFetchSlotsLocked(time.Now())
+	backpressured := ss.fetchBackpressured
+	ss.mu.Unlock()
+
+	if !backpressured {
+		t.Fatal("high-water refill did not enter backpressure")
+	}
+	if len(out) != 1 || out[0].chain || len(out[0].blocks) != 1 {
+		t.Fatalf("backpressured refill = %+v, want exactly one peer body request", out)
+	}
+}
+
+func TestStartSyncCapsAttachedPeerCount(t *testing.T) {
+	ss := NewSyncService(makeTestChain(t), nil)
+	closers := make([]func(), 0, maxParallelSyncPeers+1)
+	for i := 0; i < maxParallelSyncPeers+1; i++ {
+		peer, closePeer := testPeer(t, fmt.Sprintf("peer-cap-%d", i))
+		closers = append(closers, closePeer)
+		ss.StartSync(peer)
+	}
+	defer func() {
+		for _, closePeer := range closers {
+			closePeer()
+		}
+	}()
+	if got := ss.Status().SyncPeerCount; got != maxParallelSyncPeers {
+		t.Fatalf("sync peers = %d, want cap %d", got, maxParallelSyncPeers)
 	}
 }
 

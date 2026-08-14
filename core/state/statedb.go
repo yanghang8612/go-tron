@@ -3267,9 +3267,9 @@ func (s *StateDB) Copy() (*StateDB, error) {
 	// physical index would silently execute against an older head. Copy callers
 	// run while the parent execution view is stable, and all mutations below stay
 	// in copy-owned state objects and journals.
-	cp := s.newCopyBase()
+	cp := s.newCopyBase(len(s.stateObjects))
 	for addr, obj := range s.stateObjects {
-		s.copyStateObjectInto(cp, addr, obj)
+		s.copyStateObjectInto(cp, addr, obj, true)
 	}
 	return cp, nil
 }
@@ -3285,14 +3285,18 @@ func (s *StateDB) Copy() (*StateDB, error) {
 // before publishing the source block's latest-domain writes; ordinary Copy
 // retains its unrestricted deep-copy semantics for RPC/debug callers.
 func (s *StateDB) CopyBlockExecutionBase() (*StateDB, error) {
-	cp := s.newCopyBase()
+	cp := s.newCopyBase(len(s.dirtyObjects))
 	copied := 0
 	for addr := range s.dirtyObjects {
 		obj := s.stateObjects[addr]
 		if obj == nil || !obj.dirty {
 			continue
 		}
-		s.copyStateObjectInto(cp, addr, obj)
+		// Clean storage cache entries are already authoritative in the stable
+		// latest view shared by the execution copy. Preserve only slots changed
+		// by this uncommitted block; untouched slots can hydrate lazily without
+		// cloning an account's accumulated cross-block read cache.
+		s.copyStateObjectInto(cp, addr, obj, false)
 		copied++
 	}
 	// Contract code is immutable, but it is not guaranteed to remain available
@@ -3324,15 +3328,15 @@ func (s *StateDB) CopyBlockExecutionBase() (*StateDB, error) {
 	return cp, nil
 }
 
-func (s *StateDB) newCopyBase() *StateDB {
+func (s *StateDB) newCopyBase(accountHint int) *StateDB {
 	return &StateDB{
 		db:                      s.db,
 		dbErr:                   s.dbErr,
-		stateObjects:            make(map[tcommon.Address]*stateObject),
+		stateObjects:            make(map[tcommon.Address]*stateObject, accountHint),
 		witnesses:               make(map[tcommon.Address]*types.Witness),
 		dirtyWitnesses:          make(map[tcommon.Address]struct{}),
 		txFinalizeDirty:         make(map[tcommon.Address]struct{}),
-		dirtyObjects:            make(map[tcommon.Address]struct{}),
+		dirtyObjects:            make(map[tcommon.Address]struct{}, accountHint),
 		journal:                 newJournal(),
 		dynProps:                s.dynProps,
 		originRoot:              s.originRoot,
@@ -3348,7 +3352,7 @@ func (s *StateDB) newCopyBase() *StateDB {
 	}
 }
 
-func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *stateObject) {
+func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *stateObject, copyCleanStorage bool) {
 	if cp == nil || obj == nil {
 		return
 	}
@@ -3374,9 +3378,13 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		}
 		kvDirtyCopy[k] = ec
 	}
+	storageEntries := len(obj.storage)
+	if !copyCleanStorage {
+		storageEntries = len(obj.dirtyStorage)
+	}
 	var storageCopy map[tcommon.Hash]storageSlot
-	if len(obj.storage) != 0 {
-		storageCopy = make(map[tcommon.Hash]storageSlot, len(obj.storage))
+	if storageEntries != 0 {
+		storageCopy = make(map[tcommon.Hash]storageSlot, storageEntries)
 	}
 	var dirtyStorageCopy map[tcommon.Hash]storageOrigin
 	if len(obj.dirtyStorage) != 0 {
@@ -3395,7 +3403,7 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		contractMeta:             metaCopy,
 		contractMetaDirty:        obj.contractMetaDirty,
 		storage:                  storageCopy,
-		storageHighWater:         len(obj.storage),
+		storageHighWater:         storageEntries,
 		dirtyStorage:             dirtyStorageCopy,
 		dirtyStorageHighWater:    len(obj.dirtyStorage),
 		selfDestructed:           obj.selfDestructed,
@@ -3406,13 +3414,23 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		kvDirtyHighWater:         len(obj.kvDirty),
 	}
 	if obj.account != nil {
-		data, _ := obj.account.Marshal()
-		acc, _ := types.UnmarshalAccount(data)
-		newObj.account = acc
-		newObj.accountProto, _ = acc.MarshalStorageCoreV4()
+		newObj.account = obj.account.Copy()
+		if obj.accountProto != nil && types.IsAccountStorageCoreV4(obj.accountProto) {
+			newObj.accountProto = bytes.Clone(obj.accountProto)
+		} else {
+			newObj.accountProto, _ = newObj.account.MarshalStorageCoreV4()
+		}
 	}
-	for k, v := range obj.storage {
-		newObj.storage[k] = v
+	if copyCleanStorage {
+		for k, v := range obj.storage {
+			newObj.storage[k] = v
+		}
+	} else {
+		for k := range obj.dirtyStorage {
+			if v, ok := obj.storage[k]; ok {
+				newObj.storage[k] = v
+			}
+		}
 	}
 	for k, origin := range obj.dirtyStorage {
 		newObj.dirtyStorage[k] = origin

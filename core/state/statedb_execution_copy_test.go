@@ -14,7 +14,9 @@ func TestStateDBCopyBlockExecutionBaseOmitsCleanObjects(t *testing.T) {
 	cleanAddr := testAddr(0x31)
 	dirtyAddr := testAddr(0x32)
 	storageKey := tcommon.Hash{0x01}
+	cleanStorageKey := tcommon.Hash{0x02}
 	originalStorage := tcommon.Hash{0x10}
+	cleanStorage := tcommon.Hash{0x11}
 	pendingStorage := tcommon.Hash{0x20}
 
 	sdb.CreateAccount(cleanAddr, corepb.AccountType_Normal)
@@ -22,6 +24,7 @@ func TestStateDBCopyBlockExecutionBaseOmitsCleanObjects(t *testing.T) {
 	sdb.CreateAccount(dirtyAddr, corepb.AccountType_Contract)
 	sdb.AddBalance(dirtyAddr, 200)
 	sdb.SetState(dirtyAddr, storageKey, originalStorage)
+	sdb.SetState(dirtyAddr, cleanStorageKey, cleanStorage)
 	if _, err := sdb.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -33,6 +36,9 @@ func TestStateDBCopyBlockExecutionBaseOmitsCleanObjects(t *testing.T) {
 	}
 	if got := sdb.GetBalance(dirtyAddr); got != 200 {
 		t.Fatalf("dirty source balance = %d, want 200", got)
+	}
+	if got := sdb.GetState(dirtyAddr, cleanStorageKey); got != cleanStorage {
+		t.Fatalf("clean cached source storage = %x, want %x", got, cleanStorage)
 	}
 	sdb.AddBalance(dirtyAddr, 7)
 	sdb.SetState(dirtyAddr, storageKey, pendingStorage)
@@ -50,6 +56,9 @@ func TestStateDBCopyBlockExecutionBaseOmitsCleanObjects(t *testing.T) {
 	if len(cp.stateObjects) != 1 {
 		t.Fatalf("initial execution-copy object count = %d, want 1", len(cp.stateObjects))
 	}
+	if _, copied := cp.stateObjects[dirtyAddr].storage[cleanStorageKey]; copied {
+		t.Fatal("clean cached storage slot was eagerly copied")
+	}
 
 	// The omitted account rehydrates from the stable latest view. The dirty
 	// account must instead expose the source's not-yet-published block writes.
@@ -61,6 +70,9 @@ func TestStateDBCopyBlockExecutionBaseOmitsCleanObjects(t *testing.T) {
 	}
 	if got := cp.GetState(dirtyAddr, storageKey); got != pendingStorage {
 		t.Fatalf("copied dirty storage = %x, want %x", got, pendingStorage)
+	}
+	if got := cp.GetState(dirtyAddr, cleanStorageKey); got != cleanStorage {
+		t.Fatalf("lazy clean storage = %x, want %x", got, cleanStorage)
 	}
 	if len(cp.stateObjects) != 2 {
 		t.Fatalf("post-hydration execution-copy object count = %d, want 2", len(cp.stateObjects))

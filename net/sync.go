@@ -26,16 +26,17 @@ import (
 // tests under net/ untouched until Slice 6 deletes net/sync.go entirely;
 // at that point every remaining reference moves to tsync.* directly.
 const (
-	maxChainInventorySize     = tsync.MaxChainInventorySize
-	maxFetchBatch             = tsync.MaxFetchBatch
-	maxSyncImportBatch        = tsync.MaxImportBatch
-	maxStagedImportBatch      = tsync.MaxStagedImportBatch
-	maxParallelSyncPeers      = tsync.MaxParallelSyncPeers
-	minFetchRequestInterval   = tsync.MinFetchRequestInterval
-	maxBufferedRunaheadBlocks = tsync.MaxBufferedRunaheadBlocks
-	maxBufferedRunaheadBytes  = tsync.MaxBufferedRunaheadBytes
-	alwaysFetchRunaheadBlocks = tsync.AlwaysFetchRunaheadBlocks
-	peerJoinAttemptInterval   = 2 * time.Second
+	maxChainInventorySize       = tsync.MaxChainInventorySize
+	maxFetchBatch               = tsync.MaxFetchBatch
+	maxSyncImportBatch          = tsync.MaxImportBatch
+	maxStagedImportBatch        = tsync.MaxStagedImportBatch
+	maxParallelSyncPeers        = tsync.MaxParallelSyncPeers
+	minFetchRequestInterval     = tsync.MinFetchRequestInterval
+	maxBufferedRunaheadBlocks   = tsync.MaxBufferedRunaheadBlocks
+	maxBufferedRunaheadBytes    = tsync.MaxBufferedRunaheadBytes
+	resumeBufferedRunaheadBytes = tsync.ResumeBufferedRunaheadBytes
+	alwaysFetchRunaheadBlocks   = tsync.AlwaysFetchRunaheadBlocks
+	peerJoinAttemptInterval     = 2 * time.Second
 )
 
 type syncPeerState struct {
@@ -107,7 +108,14 @@ type SyncService struct {
 	bufferedHash  map[tcommon.Hash]struct{}
 	blockPath     syncdl.BlockPath
 	bufferedBytes int64
-	targetHeadNum uint64
+	// fetchBackpressured is a service-wide hysteresis gate. The older per-ID
+	// byte check still admitted a near-tip strip independently on every peer;
+	// under dense historical blocks that allowed dozens of peers to keep a
+	// multi-gigabyte raw buffer full. Once the high-water mark is crossed, only
+	// one peer at a time may refill that anti-starvation strip until the buffer
+	// drains below the low-water mark.
+	fetchBackpressured bool
+	targetHeadNum      uint64
 	// syncedTipNum is the drain cursor: the highest block this session has
 	// popped for import. Under async-commit depth>2 the committed CurrentBlock
 	// lags the applied tip by up to the pipeline depth, so popping from
@@ -524,6 +532,7 @@ type SyncStatus struct {
 	Inflight              int
 	BufferedBlocks        int
 	BufferedBytes         int64
+	FetchBackpressured    bool
 	RequestedBlocks       int
 	RetryBlocks           int
 	RetainedDecodedBlocks int
@@ -552,6 +561,7 @@ func (ss *SyncService) Status() SyncStatus {
 		Inflight:            ss.inflight,
 		BufferedBlocks:      len(ss.blockBuffer),
 		BufferedBytes:       ss.bufferedBytes,
+		FetchBackpressured:  ss.fetchBackpressured,
 		RequestedBlocks:     len(ss.requested),
 		RetryBlocks:         len(ss.retryList),
 		PauseBlock:          pauseBlock,
@@ -647,6 +657,10 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 	now := time.Now()
 	ss.mu.Lock()
 	ss.ensureSessionMapsLocked()
+	if ss.syncing && ss.peers[peer.ID()] == nil && len(ss.peers) >= maxParallelSyncPeers {
+		ss.mu.Unlock()
+		return
+	}
 	attach := syncdl.PlanSyncPeerAttach(syncdl.SyncPeerAttachInput{
 		Syncing:           ss.syncing,
 		PeerAlreadyJoined: ss.syncing && ss.peers[peer.ID()] != nil,
@@ -702,6 +716,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
 	ss.blockPath = syncdl.NewBlockPath()
 	ss.bufferedBytes = 0
+	ss.fetchBackpressured = false
 	headBlock := ss.chain.CurrentBlock()
 	if headBlock == nil {
 		headBlock = ss.chain.GetBlockByNumber(0)
@@ -1453,6 +1468,7 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 	ss.ensureSessionMapsLocked()
 	var out []outboundSyncRequest
 	effectiveTipNum := ss.effectiveSyncTipLocked()
+	backpressured := ss.updateFetchBackpressureLocked()
 	for _, ps := range ss.peers {
 		eligibility := syncdl.FetchSlotEligibilityInput{}
 		if ps != nil {
@@ -1472,15 +1488,32 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 		if applyResult.SendFetch {
 			out = append(out, outboundSyncRequest{peer: ps.peer, blocks: applyResult.SlotPlan.Batch})
 		}
+		// At high water keep exactly one peer feeding the small contiguous
+		// anti-starvation strip. Already-requested bodies remain accepted and the
+		// local drain continues; this only stops new fan-out.
+		if backpressured && applyResult.SendFetch {
+			break
+		}
 	}
 	return out
+}
+
+func (ss *SyncService) updateFetchBackpressureLocked() bool {
+	if ss.fetchBackpressured {
+		if ss.bufferedBytes <= resumeBufferedRunaheadBytes {
+			ss.fetchBackpressured = false
+		}
+	} else if ss.bufferedBytes >= maxBufferedRunaheadBytes {
+		ss.fetchBackpressured = true
+	}
+	return ss.fetchBackpressured
 }
 
 func (ss *SyncService) withinRunaheadBudgetLocked(bid types.BlockID, effectiveTipNum uint64) bool {
 	if bid.Num > effectiveTipNum+maxBufferedRunaheadBlocks {
 		return false
 	}
-	if ss.bufferedBytes >= maxBufferedRunaheadBytes && bid.Num > effectiveTipNum+alwaysFetchRunaheadBlocks {
+	if ss.fetchBackpressured && bid.Num > effectiveTipNum+alwaysFetchRunaheadBlocks {
 		return false
 	}
 	return true
@@ -3322,6 +3355,7 @@ func (a syncSessionResetApplier) ClearBlockTracking() {
 	a.service.bufferedHash = nil
 	a.service.blockPath = nil
 	a.service.bufferedBytes = 0
+	a.service.fetchBackpressured = false
 	a.service.syncedTipNum = 0
 }
 

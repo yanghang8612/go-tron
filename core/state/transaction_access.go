@@ -182,6 +182,38 @@ type TransactionAccessRecorder struct {
 	publicNetReservation PublicNetReservation
 	publicNetRecorded    bool
 	publicNetValid       bool
+	capacityHint         int
+}
+
+const (
+	// Retain ordinary transaction-sized workspaces, but do not make every
+	// subsequent transaction scan or retain the buckets from one exceptional
+	// contract call. These limits cover the observed block-import working set;
+	// oversize carriers are simply rebuilt on the next transaction.
+	maxRetainedRecorderAccesses           = 4 * 1024
+	maxRetainedRecorderAccounts           = 512
+	maxRetainedRecorderAccountFields      = 2 * 1024
+	maxRetainedRecorderAccountFieldWrites = 512
+	maxRetainedRecorderCommutativeDeltas  = 256
+	maxRetainedRecorderRawKVWrites        = 256
+	maxRetainedRecorderWriteKeys          = 4 * 1024
+	maxRetainedRecorderRawKVKeys          = 4 * 1024
+)
+
+func resetRecorderMap[K comparable, V any](values map[K]V, maxRetained int) map[K]V {
+	if len(values) > maxRetained {
+		return nil
+	}
+	clear(values)
+	return values
+}
+
+func resetRecorderSlice[T any](values []T, maxRetained int) []T {
+	if cap(values) > maxRetained {
+		return nil
+	}
+	clear(values)
+	return values[:0]
 }
 
 // Reset begins a new transaction capture. capacityHint is used only for the
@@ -190,23 +222,18 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 	if r == nil {
 		return
 	}
-	if r.accesses == nil {
-		if capacityHint < 16 {
-			capacityHint = 16
-		}
-		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, capacityHint)
-	} else {
-		clear(r.accesses)
+	if capacityHint < 16 {
+		capacityHint = 16
 	}
-	clear(r.accounts)
-	clear(r.accountFields)
-	clear(r.accountFieldWrites)
-	clear(r.commutativeDeltas)
-	clear(r.rawKVWrites)
-	clear(r.writeKeys)
-	r.writeKeys = r.writeKeys[:0]
-	clear(r.captureWriteKeys)
-	r.captureWriteKeys = r.captureWriteKeys[:0]
+	r.capacityHint = capacityHint
+	r.accesses = resetRecorderMap(r.accesses, maxRetainedRecorderAccesses)
+	r.accounts = resetRecorderMap(r.accounts, maxRetainedRecorderAccounts)
+	r.accountFields = resetRecorderMap(r.accountFields, maxRetainedRecorderAccountFields)
+	r.accountFieldWrites = resetRecorderMap(r.accountFieldWrites, maxRetainedRecorderAccountFieldWrites)
+	r.commutativeDeltas = resetRecorderMap(r.commutativeDeltas, maxRetainedRecorderCommutativeDeltas)
+	r.rawKVWrites = resetRecorderMap(r.rawKVWrites, maxRetainedRecorderRawKVWrites)
+	r.writeKeys = resetRecorderSlice(r.writeKeys, maxRetainedRecorderWriteKeys)
+	r.captureWriteKeys = resetRecorderSlice(r.captureWriteKeys, maxRetainedRecorderWriteKeys)
 	r.captureWritesEnabled = true
 	r.captureWriteInclude = nil
 	r.unsupported = false
@@ -224,7 +251,7 @@ func (r *TransactionAccessRecorder) Reset(capacityHint int) {
 // later block.
 func (r *TransactionAccessRecorder) ResetBlock(capacityHint int) {
 	r.Reset(capacityHint)
-	clear(r.rawKVKeys)
+	r.rawKVKeys = resetRecorderMap(r.rawKVKeys, maxRetainedRecorderRawKVKeys)
 }
 
 // RecordPublicNetReservation retains the conditional global-bandwidth update
@@ -535,7 +562,7 @@ func (r *TransactionAccessRecorder) record(key TransactionAccessKey, mode Transa
 		return
 	}
 	if r.accesses == nil {
-		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, 16)
+		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, r.capacityHint)
 	}
 	previous := r.accesses[key]
 	next := previous | mode
@@ -590,7 +617,7 @@ func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domai
 		return
 	}
 	if r.accesses == nil {
-		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, 16)
+		r.accesses = make(map[TransactionAccessKey]TransactionAccessMode, r.capacityHint)
 	}
 	lookup := TransactionAccessKey{
 		Kind:       TransactionAccessAccountKV,

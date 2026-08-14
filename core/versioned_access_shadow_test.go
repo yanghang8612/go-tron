@@ -85,6 +85,22 @@ func BenchmarkVersionedAccessShadowPrepareReuse(b *testing.B) {
 	}
 }
 
+func TestVersionedAccessShadowPrepareDropsOversizeVersionMap(t *testing.T) {
+	var shadow versionedAccessShadow
+	shadow.Prepare(8) // versions hint = 64, retention threshold = 256
+	old := shadow.versions
+	for i := 0; i < 257; i++ {
+		old[state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: string(rune(i))}] = i
+	}
+
+	shadow.Prepare(8)
+	probe := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "new-map"}
+	shadow.versions[probe] = 1
+	if _, retained := old[probe]; retained {
+		t.Fatal("oversize version map buckets were retained")
+	}
+}
+
 func TestVersionedAccessShadowValidatesReadVersionsAcrossStateFamilies(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := statedb.DynamicProperties()

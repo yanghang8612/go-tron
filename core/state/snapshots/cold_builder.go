@@ -76,9 +76,10 @@ type Config struct {
 	CompactMaxSteps        uint64
 	RetainObsoleteSegments bool
 	// CatchupBuildMinInterval rate-limits history collation while sync is
-	// active and the remaining snapshot lag fits in one configured block batch.
-	// Large backlogs still drain immediately; zero preserves the unthrottled
-	// behavior used by offline tooling and package-level tests.
+	// active. One bounded batch may start per interval even when snapshot lag is
+	// large, so cold ETL cannot continuously compete with historical block
+	// import. Once sync is inactive the backlog drains immediately; zero
+	// preserves the unthrottled behavior used by offline tooling and tests.
 	CatchupBuildMinInterval time.Duration
 	// HeavyWorkGate prevents history/accessor construction from overlapping
 	// optional freezer compression and index maintenance in the same process.
@@ -950,10 +951,7 @@ func (r *Runner) historyBuildRateLimited(now time.Time) bool {
 	if last <= 0 || now.Sub(time.Unix(0, last)) >= r.cfg.CatchupBuildMinInterval {
 		return false
 	}
-	// Never rate-limit a backlog larger than one complete block batch. This
-	// preserves the cold builder's ability to catch up after downtime while
-	// smoothing the steady-state one-step bursts observed during sync.
-	return r.lastLagBlocks.Load() <= r.cfg.BatchBlocks
+	return true
 }
 
 func writeSnapshotBuildStage(writer ethdb.KeyValueWriter, stage rawdb.StageID, block uint64, hash common.Hash) error {
