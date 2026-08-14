@@ -190,6 +190,16 @@ func writeLatestBinarySegmentAndAccessor(dir string, ref SegmentRef, iter latest
 }
 
 func writeLatestBinarySegmentWithCompanions(dir string, ref SegmentRef, iter latestEntryIterator, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
+	return writeLatestBinarySegmentWithCompanionsContext(context.Background(), dir, ref, iter, writeAccessor)
+}
+
+func writeLatestBinarySegmentWithCompanionsContext(ctx context.Context, dir string, ref SegmentRef, iter latestEntryIterator, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
 	if iter == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest entry iterator")
 	}
@@ -255,6 +265,9 @@ func writeLatestBinarySegmentWithCompanions(dir string, ref SegmentRef, iter lat
 	var btreeCount uint64
 	var prev []byte
 	err = iter(func(entry LatestEntry) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		entry = LatestEntry{
 			Key:   append([]byte(nil), entry.Key...),
 			Value: append([]byte(nil), entry.Value...),
@@ -302,6 +315,9 @@ func writeLatestBinarySegmentWithCompanions(dir string, ref SegmentRef, iter lat
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
 	if ref.normalizedDataset() == SegmentDatasetCommitmentRoot && count != 1 {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: commitment root segment entries = %d, want 1", count)
 	}
@@ -339,6 +355,11 @@ func writeLatestBinarySegmentWithCompanions(dir string, ref SegmentRef, iter lat
 
 	size, checksum, checksumBytes, err := latestBinaryFileMetadata(tmpName)
 	if err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	// The rename is the first durable publication point. Honor shutdown before
+	// crossing it so canceled builds leave only deferred-cleaned temp files.
+	if err := ctx.Err(); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	finalAbs := contentAddressedSnapshotPath(abs, checksum)

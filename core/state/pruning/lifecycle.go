@@ -207,7 +207,7 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		if err := l.builder.PreflightCatalog(); err != nil {
 			return out, err
 		}
-		result, err := l.builder.OnePass()
+		result, err := l.builder.OnePassContext(l.ctx)
 		if err != nil {
 			return out, err
 		}
@@ -309,7 +309,41 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 
 func (l *SnapshotLifecycle) loop() {
 	defer close(l.done)
+	var retryTimer *time.Timer
+	var retry <-chan time.Time
+	cancelRetry := func() {
+		if retryTimer != nil && !retryTimer.Stop() {
+			select {
+			case <-retryTimer.C:
+			default:
+			}
+		}
+		retry = nil
+	}
+	scheduleRetry := func(after time.Duration) {
+		if after <= 0 {
+			return
+		}
+		if retryTimer == nil {
+			retryTimer = time.NewTimer(after)
+		} else {
+			if !retryTimer.Stop() {
+				select {
+				case <-retryTimer.C:
+				default:
+				}
+			}
+			retryTimer.Reset(after)
+		}
+		retry = retryTimer.C
+	}
+	defer func() {
+		if retryTimer != nil {
+			retryTimer.Stop()
+		}
+	}()
 	runPass := func(reason string) {
+		cancelRetry()
 		result, err := l.OnePass()
 		if err != nil {
 			if errors.Is(err, context.Canceled) && l.ctx.Err() != nil {
@@ -324,6 +358,8 @@ func (l *SnapshotLifecycle) loop() {
 		// remains instead of sleeping for a full maintenance interval.
 		if result.Snapshot.NeedsCatchup() {
 			l.RequestPass()
+		} else if result.Snapshot.HistoryRetryAfter > 0 {
+			scheduleRetry(result.Snapshot.HistoryRetryAfter)
 		}
 	}
 	runPass("initial")
@@ -343,6 +379,9 @@ func (l *SnapshotLifecycle) loop() {
 			runPass("interval")
 		case <-l.wake:
 			runPass("requested")
+		case <-retry:
+			retry = nil
+			runPass("resource-retry")
 		case <-l.quit:
 			return
 		}

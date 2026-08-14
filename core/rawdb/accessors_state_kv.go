@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -211,9 +212,31 @@ func IterateStateKVLatest(db ethdb.Iteratee, owner common.Address, generation ui
 }
 
 func IterateStateKVLatestRows(db ethdb.Iteratee, fn func(StateKVLatestRow) (bool, error)) error {
+	return IterateStateKVLatestRowsContext(context.Background(), db, fn)
+}
+
+// IterateStateKVLatestRowsContext is the cancellable form of
+// IterateStateKVLatestRows. The context is checked around every iterator step
+// so callers can stop even when their row filter matches no entries.
+func IterateStateKVLatestRowsContext(ctx context.Context, db ethdb.Iteratee, fn func(StateKVLatestRow) (bool, error)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	it := db.NewIterator(stateKVLatestPrefix, nil)
 	defer it.Release()
-	for it.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !it.Next() {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		owner, generation, domain, logicalKey, ok := DecodeStateKVLatestKey(it.Key())
 		if !ok {
 			continue
@@ -236,14 +259,24 @@ func IterateStateKVLatestRows(db ethdb.Iteratee, fn func(StateKVLatestRow) (bool
 			return nil
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return it.Error()
 }
 
 func IterateStateKVLatestDomainRows(db ethdb.Iteratee, domain kvdomains.KVDomain, fn func(StateKVLatestRow) (bool, error)) error {
+	return IterateStateKVLatestDomainRowsContext(context.Background(), db, domain, fn)
+}
+
+// IterateStateKVLatestDomainRowsContext is the cancellable form of
+// IterateStateKVLatestDomainRows. Cancellation is observed while scanning
+// non-matching domains, not only when fn is invoked.
+func IterateStateKVLatestDomainRowsContext(ctx context.Context, db ethdb.Iteratee, domain kvdomains.KVDomain, fn func(StateKVLatestRow) (bool, error)) error {
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("state kv latest: unregistered domain %#04x", uint16(domain))
 	}
-	return IterateStateKVLatestRows(db, func(row StateKVLatestRow) (bool, error) {
+	return IterateStateKVLatestRowsContext(ctx, db, func(row StateKVLatestRow) (bool, error) {
 		if row.Domain != domain {
 			return true, nil
 		}

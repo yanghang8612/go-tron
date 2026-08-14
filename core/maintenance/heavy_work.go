@@ -100,3 +100,18 @@ func (g *HeavyWorkGate) coolingDown(now time.Time) bool {
 	}
 	return now.UnixNano() < g.nextAllowed.Load()
 }
+
+// CooldownRemaining reports how long callers should wait before retrying an
+// admission rejected by the post-work recovery window. It returns zero when
+// the gate is not cooling down; an independently active lease has no known
+// completion time and should still be retried on the caller's normal cadence.
+func (g *HeavyWorkGate) CooldownRemaining() time.Duration {
+	if g == nil || g.cooldown <= 0 {
+		return 0
+	}
+	remaining := time.Unix(0, g.nextAllowed.Load()).Sub(g.currentTime())
+	if remaining <= 0 {
+		return 0
+	}
+	return remaining
+}

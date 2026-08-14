@@ -1067,20 +1067,21 @@ func gtron(ctx *cli.Context) error {
 		}
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
-				Dir:                        stateSnapshotDir,
-				Enabled:                    coldStateSnapshotsEnabled,
-				HistoryDataset:             historyDataset,
-				HistoryWindow:              prunePolicy.HistoryWindow,
-				ETL:                        snapshotETL,
-				CatchupBuildMinInterval:    snapshotCatchupBuildInterval,
-				HeavyWorkGate:              heavyWorkGate,
-				BuildSectionBlooms:         buildDerivedSnapshots,
-				BuildBalanceTraces:         buildDerivedSnapshots,
-				BuildEventLogs:             buildDerivedSnapshots,
-				EventLogVersion:            eventLogVersion,
-				ColdChainVerificationCache: chainFreezerVerificationCache,
-				CatalogSigningKey:          snapshotCatalogSigningKey,
-				CatalogChain:               snapshotCatalogChain,
+				Dir:                         stateSnapshotDir,
+				Enabled:                     coldStateSnapshotsEnabled,
+				HistoryDataset:              historyDataset,
+				HistoryWindow:               prunePolicy.HistoryWindow,
+				ETL:                         snapshotETL,
+				CatchupBuildMinInterval:     snapshotCatchupBuildInterval,
+				CatchupUnthrottledLagBlocks: prunePolicy.HistoryWindow,
+				HeavyWorkGate:               heavyWorkGate,
+				BuildSectionBlooms:          buildDerivedSnapshots,
+				BuildBalanceTraces:          buildDerivedSnapshots,
+				BuildEventLogs:              buildDerivedSnapshots,
+				EventLogVersion:             eventLogVersion,
+				ColdChainVerificationCache:  chainFreezerVerificationCache,
+				CatalogSigningKey:           snapshotCatalogSigningKey,
+				CatalogChain:                snapshotCatalogChain,
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.
@@ -1135,6 +1136,7 @@ func gtron(ctx *cli.Context) error {
 			"etlBufferBytes", snapshotETL.BufferLimit,
 			"etlBatchBytes", snapshotETL.BatchSize,
 			"catchupBuildMinInterval", snapshotCatchupBuildInterval,
+			"catchupUnthrottledLagBlocks", prunePolicy.HistoryWindow,
 			"heavyWorkRecoveryCooldown", heavyWorkRecoveryCooldown,
 			"heavyWorkCooldownMinDuration", heavyWorkCooldownMinDuration,
 			"sharedHeavyWorkGate", true,

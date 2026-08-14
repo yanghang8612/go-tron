@@ -3,6 +3,7 @@ package snapshots
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -149,8 +150,15 @@ func BuildCommitmentBranchSegmentFilesFromDB(db ethdb.Iteratee, dir, relPath str
 }
 
 func writeCommitmentBranchBinarySegmentFilesFromDB(db ethdb.Iteratee, dir, relPath string, fromTxNum, toTxNum uint64, skipEmpty bool) (SegmentRef, SegmentRef, SegmentRef, bool, error) {
-	return writeCommitmentBranchBinarySegmentFilesFromIterator(dir, relPath, fromTxNum, toTxNum, skipEmpty, func(yield func(prefix, encoded []byte) error) error {
+	return writeCommitmentBranchBinarySegmentFilesFromDBContext(context.Background(), db, dir, relPath, fromTxNum, toTxNum, skipEmpty)
+}
+
+func writeCommitmentBranchBinarySegmentFilesFromDBContext(ctx context.Context, db ethdb.Iteratee, dir, relPath string, fromTxNum, toTxNum uint64, skipEmpty bool) (SegmentRef, SegmentRef, SegmentRef, bool, error) {
+	return writeCommitmentBranchBinarySegmentFilesFromIteratorContext(ctx, dir, relPath, fromTxNum, toTxNum, skipEmpty, func(yield func(prefix, encoded []byte) error) error {
 		return rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
+			if err := contextError(ctx); err != nil {
+				return false, err
+			}
 			if err := yield(prefix, encoded); err != nil {
 				return false, err
 			}
@@ -162,6 +170,10 @@ func writeCommitmentBranchBinarySegmentFilesFromDB(db ethdb.Iteratee, dir, relPa
 type commitmentBranchRowIterator func(func(prefix, encoded []byte) error) error
 
 func writeCommitmentBranchBinarySegmentFilesFromIterator(dir, relPath string, fromTxNum, toTxNum uint64, skipEmpty bool, rowsIter commitmentBranchRowIterator) (SegmentRef, SegmentRef, SegmentRef, bool, error) {
+	return writeCommitmentBranchBinarySegmentFilesFromIteratorContext(context.Background(), dir, relPath, fromTxNum, toTxNum, skipEmpty, rowsIter)
+}
+
+func writeCommitmentBranchBinarySegmentFilesFromIteratorContext(ctx context.Context, dir, relPath string, fromTxNum, toTxNum uint64, skipEmpty bool, rowsIter commitmentBranchRowIterator) (SegmentRef, SegmentRef, SegmentRef, bool, error) {
 	ref := SegmentRef{
 		Dataset:   SegmentDatasetCommitmentBranch,
 		Kind:      SegmentLatest,
@@ -172,12 +184,15 @@ func writeCommitmentBranchBinarySegmentFilesFromIterator(dir, relPath string, fr
 	var rows uint64
 	iter := func(yield func(LatestEntry) error) error {
 		return rowsIter(func(prefix, encoded []byte) error {
+			if err := contextError(ctx); err != nil {
+				return err
+			}
 			rows++
 			key := encodeCommitmentBranchSnapshotKey(prefix)
 			return yield(LatestEntry{Key: key, Value: encoded})
 		})
 	}
-	segment, accessor, btree, err := writeLatestBinarySegmentAndAccessor(dir, ref, iter)
+	segment, accessor, btree, err := writeLatestBinarySegmentWithCompanionsContext(ctx, dir, ref, iter, true)
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, false, err
 	}
@@ -604,6 +619,13 @@ func (s *CommitmentBranchSource) IterateCommitmentBranches(txNum uint64, fn func
 // branch keyspace is empty, mirroring Runner.onePass's "no rows, return early"
 // without first walking a large branch keyspace just to detect that it exists.
 func buildCommitmentBranchLatest(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+	return buildCommitmentBranchLatestContext(context.Background(), db, dir, 0, fromTxNum, toTxNum, relPath)
+}
+
+func buildCommitmentBranchLatestContext(ctx context.Context, db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
 	base, based, err := rawdb.ReadCommitmentBranchBase(db)
 	if err != nil {
 		return nil, err
@@ -626,14 +648,14 @@ func buildCommitmentBranchLatest(db AggregatorDB, dir string, _ kvdomains.KVDoma
 			// merged family instead of requiring its retired input base again.
 			return nil, nil
 		}
-		return buildMergedCommitmentBranchLatest(db, dir, base, fromTxNum, toTxNum, relPath)
+		return buildMergedCommitmentBranchLatestContext(ctx, db, dir, base, fromTxNum, toTxNum, relPath)
 	}
 	if based {
 		// With no active rotation the current immutable baseline remains the
 		// authoritative branch family. Aggregator.Integrate retains its refs.
 		return nil, nil
 	}
-	ref, accessor, btree, hasRows, err := writeCommitmentBranchBinarySegmentFilesFromDB(db, dir, relPath, fromTxNum, toTxNum, true)
+	ref, accessor, btree, hasRows, err := writeCommitmentBranchBinarySegmentFilesFromDBContext(ctx, db, dir, relPath, fromTxNum, toTxNum, true)
 	if err != nil {
 		return nil, err
 	}
@@ -663,6 +685,13 @@ func commitmentBranchRotationAlreadyPublished(dir string, rotation rawdb.Commitm
 }
 
 func buildMergedCommitmentBranchLatest(db AggregatorDB, dir string, base rawdb.CommitmentBranchBase, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+	return buildMergedCommitmentBranchLatestContext(context.Background(), db, dir, base, fromTxNum, toTxNum, relPath)
+}
+
+func buildMergedCommitmentBranchLatestContext(ctx context.Context, db AggregatorDB, dir string, base rawdb.CommitmentBranchBase, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
 	mgr, err := OpenManager(dir)
 	if err != nil {
 		return nil, fmt.Errorf("snapshots: open prior commitment branch manifest: %w", err)
@@ -683,12 +712,15 @@ func buildMergedCommitmentBranchLatest(db AggregatorDB, dir string, base rawdb.C
 	delta := deltaSpace.NewIterator(db)
 	defer delta.Release()
 
-	segment, accessor, btree, hasRows, err := writeCommitmentBranchBinarySegmentFilesFromIterator(
-		dir, relPath, fromTxNum, toTxNum, true,
+	segment, accessor, btree, hasRows, err := writeCommitmentBranchBinarySegmentFilesFromIteratorContext(
+		ctx, dir, relPath, fromTxNum, toTxNum, true,
 		func(yield func(prefix, encoded []byte) error) error {
 			coldOK := cold.Next()
 			deltaOK := delta.Next()
 			for coldOK || deltaOK {
+				if err := contextError(ctx); err != nil {
+					return err
+				}
 				switch {
 				case !deltaOK:
 					if err := yield(cold.Key(), cold.Value()); err != nil {

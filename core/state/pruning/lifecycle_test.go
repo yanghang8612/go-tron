@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
@@ -212,6 +213,116 @@ func TestSnapshotLifecycleRateLimitedWakeRunsRemainingMaintenance(t *testing.T) 
 	}
 	if chainFreezerBuilds != 2 || lifecycle.pruner.Stats().Passes != prunePasses+1 {
 		t.Fatalf("downstream maintenance skipped after rate limit: freezer=%d prune=%d/%d", chainFreezerBuilds, lifecycle.pruner.Stats().Passes, prunePasses)
+	}
+}
+
+func TestSnapshotLifecycleAcceleratedCatchupPreservesOrderedMaintenance(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	for blockNum := uint64(1); blockNum <= 6; blockNum++ {
+		writeSnapPruningChange(t, db, blockNum, blockNum*10, blockNum*10+2)
+	}
+	chain := &fakePruneChain{db: db, solidified: 7, syncRemaining: 100, syncRemainingOK: true}
+	chainFreezerBuilds := 0
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:                         dir,
+			Enabled:                     true,
+			HistoryWindow:               1,
+			BatchBlocks:                 2,
+			CatchupBuildMinInterval:     time.Hour,
+			CatchupUnthrottledLagBlocks: 2,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			SnapshotDir: dir,
+		},
+		ChainFreezerBuild: func() (snapshots.ChainFreezerSnapshotPassResult, error) {
+			chainFreezerBuilds++
+			return snapshots.ChainFreezerSnapshotPassResult{}, nil
+		},
+	})
+
+	first, err := lifecycle.OnePass()
+	if err != nil || !first.Snapshot.Built || !first.Snapshot.HistoryAccelerated {
+		t.Fatalf("first accelerated lifecycle pass = %+v err=%v", first, err)
+	}
+	second, err := lifecycle.OnePass()
+	if err != nil || !second.Snapshot.Built || !second.Snapshot.HistoryAccelerated {
+		t.Fatalf("second accelerated lifecycle pass = %+v err=%v", second, err)
+	}
+	if chainFreezerBuilds != 2 || lifecycle.pruner.Stats().Passes != 2 {
+		t.Fatalf("ordered maintenance after acceleration: freezer=%d prune=%d", chainFreezerBuilds, lifecycle.pruner.Stats().Passes)
+	}
+
+	third, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("post-acceleration lifecycle pass: %v", err)
+	}
+	if !third.Snapshot.HistoryRateLimited || third.Snapshot.Built {
+		t.Fatalf("post-acceleration lifecycle pass = %+v", third)
+	}
+	if chainFreezerBuilds != 3 || lifecycle.pruner.Stats().Passes != 3 {
+		t.Fatalf("ordered maintenance after rate limit: freezer=%d prune=%d", chainFreezerBuilds, lifecycle.pruner.Stats().Passes)
+	}
+}
+
+func TestSnapshotLifecycleRetriesAcceleratedCatchupAfterGateCooldown(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	for blockNum := uint64(1); blockNum <= 4; blockNum++ {
+		writeSnapPruningChange(t, db, blockNum, blockNum*10, blockNum*10+2)
+	}
+	gate := maintenance.NewHeavyWorkGateWithCooldownAfter(2*time.Second, 0)
+	lifecycle := NewSnapshotLifecycle(&fakePruneChain{
+		db:              db,
+		solidified:      5,
+		syncRemaining:   100,
+		syncRemainingOK: true,
+	}, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:                         dir,
+			Enabled:                     true,
+			HistoryWindow:               1,
+			BatchBlocks:                 2,
+			CatchupBuildMinInterval:     time.Hour,
+			CatchupUnthrottledLagBlocks: 1,
+			HeavyWorkGate:               gate,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+		Interval: time.Hour,
+	})
+	if err := lifecycle.Start(); err != nil {
+		t.Fatalf("start lifecycle: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := lifecycle.Stop(); err != nil {
+			t.Errorf("stop lifecycle: %v", err)
+		}
+	})
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild)
+		if err != nil {
+			t.Fatalf("read snapshot build stage: %v", err)
+		}
+		if ok && progress == 4 && lifecycle.builder.Snapshot().SegmentsBuilt == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild)
+	if err != nil || !ok || progress != 4 {
+		t.Fatalf("snapshot build stage = %d ok=%v err=%v, want cooldown retry to reach 4", progress, ok, err)
+	}
+	stats := lifecycle.builder.Snapshot()
+	if stats.SegmentsBuilt != 2 || stats.HistoryAcceleratedBuilds != 2 || stats.HistoryGateDeferred == 0 {
+		t.Fatalf("builder cooldown retry stats = %+v", stats)
 	}
 }
 

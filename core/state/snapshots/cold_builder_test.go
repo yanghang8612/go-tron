@@ -524,6 +524,50 @@ func TestColdBuilderRateLimitsLargeBacklogDuringSync(t *testing.T) {
 	}
 }
 
+func TestColdBuilderAcceleratesDeepBacklogDuringSync(t *testing.T) {
+	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7b)
+	for blockNum := uint64(1); blockNum <= 8; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	chain := &coldBuilderChain{db: db, solidified: 9, syncRemaining: 100, syncRemainingOK: true}
+	runner := NewRunner(chain, Config{
+		Dir:                         dir,
+		Enabled:                     true,
+		HistoryWindow:               1,
+		BatchBlocks:                 2,
+		CatchupBuildMinInterval:     time.Hour,
+		CatchupUnthrottledLagBlocks: 4,
+		MetricsNamespace:            namespace,
+	})
+
+	first, err := runner.OnePass()
+	if err != nil || !first.Built || !first.HistoryAccelerated || first.ToBlock != 2 {
+		t.Fatalf("first accelerated pass = %+v err=%v", first, err)
+	}
+	second, err := runner.OnePass()
+	if err != nil || !second.Built || !second.HistoryAccelerated || second.ToBlock != 4 {
+		t.Fatalf("second accelerated pass = %+v err=%v", second, err)
+	}
+	deferred, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("post-acceleration rate-limited pass: %v", err)
+	}
+	if !deferred.HistoryDeferred || !deferred.HistoryRateLimited || deferred.HistoryAccelerated || deferred.Built {
+		t.Fatalf("post-acceleration pass = %+v", deferred)
+	}
+	stats := runner.Snapshot()
+	if stats.SegmentsBuilt != 2 || stats.HistoryAcceleratedBuilds != 2 || stats.HistoryRateLimitedSync != 1 || stats.LastLagBlocks != 4 {
+		t.Fatalf("accelerated stats = %+v", stats)
+	}
+	assertColdRunnerGauge(t, namespace+"history/accelerated/builds", 2)
+	assertColdRunnerGauge(t, namespace+"history/deferred/rate_limit", 1)
+}
+
 func TestColdBuilderDefersWhenHeavyWorkGateIsBusy(t *testing.T) {
 	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
 	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
@@ -2484,6 +2528,7 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"latest/deferred/sync",
 		"history/deferred/sync",
 		"history/deferred/rate_limit",
+		"history/accelerated/builds",
 		"history/deferred/resource",
 		"last/latest_build_block",
 	} {

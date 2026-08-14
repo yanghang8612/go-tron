@@ -2,7 +2,9 @@ package rawdb
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -26,6 +28,55 @@ func (s noBatchStateKVStore) Put(key, value []byte) error    { return s.db.Put(k
 func (s noBatchStateKVStore) Delete(key []byte) error        { return s.db.Delete(key) }
 func (s noBatchStateKVStore) NewIterator(prefix, start []byte) ethdb.Iterator {
 	return s.db.NewIterator(prefix, start)
+}
+
+type cancelingStateKVIteratee struct {
+	ethdb.Iteratee
+	cancel    context.CancelFunc
+	remaining int
+}
+
+func (db *cancelingStateKVIteratee) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return &cancelingStateKVIterator{Iterator: db.Iteratee.NewIterator(prefix, start), parent: db}
+}
+
+type cancelingStateKVIterator struct {
+	ethdb.Iterator
+	parent *cancelingStateKVIteratee
+}
+
+func (it *cancelingStateKVIterator) Next() bool {
+	ok := it.Iterator.Next()
+	if ok && it.parent.remaining > 0 {
+		it.parent.remaining--
+		if it.parent.remaining == 0 {
+			it.parent.cancel()
+		}
+	}
+	return ok
+}
+
+func TestIterateStateKVLatestDomainRowsContextCancelsWhileSkippingOtherDomains(t *testing.T) {
+	db := NewMemoryDatabase()
+	for i := byte(1); i <= 8; i++ {
+		owner := common.BytesToAddress([]byte{common.AddressPrefixMainnet, i})
+		if err := WriteStateKVLatest(db, owner, 0, kvdomains.SystemAsset, []byte{i}, []byte("value")); err != nil {
+			t.Fatalf("write row %d: %v", i, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapped := &cancelingStateKVIteratee{Iteratee: db, cancel: cancel, remaining: 3}
+	called := false
+	err := IterateStateKVLatestDomainRowsContext(ctx, wrapped, kvdomains.ContractStorage, func(StateKVLatestRow) (bool, error) {
+		called = true
+		return true, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("iteration error = %v, want context.Canceled", err)
+	}
+	if called {
+		t.Fatal("target-domain callback called for non-matching rows")
+	}
 }
 
 func BenchmarkDeleteStateKVPrefixByPointScan(b *testing.B) {

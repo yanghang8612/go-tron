@@ -2,7 +2,9 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +18,97 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+type cancelingLatestIteratee struct {
+	ethdb.Iteratee
+	cancel    context.CancelFunc
+	remaining int
+}
+
+func (db *cancelingLatestIteratee) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return &cancelingLatestIterator{Iterator: db.Iteratee.NewIterator(prefix, start), parent: db}
+}
+
+type cancelingLatestIterator struct {
+	ethdb.Iterator
+	parent *cancelingLatestIteratee
+}
+
+func (it *cancelingLatestIterator) Next() bool {
+	ok := it.Iterator.Next()
+	if ok && it.parent.remaining > 0 {
+		it.parent.remaining--
+		if it.parent.remaining == 0 {
+			it.parent.cancel()
+		}
+	}
+	return ok
+}
+
+func TestBuildLatestDomainSegmentFilesContextCancelsSparseScanAndCleansTemps(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for i := byte(1); i <= 8; i++ {
+		owner := common.BytesToAddress([]byte{common.AddressPrefixMainnet, i})
+		if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.SystemAsset, []byte{i}, []byte("value")); err != nil {
+			t.Fatalf("write row %d: %v", i, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapped := &cancelingLatestIteratee{Iteratee: db, cancel: cancel, remaining: 3}
+	dir := t.TempDir()
+	_, _, _, err := BuildLatestDomainSegmentFilesFromDBContext(ctx, wrapped, dir, kvdomains.ContractStorage, 1, 10, "latest/contract-storage.seg")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("build error = %v, want context.Canceled", err)
+	}
+	if walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			t.Errorf("canceled build left file %s", path)
+		}
+		return nil
+	}); walkErr != nil {
+		t.Fatalf("walk snapshot dir: %v", walkErr)
+	}
+}
+
+func TestBuildLatestDomainSegmentsMultiContextCancelsSparseScanAndCleansTemps(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for i := byte(1); i <= 8; i++ {
+		owner := common.BytesToAddress([]byte{common.AddressPrefixMainnet, i})
+		if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.SystemAsset, []byte{i}, []byte("value")); err != nil {
+			t.Fatalf("write row %d: %v", i, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapped := &cancelingLatestIteratee{Iteratee: db, cancel: cancel, remaining: 3}
+	dir := t.TempDir()
+	_, err := buildLatestDomainSegmentFilesFromStoreMultiContext(
+		ctx,
+		newRawDBLatestHotBuildStore(wrapped),
+		dir,
+		[]kvdomains.KVDomain{kvdomains.ContractStorage},
+		1,
+		10,
+		func(kvdomains.KVDomain) string { return "latest/contract-storage.seg" },
+		false,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("build error = %v, want context.Canceled", err)
+	}
+	if walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			t.Errorf("canceled multi-domain build left file %s", path)
+		}
+		return nil
+	}); walkErr != nil {
+		t.Fatalf("walk snapshot dir: %v", walkErr)
+	}
+}
 
 func TestLatestSegmentIteratorWriterMatchesMaterializedJSON(t *testing.T) {
 	owner1 := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x11}, common.AccountIDLength)...))

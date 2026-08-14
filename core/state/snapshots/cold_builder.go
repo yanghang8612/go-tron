@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -76,11 +77,17 @@ type Config struct {
 	CompactMaxSteps        uint64
 	RetainObsoleteSegments bool
 	// CatchupBuildMinInterval rate-limits history collation while sync is
-	// active. One bounded batch may start per interval even when snapshot lag is
-	// large, so cold ETL cannot continuously compete with historical block
-	// import. Once sync is inactive the backlog drains immediately; zero
-	// preserves the unthrottled behavior used by offline tooling and tests.
+	// active. One bounded batch may start per interval unless adaptive catch-up
+	// below is enabled and its lag threshold is exceeded. Once sync is inactive
+	// the backlog drains immediately; zero preserves the unthrottled behavior
+	// used by offline tooling and tests.
 	CatchupBuildMinInterval time.Duration
+	// CatchupUnthrottledLagBlocks bypasses CatchupBuildMinInterval while sync is
+	// active and more than this many complete hot-history blocks are ready to be
+	// published. Each build remains bounded by BatchBlocks/BatchTxNums, and the
+	// ordered SnapshotLifecycle still runs freezer/prune maintenance after every
+	// published batch. Zero preserves the fixed-interval behavior.
+	CatchupUnthrottledLagBlocks uint64
 	// HeavyWorkGate prevents history/accessor construction from overlapping
 	// optional freezer compression and index maintenance in the same process.
 	// Losing non-blocking admission defers the pass to its normal cadence.
@@ -135,7 +142,9 @@ type PassResult struct {
 	Built               bool
 	HistoryDeferred     bool
 	HistoryRateLimited  bool
+	HistoryAccelerated  bool
 	HistoryGateDeferred bool
+	HistoryRetryAfter   time.Duration
 	LatestBuilt         bool
 	LatestDeferred      bool
 	Compaction          HistoryCompactionResult
@@ -172,89 +181,92 @@ func (r PassResult) NeedsCatchup() bool {
 
 // Stats is a thread-safe snapshot of lifecycle progress.
 type Stats struct {
-	PassesCompleted         uint64
-	PassErrors              uint64
-	SegmentsBuilt           uint64
-	SegmentsCompacted       uint64
-	CompactionMerges        uint64
-	CompactionCatchupDefers uint64
-	BytesBuilt              uint64
-	LastSolidified          uint64
-	LastCutoffBlock         uint64
-	LastEligibleCutoffBlock uint64
-	LastPublishedBlock      uint64
-	LastLagBlocks           uint64
-	LastVisibleTxEnd        uint64
-	LastFromTxNum           uint64
-	LastToTxNum             uint64
-	LastPassDuration        time.Duration
-	LastBuildDuration       time.Duration
-	LastCompactionDuration  time.Duration
-	LastCompactionMerges    uint64
-	LastLatestDuration      time.Duration
-	LatestDeferredSync      uint64
-	HistoryDeferredSync     uint64
-	HistoryRateLimitedSync  uint64
-	HistoryGateDeferred     uint64
-	LastLatestBuildBlock    uint64
+	PassesCompleted          uint64
+	PassErrors               uint64
+	SegmentsBuilt            uint64
+	SegmentsCompacted        uint64
+	CompactionMerges         uint64
+	CompactionCatchupDefers  uint64
+	BytesBuilt               uint64
+	LastSolidified           uint64
+	LastCutoffBlock          uint64
+	LastEligibleCutoffBlock  uint64
+	LastPublishedBlock       uint64
+	LastLagBlocks            uint64
+	LastVisibleTxEnd         uint64
+	LastFromTxNum            uint64
+	LastToTxNum              uint64
+	LastPassDuration         time.Duration
+	LastBuildDuration        time.Duration
+	LastCompactionDuration   time.Duration
+	LastCompactionMerges     uint64
+	LastLatestDuration       time.Duration
+	LatestDeferredSync       uint64
+	HistoryDeferredSync      uint64
+	HistoryRateLimitedSync   uint64
+	HistoryAcceleratedBuilds uint64
+	HistoryGateDeferred      uint64
+	LastLatestBuildBlock     uint64
 }
 
 type coldRunnerMetrics struct {
-	passes                  *metrics.Gauge
-	errors                  *metrics.Gauge
-	segmentsBuilt           *metrics.Gauge
-	segmentsCompacted       *metrics.Gauge
-	compactionMerges        *metrics.Gauge
-	compactionCatchupDefers *metrics.Gauge
-	bytesBuilt              *metrics.Gauge
-	lastSolidified          *metrics.Gauge
-	lastEligibleCutoff      *metrics.Gauge
-	lastSelectedCutoff      *metrics.Gauge
-	lastPublishedBlock      *metrics.Gauge
-	lagBlocks               *metrics.Gauge
-	lastVisibleTxEnd        *metrics.Gauge
-	lastFromTxNum           *metrics.Gauge
-	lastToTxNum             *metrics.Gauge
-	lastPassDuration        *metrics.Gauge
-	lastBuildDuration       *metrics.Gauge
-	lastCompactionDuration  *metrics.Gauge
-	lastCompactionMerges    *metrics.Gauge
-	lastLatestDuration      *metrics.Gauge
-	latestDeferredSync      *metrics.Gauge
-	historyDeferredSync     *metrics.Gauge
-	historyRateLimitedSync  *metrics.Gauge
-	historyGateDeferred     *metrics.Gauge
-	lastLatestBuildBlock    *metrics.Gauge
+	passes                   *metrics.Gauge
+	errors                   *metrics.Gauge
+	segmentsBuilt            *metrics.Gauge
+	segmentsCompacted        *metrics.Gauge
+	compactionMerges         *metrics.Gauge
+	compactionCatchupDefers  *metrics.Gauge
+	bytesBuilt               *metrics.Gauge
+	lastSolidified           *metrics.Gauge
+	lastEligibleCutoff       *metrics.Gauge
+	lastSelectedCutoff       *metrics.Gauge
+	lastPublishedBlock       *metrics.Gauge
+	lagBlocks                *metrics.Gauge
+	lastVisibleTxEnd         *metrics.Gauge
+	lastFromTxNum            *metrics.Gauge
+	lastToTxNum              *metrics.Gauge
+	lastPassDuration         *metrics.Gauge
+	lastBuildDuration        *metrics.Gauge
+	lastCompactionDuration   *metrics.Gauge
+	lastCompactionMerges     *metrics.Gauge
+	lastLatestDuration       *metrics.Gauge
+	latestDeferredSync       *metrics.Gauge
+	historyDeferredSync      *metrics.Gauge
+	historyRateLimitedSync   *metrics.Gauge
+	historyAcceleratedBuilds *metrics.Gauge
+	historyGateDeferred      *metrics.Gauge
+	lastLatestBuildBlock     *metrics.Gauge
 }
 
 func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 	namespace = normalizeColdSnapshotMetricNamespace(namespace)
 	return coldRunnerMetrics{
-		passes:                  metrics.GetOrRegisterGauge(namespace+"passes", nil),
-		errors:                  metrics.GetOrRegisterGauge(namespace+"errors", nil),
-		segmentsBuilt:           metrics.GetOrRegisterGauge(namespace+"segments/built", nil),
-		segmentsCompacted:       metrics.GetOrRegisterGauge(namespace+"segments/compacted", nil),
-		compactionMerges:        metrics.GetOrRegisterGauge(namespace+"compaction/merges", nil),
-		compactionCatchupDefers: metrics.GetOrRegisterGauge(namespace+"compaction/deferred/catchup", nil),
-		bytesBuilt:              metrics.GetOrRegisterGauge(namespace+"bytes/built", nil),
-		lastSolidified:          metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
-		lastEligibleCutoff:      metrics.GetOrRegisterGauge(namespace+"last/eligible_cutoff_block", nil),
-		lastSelectedCutoff:      metrics.GetOrRegisterGauge(namespace+"last/selected_cutoff_block", nil),
-		lastPublishedBlock:      metrics.GetOrRegisterGauge(namespace+"last/published_block", nil),
-		lagBlocks:               metrics.GetOrRegisterGauge(namespace+"lag/blocks", nil),
-		lastVisibleTxEnd:        metrics.GetOrRegisterGauge(namespace+"last/visible_tx_end", nil),
-		lastFromTxNum:           metrics.GetOrRegisterGauge(namespace+"last/from_tx", nil),
-		lastToTxNum:             metrics.GetOrRegisterGauge(namespace+"last/to_tx", nil),
-		lastPassDuration:        metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
-		lastBuildDuration:       metrics.GetOrRegisterGauge(namespace+"lastpass/build/duration", nil),
-		lastCompactionDuration:  metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/duration", nil),
-		lastCompactionMerges:    metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/merges", nil),
-		lastLatestDuration:      metrics.GetOrRegisterGauge(namespace+"lastpass/latest/duration", nil),
-		latestDeferredSync:      metrics.GetOrRegisterGauge(namespace+"latest/deferred/sync", nil),
-		historyDeferredSync:     metrics.GetOrRegisterGauge(namespace+"history/deferred/sync", nil),
-		historyRateLimitedSync:  metrics.GetOrRegisterGauge(namespace+"history/deferred/rate_limit", nil),
-		historyGateDeferred:     metrics.GetOrRegisterGauge(namespace+"history/deferred/resource", nil),
-		lastLatestBuildBlock:    metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
+		passes:                   metrics.GetOrRegisterGauge(namespace+"passes", nil),
+		errors:                   metrics.GetOrRegisterGauge(namespace+"errors", nil),
+		segmentsBuilt:            metrics.GetOrRegisterGauge(namespace+"segments/built", nil),
+		segmentsCompacted:        metrics.GetOrRegisterGauge(namespace+"segments/compacted", nil),
+		compactionMerges:         metrics.GetOrRegisterGauge(namespace+"compaction/merges", nil),
+		compactionCatchupDefers:  metrics.GetOrRegisterGauge(namespace+"compaction/deferred/catchup", nil),
+		bytesBuilt:               metrics.GetOrRegisterGauge(namespace+"bytes/built", nil),
+		lastSolidified:           metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
+		lastEligibleCutoff:       metrics.GetOrRegisterGauge(namespace+"last/eligible_cutoff_block", nil),
+		lastSelectedCutoff:       metrics.GetOrRegisterGauge(namespace+"last/selected_cutoff_block", nil),
+		lastPublishedBlock:       metrics.GetOrRegisterGauge(namespace+"last/published_block", nil),
+		lagBlocks:                metrics.GetOrRegisterGauge(namespace+"lag/blocks", nil),
+		lastVisibleTxEnd:         metrics.GetOrRegisterGauge(namespace+"last/visible_tx_end", nil),
+		lastFromTxNum:            metrics.GetOrRegisterGauge(namespace+"last/from_tx", nil),
+		lastToTxNum:              metrics.GetOrRegisterGauge(namespace+"last/to_tx", nil),
+		lastPassDuration:         metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
+		lastBuildDuration:        metrics.GetOrRegisterGauge(namespace+"lastpass/build/duration", nil),
+		lastCompactionDuration:   metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/duration", nil),
+		lastCompactionMerges:     metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/merges", nil),
+		lastLatestDuration:       metrics.GetOrRegisterGauge(namespace+"lastpass/latest/duration", nil),
+		latestDeferredSync:       metrics.GetOrRegisterGauge(namespace+"latest/deferred/sync", nil),
+		historyDeferredSync:      metrics.GetOrRegisterGauge(namespace+"history/deferred/sync", nil),
+		historyRateLimitedSync:   metrics.GetOrRegisterGauge(namespace+"history/deferred/rate_limit", nil),
+		historyAcceleratedBuilds: metrics.GetOrRegisterGauge(namespace+"history/accelerated/builds", nil),
+		historyGateDeferred:      metrics.GetOrRegisterGauge(namespace+"history/deferred/resource", nil),
+		lastLatestBuildBlock:     metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
 	}
 }
 
@@ -292,6 +304,7 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.latestDeferredSync.Update(coldSnapshotUintGauge(stats.LatestDeferredSync))
 	m.historyDeferredSync.Update(coldSnapshotUintGauge(stats.HistoryDeferredSync))
 	m.historyRateLimitedSync.Update(coldSnapshotUintGauge(stats.HistoryRateLimitedSync))
+	m.historyAcceleratedBuilds.Update(coldSnapshotUintGauge(stats.HistoryAcceleratedBuilds))
 	m.historyGateDeferred.Update(coldSnapshotUintGauge(stats.HistoryGateDeferred))
 	m.lastLatestBuildBlock.Update(coldSnapshotUintGauge(stats.LastLatestBuildBlock))
 }
@@ -320,32 +333,33 @@ type Runner struct {
 	startErr    error
 	prepareErr  error
 
-	passesCompleted         atomic.Uint64
-	passErrors              atomic.Uint64
-	segmentsBuilt           atomic.Uint64
-	segmentsCompacted       atomic.Uint64
-	compactionMerges        atomic.Uint64
-	compactionCatchupDefers atomic.Uint64
-	bytesBuilt              atomic.Uint64
-	lastSolidified          atomic.Uint64
-	lastCutoffBlock         atomic.Uint64
-	lastEligibleCutoff      atomic.Uint64
-	lastPublishedBlock      atomic.Uint64
-	lastLagBlocks           atomic.Uint64
-	lastVisibleTxEnd        atomic.Uint64
-	lastFromTxNum           atomic.Uint64
-	lastToTxNum             atomic.Uint64
-	lastPassDuration        atomic.Int64
-	lastBuildDuration       atomic.Int64
-	lastCompactionDuration  atomic.Int64
-	lastCompactionMerges    atomic.Uint64
-	lastLatestDuration      atomic.Int64
-	lastLatestBuildBlock    atomic.Uint64
-	latestDeferredSync      atomic.Uint64
-	historyDeferredSync     atomic.Uint64
-	historyRateLimitedSync  atomic.Uint64
-	historyGateDeferred     atomic.Uint64
-	lastHistoryBuildAt      atomic.Int64
+	passesCompleted          atomic.Uint64
+	passErrors               atomic.Uint64
+	segmentsBuilt            atomic.Uint64
+	segmentsCompacted        atomic.Uint64
+	compactionMerges         atomic.Uint64
+	compactionCatchupDefers  atomic.Uint64
+	bytesBuilt               atomic.Uint64
+	lastSolidified           atomic.Uint64
+	lastCutoffBlock          atomic.Uint64
+	lastEligibleCutoff       atomic.Uint64
+	lastPublishedBlock       atomic.Uint64
+	lastLagBlocks            atomic.Uint64
+	lastVisibleTxEnd         atomic.Uint64
+	lastFromTxNum            atomic.Uint64
+	lastToTxNum              atomic.Uint64
+	lastPassDuration         atomic.Int64
+	lastBuildDuration        atomic.Int64
+	lastCompactionDuration   atomic.Int64
+	lastCompactionMerges     atomic.Uint64
+	lastLatestDuration       atomic.Int64
+	lastLatestBuildBlock     atomic.Uint64
+	latestDeferredSync       atomic.Uint64
+	historyDeferredSync      atomic.Uint64
+	historyRateLimitedSync   atomic.Uint64
+	historyAcceleratedBuilds atomic.Uint64
+	historyGateDeferred      atomic.Uint64
+	lastHistoryBuildAt       atomic.Int64
 }
 
 func NewRunner(chain ChainSource, cfg Config) *Runner {
@@ -523,31 +537,32 @@ func (r *Runner) Snapshot() Stats {
 		return Stats{}
 	}
 	return Stats{
-		PassesCompleted:         r.passesCompleted.Load(),
-		PassErrors:              r.passErrors.Load(),
-		SegmentsBuilt:           r.segmentsBuilt.Load(),
-		SegmentsCompacted:       r.segmentsCompacted.Load(),
-		CompactionMerges:        r.compactionMerges.Load(),
-		CompactionCatchupDefers: r.compactionCatchupDefers.Load(),
-		BytesBuilt:              r.bytesBuilt.Load(),
-		LastSolidified:          r.lastSolidified.Load(),
-		LastCutoffBlock:         r.lastCutoffBlock.Load(),
-		LastEligibleCutoffBlock: r.lastEligibleCutoff.Load(),
-		LastPublishedBlock:      r.lastPublishedBlock.Load(),
-		LastLagBlocks:           r.lastLagBlocks.Load(),
-		LastVisibleTxEnd:        r.lastVisibleTxEnd.Load(),
-		LastFromTxNum:           r.lastFromTxNum.Load(),
-		LastToTxNum:             r.lastToTxNum.Load(),
-		LastPassDuration:        time.Duration(r.lastPassDuration.Load()),
-		LastBuildDuration:       time.Duration(r.lastBuildDuration.Load()),
-		LastCompactionDuration:  time.Duration(r.lastCompactionDuration.Load()),
-		LastCompactionMerges:    r.lastCompactionMerges.Load(),
-		LastLatestDuration:      time.Duration(r.lastLatestDuration.Load()),
-		LatestDeferredSync:      r.latestDeferredSync.Load(),
-		HistoryDeferredSync:     r.historyDeferredSync.Load(),
-		HistoryRateLimitedSync:  r.historyRateLimitedSync.Load(),
-		HistoryGateDeferred:     r.historyGateDeferred.Load(),
-		LastLatestBuildBlock:    r.lastLatestBuildBlock.Load(),
+		PassesCompleted:          r.passesCompleted.Load(),
+		PassErrors:               r.passErrors.Load(),
+		SegmentsBuilt:            r.segmentsBuilt.Load(),
+		SegmentsCompacted:        r.segmentsCompacted.Load(),
+		CompactionMerges:         r.compactionMerges.Load(),
+		CompactionCatchupDefers:  r.compactionCatchupDefers.Load(),
+		BytesBuilt:               r.bytesBuilt.Load(),
+		LastSolidified:           r.lastSolidified.Load(),
+		LastCutoffBlock:          r.lastCutoffBlock.Load(),
+		LastEligibleCutoffBlock:  r.lastEligibleCutoff.Load(),
+		LastPublishedBlock:       r.lastPublishedBlock.Load(),
+		LastLagBlocks:            r.lastLagBlocks.Load(),
+		LastVisibleTxEnd:         r.lastVisibleTxEnd.Load(),
+		LastFromTxNum:            r.lastFromTxNum.Load(),
+		LastToTxNum:              r.lastToTxNum.Load(),
+		LastPassDuration:         time.Duration(r.lastPassDuration.Load()),
+		LastBuildDuration:        time.Duration(r.lastBuildDuration.Load()),
+		LastCompactionDuration:   time.Duration(r.lastCompactionDuration.Load()),
+		LastCompactionMerges:     r.lastCompactionMerges.Load(),
+		LastLatestDuration:       time.Duration(r.lastLatestDuration.Load()),
+		LatestDeferredSync:       r.latestDeferredSync.Load(),
+		HistoryDeferredSync:      r.historyDeferredSync.Load(),
+		HistoryRateLimitedSync:   r.historyRateLimitedSync.Load(),
+		HistoryAcceleratedBuilds: r.historyAcceleratedBuilds.Load(),
+		HistoryGateDeferred:      r.historyGateDeferred.Load(),
+		LastLatestBuildBlock:     r.lastLatestBuildBlock.Load(),
 	}
 }
 
@@ -555,8 +570,18 @@ func (r *Runner) Snapshot() Stats {
 // catch-up-aware geometric scheduling, then runs one latest-snapshot build pass
 // if the cadence interval has elapsed.
 func (r *Runner) OnePass() (PassResult, error) {
+	return r.OnePassContext(context.Background())
+}
+
+func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 	if r == nil {
 		return PassResult{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return PassResult{}, err
 	}
 	r.passMu.Lock()
 	defer r.passMu.Unlock()
@@ -565,14 +590,20 @@ func (r *Runner) OnePass() (PassResult, error) {
 	phaseStart := start
 	result, err := r.onePass()
 	result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err == nil && !result.HistoryDeferred {
 		phaseStart = time.Now()
 		result.Compaction, err = r.compactHistory(result.NeedsCatchup())
 		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
+		if err == nil {
+			err = ctx.Err()
+		}
 	}
 	if err == nil {
 		phaseStart = time.Now()
-		built, deferred, perr := r.latestPassWithStatus()
+		built, deferred, perr := r.latestPassWithStatusContext(ctx)
 		result.LatestDuration = coldSnapshotPhaseDuration(phaseStart)
 		result.LatestDeferred = deferred
 		if perr != nil {
@@ -765,7 +796,9 @@ func (r *Runner) onePass() (PassResult, error) {
 	if !ok {
 		return result, nil
 	}
-	if r.historyBuildRateLimited(time.Now()) {
+	readyBlocks := cutoffBlock - startBlock + 1
+	result.HistoryAccelerated = r.historyBuildAccelerated(readyBlocks)
+	if r.historyBuildRateLimited(time.Now(), result.HistoryAccelerated) {
 		result.HistoryDeferred = true
 		result.HistoryRateLimited = true
 		return result, nil
@@ -823,6 +856,7 @@ func (r *Runner) onePass() (PassResult, error) {
 	if !admitted {
 		result.HistoryDeferred = true
 		result.HistoryGateDeferred = true
+		result.HistoryRetryAfter = r.cfg.HeavyWorkGate.CooldownRemaining()
 		return result, nil
 	}
 	defer releaseHeavyWork()
@@ -936,7 +970,19 @@ func (r *Runner) onePass() (PassResult, error) {
 	return result, nil
 }
 
-func (r *Runner) historyBuildRateLimited(now time.Time) bool {
+func (r *Runner) historyBuildAccelerated(readyBlocks uint64) bool {
+	if r == nil || r.cfg.CatchupUnthrottledLagBlocks == 0 || readyBlocks <= r.cfg.CatchupUnthrottledLagBlocks {
+		return false
+	}
+	source, ok := r.chain.(syncRemainingSource)
+	if !ok {
+		return false
+	}
+	_, active := source.SyncRemainingBlocks()
+	return active
+}
+
+func (r *Runner) historyBuildRateLimited(now time.Time, accelerated bool) bool {
 	if r == nil || r.cfg.CatchupBuildMinInterval <= 0 {
 		return false
 	}
@@ -945,6 +991,9 @@ func (r *Runner) historyBuildRateLimited(now time.Time) bool {
 		return false
 	}
 	if _, active := source.SyncRemainingBlocks(); !active {
+		return false
+	}
+	if accelerated {
 		return false
 	}
 	last := r.lastHistoryBuildAt.Load()
@@ -1179,6 +1228,9 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	if result.Built {
 		r.segmentsBuilt.Add(1)
 		r.lastHistoryBuildAt.Store(time.Now().UnixNano())
+		if result.HistoryAccelerated {
+			r.historyAcceleratedBuilds.Add(1)
+		}
 	}
 	if result.Compaction.Merged {
 		r.segmentsCompacted.Add(uint64(result.Compaction.SegmentsMerged))
@@ -1376,13 +1428,23 @@ func (r *Runner) latestBuildWatermark() (block uint64, txNum uint64, ok bool, er
 }
 
 func (r *Runner) latestPass() (bool, error) {
-	built, _, err := r.latestPassWithStatus()
+	built, _, err := r.latestPassWithStatusContext(context.Background())
 	return built, err
 }
 
 func (r *Runner) latestPassWithStatus() (built bool, deferred bool, err error) {
+	return r.latestPassWithStatusContext(context.Background())
+}
+
+func (r *Runner) latestPassWithStatusContext(ctx context.Context) (built bool, deferred bool, err error) {
 	if r == nil || !r.cfg.Enabled || r.cfg.LatestBuildBlocks == 0 {
 		return false, false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false, false, err
 	}
 	db := r.chain.DB()
 	if db == nil {
@@ -1428,7 +1490,7 @@ func (r *Runner) latestPassWithStatus() (built bool, deferred bool, err error) {
 			return false, false, err
 		}
 	}
-	res, err := NewAggregator(r.cfg.Dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: txNum})
+	res, err := NewAggregator(r.cfg.Dir).BuildLatestContext(ctx, db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: txNum})
 	if err != nil {
 		return false, false, err
 	}

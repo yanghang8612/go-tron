@@ -7,12 +7,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+type countingKVLatestScanDB struct {
+	ethdb.KeyValueStore
+	scans int
+}
+
+func (db *countingKVLatestScanDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	// Identify the private state-KV latest prefix by probing the requested
+	// range. This keeps the assertion at the public rawdb boundary.
+	probe := db.KeyValueStore.NewIterator(prefix, start)
+	if probe.Next() {
+		_, _, _, _, ok := rawdb.DecodeStateKVLatestKey(probe.Key())
+		if ok {
+			db.scans++
+		}
+	}
+	probe.Release()
+	return db.KeyValueStore.NewIterator(prefix, start)
+}
 
 func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	dir := t.TempDir()
@@ -579,6 +599,48 @@ func TestAggregatorBuildLatestPrunesDeletedContractGeneration(t *testing.T) {
 		if err != nil || !ok || string(got) != tc.want {
 			t.Fatalf("restored current generation %s value = %q ok=%v err=%v, want %q", kvdomains.Name(tc.domain), got, ok, err, tc.want)
 		}
+	}
+}
+
+func TestAggregatorBuildLatestScansSharedKVDomainTableOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		configured []kvdomains.KVDomain
+	}{
+		{name: "discover domains"},
+		{name: "configured domains", configured: []kvdomains.KVDomain{kvdomains.ContractStorage, kvdomains.ContractMetadata}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := rawdb.NewMemoryDatabase()
+			db := &countingKVLatestScanDB{KeyValueStore: base}
+			owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0xa7}, common.AccountIDLength)...))
+			if err := rawdb.WriteStateKVGeneration(db, owner, 3); err != nil {
+				t.Fatal(err)
+			}
+			if err := rawdb.WriteStateKVLatest(db, owner, 3, kvdomains.ContractMetadata, []byte("meta"), []byte("metadata")); err != nil {
+				t.Fatal(err)
+			}
+			if err := rawdb.WriteStateKVLatest(db, owner, 3, kvdomains.ContractStorage, []byte("slot"), []byte("storage")); err != nil {
+				t.Fatal(err)
+			}
+			if err := rawdb.WriteLatestDomainCommitmentRoot(db, common.Hash{0x42}); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := NewAggregator(t.TempDir()).BuildLatest(db, AggregatorBuildOptions{
+				FromTxNum: 1,
+				ToTxNum:   10,
+				KVDomains: tc.configured,
+			})
+			if err != nil {
+				t.Fatalf("BuildLatest: %v", err)
+			}
+			if db.scans != 1 {
+				t.Fatalf("state-KV latest table scans = %d, want 1", db.scans)
+			}
+			assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractMetadata, SegmentLatest)
+			assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentLatest)
+		})
 	}
 }
 

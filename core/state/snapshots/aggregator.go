@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -73,6 +74,16 @@ func (a *Aggregator) Build(db AggregatorDB, opts AggregatorBuildOptions) (*Aggre
 }
 
 func (a *Aggregator) buildLatestSegments(db AggregatorDB, opts AggregatorBuildOptions) ([]SegmentRef, error) {
+	return a.buildLatestSegmentsContext(context.Background(), db, opts)
+}
+
+func (a *Aggregator) buildLatestSegmentsContext(ctx context.Context, db AggregatorDB, opts AggregatorBuildOptions) ([]SegmentRef, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
@@ -82,9 +93,13 @@ func (a *Aggregator) buildLatestSegments(db AggregatorDB, opts AggregatorBuildOp
 	if opts.ToTxNum < opts.FromTxNum {
 		return nil, fmt.Errorf("snapshots: aggregate range [%d,%d] is inverted", opts.FromTxNum, opts.ToTxNum)
 	}
-	domains, err := aggregationKVDomains(db, opts.KVDomains)
-	if err != nil {
-		return nil, err
+	var domains []kvdomains.KVDomain
+	if len(opts.KVDomains) != 0 {
+		var err error
+		domains, err = normalizeAggregationKVDomains(opts.KVDomains)
+		if err != nil {
+			return nil, err
+		}
 	}
 	kvLatestDomains := make(map[SegmentDataset][]kvdomains.KVDomain)
 	kvLatestDomains[SegmentDatasetKVLatest] = domains
@@ -92,12 +107,36 @@ func (a *Aggregator) buildLatestSegments(db AggregatorDB, opts AggregatorBuildOp
 	var refs []SegmentRef
 	registry := DefaultDomainRegistry()
 	for _, cfg := range registry.LatestConfigs() {
-		if cfg.BuildLatest == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if cfg.BuildLatest == nil && cfg.BuildLatestContext == nil && cfg.BuildLatestDomainsContext == nil {
 			return nil, fmt.Errorf("snapshots: latest domain %s has no builder", cfg.Dataset)
 		}
 		if cfg.DomainSpecific {
-			for _, domain := range kvLatestDomains[cfg.Dataset] {
-				built, err := cfg.BuildLatest(db, a.dir, domain, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(domain), opts, cfg.latestPathExt()))
+			if cfg.BuildLatestDomainsContext != nil {
+				built, err := cfg.BuildLatestDomainsContext(ctx, db, a.dir, kvLatestDomains[cfg.Dataset], opts.FromTxNum, opts.ToTxNum, func(domain kvdomains.KVDomain) string {
+					return aggregateLatestPath(cfg.LatestPathBase(domain), opts, cfg.latestPathExt())
+				})
+				if err != nil {
+					return nil, err
+				}
+				refs = append(refs, built...)
+				continue
+			}
+			datasetDomains := kvLatestDomains[cfg.Dataset]
+			if len(datasetDomains) == 0 {
+				var discoverErr error
+				datasetDomains, discoverErr = aggregationKVDomainsContext(ctx, db, nil)
+				if discoverErr != nil {
+					return nil, discoverErr
+				}
+			}
+			for _, domain := range datasetDomains {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				built, err := cfg.buildLatestContext(ctx, db, a.dir, domain, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(domain), opts, cfg.latestPathExt()))
 				if err != nil {
 					return nil, err
 				}
@@ -105,7 +144,7 @@ func (a *Aggregator) buildLatestSegments(db AggregatorDB, opts AggregatorBuildOp
 			}
 			continue
 		}
-		built, err := cfg.BuildLatest(db, a.dir, 0, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(0), opts, cfg.latestPathExt()))
+		built, err := cfg.buildLatestContext(ctx, db, a.dir, 0, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(0), opts, cfg.latestPathExt()))
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +177,14 @@ func (a *Aggregator) BuildSegments(db AggregatorDB, opts AggregatorBuildOptions)
 // ToTxNum] and integrates them into the manifest. History segments are owned by
 // the cold history Runner pass and are not touched here.
 func (a *Aggregator) BuildLatest(db AggregatorDB, opts AggregatorBuildOptions) (*AggregatorBuildResult, error) {
-	refs, err := a.buildLatestSegments(db, opts)
+	return a.BuildLatestContext(context.Background(), db, opts)
+}
+
+func (a *Aggregator) BuildLatestContext(ctx context.Context, db AggregatorDB, opts AggregatorBuildOptions) (*AggregatorBuildResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	refs, err := a.buildLatestSegmentsContext(ctx, db, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +192,9 @@ func (a *Aggregator) BuildLatest(db AggregatorDB, opts AggregatorBuildOptions) (
 		return &AggregatorBuildResult{}, nil
 	}
 	sortSegments(refs)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	manifest, err := a.Integrate(opts.FromTxNum, opts.ToTxNum, refs)
 	if err != nil {
 		return nil, err
@@ -765,15 +814,15 @@ func cloneProgress(progress *Progress) *Progress {
 }
 
 func aggregationKVDomains(db ethdb.Iteratee, configured []kvdomains.KVDomain) ([]kvdomains.KVDomain, error) {
+	return aggregationKVDomainsContext(context.Background(), db, configured)
+}
+
+func aggregationKVDomainsContext(ctx context.Context, db ethdb.Iteratee, configured []kvdomains.KVDomain) ([]kvdomains.KVDomain, error) {
 	if len(configured) != 0 {
 		return normalizeAggregationKVDomains(configured)
 	}
-	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetKVLatest)
-	if !ok || cfg.IterateHotKVLatestRows == nil {
-		return nil, errors.New("snapshots: missing account-KV latest iterator")
-	}
 	seen := make(map[kvdomains.KVDomain]struct{})
-	if err := cfg.IterateHotKVLatestRows(db, func(row rawdb.StateKVLatestRow) (bool, error) {
+	if err := rawdb.IterateStateKVLatestRowsContext(ctx, db, func(row rawdb.StateKVLatestRow) (bool, error) {
 		seen[row.Domain] = struct{}{}
 		return true, nil
 	}); err != nil {

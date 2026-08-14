@@ -30,6 +30,8 @@ type DomainCfg struct {
 	HasHistoryAccessor                bool
 	TracksCommitmentFlush             bool
 	BuildLatest                       LatestSnapshotBuilder
+	BuildLatestContext                LatestSnapshotBuilderContext
+	BuildLatestDomainsContext         LatestSnapshotDomainsBuilderContext
 	ReadHotAccountLatest              HotAccountLatestReader
 	IterateHotAccountLatest           HotAccountLatestIterator
 	ReadHotKVLatest                   HotKVLatestReader
@@ -97,6 +99,26 @@ type DomainRegistry struct {
 }
 
 type LatestSnapshotBuilder func(db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error)
+
+type LatestSnapshotBuilderContext func(ctx context.Context, db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error)
+
+// LatestSnapshotDomainsBuilderContext builds every requested physical domain
+// from one traversal of the shared hot keyspace. An empty domains slice asks
+// the builder to discover domains during that traversal.
+type LatestSnapshotDomainsBuilderContext func(ctx context.Context, db AggregatorDB, dir string, domains []kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath func(kvdomains.KVDomain) string) ([]SegmentRef, error)
+
+func (cfg DomainCfg) buildLatestContext(ctx context.Context, db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+	if cfg.BuildLatestContext != nil {
+		return cfg.BuildLatestContext(ctx, db, dir, domain, fromTxNum, toTxNum, relPath)
+	}
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if cfg.BuildLatest == nil {
+		return nil, fmt.Errorf("snapshots: latest domain %s has no builder", cfg.Dataset)
+	}
+	return cfg.BuildLatest(db, dir, domain, fromTxNum, toTxNum, relPath)
+}
 
 type HotAccountLatestReader func(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error)
 
@@ -226,6 +248,13 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				}
 				return []SegmentRef{latest, btree}, nil
 			},
+			BuildLatestContext: func(ctx context.Context, db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, _, btree, err := buildAccountLatestSegmentFilesFromStoreContext(ctx, newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, btree}, nil
+			},
 			ReadHotAccountLatest:    rawdb.ReadStateAccountLatest,
 			IterateHotAccountLatest: rawdb.IterateStateAccountLatest,
 		},
@@ -244,6 +273,16 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				}
 				return []SegmentRef{latest, btree}, nil
 			},
+			BuildLatestContext: func(ctx context.Context, db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, _, btree, err := buildLatestDomainSegmentFilesFromStoreContext(ctx, newRawDBLatestHotBuildStore(db), dir, domain, fromTxNum, toTxNum, relPath, false)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, btree}, nil
+			},
+			BuildLatestDomainsContext: func(ctx context.Context, db AggregatorDB, dir string, domains []kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath func(kvdomains.KVDomain) string) ([]SegmentRef, error) {
+				return buildLatestDomainSegmentFilesFromStoreMultiContext(ctx, newRawDBLatestHotBuildStore(db), dir, domains, fromTxNum, toTxNum, relPath, false)
+			},
 			ReadHotKVLatest:        rawdb.ReadStateKVLatest,
 			IterateHotKVLatestRows: rawdb.IterateStateKVLatestRows,
 		},
@@ -256,6 +295,13 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
 				latest, _, btree, err := buildKVGenerationSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, btree}, nil
+			},
+			BuildLatestContext: func(ctx context.Context, db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, _, btree, err := buildKVGenerationSegmentFilesFromStoreContext(ctx, newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
@@ -291,6 +337,13 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				}
 				return []SegmentRef{latest, btree}, nil
 			},
+			BuildLatestContext: func(ctx context.Context, db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, _, btree, err := buildCodeSegmentFilesFromStoreContext(ctx, newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, btree}, nil
+			},
 			ReadHotCode:          readHotStateCode,
 			IterateHotCode:       rawdb.IterateStateCode,
 			IterateHotCodeHashes: rawdb.IterateStateCodeHashes,
@@ -306,6 +359,13 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			TracksCommitmentFlush: true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
 				latest, _, btree, err := buildCommitmentRootSegmentFilesFromStore(newRawDBLatestHotReadStore(db), dir, fromTxNum, toTxNum, relPath, false)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, btree}, nil
+			},
+			BuildLatestContext: func(ctx context.Context, db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, _, btree, err := buildCommitmentRootSegmentFilesFromStoreContext(ctx, newRawDBLatestHotReadStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
@@ -327,6 +387,13 @@ func buildDefaultDomainRegistry() DomainRegistry {
 				}
 				return []SegmentRef{latest, btree}, nil
 			},
+			BuildLatestContext: func(ctx context.Context, db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, _, btree, err := buildCommitmentCheckpointSegmentFilesFromStoreContext(ctx, newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, btree}, nil
+			},
 			WriteHotCommitmentCheckpoint:      rawdb.WriteStateCommitmentCheckpoint,
 			ReadHotLatestCommitmentCheckpoint: rawdb.ReadLatestStateCommitmentCheckpoint,
 			IterateHotCommitmentCheckpoints:   rawdb.IterateStateCommitmentCheckpoints,
@@ -342,6 +409,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestBTree:        true,
 			TracksCommitmentFlush: true,
 			BuildLatest:           buildCommitmentBranchLatest,
+			BuildLatestContext:    buildCommitmentBranchLatestContext,
 			CheckLatest:           checkCommitmentBranchSegment,
 		},
 		{
