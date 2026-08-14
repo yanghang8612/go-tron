@@ -102,6 +102,38 @@ func TestStateDomainChangeKeyOrientedV6RoundTripAndLookups(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangeV6CompactionFrameDoesNotResolveDictionary(t *testing.T) {
+	changes := normalizeStateDomainChangesForBinary(buildHistoryStructs(8, 4))
+	segment, index, accessor, err := encodeStateDomainChangeBinarySegmentV6(9_000_000, 9_000_007, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessorReads := &countingStateDomainReaderAt{reader: bytes.NewReader(accessor)}
+	reader := &stateDomainChangeHistoryReader{
+		historySegmentReader: nopHistoryReader{ioReaderAt: bytes.NewReader(segment)},
+		header:               stateDomainChangeBinaryHeader{version: stateDomainChangeBinaryVersionV6, fromTxNum: 9_000_000, toTxNum: 9_000_007, count: uint64(len(changes))},
+		logicalSize:          uint64(len(segment)),
+		ref:                  SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 9_000_000, ToTxNum: 9_000_007},
+		v6Accessor:           nopHistoryReader{ioReaderAt: accessorReads},
+		v6Size:               uint64(len(accessor)),
+	}
+	var payload []byte
+	var change rawdb.StateDomainChange
+	payload, keyID, next, err := readStateDomainChangeBinaryRecordV6FrameInto(reader, index[0].offset, uint64(len(segment)), index[0].recordIndex, payload, &change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) == 0 || next <= index[0].offset || uint64(keyID) >= uint64(len(changes)) {
+		t.Fatalf("payload=%d keyID=%d next=%d", len(payload), keyID, next)
+	}
+	if change.TxNum != changes[0].TxNum || change.BlockNum != changes[0].BlockNum || change.Seq == 0 || change.PrevExists != changes[0].PrevExists || !bytes.Equal(change.Prev, changes[0].Prev) {
+		t.Fatalf("decoded compact row = %+v, want tx/block/previous from %+v", change, changes[0])
+	}
+	if accessorReads.reads != 0 {
+		t.Fatalf("direct V6 compaction frame performed %d dictionary reads", accessorReads.reads)
+	}
+}
+
 func TestStateDomainChangeKeyOrientedV6Corruption(t *testing.T) {
 	changes := normalizeStateDomainChangesForBinary(buildHistoryStructs(8, 4))
 	_, _, accessor, err := encodeStateDomainChangeBinarySegmentV6(9_000_000, 9_000_007, changes)

@@ -622,6 +622,42 @@ func verifyStateDomainChangeBinaryV6DictionaryPair(segment, accessor io.ReaderAt
 	return nil
 }
 
+// iterateStateDomainChangeBinaryAccessorV6Keys walks the immutable dictionary
+// in keyID order. Compaction uses this once per source segment to collect the
+// union dictionary and to build a dense source-ID to destination-ID remap.
+// Unlike KeyByID, this performs one sequential block-directory pass and one
+// decode per unique key block, independent of the number and order of postings.
+func iterateStateDomainChangeBinaryAccessorV6Keys(r io.ReaderAt, fileSize uint64, fn func(uint32, []byte) error) (stateDomainChangeBinaryAccessorV6Header, error) {
+	h, err := decodeStateDomainChangeBinaryAccessorV6Header(r, fileSize)
+	if err != nil {
+		return h, err
+	}
+	blocks, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectory(r, h)
+	if err != nil {
+		return h, err
+	}
+	var seen uint64
+	for blockIndex, block := range blocks {
+		records, err := stateDomainChangeBinaryAccessorV6ReadBlock(r, fileSize, h, block, uint32(blockIndex*stateDomainChangeBinaryAccessorV6BlockKeys))
+		if err != nil {
+			return h, err
+		}
+		for _, record := range records {
+			if uint64(record.keyID) != seen {
+				return h, errors.New("snapshots: V6 accessor dictionary key IDs are not contiguous")
+			}
+			if err := fn(record.keyID, record.key); err != nil {
+				return h, err
+			}
+			seen++
+		}
+	}
+	if seen != h.keyCount {
+		return h, fmt.Errorf("snapshots: V6 accessor dictionary has %d keys, want %d", seen, h.keyCount)
+	}
+	return h, nil
+}
+
 func checkStateDomainChangeBinaryAccessorV6(r io.ReaderAt, fileSize uint64) error {
 	h, err := decodeStateDomainChangeBinaryAccessorV6Header(r, fileSize)
 	if err != nil {
@@ -861,20 +897,32 @@ func encodeStateDomainChangeBinarySegmentV6(fromTxNum, toTxNum uint64, changes [
 }
 
 func decodeStateDomainChangeRecordV6(data []byte) (uint32, *rawdb.StateDomainChange, error) {
-	if len(data) < 17 {
-		return 0, nil, io.ErrUnexpectedEOF
+	change := new(rawdb.StateDomainChange)
+	keyID, err := decodeStateDomainChangeRecordV6Into(data, change)
+	if err != nil {
+		return 0, nil, err
 	}
-	change := &rawdb.StateDomainChange{TxNum: binary.BigEndian.Uint64(data[4:12])}
+	return keyID, change, nil
+}
+
+func decodeStateDomainChangeRecordV6Into(data []byte, change *rawdb.StateDomainChange) (uint32, error) {
+	if change == nil {
+		return 0, errors.New("snapshots: nil V6 state-domain-change destination")
+	}
+	if len(data) < 17 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	*change = rawdb.StateDomainChange{TxNum: binary.BigEndian.Uint64(data[4:12])}
 	if data[12] > 1 {
-		return 0, nil, errors.New("snapshots: invalid V6 previous-value marker")
+		return 0, errors.New("snapshots: invalid V6 previous-value marker")
 	}
 	change.PrevExists = data[12] == 1
 	length := uint64(binary.BigEndian.Uint32(data[13:17]))
 	if length != uint64(len(data)-17) {
-		return 0, nil, errors.New("snapshots: invalid V6 previous-value length")
+		return 0, errors.New("snapshots: invalid V6 previous-value length")
 	}
 	if length != 0 {
 		change.Prev = data[17:]
 	}
-	return binary.BigEndian.Uint32(data[:4]), change, nil
+	return binary.BigEndian.Uint32(data[:4]), nil
 }

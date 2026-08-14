@@ -102,11 +102,21 @@ func (b *stateDomainChangeV6Build) CollectKey(change *rawdb.StateDomainChange) e
 		return errors.New("snapshots: nil V6 key collector/change")
 	}
 	b.keyScratch = appendStateDomainChangeBinaryAccessorLookupKey(b.keyScratch[:0], change.FlatDomain, change.Owner, change.Generation, change.Domain, change.Key)
-	if len(b.keyScratch) > math.MaxUint16 {
-		return fmt.Errorf("snapshots: V6 logical key length %d exceeds uint16", len(b.keyScratch))
+	return b.CollectLogicalKey(b.keyScratch)
+}
+
+// CollectLogicalKey adds one already-encoded V6 dictionary key. V6-to-V6
+// compaction walks each source dictionary once instead of resolving the same
+// keyID for every posting in transaction order.
+func (b *stateDomainChangeV6Build) CollectLogicalKey(logicalKey []byte) error {
+	if b == nil || b.keys == nil || len(logicalKey) == 0 {
+		return errors.New("snapshots: nil V6 key collector/logical key")
 	}
-	return b.keys.PutEncoded(len(b.keyScratch), 0, func(key, _ []byte) {
-		copy(key, b.keyScratch)
+	if len(logicalKey) > math.MaxUint16 {
+		return fmt.Errorf("snapshots: V6 logical key length %d exceeds uint16", len(logicalKey))
+	}
+	return b.keys.PutEncoded(len(logicalKey), 0, func(key, _ []byte) {
+		copy(key, logicalKey)
 	})
 }
 

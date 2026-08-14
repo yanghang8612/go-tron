@@ -887,17 +887,41 @@ func (r *Runner) onePass() (PassResult, error) {
 	}
 
 	var refs []SegmentRef
+	historyBuildStarted := time.Now()
+	coldSnapshotLog.Info("History cold snapshot build started",
+		"dataset", r.cfg.HistoryDataset,
+		"fromTx", fromTxNum,
+		"toTx", toTxNum,
+		"fromBlock", startBlock,
+		"toBlock", cutoffBlock,
+		"accelerated", result.HistoryAccelerated)
 	if historyCfg.BuildHistoryBlockRange != nil {
 		refs, err = historyCfg.BuildHistoryBlockRange(db, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, historyCfg.HistoryPath(fromTxNum, toTxNum))
 	} else {
 		refs, err = historyCfg.BuildHistory(db, r.cfg.Dir, fromTxNum, toTxNum, historyCfg.HistoryPath(fromTxNum, toTxNum))
 	}
 	if err != nil {
+		coldSnapshotLog.Warn("History cold snapshot build failed",
+			"dataset", r.cfg.HistoryDataset,
+			"fromTx", fromTxNum,
+			"toTx", toTxNum,
+			"fromBlock", startBlock,
+			"toBlock", cutoffBlock,
+			"elapsed", time.Since(historyBuildStarted).Round(time.Millisecond),
+			"err", err)
 		return PassResult{}, err
 	}
 	if len(refs) == 0 {
 		return result, nil
 	}
+	coldSnapshotLog.Info("History cold snapshot history segment built",
+		"dataset", r.cfg.HistoryDataset,
+		"fromTx", fromTxNum,
+		"toTx", toTxNum,
+		"fromBlock", startBlock,
+		"toBlock", cutoffBlock,
+		"segments", len(refs),
+		"elapsed", time.Since(historyBuildStarted).Round(time.Millisecond))
 	aggregator := NewAggregator(r.cfg.Dir)
 	var chainDB *rawdb.ChainDB
 	if r.cfg.BuildBalanceTraces || r.cfg.BuildEventLogs {

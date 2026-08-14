@@ -629,7 +629,38 @@ func (w *stateDomainChangeHistoryRecordWriter) WriteBorrowedV5Change(change *raw
 	return nil
 }
 
+// WriteBorrowedV6Change emits a decoded V6 row with an already-remapped target
+// dictionary ID. The source dictionary is immutable and sorted, so compaction
+// can build this mapping once per source and avoid resolving/decompressing its
+// logical key for every record in transaction order.
+func (w *stateDomainChangeHistoryRecordWriter) WriteBorrowedV6Change(change *rawdb.StateDomainChange, targetKeyID uint32) error {
+	if w == nil {
+		return errors.New("snapshots: nil borrowed v6 state-domain-change history writer")
+	}
+	if change == nil {
+		return errors.New("snapshots: nil borrowed v6 state-domain-change history record")
+	}
+	if w.previous != nil {
+		if compareStateDomainChangeForBinary(w.previous, change) > 0 {
+			return errStateDomainChangeHistoryRecordsNotOrdered
+		}
+	} else if w.havePreviousV5 && (change.TxNum < w.previousV5Tx || change.TxNum == w.previousV5Tx && change.Seq <= w.previousV5Seq) {
+		return errStateDomainChangeHistoryRecordsNotOrdered
+	}
+	if err := w.writeChangeWithV6KeyID(change, true, &targetKeyID); err != nil {
+		return err
+	}
+	w.previousV5Tx = change.TxNum
+	w.previousV5Seq = change.Seq
+	w.havePreviousV5 = true
+	return nil
+}
+
 func (w *stateDomainChangeHistoryRecordWriter) writeChange(change *rawdb.StateDomainChange, trustedOrder bool) error {
+	return w.writeChangeWithV6KeyID(change, trustedOrder, nil)
+}
+
+func (w *stateDomainChangeHistoryRecordWriter) writeChangeWithV6KeyID(change *rawdb.StateDomainChange, trustedOrder bool, mappedKeyID *uint32) error {
 	if w == nil || w.segment == nil || w.index == nil {
 		return errors.New("snapshots: nil state-domain-change history record writer")
 	}
@@ -657,13 +688,20 @@ func (w *stateDomainChangeHistoryRecordWriter) writeChange(change *rawdb.StateDo
 	}
 	var v6KeyID uint32
 	if w.v6 != nil {
-		w.v6.keyScratch = appendStateDomainChangeBinaryAccessorLookupKey(w.v6.keyScratch[:0], change.FlatDomain, change.Owner, change.Generation, change.Domain, change.Key)
-		keyID, err := w.v6.KeyID(w.v6.keyScratch)
-		if err != nil {
-			return err
+		if mappedKeyID != nil {
+			if *mappedKeyID >= w.v6.keyCount {
+				return errors.New("snapshots: remapped V6 key id outside target dictionary")
+			}
+			v6KeyID = *mappedKeyID
+		} else {
+			w.v6.keyScratch = appendStateDomainChangeBinaryAccessorLookupKey(w.v6.keyScratch[:0], change.FlatDomain, change.Owner, change.Generation, change.Domain, change.Key)
+			keyID, err := w.v6.KeyID(w.v6.keyScratch)
+			if err != nil {
+				return err
+			}
+			v6KeyID = keyID
 		}
-		v6KeyID = keyID
-		if err := w.v6.CollectPosting(keyID, change.TxNum, w.segmentOff, w.count); err != nil {
+		if err := w.v6.CollectPosting(v6KeyID, change.TxNum, w.segmentOff, w.count); err != nil {
 			return err
 		}
 	}

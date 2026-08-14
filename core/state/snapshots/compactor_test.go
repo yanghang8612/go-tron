@@ -406,6 +406,42 @@ func TestCompactHistoryDomainTranscodesV2HistoryRecordsToV6(t *testing.T) {
 	}
 }
 
+func TestCompactHistoryDomainRemapsV6SourceDictionaries(t *testing.T) {
+	dir := t.TempDir()
+	first := []*rawdb.StateDomainChange{
+		binaryStateDomainChange(1, 1, 1, "slot/m"),
+		binaryStateDomainChange(2, 2, 1, "slot/z"),
+	}
+	second := []*rawdb.StateDomainChange{
+		binaryStateDomainChange(3, 3, 1, "slot/a"),
+		binaryStateDomainChange(4, 4, 1, "slot/n"),
+	}
+	refs := append([]SegmentRef{}, writeV6StateDomainHistorySegmentForTest(t, dir, 1, 2, first)...)
+	refs = append(refs, writeV6StateDomainHistorySegmentForTest(t, dir, 3, 4, second)...)
+	if err := PublishManifest(dir, NewManifest(1, 4, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{})
+	if err != nil {
+		t.Fatalf("compact V6 source dictionaries: %v", err)
+	}
+	if !result.Merged {
+		t.Fatalf("result = %+v", result)
+	}
+	historyRef := compactionRefByKind(t, result, SegmentHistory)
+	changes, err := readStateDomainChangeBinarySegment(dir, historyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBinaryChangeOrder(t, changes, []binaryChangeOrder{
+		{txNum: 1, seq: 1, key: "slot/m"},
+		{txNum: 2, seq: 2, key: "slot/z"},
+		{txNum: 3, seq: 3, key: "slot/a"},
+		{txNum: 4, seq: 4, key: "slot/n"},
+	})
+}
+
 func rewriteStateDomainChangeHistoryAsV2(t *testing.T, dir string, refs []SegmentRef, changes ...*rawdb.StateDomainChange) {
 	t.Helper()
 	normalized := normalizeStateDomainChangesForBinary(changes)
