@@ -1,11 +1,16 @@
 package producer
 
 import (
+	"context"
+	"errors"
+	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -235,4 +240,115 @@ func TestProduceBlock_JustBelowThreshold_Skips(t *testing.T) {
 	if rate != 14 {
 		t.Fatalf("expected rate=14, got %d", rate)
 	}
+}
+
+func TestProducerSlotWarningsAreDeduplicatedAndStructured(t *testing.T) {
+	previous := gtronlog.Root()
+	defer gtronlog.SetDefault(previous)
+	capture := &producerLogCapture{}
+	gtronlog.SetDefault(gtronlog.NewLogger(&producerCaptureHandler{capture: capture}))
+
+	p := &Producer{}
+	base := time.Now()
+	p.reportLowParticipation(10, 14, base)
+	p.reportLowParticipation(10, 14, base.Add(time.Second))
+	p.reportLowParticipation(11, 13, base.Add(time.Minute))
+	p.reportLowParticipation(12, 12, base.Add(producerWarningSummaryInterval))
+	p.reportLowParticipationRecovery(13, 20, base.Add(producerWarningSummaryInterval+time.Minute))
+	p.reportProduceFailure(20, 60_000, time.Second, errors.New("first"), base)
+	p.reportProduceFailure(20, 60_000, 2*time.Second, errors.New("repeat"), base.Add(time.Second))
+	p.reportProduceFailure(21, 63_000, 3*time.Second, errors.New("next"), base.Add(time.Minute))
+	p.reportProduceFailure(22, 66_000, 4*time.Second, errors.New("summary"), base.Add(producerWarningSummaryInterval))
+	p.reportProduceRecovery(22, base.Add(producerWarningSummaryInterval+time.Minute))
+
+	records := capture.snapshot()
+	warnings, infos := 0, 0
+	for _, record := range records {
+		switch record.level {
+		case gtronlog.LevelWarn:
+			warnings++
+		case gtronlog.LevelInfo:
+			infos++
+		}
+	}
+	if warnings != 4 || infos != 2 {
+		t.Fatalf("record levels = warn %d info %d, want 4/2: %+v", warnings, infos, records)
+	}
+	paused := requireProducerLogRecord(t, records, "Block production paused by low participation")
+	if paused.attrs["slot"] != int64(10) || paused.attrs["ratePct"] != int64(14) || paused.attrs["thresholdPct"] != int64(15) {
+		t.Errorf("low-participation entry attrs = %+v", paused.attrs)
+	}
+	continued := requireProducerLogRecord(t, records, "Low participation continues")
+	if continued.attrs["skippedSlotsSinceLastReport"] != uint64(2) || continued.attrs["retryAttemptsSuppressed"] != uint64(1) {
+		t.Errorf("low-participation summary attrs = %+v", continued.attrs)
+	}
+	failing := requireProducerLogRecord(t, records, "Block production failing")
+	if failing.attrs["slot"] != int64(20) || failing.attrs["slotTimestampMs"] != int64(60_000) {
+		t.Errorf("production failure attrs = %+v", failing.attrs)
+	}
+	failureSummary := requireProducerLogRecord(t, records, "Block production failures continue")
+	if failureSummary.attrs["failedSlotsSinceLastReport"] != uint64(2) || failureSummary.attrs["retryAttemptsSuppressed"] != uint64(1) {
+		t.Errorf("production failure summary attrs = %+v", failureSummary.attrs)
+	}
+	requireProducerLogRecord(t, records, "Block production resumed after low participation")
+	requireProducerLogRecord(t, records, "Block production recovered")
+}
+
+type producerLogRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]any
+}
+
+type producerLogCapture struct {
+	mu      sync.Mutex
+	records []producerLogRecord
+}
+
+func (c *producerLogCapture) snapshot() []producerLogRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]producerLogRecord(nil), c.records...)
+}
+
+type producerCaptureHandler struct {
+	capture *producerLogCapture
+	attrs   []slog.Attr
+}
+
+func (h *producerCaptureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *producerCaptureHandler) Handle(_ context.Context, record slog.Record) error {
+	attrs := make(map[string]any, len(h.attrs)+record.NumAttrs())
+	add := func(attr slog.Attr) bool {
+		attrs[attr.Key] = attr.Value.Resolve().Any()
+		return true
+	}
+	for _, attr := range h.attrs {
+		add(attr)
+	}
+	record.Attrs(add)
+	h.capture.mu.Lock()
+	h.capture.records = append(h.capture.records, producerLogRecord{level: record.Level, msg: record.Message, attrs: attrs})
+	h.capture.mu.Unlock()
+	return nil
+}
+
+func (h *producerCaptureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	clone := &producerCaptureHandler{capture: h.capture, attrs: append([]slog.Attr(nil), h.attrs...)}
+	clone.attrs = append(clone.attrs, attrs...)
+	return clone
+}
+
+func (h *producerCaptureHandler) WithGroup(string) slog.Handler { return h }
+
+func requireProducerLogRecord(t *testing.T, records []producerLogRecord, msg string) producerLogRecord {
+	t.Helper()
+	for _, record := range records {
+		if record.msg == msg {
+			return record
+		}
+	}
+	t.Fatalf("missing producer log event %q: %+v", msg, records)
+	return producerLogRecord{}
 }

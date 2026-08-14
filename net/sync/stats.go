@@ -10,8 +10,8 @@ import (
 	"github.com/tronprotocol/go-tron/core"
 )
 
-// Snapshot is the rolling-window snapshot consumed by the "Imported chain
-// segment" formatter. Exported because reportSegment lives in the net
+// Snapshot is the rolling-window snapshot consumed by the sync import
+// progress formatter. Exported because reportSegment lives in the net
 // package (it reads downloader state alongside the Stats data) and needs
 // access to every field. Field names mirror the pre-refactor unexported
 // shape one-for-one.
@@ -32,7 +32,7 @@ type Snapshot struct {
 	ApplyStats core.ApplyStats
 
 	// TxKinds counts the transactions applied in the window by contract type
-	// (corepb.Transaction_Contract_ContractType name) for the "txTop" summary
+	// (corepb.Transaction_Contract_ContractType name) for debug diagnostics
 	// field — it tells whether a slow window is contract-heavy
 	// (TriggerSmartContract) vs transfer-heavy, etc. nil when none recorded.
 	TxKinds map[string]int
@@ -68,7 +68,7 @@ type speedSample struct {
 
 // Stats wraps the rolling-window accumulator behind its own mutex. SyncService
 // holds a *Stats and forwards onApplyStats / drain-time bookkeeping into the
-// AddX methods. Emission of the throttled "Imported chain segment" line is
+// AddX methods. Emission of the throttled "Sync import progress" line is
 // driven from drainBufferedBlocks (which holds the diagnostic state needed by
 // the formatter) — Stats owns the accumulator + snapshot+reset only.
 //

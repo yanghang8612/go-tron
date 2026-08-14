@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -37,7 +38,12 @@ type peerState struct {
 	headNum        uint64
 	solidNum       uint64
 	lowestBlockNum uint64
+
+	rateLimitDrops            atomic.Uint64
+	lastRateLimitSummaryNanos atomic.Int64
 }
+
+const peerRateLimitSummaryInterval = time.Minute
 
 // TronHandler implements p2p.Handler for the TRON protocol.
 type TronHandler struct {
@@ -404,13 +410,13 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 	h.mu.Unlock()
 
 	localHead := h.chain.CurrentBlock().Number()
-	log.Info("Peer handshaked",
+	log.Debug("Peer handshaked",
 		"peer", peer.ID(),
 		"peerHead", ps.headNum,
 		"peerSolid", ps.solidNum,
 		"peerLowest", ps.lowestBlockNum,
 		"localHead", localHead,
-		"lag", int64(ps.headNum)-int64(localHead))
+		"headDelta", int64(ps.headNum)-int64(localHead))
 
 	// Trigger sync if peer has more blocks
 	if h.syncService != nil && ps.headNum > localHead {
@@ -453,7 +459,11 @@ func (h *TronHandler) handleDisconnect(peer *p2p.Peer, payload []byte) {
 			h.mu.RUnlock()
 			h.server.ForgetApplicationPeer(peer, from)
 		}
-		log.Info("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
+		if msg.Reason == corepb.ReasonCode_LIGHT_NODE_SYNC_FAIL {
+			log.Debug("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
+		} else {
+			log.Info("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
+		}
 	} else {
 		peer.RecordDisconnectCause("invalid application disconnect: " + err.Error())
 		log.Info("Peer disconnected", "peer", peer.ID(), "err", err)
@@ -494,10 +504,7 @@ func (h *TronHandler) handleProtocolMessage(peer *p2p.Peer, code byte, payload [
 	ps := h.peers[peer.ID()]
 	h.mu.RUnlock()
 	if ps != nil && ps.rl != nil && !ps.rl.Allow(code) {
-		log.Warn("Peer rate limited",
-			"peer", peer.ID(),
-			"msg", p2p.MsgName(code),
-			"code", fmt.Sprintf("0x%02x", code))
+		h.reportPeerRateLimited(ps, code, time.Now())
 		return
 	}
 
@@ -525,6 +532,29 @@ func (h *TronHandler) handleProtocolMessage(peer *p2p.Peer, code byte, payload [
 	case p2p.MsgPbftCommitMsg:
 		h.pbftDataSync.HandleCommitMsg(peer, payload)
 	}
+}
+
+func (h *TronHandler) reportPeerRateLimited(ps *peerState, code byte, now time.Time) {
+	if ps == nil || ps.peer == nil {
+		return
+	}
+	log.Debug("Peer message rate limited",
+		"peer", ps.peer.ID(),
+		"msg", p2p.MsgName(code),
+		"code", fmt.Sprintf("0x%02x", code))
+	ps.rateLimitDrops.Add(1)
+	last := ps.lastRateLimitSummaryNanos.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < peerRateLimitSummaryInterval {
+		return
+	}
+	if !ps.lastRateLimitSummaryNanos.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+	log.Warn("Peer message rate-limit drops",
+		"peer", ps.peer.ID(),
+		"droppedSinceLastReport", ps.rateLimitDrops.Swap(0),
+		"sampleMsg", p2p.MsgName(code),
+		"sampleCode", fmt.Sprintf("0x%02x", code))
 }
 
 func (h *TronHandler) handleFetchInvData(peer *p2p.Peer, payload []byte) {

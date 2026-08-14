@@ -94,6 +94,9 @@ type PrunerStats struct {
 	DeletedCommitmentCheckpoints      uint64
 	DeletedStateCodeRows              uint64
 	LastSolidifiedBlock               uint64
+	LastDomainChangeStartBlock        uint64
+	LastDomainChangePrunedThrough     uint64
+	LastDomainChangePrunedThroughTx   uint64
 	LastPassDuration                  time.Duration
 }
 
@@ -120,6 +123,9 @@ type Pruner struct {
 	retiredVerificationFull           atomic.Uint64
 	retiredVerificationCanceled       atomic.Uint64
 	lastSolidifiedBlock               atomic.Uint64
+	lastDomainChangeStartBlock        atomic.Uint64
+	lastDomainChangePrunedThrough     atomic.Uint64
+	lastDomainChangePrunedThroughTx   atomic.Uint64
 	lastPassDuration                  atomic.Int64
 }
 
@@ -142,6 +148,9 @@ type prunerMetrics struct {
 	deletedCommitmentCheckpoints      *metrics.Gauge
 	deletedStateCodeRows              *metrics.Gauge
 	lastSolidifiedBlock               *metrics.Gauge
+	lastDomainChangeStartBlock        *metrics.Gauge
+	lastDomainChangePrunedThrough     *metrics.Gauge
+	lastDomainChangePrunedThroughTx   *metrics.Gauge
 	lastPassDuration                  *metrics.Gauge
 }
 
@@ -166,6 +175,9 @@ func newPrunerMetrics(namespace string) prunerMetrics {
 		deletedCommitmentCheckpoints:      metrics.GetOrRegisterGauge(namespace+"deleted/commitment_checkpoints", nil),
 		deletedStateCodeRows:              metrics.GetOrRegisterGauge(namespace+"deleted/state_code_rows", nil),
 		lastSolidifiedBlock:               metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
+		lastDomainChangeStartBlock:        metrics.GetOrRegisterGauge(namespace+"last/domain_change/start_block", nil),
+		lastDomainChangePrunedThrough:     metrics.GetOrRegisterGauge(namespace+"last/domain_change/pruned_through_block", nil),
+		lastDomainChangePrunedThroughTx:   metrics.GetOrRegisterGauge(namespace+"last/domain_change/pruned_through_tx", nil),
 		lastPassDuration:                  metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
 	}
 }
@@ -199,6 +211,9 @@ func (m prunerMetrics) update(stats PrunerStats) {
 	m.deletedCommitmentCheckpoints.Update(prunerUintGauge(stats.DeletedCommitmentCheckpoints))
 	m.deletedStateCodeRows.Update(prunerUintGauge(stats.DeletedStateCodeRows))
 	m.lastSolidifiedBlock.Update(prunerUintGauge(stats.LastSolidifiedBlock))
+	m.lastDomainChangeStartBlock.Update(prunerUintGauge(stats.LastDomainChangeStartBlock))
+	m.lastDomainChangePrunedThrough.Update(prunerUintGauge(stats.LastDomainChangePrunedThrough))
+	m.lastDomainChangePrunedThroughTx.Update(prunerUintGauge(stats.LastDomainChangePrunedThroughTx))
 	m.lastPassDuration.Update(int64(stats.LastPassDuration))
 }
 
@@ -304,6 +319,9 @@ func (p *Pruner) Stats() PrunerStats {
 		RetiredVerificationFull:           p.retiredVerificationFull.Load(),
 		RetiredVerificationCanceled:       p.retiredVerificationCanceled.Load(),
 		LastSolidifiedBlock:               p.lastSolidifiedBlock.Load(),
+		LastDomainChangeStartBlock:        p.lastDomainChangeStartBlock.Load(),
+		LastDomainChangePrunedThrough:     p.lastDomainChangePrunedThrough.Load(),
+		LastDomainChangePrunedThroughTx:   p.lastDomainChangePrunedThroughTx.Load(),
 		LastPassDuration:                  time.Duration(p.lastPassDuration.Load()),
 	}
 }
@@ -473,17 +491,48 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 	p.deletedCommitmentCheckpoints.Add(uint64(stats.DeletedCommitmentCheckpoints))
 	p.deletedStateCodeRows.Add(uint64(stats.DeletedStateCodeRows))
 	p.lastSolidifiedBlock.Store(uint64(solidified))
+	if stats.DeletedDomainChangeBlocks > 0 {
+		p.lastDomainChangeStartBlock.Store(stats.DomainChangeStartBlock)
+		p.lastDomainChangePrunedThrough.Store(stats.DomainChangePrunedThrough)
+		p.lastDomainChangePrunedThroughTx.Store(stats.DomainChangePrunedThroughTx)
+	}
 	if stats.DeletedTxRanges != 0 || stats.DeletedDomainChangeBlocks != 0 || stats.DeletedCommitmentCheckpoints != 0 || stats.DeletedStateCodeRows != 0 {
-		log.Info("Domain state prune pass completed",
-			"pruneHead", pruneHead,
-			"solidified", solidified,
-			"txRanges", stats.DeletedTxRanges,
-			"changeBlocks", stats.DeletedDomainChangeBlocks,
-			"commitments", stats.DeletedCommitmentCheckpoints,
-			"codeRows", stats.DeletedStateCodeRows,
-			"elapsed", time.Since(start))
+		elapsed := time.Since(start)
+		log.Info("Domain state prune pass completed", prunePassLogContext(pruneHead, solidified, p.cfg.Policy, stats, elapsed)...)
 	}
 	return stats, nil
+}
+
+func prunePassLogContext(pruneHead uint64, solidified int64, policy Policy, stats Stats, elapsed time.Duration) []any {
+	ctx := []any{
+		"headBlock", pruneHead,
+		"solidifiedBlock", solidified,
+		"historyChanged", stats.DeletedDomainChangeBlocks > 0,
+		"txRanges", stats.DeletedTxRanges,
+		"changeBlocks", stats.DeletedDomainChangeBlocks,
+		"commitments", stats.DeletedCommitmentCheckpoints,
+		"codeRows", stats.DeletedStateCodeRows,
+		"elapsed", elapsed.Round(time.Millisecond),
+	}
+	if pruneHead >= policy.HistoryWindow {
+		ctx = append(ctx, "targetPruneThrough", pruneHead-policy.HistoryWindow)
+	}
+	if stats.DeletedDomainChangeBlocks > 0 {
+		ctx = append(ctx,
+			"startBlock", stats.DomainChangeStartBlock,
+			"prunedThroughBlock", stats.DomainChangePrunedThrough,
+			"prunedThroughTx", stats.DomainChangePrunedThroughTx,
+			"historyBlocksPerSec", pruneRate(stats.DeletedDomainChangeBlocks, elapsed))
+	}
+	return ctx
+}
+
+func pruneRate(items int, elapsed time.Duration) float64 {
+	if items <= 0 || elapsed <= 0 {
+		return 0
+	}
+	rate := float64(items) / elapsed.Seconds()
+	return float64(int64(rate*100+0.5)) / 100
 }
 
 func (p *Pruner) pruneHeadWithVerifiedBoundary(pruneHead uint64) (uint64, common.Hash, bool, error) {

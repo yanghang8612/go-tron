@@ -203,6 +203,29 @@ go.opentelemetry.io/otel/metric v1.40.0    // transitive (otel)
 go.opentelemetry.io/otel/trace v1.40.0     // handler.go, server.go
 ```
 
+### 4. JSON-RPC log amplification hardening
+
+`handler.go` deliberately differs from upstream in logging only; response IDs,
+error codes, messages, and error data on the wire are unchanged.
+
+- Request IDs longer than 128 bytes are represented in logs by their byte
+  length and a short SHA-256 fingerprint.
+- Method names use a stable event message plus a bounded structured field;
+  names longer than 128 bytes are length/hash represented.
+- Error-message log fields are capped at 512 bytes and carry length/hash
+  metadata when truncated.
+- Error data is never copied into normal logs; the record contains only
+  `hasErrorData=true`.
+- JSON-RPC client errors (`parse`, `invalid request`, `method not found`, and
+  `invalid params`) log at Debug. Server/application errors retain Warn.
+- Server/application Warn records are globally limited to one per 30 seconds;
+  intervening errors remain available at Debug and their count is attached to
+  the next Warn as `suppressedSinceLastReport`.
+
+This prevents one remote request or large batch from expanding
+attacker-controlled IDs/error payloads into substantially larger Warn output.
+Reapply this logging-only patch during an upstream refresh.
+
 No other code modifications were required. Imports of go-ethereum `log`,
 `metrics`, `common`, `common/hexutil`, and `p2p/netutil` resolve as-is and were
 left untouched.
@@ -237,10 +260,13 @@ To re-sync against a newer go-ethereum tag:
    (`grep -n telemetry internal/rpc/*.go`), strip the forbidden import, and
    replace each call with its no-op equivalent. If upstream moved tracing into
    additional files, patch those too and update this doc.
-4. If any *kept* file/test still references
+4. Re-apply the **JSON-RPC log amplification hardening** (#4), adapting the
+   bounded request-ID/error representation and client-error level split to any
+   upstream logging changes without changing response semantics.
+5. If any *kept* file/test still references
    `github.com/ethereum/go-ethereum/rpc`, rewrite it to
    `github.com/tronprotocol/go-tron/internal/rpc`.
-5. Promote any newly-required transitive deps with targeted `go get @<version>`
+6. Promote any newly-required transitive deps with targeted `go get @<version>`
    (modification #3) — pin to the versions MVS already resolves; avoid
    `go mod tidy` so unrelated WIP deps aren't churned.
-6. Re-run the four scoped commands above until all are green.
+7. Re-run the four scoped commands above until all are green.

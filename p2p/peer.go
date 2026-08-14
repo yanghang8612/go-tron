@@ -34,7 +34,15 @@ type Peer struct {
 	// Note: UnixNano does not overflow for any plausible clock value in the
 	// range [1678, 2262] CE, which covers all expected production use.
 	lastSeenNanos atomic.Int64
+
+	// writeDrops and lastWriteDropSummary aggregate queue saturation warnings.
+	// Send can be called concurrently by broadcast, sync, and keepalive paths,
+	// so both fields must remain atomic and independent of the peer lifecycle.
+	writeDrops                atomic.Uint64
+	lastWriteDropSummaryNanos atomic.Int64
 }
+
+const peerWriteDropSummaryInterval = time.Minute
 
 type msgFrame struct {
 	code    byte
@@ -116,9 +124,29 @@ func (p *Peer) Send(code byte, payload []byte) {
 	case p.writeCh <- msgFrame{code, payload}:
 	case <-p.quit:
 	default:
-		peerLog.Warn("Peer write buffer full, dropping message",
-			"peer", p.id, "msg", MsgName(code), "code", fmt.Sprintf("0x%02x", code))
+		p.reportWriteDrop(code, time.Now())
 	}
+}
+
+func (p *Peer) reportWriteDrop(code byte, now time.Time) {
+	if p == nil {
+		return
+	}
+	peerLog.Debug("Peer write queue saturated",
+		"peer", p.id, "msg", MsgName(code), "code", fmt.Sprintf("0x%02x", code))
+	p.writeDrops.Add(1)
+	last := p.lastWriteDropSummaryNanos.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < peerWriteDropSummaryInterval {
+		return
+	}
+	if !p.lastWriteDropSummaryNanos.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+	peerLog.Warn("Peer write queue drops",
+		"peer", p.id,
+		"droppedSinceLastReport", p.writeDrops.Swap(0),
+		"sampleMsg", MsgName(code),
+		"sampleCode", fmt.Sprintf("0x%02x", code))
 }
 
 // GoodbyeAndClose sends a DISCONNECT message with the given reason and then

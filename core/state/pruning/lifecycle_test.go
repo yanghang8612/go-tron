@@ -987,6 +987,49 @@ func TestSnapshotLifecyclePassCompleteHookRunsAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestSnapshotLifecyclePassLogContextReportsOnlyChangedMaintenance(t *testing.T) {
+	ctx, changed := snapshotLifecyclePassLogContext(SnapshotLifecyclePass{}, 0, time.Second)
+	if changed || len(ctx) != 2 {
+		t.Fatalf("no-op context = %+v, changed=%t", ctx, changed)
+	}
+
+	pass := SnapshotLifecyclePass{
+		Snapshot: snapshots.PassResult{LatestBuilt: true, LatestDuration: 2 * time.Second},
+		ChainFreezerBuild: snapshots.ChainFreezerSnapshotPassResult{
+			Built: true, FromBlock: 10, ToBlock: 19, EventLogBuilt: true, EventLogFromBlock: 10, EventLogToBlock: 19,
+		},
+		ChainLookupPrune: &snapshots.PruneHotChainLookupResult{
+			HasRange: true, FromBlock: 10, ToBlock: 19, TxIndexesDeleted: 7,
+		},
+	}
+	ctx, changed = snapshotLifecyclePassLogContext(pass, 19, 3*time.Second)
+	if !changed {
+		t.Fatal("changed maintenance was not reported")
+	}
+	fields := make(map[string]any, len(ctx)/2)
+	for i := 0; i+1 < len(ctx); i += 2 {
+		key, ok := ctx[i].(string)
+		if !ok {
+			t.Fatalf("field key %d = %T, want string", i, ctx[i])
+		}
+		fields[key] = ctx[i+1]
+	}
+	for key, want := range map[string]any{
+		"latestSnapshotBuilt":           true,
+		"latestSnapshotBlock":           uint64(19),
+		"chainFreezerFromBlock":         uint64(10),
+		"chainFreezerToBlock":           uint64(19),
+		"chainFreezerEventLogBuilt":     true,
+		"chainFreezerEventLogFromBlock": uint64(10),
+		"chainFreezerEventLogToBlock":   uint64(19),
+		"chainLookupTxIndexesDeleted":   uint64(7),
+	} {
+		if got := fields[key]; got != want {
+			t.Errorf("field %s = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
 func waitLifecyclePass(t *testing.T, entered <-chan int, want int) {
 	t.Helper()
 	select {

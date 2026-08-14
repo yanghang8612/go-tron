@@ -40,6 +40,9 @@ type Stats struct {
 	DeletedDomainChangeBlocks    int
 	DeletedCommitmentCheckpoints int
 	DeletedStateCodeRows         int
+	DomainChangeStartBlock       uint64
+	DomainChangePrunedThrough    uint64
+	DomainChangePrunedThroughTx  uint64
 }
 
 const maxPruneBatchValueSize = 32 << 20
@@ -193,6 +196,7 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	if err != nil {
 		return Stats{}, err
 	}
+	stats.DomainChangeStartBlock = hotPruneStartBlock
 	hotStats, err := historyCfg.PruneHotHistory(historyStore, snapshots.HotHistoryPruneOptions{
 		MaxBlocks:  w.MaxBlocks,
 		StartBlock: hotPruneStartBlock,
@@ -223,6 +227,8 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	}
 	stats.DeletedTxRanges = hotStats.DeletedTxRanges
 	stats.DeletedDomainChangeBlocks = hotStats.DeletedHistoryBlocks
+	stats.DomainChangePrunedThrough = hotStats.MaxDeletedHistoryBlock
+	stats.DomainChangePrunedThroughTx = hotStats.MaxDeletedHistoryBlockTx
 	if hotStats.MaxDeletedHistoryBlockTx != 0 && w.SnapshotDir != "" {
 		if err := snapshots.UpdateHotPruneProgress(w.SnapshotDir, hotStats.MaxDeletedHistoryBlock, hotStats.MaxDeletedHistoryBlockTx); err != nil {
 			return Stats{}, err

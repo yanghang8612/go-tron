@@ -3,6 +3,7 @@ package net
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 
 // TestSync_BatchSummaryReportedOnInterval drives a stream of blocks through
 // HandleBlock with StatsReportInterval temporarily shrunk to 50ms, then
-// asserts the throttled "Imported chain segment" summary line is emitted at
+// asserts the throttled "Sync import progress" summary line is emitted at
 // least once with the expected fields.
 func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 	oldInterval := tsync.StatsReportInterval
@@ -79,27 +80,23 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 	out := buf.String()
 	var summary, detail string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "Imported chain segment details") {
+		if strings.Contains(line, "Sync import diagnostics") {
 			detail = line
-		} else if strings.Contains(line, "Imported chain segment") {
+		} else if strings.Contains(line, "Sync import progress") {
 			summary = line
 		}
 	}
 	if summary == "" {
-		t.Fatalf("expected 'Imported chain segment' summary line, got:\n%s", out)
+		t.Fatalf("expected 'Sync import progress' summary line, got:\n%s", out)
 	}
 	for _, k := range []string{
+		"window=",
 		"head=",
 		"blocks=",
 		"txs=",
-		"elapsed=",
-		"blocks/s=",
-		"txs/s=",
-		"energy=",
-		"energy/s=",
-		"txTop=",
-		"stateMutTop=",
-		"stateMutKVTop=",
+		"blocksPerSec=",
+		"txsPerSec=",
+		"remaining=",
 		"peers=",
 		"activePeers=",
 		"inflight=",
@@ -141,7 +138,7 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"validate=",
 		"execute=",
 		"energy=",
-		"energy/s=",
+		"energyPerSec=",
 		"maintenance=",
 		"stateCommit=",
 		"stateCommitMeasured=",
@@ -223,14 +220,12 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 	out := buf.String()
 	var segmentLine string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "Imported chain segment") {
+		if strings.Contains(line, "Sync import progress") {
 			segmentLine = line
 		}
 	}
 	for _, field := range []string{
-		"head=90", "blocks=20", "txs=40", "blocks/s=10", "txs/s=20",
-		"energy=6.00B", "energy/s=",
-		`txTop="TransferContract=40"`, `stateMutTop="storagePut=12,accountUpdate=8"`, "stateMutKVTop=none",
+		"window=", "head=90", "blocks=20", "txs=40", "blocksPerSec=10", "txsPerSec=20", "remaining=10",
 		"peers=2", "activePeers=1", "inflight=2",
 		"buffered=3", "requested=4", "retries=1",
 	} {
@@ -238,7 +233,10 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 			t.Errorf("missing real-time field %q:\n%s", field, segmentLine)
 		}
 	}
-	for _, field := range []string{"Imported chain segment details", "execElapsed=", "stateCommit=", "peerState="} {
+	for _, field := range []string{
+		"Sync import diagnostics", "execElapsed=", "stateCommit=", "peerState=",
+		"energy=", "energyPerSec=", "txTop=", "stateMutTop=", "stateMutKVTop=",
+	} {
 		if strings.Contains(out, field) {
 			t.Errorf("diagnostic field %q emitted at info level:\n%s", field, out)
 		}
@@ -316,12 +314,94 @@ func TestReportCalendarProgressEmitsDueWindows(t *testing.T) {
 	}
 	for _, field := range []string{
 		"window=5m", "window=30m", "window=1h",
-		"from=", "to=", "coverage=100", "head=90", "target=100",
-		"progress=90", "remain=10", "windowBlocks=", "avgBlocks/s=", "minBlocks/s=", "maxBlocks/s=", "eta=",
+		"from=", "to=", "coveragePct=100", "warming=false", "head=90", "target=100",
+		"chainProgressPct=90", "remaining=10", "windowBlocks=", "avgBlocksPerSec=", "minBlocksPerSec=", "maxBlocksPerSec=", "eta=",
 	} {
 		if !strings.Contains(out, field) {
 			t.Errorf("missing progress field %q:\n%s", field, out)
 		}
+	}
+}
+
+func TestReportCalendarProgressSuppressesWarmupETA(t *testing.T) {
+	var buf bytes.Buffer
+	prev := gtronlog.Root()
+	defer gtronlog.SetDefault(prev)
+	gtronlog.SetDefault(gtronlog.NewLogger(gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelInfo)))
+
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	boundary := time.Date(2026, 7, 31, 12, 0, 0, 0, loc)
+	stats := tsync.NewStats()
+	stats.InitSession(boundary.Add(-5 * time.Minute))
+	stats.ObserveSpeed(boundary, 300, 5*time.Minute, time.Hour)
+	ss := &SyncService{
+		stats:         stats,
+		pause:         tsync.NewPauseGate(),
+		syncing:       true,
+		syncedTipNum:  90,
+		targetHeadNum: 100,
+	}
+	ss.reportCalendarProgress(boundary)
+
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if !strings.Contains(line, "window=1h") {
+			continue
+		}
+		if !strings.Contains(line, "warming=true") {
+			t.Fatalf("1h warmup line missing warming=true:\n%s", line)
+		}
+		if strings.Contains(line, " eta=") {
+			t.Fatalf("1h warmup line emitted unstable ETA:\n%s", line)
+		}
+		return
+	}
+	t.Fatalf("missing 1h progress line:\n%s", buf.String())
+}
+
+func TestUnavailableSyncPeerInfoIsRateLimited(t *testing.T) {
+	var buf bytes.Buffer
+	prev := gtronlog.Root()
+	defer gtronlog.SetDefault(prev)
+	gtronlog.SetDefault(gtronlog.NewLogger(gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelInfo)))
+
+	c1, c2 := gnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	peer := p2p.NewPeer(c1, "range-peer", false, nil)
+	ss := &SyncService{}
+	ss.reportUnavailableSyncPeer(peer, 100, 1_000, 2_000)
+	ss.reportUnavailableSyncPeer(peer, 101, 1_000, 2_000)
+
+	out := buf.String()
+	if got := strings.Count(out, `msg="Historical sync peers unavailable"`); got != 1 {
+		t.Fatalf("range summary count = %d, want 1:\n%s", got, out)
+	}
+	for _, field := range []string{"rejectedSinceLastReport=1", "needFrom=100", "samplePeerLowest=1000", "samplePeerHead=2000"} {
+		if !strings.Contains(out, field) {
+			t.Errorf("missing range summary field %q:\n%s", field, out)
+		}
+	}
+}
+
+func TestUnavailableSyncPeerConcurrentAccounting(t *testing.T) {
+	c1, c2 := gnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	peer := p2p.NewPeer(c1, "range-peer", false, nil)
+	ss := &SyncService{}
+	ss.lastPeerRangeSummary.Store(time.Now().UnixNano())
+
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ss.reportUnavailableSyncPeer(peer, 100, 1_000, 2_000)
+		}()
+	}
+	wg.Wait()
+	if got := ss.peerRangeRejects.Load(); got != 64 {
+		t.Fatalf("pending rejected peers = %d, want 64", got)
 	}
 }
 

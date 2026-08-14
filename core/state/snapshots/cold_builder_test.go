@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -136,6 +137,9 @@ func TestColdBuilderOnePassBuildsStateDomainChangeHistoryAndManagerReads(t *test
 	if len(result.Segments) != 3 {
 		t.Fatalf("segment refs = %+v, want history/accessor/index refs", result.Segments)
 	}
+	if result.HistoryDuration <= 0 || result.PublishDuration <= 0 {
+		t.Fatalf("phase durations = history %s publish %s, want both measured", result.HistoryDuration, result.PublishDuration)
+	}
 	for _, ref := range result.Segments {
 		if ref.Dataset != SegmentDatasetStateDomainChange {
 			t.Fatalf("segment ref dataset = %s, want %s: %+v", ref.Dataset, SegmentDatasetStateDomainChange, ref)
@@ -171,6 +175,64 @@ func TestColdBuilderOnePassBuildsStateDomainChangeHistoryAndManagerReads(t *test
 	}
 	if want := []string{"a", "b", "c"}; !equalStrings(got, want) {
 		t.Fatalf("changes = %v, want %v", got, want)
+	}
+}
+
+func TestColdSnapshotPublishedLogReportsOperationalProgress(t *testing.T) {
+	var buf bytes.Buffer
+	previous := gtronlog.Root()
+	defer gtronlog.SetDefault(previous)
+	gtronlog.SetDefault(gtronlog.NewLogger(gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelInfo)))
+
+	runner := &Runner{cfg: Config{HistoryDataset: SegmentDatasetStateDomainChange}}
+	runner.lastLagBlocks.Store(500)
+	runner.lastHistoryBuildAt.Store(time.Now().Add(-10 * time.Second).UnixNano())
+	result := PassResult{
+		Built:                true,
+		HistoryAccelerated:   true,
+		FromTxNum:            100,
+		ToTxNum:              199,
+		FromBlock:            10,
+		ToBlock:              19,
+		PublishedBlock:       19,
+		EligibleCutoffBlock:  419,
+		HistoryDuration:      2 * time.Second,
+		EventLogDuration:     time.Second,
+		SectionBloomDuration: 250 * time.Millisecond,
+		PublishDuration:      100 * time.Millisecond,
+		Segments: []SegmentRef{
+			{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, Size: 1_000},
+			{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, Size: 2_000},
+		},
+	}
+	logColdSnapshotPublished(runner, result, time.Now().Add(-4*time.Second), 1, 1_000)
+
+	out := buf.String()
+	for _, field := range []string{
+		`msg="History cold snapshot published"`,
+		"txs=100", "blocks=10", "totalBytes=3000", "historyElapsed=2s",
+		"eventLogElapsed=1s", "publishElapsed=100ms", "publishedBlock=19",
+		"eligibleCutoffBlock=419", "backlogBlocks=400", "accelerated=true",
+		"blocksPerSec=", "txsPerSec=", "netCatchupBlocksPerSec=", "eta=",
+	} {
+		if !strings.Contains(out, field) {
+			t.Errorf("missing published log field %q:\n%s", field, out)
+		}
+	}
+}
+
+func TestColdSnapshotETAKeepsSubCentPrecisionAndBoundsOverflow(t *testing.T) {
+	if got := coldSnapshotDisplayRate(0.004); got != 0.004 {
+		t.Fatalf("display rate = %v, want 0.004", got)
+	}
+	if eta, ok := coldSnapshotETA(1, 0.004); !ok || eta != 250*time.Second {
+		t.Fatalf("eta = %s, %t, want 4m10s, true", eta, ok)
+	}
+	if eta, ok := coldSnapshotETA(^uint64(0), 1e-12); ok || eta != 0 {
+		t.Fatalf("overflow eta = %s, %t, want suppressed", eta, ok)
+	}
+	if got := smoothColdSnapshotCatchupRate(100, 2, coldSnapshotCatchupRateReset); got != 2 {
+		t.Fatalf("stale smoothed rate = %v, want reset to 2", got)
 	}
 }
 

@@ -29,13 +29,31 @@ type Producer struct {
 
 	lastProducedSlot int64
 	loggedWitnessErr bool
-	quit             chan struct{}
-	wg               sync.WaitGroup
+
+	// Warning aggregation state is owned by the producer loop goroutine. It
+	// changes logging only; every 500ms production retry still runs unchanged.
+	lowParticipationActive          bool
+	lowParticipationSince           time.Time
+	lowParticipationLastSlot        int64
+	lowParticipationSkippedSlots    uint64
+	lowParticipationRetrySuppressed uint64
+	lowParticipationLastSummary     time.Time
+	productionFailureActive         bool
+	productionFailureSince          time.Time
+	productionFailureLastSlot       int64
+	productionFailureSlots          uint64
+	productionFailureSuppressed     uint64
+	productionFailureLastSummary    time.Time
+
+	quit chan struct{}
+	wg   sync.WaitGroup
 
 	// BlockCallback is called after a new block is produced and inserted.
 	// Used by the P2P layer to broadcast the block to peers.
 	BlockCallback func(block *types.Block)
 }
+
+const producerWarningSummaryInterval = 10 * time.Minute
 
 func New(chain *core.BlockChain, pool *txpool.TxPool, engine *dpos.DPoS, witnessKey *ecdsa.PrivateKey) *Producer {
 	return &Producer{
@@ -101,10 +119,14 @@ func (p *Producer) tryProduceBlock() {
 	scheduled, err := p.engine.GetScheduledWitness(headSlot)
 	if err != nil {
 		if !p.loggedWitnessErr {
-			log.Warn("Cannot get scheduled witness", "err", err)
+			log.Warn("Cannot get scheduled witness", "slot", currentSlot, "headSlot", headSlot, "err", err)
 			p.loggedWitnessErr = true
 		}
 		return
+	}
+	if p.loggedWitnessErr {
+		log.Info("Scheduled witness lookup recovered", "slot", currentSlot, "headSlot", headSlot)
+		p.loggedWitnessErr = false
 	}
 	if scheduled != p.witnessAddr {
 		return
@@ -115,19 +137,124 @@ func (p *Producer) tryProduceBlock() {
 	// java-tron consensus/dpos/StateManager.java:54-59 invoked from
 	// DposTask.produceBlock (DposTask.java:89-92).
 	if skip, rate := shouldSkipLowParticipation(p.chain); skip {
-		log.Warn("Skipping slot (low participation)",
-			"rate", rate, "threshold", params.MinParticipationRate)
+		p.reportLowParticipation(currentSlot, rate, time.Now())
 		return
+	} else {
+		p.reportLowParticipationRecovery(currentSlot, rate, time.Now())
 	}
 
 	produceStart := time.Now()
 	if err := p.produceBlock(p.witnessAddr, slotTimestamp); err != nil {
-		log.Warn("Failed to produce block",
-			"err", err, "elapsed", ethcommon.PrettyDuration(time.Since(produceStart)))
+		p.reportProduceFailure(currentSlot, slotTimestamp, time.Since(produceStart), err, time.Now())
 		return
 	}
+	p.reportProduceRecovery(currentSlot, time.Now())
 
 	p.lastProducedSlot = currentSlot
+}
+
+func (p *Producer) reportLowParticipation(slot, rate int64, now time.Time) {
+	if p == nil {
+		return
+	}
+	if slot == p.lowParticipationLastSlot {
+		p.lowParticipationRetrySuppressed++
+		return
+	}
+	p.lowParticipationLastSlot = slot
+	p.lowParticipationSkippedSlots++
+	if !p.lowParticipationActive {
+		p.lowParticipationActive = true
+		p.lowParticipationSince = now
+		p.lowParticipationLastSummary = now
+		p.lowParticipationSkippedSlots = 0
+		log.Warn("Block production paused by low participation",
+			"slot", slot,
+			"ratePct", rate,
+			"thresholdPct", params.MinParticipationRate)
+		return
+	}
+	if now.Sub(p.lowParticipationLastSummary) < producerWarningSummaryInterval {
+		return
+	}
+	log.Warn("Low participation continues",
+		"slot", slot,
+		"ratePct", rate,
+		"thresholdPct", params.MinParticipationRate,
+		"skippedSlotsSinceLastReport", p.lowParticipationSkippedSlots,
+		"retryAttemptsSuppressed", p.lowParticipationRetrySuppressed,
+		"stateDuration", now.Sub(p.lowParticipationSince).Round(time.Second))
+	p.lowParticipationSkippedSlots = 0
+	p.lowParticipationRetrySuppressed = 0
+	p.lowParticipationLastSummary = now
+}
+
+func (p *Producer) reportLowParticipationRecovery(slot, rate int64, now time.Time) {
+	if p == nil || !p.lowParticipationActive {
+		return
+	}
+	log.Info("Block production resumed after low participation",
+		"slot", slot,
+		"ratePct", rate,
+		"thresholdPct", params.MinParticipationRate,
+		"stateDuration", now.Sub(p.lowParticipationSince).Round(time.Second),
+		"skippedSlotsSinceLastReport", p.lowParticipationSkippedSlots,
+		"retryAttemptsSuppressed", p.lowParticipationRetrySuppressed)
+	p.lowParticipationActive = false
+	p.lowParticipationLastSlot = 0
+	p.lowParticipationSkippedSlots = 0
+	p.lowParticipationRetrySuppressed = 0
+}
+
+func (p *Producer) reportProduceFailure(slot, slotTimestampMs int64, elapsed time.Duration, err error, now time.Time) {
+	if p == nil {
+		return
+	}
+	if slot == p.productionFailureLastSlot {
+		p.productionFailureSuppressed++
+		return
+	}
+	p.productionFailureLastSlot = slot
+	p.productionFailureSlots++
+	if !p.productionFailureActive {
+		p.productionFailureActive = true
+		p.productionFailureSince = now
+		p.productionFailureLastSummary = now
+		p.productionFailureSlots = 0
+		log.Warn("Block production failing",
+			"slot", slot,
+			"slotTimestampMs", slotTimestampMs,
+			"elapsed", ethcommon.PrettyDuration(elapsed),
+			"err", err)
+		return
+	}
+	if now.Sub(p.productionFailureLastSummary) < producerWarningSummaryInterval {
+		return
+	}
+	log.Warn("Block production failures continue",
+		"slot", slot,
+		"slotTimestampMs", slotTimestampMs,
+		"failedSlotsSinceLastReport", p.productionFailureSlots,
+		"retryAttemptsSuppressed", p.productionFailureSuppressed,
+		"stateDuration", now.Sub(p.productionFailureSince).Round(time.Second),
+		"sampleErr", err)
+	p.productionFailureSlots = 0
+	p.productionFailureSuppressed = 0
+	p.productionFailureLastSummary = now
+}
+
+func (p *Producer) reportProduceRecovery(slot int64, now time.Time) {
+	if p == nil || !p.productionFailureActive {
+		return
+	}
+	log.Info("Block production recovered",
+		"slot", slot,
+		"stateDuration", now.Sub(p.productionFailureSince).Round(time.Second),
+		"failedSlotsSinceLastReport", p.productionFailureSlots,
+		"retryAttemptsSuppressed", p.productionFailureSuppressed)
+	p.productionFailureActive = false
+	p.productionFailureSlots = 0
+	p.productionFailureSuppressed = 0
 }
 
 func productionSlotForTimestamp(chain *core.BlockChain, timestamp int64) int64 {
@@ -182,7 +309,8 @@ func (p *Producer) produceBlock(witnessAddr tcommon.Address, timestamp int64) er
 		"hash", block.Hash(),
 		"txs", len(block.Transactions()),
 		"witness", fmt.Sprintf("%x", witnessAddr[:6]),
-		"slot", timestamp,
+		"slot", dpos.AbsoluteSlot(timestamp, p.chain.GenesisTimestamp()),
+		"slotTimestampMs", timestamp,
 		"elapsed", ethcommon.PrettyDuration(time.Since(produceStart)))
 
 	if p.BlockCallback != nil {

@@ -212,6 +212,7 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 	if l == nil {
 		return SnapshotLifecyclePass{}, nil
 	}
+	started := time.Now()
 	var out SnapshotLifecyclePass
 	var stopErr error
 	if l.builder != nil {
@@ -345,8 +346,77 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 	if stopErr != nil {
 		return out, stopErr
 	}
+	latestBlock := uint64(0)
+	if l.builder != nil {
+		latestBlock = l.builder.Snapshot().LastLatestBuildBlock
+	}
+	if ctx, changed := snapshotLifecyclePassLogContext(out, latestBlock, time.Since(started)); changed {
+		lifecycleLog.Info("Domain state lifecycle maintenance completed", ctx...)
+	}
 	l.notifyPassComplete()
 	return out, nil
+}
+
+func snapshotLifecyclePassLogContext(pass SnapshotLifecyclePass, latestBlock uint64, elapsed time.Duration) ([]any, bool) {
+	ctx := []any{"elapsed", elapsed.Round(time.Millisecond)}
+	changed := false
+	if pass.Snapshot.LatestBuilt {
+		changed = true
+		ctx = append(ctx, "latestSnapshotBuilt", true, "latestSnapshotBlock", latestBlock, "latestSnapshotElapsed", pass.Snapshot.LatestDuration.Round(time.Millisecond))
+	}
+	if pass.ChainFreezerBuild.Built || pass.ChainFreezerBuild.EventLogBuilt {
+		changed = true
+		ctx = append(ctx, "chainFreezerSnapshotBuilt", pass.ChainFreezerBuild.Built, "chainFreezerEventLogBuilt", pass.ChainFreezerBuild.EventLogBuilt)
+		if pass.ChainFreezerBuild.Built {
+			ctx = append(ctx,
+				"chainFreezerFromBlock", pass.ChainFreezerBuild.FromBlock,
+				"chainFreezerToBlock", pass.ChainFreezerBuild.ToBlock)
+		}
+		if pass.ChainFreezerBuild.EventLogBuilt {
+			ctx = append(ctx,
+				"chainFreezerEventLogFromBlock", pass.ChainFreezerBuild.EventLogFromBlock,
+				"chainFreezerEventLogToBlock", pass.ChainFreezerBuild.EventLogToBlock)
+		}
+	}
+	if result := pass.ChainLookupPrune; result != nil && result.HasRange {
+		changed = true
+		ctx = append(ctx,
+			"chainLookupFromBlock", result.FromBlock,
+			"chainLookupToBlock", result.ToBlock,
+			"chainLookupBlockIndexesDeleted", result.BlockIndexesDeleted,
+			"chainLookupStateRootsDeleted", result.StateRootsDeleted,
+			"chainLookupTxIndexesDeleted", result.TxIndexesDeleted,
+			"chainLookupTxInfosDeleted", result.TxInfosDeleted)
+	}
+	if result := pass.SectionBloomPrune; result != nil && result.HasRange {
+		changed = true
+		ctx = append(ctx,
+			"sectionBloomFromSection", result.FromSection,
+			"sectionBloomToSection", result.ToSection,
+			"sectionBloomRowsDeleted", result.RowsDeleted)
+	}
+	if result := pass.BalanceTracePrune; result != nil && result.HasRange {
+		changed = true
+		ctx = append(ctx,
+			"balanceTraceFromBlock", result.FromBlock,
+			"balanceTraceToBlock", result.ToBlock,
+			"balanceTraceBlocksDeleted", result.BlockTracesDeleted,
+			"balanceTraceAccountsDeleted", result.AccountTracesDeleted)
+	}
+	if result := pass.StateChangeIndexPrune; result != nil && (result.PostingRowsDeleted > 0 || result.DirectoryRowsDeleted > 0) {
+		changed = true
+		ctx = append(ctx,
+			"stateChangePostingRowsDeleted", result.PostingRowsDeleted,
+			"stateChangeDirectoryRowsDeleted", result.DirectoryRowsDeleted)
+	}
+	if result := pass.RetiredPrune; result != nil && (result.FilesDeleted > 0 || result.FilesMissing > 0) {
+		changed = true
+		ctx = append(ctx,
+			"retiredSnapshotFilesDeleted", result.FilesDeleted,
+			"retiredSnapshotFilesMissing", result.FilesMissing,
+			"retiredSnapshotBytesDeleted", result.BytesDeleted)
+	}
+	return ctx, changed
 }
 
 func (l *SnapshotLifecycle) loop() {

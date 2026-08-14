@@ -400,6 +400,9 @@ func TestWorkerSnapResumesHotHistoryPruneAfterPersistedBlockCursor(t *testing.T)
 	if first.DeletedDomainChangeBlocks != 1 {
 		t.Fatalf("first stats = %+v, want one deleted change block", first)
 	}
+	if first.DomainChangeStartBlock != 0 || first.DomainChangePrunedThrough != 1 || first.DomainChangePrunedThroughTx != 12 {
+		t.Fatalf("first prune cursor stats = %+v, want start 0 through block 1 tx 12", first)
+	}
 	manifest, err := snapshots.LoadProductionManifest(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -420,6 +423,9 @@ func TestWorkerSnapResumesHotHistoryPruneAfterPersistedBlockCursor(t *testing.T)
 	}
 	if second.DeletedDomainChangeBlocks != 1 {
 		t.Fatalf("second stats = %+v, want next deleted change block", second)
+	}
+	if second.DomainChangeStartBlock != 2 || second.DomainChangePrunedThrough != 2 || second.DomainChangePrunedThroughTx != 22 {
+		t.Fatalf("second prune cursor stats = %+v, want start/through block 2 tx 22", second)
 	}
 	manifest, err = snapshots.LoadProductionManifest(dir)
 	if err != nil {
@@ -1852,13 +1858,16 @@ func TestPrunerPassUsesSolidifiedBlockAndBatch(t *testing.T) {
 	if stats.DeletedTxRanges != 1 {
 		t.Fatalf("deleted tx ranges = %d, want 1", stats.DeletedTxRanges)
 	}
-	if got := pruner.Stats(); got.Passes != 1 || got.LastSolidifiedBlock != 5 {
+	if got := pruner.Stats(); got.Passes != 1 || got.LastSolidifiedBlock != 5 || got.LastDomainChangeStartBlock != 0 || got.LastDomainChangePrunedThrough != 1 || got.LastDomainChangePrunedThroughTx != 1 {
 		t.Fatalf("pruner stats = %+v", got)
 	}
 	assertPrunerGauge(t, namespace+"passes", 1)
 	assertPrunerGauge(t, namespace+"errors", 0)
 	assertPrunerGauge(t, namespace+"deleted/tx_ranges", 1)
 	assertPrunerGauge(t, namespace+"last/solidified_block", 5)
+	assertPrunerGauge(t, namespace+"last/domain_change/start_block", 0)
+	assertPrunerGauge(t, namespace+"last/domain_change/pruned_through_block", 1)
+	assertPrunerGauge(t, namespace+"last/domain_change/pruned_through_tx", 1)
 	if got := prunerGaugeValue(t, namespace+"lastpass/duration"); got <= 0 {
 		t.Fatalf("lastpass/duration = %d, want positive", got)
 	}
@@ -1880,6 +1889,61 @@ func TestPrunerPassUsesSolidifiedBlockAndBatch(t *testing.T) {
 	}
 	if err := pruner.Stop(); err != nil {
 		t.Fatalf("stop: %v", err)
+	}
+}
+
+func TestPrunePassLogContextOmitsHistoryCursorWhenOnlyCodeChanges(t *testing.T) {
+	ctx := prunePassLogContext(100, 120, Policy{HistoryWindow: 20}, Stats{DeletedStateCodeRows: 3}, time.Second)
+	fields := make(map[string]any, len(ctx)/2)
+	for i := 0; i+1 < len(ctx); i += 2 {
+		key, ok := ctx[i].(string)
+		if !ok {
+			t.Fatalf("field key %d = %T, want string", i, ctx[i])
+		}
+		fields[key] = ctx[i+1]
+	}
+	if fields["historyChanged"] != false || fields["targetPruneThrough"] != uint64(80) {
+		t.Fatalf("base fields = %+v", fields)
+	}
+	for _, key := range []string{"startBlock", "prunedThroughBlock", "prunedThroughTx", "historyBlocksPerSec"} {
+		if _, exists := fields[key]; exists {
+			t.Errorf("history cursor field %q present without history changes: %+v", key, fields)
+		}
+	}
+}
+
+func TestPrunePassLogContextReportsCommittedHistoryCursor(t *testing.T) {
+	ctx := prunePassLogContext(100, 120, Policy{HistoryWindow: 20}, Stats{
+		DeletedTxRanges:             2,
+		DeletedDomainChangeBlocks:   3,
+		DomainChangeStartBlock:      41,
+		DomainChangePrunedThrough:   43,
+		DomainChangePrunedThroughTx: 430,
+	}, 2*time.Second)
+	fields := make(map[string]any, len(ctx)/2)
+	for i := 0; i+1 < len(ctx); i += 2 {
+		key, ok := ctx[i].(string)
+		if !ok {
+			t.Fatalf("field key %d = %T, want string", i, ctx[i])
+		}
+		fields[key] = ctx[i+1]
+	}
+	want := map[string]any{
+		"headBlock":           uint64(100),
+		"solidifiedBlock":     int64(120),
+		"targetPruneThrough":  uint64(80),
+		"historyChanged":      true,
+		"startBlock":          uint64(41),
+		"prunedThroughBlock":  uint64(43),
+		"prunedThroughTx":     uint64(430),
+		"historyBlocksPerSec": float64(1.5),
+		"txRanges":            2,
+		"changeBlocks":        3,
+	}
+	for key, expected := range want {
+		if fields[key] != expected {
+			t.Errorf("field %q = %#v, want %#v (all fields: %+v)", key, fields[key], expected, fields)
+		}
 	}
 }
 
@@ -2564,6 +2628,9 @@ func unregisterPrunerMetricNamespace(namespace string) {
 		"deleted/commitment_checkpoints",
 		"deleted/state_code_rows",
 		"last/solidified_block",
+		"last/domain_change/start_block",
+		"last/domain_change/pruned_through_block",
+		"last/domain_change/pruned_through_tx",
 		"lastpass/duration",
 	} {
 		metrics.DefaultRegistry.Unregister(namespace + suffix)

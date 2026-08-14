@@ -1,12 +1,20 @@
 package snapshots
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/metrics"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 )
 
 func TestHistoryCompactionProgressPublishesLiveMetrics(t *testing.T) {
+	var logBuf bytes.Buffer
+	previousLogger := gtronlog.Root()
+	defer gtronlog.SetDefault(previousLogger)
+	gtronlog.SetDefault(gtronlog.NewLogger(gtronlog.LogfmtHandlerWithLevel(&logBuf, gtronlog.LevelInfo)))
+
 	live := historyCompactionLiveMetrics{
 		active:           metrics.NewGauge(),
 		phase:            metrics.NewGauge(),
@@ -35,10 +43,24 @@ func TestHistoryCompactionProgressPublishesLiveMetrics(t *testing.T) {
 	if live.elapsed.Snapshot().Value() <= 0 {
 		t.Fatal("live compaction elapsed metric was not updated")
 	}
+	for _, field := range []string{`msg="History cold snapshot compaction progress"`, "progressPct=40", "recordsPerSecond=", "elapsed="} {
+		if !strings.Contains(logBuf.String(), field) {
+			t.Errorf("missing progress field %q:\n%s", field, logBuf.String())
+		}
+	}
 
 	progress.finish(nil)
 	assertGaugeValue(t, live.active, 0)
 	assertGaugeValue(t, live.phase, historyCompactionPhaseIdle)
+}
+
+func TestHistoryCompactionPercentIsNumericAndRounded(t *testing.T) {
+	if got := historyCompactionPercent(1, 3); got != 33.33 {
+		t.Fatalf("progress = %v, want 33.33", got)
+	}
+	if got := historyCompactionPercent(0, 0); got != 0 {
+		t.Fatalf("zero-total progress = %v, want 0", got)
+	}
 }
 
 func assertGaugeValue(t *testing.T, gauge *metrics.Gauge, want int64) {

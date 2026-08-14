@@ -57,7 +57,7 @@ const MinFetchRequestInterval = 400 * time.Millisecond
 // fetch-timer goroutine never races a test's restore.
 var SyncFetchTimeout = 30 * time.Second
 
-// StatsReportInterval is the cadence at which sync emits "Imported chain
-// segment" summary lines. Exposed as a var so tests can shrink it. Mirrors
-// geth's blockchain_insert.go:statsReportLimit.
-var StatsReportInterval = 8 * time.Second
+// StatsReportInterval is the cadence at which sync emits compact operational
+// progress. Detailed per-window execution diagnostics remain available at
+// debug level. Exposed as a var so tests can shrink it.
+var StatsReportInterval = 30 * time.Second

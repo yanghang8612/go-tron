@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,7 @@ const (
 	// step on a complete block boundary and retains BatchBlocks as a second cap.
 	defaultColdSnapshotBatchTxNums = uint64(390_625)
 	defaultColdSnapshotMetrics     = "state/snapshot/cold/"
+	coldSnapshotCatchupRateReset   = 15 * time.Minute
 )
 
 var ErrCommitmentBranchRotationNotSolidified = errors.New("snapshots: commitment branch rotation boundary is not solidified")
@@ -144,34 +146,39 @@ type Config struct {
 
 // PassResult describes a single cold snapshot builder pass.
 type PassResult struct {
-	Built               bool
-	HistoryDeferred     bool
-	HistoryRateLimited  bool
-	HistoryAccelerated  bool
-	HistoryGateDeferred bool
-	HistoryRetryAfter   time.Duration
-	LatestBuilt         bool
-	LatestDeferred      bool
-	Compaction          HistoryCompactionResult
-	FromTxNum           uint64
-	ToTxNum             uint64
-	FromBlock           uint64
-	ToBlock             uint64
-	CutoffBlock         uint64
-	EligibleCutoffBlock uint64
-	PublishedBlock      uint64
-	SolidifiedBlock     uint64
-	PreviousVisibleTx   uint64
-	Segment             SegmentRef
-	Segments            []SegmentRef
-	SectionBloomBuilt   bool
-	BalanceTraceBuilt   bool
-	EventLogBuilt       bool
-	CatalogPublished    bool
-	Manifest            *Manifest
-	BuildDuration       time.Duration
-	CompactionDuration  time.Duration
-	LatestDuration      time.Duration
+	Built                bool
+	HistoryDeferred      bool
+	HistoryRateLimited   bool
+	HistoryAccelerated   bool
+	HistoryGateDeferred  bool
+	HistoryRetryAfter    time.Duration
+	LatestBuilt          bool
+	LatestDeferred       bool
+	Compaction           HistoryCompactionResult
+	FromTxNum            uint64
+	ToTxNum              uint64
+	FromBlock            uint64
+	ToBlock              uint64
+	CutoffBlock          uint64
+	EligibleCutoffBlock  uint64
+	PublishedBlock       uint64
+	SolidifiedBlock      uint64
+	PreviousVisibleTx    uint64
+	Segment              SegmentRef
+	Segments             []SegmentRef
+	SectionBloomBuilt    bool
+	BalanceTraceBuilt    bool
+	EventLogBuilt        bool
+	CatalogPublished     bool
+	Manifest             *Manifest
+	HistoryDuration      time.Duration
+	BalanceTraceDuration time.Duration
+	EventLogDuration     time.Duration
+	SectionBloomDuration time.Duration
+	PublishDuration      time.Duration
+	BuildDuration        time.Duration
+	CompactionDuration   time.Duration
+	LatestDuration       time.Duration
 }
 
 // NeedsCatchup reports whether a successful bounded history build published
@@ -367,6 +374,9 @@ type Runner struct {
 	historyAcceleratedBuilds atomic.Uint64
 	historyGateDeferred      atomic.Uint64
 	lastHistoryBuildAt       atomic.Int64
+	// catchupRate is updated only while passMu is held and smooths the noisy
+	// one-pass lag delta used for operator ETA logs.
+	catchupRate float64
 }
 
 func NewRunner(chain ChainSource, cfg Config) *Runner {
@@ -888,13 +898,25 @@ func (r *Runner) onePass() (PassResult, error) {
 
 	var refs []SegmentRef
 	historyBuildStarted := time.Now()
+	buildBlocks := cutoffBlock - startBlock + 1
+	buildTxs := toTxNum - fromTxNum + 1
+	backlogBlocks := uint64(0)
+	if result.EligibleCutoffBlock > cutoffBlock {
+		backlogBlocks = result.EligibleCutoffBlock - cutoffBlock
+	}
 	coldSnapshotLog.Info("History cold snapshot build started",
 		"dataset", r.cfg.HistoryDataset,
 		"fromTx", fromTxNum,
 		"toTx", toTxNum,
+		"txs", buildTxs,
 		"fromBlock", startBlock,
 		"toBlock", cutoffBlock,
+		"blocks", buildBlocks,
+		"eligibleCutoffBlock", result.EligibleCutoffBlock,
+		"backlogBlocks", backlogBlocks,
 		"accelerated", result.HistoryAccelerated)
+	buildProgress := startColdSnapshotBuildProgress(r.cfg.HistoryDataset, fromTxNum, toTxNum, startBlock, cutoffBlock, result.EligibleCutoffBlock, 0)
+	defer buildProgress.Stop()
 	if historyCfg.BuildHistoryBlockRange != nil {
 		refs, err = historyCfg.BuildHistoryBlockRange(db, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, historyCfg.HistoryPath(fromTxNum, toTxNum))
 	} else {
@@ -914,14 +936,19 @@ func (r *Runner) onePass() (PassResult, error) {
 	if len(refs) == 0 {
 		return result, nil
 	}
-	coldSnapshotLog.Info("History cold snapshot history segment built",
+	result.HistoryDuration = time.Since(historyBuildStarted)
+	historyRefs := len(refs)
+	historyBytes := segmentRefsSize(refs)
+	coldSnapshotLog.Debug("History cold snapshot history files built",
 		"dataset", r.cfg.HistoryDataset,
 		"fromTx", fromTxNum,
 		"toTx", toTxNum,
 		"fromBlock", startBlock,
 		"toBlock", cutoffBlock,
-		"segments", len(refs),
-		"elapsed", time.Since(historyBuildStarted).Round(time.Millisecond))
+		"refs", historyRefs,
+		"bytes", historyBytes,
+		"elapsed", result.HistoryDuration.Round(time.Millisecond))
+	buildProgress.SetPhase("prepare-derived")
 	aggregator := NewAggregator(r.cfg.Dir)
 	var chainDB *rawdb.ChainDB
 	if r.cfg.BuildBalanceTraces || r.cfg.BuildEventLogs {
@@ -932,6 +959,8 @@ func (r *Runner) onePass() (PassResult, error) {
 	}
 	balanceTraceBuilt := false
 	if r.cfg.BuildBalanceTraces {
+		buildProgress.SetPhase("balance-trace")
+		balanceTraceStarted := time.Now()
 		traceRefs, err := r.balanceTracePass(chainDB, db, startBlock, cutoffBlock)
 		if err != nil {
 			return PassResult{}, err
@@ -940,10 +969,13 @@ func (r *Runner) onePass() (PassResult, error) {
 			refs = append(refs, traceRefs...)
 			balanceTraceBuilt = true
 		}
+		result.BalanceTraceDuration = coldSnapshotPhaseDuration(balanceTraceStarted)
 	}
 	eventLogBuilt := false
 	var eventLogRef, eventLogIndexRef SegmentRef
 	if r.cfg.BuildEventLogs {
+		buildProgress.SetPhase("event-log")
+		eventLogStarted := time.Now()
 		eventRefs, err := buildEventLogPairFromChain(chainDB, r.cfg.Dir, startBlock, cutoffBlock, EventLogBuildOptions{Version: r.cfg.EventLogVersion, ETL: r.cfg.ETL})
 		if err != nil {
 			return PassResult{}, err
@@ -957,9 +989,12 @@ func (r *Runner) onePass() (PassResult, error) {
 		// Existing adjacent indexes remain active in the manifest; rebuilding a
 		// chain-wide index on every catch-up step makes historical sync quadratic.
 		eventLogBuilt = true
+		result.EventLogDuration = coldSnapshotPhaseDuration(eventLogStarted)
 	}
 	sectionBloomBuilt := false
 	if r.cfg.BuildSectionBlooms {
+		buildProgress.SetPhase("section-bloom")
+		sectionBloomStarted := time.Now()
 		sectionRefs, err := r.sectionBloomPassWithManifest(db, cutoffBlock, productionManifest)
 		if err != nil {
 			return PassResult{}, err
@@ -968,7 +1003,10 @@ func (r *Runner) onePass() (PassResult, error) {
 			refs = append(refs, sectionRefs...)
 			sectionBloomBuilt = true
 		}
+		result.SectionBloomDuration = coldSnapshotPhaseDuration(sectionBloomStarted)
 	}
+	buildProgress.SetPhase("publish")
+	publishStarted := time.Now()
 	manifest, err := aggregator.integrateWithManifest(fromTxNum, toTxNum, refs, productionManifest)
 	if err != nil {
 		return PassResult{}, err
@@ -1008,7 +1046,128 @@ func (r *Runner) onePass() (PassResult, error) {
 			return PassResult{}, err
 		}
 	}
+	result.PublishDuration = coldSnapshotPhaseDuration(publishStarted)
+	buildProgress.Stop()
+	logColdSnapshotPublished(r, result, historyBuildStarted, historyRefs, historyBytes)
 	return result, nil
+}
+
+func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, historyRefs int, historyBytes uint64) {
+	if r == nil || !result.Built {
+		return
+	}
+	elapsed := time.Since(started)
+	blocks := result.ToBlock - result.FromBlock + 1
+	txs := result.ToTxNum - result.FromTxNum + 1
+	backlogBlocks := uint64(0)
+	if result.EligibleCutoffBlock > result.PublishedBlock {
+		backlogBlocks = result.EligibleCutoffBlock - result.PublishedBlock
+	}
+	totalBytes := segmentRefsSize(result.Segments)
+	coldSnapshotLog.Debug("History cold snapshot publication details",
+		"dataset", r.cfg.HistoryDataset,
+		"fromTx", result.FromTxNum,
+		"toTx", result.ToTxNum,
+		"historyRefs", historyRefs,
+		"totalRefs", len(result.Segments),
+		"historyBytes", historyBytes,
+		"totalBytes", totalBytes,
+		"balanceTraceElapsed", result.BalanceTraceDuration.Round(time.Millisecond),
+		"sectionBloomElapsed", result.SectionBloomDuration.Round(time.Millisecond))
+	ctx := []any{
+		"dataset", r.cfg.HistoryDataset,
+		"fromBlock", result.FromBlock,
+		"toBlock", result.ToBlock,
+		"blocks", blocks,
+		"txs", txs,
+		"totalBytes", totalBytes,
+		"historyElapsed", result.HistoryDuration.Round(time.Millisecond),
+		"eventLogElapsed", result.EventLogDuration.Round(time.Millisecond),
+		"publishElapsed", result.PublishDuration.Round(time.Millisecond),
+		"elapsed", elapsed.Round(time.Millisecond),
+		"blocksPerSec", coldSnapshotRate(blocks, elapsed),
+		"txsPerSec", coldSnapshotRate(txs, elapsed),
+		"publishedBlock", result.PublishedBlock,
+		"eligibleCutoffBlock", result.EligibleCutoffBlock,
+		"backlogBlocks", backlogBlocks,
+		"accelerated", result.HistoryAccelerated,
+	}
+	previousLag := r.lastLagBlocks.Load()
+	previousAt := r.lastHistoryBuildAt.Load()
+	if previousAt > 0 {
+		window := time.Since(time.Unix(0, previousAt))
+		if window >= coldSnapshotCatchupRateReset {
+			// Do not let a pre-pause EWMA leak into the next short build when
+			// the first post-pause pass merely holds or increases the backlog.
+			r.catchupRate = 0
+		}
+		if previousLag > backlogBlocks {
+			instantRate := coldSnapshotRawRate(previousLag-backlogBlocks, window)
+			if instantRate > 0 {
+				r.catchupRate = smoothColdSnapshotCatchupRate(r.catchupRate, instantRate, window)
+				ctx = append(ctx, "netCatchupBlocksPerSec", coldSnapshotDisplayRate(r.catchupRate))
+				if eta, ok := coldSnapshotETA(backlogBlocks, r.catchupRate); ok {
+					ctx = append(ctx, "eta", eta)
+				}
+			}
+		}
+	}
+	coldSnapshotLog.Info("History cold snapshot published", ctx...)
+}
+
+func coldSnapshotRate(items uint64, elapsed time.Duration) float64 {
+	return coldSnapshotDisplayRate(coldSnapshotRawRate(items, elapsed))
+}
+
+func coldSnapshotRawRate(items uint64, elapsed time.Duration) float64 {
+	if items == 0 || elapsed <= 0 {
+		return 0
+	}
+	return float64(items) / elapsed.Seconds()
+}
+
+func coldSnapshotDisplayRate(rate float64) float64 {
+	if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return 0
+	}
+	precision := 100.0
+	if rate < 0.01 {
+		precision = 10_000
+	}
+	return math.Round(rate*precision) / precision
+}
+
+func smoothColdSnapshotCatchupRate(previous, instant float64, window time.Duration) float64 {
+	if instant <= 0 {
+		return previous
+	}
+	if previous <= 0 || window >= coldSnapshotCatchupRateReset {
+		return instant
+	}
+	return previous*0.8 + instant*0.2
+}
+
+func coldSnapshotETA(items uint64, rate float64) (time.Duration, bool) {
+	if items == 0 || rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return 0, false
+	}
+	seconds := float64(items) / rate
+	maxSeconds := float64(math.MaxInt64) / float64(time.Second)
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds > maxSeconds {
+		return 0, false
+	}
+	return time.Duration(seconds * float64(time.Second)).Round(time.Second), true
+}
+
+func segmentRefsSize(refs []SegmentRef) uint64 {
+	var total uint64
+	for _, ref := range refs {
+		if ^uint64(0)-total < ref.Size {
+			return ^uint64(0)
+		}
+		total += ref.Size
+	}
+	return total
 }
 
 func (r *Runner) historyBuildAccelerated(readyBlocks uint64) bool {
@@ -1290,14 +1449,8 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	} else if result.HistoryDeferred {
 		r.historyDeferredSync.Add(1)
 	}
-	var builtBytes uint64
-	for _, ref := range append(append([]SegmentRef(nil), result.Segments...), result.Compaction.Segments...) {
-		if ^uint64(0)-builtBytes < ref.Size {
-			builtBytes = ^uint64(0)
-			break
-		}
-		builtBytes += ref.Size
-	}
+	builtRefs := append(append([]SegmentRef(nil), result.Segments...), result.Compaction.Segments...)
+	builtBytes := segmentRefsSize(builtRefs)
 	if builtBytes > 0 {
 		r.bytesBuilt.Add(builtBytes)
 	}
@@ -1582,7 +1735,7 @@ func (r *Runner) loop() {
 	if err != nil {
 		coldSnapshotLog.Warn("History cold snapshot initial pass failed", "dataset", r.cfg.HistoryDataset, "err", err)
 	} else if result.Built {
-		coldSnapshotLog.Info("History cold snapshot initial pass built",
+		coldSnapshotLog.Debug("History cold snapshot initial pass completed",
 			"dataset", r.cfg.HistoryDataset,
 			"fromTx", result.FromTxNum,
 			"toTx", result.ToTxNum,
@@ -1596,7 +1749,7 @@ func (r *Runner) loop() {
 			"balanceTraceBuilt", result.BalanceTraceBuilt,
 			"eventLogBuilt", result.EventLogBuilt)
 	} else if result.Compaction.Merged {
-		coldSnapshotLog.Info("History cold snapshot initial pass compacted",
+		coldSnapshotLog.Debug("History cold snapshot initial pass compacted",
 			"dataset", result.Compaction.Dataset,
 			"fromTx", result.Compaction.FromTxNum,
 			"toTx", result.Compaction.ToTxNum,
@@ -1629,7 +1782,7 @@ func (r *Runner) loop() {
 		if err != nil {
 			coldSnapshotLog.Warn("History cold snapshot pass failed", "dataset", r.cfg.HistoryDataset, "err", err)
 		} else if result.Built {
-			coldSnapshotLog.Info("History cold snapshot pass built",
+			coldSnapshotLog.Debug("History cold snapshot pass completed",
 				"dataset", r.cfg.HistoryDataset,
 				"fromTx", result.FromTxNum,
 				"toTx", result.ToTxNum,
@@ -1643,7 +1796,7 @@ func (r *Runner) loop() {
 				"balanceTraceBuilt", result.BalanceTraceBuilt,
 				"eventLogBuilt", result.EventLogBuilt)
 		} else if result.Compaction.Merged {
-			coldSnapshotLog.Info("History cold snapshot pass compacted",
+			coldSnapshotLog.Debug("History cold snapshot pass compacted",
 				"dataset", result.Compaction.Dataset,
 				"fromTx", result.Compaction.FromTxNum,
 				"toTx", result.Compaction.ToTxNum,

@@ -17,16 +17,17 @@
 package rpc
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -468,21 +469,50 @@ func (h *handler) handleCallMsg(ctx *callProc, msg *jsonrpcMessage) *jsonrpcMess
 	switch {
 	case msg.isNotification():
 		h.handleCall(ctx, msg)
-		h.log.Debug("Served "+msg.Method, "duration", time.Since(start))
+		h.log.Debug("RPC notification served",
+			"method", boundedRPCMethodLog(msg.Method),
+			"methodBytes", len(msg.Method),
+			"methodTruncated", len(msg.Method) > maxRPCMethodLogBytes,
+			"duration", time.Since(start))
 		return nil
 
 	case msg.isCall():
 		resp := h.handleCall(ctx, msg)
-		var logctx []any
-		logctx = append(logctx, "reqid", idForLog{msg.ID}, "duration", time.Since(start))
+		requestID := idForLog{msg.ID}
+		logctx := []any{
+			"method", boundedRPCMethodLog(msg.Method),
+			"methodBytes", len(msg.Method),
+			"methodTruncated", len(msg.Method) > maxRPCMethodLogBytes,
+			"reqid", requestID,
+			"reqidBytes", requestID.Len(),
+			"reqidTruncated", requestID.Truncated(),
+			"duration", time.Since(start),
+		}
 		if resp.Error != nil {
-			logctx = append(logctx, "err", resp.Error.Message)
+			logctx = append(logctx,
+				"rpcErrorCode", resp.Error.Code,
+				"err", boundedRPCLogText(resp.Error.Message),
+			)
 			if resp.Error.Data != nil {
-				logctx = append(logctx, "errdata", formatErrorData(resp.Error.Data))
+				// Error data can contain revert output or application-specific
+				// payloads. The response remains unchanged, but Info/Warn logs only
+				// record its presence; operators can opt into method-level tracing
+				// without copying remote-controlled data into the log pipeline.
+				logctx = append(logctx, "hasErrorData", true)
 			}
-			h.log.Warn("Served "+msg.Method, logctx...)
+			if isRPCClientErrorCode(resp.Error.Code) {
+				h.log.Debug("RPC request served", logctx...)
+			} else if report, suppressed := rpcServerErrorWarnLimiter.Allow(time.Now()); report {
+				if suppressed > 0 {
+					logctx = append(logctx, "suppressedSinceLastReport", suppressed)
+				}
+				h.log.Warn("RPC request served", logctx...)
+			} else {
+				logctx = append(logctx, "warnSuppressed", true)
+				h.log.Debug("RPC request served", logctx...)
+			}
 		} else {
-			h.log.Debug("Served "+msg.Method, logctx...)
+			h.log.Debug("RPC request served", logctx...)
 		}
 		return resp
 
@@ -612,42 +642,87 @@ func (h *handler) unsubscribe(ctx context.Context, id ID) (bool, error) {
 
 type idForLog struct{ json.RawMessage }
 
+const (
+	maxRPCRequestIDLogBytes = 128
+	maxRPCMethodLogBytes    = 128
+	maxRPCErrorLogBytes     = 512
+	rpcErrorWarnInterval    = 30 * time.Second
+)
+
+var rpcServerErrorWarnLimiter rpcWarnLimiter
+
+// rpcWarnLimiter bounds remotely-triggered server/application error warnings
+// across HTTP, WebSocket, and IPC handlers. Suppressed events remain visible at
+// Debug and are counted on the next Warn; RPC execution and responses are not
+// affected.
+type rpcWarnLimiter struct {
+	lastReportNanos atomic.Int64
+	suppressed      atomic.Uint64
+}
+
+func (l *rpcWarnLimiter) Allow(now time.Time) (report bool, suppressed uint64) {
+	if l == nil {
+		return true, 0
+	}
+	l.suppressed.Add(1)
+	last := l.lastReportNanos.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < rpcErrorWarnInterval {
+		return false, 0
+	}
+	if !l.lastReportNanos.CompareAndSwap(last, now.UnixNano()) {
+		return false, 0
+	}
+	count := l.suppressed.Swap(0)
+	if count > 0 {
+		count-- // The current event is represented by the Warn itself.
+	}
+	return true, count
+}
+
 func (id idForLog) String() string {
+	if id.Truncated() {
+		digest := sha256.Sum256(id.RawMessage)
+		return fmt.Sprintf("<request-id bytes=%d sha256=%x>", len(id.RawMessage), digest[:6])
+	}
 	if s, err := strconv.Unquote(string(id.RawMessage)); err == nil {
 		return s
 	}
 	return string(id.RawMessage)
 }
 
-var errTruncatedOutput = errors.New("truncated output")
-
-type limitedBuffer struct {
-	output []byte
-	limit  int
+func (id idForLog) Len() int {
+	return len(id.RawMessage)
 }
 
-func (buf *limitedBuffer) Write(data []byte) (int, error) {
-	avail := buf.limit - len(buf.output)
-	if avail <= 0 {
-		return 0, errTruncatedOutput
-	}
-	if len(data) <= avail {
-		buf.output = append(buf.output, data...)
-		return len(data), nil
-	}
-	buf.output = append(buf.output, data[:avail]...)
-	return avail, errTruncatedOutput
+func (id idForLog) Truncated() bool {
+	return len(id.RawMessage) > maxRPCRequestIDLogBytes
 }
 
-func formatErrorData(v any) string {
-	buf := limitedBuffer{limit: 1024}
-	err := json.NewEncoder(&buf).Encode(v)
-	switch {
-	case err == nil:
-		return string(bytes.TrimRight(buf.output, "\n"))
-	case errors.Is(err, errTruncatedOutput):
-		return fmt.Sprintf("%s... (truncated)", buf.output)
+func boundedRPCLogText(text string) string {
+	if len(text) <= maxRPCErrorLogBytes {
+		return text
+	}
+	digest := sha256.Sum256([]byte(text))
+	prefix := text[:maxRPCErrorLogBytes]
+	for len(prefix) > 0 && !utf8.ValidString(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return fmt.Sprintf("%s... <truncated bytes=%d sha256=%x>", prefix, len(text), digest[:6])
+}
+
+func boundedRPCMethodLog(method string) string {
+	if len(method) <= maxRPCMethodLogBytes {
+		return method
+	}
+	digest := sha256.Sum256([]byte(method))
+	return fmt.Sprintf("<method bytes=%d sha256=%x>", len(method), digest[:6])
+}
+
+func isRPCClientErrorCode(code int) bool {
+	switch code {
+	case -32700, -32600, -32601, -32602:
+		return true
 	default:
-		return fmt.Sprintf("bad error data (err=%v)", err)
+		return false
 	}
 }

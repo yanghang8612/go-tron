@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -188,32 +189,32 @@ func (p *historyCompactionProgress) logProgress() {
 	processed := p.recordsProcessed.Load()
 	total := p.recordsTotal.Load()
 	var recordsPerSecond uint64
-	var eta time.Duration
 	copyElapsed := elapsed
 	if started := p.copyStarted.Load(); started > 0 {
 		copyElapsed = time.Since(time.Unix(0, started))
 	}
 	if p.phase.Load() == historyCompactionPhaseCopyRecords && processed > 0 && copyElapsed > 0 {
 		recordsPerSecond = uint64(float64(processed) / copyElapsed.Seconds())
-		if recordsPerSecond > 0 && total > processed {
-			eta = time.Duration((total-processed)/recordsPerSecond) * time.Second
-		}
 	}
 	p.metrics.elapsed.Update(elapsed.Nanoseconds())
-	coldSnapshotLog.Info("History cold snapshot compaction progress",
+	ctx := []any{
 		"dataset", p.dataset,
 		"phase", historyCompactionPhaseName(p.phase.Load()),
 		"fromTx", p.fromTx,
 		"toTx", p.toTx,
 		"records", processed,
 		"totalRecords", total,
-		"percent", historyCompactionPercent(processed, total),
+		"progressPct", historyCompactionPercent(processed, total),
 		"recordsPerSecond", recordsPerSecond,
-		"eta", eta.Round(time.Second),
 		"sources", p.sourcesProcessed.Load(),
 		"totalSources", p.sourcesTotal.Load(),
 		"remapRows", p.remapRows.Load(),
-		"elapsed", elapsed.Round(time.Millisecond))
+		"elapsed", elapsed.Round(time.Millisecond),
+	}
+	if recordsPerSecond > 0 && total > processed {
+		ctx = append(ctx, "eta", (time.Duration((total-processed)/recordsPerSecond) * time.Second).Round(time.Second))
+	}
+	coldSnapshotLog.Info("History cold snapshot compaction progress", ctx...)
 }
 
 func (p *historyCompactionProgress) finish(err error) {
@@ -257,9 +258,9 @@ func historyCompactionPhaseName(phase int64) string {
 	return fmt.Sprintf("unknown-%d", phase)
 }
 
-func historyCompactionPercent(processed, total uint64) string {
+func historyCompactionPercent(processed, total uint64) float64 {
 	if total == 0 {
-		return "0.00"
+		return 0
 	}
-	return fmt.Sprintf("%.2f", float64(processed)*100/float64(total))
+	return math.Round(float64(processed)*10_000/float64(total)) / 100
 }

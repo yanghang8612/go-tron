@@ -1,11 +1,14 @@
 package p2p
 
 import (
+	"bytes"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	p2ppb "github.com/tronprotocol/go-tron/proto/p2p"
 )
 
@@ -153,5 +156,45 @@ func TestPeerDisconnectCauseKeepsFirstReason(t *testing.T) {
 	p.RecordDisconnectCause("read: EOF")
 	if got := p.DisconnectCause(); got != "application disconnect: BAD_PROTOCOL" {
 		t.Fatalf("disconnect cause = %q", got)
+	}
+}
+
+func TestPeerWriteDropWarningsAreAggregated(t *testing.T) {
+	var buf bytes.Buffer
+	previous := gtronlog.Root()
+	defer gtronlog.SetDefault(previous)
+	gtronlog.SetDefault(gtronlog.NewLogger(gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelWarn)))
+
+	p := NewPeer(nil, "slow-peer", false, nil)
+	now := time.Now()
+	p.reportWriteDrop(MsgBlock, now)
+	p.reportWriteDrop(MsgBlock, now.Add(time.Second))
+	p.reportWriteDrop(MsgTrxs, now.Add(peerWriteDropSummaryInterval))
+
+	out := buf.String()
+	if got := strings.Count(out, `msg="Peer write queue drops"`); got != 2 {
+		t.Fatalf("summary count = %d, want 2:\n%s", got, out)
+	}
+	for _, field := range []string{"droppedSinceLastReport=1", "droppedSinceLastReport=2", "sampleMsg=", "sampleCode="} {
+		if !strings.Contains(out, field) {
+			t.Errorf("missing aggregate field %q:\n%s", field, out)
+		}
+	}
+}
+
+func TestPeerWriteDropConcurrentAccounting(t *testing.T) {
+	p := NewPeer(nil, "slow-peer", false, nil)
+	p.lastWriteDropSummaryNanos.Store(time.Now().UnixNano())
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.reportWriteDrop(MsgBlock, time.Now())
+		}()
+	}
+	wg.Wait()
+	if got := p.writeDrops.Load(); got != 64 {
+		t.Fatalf("pending write drops = %d, want 64", got)
 	}
 }

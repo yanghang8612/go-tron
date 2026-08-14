@@ -37,6 +37,8 @@ const (
 	resumeBufferedRunaheadBytes = tsync.ResumeBufferedRunaheadBytes
 	alwaysFetchRunaheadBlocks   = tsync.AlwaysFetchRunaheadBlocks
 	peerJoinAttemptInterval     = 2 * time.Second
+	peerRangeSummaryInterval    = time.Minute
+	syncProgressMinETACoverage  = 80.0
 )
 
 type syncPeerState struct {
@@ -138,8 +140,8 @@ type SyncService struct {
 	// called outside ss.mu so write paths never nest.
 	pause *tsync.PauseGate
 
-	// stats accumulates per-window throughput counters used for the
-	// "Imported chain segment" summary line. Owns its own mutex; lock
+	// stats accumulates per-window throughput counters used for the compact
+	// "Sync import progress" line. Owns its own mutex; lock
 	// order is ss.mu (outer) → stats.mu (inner) when both are held.
 	// onApplyStats is the only writer that does NOT also hold ss.mu —
 	// stats.mu serializes its own state so the off-sync producer path
@@ -159,6 +161,9 @@ type SyncService struct {
 	bufferWait syncdl.BufferWaitTracker
 
 	lastPeerJoinAttempt time.Time
+
+	peerRangeRejects     atomic.Uint64
+	lastPeerRangeSummary atomic.Int64
 
 	// completeHooks run after a successful sync session has been reset. Hooks
 	// must return promptly; they are intended for non-blocking stage wakeups.
@@ -436,21 +441,23 @@ func (ss *SyncService) reportCalendarProgress(boundary time.Time) {
 		if speed.Window > 0 {
 			coverage = float64(speed.Coverage) * 100 / float64(speed.Window)
 		}
+		warming := coverage < syncProgressMinETACoverage
 		ctx := []any{
 			"window", window.label,
 			"from", window.from.Format(time.RFC3339),
 			"to", boundary.Format(time.RFC3339),
-			"coverage", round2(coverage),
+			"coveragePct", round2(coverage),
+			"warming", warming,
 			"head", status.AppliedTip,
 			"target", target,
-			"progress", round2(progress),
-			"remain", status.Remaining,
+			"chainProgressPct", round2(progress),
+			"remaining", status.Remaining,
 			"windowBlocks", round2(speed.Blocks),
-			"avgBlocks/s", round2(speed.Average),
-			"minBlocks/s", round2(speed.Minimum),
-			"maxBlocks/s", round2(speed.Maximum),
+			"avgBlocksPerSec", round2(speed.Average),
+			"minBlocksPerSec", round2(speed.Minimum),
+			"maxBlocksPerSec", round2(speed.Maximum),
 		}
-		if speed.Average > 0 && status.Remaining > 0 {
+		if !warming && speed.Average > 0 && status.Remaining > 0 {
 			etaSec := float64(status.Remaining) / speed.Average
 			ctx = append(ctx, "eta", ethcommon.PrettyDuration(time.Duration(etaSec*float64(time.Second))))
 		}
@@ -646,11 +653,7 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 	})
 	if !gate.Allowed {
 		if gate.SkipReason == syncdl.SyncStartSkipPeerUnavailable {
-			syncLog.Info("Skipping sync peer outside available range",
-				"peer", peer.ID(),
-				"needFrom", needFrom,
-				"peerLowest", lowest,
-				"peerHead", peerHead)
+			ss.reportUnavailableSyncPeer(peer, needFrom, lowest, peerHead)
 		}
 		return
 	}
@@ -698,6 +701,32 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 	if attach.JoinAvailablePeers {
 		ss.joinAvailablePeers()
 	}
+}
+
+func (ss *SyncService) reportUnavailableSyncPeer(peer *p2p.Peer, needFrom, peerLowest, peerHead uint64) {
+	if ss == nil || peer == nil {
+		return
+	}
+	syncLog.Debug("Sync peer outside available range",
+		"peer", peer.ID(),
+		"needFrom", needFrom,
+		"peerLowest", peerLowest,
+		"peerHead", peerHead)
+	ss.peerRangeRejects.Add(1)
+	now := time.Now()
+	last := ss.lastPeerRangeSummary.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < peerRangeSummaryInterval {
+		return
+	}
+	if !ss.lastPeerRangeSummary.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+	rejected := ss.peerRangeRejects.Swap(0)
+	syncLog.Info("Historical sync peers unavailable",
+		"rejectedSinceLastReport", rejected,
+		"needFrom", needFrom,
+		"samplePeerLowest", peerLowest,
+		"samplePeerHead", peerHead)
 }
 
 func (ss *SyncService) initSessionLocked(now time.Time) {
@@ -1437,7 +1466,7 @@ func (a *syncChainInventorySessionRunApplier) FinishSync() {
 
 func (a *syncChainInventorySessionRunApplier) ChainInventoryApplied() {
 	syncLog.Debug("Chain inventory received",
-		"blocks", a.inventoryBlocks, "queued", len(a.peerState.fetchList), "remain", a.remainNum, "peer", a.peerID)
+		"blocks", a.inventoryBlocks, "queued", len(a.peerState.fetchList), "remaining", a.remainNum, "peer", a.peerID)
 }
 
 func (a *syncChainInventorySessionRunApplier) RefillFetchSlotsAfterInventory() int {
@@ -3081,7 +3110,7 @@ func (ss *SyncService) snapshotDiagnosticsLocked() syncdl.Diagnostics {
 	return syncdl.NewDiagnostics(len(ss.blockBuffer), len(ss.requested), len(ss.retryList), peers)
 }
 
-// reportSegment emits the throttled "Imported chain segment" summary. Called
+// reportSegment emits the throttled "Sync import progress" summary. Called
 // without ss.mu held.
 func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, head uint64, remain int64, peer *p2p.Peer) {
 	now := time.Now()
@@ -3091,9 +3120,31 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	}
 	blocksPerSec := float64(s.Blocks) * float64(time.Second) / float64(elapsed)
 	txsPerSec := float64(s.Txs) * float64(time.Second) / float64(elapsed)
-	energyPerSec := float64(s.ApplyStats.EnergyUsageTotal) * float64(time.Second) / float64(elapsed)
 	ss.stats.RecordSpeed(now, s.Blocks, elapsed)
-	_ = remain // retained in the report payload for compatibility with downloader scheduling
+	ctx := []any{
+		"window", ethcommon.PrettyDuration(elapsed),
+		"head", head,
+		"blocks", s.Blocks,
+		"txs", s.Txs,
+		"blocksPerSec", round2(blocksPerSec),
+		"txsPerSec", round2(txsPerSec),
+		"remaining", remain,
+		"peers", diag.PeerCount,
+		"activePeers", diag.ActivePeerCount,
+		"inflight", diag.Inflight,
+		"buffered", diag.BlockBufferLen,
+		"requested", diag.RequestedLen,
+		"retries", diag.RetryListLen,
+	}
+	syncLog.Info("Sync import progress", ctx...)
+
+	// Detailed execution diagnostics are intentionally opt-in. Besides keeping
+	// the normal operator log compact, this guard avoids building a large field
+	// slice on every reporting interval when net/sync debug logging is disabled.
+	if !syncLog.DebugEnabled() {
+		return
+	}
+	energyPerSec := float64(s.ApplyStats.EnergyUsageTotal) * float64(time.Second) / float64(elapsed)
 	txTop := tsync.TopTxKindsString(s.TxKinds, 5)
 	if txTop == "" {
 		txTop = "none"
@@ -3106,33 +3157,6 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	if stateMutKVTop == "" {
 		stateMutKVTop = "none"
 	}
-	ctx := []any{
-		"head", head,
-		"blocks", s.Blocks,
-		"txs", s.Txs,
-		"elapsed", ethcommon.PrettyDuration(elapsed),
-		"blocks/s", round2(blocksPerSec),
-		"txs/s", round2(txsPerSec),
-		"energy", formatCompactEnergy(float64(s.ApplyStats.EnergyUsageTotal)),
-		"energy/s", formatCompactEnergy(energyPerSec),
-		"txTop", txTop,
-		"stateMutTop", stateMutTop,
-		"stateMutKVTop", stateMutKVTop,
-		"peers", diag.PeerCount,
-		"activePeers", diag.ActivePeerCount,
-		"inflight", diag.Inflight,
-		"buffered", diag.BlockBufferLen,
-		"requested", diag.RequestedLen,
-		"retries", diag.RetryListLen,
-	}
-	syncLog.Info("Imported chain segment", ctx...)
-
-	// Detailed execution diagnostics are intentionally opt-in. Besides keeping
-	// the normal operator log compact, this guard avoids building a large field
-	// slice on every reporting interval when net/sync debug logging is disabled.
-	if !syncLog.DebugEnabled() {
-		return
-	}
 	detail := []any{
 		"blocks", s.Blocks,
 		"txs", s.Txs,
@@ -3144,7 +3168,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"validate", ethcommon.PrettyDuration(s.ApplyStats.Validate),
 		"execute", ethcommon.PrettyDuration(s.ApplyStats.Execute),
 		"energy", formatCompactEnergy(float64(s.ApplyStats.EnergyUsageTotal)),
-		"energy/s", formatCompactEnergy(energyPerSec),
+		"energyPerSec", formatCompactEnergy(energyPerSec),
 		"maintenance", ethcommon.PrettyDuration(s.ApplyStats.Maintenance),
 		"stateCommit", ethcommon.PrettyDuration(s.ApplyStats.StateCommit),
 		"stateCommitMeasured", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.Total()),
@@ -3211,7 +3235,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	if diag.PeerState != "" {
 		detail = append(detail, "peerState", diag.PeerState)
 	}
-	syncLog.Debug("Imported chain segment details", detail...)
+	syncLog.Debug("Sync import diagnostics", detail...)
 }
 
 func round2(f float64) float64 {
@@ -3527,7 +3551,7 @@ func (ss *SyncService) finishSync() {
 	}
 	if totalElapsed > 0 && totalBlocks > 0 {
 		rate := float64(totalBlocks) * float64(time.Second) / float64(totalElapsed)
-		ctx = append(ctx, "avgBlocks/s", round2(rate))
+		ctx = append(ctx, "avgBlocksPerSec", round2(rate))
 	}
 	syncLog.Info("Sync complete", ctx...)
 }
