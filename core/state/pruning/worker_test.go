@@ -900,6 +900,13 @@ func TestRetiredPruneUsesPersistentStateHistoryVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := snapshots.NewManifest(10, 12, activeRefs)
+	// State-history retirement must not spend hours authenticating unrelated
+	// active families. The missing bloom file would fail the generic full-view
+	// verifier, but it cannot alias or be removed by this state-history reclaim.
+	manifest.Segments = append(manifest.Segments, snapshots.SegmentRef{
+		Dataset: snapshots.SegmentDatasetSectionBloom, Kind: snapshots.SegmentSectionBloom,
+		FromTxNum: 10, ToTxNum: 12, Path: "history/unrelated-active-bloom.seg", Size: 1,
+	})
 	manifest.Retired = retiredRefs
 	if err := snapshots.PublishManifest(dir, manifest); err != nil {
 		t.Fatal(err)

@@ -403,41 +403,72 @@ func (p *Pruner) RecordTrustedSnapshotSegments(refs []snapshots.SegmentRef) erro
 	return nil
 }
 
-// verifyActiveSnapshotManifest is the retired-file deletion gate. All active
-// families retain their normal manifest checks; state-domain history triples
-// additionally reuse the same content-addressed semantic proof as hot pruning.
-// A destructive gate always re-hashes a same-process memory hit immediately
-// before allowing old fallback files to be removed.
+// verifyActiveSnapshotManifest is the retired-file deletion gate. When every
+// retired candidate belongs to state history, only the active state-history
+// triples can be affected by their removal; avoid re-reading unrelated event,
+// bloom, latest and chain-freezer families. Mixed retirements retain the full
+// manifest gate. A destructive gate always re-hashes a same-process memory hit
+// immediately before allowing old fallback files to be removed.
 func (p *Pruner) verifyActiveSnapshotManifest(ctx context.Context, dir string, manifest *snapshots.Manifest) error {
 	if p == nil || p.coverageVerificationCache == nil {
 		_, err := snapshots.VerifyLoadedManifestFiles(dir, manifest, snapshots.VerifyManifestOptions{Context: ctx})
 		return err
 	}
 	active := make(map[snapshotHistoryVerificationKey]struct{})
-	_, err := snapshots.VerifyLoadedManifestFiles(dir, manifest, snapshots.VerifyManifestOptions{
-		Context: ctx,
-		StateDomainHistoryVerifier: func(ctx context.Context, dir string, manifest *snapshots.Manifest, ref snapshots.SegmentRef) error {
-			key, route, err := p.coverageVerificationCache.verifyHistory(ctx, dir, manifest, ref, true, "retired active-view gate")
-			if err != nil {
-				return err
+	verifyHistory := func(ctx context.Context, dir string, manifest *snapshots.Manifest, ref snapshots.SegmentRef) error {
+		key, route, err := p.coverageVerificationCache.verifyHistory(ctx, dir, manifest, ref, true, "retired active-view gate")
+		if err != nil {
+			return err
+		}
+		active[key] = struct{}{}
+		switch route {
+		case snapshotHistoryVerificationMemory:
+			p.retiredVerificationMemoryHits.Add(1)
+		case snapshotHistoryVerificationPersistent:
+			p.retiredVerificationPersistentHits.Add(1)
+		case snapshotHistoryVerificationFull:
+			p.retiredVerificationFull.Add(1)
+		}
+		return nil
+	}
+	var err error
+	if manifestRetiresOnlyStateHistory(manifest) {
+		for _, ref := range manifest.Segments {
+			if ref.Dataset != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
+				continue
 			}
-			active[key] = struct{}{}
-			switch route {
-			case snapshotHistoryVerificationMemory:
-				p.retiredVerificationMemoryHits.Add(1)
-			case snapshotHistoryVerificationPersistent:
-				p.retiredVerificationPersistentHits.Add(1)
-			case snapshotHistoryVerificationFull:
-				p.retiredVerificationFull.Add(1)
+			if err = verifyHistory(ctx, dir, manifest, ref); err != nil {
+				break
 			}
-			return nil
-		},
-	})
+		}
+	} else {
+		_, err = snapshots.VerifyLoadedManifestFiles(dir, manifest, snapshots.VerifyManifestOptions{
+			Context:                    ctx,
+			StateDomainHistoryVerifier: verifyHistory,
+		})
+	}
 	if err == nil {
 		err = p.coverageVerificationCache.retain(active)
 	}
 	p.updateMetrics()
 	return err
+}
+
+func manifestRetiresOnlyStateHistory(manifest *snapshots.Manifest) bool {
+	if manifest == nil || len(manifest.Retired) == 0 {
+		return false
+	}
+	for _, ref := range manifest.Retired {
+		if ref.Dataset != snapshots.SegmentDatasetStateDomainChange {
+			return false
+		}
+		switch ref.Kind {
+		case snapshots.SegmentHistory, snapshots.SegmentAccessor, snapshots.SegmentInverted:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (p *Pruner) recordRetiredVerificationCanceled() {
