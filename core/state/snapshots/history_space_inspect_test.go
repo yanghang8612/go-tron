@@ -149,6 +149,29 @@ func TestEvenlySpacedHistoryWindowStartsDoesNotOverlapAlignedFrames(t *testing.T
 	}
 }
 
+func TestScaleHistorySpaceSampleUsesWideIntermediate(t *testing.T) {
+	// The exact 10 GB projection fits in uint64, but the 100 GB * 100 GB
+	// intermediate does not. This shape reproduces the mainnet history sample
+	// projection that previously saturated to MaxUint64.
+	const (
+		value   = uint64(100_000_000_000)
+		sampled = uint64(1_000_000_000_000)
+		total   = uint64(100_000_000_000)
+	)
+	if got, want := scaleHistorySpaceSample(value, sampled, total), uint64(10_000_000_000); got != want {
+		t.Fatalf("scaled value = %d, want %d", got, want)
+	}
+}
+
+func TestSaturatingHistorySpaceSum(t *testing.T) {
+	if got := saturatingHistorySpaceSum(^uint64(0)-10, 20); got != ^uint64(0) {
+		t.Fatalf("overflowing sum = %d, want saturation", got)
+	}
+	if got := saturatingHistorySpaceSum(10, 20, 30); got != 60 {
+		t.Fatalf("ordinary sum = %d, want 60", got)
+	}
+}
+
 func writeCompressedV6HistorySpaceTrio(t testing.TB, dir string, fromTxNum, toTxNum uint64, changes []*rawdb.StateDomainChange) []SegmentRef {
 	t.Helper()
 	refs := writeV6StateDomainHistorySegmentForTest(t, dir, fromTxNum, toTxNum, changes)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"sort"
@@ -371,7 +372,12 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 			MaxTxIndexScanEntries:  historySpaceTxIndexFrameEntries,
 			MaxPostingScanEntries:  historySpacePostingFrameEntries,
 		}
-		candidate.EstimatedPhysicalBytes = candidate.HistoryBytes + candidate.AccessorBytes + candidate.InvertedBytes + candidate.RecordDirectoryBytes
+		candidate.EstimatedPhysicalBytes = saturatingHistorySpaceSum(
+			candidate.HistoryBytes,
+			candidate.AccessorBytes,
+			candidate.InvertedBytes,
+			candidate.RecordDirectoryBytes,
+		)
 		if candidate.ComparedPhysicalBytes >= candidate.EstimatedPhysicalBytes {
 			candidate.SavingsBytes = candidate.ComparedPhysicalBytes - candidate.EstimatedPhysicalBytes
 		}
@@ -838,23 +844,27 @@ func scaleHistorySpaceSample(value, sampled, total uint64) uint64 {
 	if value == 0 || sampled == 0 || total == 0 {
 		return 0
 	}
-	whole := total / sampled
-	remainder := total % sampled
-	if whole > 0 && value > math.MaxUint64/whole {
+	// Compute value*total/sampled without overflowing the intermediate
+	// product. bits.Div64 requires the high word to be below the divisor;
+	// otherwise the exact quotient does not fit in uint64 and is saturated.
+	hi, lo := bits.Mul64(value, total)
+	if hi >= sampled {
 		return math.MaxUint64
 	}
-	result := value * whole
-	if remainder > 0 {
-		if value > math.MaxUint64/remainder {
+	quotient, _ := bits.Div64(hi, lo, sampled)
+	return quotient
+}
+
+func saturatingHistorySpaceSum(values ...uint64) uint64 {
+	var total uint64
+	for _, value := range values {
+		var carry uint64
+		total, carry = bits.Add64(total, value, 0)
+		if carry != 0 {
 			return math.MaxUint64
 		}
-		part := value * remainder / sampled
-		if result > math.MaxUint64-part {
-			return math.MaxUint64
-		}
-		result += part
 	}
-	return result
+	return total
 }
 
 func uvarintLen(value uint64) int {
