@@ -25,6 +25,29 @@ type cancelingLatestIteratee struct {
 	remaining int
 }
 
+func TestManagerReportsHotPrunedThroughBlock(t *testing.T) {
+	manifest := NewManifest(1, 2, nil)
+	manifest.Progress = &Progress{HotPruneBlockNum: 42}
+	manager := &Manager{manifest: manifest, pinned: true}
+
+	block, present, err := manager.HotPrunedThroughBlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present || block != 42 {
+		t.Fatalf("hot prune boundary = (%d,%t), want (42,true)", block, present)
+	}
+
+	manifest.Progress.HotPruneBlockNum = 0
+	block, present, err = manager.HotPrunedThroughBlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if present || block != 0 {
+		t.Fatalf("empty hot prune boundary = (%d,%t), want (0,false)", block, present)
+	}
+}
+
 func (db *cancelingLatestIteratee) NewIterator(prefix, start []byte) ethdb.Iterator {
 	return &cancelingLatestIterator{Iterator: db.Iteratee.NewIterator(prefix, start), parent: db}
 }

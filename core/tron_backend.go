@@ -3691,7 +3691,10 @@ func (b *TronBackend) archiveStateAt(blockNum uint64, contexts ...context.Contex
 		headRoot: headRoot,
 		release:  releaseHistory,
 	}
-	reader.SetHotHistoryBlockRange(blockNum, headNum)
+	if err := reader.SetHotHistoryBlockRange(blockNum, headNum); err != nil {
+		session.Close()
+		return nil, err
+	}
 	if err := b.requireArchive(blockNum, headNum); err != nil {
 		session.Close()
 		return nil, err
@@ -3798,14 +3801,7 @@ func (b *TronBackend) GetBalanceAtContext(ctx context.Context, addr tcommon.Addr
 		return 0, err
 	}
 	defer session.Close()
-	acc, err := session.reader.AccountAt(addr, blockNum)
-	if err != nil {
-		return 0, err
-	}
-	if acc == nil {
-		return 0, nil
-	}
-	return acc.Balance(), nil
+	return session.reader.BalanceAt(addr, blockNum)
 }
 
 // GetCodeAt returns addr's contract bytecode as of the end of blockNum.

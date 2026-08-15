@@ -1046,6 +1046,24 @@ func (m *Manager) Manifest() *Manifest {
 	return &cp
 }
 
+// HotPrunedThroughBlock reports the inclusive authoritative hot-history prune
+// boundary. Packed posting-index frames are derived and may outlive this
+// watermark until a later sequential sweep, so archive readers use the
+// boundary to avoid probing stale candidates whose changesets were removed.
+func (m *Manager) HotPrunedThroughBlock() (uint64, bool, error) {
+	if m == nil {
+		return 0, false, nil
+	}
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return 0, false, err
+	}
+	if manifest.Progress == nil || manifest.Progress.HotPruneBlockNum == 0 {
+		return 0, false, nil
+	}
+	return manifest.Progress.HotPruneBlockNum, true, nil
+}
+
 // LatestStateTxNum reports the manifest txNum boundary for cold latest reads.
 func (m *Manager) LatestStateTxNum() (uint64, bool, error) {
 	manifest, err := m.currentManifest()

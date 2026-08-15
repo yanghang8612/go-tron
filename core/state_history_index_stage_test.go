@@ -60,7 +60,9 @@ func TestBlockChainSyncInsertDefersStateHistoryIndexUntilSolidifiedStage(t *test
 	// Archive reads must remain complete while the solidified tail has only
 	// authoritative changesets and no inverse row.
 	reader := state.NewPersistentHistoryReader(bc.buffer, nil, block.Number())
-	reader.SetHotHistoryBlockRange(0, block.Number())
+	if err := reader.SetHotHistoryBlockRange(0, block.Number()); err != nil {
+		t.Fatal(err)
+	}
 	pre, err := reader.AccountAt(testInsertAddr(1), 0)
 	if err != nil {
 		t.Fatalf("AccountAt before history index stage: %v", err)

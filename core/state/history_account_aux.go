@@ -40,13 +40,31 @@ func (r *PersistentHistoryReader) materializeHistoricalAccountAux(pb *corepb.Acc
 		candidates[domain] = make(map[string]struct{})
 	}
 	if r.coldHistory != nil && targetTxNum < headTxNum {
-		if err := r.coldHistory.IterateStateDomainChanges(targetTxNum+1, headTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
-			if change.FlatDomain == rawdb.StateFlatDomainKVLatest && change.Owner == owner && isAccountSplitDomain(change.Domain) {
-				candidates[change.Domain][string(change.Key)] = struct{}{}
+		if keyed, ok := r.coldHistory.(StateDomainChangeColdPrefixHistory); ok {
+			// Production cold history is key-oriented. Enumerate only this
+			// account/generation/domain prefix instead of decoding every state
+			// mutation between the requested block and head.
+			for _, domain := range accountSplitDomains {
+				if err := keyed.IterateStateDomainChangesByPrefix(targetTxNum+1, headTxNum, owner, generation, domain, nil, func(change *rawdb.StateDomainChange) (bool, error) {
+					if change != nil && change.FlatDomain == rawdb.StateFlatDomainKVLatest && change.Owner == owner && change.Generation == generation && change.Domain == domain {
+						candidates[domain][string(change.Key)] = struct{}{}
+					}
+					return true, nil
+				}); err != nil {
+					return err
+				}
 			}
-			return true, nil
-		}); err != nil {
-			return err
+		} else {
+			// Preserve the generic compatibility path for test or external cold
+			// readers that have not implemented owner-prefix history seeks.
+			if err := r.coldHistory.IterateStateDomainChanges(targetTxNum+1, headTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+				if change.FlatDomain == rawdb.StateFlatDomainKVLatest && change.Owner == owner && isAccountSplitDomain(change.Domain) {
+					candidates[change.Domain][string(change.Key)] = struct{}{}
+				}
+				return true, nil
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	if r.coldHistory != nil {

@@ -258,6 +258,15 @@ type StateDomainChangeColdPrefixHistory interface {
 	IterateStateDomainChangesByPrefix(fromTxNum, toTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
 }
 
+// StateDomainChangeHotPruneBoundary reports the inclusive block through which
+// authoritative hot changesets have been removed after verified cold history
+// publication. Readers must not walk derived hot posting candidates at or
+// below this boundary: those candidates can remain until the infrequent
+// sequential posting-index sweep, but their authoritative rows no longer do.
+type StateDomainChangeHotPruneBoundary interface {
+	HotPrunedThroughBlock() (uint64, bool, error)
+}
+
 type StateCodeColdHistory interface {
 	GetCode(hash tcommon.Hash, txNum uint64) ([]byte, bool, error)
 }
@@ -360,14 +369,26 @@ func (r *PersistentHistoryReader) contextError() error {
 
 // SetHotHistoryBlockRange bounds inverse-index walks for this single-use
 // reader. Archive queries only need changes after the requested block and up
-// to the head snapshot captured with the reader.
-func (r *PersistentHistoryReader) SetHotHistoryBlockRange(targetBlock, headBlock uint64) {
+// to the head snapshot captured with the reader. When verified cold history
+// has already replaced and pruned an older hot prefix, begin after that
+// authoritative boundary even if derived posting frames have not been swept.
+func (r *PersistentHistoryReader) SetHotHistoryBlockRange(targetBlock, headBlock uint64) error {
 	if r == nil {
-		return
+		return nil
+	}
+	if boundary, ok := r.coldHistory.(StateDomainChangeHotPruneBoundary); ok {
+		prunedThrough, present, err := boundary.HotPrunedThroughBlock()
+		if err != nil {
+			return fmt.Errorf("state history: read hot prune boundary: %w", err)
+		}
+		if present && prunedThrough > targetBlock {
+			targetBlock = min(prunedThrough, headBlock)
+		}
 	}
 	r.hotHistoryFromBlock = targetBlock
 	r.hotHistoryToBlock = headBlock
 	r.hotHistoryBounded = true
+	return nil
 }
 
 // AccountAt returns the account at addr at the end of blockNum.
@@ -377,6 +398,45 @@ func (r *PersistentHistoryReader) AccountAt(addr tcommon.Address, blockNum uint6
 		return nil, err
 	}
 	return entry.account, nil
+}
+
+// BalanceAt resolves only the account core needed by eth_getBalance. A full
+// AccountAt reconstruction also materializes permissions, votes, frozen rows,
+// and resource maps; doing that work for a scalar balance query turns a point
+// history seek into an unrelated account-prefix reconstruction.
+func (r *PersistentHistoryReader) BalanceAt(addr tcommon.Address, blockNum uint64) (int64, error) {
+	if r == nil {
+		return 0, nil
+	}
+	if blockNum >= r.headNum && r.live != nil {
+		account := r.live.GetAccount(addr)
+		if account == nil {
+			return 0, nil
+		}
+		return account.Balance(), nil
+	}
+	if blockNum < r.headNum {
+		available, err := r.stateDomainHistoryAvailable()
+		if err != nil {
+			return 0, err
+		}
+		if !available {
+			return 0, ErrStateDomainHistoryUnavailable
+		}
+	}
+	data, exists, err := r.readStateAccountLatestAsOf(addr, blockNum, r.headNum)
+	if err != nil || !exists {
+		return 0, err
+	}
+	envelope, err := DecodeStateAccountV2(data)
+	if err != nil {
+		return 0, err
+	}
+	account, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
+	if err != nil {
+		return 0, err
+	}
+	return account.Balance(), nil
 }
 
 // CodeAt returns the contract bytecode at addr at the end of blockNum.

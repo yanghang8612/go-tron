@@ -29,6 +29,56 @@ func TestPersistentHistoryReaderHonorsCanceledContext(t *testing.T) {
 	}
 }
 
+type hotPruneBoundaryColdHistory struct {
+	block   uint64
+	present bool
+	err     error
+}
+
+func (*hotPruneBoundaryColdHistory) IterateStateDomainChanges(uint64, uint64, func(*rawdb.StateDomainChange) (bool, error)) error {
+	return nil
+}
+
+func (h *hotPruneBoundaryColdHistory) HotPrunedThroughBlock() (uint64, bool, error) {
+	return h.block, h.present, h.err
+}
+
+func TestPersistentHistoryReaderBoundsHotHistoryAtPrunedColdBoundary(t *testing.T) {
+	reader := NewPersistentHistoryReaderWithColdHistory(
+		ethrawdb.NewMemoryDatabase(),
+		nil,
+		20,
+		&hotPruneBoundaryColdHistory{block: 10, present: true},
+	)
+	if err := reader.SetHotHistoryBlockRange(2, 20); err != nil {
+		t.Fatal(err)
+	}
+	if !reader.hotHistoryBounded || reader.hotHistoryFromBlock != 10 || reader.hotHistoryToBlock != 20 {
+		t.Fatalf("hot range = bounded=%t [%d,%d], want true [10,20]", reader.hotHistoryBounded, reader.hotHistoryFromBlock, reader.hotHistoryToBlock)
+	}
+
+	// A query newer than the prune boundary must retain its narrower range.
+	if err := reader.SetHotHistoryBlockRange(12, 20); err != nil {
+		t.Fatal(err)
+	}
+	if reader.hotHistoryFromBlock != 12 {
+		t.Fatalf("newer hot range starts at %d, want 12", reader.hotHistoryFromBlock)
+	}
+}
+
+func TestPersistentHistoryReaderSurfacesHotPruneBoundaryError(t *testing.T) {
+	want := errors.New("manifest unavailable")
+	reader := NewPersistentHistoryReaderWithColdHistory(
+		ethrawdb.NewMemoryDatabase(),
+		nil,
+		20,
+		&hotPruneBoundaryColdHistory{err: want},
+	)
+	if err := reader.SetHotHistoryBlockRange(2, 20); !errors.Is(err, want) {
+		t.Fatalf("SetHotHistoryBlockRange error = %v, want %v", err, want)
+	}
+}
+
 type countingHistoryReaderDB struct {
 	ethdb.Database
 	gets int
@@ -183,7 +233,9 @@ func TestPersistentHistoryReaderBatchKVAsOf(t *testing.T) {
 	})
 
 	reader := f.reader()
-	reader.SetHotHistoryBlockRange(1, 2)
+	if err := reader.SetHotHistoryBlockRange(1, 2); err != nil {
+		t.Fatal(err)
+	}
 	got, err := reader.readStateKVBatchAsOf(addr, 0, domain, [][]byte{[]byte("one"), []byte("two"), []byte("three")}, 1, 2)
 	if err != nil {
 		t.Fatal(err)
@@ -216,7 +268,9 @@ func TestPersistentHistoryReaderBatchKVAsOfMergesKeyedColdHistory(t *testing.T) 
 	}}
 	reader := NewPersistentHistoryReaderWithColdHistory(db, nil, 2, cold)
 	reader.latest = latest
-	reader.SetHotHistoryBlockRange(1, 2)
+	if err := reader.SetHotHistoryBlockRange(1, 2); err != nil {
+		t.Fatal(err)
+	}
 	got, err := reader.readStateKVBatchAsOf(owner, 3, domain, [][]byte{[]byte("one"), []byte("two"), []byte("three")}, 1, 2)
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +280,61 @@ func TestPersistentHistoryReaderBatchKVAsOfMergesKeyedColdHistory(t *testing.T) 
 	}
 	if !cold.keyedCalled || cold.genericCalled || len(cold.keyedCalls) != 3 {
 		t.Fatalf("cold calls keyed=%v generic=%v count=%d, want true/false/3", cold.keyedCalled, cold.genericCalled, len(cold.keyedCalls))
+	}
+}
+
+func TestPersistentHistoryReaderMaterializesAccountAuxWithColdPrefixSeeks(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	for blockNum := uint64(1); blockNum <= 2; blockNum++ {
+		if err := rawdb.WriteStateTxRange(db, blockNum, tcommon.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner := testAddr(0x93)
+	cold := new(prefixedColdHistoryStub)
+	reader := NewPersistentHistoryReaderWithColdHistory(db, nil, 2, cold)
+	reader.latest = &recordingHotStateLatestReader{generation: map[tcommon.Address]uint64{owner: 7}}
+
+	if err := reader.materializeHistoricalAccountAux(&corepb.Account{}, owner, 7, 1); err != nil {
+		t.Fatal(err)
+	}
+	if cold.genericCalled {
+		t.Fatal("account auxiliary materialization used the full cold-history scan")
+	}
+	if len(cold.prefixCalls) != len(accountSplitDomains) {
+		t.Fatalf("cold prefix calls = %d, want %d", len(cold.prefixCalls), len(accountSplitDomains))
+	}
+	for i, call := range cold.prefixCalls {
+		if call.owner != owner || call.generation != 7 || call.domain != accountSplitDomains[i] || call.prefix != "" {
+			t.Fatalf("cold prefix call %d = %+v", i, call)
+		}
+	}
+}
+
+func TestPersistentHistoryReaderBalanceAtSkipsAccountAuxMaterialization(t *testing.T) {
+	f := newHistoryFixture(t)
+	owner := testAddr(0x94)
+	f.applyBlock(tcommon.Hash{1}, func(s *StateDB) { s.AddBalance(owner, 100) })
+	f.applyBlock(tcommon.Hash{2}, func(s *StateDB) { s.AddBalance(owner, 50) })
+
+	cold := new(keyedColdHistoryStub)
+	reader := NewPersistentHistoryReaderWithColdHistory(f.disk, f.state, f.head, cold)
+	balance, err := reader.BalanceAt(owner, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 100 {
+		t.Fatalf("BalanceAt block 1 = %d, want 100", balance)
+	}
+	if cold.genericCalled {
+		t.Fatal("BalanceAt materialized account auxiliary history")
+	}
+
+	if _, err := reader.AccountAt(owner, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !cold.genericCalled {
+		t.Fatal("control AccountAt did not materialize account auxiliary history")
 	}
 }
 
@@ -2028,6 +2137,39 @@ type keyedColdHistoryStub struct {
 	genericCalled bool
 	keyedCalls    []keyedColdHistoryCall
 	keyedVisits   int
+}
+
+type prefixedColdHistoryCall struct {
+	owner      tcommon.Address
+	generation uint64
+	domain     kvdomains.KVDomain
+	prefix     string
+}
+
+type prefixedColdHistoryStub struct {
+	keyedColdHistoryStub
+	prefixCalls []prefixedColdHistoryCall
+}
+
+func (s *prefixedColdHistoryStub) IterateStateDomainChangesByPrefix(fromTxNum, toTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	s.prefixCalls = append(s.prefixCalls, prefixedColdHistoryCall{
+		owner:      owner,
+		generation: generation,
+		domain:     domain,
+		prefix:     string(prefix),
+	})
+	for _, change := range s.changes {
+		if change.TxNum < fromTxNum || change.TxNum > toTxNum ||
+			change.FlatDomain != rawdb.StateFlatDomainKVLatest || change.Owner != owner ||
+			change.Generation != generation || change.Domain != domain || !bytes.HasPrefix(change.Key, prefix) {
+			continue
+		}
+		cont, err := fn(change)
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
 }
 
 type recordingHotStateLatestReader struct {
