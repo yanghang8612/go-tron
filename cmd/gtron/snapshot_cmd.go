@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -133,6 +134,31 @@ var (
 		Name:  "snapshot.event-log.sample-segments",
 		Usage: "Evenly sample this many whole active event-log segments (0 = scan all)",
 		Value: 16,
+	}
+	snapshotHistorySampleSegmentsFlag = &cli.Uint64Flag{
+		Name:  "snapshot.history.sample-segments",
+		Usage: "Sample this many active state history/accessor/index trios",
+		Value: 8,
+	}
+	snapshotHistorySampleIndexEntriesFlag = &cli.Uint64Flag{
+		Name:  "snapshot.history.sample-index-entries",
+		Usage: "Maximum transaction index entries sampled per selected history segment",
+		Value: 32 * 1024,
+	}
+	snapshotHistorySampleAccessorBlocksFlag = &cli.Uint64Flag{
+		Name:  "snapshot.history.sample-accessor-blocks",
+		Usage: "Maximum V6 accessor key-directory blocks sampled per selected history segment",
+		Value: 64,
+	}
+	snapshotHistorySampleMiBFlag = &cli.Uint64Flag{
+		Name:  "snapshot.history.sample-mib",
+		Usage: "Approximate uncompressed history MiB recompressed per selected segment and candidate frame size",
+		Value: 8,
+	}
+	snapshotHistoryProgressFlag = &cli.DurationFlag{
+		Name:  "progress",
+		Usage: "History-space benchmark progress reporting interval (0 disables)",
+		Value: 30 * time.Second,
 	}
 	snapshotEventLogVersionFlag = &cli.UintFlag{
 		Name:    "snapshot.event-log.version",
@@ -394,6 +420,20 @@ func snapshotCommand() *cli.Command {
 					snapshotEventLogSampleSegmentsFlag,
 				},
 				Action: snapshotEventLogSpaceBenchmarkCmd,
+			},
+			{
+				Name:  "history-space-benchmark",
+				Usage: "Inspect active state history/accessor/index layout and simulate compact formats without opening chaindata",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					snapshotDirFlag,
+					snapshotHistorySampleSegmentsFlag,
+					snapshotHistorySampleIndexEntriesFlag,
+					snapshotHistorySampleAccessorBlocksFlag,
+					snapshotHistorySampleMiBFlag,
+					snapshotHistoryProgressFlag,
+				},
+				Action: snapshotHistorySpaceBenchmarkCmd,
 			},
 			{
 				Name:  "migrate-event-logs-v3",
@@ -1530,6 +1570,42 @@ func snapshotEventLogSpaceBenchmarkCmd(ctx *cli.Context) error {
 	inspection, err := statesnapshots.InspectEventLogSpace(dir, statesnapshots.EventLogSpaceInspectOptions{
 		SampleSegments: ctx.Uint64("snapshot.event-log.sample-segments"),
 		Context:        contextOrBackground(ctx),
+	})
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(inspection)
+}
+
+func snapshotHistorySpaceBenchmarkCmd(ctx *cli.Context) error {
+	const mib = uint64(1 << 20)
+	sampleMiB := ctx.Uint64("snapshot.history.sample-mib")
+	if sampleMiB > ^uint64(0)/mib {
+		return errors.New("--snapshot.history.sample-mib is too large")
+	}
+	progressInterval := ctx.Duration("progress")
+	if progressInterval < 0 {
+		return errors.New("--progress must not be negative")
+	}
+	cfg := makeConfig(ctx)
+	inspection, err := statesnapshots.InspectHistorySpace(snapshotDir(ctx, cfg.DataDir), statesnapshots.HistorySpaceInspectOptions{
+		SampleSegments:       ctx.Uint64("snapshot.history.sample-segments"),
+		SampleIndexEntries:   ctx.Uint64("snapshot.history.sample-index-entries"),
+		SampleAccessorBlocks: ctx.Uint64("snapshot.history.sample-accessor-blocks"),
+		SampleHistoryBytes:   sampleMiB * mib,
+		ProgressInterval:     progressInterval,
+		Progress: func(progress statesnapshots.HistorySpaceInspectProgress) {
+			fmt.Fprintf(os.Stderr, "history-space benchmark phase=%s trios=%d/%d elapsed=%s path=%s\n",
+				progress.Phase,
+				progress.CompletedTrios,
+				progress.TotalTrios,
+				progress.Elapsed.Round(time.Millisecond),
+				progress.HistoryPath,
+			)
+		},
+		Context: contextOrBackground(ctx),
 	})
 	if err != nil {
 		return err

@@ -1596,6 +1596,40 @@ func TestSnapshotEventLogSpaceBenchmarkCmdIsReadOnlyAndDoesNotOpenChaindata(t *t
 	}
 }
 
+func TestSnapshotHistorySpaceBenchmarkCommandRegistered(t *testing.T) {
+	var command *cli.Command
+	for _, candidate := range snapshotCommand().Subcommands {
+		if candidate.Name == "history-space-benchmark" {
+			command = candidate
+			break
+		}
+	}
+	if command == nil {
+		t.Fatal("history-space-benchmark command is not registered")
+	}
+	wantFlags := map[string]bool{
+		"datadir":                                 false,
+		"snapshot.dir":                            false,
+		"snapshot.history.sample-segments":        false,
+		"snapshot.history.sample-index-entries":   false,
+		"snapshot.history.sample-accessor-blocks": false,
+		"snapshot.history.sample-mib":             false,
+		"progress":                                false,
+	}
+	for _, flag := range command.Flags {
+		for _, name := range flag.Names() {
+			if _, ok := wantFlags[name]; ok {
+				wantFlags[name] = true
+			}
+		}
+	}
+	for name, found := range wantFlags {
+		if !found {
+			t.Fatalf("history-space-benchmark missing --%s", name)
+		}
+	}
+}
+
 func TestSnapshotMigrateEventLogsV3CommandBuildOnlyWithLockedChaindata(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "datadir")
