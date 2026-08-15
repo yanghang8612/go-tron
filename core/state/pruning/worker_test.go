@@ -971,6 +971,71 @@ func TestOfflineRetiredPruneUsesPersistentStateHistoryVerification(t *testing.T)
 	}
 }
 
+func TestVerifySnapshotHistoryRefsConcurrentlyBoundsWorkers(t *testing.T) {
+	refs := make([]snapshots.SegmentRef, 12)
+	for i := range refs {
+		refs[i] = snapshots.SegmentRef{Path: fmt.Sprintf("history-%02d.seg", i)}
+	}
+	started := make(chan struct{}, len(refs))
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	var running, peak atomic.Int64
+	go func() {
+		done <- verifySnapshotHistoryRefsConcurrently(context.Background(), refs, 4, func(ctx context.Context, _ snapshots.SegmentRef) error {
+			current := running.Add(1)
+			defer running.Add(-1)
+			for {
+				observed := peak.Load()
+				if current <= observed || peak.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			started <- struct{}{}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-release:
+				return nil
+			}
+		})
+	}()
+	for range 4 {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("parallel history verification did not start four workers")
+		}
+	}
+	if got := peak.Load(); got != 4 {
+		t.Fatalf("peak verification workers = %d, want 4", got)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("parallel history verification: %v", err)
+	}
+	if got := peak.Load(); got != 4 {
+		t.Fatalf("final peak verification workers = %d, want 4", got)
+	}
+}
+
+func TestVerifySnapshotHistoryRefsConcurrentlyCancelsPeers(t *testing.T) {
+	want := errors.New("bad history")
+	refs := []snapshots.SegmentRef{{Path: "block.seg"}, {Path: "bad.seg"}, {Path: "queued.seg"}}
+	peerStarted := make(chan struct{})
+	err := verifySnapshotHistoryRefsConcurrently(context.Background(), refs, 2, func(ctx context.Context, ref snapshots.SegmentRef) error {
+		if ref.Path == "bad.seg" {
+			<-peerStarted
+			return want
+		}
+		close(peerStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("parallel history verification error = %v, want %v", err, want)
+	}
+}
+
 func TestRetiredPruneReauthenticatesTrustedMemoryHitBeforeDelete(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()

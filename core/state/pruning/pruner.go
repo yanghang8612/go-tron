@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,8 +31,9 @@ const (
 	// the block selection window raises throughput without recreating an
 	// unbounded Pebble batch. At the live tip the iterator simply stops after the
 	// handful of newly eligible blocks.
-	defaultBatch                  = 25_000
-	defaultPrunerMetricsNamespace = "state/prune/"
+	defaultBatch                   = 25_000
+	defaultPrunerMetricsNamespace  = "state/prune/"
+	maxRetiredHistoryVerifyWorkers = 8
 )
 
 var errPruneDeferredForCatchup = errors.New("pruning: deferred for sync catch-up")
@@ -415,12 +417,15 @@ func (p *Pruner) verifyActiveSnapshotManifest(ctx context.Context, dir string, m
 		return err
 	}
 	active := make(map[snapshotHistoryVerificationKey]struct{})
+	var activeMu sync.Mutex
 	verifyHistory := func(ctx context.Context, dir string, manifest *snapshots.Manifest, ref snapshots.SegmentRef) error {
 		key, route, err := p.coverageVerificationCache.verifyHistory(ctx, dir, manifest, ref, true, "retired active-view gate")
 		if err != nil {
 			return err
 		}
+		activeMu.Lock()
 		active[key] = struct{}{}
+		activeMu.Unlock()
 		switch route {
 		case snapshotHistoryVerificationMemory:
 			p.retiredVerificationMemoryHits.Add(1)
@@ -433,14 +438,20 @@ func (p *Pruner) verifyActiveSnapshotManifest(ctx context.Context, dir string, m
 	}
 	var err error
 	if manifestRetiresOnlyStateHistory(manifest) {
+		refs := make([]snapshots.SegmentRef, 0, len(manifest.Segments)/3)
 		for _, ref := range manifest.Segments {
 			if ref.Dataset != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
 				continue
 			}
-			if err = verifyHistory(ctx, dir, manifest, ref); err != nil {
-				break
-			}
+			refs = append(refs, ref)
 		}
+		workers := min(runtime.GOMAXPROCS(0), maxRetiredHistoryVerifyWorkers, len(refs))
+		if workers > 1 {
+			log.Info("Verifying active domain snapshot histories in parallel", "operation", "retired active-view gate", "segments", len(refs), "workers", workers)
+		}
+		err = verifySnapshotHistoryRefsConcurrently(ctx, refs, workers, func(ctx context.Context, ref snapshots.SegmentRef) error {
+			return verifyHistory(ctx, dir, manifest, ref)
+		})
 	} else {
 		_, err = snapshots.VerifyLoadedManifestFiles(dir, manifest, snapshots.VerifyManifestOptions{
 			Context:                    ctx,
@@ -452,6 +463,66 @@ func (p *Pruner) verifyActiveSnapshotManifest(ctx context.Context, dir string, m
 	}
 	p.updateMetrics()
 	return err
+}
+
+func verifySnapshotHistoryRefsConcurrently(ctx context.Context, refs []snapshots.SegmentRef, workers int, verify func(context.Context, snapshots.SegmentRef) error) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if verify == nil {
+		return errors.New("pruning: nil state-history verifier")
+	}
+	workers = min(max(workers, 1), len(refs))
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	jobs := make(chan snapshots.SegmentRef)
+	var (
+		wg       sync.WaitGroup
+		errOnce  sync.Once
+		firstErr error
+	)
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-workCtx.Done():
+					return
+				case ref, ok := <-jobs:
+					if !ok {
+						return
+					}
+					if err := verify(workCtx, ref); err != nil {
+						errOnce.Do(func() {
+							firstErr = err
+							cancel()
+						})
+						return
+					}
+				}
+			}
+		}()
+	}
+
+send:
+	for _, ref := range refs {
+		select {
+		case <-workCtx.Done():
+			break send
+		case jobs <- ref:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
 }
 
 func manifestRetiresOnlyStateHistory(manifest *snapshots.Manifest) bool {
