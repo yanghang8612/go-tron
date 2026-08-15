@@ -61,6 +61,8 @@ type stateDomainChangeBinaryAccessorV6Block struct {
 }
 
 type stateDomainChangeBinaryAccessorV6Header struct {
+	version                             uint32
+	headerSize                          uint64
 	fromTxNum, toTxNum                  uint64
 	recordCount, keyCount, blockCount   uint64
 	blockDirLen, keyDataLen, postingLen uint64
@@ -249,6 +251,7 @@ func decodeStateDomainChangeBinaryAccessorV6Header(r io.ReaderAt, fileSize uint6
 		return stateDomainChangeBinaryAccessorV6Header{}, errors.New("snapshots: invalid state-domain-change V6 accessor header")
 	}
 	h := stateDomainChangeBinaryAccessorV6Header{
+		version: stateDomainChangeBinaryVersionV6, headerSize: stateDomainChangeBinaryAccessorV6HeaderSize,
 		fromTxNum: binary.BigEndian.Uint64(raw[12:20]), toTxNum: binary.BigEndian.Uint64(raw[20:28]),
 		recordCount: binary.BigEndian.Uint64(raw[28:36]), keyCount: binary.BigEndian.Uint64(raw[40:48]),
 		blockCount: binary.BigEndian.Uint64(raw[48:56]), blockDirLen: binary.BigEndian.Uint64(raw[56:64]),
@@ -259,7 +262,7 @@ func decodeStateDomainChangeBinaryAccessorV6Header(r io.ReaderAt, fileSize uint6
 	if h.recordCount > math.MaxUint32 || h.keyCount > math.MaxUint32 || h.blockCount != ceilDiv(h.keyCount, stateDomainChangeBinaryAccessorV6BlockKeys) {
 		return h, errors.New("snapshots: invalid state-domain-change V6 accessor counts")
 	}
-	total, overflow := checkedAdd(stateDomainChangeBinaryAccessorV6HeaderSize, h.blockDirLen)
+	total, overflow := checkedAdd(h.headerSize, h.blockDirLen)
 	if overflow {
 		return h, errors.New("snapshots: V6 accessor length overflow")
 	}
@@ -281,7 +284,7 @@ func stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(r io.ReaderAt, h s
 	if index >= h.blockCount {
 		return stateDomainChangeBinaryAccessorV6Block{}, io.EOF
 	}
-	dirStart := uint64(stateDomainChangeBinaryAccessorV6HeaderSize)
+	dirStart := h.headerSize
 	entriesStart := dirStart + h.blockCount*8
 	dirEnd := dirStart + h.blockDirLen
 	var offRaw [8]byte
@@ -348,7 +351,7 @@ func stateDomainChangeBinaryAccessorV6ReadBlockDirectory(r io.ReaderAt, h stateD
 }
 
 func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, h stateDomainChangeBinaryAccessorV6Header, block stateDomainChangeBinaryAccessorV6Block, firstKeyID uint32) ([]stateDomainChangeBinaryAccessorV6Record, error) {
-	keyStart := uint64(stateDomainChangeBinaryAccessorV6HeaderSize) + h.blockDirLen
+	keyStart := h.headerSize + h.blockDirLen
 	postingStart := keyStart + h.keyDataLen
 	storedLen := uint64(block.dataLen &^ stateDomainChangeBinaryAccessorV6StoredRaw)
 	if block.dataOff < keyStart || block.dataOff > postingStart || storedLen > postingStart-block.dataOff || postingStart+h.postingLen != fileSize {
@@ -401,9 +404,16 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 		if err != nil || postingCount > math.MaxUint32 {
 			return nil, errors.New("snapshots: invalid V6 accessor posting count")
 		}
-		postingBytes := postingCount * stateDomainChangeBinaryAccessorV6PostingSize
-		if postingOff > h.postingLen || postingBytes > h.postingLen-postingOff {
-			return nil, errors.New("snapshots: V6 accessor postings outside section")
+		if postingOff > h.postingLen {
+			return nil, errors.New("snapshots: key-oriented accessor posting offset outside section")
+		}
+		if h.version == stateDomainChangeBinaryVersionV6 {
+			postingBytes := postingCount * stateDomainChangeBinaryAccessorV6PostingSize
+			if postingBytes > h.postingLen-postingOff {
+				return nil, errors.New("snapshots: V6 accessor postings outside section")
+			}
+		} else if postingCount != 0 && postingOff == h.postingLen {
+			return nil, errors.New("snapshots: V7 accessor posting offset at section end")
 		}
 		if i == 0 && !bytes.Equal(key, block.firstKey) {
 			return nil, errors.New("snapshots: V6 accessor first key mismatch")
@@ -482,7 +492,7 @@ func stateDomainChangeBinaryAccessorV6PostingAt(r io.ReaderAt, h stateDomainChan
 	if index >= record.postings {
 		return stateDomainChangeBinaryAccessorV6Posting{}, errors.New("snapshots: V6 accessor posting index outside key")
 	}
-	off := uint64(stateDomainChangeBinaryAccessorV6HeaderSize) + h.blockDirLen + h.keyDataLen + record.postingOff + uint64(index)*stateDomainChangeBinaryAccessorV6PostingSize
+	off := h.headerSize + h.blockDirLen + h.keyDataLen + record.postingOff + uint64(index)*stateDomainChangeBinaryAccessorV6PostingSize
 	var raw [stateDomainChangeBinaryAccessorV6PostingSize]byte
 	if _, err := r.ReadAt(raw[:], int64(off)); err != nil {
 		return stateDomainChangeBinaryAccessorV6Posting{}, err
@@ -608,7 +618,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorV6Prefix(segment io.ReaderAt
 }
 
 func verifyStateDomainChangeBinaryV6DictionaryPair(segment, accessor io.ReaderAt, accessorSize uint64) error {
-	h, err := decodeStateDomainChangeBinaryAccessorV6Header(accessor, accessorSize)
+	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(accessor, accessorSize)
 	if err != nil {
 		return err
 	}
@@ -628,7 +638,7 @@ func verifyStateDomainChangeBinaryV6DictionaryPair(segment, accessor io.ReaderAt
 // Unlike KeyByID, this performs one sequential block-directory pass and one
 // decode per unique key block, independent of the number and order of postings.
 func iterateStateDomainChangeBinaryAccessorV6Keys(r io.ReaderAt, fileSize uint64, fn func(uint32, []byte) error) (stateDomainChangeBinaryAccessorV6Header, error) {
-	h, err := decodeStateDomainChangeBinaryAccessorV6Header(r, fileSize)
+	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(r, fileSize)
 	if err != nil {
 		return h, err
 	}
@@ -669,7 +679,7 @@ func checkStateDomainChangeBinaryAccessorV6(r io.ReaderAt, fileSize uint64) erro
 	}
 	var keyCount, postingCount uint64
 	var previous []byte
-	postingBase := uint64(stateDomainChangeBinaryAccessorV6HeaderSize) + h.blockDirLen + h.keyDataLen
+	postingBase := h.headerSize + h.blockDirLen + h.keyDataLen
 	postingReader := bufio.NewReaderSize(io.NewSectionReader(r, int64(postingBase), int64(h.postingLen)), 1<<20)
 	var postingRaw [stateDomainChangeBinaryAccessorV6PostingSize]byte
 	var expectedPostingOff uint64

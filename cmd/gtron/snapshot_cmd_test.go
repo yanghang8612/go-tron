@@ -1630,6 +1630,30 @@ func TestSnapshotHistorySpaceBenchmarkCommandRegistered(t *testing.T) {
 	}
 }
 
+func TestSnapshotMigrateHistoryV7CommandRegistered(t *testing.T) {
+	var command *cli.Command
+	for _, candidate := range snapshotCommand().Subcommands {
+		if candidate.Name == "migrate-history-v7" {
+			command = candidate
+			break
+		}
+	}
+	if command == nil {
+		t.Fatal("migrate-history-v7 command is not registered")
+	}
+	flags := make(map[string]bool)
+	for _, flag := range command.Flags {
+		for _, name := range flag.Names() {
+			flags[name] = true
+		}
+	}
+	for _, name := range []string{"datadir", "snapshot.dir", "yes", "max-trios", "json"} {
+		if !flags[name] {
+			t.Fatalf("migrate-history-v7 missing --%s", name)
+		}
+	}
+}
+
 func TestSnapshotMigrateEventLogsV3CommandBuildOnlyWithLockedChaindata(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "datadir")

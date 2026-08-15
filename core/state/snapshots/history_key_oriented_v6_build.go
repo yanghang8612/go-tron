@@ -403,6 +403,150 @@ type stateDomainChangeV6PostingWriter struct {
 	rows     uint64
 }
 
+// stateDomainChangeV7PostingWriter consumes the same bounded ETL rows as V6,
+// but publishes one delta-framed stream per logical key. A single key is the
+// only buffered unit; the global posting set remains an external sort.
+type stateDomainChangeV7PostingWriter struct {
+	postings *bufio.Writer
+	meta     *bufio.Writer
+	scratch  *os.File
+	expected uint32
+	fromTx   uint64
+	keyID    uint32
+	haveKey  bool
+	offset   uint64
+	rows     uint64
+	current  []stateDomainChangeBinaryAccessorV6Posting
+	frames   []stateDomainChangeBinaryAccessorV7Frame
+	last     stateDomainChangeBinaryAccessorV6Posting
+	haveLast bool
+}
+
+func (w *stateDomainChangeV7PostingWriter) Put(key, value []byte) error {
+	if len(key) != 8 || len(value) != stateDomainChangeBinaryAccessorV6PostingSize {
+		return errors.New("snapshots: invalid V7 posting ETL row")
+	}
+	keyID := binary.BigEndian.Uint32(key[:4])
+	if keyID >= w.expected {
+		return errors.New("snapshots: V7 posting key ID outside dictionary")
+	}
+	if !w.haveKey {
+		if keyID != 0 {
+			return errors.New("snapshots: V7 postings do not start at key zero")
+		}
+		w.keyID, w.haveKey = keyID, true
+	} else if keyID != w.keyID {
+		if keyID != w.keyID+1 {
+			return errors.New("snapshots: V7 posting key ID gap")
+		}
+		if err := w.flushKey(); err != nil {
+			return err
+		}
+		w.keyID = keyID
+	}
+	posting, err := decodeStateDomainChangeBinaryAccessorV6Posting(value)
+	if err != nil {
+		return err
+	}
+	if w.haveLast {
+		if posting.txNum < w.last.txNum || posting.offset <= w.last.offset || posting.recordIndex <= w.last.recordIndex {
+			return errors.New("snapshots: V7 postings are not ordered")
+		}
+	}
+	w.current = append(w.current, posting)
+	w.last, w.haveLast = posting, true
+	w.rows++
+	if len(w.current) == int(stateDomainChangeBinaryAccessorV7FramePostings) {
+		return w.flushFrame()
+	}
+	return nil
+}
+
+func (*stateDomainChangeV7PostingWriter) Delete([]byte) error {
+	return errors.New("snapshots: V7 posting delete")
+}
+
+func (w *stateDomainChangeV7PostingWriter) flushKey() error {
+	if len(w.current) != 0 {
+		if err := w.flushFrame(); err != nil {
+			return err
+		}
+	}
+	if len(w.frames) == 0 {
+		return errors.New("snapshots: V7 key has no postings")
+	}
+	written, count, err := writeStateDomainChangeBinaryAccessorV7PostingFrames(w.postings, w.scratch, w.frames)
+	if err != nil {
+		return err
+	}
+	var raw [12]byte
+	binary.BigEndian.PutUint64(raw[:8], w.offset)
+	binary.BigEndian.PutUint32(raw[8:12], count)
+	if _, err := w.meta.Write(raw[:]); err != nil {
+		return err
+	}
+	w.offset += written
+	w.current = w.current[:0]
+	w.frames = w.frames[:0]
+	w.haveLast = false
+	if err := w.scratch.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := w.scratch.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *stateDomainChangeV7PostingWriter) flushFrame() error {
+	if len(w.current) == 0 || w.scratch == nil {
+		return errors.New("snapshots: invalid V7 posting frame")
+	}
+	encoded, err := encodeStateDomainChangeBinaryAccessorV7PostingList(w.fromTx, w.current)
+	if err != nil {
+		return err
+	}
+	if len(encoded) < 5 || encoded[0] != stateDomainChangeBinaryAccessorV7Single {
+		return errors.New("snapshots: invalid bounded V7 posting frame encoding")
+	}
+	frameData := encoded[1 : len(encoded)-4]
+	off, err := w.scratch.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	if off < 0 || uint64(off) > math.MaxUint32 || len(frameData) > math.MaxUint32 {
+		return errors.New("snapshots: V7 posting frame scratch exceeds uint32")
+	}
+	if _, err := w.scratch.Write(frameData); err != nil {
+		return err
+	}
+	w.frames = append(w.frames, stateDomainChangeBinaryAccessorV7Frame{
+		firstTx: w.current[0].txNum, dataOff: uint32(off), dataLen: uint32(len(frameData)),
+		count: uint16(len(w.current)), crc: binary.BigEndian.Uint32(encoded[len(encoded)-4:]),
+	})
+	w.current = w.current[:0]
+	return nil
+}
+
+func (w *stateDomainChangeV7PostingWriter) Finish() error {
+	if w.expected == 0 {
+		if w.haveKey {
+			return errors.New("snapshots: V7 empty dictionary has postings")
+		}
+		return nil
+	}
+	if !w.haveKey || w.keyID+1 != w.expected {
+		return errors.New("snapshots: V7 postings do not cover dictionary")
+	}
+	if err := w.flushKey(); err != nil {
+		return err
+	}
+	if err := w.postings.Flush(); err != nil {
+		return err
+	}
+	return w.meta.Flush()
+}
+
 func (w *stateDomainChangeV6PostingWriter) Put(key, value []byte) error {
 	if len(key) != 8 || len(value) != stateDomainChangeBinaryAccessorV6PostingSize {
 		return errors.New("snapshots: invalid V6 posting ETL row")
@@ -483,7 +627,12 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	defer func() { _ = metaFile.Close(); _ = os.Remove(metaName) }()
-	writer := &stateDomainChangeV6PostingWriter{postings: bufio.NewWriterSize(postingFile, 1<<20), meta: bufio.NewWriterSize(metaFile, 1<<20), expected: b.keyCount}
+	scratchFile, scratchName, err := createStateDomainChangeBinaryTempFileInDir(filepath.Dir(abs), filepath.Base(abs)+".posting-frames")
+	if err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
+	defer func() { _ = scratchFile.Close(); _ = os.Remove(scratchName) }()
+	writer := &stateDomainChangeV7PostingWriter{postings: bufio.NewWriterSize(postingFile, 1<<20), meta: bufio.NewWriterSize(metaFile, 1<<20), scratch: scratchFile, expected: b.keyCount, fromTx: ref.FromTxNum}
 	postingStats, err := b.postings.Load(writer)
 	if err != nil {
 		return SegmentRef{}, postingStats, err
@@ -548,9 +697,9 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 	}
 	defer func() { _ = tmp.Close(); _ = os.Remove(tmpName) }()
 	metadata := newSnapshotMetadataWriter(tmp)
-	var header [stateDomainChangeBinaryAccessorV6HeaderSize]byte
+	var header [stateDomainChangeBinaryAccessorV7HeaderSize]byte
 	copy(header[:8], stateDomainChangeBinaryAccessorMagic[:])
-	binary.BigEndian.PutUint32(header[8:12], stateDomainChangeBinaryVersionV6)
+	binary.BigEndian.PutUint32(header[8:12], stateDomainChangeBinaryVersionV7)
 	binary.BigEndian.PutUint64(header[12:20], ref.FromTxNum)
 	binary.BigEndian.PutUint64(header[20:28], ref.ToTxNum)
 	binary.BigEndian.PutUint64(header[28:36], recordCount)
@@ -560,12 +709,13 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 	binary.BigEndian.PutUint64(header[56:64], dirLen)
 	binary.BigEndian.PutUint64(header[64:72], uint64(keyStat.Size()))
 	copy(header[72:104], b.dictionaryDigest[:])
-	binary.BigEndian.PutUint32(header[104:108], crc32.ChecksumIEEE(header[:104]))
+	binary.BigEndian.PutUint64(header[104:112], uint64(postingStat.Size()))
+	binary.BigEndian.PutUint32(header[112:116], crc32.ChecksumIEEE(header[:112]))
 	if _, err := metadata.Write(header[:]); err != nil {
 		return SegmentRef{}, postingStats, err
 	}
-	keyDataBase := uint64(stateDomainChangeBinaryAccessorV6HeaderSize) + dirLen
-	entryOffset := uint64(stateDomainChangeBinaryAccessorV6HeaderSize) + uint64(len(blocks))*8
+	keyDataBase := stateDomainChangeBinaryAccessorV7HeaderSize + dirLen
+	entryOffset := stateDomainChangeBinaryAccessorV7HeaderSize + uint64(len(blocks))*8
 	var offsetRaw [8]byte
 	for _, block := range blocks {
 		binary.BigEndian.PutUint64(offsetRaw[:], entryOffset)
@@ -608,8 +758,8 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 			return SegmentRef{}, postingStats, err
 		}
 	}
-	if uint64(postingStat.Size()) != recordCount*stateDomainChangeBinaryAccessorV6PostingSize {
-		return SegmentRef{}, postingStats, errors.New("snapshots: V6 posting file size mismatch")
+	if uint64(postingStat.Size()) != writer.offset {
+		return SegmentRef{}, postingStats, errors.New("snapshots: V7 posting file size mismatch")
 	}
 	result, err := finalizeStateDomainChangeHistoryFileWithMetadata(dir, ref, tmp, tmpName, metadata.Metadata(), false)
 	return result, postingStats, err

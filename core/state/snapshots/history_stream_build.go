@@ -196,6 +196,10 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if err := writeStateDomainChangeBinaryHeaderCount(indexTmp, recordWriter.indexWritten); err != nil {
 		return result, err
 	}
+	indexTmp, indexTmpName, err = rewriteStateDomainChangeBinaryIndexV7(indexTmp, indexTmpName)
+	if err != nil {
+		return result, err
+	}
 
 	var segmentRef, indexRef, accessorRef SegmentRef
 	published := false
@@ -255,9 +259,9 @@ func validateBuiltStateDomainChangeBinaryFiles(dir string, segmentRef, indexRef,
 		_ = accessor.Close()
 		return fmt.Errorf("snapshots: state-domain-change history accessor count %d, want %d", accessorHeader.count, recordCount)
 	}
-	if accessorHeader.version == stateDomainChangeBinaryVersionV6 {
+	if accessorHeader.version == stateDomainChangeBinaryVersionV6 || accessorHeader.version == stateDomainChangeBinaryVersionV7 {
 		var v6Header stateDomainChangeBinaryAccessorV6Header
-		v6Header, err = decodeStateDomainChangeBinaryAccessorV6Header(accessor, accessorSize)
+		v6Header, err = decodeStateDomainChangeBinaryAccessorKeyHeader(accessor, accessorSize)
 		if err == nil {
 			var history historySegmentReader
 			history, _, _, err = openHistorySegmentForRead(dir, segmentRef)
@@ -271,7 +275,11 @@ func validateBuiltStateDomainChangeBinaryFiles(dir string, segmentRef, indexRef,
 			}
 		}
 		if err == nil {
-			err = checkStateDomainChangeBinaryAccessorV6(accessor, accessorSize)
+			if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+				err = checkStateDomainChangeBinaryAccessorV7(accessor, accessorSize)
+			} else {
+				err = checkStateDomainChangeBinaryAccessorV6(accessor, accessorSize)
+			}
 		}
 	} else if accessorHeader.version == stateDomainChangeBinaryVersionV5 {
 		var layout stateDomainChangeBinaryAccessorV3Layout

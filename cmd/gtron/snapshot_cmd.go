@@ -147,7 +147,7 @@ var (
 	}
 	snapshotHistorySampleAccessorBlocksFlag = &cli.Uint64Flag{
 		Name:  "snapshot.history.sample-accessor-blocks",
-		Usage: "Maximum V6 accessor key-directory blocks sampled per selected history segment",
+		Usage: "Maximum key-oriented accessor blocks sampled per selected history segment",
 		Value: 64,
 	}
 	snapshotHistorySampleMiBFlag = &cli.Uint64Flag{
@@ -159,6 +159,18 @@ var (
 		Name:  "progress",
 		Usage: "History-space benchmark progress reporting interval (0 disables)",
 		Value: 30 * time.Second,
+	}
+	snapshotHistoryMigrateYesFlag = &cli.BoolFlag{
+		Name:  "yes",
+		Usage: "Confirm the offline rewrite and atomic publication of active history trios",
+	}
+	snapshotHistoryMigrateMaxTriosFlag = &cli.Uint64Flag{
+		Name:  "max-trios",
+		Usage: "Maximum non-current history trios to rewrite in this run (0 = all)",
+	}
+	snapshotHistoryMigrateJSONFlag = &cli.BoolFlag{
+		Name:  "json",
+		Usage: "Write the migration summary as JSON",
 	}
 	snapshotEventLogVersionFlag = &cli.UintFlag{
 		Name:    "snapshot.event-log.version",
@@ -434,6 +446,19 @@ func snapshotCommand() *cli.Command {
 					snapshotHistoryProgressFlag,
 				},
 				Action: snapshotHistorySpaceBenchmarkCmd,
+			},
+			{
+				Name:        "migrate-history-v7",
+				Usage:       "Rewrite active state history trios into the current compact V7 layout",
+				Description: "The node using this snapshot directory must be stopped. Each verified trio is published atomically, and rerunning resumes by skipping trios already in the current layout.",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					snapshotDirFlag,
+					snapshotHistoryMigrateYesFlag,
+					snapshotHistoryMigrateMaxTriosFlag,
+					snapshotHistoryMigrateJSONFlag,
+				},
+				Action: snapshotMigrateHistoryV7Cmd,
 			},
 			{
 				Name:  "migrate-event-logs-v3",
@@ -1613,6 +1638,49 @@ func snapshotHistorySpaceBenchmarkCmd(ctx *cli.Context) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(inspection)
+}
+
+func snapshotMigrateHistoryV7Cmd(ctx *cli.Context) error {
+	if !ctx.Bool("yes") {
+		return errors.New("refusing to migrate history without --yes; stop gtron and rerun with explicit confirmation")
+	}
+	cfg := makeConfig(ctx)
+	result, err := statesnapshots.MigrateHistoryV7(snapshotDir(ctx, cfg.DataDir), statesnapshots.HistoryV7MigrationOptions{
+		Context:  contextOrBackground(ctx),
+		MaxTrios: ctx.Uint64("max-trios"),
+		OnProgress: func(progress statesnapshots.HistoryV7MigrationProgress) {
+			fmt.Fprintf(os.Stderr, "history V7 migration trios=%d/%d migrated=%d range=[%d,%d] active=%s->%s elapsed=%s path=%s\n",
+				progress.CompletedTrios,
+				progress.TotalTrios,
+				progress.MigratedTrios,
+				progress.FromTxNum,
+				progress.ToTxNum,
+				formatIEC(progress.ActiveBytesBefore),
+				formatIEC(progress.ActiveBytesAfter),
+				progress.Elapsed.Round(time.Millisecond),
+				progress.CurrentHistory,
+			)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if ctx.Bool("json") {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(result)
+	}
+	fmt.Printf("History V7 migration completed: trios=%d current=%d migrated=%d remaining=%d active=%s->%s retiredAdded=%s elapsed=%s\n",
+		result.TotalTrios,
+		result.AlreadyCurrent,
+		result.MigratedTrios,
+		result.RemainingTrios,
+		formatIEC(result.ActiveBytesBefore),
+		formatIEC(result.ActiveBytesAfter),
+		formatIEC(result.RetiredBytesAdded),
+		time.Duration(result.ElapsedSeconds*float64(time.Second)).Round(time.Millisecond),
+	)
+	return nil
 }
 
 func snapshotMigrateEventLogsV3Cmd(ctx *cli.Context) error {

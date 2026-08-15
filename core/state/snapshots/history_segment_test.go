@@ -544,7 +544,7 @@ func TestBuildStateDomainChangeHistoryStreamHonorsCompressionGate(t *testing.T) 
 	}
 }
 
-func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptV6Directory(t *testing.T) {
+func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptV7Directory(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5e}, common.AccountIDLength)...))
@@ -567,12 +567,12 @@ func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptV6Directory(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if header.version != stateDomainChangeBinaryVersionV6 {
+	if header.version != stateDomainChangeBinaryVersionV7 {
 		_ = accessor.Close()
-		t.Fatalf("accessor version = %d, want V6", header.version)
+		t.Fatalf("accessor version = %d, want V7", header.version)
 	}
 	var offsetRaw [8]byte
-	_, err = accessor.ReadAt(offsetRaw[:], stateDomainChangeBinaryAccessorV6HeaderSize)
+	_, err = accessor.ReadAt(offsetRaw[:], int64(stateDomainChangeBinaryAccessorV7HeaderSize))
 	entryOffset := int64(binary.BigEndian.Uint64(offsetRaw[:]))
 	var keyLenRaw [2]byte
 	if err == nil {

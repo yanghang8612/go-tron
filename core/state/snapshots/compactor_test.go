@@ -327,7 +327,7 @@ func TestCompactHistoryDomainPreservesRepeatedAccessorKeys(t *testing.T) {
 	})
 }
 
-func TestCompactHistoryDomainUpgradesV2AccessorToV6(t *testing.T) {
+func TestCompactHistoryDomainUpgradesV2AccessorToV7(t *testing.T) {
 	dir := t.TempDir()
 	owner := binaryAddress(0xef)
 	first := binaryStateDomainChange(1, 1, 1, "slot/a")
@@ -353,8 +353,8 @@ func TestCompactHistoryDomainUpgradesV2AccessorToV6(t *testing.T) {
 	}
 	accessorRef := compactionRefByKind(t, result, SegmentAccessor)
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if got := binary.BigEndian.Uint32(data[8:12]); got != stateDomainChangeBinaryVersionV6 {
-		t.Fatalf("compacted accessor version = %d, want %d", got, stateDomainChangeBinaryVersionV6)
+	if got := binary.BigEndian.Uint32(data[8:12]); got != stateDomainChangeBinaryVersionV7 {
+		t.Fatalf("compacted accessor version = %d, want %d", got, stateDomainChangeBinaryVersionV7)
 	}
 
 	mgr, err := OpenManager(dir)

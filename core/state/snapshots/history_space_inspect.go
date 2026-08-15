@@ -174,6 +174,7 @@ type historySpaceHeaders struct {
 	historyBlocks     uint64
 	historyCompressed bool
 	accessorV6        bool
+	accessorVersion   uint32
 }
 
 type historySpaceSampleTotals struct {
@@ -252,6 +253,7 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 	var totalRecords, totalKeys, totalIndexEntries, totalIndexFrames uint64
 	var totalRecordDirectoryEntries uint64
 	var totalAccessorPosting, totalAccessorMetadata uint64
+	allV7 := true
 	for i, trio := range trios {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -271,8 +273,9 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 		totalRecordDirectoryEntries += ceilDiv(h.records, historySpaceRecordDirectoryEntries)
 		totalAccessorPosting += h.accessorPosting
 		totalAccessorMetadata += h.accessorMetadata
+		allV7 = allV7 && h.accessorVersion == stateDomainChangeBinaryVersionV7
 		if !h.accessorV6 {
-			return nil, fmt.Errorf("snapshots: history-space benchmark requires V6 accessor %s", trio.accessor.Path)
+			return nil, fmt.Errorf("snapshots: history-space benchmark requires a key-oriented V6/V7 accessor %s", trio.accessor.Path)
 		}
 		if !h.historyCompressed {
 			return nil, fmt.Errorf("snapshots: history-space benchmark requires compressed history %s", trio.history.Path)
@@ -345,8 +348,12 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 	}
 
 	recordDirectoryBytes := uint64(len(trios))*historySpaceCandidateHeaderBytes + totalRecordDirectoryEntries*historySpaceRecordDirectoryEntry
+	currentName := "current-v6"
+	if allV7 {
+		currentName = "current-v7"
+	}
 	current := HistorySpaceCandidate{
-		Name:                   "current-v6",
+		Name:                   currentName,
 		HistoryBlockBytes:      historyCompressChunkSize,
 		HistoryBytes:           out.ManifestPhysical.History,
 		AccessorBytes:          out.ManifestPhysical.Accessor,
@@ -532,18 +539,20 @@ func inspectHistorySpaceHeaders(dir string, trio historySpaceTrio) (historySpace
 	if _, err := accessor.ReadAt(fixed[:], 0); err != nil {
 		return out, err
 	}
-	if string(fixed[:8]) == string(stateDomainChangeBinaryAccessorMagic[:]) && binary.BigEndian.Uint32(fixed[8:12]) == stateDomainChangeBinaryVersionV6 {
-		h, err := decodeStateDomainChangeBinaryAccessorV6Header(accessor, uint64(stat.Size()))
+	accessorVersion := binary.BigEndian.Uint32(fixed[8:12])
+	if string(fixed[:8]) == string(stateDomainChangeBinaryAccessorMagic[:]) && (accessorVersion == stateDomainChangeBinaryVersionV6 || accessorVersion == stateDomainChangeBinaryVersionV7) {
+		h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(accessor, uint64(stat.Size()))
 		if err != nil {
 			return out, err
 		}
 		out.records, out.keys = h.recordCount, h.keyCount
 		out.accessorPosting = h.postingLen
 		if uint64(stat.Size()) < h.postingLen {
-			return out, errors.New("snapshots: V6 accessor posting section exceeds file size")
+			return out, errors.New("snapshots: key-oriented accessor posting section exceeds file size")
 		}
 		out.accessorMetadata = uint64(stat.Size()) - h.postingLen
 		out.accessorV6 = true
+		out.accessorVersion = accessorVersion
 	} else {
 		out.accessorMetadata = uint64(stat.Size())
 	}
@@ -668,7 +677,7 @@ func sampleHistorySpaceAccessor(ctx context.Context, dir string, ref SegmentRef,
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	h, err := decodeStateDomainChangeBinaryAccessorV6Header(file, uint64(stat.Size()))
+	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(file, uint64(stat.Size()))
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -705,7 +714,10 @@ func sampleHistorySpaceAccessor(ctx context.Context, dir string, ref SegmentRef,
 func estimateHistorySpacePostingKey(file io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record) (uint64, error) {
 	count := uint64(record.postings)
 	if count == 0 {
-		return 0, errors.New("snapshots: V6 accessor key has zero postings")
+		return 0, errors.New("snapshots: key-oriented accessor key has zero postings")
+	}
+	if h.version == stateDomainChangeBinaryVersionV7 {
+		return stateDomainChangeBinaryAccessorV7PostingListLength(file, h, record)
 	}
 	first, err := stateDomainChangeBinaryAccessorV6PostingAt(file, h, record, 0)
 	if err != nil {
