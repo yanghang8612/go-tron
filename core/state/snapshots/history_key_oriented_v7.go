@@ -411,6 +411,10 @@ type stateDomainChangeBinaryAccessorV7PostingCursor struct {
 	frame    int
 	postings []stateDomainChangeBinaryAccessorV6Posting
 	posting  int
+	previous []byte
+	keys     uint64
+	rows     uint64
+	finished bool
 }
 
 func newStateDomainChangeBinaryAccessorV7PostingCursor(r io.ReaderAt, size uint64) (*stateDomainChangeBinaryAccessorV7PostingCursor, error) {
@@ -430,6 +434,10 @@ func (c *stateDomainChangeBinaryAccessorV7PostingCursor) Next() (uint32, stateDo
 		if c.posting < len(c.postings) {
 			p := c.postings[c.posting]
 			c.posting++
+			if p.txNum < c.header.fromTxNum || p.txNum > c.header.toTxNum || uint64(p.recordIndex) >= c.header.recordCount {
+				return 0, stateDomainChangeBinaryAccessorV6Posting{}, false, errors.New("snapshots: V7 accessor posting outside segment bounds")
+			}
+			c.rows++
 			return c.records[c.record-1].keyID, p, true, nil
 		}
 		if c.frame < len(c.frames) {
@@ -443,15 +451,26 @@ func (c *stateDomainChangeBinaryAccessorV7PostingCursor) Next() (uint32, stateDo
 		}
 		if c.record < len(c.records) {
 			record := c.records[c.record]
+			if c.previous != nil && bytes.Compare(c.previous, record.key) >= 0 {
+				return 0, stateDomainChangeBinaryAccessorV6Posting{}, false, errors.New("snapshots: V7 accessor dictionary is not sorted")
+			}
 			frames, err := stateDomainChangeBinaryAccessorV7PostingFrames(c.r, c.header, record)
 			if err != nil {
 				return 0, stateDomainChangeBinaryAccessorV6Posting{}, false, err
 			}
+			c.previous = record.key
+			c.keys++
 			c.record++
 			c.frames, c.frame, c.postings, c.posting = frames, 0, nil, 0
 			continue
 		}
 		if c.block >= len(c.blocks) {
+			if !c.finished {
+				c.finished = true
+				if c.keys != c.header.keyCount || c.rows != c.header.recordCount {
+					return 0, stateDomainChangeBinaryAccessorV6Posting{}, false, fmt.Errorf("snapshots: V7 accessor counts keys=%d/%d postings=%d/%d", c.keys, c.header.keyCount, c.rows, c.header.recordCount)
+				}
+			}
 			return 0, stateDomainChangeBinaryAccessorV6Posting{}, false, nil
 		}
 		records, err := stateDomainChangeBinaryAccessorV6ReadBlock(c.r, c.size, c.header, c.blocks[c.block], uint32(c.block*stateDomainChangeBinaryAccessorV6BlockKeys))

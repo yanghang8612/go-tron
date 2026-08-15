@@ -1540,9 +1540,11 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 		if segmentDigest != v7Header.dictionaryDigest {
 			return errors.New("snapshots: V7 history/accessor dictionary commitment mismatch")
 		}
-		if err := checkStateDomainChangeBinaryAccessorV7(accessorReader, accessorSize); err != nil {
-			return err
-		}
+		// The streaming verifier below visits every dictionary block, posting
+		// frame and posting while comparing its exact history tuple. Its readers
+		// enforce the same block/frame checksums and bounds as the standalone
+		// structural scan, so running checkStateDomainChangeBinaryAccessorV7 here
+		// would decode the entire (often billion-row) accessor twice.
 		return verifyStateDomainChangeBinaryV7CoverageSequential(ctx, dir, historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader, indexReader, indexHeader.count, accessorReader, accessorSize)
 	}
 	if err := verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader.count, indexReader, indexHeader.count); err != nil {
