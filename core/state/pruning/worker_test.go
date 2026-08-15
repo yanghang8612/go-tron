@@ -927,6 +927,43 @@ func TestRetiredPruneUsesPersistentStateHistoryVerification(t *testing.T) {
 	}
 }
 
+func TestOfflineRetiredPruneUsesPersistentStateHistoryVerification(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 1, 3)
+	_, _, _ = writeSnapPruningChange(t, db, 10, 10, 12)
+	retiredRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 3, "history/state-domain-change-retired.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-active.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := snapshots.NewManifest(10, 12, activeRefs)
+	manifest.Retired = retiredRefs
+	if err := snapshots.PublishManifest(dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	first := NewPruner(&fakePruneChain{db: db, solidified: 10}, PrunerConfig{Policy: SnapPolicy(3, 2), SnapshotDir: dir})
+	if err := first.RecordTrustedSnapshotSegments(activeRefs); err != nil {
+		t.Fatalf("record trusted active snapshot: %v", err)
+	}
+
+	result, err := PruneRetiredSnapshotFilesContext(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("offline retired prune with persistent verification: %v", err)
+	}
+	if result.FilesDeleted != len(retiredRefs) {
+		t.Fatalf("offline retired prune result = %+v, want %d deleted files", result, len(retiredRefs))
+	}
+	for _, ref := range retiredRefs {
+		if _, err := os.Stat(filepath.Join(dir, ref.Path)); !os.IsNotExist(err) {
+			t.Fatalf("retired file %q still present or stat failed: %v", ref.Path, err)
+		}
+	}
+}
+
 func TestRetiredPruneReauthenticatesTrustedMemoryHitBeforeDelete(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()

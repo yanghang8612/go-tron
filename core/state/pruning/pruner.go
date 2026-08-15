@@ -250,6 +250,21 @@ func NewPruner(chain ChainSource, cfg PrunerConfig) *Pruner {
 	return pruner
 }
 
+// PruneRetiredSnapshotFilesContext removes retired snapshot files through the
+// same content-addressed active-history verification cache used by the online
+// pruning lifecycle. Persistent hits are always re-authenticated by hashing
+// the active history, inverted-index, and accessor files before deletion; a
+// missing or invalid cache safely falls back to exhaustive semantic
+// verification.
+//
+// This helper is intended for offline maintenance commands. It keeps those
+// commands from repeating a record-by-record audit that the node has already
+// completed and persisted, while preserving the destructive deletion gate.
+func PruneRetiredSnapshotFilesContext(ctx context.Context, dir string) (*snapshots.PruneRetiredSegmentFilesResult, error) {
+	pruner := NewPruner(nil, PrunerConfig{SnapshotDir: dir})
+	return snapshots.PruneRetiredSegmentFilesContextWithVerifier(ctx, dir, pruner.verifyActiveSnapshotManifest)
+}
+
 func (p *Pruner) Start() error {
 	if p == nil {
 		return nil

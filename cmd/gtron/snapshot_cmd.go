@@ -21,6 +21,7 @@ import (
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	corestate "github.com/tronprotocol/go-tron/core/state"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
+	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
@@ -1511,7 +1512,7 @@ func snapshotPruneRetiredCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	result, err := statesnapshots.PruneRetiredSegmentFiles(dir)
+	result, err := statepruning.PruneRetiredSnapshotFilesContext(ctx.Context, dir)
 	if err != nil {
 		return err
 	}
