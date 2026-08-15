@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -1527,6 +1528,23 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 		}
 		return verifyStateDomainChangeBinaryAccessorV4CollectedContext(ctx, scratch, accessorRef, segmentHeader.count, accessorReader, accessorSize, accessorHeader, collectors)
 	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+		v7Header, err := decodeStateDomainChangeBinaryAccessorV7Header(accessorReader, accessorSize)
+		if err != nil {
+			return err
+		}
+		segmentDigest, err := readStateDomainChangeBinaryV6DictionaryCommitment(segmentReader)
+		if err != nil {
+			return err
+		}
+		if segmentDigest != v7Header.dictionaryDigest {
+			return errors.New("snapshots: V7 history/accessor dictionary commitment mismatch")
+		}
+		if err := checkStateDomainChangeBinaryAccessorV7(accessorReader, accessorSize); err != nil {
+			return err
+		}
+		return verifyStateDomainChangeBinaryV7CoverageSequential(ctx, dir, historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader, indexReader, indexHeader.count, accessorReader, accessorSize)
+	}
 	if err := verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader.count, indexReader, indexHeader.count); err != nil {
 		return err
 	}
@@ -1550,24 +1568,160 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 		}
 		return verifyStateDomainChangeBinaryAccessorV6Coverage(segmentReader, segmentSize, accessorReader, accessorSize)
 	}
-	if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
-		v7Header, err := decodeStateDomainChangeBinaryAccessorV7Header(accessorReader, accessorSize)
-		if err != nil {
-			return err
-		}
-		segmentDigest, err := readStateDomainChangeBinaryV6DictionaryCommitment(segmentReader)
-		if err != nil {
-			return err
-		}
-		if segmentDigest != v7Header.dictionaryDigest {
-			return errors.New("snapshots: V7 history/accessor dictionary commitment mismatch")
-		}
-		if err := checkStateDomainChangeBinaryAccessorV7(accessorReader, accessorSize); err != nil {
-			return err
-		}
-		return verifyStateDomainChangeBinaryAccessorV7Coverage(segmentReader, segmentSize, accessorReader, accessorSize)
-	}
 	return verifyStateDomainChangeBinaryAccessorCoverage(historyRef, accessorRef, segmentReader, segmentSize, recordOffset, segmentHeader.count, accessorReader, accessorSize, accessorHeader.count)
+}
+
+const stateDomainChangeV7VerificationBufferLimit = 32 << 20
+
+// verifyStateDomainChangeBinaryV7CoverageSequential proves the V7 index and
+// accessor against the history stream without following key-oriented postings
+// back into history in random order. The bounded ETL sort changes only the
+// verification access pattern: every posting tuple is still compared exactly.
+func verifyStateDomainChangeBinaryV7CoverageSequential(ctx context.Context, dir string, historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset uint64, segmentHeader stateDomainChangeBinaryHeader, index io.ReaderAt, indexCount uint64, accessor io.ReaderAt, accessorSize uint64) error {
+	return verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx, dir, historyRef, indexRef, segment, segmentSize, recordOffset, segmentHeader, index, indexCount, accessor, accessorSize, stateDomainChangeV7VerificationBufferLimit)
+}
+
+func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Context, dir string, historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset uint64, segmentHeader stateDomainChangeBinaryHeader, index io.ReaderAt, indexCount uint64, accessor io.ReaderAt, accessorSize uint64, bufferLimit int) error {
+	if segmentHeader.version != stateDomainChangeBinaryVersionV6 {
+		return fmt.Errorf("snapshots: V7 accessor requires V6 history, got version %d", segmentHeader.version)
+	}
+	collector, err := etl.NewCollector(etl.Options{TempDir: filepath.Join(dir, "etl"), BufferLimit: bufferLimit})
+	if err != nil {
+		return fmt.Errorf("snapshots: create V7 verification ETL: %w", err)
+	}
+	defer collector.Close()
+	txRanges, err := newStateDomainChangeTxRangeCursor(segment, segmentSize, historyRef, segmentHeader)
+	if err != nil {
+		return err
+	}
+
+	started, lastProgress := time.Now(), time.Now()
+	expectedRecordIndex, expectedOffset := uint64(0), recordOffset
+	var previousTxNum uint64
+	var payload []byte
+	var change rawdb.StateDomainChange
+	for i := uint64(0); i < indexCount; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		entry, err := readStateDomainChangeBinaryIndexEntryAt(index, i)
+		if err != nil {
+			return err
+		}
+		if entry.txNum < indexRef.FromTxNum || entry.txNum > indexRef.ToTxNum {
+			return fmt.Errorf("snapshots: state-domain-change binary index %q tx %d outside range [%d,%d]", indexRef.Path, entry.txNum, indexRef.FromTxNum, indexRef.ToTxNum)
+		}
+		if i > 0 && entry.txNum <= previousTxNum {
+			return fmt.Errorf("snapshots: state-domain-change binary index %q entries are not sorted", indexRef.Path)
+		}
+		previousTxNum = entry.txNum
+		if entry.recordIndex != expectedRecordIndex || entry.offset != expectedOffset {
+			return fmt.Errorf("snapshots: state-domain-change binary index %q entry %d is not contiguous", indexRef.Path, i)
+		}
+		if entry.offset < recordOffset || entry.offset >= segmentSize || entry.count == 0 || entry.recordIndex >= segmentHeader.count || entry.count > segmentHeader.count-entry.recordIndex {
+			return fmt.Errorf("snapshots: state-domain-change binary index %q entry %d is outside segment %q", indexRef.Path, i, historyRef.Path)
+		}
+		offset := entry.offset
+		var previousSeq uint64
+		for j := uint64(0); j < entry.count; j++ {
+			recordIndex := entry.recordIndex + j
+			var keyID uint32
+			var next uint64
+			payload, keyID, next, err = readStateDomainChangeBinaryRecordV6FrameRawInto(segment, offset, segmentSize, payload, &change)
+			if err != nil {
+				return err
+			}
+			if change.TxNum != entry.txNum {
+				return fmt.Errorf("snapshots: state-domain-change binary index %q tx %d read segment tx %d", indexRef.Path, entry.txNum, change.TxNum)
+			}
+			row, err := txRanges.txRangeForTxNum(change.TxNum)
+			if err != nil {
+				return err
+			}
+			if err := hydrateStateDomainChangeBinaryRecordV5FromRange(row, recordIndex, &change); err != nil {
+				return err
+			}
+			if j > 0 && change.Seq < previousSeq {
+				return errors.New("snapshots: state-domain-change entries are not sorted")
+			}
+			previousSeq = change.Seq
+			if recordIndex > math.MaxUint32 || offset > stateDomainChangeBinaryAccessorV5MaxOffset {
+				return errors.New("snapshots: V7 verification posting exceeds encoded bounds")
+			}
+			if err := collector.PutEncoded(8, stateDomainChangeBinaryAccessorV6PostingSize, func(key, value []byte) {
+				binary.BigEndian.PutUint32(key[:4], keyID)
+				binary.BigEndian.PutUint32(key[4:], uint32(recordIndex))
+				binary.BigEndian.PutUint64(value[:8], change.TxNum)
+				_ = putStateDomainChangeBinaryAccessorV5Offset(value[8:14], offset)
+				binary.BigEndian.PutUint32(value[14:18], uint32(recordIndex))
+			}); err != nil {
+				return err
+			}
+			offset = next
+			if time.Since(lastProgress) >= 30*time.Second {
+				coldSnapshotLog.Info("History verification progress", "dataset", historyRef.Dataset, "phase", "collect-postings", "path", historyRef.Path, "records", recordIndex+1, "totalRecords", segmentHeader.count, "elapsed", time.Since(started))
+				lastProgress = time.Now()
+			}
+		}
+		expectedRecordIndex += entry.count
+		expectedOffset = offset
+	}
+	if expectedRecordIndex != segmentHeader.count {
+		return fmt.Errorf("snapshots: state-domain-change binary index %q missing segment record %d", indexRef.Path, expectedRecordIndex)
+	}
+	if expectedOffset != segmentSize {
+		return fmt.Errorf("snapshots: state-domain-change binary segment %q has %d trailing bytes", historyRef.Path, segmentSize-expectedOffset)
+	}
+
+	cursor, err := newStateDomainChangeBinaryAccessorV7PostingCursor(accessor, accessorSize)
+	if err != nil {
+		return err
+	}
+	var compared uint64
+	_, err = collector.Iterate(func(key, value []byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(key) != 8 || len(value) != stateDomainChangeBinaryAccessorV6PostingSize {
+			return errors.New("snapshots: invalid V7 verification ETL row")
+		}
+		keyID, posting, ok, err := cursor.Next()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("snapshots: V7 accessor is missing postings")
+		}
+		expectedKeyID := binary.BigEndian.Uint32(key[:4])
+		expected := stateDomainChangeBinaryAccessorV6Posting{
+			txNum: binary.BigEndian.Uint64(value[:8]), recordIndex: binary.BigEndian.Uint32(value[14:18]),
+		}
+		expected.offset, err = stateDomainChangeBinaryAccessorV5Offset(value[8:14])
+		if err != nil {
+			return err
+		}
+		if keyID != expectedKeyID || posting != expected {
+			return errors.New("snapshots: V7 accessor posting/history mismatch")
+		}
+		compared++
+		if time.Since(lastProgress) >= 30*time.Second {
+			coldSnapshotLog.Info("History verification progress", "dataset", historyRef.Dataset, "phase", "compare-accessor", "path", historyRef.Path, "records", compared, "totalRecords", segmentHeader.count, "elapsed", time.Since(started))
+			lastProgress = time.Now()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if _, _, ok, err := cursor.Next(); err != nil {
+		return err
+	} else if ok {
+		return errors.New("snapshots: V7 accessor has extra postings")
+	}
+	if compared != segmentHeader.count {
+		return fmt.Errorf("snapshots: V7 accessor covers %d records, want %d", compared, segmentHeader.count)
+	}
+	return nil
 }
 
 func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset, recordCount uint64, index io.ReaderAt, indexCount uint64) error {
@@ -3999,6 +4153,17 @@ func readStateDomainChangeBinaryRecordV5FrameInto(r io.ReaderAt, offset, fileSiz
 // precomputed source-keyID to target-keyID mapping, avoiding one dictionary
 // block lookup and decompression for every history record.
 func readStateDomainChangeBinaryRecordV6FrameInto(r io.ReaderAt, offset, fileSize, recordIndex uint64, payload []byte, change *rawdb.StateDomainChange) ([]byte, uint32, uint64, error) {
+	payload, keyID, next, err := readStateDomainChangeBinaryRecordV6FrameRawInto(r, offset, fileSize, payload, change)
+	if err != nil {
+		return payload, 0, 0, err
+	}
+	if err := hydrateStateDomainChangeBinaryRecordV5(r, fileSize, recordIndex, true, change); err != nil {
+		return payload, 0, 0, err
+	}
+	return payload, keyID, next, nil
+}
+
+func readStateDomainChangeBinaryRecordV6FrameRawInto(r io.ReaderAt, offset, fileSize uint64, payload []byte, change *rawdb.StateDomainChange) ([]byte, uint32, uint64, error) {
 	if offset > math.MaxInt64 {
 		return payload, 0, 0, fmt.Errorf("snapshots: state-domain-change record offset too large: %d", offset)
 	}
@@ -4023,9 +4188,6 @@ func readStateDomainChangeBinaryRecordV6FrameInto(r io.ReaderAt, offset, fileSiz
 	}
 	keyID, err := decodeStateDomainChangeRecordV6Into(payload, change)
 	if err != nil {
-		return payload, 0, 0, err
-	}
-	if err := hydrateStateDomainChangeBinaryRecordV5(r, fileSize, recordIndex, true, change); err != nil {
 		return payload, 0, 0, err
 	}
 	return payload, keyID, offset + 4 + uint64(length), nil

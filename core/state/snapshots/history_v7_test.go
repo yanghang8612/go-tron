@@ -1,7 +1,9 @@
 package snapshots
 
 import (
+	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -165,5 +167,71 @@ func TestStateDomainChangeV7FramedAccessorQuery(t *testing.T) {
 	}
 	if len(got) != 131 || got[0] != 130 || got[len(got)-1] != 260 {
 		t.Fatalf("framed lookup = %d rows [%d,%d]", len(got), got[0], got[len(got)-1])
+	}
+}
+
+func TestStateDomainChangeV7SequentialVerificationExternalSort(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, make([]byte, common.AccountIDLength)...))
+	for txNum := uint64(1); txNum <= 300; txNum++ {
+		var hash common.Hash
+		binary.BigEndian.PutUint64(hash[24:], txNum)
+		if err := rawdb.WriteStateTxRange(db, txNum, hash, txNum, txNum); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+			BlockNum: txNum, BlockHash: hash, TxNum: txNum, Seq: 1,
+			FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: txNum % 7,
+			Domain: kvdomains.ContractStorage, Key: []byte{byte(txNum % 19)}, PrevExists: true, Prev: []byte{byte(txNum)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 300, "history/state-domain-change-1-300.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var historyRef, indexRef, accessorRef SegmentRef
+	for _, ref := range refs {
+		switch ref.Kind {
+		case SegmentHistory:
+			historyRef = ref
+		case SegmentInverted:
+			indexRef = ref
+		case SegmentAccessor:
+			accessorRef = ref
+		}
+	}
+	history, historyHeader, historySize, err := openStateDomainChangeBinarySegmentReader(dir, historyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer history.Close()
+	historyReader := contextReaderAt{ctx: context.Background(), r: history}
+	recordOffset, err := validateStateDomainChangeBinaryTxRangeTableAt(historyReader, historySize, historyRef, historyHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, indexHeader, err := openStateDomainChangeBinaryIndexReader(dir, indexRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer index.Close()
+	accessor, accessorHeader, accessorSize, err := openStateDomainChangeBinaryAccessorReader(dir, accessorRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer accessor.Close()
+	if accessorHeader.version != stateDomainChangeBinaryVersionV7 {
+		t.Fatalf("accessor version = %d, want V7", accessorHeader.version)
+	}
+	if err := verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(context.Background(), dir, historyRef, indexRef, historyReader, historySize, recordOffset, historyHeader, index, indexHeader.count, accessor, accessorSize, 1); err != nil {
+		t.Fatalf("verify forced external-sort path: %v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(canceled, dir, historyRef, indexRef, historyReader, historySize, recordOffset, historyHeader, index, indexHeader.count, accessor, accessorSize, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled verification error = %v, want context.Canceled", err)
 	}
 }

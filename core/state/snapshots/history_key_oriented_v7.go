@@ -399,6 +399,70 @@ type stateDomainChangeBinaryAccessorV7Cursor struct {
 	off, limit uint64
 }
 
+type stateDomainChangeBinaryAccessorV7PostingCursor struct {
+	r        io.ReaderAt
+	size     uint64
+	header   stateDomainChangeBinaryAccessorV6Header
+	blocks   []stateDomainChangeBinaryAccessorV6Block
+	block    int
+	records  []stateDomainChangeBinaryAccessorV6Record
+	record   int
+	frames   []stateDomainChangeBinaryAccessorV7Frame
+	frame    int
+	postings []stateDomainChangeBinaryAccessorV6Posting
+	posting  int
+}
+
+func newStateDomainChangeBinaryAccessorV7PostingCursor(r io.ReaderAt, size uint64) (*stateDomainChangeBinaryAccessorV7PostingCursor, error) {
+	h, err := decodeStateDomainChangeBinaryAccessorV7Header(r, size)
+	if err != nil {
+		return nil, err
+	}
+	blocks, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectory(r, h)
+	if err != nil {
+		return nil, err
+	}
+	return &stateDomainChangeBinaryAccessorV7PostingCursor{r: r, size: size, header: h, blocks: blocks}, nil
+}
+
+func (c *stateDomainChangeBinaryAccessorV7PostingCursor) Next() (uint32, stateDomainChangeBinaryAccessorV6Posting, bool, error) {
+	for {
+		if c.posting < len(c.postings) {
+			p := c.postings[c.posting]
+			c.posting++
+			return c.records[c.record-1].keyID, p, true, nil
+		}
+		if c.frame < len(c.frames) {
+			rows, err := stateDomainChangeBinaryAccessorV7ReadFrame(c.r, c.header, c.records[c.record-1], c.frames[c.frame])
+			if err != nil {
+				return 0, stateDomainChangeBinaryAccessorV6Posting{}, false, err
+			}
+			c.frame++
+			c.postings, c.posting = rows, 0
+			continue
+		}
+		if c.record < len(c.records) {
+			record := c.records[c.record]
+			frames, err := stateDomainChangeBinaryAccessorV7PostingFrames(c.r, c.header, record)
+			if err != nil {
+				return 0, stateDomainChangeBinaryAccessorV6Posting{}, false, err
+			}
+			c.record++
+			c.frames, c.frame, c.postings, c.posting = frames, 0, nil, 0
+			continue
+		}
+		if c.block >= len(c.blocks) {
+			return 0, stateDomainChangeBinaryAccessorV6Posting{}, false, nil
+		}
+		records, err := stateDomainChangeBinaryAccessorV6ReadBlock(c.r, c.size, c.header, c.blocks[c.block], uint32(c.block*stateDomainChangeBinaryAccessorV6BlockKeys))
+		if err != nil {
+			return 0, stateDomainChangeBinaryAccessorV6Posting{}, false, err
+		}
+		c.block++
+		c.records, c.record, c.frames, c.frame, c.postings, c.posting = records, 0, nil, 0, nil, 0
+	}
+}
+
 func (c *stateDomainChangeBinaryAccessorV7Cursor) uvarint() (uint64, []byte, error) {
 	var raw []byte
 	for i := 0; i < binary.MaxVarintLen64; i++ {
@@ -618,56 +682,6 @@ func stateDomainChangeBinaryAccessorV7PostingListLength(r io.ReaderAt, h stateDo
 	}
 	last := frames[len(frames)-1]
 	return uint64(last.dataOff) + uint64(last.dataLen), nil
-}
-
-func verifyStateDomainChangeBinaryAccessorV7Coverage(segment io.ReaderAt, segmentSize uint64, accessor io.ReaderAt, accessorSize uint64) error {
-	h, err := decodeStateDomainChangeBinaryAccessorV7Header(accessor, accessorSize)
-	if err != nil {
-		return err
-	}
-	blocks, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectory(accessor, h)
-	if err != nil {
-		return err
-	}
-	seen := make([]uint64, (h.recordCount+63)/64)
-	var covered uint64
-	for bi, b := range blocks {
-		records, err := stateDomainChangeBinaryAccessorV6ReadBlock(accessor, accessorSize, h, b, uint32(bi*stateDomainChangeBinaryAccessorV6BlockKeys))
-		if err != nil {
-			return err
-		}
-		for _, record := range records {
-			frames, err := stateDomainChangeBinaryAccessorV7PostingFrames(accessor, h, record)
-			if err != nil {
-				return err
-			}
-			for _, frame := range frames {
-				rows, err := stateDomainChangeBinaryAccessorV7ReadFrame(accessor, h, record, frame)
-				if err != nil {
-					return err
-				}
-				for _, p := range rows {
-					word, bit := uint64(p.recordIndex)/64, uint(p.recordIndex)%64
-					if seen[word]&(uint64(1)<<bit) != 0 {
-						return errors.New("snapshots: V7 accessor covers a history record twice")
-					}
-					change, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, p.offset, segmentSize, uint64(p.recordIndex))
-					if err != nil {
-						return err
-					}
-					if change.TxNum != p.txNum || !bytes.Equal(stateDomainChangeBinaryAccessorKey(change), record.key) {
-						return errors.New("snapshots: V7 accessor posting/history mismatch")
-					}
-					seen[word] |= uint64(1) << bit
-					covered++
-				}
-			}
-		}
-	}
-	if covered != h.recordCount {
-		return fmt.Errorf("snapshots: V7 accessor covers %d records, want %d", covered, h.recordCount)
-	}
-	return nil
 }
 
 func readStateDomainChangeBinaryAccessorV7Debug(accessor io.ReaderAt, accessorSize uint64) ([]stateDomainChangeBinaryAccessorEntry, error) {
