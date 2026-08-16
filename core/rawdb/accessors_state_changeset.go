@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -689,12 +690,34 @@ func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*Stat
 }
 
 func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	return IterateStateDomainChangesContext(context.Background(), db, blockNum, fn)
+}
+
+// IterateStateDomainChangesContext is the cancellable form used by archive
+// reads which may encounter large packed changesets while reconstructing one
+// historical state request.
+func IterateStateDomainChangesContext(ctx context.Context, db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	prefix := stateChangeSetBlockPrefix(blockNum)
 	it := db.NewIterator(prefix, nil)
 	defer it.Release()
 	var packed []*StateDomainChange
 	var packedExtras []*StateDomainChange
-	for it.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !it.Next() {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		key := it.Key()
 		if !bytes.HasPrefix(key, prefix) || len(key) != len(stateChangeSetPrefix)+16 {
 			continue
@@ -750,6 +773,9 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 		sort.Slice(packed, func(i, j int) bool { return packed[i].Seq < packed[j].Seq })
 	}
 	for _, row := range packed {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		cont, err := fn(row)
 		if err != nil {
 			return err
@@ -768,6 +794,20 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 // blockbuffer overlay iterator state once per block while preserving the same
 // block-pack/positive-sequence overwrite rules as IterateStateDomainChanges.
 func IterateStateDomainChangesByBlockRange(db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*StateDomainChange) (bool, error)) error {
+	return IterateStateDomainChangesByBlockRangeContext(context.Background(), db, fromBlock, toBlock, fn)
+}
+
+// IterateStateDomainChangesByBlockRangeContext is the cancellable form of the
+// ordered stage-tail scan. Cancellation is checked around iterator movement
+// and while flushing packed rows so a range containing no matching logical key
+// cannot keep an obsolete RPC alive.
+func IterateStateDomainChangesByBlockRangeContext(ctx context.Context, db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*StateDomainChange) (bool, error)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if fromBlock > toBlock {
 		return nil
 	}
@@ -788,6 +828,9 @@ func IterateStateDomainChangesByBlockRange(db ethdb.Iteratee, fromBlock, toBlock
 			sort.Slice(packed, func(i, j int) bool { return packed[i].Seq < packed[j].Seq })
 		}
 		for _, row := range packed {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
 			cont, err := fn(row)
 			if err != nil || !cont {
 				return cont, err
@@ -798,7 +841,16 @@ func IterateStateDomainChangesByBlockRange(db ethdb.Iteratee, fromBlock, toBlock
 		return true, nil
 	}
 
-	for it.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !it.Next() {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		key := it.Key()
 		if !bytes.HasPrefix(key, stateChangeSetPrefix) || len(key) != len(stateChangeSetPrefix)+16 {
 			continue
@@ -856,6 +908,9 @@ func IterateStateDomainChangesByBlockRange(db ethdb.Iteratee, fromBlock, toBlock
 		if callbackErr != nil || !cont {
 			return callbackErr
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := it.Error(); err != nil {
 		return err
@@ -1269,6 +1324,18 @@ func IterateStateDomainChangeBlocksByKeyRange(db ethdb.Iteratee, fromBlock, toBl
 // mutation after targetBlock. The posting reader stops after the first exact
 // candidate whose original latest key matches the changeset.
 func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*StateDomainChange, error) {
+	return ReadFirstStateDomainChangeByKeyBlockRangeContext(context.Background(), db, targetBlock, headBlock, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key)
+}
+
+// ReadFirstStateDomainChangeByKeyBlockRangeContext is the cancellable form
+// used by request-scoped archive reads.
+func ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx context.Context, db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*StateDomainChange, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if targetBlock >= headBlock || targetTxNum >= headTxNum {
 		return nil, nil
 	}
@@ -1281,12 +1348,12 @@ func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBl
 		indexedHead = headBlock
 	}
 	for fromBlock <= indexedHead {
-		blockNum, ok, err := firstStateDomainChangeBlockByKeyRange(db, fromBlock, indexedHead, staged, flatDomain, owner, generation, domain, key)
+		blockNum, ok, err := firstStateDomainChangeBlockByKeyRangeContext(ctx, db, fromBlock, indexedHead, flatDomain, owner, generation, domain, key)
 		if err != nil || !ok {
 			return nil, err
 		}
 		var first *StateDomainChange
-		if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+		if err := IterateStateDomainChangesContext(ctx, db, blockNum, func(change *StateDomainChange) (bool, error) {
 			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
 				!stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
 				return true, nil
@@ -1313,7 +1380,7 @@ func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBl
 			directFrom = indexedHead + 1
 		}
 		var first *StateDomainChange
-		if err := IterateStateDomainChangesByBlockRange(db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
+		if err := IterateStateDomainChangesByBlockRangeContext(ctx, db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
 			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
 				!stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
 				return true, nil
@@ -1336,7 +1403,19 @@ func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBl
 // instead of once per key. This is the common shape for historical dynamic
 // properties, where roughly a hundred keys share one owner and domain.
 func ReadFirstStateKVChangesByKeysBlockRange(db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte) (map[string]*StateDomainChange, error) {
+	return ReadFirstStateKVChangesByKeysBlockRangeContext(context.Background(), db, targetBlock, headBlock, targetTxNum, headTxNum, owner, generation, domain, keys)
+}
+
+// ReadFirstStateKVChangesByKeysBlockRangeContext is the cancellable form used
+// by historical dynamic-property batch reads.
+func ReadFirstStateKVChangesByKeysBlockRangeContext(ctx context.Context, db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte) (map[string]*StateDomainChange, error) {
 	first := make(map[string]*StateDomainChange, len(keys))
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if targetBlock >= headBlock || targetTxNum >= headTxNum || len(keys) == 0 {
 		return first, nil
 	}
@@ -1356,7 +1435,10 @@ func ReadFirstStateKVChangesByKeysBlockRange(db StateKVHistoryReader, targetBloc
 	}
 	if targetBlock < indexedHead {
 		for keyString, key := range wanted {
-			change, err := ReadFirstStateDomainChangeByKeyBlockRange(db, targetBlock, indexedHead, targetTxNum, headTxNum, StateFlatDomainKVLatest, owner, generation, domain, key)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			change, err := ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx, db, targetBlock, indexedHead, targetTxNum, headTxNum, StateFlatDomainKVLatest, owner, generation, domain, key)
 			if err != nil {
 				return nil, err
 			}
@@ -1376,7 +1458,7 @@ func ReadFirstStateKVChangesByKeysBlockRange(db StateKVHistoryReader, targetBloc
 		}
 		directFrom = indexedHead + 1
 	}
-	if err := IterateStateDomainChangesByBlockRange(db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
+	if err := IterateStateDomainChangesByBlockRangeContext(ctx, db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
 		if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
 			change.FlatDomain != StateFlatDomainKVLatest || change.Owner != owner ||
 			change.Generation != generation || change.Domain != domain {
@@ -1409,14 +1491,14 @@ func stateHistoryIndexedHead(db ethdb.KeyValueReader, headBlock uint64) (uint64,
 	return headBlock, true, nil
 }
 
-func firstStateDomainChangeBlockByKeyRange(db ethdb.Iteratee, fromBlock, toBlock uint64, _ bool, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (uint64, bool, error) {
+func firstStateDomainChangeBlockByKeyRangeContext(ctx context.Context, db ethdb.Iteratee, fromBlock, toBlock uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (uint64, bool, error) {
 	latestKey, ok := stateDomainChangeLatestKeyByKey(flatDomain, owner, generation, domain, key)
 	if !ok || fromBlock > toBlock {
 		return 0, false, nil
 	}
 	var first uint64
 	found := false
-	err := iterateStateDomainChangePostingBlocks(db, latestKey, fromBlock, toBlock, func(blockNum uint64) (bool, error) {
+	err := iterateStateDomainChangePostingBlocksContext(ctx, db, latestKey, fromBlock, toBlock, func(blockNum uint64) (bool, error) {
 		first = blockNum
 		found = true
 		return false, nil
@@ -1438,10 +1520,14 @@ func stateDomainChangeLatestKeyByKey(flatDomain StateFlatDomain, owner common.Ad
 }
 
 func iterateStateDomainChangePostingBlocks(db ethdb.Iteratee, latestKey []byte, fromBlock, toBlock uint64, fn func(uint64) (bool, error)) error {
-	return iterateStateChangePostingCandidates(db, latestKey, fromBlock, toBlock, func(blockNum uint64) (bool, error) {
+	return iterateStateDomainChangePostingBlocksContext(context.Background(), db, latestKey, fromBlock, toBlock, fn)
+}
+
+func iterateStateDomainChangePostingBlocksContext(ctx context.Context, db ethdb.Iteratee, latestKey []byte, fromBlock, toBlock uint64, fn func(uint64) (bool, error)) error {
+	return iterateStateChangePostingCandidatesContext(ctx, db, latestKey, fromBlock, toBlock, func(blockNum uint64) (bool, error) {
 		// SHA-256 is only a candidate selector. The changeset's reconstructed
 		// original latest key is the authoritative collision check.
-		matches, err := stateDomainChangeBlockMatchesLatestKey(db, blockNum, latestKey)
+		matches, err := stateDomainChangeBlockMatchesLatestKeyContext(ctx, db, blockNum, latestKey)
 		if err != nil || !matches {
 			return err == nil, err
 		}
@@ -1449,9 +1535,9 @@ func iterateStateDomainChangePostingBlocks(db ethdb.Iteratee, latestKey []byte, 
 	})
 }
 
-func stateDomainChangeBlockMatchesLatestKey(db ethdb.Iteratee, blockNum uint64, latestKey []byte) (bool, error) {
+func stateDomainChangeBlockMatchesLatestKeyContext(ctx context.Context, db ethdb.Iteratee, blockNum uint64, latestKey []byte) (bool, error) {
 	found := false
-	err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+	err := IterateStateDomainChangesContext(ctx, db, blockNum, func(change *StateDomainChange) (bool, error) {
 		candidate, err := stateDomainChangeLatestKey(change)
 		if err != nil {
 			return false, err

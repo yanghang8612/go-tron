@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -1022,6 +1023,26 @@ func TestReadFirstStateDomainChangeByKeyBlockRangeUsesPostingIterator(t *testing
 	}
 }
 
+func TestReadFirstStateDomainChangeByKeyBlockRangeContextCancelsDuringPostingScan(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x39}
+	key := []byte("reward/cancel-posting")
+	if err := WriteStateDomainChange(base, &StateDomainChange{
+		BlockNum: 100, TxNum: 100, Seq: 1,
+		FlatDomain: StateFlatDomainKVLatest, Owner: owner, Generation: 1,
+		Domain: kvdomains.SystemReward, Key: key,
+		PrevExists: true, Prev: []byte("before"), NextExists: true, Next: []byte("after"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	db := &cancelingPostingHistoryDB{Database: base, cancel: cancel}
+	_, err := ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx, db, 99, 100, 99, 100, StateFlatDomainKVLatest, owner, 1, kvdomains.SystemReward, key)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled posting scan err = %v, want context.Canceled", err)
+	}
+}
+
 func TestReadFirstStateDomainChangeByKeyBlockRangeUsesPostingForStagedIndex(t *testing.T) {
 	base := ethrawdb.NewMemoryDatabase()
 	db := &prefixSeekingHistoryDB{Database: base}
@@ -1336,6 +1357,34 @@ type prefixSeekingHistoryDB struct {
 	inverseIteratorCalls     int
 	changeBlockIteratorCalls int
 	changeRangeIteratorCalls int
+}
+
+type cancelingPostingHistoryDB struct {
+	ethdb.Database
+	cancel   context.CancelFunc
+	canceled bool
+}
+
+func (db *cancelingPostingHistoryDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	it := db.Database.NewIterator(prefix, start)
+	if !bytes.HasPrefix(prefix, stateChangePostingPrefix) {
+		return it
+	}
+	return &cancelingPostingIterator{Iterator: it, db: db}
+}
+
+type cancelingPostingIterator struct {
+	ethdb.Iterator
+	db *cancelingPostingHistoryDB
+}
+
+func (it *cancelingPostingIterator) Next() bool {
+	ok := it.Iterator.Next()
+	if ok && !it.db.canceled {
+		it.db.canceled = true
+		it.db.cancel()
+	}
+	return ok
 }
 
 func (db *prefixSeekingHistoryDB) SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {

@@ -66,6 +66,75 @@ func TestPersistentHistoryReaderBoundsHotHistoryAtPrunedColdBoundary(t *testing.
 	}
 }
 
+func TestPersistentHistoryReaderBatchKVAsOfUsesPrunedColdBoundary(t *testing.T) {
+	base := ethrawdb.NewMemoryDatabase()
+	for _, blockNum := range []uint64{1, 20} {
+		if err := rawdb.WriteStateTxRange(base, blockNum, tcommon.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner := testAddr(0x42)
+	domain := kvdomains.SystemDynamicProperty
+	key := []byte("boundary")
+	if err := rawdb.WriteStateDomainChange(base, &rawdb.StateDomainChange{
+		BlockNum: 3, TxNum: 3, Seq: 1,
+		FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner,
+		Domain: domain, Key: key, PrevExists: true, Prev: []byte("old"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture the opaque physical prefix used to inspect block 3, then verify
+	// the batch path never opens it once cold history has pruned through 10.
+	probe := &prefixRecordingDB{readerDB: base}
+	if err := rawdb.IterateStateDomainChanges(probe, 3, func(*rawdb.StateDomainChange) (bool, error) { return true, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(probe.prefixes) != 1 {
+		t.Fatalf("probe iterator prefixes = %d, want 1", len(probe.prefixes))
+	}
+	staleBlockPrefix := append([]byte(nil), probe.prefixes[0]...)
+
+	recording := &prefixRecordingDB{readerDB: base}
+	reader := NewPersistentHistoryReaderWithColdHistory(
+		recording,
+		nil,
+		20,
+		&hotPruneBoundaryColdHistory{block: 10, present: true},
+	)
+	if err := reader.SetHotHistoryBlockRange(1, 20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.readStateKVBatchAsOf(owner, 0, domain, [][]byte{key}, 1, 20); err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range recording.prefixes {
+		if bytes.Equal(prefix, staleBlockPrefix) {
+			t.Fatalf("batch history read inspected pruned hot changeset block 3: %x", prefix)
+		}
+	}
+}
+
+func TestPersistentHistoryReaderBatchKVAsOfHonorsCanceledContext(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	for _, blockNum := range []uint64{1, 2} {
+		if err := rawdb.WriteStateTxRange(db, blockNum, tcommon.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader := NewPersistentHistoryReader(db, nil, 2)
+	if err := reader.SetHotHistoryBlockRange(1, 2); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reader.SetContext(ctx)
+	_, err := reader.readStateKVBatchAsOf(testAddr(0x43), 0, kvdomains.SystemDynamicProperty, [][]byte{[]byte("cancel")}, 1, 2)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("batch canceled history err = %v, want context.Canceled", err)
+	}
+}
+
 func TestPersistentHistoryReaderSurfacesHotPruneBoundaryError(t *testing.T) {
 	want := errors.New("manifest unavailable")
 	reader := NewPersistentHistoryReaderWithColdHistory(

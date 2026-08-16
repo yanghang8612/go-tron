@@ -236,15 +236,33 @@ func readLiveStateChangePosting(db StateKVLatestStore, key []byte, blockNum uint
 	return append([]byte(nil), value...), true, nil
 }
 
-// iterateStateChangePostingCandidates walks hash candidates in block order.
-// Every candidate must subsequently be checked against the original latest key
-// reconstructed from its authoritative changeset.
-func iterateStateChangePostingCandidates(db ethdb.Iteratee, latestKey []byte, fromBlock, toBlock uint64, fn func(uint64) (bool, error)) error {
+// iterateStateChangePostingCandidatesContext is the cancellable form used by
+// archive RPC reads. It walks hash candidates in block order; every candidate
+// must subsequently be checked against the original latest key reconstructed
+// from its authoritative changeset. Posting frames can outlive their pruned
+// authoritative changesets, so a canceled request must stop while skipping
+// stale candidates rather than only after a matching callback is reached.
+func iterateStateChangePostingCandidatesContext(ctx context.Context, db ethdb.Iteratee, latestKey []byte, fromBlock, toBlock uint64, fn func(uint64) (bool, error)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	hash := stateChangePostingHash(latestKey)
 	prefix := stateChangePostingHashPrefix(hash)
 	it := db.NewIterator(prefix, nil)
 	defer it.Release()
-	for it.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !it.Next() {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		key := it.Key()
 		if len(key) != len(prefix)+8 || !bytes.HasPrefix(key, prefix) {
 			continue
@@ -261,11 +279,17 @@ func iterateStateChangePostingCandidates(db ethdb.Iteratee, latestKey []byte, fr
 			if blockNum > toBlock {
 				break
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			cont, err := fn(blockNum)
 			if err != nil || !cont {
 				return err
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return it.Error()
 }

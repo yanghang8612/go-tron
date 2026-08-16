@@ -724,6 +724,9 @@ func (r *PersistentHistoryReader) readStateKVBatchAsOf(owner tcommon.Address, ge
 	if len(keys) == 0 {
 		return out, nil
 	}
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
 	targetTxNum, err := r.stateTxNumAtBlockEnd(targetBlock)
 	if err != nil {
 		return nil, err
@@ -746,7 +749,7 @@ func (r *PersistentHistoryReader) readStateKVBatchAsOf(owner tcommon.Address, ge
 		}
 		return out, nil
 	}
-	hotFirst, err := rawdb.ReadFirstStateKVChangesByKeysBlockRange(r.db, targetBlock, headBlock, targetTxNum, headTxNum, owner, generation, domain, keys)
+	hotFirst, err := rawdb.ReadFirstStateKVChangesByKeysBlockRangeContext(r.ctx, r.db, r.hotHistoryFromBlock, r.hotHistoryToBlock, targetTxNum, headTxNum, owner, generation, domain, keys)
 	if err != nil {
 		return nil, err
 	}
