@@ -31,6 +31,14 @@ type stateDomainChangeBinaryAccessorV7Frame struct {
 	crc     uint32
 }
 
+type stateDomainChangeBinaryAccessorV7PostingDirectory struct {
+	base       uint64
+	frameCount uint64
+	prefixLen  uint64
+	dataStart  uint64
+	single     bool
+}
+
 func decodeStateDomainChangeBinaryAccessorV7Header(r io.ReaderAt, fileSize uint64) (stateDomainChangeBinaryAccessorV6Header, error) {
 	if fileSize < stateDomainChangeBinaryAccessorV7HeaderSize {
 		return stateDomainChangeBinaryAccessorV6Header{}, io.ErrUnexpectedEOF
@@ -294,49 +302,23 @@ func decodeStateDomainChangeBinaryAccessorV7Frame(raw []byte, fromTxNum uint64, 
 }
 
 func stateDomainChangeBinaryAccessorV7PostingFrames(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record) ([]stateDomainChangeBinaryAccessorV7Frame, error) {
-	base := h.headerSize + h.blockDirLen + h.keyDataLen + record.postingOff
-	if record.postingOff >= h.postingLen {
-		return nil, errors.New("snapshots: V7 accessor posting offset outside section")
-	}
-	var marker [1]byte
-	if _, err := r.ReadAt(marker[:], int64(base)); err != nil {
+	directory, err := stateDomainChangeBinaryAccessorV7OpenPostingDirectory(r, h, record)
+	if err != nil {
 		return nil, err
 	}
-	if marker[0] == stateDomainChangeBinaryAccessorV7Single {
-		if record.postings > stateDomainChangeBinaryAccessorV7FramePostings {
-			return nil, errors.New("snapshots: oversized V7 single posting frame")
-		}
-		// Single frames are decoded by the bounded streaming helper below.
+	if directory.single {
 		return []stateDomainChangeBinaryAccessorV7Frame{{count: uint16(record.postings), dataOff: 1}}, nil
 	}
-	if marker[0] != stateDomainChangeBinaryAccessorV7Framed {
-		return nil, errors.New("snapshots: invalid V7 accessor posting marker")
-	}
-	reader := io.NewSectionReader(r, int64(base+1), int64(h.postingLen-record.postingOff-1))
-	frameCount, err := binary.ReadUvarint(&readerByteReader{r: reader})
-	if err != nil || frameCount < 2 || frameCount != ceilDiv(uint64(record.postings), uint64(stateDomainChangeBinaryAccessorV7FramePostings)) || frameCount > math.MaxUint32 {
-		return nil, errors.New("snapshots: invalid V7 accessor posting frame count")
-	}
-	prefixLen := uint64(1 + uvarintLen(frameCount))
-	if frameCount > (h.postingLen-record.postingOff-prefixLen)/stateDomainChangeBinaryAccessorV7FrameDirSize {
-		return nil, errors.New("snapshots: V7 accessor posting directory exceeds section")
-	}
-	frames := make([]stateDomainChangeBinaryAccessorV7Frame, frameCount)
-	var raw [stateDomainChangeBinaryAccessorV7FrameDirSize]byte
+	frames := make([]stateDomainChangeBinaryAccessorV7Frame, directory.frameCount)
 	var total uint64
 	var previousTx uint64
-	dataStart := prefixLen + frameCount*stateDomainChangeBinaryAccessorV7FrameDirSize
-	dataEnd := dataStart
-	for i := uint64(0); i < frameCount; i++ {
-		if _, err := r.ReadAt(raw[:], int64(base+prefixLen+i*stateDomainChangeBinaryAccessorV7FrameDirSize)); err != nil {
+	dataEnd := directory.dataStart
+	for i := uint64(0); i < directory.frameCount; i++ {
+		frame, err := stateDomainChangeBinaryAccessorV7ReadPostingDirectoryFrame(r, h, record, directory, i)
+		if err != nil {
 			return nil, err
 		}
-		if raw[18] != 0 || raw[19] != 0 {
-			return nil, errors.New("snapshots: non-zero V7 accessor frame reserved bytes")
-		}
-		frame := stateDomainChangeBinaryAccessorV7Frame{firstTx: binary.BigEndian.Uint64(raw[0:8]), dataOff: binary.BigEndian.Uint32(raw[8:12]), dataLen: binary.BigEndian.Uint32(raw[12:16]), count: binary.BigEndian.Uint16(raw[16:18]), crc: binary.BigEndian.Uint32(raw[20:24])}
-		wantCount := min(uint64(stateDomainChangeBinaryAccessorV7FramePostings), uint64(record.postings)-total)
-		if uint64(frame.count) != wantCount || uint64(frame.dataOff) != dataEnd || uint64(frame.dataLen) > h.postingLen-record.postingOff-dataEnd || i > 0 && frame.firstTx < previousTx {
+		if uint64(frame.dataOff) != dataEnd || i > 0 && frame.firstTx < previousTx {
 			return nil, errors.New("snapshots: invalid V7 accessor posting frame directory")
 		}
 		frames[i] = frame
@@ -348,6 +330,67 @@ func stateDomainChangeBinaryAccessorV7PostingFrames(r io.ReaderAt, h stateDomain
 		return nil, errors.New("snapshots: V7 accessor posting frame count mismatch")
 	}
 	return frames, nil
+}
+
+func stateDomainChangeBinaryAccessorV7OpenPostingDirectory(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record) (stateDomainChangeBinaryAccessorV7PostingDirectory, error) {
+	base := h.headerSize + h.blockDirLen + h.keyDataLen + record.postingOff
+	if record.postingOff >= h.postingLen {
+		return stateDomainChangeBinaryAccessorV7PostingDirectory{}, errors.New("snapshots: V7 accessor posting offset outside section")
+	}
+	var marker [1]byte
+	if _, err := r.ReadAt(marker[:], int64(base)); err != nil {
+		return stateDomainChangeBinaryAccessorV7PostingDirectory{}, err
+	}
+	if marker[0] == stateDomainChangeBinaryAccessorV7Single {
+		if record.postings > stateDomainChangeBinaryAccessorV7FramePostings {
+			return stateDomainChangeBinaryAccessorV7PostingDirectory{}, errors.New("snapshots: oversized V7 single posting frame")
+		}
+		return stateDomainChangeBinaryAccessorV7PostingDirectory{base: base, frameCount: 1, prefixLen: 1, dataStart: 1, single: true}, nil
+	}
+	if marker[0] != stateDomainChangeBinaryAccessorV7Framed {
+		return stateDomainChangeBinaryAccessorV7PostingDirectory{}, errors.New("snapshots: invalid V7 accessor posting marker")
+	}
+	reader := io.NewSectionReader(r, int64(base+1), int64(h.postingLen-record.postingOff-1))
+	frameCount, err := binary.ReadUvarint(&readerByteReader{r: reader})
+	if err != nil || frameCount < 2 || frameCount != ceilDiv(uint64(record.postings), uint64(stateDomainChangeBinaryAccessorV7FramePostings)) || frameCount > math.MaxUint32 {
+		return stateDomainChangeBinaryAccessorV7PostingDirectory{}, errors.New("snapshots: invalid V7 accessor posting frame count")
+	}
+	prefixLen := uint64(1 + uvarintLen(frameCount))
+	if frameCount > (h.postingLen-record.postingOff-prefixLen)/stateDomainChangeBinaryAccessorV7FrameDirSize {
+		return stateDomainChangeBinaryAccessorV7PostingDirectory{}, errors.New("snapshots: V7 accessor posting directory exceeds section")
+	}
+	dataStart := prefixLen + frameCount*stateDomainChangeBinaryAccessorV7FrameDirSize
+	if dataStart > math.MaxUint32 {
+		return stateDomainChangeBinaryAccessorV7PostingDirectory{}, errors.New("snapshots: V7 accessor posting directory is too large")
+	}
+	return stateDomainChangeBinaryAccessorV7PostingDirectory{base: base, frameCount: frameCount, prefixLen: prefixLen, dataStart: dataStart}, nil
+}
+
+func stateDomainChangeBinaryAccessorV7ReadPostingDirectoryFrame(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record, directory stateDomainChangeBinaryAccessorV7PostingDirectory, index uint64) (stateDomainChangeBinaryAccessorV7Frame, error) {
+	if directory.single {
+		if index != 0 {
+			return stateDomainChangeBinaryAccessorV7Frame{}, io.EOF
+		}
+		return stateDomainChangeBinaryAccessorV7Frame{count: uint16(record.postings), dataOff: 1}, nil
+	}
+	if index >= directory.frameCount {
+		return stateDomainChangeBinaryAccessorV7Frame{}, io.EOF
+	}
+	var raw [stateDomainChangeBinaryAccessorV7FrameDirSize]byte
+	if _, err := r.ReadAt(raw[:], int64(directory.base+directory.prefixLen+index*stateDomainChangeBinaryAccessorV7FrameDirSize)); err != nil {
+		return stateDomainChangeBinaryAccessorV7Frame{}, err
+	}
+	if raw[18] != 0 || raw[19] != 0 {
+		return stateDomainChangeBinaryAccessorV7Frame{}, errors.New("snapshots: non-zero V7 accessor frame reserved bytes")
+	}
+	frame := stateDomainChangeBinaryAccessorV7Frame{firstTx: binary.BigEndian.Uint64(raw[0:8]), dataOff: binary.BigEndian.Uint32(raw[8:12]), dataLen: binary.BigEndian.Uint32(raw[12:16]), count: binary.BigEndian.Uint16(raw[16:18]), crc: binary.BigEndian.Uint32(raw[20:24])}
+	consumed := index * uint64(stateDomainChangeBinaryAccessorV7FramePostings)
+	wantCount := min(uint64(stateDomainChangeBinaryAccessorV7FramePostings), uint64(record.postings)-consumed)
+	sectionLen := h.postingLen - record.postingOff
+	if uint64(frame.count) != wantCount || uint64(frame.dataOff) < directory.dataStart || uint64(frame.dataOff) > sectionLen || uint64(frame.dataLen) > sectionLen-uint64(frame.dataOff) || index == 0 && uint64(frame.dataOff) != directory.dataStart {
+		return stateDomainChangeBinaryAccessorV7Frame{}, errors.New("snapshots: invalid V7 accessor posting frame directory")
+	}
+	return frame, nil
 }
 
 type readerByteReader struct{ r io.Reader }
@@ -507,16 +550,41 @@ func (c *stateDomainChangeBinaryAccessorV7Cursor) uvarint() (uint64, []byte, err
 }
 
 func iterateStateDomainChangeBinarySegmentByAccessorV7Record(segment io.ReaderAt, segmentSize uint64, accessor io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
-	frames, err := stateDomainChangeBinaryAccessorV7PostingFrames(accessor, h, record)
+	directory, err := stateDomainChangeBinaryAccessorV7OpenPostingDirectory(accessor, h, record)
 	if err != nil {
 		return err
 	}
-	start := sort.Search(len(frames), func(i int) bool { return frames[i].firstTx >= fromTxNum })
+	low, high := uint64(0), directory.frameCount
+	for low < high {
+		mid := low + (high-low)/2
+		frame, err := stateDomainChangeBinaryAccessorV7ReadPostingDirectoryFrame(accessor, h, record, directory, mid)
+		if err != nil {
+			return err
+		}
+		if frame.firstTx < fromTxNum {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	start := low
 	if start > 0 {
 		start--
 	}
-	for i := start; i < len(frames); i++ {
-		postings, err := stateDomainChangeBinaryAccessorV7ReadFrame(accessor, h, record, frames[i])
+	var previous stateDomainChangeBinaryAccessorV7Frame
+	havePrevious := false
+	for i := start; i < directory.frameCount; i++ {
+		frame, err := stateDomainChangeBinaryAccessorV7ReadPostingDirectoryFrame(accessor, h, record, directory, i)
+		if err != nil {
+			return err
+		}
+		if havePrevious && (frame.firstTx < previous.firstTx || uint64(frame.dataOff) != uint64(previous.dataOff)+uint64(previous.dataLen)) {
+			return errors.New("snapshots: invalid V7 accessor posting frame sequence")
+		}
+		if i > start && frame.firstTx > toTxNum {
+			return nil
+		}
+		postings, err := stateDomainChangeBinaryAccessorV7ReadFrame(accessor, h, record, frame)
 		if err != nil {
 			return err
 		}
@@ -539,6 +607,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorV7Record(segment io.ReaderAt
 				return err
 			}
 		}
+		previous, havePrevious = frame, true
 	}
 	return nil
 }
@@ -568,30 +637,58 @@ func iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext(ctx context.Co
 	if err != nil {
 		return err
 	}
-	blocks, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectory(accessor, h)
-	if err != nil {
-		return err
-	}
 	keys := make([][]byte, len(lookupKeys))
 	copy(keys, lookupKeys)
 	sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i], keys[j]) < 0 })
-	loadedBlock := -1
-	var records []stateDomainChangeBinaryAccessorV6Record
+	// A production accessor can contain tens of thousands of key blocks. Do
+	// not eagerly read its full directory for a batch of roughly one hundred
+	// dynamic-property keys: on a compressed reader that turns a point lookup
+	// into a multi-gigabyte directory walk. Cache only directory entries touched
+	// by binary searches and key blocks that actually contain requested keys.
+	directory := make(map[uint64]stateDomainChangeBinaryAccessorV6Block)
+	readDirectory := func(index uint64) (stateDomainChangeBinaryAccessorV6Block, error) {
+		if block, ok := directory[index]; ok {
+			return block, nil
+		}
+		block, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(accessor, h, index)
+		if err == nil {
+			directory[index] = block
+		}
+		return block, err
+	}
+	recordBlocks := make(map[uint64][]stateDomainChangeBinaryAccessorV6Record)
 	for _, lookupKey := range keys {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		upper := sort.Search(len(blocks), func(i int) bool { return bytes.Compare(blocks[i].firstKey, lookupKey) > 0 })
-		if upper == 0 {
-			continue
-		}
-		blockIndex := upper - 1
-		if loadedBlock != blockIndex {
-			records, err = stateDomainChangeBinaryAccessorV6ReadBlock(accessor, accessorSize, h, blocks[blockIndex], uint32(blockIndex*stateDomainChangeBinaryAccessorV6BlockKeys))
+		low, high := uint64(0), h.blockCount
+		for low < high {
+			mid := low + (high-low)/2
+			block, err := readDirectory(mid)
 			if err != nil {
 				return err
 			}
-			loadedBlock = blockIndex
+			if bytes.Compare(block.firstKey, lookupKey) <= 0 {
+				low = mid + 1
+			} else {
+				high = mid
+			}
+		}
+		if low == 0 {
+			continue
+		}
+		blockIndex := low - 1
+		records, ok := recordBlocks[blockIndex]
+		if !ok {
+			block, err := readDirectory(blockIndex)
+			if err != nil {
+				return err
+			}
+			records, err = stateDomainChangeBinaryAccessorV6ReadBlock(accessor, accessorSize, h, block, uint32(blockIndex*stateDomainChangeBinaryAccessorV6BlockKeys))
+			if err != nil {
+				return err
+			}
+			recordBlocks[blockIndex] = records
 		}
 		pos := sort.Search(len(records), func(i int) bool { return bytes.Compare(records[i].key, lookupKey) >= 0 })
 		if pos == len(records) || !bytes.Equal(records[pos].key, lookupKey) {
