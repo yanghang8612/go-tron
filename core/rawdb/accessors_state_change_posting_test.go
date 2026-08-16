@@ -264,8 +264,8 @@ func TestPruneStaleStateChangePostingIndexThroughUsesLiveHashDirectory(t *testin
 	if stats.PostingRowsScanned != 2 || stats.PostingRowsDeleted != 1 || stats.DirectoryRowsScanned != 2 || stats.DirectoryRowsDeleted != 1 {
 		t.Fatalf("watermark prune stats = %+v", stats)
 	}
-	if countingDB.iterators != 3 {
-		t.Fatalf("watermark prune iterators = %d, want posting + one crossing changeset + directory", countingDB.iterators)
+	if countingDB.iterators != 2 {
+		t.Fatalf("watermark prune iterators = %d, want only posting + directory", countingDB.iterators)
 	}
 	if !slices.Contains(phases, "postings-complete") || !slices.Contains(phases, "directory-complete") {
 		t.Fatalf("progress phases = %v", phases)

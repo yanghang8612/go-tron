@@ -494,9 +494,9 @@ func PruneStaleStateChangePostingIndexContext(ctx context.Context, db ethdb.KeyV
 // PruneStaleStateChangePostingIndexThroughContext reclaims immutable posting
 // frames after hot StateDomainChanges have durably been pruned through the
 // inclusive block watermark. Frames ending at or below the watermark can be
-// deleted by one sequential scan without random changeset reads. A frame that
-// crosses the watermark is retained if any newer authoritative changeset is
-// still live.
+// deleted by one sequential scan without random changeset reads. Frames that
+// cross the watermark are conservatively retained until a later pass advances
+// beyond them.
 func PruneStaleStateChangePostingIndexThroughContext(ctx context.Context, db ethdb.KeyValueStore, prunedThrough uint64) (StateChangePostingPruneResult, error) {
 	return pruneStaleStateChangePostingIndex(ctx, db, prunedThrough, true, nil)
 }
@@ -516,13 +516,15 @@ func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueSto
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	// With a durable watermark, retain the exact set of hashes which still
-	// have a live posting. The following directory sweep can then perform two
-	// ordered scans instead of opening one Pebble iterator per logical key.
-	// The set is bounded by the unpruned hot suffix rather than all history.
-	var livePostingHashes map[[sha256.Size]byte]struct{}
+	// With a durable watermark, retain a conservative fingerprint set for
+	// hashes which still have a posting. The following directory sweep can then
+	// perform two ordered scans instead of opening one Pebble iterator per
+	// logical key. A 64-bit collision can only retain an orphan directory; it
+	// can never delete a live one. The set is bounded by the unpruned hot suffix
+	// rather than all history.
+	var livePostingFingerprints map[uint64]struct{}
 	if hasPruneWatermark {
-		livePostingHashes = make(map[[sha256.Size]byte]struct{})
+		livePostingFingerprints = make(map[uint64]struct{})
 	}
 	report := func(phase string) {
 		if progress != nil {
@@ -550,15 +552,14 @@ func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueSto
 			return result, err
 		}
 		wantHash := key[len(stateChangePostingPrefix) : len(stateChangePostingPrefix)+sha256.Size]
-		live := false
 		// Hot-prune progress advances only after all authoritative changesets in
-		// the covered prefix have been deleted. Trust that durable boundary and
-		// reserve point/range reads for the at most one crossing frame per hash.
-		if !hasPruneWatermark || blocks[len(blocks)-1] > prunedThrough {
+		// the covered prefix have been deleted. Trust that durable boundary. A
+		// frame crossing the boundary is conservatively retained; verifying it
+		// with random changeset reads would turn an otherwise ordered scan into
+		// hours of point/range I/O on a large hot suffix.
+		live := hasPruneWatermark && blocks[len(blocks)-1] > prunedThrough
+		if !hasPruneWatermark {
 			for _, blockNum := range blocks {
-				if hasPruneWatermark && blockNum <= prunedThrough {
-					continue
-				}
 				if err := ctx.Err(); err != nil {
 					postingIt.Release()
 					return result, err
@@ -594,9 +595,7 @@ func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueSto
 			}
 			result.PostingRowsDeleted++
 		} else if hasPruneWatermark {
-			var hash [sha256.Size]byte
-			copy(hash[:], wantHash)
-			livePostingHashes[hash] = struct{}{}
+			livePostingFingerprints[binary.BigEndian.Uint64(wantHash)] = struct{}{}
 		}
 		if result.PostingRowsScanned%stateChangePostingPruneProgressRows == 0 {
 			report("postings")
@@ -635,7 +634,7 @@ func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueSto
 		hash := stateChangePostingHash(key[len(stateChangeKeyDirectoryPrefix):])
 		hasPosting := false
 		if hasPruneWatermark {
-			_, hasPosting = livePostingHashes[hash]
+			_, hasPosting = livePostingFingerprints[binary.BigEndian.Uint64(hash[:])]
 		} else {
 			it := db.NewIterator(stateChangePostingHashPrefix(hash), nil)
 			hasPosting = it.Next()
