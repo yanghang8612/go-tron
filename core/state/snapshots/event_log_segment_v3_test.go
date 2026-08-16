@@ -22,7 +22,7 @@ func TestEventLogV3BuildVerifyLookupAndMixedManifest(t *testing.T) {
 		eventLogV3TestRow(1, 0, 0, addrA, common.Hash{0x11}, common.Hash{0x21}, topicA, bytes.Repeat([]byte{0x01}, 200)),
 		eventLogV3TestRow(1, 0, 1, addrB, common.Hash{0x11}, common.Hash{0x21}, topicB, bytes.Repeat([]byte{0x02}, 33000)),
 		eventLogV3TestRow(2, 0, 0, addrA, common.Hash{0x12}, common.Hash{0x22}, topicB, bytes.Repeat([]byte{0x03}, 300)),
-		{BlockNum: 2, TxIndex: 1, LogIndex: 1, TxHash: common.Hash{0x13}, BlockHash: common.Hash{0x22}, Address: addrB, Log: &corepb.TransactionInfo_Log{Address: append([]byte(nil), addrB[:]...)}},
+		{BlockNum: 2, TxIndex: 1, LogIndex: 1, TxHash: common.Hash{0x13}, BlockHash: common.Hash{0x22}, Address: addrB, Log: &corepb.TransactionInfo_Log{Address: eventLogV3PayloadAddress(addrB)}},
 	}
 	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 2)
 	if err != nil {
@@ -59,7 +59,7 @@ func TestEventLogV3BuildVerifyLookupAndMixedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IterateEventLogs V3: %v", err)
 	}
-	if len(got) != 1 || got[0].BlockNum != 2 || !bytes.Equal(got[0].Log.GetAddress(), addrA[:]) || len(got[0].Log.GetData()) != 300 {
+	if len(got) != 1 || got[0].BlockNum != 2 || !bytes.Equal(got[0].Log.GetAddress(), eventLogV3PayloadAddress(addrA)) || len(got[0].Log.GetData()) != 300 {
 		t.Fatalf("V3 filtered rows = %+v", got)
 	}
 }
@@ -107,7 +107,7 @@ func TestEventLogV3RejectsCorruptPayloadFrame(t *testing.T) {
 func TestEventLogV3AllowsAddressOnlyLogWithEmptyStrippedPayload(t *testing.T) {
 	dir := t.TempDir()
 	address := common.BytesToAddress(eventLogTestAddress(0x42))
-	row := EventLog{BlockNum: 1, TxHash: common.Hash{1}, BlockHash: common.Hash{2}, Address: address, Log: &corepb.TransactionInfo_Log{Address: append([]byte(nil), address[:]...)}}
+	row := EventLog{BlockNum: 1, TxHash: common.Hash{1}, BlockHash: common.Hash{2}, Address: address, Log: &corepb.TransactionInfo_Log{Address: eventLogV3PayloadAddress(address)}}
 	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
 	if err != nil {
 		t.Fatalf("BuildEventLogV3SegmentFromReader empty payload: %v", err)
@@ -137,6 +137,32 @@ func TestEventLogV3NormalizesTwentyByteTVMAddress(t *testing.T) {
 	}
 	if got.Address != address || eventLogAddress(got.Log.GetAddress()) != address {
 		t.Fatalf("normalized address = %x payload=%x, want %x", got.Address, got.Log.GetAddress(), address)
+	}
+	if !bytes.Equal(got.Log.GetAddress(), rawAddress) {
+		t.Fatalf("payload address width changed: got %x (%d bytes), want %x (%d bytes)", got.Log.GetAddress(), len(got.Log.GetAddress()), rawAddress, len(rawAddress))
+	}
+}
+
+func TestEventLogV3PreservesTwentyOneByteTronAddress(t *testing.T) {
+	dir := t.TempDir()
+	rawAddress := append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x75}, common.AddressLength-1)...)
+	address := common.BytesToAddress(rawAddress)
+	row := EventLog{BlockNum: 1, TxHash: common.Hash{1}, BlockHash: common.Hash{2}, Address: address, Log: &corepb.TransactionInfo_Log{Address: rawAddress, Data: []byte{1}}}
+	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogV3SegmentFromReader 21-byte address: %v", err)
+	}
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seg.Close()
+	var got EventLog
+	if err := seg.IterateLogs(1, 1, EventLogFilter{}, func(row EventLog) (bool, error) { got = row; return true, nil }); err != nil {
+		t.Fatalf("IterateLogs 21-byte address: %v", err)
+	}
+	if !bytes.Equal(got.Log.GetAddress(), rawAddress) {
+		t.Fatalf("payload address width changed: got %x (%d bytes), want %x (%d bytes)", got.Log.GetAddress(), len(got.Log.GetAddress()), rawAddress, len(rawAddress))
 	}
 }
 
@@ -368,6 +394,6 @@ func TestMigrateSingleEventLogV3PreservesCrossingGlobalIndex(t *testing.T) {
 func eventLogV3TestRow(block, tx, log uint64, address common.Address, txHash, blockHash, topic common.Hash, data []byte) EventLog {
 	return EventLog{
 		BlockNum: block, TxIndex: tx, LogIndex: log, TxHash: txHash, BlockHash: blockHash, Address: address,
-		Log: &corepb.TransactionInfo_Log{Address: append([]byte(nil), address[:]...), Topics: [][]byte{append([]byte(nil), topic[:]...)}, Data: data},
+		Log: &corepb.TransactionInfo_Log{Address: eventLogV3PayloadAddress(address), Topics: [][]byte{append([]byte(nil), topic[:]...)}, Data: data},
 	}
 }

@@ -30,7 +30,7 @@ func TestEventLogV3CompactLookupSpaceAndFilterSemantics(t *testing.T) {
 		binary.BigEndian.PutUint64(txHash[common.HashLength-8:], i+1)
 		rows = append(rows, EventLog{
 			BlockNum: 1, TxIndex: i, LogIndex: i, TxHash: txHash, BlockHash: common.Hash{0x71}, Address: address,
-			Log: &corepb.TransactionInfo_Log{Address: append([]byte(nil), address[:]...), Topics: [][]byte{topic[:]}, Data: []byte{byte(i)}},
+			Log: &corepb.TransactionInfo_Log{Address: eventLogV3PayloadAddress(address), Topics: [][]byte{topic[:]}, Data: []byte{byte(i)}},
 		})
 		legacyTopicPostingBytes += uvarintBytes(i)
 	}

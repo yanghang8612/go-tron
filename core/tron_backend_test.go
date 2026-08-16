@@ -2215,6 +2215,56 @@ func TestTronBackend_GetLogsUsesColdEventLogSegment(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetLogsV3PayloadMatchesCanonicalTwentyByteAddress(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x34)
+	topic := tcommon.Hash{0x34}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x34, 0x35},
+	})
+	block2, _ := testBackendLogBlock(2, nil)
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block2)
+
+	dir := t.TempDir()
+	if _, err := statesnapshots.NewAggregator(dir).BuildEventLogsWithBuildOptions(bc.ChainDB(), 1, 1, statesnapshots.EventLogBuildOptions{Version: statesnapshots.EventLogSegmentV3Version}); err != nil {
+		t.Fatalf("BuildEventLogsWithBuildOptions V3: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	bc.ChainDB().SetEventLogReader(mgr)
+
+	from, to := uint64(1), uint64(1)
+	logs, err := (&TronBackend{chain: bc}).GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs with canonical V3 validation: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs with canonical V3 validation returned %d logs, want 1", len(logs))
+	}
+	if got := logs[0]; got.Address != fmt.Sprintf("0x%x", logAddress) || got.Data != "0x3435" {
+		t.Fatalf("canonical V3 log = %+v, want address 0x%x data 0x3435", got, logAddress)
+	}
+}
+
 func TestTronBackend_GetLogsUsesColdEventLogSegmentWithIncompleteHotTransactionInfo(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()

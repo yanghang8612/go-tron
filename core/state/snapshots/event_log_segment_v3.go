@@ -1268,12 +1268,27 @@ func (s *EventLogSegment) materializeEventLogV3(row eventLogV3Row) (EventLog, er
 	if err := proto.Unmarshal(decoded[row.payloadOffset:end], &log); err != nil {
 		return EventLog{}, err
 	}
-	log.Address = append([]byte(nil), address[:]...)
+	log.Address = eventLogV3PayloadAddress(address)
 	entry := eventLogIndexEntry{blockNum: blockNum, txIndex: row.txIndex, logIndex: row.logIndex, txHash: txHash, blockHash: blockHash, address: address}
 	if err := validateEventLogPayload(entry, &log, "V3 event log read"); err != nil {
 		return EventLog{}, err
 	}
 	return EventLog{BlockNum: blockNum, TxIndex: row.txIndex, LogIndex: row.logIndex, TxHash: txHash, BlockHash: blockHash, Address: address, Log: &log}, nil
+}
+
+// eventLogV3PayloadAddress restores the protobuf address width lost when V3
+// moves the address into its fixed-width dictionary. TVM event logs carry a
+// 20-byte EVM address, which eventLogAddress represents as a 21-byte common
+// Address with a zero leading byte. Protocol-native TRON logs already carry a
+// valid non-zero network prefix (0x41) and retain all 21 bytes. Restoring the
+// original width keeps the cold protobuf byte-for-byte equal to the canonical
+// TransactionInfo log while preserving one fixed-width lookup identity.
+func eventLogV3PayloadAddress(address common.Address) []byte {
+	raw := address[:]
+	if address[0] == 0 {
+		raw = raw[1:]
+	}
+	return append([]byte(nil), raw...)
 }
 
 func (s *EventLogSegment) readEventLogV3Address(index uint64) ([]byte, error) {
