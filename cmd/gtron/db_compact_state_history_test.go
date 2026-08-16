@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/urfave/cli/v2"
 )
 
@@ -40,6 +41,11 @@ func TestDBCompactStateHistoryCommandPreservesLiveRows(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	manifest := statesnapshots.NewManifest(0, 0, nil)
+	manifest.Progress = &statesnapshots.Progress{HotPruneBlockNum: 6}
+	if err := statesnapshots.PublishManifest(stateSnapshotsDir(datadir), manifest); err != nil {
+		t.Fatal(err)
+	}
 
 	var stdout, stderr bytes.Buffer
 	app := &cli.App{Writer: &stdout, ErrWriter: &stderr, Commands: []*cli.Command{dbCommand()}}
@@ -60,6 +66,16 @@ func TestDBCompactStateHistoryCommandPreservesLiveRows(t *testing.T) {
 	}
 	if !report.CompactedChangeSets || !report.CompactedPostingIndex {
 		t.Fatalf("unexpected report: %+v", report)
+	}
+	if !report.UsedPruneWatermark || report.PrunedThroughBlock != 6 || report.PostingRowsScanned != 1 || report.DirectoryRowsScanned != 1 {
+		t.Fatalf("watermark report: %+v", report)
+	}
+	updatedManifest, err := statesnapshots.LoadProductionManifest(stateSnapshotsDir(datadir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedManifest.Progress == nil || updatedManifest.Progress.StateChangeIndexPruneBlockNum != 6 {
+		t.Fatalf("state-change index prune progress = %+v", updatedManifest.Progress)
 	}
 
 	reopened, err := rawdb.NewPebbleDB(chainDataDir(datadir), 16, 16)

@@ -466,17 +466,29 @@ type StateChangePostingPruneResult struct {
 	DirectoryRowsDeleted uint64
 }
 
+// StateChangePostingPruneProgress reports bounded checkpoints while pruning
+// the derived state-change index. Callers must treat Result as a snapshot; the
+// final authoritative counters are returned by the prune function.
+type StateChangePostingPruneProgress struct {
+	Phase  string
+	Result StateChangePostingPruneResult
+}
+
+type StateChangePostingPruneProgressFn func(StateChangePostingPruneProgress)
+
+const stateChangePostingPruneProgressRows uint64 = 65_536
+
 // PruneStaleStateChangePostingIndex reclaims only wholly stale immutable
 // frames. Mixed live/stale frames remain unchanged and are filtered exactly by
 // the mandatory changeset collision check.
 func PruneStaleStateChangePostingIndex(db ethdb.KeyValueStore) (StateChangePostingPruneResult, error) {
-	return pruneStaleStateChangePostingIndex(context.Background(), db, 0, false)
+	return pruneStaleStateChangePostingIndex(context.Background(), db, 0, false, nil)
 }
 
 // PruneStaleStateChangePostingIndexContext is the cancellable form used by
 // online maintenance when no authoritative prune watermark is available.
 func PruneStaleStateChangePostingIndexContext(ctx context.Context, db ethdb.KeyValueStore) (StateChangePostingPruneResult, error) {
-	return pruneStaleStateChangePostingIndex(ctx, db, 0, false)
+	return pruneStaleStateChangePostingIndex(ctx, db, 0, false, nil)
 }
 
 // PruneStaleStateChangePostingIndexThroughContext reclaims immutable posting
@@ -486,16 +498,36 @@ func PruneStaleStateChangePostingIndexContext(ctx context.Context, db ethdb.KeyV
 // crosses the watermark is retained if any newer authoritative changeset is
 // still live.
 func PruneStaleStateChangePostingIndexThroughContext(ctx context.Context, db ethdb.KeyValueStore, prunedThrough uint64) (StateChangePostingPruneResult, error) {
-	return pruneStaleStateChangePostingIndex(ctx, db, prunedThrough, true)
+	return pruneStaleStateChangePostingIndex(ctx, db, prunedThrough, true, nil)
 }
 
-func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueStore, prunedThrough uint64, hasPruneWatermark bool) (StateChangePostingPruneResult, error) {
+// PruneStaleStateChangePostingIndexThroughContextWithProgress is the offline
+// maintenance form. The durable hot-prune watermark makes the posting sweep
+// sequential, and progress checkpoints keep long scans observable.
+func PruneStaleStateChangePostingIndexThroughContextWithProgress(ctx context.Context, db ethdb.KeyValueStore, prunedThrough uint64, progress StateChangePostingPruneProgressFn) (StateChangePostingPruneResult, error) {
+	return pruneStaleStateChangePostingIndex(ctx, db, prunedThrough, true, progress)
+}
+
+func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueStore, prunedThrough uint64, hasPruneWatermark bool, progress StateChangePostingPruneProgressFn) (StateChangePostingPruneResult, error) {
 	var result StateChangePostingPruneResult
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
+	}
+	// With a durable watermark, retain the exact set of hashes which still
+	// have a live posting. The following directory sweep can then perform two
+	// ordered scans instead of opening one Pebble iterator per logical key.
+	// The set is bounded by the unpruned hot suffix rather than all history.
+	var livePostingHashes map[[sha256.Size]byte]struct{}
+	if hasPruneWatermark {
+		livePostingHashes = make(map[[sha256.Size]byte]struct{})
+	}
+	report := func(phase string) {
+		if progress != nil {
+			progress(StateChangePostingPruneProgress{Phase: phase, Result: result})
+		}
 	}
 	postingIt := db.NewIterator(stateChangePostingPrefix, nil)
 	batch := db.NewBatch()
@@ -561,6 +593,13 @@ func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueSto
 				return result, err
 			}
 			result.PostingRowsDeleted++
+		} else if hasPruneWatermark {
+			var hash [sha256.Size]byte
+			copy(hash[:], wantHash)
+			livePostingHashes[hash] = struct{}{}
+		}
+		if result.PostingRowsScanned%stateChangePostingPruneProgressRows == 0 {
+			report("postings")
 		}
 		if batch.ValueSize() >= ethdb.IdealBatchSize {
 			if err := batch.Write(); err != nil {
@@ -579,6 +618,7 @@ func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueSto
 		return result, err
 	}
 	batch.Reset()
+	report("postings-complete")
 
 	directoryIt := db.NewIterator(stateChangeKeyDirectoryPrefix, nil)
 	for directoryIt.Next() {
@@ -593,13 +633,18 @@ func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueSto
 		}
 		result.DirectoryRowsScanned++
 		hash := stateChangePostingHash(key[len(stateChangeKeyDirectoryPrefix):])
-		it := db.NewIterator(stateChangePostingHashPrefix(hash), nil)
-		hasPosting := it.Next()
-		err := it.Error()
-		it.Release()
-		if err != nil {
-			directoryIt.Release()
-			return result, err
+		hasPosting := false
+		if hasPruneWatermark {
+			_, hasPosting = livePostingHashes[hash]
+		} else {
+			it := db.NewIterator(stateChangePostingHashPrefix(hash), nil)
+			hasPosting = it.Next()
+			err := it.Error()
+			it.Release()
+			if err != nil {
+				directoryIt.Release()
+				return result, err
+			}
 		}
 		if !hasPosting {
 			if err := batch.Delete(key); err != nil {
@@ -607,6 +652,9 @@ func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueSto
 				return result, err
 			}
 			result.DirectoryRowsDeleted++
+		}
+		if result.DirectoryRowsScanned%stateChangePostingPruneProgressRows == 0 {
+			report("directory")
 		}
 		if batch.ValueSize() >= ethdb.IdealBatchSize {
 			if err := batch.Write(); err != nil {
@@ -621,5 +669,9 @@ func pruneStaleStateChangePostingIndex(ctx context.Context, db ethdb.KeyValueSto
 	if directoryErr != nil {
 		return result, directoryErr
 	}
-	return result, batch.Write()
+	if err := batch.Write(); err != nil {
+		return result, err
+	}
+	report("directory-complete")
+	return result, nil
 }

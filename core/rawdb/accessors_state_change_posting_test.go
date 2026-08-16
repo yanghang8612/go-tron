@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -216,6 +217,80 @@ func TestPruneStaleStateChangePostingIndexThroughContextHonorsCancellation(t *te
 	if !errors.Is(err, context.Canceled) || stats != (StateChangePostingPruneResult{}) {
 		t.Fatalf("canceled sweep = (%+v,%v), want zero/context.Canceled", stats, err)
 	}
+}
+
+func TestPruneStaleStateChangePostingIndexThroughUsesLiveHashDirectory(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{common.AddressPrefixMainnet, 0x67}
+	stale := writePostingTestChange(t, db, owner, 1, "stale", false)
+	stale2 := writePostingTestChange(t, db, owner, 2, "stale", false)
+	live := writePostingTestChange(t, db, owner, 3, "live", false)
+	collector, err := newStateChangePostingCollector(1, 3, etl.Options{TempDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	if err := collector.Collect(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.Collect(stale2); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.Collect(live); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collector.Load(db, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteStateDomainChanges(db, stale.BlockNum); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteStateDomainChanges(db, stale2.BlockNum); err != nil {
+		t.Fatal(err)
+	}
+	countingDB := &stateChangePostingIteratorCountingDB{KeyValueStore: db}
+	var phases []string
+	stats, err := PruneStaleStateChangePostingIndexThroughContextWithProgress(
+		context.Background(),
+		countingDB,
+		2,
+		func(progress StateChangePostingPruneProgress) {
+			phases = append(phases, progress.Phase)
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PostingRowsScanned != 2 || stats.PostingRowsDeleted != 1 || stats.DirectoryRowsScanned != 2 || stats.DirectoryRowsDeleted != 1 {
+		t.Fatalf("watermark prune stats = %+v", stats)
+	}
+	if countingDB.iterators != 3 {
+		t.Fatalf("watermark prune iterators = %d, want posting + one crossing changeset + directory", countingDB.iterators)
+	}
+	if !slices.Contains(phases, "postings-complete") || !slices.Contains(phases, "directory-complete") {
+		t.Fatalf("progress phases = %v", phases)
+	}
+	staleLatest := mustStateDomainChangeLatestKey(t, stale)
+	if ok, err := db.Has(stateChangeKeyDirectoryKey(staleLatest)); err != nil || ok {
+		t.Fatalf("stale directory survived: ok=%v err=%v", ok, err)
+	}
+	liveLatest := mustStateDomainChangeLatestKey(t, live)
+	if ok, err := db.Has(stateChangeKeyDirectoryKey(liveLatest)); err != nil || !ok {
+		t.Fatalf("live directory missing: ok=%v err=%v", ok, err)
+	}
+	if got := collectPostingTestBlocks(t, db, owner, []byte("live")); !reflect.DeepEqual(got, []uint64{3}) {
+		t.Fatalf("live posting blocks = %v", got)
+	}
+}
+
+type stateChangePostingIteratorCountingDB struct {
+	ethdb.KeyValueStore
+	iterators uint64
+}
+
+func (db *stateChangePostingIteratorCountingDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	db.iterators++
+	return db.KeyValueStore.NewIterator(prefix, start)
 }
 
 func TestPosting256SelectionRecordsFullMainnetBenchmark(t *testing.T) {

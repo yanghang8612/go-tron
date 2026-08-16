@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/urfave/cli/v2"
 )
 
@@ -30,7 +31,11 @@ type compactStateHistoryOutput struct {
 	ChaindataPath             string  `json:"chaindata_path"`
 	CompactedChangeSets       bool    `json:"compacted_changesets"`
 	CompactedPostingIndex     bool    `json:"compacted_posting_index"`
+	UsedPruneWatermark        bool    `json:"used_prune_watermark"`
+	PrunedThroughBlock        uint64  `json:"pruned_through_block,omitempty"`
+	PostingRowsScanned        uint64  `json:"posting_rows_scanned"`
 	StalePostingRowsDeleted   uint64  `json:"stale_posting_rows_deleted"`
+	DirectoryRowsScanned      uint64  `json:"directory_rows_scanned"`
 	StaleDirectoryRowsDeleted uint64  `json:"stale_directory_rows_deleted"`
 	PhysicalBytesBefore       uint64  `json:"physical_bytes_before"`
 	PhysicalBytesAfter        uint64  `json:"physical_bytes_after"`
@@ -45,6 +50,7 @@ func dbCompactStateHistoryCommand() *cli.Command {
 		Description: "The node using this datadir must be stopped. This command removes only stale posting frames/directories, then compacts state-history tombstones without deleting live history.",
 		Flags: []cli.Flag{
 			dataDirFlag,
+			snapshotDirFlag,
 			dbCacheFlag,
 			dbHandlesFlag,
 			dbMemtableFlag,
@@ -88,9 +94,31 @@ func dbCompactStateHistoryCmd(ctx *cli.Context) error {
 		errWriter = os.Stderr
 	}
 	started := time.Now()
-	postingPrune, err := rawdb.PruneStaleStateChangePostingIndex(db)
+	pruneContext := contextOrBackground(ctx)
+	pruneWatermark, usePruneWatermark, err := stateHistoryPruneWatermark(ctx, ctx.String("datadir"))
+	if err != nil {
+		return err
+	}
+	var postingPrune rawdb.StateChangePostingPruneResult
+	if usePruneWatermark {
+		fmt.Fprintf(errWriter, "Pruning stale state-change index through block %d with sequential watermark scan...\n", pruneWatermark)
+		postingPrune, err = rawdb.PruneStaleStateChangePostingIndexThroughContextWithProgress(
+			pruneContext,
+			db,
+			pruneWatermark,
+			stateHistoryPruneProgressReporter(ctx.Duration("progress"), errWriter),
+		)
+	} else {
+		fmt.Fprintln(errWriter, "No durable hot-prune watermark found; falling back to the conservative state-change index scan...")
+		postingPrune, err = rawdb.PruneStaleStateChangePostingIndexContext(pruneContext, db)
+	}
 	if err != nil {
 		return fmt.Errorf("prune stale state change postings: %w", err)
+	}
+	if usePruneWatermark {
+		if err := statesnapshots.UpdateStateChangeIndexPruneProgress(snapshotDir(ctx, ctx.String("datadir")), pruneWatermark); err != nil {
+			return fmt.Errorf("publish state-change index prune progress through block %d: %w", pruneWatermark, err)
+		}
 	}
 	changeSetStart, changeSetLimit := rawdb.StateHistoryKeyspaceBounds()
 	if err := compactKeyRangeWithHeartbeat(db, "state-changeset-v2-*", changeSetStart, changeSetLimit, ctx.Duration("progress"), errWriter); err != nil {
@@ -119,7 +147,11 @@ func dbCompactStateHistoryCmd(ctx *cli.Context) error {
 		ChaindataPath:             path,
 		CompactedChangeSets:       true,
 		CompactedPostingIndex:     true,
+		UsedPruneWatermark:        usePruneWatermark,
+		PrunedThroughBlock:        pruneWatermark,
+		PostingRowsScanned:        postingPrune.PostingRowsScanned,
 		StalePostingRowsDeleted:   postingPrune.PostingRowsDeleted,
+		DirectoryRowsScanned:      postingPrune.DirectoryRowsScanned,
 		StaleDirectoryRowsDeleted: postingPrune.DirectoryRowsDeleted,
 		PhysicalBytesBefore:       physicalBefore,
 		PhysicalBytesAfter:        physicalAfter,
@@ -138,4 +170,47 @@ func dbCompactStateHistoryCmd(ctx *cli.Context) error {
 	fmt.Fprintf(writer, "Compacted state history in %s; physical=%s -> %s reclaimed=%s elapsed=%s\n",
 		path, formatIEC(physicalBefore), formatIEC(physicalAfter), formatIEC(reclaimed), time.Since(started).Round(time.Millisecond))
 	return nil
+}
+
+func stateHistoryPruneWatermark(ctx *cli.Context, dataDir string) (uint64, bool, error) {
+	dir := snapshotDir(ctx, dataDir)
+	manifest, err := statesnapshots.LoadProductionManifest(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("load state snapshot manifest %q: %w", dir, err)
+	}
+	if manifest.Progress == nil || manifest.Progress.HotPruneBlockNum == 0 {
+		return 0, false, nil
+	}
+	return manifest.Progress.HotPruneBlockNum, true, nil
+}
+
+func stateHistoryPruneProgressReporter(interval time.Duration, writer interface{ Write([]byte) (int, error) }) rawdb.StateChangePostingPruneProgressFn {
+	if interval <= 0 || writer == nil {
+		return nil
+	}
+	started := time.Now()
+	lastReport := started.Add(-interval)
+	lastPhase := ""
+	return func(progress rawdb.StateChangePostingPruneProgress) {
+		now := time.Now()
+		phaseChanged := progress.Phase != lastPhase
+		phaseComplete := progress.Phase == "postings-complete" || progress.Phase == "directory-complete"
+		if !phaseChanged && !phaseComplete && now.Sub(lastReport) < interval {
+			return
+		}
+		fmt.Fprintf(writer,
+			"pruning stale state-change index phase=%s postingScanned=%d postingDeleted=%d directoryScanned=%d directoryDeleted=%d elapsed=%s\n",
+			progress.Phase,
+			progress.Result.PostingRowsScanned,
+			progress.Result.PostingRowsDeleted,
+			progress.Result.DirectoryRowsScanned,
+			progress.Result.DirectoryRowsDeleted,
+			now.Sub(started).Round(time.Millisecond),
+		)
+		lastPhase = progress.Phase
+		lastReport = now
+	}
 }
