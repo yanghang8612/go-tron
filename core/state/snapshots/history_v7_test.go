@@ -170,6 +170,65 @@ func TestStateDomainChangeV7FramedAccessorQuery(t *testing.T) {
 	}
 }
 
+func TestManagerBatchesFirstStateDomainChangesAcrossV7Segment(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, make([]byte, common.AccountIDLength)...))
+	for txNum := uint64(1); txNum <= 100; txNum++ {
+		var hash common.Hash
+		binary.BigEndian.PutUint64(hash[24:], txNum)
+		if err := rawdb.WriteStateTxRange(db, txNum, hash, txNum, txNum); err != nil {
+			t.Fatal(err)
+		}
+		var key []byte
+		switch txNum {
+		case 20, 80:
+			key = []byte("alpha")
+		case 30:
+			key = []byte("beta")
+		case 70:
+			key = []byte("gamma")
+		default:
+			continue
+		}
+		if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+			BlockNum: txNum, BlockHash: hash, TxNum: txNum, Seq: 1,
+			FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: 4,
+			Domain: kvdomains.SystemDynamicProperty, Key: key, PrevExists: true, Prev: []byte{byte(txNum)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 50, "history/state-domain-change-1-50.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 51, 100, "history/state-domain-change-51-100.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs = append(refs, later...)
+	if err := PublishManifest(dir, NewManifest(1, 100, refs)); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := mgr.FirstStateDomainChangesByKeysContext(context.Background(), 10, 90, rawdb.StateFlatDomainKVLatest, owner, 4, kvdomains.SystemDynamicProperty, [][]byte{[]byte("alpha"), []byte("beta"), []byte("gamma"), []byte("missing")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got["alpha"] == nil || got["alpha"].TxNum != 20 || got["beta"] == nil || got["beta"].TxNum != 30 || got["gamma"] == nil || got["gamma"].TxNum != 70 || got["missing"] != nil {
+		t.Fatalf("batched first changes = %+v, want alpha@20 beta@30 gamma@70", got)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := mgr.FirstStateDomainChangesByKeysContext(canceled, 10, 90, rawdb.StateFlatDomainKVLatest, owner, 4, kvdomains.SystemDynamicProperty, [][]byte{[]byte("alpha")}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled batch error = %v, want context.Canceled", err)
+	}
+}
+
 func TestStateDomainChangeV7SequentialVerificationExternalSort(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()

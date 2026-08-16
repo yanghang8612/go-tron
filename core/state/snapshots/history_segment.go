@@ -390,6 +390,117 @@ func (m *Manager) IterateStateDomainChangesByKey(fromTxNum, toTxNum uint64, flat
 	return nil
 }
 
+// FirstStateDomainChangesByKeysContext returns the earliest matching change in
+// the requested transaction range for every logical key. Binary history files
+// are opened once per segment for the entire batch; this is the primary archive
+// read path used when loading the many dynamic properties required by eth_call.
+func (m *Manager) FirstStateDomainChangesByKeysContext(ctx context.Context, fromTxNum, toTxNum uint64, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKeys [][]byte) (map[string]*rawdb.StateDomainChange, error) {
+	out := make(map[string]*rawdb.StateDomainChange, len(logicalKeys))
+	if m == nil || len(logicalKeys) == 0 {
+		return out, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if toTxNum < fromTxNum {
+		return nil, fmt.Errorf("snapshots: state-domain-change range [%d,%d] is inverted", fromTxNum, toTxNum)
+	}
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return out, err
+	}
+	type keyQuery struct {
+		logical []byte
+		lookup  []byte
+	}
+	queries := make([]keyQuery, 0, len(logicalKeys))
+	queryByLookup := make(map[string]keyQuery, len(logicalKeys))
+	for _, logicalKey := range logicalKeys {
+		lookup := stateDomainChangeBinaryAccessorLookupKey(flatDomain, owner, generation, domain, logicalKey)
+		query := keyQuery{logical: append([]byte(nil), logicalKey...), lookup: lookup}
+		if _, exists := queryByLookup[string(lookup)]; exists {
+			continue
+		}
+		queries = append(queries, query)
+		queryByLookup[string(lookup)] = query
+	}
+	consider := func(query keyQuery, change *rawdb.StateDomainChange) {
+		if !stateDomainChangeMatchesAccessorLookup(change, flatDomain, owner, generation, domain, query.logical) {
+			return
+		}
+		key := string(query.logical)
+		current := out[key]
+		if current == nil || change.TxNum < current.TxNum || change.TxNum == current.TxNum && change.Seq < current.Seq {
+			out[key] = cloneStateDomainChangeForSegment(change)
+		}
+	}
+	for _, ref := range manifest.Segments {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory || ref.ToTxNum < fromTxNum || ref.FromTxNum > toTxNum {
+			continue
+		}
+		// Active history ranges are validated as non-overlapping and sorted by
+		// FromTxNum. Once the first change for a key is found, no later segment
+		// can contain an earlier answer, so exclude it from subsequent opens.
+		lookupKeys := make([][]byte, 0, len(queries)-len(out))
+		for _, query := range queries {
+			if out[string(query.logical)] == nil {
+				lookupKeys = append(lookupKeys, query.lookup)
+			}
+		}
+		if len(lookupKeys) == 0 {
+			break
+		}
+		cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
+		if !ok {
+			return nil, fmt.Errorf("snapshots: no history key reader registered for %s", ref.normalizedDataset())
+		}
+		if isStateDomainChangeBinarySegmentPath(ref.Path) {
+			accessorRef, ok := cfg.HistoryAccessorRef(manifest, ref)
+			if !ok {
+				return nil, fmt.Errorf("snapshots: binary state-domain-change history %q missing required accessor %q", ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
+			}
+			if err := iterateStateDomainChangeBinarySegmentByAccessorKeysFile(ctx, m.dir, ref, accessorRef, lookupKeys, fromTxNum, toTxNum, func(lookupKey []byte, change *rawdb.StateDomainChange) (bool, error) {
+				query, ok := queryByLookup[string(lookupKey)]
+				if !ok {
+					return false, errors.New("snapshots: unexpected batch history lookup key")
+				}
+				if !stateDomainChangeMatchesAccessorLookup(change, flatDomain, owner, generation, domain, query.logical) {
+					return true, nil
+				}
+				consider(query, change)
+				return false, nil
+			}); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		// JSON compatibility segments are small and already resident after one
+		// open, so scan the segment once rather than once per requested key.
+		if err := iterateStateDomainChangeHistoryRange(m.dir, manifest, ref, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			if change == nil || change.FlatDomain != flatDomain || change.Owner != owner {
+				return true, nil
+			}
+			query, ok := queryByLookup[string(stateDomainChangeBinaryAccessorKey(change))]
+			if ok {
+				consider(query, change)
+			}
+			return true, nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 func (m *Manager) IterateStateDomainChangesByPrefix(fromTxNum, toTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error {
 	if m == nil {
 		return nil

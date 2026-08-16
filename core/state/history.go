@@ -254,6 +254,14 @@ type StateDomainChangeColdKeyHistory interface {
 	IterateStateDomainChangesByKey(fromTxNum, toTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
 }
 
+// StateDomainChangeColdKeyBatchHistory resolves the first change after the
+// requested point for many logical keys in one cold-history pass. Implementers
+// can therefore share immutable segment and accessor readers across the whole
+// batch instead of reopening the same files once per key.
+type StateDomainChangeColdKeyBatchHistory interface {
+	FirstStateDomainChangesByKeysContext(ctx context.Context, fromTxNum, toTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte) (map[string]*rawdb.StateDomainChange, error)
+}
+
 type StateDomainChangeColdPrefixHistory interface {
 	IterateStateDomainChangesByPrefix(fromTxNum, toTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
 }
@@ -439,22 +447,41 @@ func (r *PersistentHistoryReader) BalanceAt(addr tcommon.Address, blockNum uint6
 	return account.Balance(), nil
 }
 
-// CodeAt returns the contract bytecode at addr at the end of blockNum.
-// Shares the inverse-index walk with AccountAt via accountAndCode.
+// CodeAt returns the contract bytecode at addr at the end of blockNum. A code
+// lookup only needs the compact account envelope's CodeHash; unlike AccountAt,
+// it must not materialize permissions, votes, frozen balances, or other split
+// account domains.
 func (r *PersistentHistoryReader) CodeAt(addr tcommon.Address, blockNum uint64) ([]byte, error) {
-	// Code reads cache separately from account reads — a caller doing
-	// CodeAt -> AccountAt -> CodeAt at the same blockNum still pays only
-	// one walk (the account+code walk fills both account and code caches).
 	key := reqCacheKey{kind: cacheKindCode, addr: addr, blockNum: blockNum}
 	if v, ok := r.cache[key]; ok {
 		return v.([]byte), nil
 	}
-	entry, err := r.accountAndCode(addr, blockNum)
+	// AccountAt still resolves code alongside the account, so preserve the
+	// zero-work AccountAt -> CodeAt cache hit without forcing the reverse order
+	// to build a full account.
+	accountKey := reqCacheKey{kind: cacheKindAccount, addr: addr, blockNum: blockNum}
+	if v, ok := r.cache[accountKey]; ok {
+		code := v.(accountCacheEntry).code
+		r.cache[key] = code
+		return code, nil
+	}
+	if blockNum >= r.headNum {
+		entry, err := r.readAccountAndCodeLive(addr)
+		if err != nil {
+			return nil, err
+		}
+		r.cache[key] = entry.code
+		return entry.code, nil
+	}
+	code, ok, err := r.codeFromStateDomain(addr, blockNum)
 	if err != nil {
 		return nil, err
 	}
-	r.cache[key] = entry.code
-	return entry.code, nil
+	if !ok {
+		return nil, ErrStateDomainHistoryUnavailable
+	}
+	r.cache[key] = code
+	return code, nil
 }
 
 // StorageAt returns the storage slot value at (addr, slot) at the end of
@@ -630,6 +657,35 @@ func (r *PersistentHistoryReader) accountAndCodeFromStateDomain(addr tcommon.Add
 	return accountCacheEntry{account: acc, code: code}, true, nil
 }
 
+func (r *PersistentHistoryReader) codeFromStateDomain(addr tcommon.Address, blockNum uint64) ([]byte, bool, error) {
+	ok, err := r.stateDomainHistoryAvailable()
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	data, exists, err := r.readStateAccountLatestAsOf(addr, blockNum, r.headNum)
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, true, nil
+	}
+	envelope, err := DecodeStateAccountV2(data)
+	if err != nil {
+		return nil, false, err
+	}
+	if envelope.CodeHash == (tcommon.Hash{}) {
+		return nil, true, nil
+	}
+	code, err := r.readCodeByHashAtBlock(envelope.CodeHash, blockNum)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(code) == 0 {
+		return nil, true, nil
+	}
+	return code, true, nil
+}
+
 func (r *PersistentHistoryReader) storageFromStateDomain(addr tcommon.Address, slot tcommon.Hash, blockNum uint64) (tcommon.Hash, bool, error) {
 	ok, err := r.stateDomainHistoryAvailable()
 	if err != nil || !ok {
@@ -778,7 +834,18 @@ func (r *PersistentHistoryReader) readStateKVBatchAsOf(owner tcommon.Address, ge
 	}
 	if r.coldHistory != nil && targetTxNum != ^uint64(0) {
 		fromTxNum := targetTxNum + 1
-		if keyed, ok := r.coldHistory.(StateDomainChangeColdKeyHistory); ok {
+		if batched, ok := r.coldHistory.(StateDomainChangeColdKeyBatchHistory); ok {
+			coldFirst, err := batched.FirstStateDomainChangesByKeysContext(r.ctx, fromTxNum, headTxNum, rawdb.StateFlatDomainKVLatest, owner, generation, domain, keys)
+			if err != nil {
+				return nil, err
+			}
+			for _, change := range coldFirst {
+				if err := r.contextError(); err != nil {
+					return nil, err
+				}
+				consider(change)
+			}
+		} else if keyed, ok := r.coldHistory.(StateDomainChangeColdKeyHistory); ok {
 			for _, key := range keys {
 				if err := keyed.IterateStateDomainChangesByKey(fromTxNum, headTxNum, rawdb.StateFlatDomainKVLatest, owner, generation, domain, key, func(change *rawdb.StateDomainChange) (bool, error) {
 					if err := r.contextError(); err != nil {

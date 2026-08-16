@@ -15,7 +15,7 @@ func TestStateDomainHistoryRecordReadersUseCompressedOpeners(t *testing.T) {
 		"checkStateDomainChangeBinarySegment":                        {"openHistorySegmentForRead"},
 		"collectStateDomainChangeBinarySegmentV6Keys":                {"openStateDomainChangeBinaryAccessorReader", "openStateDomainChangeBinarySegmentSequentialReader"},
 		"copyStateDomainChangeBinarySegmentPayload":                  {"openStateDomainChangeBinarySegmentSequentialReader"},
-		"iterateStateDomainChangeBinarySegmentByAccessorFile":        {"openHistorySegmentForRead", "openStateDomainChangeBinaryAccessorReader"},
+		"iterateStateDomainChangeBinarySegmentByOpenAccessorKey":     nil,
 		"iterateStateDomainChangeBinarySegmentByAccessorPrefixFile":  {"openHistorySegmentForRead", "openStateDomainChangeBinaryAccessorReader"},
 		"iterateStateDomainChangeBinarySegmentTxRangeByIndexFile":    {"openHistorySegmentForRead"},
 		"readStateDomainChangeBinarySegment":                         {"openHistorySegmentForRead"},

@@ -352,6 +352,41 @@ func TestPersistentHistoryReaderBatchKVAsOfMergesKeyedColdHistory(t *testing.T) 
 	}
 }
 
+func TestPersistentHistoryReaderBatchKVAsOfUsesSingleColdBatch(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	for blockNum := uint64(1); blockNum <= 2; blockNum++ {
+		if err := rawdb.WriteStateTxRange(db, blockNum, tcommon.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner := testAddr(0x92)
+	domain := kvdomains.SystemDynamicProperty
+	cold := &batchedColdHistoryStub{keyedColdHistoryStub: keyedColdHistoryStub{changes: []*rawdb.StateDomainChange{
+		{BlockNum: 2, TxNum: 2, Seq: 1, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: 5, Domain: domain, Key: []byte("one"), PrevExists: true, Prev: []byte("one-v1")},
+		{BlockNum: 2, TxNum: 2, Seq: 2, FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: 5, Domain: domain, Key: []byte("two"), PrevExists: true, Prev: []byte("two-v1")},
+	}}}
+	latest := &recordingHotStateLatestReader{kv: map[string][]byte{
+		recordingHotLatestKVKey(owner, 5, domain, []byte("one")):   []byte("one-v2"),
+		recordingHotLatestKVKey(owner, 5, domain, []byte("two")):   []byte("two-v2"),
+		recordingHotLatestKVKey(owner, 5, domain, []byte("three")): []byte("three-v2"),
+	}}
+	reader := NewPersistentHistoryReaderWithColdHistory(db, nil, 2, cold)
+	reader.latest = latest
+	if err := reader.SetHotHistoryBlockRange(1, 2); err != nil {
+		t.Fatal(err)
+	}
+	got, err := reader.readStateKVBatchAsOf(owner, 5, domain, [][]byte{[]byte("one"), []byte("two"), []byte("three")}, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got["one"], []byte("one-v1")) || !bytes.Equal(got["two"], []byte("two-v1")) || !bytes.Equal(got["three"], []byte("three-v2")) {
+		t.Fatalf("cold batched history = %q", got)
+	}
+	if cold.batchCalls != 1 || cold.keyedCalled || cold.genericCalled {
+		t.Fatalf("cold calls batch=%d keyed=%v generic=%v, want 1/false/false", cold.batchCalls, cold.keyedCalled, cold.genericCalled)
+	}
+}
+
 func TestPersistentHistoryReaderMaterializesAccountAuxWithColdPrefixSeeks(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	for blockNum := uint64(1); blockNum <= 2; blockNum++ {
@@ -550,6 +585,34 @@ func TestPersistentHistoryReaderUsesStateDomainAccountLatest(t *testing.T) {
 	}
 	if storage != (tcommon.Hash{0x02}) {
 		t.Fatalf("domain StorageAt head = %x, want 02", storage)
+	}
+}
+
+func TestPersistentHistoryReaderCodeAtSkipsAccountAuxiliaryDomains(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x23)
+	code := []byte{0x60, 0x23, 0x60, 0x00, 0xf3}
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetCode(contract, code)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.AddBalance(testAddr(0x24), 1)
+	})
+	cold := new(prefixedColdHistoryStub)
+	reader := NewPersistentHistoryReaderWithColdHistory(f.disk, f.state, f.head, cold)
+	if err := reader.SetHotHistoryBlockRange(1, f.head); err != nil {
+		t.Fatal(err)
+	}
+	got, err := reader.CodeAt(contract, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, code) {
+		t.Fatalf("CodeAt block 1 = %x, want %x", got, code)
+	}
+	if len(cold.prefixCalls) != 0 {
+		t.Fatalf("CodeAt materialized %d account auxiliary domains, want zero", len(cold.prefixCalls))
 	}
 }
 
@@ -2218,6 +2281,32 @@ type prefixedColdHistoryCall struct {
 type prefixedColdHistoryStub struct {
 	keyedColdHistoryStub
 	prefixCalls []prefixedColdHistoryCall
+}
+
+type batchedColdHistoryStub struct {
+	keyedColdHistoryStub
+	batchCalls int
+}
+
+func (s *batchedColdHistoryStub) FirstStateDomainChangesByKeysContext(ctx context.Context, fromTxNum, toTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte) (map[string]*rawdb.StateDomainChange, error) {
+	s.batchCalls++
+	out := make(map[string]*rawdb.StateDomainChange, len(keys))
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		for _, change := range s.changes {
+			if change.TxNum < fromTxNum || change.TxNum > toTxNum || change.FlatDomain != flatDomain || change.Owner != owner ||
+				change.Generation != generation || change.Domain != domain || !bytes.Equal(change.Key, key) {
+				continue
+			}
+			current := out[string(key)]
+			if current == nil || stateDomainChangeLess(change, current) {
+				out[string(key)] = change
+			}
+		}
+	}
+	return out, nil
 }
 
 func (s *prefixedColdHistoryStub) IterateStateDomainChangesByPrefix(fromTxNum, toTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error {

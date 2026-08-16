@@ -2652,11 +2652,27 @@ func readStateDomainChangeBinarySegmentByAccessorFile(dir string, ref SegmentRef
 }
 
 func iterateStateDomainChangeBinarySegmentByAccessorFile(dir string, ref SegmentRef, accessorRef SegmentRef, lookupKey []byte, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	return iterateStateDomainChangeBinarySegmentByAccessorKeysFile(context.Background(), dir, ref, accessorRef, [][]byte{lookupKey}, fromTxNum, toTxNum, func(_ []byte, change *rawdb.StateDomainChange) (bool, error) {
+		return fn(change)
+	})
+}
+
+// iterateStateDomainChangeBinarySegmentByAccessorKeysFile opens one immutable
+// history/accessor pair and resolves all requested keys against those shared
+// readers. Dynamic-property archive reads routinely request more than one
+// hundred keys, so reopening and reparsing the same compressed block directory
+// once per key dominates the actual lookup work.
+func iterateStateDomainChangeBinarySegmentByAccessorKeysFile(ctx context.Context, dir string, ref SegmentRef, accessorRef SegmentRef, lookupKeys [][]byte, fromTxNum, toTxNum uint64, fn func([]byte, *rawdb.StateDomainChange) (bool, error)) error {
 	if toTxNum < fromTxNum {
 		return fmt.Errorf("snapshots: state-domain-change range [%d,%d] is inverted", fromTxNum, toTxNum)
 	}
-	if len(lookupKey) == 0 {
-		return errors.New("snapshots: empty state-domain-change accessor lookup key")
+	if len(lookupKeys) == 0 {
+		return nil
+	}
+	for _, lookupKey := range lookupKeys {
+		if len(lookupKey) == 0 {
+			return errors.New("snapshots: empty state-domain-change accessor lookup key")
+		}
 	}
 	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
 		return fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
@@ -2683,6 +2699,41 @@ func iterateStateDomainChangeBinarySegmentByAccessorFile(dir string, ref Segment
 	if accessorHeader.fromTxNum != ref.FromTxNum || accessorHeader.toTxNum != ref.ToTxNum {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q range [%d,%d], want [%d,%d]", accessorRef.Path, accessorHeader.fromTxNum, accessorHeader.toTxNum, ref.FromTxNum, ref.ToTxNum)
 	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV6 || accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+		if history, ok := segmentFile.(*stateDomainChangeHistoryReader); ok {
+			if err := history.attachV6Accessor(accessorFile, accessorSize); err != nil {
+				return err
+			}
+			accessorOwned = false
+		}
+	}
+	if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+		return iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext(ctx, segmentFile, segmentSize, accessorFile, accessorSize, lookupKeys, fromTxNum, toTxNum, fn)
+	}
+	for _, lookupKey := range lookupKeys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cont := true
+		err := iterateStateDomainChangeBinarySegmentByOpenAccessorKey(segmentFile, segmentSize, accessorFile, accessorHeader, accessorSize, lookupKey, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			var err error
+			cont, err = fn(lookupKey, change)
+			return cont, err
+		})
+		if err != nil {
+			return err
+		}
+		if !cont {
+			continue
+		}
+	}
+	return ctx.Err()
+}
+
+func iterateStateDomainChangeBinarySegmentByOpenAccessorKey(segmentFile historySegmentReader, segmentSize uint64, accessorFile historySegmentReader, accessorHeader stateDomainChangeBinaryHeader, accessorSize uint64, lookupKey []byte, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
 	if accessorHeader.version == stateDomainChangeBinaryVersionV3 {
 		return iterateStateDomainChangeBinarySegmentByAccessorV3Key(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupKey, fromTxNum, toTxNum, fn)
 	}
@@ -2693,21 +2744,9 @@ func iterateStateDomainChangeBinarySegmentByAccessorFile(dir string, ref Segment
 		return iterateStateDomainChangeBinarySegmentByAccessorV5Key(segmentFile, segmentSize, accessorFile, accessorSize, accessorHeader, lookupKey, fromTxNum, toTxNum, fn)
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV6 {
-		if history, ok := segmentFile.(*stateDomainChangeHistoryReader); ok {
-			if err := history.attachV6Accessor(accessorFile, accessorSize); err != nil {
-				return err
-			}
-			accessorOwned = false
-		}
 		return iterateStateDomainChangeBinarySegmentByAccessorV6Key(segmentFile, segmentSize, accessorFile, accessorSize, lookupKey, fromTxNum, toTxNum, fn)
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
-		if history, ok := segmentFile.(*stateDomainChangeHistoryReader); ok {
-			if err := history.attachV6Accessor(accessorFile, accessorSize); err != nil {
-				return err
-			}
-			accessorOwned = false
-		}
 		return iterateStateDomainChangeBinarySegmentByAccessorV7Key(segmentFile, segmentSize, accessorFile, accessorSize, lookupKey, fromTxNum, toTxNum, fn)
 	}
 

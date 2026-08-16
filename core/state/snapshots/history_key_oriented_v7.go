@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -551,6 +552,61 @@ func iterateStateDomainChangeBinarySegmentByAccessorV7Key(segment io.ReaderAt, s
 		return err
 	}
 	return iterateStateDomainChangeBinarySegmentByAccessorV7Record(segment, segmentSize, accessor, h, record, fromTxNum, toTxNum, fn)
+}
+
+func iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext(ctx context.Context, segment io.ReaderAt, segmentSize uint64, accessor io.ReaderAt, accessorSize uint64, lookupKeys [][]byte, fromTxNum, toTxNum uint64, fn func([]byte, *rawdb.StateDomainChange) (bool, error)) error {
+	if len(lookupKeys) == 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := verifyStateDomainChangeBinaryKeyDictionaryPair(segment, accessor, accessorSize); err != nil {
+		return err
+	}
+	h, err := decodeStateDomainChangeBinaryAccessorV7Header(accessor, accessorSize)
+	if err != nil {
+		return err
+	}
+	blocks, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectory(accessor, h)
+	if err != nil {
+		return err
+	}
+	keys := make([][]byte, len(lookupKeys))
+	copy(keys, lookupKeys)
+	sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i], keys[j]) < 0 })
+	loadedBlock := -1
+	var records []stateDomainChangeBinaryAccessorV6Record
+	for _, lookupKey := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		upper := sort.Search(len(blocks), func(i int) bool { return bytes.Compare(blocks[i].firstKey, lookupKey) > 0 })
+		if upper == 0 {
+			continue
+		}
+		blockIndex := upper - 1
+		if loadedBlock != blockIndex {
+			records, err = stateDomainChangeBinaryAccessorV6ReadBlock(accessor, accessorSize, h, blocks[blockIndex], uint32(blockIndex*stateDomainChangeBinaryAccessorV6BlockKeys))
+			if err != nil {
+				return err
+			}
+			loadedBlock = blockIndex
+		}
+		pos := sort.Search(len(records), func(i int) bool { return bytes.Compare(records[i].key, lookupKey) >= 0 })
+		if pos == len(records) || !bytes.Equal(records[pos].key, lookupKey) {
+			continue
+		}
+		if err := iterateStateDomainChangeBinarySegmentByAccessorV7Record(segment, segmentSize, accessor, h, records[pos], fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			return fn(lookupKey, change)
+		}); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }
 
 func iterateStateDomainChangeBinarySegmentByAccessorV7Prefix(segment io.ReaderAt, segmentSize uint64, accessor io.ReaderAt, accessorSize uint64, lookupPrefix []byte, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
