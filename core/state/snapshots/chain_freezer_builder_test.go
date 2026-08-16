@@ -769,7 +769,7 @@ func TestBuildChainFreezerSnapshotPassBuildsIndexedEventLogs(t *testing.T) {
 		Dir:               snapshotDir,
 		BatchBlocks:       2,
 		BuildEventLogs:    true,
-		EventLogVersion:   EventLogSegmentV3Version,
+		EventLogVersion:   EventLogSegmentV4Version,
 		VerificationCache: cache,
 	})
 	if err != nil {
@@ -792,7 +792,7 @@ func TestBuildChainFreezerSnapshotPassBuildsIndexedEventLogs(t *testing.T) {
 	}
 	version := segment.header.version
 	_ = segment.Close()
-	if version != EventLogSegmentV3Version {
+	if version != EventLogSegmentV4Version {
 		t.Fatalf("event-log version = %d, want V3", version)
 	}
 	stats := cache.Stats()

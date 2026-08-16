@@ -664,7 +664,7 @@ func InspectEventLogSpaceFromManifest(dir string, manifest *Manifest, opts Event
 func inspectEventLogSegment(ctx context.Context, seg *EventLogSegment, acc *eventLogCandidateAccumulator, globalRow *uint64, previousBlockHash *common.Hash, haveBlockHash *bool, previousTxHash *common.Hash, haveTxHash *bool, distinctAddresses map[common.Address]struct{}) (EventLogSegmentSpaceStats, eventLogExactDistribution, eventLogExactDistribution, error) {
 	var payloadDist, topicDist eventLogExactDistribution
 	header := seg.header
-	if header.version == EventLogSegmentV3Version {
+	if header.version == EventLogSegmentV4Version {
 		return inspectEventLogV3Space(ctx, seg, acc, globalRow, previousBlockHash, haveBlockHash, previousTxHash, haveTxHash, distinctAddresses)
 	}
 	stats := EventLogSegmentSpaceStats{
@@ -744,7 +744,7 @@ func inspectEventLogV3Space(ctx context.Context, seg *EventLogSegment, acc *even
 	h := seg.header.v3
 	var payloadDist, topicDist eventLogExactDistribution
 	stats := EventLogSegmentSpaceStats{
-		Path: seg.ref.Path, Version: EventLogSegmentV3Version, FromBlock: h.fromBlock, ToBlock: h.toBlock, Rows: h.rowCount,
+		Path: seg.ref.Path, Version: EventLogSegmentV4Version, FromBlock: h.fromBlock, ToBlock: h.toBlock, Rows: h.rowCount,
 		Physical: EventLogPhysicalBytes{
 			MainSegment: seg.size, Header: eventLogV3HeaderSize,
 			FixedRowIndex:           h.blockDictLength + h.txDictLength + h.rowDirLength + h.rowDataLength,

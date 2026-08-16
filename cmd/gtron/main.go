@@ -671,6 +671,12 @@ func gtron(ctx *cli.Context) error {
 		closeStores()
 		return err
 	}
+	// Snap mode continuously publishes authenticated event-log segments ahead
+	// of the direct V2 freezer. Once a complete freezer segment is covered, its
+	// receipt rows can omit duplicate logs and reconstruct them from the cold
+	// sidecar. Other modes retain self-contained receipts because they do not
+	// guarantee that lifecycle.
+	freezerCfg.ExternalizeV2ReceiptLogs = chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled
 	if ancientStore != nil {
 		if err := validateAncientV2PruneMode(chainConfig, ancientStore.V2Coverage()); err != nil {
 			closeStores()
@@ -1229,6 +1235,7 @@ func gtron(ctx *cli.Context) error {
 				"batch", freezerCfg.BatchBlocks,
 				"interval", freezerCfg.Interval,
 				"v2", freezerCfg.V2Enabled,
+				"receiptLogsExternal", freezerCfg.ExternalizeV2ReceiptLogs,
 				"txIndex", freezerCfg.TransactionIndexEnabled,
 				"txIndexPrefixBits", freezerCfg.TransactionIndexPrefixBits)
 		}

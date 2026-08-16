@@ -1450,8 +1450,8 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read event-log segment: %v", err)
 	}
-	if len(rawSegment) < 8 || string(rawSegment[:8]) != "gtevlg3\n" {
-		t.Fatalf("event-log does not use V3 magic")
+	if len(rawSegment) < 8 || string(rawSegment[:8]) != "gtevlg4\n" {
+		t.Fatalf("event-log does not use V4 magic")
 	}
 	mgr, err := statesnapshots.OpenManager(snapshotDir)
 	if err != nil {
@@ -1654,7 +1654,7 @@ func TestSnapshotMigrateHistoryV7CommandRegistered(t *testing.T) {
 	}
 }
 
-func TestSnapshotMigrateEventLogsV3CommandBuildOnlyWithLockedChaindata(t *testing.T) {
+func TestSnapshotMigrateEventLogsV4CommandBuildOnlyWithLockedChaindata(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "datadir")
 	snapshotDir := filepath.Join(root, "snapshot")
@@ -1685,16 +1685,16 @@ func TestSnapshotMigrateEventLogsV3CommandBuildOnlyWithLockedChaindata(t *testin
 	defer locked.Close()
 	app := &cli.App{Commands: []*cli.Command{snapshotCommand()}}
 	output, err := captureDBCmdStdout(t, func() error {
-		return app.Run([]string{"gtron", "snapshot", "migrate-event-logs-v3", "--datadir", dataDir, "--snapshot.dir", snapshotDir, "--snapshot.from-block", "1", "--snapshot.event-log.merge", "1"})
+		return app.Run([]string{"gtron", "snapshot", "migrate-event-logs-v4", "--datadir", dataDir, "--snapshot.dir", snapshotDir, "--snapshot.from-block", "1", "--snapshot.event-log.merge", "1"})
 	})
 	if err != nil {
-		t.Fatalf("migrate-event-logs-v3: %v", err)
+		t.Fatalf("migrate-event-logs-v4: %v", err)
 	}
-	var result statesnapshots.EventLogV3MigrationResult
+	var result statesnapshots.EventLogV4MigrationResult
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("decode command output %q: %v", output, err)
 	}
-	if result.Published || result.SourceSegments != 1 || result.V3MainBytes == 0 {
+	if result.Published || result.SourceSegments != 1 || result.V4MainBytes == 0 {
 		t.Fatalf("command result = %+v", result)
 	}
 	after, err := statesnapshots.LoadProductionManifest(snapshotDir)
@@ -3085,16 +3085,16 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 	return cli.NewContext(app, set, nil)
 }
 
-func TestSnapshotEventLogBuildVersionDefaultsToV3AndAllowsRollback(t *testing.T) {
+func TestSnapshotEventLogBuildVersionDefaultsToV4AndAllowsRollback(t *testing.T) {
 	version, err := snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, nil))
-	if err != nil || version != statesnapshots.EventLogSegmentV3Version {
-		t.Fatalf("default event-log version = %d/%v, want V3", version, err)
+	if err != nil || version != statesnapshots.EventLogSegmentV4Version {
+		t.Fatalf("default event-log version = %d/%v, want V4", version, err)
 	}
 	version, err = snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, []string{"--snapshot.event-log.version", "2"}))
 	if err != nil || version != statesnapshots.EventLogSegmentVersion {
 		t.Fatalf("rollback event-log version = %d/%v, want V2", version, err)
 	}
-	if _, err := snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, []string{"--snapshot.event-log.version", "4"})); err == nil {
+	if _, err := snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, []string{"--snapshot.event-log.version", "99"})); err == nil {
 		t.Fatal("unsupported event-log version was accepted")
 	}
 }

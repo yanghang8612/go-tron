@@ -124,7 +124,7 @@ type Config struct {
 	// block range as each newly published state-history segment.
 	BuildEventLogs bool
 	// EventLogVersion selects the main event-log writer. Zero/2 retains the
-	// legacy V2 writer; 3 writes dictionary/framed V3 segments directly.
+	// legacy V2 writer; 4 writes topic-deduplicated dictionary/framed segments.
 	EventLogVersion uint32
 	// ColdChainVerificationCache carries the exact locally built event-log and
 	// index pair into the chain-freezer lifecycle's semantic-proof cache. Only

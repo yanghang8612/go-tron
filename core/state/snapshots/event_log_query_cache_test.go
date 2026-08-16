@@ -124,7 +124,7 @@ func TestEventLogPersistentProofRehashesSameIdentityCompanion(t *testing.T) {
 		common.BytesToAddress(eventLogTestAddress(0x73)),
 		common.Hash{0x31}, common.Hash{0x41}, common.Hash{0xe3}, []byte{0x33},
 	)
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "log/event-log-same-identity.seg", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "log/event-log-same-identity.seg", 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

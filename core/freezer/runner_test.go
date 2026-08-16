@@ -33,14 +33,17 @@ type fakeChain struct {
 	// Per-block synthetic content. plantBlock populates all three; the
 	// runner asserts that what it appended to ancient matches what
 	// plantBlock seeded.
-	blockRaw      map[uint64][]byte
-	blockErr      map[uint64]error
-	txInfosRaw    map[uint64][]byte
-	txInfosErr    map[uint64]error
-	stateRootRaw  map[uint64][]byte
-	stateRootErr  map[uint64]error
-	blockHashByNo map[uint64]tcommon.Hash
-	blockHashErr  map[uint64]error
+	blockRaw           map[uint64][]byte
+	blockErr           map[uint64]error
+	txInfosRaw         map[uint64][]byte
+	txInfosErr         map[uint64]error
+	stateRootRaw       map[uint64][]byte
+	stateRootErr       map[uint64]error
+	blockHashByNo      map[uint64]tcommon.Hash
+	blockHashErr       map[uint64]error
+	receiptLogsCovered bool
+	receiptLogsErr     error
+	receiptLogRanges   [][2]uint64
 }
 
 type failNextBatchDB struct {
@@ -120,6 +123,13 @@ func (f *fakeChain) setSolidified(n int64) {
 }
 
 func (f *fakeChain) DB() ethdb.KeyValueStore { return f.db }
+
+func (f *fakeChain) ReceiptLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.receiptLogRanges = append(f.receiptLogRanges, [2]uint64{fromBlock, toBlock})
+	return f.receiptLogsCovered, f.receiptLogsErr
+}
 
 func (f *fakeChain) ReadBlockRawStrict(n uint64) ([]byte, bool, error) {
 	f.mu.Lock()
@@ -965,6 +975,43 @@ func TestOnePassPublishesFreshSyncDirectlyToV2(t *testing.T) {
 		if _, err := fz.Ancient(rawdbAncientBlocks, number); err != nil {
 			t.Fatalf("read direct V2 body %d: %v", number, err)
 		}
+	}
+}
+
+func TestOnePassDirectV2ExternalizesReceiptsOnlyAfterEventLogCoverage(t *testing.T) {
+	fc := newFakeChain()
+	for number := uint64(0); number < 4; number++ {
+		fc.plantBlock(t, number)
+	}
+	fc.setSolidified(3)
+	fz := newFreezer(t)
+	r := New(fc, wrapFreezer(fz), Config{
+		Enabled:                  true,
+		MarginBlocks:             0,
+		V2Enabled:                true,
+		DirectV2:                 true,
+		V2FrameBlocks:            2,
+		V2SegmentBlocks:          4,
+		TransactionIndexEnabled:  false,
+		ExternalizeV2ReceiptLogs: true,
+	})
+	if frozen, err := r.OnePass(); err != nil || frozen != 0 {
+		t.Fatalf("uncovered direct V2 frozen=%d err=%v, want 0/nil", frozen, err)
+	}
+	if coverage := fz.V2Coverage(); coverage != 0 {
+		t.Fatalf("uncovered direct V2 coverage=%d, want 0", coverage)
+	}
+	fc.mu.Lock()
+	fc.receiptLogsCovered = true
+	fc.mu.Unlock()
+	if frozen, err := r.OnePass(); err != nil || frozen != 4 {
+		t.Fatalf("covered direct V2 frozen=%d err=%v, want 4/nil", frozen, err)
+	}
+	fc.mu.Lock()
+	ranges := append([][2]uint64(nil), fc.receiptLogRanges...)
+	fc.mu.Unlock()
+	if len(ranges) != 2 || ranges[0] != [2]uint64{1, 3} || ranges[1] != [2]uint64{1, 3} {
+		t.Fatalf("receipt coverage ranges=%v, want two [1,3] checks", ranges)
 	}
 }
 

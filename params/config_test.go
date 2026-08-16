@@ -61,8 +61,8 @@ func TestHistoryPruneWindowDefaultsByMode(t *testing.T) {
 		{name: "blank defaults to full", mode: "", want: HistoryDefaultPruneWindow},
 		{name: "full", mode: HistoryModeFull, want: HistoryDefaultPruneWindow},
 		{name: "blocks", mode: HistoryModeBlocks, want: HistoryDefaultPruneWindow},
-		{name: "snap", mode: HistoryModeSnap, want: HistoryDefaultPruneWindow},
-		{name: "archive", mode: HistoryModeArchive, want: HistoryDefaultPruneWindow},
+		{name: "snap", mode: HistoryModeSnap, want: HistoryColdDefaultPruneWindow},
+		{name: "archive", mode: HistoryModeArchive, want: HistoryColdDefaultPruneWindow},
 		{name: "minimal", mode: HistoryModeMinimal, want: HistoryMinimalDefaultPruneWindow},
 		{name: "unknown defaults to full", mode: "unknown", want: HistoryDefaultPruneWindow},
 	} {

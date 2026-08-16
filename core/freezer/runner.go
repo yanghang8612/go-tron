@@ -172,6 +172,12 @@ type Config struct {
 	// are removed, so readers always retain at least one valid lookup path.
 	TransactionIndexEnabled    bool
 	TransactionIndexPrefixBits uint32
+	// ExternalizeV2ReceiptLogs removes duplicate TransactionInfo.Log payloads
+	// from direct Ancient V2 receipts only after the matching immutable event-
+	// log range is fully covered. Readers reconstruct logs from that sidecar.
+	// This is intentionally opt-in at the runner boundary because legacy/full
+	// configurations may not build a cold event-log archive.
+	ExternalizeV2ReceiptLogs bool
 
 	// MetricsNamespace is the go-ethereum metrics prefix used for runner
 	// gauges. Default "chain/freezer/". Tests may override it to avoid
@@ -303,6 +309,10 @@ type ChainSource interface {
 	// Corruption and cold-index lookup failures must return an error so
 	// the pass rolls back instead of appending an empty state-root row.
 	ReadBlockStateRootRaw(hash tcommon.Hash) ([]byte, error)
+}
+
+type receiptLogCoverageSource interface {
+	ReceiptLogRangeCovered(fromBlock, toBlock uint64) (bool, error)
 }
 
 // FreezerStore is the writer surface the runner needs from the freezer.
@@ -631,6 +641,7 @@ func (r *Runner) Start() error {
 		"catchupMaintenanceInterval", r.cfg.CatchupMaintenanceInterval,
 		"v2CatchupTimeBudget", r.cfg.V2CatchupTimeBudget,
 		"v2CatchupMaxSegments", r.cfg.V2CatchupMaxSegments,
+		"receiptLogsExternal", r.cfg.ExternalizeV2ReceiptLogs,
 		"heavyMaintenanceStartupDelay", r.cfg.HeavyMaintenanceStartupDelay,
 		"heavyMaintenanceErrorBackoff", r.cfg.HeavyMaintenanceErrorBackoff,
 		"sharedHeavyWorkGate", r.cfg.HeavyWorkGate != nil)
@@ -1631,6 +1642,28 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 			return 0, nil
 		}
 		capExclusive = freezeFromN + r.cfg.V2SegmentBlocks
+		if r.cfg.ExternalizeV2ReceiptLogs {
+			coverage, ok := r.chain.(receiptLogCoverageSource)
+			if !ok {
+				return 0, errors.New("freezer: receipt-log externalization requires an event-log coverage source")
+			}
+			coverageFrom := freezeFromN
+			if coverageFrom == 0 {
+				// Genesis has no transaction logs and event-log manifests begin at
+				// block one. Do not make the first V2 segment wait for impossible
+				// block-zero event coverage.
+				coverageFrom = 1
+			}
+			if coverageFrom < capExclusive {
+				covered, err := coverage.ReceiptLogRangeCovered(coverageFrom, capExclusive-1)
+				if err != nil {
+					return 0, fmt.Errorf("freezer: verify event-log coverage for receipt range [%d,%d): %w", freezeFromN, capExclusive, err)
+				}
+				if !covered {
+					return 0, nil
+				}
+			}
+		}
 		release, ok := r.cfg.HeavyWorkGate.TryAcquire()
 		if !ok {
 			r.recordHeavyMaintenanceDeferred(heavyMaintenanceV2, heavyMaintenanceDeferredResource)
@@ -1649,7 +1682,7 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	// fallback remains for upgraded stores with an existing mutable suffix.
 	if directV2 {
 		var err error
-		blockHashes, err = r.appendDirectV2Segment(directAppender, freezeFromN, capExclusive)
+		blockHashes, err = r.appendDirectV2Segment(directAppender, freezeFromN, capExclusive, r.cfg.ExternalizeV2ReceiptLogs)
 		if err != nil {
 			return 0, err
 		}
@@ -1806,7 +1839,7 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	return frozen, nil
 }
 
-func (r *Runner) appendDirectV2Segment(appender V2DirectAppender, start, end uint64) ([]tcommon.Hash, error) {
+func (r *Runner) appendDirectV2Segment(appender V2DirectAppender, start, end uint64, externalizeReceiptLogs bool) ([]tcommon.Hash, error) {
 	if appender == nil || end <= start {
 		return nil, errors.New("freezer: invalid direct V2 segment")
 	}
@@ -1883,6 +1916,10 @@ func (r *Runner) appendDirectV2Segment(appender V2DirectAppender, start, end uin
 			return nil, fmt.Errorf("freezer: unknown direct V2 table %s", kind)
 		}
 	}
+	transform := rawdb.CompactAncientV2Record
+	if externalizeReceiptLogs {
+		transform = rawdb.CompactAncientV2RecordWithExternalLogs
+	}
 	options := rawdbfreezer.V2MigrationOptions{
 		Tables:                     []string{rawdbAncientBlocks, rawdbAncientTxInfos, rawdbAncientStateRoots},
 		SegmentBlocks:              end - start,
@@ -1892,7 +1929,7 @@ func (r *Runner) appendDirectV2Segment(appender V2DirectAppender, start, end uin
 		Context:                    r.pauseCtx,
 		Source:                     readSource,
 		SourceHead:                 end,
-		Transform:                  rawdb.CompactAncientV2Record,
+		Transform:                  transform,
 		TransactionIndexPrefixBits: r.cfg.TransactionIndexPrefixBits,
 	}
 	if r.cfg.TransactionIndexEnabled {

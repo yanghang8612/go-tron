@@ -34,9 +34,9 @@ func TestEventLogV3CompactLookupSpaceAndFilterSemantics(t *testing.T) {
 		})
 		legacyTopicPostingBytes += uvarintBytes(i)
 	}
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
 	if err != nil {
-		t.Fatalf("BuildEventLogV3SegmentFromReader: %v", err)
+		t.Fatalf("BuildEventLogV4SegmentFromReader: %v", err)
 	}
 	seg, err := OpenEventLogSegment(dir, ref)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestEventLogV3CompactLookupRejectsCorruptKeyBlock(t *testing.T) {
 	dir := t.TempDir()
 	address := common.BytesToAddress(eventLogTestAddress(0x62))
 	row := eventLogV3TestRow(1, 0, 0, address, common.Hash{1}, common.Hash{2}, common.Hash{3}, []byte("payload"))
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestEventLogV3CompactLookupRejectsCorruptMagic(t *testing.T) {
 	dir := t.TempDir()
 	address := common.BytesToAddress(eventLogTestAddress(0x63))
 	row := eventLogV3TestRow(1, 0, 0, address, common.Hash{1}, common.Hash{2}, common.Hash{3}, []byte("payload"))
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestEventLogV3CompactLookupRejectsCorruptHeader(t *testing.T) {
 	dir := t.TempDir()
 	address := common.BytesToAddress(eventLogTestAddress(0x65))
 	row := eventLogV3TestRow(1, 0, 0, address, common.Hash{1}, common.Hash{2}, common.Hash{3}, []byte("payload"))
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestEventLogV3CompactLookupRejectsCorruptDirectoryFirstKey(t *testing.T) {
 		binary.BigEndian.PutUint64(txHash[common.HashLength-8:], i+1)
 		rows = append(rows, eventLogV3TestRow(1, i, i, address, txHash, common.Hash{2}, topic, []byte("payload")))
 	}
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestEventLogV3SegmentConcurrentQueriesAndClose(t *testing.T) {
 		binary.BigEndian.PutUint64(txHash[common.HashLength-8:], uint64(i+1))
 		rows = append(rows, eventLogV3TestRow(1, uint64(i), uint64(i), address, txHash, common.Hash{2}, topics[i], make([]byte, 256)))
 	}
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -393,9 +393,11 @@ func writeHistorySegmentFiles(dir string, ref SegmentRef, changes []*rawdb.State
 }
 
 // historyCompressChunkSize is the uncompressed chunk size per compressed block
-// in a cold history .seg. ~16 KiB balances ratio against per-lookup decompress
-// cost; record frames span chunks freely (ReadAt is multi-block-safe).
-const historyCompressChunkSize = 64 << 10
+// in a cold history .seg. Production V7 sampling found that 128 KiB materially
+// reduces the dominant history payload beyond 64 KiB while keeping a point read
+// bounded to one small page. Record frames span chunks freely and the physical
+// table records every span, so readers never infer this value from the version.
+const historyCompressChunkSize = 128 << 10
 
 // writeStateDomainChangeBinaryCompressedSegmentFiles writes a cold history
 // segment whose .seg payload is block-compressed (magic gtcblk01). Its .idx and

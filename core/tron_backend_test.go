@@ -2215,6 +2215,75 @@ func TestTronBackend_GetLogsUsesColdEventLogSegment(t *testing.T) {
 	}
 }
 
+func TestJSONRPCReceiptHydratesExternalizedLogsFromEventLogV4(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x37)
+	topic := tcommon.Hash{0x38}
+	block, info := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x39, 0x3a},
+	})
+	info.Receipt = &corepb.ResourceReceipt{EnergyUsageTotal: 77}
+	info.Result = corepb.TransactionInfo_FAILED
+	if err := rawdb.WriteBlock(bc.db, block); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteTransactionIndex(bc.db, block.Transactions()[0].Hash().Bytes(), 1); err != nil {
+		t.Fatal(err)
+	}
+	bc.currentBlock.Store(block)
+
+	dir := t.TempDir()
+	if _, err := statesnapshots.NewAggregator(dir).BuildEventLogsWithBuildOptions(bc.ChainDB(), 1, 1, statesnapshots.EventLogBuildOptions{Version: statesnapshots.EventLogSegmentV4Version}); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc.ChainDB().SetEventLogReader(mgr)
+	raw, ok, err := rawdb.ReadTransactionInfosRawStrict(bc.db, 1)
+	if err != nil || !ok {
+		t.Fatalf("read raw receipts = %t/%v", ok, err)
+	}
+	external, removed, err := rawdb.ExternalizeTransactionInfoLogs(raw)
+	if err != nil || removed == 0 {
+		t.Fatalf("externalize receipts removed=%d err=%v", removed, err)
+	}
+	if err := rawdb.WriteTransactionInfosRaw(bc.db, 1, external); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := &TronBackend{chain: bc}
+	txHash := block.Transactions()[0].Hash()
+	got, err := backend.GetTransactionInfo(txHash)
+	if err != nil || got == nil || len(got.Log) != 1 || !proto.Equal(got.Log[0], info.Log[0]) || got.GetReceipt().GetEnergyUsageTotal() != 77 {
+		t.Fatalf("hydrated receipt = %+v/%v", got, err)
+	}
+	rpcServer := jsonrpc.NewServer(backend, 0)
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer.Handler())
+	defer httpServer.Close()
+	resp := postCoreJSONRPC(t, httpServer.URL, "eth_getTransactionReceipt", []any{"0x" + txHash.Hex()})
+	receipt, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("receipt result = %T %v", resp["result"], resp["result"])
+	}
+	logs, ok := receipt["logs"].([]any)
+	if !ok || len(logs) != 1 || receipt["status"] != "0x0" || receipt["gasUsed"] != "0x4d" {
+		t.Fatalf("external receipt = %+v", receipt)
+	}
+	logObject, ok := logs[0].(map[string]any)
+	if !ok || logObject["data"] != "0x393a" || logObject["transactionHash"] != "0x"+txHash.Hex() {
+		t.Fatalf("external receipt log = %+v", logs[0])
+	}
+}
+
 func TestTronBackend_GetLogsV3PayloadMatchesCanonicalTwentyByteAddress(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
@@ -2238,7 +2307,7 @@ func TestTronBackend_GetLogsV3PayloadMatchesCanonicalTwentyByteAddress(t *testin
 	bc.currentBlock.Store(block2)
 
 	dir := t.TempDir()
-	if _, err := statesnapshots.NewAggregator(dir).BuildEventLogsWithBuildOptions(bc.ChainDB(), 1, 1, statesnapshots.EventLogBuildOptions{Version: statesnapshots.EventLogSegmentV3Version}); err != nil {
+	if _, err := statesnapshots.NewAggregator(dir).BuildEventLogsWithBuildOptions(bc.ChainDB(), 1, 1, statesnapshots.EventLogBuildOptions{Version: statesnapshots.EventLogSegmentV4Version}); err != nil {
 		t.Fatalf("BuildEventLogsWithBuildOptions V3: %v", err)
 	}
 	mgr, err := statesnapshots.OpenManager(dir)

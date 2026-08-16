@@ -6,7 +6,12 @@ import (
 	"reflect"
 )
 
-type EventLogV3MigrationOptions struct {
+const (
+	eventLogV4MigrationMaxSourceSegments = 64
+	eventLogV4MigrationMaxBlockSpan      = 320_000
+)
+
+type EventLogV4MigrationOptions struct {
 	FromBlock  uint64
 	ToBlock    uint64
 	ToBlockSet bool
@@ -14,7 +19,7 @@ type EventLogV3MigrationOptions struct {
 	Publish    bool
 }
 
-type EventLogV3MigrationResult struct {
+type EventLogV4MigrationResult struct {
 	SourceGeneration    uint64                  `json:"sourceGeneration"`
 	Published           bool                    `json:"published"`
 	Generation          uint64                  `json:"generation"`
@@ -23,21 +28,21 @@ type EventLogV3MigrationResult struct {
 	SourceSegments      int                     `json:"sourceSegments"`
 	SourceMainBytes     uint64                  `json:"sourceMainBytes"`
 	SourceIndexBytes    uint64                  `json:"sourceIndexBytes"`
-	V3MainBytes         uint64                  `json:"v3MainBytes"`
-	V3IndexBytes        uint64                  `json:"v3IndexBytes"`
+	V4MainBytes         uint64                  `json:"v4MainBytes"`
+	V4IndexBytes        uint64                  `json:"v4IndexBytes"`
 	PreservedIndexes    int                     `json:"preservedIndexSegments"`
 	PreservedIndexBytes uint64                  `json:"preservedIndexBytes"`
 	MainSavingsBytes    int64                   `json:"mainSavingsBytes"`
-	V3Physical          EventLogV3PhysicalStats `json:"v3Physical"`
+	V4Physical          EventLogV4PhysicalStats `json:"v4Physical"`
 	Segments            []SegmentRef            `json:"segments"`
 }
 
-// MigrateEventLogsV3 rewrites exact active segment boundaries from one pinned
+// MigrateEventLogsV4 rewrites exact active segment boundaries from one pinned
 // production manifest. Publication is opt-in and is refused when the active
 // manifest changes while the new immutable files are being built.
-func MigrateEventLogsV3(dir string, opts EventLogV3MigrationOptions) (*EventLogV3MigrationResult, error) {
+func MigrateEventLogsV4(dir string, opts EventLogV4MigrationOptions) (*EventLogV4MigrationResult, error) {
 	if dir == "" {
-		return nil, errors.New("snapshots: V3 migration directory is empty")
+		return nil, errors.New("snapshots: V4 migration directory is empty")
 	}
 	if opts.Merge == 0 {
 		opts.Merge = 8
@@ -46,7 +51,7 @@ func MigrateEventLogsV3(dir string, opts EventLogV3MigrationOptions) (*EventLogV
 	if err != nil {
 		return nil, err
 	}
-	sources, err := selectEventLogV3MigrationSources(manifest, opts)
+	sources, err := selectEventLogV4MigrationSources(manifest, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -71,34 +76,34 @@ func MigrateEventLogsV3(dir string, opts EventLogV3MigrationOptions) (*EventLogV
 	if err != nil {
 		return nil, err
 	}
-	v3Ref, err := BuildEventLogV3SegmentFromReader(pinned, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	v4Ref, err := BuildEventLogV4SegmentFromReader(pinned, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
 	if err != nil {
 		return nil, err
 	}
-	publishRefs := []SegmentRef{v3Ref}
+	publishRefs := []SegmentRef{v4Ref}
 	var indexRef SegmentRef
 	if preserveIndexes {
-		if err := verifyEventLogSegmentCandidateKeysEqual(dir, sources[0], v3Ref); err != nil {
+		if err := verifyEventLogSegmentCandidateKeysEqual(dir, sources[0], v4Ref); err != nil {
 			return nil, fmt.Errorf("snapshots: cannot preserve crossing event-log-index: %w", err)
 		}
 	} else {
-		indexRef, err = writeFreshEventLogV3Index(dir, v3Ref, EventLogIndexSegmentPath(fromBlock, toBlock))
+		indexRef, err = writeFreshEventLogV4Index(dir, v4Ref, EventLogIndexSegmentPath(fromBlock, toBlock))
 		if err != nil {
 			return nil, err
 		}
-		if err := verifyEventLogIndexSegmentAgainstEventLogs(dir, indexRef, []SegmentRef{v3Ref}); err != nil {
-			return nil, fmt.Errorf("snapshots: verify V3 migration companion: %w", err)
+		if err := verifyEventLogIndexSegmentAgainstEventLogs(dir, indexRef, []SegmentRef{v4Ref}); err != nil {
+			return nil, fmt.Errorf("snapshots: verify V4 migration companion: %w", err)
 		}
 		publishRefs = append(publishRefs, indexRef)
 	}
-	result := &EventLogV3MigrationResult{
+	result := &EventLogV4MigrationResult{
 		SourceGeneration: manifest.Generation,
 		Generation:       manifest.Generation,
 		FromBlock:        fromBlock,
 		ToBlock:          toBlock,
 		SourceSegments:   len(sources),
-		V3MainBytes:      v3Ref.Size,
-		V3IndexBytes:     indexRef.Size,
+		V4MainBytes:      v4Ref.Size,
+		V4IndexBytes:     indexRef.Size,
 		Segments:         append([]SegmentRef(nil), publishRefs...),
 	}
 	for _, ref := range sources {
@@ -114,8 +119,8 @@ func MigrateEventLogsV3(dir string, opts EventLogV3MigrationOptions) (*EventLogV
 			result.SourceIndexBytes += ref.Size
 		}
 	}
-	result.MainSavingsBytes = signedByteSavings(result.SourceMainBytes, result.V3MainBytes)
-	result.V3Physical, err = InspectEventLogV3Physical(dir, v3Ref)
+	result.MainSavingsBytes = signedByteSavings(result.SourceMainBytes, result.V4MainBytes)
+	result.V4Physical, err = InspectEventLogV4Physical(dir, v4Ref)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +132,7 @@ func MigrateEventLogsV3(dir string, opts EventLogV3MigrationOptions) (*EventLogV
 		return nil, err
 	}
 	if current.Generation != manifest.Generation || !reflect.DeepEqual(current.Segments, manifest.Segments) {
-		return nil, fmt.Errorf("snapshots: production manifest changed during V3 build (started generation %d, now %d); immutable outputs were left unreferenced and the migration is safe to rerun", manifest.Generation, current.Generation)
+		return nil, fmt.Errorf("snapshots: production manifest changed during V4 build (started generation %d, now %d); immutable outputs were left unreferenced and the migration is safe to rerun", manifest.Generation, current.Generation)
 	}
 	published, err := NewAggregator(dir).integrateWithManifest(fromBlock, toBlock, publishRefs, current)
 	if err != nil {
@@ -177,7 +182,7 @@ func sameEventLogCandidateKeys(a, b map[string][]uint64) bool {
 	return true
 }
 
-func selectEventLogV3MigrationSources(manifest *Manifest, opts EventLogV3MigrationOptions) ([]SegmentRef, error) {
+func selectEventLogV4MigrationSources(manifest *Manifest, opts EventLogV4MigrationOptions) ([]SegmentRef, error) {
 	refs := eventLogRefs(manifest)
 	if len(refs) == 0 {
 		return nil, errors.New("snapshots: production manifest has no active event-log segments")
@@ -204,17 +209,33 @@ func selectEventLogV3MigrationSources(manifest *Manifest, opts EventLogV3Migrati
 			return nil, fmt.Errorf("snapshots: --snapshot.to-block=%d is not an active event-log segment boundary", opts.ToBlock)
 		}
 	} else {
-		limit := start + int(opts.Merge) - 1
-		if limit >= len(refs) {
-			limit = len(refs) - 1
+		remaining := uint64(len(refs) - start)
+		merge := opts.Merge
+		if merge == 0 {
+			merge = 8
 		}
-		end = limit
+		if merge > remaining {
+			merge = remaining
+		}
+		end = start + int(merge) - 1
 	}
 	selected := append([]SegmentRef(nil), refs[start:end+1]...)
 	for i := 1; i < len(selected); i++ {
 		if selected[i-1].ToTxNum == ^uint64(0) || selected[i].FromTxNum != selected[i-1].ToTxNum+1 {
 			return nil, fmt.Errorf("snapshots: active event-log segments %q and %q are not contiguous", selected[i-1].Path, selected[i].Path)
 		}
+	}
+	if len(selected) > eventLogV4MigrationMaxSourceSegments {
+		return nil, fmt.Errorf("snapshots: event-log V4 migration selects %d source segments, exceeds safety limit %d", len(selected), eventLogV4MigrationMaxSourceSegments)
+	}
+	fromBlock, toBlock := selected[0].FromTxNum, selected[len(selected)-1].ToTxNum
+	if toBlock < fromBlock {
+		return nil, fmt.Errorf("snapshots: event-log V4 migration range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	// Compare the inclusive span without adding one first, so a MaxUint64 end
+	// block cannot overflow the check.
+	if toBlock-fromBlock >= eventLogV4MigrationMaxBlockSpan {
+		return nil, fmt.Errorf("snapshots: event-log V4 migration range [%d,%d] exceeds safety limit of %d blocks", fromBlock, toBlock, eventLogV4MigrationMaxBlockSpan)
 	}
 	return selected, nil
 }

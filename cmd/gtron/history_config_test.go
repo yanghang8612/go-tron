@@ -518,7 +518,7 @@ func TestDomainStatePrunePolicyUsesModeDefaultWindow(t *testing.T) {
 	}{
 		{mode: params.HistoryModeFull, want: params.HistoryDefaultPruneWindow},
 		{mode: params.HistoryModeBlocks, want: params.HistoryDefaultPruneWindow},
-		{mode: params.HistoryModeSnap, want: params.HistoryDefaultPruneWindow},
+		{mode: params.HistoryModeSnap, want: params.HistoryColdDefaultPruneWindow},
 		{mode: params.HistoryModeMinimal, want: params.HistoryMinimalDefaultPruneWindow},
 	}
 	for _, tt := range tests {

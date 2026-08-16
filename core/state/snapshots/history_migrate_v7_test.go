@@ -20,7 +20,7 @@ func TestHistoryUsesCurrentCompressionDistinguishesChunkLayout(t *testing.T) {
 		t.Fatalf("current compression = %t, err=%v", current, err)
 	}
 	legacyPath := filepath.Join(dir, "legacy.seg")
-	if err := compressBlobToFile(dir, legacyPath, payload, 16<<10); err != nil {
+	if err := compressBlobToFile(dir, legacyPath, payload, 64<<10); err != nil {
 		t.Fatalf("write legacy compression: %v", err)
 	}
 	current, err = historyUsesCurrentCompression(legacyPath)

@@ -1259,6 +1259,9 @@ func TestProductionEventLogQueriesUseChainDBBoundary(t *testing.T) {
 func TestProductionEventLogCoverageChecksStayOnAuditedBoundaries(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditEventLogCoverageCheckCalls(t, root, eventLogCoverageCheckMethods(), map[string]map[string]struct{}{
+		"cmd/gtron/freezer_adapter.go": {
+			"ReceiptLogRangeCovered": {},
+		},
 		"cmd/gtron/snapshot_cmd.go": {
 			"snapshotBuildDerivedIndexesFromCold": {},
 			"snapshotBuildEventLogsCmd":           {},
@@ -1269,7 +1272,7 @@ func TestProductionEventLogCoverageChecksStayOnAuditedBoundaries(t *testing.T) {
 			"EventLogRangeCoveredForFilter":             {},
 		},
 		"core/state/snapshots/event_log_segment_v3.go": {
-			"BuildEventLogV3SegmentFromReader": {},
+			"BuildEventLogV4SegmentFromReader": {},
 		},
 	})
 	if len(offenders) > 0 {

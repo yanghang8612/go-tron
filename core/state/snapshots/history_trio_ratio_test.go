@@ -56,7 +56,7 @@ func TestHistoryTrioCompressionRatio(t *testing.T) {
 	for _, chunkSize := range []int{32 << 10, 64 << 10, 128 << 10, 256 << 10} {
 		name := fmt.Sprintf("seg-%d.cb", chunkSize)
 		chunkCompressed := compressedSizeWithChunk(t, dir, name, segmentData, chunkSize)
-		t.Logf("  seg chunk %6d KiB = %8d  (%.2fx; %.2f%% vs 16KiB)", chunkSize>>10, chunkCompressed, float64(segRaw)/float64(chunkCompressed), 100*(1-float64(chunkCompressed)/float64(segC)))
+		t.Logf("  seg chunk %6d KiB = %8d  (%.2fx; %.2f%% vs current %dKiB)", chunkSize>>10, chunkCompressed, float64(segRaw)/float64(chunkCompressed), 100*(1-float64(chunkCompressed)/float64(segC)), historyCompressChunkSize>>10)
 	}
 	idxC := compressedSize(t, dir, "idx.cb", indexData)
 	kvC := compressedSize(t, dir, "kv.cb", accessorData)

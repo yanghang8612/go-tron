@@ -45,7 +45,7 @@ type HistoryV7MigrationResult struct {
 }
 
 // MigrateHistoryV7 rewrites every non-current active state-domain-change trio
-// using the current 64 KiB compressed history, delta-framed transaction index,
+// using the current 128 KiB compressed history, delta-framed transaction index,
 // and delta-framed key accessor. The node must be stopped: this function owns
 // manifest publication for the duration of the conversion.
 func MigrateHistoryV7(dir string, opts HistoryV7MigrationOptions) (*HistoryV7MigrationResult, error) {

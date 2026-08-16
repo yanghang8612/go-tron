@@ -378,8 +378,8 @@ func normalizedEventLogBuildVersion(version uint32) (uint32, error) {
 	if version == 0 {
 		version = EventLogSegmentVersion
 	}
-	if version != EventLogSegmentVersion && version != EventLogSegmentV3Version {
-		return 0, fmt.Errorf("snapshots: event-log build version %d is unsupported; use 2 or 3", version)
+	if version != EventLogSegmentVersion && version != EventLogSegmentV4Version {
+		return 0, fmt.Errorf("snapshots: event-log build version %d is unsupported; use 2 or 4", version)
 	}
 	return version, nil
 }
@@ -389,12 +389,12 @@ func buildEventLogPairFromChain(chain *rawdb.ChainDB, dir string, fromBlock, toB
 	if err != nil {
 		return nil, err
 	}
-	if version == EventLogSegmentV3Version {
-		ref, err := BuildEventLogV3SegmentFromChain(chain, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	if version == EventLogSegmentV4Version {
+		ref, err := BuildEventLogV4SegmentFromChain(chain, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
 		if err != nil {
 			return nil, err
 		}
-		indexRef, err := writeFreshEventLogV3Index(dir, ref, EventLogIndexSegmentPath(fromBlock, toBlock))
+		indexRef, err := writeFreshEventLogV4Index(dir, ref, EventLogIndexSegmentPath(fromBlock, toBlock))
 		if err != nil {
 			return nil, err
 		}
@@ -416,12 +416,12 @@ func buildEventLogPairFromReader(reader rawdb.EventLogReader, dir string, fromBl
 	if err != nil {
 		return nil, err
 	}
-	if version == EventLogSegmentV3Version {
-		ref, err := BuildEventLogV3SegmentFromReader(reader, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	if version == EventLogSegmentV4Version {
+		ref, err := BuildEventLogV4SegmentFromReader(reader, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
 		if err != nil {
 			return nil, err
 		}
-		indexRef, err := writeFreshEventLogV3Index(dir, ref, EventLogIndexSegmentPath(fromBlock, toBlock))
+		indexRef, err := writeFreshEventLogV4Index(dir, ref, EventLogIndexSegmentPath(fromBlock, toBlock))
 		if err != nil {
 			return nil, err
 		}

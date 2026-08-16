@@ -3,8 +3,10 @@ package snapshots
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -24,9 +26,9 @@ func TestEventLogV3BuildVerifyLookupAndMixedManifest(t *testing.T) {
 		eventLogV3TestRow(2, 0, 0, addrA, common.Hash{0x12}, common.Hash{0x22}, topicB, bytes.Repeat([]byte{0x03}, 300)),
 		{BlockNum: 2, TxIndex: 1, LogIndex: 1, TxHash: common.Hash{0x13}, BlockHash: common.Hash{0x22}, Address: addrB, Log: &corepb.TransactionInfo_Log{Address: eventLogV3PayloadAddress(addrB)}},
 	}
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 2)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 2)
 	if err != nil {
-		t.Fatalf("BuildEventLogV3SegmentFromReader: %v", err)
+		t.Fatalf("BuildEventLogV4SegmentFromReader: %v", err)
 	}
 	if err := CheckEventLogSegment(dir, ref); err != nil {
 		t.Fatalf("CheckEventLogSegment V3: %v", err)
@@ -35,8 +37,8 @@ func TestEventLogV3BuildVerifyLookupAndMixedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(raw[:8], eventLogMagicV3[:]) {
-		t.Fatalf("magic = %q, want V3", raw[:8])
+	if !bytes.Equal(raw[:8], eventLogMagicV4[:]) {
+		t.Fatalf("magic = %q, want V4", raw[:8])
 	}
 
 	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref}, "")
@@ -69,7 +71,7 @@ func TestEventLogV3RejectsCorruptPayloadFrame(t *testing.T) {
 	addr := common.BytesToAddress(eventLogTestAddress(0x41))
 	topic := common.Hash{0xc1}
 	row := eventLogV3TestRow(1, 0, 0, addr, common.Hash{1}, common.Hash{2}, topic, []byte("payload"))
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,9 +110,9 @@ func TestEventLogV3AllowsAddressOnlyLogWithEmptyStrippedPayload(t *testing.T) {
 	dir := t.TempDir()
 	address := common.BytesToAddress(eventLogTestAddress(0x42))
 	row := EventLog{BlockNum: 1, TxHash: common.Hash{1}, BlockHash: common.Hash{2}, Address: address, Log: &corepb.TransactionInfo_Log{Address: eventLogV3PayloadAddress(address)}}
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
 	if err != nil {
-		t.Fatalf("BuildEventLogV3SegmentFromReader empty payload: %v", err)
+		t.Fatalf("BuildEventLogV4SegmentFromReader empty payload: %v", err)
 	}
 	if err := CheckEventLogSegment(dir, ref); err != nil {
 		t.Fatalf("CheckEventLogSegment empty payload: %v", err)
@@ -122,9 +124,9 @@ func TestEventLogV3NormalizesTwentyByteTVMAddress(t *testing.T) {
 	rawAddress := bytes.Repeat([]byte{0x73}, common.AddressLength-1)
 	address := common.BytesToAddress(rawAddress)
 	row := EventLog{BlockNum: 1, TxHash: common.Hash{1}, BlockHash: common.Hash{2}, Address: address, Log: &corepb.TransactionInfo_Log{Address: rawAddress, Data: []byte{1}}}
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
 	if err != nil {
-		t.Fatalf("BuildEventLogV3SegmentFromReader 20-byte address: %v", err)
+		t.Fatalf("BuildEventLogV4SegmentFromReader 20-byte address: %v", err)
 	}
 	seg, err := OpenEventLogSegment(dir, ref)
 	if err != nil {
@@ -148,9 +150,9 @@ func TestEventLogV3PreservesTwentyOneByteTronAddress(t *testing.T) {
 	rawAddress := append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x75}, common.AddressLength-1)...)
 	address := common.BytesToAddress(rawAddress)
 	row := EventLog{BlockNum: 1, TxHash: common.Hash{1}, BlockHash: common.Hash{2}, Address: address, Log: &corepb.TransactionInfo_Log{Address: rawAddress, Data: []byte{1}}}
-	ref, err := BuildEventLogV3SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "", 1, 1)
 	if err != nil {
-		t.Fatalf("BuildEventLogV3SegmentFromReader 21-byte address: %v", err)
+		t.Fatalf("BuildEventLogV4SegmentFromReader 21-byte address: %v", err)
 	}
 	seg, err := OpenEventLogSegment(dir, ref)
 	if err != nil {
@@ -187,7 +189,7 @@ func TestEventLogBuildVersionSelectionPreservesLegacyDefault(t *testing.T) {
 	}
 
 	v3Dir := t.TempDir()
-	v3, err := NewAggregator(v3Dir).BuildEventLogsFromReaderWithBuildOptions(reader, 1, 1, EventLogBuildOptions{Version: EventLogSegmentV3Version})
+	v3, err := NewAggregator(v3Dir).BuildEventLogsFromReaderWithBuildOptions(reader, 1, 1, EventLogBuildOptions{Version: EventLogSegmentV4Version})
 	if err != nil {
 		t.Fatalf("V3 BuildEventLogsFromReaderWithBuildOptions: %v", err)
 	}
@@ -197,13 +199,13 @@ func TestEventLogBuildVersionSelectionPreservesLegacyDefault(t *testing.T) {
 	}
 	v3Version := v3Segment.header.version
 	_ = v3Segment.Close()
-	if v3Version != EventLogSegmentV3Version {
+	if v3Version != EventLogSegmentV4Version {
 		t.Fatalf("explicit API version = %d, want V3", v3Version)
 	}
 	if len(eventLogIndexRefs(v3.Manifest)) != 1 {
 		t.Fatalf("V3 manifest has no external event-log-index companion: %+v", v3.Manifest.Segments)
 	}
-	if _, err := NewAggregator(t.TempDir()).BuildEventLogsFromReaderWithBuildOptions(reader, 1, 1, EventLogBuildOptions{Version: 4}); err == nil {
+	if _, err := NewAggregator(t.TempDir()).BuildEventLogsFromReaderWithBuildOptions(reader, 1, 1, EventLogBuildOptions{Version: 99}); err == nil {
 		t.Fatal("unsupported event-log version was accepted")
 	}
 }
@@ -224,7 +226,7 @@ func TestBuildEventLogV3DirectlyFromChainNormalizesTVMAddress(t *testing.T) {
 	if err := rawdb.WriteTransactionInfosByBlock(chain, 1, infos); err != nil {
 		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
 	}
-	result, err := NewAggregator(dir).BuildEventLogsWithBuildOptions(chain, 1, 1, EventLogBuildOptions{Version: EventLogSegmentV3Version})
+	result, err := NewAggregator(dir).BuildEventLogsWithBuildOptions(chain, 1, 1, EventLogBuildOptions{Version: EventLogSegmentV4Version})
 	if err != nil {
 		t.Fatalf("BuildEventLogsWithBuildOptions: %v", err)
 	}
@@ -248,7 +250,7 @@ func TestBuildEventLogV3DirectlyFromChainNormalizesTVMAddress(t *testing.T) {
 	}
 }
 
-func TestMigrateEventLogsV3BuildOnlyThenPublish(t *testing.T) {
+func TestMigrateEventLogsV4BuildOnlyThenPublish(t *testing.T) {
 	dir := t.TempDir()
 	addr := common.BytesToAddress(eventLogTestAddress(0x51))
 	topic := common.Hash{0xd1}
@@ -275,7 +277,7 @@ func TestMigrateEventLogsV3BuildOnlyThenPublish(t *testing.T) {
 	if err := PublishManifest(dir, manifest); err != nil {
 		t.Fatal(err)
 	}
-	preview, err := MigrateEventLogsV3(dir, EventLogV3MigrationOptions{FromBlock: 1, Merge: 2})
+	preview, err := MigrateEventLogsV4(dir, EventLogV4MigrationOptions{FromBlock: 1, Merge: 2})
 	if err != nil {
 		t.Fatalf("build-only migration: %v", err)
 	}
@@ -289,7 +291,7 @@ func TestMigrateEventLogsV3BuildOnlyThenPublish(t *testing.T) {
 	if unchanged.Generation != 7 || len(eventLogRefs(unchanged)) != 2 {
 		t.Fatalf("build-only changed manifest: %+v", unchanged)
 	}
-	published, err := MigrateEventLogsV3(dir, EventLogV3MigrationOptions{FromBlock: 1, Merge: 2, Publish: true})
+	published, err := MigrateEventLogsV4(dir, EventLogV4MigrationOptions{FromBlock: 1, Merge: 2, Publish: true})
 	if err != nil {
 		t.Fatalf("published migration: %v", err)
 	}
@@ -307,7 +309,7 @@ func TestMigrateEventLogsV3BuildOnlyThenPublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seg.header.version != EventLogSegmentV3Version {
+	if seg.header.version != EventLogSegmentV4Version {
 		t.Fatalf("active event-log version = %d", seg.header.version)
 	}
 	_ = seg.Close()
@@ -315,11 +317,11 @@ func TestMigrateEventLogsV3BuildOnlyThenPublish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectEventLogSpace V3: %v", err)
 	}
-	if len(inspection.Segments) != 1 || inspection.Segments[0].Version != EventLogSegmentV3Version || inspection.Segments[0].Physical.MainSegment != published.V3MainBytes {
+	if len(inspection.Segments) != 1 || inspection.Segments[0].Version != EventLogSegmentV4Version || inspection.Segments[0].Physical.MainSegment != published.V4MainBytes {
 		t.Fatalf("V3 inspection = %+v", inspection.Segments)
 	}
-	if _, err := MigrateEventLogsV3(dir, EventLogV3MigrationOptions{FromBlock: 1, Merge: 1, Publish: true}); err != nil {
-		t.Fatalf("idempotent V3 migration rerun: %v", err)
+	if _, err := MigrateEventLogsV4(dir, EventLogV4MigrationOptions{FromBlock: 1, Merge: 1, Publish: true}); err != nil {
+		t.Fatalf("idempotent V4 migration rerun: %v", err)
 	}
 }
 
@@ -347,11 +349,11 @@ func TestMigrateSingleEventLogV3PreservesCrossingGlobalIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := MigrateEventLogsV3(dir, EventLogV3MigrationOptions{FromBlock: 1, ToBlock: 1, ToBlockSet: true, Publish: true})
+	result, err := MigrateEventLogsV4(dir, EventLogV4MigrationOptions{FromBlock: 1, ToBlock: 1, ToBlockSet: true, Publish: true})
 	if err != nil {
-		t.Fatalf("single V3 migration with crossing index: %v", err)
+		t.Fatalf("single V4 migration with crossing index: %v", err)
 	}
-	if !result.Published || result.PreservedIndexes != 1 || result.PreservedIndexBytes != globalIndex.Size || result.V3IndexBytes != 0 || len(result.Segments) != 1 {
+	if !result.Published || result.PreservedIndexes != 1 || result.PreservedIndexBytes != globalIndex.Size || result.V4IndexBytes != 0 || len(result.Segments) != 1 {
 		t.Fatalf("migration result = %+v", result)
 	}
 	active, err := LoadProductionManifest(dir)
@@ -370,7 +372,7 @@ func TestMigrateSingleEventLogV3PreservesCrossingGlobalIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.header.version != EventLogSegmentV3Version {
+	if first.header.version != EventLogSegmentV4Version {
 		t.Fatalf("first version = %d", first.header.version)
 	}
 	_ = first.Close()
@@ -388,6 +390,43 @@ func TestMigrateSingleEventLogV3PreservesCrossingGlobalIndex(t *testing.T) {
 	}
 	if !equalUint64Slices(blocks, []uint64{1, 2}) {
 		t.Fatalf("blocks = %v", blocks)
+	}
+}
+
+func TestSelectEventLogV4MigrationSourcesRejectsUnsafeRanges(t *testing.T) {
+	refs := make([]SegmentRef, eventLogV4MigrationMaxSourceSegments+1)
+	for i := range refs {
+		block := uint64(i + 1)
+		refs[i] = SegmentRef{
+			Dataset:   SegmentDatasetEventLog,
+			Kind:      SegmentEventLog,
+			FromTxNum: block,
+			ToTxNum:   block,
+			Path:      fmt.Sprintf("log/event-log-%d-%d.seg", block, block),
+		}
+	}
+	manifest := NewManifest(1, uint64(len(refs)), refs)
+	if _, err := selectEventLogV4MigrationSources(manifest, EventLogV4MigrationOptions{
+		FromBlock: 1,
+		Merge:     uint64(len(refs)),
+	}); err == nil || !strings.Contains(err.Error(), "selects 65 source segments, exceeds safety limit 64") {
+		t.Fatalf("merge source limit error = %v", err)
+	}
+
+	large := NewManifest(1, eventLogV4MigrationMaxBlockSpan+1, []SegmentRef{{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLog,
+		FromTxNum: 1,
+		ToTxNum:   eventLogV4MigrationMaxBlockSpan + 1,
+		Path:      "log/event-log-1-320001.seg",
+	}})
+	for _, opts := range []EventLogV4MigrationOptions{
+		{FromBlock: 1, Merge: 1},
+		{FromBlock: 1, ToBlock: eventLogV4MigrationMaxBlockSpan + 1, ToBlockSet: true},
+	} {
+		if _, err := selectEventLogV4MigrationSources(large, opts); err == nil || !strings.Contains(err.Error(), "exceeds safety limit of 320000 blocks") {
+			t.Fatalf("range limit error for %+v = %v", opts, err)
+		}
 	}
 }
 

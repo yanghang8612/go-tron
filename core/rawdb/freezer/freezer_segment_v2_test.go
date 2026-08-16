@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -81,6 +82,89 @@ func TestV2SegmentRoundTripAndChecksum(t *testing.T) {
 		t.Fatal("corrupt frame passed checksum validation")
 	}
 	_ = store.Close()
+}
+
+func TestV2BodiesDictionaryRoundTripAndCorruption(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bodies", v2SegmentName(0, 32))
+	records := make([][]byte, 32)
+	for number := range records {
+		prefix := bytes.Repeat([]byte("tron-block-body-contract-transfer-"), 600)
+		var suffix [8]byte
+		binary.BigEndian.PutUint64(suffix[:], uint64(number))
+		records[number] = append(prefix, suffix[:]...)
+	}
+	if err := writeV2TableSegment(path, "bodies", 0, uint64(len(records)), 8, func(number uint64) ([]byte, error) {
+		return records[number], nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openV2Segment(path, "bodies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.codec != v2CodecBodiesDict || len(reader.dictionary) != v2BodiesDictBytes {
+		_ = reader.Close()
+		t.Fatalf("body codec=%d dictionary=%d, want codec=%d dictionary=%d", reader.codec, len(reader.dictionary), v2CodecBodiesDict, v2BodiesDictBytes)
+	}
+	store := newTestV2Store(t, "bodies", reader)
+	decoder, err := newV2DecoderForSegments(store.segments)
+	if err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	store.decoder.Close()
+	store.decoder = decoder
+	for number, want := range records {
+		got, err := store.read("bodies", uint64(number))
+		if err != nil || !bytes.Equal(got, want) {
+			_ = store.Close()
+			t.Fatalf("body %d round trip err=%v equal=%v", number, err, bytes.Equal(got, want))
+		}
+	}
+	frameCount := len(reader.frames)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dictionaryOffset := int64(v2HeaderSize + frameCount*v2FrameEntrySize)
+	one := []byte{0}
+	if _, err := file.ReadAt(one, dictionaryOffset); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	one[0] ^= 0xff
+	if _, err := file.WriteAt(one, dictionaryOffset); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openV2Segment(path, "bodies"); err == nil || !strings.Contains(err.Error(), "dictionary checksum mismatch") {
+		t.Fatalf("corrupt body dictionary error=%v, want checksum mismatch", err)
+	}
+}
+
+func TestV2BodiesCodecIsNotAppliedToOtherTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tx_infos", v2SegmentName(0, 8))
+	if err := writeV2TableSegment(path, "tx_infos", 0, 8, 4, func(number uint64) ([]byte, error) {
+		return []byte(fmt.Sprintf("receipt-%d", number)), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openV2Segment(path, "tx_infos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if reader.codec != v2CodecDefault || len(reader.dictionary) != 0 {
+		t.Fatalf("tx_infos codec=%d dictionary=%d, want default without dictionary", reader.codec, len(reader.dictionary))
+	}
 }
 
 func TestV2LoadFrameReusesCompressedBuffer(t *testing.T) {

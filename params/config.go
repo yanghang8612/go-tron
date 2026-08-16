@@ -69,6 +69,13 @@ const (
 // full and blocks mode: 262,144 blocks.
 const HistoryDefaultPruneWindow uint64 = 262_144
 
+// HistoryColdDefaultPruneWindow is the fresh-genesis snap/archive hot duplicate
+// window. Verified cold history remains permanent, so retaining more than one
+// 65,536-block immutable segment in Pebble only duplicates data. At TRON's
+// three-second cadence this still leaves roughly 2.3 days of local history and
+// is far wider than the reorg safety window.
+const HistoryColdDefaultPruneWindow uint64 = 65_536
+
 // HistoryMinimalDefaultPruneWindow is the default finite-prune state history
 // window for minimal mode. Erigon 3.5 kept minimal at 100,000 blocks while
 // widening full and blocks mode.
@@ -117,6 +124,9 @@ func (c *ChainConfig) EffectiveHistoryMode() string {
 func DefaultHistoryPruneWindowForMode(mode string) uint64 {
 	if mode == HistoryModeMinimal {
 		return HistoryMinimalDefaultPruneWindow
+	}
+	if mode == HistoryModeSnap || mode == HistoryModeArchive {
+		return HistoryColdDefaultPruneWindow
 	}
 	return HistoryDefaultPruneWindow
 }

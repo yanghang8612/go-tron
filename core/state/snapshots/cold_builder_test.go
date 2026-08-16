@@ -1964,7 +1964,7 @@ func TestColdBuilderCatchupKeepsEventLogIndexesSegmentLocal(t *testing.T) {
 		HistoryWindow:   1,
 		BatchBlocks:     1,
 		BuildEventLogs:  true,
-		EventLogVersion: EventLogSegmentV3Version,
+		EventLogVersion: EventLogSegmentV4Version,
 	}
 	for pass := uint64(1); pass <= 2; pass++ {
 		// Recreate the lifecycle on every pass to exercise manifest/stage resume
@@ -1998,7 +1998,7 @@ func TestColdBuilderCatchupKeepsEventLogIndexesSegmentLocal(t *testing.T) {
 		}
 		version := segment.header.version
 		_ = segment.Close()
-		if version != EventLogSegmentV3Version {
+		if version != EventLogSegmentV4Version {
 			t.Fatalf("event-log %s version = %d, want V3", ref.Path, version)
 		}
 	}

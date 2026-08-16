@@ -175,18 +175,18 @@ var (
 	}
 	snapshotEventLogVersionFlag = &cli.UintFlag{
 		Name:    "snapshot.event-log.version",
-		Usage:   "Main event-log snapshot writer version: 2 (legacy) or 3 (dictionary + framed Zstd)",
-		Value:   statesnapshots.EventLogSegmentV3Version,
+		Usage:   "Main event-log snapshot writer version: 2 (legacy) or 4 (topic-deduplicated dictionary + framed Zstd)",
+		Value:   statesnapshots.EventLogSegmentV4Version,
 		EnvVars: []string{"GTRON_SNAPSHOT_EVENT_LOG_VERSION"},
 	}
-	snapshotEventLogV3MergeFlag = &cli.Uint64Flag{
+	snapshotEventLogV4MergeFlag = &cli.Uint64Flag{
 		Name:  "snapshot.event-log.merge",
 		Usage: "Number of consecutive active event-log segments to merge when --snapshot.to-block is omitted",
 		Value: 8,
 	}
-	snapshotEventLogV3PublishFlag = &cli.BoolFlag{
+	snapshotEventLogV4PublishFlag = &cli.BoolFlag{
 		Name:  "publish",
-		Usage: "Atomically publish the verified V3 segment pair into manifest.json (otherwise build and verify only)",
+		Usage: "Atomically publish the verified V4 segment pair into manifest.json (otherwise build and verify only)",
 	}
 )
 
@@ -462,17 +462,17 @@ func snapshotCommand() *cli.Command {
 				Action: snapshotMigrateHistoryV7Cmd,
 			},
 			{
-				Name:  "migrate-event-logs-v3",
-				Usage: "Rewrite consecutive active event-log segments as an experimental V3 main segment without opening chaindata",
+				Name:  "migrate-event-logs-v4",
+				Usage: "Rewrite consecutive active event-log segments as a compact V4 main segment without opening chaindata",
 				Flags: []cli.Flag{
 					dataDirFlag,
 					snapshotDirFlag,
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
-					snapshotEventLogV3MergeFlag,
-					snapshotEventLogV3PublishFlag,
+					snapshotEventLogV4MergeFlag,
+					snapshotEventLogV4PublishFlag,
 				},
-				Action: snapshotMigrateEventLogsV3Cmd,
+				Action: snapshotMigrateEventLogsV4Cmd,
 			},
 			{
 				Name:  "prune-chain-lookups",
@@ -1684,12 +1684,12 @@ func snapshotMigrateHistoryV7Cmd(ctx *cli.Context) error {
 	return nil
 }
 
-func snapshotMigrateEventLogsV3Cmd(ctx *cli.Context) error {
+func snapshotMigrateEventLogsV4Cmd(ctx *cli.Context) error {
 	if !ctx.IsSet("snapshot.from-block") {
-		return errors.New("snapshot V3 migration requires --snapshot.from-block at an active event-log segment boundary")
+		return errors.New("snapshot V4 migration requires --snapshot.from-block at an active event-log segment boundary")
 	}
 	cfg := makeConfig(ctx)
-	result, err := statesnapshots.MigrateEventLogsV3(snapshotDir(ctx, cfg.DataDir), statesnapshots.EventLogV3MigrationOptions{
+	result, err := statesnapshots.MigrateEventLogsV4(snapshotDir(ctx, cfg.DataDir), statesnapshots.EventLogV4MigrationOptions{
 		FromBlock:  ctx.Uint64("snapshot.from-block"),
 		ToBlock:    ctx.Uint64("snapshot.to-block"),
 		ToBlockSet: ctx.IsSet("snapshot.to-block"),
@@ -1728,8 +1728,8 @@ func contextOrBackground(ctx *cli.Context) context.Context {
 
 func snapshotEventLogBuildVersion(ctx *cli.Context) (uint32, error) {
 	version := uint32(ctx.Uint("snapshot.event-log.version"))
-	if version != statesnapshots.EventLogSegmentVersion && version != statesnapshots.EventLogSegmentV3Version {
-		return 0, fmt.Errorf("--snapshot.event-log.version must be 2 or 3, got %d", version)
+	if version != statesnapshots.EventLogSegmentVersion && version != statesnapshots.EventLogSegmentV4Version {
+		return 0, fmt.Errorf("--snapshot.event-log.version must be 2 or 4, got %d", version)
 	}
 	return version, nil
 }

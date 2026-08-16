@@ -51,6 +51,10 @@ func (a *freezerChainSource) ReadBlockStateRootRaw(hash tcommon.Hash) ([]byte, e
 	return data, nil
 }
 
+func (a *freezerChainSource) ReceiptLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	return a.chain.ChainDB().EventLogRangeCovered(fromBlock, toBlock)
+}
+
 type freezerStore struct {
 	rawdb.AncientReader
 	f *rawdbfreezer.Freezer

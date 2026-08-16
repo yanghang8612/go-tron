@@ -370,14 +370,14 @@ func ReadTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.
 		if err != nil {
 			return nil, ok, err
 		}
-		infos, err := decodeTransactionRetForBlock(data, blockNum)
+		infos, err := decodeTransactionRetForBlock(db, data, blockNum)
 		return infos, true, err
 	}
 	data, ok, err := readValueThenVerifyMiss(db, txInfoBlockKey(blockNum), fmt.Sprintf("transaction infos for block %d", blockNum), nil)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	infos, err := decodeTransactionRetForBlock(data, blockNum)
+	infos, err := decodeTransactionRetForBlock(db, data, blockNum)
 	return infos, true, err
 }
 
@@ -395,9 +395,13 @@ func readAncientTransactionInfosStrict(db *ChainDB, blockNum uint64) ([]byte, bo
 	return data, true, nil
 }
 
-func decodeTransactionRetForBlock(data []byte, blockNum uint64) ([]*corepb.TransactionInfo, error) {
+func decodeTransactionRetForBlock(db *ChainDB, data []byte, blockNum uint64) ([]*corepb.TransactionInfo, error) {
+	stored, err := decodeTransactionRetStorage(data)
+	if err != nil {
+		return nil, err
+	}
 	ret := &corepb.TransactionRet{}
-	if err := proto.Unmarshal(data, ret); err != nil {
+	if err := proto.Unmarshal(stored.payload, ret); err != nil {
 		return nil, err
 	}
 	if !transactionInfoBlockNumberMatches(ret.BlockNumber, blockNum) {
@@ -411,6 +415,11 @@ func decodeTransactionRetForBlock(data []byte, blockNum uint64) ([]*corepb.Trans
 			info.BlockTimeStamp = ret.BlockTimeStamp
 		}
 		if err := validateTransactionInfoForBlockKey(blockNum, txIndex, info, "read transaction infos by block"); err != nil {
+			return nil, err
+		}
+	}
+	if stored.externalLogs {
+		if err := hydrateExternalTransactionInfoLogs(db, blockNum, ret.Transactioninfo, stored.expectedLogCount); err != nil {
 			return nil, err
 		}
 	}

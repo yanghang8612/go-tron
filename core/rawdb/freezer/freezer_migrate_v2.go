@@ -340,7 +340,7 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				return data, nil
 			}
 			unpublished = append(unpublished, path)
-			if err := writeV2Segment(path, start, count, options.FrameBlocks, readForWrite); err != nil {
+			if err := writeV2TableSegment(path, kind, start, count, options.FrameBlocks, readForWrite); err != nil {
 				cleanupUnpublished()
 				return result, fmt.Errorf("write ancient V2 %s segment %d: %w", kind, start, err)
 			}
@@ -653,7 +653,7 @@ func verifyV2Segment(ctx context.Context, path, kind string, start, count uint64
 	if err != nil {
 		return fmt.Errorf("open new ancient V2 segment %s: %w", path, err)
 	}
-	decoder, err := newV2Decoder()
+	decoder, err := newV2DecoderForReaders(map[string]*v2SegmentReader{kind: reader})
 	if err != nil {
 		reader.Close()
 		return err

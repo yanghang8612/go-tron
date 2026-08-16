@@ -39,6 +39,18 @@ The recovered format retains the mainnet-benchmarked layout:
 - mixed V2 prefix plus appendable V1 suffix reads;
 - a bounded 64 MiB decoded-frame cache and capped decoder concurrency.
 
+Fresh-genesis writers use a bodies-specific compression profile without
+changing the stored block representation or the 64-row random-read boundary.
+The first frame of each 65,536-block segment is compressed independently and
+also supplies a bounded 64 KiB raw Zstd dictionary embedded in the same segment
+file. Remaining frames use that dictionary at the better-compression level.
+The reserved V2 header codec field and dictionary checksum make the extension
+self-describing and fail closed; the dictionary bytes are covered by the same
+file fsync/rename and manifest publication transaction as the frame payloads.
+`tx_infos` and `state_roots` retain their existing codecs. Reads still return
+the exact original `corepb.Block` wire bytes, so block hashes, transaction
+index fusion, replay, and RPC behavior are unchanged.
+
 Offline migration writes and verifies every table segment, publishes the
 manifest atomically, installs the new reader, advances the V1 virtual tail, and
 physically reclaims fully hidden V1 shards. An interruption before manifest

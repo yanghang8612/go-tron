@@ -31,6 +31,12 @@ const (
 	v2MaxCompressedBytes  = v2MaxFrameBytes + uint64(1<<20)
 	v2DecoderConcurrency  = 4
 	v2MaxPooledCompressed = 8 << 20
+	// Reserved V2 header bytes [52:56] identify the table codec. Bodies codec
+	// 1 places a checksummed raw dictionary between the frame table and the
+	// first compressed frame; [60:64] stores its Castagnoli checksum.
+	v2CodecDefault    = uint32(0)
+	v2CodecBodiesDict = uint32(1)
+	v2BodiesDictBytes = 64 << 10
 )
 
 var v2CRC = crc32.MakeTable(crc32.Castagnoli)
@@ -45,13 +51,16 @@ type v2FrameEntry struct {
 }
 
 type v2SegmentReader struct {
-	kind        string
-	path        string
-	file        *os.File
-	start       uint64
-	count       uint64
-	frameBlocks uint32
-	frames      []v2FrameEntry
+	kind         string
+	path         string
+	file         *os.File
+	start        uint64
+	count        uint64
+	frameBlocks  uint32
+	codec        uint32
+	dictionary   []byte
+	dictionaryID uint32
+	frames       []v2FrameEntry
 }
 
 type v2Manifest struct {
@@ -113,14 +122,9 @@ type v2Store struct {
 
 func openV2Store(ancientDir string) (*v2Store, error) {
 	base := filepath.Join(ancientDir, "v2")
-	decoder, err := newV2Decoder()
-	if err != nil {
-		return nil, err
-	}
 	store := &v2Store{
 		base:              base,
 		segments:          make(map[string][]*v2SegmentReader),
-		decoder:           decoder,
 		cacheList:         list.New(),
 		cacheItems:        make(map[v2FrameKey]*list.Element),
 		cacheLoads:        make(map[v2FrameKey]*v2FrameLoad),
@@ -130,6 +134,11 @@ func openV2Store(ancientDir string) (*v2Store, error) {
 	manifestDir := filepath.Join(base, "manifests")
 	entries, err := os.ReadDir(manifestDir)
 	if os.IsNotExist(err) {
+		store.decoder, err = newV2Decoder()
+		if err != nil {
+			store.Close()
+			return nil, err
+		}
 		return store, nil
 	}
 	if err != nil {
@@ -169,12 +178,17 @@ func openV2Store(ancientDir string) (*v2Store, error) {
 			store.Close()
 			return nil, err
 		}
-		if err := store.installManifestReaders(manifest, readers); err != nil {
+		if err := store.appendManifestReaders(manifest, readers); err != nil {
 			closeV2SegmentReaders(readers)
 			store.Close()
 			return nil, err
 		}
 		expected = store.coverage
+	}
+	store.decoder, err = newV2DecoderForSegments(store.segments)
+	if err != nil {
+		store.Close()
+		return nil, err
 	}
 	return store, nil
 }
@@ -213,7 +227,7 @@ func closeV2SegmentReaders(readers map[string]*v2SegmentReader) {
 // installManifestReaders appends one fully opened segment family to the
 // in-memory immutable prefix. The caller must exclude concurrent access to the
 // store. Ownership of readers transfers to the store only on success.
-func (s *v2Store) installManifestReaders(manifest v2Manifest, readers map[string]*v2SegmentReader) error {
+func (s *v2Store) validateManifestReaders(manifest v2Manifest, readers map[string]*v2SegmentReader) error {
 	if s == nil {
 		return errors.New("ancient V2 store is closed")
 	}
@@ -238,6 +252,13 @@ func (s *v2Store) installManifestReaders(manifest v2Manifest, readers map[string
 			return fmt.Errorf("ancient V2 manifest at %d has no open reader for table %s", manifest.Start, kind)
 		}
 	}
+	return nil
+}
+
+func (s *v2Store) appendManifestReaders(manifest v2Manifest, readers map[string]*v2SegmentReader) error {
+	if err := s.validateManifestReaders(manifest, readers); err != nil {
+		return err
+	}
 	for kind, reader := range readers {
 		s.segments[kind] = append(s.segments[kind], reader)
 	}
@@ -245,15 +266,75 @@ func (s *v2Store) installManifestReaders(manifest v2Manifest, readers map[string
 	return nil
 }
 
+func (s *v2Store) installManifestReaders(manifest v2Manifest, readers map[string]*v2SegmentReader) error {
+	if err := s.validateManifestReaders(manifest, readers); err != nil {
+		return err
+	}
+	decoder, err := newV2DecoderForSegmentSets(s.segments, readers)
+	if err != nil {
+		return err
+	}
+	oldDecoder := s.decoder
+	for kind, reader := range readers {
+		s.segments[kind] = append(s.segments[kind], reader)
+	}
+	s.coverage += manifest.Count
+	s.decoder = decoder
+	if oldDecoder != nil {
+		oldDecoder.Close()
+	}
+	return nil
+}
+
 func newV2Decoder() (*zstd.Decoder, error) {
+	return newV2DecoderForSegmentSets(nil, nil)
+}
+
+func newV2DecoderForSegments(segments map[string][]*v2SegmentReader) (*zstd.Decoder, error) {
+	return newV2DecoderForSegmentSets(segments, nil)
+}
+
+func newV2DecoderForReaders(readers map[string]*v2SegmentReader) (*zstd.Decoder, error) {
+	return newV2DecoderForSegmentSets(nil, readers)
+}
+
+func newV2DecoderForSegmentSets(segments map[string][]*v2SegmentReader, readers map[string]*v2SegmentReader) (*zstd.Decoder, error) {
 	concurrency := runtime.GOMAXPROCS(0)
 	if concurrency > v2DecoderConcurrency {
 		concurrency = v2DecoderConcurrency
 	}
-	return zstd.NewReader(nil,
+	options := []zstd.DOption{
 		zstd.WithDecoderConcurrency(concurrency),
 		zstd.WithDecoderMaxMemory(v2MaxFrameBytes),
-	)
+	}
+	dictionaries := make(map[uint32][]byte)
+	add := func(reader *v2SegmentReader) error {
+		if reader == nil || len(reader.dictionary) == 0 {
+			return nil
+		}
+		if previous, ok := dictionaries[reader.dictionaryID]; ok {
+			if !bytes.Equal(previous, reader.dictionary) {
+				return fmt.Errorf("ancient V2 dictionary id collision %08x", reader.dictionaryID)
+			}
+			return nil
+		}
+		dictionaries[reader.dictionaryID] = reader.dictionary
+		options = append(options, zstd.WithDecoderDictRaw(reader.dictionaryID, reader.dictionary))
+		return nil
+	}
+	for _, table := range segments {
+		for _, reader := range table {
+			if err := add(reader); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, reader := range readers {
+		if err := add(reader); err != nil {
+			return nil, err
+		}
+	}
+	return zstd.NewReader(nil, options...)
 }
 
 func (s *v2Store) Close() error {
@@ -415,14 +496,27 @@ func (s *v2Store) loadFrame(segment *v2SegmentReader, frameIndex int) (*v2Decode
 	}
 	compressedBuffer := s.acquireCompressedBuffer(int(frame.compressedLen))
 	defer s.releaseCompressedBuffer(compressedBuffer)
-	compressed := compressedBuffer.data
+	return decodeV2Frame(segment, frameIndex, s.decoder, compressedBuffer.data)
+}
+
+// decodeV2Frame decodes one checksummed frame with the store decoder that owns
+// every dictionary referenced by its immutable segment prefix. The caller owns
+// compressed and must size it to the frame's compressed length.
+func decodeV2Frame(segment *v2SegmentReader, frameIndex int, decoder *zstd.Decoder, compressed []byte) (*v2DecodedFrame, error) {
+	if segment == nil || decoder == nil || frameIndex < 0 || frameIndex >= len(segment.frames) {
+		return nil, errOutOfBounds
+	}
+	frame := segment.frames[frameIndex]
+	if len(compressed) != int(frame.compressedLen) {
+		return nil, fmt.Errorf("ancient V2 compressed buffer length %d, want %d", len(compressed), frame.compressedLen)
+	}
 	if _, err := segment.file.ReadAt(compressed, int64(frame.compressedStart)); err != nil {
 		return nil, err
 	}
 	if crc32.Checksum(compressed, v2CRC) != frame.checksum {
 		return nil, fmt.Errorf("ancient V2 checksum mismatch in %s frame %d", segment.path, frameIndex)
 	}
-	decoded, err := s.decoder.DecodeAll(compressed, make([]byte, 0, int(frame.uncompressedLen)))
+	decoded, err := decoder.DecodeAll(compressed, make([]byte, 0, int(frame.uncompressedLen)))
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +611,8 @@ func openV2Segment(path, kind string) (*v2SegmentReader, error) {
 	count := binary.BigEndian.Uint64(header[24:32])
 	frameCount := binary.BigEndian.Uint64(header[32:40])
 	dataOffset := binary.BigEndian.Uint64(header[40:48])
+	codec := binary.BigEndian.Uint32(header[52:56])
+	dictionaryChecksum := binary.BigEndian.Uint32(header[60:64])
 	if frameBlocks == 0 || count == 0 || frameCount == 0 || frameCount > 1<<24 {
 		return fail(fmt.Errorf("invalid ancient V2 dimensions %s", path))
 	}
@@ -524,8 +620,22 @@ func openV2Segment(path, kind string) (*v2SegmentReader, error) {
 		return fail(fmt.Errorf("invalid ancient V2 frame count %s", path))
 	}
 	tableLen := frameCount * v2FrameEntrySize
-	if dataOffset != v2HeaderSize+tableLen || tableLen > 1<<32 {
+	tableEnd := uint64(v2HeaderSize) + tableLen
+	if tableLen > 1<<32 || dataOffset < tableEnd {
 		return fail(fmt.Errorf("invalid ancient V2 frame table %s", path))
+	}
+	dictionaryLen := dataOffset - tableEnd
+	switch codec {
+	case v2CodecDefault:
+		if dictionaryLen != 0 || dictionaryChecksum != 0 {
+			return fail(fmt.Errorf("invalid ancient V2 default codec metadata %s", path))
+		}
+	case v2CodecBodiesDict:
+		if kind != "bodies" || dictionaryLen < 8 || dictionaryLen > v2BodiesDictBytes {
+			return fail(fmt.Errorf("invalid ancient V2 bodies dictionary metadata %s", path))
+		}
+	default:
+		return fail(fmt.Errorf("unsupported ancient V2 codec %d in %s", codec, path))
 	}
 	table := make([]byte, int(tableLen))
 	if _, err := io.ReadFull(file, table); err != nil {
@@ -534,11 +644,25 @@ func openV2Segment(path, kind string) (*v2SegmentReader, error) {
 	if crc32.Checksum(table, v2CRC) != binary.BigEndian.Uint32(header[48:52]) {
 		return fail(fmt.Errorf("ancient V2 table checksum mismatch %s", path))
 	}
+	var dictionary []byte
+	if dictionaryLen != 0 {
+		dictionary = make([]byte, int(dictionaryLen))
+		if _, err := io.ReadFull(file, dictionary); err != nil {
+			return fail(err)
+		}
+		if crc32.Checksum(dictionary, v2CRC) != dictionaryChecksum {
+			return fail(fmt.Errorf("ancient V2 dictionary checksum mismatch %s", path))
+		}
+	}
 	info, err := file.Stat()
 	if err != nil {
 		return fail(err)
 	}
-	reader := &v2SegmentReader{kind: kind, path: path, file: file, start: start, count: count, frameBlocks: frameBlocks, frames: make([]v2FrameEntry, frameCount)}
+	reader := &v2SegmentReader{
+		kind: kind, path: path, file: file, start: start, count: count, frameBlocks: frameBlocks,
+		codec: codec, dictionary: dictionary, dictionaryID: v2DictionaryID(start),
+		frames: make([]v2FrameEntry, frameCount),
+	}
 	var (
 		expectedRecord uint64
 		expectedData   = dataOffset
@@ -577,6 +701,17 @@ func (r *v2SegmentReader) Close() error {
 }
 
 func writeV2Segment(path string, start, count uint64, frameBlocks uint32, read func(uint64) ([]byte, error)) error {
+	return writeV2SegmentProfile(path, start, count, frameBlocks, v2CodecDefault, zstd.SpeedDefault, read)
+}
+
+func writeV2TableSegment(path, kind string, start, count uint64, frameBlocks uint32, read func(uint64) ([]byte, error)) error {
+	if kind == "bodies" {
+		return writeV2SegmentProfile(path, start, count, frameBlocks, v2CodecBodiesDict, zstd.SpeedBetterCompression, read)
+	}
+	return writeV2Segment(path, start, count, frameBlocks, read)
+}
+
+func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read func(uint64) ([]byte, error)) error {
 	if count == 0 || frameBlocks == 0 {
 		return errors.New("ancient V2: empty segment dimensions")
 	}
@@ -592,37 +727,81 @@ func writeV2Segment(path string, start, count uint64, frameBlocks uint32, read f
 		file.Close()
 		os.Remove(tempName)
 	}()
-	frameCount := (count + uint64(frameBlocks) - 1) / uint64(frameBlocks)
-	dataOffset := uint64(v2HeaderSize) + frameCount*v2FrameEntrySize
-	if _, err := file.Seek(int64(dataOffset), io.SeekStart); err != nil {
-		return err
+	if codec != v2CodecDefault && codec != v2CodecBodiesDict {
+		return fmt.Errorf("ancient V2: unsupported write codec %d", codec)
 	}
-	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1))
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderConcurrency(1))
 	if err != nil {
 		return err
 	}
-	defer encoder.Close()
+	defer func() {
+		if encoder != nil {
+			encoder.Close()
+		}
+	}()
+	frameCount := (count + uint64(frameBlocks) - 1) / uint64(frameBlocks)
 	frames := make([]v2FrameEntry, 0, frameCount)
 	buffer := make([]byte, 0, 4<<20)
 	var written uint64
-	for written < count {
+	readFrame := func() (uint64, uint32, error) {
 		first := written
 		records := uint32(0)
 		buffer = buffer[:0]
 		for records < frameBlocks && written < count {
 			record, err := read(start + written)
 			if err != nil {
-				return err
+				return 0, 0, err
 			}
 			buffer = binary.AppendUvarint(buffer, uint64(len(record)))
 			buffer = append(buffer, record...)
 			if uint64(len(buffer)) > v2MaxFrameBytes {
-				return fmt.Errorf("ancient V2 frame exceeds %d bytes at record %d", v2MaxFrameBytes, start+written)
+				return 0, 0, fmt.Errorf("ancient V2 frame exceeds %d bytes at record %d", v2MaxFrameBytes, start+written)
 			}
 			records++
 			written++
 		}
-		compressed := encoder.EncodeAll(buffer, nil)
+		return first, records, nil
+	}
+	first, records, err := readFrame()
+	if err != nil {
+		return err
+	}
+	var (
+		dictionary         []byte
+		dictionaryChecksum uint32
+		dictionaryEncoder  *zstd.Encoder
+	)
+	if codec == v2CodecBodiesDict {
+		dictionaryLen := len(buffer)
+		if dictionaryLen > v2BodiesDictBytes {
+			dictionaryLen = v2BodiesDictBytes
+		}
+		if dictionaryLen >= 8 {
+			dictionary = append([]byte(nil), buffer[len(buffer)-dictionaryLen:]...)
+			dictionaryChecksum = crc32.Checksum(dictionary, v2CRC)
+			dictionaryEncoder, err = zstd.NewWriter(nil,
+				zstd.WithEncoderLevel(level),
+				zstd.WithEncoderConcurrency(1),
+				zstd.WithEncoderDictRaw(v2DictionaryID(start), dictionary),
+			)
+			if err != nil {
+				return err
+			}
+			defer dictionaryEncoder.Close()
+		} else {
+			codec = v2CodecDefault
+		}
+	}
+	dataOffset := uint64(v2HeaderSize) + frameCount*v2FrameEntrySize + uint64(len(dictionary))
+	if _, err := file.Seek(int64(dataOffset), io.SeekStart); err != nil {
+		return err
+	}
+	writeFrame := func(first uint64, records uint32, useDictionary bool) error {
+		activeEncoder := encoder
+		if useDictionary {
+			activeEncoder = dictionaryEncoder
+		}
+		compressed := activeEncoder.EncodeAll(buffer, nil)
 		position, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return err
@@ -638,6 +817,26 @@ func writeV2Segment(path string, start, count uint64, frameBlocks uint32, read f
 			uncompressedLen: uint64(len(buffer)),
 			checksum:        crc32.Checksum(compressed, v2CRC),
 		})
+		return nil
+	}
+	if err := writeFrame(first, records, false); err != nil {
+		return err
+	}
+	if len(dictionary) != 0 {
+		// The bootstrap encoder is no longer needed once the independent first
+		// frame is durable in the temporary file. Releasing it keeps a bodies
+		// migration to one live Better-compression encoder at a time.
+		encoder.Close()
+		encoder = nil
+	}
+	for written < count {
+		first, records, err = readFrame()
+		if err != nil {
+			return err
+		}
+		if err := writeFrame(first, records, len(dictionary) != 0); err != nil {
+			return err
+		}
 	}
 	table := make([]byte, len(frames)*v2FrameEntrySize)
 	for i, frame := range frames {
@@ -658,12 +857,19 @@ func writeV2Segment(path string, start, count uint64, frameBlocks uint32, read f
 	binary.BigEndian.PutUint64(header[32:40], uint64(len(frames)))
 	binary.BigEndian.PutUint64(header[40:48], dataOffset)
 	binary.BigEndian.PutUint32(header[48:52], crc32.Checksum(table, v2CRC))
+	binary.BigEndian.PutUint32(header[52:56], codec)
 	binary.BigEndian.PutUint32(header[56:60], crc32.Checksum(header[:56], v2CRC))
+	binary.BigEndian.PutUint32(header[60:64], dictionaryChecksum)
 	if _, err := file.WriteAt(header, 0); err != nil {
 		return err
 	}
 	if _, err := file.WriteAt(table, v2HeaderSize); err != nil {
 		return err
+	}
+	if len(dictionary) != 0 {
+		if _, err := file.WriteAt(dictionary, int64(v2HeaderSize)+int64(len(table))); err != nil {
+			return err
+		}
 	}
 	if err := file.Sync(); err != nil {
 		return err
@@ -675,6 +881,14 @@ func writeV2Segment(path string, start, count uint64, frameBlocks uint32, read f
 		return err
 	}
 	return syncDir(filepath.Dir(path))
+}
+
+func v2DictionaryID(segmentStart uint64) uint32 {
+	id := uint32(segmentStart) + 1
+	if id == 0 {
+		return 1
+	}
+	return id
 }
 
 func v2SegmentName(start, count uint64) string {

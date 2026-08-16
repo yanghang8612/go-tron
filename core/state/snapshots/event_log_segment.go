@@ -24,7 +24,8 @@ import (
 const (
 	EventLogSegmentVersion   = 2
 	EventLogSegmentV3Version = 3
-	EventLogIndexVersion     = 1
+	EventLogSegmentV4Version = 4
+	EventLogIndexVersion     = 2
 
 	eventLogHeaderV1Size    = 8 + 8 + 8 + 8 + 8 + 8
 	eventLogHeaderV2Size    = 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8
@@ -45,7 +46,8 @@ var (
 	eventLogMagicV1    = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '1', '\n'}
 	eventLogMagicV2    = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '2', '\n'}
 	eventLogMagicV3    = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '3', '\n'}
-	eventLogIndexMagic = [8]byte{'g', 't', 'e', 'v', 'l', 'x', '1', '\n'}
+	eventLogMagicV4    = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '4', '\n'}
+	eventLogIndexMagic = [8]byte{'g', 't', 'e', 'v', 'l', 'x', '2', '\n'}
 )
 
 type EventLogSegment struct {
@@ -346,7 +348,7 @@ func CheckEventLogSegment(dir string, ref SegmentRef) error {
 	if err := validateEventLogHeader(ref, header, fileSize); err != nil {
 		return err
 	}
-	if header.version == EventLogSegmentV3Version {
+	if header.version == EventLogSegmentV4Version {
 		return checkEventLogV3Segment(file, ref, header, fileSize)
 	}
 	return checkEventLogIndex(file, ref, header, fileSize)
@@ -376,7 +378,7 @@ func checkEventLogSegmentPayload(dir string, ref SegmentRef) error {
 	if err := validateEventLogHeader(ref, header, fileSize); err != nil {
 		return err
 	}
-	if header.version == EventLogSegmentV3Version {
+	if header.version == EventLogSegmentV4Version {
 		return checkEventLogV3Segment(file, ref, header, fileSize)
 	}
 	_, _, err = checkEventLogPayloadIndex(file, ref, header, fileSize)
@@ -465,7 +467,7 @@ func verifyEventLogIndexSegmentAgainstEventLogs(dir string, indexRef SegmentRef,
 	if err != nil {
 		return err
 	}
-	actualAddress, err := readEventLogLookupIndexMap(index.file, index.header.addressIndexOffset, index.header.addressIndexLength, index.size, eventLogAddressLookupKeySize)
+	actualAddress, err := readEventLogIndexLookupMap(index, index.header.addressIndexOffset, index.header.addressIndexLength, eventLogAddressLookupKeySize)
 	if closeErr := index.Close(); err == nil {
 		err = closeErr
 	}
@@ -479,7 +481,7 @@ func verifyEventLogIndexSegmentAgainstEventLogs(dir string, indexRef SegmentRef,
 	if err != nil {
 		return err
 	}
-	actualTopic, err := readEventLogLookupIndexMap(index.file, index.header.topicIndexOffset, index.header.topicIndexLength, index.size, eventLogTopicLookupKeySize)
+	actualTopic, err := readEventLogIndexLookupMap(index, index.header.topicIndexOffset, index.header.topicIndexLength, eventLogTopicLookupKeySize)
 	if closeErr := index.Close(); err == nil {
 		err = closeErr
 	}
@@ -512,7 +514,7 @@ func OpenEventLogSegment(dir string, ref SegmentRef) (*EventLogSegment, error) {
 		return nil, err
 	}
 	segment := &EventLogSegment{ref: ref, file: file, header: header, size: uint64(stat.Size())}
-	if header.version == EventLogSegmentV3Version {
+	if header.version == EventLogSegmentV4Version {
 		segment.v3, err = openEventLogV3Reader(file, *header.v3, segment.size)
 		if err != nil {
 			_ = file.Close()
@@ -613,11 +615,11 @@ func (s *EventLogIndexSegment) Stats() (EventLogIndexSegmentStats, error) {
 	if err != nil {
 		return EventLogIndexSegmentStats{}, err
 	}
-	address, err := readEventLogLookupStats(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, s.size, eventLogAddressLookupKeySize)
+	address, err := readEventLogIndexLookupStats(s, s.header.addressIndexOffset, s.header.addressIndexLength, eventLogAddressLookupKeySize)
 	if err != nil {
 		return EventLogIndexSegmentStats{}, err
 	}
-	topic, err := readEventLogLookupStats(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, s.size, eventLogTopicLookupKeySize)
+	topic, err := readEventLogIndexLookupStats(s, s.header.topicIndexOffset, s.header.topicIndexLength, eventLogTopicLookupKeySize)
 	if err != nil {
 		return EventLogIndexSegmentStats{}, err
 	}
@@ -725,7 +727,7 @@ func (s *EventLogSegment) iterateLogsFullScan(fromBlock, toBlock uint64, filter 
 	if toBlock < fromBlock {
 		return nil
 	}
-	if s.header.version == 3 {
+	if s.header.version == EventLogSegmentV4Version {
 		return s.iterateEventLogV3FullScan(fromBlock, toBlock, filter, fn)
 	}
 	for i := uint64(0); i < s.header.rowCount; i++ {
@@ -771,7 +773,7 @@ func (s *EventLogIndexSegment) CandidateSegmentStarts(filter EventLogFilter) ([]
 	if len(filter.Addresses) > 0 {
 		var union []uint64
 		for _, address := range filter.Addresses {
-			rows, err := readEventLogLookupRows(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, s.size, eventLogAddressLookupKey(address))
+			rows, err := readEventLogIndexLookupRows(s, s.header.addressIndexOffset, s.header.addressIndexLength, eventLogAddressLookupKeySize, eventLogAddressLookupKey(address))
 			if err != nil {
 				return nil, true, err
 			}
@@ -786,7 +788,7 @@ func (s *EventLogIndexSegment) CandidateSegmentStarts(filter EventLogFilter) ([]
 		}
 		var union []uint64
 		for _, topic := range required {
-			rows, err := readEventLogLookupRows(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, s.size, eventLogTopicLookupKey(uint64(position), topic))
+			rows, err := readEventLogIndexLookupRows(s, s.header.topicIndexOffset, s.header.topicIndexLength, eventLogTopicLookupKeySize, eventLogTopicLookupKey(uint64(position), topic))
 			if err != nil {
 				return nil, true, err
 			}
@@ -809,7 +811,7 @@ func (s *EventLogIndexSegment) CandidateSegmentStarts(filter EventLogFilter) ([]
 }
 
 func (s *EventLogSegment) iterateLogsByLookupIndexes(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (bool, error) {
-	if s.header.version == 3 {
+	if s.header.version == EventLogSegmentV4Version {
 		return s.iterateEventLogV3ByLookup(fromBlock, toBlock, filter, fn)
 	}
 	candidates, ok, err := s.lookupEventLogCandidateRows(filter)
@@ -854,7 +856,7 @@ func (s *EventLogSegment) iterateLogsByLookupIndexes(fromBlock, toBlock uint64, 
 }
 
 func (s *EventLogSegment) lookupEventLogCandidateRows(filter EventLogFilter) ([]uint64, bool, error) {
-	if s.header.version == 3 {
+	if s.header.version == EventLogSegmentV4Version {
 		return s.lookupEventLogV3CandidateRows(filter)
 	}
 	if s.header.addressIndexOffset == 0 && s.header.topicIndexOffset == 0 {
@@ -1894,7 +1896,7 @@ func collectEventLogIndexPostings(seg *EventLogSegment, addressPostings, topicPo
 		return errors.New("snapshots: nil event log segment for index build")
 	}
 	segmentStart := seg.ref.FromTxNum
-	if seg.header.version == EventLogSegmentV3Version {
+	if seg.header.version == EventLogSegmentV4Version {
 		return seg.iterateLogsFullScan(seg.ref.FromTxNum, seg.ref.ToTxNum, EventLogFilter{}, func(row EventLog) (bool, error) {
 			addressKey := string(eventLogAddressLookupKey(row.Address))
 			addressPostings[addressKey] = appendEventLogSegmentPosting(addressPostings[addressKey], segmentStart)
@@ -1945,7 +1947,7 @@ func collectVerifiedEventLogSegmentPostings(dir string, ref SegmentRef, addressP
 	if headerErr != nil {
 		return headerErr
 	}
-	if probeHeader.version == EventLogSegmentV3Version {
+	if probeHeader.version == EventLogSegmentV4Version {
 		if err := CheckEventLogSegment(dir, ref); err != nil {
 			return err
 		}
@@ -2025,7 +2027,7 @@ func collectEventLogIndexPostingsToETL(seg *EventLogSegment, collector *etl.Coll
 		return errors.New("snapshots: nil event log segment for index build")
 	}
 	segmentStart := seg.ref.FromTxNum
-	if seg.header.version == EventLogSegmentV3Version {
+	if seg.header.version == EventLogSegmentV4Version {
 		addressKeys, err := readEventLogV3LookupKeys(seg.file, seg.v3.header.addressIndexOffset, seg.v3.header.addressIndexLength, seg.size, eventLogAddressLookupKeySize)
 		if err != nil {
 			return err
@@ -2155,6 +2157,18 @@ func writeEventLogIndexSegment(dir string, ref SegmentRef, addressPostings, topi
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
+	addressLookup, err := buildEventLogV3Lookup(filepath.Dir(abs), "event-log-index-v2-address", eventLogAddressLookupKeySize, addressPostings)
+	if err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	defer addressLookup.close()
+	topicLookup, err := buildEventLogV3Lookup(filepath.Dir(abs), "event-log-index-v2-topic", eventLogTopicLookupKeySize, topicPostings)
+	if err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	defer topicLookup.close()
 
 	if _, err := tmp.Write(make([]byte, eventLogIndexHeaderSize)); err != nil {
 		_ = tmp.Close()
@@ -2162,15 +2176,15 @@ func writeEventLogIndexSegment(dir string, ref SegmentRef, addressPostings, topi
 	}
 	offset := uint64(eventLogIndexHeaderSize)
 	addressIndexOffset := offset
-	addressIndexLength, err := writeEventLogLookupIndexAt(tmp, addressIndexOffset, eventLogAddressLookupKeySize, addressPostings)
-	if err != nil {
+	addressIndexLength := addressLookup.length()
+	if err := writeEventLogV3Lookup(tmp, addressIndexOffset, addressLookup); err != nil {
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	}
 	offset += addressIndexLength
 	topicIndexOffset := offset
-	topicIndexLength, err := writeEventLogLookupIndexAt(tmp, topicIndexOffset, eventLogTopicLookupKeySize, topicPostings)
-	if err != nil {
+	topicIndexLength := topicLookup.length()
+	if err := writeEventLogV3Lookup(tmp, topicIndexOffset, topicLookup); err != nil {
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	}
@@ -2305,7 +2319,7 @@ func validateEventLogIndexRef(ref SegmentRef) error {
 }
 
 func validateEventLogHeader(ref SegmentRef, header eventLogHeader, fileSize uint64) error {
-	if header.version == EventLogSegmentV3Version {
+	if header.version == EventLogSegmentV4Version {
 		if header.v3 == nil || header.headerSize != eventLogV3HeaderSize {
 			return fmt.Errorf("snapshots: event log segment %q has invalid V3 header", ref.Path)
 		}
@@ -3032,64 +3046,113 @@ func checkEventLogLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogH
 }
 
 func checkEventLogSegmentStartLookupIndex(file io.ReaderAt, ref SegmentRef, name string, offset, length, fileSize uint64, keySize int) error {
-	if length < eventLogLookupHeaderSize {
-		return fmt.Errorf("snapshots: event log index %q %s lookup length %d smaller than header", ref.Path, name, length)
-	}
-	indexEnd, overflow := checkedAdd(offset, length)
-	if overflow {
-		return fmt.Errorf("snapshots: event log index %q %s lookup range [%d,+%d] overflows", ref.Path, name, offset, length)
-	}
-	if indexEnd > fileSize {
-		return fmt.Errorf("snapshots: event log index %q %s lookup range [%d,%d] outside file size %d", ref.Path, name, offset, indexEnd, fileSize)
-	}
-	count, err := readEventLogUint64At(file, offset)
-	if err != nil {
-		return err
-	}
-	entrySize := uint64(keySize + 16)
-	dirBytes, overflow := checkedMul(count, entrySize)
-	if overflow {
-		return fmt.Errorf("snapshots: event log index %q %s lookup directory overflows", ref.Path, name)
-	}
-	dirStart, overflow := checkedAdd(offset, eventLogLookupHeaderSize)
-	if overflow {
-		return fmt.Errorf("snapshots: event log index %q %s lookup directory start overflows", ref.Path, name)
-	}
-	dirEnd, overflow := checkedAdd(dirStart, dirBytes)
-	if overflow || dirEnd > indexEnd {
-		return fmt.Errorf("snapshots: event log index %q %s lookup directory [%d,%d] outside [%d,%d]", ref.Path, name, dirStart, dirEnd, offset, indexEnd)
-	}
-	var prevKey []byte
-	entryRaw := make([]byte, int(entrySize))
-	for i := uint64(0); i < count; i++ {
-		entryOffset := dirStart + i*entrySize
-		if _, err := file.ReadAt(entryRaw, int64(entryOffset)); err != nil {
-			if errors.Is(err, io.EOF) {
-				return io.ErrUnexpectedEOF
-			}
-			return err
+	err := walkEventLogIndexLookup(file, offset, length, fileSize, keySize, eventLogIndexMaxPosting(ref), func(key []byte, rows []uint64) error {
+		if len(key) != keySize {
+			return fmt.Errorf("snapshots: event log index %q %s key length %d, want %d", ref.Path, name, len(key), keySize)
 		}
-		key := append([]byte(nil), entryRaw[:keySize]...)
-		if i > 0 && bytes.Compare(prevKey, key) >= 0 {
-			return fmt.Errorf("snapshots: event log index %q %s lookup key %d is not strictly sorted", ref.Path, name, i)
-		}
-		prevKey = key
-		postingsOffset := binary.BigEndian.Uint64(entryRaw[keySize : keySize+8])
-		postingsCount := binary.BigEndian.Uint64(entryRaw[keySize+8 : keySize+16])
-		rows, err := readEventLogLookupPostings(file, offset, length, fileSize, dirEnd, postingsOffset, postingsCount)
-		if err != nil {
-			return err
-		}
-		var prevStart uint64
-		for j, segmentStart := range rows {
+		for _, segmentStart := range rows {
 			if segmentStart < ref.FromTxNum || segmentStart > ref.ToTxNum {
 				return fmt.Errorf("snapshots: event log index %q %s lookup segment start %d outside [%d,%d]", ref.Path, name, segmentStart, ref.FromTxNum, ref.ToTxNum)
 			}
-			if j > 0 && segmentStart <= prevStart {
-				return fmt.Errorf("snapshots: event log index %q %s lookup postings for key %d are not strictly sorted", ref.Path, name, i)
-			}
-			prevStart = segmentStart
 		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("snapshots: event log index %q %s lookup: %w", ref.Path, name, err)
+	}
+	return nil
+}
+
+func eventLogIndexMaxPosting(ref SegmentRef) uint64 {
+	if ref.ToTxNum == math.MaxUint64 {
+		return math.MaxUint64
+	}
+	return ref.ToTxNum + 1
+}
+
+func readEventLogIndexLookupRows(s *EventLogIndexSegment, offset, length uint64, keySize int, key []byte) ([]uint64, error) {
+	return readEventLogV3LookupRows(s.file, offset, length, s.size, keySize, key, eventLogIndexMaxPosting(s.ref))
+}
+
+func readEventLogIndexLookupMap(s *EventLogIndexSegment, offset, length uint64, keySize int) (map[string][]uint64, error) {
+	return readAllEventLogV3Lookup(s.file, offset, length, s.size, keySize, eventLogIndexMaxPosting(s.ref))
+}
+
+func readEventLogIndexLookupStats(s *EventLogIndexSegment, offset, length uint64, keySize int) (EventLogIndexLookupStats, error) {
+	var stats EventLogIndexLookupStats
+	err := walkEventLogIndexLookup(s.file, offset, length, s.size, keySize, eventLogIndexMaxPosting(s.ref), func(_ []byte, rows []uint64) error {
+		stats.Keys++
+		count := uint64(len(rows))
+		var overflow bool
+		stats.Postings, overflow = checkedAdd(stats.Postings, count)
+		if overflow {
+			return errors.New("snapshots: event log index posting count overflow")
+		}
+		stats.MaxPostingsPerKey = max(stats.MaxPostingsPerKey, count)
+		switch count {
+		case 1:
+			stats.SingletonKeys++
+		case 0:
+		default:
+			stats.MultiPostingKeys++
+		}
+		return nil
+	})
+	if err != nil {
+		return EventLogIndexLookupStats{}, err
+	}
+	stats.AveragePostingsPerKeyMilli = eventLogAveragePostingsPerKeyMilli(stats.Keys, stats.Postings)
+	return stats, nil
+}
+
+// walkEventLogIndexLookup validates and visits one compact key/posting record
+// at a time. It keeps index inspection and startup verification bounded by the
+// largest posting list instead of retaining the whole sidecar in memory.
+func walkEventLogIndexLookup(file io.ReaderAt, offset, length, size uint64, keySize int, maxRows uint64, visit func([]byte, []uint64) error) error {
+	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+	if err != nil {
+		return err
+	}
+	expectedKeyOff := offset + eventLogV3LookupV2HeaderSize + h.blockDirLen
+	var expectedPostingOff, visited uint64
+	var previous []byte
+	for i := uint64(0); i < h.blockCount; i++ {
+		block, err := readEventLogV3LookupV2Block(file, offset, h, i)
+		if err != nil {
+			return err
+		}
+		storedLen := uint64(block.dataLen &^ eventLogV3LookupV2StoredRaw)
+		if block.dataOff != expectedKeyOff {
+			return errors.New("snapshots: compact event log index key blocks are not contiguous")
+		}
+		expectedKeyOff += storedLen
+		records, _, err := readEventLogV3LookupV2Records(file, offset, length, h, block)
+		if err != nil {
+			return err
+		}
+		for _, record := range records {
+			if len(previous) != 0 && bytes.Compare(previous, record.key) >= 0 {
+				return errors.New("snapshots: compact event log index keys are not strictly sorted")
+			}
+			if record.postingOff != expectedPostingOff {
+				return errors.New("snapshots: compact event log index postings are not contiguous")
+			}
+			expectedPostingOff += record.postingLen
+			rows, err := readEventLogV3LookupV2RecordRows(file, offset, length, h, record, maxRows)
+			if err != nil {
+				return err
+			}
+			if visit != nil {
+				if err := visit(record.key, rows); err != nil {
+					return err
+				}
+			}
+			previous = record.key
+			visited++
+		}
+	}
+	if visited != h.keyCount || expectedKeyOff != offset+eventLogV3LookupV2HeaderSize+h.blockDirLen+h.keyDataLen || expectedPostingOff != h.postingDataLen {
+		return errors.New("snapshots: compact event log index data coverage mismatch")
 	}
 	return nil
 }
@@ -3169,12 +3232,14 @@ func readEventLogHeader(r io.Reader) (eventLogHeader, error) {
 			topicIndexLength:   binary.BigEndian.Uint64(raw[72:80]),
 		}, nil
 	case eventLogMagicV3:
+		return eventLogHeader{}, errors.New("snapshots: event log V3 is unsupported by the fresh-genesis V4 reader")
+	case eventLogMagicV4:
 		v3, err := readEventLogV3HeaderRest(r)
 		if err != nil {
 			return eventLogHeader{}, err
 		}
 		return eventLogHeader{
-			version:    3,
+			version:    EventLogSegmentV4Version,
 			headerSize: eventLogV3HeaderSize,
 			fromBlock:  v3.fromBlock,
 			toBlock:    v3.toBlock,
