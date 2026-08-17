@@ -31,6 +31,7 @@ const (
 	defaultColdSnapshotBatchTxNums = uint64(390_625)
 	defaultColdSnapshotMetrics     = "state/snapshot/cold/"
 	coldSnapshotCatchupRateReset   = 15 * time.Minute
+	coldSnapshotPublishLogInterval = 30 * time.Second
 )
 
 var ErrCommitmentBranchRotationNotSolidified = errors.New("snapshots: commitment branch rotation boundary is not solidified")
@@ -374,6 +375,8 @@ type Runner struct {
 	historyAcceleratedBuilds atomic.Uint64
 	historyGateDeferred      atomic.Uint64
 	lastHistoryBuildAt       atomic.Int64
+	lastHistoryPublishLogAt  atomic.Int64
+	historyPublishSuppressed atomic.Uint64
 	// catchupRate is updated only while passMu is held and smooths the noisy
 	// one-pass lag delta used for operator ETA logs.
 	catchupRate float64
@@ -904,7 +907,7 @@ func (r *Runner) onePass() (PassResult, error) {
 	if result.EligibleCutoffBlock > cutoffBlock {
 		backlogBlocks = result.EligibleCutoffBlock - cutoffBlock
 	}
-	coldSnapshotLog.Info("History cold snapshot build started",
+	buildLogContext := []any{
 		"dataset", r.cfg.HistoryDataset,
 		"fromTx", fromTxNum,
 		"toTx", toTxNum,
@@ -914,7 +917,13 @@ func (r *Runner) onePass() (PassResult, error) {
 		"blocks", buildBlocks,
 		"eligibleCutoffBlock", result.EligibleCutoffBlock,
 		"backlogBlocks", backlogBlocks,
-		"accelerated", result.HistoryAccelerated)
+		"accelerated", result.HistoryAccelerated,
+	}
+	if result.HistoryAccelerated {
+		coldSnapshotLog.Debug("History cold snapshot build started", buildLogContext...)
+	} else {
+		coldSnapshotLog.Info("History cold snapshot build started", buildLogContext...)
+	}
 	buildProgress := startColdSnapshotBuildProgress(r.cfg.HistoryDataset, fromTxNum, toTxNum, startBlock, cutoffBlock, result.EligibleCutoffBlock, 0)
 	defer buildProgress.Stop()
 	if historyCfg.BuildHistoryBlockRange != nil {
@@ -1112,7 +1121,43 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 			}
 		}
 	}
-	coldSnapshotLog.Info("History cold snapshot published", ctx...)
+	if info, suppressed := coldSnapshotPublishLogDecision(r, result, time.Now()); info {
+		if suppressed > 0 {
+			ctx = append(ctx, "suppressedPasses", suppressed)
+		}
+		coldSnapshotLog.Info("History cold snapshot published", ctx...)
+	} else {
+		coldSnapshotLog.Debug("History cold snapshot published", ctx...)
+	}
+}
+
+func coldSnapshotPublishLogDecision(r *Runner, result PassResult, now time.Time) (info bool, suppressed uint64) {
+	if r == nil {
+		return true, 0
+	}
+	// Normal cadence passes and the final catch-up publication are rare and
+	// operationally important, so always keep them at Info.
+	if !result.HistoryAccelerated || result.EligibleCutoffBlock <= result.PublishedBlock {
+		r.lastHistoryPublishLogAt.Store(now.UnixNano())
+		return true, r.historyPublishSuppressed.Swap(0)
+	}
+
+	// Genesis catch-up can publish a bounded segment every few seconds. Keep
+	// every durable boundary at Debug, but sample the Info cursor at 30s and
+	// report how many successful publications were suppressed in between.
+	r.historyPublishSuppressed.Add(1)
+	last := r.lastHistoryPublishLogAt.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < coldSnapshotPublishLogInterval {
+		return false, 0
+	}
+	if !r.lastHistoryPublishLogAt.CompareAndSwap(last, now.UnixNano()) {
+		return false, 0
+	}
+	count := r.historyPublishSuppressed.Swap(0)
+	if count > 0 {
+		count-- // The current publication is represented by the Info record.
+	}
+	return true, count
 }
 
 func coldSnapshotRate(items uint64, elapsed time.Duration) float64 {

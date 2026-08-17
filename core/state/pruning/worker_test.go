@@ -2056,6 +2056,42 @@ func TestPrunePassLogContextReportsCommittedHistoryCursor(t *testing.T) {
 	}
 }
 
+func TestColdCatchupPruneInfoIsSampledAndImportantChangesRemainVisible(t *testing.T) {
+	pruner := &Pruner{cfg: PrunerConfig{Policy: SnapPolicy(65_536, 128)}}
+	stats := Stats{DeletedDomainChangeBlocks: 5_000, DomainChangePrunedThrough: 5_000}
+	base := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+
+	if info, suppressed := pruner.prunePassLogDecision(100_000, stats, base); !info || suppressed != 0 {
+		t.Fatalf("first prune = info %t suppressed %d, want true/0", info, suppressed)
+	}
+	if info, _ := pruner.prunePassLogDecision(105_000, stats, base.Add(time.Second)); info {
+		t.Fatal("cold catch-up prune inside sampling window logged at Info")
+	}
+	if info, suppressed := pruner.prunePassLogDecision(110_000, stats, base.Add(coldPruneProgressLogInterval)); !info || suppressed != 1 {
+		t.Fatalf("sampled prune = info %t suppressed %d, want true/1", info, suppressed)
+	}
+
+	withCode := stats
+	withCode.DeletedStateCodeRows = 1
+	if info, _ := pruner.prunePassLogDecision(115_000, withCode, base.Add(coldPruneProgressLogInterval+time.Second)); !info {
+		t.Fatal("uncommon code reclamation should retain Info visibility")
+	}
+	caughtUp := stats
+	caughtUp.DomainChangePrunedThrough = 65_536
+	if info, _ := pruner.prunePassLogDecision(131_072, caughtUp, base.Add(coldPruneProgressLogInterval+2*time.Second)); !info {
+		t.Fatal("caught-up prune boundary should retain Info visibility")
+	}
+	archive := &Pruner{cfg: PrunerConfig{Policy: ArchiveColdPolicy(65_536, 128)}}
+	if info, _ := archive.prunePassLogDecision(100_000, stats, base); !info {
+		t.Fatal("archive-cold first prune should retain Info visibility")
+	}
+	full := &Pruner{cfg: PrunerConfig{Policy: FullPolicy(65_536, 128)}}
+	full.lastColdPruneProgressLogAt.Store(base.UnixNano())
+	if info, _ := full.prunePassLogDecision(100_000, stats, base.Add(time.Second)); !info {
+		t.Fatal("non-cold full-mode prune should retain Info visibility")
+	}
+}
+
 func TestPrunerCatchupDefaultsUseBoundedLargeBlockWindow(t *testing.T) {
 	pruner := NewPruner(&fakePruneChain{db: rawdb.NewMemoryDatabase()}, PrunerConfig{
 		Policy: FullPolicy(2, 1),

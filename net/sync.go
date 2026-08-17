@@ -983,7 +983,11 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 	if orderReadErrorCount > 0 {
 		firstOrderReadErrorStage = result.SyncPipelineOrderErrors[0].Stage
 	}
-	syncLog.Info("Sync startup repair summary",
+	syncLog.Info("Sync startup repair summary", syncStartupRepairSummaryContext(result)...)
+	if !syncLog.DebugEnabled() {
+		return
+	}
+	syncLog.Debug("Sync startup repair diagnostics",
 		"syncStartupRepairComplete", repair.Complete,
 		"syncStartupRepairKept", repair.Kept,
 		"syncStartupRepairMissing", repair.Missing,
@@ -1044,6 +1048,111 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 		"syncStartupInterrupted", result.Interrupted,
 		"syncStartupErrorStep", result.ErrorStep,
 	)
+}
+
+func syncStartupRepairSummaryContext(result syncdl.SessionStartupApplyResult) []any {
+	repair := result.SyncPipelineRepairResult
+	ctx := []any{
+		"repairComplete", repair.Complete,
+		"repairRows", len(repair.Repairs),
+	}
+	if repair.Kept > 0 {
+		ctx = append(ctx, "kept", repair.Kept)
+	}
+	if repair.Missing > 0 {
+		ctx = append(ctx, "missing", repair.Missing)
+	}
+	if repair.Deleted > 0 {
+		ctx = append(ctx, "deleted", repair.Deleted)
+	}
+	if repair.HasBlocked {
+		ctx = append(ctx, "blockedStage", repair.FirstBlockedStage)
+	}
+	if repair.Interrupted {
+		ctx = append(ctx, "repairInterrupted", true)
+	}
+	if repair.ErrorStage != "" {
+		ctx = append(ctx, "repairErrorStage", repair.ErrorStage)
+	}
+	if result.HasSyncPipelineHead {
+		head := result.SyncPipelineHeadCompletion
+		if head.Complete || head.Written > 0 || head.ErrorStage != "" {
+			ctx = append(ctx, "headComplete", head.Complete, "headStagesWritten", head.Written)
+			if head.ErrorStage != "" {
+				ctx = append(ctx, "headErrorStage", head.ErrorStage)
+			}
+		}
+	}
+	if result.HasImportedBodyCleanup {
+		cleanup := result.ImportedBodyCleanup
+		if cleanup.Deleted > 0 || cleanup.Failed() {
+			ctx = append(ctx, "importedBodiesDeleted", cleanup.Deleted, "importedCleanupFailed", cleanup.Failed())
+		}
+	}
+	if issues := len(result.SyncPipelineOrderIssues); issues > 0 {
+		ctx = append(ctx, "orderIssues", issues, "firstOrderIssue", result.SyncPipelineOrderIssues[0].String())
+	}
+	if readErrors := len(result.SyncPipelineOrderErrors); readErrors > 0 {
+		ctx = append(ctx, "orderReadErrors", readErrors, "firstOrderReadErrorStage", result.SyncPipelineOrderErrors[0].Stage)
+	}
+	if result.HasSyncPipelineOrderRepair {
+		order := result.SyncPipelineOrderRepair
+		if order.Deleted > 0 || order.Updated > 0 || order.Interrupted || order.ErrorStage != "" {
+			ctx = append(ctx, "orderDeleted", order.Deleted, "orderUpdated", order.Updated)
+			if order.Interrupted {
+				ctx = append(ctx, "orderInterrupted", true)
+			}
+			if order.ErrorStage != "" {
+				ctx = append(ctx, "orderErrorStage", order.ErrorStage)
+			}
+		}
+	}
+	if result.HasSyncPipelineCursor {
+		cursor := result.SyncPipelineCursor
+		ctx = append(ctx, "cursorRows", cursor.StageRows, "cursorComplete", cursor.Complete)
+		if cursor.HasLast {
+			ctx = append(ctx, "cursorLastStage", cursor.LastStage, "cursorLastBlock", cursor.LastBlock)
+		}
+		if cursor.HasNext {
+			ctx = append(ctx, "cursorNextStage", cursor.NextStage)
+		}
+		if cursor.HasBlocked {
+			ctx = append(ctx, "cursorBlocked", true)
+		}
+		if cursor.Interrupted {
+			ctx = append(ctx, "cursorInterrupted", true)
+		}
+		if cursor.ErrorStage != "" {
+			ctx = append(ctx, "cursorErrorStage", cursor.ErrorStage)
+		}
+	}
+	if result.HasStagedBodyRestore {
+		restore := result.StagedBodyRestore
+		if restore.Restored > 0 || restore.NeedPruneTail {
+			ctx = append(ctx,
+				"stagedBodiesRestored", restore.Restored,
+				"stagedTargetHead", restore.TargetHead,
+				"stagedNextExpected", restore.NextExpected)
+			if restore.NeedPruneTail {
+				ctx = append(ctx, "stagedPruneFrom", restore.PruneFrom)
+			}
+		}
+	}
+	if result.HasBodiesReadyRefresh {
+		ready := result.BodiesReadyRefresh
+		if ready.Updated || ready.Deleted || ready.Failed() {
+			ctx = append(ctx,
+				"bodiesReadyUpdated", ready.Updated,
+				"bodiesReadyDeleted", ready.Deleted,
+				"bodiesReadyFailed", ready.Failed(),
+				"bodiesReadyFrontier", ready.Frontier.Number,
+				"bodiesReadyNextMissing", ready.Frontier.NextMissing)
+		}
+	}
+	if result.Interrupted {
+		ctx = append(ctx, "interrupted", true, "errorStep", result.ErrorStep)
+	}
+	return ctx
 }
 
 func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pruneStaleTail bool) syncdl.StagedBodyRestoreResult {
@@ -3120,6 +3229,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	}
 	blocksPerSec := float64(s.Blocks) * float64(time.Second) / float64(elapsed)
 	txsPerSec := float64(s.Txs) * float64(time.Second) / float64(elapsed)
+	energyPerSec := syncEnergyPerSec(s.ApplyStats.EnergyUsageTotal, elapsed)
 	ss.stats.RecordSpeed(now, s.Blocks, elapsed)
 	ctx := []any{
 		"window", ethcommon.PrettyDuration(elapsed),
@@ -3128,6 +3238,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"txs", s.Txs,
 		"blocksPerSec", round2(blocksPerSec),
 		"txsPerSec", round2(txsPerSec),
+		"energyPerSec", energyPerSec,
 		"remaining", remain,
 		"peers", diag.PeerCount,
 		"activePeers", diag.ActivePeerCount,
@@ -3144,7 +3255,6 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	if !syncLog.DebugEnabled() {
 		return
 	}
-	energyPerSec := float64(s.ApplyStats.EnergyUsageTotal) * float64(time.Second) / float64(elapsed)
 	txTop := tsync.TopTxKindsString(s.TxKinds, 5)
 	if txTop == "" {
 		txTop = "none"
@@ -3168,7 +3278,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"validate", ethcommon.PrettyDuration(s.ApplyStats.Validate),
 		"execute", ethcommon.PrettyDuration(s.ApplyStats.Execute),
 		"energy", formatCompactEnergy(float64(s.ApplyStats.EnergyUsageTotal)),
-		"energyPerSec", formatCompactEnergy(energyPerSec),
+		"energyPerSec", energyPerSec,
 		"maintenance", ethcommon.PrettyDuration(s.ApplyStats.Maintenance),
 		"stateCommit", ethcommon.PrettyDuration(s.ApplyStats.StateCommit),
 		"stateCommitMeasured", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.Total()),
@@ -3236,6 +3346,14 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		detail = append(detail, "peerState", diag.PeerState)
 	}
 	syncLog.Debug("Sync import diagnostics", detail...)
+}
+
+func syncEnergyPerSec(total int64, elapsed time.Duration) float64 {
+	if total <= 0 || elapsed <= 0 {
+		return 0
+	}
+	rate := float64(total) * float64(time.Second) / float64(elapsed)
+	return round2(rate)
 }
 
 func round2(f float64) float64 {

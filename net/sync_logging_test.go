@@ -96,6 +96,7 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"txs=",
 		"blocksPerSec=",
 		"txsPerSec=",
+		"energyPerSec=",
 		"remaining=",
 		"peers=",
 		"activePeers=",
@@ -226,7 +227,7 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 	}
 	for _, field := range []string{
 		"window=", "head=90", "blocks=20", "txs=40", "blocksPerSec=10", "txsPerSec=20", "remaining=10",
-		"peers=2", "activePeers=1", "inflight=2",
+		"energyPerSec=", "peers=2", "activePeers=1", "inflight=2",
 		"buffered=3", "requested=4", "retries=1",
 	} {
 		if !strings.Contains(segmentLine, field) {
@@ -235,7 +236,7 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 	}
 	for _, field := range []string{
 		"Sync import diagnostics", "execElapsed=", "stateCommit=", "peerState=",
-		"energy=", "energyPerSec=", "txTop=", "stateMutTop=", "stateMutKVTop=",
+		"energy=", "txTop=", "stateMutTop=", "stateMutKVTop=",
 	} {
 		if strings.Contains(out, field) {
 			t.Errorf("diagnostic field %q emitted at info level:\n%s", field, out)
@@ -258,6 +259,24 @@ func TestFormatCompactEnergy(t *testing.T) {
 	} {
 		if got := formatCompactEnergy(tc.value); got != tc.want {
 			t.Errorf("formatCompactEnergy(%v) = %q, want %q", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestSyncEnergyPerSecIsNumericAndRounded(t *testing.T) {
+	if got := syncEnergyPerSec(6_000_000_001, 2*time.Second); got != 3_000_000_000.5 {
+		t.Fatalf("energyPerSec = %v, want 3000000000.5", got)
+	}
+	for _, tc := range []struct {
+		total   int64
+		elapsed time.Duration
+	}{
+		{0, time.Second},
+		{-1, time.Second},
+		{1, 0},
+	} {
+		if got := syncEnergyPerSec(tc.total, tc.elapsed); got != 0 {
+			t.Errorf("syncEnergyPerSec(%d, %s) = %v, want 0", tc.total, tc.elapsed, got)
 		}
 	}
 }
@@ -456,8 +475,28 @@ func TestSync_StartupRepairSummaryLogged(t *testing.T) {
 	})
 
 	out := buf.String()
-	if !strings.Contains(out, "Sync startup repair summary") {
+	var summaryLine, diagnosticLine string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "Sync startup repair summary") {
+			summaryLine = line
+		}
+		if strings.Contains(line, "Sync startup repair diagnostics") {
+			diagnosticLine = line
+		}
+	}
+	if summaryLine == "" {
 		t.Fatalf("expected startup repair summary line, got:\n%s", out)
+	}
+	for _, field := range []string{"repairComplete=false", "repairRows=3", "kept=2", "deleted=1", "blockedStage=SyncCommitment", "orderDeleted=1", "orderUpdated=2", "cursorRows=4", "cursorLastBlock=6", "cursorNextStage=SyncCommitment", "stagedBodiesRestored=3", "stagedPruneFrom=8"} {
+		if !strings.Contains(summaryLine, field) {
+			t.Errorf("missing compact summary field %q:\n%s", field, summaryLine)
+		}
+	}
+	if strings.Contains(summaryLine, "syncStartup") {
+		t.Fatalf("verbose diagnostic fields leaked into Info summary:\n%s", summaryLine)
+	}
+	if diagnosticLine == "" {
+		t.Fatalf("expected startup repair diagnostics at Debug, got:\n%s", out)
 	}
 	for _, k := range []string{
 		"syncStartupRepairComplete=false",

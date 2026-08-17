@@ -34,6 +34,7 @@ const (
 	defaultBatch                   = 25_000
 	defaultPrunerMetricsNamespace  = "state/prune/"
 	maxRetiredHistoryVerifyWorkers = 8
+	coldPruneProgressLogInterval   = time.Minute
 )
 
 var errPruneDeferredForCatchup = errors.New("pruning: deferred for sync catch-up")
@@ -129,6 +130,8 @@ type Pruner struct {
 	lastDomainChangePrunedThrough     atomic.Uint64
 	lastDomainChangePrunedThroughTx   atomic.Uint64
 	lastPassDuration                  atomic.Int64
+	lastColdPruneProgressLogAt        atomic.Int64
+	coldPruneProgressSuppressed       atomic.Uint64
 }
 
 type prunerMetrics struct {
@@ -615,9 +618,48 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 	}
 	if stats.DeletedTxRanges != 0 || stats.DeletedDomainChangeBlocks != 0 || stats.DeletedCommitmentCheckpoints != 0 || stats.DeletedStateCodeRows != 0 {
 		elapsed := time.Since(start)
-		log.Info("Domain state prune pass completed", prunePassLogContext(pruneHead, solidified, p.cfg.Policy, stats, elapsed)...)
+		ctx := prunePassLogContext(pruneHead, solidified, p.cfg.Policy, stats, elapsed)
+		if info, suppressed := p.prunePassLogDecision(pruneHead, stats, time.Now()); info {
+			if suppressed > 0 {
+				ctx = append(ctx, "suppressedPasses", suppressed)
+			}
+			log.Info("Domain state prune pass completed", ctx...)
+		} else {
+			log.Debug("Domain state prune pass completed", ctx...)
+		}
 	}
 	return stats, nil
+}
+
+func (p *Pruner) prunePassLogDecision(pruneHead uint64, stats Stats, now time.Time) (info bool, suppressed uint64) {
+	if p == nil {
+		return true, 0
+	}
+	policy := p.cfg.Policy
+	coldHistoryMode := policy.Mode == ModeSnap || (policy.Mode == ModeArchive && policy.HistoryWindow > 0)
+	hasUncommonChanges := stats.DeletedTxRanges > 0 || stats.DeletedCommitmentCheckpoints > 0 || stats.DeletedStateCodeRows > 0
+	caughtUp := pruneHead >= policy.HistoryWindow && stats.DomainChangePrunedThrough >= pruneHead-policy.HistoryWindow
+	if !coldHistoryMode || hasUncommonChanges || caughtUp {
+		p.lastColdPruneProgressLogAt.Store(now.UnixNano())
+		return true, p.coldPruneProgressSuppressed.Swap(0)
+	}
+
+	// Cold snapshot catch-up can make a short prune commit every few seconds.
+	// Preserve every committed cursor at Debug and sample Info once per minute;
+	// uncommon side effects and the caught-up boundary are always Info.
+	p.coldPruneProgressSuppressed.Add(1)
+	last := p.lastColdPruneProgressLogAt.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < coldPruneProgressLogInterval {
+		return false, 0
+	}
+	if !p.lastColdPruneProgressLogAt.CompareAndSwap(last, now.UnixNano()) {
+		return false, 0
+	}
+	count := p.coldPruneProgressSuppressed.Swap(0)
+	if count > 0 {
+		count--
+	}
+	return true, count
 }
 
 func prunePassLogContext(pruneHead uint64, solidified int64, policy Policy, stats Stats, elapsed time.Duration) []any {

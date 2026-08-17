@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -233,6 +235,52 @@ func TestColdSnapshotETAKeepsSubCentPrecisionAndBoundsOverflow(t *testing.T) {
 	}
 	if got := smoothColdSnapshotCatchupRate(100, 2, coldSnapshotCatchupRateReset); got != 2 {
 		t.Fatalf("stale smoothed rate = %v, want reset to 2", got)
+	}
+}
+
+func TestColdSnapshotPublishInfoIsSampledDuringAcceleratedCatchup(t *testing.T) {
+	runner := &Runner{}
+	result := PassResult{HistoryAccelerated: true, PublishedBlock: 50, EligibleCutoffBlock: 100}
+	base := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+
+	if info, suppressed := coldSnapshotPublishLogDecision(runner, result, base); !info || suppressed != 0 {
+		t.Fatalf("first publication = info %t suppressed %d, want true/0", info, suppressed)
+	}
+	if info, _ := coldSnapshotPublishLogDecision(runner, result, base.Add(time.Second)); info {
+		t.Fatal("accelerated publication inside sampling window logged at Info")
+	}
+	if info, suppressed := coldSnapshotPublishLogDecision(runner, result, base.Add(coldSnapshotPublishLogInterval)); !info || suppressed != 1 {
+		t.Fatalf("sampled publication = info %t suppressed %d, want true/1", info, suppressed)
+	}
+
+	result.PublishedBlock = result.EligibleCutoffBlock
+	if info, suppressed := coldSnapshotPublishLogDecision(runner, result, base.Add(coldSnapshotPublishLogInterval+time.Second)); !info || suppressed != 0 {
+		t.Fatalf("final catch-up publication = info %t suppressed %d, want true/0", info, suppressed)
+	}
+}
+
+func TestColdSnapshotPublishSamplingIsConcurrentSafe(t *testing.T) {
+	runner := &Runner{}
+	result := PassResult{HistoryAccelerated: true, PublishedBlock: 50, EligibleCutoffBlock: 100}
+	base := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+	if info, _ := coldSnapshotPublishLogDecision(runner, result, base); !info {
+		t.Fatal("initial publication should establish the sampling window")
+	}
+
+	var reports atomic.Uint64
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if info, _ := coldSnapshotPublishLogDecision(runner, result, base.Add(coldSnapshotPublishLogInterval)); info {
+				reports.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := reports.Load(); got != 1 {
+		t.Fatalf("concurrent Info reports = %d, want 1", got)
 	}
 }
 
