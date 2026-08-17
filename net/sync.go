@@ -3229,7 +3229,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	}
 	blocksPerSec := float64(s.Blocks) * float64(time.Second) / float64(elapsed)
 	txsPerSec := float64(s.Txs) * float64(time.Second) / float64(elapsed)
-	energyPerSec := syncEnergyPerSec(s.ApplyStats.EnergyUsageTotal, elapsed)
+	energyPerSec := formatSyncEnergyPerSec(s.ApplyStats.EnergyUsageTotal, elapsed)
 	ss.stats.RecordSpeed(now, s.Blocks, elapsed)
 	ctx := []any{
 		"window", ethcommon.PrettyDuration(elapsed),
@@ -3356,6 +3356,10 @@ func syncEnergyPerSec(total int64, elapsed time.Duration) float64 {
 	return round2(rate)
 }
 
+func formatSyncEnergyPerSec(total int64, elapsed time.Duration) string {
+	return formatCompactEnergy(syncEnergyPerSec(total, elapsed))
+}
+
 func round2(f float64) float64 {
 	// Trim to 2 decimals for log readability without depending on a printf
 	// format directive (slog handlers print floats with full precision).
@@ -3372,6 +3376,8 @@ func formatCompactEnergy(value float64) string {
 		return fmt.Sprintf("%.2fB", value/1_000_000_000)
 	case abs >= 1_000_000:
 		return fmt.Sprintf("%.2fM", value/1_000_000)
+	case abs >= 1_000:
+		return fmt.Sprintf("%.2fk", value/1_000)
 	default:
 		return fmt.Sprintf("%g", round2(value))
 	}

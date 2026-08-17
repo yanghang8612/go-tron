@@ -250,7 +250,10 @@ func TestFormatCompactEnergy(t *testing.T) {
 		want  string
 	}{
 		{0, "0"},
-		{999_999.125, "999999.13"},
+		{999.125, "999.13"},
+		{1_000, "1.00k"},
+		{18_436.725, "18.44k"},
+		{999_999.125, "1000.00k"},
 		{1_000_000, "1.00M"},
 		{18_436_725, "18.44M"},
 		{1_000_000_000, "1.00B"},
@@ -263,9 +266,15 @@ func TestFormatCompactEnergy(t *testing.T) {
 	}
 }
 
-func TestSyncEnergyPerSecIsNumericAndRounded(t *testing.T) {
+func TestSyncEnergyPerSecCalculationAndFormatting(t *testing.T) {
 	if got := syncEnergyPerSec(6_000_000_001, 2*time.Second); got != 3_000_000_000.5 {
 		t.Fatalf("energyPerSec = %v, want 3000000000.5", got)
+	}
+	if got := formatSyncEnergyPerSec(6_000_000_001, 2*time.Second); got != "3.00B" {
+		t.Fatalf("formatted energyPerSec = %q, want 3.00B", got)
+	}
+	if got := formatSyncEnergyPerSec(36_873, 2*time.Second); got != "18.44k" {
+		t.Fatalf("formatted energyPerSec = %q, want 18.44k", got)
 	}
 	for _, tc := range []struct {
 		total   int64
