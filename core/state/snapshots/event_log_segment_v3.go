@@ -1220,6 +1220,74 @@ func (s *EventLogSegment) readEventLogV3Row(rowIndex uint64) (eventLogV3Row, err
 	return s.v3.cacheRows[rowIndex%eventLogV3RowFrameRows], nil
 }
 
+// eventLogV4BlockIDLowerBound returns the first block dictionary id whose
+// block number is at least target. V4 writes the dictionary in canonical block
+// order and rows reference it monotonically, so a narrow RPC range does not
+// need to decode payloads belonging to the rest of the physical segment.
+func (s *EventLogSegment) eventLogV4BlockIDLowerBound(target uint64) (uint64, error) {
+	lo, hi := uint64(0), s.v3.blockCount
+	var raw [8]byte
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		offset := s.v3.header.blockDictOffset + 8 + mid*uint64(8+common.HashLength)
+		if _, err := s.file.ReadAt(raw[:], int64(offset)); err != nil {
+			return 0, err
+		}
+		if binary.BigEndian.Uint64(raw[:]) < target {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo, nil
+}
+
+// eventLogV4RowLowerBound returns the first row whose block dictionary id is
+// at least target. Reading a row validates the complete checksummed row frame;
+// the binary search therefore remains fail-closed for every frame it uses.
+func (s *EventLogSegment) eventLogV4RowLowerBound(target uint64) (uint64, error) {
+	lo, hi := uint64(0), s.header.rowCount
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		row, err := s.readEventLogV3Row(mid)
+		if err != nil {
+			return 0, err
+		}
+		if row.blockID < target {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo, nil
+}
+
+func (s *EventLogSegment) eventLogV4RowRange(fromBlock, toBlock uint64) (uint64, uint64, error) {
+	if toBlock < fromBlock || s.header.rowCount == 0 || s.v3.blockCount == 0 {
+		return 0, 0, nil
+	}
+	fromID, err := s.eventLogV4BlockIDLowerBound(fromBlock)
+	if err != nil || fromID == s.v3.blockCount {
+		return 0, 0, err
+	}
+	toID := s.v3.blockCount
+	if toBlock != math.MaxUint64 {
+		toID, err = s.eventLogV4BlockIDLowerBound(toBlock + 1)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	fromRow, err := s.eventLogV4RowLowerBound(fromID)
+	if err != nil {
+		return 0, 0, err
+	}
+	toRow, err := s.eventLogV4RowLowerBound(toID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return fromRow, toRow, nil
+}
+
 func decodeEventLogV3Rows(raw []byte, count int) ([]eventLogV3Row, error) {
 	rows := make([]eventLogV3Row, 0, count)
 	reader := bytes.NewReader(raw)
@@ -1508,7 +1576,11 @@ func readEventLogV3LookupKeyAt(file io.ReaderAt, offset, length, size uint64, ke
 }
 
 func (s *EventLogSegment) iterateEventLogV3FullScan(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
-	for i := uint64(0); i < s.header.rowCount; i++ {
+	fromRow, toRow, err := s.eventLogV4RowRange(fromBlock, toBlock)
+	if err != nil {
+		return err
+	}
+	for i := fromRow; i < toRow; i++ {
 		row, err := s.readEventLogV3Row(i)
 		if err != nil {
 			return err

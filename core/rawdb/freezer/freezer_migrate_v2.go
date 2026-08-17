@@ -461,9 +461,14 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 
 func buildOrRecoverTransactionIndexRun(ctx context.Context, path string, start, end uint64, prefixBits uint32, collector *etl.Collector) (TransactionIndexBuildResult, bool, error) {
 	expectedRows := collector.Stats().Collected
+	configuredMax := prefixBits
+	if configuredMax == 0 {
+		configuredMax = transactionIndexDefaultPrefixBits
+	}
+	prefixBits = AdaptiveTransactionIndexPrefixBits(expectedRows, prefixBits)
 	if run, err := OpenTransactionIndexRun(path); err == nil {
 		defer run.Close()
-		if run.StartBlock() != start || run.EndBlock() != end || (prefixBits != 0 && run.PrefixBits() != prefixBits) || run.Rows() != expectedRows {
+		if run.StartBlock() != start || run.EndBlock() != end || run.PrefixBits() > configuredMax || run.Rows() != expectedRows {
 			return TransactionIndexBuildResult{}, false, fmt.Errorf("existing run %q has incompatible metadata", path)
 		}
 		if err := run.VerifyContext(ctx); err != nil {

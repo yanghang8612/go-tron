@@ -24,6 +24,8 @@ const (
 	transactionIndexFingerprintBits     = uint32(64)
 	transactionIndexMinPrefixBits       = uint32(8)
 	transactionIndexMaxPrefixBits       = uint32(24)
+	transactionIndexAdaptiveMinBits     = uint32(12)
+	transactionIndexTargetBucketRows    = uint64(64)
 	transactionIndexMaxBucketRows       = uint64(1 << 20)
 	transactionIndexDirectoryEntryBytes = uint64(8)
 	transactionLocationMarker           = uint64(1) << 63
@@ -31,6 +33,48 @@ const (
 )
 
 var transactionIndexCRC = crc32.MakeTable(crc32.Castagnoli)
+
+// AdaptiveTransactionIndexPrefixBits treats configuredMax as a lookup-latency
+// ceiling rather than forcing every immutable run to reserve the same fixed
+// directory. Small 65k-block runs otherwise each spend 8 MiB on a 20-bit
+// directory even when they contain only a few hundred thousand transactions.
+//
+// The 64-bit fingerprint is unchanged. Reducing the routed prefix only grows
+// the checksummed candidate bucket; callers still verify the full transaction
+// hash. A 12-bit production floor also keeps a future billion-row geometric
+// merge below the on-disk bucket safety limit. Explicit test/special-purpose
+// configurations below 12 bits retain their requested ceiling.
+func AdaptiveTransactionIndexPrefixBits(rows uint64, configuredMax uint32) uint32 {
+	if configuredMax == 0 {
+		configuredMax = transactionIndexDefaultPrefixBits
+	}
+	if configuredMax < transactionIndexMinPrefixBits {
+		return transactionIndexMinPrefixBits
+	}
+	if configuredMax > transactionIndexMaxPrefixBits {
+		configuredMax = transactionIndexMaxPrefixBits
+	}
+	floor := min(configuredMax, transactionIndexAdaptiveMinBits)
+	wantedBuckets := ceilDivUint64(rows, transactionIndexTargetBucketRows)
+	bits := uint32(0)
+	for buckets := uint64(1); buckets < wantedBuckets && bits < transactionIndexMaxPrefixBits; buckets <<= 1 {
+		bits++
+	}
+	if bits < floor {
+		bits = floor
+	}
+	if bits > configuredMax {
+		bits = configuredMax
+	}
+	return bits
+}
+
+func ceilDivUint64(value, divisor uint64) uint64 {
+	if value == 0 {
+		return 0
+	}
+	return 1 + (value-1)/divisor
+}
 
 // TransactionIndexEntry is one hash-sorted immutable transaction locator.
 // Location retains rawdb's eight-byte encoding so both legacy block-only and

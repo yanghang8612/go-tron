@@ -72,6 +72,98 @@ func TestCompactTransactionIndexTailGeometricMerge(t *testing.T) {
 	}
 }
 
+func TestCompactTransactionIndexTailRepairsDeferredBacklog(t *testing.T) {
+	dir := t.TempDir()
+	for segment := uint64(0); segment < 4; segment++ {
+		start, end := segment*10, segment*10+10
+		var hash [32]byte
+		binary.BigEndian.PutUint64(hash[:8], segment+1)
+		result, err := BuildTransactionIndexRun(TransactionIndexRunPath(dir, start, end), TransactionIndexBuildOptions{
+			PrefixBits: 8,
+			StartBlock: start,
+			EndBlock:   end,
+			Iterate: transactionIndexTestIterator([]TransactionIndexEntry{{
+				Hash: hash, Location: start,
+			}}),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := PublishTransactionIndexRun(dir, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	merges := 0
+	for {
+		_, _, merged, err := CompactTransactionIndexTail(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !merged {
+			break
+		}
+		merges++
+	}
+	store, err := OpenTransactionIndexStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if merges != 3 || len(store.runs) != 1 || store.Coverage() != 40 {
+		t.Fatalf("deferred compaction merges=%d runs=%d coverage=%d, want 3/1/40", merges, len(store.runs), store.Coverage())
+	}
+}
+
+func TestCompactTransactionIndexTailMergesDifferentPrefixWidths(t *testing.T) {
+	dir := t.TempDir()
+	entries := make([]TransactionIndexEntry, 0, 64)
+	for segment, prefixBits := range []uint32{8, 12} {
+		start, end := uint64(segment*10), uint64(segment*10+10)
+		var runEntries []TransactionIndexEntry
+		for i := 0; i < 32; i++ {
+			var hash [32]byte
+			binary.BigEndian.PutUint64(hash[:8], uint64(segment*10_000+i*17+1))
+			binary.BigEndian.PutUint64(hash[8:16], uint64(i)*0x9e3779b97f4a7c15)
+			entry := TransactionIndexEntry{Hash: hash, Location: start + uint64(i%10)}
+			runEntries = append(runEntries, entry)
+			entries = append(entries, entry)
+		}
+		path := TransactionIndexRunPath(dir, start, end)
+		result, err := BuildTransactionIndexRun(path, TransactionIndexBuildOptions{
+			PrefixBits: prefixBits,
+			StartBlock: start,
+			EndBlock:   end,
+			Iterate:    transactionIndexTestIterator(runEntries),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := PublishTransactionIndexRun(dir, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, merged, err := CompactTransactionIndexTail(dir); err != nil || !merged {
+		t.Fatalf("merge=%v err=%v", merged, err)
+	}
+	store, err := OpenTransactionIndexStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if len(store.runs) != 1 || store.runs[0].PrefixBits() != 8 {
+		t.Fatalf("merged runs=%d prefix=%d, want 1/8", len(store.runs), store.runs[0].PrefixBits())
+	}
+	for _, entry := range entries {
+		locations, err := store.Candidates(entry.Hash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(locations) != 1 || locations[0] != entry.Location {
+			t.Fatalf("candidate %x = %v, want [%d]", entry.Hash[:8], locations, entry.Location)
+		}
+	}
+}
+
 func TestTransactionIndexOrphanCleanupRecoversPublishedMergeCrash(t *testing.T) {
 	dir := t.TempDir()
 	var obsolete []string
@@ -226,5 +318,51 @@ func TestMergeTransactionIndexRunsPreservesFingerprintCollisions(t *testing.T) {
 	}
 	if err := store.runs[0].Verify(); err != nil {
 		t.Fatal(fmt.Errorf("verify merged collision run: %w", err))
+	}
+}
+
+func TestMergeTransactionIndexRunsPreservesCollisionsAcrossPrefixWidths(t *testing.T) {
+	dir := t.TempDir()
+	makeHash := func(tail byte) [32]byte {
+		var hash [32]byte
+		copy(hash[:16], []byte("same-route-bits!"))
+		hash[31] = tail
+		return hash
+	}
+	entries := []TransactionIndexEntry{
+		{Hash: makeHash(1), Location: 1},
+		{Hash: makeHash(2), Location: 2},
+	}
+	for i, prefixBits := range []uint32{8, 12} {
+		start := uint64(i * 2)
+		result, err := BuildTransactionIndexRun(TransactionIndexRunPath(dir, start, start+2), TransactionIndexBuildOptions{
+			PrefixBits: prefixBits,
+			StartBlock: start,
+			EndBlock:   start + 2,
+			Iterate:    transactionIndexTestIterator(entries[i : i+1]),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := PublishTransactionIndexRun(dir, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, merged, err := CompactTransactionIndexTail(dir); err != nil || !merged {
+		t.Fatalf("merge=%v err=%v", merged, err)
+	}
+	store, err := OpenTransactionIndexStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, entry := range entries {
+		locations, err := store.Candidates(entry.Hash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(locations) != 2 {
+			t.Fatalf("collision candidates for %x = %v, want both locations", entry.Hash[:16], locations)
+		}
 	}
 }

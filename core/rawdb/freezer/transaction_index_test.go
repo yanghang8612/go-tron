@@ -39,6 +39,26 @@ func transactionIndexTestIterator(entries []TransactionIndexEntry) TransactionIn
 	}
 }
 
+func TestAdaptiveTransactionIndexPrefixBits(t *testing.T) {
+	for _, test := range []struct {
+		rows uint64
+		max  uint32
+		want uint32
+	}{
+		{rows: 0, max: 20, want: 12},
+		{rows: 16_384, max: 20, want: 12},
+		{rows: 600_000, max: 20, want: 14},
+		{rows: 1_100_000, max: 20, want: 15},
+		{rows: 100_000_000, max: 20, want: 20},
+		{rows: 600_000, max: 13, want: 13},
+		{rows: 600_000, max: 8, want: 8},
+	} {
+		if got := AdaptiveTransactionIndexPrefixBits(test.rows, test.max); got != test.want {
+			t.Fatalf("AdaptiveTransactionIndexPrefixBits(%d, %d) = %d, want %d", test.rows, test.max, got, test.want)
+		}
+	}
+}
+
 func TestTransactionIndexRunRoundTrip(t *testing.T) {
 	entries := make([]TransactionIndexEntry, 4096)
 	for i := range entries {

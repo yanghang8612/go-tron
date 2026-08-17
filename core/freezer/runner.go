@@ -1245,13 +1245,13 @@ func (r *Runner) buildOrRecoverOnlineTransactionIndexRangeContext(ctx context.Co
 	}
 	if run, err := rawdbfreezer.OpenTransactionIndexRun(path); err == nil {
 		defer run.Close()
-		if run.StartBlock() != start || run.EndBlock() != end || run.PrefixBits() != prefixBits {
+		if run.StartBlock() != start || run.EndBlock() != end || run.PrefixBits() > prefixBits {
 			return rawdbfreezer.TransactionIndexBuildResult{}, false, fmt.Errorf("online transaction index run %q has incompatible metadata", path)
 		}
 		if err := run.VerifyContext(ctx); err != nil {
 			return rawdbfreezer.TransactionIndexBuildResult{}, false, err
 		}
-		return rawdbfreezer.TransactionIndexBuildResult{Path: path, Rows: run.Rows(), StartBlock: start, EndBlock: end, PrefixBits: prefixBits, FileBytes: run.Size()}, true, nil
+		return rawdbfreezer.TransactionIndexBuildResult{Path: path, Rows: run.Rows(), StartBlock: start, EndBlock: end, PrefixBits: run.PrefixBits(), FileBytes: run.Size()}, true, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return rawdbfreezer.TransactionIndexBuildResult{}, false, err
 	}
@@ -1273,6 +1273,7 @@ func (r *Runner) buildOrRecoverOnlineTransactionIndexRangeContext(ctx context.Co
 	if err != nil {
 		return rawdbfreezer.TransactionIndexBuildResult{}, false, err
 	}
+	prefixBits = rawdbfreezer.AdaptiveTransactionIndexPrefixBits(rows, prefixBits)
 	result, err := rawdbfreezer.BuildTransactionIndexRun(path, rawdbfreezer.TransactionIndexBuildOptions{
 		Context:    ctx,
 		PrefixBits: prefixBits,

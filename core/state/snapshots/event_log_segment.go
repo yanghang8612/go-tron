@@ -1225,8 +1225,21 @@ func (m *Manager) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) 
 	if err != nil || manifest == nil {
 		return false, err
 	}
+	refs := eventLogRefs(manifest)
+	if !eventLogRangeCoveredByRefs(refs, fromBlock, toBlock) {
+		return false, nil
+	}
+	// The external lookup index is built from, and semantically verified
+	// against, the exact immutable event-log companions. Reuse that proof when
+	// available instead of replaying CheckEventLogSegment on every receipt
+	// lookup and every freezer pass. A missing or damaged optional sidecar must
+	// not make otherwise valid unfiltered event-log coverage unavailable; the
+	// direct segment verifier below remains the authoritative fallback.
+	if verified, verifyErr := m.verifyEventLogCompanionsForRange(manifest, refs, fromBlock, toBlock); verifyErr == nil && verified {
+		return true, nil
+	}
 	next := fromBlock
-	for _, ref := range eventLogRefs(manifest) {
+	for _, ref := range refs {
 		if ref.ToTxNum < next {
 			continue
 		}

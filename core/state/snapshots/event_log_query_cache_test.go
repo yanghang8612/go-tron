@@ -117,6 +117,33 @@ func TestEventLogQueryReusesVerifiedCompanionsWithoutScanningNonCandidates(t *te
 	}
 }
 
+func TestEventLogRangeCoveredReusesVerifiedCompanions(t *testing.T) {
+	dir, _ := buildEventLogVerificationFixture(t, 2, 1)
+	if err := os.Remove(filepath.Join(dir, chainFreezerVerificationCacheFile)); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered, err := mgr.EventLogRangeCovered(1, 1)
+	if err != nil || !covered {
+		t.Fatalf("first EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	first := mgr.chainVerificationCache.Stats()
+	if first.EventFullVerified != 1 {
+		t.Fatalf("first coverage stats = %+v, want one full proof", first)
+	}
+	covered, err = mgr.EventLogRangeCovered(1, 1)
+	if err != nil || !covered {
+		t.Fatalf("second EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	second := mgr.chainVerificationCache.Stats()
+	if second.EventFullVerified != first.EventFullVerified || second.EventMemoryHits <= first.EventMemoryHits {
+		t.Fatalf("coverage did not reuse proof: first=%+v second=%+v", first, second)
+	}
+}
+
 func TestEventLogPersistentProofRehashesSameIdentityCompanion(t *testing.T) {
 	dir := t.TempDir()
 	row := eventLogV3TestRow(

@@ -87,6 +87,69 @@ func TestEventLogV4StripsAndExactlyRestoresOrderedTopics(t *testing.T) {
 	}
 }
 
+func TestEventLogV4NarrowBlockRangeUsesRowBounds(t *testing.T) {
+	dir := t.TempDir()
+	address := common.BytesToAddress(eventLogTestAddress(0x80))
+	topic := common.Hash{0x90}
+	var rows []EventLog
+	for _, group := range []struct {
+		block uint64
+		count int
+	}{{block: 10, count: 260}, {block: 20, count: 3}, {block: 30, count: 257}} {
+		for range group.count {
+			ordinal := uint64(len(rows))
+			var txHash, blockHash common.Hash
+			binary.BigEndian.PutUint64(txHash[24:], ordinal+1)
+			binary.BigEndian.PutUint64(blockHash[24:], group.block)
+			rows = append(rows, eventLogV3TestRow(
+				group.block, ordinal, ordinal, address, txHash, blockHash, topic,
+				[]byte{byte(group.block)},
+			))
+		}
+	}
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 10, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seg.Close()
+
+	for _, test := range []struct {
+		name            string
+		from, to        uint64
+		wantFrom, toRow uint64
+	}{
+		{name: "first block crosses frame", from: 10, to: 10, wantFrom: 0, toRow: 260},
+		{name: "empty gap", from: 11, to: 19, wantFrom: 260, toRow: 260},
+		{name: "middle block", from: 20, to: 20, wantFrom: 260, toRow: 263},
+		{name: "last block crosses frame", from: 30, to: 30, wantFrom: 263, toRow: 520},
+		{name: "past segment", from: 31, to: 40, wantFrom: 0, toRow: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fromRow, toRow, err := seg.eventLogV4RowRange(test.from, test.to)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fromRow != test.wantFrom || toRow != test.toRow {
+				t.Fatalf("row range = [%d,%d), want [%d,%d)", fromRow, toRow, test.wantFrom, test.toRow)
+			}
+			var got []uint64
+			if err := seg.iterateEventLogV3FullScan(test.from, test.to, EventLogFilter{}, func(row EventLog) (bool, error) {
+				got = append(got, row.BlockNum)
+				return true, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if uint64(len(got)) != toRow-fromRow {
+				t.Fatalf("iterated blocks %v, want %d rows", got, toRow-fromRow)
+			}
+		})
+	}
+}
+
 func TestEventLogV4ReaderRejectsV3Magic(t *testing.T) {
 	raw := make([]byte, eventLogV3HeaderSize)
 	copy(raw, eventLogMagicV3[:])

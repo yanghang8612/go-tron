@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +57,26 @@ const (
 )
 
 var metricsOnce sync.Once
+
+// closeRuntimeStore converts a cleanup panic into an ordinary shutdown error
+// with a complete stack. The chain state has already been synchronously
+// flushed before runtime stores are closed, so one faulty file-cache close
+// must not turn a requested systemd stop into an abnormal exit and restart
+// loop. The stack keeps the underlying close bug diagnosable in production.
+func closeRuntimeStore(name string, closeFn func() error) (err error) {
+	if closeFn == nil {
+		return nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("%s close panic: %v\n%s", name, recovered, debug.Stack())
+		}
+	}()
+	if err := closeFn(); err != nil {
+		return fmt.Errorf("%s close: %w", name, err)
+	}
+	return nil
+}
 
 func applyRuntimeSnapshotETLDefaults(opts statesnapshots.RestoreETLOptions) statesnapshots.RestoreETLOptions {
 	if opts.BufferLimit == 0 {
@@ -606,12 +627,19 @@ func gtron(ctx *cli.Context) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	var ancientStore *rawdbfreezer.Freezer
+	var storesCloseOnce sync.Once
 	closeStores := func() {
-		if ancientStore != nil {
-			_ = ancientStore.Close()
-			ancientStore = nil
-		}
-		_ = db.Close()
+		storesCloseOnce.Do(func() {
+			if ancientStore != nil {
+				if err := closeRuntimeStore("ancient database", ancientStore.Close); err != nil {
+					log.Error("Ancient database close failed", "err", err)
+				}
+				ancientStore = nil
+			}
+			if err := closeRuntimeStore("chaindata", db.Close); err != nil {
+				log.Error("Chaindata close failed", "err", err)
+			}
+		})
 	}
 
 	freezerCfg := makeFreezerConfig(ctx)
