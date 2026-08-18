@@ -3147,6 +3147,39 @@ there is no measured light-block regression. A 10-second profile contained
 0.05 seconds (0.19%). Pebble compaction used 8.30 seconds (31.97%), making the
 storage runtime the next measured cost after the co-scheduled retry gate closed.
 
+#### P4.60: Canonical-boundary VM publication oracle
+
+A review of the proposed 1/16 ordinary-block VM expansion found no concurrent
+canonical StateDB writer, but rejected the rollout gate for two reasons. The
+deterministic publication fixture used non-mutating bytecode, and the
+post-publication audit compared a retained worker result with the canonical
+post-image produced by applying that same result. Exact read-version validation
+remains necessary, but that audit alone is not an independent serial oracle for
+an unrecorded-read defect.
+
+The ordinary 1/16 expansion is therefore withdrawn and block-start VM
+publication returns to the proven `block % 1024 == 0` sampled cohort. Before a
+candidate from that cohort may publish, the ordered loop copies the exact
+canonical pre-transaction StateDB and DynamicProperties, executes the same VM
+transaction through the authoritative serial path with isolated raw-KV writes,
+and requires exact TransactionInfo, full ordered WriteSet, and optional
+BalanceTrace equality. Any copy, execution, readiness, or equality failure is
+fail-closed and falls through to normal serial execution without mutating
+canonical state. Dedicated `core/parallel_vm/serial_verify/` counters expose
+candidates, matches, the three mismatch families, errors, and total time.
+
+The publication fixture now performs persistent SSTORE writes, including a
+same-sender successor that overwrites its predecessor's slot. A second fixture
+uses different senders on the same slot and proves the stale block-start result
+is rejected by read-version validation before the boundary oracle while the
+first result publishes. Both compare serial and publication TransactionInfo,
+resource state, storage values, and final roots. A direct negative test corrupts
+the retained SSTORE post-image and proves the boundary oracle rejects it as a
+write-set mismatch. Re-expanding beyond 1/1024 now requires a fresh production
+window with non-zero serial-verification matches, zero mismatch/error, zero
+publisher/resource failures, and an explicit decision on whether the serial
+oracle cost remains enabled or is replaced by a separately proven cohort.
+
 ### P5: Snapshot-first bootstrap and steady-state cold lifecycle
 
 Erigon-class initial sync also requires avoiding execution from genesis when a

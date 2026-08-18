@@ -339,17 +339,17 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				}
 				return data, nil
 			}
-			unpublished = append(unpublished, path)
-			if err := writeV2TableSegment(path, kind, start, count, options.FrameBlocks, readForWrite); err != nil {
-				cleanupUnpublished()
-				return result, fmt.Errorf("write ancient V2 %s segment %d: %w", kind, start, err)
-			}
 			readExpected := func(number uint64) ([]byte, error) {
 				data, err := readSource(number)
 				if err != nil {
 					return nil, err
 				}
 				return f.transformV2MigrationRecord(options, kind, number, data, sourceReader)
+			}
+			unpublished = append(unpublished, path)
+			if err := writeV2TableSegment(path, kind, start, count, options.FrameBlocks, readForWrite, readExpected); err != nil {
+				cleanupUnpublished()
+				return result, fmt.Errorf("write ancient V2 %s segment %d: %w", kind, start, err)
 			}
 			if err := verifyV2Segment(options.Context, path, kind, start, count, readExpected); err != nil {
 				cleanupUnpublished()

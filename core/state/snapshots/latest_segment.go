@@ -998,16 +998,28 @@ func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
 }
 
 func OpenManager(dir string) (*Manager, error) {
+	return OpenManagerWithChainVerificationCache(dir, nil)
+}
+
+// OpenManagerWithChainVerificationCache opens the live snapshot manager with
+// the process-wide chain/event-log verification cache. Sharing this cache with
+// the cold-history and chain-freezer builders lets their identity-bound trusted
+// handoff suppress a redundant semantic replay when the manager immediately
+// consumes the segments they published.
+func OpenManagerWithChainVerificationCache(dir string, verificationCache *ChainFreezerVerificationCache) (*Manager, error) {
 	manifest, info, err := loadCurrentProductionManifest(dir)
 	if err != nil {
 		return nil, err
+	}
+	if verificationCache == nil {
+		verificationCache = NewChainFreezerVerificationCache(dir)
 	}
 	return &Manager{
 		dir:                    dir,
 		manifest:               manifest,
 		manifestInfo:           info,
 		cache:                  make(map[string]*LatestSegment),
-		chainVerificationCache: NewChainFreezerVerificationCache(dir),
+		chainVerificationCache: verificationCache,
 	}, nil
 }
 

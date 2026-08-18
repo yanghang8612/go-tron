@@ -672,7 +672,15 @@ func gtron(ctx *cli.Context) error {
 				"bytes", stats.Bytes)
 		}
 	}
-	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
+	// One process-wide verification cache connects the trusted handoff from
+	// cold-history/freezer builders to the live snapshot reader. Keeping the
+	// manager on a private cache would force it to replay freshly built event-log
+	// segments before the direct V2 freezer could consume their coverage.
+	chainFreezerVerificationCache := statesnapshots.NewChainFreezerVerificationCache(stateSnapshotDir)
+	if err := chainFreezerVerificationCache.LoadError(); err != nil {
+		log.Warn("Chain-freezer verification cache ignored; full verification will rebuild it", "err", err)
+	}
+	stateSnapshotManager, err := statesnapshots.OpenManagerWithChainVerificationCache(stateSnapshotDir, chainFreezerVerificationCache)
 	if err != nil {
 		closeStores()
 		return fmt.Errorf("open state snapshots: %w", err)
@@ -1043,12 +1051,7 @@ func gtron(ctx *cli.Context) error {
 	heavyWorkGate := maintenance.NewHeavyWorkGateWithCooldownAfter(heavyWorkRecoveryCooldown, heavyWorkCooldownMinDuration)
 	var domainLifecycle *statepruning.SnapshotLifecycle
 	var chainFreezerSnapshotBuild statepruning.ChainFreezerBuildFunc
-	var chainFreezerVerificationCache *statesnapshots.ChainFreezerVerificationCache
 	if shouldEnableChainFreezerSnapshotBuilder(chainConfig, ancientStore != nil, freezerCfg.Enabled) {
-		chainFreezerVerificationCache = statesnapshots.NewChainFreezerVerificationCache(stateSnapshotDir)
-		if err := chainFreezerVerificationCache.LoadError(); err != nil {
-			log.Warn("Chain-freezer verification cache ignored; full verification will rebuild it", "err", err)
-		}
 		chainFreezerSnapshotBuild = func() (statesnapshots.ChainFreezerSnapshotPassResult, error) {
 			return statesnapshots.BuildChainFreezerSnapshotPass(ancientStore, bc.ChainDB(), statesnapshots.ChainFreezerSnapshotConfig{
 				Dir:               stateSnapshotDir,

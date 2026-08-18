@@ -240,6 +240,13 @@ var (
 	parallelVMBlockEnergyFallbackCounter             = metrics.NewRegisteredCounter("core/parallel_vm/fallback/block_energy", nil)
 	parallelVMErrorsCounter                          = metrics.NewRegisteredCounter("core/parallel_vm/errors", nil)
 	parallelVMPublicationNanosCounter                = metrics.NewRegisteredCounter("core/parallel_vm/publication_nanos", nil)
+	parallelVMSerialVerifyCandidatesCounter          = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/candidates", nil)
+	parallelVMSerialVerifyMatchesCounter             = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/matches", nil)
+	parallelVMSerialVerifyInfoMismatchCounter        = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/info_mismatches", nil)
+	parallelVMSerialVerifyWriteMismatchCounter       = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/write_set_mismatches", nil)
+	parallelVMSerialVerifyBalanceMismatchCounter     = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/balance_trace_mismatches", nil)
+	parallelVMSerialVerifyErrorsCounter              = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/errors", nil)
+	parallelVMSerialVerifyNanosCounter               = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/nanos", nil)
 	parallelVMChainCandidatesCounter                 = metrics.NewRegisteredCounter("core/parallel_vm/sender_chain/candidates", nil)
 	parallelVMChainPublishedCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/sender_chain/published", nil)
 	parallelVMChainPredFallbackCounter               = metrics.NewRegisteredCounter("core/parallel_vm/sender_chain/fallback/predecessor", nil)
@@ -3593,6 +3600,71 @@ func preexecutedResultValidForReadValidation(result *discardShadowTaskResult) bo
 
 func preexecutedResultReady(result *discardShadowTaskResult) bool {
 	return preexecutedResultValidForReadValidation(result) && !result.contractRetMismatch
+}
+
+type vmBoundarySerialVerification struct {
+	infoMatch    bool
+	writeMatch   bool
+	balanceMatch bool
+	err          error
+}
+
+func (verification vmBoundarySerialVerification) matched() bool {
+	return verification.err == nil && verification.infoMatch && verification.writeMatch && verification.balanceMatch
+}
+
+// verifyVMResultAtCanonicalBoundary runs the authoritative transaction path on
+// an isolated copy of the exact canonical pre-transaction state. The sparse VM
+// publication cohort deliberately pays this canary cost so its post-publication
+// audit is not limited to reapplying and comparing the worker's own WriteSet.
+// The caller must install any ordered public-net override before invoking this
+// function, making the worker and serial WriteSets directly comparable.
+func verifyVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig) vmBoundarySerialVerification {
+	verification := vmBoundarySerialVerification{balanceMatch: !cfg.captureBalanceTrace}
+	if statedb == nil || dynProps == nil || cfg.block == nil || result == nil || txIndex < 0 || txIndex >= len(cfg.transactions) {
+		verification.err = errors.New("missing VM boundary verification input")
+		return verification
+	}
+	boundaryState, err := statedb.CopyBlockExecutionBase()
+	if err != nil {
+		verification.err = err
+		return verification
+	}
+	boundaryState.SetDynamicProperties(dynProps.Copy())
+	if cfg.captureBalanceTrace {
+		blockHash := cfg.block.Hash()
+		boundaryState.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
+	}
+	worker := discardShadowWorker{
+		state:     boundaryState,
+		dynProps:  boundaryState.DynamicProperties(),
+		db:        discardKVOverlay{parent: cfg.db},
+		forkCache: forks.NewVersionPassCache().BlockScope(),
+	}
+	worker.db.recorder = &worker.recorder
+	verifyCfg := cfg
+	verifyCfg.canonicalInfos = nil
+	verifyCfg.canonicalWriteSets = nil
+	verifyCfg.retainInfos = true
+	serialResult := worker.execute(txIndex, verifyCfg)
+	if !preexecutedResultReady(&serialResult) {
+		if serialResult.err != nil {
+			verification.err = serialResult.err
+		} else if serialResult.writeSetErr != nil {
+			verification.err = serialResult.writeSetErr
+		} else if serialResult.applyErr != nil {
+			verification.err = serialResult.applyErr
+		} else {
+			verification.err = errors.New("canonical-boundary VM verification result is unavailable")
+		}
+		return verification
+	}
+	verification.infoMatch = compareDiscardShadowInfo(result.info, serialResult.info) == 0
+	verification.writeMatch = state.EqualTransactionWriteSets(result.writes, serialResult.writes)
+	if cfg.captureBalanceTrace {
+		verification.balanceMatch = proto.Equal(result.balanceTrace, serialResult.balanceTrace)
+	}
+	return verification
 }
 
 func preexecutedTransferReady(result *discardShadowTaskResult) bool {

@@ -283,6 +283,12 @@
   keeping the VM and Transfer canonical publishers disjoint.
 - [x] Run the co-scheduled retry gate with non-zero audited VM publication,
   zero mismatch/error/fallback, and bounded queue/CPU growth.
+- [x] Withdraw the ungated 1/16 ordinary-block VM expansion and retain the
+  proven 1/1024 block-start publication cohort.
+- [x] Add an exact canonical-boundary serial VM oracle before block-start
+  publication, with fail-closed fallback and dedicated mismatch metrics.
+- [x] Replace the non-mutating VM publication fixture with SSTORE coverage and
+  add same-slot conflict plus corrupted-post-image rejection tests.
 
 ## P5: Snapshot and cold steady state
 

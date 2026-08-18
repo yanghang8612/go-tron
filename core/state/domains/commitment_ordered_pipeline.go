@@ -51,16 +51,19 @@ type orderedCommitmentLaneTask struct {
 }
 
 type orderedCommitmentPrefetchTask struct {
-	store  *rawdbBranchStore
-	result *orderedCommitmentPrefetchResult
-	nb     uint8
-	depth  int
-	ops    []op
+	store          *rawdbBranchStore
+	result         *orderedCommitmentPrefetchResult
+	nb             uint8
+	depth          int
+	lookaheadDepth int
+	lookaheadLimit int
+	ops            []op
 }
 
 type orderedCommitmentPrefetchResult struct {
-	done   sync.WaitGroup
-	active bool
+	critical sync.WaitGroup
+	done     sync.WaitGroup
+	active   bool
 }
 
 type orderedCommitmentJob struct {
@@ -81,6 +84,16 @@ type orderedCommitmentJob struct {
 // fixed depth-0..4 trunk. Setting it to zero disables ordered-pipeline
 // read-ahead without changing commitment bytes or scheduling semantics.
 var CommitmentParentPrefetchDepth = 5
+
+// CommitmentParentPrefetchLookaheadDepth adds a bounded child-level stream
+// after the first non-trunk level is warm. The critical depth is joined before
+// a lane folds; this lookahead overlaps the fold and is joined only before the
+// snapshot-scoped parent session closes. A per-lane cap prevents dense blocks
+// from turning read-ahead into unbounded random-read amplification.
+var (
+	CommitmentParentPrefetchLookaheadDepth        = 1
+	CommitmentParentPrefetchLookaheadLimitPerLane = 16
+)
 
 // NewOrderedCommitmentPipeline verifies the currently visible persisted root
 // once, then seeds all 16 lane owners from that root branch. The production
@@ -232,9 +245,16 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 			group := (*ops)[starts[nb] : starts[nb]+counts[nb]]
 			result := &job.prefetch[nb]
 			result.active = true
+			result.critical.Add(1)
 			result.done.Add(1)
 			p.prefetchLanes[nb] <- orderedCommitmentPrefetchTask{
-				store: job.store, result: result, nb: uint8(nb), depth: prefetchDepth, ops: group,
+				store:          job.store,
+				result:         result,
+				nb:             uint8(nb),
+				depth:          prefetchDepth,
+				lookaheadDepth: CommitmentParentPrefetchLookaheadDepth,
+				lookaheadLimit: CommitmentParentPrefetchLookaheadLimitPerLane,
+				ops:            group,
 			}
 		}
 	}
@@ -260,7 +280,7 @@ func (p *OrderedCommitmentPipeline) runLane(nb uint8, root BranchData, tasks <-c
 	for task := range tasks {
 		job := task.job
 		if prefetched := &job.prefetch[nb]; prefetched.active {
-			prefetched.done.Wait()
+			prefetched.critical.Wait()
 		}
 		if failed := p.failed.Load(); failed != nil {
 			job.setError(*failed)
@@ -295,18 +315,43 @@ func (p *OrderedCommitmentPipeline) runLane(nb uint8, root BranchData, tasks <-c
 func (p *OrderedCommitmentPipeline) runPrefetchLane(tasks <-chan orderedCommitmentPrefetchTask) {
 	defer p.prefetchWG.Done()
 	for task := range tasks {
-		// Read-ahead is speculative. An unused predicted row must never make a
-		// valid fold fail; the authoritative foreground cursor retries any branch
-		// it actually needs and reports the error through the normal pipeline.
-		if err := task.store.prefetchParentLane(task.nb, task.ops, task.depth); err != nil {
-			commitmentPipelinePrefetchErrorsCounter.Inc(1)
-		}
-		task.result.done.Done()
+		func() {
+			defer task.result.done.Done()
+			// Read-ahead is speculative. An unused predicted row must never make a
+			// valid fold fail; the authoritative foreground cursor retries any branch
+			// it actually needs and reports the error through the normal pipeline.
+			if err := task.store.prefetchParentLane(task.nb, task.ops, task.depth); err != nil {
+				commitmentPipelinePrefetchErrorsCounter.Inc(1)
+				task.result.critical.Done()
+				return
+			}
+			task.result.critical.Done()
+			if task.lookaheadDepth <= 0 || task.lookaheadLimit <= 0 {
+				return
+			}
+			planned, capped, err := task.store.prefetchParentLaneLimited(
+				task.nb, task.ops, task.depth+task.lookaheadDepth, task.lookaheadLimit,
+			)
+			commitmentPipelinePrefetchLookaheadPlannedCounter.Inc(int64(planned))
+			if capped {
+				commitmentPipelinePrefetchLookaheadCappedCounter.Inc(1)
+			}
+			if err != nil {
+				commitmentPipelinePrefetchErrorsCounter.Inc(1)
+			}
+		}()
 	}
 }
 
 func (p *OrderedCommitmentPipeline) finishJob(job *orderedCommitmentJob) {
 	job.done.Wait()
+	// Lookahead is allowed to overlap the authoritative fold, but its cursors
+	// still belong to this snapshot-scoped session and must finish before close.
+	for nb := range job.prefetch {
+		if job.prefetch[nb].active {
+			job.prefetch[nb].done.Wait()
+		}
+	}
 	for nb := range job.siblingStats {
 		job.stats.merge(&job.siblingStats[nb])
 	}

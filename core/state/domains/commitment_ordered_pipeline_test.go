@@ -169,6 +169,34 @@ func TestCommitmentParentLanePrefetchesDistinctFirstNonTrunkPrefixes(t *testing.
 	}
 }
 
+func TestCommitmentParentLaneLookaheadIsBounded(t *testing.T) {
+	session := new(recordingCommitmentParentSession)
+	store := &rawdbBranchStore{
+		keyspace:                   rawdb.LegacyCommitmentBranchKeyspace(),
+		parentSession:              session,
+		parentPrefetchBase:         40,
+		parentFallbackPrefetchBase: -1,
+	}
+	ops := []op{
+		{path: common.Hash{0x12, 0x34, 0x50}},
+		{path: common.Hash{0x12, 0x34, 0x60}},
+		{path: common.Hash{0x12, 0x34, 0x70}},
+	}
+	planned, capped, err := store.prefetchParentLaneLimited(1, ops, 6, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planned != 2 || !capped || len(session.prefetches) != 2 {
+		t.Fatalf("bounded lookahead = planned %d capped %t calls %d, want 2/true/2", planned, capped, len(session.prefetches))
+	}
+	wantPrefixes := [][]byte{{1, 2, 3, 4, 5, 0}, {1, 2, 3, 4, 6, 0}}
+	for i := range wantPrefixes {
+		if !bytes.Equal(session.prefetches[i].second, wantPrefixes[i]) {
+			t.Fatalf("prefetch %d trie prefix = %x, want %x", i, session.prefetches[i].second, wantPrefixes[i])
+		}
+	}
+}
+
 func BenchmarkCommitmentParentLanePrefetchPlan(b *testing.B) {
 	const opCount = 1024
 	ops := make([]op, opCount)
@@ -192,6 +220,37 @@ func BenchmarkCommitmentParentLanePrefetchPlan(b *testing.B) {
 	for b.Loop() {
 		if err := store.prefetchParentLane(1, ops, 5); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCommitmentParentLaneBoundedLookaheadPlan(b *testing.B) {
+	const (
+		opCount = 1024
+		limit   = 16
+	)
+	ops := make([]op, opCount)
+	for i := range ops {
+		prefix := i / 4
+		ops[i].path[0] = 0x10 | byte(prefix>>12)
+		ops[i].path[1] = byte(prefix >> 4)
+		ops[i].path[2] = byte(prefix << 4)
+		ops[i].path[common.HashLength-1] = byte(i)
+	}
+	session := new(countingCommitmentParentSession)
+	store := &rawdbBranchStore{
+		keyspace:                   rawdb.LegacyCommitmentBranchKeyspace(),
+		parentSession:              session,
+		parentPrefetchBase:         40,
+		parentFallbackPrefetchBase: -1,
+	}
+	b.ReportAllocs()
+	b.ReportMetric(limit, "max_logical_reads/op")
+	b.ResetTimer()
+	for b.Loop() {
+		planned, capped, err := store.prefetchParentLaneLimited(1, ops, 6, limit)
+		if err != nil || planned != limit || !capped {
+			b.Fatalf("bounded lookahead = planned %d capped %t err %v", planned, capped, err)
 		}
 	}
 }

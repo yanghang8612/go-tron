@@ -7,9 +7,12 @@ snapshot layouts.
 
 ## Immutable formats
 
-- Ancient V2 `bodies` use a 64 KiB per-segment raw Zstandard dictionary. The
-  first frame is independently compressed and supplies the dictionary bytes;
-  every later frame is independently checksummed and dictionary-compressed.
+- Ancient V2 `bodies` use a bounded, per-segment Zstandard dictionary trained
+  from up to 256 evenly spaced bodies across the immutable segment. Training
+  retains at most 16 MiB of samples and 64 KiB of dictionary history; every
+  frame is independently checksummed and dictionary-compressed. Degenerate
+  genesis/private-network corpora that cannot train entropy tables fall back to
+  the checksummed raw-history dictionary without blocking freezer progress.
 - Ancient V2 `tx_infos` retain the canonical receipt protobuf, but omit logs
   when doing so makes the row smaller and the complete block range is already
   covered by an authenticated event-log segment. Reads reconstruct and verify

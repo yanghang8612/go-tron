@@ -512,11 +512,14 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 		base.SetContract(contract.address, &contractpb.SmartContract{
 			OriginAddress: contract.origin.Bytes(), ContractAddress: contract.address.Bytes(),
 		})
-		base.SetCode(contract.address, []byte{0x60, 0x01, 0x60, 0x02, 0x01, 0x50, 0x00})
+		// PUSH1 0; CALLDATALOAD; PUSH1 0; SSTORE; STOP. This makes the
+		// publication fixture exercise a persistent storage post-image instead
+		// of proving equivalence only for resource and balance settlement.
+		base.SetCode(contract.address, []byte{0x60, 0x00, 0x35, 0x60, 0x00, 0x55, 0x00})
 	}
-	// A small non-mutating program still consumes VM energy. Interleaving a
-	// second sender forces the final owner1 result to cross both a forwarded
-	// sender boundary and an independently ordered public-net boundary.
+	// Interleaving a second sender forces the final owner1 result to cross a
+	// forwarded storage boundary and an independently ordered public-net
+	// boundary. Its second call overwrites the same slot written by the first.
 	if _, err := base.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -532,10 +535,15 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	}
 	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
 
+	storageInput := func(value byte) []byte {
+		input := make([]byte, tcommon.HashLength)
+		input[len(input)-1] = value
+		return input
+	}
 	transactions := []*types.Transaction{
-		makeTestTriggerTx(1, contract1, []byte{0x01}),
-		makeTestTriggerTx(3, contract2, []byte{0x02}),
-		makeTestTriggerTx(1, contract1, []byte{0x03}),
+		makeTestTriggerTx(1, contract1, storageInput(1)),
+		makeTestTriggerTx(3, contract2, storageInput(2)),
+		makeTestTriggerTx(1, contract1, storageInput(3)),
 	}
 	transactionProtos := make([]*corepb.Transaction, len(transactions))
 	for txIndex, tx := range transactions {
@@ -581,6 +589,12 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	energyMatchesBefore := discardShadowVMBlockEnergyMatchesCounter.Snapshot().Count()
 	energyMismatchesBefore := discardShadowVMBlockEnergyMismatchesCounter.Snapshot().Count()
 	energyMissingBefore := discardShadowVMBlockEnergyMissingCounter.Snapshot().Count()
+	serialVerifyCandidatesBefore := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count()
+	serialVerifyMatchesBefore := parallelVMSerialVerifyMatchesCounter.Snapshot().Count()
+	serialVerifyInfoMismatchesBefore := parallelVMSerialVerifyInfoMismatchCounter.Snapshot().Count()
+	serialVerifyWriteMismatchesBefore := parallelVMSerialVerifyWriteMismatchCounter.Snapshot().Count()
+	serialVerifyBalanceMismatchesBefore := parallelVMSerialVerifyBalanceMismatchCounter.Snapshot().Count()
+	serialVerifyErrorsBefore := parallelVMSerialVerifyErrorsCounter.Snapshot().Count()
 	errorsBefore := parallelVMErrorsCounter.Snapshot().Count()
 	fallbacksBefore := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
 		parallelVMConflictFallbackCounter.Snapshot().Count() +
@@ -649,6 +663,24 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	if failures := parallelVMErrorsCounter.Snapshot().Count() - errorsBefore; failures != 0 {
 		t.Fatalf("parallel VM errors = %d, want 0", failures)
 	}
+	if candidates := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count() - serialVerifyCandidatesBefore; candidates != 3 {
+		t.Fatalf("parallel VM boundary serial verification candidates = %d, want 3", candidates)
+	}
+	if matches := parallelVMSerialVerifyMatchesCounter.Snapshot().Count() - serialVerifyMatchesBefore; matches != 3 {
+		t.Fatalf("parallel VM boundary serial verification matches = %d, want 3", matches)
+	}
+	if mismatches := parallelVMSerialVerifyInfoMismatchCounter.Snapshot().Count() - serialVerifyInfoMismatchesBefore; mismatches != 0 {
+		t.Fatalf("parallel VM boundary serial info mismatches = %d, want 0", mismatches)
+	}
+	if mismatches := parallelVMSerialVerifyWriteMismatchCounter.Snapshot().Count() - serialVerifyWriteMismatchesBefore; mismatches != 0 {
+		t.Fatalf("parallel VM boundary serial write mismatches = %d, want 0", mismatches)
+	}
+	if mismatches := parallelVMSerialVerifyBalanceMismatchCounter.Snapshot().Count() - serialVerifyBalanceMismatchesBefore; mismatches != 0 {
+		t.Fatalf("parallel VM boundary serial balance mismatches = %d, want 0", mismatches)
+	}
+	if failures := parallelVMSerialVerifyErrorsCounter.Snapshot().Count() - serialVerifyErrorsBefore; failures != 0 {
+		t.Fatalf("parallel VM boundary serial verification errors = %d, want 0", failures)
+	}
 	fallbacksAfter := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
 		parallelVMConflictFallbackCounter.Snapshot().Count() +
 		parallelVMPreflightFallbackCounter.Snapshot().Count() +
@@ -679,6 +711,18 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 			t.Fatalf("balance %s serial=%d parallel=%d", address.Hex(), serialBalance, parallelBalance)
 		}
 	}
+	storageSlot := tcommon.Hash{}
+	for _, contract := range []struct {
+		address tcommon.Address
+		want    byte
+	}{{address: contract1, want: 3}, {address: contract2, want: 2}} {
+		serialValue, serialExists := serialState.GetStateWithExist(contract.address, storageSlot)
+		parallelValue, parallelExists := parallelState.GetStateWithExist(contract.address, storageSlot)
+		if !serialExists || !parallelExists || serialValue != parallelValue || serialValue[31] != contract.want {
+			t.Fatalf("storage %s serial=%x/%t parallel=%x/%t, want ...%02x",
+				contract.address.Hex(), serialValue, serialExists, parallelValue, parallelExists, contract.want)
+		}
+	}
 	for _, property := range []struct {
 		name     string
 		serial   int64
@@ -702,6 +746,137 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	}
 	if serialRoot != parallelRoot {
 		t.Fatalf("VM state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
+func TestProcessBlockVMPublisherFallsBackOnStorageConflict(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner1 := testProcessorAddr(1)
+	owner2 := testProcessorAddr(3)
+	contractAddr := testProcessorAddr(0x83)
+	for _, owner := range []tcommon.Address{owner1, owner2} {
+		base.CreateAccount(owner, corepb.AccountType_Normal)
+		base.AddBalance(owner, 100_000_000)
+	}
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner1.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	// Both callers write calldata to slot zero. The second speculative worker
+	// sees an empty block-start slot, whereas serial execution sees the first
+	// transaction's value and charges RESET rather than SET energy. Exact
+	// storage read-version validation must reject that stale result.
+	base.SetCode(contractAddr, []byte{0x60, 0x00, 0x35, 0x60, 0x00, 0x55, 0x00})
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	storageInput := func(value byte) []byte {
+		input := make([]byte, tcommon.HashLength)
+		input[len(input)-1] = value
+		return input
+	}
+	transactions := []*types.Transaction{
+		makeTestTriggerTx(1, contractAddr, storageInput(1)),
+		makeTestTriggerTx(3, contractAddr, storageInput(2)),
+	}
+	transactionProtos := make([]*corepb.Transaction, len(transactions))
+	for txIndex, tx := range transactions {
+		tx.Proto().RawData.FeeLimit = 10_000_000
+		tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+		transactionProtos[txIndex] = tx.Proto()
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: transactionProtos,
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial VM process: %v", err)
+	}
+	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	conflictsBefore := parallelVMConflictFallbackCounter.Snapshot().Count()
+	serialVerifyCandidatesBefore := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count()
+	serialVerifyMatchesBefore := parallelVMSerialVerifyMatchesCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true})
+	if err != nil {
+		t.Fatalf("parallel VM process: %v", err)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 1 {
+		t.Fatalf("parallel VM publications = %d, want first transaction only", published)
+	}
+	if conflicts := parallelVMConflictFallbackCounter.Snapshot().Count() - conflictsBefore; conflicts != 1 {
+		t.Fatalf("parallel VM storage-conflict fallbacks = %d, want 1", conflicts)
+	}
+	if candidates := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count() - serialVerifyCandidatesBefore; candidates != 1 {
+		t.Fatalf("parallel VM boundary serial verification candidates = %d, want first transaction only", candidates)
+	}
+	if matches := parallelVMSerialVerifyMatchesCounter.Snapshot().Count() - serialVerifyMatchesBefore; matches != 1 {
+		t.Fatalf("parallel VM boundary serial verification matches = %d, want 1", matches)
+	}
+	for txIndex := range serialInfos {
+		if !proto.Equal(serialInfos[txIndex], parallelInfos[txIndex]) {
+			t.Fatalf("tx %d info mismatch\nserial=%v\nparallel=%v", txIndex, serialInfos[txIndex], parallelInfos[txIndex])
+		}
+	}
+	serialValue, serialExists := serialState.GetStateWithExist(contractAddr, tcommon.Hash{})
+	parallelValue, parallelExists := parallelState.GetStateWithExist(contractAddr, tcommon.Hash{})
+	if !serialExists || !parallelExists || serialValue != parallelValue || serialValue[31] != 2 {
+		t.Fatalf("storage serial=%x/%t parallel=%x/%t, want ...02",
+			serialValue, serialExists, parallelValue, parallelExists)
+	}
+	for _, property := range []struct {
+		name     string
+		serial   int64
+		parallel int64
+	}{
+		{name: "public_net_usage", serial: serialState.DynamicProperties().PublicNetUsage(), parallel: parallelState.DynamicProperties().PublicNetUsage()},
+		{name: "block_energy_usage", serial: serialState.DynamicProperties().BlockEnergyUsage(), parallel: parallelState.DynamicProperties().BlockEnergyUsage()},
+	} {
+		if property.serial != property.parallel {
+			t.Fatalf("%s serial=%d parallel=%d", property.name, property.serial, property.parallel)
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("storage-conflict roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
 	}
 }
 

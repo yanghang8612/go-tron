@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 const (
@@ -27,6 +31,8 @@ const (
 	historySpaceDefaultAccessorBlocks  = uint64(64)
 	historySpaceDefaultHistoryBytes    = uint64(8 << 20)
 	historySpaceMaxPostingPairsPerKey  = uint64(128)
+	historySpaceMaxValueTxSamples      = uint64(256)
+	historySpaceMaxValueRecords        = uint64(65_536)
 )
 
 var historySpaceBlockSizes = [...]uint64{16 << 10, 32 << 10, 64 << 10, 128 << 10}
@@ -122,6 +128,48 @@ type HistorySpaceCompressionStats struct {
 	ProjectedHistoryBytes uint64 `json:"projectedHistoryBytes"`
 }
 
+type HistorySpaceValueDomainStats struct {
+	Records        uint64 `json:"records"`
+	PresentRecords uint64 `json:"presentRecords"`
+	ValueBytes     uint64 `json:"valueBytes"`
+	DuplicateBytes uint64 `json:"duplicateBytes"`
+}
+
+// HistorySpaceValueStats measures exact previous-value reuse in decoded V6
+// records. CurrentBytes includes the existing marker and fixed 4-byte length
+// on every row. ContentAddressedBytes models a per-segment dense value table
+// plus one tagged uvarint value ID per present record; it deliberately excludes
+// speculative cross-segment/global table metadata.
+type HistorySpaceValueStats struct {
+	SampledTxEntries       uint64                                  `json:"sampledTxEntries"`
+	SampledRecords         uint64                                  `json:"sampledRecords"`
+	PresentRecords         uint64                                  `json:"presentRecords"`
+	ValueBytes             uint64                                  `json:"valueBytes"`
+	SegmentUniqueValues    uint64                                  `json:"segmentUniqueValues"`
+	SegmentUniqueBytes     uint64                                  `json:"segmentUniqueBytes"`
+	SegmentDuplicateBytes  uint64                                  `json:"segmentDuplicateBytes"`
+	CrossSegmentDuplicates uint64                                  `json:"crossSegmentDuplicateBytes"`
+	CurrentBytes           uint64                                  `json:"currentBytes"`
+	ContentAddressedBytes  uint64                                  `json:"contentAddressedBytes"`
+	SavingsBytes           uint64                                  `json:"savingsBytes"`
+	SavingsMilli           int64                                   `json:"savingsMilli"`
+	Domains                map[string]HistorySpaceValueDomainStats `json:"domains"`
+}
+
+type HistorySpaceDictionaryStats struct {
+	SampledSegments       uint64 `json:"sampledSegments"`
+	TrainingFailures      uint64 `json:"trainingFailures"`
+	TrainingRawBytes      uint64 `json:"trainingRawBytes"`
+	EvaluationRawBytes    uint64 `json:"evaluationRawBytes"`
+	PlainStoredBytes      uint64 `json:"plainStoredBytes"`
+	DictionaryStoredBytes uint64 `json:"dictionaryStoredBytes"`
+	DictionaryBytes       uint64 `json:"dictionaryBytes"`
+	ComparedHistoryBytes  uint64 `json:"comparedHistoryBytes"`
+	ProjectedHistoryBytes uint64 `json:"projectedHistoryBytes"`
+	SavingsBytes          uint64 `json:"savingsBytes"`
+	SavingsMilli          int64  `json:"savingsMilli"`
+}
+
 type HistorySpaceCandidate struct {
 	Name                   string `json:"name"`
 	HistoryBlockBytes      uint64 `json:"historyBlockBytes"`
@@ -151,6 +199,8 @@ type HistorySpaceInspection struct {
 	SampleConfig        HistorySpaceSampleConfig       `json:"sampleConfig"`
 	Index               HistorySpaceIndexStats         `json:"index"`
 	Accessor            HistorySpaceAccessorStats      `json:"accessor"`
+	Values              HistorySpaceValueStats         `json:"values"`
+	TrainedDictionary   HistorySpaceDictionaryStats    `json:"trainedZstdDictionary"`
 	Compression         []HistorySpaceCompressionStats `json:"compression"`
 	Candidates          []HistorySpaceCandidate        `json:"candidates"`
 	Segments            []HistorySpaceSegmentStats     `json:"segments"`
@@ -178,15 +228,36 @@ type historySpaceHeaders struct {
 }
 
 type historySpaceSampleTotals struct {
-	indexEntries       uint64
-	indexVariableBytes uint64
-	accessorKeys       uint64
-	accessorPostings   uint64
-	accessorBytes      uint64
-	historyRaw         uint64
-	historyCandidates  map[uint64]uint64
-	selectedPhysical   uint64
-	selectedProjected  map[uint64]uint64
+	indexEntries        uint64
+	indexVariableBytes  uint64
+	accessorKeys        uint64
+	accessorPostings    uint64
+	accessorBytes       uint64
+	historyRaw          uint64
+	historyCandidates   map[uint64]uint64
+	selectedPhysical    uint64
+	selectedProjected   map[uint64]uint64
+	dictionary          HistorySpaceDictionaryStats
+	dictionaryProjected uint64
+}
+
+type historySpaceDictionarySample struct {
+	trainingRaw      uint64
+	evaluationRaw    uint64
+	plainStored      uint64
+	dictionaryStored uint64
+	dictionaryBytes  uint64
+	failed           bool
+}
+
+type historySpaceValueKey struct {
+	digest [sha256.Size]byte
+	length uint64
+}
+
+type historySpaceValueAccumulator struct {
+	global map[historySpaceValueKey]struct{}
+	stats  HistorySpaceValueStats
 }
 
 // InspectHistorySpace profiles active immutable state-history files from one
@@ -288,6 +359,10 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 		historyCandidates: make(map[uint64]uint64),
 		selectedProjected: make(map[uint64]uint64),
 	}
+	values := historySpaceValueAccumulator{
+		global: make(map[historySpaceValueKey]struct{}),
+		stats:  HistorySpaceValueStats{Domains: make(map[string]HistorySpaceValueDomainStats)},
+	}
 	var sampled uint64
 	for _, trio := range trios {
 		if _, ok := selectedSet[trio.history.Path]; !ok {
@@ -301,6 +376,9 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 			return nil, err
 		}
 		out.Segments = append(out.Segments, stats)
+		if err := sampleHistorySpaceValues(ctx, dir, trio, headers[trio.history.Path], opts, &values); err != nil {
+			return nil, err
+		}
 		sampled++
 		progress.report("samples", sampled, uint64(len(selected)), trio.history.Path, false)
 	}
@@ -331,6 +409,20 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 		ProjectedMetadataBytes: totalAccessorMetadata,
 		ProjectedBytes:         accessorProjected,
 	}
+	out.Values = values.stats
+	if out.Values.CurrentBytes >= out.Values.ContentAddressedBytes {
+		out.Values.SavingsBytes = out.Values.CurrentBytes - out.Values.ContentAddressedBytes
+	}
+	out.Values.SavingsMilli = checkedCandidateSavings(out.Values.CurrentBytes, out.Values.ContentAddressedBytes)
+	out.TrainedDictionary = samples.dictionary
+	out.TrainedDictionary.ComparedHistoryBytes = out.ManifestPhysical.History
+	if samples.selectedPhysical > 0 {
+		out.TrainedDictionary.ProjectedHistoryBytes = scaleHistorySpaceSample(samples.dictionaryProjected, samples.selectedPhysical, out.ManifestPhysical.History)
+	}
+	if out.TrainedDictionary.ComparedHistoryBytes >= out.TrainedDictionary.ProjectedHistoryBytes {
+		out.TrainedDictionary.SavingsBytes = out.TrainedDictionary.ComparedHistoryBytes - out.TrainedDictionary.ProjectedHistoryBytes
+	}
+	out.TrainedDictionary.SavingsMilli = checkedCandidateSavings(out.TrainedDictionary.ComparedHistoryBytes, out.TrainedDictionary.ProjectedHistoryBytes)
 
 	projectedHistory := make(map[uint64]uint64, len(historySpaceBlockSizes))
 	for _, blockBytes := range historySpaceBlockSizes {
@@ -395,6 +487,9 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 		"candidate sizes are sampled projections, not bytes produced by an implemented on-disk format",
 		"delta index/posting candidates remove per-record offsets and assume a sparse record directory; reported scan bounds are the resulting worst-case local scans",
 		"history compression candidates recompress sampled uncompressed blocks with the production zstd codec",
+		"value reuse samples at most 256 evenly spaced transaction-index entries per selected segment; SHA-256 plus length identifies exact-value candidates without retaining payloads",
+		"content-addressed value bytes model per-segment dense IDs only; cross-segment duplicate bytes are reported separately and are not counted as savings",
+		"trained-dictionary history projection trains on alternating sampled windows and evaluates only disjoint windows; each projected segment includes its dictionary bytes",
 	)
 	out.ElapsedSeconds = time.Since(started).Seconds()
 	progress.report("complete", uint64(len(selected)), uint64(len(selected)), "", true)
@@ -614,7 +709,7 @@ func inspectHistorySpaceTrio(ctx context.Context, dir string, trio historySpaceT
 	totals.accessorPostings += postings
 	totals.accessorBytes += accessorBytes
 
-	current, raw, candidates, err := sampleHistorySpaceCompression(ctx, dir, trio.history, opts.SampleHistoryBytes)
+	current, raw, candidates, dictionary, err := sampleHistorySpaceCompression(ctx, dir, trio.history, opts.SampleHistoryBytes)
 	if err != nil {
 		return stats, err
 	}
@@ -629,7 +724,131 @@ func inspectHistorySpaceTrio(ctx context.Context, dir string, trio historySpaceT
 		}
 		totals.selectedProjected[blockBytes] += projected
 	}
+	totals.dictionary.SampledSegments++
+	totals.dictionary.TrainingRawBytes += dictionary.trainingRaw
+	totals.dictionary.EvaluationRawBytes += dictionary.evaluationRaw
+	totals.dictionary.PlainStoredBytes += dictionary.plainStored
+	totals.dictionary.DictionaryStoredBytes += dictionary.dictionaryStored
+	totals.dictionary.DictionaryBytes += dictionary.dictionaryBytes
+	if dictionary.failed {
+		totals.dictionary.TrainingFailures++
+		totals.dictionaryProjected += trio.history.Size
+	} else if dictionary.plainStored > 0 {
+		compressedProjection := scaleHistorySpaceSample(dictionary.dictionaryStored, dictionary.plainStored, trio.history.Size)
+		totals.dictionaryProjected += saturatingHistorySpaceSum(compressedProjection, dictionary.dictionaryBytes)
+	} else {
+		totals.dictionaryProjected += trio.history.Size
+	}
 	return stats, nil
+}
+
+func sampleHistorySpaceValues(ctx context.Context, dir string, trio historySpaceTrio, headers historySpaceHeaders, opts HistorySpaceInspectOptions, accumulator *historySpaceValueAccumulator) error {
+	if accumulator == nil || headers.records == 0 || headers.indexEntries == 0 {
+		return nil
+	}
+	reader, logicalSize, header, err := openHistorySegmentForReadWithCacheLimit(dir, trio.history, 2)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	if header.version != stateDomainChangeBinaryVersionV6 {
+		return fmt.Errorf("snapshots: value reuse benchmark requires V6 history records in %s", trio.history.Path)
+	}
+	contextual, ok := reader.(*stateDomainChangeHistoryReader)
+	if !ok {
+		return fmt.Errorf("snapshots: value reuse benchmark lacks contextual history reader for %s", trio.history.Path)
+	}
+	index, indexHeader, err := openStateDomainChangeBinaryIndexReader(dir, trio.inverted)
+	if err != nil {
+		return err
+	}
+	defer index.Close()
+	entryCount := min(headers.indexEntries, indexHeader.count)
+	selected := evenlySpacedHistoryIndexes(entryCount, min(historySpaceMaxValueTxSamples, entryCount))
+	local := make(map[historySpaceValueKey]uint64)
+	var (
+		payload             []byte
+		change              rawdb.StateDomainChange
+		sampledRecords      uint64
+		presentRecords      uint64
+		valueBytes          uint64
+		currentBytes        uint64
+		contentAddressBytes uint64
+	)
+	for _, entryIndex := range selected {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		entry, err := readStateDomainChangeBinaryIndexEntryAt(index, entryIndex)
+		if err != nil {
+			return err
+		}
+		offset := entry.offset
+		processed := false
+		for row := uint64(0); row < entry.count && sampledRecords < historySpaceMaxValueRecords; row++ {
+			var keyID uint32
+			payload, keyID, offset, err = readStateDomainChangeBinaryRecordV6FrameRawInto(reader, offset, logicalSize, payload, &change)
+			if err != nil {
+				return err
+			}
+			key, err := contextual.v6Key(keyID)
+			if err != nil {
+				return err
+			}
+			if err := decodeStateDomainChangeBinaryAccessorKey(key, &change); err != nil {
+				return err
+			}
+			processed = true
+			sampledRecords++
+			currentBytes += 5 // previous-value marker + fixed uint32 length
+			contentAddressBytes++
+			domainName := change.FlatDomain.String()
+			domain := accumulator.stats.Domains[domainName]
+			domain.Records++
+			if change.PrevExists {
+				presentRecords++
+				length := uint64(len(change.Prev))
+				valueBytes += length
+				currentBytes += length
+				domain.PresentRecords++
+				domain.ValueBytes += length
+				key := historySpaceValueKey{digest: sha256.Sum256(change.Prev), length: length}
+				id, exists := local[key]
+				if exists {
+					accumulator.stats.SegmentDuplicateBytes += length
+					domain.DuplicateBytes += length
+				} else {
+					id = uint64(len(local))
+					local[key] = id
+					accumulator.stats.SegmentUniqueValues++
+					accumulator.stats.SegmentUniqueBytes += length
+					contentAddressBytes += uint64(uvarintLen(length)) + length
+					if _, globalExists := accumulator.global[key]; globalExists {
+						accumulator.stats.CrossSegmentDuplicates += length
+					} else {
+						accumulator.global[key] = struct{}{}
+					}
+				}
+				contentAddressBytes += uint64(uvarintLen(id))
+			}
+			accumulator.stats.Domains[domainName] = domain
+			if valueBytes >= opts.SampleHistoryBytes {
+				break
+			}
+		}
+		if processed {
+			accumulator.stats.SampledTxEntries++
+		}
+		if sampledRecords >= historySpaceMaxValueRecords || valueBytes >= opts.SampleHistoryBytes {
+			break
+		}
+	}
+	accumulator.stats.SampledRecords += sampledRecords
+	accumulator.stats.PresentRecords += presentRecords
+	accumulator.stats.ValueBytes += valueBytes
+	accumulator.stats.CurrentBytes += currentBytes
+	accumulator.stats.ContentAddressedBytes += contentAddressBytes
+	return nil
 }
 
 func sampleHistorySpaceIndex(ctx context.Context, dir string, ref SegmentRef, count, limit uint64) (uint64, uint64, error) {
@@ -753,18 +972,19 @@ func estimateHistorySpacePostingKey(file io.ReaderAt, h stateDomainChangeBinaryA
 	return bytes, nil
 }
 
-func sampleHistorySpaceCompression(ctx context.Context, dir string, ref SegmentRef, byteLimit uint64) (uint64, uint64, map[uint64]uint64, error) {
+func sampleHistorySpaceCompression(ctx context.Context, dir string, ref SegmentRef, byteLimit uint64) (uint64, uint64, map[uint64]uint64, historySpaceDictionarySample, error) {
+	var dictionary historySpaceDictionarySample
 	path := filepath.Join(dir, ref.Path)
 	r, err := openCompressedBlockReaderWithCacheLimit(path, 1)
 	if err != nil {
 		// New fresh-sync history is compressed. Keep an explicit error here
 		// instead of silently projecting an unrelated ratio over a raw file.
-		return 0, 0, nil, fmt.Errorf("inspect compressed history %s: %w", ref.Path, err)
+		return 0, 0, nil, dictionary, fmt.Errorf("inspect compressed history %s: %w", ref.Path, err)
 	}
 	defer r.Close()
 	result := make(map[uint64]uint64, len(historySpaceBlockSizes))
 	if len(r.table) == 0 {
-		return 0, 0, result, nil
+		return 0, 0, result, dictionary, nil
 	}
 	maxBlock := historySpaceBlockSizes[len(historySpaceBlockSizes)-1]
 	windows := max(uint64(1), ceilDiv(byteLimit, maxBlock))
@@ -772,12 +992,13 @@ func sampleHistorySpaceCompression(ctx context.Context, dir string, ref SegmentR
 	starts := evenlySpacedHistoryWindowStarts(uint64(len(r.table)), windows, blockSpan)
 	enc, _, err := cbCodec()
 	if err != nil {
-		return 0, 0, nil, err
+		return 0, 0, nil, dictionary, err
 	}
 	var current, rawTotal uint64
+	rawWindows := make([][]byte, 0, len(starts))
 	for _, start := range starts {
 		if err := ctx.Err(); err != nil {
-			return current, rawTotal, result, err
+			return current, rawTotal, result, dictionary, err
 		}
 		end := min(uint64(len(r.table)), start+blockSpan)
 		var raw []byte
@@ -789,11 +1010,12 @@ func sampleHistorySpaceCompression(ctx context.Context, dir string, ref SegmentR
 			}
 			r.mu.Unlock()
 			if readErr != nil {
-				return current, rawTotal, result, readErr
+				return current, rawTotal, result, dictionary, readErr
 			}
 			current += r.table[i].compressedLen + compressedBlockTableEntry
 		}
 		rawTotal += uint64(len(raw))
+		rawWindows = append(rawWindows, raw)
 		for _, blockBytes := range historySpaceBlockSizes {
 			for offset := 0; offset < len(raw); offset += int(blockBytes) {
 				chunk := raw[offset:min(len(raw), offset+int(blockBytes))]
@@ -801,7 +1023,89 @@ func sampleHistorySpaceCompression(ctx context.Context, dir string, ref SegmentR
 			}
 		}
 	}
-	return current, rawTotal, result, nil
+	dictionary = sampleHistorySpaceTrainedDictionary(rawWindows)
+	return current, rawTotal, result, dictionary, nil
+}
+
+func sampleHistorySpaceTrainedDictionary(rawWindows [][]byte) historySpaceDictionarySample {
+	var out historySpaceDictionarySample
+	if len(rawWindows) < 2 {
+		out.failed = true
+		return out
+	}
+	training := make([][]byte, 0, (len(rawWindows)+1)/2)
+	evaluation := make([][]byte, 0, len(rawWindows)/2)
+	for i, raw := range rawWindows {
+		if i&1 == 0 {
+			training = append(training, raw)
+			out.trainingRaw += uint64(len(raw))
+		} else {
+			evaluation = append(evaluation, raw)
+			out.evaluationRaw += uint64(len(raw))
+		}
+	}
+	if len(training) == 0 || len(evaluation) == 0 {
+		out.failed = true
+		return out
+	}
+	history := make([]byte, 0, historySpaceDictionaryBytes)
+	for i, sample := range training {
+		remaining := len(training) - i
+		quota := (historySpaceDictionaryBytes - len(history) + remaining - 1) / remaining
+		quota = min(quota, len(sample))
+		start := 0
+		if len(sample) > quota {
+			start = i * (len(sample) - quota) / max(1, len(training)-1)
+		}
+		history = append(history, sample[start:start+quota]...)
+	}
+	dictionary, err := buildHistorySpaceDictionary(zstd.BuildDictOptions{
+		ID:       1,
+		Contents: training,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedDefault,
+	})
+	if err != nil {
+		out.failed = true
+		return out
+	}
+	encoder, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedDefault),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderDict(dictionary),
+	)
+	if err != nil {
+		out.failed = true
+		return out
+	}
+	defer encoder.Close()
+	plain, _, err := cbCodec()
+	if err != nil {
+		out.failed = true
+		return out
+	}
+	for _, raw := range evaluation {
+		for offset := 0; offset < len(raw); offset += historyCompressChunkSize {
+			chunk := raw[offset:min(len(raw), offset+historyCompressChunkSize)]
+			out.plainStored += uint64(len(plain.EncodeAll(chunk, nil))) + compressedBlockTableEntry
+			out.dictionaryStored += uint64(len(encoder.EncodeAll(chunk, nil))) + compressedBlockTableEntry
+		}
+	}
+	out.dictionaryBytes = uint64(len(dictionary))
+	return out
+}
+
+const historySpaceDictionaryBytes = 64 << 10
+
+func buildHistorySpaceDictionary(options zstd.BuildDictOptions) (dictionary []byte, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			dictionary = nil
+			err = fmt.Errorf("zstd dictionary builder panic: %v", recovered)
+		}
+	}()
+	return zstd.BuildDict(options)
 }
 
 func evenlySpacedHistoryIndexes(total, count uint64) []uint64 {

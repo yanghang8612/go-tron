@@ -1957,13 +1957,17 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block.Hash() {
 		t.Fatalf("StageSnapshotEventLogBuild row = %+v ok=%v err=%v, want hash %x", row, ok, err, block.Hash())
 	}
-	mgr, err := OpenManager(dir)
+	mgr, err := OpenManagerWithChainVerificationCache(dir, verificationCache)
 	if err != nil {
-		t.Fatalf("OpenManager: %v", err)
+		t.Fatalf("OpenManagerWithChainVerificationCache: %v", err)
 	}
 	covered, err := mgr.EventLogRangeCovered(1, 1)
 	if err != nil || !covered {
 		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	stats = verificationCache.Stats()
+	if stats.EventMemoryHits != 2 || stats.EventFullVerified != 0 {
+		t.Fatalf("manager did not reuse trusted event proof: %+v", stats)
 	}
 	covered, err = mgr.EventLogIndexedRangeCovered(1, 1)
 	if err != nil || !covered {

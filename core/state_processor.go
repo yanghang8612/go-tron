@@ -1270,6 +1270,31 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					parallelVMPublicNetFallbackCounter.Inc(1)
 					break
 				}
+				parallelVMSerialVerifyCandidatesCounter.Inc(1)
+				verifyStarted := time.Now()
+				verification := verifyVMResultAtCanonicalBoundary(statedb, dynProps, i, preResult, discardCfg)
+				parallelVMSerialVerifyNanosCounter.Inc(time.Since(verifyStarted).Nanoseconds())
+				if verification.err != nil {
+					publicNetOverride.restore()
+					parallelVMSerialVerifyErrorsCounter.Inc(1)
+					parallelVMPreflightFallbackCounter.Inc(1)
+					break
+				}
+				if !verification.infoMatch {
+					parallelVMSerialVerifyInfoMismatchCounter.Inc(1)
+				}
+				if !verification.writeMatch {
+					parallelVMSerialVerifyWriteMismatchCounter.Inc(1)
+				}
+				if !verification.balanceMatch {
+					parallelVMSerialVerifyBalanceMismatchCounter.Inc(1)
+				}
+				if !verification.matched() {
+					publicNetOverride.restore()
+					parallelVMPreflightFallbackCounter.Inc(1)
+					break
+				}
+				parallelVMSerialVerifyMatchesCounter.Inc(1)
 				if err := statedb.ValidateTransactionWriteSetApply(preResult.writes, dynProps, transactionDB); err != nil {
 					publicNetOverride.restore()
 					parallelVMPreflightFallbackCounter.Inc(1)

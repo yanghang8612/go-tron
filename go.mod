@@ -16,7 +16,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/holiman/uint256 v1.3.2
-	github.com/klauspost/compress v1.17.8
+	github.com/klauspost/compress v1.17.11
 	github.com/mr-tron/base58 v1.3.0
 	github.com/urfave/cli/v2 v2.27.7
 	go.opentelemetry.io/otel v1.40.0

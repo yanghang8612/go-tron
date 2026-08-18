@@ -47,6 +47,15 @@ var (
 	commitmentBranchFrozenTombstoneCounter  = metrics.NewRegisteredCounter("state/commitment/branch_rotation/frozen_tombstones", nil)
 )
 
+var (
+	commitmentPipelinePrefetchLookaheadPlannedCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_lookahead/planned", nil,
+	)
+	commitmentPipelinePrefetchLookaheadCappedCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_lookahead/capped_lanes", nil,
+	)
+)
+
 var commitmentPipelineMaxInflight atomic.Int64
 
 // commitmentFoldStats is owned by one Fold invocation. Parallel root workers

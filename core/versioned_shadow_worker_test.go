@@ -14,6 +14,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -114,12 +115,28 @@ func TestVMSenderRetryPublicationStaysDisjointFromTransferPublisher(t *testing.T
 	}
 }
 
+func TestVMSenderChainPublicationStaysDisjointFromRetryPublishers(t *testing.T) {
+	for blockNum := uint64(0); blockNum < 4*vmSenderRetryPublishInterval; blockNum++ {
+		if !useVMSenderChainPublication(blockNum) {
+			continue
+		}
+		if useVMSenderRetryPublication(blockNum) {
+			t.Fatalf("block %d enables both VM block-start and VM retry publishers", blockNum)
+		}
+		if useDiscardShadowAsyncRetryPublication(blockNum) {
+			t.Fatalf("block %d enables both VM block-start and Transfer retry publishers", blockNum)
+		}
+	}
+}
+
 func TestVMSenderChainPublicationCohort(t *testing.T) {
 	tests := []struct {
 		blockNum uint64
 		want     bool
 	}{
 		{blockNum: 0, want: false},
+		{blockNum: 8, want: false},
+		{blockNum: 24, want: false},
 		{blockNum: 64, want: false},
 		{blockNum: 1_024, want: true},
 		{blockNum: 1_088, want: false},
@@ -1471,6 +1488,83 @@ func TestVMSenderChainReadinessAllowsEnergyReceipt(t *testing.T) {
 	}
 	if preexecutedTransferReady(result) {
 		t.Fatal("transfer publication readiness accepted an energy-bearing result")
+	}
+}
+
+func TestVMCanonicalBoundarySerialVerificationRejectsMutatedStorageWrite(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x84)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	base.SetCode(contractAddr, []byte{0x60, 0x00, 0x35, 0x60, 0x00, 0x55, 0x00})
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	input := make([]byte, tcommon.HashLength)
+	input[len(input)-1] = 9
+	tx := makeTestTriggerTx(1, contractAddr, input)
+	tx.Proto().RawData.FeeLimit = 10_000_000
+	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	cfg := discardShadowRunConfig{
+		block:                   block,
+		db:                      ethrawdb.NewMemoryDatabase(),
+		transactions:            []*types.Transaction{tx},
+		energyLimitForkBlockNum: params.DefaultBlockNumForEnergyLimit,
+		retainInfos:             true,
+	}
+	shadow := prepareTransferExecutionBlock(base, base.DynamicProperties(), block.Number(), false)
+	if shadow == nil {
+		t.Fatal("missing sampled VM execution base")
+	}
+	pre := shadow.preexecuteVMSenderChains(cfg, false)
+	if pre == nil || len(pre.results) != 1 || !preexecutedResultReady(&pre.results[0]) {
+		t.Fatalf("VM preexecution unavailable: %+v", pre)
+	}
+	result := &pre.results[0]
+	override, admitted := overridePublicNetReservation(result, base.DynamicProperties())
+	if !admitted {
+		t.Fatal("block-start public-net reservation was not admitted at the same boundary")
+	}
+	defer override.restore()
+
+	verification := verifyVMResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
+	if !verification.matched() {
+		t.Fatalf("matching VM boundary result was rejected: %+v", verification)
+	}
+	storageKey := state.TransactionAccessKey{
+		Kind: state.TransactionAccessStorage, Address: contractAddr, StorageKey: tcommon.Hash{},
+	}
+	storageWrite, ok := result.writes[storageKey]
+	if !ok {
+		t.Fatalf("VM result has no storage write: %+v", result.writes)
+	}
+	storageWrite.Value = make([]byte, tcommon.HashLength)
+	storageWrite.Value[len(storageWrite.Value)-1] = 0xff
+	result.writes[storageKey] = storageWrite
+
+	verification = verifyVMResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
+	if verification.matched() || verification.writeMatch || !verification.infoMatch || verification.err != nil {
+		t.Fatalf("mutated storage write was not isolated as a boundary mismatch: %+v", verification)
 	}
 }
 

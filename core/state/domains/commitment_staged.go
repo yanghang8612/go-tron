@@ -475,9 +475,18 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 // a map or heap allocation. The read-ahead does not decode values: the normal
 // fold remains the sole authority for branch kinds and mutations.
 func (s *rawdbBranchStore) prefetchParentLane(nb uint8, ops []op, depth int) error {
+	_, _, err := s.prefetchParentLaneLimited(nb, ops, depth, 0)
+	return err
+}
+
+// prefetchParentLaneLimited is the bounded planner used by child-level
+// lookahead. A non-positive limit preserves the unbounded critical-level
+// behavior. The count is in logical prefixes; legacy/frozen fallback probes do
+// not consume a second unit.
+func (s *rawdbBranchStore) prefetchParentLaneLimited(nb uint8, ops []op, depth, limit int) (int, bool, error) {
 	prefetch, ok := s.parentSession.(pointread.CommitmentParentPrefetchSession)
 	if !ok || len(ops) == 0 || depth <= 0 {
-		return nil
+		return 0, false, nil
 	}
 	if depth > pathLen {
 		depth = pathLen
@@ -485,9 +494,10 @@ func (s *rawdbBranchStore) prefetchParentLane(nb uint8, ops []op, depth int) err
 	current := &s.parentPrefetchPaths[nb]
 	var previous [pathLen]byte
 	havePrevious := false
+	planned := 0
 	for i := range ops {
 		if pathNibble(ops[i].path, 0) != nb {
-			return fmt.Errorf("domains: commitment prefetch lane %d received path in lane %d", nb, pathNibble(ops[i].path, 0))
+			return planned, false, fmt.Errorf("domains: commitment prefetch lane %d received path in lane %d", nb, pathNibble(ops[i].path, 0))
 		}
 		for d := 0; d < depth; d++ {
 			current[d] = pathNibble(ops[i].path, d)
@@ -499,12 +509,16 @@ func (s *rawdbBranchStore) prefetchParentLane(nb uint8, ops []op, depth int) err
 		if same {
 			continue
 		}
+		if limit > 0 && planned >= limit {
+			return planned, true, nil
+		}
 		copy(previous[:depth], current[:depth])
 		havePrevious = true
+		planned++
 
 		found, err := s.keyspace.PrefetchParentInSession(prefetch, s.parentPrefetchBase+int(nb), current[:depth])
 		if err != nil {
-			return err
+			return planned, false, err
 		}
 		if found || s.parentFallbackPrefetchBase < 0 {
 			continue
@@ -514,10 +528,10 @@ func (s *rawdbBranchStore) prefetchParentLane(nb uint8, ops []op, depth int) err
 			fallback = s.frozenKeyspace
 		}
 		if _, err := fallback.PrefetchParentInSession(prefetch, s.parentFallbackPrefetchBase+int(nb), current[:depth]); err != nil {
-			return err
+			return planned, false, err
 		}
 	}
-	return nil
+	return planned, false, nil
 }
 
 func (s *rawdbBranchStore) supportsParentPrefetch() bool {

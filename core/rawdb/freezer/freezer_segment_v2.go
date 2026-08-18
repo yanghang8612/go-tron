@@ -31,15 +31,24 @@ const (
 	v2MaxCompressedBytes  = v2MaxFrameBytes + uint64(1<<20)
 	v2DecoderConcurrency  = 4
 	v2MaxPooledCompressed = 8 << 20
-	// Reserved V2 header bytes [52:56] identify the table codec. Bodies codec
-	// 1 places a checksummed raw dictionary between the frame table and the
-	// first compressed frame; [60:64] stores its Castagnoli checksum.
-	v2CodecDefault    = uint32(0)
-	v2CodecBodiesDict = uint32(1)
-	v2BodiesDictBytes = 64 << 10
+	// Reserved V2 header bytes [52:56] identify the table codec. Bodies codecs
+	// place a checksummed dictionary between the frame table and the first
+	// compressed frame; [60:64] stores its Castagnoli checksum. Codec 1 is the
+	// original raw-history dictionary. Codec 2 is a proper Zstd dictionary with
+	// trained entropy tables, sampled across the complete immutable segment.
+	v2CodecDefault           = uint32(0)
+	v2CodecBodiesRawDict     = uint32(1)
+	v2CodecBodiesTrainedDict = uint32(2)
+	v2BodiesDictBytes        = 64 << 10
+	v2BodiesDictMaxBytes     = 96 << 10
+	v2BodiesTrainSamples     = 256
+	v2BodiesTrainSampleBytes = 256 << 10
+	v2BodiesTrainTotalBytes  = 16 << 20
 )
 
 var v2CRC = crc32.MakeTable(crc32.Castagnoli)
+
+var errV2BodiesDictionaryUnavailable = errors.New("ancient V2: trained bodies dictionary unavailable")
 
 type v2FrameEntry struct {
 	firstRecord     uint64
@@ -307,19 +316,30 @@ func newV2DecoderForSegmentSets(segments map[string][]*v2SegmentReader, readers 
 		zstd.WithDecoderConcurrency(concurrency),
 		zstd.WithDecoderMaxMemory(v2MaxFrameBytes),
 	}
-	dictionaries := make(map[uint32][]byte)
+	type registeredDictionary struct {
+		codec uint32
+		data  []byte
+	}
+	dictionaries := make(map[uint32]registeredDictionary)
 	add := func(reader *v2SegmentReader) error {
 		if reader == nil || len(reader.dictionary) == 0 {
 			return nil
 		}
 		if previous, ok := dictionaries[reader.dictionaryID]; ok {
-			if !bytes.Equal(previous, reader.dictionary) {
+			if previous.codec != reader.codec || !bytes.Equal(previous.data, reader.dictionary) {
 				return fmt.Errorf("ancient V2 dictionary id collision %08x", reader.dictionaryID)
 			}
 			return nil
 		}
-		dictionaries[reader.dictionaryID] = reader.dictionary
-		options = append(options, zstd.WithDecoderDictRaw(reader.dictionaryID, reader.dictionary))
+		dictionaries[reader.dictionaryID] = registeredDictionary{codec: reader.codec, data: reader.dictionary}
+		switch reader.codec {
+		case v2CodecBodiesRawDict:
+			options = append(options, zstd.WithDecoderDictRaw(reader.dictionaryID, reader.dictionary))
+		case v2CodecBodiesTrainedDict:
+			options = append(options, zstd.WithDecoderDicts(reader.dictionary))
+		default:
+			return fmt.Errorf("ancient V2 dictionary on unsupported codec %d", reader.codec)
+		}
 		return nil
 	}
 	for _, table := range segments {
@@ -630,9 +650,13 @@ func openV2Segment(path, kind string) (*v2SegmentReader, error) {
 		if dictionaryLen != 0 || dictionaryChecksum != 0 {
 			return fail(fmt.Errorf("invalid ancient V2 default codec metadata %s", path))
 		}
-	case v2CodecBodiesDict:
+	case v2CodecBodiesRawDict:
 		if kind != "bodies" || dictionaryLen < 8 || dictionaryLen > v2BodiesDictBytes {
 			return fail(fmt.Errorf("invalid ancient V2 bodies dictionary metadata %s", path))
+		}
+	case v2CodecBodiesTrainedDict:
+		if kind != "bodies" || dictionaryLen < 8 || dictionaryLen > v2BodiesDictMaxBytes {
+			return fail(fmt.Errorf("invalid ancient V2 trained bodies dictionary metadata %s", path))
 		}
 	default:
 		return fail(fmt.Errorf("unsupported ancient V2 codec %d in %s", codec, path))
@@ -652,6 +676,15 @@ func openV2Segment(path, kind string) (*v2SegmentReader, error) {
 		}
 		if crc32.Checksum(dictionary, v2CRC) != dictionaryChecksum {
 			return fail(fmt.Errorf("ancient V2 dictionary checksum mismatch %s", path))
+		}
+		if codec == v2CodecBodiesTrainedDict {
+			inspected, err := zstd.InspectDictionary(dictionary)
+			if err != nil {
+				return fail(fmt.Errorf("invalid ancient V2 trained bodies dictionary %s: %w", path, err))
+			}
+			if inspected.ID() != v2DictionaryID(start) {
+				return fail(fmt.Errorf("ancient V2 trained bodies dictionary id %08x, want %08x in %s", inspected.ID(), v2DictionaryID(start), path))
+			}
 		}
 	}
 	info, err := file.Stat()
@@ -701,17 +734,20 @@ func (r *v2SegmentReader) Close() error {
 }
 
 func writeV2Segment(path string, start, count uint64, frameBlocks uint32, read func(uint64) ([]byte, error)) error {
-	return writeV2SegmentProfile(path, start, count, frameBlocks, v2CodecDefault, zstd.SpeedDefault, read)
+	return writeV2SegmentProfile(path, start, count, frameBlocks, v2CodecDefault, zstd.SpeedDefault, read, nil)
 }
 
-func writeV2TableSegment(path, kind string, start, count uint64, frameBlocks uint32, read func(uint64) ([]byte, error)) error {
+func writeV2TableSegment(path, kind string, start, count uint64, frameBlocks uint32, read, dictionaryRead func(uint64) ([]byte, error)) error {
 	if kind == "bodies" {
-		return writeV2SegmentProfile(path, start, count, frameBlocks, v2CodecBodiesDict, zstd.SpeedBetterCompression, read)
+		if dictionaryRead == nil {
+			return errors.New("ancient V2: bodies writer requires a side-effect-free dictionary reader")
+		}
+		return writeV2SegmentProfile(path, start, count, frameBlocks, v2CodecBodiesTrainedDict, zstd.SpeedBetterCompression, read, dictionaryRead)
 	}
 	return writeV2Segment(path, start, count, frameBlocks, read)
 }
 
-func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read func(uint64) ([]byte, error)) error {
+func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read, dictionaryRead func(uint64) ([]byte, error)) error {
 	if count == 0 || frameBlocks == 0 {
 		return errors.New("ancient V2: empty segment dimensions")
 	}
@@ -727,7 +763,7 @@ func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec 
 		file.Close()
 		os.Remove(tempName)
 	}()
-	if codec != v2CodecDefault && codec != v2CodecBodiesDict {
+	if codec != v2CodecDefault && codec != v2CodecBodiesRawDict && codec != v2CodecBodiesTrainedDict {
 		return fmt.Errorf("ancient V2: unsupported write codec %d", codec)
 	}
 	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderConcurrency(1))
@@ -771,7 +807,20 @@ func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec 
 		dictionaryChecksum uint32
 		dictionaryEncoder  *zstd.Encoder
 	)
-	if codec == v2CodecBodiesDict {
+	if codec == v2CodecBodiesTrainedDict {
+		dictionary, err = trainV2BodiesDictionary(start, count, level, dictionaryRead)
+		if err != nil {
+			if !errors.Is(err, errV2BodiesDictionaryUnavailable) {
+				return err
+			}
+			// Early genesis segments and synthetic/private networks may not have
+			// enough repeated sequences to train entropy tables. Keep freezing
+			// deterministic and fail-safe by retaining the previous raw-history
+			// codec for only those segments.
+			codec = v2CodecBodiesRawDict
+		}
+	}
+	if codec == v2CodecBodiesRawDict {
 		dictionaryLen := len(buffer)
 		if dictionaryLen > v2BodiesDictBytes {
 			dictionaryLen = v2BodiesDictBytes
@@ -791,6 +840,17 @@ func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec 
 		} else {
 			codec = v2CodecDefault
 		}
+	} else if codec == v2CodecBodiesTrainedDict {
+		dictionaryChecksum = crc32.Checksum(dictionary, v2CRC)
+		dictionaryEncoder, err = zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(level),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderDict(dictionary),
+		)
+		if err != nil {
+			return err
+		}
+		defer dictionaryEncoder.Close()
 	}
 	dataOffset := uint64(v2HeaderSize) + frameCount*v2FrameEntrySize + uint64(len(dictionary))
 	if _, err := file.Seek(int64(dataOffset), io.SeekStart); err != nil {
@@ -819,7 +879,7 @@ func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec 
 		})
 		return nil
 	}
-	if err := writeFrame(first, records, false); err != nil {
+	if err := writeFrame(first, records, codec == v2CodecBodiesTrainedDict); err != nil {
 		return err
 	}
 	if len(dictionary) != 0 {
@@ -881,6 +941,96 @@ func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec 
 		return err
 	}
 	return syncDir(filepath.Dir(path))
+}
+
+// trainV2BodiesDictionary samples immutable block bodies from evenly spaced
+// positions across a segment. The sample and history budgets are fixed, so
+// training does not grow with chain height or transaction density. Each sampled
+// body is copied because freezer read implementations may return borrowed data.
+func trainV2BodiesDictionary(start, count uint64, level zstd.EncoderLevel, read func(uint64) ([]byte, error)) ([]byte, error) {
+	if count == 0 || read == nil {
+		return nil, errors.New("ancient V2: empty bodies dictionary sample")
+	}
+	sampleCount := uint64(v2BodiesTrainSamples)
+	if sampleCount > count {
+		sampleCount = count
+	}
+	contents := make([][]byte, 0, sampleCount)
+	total := 0
+	for i := uint64(0); i < sampleCount && total < v2BodiesTrainTotalBytes; i++ {
+		var relative uint64
+		if sampleCount > 1 {
+			relative = i * (count - 1) / (sampleCount - 1)
+		}
+		record, err := read(start + relative)
+		if err != nil {
+			return nil, err
+		}
+		remaining := v2BodiesTrainTotalBytes - total
+		limit := min(v2BodiesTrainSampleBytes, remaining)
+		if len(record) > limit {
+			// Rotate the retained window so large bodies contribute prefixes,
+			// middles and suffixes instead of biasing every sample to protobuf
+			// headers.
+			span := len(record) - limit
+			offset := 0
+			if span > 0 {
+				offset = int((i * uint64(span)) / max(uint64(1), sampleCount-1))
+			}
+			record = record[offset : offset+limit]
+		}
+		if len(record) < 8 {
+			continue
+		}
+		contents = append(contents, append([]byte(nil), record...))
+		total += len(record)
+	}
+	if len(contents) == 0 {
+		return nil, fmt.Errorf("%w: no usable samples", errV2BodiesDictionaryUnavailable)
+	}
+	history := make([]byte, 0, v2BodiesDictBytes)
+	for i, sample := range contents {
+		remainingSamples := len(contents) - i
+		quota := (v2BodiesDictBytes - len(history) + remainingSamples - 1) / remainingSamples
+		if quota > len(sample) {
+			quota = len(sample)
+		}
+		startAt := 0
+		if len(sample) > quota {
+			startAt = i * (len(sample) - quota) / max(1, len(contents)-1)
+		}
+		history = append(history, sample[startAt:startAt+quota]...)
+	}
+	if len(history) < 8 {
+		return nil, fmt.Errorf("%w: history is too small", errV2BodiesDictionaryUnavailable)
+	}
+	dictionary, err := buildV2BodiesDictionary(zstd.BuildDictOptions{
+		ID:       v2DictionaryID(start),
+		Contents: contents,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    level,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errV2BodiesDictionaryUnavailable, err)
+	}
+	if len(dictionary) > v2BodiesDictMaxBytes {
+		return nil, fmt.Errorf("%w: dictionary exceeds %d bytes", errV2BodiesDictionaryUnavailable, v2BodiesDictMaxBytes)
+	}
+	return dictionary, nil
+}
+
+func buildV2BodiesDictionary(options zstd.BuildDictOptions) (dictionary []byte, err error) {
+	// Dictionary construction is an offline heuristic inside an otherwise
+	// crash-safe freezer pass. A malformed/degenerate training corpus must never
+	// take down the node, including if the codec dependency rejects it by panic.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			dictionary = nil
+			err = fmt.Errorf("zstd dictionary builder panic: %v", recovered)
+		}
+	}()
+	return zstd.BuildDict(options)
 }
 
 func v2DictionaryID(segmentStart uint64) uint32 {

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
 
@@ -94,18 +95,24 @@ func TestV2BodiesDictionaryRoundTripAndCorruption(t *testing.T) {
 		binary.BigEndian.PutUint64(suffix[:], uint64(number))
 		records[number] = append(prefix, suffix[:]...)
 	}
-	if err := writeV2TableSegment(path, "bodies", 0, uint64(len(records)), 8, func(number uint64) ([]byte, error) {
+	read := func(number uint64) ([]byte, error) {
 		return records[number], nil
-	}); err != nil {
+	}
+	if err := writeV2TableSegment(path, "bodies", 0, uint64(len(records)), 8, read, read); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := openV2Segment(path, "bodies")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reader.codec != v2CodecBodiesDict || len(reader.dictionary) != v2BodiesDictBytes {
+	if reader.codec != v2CodecBodiesTrainedDict || len(reader.dictionary) < v2BodiesDictBytes || len(reader.dictionary) > v2BodiesDictMaxBytes {
 		_ = reader.Close()
-		t.Fatalf("body codec=%d dictionary=%d, want codec=%d dictionary=%d", reader.codec, len(reader.dictionary), v2CodecBodiesDict, v2BodiesDictBytes)
+		t.Fatalf("body codec=%d dictionary=%d, want codec=%d dictionary=[%d,%d]", reader.codec, len(reader.dictionary), v2CodecBodiesTrainedDict, v2BodiesDictBytes, v2BodiesDictMaxBytes)
+	}
+	inspected, err := zstd.InspectDictionary(reader.dictionary)
+	if err != nil || inspected.ID() != v2DictionaryID(0) {
+		_ = reader.Close()
+		t.Fatalf("trained dictionary inspection id=%v err=%v", inspected, err)
 	}
 	store := newTestV2Store(t, "bodies", reader)
 	decoder, err := newV2DecoderForSegments(store.segments)
@@ -154,7 +161,7 @@ func TestV2BodiesCodecIsNotAppliedToOtherTables(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tx_infos", v2SegmentName(0, 8))
 	if err := writeV2TableSegment(path, "tx_infos", 0, 8, 4, func(number uint64) ([]byte, error) {
 		return []byte(fmt.Sprintf("receipt-%d", number)), nil
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := openV2Segment(path, "tx_infos")
@@ -164,6 +171,93 @@ func TestV2BodiesCodecIsNotAppliedToOtherTables(t *testing.T) {
 	defer reader.Close()
 	if reader.codec != v2CodecDefault || len(reader.dictionary) != 0 {
 		t.Fatalf("tx_infos codec=%d dictionary=%d, want default without dictionary", reader.codec, len(reader.dictionary))
+	}
+}
+
+func TestV2BodiesTrainingUsesSideEffectFreeReader(t *testing.T) {
+	const records = uint64(512)
+	path := filepath.Join(t.TempDir(), "bodies", v2SegmentName(9_000, records))
+	var writeReads, trainingReads uint64
+	readRecord := func(number uint64) []byte {
+		var suffix [16]byte
+		binary.BigEndian.PutUint64(suffix[:8], number)
+		binary.BigEndian.PutUint64(suffix[8:], number%17)
+		return append(bytes.Repeat([]byte("transfer-contract-owner-recipient-amount"), 64), suffix[:]...)
+	}
+	err := writeV2TableSegment(path, "bodies", 9_000, records, 64,
+		func(number uint64) ([]byte, error) {
+			writeReads++
+			return readRecord(number), nil
+		},
+		func(number uint64) ([]byte, error) {
+			trainingReads++
+			return readRecord(number), nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writeReads != records {
+		t.Fatalf("ordered writer reads = %d, want %d", writeReads, records)
+	}
+	if trainingReads == 0 || trainingReads > v2BodiesTrainSamples {
+		t.Fatalf("training reads = %d, want (0,%d]", trainingReads, v2BodiesTrainSamples)
+	}
+	reader, err := openV2Segment(path, "bodies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if reader.codec != v2CodecBodiesTrainedDict {
+		t.Fatalf("codec = %d, want trained dictionary", reader.codec)
+	}
+}
+
+func TestV2BodiesTrainingFallsBackForDegenerateCorpus(t *testing.T) {
+	const records = uint64(32)
+	path := filepath.Join(t.TempDir(), "bodies", v2SegmentName(0, records))
+	read := func(number uint64) ([]byte, error) {
+		return []byte{byte(number)}, nil
+	}
+	if err := writeV2TableSegment(path, "bodies", 0, records, 8, read, read); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openV2Segment(path, "bodies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newTestV2Store(t, "bodies", reader)
+	defer store.Close()
+	if reader.codec != v2CodecBodiesRawDict {
+		t.Fatalf("codec = %d, want raw dictionary fallback", reader.codec)
+	}
+	for number := uint64(0); number < records; number++ {
+		got, err := store.read("bodies", number)
+		if err != nil || !bytes.Equal(got, []byte{byte(number)}) {
+			t.Fatalf("body %d = %x err=%v", number, got, err)
+		}
+	}
+}
+
+func TestV2BodiesTrainingPropagatesSourceError(t *testing.T) {
+	want := errors.New("sample read failed")
+	path := filepath.Join(t.TempDir(), "bodies", v2SegmentName(0, 512))
+	err := writeV2TableSegment(path, "bodies", 0, 512, 64,
+		func(number uint64) ([]byte, error) {
+			return bytes.Repeat([]byte("canonical-body"), 64), nil
+		},
+		func(number uint64) ([]byte, error) {
+			if number > 400 {
+				return nil, want
+			}
+			return bytes.Repeat([]byte("canonical-body"), 64), nil
+		},
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("write error = %v, want %v", err, want)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("failed trained segment was published: %v", statErr)
 	}
 }
 
@@ -1299,12 +1393,13 @@ func TestFreezerMigrateV2CancellationDoesNotPublish(t *testing.T) {
 
 func newTestV2Store(t *testing.T, kind string, reader *v2SegmentReader) *v2Store {
 	t.Helper()
-	decoder, err := newV2Decoder()
+	segments := map[string][]*v2SegmentReader{kind: {reader}}
+	decoder, err := newV2DecoderForSegments(segments)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &v2Store{
-		segments:          map[string][]*v2SegmentReader{kind: {reader}},
+		segments:          segments,
 		decoder:           decoder,
 		cacheList:         list.New(),
 		cacheItems:        make(map[v2FrameKey]*list.Element),

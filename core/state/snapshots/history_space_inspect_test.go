@@ -87,6 +87,21 @@ func TestInspectHistorySpaceProfilesCompressedV6Trio(t *testing.T) {
 	if inspection.Accessor.ProjectedBytes >= inspection.Accessor.CurrentBytes {
 		t.Fatalf("delta posting projection did not shrink: %+v", inspection.Accessor)
 	}
+	if inspection.Values.SampledRecords == 0 || inspection.Values.PresentRecords == 0 || inspection.Values.SegmentDuplicateBytes == 0 {
+		t.Fatalf("value reuse sample = %+v", inspection.Values)
+	}
+	if inspection.Values.ContentAddressedBytes >= inspection.Values.CurrentBytes || inspection.Values.SavingsBytes == 0 {
+		t.Fatalf("content-addressed value model did not shrink repeated fixture: %+v", inspection.Values)
+	}
+	if inspection.Values.Domains[rawdb.StateFlatDomainKVLatest.String()].Records == 0 {
+		t.Fatalf("value domain sample = %+v", inspection.Values.Domains)
+	}
+	if inspection.TrainedDictionary.SampledSegments != 1 || inspection.TrainedDictionary.TrainingFailures != 0 || inspection.TrainedDictionary.TrainingRawBytes == 0 || inspection.TrainedDictionary.EvaluationRawBytes == 0 {
+		t.Fatalf("trained history dictionary sample = %+v", inspection.TrainedDictionary)
+	}
+	if inspection.TrainedDictionary.PlainStoredBytes == 0 || inspection.TrainedDictionary.DictionaryStoredBytes == 0 || inspection.TrainedDictionary.DictionaryBytes == 0 || inspection.TrainedDictionary.ProjectedHistoryBytes == 0 {
+		t.Fatalf("trained history dictionary projection = %+v", inspection.TrainedDictionary)
+	}
 	if len(inspection.Candidates) != 1+len(historySpaceBlockSizes) {
 		t.Fatalf("candidate count = %d", len(inspection.Candidates))
 	}
