@@ -228,6 +228,78 @@ func TestRepairMainnetParallelVMMissedPayment(t *testing.T) {
 	}
 }
 
+func TestRepairMainnetCOSTMissedReward(t *testing.T) {
+	statedb := newTestState(t)
+	statedb.CreateAccount(mainnetCOSTMissedRewardRecipient, corepb.AccountType_Normal)
+	statedb.AddBalance(mainnetCOSTMissedRewardRecipient, mainnetCOSTMissedRewardRecipientBadBalance)
+	statedb.CreateAccount(mainnetCOSTMissedRewardContract, corepb.AccountType_Contract)
+	statedb.AddBalance(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardContractBalance)
+	statedb.SetState(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot, mainnetCOSTMissedRewardBadStorageValue)
+	statedb.CreateAccount(mainnetCOSTMissedRewardPayer, corepb.AccountType_Normal)
+	statedb.AddBalance(mainnetCOSTMissedRewardPayer, mainnetCOSTMissedRewardPayerBalance)
+	blackhole := statedb.BlackholeAddress()
+	statedb.CreateAccount(blackhole, corepb.AccountType_Normal)
+	statedb.AddBalance(blackhole, mainnetCOSTMissedRewardBlackholeBalance)
+	snapshot := statedb.Snapshot()
+
+	if repaired := repairMainnetCOSTMissedReward(
+		statedb,
+		mainnetCOSTMissedRewardRepairBlock,
+		mainnetCOSTMissedRewardRepairBlockID,
+	); !repaired {
+		t.Fatal("legacy COST missed reward was not repaired")
+	}
+	if got := statedb.GetBalance(mainnetCOSTMissedRewardRecipient); got != mainnetCOSTMissedRewardRecipientBalance {
+		t.Fatalf("repaired recipient balance = %d, want %d", got, mainnetCOSTMissedRewardRecipientBalance)
+	}
+	if got := statedb.GetBalance(mainnetCOSTMissedRewardContract); got != mainnetCOSTMissedRewardContractBalance-mainnetCOSTMissedRewardAmount {
+		t.Fatalf("repaired contract balance = %d", got)
+	}
+	if got := statedb.GetBalance(mainnetCOSTMissedRewardPayer); got != mainnetCOSTMissedRewardPayerBalance-mainnetCOSTMissedRewardEnergyFee {
+		t.Fatalf("repaired payer balance = %d", got)
+	}
+	if got := statedb.GetBalance(blackhole); got != mainnetCOSTMissedRewardBlackholeBalance+mainnetCOSTMissedRewardEnergyFee {
+		t.Fatalf("repaired blackhole balance = %d", got)
+	}
+	if got := statedb.GetState(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot); got != mainnetCOSTMissedRewardStorageValue {
+		t.Fatalf("repaired reward storage = %x, want %x", got, mainnetCOSTMissedRewardStorageValue)
+	}
+	if repaired := repairMainnetCOSTMissedReward(
+		statedb,
+		mainnetCOSTMissedRewardRepairBlock,
+		mainnetCOSTMissedRewardRepairBlockID,
+	); repaired {
+		t.Fatal("canonical state must not be repaired twice")
+	}
+
+	statedb.RevertToSnapshot(snapshot)
+	if got := statedb.GetBalance(mainnetCOSTMissedRewardRecipient); got != mainnetCOSTMissedRewardRecipientBadBalance {
+		t.Fatalf("recipient after block snapshot rollback = %d, want %d", got, mainnetCOSTMissedRewardRecipientBadBalance)
+	}
+	if got := statedb.GetState(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot); got != mainnetCOSTMissedRewardBadStorageValue {
+		t.Fatalf("reward storage after block snapshot rollback = %x, want %x", got, mainnetCOSTMissedRewardBadStorageValue)
+	}
+	if repaired := repairMainnetCOSTMissedReward(
+		statedb,
+		mainnetCOSTMissedRewardRepairBlock,
+		tcommon.Hash{0xff},
+	); repaired {
+		t.Fatal("non-canonical block hash activated the repair")
+	}
+
+	statedb.SetState(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot, mainnetCOSTMissedRewardStorageValue)
+	if repaired := repairMainnetCOSTMissedReward(
+		statedb,
+		mainnetCOSTMissedRewardRepairBlock,
+		mainnetCOSTMissedRewardRepairBlockID,
+	); repaired {
+		t.Fatal("unexpected storage pre-image activated the repair")
+	}
+	if got := statedb.GetBalance(mainnetCOSTMissedRewardRecipient); got != mainnetCOSTMissedRewardRecipientBadBalance {
+		t.Fatalf("failed repair changed recipient balance to %d", got)
+	}
+}
+
 func testProcessorAddr(b byte) tcommon.Address {
 	var addr tcommon.Address
 	addr[0] = 0x41

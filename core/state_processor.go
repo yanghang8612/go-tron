@@ -36,6 +36,14 @@ const (
 	mainnetParallelVMMissedPaymentBlackholeBalance = int64(-9_223_234_026_935_214_473)
 	mainnetParallelVMMissedPaymentAmount           = int64(11_826_751)
 	mainnetParallelVMMissedPaymentEnergyFee        = int64(85_360)
+	mainnetCOSTMissedRewardRepairBlock             = uint64(20_674_403)
+	mainnetCOSTMissedRewardRecipientBadBalance     = int64(5_000_000)
+	mainnetCOSTMissedRewardRecipientBalance        = int64(10_000_000)
+	mainnetCOSTMissedRewardContractBalance         = int64(5_101_000_000)
+	mainnetCOSTMissedRewardPayerBalance            = int64(28_972_799_410)
+	mainnetCOSTMissedRewardBlackholeBalance        = int64(-9_223_225_669_149_305_083)
+	mainnetCOSTMissedRewardAmount                  = int64(5_000_000)
+	mainnetCOSTMissedRewardEnergyFee               = int64(140_870)
 )
 
 var (
@@ -57,6 +65,22 @@ var (
 		0x41, 0x98, 0x56, 0x2b, 0x38, 0x71, 0x53, 0x3e, 0x85, 0x3d, 0x6c,
 		0xbc, 0xfc, 0x51, 0x11, 0x97, 0xb5, 0x94, 0x30, 0x47, 0xc0,
 	}
+	mainnetCOSTMissedRewardRepairBlockID = tcommon.HexToHash("00000000013b77633413e57c9a741dbcb6c6faf7ab1f261c1210a19d08d88b7d")
+	mainnetCOSTMissedRewardRecipient     = tcommon.Address{
+		0x41, 0xe2, 0xe8, 0x86, 0x7d, 0xc6, 0x25, 0x42, 0x6a, 0x62, 0x22,
+		0x4a, 0xbd, 0x1f, 0x40, 0x7e, 0xb8, 0x3b, 0x12, 0x73, 0x2e,
+	}
+	mainnetCOSTMissedRewardContract = tcommon.Address{
+		0x41, 0x15, 0x9d, 0x09, 0x6a, 0xb1, 0x2d, 0x5d, 0x35, 0xeb, 0xf8,
+		0x35, 0x79, 0x60, 0x32, 0x4f, 0x59, 0x8f, 0xd5, 0x4d, 0x16,
+	}
+	mainnetCOSTMissedRewardPayer = tcommon.Address{
+		0x41, 0x78, 0x90, 0xbf, 0x5b, 0x42, 0x70, 0x64, 0xe7, 0x55, 0xd8,
+		0x82, 0xb0, 0x1c, 0xa6, 0x6c, 0xfc, 0x2b, 0x86, 0x23, 0x63,
+	}
+	mainnetCOSTMissedRewardStorageSlot     = tcommon.HexToHash("0a")
+	mainnetCOSTMissedRewardBadStorageValue = tcommon.HexToHash("42ff916e040")
+	mainnetCOSTMissedRewardStorageValue    = tcommon.HexToHash("42ff9632b80")
 )
 
 // repairMainnetCreateTransferFailureOvercharge heals state materialized by a
@@ -110,6 +134,39 @@ func repairMainnetParallelVMMissedPayment(statedb *state.StateDB, blockNum uint6
 	statedb.AddBalance(mainnetParallelVMMissedPaymentContract, -mainnetParallelVMMissedPaymentAmount)
 	statedb.AddBalance(mainnetParallelVMMissedPaymentPayer, -mainnetParallelVMMissedPaymentEnergyFee)
 	statedb.AddSettlementBalance(blackhole, mainnetParallelVMMissedPaymentEnergyFee)
+	return true
+}
+
+// repairMainnetCOSTMissedReward heals another state produced by the same
+// pre-fix speculative VM publisher. Mainnet block 20,616,256 tx
+// 0def93583b... called COST.reward and java-tron transferred 5,000,000 sun from
+// the contract to the recipient, charged the payer 140,870 sun for 14,087
+// energy, and added 5,000,000 to the contract's total-reward storage slot. The
+// legacy gtron state instead contains a zero-energy SUCCESS receipt and none of
+// those effects. The missing recipient balance becomes fatal at block
+// 20,674,403 tx 59feaaa85d..., whose 5,000,000-sun call then has no balance left
+// to buy energy and incorrectly returns OUT_OF_ENERGY.
+//
+// A clean replay already has the canonical state and takes no action. Requiring
+// the canonical repair block ID and every legacy balance/storage pre-image
+// keeps the repair mainnet-specific, atomic, and idempotent.
+func repairMainnetCOSTMissedReward(statedb *state.StateDB, blockNum uint64, blockID tcommon.Hash) bool {
+	if statedb == nil || blockNum != mainnetCOSTMissedRewardRepairBlock || blockID != mainnetCOSTMissedRewardRepairBlockID {
+		return false
+	}
+	blackhole := statedb.BlackholeAddress()
+	if statedb.GetBalance(mainnetCOSTMissedRewardRecipient) != mainnetCOSTMissedRewardRecipientBadBalance ||
+		statedb.GetBalance(mainnetCOSTMissedRewardContract) != mainnetCOSTMissedRewardContractBalance ||
+		statedb.GetBalance(mainnetCOSTMissedRewardPayer) != mainnetCOSTMissedRewardPayerBalance ||
+		statedb.GetBalance(blackhole) != mainnetCOSTMissedRewardBlackholeBalance ||
+		statedb.GetState(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot) != mainnetCOSTMissedRewardBadStorageValue {
+		return false
+	}
+	statedb.AddBalance(mainnetCOSTMissedRewardRecipient, mainnetCOSTMissedRewardAmount)
+	statedb.AddBalance(mainnetCOSTMissedRewardContract, -mainnetCOSTMissedRewardAmount)
+	statedb.AddBalance(mainnetCOSTMissedRewardPayer, -mainnetCOSTMissedRewardEnergyFee)
+	statedb.AddSettlementBalance(blackhole, mainnetCOSTMissedRewardEnergyFee)
+	statedb.SetState(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot, mainnetCOSTMissedRewardStorageValue)
 	return true
 }
 
@@ -809,6 +866,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	}()
 	repairMainnetCreateTransferFailureOvercharge(statedb, block.Number(), block.Hash())
 	repairMainnetParallelVMMissedPayment(statedb, block.Number(), block.Hash())
+	repairMainnetCOSTMissedReward(statedb, block.Number(), block.Hash())
 
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)
