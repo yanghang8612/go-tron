@@ -44,6 +44,9 @@ const (
 	mainnetCOSTMissedRewardBlackholeBalance        = int64(-9_223_225_669_149_305_083)
 	mainnetCOSTMissedRewardAmount                  = int64(5_000_000)
 	mainnetCOSTMissedRewardEnergyFee               = int64(140_870)
+	mainnetWINKMissingCodeRepairBlock              = uint64(20_674_403)
+	mainnetWINKRuntimeOffset                       = 0x35a
+	mainnetWINKRuntimeSize                         = 0x1ae7
 )
 
 var (
@@ -81,7 +84,24 @@ var (
 	mainnetCOSTMissedRewardStorageSlot     = tcommon.HexToHash("0a")
 	mainnetCOSTMissedRewardBadStorageValue = tcommon.HexToHash("42ff916e040")
 	mainnetCOSTMissedRewardStorageValue    = tcommon.HexToHash("42ff9632b80")
+	mainnetWINKMissingCodeRepairBlockID    = tcommon.HexToHash("00000000013b77633413e57c9a741dbcb6c6faf7ab1f261c1210a19d08d88b7d")
+	mainnetWINKContract                    = tcommon.Address{
+		0x41, 0x74, 0x47, 0x2e, 0x7d, 0x35, 0x39, 0x5a, 0x6b, 0x5a, 0xdd,
+		0x42, 0x7e, 0xec, 0xb7, 0xf4, 0xb6, 0x2a, 0xd2, 0xb0, 0x71,
+	}
+	mainnetWINKCreationCodeHash = tcommon.HexToHash("6d6573f4e5bca2b3c691e783e3fb63a619d993602220158cf84996c4f166b834")
+	mainnetWINKRuntimeCodeHash  = tcommon.HexToHash("b8b0efb7d4ff5ce4567d234b4bed40278f1955619f7e496fcff99aa20b6e1c08")
 )
+
+type missingRuntimeCodeRepairSpec struct {
+	blockNum         uint64
+	blockID          tcommon.Hash
+	contract         tcommon.Address
+	creationCodeHash tcommon.Hash
+	runtimeCodeHash  tcommon.Hash
+	runtimeOffset    int
+	runtimeSize      int
+}
 
 // repairMainnetCreateTransferFailureOvercharge heals state materialized by a
 // pre-fix gtron binary without affecting a clean replay. Mainnet block
@@ -168,6 +188,61 @@ func repairMainnetCOSTMissedReward(statedb *state.StateDB, blockNum uint64, bloc
 	statedb.AddSettlementBalance(blackhole, mainnetCOSTMissedRewardEnergyFee)
 	statedb.SetState(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot, mainnetCOSTMissedRewardStorageValue)
 	return true
+}
+
+// repairMissingRuntimeCodeFromMetadata restores an immutable code blob only
+// when the account already references the expected runtime hash and its exact
+// creation bytecode is still present in canonical contract metadata. SetCode
+// leaves the account's consensus-visible code hash unchanged; committing the
+// block merely restores the missing content-addressed code row.
+func repairMissingRuntimeCodeFromMetadata(statedb *state.StateDB, blockNum uint64, blockID tcommon.Hash, spec missingRuntimeCodeRepairSpec) bool {
+	if statedb == nil || blockNum != spec.blockNum || blockID != spec.blockID ||
+		spec.runtimeOffset < 0 || spec.runtimeSize <= 0 {
+		return false
+	}
+	if statedb.GetCodeHash(spec.contract) != spec.runtimeCodeHash || len(statedb.GetCode(spec.contract)) != 0 {
+		return false
+	}
+	meta := statedb.GetContract(spec.contract)
+	if meta == nil {
+		return false
+	}
+	creationCode := meta.GetBytecode()
+	runtimeEnd := spec.runtimeOffset + spec.runtimeSize
+	if runtimeEnd < spec.runtimeOffset || runtimeEnd > len(creationCode) ||
+		tcommon.Keccak256(creationCode) != spec.creationCodeHash {
+		return false
+	}
+	runtimeCode := creationCode[spec.runtimeOffset:runtimeEnd]
+	if tcommon.Keccak256(runtimeCode) != spec.runtimeCodeHash {
+		return false
+	}
+	statedb.SetCode(spec.contract, runtimeCode)
+	return true
+}
+
+// repairMainnetWINKMissingRuntimeCode restores the WINK token runtime required
+// by mainnet block 20,674,403 tx e6fc287654... . The canonical transaction has
+// empty calldata, reaches the contract fallback, consumes 43 energy, and
+// returns REVERT. The legacy database retains the canonical account code hash
+// and the exact 7,969-byte creation code in SmartContract metadata, but the
+// referenced 6,887-byte immutable runtime blob is absent, so an empty-code call
+// incorrectly returns SUCCESS.
+//
+// The canonical block ID plus both code hashes make this repair inert for a
+// clean database, a fork, different metadata, or a retry after successful
+// persistence. It runs inside processBlock's snapshot and therefore rolls back
+// atomically if a later transaction still rejects the block.
+func repairMainnetWINKMissingRuntimeCode(statedb *state.StateDB, blockNum uint64, blockID tcommon.Hash) bool {
+	return repairMissingRuntimeCodeFromMetadata(statedb, blockNum, blockID, missingRuntimeCodeRepairSpec{
+		blockNum:         mainnetWINKMissingCodeRepairBlock,
+		blockID:          mainnetWINKMissingCodeRepairBlockID,
+		contract:         mainnetWINKContract,
+		creationCodeHash: mainnetWINKCreationCodeHash,
+		runtimeCodeHash:  mainnetWINKRuntimeCodeHash,
+		runtimeOffset:    mainnetWINKRuntimeOffset,
+		runtimeSize:      mainnetWINKRuntimeSize,
+	})
 }
 
 // ApplyTransaction executes a single transaction against the given state.
@@ -867,6 +942,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	repairMainnetCreateTransferFailureOvercharge(statedb, block.Number(), block.Hash())
 	repairMainnetParallelVMMissedPayment(statedb, block.Number(), block.Hash())
 	repairMainnetCOSTMissedReward(statedb, block.Number(), block.Hash())
+	repairMainnetWINKMissingRuntimeCode(statedb, block.Number(), block.Hash())
 
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)

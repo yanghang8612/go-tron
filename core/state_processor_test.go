@@ -300,6 +300,91 @@ func TestRepairMainnetCOSTMissedReward(t *testing.T) {
 	}
 }
 
+func TestRepairMissingRuntimeCodeFromMetadata(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	database := state.NewDatabase(diskdb)
+	statedb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := testProcessorAddr(0x91)
+	prefix := []byte{0x60, 0x01, 0x60}
+	runtime := []byte{byte(vm.PUSH1), 0x00, byte(vm.PUSH1), 0x00, byte(vm.REVERT)}
+	creation := append(append(append([]byte(nil), prefix...), runtime...), 0xaa, 0xbb)
+	spec := missingRuntimeCodeRepairSpec{
+		blockNum:         99,
+		blockID:          tcommon.HexToHash("0123"),
+		contract:         contract,
+		creationCodeHash: tcommon.Keccak256(creation),
+		runtimeCodeHash:  tcommon.Keccak256(runtime),
+		runtimeOffset:    len(prefix),
+		runtimeSize:      len(runtime),
+	}
+
+	statedb.CreateAccount(contract, corepb.AccountType_Contract)
+	statedb.SetContract(contract, &contractpb.SmartContract{
+		ContractAddress: contract.Bytes(),
+		Bytecode:        creation,
+	})
+	statedb.SetCode(contract, runtime)
+	root, err := statedb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tronrawdb.DeleteStateCode(diskdb, spec.runtimeCodeHash); err != nil {
+		t.Fatal(err)
+	}
+	statedb, err = state.New(root, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := statedb.GetCodeHash(contract); got != spec.runtimeCodeHash {
+		t.Fatalf("pre-repair code hash = %x, want %x", got, spec.runtimeCodeHash)
+	}
+	if got := statedb.GetCode(contract); len(got) != 0 {
+		t.Fatalf("pre-repair code = %x, want missing", got)
+	}
+	snapshot := statedb.Snapshot()
+
+	if repaired := repairMissingRuntimeCodeFromMetadata(statedb, spec.blockNum, spec.blockID, spec); !repaired {
+		t.Fatal("missing runtime code was not repaired")
+	}
+	if got := statedb.GetCode(contract); !bytes.Equal(got, runtime) {
+		t.Fatalf("repaired runtime = %x, want %x", got, runtime)
+	}
+	if repaired := repairMissingRuntimeCodeFromMetadata(statedb, spec.blockNum, spec.blockID, spec); repaired {
+		t.Fatal("present runtime code must not be repaired twice")
+	}
+
+	statedb.RevertToSnapshot(snapshot)
+	if got := statedb.GetCode(contract); len(got) != 0 {
+		t.Fatalf("runtime after block snapshot rollback = %x, want missing", got)
+	}
+	if repaired := repairMissingRuntimeCodeFromMetadata(statedb, spec.blockNum, tcommon.Hash{0xff}, spec); repaired {
+		t.Fatal("non-canonical block hash activated the repair")
+	}
+	badMetadataSpec := spec
+	badMetadataSpec.creationCodeHash = tcommon.Hash{0xff}
+	if repaired := repairMissingRuntimeCodeFromMetadata(statedb, spec.blockNum, spec.blockID, badMetadataSpec); repaired {
+		t.Fatal("unexpected creation metadata activated the repair")
+	}
+
+	if repaired := repairMissingRuntimeCodeFromMetadata(statedb, spec.blockNum, spec.blockID, spec); !repaired {
+		t.Fatal("missing runtime code was not repaired after block retry")
+	}
+	root, err = statedb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := state.New(root, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.GetCode(contract); !bytes.Equal(got, runtime) {
+		t.Fatalf("persisted repaired runtime = %x, want %x", got, runtime)
+	}
+}
+
 func testProcessorAddr(b byte) tcommon.Address {
 	var addr tcommon.Address
 	addr[0] = 0x41

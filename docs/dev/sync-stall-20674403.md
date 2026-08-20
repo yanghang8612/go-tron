@@ -39,23 +39,49 @@ The missing transfer first becomes fatal at block 20,674,403 transaction
 `59feaaa85dc3b264cf2a5207f8ddb4d20ca5074a9a71aa3b98fd0938928d60aa`.
 Java-tron executes it successfully with 20,470 energy.
 
+## Follow-up mismatch at transaction 55
+
+After correcting transaction 0, replay advanced to transaction 55
+`e6fc2876547d39db5d736e008166439ec4899104de33770035b5e5a4805c7c45`
+and stopped with expected REVERT, actual SUCCESS.
+
+This transaction sends empty calldata to the WINK token contract
+`4174472e7d35395a6b5add427eecb7f4b62ad2b071`. Canonical execution reaches the
+fallback, consumes 43 energy, and executes REVERT. The legacy database account
+still references canonical runtime hash
+`b8b0efb7d4ff5ce4567d234b4bed40278f1955619f7e496fcff99aa20b6e1c08`,
+but the corresponding immutable state-code blob is missing, so gtron treats the
+call as empty code and returns SUCCESS.
+
+The contract metadata remains intact. Its 7,969-byte creation bytecode has hash
+`6d6573f4e5bca2b3c691e783e3fb63a619d993602220158cf84996c4f166b834`.
+Extracting 6,887 bytes at offset `0x35a` exactly reproduces both the runtime
+returned in the canonical creation receipt and the account's runtime hash.
+
 ## Correction
 
-At canonical block 20,674,403, an exact-state guarded repair restores the five
-omitted state deltas before transaction execution. It checks:
+At canonical block 20,674,403, exact-state guarded repairs run before
+transaction execution. The first restores the five omitted COST state deltas
+and checks:
 
 - the canonical block ID;
 - recipient, contract, payer, and blackhole balances; and
 - the exact pre-repair value of contract storage slot 10.
 
-The repair is inside the block snapshot, so a failed block rolls it back. A
-clean replay, a fork, a retry after successful repair, or any independently
+The second restores the missing WINK immutable code blob from existing contract
+metadata. It requires the canonical block ID, a missing runtime row, the exact
+account runtime hash, the exact creation-code hash, and a matching hash for the
+extracted runtime. Restoring the blob leaves the account's consensus-visible
+code hash unchanged.
+
+Both repairs are inside the block snapshot, so a failed block rolls them back.
+A clean replay, a fork, a retry after successful repair, or any independently
 modified state does not match all guards and remains unchanged.
 
 ## Recovery
 
-Deploy a binary containing the existing speculative VM fixes and this guarded
-repair, then restart `gtron.service`. It retries block 20,674,403 and should
+Deploy a binary containing the existing speculative VM fixes and both guarded
+repairs, then restart `gtron.service`. It retries block 20,674,403 and should
 resume sync without a clean resync.
 
 If the guard does not match, do not edit the database manually. Restore a
@@ -67,4 +93,5 @@ but cannot repair divergence already committed by an older binary.
 
 - Confirm block 20,674,403 imports and the head advances.
 - Confirm transaction `59feaaa85d...` records SUCCESS with 20,470 energy.
+- Confirm transaction `e6fc287654...` records REVERT with 43 energy.
 - Run `go test ./core -count=1 -timeout 300s`.
