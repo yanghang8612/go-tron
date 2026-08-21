@@ -17,6 +17,28 @@ import (
 // the stale base/delta keyspaces and rebuilding from authoritative latest rows.
 var ErrCommitmentBranchBaseRootMismatch = errors.New("domains: commitment branch base root mismatch")
 
+// CommitmentBranchBaseRootMismatchError carries the two independently stored
+// roots that made an immutable branch baseline unsafe. It unwraps to
+// ErrCommitmentBranchBaseRootMismatch so existing strict callers retain their
+// errors.Is contract while recovery and logging gain actionable context.
+type CommitmentBranchBaseRootMismatchError struct {
+	SnapshotTxNum     uint64
+	MarkerRoot        common.Hash
+	SnapshotRoot      common.Hash
+	SnapshotRootFound bool
+}
+
+func (e *CommitmentBranchBaseRootMismatchError) Error() string {
+	if e.SnapshotRootFound {
+		return fmt.Sprintf("%s at tx %d: marker root %x, snapshot root %x", ErrCommitmentBranchBaseRootMismatch, e.SnapshotTxNum, e.MarkerRoot, e.SnapshotRoot)
+	}
+	return fmt.Sprintf("%s at tx %d: marker root %x, snapshot root missing", ErrCommitmentBranchBaseRootMismatch, e.SnapshotTxNum, e.MarkerRoot)
+}
+
+func (e *CommitmentBranchBaseRootMismatchError) Unwrap() error {
+	return ErrCommitmentBranchBaseRootMismatch
+}
+
 // rawdbBranchStore is a branchStore backed by the rawdb commitment-branch
 // keyspace (prefix state-commitment-branch-v1-). Branch nodes are encoded with
 // BranchData.Encode and decoded with DecodeBranchData; the prefix is the
@@ -232,7 +254,12 @@ func openRawdbBranchBase(db CommitmentDB, repair CommitmentSnapshotRepair, base 
 		return nil, fmt.Errorf("domains: read commitment branch base root: %w", err)
 	}
 	if !rootOK || snapshotRoot != base.Root {
-		return nil, fmt.Errorf("%w at tx %d", ErrCommitmentBranchBaseRootMismatch, base.SnapshotTxNum)
+		return nil, &CommitmentBranchBaseRootMismatchError{
+			SnapshotTxNum:     base.SnapshotTxNum,
+			MarkerRoot:        base.Root,
+			SnapshotRoot:      snapshotRoot,
+			SnapshotRootFound: rootOK,
+		}
 	}
 	viewer, ok := repair.Source.(pointread.CommitmentBranchSnapshotViewer)
 	if !ok {
@@ -793,6 +820,11 @@ type stagedCommitmentStore struct {
 	// lets tests prove that normal incremental commits do not trigger a bootstrap
 	// scan once branch state is persisted.
 	bootstrapCount int
+
+	// rebuildContext explains an exceptional full-state branch rebuild to
+	// operators. Ordinary explicit Rebuild calls use the default bootstrap
+	// reason; mismatch recovery fills the snapshot/root evidence here.
+	rebuildContext commitmentRebuildContext
 }
 
 // NewStagedCommitmentStore builds a staged LatestCommitmentStore over db.
@@ -847,6 +879,18 @@ func NewRecoveringStagedCommitmentStoreWithRepair(db CommitmentDB, repair Commit
 
 	rebuilt := newStagedCommitmentStoreWithBranchStore(db, newRawdbBranchStore(db))
 	rebuilt.asyncParentBranches = asyncParentBranches
+	rebuilt.rebuildContext = commitmentRebuildContext{
+		reason:  "branch_base_root_mismatch",
+		trigger: err.Error(),
+	}
+	var mismatch *CommitmentBranchBaseRootMismatchError
+	if errors.As(err, &mismatch) {
+		rebuilt.rebuildContext.snapshotTxNum = mismatch.SnapshotTxNum
+		rebuilt.rebuildContext.markerRoot = mismatch.MarkerRoot
+		rebuilt.rebuildContext.snapshotRoot = mismatch.SnapshotRoot
+		rebuilt.rebuildContext.snapshotRootFound = mismatch.SnapshotRootFound
+		rebuilt.rebuildContext.hasSnapshotRoots = true
+	}
 	if _, rebuildErr := rebuilt.Rebuild(); rebuildErr != nil {
 		return nil, fmt.Errorf("domains: rebuild commitment branches after base root mismatch: %w", rebuildErr)
 	}
@@ -1080,6 +1124,9 @@ func SetRebuildSpyHook(fn func()) { rebuildSpyHook = fn }
 const (
 	stagedCommitmentRebuildBatchEntries = 32 * 1024
 	stagedCommitmentRebuildBatchBytes   = 64 << 20
+	// Publishing counters twice per entry batch keeps progress fresh without
+	// putting atomics and time reads on every latest-domain row.
+	stagedCommitmentRebuildProgressEntries = 16 * 1024
 )
 
 type durableCommitmentRebuildProvider interface {
@@ -1097,12 +1144,17 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 	s.bootstrapCount++
 	if provider, ok := s.db.(durableCommitmentRebuildProvider); ok {
 		if durable, release, leased := provider.BeginDurableCommitmentRebuild(); leased {
-			root, err := s.rebuildDurable(durable, stagedCommitmentRebuildBatchEntries, stagedCommitmentRebuildBatchBytes)
+			progress := startCommitmentRebuildProgress(s.rebuildContext, "durable", stagedCommitmentRebuildBatchEntries, stagedCommitmentRebuildBatchBytes, 0)
+			root, err := s.rebuildDurableObserved(durable, stagedCommitmentRebuildBatchEntries, stagedCommitmentRebuildBatchBytes, progress)
 			release()
+			progress.finish(root, err)
 			return root, err
 		}
 	}
-	return s.rebuildWithBatchLimits(stagedCommitmentRebuildBatchEntries, stagedCommitmentRebuildBatchBytes)
+	progress := startCommitmentRebuildProgress(s.rebuildContext, "buffered", stagedCommitmentRebuildBatchEntries, stagedCommitmentRebuildBatchBytes, 0)
+	root, err := s.rebuildWithBatchLimitsObserved(stagedCommitmentRebuildBatchEntries, stagedCommitmentRebuildBatchBytes, progress)
+	progress.finish(root, err)
+	return root, err
 }
 
 // rebuildDurable streams the complete legacy branch table to the durable base
@@ -1111,19 +1163,29 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 // invalidation is mirrored into the layer so an older buffered marker can never
 // reactivate after the direct table has replaced its snapshot-backed layout.
 func (s *stagedCommitmentStore) rebuildDurable(durable ethdb.KeyValueStore, maxEntries, maxBytes int) (common.Hash, error) {
+	return s.rebuildDurableObserved(durable, maxEntries, maxBytes, nil)
+}
+
+func (s *stagedCommitmentStore) rebuildDurableObserved(durable ethdb.KeyValueStore, maxEntries, maxBytes int, progress *commitmentRebuildProgress) (common.Hash, error) {
 	if durable == nil {
 		return common.Hash{}, errors.New("domains: nil durable commitment rebuild store")
+	}
+	if progress != nil {
+		progress.setPhase("invalidate-metadata")
 	}
 	if err := invalidateCommitmentBranchMetadata(s.db); err != nil {
 		return common.Hash{}, err
 	}
 
 	bootstrap := newStagedCommitmentStoreWithBranchStore(s.db, newRawdbBranchStore(durable))
-	root, err := bootstrap.rebuildBranchesWithBatchLimits(maxEntries, maxBytes)
+	root, err := bootstrap.rebuildBranchesWithBatchLimits(maxEntries, maxBytes, progress)
 	if err != nil {
 		return common.Hash{}, err
 	}
 
+	if progress != nil {
+		progress.setPhase("publish-root")
+	}
 	if err := s.store.close(); err != nil {
 		return common.Hash{}, err
 	}
@@ -1175,9 +1237,16 @@ func invalidateCommitmentBranchMetadata(db CommitmentDB) error {
 }
 
 func (s *stagedCommitmentStore) rebuildWithBatchLimits(maxEntries, maxBytes int) (common.Hash, error) {
-	root, err := s.rebuildBranchesWithBatchLimits(maxEntries, maxBytes)
+	return s.rebuildWithBatchLimitsObserved(maxEntries, maxBytes, nil)
+}
+
+func (s *stagedCommitmentStore) rebuildWithBatchLimitsObserved(maxEntries, maxBytes int, progress *commitmentRebuildProgress) (common.Hash, error) {
+	root, err := s.rebuildBranchesWithBatchLimits(maxEntries, maxBytes, progress)
 	if err != nil {
 		return common.Hash{}, err
+	}
+	if progress != nil {
+		progress.setPhase("publish-root")
 	}
 	if err := s.WriteRoot(root); err != nil {
 		return common.Hash{}, err
@@ -1185,10 +1254,13 @@ func (s *stagedCommitmentStore) rebuildWithBatchLimits(maxEntries, maxBytes int)
 	return root, nil
 }
 
-func (s *stagedCommitmentStore) rebuildBranchesWithBatchLimits(maxEntries, maxBytes int) (common.Hash, error) {
+func (s *stagedCommitmentStore) rebuildBranchesWithBatchLimits(maxEntries, maxBytes int, progress *commitmentRebuildProgress) (common.Hash, error) {
 	// Fold MERGES into existing branches, so a rebuild must start from a clean
 	// branch keyspace; otherwise rows from an earlier (e.g. pre-rewind) tip would
 	// contribute to the rebuilt root.
+	if progress != nil {
+		progress.setPhase("clear")
+	}
 	if err := s.store.clear(); err != nil {
 		return common.Hash{}, err
 	}
@@ -1201,9 +1273,14 @@ func (s *stagedCommitmentStore) rebuildBranchesWithBatchLimits(maxEntries, maxBy
 	batchBytes := 0
 	var root common.Hash
 	folded := false
+	var rowsScanned, sourceRowsScanned, bytesScanned uint64
+	var currentSource rawdb.LatestDomainCommitmentSource
 	flush := func() error {
 		if len(updates) == 0 {
 			return nil
+		}
+		if progress != nil {
+			progress.beginFold(rowsScanned, sourceRowsScanned, bytesScanned)
 		}
 		var err error
 		root, err = s.trie.Fold(updates)
@@ -1214,14 +1291,34 @@ func (s *stagedCommitmentStore) rebuildBranchesWithBatchLimits(maxEntries, maxBy
 		clear(updates)
 		updates = updates[:0]
 		batchBytes = 0
+		if progress != nil {
+			progress.finishFold(rowsScanned, sourceRowsScanned, bytesScanned)
+		}
 		return nil
 	}
-	if err := rawdb.IterateLatestDomainCommitmentSources(s.db, func(key, value []byte) (bool, error) {
+	if progress != nil {
+		progress.setPhase("scan")
+	}
+	if err := rawdb.IterateLatestDomainCommitmentSourcesWithSource(s.db, func(source rawdb.LatestDomainCommitmentSource, key, value []byte) (bool, error) {
+		if source != currentSource {
+			currentSource = source
+			sourceRowsScanned = 0
+			if progress != nil {
+				progress.setSource(source, rowsScanned, bytesScanned)
+			}
+		}
 		updates = append(updates, Update{
 			Key:   append([]byte(nil), key...),
 			Value: append([]byte(nil), value...),
 		})
-		batchBytes += len(key) + len(value)
+		rowBytes := len(key) + len(value)
+		batchBytes += rowBytes
+		rowsScanned++
+		sourceRowsScanned++
+		bytesScanned += uint64(rowBytes)
+		if progress != nil && rowsScanned%stagedCommitmentRebuildProgressEntries == 0 {
+			progress.observeScan(rowsScanned, sourceRowsScanned, bytesScanned)
+		}
 		if (maxEntries > 0 && len(updates) >= maxEntries) || (maxBytes > 0 && batchBytes >= maxBytes) {
 			if err := flush(); err != nil {
 				return false, err
@@ -1235,6 +1332,9 @@ func (s *stagedCommitmentStore) rebuildBranchesWithBatchLimits(maxEntries, maxBy
 		return common.Hash{}, err
 	}
 	if !folded {
+		if progress != nil {
+			progress.setPhase("fold-empty")
+		}
 		var err error
 		root, err = s.trie.Fold(nil)
 		if err != nil {

@@ -240,9 +240,17 @@ func TestRecoveringStagedStoreRebuildsMismatchedBaseInAsyncLayer(t *testing.T) {
 		root: common.Hash{0xee}, rootOK: true,
 	}, TxNum: txNum}
 
-	if strict, err := NewStagedCommitmentStoreWithRepair(view, repair, true); !errors.Is(err, ErrCommitmentBranchBaseRootMismatch) {
+	strict, strictErr := NewStagedCommitmentStoreWithRepair(view, repair, true)
+	if !errors.Is(strictErr, ErrCommitmentBranchBaseRootMismatch) {
 		_ = CloseLatestCommitmentStore(strict)
-		t.Fatalf("strict open error = %v, want base-root mismatch", err)
+		t.Fatalf("strict open error = %v, want base-root mismatch", strictErr)
+	}
+	var mismatch *CommitmentBranchBaseRootMismatchError
+	if !errors.As(strictErr, &mismatch) {
+		t.Fatalf("strict open error = %T, want structured mismatch", strictErr)
+	}
+	if mismatch.SnapshotTxNum != txNum || mismatch.MarkerRoot != baseRoot || mismatch.SnapshotRoot != (common.Hash{0xee}) || !mismatch.SnapshotRootFound {
+		t.Fatalf("mismatch context = %+v, want tx/root evidence", mismatch)
 	}
 	latest, err := NewRecoveringStagedCommitmentStoreWithRepair(view, repair, true)
 	if err != nil {

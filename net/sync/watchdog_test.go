@@ -84,6 +84,13 @@ type fakeStarter struct {
 	syncing  bool
 }
 
+type gatedFakeStarter struct {
+	*fakeStarter
+	blocked bool
+}
+
+func (f *gatedFakeStarter) StallRecoveryBlocked() bool { return f.blocked }
+
 func (f *fakeStarter) StartSync(peer *p2p.Peer) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -226,6 +233,19 @@ func TestWatchdog_DirectCheckIsolation_NoTickerNeeded(t *testing.T) {
 		w.checkIsolation()
 		if starter.recoverCount() != 0 {
 			t.Fatalf("paused: RecoverStalledFetch calls = %d, want 0", starter.recoverCount())
+		}
+	})
+
+	t.Run("maintenance-blocked→no-start-or-recover", func(t *testing.T) {
+		chain := &fakeChain{lastInsert: time.Now().Add(-time.Hour)}
+		peers := &fakePeerSource{best: dummyPeer}
+		pause := &fakePauseStatus{}
+		starter := &gatedFakeStarter{fakeStarter: &fakeStarter{syncing: true}, blocked: true}
+		w := newTestWatchdog(t, chain, peers, pause, starter)
+
+		w.checkIsolation()
+		if starter.callCount() != 0 || starter.recoverCount() != 0 {
+			t.Fatalf("maintenance-blocked: starts=%d recovers=%d, want 0/0", starter.callCount(), starter.recoverCount())
 		}
 	})
 

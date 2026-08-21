@@ -84,6 +84,9 @@ type SnapshotLifecycle struct {
 
 	hookMu    sync.Mutex
 	passHooks []func()
+
+	failureLogMu sync.Mutex
+	failureLog   snapshotLifecycleFailureLogState
 }
 
 func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *SnapshotLifecycle {
@@ -461,9 +464,10 @@ func (l *SnapshotLifecycle) loop() {
 			if errors.Is(err, context.Canceled) && l.ctx.Err() != nil {
 				return
 			}
-			lifecycleLog.Warn("Domain state snapshot/prune pass failed", "reason", reason, "err", err)
+			l.logPassFailure(reason, err, time.Now())
 			return
 		}
+		l.logPassRecovery(time.Now())
 		// Erigon's background aggregator drains every ready immutable step in
 		// one run. Preserve go-tron's smaller build/publish/prune transaction
 		// boundary, but coalesce an immediate next pass while verified lag

@@ -1874,13 +1874,38 @@ func loadOptionalProductionManifest(dir string) (*Manifest, error) {
 	return manifest, nil
 }
 
+// HistoryCoverageError means the manifest's durable history cursor is ahead
+// of the continuously visible files for one dataset. Keeping the values typed
+// lets lifecycle logs and metrics expose the gap as structured fields while
+// preserving the existing human-readable error text.
+type HistoryCoverageError struct {
+	Progress   uint64
+	Dataset    SegmentDataset
+	VisibleEnd uint64
+}
+
+func (e *HistoryCoverageError) Error() string {
+	return fmt.Sprintf("snapshots: history progress %d exceeds visible %s coverage %d", e.Progress, e.Dataset, e.VisibleEnd)
+}
+
+func (e *HistoryCoverageError) Gap() uint64 {
+	if e == nil || e.Progress <= e.VisibleEnd {
+		return 0
+	}
+	return e.Progress - e.VisibleEnd
+}
+
 func coldSnapshotVisibleTxEndFromManifest(manifest *Manifest, dataset SegmentDataset) (uint64, error) {
 	if manifest == nil {
 		return 0, nil
 	}
 	visibleEnd := ContiguousHistoryVisibleTxEnd(manifest, dataset, 1)
 	if manifest.Progress != nil && manifest.Progress.HistoryBuildTxNum > visibleEnd {
-		return 0, fmt.Errorf("snapshots: history progress %d exceeds visible %s coverage %d", manifest.Progress.HistoryBuildTxNum, dataset, visibleEnd)
+		return 0, &HistoryCoverageError{
+			Progress:   manifest.Progress.HistoryBuildTxNum,
+			Dataset:    dataset,
+			VisibleEnd: visibleEnd,
+		}
 	}
 	return visibleEnd, nil
 }

@@ -13,6 +13,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/types"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
 	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
@@ -157,6 +158,9 @@ type SyncService struct {
 	progressMu   sync.Mutex
 	progressStop chan struct{}
 	progressWG   sync.WaitGroup
+
+	stalledFetchLogMu sync.Mutex
+	stalledFetchLog   stalledFetchRecoveryLogState
 
 	bufferWait syncdl.BufferWaitTracker
 
@@ -493,8 +497,27 @@ func (ss *SyncService) RecoverStalledFetch() {
 	if !syncing || ss.pause.Paused() {
 		return
 	}
-	syncLog.Warn("Re-kicking stalled sync fetch", "head", ss.chain.CurrentBlock().Number())
+	if ss.StallRecoveryBlocked() {
+		return
+	}
+	before := ss.chain.CurrentBlock().Number()
 	ss.drainBufferedBlocks()
+	after := ss.chain.CurrentBlock().Number()
+	ss.logStalledFetchRecovery(before, after, ss.IsSyncing(), time.Now())
+}
+
+// StallRecoveryBlocked lets the watchdog distinguish a known long-running
+// commitment rebuild from an unresponsive fetch scheduler. The rebuild owns
+// its own start/progress/completion logs, so polling it every 30 seconds would
+// add noise and resource contention without advancing sync.
+func (ss *SyncService) StallRecoveryBlocked() bool {
+	blocked := statedomains.CommitmentRebuildActive()
+	if blocked {
+		ss.stalledFetchLogMu.Lock()
+		ss.stalledFetchLog = stalledFetchRecoveryLogState{}
+		ss.stalledFetchLogMu.Unlock()
+	}
+	return blocked
 }
 
 // SyncRemainingBlocks reports the current sync backlog when a sync session is

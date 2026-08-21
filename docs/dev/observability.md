@@ -30,6 +30,12 @@ The first operator-level gauges are:
 | `txpool_pending` | transactions waiting in the pool |
 | `sync_active` | 1 while a sync session is active |
 | `sync_remaining_blocks` | estimated sync backlog |
+| `state_commitment_rebuild_active` | number of full commitment branch rebuilds currently active |
+| `state_commitment_rebuild_current_rows_scanned` | authoritative latest-domain rows scanned by the active/latest rebuild |
+| `state_commitment_rebuild_current_bytes_scanned` | physical key and value bytes scanned by the active/latest rebuild |
+| `state_commitment_rebuild_current_batches_folded` | commitment batches completed by the active/latest rebuild |
+| `state_commitment_rebuild_last_progress_unix` | Unix timestamp of the latest rebuild phase/counter advance |
+| `state_lifecycle_failure_active` | 1 while the snapshot/prune lifecycle has an unresolved pass failure |
 
 The exporter also includes the existing RPC, Pebble/freezer and Go process
 metrics registered through go-ethereum's metrics package.
@@ -99,6 +105,57 @@ gtron ... --log.module net/sync=debug
 The normal info configuration does not construct or emit the large detail
 record. The Nile sampling script combines the latest real-time segment,
 periodic progress, and (when enabled) debug detail records into one sample.
+
+## Commitment rebuild and recovery logs
+
+A commitment branch rebuild is a full scan of the authoritative
+`account-latest`, `kv-generation`, and `kv-latest` tables. It rebuilds a
+derived branch index; it does not redownload or re-execute the chain. Recovery
+from an immutable branch-base root mismatch emits the marker tx/root and the
+independently observed snapshot root in the start event.
+
+The lifecycle is observable at normal info verbosity:
+
+| Event | When | Important fields |
+| --- | --- | --- |
+| `Commitment branch rebuild started` | once | `reason`, `mode`, `trigger`, `snapshotTxNum`, roots, batch limits |
+| `Commitment branch rebuild source started` | source-table transition | `source`, cumulative rows/bytes, `elapsed` |
+| `Commitment branch rebuild progress` | every 30 seconds | `phase`, `source`, rows/bytes, folded batches, rates, `sinceLastProgress` |
+| `Commitment branch rebuild completed` | once on success | final root, totals, `elapsed` |
+| `Commitment branch rebuild failed` | once on failure | last phase/source, totals, `err` |
+
+There is intentionally no percent or ETA: pre-counting the full keyspace would
+perform another expensive scan and delay recovery. Progress is proven by
+monotonically increasing `rowsScanned`, `bytesScanned`, or `batchesFolded`.
+During a long fold, those counters can remain unchanged while `phase=fold`;
+`sinceLastProgress` makes that interval explicit.
+
+The sync watchdog does not re-kick or start a fetch session while
+`state_commitment_rebuild_active` is nonzero. The rebuild progress record is
+the authoritative explanation for a stationary chain head during that time.
+Outside rebuilds, a stalled fetch emits one Info re-kick, suppresses identical
+30-second attempts, emits a Warn summary every 10 minutes, and emits an Info
+recovery transition when the head/session advances.
+
+Snapshot/prune pass errors follow the same stateful policy: first failure,
+one continuation summary per 10 minutes, then recovery. History coverage
+failures expose `historyProgress`, `visibleCoverage`, and `coverageGap` as
+numeric fields instead of requiring operators to parse the error string.
+
+Suggested alerts:
+
+- warning when a rebuild remains active for 30 minutes;
+- critical when `state_commitment_rebuild_last_progress_unix` is unchanged for
+  5 minutes while the active gauge is nonzero;
+- critical on `Commitment branch rebuild failed` or a repeatedly active
+  `state_lifecycle_failure_active` gauge.
+
+For a concise live view:
+
+```bash
+tail -F /data/gtron/main/gtron.log | \
+  rg 'Commitment branch rebuild|Sync fetch remains stalled|snapshot/prune pass'
+```
 
 ## Runtime debugging
 

@@ -110,6 +110,26 @@ func AppendStateKVGenerationCommitmentKey(dst []byte, owner common.Address) []by
 	return appendStateKVGenerationKey(dst, owner)
 }
 
+// LatestDomainCommitmentSource identifies one authoritative latest-domain
+// table visited while bootstrapping the commitment branch index. The stable
+// names are also used in operator-facing rebuild progress logs.
+type LatestDomainCommitmentSource string
+
+const (
+	LatestDomainCommitmentSourceAccounts     LatestDomainCommitmentSource = "account-latest"
+	LatestDomainCommitmentSourceKVGeneration LatestDomainCommitmentSource = "kv-generation"
+	LatestDomainCommitmentSourceKVLatest     LatestDomainCommitmentSource = "kv-latest"
+)
+
+var latestDomainCommitmentSources = [...]struct {
+	name   LatestDomainCommitmentSource
+	prefix []byte
+}{
+	{name: LatestDomainCommitmentSourceAccounts, prefix: stateAccountLatestPrefix},
+	{name: LatestDomainCommitmentSourceKVGeneration, prefix: stateKVGenerationPrefix},
+	{name: LatestDomainCommitmentSourceKVLatest, prefix: stateKVLatestPrefix},
+}
+
 // IterateLatestDomainCommitmentSources iterates every row in the three
 // latest-domain source tables (account-latest, KV-generation, KV-latest) in a
 // deterministic prefix order and calls fn with the physical (key, value) of
@@ -118,10 +138,20 @@ func AppendStateKVGenerationCommitmentKey(dst []byte, owner common.Address) []by
 // exists so callers outside rawdb can bootstrap a commitment engine from the
 // latest-domain rows without duplicating the unexported prefix literals.
 func IterateLatestDomainCommitmentSources(db ethdb.Iteratee, fn func(key, value []byte) (bool, error)) error {
-	for _, prefix := range [][]byte{stateAccountLatestPrefix, stateKVGenerationPrefix, stateKVLatestPrefix} {
-		it := db.NewIterator(prefix, nil)
+	return IterateLatestDomainCommitmentSourcesWithSource(db, func(_ LatestDomainCommitmentSource, key, value []byte) (bool, error) {
+		return fn(key, value)
+	})
+}
+
+// IterateLatestDomainCommitmentSourcesWithSource is the observable form of
+// IterateLatestDomainCommitmentSources. It additionally reports the source
+// table for each row so a long full-state rebuild can expose monotonic progress
+// without a separate pre-count scan.
+func IterateLatestDomainCommitmentSourcesWithSource(db ethdb.Iteratee, fn func(source LatestDomainCommitmentSource, key, value []byte) (bool, error)) error {
+	for _, source := range latestDomainCommitmentSources {
+		it := db.NewIterator(source.prefix, nil)
 		for it.Next() {
-			cont, err := fn(it.Key(), it.Value())
+			cont, err := fn(source.name, it.Key(), it.Value())
 			if err != nil {
 				it.Release()
 				return err

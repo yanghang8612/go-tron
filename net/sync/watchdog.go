@@ -59,6 +59,13 @@ type SyncStarter interface {
 	RecoverStalledFetch()
 }
 
+// StallRecoveryGate is an optional process-maintenance gate implemented by a
+// SyncStarter. A blocked watchdog does not start or re-kick sync; the owning
+// maintenance task is responsible for emitting its own progress logs.
+type StallRecoveryGate interface {
+	StallRecoveryBlocked() bool
+}
+
 // StallLogger formats the "Polling peer (chain stalled)" log line. Injectable
 // so the watchdog can stay package-internal yet still emit through the
 // hosting package's logger. nil is allowed (silent watchdog, for tests).
@@ -177,6 +184,9 @@ func (w *Watchdog) checkIsolation() {
 	}
 	stalledFor := time.Since(w.chain.LastInsertTime())
 	if stalledFor < w.StallThreshold {
+		return
+	}
+	if gate, ok := w.starter.(StallRecoveryGate); ok && gate.StallRecoveryBlocked() {
 		return
 	}
 	if w.starter.IsSyncing() {
