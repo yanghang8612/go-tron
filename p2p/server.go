@@ -191,19 +191,22 @@ func (s *Server) Start() error {
 	go s.acceptLoop()
 	go s.maintainLoop()
 
+	// Operator-supplied seeds are direct connectivity requirements, not merely
+	// discovery hints. Dial them immediately even when UDP discovery is enabled;
+	// otherwise cached/discovered peers can occupy every slot before the first
+	// periodic maintenance round reaches the explicit seeds.
+	for _, addr := range s.config.SeedNodes {
+		go func(addr string) {
+			if err := s.AddPeer(addr); err != nil {
+				log.Debug("Seed dial failed", "addr", addr, "err", err)
+			}
+		}(addr)
+	}
+
 	// Start discovery service if configured
 	if s.config.Discovery != nil {
 		s.config.Discovery.Start()
 		s.config.Discovery.AddBootstrap(s.peerCandidates())
-	} else {
-		// Dial seed nodes directly when discovery is disabled
-		for _, addr := range s.config.SeedNodes {
-			go func(addr string) {
-				if err := s.AddPeer(addr); err != nil {
-					log.Debug("Seed dial failed", "addr", addr, "err", err)
-				}
-			}(addr)
-		}
 	}
 
 	// The discovery table is intentionally in-memory, but a deployment restart
@@ -321,7 +324,7 @@ func (s *Server) AddPeer(addr string) error {
 	// peer set is full; addPeerConn repeats both checks to close the race with a
 	// concurrent inbound/outbound handshake.
 	s.mu.RLock()
-	full := len(s.peers) >= s.config.MaxPeers
+	full := len(s.peers) >= s.peerLimitForAddrLocked(addr)
 	_, connected := s.peers[addr]
 	s.mu.RUnlock()
 	if full {
@@ -440,7 +443,7 @@ func (s *Server) acceptLoop() {
 func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	// Capacity + dedup + per-IP cap check BEFORE expensive handshake.
 	s.mu.Lock()
-	if len(s.peers) >= s.config.MaxPeers {
+	if len(s.peers) >= s.peerLimitForAddrLocked(id) {
 		s.mu.Unlock()
 		return errPeerCapacity
 	}
@@ -470,7 +473,7 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 
 	// Re-check capacity/dedup/per-IP under lock (another peer may have joined meanwhile).
 	s.mu.Lock()
-	if len(s.peers) >= s.config.MaxPeers {
+	if len(s.peers) >= s.peerLimitForAddrLocked(id) {
 		s.mu.Unlock()
 		_ = writePostHandshakeDisconnect(conn, p2ppb.DisconnectReason_TOO_MANY_PEERS)
 		return errPeerCapacity
@@ -505,6 +508,41 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	p.Start()
 	s.handler.OnPeerConnected(p)
 	return nil
+}
+
+// peerLimitForAddrLocked reserves one connection slot for every distinct,
+// valid explicit seed that is not connected yet. Non-seed discovery and cache
+// dials therefore cannot crowd operator-supplied archive peers out during the
+// concurrent startup dial burst. The caller must hold s.mu for reading.
+func (s *Server) peerLimitForAddrLocked(addr string) int {
+	limit := s.config.MaxPeers
+	if limit <= 0 {
+		return 0
+	}
+	for _, seed := range s.config.SeedNodes {
+		if seed == addr {
+			return limit
+		}
+	}
+
+	missing := 0
+	seen := make(map[string]struct{}, len(s.config.SeedNodes))
+	for _, seed := range s.config.SeedNodes {
+		if !validCachedPeerAddress(seed) {
+			continue
+		}
+		if _, duplicate := seen[seed]; duplicate {
+			continue
+		}
+		seen[seed] = struct{}{}
+		if _, connected := s.peers[seed]; !connected {
+			missing++
+		}
+	}
+	if missing >= limit {
+		return 0
+	}
+	return limit - missing
 }
 
 // RememberApplicationPeer persists a peer only after the caller has completed

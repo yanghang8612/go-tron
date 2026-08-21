@@ -279,6 +279,71 @@ func TestServerMaintainReconnectsToSeed(t *testing.T) {
 	// No assertion needed — this just exercises the reconnect path without panic.
 }
 
+func TestServerDialsExplicitSeedImmediatelyWithDiscoveryEnabled(t *testing.T) {
+	seed := NewServer(ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, &testHandler{})
+	if err := seed.Start(); err != nil {
+		t.Fatalf("start seed: %v", err)
+	}
+	defer seed.Stop()
+
+	client := NewServer(ServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		MaxPeers:   1,
+		SeedNodes:  []string{seed.ListenAddr()},
+		Discovery:  &fakeDiscovery{},
+	}, &testHandler{})
+	if err := client.Start(); err != nil {
+		t.Fatalf("start client: %v", err)
+	}
+	defer client.Stop()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && client.PeerCount() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := client.PeerCount(); got != 1 {
+		t.Fatalf("peer count = %d, want immediate explicit seed connection", got)
+	}
+}
+
+func TestServerReservesCapacityForExplicitSeed(t *testing.T) {
+	seed := NewServer(ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, &testHandler{})
+	if err := seed.Start(); err != nil {
+		t.Fatalf("start seed: %v", err)
+	}
+	defer seed.Stop()
+
+	ordinary1 := NewServer(ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, &testHandler{})
+	if err := ordinary1.Start(); err != nil {
+		t.Fatalf("start first ordinary peer: %v", err)
+	}
+	defer ordinary1.Stop()
+	ordinary2 := NewServer(ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, &testHandler{})
+	if err := ordinary2.Start(); err != nil {
+		t.Fatalf("start second ordinary peer: %v", err)
+	}
+	defer ordinary2.Stop()
+
+	client := NewServer(ServerConfig{
+		MaxPeers:  2,
+		SeedNodes: []string{seed.ListenAddr()},
+	}, &testHandler{})
+	defer client.Stop()
+
+	if err := client.AddPeer(ordinary1.ListenAddr()); err != nil {
+		t.Fatalf("add first ordinary peer: %v", err)
+	}
+	if err := client.AddPeer(ordinary2.ListenAddr()); !errors.Is(err, errPeerCapacity) {
+		t.Fatalf("second ordinary peer error = %v, want reserved seed capacity", err)
+	}
+	if err := client.AddPeer(seed.ListenAddr()); err != nil {
+		t.Fatalf("explicit seed could not use reserved slot: %v", err)
+	}
+	if got := client.PeerCount(); got != 2 {
+		t.Fatalf("peer count = %d, want one ordinary peer plus explicit seed", got)
+	}
+}
+
 // TestServerMaintainConnectsBootstrapWithoutDiscoveryReply covers the restart
 // recovery fallback: built-in bootstrap endpoints remain direct TCP candidates
 // even when the discovery service has not produced a UDP pong/neighbours reply.
@@ -462,7 +527,7 @@ func TestServer_BootstrapNodesFedToDiscovery(t *testing.T) {
 	srv := NewServer(ServerConfig{
 		ListenAddr:     "127.0.0.1:0",
 		MaxPeers:       5,
-		SeedNodes:      []string{"1.1.1.1:11111"},
+		SeedNodes:      []string{"127.0.0.1:1"},
 		BootstrapNodes: []string{"3.3.3.3:33333", "2.2.2.2:22222"},
 		Discovery:      fake,
 	}, &testHandler{})
@@ -472,7 +537,7 @@ func TestServer_BootstrapNodesFedToDiscovery(t *testing.T) {
 	defer srv.Stop()
 
 	got := fake.snapshot()
-	want := []string{"1.1.1.1:11111", "2.2.2.2:22222", "3.3.3.3:33333"}
+	want := []string{"127.0.0.1:1", "2.2.2.2:22222", "3.3.3.3:33333"}
 	if len(got) != len(want) {
 		t.Fatalf("AddBootstrap got %v entries, want %v", got, want)
 	}
@@ -491,8 +556,8 @@ func TestServer_BootstrapNodesDeduplicated(t *testing.T) {
 	srv := NewServer(ServerConfig{
 		ListenAddr:     "127.0.0.1:0",
 		MaxPeers:       1,
-		SeedNodes:      []string{"1.1.1.1:11111", "2.2.2.2:22222"},
-		BootstrapNodes: []string{"2.2.2.2:22222", "1.1.1.1:11111"},
+		SeedNodes:      []string{"127.0.0.1:1", "127.0.0.1:2"},
+		BootstrapNodes: []string{"127.0.0.1:2", "127.0.0.1:1"},
 		Discovery:      fake,
 	}, &testHandler{})
 	if err := srv.Start(); err != nil {
@@ -501,7 +566,7 @@ func TestServer_BootstrapNodesDeduplicated(t *testing.T) {
 	defer srv.Stop()
 
 	got := fake.snapshot()
-	want := []string{"1.1.1.1:11111", "2.2.2.2:22222"}
+	want := []string{"127.0.0.1:1", "127.0.0.1:2"}
 	if len(got) != len(want) {
 		t.Fatalf("AddBootstrap got %v entries, want %v", got, want)
 	}
