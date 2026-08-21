@@ -96,8 +96,13 @@ func TestCommitmentFoldRecoversMismatchedBranchBase(t *testing.T) {
 			if _, ok, err := rawdb.ReadCommitmentBranchBase(view); err != nil || ok {
 				t.Fatalf("layer marker survived recovery ok=%v err=%v", ok, err)
 			}
-			if _, ok, err := rawdb.ReadCommitmentBranchBase(disk); err != nil || !ok {
-				t.Fatalf("disk marker changed before layer commit ok=%v err=%v", ok, err)
+			if _, ok, err := rawdb.ReadCommitmentBranchBase(disk); err != nil || ok {
+				t.Fatalf("disk marker survived durable rebuild ok=%v err=%v", ok, err)
+			}
+			// Rebuilt branch rows are derived and may stream durably, but the
+			// authoritative root remains rewindable until this layer commits.
+			if root, ok, err := rawdb.ReadLatestDomainCommitmentRoot(disk); err != nil || !ok || root != baseRoot {
+				t.Fatalf("disk root before layer commit=%x ok=%v err=%v, want %x", root, ok, err, baseRoot)
 			}
 		})
 	}

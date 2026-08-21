@@ -237,6 +237,50 @@ var _ pointread.CommitmentParentSessioner = (*LayerView)(nil)
 var _ pointread.CommitmentParentSession = (*commitmentParentReadSession)(nil)
 var _ pointread.CommitmentParentPrefetchSession = (*commitmentParentReadSession)(nil)
 
+// BeginDurableCommitmentRebuild leases the durable base for the exceptional
+// full commitment-branch bootstrap. Branch rows are a derived index, so the
+// rebuild may stream them directly to disk instead of retaining the complete
+// table in one rewindable block layer. The latest-domain root and the current
+// block's incremental branch mutations still go through this LayerView.
+//
+// Direct streaming is safe only at the oldest in-flight layer with no
+// committed overlays. Holding flushMu keeps that empty committed cut stable
+// until release. A crash can leave an incomplete legacy branch table, but not
+// a published root/marker; the next fold detects the root mismatch and repeats
+// the rebuild from authoritative latest-domain rows.
+//
+// This method is intentionally discovered through a narrow structural
+// interface in state/domains; ordinary blockbuffer callers must not bypass
+// the rewindable layer.
+func (v *LayerView) BeginDurableCommitmentRebuild() (ethdb.KeyValueStore, func(), bool) {
+	if v == nil || v.b == nil || v.l == nil {
+		return nil, nil, false
+	}
+	base, ok := v.b.base.(ethdb.KeyValueStore)
+	if !ok {
+		return nil, nil, false
+	}
+
+	v.b.flushMu.Lock()
+	v.b.mu.RLock()
+	eligible := len(v.b.layers) == 0 && len(v.b.inflight) > 0 &&
+		v.b.inflight[0] == v.l && v.l.state == layerInflight
+	v.b.mu.RUnlock()
+	if !eligible {
+		v.b.flushMu.Unlock()
+		return nil, nil, false
+	}
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			v.b.clearBaseReadCache()
+			v.b.flushMu.Unlock()
+		})
+	}
+	return base, release, true
+}
+
 // NewCommitmentParentView holds the durable engine's lifecycle read lease for
 // one fold. It deliberately does not pin a Pebble snapshot or reuse iterators:
 // each exact-key lookup retains DB.Get's point-read/Bloom-filter behaviour.

@@ -640,6 +640,23 @@ func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
 // operations after every sibling has published.
 func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*BranchData, batchCount int) error {
 	if !s.ownedValue {
+		// A direct durable rebuild deliberately bypasses blockbuffer ownership.
+		// Commit each sibling flush as one bounded database batch instead of one
+		// Pebble transaction per branch. Subsequent rebuild folds can read the
+		// batch immediately, while memory is released after Batch.Write.
+		if batcher, ok := s.db.(ethdb.Batcher); ok && len(keys) > 1 {
+			batch := batcher.NewBatch()
+			defer batch.Reset()
+			bp := borrowEncodeBuf()
+			defer returnEncodeBuf(bp)
+			for _, key := range keys {
+				*bp = branches[key].EncodeTo((*bp)[:0])
+				if err := s.keyspace.Write(batch, []byte(key), *bp); err != nil {
+					return err
+				}
+			}
+			return batch.Write()
+		}
 		for _, key := range keys {
 			if err := s.PutBranch([]byte(key), *branches[key]); err != nil {
 				return err
@@ -814,9 +831,13 @@ func NewStagedCommitmentStoreWithRepair(db CommitmentDB, repair CommitmentSnapsh
 // and its delta generations and rebuilds a complete legacy branch table from
 // the authoritative latest-domain rows visible through db.
 //
-// Production fold callers pass a blockbuffer layer, so both invalidation and
-// rebuild are committed atomically with the block and are discarded together
-// if the fold fails. All other marker, snapshot, and storage errors remain
+// Production fold callers pass a blockbuffer layer. When that layer is the
+// oldest in-flight block and no committed overlay remains, Rebuild streams the
+// derived legacy branch table to the durable base under an exclusive lease;
+// marker invalidation and the authoritative root remain in the rewindable
+// layer. A crash can therefore leave only an unpublished partial derived table,
+// which the next root validation rebuilds. Other layouts retain the fully
+// buffered fallback. All unrelated marker, snapshot, and storage errors remain
 // strict and are returned without attempting recovery.
 func NewRecoveringStagedCommitmentStoreWithRepair(db CommitmentDB, repair CommitmentSnapshotRepair, asyncParentBranches bool) (LatestCommitmentStore, error) {
 	store, err := NewStagedCommitmentStoreWithRepair(db, repair, asyncParentBranches)
@@ -1061,6 +1082,10 @@ const (
 	stagedCommitmentRebuildBatchBytes   = 64 << 20
 )
 
+type durableCommitmentRebuildProvider interface {
+	BeginDurableCommitmentRebuild() (ethdb.KeyValueStore, func(), bool)
+}
+
 // Rebuild bootstraps the full staged trie from every latest-domain source row,
 // writes the root row, and returns the root. This is the one-time fallback used
 // when no branch state is present; it must not run on a normal incremental
@@ -1070,10 +1095,97 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 		rebuildSpyHook()
 	}
 	s.bootstrapCount++
+	if provider, ok := s.db.(durableCommitmentRebuildProvider); ok {
+		if durable, release, leased := provider.BeginDurableCommitmentRebuild(); leased {
+			root, err := s.rebuildDurable(durable, stagedCommitmentRebuildBatchEntries, stagedCommitmentRebuildBatchBytes)
+			release()
+			return root, err
+		}
+	}
 	return s.rebuildWithBatchLimits(stagedCommitmentRebuildBatchEntries, stagedCommitmentRebuildBatchBytes)
 }
 
+// rebuildDurable streams the complete legacy branch table to the durable base
+// while keeping the authoritative root row in the caller's rewindable layer.
+// It is used only under LayerView's exclusive rebuild lease. Marker and delta
+// invalidation is mirrored into the layer so an older buffered marker can never
+// reactivate after the direct table has replaced its snapshot-backed layout.
+func (s *stagedCommitmentStore) rebuildDurable(durable ethdb.KeyValueStore, maxEntries, maxBytes int) (common.Hash, error) {
+	if durable == nil {
+		return common.Hash{}, errors.New("domains: nil durable commitment rebuild store")
+	}
+	if err := invalidateCommitmentBranchMetadata(s.db); err != nil {
+		return common.Hash{}, err
+	}
+
+	bootstrap := newStagedCommitmentStoreWithBranchStore(s.db, newRawdbBranchStore(durable))
+	root, err := bootstrap.rebuildBranchesWithBatchLimits(maxEntries, maxBytes)
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	if err := s.store.close(); err != nil {
+		return common.Hash{}, err
+	}
+	s.store = newRawdbBranchStore(s.db)
+	s.trie = newCommitmentTrie(s.store)
+	s.trie.parallelMinOps = ParallelFoldMinOps
+	s.initErr = nil
+	s.branchStateWritten = true
+	if err := s.WriteRoot(root); err != nil {
+		return common.Hash{}, err
+	}
+	return root, nil
+}
+
+// invalidateCommitmentBranchMetadata masks the snapshot/delta layout in the
+// current rewindable layer without deleting the legacy namespace. The durable
+// bootstrap owns replacement of that namespace; a layer range tombstone there
+// would also mask the freshly streamed rows.
+func invalidateCommitmentBranchMetadata(db CommitmentDB) error {
+	base, based, err := rawdb.ReadCommitmentBranchBase(db)
+	if err != nil {
+		return err
+	}
+	rotation, rotating, err := rawdb.ReadCommitmentBranchRotation(db)
+	if err != nil {
+		return err
+	}
+	if err := rawdb.DeleteCommitmentBranchBase(db); err != nil {
+		return err
+	}
+	if err := rawdb.DeleteCommitmentBranchRotation(db); err != nil {
+		return err
+	}
+	generations := [...]uint64{base.Generation, rotation.Generation}
+	for i, generation := range generations {
+		if generation == 0 || (i == 0 && !based) || (i == 1 && !rotating) ||
+			(i == 1 && generation == generations[0]) {
+			continue
+		}
+		keyspace, err := rawdb.NewCommitmentBranchDeltaKeyspace(generation)
+		if err != nil {
+			return err
+		}
+		if err := keyspace.DeleteAll(db); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *stagedCommitmentStore) rebuildWithBatchLimits(maxEntries, maxBytes int) (common.Hash, error) {
+	root, err := s.rebuildBranchesWithBatchLimits(maxEntries, maxBytes)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if err := s.WriteRoot(root); err != nil {
+		return common.Hash{}, err
+	}
+	return root, nil
+}
+
+func (s *stagedCommitmentStore) rebuildBranchesWithBatchLimits(maxEntries, maxBytes int) (common.Hash, error) {
 	// Fold MERGES into existing branches, so a rebuild must start from a clean
 	// branch keyspace; otherwise rows from an earlier (e.g. pre-rewind) tip would
 	// contribute to the rebuilt root.
@@ -1128,9 +1240,6 @@ func (s *stagedCommitmentStore) rebuildWithBatchLimits(maxEntries, maxBytes int)
 		if err != nil {
 			return common.Hash{}, err
 		}
-	}
-	if err := s.WriteRoot(root); err != nil {
-		return common.Hash{}, err
 	}
 	return root, nil
 }

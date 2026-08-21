@@ -278,8 +278,22 @@ func TestRecoveringStagedStoreRebuildsMismatchedBaseInAsyncLayer(t *testing.T) {
 	if rows := countBranchKeyspaceRows(t, delta, view); rows != 0 {
 		t.Fatalf("layer delta rows after recovery = %d, want 0", rows)
 	}
-	if _, ok, err := rawdb.ReadCommitmentBranchBase(disk); err != nil || !ok {
-		t.Fatalf("disk marker changed before layer commit ok=%v err=%v", ok, err)
+	// The complete branch table is a derived index and is streamed directly to
+	// disk under the blockbuffer rebuild lease. Its stale marker/delta are
+	// invalidated first, so a crash exposes an unbound legacy table whose root is
+	// revalidated and rebuilt on restart. The authoritative root row remains in
+	// the rewindable layer until block commit.
+	if _, ok, err := rawdb.ReadCommitmentBranchBase(disk); err != nil || ok {
+		t.Fatalf("disk marker survived durable rebuild ok=%v err=%v", ok, err)
+	}
+	if rows := countBranchKeyspaceRows(t, delta, disk); rows != 0 {
+		t.Fatalf("disk delta rows after durable rebuild = %d, want 0", rows)
+	}
+	if rows := countBranchKeyspaceRows(t, rawdb.LegacyCommitmentBranchKeyspace(), disk); rows == 0 {
+		t.Fatal("durable rebuild did not stream legacy branch rows to disk")
+	}
+	if stored, ok, err := rawdb.ReadLatestDomainCommitmentRoot(disk); err != nil || !ok || stored != baseRoot {
+		t.Fatalf("durable root changed before layer commit=%x ok=%v err=%v, want old %x", stored, ok, err, baseRoot)
 	}
 
 	if err := buffer.CommitInflight(handle); err != nil {
