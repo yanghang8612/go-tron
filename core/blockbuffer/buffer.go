@@ -27,6 +27,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -3582,60 +3583,30 @@ func (b *Buffer) finishIterator(overlay *overlayState, prefix, start []byte) eth
 }
 
 func finishIteratorWithBase(base ethdb.KeyValueReader, overlay *overlayState, prefix, start []byte) ethdb.Iterator {
-	var entries []bufferIteratorEntry
+	entries := make([]bufferIteratorEntry, 0, len(overlay.m))
+	for key, op := range overlay.m {
+		entries = append(entries, bufferIteratorEntry{key: key, value: op.value, deleted: op.deleted})
+	}
+	slices.SortFunc(entries, func(a, b bufferIteratorEntry) int {
+		return strings.Compare(a.key, b.key)
+	})
+
+	var baseIt ethdb.Iterator
 	if base != nil {
 		if iter, ok := base.(ethdb.Iteratee); ok {
-			it := iter.NewIterator(prefix, start)
-			for it.Next() {
-				key := it.Key()
-				var k string
-				if len(key) != 0 {
-					// Iterator keys remain valid until the next Next call. The map
-					// lookup and delete below are synchronous and never retain k, so
-					// avoid copying every base key merely to probe the overlay.
-					k = unsafe.String(unsafe.SliceData(key), len(key))
-				}
-				if op, masked := overlay.m[k]; masked {
-					if !op.deleted {
-						entries = append(entries, bufferIteratorEntry{
-							key:   append([]byte(nil), key...),
-							value: op.value,
-						})
-					}
-					delete(overlay.m, k)
-					continue
-				}
-				entries = append(entries, bufferIteratorEntry{
-					key:   append([]byte(nil), key...),
-					value: append([]byte(nil), it.Value()...),
-				})
-			}
-			err := it.Error()
-			it.Release()
-			if err != nil {
-				return &bufferIterator{err: err}
-			}
+			baseIt = iter.NewIterator(prefix, start)
 		}
 		// If the base does not implement Iteratee, only the overlay is
 		// surfaced. This matches the contract that NewIterator on a reader
 		// with no iteration support cannot synthesize one.
 	}
-	// Overlay-only keys (no disk hit). Tombstones for non-existent disk keys
-	// contribute nothing.
-	for k, op := range overlay.m {
-		if op.deleted {
-			continue
-		}
-		entries = append(entries, bufferIteratorEntry{key: []byte(k), value: op.value})
-	}
-
-	// Sort ascending by key. The disk leg arrives already sorted; the overlay
-	// leg is map-order. One sort over the combined list is cleaner than a
-	// merge-cursor for small N.
-	sort.Slice(entries, func(i, j int) bool {
-		return bytes.Compare(entries[i].key, entries[j].key) < 0
-	})
-	return &bufferIterator{entries: entries, idx: -1}
+	// Keep the base iterator lazy. Full latest-domain scans can cover tens of
+	// gigabytes, and materialising every base key/value here made a single
+	// iterator exceed the service's memory limit before its caller could consume
+	// the first row. The overlay is already a private snapshot and is normally
+	// tiny, so only it is sorted eagerly; bufferIterator merges both ordered legs
+	// on demand.
+	return &bufferIterator{base: baseIt, overlay: entries}
 }
 
 func seekPrefixWithBase(base ethdb.KeyValueReader, overlay *overlayState, prefix, start []byte) (key, value []byte, ok bool, err error) {
@@ -3693,47 +3664,124 @@ func seekPrefixWithBase(base ethdb.KeyValueReader, overlay *overlayState, prefix
 	return nil, nil, false, nil
 }
 
-// bufferIterator is a snapshot iterator returned by Buffer.NewIterator.
-// Holds no locks. Key/Value buffers are owned by the iterator; callers must
-// not mutate them (mirrors the ethdb.Iterator contract).
+// bufferIterator is a snapshot iterator returned by Buffer.NewIterator. It
+// holds no blockbuffer locks and lazily merges the base iterator with the
+// captured overlay. Key/Value remain valid until the next Next call; callers
+// must not mutate them (mirrors the ethdb.Iterator contract).
 type bufferIterator struct {
-	entries []bufferIteratorEntry
-	idx     int
-	err     error
+	base        ethdb.Iterator
+	overlay     []bufferIteratorEntry
+	overlayIdx  int
+	baseReady   bool
+	advanceBase bool
+	key, value  []byte
+	err         error
+	released    bool
 }
 
 type bufferIteratorEntry struct {
-	key, value []byte
+	key     string
+	value   []byte
+	deleted bool
 }
 
 func (it *bufferIterator) Next() bool {
-	if it.err != nil {
+	if it.err != nil || it.released {
 		return false
 	}
-	if it.idx+1 >= len(it.entries) {
-		return false
+	it.key, it.value = nil, nil
+	if it.advanceBase {
+		it.baseReady = false
+		it.advanceBase = false
 	}
-	it.idx++
-	return true
+
+	for {
+		if !it.baseReady && it.base != nil {
+			if it.base.Next() {
+				it.baseReady = true
+			} else {
+				it.err = it.base.Error()
+				it.base.Release()
+				it.base = nil
+				if it.err != nil {
+					return false
+				}
+			}
+		}
+
+		overlayReady := it.overlayIdx < len(it.overlay)
+		if !it.baseReady && !overlayReady {
+			return false
+		}
+		if !it.baseReady {
+			entry := &it.overlay[it.overlayIdx]
+			it.overlayIdx++
+			if entry.deleted {
+				continue
+			}
+			it.key = unsafe.Slice(unsafe.StringData(entry.key), len(entry.key))
+			it.value = entry.value
+			return true
+		}
+		if !overlayReady {
+			it.key, it.value = it.base.Key(), it.base.Value()
+			it.advanceBase = true
+			return true
+		}
+
+		entry := &it.overlay[it.overlayIdx]
+		baseKey := it.base.Key()
+		baseKeyString := unsafe.String(unsafe.SliceData(baseKey), len(baseKey))
+		switch strings.Compare(baseKeyString, entry.key) {
+		case -1:
+			it.key, it.value = baseKey, it.base.Value()
+			it.advanceBase = true
+			return true
+		case 0:
+			// The overlay masks the matching base row whether it is a write or
+			// a tombstone. Advancing the base on the next loop/call preserves
+			// the returned base buffers until Next is called again.
+			it.overlayIdx++
+			if entry.deleted {
+				it.baseReady = false
+				continue
+			}
+			it.key = unsafe.Slice(unsafe.StringData(entry.key), len(entry.key))
+			it.value = entry.value
+			it.advanceBase = true
+			return true
+		default:
+			it.overlayIdx++
+			if entry.deleted {
+				continue
+			}
+			it.key = unsafe.Slice(unsafe.StringData(entry.key), len(entry.key))
+			it.value = entry.value
+			return true
+		}
+	}
 }
 
 func (it *bufferIterator) Error() error { return it.err }
 
 func (it *bufferIterator) Key() []byte {
-	if it.idx < 0 || it.idx >= len(it.entries) {
-		return nil
-	}
-	return it.entries[it.idx].key
+	return it.key
 }
 
 func (it *bufferIterator) Value() []byte {
-	if it.idx < 0 || it.idx >= len(it.entries) {
-		return nil
-	}
-	return it.entries[it.idx].value
+	return it.value
 }
 
 func (it *bufferIterator) Release() {
-	it.entries = nil
-	it.idx = 0
+	if it.released {
+		return
+	}
+	it.released = true
+	if it.base != nil {
+		it.base.Release()
+	}
+	it.base = nil
+	it.overlay = nil
+	it.key, it.value = nil, nil
+	it.baseReady = false
 }

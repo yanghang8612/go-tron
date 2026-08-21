@@ -1056,6 +1056,11 @@ var rebuildSpyHook func()
 // calls it.
 func SetRebuildSpyHook(fn func()) { rebuildSpyHook = fn }
 
+const (
+	stagedCommitmentRebuildBatchEntries = 32 * 1024
+	stagedCommitmentRebuildBatchBytes   = 64 << 20
+)
+
 // Rebuild bootstraps the full staged trie from every latest-domain source row,
 // writes the root row, and returns the root. This is the one-time fallback used
 // when no branch state is present; it must not run on a normal incremental
@@ -1065,6 +1070,10 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 		rebuildSpyHook()
 	}
 	s.bootstrapCount++
+	return s.rebuildWithBatchLimits(stagedCommitmentRebuildBatchEntries, stagedCommitmentRebuildBatchBytes)
+}
+
+func (s *stagedCommitmentStore) rebuildWithBatchLimits(maxEntries, maxBytes int) (common.Hash, error) {
 	// Fold MERGES into existing branches, so a rebuild must start from a clean
 	// branch keyspace; otherwise rows from an earlier (e.g. pre-rewind) tip would
 	// contribute to the rebuilt root.
@@ -1072,19 +1081,53 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 		return common.Hash{}, err
 	}
 	s.branchStateWritten = true
-	var updates []Update
+	capacity := maxEntries
+	if capacity <= 0 {
+		capacity = 1024
+	}
+	updates := make([]Update, 0, capacity)
+	batchBytes := 0
+	var root common.Hash
+	folded := false
+	flush := func() error {
+		if len(updates) == 0 {
+			return nil
+		}
+		var err error
+		root, err = s.trie.Fold(updates)
+		if err != nil {
+			return err
+		}
+		folded = true
+		clear(updates)
+		updates = updates[:0]
+		batchBytes = 0
+		return nil
+	}
 	if err := rawdb.IterateLatestDomainCommitmentSources(s.db, func(key, value []byte) (bool, error) {
 		updates = append(updates, Update{
 			Key:   append([]byte(nil), key...),
 			Value: append([]byte(nil), value...),
 		})
+		batchBytes += len(key) + len(value)
+		if (maxEntries > 0 && len(updates) >= maxEntries) || (maxBytes > 0 && batchBytes >= maxBytes) {
+			if err := flush(); err != nil {
+				return false, err
+			}
+		}
 		return true, nil
 	}); err != nil {
 		return common.Hash{}, err
 	}
-	root, err := s.trie.Fold(updates)
-	if err != nil {
+	if err := flush(); err != nil {
 		return common.Hash{}, err
+	}
+	if !folded {
+		var err error
+		root, err = s.trie.Fold(nil)
+		if err != nil {
+			return common.Hash{}, err
+		}
 	}
 	if err := s.WriteRoot(root); err != nil {
 		return common.Hash{}, err

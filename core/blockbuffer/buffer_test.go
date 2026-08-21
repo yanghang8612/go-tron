@@ -1914,6 +1914,32 @@ func TestBuffer_NewIterator_BaseOnly(t *testing.T) {
 	}
 }
 
+func TestBuffer_NewIteratorStreamsBaseRows(t *testing.T) {
+	base := &countingIteratorStore{KeyValueStore: rawdb.NewMemoryDatabase()}
+	for i := 0; i < 2048; i++ {
+		key := []byte(fmt.Sprintf("state/%04d", i))
+		if err := base.Put(key, bytes.Repeat([]byte{byte(i)}, 1024)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := New(base)
+
+	it := b.NewIterator([]byte("state/"), nil)
+	defer it.Release()
+	if base.nextCalls != 0 {
+		t.Fatalf("base iterator was consumed eagerly: Next calls = %d, want 0", base.nextCalls)
+	}
+	if !it.Next() {
+		t.Fatalf("first Next failed: %v", it.Error())
+	}
+	if got := string(it.Key()); got != "state/0000" {
+		t.Fatalf("first key = %q, want state/0000", got)
+	}
+	if base.nextCalls != 1 {
+		t.Fatalf("base iterator Next calls after first row = %d, want 1", base.nextCalls)
+	}
+}
+
 func TestBuffer_SeekPrefixStopsAfterFirstVisibleBaseEntry(t *testing.T) {
 	base := &countingIteratorStore{KeyValueStore: rawdb.NewMemoryDatabase()}
 	for i := 1; i <= 2048; i++ {
@@ -1974,7 +2000,7 @@ func BenchmarkBufferPrefixFirst(b *testing.B) {
 			}
 		}
 	})
-	b.Run("materialized-iterator-first", func(b *testing.B) {
+	b.Run("streaming-iterator-first", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			it := buf.NewIterator(prefix, start)
 			if !it.Next() || string(it.Key()) != "history/key/00010000" {

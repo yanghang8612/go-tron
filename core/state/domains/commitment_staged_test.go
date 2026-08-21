@@ -525,6 +525,52 @@ func TestStagedCommitmentUpdateMatchesRebuild(t *testing.T) {
 	}
 }
 
+func TestStagedCommitmentRebuildBatchesMatchSingleFold(t *testing.T) {
+	seed := func(t *testing.T) ethdb.KeyValueStore {
+		t.Helper()
+		db := rawdb.NewMemoryDatabase()
+		for i := 0; i < 64; i++ {
+			owner := common.Address{0x41, byte(i), byte(i >> 8)}
+			if err := rawdb.WriteStateAccountLatest(db, owner, []byte{byte(i), byte(i * 3)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return db
+	}
+
+	oneShotDB := seed(t)
+	oneShot := newStagedCommitmentStore(oneShotDB)
+	oneShotRoot, err := oneShot.rebuildWithBatchLimits(1024, 1<<20)
+	if err != nil {
+		t.Fatalf("single-fold rebuild: %v", err)
+	}
+
+	batchedDB := seed(t)
+	batched := newStagedCommitmentStore(batchedDB)
+	batchedRoot, err := batched.rebuildWithBatchLimits(3, 32)
+	if err != nil {
+		t.Fatalf("batched rebuild: %v", err)
+	}
+	if batchedRoot != oneShotRoot {
+		t.Fatalf("batched rebuild root = %x, want single-fold root %x", batchedRoot, oneShotRoot)
+	}
+
+	update := []rawdb.StateCommitmentUpdate{
+		rawdb.NewStateCommitmentPut(rawdb.StateAccountLatestCommitmentKey(common.Address{0x41, 0x20}), []byte("changed")),
+	}
+	want, err := oneShot.Update(update)
+	if err != nil {
+		t.Fatalf("single-fold store update: %v", err)
+	}
+	got, err := batched.Update(update)
+	if err != nil {
+		t.Fatalf("batched store update: %v", err)
+	}
+	if got != want {
+		t.Fatalf("batched store update root = %x, want %x", got, want)
+	}
+}
+
 // TestStagedCommitmentRebuildClearsStaleBranches pins the rewind/fork-switch
 // fallback contract: Rebuild must reflect EXACTLY the current latest-domain
 // source rows, independent of any branch state left over from an earlier (taller)
