@@ -190,6 +190,38 @@ func TestJavaTronApplicationHello(t *testing.T) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+	if fetchID := os.Getenv("JAVA_TRON_FETCH_BLOCK_ID"); fetchID != "" {
+		h.mu.Lock()
+		hasHello := false
+		for _, message := range h.messages {
+			hasHello = hasHello || message.code == MsgHello
+		}
+		messageCount := len(h.messages)
+		h.mu.Unlock()
+		if hasHello {
+			fetchHash, fetchNum := decodeBlockID("JAVA_TRON_FETCH_BLOCK_ID")
+			request, err := proto.Marshal(&corepb.Inventory{
+				Type: corepb.Inventory_BLOCK,
+				Ids:  [][]byte{fetchHash},
+			})
+			if err != nil {
+				t.Fatalf("marshal block fetch request: %v", err)
+			}
+			peers[0].Send(MsgFetchInvData, request)
+			t.Logf("requested historical block=%d", fetchNum)
+			deadline = time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				h.mu.Lock()
+				responseCount := len(h.messages)
+				disconnectedCount := len(h.disconnected)
+				h.mu.Unlock()
+				if responseCount > messageCount || disconnectedCount > 0 {
+					break
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+		}
+	}
 	h.mu.Lock()
 	messages := append([]struct {
 		code    byte
@@ -215,6 +247,14 @@ func TestJavaTronApplicationHello(t *testing.T) {
 				continue
 			}
 			t.Logf("remote Disconnect: reason=%s", remote.Reason)
+		case MsgBlock:
+			var remote corepb.Block
+			if err := proto.Unmarshal(message.payload, &remote); err != nil {
+				t.Logf("remote malformed Block: %v", err)
+				continue
+			}
+			t.Logf("remote Block: number=%d bytes=%d",
+				remote.GetBlockHeader().GetRawData().GetNumber(), len(message.payload))
 		default:
 			t.Logf("remote application message: code=%s payload=%d bytes", MsgName(message.code), len(message.payload))
 		}
