@@ -3329,12 +3329,26 @@ func (s *StateDB) CopyBlockExecutionBase() (*StateDB, error) {
 }
 
 func (s *StateDB) newCopyBase(accountHint int) *StateDB {
+	witnesses := make(map[tcommon.Address]*types.Witness, len(s.witnesses))
+	for addr, witness := range s.witnesses {
+		if witness != nil {
+			witnesses[addr] = witness.Copy()
+		}
+	}
+	dirtyWitnesses := make(map[tcommon.Address]struct{}, len(s.dirtyWitnesses))
+	for addr := range s.dirtyWitnesses {
+		dirtyWitnesses[addr] = struct{}{}
+	}
 	return &StateDB{
-		db:                      s.db,
-		dbErr:                   s.dbErr,
-		stateObjects:            make(map[tcommon.Address]*stateObject, accountHint),
-		witnesses:               make(map[tcommon.Address]*types.Witness),
-		dirtyWitnesses:          make(map[tcommon.Address]struct{}),
+		db:           s.db,
+		dbErr:        s.dbErr,
+		stateObjects: make(map[tcommon.Address]*stateObject, accountHint),
+		// Witness updates are cached outside stateObjects and are flushed only
+		// after transaction execution. Copies used by speculative workers and
+		// the canonical-boundary oracle must therefore retain the exact in-memory
+		// witness view instead of rehydrating an older durable capsule.
+		witnesses:               witnesses,
+		dirtyWitnesses:          dirtyWitnesses,
 		txFinalizeDirty:         make(map[tcommon.Address]struct{}),
 		dirtyObjects:            make(map[tcommon.Address]struct{}, accountHint),
 		journal:                 newJournal(),

@@ -301,6 +301,7 @@ type BlockChain struct {
 	// taken and the synchronous commit path runs unchanged — byte-identical.
 	asyncCommit       bool
 	parallelTransfers bool
+	parallelVM        bool
 	commitDepth       int // resolved at NewBlockChain (GTRON_ASYNC_COMMIT_DEPTH), ≥2
 	commitQueue       chan *commitJob
 	commitPending     *flushBarrier
@@ -350,6 +351,20 @@ func (bc *BlockChain) SetParallelTransferExecution(enabled bool) {
 		parallelTransferEnabledGauge.Update(1)
 	} else {
 		parallelTransferEnabledGauge.Update(0)
+	}
+}
+
+// SetParallelVMExecution enables the sparse speculative Trigger/Create smart
+// contract publication cohorts. Every candidate is re-executed through the
+// authoritative serial path at its canonical transaction boundary before its
+// retained post-images may be published. This remains a separate operational
+// opt-in from plain TransferContract publication.
+func (bc *BlockChain) SetParallelVMExecution(enabled bool) {
+	bc.parallelVM = enabled
+	if enabled {
+		parallelVMEnabledGauge.Update(1)
+	} else {
+		parallelVMEnabledGauge.Update(0)
 	}
 }
 
@@ -1414,9 +1429,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	if accountStateRootEnabled {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers, captureBalanceTrace: balanceTraceEnabled})
+		txInfos, javaAccountStateRoot, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers, parallelVM: bc.parallelVM, captureBalanceTrace: balanceTraceEnabled})
 	} else {
-		txInfos, _, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers, captureBalanceTrace: balanceTraceEnabled})
+		txInfos, _, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers, parallelVM: bc.parallelVM, captureBalanceTrace: balanceTraceEnabled})
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)

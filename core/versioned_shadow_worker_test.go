@@ -1,15 +1,18 @@
 package core
 
 import (
+	"bytes"
 	"container/heap"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -1565,6 +1568,120 @@ func TestVMCanonicalBoundarySerialVerificationRejectsMutatedStorageWrite(t *test
 	verification = verifyVMResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
 	if verification.matched() || verification.writeMatch || !verification.infoMatch || verification.err != nil {
 		t.Fatalf("mutated storage write was not isolated as a boundary mismatch: %+v", verification)
+	}
+}
+
+func TestVMCanonicalBoundarySerialVerificationUsesAuthoritativeCachedAccount(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	base, err := state.New(tcommon.Hash{}, state.NewDatabase(disk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x85)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	base.SetCode(contractAddr, []byte{0x60, 0x01, 0x60, 0x02, 0x01, 0x50, 0x00})
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := base.GetBalance(owner); got != 100_000_000 {
+		t.Fatalf("cached owner balance = %d, want 100000000", got)
+	}
+
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	tx.Proto().RawData.FeeLimit = 10_000_000
+	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	cfg := discardShadowRunConfig{
+		block:                   block,
+		db:                      ethrawdb.NewMemoryDatabase(),
+		transactions:            []*types.Transaction{tx},
+		energyLimitForkBlockNum: params.DefaultBlockNumForEnergyLimit,
+		retainInfos:             true,
+	}
+	shadow := prepareTransferExecutionBlock(base, dynProps, block.Number(), false)
+	pre := shadow.preexecuteVMSenderChains(cfg, false)
+	if pre == nil || len(pre.results) != 1 || !preexecutedResultReady(&pre.results[0]) {
+		t.Fatalf("VM preexecution unavailable: %+v", pre)
+	}
+	result := &pre.results[0]
+	override, admitted := overridePublicNetReservation(result, dynProps)
+	if !admitted {
+		t.Fatal("public-net reservation was not admitted")
+	}
+	defer override.restore()
+
+	// Model a cache/backing-store visibility gap. The canonical StateDB still
+	// owns the exact account used by normal serial execution. An oracle built
+	// with CopyBlockExecutionBase would omit that clean account and share the
+	// speculative copy's failure mode; the full-copy oracle must remain exact.
+	if err := rawdb.DeleteStateAccountLatest(disk, owner); err != nil {
+		t.Fatal(err)
+	}
+	if got := base.GetBalance(owner); got != 100_000_000 {
+		t.Fatalf("authoritative cached owner balance after hot-row removal = %d", got)
+	}
+	verification := verifyVMResultAtCanonicalBoundary(base, dynProps, 0, result, cfg)
+	if !verification.matched() {
+		t.Fatalf("full-copy boundary oracle lost authoritative cached state: %+v", verification)
+	}
+}
+
+func TestVMCanonicalBoundarySerialOracleRejectionIsObservable(t *testing.T) {
+	var buf bytes.Buffer
+	previousLogger := gtronlog.Root()
+	t.Cleanup(func() { gtronlog.SetDefault(previousLogger) })
+	gtronlog.SetDefault(gtronlog.NewLogger(gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelWarn)))
+
+	contractAddr := testProcessorAddr(0x86)
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1234}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	logVMSerialOracleRejection(discardShadowRunConfig{
+		block:        block,
+		transactions: []*types.Transaction{tx},
+	}, 0, vmBoundarySerialVerification{
+		infoMatch:    true,
+		writeMatch:   false,
+		balanceMatch: true,
+		err:          errors.New("injected oracle failure"),
+	})
+
+	output := buf.String()
+	for _, want := range []string{
+		"Speculative VM result rejected by canonical serial oracle",
+		"module=core/chain",
+		"block=1234",
+		"txIndex=0",
+		"infoMatch=true",
+		"writeSetMatch=false",
+		"balanceTraceMatch=true",
+		"action=serial-fallback",
+		"injected oracle failure",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("oracle rejection log missing %q:\n%s", want, output)
+		}
 	}
 }
 

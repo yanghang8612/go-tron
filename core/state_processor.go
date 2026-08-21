@@ -912,6 +912,7 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 
 type processBlockOptions struct {
 	parallelTransfers   bool
+	parallelVM          bool
 	captureBalanceTrace bool
 }
 
@@ -961,7 +962,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	accountStateMark := statedb.JournalMark()
 	var txScratch applyTransactionScratch
 	transactions := block.Transactions()
-	shadowEnabled := txInfoBatch != nil && (validateEnvelope || options.parallelTransfers)
+	shadowEnabled := txInfoBatch != nil && (validateEnvelope || options.parallelTransfers || options.parallelVM)
 	var transferShadow speculativeTransferShadow
 	var versionedShadow *versionedAccessShadow
 	if shadowEnabled {
@@ -1037,9 +1038,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				// VM is the dominant historical-sync family. Every sampled block
 				// retains the serial reference; one narrow cohort may publish only
 				// after the ordered bandwidth and block-energy carriers admit it.
-				vmAsyncRetry := options.parallelTransfers && useVMSenderRetryObservation(block.Number())
+				vmAsyncRetry := options.parallelVM && useVMSenderRetryObservation(block.Number())
 				vmSenderChainPreexecution = discardShadow.preexecuteVMSenderChains(discardCfg, vmAsyncRetry)
-				if options.parallelTransfers && useVMSenderChainPublication(block.Number()) {
+				if options.parallelVM && useVMSenderChainPublication(block.Number()) {
 					parallelVMBlocksCounter.Inc(1)
 					if vmSenderChainPreexecution != nil {
 						vmSenderChainPublication = true
@@ -1284,7 +1285,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				continue
 			}
 		}
-		if options.parallelTransfers && vmSenderRetry != nil {
+		if options.parallelVM && vmSenderRetry != nil {
 			if retryResult, found := vmSenderRetry.selectedResultForPublication(i); found {
 				parallelVMAsyncRetryPublishCandidatesCounter.Inc(1)
 				parallelVMCandidatesCounter.Inc(1)
@@ -1315,6 +1316,16 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 						break
 					}
 					if err := statedb.ValidateTransactionWriteSetApply(retryResult.writes, dynProps, transactionDB); err != nil {
+						publicNetOverride.restore()
+						parallelVMAsyncRetryPublishPreflightCounter.Inc(1)
+						parallelVMPreflightFallbackCounter.Inc(1)
+						break
+					}
+					// Retry publication must pass the same independent serial oracle as
+					// block-start publication. Read-version validation proves only the
+					// dependencies the worker recorded; it cannot prove that an omitted
+					// read or a shared bad execution base did not affect the result.
+					if !validateVMResultAtCanonicalBoundary(statedb, dynProps, i, retryResult, discardCfg) {
 						publicNetOverride.restore()
 						parallelVMAsyncRetryPublishPreflightCounter.Inc(1)
 						parallelVMPreflightFallbackCounter.Inc(1)
@@ -1404,31 +1415,11 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					parallelVMPublicNetFallbackCounter.Inc(1)
 					break
 				}
-				parallelVMSerialVerifyCandidatesCounter.Inc(1)
-				verifyStarted := time.Now()
-				verification := verifyVMResultAtCanonicalBoundary(statedb, dynProps, i, preResult, discardCfg)
-				parallelVMSerialVerifyNanosCounter.Inc(time.Since(verifyStarted).Nanoseconds())
-				if verification.err != nil {
-					publicNetOverride.restore()
-					parallelVMSerialVerifyErrorsCounter.Inc(1)
-					parallelVMPreflightFallbackCounter.Inc(1)
-					break
-				}
-				if !verification.infoMatch {
-					parallelVMSerialVerifyInfoMismatchCounter.Inc(1)
-				}
-				if !verification.writeMatch {
-					parallelVMSerialVerifyWriteMismatchCounter.Inc(1)
-				}
-				if !verification.balanceMatch {
-					parallelVMSerialVerifyBalanceMismatchCounter.Inc(1)
-				}
-				if !verification.matched() {
+				if !validateVMResultAtCanonicalBoundary(statedb, dynProps, i, preResult, discardCfg) {
 					publicNetOverride.restore()
 					parallelVMPreflightFallbackCounter.Inc(1)
 					break
 				}
-				parallelVMSerialVerifyMatchesCounter.Inc(1)
 				if err := statedb.ValidateTransactionWriteSetApply(preResult.writes, dynProps, transactionDB); err != nil {
 					publicNetOverride.restore()
 					parallelVMPreflightFallbackCounter.Inc(1)

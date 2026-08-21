@@ -86,8 +86,9 @@ resume sync without a clean resync.
 
 If the guard does not match, do not edit the database manually. Restore a
 trusted snapshot before block 20,616,256 or clean-resync with the corrected
-binary. Disabling `--exec.parallel-transfers` is conservative during a replay,
-but cannot repair divergence already committed by an older binary.
+binary. Disabling `--exec.parallel-vm` is conservative during a replay, but
+cannot repair divergence already committed by an older binary. Builds before
+the VM flag was separated used `--exec.parallel-transfers` for both publishers.
 
 ## Verification
 

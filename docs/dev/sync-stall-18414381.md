@@ -62,8 +62,10 @@ transaction execution, and resumes sync without a clean resync.
 
 If the exact-state guard does not match, do not alter balances manually. Restore
 a trusted snapshot before block 18,402,304, or clean-resync with a corrected
-binary. Disabling `--exec.parallel-transfers` is an additional conservative
-option during that replay, but does not repair an already-diverged database.
+binary. Disabling `--exec.parallel-vm` is an additional conservative option
+during that replay, but does not repair an already-diverged database. Builds
+before the VM flag was separated used `--exec.parallel-transfers` for both
+publishers.
 
 ## Verification
 

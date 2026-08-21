@@ -6,6 +6,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -124,6 +125,45 @@ func TestStateDBCopyBlockExecutionBaseRetainsCachedContractCode(t *testing.T) {
 	}
 	if got := cp.GetCode(contract); !bytes.Equal(got, code) {
 		t.Fatalf("execution-copy code = %x, want cached %x", got, code)
+	}
+}
+
+func TestStateDBCopiesRetainUnflushedWitnessView(t *testing.T) {
+	sdb := newTestStateDB(t)
+	witnessAddr := testAddr(0x34)
+	sdb.CreateAccount(witnessAddr, corepb.AccountType_Normal)
+	if err := sdb.SetWitnessCapsule(types.NewWitness(witnessAddr, "https://old.example")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Witness mutations live in the separate in-memory witness cache until the
+	// block-level FlushWitnesses call. Rehydrating a copy from the durable row at
+	// this boundary would silently recover the old URL.
+	sdb.SetWitnessURL(witnessAddr, "https://new.example")
+	if got := sdb.GetWitness(witnessAddr).URL(); got != "https://new.example" {
+		t.Fatalf("source witness URL = %q, want updated value", got)
+	}
+
+	for name, copyFn := range map[string]func() (*StateDB, error){
+		"full":            sdb.Copy,
+		"block_execution": sdb.CopyBlockExecutionBase,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cp, err := copyFn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cp.GetWitness(witnessAddr); got == nil || got.URL() != "https://new.example" {
+				t.Fatalf("copied witness = %v, want updated URL", got)
+			}
+			cp.SetWitnessURL(witnessAddr, "https://copy.example")
+			if got := sdb.GetWitness(witnessAddr).URL(); got != "https://new.example" {
+				t.Fatalf("copy mutation changed source witness URL to %q", got)
+			}
+		})
 	}
 }
 

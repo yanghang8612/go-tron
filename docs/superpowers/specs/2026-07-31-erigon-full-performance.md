@@ -3159,14 +3159,24 @@ an unrecorded-read defect.
 
 The ordinary 1/16 expansion is therefore withdrawn and block-start VM
 publication returns to the proven `block % 1024 == 0` sampled cohort. Before a
-candidate from that cohort may publish, the ordered loop copies the exact
-canonical pre-transaction StateDB and DynamicProperties, executes the same VM
-transaction through the authoritative serial path with isolated raw-KV writes,
-and requires exact TransactionInfo, full ordered WriteSet, and optional
-BalanceTrace equality. Any copy, execution, readiness, or equality failure is
-fail-closed and falls through to normal serial execution without mutating
-canonical state. Dedicated `core/parallel_vm/serial_verify/` counters expose
-candidates, matches, the three mismatch families, errors, and total time.
+candidate from any canonical VM publication path may publish, including the
+boundary-ready asynchronous retry path, the ordered loop makes a full copy of
+the exact canonical pre-transaction StateDB and DynamicProperties, executes
+the same VM transaction through the authoritative serial path with isolated
+raw-KV writes, and requires exact TransactionInfo, full ordered WriteSet, and
+optional BalanceTrace equality. The oracle must not use the optimized
+block-execution copy: otherwise it can share a missing-cache defect with the
+speculative worker and falsely agree. Any copy, execution, readiness, or
+equality failure is fail-closed, emits one high-signal warning, and falls
+through to normal serial execution without mutating canonical state. Dedicated
+`core/parallel_vm/serial_verify/` counters expose candidates, matches, the
+three mismatch families, errors, and total time.
+
+Canonical VM publication is a separate, default-off operational capability:
+`--exec.parallel-vm` (or `GTRON_EXEC_PARALLEL_VM=1`) enables it, while
+`--exec.parallel-transfers` controls only canonical Transfer publication.
+This separation permits a fresh replay to retain the mature Transfer path
+without implicitly admitting VM post-images.
 
 The publication fixture now performs persistent SSTORE writes, including a
 same-sender successor that overwrites its predecessor's slot. A second fixture

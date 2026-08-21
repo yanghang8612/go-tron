@@ -380,6 +380,11 @@ var (
 		Usage:   "Pre-execute plain transfers, validate typed read versions, publish in block order, and replay conflicts serially",
 		EnvVars: []string{"GTRON_EXEC_PARALLEL_TRANSFERS"},
 	}
+	execParallelVMFlag = &cli.BoolFlag{
+		Name:    "exec.parallel-vm",
+		Usage:   "Enable sparse speculative VM publication with canonical-boundary serial verification and serial fallback",
+		EnvVars: []string{"GTRON_EXEC_PARALLEL_VM"},
+	}
 	syncStopAtFlag = &cli.Uint64Flag{
 		Name:  "sync.stop-at",
 		Usage: "Pause block sync after importing this height (inclusive), for database parity audits",
@@ -466,6 +471,7 @@ var app = &cli.App{
 		syncETLBatchMiBFlag,
 		syncAsyncCommitFlag,
 		execParallelTransfersFlag,
+		execParallelVMFlag,
 		syncStopAtFlag,
 	},
 	Before: func(ctx *cli.Context) error {
@@ -789,6 +795,9 @@ func gtron(ctx *cli.Context) error {
 		bc.SetParallelTransferExecution(true)
 		log.Info("Parallel Transfer execution enabled", "workers", 4)
 	}
+	parallelVMEnabled := ctx.Bool(execParallelVMFlag.Name)
+	bc.SetParallelVMExecution(parallelVMEnabled)
+	log.Info("Speculative VM publication configured", "enabled", parallelVMEnabled, "workers", 4, "serialOracle", true)
 	if commitmentCacheMiB > 0 {
 		log.Info("Commitment and flat-latest base-read cache enabled", "cacheMiB", commitmentCacheMiB)
 	} else {

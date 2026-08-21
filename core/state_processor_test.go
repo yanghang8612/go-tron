@@ -691,6 +691,11 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 		t.Fatal(err)
 	}
 	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+	transferOnlyState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transferOnlyState.SetDynamicProperties(base.DynamicProperties().Copy())
 
 	storageInput := func(value byte) []byte {
 		input := make([]byte, tcommon.HashLength)
@@ -730,6 +735,30 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serial VM process: %v", err)
 	}
+	vmPublishedWithTransferOnlyBefore := parallelVMPublishedCounter.Snapshot().Count()
+	transferOnlyInfos, transferOnlyTrace, transferOnlyFinalBalances, err := run(transferOnlyState, ethrawdb.NewMemoryDatabase(), processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
+	if err != nil {
+		t.Fatalf("Transfer-only process: %v", err)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - vmPublishedWithTransferOnlyBefore; published != 0 {
+		t.Fatalf("Transfer-only option published %d VM results, want 0", published)
+	}
+	for txIndex := range serialInfos {
+		if !proto.Equal(serialInfos[txIndex], transferOnlyInfos[txIndex]) {
+			t.Fatalf("Transfer-only tx %d info mismatch\nserial=%v\ntransfer-only=%v", txIndex, serialInfos[txIndex], transferOnlyInfos[txIndex])
+		}
+	}
+	if !proto.Equal(serialTrace, transferOnlyTrace) {
+		t.Fatalf("Transfer-only block balance trace mismatch\nserial=%v\ntransfer-only=%v", serialTrace, transferOnlyTrace)
+	}
+	if len(serialFinalBalances) != len(transferOnlyFinalBalances) {
+		t.Fatalf("Transfer-only final balance count serial=%d transfer-only=%d", len(serialFinalBalances), len(transferOnlyFinalBalances))
+	}
+	for address, serialBalance := range serialFinalBalances {
+		if transferOnlyBalance, ok := transferOnlyFinalBalances[address]; !ok || transferOnlyBalance != serialBalance {
+			t.Fatalf("Transfer-only final balance %s serial=%d transfer-only=%d present=%t", address.Hex(), serialBalance, transferOnlyBalance, ok)
+		}
+	}
 	blocksBefore := parallelVMBlocksCounter.Snapshot().Count()
 	preexecutedBefore := parallelVMPreexecutedCounter.Snapshot().Count()
 	candidatesBefore := parallelVMCandidatesCounter.Snapshot().Count()
@@ -758,7 +787,7 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 		parallelVMPreflightFallbackCounter.Snapshot().Count() +
 		parallelVMPublicNetFallbackCounter.Snapshot().Count() +
 		parallelVMBlockEnergyFallbackCounter.Snapshot().Count()
-	parallelInfos, parallelTrace, parallelFinalBalances, err := run(parallelState, ethrawdb.NewMemoryDatabase(), processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
+	parallelInfos, parallelTrace, parallelFinalBalances, err := run(parallelState, ethrawdb.NewMemoryDatabase(), processBlockOptions{parallelVM: true, captureBalanceTrace: true})
 	if err != nil {
 		t.Fatalf("parallel VM process: %v", err)
 	}
@@ -901,8 +930,15 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	transferOnlyRoot, err := transferOnlyState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if serialRoot != parallelRoot {
 		t.Fatalf("VM state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+	if serialRoot != transferOnlyRoot {
+		t.Fatalf("Transfer-only state root differs: serial=%x transfer-only=%x", serialRoot, transferOnlyRoot)
 	}
 }
 
@@ -985,7 +1021,7 @@ func TestProcessBlockVMPublisherFallsBackOnStorageConflict(t *testing.T) {
 	conflictsBefore := parallelVMConflictFallbackCounter.Snapshot().Count()
 	serialVerifyCandidatesBefore := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count()
 	serialVerifyMatchesBefore := parallelVMSerialVerifyMatchesCounter.Snapshot().Count()
-	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true})
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
 	if err != nil {
 		t.Fatalf("parallel VM process: %v", err)
 	}
@@ -1112,7 +1148,7 @@ func TestProcessBlockVMPublisherRetainsCachedCodeAfterHotPrune(t *testing.T) {
 		t.Fatalf("serial VM process: %v", err)
 	}
 	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
-	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true})
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
 	if err != nil {
 		t.Fatalf("parallel VM process: %v", err)
 	}
@@ -1243,11 +1279,14 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 		parallelVMAsyncRetryPublishPreflightCounter.Snapshot().Count()
 	publishWriteOKBefore := parallelVMAsyncRetryPublishWriteOKCounter.Snapshot().Count()
 	publishWriteMismatchBefore := parallelVMAsyncRetryPublishWriteMismatchCounter.Snapshot().Count()
+	serialVerifyCandidatesBefore := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count()
+	serialVerifyMatchesBefore := parallelVMSerialVerifyMatchesCounter.Snapshot().Count()
+	serialVerifyErrorsBefore := parallelVMSerialVerifyErrorsCounter.Snapshot().Count()
 	mismatchesBefore := parallelVMAsyncRetryInfoMismatchCounter.Snapshot().Count() +
 		parallelVMAsyncRetryWriteMismatchCounter.Snapshot().Count() +
 		parallelVMAsyncRetryBalanceMismatchCounter.Snapshot().Count()
 	vmPublishedBefore := parallelVMPublishedCounter.Snapshot().Count()
-	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true})
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
 	if err != nil {
 		t.Fatalf("parallel VM retry process: %v", err)
 	}
@@ -1326,6 +1365,15 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 	}
 	if mismatches := parallelVMAsyncRetryPublishWriteMismatchCounter.Snapshot().Count() - publishWriteMismatchBefore; mismatches != 0 {
 		t.Fatalf("async VM retry publish write-set mismatches = %d, want 0", mismatches)
+	}
+	if candidates := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count() - serialVerifyCandidatesBefore; candidates != 1 {
+		t.Fatalf("async VM retry boundary serial verification candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMSerialVerifyMatchesCounter.Snapshot().Count() - serialVerifyMatchesBefore; matches != 1 {
+		t.Fatalf("async VM retry boundary serial verification matches = %d, want 1", matches)
+	}
+	if failures := parallelVMSerialVerifyErrorsCounter.Snapshot().Count() - serialVerifyErrorsBefore; failures != 0 {
+		t.Fatalf("async VM retry boundary serial verification errors = %d, want 0", failures)
 	}
 	if published := parallelVMPublishedCounter.Snapshot().Count() - vmPublishedBefore; published != 1 {
 		t.Fatalf("VM publications = %d, want 1 async retry descendant", published)

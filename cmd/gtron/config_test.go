@@ -38,6 +38,7 @@ func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
 		syncETLBatchMiBFlag,
 		syncAsyncCommitFlag,
 		execParallelTransfersFlag,
+		execParallelVMFlag,
 	}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
 	for _, f := range app.Flags {
@@ -220,6 +221,15 @@ func TestParallelTransferExecutionFlagDefaultsOff(t *testing.T) {
 	}
 	if !makeNodeConfigFlagSet(t, []string{"--exec.parallel-transfers"}).Bool(execParallelTransfersFlag.Name) {
 		t.Fatal("explicit parallel Transfer execution flag was ignored")
+	}
+}
+
+func TestParallelVMExecutionFlagDefaultsOff(t *testing.T) {
+	if makeNodeConfigFlagSet(t, nil).Bool(execParallelVMFlag.Name) {
+		t.Fatal("parallel VM execution enabled by default")
+	}
+	if !makeNodeConfigFlagSet(t, []string{"--exec.parallel-vm"}).Bool(execParallelVMFlag.Name) {
+		t.Fatal("explicit parallel VM execution flag was ignored")
 	}
 }
 

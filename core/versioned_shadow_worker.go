@@ -228,6 +228,7 @@ var (
 	parallelTransferChainCandidatesCounter           = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/candidates", nil)
 	parallelTransferChainPublishedCounter            = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/published", nil)
 	parallelTransferChainPredFallbackCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/sender_chain/fallback/predecessor", nil)
+	parallelVMEnabledGauge                           = metrics.NewRegisteredGauge("core/parallel_vm/enabled", nil)
 	parallelVMBlocksCounter                          = metrics.NewRegisteredCounter("core/parallel_vm/blocks", nil)
 	parallelVMPreexecutedCounter                     = metrics.NewRegisteredCounter("core/parallel_vm/preexecuted", nil)
 	parallelVMPreexecutionNanosCounter               = metrics.NewRegisteredCounter("core/parallel_vm/preexecution_nanos", nil)
@@ -3614,9 +3615,13 @@ func (verification vmBoundarySerialVerification) matched() bool {
 }
 
 // verifyVMResultAtCanonicalBoundary runs the authoritative transaction path on
-// an isolated copy of the exact canonical pre-transaction state. The sparse VM
-// publication cohort deliberately pays this canary cost so its post-publication
-// audit is not limited to reapplying and comparing the worker's own WriteSet.
+// an isolated full copy of the exact canonical pre-transaction state. The VM
+// publication cohorts deliberately pay this canary cost so their
+// post-publication audit is not limited to reapplying and comparing the
+// worker's own WriteSet. A full Copy is required here: using the optimized
+// block-execution copy would make the oracle share the speculative worker's
+// cache-omission failure modes and could turn a common bad base into a false
+// match.
 // The caller must install any ordered public-net override before invoking this
 // function, making the worker and serial WriteSets directly comparable.
 func verifyVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig) vmBoundarySerialVerification {
@@ -3625,7 +3630,7 @@ func verifyVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.D
 		verification.err = errors.New("missing VM boundary verification input")
 		return verification
 	}
-	boundaryState, err := statedb.CopyBlockExecutionBase()
+	boundaryState, err := statedb.Copy()
 	if err != nil {
 		verification.err = err
 		return verification
@@ -3665,6 +3670,65 @@ func verifyVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.D
 		verification.balanceMatch = proto.Equal(result.balanceTrace, serialResult.balanceTrace)
 	}
 	return verification
+}
+
+// validateVMResultAtCanonicalBoundary is the single fail-closed admission gate
+// shared by every canonical VM publisher. Keeping metrics and the match policy
+// here prevents a new publication cohort from accidentally omitting part of
+// the serial-oracle contract.
+func validateVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig) bool {
+	parallelVMSerialVerifyCandidatesCounter.Inc(1)
+	started := time.Now()
+	verification := verifyVMResultAtCanonicalBoundary(statedb, dynProps, txIndex, result, cfg)
+	parallelVMSerialVerifyNanosCounter.Inc(time.Since(started).Nanoseconds())
+	if verification.err != nil {
+		parallelVMSerialVerifyErrorsCounter.Inc(1)
+		logVMSerialOracleRejection(cfg, txIndex, verification)
+		return false
+	}
+	if !verification.infoMatch {
+		parallelVMSerialVerifyInfoMismatchCounter.Inc(1)
+	}
+	if !verification.writeMatch {
+		parallelVMSerialVerifyWriteMismatchCounter.Inc(1)
+	}
+	if !verification.balanceMatch {
+		parallelVMSerialVerifyBalanceMismatchCounter.Inc(1)
+	}
+	if !verification.matched() {
+		logVMSerialOracleRejection(cfg, txIndex, verification)
+		return false
+	}
+	parallelVMSerialVerifyMatchesCounter.Inc(1)
+	return true
+}
+
+func logVMSerialOracleRejection(cfg discardShadowRunConfig, txIndex int, verification vmBoundarySerialVerification) {
+	var (
+		blockNumber uint64
+		txHash      tcommon.Hash
+	)
+	if cfg.block != nil {
+		blockNumber = cfg.block.Number()
+	}
+	if txIndex >= 0 && txIndex < len(cfg.transactions) && cfg.transactions[txIndex] != nil {
+		txHash = cfg.transactions[txIndex].Hash()
+	}
+	// This is deliberately a warning rather than an error: the candidate has
+	// not mutated canonical state and the caller immediately runs the normal
+	// serial path. It is nevertheless unexpected and must be visible without a
+	// metrics scraper because any non-zero mismatch invalidates the VM rollout
+	// gate.
+	log.Warn("Speculative VM result rejected by canonical serial oracle",
+		"block", blockNumber,
+		"txIndex", txIndex,
+		"tx", txHash,
+		"infoMatch", verification.infoMatch,
+		"writeSetMatch", verification.writeMatch,
+		"balanceTraceMatch", verification.balanceMatch,
+		"err", verification.err,
+		"action", "serial-fallback",
+	)
 }
 
 func preexecutedTransferReady(result *discardShadowTaskResult) bool {
