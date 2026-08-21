@@ -146,13 +146,29 @@ type SyncPipelineProgressCursor struct {
 // can be completed at startup because the canonical head already proves the
 // full block import boundary exists.
 type SyncPipelineProgressHeadCompletionPlan struct {
-	Head          uint64
-	HeadHash      tcommon.Hash
-	HasHeadPrefix bool
-	LastStage     rawdb.StageID
-	LastBlock     uint64
-	FillStages    []rawdb.StageID
-	Complete      bool
+	Head                      uint64
+	HeadHash                  tcommon.Hash
+	HasHeadPrefix             bool
+	RecoveredFromHeadEvidence bool
+	LastStage                 rawdb.StageID
+	LastBlock                 uint64
+	FillStages                []rawdb.StageID
+	Complete                  bool
+}
+
+// SyncPipelineProgressHeadRecoveryEvidence proves that an otherwise missing
+// sync diagnostic prefix belongs to a fully committed sync head. Canonical
+// Finish proves the execution boundary, TxLookup proves post-commit derived
+// work crossed the same boundary, and a later inventory target proves the
+// node reached the head through an active sync session rather than an
+// unrelated producer/import path.
+type SyncPipelineProgressHeadRecoveryEvidence struct {
+	CanonicalFinish    rawdb.StageProgress
+	HasCanonicalFinish bool
+	TxLookup           rawdb.StageProgress
+	HasTxLookup        bool
+	SyncInventory      rawdb.StageProgress
+	HasSyncInventory   bool
 }
 
 // SyncPipelineProgressHeadCompletion records the result of applying a
@@ -969,6 +985,7 @@ type ImportResumePhasePublishDecision struct {
 	Phase           ImportStagePhase
 	CanonicalStage  rawdb.StageID
 	SyncStage       rawdb.StageID
+	Recovery        bool
 	TargetBlock     uint64
 	TargetHash      tcommon.Hash
 	CanonicalRow    rawdb.StageProgress
@@ -988,11 +1005,12 @@ type ImportResumePhasePublishDecision struct {
 // hash-bound canonical stage row, preventing diagnostic sync rows from moving
 // past canonical execution.
 type ImportResumePhasePublishPlan struct {
-	Phases    []ImportStagePhasePlan
-	Progress  []rawdb.StageProgress
-	Decisions []ImportResumePhasePublishDecision
-	Complete  bool
-	OK        bool
+	Phases         []ImportStagePhasePlan
+	RecoveryPhases []ImportStagePhasePlan
+	Progress       []rawdb.StageProgress
+	Decisions      []ImportResumePhasePublishDecision
+	Complete       bool
+	OK             bool
 }
 
 // ImportResumePhasePublishPlanApplier performs the storage write selected by a
@@ -1474,20 +1492,46 @@ func importResumePhasePublishFailureError(run ImportResumePhasePublishFinalizati
 
 // PlanImportResumePhasePublish verifies a yielded phase suffix against
 // canonical stage progress and builds the sync-stage rows that can be safely
-// published after the caller's commit barrier. The returned plan is all-or-none:
-// a missing or mismatched phase leaves Progress empty so callers do not publish
-// a partial suffix that could hide an async commit failure.
+// published after the caller's commit barrier. If a durable upstream sync row
+// disappeared across restart, an exact canonical prefix at the same block/hash
+// may recover it in the same atomic write. The returned plan is all-or-none: a
+// missing or mismatched canonical proof leaves Progress empty so callers do not
+// publish a partial suffix that could hide an async commit failure.
 func PlanImportResumePhasePublish(phases []ImportStagePhasePlan, read StageProgressReader) ImportResumePhasePublishPlan {
+	plan := planImportResumePhasePublish(phases, nil, read)
+	if plan.OK || !importResumePhasePublishNeedsRecovery(plan) {
+		return plan
+	}
+	recovery := importResumePhaseRecoveryPrefix(phases)
+	if len(recovery) == 0 {
+		return plan
+	}
+	recovered := planImportResumePhasePublish(phases, recovery, read)
+	if recovered.OK {
+		return recovered
+	}
+	// Preserve the original failure when canonical proof for the recovery
+	// prefix is incomplete. This keeps the actionable missing-upstream status
+	// while guaranteeing that no speculative prefix is ever written.
+	return plan
+}
+
+func planImportResumePhasePublish(phases, recovery []ImportStagePhasePlan, read StageProgressReader) ImportResumePhasePublishPlan {
 	plan := ImportResumePhasePublishPlan{
-		Phases: cloneImportStagePhasePlanList(phases),
+		Phases:         cloneImportStagePhasePlanList(phases),
+		RecoveryPhases: cloneImportStagePhasePlanList(recovery),
 	}
 	if len(phases) == 0 {
 		return plan
 	}
-	progress := make([]rawdb.StageProgress, 0, len(phases))
-	planned := make(map[rawdb.StageID]rawdb.StageProgress, len(phases))
-	for _, phase := range phases {
-		decision, row, ok := planImportResumePhasePublishDecision(phase, read, planned)
+	progress := make([]rawdb.StageProgress, 0, len(recovery)+len(phases))
+	planned := make(map[rawdb.StageID]rawdb.StageProgress, len(recovery)+len(phases))
+	allPhases := make([]ImportStagePhasePlan, 0, len(recovery)+len(phases))
+	allPhases = append(allPhases, recovery...)
+	allPhases = append(allPhases, phases...)
+	for i, phase := range allPhases {
+		recovering := i < len(recovery)
+		decision, row, ok := planImportResumePhasePublishDecision(phase, read, planned, recovering)
 		plan.Decisions = append(plan.Decisions, decision)
 		if !ok {
 			return plan
@@ -1501,11 +1545,44 @@ func PlanImportResumePhasePublish(phases []ImportStagePhasePlan, read StageProgr
 	return plan
 }
 
-func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read StageProgressReader, planned map[rawdb.StageID]rawdb.StageProgress) (ImportResumePhasePublishDecision, rawdb.StageProgress, bool) {
+func importResumePhasePublishNeedsRecovery(plan ImportResumePhasePublishPlan) bool {
+	if len(plan.Decisions) == 0 {
+		return false
+	}
+	return plan.Decisions[len(plan.Decisions)-1].Status == ImportResumePhasePublishUpstreamMissing
+}
+
+func importResumePhaseRecoveryPrefix(phases []ImportStagePhasePlan) []ImportStagePhasePlan {
+	if len(phases) == 0 || len(phases[0].Tasks) == 0 {
+		return nil
+	}
+	first := phases[0]
+	target := first.Tasks[len(first.Tasks)-1]
+	recovery := make([]ImportStagePhasePlan, 0, len(importStageSpecs))
+	found := false
+	for _, spec := range importStageSpecs {
+		if spec.SyncStage == first.SyncStage {
+			found = true
+			break
+		}
+		phase, ok := newImportStagePhasePlan(spec.Phase, spec.CanonicalStage, spec.SyncStage, []ImportStageTask{spec.Task(target.BlockNum, target.BlockHash)})
+		if !ok {
+			return nil
+		}
+		recovery = append(recovery, phase)
+	}
+	if !found {
+		return nil
+	}
+	return recovery
+}
+
+func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read StageProgressReader, planned map[rawdb.StageID]rawdb.StageProgress, recovering bool) (ImportResumePhasePublishDecision, rawdb.StageProgress, bool) {
 	decision := ImportResumePhasePublishDecision{
 		Phase:          phase.Phase,
 		CanonicalStage: phase.CanonicalStage,
 		SyncStage:      phase.SyncStage,
+		Recovery:       recovering,
 	}
 	if len(phase.Tasks) == 0 {
 		decision.Status = ImportResumePhasePublishEmpty
@@ -1557,7 +1634,14 @@ func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read Stage
 			return decision, rawdb.StageProgress{}, false
 		}
 	}
-	if upstreamStage, hasUpstream := importResumePhasePublishUpstreamStage(phase.SyncStage); hasUpstream {
+	// SyncBodiesReady is a transient download frontier and is intentionally
+	// cleared after an async importer drains its staged body. When recovering a
+	// missing durable SyncImport prefix after the commit barrier, exact
+	// hash-bound canonical Bodies progress is the stronger proof; synthesizing a
+	// ready row would incorrectly claim that an already-consumed staged body is
+	// still pending.
+	skipTransientReady := recovering && phase.SyncStage == rawdb.StageSyncImport
+	if upstreamStage, hasUpstream := importResumePhasePublishUpstreamStage(phase.SyncStage); hasUpstream && !skipTransientReady {
 		decision.UpstreamStage = upstreamStage
 		upstream, upstreamOK, err := readImportResumePhasePublishUpstream(upstreamStage, read, planned)
 		if err != nil {
@@ -2210,6 +2294,15 @@ func (c *SyncPipelineProgressCursor) setLast(row rawdb.StageProgress) {
 // canonical head. It never advances progress beyond head, and it does nothing
 // when the prefix belongs to an older imported block.
 func PlanSyncPipelineProgressHeadCompletion(repair SyncPipelineProgressRepairResult, head uint64, headHash tcommon.Hash) SyncPipelineProgressHeadCompletionPlan {
+	return PlanSyncPipelineProgressHeadCompletionWithEvidence(repair, head, headHash, SyncPipelineProgressHeadRecoveryEvidence{})
+}
+
+// PlanSyncPipelineProgressHeadCompletionWithEvidence also recovers a fully
+// missing diagnostic prefix when independent durable rows prove that the
+// current head crossed the canonical finish and post-commit lookup boundary
+// during an active sync session. This covers a restart that discarded the
+// pre-commit sync prefix while the async commitment branch was still pending.
+func PlanSyncPipelineProgressHeadCompletionWithEvidence(repair SyncPipelineProgressRepairResult, head uint64, headHash tcommon.Hash, evidence SyncPipelineProgressHeadRecoveryEvidence) SyncPipelineProgressHeadCompletionPlan {
 	plan := SyncPipelineProgressHeadCompletionPlan{
 		Head:     head,
 		HeadHash: headHash,
@@ -2235,7 +2328,14 @@ func PlanSyncPipelineProgressHeadCompletion(repair SyncPipelineProgressRepairRes
 		lastIndex = index
 		last = candidate
 	}
-	if lastIndex < 0 || !last.Row.HasBlockHash || last.Row.BlockNum != head || last.Row.BlockHash != headHash {
+	if lastIndex < 0 {
+		if syncPipelineHeadRecoveryEvidenceMatches(evidence, head, headHash) {
+			plan.RecoveredFromHeadEvidence = true
+			plan.FillStages = append(plan.FillStages, stages...)
+		}
+		return plan
+	}
+	if !last.Row.HasBlockHash || last.Row.BlockNum != head || last.Row.BlockHash != headHash {
 		return plan
 	}
 	plan.HasHeadPrefix = true
@@ -2249,12 +2349,28 @@ func PlanSyncPipelineProgressHeadCompletion(repair SyncPipelineProgressRepairRes
 	return plan
 }
 
+func syncPipelineHeadRecoveryEvidenceMatches(evidence SyncPipelineProgressHeadRecoveryEvidence, head uint64, headHash tcommon.Hash) bool {
+	if head == 0 || !evidence.HasCanonicalFinish || !evidence.HasTxLookup || !evidence.HasSyncInventory {
+		return false
+	}
+	finish := evidence.CanonicalFinish
+	if finish.Stage != rawdb.StageFinish || !finish.HasBlockHash || finish.BlockNum != head || finish.BlockHash != headHash {
+		return false
+	}
+	lookup := evidence.TxLookup
+	if lookup.Stage != rawdb.StageTxLookup || !lookup.HasBlockHash || lookup.BlockNum != head || lookup.BlockHash != headHash {
+		return false
+	}
+	inventory := evidence.SyncInventory
+	return inventory.Stage == rawdb.StageSyncInventory && inventory.BlockNum > head
+}
+
 // ApplySyncPipelineProgressHeadCompletionPlan writes the downstream sync-stage
 // rows named by a current-head completion plan. The downloader owns the ordered
 // fill semantics; callers own the concrete DB writer and logging.
 func ApplySyncPipelineProgressHeadCompletionPlan(plan SyncPipelineProgressHeadCompletionPlan, write StageProgressErrorWriter) SyncPipelineProgressHeadCompletion {
 	result := SyncPipelineProgressHeadCompletion{Plan: plan}
-	if !plan.HasHeadPrefix {
+	if !plan.HasHeadPrefix && !plan.RecoveredFromHeadEvidence {
 		return result
 	}
 	if len(plan.FillStages) == 0 {

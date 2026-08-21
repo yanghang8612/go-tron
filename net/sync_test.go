@@ -732,6 +732,42 @@ func TestSyncServiceDeletesOrphanedDownstreamSyncPipelineOnSessionStart(t *testi
 	}
 }
 
+func TestSyncServiceRecoversMissingSyncPipelineFromCommittedHeadOnSessionStart(t *testing.T) {
+	bc := makeChainWithBlocks(t, 1)
+	head := bc.CurrentBlock()
+	if head == nil || head.Number() == 0 {
+		t.Fatalf("current head = %v, want non-genesis block", head)
+	}
+	// A real process restart runs BlockChain.ensureCanonicalStageHead before
+	// SyncService startup. Mirror that durable canonical-stage repair here.
+	if err := rawdb.WriteCanonicalStageProgressWithHash(bc.DB(), head.Number(), head.Hash()); err != nil {
+		t.Fatalf("write canonical head evidence: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageTxLookup, head.Number(), head.Hash()); err != nil {
+		t.Fatalf("write tx lookup evidence: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(bc.DB(), rawdb.StageSyncInventory, head.Number()+100); err != nil {
+		t.Fatalf("write sync inventory evidence: %v", err)
+	}
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
+		if err := rawdb.DeleteStageProgress(bc.DB(), stage); err != nil {
+			t.Fatalf("delete %s progress: %v", stage, err)
+		}
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
+		row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage)
+		if err != nil || !ok || row.BlockNum != head.Number() || row.BlockHash != head.Hash() || !row.HasBlockHash {
+			t.Fatalf("%s progress after head recovery = %+v ok=%v err=%v, want current head", stage, row, ok, err)
+		}
+	}
+}
+
 func TestSyncServiceDeletesExecutionWithoutImportOnSessionStart(t *testing.T) {
 	bc := makeChainWithBlocks(t, 1)
 	block1 := bc.GetBlockByNumber(1)
@@ -1242,6 +1278,44 @@ func TestSyncServicePublishesResumePhaseProgressAfterBarrier(t *testing.T) {
 	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
 		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || !ok || row.BlockNum != block.Number() || row.BlockHash != block.Hash() || !row.HasBlockHash {
 			t.Fatalf("%s progress = %+v ok=%v err=%v, want block1 hash-bound", stage, row, ok, err)
+		}
+	}
+}
+
+func TestSyncServiceRecoversMissingResumePhaseUpstreamAfterBarrier(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+	for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
+		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, block.Number(), block.Hash()); err != nil {
+			t.Fatalf("write canonical %s progress: %v", stage, err)
+		}
+	}
+	phases := []syncdl.ImportStagePhasePlan{
+		{
+			Phase:          syncdl.ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []syncdl.ImportStageTask{syncdl.ImportCommitmentStageTask(block.Number(), block.Hash())},
+		},
+		{
+			Phase:          syncdl.ImportStagePhaseFinish,
+			CanonicalStage: rawdb.StageFinish,
+			SyncStage:      rawdb.StageSyncFinish,
+			Tasks:          []syncdl.ImportStageTask{syncdl.ImportFinishStageTask(block.Number(), block.Hash())},
+		},
+	}
+
+	result := ss.publishImportResumePhaseProgress(phases, true, false)
+	publish := result.Publish.Publish
+	if !result.Finalization.Publish || !publish.Applied || publish.Rows != 4 || publish.WriteError != nil || !publish.Plan.OK ||
+		len(publish.Plan.RecoveryPhases) != 2 {
+		t.Fatalf("resume recovery publish result = %+v, want recovered four-stage prefix", result)
+	}
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
+		row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage)
+		if err != nil || !ok || row.BlockNum != block.Number() || row.BlockHash != block.Hash() || !row.HasBlockHash {
+			t.Fatalf("%s progress after resume recovery = %+v ok=%v err=%v, want block1", stage, row, ok, err)
 		}
 	}
 }

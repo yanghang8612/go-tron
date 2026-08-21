@@ -814,6 +814,16 @@ func (a syncSessionStartupApplier) CompleteCurrentHeadSyncPipeline(repair syncdl
 	if db == nil {
 		return syncdl.ApplySyncPipelineProgressHeadCompletionPlan(plan, nil)
 	}
+	if repair.Kept == 0 && !plan.HasHeadPrefix {
+		evidence, errorStage, err := readSyncPipelineProgressHeadRecoveryEvidence(db)
+		if err != nil {
+			result.Plan = plan
+			result.ErrorStage = errorStage
+			result.WriteError = fmt.Errorf("read sync pipeline current-head recovery evidence %s: %w", errorStage, err)
+			return result
+		}
+		plan = syncdl.PlanSyncPipelineProgressHeadCompletionWithEvidence(repair, a.headBlock.Number(), a.headBlock.Hash(), evidence)
+	}
 	result = syncdl.ApplySyncPipelineProgressHeadCompletionPlan(plan, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) error {
 		return rawdb.WriteStageProgressWithHash(db, stage, blockNum, blockHash)
 	})
@@ -821,6 +831,27 @@ func (a syncSessionStartupApplier) CompleteCurrentHeadSyncPipeline(repair syncdl
 		syncLog.Warn("Complete sync pipeline current head failed", "stage", result.ErrorStage, "head", plan.Head, "hash", plan.HeadHash, "err", result.WriteError)
 	}
 	return result
+}
+
+func readSyncPipelineProgressHeadRecoveryEvidence(db ethdb.KeyValueStore) (syncdl.SyncPipelineProgressHeadRecoveryEvidence, rawdb.StageID, error) {
+	var evidence syncdl.SyncPipelineProgressHeadRecoveryEvidence
+	if db == nil {
+		return evidence, "", nil
+	}
+	var err error
+	evidence.CanonicalFinish, evidence.HasCanonicalFinish, err = rawdb.ReadStageProgressRow(db, rawdb.StageFinish)
+	if err != nil {
+		return evidence, rawdb.StageFinish, err
+	}
+	evidence.TxLookup, evidence.HasTxLookup, err = rawdb.ReadStageProgressRow(db, rawdb.StageTxLookup)
+	if err != nil {
+		return evidence, rawdb.StageTxLookup, err
+	}
+	evidence.SyncInventory, evidence.HasSyncInventory, err = rawdb.ReadStageProgressRow(db, rawdb.StageSyncInventory)
+	if err != nil {
+		return evidence, rawdb.StageSyncInventory, err
+	}
+	return evidence, "", nil
 }
 
 func (a syncSessionStartupApplier) RestoreInventoryTarget(inventoryFloor uint64) {
@@ -1022,6 +1053,7 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 		"syncStartupRepairRows", len(repair.Repairs),
 		"syncStartupHeadCompletionChecked", result.HasSyncPipelineHead,
 		"syncStartupHeadCompletionHasPrefix", headCompletion.Plan.HasHeadPrefix,
+		"syncStartupHeadCompletionRecovered", headCompletion.Plan.RecoveredFromHeadEvidence,
 		"syncStartupHeadCompletionLastStage", headCompletion.Plan.LastStage,
 		"syncStartupHeadCompletionLastBlock", headCompletion.Plan.LastBlock,
 		"syncStartupHeadCompletionFillStages", len(headCompletion.Plan.FillStages),
@@ -1101,6 +1133,9 @@ func syncStartupRepairSummaryContext(result syncdl.SessionStartupApplyResult) []
 		head := result.SyncPipelineHeadCompletion
 		if head.Complete || head.Written > 0 || head.ErrorStage != "" {
 			ctx = append(ctx, "headComplete", head.Complete, "headStagesWritten", head.Written)
+			if head.Plan.RecoveredFromHeadEvidence {
+				ctx = append(ctx, "headRecovered", true)
+			}
 			if head.ErrorStage != "" {
 				ctx = append(ctx, "headErrorStage", head.ErrorStage)
 			}
@@ -2173,7 +2208,21 @@ func (ss *SyncService) logImportResumePhasePublishResult(result syncdl.ImportRes
 		syncLog.Warn("Persist sync import resume phase failed", "rows", result.Rows, "err", result.WriteError)
 		return
 	}
-	syncLog.Debug("Published sync import resume phase", "rows", result.Rows)
+	if len(result.Plan.RecoveryPhases) > 0 {
+		phase := result.Plan.Phases[0]
+		target := phase.Tasks[len(phase.Tasks)-1]
+		syncLog.Info("Recovered missing sync import phase prefix",
+			"resumePhase", phase.Phase,
+			"resumeStage", phase.SyncStage,
+			"block", target.BlockNum,
+			"hash", target.BlockHash,
+			"recoveredPhases", len(result.Plan.RecoveryPhases),
+			"rows", result.Rows)
+		return
+	}
+	syncLog.Debug("Published sync import resume phase",
+		"rows", result.Rows,
+		"recoveredPhases", len(result.Plan.RecoveryPhases))
 }
 
 type syncLocalDrainSessionRunApplier struct {

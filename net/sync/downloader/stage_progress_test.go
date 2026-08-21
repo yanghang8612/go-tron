@@ -2239,6 +2239,36 @@ func TestPlanSyncPipelineProgressHeadCompletion(t *testing.T) {
 	if blocked.HasHeadPrefix || len(blocked.FillStages) != 0 || blocked.Complete {
 		t.Fatalf("blocked prefix plan = %+v, want no fill", blocked)
 	}
+
+	missingRepair := SyncPipelineProgressRepairResult{
+		Repairs: []SyncStageProgressRepair{
+			{Stage: rawdb.StageSyncImport, Status: SyncStageProgressMissing},
+			{Stage: rawdb.StageSyncExecution, Status: SyncStageProgressMissing},
+			{Stage: rawdb.StageSyncCommitment, Status: SyncStageProgressMissing},
+			{Stage: rawdb.StageSyncFinish, Status: SyncStageProgressMissing},
+		},
+		Missing: 4,
+	}
+	evidence := SyncPipelineProgressHeadRecoveryEvidence{
+		CanonicalFinish:    rawdb.StageProgress{Stage: rawdb.StageFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		HasCanonicalFinish: true,
+		TxLookup:           rawdb.StageProgress{Stage: rawdb.StageTxLookup, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		HasTxLookup:        true,
+		SyncInventory:      rawdb.StageProgress{Stage: rawdb.StageSyncInventory, BlockNum: 8},
+		HasSyncInventory:   true,
+	}
+	recovered := PlanSyncPipelineProgressHeadCompletionWithEvidence(missingRepair, 7, hash, evidence)
+	if recovered.HasHeadPrefix || !recovered.RecoveredFromHeadEvidence || recovered.Complete ||
+		!reflect.DeepEqual(recovered.FillStages, SyncPipelineProgressStages()) {
+		t.Fatalf("head evidence recovery plan = %+v, want full diagnostic prefix fill", recovered)
+	}
+
+	staleEvidence := evidence
+	staleEvidence.TxLookup.BlockHash = tcommon.Hash{0xee}
+	notRecovered := PlanSyncPipelineProgressHeadCompletionWithEvidence(missingRepair, 7, hash, staleEvidence)
+	if notRecovered.HasHeadPrefix || notRecovered.RecoveredFromHeadEvidence || len(notRecovered.FillStages) != 0 || notRecovered.Complete {
+		t.Fatalf("stale head evidence plan = %+v, want no fill", notRecovered)
+	}
 }
 
 func TestApplySyncPipelineProgressHeadCompletionPlan(t *testing.T) {
@@ -2298,6 +2328,24 @@ func TestApplySyncPipelineProgressHeadCompletionPlan(t *testing.T) {
 	})
 	if failing.Complete || failing.Written != 1 || !errors.Is(failing.WriteError, writeErr) || failing.ErrorStage != rawdb.StageSyncFinish {
 		t.Fatalf("failing result = %+v, want one write then finish error", failing)
+	}
+}
+
+func TestApplySyncPipelineProgressHeadCompletionPlanFromEvidence(t *testing.T) {
+	hash := tcommon.Hash{0x01}
+	plan := SyncPipelineProgressHeadCompletionPlan{
+		Head:                      7,
+		HeadHash:                  hash,
+		RecoveredFromHeadEvidence: true,
+		FillStages:                SyncPipelineProgressStages(),
+	}
+	var writes []rawdb.StageProgress
+	got := ApplySyncPipelineProgressHeadCompletionPlan(plan, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) error {
+		writes = append(writes, rawdb.StageProgress{Stage: stage, BlockNum: blockNum, BlockHash: blockHash, HasBlockHash: true})
+		return nil
+	})
+	if !got.Complete || got.Written != len(SyncPipelineProgressStages()) || got.WriteError != nil || len(writes) != len(SyncPipelineProgressStages()) {
+		t.Fatalf("evidence recovery apply = %+v writes=%+v, want full prefix", got, writes)
 	}
 }
 
@@ -2612,6 +2660,33 @@ func TestPlanImportResumePhasePublish(t *testing.T) {
 	got.Phases[0].Tasks[0].BlockNum = 99
 	if phases[0].Tasks[0].BlockNum == 99 {
 		t.Fatal("PlanImportResumePhasePublish returned aliased phase tasks")
+	}
+
+	recoveryRows := map[rawdb.StageID]rawdb.StageProgress{
+		rawdb.StageBodies:     {Stage: rawdb.StageBodies, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		rawdb.StageExecution:  {Stage: rawdb.StageExecution, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		rawdb.StageCommitment: {Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		rawdb.StageFinish:     {Stage: rawdb.StageFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+	}
+	recovered := PlanImportResumePhasePublish(phases, func(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {
+		row, ok := recoveryRows[stage]
+		return row, ok, nil
+	})
+	wantRecovered := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		{Stage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		{Stage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+	}
+	if !recovered.OK || !recovered.Complete || !reflect.DeepEqual(recovered.Progress, wantRecovered) ||
+		len(recovered.RecoveryPhases) != 2 || len(recovered.Decisions) != 4 ||
+		!recovered.Decisions[0].Recovery || !recovered.Decisions[1].Recovery ||
+		recovered.Decisions[2].Recovery || recovered.Decisions[3].Recovery {
+		t.Fatalf("recovered publish plan = %+v, want canonical-proven full prefix %+v", recovered, wantRecovered)
+	}
+	recovered.RecoveryPhases[0].Tasks[0].BlockNum = 99
+	if recovered.Progress[0].BlockNum == 99 || phases[0].Tasks[0].BlockNum == 99 {
+		t.Fatal("PlanImportResumePhasePublish returned aliased recovery phase tasks")
 	}
 
 	rows[rawdb.StageCommitment] = rawdb.StageProgress{Stage: rawdb.StageCommitment, BlockNum: 7, BlockHash: tcommon.Hash{0xee}, HasBlockHash: true}
