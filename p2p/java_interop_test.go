@@ -179,7 +179,17 @@ func TestJavaTronApplicationHello(t *testing.T) {
 	}
 	peers[0].Send(MsgHello, payload)
 
-	time.Sleep(5 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		messageCount := len(h.messages)
+		disconnectedCount := len(h.disconnected)
+		h.mu.Unlock()
+		if messageCount > 0 || disconnectedCount > 0 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	h.mu.Lock()
 	messages := append([]struct {
 		code    byte
