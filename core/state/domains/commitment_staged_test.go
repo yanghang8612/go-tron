@@ -1,6 +1,7 @@
 package domains
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -191,6 +192,123 @@ func TestStagedImmutableBaseNeverSilentlyFallsBackWithoutSource(t *testing.T) {
 	}); err == nil {
 		t.Fatal("legacy constructor silently updated an active immutable base")
 	}
+}
+
+func TestRecoveringStagedStoreRebuildsMismatchedBaseInAsyncLayer(t *testing.T) {
+	const (
+		generation = uint64(7)
+		txNum      = uint64(97019760)
+	)
+	disk := rawdb.NewMemoryDatabase()
+	seedLatestDomainRows(t, disk)
+	baseRoot, err := newStagedCommitmentStore(disk).Rebuild()
+	if err != nil {
+		t.Fatalf("build initial branches: %v", err)
+	}
+	if err := rawdb.WriteCommitmentBranchBase(disk, rawdb.CommitmentBranchBase{
+		Generation: generation, SnapshotTxNum: txNum, Root: baseRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.DeleteCommitmentBranches(disk); err != nil {
+		t.Fatal(err)
+	}
+	delta, err := rawdb.NewCommitmentBranchDeltaKeyspace(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staleDelta BranchData
+	staleDelta.SetHashChild(1, common.Hash{0xdd})
+	if err := delta.Write(disk, []byte{0x0d}, staleDelta.Encode()); err != nil {
+		t.Fatal(err)
+	}
+
+	buffer := blockbuffer.New(disk)
+	buffer.BeginBlock(common.Hash{0x43}, 20674403)
+	handle, ok := buffer.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	view := buffer.ViewLayer(handle)
+	newOwner := common.Address{0x41, 0x03}
+	newValue := []byte("current-block-account")
+	if err := rawdb.WriteStateAccountLatest(view, newOwner, newValue); err != nil {
+		t.Fatal(err)
+	}
+	update := rawdb.NewStateCommitmentPut(rawdb.StateAccountLatestCommitmentKey(newOwner), newValue)
+	repair := CommitmentSnapshotRepair{Source: &fakeBranchSnapshotSource{
+		root: common.Hash{0xee}, rootOK: true,
+	}, TxNum: txNum}
+
+	if strict, err := NewStagedCommitmentStoreWithRepair(view, repair, true); !errors.Is(err, ErrCommitmentBranchBaseRootMismatch) {
+		_ = CloseLatestCommitmentStore(strict)
+		t.Fatalf("strict open error = %v, want base-root mismatch", err)
+	}
+	latest, err := NewRecoveringStagedCommitmentStoreWithRepair(view, repair, true)
+	if err != nil {
+		t.Fatalf("recovering open: %v", err)
+	}
+	store := latest.(*stagedCommitmentStore)
+	if store.bootstrapCount != 1 || !store.branchStateWritten {
+		t.Fatalf("recovery bootstrap count=%d branchStateWritten=%v, want 1/true", store.bootstrapCount, store.branchStateWritten)
+	}
+	gotRoot, err := ApplyLatestCommitmentWithStoreAndRepair(store, []rawdb.StateCommitmentUpdate{update}, repair)
+	if err != nil {
+		t.Fatalf("apply after recovery: %v", err)
+	}
+	if err := CloseLatestCommitmentStore(store); err != nil {
+		t.Fatal(err)
+	}
+
+	reference := rawdb.NewMemoryDatabase()
+	seedLatestDomainRows(t, reference)
+	if err := rawdb.WriteStateAccountLatest(reference, newOwner, newValue); err != nil {
+		t.Fatal(err)
+	}
+	wantRoot, err := newStagedCommitmentStore(reference).Rebuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRoot != wantRoot {
+		t.Fatalf("recovered root %x, want rebuilt root %x", gotRoot, wantRoot)
+	}
+	if _, ok, err := rawdb.ReadCommitmentBranchBase(view); err != nil || ok {
+		t.Fatalf("layer base marker survived recovery ok=%v err=%v", ok, err)
+	}
+	if rows := countBranchKeyspaceRows(t, delta, view); rows != 0 {
+		t.Fatalf("layer delta rows after recovery = %d, want 0", rows)
+	}
+	if _, ok, err := rawdb.ReadCommitmentBranchBase(disk); err != nil || !ok {
+		t.Fatalf("disk marker changed before layer commit ok=%v err=%v", ok, err)
+	}
+
+	if err := buffer.CommitInflight(handle); err != nil {
+		t.Fatal(err)
+	}
+	if err := buffer.Flush(disk); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := rawdb.ReadCommitmentBranchBase(disk); err != nil || ok {
+		t.Fatalf("disk base marker survived committed recovery ok=%v err=%v", ok, err)
+	}
+	if rows := countBranchKeyspaceRows(t, delta, disk); rows != 0 {
+		t.Fatalf("disk delta rows after committed recovery = %d, want 0", rows)
+	}
+	if stored, ok, err := rawdb.ReadLatestDomainCommitmentRoot(disk); err != nil || !ok || stored != wantRoot {
+		t.Fatalf("stored recovered root=%x ok=%v err=%v, want %x", stored, ok, err, wantRoot)
+	}
+}
+
+func countBranchKeyspaceRows(t *testing.T, keyspace rawdb.CommitmentBranchKeyspace, db CommitmentDB) int {
+	t.Helper()
+	rows := 0
+	if err := keyspace.Iterate(db, func(_, _ []byte) (bool, error) {
+		rows++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return rows
 }
 
 func TestRawdbBranchStoreRotationLayersDeltaOverFrozenLegacy(t *testing.T) {

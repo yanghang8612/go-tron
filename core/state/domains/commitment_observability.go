@@ -35,6 +35,7 @@ var (
 	commitmentPipelineInflightGauge         = metrics.NewRegisteredGauge("state/commitment/pipeline/inflight", nil)
 	commitmentPipelineMaxInflightGauge      = metrics.NewRegisteredGauge("state/commitment/pipeline/max_inflight", nil)
 	commitmentBranchBaseOpenCounter         = metrics.NewRegisteredCounter("state/commitment/branch_base/opens", nil)
+	commitmentBranchBaseRebuildCounter      = metrics.NewRegisteredCounter("state/commitment/branch_base/rebuilds", nil)
 	commitmentBranchDeltaHitCounter         = metrics.NewRegisteredCounter("state/commitment/branch_base/delta_hits", nil)
 	commitmentBranchTombstoneCounter        = metrics.NewRegisteredCounter("state/commitment/branch_base/tombstones", nil)
 	commitmentBranchColdHitCounter          = metrics.NewRegisteredCounter("state/commitment/branch_base/cold_hits", nil)

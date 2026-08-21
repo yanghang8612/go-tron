@@ -695,7 +695,7 @@ func (d *DomainCommitmentState) ComputeCommitment(ctx context.Context, blockNum,
 		updates = batch.updates
 	}
 	repair := d.state.commitmentRepair()
-	store, err := statedomains.NewStagedCommitmentStoreWithRepair(index, repair, false)
+	store, err := statedomains.NewRecoveringStagedCommitmentStoreWithRepair(index, repair, false)
 	if err != nil {
 		return tcommon.Hash{}, err
 	}

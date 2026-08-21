@@ -4286,7 +4286,7 @@ func (c *CapturedCommit) Fold(index statedomains.CommitmentDB) (tcommon.Hash, er
 		return tcommon.Hash{}, errors.New("state: captured commitment already consumed")
 	}
 	defer c.Release()
-	store, err := statedomains.NewStagedCommitmentStoreWithRepair(index, c.repair, true)
+	store, err := statedomains.NewRecoveringStagedCommitmentStoreWithRepair(index, c.repair, true)
 	if err != nil {
 		return tcommon.Hash{}, err
 	}
@@ -4355,7 +4355,7 @@ func (s *StateDB) commitmentRepair() statedomains.CommitmentSnapshotRepair {
 // to the committing block's in-flight layer, so the fold writes that block's
 // commitment-branch rows while the foreground writes the next block's layer.
 func FoldLatestCommitment(index statedomains.CommitmentDB, updates []rawdb.StateCommitmentUpdate, repair statedomains.CommitmentSnapshotRepair) (tcommon.Hash, error) {
-	store, err := statedomains.NewStagedCommitmentStoreWithRepair(index, repair, false)
+	store, err := statedomains.NewRecoveringStagedCommitmentStoreWithRepair(index, repair, false)
 	if err != nil {
 		return tcommon.Hash{}, err
 	}

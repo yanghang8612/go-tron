@@ -11,6 +11,12 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
+// ErrCommitmentBranchBaseRootMismatch reports that the persisted immutable
+// branch-base marker no longer names the commitment root exposed by its
+// snapshot tx. Callers that own an atomic write layer may recover by dropping
+// the stale base/delta keyspaces and rebuilding from authoritative latest rows.
+var ErrCommitmentBranchBaseRootMismatch = errors.New("domains: commitment branch base root mismatch")
+
 // rawdbBranchStore is a branchStore backed by the rawdb commitment-branch
 // keyspace (prefix state-commitment-branch-v1-). Branch nodes are encoded with
 // BranchData.Encode and decoded with DecodeBranchData; the prefix is the
@@ -226,7 +232,7 @@ func openRawdbBranchBase(db CommitmentDB, repair CommitmentSnapshotRepair, base 
 		return nil, fmt.Errorf("domains: read commitment branch base root: %w", err)
 	}
 	if !rootOK || snapshotRoot != base.Root {
-		return nil, fmt.Errorf("domains: commitment branch base root mismatch at tx %d", base.SnapshotTxNum)
+		return nil, fmt.Errorf("%w at tx %d", ErrCommitmentBranchBaseRootMismatch, base.SnapshotTxNum)
 	}
 	viewer, ok := repair.Source.(pointread.CommitmentBranchSnapshotViewer)
 	if !ok {
@@ -799,6 +805,32 @@ func NewStagedCommitmentStoreWithRepair(db CommitmentDB, repair CommitmentSnapsh
 	store := newStagedCommitmentStoreWithBranchStore(db, branchStore)
 	store.asyncParentBranches = asyncParentBranches
 	return store, nil
+}
+
+// NewRecoveringStagedCommitmentStoreWithRepair is the write-path counterpart
+// of NewStagedCommitmentStoreWithRepair. A stale immutable-base marker whose
+// root no longer matches its snapshot cannot safely serve branch reads. When
+// that exact condition is detected, this constructor invalidates the marker
+// and its delta generations and rebuilds a complete legacy branch table from
+// the authoritative latest-domain rows visible through db.
+//
+// Production fold callers pass a blockbuffer layer, so both invalidation and
+// rebuild are committed atomically with the block and are discarded together
+// if the fold fails. All other marker, snapshot, and storage errors remain
+// strict and are returned without attempting recovery.
+func NewRecoveringStagedCommitmentStoreWithRepair(db CommitmentDB, repair CommitmentSnapshotRepair, asyncParentBranches bool) (LatestCommitmentStore, error) {
+	store, err := NewStagedCommitmentStoreWithRepair(db, repair, asyncParentBranches)
+	if err == nil || !errors.Is(err, ErrCommitmentBranchBaseRootMismatch) {
+		return store, err
+	}
+
+	rebuilt := newStagedCommitmentStoreWithBranchStore(db, newRawdbBranchStore(db))
+	rebuilt.asyncParentBranches = asyncParentBranches
+	if _, rebuildErr := rebuilt.Rebuild(); rebuildErr != nil {
+		return nil, fmt.Errorf("domains: rebuild commitment branches after base root mismatch: %w", rebuildErr)
+	}
+	commitmentBranchBaseRebuildCounter.Inc(1)
+	return rebuilt, nil
 }
 
 // CloseLatestCommitmentStore releases resources owned by stores constructed
