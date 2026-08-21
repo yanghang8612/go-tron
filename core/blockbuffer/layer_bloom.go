@@ -29,11 +29,12 @@ type layerBloom struct {
 // removes any member therefore degrades to ordinary per-layer probes instead
 // of risking a false negative.
 type layerBloomSegment struct {
-	first *layer
-	last  *layer
-	size  int
-	bloom *layerBloom
-	ready atomic.Bool
+	first           *layer
+	last            *layer
+	size            int
+	bloom           *layerBloom
+	hasRangeDeletes bool
+	ready           atomic.Bool
 }
 
 func newLayerBloom(keys int) *layerBloom {
@@ -184,6 +185,12 @@ func buildLayerBloomSegment(layers []*layer) {
 		last:  layers[len(layers)-1],
 		size:  len(layers),
 		bloom: bloom,
+	}
+	for _, l := range layers {
+		if l.hasRangeDeletes() {
+			segment.hasRangeDeletes = true
+			break
+		}
 	}
 	// Publish membership before scanning, but leave ready=false. A delayed
 	// writer mutates its layer under the same shard lock used below: if it wins

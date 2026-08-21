@@ -148,7 +148,57 @@ type layer struct {
 	ownedKeyArenaMu      sync.Mutex
 	ownedKeyArena        []byte
 	ownedKeyArenaBatches int
-	shards               [layerShardCount]layerShard
+	// rangeDeletes is an immutable, atomically published union of half-open
+	// key ranges deleted by this layer. A commitment rebuild can retire a very
+	// large derived keyspace with one range tombstone instead of materialising
+	// one in-memory point tombstone per durable row.
+	rangeDeleteMu sync.Mutex
+	rangeDeletes  atomic.Pointer[[]layerRangeDelete]
+	shards        [layerShardCount]layerShard
+}
+
+type layerRangeDelete struct {
+	start string
+	end   string
+}
+
+func (r layerRangeDelete) containsString(key string) bool {
+	return key >= r.start && (r.end == "" || key < r.end)
+}
+
+func (r layerRangeDelete) containsBytes(key []byte) bool {
+	return r.containsString(unsafe.String(unsafe.SliceData(key), len(key)))
+}
+
+func (l *layer) loadRangeDeletes() []layerRangeDelete {
+	if l == nil {
+		return nil
+	}
+	ranges := l.rangeDeletes.Load()
+	if ranges == nil {
+		return nil
+	}
+	return *ranges
+}
+
+func (l *layer) hasRangeDeletes() bool { return len(l.loadRangeDeletes()) != 0 }
+
+func (l *layer) rangeDeletesString(key string) bool {
+	for _, r := range l.loadRangeDeletes() {
+		if r.containsString(key) {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *layer) rangeDeletesBytes(key []byte) bool {
+	for _, r := range l.loadRangeDeletes() {
+		if r.containsBytes(key) {
+			return true
+		}
+	}
+	return false
 }
 
 type layerState uint8
@@ -1792,7 +1842,13 @@ func (b *Buffer) PendingBlocks() []common.Hash {
 // alloc-free on a buffer hit.
 func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
 	if l.bloom.Load() == nil {
-		return l.lookupMap(key)
+		if v, found, tomb = l.lookupMap(key); found || tomb {
+			return v, found, tomb
+		}
+		if l.rangeDeletesBytes(key) {
+			return nil, false, true
+		}
+		return nil, false, false
 	}
 	return l.lookupHash(key, layerBloomHashBytes(key))
 }
@@ -1800,10 +1856,15 @@ func (l *layer) lookup(key []byte) (v []byte, found, tomb bool) {
 // lookupHash is lookup with a caller-precomputed filter hash. Stack walks
 // compute it once and reuse it across every committed layer.
 func (l *layer) lookupHash(key []byte, keyHash uint64) (v []byte, found, tomb bool) {
-	if bloom := l.bloom.Load(); bloom != nil && !bloom.mayContainHash(keyHash) {
-		return nil, false, false
+	if bloom := l.bloom.Load(); bloom == nil || bloom.mayContainHash(keyHash) {
+		if v, found, tomb = l.lookupMap(key); found || tomb {
+			return v, found, tomb
+		}
 	}
-	return l.lookupMap(key)
+	if l.rangeDeletesBytes(key) {
+		return nil, false, true
+	}
+	return nil, false, false
 }
 
 func (l *layer) lookupMap(key []byte) (v []byte, found, tomb bool) {
@@ -1827,7 +1888,7 @@ func (l *layer) lookupMap(key []byte) (v []byte, found, tomb bool) {
 func lookupLayersNewest(layers []*layer, key []byte, keyHash uint64) (v []byte, found, tomb bool) {
 	for i := len(layers) - 1; i >= 0; {
 		l := layers[i]
-		if segment := l.segment.Load(); segment != nil &&
+		if segment := l.segment.Load(); segment != nil && !segment.hasRangeDeletes &&
 			segment.ready.Load() && segment.last == l && segment.size <= i+1 &&
 			layers[i-segment.size+1] == segment.first &&
 			!segment.bloom.mayContainHash(keyHash) {
@@ -2495,6 +2556,21 @@ func (b *Buffer) Delete(key []byte) error {
 	return nil
 }
 
+// DeleteRange records one half-open range tombstone in the active layer.
+// Point writes made after the range deletion remain visible and are flushed
+// after the range tombstone, matching ethdb batch ordering. This is especially
+// important for commitment rebuilds, which clear and then repopulate the same
+// prefix inside one rewindable block layer.
+func (b *Buffer) DeleteRange(start, end []byte) error {
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: DeleteRange called with no active layer")
+	}
+	return b.deleteRangeInto(active, start, end)
+}
+
 // DeleteKeyParts is the delete counterpart of PutKeyParts.
 func (b *Buffer) DeleteKeyParts(first, second []byte) error {
 	b.mu.RLock()
@@ -2797,6 +2873,9 @@ func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushG
 }
 
 func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
+	if err := writeLayerRangeDeletes(l, w); err != nil {
+		return err
+	}
 	stringWriter, writesString := w.(stringKeyWriter)
 	for i := range l.shards {
 		s := &l.shards[i]
@@ -2829,6 +2908,23 @@ func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
 			}
 		}
 		s.mu.RUnlock()
+	}
+	return nil
+}
+
+func writeLayerRangeDeletes(l *layer, w ethdb.KeyValueWriter) error {
+	ranges := l.loadRangeDeletes()
+	if len(ranges) == 0 {
+		return nil
+	}
+	deleter, ok := w.(ethdb.KeyValueRangeDeleter)
+	if !ok {
+		return errors.New("blockbuffer: flush target does not support range deletion")
+	}
+	for _, r := range ranges {
+		if err := deleter.DeleteRange([]byte(r.start), []byte(r.end)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2881,6 +2977,9 @@ func writeLayerSorted(l *layer, w ethdb.KeyValueWriter) error {
 			l.shards[i].mu.RUnlock()
 		}
 	}()
+	if err := writeLayerRangeDeletes(l, w); err != nil {
+		return err
+	}
 	count := 0
 	for i := range l.shards {
 		s := &l.shards[i]
@@ -2990,7 +3089,23 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 		inputEncoded:  pebbleBatchHeaderSize,
 		outputEncoded: pebbleBatchHeaderSize,
 	}
+	// A range tombstone must stay ordered before the point writes in its own
+	// layer and must not be collapsed into the point-only merge map. Flush that
+	// layer alone; adjacent layers resume normal coalescing in the next group.
+	if layers[start].hasRangeDeletes() {
+		next := sizes[start]
+		plan.end = start + 1
+		plan.inputValue = next.value
+		plan.inputEncoded += next.encoded
+		plan.inputOps = next.ops
+		plan.outputValue = next.value
+		plan.outputEncoded = pebbleBatchHeaderSize + next.encoded
+		return plan
+	}
 	for plan.end < len(layers) {
+		if layers[plan.end].hasRangeDeletes() {
+			break
+		}
 		next := sizes[plan.end]
 		if plan.end > start && (plan.inputValue+next.value > limits.batchValue ||
 			plan.inputEncoded+next.encoded > limits.batchEncoded) {
@@ -3005,7 +3120,7 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 		}
 	}
 	baseEnd := plan.end
-	canProbeExtension := plan.end < len(layers) &&
+	canProbeExtension := plan.end < len(layers) && !layers[plan.end].hasRangeDeletes() &&
 		plan.inputValue+sizes[plan.end].value <= limits.mergeValue &&
 		plan.inputEncoded+sizes[plan.end].encoded <= limits.mergeEncoded
 	if plan.end-start > 1 || canProbeExtension {
@@ -3302,6 +3417,11 @@ func layerWriteStats(l *layer) (valueSize, encodedSize, ops int) {
 	if l == nil {
 		return 0, 0, 0
 	}
+	for _, r := range l.loadRangeDeletes() {
+		ops++
+		valueSize += len(r.start) + len(r.end)
+		encodedSize += 1 + uvarintSize(len(r.start)) + len(r.start) + uvarintSize(len(r.end)) + len(r.end)
+	}
 	for i := range l.shards {
 		s := &l.shards[i]
 		s.mu.RLock()
@@ -3409,7 +3529,8 @@ type overlayOp struct {
 // (the first time a key is seen wins, so newer layers mask older ones). Shared
 // by Buffer.NewIterator and LayerView.NewIterator.
 type overlayState struct {
-	m map[string]overlayOp
+	m      map[string]overlayOp
+	ranges []layerRangeDelete
 }
 
 func newOverlayState() *overlayState { return &overlayState{m: make(map[string]overlayOp)} }
@@ -3480,6 +3601,7 @@ func (o *overlayState) walk(l *layer, prefix, start []byte) {
 		o.walkSortedKeysLocked(s, index.iteratorKeys, pfx, lower)
 		s.mu.Unlock()
 	}
+	o.addLayerRanges(l)
 }
 
 func (o *overlayState) walkSortedKeysLocked(s *layerShard, keys []string, prefix, lower string) {
@@ -3513,7 +3635,7 @@ func (o *overlayState) walkMapsLocked(s *layerShard, prefix, relativeStart strin
 }
 
 func (o *overlayState) addShardKeyLocked(s *layerShard, key string) {
-	if _, resolved := o.m[key]; resolved {
+	if _, resolved := o.m[key]; resolved || o.rangeDeletesString(key) {
 		return
 	}
 	if value, exists := s.writes[key]; exists {
@@ -3523,6 +3645,25 @@ func (o *overlayState) addShardKeyLocked(s *layerShard, key string) {
 	if _, deleted := s.deletes[key]; deleted {
 		o.m[key] = overlayOp{deleted: true}
 	}
+}
+
+func (o *overlayState) addLayerRanges(l *layer) {
+	if l == nil {
+		return
+	}
+	// Layers are folded newest-first. Point operations from this layer have
+	// already entered o.m and therefore remain authoritative; the appended
+	// ranges mask only older layers and the durable base.
+	o.ranges = append(o.ranges, l.loadRangeDeletes()...)
+}
+
+func (o *overlayState) rangeDeletesString(key string) bool {
+	for _, r := range o.ranges {
+		if r.containsString(key) {
+			return true
+		}
+	}
+	return false
 }
 
 // walkPrefixBucket is the account-scoped counterpart of walk. Each shard's
@@ -3559,7 +3700,7 @@ func (o *overlayState) walkPrefixBucket(l *layer, schema string, bucket byte, ph
 			if !strings.HasPrefix(key, physical) {
 				continue
 			}
-			if _, resolved := o.m[key]; resolved {
+			if _, resolved := o.m[key]; resolved || o.rangeDeletesString(key) {
 				continue
 			}
 			if value, exists := s.writes[key]; exists {
@@ -3572,6 +3713,7 @@ func (o *overlayState) walkPrefixBucket(l *layer, schema string, bucket byte, ph
 		}
 		s.mu.Unlock()
 	}
+	o.addLayerRanges(l)
 }
 
 // finishIterator merges the resolved overlay with the base keys in the
@@ -3606,7 +3748,7 @@ func finishIteratorWithBase(base ethdb.KeyValueReader, overlay *overlayState, pr
 	// the first row. The overlay is already a private snapshot and is normally
 	// tiny, so only it is sorted eagerly; bufferIterator merges both ordered legs
 	// on demand.
-	return &bufferIterator{base: baseIt, overlay: entries}
+	return &bufferIterator{base: baseIt, overlay: entries, ranges: append([]layerRangeDelete(nil), overlay.ranges...)}
 }
 
 func seekPrefixWithBase(base ethdb.KeyValueReader, overlay *overlayState, prefix, start []byte) (key, value []byte, ok bool, err error) {
@@ -3630,6 +3772,9 @@ func seekPrefixWithBase(base ethdb.KeyValueReader, overlay *overlayState, prefix
 			for it.Next() {
 				candidate := it.Key()
 				candidateString := unsafe.String(unsafe.SliceData(candidate), len(candidate))
+				if overlay.rangeDeletesString(candidateString) {
+					continue
+				}
 				if overlayOK && overlayKey < candidateString {
 					break
 				}
@@ -3671,12 +3816,26 @@ func seekPrefixWithBase(base ethdb.KeyValueReader, overlay *overlayState, prefix
 type bufferIterator struct {
 	base        ethdb.Iterator
 	overlay     []bufferIteratorEntry
+	ranges      []layerRangeDelete
 	overlayIdx  int
 	baseReady   bool
 	advanceBase bool
 	key, value  []byte
 	err         error
 	released    bool
+}
+
+func (it *bufferIterator) baseRangeDeleted() bool {
+	if !it.baseReady || it.base == nil {
+		return false
+	}
+	key := it.base.Key()
+	for _, r := range it.ranges {
+		if r.containsBytes(key) {
+			return true
+		}
+	}
+	return false
 }
 
 type bufferIteratorEntry struct {
@@ -3707,6 +3866,10 @@ func (it *bufferIterator) Next() bool {
 					return false
 				}
 			}
+		}
+		if it.baseRangeDeleted() {
+			it.baseReady = false
+			continue
 		}
 
 		overlayReady := it.overlayIdx < len(it.overlay)
@@ -3782,6 +3945,7 @@ func (it *bufferIterator) Release() {
 	}
 	it.base = nil
 	it.overlay = nil
+	it.ranges = nil
 	it.key, it.value = nil, nil
 	it.baseReady = false
 }

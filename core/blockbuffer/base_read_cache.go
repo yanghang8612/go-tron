@@ -1589,6 +1589,13 @@ func (b *Buffer) promoteBaseReadCacheLayer(l *layer) {
 	if b == nil || b.baseReadCache == nil || l == nil {
 		return
 	}
+	if l.hasRangeDeletes() {
+		// Readers that captured the pre-delete durable snapshot may have filled
+		// cache entries after DeleteRange first cleared it. The range is now
+		// durable, so invalidate the complete cache before promoting the
+		// replacement point writes from this layer.
+		b.baseReadCache.clear()
+	}
 	for i := range l.shards {
 		s := &l.shards[i]
 		s.mu.RLock()

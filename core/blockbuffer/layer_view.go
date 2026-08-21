@@ -3,6 +3,7 @@ package blockbuffer
 import (
 	"encoding/binary"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"unsafe"
@@ -874,6 +875,66 @@ func (b *Buffer) deleteIntoString(l *layer, key string) {
 	s.mu.Unlock()
 }
 
+func (b *Buffer) deleteRangeInto(l *layer, start, end []byte) error {
+	if l == nil {
+		return errors.New("blockbuffer: range delete with no target layer")
+	}
+	next := layerRangeDelete{start: string(start), end: string(end)}
+	if next.end == "" || next.start >= next.end {
+		return errors.New("blockbuffer: invalid range delete bounds")
+	}
+
+	// DeleteRange is a structural layer mutation. Publish the immutable range
+	// first, then remove earlier point operations inside it. Concurrent reads
+	// may observe the pre-delete point value until this method returns, but can
+	// never fall through to a now-masked durable value in between the two steps.
+	l.rangeDeleteMu.Lock()
+	ranges := append([]layerRangeDelete(nil), l.loadRangeDeletes()...)
+	ranges = append(ranges, next)
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i].start < ranges[j].start })
+	merged := make([]layerRangeDelete, 0, len(ranges))
+	for _, candidate := range ranges {
+		if len(merged) == 0 || merged[len(merged)-1].end < candidate.start {
+			merged = append(merged, candidate)
+			continue
+		}
+		last := &merged[len(merged)-1]
+		if candidate.end > last.end {
+			last.end = candidate.end
+		}
+	}
+	published := append([]layerRangeDelete(nil), merged...)
+	l.rangeDeletes.Store(&published)
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.Lock()
+		for key := range s.writes {
+			if next.containsString(key) {
+				delete(s.writes, key)
+				delete(s.durableWrites, key)
+			}
+		}
+		for key := range s.deletes {
+			if next.containsString(key) {
+				delete(s.deletes, key)
+			}
+		}
+		if s.prefixBucketIndex != nil {
+			s.prefixBucketIndex.invalidateIteratorKeys()
+			s.prefixBucketIndex.buckets = nil
+			s.prefixBucketIndex.built = [4]uint64{}
+		}
+		s.mu.Unlock()
+	}
+	l.rangeDeleteMu.Unlock()
+
+	// A snapshot captured before the range publication may still populate the
+	// durable cache while this layer is live. Clearing here and again after the
+	// successful flush keeps old base rows from reappearing after layer drop.
+	b.clearBaseReadCache()
+	return nil
+}
+
 func (v *LayerView) Put(key, value []byte) error {
 	v.b.putInto(v.l, key, value)
 	return nil
@@ -896,6 +957,11 @@ func (v *LayerView) PutStringOwnedValue(key string, value []byte) error {
 func (v *LayerView) Delete(key []byte) error {
 	v.b.deleteInto(v.l, key)
 	return nil
+}
+
+// DeleteRange is the layer-bound counterpart of Buffer.DeleteRange.
+func (v *LayerView) DeleteRange(start, end []byte) error {
+	return v.b.deleteRangeInto(v.l, start, end)
 }
 
 // PutKeyParts implements rawdb's optional split-key writer path. It is public
