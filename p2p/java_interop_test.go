@@ -4,6 +4,7 @@
 package p2p
 
 import (
+	"bytes"
 	"encoding/hex"
 	"os"
 	"strconv"
@@ -200,25 +201,64 @@ func TestJavaTronApplicationHello(t *testing.T) {
 		h.mu.Unlock()
 		if hasHello {
 			fetchHash, fetchNum := decodeBlockID("JAVA_TRON_FETCH_BLOCK_ID")
-			request, err := proto.Marshal(&corepb.Inventory{
-				Type: corepb.Inventory_BLOCK,
-				Ids:  [][]byte{fetchHash},
+			syncRequest, err := proto.Marshal(&corepb.ChainInventory{
+				Ids: []*corepb.ChainInventory_BlockId{{
+					Hash: headHash, Number: headNum,
+				}},
 			})
 			if err != nil {
-				t.Fatalf("marshal block fetch request: %v", err)
+				t.Fatalf("marshal sync-chain request: %v", err)
 			}
-			peers[0].Send(MsgFetchInvData, request)
-			t.Logf("requested historical block=%d", fetchNum)
+			peers[0].Send(MsgSyncBlockChain, syncRequest)
+			t.Logf("requested chain inventory after block=%d", headNum)
 			deadline = time.Now().Add(5 * time.Second)
+			hasTargetInventory := false
 			for time.Now().Before(deadline) {
 				h.mu.Lock()
-				responseCount := len(h.messages)
+				for _, message := range h.messages[messageCount:] {
+					if message.code != MsgChainInventory {
+						continue
+					}
+					var inventory corepb.ChainInventory
+					if proto.Unmarshal(message.payload, &inventory) == nil {
+						for _, id := range inventory.Ids {
+							hasTargetInventory = hasTargetInventory || bytes.Equal(id.Hash, fetchHash)
+						}
+					}
+				}
 				disconnectedCount := len(h.disconnected)
 				h.mu.Unlock()
-				if responseCount > messageCount || disconnectedCount > 0 {
+				if hasTargetInventory || disconnectedCount > 0 {
 					break
 				}
 				time.Sleep(25 * time.Millisecond)
+			}
+			if hasTargetInventory {
+				h.mu.Lock()
+				messageCount = len(h.messages)
+				h.mu.Unlock()
+				request, err := proto.Marshal(&corepb.Inventory{
+					Type: corepb.Inventory_BLOCK,
+					Ids:  [][]byte{fetchHash},
+				})
+				if err != nil {
+					t.Fatalf("marshal block fetch request: %v", err)
+				}
+				peers[0].Send(MsgFetchInvData, request)
+				t.Logf("requested historical block=%d", fetchNum)
+				deadline = time.Now().Add(5 * time.Second)
+				for time.Now().Before(deadline) {
+					h.mu.Lock()
+					done := len(h.disconnected) > 0
+					for _, message := range h.messages[messageCount:] {
+						done = done || message.code == MsgBlock || message.code == MsgDisconnect
+					}
+					h.mu.Unlock()
+					if done {
+						break
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
 			}
 		}
 	}
@@ -255,6 +295,19 @@ func TestJavaTronApplicationHello(t *testing.T) {
 			}
 			t.Logf("remote Block: number=%d bytes=%d",
 				remote.GetBlockHeader().GetRawData().GetNumber(), len(message.payload))
+		case MsgChainInventory:
+			var remote corepb.ChainInventory
+			if err := proto.Unmarshal(message.payload, &remote); err != nil {
+				t.Logf("remote malformed ChainInventory: %v", err)
+				continue
+			}
+			first, last := int64(0), int64(0)
+			if len(remote.Ids) > 0 {
+				first = remote.Ids[0].Number
+				last = remote.Ids[len(remote.Ids)-1].Number
+			}
+			t.Logf("remote ChainInventory: ids=%d first=%d last=%d remain=%d",
+				len(remote.Ids), first, last, remote.RemainNum)
 		default:
 			t.Logf("remote application message: code=%s payload=%d bytes", MsgName(message.code), len(message.payload))
 		}
