@@ -4,25 +4,30 @@
 package p2p
 
 import (
+	"encoding/hex"
 	"os"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/tronprotocol/go-tron/p2p/discover"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestJavaTronHandshake verifies that go-tron's p2p stack can complete the
 // libp2p handshake with a running java-tron node.
 //
 // Requires the following env vars:
-//   JAVA_TRON_ADDR     — "host:port" of a running java-tron node (e.g. "127.0.0.1:18888")
-//   JAVA_TRON_NETWORK  — network ID the java-tron node uses (e.g. "11111" mainnet,
-//                        "201910292" Nile, "1" Shasta, or a custom test value)
+//
+//	JAVA_TRON_ADDR     — "host:port" of a running java-tron node (e.g. "127.0.0.1:18888")
+//	JAVA_TRON_NETWORK  — network ID the java-tron node uses (e.g. "11111" mainnet,
+//	                     "201910292" Nile, "1" Shasta, or a custom test value)
 //
 // Run with:
-//   JAVA_TRON_ADDR=127.0.0.1:18888 JAVA_TRON_NETWORK=11111 \
-//     go test -tags=integration ./p2p/ -run JavaTronHandshake -v
+//
+//	JAVA_TRON_ADDR=127.0.0.1:18888 JAVA_TRON_NETWORK=11111 \
+//	  go test -tags=integration ./p2p/ -run JavaTronHandshake -v
 //
 // See docs/dev/java-tron-local.md for how to stand up a local java-tron.
 func TestJavaTronHandshake(t *testing.T) {
@@ -95,6 +100,117 @@ func TestJavaTronHandshake(t *testing.T) {
 
 	t.Logf("libp2p interop OK — handshake passed, received %d app-layer message(s): %v",
 		messageCount, codeCounts)
+}
+
+// TestJavaTronApplicationHello extends the libp2p interop probe through the
+// TRON application Hello exchange. It is intentionally integration-only and
+// takes the local canonical head block ID from the environment so operators
+// can diagnose a historical sync peer without opening the production DB from
+// a second process.
+//
+// Requires JAVA_TRON_ADDR, JAVA_TRON_NETWORK, and JAVA_TRON_HEAD_ID. The head
+// ID must be the canonical 32-byte block ID (first eight bytes are the block
+// number). JAVA_TRON_SOLID_ID is optional and defaults to the head ID.
+func TestJavaTronApplicationHello(t *testing.T) {
+	addr := os.Getenv("JAVA_TRON_ADDR")
+	if addr == "" {
+		t.Skip("JAVA_TRON_ADDR not set")
+	}
+	networkID64, err := strconv.ParseInt(os.Getenv("JAVA_TRON_NETWORK"), 10, 32)
+	if err != nil {
+		t.Fatalf("parse JAVA_TRON_NETWORK: %v", err)
+	}
+	decodeBlockID := func(name string) ([]byte, int64) {
+		t.Helper()
+		text := os.Getenv(name)
+		if text == "" && name == "JAVA_TRON_SOLID_ID" {
+			text = os.Getenv("JAVA_TRON_HEAD_ID")
+		}
+		id, err := hex.DecodeString(text)
+		if err != nil || len(id) != 32 {
+			t.Fatalf("%s must be a 32-byte hex block ID", name)
+		}
+		num, err := strconv.ParseInt(text[:16], 16, 64)
+		if err != nil {
+			t.Fatalf("parse block number from %s: %v", name, err)
+		}
+		return id, num
+	}
+	headHash, headNum := decodeBlockID("JAVA_TRON_HEAD_ID")
+	solidHash, solidNum := decodeBlockID("JAVA_TRON_SOLID_ID")
+	genesisHash, _ := hex.DecodeString("00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc")
+
+	h := &testHandler{}
+	srv := NewServer(ServerConfig{
+		ListenAddr: ":0",
+		MaxPeers:   5,
+		NodeID:     discover.GenerateNodeID(),
+		NetworkID:  int32(networkID64),
+		ExternalIP: "127.0.0.1",
+	}, h)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("start server: %v", err)
+	}
+	defer srv.Stop()
+	if err := srv.AddPeer(addr); err != nil {
+		t.Fatalf("libp2p handshake with java-tron at %s failed: %v", addr, err)
+	}
+	peers := srv.Peers()
+	if len(peers) != 1 {
+		t.Fatalf("expected one connected peer, got %d", len(peers))
+	}
+	hello := &corepb.HelloMessage{
+		From:      srv.LocalEndpoint(),
+		Version:   int32(networkID64),
+		Timestamp: time.Now().UnixMilli(),
+		GenesisBlockId: &corepb.HelloMessage_BlockId{
+			Hash: genesisHash,
+		},
+		SolidBlockId: &corepb.HelloMessage_BlockId{
+			Hash: solidHash, Number: solidNum,
+		},
+		HeadBlockId: &corepb.HelloMessage_BlockId{
+			Hash: headHash, Number: headNum,
+		},
+	}
+	payload, err := proto.Marshal(hello)
+	if err != nil {
+		t.Fatalf("marshal application hello: %v", err)
+	}
+	peers[0].Send(MsgHello, payload)
+
+	time.Sleep(5 * time.Second)
+	h.mu.Lock()
+	messages := append([]struct {
+		code    byte
+		payload []byte
+	}(nil), h.messages...)
+	disconnected := len(h.disconnected)
+	h.mu.Unlock()
+	for _, message := range messages {
+		switch message.code {
+		case MsgHello:
+			var remote corepb.HelloMessage
+			if err := proto.Unmarshal(message.payload, &remote); err != nil {
+				t.Logf("remote malformed Hello: %v", err)
+				continue
+			}
+			t.Logf("remote Hello: version=%d head=%d solid=%d lowest=%d codeVersion=%q",
+				remote.Version, remote.GetHeadBlockId().GetNumber(),
+				remote.GetSolidBlockId().GetNumber(), remote.LowestBlockNum, remote.CodeVersion)
+		case MsgDisconnect:
+			var remote corepb.DisconnectMessage
+			if err := proto.Unmarshal(message.payload, &remote); err != nil {
+				t.Logf("remote malformed Disconnect: %v", err)
+				continue
+			}
+			t.Logf("remote Disconnect: reason=%s", remote.Reason)
+		default:
+			t.Logf("remote application message: code=%s payload=%d bytes", MsgName(message.code), len(message.payload))
+		}
+	}
+	t.Logf("application probe complete: messages=%d disconnected=%d cause=%q",
+		len(messages), disconnected, peers[0].DisconnectCause())
 }
 
 // TestJavaTronDiscoverPing verifies UDP discovery ping/pong works against a
