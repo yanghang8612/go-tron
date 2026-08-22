@@ -784,7 +784,7 @@ func progressForInstalledManifest(manifest *Manifest) *Progress {
 	return mergeProgress(cloneProgress(manifest.Progress), progressFromRefs(manifest.Segments, manifest.VisibleTxEnd))
 }
 
-func progressFromRefs(refs []SegmentRef, txNum uint64) *Progress {
+func progressFromRefs(refs []SegmentRef, _ uint64) *Progress {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -794,15 +794,15 @@ func progressFromRefs(refs []SegmentRef, txNum uint64) *Progress {
 		cfg, ok := registry.ConfigForRef(ref)
 		switch ref.Kind {
 		case SegmentLatest:
-			p.LatestBuildTxNum = max(p.LatestBuildTxNum, txNum)
+			p.LatestBuildTxNum = max(p.LatestBuildTxNum, ref.ToTxNum)
 			if ok && cfg.TracksCommitmentFlush {
-				p.CommitmentFlushTxNum = max(p.CommitmentFlushTxNum, txNum)
+				p.CommitmentFlushTxNum = max(p.CommitmentFlushTxNum, ref.ToTxNum)
 			}
 		case SegmentAccessor, SegmentBTree:
-			p.AccessorBuildTxNum = max(p.AccessorBuildTxNum, txNum)
+			p.AccessorBuildTxNum = max(p.AccessorBuildTxNum, ref.ToTxNum)
 		case SegmentHistory:
 			if ok && cfg.HasHistory {
-				p.HistoryBuildTxNum = max(p.HistoryBuildTxNum, txNum)
+				p.HistoryBuildTxNum = max(p.HistoryBuildTxNum, ref.ToTxNum)
 			}
 		}
 	}

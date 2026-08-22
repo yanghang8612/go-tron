@@ -526,6 +526,165 @@ func buildCodeSegmentFilesFromStoreContext(ctx context.Context, store latestHotS
 	}, writeAccessor)
 }
 
+// buildCodeSegmentFilesPreservingSnapshotContext builds the next immutable
+// CodeDomain baseline from both the current cold baseline and the hot delta.
+//
+// Code rows are content-addressed and the snap pruner is allowed to remove a
+// hot row after it is present in the active CodeDomain snapshot. Rebuilding a
+// later baseline from the hot table alone would therefore replace the complete
+// cold baseline with only code created since the preceding build (often an
+// empty segment), making older contracts execute as code-less accounts after
+// restart. Merge the two sorted sources so every previously published hash
+// remains reachable while newly created code is added.
+func buildCodeSegmentFilesPreservingSnapshotContext(ctx context.Context, store latestHotStore, dir string, fromTxNum, toTxNum uint64, relPath string, writeAccessor bool) (SegmentRef, SegmentRef, SegmentRef, error) {
+	if store == nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
+	}
+	manager, err := OpenManager(dir)
+	if err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	manifest := manager.Manifest()
+	var coldTxNum uint64
+	for _, ref := range manifestSegments(manifest) {
+		if ref.Kind == SegmentLatest && ref.normalizedDataset() == SegmentDatasetCode && ref.Domain == 0 && ref.ToTxNum > coldTxNum {
+			coldTxNum = ref.ToTxNum
+		}
+	}
+	if coldTxNum == 0 {
+		return buildCodeSegmentFilesFromStoreContext(ctx, store, dir, fromTxNum, toTxNum, relPath, writeAccessor)
+	}
+
+	return writeLatestBinarySegmentWithCompanionsContext(ctx, dir, SegmentRef{
+		Dataset:   SegmentDatasetCode,
+		Kind:      SegmentLatest,
+		FromTxNum: fromTxNum,
+		ToTxNum:   toTxNum,
+		Path:      relPath,
+	}, func(yield func(LatestEntry) error) error {
+		cold := func(fn func(common.Hash, []byte) (bool, error)) error {
+			return manager.IterateCodePrefix(nil, coldTxNum, fn)
+		}
+		hot := func(fn func(common.Hash, []byte) (bool, error)) error {
+			return iterateCodeContext(ctx, store, fn)
+		}
+		return mergeCodeRowsContext(ctx, cold, hot, func(hash common.Hash, code []byte) error {
+			return yield(LatestEntry{Key: CodeSnapshotKey(hash), Value: code})
+		})
+	}, writeAccessor)
+}
+
+func manifestSegments(manifest *Manifest) []SegmentRef {
+	if manifest == nil {
+		return nil
+	}
+	return manifest.Segments
+}
+
+type codeRowIterator func(func(common.Hash, []byte) (bool, error)) error
+
+type codeRow struct {
+	hash common.Hash
+	code []byte
+	err  error
+}
+
+func mergeCodeRowsContext(ctx context.Context, cold, hot codeRowIterator, yield func(common.Hash, []byte) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	mergeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var workers sync.WaitGroup
+	pump := func(iter codeRowIterator) <-chan codeRow {
+		rows := make(chan codeRow, 1)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			defer close(rows)
+			err := iter(func(hash common.Hash, code []byte) (bool, error) {
+				row := codeRow{hash: hash, code: append([]byte(nil), code...)}
+				select {
+				case rows <- row:
+					return true, nil
+				case <-mergeCtx.Done():
+					return false, nil
+				}
+			})
+			if err != nil {
+				select {
+				case rows <- codeRow{err: err}:
+				case <-mergeCtx.Done():
+				}
+			}
+		}()
+		return rows
+	}
+	coldRows := pump(cold)
+	hotRows := pump(hot)
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+
+	next := func(rows <-chan codeRow) (codeRow, bool, error) {
+		select {
+		case <-mergeCtx.Done():
+			return codeRow{}, false, mergeCtx.Err()
+		case row, ok := <-rows:
+			if !ok {
+				return codeRow{}, false, nil
+			}
+			if row.err != nil {
+				return codeRow{}, false, row.err
+			}
+			return row, true, nil
+		}
+	}
+
+	coldRow, hasCold, err := next(coldRows)
+	if err != nil {
+		return err
+	}
+	hotRow, hasHot, err := next(hotRows)
+	if err != nil {
+		return err
+	}
+	for hasCold || hasHot {
+		if err := contextError(mergeCtx); err != nil {
+			return err
+		}
+		switch {
+		case !hasHot || (hasCold && bytes.Compare(coldRow.hash[:], hotRow.hash[:]) < 0):
+			if err := yield(coldRow.hash, coldRow.code); err != nil {
+				return err
+			}
+			coldRow, hasCold, err = next(coldRows)
+		case !hasCold || bytes.Compare(hotRow.hash[:], coldRow.hash[:]) < 0:
+			if err := yield(hotRow.hash, hotRow.code); err != nil {
+				return err
+			}
+			hotRow, hasHot, err = next(hotRows)
+		default:
+			if !bytes.Equal(coldRow.code, hotRow.code) {
+				return fmt.Errorf("snapshots: CodeDomain hash %x has conflicting cold and hot bytes", coldRow.hash)
+			}
+			if err := yield(hotRow.hash, hotRow.code); err != nil {
+				return err
+			}
+			coldRow, hasCold, err = next(coldRows)
+			if err == nil {
+				hotRow, hasHot, err = next(hotRows)
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func BuildCommitmentRootSegmentFromDB(db ethdb.KeyValueReader, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
 	if db == nil {
 		return SegmentRef{}, errors.New("snapshots: nil database")

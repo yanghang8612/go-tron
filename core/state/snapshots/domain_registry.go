@@ -331,14 +331,14 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
 			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, _, btree, err := buildCodeSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
+				latest, _, btree, err := buildCodeSegmentFilesPreservingSnapshotContext(context.Background(), newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}
 				return []SegmentRef{latest, btree}, nil
 			},
 			BuildLatestContext: func(ctx context.Context, db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, _, btree, err := buildCodeSegmentFilesFromStoreContext(ctx, newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
+				latest, _, btree, err := buildCodeSegmentFilesPreservingSnapshotContext(ctx, newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
 				if err != nil {
 					return nil, err
 				}

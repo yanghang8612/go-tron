@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -121,6 +122,9 @@ func (a *VMActuator) Validate(ctx *Context) error {
 		}
 		if _, ok := ctx.State.ContractRuntime(contractAddr); !ok {
 			return errors.New("no contract or not a smart contract")
+		}
+		if err := requireTriggerRuntimeCode(ctx.State, contractAddr); err != nil {
+			return err
 		}
 		if err := validateVMFeeLimit(ctx); err != nil {
 			return err
@@ -350,6 +354,9 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	}
 	callValue := tsc.CallValue
 	data := tsc.Data
+	if err := requireTriggerRuntimeCode(ctx.State, contractAddr); err != nil {
+		return nil, err
+	}
 
 	result := ctx.newResult()
 	result.setContractAddress(contractAddr)
@@ -413,6 +420,24 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 
 	result.ContractRet = 1 // SUCCESS
 	return result, nil
+}
+
+func requireTriggerRuntimeCode(st *state.StateDB, contractAddr common.Address) error {
+	if st == nil {
+		return errors.New("contract runtime code check requires state")
+	}
+	codeHash := st.GetCodeHash(contractAddr)
+	if codeHash == (common.Hash{}) || codeHash == common.Keccak256(nil) {
+		return nil
+	}
+	code, err := st.GetCodeStrict(contractAddr)
+	if err != nil {
+		return fmt.Errorf("read contract runtime code contract=%s codeHash=%s: %w", contractAddr.Hex(), codeHash.Hex(), err)
+	}
+	if len(code) == 0 {
+		return fmt.Errorf("contract runtime code unavailable contract=%s codeHash=%s; active CodeDomain snapshot or hot state-code row is missing", contractAddr.Hex(), codeHash.Hex())
+	}
+	return nil
 }
 
 func validateVMFeeLimit(ctx *Context) error {

@@ -506,6 +506,73 @@ func TestAggregatorBuildLatestOnly(t *testing.T) {
 	}
 }
 
+func TestAggregatorBuildLatestPreservesPrunedCodeDomain(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	root := common.BytesToHash(bytes.Repeat([]byte{0x5a}, common.HashLength))
+	oldCode := []byte{0x60, 0x01, 0x00}
+	oldHash := common.Keccak256(oldCode)
+	newCode := []byte{0x60, 0x02, 0x00}
+	newHash := common.Keccak256(newCode)
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateCode(db, oldHash, oldCode); err != nil {
+		t.Fatal(err)
+	}
+
+	agg := NewAggregator(dir)
+	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 10}); err != nil {
+		t.Fatalf("first BuildLatest: %v", err)
+	}
+	// Snap pruning removes code from the hot table only after the first cold
+	// CodeDomain baseline covers it. The next latest build must merge that cold
+	// baseline with newly created hot code instead of replacing it with the hot
+	// delta.
+	if err := rawdb.DeleteStateCode(db, oldHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateCode(db, newHash, newCode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 20}); err != nil {
+		t.Fatalf("second BuildLatest: %v", err)
+	}
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	for _, tc := range []struct {
+		hash common.Hash
+		code []byte
+		name string
+	}{
+		{hash: oldHash, code: oldCode, name: "cold baseline"},
+		{hash: newHash, code: newCode, name: "hot delta"},
+	} {
+		got, ok, err := mgr.GetCodeAtOrBefore(tc.hash, 20)
+		if err != nil || !ok || !bytes.Equal(got, tc.code) {
+			t.Fatalf("%s code = %x ok=%v err=%v, want %x", tc.name, got, ok, err, tc.code)
+		}
+	}
+}
+
+func TestProgressFromRefsUsesEachSegmentBoundary(t *testing.T) {
+	refs := []SegmentRef{
+		{Dataset: SegmentDatasetAccountLatest, Kind: SegmentLatest, FromTxNum: 1, ToTxNum: 30},
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 1, ToTxNum: 20},
+		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: 1, ToTxNum: 20},
+	}
+	progress := progressFromRefs(refs, 30)
+	if progress == nil {
+		t.Fatal("progressFromRefs returned nil")
+	}
+	if progress.LatestBuildTxNum != 30 || progress.HistoryBuildTxNum != 20 || progress.AccessorBuildTxNum != 20 {
+		t.Fatalf("progress = %+v, want latest=30 history=20 accessor=20", progress)
+	}
+}
+
 func TestAggregatorBuildLatestPrunesDeletedContractGeneration(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()

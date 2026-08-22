@@ -2,10 +2,13 @@ package actuator
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	tronrawdb "github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -223,6 +226,68 @@ func TestVMActuatorTriggerValidate(t *testing.T) {
 	err = act.Validate(ctx)
 	if err != nil {
 		t.Fatalf("validate failed: %v", err)
+	}
+}
+
+func TestVMActuatorTriggerRejectsMissingRuntimeCode(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+	code := []byte{0x60, 0x01, 0x00}
+	codeHash := tcommon.Keccak256(code)
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner[:],
+		ContractAddress: contractAddr[:],
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 1_000_000)
+	enableVM(ctx)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner[:],
+		ContractAddress: contractAddr[:],
+	})
+	ctx.State.SetCode(contractAddr, code)
+	if _, err := ctx.State.Commit(); err != nil {
+		t.Fatalf("commit contract: %v", err)
+	}
+	if err := tronrawdb.DeleteStateCode(ctx.DB, codeHash); err != nil {
+		t.Fatalf("delete runtime code fixture: %v", err)
+	}
+	disk, ok := ctx.DB.(ethdb.Database)
+	if !ok {
+		t.Fatalf("test DB %T does not implement ethdb.Database", ctx.DB)
+	}
+	reloaded, err := state.New(tcommon.Hash{}, state.NewDatabase(disk))
+	if err != nil {
+		t.Fatalf("reload state: %v", err)
+	}
+	ctx.State = reloaded
+
+	err = (&VMActuator{}).Validate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "contract runtime code unavailable") || !strings.Contains(err.Error(), codeHash.Hex()) {
+		t.Fatalf("Validate error = %v, want missing runtime code with hash", err)
+	}
+	if _, err := (&VMActuator{}).Execute(ctx); err == nil || !strings.Contains(err.Error(), "contract runtime code unavailable") {
+		t.Fatalf("Execute error = %v, want missing runtime code", err)
+	}
+}
+
+func TestVMActuatorTriggerAllowsRecordedEmptyRuntime(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner[:],
+		ContractAddress: contractAddr[:],
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 1_000_000)
+	enableVM(ctx)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner[:],
+		ContractAddress: contractAddr[:],
+	})
+	ctx.State.SetCode(contractAddr, nil)
+	if err := (&VMActuator{}).Validate(ctx); err != nil {
+		t.Fatalf("Validate empty runtime: %v", err)
 	}
 }
 
