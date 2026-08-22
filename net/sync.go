@@ -2192,6 +2192,11 @@ func (ss *SyncService) logImportResumePhasePublishResult(result syncdl.ImportRes
 				"canonicalBlock", decision.CanonicalRow.BlockNum,
 				"canonicalHash", decision.CanonicalRow.BlockHash,
 				"canonicalHasHash", decision.CanonicalRow.HasBlockHash,
+				"canonicalAhead", decision.CanonicalAhead,
+				"canonicalProofHash", decision.CanonicalHash,
+				"canonicalProofHasHash", decision.HasCanonicalHash,
+				"targetCanonicalHash", decision.TargetCanonicalHash,
+				"targetCanonicalHasHash", decision.HasTargetCanonicalHash,
 				"syncStageBlock", decision.SyncRow.BlockNum,
 				"syncStageHash", decision.SyncRow.BlockHash,
 				"syncStageHasHash", decision.SyncRow.HasBlockHash,
@@ -2211,11 +2216,23 @@ func (ss *SyncService) logImportResumePhasePublishResult(result syncdl.ImportRes
 	if len(result.Plan.RecoveryPhases) > 0 {
 		phase := result.Plan.Phases[0]
 		target := phase.Tasks[len(phase.Tasks)-1]
+		canonicalAhead := false
+		canonicalBlock := target.BlockNum
+		for _, decision := range result.Plan.Decisions {
+			if decision.CanonicalAhead {
+				canonicalAhead = true
+				if decision.CanonicalRow.BlockNum > canonicalBlock {
+					canonicalBlock = decision.CanonicalRow.BlockNum
+				}
+			}
+		}
 		syncLog.Info("Recovered missing sync import phase prefix",
 			"resumePhase", phase.Phase,
 			"resumeStage", phase.SyncStage,
 			"block", target.BlockNum,
 			"hash", target.BlockHash,
+			"canonicalAhead", canonicalAhead,
+			"canonicalBlock", canonicalBlock,
 			"recoveredPhases", len(result.Plan.RecoveryPhases),
 			"rows", result.Rows)
 		return
@@ -2973,11 +2990,11 @@ func (a syncImportedBatchProgressApplier) WriteImportedSyncProgressAndReady(dele
 	if a.service == nil || a.service.chain == nil || len(deletes) == 0 {
 		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
 	}
-	db := a.service.chain.DB()
+	db := a.service.chain.ChainDB()
 	if db == nil {
 		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
 	}
-	if _, ok := db.(ethdb.Batcher); !ok {
+	if _, ok := any(db).(ethdb.Batcher); !ok {
 		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
 	}
 	if a.service.chain.PipelinedCommitDepth() > 0 {
@@ -3014,6 +3031,17 @@ func (a syncImportResumePhasePublishApplier) ReadStageProgress(stage rawdb.Stage
 	return rawdb.ReadStageProgressRow(db, stage)
 }
 
+func (a syncImportResumePhasePublishApplier) ReadCanonicalHash(number uint64) (tcommon.Hash, bool) {
+	if a.service == nil || a.service.chain == nil {
+		return tcommon.Hash{}, false
+	}
+	id, ok := a.service.chain.BlockIDByNumber(number)
+	if !ok {
+		return tcommon.Hash{}, false
+	}
+	return id.Hash, true
+}
+
 func (a syncImportResumePhasePublishApplier) WriteResumePhaseProgress(rows []rawdb.StageProgress) error {
 	if a.service == nil || a.service.chain == nil {
 		return fmt.Errorf("sync: cannot publish resume phase progress without service or chain")
@@ -3048,7 +3076,7 @@ func (ss *SyncService) writeImportedSyncProgress(deletes []rawdb.SyncStagedBlock
 	if (len(deletes) == 0 && len(rows) == 0) || ss == nil || ss.chain == nil {
 		return rawdb.SyncImportProgressWriteResult{}
 	}
-	db := ss.chain.DB()
+	db := ss.chain.ChainDB()
 	if db == nil {
 		return rawdb.SyncImportProgressWriteResult{}
 	}

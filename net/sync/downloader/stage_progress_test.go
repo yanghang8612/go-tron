@@ -2853,13 +2853,123 @@ func TestApplyImportResumePhasePublishRun(t *testing.T) {
 	}
 }
 
+func TestApplyImportResumePhasePublishRunRecoversCanonicalAheadTarget(t *testing.T) {
+	targetHash := tcommon.Hash{0x07}
+	headHash := tcommon.Hash{0x09}
+	phases := []ImportStagePhasePlan{
+		{
+			Phase:          ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, targetHash)},
+		},
+		{
+			Phase:          ImportStagePhaseFinish,
+			CanonicalStage: rawdb.StageFinish,
+			SyncStage:      rawdb.StageSyncFinish,
+			Tasks:          []ImportStageTask{ImportFinishStageTask(7, targetHash)},
+		},
+	}
+	applier := &recordingImportResumePhasePublishApplier{
+		stageRows: map[rawdb.StageID]rawdb.StageProgress{
+			rawdb.StageBodies:     {Stage: rawdb.StageBodies, BlockNum: 9, BlockHash: headHash, HasBlockHash: true},
+			rawdb.StageExecution:  {Stage: rawdb.StageExecution, BlockNum: 9, BlockHash: headHash, HasBlockHash: true},
+			rawdb.StageCommitment: {Stage: rawdb.StageCommitment, BlockNum: 9, BlockHash: headHash, HasBlockHash: true},
+			rawdb.StageFinish:     {Stage: rawdb.StageFinish, BlockNum: 9, BlockHash: headHash, HasBlockHash: true},
+		},
+		canonicalHashes: map[uint64]tcommon.Hash{
+			7: targetHash,
+			9: headHash,
+		},
+	}
+
+	got := ApplyImportResumePhasePublishRun(phases, applier)
+	if !got.Publish.Applied || !got.PublishPlan.OK || len(got.PublishPlan.RecoveryPhases) != 2 || got.Publish.Rows != 4 {
+		t.Fatalf("canonical-ahead run = %+v, want recovered four-stage prefix", got)
+	}
+	for _, decision := range got.PublishPlan.Decisions {
+		if decision.Status != ImportResumePhasePublishReady || !decision.CanonicalAhead ||
+			!decision.HasCanonicalHash || !decision.HasTargetCanonicalHash {
+			t.Fatalf("canonical-ahead decision = %+v, want fully proven ready", decision)
+		}
+	}
+	for i, row := range applier.rows {
+		if row.BlockNum != 7 || row.BlockHash != targetHash || !row.HasBlockHash {
+			t.Fatalf("published row %d = %+v, want target block 7", i, row)
+		}
+	}
+}
+
+func TestPlanImportResumePhasePublishCanonicalAheadRequiresProof(t *testing.T) {
+	targetHash := tcommon.Hash{0x07}
+	headHash := tcommon.Hash{0x09}
+	phase := ImportStagePhasePlan{
+		Phase:          ImportStagePhaseCommitment,
+		CanonicalStage: rawdb.StageCommitment,
+		SyncStage:      rawdb.StageSyncCommitment,
+		Tasks:          []ImportStageTask{ImportCommitmentStageTask(7, targetHash)},
+	}
+	rows := map[rawdb.StageID]rawdb.StageProgress{
+		rawdb.StageCommitment:    {Stage: rawdb.StageCommitment, BlockNum: 9, BlockHash: headHash, HasBlockHash: true},
+		rawdb.StageSyncExecution: {Stage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: targetHash, HasBlockHash: true},
+	}
+	read := func(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {
+		row, ok := rows[stage]
+		return row, ok, nil
+	}
+	proof := func(hashes map[uint64]tcommon.Hash) CanonicalHashReader {
+		return func(number uint64) (tcommon.Hash, bool) {
+			hash, ok := hashes[number]
+			return hash, ok
+		}
+	}
+
+	valid := PlanImportResumePhasePublishWithCanonical([]ImportStagePhasePlan{phase}, read, proof(map[uint64]tcommon.Hash{7: targetHash, 9: headHash}))
+	if !valid.OK || len(valid.Decisions) != 1 || valid.Decisions[0].Status != ImportResumePhasePublishReady || !valid.Decisions[0].CanonicalAhead {
+		t.Fatalf("valid canonical-ahead plan = %+v, want ready", valid)
+	}
+
+	for _, tt := range []struct {
+		name   string
+		hashes map[uint64]tcommon.Hash
+		status ImportResumePhasePublishStatus
+	}{
+		{name: "no reader", status: ImportResumePhasePublishCanonicalProofMissing},
+		{name: "target missing", hashes: map[uint64]tcommon.Hash{9: headHash}, status: ImportResumePhasePublishCanonicalProofMissing},
+		{name: "stage missing", hashes: map[uint64]tcommon.Hash{7: targetHash}, status: ImportResumePhasePublishCanonicalProofMissing},
+		{name: "target mismatch", hashes: map[uint64]tcommon.Hash{7: {0xee}, 9: headHash}, status: ImportResumePhasePublishCanonicalProofMismatch},
+		{name: "stage mismatch", hashes: map[uint64]tcommon.Hash{7: targetHash, 9: {0xee}}, status: ImportResumePhasePublishCanonicalProofMismatch},
+	} {
+		var reader CanonicalHashReader
+		if tt.hashes != nil {
+			reader = proof(tt.hashes)
+		}
+		got := PlanImportResumePhasePublishWithCanonical([]ImportStagePhasePlan{phase}, read, reader)
+		if got.OK || got.Complete || len(got.Progress) != 0 || len(got.Decisions) != 1 || got.Decisions[0].Status != tt.status {
+			t.Fatalf("%s plan = %+v, want %s", tt.name, got, tt.status)
+		}
+	}
+
+	rows[rawdb.StageCommitment] = rawdb.StageProgress{Stage: rawdb.StageCommitment, BlockNum: 6, BlockHash: tcommon.Hash{0x06}, HasBlockHash: true}
+	behind := PlanImportResumePhasePublishWithCanonical([]ImportStagePhasePlan{phase}, read, proof(map[uint64]tcommon.Hash{6: {0x06}, 7: targetHash}))
+	if behind.OK || len(behind.Decisions) != 1 || behind.Decisions[0].Status != ImportResumePhasePublishCanonicalBehind {
+		t.Fatalf("canonical-behind plan = %+v, want canonical-behind", behind)
+	}
+}
+
 type recordingImportResumePhasePublishApplier struct {
-	rows       []rawdb.StageProgress
-	stageRows  map[rawdb.StageID]rawdb.StageProgress
-	readStages []rawdb.StageID
-	writeCalls int
-	readErr    error
-	err        error
+	rows            []rawdb.StageProgress
+	stageRows       map[rawdb.StageID]rawdb.StageProgress
+	canonicalHashes map[uint64]tcommon.Hash
+	readStages      []rawdb.StageID
+	writeCalls      int
+	readErr         error
+	err             error
+}
+
+func (a *recordingImportResumePhasePublishApplier) ReadCanonicalHash(number uint64) (tcommon.Hash, bool) {
+	hash, ok := a.canonicalHashes[number]
+	return hash, ok
 }
 
 func (a *recordingImportResumePhasePublishApplier) ReadStageProgress(stage rawdb.StageID) (rawdb.StageProgress, bool, error) {

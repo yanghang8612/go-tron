@@ -1320,6 +1320,78 @@ func TestSyncServiceRecoversMissingResumePhaseUpstreamAfterBarrier(t *testing.T)
 	}
 }
 
+func TestSyncServiceRecoversCanonicalAheadResumePhaseAfterBarrier(t *testing.T) {
+	bc := makeChainWithBlocks(t, 3)
+	ss := NewSyncService(bc, nil)
+	target := bc.GetBlockByNumber(1)
+	head := bc.CurrentBlock()
+	if target == nil || head == nil {
+		t.Fatal("canonical chain is missing target or head")
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
+		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, head.Number(), head.Hash()); err != nil {
+			t.Fatalf("write canonical %s progress: %v", stage, err)
+		}
+	}
+	phases := []syncdl.ImportStagePhasePlan{
+		{
+			Phase:          syncdl.ImportStagePhaseCommitment,
+			CanonicalStage: rawdb.StageCommitment,
+			SyncStage:      rawdb.StageSyncCommitment,
+			Tasks:          []syncdl.ImportStageTask{syncdl.ImportCommitmentStageTask(target.Number(), target.Hash())},
+		},
+		{
+			Phase:          syncdl.ImportStagePhaseFinish,
+			CanonicalStage: rawdb.StageFinish,
+			SyncStage:      rawdb.StageSyncFinish,
+			Tasks:          []syncdl.ImportStageTask{syncdl.ImportFinishStageTask(target.Number(), target.Hash())},
+		},
+	}
+
+	result := ss.publishImportResumePhaseProgress(phases, true, false)
+	publish := result.Publish.Publish
+	if !result.Finalization.Publish || !publish.Applied || publish.Rows != 4 || publish.WriteError != nil || !publish.Plan.OK ||
+		len(publish.Plan.RecoveryPhases) != 2 {
+		t.Fatalf("canonical-ahead recovery result = %+v, want recovered four-stage prefix", result)
+	}
+	for _, decision := range publish.Plan.Decisions {
+		if !decision.CanonicalAhead || decision.Status != syncdl.ImportResumePhasePublishReady ||
+			!decision.HasCanonicalHash || !decision.HasTargetCanonicalHash {
+			t.Fatalf("canonical-ahead recovery decision = %+v, want proven ready", decision)
+		}
+	}
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
+		row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage)
+		if err != nil || !ok || row.BlockNum != target.Number() || row.BlockHash != target.Hash() || !row.HasBlockHash {
+			t.Fatalf("%s progress after canonical-ahead recovery = %+v ok=%v err=%v, want target", stage, row, ok, err)
+		}
+	}
+}
+
+func TestSyncServiceImportedProgressAcceptsCanonicalProvenMissingStagedBody(t *testing.T) {
+	bc := makeChainWithBlocks(t, 2)
+	ss := NewSyncService(bc, nil)
+	target := bc.GetBlockByNumber(1)
+	head := bc.CurrentBlock()
+	if target == nil || head == nil {
+		t.Fatal("canonical chain is missing target or head")
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageFinish, head.Number(), head.Hash()); err != nil {
+		t.Fatalf("write canonical finish progress: %v", err)
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), target.Number()); err != nil || ok {
+		t.Fatalf("staged target before idempotent cleanup ok=%v err=%v, want absent", ok, err)
+	}
+
+	result := ss.writeImportedSyncProgress(
+		[]rawdb.SyncStagedBlockDelete{{Number: target.Number(), Hash: target.Hash()}},
+		[]rawdb.StageProgress{{Stage: rawdb.StageSyncImport, BlockNum: target.Number(), BlockHash: target.Hash(), HasBlockHash: true}},
+	)
+	if result.Deleted != 1 || len(result.DeleteErrors) != 0 || result.ProgressRows != 1 || result.ProgressError != nil {
+		t.Fatalf("canonical-proven service cleanup = %+v, want idempotent success", result)
+	}
+}
+
 func TestSyncServiceResumePhasePublishRejectsUnsafeRows(t *testing.T) {
 	tests := map[string]struct {
 		setup           func(t *testing.T, db ethdb.KeyValueStore, block *types.Block)

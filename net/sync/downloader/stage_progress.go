@@ -914,7 +914,10 @@ const (
 	ImportResumePhasePublishReadError
 	ImportResumePhasePublishCanonicalMissing
 	ImportResumePhasePublishCanonicalUnbound
+	ImportResumePhasePublishCanonicalBehind
 	ImportResumePhasePublishCanonicalMismatch
+	ImportResumePhasePublishCanonicalProofMissing
+	ImportResumePhasePublishCanonicalProofMismatch
 	ImportResumePhasePublishSyncAhead
 	ImportResumePhasePublishSyncHashMismatch
 	ImportResumePhasePublishUpstreamMissing
@@ -935,8 +938,14 @@ func (s ImportResumePhasePublishStatus) String() string {
 		return "canonical-missing"
 	case ImportResumePhasePublishCanonicalUnbound:
 		return "canonical-unbound"
+	case ImportResumePhasePublishCanonicalBehind:
+		return "canonical-behind"
 	case ImportResumePhasePublishCanonicalMismatch:
 		return "canonical-mismatch"
+	case ImportResumePhasePublishCanonicalProofMissing:
+		return "canonical-proof-missing"
+	case ImportResumePhasePublishCanonicalProofMismatch:
+		return "canonical-proof-mismatch"
 	case ImportResumePhasePublishSyncAhead:
 		return "sync-ahead"
 	case ImportResumePhasePublishSyncHashMismatch:
@@ -982,28 +991,34 @@ func (r ImportResumePhasePublishFinalizationSkipReason) String() string {
 
 // ImportResumePhasePublishDecision records one phase-level publish decision.
 type ImportResumePhasePublishDecision struct {
-	Phase           ImportStagePhase
-	CanonicalStage  rawdb.StageID
-	SyncStage       rawdb.StageID
-	Recovery        bool
-	TargetBlock     uint64
-	TargetHash      tcommon.Hash
-	CanonicalRow    rawdb.StageProgress
-	HasCanonicalRow bool
-	SyncRow         rawdb.StageProgress
-	HasSyncRow      bool
-	UpstreamStage   rawdb.StageID
-	UpstreamRow     rawdb.StageProgress
-	HasUpstreamRow  bool
-	Status          ImportResumePhasePublishStatus
-	Err             error
+	Phase                  ImportStagePhase
+	CanonicalStage         rawdb.StageID
+	SyncStage              rawdb.StageID
+	Recovery               bool
+	TargetBlock            uint64
+	TargetHash             tcommon.Hash
+	CanonicalRow           rawdb.StageProgress
+	HasCanonicalRow        bool
+	CanonicalAhead         bool
+	CanonicalHash          tcommon.Hash
+	HasCanonicalHash       bool
+	TargetCanonicalHash    tcommon.Hash
+	HasTargetCanonicalHash bool
+	SyncRow                rawdb.StageProgress
+	HasSyncRow             bool
+	UpstreamStage          rawdb.StageID
+	UpstreamRow            rawdb.StageProgress
+	HasUpstreamRow         bool
+	Status                 ImportResumePhasePublishStatus
+	Err                    error
 }
 
 // ImportResumePhasePublishPlan is the storage plan for a scheduler-yielded
 // import phase suffix after the caller has crossed the canonical commit
-// barrier. It publishes only when every phase in the suffix has an exact
-// hash-bound canonical stage row, preventing diagnostic sync rows from moving
-// past canonical execution.
+// barrier. It publishes only when every phase in the suffix either has an
+// exact hash-bound canonical stage row or has advanced beyond the target with
+// both heights proven by canonical block hashes. This prevents diagnostic sync
+// rows from moving past canonical execution.
 type ImportResumePhasePublishPlan struct {
 	Phases         []ImportStagePhasePlan
 	RecoveryPhases []ImportStagePhasePlan
@@ -1024,6 +1039,14 @@ type ImportResumePhasePublishPlanApplier interface {
 type ImportResumePhasePublishRunApplier interface {
 	ReadStageProgress(stage rawdb.StageID) (rawdb.StageProgress, bool, error)
 	WriteResumePhaseProgress(rows []rawdb.StageProgress) error
+}
+
+// ImportResumePhaseCanonicalHashReader is an optional runtime extension used
+// when a durable canonical stage has advanced beyond a stale resume target.
+// Both the stage row and target block must still resolve to their recorded
+// hashes on the canonical chain before the older suffix can be published.
+type ImportResumePhaseCanonicalHashReader interface {
+	ReadCanonicalHash(number uint64) (tcommon.Hash, bool)
 }
 
 // ImportResumePhasePublishApplyResult records the write outcome for a
@@ -1493,12 +1516,20 @@ func importResumePhasePublishFailureError(run ImportResumePhasePublishFinalizati
 // PlanImportResumePhasePublish verifies a yielded phase suffix against
 // canonical stage progress and builds the sync-stage rows that can be safely
 // published after the caller's commit barrier. If a durable upstream sync row
-// disappeared across restart, an exact canonical prefix at the same block/hash
+// disappeared across restart, a canonical prefix that is exact or safely ahead
 // may recover it in the same atomic write. The returned plan is all-or-none: a
 // missing or mismatched canonical proof leaves Progress empty so callers do not
 // publish a partial suffix that could hide an async commit failure.
 func PlanImportResumePhasePublish(phases []ImportStagePhasePlan, read StageProgressReader) ImportResumePhasePublishPlan {
-	plan := planImportResumePhasePublish(phases, nil, read)
+	return PlanImportResumePhasePublishWithCanonical(phases, read, nil)
+}
+
+// PlanImportResumePhasePublishWithCanonical additionally accepts a canonical
+// block-hash reader. It permits a stale yielded suffix to recover after a
+// later async batch has already advanced the canonical stage, but only when
+// both ends of that proof are still hash-bound to the canonical chain.
+func PlanImportResumePhasePublishWithCanonical(phases []ImportStagePhasePlan, read StageProgressReader, canonicalHash CanonicalHashReader) ImportResumePhasePublishPlan {
+	plan := planImportResumePhasePublish(phases, nil, read, canonicalHash)
 	if plan.OK || !importResumePhasePublishNeedsRecovery(plan) {
 		return plan
 	}
@@ -1506,7 +1537,7 @@ func PlanImportResumePhasePublish(phases []ImportStagePhasePlan, read StageProgr
 	if len(recovery) == 0 {
 		return plan
 	}
-	recovered := planImportResumePhasePublish(phases, recovery, read)
+	recovered := planImportResumePhasePublish(phases, recovery, read, canonicalHash)
 	if recovered.OK {
 		return recovered
 	}
@@ -1516,7 +1547,7 @@ func PlanImportResumePhasePublish(phases []ImportStagePhasePlan, read StageProgr
 	return plan
 }
 
-func planImportResumePhasePublish(phases, recovery []ImportStagePhasePlan, read StageProgressReader) ImportResumePhasePublishPlan {
+func planImportResumePhasePublish(phases, recovery []ImportStagePhasePlan, read StageProgressReader, canonicalHash CanonicalHashReader) ImportResumePhasePublishPlan {
 	plan := ImportResumePhasePublishPlan{
 		Phases:         cloneImportStagePhasePlanList(phases),
 		RecoveryPhases: cloneImportStagePhasePlanList(recovery),
@@ -1531,7 +1562,7 @@ func planImportResumePhasePublish(phases, recovery []ImportStagePhasePlan, read 
 	allPhases = append(allPhases, phases...)
 	for i, phase := range allPhases {
 		recovering := i < len(recovery)
-		decision, row, ok := planImportResumePhasePublishDecision(phase, read, planned, recovering)
+		decision, row, ok := planImportResumePhasePublishDecision(phase, read, canonicalHash, planned, recovering)
 		plan.Decisions = append(plan.Decisions, decision)
 		if !ok {
 			return plan
@@ -1577,7 +1608,7 @@ func importResumePhaseRecoveryPrefix(phases []ImportStagePhasePlan) []ImportStag
 	return recovery
 }
 
-func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read StageProgressReader, planned map[rawdb.StageID]rawdb.StageProgress, recovering bool) (ImportResumePhasePublishDecision, rawdb.StageProgress, bool) {
+func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read StageProgressReader, canonicalHash CanonicalHashReader, planned map[rawdb.StageID]rawdb.StageProgress, recovering bool) (ImportResumePhasePublishDecision, rawdb.StageProgress, bool) {
 	decision := ImportResumePhasePublishDecision{
 		Phase:          phase.Phase,
 		CanonicalStage: phase.CanonicalStage,
@@ -1612,9 +1643,34 @@ func planImportResumePhasePublishDecision(phase ImportStagePhasePlan, read Stage
 		decision.Status = ImportResumePhasePublishCanonicalUnbound
 		return decision, rawdb.StageProgress{}, false
 	}
-	if canonical.BlockNum != target.BlockNum || canonical.BlockHash != target.BlockHash {
+	if canonical.BlockNum < target.BlockNum {
+		decision.Status = ImportResumePhasePublishCanonicalBehind
+		return decision, rawdb.StageProgress{}, false
+	}
+	if canonical.BlockNum == target.BlockNum && canonical.BlockHash != target.BlockHash {
 		decision.Status = ImportResumePhasePublishCanonicalMismatch
 		return decision, rawdb.StageProgress{}, false
+	}
+	if canonical.BlockNum > target.BlockNum {
+		decision.CanonicalAhead = true
+		if canonicalHash == nil {
+			decision.Status = ImportResumePhasePublishCanonicalProofMissing
+			return decision, rawdb.StageProgress{}, false
+		}
+		stageHash, stageOK := canonicalHash(canonical.BlockNum)
+		decision.CanonicalHash = stageHash
+		decision.HasCanonicalHash = stageOK
+		targetHash, targetOK := canonicalHash(target.BlockNum)
+		decision.TargetCanonicalHash = targetHash
+		decision.HasTargetCanonicalHash = targetOK
+		if !stageOK || !targetOK {
+			decision.Status = ImportResumePhasePublishCanonicalProofMissing
+			return decision, rawdb.StageProgress{}, false
+		}
+		if stageHash != canonical.BlockHash || targetHash != target.BlockHash {
+			decision.Status = ImportResumePhasePublishCanonicalProofMismatch
+			return decision, rawdb.StageProgress{}, false
+		}
 	}
 	syncRow, syncOK, err := read(phase.SyncStage)
 	if err != nil {
@@ -1724,10 +1780,14 @@ func ApplyImportResumePhasePublishRun(phases []ImportStagePhasePlan, applier Imp
 func ApplyImportResumePhasePublishRunPlan(plan ImportResumePhasePublishRunPlan, applier ImportResumePhasePublishRunApplier) ImportResumePhasePublishRunApplyResult {
 	result := ImportResumePhasePublishRunApplyResult{Plan: plan}
 	var read StageProgressReader
+	var canonicalHash CanonicalHashReader
 	if applier != nil {
 		read = applier.ReadStageProgress
+		if canonicalReader, ok := applier.(ImportResumePhaseCanonicalHashReader); ok {
+			canonicalHash = canonicalReader.ReadCanonicalHash
+		}
 	}
-	result.PublishPlan = PlanImportResumePhasePublish(plan.Phases, read)
+	result.PublishPlan = PlanImportResumePhasePublishWithCanonical(plan.Phases, read, canonicalHash)
 	result.Publish = ApplyImportResumePhasePublishPlan(result.PublishPlan, applier)
 	return result
 }

@@ -553,10 +553,18 @@ func validateSyncImportDeleteRows(db ethdb.KeyValueReader, deletes []SyncStagedB
 			continue
 		}
 		if !ok {
+			canonical, proofErr := canonicalSyncImportDeleteProven(db, block)
+			if canonical {
+				continue
+			}
+			missingErr := fmt.Errorf("rawdb: sync staged block %d missing for imported delete", block.Number)
+			if proofErr != nil {
+				missingErr = fmt.Errorf("%w; canonical import proof invalid: %v", missingErr, proofErr)
+			}
 			errs = append(errs, SyncStagedBlockDeleteError{
 				Number: block.Number,
 				Hash:   block.Hash,
-				Err:    fmt.Errorf("rawdb: sync staged block %d missing for imported delete", block.Number),
+				Err:    missingErr,
 			})
 			continue
 		}
@@ -569,6 +577,40 @@ func validateSyncImportDeleteRows(db ethdb.KeyValueReader, deletes []SyncStagedB
 		}
 	}
 	return errs
+}
+
+// canonicalSyncImportDeleteProven makes imported-body cleanup idempotent only
+// for the composite canonical database. A missing staging row is safe to
+// delete again when a hash-bound Finish stage covers it, the Finish row still
+// names the canonical block at its height, and the requested delete itself
+// names the canonical block at its height. Plain KV callers remain strict.
+func canonicalSyncImportDeleteProven(db ethdb.KeyValueReader, block SyncStagedBlockDelete) (bool, error) {
+	chainDB, ok := db.(*ChainDB)
+	if !ok || chainDB == nil {
+		return false, nil
+	}
+	finish, finishOK, err := ReadStageProgressRow(chainDB, StageFinish)
+	if err != nil {
+		return false, fmt.Errorf("read finish progress: %w", err)
+	}
+	if !finishOK || !finish.HasBlockHash || finish.BlockNum < block.Number {
+		return false, nil
+	}
+	finishHash, finishCanonical := ReadBlockHash(chainDB, finish.BlockNum)
+	if !finishCanonical {
+		return false, fmt.Errorf("canonical finish block %d is unavailable", finish.BlockNum)
+	}
+	if finishHash != finish.BlockHash {
+		return false, fmt.Errorf("finish progress block %d hash %x does not match canonical hash %x", finish.BlockNum, finish.BlockHash, finishHash)
+	}
+	blockHash, blockCanonical := ReadBlockHash(chainDB, block.Number)
+	if !blockCanonical {
+		return false, fmt.Errorf("canonical imported block %d is unavailable", block.Number)
+	}
+	if blockHash != block.Hash {
+		return false, fmt.Errorf("imported delete block %d hash %x does not match canonical hash %x", block.Number, block.Hash, blockHash)
+	}
+	return true, nil
 }
 
 func validateSyncImportProgressAgainstDeletes(deletes []SyncStagedBlockDelete, rows []StageProgress) error {

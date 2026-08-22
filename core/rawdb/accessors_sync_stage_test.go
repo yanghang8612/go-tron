@@ -748,6 +748,86 @@ func TestWriteSyncImportProgressBatchValidatesDeletesBeforeProgress(t *testing.T
 	})
 }
 
+func TestWriteSyncImportProgressBatchAcceptsCanonicalProvenMissingDelete(t *testing.T) {
+	t.Run("canonical proof", func(t *testing.T) {
+		base := NewMemoryDatabase()
+		db := NewChainDB(base, NoopAncient{})
+		block1 := testSyncStagedBlock(1, common.Hash{})
+		block2 := testSyncStagedBlock(2, block1.Hash())
+		for _, block := range []*types.Block{block1, block2} {
+			if err := WriteBlock(db, block); err != nil {
+				t.Fatalf("write canonical block %d: %v", block.Number(), err)
+			}
+		}
+		if err := WriteStageProgressWithHash(db, StageFinish, block2.Number(), block2.Hash()); err != nil {
+			t.Fatalf("write finish progress: %v", err)
+		}
+
+		result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+			{Number: block1.Number(), Hash: block1.Hash()},
+		}, []StageProgress{
+			{Stage: StageSyncImport, BlockNum: block1.Number(), BlockHash: block1.Hash(), HasBlockHash: true},
+		})
+		if result.Deleted != 1 || len(result.DeleteErrors) != 0 || result.ProgressRows != 1 || result.ProgressError != nil {
+			t.Fatalf("result = %+v, want canonical-proven idempotent delete", result)
+		}
+		row, ok, err := ReadStageProgressRow(db, StageSyncImport)
+		if err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+			t.Fatalf("sync import progress = %+v ok=%v err=%v, want block1", row, ok, err)
+		}
+	})
+
+	for _, tt := range []struct {
+		name        string
+		deleteBlock int
+		deleteHash  common.Hash
+		finishBlock int
+		finishHash  common.Hash
+	}{
+		{name: "finish behind", deleteBlock: 2, finishBlock: 1},
+		{name: "delete hash mismatch", deleteBlock: 1, deleteHash: common.Hash{0xee}, finishBlock: 2},
+		{name: "finish hash mismatch", deleteBlock: 1, finishBlock: 2, finishHash: common.Hash{0xee}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			base := NewMemoryDatabase()
+			db := NewChainDB(base, NoopAncient{})
+			block1 := testSyncStagedBlock(1, common.Hash{})
+			block2 := testSyncStagedBlock(2, block1.Hash())
+			blocks := []*types.Block{block1, block2}
+			for _, block := range blocks {
+				if err := WriteBlock(db, block); err != nil {
+					t.Fatalf("write canonical block %d: %v", block.Number(), err)
+				}
+			}
+			deleteBlock := blocks[tt.deleteBlock-1]
+			deleteHash := tt.deleteHash
+			if deleteHash == (common.Hash{}) {
+				deleteHash = deleteBlock.Hash()
+			}
+			finishBlock := blocks[tt.finishBlock-1]
+			finishHash := tt.finishHash
+			if finishHash == (common.Hash{}) {
+				finishHash = finishBlock.Hash()
+			}
+			if err := WriteStageProgressWithHash(db, StageFinish, finishBlock.Number(), finishHash); err != nil {
+				t.Fatalf("write finish progress: %v", err)
+			}
+
+			result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+				{Number: deleteBlock.Number(), Hash: deleteHash},
+			}, []StageProgress{
+				{Stage: StageSyncImport, BlockNum: deleteBlock.Number(), BlockHash: deleteHash, HasBlockHash: true},
+			})
+			if len(result.DeleteErrors) != 1 || result.Deleted != 0 || result.ProgressRows != 0 || result.ProgressError != nil {
+				t.Fatalf("result = %+v, want rejected missing delete", result)
+			}
+			if row, ok, err := ReadStageProgressRow(db, StageSyncImport); err != nil || ok {
+				t.Fatalf("sync import progress after rejection = %+v ok=%v err=%v, want absent", row, ok, err)
+			}
+		})
+	}
+}
+
 func TestWriteSyncImportProgressBatchStopsOnBatchDeleteEnqueueError(t *testing.T) {
 	base := NewMemoryDatabase()
 	block := testSyncStagedBlock(2, common.Hash{0x01})
