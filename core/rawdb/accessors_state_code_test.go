@@ -178,6 +178,39 @@ func TestStateCodeStrictReadDistinguishesMissAndErrors(t *testing.T) {
 	}
 }
 
+func TestStateCodeStrictReadAcceptsClassifiedMissWithoutPresenceProbe(t *testing.T) {
+	code := []byte{0x60, 0x42}
+	hash := common.Keccak256(code)
+	reader := &classifiedMissingStateCodeReader{}
+
+	got, ok, err := ReadStateCodeStrict(reader, hash)
+	if err != nil || ok || got != nil {
+		t.Fatalf("classified missing code = %x ok=%v err=%v, want miss", got, ok, err)
+	}
+	if reader.hasCalls != 0 {
+		t.Fatalf("Has calls = %d, want 0 for classified miss", reader.hasCalls)
+	}
+}
+
+type classifiedMissingStateCodeReader struct {
+	hasCalls int
+}
+
+func (*classifiedMissingStateCodeReader) Get([]byte) ([]byte, error) {
+	return nil, errClassifiedStateCodeMissing
+}
+
+func (r *classifiedMissingStateCodeReader) Has([]byte) (bool, error) {
+	r.hasCalls++
+	return false, errors.New("classified miss must not probe presence")
+}
+
+func (*classifiedMissingStateCodeReader) IsKeyNotFound(err error) bool {
+	return errors.Is(err, errClassifiedStateCodeMissing)
+}
+
+var errClassifiedStateCodeMissing = errors.New("classified state code missing")
+
 type failingStateCodeReader struct {
 	ethdb.KeyValueStore
 	getKey []byte

@@ -56,12 +56,5 @@ func readValueThenVerifyMiss(db ethdb.KeyValueReader, key []byte, context string
 	if err == nil {
 		return value, true, nil
 	}
-	exists, hasErr := db.Has(key)
-	if hasErr != nil {
-		return nil, false, fmt.Errorf("rawdb: read %s presence after get error: %w", context, hasErr)
-	}
-	if !exists {
-		return nil, false, nil
-	}
-	return nil, false, fmt.Errorf("rawdb: read %s: %w", context, err)
+	return verifyStateReadMiss(db, key, context, err)
 }
