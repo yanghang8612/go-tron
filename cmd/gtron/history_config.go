@@ -147,6 +147,31 @@ func shouldEnableChainFreezerSnapshotBuilder(cfg *params.ChainConfig, ancientAva
 	return ancientAvailable && freezerEnabled && shouldEnableChainFreezerTailPruner(cfg)
 }
 
+// shouldDeferColdSnapshotHistoryWhileSyncing lets cold-backed modes accumulate
+// a bounded hot-history backlog while deep sync owns the foreground. The cold
+// builder's MaxDeferredHistoryBlocks high-water mark forces accelerated passes
+// before that backlog can grow without bound; full, blocks, and minimal do not
+// run this state-history snapshot builder.
+func shouldDeferColdSnapshotHistoryWhileSyncing(cfg *params.ChainConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	switch cfg.EffectiveHistoryMode() {
+	case params.HistoryModeSnap, params.HistoryModeArchive:
+		return cfg.HistoryEnabled
+	default:
+		return false
+	}
+}
+
+func maxDeferredColdHistoryBlocks(historyWindow uint64) uint64 {
+	const multiplier = uint64(4)
+	if historyWindow > ^uint64(0)/multiplier {
+		return ^uint64(0)
+	}
+	return historyWindow * multiplier
+}
+
 func domainStatePrunePolicy(cfg *params.ChainConfig, targetReorgWindow uint64) statepruning.Policy {
 	historyWindow := params.HistoryDefaultPruneWindow
 	mode := params.HistoryModeFull

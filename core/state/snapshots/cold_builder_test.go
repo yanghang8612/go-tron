@@ -563,6 +563,7 @@ func TestColdBuilderDefersHistoryAndCompactionWhileFarBehind(t *testing.T) {
 		HistoryWindow:                 1,
 		LatestBuildBlocks:             0,
 		DeferHistoryBuildWhileSyncing: true,
+		MaxDeferredHistoryBlocks:      2,
 		MetricsNamespace:              namespace,
 	})
 
@@ -585,6 +586,68 @@ func TestColdBuilderDefersHistoryAndCompactionWhileFarBehind(t *testing.T) {
 	}
 	if !built.Built || built.HistoryDeferred {
 		t.Fatalf("near-tip pass = %+v, want bounded cold build", built)
+	}
+}
+
+func TestColdBuilderForcesBoundedCatchupPastDeferredBacklogCap(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7b)
+	for blockNum := uint64(1); blockNum <= 4; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	runner := NewRunner(&coldBuilderChain{
+		db: db, solidified: 4, syncRemaining: 1_000, syncRemainingOK: true,
+	}, Config{
+		Dir:                           dir,
+		Enabled:                       true,
+		HistoryWindow:                 1,
+		BatchBlocks:                   1,
+		DeferHistoryBuildWhileSyncing: true,
+		MaxDeferredHistoryBlocks:      2,
+	})
+
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if !result.Built || result.HistoryDeferred || result.FromBlock != 1 || result.ToBlock != 1 {
+		t.Fatalf("over-cap pass = %+v, want one bounded history batch despite active deep sync", result)
+	}
+}
+
+func TestColdBuilderDefersDerivedSidecarsWhileFarBehind(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7a)
+	writeColdBuilderChange(t, db, owner, 1, 1, "previous")
+	writeColdBuilderCanonicalBlock(t, db, 1)
+	runner := NewRunner(&coldBuilderChain{
+		db: db, solidified: 2, syncRemaining: 1_000, syncRemainingOK: true,
+	}, Config{
+		Dir:                           dir,
+		Enabled:                       true,
+		HistoryWindow:                 1,
+		DeferHistoryBuildWhileSyncing: true,
+		BuildSectionBlooms:            true,
+		BuildBalanceTraces:            true,
+		BuildEventLogs:                true,
+	})
+
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("far-behind pass: %v", err)
+	}
+	if !result.HistoryDeferred || result.Built || result.SectionBloomBuilt || result.BalanceTraceBuilt || result.EventLogBuilt {
+		t.Fatalf("far-behind pass = %+v, want all cold and derived builds deferred", result)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read snapshot dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("snapshot dir contains %d entries during deep sync, want none", len(entries))
 	}
 }
 

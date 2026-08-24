@@ -155,6 +155,49 @@ func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Blo
 		result.StageError = err
 		return result
 	}
+	return writeSyncStagedBlockDataAndProgress(db, result, data)
+}
+
+// WriteSyncStagedBlockRawIDAndProgress is the raw-body counterpart used by
+// network sync admission. The caller has already decoded the BlockID from the
+// header, so the transaction tree need not be materialized merely to key and
+// hash-bind the staged row. The raw body is still independently rechecked
+// before it becomes durable.
+func WriteSyncStagedBlockRawIDAndProgress(db ethdb.KeyValueStore, id types.BlockID, raw []byte) SyncStagedBlockWriteResult {
+	result := SyncStagedBlockWriteResult{Number: id.Num, Hash: id.Hash}
+	if db == nil {
+		result.StageError = errors.New("rawdb: nil sync staged block writer")
+		return result
+	}
+	if len(raw) == 0 {
+		result.StageError = errors.New("rawdb: empty raw sync staged block")
+		return result
+	}
+	// Normal java-tron/go-tron bodies use canonical proto.Marshal order, where
+	// the zero-allocation raw scanner is authoritative. Fall back to the merge-
+	// aware header decoder only for unusual valid protobuf encodings or a
+	// mismatch, preserving wire compatibility without charging every body twice.
+	wireHash, scanErr := types.BlockHashFromRaw(raw)
+	wireID := types.BlockID{Hash: wireHash}
+	if scanErr == nil {
+		wireID.Num = binary.BigEndian.Uint64(wireHash[:8])
+	}
+	if scanErr != nil || wireID != id {
+		var err error
+		wireID, err = types.BlockIDFromRaw(raw)
+		if err != nil {
+			result.StageError = fmt.Errorf("rawdb: sync staged raw for block %d header: %w", id.Num, err)
+			return result
+		}
+		if wireID != id {
+			result.StageError = fmt.Errorf("rawdb: sync staged raw block ID %d/%x, want %d/%x", wireID.Num, wireID.Hash, id.Num, id.Hash)
+			return result
+		}
+	}
+	return writeSyncStagedBlockDataAndProgress(db, result, append([]byte(nil), raw...))
+}
+
+func writeSyncStagedBlockDataAndProgress(db ethdb.KeyValueStore, result SyncStagedBlockWriteResult, data []byte) SyncStagedBlockWriteResult {
 	existing, existingOK, err := ReadSyncStagedBlockMetadata(db, result.Number)
 	if err != nil {
 		result.StageError = fmt.Errorf("rawdb: read existing sync staged block %d: %w", result.Number, err)

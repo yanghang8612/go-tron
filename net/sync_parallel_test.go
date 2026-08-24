@@ -56,8 +56,8 @@ func TestMultiPeerChainInventorySplitsFetchBatches(t *testing.T) {
 			t.Fatalf("same block requested from both peers: %x", h)
 		}
 	}
-	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncInventory); err != nil || !ok || row.BlockNum != 1250 || row.HasBlockHash {
-		t.Fatalf("sync inventory stage = %+v ok=%v err=%v, want target block 1250 without hash", row, ok, err)
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncInventory); err != nil || !ok || row.BlockNum != 250 || row.HasBlockHash {
+		t.Fatalf("sync inventory stage = %+v ok=%v err=%v, want highest explicit inventory tip 250 without hash", row, ok, err)
 	}
 }
 
@@ -108,6 +108,7 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 		t.Fatalf("sync import stage = %+v ok=%v err=%v, want block2", row, ok, err)
 	}
 	assertSyncPipelineProgress(t, bc.DB(), block2)
+	ss.derivedWG.Wait()
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageTxLookup); err != nil || !ok || row.BlockNum != block2.Number() || !row.HasBlockHash || row.BlockHash != block2.Hash() {
 		t.Fatalf("tx lookup stage = %+v ok=%v err=%v, want block2 hash-bound", row, ok, err)
 	}

@@ -557,11 +557,7 @@ func readAncientTransactionIndexStrict(db *ChainDB, txHash []byte) (uint64, bool
 // run covers blockNum. Replay and derived-index rebuild paths use it to avoid
 // recreating historical tx-* rows after their cold replacement is published.
 func HasAncientTransactionIndex(db *ChainDB, blockNum uint64) bool {
-	if db == nil || db.AncientReader == nil {
-		return false
-	}
-	index, ok := db.AncientReader.(AncientTransactionIndexReader)
-	return ok && blockNum < index.TransactionIndexCoverage()
+	return db != nil && db.HasAncientTransactionIndex(blockNum)
 }
 
 func readHotTransactionIndexStrict(db ethdb.KeyValueReader, txHash []byte) (uint64, bool, error) {

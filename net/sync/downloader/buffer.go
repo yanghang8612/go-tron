@@ -1188,6 +1188,27 @@ func PopBufferedBatch(buffer map[uint64]BufferedBlock, bufferedHashes map[tcommo
 	return batch
 }
 
+// PeekBufferedBatch returns the contiguous run starting at next without
+// releasing any reservations. Raw staged bodies are decoded off the service
+// lock, then the caller atomically commits only the successfully decoded
+// prefix. Keeping the entries owned until that commit prevents a malformed
+// first body from advancing the drain cursor past the whole batch.
+func PeekBufferedBatch(buffer map[uint64]BufferedBlock, next uint64, limit int) BufferedBatch {
+	var batch BufferedBatch
+	if limit <= 0 {
+		return batch
+	}
+	for len(batch.Buffered) < limit {
+		buffered, ok := buffer[next]
+		if !ok {
+			break
+		}
+		batch.Buffered = append(batch.Buffered, buffered)
+		next++
+	}
+	return batch
+}
+
 // DecodeBlocks decodes raw buffered entries into Blocks. It uses a bounded
 // worker set because every raw body is independent until canonical insertion,
 // then rebuilds Blocks in order so it preserves the successfully decoded prefix
@@ -1219,6 +1240,18 @@ func bufferedBatchDecodeWorkerCount(blocks int) int {
 
 func (b *BufferedBatch) decodeBlocks(workers int) (BufferedBlock, error) {
 	if b == nil {
+		return BufferedBlock{}, nil
+	}
+	// A two-phase staged-body drain may hand the import runner a batch that was
+	// already decoded before its buffer reservations were committed. Revalidate
+	// the cheap metadata binding, but do not rebuild the pointer-rich protobuf
+	// tree a second time.
+	if len(b.Blocks) > 0 && len(b.Blocks) == len(b.Buffered) {
+		for i, block := range b.Blocks {
+			if err := ValidateBufferedBlockMetadata(b.Buffered[i], block); err != nil {
+				return b.Buffered[i], err
+			}
+		}
 		return BufferedBlock{}, nil
 	}
 	b.Blocks = make([]*types.Block, 0, len(b.Buffered))

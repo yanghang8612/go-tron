@@ -1171,6 +1171,57 @@ func UnmarshalBlockBorrowed(data []byte) (*Block, error) {
 	return block, nil
 }
 
+// BlockIDFromRaw decodes only the block header fields needed for a BlockID.
+// Unlike BlockHashFromRaw, this accepts arbitrary valid protobuf field order
+// and duplicate singular message fields with the same merge semantics as the
+// generated decoder. Transaction bodies are skipped without constructing their
+// pointer-rich protobuf graph, which makes this suitable for sync admission:
+// the staged-body importer performs the one authoritative full decode when the
+// body reaches the contiguous canonical frontier.
+func BlockIDFromRaw(data []byte) (BlockID, error) {
+	var header corepb.BlockHeader
+	var foundHeader bool
+	for len(data) != 0 {
+		fieldData := data
+		field, wireType, n := protowire.ConsumeField(fieldData)
+		if n < 0 || !field.IsValid() {
+			if n >= 0 {
+				return BlockID{}, errors.New("invalid block field number")
+			}
+			return BlockID{}, protowire.ParseError(n)
+		}
+		data = data[n:]
+		if field != 2 {
+			if field == 1 && wireType != protowire.BytesType {
+				return BlockID{}, fmt.Errorf("block transaction has wire type %d, want bytes", wireType)
+			}
+			continue
+		}
+		if wireType != protowire.BytesType {
+			return BlockID{}, fmt.Errorf("block header has wire type %d, want bytes", wireType)
+		}
+		value, ok := bytesFieldValue(fieldData[:n])
+		if !ok {
+			return BlockID{}, errors.New("malformed block header bytes field")
+		}
+		if err := blockMergeUnmarshal.Unmarshal(value, &header); err != nil {
+			return BlockID{}, fmt.Errorf("block header: %w", err)
+		}
+		foundHeader = true
+	}
+	if !foundHeader || header.RawData == nil {
+		return BlockID{}, errors.New("block raw header: missing raw_data")
+	}
+	encoded, err := proto.Marshal(header.RawData)
+	if err != nil {
+		return BlockID{}, fmt.Errorf("block raw header marshal: %w", err)
+	}
+	hash := sha256.Sum256(encoded)
+	number := uint64(header.RawData.Number)
+	binary.BigEndian.PutUint64(hash[:8], number)
+	return BlockID{Hash: hash, Num: number}, nil
+}
+
 // BlockHashFromRaw derives the canonical BlockID directly from bytes produced
 // by Block.Marshal. It scans past transaction fields without decoding them,
 // extracts BlockHeader.RawData, hashes those exact canonical protobuf bytes and

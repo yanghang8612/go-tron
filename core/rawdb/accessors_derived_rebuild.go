@@ -42,6 +42,7 @@ type RebuildTransactionDerivedIndexesResult struct {
 type RebuildTransactionLookupResult struct {
 	FromBlock            uint64
 	ToBlock              uint64
+	ToBlockHash          common.Hash
 	BlocksScanned        uint64
 	AncientBlocksScanned uint64
 	HotBlocksScanned     uint64
@@ -193,11 +194,54 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 	return result, nil
 }
 
+// TransactionLookupBlockReader is the stable hot/ancient read view consumed by
+// the recoverable TxLookup stage.
+type TransactionLookupBlockReader interface {
+	ethdb.KeyValueReader
+	ethdb.Iteratee
+	AncientReader
+	HasAncientTransactionIndex(blockNum uint64) bool
+}
+
+// CollectedTransactionLookup is a sorted, not-yet-published TxLookup rebuild.
+// Snapshot-based callers collect outside their canonical-chain lock, validate
+// the branch after reacquiring it, then load and advance the stage watermark
+// under that lock so an orphan branch cannot leak visible tx-* rows.
+type CollectedTransactionLookup struct {
+	Result    *RebuildTransactionLookupResult
+	collector *DerivedIndexCollector
+}
+
+func (c *CollectedTransactionLookup) Close() error {
+	if c == nil || c.collector == nil {
+		return nil
+	}
+	return c.collector.Close()
+}
+
+func (c *CollectedTransactionLookup) LoadInterruptible(writer ethdb.KeyValueWriter, interrupted func() bool) error {
+	if c == nil || c.collector == nil || c.Result == nil {
+		return errors.New("rawdb: nil collected transaction lookup")
+	}
+	if writer == nil {
+		return errors.New("rawdb: nil transaction lookup writer")
+	}
+	stats, err := c.collector.LoadInterruptible(writer, interrupted)
+	if err != nil {
+		if errors.Is(err, etl.ErrLoadInterrupted) {
+			return ErrTransactionLookupRebuildInterrupted
+		}
+		return err
+	}
+	c.Result.ETL = stats
+	return nil
+}
+
 // RebuildTransactionLookupFromBlocks rebuilds only tx-hash to block-number
 // rows from retained canonical block bodies. It is the recoverable TxLookup
 // stage payload used after bulk sync; keeping it independent lets execution
 // avoid unordered tx- writes without delaying receipt availability.
-func RebuildTransactionLookupFromBlocks(chain *ChainDB, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options) (*RebuildTransactionLookupResult, error) {
+func RebuildTransactionLookupFromBlocks(chain TransactionLookupBlockReader, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options) (*RebuildTransactionLookupResult, error) {
 	return RebuildTransactionLookupFromBlocksInterruptible(chain, writer, fromBlock, toBlock, opts, nil)
 }
 
@@ -206,12 +250,29 @@ func RebuildTransactionLookupFromBlocks(chain *ChainDB, writer ethdb.KeyValueWri
 // pass. Ancient bodies are fetched as one contiguous range and hot Pebble
 // bodies are consumed by a single prefix iterator; this avoids the Has+Get
 // random-point-read pair previously issued for every block.
-func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options, interrupted func() bool) (*RebuildTransactionLookupResult, error) {
+func RebuildTransactionLookupFromBlocksInterruptible(chain TransactionLookupBlockReader, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options, interrupted func() bool) (*RebuildTransactionLookupResult, error) {
 	if chain == nil {
 		return nil, errors.New("rawdb: nil chain db")
 	}
 	if writer == nil {
 		return nil, errors.New("rawdb: nil transaction lookup writer")
+	}
+	collected, err := CollectTransactionLookupFromBlocksInterruptible(chain, fromBlock, toBlock, opts, interrupted)
+	if err != nil {
+		return nil, err
+	}
+	defer collected.Close()
+	if err := collected.LoadInterruptible(writer, interrupted); err != nil {
+		return nil, err
+	}
+	return collected.Result, nil
+}
+
+// CollectTransactionLookupFromBlocksInterruptible scans and sorts one stable
+// body range without making any derived rows visible.
+func CollectTransactionLookupFromBlocksInterruptible(chain TransactionLookupBlockReader, fromBlock, toBlock uint64, opts etl.Options, interrupted func() bool) (*CollectedTransactionLookup, error) {
+	if chain == nil {
+		return nil, errors.New("rawdb: nil chain db")
 	}
 	if toBlock < fromBlock {
 		return nil, fmt.Errorf("rawdb: inverted transaction lookup rebuild range [%d,%d]", fromBlock, toBlock)
@@ -220,7 +281,12 @@ func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethd
 	if err != nil {
 		return nil, err
 	}
-	defer collector.Close()
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			collector.Close()
+		}
+	}()
 
 	result := &RebuildTransactionLookupResult{FromBlock: fromBlock, ToBlock: toBlock}
 	consume := func(blockNum uint64, encoded []byte, ancient bool) error {
@@ -235,12 +301,15 @@ func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethd
 			return fmt.Errorf("rawdb: block row %d contains block number %d", blockNum, block.Number())
 		}
 		result.BlocksScanned++
+		if blockNum == toBlock {
+			result.ToBlockHash = block.Hash()
+		}
 		if ancient {
 			result.AncientBlocksScanned++
 		} else {
 			result.HotBlocksScanned++
 		}
-		if HasAncientTransactionIndex(chain, blockNum) {
+		if chain.HasAncientTransactionIndex(blockNum) {
 			return nil
 		}
 		for _, tx := range block.Transactions() {
@@ -261,15 +330,8 @@ func RebuildTransactionLookupFromBlocksInterruptible(chain *ChainDB, writer ethd
 	if interrupted != nil && interrupted() {
 		return nil, ErrTransactionLookupRebuildInterrupted
 	}
-	stats, err := collector.LoadInterruptible(writer, interrupted)
-	if err != nil {
-		if errors.Is(err, etl.ErrLoadInterrupted) {
-			return nil, ErrTransactionLookupRebuildInterrupted
-		}
-		return nil, err
-	}
-	result.ETL = stats
-	return result, nil
+	closeOnError = false
+	return &CollectedTransactionLookup{Result: result, collector: collector}, nil
 }
 
 // RebuildStateHistoryIndexInterruptible collects hash -> block postings and a
@@ -379,7 +441,7 @@ func RebuildStateHistoryIndexInterruptible(source StateKVHistoryReader, writer e
 	return result, nil
 }
 
-func iterateTransactionLookupBlockRange(chain *ChainDB, fromBlock, toBlock uint64, consume func(uint64, []byte, bool) error) error {
+func iterateTransactionLookupBlockRange(chain TransactionLookupBlockReader, fromBlock, toBlock uint64, consume func(uint64, []byte, bool) error) error {
 	next := fromBlock
 	hasAncient, err := chain.HasAncient(ancientBlocks, next)
 	if err != nil {

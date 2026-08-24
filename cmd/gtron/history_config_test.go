@@ -381,6 +381,35 @@ func TestShouldEnableChainFreezerSnapshotBuilder(t *testing.T) {
 	}
 }
 
+func TestShouldDeferColdSnapshotHistoryWhileSyncing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  *params.ChainConfig
+		want bool
+	}{
+		{name: "snap history", cfg: &params.ChainConfig{HistoryMode: params.HistoryModeSnap, HistoryEnabled: true}, want: true},
+		{name: "archive history", cfg: &params.ChainConfig{HistoryMode: params.HistoryModeArchive, HistoryEnabled: true}, want: true},
+		{name: "snap without capture", cfg: &params.ChainConfig{HistoryMode: params.HistoryModeSnap}},
+		{name: "full history", cfg: &params.ChainConfig{HistoryMode: params.HistoryModeFull, HistoryEnabled: true}},
+		{name: "nil config"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldDeferColdSnapshotHistoryWhileSyncing(tc.cfg); got != tc.want {
+				t.Fatalf("shouldDeferColdSnapshotHistoryWhileSyncing = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMaxDeferredColdHistoryBlocksSaturates(t *testing.T) {
+	if got := maxDeferredColdHistoryBlocks(65_536); got != 262_144 {
+		t.Fatalf("ordinary cap = %d, want 262144", got)
+	}
+	if got := maxDeferredColdHistoryBlocks(^uint64(0)); got != ^uint64(0) {
+		t.Fatalf("overflow cap = %d, want MaxUint64", got)
+	}
+}
+
 func TestShouldEnableChainLookupPruner(t *testing.T) {
 	tests := []struct {
 		name string

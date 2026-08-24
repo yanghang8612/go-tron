@@ -418,6 +418,27 @@ func TestAcceptStagedBodyStagesBodyAndRefreshesReadyFrontier(t *testing.T) {
 	}
 }
 
+func TestAcceptStagedBodyRawMatchesDecodedPath(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block := testBufferedBlock(2)
+	raw, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := AcceptStagedBodyRaw(db, block.ID(), raw, 2, 0)
+	if got.Write.StageError != nil || !got.Write.Staged || !got.Write.ProgressWritten {
+		t.Fatalf("raw accept = %+v, want staged block2 and SyncBodies progress", got)
+	}
+	if !got.Ready.Refreshed || got.Ready.Refresh.WriteError != nil {
+		t.Fatalf("raw ready refresh = %+v, want refreshed", got.Ready)
+	}
+	row, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block.Number())
+	if err != nil || !ok || row.Hash != block.Hash() || !bytes.Equal(row.Raw, raw) {
+		t.Fatalf("staged raw row = %+v ok=%v err=%v, want original body", row, ok, err)
+	}
+}
+
 func TestAcceptStagedBodyStopsBeforeReadyRefreshOnStageError(t *testing.T) {
 	got := AcceptStagedBody(nil, testBufferedBlock(2), nil, 2, 0)
 	if got.Write.StageError == nil {

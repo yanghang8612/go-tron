@@ -118,6 +118,70 @@ func TestBlockChainSyncInsertDefersTransactionLookupUntilStage(t *testing.T) {
 	}
 }
 
+func TestTransactionLookupStageRebuildsPebbleSnapshotWithoutChainLock(t *testing.T) {
+	diskdb, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := cloneMainnetChainConfig()
+	cfg.HistoryEnabled = true
+	genesis := &params.Genesis{
+		Config: cfg,
+		Accounts: []params.GenesisAccount{{
+			Address: testInsertAddr(1),
+			Balance: 99_000_000_000_000_000,
+		}},
+		DynamicProperties: map[string]int64{"next_maintenance_time": 1<<62 - 1},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		diskdb.Close()
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(rawdb.WrapKeyValueStore(diskdb)), cfg)
+	if err != nil {
+		diskdb.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := bc.Close(); err != nil {
+			t.Errorf("close blockchain: %v", err)
+		}
+		if err := diskdb.Close(); err != nil {
+			t.Errorf("close pebble: %v", err)
+		}
+	})
+
+	block := buildTransferBlock(t, 1, 3000, genesisHash, testInsertAddr(1), 5_000_000)
+	txHash := block.Transactions()[0].Hash()
+	if err := bc.InsertSyncBlocksWithStageHook([]*types.Block{block}, nil); err != nil {
+		t.Fatalf("insert sync block: %v", err)
+	}
+	checkedUnlocked := false
+	result, err := bc.AdvanceTransactionLookupStageInterruptible(1, func() bool {
+		if checkedUnlocked {
+			return false
+		}
+		checkedUnlocked = bc.chainmu.TryLock()
+		if checkedUnlocked {
+			bc.chainmu.Unlock()
+		}
+		return false
+	})
+	if err != nil {
+		t.Fatalf("advance transaction lookup: %v", err)
+	}
+	if !checkedUnlocked {
+		t.Fatal("Pebble transaction-lookup ETL held chainmu while scanning")
+	}
+	if !result.Advanced || result.Rebuilt == nil || result.Rebuilt.BlocksScanned != 1 || result.Rebuilt.TransactionsIndexed != 1 {
+		t.Fatalf("transaction lookup result = %+v, want one block/transaction", result)
+	}
+	if got := rawdb.ReadTransactionIndex(bc.ChainDB(), txHash[:]); got == nil || *got != block.Number() {
+		t.Fatalf("tx lookup after snapshot stage = %v, want block %d", got, block.Number())
+	}
+}
+
 func TestBlockMetadataWriterDoesNotRecreateCompactHistoricalIndex(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	genesis := &params.Genesis{

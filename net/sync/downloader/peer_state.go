@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"math"
 	"time"
 
 	"github.com/tronprotocol/go-tron/core/types"
@@ -11,6 +12,20 @@ import (
 type FetchWindow struct {
 	Min uint64
 	Max uint64
+}
+
+// BoundInventoryRemain normalizes the peer-reported remaining count to the
+// already-clamped target projection. Negative values cannot keep a drained peer
+// artificially active, and oversized values cannot overflow progress sums.
+func BoundInventoryRemain(remainNum int64, inventoryTip, observed uint64) int64 {
+	if remainNum <= 0 || observed <= inventoryTip {
+		return 0
+	}
+	remaining := observed - inventoryTip
+	if remaining > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(remaining)
 }
 
 // InventoryTargetUpdate is the downloader target/window state derived from one
@@ -81,24 +96,45 @@ func NewFetchWindow(inventoryTip uint64, inventoryLimit int) FetchWindow {
 // ObserveInventoryTarget derives the peer fetch window and global target head
 // from one CHAIN_INVENTORY tail. remainNum follows java-tron's payload:
 // positive values extend the advertised target beyond the last returned ID.
-func ObserveInventoryTarget(currentTarget, inventoryTip uint64, remainNum int64, inventoryLimit int) InventoryTargetUpdate {
+func ObserveInventoryTarget(currentTarget, inventoryTip uint64, remainNum int64, inventoryLimit int, maxTarget ...uint64) InventoryTargetUpdate {
 	if inventoryTip == 0 {
 		return InventoryTargetUpdate{Target: currentTarget}
 	}
-	observed := inventoryTip
+	effectiveTip := inventoryTip
+	if len(maxTarget) > 0 && maxTarget[0] > 0 && effectiveTip > maxTarget[0] {
+		effectiveTip = maxTarget[0]
+	}
+	observed := effectiveTip
 	if remainNum > 0 {
-		observed += uint64(remainNum)
+		remaining := uint64(remainNum)
+		if remaining > math.MaxUint64-observed {
+			observed = math.MaxUint64
+		} else {
+			observed += remaining
+		}
 	}
 	target := currentTarget
+	if len(maxTarget) > 0 && maxTarget[0] > 0 {
+		limit := maxTarget[0]
+		if observed > limit {
+			observed = limit
+		}
+		if target > limit {
+			target = limit
+		}
+	}
 	advanced := false
 	if observed > target {
 		target = observed
 		advanced = true
 	}
 	return InventoryTargetUpdate{
-		Window:      NewFetchWindow(inventoryTip, inventoryLimit),
-		Target:      target,
-		StageTarget: target,
+		Window: NewFetchWindow(effectiveTip, inventoryLimit),
+		Target: target,
+		// Persist only the highest explicit block ID, not the peer-controlled
+		// remainNum estimate. The service applies this watermark monotonically.
+		// A restart therefore cannot inherit a fabricated multi-year backlog.
+		StageTarget: effectiveTip,
 		Observed:    observed,
 		Advanced:    advanced,
 	}

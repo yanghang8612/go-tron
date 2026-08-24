@@ -3300,12 +3300,20 @@ by both lifecycle forms, so restart and fresh-datadir startup cannot launch an
 unplanned first-tick scan.
 
 Production additionally forwards the sync service's active remaining-block
-signal into the cold builder. When a latest build is due during an active sync
-session, only that full-keyspace phase is deferred; bounded history build,
-publication, compaction, and coverage-gated pruning continue normally. The
-existing sync-complete hook requests another ordered lifecycle pass after the
-importer becomes idle, at which point one latest snapshot is built at the
-solidified watermark. `latest/deferred/sync` counts avoided scans and
+signal into the cold builder. A due latest build is always deferred during an
+active sync session. In cold-backed `snap` and `archive` modes, a session whose
+remaining blocks exceed the hot history window also defers bounded history,
+derived event-log/balance-trace/section-bloom construction, and compaction.
+Authoritative hot rows remain available, so entering the recent window can
+rebuild the accumulated backlog in bounded batches without changing execution,
+wire, or API semantics. Before a restarted peer session becomes active, the
+gate restores its remaining-block estimate from the durable `SyncInventory`
+target when that target is still above canonical head, avoiding a startup
+build race. The existing sync-complete hook requests another ordered lifecycle
+pass after the importer becomes idle; near-tip entry also resumes the regular
+cadence, while the normal lifecycle interval retries interrupted or failed
+builds. `latest/deferred/sync` and
+`history/deferred/sync` count avoided scans/builds, while
 `last/latest_build_block` exposes the seeded or published cadence boundary.
 
 #### P5.5: Pebble v2 runtime canary and rejection

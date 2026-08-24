@@ -195,6 +195,9 @@ type BlockChain struct {
 	stateTxRangeSeedHook        func(uint64)
 	transactionLookupETLOptions etl.Options
 	stateHistoryIndexETLOptions etl.Options
+	// transactionLookupStageMu serializes snapshot-based tx-lookup passes while
+	// allowing chainmu to be released during their read-only body scan and ETL.
+	transactionLookupStageMu sync.Mutex
 	// stateHistoryIndexMu serializes snapshot-based history-index passes while
 	// allowing chainmu to be released during their read-only ETL work.
 	stateHistoryIndexMu sync.Mutex
@@ -331,6 +334,11 @@ type BlockChain struct {
 	applyStatsHookMu sync.Mutex
 	applyStatsHooks  []func(*types.Block, ApplyStats) // fired after each successful applyBlock with per-block execution telemetry
 }
+
+// Historical sync sees about five plain transfers per block on the sampled
+// mainnet range. Below eight candidates, copying block-start state and running
+// sender-chain workers costs more than the serial executions it can replace.
+const syncParallelTransferMinCandidates = 8
 
 // SetEngine wires the consensus engine used for header verification in
 // applyBlock. Must be called once, after NewBlockChain and before any
@@ -1427,11 +1435,19 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if balanceTraceEnabled {
 		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
 	}
+	processorOptions := processBlockOptions{
+		parallelTransfers:   bc.parallelTransfers,
+		parallelVM:          bc.parallelVM,
+		captureBalanceTrace: balanceTraceEnabled,
+	}
+	if plan.deferTransactionLookup {
+		processorOptions.minParallelTransferCandidates = syncParallelTransferMinCandidates
+	}
 	if accountStateRootEnabled {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers, parallelVM: bc.parallelVM, captureBalanceTrace: balanceTraceEnabled})
+		txInfos, javaAccountStateRoot, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processorOptions)
 	} else {
-		txInfos, _, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processBlockOptions{parallelTransfers: bc.parallelTransfers, parallelVM: bc.parallelVM, captureBalanceTrace: balanceTraceEnabled})
+		txInfos, _, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processorOptions)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)

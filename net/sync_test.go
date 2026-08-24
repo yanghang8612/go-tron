@@ -116,6 +116,37 @@ func TestSyncServiceRestoresInventoryTargetProgress(t *testing.T) {
 	}
 }
 
+func TestSyncServiceRepairsImplausiblePersistedInventoryTarget(t *testing.T) {
+	bc := makeTestChain(t)
+	if err := rawdb.WriteStageProgress(bc.DB(), rawdb.StageSyncInventory, ^uint64(0)); err != nil {
+		t.Fatalf("write poisoned sync inventory progress: %v", err)
+	}
+	ss := NewSyncService(bc, nil)
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	target := ss.targetHeadNum
+	ss.mu.Unlock()
+	if target != bc.CurrentBlock().Number() {
+		t.Fatalf("restored poisoned target = %d, want current head %d", target, bc.CurrentBlock().Number())
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncInventory); err != nil || !ok || row.BlockNum != bc.CurrentBlock().Number() {
+		t.Fatalf("repaired inventory row = %+v ok=%v err=%v, want current head", row, ok, err)
+	}
+}
+
+func TestInventoryStageProgressIsMonotonicAcrossPeers(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	applier := syncChainInventoryPostLockApplier{service: ss}
+	applier.WriteInventoryStageProgress(rawdb.StageSyncInventory, 250)
+	applier.WriteInventoryStageProgress(rawdb.StageSyncInventory, 200)
+	applier.WriteInventoryStageProgress(rawdb.StageSyncInventory, 300)
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncInventory); err != nil || !ok || row.BlockNum != 300 {
+		t.Fatalf("monotonic inventory row = %+v ok=%v err=%v, want 300", row, ok, err)
+	}
+}
+
 func TestSyncImportedBatchProgressApplierBatchesReadyAfterSynchronousImport(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)

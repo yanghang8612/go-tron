@@ -113,6 +113,99 @@ func BenchmarkBlockHashFromRaw(b *testing.B) {
 	})
 }
 
+func BenchmarkBlockIDFromRaw(b *testing.B) {
+	block := blockDecodeReserveTestBlock(200)
+	data, err := block.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(data)))
+	b.Run("full-unmarshal", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			decoded, err := UnmarshalBlock(data)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkBlockHash = decoded.Hash()
+		}
+	})
+	b.Run("header-only", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			id, err := BlockIDFromRaw(data)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkBlockHash = id.Hash
+		}
+	})
+}
+
+func TestBlockIDFromRawMatchesFullDecode(t *testing.T) {
+	wantBlock := blockDecodeReserveTestBlock(4)
+	data, err := wantBlock.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := wantBlock.ID()
+	got, err := BlockIDFromRaw(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("BlockIDFromRaw() = %+v, want %+v", got, want)
+	}
+
+	// Singular message fields merge when they occur more than once. Keep that
+	// generated-protobuf behavior on the header-only path rather than assuming
+	// canonical one-field wire input.
+	firstHeader, err := proto.Marshal(&corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Number:     42,
+		ParentHash: bytes.Repeat([]byte{0x11}, common.HashLength),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHeader, err := proto.Marshal(&corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Timestamp:      123456,
+		WitnessAddress: bytes.Repeat([]byte{0x22}, common.AddressLength),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergedWire := protowire.AppendTag(nil, 2, protowire.BytesType)
+	mergedWire = protowire.AppendBytes(mergedWire, firstHeader)
+	mergedWire = protowire.AppendTag(mergedWire, 2, protowire.BytesType)
+	mergedWire = protowire.AppendBytes(mergedWire, secondHeader)
+	var mergedPB corepb.Block
+	if err := proto.Unmarshal(mergedWire, &mergedPB); err != nil {
+		t.Fatal(err)
+	}
+	mergedWant := NewBlockFromPB(&mergedPB).ID()
+	mergedGot, err := BlockIDFromRaw(mergedWire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mergedGot != mergedWant {
+		t.Fatalf("merged BlockIDFromRaw() = %+v, want %+v", mergedGot, mergedWant)
+	}
+}
+
+func TestBlockIDFromRawRejectsMalformedHeader(t *testing.T) {
+	wrongWire := protowire.AppendTag(nil, 2, protowire.VarintType)
+	wrongWire = protowire.AppendVarint(wrongWire, 1)
+	if _, err := BlockIDFromRaw(wrongWire); err == nil {
+		t.Fatal("BlockIDFromRaw accepted a block_header with the wrong wire type")
+	}
+
+	missingRaw := protowire.AppendTag(nil, 2, protowire.BytesType)
+	missingRaw = protowire.AppendBytes(missingRaw, nil)
+	if _, err := BlockIDFromRaw(missingRaw); err == nil {
+		t.Fatal("BlockIDFromRaw accepted a block_header without raw_data")
+	}
+}
+
 func blockDecodeReserveTestBlock(txCount int) *Block {
 	block := blockHashRawTestBlock(txCount, 64)
 	for i, tx := range block.Proto().Transactions {

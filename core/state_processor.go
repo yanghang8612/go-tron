@@ -911,9 +911,10 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 }
 
 type processBlockOptions struct {
-	parallelTransfers   bool
-	parallelVM          bool
-	captureBalanceTrace bool
+	parallelTransfers             bool
+	parallelVM                    bool
+	captureBalanceTrace           bool
+	minParallelTransferCandidates int
 }
 
 func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, collectTxInfos bool, traceTxIndex int, traceTracer vm.Tracer, traceForTxOpt ...func(index int, tx *types.Transaction) vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
@@ -962,7 +963,21 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	accountStateMark := statedb.JournalMark()
 	var txScratch applyTransactionScratch
 	transactions := block.Transactions()
-	shadowEnabled := txInfoBatch != nil && (validateEnvelope || options.parallelTransfers || options.parallelVM)
+	sampledShadow := block.Number()%discardShadowSampleInterval == 0
+	if options.parallelTransfers && !sampledShadow && options.minParallelTransferCandidates > 0 {
+		transferCandidates := countPlainTransferCandidates(transactions)
+		if !shouldRunParallelTransferBlock(true, false, options.minParallelTransferCandidates, transferCandidates) {
+			options.parallelTransfers = false
+			parallelTransferAdmissionSkippedBlocksCounter.Inc(1)
+			parallelTransferAdmissionSkippedCandidatesCounter.Inc(int64(transferCandidates))
+		}
+	}
+	// VM publication is sampled/canary-only. Do not pay version recording on
+	// ordinary blocks merely because the global operational switch is enabled.
+	if options.parallelVM && !sampledShadow {
+		options.parallelVM = false
+	}
+	shadowEnabled := txInfoBatch != nil && (sampledShadow || options.parallelTransfers || options.parallelVM)
 	var transferShadow speculativeTransferShadow
 	var versionedShadow *versionedAccessShadow
 	if shadowEnabled {
@@ -1598,6 +1613,23 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	}
 
 	return txInfos, javaAccountStateRoot, nil
+}
+
+func countPlainTransferCandidates(transactions []*types.Transaction) int {
+	count := 0
+	for _, tx := range transactions {
+		if tx != nil && tx.ContractType() == corepb.Transaction_Contract_TransferContract {
+			count++
+		}
+	}
+	return count
+}
+
+func shouldRunParallelTransferBlock(enabled, sampled bool, minimumCandidates, candidates int) bool {
+	if !enabled {
+		return false
+	}
+	return sampled || minimumCandidates <= 0 || candidates >= minimumCandidates
 }
 
 func balanceTraceTransactionStatus(result *actuator.Result) string {

@@ -28,6 +28,7 @@ type InventoryCandidateFactReader interface {
 // CHAIN_INVENTORY response.
 type ChainInventoryInput struct {
 	CurrentTarget  uint64
+	MaxTarget      uint64
 	ExistingQueued int
 	RemainNum      int64
 	InventoryLimit int
@@ -231,10 +232,14 @@ func BuildInventoryCandidates(ids []types.BlockID, reader InventoryCandidateFact
 // PlanChainInventory filters one CHAIN_INVENTORY response, advances target
 // diagnostics, and recognizes java-tron's one-id completion signal.
 func PlanChainInventory(in ChainInventoryInput) ChainInventoryPlan {
+	remainNum := in.RemainNum
+	if remainNum < 0 {
+		remainNum = 0
+	}
 	plan := ChainInventoryPlan{
 		Accepted:    make([]types.BlockID, 0, len(in.Candidates)),
 		QueuedAfter: in.ExistingQueued,
-		RemainNum:   in.RemainNum,
+		RemainNum:   remainNum,
 	}
 	for _, candidate := range in.Candidates {
 		if AcceptInventoryCandidate(candidate.Facts) {
@@ -245,7 +250,8 @@ func PlanChainInventory(in ChainInventoryInput) ChainInventoryPlan {
 	if len(in.Candidates) > 0 {
 		last := in.Candidates[len(in.Candidates)-1].ID
 		if last.Num > 0 {
-			plan.Target = ObserveInventoryTarget(in.CurrentTarget, last.Num, in.RemainNum, in.InventoryLimit)
+			plan.Target = ObserveInventoryTarget(in.CurrentTarget, last.Num, in.RemainNum, in.InventoryLimit, in.MaxTarget)
+			plan.RemainNum = BoundInventoryRemain(in.RemainNum, plan.Target.Window.Max, plan.Target.Observed)
 			plan.HasTarget = true
 			if plan.Target.StageTarget > 0 {
 				plan.StageTarget = plan.Target.StageTarget
@@ -253,7 +259,7 @@ func PlanChainInventory(in ChainInventoryInput) ChainInventoryPlan {
 			}
 		}
 	}
-	plan.Done = ShouldMarkInventoryDone(len(in.Candidates), plan.QueuedAfter, in.RemainNum)
+	plan.Done = ShouldMarkInventoryDone(len(in.Candidates), plan.QueuedAfter, plan.RemainNum)
 	return plan.withSteps()
 }
 

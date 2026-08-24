@@ -1140,7 +1140,8 @@ func gtron(ctx *cli.Context) error {
 				// datasets share this single coarse cadence. Operators may tune it.
 				LatestBuildBlocks:             statesnapshots.DefaultLatestBuildBlocks,
 				DeferLatestBuildWhileSyncing:  true,
-				DeferHistoryBuildWhileSyncing: historyMode == params.HistoryModeArchive,
+				DeferHistoryBuildWhileSyncing: shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
+				MaxDeferredHistoryBlocks:      maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
 			},
 			Pruner: statepruning.PrunerConfig{
 				Policy:      prunePolicy,
@@ -1193,6 +1194,9 @@ func gtron(ctx *cli.Context) error {
 			"catchupBuildMinInterval", snapshotCatchupBuildInterval,
 			"catchupUnthrottledLagBlocks", prunePolicy.HistoryWindow,
 			"catchupHeavyWorkCooldown", snapshotCatchupHeavyWorkCooldown,
+			"deferHistoryBuildWhileSyncing", shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
+			"maxDeferredHistoryBlocks", maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
+			"maxPruneSyncLag", domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
 			"heavyWorkRecoveryCooldown", heavyWorkRecoveryCooldown,
 			"heavyWorkCooldownMinDuration", heavyWorkCooldownMinDuration,
 			"sharedHeavyWorkGate", true,

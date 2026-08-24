@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -9,6 +11,7 @@ import (
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	tnet "github.com/tronprotocol/go-tron/net"
+	"github.com/tronprotocol/go-tron/params"
 )
 
 // prunerChainSource adapts *core.BlockChain to the narrow domain-state
@@ -97,14 +100,59 @@ func (a *stateSnapshotChainSource) CanonicalBlockHashStrict(blockNum uint64) (co
 }
 
 func (a *domainPrunerChainSource) SyncRemainingBlocks() (uint64, bool) {
-	if a == nil || a.sync == nil {
+	if a == nil {
 		return 0, false
 	}
-	remaining, ok := a.sync.SyncRemainingBlocks()
-	if !ok || remaining <= 0 {
+	if a.sync != nil {
+		if remaining, ok := a.sync.SyncRemainingBlocks(); ok && remaining > 0 {
+			return uint64(remaining), true
+		}
+	}
+	// SyncService sessions are in-memory and are re-established only after a
+	// post-restart peer handshake. Preserve the deep-sync maintenance gate in
+	// that startup window by falling back to the durable highest explicit
+	// inventory tip. Normal completion leaves the tip at or behind canonical
+	// head, so it cannot suppress the sync-complete catch-up pass.
+	if a.chain == nil || a.chain.CurrentBlock() == nil {
 		return 0, false
 	}
-	return uint64(remaining), true
+	head := a.chain.CurrentBlock().Number()
+	return persistedSyncRemainingBlocksBounded(a.chain.DB(), head, plausibleSyncTarget(a.chain, time.Now()))
+}
+
+func plausibleSyncTarget(chain *core.BlockChain, now time.Time) uint64 {
+	if chain == nil {
+		return 0
+	}
+	head := chain.CurrentBlock()
+	if head == nil || head.Timestamp() < 0 {
+		return 0
+	}
+	projectTo := now.UnixMilli() + time.Hour.Milliseconds()
+	if head.Timestamp() >= projectTo {
+		return head.Number()
+	}
+	elapsed := uint64(projectTo - head.Timestamp())
+	additional := elapsed / uint64(params.BlockProducedInterval)
+	if additional > ^uint64(0)-head.Number() {
+		return ^uint64(0)
+	}
+	return head.Number() + additional
+}
+
+func persistedSyncRemainingBlocks(db ethdb.KeyValueReader, head uint64) (uint64, bool) {
+	return persistedSyncRemainingBlocksBounded(db, head, 0)
+}
+
+func persistedSyncRemainingBlocksBounded(db ethdb.KeyValueReader, head, maxTarget uint64) (uint64, bool) {
+	if db == nil {
+		return 0, false
+	}
+	target, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSyncInventory)
+	if err != nil || !ok || target <= head || (maxTarget > 0 && target > maxTarget) {
+		return 0, false
+	}
+	return target - head, true
 }
 
 func (a *domainPrunerChainSource) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {

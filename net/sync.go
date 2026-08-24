@@ -18,6 +18,7 @@ import (
 	tsync "github.com/tronprotocol/go-tron/net/sync"
 	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	"github.com/tronprotocol/go-tron/p2p"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -40,6 +41,7 @@ const (
 	peerJoinAttemptInterval     = 2 * time.Second
 	peerRangeSummaryInterval    = time.Minute
 	syncProgressMinETACoverage  = 80.0
+	syncTargetFutureAllowance   = time.Hour
 )
 
 type syncPeerState struct {
@@ -155,9 +157,14 @@ type SyncService struct {
 	// and ticker; Start/Stop fan-out launches and joins it.
 	watchdog *tsync.Watchdog
 
-	progressMu   sync.Mutex
-	progressStop chan struct{}
-	progressWG   sync.WaitGroup
+	progressMu       sync.Mutex
+	progressStop     chan struct{}
+	progressWG       sync.WaitGroup
+	derivedMu        sync.Mutex
+	derivedRunning   bool
+	derivedPending   bool
+	derivedWG        sync.WaitGroup
+	inventoryStageMu sync.Mutex
 
 	stalledFetchLogMu sync.Mutex
 	stalledFetchLog   stalledFetchRecoveryLogState
@@ -347,6 +354,7 @@ func (ss *SyncService) Stop() {
 	syncdl.ApplySessionResetPlan(syncdl.PlanSessionQuiesce(), syncSessionResetApplier{service: ss})
 	ss.mu.Unlock()
 	ss.waitForDrain()
+	ss.derivedWG.Wait()
 	// No new bodies can enter after stopping is set, and the sole drain owner is
 	// now gone, so durable staged-body cleanup can no longer invalidate an
 	// in-flight imported-progress proof.
@@ -904,7 +912,40 @@ func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
 	if restore.ReadError != nil {
 		syncLog.Warn("Read sync inventory stage progress failed", "err", restore.ReadError)
 	}
-	return restore.Target
+	target := restore.Target
+	if maxTarget := ss.maxPlausibleSyncTarget(time.Now()); maxTarget > 0 && target > maxTarget {
+		syncLog.Warn("Discarding implausible persisted sync inventory target", "target", target, "maxTarget", maxTarget, "head", head)
+		target = head
+		if err := rawdb.WriteStageProgress(ss.chain.DB(), rawdb.StageSyncInventory, head); err != nil {
+			syncLog.Warn("Repair implausible sync inventory target failed", "head", head, "err", err)
+		}
+	}
+	return target
+}
+
+// maxPlausibleSyncTarget bounds untrusted peer height hints by projecting from
+// the current canonical block's timestamp at TRON's three-second slot interval.
+// This works during historical catch-up even though TRON's configured genesis
+// timestamp is zero. A one-hour allowance is deliberately generous for clock
+// skew and near-future inventory propagation.
+func (ss *SyncService) maxPlausibleSyncTarget(now time.Time) uint64 {
+	if ss == nil || ss.chain == nil {
+		return 0
+	}
+	head := ss.chain.CurrentBlock()
+	if head == nil || head.Timestamp() < 0 || params.BlockProducedInterval <= 0 {
+		return 0
+	}
+	projectTo := now.UnixMilli() + syncTargetFutureAllowance.Milliseconds()
+	if head.Timestamp() >= projectTo {
+		return head.Number()
+	}
+	elapsed := uint64(projectTo - head.Timestamp())
+	additional := elapsed / uint64(params.BlockProducedInterval)
+	if additional > ^uint64(0)-head.Number() {
+		return ^uint64(0)
+	}
+	return head.Number() + additional
 }
 
 func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) syncdl.SyncPipelineProgressRepairResult {
@@ -1503,8 +1544,9 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	ps.chainRequested = false
 	ids := make([]types.BlockID, 0, len(inv.Ids))
 	stopHeight, stopConfigured := ss.configuredStopHeight()
+	maxTarget := ss.maxPlausibleSyncTarget(time.Now())
 	for _, bid := range inv.Ids {
-		if stopConfigured && uint64(bid.Number) > stopHeight {
+		if bid.Number <= 0 || (stopConfigured && uint64(bid.Number) > stopHeight) || (maxTarget > 0 && uint64(bid.Number) > maxTarget) {
 			continue
 		}
 		ids = append(ids, types.BlockID{
@@ -1529,6 +1571,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	inventorySession := syncdl.ApplyChainInventorySessionRun(syncdl.ChainInventorySessionRunInput{
 		Inventory: syncdl.ChainInventoryInput{
 			CurrentTarget:  ss.targetHeadNum,
+			MaxTarget:      maxTarget,
 			ExistingQueued: len(ps.fetchList),
 			RemainNum:      inv.RemainNum,
 			InventoryLimit: maxChainInventorySize,
@@ -1871,6 +1914,13 @@ func (ss *SyncService) onPeerFetchReady(peerID string) {
 // the buffer stores those rather than the decoded block. Callers without the
 // original bytes may pass nil — they are re-marshaled from `block`.
 func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byte) bool {
+	if block == nil {
+		return false
+	}
+	return ss.handleFetchedBlock(peer, block.ID(), block, raw)
+}
+
+func (ss *SyncService) handleFetchedBlock(peer *p2p.Peer, id types.BlockID, block *types.Block, raw []byte) bool {
 	if ss.stopping.Load() {
 		return true
 	}
@@ -1887,15 +1937,14 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		ss.mu.Unlock()
 		return false
 	}
-	blockHash := block.Hash()
-	blockNum := block.Number()
 	receiptApplier := &syncFetchReceiptSessionRunApplier{
 		syncFetchReceiptSettlementApplier: &syncFetchReceiptSettlementApplier{
 			service:   ss,
 			peerState: ps,
-			blockHash: blockHash,
+			blockHash: id.Hash,
 		},
 		peer:  peer,
+		id:    id,
 		block: block,
 		raw:   raw,
 	}
@@ -1905,8 +1954,8 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 			Pending:    ps.pending,
 			PendingIDs: ps.pendingIDs,
 		},
-		Hash: blockHash,
-		Num:  blockNum,
+		Hash: id.Hash,
+		Num:  id.Num,
 	}, receiptApplier)
 	if !receiptRun.Plan.Settlement.Accepted {
 		ss.mu.Unlock()
@@ -1915,7 +1964,7 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	ss.mu.Unlock()
 
 	if receiptRun.Buffer.StageFailed {
-		ss.pauseSync(peer, blockNum, receiptRun.Buffer.StageAcceptance.FailureError())
+		ss.pauseSync(peer, id.Num, receiptRun.Buffer.StageAcceptance.FailureError())
 		return true
 	}
 
@@ -1923,12 +1972,13 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	return true
 }
 
-// HandleRawBlock is the wire receive entrypoint used by TronHandler. The
-// staged downloader still needs the decoded header while accepting the body,
-// but decoding here avoids materializing a second block in the handler when
-// sync consumes the message.
+// HandleRawBlock is the wire receive entrypoint used by TronHandler. Sync
+// admission and staging need only the BlockID, so decode the small header and
+// leave the pointer-rich transaction tree in raw form until the body reaches
+// the contiguous import frontier. The importer still performs the same one
+// authoritative full decode before any consensus validation or execution.
 func (ss *SyncService) HandleRawBlock(peer *p2p.Peer, raw []byte) bool {
-	block, err := types.UnmarshalBlockOwned(raw)
+	id, err := types.BlockIDFromRaw(raw)
 	if err != nil {
 		if ss.stopping.Load() {
 			return true
@@ -1938,7 +1988,7 @@ func (ss *SyncService) HandleRawBlock(peer *p2p.Peer, raw []byte) bool {
 		ss.mu.Unlock()
 		return syncing
 	}
-	return ss.HandleBlock(peer, block, raw)
+	return ss.handleFetchedBlock(peer, id, nil, raw)
 }
 
 func (ss *SyncService) drainBufferedBlocks() {
@@ -2030,6 +2080,26 @@ drainLoop:
 		}
 		ss.mu.Unlock()
 		batch := drainSession.Batch
+		decode := syncdl.DecodeBufferedBatch(&batch)
+		ss.logDecodeBatchResult(decode)
+		badPeer, commitErr := ss.commitDecodedBufferedBatch(&batch, decode, time.Now())
+		if commitErr != nil {
+			failedBlock := decode.Dropped.Num
+			if failedBlock == 0 && len(batch.Buffered) > 0 {
+				failedBlock = batch.Buffered[0].Num
+			}
+			ss.pauseSync(badPeer, failedBlock, commitErr)
+			paused = true
+			pauseBlock = failedBlock
+			break drainLoop
+		}
+		if decode.Err != nil && badPeer != nil {
+			badPeer.RecordDisconnectCause(fmt.Sprintf("invalid sync block body #%d: %v", decode.Dropped.Num, decode.Err))
+			go badPeer.Close()
+		}
+		if len(batch.Blocks) == 0 {
+			continue drainLoop
+		}
 		if sess == nil {
 			sess = ss.chain.BeginSyncInsertSession()
 		}
@@ -2094,9 +2164,8 @@ drainLoop:
 	// re-arm the drain from a paused session.
 	publishPausedPrefix := paused && syncdl.ImportResumePhaseSuffixPrecedesBlock(resumePhases, pauseBlock)
 	resumePublish := ss.publishImportResumePhaseProgress(resumePhases, commitBarrier.FinishOK, paused && !publishPausedPrefix)
-	if commitBarrier.FinishOK && !paused {
-		ss.advanceStateHistoryIndexStage()
-		ss.advanceTransactionLookupStage()
+	if commitBarrier.FinishOK && !paused && sessionAppliedBlocks > 0 {
+		ss.scheduleDerivedSyncStages()
 	}
 	if !publishPausedPrefix {
 		ss.applyImportResumePhaseDrainContinuation(resumePublish, lastPeer)
@@ -2325,7 +2394,21 @@ func (ss *SyncService) importBatchLimitLocked() int {
 }
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.BufferedBatch {
-	return ss.runStagedBodyDrainLocked(now).Batch
+	peeked := ss.runStagedBodyDrainLocked(now).Batch
+	if len(peeked.Buffered) == 0 {
+		return peeked
+	}
+	batch := syncdl.PopBufferedBatch(ss.blockBuffer, ss.bufferedHash, ss.blockPath, &ss.bufferWait, peeked.Buffered[0].Num, len(peeked.Buffered), now)
+	for i := range batch.Buffered {
+		ss.bufferedBytes -= int64(len(batch.Buffered[i].Raw))
+	}
+	if ss.bufferedBytes < 0 {
+		ss.bufferedBytes = 0
+	}
+	if n := len(batch.Buffered); n > 0 && batch.Buffered[n-1].Num > ss.syncedTipNum {
+		ss.syncedTipNum = batch.Buffered[n-1].Num
+	}
+	return batch
 }
 
 func (ss *SyncService) runStagedBodyDrainLocked(now time.Time) syncdl.StagedBodyDrainRunResult {
@@ -2385,19 +2468,106 @@ func (a syncStagedBodyDrainApplier) RestoreStagedBodies(from uint64, limit int, 
 }
 
 func (a syncStagedBodyDrainApplier) PopBufferedBatch(next uint64, limit int) syncdl.BufferedBatch {
-	batch := syncdl.PopBufferedBatch(a.service.blockBuffer, a.service.bufferedHash, a.service.blockPath, &a.service.bufferWait, next, limit, a.now)
-	for i := range batch.Buffered {
-		a.service.bufferedBytes -= int64(len(batch.Buffered[i].Raw))
+	return syncdl.PeekBufferedBatch(a.service.blockBuffer, next, limit)
+}
+
+// commitDecodedBufferedBatch completes the second half of staged-body drain.
+// The caller decoded batch without ss.mu. Under the lock we verify ownership,
+// durably remove only a malformed row, release the decoded prefix, and leave
+// the untouched suffix reserved in the buffer. The malformed ID is put back
+// on the global retry queue after its path reservation is released.
+func (ss *SyncService) commitDecodedBufferedBatch(batch *syncdl.BufferedBatch, decode syncdl.BufferedBatchDecodeResult, now time.Time) (*p2p.Peer, error) {
+	if ss == nil || batch == nil {
+		return nil, fmt.Errorf("sync: cannot commit nil decoded buffer batch")
 	}
-	if a.service.bufferedBytes < 0 {
-		a.service.bufferedBytes = 0
+	prefix := len(batch.Blocks)
+	if prefix > len(batch.Buffered) {
+		return nil, fmt.Errorf("sync: decoded prefix %d exceeds buffered batch %d", prefix, len(batch.Buffered))
 	}
-	if n := len(batch.Buffered); n > 0 {
-		if popped := batch.Buffered[n-1].Num; popped > a.service.syncedTipNum {
-			a.service.syncedTipNum = popped
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	verifyOwned := func(buffered syncdl.BufferedBlock) error {
+		owned, ok := ss.blockBuffer[buffered.Num]
+		if !ok {
+			return fmt.Errorf("sync: buffered block #%d disappeared before decode commit", buffered.Num)
+		}
+		if owned.Hash != buffered.Hash || len(owned.Raw) != len(buffered.Raw) {
+			return fmt.Errorf("sync: buffered block #%d changed before decode commit", buffered.Num)
+		}
+		return nil
+	}
+	for i := 0; i < prefix; i++ {
+		if err := verifyOwned(batch.Buffered[i]); err != nil {
+			return nil, err
 		}
 	}
-	return batch
+
+	var badPeer *p2p.Peer
+	if decode.Err != nil {
+		if prefix >= len(batch.Buffered) || batch.Buffered[prefix].Num != decode.Dropped.Num || batch.Buffered[prefix].Hash != decode.Dropped.Hash {
+			return nil, fmt.Errorf("sync: decoded failure is not the buffered prefix boundary: %w", decode.Err)
+		}
+		if err := verifyOwned(decode.Dropped); err != nil {
+			return nil, err
+		}
+		if ss.chain == nil || ss.chain.DB() == nil {
+			return decode.Dropped.Peer, fmt.Errorf("sync: cannot delete malformed staged body #%d without database", decode.Dropped.Num)
+		}
+		if err := rawdb.DeleteSyncStagedBlock(ss.chain.DB(), decode.Dropped.Num); err != nil {
+			return decode.Dropped.Peer, fmt.Errorf("sync: delete malformed staged body #%d: %w", decode.Dropped.Num, err)
+		}
+		refresh := ss.writeSyncBodiesReadyProgress()
+		if refresh.Failed() {
+			refreshErr := refresh.Frontier.Error
+			if refreshErr == nil {
+				refreshErr = refresh.WriteError
+			}
+			if refreshErr == nil {
+				refreshErr = refresh.DeleteError
+			}
+			return decode.Dropped.Peer, fmt.Errorf("sync: refresh bodies-ready after malformed staged body #%d: %w", decode.Dropped.Num, refreshErr)
+		}
+		badPeer = decode.Dropped.Peer
+	}
+
+	release := func(buffered syncdl.BufferedBlock, recordWait bool) {
+		wait := ss.bufferWait.End(buffered.Num, now)
+		delete(ss.blockBuffer, buffered.Num)
+		ss.blockPath.Release(buffered.Num)
+		delete(ss.bufferedHash, buffered.Hash)
+		ss.bufferedBytes -= int64(len(buffered.Raw))
+		if recordWait {
+			batch.BufferWaits = append(batch.BufferWaits, wait)
+		}
+	}
+	for i := 0; i < prefix; i++ {
+		release(batch.Buffered[i], true)
+	}
+	if prefix > 0 {
+		if popped := batch.Buffered[prefix-1].Num; popped > ss.syncedTipNum {
+			ss.syncedTipNum = popped
+		}
+	}
+	if decode.Err != nil {
+		release(decode.Dropped, false)
+		bid := types.BlockID{Hash: decode.Dropped.Hash, Num: decode.Dropped.Num}
+		queued := false
+		for _, retry := range ss.retryList {
+			if retry.Hash == bid.Hash {
+				queued = true
+				break
+			}
+		}
+		if !queued {
+			ss.retryList = append(ss.retryList, bid)
+		}
+	}
+	if ss.bufferedBytes < 0 {
+		ss.bufferedBytes = 0
+	}
+	batch.Buffered = batch.Buffered[:prefix]
+	return badPeer, nil
 }
 
 type syncIdleDrainApplier struct {
@@ -2557,6 +2727,21 @@ type syncChainInventoryPostLockApplier struct {
 }
 
 func (a syncChainInventoryPostLockApplier) WriteInventoryStageProgress(stage rawdb.StageID, target uint64) {
+	if a.service == nil || a.service.chain == nil || target == 0 {
+		return
+	}
+	db := a.service.chain.DB()
+	if db == nil {
+		return
+	}
+	a.service.inventoryStageMu.Lock()
+	defer a.service.inventoryStageMu.Unlock()
+	if current, ok, err := rawdb.ReadStageProgress(db, stage); err != nil {
+		syncLog.Warn("Read sync inventory stage before monotonic update failed", "stage", stage, "err", err)
+		return
+	} else if ok && current >= target {
+		return
+	}
 	a.service.writeStageProgress(stage, target, tcommon.Hash{}, false)
 }
 
@@ -2686,16 +2871,16 @@ func (a syncFetchRefillDispatchApplier) SendOutboundRequests() {
 type syncFetchReceiptSessionRunApplier struct {
 	*syncFetchReceiptSettlementApplier
 	peer  *p2p.Peer
+	id    types.BlockID
 	block *types.Block
 	raw   []byte
 }
 
 func (a *syncFetchReceiptSessionRunApplier) PlanFetchedBlockBuffer(_ syncdl.FetchReceiptRunPlan) syncdl.FetchedBlockBufferPlan {
-	if a == nil || a.service == nil || a.block == nil {
+	if a == nil || a.service == nil {
 		return syncdl.FetchedBlockBufferPlan{}
 	}
-	bid := types.BlockID{Hash: a.block.Hash(), Num: a.block.Number()}
-	return syncdl.PlanFetchedBlockBufferFromReader(bid, syncFetchedBlockBufferFactReader{service: a.service})
+	return syncdl.PlanFetchedBlockBufferFromReader(a.id, syncFetchedBlockBufferFactReader{service: a.service})
 }
 
 func (a *syncFetchReceiptSessionRunApplier) FetchReceiptRunProgress() syncdl.SessionProgress {
@@ -2709,11 +2894,11 @@ func (a *syncFetchReceiptSessionRunApplier) FetchReceiptRunProgress() syncdl.Ses
 }
 
 func (a *syncFetchReceiptSessionRunApplier) DropConflictingFetchedBlock(plan syncdl.FetchedBlockBufferPlan) {
-	syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, block: a.block, raw: a.raw}.DropConflictingFetchedBlock(plan)
+	syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, id: a.id, block: a.block, raw: a.raw}.DropConflictingFetchedBlock(plan)
 }
 
 func (a *syncFetchReceiptSessionRunApplier) StageFetchedBlock(plan syncdl.FetchedBlockBufferPlan) syncdl.StagedBodyAcceptance {
-	return syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, block: a.block, raw: a.raw}.StageFetchedBlock(plan)
+	return syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, id: a.id, block: a.block, raw: a.raw}.StageFetchedBlock(plan)
 }
 
 type syncFetchedBlockBufferFactReader struct {
@@ -2757,6 +2942,7 @@ func (r syncFetchedBlockBufferFactReader) ReserveFetchedBlockPath(id types.Block
 type syncFetchedBlockBufferApplier struct {
 	service *SyncService
 	peer    *p2p.Peer
+	id      types.BlockID
 	block   *types.Block
 	raw     []byte
 }
@@ -2767,11 +2953,16 @@ func (a syncFetchedBlockBufferApplier) DropConflictingFetchedBlock(plan syncdl.F
 }
 
 func (a syncFetchedBlockBufferApplier) StageFetchedBlock(plan syncdl.FetchedBlockBufferPlan) syncdl.StagedBodyAcceptance {
-	result := a.service.stageSyncBody(a.block, a.raw)
+	result := a.service.stageSyncBodyID(a.id, a.block, a.raw)
 	if result.Failed() {
 		return result
 	}
-	entry := syncdl.NewBufferedBlock(a.peer, a.block, a.raw)
+	entry := syncdl.BufferedBlock{
+		Raw:  syncdl.RawBlockBytes(a.block, a.raw),
+		Hash: a.id.Hash,
+		Num:  a.id.Num,
+		Peer: a.peer,
+	}
 	a.service.blockBuffer[plan.ID.Num] = entry
 	a.service.bufferedHash[plan.ID.Hash] = struct{}{}
 	a.service.bufferedBytes += int64(len(entry.Raw))
@@ -2872,12 +3063,49 @@ func (ss *SyncService) advanceTransactionLookupStage() {
 			transactionLookupStageHotCounter.Inc(int64(result.Rebuilt.HotBlocksScanned))
 			transactionLookupStageTransactionsCounter.Inc(int64(result.Rebuilt.TransactionsIndexed))
 		}
-		ss.requestDrainAgain()
 	}
 }
 
 func (ss *SyncService) advanceStateHistoryIndexStage() {
-	ss.advanceStateHistoryIndexStageWithMinimum(stateHistoryIndexStageMinBlocks, true)
+	ss.advanceStateHistoryIndexStageWithMinimum(stateHistoryIndexStageMinBlocks, false)
+}
+
+// scheduleDerivedSyncStages coalesces import-barrier wakes onto one background
+// worker. Both stages use immutable source snapshots and serialize their own
+// watermark publication, so canonical import no longer pays their ETL wall
+// time or chain-write-lock hold time.
+func (ss *SyncService) scheduleDerivedSyncStages() {
+	if ss == nil || ss.chain == nil || ss.stopping.Load() {
+		return
+	}
+	ss.derivedMu.Lock()
+	if ss.derivedRunning {
+		ss.derivedPending = true
+		ss.derivedMu.Unlock()
+		return
+	}
+	ss.derivedRunning = true
+	ss.derivedWG.Add(1)
+	ss.derivedMu.Unlock()
+
+	go func() {
+		defer ss.derivedWG.Done()
+		for {
+			ss.advanceStateHistoryIndexStage()
+			ss.advanceTransactionLookupStage()
+
+			ss.derivedMu.Lock()
+			if ss.derivedPending && !ss.stopping.Load() {
+				ss.derivedPending = false
+				ss.derivedMu.Unlock()
+				continue
+			}
+			ss.derivedPending = false
+			ss.derivedRunning = false
+			ss.derivedMu.Unlock()
+			return
+		}
+	}()
 }
 
 func (ss *SyncService) advanceStateHistoryIndexStageWithMinimum(minBlocks uint64, requestAgain bool) {
@@ -3106,9 +3334,18 @@ func (ss *SyncService) logImportedBatchRecordApplyResult(result syncdl.ImportedB
 }
 
 func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) syncdl.StagedBodyAcceptance {
-	if ss == nil || ss.chain == nil || block == nil {
+	if block == nil {
 		return syncdl.StagedBodyAcceptance{Write: rawdb.SyncStagedBlockWriteResult{
 			StageError: fmt.Errorf("sync: cannot stage fetched block without service, chain, or block"),
+		}}
+	}
+	return ss.stageSyncBodyID(block.ID(), block, raw)
+}
+
+func (ss *SyncService) stageSyncBodyID(id types.BlockID, block *types.Block, raw []byte) syncdl.StagedBodyAcceptance {
+	if ss == nil || ss.chain == nil || (block == nil && len(raw) == 0) {
+		return syncdl.StagedBodyAcceptance{Write: rawdb.SyncStagedBlockWriteResult{
+			StageError: fmt.Errorf("sync: cannot stage fetched block without service, chain, or body"),
 		}}
 	}
 	db := ss.chain.DB()
@@ -3123,9 +3360,14 @@ func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) syncdl.Stag
 			StageError: fmt.Errorf("sync: cannot stage fetched block without current head"),
 		}}
 	}
-	result := syncdl.AcceptStagedBody(db, block, raw, head.Number()+1, ss.targetHeadNum)
+	var result syncdl.StagedBodyAcceptance
+	if block != nil {
+		result = syncdl.AcceptStagedBody(db, block, raw, head.Number()+1, ss.targetHeadNum)
+	} else {
+		result = syncdl.AcceptStagedBodyRaw(db, id, raw, head.Number()+1, ss.targetHeadNum)
+	}
 	if result.Write.StageError != nil {
-		syncLog.Warn("Persist sync staged block failed", "number", block.Number(), "hash", block.Hash(), "err", result.Write.StageError)
+		syncLog.Warn("Persist sync staged block failed", "number", id.Num, "hash", id.Hash, "err", result.Write.StageError)
 		return result
 	}
 	if result.Write.ProgressReadError != nil {
@@ -3756,7 +3998,9 @@ func (ss *SyncService) tryFindSyncPeer(exclude *p2p.Peer) {
 func (ss *SyncService) finishSync() {
 	// Drain a final sub-batch suffix before changing over to ordinary gossip
 	// import. Inline stage progress refuses to jump a deferred gap.
+	ss.derivedWG.Wait()
 	ss.advanceStateHistoryIndexStageWithMinimum(1, false)
+	ss.advanceTransactionLookupStage()
 	totalBlocks := ss.stats.TotalBlocks()
 	totalStart := ss.stats.TotalStart()
 	if totalStart.IsZero() {

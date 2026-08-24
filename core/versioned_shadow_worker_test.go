@@ -22,6 +22,47 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
+var senderChainPreexecutionBenchmarkSink *discardShadowPreexecution
+
+func BenchmarkSenderChainPreexecutionIndependentChains(b *testing.B) {
+	base := newTestState(b)
+	const transactionCount = 64
+	transactions := make([]*types.Transaction, 0, transactionCount)
+	blockPB := &corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Number: 1, Timestamp: 3_000,
+	}}}
+	for i := 0; i < transactionCount; i++ {
+		owner := byte(i + 1)
+		recipient := byte(i + 1 + transactionCount)
+		base.CreateAccount(testProcessorAddr(owner), corepb.AccountType_Normal)
+		base.AddBalance(testProcessorAddr(owner), 10_000_000)
+		base.CreateAccount(testProcessorAddr(recipient), corepb.AccountType_Normal)
+		tx := makeTestTransferTx(owner, recipient, 1_000)
+		transactions = append(transactions, tx)
+		blockPB.Transactions = append(blockPB.Transactions, tx.Proto())
+	}
+	if _, err := base.Commit(); err != nil {
+		b.Fatal(err)
+	}
+	base.SetDynamicProperties(base.DynamicProperties().Copy())
+	block := types.NewBlockFromPB(blockPB)
+	chains := transferSenderChains(transactions)
+	if len(chains) != transactionCount {
+		b.Fatalf("sender chains = %d, want %d", len(chains), transactionCount)
+	}
+	shadow := &discardShadowBlock{base: base}
+	cfg := discardShadowRunConfig{block: block, transactions: transactions}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(len(chains)), "chains/op")
+	b.ResetTimer()
+	for b.Loop() {
+		senderChainPreexecutionBenchmarkSink = shadow.preexecuteSenderChainsWithRetryState(
+			cfg, chains, preexecutedTransferReady, false, false,
+		)
+	}
+}
+
 func TestDiscardShadowAsyncRetryCohorts(t *testing.T) {
 	tests := []struct {
 		blockNum uint64
@@ -2210,6 +2251,44 @@ func TestSenderChainPreexecutionForwardsTypedState(t *testing.T) {
 	}
 	if balance := base.GetBalance(owner); balance != 10_000_000 {
 		t.Fatalf("sender-chain worker mutated base balance = %d", balance)
+	}
+}
+
+func TestSenderChainWorkerVersionMapDoesNotLeakAcrossIndependentChains(t *testing.T) {
+	base := newTestState(t)
+	const chainCount = 5 // Four workers guarantee that one worker accepts a second job.
+	recipient := testProcessorAddr(20)
+	base.CreateAccount(recipient, corepb.AccountType_Normal)
+	transactions := make([]*types.Transaction, 0, chainCount)
+	blockPB := &corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Number: 1, Timestamp: 3_000,
+	}}}
+	for ownerID := byte(1); ownerID <= chainCount; ownerID++ {
+		owner := testProcessorAddr(ownerID)
+		base.CreateAccount(owner, corepb.AccountType_Normal)
+		base.AddBalance(owner, 10_000_000)
+		tx := makeTestTransferTx(ownerID, 20, 1_000)
+		transactions = append(transactions, tx)
+		blockPB.Transactions = append(blockPB.Transactions, tx.Proto())
+	}
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	base.SetDynamicProperties(base.DynamicProperties().Copy())
+	chains := transferSenderChains(transactions)
+	shadow := &discardShadowBlock{base: base}
+	pre := shadow.preexecuteSenderChainsWithRetryState(discardShadowRunConfig{
+		block: types.NewBlockFromPB(blockPB), transactions: transactions,
+	}, chains, preexecutedTransferReady, false, false)
+	if pre == nil || len(pre.results) != chainCount {
+		t.Fatalf("sender-chain results = %+v", pre)
+	}
+	for _, result := range pre.results {
+		for _, read := range result.reads.Reads {
+			if read.HasExpectedWriter {
+				t.Fatalf("independent chain tx %d inherited writer %d for %+v", result.txIndex, read.ExpectedWriter, read.Key)
+			}
+		}
 	}
 }
 

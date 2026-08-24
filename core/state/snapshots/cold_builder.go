@@ -111,9 +111,15 @@ type Config struct {
 	DeferLatestBuildWhileSyncing bool
 	// DeferHistoryBuildWhileSyncing prevents history compression, companion
 	// index construction, and derived sidecar work from competing with a node
-	// that is farther behind than HistoryWindow. The ordered lifecycle drains
-	// the bounded backlog immediately once sync enters the recent hot window.
+	// that is farther behind than HistoryWindow while the cold backlog remains
+	// below MaxDeferredHistoryBlocks. The ordered lifecycle drains the bounded
+	// backlog immediately once sync enters the recent hot window.
 	DeferHistoryBuildWhileSyncing bool
+	// MaxDeferredHistoryBlocks caps how much authoritative hot history may pile
+	// up while deep sync defers cold construction. Once the cap is exceeded,
+	// bounded accelerated passes resume even while sync is active. Zero uses
+	// HistoryWindow, preserving a conservative bounded default.
+	MaxDeferredHistoryBlocks uint64
 	// BuildSectionBlooms builds full-section cold section-bloom sidecars once
 	// the state-history cutoff has fully covered the source block section.
 	BuildSectionBlooms bool
@@ -761,15 +767,6 @@ func (r *Runner) onePass() (PassResult, error) {
 		CutoffBlock:         cutoffBlock,
 		EligibleCutoffBlock: cutoffBlock,
 	}
-	if r.cfg.DeferHistoryBuildWhileSyncing {
-		if source, ok := r.chain.(syncRemainingSource); ok {
-			if remaining, active := source.SyncRemainingBlocks(); active && remaining > r.cfg.HistoryWindow {
-				result.HistoryDeferred = true
-				return result, nil
-			}
-		}
-	}
-
 	cutoffRange, ok, err := historyCfg.HotHistoryTxRangeForBlock(db, cutoffBlock)
 	if err != nil {
 		return PassResult{}, err
@@ -822,6 +819,18 @@ func (r *Runner) onePass() (PassResult, error) {
 	}
 	readyBlocks := cutoffBlock - startBlock + 1
 	result.HistoryAccelerated = r.historyBuildAccelerated(readyBlocks)
+	if r.cfg.DeferHistoryBuildWhileSyncing {
+		maxDeferred := r.cfg.MaxDeferredHistoryBlocks
+		if maxDeferred == 0 {
+			maxDeferred = r.cfg.HistoryWindow
+		}
+		if source, ok := r.chain.(syncRemainingSource); ok {
+			if remaining, active := source.SyncRemainingBlocks(); active && remaining > r.cfg.HistoryWindow && readyBlocks <= maxDeferred {
+				result.HistoryDeferred = true
+				return result, nil
+			}
+		}
+	}
 	if r.historyBuildRateLimited(time.Now(), result.HistoryAccelerated) {
 		result.HistoryDeferred = true
 		result.HistoryRateLimited = true

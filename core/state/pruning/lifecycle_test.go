@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -659,6 +660,93 @@ func TestSnapshotLifecycleBuildsBalanceTracesBeforePruningHotRows(t *testing.T) 
 	traceBlock, balance, ok, err := rawdb.ReadAccountTraceAtOrBefore(db, traceOwner.Bytes(), 1)
 	if err != nil || !ok || traceBlock != 1 || balance != 444 {
 		t.Fatalf("cold ReadAccountTraceAtOrBefore = block %d balance %d ok %v err %v, want 1/444/true/nil", traceBlock, balance, ok, err)
+	}
+}
+
+func TestSnapshotLifecycleDefersDerivedBuildsUntilNearTip(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	dir := t.TempDir()
+	change, _, _ := writeSnapPruningChange(t, db, 1, 10, 12)
+	traceOwner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x78}, common.AccountIDLength)...))
+	addr := []byte{0x41, 0x31, 0x32, 0x33, 0x34}
+	block, infos := lifecycleEventLogBlock(t, 1, []*corepb.TransactionInfo_Log{{Address: addr, Data: []byte{0x02}}})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, lifecycleBlockBalanceTrace(block, 40_002)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, traceOwner.Bytes(), 1, 445); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+
+	chain := &fakePruneChain{db: db, solidified: 2, syncRemaining: 100, syncRemainingOK: true}
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:                           dir,
+			Enabled:                       true,
+			Interval:                      time.Hour,
+			HistoryWindow:                 1,
+			DeferHistoryBuildWhileSyncing: true,
+			BuildBalanceTraces:            true,
+			BuildEventLogs:                true,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+		BalanceTracePrune: func() (*snapshots.PruneHotBalanceTraceResult, error) {
+			manifest, err := snapshots.LoadProductionManifest(dir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return nil, nil
+				}
+				return nil, err
+			}
+			return snapshots.PruneHotBalanceTracesWithProgress(db, dir, manifest)
+		},
+	})
+
+	deferred, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("far-behind lifecycle pass: %v", err)
+	}
+	if !deferred.Snapshot.HistoryDeferred || deferred.Snapshot.Built || deferred.Snapshot.EventLogBuilt || deferred.Snapshot.BalanceTraceBuilt {
+		t.Fatalf("far-behind lifecycle result = %+v, want cold and derived builds deferred", deferred.Snapshot)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, change.Seq); err != nil || !ok {
+		t.Fatalf("hot domain change during deferral = ok %v err %v, want retained", ok, err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got == nil {
+		t.Fatal("hot balance trace removed during deep-sync deferral")
+	}
+
+	chain.syncRemaining = 1
+	completed, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("near-tip lifecycle pass: %v", err)
+	}
+	if !completed.Snapshot.Built || completed.Snapshot.HistoryDeferred || !completed.Snapshot.EventLogBuilt || !completed.Snapshot.BalanceTraceBuilt {
+		t.Fatalf("near-tip lifecycle result = %+v, want cold and derived backlog built", completed.Snapshot)
+	}
+	if completed.BalanceTracePrune == nil || completed.BalanceTracePrune.BlockTracesDeleted != 1 || completed.BalanceTracePrune.AccountTracesDeleted != 1 {
+		t.Fatalf("near-tip balance trace prune = %+v, want hot duplicates reclaimed", completed.BalanceTracePrune)
+	}
+	mgr, err := snapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	covered, err := mgr.EventLogRangeCovered(1, 1)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered after near-tip build = %v/%v, want true/nil", covered, err)
+	}
+	db.SetBalanceTraceReader(mgr)
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got == nil || got.GetTimestamp() != 40_002 {
+		t.Fatalf("cold BlockBalanceTrace after near-tip build = %+v, want timestamp 40002", got)
 	}
 }
 

@@ -33,8 +33,8 @@ func TestPlanChainInventoryFiltersCandidatesAndAdvancesTarget(t *testing.T) {
 	if !got.HasTarget || got.Target.Target != 15 || got.Target.Observed != 15 || got.Target.Window.Min != 8 || got.Target.Window.Max != 12 {
 		t.Fatalf("target = %+v has=%v, want observed target 15 window 8-12", got.Target, got.HasTarget)
 	}
-	if !got.HasStageTarget || got.StageTarget != 15 {
-		t.Fatalf("stage target = %d has=%v, want 15", got.StageTarget, got.HasStageTarget)
+	if !got.HasStageTarget || got.StageTarget != 12 {
+		t.Fatalf("stage target = %d has=%v, want explicit inventory tip 12", got.StageTarget, got.HasStageTarget)
 	}
 	if len(got.Steps) != 2 ||
 		got.Steps[0].Action != ChainInventoryAppendAccepted ||
@@ -44,7 +44,7 @@ func TestPlanChainInventoryFiltersCandidatesAndAdvancesTarget(t *testing.T) {
 		!got.Steps[1].HasTarget ||
 		got.Steps[1].Target.Target != 15 ||
 		!got.Steps[1].HasStageTarget ||
-		got.Steps[1].StageTarget != 15 {
+		got.Steps[1].StageTarget != 12 {
 		t.Fatalf("steps = %+v, want append id11 then target progress", got.Steps)
 	}
 }
@@ -97,8 +97,32 @@ func TestPlanChainInventoryKeepsStaleTarget(t *testing.T) {
 	if got.Target.Target != 50 || got.Target.Observed != 32 || got.Target.Advanced {
 		t.Fatalf("stale target = %+v, want keep current target 50 observed 32", got.Target)
 	}
-	if !got.HasStageTarget || got.StageTarget != 50 {
-		t.Fatalf("stage target = %d has=%v, want current target 50", got.StageTarget, got.HasStageTarget)
+	if !got.HasStageTarget || got.StageTarget != 25 {
+		t.Fatalf("stage target = %d has=%v, want explicit inventory tip 25", got.StageTarget, got.HasStageTarget)
+	}
+}
+
+func TestPlanChainInventoryBoundsPeerRemainToPlausibleTarget(t *testing.T) {
+	id12 := queueID(12)
+	got := PlanChainInventory(ChainInventoryInput{
+		MaxTarget: 20,
+		RemainNum: 1<<63 - 1,
+		Candidates: []InventoryCandidate{{
+			ID: id12, Facts: InventoryCandidateFacts{ReservedPath: true},
+		}},
+	})
+	if got.Target.Target != 20 || got.Target.Observed != 20 || got.RemainNum != 8 {
+		t.Fatalf("bounded inventory = %+v, want target 20 and remain 8", got)
+	}
+
+	got = PlanChainInventory(ChainInventoryInput{
+		RemainNum: -1,
+		Candidates: []InventoryCandidate{{
+			ID: id12, Facts: InventoryCandidateFacts{KnownOrRequested: true},
+		}},
+	})
+	if got.RemainNum != 0 || !got.Done {
+		t.Fatalf("negative remain inventory = %+v, want normalized zero and done", got)
 	}
 }
 

@@ -60,14 +60,43 @@ func TestObserveInventoryTarget(t *testing.T) {
 	}{
 		{name: "empty tip", current: 10, target: 10},
 		{name: "tip advances target", current: 10, tip: 25, limit: 5, target: 25, stageTarget: 25, observed: 25, advanced: true, windowMin: 15, windowMax: 25},
-		{name: "remain extends target", current: 10, tip: 25, remain: 7, limit: 5, target: 32, stageTarget: 32, observed: 32, advanced: true, windowMin: 15, windowMax: 25},
+		{name: "remain extends target", current: 10, tip: 25, remain: 7, limit: 5, target: 32, stageTarget: 25, observed: 32, advanced: true, windowMin: 15, windowMax: 25},
 		{name: "negative remain ignored", current: 10, tip: 25, remain: -7, limit: 5, target: 25, stageTarget: 25, observed: 25, advanced: true, windowMin: 15, windowMax: 25},
-		{name: "stale observed keeps current", current: 50, tip: 25, remain: 7, limit: 5, target: 50, stageTarget: 50, observed: 32, windowMin: 15, windowMax: 25},
+		{name: "stale observed keeps current", current: 50, tip: 25, remain: 7, limit: 5, target: 50, stageTarget: 25, observed: 32, windowMin: 15, windowMax: 25},
 	}
 	for _, tt := range tests {
 		got := ObserveInventoryTarget(tt.current, tt.tip, tt.remain, tt.limit)
 		if got.Target != tt.target || got.StageTarget != tt.stageTarget || got.Observed != tt.observed || got.Advanced != tt.advanced || got.Window.Min != tt.windowMin || got.Window.Max != tt.windowMax {
 			t.Fatalf("%s: update = %+v, want target %d stage %d observed %d advanced %v window %d-%d", tt.name, got, tt.target, tt.stageTarget, tt.observed, tt.advanced, tt.windowMin, tt.windowMax)
+		}
+	}
+}
+
+func TestObserveInventoryTargetSaturatesAndClampsUntrustedRemain(t *testing.T) {
+	got := ObserveInventoryTarget(90, 100, int64(^uint64(0)>>1), 5, 1_000)
+	if got.Target != 1_000 || got.Observed != 1_000 || got.StageTarget != 100 || got.Window.Max != 100 {
+		t.Fatalf("clamped target = %+v, want target/observed 1000 with explicit stage tip 100", got)
+	}
+
+	got = ObserveInventoryTarget(^uint64(0), ^uint64(0)-2, 10, 5, 500)
+	if got.Target != 500 || got.Observed != 500 || got.StageTarget != 500 || got.Window.Max != 500 {
+		t.Fatalf("overflow-safe target = %+v, want every untrusted height capped at 500", got)
+	}
+}
+
+func TestBoundInventoryRemain(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		remain        int64
+		tip, observed uint64
+		want          int64
+	}{
+		{name: "negative", remain: -1, tip: 10, observed: 10},
+		{name: "clamped", remain: 1_000, tip: 100, observed: 250, want: 150},
+		{name: "ordinary", remain: 7, tip: 25, observed: 32, want: 7},
+	} {
+		if got := BoundInventoryRemain(tc.remain, tc.tip, tc.observed); got != tc.want {
+			t.Fatalf("%s: bounded remain = %d, want %d", tc.name, got, tc.want)
 		}
 	}
 }

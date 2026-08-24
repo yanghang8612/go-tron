@@ -35,6 +35,58 @@ type ChainDB struct {
 	eventLog     EventLogReader
 }
 
+// ChainDBReadView composes an immutable hot KV snapshot with the same ancient
+// reader as its live ChainDB. Derived stages use it to scan a stable canonical
+// prefix without holding BlockChain.chainmu for the duration of ETL work.
+type ChainDBReadView struct {
+	reader   ethdb.KeyValueReader
+	iteratee ethdb.Iteratee
+	AncientReader
+}
+
+// NewChainDBReadView binds one immutable key/value view to an ancient reader.
+// source must support both point reads and iterators from the same snapshot.
+func NewChainDBReadView(source interface {
+	ethdb.KeyValueReader
+	ethdb.Iteratee
+}, ancient AncientReader) *ChainDBReadView {
+	if source == nil {
+		return nil
+	}
+	if ancient == nil {
+		ancient = NoopAncient{}
+	}
+	return &ChainDBReadView{reader: source, iteratee: source, AncientReader: ancient}
+}
+
+func (db *ChainDBReadView) Get(key []byte) ([]byte, error) {
+	return db.reader.Get(key)
+}
+
+func (db *ChainDBReadView) Has(key []byte) (bool, error) {
+	return db.reader.Has(key)
+}
+
+func (db *ChainDBReadView) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return db.iteratee.NewIterator(prefix, start)
+}
+
+func (db *ChainDBReadView) HasAncientTransactionIndex(blockNum uint64) bool {
+	if db == nil || db.AncientReader == nil {
+		return false
+	}
+	index, ok := db.AncientReader.(AncientTransactionIndexReader)
+	return ok && blockNum < index.TransactionIndexCoverage()
+}
+
+func (db *ChainDB) HasAncientTransactionIndex(blockNum uint64) bool {
+	if db == nil || db.AncientReader == nil {
+		return false
+	}
+	index, ok := db.AncientReader.(AncientTransactionIndexReader)
+	return ok && blockNum < index.TransactionIndexCoverage()
+}
+
 // ChainIndexReader is an optional cold lookup sidecar. It is defined in rawdb
 // instead of snapshots so the chain accessors can use it without importing the
 // snapshot package and creating a package cycle.

@@ -390,6 +390,20 @@ func AcceptStagedBody(db ethdb.KeyValueStore, block *types.Block, raw []byte, st
 	return result
 }
 
+// AcceptStagedBodyRaw persists a fetched body using header-only metadata. It
+// has the same stage/ready ordering as AcceptStagedBody but avoids requiring a
+// fully decoded transaction tree on the network receive path.
+func AcceptStagedBodyRaw(db ethdb.KeyValueStore, id types.BlockID, raw []byte, start, targetHead uint64) StagedBodyAcceptance {
+	result := StagedBodyAcceptance{
+		Write: rawdb.WriteSyncStagedBlockRawIDAndProgress(db, id, raw),
+	}
+	if result.Write.StageError != nil || result.Write.ProgressReadError != nil || result.Write.ProgressWriteError != nil {
+		return result
+	}
+	result.Ready = RefreshStagedBodyReadyProgressAfterStage(db, start, targetHead, result.Write.Number)
+	return result
+}
+
 // PruneStaleStagedBodyTail removes a stale downloader body tail, rewinds the
 // SyncBodies watermark if needed, and then recomputes SyncBodiesReady for the
 // caller's current canonical head/target.
