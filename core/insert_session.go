@@ -92,14 +92,22 @@ func (s *InsertSession) Insert(blocks []*types.Block) error {
 // canonical stage progress to hook, matching BlockChain.InsertBlocksWithStageHook
 // while keeping the cross-batch executor alive until Finish.
 func (s *InsertSession) InsertBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {
+	return s.InsertBlocksWithStageHookPrewarmed(blocks, hook, nil)
+}
+
+// InsertBlocksWithStageHookPrewarmed reuses immutable preprocessing started by
+// the downloader for this batch. It is otherwise identical to
+// InsertBlocksWithStageHook and retains the same ordered validation boundary.
+func (s *InsertSession) InsertBlocksWithStageHookPrewarmed(blocks []*types.Block, hook StageProgressHook, prewarm *SignaturePrewarmRun) error {
 	if len(blocks) == 0 {
+		prewarm.Wait()
 		return nil
 	}
 	// Start signature recovery for the whole batch, then immediately execute the
 	// first block. Workers stay ahead on later blocks while state execution runs;
 	// sync.Once makes an early serial read wait for only its own recovery. Join
 	// before returning so no worker retains the caller's batch.
-	sigPrewarm := startBlockSignaturePrewarm(blocks, s.bc.headerSigPrewarmer())
+	sigPrewarm := s.bc.signaturePrewarmForBlocks(blocks, prewarm)
 	defer sigPrewarm.Wait()
 	prevHook := s.executor.stageHook
 	s.executor.stageHook = hook

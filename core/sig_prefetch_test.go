@@ -276,6 +276,91 @@ func BenchmarkInsertBlocksSignaturePipeline(b *testing.B) {
 	}
 }
 
+// BenchmarkInsertSessionSignatureLookahead isolates the cross-batch change used
+// by sync: the second batch waits for the first batch's recovery pool, then
+// starts preprocessing while ordered execution of the first batch is still in
+// progress. Both arms use the same InsertSession and canonical validation path.
+func BenchmarkInsertSessionSignatureLookahead(b *testing.B) {
+	witnessKey, witnessAddr := keyAndAddr(b)
+	senderKey, sender := keyAndAddr(b)
+	_, recipient := keyAndAddr(b)
+	genesis := fixedVerifyGenesis(witnessAddr, sender)
+	refChain := newVerifierChain(b, genesis)
+	refBytes, refHash := genesisTaposRef(b, refChain)
+	_ = refChain.Close()
+
+	// Production sync drains 32-block chunks. Sixteen blocks here keeps the
+	// benchmark practical while preserving a much longer ordered execution tail
+	// than the former four-block micro-batch.
+	const blocksPerBatch, txsPerBlock = 16, 16
+	raw := produceSignedBlocks(b, genesis, witnessKey, blocksPerBatch*2, func(height uint64) []*types.Transaction {
+		txs := make([]*types.Transaction, txsPerBlock)
+		for i := range txs {
+			amount := int32(height*txsPerBlock + uint64(i) + 1)
+			txs[i] = buildTransferTxWithRef(b, sender, recipient, amount, 0, refBytes, refHash, senderKey)
+		}
+		return txs
+	})
+
+	for _, tc := range []struct {
+		name      string
+		lookahead bool
+	}{
+		{name: "just_in_time"},
+		{name: "one_batch_lookahead", lookahead: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				bc := newVerifierChain(b, genesis)
+				blocks := unmarshalBatch(b, raw)
+				first, second := blocks[:blocksPerBatch], blocks[blocksPerBatch:]
+				prevMin := ParallelSigVerifyMinTxs
+				prevWorkers := ParallelSigVerifyMaxWorkers
+				ParallelSigVerifyMinTxs = 1
+				ParallelSigVerifyMaxWorkers = 4
+				sess := bc.BeginInsertSession()
+				b.StartTimer()
+
+				var err error
+				if !tc.lookahead {
+					err = sess.Insert(first)
+					if err == nil {
+						err = sess.Insert(second)
+					}
+				} else {
+					firstRun := bc.StartSignaturePrewarm(first)
+					nextRun := make(chan *SignaturePrewarmRun, 1)
+					go func() {
+						firstRun.Wait()
+						nextRun <- bc.StartSignaturePrewarm(second)
+					}()
+					err = sess.InsertBlocksWithStageHookPrewarmed(first, nil, firstRun)
+					secondRun := <-nextRun
+					if err == nil {
+						err = sess.InsertBlocksWithStageHookPrewarmed(second, nil, secondRun)
+					} else {
+						secondRun.Wait()
+					}
+				}
+				if finishErr := sess.Finish(); err == nil {
+					err = finishErr
+				}
+				b.StopTimer()
+				ParallelSigVerifyMinTxs = prevMin
+				ParallelSigVerifyMaxWorkers = prevWorkers
+				if closeErr := bc.Close(); err == nil {
+					err = closeErr
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestSignaturePrewarmWorkerCount(t *testing.T) {
 	prevProcs := runtime.GOMAXPROCS(4)
 	defer runtime.GOMAXPROCS(prevProcs)
@@ -334,9 +419,9 @@ func TestStartBlockSignaturePrewarmReturnsBeforeWorkersFinish(t *testing.T) {
 		<-release
 	}
 
-	returned := make(chan *signaturePrewarmRun, 1)
+	returned := make(chan *SignaturePrewarmRun, 1)
 	go func() { returned <- startBlockSignaturePrewarm(blocks, nil) }()
-	var run *signaturePrewarmRun
+	var run *SignaturePrewarmRun
 	defer func() {
 		releaseOnce.Do(func() { close(release) })
 		run.Wait()
@@ -358,6 +443,15 @@ func TestStartBlockSignaturePrewarmReturnsBeforeWorkersFinish(t *testing.T) {
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("signature prewarm workers did not start")
 	}
+	if run.Ready() {
+		t.Fatal("blocked signature prewarm reported ready")
+	}
+	if !run.Matches(blocks) {
+		t.Fatal("signature prewarm handle did not match its source batch")
+	}
+	if got, want := run.Jobs(), 66; got != want {
+		t.Fatalf("prewarm handle jobs = %d, want %d", got, want)
+	}
 
 	waitDone := make(chan struct{})
 	go func() {
@@ -376,8 +470,112 @@ func TestStartBlockSignaturePrewarmReturnsBeforeWorkersFinish(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("prewarm Wait did not join released workers")
 	}
+	if !run.Ready() {
+		t.Fatal("joined signature prewarm did not report ready")
+	}
+	if run.WallTime() <= 0 {
+		t.Fatalf("prewarm wall time = %v, want positive", run.WallTime())
+	}
 	if got, want := jobs.Load(), int64(66); got != want {
 		t.Fatalf("prewarm jobs = %d, want %d", got, want)
+	}
+}
+
+func TestSignaturePrewarmForBlocksReusesMatchingRun(t *testing.T) {
+	blocks := []*types.Block{types.NewBlockFromPB(&corepb.Block{
+		Transactions: []*corepb.Transaction{{
+			RawData:   &corepb.TransactionRaw{Timestamp: 1},
+			Signature: [][]byte{make([]byte, 65)},
+		}},
+	})}
+	other := []*types.Block{types.NewBlockFromPB(&corepb.Block{
+		Transactions: []*corepb.Transaction{{
+			RawData:   &corepb.TransactionRaw{Timestamp: 2},
+			Signature: [][]byte{make([]byte, 65)},
+		}},
+	})}
+
+	prevMin := ParallelSigVerifyMinTxs
+	ParallelSigVerifyMinTxs = 1
+	defer func() { ParallelSigVerifyMinTxs = prevMin }()
+	prevHook := sigPrewarmJobHook
+	defer func() { sigPrewarmJobHook = prevHook }()
+	var jobs atomic.Int64
+	sigPrewarmJobHook = func() { jobs.Add(1) }
+
+	bc := new(BlockChain)
+	run := bc.StartSignaturePrewarm(blocks)
+	run.Wait()
+	before := jobs.Load()
+	if got := bc.signaturePrewarmForBlocks(blocks, run); got != run {
+		t.Fatal("matching prewarm run was not reused")
+	}
+	if got := jobs.Load(); got != before {
+		t.Fatalf("matching reuse started duplicate jobs: before=%d after=%d", before, got)
+	}
+	if run.Matches(other) {
+		t.Fatal("prewarm run matched a different batch")
+	}
+	replacement := bc.signaturePrewarmForBlocks(other, run)
+	if replacement == run {
+		t.Fatal("mismatched prewarm run was reused")
+	}
+	replacement.Wait()
+}
+
+func TestPrewarmedInsertJoinsRunWhenChainAlreadyClosed(t *testing.T) {
+	blocks := []*types.Block{types.NewBlockFromPB(&corepb.Block{
+		Transactions: []*corepb.Transaction{{
+			RawData:   &corepb.TransactionRaw{Timestamp: 1},
+			Signature: [][]byte{make([]byte, 65)},
+		}},
+	})}
+	prevMin := ParallelSigVerifyMinTxs
+	ParallelSigVerifyMinTxs = 1
+	defer func() { ParallelSigVerifyMinTxs = prevMin }()
+	prevHook := sigPrewarmJobHook
+	defer func() { sigPrewarmJobHook = prevHook }()
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	sigPrewarmJobHook = func() {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+	}
+
+	bc := new(BlockChain)
+	run := bc.StartSignaturePrewarm(blocks)
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		run.Wait()
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("signature prewarm worker did not start")
+	}
+	bc.closed.Store(true)
+	returned := make(chan error, 1)
+	go func() {
+		returned <- bc.InsertSyncBlocksWithStageHookPrewarmed(blocks, nil, run)
+	}()
+	select {
+	case err := <-returned:
+		t.Fatalf("closed-chain insertion returned before joining prewarm: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-returned:
+		if !errors.Is(err, ErrBlockChainClosed) {
+			t.Fatalf("closed-chain insertion error = %v, want %v", err, ErrBlockChainClosed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("closed-chain insertion did not return after prewarm joined")
 	}
 }
 

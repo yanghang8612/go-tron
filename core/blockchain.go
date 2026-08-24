@@ -892,20 +892,37 @@ func (bc *BlockChain) InsertBlocksWithStageHook(blocks []*types.Block, hook Stag
 // TransactionRet and temporal changeset rows remain on the canonical path.
 // SyncService advances both sorted derived stages after the range settles.
 func (bc *BlockChain) InsertSyncBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {
-	return bc.insertBlocksWithStageHook(blocks, hook, true)
+	return bc.insertBlocksWithStageHookPrewarmed(blocks, hook, true, nil)
 }
 
 func (bc *BlockChain) insertBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool) error {
+	return bc.insertBlocksWithStageHookPrewarmed(blocks, hook, deferTransactionLookup, nil)
+}
+
+// InsertSyncBlocksWithStageHookPrewarmed is the bulk-sync insertion surface for
+// a batch whose immutable signature/decoding work was started by the downloader.
+// The handle is reused only when it matches the batch; canonical ordered
+// validation remains unchanged and still owns every accept/reject decision.
+func (bc *BlockChain) InsertSyncBlocksWithStageHookPrewarmed(blocks []*types.Block, hook StageProgressHook, prewarm *SignaturePrewarmRun) error {
+	return bc.insertBlocksWithStageHookPrewarmed(blocks, hook, true, prewarm)
+}
+
+func (bc *BlockChain) insertBlocksWithStageHookPrewarmed(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool, prewarm *SignaturePrewarmRun) error {
 	if len(blocks) == 0 {
+		prewarm.Wait()
 		return nil
 	}
+	// Also cover early returns before the locked insertion helper takes
+	// ownership (notably a concurrently closed chain). The inner successful
+	// path joins the same WaitGroup; a second Wait is safe and immediate.
+	defer prewarm.Wait()
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 	if bc.closed.Load() {
 		return ErrBlockChainClosed
 	}
 
-	return bc.insertBlocksLockedWithOptions(blocks, hook, deferTransactionLookup)
+	return bc.insertBlocksLockedWithOptionsPrewarmed(blocks, hook, deferTransactionLookup, prewarm)
 }
 
 // insertBlocksLocked applies a contiguous range through insertBlockLocked.
@@ -927,10 +944,18 @@ func (bc *BlockChain) insertBlocksLockedMode(blocks []*types.Block, storedReplay
 }
 
 func (bc *BlockChain) insertBlocksLockedWithOptions(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool) (err error) {
-	return bc.insertBlocksLockedModeWithOptions(blocks, false, hook, deferTransactionLookup)
+	return bc.insertBlocksLockedModeWithOptionsPrewarmed(blocks, false, hook, deferTransactionLookup, nil)
 }
 
 func (bc *BlockChain) insertBlocksLockedModeWithOptions(blocks []*types.Block, storedReplay bool, hook StageProgressHook, deferTransactionLookup bool) (err error) {
+	return bc.insertBlocksLockedModeWithOptionsPrewarmed(blocks, storedReplay, hook, deferTransactionLookup, nil)
+}
+
+func (bc *BlockChain) insertBlocksLockedWithOptionsPrewarmed(blocks []*types.Block, hook StageProgressHook, deferTransactionLookup bool, prewarm *SignaturePrewarmRun) (err error) {
+	return bc.insertBlocksLockedModeWithOptionsPrewarmed(blocks, false, hook, deferTransactionLookup, prewarm)
+}
+
+func (bc *BlockChain) insertBlocksLockedModeWithOptionsPrewarmed(blocks []*types.Block, storedReplay bool, hook StageProgressHook, deferTransactionLookup bool, prewarm *SignaturePrewarmRun) (err error) {
 	// The Erigon-aligned layout supports one fresh canonical format. Historical
 	// replay therefore follows the normal writer path instead of branching into
 	// the retired freezer-v2/immutable-index compatibility path.
@@ -948,9 +973,11 @@ func (bc *BlockChain) insertBlocksLockedModeWithOptions(blocks []*types.Block, s
 	// An engine-less offline replay deliberately skips both header and envelope
 	// validation, so no ordered consumer can observe these memos; avoid spending
 	// a full ECDSA recovery pass solely to discard it.
-	var sigPrewarm *signaturePrewarmRun
+	var sigPrewarm *SignaturePrewarmRun
 	if bc.engine != nil {
-		sigPrewarm = startBlockSignaturePrewarm(blocks, bc.headerSigPrewarmer())
+		sigPrewarm = bc.signaturePrewarmForBlocks(blocks, prewarm)
+	} else {
+		prewarm.Wait()
 	}
 	defer sigPrewarm.Wait()
 

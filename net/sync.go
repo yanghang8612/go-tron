@@ -212,6 +212,15 @@ var (
 	stateHistoryIndexStageBatchWritesCounter  = metrics.NewRegisteredCounter("sync/stage/state_history_index/etl_batch_writes", nil)
 	stateHistoryIndexStageInterruptedCounter  = metrics.NewRegisteredCounter("sync/stage/state_history_index/interrupted", nil)
 	stateHistoryIndexStageNanosCounter        = metrics.NewRegisteredCounter("sync/stage/state_history_index/nanos", nil)
+	signatureLookaheadBatchesCounter          = metrics.NewRegisteredCounter("sync/signature_lookahead/batches", nil)
+	signatureLookaheadDecodeNanosCounter      = metrics.NewRegisteredCounter("sync/signature_lookahead/decode_nanos", nil)
+	signatureLookaheadReusedCounter           = metrics.NewRegisteredCounter("sync/signature_lookahead/reused", nil)
+	signatureLookaheadDiscardedCounter        = metrics.NewRegisteredCounter("sync/signature_lookahead/discarded", nil)
+	signatureLookaheadMismatchedCounter       = metrics.NewRegisteredCounter("sync/signature_lookahead/mismatched", nil)
+	signatureLookaheadReadyCounter            = metrics.NewRegisteredCounter("sync/signature_lookahead/ready_at_import", nil)
+	signatureLookaheadPendingCounter          = metrics.NewRegisteredCounter("sync/signature_lookahead/pending_at_import", nil)
+	signatureLookaheadLeadNanosCounter        = metrics.NewRegisteredCounter("sync/signature_lookahead/lead_nanos", nil)
+	signatureLookaheadOverlapNanosCounter     = metrics.NewRegisteredCounter("sync/signature_lookahead/overlap_after_import_start_nanos", nil)
 )
 
 // chainStatusAdapter adapts *core.BlockChain to tsync.ChainStatus by adding
@@ -2017,6 +2026,100 @@ func (ss *SyncService) drainBufferedBlocks() {
 	}
 }
 
+// syncSignatureLookahead owns one decoded-but-uncommitted staged-body batch.
+// Decoding may overlap the current import. Signature preprocessing starts only
+// after the current batch's run finishes, bounding the process to one recovery
+// worker pool while still overlapping the remainder of ordered execution.
+type syncSignatureLookahead struct {
+	batch          syncdl.BufferedBatch
+	done           chan struct{}
+	selected       bool
+	decode         syncdl.BufferedBatchDecodeResult
+	prewarm        *core.SignaturePrewarmRun
+	prewarmStarted time.Time
+}
+
+func (ss *SyncService) startSignatureLookahead(previous *core.SignaturePrewarmRun) *syncSignatureLookahead {
+	if ss == nil || ss.chain == nil || ss.stopping.Load() {
+		return nil
+	}
+	ahead := &syncSignatureLookahead{done: make(chan struct{})}
+	go func() {
+		defer close(ahead.done)
+		// Selection can restore staged bodies from disk. Keep it off the current
+		// batch's import start path as well as keeping protobuf decode off-lock.
+		ss.mu.Lock()
+		if !ss.syncing || ss.pause.Paused() || ss.stopping.Load() {
+			ss.mu.Unlock()
+			return
+		}
+		ahead.batch = ss.runStagedBodyDrainLocked(time.Now()).Batch
+		ss.mu.Unlock()
+		if len(ahead.batch.Buffered) == 0 {
+			return
+		}
+		ahead.selected = true
+		signatureLookaheadBatchesCounter.Inc(1)
+		started := time.Now()
+		ahead.decode = syncdl.DecodeBufferedBatch(&ahead.batch)
+		signatureLookaheadDecodeNanosCounter.Inc(time.Since(started).Nanoseconds())
+		if len(ahead.batch.Blocks) == 0 {
+			return
+		}
+		// Do not overlap two full signature worker pools. The current run can
+		// still overlap its own ordered execution; once it is done, the next
+		// run overlaps the remaining state/commit work of the current batch.
+		previous.Wait()
+		ahead.prewarmStarted = time.Now()
+		ahead.prewarm = ss.chain.StartSignaturePrewarm(ahead.batch.Blocks)
+	}()
+	return ahead
+}
+
+func sameBufferedBatch(left, right syncdl.BufferedBatch) bool {
+	if len(left.Buffered) != len(right.Buffered) {
+		return false
+	}
+	for i := range left.Buffered {
+		l, r := left.Buffered[i], right.Buffered[i]
+		if l.Num != r.Num || l.Hash != r.Hash || len(l.Raw) != len(r.Raw) {
+			return false
+		}
+	}
+	return len(left.Buffered) > 0
+}
+
+// take returns the lookahead result only when a fresh lock-held drain plan still
+// selects the same immutable buffered rows. A changed/removed batch is joined
+// and discarded; the caller then decodes the fresh selection normally.
+func (a *syncSignatureLookahead) take(batch syncdl.BufferedBatch) (syncdl.BufferedBatch, syncdl.BufferedBatchDecodeResult, *core.SignaturePrewarmRun, time.Time, bool) {
+	if a == nil {
+		return syncdl.BufferedBatch{}, syncdl.BufferedBatchDecodeResult{}, nil, time.Time{}, false
+	}
+	<-a.done
+	if !a.selected {
+		return syncdl.BufferedBatch{}, syncdl.BufferedBatchDecodeResult{}, nil, time.Time{}, false
+	}
+	if !sameBufferedBatch(a.batch, batch) {
+		a.prewarm.Wait()
+		signatureLookaheadMismatchedCounter.Inc(1)
+		return syncdl.BufferedBatch{}, syncdl.BufferedBatchDecodeResult{}, nil, time.Time{}, false
+	}
+	signatureLookaheadReusedCounter.Inc(1)
+	return a.batch, a.decode, a.prewarm, a.prewarmStarted, true
+}
+
+func (a *syncSignatureLookahead) discard() {
+	if a == nil {
+		return
+	}
+	<-a.done
+	a.prewarm.Wait()
+	if a.selected {
+		signatureLookaheadDiscardedCounter.Inc(1)
+	}
+}
+
 func (ss *SyncService) drainBufferedBlocksOnce() {
 	var out []outboundSyncRequest
 	// One drain may consume several small local import chunks. Reuse one
@@ -2039,6 +2142,8 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 	pauseBlock := uint64(0)
 	sessionAppliedBlocks := uint64(0)
 	rotatedForDerivedStages := false
+	var lookahead *syncSignatureLookahead
+	defer func() { lookahead.discard() }()
 drainLoop:
 	for {
 		now := time.Now()
@@ -2080,10 +2185,34 @@ drainLoop:
 		}
 		ss.mu.Unlock()
 		batch := drainSession.Batch
-		decode := syncdl.DecodeBufferedBatch(&batch)
+		var (
+			decode         syncdl.BufferedBatchDecodeResult
+			prewarm        *core.SignaturePrewarmRun
+			prewarmStarted time.Time
+			prewarmedAhead bool
+		)
+		if lookahead != nil {
+			ahead := lookahead
+			lookahead = nil
+			if aheadBatch, aheadDecode, aheadPrewarm, aheadStarted, ok := ahead.take(batch); ok {
+				batch = aheadBatch
+				decode = aheadDecode
+				prewarm = aheadPrewarm
+				prewarmStarted = aheadStarted
+				prewarmedAhead = true
+			}
+		}
+		if !prewarmedAhead {
+			decode = syncdl.DecodeBufferedBatch(&batch)
+			if len(batch.Blocks) > 0 {
+				prewarmStarted = time.Now()
+				prewarm = ss.chain.StartSignaturePrewarm(batch.Blocks)
+			}
+		}
 		ss.logDecodeBatchResult(decode)
 		badPeer, commitErr := ss.commitDecodedBufferedBatch(&batch, decode, time.Now())
 		if commitErr != nil {
+			prewarm.Wait()
 			failedBlock := decode.Dropped.Num
 			if failedBlock == 0 && len(batch.Buffered) > 0 {
 				failedBlock = batch.Buffered[0].Num
@@ -2098,8 +2227,10 @@ drainLoop:
 			go badPeer.Close()
 		}
 		if len(batch.Blocks) == 0 {
+			prewarm.Wait()
 			continue drainLoop
 		}
+		lookahead = ss.startSignatureLookahead(prewarm)
 		if sess == nil {
 			sess = ss.chain.BeginSyncInsertSession()
 		}
@@ -2107,7 +2238,15 @@ drainLoop:
 			service:                ss,
 			session:                sess,
 			flushLatestAfterInsert: depth == 0,
+			prewarm:                prewarm,
+			prewarmStarted:         prewarmStarted,
+			prewarmedAhead:         prewarmedAhead,
 		})
+		// ExecuteImportBatch normally transfers the handle to core, which joins it
+		// before returning. Keep an unconditional caller-side join for downloader
+		// plans that stop earlier (for example, a second metadata validation
+		// rejecting the batch before Execute); no worker may outlive batch ownership.
+		prewarm.Wait()
 		if applied := importRun.Run.Outcome.Applied; applied > 0 {
 			sessionAppliedBlocks += uint64(applied)
 		}
@@ -2982,6 +3121,9 @@ type syncImportBatchRunApplier struct {
 	service                *SyncService
 	session                *core.InsertSession
 	flushLatestAfterInsert bool
+	prewarm                *core.SignaturePrewarmRun
+	prewarmStarted         time.Time
+	prewarmedAhead         bool
 }
 
 // syncImportStageHookExecutor selects the sync-only insertion surface. It
@@ -2990,16 +3132,18 @@ type syncImportBatchRunApplier struct {
 type syncImportStageHookExecutor struct {
 	chain   *core.BlockChain
 	session *core.InsertSession
+	prewarm *core.SignaturePrewarmRun
 }
 
 func (e syncImportStageHookExecutor) InsertBlocksWithStageHook(blocks []*types.Block, hook core.StageProgressHook) error {
 	if e.session != nil {
-		return e.session.InsertBlocksWithStageHook(blocks, hook)
+		return e.session.InsertBlocksWithStageHookPrewarmed(blocks, hook, e.prewarm)
 	}
 	if e.chain == nil {
+		e.prewarm.Wait()
 		return fmt.Errorf("sync: nil chain import executor")
 	}
-	return e.chain.InsertSyncBlocksWithStageHook(blocks, hook)
+	return e.chain.InsertSyncBlocksWithStageHookPrewarmed(blocks, hook, e.prewarm)
 }
 
 func (a syncImportBatchRunApplier) LogDecodeBatchResult(result syncdl.BufferedBatchDecodeResult) {
@@ -3024,8 +3168,31 @@ func (a syncImportBatchRunApplier) RecordBufferWait(wait time.Duration) {
 }
 
 func (a syncImportBatchRunApplier) ExecuteImportBatch(attempt syncdl.ImportBatchExecutionAttempt) (time.Duration, error) {
-	var executor syncdl.ImportBatchStageHookExecutor = syncImportStageHookExecutor{chain: a.service.chain, session: a.session}
+	importStarted := time.Now()
+	if a.prewarmedAhead && a.prewarm != nil {
+		signatureLookaheadLeadNanosCounter.Inc(importStarted.Sub(a.prewarmStarted).Nanoseconds())
+		if a.prewarm.Ready() {
+			signatureLookaheadReadyCounter.Inc(1)
+		} else {
+			signatureLookaheadPendingCounter.Inc(1)
+		}
+	}
+	var executor syncdl.ImportBatchStageHookExecutor = syncImportStageHookExecutor{
+		chain:   a.service.chain,
+		session: a.session,
+		prewarm: a.prewarm,
+	}
 	result := syncdl.RunImportBatchExecutionAttemptWithStageHook(attempt, executor, time.Now)
+	if a.prewarmedAhead && a.prewarm != nil {
+		// Canonical insertion joins the run before returning. This records how
+		// long preprocessing remained in flight after ordered import began; it
+		// is an upper bound on possible validation-side waiting, not a claim that
+		// the serial path blocked for the whole interval.
+		finished := a.prewarmStarted.Add(a.prewarm.WallTime())
+		if finished.After(importStarted) {
+			signatureLookaheadOverlapNanosCounter.Inc(finished.Sub(importStarted).Nanoseconds())
+		}
+	}
 	if a.session != nil && a.flushLatestAfterInsert {
 		if flushErr := a.session.FlushLatest(); flushErr != nil {
 			if result.Err != nil {

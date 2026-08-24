@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -13,6 +14,10 @@ var (
 	blockPreprocessBlocksCounter         = metrics.NewRegisteredCounter("core/block_preprocess/blocks", nil)
 	blockPreprocessTransactionsCounter   = metrics.NewRegisteredCounter("core/block_preprocess/transactions", nil)
 	blockPreprocessContractErrorsCounter = metrics.NewRegisteredCounter("core/block_preprocess/contract_errors", nil)
+	blockPreprocessRunsCounter           = metrics.NewRegisteredCounter("core/block_preprocess/runs", nil)
+	blockPreprocessWallNanosCounter      = metrics.NewRegisteredCounter("core/block_preprocess/wall_nanos", nil)
+	blockPreprocessReusedRunsCounter     = metrics.NewRegisteredCounter("core/block_preprocess/reused_runs", nil)
+	blockPreprocessMismatchedRunsCounter = metrics.NewRegisteredCounter("core/block_preprocess/mismatched_runs", nil)
 )
 
 // ParallelSigVerifyMinTxs gates the immutable block-preprocessing pass run at
@@ -58,12 +63,23 @@ type headerSignaturePrewarmer interface {
 // warmed on the happy path / not touched when the kill switch is off.
 var sigPrewarmJobHook func()
 
-// signaturePrewarmRun owns the preprocessing worker lifetime of one batch.
+// SignaturePrewarmRun owns the preprocessing worker lifetime of one batch.
 // Callers may execute blocks while it runs, but must Wait before releasing the
 // batch. Each derived fact is protected by the transaction/block memo that the
 // serial path reads, so an early consumer waits only for its own in-flight fact.
-type signaturePrewarmRun struct {
-	wg sync.WaitGroup
+//
+// The exported handle lets the sync downloader start immutable work while the
+// previous batch is still importing, then hand ownership to canonical insertion
+// instead of creating a duplicate worker pool for the same blocks.
+type SignaturePrewarmRun struct {
+	wg         sync.WaitGroup
+	remaining  atomic.Int64
+	wallNanos  atomic.Int64
+	started    time.Time
+	jobs       int
+	blockCount int
+	firstBlock *types.Block
+	lastBlock  *types.Block
 }
 
 // signaturePrewarmJob is deliberately pointer-only. The former job shape kept
@@ -76,10 +92,46 @@ type signaturePrewarmJob struct {
 	tx    *types.Transaction
 }
 
-func (r *signaturePrewarmRun) Wait() {
+func (r *SignaturePrewarmRun) Wait() {
 	if r != nil {
 		r.wg.Wait()
 	}
+}
+
+// Ready reports whether every preprocessing job has completed. A nil handle is
+// ready by definition: the batch was below the parallel-preprocessing threshold.
+func (r *SignaturePrewarmRun) Ready() bool {
+	return r == nil || r.remaining.Load() == 0
+}
+
+// Jobs returns the number of immutable preprocessing jobs in this run.
+func (r *SignaturePrewarmRun) Jobs() int {
+	if r == nil {
+		return 0
+	}
+	return r.jobs
+}
+
+// WallTime returns the elapsed preprocessing wall time. For an in-flight run it
+// returns the elapsed time so far; after completion it is stable.
+func (r *SignaturePrewarmRun) WallTime() time.Duration {
+	if r == nil || r.started.IsZero() {
+		return 0
+	}
+	if elapsed := r.wallNanos.Load(); elapsed != 0 {
+		return time.Duration(elapsed)
+	}
+	return time.Since(r.started)
+}
+
+// Matches verifies that a reusable handle belongs to this exact batch. Sync
+// batches are immutable and contiguous; length plus endpoint identity protects
+// accidental cross-batch reuse without retaining a second block slice.
+func (r *SignaturePrewarmRun) Matches(blocks []*types.Block) bool {
+	if r == nil || len(blocks) != r.blockCount || len(blocks) == 0 {
+		return false
+	}
+	return blocks[0] == r.firstBlock && blocks[len(blocks)-1] == r.lastBlock
 }
 
 // prewarmBlockSignatures is the historical synchronous wrapper retained for
@@ -98,7 +150,7 @@ func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarm
 // Concurrency safety: transaction signers/contract facts and block witness/body
 // facts are each populated at most once from immutable protobuf fields. Blocks
 // the pass never sees simply compute the same facts inline.
-func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePrewarmer) *signaturePrewarmRun {
+func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePrewarmer) *SignaturePrewarmRun {
 	if ParallelSigVerifyMinTxs <= 0 || len(blocks) == 0 {
 		return nil
 	}
@@ -140,7 +192,15 @@ func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePre
 
 	workers := signaturePrewarmWorkerCount(len(jobs))
 
-	run := new(signaturePrewarmRun)
+	run := &SignaturePrewarmRun{
+		started:    time.Now(),
+		jobs:       len(jobs),
+		blockCount: len(blocks),
+		firstBlock: blocks[0],
+		lastBlock:  blocks[len(blocks)-1],
+	}
+	run.remaining.Store(int64(len(jobs)))
+	blockPreprocessRunsCounter.Inc(1)
 	var next atomic.Int64
 	n := int64(len(jobs))
 	for w := 0; w < workers; w++ {
@@ -153,10 +213,40 @@ func startBlockSignaturePrewarm(blocks []*types.Block, engine headerSignaturePre
 					return
 				}
 				runSigJob(jobs[idx], engine)
+				if run.remaining.Add(-1) == 0 {
+					elapsed := time.Since(run.started).Nanoseconds()
+					run.wallNanos.Store(elapsed)
+					blockPreprocessWallNanosCounter.Inc(elapsed)
+				}
 			}
 		}()
 	}
 	return run
+}
+
+// StartSignaturePrewarm starts the same immutable preprocessing used by block
+// insertion and returns its ownership handle. The caller must either pass the
+// handle to a Prewarmed insertion method for the same batch or call Wait.
+func (bc *BlockChain) StartSignaturePrewarm(blocks []*types.Block) *SignaturePrewarmRun {
+	if bc == nil {
+		return nil
+	}
+	return startBlockSignaturePrewarm(blocks, bc.headerSigPrewarmer())
+}
+
+// signaturePrewarmForBlocks validates an optional reusable run and falls back
+// to a fresh run when necessary. A mismatched run is joined before replacement
+// so its workers never escape the lifetime promised by its original caller.
+func (bc *BlockChain) signaturePrewarmForBlocks(blocks []*types.Block, reusable *SignaturePrewarmRun) *SignaturePrewarmRun {
+	if reusable != nil {
+		if reusable.Matches(blocks) {
+			blockPreprocessReusedRunsCounter.Inc(1)
+			return reusable
+		}
+		blockPreprocessMismatchedRunsCounter.Inc(1)
+		reusable.Wait()
+	}
+	return bc.StartSignaturePrewarm(blocks)
 }
 
 func signaturePrewarmWorkerCount(jobCount int) int {
