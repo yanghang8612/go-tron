@@ -651,6 +651,116 @@ func TestColdBuilderDefersDerivedSidecarsWhileFarBehind(t *testing.T) {
 	}
 }
 
+func TestColdBuilderDecouplesAndRestartsDerivedSidecarCatchup(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x7d)
+	address := eventLogTestAddress(0x7e)
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		block, infos := coldBuilderEventLogBlock(t, blockNum, []*corepb.TransactionInfo_Log{{
+			Address: address,
+			Data:    []byte{byte(blockNum)},
+		}})
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(db, blockNum, infos); err != nil {
+			t.Fatalf("WriteTransactionInfosByBlock %d: %v", blockNum, err)
+		}
+	}
+	chain := &coldBuilderChain{
+		db: db, solidified: 4, syncRemaining: 1_000, syncRemainingOK: true,
+	}
+	cfg := Config{
+		Dir:                              dir,
+		Enabled:                          true,
+		HistoryWindow:                    1,
+		BatchBlocks:                      1,
+		DeferHistoryBuildWhileSyncing:    true,
+		MaxDeferredHistoryBlocks:         1,
+		DeferDerivedSidecarsWhileSyncing: true,
+		BuildEventLogs:                   true,
+		EventLogVersion:                  EventLogSegmentV4Version,
+	}
+	runner := NewRunner(chain, cfg)
+	for pass := uint64(1); pass <= 2; pass++ {
+		result, err := runner.OnePass()
+		if err != nil {
+			t.Fatalf("sync pass %d: %v", pass, err)
+		}
+		if !result.Built || result.ToBlock != pass || result.EventLogBuilt || !result.DerivedSidecarsDeferred {
+			t.Fatalf("sync pass %d = %+v, want history-only publication", pass, result)
+		}
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest during sync: %v", err)
+	}
+	if logs := eventLogRefs(manifest); len(logs) != 0 {
+		t.Fatalf("sync-time event logs = %+v, want none", logs)
+	}
+
+	// Finish sync. The last state-history batch may publish its own sidecar,
+	// leaving an older hole which the independent cursor must fill safely.
+	chain.syncRemainingOK = false
+	lastHistory, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("last history pass: %v", err)
+	}
+	if !lastHistory.Built || lastHistory.ToBlock != 3 || !lastHistory.EventLogBuilt {
+		t.Fatalf("last history pass = %+v, want block 3 history+event log", lastHistory)
+	}
+	// Simulate a crash after atomic manifest publication but before the
+	// hash-bound DB stage write. The retained StateTxRange mapping must repair
+	// the history boundary before sidecar catch-up chooses its upper bound.
+	if err := rawdb.DeleteStageProgress(db, rawdb.StageSnapshotBuild); err != nil {
+		t.Fatalf("DeleteStageProgress SnapshotBuild: %v", err)
+	}
+
+	firstCatchup, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("first sidecar catch-up: %v", err)
+	}
+	if firstCatchup.Built || !firstCatchup.DerivedSidecarCatchup || !firstCatchup.EventLogBuilt ||
+		!firstCatchup.DerivedSidecarsPending || !firstCatchup.NeedsCatchup() {
+		t.Fatalf("first sidecar catch-up = %+v, want bounded progress with debt", firstCatchup)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild); err != nil || !ok || got != 3 {
+		t.Fatalf("repaired StageSnapshotBuild = %d ok=%v err=%v, want 3", got, ok, err)
+	}
+
+	// Recreate the runner to prove that active manifest coverage, rather than an
+	// in-memory queue, resumes the remaining sidecar debt.
+	runner = NewRunner(chain, cfg)
+	finalCatchup, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("restart sidecar catch-up: %v", err)
+	}
+	if finalCatchup.Built || !finalCatchup.DerivedSidecarCatchup || !finalCatchup.EventLogBuilt ||
+		finalCatchup.DerivedSidecarsPending || finalCatchup.NeedsCatchup() {
+		t.Fatalf("restart sidecar catch-up = %+v, want debt fully drained", finalCatchup)
+	}
+	manifest, err = LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest after catch-up: %v", err)
+	}
+	if logs, indexes := eventLogRefs(manifest), eventLogIndexRefs(manifest); len(logs) != 3 || len(indexes) != 3 {
+		t.Fatalf("event sidecars after catch-up = logs %+v indexes %+v, want three aligned pairs", logs, indexes)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 3 {
+		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 3", got, ok, err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	covered, err := mgr.EventLogIndexedRangeCovered(1, 3)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+}
+
 func TestColdBuilderRateLimitsLargeBacklogDuringSync(t *testing.T) {
 	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
 	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
@@ -2020,6 +2130,19 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block.Hash() {
 		t.Fatalf("StageSnapshotEventLogBuild row = %+v ok=%v err=%v, want hash %x", row, ok, err, block.Hash())
 	}
+	if err := rawdb.DeleteStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil {
+		t.Fatalf("DeleteStageProgress SnapshotEventLogBuild: %v", err)
+	}
+	repaired, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("repair manifest-first event stage: %v", err)
+	}
+	if repaired.DerivedSidecarCatchup || repaired.EventLogBuilt {
+		t.Fatalf("event stage repair rebuilt immutable sidecars: %+v", repaired)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || !row.HasBlockHash || row.BlockHash != block.Hash() {
+		t.Fatalf("repaired StageSnapshotEventLogBuild row = %+v ok=%v err=%v, want hash %x", row, ok, err, block.Hash())
+	}
 	mgr, err := OpenManagerWithChainVerificationCache(dir, verificationCache)
 	if err != nil {
 		t.Fatalf("OpenManagerWithChainVerificationCache: %v", err)
@@ -2313,6 +2436,63 @@ func TestColdBuilderSkipsBalanceTraceBuildWithoutCompleteCoverage(t *testing.T) 
 	}
 }
 
+func TestColdBuilderBackfillsBalanceTraceAfterSourceCoverageArrives(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x4b)
+	traceOwner := balanceTraceTestAddress(0x4c)
+	writeColdBuilderChange(t, db, owner, 1, 1, "next")
+	block, _ := coldBuilderEventLogBlock(t, 1, nil)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	cfg := Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryWindow:      1,
+		BuildBalanceTraces: true,
+	}
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, cfg)
+	first, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("history pass: %v", err)
+	}
+	if !first.Built || first.BalanceTraceBuilt {
+		t.Fatalf("history pass = %+v, want history without incomplete balance trace", first)
+	}
+
+	trace := coldBuilderBlockBalanceTrace(block, 10_004)
+	trace.TransactionBalanceTrace = []*contractpb.TransactionBalanceTrace{{
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			OperationIdentifier: 0,
+			Address:             traceOwner.Bytes(),
+			Amount:              888,
+		}},
+	}}
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, traceOwner.Bytes(), 1, 888); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+
+	second, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("balance-trace catch-up: %v", err)
+	}
+	if second.Built || !second.DerivedSidecarCatchup || !second.BalanceTraceBuilt || second.DerivedSidecarsPending {
+		t.Fatalf("balance-trace catch-up = %+v, want independent completed build", second)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	traceBlock, balance, ok, err := mgr.AccountTraceAtOrBefore(traceOwner.Bytes(), 1)
+	if err != nil || !ok || traceBlock != 1 || balance != 888 {
+		t.Fatalf("AccountTraceAtOrBefore = %d/%d/%v/%v, want 1/888/true/nil", traceBlock, balance, ok, err)
+	}
+}
+
 func TestColdBuilderSkipsBalanceTraceBuildWithoutAccountTraceCoverage(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
@@ -2456,6 +2636,57 @@ func TestColdBuilderBuildsSectionBloomsOnlyForCompleteSections(t *testing.T) {
 	bitset, ok, err := rawdb.ReadSectionBloomBitSet(db, 0, 42)
 	if err != nil || !ok || !rawdb.SectionBloomBitSetHas(bitset, 5) {
 		t.Fatalf("cold ReadSectionBloomBitSet = %x/%v/%v, want bit 5", bitset, ok, err)
+	}
+}
+
+func TestColdBuilderBackfillsDeferredSectionBloomAfterSync(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x4d)
+	sectionEnd := uint64(rawdb.SectionBloomBlockPerSection) - 1
+	writeColdBuilderChange(t, db, owner, 1, 1, "next")
+	if err := rawdb.WriteStateTxRange(db, sectionEnd, common.Hash{0xef}, sectionEnd, sectionEnd); err != nil {
+		t.Fatalf("WriteStateTxRange section end: %v", err)
+	}
+	writeColdBuilderCanonicalBlock(t, db, sectionEnd)
+	row := sectionBloomTestEncodedBit(t, 7)
+	if err := rawdb.WriteSectionBloom(db, 0, 51, row); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+	chain := &coldBuilderChain{
+		db: db, solidified: int64(sectionEnd + 1), syncRemaining: 1_000, syncRemainingOK: true,
+	}
+	cfg := Config{
+		Dir:                              dir,
+		Enabled:                          true,
+		HistoryWindow:                    1,
+		BatchBlocks:                      sectionEnd,
+		BuildSectionBlooms:               true,
+		DeferDerivedSidecarsWhileSyncing: true,
+	}
+	runner := NewRunner(chain, cfg)
+	first, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("sync history pass: %v", err)
+	}
+	if !first.Built || first.SectionBloomBuilt || !first.DerivedSidecarsDeferred {
+		t.Fatalf("sync history pass = %+v, want section bloom deferred", first)
+	}
+	chain.syncRemainingOK = false
+	second, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("section-bloom catch-up: %v", err)
+	}
+	if second.Built || !second.DerivedSidecarCatchup || !second.SectionBloomBuilt || second.DerivedSidecarsPending {
+		t.Fatalf("section-bloom catch-up = %+v, want independent completed build", second)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	cold, ok, err := mgr.SectionBloom(0, 51)
+	if err != nil || !ok || !bytes.Equal(cold, row) {
+		t.Fatalf("cold SectionBloom = %x/%v/%v, want row", cold, ok, err)
 	}
 }
 
@@ -2788,6 +3019,8 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"history/deferred/rate_limit",
 		"history/accelerated/builds",
 		"history/deferred/resource",
+		"sidecar/deferred/sync_or_resource",
+		"sidecar/catchup/builds",
 		"last/latest_build_block",
 	} {
 		metrics.DefaultRegistry.Unregister(namespace + suffix)

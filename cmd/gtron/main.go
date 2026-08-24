@@ -1138,10 +1138,11 @@ func gtron(ctx *cli.Context) error {
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.
-				LatestBuildBlocks:             statesnapshots.DefaultLatestBuildBlocks,
-				DeferLatestBuildWhileSyncing:  true,
-				DeferHistoryBuildWhileSyncing: shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
-				MaxDeferredHistoryBlocks:      maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
+				LatestBuildBlocks:                statesnapshots.DefaultLatestBuildBlocks,
+				DeferLatestBuildWhileSyncing:     true,
+				DeferHistoryBuildWhileSyncing:    shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
+				MaxDeferredHistoryBlocks:         maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
+				DeferDerivedSidecarsWhileSyncing: buildDerivedSnapshots,
 			},
 			Pruner: statepruning.PrunerConfig{
 				Policy:      prunePolicy,
@@ -1196,6 +1197,7 @@ func gtron(ctx *cli.Context) error {
 			"catchupHeavyWorkCooldown", snapshotCatchupHeavyWorkCooldown,
 			"deferHistoryBuildWhileSyncing", shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
 			"maxDeferredHistoryBlocks", maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
+			"deferDerivedSidecarsWhileSyncing", buildDerivedSnapshots,
 			"maxPruneSyncLag", domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
 			"heavyWorkRecoveryCooldown", heavyWorkRecoveryCooldown,
 			"heavyWorkCooldownMinDuration", heavyWorkCooldownMinDuration,
