@@ -4645,6 +4645,87 @@ prefix/as-of lookups, verifies compaction output, corrupts directory metadata,
 and swaps a structurally valid stale dictionary to prove the cross-file
 commitment fails closed.
 
+#### P5.40: Defer CodeDomain reclamation during historical sync
+
+A fresh 60-second profile of the deployed P5.39 binary attributed 13.68 CPU
+seconds to the background state-code pruning path. Twelve consecutive lifecycle
+passes each spent 7.7–8.1 wall-clock seconds scanning the current CodeDomain
+snapshot and deleted zero hot code rows. This scan competes with canonical
+import through B-tree reads, Snappy decoding, and filesystem reads, while the
+same catch-up configuration already defers rebuilding latest-domain snapshots.
+Consequently, the immutable snapshot coverage used by the scan cannot advance
+during active historical sync and newly imported bytecode cannot become
+reclaimable through these repeated passes.
+
+Snap mode now defers only the full CodeDomain reference/reclamation stage while
+sync is active. Hot-history pruning, commitment-checkpoint cleanup, hot-prune
+progress, and hash-bound SnapshotPrune stage progress continue unchanged, so
+the large history changeset remains bounded and restart semantics do not move
+backward. Retained hot bytecode remains authoritative and safe: code is
+content-addressed and immutable, and the first post-sync lifecycle pass scans
+all hot code hashes rather than resuming from a potentially stale cursor. The
+existing sync-complete hook requests that pass immediately.
+
+The sync predicate is evaluated at the CodeDomain stage boundary, closing the
+race where synchronization starts while the preceding hot-history phase is
+running. Production exports a cumulative deferred-pass gauge. Regression
+coverage proves that an active-sync pass still prunes history and advances
+stage progress while retaining code, then reclaims the covered code on the
+first idle pass. The production gate compares the state-code deferred count,
+pruner CPU/read bandwidth, Pebble read latency, importer CPU, and fixed-density
+transactions/s; lower background CPU alone is not a throughput acceptance.
+
+#### P5.41: Work-normalized import telemetry and standby-reward set reuse
+
+Raw transactions/second is not sufficient to distinguish a regression from a
+historical interval with fewer but more expensive transactions, nor can it
+separate downloader starvation from fixed per-block consensus work. Each sync
+progress window now publishes blocks/s, transactions/s, transactions/block,
+energy/s, energy/block, energy/transaction, importer busy and buffer-wait
+ratios, importer overhead, and phase time normalized per block or transaction.
+The execution phase is split further into transaction-dependent processing,
+account-state-root calculation, adaptive energy, rewards, shielded finalization,
+witness flushing, and block statistics. `outside_transaction` and
+`execute_fixed` expose the per-block floor directly instead of fitting it from
+two transaction-density samples. The compact INFO line carries the primary
+diagnostic dimensions; the complete durations remain in DEBUG and registered
+`sync/import/window/*` gauges. Completed apply blocks/transactions and their
+coverage ratio are tracked separately from foreground import counts, so an
+async sample crossing a reporting boundary is normalized by the work it
+actually represents rather than silently diluted by the whole window.
+
+The telemetry join covers both halves of async commitment. Previously the
+foreground published `ApplyStats` immediately after enqueue, before the worker
+folded the commitment, wrote metadata, ran hooks, advanced stages, and promoted
+the block layer. The foreground and worker now mark completion independently;
+the second side publishes exactly one joined sample without making either side
+wait. Worker state-commit, DP-update, persist, and hook durations are added to
+the block's work totals. Because these phases intentionally overlap the next
+block, their sum is a work attribution and may exceed importer wall time;
+`exec_busy_ratio` remains the wall-clock saturation signal.
+
+The same profile attributed 2.27 CPU seconds per minute to rebuilding the
+top-127 standby-witness reward set on every block. Java semantics require the
+reward calculation to observe the post-transaction witness membership and vote
+weights, but do not require re-sorting an unchanged set. StateDB now maintains a
+monotonic, execution-local generation for only those ranking inputs. The
+chain-level set is rebound to each block's starting view and reused at reward
+time when the generation still matches. Witness creation or vote-weight change
+forces an exact post-transaction rebuild and invalidates the cross-block cache;
+maintenance, cycle rollover, and fork rewind retain their existing explicit
+invalidations. URL and produced/missed counter writes do not perturb ranking,
+so ordinary block statistics cannot defeat the cache. A reverted speculative
+mutation may cause one conservative rebuild but can never allow stale rewards.
+
+Regression coverage requires an unchanged set to take the reuse route, an
+arbitrary stale set and an in-view vote mutation to rebuild, production-only
+witness counter writes not to advance the generation, and async ApplyStats to
+publish once per block with a deliberately delayed worker fold included. The
+production gate compares standby-set reuse/rebuild counts, reward and
+execute-fixed milliseconds/block, outside-transaction milliseconds/block,
+transactions/energy density, importer busy/wait ratios, state-code deferrals,
+and fixed-density transactions/s.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

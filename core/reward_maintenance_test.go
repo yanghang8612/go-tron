@@ -58,10 +58,40 @@ func TestBuildStandbyWitnessPaySet_OptAwareTiebreakAndFilter(t *testing.T) {
 	if set.voteSum != 200 {
 		t.Fatalf("voteSum: want 200 (0-vote excluded), got %d", set.voteSum)
 	}
+	if set.stateVersion != statedb.StandbyWitnessVersion() {
+		t.Fatalf("set version = %d, state version = %d", set.stateVersion, statedb.StandbyWitnessVersion())
+	}
 	for _, w := range set.witnesses {
 		if w.addr == z {
 			t.Fatal("0-vote witness must be filtered (java removeIf voteCount<1)")
 		}
+	}
+}
+
+func TestPayStandbyWitnessReusesVersionMatchedSet(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.SetChangeDelegation(true)
+	dp.SetCurrentCycleNumber(3)
+	dp.Set("witness_127_pay_per_block", 100)
+
+	a := tcommon.BytesToAddress([]byte{0x41, 0x01})
+	statedb.CreateAccount(a, corepb.AccountType_Normal)
+	seedWitness(t, statedb, a, 100)
+	set := buildStandbyWitnessPaySet(db, statedb, 3, true)
+	if set == nil {
+		t.Fatal("expected standby set")
+	}
+
+	reusedBefore := standbyPaySetReusedCounter.Snapshot().Count()
+	rebuiltBefore := standbyPaySetRebuiltCounter.Snapshot().Count()
+	payStandbyWitnessWithSet(db, statedb, dp, set)
+	if got := standbyPaySetReusedCounter.Snapshot().Count(); got != reusedBefore+1 {
+		t.Fatalf("reused counter = %d, want %d", got, reusedBefore+1)
+	}
+	if got := standbyPaySetRebuiltCounter.Snapshot().Count(); got != rebuiltBefore {
+		t.Fatalf("rebuilt counter changed on valid set: got %d, want %d", got, rebuiltBefore)
 	}
 }
 
@@ -100,12 +130,16 @@ func TestProcessBlockRebuildsStandbyPaySetAtRewardTime(t *testing.T) {
 		},
 	})
 
+	rebuiltBefore := standbyPaySetRebuiltCounter.Snapshot().Count()
 	_, _, err := processBlock(
 		statedb, dp, block, db, nil, 0, params.DefaultBlockNumForEnergyLimit,
 		false, tcommon.Hash{}, nil, staleSet, nil, nil, nil, true, -1, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := standbyPaySetRebuiltCounter.Snapshot().Count(); got != rebuiltBefore+1 {
+		t.Fatalf("stale set rebuild counter = %d, want %d", got, rebuiltBefore+1)
 	}
 
 	// Reward-time rebuild sees both witnesses: totalPay=100, voteSum=200,

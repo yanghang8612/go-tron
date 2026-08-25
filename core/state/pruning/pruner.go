@@ -73,6 +73,11 @@ type PrunerConfig struct {
 	// sync service can report more than this many blocks remaining. A zero
 	// value disables the catch-up gate.
 	MaxSyncLag uint64
+	// DeferStateCodePruneWhileSyncing keeps immutable hot bytecode available
+	// during historical sync instead of repeatedly scanning every CodeDomain
+	// reference. Hot-history pruning still runs to bound the large changeset
+	// backlog, and the sync-complete lifecycle wake resumes code reclamation.
+	DeferStateCodePruneWhileSyncing bool
 	// MetricsNamespace prefixes production prune gauges. Tests may override it
 	// to isolate process-global metric registrations.
 	MetricsNamespace string
@@ -96,6 +101,7 @@ type PrunerStats struct {
 	DeletedDomainChangeBlocks         uint64
 	DeletedCommitmentCheckpoints      uint64
 	DeletedStateCodeRows              uint64
+	DeferredStateCodePrune            uint64
 	LastSolidifiedBlock               uint64
 	LastDomainChangeStartBlock        uint64
 	LastDomainChangePrunedThrough     uint64
@@ -119,6 +125,7 @@ type Pruner struct {
 	deletedDomainChangeBlocks         atomic.Uint64
 	deletedCommitmentCheckpoints      atomic.Uint64
 	deletedStateCodeRows              atomic.Uint64
+	deferredStateCodePrune            atomic.Uint64
 	skippedCatchup                    atomic.Uint64
 	canceledCatchup                   atomic.Uint64
 	retiredVerificationMemoryHits     atomic.Uint64
@@ -152,6 +159,7 @@ type prunerMetrics struct {
 	deletedDomainChangeBlocks         *metrics.Gauge
 	deletedCommitmentCheckpoints      *metrics.Gauge
 	deletedStateCodeRows              *metrics.Gauge
+	deferredStateCodePrune            *metrics.Gauge
 	lastSolidifiedBlock               *metrics.Gauge
 	lastDomainChangeStartBlock        *metrics.Gauge
 	lastDomainChangePrunedThrough     *metrics.Gauge
@@ -179,6 +187,7 @@ func newPrunerMetrics(namespace string) prunerMetrics {
 		deletedDomainChangeBlocks:         metrics.GetOrRegisterGauge(namespace+"deleted/domain_change_blocks", nil),
 		deletedCommitmentCheckpoints:      metrics.GetOrRegisterGauge(namespace+"deleted/commitment_checkpoints", nil),
 		deletedStateCodeRows:              metrics.GetOrRegisterGauge(namespace+"deleted/state_code_rows", nil),
+		deferredStateCodePrune:            metrics.GetOrRegisterGauge(namespace+"state_code/deferred/catchup", nil),
 		lastSolidifiedBlock:               metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
 		lastDomainChangeStartBlock:        metrics.GetOrRegisterGauge(namespace+"last/domain_change/start_block", nil),
 		lastDomainChangePrunedThrough:     metrics.GetOrRegisterGauge(namespace+"last/domain_change/pruned_through_block", nil),
@@ -215,6 +224,7 @@ func (m prunerMetrics) update(stats PrunerStats) {
 	m.deletedDomainChangeBlocks.Update(prunerUintGauge(stats.DeletedDomainChangeBlocks))
 	m.deletedCommitmentCheckpoints.Update(prunerUintGauge(stats.DeletedCommitmentCheckpoints))
 	m.deletedStateCodeRows.Update(prunerUintGauge(stats.DeletedStateCodeRows))
+	m.deferredStateCodePrune.Update(prunerUintGauge(stats.DeferredStateCodePrune))
 	m.lastSolidifiedBlock.Update(prunerUintGauge(stats.LastSolidifiedBlock))
 	m.lastDomainChangeStartBlock.Update(prunerUintGauge(stats.LastDomainChangeStartBlock))
 	m.lastDomainChangePrunedThrough.Update(prunerUintGauge(stats.LastDomainChangePrunedThrough))
@@ -295,7 +305,8 @@ func (p *Pruner) Start() error {
 		"interval", p.cfg.Interval,
 		"batch", p.cfg.BatchSize,
 		"snapshotDir", p.cfg.SnapshotDir,
-		"maxSyncLag", p.cfg.MaxSyncLag)
+		"maxSyncLag", p.cfg.MaxSyncLag,
+		"deferStateCodePruneWhileSyncing", p.cfg.DeferStateCodePruneWhileSyncing)
 	return nil
 }
 
@@ -311,7 +322,8 @@ func (p *Pruner) Stop() error {
 		"txRanges", p.deletedTxRanges.Load(),
 		"changeBlocks", p.deletedDomainChangeBlocks.Load(),
 		"commitments", p.deletedCommitmentCheckpoints.Load(),
-		"codeRows", p.deletedStateCodeRows.Load())
+		"codeRows", p.deletedStateCodeRows.Load(),
+		"deferredStateCodePrune", p.deferredStateCodePrune.Load())
 	return nil
 }
 
@@ -327,6 +339,7 @@ func (p *Pruner) Stats() PrunerStats {
 		DeletedDomainChangeBlocks:         p.deletedDomainChangeBlocks.Load(),
 		DeletedCommitmentCheckpoints:      p.deletedCommitmentCheckpoints.Load(),
 		DeletedStateCodeRows:              p.deletedStateCodeRows.Load(),
+		DeferredStateCodePrune:            p.deferredStateCodePrune.Load(),
 		SkippedCatchup:                    p.skippedCatchup.Load(),
 		CanceledCatchup:                   p.canceledCatchup.Load(),
 		VerificationMemoryHits:            verification.MemoryHits,
@@ -585,10 +598,13 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		return Stats{}, err
 	}
 	stats, err = Worker{
-		DB:                          p.chain.DB(),
-		Policy:                      p.cfg.Policy,
-		MaxBlocks:                   p.cfg.BatchSize,
-		SnapshotDir:                 p.cfg.SnapshotDir,
+		DB:          p.chain.DB(),
+		Policy:      p.cfg.Policy,
+		MaxBlocks:   p.cfg.BatchSize,
+		SnapshotDir: p.cfg.SnapshotDir,
+		ShouldDeferStateCodePrune: func() bool {
+			return p.cfg.DeferStateCodePruneWhileSyncing && p.syncActive()
+		},
 		PruneHeadHash:               pruneHeadHash,
 		PruneHeadHasHash:            pruneHeadHasHash,
 		coverageVerificationCache:   p.coverageVerificationCache,
@@ -610,6 +626,9 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 	p.deletedDomainChangeBlocks.Add(uint64(stats.DeletedDomainChangeBlocks))
 	p.deletedCommitmentCheckpoints.Add(uint64(stats.DeletedCommitmentCheckpoints))
 	p.deletedStateCodeRows.Add(uint64(stats.DeletedStateCodeRows))
+	if stats.StateCodePruneDeferred {
+		p.deferredStateCodePrune.Add(1)
+	}
 	p.lastSolidifiedBlock.Store(uint64(solidified))
 	if stats.DeletedDomainChangeBlocks > 0 {
 		p.lastDomainChangeStartBlock.Store(stats.DomainChangeStartBlock)
@@ -671,6 +690,7 @@ func prunePassLogContext(pruneHead uint64, solidified int64, policy Policy, stat
 		"changeBlocks", stats.DeletedDomainChangeBlocks,
 		"commitments", stats.DeletedCommitmentCheckpoints,
 		"codeRows", stats.DeletedStateCodeRows,
+		"stateCodePruneDeferred", stats.StateCodePruneDeferred,
 		"elapsed", elapsed.Round(time.Millisecond),
 	}
 	if pruneHead >= policy.HistoryWindow {

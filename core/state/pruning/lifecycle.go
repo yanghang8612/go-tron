@@ -153,6 +153,7 @@ func (l *SnapshotLifecycle) Start() error {
 		"stateChangeIndexPrune", l.stateChangeIndexPrune != nil,
 		"retiredPrune", l.retiredPrune != nil,
 		"deferRetiredPruneWhileSyncing", l.deferRetiredPrune,
+		"deferStateCodePruneWhileSyncing", l.pruner.cfg.DeferStateCodePruneWhileSyncing,
 		"mode", l.pruner.cfg.Policy.Mode,
 		"interval", l.interval,
 		"snapshotDir", l.pruner.cfg.SnapshotDir)

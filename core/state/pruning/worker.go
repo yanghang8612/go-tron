@@ -25,6 +25,14 @@ type Worker struct {
 	MaxBlocks   int
 	SnapshotDir string
 
+	// ShouldDeferStateCodePrune skips the optional full CodeDomain reference
+	// scan when it returns true at the stage boundary. Hot code is immutable and
+	// remains authoritative while retained; a later pass scans every hot code
+	// hash again, so no separate resume cursor is required. Production uses this
+	// only during active historical sync. Evaluating it here, rather than when
+	// the pass starts, closes the race where sync begins during hot-history prune.
+	ShouldDeferStateCodePrune func() bool
+
 	// PruneHeadHash, when set by the live pruner, binds SnapshotPrune
 	// progress to the canonical block hash that capped this prune pass.
 	PruneHeadHash    common.Hash
@@ -40,6 +48,7 @@ type Stats struct {
 	DeletedDomainChangeBlocks    int
 	DeletedCommitmentCheckpoints int
 	DeletedStateCodeRows         int
+	StateCodePruneDeferred       bool
 	DomainChangeStartBlock       uint64
 	DomainChangePrunedThrough    uint64
 	DomainChangePrunedThroughTx  uint64
@@ -240,15 +249,20 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	if err := ctx.Err(); err != nil {
 		return Stats{}, err
 	}
-	codeStore, flushCode := newPruneBatchStore(w.DB)
-	deletedCodeRows, err := w.pruneStateCodeRowsContext(ctx, codeStore, headNum)
-	if err != nil {
-		return Stats{}, err
+	deferStateCodePrune := w.ShouldDeferStateCodePrune != nil && w.ShouldDeferStateCodePrune()
+	if deferStateCodePrune && w.Policy.Mode == ModeSnap && w.SnapshotDir != "" {
+		stats.StateCodePruneDeferred = true
+	} else {
+		codeStore, flushCode := newPruneBatchStore(w.DB)
+		deletedCodeRows, err := w.pruneStateCodeRowsContext(ctx, codeStore, headNum)
+		if err != nil {
+			return Stats{}, err
+		}
+		if err := flushCode(); err != nil {
+			return Stats{}, fmt.Errorf("pruning: flush CodeDomain delete batch: %w", err)
+		}
+		stats.DeletedStateCodeRows = deletedCodeRows
 	}
-	if err := flushCode(); err != nil {
-		return Stats{}, fmt.Errorf("pruning: flush CodeDomain delete batch: %w", err)
-	}
-	stats.DeletedStateCodeRows = deletedCodeRows
 
 	checkpointCfg, err := latestDomainConfig(snapshots.SegmentDatasetCommitmentCheckpoint)
 	if err != nil {

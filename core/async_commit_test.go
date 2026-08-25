@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,48 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/types/known/anypb"
 )
+
+func TestAsyncCommitApplyStatsIncludesDeferredWorker(t *testing.T) {
+	witnessAddr := testInsertAddr(1)
+	blocks, _ := buildSyncBlockSequence(t, witnessAddr, 3)
+	bc := newAsyncFlushChainOn(t, ethrawdb.NewMemoryDatabase(), witnessAddr)
+	bc.SetAsyncCommit(true)
+	defer bc.Close()
+
+	const foldDelay = 5 * time.Millisecond
+	SetCommitFoldHookForTest(func(uint64) error {
+		time.Sleep(foldDelay)
+		return nil
+	})
+	defer SetCommitFoldHookForTest(nil)
+
+	var mu sync.Mutex
+	statsByBlock := make(map[uint64][]ApplyStats)
+	bc.AddApplyStatsHook(func(block *types.Block, stats ApplyStats) {
+		mu.Lock()
+		statsByBlock[block.Number()] = append(statsByBlock[block.Number()], stats)
+		mu.Unlock()
+	})
+	if err := bc.InsertBlocks(blocks); err != nil {
+		t.Fatalf("InsertBlocks: %v", err)
+	}
+	bc.WaitForCommitSettled()
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, block := range blocks {
+		samples := statsByBlock[block.Number()]
+		if len(samples) != 1 {
+			t.Fatalf("block %d samples = %d, want exactly 1", block.Number(), len(samples))
+		}
+		if samples[0].StateCommit < foldDelay {
+			t.Fatalf("block %d state commit = %s, want deferred fold >= %s", block.Number(), samples[0].StateCommit, foldDelay)
+		}
+		if samples[0].Persist <= 0 {
+			t.Fatalf("block %d persist duration was not joined", block.Number())
+		}
+	}
+}
 
 // chainFrom builds a deterministic linear chain of n unsigned blocks on top of
 // parent. tsOffset perturbs timestamps so two chains off the same parent get

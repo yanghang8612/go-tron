@@ -4,6 +4,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -93,7 +94,16 @@ type standbyWitnessPaySet struct {
 	witnesses []standbyWitnessVote
 	voteSum   int64
 	cycle     int64
+	// stateVersion binds the set to the StateDB witness membership/vote view
+	// from which it was built (or to which BlockChain has explicitly rebound a
+	// logically-valid cross-StateDB cache at the start of a block).
+	stateVersion uint64
 }
+
+var (
+	standbyPaySetReusedCounter  = metrics.NewRegisteredCounter("core/reward/standby_set/reused", nil)
+	standbyPaySetRebuiltCounter = metrics.NewRegisteredCounter("core/reward/standby_set/rebuilt", nil)
+)
 
 func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB, cycle int64, sortOpt bool) *standbyWitnessPaySet {
 	// Mirrors java WitnessStore.getWitnessStandby(allowWitnessSortOptimization()):
@@ -141,7 +151,12 @@ func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB, cycle in
 	if voteSum < 1 {
 		return nil
 	}
-	return &standbyWitnessPaySet{witnesses: all, voteSum: voteSum, cycle: cycle}
+	return &standbyWitnessPaySet{
+		witnesses:    all,
+		voteSum:      voteSum,
+		cycle:        cycle,
+		stateVersion: statedb.StandbyWitnessVersion(),
+	}
 }
 
 func payStandbyWitness(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties) {
@@ -157,8 +172,11 @@ func payStandbyWitnessWithSet(db kvReadWriter, statedb *state.StateDB, dp *state
 		return
 	}
 	cycle := dp.CurrentCycleNumber()
-	if set == nil || set.cycle != cycle {
+	if set == nil || set.cycle != cycle || set.stateVersion != statedb.StandbyWitnessVersion() {
+		standbyPaySetRebuiltCounter.Inc(1)
 		set = buildStandbyWitnessPaySet(db, statedb, cycle, dp.ConsensusLogicOptimization())
+	} else {
+		standbyPaySetReusedCounter.Inc(1)
 	}
 	if set == nil || set.voteSum < 1 {
 		return

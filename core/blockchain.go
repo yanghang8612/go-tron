@@ -73,7 +73,9 @@ func (e *InsertBlocksError) Unwrap() error {
 //     match, post-fork timestamp alignment) plus parent linkage.
 //   - Execute: transaction execution + reward + BLOCK_FILLED_SLOTS update.
 //     Includes the in-memory state mutations; does NOT include the flat
-//     commitment update (that lives in StateCommit).
+//     commitment update (that lives in StateCommit). TransactionExecute and
+//     the other execution-detail fields below are nested telemetry slices of
+//     Execute and therefore are not added again by Total.
 //   - Maintenance: doMaintenance work on cycle boundaries (proposals, vote
 //     tally, active-set rotation, reward VI). Zero on non-maintenance blocks.
 //   - StateCommit: statedb.Commit — flat latest-domain writes plus
@@ -87,6 +89,17 @@ func (e *InsertBlocksError) Unwrap() error {
 type ApplyStats struct {
 	Validate time.Duration
 	Execute  time.Duration
+
+	// TransactionExecute covers transaction-dependent preparation, the
+	// canonical transaction loop, and its synchronous post-processing. The
+	// remaining Execute time is the fixed/per-block execution tail.
+	TransactionExecute time.Duration
+	AccountStateRoot   time.Duration
+	AdaptiveEnergy     time.Duration
+	Rewards            time.Duration
+	ShieldedFinalize   time.Duration
+	WitnessFlush       time.Duration
+	BlockStatistics    time.Duration
 
 	// EnergyUsageTotal is the sum of receipt.energy_usage_total for every
 	// successfully executed transaction in the applied block. It is telemetry
@@ -411,13 +424,23 @@ func (bc *BlockChain) SetStateCommitmentColdHistory(source state.StateCommitment
 
 // AddApplyStatsHook registers a callback invoked after each successful
 // applyBlock with the per-phase wall-clock breakdown. Subscribers must treat
-// the ApplyStats value as read-only and return quickly; callbacks run on the
-// applyBlock goroutine, holding bc.chainmu. Used by the sync summary line and
-// the metrics surface.
+// the ApplyStats value as read-only and return quickly. Synchronous blocks call
+// back on the apply goroutine; async-commit blocks call back on whichever of
+// the foreground or commit worker completes second, after both timing halves
+// have been joined. Used by the sync summary line and metrics surface.
 func (bc *BlockChain) AddApplyStatsHook(fn func(*types.Block, ApplyStats)) {
 	bc.applyStatsHookMu.Lock()
 	bc.applyStatsHooks = append(bc.applyStatsHooks, fn)
 	bc.applyStatsHookMu.Unlock()
+}
+
+func (bc *BlockChain) publishApplyStats(block *types.Block, stats ApplyStats) {
+	bc.applyStatsHookMu.Lock()
+	hooks := bc.applyStatsHooks
+	bc.applyStatsHookMu.Unlock()
+	for _, h := range hooks {
+		h(block, stats)
+	}
 }
 
 // AddMaintenanceHook registers a callback fired after each successfully
@@ -1227,6 +1250,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}()
 
 	stats := applyStats{last: time.Now()}
+	applyStatsDeferred := false
 	applyStart := stats.last
 	defer func() {
 		if retErr != nil {
@@ -1238,14 +1262,8 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		// Publish the per-phase breakdown to subscribers (sync summary line,
 		// metrics surface). Snapshot the hook slice under the mutex; invoke
 		// without holding it so a slow subscriber can't wedge applyBlock.
-		bc.applyStatsHookMu.Lock()
-		hooks := bc.applyStatsHooks
-		bc.applyStatsHookMu.Unlock()
-		if len(hooks) > 0 {
-			snap := stats.ApplyStats
-			for _, h := range hooks {
-				h(block, snap)
-			}
+		if !applyStatsDeferred {
+			bc.publishApplyStats(block, stats.ApplyStats)
 		}
 	}()
 
@@ -1442,6 +1460,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	var err error
 	energyLimitForkBlockNum := bc.config.EnergyLimitForkBlockNum()
 	var standbyPaySet *standbyWitnessPaySet
+	standbyWitnessVersion := statedb.StandbyWitnessVersion()
 	if dynProps.ChangeDelegation() && dynProps.Witness127PayPerBlock() > 0 {
 		standbyPaySet = bc.cachedStandbyPaySet(statedb, dynProps.CurrentCycleNumber(), dynProps.ConsensusLogicOptimization())
 	}
@@ -1467,6 +1486,8 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		parallelVM:          bc.parallelVM,
 		captureBalanceTrace: balanceTraceEnabled,
 	}
+	processorTiming := processBlockTiming{}
+	processorOptions.timing = &processorTiming
 	if plan.deferTransactionLookup {
 		processorOptions.minParallelTransferCandidates = syncParallelTransferMinCandidates
 	}
@@ -1476,9 +1497,19 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	} else {
 		txInfos, _, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processorOptions)
 	}
+	if statedb.StandbyWitnessVersion() != standbyWitnessVersion {
+		// The reward path rebuilt from the post-transaction witness view. Drop
+		// the chain-level copy so the next block starts with that same view,
+		// including when each InsertBlock owns a fresh StateDB instance.
+		bc.invalidateStandbyPayCache()
+	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
+	stats.TransactionExecute = processorTiming.Transactions
+	stats.AccountStateRoot = processorTiming.AccountStateRoot
+	stats.AdaptiveEnergy = processorTiming.AdaptiveEnergy
+	stats.Rewards = processorTiming.Rewards
 	stats.EnergyUsageTotal = transactionInfosEnergyUsageTotal(txInfos)
 
 	// Promote CURRENT_TREE to LAST_TREE + index by root + blockNum after
@@ -1488,9 +1519,11 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// Mirrors java-tron Manager.processBlock → MerkleContainer.saveCurrentMerkleTreeAsBestMerkleTree.
 	//
 	if shieldedMerkleAvailable {
+		phaseStart := time.Now()
 		if err := zksnark.NewMerkleContainer(statedb).SaveCurrentAsBest(int64(block.Number())); err != nil {
 			return fmt.Errorf("save shielded merkle tree: %w", err)
 		}
+		stats.ShieldedFinalize = time.Since(phaseStart)
 	}
 
 	// Drain the in-memory witness deltas (VoteCount from VoteWitness /
@@ -1500,7 +1533,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// back — so the merge order here ensures both the actuator-driven
 	// VoteCount and the consensus-driven counter updates land together
 	// instead of one overwriting the other. (D-2.c root-cause fix.)
+	phaseStart := time.Now()
 	statedb.FlushWitnesses()
+	stats.WitnessFlush = time.Since(phaseStart)
 
 	// Update witness production counters + BLOCK_FILLED_SLOTS rolling window
 	// (mirrors java-tron StatisticManager.applyBlock). The per-witness
@@ -1513,8 +1548,10 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// the old fork-rewind "slice 2 / move the writer onto bc.buffer" plan
 	// (docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md): the rooted
 	// refactor rewinds these keys via the state root, not a buffer layer.
+	phaseStart = time.Now()
 	dpos.ApplyBlockStatistics(statedb, dynProps, block, previousHeadTimestamp,
 		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
+	stats.BlockStatistics = time.Since(phaseStart)
 	stats.mark(&stats.Execute)
 	if err := stagePipeline.Advance(rawdb.StageExecution); err != nil {
 		return err
@@ -1723,6 +1760,11 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// is skipped entirely and the synchronous commit runs unchanged —
 	// byte-identical.
 	if bc.asyncCommit && plan.commit != nil {
+		// The worker owns the commitment fold and publish tail. It combines
+		// those durations with the foreground snapshot and publishes exactly
+		// once after both halves complete; the foreground defer must not expose
+		// a partial per-block sample.
+		applyStatsDeferred = true
 		return bc.commitAsync(block, blockData, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos, balanceTraceData)
 	}
 
@@ -2924,6 +2966,12 @@ func (bc *BlockChain) effectiveGenesisHash() tcommon.Hash {
 func (bc *BlockChain) cachedStandbyPaySet(statedb *state.StateDB, cycle int64, sortOpt bool) *standbyWitnessPaySet {
 	if bc.standbyPayCache == nil || bc.standbyPayCache.cycle != cycle {
 		bc.standbyPayCache = buildStandbyWitnessPaySet(bc.buffer, statedb, cycle, sortOpt)
+	}
+	if bc.standbyPayCache != nil {
+		// Cache validity across StateDB instances is maintained by explicit
+		// invalidation after ranking mutations. Rebind the diagnostic generation
+		// to this block's execution view so in-block mutations are still caught.
+		bc.standbyPayCache.stateVersion = statedb.StandbyWitnessVersion()
 	}
 	return bc.standbyPayCache
 }

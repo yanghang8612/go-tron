@@ -96,7 +96,24 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"txs=",
 		"blocksPerSec=",
 		"txsPerSec=",
+		"txsPerBlock=",
 		"energyPerSec=",
+		"energyPerBlock=",
+		"energyPerTx=",
+		"execBusyPct=",
+		"bufferWaitPct=",
+		"applySamples=",
+		"applyCoveragePct=",
+		"importMsPerBlock=",
+		"applyMsPerBlock=",
+		"importOverheadMsPerBlock=",
+		"outsideTxMsPerBlock=",
+		"executeFixedMsPerBlock=",
+		"transactionMsPerTx=",
+		"rewardsMsPerBlock=",
+		"blockStatsMsPerBlock=",
+		"stateCommitMsPerBlock=",
+		"persistMsPerBlock=",
 		"remaining=",
 		"peers=",
 		"activePeers=",
@@ -138,6 +155,13 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"bufferWaitElapsed=",
 		"validate=",
 		"execute=",
+		"transactionExecute=",
+		"accountStateRoot=",
+		"adaptiveEnergy=",
+		"rewards=",
+		"shieldedFinalize=",
+		"witnessFlush=",
+		"blockStatistics=",
 		"energy=",
 		"energyPerSec=",
 		"maintenance=",
@@ -207,6 +231,8 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 		TotalStart:  start.Add(-8 * time.Second),
 		Blocks:      20,
 		Txs:         40,
+		ApplyBlocks: 20,
+		ApplyTxs:    40,
 		TotalBlocks: 80,
 		TotalTxs:    160,
 		TxKinds:     map[string]int{"TransferContract": 40},
@@ -227,7 +253,11 @@ func TestReportSegmentInfoIsCompactOperationalStatus(t *testing.T) {
 	}
 	for _, field := range []string{
 		"window=", "head=90", "blocks=20", "txs=40", "blocksPerSec=10", "txsPerSec=20", "remaining=10",
-		"energyPerSec=", "peers=2", "activePeers=1", "inflight=2",
+		"txsPerBlock=2", "energyPerSec=", "energyPerBlock=300.00M", "energyPerTx=150.00M",
+		"execBusyPct=", "bufferWaitPct=", "applySamples=20", "applyCoveragePct=100", "importMsPerBlock=", "applyMsPerBlock=",
+		"importOverheadMsPerBlock=", "outsideTxMsPerBlock=", "executeFixedMsPerBlock=", "transactionMsPerTx=",
+		"rewardsMsPerBlock=", "blockStatsMsPerBlock=",
+		"stateCommitMsPerBlock=", "persistMsPerBlock=", "peers=2", "activePeers=1", "inflight=2",
 		"buffered=3", "requested=4", "retries=1",
 	} {
 		if !strings.Contains(segmentLine, field) {
@@ -287,6 +317,90 @@ func TestSyncEnergyPerSecCalculationAndFormatting(t *testing.T) {
 		if got := syncEnergyPerSec(tc.total, tc.elapsed); got != 0 {
 			t.Errorf("syncEnergyPerSec(%d, %s) = %v, want 0", tc.total, tc.elapsed, got)
 		}
+	}
+}
+
+func TestSyncImportWindowObservationSeparatesWorkAndSupply(t *testing.T) {
+	s := tsync.Snapshot{
+		Blocks:            10,
+		Txs:               40,
+		ApplyBlocks:       10,
+		ApplyTxs:          40,
+		ExecElapsed:       800 * time.Millisecond,
+		BufferWaitElapsed: 100 * time.Millisecond,
+		ApplyStats: core.ApplyStats{
+			Validate:           50 * time.Millisecond,
+			Execute:            400 * time.Millisecond,
+			TransactionExecute: 300 * time.Millisecond,
+			AccountStateRoot:   10 * time.Millisecond,
+			AdaptiveEnergy:     20 * time.Millisecond,
+			Rewards:            30 * time.Millisecond,
+			ShieldedFinalize:   5 * time.Millisecond,
+			WitnessFlush:       5 * time.Millisecond,
+			BlockStatistics:    10 * time.Millisecond,
+			EnergyUsageTotal:   8_000_000,
+			Maintenance:        10 * time.Millisecond,
+			StateCommit:        200 * time.Millisecond,
+			DPUpdate:           20 * time.Millisecond,
+			Persist:            100 * time.Millisecond,
+			Hooks:              20 * time.Millisecond,
+		},
+	}
+	got := newSyncImportWindowObservation(s, 2*time.Second)
+	for name, check := range map[string]struct{ got, want float64 }{
+		"blocks/s":               {got.BlocksPerSec, 5},
+		"txs/s":                  {got.TxsPerSec, 20},
+		"txs/block":              {got.TxsPerBlock, 4},
+		"energy/s":               {got.EnergyPerSec, 4_000_000},
+		"energy/block":           {got.EnergyPerBlock, 800_000},
+		"energy/tx":              {got.EnergyPerTx, 200_000},
+		"exec busy":              {got.ExecBusyRatio, 0.4},
+		"buffer wait":            {got.BufferWaitRatio, 0.05},
+		"apply coverage":         {got.ApplyCoverageRatio, 1},
+		"import ms/block":        {got.ImportMillisPerBlock, 80},
+		"apply ms/block":         {got.ApplyMillisPerBlock, 80},
+		"import overhead/block":  {got.ImportOverheadMillisPerBlock, 0},
+		"outside tx ms/block":    {got.OutsideTxMillisPerBlock, 50},
+		"execute fixed ms/block": {got.ExecuteFixedMillisPerBlock, 10},
+		"execute ms/block":       {got.ExecuteMillisPerBlock, 40},
+		"transaction ms/block":   {got.TransactionMillisPerBlock, 30},
+		"transaction ms/tx":      {got.TransactionMillisPerTx, 7.5},
+		"reward ms/block":        {got.RewardsMillisPerBlock, 3},
+		"block stats ms/block":   {got.BlockStatsMillisPerBlock, 1},
+		"commit ms/block":        {got.StateCommitMillisPerBlock, 20},
+		"persist ms/block":       {got.PersistMillisPerBlock, 10},
+	} {
+		if check.got != check.want {
+			t.Errorf("%s = %v, want %v", name, check.got, check.want)
+		}
+	}
+}
+
+func TestSyncImportWindowObservationUsesCompletedApplyCoverage(t *testing.T) {
+	s := tsync.Snapshot{
+		Blocks:      10,
+		Txs:         40,
+		ApplyBlocks: 8,
+		ApplyTxs:    32,
+		ExecElapsed: 800 * time.Millisecond,
+		ApplyStats: core.ApplyStats{
+			Execute:            320 * time.Millisecond,
+			TransactionExecute: 240 * time.Millisecond,
+			EnergyUsageTotal:   6_400,
+		},
+	}
+	got := newSyncImportWindowObservation(s, time.Second)
+	if got.ApplyCoverageRatio != 0.8 {
+		t.Fatalf("apply coverage = %v, want 0.8", got.ApplyCoverageRatio)
+	}
+	if got.ApplyMillisPerBlock != 40 || got.TransactionMillisPerTx != 7.5 {
+		t.Fatalf("coverage-normalized apply/tx = %v/%v, want 40/7.5", got.ApplyMillisPerBlock, got.TransactionMillisPerTx)
+	}
+	if got.EnergyPerBlock != 800 || got.EnergyPerTx != 200 {
+		t.Fatalf("coverage-normalized energy = %v/block %v/tx, want 800/200", got.EnergyPerBlock, got.EnergyPerTx)
+	}
+	if got.ImportOverheadMillisPerBlock != 0 {
+		t.Fatalf("mismatched coverage must suppress import-overhead subtraction, got %v", got.ImportOverheadMillisPerBlock)
 	}
 }
 

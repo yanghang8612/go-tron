@@ -546,6 +546,26 @@
 - [x] Preserve the parent snapshot/overlay/version cut with separate prefetch
   cursors, keep speculative errors non-authoritative, and cover present,
   missing, prefix-deduplication, Pebble-root, race, and allocation behavior.
+- [x] Defer the full CodeDomain reference scan during active snap-mode sync
+  while preserving hot-history/checkpoint pruning and stage progress.
+- [x] Re-evaluate the sync gate at the CodeDomain stage boundary, resume the
+  all-hash scan after sync, and cover retention, reclamation, progress, and the
+  deferred-pass metric in regression tests.
+- [x] Export workload-normalized sync windows for block/transaction/energy
+  density, importer busy/wait ratios, and per-block/per-transaction apply
+  phases, including transaction processing and fixed execution subphases.
+- [x] Join foreground and worker timing before publishing async ApplyStats so
+  commitment fold, metadata/stage persistence, and hooks are not omitted or
+  double-published.
+- [x] Reuse the top-127 standby reward set across unchanged blocks with a
+  membership/vote generation guard, exact post-transaction rebuild, and
+  maintenance/reorg/cross-block invalidation coverage.
+- [ ] Run the P5.41 production gate and compare workload density, importer
+  busy/wait, outside-transaction and execute-fixed ms/block, phase attribution,
+  standby reuse/rebuild counts, and fixed-density transactions/s.
+- [ ] Run the P5.40 production gate and compare state-code scan CPU/read
+  bandwidth, deferred-pass counts, Pebble latency, importer CPU, and
+  fixed-density transactions/s against the deployed P5.39 sample.
 - [ ] Run the P5.37 production gate and compare foreground durable reads,
   planned/useful prefetch ratio, `pread` delay, NVMe queue/utilization,
   commitment and GC CPU, heap, and fixed-density transactions/s against the

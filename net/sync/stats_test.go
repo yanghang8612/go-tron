@@ -195,11 +195,18 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 	mut2.AccountUpdates = 40
 	mut2.KVPutItems = 20
 	s.AddApplyBlock(core.ApplyStats{
-		Validate:         1 * time.Millisecond,
-		Execute:          2 * time.Millisecond,
-		EnergyUsageTotal: 1_000,
-		Maintenance:      3 * time.Millisecond,
-		StateCommit:      4 * time.Millisecond,
+		Validate:           1 * time.Millisecond,
+		Execute:            2 * time.Millisecond,
+		TransactionExecute: 3 * time.Millisecond,
+		AccountStateRoot:   4 * time.Millisecond,
+		AdaptiveEnergy:     5 * time.Millisecond,
+		Rewards:            6 * time.Millisecond,
+		ShieldedFinalize:   7 * time.Millisecond,
+		WitnessFlush:       8 * time.Millisecond,
+		BlockStatistics:    9 * time.Millisecond,
+		EnergyUsageTotal:   1_000,
+		Maintenance:        3 * time.Millisecond,
+		StateCommit:        4 * time.Millisecond,
 		StateCommitDetail: state.CommitStats{
 			Prepare:               time.Millisecond,
 			KVCompute:             2 * time.Millisecond,
@@ -216,11 +223,18 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 		Hooks:    7 * time.Millisecond,
 	})
 	s.AddApplyBlock(core.ApplyStats{
-		Validate:         10 * time.Millisecond,
-		Execute:          20 * time.Millisecond,
-		EnergyUsageTotal: 20_000,
-		Maintenance:      30 * time.Millisecond,
-		StateCommit:      40 * time.Millisecond,
+		Validate:           10 * time.Millisecond,
+		Execute:            20 * time.Millisecond,
+		TransactionExecute: 30 * time.Millisecond,
+		AccountStateRoot:   40 * time.Millisecond,
+		AdaptiveEnergy:     50 * time.Millisecond,
+		Rewards:            60 * time.Millisecond,
+		ShieldedFinalize:   70 * time.Millisecond,
+		WitnessFlush:       80 * time.Millisecond,
+		BlockStatistics:    90 * time.Millisecond,
+		EnergyUsageTotal:   20_000,
+		Maintenance:        30 * time.Millisecond,
+		StateCommit:        40 * time.Millisecond,
 		StateCommitDetail: state.CommitStats{
 			Prepare:               10 * time.Millisecond,
 			KVCompute:             20 * time.Millisecond,
@@ -238,11 +252,18 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 	})
 	got := s.CurrentSnapshot().ApplyStats
 	want := core.ApplyStats{
-		Validate:         11 * time.Millisecond,
-		Execute:          22 * time.Millisecond,
-		EnergyUsageTotal: 21_000,
-		Maintenance:      33 * time.Millisecond,
-		StateCommit:      44 * time.Millisecond,
+		Validate:           11 * time.Millisecond,
+		Execute:            22 * time.Millisecond,
+		TransactionExecute: 33 * time.Millisecond,
+		AccountStateRoot:   44 * time.Millisecond,
+		AdaptiveEnergy:     55 * time.Millisecond,
+		Rewards:            66 * time.Millisecond,
+		ShieldedFinalize:   77 * time.Millisecond,
+		WitnessFlush:       88 * time.Millisecond,
+		BlockStatistics:    99 * time.Millisecond,
+		EnergyUsageTotal:   21_000,
+		Maintenance:        33 * time.Millisecond,
+		StateCommit:        44 * time.Millisecond,
 		StateCommitDetail: state.CommitStats{
 			Prepare:               11 * time.Millisecond,
 			KVCompute:             22 * time.Millisecond,
@@ -264,6 +285,9 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 	if got != want {
 		t.Fatalf("ApplyStats=%+v, want %+v", got, want)
 	}
+	if snapshot := s.CurrentSnapshot(); snapshot.ApplyBlocks != 2 || snapshot.ApplyTxs != 0 {
+		t.Fatalf("apply coverage = %d blocks/%d txs, want 2/0", snapshot.ApplyBlocks, snapshot.ApplyTxs)
+	}
 }
 
 func TestStats_SnapshotAndResetReturnsThenClears(t *testing.T) {
@@ -272,7 +296,7 @@ func TestStats_SnapshotAndResetReturnsThenClears(t *testing.T) {
 	s.InitSession(start)
 	s.AddBlock(3, 10*time.Millisecond)
 	s.AddBufferWait(5 * time.Millisecond)
-	s.AddApplyBlock(core.ApplyStats{Validate: 1 * time.Millisecond})
+	s.AddApplyBlockWithTxs(3, core.ApplyStats{Validate: 1 * time.Millisecond})
 
 	newStart := start.Add(time.Second)
 	snap := s.SnapshotAndReset(newStart)
@@ -293,6 +317,9 @@ func TestStats_SnapshotAndResetReturnsThenClears(t *testing.T) {
 	if snap.ApplyStats.Validate != 1*time.Millisecond {
 		t.Fatalf("snap.ApplyStats.Validate=%v, want 1ms", snap.ApplyStats.Validate)
 	}
+	if snap.ApplyBlocks != 1 || snap.ApplyTxs != 3 {
+		t.Fatalf("snap apply coverage=%d/%d, want 1/3", snap.ApplyBlocks, snap.ApplyTxs)
+	}
 	if !snap.StartTime.Equal(start) {
 		t.Fatalf("snap.StartTime=%v, want %v", snap.StartTime, start)
 	}
@@ -302,7 +329,7 @@ func TestStats_SnapshotAndResetReturnsThenClears(t *testing.T) {
 
 	// Post-reset: window cleared, session-wide counters preserved.
 	now := s.CurrentSnapshot()
-	if now.Blocks != 0 || now.Txs != 0 || now.ExecElapsed != 0 ||
+	if now.Blocks != 0 || now.Txs != 0 || now.ApplyBlocks != 0 || now.ApplyTxs != 0 || now.ExecElapsed != 0 ||
 		now.BufferWaitElapsed != 0 || now.ApplyStats.Total() != 0 {
 		t.Fatalf("window not cleared after SnapshotAndReset: %+v", now)
 	}

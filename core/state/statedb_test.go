@@ -367,6 +367,36 @@ func seedWitnessCapsule(t *testing.T, sdb *StateDB, addr tcommon.Address, url st
 	return w
 }
 
+func TestStandbyWitnessVersionTracksOnlyRankingInputs(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(31)
+	w := seedWitnessCapsule(t, sdb, addr, "http://sr", 100)
+	seedVersion := sdb.StandbyWitnessVersion()
+	if seedVersion == 0 {
+		t.Fatal("seeding witness must advance standby version")
+	}
+
+	statsOnly := w.Copy()
+	statsOnly.SetTotalProduced(1)
+	statsOnly.SetLatestBlockNum(9)
+	if err := sdb.SetWitnessCapsule(statsOnly); err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.StandbyWitnessVersion(); got != seedVersion {
+		t.Fatalf("production-only capsule update advanced version: got %d, want %d", got, seedVersion)
+	}
+
+	sdb.SetWitnessURL(addr, "http://renamed")
+	if got := sdb.StandbyWitnessVersion(); got != seedVersion {
+		t.Fatalf("URL-only update advanced version: got %d, want %d", got, seedVersion)
+	}
+
+	sdb.AddWitnessVoteCount(addr, 1)
+	if got := sdb.StandbyWitnessVersion(); got != seedVersion+1 {
+		t.Fatalf("vote update version = %d, want %d", got, seedVersion+1)
+	}
+}
+
 // TestStateDBFlushWitnesses_VoteCountDelta covers the D-2.c scenario: a
 // VoteWitness-style in-memory delta on a pre-existing witness must persist
 // to the native witness capsule without clobbering production counters. Prior

@@ -24,6 +24,8 @@ type Snapshot struct {
 	TotalStart        time.Time     // session start (for "Sync complete" line)
 	TotalBlocks       int           // session-wide block count
 	TotalTxs          int           // session-wide transaction count
+	ApplyBlocks       int           // blocks represented by ApplyStats
+	ApplyTxs          int           // transactions represented by ApplyStats
 
 	// ApplyStats is the per-block execution telemetry reported by
 	// BlockChain.applyBlock via the AddApplyStatsHook callback. Summing across
@@ -178,6 +180,8 @@ func (s *Stats) EndSession(now time.Time) {
 	s.cur.StartTime = time.Time{}
 	s.cur.Blocks = 0
 	s.cur.Txs = 0
+	s.cur.ApplyBlocks = 0
+	s.cur.ApplyTxs = 0
 	s.cur.ExecElapsed = 0
 	s.cur.BufferWaitElapsed = 0
 	s.cur.ApplyStats = core.ApplyStats{}
@@ -272,14 +276,32 @@ func summarizeSpeedSamples(samples []speedSample, from, to, coverageStart time.T
 }
 
 // AddApplyBlock folds one block's execution telemetry into the rolling window.
-// Fires synchronously from applyBlock on the importing
-// goroutine — during sync that is drainBufferedBlocks; during normal
-// operation it is the broadcast/producer path.
+// Synchronous apply calls it on the importer; async commitment may call it on
+// the commit worker after the foreground and worker timings have been joined.
 func (s *Stats) AddApplyBlock(a core.ApplyStats) {
+	s.AddApplyBlockWithTxs(0, a)
+}
+
+// AddApplyBlockWithTxs folds one completed block sample and its exact
+// transaction coverage into the rolling window. Async commitment can deliver
+// this callback a few blocks after foreground bookkeeping; the explicit counts
+// keep phase normalization honest at a reporting boundary.
+func (s *Stats) AddApplyBlockWithTxs(txs int, a core.ApplyStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cur.ApplyBlocks++
+	if txs > 0 {
+		s.cur.ApplyTxs += txs
+	}
 	s.cur.ApplyStats.Validate += a.Validate
 	s.cur.ApplyStats.Execute += a.Execute
+	s.cur.ApplyStats.TransactionExecute += a.TransactionExecute
+	s.cur.ApplyStats.AccountStateRoot += a.AccountStateRoot
+	s.cur.ApplyStats.AdaptiveEnergy += a.AdaptiveEnergy
+	s.cur.ApplyStats.Rewards += a.Rewards
+	s.cur.ApplyStats.ShieldedFinalize += a.ShieldedFinalize
+	s.cur.ApplyStats.WitnessFlush += a.WitnessFlush
+	s.cur.ApplyStats.BlockStatistics += a.BlockStatistics
 	s.cur.ApplyStats.EnergyUsageTotal += a.EnergyUsageTotal
 	s.cur.ApplyStats.Maintenance += a.Maintenance
 	s.cur.ApplyStats.StateCommit += a.StateCommit
@@ -406,6 +428,8 @@ func (s *Stats) snapshotAndResetLocked(now time.Time) Snapshot {
 	s.cur.StartTime = now
 	s.cur.Blocks = 0
 	s.cur.Txs = 0
+	s.cur.ApplyBlocks = 0
+	s.cur.ApplyTxs = 0
 	s.cur.ExecElapsed = 0
 	s.cur.BufferWaitElapsed = 0
 	s.cur.ApplyStats = core.ApplyStats{}

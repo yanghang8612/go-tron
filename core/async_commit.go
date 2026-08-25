@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/metrics"
@@ -82,6 +83,20 @@ type commitJob struct {
 	balanceTrace      *blockBalanceTraceData
 	wasMaintenance    bool
 	maintNewWitnesses []tcommon.Address
+
+	// Async telemetry is joined without making either half wait: foreground
+	// commit capture/flush and worker fold/publish mark completion under this
+	// mutex, and the second side publishes one complete ApplyStats snapshot.
+	telemetryMu                 sync.Mutex
+	telemetry                   *applyStats
+	telemetryForegroundComplete bool
+	telemetryWorkerComplete     bool
+	telemetryPublish            bool
+	telemetryPublished          bool
+	deferredStateCommit         time.Duration
+	deferredDPUpdate            time.Duration
+	deferredPersist             time.Duration
+	deferredHooks               time.Duration
 }
 
 // SetAsyncCommit enables (or disables) the async/pipelined commit path. It must
@@ -248,6 +263,7 @@ func (bc *BlockChain) startCommitWorker() {
 						continue
 					}
 				}
+				foldStarted := time.Now()
 				var result <-chan state.OrderedCommitmentResult
 				if submissionErr != nil {
 					result = completedOrderedCommitmentResult(submissionErr)
@@ -260,12 +276,13 @@ func (bc *BlockChain) startCommitWorker() {
 				if result == nil {
 					result = job.captured.SubmitOrdered(pipeline, &job.index)
 				}
-				pending = append(pending, pendingOrderedCommitJob{job: job, result: result})
+				pending = append(pending, pendingOrderedCommitJob{job: job, result: result, foldStarted: foldStarted})
 			case result := <-front:
 				entry := pending[0]
 				copy(pending, pending[1:])
 				pending[len(pending)-1] = pendingOrderedCommitJob{}
 				pending = pending[:len(pending)-1]
+				entry.job.deferredStateCommit += time.Since(entry.foldStarted)
 				bc.finishCommitJob(entry.job, result.Root, result.Err)
 			}
 		}
@@ -273,8 +290,9 @@ func (bc *BlockChain) startCommitWorker() {
 }
 
 type pendingOrderedCommitJob struct {
-	job    *commitJob
-	result <-chan state.OrderedCommitmentResult
+	job         *commitJob
+	result      <-chan state.OrderedCommitmentResult
+	foldStarted time.Time
 }
 
 func completedOrderedCommitmentResult(err error) <-chan state.OrderedCommitmentResult {
@@ -317,7 +335,7 @@ func (bc *BlockChain) commitAsync(
 	rewardAcctAddrs []tcommon.Address,
 	txInfos []*corepb.TransactionInfo,
 	balanceTrace *blockBalanceTraceData,
-) error {
+) (retErr error) {
 	// 1. Write latest-domain rows to the scope + capture the fold inputs. On the
 	//    deep pipeline (depth>2) tag the scoped latest writer so its prunePending
 	//    verifies durability before dropping read-your-writes overlay entries — the
@@ -374,7 +392,11 @@ func (bc *BlockChain) commitAsync(
 		balanceTrace:      balanceTrace,
 		wasMaintenance:    wasMaintenanceBlock,
 		maintNewWitnesses: maintNewWitnesses,
+		telemetry:         stats,
 	}
+	defer func() {
+		bc.completeAsyncApplyTelemetry(job, false, retErr == nil)
+	}()
 	job.txInfoBatch = plan.txInfoBatch
 	job.txInfoBatchPool = plan.txInfoBatchPool
 	bc.buffer.ViewLayerInto(hN, &job.index)
@@ -446,6 +468,37 @@ func (bc *BlockChain) commitAsync(
 	return nil
 }
 
+// completeAsyncApplyTelemetry joins the foreground and worker portions of one
+// block's timing without adding a dependency edge to the commit pipeline. The
+// caller that arrives second publishes; inline-worker fallback is therefore
+// safe as well as the normal concurrent path.
+func (bc *BlockChain) completeAsyncApplyTelemetry(job *commitJob, worker, publish bool) {
+	if job == nil || job.telemetry == nil {
+		return
+	}
+	job.telemetryMu.Lock()
+	if worker {
+		job.telemetryWorkerComplete = true
+	} else {
+		job.telemetryForegroundComplete = true
+		job.telemetryPublish = publish
+	}
+	ready := job.telemetryForegroundComplete && job.telemetryWorkerComplete && job.telemetryPublish && !job.telemetryPublished
+	var snapshot ApplyStats
+	if ready {
+		snapshot = job.telemetry.ApplyStats
+		snapshot.StateCommit += job.deferredStateCommit
+		snapshot.DPUpdate += job.deferredDPUpdate
+		snapshot.Persist += job.deferredPersist
+		snapshot.Hooks += job.deferredHooks
+		job.telemetryPublished = true
+	}
+	job.telemetryMu.Unlock()
+	if ready {
+		bc.publishApplyStats(job.block, snapshot)
+	}
+}
+
 // enqueueCommit posts the pending-commit barrier and hands the job to the
 // scheduler. The send blocks on the unbuffered queue until the scheduler owns
 // the job; its depth-1 pending bound provides backpressure. Callers hold
@@ -486,6 +539,7 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 
 	index := &job.index
 
+	foldStarted := time.Now()
 	// Test seam: simulate a worker-side fold failure for a specific block, to
 	// exercise the speculative-exec unwind without a real disk error. Nil in
 	// production (zero cost).
@@ -498,6 +552,7 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 
 	// Fold (the ~55% commit cost), producing this block's internal state root.
 	root, err := job.captured.Fold(index)
+	job.deferredStateCommit += time.Since(foldStarted)
 	bc.finishCommitJob(job, root, err)
 }
 
@@ -523,21 +578,26 @@ func (bc *BlockChain) finishCommitJob(job *commitJob, root tcommon.Hash, foldErr
 
 	index := &job.index
 	// Publish StageCommitment only after the fold succeeds.
+	phaseStarted := time.Now()
 	if err := job.plan.finishCommitState(); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit finish state block %d: %w", job.block.Number(), err))
 		return
 	}
+	job.deferredStateCommit += time.Since(phaseStarted)
 
 	// Derived DP keys + cycle-reward pending accumulator (captured snapshots).
+	phaseStarted = time.Now()
 	job.dynProps.Flush(index)
 	if err := job.cycleRewards.Write(index); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit cycle rewards block %d: %w", job.block.Number(), err))
 		return
 	}
+	job.deferredDPUpdate += time.Since(phaseStarted)
 
 	// Out-of-band metadata batch to disk (block, state root, TAPOS, per-block
 	// tx infos, and normally tx lookup) — durable BEFORE the head pointer advances, preserving the
 	// head=N ⟹ root[N] durable invariant for off-lock readers.
+	phaseStarted = time.Now()
 	if err := bc.writeBlockMetadataBatch(job.block, job.blockData, root, job.txInfos, job.balanceTrace, !job.plan.deferTransactionLookup); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit metadata block %d: %w", job.block.Number(), err))
 		return
@@ -555,11 +615,13 @@ func (bc *BlockChain) finishCommitJob(job *commitJob, root tcommon.Hash, foldErr
 	bc.currentBlock.Store(job.block)
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 	bc.storeReusableDynPropsCache(job.dynProps)
+	job.deferredPersist += time.Since(phaseStarted)
 
 	// Fire maintenance hooks before block hooks so the SRL PBFT message precedes
 	// the block PREPREPARE (java-tron MaintenanceManager.applyBlock ordering).
 	// dynPropsCache was just set to block N's DP, so ProcessOnBlock(N) reads the
 	// correct epoch (decision-(b)).
+	phaseStarted = time.Now()
 	if job.wasMaintenance && job.block.Number() != 1 {
 		bc.maintHookMu.Lock()
 		mhooks := bc.maintHooks
@@ -574,7 +636,9 @@ func (bc *BlockChain) finishCommitJob(job *commitJob, root tcommon.Hash, foldErr
 	for _, h := range hooks {
 		h(job.block)
 	}
+	job.deferredHooks += time.Since(phaseStarted)
 
+	phaseStarted = time.Now()
 	if err := job.plan.pipeline.Advance(rawdb.StageFinish); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit stage finish block %d: %w", job.block.Number(), err))
 		return
@@ -597,6 +661,8 @@ func (bc *BlockChain) finishCommitJob(job *commitJob, root tcommon.Hash, foldErr
 		return
 	}
 	bc.archiveHead.Store(job.block)
+	job.deferredPersist += time.Since(phaseStarted)
+	bc.completeAsyncApplyTelemetry(job, true, true)
 }
 
 // failCommit records the first commit-worker error fail-fast and discards the

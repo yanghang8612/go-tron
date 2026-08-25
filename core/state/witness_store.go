@@ -45,8 +45,13 @@ func (s *StateDB) SetWitnessCapsule(w *types.Witness) error {
 		return nil
 	}
 	addr := w.Address()
+	existing := s.witnesses[addr]
+	rankingChanged := existing == nil || existing.VoteCount() != w.VoteCount()
 	s.journalWitness(addr)
 	s.witnesses[addr] = w.Copy()
+	if rankingChanged {
+		s.standbyWitnessVersion++
+	}
 	data, err := statecodec.Marshal(w.Proto())
 	if err != nil {
 		return err

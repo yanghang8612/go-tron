@@ -160,6 +160,14 @@ type StateDB struct {
 	// marks per change — the saved IO doesn't justify the complexity.
 	dirtyWitnesses map[tcommon.Address]struct{}
 
+	// standbyWitnessVersion changes only when the membership or vote weights
+	// used by the top-127 standby reward calculation change. It is deliberately
+	// monotonic across journal reverts: a false-positive cache rebuild is safe,
+	// while reusing a set after a reverted speculative mutation is not worth the
+	// bookkeeping risk. Production/missed counters and URL-only updates do not
+	// affect standby ranking and therefore leave this version unchanged.
+	standbyWitnessVersion uint64
+
 	// txFinalizeDirty tracks addresses whose contract storage was written
 	// (SetState) or which were self-destructed since the last
 	// FinalizeTransaction. FinalizeTransaction iterates this set instead of the
@@ -1756,6 +1764,7 @@ func (s *StateDB) PutWitness(addr tcommon.Address, url string) {
 	s.journalWitness(addr)
 	s.witnesses[addr] = types.NewWitness(addr, url)
 	s.dirtyWitnesses[addr] = struct{}{}
+	s.standbyWitnessVersion++
 }
 
 // SetWitnessURL updates the URL on the existing in-memory witness without
@@ -1771,6 +1780,7 @@ func (s *StateDB) SetWitnessURL(addr tcommon.Address, url string) {
 		s.journalWitness(addr)
 		s.witnesses[addr] = types.NewWitness(addr, url)
 		s.dirtyWitnesses[addr] = struct{}{}
+		s.standbyWitnessVersion++
 		return
 	}
 	s.journalWitness(addr)
@@ -2413,7 +2423,14 @@ func (s *StateDB) AddWitnessVoteCount(addr tcommon.Address, delta int64) {
 	s.journalWitness(addr)
 	w.SetVoteCount(w.VoteCount() + delta)
 	s.dirtyWitnesses[addr] = struct{}{}
+	if delta != 0 {
+		s.standbyWitnessVersion++
+	}
 }
+
+// StandbyWitnessVersion returns the execution-view generation of the witness
+// membership/vote inputs used by standby reward selection.
+func (s *StateDB) StandbyWitnessVersion() uint64 { return s.standbyWitnessVersion }
 
 // GetAllowance returns the witness reward allowance.
 func (s *StateDB) GetAllowance(addr tcommon.Address) int64 {
@@ -3349,6 +3366,7 @@ func (s *StateDB) newCopyBase(accountHint int) *StateDB {
 		// witness view instead of rehydrating an older durable capsule.
 		witnesses:               witnesses,
 		dirtyWitnesses:          dirtyWitnesses,
+		standbyWitnessVersion:   s.standbyWitnessVersion,
 		txFinalizeDirty:         make(map[tcommon.Address]struct{}),
 		dirtyObjects:            make(map[tcommon.Address]struct{}, accountHint),
 		journal:                 newJournal(),

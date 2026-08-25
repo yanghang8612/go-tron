@@ -915,6 +915,17 @@ type processBlockOptions struct {
 	parallelVM                    bool
 	captureBalanceTrace           bool
 	minParallelTransferCandidates int
+	timing                        *processBlockTiming
+}
+
+// processBlockTiming contains nested, diagnostic-only slices of applyBlock's
+// Execute phase. It is deliberately passed through processBlockOptions so
+// replay/debug callers pay no allocation and consensus behavior is untouched.
+type processBlockTiming struct {
+	Transactions     time.Duration
+	AccountStateRoot time.Duration
+	AdaptiveEnergy   time.Duration
+	Rewards          time.Duration
 }
 
 func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, collectTxInfos bool, traceTxIndex int, traceTracer vm.Tracer, traceForTxOpt ...func(index int, tx *types.Transaction) vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
@@ -962,6 +973,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	writeHistoryBlockHash(statedb, dynProps, block.Number(), block.ParentHash())
 	accountStateMark := statedb.JournalMark()
 	var txScratch applyTransactionScratch
+	transactionStarted := time.Now()
 	transactions := block.Transactions()
 	sampledShadow := block.Number()%discardShadowSampleInterval == 0
 	if options.parallelTransfers && !sampledShadow && options.minParallelTransferCandidates > 0 {
@@ -1574,11 +1586,18 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	if discardShadow != nil && discardShadow.sampled {
 		_ = discardShadow.run(versionedShadow, discardCfg)
 	}
+	if options.timing != nil {
+		options.timing.Transactions = time.Since(transactionStarted)
+	}
 
 	if parentAccountStateRoot != nil {
+		phaseStart := time.Now()
 		javaAccountStateRoot, err = defaultStateRootAdapter.JavaAccountStateRoot(statedb, *parentAccountStateRoot, accountStateMark)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("account state root: %w", err)
+		}
+		if options.timing != nil {
+			options.timing.AccountStateRoot = time.Since(phaseStart)
 		}
 	}
 
@@ -1586,9 +1605,13 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	// ceiling computation rejects the block (java ArithmeticException unwinds the
 	// block-processing stack); the named-return + deferred revert above mirror that.
 	if dynProps.AllowAdaptiveEnergy() {
+		phaseStart := time.Now()
 		UpdateTotalEnergyAverageUsage(dynProps, genesisTimestamp)
 		if err = UpdateAdaptiveTotalEnergyLimit(dynProps); err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("adaptive total energy limit: %w", err)
+		}
+		if options.timing != nil {
+			options.timing.AdaptiveEnergy = time.Since(phaseStart)
 		}
 	}
 
@@ -1599,13 +1622,17 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	// pool reward from the same payReward path.
 	witnessAddr := block.WitnessAddress()
 	if witnessAddr != (tcommon.Address{}) {
+		phaseStart := time.Now()
 		payBlockReward(db, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
-		// java-tron rebuilds WitnessStore.getWitnessStandby at reward time,
-		// after the block's transactions have executed. A caller-provided set is
-		// only a preload hint; using it for consensus rewards can make
-		// cycleReward stale when the in-block witness set changes.
-		payStandbyWitnessWithSet(db, statedb, dynProps, nil)
+		// java-tron observes WitnessStore at reward time, after transactions.
+		// The cached set is reusable only while StateDB's membership/vote
+		// generation still matches; payStandbyWitnessWithSet rebuilds from the
+		// post-transaction view on any mutation, preserving the same result.
+		payStandbyWitnessWithSet(db, statedb, dynProps, standbyPaySet)
 		payTransactionFeeReward(db, statedb, dynProps, witnessAddr)
+		if options.timing != nil {
+			options.timing.Rewards = time.Since(phaseStart)
+		}
 	}
 	if shadowEnabled {
 		transferShadow.Publish()

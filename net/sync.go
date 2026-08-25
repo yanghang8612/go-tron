@@ -332,8 +332,12 @@ func watchdogLog(peer *p2p.Peer, head uint64, stalledFor time.Duration) {
 // so no ss.mu acquisition here; this matters because the producer path
 // may invoke applyBlock from a goroutine that already holds the producer
 // lock, and we don't want to deadlock with any future ss.mu holder.
-func (ss *SyncService) onApplyStats(_ *types.Block, s core.ApplyStats) {
-	ss.stats.AddApplyBlock(s)
+func (ss *SyncService) onApplyStats(block *types.Block, s core.ApplyStats) {
+	txs := 0
+	if block != nil {
+		txs = len(block.Transactions())
+	}
+	ss.stats.AddApplyBlockWithTxs(txs, s)
 }
 
 // Start launches the isolation watchdog goroutine.
@@ -3736,18 +3740,35 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	if elapsed <= 0 {
 		elapsed = 1
 	}
-	blocksPerSec := float64(s.Blocks) * float64(time.Second) / float64(elapsed)
-	txsPerSec := float64(s.Txs) * float64(time.Second) / float64(elapsed)
-	energyPerSec := formatSyncEnergyPerSec(s.ApplyStats.EnergyUsageTotal, elapsed)
+	obs := newSyncImportWindowObservation(s, elapsed)
+	energyPerSec := formatCompactEnergy(obs.EnergyPerSec)
+	updateSyncImportWindowMetrics(now, elapsed, s, obs, diag)
 	ss.stats.RecordSpeed(now, s.Blocks, elapsed)
 	ctx := []any{
 		"window", ethcommon.PrettyDuration(elapsed),
 		"head", head,
 		"blocks", s.Blocks,
 		"txs", s.Txs,
-		"blocksPerSec", round2(blocksPerSec),
-		"txsPerSec", round2(txsPerSec),
+		"blocksPerSec", round2(obs.BlocksPerSec),
+		"txsPerSec", round2(obs.TxsPerSec),
+		"txsPerBlock", round2(obs.TxsPerBlock),
 		"energyPerSec", energyPerSec,
+		"energyPerBlock", formatCompactEnergy(obs.EnergyPerBlock),
+		"energyPerTx", formatCompactEnergy(obs.EnergyPerTx),
+		"execBusyPct", round2(obs.ExecBusyRatio * 100),
+		"bufferWaitPct", round2(obs.BufferWaitRatio * 100),
+		"applySamples", s.ApplyBlocks,
+		"applyCoveragePct", round2(obs.ApplyCoverageRatio * 100),
+		"importMsPerBlock", round2(obs.ImportMillisPerBlock),
+		"applyMsPerBlock", round2(obs.ApplyMillisPerBlock),
+		"importOverheadMsPerBlock", round2(obs.ImportOverheadMillisPerBlock),
+		"outsideTxMsPerBlock", round2(obs.OutsideTxMillisPerBlock),
+		"executeFixedMsPerBlock", round2(obs.ExecuteFixedMillisPerBlock),
+		"transactionMsPerTx", round2(obs.TransactionMillisPerTx),
+		"rewardsMsPerBlock", round2(obs.RewardsMillisPerBlock),
+		"blockStatsMsPerBlock", round2(obs.BlockStatsMillisPerBlock),
+		"stateCommitMsPerBlock", round2(obs.StateCommitMillisPerBlock),
+		"persistMsPerBlock", round2(obs.PersistMillisPerBlock),
 		"remaining", remain,
 		"peers", diag.PeerCount,
 		"activePeers", diag.ActivePeerCount,
@@ -3786,6 +3807,13 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"bufferWaitElapsed", ethcommon.PrettyDuration(s.BufferWaitElapsed),
 		"validate", ethcommon.PrettyDuration(s.ApplyStats.Validate),
 		"execute", ethcommon.PrettyDuration(s.ApplyStats.Execute),
+		"transactionExecute", ethcommon.PrettyDuration(s.ApplyStats.TransactionExecute),
+		"accountStateRoot", ethcommon.PrettyDuration(s.ApplyStats.AccountStateRoot),
+		"adaptiveEnergy", ethcommon.PrettyDuration(s.ApplyStats.AdaptiveEnergy),
+		"rewards", ethcommon.PrettyDuration(s.ApplyStats.Rewards),
+		"shieldedFinalize", ethcommon.PrettyDuration(s.ApplyStats.ShieldedFinalize),
+		"witnessFlush", ethcommon.PrettyDuration(s.ApplyStats.WitnessFlush),
+		"blockStatistics", ethcommon.PrettyDuration(s.ApplyStats.BlockStatistics),
 		"energy", formatCompactEnergy(float64(s.ApplyStats.EnergyUsageTotal)),
 		"energyPerSec", energyPerSec,
 		"maintenance", ethcommon.PrettyDuration(s.ApplyStats.Maintenance),

@@ -1471,6 +1471,87 @@ func TestWorkerSnapPrunesHistoricalStateCodeCoveredByCodeDomain(t *testing.T) {
 	}
 }
 
+func TestPrunerDefersStateCodePruneDuringSyncAndResumes(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x6b}, common.AccountIDLength)...))
+	code := []byte{0x60, 0x2b}
+	hash := common.Keccak256(code)
+	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateTxRange(db, 2, common.Hash{0x02}, 2, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum:   2,
+		BlockHash:  common.Hash{0x02},
+		TxNum:      2,
+		Seq:        1,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      owner,
+		PrevExists: true,
+		Prev:       accountLatestEnvelopeBytes(t, hash),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	codeRef, codeAccessorRef, codeBTreeRef, err := snapshots.BuildCodeSegmentFilesFromDB(db, dir, 2, 2, "latest/code-2-2.seg")
+	if err != nil {
+		t.Fatalf("build code snapshot: %v", err)
+	}
+	historyRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 2, 2, "history/state-domain-change-2-2.seg")
+	if err != nil {
+		t.Fatalf("build history snapshot: %v", err)
+	}
+	refs := append([]snapshots.SegmentRef{codeRef, codeAccessorRef, codeBTreeRef}, historyRefs...)
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(2, 2, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+
+	namespace := normalizePrunerMetricNamespace("test/state/prune/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterPrunerMetricNamespace(namespace) })
+	chain := &fakePruneChain{db: db, solidified: 5, syncRemaining: 1_000, syncRemainingOK: true}
+	pruner := NewPruner(chain, PrunerConfig{
+		Policy:                          SnapPolicy(2, 1),
+		SnapshotDir:                     dir,
+		DeferStateCodePruneWhileSyncing: true,
+		MetricsNamespace:                namespace,
+	})
+	first, err := pruner.PrunePass()
+	if err != nil {
+		t.Fatalf("catch-up prune pass: %v", err)
+	}
+	if first.DeletedDomainChangeBlocks != 1 || first.DeletedStateCodeRows != 0 || !first.StateCodePruneDeferred {
+		t.Fatalf("catch-up stats = %+v, want history pruned and code deferred", first)
+	}
+	if got := rawdb.ReadStateCode(db, hash); !bytes.Equal(got, code) {
+		t.Fatalf("hot code during catch-up = %x, want %x", got, code)
+	}
+	if got := pruner.Stats(); got.Passes != 1 || got.DeferredStateCodePrune != 1 || got.DeletedStateCodeRows != 0 {
+		t.Fatalf("catch-up pruner stats = %+v", got)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotPrune); err != nil || !ok || got != 5 {
+		t.Fatalf("catch-up snapshot/prune progress = %d/%v, err=%v; want 5/true", got, ok, err)
+	}
+	assertPrunerGauge(t, namespace+"state_code/deferred/catchup", 1)
+
+	chain.syncRemaining = 0
+	chain.syncRemainingOK = false
+	second, err := pruner.PrunePass()
+	if err != nil {
+		t.Fatalf("post-sync prune pass: %v", err)
+	}
+	if second.StateCodePruneDeferred || second.DeletedStateCodeRows != 1 {
+		t.Fatalf("post-sync stats = %+v, want one code row reclaimed", second)
+	}
+	if got := rawdb.ReadStateCode(db, hash); got != nil {
+		t.Fatalf("hot code survived post-sync pass: %x", got)
+	}
+	if got := pruner.Stats(); got.Passes != 2 || got.DeferredStateCodePrune != 1 || got.DeletedStateCodeRows != 1 {
+		t.Fatalf("post-sync pruner stats = %+v", got)
+	}
+}
+
 func TestWorkerSnapKeepsCodeWhenSnapshotStartsAfterEarliestReference(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
@@ -2772,6 +2853,7 @@ func unregisterPrunerMetricNamespace(namespace string) {
 		"deleted/domain_change_blocks",
 		"deleted/commitment_checkpoints",
 		"deleted/state_code_rows",
+		"state_code/deferred/catchup",
 		"last/solidified_block",
 		"last/domain_change/start_block",
 		"last/domain_change/pruned_through_block",
