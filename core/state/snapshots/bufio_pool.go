@@ -31,6 +31,31 @@ var stateDomainChangeAccessorGroupOffsetsPool = sync.Pool{
 	New: func() any { return new([]uint64) },
 }
 
+// V4 event-log validation compares compact posting streams in physical order.
+// A reusable reader turns singleton-heavy dictionaries from one pread per key
+// into bounded sequential reads without retaining segment-sized buffers.
+const eventLogV4ValidationReadBufferSize = 256 << 10
+
+var eventLogV4ValidationReaderPool = sync.Pool{
+	New: func() any { return bufio.NewReaderSize(nil, eventLogV4ValidationReadBufferSize) },
+}
+
+func acquireEventLogV4ValidationReader(source io.Reader) *bufio.Reader {
+	reader := eventLogV4ValidationReaderPool.Get().(*bufio.Reader)
+	reader.Reset(source)
+	return reader
+}
+
+func releaseEventLogV4ValidationReader(reader **bufio.Reader) {
+	if reader == nil || *reader == nil {
+		return
+	}
+	buffered := *reader
+	*reader = nil
+	buffered.Reset(nil)
+	eventLogV4ValidationReaderPool.Put(buffered)
+}
+
 // Accessor integrity checks walk the exact table and group payload in logical
 // order, but the format exposes both through ReaderAt. Raw accessor files would
 // otherwise turn every small fixed-width entry into its own pread(2). Keep two

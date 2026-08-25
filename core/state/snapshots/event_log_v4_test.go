@@ -224,6 +224,98 @@ func TestEventLogV4RejectsCorruptTopicSequence(t *testing.T) {
 	}
 }
 
+func TestEventLogV4RejectsRowLookupDisagreement(t *testing.T) {
+	dir := t.TempDir()
+	addressA := common.BytesToAddress(eventLogTestAddress(0x83))
+	addressB := common.BytesToAddress(eventLogTestAddress(0x84))
+	topic := common.Hash{0xc4}
+	rows := []EventLog{
+		eventLogV3TestRow(1, 0, 0, addressA, common.Hash{1}, common.Hash{2}, topic, nil),
+		eventLogV3TestRow(1, 1, 1, addressB, common.Hash{3}, common.Hash{2}, topic, nil),
+	}
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := readEventLogHeader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := readEventLogV3FrameAt(file, header.v3.rowDirOffset, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := make([]byte, frame.dataLen)
+	if _, err := file.ReadAt(raw, int64(frame.dataOff)); err != nil {
+		t.Fatal(err)
+	}
+	offset := 0
+	for field := 0; field < 4; field++ {
+		_, width := binary.Uvarint(raw[offset:])
+		if width <= 0 {
+			t.Fatal("invalid generated row")
+		}
+		offset += width
+	}
+	addressID, width := binary.Uvarint(raw[offset:])
+	if width != 1 || addressID != 0 {
+		t.Fatalf("first address dictionary id = %d width=%d, want 0/1", addressID, width)
+	}
+	// Point the first row at address B while retaining the original lookup.
+	// Refresh the local row-frame CRC so only the semantic row/index proof can
+	// reject the internally checksummed corruption.
+	raw[offset] = 1
+	if _, err := file.WriteAt(raw, int64(frame.dataOff)); err != nil {
+		t.Fatal(err)
+	}
+	var checksum [4]byte
+	binary.BigEndian.PutUint32(checksum[:], crc32.ChecksumIEEE(raw))
+	if _, err := file.WriteAt(checksum[:], int64(header.v3.rowDirOffset+8+24)); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ref.Checksum = ""
+	if err := CheckEventLogSegment(dir, ref); err == nil || !strings.Contains(err.Error(), "address lookup dictionary id 0 is unused") {
+		t.Fatalf("row/lookup disagreement error = %v", err)
+	}
+}
+
+func TestEventLogV4ValidationBuffersSingletonPostingReads(t *testing.T) {
+	const rowCount = 2_048
+	dir := t.TempDir()
+	address := common.BytesToAddress(eventLogTestAddress(0x86))
+	rows := make([]EventLog, 0, rowCount)
+	for i := uint64(0); i < rowCount; i++ {
+		var topic, txHash common.Hash
+		binary.BigEndian.PutUint64(topic[24:], i+1)
+		binary.BigEndian.PutUint64(txHash[24:], i+1)
+		rows = append(rows, eventLogV3TestRow(1, i, i, address, txHash, common.Hash{2}, topic, nil))
+	}
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeReads := eventLogV4ValidationPostingReadCounter.Snapshot().Count()
+	beforeBytes := eventLogV4ValidationPostingByteCounter.Snapshot().Count()
+	if err := CheckEventLogSegment(dir, ref); err != nil {
+		t.Fatal(err)
+	}
+	reads := eventLogV4ValidationPostingReadCounter.Snapshot().Count() - beforeReads
+	readBytes := eventLogV4ValidationPostingByteCounter.Snapshot().Count() - beforeBytes
+	if reads > 4 {
+		t.Fatalf("singleton-heavy V4 validation used %d posting source reads, want <= 4", reads)
+	}
+	if reads <= 0 || readBytes <= 0 || uint64(readBytes) > ref.Size {
+		t.Fatalf("posting source reads/bytes = %d/%d for segment size %d", reads, readBytes, ref.Size)
+	}
+}
+
 func TestEventLogIndexV2CompactAndCorruptionSafe(t *testing.T) {
 	dir := t.TempDir()
 	address := common.BytesToAddress(eventLogTestAddress(0x83))

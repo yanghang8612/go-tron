@@ -119,6 +119,28 @@ func TestEventLogV3AllowsAddressOnlyLogWithEmptyStrippedPayload(t *testing.T) {
 	}
 }
 
+func TestEventLogV4AllowsEmptySegment(t *testing.T) {
+	dir := t.TempDir()
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{}, dir, "", 1, 2)
+	if err != nil {
+		t.Fatalf("BuildEventLogV4SegmentFromReader empty segment: %v", err)
+	}
+	if err := CheckEventLogSegment(dir, ref); err != nil {
+		t.Fatalf("CheckEventLogSegment empty segment: %v", err)
+	}
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seg.Close()
+	if err := seg.IterateLogs(1, 2, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("empty V4 segment invoked callback")
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEventLogV3NormalizesTwentyByteTVMAddress(t *testing.T) {
 	dir := t.TempDir()
 	rawAddress := bytes.Repeat([]byte{0x73}, common.AddressLength-1)

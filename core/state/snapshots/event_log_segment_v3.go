@@ -12,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -44,6 +46,18 @@ const (
 )
 
 var eventLogV3LookupV2Magic = [8]byte{'g', 't', 'e', 'v', 'l', 'i', '3', '\n'}
+
+var (
+	eventLogV4ValidationRunsCounter        = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/runs", nil)
+	eventLogV4ValidationRowsCounter        = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/rows", nil)
+	eventLogV4ValidationBytesCounter       = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/bytes", nil)
+	eventLogV4ValidationNanosCounter       = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/nanoseconds", nil)
+	eventLogV4ValidationSemanticCounter    = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/semantic_nanoseconds", nil)
+	eventLogV4ValidationPostingFillCounter = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/posting_fill_nanoseconds", nil)
+	eventLogV4ValidationLookupCounter      = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/lookup_nanoseconds", nil)
+	eventLogV4ValidationPostingReadCounter = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/posting_source_reads", nil)
+	eventLogV4ValidationPostingByteCounter = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/posting_source_bytes", nil)
+)
 
 type eventLogV3Header struct {
 	fromBlock, toBlock, rowCount           uint64
@@ -2033,11 +2047,31 @@ func readEventLogV3LookupRows(file io.ReaderAt, offset, length, size uint64, key
 }
 
 func checkEventLogV3Segment(file *os.File, ref SegmentRef, header eventLogHeader, size uint64) error {
+	validationStarted := time.Now()
 	reader, err := openEventLogV3Reader(file, *header.v3, size)
 	if err != nil {
 		return err
 	}
 	seg := &EventLogSegment{ref: ref, file: file, header: header, size: size, v3: reader}
+	nextRow, nextRowOffset := uint64(0), reader.header.rowDataOffset
+	for i := uint64(0); i < reader.rowFrameCount; i++ {
+		frame, err := readEventLogV3FrameAt(file, reader.header.rowDirOffset, i, reader.rowFrameCount)
+		if err != nil {
+			return err
+		}
+		expectedRows := uint32(eventLogV3RowFrameRows)
+		if remaining := header.rowCount - nextRow; remaining < uint64(expectedRows) {
+			expectedRows = uint32(remaining)
+		}
+		if frame.firstRow != nextRow || frame.rowCount != expectedRows || frame.dataOff != nextRowOffset || frame.rawLen != frame.dataLen {
+			return fmt.Errorf("snapshots: V4 row frame %d metadata mismatch", i)
+		}
+		nextRow += uint64(frame.rowCount)
+		nextRowOffset += uint64(frame.dataLen)
+	}
+	if nextRow != header.rowCount || nextRowOffset != reader.header.rowDataOffset+reader.header.rowDataLength {
+		return errors.New("snapshots: V4 row frames do not cover row section")
+	}
 	nextPayloadRow, nextPayloadOffset := uint64(0), reader.header.payloadDataOffset
 	for i := uint64(0); i < reader.payloadFrames; i++ {
 		frame, err := readEventLogV3FrameAt(file, reader.header.payloadDirOffset, i, reader.payloadFrames)
@@ -2053,48 +2087,540 @@ func checkEventLogV3Segment(file *os.File, ref SegmentRef, header eventLogHeader
 	if nextPayloadRow != header.rowCount || nextPayloadOffset != reader.header.payloadDataOffset+reader.header.payloadDataLength {
 		return errors.New("snapshots: V4 payload frames do not cover payload section")
 	}
-	expectedAddress := make(map[string][]uint64)
-	expectedTopic := make(map[string][]uint64)
-	var prev EventLog
-	have := false
+	blockNumbers, err := readEventLogV4BlockNumbers(file, reader, ref)
+	if err != nil {
+		return err
+	}
+	if reader.addressCount > uint64(math.MaxInt) || reader.topicCount > uint64(math.MaxInt) {
+		return errors.New("snapshots: V4 lookup dictionary exceeds platform limits")
+	}
+	addressCounts := make([]uint64, int(reader.addressCount))
+	topicCounts := make([]uint64, int(reader.topicCount))
+	topicPositions := make([]uint64, int(reader.topicCount))
+	for i := range topicPositions {
+		topicPositions[i] = math.MaxUint64
+	}
+	payloads := eventLogV4PayloadVerifier{file: file, reader: reader}
+	var previous eventLogIndexEntry
+	var previousRow eventLogV3Row
+	havePrevious := false
 	for i := uint64(0); i < header.rowCount; i++ {
 		row, err := seg.readEventLogV3Row(i)
 		if err != nil {
 			return err
 		}
-		log, err := seg.materializeEventLogV3(row)
-		if err != nil {
-			return fmt.Errorf("snapshots: V4 event log %q row %d: %w", ref.Path, i, err)
+		if row.blockID >= reader.blockCount || row.txID >= reader.txCount || row.addressID >= reader.addressCount || row.payloadFrame >= reader.payloadFrames {
+			return fmt.Errorf("snapshots: V4 event log %q row %d dictionary id outside bounds", ref.Path, i)
 		}
-		if log.BlockNum < ref.FromTxNum || log.BlockNum > ref.ToTxNum {
-			return errors.New("snapshots: V4 row block outside segment")
-		}
-		if have && compareEventLogEntries(eventLogIndexEntry{blockNum: prev.BlockNum, txIndex: prev.TxIndex, logIndex: prev.LogIndex}, eventLogIndexEntry{blockNum: log.BlockNum, txIndex: log.TxIndex, logIndex: log.LogIndex}) >= 0 {
+		entry := eventLogIndexEntry{blockNum: blockNumbers[row.blockID], txIndex: row.txIndex, logIndex: row.logIndex}
+		if havePrevious && compareEventLogEntries(previous, entry) >= 0 {
 			return errors.New("snapshots: V4 rows not strictly ordered")
 		}
-		have = true
-		prev = log
-		ak := string(eventLogAddressLookupKey(log.Address))
-		expectedAddress[ak] = append(expectedAddress[ak], i)
-		for p, t := range log.Log.GetTopics() {
-			var topic common.Hash
-			copy(topic[:], t)
-			tk := string(eventLogTopicLookupKey(uint64(p), topic))
-			expectedTopic[tk] = append(expectedTopic[tk], i)
+		if !havePrevious {
+			if row.blockID != 0 || row.txID != 0 {
+				return errors.New("snapshots: V4 first row does not start at dictionary id zero")
+			}
+		} else {
+			if row.blockID > previousRow.blockID+1 || row.txID > previousRow.txID+1 {
+				return errors.New("snapshots: V4 row dictionary ids contain a gap")
+			}
+		}
+		havePrevious, previous = true, entry
+		previousRow = row
+		if addressCounts[row.addressID] == math.MaxUint64 {
+			return errors.New("snapshots: V4 address posting count overflow")
+		}
+		addressCounts[row.addressID]++
+		for position, topicID := range row.topicIDs {
+			if topicID >= reader.topicCount {
+				return fmt.Errorf("snapshots: V4 event log %q row %d topic dictionary id outside bounds", ref.Path, i)
+			}
+			if topicPositions[topicID] == math.MaxUint64 {
+				topicPositions[topicID] = uint64(position)
+			} else if topicPositions[topicID] != uint64(position) {
+				return fmt.Errorf("snapshots: V4 event log %q row %d topic dictionary position mismatch", ref.Path, i)
+			}
+			if topicCounts[topicID] == math.MaxUint64 {
+				return errors.New("snapshots: V4 topic posting count overflow")
+			}
+			topicCounts[topicID]++
+		}
+		if err := payloads.verify(i, row); err != nil {
+			return fmt.Errorf("snapshots: V4 event log %q row %d: %w", ref.Path, i, err)
 		}
 	}
-	actualAddress, err := readAllEventLogV3Lookup(file, header.v3.addressIndexOffset, header.v3.addressIndexLength, size, eventLogAddressLookupKeySize, header.rowCount)
+	if err := payloads.finish(); err != nil {
+		return fmt.Errorf("snapshots: V4 event log %q payload coverage: %w", ref.Path, err)
+	}
+	if header.rowCount == 0 {
+		if reader.blockCount != 0 || reader.txCount != 0 || reader.addressCount != 0 || reader.topicCount != 0 {
+			return errors.New("snapshots: V4 empty event-log segment has non-empty dictionaries")
+		}
+	} else if previousRow.blockID+1 != reader.blockCount || previousRow.txID+1 != reader.txCount {
+		return errors.New("snapshots: V4 row dictionary ids do not cover block/transaction dictionaries")
+	}
+	semanticDuration := time.Since(validationStarted)
+	postingFillStarted := time.Now()
+	expectedAddress, err := allocateEventLogV4Postings(addressCounts)
 	if err != nil {
 		return err
 	}
-	actualTopic, err := readAllEventLogV3Lookup(file, header.v3.topicIndexOffset, header.v3.topicIndexLength, size, eventLogTopicLookupKeySize, header.rowCount)
+	expectedTopic, err := allocateEventLogV4Postings(topicCounts)
 	if err != nil {
 		return err
 	}
-	if err := compareEventLogSegmentLookupIndexMaps(ref, "V3 address", expectedAddress, actualAddress); err != nil {
+	// A second row-frame pass fills exact posting lists into one flat allocation
+	// per lookup. The expensive payload and dictionary checks above are not
+	// repeated. This trades a small sequential row read for eliminating the old
+	// per-row address/topic materialization and random compact-dictionary reads.
+	for i := uint64(0); i < header.rowCount; i++ {
+		row, err := seg.readEventLogV3Row(i)
+		if err != nil {
+			return err
+		}
+		if row.addressID >= expectedAddress.keyCount() {
+			return errors.New("snapshots: V4 address dictionary changed between validation passes")
+		}
+		addressCursor := addressCounts[row.addressID]
+		if addressCursor >= expectedAddress.offsets[row.addressID+1] {
+			return errors.New("snapshots: V4 address posting count changed between validation passes")
+		}
+		expectedAddress.rows[addressCursor] = i
+		addressCounts[row.addressID]++
+		for _, topicID := range row.topicIDs {
+			if topicID >= expectedTopic.keyCount() {
+				return errors.New("snapshots: V4 topic dictionary changed between validation passes")
+			}
+			topicCursor := topicCounts[topicID]
+			if topicCursor >= expectedTopic.offsets[topicID+1] {
+				return errors.New("snapshots: V4 topic posting count changed between validation passes")
+			}
+			expectedTopic.rows[topicCursor] = i
+			topicCounts[topicID]++
+		}
+	}
+	if !expectedAddress.filled(addressCounts) || !expectedTopic.filled(topicCounts) {
+		return errors.New("snapshots: V4 posting counts changed between validation passes")
+	}
+	postingFillDuration := time.Since(postingFillStarted)
+	lookupStarted := time.Now()
+	if err := checkEventLogV4LookupPostings(file, header.v3.addressIndexOffset, header.v3.addressIndexLength, size, eventLogAddressLookupKeySize, header.rowCount, "address", expectedAddress, nil); err != nil {
+		return fmt.Errorf("snapshots: V4 event log %q: %w", ref.Path, err)
+	}
+	if err := checkEventLogV4LookupPostings(file, header.v3.topicIndexOffset, header.v3.topicIndexLength, size, eventLogTopicLookupKeySize, header.rowCount, "topic", expectedTopic, topicPositions); err != nil {
 		return err
 	}
-	return compareEventLogSegmentLookupIndexMaps(ref, "V3 topic", expectedTopic, actualTopic)
+	recordEventLogV4Validation(header.rowCount, size, time.Since(validationStarted), semanticDuration, postingFillDuration, time.Since(lookupStarted))
+	return nil
+}
+
+func recordEventLogV4Validation(rows, bytes uint64, total, semantic, postingFill, lookup time.Duration) {
+	eventLogV4ValidationRunsCounter.Inc(1)
+	eventLogV4ValidationRowsCounter.Inc(coldSnapshotUintGauge(rows))
+	eventLogV4ValidationBytesCounter.Inc(coldSnapshotUintGauge(bytes))
+	eventLogV4ValidationNanosCounter.Inc(total.Nanoseconds())
+	eventLogV4ValidationSemanticCounter.Inc(semantic.Nanoseconds())
+	eventLogV4ValidationPostingFillCounter.Inc(postingFill.Nanoseconds())
+	eventLogV4ValidationLookupCounter.Inc(lookup.Nanoseconds())
+}
+
+func readEventLogV4BlockNumbers(file io.ReaderAt, reader *eventLogV3Reader, ref SegmentRef) ([]uint64, error) {
+	if reader.blockCount > uint64(math.MaxInt) {
+		return nil, errors.New("snapshots: V4 block dictionary exceeds platform limits")
+	}
+	rawLength, overflow := checkedMul(reader.blockCount, 8+common.HashLength)
+	if overflow || rawLength > uint64(math.MaxInt) {
+		return nil, errors.New("snapshots: V4 block dictionary length overflow")
+	}
+	raw, err := readEventLogPayloadAt(file, reader.header.blockDictOffset+8, rawLength, reader.header.blockDictOffset+reader.header.blockDictLength)
+	if err != nil {
+		return nil, err
+	}
+	numbers := make([]uint64, int(reader.blockCount))
+	entrySize := 8 + common.HashLength
+	for i := range numbers {
+		numbers[i] = binary.BigEndian.Uint64(raw[i*entrySize : i*entrySize+8])
+		if numbers[i] < ref.FromTxNum || numbers[i] > ref.ToTxNum {
+			return nil, errors.New("snapshots: V4 block dictionary entry outside segment")
+		}
+		if i > 0 && numbers[i] <= numbers[i-1] {
+			return nil, errors.New("snapshots: V4 block dictionary is not strictly ordered")
+		}
+	}
+	return numbers, nil
+}
+
+type eventLogV4PayloadVerifier struct {
+	file       io.ReaderAt
+	reader     *eventLogV3Reader
+	loaded     bool
+	frameIndex uint64
+	frame      eventLogV3Frame
+	decoded    []byte
+	nextOffset uint64
+	rows       uint64
+}
+
+func (v *eventLogV4PayloadVerifier) verify(rowIndex uint64, row eventLogV3Row) error {
+	if !v.loaded || row.payloadFrame != v.frameIndex {
+		if err := v.finishFrame(); err != nil {
+			return err
+		}
+		expectedFrame := uint64(0)
+		if v.loaded {
+			expectedFrame = v.frameIndex + 1
+		}
+		if row.payloadFrame != expectedFrame {
+			return errors.New("snapshots: V4 payload frame sequence is not contiguous")
+		}
+		frame, err := readEventLogV3FrameAt(v.file, v.reader.header.payloadDirOffset, row.payloadFrame, v.reader.payloadFrames)
+		if err != nil {
+			return err
+		}
+		compressed, err := readEventLogPayloadAt(v.file, frame.dataOff, uint64(frame.dataLen), v.reader.header.payloadDataOffset+v.reader.header.payloadDataLength)
+		if err != nil {
+			return err
+		}
+		_, decoder, err := cbCodec()
+		if err != nil {
+			return err
+		}
+		decoded, err := decoder.DecodeAll(compressed, make([]byte, 0, int(frame.rawLen)))
+		if err != nil {
+			return err
+		}
+		if len(decoded) != int(frame.rawLen) || crc32.ChecksumIEEE(decoded) != frame.checksum {
+			return errors.New("snapshots: V4 payload frame content mismatch")
+		}
+		if frame.firstRow != rowIndex {
+			return errors.New("snapshots: V4 payload frame first row mismatch")
+		}
+		v.loaded, v.frameIndex, v.frame, v.decoded = true, row.payloadFrame, frame, decoded
+		v.nextOffset, v.rows = 0, 0
+	}
+	if rowIndex != v.frame.firstRow+v.rows || v.rows >= uint64(v.frame.rowCount) {
+		return errors.New("snapshots: V4 payload frame row coverage mismatch")
+	}
+	if row.payloadOffset != v.nextOffset {
+		return errors.New("snapshots: V4 payload slices are not contiguous")
+	}
+	end, overflow := checkedAdd(row.payloadOffset, row.payloadLength)
+	if overflow || end > uint64(len(v.decoded)) {
+		return errors.New("snapshots: V4 payload slice outside frame")
+	}
+	var log corepb.TransactionInfo_Log
+	if err := proto.Unmarshal(v.decoded[row.payloadOffset:end], &log); err != nil {
+		return err
+	}
+	if len(log.GetAddress()) != 0 || len(log.GetTopics()) != 0 {
+		return errors.New("snapshots: V4 stripped payload contains address or topics")
+	}
+	v.nextOffset, v.rows = end, v.rows+1
+	return nil
+}
+
+func (v *eventLogV4PayloadVerifier) finishFrame() error {
+	if !v.loaded {
+		return nil
+	}
+	if v.rows != uint64(v.frame.rowCount) || v.nextOffset != uint64(len(v.decoded)) {
+		return errors.New("snapshots: V4 payload frame is not exactly covered by rows")
+	}
+	return nil
+}
+
+func (v *eventLogV4PayloadVerifier) finish() error {
+	if err := v.finishFrame(); err != nil {
+		return err
+	}
+	if v.reader.header.rowCount == 0 {
+		if v.loaded {
+			return errors.New("snapshots: V4 empty segment has payload data")
+		}
+		return nil
+	}
+	if !v.loaded || v.frameIndex+1 != v.reader.payloadFrames {
+		return errors.New("snapshots: V4 payload frames are not exactly covered")
+	}
+	return nil
+}
+
+type eventLogV4ExpectedPostings struct {
+	offsets []uint64
+	rows    []uint64
+}
+
+func (p eventLogV4ExpectedPostings) keyCount() uint64 {
+	if len(p.offsets) == 0 {
+		return 0
+	}
+	return uint64(len(p.offsets) - 1)
+}
+
+func (p eventLogV4ExpectedPostings) rowsFor(id uint64) []uint64 {
+	return p.rows[p.offsets[id]:p.offsets[id+1]]
+}
+
+func (p eventLogV4ExpectedPostings) filled(cursors []uint64) bool {
+	if uint64(len(cursors)) != p.keyCount() {
+		return false
+	}
+	for i, cursor := range cursors {
+		if cursor != p.offsets[i+1] {
+			return false
+		}
+	}
+	return true
+}
+
+func allocateEventLogV4Postings(counts []uint64) (eventLogV4ExpectedPostings, error) {
+	var total uint64
+	offsets := make([]uint64, len(counts)+1)
+	for i, count := range counts {
+		offsets[i] = total
+		var overflow bool
+		total, overflow = checkedAdd(total, count)
+		if overflow {
+			return eventLogV4ExpectedPostings{}, errors.New("snapshots: V4 posting count overflow")
+		}
+		counts[i] = offsets[i]
+	}
+	offsets[len(counts)] = total
+	if total > uint64(math.MaxInt) {
+		return eventLogV4ExpectedPostings{}, errors.New("snapshots: V4 postings exceed platform limits")
+	}
+	return eventLogV4ExpectedPostings{offsets: offsets, rows: make([]uint64, int(total))}, nil
+}
+
+func checkEventLogV4LookupPostings(file io.ReaderAt, offset, length, size uint64, keySize int, maxRows uint64, name string, expected eventLogV4ExpectedPostings, topicPositions []uint64) error {
+	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+	if err != nil {
+		return err
+	}
+	if h.keyCount != expected.keyCount() {
+		return fmt.Errorf("snapshots: V4 %s lookup key count %d, want %d", name, h.keyCount, expected.keyCount())
+	}
+	expectedKeyOff := offset + eventLogV3LookupV2HeaderSize + h.blockDirLen
+	var expectedPostingOff, keyID uint64
+	var keyBlockStoredScratch, keyBlockDecodedScratch, postingScratch []byte
+	previousKey := make([]byte, keySize)
+	havePreviousKey := false
+	postingDataStart := offset + eventLogV3LookupV2HeaderSize + h.blockDirLen + h.keyDataLen
+	if postingDataStart > uint64(math.MaxInt64) || h.postingDataLen > uint64(math.MaxInt64) {
+		return errors.New("snapshots: V4 compact lookup posting section exceeds int64 limits")
+	}
+	postingSource := eventLogV4ValidationPostingSource{source: io.NewSectionReader(file, int64(postingDataStart), int64(h.postingDataLen))}
+	postingReader := acquireEventLogV4ValidationReader(&postingSource)
+	defer releaseEventLogV4ValidationReader(&postingReader)
+	for i := uint64(0); i < h.blockCount; i++ {
+		block, err := readEventLogV3LookupV2Block(file, offset, h, i)
+		if err != nil {
+			return err
+		}
+		storedLen := uint64(block.dataLen &^ eventLogV3LookupV2StoredRaw)
+		if block.dataOff != expectedKeyOff {
+			return fmt.Errorf("snapshots: V4 %s lookup key blocks are not contiguous", name)
+		}
+		expectedKeyOff += storedLen
+		decoded, err := readEventLogV4LookupKeyBlock(file, offset, length, h, block, &keyBlockStoredScratch, &keyBlockDecodedScratch)
+		if err != nil {
+			return err
+		}
+		cursor := 0
+		blockPreviousKey := make([]byte, keySize)
+		blockKey := make([]byte, keySize)
+		blockHasPrevious := false
+		for within := uint32(0); within < block.keyCount; within++ {
+			prefix, err := consumeEventLogV4LookupUvarint(decoded, &cursor)
+			if err != nil || prefix > uint64(keySize) || (!blockHasPrevious && prefix != 0) {
+				return errors.New("snapshots: invalid V3 compact lookup key prefix")
+			}
+			if blockHasPrevious && prefix > uint64(len(blockPreviousKey)) {
+				return errors.New("snapshots: invalid V3 compact lookup key prefix")
+			}
+			suffixLength := keySize - int(prefix)
+			if suffixLength > len(decoded)-cursor {
+				return io.ErrUnexpectedEOF
+			}
+			copy(blockKey[:prefix], blockPreviousKey[:prefix])
+			copy(blockKey[prefix:], decoded[cursor:cursor+suffixLength])
+			cursor += suffixLength
+			postingOff, err := consumeEventLogV4LookupUvarint(decoded, &cursor)
+			if err != nil {
+				return err
+			}
+			postingLen, err := consumeEventLogV4LookupUvarint(decoded, &cursor)
+			if err != nil {
+				return err
+			}
+			postingCount, err := consumeEventLogV4LookupUvarint(decoded, &cursor)
+			if err != nil {
+				return err
+			}
+			if len(decoded)-cursor < 4 {
+				return io.ErrUnexpectedEOF
+			}
+			postingChecksum := binary.BigEndian.Uint32(decoded[cursor : cursor+4])
+			cursor += 4
+			if postingOff > h.postingDataLen || postingLen > h.postingDataLen-postingOff || postingCount > postingLen {
+				return errors.New("snapshots: V4 compact lookup postings outside section")
+			}
+			if within == 0 && !bytes.Equal(blockKey, block.firstKey) {
+				return errors.New("snapshots: V4 compact lookup first key mismatch")
+			}
+			if blockHasPrevious && bytes.Compare(blockPreviousKey, blockKey) >= 0 {
+				return errors.New("snapshots: V4 compact lookup keys not sorted")
+			}
+			if keyID >= expected.keyCount() {
+				return fmt.Errorf("snapshots: V4 %s lookup contains too many keys", name)
+			}
+			if havePreviousKey && bytes.Compare(previousKey, blockKey) >= 0 {
+				return fmt.Errorf("snapshots: V4 %s lookup blocks are not strictly sorted", name)
+			}
+			if postingOff != expectedPostingOff {
+				return fmt.Errorf("snapshots: V4 %s lookup postings are not contiguous", name)
+			}
+			expectedPostingOff += postingLen
+			want := expected.rowsFor(keyID)
+			if len(want) == 0 {
+				return fmt.Errorf("snapshots: V4 %s lookup dictionary id %d is unused", name, keyID)
+			}
+			if postingCount != uint64(len(want)) {
+				return fmt.Errorf("snapshots: V4 %s lookup posting count for dictionary id %d is %d, want %d", name, keyID, postingCount, len(want))
+			}
+			if topicPositions != nil {
+				position := binary.BigEndian.Uint64(blockKey[:8])
+				if keyID >= uint64(len(topicPositions)) || topicPositions[keyID] == math.MaxUint64 || position != topicPositions[keyID] {
+					return fmt.Errorf("snapshots: V4 topic dictionary position mismatch at id %d", keyID)
+				}
+			}
+			if err := checkEventLogV4PostingRows(postingReader, postingLen, postingChecksum, maxRows, want, &postingScratch); err != nil {
+				return fmt.Errorf("snapshots: V4 %s lookup dictionary id %d: %w", name, keyID, err)
+			}
+			copy(previousKey, blockKey)
+			havePreviousKey = true
+			blockPreviousKey, blockKey = blockKey, blockPreviousKey
+			blockHasPrevious = true
+			keyID++
+		}
+		if cursor != len(decoded) {
+			return errors.New("snapshots: V4 compact lookup key block trailing bytes")
+		}
+	}
+	if keyID != h.keyCount {
+		return fmt.Errorf("snapshots: V4 %s lookup key count mismatch", name)
+	}
+	if expectedKeyOff != offset+eventLogV3LookupV2HeaderSize+h.blockDirLen+h.keyDataLen || expectedPostingOff != h.postingDataLen {
+		return fmt.Errorf("snapshots: V4 %s lookup data coverage mismatch", name)
+	}
+	return nil
+}
+
+type eventLogV4ValidationPostingSource struct {
+	source io.Reader
+}
+
+func (r *eventLogV4ValidationPostingSource) Read(p []byte) (int, error) {
+	n, err := r.source.Read(p)
+	eventLogV4ValidationPostingReadCounter.Inc(1)
+	if n > 0 {
+		eventLogV4ValidationPostingByteCounter.Inc(int64(n))
+	}
+	return n, err
+}
+
+func readEventLogV4LookupKeyBlock(file io.ReaderAt, offset, length uint64, h eventLogV3LookupV2Header, block eventLogV3LookupV2Block, storedScratch, decodedScratch *[]byte) ([]byte, error) {
+	keyDataStart := offset + eventLogV3LookupV2HeaderSize + h.blockDirLen
+	postingStart := keyDataStart + h.keyDataLen
+	storedLength := uint64(block.dataLen &^ eventLogV3LookupV2StoredRaw)
+	if block.dataOff < keyDataStart || block.dataOff > postingStart || storedLength > postingStart-block.dataOff || postingStart > offset+length {
+		return nil, errors.New("snapshots: V4 compact lookup key block outside key data")
+	}
+	if storedLength > uint64(math.MaxInt) {
+		return nil, errors.New("snapshots: V4 compact lookup key block exceeds platform limits")
+	}
+	if cap(*storedScratch) < int(storedLength) {
+		*storedScratch = make([]byte, int(storedLength))
+	}
+	stored := (*storedScratch)[:int(storedLength)]
+	if _, err := file.ReadAt(stored, int64(block.dataOff)); err != nil {
+		return nil, err
+	}
+	decoded := stored
+	if block.dataLen&eventLogV3LookupV2StoredRaw == 0 {
+		_, decoder, err := cbCodec()
+		if err != nil {
+			return nil, err
+		}
+		if cap(*decodedScratch) < int(block.rawLen) {
+			*decodedScratch = make([]byte, 0, int(block.rawLen))
+		}
+		decoded, err = decoder.DecodeAll(stored, (*decodedScratch)[:0])
+		if err != nil {
+			return nil, err
+		}
+		*decodedScratch = decoded
+	}
+	if len(decoded) != int(block.rawLen) || crc32.ChecksumIEEE(decoded) != block.checksum {
+		return nil, errors.New("snapshots: V4 compact lookup key block checksum mismatch")
+	}
+	return decoded, nil
+}
+
+func consumeEventLogV4LookupUvarint(raw []byte, cursor *int) (uint64, error) {
+	if *cursor >= len(raw) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	value, width := binary.Uvarint(raw[*cursor:])
+	if width == 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	if width < 0 {
+		return 0, errors.New("snapshots: V4 compact lookup uvarint overflows")
+	}
+	*cursor += width
+	return value, nil
+}
+
+func checkEventLogV4PostingRows(reader io.Reader, postingLen uint64, checksum uint32, maxRows uint64, want []uint64, scratch *[]byte) error {
+	if postingLen > uint64(math.MaxInt) {
+		return errors.New("posting stream exceeds platform limits")
+	}
+	if cap(*scratch) < int(postingLen) {
+		*scratch = make([]byte, int(postingLen))
+	}
+	raw := (*scratch)[:int(postingLen)]
+	if _, err := io.ReadFull(reader, raw); err != nil {
+		return err
+	}
+	if crc32.ChecksumIEEE(raw) != checksum {
+		return errors.New("posting checksum mismatch")
+	}
+	cursor := 0
+	var previous uint64
+	for i, expectedRow := range want {
+		value, err := consumeEventLogV4LookupUvarint(raw, &cursor)
+		if err != nil {
+			return err
+		}
+		if i > 0 {
+			if value == 0 || math.MaxUint64-previous < value {
+				return errors.New("posting delta invalid")
+			}
+			value += previous
+		}
+		if value >= maxRows {
+			return errors.New("posting row outside segment")
+		}
+		if value != expectedRow {
+			return fmt.Errorf("posting row %d is %d, want %d", i, value, expectedRow)
+		}
+		previous = value
+	}
+	if cursor != len(raw) {
+		return errors.New("posting stream has trailing bytes")
+	}
+	return nil
 }
 
 func readAllEventLogV3Lookup(file io.ReaderAt, offset, length, size uint64, keySize int, maxRows uint64) (map[string][]uint64, error) {

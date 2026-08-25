@@ -579,6 +579,18 @@
 - [x] Cover V7 corruption, truncation, bounded source-read amplification,
   cached-read cancellation, race behavior, and before/after allocation and
   throughput benchmarks.
+- [x] Replace V4 event-log validation's per-row address/topic materialization
+  with sequential dictionary-ID posting proofs while retaining payload,
+  ordering, position, CRC, and exact lookup-membership checks.
+- [x] Export cumulative V4 validation runs/rows/bytes plus total, semantic,
+  posting-fill, and lookup phase nanoseconds plus posting source reads/bytes,
+  and cover internally checksummed row/index disagreement with adversarial tests.
+- [x] Benchmark the 4,096-row/four-topic strict verifier before and after P5.44;
+  confirm about 6.2x throughput, 79% fewer allocated bytes, and 92% fewer
+  allocations on the local M1 Max fixture.
+- [ ] Run the P5.44 production gate and compare V4 validation phase counters,
+  event checker CPU/allocations, NVMe utilization, event batches/hour, cold lag,
+  importer busy ratio, and fixed-workload transactions/s.
 - [ ] Run the P5.43 production gate and compare accessor-validation source
   reads/bytes, V7 checker and `pread` CPU, compaction sources/second, cold lag,
   importer busy ratio, and fixed-density transactions/s.

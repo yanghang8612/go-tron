@@ -4798,6 +4798,53 @@ requires the validation hotspot to disappear without checksum/layout failures,
 slower cancellation, elevated lifecycle errors, or a regression in sustained
 fixed-density transactions per second.
 
+#### P5.44: Sequential dictionary-ID event-log verification
+
+After the V2 event-log catch-up liveness fix began continuously building
+65,536-block V4 batches, the next deployed 60-second profile attributed 52.30
+CPU seconds to the event-log build/check path. The strict post-build verifier
+accounted for the dominant work: it materialized every row into a complete log,
+resolved every address and ordered topic through the compact dictionaries, and
+then independently reread both lookup indexes. Interleaved topic positions
+thrashed the 32-block lookup cache. The process allocation profile attributed
+6.316 billion cumulative objects and 744.16 GB to the checker path, while the
+same process allocated about 857 MiB/s during the sampled validation interval.
+
+V4 verification now remains exhaustive but works in physical order. Its first
+row-frame pass validates dictionary bounds, strict block/transaction/log order,
+topic-ID position consistency, payload-frame coverage and checksums, protobuf
+decoding, and the invariant that V4 payloads contain neither addresses nor
+topics. It counts address/topic postings by dictionary ID. One flat allocation
+per lookup then receives exact row IDs during a second cheap row-frame pass.
+Finally, a verification-only streaming cursor walks front-coded key blocks and
+posting streams once in file order, reusing key-block, decoded-key, and posting
+buffers while comparing every posting directly with the expected ID group. A
+pooled 256 KiB sequential posting reader amortizes singleton-heavy dictionaries
+instead of issuing one `pread` for every key.
+Key ordering, block and posting contiguity, entry and payload CRCs, posting
+counts, row bounds, delta ordering, topic positions, and exact row membership
+remain fail-closed. Restart and external-file checks therefore retain the full
+semantic proof; this phase does not widen the trusted-build boundary or skip
+verification.
+
+Cumulative V4 validation counters expose successful runs, rows, bytes, total
+nanoseconds, the semantic-scan, posting-fill, and lookup subphase times, and
+the buffered posting reader's underlying read count and bytes.
+Adversarial regressions mutate row address/topic IDs while refreshing the local
+row-frame CRC, proving that the independent lookup comparison rejects
+internally checksummed semantic disagreement. Existing payload, compact-key
+block, header, checksum, ordering, query, and restoration tests remain active.
+
+On an Apple M1 Max, a 4,096-row fixture with four unique topics per row reduced
+strict verification from 23.45--23.63 ms, 15.96 MB, and about 218,945
+allocations to 3.63--3.89 ms, 3.41 MB, and about 17,165 allocations: about 6.2x
+faster, 79% fewer allocated bytes, and 92% fewer allocations. The
+production gate must compare V4 validation phase counters, checker CPU and
+allocations, NVMe reads/utilization, catch-up batches/hour, importer busy ratio,
+and work-normalized transactions/s. Acceptance also requires unchanged cold
+errors, exact manifest/event-index coverage, and no starvation regression after
+the event gap closes.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

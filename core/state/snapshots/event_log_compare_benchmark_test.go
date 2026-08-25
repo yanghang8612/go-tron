@@ -64,3 +64,35 @@ func TestEventLogComparisonFixture(t *testing.T) {
 		mainRef.Size, indexRef.Size, mainRef.Size+indexRef.Size, build.Nanoseconds(), physical.PayloadCompressedBytes, physical.TopicLookupBytes,
 		full.NsPerOp(), full.AllocedBytesPerOp(), full.AllocsPerOp(), filteredResult.NsPerOp(), filteredResult.AllocedBytesPerOp(), filteredResult.AllocsPerOp())
 }
+
+func BenchmarkCheckEventLogV4Segment(b *testing.B) {
+	const rowCount = 4096
+	dir := b.TempDir()
+	address := common.BytesToAddress(eventLogTestAddress(0x85))
+	rows := make([]EventLog, 0, rowCount)
+	for i := 0; i < rowCount; i++ {
+		topics := make([][]byte, 4)
+		for position := range topics {
+			var topic common.Hash
+			binary.BigEndian.PutUint64(topic[24:], uint64(position*rowCount+i))
+			topics[position] = append([]byte(nil), topic[:]...)
+		}
+		var txHash common.Hash
+		binary.BigEndian.PutUint64(txHash[24:], uint64(i+1))
+		rows = append(rows, EventLog{BlockNum: 1, TxIndex: uint64(i), LogIndex: uint64(i), TxHash: txHash, BlockHash: common.Hash{2}, Address: address, Log: &corepb.TransactionInfo_Log{
+			Address: eventLogV3PayloadAddress(address), Topics: topics, Data: bytes.Repeat([]byte{byte(i)}, 128),
+		}})
+	}
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: rows}, dir, "", 1, 1)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(ref.Size))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := CheckEventLogSegment(dir, ref); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

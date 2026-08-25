@@ -83,6 +83,32 @@ func TestStateDomainChangeAccessorGroupOffsetsPoolResetsLength(t *testing.T) {
 	}
 }
 
+func TestEventLogV4ValidationReaderPoolDropsPreviousSource(t *testing.T) {
+	reader := acquireEventLogV4ValidationReader(bytes.NewReader([]byte("previous-source")))
+	retained := reader
+	var prefix [8]byte
+	if _, err := io.ReadFull(reader, prefix[:]); err != nil {
+		t.Fatal(err)
+	}
+	releaseEventLogV4ValidationReader(&reader)
+	if reader != nil {
+		t.Fatal("released event-log validation reader still reachable through caller")
+	}
+	if retained.Buffered() != 0 {
+		t.Fatalf("released event-log validation reader retained %d bytes", retained.Buffered())
+	}
+
+	reader = acquireEventLogV4ValidationReader(bytes.NewReader([]byte("new")))
+	defer releaseEventLogV4ValidationReader(&reader)
+	got, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new" {
+		t.Fatalf("reused event-log validation reader returned %q, want new", got)
+	}
+}
+
 func TestCopyStateDomainChangeHistoryDataUsesPooledBuffer(t *testing.T) {
 	reader := &stateDomainChangeHistoryFastPathReader{Reader: bytes.NewReader([]byte("history payload"))}
 	writer := new(stateDomainChangeHistoryFastPathWriter)
