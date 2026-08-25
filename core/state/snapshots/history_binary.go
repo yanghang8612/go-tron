@@ -2397,10 +2397,14 @@ func checkStateDomainChangeBinaryAccessorValidationContext(ctx context.Context, 
 		return checkStateDomainChangeBinaryAccessorV5(buffered, fileSize, header)
 	}
 	if header.version == stateDomainChangeBinaryVersionV6 {
-		return checkStateDomainChangeBinaryAccessorV6(accessorReader, fileSize)
+		buffered := acquireStateDomainChangeAccessorValidationReader(accessorReader, fileSize)
+		defer releaseStateDomainChangeAccessorValidationReader(&buffered)
+		return checkStateDomainChangeBinaryAccessorV6(contextReaderAt{ctx: ctx, r: buffered}, fileSize)
 	}
 	if header.version == stateDomainChangeBinaryVersionV7 {
-		return checkStateDomainChangeBinaryAccessorV7(accessorReader, fileSize)
+		buffered := acquireStateDomainChangeAccessorValidationReader(accessorReader, fileSize)
+		defer releaseStateDomainChangeAccessorValidationReader(&buffered)
+		return checkStateDomainChangeBinaryAccessorV7(contextReaderAt{ctx: ctx, r: buffered}, fileSize)
 	}
 
 	offsetTableLen := header.count * 8

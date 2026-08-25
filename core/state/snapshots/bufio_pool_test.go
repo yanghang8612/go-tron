@@ -2,6 +2,8 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"testing"
 )
@@ -124,5 +126,30 @@ func TestStateDomainChangeAccessorValidationReaderKeepsTwoWindows(t *testing.T) 
 	}
 	if source.reads != 2 {
 		t.Fatalf("alternating validation reads used %d source reads, want 2 windows", source.reads)
+	}
+}
+
+func TestStateDomainChangeAccessorValidationReaderCachedReadHonorsCancellation(t *testing.T) {
+	data := make([]byte, stateDomainChangeAccessorValidationWindowSize)
+	source := &countingStateDomainReaderAt{reader: bytes.NewReader(data)}
+	buffered := acquireStateDomainChangeAccessorValidationReader(source, uint64(len(data)))
+	defer releaseStateDomainChangeAccessorValidationReader(&buffered)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reader := contextReaderAt{ctx: ctx, r: buffered}
+	var got [16]byte
+	if _, err := reader.ReadAt(got[:], 0); err != nil {
+		t.Fatalf("initial ReadAt: %v", err)
+	}
+	if source.reads != 1 {
+		t.Fatalf("initial ReadAt used %d source reads, want 1", source.reads)
+	}
+
+	cancel()
+	if _, err := reader.ReadAt(got[:], 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cached ReadAt error = %v, want context.Canceled", err)
+	}
+	if source.reads != 1 {
+		t.Fatalf("canceled cached ReadAt used %d source reads, want 1", source.reads)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"sync"
+
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 // History builds create several large buffered writers in sequence: the tx
@@ -53,6 +55,11 @@ type stateDomainChangeAccessorValidationReader struct {
 var stateDomainChangeAccessorValidationReaderPool = sync.Pool{
 	New: func() any { return new(stateDomainChangeAccessorValidationReader) },
 }
+
+var (
+	stateDomainChangeAccessorValidationSourceReadCounter = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"accessor_validation/source_reads", nil)
+	stateDomainChangeAccessorValidationSourceByteCounter = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"accessor_validation/source_bytes", nil)
+)
 
 func acquireStateDomainChangeAccessorValidationReader(source io.ReaderAt, size uint64) *stateDomainChangeAccessorValidationReader {
 	reader := stateDomainChangeAccessorValidationReaderPool.Get().(*stateDomainChangeAccessorValidationReader)
@@ -134,7 +141,11 @@ func (r *stateDomainChangeAccessorValidationReader) fillWindow(off int64) (*stat
 	if length > stateDomainChangeAccessorValidationWindowSize {
 		length = stateDomainChangeAccessorValidationWindowSize
 	}
+	stateDomainChangeAccessorValidationSourceReadCounter.Inc(1)
 	n, err := r.source.ReadAt(window.data[:length], start)
+	if n > 0 {
+		stateDomainChangeAccessorValidationSourceByteCounter.Inc(int64(n))
+	}
 	if int64(n) != length {
 		if err == nil {
 			err = io.ErrUnexpectedEOF

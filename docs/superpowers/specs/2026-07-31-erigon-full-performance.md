@@ -4760,6 +4760,44 @@ foreground overlap without removing the dominant I/O. A future experiment must
 first add origin-specific usefulness/latency attribution and compare a fixed
 workload; the existing P5.37 gate remains authoritative.
 
+#### P5.43: Bounded V7 accessor validation I/O
+
+The post-P5.42 production profile moved the dominant background cost to V7
+state-history accessor validation. A 60-second sample attributed about 58 CPU
+seconds to the V7 checker and 56 seconds to `pread`; the single-frame decoder
+issued one `ReaderAt` operation per varint byte, built a growable checksum
+slice, and then scanned the same payload again to recover its encoded length.
+Allocation profiling attributed more than 1.1 billion sampled objects to that
+byte cursor. This path competes with canonical import during cold compaction,
+where most dictionary keys have a single posting frame.
+
+Single-frame validation now performs one strictly bounded read: at most 128
+posting triples times the ten-byte uint64 varint limit plus the four-byte CRC.
+It parses the scratch buffer in memory, verifies the checksum over the exact
+payload, returns the verified encoded length to the caller, and therefore
+eliminates the second scan. Count, offset, section, varint, checksum, ordering,
+and final-contiguity checks remain fail-closed. Reading a bounded suffix that
+may include bytes from the following key is safe because only the exact parsed
+payload and its immediately following CRC participate in validation.
+
+V6 and V7 full-file validation also use the existing pooled two-window reader,
+turning small logical `ReaderAt` calls into 256 KiB source reads while retaining
+an outer context check on every logical read, including cache hits. Cumulative
+source-read and source-byte counters make the remaining read amplification
+observable. A 2,048-key regression corpus reduced underlying reads from 4,176
+to 1. The 128-posting microbenchmark improved from about 14.4 microseconds,
+10,232 bytes, and 778 allocations per operation to about 2.1 microseconds,
+3,074 bytes, and 1 allocation, without changing the V7 format. The bounded
+read scratch is pooled; the sole remaining allocation is the returned posting
+slice.
+
+The production gate compares accessor-validation source reads/bytes, V7 checker
+and `pread` CPU, compaction source completion rate, lifecycle read bandwidth,
+cold lag, importer busy ratio, and work-normalized sync throughput. Acceptance
+requires the validation hotspot to disappear without checksum/layout failures,
+slower cancellation, elevated lifecycle errors, or a regression in sustained
+fixed-density transactions per second.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

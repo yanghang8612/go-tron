@@ -570,6 +570,18 @@
 - [x] Adversarially review commitment read-ahead against the deployed CPU and
   usefulness counters; retain the current implementation until origin-specific
   telemetry can support a safe fixed-workload experiment.
+- [x] Replace the V7 single-frame per-varint-byte `ReaderAt` cursor and duplicate
+  length scan with one bounded bulk read, exact CRC verification, and the
+  verified frame end returned from the decode pass.
+- [x] Route V6/V7 full accessor validation through pooled two-window source
+  reads while preserving context cancellation on every logical read, and
+  export cumulative source-read/source-byte counters.
+- [x] Cover V7 corruption, truncation, bounded source-read amplification,
+  cached-read cancellation, race behavior, and before/after allocation and
+  throughput benchmarks.
+- [ ] Run the P5.43 production gate and compare accessor-validation source
+  reads/bytes, V7 checker and `pread` CPU, compaction sources/second, cold lag,
+  importer busy ratio, and fixed-density transactions/s.
 - [ ] Run the P5.42 production gate and compare code-cache hit/eviction/reject
   rates, code/history durable reads, snapshot lifecycle allocations/CPU, ETL
   spill throughput, importer busy ratio, and fixed-density transactions/s.

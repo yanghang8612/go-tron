@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -12,6 +13,136 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+var stateDomainChangeV7FrameBenchmarkSink []stateDomainChangeBinaryAccessorV6Posting
+
+func BenchmarkStateDomainChangeV7SingleFrameRead(b *testing.B) {
+	const count = uint16(stateDomainChangeBinaryAccessorV7FramePostings)
+	postings := make([]stateDomainChangeBinaryAccessorV6Posting, count)
+	for i := range postings {
+		postings[i] = stateDomainChangeBinaryAccessorV6Posting{
+			txNum:       10_000 + uint64(i),
+			offset:      1_000 + uint64(i)*97,
+			recordIndex: uint32(i),
+		}
+	}
+	encoded, err := encodeStateDomainChangeBinaryAccessorV7PostingList(10_000, postings)
+	if err != nil {
+		b.Fatal(err)
+	}
+	h := stateDomainChangeBinaryAccessorV6Header{fromTxNum: 10_000, postingLen: uint64(len(encoded))}
+	record := stateDomainChangeBinaryAccessorV6Record{postings: uint32(count)}
+	frame := stateDomainChangeBinaryAccessorV7Frame{count: count, dataOff: 1}
+	reader := bytes.NewReader(encoded)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(encoded)))
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := stateDomainChangeBinaryAccessorV7ReadFrame(reader, h, record, frame)
+		if err != nil {
+			b.Fatal(err)
+		}
+		stateDomainChangeV7FrameBenchmarkSink = got
+	}
+}
+
+func buildStateDomainChangeV7AccessorBytes(t testing.TB, keys int) []byte {
+	t.Helper()
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, make([]byte, common.AccountIDLength)...))
+	for i := 1; i <= keys; i++ {
+		txNum := uint64(i)
+		var hash common.Hash
+		binary.BigEndian.PutUint64(hash[24:], txNum)
+		if err := rawdb.WriteStateTxRange(db, txNum, hash, txNum, txNum); err != nil {
+			t.Fatal(err)
+		}
+		key := make([]byte, 8)
+		binary.BigEndian.PutUint64(key, txNum)
+		if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+			BlockNum: txNum, BlockHash: hash, TxNum: txNum, Seq: 1,
+			FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: 5,
+			Domain: kvdomains.ContractStorage, Key: key, PrevExists: true, Prev: []byte{byte(i)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, uint64(keys), "history/state-domain-change-validation.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range refs {
+		if ref.Kind != SegmentAccessor {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, ref.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	t.Fatal("V7 build did not publish an accessor")
+	return nil
+}
+
+func TestStateDomainChangeV7ValidationUsesBoundedSourceReads(t *testing.T) {
+	const keys = 2_048 // One single-frame posting list per distinct key.
+	data := buildStateDomainChangeV7AccessorBytes(t, keys)
+
+	direct := &countingStateDomainReaderAt{reader: bytes.NewReader(data)}
+	if err := checkStateDomainChangeBinaryAccessorV7(direct, uint64(len(data))); err != nil {
+		t.Fatalf("direct validation: %v", err)
+	}
+
+	source := &countingStateDomainReaderAt{reader: bytes.NewReader(data)}
+	buffered := acquireStateDomainChangeAccessorValidationReader(source, uint64(len(data)))
+	if err := checkStateDomainChangeBinaryAccessorV7(buffered, uint64(len(data))); err != nil {
+		releaseStateDomainChangeAccessorValidationReader(&buffered)
+		t.Fatalf("windowed validation: %v", err)
+	}
+	releaseStateDomainChangeAccessorValidationReader(&buffered)
+
+	fileWindows := (len(data) + stateDomainChangeAccessorValidationWindowSize - 1) / stateDomainChangeAccessorValidationWindowSize
+	maxSourceReads := 4*fileWindows + 2 // Allow alternating dictionary/posting windows.
+	if source.reads > maxSourceReads {
+		t.Fatalf("windowed V7 validation used %d source reads for %d bytes/%d windows, want <= %d", source.reads, len(data), fileWindows, maxSourceReads)
+	}
+	if direct.reads < source.reads*100 {
+		t.Fatalf("V7 validation source-read reduction = %d/%d, want at least 100x", direct.reads, source.reads)
+	}
+	t.Logf("V7 validation ReaderAt calls direct=%d windowed=%d bytes=%d", direct.reads, source.reads, len(data))
+}
+
+func TestStateDomainChangeV7SingleFrameBulkReadRejectsCorruption(t *testing.T) {
+	postings := []stateDomainChangeBinaryAccessorV6Posting{
+		{txNum: 100, offset: 50, recordIndex: 0},
+		{txNum: 102, offset: 75, recordIndex: 1},
+	}
+	encoded, err := encodeStateDomainChangeBinaryAccessorV7PostingList(100, postings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := stateDomainChangeBinaryAccessorV6Header{fromTxNum: 100, postingLen: uint64(len(encoded))}
+	record := stateDomainChangeBinaryAccessorV6Record{postings: uint32(len(postings))}
+	frame := stateDomainChangeBinaryAccessorV7Frame{count: uint16(len(postings)), dataOff: 1}
+	if _, err := stateDomainChangeBinaryAccessorV7ReadFrame(bytes.NewReader(encoded), h, record, frame); err != nil {
+		t.Fatalf("valid single frame: %v", err)
+	}
+
+	corrupt := append([]byte(nil), encoded...)
+	corrupt[1] ^= 0x01
+	if _, err := stateDomainChangeBinaryAccessorV7ReadFrame(bytes.NewReader(corrupt), h, record, frame); err == nil {
+		t.Fatal("bulk single-frame read accepted corrupt payload")
+	}
+
+	truncated := encoded[:len(encoded)-1]
+	h.postingLen = uint64(len(truncated))
+	if _, err := stateDomainChangeBinaryAccessorV7ReadFrame(bytes.NewReader(truncated), h, record, frame); err == nil {
+		t.Fatal("bulk single-frame read accepted truncated checksum")
+	}
+}
 
 func TestStateDomainChangeIndexV7RoundTripAndCorruption(t *testing.T) {
 	dir := t.TempDir()

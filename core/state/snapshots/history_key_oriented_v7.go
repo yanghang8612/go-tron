@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -21,7 +22,14 @@ const (
 	stateDomainChangeBinaryAccessorV7FrameDirSize  = uint64(24)
 	stateDomainChangeBinaryAccessorV7Single        = byte(0)
 	stateDomainChangeBinaryAccessorV7Framed        = byte(1)
+	stateDomainChangeBinaryAccessorV7SingleReadMax = int(stateDomainChangeBinaryAccessorV7FramePostings)*3*binary.MaxVarintLen64 + 4
 )
+
+type stateDomainChangeBinaryAccessorV7SingleReadBuffer [stateDomainChangeBinaryAccessorV7SingleReadMax]byte
+
+var stateDomainChangeBinaryAccessorV7SingleReadBufferPool = sync.Pool{
+	New: func() any { return new(stateDomainChangeBinaryAccessorV7SingleReadBuffer) },
+}
 
 type stateDomainChangeBinaryAccessorV7Frame struct {
 	firstTx uint64
@@ -402,45 +410,93 @@ func (r *readerByteReader) ReadByte() (byte, error) {
 }
 
 func stateDomainChangeBinaryAccessorV7ReadFrame(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record, frame stateDomainChangeBinaryAccessorV7Frame) ([]stateDomainChangeBinaryAccessorV6Posting, error) {
-	base := h.headerSize + h.blockDirLen + h.keyDataLen + record.postingOff
-	if frame.dataOff == 1 { // single frame: decode at most 128 triples, then checksum
-		cursor := &stateDomainChangeBinaryAccessorV7Cursor{r: r, off: base + 1, limit: h.headerSize + h.blockDirLen + h.keyDataLen + h.postingLen}
-		var raw []byte
-		for i := uint16(0); i < frame.count; i++ {
-			for j := 0; j < 3; j++ {
-				_, encoded, err := cursor.uvarint()
-				if err != nil {
-					return nil, err
-				}
-				raw = append(raw, encoded...)
-			}
-		}
-		var sum [4]byte
-		if _, err := r.ReadAt(sum[:], int64(cursor.off)); err != nil {
-			return nil, err
-		}
-		if binary.BigEndian.Uint32(sum[:]) != crc32.ChecksumIEEE(raw) {
-			return nil, errors.New("snapshots: V7 accessor single frame checksum mismatch")
-		}
-		return decodeStateDomainChangeBinaryAccessorV7Frame(raw, h.fromTxNum, frame.count)
-	}
-	raw := make([]byte, frame.dataLen)
-	if _, err := r.ReadAt(raw, int64(base+uint64(frame.dataOff))); err != nil {
-		return nil, err
-	}
-	if crc32.ChecksumIEEE(raw) != frame.crc {
-		return nil, errors.New("snapshots: V7 accessor posting frame checksum mismatch")
-	}
-	postings, err := decodeStateDomainChangeBinaryAccessorV7Frame(raw, h.fromTxNum, frame.count)
-	if err == nil && len(postings) > 0 && postings[0].txNum != frame.firstTx {
-		return nil, errors.New("snapshots: V7 accessor posting frame first tx mismatch")
-	}
+	postings, _, err := stateDomainChangeBinaryAccessorV7ReadFrameWithLength(r, h, record, frame)
 	return postings, err
 }
 
-type stateDomainChangeBinaryAccessorV7Cursor struct {
-	r          io.ReaderAt
-	off, limit uint64
+// stateDomainChangeBinaryAccessorV7ReadFrameWithLength returns the verified
+// postings and the end of this frame relative to the start of its key's
+// posting list. Validation uses the latter to prove contiguous key posting
+// streams without scanning a single-frame varint payload a second time.
+func stateDomainChangeBinaryAccessorV7ReadFrameWithLength(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record, frame stateDomainChangeBinaryAccessorV7Frame) ([]stateDomainChangeBinaryAccessorV6Posting, uint64, error) {
+	base := h.headerSize + h.blockDirLen + h.keyDataLen + record.postingOff
+	if frame.dataOff == 1 { // single frame: decode at most 128 triples, then checksum
+		scratch := stateDomainChangeBinaryAccessorV7SingleReadBufferPool.Get().(*stateDomainChangeBinaryAccessorV7SingleReadBuffer)
+		defer stateDomainChangeBinaryAccessorV7SingleReadBufferPool.Put(scratch)
+		raw, listLength, err := stateDomainChangeBinaryAccessorV7ReadSingleFrameData(r, h, record, frame.count, scratch[:])
+		if err != nil {
+			return nil, 0, err
+		}
+		postings, err := decodeStateDomainChangeBinaryAccessorV7Frame(raw, h.fromTxNum, frame.count)
+		return postings, listLength, err
+	}
+	raw := make([]byte, frame.dataLen)
+	if _, err := r.ReadAt(raw, int64(base+uint64(frame.dataOff))); err != nil {
+		return nil, 0, err
+	}
+	if crc32.ChecksumIEEE(raw) != frame.crc {
+		return nil, 0, errors.New("snapshots: V7 accessor posting frame checksum mismatch")
+	}
+	postings, err := decodeStateDomainChangeBinaryAccessorV7Frame(raw, h.fromTxNum, frame.count)
+	if err == nil && len(postings) > 0 && postings[0].txNum != frame.firstTx {
+		return nil, 0, errors.New("snapshots: V7 accessor posting frame first tx mismatch")
+	}
+	return postings, uint64(frame.dataOff) + uint64(frame.dataLen), err
+}
+
+// stateDomainChangeBinaryAccessorV7ReadSingleFrameData reads one complete
+// single-frame posting payload with a single bounded ReaderAt operation. The
+// layout omits an explicit payload length, but a frame contains at most 128
+// triples and every uint64 varint is at most ten bytes, so reading through that
+// strict maximum plus the checksum is enough to find the exact end safely.
+// Bytes belonging to the following key may be present in the scratch buffer;
+// they are never included in either decoding or checksum verification.
+func stateDomainChangeBinaryAccessorV7ReadSingleFrameData(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record, count uint16, scratch []byte) ([]byte, uint64, error) {
+	if count == 0 || uint32(count) != record.postings || uint32(count) > stateDomainChangeBinaryAccessorV7FramePostings {
+		return nil, 0, errors.New("snapshots: invalid V7 single posting frame count")
+	}
+	postingBase := h.headerSize + h.blockDirLen + h.keyDataLen
+	if record.postingOff >= h.postingLen {
+		return nil, 0, errors.New("snapshots: V7 accessor posting offset outside section")
+	}
+	start := postingBase + record.postingOff + 1
+	sectionEnd := postingBase + h.postingLen
+	if start > sectionEnd || sectionEnd-start < 4 {
+		return nil, 0, io.ErrUnexpectedEOF
+	}
+	maxRead := uint64(count)*3*binary.MaxVarintLen64 + 4
+	readLen := min(maxRead, sectionEnd-start)
+	if uint64(len(scratch)) < readLen {
+		return nil, 0, errors.New("snapshots: V7 single posting frame scratch buffer is too small")
+	}
+	buffer := scratch[:readLen]
+	if _, err := r.ReadAt(buffer, int64(start)); err != nil {
+		return nil, 0, err
+	}
+	pos := 0
+	for i := uint16(0); i < count; i++ {
+		for j := 0; j < 3; j++ {
+			if pos >= len(buffer) {
+				return nil, 0, io.ErrUnexpectedEOF
+			}
+			_, n := binary.Uvarint(buffer[pos:])
+			if n == 0 {
+				return nil, 0, io.ErrUnexpectedEOF
+			}
+			if n < 0 {
+				return nil, 0, errors.New("snapshots: oversized V7 accessor varint")
+			}
+			pos += n
+		}
+	}
+	if len(buffer)-pos < 4 {
+		return nil, 0, io.ErrUnexpectedEOF
+	}
+	raw := buffer[:pos]
+	if binary.BigEndian.Uint32(buffer[pos:pos+4]) != crc32.ChecksumIEEE(raw) {
+		return nil, 0, errors.New("snapshots: V7 accessor single frame checksum mismatch")
+	}
+	return raw, 1 + uint64(pos) + 4, nil
 }
 
 type stateDomainChangeBinaryAccessorV7PostingCursor struct {
@@ -524,29 +580,6 @@ func (c *stateDomainChangeBinaryAccessorV7PostingCursor) Next() (uint32, stateDo
 		c.block++
 		c.records, c.record, c.frames, c.frame, c.postings, c.posting = records, 0, nil, 0, nil, 0
 	}
-}
-
-func (c *stateDomainChangeBinaryAccessorV7Cursor) uvarint() (uint64, []byte, error) {
-	var raw []byte
-	for i := 0; i < binary.MaxVarintLen64; i++ {
-		if c.off >= c.limit {
-			return 0, raw, io.ErrUnexpectedEOF
-		}
-		var b [1]byte
-		if _, err := c.r.ReadAt(b[:], int64(c.off)); err != nil {
-			return 0, raw, err
-		}
-		c.off++
-		raw = append(raw, b[0])
-		if b[0] < 0x80 {
-			value, n := binary.Uvarint(raw)
-			if n <= 0 {
-				return 0, raw, errors.New("snapshots: invalid V7 accessor varint")
-			}
-			return value, raw, nil
-		}
-	}
-	return 0, raw, errors.New("snapshots: oversized V7 accessor varint")
 }
 
 func iterateStateDomainChangeBinarySegmentByAccessorV7Record(segment io.ReaderAt, segmentSize uint64, accessor io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
@@ -800,11 +833,13 @@ func checkStateDomainChangeBinaryAccessorV7(r io.ReaderAt, fileSize uint64) erro
 			}
 			var last stateDomainChangeBinaryAccessorV6Posting
 			var seen uint64
+			var postingListLength uint64
 			for _, frame := range frames {
-				rows, err := stateDomainChangeBinaryAccessorV7ReadFrame(r, h, record, frame)
+				rows, frameEnd, err := stateDomainChangeBinaryAccessorV7ReadFrameWithLength(r, h, record, frame)
 				if err != nil {
 					return err
 				}
+				postingListLength = max(postingListLength, frameEnd)
 				for _, p := range rows {
 					if p.txNum < h.fromTxNum || p.txNum > h.toTxNum || uint64(p.recordIndex) >= h.recordCount {
 						return errors.New("snapshots: V7 accessor posting outside segment bounds")
@@ -819,11 +854,7 @@ func checkStateDomainChangeBinaryAccessorV7(r io.ReaderAt, fileSize uint64) erro
 			if seen != uint64(record.postings) {
 				return errors.New("snapshots: V7 accessor posting count mismatch")
 			}
-			length, err := stateDomainChangeBinaryAccessorV7PostingListLength(r, h, record)
-			if err != nil {
-				return err
-			}
-			expectedOff += length
+			expectedOff += postingListLength
 			postings += seen
 			keys++
 			previous = record.key
@@ -841,16 +872,10 @@ func stateDomainChangeBinaryAccessorV7PostingListLength(r io.ReaderAt, h stateDo
 		return 0, err
 	}
 	if len(frames) == 1 && frames[0].dataOff == 1 {
-		base := h.headerSize + h.blockDirLen + h.keyDataLen + record.postingOff
-		cursor := &stateDomainChangeBinaryAccessorV7Cursor{r: r, off: base + 1, limit: h.headerSize + h.blockDirLen + h.keyDataLen + h.postingLen}
-		for i := uint32(0); i < record.postings; i++ {
-			for j := 0; j < 3; j++ {
-				if _, _, err := cursor.uvarint(); err != nil {
-					return 0, err
-				}
-			}
-		}
-		return cursor.off - (base + 1) + 5, nil
+		scratch := stateDomainChangeBinaryAccessorV7SingleReadBufferPool.Get().(*stateDomainChangeBinaryAccessorV7SingleReadBuffer)
+		defer stateDomainChangeBinaryAccessorV7SingleReadBufferPool.Put(scratch)
+		_, length, err := stateDomainChangeBinaryAccessorV7ReadSingleFrameData(r, h, record, frames[0].count, scratch[:])
+		return length, err
 	}
 	last := frames[len(frames)-1]
 	return uint64(last.dataOff) + uint64(last.dataLen), nil
