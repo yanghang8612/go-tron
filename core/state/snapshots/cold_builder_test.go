@@ -104,6 +104,17 @@ func TestColdBuilderConfigRejectsUnknownHistoryDataset(t *testing.T) {
 	}
 }
 
+func TestColdBuilderConfigRejectsSyncEventCatchupWithoutEventBuilds(t *testing.T) {
+	cfg := Config{
+		Dir:                        t.TempDir(),
+		Enabled:                    true,
+		BuildEventLogsWhileSyncing: true,
+	}.applyDefaults()
+	if err := cfg.validate(); err == nil {
+		t.Fatal("sync-time event-log catch-up without event-log builds accepted")
+	}
+}
+
 func TestColdBuilderOnePassBuildsStateDomainChangeHistoryAndManagerReads(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -758,6 +769,110 @@ func TestColdBuilderDecouplesAndRestartsDerivedSidecarCatchup(t *testing.T) {
 	covered, err := mgr.EventLogIndexedRangeCovered(1, 3)
 	if err != nil || !covered {
 		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+}
+
+func TestColdBuilderKeepsRequiredEventLogCoverageMovingDuringSync(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x8d)
+	address := eventLogTestAddress(0x8e)
+	for blockNum := uint64(1); blockNum <= 3; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		block, infos := coldBuilderEventLogBlock(t, blockNum, []*corepb.TransactionInfo_Log{{
+			Address: address,
+			Data:    []byte{byte(blockNum)},
+		}})
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(db, blockNum, infos); err != nil {
+			t.Fatalf("WriteTransactionInfosByBlock %d: %v", blockNum, err)
+		}
+	}
+	chain := &coldBuilderChain{
+		db: db, solidified: 4, syncRemaining: 1_000, syncRemainingOK: true,
+	}
+	cfg := Config{
+		Dir:                              dir,
+		Enabled:                          true,
+		HistoryWindow:                    1,
+		BatchBlocks:                      1,
+		DeferHistoryBuildWhileSyncing:    true,
+		MaxDeferredHistoryBlocks:         1,
+		DeferDerivedSidecarsWhileSyncing: true,
+		BuildEventLogs:                   true,
+		EventLogVersion:                  EventLogSegmentV4Version,
+	}
+
+	// Establish a restart-safe history/event-log gap using the normal sync-time
+	// deferral policy.
+	runner := NewRunner(chain, cfg)
+	for pass := uint64(1); pass <= 2; pass++ {
+		result, err := runner.OnePass()
+		if err != nil {
+			t.Fatalf("deferred sync pass %d: %v", pass, err)
+		}
+		if !result.Built || result.EventLogBuilt {
+			t.Fatalf("deferred sync pass %d = %+v, want history-only publication", pass, result)
+		}
+	}
+
+	// Direct V2 receipt-log externalization enables only the event-log family
+	// during sync. Its larger bounded range gets the shared heavy-work lease
+	// before another ready history batch could install a long cooldown.
+	cfg.DeferHistoryBuildWhileSyncing = false
+	cfg.BuildEventLogsWhileSyncing = true
+	cfg.SyncEventLogCatchupBlocks = 2
+	cfg.HeavyWorkGate = maintenance.NewHeavyWorkGateWithCooldown(time.Hour)
+	cfg.CatchupHeavyWorkCooldown = time.Hour
+	runner = NewRunner(chain, cfg)
+	critical, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("sync-critical event-log pass: %v", err)
+	}
+	if critical.Built || !critical.DerivedSidecarCatchup ||
+		!critical.EventLogBuilt || critical.DerivedSidecarsPending || critical.NeedsCatchup() {
+		t.Fatalf("sync-critical pass = %+v, want bounded event-log progress before history admission", critical)
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest after critical pass: %v", err)
+	}
+	manager, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager after critical pass: %v", err)
+	}
+	covered, err := manager.EventLogIndexedRangeCovered(1, 2)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered(1,2) = %v/%v, want true/nil; manifest=%+v", covered, err, manifest)
+	}
+	covered, err = manager.EventLogIndexedRangeCovered(1, 3)
+	if err != nil || covered {
+		t.Fatalf("EventLogIndexedRangeCovered(1,3) = %v/%v, want false/nil", covered, err)
+	}
+
+	// Once the pre-existing gap closes, history is admitted again and publishes
+	// its required event-log sidecar in the same heavy-work lease. This keeps the
+	// dependency aligned without alternating two cooldown-limited passes forever.
+	cfg.HeavyWorkGate = nil
+	cfg.CatchupHeavyWorkCooldown = 0
+	runner = NewRunner(chain, cfg)
+	final, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("history pass after event-log catch-up: %v", err)
+	}
+	if !final.Built || final.ToBlock != 3 || final.DerivedSidecarCatchup || !final.EventLogBuilt ||
+		final.DerivedSidecarsPending || final.NeedsCatchup() {
+		t.Fatalf("history pass after event-log catch-up = %+v, want aligned history and event-log publication", final)
+	}
+	manager, err = OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager after final pass: %v", err)
+	}
+	covered, err = manager.EventLogIndexedRangeCovered(1, 3)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered(1,3) = %v/%v, want true/nil", covered, err)
 	}
 }
 

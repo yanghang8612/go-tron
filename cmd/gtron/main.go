@@ -684,6 +684,15 @@ func gtron(ctx *cli.Context) error {
 				"bytes", stats.Bytes)
 		}
 	}
+	if stats, cleanupErr := statesnapshots.CleanupStaleTempFiles(stateSnapshotDir, statesnapshots.DefaultStaleTempFileAge); cleanupErr != nil {
+		log.Warn("Failed to clean stale snapshot temporary files", "dir", stateSnapshotDir, "err", cleanupErr)
+	} else if stats.Files != 0 {
+		log.Info("Cleaned stale snapshot temporary files",
+			"dir", stateSnapshotDir,
+			"files", stats.Files,
+			"bytes", stats.Bytes,
+			"minimumAge", statesnapshots.DefaultStaleTempFileAge)
+	}
 	// One process-wide verification cache connects the trusted handoff from
 	// cold-history/freezer builders to the live snapshot reader. Keeping the
 	// manager on a private cache would force it to replay freshly built event-log
@@ -1154,6 +1163,8 @@ func gtron(ctx *cli.Context) error {
 				DeferHistoryBuildWhileSyncing:    shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
 				MaxDeferredHistoryBlocks:         maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
 				DeferDerivedSidecarsWhileSyncing: buildDerivedSnapshots,
+				BuildEventLogsWhileSyncing:       buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
+				SyncEventLogCatchupBlocks:        freezerCfg.V2SegmentBlocks,
 			},
 			Pruner: statepruning.PrunerConfig{
 				Policy:                          prunePolicy,
@@ -1210,6 +1221,8 @@ func gtron(ctx *cli.Context) error {
 			"deferHistoryBuildWhileSyncing", shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
 			"maxDeferredHistoryBlocks", maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
 			"deferDerivedSidecarsWhileSyncing", buildDerivedSnapshots,
+			"buildEventLogsWhileSyncing", buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
+			"syncEventLogCatchupBlocks", freezerCfg.V2SegmentBlocks,
 			"maxPruneSyncLag", domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
 			"deferStateCodePruneWhileSyncing", prunePolicy.Mode == statepruning.ModeSnap,
 			"heavyWorkRecoveryCooldown", heavyWorkRecoveryCooldown,

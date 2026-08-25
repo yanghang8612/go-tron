@@ -127,7 +127,19 @@ type Config struct {
 	// caught up independently, from their manifest coverage to the verified
 	// StageSnapshotBuild boundary, once sync is idle. Their hot source rows stay
 	// protected because each sidecar pruner requires matching cold coverage.
+	// BuildEventLogsWhileSyncing may exempt event logs when direct V2 depends on
+	// them; balance traces and section blooms remain deferred.
 	DeferDerivedSidecarsWhileSyncing bool
+	// BuildEventLogsWhileSyncing keeps the event-log coverage required by the
+	// direct V2 freezer moving while the remaining rebuildable sidecars stay
+	// deferred. This is only needed when frozen transaction receipts externalize
+	// their logs into the authenticated event-log snapshot.
+	BuildEventLogsWhileSyncing bool
+	// SyncEventLogCatchupBlocks bounds one sync-time event-log catch-up range.
+	// Production aligns this with the direct V2 freezer segment size so every
+	// successful build can unblock at least one complete freezer segment. Zero
+	// falls back to BatchBlocks.
+	SyncEventLogCatchupBlocks uint64
 	// BuildSectionBlooms builds full-section cold section-bloom sidecars once
 	// the state-history cutoff has fully covered the source block section.
 	BuildSectionBlooms bool
@@ -473,6 +485,9 @@ func (c Config) validate() error {
 	if c.BatchBlocks == 0 {
 		return errors.New("snapshots: cold builder batch blocks is zero")
 	}
+	if c.BuildEventLogsWhileSyncing && !c.BuildEventLogs {
+		return errors.New("snapshots: sync-time event-log catch-up requires event-log builds")
+	}
 	if c.CatchupHeavyWorkCooldown < 0 {
 		return fmt.Errorf("snapshots: invalid catch-up heavy-work cooldown %s", c.CatchupHeavyWorkCooldown)
 	}
@@ -538,6 +553,8 @@ func (r *Runner) Start() error {
 			"sharedHeavyWorkGate", r.cfg.HeavyWorkGate != nil,
 			"compactMaxSteps", r.cfg.CompactMaxSteps,
 			"deferDerivedSidecarsWhileSyncing", r.cfg.DeferDerivedSidecarsWhileSyncing,
+			"buildEventLogsWhileSyncing", r.cfg.BuildEventLogsWhileSyncing,
+			"syncEventLogCatchupBlocks", r.cfg.SyncEventLogCatchupBlocks,
 			"sectionBloomBuild", r.cfg.BuildSectionBlooms,
 			"balanceTraceBuild", r.cfg.BuildBalanceTraces,
 			"eventLogBuild", r.cfg.BuildEventLogs)
@@ -650,32 +667,48 @@ func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 	defer r.passMu.Unlock()
 
 	start := time.Now()
-	phaseStart := start
-	result, err := r.onePass()
-	result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
-	if err == nil {
-		err = ctx.Err()
+	result := PassResult{}
+	var err error
+	// Direct V2 receipt publication is hard-bound to event-log coverage. Give
+	// an existing event-log gap first admission to the shared heavy-work gate;
+	// otherwise a successful history build installs a cooldown before the
+	// dependent sidecar can ever run while continuous sync keeps history ready.
+	syncCriticalAttempted := false
+	if err == nil && r.syncActive() && r.syncEventLogCatchupEnabled() {
+		syncCriticalAttempted, err = r.derivedSidecarCatchupPass(&result)
+		if err == nil {
+			err = ctx.Err()
+		}
 	}
-	if err == nil && !result.HistoryDeferred {
-		phaseStart = time.Now()
+	historyPassRan := false
+	if err == nil && !syncCriticalAttempted {
+		historyPassRan = true
+		phaseStart := time.Now()
+		result, err = r.onePass()
+		result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
+		if err == nil {
+			err = ctx.Err()
+		}
+	}
+	if err == nil && historyPassRan && !result.HistoryDeferred {
+		phaseStart := time.Now()
 		result.Compaction, err = r.compactHistory(result.HistoryNeedsCatchup())
 		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
 		if err == nil {
 			err = ctx.Err()
 		}
 	}
-	// State history is authoritative and drains first. Once it has no bounded
-	// batch to publish, independently fill rebuildable sidecar gaps. This makes
-	// sync-time deferral restart-safe without putting the optional work back on
-	// the canonical history publication path.
-	if err == nil && !result.Built && !result.HistoryDeferred {
-		err = r.derivedSidecarCatchupPass(&result)
+	// Once history has no bounded batch to publish, independently fill the
+	// remaining rebuildable sidecar gaps. Sync-critical event-log work already
+	// ran above and must not execute twice in one lifecycle pass.
+	if err == nil && historyPassRan && !result.Built && !result.HistoryDeferred {
+		_, err = r.derivedSidecarCatchupPass(&result)
 		if err == nil {
 			err = ctx.Err()
 		}
 	}
 	if err == nil {
-		phaseStart = time.Now()
+		phaseStart := time.Now()
 		built, deferred, perr := r.latestPassWithStatusContext(ctx)
 		result.LatestDuration = coldSnapshotPhaseDuration(phaseStart)
 		result.LatestDeferred = deferred
@@ -1012,13 +1045,19 @@ func (r *Runner) onePass() (PassResult, error) {
 	buildProgress.SetPhase("prepare-derived")
 	aggregator := NewAggregator(r.cfg.Dir)
 	buildDerivedSidecars := true
-	if r.cfg.DeferDerivedSidecarsWhileSyncing && r.syncActive() && r.derivedSidecarsConfigured() {
+	syncActive := r.syncActive()
+	if r.cfg.DeferDerivedSidecarsWhileSyncing && syncActive && r.derivedSidecarsConfigured() {
 		buildDerivedSidecars = false
 		result.DerivedSidecarsDeferred = true
 		result.DerivedSidecarsPending = true
 	}
+	// When V2 receipts externalize logs, a new history range must carry its
+	// event-log sidecar in the same admitted lease. Older event gaps are drained
+	// before history admission by OnePassContext; keeping the new boundary
+	// aligned avoids alternating history/event leases forever near the tip.
+	buildEventLogs := r.cfg.BuildEventLogs && (buildDerivedSidecars || (syncActive && r.syncEventLogCatchupEnabled()))
 	var chainDB *rawdb.ChainDB
-	if buildDerivedSidecars && (r.cfg.BuildBalanceTraces || r.cfg.BuildEventLogs) {
+	if (buildDerivedSidecars && r.cfg.BuildBalanceTraces) || buildEventLogs {
 		chainDB, err = r.derivedIndexChainDB()
 		if err != nil {
 			return PassResult{}, err
@@ -1040,7 +1079,7 @@ func (r *Runner) onePass() (PassResult, error) {
 	}
 	eventLogBuilt := false
 	var eventLogRef, eventLogIndexRef SegmentRef
-	if buildDerivedSidecars && r.cfg.BuildEventLogs {
+	if buildEventLogs {
 		buildProgress.SetPhase("event-log")
 		eventLogStarted := time.Now()
 		eventRefs, err := buildEventLogPairFromChain(chainDB, r.cfg.Dir, startBlock, cutoffBlock, EventLogBuildOptions{Version: r.cfg.EventLogVersion, ETL: r.cfg.ETL})
@@ -1590,43 +1629,62 @@ func (r *Runner) derivedSidecarsConfigured() bool {
 	return r != nil && (r.cfg.BuildBalanceTraces || r.cfg.BuildSectionBlooms || r.cfg.BuildEventLogs)
 }
 
+func (r *Runner) syncEventLogCatchupEnabled() bool {
+	return r != nil && r.cfg.BuildEventLogs && r.cfg.BuildEventLogsWhileSyncing
+}
+
 // derivedSidecarCatchupPass publishes at most one bounded missing range per
 // configured sidecar family. StageSnapshotBuild is hash-bound to the canonical
 // chain and therefore serves as the authoritative upper bound; each family's
-// active manifest coverage is its restart-safe cursor.
-func (r *Runner) derivedSidecarCatchupPass(result *PassResult) error {
+// active manifest coverage is its restart-safe cursor. The boolean reports
+// that a sync-critical event-log gap claimed this lifecycle pass, including a
+// gate deferral, so the caller does not let history take the same admission.
+func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (bool, error) {
 	if r == nil || result == nil || !r.cfg.Enabled || !r.derivedSidecarsConfigured() {
-		return nil
+		return false, nil
 	}
 	db := r.chain.DB()
 	if db == nil {
-		return errors.New("snapshots: nil derived sidecar catch-up database")
+		return false, errors.New("snapshots: nil derived sidecar catch-up database")
 	}
 	publishedBlock, ok, err := r.verifiedSnapshotBuildStageBlock(db)
 	if err != nil || !ok || publishedBlock == 0 {
-		return err
+		return false, err
 	}
 	manifest, err := loadOptionalProductionManifest(r.cfg.Dir)
 	if err != nil || manifest == nil {
-		return err
+		return false, err
 	}
 
 	plan, err := r.derivedSidecarCatchupPlan(manifest, publishedBlock)
 	if err != nil {
-		return err
+		return false, err
 	}
 	result.DerivedSidecarsPending = plan.pending()
 	// Reconcile the manifest-first/stage-second publication boundary even when
 	// another sidecar family is still blocked on incomplete hot source rows.
 	if err := r.reconcileEventLogBuildStage(manifest); err != nil {
-		return err
+		return false, err
 	}
 	if !result.DerivedSidecarsPending {
-		return nil
+		return false, nil
 	}
-	if r.syncActive() {
-		result.DerivedSidecarsDeferred = true
-		return nil
+	syncActive := r.syncActive()
+	syncCriticalEventLog := syncActive && r.syncEventLogCatchupEnabled() && plan.event != nil
+	if syncActive {
+		// Balance traces and section blooms are optional for direct V2 receipt
+		// publication and remain deferred during import. Event logs are different:
+		// externalized V2 receipts cannot be published without their authenticated
+		// cold coverage, so allow only that bounded family through the gate.
+		if !syncCriticalEventLog {
+			result.DerivedSidecarsDeferred = true
+			return false, nil
+		}
+		if plan.balance != nil || plan.section != nil {
+			result.DerivedSidecarsDeferred = true
+		}
+		plan.balance = nil
+		plan.section = nil
 	}
 	var release func()
 	var admitted bool
@@ -1638,24 +1696,31 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) error {
 	if !admitted {
 		result.DerivedSidecarsDeferred = true
 		result.HistoryRetryAfter = r.cfg.HeavyWorkGate.CooldownRemaining()
-		return nil
+		return syncCriticalEventLog, nil
 	}
 	defer release()
 
 	started := time.Now()
+	if syncCriticalEventLog {
+		coldSnapshotLog.Info("Sync-critical event-log catch-up started",
+			"fromBlock", plan.event.from,
+			"toBlock", plan.event.to,
+			"blocks", plan.event.to-plan.event.from+1,
+			"publishedHistoryBlock", publishedBlock)
+	}
 	refs := make([]SegmentRef, 0, 4)
 	var chainDB *rawdb.ChainDB
 	if plan.balance != nil || plan.event != nil {
 		chainDB, err = r.derivedIndexChainDB()
 		if err != nil {
-			return err
+			return syncCriticalEventLog, err
 		}
 	}
 	if plan.balance != nil {
 		phaseStarted := time.Now()
 		traceRefs, buildErr := r.balanceTracePass(chainDB, db, plan.balance.from, plan.balance.to)
 		if buildErr != nil {
-			return buildErr
+			return syncCriticalEventLog, buildErr
 		}
 		if len(traceRefs) > 0 {
 			refs = append(refs, traceRefs...)
@@ -1671,11 +1736,11 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) error {
 			ETL:     r.cfg.ETL,
 		})
 		if buildErr != nil {
-			return buildErr
+			return syncCriticalEventLog, buildErr
 		}
 		eventLogRef, eventLogIndexRef, buildErr = eventLogBuildCompanions(eventRefs)
 		if buildErr != nil {
-			return buildErr
+			return syncCriticalEventLog, buildErr
 		}
 		refs = append(refs, eventRefs...)
 		result.EventLogBuilt = true
@@ -1686,7 +1751,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) error {
 		ref, buildErr := BuildSectionBloomSegmentFromDBWithOptions(db, r.cfg.Dir,
 			SectionBloomSegmentPath(plan.section.from, plan.section.to), plan.section.from, plan.section.to, r.cfg.ETL)
 		if buildErr != nil {
-			return buildErr
+			return syncCriticalEventLog, buildErr
 		}
 		refs = append(refs, ref)
 		result.SectionBloomBuilt = true
@@ -1696,24 +1761,24 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) error {
 		// Balance-trace source coverage can be temporarily incomplete. Leave its
 		// hot rows and debt intact, but do not spin immediate catch-up passes.
 		result.DerivedSidecarDuration = coldSnapshotPhaseDuration(started)
-		return nil
+		return syncCriticalEventLog, nil
 	}
 
 	publishStarted := time.Now()
 	updated, err := NewAggregator(r.cfg.Dir).integrateWithManifest(manifest.VisibleTxStart, manifest.VisibleTxEnd, refs, manifest)
 	if err != nil {
-		return err
+		return syncCriticalEventLog, err
 	}
 	if result.EventLogBuilt {
 		eventRefs := []SegmentRef{eventLogRef, eventLogIndexRef}
 		if err := requireBuiltSegmentsActive(updated, eventRefs); err != nil {
-			return fmt.Errorf("snapshots: authenticate sidecar catch-up event-log range [%d,%d]: %w", plan.event.from, plan.event.to, err)
+			return syncCriticalEventLog, fmt.Errorf("snapshots: authenticate sidecar catch-up event-log range [%d,%d]: %w", plan.event.from, plan.event.to, err)
 		}
 		if err := r.cfg.ColdChainVerificationCache.recordTrustedEventLogs(r.cfg.Dir, eventLogIndexRef, []SegmentRef{eventLogRef}); err != nil {
-			return fmt.Errorf("snapshots: record trusted sidecar catch-up event-log range [%d,%d]: %w", plan.event.from, plan.event.to, err)
+			return syncCriticalEventLog, fmt.Errorf("snapshots: record trusted sidecar catch-up event-log range [%d,%d]: %w", plan.event.from, plan.event.to, err)
 		}
 		if err := writeEventLogBuildStage(chainDB, updated); err != nil {
-			return err
+			return syncCriticalEventLog, err
 		}
 	}
 	result.PublishDuration += coldSnapshotPhaseDuration(publishStarted)
@@ -1723,11 +1788,12 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) error {
 	result.Manifest = updated
 	nextPlan, err := r.derivedSidecarCatchupPlan(updated, publishedBlock)
 	if err != nil {
-		return err
+		return syncCriticalEventLog, err
 	}
 	result.DerivedSidecarsPending = nextPlan.pending()
 	coldSnapshotLog.Info("Derived cold sidecar catch-up published",
 		"publishedHistoryBlock", publishedBlock,
+		"syncCriticalEventLog", syncCriticalEventLog,
 		"refs", len(refs),
 		"bytes", segmentRefsSize(refs),
 		"balanceTraceBuilt", result.BalanceTraceBuilt,
@@ -1735,7 +1801,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) error {
 		"sectionBloomBuilt", result.SectionBloomBuilt,
 		"pending", result.DerivedSidecarsPending,
 		"elapsed", result.DerivedSidecarDuration.Round(time.Millisecond))
-	return nil
+	return syncCriticalEventLog, nil
 }
 
 type coldSidecarCatchupPlan struct {
@@ -1759,7 +1825,11 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 		}
 	}
 	if r.cfg.BuildEventLogs {
-		if next, ok := nextEventLogCatchupRange(manifest, publishedBlock, r.cfg.BatchBlocks); ok {
+		batchBlocks := r.cfg.BatchBlocks
+		if r.syncActive() && r.syncEventLogCatchupEnabled() && r.cfg.SyncEventLogCatchupBlocks > 0 {
+			batchBlocks = r.cfg.SyncEventLogCatchupBlocks
+		}
+		if next, ok := nextEventLogCatchupRange(manifest, publishedBlock, batchBlocks); ok {
 			plan.event = &next
 		}
 	}
