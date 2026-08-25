@@ -100,7 +100,12 @@ func (s *StateDB) readStateCode(hash tcommon.Hash) []byte {
 	if store == nil {
 		return nil
 	}
-	return store.ReadStateCode(hash)
+	if code, ok := s.cachedStateCode(hash, store); ok {
+		return code
+	}
+	code := store.ReadStateCode(hash)
+	s.admitStateCode(hash, code, store)
+	return code
 }
 
 func (s *StateDB) readStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
@@ -108,13 +113,21 @@ func (s *StateDB) readStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
 	if store == nil {
 		return nil, false, nil
 	}
+	if code, ok := s.cachedStateCode(hash, store); ok {
+		return code, true, nil
+	}
 	if strict, ok := store.(stateCodeStrictReader); ok {
-		return strict.ReadStateCodeStrict(hash)
+		code, found, err := strict.ReadStateCodeStrict(hash)
+		if err == nil && found {
+			s.admitStateCode(hash, code, store)
+		}
+		return code, found, err
 	}
 	code := store.ReadStateCode(hash)
 	if len(code) == 0 {
 		return nil, false, nil
 	}
+	s.admitStateCode(hash, code, store)
 	return append([]byte(nil), code...), true, nil
 }
 
@@ -124,4 +137,27 @@ func (s *StateDB) writeStateCode(hash tcommon.Hash, code []byte) error {
 		return errors.New("state code store: nil store")
 	}
 	return store.WriteStateCode(hash, code)
+}
+
+func (s *StateDB) cachedStateCode(hash tcommon.Hash, store stateCodeStore) ([]byte, bool) {
+	if s == nil || s.db == nil || s.db.codeCache == nil {
+		return nil, false
+	}
+	// Typed store overrides may represent a different logical database. Only
+	// raw stores wired to this Database (including blockbuffer reader overrides)
+	// participate in its cache.
+	if _, ok := store.(rawDBStateCodeStore); !ok {
+		return nil, false
+	}
+	return s.db.codeCache.get(hash)
+}
+
+func (s *StateDB) admitStateCode(hash tcommon.Hash, code []byte, store stateCodeStore) {
+	if s == nil || s.db == nil || s.db.codeCache == nil {
+		return
+	}
+	if _, ok := store.(rawDBStateCodeStore); !ok {
+		return
+	}
+	s.db.codeCache.admit(hash, code)
 }

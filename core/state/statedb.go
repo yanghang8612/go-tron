@@ -2829,6 +2829,9 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 		} else if s.codeColdHistory != nil {
 			if code, ok, err := s.codeColdHistory.GetCodeAtOrBefore(obj.codeHash, s.codeColdTxNum); err == nil && ok && len(code) > 0 {
 				obj.code = append([]byte(nil), code...)
+				if store := s.getStateCodeStore(); store != nil {
+					s.admitStateCode(obj.codeHash, obj.code, store)
+				}
 			}
 		}
 	}

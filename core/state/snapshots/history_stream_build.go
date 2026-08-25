@@ -466,11 +466,11 @@ func appendStateDomainChangeBinaryRecordFrame(dst []byte, change *rawdb.StateDom
 }
 
 func appendStateDomainChangeBinaryRecordFrameV6(dst []byte, change *rawdb.StateDomainChange, keyID uint32) ([]byte, error) {
-	payload, err := encodeStateDomainChangeRecordV6(change, keyID)
+	payloadSize, err := stateDomainChangeRecordV6PayloadSize(change)
 	if err != nil {
 		return nil, err
 	}
-	frameSize := 4 + len(payload)
+	frameSize := 4 + payloadSize
 	start := len(dst)
 	if cap(dst)-start < frameSize {
 		capacity := max(cap(dst)*2, start+frameSize)
@@ -479,8 +479,8 @@ func appendStateDomainChangeBinaryRecordFrameV6(dst []byte, change *rawdb.StateD
 		dst = grown
 	}
 	dst = dst[:start+frameSize]
-	binary.BigEndian.PutUint32(dst[start:start+4], uint32(len(payload)))
-	copy(dst[start+4:], payload)
+	binary.BigEndian.PutUint32(dst[start:start+4], uint32(payloadSize))
+	putStateDomainChangeRecordV6(dst[start+4:start+frameSize], change, keyID)
 	return dst, nil
 }
 

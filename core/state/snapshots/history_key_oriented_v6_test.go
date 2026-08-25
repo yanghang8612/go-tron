@@ -13,6 +13,7 @@ import (
 )
 
 var stateDomainChangeV6TokenBenchmarkSink uint64
+var stateDomainChangeV6FrameBenchmarkSink byte
 
 func BenchmarkStateDomainChangeV6BuildKeyToken(b *testing.B) {
 	key := bytes.Repeat([]byte("state-domain-owner-generation-key/"), 3)
@@ -35,6 +36,48 @@ func BenchmarkStateDomainChangeV6BuildKeyToken(b *testing.B) {
 		}
 		stateDomainChangeV6TokenBenchmarkSink = sink
 	})
+}
+
+func BenchmarkAppendStateDomainChangeBinaryRecordFrameV6(b *testing.B) {
+	change := &rawdb.StateDomainChange{
+		TxNum:      9_001,
+		PrevExists: true,
+		Prev:       bytes.Repeat([]byte{0x5a}, 128),
+	}
+	scratch := make([]byte, 0, 4+17+len(change.Prev))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		frame, err := appendStateDomainChangeBinaryRecordFrameV6(scratch[:0], change, uint32(i))
+		if err != nil {
+			b.Fatal(err)
+		}
+		stateDomainChangeV6FrameBenchmarkSink ^= frame[len(frame)-1]
+	}
+}
+
+func TestAppendStateDomainChangeBinaryRecordFrameV6MatchesPayloadEncoder(t *testing.T) {
+	for _, change := range []*rawdb.StateDomainChange{
+		{TxNum: 1},
+		{TxNum: 2, PrevExists: true},
+		{TxNum: 3, PrevExists: true, Prev: bytes.Repeat([]byte{0xa5}, 257)},
+	} {
+		const keyID = uint32(0x10203040)
+		payload, err := encodeStateDomainChangeRecordV6(change, keyID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, err := appendStateDomainChangeBinaryRecordFrameV6(make([]byte, 3, 3+4+len(payload)), change, keyID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := binary.BigEndian.Uint32(frame[3:7]), uint32(len(payload)); got != want {
+			t.Fatalf("frame payload length = %d, want %d", got, want)
+		}
+		if !bytes.Equal(frame[7:], payload) {
+			t.Fatalf("frame payload = %x, want %x", frame[7:], payload)
+		}
+	}
 }
 
 func TestStateDomainChangeKeyOrientedV6RoundTripAndLookups(t *testing.T) {

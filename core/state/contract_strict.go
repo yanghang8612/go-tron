@@ -63,7 +63,9 @@ func (s *StateDB) GetStateStrict(addr tcommon.Address, key tcommon.Hash) (tcommo
 	return h, nil
 }
 
-// GetCodeStrict returns live bytecode without hiding storage errors.
+// GetCodeStrict returns verified live bytecode. A database-owned positive cache
+// may satisfy the immutable content hash directly; on a cache miss, durable and
+// cold-history storage errors are preserved.
 func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 	obj := s.getStateObject(addr)
 	if obj == nil || obj.deleted {
@@ -85,6 +87,9 @@ func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 			return nil, err
 		} else if ok && len(code) > 0 {
 			obj.code = append([]byte(nil), code...)
+			if store := s.getStateCodeStore(); store != nil {
+				s.admitStateCode(obj.codeHash, obj.code, store)
+			}
 			return obj.code, nil
 		}
 	}

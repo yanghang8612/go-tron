@@ -17,6 +17,9 @@ type DatabaseConfig struct {
 	// java-tron accountStateRoot trie reads/writes. Internal full state no
 	// longer uses a trie-backed root.
 	CleanTrieCacheSizeBytes int
+	// CodeCacheSizeBytes bounds the database-owned cache of successfully read,
+	// content-addressed contract bytecode. Zero disables it.
+	CodeCacheSizeBytes int
 }
 
 // Database wraps state storage plus the independent java-tron accountStateRoot trie.
@@ -25,6 +28,7 @@ type Database struct {
 	trieDisk      ethdb.Database
 	trieDB        *triedb.Database
 	trieNodeCache *fastcache.Cache
+	codeCache     *stateCodeCache
 
 	// stateObjectPool spans the short-lived StateDB instances created when a
 	// sync drain ends at a temporary buffer gap. It is guarded because Database
@@ -35,7 +39,9 @@ type Database struct {
 
 // NewDatabase creates a state database.
 func NewDatabase(diskdb ethdb.Database) *Database {
-	return NewDatabaseWithConfig(diskdb, DatabaseConfig{})
+	return NewDatabaseWithConfig(diskdb, DatabaseConfig{
+		CodeCacheSizeBytes: DefaultStateCodeCacheSizeBytes,
+	})
 }
 
 // NewDatabaseWithConfig creates a state database with explicit trie cache
@@ -43,6 +49,9 @@ func NewDatabase(diskdb ethdb.Database) *Database {
 func NewDatabaseWithConfig(diskdb ethdb.Database, cfg DatabaseConfig) *Database {
 	if cfg.CleanTrieCacheSizeBytes < 0 {
 		cfg.CleanTrieCacheSizeBytes = 0
+	}
+	if cfg.CodeCacheSizeBytes < 0 {
+		cfg.CodeCacheSizeBytes = 0
 	}
 	trieDisk := diskdb
 	var trieNodeCache *fastcache.Cache
@@ -64,6 +73,7 @@ func NewDatabaseWithConfig(diskdb ethdb.Database, cfg DatabaseConfig) *Database 
 		trieDisk:      trieDisk,
 		trieDB:        trieDB,
 		trieNodeCache: trieNodeCache,
+		codeCache:     newStateCodeCache(cfg.CodeCacheSizeBytes),
 	}
 	return db
 }
@@ -83,8 +93,8 @@ func (db *Database) DiskDB() ethdb.Database {
 	return db.disk
 }
 
-// Close releases in-process trie caches. The underlying disk database remains
-// owned by the caller.
+// Close releases database-owned in-process caches. The underlying disk
+// database remains owned by the caller.
 func (db *Database) Close() error {
 	if db == nil {
 		return nil
@@ -93,6 +103,9 @@ func (db *Database) Close() error {
 	clear(db.stateObjectPool)
 	db.stateObjectPool = nil
 	db.stateObjectPoolMu.Unlock()
+	if db.codeCache != nil {
+		db.codeCache.close()
+	}
 	if db.trieDB == nil {
 		return nil
 	}

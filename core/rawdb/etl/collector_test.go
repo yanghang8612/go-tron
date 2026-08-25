@@ -1,6 +1,7 @@
 package etl
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -177,6 +178,27 @@ func TestCollectorSpilledRunRejectsTruncatedHeader(t *testing.T) {
 	}
 	if _, err := collector.Load(newRecordingWriter()); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("truncated run load err = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+}
+
+func TestWriteRunEntrySupportsBufferSmallerThanHeader(t *testing.T) {
+	var raw bytes.Buffer
+	writer := bufio.NewWriterSize(&raw, 8)
+	want := entry{key: []byte("key"), value: []byte("value"), op: opPut, seq: 19}
+	if err := writeRunEntry(writer, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(bytes.NewReader(raw.Bytes()))
+	var keyBuffer, valueBuffer []byte
+	got, err := readRunEntryReuse(reader, &keyBuffer, &valueBuffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.op != want.op || got.seq != want.seq || !bytes.Equal(got.key, want.key) || !bytes.Equal(got.value, want.value) {
+		t.Fatalf("decoded entry = %+v, want %+v", got, want)
 	}
 }
 
@@ -444,6 +466,45 @@ func BenchmarkCollectorSpilledRunMerge(b *testing.B) {
 	b.ReportMetric(float64(runCount), "runs")
 	for range b.N {
 		if err := collector.mergeRuns(newApplier(discardWriter{}, 1<<20), nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkCollectorEncodedSpillLifecycle models the fixed-width dictionary
+// and posting collectors used by state-history snapshot builds. Unlike the
+// merge-only benchmark above, it includes collection and spill-file encoding,
+// where per-row temporary allocations materially affect long-running sync.
+func BenchmarkCollectorEncodedSpillLifecycle(b *testing.B) {
+	const rows = 100_000
+	parent := b.TempDir()
+	b.ReportAllocs()
+	for range b.N {
+		collector, err := NewCollector(Options{TempDir: parent, BufferLimit: 512 << 10})
+		if err != nil {
+			b.Fatal(err)
+		}
+		for i := 0; i < rows; i++ {
+			if err := collector.PutEncoded(8, 18, func(key, value []byte) {
+				binary.BigEndian.PutUint64(key, uint64((i*104729)%rows))
+				binary.BigEndian.PutUint64(value, uint64(i))
+				binary.BigEndian.PutUint64(value[8:], uint64(rows-i))
+				binary.BigEndian.PutUint16(value[16:], uint16(i))
+			}); err != nil {
+				_ = collector.Close()
+				b.Fatal(err)
+			}
+		}
+		stats, err := collector.Load(discardWriter{})
+		if err != nil {
+			_ = collector.Close()
+			b.Fatal(err)
+		}
+		if stats.Applied != rows || stats.SpilledRuns < 2 {
+			_ = collector.Close()
+			b.Fatalf("stats = %+v, want %d applied across multiple runs", stats, rows)
+		}
+		if err := collector.Close(); err != nil {
 			b.Fatal(err)
 		}
 	}

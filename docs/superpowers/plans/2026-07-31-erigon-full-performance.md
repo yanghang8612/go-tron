@@ -560,6 +560,19 @@
 - [x] Reuse the top-127 standby reward set across unchanged blocks with a
   membership/vote generation guard, exact post-transaction rebuild, and
   maintenance/reorg/cross-block invalidation coverage.
+- [x] Share verified immutable contract code across short-lived StateDB views
+  through a database-owned byte-bounded LRU, with owned return values,
+  per-database isolation, strict-error preservation, metrics, and an operator
+  disable switch.
+- [x] Encode ETL run headers and streamed V6 state-history records without one
+  heap allocation per row while preserving byte-identical formats and the
+  unusually-small-buffer compatibility path.
+- [x] Adversarially review commitment read-ahead against the deployed CPU and
+  usefulness counters; retain the current implementation until origin-specific
+  telemetry can support a safe fixed-workload experiment.
+- [ ] Run the P5.42 production gate and compare code-cache hit/eviction/reject
+  rates, code/history durable reads, snapshot lifecycle allocations/CPU, ETL
+  spill throughput, importer busy ratio, and fixed-density transactions/s.
 - [ ] Run the P5.41 production gate and compare workload density, importer
   busy/wait, outside-transaction and execute-fixed ms/block, phase attribution,
   standby reuse/rebuild counts, and fixed-density transactions/s.

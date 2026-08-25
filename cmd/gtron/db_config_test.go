@@ -10,7 +10,7 @@ import (
 func makeDBFlagSet(t *testing.T, argv []string) *cli.Context {
 	t.Helper()
 	app := cli.NewApp()
-	app.Flags = []cli.Flag{dbCacheFlag, dbHandlesFlag, dbMemtableFlag, dbTargetFileSizeFlag, dbLBaseMaxSizeFlag, dbL0CompactionFlag, dbL0StopFlag, stateTrieCacheFlag}
+	app.Flags = []cli.Flag{dbCacheFlag, dbHandlesFlag, dbMemtableFlag, dbTargetFileSizeFlag, dbLBaseMaxSizeFlag, dbL0CompactionFlag, dbL0StopFlag, stateTrieCacheFlag, stateCodeCacheFlag}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
 	for _, f := range app.Flags {
 		if err := f.Apply(set); err != nil {
@@ -115,6 +115,9 @@ func TestMakeStateDatabaseConfigAutoScalesFromDBCache(t *testing.T) {
 	if cfg.CleanTrieCacheSizeBytes != 1024*1024*1024 {
 		t.Fatalf("clean trie cache=%d, want 1GiB", cfg.CleanTrieCacheSizeBytes)
 	}
+	if cfg.CodeCacheSizeBytes != 64*1024*1024 {
+		t.Fatalf("code cache=%d, want 64MiB", cfg.CodeCacheSizeBytes)
+	}
 }
 
 func TestMakeStateDatabaseConfigOverrideAndDisable(t *testing.T) {
@@ -142,5 +145,30 @@ func TestMakeStateDatabaseConfigRejectsInvalidValue(t *testing.T) {
 
 	if _, err := makeStateDatabaseConfig(ctx); err == nil {
 		t.Fatal("expected invalid trie cache to fail")
+	}
+
+	ctx = makeDBFlagSet(t, []string{"--state.code.cache", "-1"})
+	if _, err := makeStateDatabaseConfig(ctx); err == nil {
+		t.Fatal("expected invalid code cache to fail")
+	}
+}
+
+func TestMakeStateDatabaseConfigCodeCacheOverrideAndDisable(t *testing.T) {
+	ctx := makeDBFlagSet(t, []string{"--state.code.cache", "8"})
+	cfg, err := makeStateDatabaseConfig(ctx)
+	if err != nil {
+		t.Fatalf("override: %v", err)
+	}
+	if cfg.CodeCacheSizeBytes != 8*1024*1024 {
+		t.Fatalf("code cache=%d, want 8MiB", cfg.CodeCacheSizeBytes)
+	}
+
+	ctx = makeDBFlagSet(t, []string{"--state.code.cache", "0"})
+	cfg, err = makeStateDatabaseConfig(ctx)
+	if err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if cfg.CodeCacheSizeBytes != 0 {
+		t.Fatalf("disabled code cache=%d, want 0", cfg.CodeCacheSizeBytes)
 	}
 }

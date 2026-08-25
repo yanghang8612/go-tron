@@ -4726,6 +4726,40 @@ execute-fixed milliseconds/block, outside-transaction milliseconds/block,
 transactions/energy density, importer busy/wait ratios, state-code deferrals,
 and fixed-density transactions/s.
 
+#### P5.42: Shared immutable-code reuse and allocation-free cold writers
+
+The post-P5.41 profile showed that repeated contract-code reads still crossed
+short-lived `StateDB` boundaries and paid the durable or cold-history lookup
+again. `state.Database` now owns a byte-bounded LRU keyed by the immutable code
+hash. Admission is positive-only and recomputes Keccak-256 before retaining a
+caller-independent copy; cache hits also return owned bytes, so a mutable
+consumer cannot poison another execution view. Typed code-store overrides are
+excluded because they may represent a different logical database. The cache is
+64 MiB by default for the node, can be disabled with `--state.code.cache=0`, is
+released by `Database.Close`, and exports hits, misses, admissions, evictions,
+hash rejections, and current bytes. A warm strict read may continue to return
+authenticated code if its backing hot row was pruned or temporarily
+unavailable; this is valid because the account selects the content by hash, but
+the production gate must still watch rejection and miss behavior.
+
+Two lifecycle allocation sites are removed without changing their encodings.
+ETL spill headers are reserved directly in the existing `bufio.Writer` buffer,
+with the old allocating path retained for custom buffers smaller than the
+17-byte header. V6 state-history streaming writers now size the payload and
+encode it directly into the reusable length-delimited frame instead of
+allocating and copying an intermediate slice. Byte-equivalence, forced-spill,
+small-buffer, malformed-input, and race coverage guard both paths.
+
+The commitment read-ahead profile was reviewed adversarially but deliberately
+left unchanged. Durable cursor reads accounted for 84.5% of sampled prefetch
+CPU and 4.703 million of 5.985 million durable results were useful (78.6%).
+Planner work was negligible, Bloom positives cannot safely skip the underlying
+read, and current telemetry cannot attribute a useful result to critical versus
+lookahead origin. Removing lanes or depth under those conditions risks reducing
+foreground overlap without removing the dominant I/O. A future experiment must
+first add origin-specific usefulness/latency attribution and compare a fixed
+workload; the existing P5.37 gate remains authoritative.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

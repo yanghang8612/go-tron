@@ -827,18 +827,36 @@ func decodeStateDomainChangeBinaryAccessorKey(key []byte, change *rawdb.StateDom
 }
 
 func encodeStateDomainChangeRecordV6(change *rawdb.StateDomainChange, keyID uint32) ([]byte, error) {
-	if change == nil || uint64(len(change.Prev)) > math.MaxUint32 {
-		return nil, errors.New("snapshots: invalid V6 state-domain-change record")
+	payloadSize, err := stateDomainChangeRecordV6PayloadSize(change)
+	if err != nil {
+		return nil, err
 	}
-	payload := make([]byte, 4+8+1+4+len(change.Prev))
+	payload := make([]byte, payloadSize)
+	putStateDomainChangeRecordV6(payload, change, keyID)
+	return payload, nil
+}
+
+func stateDomainChangeRecordV6PayloadSize(change *rawdb.StateDomainChange) (int, error) {
+	if change == nil || uint64(len(change.Prev)) > math.MaxUint32 {
+		return 0, errors.New("snapshots: invalid V6 state-domain-change record")
+	}
+	return 4 + 8 + 1 + 4 + len(change.Prev), nil
+}
+
+// putStateDomainChangeRecordV6 encodes into exact-sized caller-owned storage.
+// Callers validate the change and reserve stateDomainChangeRecordV6PayloadSize
+// bytes first. Keeping this primitive allocation-free lets streaming snapshot
+// writers reuse their record scratch buffer without a payload copy.
+func putStateDomainChangeRecordV6(payload []byte, change *rawdb.StateDomainChange, keyID uint32) {
 	binary.BigEndian.PutUint32(payload[:4], keyID)
 	binary.BigEndian.PutUint64(payload[4:12], change.TxNum)
 	if change.PrevExists {
 		payload[12] = 1
+	} else {
+		payload[12] = 0
 	}
 	binary.BigEndian.PutUint32(payload[13:17], uint32(len(change.Prev)))
 	copy(payload[17:], change.Prev)
-	return payload, nil
 }
 
 func encodeStateDomainChangeBinarySegmentV6(fromTxNum, toTxNum uint64, changes []*rawdb.StateDomainChange, txRangeSets ...[]*rawdb.StateTxRange) ([]byte, []stateDomainChangeBinaryTxOffset, []byte, error) {

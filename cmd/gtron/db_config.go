@@ -70,8 +70,13 @@ func makeStateDatabaseConfig(ctx *cli.Context) (state.DatabaseConfig, error) {
 			trieCacheMiB = 1024
 		}
 	}
+	codeCacheMiB := intFlagOrDefault(ctx, "state.code.cache", stateCodeCacheFlag.Value)
+	if codeCacheMiB < 0 {
+		return state.DatabaseConfig{}, fmt.Errorf("--state.code.cache must be >= 0")
+	}
 	return state.DatabaseConfig{
 		CleanTrieCacheSizeBytes: trieCacheMiB * 1024 * 1024,
+		CodeCacheSizeBytes:      codeCacheMiB * 1024 * 1024,
 	}, nil
 }
 

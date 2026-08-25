@@ -806,16 +806,33 @@ func releaseEntryOrderBuffer(buffer *[]uint32, put func(any)) {
 	}
 }
 
-func writeRunEntry(w io.Writer, e entry) error {
+// writeRunEntry deliberately accepts the concrete buffered writer. Passing a
+// local header through io.Writer makes it escape on current Go compilers,
+// turning every spill row into a heap object. All production run files use a
+// large buffer, so reserving the header in that buffer removes the temporary.
+func writeRunEntry(w *bufio.Writer, e entry) error {
 	if uint64(len(e.key)) > uint64(^uint32(0)) || uint64(len(e.value)) > uint64(^uint32(0)) {
 		return errors.New("etl: key or value too large")
 	}
-	var header [runEntryHeaderSize]byte
+	if w.Available() < runEntryHeaderSize && w.Size() >= runEntryHeaderSize {
+		if err := w.Flush(); err != nil {
+			return err
+		}
+	}
+	var header []byte
+	if w.Available() >= runEntryHeaderSize {
+		// AvailableBuffer aliases the writer's existing buffer. Reserving the
+		// fixed header there avoids a stack array escaping through Write.
+		header = w.AvailableBuffer()[:runEntryHeaderSize]
+	} else {
+		// Preserve the old behavior for unusually small test/custom buffers.
+		header = make([]byte, runEntryHeaderSize)
+	}
 	header[0] = byte(e.op)
 	binary.BigEndian.PutUint64(header[1:9], e.seq)
 	binary.BigEndian.PutUint32(header[9:13], uint32(len(e.key)))
 	binary.BigEndian.PutUint32(header[13:17], uint32(len(e.value)))
-	if _, err := w.Write(header[:]); err != nil {
+	if _, err := w.Write(header); err != nil {
 		return err
 	}
 	if _, err := w.Write(e.key); err != nil {

@@ -275,6 +275,11 @@ var (
 		Usage: "Hash-trie clean-node cache size in MiB (-1 auto from --db.cache, 0 disables)",
 		Value: -1,
 	}
+	stateCodeCacheFlag = &cli.IntFlag{
+		Name:  "state.code.cache",
+		Usage: "Immutable contract bytecode cache size in MiB (0 disables)",
+		Value: state.DefaultStateCodeCacheSizeBytes / (1024 * 1024),
+	}
 	stateCommitmentCacheFlag = &cli.IntFlag{
 		Name:  "state.commitment.cache",
 		Usage: "Generation-safe commitment/flat-latest base-read cache size in MiB (0 disables)",
@@ -449,6 +454,7 @@ var app = &cli.App{
 		snapshotCatalogRetainFlag,
 		snapshotCatalogGraceFlag,
 		stateTrieCacheFlag,
+		stateCodeCacheFlag,
 		stateCommitmentCacheFlag,
 		configFileFlag,
 		dbCacheFlag,
@@ -778,6 +784,11 @@ func gtron(ctx *cli.Context) error {
 		log.Info("State trie node cache enabled", "cacheMiB", stateDBConfig.CleanTrieCacheSizeBytes/(1024*1024))
 	} else {
 		log.Info("State trie node cache disabled")
+	}
+	if stateDBConfig.CodeCacheSizeBytes > 0 {
+		log.Info("Immutable contract code cache enabled", "cacheMiB", stateDBConfig.CodeCacheSizeBytes/(1024*1024))
+	} else {
+		log.Info("Immutable contract code cache disabled")
 	}
 	commitmentCacheMiB := ctx.Int("state.commitment.cache")
 	if commitmentCacheMiB < 0 {
