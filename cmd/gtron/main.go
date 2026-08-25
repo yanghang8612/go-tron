@@ -1097,6 +1097,21 @@ func gtron(ctx *cli.Context) error {
 		coldStateSnapshotsEnabled := (historyMode == params.HistoryModeSnap || historyMode == params.HistoryModeArchive) && chainConfig.HistoryEnabled
 		buildDerivedSnapshots := historyMode == params.HistoryModeSnap
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
+		var syncEventLogTargetBlock func() (uint64, bool)
+		if buildDerivedSnapshots && freezerCfg.Enabled && freezerCfg.V2Enabled && freezerCfg.DirectV2 &&
+			freezerCfg.ExternalizeV2ReceiptLogs && ancientStore != nil && freezerCfg.V2SegmentBlocks > 0 {
+			syncEventLogTargetBlock = func() (uint64, bool) {
+				coverage := ancientStore.V2Coverage()
+				if !ancientStore.CanAppendV2Direct(coverage) ||
+					(freezerCfg.V2PromotionAllowed != nil && !freezerCfg.V2PromotionAllowed()) {
+					return 0, false
+				}
+				if coverage > ^uint64(0)-freezerCfg.V2SegmentBlocks {
+					return ^uint64(0), true
+				}
+				return coverage + freezerCfg.V2SegmentBlocks - 1, true
+			}
+		}
 		var chainLookupPrune statepruning.ChainLookupPruneFunc
 		var sectionBloomPrune statepruning.SectionBloomPruneFunc
 		var balanceTracePrune statepruning.BalanceTracePruneFunc
@@ -1165,6 +1180,7 @@ func gtron(ctx *cli.Context) error {
 				DeferDerivedSidecarsWhileSyncing: buildDerivedSnapshots,
 				BuildEventLogsWhileSyncing:       buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
 				SyncEventLogCatchupBlocks:        freezerCfg.V2SegmentBlocks,
+				SyncEventLogTargetBlock:          syncEventLogTargetBlock,
 			},
 			Pruner: statepruning.PrunerConfig{
 				Policy:                          prunePolicy,
@@ -1223,6 +1239,7 @@ func gtron(ctx *cli.Context) error {
 			"deferDerivedSidecarsWhileSyncing", buildDerivedSnapshots,
 			"buildEventLogsWhileSyncing", buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
 			"syncEventLogCatchupBlocks", freezerCfg.V2SegmentBlocks,
+			"syncEventLogFreezerHandoff", syncEventLogTargetBlock != nil,
 			"maxPruneSyncLag", domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
 			"deferStateCodePruneWhileSyncing", prunePolicy.Mode == statepruning.ModeSnap,
 			"heavyWorkRecoveryCooldown", heavyWorkRecoveryCooldown,

@@ -688,8 +688,6 @@ func TestColdBuilderDecouplesAndRestartsDerivedSidecarCatchup(t *testing.T) {
 		Enabled:                          true,
 		HistoryWindow:                    1,
 		BatchBlocks:                      1,
-		DeferHistoryBuildWhileSyncing:    true,
-		MaxDeferredHistoryBlocks:         1,
 		DeferDerivedSidecarsWhileSyncing: true,
 		BuildEventLogs:                   true,
 		EventLogVersion:                  EventLogSegmentV4Version,
@@ -798,8 +796,7 @@ func TestColdBuilderKeepsRequiredEventLogCoverageMovingDuringSync(t *testing.T) 
 		Enabled:                          true,
 		HistoryWindow:                    1,
 		BatchBlocks:                      1,
-		DeferHistoryBuildWhileSyncing:    true,
-		MaxDeferredHistoryBlocks:         1,
+		DeferHistoryBuildWhileSyncing:    false,
 		DeferDerivedSidecarsWhileSyncing: true,
 		BuildEventLogs:                   true,
 		EventLogVersion:                  EventLogSegmentV4Version,
@@ -808,7 +805,7 @@ func TestColdBuilderKeepsRequiredEventLogCoverageMovingDuringSync(t *testing.T) 
 	// Establish a restart-safe history/event-log gap using the normal sync-time
 	// deferral policy.
 	runner := NewRunner(chain, cfg)
-	for pass := uint64(1); pass <= 2; pass++ {
+	for pass := uint64(1); pass <= 3; pass++ {
 		result, err := runner.OnePass()
 		if err != nil {
 			t.Fatalf("deferred sync pass %d: %v", pass, err)
@@ -819,11 +816,13 @@ func TestColdBuilderKeepsRequiredEventLogCoverageMovingDuringSync(t *testing.T) 
 	}
 
 	// Direct V2 receipt-log externalization enables only the event-log family
-	// during sync. Its larger bounded range gets the shared heavy-work lease
-	// before another ready history batch could install a long cooldown.
-	cfg.DeferHistoryBuildWhileSyncing = false
+	// during sync. Cap it at the end of the next freezer segment even though the
+	// verified history boundary is farther ahead, so one successful build hands
+	// the shared heavy-work turn to V2 instead of immediately scheduling itself.
+	targetBlock := uint64(2)
 	cfg.BuildEventLogsWhileSyncing = true
 	cfg.SyncEventLogCatchupBlocks = 2
+	cfg.SyncEventLogTargetBlock = func() (uint64, bool) { return targetBlock, true }
 	cfg.HeavyWorkGate = maintenance.NewHeavyWorkGateWithCooldown(time.Hour)
 	cfg.CatchupHeavyWorkCooldown = time.Hour
 	runner = NewRunner(chain, cfg)
@@ -832,8 +831,9 @@ func TestColdBuilderKeepsRequiredEventLogCoverageMovingDuringSync(t *testing.T) 
 		t.Fatalf("sync-critical event-log pass: %v", err)
 	}
 	if critical.Built || !critical.DerivedSidecarCatchup ||
-		!critical.EventLogBuilt || critical.DerivedSidecarsPending || critical.NeedsCatchup() {
-		t.Fatalf("sync-critical pass = %+v, want bounded event-log progress before history admission", critical)
+		!critical.EventLogBuilt || !critical.EventLogFreezerHandoff ||
+		critical.DerivedSidecarsPending || critical.NeedsCatchup() {
+		t.Fatalf("sync-critical pass = %+v, want one bounded event-log segment and freezer handoff", critical)
 	}
 	manifest, err := LoadProductionManifest(dir)
 	if err != nil {
@@ -852,19 +852,27 @@ func TestColdBuilderKeepsRequiredEventLogCoverageMovingDuringSync(t *testing.T) 
 		t.Fatalf("EventLogIndexedRangeCovered(1,3) = %v/%v, want false/nil", covered, err)
 	}
 
-	// Once the pre-existing gap closes, history is admitted again and publishes
-	// its required event-log sidecar in the same heavy-work lease. This keeps the
-	// dependency aligned without alternating two cooldown-limited passes forever.
+	// Re-running before V2 advances must not build the next event-log range.
+	waiting, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("event-log pass while waiting for freezer: %v", err)
+	}
+	if waiting.EventLogBuilt || waiting.DerivedSidecarCatchup || waiting.NeedsCatchup() {
+		t.Fatalf("waiting pass = %+v, want no event-log work before freezer advances", waiting)
+	}
+
+	// Advancing V2 moves the callback target and admits exactly the next range.
+	targetBlock = 3
 	cfg.HeavyWorkGate = nil
 	cfg.CatchupHeavyWorkCooldown = 0
 	runner = NewRunner(chain, cfg)
 	final, err := runner.OnePass()
 	if err != nil {
-		t.Fatalf("history pass after event-log catch-up: %v", err)
+		t.Fatalf("event-log pass after freezer advance: %v", err)
 	}
-	if !final.Built || final.ToBlock != 3 || final.DerivedSidecarCatchup || !final.EventLogBuilt ||
+	if final.Built || !final.DerivedSidecarCatchup || !final.EventLogBuilt ||
 		final.DerivedSidecarsPending || final.NeedsCatchup() {
-		t.Fatalf("history pass after event-log catch-up = %+v, want aligned history and event-log publication", final)
+		t.Fatalf("event-log pass after freezer advance = %+v, want exactly the next range", final)
 	}
 	manager, err = OpenManager(dir)
 	if err != nil {
@@ -873,6 +881,45 @@ func TestColdBuilderKeepsRequiredEventLogCoverageMovingDuringSync(t *testing.T) 
 	covered, err = manager.EventLogIndexedRangeCovered(1, 3)
 	if err != nil || !covered {
 		t.Fatalf("EventLogIndexedRangeCovered(1,3) = %v/%v, want true/nil", covered, err)
+	}
+}
+
+func TestColdBuilderPrepareSeedsPersistedHistoryMetrics(t *testing.T) {
+	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
+	db := rawdb.NewMemoryDatabase()
+	snapshotHash := writeColdBuilderCanonicalBlock(t, db, 10)
+	finishHash := writeColdBuilderCanonicalBlock(t, db, 14)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSnapshotBuild, 10, snapshotHash); err != nil {
+		t.Fatalf("write snapshot-build stage: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 14, finishHash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 20}, Config{
+		Dir:              t.TempDir(),
+		Enabled:          true,
+		HistoryWindow:    5,
+		MetricsNamespace: namespace,
+	})
+	if err := runner.Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	stats := runner.Snapshot()
+	if stats.LastSolidified != 20 || stats.LastEligibleCutoffBlock != 14 ||
+		stats.LastCutoffBlock != 14 || stats.LastPublishedBlock != 10 || stats.LastLagBlocks != 4 {
+		t.Fatalf("seeded history stats = %+v", stats)
+	}
+	for suffix, want := range map[string]int64{
+		"last/solidified_block":      20,
+		"last/eligible_cutoff_block": 14,
+		"last/selected_cutoff_block": 14,
+		"last/published_block":       10,
+		"lag/blocks":                 4,
+	} {
+		if got := coldRunnerGaugeValue(t, namespace+suffix); got != want {
+			t.Fatalf("gauge %s = %d, want %d", suffix, got, want)
+		}
 	}
 }
 
@@ -3136,6 +3183,7 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"history/deferred/resource",
 		"sidecar/deferred/sync_or_resource",
 		"sidecar/catchup/builds",
+		"sidecar/event_log/freezer_handoffs",
 		"last/latest_build_block",
 	} {
 		metrics.DefaultRegistry.Unregister(namespace + suffix)

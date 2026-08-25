@@ -13,6 +13,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
+	"github.com/tronprotocol/go-tron/internal/tronapi"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"github.com/tronprotocol/go-tron/vm/tracers"
 )
@@ -52,6 +53,7 @@ type stubBackend struct {
 	freezerErr        error
 	stageStatus       *jsonrpc.StageStatus
 	stageErr          error
+	nodeInfo          *tronapi.NodeInfo
 
 	// Archive-query stubs: when atErr is non-nil the *At methods return it
 	// (used to exercise the history-disabled gate at the handler layer).
@@ -84,6 +86,12 @@ type stubBackend struct {
 
 func (s *stubBackend) ChainID() int64      { return s.chainID }
 func (s *stubBackend) BlockNumber() uint64 { return s.blockNumber }
+func (s *stubBackend) SyncInfo() *tronapi.SyncInfo {
+	if s.nodeInfo == nil {
+		return nil
+	}
+	return s.nodeInfo.Sync
+}
 func (s *stubBackend) GetBalance(addr common.Address) (int64, error) {
 	if s.liveErr != nil {
 		return 0, s.liveErr
@@ -340,6 +348,28 @@ func TestEthSyncing(t *testing.T) {
 	resp := rpcCall(t, srv, "eth_syncing", []interface{}{})
 	if resp["result"] != false {
 		t.Fatalf("eth_syncing should return false, got %v", resp["result"])
+	}
+}
+
+func TestEthSyncingReturnsLiveProgress(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{
+		blockNumber: 100,
+		nodeInfo: &tronapi.NodeInfo{Sync: &tronapi.SyncInfo{
+			Active:        true,
+			TargetHead:    200,
+			AppliedTip:    110,
+			SessionBlocks: 10,
+			Remaining:     90,
+		}},
+	})
+	defer srv.Close()
+	resp := rpcCall(t, srv, "eth_syncing", []interface{}{})
+	result, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("eth_syncing result = %#v, want progress object", resp["result"])
+	}
+	if result["startingBlock"] != "0x64" || result["currentBlock"] != "0x6e" || result["highestBlock"] != "0xc8" {
+		t.Fatalf("eth_syncing progress = %#v", result)
 	}
 }
 

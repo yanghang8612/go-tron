@@ -447,7 +447,7 @@ func (api *API) ethBlockNumber(_ json.RawMessage) (interface{}, error) {
 	return hexUint64(api.backend.BlockNumber()), nil
 }
 func (api *API) ethSyncing(_ json.RawMessage) (interface{}, error) {
-	return false, nil
+	return ethSyncingResult(api.backend.BlockNumber(), api.backend.SyncInfo()), nil
 }
 
 // resolveBlockArg parses the optional block-tag argument at params[idx]

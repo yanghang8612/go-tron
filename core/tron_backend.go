@@ -109,6 +109,16 @@ func (b *TronBackend) SetSyncInfoProvider(fn func() tronapi.SyncInfo) {
 	b.syncInfoFunc = fn
 }
 
+// SyncInfo returns a point-in-time downloader status for Ethereum-compatible
+// eth_syncing and the TRON node-info endpoint.
+func (b *TronBackend) SyncInfo() *tronapi.SyncInfo {
+	if b == nil || b.syncInfoFunc == nil {
+		return nil
+	}
+	info := b.syncInfoFunc()
+	return &info
+}
+
 // SetStateColdHistory wires snapshot-backed flat history into archive reads.
 // Hot rows remain the primary source; this reader supplies pruned
 // StateDomainChange rows and, when present, cold latest-domain segments after
@@ -244,10 +254,7 @@ func (b *TronBackend) GetNodeInfo() *tronapi.NodeInfo {
 		CurrentBlock:   current.Number(),
 		LastInsertTime: b.chain.LastInsertTime().UnixMilli(),
 	}
-	if b.syncInfoFunc != nil {
-		syncInfo := b.syncInfoFunc()
-		info.Sync = &syncInfo
-	}
+	info.Sync = b.SyncInfo()
 	return info
 }
 

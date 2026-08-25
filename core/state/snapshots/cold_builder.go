@@ -140,6 +140,13 @@ type Config struct {
 	// successful build can unblock at least one complete freezer segment. Zero
 	// falls back to BatchBlocks.
 	SyncEventLogCatchupBlocks uint64
+	// SyncEventLogTargetBlock returns the inclusive event-log block required by
+	// the next direct-V2 freezer segment. While sync is active, catch-up does not
+	// run past this target even when state history is much farther ahead. The
+	// freezer advance hook wakes the lifecycle after consuming the prepared
+	// segment, producing an explicit sidecar -> freezer handoff instead of letting
+	// consecutive event-log builds monopolize the shared heavy-work gate.
+	SyncEventLogTargetBlock func() (uint64, bool)
 	// BuildSectionBlooms builds full-section cold section-bloom sidecars once
 	// the state-history cutoff has fully covered the source block section.
 	BuildSectionBlooms bool
@@ -203,6 +210,7 @@ type PassResult struct {
 	DerivedSidecarCatchup   bool
 	DerivedSidecarsPending  bool
 	DerivedSidecarsDeferred bool
+	EventLogFreezerHandoff  bool
 	CatalogPublished        bool
 	Manifest                *Manifest
 	HistoryDuration         time.Duration
@@ -261,6 +269,7 @@ type Stats struct {
 	HistoryGateDeferred      uint64
 	DerivedSidecarsDeferred  uint64
 	DerivedSidecarCatchups   uint64
+	EventLogFreezerHandoffs  uint64
 	LastLatestBuildBlock     uint64
 }
 
@@ -292,6 +301,7 @@ type coldRunnerMetrics struct {
 	historyGateDeferred      *metrics.Gauge
 	derivedSidecarsDeferred  *metrics.Gauge
 	derivedSidecarCatchups   *metrics.Gauge
+	eventLogFreezerHandoffs  *metrics.Gauge
 	lastLatestBuildBlock     *metrics.Gauge
 }
 
@@ -325,6 +335,7 @@ func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 		historyGateDeferred:      metrics.GetOrRegisterGauge(namespace+"history/deferred/resource", nil),
 		derivedSidecarsDeferred:  metrics.GetOrRegisterGauge(namespace+"sidecar/deferred/sync_or_resource", nil),
 		derivedSidecarCatchups:   metrics.GetOrRegisterGauge(namespace+"sidecar/catchup/builds", nil),
+		eventLogFreezerHandoffs:  metrics.GetOrRegisterGauge(namespace+"sidecar/event_log/freezer_handoffs", nil),
 		lastLatestBuildBlock:     metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
 	}
 }
@@ -367,6 +378,7 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.historyGateDeferred.Update(coldSnapshotUintGauge(stats.HistoryGateDeferred))
 	m.derivedSidecarsDeferred.Update(coldSnapshotUintGauge(stats.DerivedSidecarsDeferred))
 	m.derivedSidecarCatchups.Update(coldSnapshotUintGauge(stats.DerivedSidecarCatchups))
+	m.eventLogFreezerHandoffs.Update(coldSnapshotUintGauge(stats.EventLogFreezerHandoffs))
 	m.lastLatestBuildBlock.Update(coldSnapshotUintGauge(stats.LastLatestBuildBlock))
 }
 
@@ -422,6 +434,7 @@ type Runner struct {
 	historyGateDeferred      atomic.Uint64
 	derivedSidecarsDeferred  atomic.Uint64
 	derivedSidecarCatchups   atomic.Uint64
+	eventLogFreezerHandoffs  atomic.Uint64
 	lastHistoryBuildAt       atomic.Int64
 	lastHistoryPublishLogAt  atomic.Int64
 	historyPublishSuppressed atomic.Uint64
@@ -581,6 +594,14 @@ func (r *Runner) Prepare() error {
 			r.prepareErr = errors.New("snapshots: nil cold builder chain or database")
 			return
 		}
+		// Seed operator-visible history/latest progress before the first pass. A
+		// sync-critical sidecar pass may legitimately run before another history
+		// eligibility pass; without this restart seed every history gauge remained
+		// zero even though the persisted manifest and hash-bound stage were healthy.
+		if err := r.seedHistoryProgress(); err != nil {
+			r.prepareErr = err
+			return
+		}
 		// Seed from the hash-bound persisted stage when present; a fresh node
 		// uses its current solidified watermark so the first lifecycle tick does
 		// not launch a redundant full-keyspace latest snapshot scan.
@@ -642,6 +663,7 @@ func (r *Runner) Snapshot() Stats {
 		HistoryGateDeferred:      r.historyGateDeferred.Load(),
 		DerivedSidecarsDeferred:  r.derivedSidecarsDeferred.Load(),
 		DerivedSidecarCatchups:   r.derivedSidecarCatchups.Load(),
+		EventLogFreezerHandoffs:  r.eventLogFreezerHandoffs.Load(),
 		LastLatestBuildBlock:     r.lastLatestBuildBlock.Load(),
 	}
 }
@@ -1791,9 +1813,12 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (bool, error) {
 		return syncCriticalEventLog, err
 	}
 	result.DerivedSidecarsPending = nextPlan.pending()
+	result.EventLogFreezerHandoff = syncCriticalEventLog && result.EventLogBuilt &&
+		plan.eventTargetCapped && nextPlan.event == nil
 	coldSnapshotLog.Info("Derived cold sidecar catch-up published",
 		"publishedHistoryBlock", publishedBlock,
 		"syncCriticalEventLog", syncCriticalEventLog,
+		"freezerHandoff", result.EventLogFreezerHandoff,
 		"refs", len(refs),
 		"bytes", segmentRefsSize(refs),
 		"balanceTraceBuilt", result.BalanceTraceBuilt,
@@ -1805,9 +1830,10 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (bool, error) {
 }
 
 type coldSidecarCatchupPlan struct {
-	balance *coldSidecarBlockRange
-	event   *coldSidecarBlockRange
-	section *coldSidecarBlockRange
+	balance           *coldSidecarBlockRange
+	event             *coldSidecarBlockRange
+	section           *coldSidecarBlockRange
+	eventTargetCapped bool
 }
 
 func (p coldSidecarCatchupPlan) pending() bool {
@@ -1826,10 +1852,19 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 	}
 	if r.cfg.BuildEventLogs {
 		batchBlocks := r.cfg.BatchBlocks
-		if r.syncActive() && r.syncEventLogCatchupEnabled() && r.cfg.SyncEventLogCatchupBlocks > 0 {
-			batchBlocks = r.cfg.SyncEventLogCatchupBlocks
+		eventTargetBlock := publishedBlock
+		if r.syncActive() && r.syncEventLogCatchupEnabled() {
+			if r.cfg.SyncEventLogCatchupBlocks > 0 {
+				batchBlocks = r.cfg.SyncEventLogCatchupBlocks
+			}
+			if r.cfg.SyncEventLogTargetBlock != nil {
+				if target, ok := r.cfg.SyncEventLogTargetBlock(); ok && target < eventTargetBlock {
+					eventTargetBlock = target
+					plan.eventTargetCapped = true
+				}
+			}
 		}
-		if next, ok := nextEventLogCatchupRange(manifest, publishedBlock, batchBlocks); ok {
+		if next, ok := nextEventLogCatchupRange(manifest, eventTargetBlock, batchBlocks); ok {
 			plan.event = &next
 		}
 	}
@@ -1997,6 +2032,9 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	if result.DerivedSidecarCatchup {
 		r.derivedSidecarCatchups.Add(1)
 	}
+	if result.EventLogFreezerHandoff {
+		r.eventLogFreezerHandoffs.Add(1)
+	}
 	if result.LatestDeferred {
 		r.latestDeferredSync.Add(1)
 	}
@@ -2139,6 +2177,56 @@ func (r *Runner) seedLatestBuildBlock() error {
 	if ok {
 		r.lastLatestBuildBlock.Store(block)
 	}
+	return nil
+}
+
+// seedHistoryProgress restores the durable history position into the
+// process-local gauges. It is read-only: crash-boundary stage reconciliation
+// remains owned by the normal history pass, while startup metrics only accept a
+// hash-verified SnapshotBuild row.
+func (r *Runner) seedHistoryProgress() error {
+	if r == nil || !r.cfg.Enabled || r.chain == nil || r.chain.DB() == nil {
+		return nil
+	}
+	solidified := r.chain.LatestSolidifiedBlockNum()
+	if solidified <= 0 {
+		return nil
+	}
+	db := r.chain.DB()
+	cutoffBlock := uint64(0)
+	if uint64(solidified) >= r.cfg.HistoryWindow {
+		cutoffBlock = uint64(solidified) - r.cfg.HistoryWindow
+		finishStage, ok, err := r.verifiedFinishStageBlock(db)
+		if err != nil {
+			return err
+		}
+		if ok && finishStage < cutoffBlock {
+			cutoffBlock = finishStage
+		}
+	}
+	publishedBlock, _, err := r.verifiedSnapshotBuildStageBlock(db)
+	if err != nil {
+		return err
+	}
+	manifest, err := loadOptionalProductionManifest(r.cfg.Dir)
+	if err != nil {
+		return err
+	}
+	visibleTxEnd, err := coldSnapshotVisibleTxEndFromManifest(manifest, r.cfg.HistoryDataset)
+	if err != nil {
+		return err
+	}
+	lagBlocks := uint64(0)
+	if cutoffBlock > publishedBlock {
+		lagBlocks = cutoffBlock - publishedBlock
+	}
+	r.lastSolidified.Store(uint64(solidified))
+	r.lastCutoffBlock.Store(cutoffBlock)
+	r.lastEligibleCutoff.Store(cutoffBlock)
+	r.lastPublishedBlock.Store(publishedBlock)
+	r.lastLagBlocks.Store(lagBlocks)
+	r.lastVisibleTxEnd.Store(visibleTxEnd)
+	r.updateMetrics()
 	return nil
 }
 

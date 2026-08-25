@@ -5,6 +5,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/internal/tronapi"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"github.com/tronprotocol/go-tron/vm/tracers"
 )
@@ -200,6 +201,7 @@ type Backend interface {
 	// Node metadata
 	GasPrice() int64 // energy fee in SUN per energy unit
 	PeerCount() int
+	SyncInfo() *tronapi.SyncInfo
 	FreezerStatus() (*FreezerStatus, error)
 	StageStatus() (*StageStatus, error)
 

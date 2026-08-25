@@ -9,6 +9,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/internal/tronapi"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -84,9 +85,46 @@ func (e *EthAPI) ChainId() string { return hexUint64(uint64(e.backend.ChainID())
 // BlockNumber serves eth_blockNumber: the current head height as 0x-hex.
 func (e *EthAPI) BlockNumber() string { return hexUint64(e.backend.BlockNumber()) }
 
-// Syncing serves eth_syncing. go-tron always reports false here, mirroring the
-// legacy handler; sync progress is surfaced through the TRON HTTP API instead.
-func (e *EthAPI) Syncing() bool { return false }
+// SyncProgress is the standard Ethereum eth_syncing object. The fields are
+// hexadecimal block quantities, matching geth and Erigon.
+type SyncProgress struct {
+	StartingBlock string `json:"startingBlock"`
+	CurrentBlock  string `json:"currentBlock"`
+	HighestBlock  string `json:"highestBlock"`
+}
+
+// Syncing serves eth_syncing. Backends without downloader diagnostics retain
+// the historical false result, while the production TronBackend exposes the
+// live session already used by the HTTP node-info endpoint.
+func (e *EthAPI) Syncing() interface{} {
+	return ethSyncingResult(e.backend.BlockNumber(), e.backend.SyncInfo())
+}
+
+func ethSyncingResult(head uint64, syncInfo *tronapi.SyncInfo) interface{} {
+	if syncInfo == nil {
+		return false
+	}
+	current := head
+	if syncInfo.AppliedTip > current {
+		current = syncInfo.AppliedTip
+	}
+	highest := syncInfo.TargetHead
+	if syncInfo.Remaining > 0 && uint64(syncInfo.Remaining) <= ^uint64(0)-current {
+		highest = max(highest, current+uint64(syncInfo.Remaining))
+	}
+	if !syncInfo.Active && !syncInfo.Paused && syncInfo.Remaining <= 0 && highest <= current {
+		return false
+	}
+	starting := current
+	if syncInfo.SessionBlocks > 0 && uint64(syncInfo.SessionBlocks) <= current {
+		starting -= uint64(syncInfo.SessionBlocks)
+	}
+	return SyncProgress{
+		StartingBlock: hexUint64(starting),
+		CurrentBlock:  hexUint64(current),
+		HighestBlock:  hexUint64(max(highest, current)),
+	}
+}
 
 // GasPrice serves eth_gasPrice: the energy fee in SUN as 0x-hex.
 func (e *EthAPI) GasPrice() string { return hexUint64(uint64(e.backend.GasPrice())) }
