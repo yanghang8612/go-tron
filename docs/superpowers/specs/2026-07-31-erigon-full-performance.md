@@ -4845,6 +4845,50 @@ and work-normalized transactions/s. Acceptance also requires unchanged cold
 errors, exact manifest/event-index coverage, and no starvation regression after
 the event gap closes.
 
+#### P5.45: Conservative transaction-ID streaming and bounded freezer telemetry
+
+The August 28 mainnet sample, with canonical parallel transfer and VM both
+disabled, attributed 10.29% cumulative process CPU to freezer transaction-index
+entry iteration and 3.43% to the observational hot-block namespace scan. These
+are background CPU shares, not additive predictions of end-to-end throughput.
+
+Transaction-index building and pruning now share a conservative streaming
+transaction-ID visitor. A schema-derived recognizer accepts only wire messages
+whose typed decode/marshal is unchanged: known supported fields, canonical
+order and varints, no duplicate singular fields or encoded scalar defaults,
+valid strings, and fully validated nested envelopes. Only after validating the
+whole block does it hash the original raw_data bytes in ordinal order. All
+other encodings use the existing borrowed decoder and Transaction.Hash,
+including unknown fields and historical pre-PQ data. Callback errors never
+trigger fallback or replay. This removes the common-case protobuf object graph
+and remarshal without trusting truncated cold-index fingerprints as full IDs.
+Ancient reads and SHA-256 remain; no persistent format, publication/coverage,
+prune cursor, batching, or durability boundary changes.
+
+The diagnostic b-* size scan now stops at 1,024 rows, 8 MiB of logical bytes,
+or a soft 25 ms limit. Each observation comes from one iterator, which is
+released within the call; no long-lived snapshot or cross-pass estimate is
+introduced. The last row can exceed the byte budget, and a single database
+operation is not interruptible. Size, row count, completeness, and sample time
+are published together to Runner.Snapshot. Failed or cancelled scans retain
+the previous observation and timestamp and continue reporting the error.
+Already completed freezing is counted before this diagnostic step.
+
+`chain/freezer/pebble/size` is now only a prefix lower bound when
+`pebble/size/complete=0`; it must not be interpreted as total live bytes or
+physical disk usage. Consumers must also read `pebble/size/rows` and
+`pebble/size/sampled_at`. Frozen progress, canonical head, and V2 backlog remain
+the backlog-growth signals. See the [operator notes](../../dev/erigon-storage-benchmark.md).
+
+Acceptance requires byte-identical IDs and ordinals against the established
+decoder, differential fuzzing, preserved lookup after partial prune failures
+and cancellation, stage/coverage bounds, and race-clean sample publication.
+Production acceptance remains a separate matched-workload resample: compare
+transaction density, energy, CPU per block, allocation rate, cold lifecycle
+progress/errors, compaction, and sustained blocks/s and transactions/s. Neither
+microbenchmarks nor these CPU shares justify enabling canonical parallel
+execution or predicting an equivalent whole-node speedup.
+
 ## Benchmark And Production Acceptance
 
 All comparisons use the same binary settings, datadir snapshot, hardware, Go

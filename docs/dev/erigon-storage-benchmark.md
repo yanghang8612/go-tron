@@ -263,10 +263,19 @@ For long-running sync/freezer drills, also scrape
 `/debug/metrics?prefix=chain/freezer/`. The runner exports the visible frozen
 range (`frozen/min`, `frozen/max`, `frozen/has`), cumulative progress
 (`blocks`, `passes`), latest pass wall-clock fields (`lastpass/time`,
-`lastpass/duration` in nanoseconds), and the sampled hot block-row footprint
-(`pebble/size`). These are the primary live signals for confirming that a
-fresh follower is draining historical block rows into ancient files instead of
-leaking them in Pebble.
+`lastpass/duration` in nanoseconds), and sampled logical hot block-row bytes
+(`pebble/size`, b-* keys and values only, excluding receipts and physical SST
+overhead). Size sampling is bounded to 1,024 rows, 8 MiB, or 25 ms per pass;
+one iterator operation is not interruptible, and the last row can exceed the
+byte budget. Always inspect `pebble/size/complete`, `pebble/size/rows`, and
+`pebble/size/sampled_at` (Unix seconds) alongside the size. With `complete=0`,
+the size is only a prefix lower bound, not a full-size estimate or evidence
+that the namespace has stopped growing. A zero timestamp means no successful
+sample yet; errors/cancellation leave the previous sample and timestamp intact.
+For large backlogs, compare frozen progress with the canonical head and
+`v2/backlog/blocks` / `v2/backlog/segments` to confirm draining. No-op passes
+do not refresh the size sample. These runner metrics are separate from
+`gtron_freezerStatus`, which reports immutable-store bounds and physical files.
 
 `scripts/dev/storage_benchmark.sh` runs
 `gtron db storage-alerts --json --datadir <dir>` before emitting each JSONL row.

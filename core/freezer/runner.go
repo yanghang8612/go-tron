@@ -379,18 +379,24 @@ type Stats struct {
 	// LastPassDuration is the wall-clock duration of the most recent
 	// pass. p99 latency dashboards layer over this.
 	LastPassDuration time.Duration
-	// PebbleSizeAfter is an approximate footprint of the still-hot
-	// `b-<num>` + `tib-<num>` rows after the most recent pass. Sampled
-	// via an iterator pass on the prefix; expensive enough that the
-	// runner samples only at the end of each pass, not per-block.
-	PebbleSizeAfter     uint64
-	V2Coverage          uint64
-	V2BlocksCompacted   uint64
-	V2BacklogBlocks     uint64
-	V2BacklogSegments   uint64
-	V2LastBatchSegments uint64
-	V2LastBatchDuration time.Duration
-	V2BudgetExhausted   uint64
+	// PebbleSizeAfter is sampled logical key+value bytes for still-hot b-*
+	// rows only, not physical Pebble bytes or receipts. The scan is bounded:
+	// when PebbleSizeAfterComplete is false this is only a prefix lower bound,
+	// NOT a total-size estimate or a valid full-namespace growth trend. Use
+	// V2BacklogBlocks to observe the backlog while the size scan is incomplete.
+	// A zero SampledAt means no sample; failed/cancelled scans retain the last
+	// successful sample and its original timestamp.
+	PebbleSizeAfter          uint64
+	PebbleSizeAfterRows      uint64
+	PebbleSizeAfterComplete  bool
+	PebbleSizeAfterSampledAt time.Time
+	V2Coverage               uint64
+	V2BlocksCompacted        uint64
+	V2BacklogBlocks          uint64
+	V2BacklogSegments        uint64
+	V2LastBatchSegments      uint64
+	V2LastBatchDuration      time.Duration
+	V2BudgetExhausted        uint64
 	// TransactionIndexCoverage is the first block not covered by an immutable
 	// index run. TransactionIndexPruned is the exclusive hot-row deletion
 	// cursor and must never advance beyond coverage.
@@ -410,34 +416,37 @@ type Stats struct {
 }
 
 type runnerMetrics struct {
-	frozenMin               *metrics.Gauge
-	frozenMax               *metrics.Gauge
-	frozenHas               *metrics.Gauge
-	blocksFrozen            *metrics.Gauge
-	passesCompleted         *metrics.Gauge
-	lastPassAt              *metrics.Gauge
-	lastPassDuration        *metrics.Gauge
-	pebbleSizeAfter         *metrics.Gauge
-	v2Coverage              *metrics.Gauge
-	v2Blocks                *metrics.Gauge
-	v2BacklogBlocks         *metrics.Gauge
-	v2BacklogSegments       *metrics.Gauge
-	v2LastBatchSegments     *metrics.Gauge
-	v2LastBatchDuration     *metrics.Gauge
-	v2BudgetExhausted       *metrics.Gauge
-	txIndexCoverage         *metrics.Gauge
-	txIndexPruned           *metrics.Gauge
-	txIndexArchived         *metrics.Gauge
-	txIndexRowsPruned       *metrics.Gauge
-	v2CatchupDeferred       *metrics.Gauge
-	v2ResourceDeferred      *metrics.Gauge
-	v2ErrorBackoffDeferred  *metrics.Gauge
-	v2SourcePrunedDeferred  *metrics.Gauge
-	v2Errors                *metrics.Gauge
-	txIndexCatchupDeferred  *metrics.Gauge
-	txIndexResourceDeferred *metrics.Gauge
-	txIndexErrorDeferred    *metrics.Gauge
-	txIndexErrors           *metrics.Gauge
+	frozenMin                *metrics.Gauge
+	frozenMax                *metrics.Gauge
+	frozenHas                *metrics.Gauge
+	blocksFrozen             *metrics.Gauge
+	passesCompleted          *metrics.Gauge
+	lastPassAt               *metrics.Gauge
+	lastPassDuration         *metrics.Gauge
+	pebbleSizeAfter          *metrics.Gauge
+	pebbleSizeAfterRows      *metrics.Gauge
+	pebbleSizeAfterComplete  *metrics.Gauge
+	pebbleSizeAfterSampledAt *metrics.Gauge
+	v2Coverage               *metrics.Gauge
+	v2Blocks                 *metrics.Gauge
+	v2BacklogBlocks          *metrics.Gauge
+	v2BacklogSegments        *metrics.Gauge
+	v2LastBatchSegments      *metrics.Gauge
+	v2LastBatchDuration      *metrics.Gauge
+	v2BudgetExhausted        *metrics.Gauge
+	txIndexCoverage          *metrics.Gauge
+	txIndexPruned            *metrics.Gauge
+	txIndexArchived          *metrics.Gauge
+	txIndexRowsPruned        *metrics.Gauge
+	v2CatchupDeferred        *metrics.Gauge
+	v2ResourceDeferred       *metrics.Gauge
+	v2ErrorBackoffDeferred   *metrics.Gauge
+	v2SourcePrunedDeferred   *metrics.Gauge
+	v2Errors                 *metrics.Gauge
+	txIndexCatchupDeferred   *metrics.Gauge
+	txIndexResourceDeferred  *metrics.Gauge
+	txIndexErrorDeferred     *metrics.Gauge
+	txIndexErrors            *metrics.Gauge
 }
 
 func newRunnerMetrics(namespace string) runnerMetrics {
@@ -453,27 +462,30 @@ func newRunnerMetrics(namespace string) runnerMetrics {
 			namespace+"lastpass/duration",
 			nil,
 		),
-		pebbleSizeAfter:         metrics.GetOrRegisterGauge(namespace+"pebble/size", nil),
-		v2Coverage:              metrics.GetOrRegisterGauge(namespace+"v2/coverage", nil),
-		v2Blocks:                metrics.GetOrRegisterGauge(namespace+"v2/blocks", nil),
-		v2BacklogBlocks:         metrics.GetOrRegisterGauge(namespace+"v2/backlog/blocks", nil),
-		v2BacklogSegments:       metrics.GetOrRegisterGauge(namespace+"v2/backlog/segments", nil),
-		v2LastBatchSegments:     metrics.GetOrRegisterGauge(namespace+"v2/batch/segments", nil),
-		v2LastBatchDuration:     metrics.GetOrRegisterGauge(namespace+"v2/batch/duration", nil),
-		v2BudgetExhausted:       metrics.GetOrRegisterGauge(namespace+"v2/batch/budget_exhausted", nil),
-		txIndexCoverage:         metrics.GetOrRegisterGauge(namespace+"txindex/coverage", nil),
-		txIndexPruned:           metrics.GetOrRegisterGauge(namespace+"txindex/pruned", nil),
-		txIndexArchived:         metrics.GetOrRegisterGauge(namespace+"txindex/rows/archived", nil),
-		txIndexRowsPruned:       metrics.GetOrRegisterGauge(namespace+"txindex/rows/pruned", nil),
-		v2CatchupDeferred:       metrics.GetOrRegisterGauge(namespace+"v2/deferred/catchup", nil),
-		v2ResourceDeferred:      metrics.GetOrRegisterGauge(namespace+"v2/deferred/resource", nil),
-		v2ErrorBackoffDeferred:  metrics.GetOrRegisterGauge(namespace+"v2/deferred/error_backoff", nil),
-		v2SourcePrunedDeferred:  metrics.GetOrRegisterGauge(namespace+"v2/deferred/source_pruned", nil),
-		v2Errors:                metrics.GetOrRegisterGauge(namespace+"v2/errors", nil),
-		txIndexCatchupDeferred:  metrics.GetOrRegisterGauge(namespace+"txindex/deferred/catchup", nil),
-		txIndexResourceDeferred: metrics.GetOrRegisterGauge(namespace+"txindex/deferred/resource", nil),
-		txIndexErrorDeferred:    metrics.GetOrRegisterGauge(namespace+"txindex/deferred/error_backoff", nil),
-		txIndexErrors:           metrics.GetOrRegisterGauge(namespace+"txindex/errors", nil),
+		pebbleSizeAfter:          metrics.GetOrRegisterGauge(namespace+"pebble/size", nil),
+		pebbleSizeAfterRows:      metrics.GetOrRegisterGauge(namespace+"pebble/size/rows", nil),
+		pebbleSizeAfterComplete:  metrics.GetOrRegisterGauge(namespace+"pebble/size/complete", nil),
+		pebbleSizeAfterSampledAt: metrics.GetOrRegisterGauge(namespace+"pebble/size/sampled_at", nil),
+		v2Coverage:               metrics.GetOrRegisterGauge(namespace+"v2/coverage", nil),
+		v2Blocks:                 metrics.GetOrRegisterGauge(namespace+"v2/blocks", nil),
+		v2BacklogBlocks:          metrics.GetOrRegisterGauge(namespace+"v2/backlog/blocks", nil),
+		v2BacklogSegments:        metrics.GetOrRegisterGauge(namespace+"v2/backlog/segments", nil),
+		v2LastBatchSegments:      metrics.GetOrRegisterGauge(namespace+"v2/batch/segments", nil),
+		v2LastBatchDuration:      metrics.GetOrRegisterGauge(namespace+"v2/batch/duration", nil),
+		v2BudgetExhausted:        metrics.GetOrRegisterGauge(namespace+"v2/batch/budget_exhausted", nil),
+		txIndexCoverage:          metrics.GetOrRegisterGauge(namespace+"txindex/coverage", nil),
+		txIndexPruned:            metrics.GetOrRegisterGauge(namespace+"txindex/pruned", nil),
+		txIndexArchived:          metrics.GetOrRegisterGauge(namespace+"txindex/rows/archived", nil),
+		txIndexRowsPruned:        metrics.GetOrRegisterGauge(namespace+"txindex/rows/pruned", nil),
+		v2CatchupDeferred:        metrics.GetOrRegisterGauge(namespace+"v2/deferred/catchup", nil),
+		v2ResourceDeferred:       metrics.GetOrRegisterGauge(namespace+"v2/deferred/resource", nil),
+		v2ErrorBackoffDeferred:   metrics.GetOrRegisterGauge(namespace+"v2/deferred/error_backoff", nil),
+		v2SourcePrunedDeferred:   metrics.GetOrRegisterGauge(namespace+"v2/deferred/source_pruned", nil),
+		v2Errors:                 metrics.GetOrRegisterGauge(namespace+"v2/errors", nil),
+		txIndexCatchupDeferred:   metrics.GetOrRegisterGauge(namespace+"txindex/deferred/catchup", nil),
+		txIndexResourceDeferred:  metrics.GetOrRegisterGauge(namespace+"txindex/deferred/resource", nil),
+		txIndexErrorDeferred:     metrics.GetOrRegisterGauge(namespace+"txindex/deferred/error_backoff", nil),
+		txIndexErrors:            metrics.GetOrRegisterGauge(namespace+"txindex/errors", nil),
 	}
 }
 
@@ -500,6 +512,13 @@ func (m runnerMetrics) update(stats Stats) {
 	}
 	m.lastPassDuration.Update(int64(stats.LastPassDuration))
 	m.pebbleSizeAfter.Update(uint64GaugeValue(stats.PebbleSizeAfter))
+	m.pebbleSizeAfterRows.Update(uint64GaugeValue(stats.PebbleSizeAfterRows))
+	m.pebbleSizeAfterComplete.Update(boolGaugeValue(stats.PebbleSizeAfterComplete))
+	if stats.PebbleSizeAfterSampledAt.IsZero() {
+		m.pebbleSizeAfterSampledAt.Update(0)
+	} else {
+		m.pebbleSizeAfterSampledAt.Update(stats.PebbleSizeAfterSampledAt.Unix())
+	}
 	m.v2Coverage.Update(uint64GaugeValue(stats.V2Coverage))
 	m.v2Blocks.Update(uint64GaugeValue(stats.V2BlocksCompacted))
 	m.v2BacklogBlocks.Update(uint64GaugeValue(stats.V2BacklogBlocks))
@@ -560,7 +579,7 @@ type Runner struct {
 	passesCompleted               atomic.Uint64
 	lastPassUnixNano              atomic.Int64
 	lastPassDuration              atomic.Int64 // nanoseconds
-	pebbleSizeAfter               atomic.Uint64
+	pebbleSizeSample              atomic.Pointer[hotBlockSizeSample]
 	v2BlocksCompacted             atomic.Uint64
 	v2LastBatchSegments           atomic.Uint64
 	v2LastBatchDuration           atomic.Int64
@@ -734,7 +753,6 @@ func (r *Runner) snapshot() Stats {
 		BlocksFrozen:                         r.blocksFrozen.Load(),
 		PassesCompleted:                      r.passesCompleted.Load(),
 		LastPassDuration:                     time.Duration(r.lastPassDuration.Load()),
-		PebbleSizeAfter:                      r.pebbleSizeAfter.Load(),
 		V2BlocksCompacted:                    r.v2BlocksCompacted.Load(),
 		V2LastBatchSegments:                  r.v2LastBatchSegments.Load(),
 		V2LastBatchDuration:                  time.Duration(r.v2LastBatchDuration.Load()),
@@ -750,6 +768,12 @@ func (r *Runner) snapshot() Stats {
 		TransactionIndexResourceDeferred:     r.txIndexResourceDeferred.Load(),
 		TransactionIndexErrorBackoffDeferred: r.txIndexErrorBackoffDeferred.Load(),
 		TransactionIndexErrors:               r.txIndexErrors.Load(),
+	}
+	if sample := r.pebbleSizeSample.Load(); sample != nil {
+		stats.PebbleSizeAfter = sample.bytes
+		stats.PebbleSizeAfterRows = sample.rows
+		stats.PebbleSizeAfterComplete = sample.complete
+		stats.PebbleSizeAfterSampledAt = sample.sampledAt
 	}
 	if t := r.lastPassUnixNano.Load(); t > 0 {
 		stats.LastPassAt = time.Unix(0, t)
@@ -1214,19 +1238,21 @@ func (r *Runner) iterateTransactionIndexEntriesContext(ctx context.Context, star
 		if err != nil {
 			return 0, fmt.Errorf("read ancient body %d for transaction index: %w", number, err)
 		}
-		block, err := coretypes.UnmarshalBlockBorrowed(body)
-		if err != nil {
-			return 0, fmt.Errorf("decode ancient body %d for transaction index: %w", number, err)
-		}
-		for ordinal, tx := range block.Transactions() {
+		if err := coretypes.IterateBlockTransactionHashes(ctx, body, func(ordinal int, hash tcommon.Hash) error {
+			if err := r.checkStopping(); err != nil {
+				return err
+			}
 			location, err := rawdb.EncodeTransactionLocation(number, ordinal)
 			if err != nil {
-				return 0, err
+				return err
 			}
-			if err := yield(rawdbfreezer.TransactionIndexEntry{Hash: tx.Hash(), Location: location}); err != nil {
-				return 0, err
+			if err := yield(rawdbfreezer.TransactionIndexEntry{Hash: hash, Location: location}); err != nil {
+				return err
 			}
 			rows++
+			return nil
+		}); err != nil {
+			return 0, fmt.Errorf("iterate ancient body %d for transaction index: %w", number, err)
 		}
 		if time.Since(lastProgress) >= 30*time.Second {
 			log.Info("Freezer: streaming transaction index", "from", start, "to", end, "block", number, "rows", rows, "elapsed", time.Since(started))
@@ -1827,17 +1853,12 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 		return 0, err
 	}
 
-	// Phase 5: update stats. PebbleSizeAfter is sampled by an iterator
-	// pass on the still-hot `b-` prefix — cheap because after a successful
-	// freeze the prefix only holds the post-margin window.
+	// Phase 5: account for completed freezing before the observational scan.
+	// Sampling is bounded even when the still-hot backlog is large; a failed
+	// or cancelled scan must not erase blocks already frozen by this pass.
 	frozen = capExclusive - freezeFromN
-	pebbleSize, err := r.pebbleBlockNamespaceSize()
-	if err != nil {
-		return 0, err
-	}
 	r.blocksFrozen.Add(frozen)
-	r.pebbleSizeAfter.Store(pebbleSize)
-	return frozen, nil
+	return frozen, r.sampleHotBlockNamespaceSize()
 }
 
 func (r *Runner) appendDirectV2Segment(appender V2DirectAppender, start, end uint64, externalizeReceiptLogs bool) ([]tcommon.Hash, error) {
@@ -2278,25 +2299,6 @@ func (r *Runner) loop() {
 			}
 		}
 	}
-}
-
-// pebbleBlockNamespaceSize iterates `b-` rows and returns the cumulative
-// key+value bytes. Approximate — Pebble's on-disk footprint after
-// compression and block-overhead deduction is smaller — but accurate
-// enough as an unbounded-growth detector. Called once at the end of each
-// pass; cost is O(remaining-block-rows), which is bounded by
-// MarginBlocks + BatchBlocks under steady state.
-func (r *Runner) pebbleBlockNamespaceSize() (uint64, error) {
-	it := r.chain.DB().NewIterator(blockNamespacePrefix, nil)
-	defer it.Release()
-	var size uint64
-	for it.Next() {
-		if err := r.checkStopping(); err != nil {
-			return 0, err
-		}
-		size += uint64(len(it.Key()) + len(it.Value()))
-	}
-	return size, it.Error()
 }
 
 // blockNamespacePrefix is the `b-` prefix mirrored from
