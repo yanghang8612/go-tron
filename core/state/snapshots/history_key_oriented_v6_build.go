@@ -3,6 +3,7 @@ package snapshots
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -208,11 +209,15 @@ func decodeStateDomainChangeV6DictionaryBlock(raw []byte, count uint32) ([][]byt
 }
 
 func (b *stateDomainChangeV6Build) FinishDictionary() error {
+	return b.FinishDictionaryContext(context.Background())
+}
+
+func (b *stateDomainChangeV6Build) FinishDictionaryContext(ctx context.Context) error {
 	if b == nil || b.keys == nil {
 		return errors.New("snapshots: nil V6 dictionary build")
 	}
 	writer := &stateDomainChangeV6DictionaryWriter{build: b}
-	stats, err := b.keys.Load(writer)
+	stats, err := loadHistoryETLContext(ctx, b.keys, writer)
 	if err != nil {
 		return err
 	}
@@ -225,11 +230,14 @@ func (b *stateDomainChangeV6Build) FinishDictionary() error {
 	b.keyStats = stats
 	_ = b.keys.Close()
 	b.keys = nil
-	return b.buildKeyTable()
+	return b.buildKeyTable(ctx)
 }
 
-func (b *stateDomainChangeV6Build) iterateDictionaryKeys(fn func(uint32, []byte) error) error {
+func (b *stateDomainChangeV6Build) iterateDictionaryKeys(ctx context.Context, fn func(uint32, []byte) error) error {
 	for blockIndex := range b.blocks {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
 		keys, err := b.dictionaryBlock(blockIndex)
 		if err != nil {
 			return err
@@ -243,7 +251,10 @@ func (b *stateDomainChangeV6Build) iterateDictionaryKeys(fn func(uint32, []byte)
 	return nil
 }
 
-func (b *stateDomainChangeV6Build) buildKeyTable() error {
+func (b *stateDomainChangeV6Build) buildKeyTable(ctx context.Context) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	buckets := uint64(1)
 	for buckets*7 < uint64(b.keyCount)*10 {
 		buckets <<= 1
@@ -255,7 +266,7 @@ func (b *stateDomainChangeV6Build) buildKeyTable() error {
 	}
 	digest := sha256.New()
 	var length [4]byte
-	err := b.iterateDictionaryKeys(func(keyID uint32, key []byte) error {
+	err := b.iterateDictionaryKeys(ctx, func(keyID uint32, key []byte) error {
 		binary.BigEndian.PutUint32(length[:], uint32(len(key)))
 		_, _ = digest.Write(length[:])
 		_, _ = digest.Write(key)
@@ -407,6 +418,7 @@ type stateDomainChangeV6PostingWriter struct {
 // but publishes one delta-framed stream per logical key. A single key is the
 // only buffered unit; the global posting set remains an external sort.
 type stateDomainChangeV7PostingWriter struct {
+	ctx      context.Context
 	postings *bufio.Writer
 	meta     *bufio.Writer
 	scratch  *os.File
@@ -475,7 +487,7 @@ func (w *stateDomainChangeV7PostingWriter) flushKey() error {
 	if len(w.frames) == 0 {
 		return errors.New("snapshots: V7 key has no postings")
 	}
-	written, count, err := writeStateDomainChangeBinaryAccessorV7PostingFrames(w.postings, w.scratch, w.frames)
+	written, count, err := writeStateDomainChangeBinaryAccessorV7PostingFrames(contextWriter{ctx: w.ctx, w: w.postings}, w.scratch, w.frames)
 	if err != nil {
 		return err
 	}
@@ -610,6 +622,13 @@ func (w *stateDomainChangeV6PostingWriter) Finish() error {
 }
 
 func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, recordCount uint64) (SegmentRef, etl.Stats, error) {
+	return b.BuildAccessorContext(context.Background(), dir, ref, recordCount)
+}
+
+func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir string, ref SegmentRef, recordCount uint64) (SegmentRef, etl.Stats, error) {
+	if err := contextError(ctx); err != nil {
+		return SegmentRef{}, etl.Stats{}, err
+	}
 	if b == nil || b.postings == nil || uint64(b.keyCount) > recordCount {
 		return SegmentRef{}, etl.Stats{}, errors.New("snapshots: invalid V6 accessor build")
 	}
@@ -632,8 +651,8 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 		return SegmentRef{}, etl.Stats{}, err
 	}
 	defer func() { _ = scratchFile.Close(); _ = os.Remove(scratchName) }()
-	writer := &stateDomainChangeV7PostingWriter{postings: bufio.NewWriterSize(postingFile, 1<<20), meta: bufio.NewWriterSize(metaFile, 1<<20), scratch: scratchFile, expected: b.keyCount, fromTx: ref.FromTxNum}
-	postingStats, err := b.postings.Load(writer)
+	writer := &stateDomainChangeV7PostingWriter{ctx: ctx, postings: bufio.NewWriterSize(postingFile, 1<<20), meta: bufio.NewWriterSize(metaFile, 1<<20), scratch: scratchFile, expected: b.keyCount, fromTx: ref.FromTxNum}
+	postingStats, err := loadHistoryETLContext(ctx, b.postings, writer)
 	if err != nil {
 		return SegmentRef{}, postingStats, err
 	}
@@ -652,6 +671,9 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 	defer func() { _ = keyData.Close(); _ = os.Remove(keyDataName) }()
 	var blocks []stateDomainChangeBinaryAccessorV6Block
 	for blockIndex := range b.blocks {
+		if err := contextError(ctx); err != nil {
+			return SegmentRef{}, postingStats, err
+		}
 		keys, err := b.dictionaryBlock(blockIndex)
 		if err != nil {
 			return SegmentRef{}, postingStats, err
@@ -696,7 +718,7 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 		return SegmentRef{}, postingStats, err
 	}
 	defer func() { _ = tmp.Close(); _ = os.Remove(tmpName) }()
-	metadata := newSnapshotMetadataWriter(tmp)
+	metadata := newSnapshotMetadataWriter(contextWriter{ctx: ctx, w: tmp})
 	var header [stateDomainChangeBinaryAccessorV7HeaderSize]byte
 	copy(header[:8], stateDomainChangeBinaryAccessorMagic[:])
 	binary.BigEndian.PutUint32(header[8:12], stateDomainChangeBinaryVersionV7)
@@ -754,15 +776,30 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 		if _, err := src.Seek(0, io.SeekStart); err != nil {
 			return SegmentRef{}, postingStats, err
 		}
-		if _, err := io.Copy(metadata, src); err != nil {
+		if _, err := copyStateDomainChangeHistoryData(metadata, contextReader{ctx: ctx, r: src}); err != nil {
 			return SegmentRef{}, postingStats, err
 		}
 	}
 	if uint64(postingStat.Size()) != writer.offset {
 		return SegmentRef{}, postingStats, errors.New("snapshots: V7 posting file size mismatch")
 	}
+	if err := contextError(ctx); err != nil {
+		return SegmentRef{}, postingStats, err
+	}
 	result, err := finalizeStateDomainChangeHistoryFileWithMetadata(dir, ref, tmp, tmpName, metadata.Metadata(), false)
 	return result, postingStats, err
+}
+
+// Preserve the cancellation cause for lifecycle shutdown handling instead of
+// reporting a cooperative ETL stop as a compaction failure.
+func loadHistoryETLContext(ctx context.Context, collector *etl.Collector, writer ethdb.KeyValueWriter) (etl.Stats, error) {
+	stats, err := collector.LoadInterruptible(writer, func() bool { return contextError(ctx) != nil })
+	if errors.Is(err, etl.ErrLoadInterrupted) {
+		if ctxErr := contextError(ctx); ctxErr != nil {
+			err = ctxErr
+		}
+	}
+	return stats, err
 }
 
 var _ ethdb.KeyValueWriter = (*stateDomainChangeV6DictionaryWriter)(nil)

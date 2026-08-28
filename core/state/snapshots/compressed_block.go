@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -336,6 +337,10 @@ func (w *compressedBlockWriter) finishWithPrefix(path string, prefix []byte) err
 }
 
 func (w *compressedBlockWriter) finishWithPrefixMetadata(path string, prefix []byte, metadata *snapshotFileMetadata) (err error) {
+	return w.finishWithPrefixMetadataContext(context.Background(), path, prefix, metadata)
+}
+
+func (w *compressedBlockWriter) finishWithPrefixMetadataContext(ctx context.Context, path string, prefix []byte, metadata *snapshotFileMetadata) (err error) {
 	if metadata != nil {
 		*metadata = snapshotFileMetadata{}
 	}
@@ -345,6 +350,9 @@ func (w *compressedBlockWriter) finishWithPrefixMetadata(path string, prefix []b
 		_ = w.tmp.Close()
 		_ = os.Remove(w.tmpName)
 	}()
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	if w.bufRecs != 0 || len(w.buf) != 0 {
 		return errors.New("snapshots: prefixed compressed writer has buffered records")
 	}
@@ -380,10 +388,10 @@ func (w *compressedBlockWriter) finishWithPrefixMetadata(path string, prefix []b
 			err = cerr
 		}
 	}()
-	finalOut := io.Writer(out)
+	finalOut := io.Writer(contextWriter{ctx: ctx, w: out})
 	var metadataWriter *snapshotMetadataWriter
 	if metadata != nil {
-		metadataWriter = newSnapshotMetadataWriter(out)
+		metadataWriter = newSnapshotMetadataWriter(finalOut)
 		finalOut = metadataWriter
 	}
 
@@ -402,7 +410,7 @@ func (w *compressedBlockWriter) finishWithPrefixMetadata(path string, prefix []b
 			return err
 		}
 	}
-	if _, err = copyStateDomainChangeHistoryData(finalOut, w.tmp); err != nil {
+	if _, err = copyStateDomainChangeHistoryData(finalOut, contextReader{ctx: ctx, r: w.tmp}); err != nil {
 		return err
 	}
 	if err = out.Sync(); err != nil {
@@ -1336,14 +1344,30 @@ func (w *compressedBlockStreamWriter) Finish(path string) error {
 }
 
 func (w *compressedBlockStreamWriter) FinishWithMetadata(path string) (snapshotFileMetadata, error) {
+	return w.FinishWithMetadataContext(context.Background(), path)
+}
+
+func (w *compressedBlockStreamWriter) FinishWithMetadataContext(ctx context.Context, path string) (snapshotFileMetadata, error) {
 	var metadata snapshotFileMetadata
-	err := w.finish(path, &metadata)
+	err := w.finishContext(ctx, path, &metadata)
 	return metadata, err
 }
 
 func (w *compressedBlockStreamWriter) finish(path string, metadata *snapshotFileMetadata) error {
+	return w.finishContext(context.Background(), path, metadata)
+}
+
+func (w *compressedBlockStreamWriter) finishContext(ctx context.Context, path string, metadata *snapshotFileMetadata) error {
 	if w == nil || w.closed || w.body == nil {
 		return errors.New("snapshots: compressed stream writer is closed")
+	}
+	if err := contextError(ctx); err != nil {
+		w.Abort()
+		return err
+	}
+	if pipeline := w.parallel; pipeline != nil && ctx != nil {
+		stop := context.AfterFunc(ctx, func() { pipeline.setError(ctx.Err()) })
+		defer stop()
 	}
 	if err := w.flushChunk(true); err != nil {
 		w.Abort()
@@ -1364,7 +1388,7 @@ func (w *compressedBlockStreamWriter) finish(path string, metadata *snapshotFile
 	releaseStateDomainChangeHistoryCompressionChunk(&w.chunk, w.chunkSize)
 	defer releaseStateDomainChangeHistoryCompressionChunk(&first, w.chunkSize)
 	defer releaseStateDomainChangeHistoryEncodedChunk(&body.encoded, w.chunkSize)
-	return body.finishWithPrefixMetadata(path, first, metadata)
+	return body.finishWithPrefixMetadataContext(ctx, path, first, metadata)
 }
 
 func (w *compressedBlockStreamWriter) Reset() error {

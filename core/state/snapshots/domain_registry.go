@@ -52,6 +52,7 @@ type DomainCfg struct {
 	OpenHistory                       HistorySnapshotOpener
 	WriteHistory                      HistorySnapshotWriter
 	CompactHistory                    HistoryCompactor
+	CompactHistoryContext             HistoryCompactorContext
 	ReadHistoryRange                  HistoryRangeReader
 	ReadHistoryByKey                  HistoryKeyReader
 	IterateHistoryRange               HistoryRangeIterator
@@ -161,6 +162,8 @@ type HistorySnapshotWriter func(dir string, ref SegmentRef, changes []*rawdb.Sta
 type HotHistoryBlockWriter func(db ethdb.KeyValueWriter, changes []*rawdb.StateDomainChange) error
 
 type HistoryCompactor func(dir string, cfg DomainCfg, selection historyCompactionSelection) ([]SegmentRef, error)
+
+type HistoryCompactorContext func(ctx context.Context, dir string, cfg DomainCfg, selection historyCompactionSelection) ([]SegmentRef, error)
 
 type HistoryRangeReader func(dir string, manifest *Manifest, ref SegmentRef, fromTxNum, toTxNum uint64) ([]*rawdb.StateDomainChange, error)
 
@@ -432,6 +435,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			OpenHistory:                       openStateDomainChangeHistoryChanges,
 			WriteHistory:                      writeHistorySegmentFiles,
 			CompactHistory:                    compactStateDomainChangeBinaryHistoryRun,
+			CompactHistoryContext:             compactStateDomainChangeBinaryHistoryRunContext,
 			ReadHistoryRange:                  readStateDomainChangeHistoryRange,
 			ReadHistoryByKey:                  readStateDomainChangeHistoryByKey,
 			IterateHistoryRange:               iterateStateDomainChangeHistoryRange,

@@ -1,6 +1,8 @@
 package snapshots
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -228,6 +230,14 @@ func (p *historyCompactionProgress) finish(err error) {
 		p.metrics.elapsed.Update(elapsed.Nanoseconds())
 		p.metrics.active.Update(0)
 		p.metrics.phase.Update(historyCompactionPhaseIdle)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			coldSnapshotLog.Info("History cold snapshot compaction canceled",
+				"dataset", p.dataset, "phase", historyCompactionPhaseName(p.phase.Load()),
+				"fromTx", p.fromTx, "toTx", p.toTx,
+				"records", p.recordsProcessed.Load(), "totalRecords", p.recordsTotal.Load(),
+				"elapsed", elapsed.Round(time.Millisecond), "err", err)
+			return
+		}
 		if err != nil {
 			coldSnapshotLog.Warn("History cold snapshot compaction failed",
 				"dataset", p.dataset,

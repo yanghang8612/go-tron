@@ -396,8 +396,10 @@ type Runner struct {
 	cfg     Config
 	metrics coldRunnerMetrics
 
-	quit chan struct{}
-	done chan struct{}
+	quit   chan struct{}
+	done   chan struct{}
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	startOnce   sync.Once
 	stopOnce    sync.Once
@@ -445,12 +447,15 @@ type Runner struct {
 
 func NewRunner(chain ChainSource, cfg Config) *Runner {
 	cfg = cfg.applyDefaults()
+	ctx, cancel := context.WithCancel(context.Background())
 	runner := &Runner{
 		chain:   chain,
 		cfg:     cfg,
 		metrics: newColdRunnerMetrics(cfg.MetricsNamespace),
 		quit:    make(chan struct{}),
 		done:    make(chan struct{}),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 	runner.updateMetrics()
 	return runner
@@ -616,6 +621,9 @@ func (r *Runner) Stop() error {
 		return nil
 	}
 	r.stopOnce.Do(func() {
+		if r.cancel != nil {
+			r.cancel()
+		}
 		if r.quit != nil {
 			close(r.quit)
 		}
@@ -687,6 +695,9 @@ func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 	}
 	r.passMu.Lock()
 	defer r.passMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return PassResult{}, err
+	}
 
 	start := time.Now()
 	result := PassResult{}
@@ -714,7 +725,7 @@ func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 	}
 	if err == nil && historyPassRan && !result.HistoryDeferred {
 		phaseStart := time.Now()
-		result.Compaction, err = r.compactHistory(result.HistoryNeedsCatchup())
+		result.Compaction, err = r.compactHistory(ctx, result.HistoryNeedsCatchup())
 		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
 		if err == nil {
 			err = ctx.Err()
@@ -2101,7 +2112,7 @@ func (r *Runner) updateMetrics() {
 	r.metrics.update(r.Snapshot())
 }
 
-func (r *Runner) compactHistory(catchingUp bool) (HistoryCompactionResult, error) {
+func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (HistoryCompactionResult, error) {
 	if r == nil || !r.cfg.Enabled {
 		return HistoryCompactionResult{}, nil
 	}
@@ -2120,7 +2131,10 @@ func (r *Runner) compactHistory(catchingUp bool) (HistoryCompactionResult, error
 
 	var total HistoryCompactionResult
 	for {
-		result, err := CompactHistoryDomain(r.cfg.Dir, r.cfg.HistoryDataset, cfg)
+		if err := contextError(ctx); err != nil {
+			return total, err
+		}
+		result, err := CompactHistoryDomainContext(ctx, r.cfg.Dir, r.cfg.HistoryDataset, cfg)
 		if err != nil {
 			return total, err
 		}
@@ -2377,7 +2391,7 @@ func (r *Runner) loop() {
 		}
 	}
 
-	result, err := r.OnePass()
+	result, err := r.OnePassContext(r.ctx)
 	if err != nil {
 		coldSnapshotLog.Warn("History cold snapshot initial pass failed", "dataset", r.cfg.HistoryDataset, "err", err)
 	} else if result.Built {
@@ -2424,7 +2438,7 @@ func (r *Runner) loop() {
 		case <-r.quit:
 			return
 		}
-		result, err := r.OnePass()
+		result, err := r.OnePassContext(r.ctx)
 		if err != nil {
 			coldSnapshotLog.Warn("History cold snapshot pass failed", "dataset", r.cfg.HistoryDataset, "err", err)
 		} else if result.Built {

@@ -1755,6 +1755,15 @@ func finalizeStateDomainChangeBinaryCompanions(dir string, historyRef SegmentRef
 }
 
 func finalizeStateDomainChangeBinaryCompanionsV6(dir string, historyRef SegmentRef, indexTmp *os.File, indexTmpName string, build *stateDomainChangeV6Build, recordCount uint64) (indexRef, accessorRef SegmentRef, accessorStats etl.Stats, err error) {
+	return finalizeStateDomainChangeBinaryCompanionsV6Context(context.Background(), dir, historyRef, indexTmp, indexTmpName, build, recordCount)
+}
+
+func finalizeStateDomainChangeBinaryCompanionsV6Context(ctx context.Context, dir string, historyRef SegmentRef, indexTmp *os.File, indexTmpName string, build *stateDomainChangeV6Build, recordCount uint64) (indexRef, accessorRef SegmentRef, accessorStats etl.Stats, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	indexRef = SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentInverted, FromTxNum: historyRef.FromTxNum, ToTxNum: historyRef.ToTxNum, AggregationSteps: historyRef.AggregationSteps, Path: stateDomainChangeBinaryIndexPath(historyRef.Path)}
 	accessorRef = SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: historyRef.FromTxNum, ToTxNum: historyRef.ToTxNum, AggregationSteps: historyRef.AggregationSteps, Path: stateDomainChangeBinaryAccessorPath(historyRef.Path)}
 	var indexErr, accessorErr error
@@ -1762,20 +1771,27 @@ func finalizeStateDomainChangeBinaryCompanionsV6(dir string, historyRef SegmentR
 	workers.Add(2)
 	go func() {
 		defer workers.Done()
-		indexRef, indexErr = finalizeStateDomainChangeHistoryFile(dir, indexRef, indexTmp, indexTmpName, false)
+		indexRef, indexErr = finalizeStateDomainChangeHistoryFileContext(ctx, dir, indexRef, indexTmp, indexTmpName, false)
+		if indexErr != nil {
+			cancel()
+		}
 	}()
 	go func() {
 		defer workers.Done()
-		accessorRef, accessorStats, accessorErr = build.BuildAccessor(dir, accessorRef, recordCount)
+		accessorRef, accessorStats, accessorErr = build.BuildAccessorContext(ctx, dir, accessorRef, recordCount)
+		if accessorErr != nil {
+			cancel()
+		}
 	}()
 	workers.Wait()
-	if indexErr != nil {
-		return indexRef, accessorRef, accessorStats, indexErr
+	// A failed worker cancels its sibling. Report the actual failure, not the
+	// sibling's cooperative stop, so corruption/I/O errors are not suppressed.
+	for _, workerErr := range []error{indexErr, accessorErr} {
+		if workerErr != nil && !errors.Is(workerErr, context.Canceled) && !errors.Is(workerErr, context.DeadlineExceeded) {
+			return indexRef, accessorRef, accessorStats, workerErr
+		}
 	}
-	if accessorErr != nil {
-		return indexRef, accessorRef, accessorStats, accessorErr
-	}
-	return indexRef, accessorRef, accessorStats, nil
+	return indexRef, accessorRef, accessorStats, errors.Join(indexErr, accessorErr)
 }
 
 // stateDomainChangeBinaryAccessorETLSortKey preserves the binary accessor's

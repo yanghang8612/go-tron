@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -53,6 +54,19 @@ type historyCompactionSelection struct {
 // CompactHistoryDomain merges the frontmost continuous run of binary history
 // segments for a registered history domain and publishes the replacement refs.
 func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConfig) (HistoryCompactionResult, error) {
+	return CompactHistoryDomainContext(context.Background(), dir, dataset, cfg)
+}
+
+// CompactHistoryDomainContext cancels preparation before the manifest commit.
+// Once integration starts, finish that atomic publication and its bookkeeping;
+// cancellation must never remove files already referenced by the manifest.
+func CompactHistoryDomainContext(ctx context.Context, dir string, dataset SegmentDataset, cfg CompactionConfig) (HistoryCompactionResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return HistoryCompactionResult{}, err
+	}
 	if dir == "" {
 		return HistoryCompactionResult{}, errors.New("snapshots: compaction directory is empty")
 	}
@@ -79,7 +93,7 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 	if !ok || !historyCfg.HasHistory {
 		return HistoryCompactionResult{}, nil
 	}
-	if historyCfg.CompactHistory == nil && (historyCfg.OpenHistory == nil || historyCfg.WriteHistory == nil) {
+	if historyCfg.CompactHistoryContext == nil && historyCfg.CompactHistory == nil && (historyCfg.OpenHistory == nil || historyCfg.WriteHistory == nil) {
 		return HistoryCompactionResult{}, fmt.Errorf("snapshots: history domain %s missing compaction codec", historyCfg.Dataset)
 	}
 	selection, ok := selectHistoryCompactionRunAtLeast(manifest, historyCfg, minSteps, maxSteps)
@@ -88,7 +102,12 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 	}
 
 	var refs []SegmentRef
-	if historyCfg.CompactHistory != nil {
+	if historyCfg.CompactHistoryContext != nil {
+		refs, err = historyCfg.CompactHistoryContext(ctx, dir, historyCfg, selection)
+		if err != nil {
+			return HistoryCompactionResult{}, err
+		}
+	} else if historyCfg.CompactHistory != nil {
 		refs, err = historyCfg.CompactHistory(dir, historyCfg, selection)
 		if err != nil {
 			return HistoryCompactionResult{}, err
@@ -96,6 +115,9 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 	} else {
 		var changes []*rawdb.StateDomainChange
 		for _, candidate := range selection.candidates {
+			if err := ctx.Err(); err != nil {
+				return HistoryCompactionResult{}, err
+			}
 			segmentChanges, err := historyCfg.OpenHistory(dir, candidate.history)
 			if err != nil {
 				return HistoryCompactionResult{}, err
@@ -118,6 +140,14 @@ func CompactHistoryDomain(dir string, dataset SegmentDataset, cfg CompactionConf
 		refs = nonZeroSegmentRefs(segRef, accessorRef, idxRef)
 	}
 
+	if err := ctx.Err(); err != nil {
+		// The new immutable objects are not visible yet. Leave the original
+		// generation and all of its inputs intact for the next attempt.
+		for _, ref := range refs {
+			_ = os.Remove(filepath.Join(dir, ref.Path))
+		}
+		return HistoryCompactionResult{}, err
+	}
 	if _, err := NewAggregator(dir).Integrate(selection.fromTxNum, selection.toTxNum, refs); err != nil {
 		return HistoryCompactionResult{}, err
 	}

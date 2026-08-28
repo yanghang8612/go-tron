@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -60,6 +61,19 @@ func TestHistoryCompactionPercentIsNumericAndRounded(t *testing.T) {
 	}
 	if got := historyCompactionPercent(0, 0); got != 0 {
 		t.Fatalf("zero-total progress = %v, want 0", got)
+	}
+}
+
+func TestHistoryCompactionCancellationIsNotLoggedAsFailure(t *testing.T) {
+	var buf bytes.Buffer
+	previous := gtronlog.Root()
+	defer gtronlog.SetDefault(previous)
+	gtronlog.SetDefault(gtronlog.NewLogger(gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelInfo)))
+	progress := newHistoryCompactionProgress(SegmentDatasetStateDomainChange, 1, 2, 2)
+	progress.setPhase(historyCompactionPhaseBuildAccessor)
+	progress.finish(context.Canceled)
+	if !strings.Contains(buf.String(), `msg="History cold snapshot compaction canceled"`) || strings.Contains(buf.String(), "compaction failed") {
+		t.Fatalf("unexpected cancellation log: %s", buf.String())
 	}
 }
 

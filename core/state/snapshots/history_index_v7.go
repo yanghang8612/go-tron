@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -31,6 +32,13 @@ type stateDomainChangeBinaryIndexV7Frame struct {
 // lets the history writer stay single-pass; the rewrite is sequential and does
 // not retain more than one 256-entry frame.
 func rewriteStateDomainChangeBinaryIndexV7(file *os.File, name string) (*os.File, string, error) {
+	return rewriteStateDomainChangeBinaryIndexV7Context(context.Background(), file, name)
+}
+
+func rewriteStateDomainChangeBinaryIndexV7Context(ctx context.Context, file *os.File, name string) (*os.File, string, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, "", err
+	}
 	if file == nil {
 		return nil, "", errors.New("snapshots: nil state-domain-change index staging file")
 	}
@@ -65,13 +73,16 @@ func rewriteStateDomainChangeBinaryIndexV7(file *os.File, name string) (*os.File
 			_ = os.Remove(outName)
 		}
 	}()
-	if err := writeZeroes(out, stateDomainChangeBinaryIndexV7HeaderSize+dirLen); err != nil {
+	if err := writeZeroes(contextWriter{ctx: ctx, w: out}, stateDomainChangeBinaryIndexV7HeaderSize+dirLen); err != nil {
 		return nil, "", err
 	}
 	frames := make([]stateDomainChangeBinaryIndexV7Frame, 0, frameCount)
 	dataOff := stateDomainChangeBinaryIndexV7HeaderSize + dirLen
 	var previousGlobal stateDomainChangeBinaryTxOffset
 	for frameIndex := uint64(0); frameIndex < frameCount; frameIndex++ {
+		if err := contextError(ctx); err != nil {
+			return nil, "", err
+		}
 		start := frameIndex * stateDomainChangeBinaryIndexV7FrameEntries
 		count := min(stateDomainChangeBinaryIndexV7FrameEntries, header.count-start)
 		var encoded []byte
@@ -137,6 +148,9 @@ func rewriteStateDomainChangeBinaryIndexV7(file *os.File, name string) (*os.File
 	}
 	var rawFrame [stateDomainChangeBinaryIndexV7FrameSize]byte
 	for i, frame := range frames {
+		if err := contextError(ctx); err != nil {
+			return nil, "", err
+		}
 		clear(rawFrame[:])
 		binary.BigEndian.PutUint64(rawFrame[0:8], frame.firstTx)
 		binary.BigEndian.PutUint64(rawFrame[8:16], frame.dataOff)
