@@ -5,15 +5,19 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/pointread"
@@ -49,16 +53,48 @@ type CommitmentBranchSegment struct {
 	binary bool
 }
 
-// CommitmentBranchPointView owns open segment and B-tree descriptors. Both
-// lookup paths use ReaderAt exclusively, so all 16 ordered commitment lanes may
-// share one view without cursor locks or per-block open/close work.
+// CommitmentBranchPointView owns one open segment descriptor plus a packed
+// resident copy of its sparse B-tree. The B-tree file itself is read once and
+// closed during OpenCommitmentBranchSnapshot. Lookups use one segment ReadAt,
+// so all 16 ordered commitment lanes may share the view without cursor locks or
+// per-block descriptor churn.
 type CommitmentBranchPointView struct {
+	mu            sync.RWMutex
 	txNum         uint64
 	segment       *os.File
 	segmentHeader latestBinaryHeader
-	btree         *os.File
 	btreeHeader   latestBinaryBTreeHeader
+
+	// The sparse B-tree has one entry per 128 segment rows. Keeping those
+	// entries resident turns every hot lookup from O(log N) tiny ReadAt calls
+	// plus up to 128 per-row reads into one in-memory floor search and one
+	// contiguous segment ReadAt. Keys share keyArena, so the steady resident
+	// footprint is one entry descriptor plus the sparse key bytes per block.
+	index    []latestBinaryBTreeEntry
+	keyArena []byte
+
+	// scratchPool is deliberately bounded by both concurrency and total retained
+	// bytes. The commitment fold normally has 16 lanes; ordinary ~70 KiB blocks
+	// retain all 32 slots, while an unusually large valid block lowers the slot
+	// count instead of pinning hundreds of MiB after a transient burst.
+	maxBlockBytes int
+	scratchPool   chan []byte
 }
+
+const (
+	commitmentBranchPointScratchPoolSize = 32
+	// BranchData rows are normally below 1 KiB, so a 128-row block is around
+	// 64-128 KiB. Rejecting an implausibly large block prevents a malformed or
+	// incompatible snapshot from turning one lookup into an unbounded allocation.
+	commitmentBranchPointMaxBlockBytes           = 8 << 20
+	commitmentBranchPointMaxRetainedScratchBytes = 32 << 20
+	// The sparse B-tree is roughly one 45-byte record per 128 branch rows.
+	// 256 MiB therefore covers branch baselines far beyond the current chain
+	// while bounding the one sequential temporary allocation during open.
+	commitmentBranchPointMaxIndexFileBytes = 256 << 20
+)
+
+var errCommitmentBranchPointViewClosed = errors.New("snapshots: closed commitment branch point view")
 
 type commitmentBranchBinaryIterator struct {
 	file   *os.File
@@ -73,22 +109,54 @@ type commitmentBranchBinaryIterator struct {
 var _ pointread.CommitmentBranchSnapshotView = (*CommitmentBranchPointView)(nil)
 
 func (v *CommitmentBranchPointView) Get(prefix []byte) ([]byte, bool, error) {
-	if v == nil || v.segment == nil || v.btree == nil {
-		return nil, false, errors.New("snapshots: closed commitment branch point view")
+	if v == nil {
+		return nil, false, errCommitmentBranchPointViewClosed
 	}
-	return readLatestBinaryValueByBTreeReaders(
-		v.segment,
-		v.segmentHeader,
-		v.btree,
-		v.btreeHeader,
-		encodeCommitmentBranchSnapshotKey(prefix),
-	)
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	if v.segment == nil || len(v.index) == 0 || v.maxBlockBytes <= 0 || v.scratchPool == nil {
+		return nil, false, errCommitmentBranchPointViewClosed
+	}
+
+	var keyStack [65]byte // one schema byte plus the 64-nibble commitment path
+	var key []byte
+	if len(prefix)+1 <= len(keyStack) {
+		key = keyStack[:len(prefix)+1]
+	} else {
+		key = make([]byte, len(prefix)+1)
+	}
+	copy(key[1:], prefix)
+
+	index := sort.Search(len(v.index), func(i int) bool {
+		return bytes.Compare(v.index[i].key, key) > 0
+	})
+	if index == 0 {
+		return nil, false, nil
+	}
+	entry := v.index[index-1]
+	end := v.segmentHeader.fileSize
+	if index < len(v.index) {
+		end = v.index[index].segmentOffset
+	}
+	if end < entry.segmentOffset || end-entry.segmentOffset > uint64(v.maxBlockBytes) {
+		return nil, false, errors.New("snapshots: invalid commitment branch resident block span")
+	}
+
+	scratch := v.borrowScratch()
+	defer v.returnScratch(scratch)
+	block := scratch[:int(end-entry.segmentOffset)]
+	if _, err := v.segment.ReadAt(block, int64(entry.segmentOffset)); err != nil {
+		return nil, false, err
+	}
+	return readCommitmentBranchValueFromBlock(block, v.segmentHeader, entry.ordinal, v.btreeHeader.blockSize, key)
 }
 
 func (v *CommitmentBranchPointView) SnapshotTxNum() uint64 {
 	if v == nil {
 		return 0
 	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
 	return v.txNum
 }
 
@@ -96,18 +164,225 @@ func (v *CommitmentBranchPointView) Close() error {
 	if v == nil {
 		return nil
 	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	var first error
 	if v.segment != nil {
 		first = v.segment.Close()
 		v.segment = nil
 	}
-	if v.btree != nil {
-		if err := v.btree.Close(); first == nil {
-			first = err
-		}
-		v.btree = nil
-	}
+	v.index = nil
+	v.keyArena = nil
+	v.maxBlockBytes = 0
+	v.scratchPool = nil
 	return first
+}
+
+func (v *CommitmentBranchPointView) borrowScratch() []byte {
+	select {
+	case scratch := <-v.scratchPool:
+		return scratch[:v.maxBlockBytes]
+	default:
+		return make([]byte, v.maxBlockBytes)
+	}
+}
+
+func (v *CommitmentBranchPointView) returnScratch(scratch []byte) {
+	if cap(scratch) < v.maxBlockBytes {
+		return
+	}
+	scratch = scratch[:v.maxBlockBytes]
+	select {
+	case v.scratchPool <- scratch:
+	default:
+	}
+}
+
+func commitmentBranchPointScratchPoolCapacity(blockBytes int) int {
+	if blockBytes <= 0 {
+		return 0
+	}
+	byBytes := commitmentBranchPointMaxRetainedScratchBytes / blockBytes
+	if byBytes < 1 {
+		byBytes = 1
+	}
+	if byBytes > commitmentBranchPointScratchPoolSize {
+		byBytes = commitmentBranchPointScratchPoolSize
+	}
+	return byBytes
+}
+
+func readCommitmentBranchValueFromBlock(block []byte, header latestBinaryHeader, firstOrdinal, blockSize uint64, key []byte) ([]byte, bool, error) {
+	offset := 0
+	limit := header.count - firstOrdinal
+	if limit > blockSize {
+		limit = blockSize
+	}
+	for ordinal := uint64(0); ordinal < limit; ordinal++ {
+		if len(block)-offset < 8 {
+			return nil, false, io.ErrUnexpectedEOF
+		}
+		keyLen := int(binary.BigEndian.Uint32(block[offset : offset+4]))
+		frame, err := latestBinaryValueFrameFromStoredLength(binary.BigEndian.Uint32(block[offset+4:offset+8]), header.compressedValues)
+		if err != nil {
+			return nil, false, err
+		}
+		if err := validateLatestBinaryValueFrame(frame); err != nil {
+			return nil, false, err
+		}
+		keyStart := offset + 8
+		valueStart := keyStart + keyLen
+		next := valueStart + int(frame.encodedLen)
+		if keyStart < 0 || valueStart < keyStart || next < valueStart || next > len(block) {
+			return nil, false, io.ErrUnexpectedEOF
+		}
+		entryKey := block[keyStart:valueStart]
+		cmp := bytes.Compare(entryKey, key)
+		if cmp == 0 {
+			value, err := decodeLatestBinaryValue(block[valueStart:next], frame)
+			if err != nil {
+				return nil, false, err
+			}
+			if err := validateLatestBinaryEntry(header.dataset, entryKey, value); err != nil {
+				return nil, false, err
+			}
+			// Uncompressed values alias the pooled block. Preserve Get's owned
+			// result contract before returning the scratch buffer to the pool.
+			if !frame.compressed {
+				value = append([]byte(nil), value...)
+			}
+			return value, true, nil
+		}
+		if cmp > 0 {
+			return nil, false, nil
+		}
+		offset = next
+	}
+	return nil, false, nil
+}
+
+func newCommitmentBranchPointView(txNum uint64, segment *os.File, segmentHeader latestBinaryHeader, btree *os.File, btreeHeader latestBinaryBTreeHeader) (*CommitmentBranchPointView, error) {
+	if segment == nil || btree == nil {
+		return nil, errors.New("snapshots: nil commitment branch point descriptor")
+	}
+	if btreeHeader.count == 0 || btreeHeader.blockSize == 0 {
+		return nil, errors.New("snapshots: empty commitment branch resident index")
+	}
+	expectedEntries := segmentHeader.count / btreeHeader.blockSize
+	if segmentHeader.count%btreeHeader.blockSize != 0 {
+		expectedEntries++
+	}
+	if btreeHeader.count != expectedEntries {
+		return nil, fmt.Errorf("snapshots: commitment branch resident index count %d, want %d", btreeHeader.count, expectedEntries)
+	}
+	entries, totalKeyBytes, err := readCommitmentBranchResidentIndexFile(btree, btreeHeader, segmentHeader)
+	if err != nil {
+		return nil, err
+	}
+
+	keyArena := make([]byte, totalKeyBytes)
+	keyOffset := 0
+	maxBlockBytes := 0
+	for i := range entries {
+		copy(keyArena[keyOffset:], entries[i].key)
+		entries[i].key = keyArena[keyOffset : keyOffset+len(entries[i].key)]
+		keyOffset += len(entries[i].key)
+		end := segmentHeader.fileSize
+		if i+1 < len(entries) {
+			end = entries[i+1].segmentOffset
+		}
+		if end <= entries[i].segmentOffset || end-entries[i].segmentOffset > commitmentBranchPointMaxBlockBytes {
+			return nil, fmt.Errorf("snapshots: commitment branch resident block span %d exceeds limit %d", end-entries[i].segmentOffset, commitmentBranchPointMaxBlockBytes)
+		}
+		span := int(end - entries[i].segmentOffset)
+		if span > maxBlockBytes {
+			maxBlockBytes = span
+		}
+	}
+	return &CommitmentBranchPointView{
+		txNum:         txNum,
+		segment:       segment,
+		segmentHeader: segmentHeader,
+		btreeHeader:   btreeHeader,
+		index:         entries,
+		keyArena:      keyArena,
+		maxBlockBytes: maxBlockBytes,
+		scratchPool:   make(chan []byte, commitmentBranchPointScratchPoolCapacity(maxBlockBytes)),
+	}, nil
+}
+
+// readCommitmentBranchResidentIndexFile loads the complete sparse B-tree with
+// one contiguous ReadAt, then validates and packs its keys. The previous open
+// path called readLatestBinaryBTreeEntryAt per sparse row, which meant at least
+// three preads per entry (offset, header, key) and scaled to millions of syscalls
+// for a large base before the first block could execute.
+func readCommitmentBranchResidentIndexFile(btree *os.File, btreeHeader latestBinaryBTreeHeader, segmentHeader latestBinaryHeader) ([]latestBinaryBTreeEntry, int, error) {
+	if btreeHeader.fileSize > commitmentBranchPointMaxIndexFileBytes || btreeHeader.fileSize > uint64(math.MaxInt) {
+		return nil, 0, fmt.Errorf("snapshots: commitment branch sparse index file %d exceeds limit %d", btreeHeader.fileSize, commitmentBranchPointMaxIndexFileBytes)
+	}
+	if btreeHeader.count > uint64(math.MaxInt) {
+		return nil, 0, errors.New("snapshots: commitment branch resident index is too large")
+	}
+	offsetBytes := btreeHeader.count * 8
+	if btreeHeader.count != 0 && offsetBytes/8 != btreeHeader.count {
+		return nil, 0, errors.New("snapshots: commitment branch resident offset table overflow")
+	}
+	payloadStart := uint64(latestBinaryBTreeHeaderSize) + offsetBytes
+	if payloadStart < latestBinaryBTreeHeaderSize || payloadStart > btreeHeader.fileSize {
+		return nil, 0, errors.New("snapshots: commitment branch resident offset table exceeds index file")
+	}
+
+	data := make([]byte, int(btreeHeader.fileSize))
+	n, err := btree.ReadAt(data, 0)
+	if err != nil && !(errors.Is(err, io.EOF) && n == len(data)) {
+		return nil, 0, err
+	}
+	if n != len(data) {
+		return nil, 0, io.ErrUnexpectedEOF
+	}
+	entries := make([]latestBinaryBTreeEntry, int(btreeHeader.count))
+	totalKeyBytes := 0
+	for i := range entries {
+		offsetPos := latestBinaryBTreeHeaderSize + i*8
+		offset := binary.BigEndian.Uint64(data[offsetPos : offsetPos+8])
+		if offset < payloadStart || offset > btreeHeader.fileSize-20 {
+			return nil, 0, errors.New("snapshots: commitment branch resident entry offset outside index payload")
+		}
+		head := data[int(offset) : int(offset)+20]
+		keyLen := uint64(binary.BigEndian.Uint32(head[:4]))
+		keyStart := offset + 20
+		keyEnd := keyStart + keyLen
+		if keyEnd < keyStart || keyEnd > btreeHeader.fileSize {
+			return nil, 0, errors.New("snapshots: commitment branch resident key outside index payload")
+		}
+		entry := latestBinaryBTreeEntry{
+			key:           data[int(keyStart):int(keyEnd)],
+			ordinal:       binary.BigEndian.Uint64(head[4:12]),
+			segmentOffset: binary.BigEndian.Uint64(head[12:20]),
+		}
+		if entry.ordinal != uint64(i)*btreeHeader.blockSize {
+			return nil, 0, errors.New("snapshots: commitment branch resident index ordinal gap")
+		}
+		if i == 0 {
+			if entry.ordinal != 0 || entry.segmentOffset < latestBinaryHeaderSize {
+				return nil, 0, errors.New("snapshots: invalid first commitment branch resident index entry")
+			}
+		} else {
+			prev := entries[i-1]
+			if bytes.Compare(prev.key, entry.key) >= 0 || prev.segmentOffset >= entry.segmentOffset {
+				return nil, 0, errors.New("snapshots: unsorted commitment branch resident index")
+			}
+		}
+		if entry.ordinal >= segmentHeader.count || entry.segmentOffset >= segmentHeader.fileSize {
+			return nil, 0, errors.New("snapshots: commitment branch resident index entry outside segment")
+		}
+		if len(entry.key) > math.MaxInt-totalKeyBytes {
+			return nil, 0, errors.New("snapshots: commitment branch resident index key arena overflow")
+		}
+		totalKeyBytes += len(entry.key)
+		entries[i] = entry
+	}
+	return entries, totalKeyBytes, nil
 }
 
 // BuildCommitmentBranchSegmentFromDB streams every state-commitment-branch-v1-

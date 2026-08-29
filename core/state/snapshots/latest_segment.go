@@ -1437,13 +1437,17 @@ func (m *Manager) OpenCommitmentBranchSnapshot(txNum uint64) (pointread.Commitme
 		_ = btree.Close()
 		return nil, false, err
 	}
-	return &CommitmentBranchPointView{
-		txNum:         ref.ToTxNum,
-		segment:       segment,
-		segmentHeader: segmentHeader,
-		btree:         btree,
-		btreeHeader:   btreeHeader,
-	}, true, nil
+	view, err := newCommitmentBranchPointView(ref.ToTxNum, segment, segmentHeader, btree, btreeHeader)
+	closeBTreeErr := btree.Close()
+	if err != nil {
+		_ = segment.Close()
+		return nil, false, err
+	}
+	if closeBTreeErr != nil {
+		_ = segment.Close()
+		return nil, false, closeBTreeErr
+	}
+	return view, true, nil
 }
 
 func (m *Manager) GetCode(hash common.Hash, txNum uint64) ([]byte, bool, error) {
