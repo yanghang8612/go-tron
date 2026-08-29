@@ -1242,11 +1242,15 @@ func (m *Manager) LatestStateTxNum() (uint64, bool, error) {
 		return 0, false, err
 	}
 	hasLatest := false
-	registry := DefaultDomainRegistry()
 	for _, ref := range manifest.Segments {
-		cfg, ok := registry.ConfigForRef(ref)
-		if ok && cfg.HasLatest && ref.Kind == SegmentLatest {
+		if ref.Kind != SegmentLatest {
+			continue
+		}
+		switch ref.NormalizedDataset() {
+		case SegmentDatasetAccountLatest, SegmentDatasetKVLatest, SegmentDatasetKVGeneration, SegmentDatasetCode:
 			hasLatest = true
+		}
+		if hasLatest {
 			break
 		}
 	}

@@ -215,6 +215,7 @@ func (bc *BlockChain) CompleteCommitmentBranchRotation(rotation rawdb.Commitment
 	batch := bc.db.NewBatch()
 	if err := rawdb.WriteCommitmentBranchBase(batch, rawdb.CommitmentBranchBase{
 		Generation: rotation.Generation, SnapshotTxNum: rotation.SnapshotTxNum, Root: rotation.Root,
+		BlockNum: rotation.BlockNum, BlockHash: rotation.BlockHash,
 	}); err != nil {
 		return err
 	}

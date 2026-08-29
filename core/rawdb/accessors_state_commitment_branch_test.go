@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
@@ -256,6 +257,8 @@ func TestCommitmentBranchBaseRoundTripAndValidation(t *testing.T) {
 		Generation:    42,
 		SnapshotTxNum: 9001,
 		Root:          common.HexToHash("0x0123456789abcdef"),
+		BlockNum:      8000,
+		BlockHash:     common.Hash{0xaa, 0xbb},
 	}
 	if err := WriteCommitmentBranchBase(db, want); err != nil {
 		t.Fatal(err)
@@ -282,11 +285,23 @@ func TestCommitmentBranchBaseRoundTripAndValidation(t *testing.T) {
 		nil,
 		valid[:len(valid)-1],
 		append([]byte{commitmentBranchBaseVersion + 1}, valid[1:]...),
-		append([]byte{commitmentBranchBaseVersion}, make([]byte, len(valid)-1)...),
+		append([]byte{commitmentBranchBaseLegacyVersion}, make([]byte, commitmentBranchBaseLegacySize-1)...),
 	} {
 		if _, err := DecodeCommitmentBranchBase(encoded); err == nil {
 			t.Fatalf("invalid base %x accepted", encoded)
 		}
+	}
+	legacy := make([]byte, commitmentBranchBaseLegacySize)
+	legacy[0] = commitmentBranchBaseLegacyVersion
+	binary.BigEndian.PutUint64(legacy[1:9], want.Generation)
+	binary.BigEndian.PutUint64(legacy[9:17], want.SnapshotTxNum)
+	copy(legacy[17:], want.Root[:])
+	legacyBase, err := DecodeCommitmentBranchBase(legacy)
+	if err != nil {
+		t.Fatalf("decode legacy base: %v", err)
+	}
+	if legacyBase.Generation != want.Generation || legacyBase.SnapshotTxNum != want.SnapshotTxNum || legacyBase.Root != want.Root || legacyBase.BlockNum != 0 || legacyBase.BlockHash != (common.Hash{}) {
+		t.Fatalf("legacy base = %+v", legacyBase)
 	}
 }
 

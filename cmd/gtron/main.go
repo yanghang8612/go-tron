@@ -1173,14 +1173,15 @@ func gtron(ctx *cli.Context) error {
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.
-				LatestBuildBlocks:                statesnapshots.DefaultLatestBuildBlocks,
-				DeferLatestBuildWhileSyncing:     true,
-				DeferHistoryBuildWhileSyncing:    shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
-				MaxDeferredHistoryBlocks:         maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
-				DeferDerivedSidecarsWhileSyncing: buildDerivedSnapshots,
-				BuildEventLogsWhileSyncing:       buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
-				SyncEventLogCatchupBlocks:        freezerCfg.V2SegmentBlocks,
-				SyncEventLogTargetBlock:          syncEventLogTargetBlock,
+				LatestBuildBlocks:                     statesnapshots.DefaultLatestBuildBlocks,
+				DeferLatestBuildWhileSyncing:          true,
+				BuildCommitmentBranchBaseWhileSyncing: true,
+				DeferHistoryBuildWhileSyncing:         shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
+				MaxDeferredHistoryBlocks:              maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
+				DeferDerivedSidecarsWhileSyncing:      buildDerivedSnapshots,
+				BuildEventLogsWhileSyncing:            buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
+				SyncEventLogCatchupBlocks:             freezerCfg.V2SegmentBlocks,
+				SyncEventLogTargetBlock:               syncEventLogTargetBlock,
 			},
 			Pruner: statepruning.PrunerConfig{
 				Policy:                          prunePolicy,

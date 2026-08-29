@@ -557,6 +557,82 @@ func TestColdBuilderDefersFullLatestBuildDuringActiveSync(t *testing.T) {
 	}
 }
 
+func TestColdBuilderBuildsOnlyCommitmentBranchBaseDuringActiveSync(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x77)
+	seedLatestRows(t, db, owner, 50, 50)
+	root, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
+	if err != nil || !ok {
+		t.Fatalf("read root ok=%v err=%v", ok, err)
+	}
+	if err := rawdb.WriteCommitmentBranch(db, nil, []byte("root-branch")); err != nil {
+		t.Fatal(err)
+	}
+	rotation := rawdb.CommitmentBranchRotation{
+		Generation: 1, SnapshotTxNum: 50, Root: root, BlockNum: 50, BlockHash: common.Hash{50},
+	}
+	if err := rawdb.WriteCommitmentBranchRotation(db, rotation); err != nil {
+		t.Fatal(err)
+	}
+	chain := &coldBuilderChain{
+		db: db, solidified: 50, syncRemaining: 1_000, syncRemainingOK: true,
+		rotation: &rotation, persistRotationBase: true,
+	}
+	runner := NewRunner(chain, Config{
+		Dir: dir, Enabled: true, Interval: time.Hour, HistoryWindow: 100,
+		LatestBuildBlocks: 10, DeferLatestBuildWhileSyncing: true,
+		BuildCommitmentBranchBaseWhileSyncing: true,
+	})
+	// Model a recent full latest build: an already-started branch rotation must
+	// resume independently of the coarse full-latest cadence.
+	runner.lastLatestBuildBlock.Store(50)
+
+	built, deferred, err := runner.latestPassWithStatus()
+	if err != nil || !built || deferred {
+		t.Fatalf("sync commitment pass built=%v deferred=%v err=%v", built, deferred, err)
+	}
+	if chain.rotationBegin != 1 || chain.rotationComplete != 1 {
+		t.Fatalf("rotation calls begin=%d complete=%d", chain.rotationBegin, chain.rotationComplete)
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range manifest.Segments {
+		if ref.Dataset != SegmentDatasetCommitmentRoot && ref.Dataset != SegmentDatasetCommitmentBranch {
+			t.Fatalf("sync commitment pass published unrelated ref %+v", ref)
+		}
+	}
+	if manifest.Progress == nil || manifest.Progress.LatestBuildTxNum != 0 || manifest.Progress.AccessorBuildTxNum != 0 || manifest.Progress.CommitmentFlushTxNum != 0 {
+		t.Fatalf("sync commitment progress = %+v", manifest.Progress)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if txNum, ok, err := mgr.LatestStateTxNum(); err != nil || ok {
+		t.Fatalf("commitment-only manifest advertised general latest state tx=%d ok=%v err=%v", txNum, ok, err)
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || ok {
+		t.Fatalf("full latest build stage exists ok=%v err=%v", ok, err)
+	}
+	base, ok, err := rawdb.ReadCommitmentBranchBase(db)
+	if err != nil || !ok || base.BlockNum != rotation.BlockNum || base.BlockHash != rotation.BlockHash {
+		t.Fatalf("persisted base = %+v ok=%v err=%v", base, ok, err)
+	}
+
+	// The baseline block, rather than the deferred full-latest watermark, owns
+	// the sync-time cadence. A second pass at the same boundary must not rotate.
+	built, deferred, err = runner.latestPassWithStatus()
+	if err != nil || built || deferred {
+		t.Fatalf("cadence pass built=%v deferred=%v err=%v", built, deferred, err)
+	}
+	if chain.rotationBegin != 1 {
+		t.Fatalf("rotation began again inside cadence: %d", chain.rotationBegin)
+	}
+}
+
 func TestColdBuilderDefersHistoryAndCompactionWhileFarBehind(t *testing.T) {
 	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
 	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
@@ -2968,6 +3044,7 @@ type coldBuilderChain struct {
 	rotationComplete     int
 	rotationCompleteErr  error
 	rotationSnapshotRoot common.Hash
+	persistRotationBase  bool
 }
 
 type coldBuilderSeekRecordingDB struct {
@@ -3008,7 +3085,26 @@ func (c *coldBuilderChain) CompleteCommitmentBranchRotation(rotation rawdb.Commi
 		return errors.New("test rotation snapshot root missing")
 	}
 	c.rotationSnapshotRoot = root
-	return c.rotationCompleteErr
+	if c.rotationCompleteErr != nil {
+		return c.rotationCompleteErr
+	}
+	if c.persistRotationBase {
+		writer, ok := c.db.(ethdb.KeyValueWriter)
+		if !ok {
+			return errors.New("test rotation database is not writable")
+		}
+		if err := rawdb.WriteCommitmentBranchBase(writer, rawdb.CommitmentBranchBase{
+			Generation: rotation.Generation, SnapshotTxNum: rotation.SnapshotTxNum, Root: rotation.Root,
+			BlockNum: rotation.BlockNum, BlockHash: rotation.BlockHash,
+		}); err != nil {
+			return err
+		}
+		if err := rawdb.DeleteCommitmentBranchRotation(writer); err != nil {
+			return err
+		}
+		c.rotation = nil
+	}
+	return nil
 }
 
 func (c *coldBuilderChain) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {

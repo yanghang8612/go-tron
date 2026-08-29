@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -555,6 +556,52 @@ func TestAggregatorBuildLatestPreservesPrunedCodeDomain(t *testing.T) {
 		if err != nil || !ok || !bytes.Equal(got, tc.code) {
 			t.Fatalf("%s code = %x ok=%v err=%v, want %x", tc.name, got, ok, err, tc.code)
 		}
+	}
+}
+
+func TestAggregatorBuildCommitmentBranchBasePreservesGeneralLatestProgress(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x5b)
+	seedLatestRows(t, db, owner, 10, 10)
+	seedStagedBranchRows(t, db)
+
+	agg := NewAggregator(dir)
+	initial, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 10})
+	if err != nil {
+		t.Fatalf("initial BuildLatest: %v", err)
+	}
+	if initial.Manifest == nil || initial.Manifest.Progress == nil {
+		t.Fatal("initial BuildLatest returned no manifest progress")
+	}
+
+	result, err := agg.BuildCommitmentBranchBaseContext(context.Background(), db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 20})
+	if err != nil {
+		t.Fatalf("BuildCommitmentBranchBaseContext: %v", err)
+	}
+	if result.Manifest == nil || result.Manifest.Progress == nil {
+		t.Fatal("commitment base build returned no manifest progress")
+	}
+	for _, ref := range result.Segments {
+		if ref.Dataset != SegmentDatasetCommitmentRoot && ref.Dataset != SegmentDatasetCommitmentBranch {
+			t.Fatalf("commitment base build returned unrelated ref %+v", ref)
+		}
+	}
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentBranch, 0, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentLatest)
+	progress := result.Manifest.Progress
+	if progress.LatestBuildTxNum != 10 || progress.AccessorBuildTxNum != 10 {
+		t.Fatalf("general latest progress advanced: %+v", progress)
+	}
+	if progress.CommitmentFlushTxNum != 10 {
+		t.Fatalf("shared commitment progress = %d, want preserved 10", progress.CommitmentFlushTxNum)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatest); err != nil || !ok || got != 10 {
+		t.Fatalf("latest stage = %d ok=%v err=%v, want 10", got, ok, err)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotCommitmentFlush); err != nil || !ok || got != 10 {
+		t.Fatalf("commitment stage = %d ok=%v err=%v, want preserved 10", got, ok, err)
 	}
 }
 

@@ -10,10 +10,12 @@ import (
 )
 
 const (
-	commitmentBranchBaseVersion     = byte(1)
-	commitmentBranchBaseSize        = 1 + 8 + 8 + common.HashLength
-	commitmentBranchRotationVersion = byte(1)
-	commitmentBranchRotationSize    = 1 + 8 + 8 + common.HashLength + 8 + common.HashLength
+	commitmentBranchBaseLegacyVersion = byte(1)
+	commitmentBranchBaseVersion       = byte(2)
+	commitmentBranchBaseLegacySize    = 1 + 8 + 8 + common.HashLength
+	commitmentBranchBaseSize          = commitmentBranchBaseLegacySize + 8 + common.HashLength
+	commitmentBranchRotationVersion   = byte(1)
+	commitmentBranchRotationSize      = 1 + 8 + 8 + common.HashLength + 8 + common.HashLength
 )
 
 // CommitmentBranchBase binds one immutable branch snapshot to the generation
@@ -23,6 +25,11 @@ type CommitmentBranchBase struct {
 	Generation    uint64
 	SnapshotTxNum uint64
 	Root          common.Hash
+	// BlockNum and BlockHash identify the canonical rotation boundary. Version-1
+	// markers decode with zero values so an upgraded node conservatively rebuilds
+	// the baseline once before applying the normal block-based cadence.
+	BlockNum  uint64
+	BlockHash common.Hash
 }
 
 // CommitmentBranchRotation records the short crash-safe interval in which new
@@ -45,16 +52,26 @@ func EncodeCommitmentBranchBase(base CommitmentBranchBase) ([]byte, error) {
 	encoded[0] = commitmentBranchBaseVersion
 	binary.BigEndian.PutUint64(encoded[1:9], base.Generation)
 	binary.BigEndian.PutUint64(encoded[9:17], base.SnapshotTxNum)
-	copy(encoded[17:], base.Root[:])
+	copy(encoded[17:17+common.HashLength], base.Root[:])
+	offset := 17 + common.HashLength
+	binary.BigEndian.PutUint64(encoded[offset:offset+8], base.BlockNum)
+	copy(encoded[offset+8:], base.BlockHash[:])
 	return encoded, nil
 }
 
 func DecodeCommitmentBranchBase(encoded []byte) (CommitmentBranchBase, error) {
-	if len(encoded) != commitmentBranchBaseSize {
-		return CommitmentBranchBase{}, fmt.Errorf("rawdb: commitment branch base bad length %d", len(encoded))
+	if len(encoded) == 0 {
+		return CommitmentBranchBase{}, errors.New("rawdb: commitment branch base empty encoding")
 	}
-	if encoded[0] != commitmentBranchBaseVersion {
+	if encoded[0] != commitmentBranchBaseLegacyVersion && encoded[0] != commitmentBranchBaseVersion {
 		return CommitmentBranchBase{}, fmt.Errorf("rawdb: commitment branch base unsupported version %d", encoded[0])
+	}
+	wantSize := commitmentBranchBaseSize
+	if encoded[0] == commitmentBranchBaseLegacyVersion {
+		wantSize = commitmentBranchBaseLegacySize
+	}
+	if len(encoded) != wantSize {
+		return CommitmentBranchBase{}, fmt.Errorf("rawdb: commitment branch base bad length %d", len(encoded))
 	}
 	base := CommitmentBranchBase{
 		Generation:    binary.BigEndian.Uint64(encoded[1:9]),
@@ -63,7 +80,12 @@ func DecodeCommitmentBranchBase(encoded []byte) (CommitmentBranchBase, error) {
 	if base.Generation == 0 {
 		return CommitmentBranchBase{}, errors.New("rawdb: zero commitment branch base generation")
 	}
-	copy(base.Root[:], encoded[17:])
+	copy(base.Root[:], encoded[17:17+common.HashLength])
+	if encoded[0] == commitmentBranchBaseVersion {
+		offset := 17 + common.HashLength
+		base.BlockNum = binary.BigEndian.Uint64(encoded[offset : offset+8])
+		copy(base.BlockHash[:], encoded[offset+8:])
+	}
 	return base, nil
 }
 
