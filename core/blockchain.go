@@ -219,10 +219,20 @@ type BlockChain struct {
 	// archiveHead is the newest block whose async state layer has been fully
 	// promoted. Historical readers may lag CurrentBlock briefly, but can capture
 	// this boundary without draining the commit pipeline.
-	archiveHead    atomic.Pointer[types.Block]
-	chainmu        sync.Mutex // serializes block insertion
-	lastInsertNano atomic.Int64
-	closed         atomic.Bool
+	archiveHead atomic.Pointer[types.Block]
+	// insertSessionGate protects the lifetime of cross-batch InsertSessions
+	// against commitment-branch routing changes. Sessions take the read side
+	// before they create their reusable StateDB/CommitScope and retain it until
+	// Finish has closed that scope. Branch rotation takes the write side before
+	// chainmu, drains both workers, and may then safely Discard buffer layers.
+	//
+	// Lock order is always insertSessionGate -> chainmu. In particular, a
+	// rotation must never hold chainmu while waiting for a session to Finish:
+	// Finish itself needs chainmu in order to drain and close the executor.
+	insertSessionGate sync.RWMutex
+	chainmu           sync.Mutex // serializes block insertion
+	lastInsertNano    atomic.Int64
+	closed            atomic.Bool
 
 	genesisBlock     *types.Block
 	genesisWitnesses []consensus.GenesisWitnessInfo
@@ -2253,6 +2263,12 @@ func (bc *BlockChain) Close() error {
 	// takes this mutex before chainmu, so preserve that lock order here.
 	bc.stateHistoryIndexMu.Lock()
 	defer bc.stateHistoryIndexMu.Unlock()
+	// A sync InsertSession may be between batch calls with chainmu free while
+	// still owning an open StateDB/CommitScope. Wait for Finish before the final
+	// buffer Discard and database close. Keep the same writer-gate -> chainmu
+	// order as branch rotation; lifecycle shutdown must stop/finish sync first.
+	bc.insertSessionGate.Lock()
+	defer bc.insertSessionGate.Unlock()
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 	if bc.closed.Swap(true) {

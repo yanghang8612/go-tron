@@ -1173,9 +1173,12 @@ func gtron(ctx *cli.Context) error {
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.
-				LatestBuildBlocks:                     statesnapshots.DefaultLatestBuildBlocks,
-				DeferLatestBuildWhileSyncing:          true,
-				BuildCommitmentBranchBaseWhileSyncing: true,
+				LatestBuildBlocks:            statesnapshots.DefaultLatestBuildBlocks,
+				DeferLatestBuildWhileSyncing: true,
+				// Periodic sync-time rotation is disabled until immutable-base point
+				// reads and full-base rewrite amortization meet the replay release gate.
+				// A 40k-block cadence can otherwise continuously rewrite a large base.
+				BuildCommitmentBranchBaseWhileSyncing: false,
 				DeferHistoryBuildWhileSyncing:         shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
 				MaxDeferredHistoryBlocks:              maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
 				DeferDerivedSidecarsWhileSyncing:      buildDerivedSnapshots,

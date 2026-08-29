@@ -27,6 +27,12 @@ func (bc *BlockChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRot
 	if bc == nil || bc.db == nil {
 		return rawdb.CommitmentBranchRotation{}, false, errors.New("core: nil blockchain or database")
 	}
+	// Writer-before-chainmu is the load-bearing lock order: existing sessions
+	// retain the read side until their reusable scope has closed, and Finish
+	// needs chainmu to do that. Once this returns, no live session can still
+	// target a layer that the rotation's Discard will detach.
+	bc.insertSessionGate.Lock()
+	defer bc.insertSessionGate.Unlock()
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 
@@ -165,6 +171,8 @@ func (bc *BlockChain) CompleteCommitmentBranchRotation(rotation rawdb.Commitment
 	if bc == nil || bc.db == nil {
 		return errors.New("core: nil blockchain or database")
 	}
+	bc.insertSessionGate.Lock()
+	defer bc.insertSessionGate.Unlock()
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 

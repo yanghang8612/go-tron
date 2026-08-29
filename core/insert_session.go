@@ -1,10 +1,16 @@
 package core
 
 import (
+	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/tronprotocol/go-tron/core/types"
 )
+
+// ErrInsertSessionFinished is returned when a caller tries to reuse a session
+// after Finish has closed its executor and released the rotation gate.
+var ErrInsertSessionFinished = errors.New("core: insert session already finished")
 
 // InsertSession applies a sequence of block batches that share ONE canonical
 // range executor. It is the cross-chunk range vehicle for the sync drain loop,
@@ -40,13 +46,27 @@ type InsertSession struct {
 	yieldChainLock bool
 	// chainLockYieldHook is test-only observability for the unlocked handoff.
 	chainLockYieldHook func()
+
+	// finishOnce makes Finish both idempotent and the single owner of the
+	// lifetime read-lock release. lifecycleMu lets immutable PrepareDecoded*
+	// prefetch run concurrently with Insert, but makes Finish wait for both and
+	// prevents either from racing executor.Close. operationMu retains the
+	// session's single ordered mutation stream if callers accidentally overlap
+	// Insert/FlushLatest calls.
+	finishOnce  sync.Once
+	finishErr   error
+	lifecycleMu sync.RWMutex
+	operationMu sync.Mutex
+	finished    bool
+	gateHeld    bool
 }
 
 // BeginInsertSession starts a cross-batch insert session sharing one canonical
 // range executor. Finish must be called once the batch sequence is done (drains
 // the commit worker and converges the on-disk image).
 func (bc *BlockChain) BeginInsertSession() *InsertSession {
-	return &InsertSession{bc: bc, executor: newCanonicalRangeExecutor(bc, true)}
+	bc.insertSessionGate.RLock()
+	return &InsertSession{bc: bc, executor: newCanonicalRangeExecutor(bc, true), gateHeld: true}
 }
 
 // BeginSyncInsertSession starts a bulk-sync session whose tx-hash lookup and
@@ -54,16 +74,22 @@ func (bc *BlockChain) BeginInsertSession() *InsertSession {
 // canonical execution has finished. Per-block TransactionRet and authoritative
 // changeset rows remain on the normal canonical path.
 func (bc *BlockChain) BeginSyncInsertSession() *InsertSession {
+	bc.insertSessionGate.RLock()
 	executor := newCanonicalRangeExecutorWithOptions(bc, true, nil, true)
 	executor.enableStateReadAhead()
-	return &InsertSession{bc: bc, executor: executor, yieldChainLock: true}
+	return &InsertSession{bc: bc, executor: executor, yieldChainLock: true, gateHeld: true}
 }
 
 // PrepareDecodedBlocks starts deterministic state read ahead as soon as a
 // staged body batch has been decoded. It does not validate or mutate state;
 // canonical insertion remains the sole ordered accept/reject path.
 func (s *InsertSession) PrepareDecodedBlocks(blocks []*types.Block) int {
-	if s == nil || s.executor == nil {
+	if s == nil {
+		return 0
+	}
+	s.lifecycleMu.RLock()
+	defer s.lifecycleMu.RUnlock()
+	if s.finished || s.executor == nil {
 		return 0
 	}
 	return s.executor.PrepareReadAhead(blocks)
@@ -72,7 +98,12 @@ func (s *InsertSession) PrepareDecodedBlocks(blocks []*types.Block) int {
 // PrepareDecodedBlock is the downloader fast path. It uses the retained wire
 // size for queue accounting instead of traversing the decoded protobuf again.
 func (s *InsertSession) PrepareDecodedBlock(block *types.Block, encodedBytes int) bool {
-	return s != nil && s.executor != nil && s.executor.PrepareReadAheadBlock(block, encodedBytes)
+	if s == nil {
+		return false
+	}
+	s.lifecycleMu.RLock()
+	defer s.lifecycleMu.RUnlock()
+	return !s.finished && s.executor != nil && s.executor.PrepareReadAheadBlock(block, encodedBytes)
 }
 
 // Insert applies one batch within the session WITHOUT settling (no scope close
@@ -99,6 +130,18 @@ func (s *InsertSession) InsertBlocksWithStageHook(blocks []*types.Block, hook St
 // the downloader for this batch. It is otherwise identical to
 // InsertBlocksWithStageHook and retains the same ordered validation boundary.
 func (s *InsertSession) InsertBlocksWithStageHookPrewarmed(blocks []*types.Block, hook StageProgressHook, prewarm *SignaturePrewarmRun) error {
+	if s == nil {
+		prewarm.Wait()
+		return ErrInsertSessionFinished
+	}
+	s.lifecycleMu.RLock()
+	defer s.lifecycleMu.RUnlock()
+	if s.finished {
+		prewarm.Wait()
+		return ErrInsertSessionFinished
+	}
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
 	if len(blocks) == 0 {
 		prewarm.Wait()
 		return nil
@@ -183,6 +226,13 @@ func (s *InsertSession) FlushLatest() error {
 	if s == nil || s.bc == nil || s.executor == nil {
 		return nil
 	}
+	s.lifecycleMu.RLock()
+	defer s.lifecycleMu.RUnlock()
+	if s.finished {
+		return ErrInsertSessionFinished
+	}
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
 	s.bc.chainmu.Lock()
 	defer s.bc.chainmu.Unlock()
 	if s.bc.closed.Load() {
@@ -198,7 +248,32 @@ func (s *InsertSession) FlushLatest() error {
 // rather than once per local chunk. Acquires chainmu; safe to call after an
 // Insert error (it still drains + surfaces any worker error). Idempotent enough
 // to call once on every drain-loop exit path.
-func (s *InsertSession) Finish() (err error) {
+func (s *InsertSession) Finish() error {
+	if s == nil {
+		return nil
+	}
+	s.finishOnce.Do(func() {
+		s.lifecycleMu.Lock()
+		defer s.lifecycleMu.Unlock()
+		s.finished = true
+		// Release the read side only after the executor has closed and chainmu
+		// has been dropped. A waiting rotation can then acquire the write side,
+		// followed by chainmu, without observing a detached live scope.
+		if s.gateHeld {
+			defer func() {
+				s.gateHeld = false
+				s.bc.insertSessionGate.RUnlock()
+			}()
+		}
+		s.finishErr = s.finishLocked()
+	})
+	return s.finishErr
+}
+
+func (s *InsertSession) finishLocked() (err error) {
+	if s.bc == nil || s.executor == nil {
+		return nil
+	}
 	s.bc.chainmu.Lock()
 	defer s.bc.chainmu.Unlock()
 	s.bc.WaitForCommitSettled()
