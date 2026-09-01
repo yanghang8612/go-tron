@@ -292,6 +292,10 @@ func (e *baseReadCacheEntry) recordUsefulPrefetch() bool {
 	}
 }
 
+func (e *baseReadCacheEntry) hasUnusedPrefetch() bool {
+	return e != nil && e.references.Load()&baseReadCachePrefetchedReference != 0
+}
+
 func newBaseReadCache(sizeBytes int, flushAdmissionPrefix ...string) *baseReadCache {
 	return newBaseReadCacheWithTrunk(sizeBytes, -1, flushAdmissionPrefix...)
 }
@@ -536,9 +540,9 @@ func (c *baseReadCache) viewWithEpoch(key []byte, fn func(value []byte, stable b
 // viewAtVersion applies viewWithEpoch's scoped lifetime to a commitment
 // snapshot session. A replacement newer than maxVersion is bypassed exactly as
 // in getAtVersion and cannot be overwritten by the older snapshot value.
-func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(value []byte, stable bool) error) (cached, present, windowHit bool, epoch baseReadCacheEpoch, cacheable bool, err error) {
+func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(value []byte, stable bool) error) (cached, present, windowHit, usefulPrefetch bool, epoch baseReadCacheEpoch, cacheable bool, err error) {
 	if c == nil {
-		return false, false, false, baseReadCacheEpoch{}, false, nil
+		return false, false, false, false, baseReadCacheEpoch{}, false, nil
 	}
 	s := &c.shards[baseReadCacheShardIndex(key)]
 	s.mu.RLock()
@@ -546,7 +550,8 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 	if ok {
 		if e.version <= maxVersion {
 			e.reference()
-			if e.recordUsefulPrefetch() {
+			usefulPrefetch = e.recordUsefulPrefetch()
+			if usefulPrefetch {
 				commitmentParentPrefetchUsefulCounter.Inc(1)
 			}
 			windowHit = e.window
@@ -557,23 +562,23 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 			}
 			if e.value == nil {
 				s.mu.RUnlock()
-				return true, false, windowHit, baseReadCacheEpoch{}, false, nil
+				return true, false, windowHit, usefulPrefetch, baseReadCacheEpoch{}, false, nil
 			}
 			if !c.scopedRefreshKey(key) {
 				e.exposed.Store(true)
 				value := e.value
 				s.mu.RUnlock()
-				return true, true, windowHit, baseReadCacheEpoch{}, false, fn(value, true)
+				return true, true, windowHit, usefulPrefetch, baseReadCacheEpoch{}, false, fn(value, true)
 			}
 			defer s.mu.RUnlock()
-			return true, true, windowHit, baseReadCacheEpoch{}, false, fn(e.value, false)
+			return true, true, windowHit, usefulPrefetch, baseReadCacheEpoch{}, false, fn(e.value, false)
 		}
 		s.mu.RUnlock()
-		return false, false, false, baseReadCacheEpoch{}, false, nil
+		return false, false, false, false, baseReadCacheEpoch{}, false, nil
 	}
 	s.mu.RUnlock()
 	slot := baseReadCacheInvalidationSlotBytes(key, len(c.invalidations))
-	return false, false, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true, nil
+	return false, false, false, false, baseReadCacheEpoch{slot: slot, value: c.invalidations[slot].Load()}, true, nil
 }
 
 // scopedRefreshKey reports whether callback consumers of key may receive a
@@ -651,6 +656,14 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 	// instead of copying the same key/value again, appending a stale queue entry,
 	// and replacing an entry from the identical durable generation.
 	if current, ok := s.entries[string(key)]; ok {
+		if _, commitment := c.commitmentKeyDepthBytes(key); commitment {
+			commitmentParentDurablePublishRaceCounter.Inc(1)
+			if force {
+				commitmentParentPrefetchPublishRaceCounter.Inc(1)
+			} else {
+				commitmentParentForegroundPublishRaceCounter.Inc(1)
+			}
+		}
 		current.reference()
 		value := current.value
 		if expose && value != nil {
@@ -1482,11 +1495,23 @@ func (s *baseReadCacheShard) evictOne(other bool) bool {
 			if entry.nonCommitment {
 				s.nonCommitmentUsed -= entry.charge
 			}
+			if entry.hasUnusedPrefetch() && isCommitmentBranchCacheKey(entry.key) {
+				commitmentParentPrefetchUnusedCapacityEvictedCounter.Inc(1)
+				commitmentParentPrefetchUnusedCapacityEvictedBytes.Inc(int64(entry.charge))
+			}
 		}
 		s.recycleEntry(entry)
 		return true
 	}
 	return false
+}
+
+func isCommitmentBranchCacheKey(key string) bool {
+	if strings.HasPrefix(key, rawdb.CommitmentBranchKeyPrefix) {
+		return true
+	}
+	return len(key) >= len(rawdb.CommitmentBranchDeltaKeyPrefix)+8 &&
+		strings.HasPrefix(key, rawdb.CommitmentBranchDeltaKeyPrefix)
 }
 
 func (s *baseReadCacheShard) compactConsumedPrefix(other bool) {

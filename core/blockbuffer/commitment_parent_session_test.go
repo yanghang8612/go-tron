@@ -466,6 +466,9 @@ func TestCommitmentParentReadSessionPrefetchAdmitsPresentAndMissing(t *testing.T
 			durableBefore := commitmentParentDurableReadsCounter.Snapshot().Count()
 			usefulBefore := baseReadCachePrefetchUsefulCounter.Snapshot().Count()
 			commitmentUsefulBefore := commitmentParentPrefetchUsefulCounter.Snapshot().Count()
+			depthPlannedBefore := commitmentParentPrefetchDepthPlannedCounters[0].Snapshot().Count()
+			depthDurableBefore := commitmentParentPrefetchDepthDurableCounters[0].Snapshot().Count()
+			depthUsefulBefore := commitmentParentPrefetchDepthUsefulCounters[0].Snapshot().Count()
 
 			found, err := rawdb.LegacyCommitmentBranchKeyspace().PrefetchParentInSession(prefetch, 0, prefix)
 			if err != nil || found != tc.present {
@@ -507,6 +510,31 @@ func TestCommitmentParentReadSessionPrefetchAdmitsPresentAndMissing(t *testing.T
 			if got := commitmentParentPrefetchUsefulCounter.Snapshot().Count() - commitmentUsefulBefore; got != 1 {
 				t.Fatalf("commitment useful prefetch delta = %d, want 1", got)
 			}
+			if got := commitmentParentPrefetchDepthPlannedCounters[0].Snapshot().Count() - depthPlannedBefore; got != 1 {
+				t.Fatalf("depth-five planned prefetch delta = %d, want 1", got)
+			}
+			if got := commitmentParentPrefetchDepthDurableCounters[0].Snapshot().Count() - depthDurableBefore; got != 1 {
+				t.Fatalf("depth-five durable prefetch delta = %d, want 1", got)
+			}
+			if got := commitmentParentPrefetchDepthUsefulCounters[0].Snapshot().Count() - depthUsefulBefore; got != 1 {
+				t.Fatalf("depth-five useful prefetch delta = %d, want 1", got)
+			}
 		})
+	}
+}
+
+func TestCommitmentParentPrefetchDepthBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		depth int
+		want  int
+	}{
+		{depth: 4, want: -1},
+		{depth: 5, want: 0},
+		{depth: 6, want: 1},
+		{depth: 32, want: 1},
+	} {
+		if got := commitmentParentPrefetchDepthBucket(tc.depth); got != tc.want {
+			t.Fatalf("depth %d bucket = %d, want %d", tc.depth, got, tc.want)
+		}
 	}
 }

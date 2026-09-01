@@ -49,6 +49,78 @@ func TestBaseReadCacheEntryBatchReturnsDistinctStableEntries(t *testing.T) {
 	}
 }
 
+func TestBaseReadCacheRecordsDurablePublishRacesBySource(t *testing.T) {
+	c := newBaseReadCache(1<<20, rawdb.CommitmentBranchKeyPrefix)
+	totalBefore := commitmentParentDurablePublishRaceCounter.Snapshot().Count()
+	prefetchBefore := commitmentParentPrefetchPublishRaceCounter.Snapshot().Count()
+	foregroundBefore := commitmentParentForegroundPublishRaceCounter.Snapshot().Count()
+
+	prefetchKey := []byte(rawdb.CommitmentBranchKeyPrefix + "prefetch-race")
+	_, _, firstPrefetchEpoch := c.getForPrefetchWithEpoch(prefetchKey)
+	_, _, secondPrefetchEpoch := c.getForPrefetchWithEpoch(prefetchKey)
+	if _, stored := c.prefetchIfEpoch(prefetchKey, []byte("value"), firstPrefetchEpoch); !stored {
+		t.Fatal("first prefetch publication was not stored")
+	}
+	if _, stored := c.prefetchIfEpoch(prefetchKey, []byte("value"), secondPrefetchEpoch); !stored {
+		t.Fatal("racing prefetch publication did not reuse the resident value")
+	}
+
+	foregroundKey := []byte(rawdb.CommitmentBranchKeyPrefix + "foreground-race")
+	_, _, prefetchEpoch := c.getForPrefetchWithEpoch(foregroundKey)
+	_, _, foregroundEpoch := c.getWithEpoch(foregroundKey)
+	if _, stored := c.prefetchIfEpoch(foregroundKey, []byte("value"), prefetchEpoch); !stored {
+		t.Fatal("prefetch publication for foreground race was not stored")
+	}
+	if _, stored := c.setIfEpoch(foregroundKey, []byte("value"), foregroundEpoch); !stored {
+		t.Fatal("racing foreground publication did not reuse the resident value")
+	}
+
+	otherKey := []byte("flat-latest-race")
+	_, _, firstOtherEpoch := c.getForPrefetchWithEpoch(otherKey)
+	_, _, secondOtherEpoch := c.getForPrefetchWithEpoch(otherKey)
+	if _, stored := c.prefetchIfEpoch(otherKey, []byte("value"), firstOtherEpoch); !stored {
+		t.Fatal("first non-commitment publication was not stored")
+	}
+	if _, stored := c.prefetchIfEpoch(otherKey, []byte("value"), secondOtherEpoch); !stored {
+		t.Fatal("racing non-commitment publication did not reuse the resident value")
+	}
+
+	if got := commitmentParentDurablePublishRaceCounter.Snapshot().Count() - totalBefore; got != 2 {
+		t.Fatalf("durable publish race delta = %d, want 2", got)
+	}
+	if got := commitmentParentPrefetchPublishRaceCounter.Snapshot().Count() - prefetchBefore; got != 1 {
+		t.Fatalf("prefetch publish race delta = %d, want 1", got)
+	}
+	if got := commitmentParentForegroundPublishRaceCounter.Snapshot().Count() - foregroundBefore; got != 1 {
+		t.Fatalf("foreground publish race delta = %d, want 1", got)
+	}
+}
+
+func TestBaseReadCacheRecordsUnusedPrefetchCapacityEviction(t *testing.T) {
+	shard := baseReadCacheShard{
+		limit:   1 << 20,
+		entries: make(map[string]*baseReadCacheEntry),
+	}
+	entry := shard.acquireEntryString(rawdb.CommitmentBranchKeyPrefix+"prefetched", []byte("value"), false, 1)
+	entry.references.Store(baseReadCachePrefetchedReference)
+	shard.entries[entry.key] = entry
+	shard.queue = append(shard.queue, entry)
+	shard.used = entry.charge
+	wantBytes := int64(entry.charge)
+
+	countBefore := commitmentParentPrefetchUnusedCapacityEvictedCounter.Snapshot().Count()
+	bytesBefore := commitmentParentPrefetchUnusedCapacityEvictedBytes.Snapshot().Count()
+	if !shard.evictOne(false) {
+		t.Fatal("evictOne did not consume the prefetched entry")
+	}
+	if got := commitmentParentPrefetchUnusedCapacityEvictedCounter.Snapshot().Count() - countBefore; got != 1 {
+		t.Fatalf("unused prefetch eviction delta = %d, want 1", got)
+	}
+	if got := commitmentParentPrefetchUnusedCapacityEvictedBytes.Snapshot().Count() - bytesBefore; got != wantBytes {
+		t.Fatalf("unused prefetch eviction bytes delta = %d, want %d", got, wantBytes)
+	}
+}
+
 func testBaseReadCacheSet(c *baseReadCache, key, value []byte) {
 	for attempt := 0; attempt < 2; attempt++ {
 		_, _, epoch := c.getWithEpoch(key)

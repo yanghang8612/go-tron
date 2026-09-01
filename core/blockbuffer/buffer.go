@@ -98,6 +98,30 @@ var (
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_17_32/durable_reads", nil),
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_33_plus/durable_reads", nil),
 	}
+	commitmentParentPrefetchDepthPlannedCounters = [...]*metrics.Counter{
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/depth_5/planned", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/depth_6_plus/planned", nil),
+	}
+	commitmentParentPrefetchDepthCacheCounters = [...]*metrics.Counter{
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/depth_5/cache_resolved", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/depth_6_plus/cache_resolved", nil),
+	}
+	commitmentParentPrefetchDepthDurableCounters = [...]*metrics.Counter{
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/depth_5/durable_reads", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/depth_6_plus/durable_reads", nil),
+	}
+	commitmentParentPrefetchDepthUsefulCounters = [...]*metrics.Counter{
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/depth_5/useful_hits", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/depth_6_plus/useful_hits", nil),
+	}
+)
+
+var (
+	commitmentParentDurablePublishRaceCounter            = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable_publish_races", nil)
+	commitmentParentPrefetchPublishRaceCounter           = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable_publish_races/prefetch", nil)
+	commitmentParentForegroundPublishRaceCounter         = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable_publish_races/foreground", nil)
+	commitmentParentPrefetchUnusedCapacityEvictedCounter = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/unused_capacity_evicted", nil)
+	commitmentParentPrefetchUnusedCapacityEvictedBytes   = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/unused_capacity_evicted_bytes", nil)
 )
 
 const flushPhysicalFamilySampleInterval = uint64(32)

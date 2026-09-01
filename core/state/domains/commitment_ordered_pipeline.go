@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -237,6 +238,13 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 	// predecessor. Every stream owns separate snapshot cursors and is joined by
 	// its lane before the session can close.
 	prefetchDepth := CommitmentParentPrefetchDepth
+	commitmentPipelinePrefetchDepthGauge.Update(int64(prefetchDepth))
+	lookaheadDepth := 0
+	if prefetchDepth > 0 && CommitmentParentPrefetchLookaheadDepth > 0 {
+		lookaheadDepth = prefetchDepth + CommitmentParentPrefetchLookaheadDepth
+	}
+	commitmentPipelinePrefetchLookaheadDepthGauge.Update(int64(lookaheadDepth))
+	commitmentPipelinePrefetchLookaheadLimitGauge.Update(int64(CommitmentParentPrefetchLookaheadLimitPerLane))
 	if prefetchDepth > 0 && job.store.supportsParentPrefetch() {
 		for nb := range p.lanes {
 			if counts[nb] == 0 {
@@ -280,7 +288,10 @@ func (p *OrderedCommitmentPipeline) runLane(nb uint8, root BranchData, tasks <-c
 	for task := range tasks {
 		job := task.job
 		if prefetched := &job.prefetch[nb]; prefetched.active {
+			started := time.Now()
 			prefetched.critical.Wait()
+			commitmentPipelinePrefetchCriticalWaitCallsCounter.Inc(1)
+			commitmentPipelinePrefetchCriticalWaitNanosCounter.Inc(time.Since(started).Nanoseconds())
 		}
 		if failed := p.failed.Load(); failed != nil {
 			job.setError(*failed)
@@ -320,7 +331,11 @@ func (p *OrderedCommitmentPipeline) runPrefetchLane(tasks <-chan orderedCommitme
 			// Read-ahead is speculative. An unused predicted row must never make a
 			// valid fold fail; the authoritative foreground cursor retries any branch
 			// it actually needs and reports the error through the normal pipeline.
-			if err := task.store.prefetchParentLane(task.nb, task.ops, task.depth); err != nil {
+			criticalStarted := time.Now()
+			planned, _, err := task.store.prefetchParentLaneLimited(task.nb, task.ops, task.depth, 0)
+			commitmentPipelinePrefetchCriticalPlannedCounter.Inc(int64(planned))
+			commitmentPipelinePrefetchCriticalWallNanosCounter.Inc(time.Since(criticalStarted).Nanoseconds())
+			if err != nil {
 				commitmentPipelinePrefetchErrorsCounter.Inc(1)
 				task.result.critical.Done()
 				return
@@ -329,9 +344,11 @@ func (p *OrderedCommitmentPipeline) runPrefetchLane(tasks <-chan orderedCommitme
 			if task.lookaheadDepth <= 0 || task.lookaheadLimit <= 0 {
 				return
 			}
+			lookaheadStarted := time.Now()
 			planned, capped, err := task.store.prefetchParentLaneLimited(
 				task.nb, task.ops, task.depth+task.lookaheadDepth, task.lookaheadLimit,
 			)
+			commitmentPipelinePrefetchLookaheadWallNanosCounter.Inc(time.Since(lookaheadStarted).Nanoseconds())
 			commitmentPipelinePrefetchLookaheadPlannedCounter.Inc(int64(planned))
 			if capped {
 				commitmentPipelinePrefetchLookaheadCappedCounter.Inc(1)

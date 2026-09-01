@@ -2331,8 +2331,18 @@ def parse_debug_metrics(url, path, status):
     if not isinstance(data, dict):
         row["debugMetricsStatus"] = "invalid"
         return row
-    metrics = data.get("metrics", [])
-    if not isinstance(metrics, list):
+    metrics = data.get("metrics", {})
+    if isinstance(metrics, dict):
+        metric_rows = [
+            {"name": name, "values": values}
+            for name, values in metrics.items()
+            if isinstance(values, dict)
+        ]
+    elif isinstance(metrics, list):
+        # Retain compatibility with archived fixtures from the earlier debug
+        # endpoint shape. The live debugapi uses a name -> values object.
+        metric_rows = metrics
+    else:
         row["debugMetricsStatus"] = "invalid"
         return row
     row["debugMetricsPrefix"] = str(data.get("prefix", ""))
@@ -2340,7 +2350,7 @@ def parse_debug_metrics(url, path, status):
         row["debugMetricsCount"] = int(data.get("count", len(metrics)))
     except Exception:
         row["debugMetricsCount"] = len(metrics)
-    for metric in metrics:
+    for metric in metric_rows:
         if not isinstance(metric, dict):
             continue
         name = str(metric.get("name", ""))

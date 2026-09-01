@@ -61,12 +61,12 @@ class NileSampleHandler(BaseHTTPRequestHandler):
             "/debug/metrics?prefix=chain/freezer/": {
                 "prefix": "chain/freezer/",
                 "count": 4,
-                "metrics": [
-                    {"name": "chain/freezer/blocks", "values": {"value": 16}},
-                    {"name": "chain/freezer/passes", "values": {"value": 2}},
-                    {"name": "chain/freezer/lastpass/duration", "values": {"value": 250000000}},
-                    {"name": "chain/freezer/pebble/size", "values": {"value": 4096}},
-                ],
+                "metrics": {
+                    "chain/freezer/blocks": {"value": 16},
+                    "chain/freezer/passes": {"value": 2},
+                    "chain/freezer/lastpass/duration": {"value": 250000000},
+                    "chain/freezer/pebble/size": {"value": 4096},
+                },
             },
         }
         payload = payloads.get(self.path)

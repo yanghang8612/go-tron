@@ -155,20 +155,24 @@ type commitmentParentReadContext struct {
 	// One fold worker exclusively owns each context, so these counters stay
 	// non-atomic on the read hot path. Close aggregates them into process metrics
 	// once after all sibling workers have joined.
-	overlayResolved uint64
-	cacheResolved   uint64
-	durableReads    uint64
-	durableHits     uint64
-	trunkCached     uint64
-	trunkDurable    uint64
-	windowCached    uint64
-	depthCached     [4]uint64
-	depthDurable    [4]uint64
-	prefetchPlanned uint64
-	prefetchOverlay uint64
-	prefetchCache   uint64
-	prefetchDurable uint64
-	prefetchHits    uint64
+	overlayResolved      uint64
+	cacheResolved        uint64
+	durableReads         uint64
+	durableHits          uint64
+	trunkCached          uint64
+	trunkDurable         uint64
+	windowCached         uint64
+	depthCached          [4]uint64
+	depthDurable         [4]uint64
+	prefetchPlanned      uint64
+	prefetchOverlay      uint64
+	prefetchCache        uint64
+	prefetchDurable      uint64
+	prefetchHits         uint64
+	prefetchDepthPlanned [2]uint64
+	prefetchDepthCache   [2]uint64
+	prefetchDepthDurable [2]uint64
+	prefetchDepthUseful  [2]uint64
 }
 
 func newCommitmentParentReadContext() any {
@@ -211,6 +215,10 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.prefetchCache = 0
 		ctx.prefetchDurable = 0
 		ctx.prefetchHits = 0
+		ctx.prefetchDepthPlanned = [2]uint64{}
+		ctx.prefetchDepthCache = [2]uint64{}
+		ctx.prefetchDepthDurable = [2]uint64{}
+		ctx.prefetchDepthUseful = [2]uint64{}
 		commitmentParentReadContextPool.Put(ctx)
 		contexts[i] = nil
 	}
@@ -489,6 +497,10 @@ func (s *commitmentParentReadSession) PrefetchKeyParts(reader int, first, second
 func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []byte) (bool, error) {
 	ctx := s.readContexts[reader]
 	ctx.prefetchPlanned++
+	prefetchDepth := commitmentParentPrefetchDepthBucket(len(key) - len(keyPrefix))
+	if prefetchDepth >= 0 {
+		ctx.prefetchDepthPlanned[prefetchDepth]++
+	}
 	keyHash := layerBloomHashBytes(key)
 	if _, found, tomb := lookupLayersNewest(s.inflight, key, keyHash); tomb {
 		ctx.prefetchOverlay++
@@ -507,6 +519,9 @@ func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []b
 	cached, present, cacheEpoch, cacheable := s.cache.probeAtVersionForPrefetch(key, s.cacheVersion)
 	if cached {
 		ctx.prefetchCache++
+		if prefetchDepth >= 0 {
+			ctx.prefetchDepthCache[prefetchDepth]++
+		}
 		return present, nil
 	}
 	cursor := s.cursors[reader]
@@ -523,6 +538,9 @@ func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []b
 	ctx.cacheable = cacheable
 	ctx.prefetch = true
 	ctx.prefetchDurable++
+	if prefetchDepth >= 0 {
+		ctx.prefetchDepthDurable[prefetchDepth]++
+	}
 	found, err := cursor.View(key, ctx.callback)
 	if found {
 		ctx.prefetchHits++
@@ -557,7 +575,7 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 		ctx.overlayResolved++
 		return true, fn(value, true)
 	}
-	cached, present, windowHit, cacheEpoch, cacheable, err := s.cache.viewAtVersion(key, s.cacheVersion, fn)
+	cached, present, windowHit, usefulPrefetch, cacheEpoch, cacheable, err := s.cache.viewAtVersion(key, s.cacheVersion, fn)
 	if cached {
 		ctx.cacheResolved++
 		if trunk {
@@ -568,6 +586,11 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 		}
 		if depthBucket >= 0 {
 			ctx.depthCached[depthBucket]++
+		}
+		if usefulPrefetch {
+			if prefetchDepth := commitmentParentPrefetchDepthBucket(depth); prefetchDepth >= 0 {
+				ctx.prefetchDepthUseful[prefetchDepth]++
+			}
 		}
 		return present, err
 	}
@@ -628,6 +651,7 @@ func (s *commitmentParentReadSession) Close() error {
 	var overlayResolved, cacheResolved, durableReads, durableHits, trunkCached, trunkDurable, windowCached uint64
 	var prefetchPlanned, prefetchOverlay, prefetchCache, prefetchDurable, prefetchHits uint64
 	var depthCached, depthDurable [4]uint64
+	var prefetchDepthPlanned, prefetchDepthCache, prefetchDepthDurable, prefetchDepthUseful [2]uint64
 	for _, ctx := range s.readContexts {
 		overlayResolved += ctx.overlayResolved
 		cacheResolved += ctx.cacheResolved
@@ -641,6 +665,12 @@ func (s *commitmentParentReadSession) Close() error {
 		prefetchCache += ctx.prefetchCache
 		prefetchDurable += ctx.prefetchDurable
 		prefetchHits += ctx.prefetchHits
+		for bucket := range prefetchDepthPlanned {
+			prefetchDepthPlanned[bucket] += ctx.prefetchDepthPlanned[bucket]
+			prefetchDepthCache[bucket] += ctx.prefetchDepthCache[bucket]
+			prefetchDepthDurable[bucket] += ctx.prefetchDepthDurable[bucket]
+			prefetchDepthUseful[bucket] += ctx.prefetchDepthUseful[bucket]
+		}
 		for bucket := range depthCached {
 			depthCached[bucket] += ctx.depthCached[bucket]
 			depthDurable[bucket] += ctx.depthDurable[bucket]
@@ -658,6 +688,12 @@ func (s *commitmentParentReadSession) Close() error {
 	commitmentParentPrefetchCacheCounter.Inc(int64(prefetchCache))
 	commitmentParentPrefetchDurableCounter.Inc(int64(prefetchDurable))
 	commitmentParentPrefetchDurableHitCounter.Inc(int64(prefetchHits))
+	for bucket := range prefetchDepthPlanned {
+		commitmentParentPrefetchDepthPlannedCounters[bucket].Inc(int64(prefetchDepthPlanned[bucket]))
+		commitmentParentPrefetchDepthCacheCounters[bucket].Inc(int64(prefetchDepthCache[bucket]))
+		commitmentParentPrefetchDepthDurableCounters[bucket].Inc(int64(prefetchDepthDurable[bucket]))
+		commitmentParentPrefetchDepthUsefulCounters[bucket].Inc(int64(prefetchDepthUseful[bucket]))
+	}
 	for bucket := range depthCached {
 		commitmentParentDepthCacheCounters[bucket].Inc(int64(depthCached[bucket]))
 		commitmentParentDepthDurableCounters[bucket].Inc(int64(depthDurable[bucket]))
@@ -681,6 +717,17 @@ func commitmentParentDeepDepthBucket(depth int) int {
 		return 2
 	default:
 		return 3
+	}
+}
+
+func commitmentParentPrefetchDepthBucket(depth int) int {
+	switch {
+	case depth == baseReadCacheTrunkDepth+1:
+		return 0
+	case depth > baseReadCacheTrunkDepth+1:
+		return 1
+	default:
+		return -1
 	}
 }
 

@@ -55,6 +55,30 @@ var (
 	commitmentPipelinePrefetchLookaheadCappedCounter = metrics.NewRegisteredCounter(
 		"state/commitment/pipeline/prefetch_lookahead/capped_lanes", nil,
 	)
+	commitmentPipelinePrefetchCriticalPlannedCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_critical/planned", nil,
+	)
+	commitmentPipelinePrefetchCriticalWallNanosCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_critical/wall_nanos", nil,
+	)
+	commitmentPipelinePrefetchLookaheadWallNanosCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_lookahead/wall_nanos", nil,
+	)
+	commitmentPipelinePrefetchCriticalWaitCallsCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_critical/wait_calls", nil,
+	)
+	commitmentPipelinePrefetchCriticalWaitNanosCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_critical/wait_nanos", nil,
+	)
+	commitmentPipelinePrefetchDepthGauge = metrics.NewRegisteredGauge(
+		"state/commitment/pipeline/prefetch_critical/depth", nil,
+	)
+	commitmentPipelinePrefetchLookaheadDepthGauge = metrics.NewRegisteredGauge(
+		"state/commitment/pipeline/prefetch_lookahead/depth", nil,
+	)
+	commitmentPipelinePrefetchLookaheadLimitGauge = metrics.NewRegisteredGauge(
+		"state/commitment/pipeline/prefetch_lookahead/limit_per_lane", nil,
+	)
 )
 
 var commitmentPipelineMaxInflight atomic.Int64

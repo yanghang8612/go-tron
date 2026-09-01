@@ -278,6 +278,11 @@ func TestOrderedCommitmentPipelinePrefetchPreservesPebbleRoot(t *testing.T) {
 	oldDepth := CommitmentParentPrefetchDepth
 	CommitmentParentPrefetchDepth = 2
 	defer func() { CommitmentParentPrefetchDepth = oldDepth }()
+	criticalPlannedBefore := commitmentPipelinePrefetchCriticalPlannedCounter.Snapshot().Count()
+	criticalWallBefore := commitmentPipelinePrefetchCriticalWallNanosCounter.Snapshot().Count()
+	criticalWaitCallsBefore := commitmentPipelinePrefetchCriticalWaitCallsCounter.Snapshot().Count()
+	lookaheadPlannedBefore := commitmentPipelinePrefetchLookaheadPlannedCounter.Snapshot().Count()
+	lookaheadWallBefore := commitmentPipelinePrefetchLookaheadWallNanosCounter.Snapshot().Count()
 	pipeline, err := NewOrderedCommitmentPipeline(buf)
 	if err != nil {
 		t.Fatal(err)
@@ -301,6 +306,30 @@ func TestOrderedCommitmentPipelinePrefetchPreservesPebbleRoot(t *testing.T) {
 	}
 	if err := buf.CommitInflight(handle); err != nil {
 		t.Fatal(err)
+	}
+	if got := commitmentPipelinePrefetchCriticalPlannedCounter.Snapshot().Count() - criticalPlannedBefore; got <= 0 {
+		t.Fatalf("critical prefetch planned delta = %d, want > 0", got)
+	}
+	if got := commitmentPipelinePrefetchCriticalWallNanosCounter.Snapshot().Count() - criticalWallBefore; got <= 0 {
+		t.Fatalf("critical prefetch wall nanos delta = %d, want > 0", got)
+	}
+	if got := commitmentPipelinePrefetchCriticalWaitCallsCounter.Snapshot().Count() - criticalWaitCallsBefore; got <= 0 {
+		t.Fatalf("critical prefetch wait calls delta = %d, want > 0", got)
+	}
+	if got := commitmentPipelinePrefetchLookaheadPlannedCounter.Snapshot().Count() - lookaheadPlannedBefore; got <= 0 {
+		t.Fatalf("lookahead prefetch planned delta = %d, want > 0", got)
+	}
+	if got := commitmentPipelinePrefetchLookaheadWallNanosCounter.Snapshot().Count() - lookaheadWallBefore; got <= 0 {
+		t.Fatalf("lookahead prefetch wall nanos delta = %d, want > 0", got)
+	}
+	if got := commitmentPipelinePrefetchDepthGauge.Snapshot().Value(); got != 2 {
+		t.Fatalf("critical prefetch depth gauge = %d, want 2", got)
+	}
+	if got := commitmentPipelinePrefetchLookaheadDepthGauge.Snapshot().Value(); got != 3 {
+		t.Fatalf("lookahead prefetch depth gauge = %d, want 3", got)
+	}
+	if got := commitmentPipelinePrefetchLookaheadLimitGauge.Snapshot().Value(); got != int64(CommitmentParentPrefetchLookaheadLimitPerLane) {
+		t.Fatalf("lookahead prefetch limit gauge = %d, want %d", got, CommitmentParentPrefetchLookaheadLimitPerLane)
 	}
 }
 
