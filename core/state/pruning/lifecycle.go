@@ -36,7 +36,12 @@ type SnapshotLifecycleConfig struct {
 	// verification and retired-file deletion gate while historical sync is
 	// active. The sync-complete lifecycle wake runs it once the importer is idle.
 	DeferRetiredPruneWhileSyncing bool
-	Interval                      time.Duration
+	// DeferPruneOnSyncHistoryDeferral postpones hot and derived pruning when the
+	// cold builder deliberately yields to an active foreground importer. A cold
+	// build admitted by capacity or forced by its hard backlog cap still runs the
+	// ordered prune stages in the same pass, bounding hot duplicate growth.
+	DeferPruneOnSyncHistoryDeferral bool
+	Interval                        time.Duration
 }
 
 type ChainLookupPruneFunc func() (*snapshots.PruneHotChainLookupResult, error)
@@ -58,6 +63,7 @@ type SnapshotLifecyclePass struct {
 	StateChangeIndexDeferred bool
 	RetiredPrune             *snapshots.PruneRetiredSegmentFilesResult
 	RetiredDeferred          bool
+	PruneDeferred            bool
 }
 
 // SnapshotLifecycle owns the state snapshot builder/compactor and hot pruner
@@ -73,6 +79,7 @@ type SnapshotLifecycle struct {
 	stateChangeIndexPrune StateChangeIndexPruneFunc
 	retiredPrune          RetiredPruneFunc
 	deferRetiredPrune     bool
+	deferPruneOnHistory   bool
 
 	interval time.Duration
 	ctx      context.Context
@@ -116,6 +123,7 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 		stateChangeIndexPrune: cfg.StateChangeIndexPrune,
 		retiredPrune:          cfg.RetiredPrune,
 		deferRetiredPrune:     cfg.DeferRetiredPruneWhileSyncing,
+		deferPruneOnHistory:   cfg.DeferPruneOnSyncHistoryDeferral,
 		interval:              interval,
 		ctx:                   ctx,
 		cancel:                cancel,
@@ -153,6 +161,7 @@ func (l *SnapshotLifecycle) Start() error {
 		"stateChangeIndexPrune", l.stateChangeIndexPrune != nil,
 		"retiredPrune", l.retiredPrune != nil,
 		"deferRetiredPruneWhileSyncing", l.deferRetiredPrune,
+		"deferPruneOnSyncHistoryDeferral", l.deferPruneOnHistory,
 		"deferStateCodePruneWhileSyncing", l.pruner.cfg.DeferStateCodePruneWhileSyncing,
 		"mode", l.pruner.cfg.Policy.Mode,
 		"interval", l.interval,
@@ -239,6 +248,7 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		if result.HistoryGateDeferred {
 			return out, nil
 		}
+		out.PruneDeferred = l.deferPruneOnHistory && result.HistoryDeferred && l.pruner != nil && l.pruner.syncActive()
 	}
 	if l.chainFreezerBuild != nil {
 		result, err := l.chainFreezerBuild()
@@ -247,7 +257,7 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		}
 		out.ChainFreezerBuild = result
 	}
-	if l.pruner != nil {
+	if l.pruner != nil && !out.PruneDeferred {
 		stats, err := l.pruner.PrunePassContext(l.ctx)
 		if err != nil {
 			return out, err
@@ -285,21 +295,21 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			}
 		}
 	}
-	if l.chainLookupPrune != nil {
+	if l.chainLookupPrune != nil && !out.PruneDeferred {
 		result, err := l.chainLookupPrune()
 		if err != nil {
 			return out, err
 		}
 		out.ChainLookupPrune = result
 	}
-	if l.sectionBloomPrune != nil {
+	if l.sectionBloomPrune != nil && !out.PruneDeferred {
 		result, err := l.sectionBloomPrune()
 		if err != nil {
 			return out, err
 		}
 		out.SectionBloomPrune = result
 	}
-	if l.balanceTracePrune != nil {
+	if l.balanceTracePrune != nil && !out.PruneDeferred {
 		result, err := l.balanceTracePrune()
 		if err != nil {
 			return out, err

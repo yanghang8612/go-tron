@@ -2518,6 +2518,21 @@ func (b *Buffer) PutKeyPartsStringsOwnedValuesWithBatchCount(first []byte, secon
 	return nil
 }
 
+// PutKeyPartsStringsOwnedValuesInArenaWithBatchCount is the active-layer form
+// of LayerView's combined values+keys arena writer.
+func (b *Buffer) PutKeyPartsStringsOwnedValuesInArenaWithBatchCount(first []byte, seconds []string, values [][]byte, arena []byte, batchCount int) error {
+	if len(seconds) != len(values) {
+		return errors.New("blockbuffer: key/value batch length mismatch")
+	}
+	b.mu.RLock()
+	active := b.newestInflightLocked()
+	b.mu.RUnlock()
+	if active == nil {
+		panic("blockbuffer: PutKeyPartsStringsOwnedValuesInArena called with no active layer")
+	}
+	return b.putIntoKeyPartsStringsOwnedValuesInArena(active, first, seconds, values, arena, batchCount)
+}
+
 // PutStateKVLatest implements rawdb's structured flat-latest writer path for
 // the synchronous pipeline.
 func (b *Buffer) PutStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey, value []byte) error {

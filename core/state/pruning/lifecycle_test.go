@@ -750,6 +750,61 @@ func TestSnapshotLifecycleDefersDerivedBuildsUntilNearTip(t *testing.T) {
 	}
 }
 
+func TestSnapshotLifecyclePruneDeferralRequiresOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		deferPrune    bool
+		wantDeferred  bool
+		wantPruneRuns int
+	}{
+		{name: "default preserves ordered prune", wantPruneRuns: 1},
+		{name: "busy importer defers ordered prune", deferPrune: true, wantDeferred: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := rawdb.NewMemoryDatabase()
+			dir := t.TempDir()
+			for blockNum := uint64(1); blockNum <= 4; blockNum++ {
+				writeSnapPruningChange(t, db, blockNum, blockNum, blockNum)
+			}
+			chain := &fakePruneChain{db: db, solidified: 4, syncRemaining: 1_000, syncRemainingOK: true}
+			pruneRuns := 0
+			lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+				Snapshot: snapshots.Config{
+					Dir:                           dir,
+					Enabled:                       true,
+					Interval:                      time.Hour,
+					HistoryWindow:                 1,
+					DeferHistoryBuildWhileSyncing: true,
+					MaxDeferredHistoryBlocks:      2,
+					MaxBusyDeferredHistoryBlocks:  4,
+					SyncBuildReady:                func() bool { return false },
+				},
+				Pruner: PrunerConfig{
+					Policy:      SnapPolicy(1, 1),
+					Interval:    time.Hour,
+					SnapshotDir: dir,
+				},
+				ChainLookupPrune: func() (*snapshots.PruneHotChainLookupResult, error) {
+					pruneRuns++
+					return nil, nil
+				},
+				DeferPruneOnSyncHistoryDeferral: tc.deferPrune,
+			})
+
+			result, err := lifecycle.OnePass()
+			if err != nil {
+				t.Fatalf("OnePass: %v", err)
+			}
+			if !result.Snapshot.HistoryDeferred || result.Snapshot.Built {
+				t.Fatalf("snapshot pass = %+v, want busy-importer history deferral", result.Snapshot)
+			}
+			if result.PruneDeferred != tc.wantDeferred || pruneRuns != tc.wantPruneRuns {
+				t.Fatalf("PruneDeferred=%v pruneRuns=%d, want %v/%d", result.PruneDeferred, pruneRuns, tc.wantDeferred, tc.wantPruneRuns)
+			}
+		})
+	}
+}
+
 func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	writeSnapPruningChange(t, db, 1, 10, 12)

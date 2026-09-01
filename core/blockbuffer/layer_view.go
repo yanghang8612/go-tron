@@ -794,6 +794,33 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValues(l *layer, first []byte, secon
 		totalSize += len(second)
 	}
 	keyArena := l.reserveOwnedKeyBytes(totalSize, reserveBatches)
+	b.putIntoKeyPartsStringsOwnedValuesFromKeyArena(l, first, seconds, values, keyArena, reserveBatches)
+}
+
+// putIntoKeyPartsStringsOwnedValuesInArena is the combined-allocation form of
+// putIntoKeyPartsStringsOwnedValues. arena's current length contains the
+// caller-owned encoded values; its spare capacity receives the joined physical
+// keys. Both become immutable before publication and the layer's map entries
+// retain the shared backing allocation until drop.
+func (b *Buffer) putIntoKeyPartsStringsOwnedValuesInArena(l *layer, first []byte, seconds []string, values [][]byte, arena []byte, reserveBatches int) error {
+	if reserveBatches < 1 {
+		reserveBatches = 1
+	}
+	totalSize := len(first) * len(seconds)
+	for _, second := range seconds {
+		totalSize += len(second)
+	}
+	if cap(arena)-len(arena) < totalSize {
+		return errors.New("blockbuffer: owned batch arena has insufficient key capacity")
+	}
+	start := len(arena)
+	arena = arena[:start+totalSize]
+	keyArena := arena[start : start+totalSize : start+totalSize]
+	b.putIntoKeyPartsStringsOwnedValuesFromKeyArena(l, first, seconds, values, keyArena, reserveBatches)
+	return nil
+}
+
+func (b *Buffer) putIntoKeyPartsStringsOwnedValuesFromKeyArena(l *layer, first []byte, seconds []string, values [][]byte, keyArena []byte, reserveBatches int) {
 	linksPtr := borrowOwnedValueBatchLinks(len(seconds))
 	defer returnOwnedValueBatchLinks(linksPtr)
 	links := *linksPtr
@@ -1047,6 +1074,18 @@ func (v *LayerView) PutKeyPartsStringsOwnedValuesWithBatchCount(first []byte, se
 	}
 	v.b.putIntoKeyPartsStringsOwnedValues(v.l, first, seconds, values, batchCount)
 	return nil
+}
+
+// PutKeyPartsStringsOwnedValuesInArenaWithBatchCount publishes encoded values
+// and joined physical keys from one caller-owned allocation. arena's current
+// length contains the immutable values and its spare capacity must fit every
+// joined key. This method is exposed for rawdb's structural fast-path
+// discovery; other callers should use the ordinary ownership-taking methods.
+func (v *LayerView) PutKeyPartsStringsOwnedValuesInArenaWithBatchCount(first []byte, seconds []string, values [][]byte, arena []byte, batchCount int) error {
+	if len(seconds) != len(values) {
+		return errors.New("blockbuffer: key/value batch length mismatch")
+	}
+	return v.b.putIntoKeyPartsStringsOwnedValuesInArena(v.l, first, seconds, values, arena, batchCount)
 }
 
 // DeleteKeyParts is the delete counterpart of PutKeyParts.

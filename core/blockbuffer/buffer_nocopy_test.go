@@ -1951,6 +1951,68 @@ func TestCommitmentBranchLayerOwnedBatchRetainsValues(t *testing.T) {
 	}
 }
 
+func TestCommitmentBranchLayerOwnedBatchSharesValuesAndKeysArena(t *testing.T) {
+	buf := New(rawdb.NewMemoryDatabase())
+	buf.BeginBlock(bufHash(1), 1)
+	h, ok := buf.NewestInflight()
+	if !ok {
+		t.Fatal("missing in-flight layer")
+	}
+	view := buf.ViewLayer(h)
+	first := []byte(rawdb.CommitmentBranchKeyPrefix)
+	seconds := []string{string([]byte{0x01, 0x02}), string([]byte{0x03, 0x04, 0x05})}
+	wantValues := [][]byte{[]byte("first-branch"), []byte("second-branch")}
+	valueBytes := len(wantValues[0]) + len(wantValues[1])
+	keyBytes := len(first)*len(seconds) + len(seconds[0]) + len(seconds[1])
+	arena := make([]byte, 0, valueBytes+keyBytes)
+	values := make([][]byte, len(wantValues))
+	for i, value := range wantValues {
+		start := len(arena)
+		arena = append(arena, value...)
+		values[i] = arena[start:len(arena):len(arena)]
+	}
+	if err := view.PutKeyPartsStringsOwnedValuesInArenaWithBatchCount(first, seconds, values, arena, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.l.ownedKeyArena) != 0 {
+		t.Fatalf("combined write used separate layer key arena: %d bytes", len(h.l.ownedKeyArena))
+	}
+
+	arenaStart := uintptr(unsafe.Pointer(unsafe.SliceData(arena)))
+	arenaEnd := arenaStart + uintptr(cap(arena))
+	seen := 0
+	for shard := range h.l.shards {
+		for key, value := range h.l.shards[shard].writes {
+			keyStart := uintptr(unsafe.Pointer(unsafe.StringData(key)))
+			if keyStart < arenaStart || keyStart+uintptr(len(key)) > arenaEnd {
+				t.Fatalf("key %x is outside the combined arena", key)
+			}
+			valueStart := uintptr(unsafe.Pointer(unsafe.SliceData(value)))
+			if valueStart < arenaStart || valueStart+uintptr(len(value)) > arenaEnd {
+				t.Fatalf("value %x is outside the combined arena", value)
+			}
+			seen++
+		}
+	}
+	if seen != len(seconds) {
+		t.Fatalf("combined arena entries = %d, want %d", seen, len(seconds))
+	}
+	for i, second := range seconds {
+		got, err := view.Get(append(append([]byte(nil), first...), second...))
+		if err != nil || !bytes.Equal(got, wantValues[i]) {
+			t.Fatalf("combined branch %d = (%q,%v), want (%q,nil)", i, got, err, wantValues[i])
+		}
+	}
+
+	invalidBuf := New(rawdb.NewMemoryDatabase())
+	invalidBuf.BeginBlock(bufHash(2), 2)
+	h2, _ := invalidBuf.NewestInflight()
+	tooSmall := []byte("value")
+	if err := invalidBuf.ViewLayer(h2).PutKeyPartsStringsOwnedValuesInArenaWithBatchCount(first, []string{"key"}, [][]byte{tooSmall}, tooSmall, 1); err == nil {
+		t.Fatal("combined writer accepted an arena without key capacity")
+	}
+}
+
 func TestCommitmentBranchLayerOwnedBatchPreservesLastWrite(t *testing.T) {
 	buf := New(rawdb.NewMemoryDatabase())
 	buf.BeginBlock(bufHash(1), 1)

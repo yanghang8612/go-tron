@@ -214,11 +214,32 @@ type keyPartsStringsOwnedValuesBatchWriter interface {
 	PutKeyPartsStringsOwnedValuesWithBatchCount(first []byte, seconds []string, values [][]byte, batchCount int) error
 }
 
+// keyPartsStringsOwnedValuesArenaBatchWriter is the layered commitment writer
+// fast path for a caller whose encoded values occupy the prefix of one owned
+// arena and whose spare capacity is exactly large enough for the joined
+// physical keys. The writer appends those keys into the same immutable backing
+// allocation and retains both key strings and value slices until layer drop.
+// Generic writers deliberately omit this interface and retain the ordinary
+// ownership/copy contracts below.
+type keyPartsStringsOwnedValuesArenaBatchWriter interface {
+	PutKeyPartsStringsOwnedValuesInArenaWithBatchCount(first []byte, seconds []string, values [][]byte, arena []byte, batchCount int) error
+}
+
 // SupportsCommitmentBranchOwnedValue reports whether db can retain a freshly
 // encoded branch value directly. Callers use this to choose between allocating
 // the final immutable encoding and reusing a scratch buffer for copying stores.
 func SupportsCommitmentBranchOwnedValue(db ethdb.KeyValueWriter) bool {
 	_, ok := db.(keyPartsOwnedValueWriter)
+	return ok
+}
+
+// SupportsCommitmentBranchOwnedBatchArena reports whether db can retain the
+// encoded values and their joined physical keys from one shared immutable
+// allocation. Callers must use this narrower capability independently of
+// SupportsCommitmentBranchOwnedValue: an older layered writer may support
+// ownership transfer without supporting the combined batch layout.
+func SupportsCommitmentBranchOwnedBatchArena(db ethdb.KeyValueWriter) bool {
+	_, ok := db.(keyPartsStringsOwnedValuesArenaBatchWriter)
 	return ok
 }
 
@@ -303,6 +324,33 @@ func (s CommitmentBranchKeyspace) WriteOwnedStringsWithBatchCount(db ethdb.KeyVa
 		}
 	}
 	return nil
+}
+
+// PhysicalKeyBytes returns the exact number of bytes occupied by the joined
+// physical keys for prefixes. It lets an ownership-taking caller reserve one
+// shared values+keys arena without exposing the keyspace's internal prefix.
+func (s CommitmentBranchKeyspace) PhysicalKeyBytes(prefixes []string) int {
+	total := len(s.prefix()) * len(prefixes)
+	for _, prefix := range prefixes {
+		total += len(prefix)
+	}
+	return total
+}
+
+// WriteOwnedStringsInArenaWithBatchCount is
+// WriteOwnedStringsWithBatchCount for encoded values occupying arena's current
+// length. A capable layered writer appends every joined physical key into the
+// spare capacity of that same allocation. The caller must not mutate arena or
+// encoded after this call. Unsupported writers ignore the spare capacity and
+// retain the existing batch path.
+func (s CommitmentBranchKeyspace) WriteOwnedStringsInArenaWithBatchCount(db ethdb.KeyValueWriter, prefixes []string, encoded [][]byte, arena []byte, batchCount int) error {
+	if len(prefixes) != len(encoded) {
+		return errors.New("rawdb: commitment branch batch length mismatch")
+	}
+	if writer, ok := db.(keyPartsStringsOwnedValuesArenaBatchWriter); ok {
+		return writer.PutKeyPartsStringsOwnedValuesInArenaWithBatchCount(s.prefix(), prefixes, encoded, arena, batchCount)
+	}
+	return s.WriteOwnedStringsWithBatchCount(db, prefixes, encoded, batchCount)
 }
 
 // ReadCommitmentBranch retrieves the encoded BranchData for prefix.

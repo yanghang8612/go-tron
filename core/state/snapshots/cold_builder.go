@@ -123,10 +123,24 @@ type Config struct {
 	// immediately once sync enters the recent hot window.
 	DeferHistoryBuildWhileSyncing bool
 	// MaxDeferredHistoryBlocks caps how much authoritative hot history may pile
-	// up while deep sync defers cold construction. Once the cap is exceeded,
-	// bounded accelerated passes resume even while sync is active. Zero uses
-	// HistoryWindow, preserving a conservative bounded default.
+	// up while deep sync defers cold construction before SyncBuildReady is
+	// consulted. Once the cap is exceeded, bounded accelerated passes resume
+	// while the importer has maintenance capacity. Zero uses HistoryWindow,
+	// preserving the historical bounded default.
 	MaxDeferredHistoryBlocks uint64
+	// MaxBusyDeferredHistoryBlocks is the hard history-backlog cap while
+	// SyncBuildReady reports that the foreground importer is busy. Exceeding it
+	// forces one bounded build so a continuously supplied importer cannot starve
+	// cold history forever. Zero (or a value below MaxDeferredHistoryBlocks)
+	// collapses to MaxDeferredHistoryBlocks and preserves the historical
+	// immediate-over-cap behavior.
+	MaxBusyDeferredHistoryBlocks uint64
+	// SyncBuildReady is a fast, concurrency-safe admission callback for history
+	// construction while sync is active and backlog is between the soft and hard
+	// caps. Nil preserves the historical immediate-over-cap behavior. The hard
+	// cap always wins, so a callback that remains false cannot make the backlog
+	// unbounded.
+	SyncBuildReady func() bool
 	// DeferDerivedSidecarsWhileSyncing lets bounded state-history compression
 	// continue during an active sync without also materializing EventLog,
 	// balance-trace, or section-bloom sidecars. Those rebuildable datasets are
@@ -946,9 +960,19 @@ func (r *Runner) onePass() (PassResult, error) {
 			maxDeferred = r.cfg.HistoryWindow
 		}
 		if source, ok := r.chain.(syncRemainingSource); ok {
-			if remaining, active := source.SyncRemainingBlocks(); active && remaining > r.cfg.HistoryWindow && readyBlocks <= maxDeferred {
-				result.HistoryDeferred = true
-				return result, nil
+			if remaining, active := source.SyncRemainingBlocks(); active && remaining > r.cfg.HistoryWindow {
+				if readyBlocks <= maxDeferred {
+					result.HistoryDeferred = true
+					return result, nil
+				}
+				maxBusyDeferred := r.cfg.MaxBusyDeferredHistoryBlocks
+				if maxBusyDeferred < maxDeferred {
+					maxBusyDeferred = maxDeferred
+				}
+				if r.cfg.SyncBuildReady != nil && readyBlocks <= maxBusyDeferred && !r.cfg.SyncBuildReady() {
+					result.HistoryDeferred = true
+					return result, nil
+				}
 			}
 		}
 	}

@@ -1093,6 +1093,8 @@ func gtron(ctx *cli.Context) error {
 	}
 	if shouldEnableDomainStatePruner(chainConfig) {
 		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
+		maxDeferredHistoryBlocks := maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow)
+		syncHistoryBuildAdmission := newSyncImporterMaintenanceAdmission(30 * time.Second)
 		historyMode := chainConfig.EffectiveHistoryMode()
 		coldStateSnapshotsEnabled := (historyMode == params.HistoryModeSnap || historyMode == params.HistoryModeArchive) && chainConfig.HistoryEnabled
 		buildDerivedSnapshots := historyMode == params.HistoryModeSnap
@@ -1180,11 +1182,15 @@ func gtron(ctx *cli.Context) error {
 				// A 40k-block cadence can otherwise continuously rewrite a large base.
 				BuildCommitmentBranchBaseWhileSyncing: false,
 				DeferHistoryBuildWhileSyncing:         shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
-				MaxDeferredHistoryBlocks:              maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
-				DeferDerivedSidecarsWhileSyncing:      buildDerivedSnapshots,
-				BuildEventLogsWhileSyncing:            buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
-				SyncEventLogCatchupBlocks:             freezerCfg.V2SegmentBlocks,
-				SyncEventLogTargetBlock:               syncEventLogTargetBlock,
+				MaxDeferredHistoryBlocks:              maxDeferredHistoryBlocks,
+				MaxBusyDeferredHistoryBlocks:          maxBusyDeferredColdHistoryBlocks(maxDeferredHistoryBlocks),
+				SyncBuildReady: func() bool {
+					return syncHistoryBuildAdmission.Ready(syncService.Status(), time.Now())
+				},
+				DeferDerivedSidecarsWhileSyncing: buildDerivedSnapshots,
+				BuildEventLogsWhileSyncing:       buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
+				SyncEventLogCatchupBlocks:        freezerCfg.V2SegmentBlocks,
+				SyncEventLogTargetBlock:          syncEventLogTargetBlock,
 			},
 			Pruner: statepruning.PrunerConfig{
 				Policy:                          prunePolicy,
@@ -1200,7 +1206,8 @@ func gtron(ctx *cli.Context) error {
 			// Retired-file deletion verifies the complete active manifest first.
 			// Keep that CPU/IO-heavy safety gate off the historical import path;
 			// AddSyncCompleteHook below wakes the lifecycle as soon as sync ends.
-			DeferRetiredPruneWhileSyncing: true,
+			DeferRetiredPruneWhileSyncing:   true,
+			DeferPruneOnSyncHistoryDeferral: true,
 			RetiredPrune: func(ctx context.Context, verifyActive statesnapshots.ActiveManifestVerifier) (*statesnapshots.PruneRetiredSegmentFilesResult, error) {
 				if _, err := statesnapshots.LoadProductionManifest(stateSnapshotDir); err != nil {
 					if os.IsNotExist(err) {
@@ -1239,13 +1246,16 @@ func gtron(ctx *cli.Context) error {
 			"catchupUnthrottledLagBlocks", prunePolicy.HistoryWindow,
 			"catchupHeavyWorkCooldown", snapshotCatchupHeavyWorkCooldown,
 			"deferHistoryBuildWhileSyncing", shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
-			"maxDeferredHistoryBlocks", maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow),
+			"maxDeferredHistoryBlocks", maxDeferredHistoryBlocks,
+			"maxBusyDeferredHistoryBlocks", maxBusyDeferredColdHistoryBlocks(maxDeferredHistoryBlocks),
+			"syncBuildRequiresImporterCapacity", true,
 			"deferDerivedSidecarsWhileSyncing", buildDerivedSnapshots,
 			"buildEventLogsWhileSyncing", buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
 			"syncEventLogCatchupBlocks", freezerCfg.V2SegmentBlocks,
 			"syncEventLogFreezerHandoff", syncEventLogTargetBlock != nil,
 			"maxPruneSyncLag", domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
 			"deferStateCodePruneWhileSyncing", prunePolicy.Mode == statepruning.ModeSnap,
+			"deferPruneOnSyncHistoryDeferral", true,
 			"heavyWorkRecoveryCooldown", heavyWorkRecoveryCooldown,
 			"heavyWorkCooldownMinDuration", heavyWorkCooldownMinDuration,
 			"sharedHeavyWorkGate", true,

@@ -282,36 +282,45 @@ func BenchmarkRawdbBranchStoreGetBranchInto(b *testing.B) {
 
 func BenchmarkRawdbBranchStorePutBranches(b *testing.B) {
 	for _, count := range []int{16, 32, 64, 128, 256, 1024} {
-		b.Run(strconv.Itoa(count), func(b *testing.B) {
-			keys := make([]string, count)
-			branches := make(map[string]*BranchData, count)
-			for i := range keys {
-				key := string([]byte{byte(i >> 8), byte(i)})
-				branch := new(BranchData)
-				for nibble := uint8(0); nibble < 16; nibble++ {
-					var hash common.Hash
-					hash[0] = nibble + 1
-					hash[1] = byte(i)
-					branch.SetHashChild(nibble, hash)
-				}
-				keys[i] = key
-				branches[key] = branch
+		keys := make([]string, count)
+		branches := make(map[string]*BranchData, count)
+		for i := range keys {
+			key := string([]byte{byte(i >> 8), byte(i)})
+			branch := new(BranchData)
+			for nibble := uint8(0); nibble < 16; nibble++ {
+				var hash common.Hash
+				hash[0] = nibble + 1
+				hash[1] = byte(i)
+				branch.SetHashChild(nibble, hash)
 			}
+			keys[i] = key
+			branches[key] = branch
+		}
 
-			buffer := blockbuffer.New(rawdb.NewMemoryDatabase())
-			buffer.BeginBlock(common.Hash{1}, 1)
-			handle, ok := buffer.NewestInflight()
-			if !ok {
-				b.Fatal("missing in-flight layer")
-			}
-			store := newRawdbBranchStore(buffer.ViewLayer(handle))
-			b.ReportAllocs()
-			b.ResetTimer()
-			for b.Loop() {
-				if err := store.putBranches(keys, branches, 1); err != nil {
-					b.Fatal(err)
+		for _, tc := range []struct {
+			name        string
+			sharedArena bool
+		}{
+			{name: "separate-arena", sharedArena: false},
+			{name: "shared-arena", sharedArena: true},
+		} {
+			b.Run(strconv.Itoa(count)+"/"+tc.name, func(b *testing.B) {
+				buffer := blockbuffer.New(rawdb.NewMemoryDatabase())
+				buffer.BeginBlock(common.Hash{1}, 1)
+				handle, ok := buffer.NewestInflight()
+				if !ok {
+					b.Fatal("missing in-flight layer")
 				}
-			}
-		})
+				store := newRawdbBranchStore(buffer.ViewLayer(handle))
+				store.ownedBatchArena = tc.sharedArena
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					if err := store.putBranches(keys, branches, 1); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }

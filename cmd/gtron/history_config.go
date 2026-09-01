@@ -6,10 +6,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
+	tnet "github.com/tronprotocol/go-tron/net"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
@@ -170,6 +173,63 @@ func maxDeferredColdHistoryBlocks(historyWindow uint64) uint64 {
 		return ^uint64(0)
 	}
 	return historyWindow * multiplier
+}
+
+func maxBusyDeferredColdHistoryBlocks(maxDeferred uint64) uint64 {
+	const multiplier = uint64(2)
+	if maxDeferred > ^uint64(0)/multiplier {
+		return ^uint64(0)
+	}
+	return maxDeferred * multiplier
+}
+
+// syncImporterMaintenanceAdmission requires an active downloader to remain
+// supply-idle across observations before admitting cold history. Comparing the
+// monotonic session progress prevents a transient empty buffer between import
+// batches from looking like sustained spare capacity. The builder's hard
+// backlog cap remains the independent liveness fallback.
+type syncImporterMaintenanceAdmission struct {
+	mu          sync.Mutex
+	quietPeriod time.Duration
+	idleSince   time.Time
+	observed    bool
+	targetHead  uint64
+	appliedTip  uint64
+	blocks      int
+}
+
+func newSyncImporterMaintenanceAdmission(quietPeriod time.Duration) *syncImporterMaintenanceAdmission {
+	if quietPeriod < 0 {
+		quietPeriod = 0
+	}
+	return &syncImporterMaintenanceAdmission{quietPeriod: quietPeriod}
+}
+
+func (a *syncImporterMaintenanceAdmission) Ready(status tnet.SyncStatus, now time.Time) bool {
+	if a == nil {
+		return true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !status.Active || status.Paused {
+		a.idleSince = time.Time{}
+		a.observed = false
+		return true
+	}
+	progressUnchanged := a.observed && a.targetHead == status.TargetHead && a.appliedTip == status.AppliedTip && a.blocks == status.SessionBlocks
+	a.observed = true
+	a.targetHead = status.TargetHead
+	a.appliedTip = status.AppliedTip
+	a.blocks = status.SessionBlocks
+	if status.BufferedBlocks > 0 || status.Inflight > 0 {
+		a.idleSince = time.Time{}
+		return false
+	}
+	if !progressUnchanged || a.idleSince.IsZero() || now.Before(a.idleSince) {
+		a.idleSince = now
+		return false
+	}
+	return now.Sub(a.idleSince) >= a.quietPeriod
 }
 
 func domainStatePrunePolicy(cfg *params.ChainConfig, targetReorgWindow uint64) statepruning.Policy {

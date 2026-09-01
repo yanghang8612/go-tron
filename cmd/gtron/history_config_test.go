@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
+	tnet "github.com/tronprotocol/go-tron/net"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
@@ -407,6 +409,63 @@ func TestMaxDeferredColdHistoryBlocksSaturates(t *testing.T) {
 	}
 	if got := maxDeferredColdHistoryBlocks(^uint64(0)); got != ^uint64(0) {
 		t.Fatalf("overflow cap = %d, want MaxUint64", got)
+	}
+}
+
+func TestMaxBusyDeferredColdHistoryBlocksSaturates(t *testing.T) {
+	if got := maxBusyDeferredColdHistoryBlocks(262_144); got != 524_288 {
+		t.Fatalf("ordinary hard cap = %d, want 524288", got)
+	}
+	if got := maxBusyDeferredColdHistoryBlocks(^uint64(0)); got != ^uint64(0) {
+		t.Fatalf("overflow hard cap = %d, want MaxUint64", got)
+	}
+}
+
+func TestSyncImporterMaintenanceAdmissionRequiresSustainedIdle(t *testing.T) {
+	admission := newSyncImporterMaintenanceAdmission(30 * time.Second)
+	now := time.Unix(100, 0)
+	if !admission.Ready(tnet.SyncStatus{}, now) {
+		t.Fatal("inactive importer should admit maintenance")
+	}
+	if !admission.Ready(tnet.SyncStatus{Active: true, Paused: true, BufferedBlocks: 10}, now) {
+		t.Fatal("paused importer should admit maintenance")
+	}
+
+	idle := tnet.SyncStatus{Active: true, TargetHead: 1_000, AppliedTip: 100, SessionBlocks: 100}
+	if admission.Ready(idle, now) {
+		t.Fatal("first idle observation should establish, not satisfy, quiet period")
+	}
+	if admission.Ready(idle, now.Add(29*time.Second)) {
+		t.Fatal("idle importer admitted before quiet period")
+	}
+	if !admission.Ready(idle, now.Add(30*time.Second)) {
+		t.Fatal("sustained idle importer should admit after quiet period")
+	}
+
+	progressed := idle
+	progressed.AppliedTip++
+	progressed.SessionBlocks++
+	if admission.Ready(progressed, now.Add(time.Minute)) {
+		t.Fatal("new import progress should restart quiet period")
+	}
+	changedTarget := progressed
+	changedTarget.TargetHead++
+	if admission.Ready(changedTarget, now.Add(2*time.Minute)) {
+		t.Fatal("sync target change should restart quiet period")
+	}
+	newSession := changedTarget
+	newSession.SessionBlocks = 0
+	if admission.Ready(newSession, now.Add(3*time.Minute)) {
+		t.Fatal("sync session reset should restart quiet period")
+	}
+	busy := newSession
+	busy.BufferedBlocks = 1
+	if admission.Ready(busy, now.Add(4*time.Minute)) {
+		t.Fatal("buffered foreground work should reject maintenance")
+	}
+	busy.BufferedBlocks = 0
+	if admission.Ready(busy, now.Add(5*time.Minute)) {
+		t.Fatal("first observation after foreground work should restart quiet period")
 	}
 }
 

@@ -68,15 +68,6 @@ type decodedWireTransaction struct {
 	refBlockHash  [8]byte
 }
 
-type blockTransactionReserve struct {
-	rawPresent bool
-	signatures int
-	results    int
-	pqAuthSigs int
-	auths      int
-	contracts  int
-}
-
 func verifyBlockDecodeReserveLayout() bool {
 	blockFields := (&corepb.Block{}).ProtoReflect().Descriptor().Fields()
 	if blockFields.Len() != 2 || !protoFieldShape(blockFields, 1, protoreflect.MessageKind, true) ||
@@ -142,10 +133,10 @@ type Block struct {
 	hash     common.Hash
 	hashDone bool
 	hashMu   sync.Mutex
-	// wireBacking keeps an immutable borrowed protobuf buffer alive for the
-	// stored-replay decoder. Only calldata-like byte fields alias it, always with
-	// capacity clamped to length; ordinary/network decoders leave this nil and
-	// retain their established independently-owned protobuf graph.
+	// wireBacking keeps an immutable borrowed protobuf buffer alive for freezer
+	// replay and staged sync import. Only allocation-sensitive byte fields alias
+	// it, always with capacity clamped to length; ordinary decoders leave this
+	// nil and retain an independently-owned protobuf graph.
 	wireBacking []byte
 
 	// marshalScratch is an exclusively-owned wire buffer transferred by the
@@ -538,35 +529,6 @@ func countBlockTransactionFields(data []byte) (int, bool) {
 }
 
 func unmarshalBlockTransactionReserved(data []byte, decoded *decodedWireTransaction) (*corepb.Transaction, error) {
-	reserve, ok := scanBlockTransactionReserve(data)
-	if !ok {
-		return nil, errors.New("malformed transaction wire envelope")
-	}
-	if reserve.rawPresent {
-		decoded.tx.RawData = &decoded.raw
-	}
-	if reserve.signatures == 1 {
-		decoded.tx.Signature = decoded.signatureSlot[:0]
-	} else if reserve.signatures > 1 {
-		decoded.tx.Signature = make([][]byte, 0, reserve.signatures)
-	}
-	if reserve.results == 1 {
-		decoded.tx.Ret = decoded.resultSlot[:0]
-	} else if reserve.results > 1 {
-		decoded.tx.Ret = make([]*corepb.Transaction_Result, 0, reserve.results)
-	}
-	if reserve.pqAuthSigs != 0 {
-		decoded.tx.PqAuthSig = make([]*corepb.PQAuthSig, 0, reserve.pqAuthSigs)
-	}
-	if reserve.auths != 0 {
-		decoded.raw.Auths = make([]*corepb.Authority, 0, reserve.auths)
-	}
-	if reserve.contracts == 1 {
-		decoded.raw.Contract = decoded.contractSlot[:0]
-	} else if reserve.contracts > 1 {
-		decoded.raw.Contract = make([]*corepb.Transaction_Contract, 0, reserve.contracts)
-	}
-
 	var unknown []byte
 	for len(data) != 0 {
 		fieldData := data
@@ -585,6 +547,9 @@ func unmarshalBlockTransactionReserved(data []byte, decoded *decodedWireTransact
 		}
 		switch field {
 		case 1:
+			if decoded.tx.RawData == nil {
+				decoded.tx.RawData = &decoded.raw
+			}
 			if err := unmarshalTransactionRawReserved(value, decoded); err != nil {
 				return nil, err
 			}
@@ -592,10 +557,14 @@ func unmarshalBlockTransactionReserved(data []byte, decoded *decodedWireTransact
 			// Borrow until ownBlockByteValues coalesces signatures with the other
 			// allocation-sensitive byte fields. UnmarshalBlockBorrowed retains the
 			// immutable wire buffer instead.
+			if decoded.tx.Signature == nil {
+				decoded.tx.Signature = decoded.signatureSlot[:0]
+			}
 			decoded.tx.Signature = append(decoded.tx.Signature, value[:len(value):len(value)])
 		case 5:
 			var result *corepb.Transaction_Result
-			if len(decoded.tx.Ret) == 0 {
+			if decoded.tx.Ret == nil {
+				decoded.tx.Ret = decoded.resultSlot[:0]
 				result = &decoded.result
 			} else {
 				result = new(corepb.Transaction_Result)
@@ -678,7 +647,8 @@ func unmarshalTransactionRawReserved(data []byte, decoded *decodedWireTransactio
 			}
 			var contract *corepb.Transaction_Contract
 			var inlineParameter *anypb.Any
-			if len(decoded.raw.Contract) == 0 {
+			if decoded.raw.Contract == nil {
+				decoded.raw.Contract = decoded.contractSlot[:0]
 				contract = &decoded.contract
 				inlineParameter = &decoded.parameter
 			} else {
@@ -903,60 +873,6 @@ func ownBlockByteValues(block *corepb.Block, total int) {
 	}
 }
 
-func scanBlockTransactionReserve(data []byte) (blockTransactionReserve, bool) {
-	var reserve blockTransactionReserve
-	for len(data) != 0 {
-		fieldData := data
-		field, wireType, n := protowire.ConsumeField(fieldData)
-		if n < 0 || !field.IsValid() {
-			return blockTransactionReserve{}, false
-		}
-		data = data[n:]
-		if wireType != protowire.BytesType {
-			continue
-		}
-		switch field {
-		case 1:
-			value, ok := bytesFieldValue(fieldData[:n])
-			if !ok {
-				return blockTransactionReserve{}, false
-			}
-			reserve.rawPresent = true
-			auths, contracts, ok := scanTransactionRawRepeated(value)
-			if !ok {
-				return blockTransactionReserve{}, false
-			}
-			reserve.auths += auths
-			reserve.contracts += contracts
-		case 2:
-			reserve.signatures++
-		case 5:
-			reserve.results++
-		case 6:
-			reserve.pqAuthSigs++
-		}
-	}
-	return reserve, true
-}
-
-func scanTransactionRawRepeated(data []byte) (auths, contracts int, ok bool) {
-	for len(data) != 0 {
-		field, wireType, n := protowire.ConsumeField(data)
-		if n < 0 || !field.IsValid() {
-			return 0, 0, false
-		}
-		if wireType == protowire.BytesType {
-			if field == 9 {
-				auths++
-			} else if field == 11 {
-				contracts++
-			}
-		}
-		data = data[n:]
-	}
-	return auths, contracts, true
-}
-
 func hasBytesField(data []byte, want protowire.Number) bool {
 	for len(data) != 0 {
 		field, wireType, n := protowire.ConsumeField(data)
@@ -1160,7 +1076,7 @@ func UnmarshalBlockOwned(data []byte) (*Block, error) {
 // transaction byte fields from immutable data. The caller must keep data
 // immutable for the returned block's lifetime; Block retains the backing
 // allocation explicitly. It is intended for immutable freezer record views
-// during one-shot stored replay. Malformed/legacy fallback decoding remains
+// and sync-owned staged bodies. Malformed/legacy fallback decoding remains
 // independently owned.
 func UnmarshalBlockBorrowed(data []byte) (*Block, error) {
 	block, err := unmarshalBlockReservedMode(data, false)

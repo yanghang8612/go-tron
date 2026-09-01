@@ -52,6 +52,7 @@ type rawdbBranchStore struct {
 	frozenKeyspace             rawdb.CommitmentBranchKeyspace
 	hasFrozenKeyspace          bool
 	ownedValue                 bool
+	ownedBatchArena            bool
 	readParentBranches         bool
 	parentView                 pointread.CommitmentParentView
 	parentSession              pointread.CommitmentParentSession
@@ -198,11 +199,12 @@ func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
 
 func newRawdbBranchStoreInKeyspace(db CommitmentDB, keyspace rawdb.CommitmentBranchKeyspace, cold pointread.CommitmentBranchSnapshotView, coldOwned bool) *rawdbBranchStore {
 	return &rawdbBranchStore{
-		db:         db,
-		keyspace:   keyspace,
-		cold:       cold,
-		coldOwned:  coldOwned,
-		ownedValue: rawdb.SupportsCommitmentBranchOwnedValue(db),
+		db:              db,
+		keyspace:        keyspace,
+		cold:            cold,
+		coldOwned:       coldOwned,
+		ownedValue:      rawdb.SupportsCommitmentBranchOwnedValue(db),
+		ownedBatchArena: rawdb.SupportsCommitmentBranchOwnedBatchArena(db),
 	}
 }
 
@@ -701,7 +703,15 @@ func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*Branc
 		plans[i] = branchEncodingPlan{branch: branch, childBits: childBits, size: size}
 		totalSize += size
 	}
-	arena := make([]byte, 0, totalSize)
+	arenaCapacity := totalSize
+	if s.ownedBatchArena {
+		// Values and their joined physical keys have the same immutable layer
+		// lifetime. Leave exact spare capacity for blockbuffer to append the keys
+		// after the encoded values, removing a second retained allocation without
+		// changing either byte representation.
+		arenaCapacity += s.keyspace.PhysicalKeyBytes(keys)
+	}
+	arena := make([]byte, 0, arenaCapacity)
 	valuesPtr := borrowBranchEncodingSlices(len(keys))
 	defer returnBranchEncodingSlices(valuesPtr)
 	values := *valuesPtr
@@ -709,6 +719,9 @@ func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*Branc
 		start := len(arena)
 		arena = plan.branch.encodeToLayout(arena, plan.childBits, plan.size)
 		values[i] = arena[start:len(arena):len(arena)]
+	}
+	if s.ownedBatchArena {
+		return s.keyspace.WriteOwnedStringsInArenaWithBatchCount(s.db, keys, values, arena, batchCount)
 	}
 	return s.keyspace.WriteOwnedStringsWithBatchCount(s.db, keys, values, batchCount)
 }

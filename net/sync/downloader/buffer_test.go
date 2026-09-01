@@ -17,6 +17,8 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+var benchmarkDecodedBufferedBlock *types.Block
+
 func TestRawBlockBytesTakesOwnershipOfWirePayload(t *testing.T) {
 	block := testBufferedBlock(1)
 	raw, err := block.Marshal()
@@ -43,6 +45,74 @@ func TestRawBlockBytesRemarshalsWhenWirePayloadMissing(t *testing.T) {
 	if decoded.Hash() != block.Hash() || decoded.Number() != block.Number() {
 		t.Fatalf("decoded block = #%d %x, want #%d %x", decoded.Number(), decoded.Hash(), block.Number(), block.Hash())
 	}
+}
+
+func TestDecodeBufferedBlockBorrowsOwnedWirePayload(t *testing.T) {
+	block := testBufferedBlock(1)
+	marker := []byte("sync-buffer-unique-borrowed-transaction-data")
+	block.Proto().Transactions[0].RawData.Data = marker
+	raw, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block: %v", err)
+	}
+	if count := bytes.Count(raw, marker); count != 1 {
+		t.Fatalf("borrow marker occurs %d times in wire, want 1", count)
+	}
+	decoded, err := decodeBufferedBlock(BufferedBlock{Raw: raw, Hash: block.Hash(), Num: block.Number()})
+	if err != nil {
+		t.Fatalf("decode buffered block: %v", err)
+	}
+	decodedData := decoded.Proto().Transactions[0].RawData.Data
+	if !bytes.Equal(decodedData, marker) || cap(decodedData) != len(decodedData) {
+		t.Fatalf("decoded data = len %d cap %d value %q, want isolated marker", len(decodedData), cap(decodedData), decodedData)
+	}
+
+	offset := bytes.Index(raw, marker)
+	original := raw[offset]
+	raw[offset] ^= 0xff
+	if decodedData[0] != original^0xff {
+		t.Fatal("decoded transaction data does not borrow the immutable sync buffer")
+	}
+	raw[offset] = original
+}
+
+func BenchmarkDecodeBufferedBlockWireOwnership(b *testing.B) {
+	block := testBufferedBlock(1)
+	block.Proto().Transactions = make([]*corepb.Transaction, 200)
+	for i := range block.Proto().Transactions {
+		tx := testBufferedTx(corepb.Transaction_Contract_TransferContract, byte(i))
+		tx.Signature[0] = bytes.Repeat([]byte{byte(i)}, 65)
+		tx.RawData.Data = bytes.Repeat([]byte{byte(i + 1)}, 128)
+		block.Proto().Transactions[i] = tx
+	}
+	raw, err := block.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	buffered := BufferedBlock{Raw: raw, Hash: block.Hash(), Num: block.Number()}
+	b.SetBytes(int64(len(raw)))
+	b.Run("owned-copy", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			decoded, decodeErr := types.UnmarshalBlock(raw)
+			if decodeErr != nil {
+				b.Fatal(decodeErr)
+			}
+			if validateErr := ValidateBufferedBlockMetadata(buffered, decoded); validateErr != nil {
+				b.Fatal(validateErr)
+			}
+			benchmarkDecodedBufferedBlock = decoded
+		}
+	})
+	b.Run("borrowed-sync", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			benchmarkDecodedBufferedBlock, err = decodeBufferedBlock(buffered)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func TestBufferedBatchDecodeBlocksKeepsPrefixOnError(t *testing.T) {

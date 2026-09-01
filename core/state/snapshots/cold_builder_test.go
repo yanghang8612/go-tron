@@ -704,6 +704,87 @@ func TestColdBuilderForcesBoundedCatchupPastDeferredBacklogCap(t *testing.T) {
 	}
 }
 
+func TestColdBuilderWaitsForImporterCapacityBetweenSoftAndHardCaps(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7c)
+	for blockNum := uint64(1); blockNum <= 4; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	ready := false
+	callbackCalls := 0
+	runner := NewRunner(&coldBuilderChain{
+		db: db, solidified: 4, syncRemaining: 1_000, syncRemainingOK: true,
+	}, Config{
+		Dir:                           dir,
+		Enabled:                       true,
+		HistoryWindow:                 1,
+		BatchBlocks:                   1,
+		DeferHistoryBuildWhileSyncing: true,
+		MaxDeferredHistoryBlocks:      2,
+		MaxBusyDeferredHistoryBlocks:  4,
+		SyncBuildReady: func() bool {
+			callbackCalls++
+			return ready
+		},
+	})
+
+	deferred, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("busy OnePass: %v", err)
+	}
+	if !deferred.HistoryDeferred || deferred.Built || callbackCalls != 1 {
+		t.Fatalf("busy pass = %+v callbackCalls=%d, want capacity deferral", deferred, callbackCalls)
+	}
+
+	ready = true
+	built, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("ready OnePass: %v", err)
+	}
+	if !built.Built || built.HistoryDeferred || built.FromBlock != 1 || built.ToBlock != 1 || callbackCalls != 2 {
+		t.Fatalf("ready pass = %+v callbackCalls=%d, want one admitted bounded build", built, callbackCalls)
+	}
+}
+
+func TestColdBuilderHardCapPreventsBusyImporterStarvation(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7d)
+	for blockNum := uint64(1); blockNum <= 6; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	callbackCalls := 0
+	runner := NewRunner(&coldBuilderChain{
+		db: db, solidified: 6, syncRemaining: 1_000, syncRemainingOK: true,
+	}, Config{
+		Dir:                           dir,
+		Enabled:                       true,
+		HistoryWindow:                 1,
+		BatchBlocks:                   1,
+		DeferHistoryBuildWhileSyncing: true,
+		MaxDeferredHistoryBlocks:      2,
+		MaxBusyDeferredHistoryBlocks:  4,
+		SyncBuildReady: func() bool {
+			callbackCalls++
+			return false
+		},
+	})
+
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if !result.Built || result.HistoryDeferred || result.FromBlock != 1 || result.ToBlock != 1 {
+		t.Fatalf("hard-cap pass = %+v, want one forced bounded build", result)
+	}
+	if callbackCalls != 0 {
+		t.Fatalf("hard-cap pass consulted capacity callback %d times, want 0", callbackCalls)
+	}
+}
+
 func TestColdBuilderDefersDerivedSidecarsWhileFarBehind(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()

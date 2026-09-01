@@ -1299,7 +1299,12 @@ func (b *BufferedBatch) decodeBlocks(workers int) (BufferedBlock, error) {
 }
 
 func decodeBufferedBlock(buffered BufferedBlock) (*types.Block, error) {
-	block, err := types.UnmarshalBlock(buffered.Raw)
+	// BufferedBlock owns immutable receive/staged bytes until the decoded block
+	// has finished importing. Let allocation-sensitive protobuf byte fields
+	// borrow that backing store instead of copying them into a second arena.
+	// UnmarshalBlockBorrowed retains Raw explicitly if the block outlives the
+	// batch; callers already promise not to mutate Raw after buffering it.
+	block, err := types.UnmarshalBlockBorrowed(buffered.Raw)
 	if err != nil {
 		return nil, err
 	}
