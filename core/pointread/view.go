@@ -104,7 +104,12 @@ type CommitmentParentViewer interface {
 // CommitmentParentSession resolves split physical keys against a stable parent
 // state. Each reader index is exclusively owned by one fold worker, allowing an
 // implementation to reuse a non-thread-safe ordered cursor without a lock.
-// stable reports whether value may be retained after fn returns.
+// stable reports whether value may be retained after fn returns. Callbacks must
+// treat value as read-only: implementations may share one immutable durable
+// result across concurrent readers of the same session. A callback must not
+// re-enter the same session; cursor ownership and in-flight read coalescing are
+// scoped to the outer call. Callers must wait for every read to return before
+// calling Close.
 type CommitmentParentSession interface {
 	ViewKeyParts(reader int, first, second []byte, fn func(value []byte, stable bool) error) (bool, error)
 	Close() error

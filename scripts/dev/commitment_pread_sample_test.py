@@ -44,6 +44,17 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 "blockbuffer/commitment_parent/prefetch/depth_6_plus/durable_reads": 20,
                 "blockbuffer/commitment_parent/prefetch/depth_6_plus/useful_hits": 5,
                 "blockbuffer/commitment_parent/durable_publish_races": 5,
+                "blockbuffer/commitment_parent/singleflight/leaders": 90,
+                "blockbuffer/commitment_parent/singleflight/waiters": 12,
+                "blockbuffer/commitment_parent/singleflight/shared_results": 10,
+                "blockbuffer/commitment_parent/singleflight/shared_results/foreground": 8,
+                "blockbuffer/commitment_parent/singleflight/shared_results/prefetch": 2,
+                "blockbuffer/commitment_parent/singleflight/shared_present": 8,
+                "blockbuffer/commitment_parent/singleflight/shared_missing": 2,
+                "blockbuffer/commitment_parent/singleflight/leader_errors": 1,
+                "blockbuffer/commitment_parent/singleflight/wait_nanos": 1_200,
+                "blockbuffer/commitment_parent/singleflight/waiters/foreground": 9,
+                "blockbuffer/commitment_parent/singleflight/waiters/prefetch": 3,
                 "blockbuffer/commitment_parent/prefetch/unused_capacity_evicted": 4,
                 "state/commitment/pipeline/prefetch_critical/planned": 20,
                 "state/commitment/pipeline/prefetch_critical/wall_nanos": 2_000,
@@ -62,12 +73,18 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         analysis = row["analysis"]
         self.assertEqual(row["intervalBlocks"], 20)
         self.assertEqual(row["blocksPerSecond"], 2.0)
-        self.assertAlmostEqual(analysis["foregroundDurableRatio"], 0.6)
+        self.assertAlmostEqual(analysis["foregroundDurableRatio"], 60 / 108)
         self.assertAlmostEqual(analysis["foregroundDepthDurableRatio"]["depth_5_8"], 0.75)
         self.assertAlmostEqual(analysis["prefetchUsefulRatio"], 0.5)
         self.assertAlmostEqual(analysis["depth5UsefulRatio"], 0.75)
         self.assertAlmostEqual(analysis["depth6PlusUsefulRatio"], 0.25)
         self.assertAlmostEqual(analysis["durablePublishRaceRatio"], 0.05)
+        self.assertAlmostEqual(analysis["singleflightSharedRatio"], 0.1)
+        self.assertAlmostEqual(analysis["singleflightWaiterShareRatio"], 10 / 12)
+        self.assertEqual(analysis["singleflightWaitNanosPerWaiter"], 100.0)
+        self.assertAlmostEqual(analysis["singleflightSharedPresentRatio"], 0.8)
+        self.assertAlmostEqual(analysis["singleflightForegroundWaiterRatio"], 0.75)
+        self.assertAlmostEqual(analysis["singleflightLeaderErrorRatio"], 1 / 90)
         self.assertEqual(analysis["criticalNanosPerPlannedRead"], 100.0)
         self.assertEqual(analysis["criticalWaitNanosPerLane"], 200.0)
         self.assertAlmostEqual(analysis["blockCacheHitRatio"], 0.9)

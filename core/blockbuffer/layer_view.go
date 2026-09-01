@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -131,6 +132,7 @@ type commitmentParentReadSession struct {
 	snapshot     pointread.Snapshot
 	cursors      []pointread.Cursor
 	readContexts []*commitmentParentReadContext
+	flights      commitmentParentReadFlights
 	// keyScratch is split into one 128-byte region per cursor/reader. The
 	// CommitmentParentSession contract gives each reader index one exclusive
 	// worker, so split-key assembly needs neither a lock nor a sync.Pool trip on
@@ -151,28 +153,45 @@ type commitmentParentReadContext struct {
 	prefetch  bool
 	fn        func(value []byte, stable bool) error
 	callback  func(value []byte) error
+	flight    *commitmentParentReadFlight
+	// callbackErr belongs only to this logical caller. Storage errors are
+	// published through flight.err; a decoder/callback failure must never poison
+	// followers sharing the same durable result.
+	callbackErr  error
+	flightShared bool
 
 	// One fold worker exclusively owns each context, so these counters stay
 	// non-atomic on the read hot path. Close aggregates them into process metrics
 	// once after all sibling workers have joined.
-	overlayResolved      uint64
-	cacheResolved        uint64
-	durableReads         uint64
-	durableHits          uint64
-	trunkCached          uint64
-	trunkDurable         uint64
-	windowCached         uint64
-	depthCached          [4]uint64
-	depthDurable         [4]uint64
-	prefetchPlanned      uint64
-	prefetchOverlay      uint64
-	prefetchCache        uint64
-	prefetchDurable      uint64
-	prefetchHits         uint64
-	prefetchDepthPlanned [2]uint64
-	prefetchDepthCache   [2]uint64
-	prefetchDepthDurable [2]uint64
-	prefetchDepthUseful  [2]uint64
+	overlayResolved        uint64
+	cacheResolved          uint64
+	durableReads           uint64
+	durableHits            uint64
+	trunkCached            uint64
+	trunkDurable           uint64
+	windowCached           uint64
+	depthCached            [4]uint64
+	depthDurable           [4]uint64
+	prefetchPlanned        uint64
+	prefetchOverlay        uint64
+	prefetchCache          uint64
+	prefetchDurable        uint64
+	prefetchHits           uint64
+	prefetchDepthPlanned   [2]uint64
+	prefetchDepthCache     [2]uint64
+	prefetchDepthDurable   [2]uint64
+	prefetchDepthUseful    [2]uint64
+	flightLeaders          uint64
+	flightWaiters          uint64
+	flightSharedResults    uint64
+	flightSharedForeground uint64
+	flightSharedPrefetch   uint64
+	flightSharedPresent    uint64
+	flightSharedMissing    uint64
+	flightLeaderErrors     uint64
+	flightWaitNanos        uint64
+	flightForegroundWait   uint64
+	flightPrefetchWait     uint64
 }
 
 func newCommitmentParentReadContext() any {
@@ -201,6 +220,9 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.cacheable = false
 		ctx.prefetch = false
 		ctx.fn = nil
+		ctx.flight = nil
+		ctx.callbackErr = nil
+		ctx.flightShared = false
 		ctx.overlayResolved = 0
 		ctx.cacheResolved = 0
 		ctx.durableReads = 0
@@ -219,6 +241,17 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.prefetchDepthCache = [2]uint64{}
 		ctx.prefetchDepthDurable = [2]uint64{}
 		ctx.prefetchDepthUseful = [2]uint64{}
+		ctx.flightLeaders = 0
+		ctx.flightWaiters = 0
+		ctx.flightSharedResults = 0
+		ctx.flightSharedForeground = 0
+		ctx.flightSharedPrefetch = 0
+		ctx.flightSharedPresent = 0
+		ctx.flightSharedMissing = 0
+		ctx.flightLeaderErrors = 0
+		ctx.flightWaitNanos = 0
+		ctx.flightForegroundWait = 0
+		ctx.flightPrefetchWait = 0
 		commitmentParentReadContextPool.Put(ctx)
 		contexts[i] = nil
 	}
@@ -233,10 +266,16 @@ func (ctx *commitmentParentReadContext) consume(value []byte) error {
 			s.cache.storeIfEpoch(ctx.key, value, ctx.epoch)
 		}
 	}
+	if ctx.flight != nil && s.flights.capture(ctx.flight, value) {
+		ctx.flightShared = true
+	}
 	if ctx.prefetch {
 		return nil
 	}
-	return ctx.fn(value, false)
+	if !ctx.flightShared {
+		ctx.callbackErr = ctx.fn(value, false)
+	}
+	return nil
 }
 
 var _ pointread.CommitmentParentViewer = (*LayerView)(nil)
@@ -516,42 +555,122 @@ func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []b
 		ctx.prefetchOverlay++
 		return true, nil
 	}
-	cached, present, cacheEpoch, cacheable := s.cache.probeAtVersionForPrefetch(key, s.cacheVersion)
-	if cached {
-		ctx.prefetchCache++
-		if prefetchDepth >= 0 {
-			ctx.prefetchDepthCache[prefetchDepth]++
+	for {
+		cached, present, cacheEpoch, cacheable := s.cache.probeAtVersionForPrefetch(key, s.cacheVersion)
+		if cached {
+			ctx.prefetchCache++
+			if prefetchDepth >= 0 {
+				ctx.prefetchDepthCache[prefetchDepth]++
+			}
+			return present, nil
 		}
-		return present, nil
+		cursor := s.cursors[reader]
+		if cursor == nil {
+			var err error
+			cursor, err = s.snapshot.NewCursor(keyPrefix)
+			if err != nil {
+				return false, err
+			}
+			s.cursors[reader] = cursor
+		}
+		call, leader, share, _ := s.flights.acquire(key, keyHash, true)
+		if leader {
+			return s.leadCommitmentParentPrefetch(ctx, cursor, key, call, cacheEpoch, cacheable, prefetchDepth)
+		}
+
+		ctx.flightWaiters++
+		ctx.flightPrefetchWait++
+		waitStarted := time.Now()
+		found, value, err := s.flights.wait(call)
+		ctx.flightWaitNanos += uint64(time.Since(waitStarted))
+		if !share || err != nil {
+			s.flights.release(call)
+			if err != nil {
+				return false, err
+			}
+			// The leader had already left the cursor callback when this caller
+			// joined. Its cache publication is now visible; retry without ever
+			// starting a concurrent duplicate read.
+			continue
+		}
+
+		ctx.flightSharedResults++
+		ctx.flightSharedPrefetch++
+		if found {
+			ctx.flightSharedPresent++
+		} else {
+			ctx.flightSharedMissing++
+		}
+		func() {
+			defer s.flights.release(call)
+			cached, present, epoch, canStore := s.cache.probeAtVersionForPrefetch(key, s.cacheVersion)
+			if cached {
+				found = present
+				return
+			}
+			if canStore && s.cache.version.Load() == s.cacheVersion {
+				if found {
+					s.cache.prefetchIfEpoch(key, value, epoch)
+				} else {
+					s.cache.prefetchMissingIfEpoch(key, epoch)
+				}
+			}
+		}()
+		return found, nil
 	}
-	cursor := s.cursors[reader]
-	if cursor == nil {
-		var err error
-		cursor, err = s.snapshot.NewCursor(keyPrefix)
-		if err != nil {
-			return false, err
+}
+
+func (s *commitmentParentReadSession) leadCommitmentParentPrefetch(
+	ctx *commitmentParentReadContext,
+	cursor pointread.Cursor,
+	key []byte,
+	call *commitmentParentReadFlight,
+	cacheEpoch baseReadCacheEpoch,
+	cacheable bool,
+	prefetchDepth int,
+) (found bool, err error) {
+	completed := false
+	released := false
+	defer func() {
+		ctx.key = nil
+		ctx.epoch = baseReadCacheEpoch{}
+		ctx.cacheable = false
+		ctx.prefetch = false
+		ctx.flight = nil
+		ctx.flightShared = false
+		if !completed {
+			s.flights.complete(call, false, errCommitmentParentReadAborted)
 		}
-		s.cursors[reader] = cursor
+		if !released {
+			s.flights.release(call)
+		}
+	}()
+
+	ctx.flightLeaders++
+	ctx.prefetchDurable++
+	if prefetchDepth >= 0 {
+		ctx.prefetchDepthDurable[prefetchDepth]++
 	}
 	ctx.key = key
 	ctx.epoch = cacheEpoch
 	ctx.cacheable = cacheable
 	ctx.prefetch = true
-	ctx.prefetchDurable++
-	if prefetchDepth >= 0 {
-		ctx.prefetchDepthDurable[prefetchDepth]++
-	}
-	found, err := cursor.View(key, ctx.callback)
+	ctx.flight = call
+	found, err = cursor.View(key, ctx.callback)
+	ctx.flight = nil
 	if found {
 		ctx.prefetchHits++
 	}
-	ctx.key = nil
-	ctx.epoch = baseReadCacheEpoch{}
-	ctx.cacheable = false
-	ctx.prefetch = false
 	if err == nil && !found && cacheable && s.cache.version.Load() == s.cacheVersion {
 		s.cache.prefetchMissingIfEpoch(key, cacheEpoch)
 	}
+	if err != nil {
+		ctx.flightLeaderErrors++
+	}
+	s.flights.complete(call, found, err)
+	completed = true
+	s.flights.release(call)
+	released = true
 	return found, err
 }
 
@@ -575,38 +694,124 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 		ctx.overlayResolved++
 		return true, fn(value, true)
 	}
-	cached, present, windowHit, usefulPrefetch, cacheEpoch, cacheable, err := s.cache.viewAtVersion(key, s.cacheVersion, fn)
-	if cached {
-		ctx.cacheResolved++
-		if trunk {
-			ctx.trunkCached++
-		}
-		if windowHit {
-			ctx.windowCached++
-		}
-		if depthBucket >= 0 {
-			ctx.depthCached[depthBucket]++
-		}
-		if usefulPrefetch {
-			if prefetchDepth := commitmentParentPrefetchDepthBucket(depth); prefetchDepth >= 0 {
-				ctx.prefetchDepthUseful[prefetchDepth]++
+	for {
+		cached, present, windowHit, usefulPrefetch, cacheEpoch, cacheable, err := s.cache.viewAtVersion(key, s.cacheVersion, fn)
+		if cached {
+			ctx.cacheResolved++
+			if trunk {
+				ctx.trunkCached++
 			}
+			if windowHit {
+				ctx.windowCached++
+			}
+			if depthBucket >= 0 {
+				ctx.depthCached[depthBucket]++
+			}
+			if usefulPrefetch {
+				if prefetchDepth := commitmentParentPrefetchDepthBucket(depth); prefetchDepth >= 0 {
+					ctx.prefetchDepthUseful[prefetchDepth]++
+				}
+			}
+			return present, err
 		}
-		return present, err
-	}
-	cursor := s.cursors[reader]
-	if cursor == nil {
-		var err error
-		cursor, err = s.snapshot.NewCursor(keyPrefix)
-		if err != nil {
-			return false, err
+		cursor := s.cursors[reader]
+		if cursor == nil {
+			var err error
+			cursor, err = s.snapshot.NewCursor(keyPrefix)
+			if err != nil {
+				return false, err
+			}
+			s.cursors[reader] = cursor
 		}
-		s.cursors[reader] = cursor
+		call, leader, share, prefetchLeader := s.flights.acquire(key, keyHash, false)
+		if leader {
+			return s.leadCommitmentParentView(ctx, cursor, key, call, cacheEpoch, cacheable, trunk, depthBucket, fn)
+		}
+
+		ctx.flightWaiters++
+		ctx.flightForegroundWait++
+		waitStarted := time.Now()
+		found, value, readErr := s.flights.wait(call)
+		ctx.flightWaitNanos += uint64(time.Since(waitStarted))
+		if !share || readErr != nil {
+			s.flights.release(call)
+			if readErr != nil {
+				if prefetchLeader {
+					// Prefetch is speculative. An authoritative foreground
+					// lookup must retry with its own cursor rather than turn a
+					// lookahead failure into a valid fold failure.
+					continue
+				}
+				return false, readErr
+			}
+			continue
+		}
+
+		ctx.flightSharedResults++
+		ctx.flightSharedForeground++
+		if found {
+			ctx.flightSharedPresent++
+		} else {
+			ctx.flightSharedMissing++
+		}
+		func() {
+			defer s.flights.release(call)
+			cached, present, _, useful, epoch, canStore, cacheErr := s.cache.viewAtVersion(key, s.cacheVersion, fn)
+			if cached {
+				found = present
+				readErr = cacheErr
+				if useful {
+					if prefetchDepth := commitmentParentPrefetchDepthBucket(depth); prefetchDepth >= 0 {
+						ctx.prefetchDepthUseful[prefetchDepth]++
+					}
+				}
+				return
+			}
+			if canStore && s.cache.version.Load() == s.cacheVersion {
+				if found {
+					s.cache.storeIfEpoch(key, value, epoch)
+				} else {
+					s.cache.setMissingIfEpoch(key, epoch)
+				}
+			}
+			if found {
+				readErr = fn(value, false)
+			}
+		}()
+		return found, readErr
 	}
-	ctx.key = key
-	ctx.epoch = cacheEpoch
-	ctx.cacheable = cacheable
-	ctx.fn = fn
+}
+
+func (s *commitmentParentReadSession) leadCommitmentParentView(
+	ctx *commitmentParentReadContext,
+	cursor pointread.Cursor,
+	key []byte,
+	call *commitmentParentReadFlight,
+	cacheEpoch baseReadCacheEpoch,
+	cacheable bool,
+	trunk bool,
+	depthBucket int,
+	fn func(value []byte, stable bool) error,
+) (found bool, err error) {
+	completed := false
+	released := false
+	defer func() {
+		ctx.key = nil
+		ctx.epoch = baseReadCacheEpoch{}
+		ctx.cacheable = false
+		ctx.fn = nil
+		ctx.flight = nil
+		ctx.callbackErr = nil
+		ctx.flightShared = false
+		if !completed {
+			s.flights.complete(call, false, errCommitmentParentReadAborted)
+		}
+		if !released {
+			s.flights.release(call)
+		}
+	}()
+
+	ctx.flightLeaders++
 	ctx.durableReads++
 	if trunk {
 		ctx.trunkDurable++
@@ -614,16 +819,33 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 	if depthBucket >= 0 {
 		ctx.depthDurable[depthBucket]++
 	}
-	found, err := cursor.View(key, ctx.callback)
+	ctx.key = key
+	ctx.epoch = cacheEpoch
+	ctx.cacheable = cacheable
+	ctx.fn = fn
+	ctx.flight = call
+	found, err = cursor.View(key, ctx.callback)
+	ctx.flight = nil
+	callbackErr := ctx.callbackErr
 	if found {
 		ctx.durableHits++
 	}
-	ctx.key = nil
-	ctx.epoch = baseReadCacheEpoch{}
-	ctx.cacheable = false
-	ctx.fn = nil
 	if err == nil && !found && cacheable && s.cache.version.Load() == s.cacheVersion {
 		s.cache.setMissingIfEpoch(key, cacheEpoch)
+	}
+	if err != nil {
+		ctx.flightLeaderErrors++
+	}
+	shared := ctx.flightShared
+	s.flights.complete(call, found, err)
+	completed = true
+	if found && shared {
+		callbackErr = fn(call.value, false)
+	}
+	s.flights.release(call)
+	released = true
+	if callbackErr != nil {
+		return found, callbackErr
 	}
 	return found, err
 }
@@ -652,6 +874,9 @@ func (s *commitmentParentReadSession) Close() error {
 	var prefetchPlanned, prefetchOverlay, prefetchCache, prefetchDurable, prefetchHits uint64
 	var depthCached, depthDurable [4]uint64
 	var prefetchDepthPlanned, prefetchDepthCache, prefetchDepthDurable, prefetchDepthUseful [2]uint64
+	var flightLeaders, flightWaiters, flightSharedResults, flightSharedForeground, flightSharedPrefetch uint64
+	var flightSharedPresent, flightSharedMissing uint64
+	var flightLeaderErrors, flightWaitNanos, flightForegroundWait, flightPrefetchWait uint64
 	for _, ctx := range s.readContexts {
 		overlayResolved += ctx.overlayResolved
 		cacheResolved += ctx.cacheResolved
@@ -665,6 +890,17 @@ func (s *commitmentParentReadSession) Close() error {
 		prefetchCache += ctx.prefetchCache
 		prefetchDurable += ctx.prefetchDurable
 		prefetchHits += ctx.prefetchHits
+		flightLeaders += ctx.flightLeaders
+		flightWaiters += ctx.flightWaiters
+		flightSharedResults += ctx.flightSharedResults
+		flightSharedForeground += ctx.flightSharedForeground
+		flightSharedPrefetch += ctx.flightSharedPrefetch
+		flightSharedPresent += ctx.flightSharedPresent
+		flightSharedMissing += ctx.flightSharedMissing
+		flightLeaderErrors += ctx.flightLeaderErrors
+		flightWaitNanos += ctx.flightWaitNanos
+		flightForegroundWait += ctx.flightForegroundWait
+		flightPrefetchWait += ctx.flightPrefetchWait
 		for bucket := range prefetchDepthPlanned {
 			prefetchDepthPlanned[bucket] += ctx.prefetchDepthPlanned[bucket]
 			prefetchDepthCache[bucket] += ctx.prefetchDepthCache[bucket]
@@ -688,6 +924,17 @@ func (s *commitmentParentReadSession) Close() error {
 	commitmentParentPrefetchCacheCounter.Inc(int64(prefetchCache))
 	commitmentParentPrefetchDurableCounter.Inc(int64(prefetchDurable))
 	commitmentParentPrefetchDurableHitCounter.Inc(int64(prefetchHits))
+	commitmentParentSingleflightLeadersCounter.Inc(int64(flightLeaders))
+	commitmentParentSingleflightWaitersCounter.Inc(int64(flightWaiters))
+	commitmentParentSingleflightSharedCounter.Inc(int64(flightSharedResults))
+	commitmentParentSingleflightForegroundSharedCounter.Inc(int64(flightSharedForeground))
+	commitmentParentSingleflightPrefetchSharedCounter.Inc(int64(flightSharedPrefetch))
+	commitmentParentSingleflightSharedPresentCounter.Inc(int64(flightSharedPresent))
+	commitmentParentSingleflightSharedMissingCounter.Inc(int64(flightSharedMissing))
+	commitmentParentSingleflightLeaderErrorsCounter.Inc(int64(flightLeaderErrors))
+	commitmentParentSingleflightWaitNanosCounter.Inc(int64(flightWaitNanos))
+	commitmentParentSingleflightForegroundWaitersCounter.Inc(int64(flightForegroundWait))
+	commitmentParentSingleflightPrefetchWaitersCounter.Inc(int64(flightPrefetchWait))
 	for bucket := range prefetchDepthPlanned {
 		commitmentParentPrefetchDepthPlannedCounters[bucket].Inc(int64(prefetchDepthPlanned[bucket]))
 		commitmentParentPrefetchDepthCacheCounters[bucket].Inc(int64(prefetchDepthCache[bucket]))

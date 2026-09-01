@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,8 +16,10 @@ import (
 
 type benchmarkCommitmentCursor struct{}
 
+var benchmarkCommitmentValue = []byte("encoded-branch")
+
 func (benchmarkCommitmentCursor) View(_ []byte, fn func([]byte) error) (bool, error) {
-	return true, fn([]byte("encoded-branch"))
+	return true, fn(benchmarkCommitmentValue)
 }
 
 func (benchmarkCommitmentCursor) Close() error { return nil }
@@ -31,6 +35,72 @@ func (benchmarkCommitmentSnapshot) Close() error { return nil }
 type checkingCommitmentCursor struct {
 	want []byte
 }
+
+type blockingCommitmentCursorState struct {
+	started   chan struct{}
+	release   chan struct{}
+	start     sync.Once
+	calls     atomic.Int64
+	present   bool
+	value     []byte
+	readErr   error
+	readPanic any
+	overwrite bool
+}
+
+type blockingCommitmentCursor struct {
+	state *blockingCommitmentCursorState
+}
+
+func (c blockingCommitmentCursor) View(_ []byte, fn func([]byte) error) (bool, error) {
+	s := c.state
+	s.calls.Add(1)
+	s.start.Do(func() { close(s.started) })
+	<-s.release
+	if s.readPanic != nil {
+		panic(s.readPanic)
+	}
+	if s.readErr != nil {
+		return false, s.readErr
+	}
+	if !s.present {
+		return false, nil
+	}
+	err := fn(s.value)
+	if s.overwrite {
+		for i := range s.value {
+			s.value[i] = 0
+		}
+	}
+	return true, err
+}
+
+func (blockingCommitmentCursor) Close() error { return nil }
+
+type blockingCommitmentSnapshot struct {
+	state *blockingCommitmentCursorState
+}
+
+func (s blockingCommitmentSnapshot) NewCursor([]byte) (pointread.Cursor, error) {
+	return blockingCommitmentCursor{state: s.state}, nil
+}
+
+func (blockingCommitmentSnapshot) Close() error { return nil }
+
+type sequencedCommitmentSnapshot struct {
+	states []*blockingCommitmentCursorState
+	next   atomic.Int64
+}
+
+func (s *sequencedCommitmentSnapshot) NewCursor([]byte) (pointread.Cursor, error) {
+	index := int(s.next.Add(1) - 1)
+	if index >= len(s.states) {
+		return nil, errors.New("unexpected commitment cursor")
+	}
+	return blockingCommitmentCursor{state: s.states[index]}, nil
+}
+
+func (*sequencedCommitmentSnapshot) Close() error { return nil }
 
 // blockingCommitmentWriter forwards the first mutation either before or after
 // parking it. It holds FlushUpTo in the disk-I/O phase while tests capture a
@@ -426,6 +496,398 @@ func TestCommitmentParentReadSessionReaderScratchIsolated(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Error(err)
+	}
+}
+
+func newBlockingCommitmentParentSession(t *testing.T, readers int, state *blockingCommitmentCursorState) *commitmentParentReadSession {
+	t.Helper()
+	cache := newBaseReadCacheWithTrunk(1<<20, baseReadCacheTrunkDepth, rawdb.CommitmentBranchKeyPrefix)
+	keyScratch := borrowCommitmentParentKeyScratch(readers)
+	session := &commitmentParentReadSession{
+		cache:        cache,
+		cacheVersion: cache.version.Load(),
+		snapshot:     blockingCommitmentSnapshot{state: state},
+		cursors:      make([]pointread.Cursor, readers),
+		keyScratch:   keyScratch,
+	}
+	session.readContexts = borrowCommitmentParentReadContexts(session, readers)
+	return session
+}
+
+func waitForCommitmentParentFlightFollowers(t *testing.T, session *commitmentParentReadSession, key []byte, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	hash := layerBloomHashBytes(key)
+	shard := &session.flights.shards[hash&(baseReadCacheShardCount-1)]
+	for time.Now().Before(deadline) {
+		shard.mu.Lock()
+		got := 0
+		for call := shard.calls[hash]; call != nil; call = call.next {
+			if call.matches(key, hash) {
+				got = call.followers
+				break
+			}
+		}
+		shard.mu.Unlock()
+		if got >= want {
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatalf("commitment parent flight did not reach %d followers", want)
+}
+
+func TestCommitmentParentReadSessionSingleflightSharesPresentValueAndIsolatesCallbacks(t *testing.T) {
+	const readers = 8
+	wantValue := []byte("shared-durable-branch")
+	state := &blockingCommitmentCursorState{
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+		present:   true,
+		value:     append([]byte(nil), wantValue...),
+		overwrite: true,
+	}
+	session := newBlockingCommitmentParentSession(t, readers, state)
+	prefix := []byte{1, 2, 3, 4, 5, 6}
+	physicalKey := append([]byte(rawdb.CommitmentBranchKeyPrefix), prefix...)
+	wantCallbackErr := errors.New("leader callback stopped")
+
+	leadersBefore := commitmentParentSingleflightLeadersCounter.Snapshot().Count()
+	waitersBefore := commitmentParentSingleflightWaitersCounter.Snapshot().Count()
+	sharedBefore := commitmentParentSingleflightSharedCounter.Snapshot().Count()
+	durableBefore := commitmentParentDurableReadsCounter.Snapshot().Count()
+
+	type result struct {
+		found  bool
+		stable bool
+		value  []byte
+		err    error
+	}
+	results := make([]result, readers)
+	var wg sync.WaitGroup
+	read := func(reader int) {
+		defer wg.Done()
+		results[reader].found, results[reader].err = rawdb.LegacyCommitmentBranchKeyspace().ViewParentInSession(
+			session,
+			reader,
+			prefix,
+			func(value []byte, stable bool) error {
+				results[reader].stable = stable
+				results[reader].value = append([]byte(nil), value...)
+				if reader == 0 {
+					return wantCallbackErr
+				}
+				return nil
+			},
+		)
+	}
+
+	wg.Add(1)
+	go read(0)
+	<-state.started
+	for reader := 1; reader < readers; reader++ {
+		wg.Add(1)
+		go read(reader)
+	}
+	waitForCommitmentParentFlightFollowers(t, session, physicalKey, readers-1)
+	close(state.release)
+	wg.Wait()
+
+	if got := state.calls.Load(); got != 1 {
+		t.Fatalf("durable cursor calls = %d, want 1", got)
+	}
+	for reader, result := range results {
+		if !result.found || result.stable || !bytes.Equal(result.value, wantValue) {
+			t.Errorf("reader %d = (found=%v,stable=%v,value=%q)", reader, result.found, result.stable, result.value)
+		}
+		if reader == 0 {
+			if !errors.Is(result.err, wantCallbackErr) {
+				t.Errorf("leader callback error = %v, want %v", result.err, wantCallbackErr)
+			}
+		} else if result.err != nil {
+			t.Errorf("reader %d inherited leader callback error: %v", reader, result.err)
+		}
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := commitmentParentSingleflightLeadersCounter.Snapshot().Count() - leadersBefore; got != 1 {
+		t.Fatalf("singleflight leaders delta = %d, want 1", got)
+	}
+	if got := commitmentParentSingleflightWaitersCounter.Snapshot().Count() - waitersBefore; got != readers-1 {
+		t.Fatalf("singleflight waiters delta = %d, want %d", got, readers-1)
+	}
+	if got := commitmentParentSingleflightSharedCounter.Snapshot().Count() - sharedBefore; got != readers-1 {
+		t.Fatalf("singleflight shared delta = %d, want %d", got, readers-1)
+	}
+	if got := commitmentParentDurableReadsCounter.Snapshot().Count() - durableBefore; got != 1 {
+		t.Fatalf("durable reads delta = %d, want 1", got)
+	}
+}
+
+func TestCommitmentParentReadSessionSingleflightSharesMissingAndStorageError(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		readErr error
+	}{
+		{name: "missing"},
+		{name: "storage-error", readErr: errors.New("durable read failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const readers = 4
+			state := &blockingCommitmentCursorState{
+				started: make(chan struct{}),
+				release: make(chan struct{}),
+				readErr: tc.readErr,
+			}
+			session := newBlockingCommitmentParentSession(t, readers, state)
+			prefix := []byte{9, 8, 7, 6, 5, 4}
+			physicalKey := append([]byte(rawdb.CommitmentBranchKeyPrefix), prefix...)
+			found := make([]bool, readers)
+			errs := make([]error, readers)
+			var callbackCalls atomic.Int64
+			var wg sync.WaitGroup
+			read := func(reader int) {
+				defer wg.Done()
+				found[reader], errs[reader] = rawdb.LegacyCommitmentBranchKeyspace().ViewParentInSession(
+					session,
+					reader,
+					prefix,
+					func([]byte, bool) error {
+						callbackCalls.Add(1)
+						return nil
+					},
+				)
+			}
+			wg.Add(1)
+			go read(0)
+			<-state.started
+			for reader := 1; reader < readers; reader++ {
+				wg.Add(1)
+				go read(reader)
+			}
+			waitForCommitmentParentFlightFollowers(t, session, physicalKey, readers-1)
+			close(state.release)
+			wg.Wait()
+			if got := state.calls.Load(); got != 1 {
+				t.Fatalf("durable cursor calls = %d, want 1", got)
+			}
+			if got := callbackCalls.Load(); got != 0 {
+				t.Fatalf("callback calls = %d, want 0", got)
+			}
+			for reader := range readers {
+				if found[reader] {
+					t.Errorf("reader %d unexpectedly found missing value", reader)
+				}
+				if !errors.Is(errs[reader], tc.readErr) {
+					t.Errorf("reader %d error = %v, want %v", reader, errs[reader], tc.readErr)
+				}
+			}
+			if err := session.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCommitmentParentReadSessionSingleflightReleasesFollowerAfterLeaderPanic(t *testing.T) {
+	state := &blockingCommitmentCursorState{
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+		readPanic: "durable cursor panic",
+	}
+	session := newBlockingCommitmentParentSession(t, 2, state)
+	prefix := []byte{3, 3, 3, 3, 3, 3}
+	physicalKey := append([]byte(rawdb.CommitmentBranchKeyPrefix), prefix...)
+
+	leaderRecovered := make(chan any, 1)
+	go func() {
+		defer func() { leaderRecovered <- recover() }()
+		_, _ = rawdb.LegacyCommitmentBranchKeyspace().ViewParentInSession(
+			session,
+			0,
+			prefix,
+			func([]byte, bool) error { return nil },
+		)
+	}()
+	<-state.started
+
+	followerDone := make(chan error, 1)
+	go func() {
+		_, err := rawdb.LegacyCommitmentBranchKeyspace().ViewParentInSession(
+			session,
+			1,
+			prefix,
+			func([]byte, bool) error { return nil },
+		)
+		followerDone <- err
+	}()
+	waitForCommitmentParentFlightFollowers(t, session, physicalKey, 1)
+	close(state.release)
+
+	select {
+	case recovered := <-leaderRecovered:
+		if recovered != state.readPanic {
+			t.Fatalf("leader recovered %v, want %v", recovered, state.readPanic)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("leader panic did not unwind")
+	}
+	select {
+	case err := <-followerDone:
+		if !errors.Is(err, errCommitmentParentReadAborted) {
+			t.Fatalf("follower error = %v, want %v", err, errCommitmentParentReadAborted)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("follower remained blocked after leader panic")
+	}
+
+	hash := layerBloomHashBytes(physicalKey)
+	shard := &session.flights.shards[hash&(baseReadCacheShardCount-1)]
+	shard.mu.Lock()
+	active := shard.calls[hash]
+	shard.mu.Unlock()
+	if active != nil {
+		t.Fatal("panicked flight remained active")
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCommitmentParentReadSessionSingleflightSharesPrefetchWithForeground(t *testing.T) {
+	state := &blockingCommitmentCursorState{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		present: true,
+		value:   []byte("prefetched-branch"),
+	}
+	session := newBlockingCommitmentParentSession(t, 2, state)
+	prefix := []byte{1, 1, 1, 1, 1, 1}
+	physicalKey := append([]byte(rawdb.CommitmentBranchKeyPrefix), prefix...)
+	var prefetch pointread.CommitmentParentPrefetchSession = session
+
+	type prefetchResult struct {
+		found bool
+		err   error
+	}
+	prefetchDone := make(chan prefetchResult, 1)
+	go func() {
+		found, err := rawdb.LegacyCommitmentBranchKeyspace().PrefetchParentInSession(prefetch, 0, prefix)
+		prefetchDone <- prefetchResult{found: found, err: err}
+	}()
+	<-state.started
+
+	type foregroundResult struct {
+		found bool
+		value []byte
+		err   error
+	}
+	foregroundDone := make(chan foregroundResult, 1)
+	go func() {
+		var result foregroundResult
+		result.found, result.err = rawdb.LegacyCommitmentBranchKeyspace().ViewParentInSession(
+			session,
+			1,
+			prefix,
+			func(value []byte, _ bool) error {
+				result.value = append([]byte(nil), value...)
+				return nil
+			},
+		)
+		foregroundDone <- result
+	}()
+	waitForCommitmentParentFlightFollowers(t, session, physicalKey, 1)
+	close(state.release)
+
+	preResult := <-prefetchDone
+	foreground := <-foregroundDone
+	if !preResult.found || preResult.err != nil {
+		t.Fatalf("prefetch = (%v,%v), want (true,nil)", preResult.found, preResult.err)
+	}
+	if !foreground.found || foreground.err != nil || string(foreground.value) != "prefetched-branch" {
+		t.Fatalf("foreground = (%v,%q,%v)", foreground.found, foreground.value, foreground.err)
+	}
+	if got := state.calls.Load(); got != 1 {
+		t.Fatalf("durable cursor calls = %d, want 1", got)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCommitmentParentReadSessionForegroundRetriesFailedPrefetchFlight(t *testing.T) {
+	prefetchErr := errors.New("speculative prefetch failed")
+	prefetchState := &blockingCommitmentCursorState{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		readErr: prefetchErr,
+	}
+	foregroundRelease := make(chan struct{})
+	close(foregroundRelease)
+	foregroundState := &blockingCommitmentCursorState{
+		started: make(chan struct{}),
+		release: foregroundRelease,
+		present: true,
+		value:   []byte("authoritative-branch"),
+	}
+	snapshot := &sequencedCommitmentSnapshot{states: []*blockingCommitmentCursorState{prefetchState, foregroundState}}
+	cache := newBaseReadCacheWithTrunk(1<<20, baseReadCacheTrunkDepth, rawdb.CommitmentBranchKeyPrefix)
+	session := &commitmentParentReadSession{
+		cache:        cache,
+		cacheVersion: cache.version.Load(),
+		snapshot:     snapshot,
+		cursors:      make([]pointread.Cursor, 2),
+		keyScratch:   borrowCommitmentParentKeyScratch(2),
+	}
+	session.readContexts = borrowCommitmentParentReadContexts(session, 2)
+	prefix := []byte{2, 2, 2, 2, 2, 2}
+	physicalKey := append([]byte(rawdb.CommitmentBranchKeyPrefix), prefix...)
+	type foregroundRetryResult struct {
+		found bool
+		value []byte
+		err   error
+	}
+
+	prefetchDone := make(chan error, 1)
+	go func() {
+		_, err := rawdb.LegacyCommitmentBranchKeyspace().PrefetchParentInSession(session, 0, prefix)
+		prefetchDone <- err
+	}()
+	<-prefetchState.started
+
+	foregroundDone := make(chan foregroundRetryResult, 1)
+	go func() {
+		var result foregroundRetryResult
+		result.found, result.err = rawdb.LegacyCommitmentBranchKeyspace().ViewParentInSession(
+			session,
+			1,
+			prefix,
+			func(value []byte, _ bool) error {
+				result.value = append([]byte(nil), value...)
+				return nil
+			},
+		)
+		foregroundDone <- result
+	}()
+	waitForCommitmentParentFlightFollowers(t, session, physicalKey, 1)
+	close(prefetchState.release)
+
+	if err := <-prefetchDone; !errors.Is(err, prefetchErr) {
+		t.Fatalf("prefetch error = %v, want %v", err, prefetchErr)
+	}
+	foreground := <-foregroundDone
+	if !foreground.found || foreground.err != nil || string(foreground.value) != "authoritative-branch" {
+		t.Fatalf("foreground retry = (%v,%q,%v)", foreground.found, foreground.value, foreground.err)
+	}
+	if got := prefetchState.calls.Load(); got != 1 {
+		t.Fatalf("prefetch cursor calls = %d, want 1", got)
+	}
+	if got := foregroundState.calls.Load(); got != 1 {
+		t.Fatalf("foreground cursor calls = %d, want 1", got)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -57,6 +57,17 @@ COUNTER_METRICS = (
     "blockbuffer/commitment_parent/durable_publish_races",
     "blockbuffer/commitment_parent/durable_publish_races/prefetch",
     "blockbuffer/commitment_parent/durable_publish_races/foreground",
+    "blockbuffer/commitment_parent/singleflight/leaders",
+    "blockbuffer/commitment_parent/singleflight/waiters",
+    "blockbuffer/commitment_parent/singleflight/shared_results",
+    "blockbuffer/commitment_parent/singleflight/shared_results/foreground",
+    "blockbuffer/commitment_parent/singleflight/shared_results/prefetch",
+    "blockbuffer/commitment_parent/singleflight/shared_present",
+    "blockbuffer/commitment_parent/singleflight/shared_missing",
+    "blockbuffer/commitment_parent/singleflight/leader_errors",
+    "blockbuffer/commitment_parent/singleflight/wait_nanos",
+    "blockbuffer/commitment_parent/singleflight/waiters/foreground",
+    "blockbuffer/commitment_parent/singleflight/waiters/prefetch",
     "blockbuffer/commitment_parent/prefetch/unused_capacity_evicted",
     "blockbuffer/commitment_parent/prefetch/unused_capacity_evicted_bytes",
     "state/commitment/fold/wall_nanos",
@@ -232,6 +243,7 @@ def build_row(now, height, current, previous):
         deltas.get("blockbuffer/commitment_parent/overlay/resolved"),
         deltas.get("blockbuffer/commitment_parent/cache/resolved"),
         deltas.get("blockbuffer/commitment_parent/durable/reads"),
+        deltas.get("blockbuffer/commitment_parent/singleflight/shared_results/foreground"),
     )
     total_durable = positive_sum(
         deltas.get("blockbuffer/commitment_parent/durable/reads"),
@@ -240,6 +252,10 @@ def build_row(now, height, current, previous):
     block_cache_total = positive_sum(deltas.get("cache/block/hit"), deltas.get("cache/block/miss"))
     table_cache_total = positive_sum(deltas.get("cache/table/hit"), deltas.get("cache/table/miss"))
     filter_total = positive_sum(deltas.get("filter/hit"), deltas.get("filter/miss"))
+    flight_logical_reads = positive_sum(
+        deltas.get("blockbuffer/commitment_parent/singleflight/leaders"),
+        deltas.get("blockbuffer/commitment_parent/singleflight/shared_results"),
+    )
 
     foreground_depth_ratios = {}
     for bucket in ("depth_5_8", "depth_9_16", "depth_17_32", "depth_33_plus"):
@@ -275,6 +291,30 @@ def build_row(now, height, current, previous):
         ),
         "durablePublishRaceRatio": safe_ratio(
             deltas.get("blockbuffer/commitment_parent/durable_publish_races"), total_durable
+        ),
+        "singleflightSharedRatio": safe_ratio(
+            deltas.get("blockbuffer/commitment_parent/singleflight/shared_results"),
+            flight_logical_reads,
+        ),
+        "singleflightWaiterShareRatio": safe_ratio(
+            deltas.get("blockbuffer/commitment_parent/singleflight/shared_results"),
+            deltas.get("blockbuffer/commitment_parent/singleflight/waiters"),
+        ),
+        "singleflightWaitNanosPerWaiter": safe_ratio(
+            deltas.get("blockbuffer/commitment_parent/singleflight/wait_nanos"),
+            deltas.get("blockbuffer/commitment_parent/singleflight/waiters"),
+        ),
+        "singleflightSharedPresentRatio": safe_ratio(
+            deltas.get("blockbuffer/commitment_parent/singleflight/shared_present"),
+            deltas.get("blockbuffer/commitment_parent/singleflight/shared_results"),
+        ),
+        "singleflightForegroundWaiterRatio": safe_ratio(
+            deltas.get("blockbuffer/commitment_parent/singleflight/waiters/foreground"),
+            deltas.get("blockbuffer/commitment_parent/singleflight/waiters"),
+        ),
+        "singleflightLeaderErrorRatio": safe_ratio(
+            deltas.get("blockbuffer/commitment_parent/singleflight/leader_errors"),
+            deltas.get("blockbuffer/commitment_parent/singleflight/leaders"),
         ),
         "criticalNanosPerPlannedRead": safe_ratio(
             deltas.get("state/commitment/pipeline/prefetch_critical/wall_nanos"),
