@@ -68,6 +68,142 @@ func TestPhysicalReadFSObservesSSTReadAtAndLocality(t *testing.T) {
 	assertCounter("locality samples", m.localitySamples, 3)
 	assertCounter("same offset", m.sameOffset, 1)
 	assertCounter("offset jump bytes", m.offsetJumpBytes, 20)
+	assertCounter("other FD calls", m.fdOther.calls, 5)
+	assertCounter("other FD bytes", m.fdOther.bytes, 18)
+}
+
+func TestPhysicalReadFSClassifiesSSTOpenMode(t *testing.T) {
+	fs := vfs.NewMem()
+	file, err := fs.Create("000001.sst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(make([]byte, 16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	observed := newPhysicalReadFS(fs, "test/physical_read_fd_mode/")
+	m := observed.(*physicalReadFS).metrics
+	for _, test := range []struct {
+		name string
+		opts []vfs.OpenOption
+		fd   *physicalReadFDMetrics
+	}{
+		{name: "random", opts: []vfs.OpenOption{vfs.RandomReadsOption}, fd: &m.fdRandom},
+		{name: "sequential", opts: []vfs.OpenOption{vfs.SequentialReadsOption}, fd: &m.fdSequential},
+		{name: "sequential then random", opts: []vfs.OpenOption{vfs.SequentialReadsOption, vfs.RandomReadsOption}, fd: &m.fdRandom},
+		{name: "random then sequential", opts: []vfs.OpenOption{vfs.RandomReadsOption, vfs.SequentialReadsOption}, fd: &m.fdSequential},
+		{name: "other", opts: []vfs.OpenOption{physicalReadUncomparableOpenOption{1}}, fd: &m.fdOther},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opened, err := observed.Open("000001.sst", test.opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			physical := opened.(*physicalReadFile)
+			if physical.fdMetrics != test.fd {
+				t.Fatalf("FD metrics = %p, want %p", physical.fdMetrics, test.fd)
+			}
+			if n, err := physical.ReadAt(make([]byte, 4), 0); err != nil || n != 4 {
+				t.Fatalf("ReadAt = %d, %v", n, err)
+			}
+			if err := opened.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	for name, fd := range map[string]*physicalReadFDMetrics{
+		"random":     &m.fdRandom,
+		"sequential": &m.fdSequential,
+		"other":      &m.fdOther,
+	} {
+		want := int64(1)
+		if name != "other" {
+			want = 2
+		}
+		if got := fd.calls.Snapshot().Count(); got != want {
+			t.Fatalf("%s calls = %d, want %d", name, got, want)
+		}
+		if got := fd.bytes.Snapshot().Count(); got != want*4 {
+			t.Fatalf("%s bytes = %d, want %d", name, got, want*4)
+		}
+	}
+	if got := m.calls.Snapshot().Count(); got != 5 {
+		t.Fatalf("total calls = %d, want 5", got)
+	}
+	if got := m.bytes.Snapshot().Count(); got != 20 {
+		t.Fatalf("total bytes = %d, want 20", got)
+	}
+	classifiedNanos := m.fdRandom.nanos.Snapshot().Count() +
+		m.fdSequential.nanos.Snapshot().Count() +
+		m.fdOther.nanos.Snapshot().Count()
+	if totalNanos := m.nanos.Snapshot().Count(); classifiedNanos != totalNanos {
+		t.Fatalf("classified nanos = %d, total nanos = %d", classifiedNanos, totalNanos)
+	}
+}
+
+type physicalReadUncomparableOpenOption []byte
+
+func (physicalReadUncomparableOpenOption) Apply(vfs.File) {}
+
+type physicalReadPrefetchErrorFile struct {
+	vfs.File
+	err    error
+	calls  int
+	offset int64
+	length int64
+}
+
+func (f *physicalReadPrefetchErrorFile) Prefetch(offset, length int64) error {
+	f.calls++
+	f.offset = offset
+	f.length = length
+	return f.err
+}
+
+func TestPhysicalReadFileObservesPrefetchHints(t *testing.T) {
+	fs := vfs.NewMem()
+	file, err := fs.Create("000001.sst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file, err = fs.Open("000001.sst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	m := newPhysicalReadMetrics("test/physical_read_prefetch/")
+	physical := &physicalReadFile{File: file, metrics: m, fdMetrics: &m.fdOther}
+	if err := physical.Prefetch(4, 64<<10); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("prefetch failed")
+	captured := &physicalReadPrefetchErrorFile{File: file, err: wantErr}
+	physical.File = captured
+	if err := physical.Prefetch(8, 128<<10); !errors.Is(err, wantErr) {
+		t.Fatalf("Prefetch error = %v, want %v", err, wantErr)
+	}
+	if captured.calls != 1 || captured.offset != 8 || captured.length != 128<<10 {
+		t.Fatalf("Prefetch forwarding = calls %d offset %d length %d", captured.calls, captured.offset, captured.length)
+	}
+
+	if got := m.prefetchCalls.Snapshot().Count(); got != 2 {
+		t.Fatalf("prefetch calls = %d, want 2", got)
+	}
+	if got := m.prefetchBytes.Snapshot().Count(); got != 192<<10 {
+		t.Fatalf("prefetch requested bytes = %d, want %d", got, 192<<10)
+	}
+	if got := m.prefetchErrors.Snapshot().Count(); got != 1 {
+		t.Fatalf("prefetch errors = %d, want 1", got)
+	}
 }
 
 func TestPhysicalReadLocalitySamplingHasNoFixedPhase(t *testing.T) {

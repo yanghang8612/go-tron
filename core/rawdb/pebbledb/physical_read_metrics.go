@@ -1,6 +1,7 @@
 package pebbledb
 
 import (
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,29 @@ type physicalReadMetrics struct {
 	localitySamples *metrics.Counter
 	sameOffset      *metrics.Counter
 	offsetJumpBytes *metrics.Counter
+	fdRandom        physicalReadFDMetrics
+	fdSequential    physicalReadFDMetrics
+	fdOther         physicalReadFDMetrics
+	prefetchCalls   *metrics.Counter
+	prefetchBytes   *metrics.Counter
+	prefetchErrors  *metrics.Counter
+}
+
+// physicalReadFDMetrics is selected once when an SST descriptor is opened.
+// Keeping direct counter pointers on physicalReadFile avoids an option scan,
+// registry lookup, label construction or switch in the ReadAt hot path.
+type physicalReadFDMetrics struct {
+	calls *metrics.Counter
+	bytes *metrics.Counter
+	nanos *metrics.Counter
+}
+
+func newPhysicalReadFDMetrics(prefix string) physicalReadFDMetrics {
+	return physicalReadFDMetrics{
+		calls: metrics.GetOrRegisterCounter(prefix+"calls", nil),
+		bytes: metrics.GetOrRegisterCounter(prefix+"bytes", nil),
+		nanos: metrics.GetOrRegisterCounter(prefix+"nanos", nil),
+	}
 }
 
 func newPhysicalReadMetrics(namespace string) *physicalReadMetrics {
@@ -36,6 +60,12 @@ func newPhysicalReadMetrics(namespace string) *physicalReadMetrics {
 		localitySamples: metrics.GetOrRegisterCounter(prefix+"locality/samples", nil),
 		sameOffset:      metrics.GetOrRegisterCounter(prefix+"locality/same_offset", nil),
 		offsetJumpBytes: metrics.GetOrRegisterCounter(prefix+"locality/offset_jump_bytes", nil),
+		fdRandom:        newPhysicalReadFDMetrics(prefix + "fd/random/"),
+		fdSequential:    newPhysicalReadFDMetrics(prefix + "fd/sequential/"),
+		fdOther:         newPhysicalReadFDMetrics(prefix + "fd/other/"),
+		prefetchCalls:   metrics.GetOrRegisterCounter(prefix+"prefetch/calls", nil),
+		prefetchBytes:   metrics.GetOrRegisterCounter(prefix+"prefetch/requested_bytes", nil),
+		prefetchErrors:  metrics.GetOrRegisterCounter(prefix+"prefetch/errors", nil),
 	}
 }
 
@@ -53,12 +83,48 @@ func (fs *physicalReadFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, e
 	if err != nil || !strings.HasSuffix(name, ".sst") {
 		return file, err
 	}
-	return &physicalReadFile{File: file, metrics: fs.metrics, sampleSeed: physicalReadNameSeed(name)}, nil
+	return &physicalReadFile{
+		File:       file,
+		metrics:    fs.metrics,
+		fdMetrics:  fs.metrics.fdMetrics(opts),
+		sampleSeed: physicalReadNameSeed(name),
+	}, nil
+}
+
+func (m *physicalReadMetrics) fdMetrics(opts []vfs.OpenOption) *physicalReadFDMetrics {
+	// This class records which access option accompanied a successful Open.
+	// Open has already applied the options to the underlying file; in particular,
+	// SequentialReadsOption deliberately does not expose the fadvise result. It
+	// also cannot distinguish a compaction handle from a speculative iterator
+	// that crossed Pebble's sequential-read threshold.
+	selected := &m.fdOther
+	for _, option := range opts {
+		switch {
+		case physicalReadSameOpenOption(option, vfs.SequentialReadsOption):
+			selected = &m.fdSequential
+		case physicalReadSameOpenOption(option, vfs.RandomReadsOption):
+			selected = &m.fdRandom
+		}
+	}
+	return selected
+}
+
+// physicalReadSameOpenOption safely compares Pebble's singleton pointer
+// options. OpenOption is an open interface and may contain an incomparable
+// dynamic value, so direct interface equality could panic in an FS wrapper.
+// Reflection runs only while opening a descriptor, never on ReadAt.
+func physicalReadSameOpenOption(got, want vfs.OpenOption) bool {
+	gotValue := reflect.ValueOf(got)
+	wantValue := reflect.ValueOf(want)
+	return gotValue.IsValid() && wantValue.IsValid() &&
+		gotValue.Kind() == reflect.Pointer && wantValue.Kind() == reflect.Pointer &&
+		gotValue.Type() == wantValue.Type() && gotValue.Pointer() == wantValue.Pointer()
 }
 
 type physicalReadFile struct {
 	vfs.File
-	metrics *physicalReadMetrics
+	metrics   *physicalReadMetrics
+	fdMetrics *physicalReadFDMetrics
 
 	// lastOffsetPlusOne uses zero as the unseen sentinel. Swap gives concurrent
 	// readers of one SST a cheap total observation order without serialising the
@@ -106,6 +172,9 @@ func (f *physicalReadFile) ReadAt(p []byte, offset int64) (int, error) {
 	f.metrics.calls.Inc(1)
 	f.metrics.bytes.Inc(int64(n))
 	f.metrics.nanos.Inc(elapsed.Nanoseconds())
+	f.fdMetrics.calls.Inc(1)
+	f.fdMetrics.bytes.Inc(int64(n))
+	f.fdMetrics.nanos.Inc(elapsed.Nanoseconds())
 	if err != nil {
 		f.metrics.errors.Inc(1)
 	}
@@ -124,4 +193,19 @@ func (f *physicalReadFile) ReadAt(p []byte, offset int64) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// Prefetch observes Pebble's read-ahead hints. requested_bytes is deliberately
+// named as a request total: ranges may overlap and the kernel may satisfy them
+// from cache, so it must not be interpreted as bytes read from the device.
+func (f *physicalReadFile) Prefetch(offset, length int64) error {
+	f.metrics.prefetchCalls.Inc(1)
+	if length > 0 {
+		f.metrics.prefetchBytes.Inc(length)
+	}
+	err := f.File.Prefetch(offset, length)
+	if err != nil {
+		f.metrics.prefetchErrors.Inc(1)
+	}
+	return err
 }

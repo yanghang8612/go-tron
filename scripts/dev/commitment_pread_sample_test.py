@@ -93,6 +93,24 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_read_nanos"]: 5_000,
                 MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["point_count"]: 200,
                 MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["read_amp_sum"]: 30,
+                MODULE.PEBBLE_COMPACTION_INPUT_METRIC: 4_000_000,
+                MODULE.PEBBLE_COMPACTION_LIVE_COUNT_METRIC: 3,
+                **{
+                    name: (level + 1) * 100_000
+                    for level, name in MODULE.PEBBLE_LEVEL_COMPACTION_READ_METRICS.items()
+                },
+                MODULE.SST_FD_ACCESS_METRICS["random"]["calls"]: 60,
+                MODULE.SST_FD_ACCESS_METRICS["random"]["bytes"]: 30_000,
+                MODULE.SST_FD_ACCESS_METRICS["random"]["nanos"]: 12_000,
+                MODULE.SST_FD_ACCESS_METRICS["sequential"]["calls"]: 30,
+                MODULE.SST_FD_ACCESS_METRICS["sequential"]["bytes"]: 12_000,
+                MODULE.SST_FD_ACCESS_METRICS["sequential"]["nanos"]: 6_000,
+                MODULE.SST_FD_ACCESS_METRICS["other"]["calls"]: 10,
+                MODULE.SST_FD_ACCESS_METRICS["other"]["bytes"]: 3_000,
+                MODULE.SST_FD_ACCESS_METRICS["other"]["nanos"]: 2_000,
+                MODULE.SST_PREFETCH_METRICS["calls"]: 4,
+                MODULE.SST_PREFETCH_METRICS["requested_bytes"]: 4_096,
+                MODULE.SST_PREFETCH_METRICS["errors"]: 1,
                 "chain/freezer/txindex/coverage": 100,
                 "chain/freezer/txindex/debt/blocks": 16_384,
                 "chain/freezer/txindex/prune/blocks": 40,
@@ -193,6 +211,37 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertEqual(analysis["pebbleCursorReadAmpSumPerBlock"], 1.5)
         self.assertEqual(analysis["pebbleCursorBlockReadNanosPerSeek"], 50.0)
         self.assertEqual(analysis["pebbleCursorReadAmpPerCursor"], 3.0)
+        self.assertEqual(analysis["pebbleCompactionInputBytes"], 4_000_000)
+        self.assertEqual(analysis["pebbleCompactionInputBytesPerBlock"], 200_000.0)
+        self.assertEqual(analysis["pebbleCompactionInputBytesPerSecond"], 400_000.0)
+        self.assertEqual(analysis["pebbleCompactionLiveCount"], 3)
+        self.assertEqual(analysis["pebbleLevelCompactionReadMetricCoverageRatio"], 1.0)
+        self.assertEqual(analysis["pebbleLevelCompactionReadBytes"]["0"], 100_000)
+        self.assertEqual(analysis["pebbleLevelCompactionReadBytesPerBlock"]["6"], 35_000.0)
+        self.assertEqual(analysis["pebbleLevelCompactionReadBytesTotal"], 2_800_000)
+        self.assertEqual(analysis["pebbleLevelCompactionReadBytesPerBlockTotal"], 140_000.0)
+        self.assertTrue(analysis["sstFdAccessMetricsAvailable"])
+        self.assertEqual(analysis["sstFdAccessMetricCoverageRatio"], 1.0)
+        self.assertEqual(analysis["sstFdClassifiedCallsPerBlock"], 5.0)
+        self.assertEqual(analysis["sstFdClassifiedBytesPerBlock"], 2_250.0)
+        self.assertEqual(analysis["sstFdClassifiedNanosPerBlock"], 1_000.0)
+        self.assertEqual(analysis["sstFdClassifiedCallRatio"], 1.0)
+        self.assertEqual(analysis["sstFdClassifiedByteRatio"], 1.0)
+        self.assertEqual(analysis["sstFdClassifiedNanosRatio"], 1.0)
+        self.assertEqual(analysis["sstFdRandomCallsPerBlock"], 3.0)
+        self.assertEqual(analysis["sstFdRandomBytesPerCall"], 500.0)
+        self.assertEqual(analysis["sstFdRandomNanosPerCall"], 200.0)
+        self.assertEqual(analysis["sstFdRandomCallRatio"], 0.6)
+        self.assertAlmostEqual(analysis["sstFdRandomByteRatio"], 2 / 3)
+        self.assertEqual(analysis["sstFdRandomNanosRatio"], 0.6)
+        self.assertEqual(analysis["sstFdSequentialCallRatio"], 0.3)
+        self.assertEqual(analysis["sstFdOtherCallRatio"], 0.1)
+        self.assertTrue(analysis["sstPrefetchMetricsAvailable"])
+        self.assertEqual(analysis["sstPrefetchMetricCoverageRatio"], 1.0)
+        self.assertEqual(analysis["sstPrefetchCallsPerBlock"], 0.2)
+        self.assertEqual(analysis["sstPrefetchRequestedBytesPerBlock"], 204.8)
+        self.assertEqual(analysis["sstPrefetchRequestedBytesPerCall"], 1_024.0)
+        self.assertEqual(analysis["sstPrefetchErrorRatio"], 0.25)
         self.assertEqual(analysis["txIndexDebtBlocks"], 16_384)
         self.assertEqual(analysis["txIndexCoverageBlocksPerBlock"], 5.0)
         self.assertEqual(analysis["txIndexPrunedBlocksPerBlock"], 2.0)
@@ -242,6 +291,10 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         gauge = "chain/freezer/txindex/maintenance/admitted"
         physical_bytes = MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_bytes"]
         physical_cached = MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_bytes_cached"]
+        compaction_input = MODULE.PEBBLE_COMPACTION_INPUT_METRIC
+        level_read = MODULE.PEBBLE_LEVEL_COMPACTION_READ_METRICS[0]
+        fd_random_calls = MODULE.SST_FD_ACCESS_METRICS["random"]["calls"]
+        prefetch_calls = MODULE.SST_PREFETCH_METRICS["calls"]
         current.update(
             {
                 MODULE.PROCESS_IDENTITY_METRIC: 200,
@@ -249,6 +302,10 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 gauge: 100,
                 physical_bytes: 10_000,
                 physical_cached: 6_000,
+                compaction_input: 10_000,
+                level_read: 8_000,
+                fd_random_calls: 100,
+                prefetch_calls: 20,
                 "chain/freezer/txindex/debt/blocks": 12_345,
             }
         )
@@ -261,6 +318,10 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 gauge: 2,
                 physical_bytes: 100,
                 physical_cached: 60,
+                compaction_input: 100,
+                level_read: 80,
+                fd_random_calls: 10,
+                prefetch_calls: 2,
             },
         }
         row = MODULE.build_row(101.0, 2, current, previous)
@@ -271,7 +332,14 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertIsNone(row["delta"][gauge])
         self.assertIsNone(row["delta"][physical_bytes])
         self.assertIsNone(row["delta"][physical_cached])
+        self.assertIsNone(row["delta"][compaction_input])
+        self.assertIsNone(row["delta"][level_read])
+        self.assertIsNone(row["delta"][fd_random_calls])
+        self.assertIsNone(row["delta"][prefetch_calls])
         self.assertIsNone(row["analysis"]["pebbleCursorUncachedBlockBytes"])
+        self.assertIsNone(row["analysis"]["pebbleCompactionInputBytes"])
+        self.assertIsNone(row["analysis"]["sstFdRandomCallsPerBlock"])
+        self.assertIsNone(row["analysis"]["sstPrefetchCallsPerBlock"])
         self.assertEqual(row["analysis"]["txIndexDebtBlocks"], 12_345)
 
     def test_first_identity_sample_remains_bootstrap(self):
@@ -330,6 +398,17 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertIsNone(row["analysis"]["pebbleCursorUncachedBlockRatio"])
         self.assertIsNone(row["analysis"]["pebbleCursorBlockReadNanosPerSeek"])
         self.assertIsNone(row["analysis"]["pebbleCursorReadAmpPerCursor"])
+        self.assertIsNone(row["analysis"]["pebbleCompactionInputBytes"])
+        self.assertIsNone(row["analysis"]["pebbleCompactionLiveCount"])
+        self.assertEqual(row["analysis"]["pebbleLevelCompactionReadMetricCoverageRatio"], 0.0)
+        self.assertIsNone(row["analysis"]["pebbleLevelCompactionReadBytesTotal"])
+        self.assertFalse(row["analysis"]["sstFdAccessMetricsAvailable"])
+        self.assertEqual(row["analysis"]["sstFdAccessMetricCoverageRatio"], 0.0)
+        self.assertIsNone(row["analysis"]["sstFdRandomCallsPerBlock"])
+        self.assertIsNone(row["analysis"]["sstFdClassifiedCallRatio"])
+        self.assertFalse(row["analysis"]["sstPrefetchMetricsAvailable"])
+        self.assertEqual(row["analysis"]["sstPrefetchMetricCoverageRatio"], 0.0)
+        self.assertIsNone(row["analysis"]["sstPrefetchRequestedBytesPerCall"])
         self.assertIsNone(row["analysis"]["txIndexPruneDutyRatio"])
         self.assertIsNone(row["analysis"]["coldSnapshotLastForcedDutyRatio"])
 
@@ -347,6 +426,8 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertIsNone(analysis["commitmentSegmentPhysicalReadSameBlockRatio"])
         self.assertFalse(analysis["sstPhysicalReadMetricsAvailable"])
         self.assertFalse(analysis["pebbleCursorMetricsAvailable"])
+        self.assertFalse(analysis["sstFdAccessMetricsAvailable"])
+        self.assertFalse(analysis["sstPrefetchMetricsAvailable"])
 
     def test_inconsistent_cached_block_delta_does_not_report_negative_uncached_bytes(self):
         current = {name: None for name in MODULE.ALL_METRICS}
@@ -364,8 +445,23 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertIsNone(analysis["pebbleCursorUncachedBlockRatio"])
         self.assertIsNone(analysis["pebbleCursorUncachedBlockBytesPerBlock"])
 
+    def test_compaction_live_count_is_a_point_gauge_not_a_resetting_counter(self):
+        current = {name: None for name in MODULE.ALL_METRICS}
+        current[MODULE.PEBBLE_COMPACTION_LIVE_COUNT_METRIC] = 1
+        previous = {
+            "unix": 100.0,
+            "height": 1,
+            "metrics": {MODULE.PEBBLE_COMPACTION_LIVE_COUNT_METRIC: 3},
+        }
+        row = MODULE.build_row(101.0, 2, current, previous)
+        self.assertEqual(row["status"], "ok")
+        self.assertEqual(row["counterResets"], [])
+        self.assertEqual(row["analysis"]["pebbleCompactionLiveCount"], 1)
+
     def test_new_prefixes_and_metric_types_match_exporters(self):
         self.assertIn("process/", MODULE.METRIC_PREFIXES)
+        self.assertIn("compact/", MODULE.METRIC_PREFIXES)
+        self.assertIn("level/", MODULE.METRIC_PREFIXES)
         self.assertIn("disk/physical/read/sst/", MODULE.METRIC_PREFIXES)
         self.assertIn("chain/freezer/", MODULE.METRIC_PREFIXES)
         self.assertIn("state/snapshot/cold/", MODULE.METRIC_PREFIXES)
@@ -392,6 +488,16 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 self.assertIn(name, MODULE.COUNTER_METRICS)
         self.assertEqual(len(MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS), 8)
         for name in MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS.values():
+            self.assertIn(name, MODULE.COUNTER_METRICS)
+        self.assertIn(MODULE.PEBBLE_COMPACTION_INPUT_METRIC, MODULE.COUNTER_METRICS)
+        self.assertIn(MODULE.PEBBLE_COMPACTION_LIVE_COUNT_METRIC, MODULE.POINT_GAUGE_METRICS)
+        for name in MODULE.PEBBLE_LEVEL_COMPACTION_READ_METRICS.values():
+            self.assertIn(name, MODULE.MONOTONIC_GAUGE_METRICS)
+        self.assertEqual(len(MODULE.SST_FD_ACCESS_COUNTER_METRICS), 9)
+        for name in MODULE.SST_FD_ACCESS_COUNTER_METRICS:
+            self.assertIn(name, MODULE.COUNTER_METRICS)
+        self.assertEqual(len(MODULE.SST_PREFETCH_COUNTER_METRICS), 3)
+        for name in MODULE.SST_PREFETCH_COUNTER_METRICS:
             self.assertIn(name, MODULE.COUNTER_METRICS)
 
     def test_with_prefix_replaces_existing_filter(self):

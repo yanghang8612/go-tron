@@ -18,6 +18,8 @@ from pathlib import Path
 
 METRIC_PREFIXES = (
     "process/",
+    "compact/",
+    "level/",
     "disk/physical/read/sst/",
     "blockbuffer/commitment_parent/",
     "state/commitment/",
@@ -30,6 +32,13 @@ METRIC_PREFIXES = (
 )
 
 PROCESS_IDENTITY_METRIC = "process/start/unix_nano"
+
+PEBBLE_COMPACTION_INPUT_METRIC = "compact/input"
+PEBBLE_COMPACTION_LIVE_COUNT_METRIC = "compact/live/count"
+# Pebble's production layout exposes the standard seven levels, L0 through L6.
+PEBBLE_LEVEL_COMPACTION_READ_METRICS = {
+    level: "level/{}/compact/read".format(level) for level in range(7)
+}
 
 # Optional physical-I/O contracts. Keep the names and output prefixes in one
 # place: older/mixed-version nodes must report missing data, never invented
@@ -93,6 +102,28 @@ PEBBLE_COMMITMENT_CURSOR_METRICS = {
 PEBBLE_COMMITMENT_CURSOR_COUNTER_METRICS = tuple(
     PEBBLE_COMMITMENT_CURSOR_METRICS.values()
 )
+
+# These counters attribute ReadAt work by the access advice carried by the
+# successful SST Open. Sequential includes both compaction and speculative
+# threshold reopens; it does not prove that the kernel accepted fadvise.
+SST_FD_ACCESS_METRICS = {
+    access: {
+        unit: "disk/physical/read/sst/fd/{}/{}".format(access, unit)
+        for unit in ("calls", "bytes", "nanos")
+    }
+    for access in ("random", "sequential", "other")
+}
+SST_FD_ACCESS_COUNTER_METRICS = tuple(
+    name
+    for access_metrics in SST_FD_ACCESS_METRICS.values()
+    for name in access_metrics.values()
+)
+SST_PREFETCH_METRICS = {
+    "calls": "disk/physical/read/sst/prefetch/calls",
+    "requested_bytes": "disk/physical/read/sst/prefetch/requested_bytes",
+    "errors": "disk/physical/read/sst/prefetch/errors",
+}
+SST_PREFETCH_COUNTER_METRICS = tuple(SST_PREFETCH_METRICS.values())
 
 
 def physical_read_group(output_prefix):
@@ -164,7 +195,11 @@ COUNTER_METRICS = (
     "state/commitment/pipeline/prefetch_lookahead/wall_nanos",
     "state/commitment/pipeline/prefetch_lookahead/finish_wait_calls",
     "state/commitment/pipeline/prefetch_lookahead/finish_wait_nanos",
-) + PHYSICAL_READ_COUNTER_METRICS + PEBBLE_COMMITMENT_CURSOR_COUNTER_METRICS
+) + (PEBBLE_COMPACTION_INPUT_METRIC,) + PHYSICAL_READ_COUNTER_METRICS + (
+    PEBBLE_COMMITMENT_CURSOR_COUNTER_METRICS
+    + SST_FD_ACCESS_COUNTER_METRICS
+    + SST_PREFETCH_COUNTER_METRICS
+)
 
 # These are exported as gauges by their owners, but hold process-lifetime or
 # durable monotonic totals. Delta them like counters while retaining their
@@ -200,10 +235,11 @@ MONOTONIC_GAUGE_METRICS = (
     "cache/table/miss",
     "filter/hit",
     "filter/miss",
-)
+) + tuple(PEBBLE_LEVEL_COMPACTION_READ_METRICS.values())
 
 POINT_GAUGE_METRICS = (
     PROCESS_IDENTITY_METRIC,
+    PEBBLE_COMPACTION_LIVE_COUNT_METRIC,
     "state/commitment/pipeline/prefetch_critical/depth",
     "state/commitment/pipeline/prefetch_critical/queue_high_water",
     "state/commitment/pipeline/prefetch_lookahead/depth",
@@ -399,6 +435,112 @@ def build_pebble_commitment_cursor_analysis(current, deltas, interval_blocks):
             values["block_read_nanos"], values["seek_calls"]
         ),
         "pebbleCursorReadAmpPerCursor": safe_ratio(values["read_amp_sum"], values["cursors"]),
+    }
+
+
+def build_pebble_compaction_analysis(current, deltas, interval_blocks, interval):
+    level_values = {
+        str(level): deltas.get(name)
+        for level, name in PEBBLE_LEVEL_COMPACTION_READ_METRICS.items()
+    }
+    level_present = sum(
+        1 for name in PEBBLE_LEVEL_COMPACTION_READ_METRICS.values()
+        if current.get(name) is not None
+    )
+    level_total = positive_sum(*level_values.values())
+    compaction_input = deltas.get(PEBBLE_COMPACTION_INPUT_METRIC)
+    return {
+        "pebbleCompactionInputBytes": compaction_input,
+        "pebbleCompactionInputBytesPerBlock": safe_ratio(compaction_input, interval_blocks),
+        "pebbleCompactionInputBytesPerSecond": safe_ratio(compaction_input, interval),
+        "pebbleCompactionLiveCount": current.get(PEBBLE_COMPACTION_LIVE_COUNT_METRIC),
+        "pebbleLevelCompactionReadMetricCoverageRatio": safe_ratio(
+            level_present, len(PEBBLE_LEVEL_COMPACTION_READ_METRICS)
+        ),
+        "pebbleLevelCompactionReadBytes": level_values,
+        "pebbleLevelCompactionReadBytesPerBlock": {
+            level: safe_ratio(value, interval_blocks)
+            for level, value in level_values.items()
+        },
+        "pebbleLevelCompactionReadBytesTotal": level_total,
+        "pebbleLevelCompactionReadBytesPerBlockTotal": safe_ratio(
+            level_total, interval_blocks
+        ),
+    }
+
+
+def build_sst_fd_access_analysis(current, deltas, interval_blocks):
+    present = sum(
+        1
+        for access_metrics in SST_FD_ACCESS_METRICS.values()
+        for name in access_metrics.values()
+        if current.get(name) is not None
+    )
+    totals = {
+        unit: positive_sum(
+            *(deltas.get(metrics[unit]) for metrics in SST_FD_ACCESS_METRICS.values())
+        )
+        for unit in ("calls", "bytes", "nanos")
+    }
+    sst_metrics = physical_read_group("sstPhysicalRead")["metrics"]
+    result = {
+        "sstFdAccessMetricsAvailable": present > 0,
+        "sstFdAccessMetricCoverageRatio": safe_ratio(
+            present, len(SST_FD_ACCESS_COUNTER_METRICS)
+        ),
+        "sstFdClassifiedCallsPerBlock": safe_ratio(totals["calls"], interval_blocks),
+        "sstFdClassifiedBytesPerBlock": safe_ratio(totals["bytes"], interval_blocks),
+        "sstFdClassifiedNanosPerBlock": safe_ratio(totals["nanos"], interval_blocks),
+        "sstFdClassifiedCallRatio": safe_ratio(
+            totals["calls"], deltas.get(sst_metrics["calls"])
+        ),
+        "sstFdClassifiedByteRatio": safe_ratio(
+            totals["bytes"], deltas.get(sst_metrics["bytes"])
+        ),
+        "sstFdClassifiedNanosRatio": safe_ratio(
+            totals["nanos"], deltas.get(sst_metrics["nanos"])
+        ),
+    }
+    for access, metrics in SST_FD_ACCESS_METRICS.items():
+        output = access[0].upper() + access[1:]
+        calls = deltas.get(metrics["calls"])
+        result["sstFd" + output + "CallsPerBlock"] = safe_ratio(calls, interval_blocks)
+        result["sstFd" + output + "BytesPerBlock"] = safe_ratio(
+            deltas.get(metrics["bytes"]), interval_blocks
+        )
+        result["sstFd" + output + "NanosPerBlock"] = safe_ratio(
+            deltas.get(metrics["nanos"]), interval_blocks
+        )
+        result["sstFd" + output + "BytesPerCall"] = safe_ratio(
+            deltas.get(metrics["bytes"]), calls
+        )
+        result["sstFd" + output + "NanosPerCall"] = safe_ratio(
+            deltas.get(metrics["nanos"]), calls
+        )
+        result["sstFd" + output + "CallRatio"] = safe_ratio(calls, totals["calls"])
+        result["sstFd" + output + "ByteRatio"] = safe_ratio(
+            deltas.get(metrics["bytes"]), totals["bytes"]
+        )
+        result["sstFd" + output + "NanosRatio"] = safe_ratio(
+            deltas.get(metrics["nanos"]), totals["nanos"]
+        )
+    return result
+
+
+def build_sst_prefetch_analysis(current, deltas, interval_blocks):
+    present = sum(1 for name in SST_PREFETCH_METRICS.values() if current.get(name) is not None)
+    calls = deltas.get(SST_PREFETCH_METRICS["calls"])
+    requested_bytes = deltas.get(SST_PREFETCH_METRICS["requested_bytes"])
+    return {
+        "sstPrefetchMetricsAvailable": present > 0,
+        "sstPrefetchMetricCoverageRatio": safe_ratio(present, len(SST_PREFETCH_METRICS)),
+        "sstPrefetchCallsPerBlock": safe_ratio(calls, interval_blocks),
+        # Requested bytes are overlapping kernel hints, not bytes proven read.
+        "sstPrefetchRequestedBytesPerBlock": safe_ratio(requested_bytes, interval_blocks),
+        "sstPrefetchRequestedBytesPerCall": safe_ratio(requested_bytes, calls),
+        "sstPrefetchErrorRatio": safe_ratio(
+            deltas.get(SST_PREFETCH_METRICS["errors"]), calls
+        ),
     }
 
 
@@ -665,6 +807,9 @@ def build_row(now, height, current, previous):
     for group in PHYSICAL_READ_METRIC_GROUPS:
         analysis.update(build_physical_read_analysis(group, current, deltas, interval_blocks))
     analysis.update(build_pebble_commitment_cursor_analysis(current, deltas, interval_blocks))
+    analysis.update(build_pebble_compaction_analysis(current, deltas, interval_blocks, interval))
+    analysis.update(build_sst_fd_access_analysis(current, deltas, interval_blocks))
+    analysis.update(build_sst_prefetch_analysis(current, deltas, interval_blocks))
     return {
         "timestamp": dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(),
         "unix": now,
