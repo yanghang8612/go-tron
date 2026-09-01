@@ -79,6 +79,7 @@ type CommitmentBranchPointView struct {
 	// count instead of pinning hundreds of MiB after a transient burst.
 	maxBlockBytes int
 	scratchPool   chan []byte
+	readMetrics   commitmentBranchPointReadMetrics
 }
 
 const (
@@ -145,7 +146,7 @@ func (v *CommitmentBranchPointView) Get(prefix []byte) ([]byte, bool, error) {
 	scratch := v.borrowScratch()
 	defer v.returnScratch(scratch)
 	block := scratch[:int(end-entry.segmentOffset)]
-	if _, err := v.segment.ReadAt(block, int64(entry.segmentOffset)); err != nil {
+	if _, err := v.readMetrics.readAt(v.segment, block, int64(entry.segmentOffset), index-1, v.index, prefix); err != nil {
 		return nil, false, err
 	}
 	return readCommitmentBranchValueFromBlock(block, v.segmentHeader, entry.ordinal, v.btreeHeader.blockSize, key)
@@ -308,6 +309,7 @@ func newCommitmentBranchPointView(txNum uint64, segment *os.File, segmentHeader 
 		keyArena:      keyArena,
 		maxBlockBytes: maxBlockBytes,
 		scratchPool:   make(chan []byte, commitmentBranchPointScratchPoolCapacity(maxBlockBytes)),
+		readMetrics:   newCommitmentBranchPointReadMetrics(txNum, segmentHeader.fileSize),
 	}, nil
 }
 

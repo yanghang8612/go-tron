@@ -68,6 +68,31 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 "state/commitment/pipeline/prefetch_lookahead/finish_wait_calls": 2,
                 "state/commitment/pipeline/prefetch_lookahead/finish_wait_nanos": 1_000,
                 "state/commitment/pipeline/prefetch_lookahead/queue_high_water": 5,
+                MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["calls"]: 40,
+                MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["bytes"]: 8_000,
+                MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["nanos"]: 4_000,
+                MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["errors"]: 2,
+                MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["short_reads"]: 1,
+                MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["locality_samples"]: 30,
+                MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["offset_jump_bytes"]: 90_000,
+                MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["same_block"]: 10,
+                MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["adjacent_block"]: 5,
+                MODULE.physical_read_group("sstPhysicalRead")["metrics"]["calls"]: 100,
+                MODULE.physical_read_group("sstPhysicalRead")["metrics"]["bytes"]: 45_000,
+                MODULE.physical_read_group("sstPhysicalRead")["metrics"]["nanos"]: 20_000,
+                MODULE.physical_read_group("sstPhysicalRead")["metrics"]["errors"]: 1,
+                MODULE.physical_read_group("sstPhysicalRead")["metrics"]["short_reads"]: 2,
+                MODULE.physical_read_group("sstPhysicalRead")["metrics"]["locality_samples"]: 80,
+                MODULE.physical_read_group("sstPhysicalRead")["metrics"]["offset_jump_bytes"]: 160_000,
+                MODULE.physical_read_group("sstPhysicalRead")["metrics"]["same_offset"]: 20,
+                MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["cursors"]: 10,
+                MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["seek_calls"]: 100,
+                MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["internal_seek_calls"]: 110,
+                MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_bytes"]: 10_000,
+                MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_bytes_cached"]: 6_000,
+                MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_read_nanos"]: 5_000,
+                MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["point_count"]: 200,
+                MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["read_amp_sum"]: 30,
                 "chain/freezer/txindex/coverage": 100,
                 "chain/freezer/txindex/debt/blocks": 16_384,
                 "chain/freezer/txindex/prune/blocks": 40,
@@ -128,6 +153,46 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertEqual(analysis["finishLookaheadWaitNanosPerBlock"], 50.0)
         self.assertEqual(analysis["criticalQueueHighWaterPerLane"], 3)
         self.assertEqual(analysis["lookaheadQueueHighWaterPerLane"], 5)
+        self.assertTrue(analysis["commitmentSegmentPhysicalReadMetricsAvailable"])
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadMetricCoverageRatio"], 1.0)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadCallsPerBlock"], 2.0)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadBytesPerBlock"], 400.0)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadNanosPerBlock"], 200.0)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadBytesPerCall"], 200.0)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadNanosPerCall"], 100.0)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadErrorRatio"], 0.05)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadShortReadRatio"], 0.025)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadOffsetJumpBytesPerSample"], 3_000.0)
+        self.assertAlmostEqual(analysis["commitmentSegmentPhysicalReadSameBlockRatio"], 1 / 3)
+        self.assertAlmostEqual(analysis["commitmentSegmentPhysicalReadAdjacentBlockRatio"], 1 / 6)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadLocalityRatio"], 0.5)
+        self.assertTrue(analysis["sstPhysicalReadMetricsAvailable"])
+        self.assertEqual(analysis["sstPhysicalReadMetricCoverageRatio"], 1.0)
+        self.assertEqual(analysis["sstPhysicalReadCallsPerBlock"], 5.0)
+        self.assertEqual(analysis["sstPhysicalReadBytesPerBlock"], 2_250.0)
+        self.assertEqual(analysis["sstPhysicalReadNanosPerBlock"], 1_000.0)
+        self.assertEqual(analysis["sstPhysicalReadBytesPerCall"], 450.0)
+        self.assertEqual(analysis["sstPhysicalReadNanosPerCall"], 200.0)
+        self.assertEqual(analysis["sstPhysicalReadErrorRatio"], 0.01)
+        self.assertEqual(analysis["sstPhysicalReadShortReadRatio"], 0.02)
+        self.assertEqual(analysis["sstPhysicalReadOffsetJumpBytesPerSample"], 2_000.0)
+        self.assertEqual(analysis["sstPhysicalReadSameOffsetRatio"], 0.25)
+        self.assertEqual(analysis["sstPhysicalReadLocalityRatio"], 0.25)
+        self.assertTrue(analysis["pebbleCursorMetricsAvailable"])
+        self.assertEqual(analysis["pebbleCursorMetricCoverageRatio"], 1.0)
+        self.assertEqual(analysis["pebbleCursorUncachedBlockBytes"], 4_000)
+        self.assertEqual(analysis["pebbleCursorUncachedBlockRatio"], 0.4)
+        self.assertEqual(analysis["pebbleCursorCursorsPerBlock"], 0.5)
+        self.assertEqual(analysis["pebbleCursorSeekCallsPerBlock"], 5.0)
+        self.assertEqual(analysis["pebbleCursorInternalSeekCallsPerBlock"], 5.5)
+        self.assertEqual(analysis["pebbleCursorBlockBytesPerBlock"], 500.0)
+        self.assertEqual(analysis["pebbleCursorBlockBytesCachedPerBlock"], 300.0)
+        self.assertEqual(analysis["pebbleCursorUncachedBlockBytesPerBlock"], 200.0)
+        self.assertEqual(analysis["pebbleCursorBlockReadNanosPerBlock"], 250.0)
+        self.assertEqual(analysis["pebbleCursorPointCountPerBlock"], 10.0)
+        self.assertEqual(analysis["pebbleCursorReadAmpSumPerBlock"], 1.5)
+        self.assertEqual(analysis["pebbleCursorBlockReadNanosPerSeek"], 50.0)
+        self.assertEqual(analysis["pebbleCursorReadAmpPerCursor"], 3.0)
         self.assertEqual(analysis["txIndexDebtBlocks"], 16_384)
         self.assertEqual(analysis["txIndexCoverageBlocksPerBlock"], 5.0)
         self.assertEqual(analysis["txIndexPrunedBlocksPerBlock"], 2.0)
@@ -175,11 +240,15 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         current = {name: None for name in MODULE.ALL_METRICS}
         counter = "blockbuffer/commitment_parent/durable/reads"
         gauge = "chain/freezer/txindex/maintenance/admitted"
+        physical_bytes = MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_bytes"]
+        physical_cached = MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_bytes_cached"]
         current.update(
             {
                 MODULE.PROCESS_IDENTITY_METRIC: 200,
                 counter: 1_000,
                 gauge: 100,
+                physical_bytes: 10_000,
+                physical_cached: 6_000,
                 "chain/freezer/txindex/debt/blocks": 12_345,
             }
         )
@@ -190,6 +259,8 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 MODULE.PROCESS_IDENTITY_METRIC: 100,
                 counter: 10,
                 gauge: 2,
+                physical_bytes: 100,
+                physical_cached: 60,
             },
         }
         row = MODULE.build_row(101.0, 2, current, previous)
@@ -198,6 +269,9 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertIn(MODULE.PROCESS_IDENTITY_METRIC, row["counterResets"])
         self.assertIsNone(row["delta"][counter])
         self.assertIsNone(row["delta"][gauge])
+        self.assertIsNone(row["delta"][physical_bytes])
+        self.assertIsNone(row["delta"][physical_cached])
+        self.assertIsNone(row["analysis"]["pebbleCursorUncachedBlockBytes"])
         self.assertEqual(row["analysis"]["txIndexDebtBlocks"], 12_345)
 
     def test_first_identity_sample_remains_bootstrap(self):
@@ -240,13 +314,62 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertEqual(row["status"], "ok")
         self.assertEqual(row["counterResets"], [])
         self.assertIsNone(row["analysis"]["criticalQueueWaitNanosPerCall"])
+        self.assertFalse(row["analysis"]["commitmentSegmentPhysicalReadMetricsAvailable"])
+        self.assertEqual(row["analysis"]["commitmentSegmentPhysicalReadMetricCoverageRatio"], 0.0)
+        self.assertIsNone(row["analysis"]["commitmentSegmentPhysicalReadCallsPerBlock"])
+        self.assertIsNone(row["analysis"]["commitmentSegmentPhysicalReadBytesPerCall"])
+        self.assertIsNone(row["analysis"]["commitmentSegmentPhysicalReadOffsetJumpBytesPerSample"])
+        self.assertIsNone(row["analysis"]["commitmentSegmentPhysicalReadSameBlockRatio"])
+        self.assertFalse(row["analysis"]["sstPhysicalReadMetricsAvailable"])
+        self.assertEqual(row["analysis"]["sstPhysicalReadMetricCoverageRatio"], 0.0)
+        self.assertIsNone(row["analysis"]["sstPhysicalReadCallsPerBlock"])
+        self.assertIsNone(row["analysis"]["sstPhysicalReadSameOffsetRatio"])
+        self.assertFalse(row["analysis"]["pebbleCursorMetricsAvailable"])
+        self.assertEqual(row["analysis"]["pebbleCursorMetricCoverageRatio"], 0.0)
+        self.assertIsNone(row["analysis"]["pebbleCursorUncachedBlockBytes"])
+        self.assertIsNone(row["analysis"]["pebbleCursorUncachedBlockRatio"])
+        self.assertIsNone(row["analysis"]["pebbleCursorBlockReadNanosPerSeek"])
+        self.assertIsNone(row["analysis"]["pebbleCursorReadAmpPerCursor"])
         self.assertIsNone(row["analysis"]["txIndexPruneDutyRatio"])
         self.assertIsNone(row["analysis"]["coldSnapshotLastForcedDutyRatio"])
 
+    def test_partial_physical_metrics_report_coverage_without_inventing_ratios(self):
+        current = {name: None for name in MODULE.ALL_METRICS}
+        calls = MODULE.physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["calls"]
+        current[calls] = 20
+        previous = {"unix": 100.0, "height": 1, "metrics": {calls: 10}}
+        row = MODULE.build_row(101.0, 2, current, previous)
+        analysis = row["analysis"]
+        self.assertTrue(analysis["commitmentSegmentPhysicalReadMetricsAvailable"])
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadMetricCoverageRatio"], 1 / 9)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadCallsPerBlock"], 10.0)
+        self.assertIsNone(analysis["commitmentSegmentPhysicalReadBytesPerCall"])
+        self.assertIsNone(analysis["commitmentSegmentPhysicalReadSameBlockRatio"])
+        self.assertFalse(analysis["sstPhysicalReadMetricsAvailable"])
+        self.assertFalse(analysis["pebbleCursorMetricsAvailable"])
+
+    def test_inconsistent_cached_block_delta_does_not_report_negative_uncached_bytes(self):
+        current = {name: None for name in MODULE.ALL_METRICS}
+        block_bytes = MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_bytes"]
+        cached_bytes = MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS["block_bytes_cached"]
+        current[block_bytes] = 20
+        current[cached_bytes] = 30
+        previous = {
+            "unix": 100.0,
+            "height": 1,
+            "metrics": {block_bytes: 0, cached_bytes: 0},
+        }
+        analysis = MODULE.build_row(101.0, 2, current, previous)["analysis"]
+        self.assertIsNone(analysis["pebbleCursorUncachedBlockBytes"])
+        self.assertIsNone(analysis["pebbleCursorUncachedBlockRatio"])
+        self.assertIsNone(analysis["pebbleCursorUncachedBlockBytesPerBlock"])
+
     def test_new_prefixes_and_metric_types_match_exporters(self):
         self.assertIn("process/", MODULE.METRIC_PREFIXES)
+        self.assertIn("disk/physical/read/sst/", MODULE.METRIC_PREFIXES)
         self.assertIn("chain/freezer/", MODULE.METRIC_PREFIXES)
         self.assertIn("state/snapshot/cold/", MODULE.METRIC_PREFIXES)
+        self.assertIn("state/snapshot/commitment_branch/", MODULE.METRIC_PREFIXES)
         self.assertIn(
             "state/commitment/pipeline/prefetch_critical/queue_wait_calls",
             MODULE.COUNTER_METRICS,
@@ -261,6 +384,15 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         cold_duty = "state/snapshot/cold/history/forced_busy/last/duty_cycle_ppm"
         self.assertIn(cold_duty, MODULE.POINT_GAUGE_METRICS)
         self.assertNotIn(cold_duty, MODULE.MONOTONIC_GAUGE_METRICS)
+        self.assertEqual(len(MODULE.PHYSICAL_READ_METRIC_GROUPS), 2)
+        for group in MODULE.PHYSICAL_READ_METRIC_GROUPS:
+            expected = 9 if group["output_prefix"] == "commitmentSegmentPhysicalRead" else 8
+            self.assertEqual(len(group["metrics"]), expected)
+            for name in group["metrics"].values():
+                self.assertIn(name, MODULE.COUNTER_METRICS)
+        self.assertEqual(len(MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS), 8)
+        for name in MODULE.PEBBLE_COMMITMENT_CURSOR_METRICS.values():
+            self.assertIn(name, MODULE.COUNTER_METRICS)
 
     def test_with_prefix_replaces_existing_filter(self):
         got = MODULE.with_prefix("http://127.0.0.1:6062/debug/metrics?prefix=old/&x=1", "cache/")

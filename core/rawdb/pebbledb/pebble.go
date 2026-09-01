@@ -70,6 +70,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
+	"github.com/cockroachdb/pebble/vfs"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
@@ -602,6 +603,7 @@ func (c *pointReadCursor) Close() error {
 	if c == nil || c.iter == nil {
 		return nil
 	}
+	commitmentPointReadMetrics.observe(c.iter.Stats(), c.iter.Metrics())
 	err := c.iter.Close()
 	c.iter = nil
 	return err
@@ -767,6 +769,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	}
 	opt := &pebble.Options{
 		Comparer: exactPointComparer,
+		FS:       newPhysicalReadFS(vfs.Default, namespace),
 		// Pebble has a single combined cache area; this fork dedicates the
 		// caller-provided cache budget to reads and sizes memtables
 		// independently from `tune.MemTableSizeBytes`.

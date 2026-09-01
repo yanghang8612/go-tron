@@ -18,8 +18,10 @@ from pathlib import Path
 
 METRIC_PREFIXES = (
     "process/",
+    "disk/physical/read/sst/",
     "blockbuffer/commitment_parent/",
     "state/commitment/",
+    "state/snapshot/commitment_branch/",
     "chain/freezer/",
     "state/snapshot/cold/",
     "cache/",
@@ -28,6 +30,77 @@ METRIC_PREFIXES = (
 )
 
 PROCESS_IDENTITY_METRIC = "process/start/unix_nano"
+
+# Optional physical-I/O contracts. Keep the names and output prefixes in one
+# place: older/mixed-version nodes must report missing data, never invented
+# zeroes. The commitment group is attributable to the immutable branch segment;
+# the SST group is process-wide physical I/O and must not be presented as if it
+# were commitment-only.
+PHYSICAL_READ_METRIC_GROUPS = (
+    {
+        "output_prefix": "commitmentSegmentPhysicalRead",
+        "metrics": {
+            "calls": "state/snapshot/commitment_branch/point_read/physical/calls",
+            "bytes": "state/snapshot/commitment_branch/point_read/physical/bytes",
+            "nanos": "state/snapshot/commitment_branch/point_read/physical/nanos",
+            "errors": "state/snapshot/commitment_branch/point_read/physical/errors",
+            "short_reads": "state/snapshot/commitment_branch/point_read/physical/short_reads",
+            "locality_samples": "state/snapshot/commitment_branch/point_read/locality/samples",
+            "offset_jump_bytes": "state/snapshot/commitment_branch/point_read/locality/offset_jump_bytes",
+            "same_block": "state/snapshot/commitment_branch/point_read/locality/same_block",
+            "adjacent_block": "state/snapshot/commitment_branch/point_read/locality/adjacent_block",
+        },
+        "locality_ratios": (
+            ("same_block", "SameBlockRatio"),
+            ("adjacent_block", "AdjacentBlockRatio"),
+        ),
+        "locality_total": ("same_block", "adjacent_block"),
+    },
+    {
+        "output_prefix": "sstPhysicalRead",
+        "metrics": {
+            "calls": "disk/physical/read/sst/calls",
+            "bytes": "disk/physical/read/sst/bytes",
+            "nanos": "disk/physical/read/sst/nanos",
+            "errors": "disk/physical/read/sst/errors",
+            "short_reads": "disk/physical/read/sst/short_reads",
+            "locality_samples": "disk/physical/read/sst/locality/samples",
+            "offset_jump_bytes": "disk/physical/read/sst/locality/offset_jump_bytes",
+            "same_offset": "disk/physical/read/sst/locality/same_offset",
+        },
+        "locality_ratios": (
+            ("same_offset", "SameOffsetRatio"),
+        ),
+        "locality_total": ("same_offset",),
+    },
+)
+PHYSICAL_READ_COUNTER_METRICS = tuple(
+    name
+    for group in PHYSICAL_READ_METRIC_GROUPS
+    for name in group["metrics"].values()
+)
+
+PEBBLE_COMMITMENT_CURSOR_METRICS = {
+    "cursors": "blockbuffer/commitment_parent/pebble/cursors",
+    "seek_calls": "blockbuffer/commitment_parent/pebble/seek_calls",
+    "internal_seek_calls": "blockbuffer/commitment_parent/pebble/internal_seek_calls",
+    "block_bytes": "blockbuffer/commitment_parent/pebble/block_bytes",
+    "block_bytes_cached": "blockbuffer/commitment_parent/pebble/block_bytes_cached",
+    "block_read_nanos": "blockbuffer/commitment_parent/pebble/block_read_nanos",
+    "point_count": "blockbuffer/commitment_parent/pebble/point_count",
+    "read_amp_sum": "blockbuffer/commitment_parent/pebble/read_amp_sum",
+}
+PEBBLE_COMMITMENT_CURSOR_COUNTER_METRICS = tuple(
+    PEBBLE_COMMITMENT_CURSOR_METRICS.values()
+)
+
+
+def physical_read_group(output_prefix):
+    for group in PHYSICAL_READ_METRIC_GROUPS:
+        if group["output_prefix"] == output_prefix:
+            return group
+    raise KeyError(output_prefix)
+
 
 COUNTER_METRICS = (
     "blockbuffer/commitment_parent/overlay/resolved",
@@ -91,7 +164,7 @@ COUNTER_METRICS = (
     "state/commitment/pipeline/prefetch_lookahead/wall_nanos",
     "state/commitment/pipeline/prefetch_lookahead/finish_wait_calls",
     "state/commitment/pipeline/prefetch_lookahead/finish_wait_nanos",
-)
+) + PHYSICAL_READ_COUNTER_METRICS + PEBBLE_COMMITMENT_CURSOR_COUNTER_METRICS
 
 # These are exported as gauges by their owners, but hold process-lifetime or
 # durable monotonic totals. Delta them like counters while retaining their
@@ -253,6 +326,80 @@ def positive_sum(*values):
     if any(value is None for value in values):
         return None
     return sum(value for value in values if value is not None)
+
+
+def nonnegative_difference(total, part):
+    if total is None or part is None or part > total:
+        return None
+    return total - part
+
+
+def build_physical_read_analysis(group, current, deltas, interval_blocks):
+    metrics = group["metrics"]
+    output_prefix = group["output_prefix"]
+    present = sum(1 for name in metrics.values() if current.get(name) is not None)
+    calls = deltas.get(metrics["calls"])
+    locality_samples = deltas.get(metrics["locality_samples"])
+    result = {
+        output_prefix + "MetricsAvailable": present > 0,
+        output_prefix + "MetricCoverageRatio": safe_ratio(present, len(metrics)),
+        output_prefix + "CallsPerBlock": safe_ratio(calls, interval_blocks),
+        output_prefix + "BytesPerBlock": safe_ratio(
+            deltas.get(metrics["bytes"]), interval_blocks
+        ),
+        output_prefix + "NanosPerBlock": safe_ratio(
+            deltas.get(metrics["nanos"]), interval_blocks
+        ),
+        output_prefix + "BytesPerCall": safe_ratio(deltas.get(metrics["bytes"]), calls),
+        output_prefix + "NanosPerCall": safe_ratio(deltas.get(metrics["nanos"]), calls),
+        output_prefix + "ErrorRatio": safe_ratio(deltas.get(metrics["errors"]), calls),
+        output_prefix + "ShortReadRatio": safe_ratio(
+            deltas.get(metrics["short_reads"]), calls
+        ),
+        output_prefix + "OffsetJumpBytesPerSample": safe_ratio(
+            deltas.get(metrics["offset_jump_bytes"]), locality_samples
+        ),
+    }
+    for metric_key, output_suffix in group["locality_ratios"]:
+        value = deltas.get(metrics[metric_key])
+        result[output_prefix + output_suffix] = safe_ratio(value, locality_samples)
+    local_hits = [deltas.get(metrics[key]) for key in group["locality_total"]]
+    result[output_prefix + "LocalityRatio"] = safe_ratio(
+        positive_sum(*local_hits), locality_samples
+    )
+    return result
+
+
+def build_pebble_commitment_cursor_analysis(current, deltas, interval_blocks):
+    metrics = PEBBLE_COMMITMENT_CURSOR_METRICS
+    present = sum(1 for name in metrics.values() if current.get(name) is not None)
+    values = {key: deltas.get(name) for key, name in metrics.items()}
+    uncached = nonnegative_difference(values["block_bytes"], values["block_bytes_cached"])
+    return {
+        "pebbleCursorMetricsAvailable": present > 0,
+        "pebbleCursorMetricCoverageRatio": safe_ratio(present, len(metrics)),
+        "pebbleCursorUncachedBlockBytes": uncached,
+        "pebbleCursorUncachedBlockRatio": safe_ratio(uncached, values["block_bytes"]),
+        "pebbleCursorCursorsPerBlock": safe_ratio(values["cursors"], interval_blocks),
+        "pebbleCursorSeekCallsPerBlock": safe_ratio(values["seek_calls"], interval_blocks),
+        "pebbleCursorInternalSeekCallsPerBlock": safe_ratio(
+            values["internal_seek_calls"], interval_blocks
+        ),
+        "pebbleCursorBlockBytesPerBlock": safe_ratio(values["block_bytes"], interval_blocks),
+        "pebbleCursorBlockBytesCachedPerBlock": safe_ratio(
+            values["block_bytes_cached"], interval_blocks
+        ),
+        "pebbleCursorUncachedBlockBytesPerBlock": safe_ratio(uncached, interval_blocks),
+        "pebbleCursorBlockReadNanosPerBlock": safe_ratio(
+            values["block_read_nanos"], interval_blocks
+        ),
+        "pebbleCursorPointCountPerBlock": safe_ratio(values["point_count"], interval_blocks),
+        "pebbleCursorReadAmpSumPerBlock": safe_ratio(values["read_amp_sum"], interval_blocks),
+        "pebbleCursorBlockReadNanosPerSeek": safe_ratio(
+            values["block_read_nanos"], values["seek_calls"]
+        ),
+        "pebbleCursorReadAmpPerCursor": safe_ratio(values["read_amp_sum"], values["cursors"]),
+    }
 
 
 def build_row(now, height, current, previous):
@@ -515,6 +662,9 @@ def build_row(now, height, current, previous):
         "filterHitRatio": safe_ratio(deltas.get("filter/hit"), filter_total),
         "foregroundDepthDurableRatio": foreground_depth_ratios,
     }
+    for group in PHYSICAL_READ_METRIC_GROUPS:
+        analysis.update(build_physical_read_analysis(group, current, deltas, interval_blocks))
+    analysis.update(build_pebble_commitment_cursor_analysis(current, deltas, interval_blocks))
     return {
         "timestamp": dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(),
         "unix": now,
