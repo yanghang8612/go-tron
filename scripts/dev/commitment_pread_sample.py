@@ -24,6 +24,7 @@ METRIC_PREFIXES = (
     "blockbuffer/commitment_parent/",
     "state/commitment/",
     "state/snapshot/commitment_branch/",
+    "ancient/",
     "chain/freezer/",
     "state/snapshot/cold/",
     "state/code_cache/",
@@ -126,7 +127,9 @@ SST_PREFETCH_METRICS = {
 }
 SST_PREFETCH_COUNTER_METRICS = tuple(SST_PREFETCH_METRICS.values())
 
-FREEZER_ANCIENT_READ_METRIC = "chain/freezer/ancient/read"
+# The raw freezer is opened with an empty metrics namespace. Its byte meter is
+# therefore rooted at ancient/, separately from the runner's chain/freezer/.
+FREEZER_ANCIENT_READ_METRIC = "ancient/read"
 FREEZER_V2_MONOTONIC_METRICS = (
     "chain/freezer/v2/coverage",
     "chain/freezer/v2/blocks",

@@ -25,6 +25,10 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertEqual(live, {"a": {"count": 2}})
         self.assertEqual(legacy, live)
 
+    def test_freezer_read_meter_uses_raw_freezer_namespace(self):
+        self.assertEqual(MODULE.FREEZER_ANCIENT_READ_METRIC, "ancient/read")
+        self.assertIn("ancient/", MODULE.METRIC_PREFIXES)
+
     def test_build_row_derives_interval_read_ratios(self):
         names = MODULE.ALL_METRICS
         previous_metrics = {name: 0 for name in names}
