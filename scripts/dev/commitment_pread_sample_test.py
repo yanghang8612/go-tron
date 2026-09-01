@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import ast
 import importlib.util
 import unittest
 from pathlib import Path
@@ -13,6 +14,9 @@ SPEC.loader.exec_module(MODULE)
 
 
 class CommitmentPreadSampleTest(unittest.TestCase):
+    def test_source_parses_as_python_36(self):
+        ast.parse(SCRIPT.read_text(encoding="utf-8"), filename=str(SCRIPT), feature_version=(3, 6))
+
     def test_normalize_metrics_accepts_live_and_legacy_shapes(self):
         live = MODULE.normalize_metrics({"metrics": {"a": {"count": 2}}})
         legacy = MODULE.normalize_metrics(

@@ -6,8 +6,6 @@ authentication or proxy support. A single invocation appends one row; --samples
 and --interval can keep the sampler alive for a bounded or continuous capture.
 """
 
-from __future__ import annotations
-
 import argparse
 import datetime as dt
 import json
@@ -89,7 +87,7 @@ GAUGE_METRICS = (
 ALL_METRICS = COUNTER_METRICS + GAUGE_METRICS
 
 
-def request_json(url: str, timeout: float) -> object:
+def request_json(url, timeout):
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         if response.status != 200:
@@ -97,14 +95,14 @@ def request_json(url: str, timeout: float) -> object:
         return json.load(response)
 
 
-def with_prefix(url: str, prefix: str) -> str:
+def with_prefix(url, prefix):
     parts = urllib.parse.urlsplit(url)
     query = [(key, value) for key, value in urllib.parse.parse_qsl(parts.query) if key != "prefix"]
     query.append(("prefix", prefix))
     return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
 
 
-def normalize_metrics(payload: object) -> dict[str, dict[str, object]]:
+def normalize_metrics(payload):
     if not isinstance(payload, dict):
         raise RuntimeError("metrics response is not a JSON object")
     raw = payload.get("metrics")
@@ -112,7 +110,7 @@ def normalize_metrics(payload: object) -> dict[str, dict[str, object]]:
         return {str(name): values for name, values in raw.items() if isinstance(values, dict)}
     # Accept the older operator-script fixture shape as well as the live map.
     if isinstance(raw, list):
-        result: dict[str, dict[str, object]] = {}
+        result = {}
         for metric in raw:
             if not isinstance(metric, dict):
                 continue
@@ -124,14 +122,14 @@ def normalize_metrics(payload: object) -> dict[str, dict[str, object]]:
     raise RuntimeError("metrics response has no object or list field 'metrics'")
 
 
-def fetch_metrics(url: str, timeout: float) -> dict[str, dict[str, object]]:
-    merged: dict[str, dict[str, object]] = {}
+def fetch_metrics(url, timeout):
+    merged = {}
     for prefix in METRIC_PREFIXES:
         merged.update(normalize_metrics(request_json(with_prefix(url, prefix), timeout)))
     return merged
 
 
-def metric_scalar(values: dict[str, object] | None) -> int | float | None:
+def metric_scalar(values):
     if not values:
         return None
     for field in ("count", "value"):
@@ -143,11 +141,11 @@ def metric_scalar(values: dict[str, object] | None) -> int | float | None:
     return None
 
 
-def select_metrics(metrics: dict[str, dict[str, object]]) -> dict[str, int | float | None]:
+def select_metrics(metrics):
     return {name: metric_scalar(metrics.get(name)) for name in ALL_METRICS}
 
 
-def wallet_height(wallet_url: str, timeout: float) -> int | None:
+def wallet_height(wallet_url, timeout):
     payload = request_json(wallet_url.rstrip("/") + "/wallet/getnowblock", timeout)
     if not isinstance(payload, dict):
         return None
@@ -161,7 +159,7 @@ def wallet_height(wallet_url: str, timeout: float) -> int | None:
     return int(number) if isinstance(number, (int, float)) and not isinstance(number, bool) else None
 
 
-def load_previous(path: str) -> dict[str, object] | None:
+def load_previous(path):
     if not path:
         return None
     try:
@@ -180,29 +178,24 @@ def load_previous(path: str) -> dict[str, object] | None:
     return None
 
 
-def safe_ratio(numerator: int | float | None, denominator: int | float | None) -> float | None:
+def safe_ratio(numerator, denominator):
     if numerator is None or denominator is None or denominator <= 0:
         return None
     return float(numerator) / float(denominator)
 
 
-def positive_sum(*values: int | float | None) -> int | float | None:
+def positive_sum(*values):
     if any(value is None for value in values):
         return None
     return sum(value for value in values if value is not None)
 
 
-def build_row(
-    now: float,
-    height: int | None,
-    current: dict[str, int | float | None],
-    previous: dict[str, object] | None,
-) -> dict[str, object]:
+def build_row(now, height, current, previous):
     previous_metrics = previous.get("metrics", {}) if isinstance(previous, dict) else {}
     if not isinstance(previous_metrics, dict):
         previous_metrics = {}
-    deltas: dict[str, int | float | None] = {}
-    resets: list[str] = []
+    deltas = {}
+    resets = []
     for name in COUNTER_METRICS:
         value = current.get(name)
         old = previous_metrics.get(name)
@@ -316,7 +309,7 @@ def build_row(
     }
 
 
-def append_row(path: str, row: dict[str, object]) -> None:
+def append_row(path, row):
     encoded = json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     print(encoded, flush=True)
     if path:
@@ -326,7 +319,7 @@ def append_row(path: str, row: dict[str, object]) -> None:
             stream.write(encoded + "\n")
 
 
-def sample_once(args: argparse.Namespace, previous: dict[str, object] | None) -> dict[str, object]:
+def sample_once(args, previous):
     now = time.time()
     metrics = select_metrics(fetch_metrics(args.metrics_url, args.timeout))
     height = None
@@ -338,7 +331,7 @@ def sample_once(args: argparse.Namespace, previous: dict[str, object] | None) ->
     return build_row(now, height, metrics, previous)
 
 
-def main() -> int:
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--metrics-url",
