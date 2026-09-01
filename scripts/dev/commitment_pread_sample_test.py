@@ -111,6 +111,19 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 MODULE.SST_PREFETCH_METRICS["calls"]: 4,
                 MODULE.SST_PREFETCH_METRICS["requested_bytes"]: 4_096,
                 MODULE.SST_PREFETCH_METRICS["errors"]: 1,
+                MODULE.FREEZER_ANCIENT_READ_METRIC: 2_000_000,
+                "chain/freezer/v2/coverage": 1_200,
+                "chain/freezer/v2/blocks": 100,
+                "chain/freezer/v2/backlog/blocks": 2_000,
+                "chain/freezer/v2/backlog/segments": 2,
+                "chain/freezer/v2/batch/segments": 1,
+                "chain/freezer/v2/batch/duration": 500_000_000,
+                "chain/freezer/v2/batch/budget_exhausted": 2,
+                "state/code_cache/hits": 90,
+                "state/code_cache/misses": 10,
+                "state/code_cache/admissions": 8,
+                MODULE.STATE_CODE_CACHE_BYTES_METRIC: 12_345,
+                MODULE.COLD_COMPACTION_ACTIVE_METRIC: 1,
                 "chain/freezer/txindex/coverage": 100,
                 "chain/freezer/txindex/debt/blocks": 16_384,
                 "chain/freezer/txindex/prune/blocks": 40,
@@ -242,6 +255,19 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertEqual(analysis["sstPrefetchRequestedBytesPerBlock"], 204.8)
         self.assertEqual(analysis["sstPrefetchRequestedBytesPerCall"], 1_024.0)
         self.assertEqual(analysis["sstPrefetchErrorRatio"], 0.25)
+        self.assertEqual(analysis["freezerAncientReadBytesPerBlock"], 100_000.0)
+        self.assertEqual(analysis["freezerV2Coverage"], 1_200)
+        self.assertEqual(analysis["freezerV2CoverageBlocksPerBlock"], 60.0)
+        self.assertEqual(analysis["freezerV2CompactedBlocksPerBlock"], 5.0)
+        self.assertEqual(analysis["freezerV2BacklogBlocks"], 2_000)
+        self.assertEqual(analysis["freezerV2BacklogSegments"], 2)
+        self.assertEqual(analysis["freezerV2LastBatchSegments"], 1)
+        self.assertEqual(analysis["freezerV2LastBatchSeconds"], 0.5)
+        self.assertEqual(analysis["freezerV2BudgetExhaustedPerBlock"], 0.1)
+        self.assertEqual(analysis["coldSnapshotCompactionActive"], 1)
+        self.assertEqual(analysis["stateCodeCacheHitRatio"], 0.9)
+        self.assertEqual(analysis["stateCodeCacheMissesPerBlock"], 0.5)
+        self.assertEqual(analysis["stateCodeCacheBytes"], 12_345)
         self.assertEqual(analysis["txIndexDebtBlocks"], 16_384)
         self.assertEqual(analysis["txIndexCoverageBlocksPerBlock"], 5.0)
         self.assertEqual(analysis["txIndexPrunedBlocksPerBlock"], 2.0)
@@ -409,6 +435,11 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertFalse(row["analysis"]["sstPrefetchMetricsAvailable"])
         self.assertEqual(row["analysis"]["sstPrefetchMetricCoverageRatio"], 0.0)
         self.assertIsNone(row["analysis"]["sstPrefetchRequestedBytesPerCall"])
+        self.assertIsNone(row["analysis"]["freezerAncientReadBytesPerBlock"])
+        self.assertIsNone(row["analysis"]["freezerV2Coverage"])
+        self.assertIsNone(row["analysis"]["freezerV2CompactedBlocksPerBlock"])
+        self.assertIsNone(row["analysis"]["stateCodeCacheHitRatio"])
+        self.assertIsNone(row["analysis"]["stateCodeCacheBytes"])
         self.assertIsNone(row["analysis"]["txIndexPruneDutyRatio"])
         self.assertIsNone(row["analysis"]["coldSnapshotLastForcedDutyRatio"])
 

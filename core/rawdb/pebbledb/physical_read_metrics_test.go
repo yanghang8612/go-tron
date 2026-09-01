@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"syscall"
 	"testing"
 
 	"github.com/cockroachdb/pebble/vfs"
@@ -185,6 +186,11 @@ func TestPhysicalReadFileObservesPrefetchHints(t *testing.T) {
 	if err := physical.Prefetch(4, 64<<10); err != nil {
 		t.Fatal(err)
 	}
+	zeroErrno := &physicalReadPrefetchErrorFile{File: file, err: syscall.Errno(0)}
+	physical.File = zeroErrno
+	if err := physical.Prefetch(6, 96<<10); err != syscall.Errno(0) {
+		t.Fatalf("Prefetch zero errno = %#v, want syscall.Errno(0)", err)
+	}
 	wantErr := errors.New("prefetch failed")
 	captured := &physicalReadPrefetchErrorFile{File: file, err: wantErr}
 	physical.File = captured
@@ -195,11 +201,11 @@ func TestPhysicalReadFileObservesPrefetchHints(t *testing.T) {
 		t.Fatalf("Prefetch forwarding = calls %d offset %d length %d", captured.calls, captured.offset, captured.length)
 	}
 
-	if got := m.prefetchCalls.Snapshot().Count(); got != 2 {
-		t.Fatalf("prefetch calls = %d, want 2", got)
+	if got := m.prefetchCalls.Snapshot().Count(); got != 3 {
+		t.Fatalf("prefetch calls = %d, want 3", got)
 	}
-	if got := m.prefetchBytes.Snapshot().Count(); got != 192<<10 {
-		t.Fatalf("prefetch requested bytes = %d, want %d", got, 192<<10)
+	if got := m.prefetchBytes.Snapshot().Count(); got != 288<<10 {
+		t.Fatalf("prefetch requested bytes = %d, want %d", got, 288<<10)
 	}
 	if got := m.prefetchErrors.Snapshot().Count(); got != 1 {
 		t.Fatalf("prefetch errors = %d, want 1", got)

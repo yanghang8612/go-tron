@@ -1,9 +1,11 @@
 package pebbledb
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/cockroachdb/pebble/vfs"
@@ -204,8 +206,20 @@ func (f *physicalReadFile) Prefetch(offset, length int64) error {
 		f.metrics.prefetchBytes.Inc(length)
 	}
 	err := f.File.Prefetch(offset, length)
-	if err != nil {
+	if physicalReadPrefetchFailed(err) {
 		f.metrics.prefetchErrors.Inc(1)
 	}
 	return err
+}
+
+// linuxFile.Prefetch returns the raw errno from unix.Syscall. On success that
+// is a non-nil error interface containing syscall.Errno(0), so a plain
+// err != nil check would count every successful readahead syscall as failed.
+// Preserve Pebble's return value while normalising only the metric predicate.
+func physicalReadPrefetchFailed(err error) bool {
+	if err == nil {
+		return false
+	}
+	var errno syscall.Errno
+	return !errors.As(err, &errno) || errno != 0
 }

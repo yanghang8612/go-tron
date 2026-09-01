@@ -26,6 +26,7 @@ METRIC_PREFIXES = (
     "state/snapshot/commitment_branch/",
     "chain/freezer/",
     "state/snapshot/cold/",
+    "state/code_cache/",
     "cache/",
     "filter/",
     "iter/",
@@ -125,6 +126,33 @@ SST_PREFETCH_METRICS = {
 }
 SST_PREFETCH_COUNTER_METRICS = tuple(SST_PREFETCH_METRICS.values())
 
+FREEZER_ANCIENT_READ_METRIC = "chain/freezer/ancient/read"
+FREEZER_V2_MONOTONIC_METRICS = (
+    "chain/freezer/v2/coverage",
+    "chain/freezer/v2/blocks",
+    "chain/freezer/v2/batch/budget_exhausted",
+    "chain/freezer/v2/deferred/catchup",
+    "chain/freezer/v2/deferred/resource",
+    "chain/freezer/v2/deferred/error_backoff",
+    "chain/freezer/v2/deferred/source_pruned",
+    "chain/freezer/v2/errors",
+)
+FREEZER_V2_POINT_METRICS = (
+    "chain/freezer/v2/backlog/blocks",
+    "chain/freezer/v2/backlog/segments",
+    "chain/freezer/v2/batch/segments",
+    "chain/freezer/v2/batch/duration",
+)
+STATE_CODE_CACHE_COUNTER_METRICS = (
+    "state/code_cache/hits",
+    "state/code_cache/misses",
+    "state/code_cache/admissions",
+    "state/code_cache/evictions",
+    "state/code_cache/hash_rejections",
+)
+STATE_CODE_CACHE_BYTES_METRIC = "state/code_cache/bytes"
+COLD_COMPACTION_ACTIVE_METRIC = "state/snapshot/cold/compaction/current/active"
+
 
 def physical_read_group(output_prefix):
     for group in PHYSICAL_READ_METRIC_GROUPS:
@@ -199,6 +227,8 @@ COUNTER_METRICS = (
     PEBBLE_COMMITMENT_CURSOR_COUNTER_METRICS
     + SST_FD_ACCESS_COUNTER_METRICS
     + SST_PREFETCH_COUNTER_METRICS
+    + (FREEZER_ANCIENT_READ_METRIC,)
+    + STATE_CODE_CACHE_COUNTER_METRICS
 )
 
 # These are exported as gauges by their owners, but hold process-lifetime or
@@ -235,7 +265,9 @@ MONOTONIC_GAUGE_METRICS = (
     "cache/table/miss",
     "filter/hit",
     "filter/miss",
-) + tuple(PEBBLE_LEVEL_COMPACTION_READ_METRICS.values())
+) + tuple(
+    PEBBLE_LEVEL_COMPACTION_READ_METRICS.values()
+) + FREEZER_V2_MONOTONIC_METRICS
 
 POINT_GAUGE_METRICS = (
     PROCESS_IDENTITY_METRIC,
@@ -254,6 +286,9 @@ POINT_GAUGE_METRICS = (
     "state/snapshot/cold/history/forced_busy/last/duty_cycle_ppm",
     "state/snapshot/cold/history/forced_busy/last/debt_blocks",
     "state/snapshot/cold/history/forced_busy/last/debt_growth_blocks",
+    *FREEZER_V2_POINT_METRICS,
+    STATE_CODE_CACHE_BYTES_METRIC,
+    COLD_COMPACTION_ACTIVE_METRIC,
     "iter/count",
 )
 
@@ -606,6 +641,9 @@ def build_row(now, height, current, previous):
     block_cache_total = positive_sum(deltas.get("cache/block/hit"), deltas.get("cache/block/miss"))
     table_cache_total = positive_sum(deltas.get("cache/table/hit"), deltas.get("cache/table/miss"))
     filter_total = positive_sum(deltas.get("filter/hit"), deltas.get("filter/miss"))
+    state_code_cache_total = positive_sum(
+        deltas.get("state/code_cache/hits"), deltas.get("state/code_cache/misses")
+    )
     flight_logical_reads = positive_sum(
         deltas.get("blockbuffer/commitment_parent/singleflight/leaders"),
         deltas.get("blockbuffer/commitment_parent/singleflight/shared_results"),
@@ -726,6 +764,33 @@ def build_row(now, height, current, previous):
             "state/commitment/pipeline/prefetch_lookahead/queue_high_water"
         ),
         "durableReadsPerBlock": safe_ratio(total_durable, interval_blocks),
+        "freezerAncientReadBytesPerBlock": safe_ratio(
+            deltas.get(FREEZER_ANCIENT_READ_METRIC), interval_blocks
+        ),
+        "freezerV2Coverage": current.get("chain/freezer/v2/coverage"),
+        "freezerV2CoverageBlocksPerBlock": safe_ratio(
+            deltas.get("chain/freezer/v2/coverage"), interval_blocks
+        ),
+        "freezerV2CompactedBlocksPerBlock": safe_ratio(
+            deltas.get("chain/freezer/v2/blocks"), interval_blocks
+        ),
+        "freezerV2BacklogBlocks": current.get("chain/freezer/v2/backlog/blocks"),
+        "freezerV2BacklogSegments": current.get("chain/freezer/v2/backlog/segments"),
+        "freezerV2LastBatchSegments": current.get("chain/freezer/v2/batch/segments"),
+        "freezerV2LastBatchSeconds": safe_ratio(
+            current.get("chain/freezer/v2/batch/duration"), 1_000_000_000
+        ),
+        "freezerV2BudgetExhaustedPerBlock": safe_ratio(
+            deltas.get("chain/freezer/v2/batch/budget_exhausted"), interval_blocks
+        ),
+        "coldSnapshotCompactionActive": current.get(COLD_COMPACTION_ACTIVE_METRIC),
+        "stateCodeCacheHitRatio": safe_ratio(
+            deltas.get("state/code_cache/hits"), state_code_cache_total
+        ),
+        "stateCodeCacheMissesPerBlock": safe_ratio(
+            deltas.get("state/code_cache/misses"), interval_blocks
+        ),
+        "stateCodeCacheBytes": current.get(STATE_CODE_CACHE_BYTES_METRIC),
         "txIndexDebtBlocks": current.get("chain/freezer/txindex/debt/blocks"),
         "txIndexCoverageBlocksPerBlock": safe_ratio(
             deltas.get("chain/freezer/txindex/coverage"), interval_blocks
