@@ -166,16 +166,19 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			return result, err
 		}
 		if recovered {
+			indexRuns, indexRows := f.transactionIndexRangeStats(start, recoveredEnd)
 			return V2MigrationResult{
-				Start:               start,
-				End:                 recoveredEnd,
-				Head:                options.SourceHead,
-				Segments:            1,
-				FrameBlocks:         options.FrameBlocks,
-				SegmentBlocks:       options.SegmentBlocks,
-				PhysicalBytesBefore: f.selectedPhysicalBytes(options.Tables),
-				PhysicalBytesAfter:  f.selectedPhysicalBytes(options.Tables),
-				Elapsed:             time.Since(started),
+				Start:                start,
+				End:                  recoveredEnd,
+				Head:                 options.SourceHead,
+				Segments:             1,
+				FrameBlocks:          options.FrameBlocks,
+				SegmentBlocks:        options.SegmentBlocks,
+				PhysicalBytesBefore:  f.selectedPhysicalBytes(options.Tables),
+				PhysicalBytesAfter:   f.selectedPhysicalBytes(options.Tables),
+				Elapsed:              time.Since(started),
+				TransactionIndexRuns: indexRuns,
+				TransactionIndexRows: indexRows,
 			}, nil
 		}
 	}
@@ -565,6 +568,25 @@ func (f *Freezer) recoverPublishedDirectV2(options V2MigrationOptions, start uin
 		_ = oldStore.Close()
 	}
 	return expectedEnd, true, nil
+}
+
+func (f *Freezer) transactionIndexRangeStats(start, end uint64) (runs, rows uint64) {
+	if f == nil || end <= start {
+		return 0, 0
+	}
+	f.v2Mu.RLock()
+	defer f.v2Mu.RUnlock()
+	if f.txIndex == nil {
+		return 0, 0
+	}
+	for _, run := range f.txIndex.runs {
+		if run.StartBlock() < start || run.EndBlock() > end {
+			continue
+		}
+		runs++
+		rows += run.Rows()
+	}
+	return runs, rows
 }
 
 func (f *Freezer) transformV2MigrationRecord(options V2MigrationOptions, kind string, number uint64, data []byte, readSource func(string, uint64) ([]byte, error)) ([]byte, error) {

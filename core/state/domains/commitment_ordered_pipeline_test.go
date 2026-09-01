@@ -2,8 +2,12 @@ package domains
 
 import (
 	"bytes"
+	"errors"
 	"math/rand"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -24,6 +28,22 @@ type recordingCommitmentParentSession struct {
 
 type countingCommitmentParentSession struct {
 	prefetches uint64
+}
+
+type controlledCommitmentPrefetchEvent struct {
+	job   string
+	depth int
+}
+
+type controlledCommitmentParentSession struct {
+	job        string
+	events     chan<- controlledCommitmentPrefetchEvent
+	blockDepth int
+	blocked    atomic.Bool
+	started    chan struct{}
+	release    chan struct{}
+	errDepth   int
+	err        error
 }
 
 func (*recordingCommitmentParentSession) ViewKeyParts(int, []byte, []byte, func([]byte, bool) error) (bool, error) {
@@ -54,6 +74,34 @@ func (s *countingCommitmentParentSession) PrefetchKeyParts(int, []byte, []byte) 
 	s.prefetches++
 	return false, nil
 }
+
+func (*controlledCommitmentParentSession) ViewKeyParts(int, []byte, []byte, func([]byte, bool) error) (bool, error) {
+	return false, nil
+}
+
+func (*controlledCommitmentParentSession) Close() error { return nil }
+
+func (s *controlledCommitmentParentSession) PrefetchKeyParts(_ int, _, second []byte) (bool, error) {
+	depth := len(second)
+	if s.events != nil {
+		s.events <- controlledCommitmentPrefetchEvent{job: s.job, depth: depth}
+	}
+	if depth == s.blockDepth && s.blocked.CompareAndSwap(false, true) {
+		if s.started != nil {
+			close(s.started)
+		}
+		if s.release != nil {
+			<-s.release
+		}
+	}
+	if depth == s.errDepth {
+		return false, s.err
+	}
+	return false, nil
+}
+
+var _ pointread.CommitmentParentSession = (*controlledCommitmentParentSession)(nil)
+var _ pointread.CommitmentParentPrefetchSession = (*controlledCommitmentParentSession)(nil)
 
 func TestOrderedCommitmentPipelineMatchesSequentialAcrossInflightBlocks(t *testing.T) {
 	seed := buildRandomPuts(rand.New(rand.NewSource(8181)), 2_000)
@@ -253,6 +301,261 @@ func BenchmarkCommitmentParentLaneBoundedLookaheadPlan(b *testing.B) {
 			b.Fatalf("bounded lookahead = planned %d capped %t err %v", planned, capped, err)
 		}
 	}
+}
+
+func waitForCommitmentPrefetchGroup(t *testing.T, group *sync.WaitGroup) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		group.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for commitment prefetch group")
+	}
+}
+
+func newControlledCommitmentPrefetchStore(session pointread.CommitmentParentSession) *rawdbBranchStore {
+	return &rawdbBranchStore{
+		keyspace:                   rawdb.LegacyCommitmentBranchKeyspace(),
+		parentSession:              session,
+		parentPrefetchBase:         40,
+		parentFallbackPrefetchBase: -1,
+	}
+}
+
+func newOrderedCommitmentPrefetchResultForTest() *orderedCommitmentPrefetchResult {
+	result := new(orderedCommitmentPrefetchResult)
+	result.active = true
+	result.critical.Add(1)
+	result.done.Add(1)
+	return result
+}
+
+func TestOrderedCommitmentPrefetchCriticalPreemptsLookaheadBetweenReads(t *testing.T) {
+	const nb = uint8(1)
+	events := make(chan controlledCommitmentPrefetchEvent, 16)
+	lookaheadStarted := make(chan struct{})
+	releaseLookahead := make(chan struct{})
+	firstSession := &controlledCommitmentParentSession{
+		job:        "first",
+		events:     events,
+		blockDepth: 3,
+		started:    lookaheadStarted,
+		release:    releaseLookahead,
+	}
+	secondSession := &controlledCommitmentParentSession{job: "second", events: events}
+	firstStore := newControlledCommitmentPrefetchStore(firstSession)
+	secondStore := newControlledCommitmentPrefetchStore(secondSession)
+	firstOps := []op{
+		{path: common.Hash{0x12, 0x30}},
+		{path: common.Hash{0x12, 0x40}},
+	}
+	secondOps := []op{{path: common.Hash{0x15, 0x60}}}
+
+	pipeline := new(OrderedCommitmentPipeline)
+	pipeline.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 4)
+	pipeline.prefetchWG.Add(1)
+	go pipeline.runPrefetchLane(nb, pipeline.prefetchLanes[nb])
+
+	first := newOrderedCommitmentPrefetchResultForTest()
+	pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
+		store: firstStore, result: first, nb: nb, depth: 2,
+		lookaheadDepth: 1, lookaheadLimit: 16, ops: firstOps,
+	})
+	waitForCommitmentPrefetchGroup(t, &first.critical)
+	select {
+	case <-lookaheadStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first lookahead did not start")
+	}
+
+	firstDone := make(chan struct{})
+	go func() {
+		first.done.Wait()
+		close(firstDone)
+	}()
+	select {
+	case <-firstDone:
+		t.Fatal("lookahead result completed while its point read was blocked")
+	default:
+	}
+
+	blockedCallsBefore := commitmentPipelinePrefetchCriticalBlockedByLookaheadCallsCounter.Snapshot().Count()
+	second := newOrderedCommitmentPrefetchResultForTest()
+	pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
+		store: secondStore, result: second, nb: nb, depth: 2,
+		lookaheadDepth: 1, lookaheadLimit: 16, ops: secondOps,
+	})
+	close(releaseLookahead)
+	waitForCommitmentPrefetchGroup(t, &second.critical)
+	waitForCommitmentPrefetchGroup(t, &first.done)
+	waitForCommitmentPrefetchGroup(t, &second.done)
+	close(pipeline.prefetchLanes[nb])
+	waitForCommitmentPrefetchGroup(t, &pipeline.prefetchWG)
+
+	close(events)
+	var order []controlledCommitmentPrefetchEvent
+	for event := range events {
+		order = append(order, event)
+	}
+	if len(order) < 4 {
+		t.Fatalf("prefetch event count = %d, want at least 4: %+v", len(order), order)
+	}
+	if order[0] != (controlledCommitmentPrefetchEvent{job: "first", depth: 2}) ||
+		order[1] != (controlledCommitmentPrefetchEvent{job: "first", depth: 3}) ||
+		order[2] != (controlledCommitmentPrefetchEvent{job: "second", depth: 2}) {
+		t.Fatalf("prefetch priority order = %+v, want first-critical, first-lookahead-step, second-critical", order)
+	}
+	if got := commitmentPipelinePrefetchCriticalBlockedByLookaheadCallsCounter.Snapshot().Count() - blockedCallsBefore; got != 1 {
+		t.Fatalf("critical blocked-by-lookahead calls delta = %d, want 1", got)
+	}
+	if got := commitmentPipelinePrefetchCriticalQueueHighWaterGauge.Snapshot().Value(); got < 1 {
+		t.Fatalf("critical queue high-water = %d, want >= 1", got)
+	}
+	if got := commitmentPipelinePrefetchLookaheadQueueHighWaterGauge.Snapshot().Value(); got < 1 {
+		t.Fatalf("lookahead queue high-water = %d, want >= 1", got)
+	}
+}
+
+func TestOrderedCommitmentPrefetchErrorReleasesWaitersAndWorkerContinues(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		errDepth int
+	}{
+		{name: "critical", errDepth: 2},
+		{name: "lookahead", errDepth: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const nb = uint8(1)
+			wantErr := errors.New(tc.name + " prefetch failed")
+			failing := newControlledCommitmentPrefetchStore(&controlledCommitmentParentSession{
+				job: "failing", errDepth: tc.errDepth, err: wantErr,
+			})
+			succeeding := newControlledCommitmentPrefetchStore(&controlledCommitmentParentSession{job: "succeeding"})
+			ops := []op{{path: common.Hash{0x12, 0x30}}}
+
+			pipeline := new(OrderedCommitmentPipeline)
+			pipeline.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 2)
+			pipeline.prefetchWG.Add(1)
+			go pipeline.runPrefetchLane(nb, pipeline.prefetchLanes[nb])
+			errorsBefore := commitmentPipelinePrefetchErrorsCounter.Snapshot().Count()
+
+			failed := newOrderedCommitmentPrefetchResultForTest()
+			pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
+				store: failing, result: failed, nb: nb, depth: 2,
+				lookaheadDepth: 1, lookaheadLimit: 16, ops: ops,
+			})
+			waitForCommitmentPrefetchGroup(t, &failed.critical)
+			waitForCommitmentPrefetchGroup(t, &failed.done)
+
+			succeeded := newOrderedCommitmentPrefetchResultForTest()
+			pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
+				store: succeeding, result: succeeded, nb: nb, depth: 2, ops: ops,
+			})
+			close(pipeline.prefetchLanes[nb])
+			waitForCommitmentPrefetchGroup(t, &succeeded.critical)
+			waitForCommitmentPrefetchGroup(t, &succeeded.done)
+			waitForCommitmentPrefetchGroup(t, &pipeline.prefetchWG)
+			if got := commitmentPipelinePrefetchErrorsCounter.Snapshot().Count() - errorsBefore; got != 1 {
+				t.Fatalf("prefetch errors delta = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestOrderedCommitmentPrefetchClosedInputDrainsQueuedCriticalAndLookahead(t *testing.T) {
+	const nb = uint8(1)
+	criticalStarted := make(chan struct{})
+	releaseCritical := make(chan struct{})
+	blocking := newControlledCommitmentPrefetchStore(&controlledCommitmentParentSession{
+		job: "blocking", blockDepth: 2, started: criticalStarted, release: releaseCritical,
+	})
+	queued := newControlledCommitmentPrefetchStore(&controlledCommitmentParentSession{job: "queued"})
+	ops := []op{{path: common.Hash{0x12, 0x30}}}
+	pipeline := new(OrderedCommitmentPipeline)
+	pipeline.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 2)
+	pipeline.prefetchWG.Add(1)
+	go pipeline.runPrefetchLane(nb, pipeline.prefetchLanes[nb])
+
+	first := newOrderedCommitmentPrefetchResultForTest()
+	pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
+		store: blocking, result: first, nb: nb, depth: 2,
+		lookaheadDepth: 1, lookaheadLimit: 16, ops: ops,
+	})
+	select {
+	case <-criticalStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocking critical prefetch did not start")
+	}
+	second := newOrderedCommitmentPrefetchResultForTest()
+	pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
+		store: queued, result: second, nb: nb, depth: 2,
+		lookaheadDepth: 1, lookaheadLimit: 16, ops: ops,
+	})
+	close(pipeline.prefetchLanes[nb])
+	close(releaseCritical)
+	waitForCommitmentPrefetchGroup(t, &first.done)
+	waitForCommitmentPrefetchGroup(t, &second.done)
+	waitForCommitmentPrefetchGroup(t, &pipeline.prefetchWG)
+}
+
+func TestWaitForOrderedCommitmentLookaheadMeasuresAndGatesFinish(t *testing.T) {
+	job := new(orderedCommitmentJob)
+	job.prefetch[1].active = true
+	job.prefetch[1].done.Add(1)
+	waitCallsBefore := commitmentPipelinePrefetchFinishLookaheadWaitCallsCounter.Snapshot().Count()
+	waitNanosBefore := commitmentPipelinePrefetchFinishLookaheadWaitNanosCounter.Snapshot().Count()
+	returned := make(chan struct{})
+	go func() {
+		waitForOrderedCommitmentLookahead(job)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+		t.Fatal("finish lookahead wait returned before done")
+	case <-time.After(10 * time.Millisecond):
+	}
+	job.prefetch[1].done.Done()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("finish lookahead wait did not return")
+	}
+	if got := commitmentPipelinePrefetchFinishLookaheadWaitCallsCounter.Snapshot().Count() - waitCallsBefore; got != 1 {
+		t.Fatalf("finish lookahead wait calls delta = %d, want 1", got)
+	}
+	if got := commitmentPipelinePrefetchFinishLookaheadWaitNanosCounter.Snapshot().Count() - waitNanosBefore; got <= 0 {
+		t.Fatalf("finish lookahead wait nanos delta = %d, want > 0", got)
+	}
+}
+
+func BenchmarkOrderedCommitmentPrefetchPriorityScheduler(b *testing.B) {
+	const nb = uint8(1)
+	store := newControlledCommitmentPrefetchStore(&countingCommitmentParentSession{})
+	ops := []op{{path: common.Hash{0x12, 0x30}}}
+	pipeline := new(OrderedCommitmentPipeline)
+	pipeline.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 16)
+	pipeline.prefetchWG.Add(1)
+	go pipeline.runPrefetchLane(nb, pipeline.prefetchLanes[nb])
+	var result orderedCommitmentPrefetchResult
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		result = orderedCommitmentPrefetchResult{active: true}
+		result.critical.Add(1)
+		result.done.Add(1)
+		pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
+			store: store, result: &result, nb: nb, depth: 2,
+			lookaheadDepth: 1, lookaheadLimit: 1, ops: ops,
+		})
+		result.done.Wait()
+	}
+	b.StopTimer()
+	close(pipeline.prefetchLanes[nb])
+	pipeline.prefetchWG.Wait()
 }
 
 func TestOrderedCommitmentPipelinePrefetchPreservesPebbleRoot(t *testing.T) {

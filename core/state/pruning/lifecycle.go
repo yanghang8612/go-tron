@@ -233,10 +233,14 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			return out, err
 		}
 		result, err := l.builder.OnePassContext(l.ctx)
+		// Preserve admission and retry metadata even when an admitted history
+		// build fails. Forced-busy work may already have consumed significant
+		// importer resources, so the loop must honor its recovery deadline rather
+		// than retrying immediately or waiting only for the coarse lifecycle tick.
+		out.Snapshot = result
 		if err != nil {
 			return out, err
 		}
-		out.Snapshot = result
 		trusted := append(append([]snapshots.SegmentRef(nil), result.Segments...), result.Compaction.Segments...)
 		if err := l.pruner.RecordTrustedSnapshotSegments(trusted); err != nil {
 			return out, err
@@ -476,6 +480,9 @@ func (l *SnapshotLifecycle) loop() {
 				return
 			}
 			l.logPassFailure(reason, err, time.Now())
+			if after := result.Snapshot.HistoryRetryRemaining(time.Now()); after > 0 {
+				scheduleRetry(after)
+			}
 			return
 		}
 		l.logPassRecovery(time.Now())
@@ -485,8 +492,8 @@ func (l *SnapshotLifecycle) loop() {
 		// remains instead of sleeping for a full maintenance interval.
 		if result.Snapshot.NeedsCatchup() {
 			l.RequestPass()
-		} else if result.Snapshot.HistoryRetryAfter > 0 {
-			scheduleRetry(result.Snapshot.HistoryRetryAfter)
+		} else if after := result.Snapshot.HistoryRetryRemaining(time.Now()); after > 0 {
+			scheduleRetry(after)
 		}
 	}
 	runPass("initial")

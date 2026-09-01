@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"time"
 
@@ -60,6 +61,10 @@ type freezerStore struct {
 	f *rawdbfreezer.Freezer
 }
 
+var _ interface {
+	CompactTransactionIndexTailContext(context.Context) (bool, error)
+} = (*freezerStore)(nil)
+
 func newFreezerStore(f *rawdbfreezer.Freezer) chainfreezer.FreezerStore {
 	if f == nil {
 		return nil
@@ -109,6 +114,10 @@ func (s *freezerStore) PublishTransactionIndexRun(result rawdbfreezer.Transactio
 
 func (s *freezerStore) CompactTransactionIndexTail() (bool, error) {
 	return s.f.CompactTransactionIndexTail()
+}
+
+func (s *freezerStore) CompactTransactionIndexTailContext(ctx context.Context) (bool, error) {
+	return s.f.CompactTransactionIndexTailContext(ctx)
 }
 
 func makeFreezerConfig(ctx *cli.Context) chainfreezer.Config {

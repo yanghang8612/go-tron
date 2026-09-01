@@ -3,7 +3,9 @@ package freezer
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -21,6 +23,71 @@ import (
 type auditAncientBodyStore struct {
 	FreezerStore
 	body []byte
+}
+
+// auditTransactionIndexMaintenanceStore exposes a large immutable coverage
+// while serving one canonical empty body for every block. It keeps the test
+// focused on scheduler admission and durable quantum boundaries instead of
+// spending time constructing thousands of unrelated V2 fixtures.
+type auditTransactionIndexMaintenanceStore struct {
+	FreezerStore
+	body       []byte
+	coverage   uint64
+	v2Coverage uint64
+	dir        string
+	merge      bool
+	mergeCalls atomic.Uint64
+	mergeBlock bool
+	mergeStart chan struct{}
+	mergeOnce  atomic.Bool
+}
+
+func (s *auditTransactionIndexMaintenanceStore) Ancient(kind string, number uint64) ([]byte, error) {
+	if kind == rawdbAncientBlocks && number < s.v2Coverage {
+		return s.body, nil
+	}
+	return s.FreezerStore.Ancient(kind, number)
+}
+
+func (s *auditTransactionIndexMaintenanceStore) AncientDatadir() (string, error) {
+	return s.dir, nil
+}
+
+func (s *auditTransactionIndexMaintenanceStore) TransactionIndexCoverage() uint64 {
+	return s.coverage
+}
+
+func (s *auditTransactionIndexMaintenanceStore) PublishTransactionIndexRun(result rawdbfreezer.TransactionIndexBuildResult) error {
+	s.coverage = result.EndBlock
+	return nil
+}
+
+func (s *auditTransactionIndexMaintenanceStore) CompactTransactionIndexTail() (bool, error) {
+	s.mergeCalls.Add(1)
+	return s.merge, nil
+}
+
+func (s *auditTransactionIndexMaintenanceStore) CompactTransactionIndexTailContext(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if s.mergeBlock {
+		s.mergeCalls.Add(1)
+		if s.mergeOnce.CompareAndSwap(false, true) {
+			close(s.mergeStart)
+		}
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+	return s.CompactTransactionIndexTail()
+}
+
+func (s *auditTransactionIndexMaintenanceStore) V2Coverage() uint64 {
+	return s.v2Coverage
+}
+
+func (s *auditTransactionIndexMaintenanceStore) MigrateV2(rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
+	return rawdbfreezer.V2MigrationResult{}, nil
 }
 
 func (s *auditAncientBodyStore) Ancient(kind string, number uint64) ([]byte, error) {
@@ -137,6 +204,16 @@ type auditPruneBatchDB struct {
 type auditPruneBatch struct {
 	ethdb.Batch
 	db *auditPruneBatchDB
+}
+
+type auditSyncDelayDB struct {
+	ethdb.KeyValueStore
+	delay time.Duration
+}
+
+func (db *auditSyncDelayDB) SyncKeyValue() error {
+	time.Sleep(db.delay)
+	return nil
 }
 
 func (db *auditPruneBatchDB) NewBatchWithSize(size int) ethdb.Batch {
@@ -296,5 +373,200 @@ func TestTransactionIndexPruneOptimizationHonorsEligibleCoverage(t *testing.T) {
 	}
 	if changed, err := r.pruneTransactionIndexDebtContext(context.Background(), 4); err != nil || !changed {
 		t.Fatalf("remaining range prune = %t/%v", changed, err)
+	}
+}
+
+func TestTransactionIndexPruneDurationIncludesDurableStageSync(t *testing.T) {
+	r, chain, _, _ := newAuditPublishedTransactionIndex(t)
+	const syncDelay = 20 * time.Millisecond
+	chain.db = &auditSyncDelayDB{KeyValueStore: chain.db, delay: syncDelay}
+	if changed, err := r.pruneTransactionIndexDebtContext(context.Background(), 4); err != nil || !changed {
+		t.Fatalf("prune changed=%v err=%v", changed, err)
+	}
+	if elapsed := r.Snapshot().TransactionIndexPruneDuration; elapsed < syncDelay {
+		t.Fatalf("prune duration=%s, want at least durable sync delay %s", elapsed, syncDelay)
+	}
+}
+
+func TestTransactionIndexBusyMaintenanceUsesCrashSafeQuantum(t *testing.T) {
+	chain := newFakeChain()
+	store := &auditTransactionIndexMaintenanceStore{
+		FreezerStore: wrapFreezer(newFreezer(t)),
+		body:         blockBytes(0),
+		coverage:     2 * transactionIndexMaintenanceBlocks,
+		v2Coverage:   2 * transactionIndexMaintenanceBlocks,
+		dir:          t.TempDir(),
+	}
+	var syncing atomic.Bool
+	syncing.Store(true)
+	namespace := "test/tx-index-busy-quantum/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	config := Config{
+		Enabled:                    true,
+		V2Enabled:                  true,
+		TransactionIndexEnabled:    true,
+		SyncActive:                 syncing.Load,
+		CatchupMaintenanceInterval: time.Hour,
+		MetricsNamespace:           namespace,
+	}
+	r := New(chain, store, config)
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+		t.Fatalf("busy maintenance changed=%v err=%v", changed, err)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(chain.db, rawdb.StageFreezerTxIndexPrune); err != nil || !ok || progress != transactionIndexMaintenanceBlocks {
+		t.Fatalf("first quantum progress=%d ok=%v err=%v, want %d", progress, ok, err, transactionIndexMaintenanceBlocks)
+	}
+	stats := r.Snapshot()
+	if stats.TransactionIndexBlocksPruned != transactionIndexMaintenanceBlocks || stats.TransactionIndexDebtBlocks != transactionIndexMaintenanceBlocks || stats.TransactionIndexMaintenanceAdmitted != 1 || stats.TransactionIndexPruneDuration <= 0 {
+		t.Fatalf("first quantum stats=%+v", stats)
+	}
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || changed {
+		t.Fatalf("busy duty-cycle retry changed=%v err=%v, want deferred", changed, err)
+	}
+	stats = r.Snapshot()
+	if stats.TransactionIndexCatchupDeferred != 1 || stats.TransactionIndexMaintenanceDeferred != 1 {
+		t.Fatalf("busy duty-cycle stats=%+v", stats)
+	}
+
+	// A new runner must resume from the durable quantum boundary, not repeat
+	// the full original range or skip the remaining debt.
+	syncing.Store(false)
+	r = New(chain, store, config)
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+		t.Fatalf("restart maintenance changed=%v err=%v", changed, err)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(chain.db, rawdb.StageFreezerTxIndexPrune); err != nil || !ok || progress != 2*transactionIndexMaintenanceBlocks {
+		t.Fatalf("restart progress=%d ok=%v err=%v, want %d", progress, ok, err, 2*transactionIndexMaintenanceBlocks)
+	}
+}
+
+func TestTransactionIndexMaintenanceQuantumPreservesBalancedRuns(t *testing.T) {
+	for _, segment := range []uint64{4_096, 65_536, 10_000, 12_289, 10_007, 1_000_003} {
+		r := &Runner{cfg: Config{V2SegmentBlocks: segment}}
+		needed := uint64(1) + (segment-1)/transactionIndexMaintenanceBlocks
+		chunks := uint64(1)
+		for chunks < needed {
+			chunks <<= 1
+		}
+		start := uint64(0)
+		minSize, maxSize := ^uint64(0), uint64(0)
+		for count := uint64(0); start < segment; count++ {
+			if count >= chunks {
+				t.Fatalf("segment %d produced more than %d chunks", segment, chunks)
+			}
+			end := r.transactionIndexMaintenanceEnd(start, segment)
+			if end <= start || end > segment || end-start > transactionIndexMaintenanceBlocks {
+				t.Fatalf("segment %d invalid chunk [%d,%d)", segment, start, end)
+			}
+			size := end - start
+			minSize = min(minSize, size)
+			maxSize = max(maxSize, size)
+			start = end
+			if start == segment && count+1 != chunks {
+				t.Fatalf("segment %d chunks=%d, want %d", segment, count+1, chunks)
+			}
+		}
+		if maxSize-minSize > 1 {
+			t.Fatalf("segment %d chunk spread=%d..%d, want <=1", segment, minSize, maxSize)
+		}
+	}
+}
+
+func TestTransactionIndexActiveMaintenanceSkipsUnboundedTailMerge(t *testing.T) {
+	chain := newFakeChain()
+	if err := rawdb.WriteStageProgress(chain.db, rawdb.StageFreezerTxIndexPrune, transactionIndexMaintenanceBlocks); err != nil {
+		t.Fatal(err)
+	}
+	store := &auditTransactionIndexMaintenanceStore{
+		FreezerStore: wrapFreezer(newFreezer(t)),
+		body:         blockBytes(0),
+		coverage:     transactionIndexMaintenanceBlocks,
+		v2Coverage:   transactionIndexMaintenanceBlocks,
+		dir:          t.TempDir(),
+		merge:        true,
+	}
+	var syncing atomic.Bool
+	syncing.Store(true)
+	namespace := "test/tx-index-active-no-merge/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	r := New(chain, store, Config{
+		Enabled:                 true,
+		V2Enabled:               true,
+		TransactionIndexEnabled: true,
+		SyncActive:              syncing.Load,
+		MetricsNamespace:        namespace,
+	})
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || changed {
+		t.Fatalf("active maintenance changed=%v err=%v, want bounded no-op", changed, err)
+	}
+	if calls := store.mergeCalls.Load(); calls != 0 {
+		t.Fatalf("active maintenance entered tail merge %d times", calls)
+	}
+	syncing.Store(false)
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+		t.Fatalf("idle maintenance changed=%v err=%v, want merge", changed, err)
+	}
+	if calls := store.mergeCalls.Load(); calls != 1 {
+		t.Fatalf("idle maintenance tail merge calls=%d, want 1", calls)
+	}
+}
+
+func TestTransactionIndexIdleTailMergeCancelsWhenSyncStarts(t *testing.T) {
+	chain := newFakeChain()
+	if err := rawdb.WriteStageProgress(chain.db, rawdb.StageFreezerTxIndexPrune, transactionIndexMaintenanceBlocks); err != nil {
+		t.Fatal(err)
+	}
+	store := &auditTransactionIndexMaintenanceStore{
+		FreezerStore: wrapFreezer(newFreezer(t)),
+		coverage:     transactionIndexMaintenanceBlocks,
+		v2Coverage:   transactionIndexMaintenanceBlocks,
+		dir:          t.TempDir(),
+		mergeBlock:   true,
+		mergeStart:   make(chan struct{}),
+	}
+	var syncing atomic.Bool
+	namespace := "test/tx-index-merge-sync-transition/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	r := New(chain, store, Config{
+		Enabled:                 true,
+		V2Enabled:               true,
+		TransactionIndexEnabled: true,
+		SyncActive:              syncing.Load,
+		MetricsNamespace:        namespace,
+	})
+	done := make(chan struct {
+		changed bool
+		err     error
+	}, 1)
+	go func() {
+		changed, err := r.MaintainTransactionIndexOnce()
+		done <- struct {
+			changed bool
+			err     error
+		}{changed: changed, err: err}
+	}()
+	select {
+	case <-store.mergeStart:
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle merge did not start")
+	}
+	syncing.Store(true)
+	select {
+	case result := <-done:
+		if result.err != nil || result.changed {
+			t.Fatalf("sync-canceled merge changed=%v err=%v", result.changed, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("sync transition did not cancel merge")
+	}
+	if calls := store.mergeCalls.Load(); calls != 1 {
+		t.Fatalf("context merge calls=%d, want 1", calls)
+	}
+	stats := r.Snapshot()
+	if stats.TransactionIndexSyncDeferred != 1 || stats.TransactionIndexMaintenanceDeferred != 0 || stats.TransactionIndexErrors != 0 {
+		t.Fatalf("sync-canceled merge stats=%+v", stats)
 	}
 }

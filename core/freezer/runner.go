@@ -39,6 +39,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,6 +90,7 @@ const (
 	defaultHeavyMaintenanceErrorBackoff = 30 * time.Minute
 	heavyMaintenancePollInterval        = 250 * time.Millisecond
 	txIndexDeleteBatchBytes             = 16 << 20
+	transactionIndexMaintenanceBlocks   = rawdbfreezer.TransactionIndexCompactionLeafBlocks
 	defaultMetricsNamespace             = "chain/freezer/"
 )
 
@@ -351,6 +353,10 @@ type TransactionIndexCompactor interface {
 	CompactTransactionIndexTail() (bool, error)
 }
 
+type transactionIndexContextCompactor interface {
+	CompactTransactionIndexTailContext(context.Context) (bool, error)
+}
+
 // Stats is a thread-safe snapshot of runner progress. Operators consume it via
 // Runner.Snapshot, and the runner mirrors the same values into metrics gauges.
 type Stats struct {
@@ -400,10 +406,20 @@ type Stats struct {
 	// TransactionIndexCoverage is the first block not covered by an immutable
 	// index run. TransactionIndexPruned is the exclusive hot-row deletion
 	// cursor and must never advance beyond coverage.
-	TransactionIndexCoverage             uint64
-	TransactionIndexPruned               uint64
-	TransactionIndexRowsArchived         uint64
-	TransactionIndexRowsPruned           uint64
+	TransactionIndexCoverage uint64
+	TransactionIndexPruned   uint64
+	// TransactionIndexDebtBlocks is the V2-covered range which still needs
+	// either immutable-index publication or durable hot-row pruning.
+	TransactionIndexDebtBlocks   uint64
+	TransactionIndexRowsArchived uint64
+	TransactionIndexRowsPruned   uint64
+	TransactionIndexBlocksPruned uint64
+	// TransactionIndexPruneDuration is cumulative time spent in successfully
+	// committed prune quanta since this runner started.
+	TransactionIndexPruneDuration        time.Duration
+	TransactionIndexMaintenanceAdmitted  uint64
+	TransactionIndexMaintenanceDeferred  uint64
+	TransactionIndexSyncDeferred         uint64
 	V2CatchupDeferred                    uint64
 	V2ResourceDeferred                   uint64
 	V2ErrorBackoffDeferred               uint64
@@ -438,6 +454,13 @@ type runnerMetrics struct {
 	txIndexPruned            *metrics.Gauge
 	txIndexArchived          *metrics.Gauge
 	txIndexRowsPruned        *metrics.Gauge
+	txIndexDebtBlocks        *metrics.Gauge
+	txIndexPruneBlocks       *metrics.Gauge
+	txIndexPruneRows         *metrics.Gauge
+	txIndexPruneDuration     *metrics.Gauge
+	txIndexAdmitted          *metrics.Gauge
+	txIndexDeferred          *metrics.Gauge
+	txIndexSyncDeferred      *metrics.Gauge
 	v2CatchupDeferred        *metrics.Gauge
 	v2ResourceDeferred       *metrics.Gauge
 	v2ErrorBackoffDeferred   *metrics.Gauge
@@ -477,6 +500,13 @@ func newRunnerMetrics(namespace string) runnerMetrics {
 		txIndexPruned:            metrics.GetOrRegisterGauge(namespace+"txindex/pruned", nil),
 		txIndexArchived:          metrics.GetOrRegisterGauge(namespace+"txindex/rows/archived", nil),
 		txIndexRowsPruned:        metrics.GetOrRegisterGauge(namespace+"txindex/rows/pruned", nil),
+		txIndexDebtBlocks:        metrics.GetOrRegisterGauge(namespace+"txindex/debt/blocks", nil),
+		txIndexPruneBlocks:       metrics.GetOrRegisterGauge(namespace+"txindex/prune/blocks", nil),
+		txIndexPruneRows:         metrics.GetOrRegisterGauge(namespace+"txindex/prune/rows", nil),
+		txIndexPruneDuration:     metrics.GetOrRegisterGauge(namespace+"txindex/prune/duration", nil),
+		txIndexAdmitted:          metrics.GetOrRegisterGauge(namespace+"txindex/maintenance/admitted", nil),
+		txIndexDeferred:          metrics.GetOrRegisterGauge(namespace+"txindex/maintenance/deferred", nil),
+		txIndexSyncDeferred:      metrics.GetOrRegisterGauge(namespace+"txindex/deferred/sync", nil),
 		v2CatchupDeferred:        metrics.GetOrRegisterGauge(namespace+"v2/deferred/catchup", nil),
 		v2ResourceDeferred:       metrics.GetOrRegisterGauge(namespace+"v2/deferred/resource", nil),
 		v2ErrorBackoffDeferred:   metrics.GetOrRegisterGauge(namespace+"v2/deferred/error_backoff", nil),
@@ -530,6 +560,13 @@ func (m runnerMetrics) update(stats Stats) {
 	m.txIndexPruned.Update(uint64GaugeValue(stats.TransactionIndexPruned))
 	m.txIndexArchived.Update(uint64GaugeValue(stats.TransactionIndexRowsArchived))
 	m.txIndexRowsPruned.Update(uint64GaugeValue(stats.TransactionIndexRowsPruned))
+	m.txIndexDebtBlocks.Update(uint64GaugeValue(stats.TransactionIndexDebtBlocks))
+	m.txIndexPruneBlocks.Update(uint64GaugeValue(stats.TransactionIndexBlocksPruned))
+	m.txIndexPruneRows.Update(uint64GaugeValue(stats.TransactionIndexRowsPruned))
+	m.txIndexPruneDuration.Update(int64(stats.TransactionIndexPruneDuration))
+	m.txIndexAdmitted.Update(uint64GaugeValue(stats.TransactionIndexMaintenanceAdmitted))
+	m.txIndexDeferred.Update(uint64GaugeValue(stats.TransactionIndexMaintenanceDeferred))
+	m.txIndexSyncDeferred.Update(uint64GaugeValue(stats.TransactionIndexSyncDeferred))
 	m.v2CatchupDeferred.Update(uint64GaugeValue(stats.V2CatchupDeferred))
 	m.v2ResourceDeferred.Update(uint64GaugeValue(stats.V2ResourceDeferred))
 	m.v2ErrorBackoffDeferred.Update(uint64GaugeValue(stats.V2ErrorBackoffDeferred))
@@ -587,6 +624,11 @@ type Runner struct {
 	lastV2Promotion               atomic.Int64
 	txIndexRowsArchived           atomic.Uint64
 	txIndexRowsPruned             atomic.Uint64
+	txIndexBlocksPruned           atomic.Uint64
+	txIndexPruneDuration          atomic.Int64
+	txIndexMaintenanceAdmitted    atomic.Uint64
+	txIndexMaintenanceDeferred    atomic.Uint64
+	txIndexSyncDeferred           atomic.Uint64
 	v2CatchupDeferred             atomic.Uint64
 	v2ResourceDeferred            atomic.Uint64
 	v2ErrorBackoffDeferred        atomic.Uint64
@@ -759,6 +801,11 @@ func (r *Runner) snapshot() Stats {
 		V2BudgetExhausted:                    r.v2BudgetExhausted.Load(),
 		TransactionIndexRowsArchived:         r.txIndexRowsArchived.Load(),
 		TransactionIndexRowsPruned:           r.txIndexRowsPruned.Load(),
+		TransactionIndexBlocksPruned:         r.txIndexBlocksPruned.Load(),
+		TransactionIndexPruneDuration:        time.Duration(r.txIndexPruneDuration.Load()),
+		TransactionIndexMaintenanceAdmitted:  r.txIndexMaintenanceAdmitted.Load(),
+		TransactionIndexMaintenanceDeferred:  r.txIndexMaintenanceDeferred.Load(),
+		TransactionIndexSyncDeferred:         r.txIndexSyncDeferred.Load(),
 		V2CatchupDeferred:                    r.v2CatchupDeferred.Load(),
 		V2ResourceDeferred:                   r.v2ResourceDeferred.Load(),
 		V2ErrorBackoffDeferred:               r.v2ErrorBackoffDeferred.Load(),
@@ -810,6 +857,9 @@ func (r *Runner) snapshot() Stats {
 		if progress, ok, err := rawdb.ReadStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune); err == nil && ok {
 			stats.TransactionIndexPruned = progress
 		}
+	}
+	if r.cfg.TransactionIndexEnabled && stats.V2Coverage > stats.TransactionIndexPruned {
+		stats.TransactionIndexDebtBlocks = stats.V2Coverage - stats.TransactionIndexPruned
 	}
 	// FrozenMin / FrozenMax come straight from the ancient store so the
 	// caller always sees the canonical position even if a concurrent
@@ -896,34 +946,11 @@ func (r *Runner) beginHeavyMaintenance(kind heavyMaintenanceKind, lastCatchup, l
 	// bounded transaction. A task which began while idle is canceled if peer
 	// discovery turns sync on underneath it.
 	if !active && r.cfg.SyncActive != nil {
-		var cancel context.CancelCauseFunc
-		ctx, cancel = context.WithCancelCause(r.pauseCtx)
-		stop := make(chan struct{})
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			ticker := time.NewTicker(heavyMaintenancePollInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					if r.cfg.SyncActive() {
-						cancel(errHeavyMaintenanceDeferred)
-						return
-					}
-				case <-stop:
-					return
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-		var stopOnce sync.Once
-		stopWatch = func() {
-			stopOnce.Do(func() { close(stop) })
-			<-done
-			cancel(nil)
-		}
+		ctx, stopWatch = r.contextWithSyncActiveCancellation()
+	}
+	if kind == heavyMaintenanceTxIndex {
+		r.txIndexMaintenanceAdmitted.Add(1)
+		r.updateMetrics()
 	}
 	return &heavyMaintenanceLease{
 		ctx: ctx,
@@ -949,6 +976,7 @@ func (r *Runner) recordHeavyMaintenanceDeferred(kind heavyMaintenanceKind, reaso
 			r.v2CatchupDeferred.Add(1)
 		}
 	case heavyMaintenanceTxIndex:
+		r.txIndexMaintenanceDeferred.Add(1)
 		switch reason {
 		case heavyMaintenanceDeferredResource:
 			r.txIndexResourceDeferred.Add(1)
@@ -959,6 +987,58 @@ func (r *Runner) recordHeavyMaintenanceDeferred(kind heavyMaintenanceKind, reaso
 		}
 	}
 	r.updateMetrics()
+}
+
+func (r *Runner) recordTransactionIndexSyncDeferred() {
+	if r == nil {
+		return
+	}
+	r.txIndexSyncDeferred.Add(1)
+	r.updateMetrics()
+}
+
+func (r *Runner) contextWithSyncActiveCancellation() (context.Context, func()) {
+	if r == nil {
+		return context.Background(), func() {}
+	}
+	if r.cfg.SyncActive == nil {
+		return r.pauseCtx, func() {}
+	}
+	ctx, cancel := context.WithCancelCause(r.pauseCtx)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if r.cfg.SyncActive() {
+			cancel(errHeavyMaintenanceDeferred)
+			return
+		}
+		ticker := time.NewTicker(heavyMaintenancePollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if r.cfg.SyncActive() {
+					cancel(errHeavyMaintenanceDeferred)
+					return
+				}
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	var stopOnce sync.Once
+	return ctx, func() {
+		stopOnce.Do(func() { close(stop) })
+		<-done
+		cancel(nil)
+	}
+}
+
+func syncActivationDeferred(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) && errors.Is(context.Cause(ctx), errHeavyMaintenanceDeferred)
 }
 
 // CompactV2Once promotes a backlog-sized but bounded batch of complete V1
@@ -1126,8 +1206,8 @@ func (r *Runner) compactV2Scheduled() (uint64, error) {
 }
 
 // MaintainTransactionIndexOnce performs one bounded, crash-resumable action:
-// prune one published segment, merge one equal-sized run pair, or publish one
-// newly V2-covered segment. Publication always precedes hot-row deletion.
+// prune one published quantum, merge one balanced run pair, or publish one
+// newly V2-covered quantum. Publication always precedes hot-row deletion.
 func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 	if err := r.checkStopping(); err != nil {
 		return false, err
@@ -1142,7 +1222,10 @@ func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 	defer lease.Close()
 	changed, err := r.maintainTransactionIndexOnceContext(lease.ctx)
 	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(lease.ctx), errHeavyMaintenanceDeferred) {
-		r.recordHeavyMaintenanceDeferred(heavyMaintenanceTxIndex, heavyMaintenanceDeferredCatchup)
+		// Admission already succeeded; a later sync transition is an interrupted
+		// admitted attempt, not a second pre-admission deferral. Keep the two
+		// populations mutually exclusive for scheduler diagnostics.
+		r.recordTransactionIndexSyncDeferred()
 		return false, nil
 	}
 	if err != nil {
@@ -1177,33 +1260,74 @@ func (r *Runner) maintainTransactionIndexOnceContext(ctx context.Context) (bool,
 		return false, fmt.Errorf("freezer: transaction index prune progress %d exceeds coverage %d", pruned, coverage)
 	}
 	if pruned < coverage {
-		end := pruned + r.cfg.V2SegmentBlocks
-		if end > coverage {
-			end = coverage
-		}
-		rows, err := r.pruneHotTransactionIndexRangeContext(ctx, pruned, end)
-		if err != nil {
-			return false, err
-		}
-		if err := r.commitTransactionIndexPrune(end, rows); err != nil {
-			return false, err
-		}
-		log.Info("Freezer: pruned archived hot transaction indexes", "from", pruned, "to", end, "rows", rows)
-		return true, nil
+		return r.pruneTransactionIndexDebtContext(ctx, coverage)
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if merged, err := index.CompactTransactionIndexTail(); err != nil {
-		return false, err
-	} else if merged {
-		log.Info("Freezer: geometrically merged transaction index tail")
-		return true, nil
+	syncActive := r.cfg.SyncActive != nil && r.cfg.SyncActive()
+	if !syncActive {
+		// Active maintenance tokens are reserved for bounded build/prune quanta.
+		// Idle production stores expose a context-aware merge so a sync transition
+		// cancels the build before manifest publication. Legacy/fake stores without
+		// that surface are merged only when no sync callback is configured.
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		syncActive = r.cfg.SyncActive != nil && r.cfg.SyncActive()
+		if !syncActive {
+			var merged bool
+			var err error
+			if compactor, ok := r.freezer.(transactionIndexContextCompactor); ok {
+				merged, err = compactor.CompactTransactionIndexTailContext(ctx)
+			} else if r.cfg.SyncActive == nil {
+				merged, err = index.CompactTransactionIndexTail()
+			}
+			if err != nil {
+				return false, err
+			}
+			if merged {
+				log.Info("Freezer: geometrically merged transaction index tail")
+				return true, nil
+			}
+		}
 	}
-	if coverage+r.cfg.V2SegmentBlocks > v2Coverage {
+	if coverage >= v2Coverage {
 		return false, nil
 	}
-	return r.ensureTransactionIndexCoverageContext(ctx, coverage+r.cfg.V2SegmentBlocks)
+	return r.ensureTransactionIndexCoverageContext(ctx, r.transactionIndexMaintenanceEnd(coverage, v2Coverage))
+}
+
+func (r *Runner) transactionIndexMaintenanceEnd(start, limit uint64) uint64 {
+	if start >= limit {
+		return limit
+	}
+	segmentBlocks := r.cfg.V2SegmentBlocks
+	if segmentBlocks == 0 {
+		segmentBlocks = defaultV2SegmentBlocks
+	}
+	// Split every V2 segment into a power-of-two count of balanced chunks. Chunk
+	// sizes differ by at most one block, so even prime/custom segment sizes keep
+	// the sync quantum near 8192 instead of degenerating to one-block work, and
+	// the generation compactor can retain its binary-counter layout.
+	needed := uint64(1) + (segmentBlocks-1)/transactionIndexMaintenanceBlocks
+	chunks := uint64(1) << bits.Len64(needed-1)
+	base := segmentBlocks / chunks
+	extra := segmentBlocks % chunks
+	offset := start % segmentBlocks
+	largeSpan := extra * (base + 1)
+	var nextOffset uint64
+	if offset < largeSpan {
+		nextOffset = (offset/(base+1) + 1) * (base + 1)
+	} else {
+		nextOffset = largeSpan + ((offset-largeSpan)/base+1)*base
+	}
+	segmentStart := start - offset
+	end := segmentStart + nextOffset
+	if end < start || end > limit {
+		return limit
+	}
+	return end
 }
 
 func (r *Runner) transactionIndexPruneProgress(coverage uint64) (uint64, bool, error) {
@@ -1340,10 +1464,7 @@ func (r *Runner) ensureTransactionIndexCoverageContext(ctx context.Context, targ
 	if coverage >= target {
 		return false, nil
 	}
-	end := coverage + r.cfg.V2SegmentBlocks
-	if end > target {
-		return false, fmt.Errorf("freezer: transaction-index target %d is not segment-aligned from coverage %d", target, coverage)
-	}
+	end := r.transactionIndexMaintenanceEnd(coverage, target)
 	path, err := index.AncientDatadir()
 	if err != nil {
 		return false, err
@@ -1403,7 +1524,7 @@ func (r *Runner) pruneHotTransactionIndexRangeContext(ctx context.Context, start
 	return rows, flush()
 }
 
-func (r *Runner) commitTransactionIndexPrune(end, rows uint64) error {
+func (r *Runner) commitTransactionIndexPrune(end, blocks, rows uint64, started time.Time) error {
 	if err := rawdb.WriteStageProgress(r.chain.DB(), rawdb.StageFreezerTxIndexPrune, end); err != nil {
 		return err
 	}
@@ -1413,14 +1534,16 @@ func (r *Runner) commitTransactionIndexPrune(end, rows uint64) error {
 		}
 	}
 	r.txIndexRowsPruned.Add(rows)
+	r.txIndexBlocksPruned.Add(blocks)
+	r.txIndexPruneDuration.Add(int64(time.Since(started)))
 	r.updateMetrics()
 	return nil
 }
 
-// pruneTransactionIndexDebtContext deletes at most one immutable-covered
-// segment of hot tx-* rows. The durable stage advances only after every
-// idempotent delete batch has completed, so an interruption simply retries the
-// same segment without exposing a lookup gap.
+// pruneTransactionIndexDebtContext deletes at most one bounded quantum of
+// immutable-covered hot tx-* rows. The durable stage advances after every
+// quantum, and only after every idempotent delete batch has completed, so an
+// interruption simply retries that quantum without exposing a lookup gap.
 func (r *Runner) pruneTransactionIndexDebtContext(ctx context.Context, maxEnd uint64) (bool, error) {
 	index, ok := r.freezer.(TransactionIndexCompactor)
 	if !ok || !r.cfg.TransactionIndexEnabled {
@@ -1440,80 +1563,92 @@ func (r *Runner) pruneTransactionIndexDebtContext(ctx context.Context, maxEnd ui
 	if pruned == coverage {
 		return false, nil
 	}
-	end := pruned + r.cfg.V2SegmentBlocks
-	if end > coverage {
-		end = coverage
-	}
+	end := r.transactionIndexMaintenanceEnd(pruned, coverage)
+	started := time.Now()
 	rows, err := r.pruneHotTransactionIndexRangeContext(ctx, pruned, end)
 	if err != nil {
 		return false, err
 	}
-	if err := r.commitTransactionIndexPrune(end, rows); err != nil {
+	if err := r.commitTransactionIndexPrune(end, end-pruned, rows, started); err != nil {
 		return false, err
 	}
 	log.Info("Freezer: pruned direct-V2 hot transaction indexes", "from", pruned, "to", end, "rows", rows)
 	return true, nil
 }
 
-// serviceDirectTransactionIndexDebt gives immutable-covered tx-* cleanup
-// priority over publishing another direct V2 segment. Unlike optional
-// maintenance, this debt is part of the publication pipeline and therefore is
-// not subject to startup/catch-up throttles which could starve it forever.
-func (r *Runner) serviceDirectTransactionIndexDebt(maxEnd uint64) (bool, error) {
+// serviceDirectTransactionIndexDebt lets an idle direct-V2 publisher repay one
+// bounded immutable-index quantum before publishing another segment. Active
+// sync bypasses this path entirely; the normal maintenance duty cycle catches
+// up later without stalling historical import.
+func (r *Runner) serviceDirectTransactionIndexDebt(maxEnd uint64) (handled, syncDeferred bool, err error) {
 	if !r.cfg.V2Enabled || !r.cfg.TransactionIndexEnabled {
-		return false, nil
+		return false, false, nil
 	}
 	index, ok := r.freezer.(TransactionIndexCompactor)
 	if !ok {
-		return false, nil
+		return false, false, nil
 	}
 	coverage := index.TransactionIndexCoverage()
 	if coverage > maxEnd {
-		return false, fmt.Errorf("freezer: transaction index coverage %d exceeds direct V2 coverage %d", coverage, maxEnd)
+		return false, false, fmt.Errorf("freezer: transaction index coverage %d exceeds direct V2 coverage %d", coverage, maxEnd)
 	}
 	pruned, initialized, err := r.transactionIndexPruneProgress(coverage)
 	if err != nil || !initialized {
-		return false, err
+		return false, false, err
 	}
 	if pruned > coverage {
-		return false, fmt.Errorf("freezer: transaction index prune progress %d exceeds direct coverage %d", pruned, coverage)
+		return false, false, fmt.Errorf("freezer: transaction index prune progress %d exceeds direct coverage %d", pruned, coverage)
 	}
 	if pruned == coverage && coverage == maxEnd {
-		return false, nil
+		return false, false, nil
+	}
+	if r.cfg.SyncActive != nil && r.cfg.SyncActive() {
+		r.recordTransactionIndexSyncDeferred()
+		return false, true, nil
 	}
 	if r.cfg.HeavyMaintenanceErrorBackoff > 0 {
 		if failedAt := r.lastTxIndexMaintenanceError.Load(); failedAt > 0 && time.Since(time.Unix(0, failedAt)) < r.cfg.HeavyMaintenanceErrorBackoff {
 			r.recordHeavyMaintenanceDeferred(heavyMaintenanceTxIndex, heavyMaintenanceDeferredErrorBackoff)
-			return true, nil
+			return true, false, nil
 		}
 	}
 	release, ok := r.cfg.HeavyWorkGate.TryAcquire()
 	if !ok {
 		r.recordHeavyMaintenanceDeferred(heavyMaintenanceTxIndex, heavyMaintenanceDeferredResource)
-		return true, nil
+		return true, false, nil
 	}
+	debtCtx, stopWatch := r.contextWithSyncActiveCancellation()
+	defer stopWatch()
+	if r.cfg.SyncActive != nil && r.cfg.SyncActive() {
+		release()
+		r.recordTransactionIndexSyncDeferred()
+		return false, true, nil
+	}
+	r.txIndexMaintenanceAdmitted.Add(1)
+	r.updateMetrics()
 	defer release()
 	changed := false
 	if pruned < coverage {
-		changed, err = r.pruneTransactionIndexDebtContext(r.pauseCtx, coverage)
+		changed, err = r.pruneTransactionIndexDebtContext(debtCtx, coverage)
 	} else {
-		target := coverage + r.cfg.V2SegmentBlocks
-		if target > maxEnd {
-			target = maxEnd
-		}
-		changed, err = r.ensureTransactionIndexCoverageContext(r.pauseCtx, target)
+		target := r.transactionIndexMaintenanceEnd(coverage, maxEnd)
+		changed, err = r.ensureTransactionIndexCoverageContext(debtCtx, target)
 		if err == nil && changed {
-			_, err = r.pruneTransactionIndexDebtContext(r.pauseCtx, target)
+			_, err = r.pruneTransactionIndexDebtContext(debtCtx, target)
 		}
+	}
+	if syncActivationDeferred(debtCtx, err) || (err == nil && r.cfg.SyncActive != nil && r.cfg.SyncActive()) {
+		r.recordTransactionIndexSyncDeferred()
+		return false, true, nil
 	}
 	if err != nil {
 		r.lastTxIndexMaintenanceError.Store(time.Now().UnixNano())
 		r.txIndexErrors.Add(1)
 		r.updateMetrics()
-		return true, err
+		return true, false, err
 	}
 	r.lastTxIndexMaintenanceError.Store(0)
-	return changed, nil
+	return changed, false, nil
 }
 
 func (r *Runner) updateMetrics() {
@@ -1637,10 +1772,16 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	}
 	directAppender, directLayout := r.freezer.(V2DirectAppender)
 	directLayout = directLayout && directAppender.CanAppendV2Direct(freezeFromN)
-	if directLayout {
-		handled, err := r.serviceDirectTransactionIndexDebt(freezeFromN)
+	syncActive := r.cfg.SyncActive != nil && r.cfg.SyncActive()
+	txIndexSyncDeferred := false
+	if directLayout && !syncActive {
+		handled, deferredForSync, err := r.serviceDirectTransactionIndexDebt(freezeFromN)
 		if err != nil {
 			return 0, err
+		}
+		if deferredForSync {
+			syncActive = true
+			txIndexSyncDeferred = true
 		}
 		if handled {
 			return 0, nil
@@ -1704,15 +1845,53 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 		return 0, nil
 	}
 	var blockHashes []tcommon.Hash
+	buildDirectTransactionIndex := r.cfg.TransactionIndexEnabled && !syncActive
+	deferDirectTransactionIndexIfSyncActive := func() bool {
+		if !directV2 || !r.cfg.TransactionIndexEnabled || !buildDirectTransactionIndex {
+			return !buildDirectTransactionIndex
+		}
+		if r.cfg.SyncActive == nil || !r.cfg.SyncActive() {
+			return false
+		}
+		buildDirectTransactionIndex = false
+		if !txIndexSyncDeferred {
+			r.recordTransactionIndexSyncDeferred()
+			txIndexSyncDeferred = true
+		}
+		return true
+	}
+	if directV2 && r.cfg.TransactionIndexEnabled && !buildDirectTransactionIndex && !txIndexSyncDeferred {
+		r.recordTransactionIndexSyncDeferred()
+		txIndexSyncDeferred = true
+	}
+	deferDirectTransactionIndexIfSyncActive()
 
 	// Phase 1: publish one complete segment directly when possible. The V1
 	// fallback remains for upgraded stores with an existing mutable suffix.
 	if directV2 {
-		var err error
-		blockHashes, err = r.appendDirectV2Segment(directAppender, freezeFromN, capExclusive, r.cfg.ExternalizeV2ReceiptLogs)
-		if err != nil {
-			return 0, err
+		appendCtx := r.pauseCtx
+		stopWatch := func() {}
+		if buildDirectTransactionIndex {
+			appendCtx, stopWatch = r.contextWithSyncActiveCancellation()
 		}
+		var appendErr error
+		blockHashes, appendErr = r.appendDirectV2Segment(appendCtx, directAppender, freezeFromN, capExclusive, r.cfg.ExternalizeV2ReceiptLogs, buildDirectTransactionIndex)
+		stopWatch()
+		if syncActivationDeferred(appendCtx, appendErr) {
+			buildDirectTransactionIndex = false
+			if !txIndexSyncDeferred {
+				r.recordTransactionIndexSyncDeferred()
+				txIndexSyncDeferred = true
+			}
+			// A canceled fused build has not made transaction-index coverage
+			// visible. Retry the same direct V2 segment without that optional sidecar;
+			// MigrateV2 owns stale-file cleanup and manifest recovery.
+			blockHashes, appendErr = r.appendDirectV2Segment(r.pauseCtx, directAppender, freezeFromN, capExclusive, r.cfg.ExternalizeV2ReceiptLogs, false)
+		}
+		if appendErr != nil {
+			return 0, appendErr
+		}
+		deferDirectTransactionIndexIfSyncActive()
 	} else if _, err := r.freezer.ModifyAncients(func(op rawdb.AncientWriteOp) error {
 		blockHashes = make([]tcommon.Hash, 0, capExclusive-freezeFromN)
 		for n := freezeFromN; n < capExclusive; n++ {
@@ -1771,17 +1950,28 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	}); err != nil {
 		return 0, err
 	}
-	if directV2 {
+	deferDirectTransactionIndexIfSyncActive()
+	if directV2 && buildDirectTransactionIndex {
 		// A crash can publish the V2 manifest after building, but before
 		// publishing, its fused transaction-index run. Recover or rebuild that
-		// exact run before hot tx-* deletion and before another V2 segment may
-		// advance past the gap.
-		if _, err := r.ensureTransactionIndexCoverageContext(r.pauseCtx, capExclusive); err != nil {
+		// run before hot tx-* deletion. Active sync deliberately omits the fused
+		// run and retains hot tx-* until bounded maintenance catches up.
+		indexCtx, stopWatch := r.contextWithSyncActiveCancellation()
+		_, ensureErr := r.ensureTransactionIndexCoverageContext(indexCtx, capExclusive)
+		stopWatch()
+		if syncActivationDeferred(indexCtx, ensureErr) {
+			buildDirectTransactionIndex = false
+			if !txIndexSyncDeferred {
+				r.recordTransactionIndexSyncDeferred()
+				txIndexSyncDeferred = true
+			}
+		} else if ensureErr != nil {
 			r.lastTxIndexMaintenanceError.Store(time.Now().UnixNano())
 			r.txIndexErrors.Add(1)
 			r.updateMetrics()
-			return 0, err
+			return 0, ensureErr
 		}
+		deferDirectTransactionIndexIfSyncActive()
 	}
 
 	// Phase 2: explicit fsync. This is the durability barrier, NOT
@@ -1820,16 +2010,30 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 		if err := r.fastForwardDirectStateRootPruneStage(freezeFromN, frozenHi); err != nil {
 			return 0, err
 		}
+	}
+	deferDirectTransactionIndexIfSyncActive()
+	if directV2 && buildDirectTransactionIndex {
 		// The fused immutable tx index was published under the same V2 commit.
 		// Remove its hot duplicate before releasing the heavy-work lease so the
 		// optional maintenance scheduler and its cooldown cannot starve cleanup.
-		if _, err := r.pruneTransactionIndexDebtContext(r.pauseCtx, capExclusive); err != nil {
+		indexCtx, stopWatch := r.contextWithSyncActiveCancellation()
+		_, pruneErr := r.pruneTransactionIndexDebtContext(indexCtx, capExclusive)
+		stopWatch()
+		if syncActivationDeferred(indexCtx, pruneErr) {
+			buildDirectTransactionIndex = false
+			if !txIndexSyncDeferred {
+				r.recordTransactionIndexSyncDeferred()
+				txIndexSyncDeferred = true
+			}
+		} else if pruneErr != nil {
 			r.lastTxIndexMaintenanceError.Store(time.Now().UnixNano())
 			r.txIndexErrors.Add(1)
 			r.updateMetrics()
-			return 0, err
+			return 0, pruneErr
 		}
-		r.lastTxIndexMaintenanceError.Store(0)
+		if buildDirectTransactionIndex {
+			r.lastTxIndexMaintenanceError.Store(0)
+		}
 	}
 	// Compaction only reclaims space; it is not part of the data-durability
 	// transition. Skip starting it during shutdown. A compaction already inside
@@ -1861,14 +2065,20 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	return frozen, r.sampleHotBlockNamespaceSize()
 }
 
-func (r *Runner) appendDirectV2Segment(appender V2DirectAppender, start, end uint64, externalizeReceiptLogs bool) ([]tcommon.Hash, error) {
+func (r *Runner) appendDirectV2Segment(ctx context.Context, appender V2DirectAppender, start, end uint64, externalizeReceiptLogs, buildTransactionIndex bool) ([]tcommon.Hash, error) {
 	if appender == nil || end <= start {
 		return nil, errors.New("freezer: invalid direct V2 segment")
+	}
+	if ctx == nil {
+		ctx = r.pauseCtx
 	}
 	hashes := make([]tcommon.Hash, end-start)
 	readSource := func(kind string, number uint64) ([]byte, error) {
 		if number < start || number >= end {
 			return nil, fmt.Errorf("freezer: direct V2 source %s[%d] outside [%d,%d)", kind, number, start, end)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		if err := r.checkStopping(); err != nil {
 			return nil, err
@@ -1948,13 +2158,13 @@ func (r *Runner) appendDirectV2Segment(appender V2DirectAppender, start, end uin
 		FrameBlocks:                r.cfg.V2FrameBlocks,
 		MaxSegments:                1,
 		Online:                     true,
-		Context:                    r.pauseCtx,
+		Context:                    ctx,
 		Source:                     readSource,
 		SourceHead:                 end,
 		Transform:                  transform,
 		TransactionIndexPrefixBits: r.cfg.TransactionIndexPrefixBits,
 	}
-	if r.cfg.TransactionIndexEnabled {
+	if r.cfg.TransactionIndexEnabled && buildTransactionIndex {
 		options.TransactionIndexEntries = rawdb.AncientTransactionIndexEntries
 	}
 	result, err := appender.MigrateV2(options)

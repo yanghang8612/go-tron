@@ -41,6 +41,12 @@ import (
 
 var log = gtronlog.NewModule("debugapi")
 
+// processStartUnixNano is a stable identity for one gtron process. Exposing it
+// with the diagnostic metrics lets interval samplers discard every
+// process-scoped delta across a restart, including counters which happened to
+// catch up past their previous value before the next sample.
+var processStartUnixNano = time.Now().UnixNano()
+
 // Server hosts the pprof endpoints. Implements node.Lifecycle.
 type Server struct {
 	httpServer *http.Server
@@ -60,6 +66,7 @@ func (s *Server) ListenAddr() string {
 // NewServer constructs the server bound to addr (e.g. "127.0.0.1:6060").
 // The caller is expected to gate construction on a non-zero port.
 func NewServer(addr string) *Server {
+	metrics.GetOrRegisterGauge("process/start/unix_nano", nil).Update(processStartUnixNano)
 	mux := http.NewServeMux()
 
 	// Standard pprof index + per-profile handlers. Mounting these explicitly

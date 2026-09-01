@@ -17,12 +17,17 @@ from pathlib import Path
 
 
 METRIC_PREFIXES = (
+    "process/",
     "blockbuffer/commitment_parent/",
     "state/commitment/",
+    "chain/freezer/",
+    "state/snapshot/cold/",
     "cache/",
     "filter/",
     "iter/",
 )
+
+PROCESS_IDENTITY_METRIC = "process/start/unix_nano"
 
 COUNTER_METRICS = (
     "blockbuffer/commitment_parent/overlay/resolved",
@@ -77,24 +82,73 @@ COUNTER_METRICS = (
     "state/commitment/pipeline/prefetch_critical/wall_nanos",
     "state/commitment/pipeline/prefetch_critical/wait_calls",
     "state/commitment/pipeline/prefetch_critical/wait_nanos",
+    "state/commitment/pipeline/prefetch_critical/queue_wait_calls",
+    "state/commitment/pipeline/prefetch_critical/queue_wait_nanos",
+    "state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_calls",
+    "state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_nanos",
     "state/commitment/pipeline/prefetch_lookahead/planned",
     "state/commitment/pipeline/prefetch_lookahead/capped_lanes",
     "state/commitment/pipeline/prefetch_lookahead/wall_nanos",
+    "state/commitment/pipeline/prefetch_lookahead/finish_wait_calls",
+    "state/commitment/pipeline/prefetch_lookahead/finish_wait_nanos",
 )
 
-GAUGE_METRICS = (
-    "state/commitment/pipeline/prefetch_critical/depth",
-    "state/commitment/pipeline/prefetch_lookahead/depth",
-    "state/commitment/pipeline/prefetch_lookahead/limit_per_lane",
+# These are exported as gauges by their owners, but hold process-lifetime or
+# durable monotonic totals. Delta them like counters while retaining their
+# actual metric type here; a decrease is a restart/reset, never negative work.
+MONOTONIC_GAUGE_METRICS = (
+    "chain/freezer/txindex/coverage",
+    "chain/freezer/txindex/pruned",
+    "chain/freezer/txindex/rows/archived",
+    "chain/freezer/txindex/rows/pruned",
+    "chain/freezer/txindex/prune/blocks",
+    "chain/freezer/txindex/prune/rows",
+    "chain/freezer/txindex/prune/duration",
+    "chain/freezer/txindex/maintenance/admitted",
+    "chain/freezer/txindex/maintenance/deferred",
+    "chain/freezer/txindex/deferred/sync",
+    "chain/freezer/txindex/deferred/catchup",
+    "chain/freezer/txindex/deferred/resource",
+    "chain/freezer/txindex/deferred/error_backoff",
+    "chain/freezer/txindex/errors",
+    "state/snapshot/cold/history/deferred/sync",
+    "state/snapshot/cold/history/deferred/rate_limit",
+    "state/snapshot/cold/history/accelerated/builds",
+    "state/snapshot/cold/history/forced_busy/passes",
+    "state/snapshot/cold/history/forced_busy/attempts",
+    "state/snapshot/cold/history/forced_busy/builds",
+    "state/snapshot/cold/history/admission/checks",
+    "state/snapshot/cold/history/admission/ready",
+    "state/snapshot/cold/history/admission/busy",
+    "state/snapshot/cold/history/deferred/resource",
     "cache/block/hit",
     "cache/block/miss",
     "cache/table/hit",
     "cache/table/miss",
     "filter/hit",
     "filter/miss",
+)
+
+POINT_GAUGE_METRICS = (
+    PROCESS_IDENTITY_METRIC,
+    "state/commitment/pipeline/prefetch_critical/depth",
+    "state/commitment/pipeline/prefetch_critical/queue_high_water",
+    "state/commitment/pipeline/prefetch_lookahead/depth",
+    "state/commitment/pipeline/prefetch_lookahead/limit_per_lane",
+    "state/commitment/pipeline/prefetch_lookahead/queue_high_water",
+    "chain/freezer/txindex/debt/blocks",
+    "state/snapshot/cold/lastpass/history/batch/blocks",
+    "state/snapshot/cold/lastpass/history/batch/txnums",
+    "state/snapshot/cold/history/forced_busy/last/batch/blocks",
+    "state/snapshot/cold/history/forced_busy/last/batch/txnums",
+    "state/snapshot/cold/history/forced_busy/last/recovery",
+    "state/snapshot/cold/history/forced_busy/last/duty_cycle_ppm",
+    "state/snapshot/cold/history/forced_busy/last/debt_blocks",
+    "state/snapshot/cold/history/forced_busy/last/debt_growth_blocks",
     "iter/count",
 )
 
+GAUGE_METRICS = MONOTONIC_GAUGE_METRICS + POINT_GAUGE_METRICS
 ALL_METRICS = COUNTER_METRICS + GAUGE_METRICS
 
 
@@ -217,12 +271,7 @@ def build_row(now, height, current, previous):
             resets.append(name)
         else:
             deltas[name] = value - old
-    # Pebble exports cumulative cache/filter totals as gauges, so treat only
-    # those gauges as monotonic interval sources. Configuration gauges remain
-    # point-in-time values.
-    for name in GAUGE_METRICS:
-        if not name.startswith(("cache/", "filter/")):
-            continue
+    for name in MONOTONIC_GAUGE_METRICS:
         value = current.get(name)
         old = previous_metrics.get(name)
         if value is None or not isinstance(old, (int, float)) or isinstance(old, bool) or value < old:
@@ -231,6 +280,22 @@ def build_row(now, height, current, previous):
                 resets.append(name)
         else:
             deltas[name] = value - old
+
+    previous_process = previous_metrics.get(PROCESS_IDENTITY_METRIC)
+    current_process = current.get(PROCESS_IDENTITY_METRIC)
+    previous_process_valid = isinstance(previous_process, (int, float)) and not isinstance(previous_process, bool)
+    current_process_valid = isinstance(current_process, (int, float)) and not isinstance(current_process, bool)
+    process_restart = isinstance(previous, dict) and (
+        previous_process_valid != current_process_valid
+        or (previous_process_valid and current_process_valid and current_process != previous_process)
+    )
+    if process_restart:
+        # A per-metric decrease is insufficient: a hot counter may catch up to
+        # its pre-restart value before the next sample. Invalidate the complete
+        # process-scoped interval while retaining current durable/point gauges.
+        for name in COUNTER_METRICS + MONOTONIC_GAUGE_METRICS:
+            deltas[name] = None
+        resets.append(PROCESS_IDENTITY_METRIC)
 
     previous_unix = previous.get("unix") if isinstance(previous, dict) else None
     interval = now - float(previous_unix) if isinstance(previous_unix, (int, float)) and now >= previous_unix else None
@@ -256,6 +321,13 @@ def build_row(now, height, current, previous):
         deltas.get("blockbuffer/commitment_parent/singleflight/leaders"),
         deltas.get("blockbuffer/commitment_parent/singleflight/shared_results"),
     )
+    tx_index_maintenance_attempts = positive_sum(
+        deltas.get("chain/freezer/txindex/maintenance/admitted"),
+        deltas.get("chain/freezer/txindex/deferred/catchup"),
+        deltas.get("chain/freezer/txindex/deferred/resource"),
+        deltas.get("chain/freezer/txindex/deferred/error_backoff"),
+    )
+    interval_nanos = interval * 1_000_000_000 if interval is not None else None
 
     foreground_depth_ratios = {}
     for bucket in ("depth_5_8", "depth_9_16", "depth_17_32", "depth_33_plus"):
@@ -328,7 +400,116 @@ def build_row(now, height, current, previous):
             deltas.get("state/commitment/pipeline/prefetch_critical/wait_nanos"),
             deltas.get("state/commitment/pipeline/prefetch_critical/wait_calls"),
         ),
+        "criticalQueueWaitNanosPerCall": safe_ratio(
+            deltas.get("state/commitment/pipeline/prefetch_critical/queue_wait_nanos"),
+            deltas.get("state/commitment/pipeline/prefetch_critical/queue_wait_calls"),
+        ),
+        "criticalQueueWaitNanosPerBlock": safe_ratio(
+            deltas.get("state/commitment/pipeline/prefetch_critical/queue_wait_nanos"),
+            interval_blocks,
+        ),
+        "criticalBlockedByLookaheadNanosPerCall": safe_ratio(
+            deltas.get("state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_nanos"),
+            deltas.get("state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_calls"),
+        ),
+        "criticalBlockedByLookaheadCallsPerBlock": safe_ratio(
+            deltas.get("state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_calls"),
+            interval_blocks,
+        ),
+        "criticalBlockedByLookaheadCallRatio": safe_ratio(
+            deltas.get("state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_calls"),
+            deltas.get("state/commitment/pipeline/prefetch_critical/queue_wait_calls"),
+        ),
+        "finishLookaheadWaitNanosPerCall": safe_ratio(
+            deltas.get("state/commitment/pipeline/prefetch_lookahead/finish_wait_nanos"),
+            deltas.get("state/commitment/pipeline/prefetch_lookahead/finish_wait_calls"),
+        ),
+        "finishLookaheadWaitNanosPerBlock": safe_ratio(
+            deltas.get("state/commitment/pipeline/prefetch_lookahead/finish_wait_nanos"),
+            interval_blocks,
+        ),
+        # Both high-water gauges are maxima of queued items in one lane, not
+        # totals across every commitment lane.
+        "criticalQueueHighWaterPerLane": current.get(
+            "state/commitment/pipeline/prefetch_critical/queue_high_water"
+        ),
+        "lookaheadQueueHighWaterPerLane": current.get(
+            "state/commitment/pipeline/prefetch_lookahead/queue_high_water"
+        ),
         "durableReadsPerBlock": safe_ratio(total_durable, interval_blocks),
+        "txIndexDebtBlocks": current.get("chain/freezer/txindex/debt/blocks"),
+        "txIndexCoverageBlocksPerBlock": safe_ratio(
+            deltas.get("chain/freezer/txindex/coverage"), interval_blocks
+        ),
+        "txIndexPrunedBlocksPerBlock": safe_ratio(
+            deltas.get("chain/freezer/txindex/prune/blocks"), interval_blocks
+        ),
+        "txIndexPrunedRowsPerBlock": safe_ratio(
+            deltas.get("chain/freezer/txindex/prune/rows"), interval_blocks
+        ),
+        "txIndexPruneNanosPerPrunedBlock": safe_ratio(
+            deltas.get("chain/freezer/txindex/prune/duration"),
+            deltas.get("chain/freezer/txindex/prune/blocks"),
+        ),
+        "txIndexPruneDutyRatio": safe_ratio(
+            deltas.get("chain/freezer/txindex/prune/duration"), interval_nanos
+        ),
+        "txIndexMaintenanceAdmittedPerBlock": safe_ratio(
+            deltas.get("chain/freezer/txindex/maintenance/admitted"), interval_blocks
+        ),
+        "txIndexMaintenanceDeferredPerBlock": safe_ratio(
+            deltas.get("chain/freezer/txindex/maintenance/deferred"), interval_blocks
+        ),
+        # Use reason-specific deferrals so the denominator remains explainable
+        # even if future skip-only observability is kept separate from admission.
+        "txIndexMaintenanceAdmissionRatio": safe_ratio(
+            deltas.get("chain/freezer/txindex/maintenance/admitted"),
+            tx_index_maintenance_attempts,
+        ),
+        "txIndexSyncDeferredPerBlock": safe_ratio(
+            deltas.get("chain/freezer/txindex/deferred/sync"), interval_blocks
+        ),
+        "coldSnapshotForcedBuildRatio": safe_ratio(
+            deltas.get("state/snapshot/cold/history/forced_busy/builds"),
+            deltas.get("state/snapshot/cold/history/forced_busy/passes"),
+        ),
+        "coldSnapshotForcedAttemptSuccessRatio": safe_ratio(
+            deltas.get("state/snapshot/cold/history/forced_busy/builds"),
+            deltas.get("state/snapshot/cold/history/forced_busy/attempts"),
+        ),
+        "coldSnapshotForcedBuildsPerBlock": safe_ratio(
+            deltas.get("state/snapshot/cold/history/forced_busy/builds"), interval_blocks
+        ),
+        "coldSnapshotAdmissionReadyRatio": safe_ratio(
+            deltas.get("state/snapshot/cold/history/admission/ready"),
+            deltas.get("state/snapshot/cold/history/admission/checks"),
+        ),
+        "coldSnapshotAdmissionBusyRatio": safe_ratio(
+            deltas.get("state/snapshot/cold/history/admission/busy"),
+            deltas.get("state/snapshot/cold/history/admission/checks"),
+        ),
+        "coldSnapshotLastBatchTxNumsPerBlock": safe_ratio(
+            current.get("state/snapshot/cold/lastpass/history/batch/txnums"),
+            current.get("state/snapshot/cold/lastpass/history/batch/blocks"),
+        ),
+        "coldSnapshotLastForcedBatchTxNumsPerBlock": safe_ratio(
+            current.get("state/snapshot/cold/history/forced_busy/last/batch/txnums"),
+            current.get("state/snapshot/cold/history/forced_busy/last/batch/blocks"),
+        ),
+        "coldSnapshotLastForcedRecoverySeconds": safe_ratio(
+            current.get("state/snapshot/cold/history/forced_busy/last/recovery"),
+            1_000_000_000,
+        ),
+        "coldSnapshotLastForcedDutyRatio": safe_ratio(
+            current.get("state/snapshot/cold/history/forced_busy/last/duty_cycle_ppm"),
+            1_000_000,
+        ),
+        "coldSnapshotLastForcedDebtBlocks": current.get(
+            "state/snapshot/cold/history/forced_busy/last/debt_blocks"
+        ),
+        "coldSnapshotLastForcedDebtGrowthBlocks": current.get(
+            "state/snapshot/cold/history/forced_busy/last/debt_growth_blocks"
+        ),
         "blockCacheHitRatio": safe_ratio(deltas.get("cache/block/hit"), block_cache_total),
         "tableCacheHitRatio": safe_ratio(deltas.get("cache/table/hit"), table_cache_total),
         "filterHitRatio": safe_ratio(deltas.get("filter/hit"), filter_total),
@@ -343,6 +524,7 @@ def build_row(now, height, current, previous):
         "blocksPerSecond": safe_ratio(interval_blocks, interval),
         "status": "counter-reset" if resets else ("bootstrap" if previous is None else "ok"),
         "counterResets": sorted(set(resets)),
+        "processRestart": process_restart,
         "metrics": current,
         "delta": deltas,
         "analysis": analysis,

@@ -780,8 +780,293 @@ func TestColdBuilderHardCapPreventsBusyImporterStarvation(t *testing.T) {
 	if !result.Built || result.HistoryDeferred || result.FromBlock != 1 || result.ToBlock != 1 {
 		t.Fatalf("hard-cap pass = %+v, want one forced bounded build", result)
 	}
-	if callbackCalls != 0 {
-		t.Fatalf("hard-cap pass consulted capacity callback %d times, want 0", callbackCalls)
+	if !result.HistoryForcedBusy || !result.HistoryAdmissionChecked || result.HistoryAdmissionReady {
+		t.Fatalf("hard-cap admission = %+v, want forced busy classification", result)
+	}
+	if callbackCalls != 1 {
+		t.Fatalf("hard-cap pass consulted capacity callback %d times, want 1", callbackCalls)
+	}
+}
+
+func TestColdBuilderForcedBusyCatchupAdaptsBatchAndRecovery(t *testing.T) {
+	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7e)
+	for blockNum := uint64(1); blockNum <= 12; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	ready := false
+	callbackCalls := 0
+	runner := NewRunner(&coldBuilderChain{
+		db: db, solidified: 13, syncRemaining: 1_000, syncRemainingOK: true,
+	}, Config{
+		Dir:                           dir,
+		Enabled:                       true,
+		HistoryWindow:                 1,
+		BatchBlocks:                   8,
+		BatchTxNums:                   8,
+		CatchupBuildMinInterval:       80 * time.Millisecond,
+		CatchupUnthrottledLagBlocks:   1,
+		CatchupHeavyWorkCooldown:      20 * time.Millisecond,
+		DeferHistoryBuildWhileSyncing: true,
+		MaxDeferredHistoryBlocks:      2,
+		MaxBusyDeferredHistoryBlocks:  4,
+		SyncBuildReady: func() bool {
+			callbackCalls++
+			return ready
+		},
+		MetricsNamespace: namespace,
+	})
+
+	first, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("first forced-busy pass: %v", err)
+	}
+	if !first.Built || !first.HistoryForcedBusy || first.HistoryDeferred ||
+		first.FromBlock != 1 || first.ToBlock != 2 || first.HistoryBatchBlocks != 2 || first.HistoryBatchTxNums != 2 {
+		t.Fatalf("first forced-busy pass = %+v, want two-block adaptive progress", first)
+	}
+	if first.HistoryAccelerated {
+		t.Fatalf("first forced-busy pass = %+v, accelerated must describe only ready unthrottled builds", first)
+	}
+	if first.HistoryMinRecovery != 80*time.Millisecond {
+		t.Fatalf("first forced-busy recovery = %s, want 80ms", first.HistoryMinRecovery)
+	}
+
+	limited, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("continuous busy pass: %v", err)
+	}
+	if !limited.HistoryDeferred || !limited.HistoryRateLimited || !limited.HistoryForcedBusy || limited.Built {
+		t.Fatalf("continuous busy pass = %+v, want forced-busy rate limit", limited)
+	}
+	if limited.HistoryRetryAfter <= 0 || limited.HistoryRetryAfter > 80*time.Millisecond {
+		t.Fatalf("forced-busy retry-after = %s, want (0,80ms]", limited.HistoryRetryAfter)
+	}
+
+	time.Sleep(limited.HistoryRetryAfter + 5*time.Millisecond)
+	second, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("forced-busy retry pass: %v", err)
+	}
+	if !second.Built || !second.HistoryForcedBusy || second.FromBlock != 3 || second.ToBlock != 4 || second.HistoryBatchBlocks != 2 {
+		t.Fatalf("forced-busy retry pass = %+v, want bounded forward progress", second)
+	}
+
+	ready = true
+	idle, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("ready importer pass: %v", err)
+	}
+	if !idle.Built || idle.HistoryForcedBusy || !idle.HistoryAdmissionChecked || !idle.HistoryAdmissionReady ||
+		idle.HistoryDeferred || idle.FromBlock != 5 || idle.ToBlock != 12 || idle.HistoryBatchBlocks != 8 || idle.HistoryBatchTxNums != 8 {
+		t.Fatalf("ready importer pass = %+v, want immediate full batch", idle)
+	}
+	if callbackCalls != 4 {
+		t.Fatalf("capacity callback calls = %d, want 4", callbackCalls)
+	}
+
+	stats := runner.Snapshot()
+	if stats.ForcedBusyPasses != 3 || stats.ForcedBusyAttempts != 2 || stats.ForcedBusyBuilds != 2 ||
+		stats.HistoryAcceleratedBuilds != 1 ||
+		stats.AdmissionChecks != 4 || stats.AdmissionBusy != 3 || stats.AdmissionReady != 1 ||
+		stats.HistoryRateLimitedSync != 1 || stats.LastBatchBlocks != 8 || stats.LastBatchTxNums != 8 ||
+		stats.LastForcedBatchBlocks != 2 || stats.LastForcedBatchTxNums != 2 ||
+		stats.LastForcedRecovery != 80*time.Millisecond || stats.LastForcedDutyPPM == 0 || stats.LastForcedDutyPPM > coldSnapshotDutyCyclePPM ||
+		stats.LastForcedDebtBlocks != 10 || stats.LastForcedDebtGrowth != 0 {
+		t.Fatalf("forced-busy stats = %+v", stats)
+	}
+	for suffix, want := range map[string]int64{
+		"history/forced_busy/passes":                  3,
+		"history/forced_busy/attempts":                2,
+		"history/forced_busy/builds":                  2,
+		"history/accelerated/builds":                  1,
+		"history/admission/checks":                    4,
+		"history/admission/ready":                     1,
+		"history/admission/busy":                      3,
+		"lastpass/history/batch/blocks":               8,
+		"lastpass/history/batch/txnums":               8,
+		"history/forced_busy/last/batch/blocks":       2,
+		"history/forced_busy/last/batch/txnums":       2,
+		"history/forced_busy/last/recovery":           int64(80 * time.Millisecond),
+		"history/forced_busy/last/debt_blocks":        10,
+		"history/forced_busy/last/debt_growth_blocks": 0,
+	} {
+		assertColdRunnerGauge(t, namespace+suffix, want)
+	}
+	if got := coldRunnerGaugeValue(t, namespace+"history/forced_busy/last/duty_cycle_ppm"); got <= 0 || got > int64(coldSnapshotDutyCyclePPM) {
+		t.Fatalf("forced-busy duty-cycle gauge = %d", got)
+	}
+}
+
+func TestColdBuilderForcedBusyFailurePreservesAdmissionAndRecovery(t *testing.T) {
+	dir := t.TempDir()
+	base := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x7f)
+	for blockNum := uint64(1); blockNum <= 12; blockNum++ {
+		writeColdBuilderChange(t, base, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, base, blockNum)
+	}
+
+	stageErr := errors.New("injected snapshot build stage failure")
+	db := &coldBuilderFailStageDB{
+		store:     base,
+		failStage: rawdb.StageSnapshotBuild,
+		err:       stageErr,
+	}
+	db.fail.Store(true)
+	runner := NewRunner(&coldBuilderChain{
+		db: db, solidified: 13, syncRemaining: 1_000, syncRemainingOK: true,
+	}, Config{
+		Dir:                           dir,
+		Enabled:                       true,
+		HistoryWindow:                 1,
+		BatchBlocks:                   8,
+		BatchTxNums:                   8,
+		CatchupBuildMinInterval:       80 * time.Millisecond,
+		CatchupUnthrottledLagBlocks:   1,
+		CatchupHeavyWorkCooldown:      20 * time.Millisecond,
+		DeferHistoryBuildWhileSyncing: true,
+		MaxDeferredHistoryBlocks:      2,
+		MaxBusyDeferredHistoryBlocks:  4,
+		SyncBuildReady:                func() bool { return false },
+	})
+
+	failed, err := runner.OnePass()
+	if !errors.Is(err, stageErr) {
+		t.Fatalf("forced-busy failure error = %v, want %v", err, stageErr)
+	}
+	if failed.Built || !failed.HistoryForcedBusy || !failed.HistoryAdmissionChecked || failed.HistoryAdmissionReady ||
+		!failed.HistoryBuildAttempted || failed.HistoryAccelerated {
+		t.Fatalf("failed forced-busy result = %+v, want preserved busy attempt classification", failed)
+	}
+	if failed.HistoryRetryDeadline.IsZero() || failed.HistoryRetryAfter <= 0 || failed.HistoryRetryAfter > 80*time.Millisecond {
+		t.Fatalf("failed forced-busy retry = after %s deadline %s, want completion-based recovery", failed.HistoryRetryAfter, failed.HistoryRetryDeadline)
+	}
+	if stats := runner.Snapshot(); stats.ForcedBusyAttempts != 1 || stats.ForcedBusyBuilds != 0 || stats.PassErrors != 1 {
+		t.Fatalf("stats after failed forced-busy attempt = %+v", stats)
+	}
+
+	db.fail.Store(false)
+	limited, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("immediate retry: %v", err)
+	}
+	if !limited.HistoryDeferred || !limited.HistoryRateLimited || !limited.HistoryForcedBusy || limited.HistoryBuildAttempted || limited.Built {
+		t.Fatalf("immediate retry = %+v, want failed-attempt recovery rate limit", limited)
+	}
+	if limited.HistoryRetryAfter <= 0 || limited.HistoryRetryAfter > 80*time.Millisecond {
+		t.Fatalf("immediate retry-after = %s, want (0,80ms]", limited.HistoryRetryAfter)
+	}
+
+	time.Sleep(limited.HistoryRetryAfter + 5*time.Millisecond)
+	retried, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("retry after recovery: %v", err)
+	}
+	if !retried.Built || !retried.HistoryForcedBusy || !retried.HistoryBuildAttempted || retried.FromBlock != 3 || retried.ToBlock != 4 {
+		t.Fatalf("retry after recovery = %+v, want next bounded forced-busy batch", retried)
+	}
+}
+
+func TestColdBuilderStandaloneSchedulesFailedForcedBusyRetry(t *testing.T) {
+	dir := t.TempDir()
+	base := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x81)
+	for blockNum := uint64(1); blockNum <= 12; blockNum++ {
+		writeColdBuilderChange(t, base, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, base, blockNum)
+	}
+	stageErr := errors.New("injected standalone snapshot stage failure")
+	db := &coldBuilderFailStageDB{store: base, failStage: rawdb.StageSnapshotBuild, err: stageErr}
+	db.fail.Store(true)
+	runner := NewRunner(&coldBuilderChain{
+		db: db, solidified: 13, syncRemaining: 1_000, syncRemainingOK: true,
+	}, Config{
+		Dir:                           dir,
+		Enabled:                       true,
+		Interval:                      time.Hour,
+		HistoryWindow:                 1,
+		BatchBlocks:                   8,
+		BatchTxNums:                   8,
+		CatchupBuildMinInterval:       80 * time.Millisecond,
+		CatchupUnthrottledLagBlocks:   1,
+		CatchupHeavyWorkCooldown:      20 * time.Millisecond,
+		DeferHistoryBuildWhileSyncing: true,
+		MaxDeferredHistoryBlocks:      2,
+		MaxBusyDeferredHistoryBlocks:  4,
+		SyncBuildReady:                func() bool { return false },
+	})
+	if err := runner.Start(); err != nil {
+		t.Fatalf("start standalone runner: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := runner.Stop(); err != nil {
+			t.Errorf("stop standalone runner: %v", err)
+		}
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for runner.Snapshot().PassErrors == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if runner.Snapshot().PassErrors == 0 {
+		t.Fatal("timed out waiting for injected standalone failure")
+	}
+	db.fail.Store(false)
+	for runner.Snapshot().SegmentsBuilt == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if stats := runner.Snapshot(); stats.SegmentsBuilt == 0 || stats.ForcedBusyAttempts < 2 {
+		t.Fatalf("standalone runner did not honor failed-attempt retry deadline: %+v", stats)
+	}
+}
+
+func TestColdBuilderRetryDeadlineDeductsPostHistoryWork(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x80)
+	for blockNum := uint64(1); blockNum <= 6; blockNum++ {
+		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
+		writeColdBuilderCanonicalBlock(t, db, blockNum)
+	}
+	baseChain := &coldBuilderChain{
+		db: db, solidified: 7, syncRemaining: 1_000, syncRemainingOK: true,
+	}
+	chain := &coldBuilderSlowRotationChain{coldBuilderChain: baseChain}
+	runner := NewRunner(chain, Config{
+		Dir:                                   dir,
+		Enabled:                               true,
+		HistoryWindow:                         1,
+		BatchBlocks:                           2,
+		BatchTxNums:                           2,
+		CatchupBuildMinInterval:               40 * time.Millisecond,
+		LatestBuildBlocks:                     1,
+		DeferLatestBuildWhileSyncing:          true,
+		BuildCommitmentBranchBaseWhileSyncing: true,
+	})
+
+	first, err := runner.OnePass()
+	if err != nil || !first.Built {
+		t.Fatalf("initial history pass = %+v err=%v, want build", first, err)
+	}
+	chain.delay = 70 * time.Millisecond
+	started := time.Now()
+	limited, err := runner.OnePass()
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("rate-limited pass with slow latest stage: %v", err)
+	}
+	if !limited.HistoryDeferred || !limited.HistoryRateLimited || limited.HistoryRetryDeadline.IsZero() {
+		t.Fatalf("rate-limited result = %+v, want absolute retry deadline", limited)
+	}
+	if elapsed < chain.delay {
+		t.Fatalf("pass elapsed = %s, want at least post-history delay %s", elapsed, chain.delay)
+	}
+	if limited.HistoryRetryAfter != time.Nanosecond || limited.HistoryRetryRemaining(time.Now()) != time.Nanosecond {
+		t.Fatalf("expired retry = after %s remaining %s, want immediate timer sentinel", limited.HistoryRetryAfter, limited.HistoryRetryRemaining(time.Now()))
 	}
 }
 
@@ -3133,6 +3418,49 @@ type coldBuilderSeekRecordingDB struct {
 	stateTxRangeStarts [][]byte
 }
 
+// coldBuilderFailStageDB deliberately does not expose ethdb.Batcher so stage
+// progress writes flow through Put and can be failed after manifest publication.
+type coldBuilderFailStageDB struct {
+	store     ethdb.KeyValueStore
+	failStage rawdb.StageID
+	err       error
+	fail      atomic.Bool
+}
+
+func (db *coldBuilderFailStageDB) Has(key []byte) (bool, error) {
+	return db.store.Has(key)
+}
+
+func (db *coldBuilderFailStageDB) Get(key []byte) ([]byte, error) {
+	return db.store.Get(key)
+}
+
+func (db *coldBuilderFailStageDB) Put(key, value []byte) error {
+	stageKey := []byte("stage-progress-v1-" + string(db.failStage))
+	if db.fail.Load() && bytes.Equal(key, stageKey) {
+		return db.err
+	}
+	return db.store.Put(key, value)
+}
+
+func (db *coldBuilderFailStageDB) Delete(key []byte) error {
+	return db.store.Delete(key)
+}
+
+func (db *coldBuilderFailStageDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	return db.store.NewIterator(prefix, start)
+}
+
+type coldBuilderSlowRotationChain struct {
+	*coldBuilderChain
+	delay time.Duration
+}
+
+func (c *coldBuilderSlowRotationChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+	time.Sleep(c.delay)
+	return c.coldBuilderChain.BeginCommitmentBranchRotation()
+}
+
 func (db *coldBuilderSeekRecordingDB) NewIterator(prefix, start []byte) ethdb.Iterator {
 	if bytes.Equal(prefix, []byte("state-tx-range-v1-")) {
 		db.stateTxRangeStarts = append(db.stateTxRangeStarts, append([]byte(nil), start...))
@@ -3357,7 +3685,21 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"history/deferred/sync",
 		"history/deferred/rate_limit",
 		"history/accelerated/builds",
+		"history/forced_busy/passes",
+		"history/forced_busy/attempts",
+		"history/forced_busy/builds",
+		"history/admission/checks",
+		"history/admission/ready",
+		"history/admission/busy",
 		"history/deferred/resource",
+		"lastpass/history/batch/blocks",
+		"lastpass/history/batch/txnums",
+		"history/forced_busy/last/batch/blocks",
+		"history/forced_busy/last/batch/txnums",
+		"history/forced_busy/last/recovery",
+		"history/forced_busy/last/duty_cycle_ppm",
+		"history/forced_busy/last/debt_blocks",
+		"history/forced_busy/last/debt_growth_blocks",
 		"sidecar/deferred/sync_or_resource",
 		"sidecar/catchup/builds",
 		"sidecar/event_log/freezer_handoffs",

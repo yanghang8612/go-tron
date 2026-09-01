@@ -70,6 +70,30 @@ var (
 	commitmentPipelinePrefetchCriticalWaitNanosCounter = metrics.NewRegisteredCounter(
 		"state/commitment/pipeline/prefetch_critical/wait_nanos", nil,
 	)
+	commitmentPipelinePrefetchCriticalQueueWaitCallsCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_critical/queue_wait_calls", nil,
+	)
+	commitmentPipelinePrefetchCriticalQueueWaitNanosCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_critical/queue_wait_nanos", nil,
+	)
+	commitmentPipelinePrefetchCriticalBlockedByLookaheadCallsCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_calls", nil,
+	)
+	commitmentPipelinePrefetchCriticalBlockedByLookaheadNanosCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_nanos", nil,
+	)
+	commitmentPipelinePrefetchFinishLookaheadWaitCallsCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_lookahead/finish_wait_calls", nil,
+	)
+	commitmentPipelinePrefetchFinishLookaheadWaitNanosCounter = metrics.NewRegisteredCounter(
+		"state/commitment/pipeline/prefetch_lookahead/finish_wait_nanos", nil,
+	)
+	commitmentPipelinePrefetchCriticalQueueHighWaterGauge = metrics.NewRegisteredGauge(
+		"state/commitment/pipeline/prefetch_critical/queue_high_water", nil,
+	)
+	commitmentPipelinePrefetchLookaheadQueueHighWaterGauge = metrics.NewRegisteredGauge(
+		"state/commitment/pipeline/prefetch_lookahead/queue_high_water", nil,
+	)
 	commitmentPipelinePrefetchDepthGauge = metrics.NewRegisteredGauge(
 		"state/commitment/pipeline/prefetch_critical/depth", nil,
 	)
@@ -82,6 +106,24 @@ var (
 )
 
 var commitmentPipelineMaxInflight atomic.Int64
+
+var (
+	commitmentPipelinePrefetchCriticalQueueHighWater  atomic.Int64
+	commitmentPipelinePrefetchLookaheadQueueHighWater atomic.Int64
+)
+
+func observeCommitmentPrefetchQueueHighWater(current int64, highWater *atomic.Int64, gauge *metrics.Gauge) {
+	for current > 0 {
+		previous := highWater.Load()
+		if current <= previous {
+			return
+		}
+		if highWater.CompareAndSwap(previous, current) {
+			gauge.Update(current)
+			return
+		}
+	}
+}
 
 // commitmentFoldStats is owned by one Fold invocation. Parallel root workers
 // write to separate sibling instances and the caller merges them after Wait,

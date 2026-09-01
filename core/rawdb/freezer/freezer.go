@@ -20,6 +20,7 @@
 package freezer
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -477,6 +478,16 @@ func (f *Freezer) PublishTransactionIndexRun(result TransactionIndexBuildResult)
 }
 
 func (f *Freezer) CompactTransactionIndexTail() (bool, error) {
+	return f.CompactTransactionIndexTailContext(context.Background())
+}
+
+func (f *Freezer) CompactTransactionIndexTailContext(ctx context.Context) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	f.v2Migrate.Lock()
 	defer f.v2Migrate.Unlock()
 	if f.readonly {
@@ -488,7 +499,7 @@ func (f *Freezer) CompactTransactionIndexTail() (bool, error) {
 	// merged run. Avoid reopening the multi-megabyte run directories on every
 	// healthy maintenance pass.
 	current := f.txIndex
-	if err := validateSelectedTransactionIndexStore(f.datadir, current); err != nil {
+	if err := validateSelectedTransactionIndexStoreContext(ctx, f.datadir, current); err != nil {
 		current, err = OpenTransactionIndexStore(f.datadir)
 		if err != nil {
 			return false, err
@@ -499,20 +510,26 @@ func (f *Freezer) CompactTransactionIndexTail() (bool, error) {
 		}
 		f.replaceTransactionIndexStore(current)
 	}
-	cleanup, err := cleanupUnreferencedTransactionIndexRuns(f.datadir, current)
+	cleanup, err := cleanupUnreferencedTransactionIndexRunsContext(ctx, f.datadir, current)
 	if err != nil {
 		return false, err
 	}
-	_, _, merged, err := CompactTransactionIndexTail(f.datadir)
+	if err := ctx.Err(); err != nil {
+		return cleanup.Files > 0, err
+	}
+	_, _, merged, err := CompactTransactionIndexTailContext(ctx, f.datadir)
 	if err != nil || !merged {
 		return cleanup.Files > 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return true, err
 	}
 	store, err := OpenTransactionIndexStore(f.datadir)
 	if err != nil {
 		return false, err
 	}
 	f.replaceTransactionIndexStore(store)
-	if _, err := cleanupUnreferencedTransactionIndexRuns(f.datadir, store); err != nil {
+	if _, err := cleanupUnreferencedTransactionIndexRunsContext(ctx, f.datadir, store); err != nil {
 		return true, err
 	}
 	return true, nil

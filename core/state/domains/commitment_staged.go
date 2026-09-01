@@ -514,59 +514,109 @@ func (s *rawdbBranchStore) prefetchParentLane(nb uint8, ops []op, depth int) err
 	return err
 }
 
+// commitmentParentPrefetchPlan retains the allocation-free prefix-dedup state
+// across point reads. Critical prefetches run it to completion; lookahead runs
+// one step at a time so a newly queued critical task can preempt between durable
+// reads without sharing one cursor concurrently.
+type commitmentParentPrefetchPlan struct {
+	store        *rawdbBranchStore
+	prefetch     pointread.CommitmentParentPrefetchSession
+	ops          []op
+	nb           uint8
+	depth        int
+	limit        int
+	next         int
+	planned      int
+	previous     [pathLen]byte
+	havePrevious bool
+	capped       bool
+	done         bool
+}
+
+func newCommitmentParentPrefetchPlan(s *rawdbBranchStore, nb uint8, ops []op, depth, limit int) commitmentParentPrefetchPlan {
+	prefetch, _ := s.parentSession.(pointread.CommitmentParentPrefetchSession)
+	if depth > pathLen {
+		depth = pathLen
+	}
+	return commitmentParentPrefetchPlan{
+		store:    s,
+		prefetch: prefetch,
+		ops:      ops,
+		nb:       nb,
+		depth:    depth,
+		limit:    limit,
+		done:     prefetch == nil || len(ops) == 0 || depth <= 0,
+	}
+}
+
+// step performs at most one distinct-prefix point read. done reports that no
+// further read remains. The fallback keyspace probe is part of the same logical
+// step because foreground lookup has the identical primary-then-fallback
+// ordering and both probes own this plan's exclusive session cursors.
+func (p *commitmentParentPrefetchPlan) step() (done bool, err error) {
+	if p.done {
+		return true, nil
+	}
+	current := &p.store.parentPrefetchPaths[p.nb]
+	for p.next < len(p.ops) {
+		i := p.next
+		p.next++
+		if pathNibble(p.ops[i].path, 0) != p.nb {
+			p.done = true
+			return true, fmt.Errorf("domains: commitment prefetch lane %d received path in lane %d", p.nb, pathNibble(p.ops[i].path, 0))
+		}
+		for d := 0; d < p.depth; d++ {
+			current[d] = pathNibble(p.ops[i].path, d)
+		}
+		same := p.havePrevious
+		for d := 0; same && d < p.depth; d++ {
+			same = current[d] == p.previous[d]
+		}
+		if same {
+			continue
+		}
+		if p.limit > 0 && p.planned >= p.limit {
+			p.capped = true
+			p.done = true
+			return true, nil
+		}
+		copy(p.previous[:p.depth], current[:p.depth])
+		p.havePrevious = true
+		p.planned++
+
+		found, err := p.store.keyspace.PrefetchParentInSession(p.prefetch, p.store.parentPrefetchBase+int(p.nb), current[:p.depth])
+		if err != nil {
+			p.done = true
+			return true, err
+		}
+		if !found && p.store.parentFallbackPrefetchBase >= 0 {
+			fallback := rawdb.LegacyCommitmentBranchKeyspace()
+			if p.store.hasFrozenKeyspace {
+				fallback = p.store.frozenKeyspace
+			}
+			if _, err := fallback.PrefetchParentInSession(p.prefetch, p.store.parentFallbackPrefetchBase+int(p.nb), current[:p.depth]); err != nil {
+				p.done = true
+				return true, err
+			}
+		}
+		return false, nil
+	}
+	p.done = true
+	return true, nil
+}
+
 // prefetchParentLaneLimited is the bounded planner used by child-level
 // lookahead. A non-positive limit preserves the unbounded critical-level
 // behavior. The count is in logical prefixes; legacy/frozen fallback probes do
 // not consume a second unit.
 func (s *rawdbBranchStore) prefetchParentLaneLimited(nb uint8, ops []op, depth, limit int) (int, bool, error) {
-	prefetch, ok := s.parentSession.(pointread.CommitmentParentPrefetchSession)
-	if !ok || len(ops) == 0 || depth <= 0 {
-		return 0, false, nil
-	}
-	if depth > pathLen {
-		depth = pathLen
-	}
-	current := &s.parentPrefetchPaths[nb]
-	var previous [pathLen]byte
-	havePrevious := false
-	planned := 0
-	for i := range ops {
-		if pathNibble(ops[i].path, 0) != nb {
-			return planned, false, fmt.Errorf("domains: commitment prefetch lane %d received path in lane %d", nb, pathNibble(ops[i].path, 0))
-		}
-		for d := 0; d < depth; d++ {
-			current[d] = pathNibble(ops[i].path, d)
-		}
-		same := havePrevious
-		for d := 0; same && d < depth; d++ {
-			same = current[d] == previous[d]
-		}
-		if same {
-			continue
-		}
-		if limit > 0 && planned >= limit {
-			return planned, true, nil
-		}
-		copy(previous[:depth], current[:depth])
-		havePrevious = true
-		planned++
-
-		found, err := s.keyspace.PrefetchParentInSession(prefetch, s.parentPrefetchBase+int(nb), current[:depth])
-		if err != nil {
-			return planned, false, err
-		}
-		if found || s.parentFallbackPrefetchBase < 0 {
-			continue
-		}
-		fallback := rawdb.LegacyCommitmentBranchKeyspace()
-		if s.hasFrozenKeyspace {
-			fallback = s.frozenKeyspace
-		}
-		if _, err := fallback.PrefetchParentInSession(prefetch, s.parentFallbackPrefetchBase+int(nb), current[:depth]); err != nil {
-			return planned, false, err
+	plan := newCommitmentParentPrefetchPlan(s, nb, ops, depth, limit)
+	for !plan.done {
+		if _, err := plan.step(); err != nil {
+			return plan.planned, false, err
 		}
 	}
-	return planned, false, nil
+	return plan.planned, plan.capped, nil
 }
 
 func (s *rawdbBranchStore) supportsParentPrefetch() bool {

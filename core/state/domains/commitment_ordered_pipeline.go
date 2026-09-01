@@ -34,15 +34,16 @@ type OrderedCommitmentResult struct {
 // reads/writes (the production blockbuffer LayerView does). Close is valid only
 // after all returned result channels have completed.
 type OrderedCommitmentPipeline struct {
-	base          *rawdbBranchStore
-	lanes         [maxFoldNibbles]chan orderedCommitmentLaneTask
-	prefetchLanes [maxFoldNibbles]chan orderedCommitmentPrefetchTask
-	laneWG        sync.WaitGroup
-	prefetchWG    sync.WaitGroup
-	failed        atomic.Pointer[error]
-	closed        atomic.Bool
-	inflight      atomic.Int64
-	closeOnce     sync.Once
+	base           *rawdbBranchStore
+	lanes          [maxFoldNibbles]chan orderedCommitmentLaneTask
+	prefetchLanes  [maxFoldNibbles]chan orderedCommitmentPrefetchTask
+	prefetchQueued [maxFoldNibbles]atomic.Int64
+	laneWG         sync.WaitGroup
+	prefetchWG     sync.WaitGroup
+	failed         atomic.Pointer[error]
+	closed         atomic.Bool
+	inflight       atomic.Int64
+	closeOnce      sync.Once
 }
 
 type orderedCommitmentLaneTask struct {
@@ -59,6 +60,13 @@ type orderedCommitmentPrefetchTask struct {
 	lookaheadDepth int
 	lookaheadLimit int
 	ops            []op
+	enqueuedAt     time.Time
+}
+
+type orderedCommitmentLookaheadTask struct {
+	result    *orderedCommitmentPrefetchResult
+	plan      commitmentParentPrefetchPlan
+	wallNanos int64
 }
 
 type orderedCommitmentPrefetchResult struct {
@@ -154,7 +162,7 @@ func NewOrderedCommitmentPipelineWithRepair(db CommitmentDB, repair CommitmentSn
 		p.laneWG.Add(1)
 		go p.runLane(uint8(nb), laneRoot, p.lanes[nb])
 		p.prefetchWG.Add(1)
-		go p.runPrefetchLane(p.prefetchLanes[nb])
+		go p.runPrefetchLane(uint8(nb), p.prefetchLanes[nb])
 	}
 	commitmentPipelineEnabledGauge.Update(1)
 	closeOnError = false
@@ -255,7 +263,7 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 			result.active = true
 			result.critical.Add(1)
 			result.done.Add(1)
-			p.prefetchLanes[nb] <- orderedCommitmentPrefetchTask{
+			p.enqueuePrefetch(uint8(nb), orderedCommitmentPrefetchTask{
 				store:          job.store,
 				result:         result,
 				nb:             uint8(nb),
@@ -263,7 +271,7 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 				lookaheadDepth: CommitmentParentPrefetchLookaheadDepth,
 				lookaheadLimit: CommitmentParentPrefetchLookaheadLimitPerLane,
 				ops:            group,
-			}
+			})
 		}
 	}
 
@@ -323,52 +331,166 @@ func (p *OrderedCommitmentPipeline) runLane(nb uint8, root BranchData, tasks <-c
 	}
 }
 
-func (p *OrderedCommitmentPipeline) runPrefetchLane(tasks <-chan orderedCommitmentPrefetchTask) {
+func (p *OrderedCommitmentPipeline) enqueuePrefetch(nb uint8, task orderedCommitmentPrefetchTask) {
+	task.enqueuedAt = time.Now()
+	depth := p.prefetchQueued[nb].Add(1)
+	observeCommitmentPrefetchQueueHighWater(
+		depth,
+		&commitmentPipelinePrefetchCriticalQueueHighWater,
+		commitmentPipelinePrefetchCriticalQueueHighWaterGauge,
+	)
+	p.prefetchLanes[nb] <- task
+}
+
+// runPrefetchLane keeps one cursor owner per nibble while allowing critical
+// work to preempt speculative lookahead between exact point reads. It never runs
+// two reads for the same lane concurrently: a lookahead plan yields after one
+// distinct prefix and critical tasks are drained first on the next iteration.
+// This preserves the prior cursor/session ownership while bounding priority
+// inversion to the one lookahead read already in progress when critical arrives.
+func (p *OrderedCommitmentPipeline) runPrefetchLane(nb uint8, tasks <-chan orderedCommitmentPrefetchTask) {
 	defer p.prefetchWG.Done()
-	for task := range tasks {
-		func() {
-			defer task.result.done.Done()
-			// Read-ahead is speculative. An unused predicted row must never make a
-			// valid fold fail; the authoritative foreground cursor retries any branch
-			// it actually needs and reports the error through the normal pipeline.
-			criticalStarted := time.Now()
-			planned, _, err := task.store.prefetchParentLaneLimited(task.nb, task.ops, task.depth, 0)
-			commitmentPipelinePrefetchCriticalPlannedCounter.Inc(int64(planned))
-			commitmentPipelinePrefetchCriticalWallNanosCounter.Inc(time.Since(criticalStarted).Nanoseconds())
-			if err != nil {
-				commitmentPipelinePrefetchErrorsCounter.Inc(1)
-				task.result.critical.Done()
-				return
+	criticalOpen := true
+	lookahead := make([]orderedCommitmentLookaheadTask, 0, 4)
+	lookaheadHead := 0
+	var lastLookaheadStarted time.Time
+	var lastLookaheadFinished time.Time
+
+	for criticalOpen || lookaheadHead < len(lookahead) {
+		if criticalOpen {
+			select {
+			case task, ok := <-tasks:
+				if !ok {
+					criticalOpen = false
+					continue
+				}
+				p.prefetchQueued[nb].Add(-1)
+				if next, ok := p.runCriticalPrefetch(task, lastLookaheadStarted, lastLookaheadFinished); ok {
+					if lookaheadHead > 0 && len(lookahead) == cap(lookahead) {
+						remaining := copy(lookahead, lookahead[lookaheadHead:])
+						clear(lookahead[remaining:])
+						lookahead = lookahead[:remaining]
+						lookaheadHead = 0
+					}
+					lookahead = append(lookahead, next)
+					observeCommitmentPrefetchQueueHighWater(
+						int64(len(lookahead)-lookaheadHead),
+						&commitmentPipelinePrefetchLookaheadQueueHighWater,
+						commitmentPipelinePrefetchLookaheadQueueHighWaterGauge,
+					)
+				}
+				continue
+			default:
 			}
-			task.result.critical.Done()
-			if task.lookaheadDepth <= 0 || task.lookaheadLimit <= 0 {
-				return
+		}
+
+		if lookaheadHead == len(lookahead) {
+			if !criticalOpen {
+				break
 			}
-			lookaheadStarted := time.Now()
-			planned, capped, err := task.store.prefetchParentLaneLimited(
-				task.nb, task.ops, task.depth+task.lookaheadDepth, task.lookaheadLimit,
-			)
-			commitmentPipelinePrefetchLookaheadWallNanosCounter.Inc(time.Since(lookaheadStarted).Nanoseconds())
-			commitmentPipelinePrefetchLookaheadPlannedCounter.Inc(int64(planned))
-			if capped {
-				commitmentPipelinePrefetchLookaheadCappedCounter.Inc(1)
+			task, ok := <-tasks
+			if !ok {
+				criticalOpen = false
+				continue
 			}
-			if err != nil {
-				commitmentPipelinePrefetchErrorsCounter.Inc(1)
+			p.prefetchQueued[nb].Add(-1)
+			if next, ok := p.runCriticalPrefetch(task, lastLookaheadStarted, lastLookaheadFinished); ok {
+				lookahead = lookahead[:0]
+				lookaheadHead = 0
+				lookahead = append(lookahead, next)
+				observeCommitmentPrefetchQueueHighWater(
+					int64(len(lookahead)),
+					&commitmentPipelinePrefetchLookaheadQueueHighWater,
+					commitmentPipelinePrefetchLookaheadQueueHighWaterGauge,
+				)
 			}
-		}()
+			continue
+		}
+
+		// No critical task was observable at the priority check. Execute one
+		// lookahead point-read step, then check the critical queue again.
+		lastLookaheadStarted = time.Now()
+		done, err := lookahead[lookaheadHead].plan.step()
+		lastLookaheadFinished = time.Now()
+		lookahead[lookaheadHead].wallNanos += lastLookaheadFinished.Sub(lastLookaheadStarted).Nanoseconds()
+		if !done && err == nil {
+			continue
+		}
+		p.finishLookaheadPrefetch(&lookahead[lookaheadHead], err)
+		lookahead[lookaheadHead] = orderedCommitmentLookaheadTask{}
+		lookaheadHead++
+		if lookaheadHead == len(lookahead) {
+			lookahead = lookahead[:0]
+			lookaheadHead = 0
+		}
 	}
+}
+
+func (p *OrderedCommitmentPipeline) runCriticalPrefetch(
+	task orderedCommitmentPrefetchTask,
+	lastLookaheadStarted time.Time,
+	lastLookaheadFinished time.Time,
+) (orderedCommitmentLookaheadTask, bool) {
+	queueWait := time.Since(task.enqueuedAt)
+	commitmentPipelinePrefetchCriticalQueueWaitCallsCounter.Inc(1)
+	commitmentPipelinePrefetchCriticalQueueWaitNanosCounter.Inc(queueWait.Nanoseconds())
+	if !lastLookaheadFinished.IsZero() && task.enqueuedAt.Before(lastLookaheadFinished) {
+		blockedAt := task.enqueuedAt
+		if blockedAt.Before(lastLookaheadStarted) {
+			blockedAt = lastLookaheadStarted
+		}
+		if blocked := lastLookaheadFinished.Sub(blockedAt); blocked > 0 {
+			commitmentPipelinePrefetchCriticalBlockedByLookaheadCallsCounter.Inc(1)
+			commitmentPipelinePrefetchCriticalBlockedByLookaheadNanosCounter.Inc(blocked.Nanoseconds())
+		}
+	}
+
+	// Read-ahead is speculative. An unused predicted row must never make a
+	// valid fold fail; the authoritative foreground cursor retries any branch
+	// it actually needs and reports the error through the normal pipeline.
+	criticalStarted := time.Now()
+	planned, _, err := task.store.prefetchParentLaneLimited(task.nb, task.ops, task.depth, 0)
+	commitmentPipelinePrefetchCriticalPlannedCounter.Inc(int64(planned))
+	commitmentPipelinePrefetchCriticalWallNanosCounter.Inc(time.Since(criticalStarted).Nanoseconds())
+	task.result.critical.Done()
+	if err != nil {
+		commitmentPipelinePrefetchErrorsCounter.Inc(1)
+		task.result.done.Done()
+		return orderedCommitmentLookaheadTask{}, false
+	}
+	if task.lookaheadDepth <= 0 || task.lookaheadLimit <= 0 {
+		task.result.done.Done()
+		return orderedCommitmentLookaheadTask{}, false
+	}
+	return orderedCommitmentLookaheadTask{
+		result: task.result,
+		plan: newCommitmentParentPrefetchPlan(
+			task.store,
+			task.nb,
+			task.ops,
+			task.depth+task.lookaheadDepth,
+			task.lookaheadLimit,
+		),
+	}, true
+}
+
+func (p *OrderedCommitmentPipeline) finishLookaheadPrefetch(task *orderedCommitmentLookaheadTask, err error) {
+	commitmentPipelinePrefetchLookaheadWallNanosCounter.Inc(task.wallNanos)
+	commitmentPipelinePrefetchLookaheadPlannedCounter.Inc(int64(task.plan.planned))
+	if task.plan.capped {
+		commitmentPipelinePrefetchLookaheadCappedCounter.Inc(1)
+	}
+	if err != nil {
+		commitmentPipelinePrefetchErrorsCounter.Inc(1)
+	}
+	task.result.done.Done()
 }
 
 func (p *OrderedCommitmentPipeline) finishJob(job *orderedCommitmentJob) {
 	job.done.Wait()
 	// Lookahead is allowed to overlap the authoritative fold, but its cursors
 	// still belong to this snapshot-scoped session and must finish before close.
-	for nb := range job.prefetch {
-		if job.prefetch[nb].active {
-			job.prefetch[nb].done.Wait()
-		}
-	}
+	waitForOrderedCommitmentLookahead(job)
 	for nb := range job.siblingStats {
 		job.stats.merge(&job.siblingStats[nb])
 	}
@@ -409,6 +531,27 @@ func (p *OrderedCommitmentPipeline) finishJob(job *orderedCommitmentJob) {
 		return
 	}
 	p.finishJobResult(job, root, nil)
+}
+
+func waitForOrderedCommitmentLookahead(job *orderedCommitmentJob) {
+	active := false
+	for nb := range job.prefetch {
+		if job.prefetch[nb].active {
+			active = true
+			break
+		}
+	}
+	if !active {
+		return
+	}
+	started := time.Now()
+	for nb := range job.prefetch {
+		if job.prefetch[nb].active {
+			job.prefetch[nb].done.Wait()
+		}
+	}
+	commitmentPipelinePrefetchFinishLookaheadWaitCallsCounter.Inc(1)
+	commitmentPipelinePrefetchFinishLookaheadWaitNanosCounter.Inc(time.Since(started).Nanoseconds())
 }
 
 func (p *OrderedCommitmentPipeline) finishJobResult(job *orderedCommitmentJob, root common.Hash, err error) {

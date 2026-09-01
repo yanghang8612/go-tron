@@ -474,6 +474,68 @@ func TestFreezerDirectV2RecoversManifestPublishedBeforeLiveInstall(t *testing.T)
 	}
 }
 
+func TestFreezerDirectV2RecoveryReportsPublishedTransactionIndex(t *testing.T) {
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"bodies":      {Prunable: true},
+		"tx_infos":    {Prunable: true},
+		"state_roots": {NoSnappy: true, Prunable: true},
+	}
+	f, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	// Make the already-published state fail only at the in-memory install step.
+	// Both durable manifests remain the recovery authority for the retry.
+	f.v2Mu.Lock()
+	closedStore := f.v2
+	f.v2 = nil
+	f.v2Mu.Unlock()
+	if err := closedStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	options := V2MigrationOptions{
+		Tables:        []string{"bodies", "tx_infos", "state_roots"},
+		SegmentBlocks: 64,
+		FrameBlocks:   8,
+		MaxSegments:   1,
+		Online:        true,
+		SourceHead:    64,
+		Source: func(kind string, number uint64) ([]byte, error) {
+			return []byte(fmt.Sprintf("%s-%d", kind, number)), nil
+		},
+		TransactionIndexPrefixBits: 8,
+		TransactionIndexEntries: func(number uint64, _ []byte) ([]TransactionIndexEntry, error) {
+			var hash [32]byte
+			binary.BigEndian.PutUint64(hash[24:], number+1)
+			return []TransactionIndexEntry{{Hash: hash, Location: number}}, nil
+		},
+	}
+	if _, err := f.MigrateV2(options); err == nil || !strings.Contains(err.Error(), "store is closed") {
+		t.Fatalf("install failure err=%v, want closed-store error", err)
+	}
+	if f.V2Coverage() != 0 || f.TransactionIndexCoverage() != 0 {
+		t.Fatalf("failed live install advanced in-memory coverage v2=%d index=%d", f.V2Coverage(), f.TransactionIndexCoverage())
+	}
+
+	options.Source = func(kind string, number uint64) ([]byte, error) {
+		return nil, fmt.Errorf("source unexpectedly reread during recovery: %s[%d]", kind, number)
+	}
+	result, err := f.MigrateV2(options)
+	if err != nil {
+		t.Fatalf("recover published V2 and transaction index: %v", err)
+	}
+	if result.Start != 0 || result.End != 64 || result.Segments != 1 ||
+		result.TransactionIndexRuns != 1 || result.TransactionIndexRows != 64 {
+		t.Fatalf("recovery result=%+v, want one 64-row transaction-index run", result)
+	}
+	if f.V2Coverage() != 64 || f.TransactionIndexCoverage() != 64 || f.head.Load() != 64 {
+		t.Fatalf("recovered coverage v2=%d index=%d head=%d, want 64/64/64", f.V2Coverage(), f.TransactionIndexCoverage(), f.head.Load())
+	}
+}
+
 func TestFreezerDirectV2SourceFailureLeavesNoPublishedSegmentAndRetries(t *testing.T) {
 	dir := t.TempDir()
 	tables := map[string]TableConfig{

@@ -88,6 +88,59 @@ type blockingReadChain struct {
 	once     sync.Once
 }
 
+type syncTransitionReadChain struct {
+	ChainSource
+	blockNum uint64
+	armed    atomic.Bool
+	activate func()
+	observed <-chan struct{}
+}
+
+func (c *syncTransitionReadChain) ReadBlockRawStrict(n uint64) ([]byte, bool, error) {
+	if n == c.blockNum && c.armed.CompareAndSwap(true, false) {
+		c.activate()
+		select {
+		case <-c.observed:
+		case <-time.After(2 * time.Second):
+			return nil, false, errors.New("timed out waiting for direct-V2 sync watcher")
+		}
+	}
+	return c.ChainSource.ReadBlockRawStrict(n)
+}
+
+type syncTransitionFreezer struct {
+	*rawdbfreezer.Freezer
+	armed    atomic.Bool
+	activate func()
+	observed <-chan struct{}
+}
+
+type syncAfterDirectMigrateFreezer struct {
+	*rawdbfreezer.Freezer
+	armed    atomic.Bool
+	activate func()
+}
+
+func (f *syncAfterDirectMigrateFreezer) MigrateV2(options rawdbfreezer.V2MigrationOptions) (rawdbfreezer.V2MigrationResult, error) {
+	result, err := f.Freezer.MigrateV2(options)
+	if err == nil && f.armed.CompareAndSwap(true, false) {
+		f.activate()
+	}
+	return result, err
+}
+
+func (f *syncTransitionFreezer) Ancient(kind string, number uint64) ([]byte, error) {
+	if kind == rawdbAncientBlocks && f.armed.CompareAndSwap(true, false) {
+		f.activate()
+		select {
+		case <-f.observed:
+		case <-time.After(2 * time.Second):
+			return nil, errors.New("timed out waiting for sync watcher")
+		}
+	}
+	return f.Freezer.Ancient(kind, number)
+}
+
 func (c *blockingReadChain) ReadBlockRawStrict(n uint64) ([]byte, bool, error) {
 	if n == c.blockNum {
 		c.once.Do(func() { close(c.entered) })
@@ -511,6 +564,10 @@ func (w *freezerWriter) PublishTransactionIndexRun(result rawdbfreezer.Transacti
 }
 func (w *freezerWriter) CompactTransactionIndexTail() (bool, error) {
 	return w.f.CompactTransactionIndexTail()
+}
+
+func (w *freezerWriter) CompactTransactionIndexTailContext(ctx context.Context) (bool, error) {
+	return w.f.CompactTransactionIndexTailContext(ctx)
 }
 
 func TestCompactV2OncePromotesCompleteAllTableSegment(t *testing.T) {
@@ -1453,16 +1510,21 @@ func TestDirectV2RepaysTransactionIndexGapBeforePublishingNextSegment(t *testing
 
 	r.cfg.TransactionIndexEnabled = true
 	fc.setSolidified(11)
-	for step, wantCoverage := range []uint64{4, 8} {
+	// Direct debt service builds and prunes one bounded segment in the same
+	// admitted pass, so the two existing segments require two passes.
+	for pass := 0; pass < 2; pass++ {
 		if frozen, err := r.OnePass(); err != nil || frozen != 0 {
-			t.Fatalf("debt step %d frozen=%d err=%v, want 0/nil", step, frozen, err)
-		}
-		if got := fz.TransactionIndexCoverage(); got != wantCoverage {
-			t.Fatalf("debt step %d index coverage=%d, want %d", step, got, wantCoverage)
+			t.Fatalf("debt step %d frozen=%d err=%v, want 0/nil", pass, frozen, err)
 		}
 		if got := fz.V2Coverage(); got != 8 {
-			t.Fatalf("debt step %d advanced V2 coverage=%d before index debt cleared", step, got)
+			t.Fatalf("debt step %d advanced V2 coverage=%d before index debt cleared", pass, got)
 		}
+	}
+	if got := fz.TransactionIndexCoverage(); got != 8 {
+		t.Fatalf("debt repayment index coverage=%d, want 8", got)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageFreezerTxIndexPrune); err != nil || !ok || progress != 8 {
+		t.Fatalf("debt repayment prune progress=%d ok=%v err=%v, want 8", progress, ok, err)
 	}
 	if frozen, err := r.OnePass(); err != nil || frozen != 4 {
 		t.Fatalf("post-debt direct pass frozen=%d err=%v, want 4/nil", frozen, err)
@@ -1477,6 +1539,382 @@ func TestDirectV2RepaysTransactionIndexGapBeforePublishingNextSegment(t *testing
 		key := append([]byte("tx-"), hash[:]...)
 		if value, err := fc.db.Get(key); err == nil && len(value) > 0 {
 			t.Fatalf("hot tx index %d survived direct debt repayment: %x", i, value)
+		}
+	}
+}
+
+func TestDirectV2DefersTransactionIndexWithoutBlockingActiveSync(t *testing.T) {
+	fc := newFakeChain()
+	fz := newFreezer(t)
+	var syncing atomic.Bool
+	syncing.Store(true)
+	namespace := "test/direct-v2-sync-debt/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	r := New(fc, wrapFreezer(fz), Config{
+		Enabled:                    true,
+		MarginBlocks:               0,
+		V2Enabled:                  true,
+		DirectV2:                   true,
+		V2FrameBlocks:              2,
+		V2SegmentBlocks:            4,
+		TransactionIndexEnabled:    true,
+		TransactionIndexPrefixBits: 8,
+		SyncActive:                 syncing.Load,
+		MetricsNamespace:           namespace,
+	})
+	hashes := make([]tcommon.Hash, 0, 8)
+	for number := uint64(0); number < 8; number++ {
+		blockPB := &corepb.Block{
+			BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(number), Timestamp: int64(number) * 3000}},
+			Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: int64(number + 1)}}},
+		}
+		raw, err := proto.Marshal(blockPB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := coretypes.NewBlockFromPB(blockPB)
+		hash := block.Transactions()[0].Hash()
+		hashes = append(hashes, hash)
+		ret, err := proto.Marshal(&corepb.TransactionRet{Transactioninfo: []*corepb.TransactionInfo{{Id: hash[:]}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteBlock(fc.db, block); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeTxInfosKV(fc.db, number, ret); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteTransactionLocation(fc.db, hash[:], number, 0); err != nil {
+			t.Fatal(err)
+		}
+		fc.mu.Lock()
+		fc.blockRaw[number] = raw
+		fc.txInfosRaw[number] = ret
+		fc.stateRootRaw[number] = stateRootBytes(number)
+		fc.blockHashByNo[number] = block.Hash()
+		fc.mu.Unlock()
+	}
+	fc.setSolidified(7)
+	for pass := 0; pass < 2; pass++ {
+		if frozen, err := r.OnePass(); err != nil || frozen != 4 {
+			t.Fatalf("active-sync pass %d frozen=%d err=%v, want 4/nil", pass, frozen, err)
+		}
+	}
+	if got := fz.V2Coverage(); got != 8 {
+		t.Fatalf("active-sync V2 coverage=%d, want 8", got)
+	}
+	if got := fz.TransactionIndexCoverage(); got != 0 {
+		t.Fatalf("active-sync transaction-index coverage=%d, want deferred", got)
+	}
+	chainDB := rawdb.NewChainDB(fc.db, rawdb.NewFreezerReader(fz))
+	for number, hash := range hashes {
+		if got := rawdb.ReadTransactionIndex(chainDB, hash[:]); got == nil || *got != uint64(number) {
+			t.Fatalf("hot fallback lookup %d=%v", number, got)
+		}
+	}
+	stats := r.Snapshot()
+	if stats.TransactionIndexDebtBlocks != 8 || stats.TransactionIndexSyncDeferred != 2 || stats.TransactionIndexMaintenanceDeferred != 0 {
+		t.Fatalf("active-sync debt stats=%+v", stats)
+	}
+
+	syncing.Store(false)
+	// Each bounded range is published before its matching hot-index prune, so
+	// two 4-block V2 segments require build/prune/build/prune maintenance.
+	for pass := 0; pass < 4; pass++ {
+		if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+			t.Fatalf("idle index catch-up pass %d changed=%v err=%v", pass, changed, err)
+		}
+	}
+	if got := fz.TransactionIndexCoverage(); got != 8 {
+		t.Fatalf("idle catch-up coverage=%d, want 8", got)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageFreezerTxIndexPrune); err != nil || !ok || progress != 8 {
+		t.Fatalf("idle catch-up prune progress=%d ok=%v err=%v", progress, ok, err)
+	}
+	for number, hash := range hashes {
+		key := append([]byte("tx-"), hash[:]...)
+		if value, err := fc.db.Get(key); err == nil && len(value) > 0 {
+			t.Fatalf("idle catch-up left hot tx index %d: %x", number, value)
+		}
+		if got := rawdb.ReadTransactionIndex(chainDB, hash[:]); got == nil || *got != uint64(number) {
+			t.Fatalf("cold lookup after catch-up %d=%v", number, got)
+		}
+	}
+}
+
+func TestDirectV2CancelsIdleDebtWhenSyncBecomesActive(t *testing.T) {
+	fc := newFakeChain()
+	base := newFreezer(t)
+	var syncing atomic.Bool
+	observed := make(chan struct{})
+	var observedOnce sync.Once
+	store := &syncTransitionFreezer{
+		Freezer: base,
+		activate: func() {
+			syncing.Store(true)
+		},
+		observed: observed,
+	}
+	namespace := "test/direct-v2-idle-active-transition/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	r := New(fc, store, Config{
+		Enabled:                    true,
+		MarginBlocks:               0,
+		V2Enabled:                  true,
+		DirectV2:                   true,
+		V2FrameBlocks:              2,
+		V2SegmentBlocks:            4,
+		TransactionIndexEnabled:    false,
+		TransactionIndexPrefixBits: 8,
+		SyncActive: func() bool {
+			active := syncing.Load()
+			if active {
+				observedOnce.Do(func() { close(observed) })
+			}
+			return active
+		},
+		MetricsNamespace: namespace,
+	})
+	hashes := make([]tcommon.Hash, 0, 8)
+	for number := uint64(0); number < 8; number++ {
+		blockPB := &corepb.Block{
+			BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(number), Timestamp: int64(number) * 3000}},
+			Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: int64(number + 1)}}},
+		}
+		raw, err := proto.Marshal(blockPB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := coretypes.NewBlockFromPB(blockPB)
+		hash := block.Transactions()[0].Hash()
+		hashes = append(hashes, hash)
+		ret, err := proto.Marshal(&corepb.TransactionRet{Transactioninfo: []*corepb.TransactionInfo{{Id: hash[:]}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteBlock(fc.db, block); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeTxInfosKV(fc.db, number, ret); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteTransactionLocation(fc.db, hash[:], number, 0); err != nil {
+			t.Fatal(err)
+		}
+		fc.mu.Lock()
+		fc.blockRaw[number] = raw
+		fc.txInfosRaw[number] = ret
+		fc.stateRootRaw[number] = stateRootBytes(number)
+		fc.blockHashByNo[number] = block.Hash()
+		fc.mu.Unlock()
+	}
+	fc.setSolidified(3)
+	if frozen, err := r.OnePass(); err != nil || frozen != 4 {
+		t.Fatalf("seed direct pass frozen=%d err=%v", frozen, err)
+	}
+	r.cfg.TransactionIndexEnabled = true
+	store.armed.Store(true)
+	fc.setSolidified(7)
+	if frozen, err := r.OnePass(); err != nil || frozen != 4 {
+		t.Fatalf("sync-transition direct pass frozen=%d err=%v, want continued V2 publication", frozen, err)
+	}
+	if got := base.V2Coverage(); got != 8 {
+		t.Fatalf("sync-transition V2 coverage=%d, want 8", got)
+	}
+	if got := base.TransactionIndexCoverage(); got != 0 {
+		t.Fatalf("canceled debt build published coverage=%d, want 0", got)
+	}
+	stats := r.Snapshot()
+	if stats.TransactionIndexSyncDeferred != 1 || stats.TransactionIndexMaintenanceDeferred != 0 || stats.TransactionIndexErrors != 0 {
+		t.Fatalf("sync-transition stats=%+v", stats)
+	}
+	chainDB := rawdb.NewChainDB(fc.db, rawdb.NewFreezerReader(base))
+	for number, hash := range hashes {
+		key := append([]byte("tx-"), hash[:]...)
+		if value, err := fc.db.Get(key); err != nil || len(value) == 0 {
+			t.Fatalf("sync-transition lost hot tx index %d: value=%x err=%v", number, value, err)
+		}
+		if got := rawdb.ReadTransactionIndex(chainDB, hash[:]); got == nil || *got != uint64(number) {
+			t.Fatalf("sync-transition lookup %d=%v", number, got)
+		}
+	}
+}
+
+func TestDirectV2SyncTransitionAfterFusedAppendRetainsHotIndex(t *testing.T) {
+	fc := newFakeChain()
+	base := newFreezer(t)
+	var syncing atomic.Bool
+	store := &syncAfterDirectMigrateFreezer{
+		Freezer:  base,
+		activate: func() { syncing.Store(true) },
+	}
+	namespace := "test/direct-v2-post-append-transition/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	r := New(fc, store, Config{
+		Enabled:                    true,
+		MarginBlocks:               0,
+		V2Enabled:                  true,
+		DirectV2:                   true,
+		V2FrameBlocks:              2,
+		V2SegmentBlocks:            4,
+		TransactionIndexEnabled:    true,
+		TransactionIndexPrefixBits: 8,
+		SyncActive:                 syncing.Load,
+		MetricsNamespace:           namespace,
+	})
+	hashes := make([]tcommon.Hash, 0, 4)
+	for number := uint64(0); number < 4; number++ {
+		blockPB := &corepb.Block{
+			BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(number), Timestamp: int64(number) * 3000}},
+			Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: int64(number + 1)}}},
+		}
+		raw, err := proto.Marshal(blockPB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := coretypes.NewBlockFromPB(blockPB)
+		hash := block.Transactions()[0].Hash()
+		hashes = append(hashes, hash)
+		ret, err := proto.Marshal(&corepb.TransactionRet{Transactioninfo: []*corepb.TransactionInfo{{Id: hash[:]}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteBlock(fc.db, block); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeTxInfosKV(fc.db, number, ret); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteTransactionLocation(fc.db, hash[:], number, 0); err != nil {
+			t.Fatal(err)
+		}
+		fc.mu.Lock()
+		fc.blockRaw[number] = raw
+		fc.txInfosRaw[number] = ret
+		fc.stateRootRaw[number] = stateRootBytes(number)
+		fc.blockHashByNo[number] = block.Hash()
+		fc.mu.Unlock()
+	}
+	store.armed.Store(true)
+	fc.setSolidified(3)
+	if frozen, err := r.OnePass(); err != nil || frozen != 4 {
+		t.Fatalf("post-append transition frozen=%d err=%v", frozen, err)
+	}
+	if got := base.TransactionIndexCoverage(); got != 4 {
+		t.Fatalf("fused index coverage=%d, want 4", got)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageFreezerTxIndexPrune); err != nil || ok || progress != 0 {
+		t.Fatalf("post-append transition prune progress=%d ok=%v err=%v, want retained hot rows", progress, ok, err)
+	}
+	stats := r.Snapshot()
+	if stats.TransactionIndexSyncDeferred != 1 || stats.TransactionIndexMaintenanceDeferred != 0 || stats.TransactionIndexErrors != 0 {
+		t.Fatalf("post-append transition stats=%+v", stats)
+	}
+	chainDB := rawdb.NewChainDB(fc.db, rawdb.NewFreezerReader(base))
+	for number, hash := range hashes {
+		key := append([]byte("tx-"), hash[:]...)
+		if value, err := fc.db.Get(key); err != nil || len(value) == 0 {
+			t.Fatalf("post-append transition lost hot tx index %d: value=%x err=%v", number, value, err)
+		}
+		if got := rawdb.ReadTransactionIndex(chainDB, hash[:]); got == nil || *got != uint64(number) {
+			t.Fatalf("post-append transition lookup %d=%v", number, got)
+		}
+	}
+}
+
+func TestDirectV2CancelsFusedIndexBuildAndRetriesWithoutIndex(t *testing.T) {
+	fc := newFakeChain()
+	base := newFreezer(t)
+	var syncing atomic.Bool
+	observed := make(chan struct{})
+	var observedOnce sync.Once
+	chain := &syncTransitionReadChain{
+		ChainSource: fc,
+		blockNum:    0,
+		activate:    func() { syncing.Store(true) },
+		observed:    observed,
+	}
+	namespace := "test/direct-v2-fused-cancel-retry/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	r := New(chain, wrapFreezer(base), Config{
+		Enabled:                    true,
+		MarginBlocks:               0,
+		V2Enabled:                  true,
+		DirectV2:                   true,
+		V2FrameBlocks:              2,
+		V2SegmentBlocks:            4,
+		TransactionIndexEnabled:    true,
+		TransactionIndexPrefixBits: 8,
+		SyncActive: func() bool {
+			active := syncing.Load()
+			if active {
+				observedOnce.Do(func() { close(observed) })
+			}
+			return active
+		},
+		MetricsNamespace: namespace,
+	})
+	hashes := make([]tcommon.Hash, 0, 4)
+	for number := uint64(0); number < 4; number++ {
+		blockPB := &corepb.Block{
+			BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(number), Timestamp: int64(number) * 3000}},
+			Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: int64(number + 1)}}},
+		}
+		raw, err := proto.Marshal(blockPB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := coretypes.NewBlockFromPB(blockPB)
+		hash := block.Transactions()[0].Hash()
+		hashes = append(hashes, hash)
+		ret, err := proto.Marshal(&corepb.TransactionRet{Transactioninfo: []*corepb.TransactionInfo{{Id: hash[:]}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteBlock(fc.db, block); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeTxInfosKV(fc.db, number, ret); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteTransactionLocation(fc.db, hash[:], number, 0); err != nil {
+			t.Fatal(err)
+		}
+		fc.mu.Lock()
+		fc.blockRaw[number] = raw
+		fc.txInfosRaw[number] = ret
+		fc.stateRootRaw[number] = stateRootBytes(number)
+		fc.blockHashByNo[number] = block.Hash()
+		fc.mu.Unlock()
+	}
+	chain.armed.Store(true)
+	fc.setSolidified(3)
+	if frozen, err := r.OnePass(); err != nil || frozen != 4 {
+		t.Fatalf("fused cancel/retry frozen=%d err=%v", frozen, err)
+	}
+	if got := base.V2Coverage(); got != 4 {
+		t.Fatalf("fused cancel/retry V2 coverage=%d, want 4", got)
+	}
+	if got := base.TransactionIndexCoverage(); got != 0 {
+		t.Fatalf("canceled fused build transaction-index coverage=%d, want 0", got)
+	}
+	stats := r.Snapshot()
+	if stats.TransactionIndexSyncDeferred != 1 || stats.TransactionIndexMaintenanceDeferred != 0 || stats.TransactionIndexErrors != 0 {
+		t.Fatalf("fused cancel/retry stats=%+v", stats)
+	}
+	chainDB := rawdb.NewChainDB(fc.db, rawdb.NewFreezerReader(base))
+	for number, hash := range hashes {
+		key := append([]byte("tx-"), hash[:]...)
+		if value, err := fc.db.Get(key); err != nil || len(value) == 0 {
+			t.Fatalf("fused cancel/retry lost hot tx index %d: value=%x err=%v", number, value, err)
+		}
+		if got := rawdb.ReadTransactionIndex(chainDB, hash[:]); got == nil || *got != uint64(number) {
+			t.Fatalf("fused cancel/retry lookup %d=%v", number, got)
 		}
 	}
 }
@@ -2951,9 +3389,16 @@ func unregisterRunnerMetricNamespace(namespace string) {
 		"txindex/pruned",
 		"txindex/rows/archived",
 		"txindex/rows/pruned",
+		"txindex/debt/blocks",
+		"txindex/prune/blocks",
+		"txindex/prune/rows",
+		"txindex/prune/duration",
+		"txindex/maintenance/admitted",
+		"txindex/maintenance/deferred",
 		"txindex/deferred/catchup",
 		"txindex/deferred/resource",
 		"txindex/deferred/error_backoff",
+		"txindex/deferred/sync",
 		"txindex/errors",
 	} {
 		metrics.DefaultRegistry.Unregister(namespace + suffix)

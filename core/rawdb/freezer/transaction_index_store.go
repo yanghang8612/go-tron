@@ -1,9 +1,12 @@
 package freezer
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +17,10 @@ const (
 	transactionIndexDirectoryName   = "tx-index"
 	transactionIndexRunsDirectory   = "runs"
 	transactionIndexManifestName    = "manifest.json"
+	// TransactionIndexCompactionLeafBlocks is the bounded online build unit.
+	// Larger fused runs start at the equivalent geometric compaction level so
+	// they do not merge prematurely with a single maintenance leaf.
+	TransactionIndexCompactionLeafBlocks = uint64(8_192)
 )
 
 type transactionIndexManifest struct {
@@ -22,10 +29,12 @@ type transactionIndexManifest struct {
 }
 
 type transactionIndexManifestRun struct {
-	File       string `json:"file"`
-	StartBlock uint64 `json:"start_block"`
-	EndBlock   uint64 `json:"end_block"`
-	Rows       uint64 `json:"rows"`
+	File               string `json:"file"`
+	StartBlock         uint64 `json:"start_block"`
+	EndBlock           uint64 `json:"end_block"`
+	Rows               uint64 `json:"rows"`
+	CompactionLevel    uint32 `json:"compaction_level,omitempty"`
+	CompactionLevelSet bool   `json:"compaction_level_set,omitempty"`
 }
 
 // TransactionIndexStore is the manifest-selected set of immutable runs. Runs
@@ -101,47 +110,76 @@ func OpenTransactionIndexStore(ancientDir string) (*TransactionIndexStore, error
 // and is deliberately retained for recovery. Unknown names and non-regular
 // entries are also left untouched.
 func cleanupUnreferencedTransactionIndexRuns(ancientDir string, selected *TransactionIndexStore) (transactionIndexOrphanCleanupResult, error) {
+	return cleanupUnreferencedTransactionIndexRunsContext(context.Background(), ancientDir, selected)
+}
+
+func cleanupUnreferencedTransactionIndexRunsContext(ctx context.Context, ancientDir string, selected *TransactionIndexStore) (transactionIndexOrphanCleanupResult, error) {
 	var result transactionIndexOrphanCleanupResult
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if selected == nil || selected.Coverage() == 0 {
 		return result, nil
 	}
-	if err := validateSelectedTransactionIndexStore(ancientDir, selected); err != nil {
+	if err := validateSelectedTransactionIndexStoreContext(ctx, ancientDir, selected); err != nil {
 		return result, err
 	}
 	runsDir := filepath.Join(ancientDir, transactionIndexDirectoryName, transactionIndexRunsDirectory)
-	entries, err := os.ReadDir(runsDir)
+	dir, err := os.Open(runsDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return result, nil
 	}
 	if err != nil {
-		return result, fmt.Errorf("transaction index orphan cleanup: read runs: %w", err)
+		return result, fmt.Errorf("transaction index orphan cleanup: open runs: %w", err)
 	}
+	defer dir.Close()
 	active := make(map[string]struct{}, len(selected.runs))
 	for _, run := range selected.runs {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		active[filepath.Base(run.Path())] = struct{}{}
 	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if _, ok := active[name]; ok {
-			continue
+	for {
+		if err := ctx.Err(); err != nil {
+			return result, err
 		}
-		_, end, ok := parseTransactionIndexRunFilename(name)
-		if !ok || end > selected.Coverage() {
-			continue
+		entries, readErr := dir.ReadDir(256)
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
+			name := entry.Name()
+			if _, ok := active[name]; ok {
+				continue
+			}
+			_, end, ok := parseTransactionIndexRunFilename(name)
+			if !ok || end > selected.Coverage() {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return result, fmt.Errorf("transaction index orphan cleanup: stat %q: %w", name, err)
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			if err := os.Remove(filepath.Join(runsDir, name)); err != nil {
+				return result, fmt.Errorf("transaction index orphan cleanup: remove %q: %w", name, err)
+			}
+			result.Files++
+			if info.Size() > 0 {
+				result.Bytes += uint64(info.Size())
+			}
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return result, fmt.Errorf("transaction index orphan cleanup: stat %q: %w", name, err)
+		if errors.Is(readErr, io.EOF) {
+			break
 		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		if err := os.Remove(filepath.Join(runsDir, name)); err != nil {
-			return result, fmt.Errorf("transaction index orphan cleanup: remove %q: %w", name, err)
-		}
-		result.Files++
-		if info.Size() > 0 {
-			result.Bytes += uint64(info.Size())
+		if readErr != nil {
+			return result, fmt.Errorf("transaction index orphan cleanup: read runs: %w", readErr)
 		}
 	}
 	if result.Files > 0 {
@@ -153,6 +191,16 @@ func cleanupUnreferencedTransactionIndexRuns(ancientDir string, selected *Transa
 }
 
 func validateSelectedTransactionIndexStore(ancientDir string, selected *TransactionIndexStore) error {
+	return validateSelectedTransactionIndexStoreContext(context.Background(), ancientDir, selected)
+}
+
+func validateSelectedTransactionIndexStoreContext(ctx context.Context, ancientDir string, selected *TransactionIndexStore) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if selected == nil {
 		return errors.New("transaction index orphan cleanup: selected store is nil")
 	}
@@ -167,13 +215,16 @@ func validateSelectedTransactionIndexStore(ancientDir string, selected *Transact
 	if err != nil {
 		return fmt.Errorf("transaction index orphan cleanup: read selected manifest: %w", err)
 	}
-	if err := validateTransactionIndexManifest(manifest); err != nil {
+	if err := validateTransactionIndexManifestContext(ctx, manifest); err != nil {
 		return err
 	}
 	if len(manifest.Runs) != len(selected.runs) {
 		return errors.New("transaction index orphan cleanup: selected store is stale")
 	}
 	for i, declared := range manifest.Runs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		run := selected.runs[i]
 		if run == nil || filepath.Base(run.Path()) != declared.File || run.StartBlock() != declared.StartBlock ||
 			run.EndBlock() != declared.EndBlock || run.Rows() != declared.Rows {
@@ -238,15 +289,27 @@ func PublishTransactionIndexRun(ancientDir string, result TransactionIndexBuildR
 		return fmt.Errorf("transaction index publish: run range [%d,%d) does not continue at %d", result.StartBlock, result.EndBlock, expectedStart)
 	}
 	manifest.Runs = append(manifest.Runs, transactionIndexManifestRun{
-		File:       filepath.Base(result.Path),
-		StartBlock: result.StartBlock,
-		EndBlock:   result.EndBlock,
-		Rows:       result.Rows,
+		File:               filepath.Base(result.Path),
+		StartBlock:         result.StartBlock,
+		EndBlock:           result.EndBlock,
+		Rows:               result.Rows,
+		CompactionLevel:    transactionIndexBaseCompactionLevel(result.EndBlock - result.StartBlock),
+		CompactionLevelSet: true,
 	})
 	return writeTransactionIndexManifest(base, manifest)
 }
 
 func verifyTransactionIndexBuildResult(ancientDir string, result TransactionIndexBuildResult) error {
+	return verifyTransactionIndexBuildResultContext(context.Background(), ancientDir, result)
+}
+
+func verifyTransactionIndexBuildResultContext(ctx context.Context, ancientDir string, result TransactionIndexBuildResult) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	runsDir := filepath.Join(ancientDir, transactionIndexDirectoryName, transactionIndexRunsDirectory)
 	absPath, err := filepath.Abs(result.Path)
 	if err != nil {
@@ -264,7 +327,7 @@ func verifyTransactionIndexBuildResult(ancientDir string, result TransactionInde
 		return fmt.Errorf("transaction index publish: reopen run: %w", err)
 	}
 	defer run.Close()
-	if err := run.Verify(); err != nil {
+	if err := run.VerifyContext(ctx); err != nil {
 		return fmt.Errorf("transaction index publish: verify run: %w", err)
 	}
 	if run.StartBlock() != result.StartBlock || run.EndBlock() != result.EndBlock || run.Rows() != result.Rows || run.Size() != result.FileBytes {
@@ -301,8 +364,18 @@ func readTransactionIndexManifest(base string) (transactionIndexManifest, error)
 }
 
 func validateTransactionIndexManifest(manifest transactionIndexManifest) error {
+	return validateTransactionIndexManifestContext(context.Background(), manifest)
+}
+
+func validateTransactionIndexManifestContext(ctx context.Context, manifest transactionIndexManifest) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	expectedStart := uint64(0)
 	for _, run := range manifest.Runs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if run.StartBlock != expectedStart || run.EndBlock <= run.StartBlock {
 			return fmt.Errorf("transaction index manifest: run range [%d,%d) does not continue at %d", run.StartBlock, run.EndBlock, expectedStart)
 		}
@@ -312,6 +385,14 @@ func validateTransactionIndexManifest(manifest transactionIndexManifest) error {
 		expectedStart = run.EndBlock
 	}
 	return nil
+}
+
+func transactionIndexBaseCompactionLevel(blocks uint64) uint32 {
+	if blocks == 0 {
+		return 0
+	}
+	leaves := uint64(1) + (blocks-1)/TransactionIndexCompactionLeafBlocks
+	return uint32(bits.Len64(leaves - 1))
 }
 
 func (s *TransactionIndexStore) Close() error {

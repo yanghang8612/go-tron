@@ -1,6 +1,7 @@
 package freezer
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -8,9 +9,11 @@ import (
 	"path/filepath"
 )
 
-// CompactTransactionIndexTail geometrically merges the rightmost equal-sized
-// adjacent pair. Normally that is the manifest tail and produces a binary
-// counter layout. Searching backward is important after maintenance was
+// CompactTransactionIndexTail geometrically merges the rightmost adjacent pair
+// in the same persisted compaction generation. Persisting the generation keeps
+// balanced chunks mergeable even when their block counts straddle a power-of-two
+// boundary. Legacy manifests without generation metadata retain the previous
+// size-class rule. Searching backward is important after maintenance was
 // deferred: a tail-only compactor gets permanently stuck on [1,1,2], while
 // merging the earlier pair repairs it to [2,2] and then [4].
 //
@@ -19,7 +22,20 @@ import (
 // the complete transaction hash, so merging fingerprint/location pairs does
 // not weaken correctness.
 func CompactTransactionIndexTail(ancientDir string) (TransactionIndexBuildResult, []string, bool, error) {
+	return CompactTransactionIndexTailContext(context.Background(), ancientDir)
+}
+
+// CompactTransactionIndexTailContext is CompactTransactionIndexTail with
+// cancellation propagated through run verification/build and checked again
+// immediately before manifest publication.
+func CompactTransactionIndexTailContext(ctx context.Context, ancientDir string) (TransactionIndexBuildResult, []string, bool, error) {
 	var zero TransactionIndexBuildResult
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, nil, false, err
+	}
 	base := filepath.Join(ancientDir, transactionIndexDirectoryName)
 	manifest, err := readTransactionIndexManifest(base)
 	if errors.Is(err, os.ErrNotExist) || len(manifest.Runs) < 2 {
@@ -28,13 +44,13 @@ func CompactTransactionIndexTail(ancientDir string) (TransactionIndexBuildResult
 	if err != nil {
 		return zero, nil, false, err
 	}
-	if err := validateTransactionIndexManifest(manifest); err != nil {
+	if err := validateTransactionIndexManifestContext(ctx, manifest); err != nil {
 		return zero, nil, false, err
 	}
 	mergeAt := -1
 	for i := len(manifest.Runs) - 2; i >= 0; i-- {
 		left, right := manifest.Runs[i], manifest.Runs[i+1]
-		if left.EndBlock-left.StartBlock == right.EndBlock-right.StartBlock {
+		if transactionIndexRunsCanMerge(left, right) {
 			mergeAt = i
 			break
 		}
@@ -62,17 +78,42 @@ func CompactTransactionIndexTail(ancientDir string) (TransactionIndexBuildResult
 	}
 
 	mergedPath := TransactionIndexRunPath(ancientDir, left.StartBlock(), right.EndBlock())
-	result, err := buildOrRecoverMergedTransactionIndex(mergedPath, left, right)
+	result, err := buildOrRecoverMergedTransactionIndexContext(ctx, mergedPath, left, right)
 	if err != nil {
 		return zero, nil, false, err
 	}
-	if err := publishTransactionIndexMerge(ancientDir, result, mergeAt, leftDecl, rightDecl); err != nil {
+	if err := publishTransactionIndexMergeContext(ctx, ancientDir, result, mergeAt, leftDecl, rightDecl); err != nil {
 		return zero, nil, false, err
 	}
 	return result, []string{leftPath, rightPath}, true, nil
 }
 
+func transactionIndexRunsCanMerge(left, right transactionIndexManifestRun) bool {
+	if left.CompactionLevelSet || right.CompactionLevelSet {
+		return left.CompactionLevelSet && right.CompactionLevelSet && left.CompactionLevel == right.CompactionLevel
+	}
+	return legacyTransactionIndexRunSizeClass(left.EndBlock-left.StartBlock) == legacyTransactionIndexRunSizeClass(right.EndBlock-right.StartBlock)
+}
+
+func legacyTransactionIndexRunSizeClass(blocks uint64) uint64 {
+	if blocks <= 1 {
+		return 1
+	}
+	class := uint64(1)
+	for class < blocks && class <= ^uint64(0)/2 {
+		class <<= 1
+	}
+	return class
+}
+
 func buildOrRecoverMergedTransactionIndex(path string, left, right *TransactionIndexRun) (TransactionIndexBuildResult, error) {
+	return buildOrRecoverMergedTransactionIndexContext(context.Background(), path, left, right)
+}
+
+func buildOrRecoverMergedTransactionIndexContext(ctx context.Context, path string, left, right *TransactionIndexRun) (TransactionIndexBuildResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	prefixBits := min(left.PrefixBits(), right.PrefixBits())
 	if run, err := OpenTransactionIndexRun(path); err == nil {
 		defer run.Close()
@@ -80,7 +121,7 @@ func buildOrRecoverMergedTransactionIndex(path string, left, right *TransactionI
 			run.PrefixBits() != prefixBits || run.Rows() != left.Rows()+right.Rows() {
 			return TransactionIndexBuildResult{}, fmt.Errorf("transaction index merge: existing run %q has incompatible metadata", path)
 		}
-		if err := run.Verify(); err != nil {
+		if err := run.VerifyContext(ctx); err != nil {
 			return TransactionIndexBuildResult{}, fmt.Errorf("transaction index merge: verify existing run: %w", err)
 		}
 		return TransactionIndexBuildResult{
@@ -95,6 +136,7 @@ func buildOrRecoverMergedTransactionIndex(path string, left, right *TransactionI
 		return TransactionIndexBuildResult{}, err
 	}
 	return BuildTransactionIndexRun(path, TransactionIndexBuildOptions{
+		Context:    ctx,
 		PrefixBits: prefixBits,
 		StartBlock: left.StartBlock(),
 		EndBlock:   right.EndBlock(),
@@ -200,15 +242,25 @@ func syntheticTransactionIndexHash(prefix uint32, fingerprint, tie uint64, prefi
 }
 
 func publishTransactionIndexMerge(ancientDir string, result TransactionIndexBuildResult, mergeAt int, left, right transactionIndexManifestRun) error {
+	return publishTransactionIndexMergeContext(context.Background(), ancientDir, result, mergeAt, left, right)
+}
+
+func publishTransactionIndexMergeContext(ctx context.Context, ancientDir string, result TransactionIndexBuildResult, mergeAt int, left, right transactionIndexManifestRun) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	base := filepath.Join(ancientDir, transactionIndexDirectoryName)
-	if err := verifyTransactionIndexBuildResult(ancientDir, result); err != nil {
+	if err := verifyTransactionIndexBuildResultContext(ctx, ancientDir, result); err != nil {
 		return err
 	}
 	manifest, err := readTransactionIndexManifest(base)
 	if err != nil {
 		return err
 	}
-	if err := validateTransactionIndexManifest(manifest); err != nil {
+	if err := validateTransactionIndexManifestContext(ctx, manifest); err != nil {
 		return err
 	}
 	if mergeAt < 0 || mergeAt+1 >= len(manifest.Runs) || manifest.Runs[mergeAt] != left || manifest.Runs[mergeAt+1] != right {
@@ -223,10 +275,17 @@ func publishTransactionIndexMerge(ancientDir string, result TransactionIndexBuil
 		EndBlock:   result.EndBlock,
 		Rows:       result.Rows,
 	}
+	if left.CompactionLevelSet && right.CompactionLevelSet {
+		merged.CompactionLevel = left.CompactionLevel + 1
+		merged.CompactionLevelSet = true
+	}
 	runs := make([]transactionIndexManifestRun, 0, len(manifest.Runs)-1)
 	runs = append(runs, manifest.Runs[:mergeAt]...)
 	runs = append(runs, merged)
 	runs = append(runs, manifest.Runs[mergeAt+2:]...)
 	manifest.Runs = runs
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return writeTransactionIndexManifest(base, manifest)
 }

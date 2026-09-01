@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -18,6 +20,42 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
+
+// lifecycleFailStageDB intercepts both direct and batched snapshot-stage writes
+// after the immutable manifest is published. This exercises lifecycle retry
+// scheduling with a partially successful forced-busy pass.
+type lifecycleFailStageDB struct {
+	ethdb.KeyValueStore
+	fail atomic.Bool
+	err  error
+}
+
+func (db *lifecycleFailStageDB) Put(key, value []byte) error {
+	if db.fail.Load() && bytes.Equal(key, []byte("stage-progress-v1-"+string(rawdb.StageSnapshotBuild))) {
+		return db.err
+	}
+	return db.KeyValueStore.Put(key, value)
+}
+
+func (db *lifecycleFailStageDB) NewBatch() ethdb.Batch {
+	return &lifecycleFailStageBatch{Batch: db.KeyValueStore.NewBatch(), db: db}
+}
+
+func (db *lifecycleFailStageDB) NewBatchWithSize(size int) ethdb.Batch {
+	return &lifecycleFailStageBatch{Batch: db.KeyValueStore.NewBatchWithSize(size), db: db}
+}
+
+type lifecycleFailStageBatch struct {
+	ethdb.Batch
+	db *lifecycleFailStageDB
+}
+
+func (batch *lifecycleFailStageBatch) Put(key, value []byte) error {
+	if batch.db.fail.Load() && bytes.Equal(key, []byte("stage-progress-v1-"+string(rawdb.StageSnapshotBuild))) {
+		return batch.db.err
+	}
+	return batch.Batch.Put(key, value)
+}
 
 func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
@@ -360,6 +398,84 @@ func TestSnapshotLifecycleRetriesAcceleratedCatchupAfterGateCooldown(t *testing.
 	stats := lifecycle.builder.Snapshot()
 	if stats.SegmentsBuilt != 2 || stats.HistoryAcceleratedBuilds != 2 || stats.HistoryGateDeferred == 0 {
 		t.Fatalf("builder cooldown retry stats = %+v", stats)
+	}
+}
+
+func TestSnapshotLifecyclePreservesAndSchedulesFailedForcedBusyRetry(t *testing.T) {
+	newLifecycle := func(t *testing.T) (*SnapshotLifecycle, *lifecycleFailStageDB) {
+		t.Helper()
+		base := rawdb.NewMemoryDatabase()
+		dir := t.TempDir()
+		for blockNum := uint64(1); blockNum <= 12; blockNum++ {
+			writeSnapPruningChange(t, base, blockNum, blockNum, blockNum)
+		}
+		stageErr := errors.New("injected lifecycle snapshot stage failure")
+		db := &lifecycleFailStageDB{KeyValueStore: base, err: stageErr}
+		db.fail.Store(true)
+		lifecycle := NewSnapshotLifecycle(&fakePruneChain{
+			db: db, solidified: 13, syncRemaining: 1_000, syncRemainingOK: true,
+		}, SnapshotLifecycleConfig{
+			Snapshot: snapshots.Config{
+				Dir:                           dir,
+				Enabled:                       true,
+				HistoryWindow:                 1,
+				BatchBlocks:                   8,
+				BatchTxNums:                   8,
+				CatchupBuildMinInterval:       80 * time.Millisecond,
+				CatchupUnthrottledLagBlocks:   1,
+				CatchupHeavyWorkCooldown:      20 * time.Millisecond,
+				DeferHistoryBuildWhileSyncing: true,
+				MaxDeferredHistoryBlocks:      2,
+				MaxBusyDeferredHistoryBlocks:  4,
+				SyncBuildReady:                func() bool { return false },
+			},
+			Pruner: PrunerConfig{
+				Policy:      SnapPolicy(1, 1),
+				Interval:    time.Hour,
+				SnapshotDir: dir,
+			},
+			Interval: time.Hour,
+		})
+		return lifecycle, db
+	}
+
+	// The synchronous API must not discard the builder's recovery metadata
+	// merely because the ordered pass returns an error.
+	direct, _ := newLifecycle(t)
+	failed, err := direct.OnePass()
+	if err == nil {
+		t.Fatal("forced-busy lifecycle pass unexpectedly succeeded")
+	}
+	if !failed.Snapshot.HistoryForcedBusy || !failed.Snapshot.HistoryBuildAttempted ||
+		failed.Snapshot.HistoryRetryDeadline.IsZero() || failed.Snapshot.HistoryRetryRemaining(time.Now()) <= 0 {
+		t.Fatalf("failed lifecycle snapshot metadata = %+v", failed.Snapshot)
+	}
+
+	// The background loop must use that deadline on the error path. Its normal
+	// interval is one hour, so progress within seconds proves the retry timer,
+	// rather than the coarse maintenance ticker, woke the next pass.
+	lifecycle, db := newLifecycle(t)
+	if err := lifecycle.Start(); err != nil {
+		t.Fatalf("start lifecycle: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := lifecycle.Stop(); err != nil {
+			t.Errorf("stop lifecycle: %v", err)
+		}
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for lifecycle.builder.Snapshot().PassErrors == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if lifecycle.builder.Snapshot().PassErrors == 0 {
+		t.Fatal("timed out waiting for injected forced-busy failure")
+	}
+	db.fail.Store(false)
+	for lifecycle.builder.Snapshot().SegmentsBuilt == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if stats := lifecycle.builder.Snapshot(); stats.SegmentsBuilt == 0 || stats.ForcedBusyAttempts < 2 {
+		t.Fatalf("lifecycle did not retry failed forced-busy work: %+v", stats)
 	}
 }
 

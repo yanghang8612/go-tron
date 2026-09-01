@@ -60,6 +60,38 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 "state/commitment/pipeline/prefetch_critical/wall_nanos": 2_000,
                 "state/commitment/pipeline/prefetch_critical/wait_calls": 4,
                 "state/commitment/pipeline/prefetch_critical/wait_nanos": 800,
+                "state/commitment/pipeline/prefetch_critical/queue_wait_calls": 4,
+                "state/commitment/pipeline/prefetch_critical/queue_wait_nanos": 400,
+                "state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_calls": 2,
+                "state/commitment/pipeline/prefetch_critical/blocked_by_lookahead_nanos": 300,
+                "state/commitment/pipeline/prefetch_critical/queue_high_water": 3,
+                "state/commitment/pipeline/prefetch_lookahead/finish_wait_calls": 2,
+                "state/commitment/pipeline/prefetch_lookahead/finish_wait_nanos": 1_000,
+                "state/commitment/pipeline/prefetch_lookahead/queue_high_water": 5,
+                "chain/freezer/txindex/coverage": 100,
+                "chain/freezer/txindex/debt/blocks": 16_384,
+                "chain/freezer/txindex/prune/blocks": 40,
+                "chain/freezer/txindex/prune/rows": 80,
+                "chain/freezer/txindex/prune/duration": 2_000_000_000,
+                "chain/freezer/txindex/maintenance/admitted": 3,
+                "chain/freezer/txindex/maintenance/deferred": 4,
+                "chain/freezer/txindex/deferred/sync": 2,
+                "chain/freezer/txindex/deferred/catchup": 1,
+                "chain/freezer/txindex/deferred/resource": 1,
+                "state/snapshot/cold/history/forced_busy/passes": 4,
+                "state/snapshot/cold/history/forced_busy/attempts": 3,
+                "state/snapshot/cold/history/forced_busy/builds": 2,
+                "state/snapshot/cold/history/admission/checks": 10,
+                "state/snapshot/cold/history/admission/ready": 6,
+                "state/snapshot/cold/history/admission/busy": 4,
+                "state/snapshot/cold/lastpass/history/batch/blocks": 100,
+                "state/snapshot/cold/lastpass/history/batch/txnums": 200,
+                "state/snapshot/cold/history/forced_busy/last/batch/blocks": 20,
+                "state/snapshot/cold/history/forced_busy/last/batch/txnums": 60,
+                "state/snapshot/cold/history/forced_busy/last/recovery": 500_000_000,
+                "state/snapshot/cold/history/forced_busy/last/duty_cycle_ppm": 250_000,
+                "state/snapshot/cold/history/forced_busy/last/debt_blocks": 1_250,
+                "state/snapshot/cold/history/forced_busy/last/debt_growth_blocks": -25,
                 "cache/block/hit": 90,
                 "cache/block/miss": 10,
                 "cache/table/hit": 80,
@@ -87,6 +119,36 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertAlmostEqual(analysis["singleflightLeaderErrorRatio"], 1 / 90)
         self.assertEqual(analysis["criticalNanosPerPlannedRead"], 100.0)
         self.assertEqual(analysis["criticalWaitNanosPerLane"], 200.0)
+        self.assertEqual(analysis["criticalQueueWaitNanosPerCall"], 100.0)
+        self.assertEqual(analysis["criticalQueueWaitNanosPerBlock"], 20.0)
+        self.assertEqual(analysis["criticalBlockedByLookaheadNanosPerCall"], 150.0)
+        self.assertEqual(analysis["criticalBlockedByLookaheadCallsPerBlock"], 0.1)
+        self.assertEqual(analysis["criticalBlockedByLookaheadCallRatio"], 0.5)
+        self.assertEqual(analysis["finishLookaheadWaitNanosPerCall"], 500.0)
+        self.assertEqual(analysis["finishLookaheadWaitNanosPerBlock"], 50.0)
+        self.assertEqual(analysis["criticalQueueHighWaterPerLane"], 3)
+        self.assertEqual(analysis["lookaheadQueueHighWaterPerLane"], 5)
+        self.assertEqual(analysis["txIndexDebtBlocks"], 16_384)
+        self.assertEqual(analysis["txIndexCoverageBlocksPerBlock"], 5.0)
+        self.assertEqual(analysis["txIndexPrunedBlocksPerBlock"], 2.0)
+        self.assertEqual(analysis["txIndexPrunedRowsPerBlock"], 4.0)
+        self.assertEqual(analysis["txIndexPruneNanosPerPrunedBlock"], 50_000_000.0)
+        self.assertEqual(analysis["txIndexPruneDutyRatio"], 0.2)
+        self.assertEqual(analysis["txIndexMaintenanceAdmittedPerBlock"], 0.15)
+        self.assertEqual(analysis["txIndexMaintenanceDeferredPerBlock"], 0.2)
+        self.assertEqual(analysis["txIndexMaintenanceAdmissionRatio"], 0.6)
+        self.assertEqual(analysis["txIndexSyncDeferredPerBlock"], 0.1)
+        self.assertEqual(analysis["coldSnapshotForcedBuildRatio"], 0.5)
+        self.assertEqual(analysis["coldSnapshotForcedAttemptSuccessRatio"], 2 / 3)
+        self.assertEqual(analysis["coldSnapshotForcedBuildsPerBlock"], 0.1)
+        self.assertEqual(analysis["coldSnapshotAdmissionReadyRatio"], 0.6)
+        self.assertEqual(analysis["coldSnapshotAdmissionBusyRatio"], 0.4)
+        self.assertEqual(analysis["coldSnapshotLastBatchTxNumsPerBlock"], 2.0)
+        self.assertEqual(analysis["coldSnapshotLastForcedBatchTxNumsPerBlock"], 3.0)
+        self.assertEqual(analysis["coldSnapshotLastForcedRecoverySeconds"], 0.5)
+        self.assertEqual(analysis["coldSnapshotLastForcedDutyRatio"], 0.25)
+        self.assertEqual(analysis["coldSnapshotLastForcedDebtBlocks"], 1_250)
+        self.assertEqual(analysis["coldSnapshotLastForcedDebtGrowthBlocks"], -25)
         self.assertAlmostEqual(analysis["blockCacheHitRatio"], 0.9)
 
     def test_build_row_marks_counter_reset_without_negative_delta(self):
@@ -98,6 +160,107 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertEqual(row["status"], "counter-reset")
         self.assertIsNone(row["delta"][name])
         self.assertIn(name, row["counterResets"])
+
+    def test_build_row_marks_monotonic_gauge_reset_without_negative_delta(self):
+        current = {name: None for name in MODULE.ALL_METRICS}
+        name = "chain/freezer/txindex/maintenance/admitted"
+        current[name] = 3
+        previous = {"unix": 100.0, "height": 1, "metrics": {name: 10}}
+        row = MODULE.build_row(101.0, 2, current, previous)
+        self.assertEqual(row["status"], "counter-reset")
+        self.assertIsNone(row["delta"][name])
+        self.assertIn(name, row["counterResets"])
+
+    def test_process_identity_change_discards_all_process_scoped_deltas(self):
+        current = {name: None for name in MODULE.ALL_METRICS}
+        counter = "blockbuffer/commitment_parent/durable/reads"
+        gauge = "chain/freezer/txindex/maintenance/admitted"
+        current.update(
+            {
+                MODULE.PROCESS_IDENTITY_METRIC: 200,
+                counter: 1_000,
+                gauge: 100,
+                "chain/freezer/txindex/debt/blocks": 12_345,
+            }
+        )
+        previous = {
+            "unix": 100.0,
+            "height": 1,
+            "metrics": {
+                MODULE.PROCESS_IDENTITY_METRIC: 100,
+                counter: 10,
+                gauge: 2,
+            },
+        }
+        row = MODULE.build_row(101.0, 2, current, previous)
+        self.assertTrue(row["processRestart"])
+        self.assertEqual(row["status"], "counter-reset")
+        self.assertIn(MODULE.PROCESS_IDENTITY_METRIC, row["counterResets"])
+        self.assertIsNone(row["delta"][counter])
+        self.assertIsNone(row["delta"][gauge])
+        self.assertEqual(row["analysis"]["txIndexDebtBlocks"], 12_345)
+
+    def test_first_identity_sample_remains_bootstrap(self):
+        current = {name: None for name in MODULE.ALL_METRICS}
+        current[MODULE.PROCESS_IDENTITY_METRIC] = 200
+        row = MODULE.build_row(101.0, 2, current, None)
+        self.assertFalse(row["processRestart"])
+        self.assertEqual(row["status"], "bootstrap")
+        self.assertEqual(row["counterResets"], [])
+
+    def test_process_identity_appearance_marks_upgrade_boundary(self):
+        current = {name: None for name in MODULE.ALL_METRICS}
+        counter = "blockbuffer/commitment_parent/durable/reads"
+        current[MODULE.PROCESS_IDENTITY_METRIC] = 200
+        current[counter] = 1_000
+        previous = {"unix": 100.0, "height": 1, "metrics": {counter: 10}}
+        row = MODULE.build_row(101.0, 2, current, previous)
+        self.assertTrue(row["processRestart"])
+        self.assertIsNone(row["delta"][counter])
+        self.assertIn(MODULE.PROCESS_IDENTITY_METRIC, row["counterResets"])
+
+    def test_process_identity_disappearance_marks_downgrade_boundary(self):
+        current = {name: None for name in MODULE.ALL_METRICS}
+        counter = "blockbuffer/commitment_parent/durable/reads"
+        current[counter] = 1_000
+        previous = {
+            "unix": 100.0,
+            "height": 1,
+            "metrics": {MODULE.PROCESS_IDENTITY_METRIC: 200, counter: 10},
+        }
+        row = MODULE.build_row(101.0, 2, current, previous)
+        self.assertTrue(row["processRestart"])
+        self.assertIsNone(row["delta"][counter])
+        self.assertIn(MODULE.PROCESS_IDENTITY_METRIC, row["counterResets"])
+
+    def test_new_metrics_are_missing_safe_for_older_nodes(self):
+        current = {name: None for name in MODULE.ALL_METRICS}
+        previous = {"unix": 100.0, "height": 1, "metrics": {}}
+        row = MODULE.build_row(101.0, 2, current, previous)
+        self.assertEqual(row["status"], "ok")
+        self.assertEqual(row["counterResets"], [])
+        self.assertIsNone(row["analysis"]["criticalQueueWaitNanosPerCall"])
+        self.assertIsNone(row["analysis"]["txIndexPruneDutyRatio"])
+        self.assertIsNone(row["analysis"]["coldSnapshotLastForcedDutyRatio"])
+
+    def test_new_prefixes_and_metric_types_match_exporters(self):
+        self.assertIn("process/", MODULE.METRIC_PREFIXES)
+        self.assertIn("chain/freezer/", MODULE.METRIC_PREFIXES)
+        self.assertIn("state/snapshot/cold/", MODULE.METRIC_PREFIXES)
+        self.assertIn(
+            "state/commitment/pipeline/prefetch_critical/queue_wait_calls",
+            MODULE.COUNTER_METRICS,
+        )
+        self.assertIn(
+            "state/commitment/pipeline/prefetch_critical/queue_high_water",
+            MODULE.POINT_GAUGE_METRICS,
+        )
+        freezer_admitted = "chain/freezer/txindex/maintenance/admitted"
+        self.assertIn(freezer_admitted, MODULE.MONOTONIC_GAUGE_METRICS)
+        self.assertNotIn(freezer_admitted, MODULE.COUNTER_METRICS)
+        cold_duty = "state/snapshot/cold/history/forced_busy/last/duty_cycle_ppm"
+        self.assertIn(cold_duty, MODULE.POINT_GAUGE_METRICS)
+        self.assertNotIn(cold_duty, MODULE.MONOTONIC_GAUGE_METRICS)
 
     def test_with_prefix_replaces_existing_filter(self):
         got = MODULE.with_prefix("http://127.0.0.1:6062/debug/metrics?prefix=old/&x=1", "cache/")
