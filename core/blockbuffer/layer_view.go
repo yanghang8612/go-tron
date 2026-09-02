@@ -172,6 +172,8 @@ type commitmentParentReadContext struct {
 	windowCached           uint64
 	depthCached            [4]uint64
 	depthDurable           [4]uint64
+	exactDepthCached       [4]uint64
+	exactDepthDurable      [4]uint64
 	prefetchPlanned        uint64
 	prefetchOverlay        uint64
 	prefetchCache          uint64
@@ -232,6 +234,8 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.windowCached = 0
 		ctx.depthCached = [4]uint64{}
 		ctx.depthDurable = [4]uint64{}
+		ctx.exactDepthCached = [4]uint64{}
+		ctx.exactDepthDurable = [4]uint64{}
 		ctx.prefetchPlanned = 0
 		ctx.prefetchOverlay = 0
 		ctx.prefetchCache = 0
@@ -679,6 +683,7 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 	depth := len(key) - len(keyPrefix)
 	trunk := depth >= 0 && depth <= baseReadCacheTrunkDepth
 	depthBucket := commitmentParentDeepDepthBucket(depth)
+	exactDepthBucket := commitmentParentExactDepthBucket(depth)
 	keyHash := layerBloomHashBytes(key)
 	if value, found, tomb := lookupLayersNewest(s.inflight, key, keyHash); tomb {
 		ctx.overlayResolved++
@@ -707,6 +712,9 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 			if depthBucket >= 0 {
 				ctx.depthCached[depthBucket]++
 			}
+			if exactDepthBucket >= 0 {
+				ctx.exactDepthCached[exactDepthBucket]++
+			}
 			if usefulPrefetch {
 				if prefetchDepth := commitmentParentPrefetchDepthBucket(depth); prefetchDepth >= 0 {
 					ctx.prefetchDepthUseful[prefetchDepth]++
@@ -725,7 +733,7 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 		}
 		call, leader, share, prefetchLeader := s.flights.acquire(key, keyHash, false)
 		if leader {
-			return s.leadCommitmentParentView(ctx, cursor, key, call, cacheEpoch, cacheable, trunk, depthBucket, fn)
+			return s.leadCommitmentParentView(ctx, cursor, key, call, cacheEpoch, cacheable, trunk, depthBucket, exactDepthBucket, fn)
 		}
 
 		ctx.flightWaiters++
@@ -791,6 +799,7 @@ func (s *commitmentParentReadSession) leadCommitmentParentView(
 	cacheable bool,
 	trunk bool,
 	depthBucket int,
+	exactDepthBucket int,
 	fn func(value []byte, stable bool) error,
 ) (found bool, err error) {
 	completed := false
@@ -818,6 +827,9 @@ func (s *commitmentParentReadSession) leadCommitmentParentView(
 	}
 	if depthBucket >= 0 {
 		ctx.depthDurable[depthBucket]++
+	}
+	if exactDepthBucket >= 0 {
+		ctx.exactDepthDurable[exactDepthBucket]++
 	}
 	ctx.key = key
 	ctx.epoch = cacheEpoch
@@ -869,10 +881,12 @@ func (s *commitmentParentReadSession) Close() error {
 	s.snapshot = nil
 	s.layers = nil
 	s.inflight = nil
+	cache := s.cache
 	s.cache = nil
 	var overlayResolved, cacheResolved, durableReads, durableHits, trunkCached, trunkDurable, windowCached uint64
 	var prefetchPlanned, prefetchOverlay, prefetchCache, prefetchDurable, prefetchHits uint64
 	var depthCached, depthDurable [4]uint64
+	var exactDepthCached, exactDepthDurable [4]uint64
 	var prefetchDepthPlanned, prefetchDepthCache, prefetchDepthDurable, prefetchDepthUseful [2]uint64
 	var flightLeaders, flightWaiters, flightSharedResults, flightSharedForeground, flightSharedPrefetch uint64
 	var flightSharedPresent, flightSharedMissing uint64
@@ -910,6 +924,8 @@ func (s *commitmentParentReadSession) Close() error {
 		for bucket := range depthCached {
 			depthCached[bucket] += ctx.depthCached[bucket]
 			depthDurable[bucket] += ctx.depthDurable[bucket]
+			exactDepthCached[bucket] += ctx.exactDepthCached[bucket]
+			exactDepthDurable[bucket] += ctx.exactDepthDurable[bucket]
 		}
 	}
 	commitmentParentOverlayResolvedCounter.Inc(int64(overlayResolved))
@@ -944,6 +960,11 @@ func (s *commitmentParentReadSession) Close() error {
 	for bucket := range depthCached {
 		commitmentParentDepthCacheCounters[bucket].Inc(int64(depthCached[bucket]))
 		commitmentParentDepthDurableCounters[bucket].Inc(int64(depthDurable[bucket]))
+		commitmentParentExactDepthCacheCounters[bucket].Inc(int64(exactDepthCached[bucket]))
+		commitmentParentExactDepthDurableCounters[bucket].Inc(int64(exactDepthDurable[bucket]))
+	}
+	if cache != nil {
+		cache.maybePublishMetrics()
 	}
 	returnCommitmentParentReadContexts(s.readContexts)
 	s.readContexts = nil
@@ -965,6 +986,13 @@ func commitmentParentDeepDepthBucket(depth int) int {
 	default:
 		return 3
 	}
+}
+
+func commitmentParentExactDepthBucket(depth int) int {
+	if depth < 5 || depth > 8 {
+		return -1
+	}
+	return depth - 5
 }
 
 func commitmentParentPrefetchDepthBucket(depth int) int {

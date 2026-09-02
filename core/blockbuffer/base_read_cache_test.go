@@ -131,6 +131,170 @@ func testBaseReadCacheSet(c *baseReadCache, key, value []byte) {
 	panic("base-read cache test fill did not complete admission")
 }
 
+func storeBaseReadCacheEntry(t *testing.T, c *baseReadCache, key, value []byte, prefetch bool) *baseReadCacheEntry {
+	t.Helper()
+	_, _, epoch := c.getWithEpoch(key)
+	stored := false
+	if prefetch {
+		_, stored = c.prefetchIfEpoch(key, value, epoch)
+	} else {
+		stored = c.storeIfEpoch(key, value, epoch)
+	}
+	if !stored {
+		t.Fatalf("cache did not retain %q", key)
+	}
+	entry := c.shards[baseReadCacheShardIndex(key)].entries[string(key)]
+	if entry == nil {
+		t.Fatalf("retained key %q has no entry", key)
+	}
+	return entry
+}
+
+func TestBaseReadCacheOccupancyStatsTrackResidentClasses(t *testing.T) {
+	prefix := []byte(rawdb.CommitmentBranchKeyPrefix)
+	c := newBaseReadCacheWithTrunk(1<<20, baseReadCacheTrunkDepth, rawdb.CommitmentBranchKeyPrefix)
+	value := []byte("branch-value")
+	trunkKey := append(append([]byte(nil), prefix...), bytes.Repeat([]byte{1}, 4)...)
+	windowKey := append(append([]byte(nil), prefix...), bytes.Repeat([]byte{2}, 5)...)
+	tailKey := append(append([]byte(nil), prefix...), bytes.Repeat([]byte{3}, 6)...)
+	otherKey := []byte("flat-latest-occupancy")
+
+	trunk := storeBaseReadCacheEntry(t, c, trunkKey, value, false)
+	window := storeBaseReadCacheEntry(t, c, windowKey, value, false)
+	windowShard := &c.shards[baseReadCacheShardIndex(windowKey)]
+	if got := windowShard.windowAdmissions; got != 1 {
+		t.Fatalf("window admissions = %d, want 1", got)
+	}
+	tail := storeBaseReadCacheEntry(t, c, tailKey, value, true)
+	other := storeBaseReadCacheEntry(t, c, otherKey, value, true)
+	stats := c.stats()
+	if stats.capacity != 1<<20 || stats.budgets != [3]int64{1 << 17, 1 << 17, 1 << 18} {
+		t.Fatalf("cache capacity/budgets = %d/%v", stats.capacity, stats.budgets)
+	}
+	wantCharges := [4]int64{int64(trunk.charge), int64(window.charge), int64(tail.charge), int64(other.charge)}
+	for class := range stats.entries {
+		if stats.entries[class] != 1 || stats.bytes[class] != wantCharges[class] {
+			t.Errorf("class %d occupancy = %d entries/%d bytes, want 1/%d", class, stats.entries[class], stats.bytes[class], wantCharges[class])
+		}
+	}
+
+	windowShard.mu.Lock()
+	windowShard.promoteWindowEntry(window)
+	windowShard.mu.Unlock()
+	stats = c.stats()
+	if stats.entries[baseReadCacheStatsWindow] != 0 || stats.bytes[baseReadCacheStatsWindow] != 0 {
+		t.Fatalf("promoted window occupancy = %d/%d, want zero", stats.entries[baseReadCacheStatsWindow], stats.bytes[baseReadCacheStatsWindow])
+	}
+	if stats.entries[baseReadCacheStatsTail] != 2 || stats.bytes[baseReadCacheStatsTail] != int64(window.charge+tail.charge) {
+		t.Fatalf("promoted tail occupancy = %d/%d, want 2/%d", stats.entries[baseReadCacheStatsTail], stats.bytes[baseReadCacheStatsTail], window.charge+tail.charge)
+	}
+
+	c.maybePublishMetrics()
+	for class := range stats.entries {
+		if got := baseReadCacheOccupancyGauges[class][0].Snapshot().Value(); got != stats.entries[class] {
+			t.Errorf("class %d entries gauge = %d, want %d", class, got, stats.entries[class])
+		}
+		if got := baseReadCacheOccupancyGauges[class][1].Snapshot().Value(); got != stats.bytes[class] {
+			t.Errorf("class %d bytes gauge = %d, want %d", class, got, stats.bytes[class])
+		}
+	}
+	if got := baseReadCacheCapacityGauge.Snapshot().Value(); got != stats.capacity {
+		t.Errorf("capacity gauge = %d, want %d", got, stats.capacity)
+	}
+	for tier := range stats.budgets {
+		if got := baseReadCacheBudgetGauges[tier].Snapshot().Value(); got != stats.budgets[tier] {
+			t.Errorf("tier %d budget gauge = %d, want %d", tier, got, stats.budgets[tier])
+		}
+	}
+	if got := baseReadCacheWindowAdmittedGauge.Snapshot().Value(); got != stats.windowAdmissions {
+		t.Errorf("window admitted gauge = %d, want %d", got, stats.windowAdmissions)
+	}
+
+	for _, key := range [][]byte{trunkKey, windowKey, tailKey, otherKey} {
+		c.del(key)
+	}
+	stats = c.stats()
+	if stats.entries != [4]int64{} || stats.bytes != [4]int64{} {
+		t.Fatalf("post-delete occupancy entries=%v bytes=%v", stats.entries, stats.bytes)
+	}
+	c.clear()
+	for class := range stats.entries {
+		if got := baseReadCacheOccupancyGauges[class][0].Snapshot().Value(); got != 0 {
+			t.Errorf("class %d entries gauge after clear = %d, want 0", class, got)
+		}
+		if got := baseReadCacheOccupancyGauges[class][1].Snapshot().Value(); got != 0 {
+			t.Errorf("class %d bytes gauge after clear = %d, want 0", class, got)
+		}
+	}
+	if got := c.metricsPublishSequence.Load(); got != 0 {
+		t.Errorf("metrics publish sequence after clear = %d, want 0", got)
+	}
+}
+
+func TestBaseReadCacheMetricsSnapshotNeverWaitsForBusyShard(t *testing.T) {
+	c := newBaseReadCacheWithTrunk(1<<20, baseReadCacheTrunkDepth, rawdb.CommitmentBranchKeyPrefix)
+	s := &c.shards[0]
+	s.mu.Lock()
+	if _, ok := c.tryStats(); ok {
+		s.mu.Unlock()
+		t.Fatal("tryStats succeeded while a shard write lock was held")
+	}
+	c.maybePublishMetrics()
+	if got := c.metricsPublishSequence.Load(); got != 0 {
+		s.mu.Unlock()
+		t.Fatalf("busy snapshot publish sequence = %d, want retry state 0", got)
+	}
+	s.mu.Unlock()
+	c.maybePublishMetrics()
+	if got := c.metricsPublishSequence.Load(); got != 1 {
+		t.Fatalf("successful retry publish sequence = %d, want 1", got)
+	}
+}
+
+func TestBaseReadCacheReconfigurationPublishesCurrentOwner(t *testing.T) {
+	buf := New(nil)
+	buf.SetBaseReadCacheSizeWithTrunk(1<<20, baseReadCacheTrunkDepth, rawdb.CommitmentBranchKeyPrefix)
+	if got := baseReadCacheCapacityGauge.Snapshot().Value(); got != 1<<20 {
+		t.Fatalf("configured capacity gauge = %d, want %d", got, 1<<20)
+	}
+	buf.SetBaseReadCacheSize(0)
+	if got := baseReadCacheCapacityGauge.Snapshot().Value(); got != 0 {
+		t.Fatalf("disabled capacity gauge = %d, want 0", got)
+	}
+	for tier := range baseReadCacheBudgetGauges {
+		if got := baseReadCacheBudgetGauges[tier].Snapshot().Value(); got != 0 {
+			t.Errorf("disabled tier %d budget gauge = %d, want 0", tier, got)
+		}
+	}
+}
+
+func TestBaseReadCacheWindowFlushRefreshUpdatesRetainedBytes(t *testing.T) {
+	prefix := []byte(rawdb.CommitmentBranchKeyPrefix)
+	c := newBaseReadCacheWithTrunk(1<<20, baseReadCacheTrunkDepth, rawdb.CommitmentBranchKeyPrefix)
+	key := append(append([]byte(nil), prefix...), bytes.Repeat([]byte{4}, 5)...)
+	entry := storeBaseReadCacheEntry(t, c, key, []byte("small"), false)
+	s := &c.shards[baseReadCacheShardIndex(key)]
+	if !entry.window || s.windowEntries != 1 || s.windowUsed != entry.charge {
+		t.Fatalf("initial window accounting entry=%p count=%d used=%d", entry, s.windowEntries, s.windowUsed)
+	}
+
+	c.setFlushed(string(key), bytes.Repeat([]byte{5}, 512))
+	if !entry.window || s.windowEntries != 1 || s.windowUsed != entry.charge {
+		t.Fatalf("grown window accounting count=%d used=%d charge=%d", s.windowEntries, s.windowUsed, entry.charge)
+	}
+	if _, found, _ := c.getWithEpoch(key); !found {
+		t.Fatal("grown window entry disappeared")
+	}
+	c.setFlushed(string(key), []byte("tiny"))
+	if !entry.window || s.windowEntries != 1 || s.windowUsed != entry.charge {
+		t.Fatalf("shrunk window accounting count=%d used=%d charge=%d", s.windowEntries, s.windowUsed, entry.charge)
+	}
+	stats := c.stats()
+	if stats.entries[baseReadCacheStatsWindow] != 1 || stats.bytes[baseReadCacheStatsWindow] != int64(entry.charge) {
+		t.Fatalf("window stats after refresh = %d/%d, want 1/%d", stats.entries[baseReadCacheStatsWindow], stats.bytes[baseReadCacheStatsWindow], entry.charge)
+	}
+}
+
 func TestBaseReadCache_TwoHitAdmissionRejectsOneHitScan(t *testing.T) {
 	c := newBaseReadCache(1 << 20)
 	value := []byte("durable-value")

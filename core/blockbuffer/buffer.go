@@ -79,14 +79,39 @@ var (
 	commitmentParentPrefetchUsefulCounter        = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/useful_hits", nil)
 	baseReadCacheWindowPromotedCounter           = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/promoted", nil)
 	baseReadCacheWindowEvictedCounter            = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/evicted", nil)
+	baseReadCacheWindowAdmittedGauge             = metrics.NewRegisteredGauge("blockbuffer/base_cache/window/admitted", nil)
 	baseReadCacheWindowAdmissionBypassedCounter  = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_bypassed", nil)
 	baseReadCacheWindowAdmissionThrottledCounter = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_throttled", nil)
 	baseReadCacheWindowAdmissionRelaxedCounter   = metrics.NewRegisteredCounter("blockbuffer/base_cache/window/admission_relaxed", nil)
 	baseReadCachePrefetchUsefulCounter           = metrics.NewRegisteredCounter("blockbuffer/base_cache/prefetch/useful_hits", nil)
-	flushFamilyOpsCounters                       = newFlushFamilyCounters("sampled_ops")
-	flushFamilyBytesCounters                     = newFlushFamilyCounters("sampled_bytes")
-	flushFamilySampledGroupsCounter              = metrics.NewRegisteredCounter("blockbuffer/flush/family/sampled_groups", nil)
-	commitmentParentDepthCacheCounters           = [...]*metrics.Counter{
+	baseReadCacheOccupancyGauges                 = [...][2]*metrics.Gauge{
+		{
+			metrics.NewRegisteredGauge("blockbuffer/base_cache/trunk/entries", nil),
+			metrics.NewRegisteredGauge("blockbuffer/base_cache/trunk/bytes", nil),
+		},
+		{
+			metrics.NewRegisteredGauge("blockbuffer/base_cache/window/entries", nil),
+			metrics.NewRegisteredGauge("blockbuffer/base_cache/window/bytes", nil),
+		},
+		{
+			metrics.NewRegisteredGauge("blockbuffer/base_cache/tail/entries", nil),
+			metrics.NewRegisteredGauge("blockbuffer/base_cache/tail/bytes", nil),
+		},
+		{
+			metrics.NewRegisteredGauge("blockbuffer/base_cache/other/entries", nil),
+			metrics.NewRegisteredGauge("blockbuffer/base_cache/other/bytes", nil),
+		},
+	}
+	baseReadCacheCapacityGauge = metrics.NewRegisteredGauge("blockbuffer/base_cache/capacity/bytes", nil)
+	baseReadCacheBudgetGauges  = [...]*metrics.Gauge{
+		metrics.NewRegisteredGauge("blockbuffer/base_cache/trunk/budget/bytes", nil),
+		metrics.NewRegisteredGauge("blockbuffer/base_cache/window/budget/bytes", nil),
+		metrics.NewRegisteredGauge("blockbuffer/base_cache/other/budget/bytes", nil),
+	}
+	flushFamilyOpsCounters             = newFlushFamilyCounters("sampled_ops")
+	flushFamilyBytesCounters           = newFlushFamilyCounters("sampled_bytes")
+	flushFamilySampledGroupsCounter    = metrics.NewRegisteredCounter("blockbuffer/flush/family/sampled_groups", nil)
+	commitmentParentDepthCacheCounters = [...]*metrics.Counter{
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_5_8/cache_resolved", nil),
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_9_16/cache_resolved", nil),
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_17_32/cache_resolved", nil),
@@ -97,6 +122,18 @@ var (
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_9_16/durable_reads", nil),
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_17_32/durable_reads", nil),
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_33_plus/durable_reads", nil),
+	}
+	commitmentParentExactDepthCacheCounters = [...]*metrics.Counter{
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_5/cache_resolved", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_6/cache_resolved", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_7/cache_resolved", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_8/cache_resolved", nil),
+	}
+	commitmentParentExactDepthDurableCounters = [...]*metrics.Counter{
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_5/durable_reads", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_6/durable_reads", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_7/durable_reads", nil),
+		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/depth_8/durable_reads", nil),
 	}
 	commitmentParentPrefetchDepthPlannedCounters = [...]*metrics.Counter{
 		metrics.NewRegisteredCounter("blockbuffer/commitment_parent/prefetch/depth_5/planned", nil),
@@ -1143,11 +1180,20 @@ func (b *Buffer) setBaseReadCacheSize(sizeBytes, trunkDepth int, flushAdmissionP
 	}
 	b.mu.Lock()
 	old := b.baseReadCache
-	b.baseReadCache = newBaseReadCacheWithTrunk(sizeBytes, trunkDepth, flushAdmissionPrefix...)
+	current := newBaseReadCacheWithTrunk(sizeBytes, trunkDepth, flushAdmissionPrefix...)
+	b.baseReadCache = current
 	b.publishReadViewLocked()
 	b.mu.Unlock()
 	if old != nil {
 		old.clear()
+	}
+	// old.clear publishes its final empty state. Re-publish the installed owner
+	// afterwards so reconfiguration (including disabling the cache) cannot leave
+	// process gauges describing the retired cache's capacity and budgets.
+	if current != nil {
+		publishBaseReadCacheMetrics(current.stats())
+	} else {
+		publishBaseReadCacheMetrics(baseReadCacheStats{})
 	}
 }
 

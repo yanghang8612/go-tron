@@ -22,6 +22,7 @@ METRIC_PREFIXES = (
     "level/",
     "disk/physical/read/sst/",
     "blockbuffer/commitment_parent/",
+    "blockbuffer/base_cache/",
     "state/commitment/",
     "state/snapshot/commitment_branch/",
     "ancient/",
@@ -156,6 +157,45 @@ STATE_CODE_CACHE_COUNTER_METRICS = (
 STATE_CODE_CACHE_BYTES_METRIC = "state/code_cache/bytes"
 COLD_COMPACTION_ACTIVE_METRIC = "state/snapshot/cold/compaction/current/active"
 
+EXACT_DEPTH_METRICS = {
+    "depth_{}".format(depth): {
+        "cache": "blockbuffer/commitment_parent/depth_{}/cache_resolved".format(depth),
+        "durable": "blockbuffer/commitment_parent/depth_{}/durable_reads".format(depth),
+    }
+    for depth in range(5, 9)
+}
+EXACT_DEPTH_COUNTER_METRICS = tuple(
+    name for metrics in EXACT_DEPTH_METRICS.values() for name in metrics.values()
+)
+BASE_CACHE_WINDOW_COUNTER_METRICS = {
+    "promoted": "blockbuffer/base_cache/window/promoted",
+    "evicted": "blockbuffer/base_cache/window/evicted",
+    "admission_bypassed": "blockbuffer/base_cache/window/admission_bypassed",
+    "admission_throttled": "blockbuffer/base_cache/window/admission_throttled",
+    "admission_relaxed": "blockbuffer/base_cache/window/admission_relaxed",
+}
+BASE_CACHE_WINDOW_ADMITTED_METRIC = "blockbuffer/base_cache/window/admitted"
+BASE_CACHE_OCCUPANCY_METRICS = {
+    tier: {
+        unit: "blockbuffer/base_cache/{}/{}".format(tier, unit)
+        for unit in ("entries", "bytes")
+    }
+    for tier in ("trunk", "window", "tail", "other")
+}
+BASE_CACHE_OCCUPANCY_POINT_METRICS = tuple(
+    name
+    for metrics in BASE_CACHE_OCCUPANCY_METRICS.values()
+    for name in metrics.values()
+)
+BASE_CACHE_CAPACITY_METRIC = "blockbuffer/base_cache/capacity/bytes"
+BASE_CACHE_BUDGET_METRICS = {
+    tier: "blockbuffer/base_cache/{}/budget/bytes".format(tier)
+    for tier in ("trunk", "window", "other")
+}
+BASE_CACHE_CAPACITY_POINT_METRICS = (BASE_CACHE_CAPACITY_METRIC,) + tuple(
+    BASE_CACHE_BUDGET_METRICS.values()
+)
+
 
 def physical_read_group(output_prefix):
     for group in PHYSICAL_READ_METRIC_GROUPS:
@@ -226,7 +266,9 @@ COUNTER_METRICS = (
     "state/commitment/pipeline/prefetch_lookahead/wall_nanos",
     "state/commitment/pipeline/prefetch_lookahead/finish_wait_calls",
     "state/commitment/pipeline/prefetch_lookahead/finish_wait_nanos",
-) + (PEBBLE_COMPACTION_INPUT_METRIC,) + PHYSICAL_READ_COUNTER_METRICS + (
+) + EXACT_DEPTH_COUNTER_METRICS + tuple(BASE_CACHE_WINDOW_COUNTER_METRICS.values()) + (
+    PEBBLE_COMPACTION_INPUT_METRIC,
+) + PHYSICAL_READ_COUNTER_METRICS + (
     PEBBLE_COMMITMENT_CURSOR_COUNTER_METRICS
     + SST_FD_ACCESS_COUNTER_METRICS
     + SST_PREFETCH_COUNTER_METRICS
@@ -270,7 +312,7 @@ MONOTONIC_GAUGE_METRICS = (
     "filter/miss",
 ) + tuple(
     PEBBLE_LEVEL_COMPACTION_READ_METRICS.values()
-) + FREEZER_V2_MONOTONIC_METRICS
+) + FREEZER_V2_MONOTONIC_METRICS + (BASE_CACHE_WINDOW_ADMITTED_METRIC,)
 
 POINT_GAUGE_METRICS = (
     PROCESS_IDENTITY_METRIC,
@@ -293,7 +335,7 @@ POINT_GAUGE_METRICS = (
     STATE_CODE_CACHE_BYTES_METRIC,
     COLD_COMPACTION_ACTIVE_METRIC,
     "iter/count",
-)
+) + BASE_CACHE_OCCUPANCY_POINT_METRICS + BASE_CACHE_CAPACITY_POINT_METRICS
 
 GAUGE_METRICS = MONOTONIC_GAUGE_METRICS + POINT_GAUGE_METRICS
 ALL_METRICS = COUNTER_METRICS + GAUGE_METRICS
@@ -582,6 +624,194 @@ def build_sst_prefetch_analysis(current, deltas, interval_blocks):
     }
 
 
+def build_exact_depth_analysis(current, deltas, interval_blocks):
+    current_present = sum(
+        1
+        for metrics in EXACT_DEPTH_METRICS.values()
+        for name in metrics.values()
+        if current.get(name) is not None
+    )
+    delta_present = sum(
+        1
+        for metrics in EXACT_DEPTH_METRICS.values()
+        for name in metrics.values()
+        if deltas.get(name) is not None
+    )
+    cached = {}
+    durable = {}
+    resolved = {}
+    durable_ratios = {}
+    for depth, metrics in EXACT_DEPTH_METRICS.items():
+        cached[depth] = deltas.get(metrics["cache"])
+        durable[depth] = deltas.get(metrics["durable"])
+        resolved[depth] = positive_sum(cached[depth], durable[depth])
+        durable_ratios[depth] = safe_ratio(durable[depth], resolved[depth])
+
+    exact_cache_total = positive_sum(*(cached[depth] for depth in EXACT_DEPTH_METRICS))
+    exact_durable_total = positive_sum(*(durable[depth] for depth in EXACT_DEPTH_METRICS))
+    durable_shares = {
+        depth: safe_ratio(durable[depth], exact_durable_total)
+        for depth in EXACT_DEPTH_METRICS
+    }
+    aggregate_cache = deltas.get(
+        "blockbuffer/commitment_parent/depth_5_8/cache_resolved"
+    )
+    aggregate_durable = deltas.get(
+        "blockbuffer/commitment_parent/depth_5_8/durable_reads"
+    )
+    return {
+        "foregroundExactDepthMetricCoverageRatio": safe_ratio(
+            current_present, len(EXACT_DEPTH_COUNTER_METRICS)
+        ),
+        "foregroundExactDepthIntervalCoverageRatio": safe_ratio(
+            delta_present, len(EXACT_DEPTH_COUNTER_METRICS)
+        ),
+        "foregroundExactDepthCacheResolvedPerBlock": {
+            depth: safe_ratio(value, interval_blocks) for depth, value in cached.items()
+        },
+        "foregroundExactDepthDurableReadsPerBlock": {
+            depth: safe_ratio(value, interval_blocks) for depth, value in durable.items()
+        },
+        "foregroundExactDepthResolvedPerBlock": {
+            depth: safe_ratio(value, interval_blocks) for depth, value in resolved.items()
+        },
+        "foregroundExactDepthDurableRatio": durable_ratios,
+        "foregroundExactDepthDurableReadShare": durable_shares,
+        "foregroundExactDepthCacheResolvedPerBlockTotal": safe_ratio(
+            exact_cache_total, interval_blocks
+        ),
+        "foregroundExactDepthDurableReadsPerBlockTotal": safe_ratio(
+            exact_durable_total, interval_blocks
+        ),
+        # Exact metrics repeat the old depth_5_8 parent bucket. Ratios near one
+        # verify exporter/scrape consistency; neither side belongs in totals twice.
+        "foregroundDepth5To8CacheReconciliationRatio": safe_ratio(
+            exact_cache_total, aggregate_cache
+        ),
+        "foregroundDepth5To8DurableReconciliationRatio": safe_ratio(
+            exact_durable_total, aggregate_durable
+        ),
+    }
+
+
+def build_base_cache_analysis(current, previous_metrics, deltas, interval_blocks, same_process):
+    window = BASE_CACHE_WINDOW_COUNTER_METRICS
+    promoted = deltas.get(window["promoted"])
+    evicted = deltas.get(window["evicted"])
+    throttled = deltas.get(window["admission_throttled"])
+    relaxed = deltas.get(window["admission_relaxed"])
+    result = {
+        "baseCacheWindowAdmittedPerBlock": safe_ratio(
+            deltas.get(BASE_CACHE_WINDOW_ADMITTED_METRIC), interval_blocks
+        ),
+        "baseCacheWindowPromotedPerBlock": safe_ratio(promoted, interval_blocks),
+        "baseCacheWindowEvictedPerBlock": safe_ratio(evicted, interval_blocks),
+        "baseCacheWindowAdmissionBypassedPerBlock": safe_ratio(
+            deltas.get(window["admission_bypassed"]), interval_blocks
+        ),
+        "baseCacheWindowThrottleAdjustmentsPerBlock": safe_ratio(
+            throttled, interval_blocks
+        ),
+        "baseCacheWindowRelaxAdjustmentsPerBlock": safe_ratio(relaxed, interval_blocks),
+        "baseCacheWindowOutcomePromotionRatio": safe_ratio(
+            promoted, positive_sum(promoted, evicted)
+        ),
+        "baseCacheWindowThrottleAdjustmentShare": safe_ratio(
+            throttled, positive_sum(throttled, relaxed)
+        ),
+        "baseCacheWindowCacheResolvedPerBlock": safe_ratio(
+            deltas.get("blockbuffer/commitment_parent/window/cache_resolved"),
+            interval_blocks,
+        ),
+        "baseCacheWindowCacheResolvedShare": safe_ratio(
+            deltas.get("blockbuffer/commitment_parent/window/cache_resolved"),
+            deltas.get("blockbuffer/commitment_parent/cache/resolved"),
+        ),
+    }
+
+    occupancy_end = {}
+    occupancy_start = {}
+    occupancy_change = {}
+    for tier, metrics in BASE_CACHE_OCCUPANCY_METRICS.items():
+        occupancy_end[tier] = {}
+        occupancy_start[tier] = {}
+        occupancy_change[tier] = {}
+        for unit, name in metrics.items():
+            value = current.get(name)
+            old = previous_metrics.get(name)
+            occupancy_end[tier][unit] = value
+            if (
+                same_process
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and isinstance(old, (int, float))
+                and not isinstance(old, bool)
+            ):
+                occupancy_start[tier][unit] = old
+                occupancy_change[tier][unit] = value - old
+            else:
+                occupancy_start[tier][unit] = None
+                occupancy_change[tier][unit] = None
+
+    totals_end = {}
+    totals_start = {}
+    totals_change = {}
+    for unit in ("entries", "bytes"):
+        totals_end[unit] = positive_sum(
+            *(occupancy_end[tier][unit] for tier in BASE_CACHE_OCCUPANCY_METRICS)
+        )
+        totals_start[unit] = positive_sum(
+            *(occupancy_start[tier][unit] for tier in BASE_CACHE_OCCUPANCY_METRICS)
+        )
+        totals_change[unit] = positive_sum(
+            *(occupancy_change[tier][unit] for tier in BASE_CACHE_OCCUPANCY_METRICS)
+        )
+
+    result.update(
+        {
+            "baseCacheOccupancyMetricCoverageRatio": safe_ratio(
+                sum(
+                    1
+                    for metrics in BASE_CACHE_OCCUPANCY_METRICS.values()
+                    for name in metrics.values()
+                    if current.get(name) is not None
+                ),
+                len(BASE_CACHE_OCCUPANCY_POINT_METRICS),
+            ),
+            "baseCacheOccupancyEnd": occupancy_end,
+            "baseCacheOccupancyStart": occupancy_start,
+            "baseCacheOccupancyChange": occupancy_change,
+            "baseCacheOccupancyTotalEnd": totals_end,
+            "baseCacheOccupancyTotalStart": totals_start,
+            "baseCacheOccupancyTotalChange": totals_change,
+            "baseCacheWindowResidentByteShare": safe_ratio(
+                occupancy_end["window"]["bytes"], totals_end["bytes"]
+            ),
+            "baseCacheRetainedChargeBytesPerEntry": safe_ratio(
+                totals_end["bytes"], totals_end["entries"]
+            ),
+            "baseCacheCapacityBytes": current.get(BASE_CACHE_CAPACITY_METRIC),
+            "baseCacheOccupancyRatio": safe_ratio(
+                totals_end["bytes"], current.get(BASE_CACHE_CAPACITY_METRIC)
+            ),
+            "baseCacheTierBudgetBytes": {
+                tier: current.get(name)
+                for tier, name in BASE_CACHE_BUDGET_METRICS.items()
+            },
+            # trunk/window are hard reservations. Other is a soft target that
+            # may be borrowed, so its ratio may exceed one without violating
+            # the total cache capacity.
+            "baseCacheTierBudgetOccupancyRatio": {
+                tier: safe_ratio(
+                    occupancy_end[tier]["bytes"], current.get(name)
+                )
+                for tier, name in BASE_CACHE_BUDGET_METRICS.items()
+            },
+        }
+    )
+    return result
+
+
 def build_row(now, height, current, previous):
     previous_metrics = previous.get("metrics", {}) if isinstance(previous, dict) else {}
     if not isinstance(previous_metrics, dict):
@@ -615,6 +845,12 @@ def build_row(now, height, current, previous):
     process_restart = isinstance(previous, dict) and (
         previous_process_valid != current_process_valid
         or (previous_process_valid and current_process_valid and current_process != previous_process)
+    )
+    same_process = (
+        isinstance(previous, dict)
+        and previous_process_valid
+        and current_process_valid
+        and current_process == previous_process
     )
     if process_restart:
         # A per-metric decrease is insufficient: a hot counter may catch up to
@@ -878,6 +1114,12 @@ def build_row(now, height, current, previous):
     analysis.update(build_pebble_compaction_analysis(current, deltas, interval_blocks, interval))
     analysis.update(build_sst_fd_access_analysis(current, deltas, interval_blocks))
     analysis.update(build_sst_prefetch_analysis(current, deltas, interval_blocks))
+    analysis.update(build_exact_depth_analysis(current, deltas, interval_blocks))
+    analysis.update(
+        build_base_cache_analysis(
+            current, previous_metrics, deltas, interval_blocks, same_process
+        )
+    )
     return {
         "timestamp": dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(),
         "unix": now,

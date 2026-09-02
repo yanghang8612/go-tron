@@ -446,6 +446,11 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertIsNone(row["analysis"]["stateCodeCacheBytes"])
         self.assertIsNone(row["analysis"]["txIndexPruneDutyRatio"])
         self.assertIsNone(row["analysis"]["coldSnapshotLastForcedDutyRatio"])
+        self.assertEqual(row["analysis"]["foregroundExactDepthMetricCoverageRatio"], 0.0)
+        self.assertIsNone(row["analysis"]["foregroundExactDepthDurableRatio"]["depth_5"])
+        self.assertEqual(row["analysis"]["baseCacheOccupancyMetricCoverageRatio"], 0.0)
+        self.assertIsNone(row["analysis"]["baseCacheCapacityBytes"])
+        self.assertIsNone(row["analysis"]["baseCacheOccupancyRatio"])
 
     def test_partial_physical_metrics_report_coverage_without_inventing_ratios(self):
         current = {name: None for name in MODULE.ALL_METRICS}
@@ -498,6 +503,7 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertIn("compact/", MODULE.METRIC_PREFIXES)
         self.assertIn("level/", MODULE.METRIC_PREFIXES)
         self.assertIn("disk/physical/read/sst/", MODULE.METRIC_PREFIXES)
+        self.assertIn("blockbuffer/base_cache/", MODULE.METRIC_PREFIXES)
         self.assertIn("chain/freezer/", MODULE.METRIC_PREFIXES)
         self.assertIn("state/snapshot/cold/", MODULE.METRIC_PREFIXES)
         self.assertIn("state/snapshot/commitment_branch/", MODULE.METRIC_PREFIXES)
@@ -534,6 +540,166 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertEqual(len(MODULE.SST_PREFETCH_COUNTER_METRICS), 3)
         for name in MODULE.SST_PREFETCH_COUNTER_METRICS:
             self.assertIn(name, MODULE.COUNTER_METRICS)
+        for name in MODULE.EXACT_DEPTH_COUNTER_METRICS:
+            self.assertIn(name, MODULE.COUNTER_METRICS)
+            self.assertNotIn(name, MODULE.POINT_GAUGE_METRICS)
+        for name in MODULE.BASE_CACHE_WINDOW_COUNTER_METRICS.values():
+            self.assertIn(name, MODULE.COUNTER_METRICS)
+            self.assertNotIn(name, MODULE.POINT_GAUGE_METRICS)
+        self.assertIn(
+            MODULE.BASE_CACHE_WINDOW_ADMITTED_METRIC,
+            MODULE.MONOTONIC_GAUGE_METRICS,
+        )
+        self.assertNotIn(
+            MODULE.BASE_CACHE_WINDOW_ADMITTED_METRIC,
+            MODULE.COUNTER_METRICS,
+        )
+        for name in (
+            MODULE.BASE_CACHE_OCCUPANCY_POINT_METRICS
+            + MODULE.BASE_CACHE_CAPACITY_POINT_METRICS
+        ):
+            self.assertIn(name, MODULE.POINT_GAUGE_METRICS)
+            self.assertNotIn(name, MODULE.COUNTER_METRICS)
+
+    def test_exact_depth_window_and_occupancy_analysis(self):
+        previous_metrics = {name: 0 for name in MODULE.COUNTER_METRICS}
+        previous_metrics[MODULE.PROCESS_IDENTITY_METRIC] = 100
+        current = {name: 0 for name in MODULE.COUNTER_METRICS}
+        current[MODULE.PROCESS_IDENTITY_METRIC] = 100
+        exact = {
+            "depth_5": (25, 75),
+            "depth_6": (60, 40),
+            "depth_7": (80, 20),
+            "depth_8": (90, 10),
+        }
+        for depth, values in exact.items():
+            current[MODULE.EXACT_DEPTH_METRICS[depth]["cache"]] = values[0]
+            current[MODULE.EXACT_DEPTH_METRICS[depth]["durable"]] = values[1]
+        current["blockbuffer/commitment_parent/depth_5_8/cache_resolved"] = 255
+        current["blockbuffer/commitment_parent/depth_5_8/durable_reads"] = 145
+        current["blockbuffer/commitment_parent/cache/resolved"] = 400
+        current["blockbuffer/commitment_parent/window/cache_resolved"] = 100
+        previous_metrics[MODULE.BASE_CACHE_WINDOW_ADMITTED_METRIC] = 0
+        current[MODULE.BASE_CACHE_WINDOW_ADMITTED_METRIC] = 120
+        current[MODULE.BASE_CACHE_WINDOW_COUNTER_METRICS["promoted"]] = 30
+        current[MODULE.BASE_CACHE_WINDOW_COUNTER_METRICS["evicted"]] = 70
+        current[MODULE.BASE_CACHE_WINDOW_COUNTER_METRICS["admission_bypassed"]] = 50
+        current[MODULE.BASE_CACHE_WINDOW_COUNTER_METRICS["admission_throttled"]] = 3
+        current[MODULE.BASE_CACHE_WINDOW_COUNTER_METRICS["admission_relaxed"]] = 1
+
+        occupancy = {
+            "trunk": (10, 1_000),
+            "window": (20, 3_000),
+            "tail": (30, 6_000),
+            "other": (40, 10_000),
+        }
+        for tier, values in occupancy.items():
+            entries = MODULE.BASE_CACHE_OCCUPANCY_METRICS[tier]["entries"]
+            byte_metric = MODULE.BASE_CACHE_OCCUPANCY_METRICS[tier]["bytes"]
+            previous_metrics[entries] = values[0] - 1
+            previous_metrics[byte_metric] = values[1] - 100
+            current[entries] = values[0]
+            current[byte_metric] = values[1]
+        current[MODULE.BASE_CACHE_CAPACITY_METRIC] = 40_000
+        current[MODULE.BASE_CACHE_BUDGET_METRICS["trunk"]] = 2_000
+        current[MODULE.BASE_CACHE_BUDGET_METRICS["window"]] = 4_000
+        current[MODULE.BASE_CACHE_BUDGET_METRICS["other"]] = 12_000
+
+        previous = {"unix": 100.0, "height": 1_000, "metrics": previous_metrics}
+        row = MODULE.build_row(110.0, 1_010, current, previous)
+        analysis = row["analysis"]
+        self.assertEqual(analysis["foregroundExactDepthMetricCoverageRatio"], 1.0)
+        self.assertEqual(analysis["foregroundExactDepthIntervalCoverageRatio"], 1.0)
+        self.assertEqual(
+            analysis["foregroundExactDepthDurableRatio"]["depth_5"], 0.75
+        )
+        self.assertEqual(
+            analysis["foregroundExactDepthDurableReadsPerBlock"]["depth_6"], 4.0
+        )
+        self.assertAlmostEqual(
+            analysis["foregroundExactDepthDurableReadShare"]["depth_8"], 10 / 145
+        )
+        self.assertEqual(
+            analysis["foregroundDepth5To8CacheReconciliationRatio"], 1.0
+        )
+        self.assertEqual(
+            analysis["foregroundDepth5To8DurableReconciliationRatio"], 1.0
+        )
+        self.assertEqual(analysis["baseCacheWindowOutcomePromotionRatio"], 0.3)
+        self.assertEqual(analysis["baseCacheWindowAdmittedPerBlock"], 12.0)
+        self.assertEqual(analysis["baseCacheWindowThrottleAdjustmentShare"], 0.75)
+        self.assertEqual(analysis["baseCacheWindowAdmissionBypassedPerBlock"], 5.0)
+        self.assertEqual(analysis["baseCacheWindowCacheResolvedShare"], 0.25)
+        self.assertEqual(analysis["baseCacheOccupancyMetricCoverageRatio"], 1.0)
+        self.assertEqual(analysis["baseCacheOccupancyTotalEnd"]["entries"], 100)
+        self.assertEqual(analysis["baseCacheOccupancyTotalEnd"]["bytes"], 20_000)
+        self.assertEqual(analysis["baseCacheOccupancyTotalChange"]["entries"], 4)
+        self.assertEqual(analysis["baseCacheOccupancyTotalChange"]["bytes"], 400)
+        self.assertEqual(analysis["baseCacheWindowResidentByteShare"], 0.15)
+        self.assertEqual(analysis["baseCacheRetainedChargeBytesPerEntry"], 200.0)
+        self.assertEqual(analysis["baseCacheCapacityBytes"], 40_000)
+        self.assertEqual(analysis["baseCacheOccupancyRatio"], 0.5)
+        self.assertEqual(analysis["baseCacheTierBudgetOccupancyRatio"]["trunk"], 0.5)
+        self.assertEqual(analysis["baseCacheTierBudgetOccupancyRatio"]["window"], 0.75)
+        self.assertEqual(analysis["durableReadsPerBlock"], 0.0)
+
+    def test_exact_depth_partial_rollout_does_not_invent_totals(self):
+        cache = MODULE.EXACT_DEPTH_METRICS["depth_5"]["cache"]
+        durable = MODULE.EXACT_DEPTH_METRICS["depth_5"]["durable"]
+        current = {cache: 25, durable: 75}
+        previous = {"unix": 100.0, "height": 1, "metrics": {cache: 0, durable: 0}}
+        analysis = MODULE.build_row(101.0, 2, current, previous)["analysis"]
+        self.assertEqual(analysis["foregroundExactDepthMetricCoverageRatio"], 0.25)
+        self.assertEqual(analysis["foregroundExactDepthIntervalCoverageRatio"], 0.25)
+        self.assertEqual(analysis["foregroundExactDepthDurableRatio"]["depth_5"], 0.75)
+        self.assertIsNone(analysis["foregroundExactDepthDurableRatio"]["depth_6"])
+        self.assertIsNone(analysis["foregroundExactDepthDurableReadsPerBlockTotal"])
+        self.assertIsNone(analysis["foregroundDepth5To8DurableReconciliationRatio"])
+
+    def test_occupancy_decrease_is_signed_point_change_not_reset(self):
+        name = MODULE.BASE_CACHE_OCCUPANCY_METRICS["window"]["bytes"]
+        current = {MODULE.PROCESS_IDENTITY_METRIC: 10, name: 100}
+        previous = {
+            "unix": 100.0,
+            "height": 1,
+            "metrics": {MODULE.PROCESS_IDENTITY_METRIC: 10, name: 300},
+        }
+        row = MODULE.build_row(101.0, 2, current, previous)
+        self.assertEqual(row["status"], "ok")
+        self.assertEqual(row["counterResets"], [])
+        self.assertEqual(row["analysis"]["baseCacheOccupancyEnd"]["window"]["bytes"], 100)
+        self.assertEqual(row["analysis"]["baseCacheOccupancyChange"]["window"]["bytes"], -200)
+        self.assertIsNone(row["analysis"]["baseCacheOccupancyTotalEnd"]["bytes"])
+
+    def test_restart_keeps_occupancy_end_but_discards_change(self):
+        name = MODULE.BASE_CACHE_OCCUPANCY_METRICS["window"]["entries"]
+        exact = MODULE.EXACT_DEPTH_METRICS["depth_5"]["durable"]
+        window = MODULE.BASE_CACHE_WINDOW_ADMITTED_METRIC
+        current = {
+            MODULE.PROCESS_IDENTITY_METRIC: 20,
+            name: 7,
+            exact: 100,
+            window: 100,
+        }
+        previous = {
+            "unix": 100.0,
+            "height": 1,
+            "metrics": {
+                MODULE.PROCESS_IDENTITY_METRIC: 10,
+                name: 9,
+                exact: 10,
+                window: 10,
+            },
+        }
+        row = MODULE.build_row(101.0, 2, current, previous)
+        self.assertTrue(row["processRestart"])
+        self.assertEqual(row["analysis"]["baseCacheOccupancyEnd"]["window"]["entries"], 7)
+        self.assertIsNone(row["analysis"]["baseCacheOccupancyStart"]["window"]["entries"])
+        self.assertIsNone(row["analysis"]["baseCacheOccupancyChange"]["window"]["entries"])
+        self.assertIsNone(row["delta"][exact])
+        self.assertIsNone(row["delta"][window])
+        self.assertIsNone(row["analysis"]["foregroundExactDepthDurableRatio"]["depth_5"])
+        self.assertIsNone(row["analysis"]["baseCacheWindowAdmittedPerBlock"])
 
     def test_with_prefix_replaces_existing_filter(self):
         got = MODULE.with_prefix("http://127.0.0.1:6062/debug/metrics?prefix=old/&x=1", "cache/")

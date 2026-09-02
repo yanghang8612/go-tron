@@ -126,6 +126,12 @@ const (
 	baseReadCacheWindowMaxAdmissionShift = 6
 )
 
+// Occupancy gauges are diagnostics rather than correctness state. Publishing
+// on the first commitment-session close and then once per 64 closes keeps the
+// 16 short shard RLocks off the read path while staying fresher than the normal
+// operator sampling interval.
+const baseReadCacheMetricsPublishInterval = uint64(64)
+
 // baseReadCache is a bounded, sharded FIFO/CLOCK cache for values read from
 // Buffer's durable base. It is intentionally below the overlay layers: in-flight and
 // committed writes/tombstones are always resolved first, so a fork discard only
@@ -153,7 +159,8 @@ type baseReadCache struct {
 	// retain the version at which they became valid, allowing a point-in-time
 	// commitment session to reuse old hot entries while rejecting replacements
 	// published after its Pebble snapshot.
-	version atomic.Uint64
+	version                atomic.Uint64
+	metricsPublishSequence atomic.Uint64
 }
 
 type baseReadCacheShard struct {
@@ -190,6 +197,15 @@ type baseReadCacheShard struct {
 	nonCommitmentUsed      int
 	trunkUsed              int
 	windowUsed             int
+	// Tail entries are derived from len(entries) minus these mutually exclusive
+	// flagged classes, so ordinary commitment admission adds no count write.
+	nonCommitmentEntries int
+	trunkEntries         int
+	windowEntries        int
+	// windowAdmissions is process-lifetime for this cache owner. It stays
+	// monotonic across clear so the metrics publisher can expose it as a gauge
+	// without adding a contended global atomic to every durable admission.
+	windowAdmissions       uint64
 	limit                  int
 	nonCommitmentLimit     int
 	trunkLimit             int
@@ -727,12 +743,16 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 	s.entries[entry.key] = entry
 	if trunk {
 		s.trunkUsed += entry.charge
+		s.trunkEntries++
 	} else if other {
 		s.nonCommitmentQueue = append(s.nonCommitmentQueue, entry)
 		s.nonCommitmentUsed += entry.charge
+		s.nonCommitmentEntries++
 	} else if window {
 		s.windowQueue = append(s.windowQueue, entry)
 		s.windowUsed += entry.charge
+		s.windowEntries++
+		s.windowAdmissions++
 	} else {
 		s.queue = append(s.queue, entry)
 	}
@@ -843,6 +863,7 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 				// fixed tier; its stable entry/map identity remains unchanged.
 				old.trunk = false
 				s.trunkUsed -= old.charge
+				s.trunkEntries--
 				s.queue = append(s.queue, old)
 			}
 			s.used += delta
@@ -851,6 +872,9 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 			}
 			if old.nonCommitment {
 				s.nonCommitmentUsed += delta
+			}
+			if old.window {
+				s.windowUsed += delta
 			}
 			old.charge = newCharge
 		}
@@ -862,14 +886,17 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 			s.used -= old.charge
 			if old.trunk {
 				s.trunkUsed -= old.charge
+				s.trunkEntries--
 				s.recycleEntry(old)
 				return
 			}
 			if old.window {
 				s.windowUsed -= old.charge
+				s.windowEntries--
 			}
 			if old.nonCommitment {
 				s.nonCommitmentUsed -= old.charge
+				s.nonCommitmentEntries--
 			}
 			retireBaseReadCacheEntry(old)
 		}
@@ -1077,15 +1104,18 @@ func (c *baseReadCache) delStringLocked(s *baseReadCacheShard, key string) {
 		s.used -= old.charge
 		if old.trunk {
 			s.trunkUsed -= old.charge
+			s.trunkEntries--
 			s.recycleEntry(old)
 			s.forgetAdmissionString(key, other)
 			return
 		}
 		if old.window {
 			s.windowUsed -= old.charge
+			s.windowEntries--
 		}
 		if old.nonCommitment {
 			s.nonCommitmentUsed -= old.charge
+			s.nonCommitmentEntries--
 		}
 		retireBaseReadCacheEntry(old)
 	}
@@ -1122,6 +1152,9 @@ func (c *baseReadCache) clear() {
 		s.nonCommitmentUsed = 0
 		s.trunkUsed = 0
 		s.windowUsed = 0
+		s.nonCommitmentEntries = 0
+		s.trunkEntries = 0
+		s.windowEntries = 0
 		s.windowAdmissionCounter = 0
 		s.windowProbeCandidates = 0
 		s.windowProbeAdmissions = 0
@@ -1135,6 +1168,11 @@ func (c *baseReadCache) clear() {
 		s.mu.Unlock()
 	}
 	c.advanceAllInvalidations()
+	// Clear is rare and already outside the ordinary read path. Publish the
+	// empty resident set immediately so an unwind/rebuild cannot leave stale
+	// occupancy indefinitely when no later commitment session is opened.
+	c.metricsPublishSequence.Store(0)
+	publishBaseReadCacheMetrics(c.stats())
 }
 
 func baseReadCacheInvalidationSlots(sizeBytes int) int {
@@ -1367,6 +1405,7 @@ func (s *baseReadCacheShard) promoteWindowEntry(entry *baseReadCacheEntry) {
 	}
 	entry.window = false
 	s.windowUsed -= entry.charge
+	s.windowEntries--
 	s.queue = append(s.queue, entry)
 	s.forgetAdmissionString(entry.key, false)
 }
@@ -1456,6 +1495,7 @@ func (s *baseReadCacheShard) evictWindowOne() bool {
 		delete(s.entries, entry.key)
 		s.used -= entry.charge
 		s.windowUsed -= entry.charge
+		s.windowEntries--
 		s.recycleEntry(entry)
 		s.observeWindowOutcome(false)
 		baseReadCacheWindowEvictedCounter.Inc(1)
@@ -1494,6 +1534,7 @@ func (s *baseReadCacheShard) evictOne(other bool) bool {
 			s.used -= entry.charge
 			if entry.nonCommitment {
 				s.nonCommitmentUsed -= entry.charge
+				s.nonCommitmentEntries--
 			}
 			if entry.hasUnusedPrefetch() && isCommitmentBranchCacheKey(entry.key) {
 				commitmentParentPrefetchUnusedCapacityEvictedCounter.Inc(1)
@@ -1600,6 +1641,115 @@ func (s *baseReadCacheShard) compactIfSparse() {
 	clear(s.windowQueue)
 	s.windowQueue = windowQueue
 	s.windowHead = 0
+}
+
+type baseReadCacheStats struct {
+	entries          [4]int64
+	bytes            [4]int64
+	capacity         int64
+	budgets          [3]int64
+	windowAdmissions int64
+}
+
+const (
+	baseReadCacheStatsTrunk = iota
+	baseReadCacheStatsWindow
+	baseReadCacheStatsTail
+	baseReadCacheStatsOther
+)
+
+// stats returns an eventually consistent process diagnostic: every shard is
+// internally exact under its RLock, while concurrent mutations may occur
+// between shards. Bytes are the cache's retained-capacity charge (key capacity
+// + value capacity + entry overhead), not payload or exact heap bytes.
+func (c *baseReadCache) stats() baseReadCacheStats {
+	var stats baseReadCacheStats
+	if c == nil {
+		return stats
+	}
+	for i := range c.shards {
+		s := &c.shards[i]
+		s.mu.RLock()
+		addBaseReadCacheShardStats(&stats, s)
+		s.mu.RUnlock()
+	}
+	return stats
+}
+
+// addBaseReadCacheShardStats reads fields protected by s.mu. The caller owns a
+// read or write lock for s.
+func addBaseReadCacheShardStats(stats *baseReadCacheStats, s *baseReadCacheShard) {
+	trunkEntries := s.trunkEntries
+	windowEntries := s.windowEntries
+	otherEntries := s.nonCommitmentEntries
+	tailEntries := len(s.entries) - trunkEntries - windowEntries - otherEntries
+	trunkBytes := s.trunkUsed
+	windowBytes := s.windowUsed
+	otherBytes := s.nonCommitmentUsed
+	tailBytes := s.used - trunkBytes - windowBytes - otherBytes
+
+	stats.entries[baseReadCacheStatsTrunk] += int64(trunkEntries)
+	stats.entries[baseReadCacheStatsWindow] += int64(windowEntries)
+	stats.entries[baseReadCacheStatsTail] += int64(tailEntries)
+	stats.entries[baseReadCacheStatsOther] += int64(otherEntries)
+	stats.bytes[baseReadCacheStatsTrunk] += int64(trunkBytes)
+	stats.bytes[baseReadCacheStatsWindow] += int64(windowBytes)
+	stats.bytes[baseReadCacheStatsTail] += int64(tailBytes)
+	stats.bytes[baseReadCacheStatsOther] += int64(otherBytes)
+	stats.capacity += int64(s.limit)
+	stats.budgets[0] += int64(s.trunkLimit)
+	stats.budgets[1] += int64(s.windowLimit)
+	stats.budgets[2] += int64(s.nonCommitmentLimit)
+	stats.windowAdmissions += int64(s.windowAdmissions)
+}
+
+// tryStats is the fold-close variant. A flush promotion can hold one shard's
+// write lock while applying a whole group, so diagnostics skip that sample
+// instead of extending the critical fold completion path.
+func (c *baseReadCache) tryStats() (baseReadCacheStats, bool) {
+	var stats baseReadCacheStats
+	if c == nil {
+		return stats, true
+	}
+	for i := range c.shards {
+		s := &c.shards[i]
+		if !s.mu.TryRLock() {
+			return baseReadCacheStats{}, false
+		}
+		addBaseReadCacheShardStats(&stats, s)
+		s.mu.RUnlock()
+	}
+	return stats, true
+}
+
+func publishBaseReadCacheMetrics(stats baseReadCacheStats) {
+	for class := range stats.entries {
+		baseReadCacheOccupancyGauges[class][0].Update(stats.entries[class])
+		baseReadCacheOccupancyGauges[class][1].Update(stats.bytes[class])
+	}
+	baseReadCacheCapacityGauge.Update(stats.capacity)
+	for tier := range stats.budgets {
+		baseReadCacheBudgetGauges[tier].Update(stats.budgets[tier])
+	}
+	baseReadCacheWindowAdmittedGauge.Update(stats.windowAdmissions)
+}
+
+func (c *baseReadCache) maybePublishMetrics() {
+	if c == nil {
+		return
+	}
+	sequence := c.metricsPublishSequence.Add(1)
+	if (sequence-1)%baseReadCacheMetricsPublishInterval != 0 {
+		return
+	}
+	stats, ok := c.tryStats()
+	if !ok {
+		// Retry on the next close rather than waiting another full interval.
+		// Concurrent closes may cause an extra harmless publication.
+		c.metricsPublishSequence.Store(0)
+		return
+	}
+	publishBaseReadCacheMetrics(stats)
 }
 
 func baseReadCacheShardIndex(key []byte) uint32 {

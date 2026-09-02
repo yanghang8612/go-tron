@@ -556,6 +556,8 @@ func TestCommitmentParentReadSessionSingleflightSharesPresentValueAndIsolatesCal
 	waitersBefore := commitmentParentSingleflightWaitersCounter.Snapshot().Count()
 	sharedBefore := commitmentParentSingleflightSharedCounter.Snapshot().Count()
 	durableBefore := commitmentParentDurableReadsCounter.Snapshot().Count()
+	exactCacheBefore := commitmentParentExactDepthCacheCounters[1].Snapshot().Count()
+	exactDurableBefore := commitmentParentExactDepthDurableCounters[1].Snapshot().Count()
 
 	type result struct {
 		found  bool
@@ -622,6 +624,12 @@ func TestCommitmentParentReadSessionSingleflightSharesPresentValueAndIsolatesCal
 	}
 	if got := commitmentParentDurableReadsCounter.Snapshot().Count() - durableBefore; got != 1 {
 		t.Fatalf("durable reads delta = %d, want 1", got)
+	}
+	if got := commitmentParentExactDepthCacheCounters[1].Snapshot().Count() - exactCacheBefore; got != 0 {
+		t.Fatalf("singleflight depth-six cache delta = %d, want 0", got)
+	}
+	if got := commitmentParentExactDepthDurableCounters[1].Snapshot().Count() - exactDurableBefore; got != 1 {
+		t.Fatalf("singleflight depth-six durable delta = %d, want 1", got)
 	}
 }
 
@@ -766,6 +774,8 @@ func TestCommitmentParentReadSessionSingleflightSharesPrefetchWithForeground(t *
 	prefix := []byte{1, 1, 1, 1, 1, 1}
 	physicalKey := append([]byte(rawdb.CommitmentBranchKeyPrefix), prefix...)
 	var prefetch pointread.CommitmentParentPrefetchSession = session
+	exactCacheBefore := commitmentParentExactDepthCacheCounters[1].Snapshot().Count()
+	exactDurableBefore := commitmentParentExactDepthDurableCounters[1].Snapshot().Count()
 
 	type prefetchResult struct {
 		found bool
@@ -813,6 +823,12 @@ func TestCommitmentParentReadSessionSingleflightSharesPrefetchWithForeground(t *
 	}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if got := commitmentParentExactDepthCacheCounters[1].Snapshot().Count() - exactCacheBefore; got != 0 {
+		t.Fatalf("shared prefetch depth-six cache delta = %d, want 0", got)
+	}
+	if got := commitmentParentExactDepthDurableCounters[1].Snapshot().Count() - exactDurableBefore; got != 0 {
+		t.Fatalf("shared prefetch depth-six durable delta = %d, want 0", got)
 	}
 }
 
@@ -998,5 +1014,102 @@ func TestCommitmentParentPrefetchDepthBuckets(t *testing.T) {
 		if got := commitmentParentPrefetchDepthBucket(tc.depth); got != tc.want {
 			t.Fatalf("depth %d bucket = %d, want %d", tc.depth, got, tc.want)
 		}
+	}
+}
+
+func TestCommitmentParentExactDepthBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		depth int
+		want  int
+	}{
+		{depth: -1, want: -1},
+		{depth: 4, want: -1},
+		{depth: 5, want: 0},
+		{depth: 6, want: 1},
+		{depth: 7, want: 2},
+		{depth: 8, want: 3},
+		{depth: 9, want: -1},
+	} {
+		if got := commitmentParentExactDepthBucket(tc.depth); got != tc.want {
+			t.Fatalf("depth %d exact bucket = %d, want %d", tc.depth, got, tc.want)
+		}
+	}
+}
+
+func TestCommitmentParentReadSessionPublishesExactDepthMetrics(t *testing.T) {
+	const readers = 1
+	cache := newBaseReadCacheWithTrunk(1<<20, baseReadCacheTrunkDepth, rawdb.CommitmentBranchKeyPrefix)
+	session := &commitmentParentReadSession{
+		cache:        cache,
+		cacheVersion: cache.version.Load(),
+		snapshot:     benchmarkCommitmentSnapshot{},
+		cursors:      make([]pointread.Cursor, readers),
+		keyScratch:   borrowCommitmentParentKeyScratch(readers),
+	}
+	session.readContexts = borrowCommitmentParentReadContexts(session, readers)
+
+	var exactCacheBefore, exactDurableBefore [4]int64
+	for bucket := range exactCacheBefore {
+		exactCacheBefore[bucket] = commitmentParentExactDepthCacheCounters[bucket].Snapshot().Count()
+		exactDurableBefore[bucket] = commitmentParentExactDepthDurableCounters[bucket].Snapshot().Count()
+	}
+	aggregateCacheBefore := commitmentParentDepthCacheCounters[0].Snapshot().Count()
+	aggregateDurableBefore := commitmentParentDepthDurableCounters[0].Snapshot().Count()
+	deepCacheBefore := commitmentParentDepthCacheCounters[1].Snapshot().Count()
+	deepDurableBefore := commitmentParentDepthDurableCounters[1].Snapshot().Count()
+	totalCacheBefore := commitmentParentCacheResolvedCounter.Snapshot().Count()
+	totalDurableBefore := commitmentParentDurableReadsCounter.Snapshot().Count()
+
+	prefix := []byte(rawdb.CommitmentBranchKeyPrefix)
+	consume := func([]byte, bool) error { return nil }
+	for depth := 4; depth <= 9; depth++ {
+		path := bytes.Repeat([]byte{byte(depth)}, depth)
+		for attempt := 0; attempt < 2; attempt++ {
+			found, err := session.ViewKeyParts(0, prefix, path, consume)
+			if err != nil || !found {
+				t.Fatalf("depth %d attempt %d = (%v,%v), want (true,nil)", depth, attempt, found, err)
+			}
+		}
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for bucket := range exactCacheBefore {
+		if got := commitmentParentExactDepthCacheCounters[bucket].Snapshot().Count() - exactCacheBefore[bucket]; got != 1 {
+			t.Errorf("exact depth %d cache delta = %d, want 1", bucket+5, got)
+		}
+		if got := commitmentParentExactDepthDurableCounters[bucket].Snapshot().Count() - exactDurableBefore[bucket]; got != 1 {
+			t.Errorf("exact depth %d durable delta = %d, want 1", bucket+5, got)
+		}
+	}
+	if got := commitmentParentDepthCacheCounters[0].Snapshot().Count() - aggregateCacheBefore; got != 4 {
+		t.Errorf("depth 5-8 cache delta = %d, want 4", got)
+	}
+	if got := commitmentParentDepthDurableCounters[0].Snapshot().Count() - aggregateDurableBefore; got != 4 {
+		t.Errorf("depth 5-8 durable delta = %d, want 4", got)
+	}
+	if got := commitmentParentDepthCacheCounters[1].Snapshot().Count() - deepCacheBefore; got != 1 {
+		t.Errorf("depth 9-16 cache delta = %d, want 1", got)
+	}
+	if got := commitmentParentDepthDurableCounters[1].Snapshot().Count() - deepDurableBefore; got != 1 {
+		t.Errorf("depth 9-16 durable delta = %d, want 1", got)
+	}
+	if got := commitmentParentCacheResolvedCounter.Snapshot().Count() - totalCacheBefore; got != 6 {
+		t.Errorf("total cache delta = %d, want 6", got)
+	}
+	if got := commitmentParentDurableReadsCounter.Snapshot().Count() - totalDurableBefore; got != 6 {
+		t.Errorf("total durable delta = %d, want 6", got)
+	}
+}
+
+func TestReturnCommitmentParentReadContextsClearsExactDepthMetrics(t *testing.T) {
+	ctx := newCommitmentParentReadContext().(*commitmentParentReadContext)
+	ctx.exactDepthCached = [4]uint64{1, 2, 3, 4}
+	ctx.exactDepthDurable = [4]uint64{5, 6, 7, 8}
+	contexts := []*commitmentParentReadContext{ctx}
+	returnCommitmentParentReadContexts(contexts)
+	if ctx.exactDepthCached != [4]uint64{} || ctx.exactDepthDurable != [4]uint64{} {
+		t.Fatalf("pooled exact-depth counters retained cache=%v durable=%v", ctx.exactDepthCached, ctx.exactDepthDurable)
 	}
 }
