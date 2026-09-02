@@ -113,8 +113,11 @@ const (
 	// two-hit CLOCK tail. This adapts Erigon's first-read branch-cache tail to
 	// Pebble without letting one-shot historical scans occupy the main cache:
 	// rows reused while resident are promoted, while untouched rows leave at
-	// the window boundary. The window is part of (not additional to) limit.
-	baseReadCacheWindowBudgetDivisor = 8
+	// the window boundary. The window is part of (not additional to) limit. Keep
+	// the first protected rollout deliberately small: 1/64 is 8 MiB in the
+	// production 512 MiB cache, enough to measure real reuse without abruptly
+	// displacing the former CLOCK tail's full 64 MiB provisional allocation.
+	baseReadCacheWindowBudgetDivisor = 64
 	// Window admission learns from completed FIFO outcomes. Historical sync has
 	// long scan phases where every first-read row is evicted untouched, but can
 	// also move into phases with strong short-term path reuse. Every outcome
@@ -1458,11 +1461,17 @@ func (s *baseReadCacheShard) observeWindowOutcome(promoted bool) {
 	s.windowPromotions = 0
 }
 
-// evictCommitmentOne gives the low-confidence first-read window priority over
-// the established CLOCK tail. A window hit promotes rather than evicts the row;
-// the outer loop can then reclaim another window row or eventually sweep the
-// promoted row using its bounded reference credits.
+// evictCommitmentOne preserves the bounded first-read observation window while
+// it is below its reservation. Without this ordering, a full total cache would
+// insert a window entry and immediately select that same low-confidence entry
+// for eviction, leaving no residency interval in which a second read could
+// reference/promote it. Once the window reaches its limit, FIFO outcomes again
+// take priority over the established CLOCK tail. The outer window-limit loop
+// still enforces the hard bound before total-cache reclamation starts.
 func (s *baseReadCacheShard) evictCommitmentOne() bool {
+	if s.windowUsed < s.windowLimit && s.evictOne(false) {
+		return true
+	}
 	if s.evictWindowOne() {
 		return true
 	}

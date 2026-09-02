@@ -168,7 +168,7 @@ func TestBaseReadCacheOccupancyStatsTrackResidentClasses(t *testing.T) {
 	tail := storeBaseReadCacheEntry(t, c, tailKey, value, true)
 	other := storeBaseReadCacheEntry(t, c, otherKey, value, true)
 	stats := c.stats()
-	if stats.capacity != 1<<20 || stats.budgets != [3]int64{1 << 17, 1 << 17, 1 << 18} {
+	if stats.capacity != 1<<20 || stats.budgets != [3]int64{1 << 17, 1 << 14, 1 << 18} {
 		t.Fatalf("cache capacity/budgets = %d/%v", stats.capacity, stats.budgets)
 	}
 	wantCharges := [4]int64{int64(trunk.charge), int64(window.charge), int64(tail.charge), int64(other.charge)}
@@ -414,7 +414,7 @@ func TestBaseReadCache_CommitmentDeltaGenerationIsSchemaNotDepth(t *testing.T) {
 func TestBaseReadCache_DeepCommitmentOneHitScanStaysInWindow(t *testing.T) {
 	const commitmentPrefix = "state-commitment-branch-v1-"
 	const shard = uint32(0)
-	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*4096, baseReadCacheTrunkDepth, commitmentPrefix)
+	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*32768, baseReadCacheTrunkDepth, commitmentPrefix)
 	s := &c.shards[shard]
 	value := bytes.Repeat([]byte{0x31}, 64)
 	keys := testBaseReadCacheKeysForShard(t, commitmentPrefix+"deep-scan-", shard, 128)
@@ -441,7 +441,7 @@ func TestBaseReadCache_DeepCommitmentOneHitScanStaysInWindow(t *testing.T) {
 func TestBaseReadCache_DeepCommitmentWindowPromotesReuse(t *testing.T) {
 	const commitmentPrefix = "state-commitment-branch-v1-"
 	const shard = uint32(0)
-	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*4096, baseReadCacheTrunkDepth, commitmentPrefix)
+	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*32768, baseReadCacheTrunkDepth, commitmentPrefix)
 	s := &c.shards[shard]
 	value := bytes.Repeat([]byte{0x42}, 64)
 	keys := testBaseReadCacheKeysForShard(t, commitmentPrefix+"deep-window-", shard, 8)
@@ -490,7 +490,7 @@ func TestBaseReadCache_DeepCommitmentWindowPromotesReuse(t *testing.T) {
 
 func TestBaseReadCache_FlushProtectsCommitmentWindowEntryForPromotion(t *testing.T) {
 	const commitmentPrefix = "state-commitment-branch-v1-"
-	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*4096, baseReadCacheTrunkDepth, commitmentPrefix)
+	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*32768, baseReadCacheTrunkDepth, commitmentPrefix)
 	key := []byte(commitmentPrefix + "deep-flushed-branch")
 	value := []byte("parent-v1")
 	_, _, epoch := c.getWithEpoch(key)
@@ -522,6 +522,89 @@ func TestBaseReadCache_FlushProtectsCommitmentWindowEntryForPromotion(t *testing
 	c.del(key)
 	if s.entries[string(key)] != nil {
 		t.Fatalf("delete retained promoted entry: entry=%p", s.entries[string(key)])
+	}
+}
+
+func TestBaseReadCache_FullTailPreservesWindowReservation(t *testing.T) {
+	const (
+		commitmentPrefix = "state-commitment-branch-v1-"
+		shard            = uint32(0)
+	)
+	c := newBaseReadCacheWithTrunk(baseReadCacheShardCount*32768, baseReadCacheTrunkDepth, commitmentPrefix)
+	s := &c.shards[shard]
+	value := bytes.Repeat([]byte{0x53}, 192)
+
+	// Establish the protected non-commitment share first, then fill the rest of
+	// this shard with forced read-ahead entries in the ordinary CLOCK tail. The
+	// force path is useful here because it bypasses both two-hit probation and
+	// the first-read window without changing eviction semantics.
+	otherKey := testBaseReadCacheKeysForShard(t, "flat-window-reservation-", shard, 1)[0]
+	testBaseReadCacheSet(c, otherKey, value)
+	for _, key := range testBaseReadCacheKeysForShard(t, commitmentPrefix+"prefetch-tail-", shard, 256) {
+		_, _, epoch := c.getWithEpoch(key)
+		if _, stored := c.prefetchIfEpoch(key, value, epoch); !stored {
+			t.Fatalf("prefetch tail fill %q was not retained", key)
+		}
+	}
+	if s.windowUsed != 0 || s.windowEntries != 0 {
+		t.Fatalf("tail-fill precondition has window occupancy %d/%d", s.windowEntries, s.windowUsed)
+	}
+	tailBefore := len(s.entries) - s.nonCommitmentEntries - s.trunkEntries
+	usedBefore := s.used
+	if tailBefore == 0 || s.limit-usedBefore >= len(value)+baseReadCacheEntryOverhead {
+		t.Fatalf("tail-fill precondition entries=%d used=%d/%d", tailBefore, usedBefore, s.limit)
+	}
+	unusedCountBefore := commitmentParentPrefetchUnusedCapacityEvictedCounter.Snapshot().Count()
+	unusedBytesBefore := commitmentParentPrefetchUnusedCapacityEvictedBytes.Snapshot().Count()
+
+	windowKey := testBaseReadCacheKeysForShard(t, commitmentPrefix+"protected-window-", shard, 1)[0]
+	_, _, epoch := c.getWithEpoch(windowKey)
+	if _, stored := c.setIfEpoch(windowKey, value, epoch); !stored {
+		t.Fatal("first deep read was not retained in the reserved window")
+	}
+	entry := s.entries[string(windowKey)]
+	if entry == nil || !entry.window {
+		t.Fatalf("reserved window entry = %#v", entry)
+	}
+	if s.windowUsed != entry.charge || s.windowEntries != 1 {
+		t.Fatalf("reserved window accounting entries=%d used=%d charge=%d", s.windowEntries, s.windowUsed, entry.charge)
+	}
+	tailAfter := len(s.entries) - s.nonCommitmentEntries - s.trunkEntries - s.windowEntries
+	if tailAfter >= tailBefore {
+		t.Fatalf("tail entries before=%d after=%d, want reclaimed capacity", tailBefore, tailAfter)
+	}
+	if got := commitmentParentPrefetchUnusedCapacityEvictedCounter.Snapshot().Count() - unusedCountBefore; got == 0 {
+		t.Fatal("window reservation did not report its unused-prefetch eviction cost")
+	}
+	if got := commitmentParentPrefetchUnusedCapacityEvictedBytes.Snapshot().Count() - unusedBytesBefore; got == 0 {
+		t.Fatal("window reservation reported no unused-prefetch eviction bytes")
+	}
+	if other := s.entries[string(otherKey)]; other == nil || !other.nonCommitment {
+		t.Fatal("window reservation displaced the protected non-commitment entry")
+	}
+	if s.used > s.limit || s.windowUsed > s.windowLimit {
+		t.Fatalf("reservation exceeded bounds window=%d/%d total=%d/%d", s.windowUsed, s.windowLimit, s.used, s.limit)
+	}
+
+	// A hit during the protected residency interval must still promote the
+	// stable entry when later window pressure reaches the FIFO boundary.
+	if _, found, _ := c.getWithEpoch(windowKey); !found {
+		t.Fatal("reserved window did not resolve its second read")
+	}
+	promotedBefore := baseReadCacheWindowPromotedCounter.Snapshot().Count()
+	nextWindowKey := testBaseReadCacheKeysForShard(t, commitmentPrefix+"protected-window-next-", shard, 1)[0]
+	_, _, epoch = c.getWithEpoch(nextWindowKey)
+	if _, stored := c.setIfEpoch(nextWindowKey, value, epoch); !stored {
+		t.Fatal("next first deep read was not retained")
+	}
+	if got := s.entries[string(windowKey)]; got != entry || got.window {
+		t.Fatalf("reused reserved entry was not promoted: %#v", got)
+	}
+	if got := baseReadCacheWindowPromotedCounter.Snapshot().Count() - promotedBefore; got != 1 {
+		t.Fatalf("window promotion delta = %d, want 1", got)
+	}
+	if s.used > s.limit || s.windowUsed > s.windowLimit {
+		t.Fatalf("post-promotion bounds window=%d/%d total=%d/%d", s.windowUsed, s.windowLimit, s.used, s.limit)
 	}
 }
 
