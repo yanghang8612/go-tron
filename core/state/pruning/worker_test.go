@@ -441,6 +441,354 @@ func TestWorkerSnapResumesHotHistoryPruneAfterPersistedBlockCursor(t *testing.T)
 	}
 }
 
+func TestWorkerSnapLazyCoverageVerifiesOnlyCurrentDeleteRange(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	writeSnapPruningChange(t, db, 2, 20, 22)
+
+	firstRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 20, 22, "history/state-domain-change-20-22.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := append(append([]snapshots.SegmentRef(nil), firstRefs...), secondRefs...)
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 22, refs)); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := snapshots.LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstCache := newSnapshotCoverageVerificationCache(dir)
+	for _, ref := range []snapshots.SegmentRef{historyRef(t, firstRefs), historyRef(t, secondRefs)} {
+		key, err := snapshotHistoryVerificationKeyFor(dir, manifest, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := firstCache.addTrusted(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	secondAccessor := segmentRefByKind(t, secondRefs, snapshots.SegmentAccessor)
+	secondAccessorPath := filepath.Join(dir, secondAccessor.Path)
+	info, err := os.Stat(secondAccessorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(secondAccessorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 0xff
+	if err := os.WriteFile(secondAccessorPath, data, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(secondAccessorPath, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := newSnapshotCoverageVerificationCache(dir)
+	worker := Worker{
+		DB: db, Policy: SnapPolicy(1, 1), SnapshotDir: dir, MaxBlocks: 1,
+		coverageVerificationCache: restarted,
+	}
+	first, err := worker.PruneTo(5)
+	if err != nil {
+		t.Fatalf("first lazy prune: %v", err)
+	}
+	if first.DeletedDomainChangeBlocks != 1 || first.DomainChangePrunedThrough != 1 {
+		t.Fatalf("first lazy prune stats = %+v", first)
+	}
+	if got := restarted.Stats(); got.PersistentHits != 1 || got.Entries != 2 || got.ActiveEntries != 2 || got.ActiveBytes == 0 || got.ChecksumStarted != 1 || got.ChecksumCompleted != 1 {
+		t.Fatalf("first lazy verification stats = %+v, want one of two active segments verified", got)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || ok {
+		t.Fatalf("first covered change survived ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 2, 1); err != nil || !ok {
+		t.Fatalf("unvisited corrupt-range change missing ok=%v err=%v", ok, err)
+	}
+
+	second, err := worker.PruneTo(5)
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("second lazy prune stats=%+v err=%v, want checksum failure", second, err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 2, 1); err != nil || !ok {
+		t.Fatalf("corrupt-range change after failed verification ok=%v err=%v, want retained", ok, err)
+	}
+	manifest, err = snapshots.LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Progress == nil || manifest.Progress.HotPruneBlockNum != 1 || manifest.Progress.HotPruneTxNum != 12 {
+		t.Fatalf("hot prune progress advanced after failed checksum: %+v", manifest.Progress)
+	}
+	if got := restarted.Stats(); got.PersistentHits != 1 || got.ChecksumStarted != 2 || got.ChecksumCompleted != 1 || got.ChecksumFailed != 1 || got.ChecksumInFlight != 0 {
+		t.Fatalf("failed lazy verification stats = %+v", got)
+	}
+}
+
+func TestWorkerSnapLazyCoverageFailureDiscardsEarlierDeletePlan(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	writeSnapPruningChange(t, db, 2, 20, 22)
+
+	firstRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 20, 22, "history/state-domain-change-20-22.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := append(append([]snapshots.SegmentRef(nil), firstRefs...), secondRefs...)
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 22, refs)); err != nil {
+		t.Fatal(err)
+	}
+	accessor := segmentRefByKind(t, secondRefs, snapshots.SegmentAccessor)
+	path := filepath.Join(dir, accessor.Path)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 0xff
+	if err := os.WriteFile(path, data, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := (Worker{
+		DB: db, Policy: SnapPolicy(1, 1), SnapshotDir: dir, MaxBlocks: 2,
+		coverageVerificationCache: newSnapshotCoverageVerificationCache(dir),
+	}).PruneTo(5)
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("lazy batch stats=%+v err=%v, want checksum failure", stats, err)
+	}
+	for _, blockNum := range []uint64{1, 2} {
+		if _, ok, err := rawdb.ReadStateDomainChange(db, blockNum, 1); err != nil || !ok {
+			t.Fatalf("block %d hot change after failed batch ok=%v err=%v, want retained", blockNum, ok, err)
+		}
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHotPrune); err != nil || ok {
+		t.Fatalf("hot prune stage after failed batch ok=%v err=%v, want absent", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotPrune); err != nil || ok {
+		t.Fatalf("snapshot prune stage after failed batch ok=%v err=%v, want absent", ok, err)
+	}
+	manifest, err := snapshots.LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Progress != nil && (manifest.Progress.HotPruneBlockNum != 0 || manifest.Progress.HotPruneTxNum != 0) {
+		t.Fatalf("manifest hot prune progress advanced after failed batch: %+v", manifest.Progress)
+	}
+}
+
+func TestSnapshotStateDomainCoverageMetadataRequiresContiguousRanges(t *testing.T) {
+	gate := snapshotStateDomainCoverageGate{segments: []snapshotStateDomainCoverageSegment{
+		{ref: snapshots.SegmentRef{FromTxNum: 10, ToTxNum: 12}},
+		{ref: snapshots.SegmentRef{FromTxNum: 13, ToTxNum: 20}},
+	}}
+	if !gate.coversMetadata(10, 20) {
+		t.Fatal("adjacent ranges did not cover their complete interval")
+	}
+	gate.segments[1].ref.FromTxNum = 14
+	if gate.coversMetadata(10, 20) {
+		t.Fatal("coverage crossed a one-transaction gap")
+	}
+}
+
+func TestWorkerSnapStopsAtFirstCoverageGap(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	writeSnapPruningChange(t, db, 2, 20, 22)
+
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 20, 22, "history/state-domain-change-20-22.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(20, 22, refs)); err != nil {
+		t.Fatal(err)
+	}
+	cache := newSnapshotCoverageVerificationCache(dir)
+	stats, err := (Worker{
+		DB: db, Policy: SnapPolicy(1, 1), SnapshotDir: dir, MaxBlocks: 10,
+		coverageVerificationCache: cache,
+	}).PruneTo(5)
+	if err != nil {
+		t.Fatalf("snap prune with leading coverage gap: %v", err)
+	}
+	if stats.DeletedDomainChangeBlocks != 0 || stats.DomainChangePrunedThrough != 0 || stats.DomainChangePrunedThroughTx != 0 {
+		t.Fatalf("snap prune crossed leading coverage gap: %+v", stats)
+	}
+	for _, blockNum := range []uint64{1, 2} {
+		if _, ok, err := rawdb.ReadStateDomainChange(db, blockNum, 1); err != nil || !ok {
+			t.Fatalf("block %d hot change across coverage gap ok=%v err=%v, want retained", blockNum, ok, err)
+		}
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHotPrune); err != nil || ok {
+		t.Fatalf("hot prune stage crossed coverage gap ok=%v err=%v, want absent", ok, err)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotPrune); err != nil || !ok || got != 5 {
+		t.Fatalf("overall snapshot prune stage = %d ok=%v err=%v, want hash-bound pass head 5", got, ok, err)
+	}
+	manifest, err := snapshots.LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Progress != nil && (manifest.Progress.HotPruneBlockNum != 0 || manifest.Progress.HotPruneTxNum != 0) {
+		t.Fatalf("manifest hot prune cursor crossed coverage gap: %+v", manifest.Progress)
+	}
+	if got := cache.Stats(); got.ChecksumStarted != 0 || got.ActiveEntries != 1 {
+		t.Fatalf("coverage gap unexpectedly verified later segment: %+v", got)
+	}
+}
+
+func TestCoverageChecksumTelemetryPublishesWhileVerificationInFlight(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := newSnapshotCoverageVerificationCache(dir)
+	pruneMetrics := newPrunerMetrics("test/state/prune/telemetry/" + strings.ToLower(t.Name()))
+	started := make(chan snapshotCoverageVerificationCacheStats, 1)
+	release := make(chan struct{})
+	cache.setStatsObserver(func(stats snapshotCoverageVerificationCacheStats) {
+		pruneMetrics.updateVerification(stats)
+		if stats.ChecksumInFlight == 0 {
+			return
+		}
+		select {
+		case started <- stats:
+			<-release
+		default:
+		}
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := (Worker{
+			Policy: SnapPolicy(3, 2), SnapshotDir: dir,
+			coverageVerificationCache: cache,
+		}).snapshotStateDomainChangeCoverageContext(context.Background())
+		done <- err
+	}()
+
+	inflight := <-started
+	if inflight.ChecksumStarted != 1 || inflight.ChecksumInFlight != 1 || inflight.ChecksumBytesInFlight == 0 {
+		t.Fatalf("in-flight checksum stats = %+v", inflight)
+	}
+	if inflight.ActiveEntries != 1 || inflight.ActiveBytes < inflight.ChecksumBytesInFlight {
+		t.Fatalf("active manifest checksum stats = %+v", inflight)
+	}
+	if got := pruneMetrics.verificationChecksumInFlight.Snapshot().Value(); got != 1 {
+		t.Fatalf("live checksum inflight gauge = %d, want 1", got)
+	}
+	if got := pruneMetrics.verificationChecksumBytesInFlight.Snapshot().Value(); got <= 0 {
+		t.Fatalf("live checksum byte gauge = %d, want positive", got)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("coverage verification: %v", err)
+	}
+	got := cache.Stats()
+	if got.ChecksumInFlight != 0 || got.ChecksumStarted != 1 || got.ChecksumCompleted != 1 || got.ChecksumFailed != 0 || got.ChecksumBytesCompleted == 0 {
+		t.Fatalf("completed checksum stats = %+v", got)
+	}
+	if value := pruneMetrics.verificationChecksumInFlight.Snapshot().Value(); value != 0 {
+		t.Fatalf("completed checksum inflight gauge = %d, want 0", value)
+	}
+}
+
+func TestCoverageStatsObserverSerializesConcurrentPublications(t *testing.T) {
+	cache := newSnapshotCoverageVerificationCache("")
+	pruneMetrics := newPrunerMetrics("test/state/prune/observer-order/" + strings.ToLower(t.Name()))
+	firstPublished := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	finalPublished := make(chan struct{})
+	var firstOnce, finalOnce sync.Once
+	cache.setStatsObserver(func(stats snapshotCoverageVerificationCacheStats) {
+		pruneMetrics.updateVerification(stats)
+		if stats.ChecksumStarted == 1 && stats.ChecksumInFlight == 1 {
+			firstOnce.Do(func() { close(firstPublished) })
+			<-releaseFirst
+		}
+		if stats.ChecksumStarted == 1 && stats.ChecksumInFlight == 0 {
+			finalOnce.Do(func() { close(finalPublished) })
+		}
+	})
+
+	beginDone := make(chan struct{})
+	go func() {
+		cache.beginChecksum(100)
+		close(beginDone)
+	}()
+	<-firstPublished
+	finishDone := make(chan struct{})
+	go func() {
+		cache.finishChecksum(100, nil)
+		close(finishDone)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for cache.Stats().ChecksumCompleted != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("concurrent checksum completion did not update cache state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-finishDone:
+		t.Fatal("newer checksum publication bypassed blocked earlier observer")
+	default:
+	}
+	close(releaseFirst)
+	<-beginDone
+	<-finishDone
+	<-finalPublished
+	if got := pruneMetrics.verificationChecksumInFlight.Snapshot().Value(); got != 0 {
+		t.Fatalf("final checksum inflight gauge regressed to %d, want 0", got)
+	}
+	if got := pruneMetrics.verificationChecksumCompleted.Snapshot().Value(); got != 1 {
+		t.Fatalf("final checksum completed gauge = %d, want 1", got)
+	}
+}
+
+func historyRef(t *testing.T, refs []snapshots.SegmentRef) snapshots.SegmentRef {
+	t.Helper()
+	return segmentRefByKind(t, refs, snapshots.SegmentHistory)
+}
+
+func segmentRefByKind(t *testing.T, refs []snapshots.SegmentRef, kind snapshots.SegmentKind) snapshots.SegmentRef {
+	t.Helper()
+	for _, ref := range refs {
+		if ref.Kind == kind {
+			return ref
+		}
+	}
+	t.Fatalf("snapshot refs have no %s segment", kind)
+	return snapshots.SegmentRef{}
+}
+
 func TestWorkerArchivePrunesOnlyVerifiedColdDuplicateChanges(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
@@ -653,9 +1001,60 @@ func TestWorkerSnapshotCoverageContextCancelsVerification(t *testing.T) {
 	// Pass the outer coverage and verification entry checks, then cancel from
 	// the checksum reader inside companion verification.
 	ctx.remaining.Store(4)
-	_, err = (Worker{Policy: SnapPolicy(3, 2), SnapshotDir: dir}).snapshotStateDomainChangeCoverageContext(ctx)
+	cache := newSnapshotCoverageVerificationCache(dir)
+	_, err = (Worker{
+		Policy: SnapPolicy(3, 2), SnapshotDir: dir,
+		coverageVerificationCache: cache,
+	}).snapshotStateDomainChangeCoverageContext(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("snapshot coverage error = %v, want context.Canceled", err)
+	}
+	if got := cache.Stats(); got.ChecksumInFlight != 0 || got.ChecksumStarted != 1 || got.ChecksumCompleted != 0 || got.ChecksumFailed != 1 || got.ChecksumCanceled != 1 || got.FullVerified != 0 {
+		t.Fatalf("canceled checksum stats = %+v", got)
+	}
+}
+
+func TestWorkerSnapLazyCoverageCancellationLeavesHotStateUntouched(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	verificationCtx := &cancelAfterChecksContext{}
+	verificationCtx.remaining.Store(4)
+	cache := newSnapshotCoverageVerificationCache(dir)
+	stats, err := (Worker{
+		DB: db, Policy: SnapPolicy(3, 2), SnapshotDir: dir, MaxBlocks: 1,
+		coverageVerificationCache:   cache,
+		coverageVerificationContext: verificationCtx,
+	}).PruneToContext(context.Background(), 5)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("lazy prune stats=%+v err=%v, want context.Canceled", stats, err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || !ok {
+		t.Fatalf("hot change after canceled checksum ok=%v err=%v, want retained", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHotPrune); err != nil || ok {
+		t.Fatalf("hot prune stage after canceled checksum ok=%v err=%v, want absent", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotPrune); err != nil || ok {
+		t.Fatalf("snapshot prune stage after canceled checksum ok=%v err=%v, want absent", ok, err)
+	}
+	manifest, err := snapshots.LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Progress != nil && (manifest.Progress.HotPruneBlockNum != 0 || manifest.Progress.HotPruneTxNum != 0) {
+		t.Fatalf("manifest hot prune progress advanced after cancellation: %+v", manifest.Progress)
+	}
+	if got := cache.Stats(); got.ChecksumInFlight != 0 || got.ChecksumFailed != 1 || got.ChecksumCanceled != 1 || got.FullVerified != 0 {
+		t.Fatalf("canceled lazy checksum stats = %+v", got)
 	}
 }
 

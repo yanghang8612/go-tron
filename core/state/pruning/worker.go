@@ -189,12 +189,19 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	if w.coverageVerificationContext != nil {
 		coverageCtx = w.coverageVerificationContext
 	}
-	coverage, err := w.snapshotStateDomainChangeCoverageContext(coverageCtx)
-	if w.coverageVerificationDone != nil {
-		w.coverageVerificationDone()
-	}
+	coverageDone := w.coverageVerificationDone
+	defer func() {
+		if coverageDone != nil {
+			coverageDone()
+		}
+	}()
+	coverage, err := w.newSnapshotStateDomainChangeCoverageGate(coverageCtx)
 	if err != nil {
 		return Stats{}, err
+	}
+	if len(coverage.segments) == 0 && coverageDone != nil {
+		coverageDone()
+		coverageDone = nil
 	}
 	historyCfg, err := w.hotHistoryDomainConfig()
 	if err != nil {
@@ -220,14 +227,22 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 			case ModeFull, ModeBlocks, ModeMinimal:
 				return snapshots.HotHistoryPruneDecision{DeleteTxRange: true, DeleteHistoryBlock: true}, nil
 			case ModeSnap, ModeArchive:
-				if !coverage.covers(row.BeginTxNum, row.EndTxNum) {
-					return snapshots.HotHistoryPruneDecision{}, nil
+				covered, err := coverage.covers(row.BeginTxNum, row.EndTxNum)
+				if err != nil {
+					return snapshots.HotHistoryPruneDecision{}, err
+				}
+				if !covered {
+					return snapshots.HotHistoryPruneDecision{Stop: true}, nil
 				}
 				return snapshots.HotHistoryPruneDecision{DeleteHistoryBlock: true}, nil
 			}
 			return snapshots.HotHistoryPruneDecision{}, nil
 		},
 	})
+	if coverageDone != nil {
+		coverageDone()
+		coverageDone = nil
+	}
 	if err != nil {
 		return Stats{}, err
 	}
@@ -514,28 +529,64 @@ type snapshotTxRange struct {
 
 type snapshotTxCoverage []snapshotTxRange
 
+type snapshotStateDomainCoverageSegment struct {
+	ref      snapshots.SegmentRef
+	key      snapshotHistoryVerificationKey
+	verified bool
+}
+
+// snapshotStateDomainCoverageGate binds one production manifest view to the
+// exact immutable file identities it names. Construction checks every active
+// companion's presence and size and retains all active durable cache records,
+// but deliberately postpones SHA-256 and semantic verification until a hot row
+// is actually eligible for deletion.
+type snapshotStateDomainCoverageGate struct {
+	ctx      context.Context
+	dir      string
+	manifest *snapshots.Manifest
+	cache    *snapshotCoverageVerificationCache
+	segments []snapshotStateDomainCoverageSegment
+}
+
 func (w Worker) snapshotStateDomainChangeCoverage() (snapshotTxCoverage, error) {
 	return w.snapshotStateDomainChangeCoverageContext(context.Background())
 }
 
 func (w Worker) snapshotStateDomainChangeCoverageContext(ctx context.Context) (snapshotTxCoverage, error) {
+	gate, err := w.newSnapshotStateDomainChangeCoverageGate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	coverage := make(snapshotTxCoverage, 0, len(gate.segments))
+	for i := range gate.segments {
+		if err := gate.verify(i); err != nil {
+			return nil, err
+		}
+		ref := gate.segments[i].ref
+		coverage = append(coverage, snapshotTxRange{from: ref.FromTxNum, to: ref.ToTxNum})
+	}
+	return coverage, nil
+}
+
+func (w Worker) newSnapshotStateDomainChangeCoverageGate(ctx context.Context) (*snapshotStateDomainCoverageGate, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	gate := &snapshotStateDomainCoverageGate{ctx: ctx, dir: w.SnapshotDir, cache: w.coverageVerificationCache}
 	if (w.Policy.Mode != ModeSnap && w.Policy.Mode != ModeArchive) || w.SnapshotDir == "" {
-		return nil, nil
+		return gate, nil
 	}
 	manifest, err := snapshots.LoadProductionManifest(w.SnapshotDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return gate, nil
 		}
 		return nil, err
 	}
-	coverage := make(snapshotTxCoverage, 0)
+	gate.manifest = manifest
 	activeCacheKeys := make(map[snapshotHistoryVerificationKey]struct{})
 	for _, ref := range manifest.Segments {
 		if ref.NormalizedDataset() != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
@@ -544,25 +595,92 @@ func (w Worker) snapshotStateDomainChangeCoverageContext(ctx context.Context) (s
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		cacheKey, _, err := w.coverageVerificationCache.verifyHistory(ctx, w.SnapshotDir, manifest, ref, false, "hot prune coverage")
+		cacheKey, err := snapshotHistoryVerificationKeyFor(w.SnapshotDir, manifest, ref)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("hot prune coverage: identify state-domain history %q: %w", ref.Path, err)
 		}
 		activeCacheKeys[cacheKey] = struct{}{}
-		coverage = append(coverage, snapshotTxRange{from: ref.FromTxNum, to: ref.ToTxNum})
+		gate.segments = append(gate.segments, snapshotStateDomainCoverageSegment{ref: ref, key: cacheKey})
 	}
 	if w.coverageVerificationCache != nil {
+		w.coverageVerificationCache.setActiveManifest(activeCacheKeys)
 		if err := w.coverageVerificationCache.retain(activeCacheKeys); err != nil {
 			return nil, fmt.Errorf("pruning: retain active state-domain history verifications: %w", err)
 		}
 	}
-	sort.Slice(coverage, func(i, j int) bool {
-		if coverage[i].from != coverage[j].from {
-			return coverage[i].from < coverage[j].from
+	sort.Slice(gate.segments, func(i, j int) bool {
+		if gate.segments[i].ref.FromTxNum != gate.segments[j].ref.FromTxNum {
+			return gate.segments[i].ref.FromTxNum < gate.segments[j].ref.FromTxNum
 		}
-		return coverage[i].to < coverage[j].to
+		return gate.segments[i].ref.ToTxNum < gate.segments[j].ref.ToTxNum
 	})
-	return coverage, nil
+	return gate, nil
+}
+
+func (g *snapshotStateDomainCoverageGate) verify(index int) error {
+	if g == nil || index < 0 || index >= len(g.segments) {
+		return errors.New("pruning: invalid state-domain coverage segment")
+	}
+	segment := &g.segments[index]
+	if segment.verified {
+		return nil
+	}
+	key, _, err := g.cache.verifyHistory(g.ctx, g.dir, g.manifest, segment.ref, false, "hot prune coverage")
+	if err != nil {
+		return err
+	}
+	if key != segment.key {
+		return fmt.Errorf("hot prune coverage: state-domain history %q identity changed before verification", segment.ref.Path)
+	}
+	segment.verified = true
+	return nil
+}
+
+func (g *snapshotStateDomainCoverageGate) covers(from, to uint64) (bool, error) {
+	if g == nil || to < from {
+		return false, nil
+	}
+	if g.ctx != nil {
+		if err := g.ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+	if !g.coversMetadata(from, to) {
+		return false, nil
+	}
+	next := from
+	for i := range g.segments {
+		ref := g.segments[i].ref
+		if ref.ToTxNum < next {
+			continue
+		}
+		if err := g.verify(i); err != nil {
+			return false, err
+		}
+		if ref.ToTxNum >= to {
+			return true, nil
+		}
+		next = ref.ToTxNum + 1
+	}
+	return false, nil
+}
+
+func (g *snapshotStateDomainCoverageGate) coversMetadata(from, to uint64) bool {
+	next := from
+	for i := range g.segments {
+		ref := g.segments[i].ref
+		if ref.ToTxNum < next {
+			continue
+		}
+		if ref.FromTxNum > next {
+			return false
+		}
+		if ref.ToTxNum >= to {
+			return true
+		}
+		next = ref.ToTxNum + 1
+	}
+	return false
 }
 
 func (c snapshotTxCoverage) covers(from, to uint64) bool {

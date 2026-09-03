@@ -10,6 +10,11 @@ import (
 type HotHistoryPruneDecision struct {
 	DeleteTxRange      bool
 	DeleteHistoryBlock bool
+	// Stop ends the ordered scan after applying this decision to the current
+	// in-memory plan. It is a normal boundary, not an error. Snap pruning uses
+	// it at the first uncovered tx range so a later covered range cannot advance
+	// the durable hot-prune cursor across a coverage gap.
+	Stop bool
 }
 
 type HotHistoryPruneOptions struct {
@@ -63,7 +68,7 @@ func (cfg DomainCfg) PruneHotHistory(db rawdb.StateKVLatestStore, opts HotHistor
 			return false, err
 		}
 		if !decision.DeleteHistoryBlock && !decision.DeleteTxRange {
-			return true, nil
+			return !decision.Stop, nil
 		}
 		blocks = append(blocks, hotHistoryPruneBlock{
 			blockNum:           row.BlockNum,
@@ -71,6 +76,9 @@ func (cfg DomainCfg) PruneHotHistory(db rawdb.StateKVLatestStore, opts HotHistor
 			deleteHistoryBlock: decision.DeleteHistoryBlock,
 			deleteTxRange:      decision.DeleteTxRange,
 		})
+		if decision.Stop {
+			return false, nil
+		}
 		if opts.MaxBlocks > 0 && len(blocks) >= opts.MaxBlocks {
 			return false, nil
 		}

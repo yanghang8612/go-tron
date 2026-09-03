@@ -77,7 +77,14 @@ class CommitmentPreadSampleTest(unittest.TestCase):
             process: 7,
             "state/prune/passes": 5,
             "state/prune/verification/full": 3,
+            "state/prune/verification/checksum/started": 4,
+            "state/prune/verification/checksum/completed": 3,
+            "state/prune/verification/checksum/bytes/completed": 8_000,
+            "state/prune/verification/checksum/inflight": 1,
+            "state/prune/verification/checksum/bytes/inflight": 2_000,
             "state/prune/verification/cache_entries": 44,
+            "state/prune/verification/active_segments": 44,
+            "state/prune/verification/active_bytes": 100_000,
             "state/prune/lastpass/duration": 2_500_000_000,
         }
         previous = {
@@ -87,12 +94,22 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 process: 7,
                 "state/prune/passes": 3,
                 "state/prune/verification/full": 2,
+                "state/prune/verification/checksum/started": 2,
+                "state/prune/verification/checksum/completed": 1,
+                "state/prune/verification/checksum/bytes/completed": 3_000,
             },
         }
         analysis = MODULE.build_row(101.0, 11, current, previous)["analysis"]
         self.assertEqual(analysis["prunePassesPerBlock"], 2.0)
         self.assertEqual(analysis["pruneVerificationFullPerBlock"], 1.0)
+        self.assertEqual(analysis["pruneChecksumStartedPerBlock"], 2.0)
+        self.assertEqual(analysis["pruneChecksumCompletedPerBlock"], 2.0)
+        self.assertEqual(analysis["pruneChecksumBytesCompletedPerBlock"], 5_000.0)
+        self.assertEqual(analysis["pruneChecksumInFlight"], 1)
+        self.assertEqual(analysis["pruneChecksumBytesInFlight"], 2_000)
         self.assertEqual(analysis["pruneVerificationCacheEntries"], 44)
+        self.assertEqual(analysis["pruneVerificationActiveSegments"], 44)
+        self.assertEqual(analysis["pruneVerificationActiveBytes"], 100_000)
         self.assertEqual(analysis["pruneLastPassSeconds"], 2.5)
 
     def test_build_row_derives_interval_read_ratios(self):

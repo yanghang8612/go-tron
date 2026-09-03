@@ -84,29 +84,39 @@ type PrunerConfig struct {
 }
 
 type PrunerStats struct {
-	Passes                            uint64
-	Errors                            uint64
-	SkippedCatchup                    uint64
-	CanceledCatchup                   uint64
-	VerificationMemoryHits            uint64
-	VerificationPersistentHits        uint64
-	VerificationFull                  uint64
-	VerificationTrusted               uint64
-	VerificationCacheEntries          uint64
-	RetiredVerificationMemoryHits     uint64
-	RetiredVerificationPersistentHits uint64
-	RetiredVerificationFull           uint64
-	RetiredVerificationCanceled       uint64
-	DeletedTxRanges                   uint64
-	DeletedDomainChangeBlocks         uint64
-	DeletedCommitmentCheckpoints      uint64
-	DeletedStateCodeRows              uint64
-	DeferredStateCodePrune            uint64
-	LastSolidifiedBlock               uint64
-	LastDomainChangeStartBlock        uint64
-	LastDomainChangePrunedThrough     uint64
-	LastDomainChangePrunedThroughTx   uint64
-	LastPassDuration                  time.Duration
+	Passes                             uint64
+	Errors                             uint64
+	SkippedCatchup                     uint64
+	CanceledCatchup                    uint64
+	VerificationMemoryHits             uint64
+	VerificationPersistentHits         uint64
+	VerificationFull                   uint64
+	VerificationTrusted                uint64
+	VerificationCacheEntries           uint64
+	VerificationActiveSegments         uint64
+	VerificationActiveBytes            uint64
+	VerificationChecksumInFlight       uint64
+	VerificationChecksumStarted        uint64
+	VerificationChecksumCompleted      uint64
+	VerificationChecksumFailed         uint64
+	VerificationChecksumCanceled       uint64
+	VerificationChecksumBytesInFlight  uint64
+	VerificationChecksumBytesStarted   uint64
+	VerificationChecksumBytesCompleted uint64
+	RetiredVerificationMemoryHits      uint64
+	RetiredVerificationPersistentHits  uint64
+	RetiredVerificationFull            uint64
+	RetiredVerificationCanceled        uint64
+	DeletedTxRanges                    uint64
+	DeletedDomainChangeBlocks          uint64
+	DeletedCommitmentCheckpoints       uint64
+	DeletedStateCodeRows               uint64
+	DeferredStateCodePrune             uint64
+	LastSolidifiedBlock                uint64
+	LastDomainChangeStartBlock         uint64
+	LastDomainChangePrunedThrough      uint64
+	LastDomainChangePrunedThroughTx    uint64
+	LastPassDuration                   time.Duration
 }
 
 type Pruner struct {
@@ -142,57 +152,77 @@ type Pruner struct {
 }
 
 type prunerMetrics struct {
-	passes                            *metrics.Gauge
-	errors                            *metrics.Gauge
-	skippedCatchup                    *metrics.Gauge
-	canceledCatchup                   *metrics.Gauge
-	verificationMemoryHits            *metrics.Gauge
-	verificationPersistentHits        *metrics.Gauge
-	verificationFull                  *metrics.Gauge
-	verificationTrusted               *metrics.Gauge
-	verificationCacheEntries          *metrics.Gauge
-	retiredVerificationMemoryHits     *metrics.Gauge
-	retiredVerificationPersistentHits *metrics.Gauge
-	retiredVerificationFull           *metrics.Gauge
-	retiredVerificationCanceled       *metrics.Gauge
-	deletedTxRanges                   *metrics.Gauge
-	deletedDomainChangeBlocks         *metrics.Gauge
-	deletedCommitmentCheckpoints      *metrics.Gauge
-	deletedStateCodeRows              *metrics.Gauge
-	deferredStateCodePrune            *metrics.Gauge
-	lastSolidifiedBlock               *metrics.Gauge
-	lastDomainChangeStartBlock        *metrics.Gauge
-	lastDomainChangePrunedThrough     *metrics.Gauge
-	lastDomainChangePrunedThroughTx   *metrics.Gauge
-	lastPassDuration                  *metrics.Gauge
+	passes                             *metrics.Gauge
+	errors                             *metrics.Gauge
+	skippedCatchup                     *metrics.Gauge
+	canceledCatchup                    *metrics.Gauge
+	verificationMemoryHits             *metrics.Gauge
+	verificationPersistentHits         *metrics.Gauge
+	verificationFull                   *metrics.Gauge
+	verificationTrusted                *metrics.Gauge
+	verificationCacheEntries           *metrics.Gauge
+	verificationActiveSegments         *metrics.Gauge
+	verificationActiveBytes            *metrics.Gauge
+	verificationChecksumInFlight       *metrics.Gauge
+	verificationChecksumStarted        *metrics.Gauge
+	verificationChecksumCompleted      *metrics.Gauge
+	verificationChecksumFailed         *metrics.Gauge
+	verificationChecksumCanceled       *metrics.Gauge
+	verificationChecksumBytesInFlight  *metrics.Gauge
+	verificationChecksumBytesStarted   *metrics.Gauge
+	verificationChecksumBytesCompleted *metrics.Gauge
+	retiredVerificationMemoryHits      *metrics.Gauge
+	retiredVerificationPersistentHits  *metrics.Gauge
+	retiredVerificationFull            *metrics.Gauge
+	retiredVerificationCanceled        *metrics.Gauge
+	deletedTxRanges                    *metrics.Gauge
+	deletedDomainChangeBlocks          *metrics.Gauge
+	deletedCommitmentCheckpoints       *metrics.Gauge
+	deletedStateCodeRows               *metrics.Gauge
+	deferredStateCodePrune             *metrics.Gauge
+	lastSolidifiedBlock                *metrics.Gauge
+	lastDomainChangeStartBlock         *metrics.Gauge
+	lastDomainChangePrunedThrough      *metrics.Gauge
+	lastDomainChangePrunedThroughTx    *metrics.Gauge
+	lastPassDuration                   *metrics.Gauge
 }
 
 func newPrunerMetrics(namespace string) prunerMetrics {
 	namespace = normalizePrunerMetricNamespace(namespace)
 	return prunerMetrics{
-		passes:                            metrics.GetOrRegisterGauge(namespace+"passes", nil),
-		errors:                            metrics.GetOrRegisterGauge(namespace+"errors", nil),
-		skippedCatchup:                    metrics.GetOrRegisterGauge(namespace+"skipped/catchup", nil),
-		canceledCatchup:                   metrics.GetOrRegisterGauge(namespace+"verification/canceled/catchup", nil),
-		verificationMemoryHits:            metrics.GetOrRegisterGauge(namespace+"verification/memory_hits", nil),
-		verificationPersistentHits:        metrics.GetOrRegisterGauge(namespace+"verification/persisted_hits", nil),
-		verificationFull:                  metrics.GetOrRegisterGauge(namespace+"verification/full", nil),
-		verificationTrusted:               metrics.GetOrRegisterGauge(namespace+"verification/trusted", nil),
-		verificationCacheEntries:          metrics.GetOrRegisterGauge(namespace+"verification/cache_entries", nil),
-		retiredVerificationMemoryHits:     metrics.GetOrRegisterGauge(namespace+"retired/verification/memory_hits", nil),
-		retiredVerificationPersistentHits: metrics.GetOrRegisterGauge(namespace+"retired/verification/persisted_hits", nil),
-		retiredVerificationFull:           metrics.GetOrRegisterGauge(namespace+"retired/verification/full", nil),
-		retiredVerificationCanceled:       metrics.GetOrRegisterGauge(namespace+"retired/verification/canceled/catchup", nil),
-		deletedTxRanges:                   metrics.GetOrRegisterGauge(namespace+"deleted/tx_ranges", nil),
-		deletedDomainChangeBlocks:         metrics.GetOrRegisterGauge(namespace+"deleted/domain_change_blocks", nil),
-		deletedCommitmentCheckpoints:      metrics.GetOrRegisterGauge(namespace+"deleted/commitment_checkpoints", nil),
-		deletedStateCodeRows:              metrics.GetOrRegisterGauge(namespace+"deleted/state_code_rows", nil),
-		deferredStateCodePrune:            metrics.GetOrRegisterGauge(namespace+"state_code/deferred/catchup", nil),
-		lastSolidifiedBlock:               metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
-		lastDomainChangeStartBlock:        metrics.GetOrRegisterGauge(namespace+"last/domain_change/start_block", nil),
-		lastDomainChangePrunedThrough:     metrics.GetOrRegisterGauge(namespace+"last/domain_change/pruned_through_block", nil),
-		lastDomainChangePrunedThroughTx:   metrics.GetOrRegisterGauge(namespace+"last/domain_change/pruned_through_tx", nil),
-		lastPassDuration:                  metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
+		passes:                             metrics.GetOrRegisterGauge(namespace+"passes", nil),
+		errors:                             metrics.GetOrRegisterGauge(namespace+"errors", nil),
+		skippedCatchup:                     metrics.GetOrRegisterGauge(namespace+"skipped/catchup", nil),
+		canceledCatchup:                    metrics.GetOrRegisterGauge(namespace+"verification/canceled/catchup", nil),
+		verificationMemoryHits:             metrics.GetOrRegisterGauge(namespace+"verification/memory_hits", nil),
+		verificationPersistentHits:         metrics.GetOrRegisterGauge(namespace+"verification/persisted_hits", nil),
+		verificationFull:                   metrics.GetOrRegisterGauge(namespace+"verification/full", nil),
+		verificationTrusted:                metrics.GetOrRegisterGauge(namespace+"verification/trusted", nil),
+		verificationCacheEntries:           metrics.GetOrRegisterGauge(namespace+"verification/cache_entries", nil),
+		verificationActiveSegments:         metrics.GetOrRegisterGauge(namespace+"verification/active_segments", nil),
+		verificationActiveBytes:            metrics.GetOrRegisterGauge(namespace+"verification/active_bytes", nil),
+		verificationChecksumInFlight:       metrics.GetOrRegisterGauge(namespace+"verification/checksum/inflight", nil),
+		verificationChecksumStarted:        metrics.GetOrRegisterGauge(namespace+"verification/checksum/started", nil),
+		verificationChecksumCompleted:      metrics.GetOrRegisterGauge(namespace+"verification/checksum/completed", nil),
+		verificationChecksumFailed:         metrics.GetOrRegisterGauge(namespace+"verification/checksum/failed", nil),
+		verificationChecksumCanceled:       metrics.GetOrRegisterGauge(namespace+"verification/checksum/canceled", nil),
+		verificationChecksumBytesInFlight:  metrics.GetOrRegisterGauge(namespace+"verification/checksum/bytes/inflight", nil),
+		verificationChecksumBytesStarted:   metrics.GetOrRegisterGauge(namespace+"verification/checksum/bytes/started", nil),
+		verificationChecksumBytesCompleted: metrics.GetOrRegisterGauge(namespace+"verification/checksum/bytes/completed", nil),
+		retiredVerificationMemoryHits:      metrics.GetOrRegisterGauge(namespace+"retired/verification/memory_hits", nil),
+		retiredVerificationPersistentHits:  metrics.GetOrRegisterGauge(namespace+"retired/verification/persisted_hits", nil),
+		retiredVerificationFull:            metrics.GetOrRegisterGauge(namespace+"retired/verification/full", nil),
+		retiredVerificationCanceled:        metrics.GetOrRegisterGauge(namespace+"retired/verification/canceled/catchup", nil),
+		deletedTxRanges:                    metrics.GetOrRegisterGauge(namespace+"deleted/tx_ranges", nil),
+		deletedDomainChangeBlocks:          metrics.GetOrRegisterGauge(namespace+"deleted/domain_change_blocks", nil),
+		deletedCommitmentCheckpoints:       metrics.GetOrRegisterGauge(namespace+"deleted/commitment_checkpoints", nil),
+		deletedStateCodeRows:               metrics.GetOrRegisterGauge(namespace+"deleted/state_code_rows", nil),
+		deferredStateCodePrune:             metrics.GetOrRegisterGauge(namespace+"state_code/deferred/catchup", nil),
+		lastSolidifiedBlock:                metrics.GetOrRegisterGauge(namespace+"last/solidified_block", nil),
+		lastDomainChangeStartBlock:         metrics.GetOrRegisterGauge(namespace+"last/domain_change/start_block", nil),
+		lastDomainChangePrunedThrough:      metrics.GetOrRegisterGauge(namespace+"last/domain_change/pruned_through_block", nil),
+		lastDomainChangePrunedThroughTx:    metrics.GetOrRegisterGauge(namespace+"last/domain_change/pruned_through_tx", nil),
+		lastPassDuration:                   metrics.GetOrRegisterGauge(namespace+"lastpass/duration", nil),
 	}
 }
 
@@ -211,11 +241,6 @@ func (m prunerMetrics) update(stats PrunerStats) {
 	m.errors.Update(prunerUintGauge(stats.Errors))
 	m.skippedCatchup.Update(prunerUintGauge(stats.SkippedCatchup))
 	m.canceledCatchup.Update(prunerUintGauge(stats.CanceledCatchup))
-	m.verificationMemoryHits.Update(prunerUintGauge(stats.VerificationMemoryHits))
-	m.verificationPersistentHits.Update(prunerUintGauge(stats.VerificationPersistentHits))
-	m.verificationFull.Update(prunerUintGauge(stats.VerificationFull))
-	m.verificationTrusted.Update(prunerUintGauge(stats.VerificationTrusted))
-	m.verificationCacheEntries.Update(prunerUintGauge(stats.VerificationCacheEntries))
 	m.retiredVerificationMemoryHits.Update(prunerUintGauge(stats.RetiredVerificationMemoryHits))
 	m.retiredVerificationPersistentHits.Update(prunerUintGauge(stats.RetiredVerificationPersistentHits))
 	m.retiredVerificationFull.Update(prunerUintGauge(stats.RetiredVerificationFull))
@@ -230,6 +255,27 @@ func (m prunerMetrics) update(stats PrunerStats) {
 	m.lastDomainChangePrunedThrough.Update(prunerUintGauge(stats.LastDomainChangePrunedThrough))
 	m.lastDomainChangePrunedThroughTx.Update(prunerUintGauge(stats.LastDomainChangePrunedThroughTx))
 	m.lastPassDuration.Update(int64(stats.LastPassDuration))
+}
+
+// updateVerification is called directly by the verification cache at segment
+// boundaries, so an in-flight startup checksum is observable before the first
+// prune pass completes.
+func (m prunerMetrics) updateVerification(stats snapshotCoverageVerificationCacheStats) {
+	m.verificationMemoryHits.Update(prunerUintGauge(stats.MemoryHits))
+	m.verificationPersistentHits.Update(prunerUintGauge(stats.PersistentHits))
+	m.verificationFull.Update(prunerUintGauge(stats.FullVerified))
+	m.verificationTrusted.Update(prunerUintGauge(stats.TrustedRecorded))
+	m.verificationCacheEntries.Update(prunerUintGauge(stats.Entries))
+	m.verificationActiveSegments.Update(prunerUintGauge(stats.ActiveEntries))
+	m.verificationActiveBytes.Update(prunerUintGauge(stats.ActiveBytes))
+	m.verificationChecksumInFlight.Update(prunerUintGauge(stats.ChecksumInFlight))
+	m.verificationChecksumStarted.Update(prunerUintGauge(stats.ChecksumStarted))
+	m.verificationChecksumCompleted.Update(prunerUintGauge(stats.ChecksumCompleted))
+	m.verificationChecksumFailed.Update(prunerUintGauge(stats.ChecksumFailed))
+	m.verificationChecksumCanceled.Update(prunerUintGauge(stats.ChecksumCanceled))
+	m.verificationChecksumBytesInFlight.Update(prunerUintGauge(stats.ChecksumBytesInFlight))
+	m.verificationChecksumBytesStarted.Update(prunerUintGauge(stats.ChecksumBytesStarted))
+	m.verificationChecksumBytesCompleted.Update(prunerUintGauge(stats.ChecksumBytesCompleted))
 }
 
 func prunerUintGauge(value uint64) int64 {
@@ -258,6 +304,7 @@ func NewPruner(chain ChainSource, cfg PrunerConfig) *Pruner {
 		quit:                      make(chan struct{}),
 		done:                      make(chan struct{}),
 	}
+	pruner.coverageVerificationCache.setStatsObserver(pruner.metrics.updateVerification)
 	if err := pruner.coverageVerificationCache.LoadError(); err != nil {
 		log.Warn("Ignoring invalid domain snapshot verification cache", "err", err)
 	}
@@ -333,29 +380,39 @@ func (p *Pruner) Stats() PrunerStats {
 	}
 	verification := p.coverageVerificationCache.Stats()
 	return PrunerStats{
-		Passes:                            p.passes.Load(),
-		Errors:                            p.errors.Load(),
-		DeletedTxRanges:                   p.deletedTxRanges.Load(),
-		DeletedDomainChangeBlocks:         p.deletedDomainChangeBlocks.Load(),
-		DeletedCommitmentCheckpoints:      p.deletedCommitmentCheckpoints.Load(),
-		DeletedStateCodeRows:              p.deletedStateCodeRows.Load(),
-		DeferredStateCodePrune:            p.deferredStateCodePrune.Load(),
-		SkippedCatchup:                    p.skippedCatchup.Load(),
-		CanceledCatchup:                   p.canceledCatchup.Load(),
-		VerificationMemoryHits:            verification.MemoryHits,
-		VerificationPersistentHits:        verification.PersistentHits,
-		VerificationFull:                  verification.FullVerified,
-		VerificationTrusted:               verification.TrustedRecorded,
-		VerificationCacheEntries:          verification.Entries,
-		RetiredVerificationMemoryHits:     p.retiredVerificationMemoryHits.Load(),
-		RetiredVerificationPersistentHits: p.retiredVerificationPersistentHits.Load(),
-		RetiredVerificationFull:           p.retiredVerificationFull.Load(),
-		RetiredVerificationCanceled:       p.retiredVerificationCanceled.Load(),
-		LastSolidifiedBlock:               p.lastSolidifiedBlock.Load(),
-		LastDomainChangeStartBlock:        p.lastDomainChangeStartBlock.Load(),
-		LastDomainChangePrunedThrough:     p.lastDomainChangePrunedThrough.Load(),
-		LastDomainChangePrunedThroughTx:   p.lastDomainChangePrunedThroughTx.Load(),
-		LastPassDuration:                  time.Duration(p.lastPassDuration.Load()),
+		Passes:                             p.passes.Load(),
+		Errors:                             p.errors.Load(),
+		DeletedTxRanges:                    p.deletedTxRanges.Load(),
+		DeletedDomainChangeBlocks:          p.deletedDomainChangeBlocks.Load(),
+		DeletedCommitmentCheckpoints:       p.deletedCommitmentCheckpoints.Load(),
+		DeletedStateCodeRows:               p.deletedStateCodeRows.Load(),
+		DeferredStateCodePrune:             p.deferredStateCodePrune.Load(),
+		SkippedCatchup:                     p.skippedCatchup.Load(),
+		CanceledCatchup:                    p.canceledCatchup.Load(),
+		VerificationMemoryHits:             verification.MemoryHits,
+		VerificationPersistentHits:         verification.PersistentHits,
+		VerificationFull:                   verification.FullVerified,
+		VerificationTrusted:                verification.TrustedRecorded,
+		VerificationCacheEntries:           verification.Entries,
+		VerificationActiveSegments:         verification.ActiveEntries,
+		VerificationActiveBytes:            verification.ActiveBytes,
+		VerificationChecksumInFlight:       verification.ChecksumInFlight,
+		VerificationChecksumStarted:        verification.ChecksumStarted,
+		VerificationChecksumCompleted:      verification.ChecksumCompleted,
+		VerificationChecksumFailed:         verification.ChecksumFailed,
+		VerificationChecksumCanceled:       verification.ChecksumCanceled,
+		VerificationChecksumBytesInFlight:  verification.ChecksumBytesInFlight,
+		VerificationChecksumBytesStarted:   verification.ChecksumBytesStarted,
+		VerificationChecksumBytesCompleted: verification.ChecksumBytesCompleted,
+		RetiredVerificationMemoryHits:      p.retiredVerificationMemoryHits.Load(),
+		RetiredVerificationPersistentHits:  p.retiredVerificationPersistentHits.Load(),
+		RetiredVerificationFull:            p.retiredVerificationFull.Load(),
+		RetiredVerificationCanceled:        p.retiredVerificationCanceled.Load(),
+		LastSolidifiedBlock:                p.lastSolidifiedBlock.Load(),
+		LastDomainChangeStartBlock:         p.lastDomainChangeStartBlock.Load(),
+		LastDomainChangePrunedThrough:      p.lastDomainChangePrunedThrough.Load(),
+		LastDomainChangePrunedThroughTx:    p.lastDomainChangePrunedThroughTx.Load(),
+		LastPassDuration:                   time.Duration(p.lastPassDuration.Load()),
 	}
 }
 

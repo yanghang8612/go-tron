@@ -55,11 +55,21 @@ type snapshotCoverageVerificationDisk struct {
 }
 
 type snapshotCoverageVerificationCacheStats struct {
-	MemoryHits      uint64
-	PersistentHits  uint64
-	FullVerified    uint64
-	TrustedRecorded uint64
-	Entries         uint64
+	MemoryHits             uint64
+	PersistentHits         uint64
+	FullVerified           uint64
+	TrustedRecorded        uint64
+	Entries                uint64
+	ActiveEntries          uint64
+	ActiveBytes            uint64
+	ChecksumInFlight       uint64
+	ChecksumStarted        uint64
+	ChecksumCompleted      uint64
+	ChecksumFailed         uint64
+	ChecksumCanceled       uint64
+	ChecksumBytesInFlight  uint64
+	ChecksumBytesStarted   uint64
+	ChecksumBytesCompleted uint64
 }
 
 type snapshotHistoryVerificationRoute uint8
@@ -71,12 +81,14 @@ const (
 )
 
 type snapshotCoverageVerificationCache struct {
-	mu         sync.Mutex
-	dir        string
-	verified   map[snapshotHistoryVerificationKey]struct{}
-	persistent map[snapshotHistoryVerificationRecord]struct{}
-	loadErr    error
-	stats      snapshotCoverageVerificationCacheStats
+	mu            sync.Mutex
+	publishMu     sync.Mutex
+	dir           string
+	verified      map[snapshotHistoryVerificationKey]struct{}
+	persistent    map[snapshotHistoryVerificationRecord]struct{}
+	loadErr       error
+	stats         snapshotCoverageVerificationCacheStats
+	statsObserver func(snapshotCoverageVerificationCacheStats)
 }
 
 func newSnapshotCoverageVerificationCache(dir string) *snapshotCoverageVerificationCache {
@@ -109,10 +121,13 @@ func (c *snapshotCoverageVerificationCache) contains(key snapshotHistoryVerifica
 		return false
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	_, ok := c.verified[key]
 	if ok {
 		c.stats.MemoryHits++
+	}
+	c.mu.Unlock()
+	if ok {
+		c.publishStats()
 	}
 	return ok
 }
@@ -136,6 +151,7 @@ func (c *snapshotCoverageVerificationCache) promotePersistent(key snapshotHistor
 	c.verified[key] = struct{}{}
 	c.stats.PersistentHits++
 	c.mu.Unlock()
+	c.publishStats()
 }
 
 func (c *snapshotCoverageVerificationCache) addFull(key snapshotHistoryVerificationKey) error {
@@ -155,7 +171,6 @@ func (c *snapshotCoverageVerificationCache) add(key snapshotHistoryVerificationK
 		return err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.verified[key] = struct{}{}
 	if trusted {
 		c.stats.TrustedRecorded++
@@ -163,13 +178,19 @@ func (c *snapshotCoverageVerificationCache) add(key snapshotHistoryVerificationK
 		c.stats.FullVerified++
 	}
 	if _, ok := c.persistent[record]; ok {
+		c.mu.Unlock()
+		c.publishStats()
 		return nil
 	}
 	c.persistent[record] = struct{}{}
 	if err := c.persistLocked(); err != nil {
 		delete(c.persistent, record)
+		c.mu.Unlock()
+		c.publishStats()
 		return err
 	}
+	c.mu.Unlock()
+	c.publishStats()
 	return nil
 }
 
@@ -182,7 +203,6 @@ func (c *snapshotCoverageVerificationCache) retain(active map[snapshotHistoryVer
 		activeRecords[snapshotHistoryVerificationRecordFor(key)] = struct{}{}
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	for key := range c.verified {
 		if _, ok := active[key]; !ok {
 			delete(c.verified, key)
@@ -196,9 +216,14 @@ func (c *snapshotCoverageVerificationCache) retain(active map[snapshotHistoryVer
 		}
 	}
 	if !dirty {
+		c.mu.Unlock()
+		c.publishStats()
 		return nil
 	}
-	return c.persistLocked()
+	err := c.persistLocked()
+	c.mu.Unlock()
+	c.publishStats()
+	return err
 }
 
 func (c *snapshotCoverageVerificationCache) Stats() snapshotCoverageVerificationCacheStats {
@@ -207,9 +232,101 @@ func (c *snapshotCoverageVerificationCache) Stats() snapshotCoverageVerification
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	stats, _ := c.statsSnapshotLocked()
+	return stats
+}
+
+func (c *snapshotCoverageVerificationCache) setStatsObserver(observer func(snapshotCoverageVerificationCacheStats)) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.statsObserver = observer
+	c.mu.Unlock()
+	c.publishStats()
+}
+
+func (c *snapshotCoverageVerificationCache) statsSnapshotLocked() (snapshotCoverageVerificationCacheStats, func(snapshotCoverageVerificationCacheStats)) {
 	stats := c.stats
 	stats.Entries = uint64(len(c.persistent))
-	return stats
+	return stats, c.statsObserver
+}
+
+// publishStats serializes observer callbacks and snapshots state only after it
+// owns the publication sequence. A delayed publisher therefore emits the most
+// recent state instead of overwriting newer gauges with the stale snapshot it
+// originally triggered.
+func (c *snapshotCoverageVerificationCache) publishStats() {
+	if c == nil {
+		return
+	}
+	c.publishMu.Lock()
+	defer c.publishMu.Unlock()
+	c.mu.Lock()
+	stats, observer := c.statsSnapshotLocked()
+	c.mu.Unlock()
+	if observer != nil {
+		observer(stats)
+	}
+}
+
+func (c *snapshotCoverageVerificationCache) beginChecksum(bytes uint64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.stats.ChecksumInFlight++
+	c.stats.ChecksumStarted++
+	c.stats.ChecksumBytesInFlight += bytes
+	c.stats.ChecksumBytesStarted += bytes
+	c.mu.Unlock()
+	c.publishStats()
+}
+
+func (c *snapshotCoverageVerificationCache) setActiveManifest(active map[snapshotHistoryVerificationKey]struct{}) {
+	if c == nil {
+		return
+	}
+	var bytes uint64
+	for key := range active {
+		size := snapshotHistoryVerificationKeyBytes(key)
+		if ^uint64(0)-bytes < size {
+			bytes = ^uint64(0)
+			break
+		}
+		bytes += size
+	}
+	c.mu.Lock()
+	c.stats.ActiveEntries = uint64(len(active))
+	c.stats.ActiveBytes = bytes
+	c.mu.Unlock()
+	c.publishStats()
+}
+
+func (c *snapshotCoverageVerificationCache) finishChecksum(bytes uint64, err error) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.stats.ChecksumInFlight > 0 {
+		c.stats.ChecksumInFlight--
+	}
+	if bytes >= c.stats.ChecksumBytesInFlight {
+		c.stats.ChecksumBytesInFlight = 0
+	} else {
+		c.stats.ChecksumBytesInFlight -= bytes
+	}
+	if err == nil {
+		c.stats.ChecksumCompleted++
+		c.stats.ChecksumBytesCompleted += bytes
+	} else {
+		c.stats.ChecksumFailed++
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			c.stats.ChecksumCanceled++
+		}
+	}
+	c.mu.Unlock()
+	c.publishStats()
 }
 
 // verifyHistory authenticates one immutable history/index/accessor triple and
@@ -232,11 +349,14 @@ func (c *snapshotCoverageVerificationCache) verifyHistory(ctx context.Context, d
 	}
 	if c != nil && c.contains(key) {
 		if reauthenticateMemory {
-			if err := snapshots.VerifyHistorySegmentCompanionChecksumsContext(ctx, dir, manifest, ref); err != nil {
+			err := c.observeChecksumVerification(key, operation, ref, snapshotHistoryVerificationMemory, func() error {
+				if err := snapshots.VerifyHistorySegmentCompanionChecksumsContext(ctx, dir, manifest, ref); err != nil {
+					return err
+				}
+				return verifySnapshotHistoryIdentityUnchanged(dir, manifest, ref, key, operation)
+			})
+			if err != nil {
 				return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: recheck in-memory state-domain history %q: %w", operation, ref.Path, err)
-			}
-			if err := verifySnapshotHistoryIdentityUnchanged(dir, manifest, ref, key, operation); err != nil {
-				return snapshotHistoryVerificationKey{}, 0, err
 			}
 		}
 		return key, snapshotHistoryVerificationMemory, nil
@@ -244,19 +364,25 @@ func (c *snapshotCoverageVerificationCache) verifyHistory(ctx context.Context, d
 
 	persisted := c != nil && c.persistentCandidate(key)
 	if persisted {
-		if err := snapshots.VerifyHistorySegmentCompanionChecksumsContext(ctx, dir, manifest, ref); err != nil {
+		err := c.observeChecksumVerification(key, operation, ref, snapshotHistoryVerificationPersistent, func() error {
+			if err := snapshots.VerifyHistorySegmentCompanionChecksumsContext(ctx, dir, manifest, ref); err != nil {
+				return err
+			}
+			return verifySnapshotHistoryIdentityUnchanged(dir, manifest, ref, key, operation)
+		})
+		if err != nil {
 			return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: recheck cached state-domain history %q: %w", operation, ref.Path, err)
 		}
 	} else {
-		started := time.Now()
-		log.Info("Verifying domain snapshot history", "operation", operation, "path", ref.Path, "size", ref.Size)
-		if err := snapshots.VerifyHistorySegmentWithCompanionsContext(ctx, dir, manifest, ref); err != nil {
+		err := c.observeChecksumVerification(key, operation, ref, snapshotHistoryVerificationFull, func() error {
+			if err := snapshots.VerifyHistorySegmentWithCompanionsContext(ctx, dir, manifest, ref); err != nil {
+				return err
+			}
+			return verifySnapshotHistoryIdentityUnchanged(dir, manifest, ref, key, operation)
+		})
+		if err != nil {
 			return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: verify state-domain history %q: %w", operation, ref.Path, err)
 		}
-		log.Info("Verified domain snapshot history", "operation", operation, "path", ref.Path, "elapsed", time.Since(started))
-	}
-	if err := verifySnapshotHistoryIdentityUnchanged(dir, manifest, ref, key, operation); err != nil {
-		return snapshotHistoryVerificationKey{}, 0, err
 	}
 	if c == nil {
 		return key, snapshotHistoryVerificationFull, nil
@@ -269,6 +395,65 @@ func (c *snapshotCoverageVerificationCache) verifyHistory(ctx context.Context, d
 		return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: persist state-domain history verification %q: %w", operation, ref.Path, err)
 	}
 	return key, snapshotHistoryVerificationFull, nil
+}
+
+func (c *snapshotCoverageVerificationCache) observeChecksumVerification(key snapshotHistoryVerificationKey, operation string, ref snapshots.SegmentRef, route snapshotHistoryVerificationRoute, verify func() error) (err error) {
+	bytes := snapshotHistoryVerificationKeyBytes(key)
+	started := time.Now()
+	c.beginChecksum(bytes)
+	log.Info("Verifying domain snapshot history",
+		"operation", operation,
+		"route", snapshotHistoryVerificationRouteName(route),
+		"path", ref.Path,
+		"checksumBytes", bytes)
+	defer func() {
+		c.finishChecksum(bytes, err)
+		if err != nil {
+			log.Warn("Domain snapshot history verification failed",
+				"operation", operation,
+				"route", snapshotHistoryVerificationRouteName(route),
+				"path", ref.Path,
+				"checksumBytes", bytes,
+				"elapsed", time.Since(started),
+				"err", err)
+			return
+		}
+		log.Info("Verified domain snapshot history",
+			"operation", operation,
+			"route", snapshotHistoryVerificationRouteName(route),
+			"path", ref.Path,
+			"checksumBytes", bytes,
+			"elapsed", time.Since(started))
+	}()
+	return verify()
+}
+
+func snapshotHistoryVerificationRouteName(route snapshotHistoryVerificationRoute) string {
+	switch route {
+	case snapshotHistoryVerificationMemory:
+		return "memory-reauth"
+	case snapshotHistoryVerificationPersistent:
+		return "persistent"
+	case snapshotHistoryVerificationFull:
+		return "full"
+	default:
+		return "unknown"
+	}
+}
+
+func snapshotHistoryVerificationKeyBytes(key snapshotHistoryVerificationKey) uint64 {
+	var total uint64
+	for _, identity := range []snapshotFileIdentity{key.historyFile, key.indexFile, key.accessorFile} {
+		if identity.size <= 0 {
+			continue
+		}
+		size := uint64(identity.size)
+		if ^uint64(0)-total < size {
+			return ^uint64(0)
+		}
+		total += size
+	}
+	return total
 }
 
 func verifySnapshotHistoryIdentityUnchanged(dir string, manifest *snapshots.Manifest, ref snapshots.SegmentRef, want snapshotHistoryVerificationKey, operation string) error {

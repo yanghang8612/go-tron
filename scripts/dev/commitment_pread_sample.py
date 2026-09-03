@@ -171,6 +171,12 @@ PRUNE_MONOTONIC_GAUGE_METRICS = tuple(
         "verification/persisted_hits",
         "verification/full",
         "verification/trusted",
+        "verification/checksum/started",
+        "verification/checksum/completed",
+        "verification/checksum/failed",
+        "verification/checksum/canceled",
+        "verification/checksum/bytes/started",
+        "verification/checksum/bytes/completed",
         "retired/verification/memory_hits",
         "retired/verification/persisted_hits",
         "retired/verification/full",
@@ -186,6 +192,10 @@ PRUNE_POINT_GAUGE_METRICS = tuple(
     "state/prune/{}".format(name)
     for name in (
         "verification/cache_entries",
+        "verification/active_segments",
+        "verification/active_bytes",
+        "verification/checksum/inflight",
+        "verification/checksum/bytes/inflight",
         "last/solidified_block",
         "last/domain_change/start_block",
         "last/domain_change/pruned_through_block",
@@ -1246,8 +1256,36 @@ def build_row(now, height, current, previous, sample_window=None):
         "pruneVerificationMemoryHitsPerBlock": safe_ratio(
             deltas.get("state/prune/verification/memory_hits"), interval_blocks
         ),
+        "pruneChecksumStartedPerBlock": safe_ratio(
+            deltas.get("state/prune/verification/checksum/started"), interval_blocks
+        ),
+        "pruneChecksumCompletedPerBlock": safe_ratio(
+            deltas.get("state/prune/verification/checksum/completed"), interval_blocks
+        ),
+        "pruneChecksumFailedPerBlock": safe_ratio(
+            deltas.get("state/prune/verification/checksum/failed"), interval_blocks
+        ),
+        "pruneChecksumCanceledPerBlock": safe_ratio(
+            deltas.get("state/prune/verification/checksum/canceled"), interval_blocks
+        ),
+        "pruneChecksumBytesCompletedPerBlock": safe_ratio(
+            deltas.get("state/prune/verification/checksum/bytes/completed"),
+            interval_blocks,
+        ),
+        "pruneChecksumInFlight": current.get(
+            "state/prune/verification/checksum/inflight"
+        ),
+        "pruneChecksumBytesInFlight": current.get(
+            "state/prune/verification/checksum/bytes/inflight"
+        ),
         "pruneVerificationCacheEntries": current.get(
             "state/prune/verification/cache_entries"
+        ),
+        "pruneVerificationActiveSegments": current.get(
+            "state/prune/verification/active_segments"
+        ),
+        "pruneVerificationActiveBytes": current.get(
+            "state/prune/verification/active_bytes"
         ),
         "pruneLastPassSeconds": safe_ratio(
             current.get("state/prune/lastpass/duration"), 1_000_000_000
