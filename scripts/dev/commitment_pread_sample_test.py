@@ -45,6 +45,56 @@ class CommitmentPreadSampleTest(unittest.TestCase):
             self.assertNotIn(name, MODULE.COUNTER_METRICS)
             self.assertNotIn(name, MODULE.MONOTONIC_GAUGE_METRICS)
 
+    def test_sync_import_window_freshness_has_fixed_staleness_limit(self):
+        current = {
+            "sync/import/window/updated_unix": 95.0,
+            "sync/import/window/elapsed_seconds": 30.0,
+        }
+        fresh = MODULE.build_row(100.0, 1, current, None)["analysis"]
+        self.assertEqual(fresh["syncImportWindowAgeSeconds"], 5.0)
+        self.assertEqual(fresh["syncImportWindowFreshnessLimitSeconds"], 60.0)
+        self.assertTrue(fresh["syncImportWindowFresh"])
+
+        current["sync/import/window/updated_unix"] = 1.0
+        stale = MODULE.build_row(100.0, 1, current, None)["analysis"]
+        self.assertEqual(stale["syncImportWindowAgeSeconds"], 99.0)
+        self.assertFalse(stale["syncImportWindowFresh"])
+
+        current["sync/import/window/updated_unix"] = 35.0
+        current["sync/import/window/elapsed_seconds"] = 1_800.0
+        long_window = MODULE.build_row(100.0, 1, current, None)["analysis"]
+        self.assertEqual(long_window["syncImportWindowFreshnessLimitSeconds"], 60.0)
+        self.assertFalse(long_window["syncImportWindowFresh"])
+
+        current["sync/import/window/updated_unix"] = 0
+        uninitialized = MODULE.build_row(100.0, 1, current, None)["analysis"]
+        self.assertIsNone(uninitialized["syncImportWindowAgeSeconds"])
+        self.assertFalse(uninitialized["syncImportWindowFresh"])
+
+    def test_prune_analysis_deltas_totals_and_converts_duration(self):
+        process = MODULE.PROCESS_IDENTITY_METRIC
+        current = {
+            process: 7,
+            "state/prune/passes": 5,
+            "state/prune/verification/full": 3,
+            "state/prune/verification/cache_entries": 44,
+            "state/prune/lastpass/duration": 2_500_000_000,
+        }
+        previous = {
+            "unix": 100.0,
+            "height": 10,
+            "metrics": {
+                process: 7,
+                "state/prune/passes": 3,
+                "state/prune/verification/full": 2,
+            },
+        }
+        analysis = MODULE.build_row(101.0, 11, current, previous)["analysis"]
+        self.assertEqual(analysis["prunePassesPerBlock"], 2.0)
+        self.assertEqual(analysis["pruneVerificationFullPerBlock"], 1.0)
+        self.assertEqual(analysis["pruneVerificationCacheEntries"], 44)
+        self.assertEqual(analysis["pruneLastPassSeconds"], 2.5)
+
     def test_build_row_derives_interval_read_ratios(self):
         names = MODULE.ALL_METRICS
         previous_metrics = {name: 0 for name in names}
@@ -538,6 +588,11 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertIn("chain/freezer/", MODULE.METRIC_PREFIXES)
         self.assertIn("state/snapshot/cold/", MODULE.METRIC_PREFIXES)
         self.assertIn("state/snapshot/commitment_branch/", MODULE.METRIC_PREFIXES)
+        self.assertIn("state/prune/", MODULE.METRIC_PREFIXES)
+        for name in MODULE.PRUNE_MONOTONIC_GAUGE_METRICS:
+            self.assertIn(name, MODULE.MONOTONIC_GAUGE_METRICS)
+        for name in MODULE.PRUNE_POINT_GAUGE_METRICS:
+            self.assertIn(name, MODULE.POINT_GAUGE_METRICS)
         self.assertIn(
             "state/commitment/pipeline/prefetch_critical/queue_wait_calls",
             MODULE.COUNTER_METRICS,
@@ -738,6 +793,7 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         def request(url, timeout):
             calls.append((url, timeout))
             return {
+                "prefixes": list(MODULE.METRIC_PREFIXES),
                 "metrics": {
                     "process/start/unix_nano": {"value": 1},
                     "cache/block/hit": {"count": 2},
@@ -761,6 +817,15 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 "cache/block/hit": {"count": 2},
             },
         )
+
+    def test_fetch_metrics_rejects_legacy_single_prefix_response(self):
+        payload = {
+            "prefix": MODULE.METRIC_PREFIXES[0],
+            "metrics": {"process/start/unix_nano": {"value": 1}},
+        }
+        with mock.patch.object(MODULE, "request_json", return_value=payload):
+            with self.assertRaisesRegex(RuntimeError, "multi-prefix snapshot"):
+                MODULE.fetch_metrics("http://127.0.0.1:6062/debug/metrics", 3.0)
 
     def test_sample_once_brackets_single_scrape_and_marks_strict_interval(self):
         events = []

@@ -25,6 +25,7 @@ METRIC_PREFIXES = (
     "blockbuffer/commitment_parent/",
     "blockbuffer/base_cache/",
     "state/commitment/",
+    "state/prune/",
     "state/snapshot/commitment_branch/",
     "ancient/",
     "chain/freezer/",
@@ -36,6 +37,7 @@ METRIC_PREFIXES = (
 )
 
 PROCESS_IDENTITY_METRIC = "process/start/unix_nano"
+SYNC_IMPORT_WINDOW_FRESHNESS_SECONDS = 60.0
 
 PEBBLE_COMPACTION_INPUT_METRIC = "compact/input"
 PEBBLE_COMPACTION_LIVE_COUNT_METRIC = "compact/live/count"
@@ -157,6 +159,40 @@ STATE_CODE_CACHE_COUNTER_METRICS = (
 )
 STATE_CODE_CACHE_BYTES_METRIC = "state/code_cache/bytes"
 COLD_COMPACTION_ACTIVE_METRIC = "state/snapshot/cold/compaction/current/active"
+
+PRUNE_MONOTONIC_GAUGE_METRICS = tuple(
+    "state/prune/{}".format(name)
+    for name in (
+        "passes",
+        "errors",
+        "skipped/catchup",
+        "verification/canceled/catchup",
+        "verification/memory_hits",
+        "verification/persisted_hits",
+        "verification/full",
+        "verification/trusted",
+        "retired/verification/memory_hits",
+        "retired/verification/persisted_hits",
+        "retired/verification/full",
+        "retired/verification/canceled/catchup",
+        "deleted/tx_ranges",
+        "deleted/domain_change_blocks",
+        "deleted/commitment_checkpoints",
+        "deleted/state_code_rows",
+        "state_code/deferred/catchup",
+    )
+)
+PRUNE_POINT_GAUGE_METRICS = tuple(
+    "state/prune/{}".format(name)
+    for name in (
+        "verification/cache_entries",
+        "last/solidified_block",
+        "last/domain_change/start_block",
+        "last/domain_change/pruned_through_block",
+        "last/domain_change/pruned_through_tx",
+        "lastpass/duration",
+    )
+)
 
 EXACT_DEPTH_METRICS = {
     "depth_{}".format(depth): {
@@ -370,7 +406,9 @@ MONOTONIC_GAUGE_METRICS = (
     "filter/miss",
 ) + tuple(
     PEBBLE_LEVEL_COMPACTION_READ_METRICS.values()
-) + FREEZER_V2_MONOTONIC_METRICS + (BASE_CACHE_WINDOW_ADMITTED_METRIC,)
+) + FREEZER_V2_MONOTONIC_METRICS + PRUNE_MONOTONIC_GAUGE_METRICS + (
+    BASE_CACHE_WINDOW_ADMITTED_METRIC,
+)
 
 POINT_GAUGE_METRICS = (
     PROCESS_IDENTITY_METRIC,
@@ -390,6 +428,7 @@ POINT_GAUGE_METRICS = (
     "state/snapshot/cold/history/forced_busy/last/debt_blocks",
     "state/snapshot/cold/history/forced_busy/last/debt_growth_blocks",
     *FREEZER_V2_POINT_METRICS,
+    *PRUNE_POINT_GAUGE_METRICS,
     STATE_CODE_CACHE_BYTES_METRIC,
     COLD_COMPACTION_ACTIVE_METRIC,
     "iter/count",
@@ -442,7 +481,12 @@ def fetch_metrics(url, timeout):
     # Ask the debug endpoint for every required family in one registry snapshot
     # so the selected counters share one scrape window. Keep the local filter as
     # a defensive boundary for unexpected endpoint responses.
-    metrics = normalize_metrics(request_json(with_prefixes(url, METRIC_PREFIXES), timeout))
+    payload = request_json(with_prefixes(url, METRIC_PREFIXES), timeout)
+    metrics = normalize_metrics(payload)
+    if payload.get("prefixes") != list(METRIC_PREFIXES):
+        raise RuntimeError(
+            "metrics endpoint did not confirm the required multi-prefix snapshot"
+        )
     return {
         name: values
         for name, values in metrics.items()
@@ -515,6 +559,24 @@ def nonnegative_difference(total, part):
     if total is None or part is None or part > total:
         return None
     return total - part
+
+
+def build_sync_import_window_analysis(now, current):
+    updated = current.get("sync/import/window/updated_unix")
+    updated_valid = (
+        isinstance(updated, (int, float))
+        and not isinstance(updated, bool)
+        and 0 < updated <= now
+    )
+    age = now - float(updated) if updated_valid else None
+    return {
+        "syncImportWindowUpdatedUnix": updated,
+        "syncImportWindowAgeSeconds": age,
+        "syncImportWindowFreshnessLimitSeconds": SYNC_IMPORT_WINDOW_FRESHNESS_SECONDS,
+        "syncImportWindowFresh": (
+            age is not None and age <= SYNC_IMPORT_WINDOW_FRESHNESS_SECONDS
+        ),
+    }
 
 
 def build_physical_read_analysis(group, current, deltas, interval_blocks):
@@ -1172,6 +1234,24 @@ def build_row(now, height, current, previous, sample_window=None):
         "freezerV2BudgetExhaustedPerBlock": safe_ratio(
             deltas.get("chain/freezer/v2/batch/budget_exhausted"), interval_blocks
         ),
+        "prunePassesPerBlock": safe_ratio(
+            deltas.get("state/prune/passes"), interval_blocks
+        ),
+        "pruneVerificationFullPerBlock": safe_ratio(
+            deltas.get("state/prune/verification/full"), interval_blocks
+        ),
+        "pruneVerificationPersistentHitsPerBlock": safe_ratio(
+            deltas.get("state/prune/verification/persisted_hits"), interval_blocks
+        ),
+        "pruneVerificationMemoryHitsPerBlock": safe_ratio(
+            deltas.get("state/prune/verification/memory_hits"), interval_blocks
+        ),
+        "pruneVerificationCacheEntries": current.get(
+            "state/prune/verification/cache_entries"
+        ),
+        "pruneLastPassSeconds": safe_ratio(
+            current.get("state/prune/lastpass/duration"), 1_000_000_000
+        ),
         "coldSnapshotCompactionActive": current.get(COLD_COMPACTION_ACTIVE_METRIC),
         "stateCodeCacheHitRatio": safe_ratio(
             deltas.get("state/code_cache/hits"), state_code_cache_total
@@ -1265,6 +1345,7 @@ def build_row(now, height, current, previous, sample_window=None):
     analysis.update(build_sst_fd_access_analysis(current, deltas, interval_blocks))
     analysis.update(build_sst_prefetch_analysis(current, deltas, interval_blocks))
     analysis.update(build_exact_depth_analysis(current, deltas, interval_blocks))
+    analysis.update(build_sync_import_window_analysis(now, current))
     analysis.update(
         build_base_cache_analysis(
             current, previous_metrics, deltas, interval_blocks, same_process
