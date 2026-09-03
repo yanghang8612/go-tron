@@ -24,9 +24,12 @@ type precompiledContractWithStatus interface {
 
 func runPrecompile(tvm *TVM, p PrecompiledContract, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
 	if ps, ok := p.(precompiledContractWithStatus); ok {
-		return ps.RunWithStatus(tvm, caller, input, energy)
+		ret, used, success, err := ps.RunWithStatus(tvm, caller, input, energy)
+		tvm.addRawEnergyUsage(used)
+		return ret, used, success, err
 	}
 	ret, used, err := p.Run(tvm, caller, input, energy)
+	tvm.addRawEnergyUsage(used)
 	return ret, used, err == nil, err
 }
 

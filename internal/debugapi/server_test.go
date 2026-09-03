@@ -88,3 +88,51 @@ func TestServer_MetricsSupportsPrefixFilter(t *testing.T) {
 		t.Fatal("prefix filter included unrelated metric")
 	}
 }
+
+func TestServer_MetricsSupportsMultiplePrefixFilters(t *testing.T) {
+	const (
+		cacheName   = "debugapi-multi/cache/hit"
+		compactName = "debugapi-multi/compact/debt"
+		excluded    = "debugapi-multi/other/value"
+	)
+	for _, name := range []string{cacheName, compactName, excluded} {
+		metrics.DefaultRegistry.Unregister(name)
+		name := name
+		t.Cleanup(func() { metrics.DefaultRegistry.Unregister(name) })
+	}
+	metrics.GetOrRegisterGauge(cacheName, nil).Update(1)
+	metrics.GetOrRegisterGauge(compactName, nil).Update(2)
+	metrics.GetOrRegisterGauge(excluded, nil).Update(3)
+
+	s := NewServer("127.0.0.1:0")
+	t.Cleanup(func() { _ = s.Stop() })
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	resp, err := http.Get("http://" + s.ListenAddr() + "/debug/metrics?prefix=debugapi-multi%2Fcache%2F&prefix=debugapi-multi%2Fcompact%2F")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Prefix   string                            `json:"prefix"`
+		Prefixes []string                          `json:"prefixes"`
+		Count    int                               `json:"count"`
+		Metrics  map[string]map[string]interface{} `json:"metrics"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Prefix != "" || len(body.Prefixes) != 2 || body.Count != 2 {
+		t.Fatalf("metrics response prefix/prefixes/count = %q/%v/%d", body.Prefix, body.Prefixes, body.Count)
+	}
+	if _, ok := body.Metrics[cacheName]; !ok {
+		t.Fatalf("missing %s", cacheName)
+	}
+	if _, ok := body.Metrics[compactName]; !ok {
+		t.Fatalf("missing %s", compactName)
+	}
+	if _, ok := body.Metrics[excluded]; ok {
+		t.Fatal("multi-prefix filter included unrelated metric")
+	}
+}

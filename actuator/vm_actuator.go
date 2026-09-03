@@ -3,6 +3,7 @@ package actuator
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -299,7 +300,9 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 		sc.Version = 0
 	}
 
+	vmStarted := time.Now()
 	ret, createdAddr, energyLeft, vmErr := evm.CreateAtWithTokenAndContract(owner, contractAddr, bytecode, energyLimit, callValue, tokenID, tokenValue, sc)
+	result.VMExecutionDuration = time.Since(vmStarted)
 	if !createdAddr.IsEmpty() {
 		contractAddr = createdAddr
 		sc.ContractAddress = contractAddr[:]
@@ -308,6 +311,10 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	energyUsed := energyLimit - energyLeft
 
 	result.EnergyUsageTotal = int64(energyUsed)
+	result.VMRawEnergyUsage = int64(energyUsed)
+	if cfg.DynamicEnergy {
+		result.VMRawEnergyUsage = int64(evm.RawEnergyUsage())
+	}
 	result.ContractResult = ret
 	result.ContractResultPresent = true
 	result.Logs = evm.Logs
@@ -398,15 +405,21 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 		energyLeft uint64
 		vmErr      error
 	)
+	vmStarted := time.Now()
 	if cfg.TransferTrc10 {
 		ret, energyLeft, vmErr = evm.CallToken(owner, contractAddr, data, energyLimit, callValue, tokenID, tokenValue)
 	} else {
 		ret, energyLeft, vmErr = evm.Call(owner, contractAddr, data, energyLimit, callValue)
 	}
+	result.VMExecutionDuration = time.Since(vmStarted)
 
 	energyUsed := energyLimit - energyLeft
 
 	result.EnergyUsageTotal = int64(energyUsed)
+	result.VMRawEnergyUsage = int64(energyUsed)
+	if cfg.DynamicEnergy {
+		result.VMRawEnergyUsage = int64(evm.RawEnergyUsage())
+	}
 	result.ContractResult = ret
 	result.ContractResultPresent = true
 	result.Logs = evm.Logs

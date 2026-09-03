@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -157,6 +158,9 @@ func TestInterpreter_DynamicEnergyPenaltyCharged(t *testing.T) {
 	if updated.EnergyUsage() != 9 {
 		t.Fatalf("recorded usage: got %d, want 9", updated.EnergyUsage())
 	}
+	if got := tvm.RawEnergyUsage(); got != 9 {
+		t.Fatalf("raw execution energy: got %d, want 9", got)
+	}
 }
 
 func TestInterpreter_DynamicEnergyNestedCallsRecordParentAndChildSeparately(t *testing.T) {
@@ -199,6 +203,9 @@ func TestInterpreter_DynamicEnergyNestedCallsRecordParentAndChildSeparately(t *t
 	if got := stateDB.ReadContractState(child).EnergyUsage(); got != 9 {
 		t.Fatalf("child usage: got %d, want 9", got)
 	}
+	if got := tvm.RawEnergyUsage(); got != 70 {
+		t.Fatalf("raw execution energy: got %d, want parent+child 70", got)
+	}
 }
 
 func TestInterpreter_DynamicEnergyOffNoPenalty(t *testing.T) {
@@ -224,6 +231,43 @@ func TestInterpreter_DynamicEnergyOffNoPenalty(t *testing.T) {
 	if used := 100 - contract.Energy; used != 9 {
 		t.Fatalf("energy: got %d, want 9", used)
 	}
+}
+
+func TestRawEnergyUsageExcludesRejectedOutOfEnergyCharge(t *testing.T) {
+	t.Run("fixed cost", func(t *testing.T) {
+		addr := tcommon.Address{0x41, 0x61}
+		tvm, _ := newTestTVMWithFactor(t, addr, 5000)
+		contract := NewContract(tcommon.Address{0x41}, addr, 0, 2)
+		contract.SetCode(addr, []byte{byte(PUSH1), 0x01})
+
+		if _, err := tvm.interpreter.Run(contract); !errors.Is(err, ErrOutOfEnergy) {
+			t.Fatalf("run error = %v, want out of energy", err)
+		}
+		if got := tvm.RawEnergyUsage(); got != 0 {
+			t.Fatalf("raw execution energy = %d, want 0 for rejected first opcode", got)
+		}
+	})
+
+	t.Run("dynamic cost after charged opcodes", func(t *testing.T) {
+		addr := tcommon.Address{0x41, 0x62}
+		tvm, _ := newTestTVMWithFactor(t, addr, 5000)
+		contract := NewContract(tcommon.Address{0x41}, addr, 0, 10)
+		contract.SetCode(addr, []byte{
+			byte(PUSH1), 0x00,
+			byte(PUSH1), 0x00,
+			byte(MSTORE),
+		})
+
+		if _, err := tvm.interpreter.Run(contract); !errors.Is(err, ErrOutOfEnergy) {
+			t.Fatalf("run error = %v, want out of energy", err)
+		}
+		// The two PUSH1 instructions each successfully charge 3 raw / 4 billed.
+		// MSTORE's memory charge is rejected and therefore contributes no raw
+		// execution work even though the top-level VM will burn the remainder.
+		if got := tvm.RawEnergyUsage(); got != 6 {
+			t.Fatalf("raw execution energy = %d, want 6", got)
+		}
+	})
 }
 
 // newTestTVMWithFactor returns a TVM with DynamicEnergy on and a pre-seeded

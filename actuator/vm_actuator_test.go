@@ -176,6 +176,12 @@ func TestVMActuatorCreateExecute(t *testing.T) {
 	if result.EnergyUsageTotal <= 0 {
 		t.Fatal("expected non-zero EnergyUsageTotal")
 	}
+	if result.VMRawEnergyUsage != result.EnergyUsageTotal {
+		t.Fatalf("pre-dynamic raw energy = %d, want billed %d", result.VMRawEnergyUsage, result.EnergyUsageTotal)
+	}
+	if result.VMExecutionDuration <= 0 {
+		t.Fatalf("VM execution duration = %s, want positive", result.VMExecutionDuration)
+	}
 	if result != ctx.ResultSink {
 		t.Fatal("create did not return the block-local result sink")
 	}
@@ -390,6 +396,8 @@ func TestVMActuatorTriggerExecute(t *testing.T) {
 
 	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 10_000_000)
 	enableVM(ctx)
+	ctx.DynProps.SetAllowDynamicEnergy(true)
+	ctx.DynProps.SetCurrentCycleNumber(10)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, 100_000_000)
 	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
@@ -397,6 +405,11 @@ func TestVMActuatorTriggerExecute(t *testing.T) {
 		ContractAddress: contractAddr[:],
 	})
 	ctx.State.SetCode(contractAddr, code)
+	contractState := types.NewContractState(10)
+	contractState.SetEnergyFactor(5000) // effective multiplier 1.5x
+	if err := ctx.State.WriteContractState(contractAddr, contractState); err != nil {
+		t.Fatal(err)
+	}
 	ctx.ResultSink = &Result{
 		ShieldedTransactionFee: 99,
 		CancelUnfreezeV2Amount: map[string]int64{"ENERGY": 88},
@@ -409,6 +422,12 @@ func TestVMActuatorTriggerExecute(t *testing.T) {
 	}
 	if result.EnergyUsageTotal <= 0 {
 		t.Fatal("expected non-zero EnergyUsageTotal")
+	}
+	if result.VMRawEnergyUsage <= 0 || result.VMRawEnergyUsage >= result.EnergyUsageTotal {
+		t.Fatalf("dynamic raw/billed energy = %d/%d, want 0 < raw < billed", result.VMRawEnergyUsage, result.EnergyUsageTotal)
+	}
+	if result.VMExecutionDuration <= 0 {
+		t.Fatalf("VM execution duration = %s, want positive", result.VMExecutionDuration)
 	}
 	if result != ctx.ResultSink {
 		t.Fatal("trigger did not return the block-local result sink")
@@ -650,6 +669,9 @@ func TestVMActuatorTriggerReplayOutOfTime(t *testing.T) {
 	}
 	if len(result.Logs) != 0 {
 		t.Fatalf("replay OUT_OF_TIME must not execute contract code, got %d logs", len(result.Logs))
+	}
+	if result.VMExecutionDuration != 0 || result.VMRawEnergyUsage != 0 {
+		t.Fatalf("replay OUT_OF_TIME execution telemetry = %s/%d, want zero", result.VMExecutionDuration, result.VMRawEnergyUsage)
 	}
 }
 

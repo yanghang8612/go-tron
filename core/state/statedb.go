@@ -353,6 +353,11 @@ type CommitStats struct {
 	RebuiltKVAccounts int
 	RebuiltKVItems    int
 
+	// CommitmentUpdates is the exact number of unique, sorted latest-domain
+	// updates handed to the commitment fold after same-block overwrite
+	// collapse. It is a workload counter, not part of Total.
+	CommitmentUpdates int
+
 	Mutations CommitMutationStats
 }
 
@@ -695,6 +700,7 @@ func (s *CommitStats) Add(o CommitStats) {
 	s.DeferredKVItems += o.DeferredKVItems
 	s.RebuiltKVAccounts += o.RebuiltKVAccounts
 	s.RebuiltKVItems += o.RebuiltKVItems
+	s.CommitmentUpdates += o.CommitmentUpdates
 	s.Mutations.Add(o.Mutations)
 }
 
@@ -4217,6 +4223,9 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 			scope.discard()
 		}
 		return tcommon.Hash{}, stats, err
+	}
+	if touchBatch != nil {
+		stats.CommitmentUpdates = len(touchBatch.updates)
 	}
 	if s.deferFold {
 		// Async commit: capture the fold inputs and hand the fold to the commit

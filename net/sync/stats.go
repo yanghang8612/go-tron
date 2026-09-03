@@ -303,11 +303,16 @@ func (s *Stats) AddApplyBlockWithTxs(txs int, a core.ApplyStats) {
 	s.cur.ApplyStats.WitnessFlush += a.WitnessFlush
 	s.cur.ApplyStats.BlockStatistics += a.BlockStatistics
 	s.cur.ApplyStats.EnergyUsageTotal += a.EnergyUsageTotal
+	s.cur.ApplyStats.VMTransactions += a.VMTransactions
+	s.cur.ApplyStats.NativeTransactions += a.NativeTransactions
+	s.cur.ApplyStats.VMExecution += a.VMExecution
+	s.cur.ApplyStats.VMRawEnergyUsage += a.VMRawEnergyUsage
 	s.cur.ApplyStats.Maintenance += a.Maintenance
 	s.cur.ApplyStats.StateCommit += a.StateCommit
 	s.cur.ApplyStats.StateCommitDetail.Add(a.StateCommitDetail)
 	s.cur.ApplyStats.DPUpdate += a.DPUpdate
 	s.cur.ApplyStats.Persist += a.Persist
+	s.cur.ApplyStats.PersistDetail.Add(a.PersistDetail)
 	s.cur.ApplyStats.Hooks += a.Hooks
 }
 

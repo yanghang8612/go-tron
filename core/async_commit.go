@@ -96,6 +96,7 @@ type commitJob struct {
 	deferredStateCommit         time.Duration
 	deferredDPUpdate            time.Duration
 	deferredPersist             time.Duration
+	deferredPersistDetail       PersistStats
 	deferredHooks               time.Duration
 }
 
@@ -490,6 +491,7 @@ func (bc *BlockChain) completeAsyncApplyTelemetry(job *commitJob, worker, publis
 		snapshot.StateCommit += job.deferredStateCommit
 		snapshot.DPUpdate += job.deferredDPUpdate
 		snapshot.Persist += job.deferredPersist
+		snapshot.PersistDetail.Add(job.deferredPersistDetail)
 		snapshot.Hooks += job.deferredHooks
 		job.telemetryPublished = true
 	}
@@ -598,10 +600,12 @@ func (bc *BlockChain) finishCommitJob(job *commitJob, root tcommon.Hash, foldErr
 	// tx infos, and normally tx lookup) — durable BEFORE the head pointer advances, preserving the
 	// head=N ⟹ root[N] durable invariant for off-lock readers.
 	phaseStarted = time.Now()
-	if err := bc.writeBlockMetadataBatch(job.block, job.blockData, root, job.txInfos, job.balanceTrace, !job.plan.deferTransactionLookup); err != nil {
+	persistDetail, err := bc.writeBlockMetadataBatch(job.block, job.blockData, root, job.txInfos, job.balanceTrace, !job.plan.deferTransactionLookup)
+	if err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit metadata block %d: %w", job.block.Number(), err))
 		return
 	}
+	job.deferredPersistDetail.Add(persistDetail)
 	// Keep the body/TAPOS rows in this layer for foreground reads and potential
 	// rewind, while skipping their duplicate write when the committed layer is
 	// eventually flushed to Pebble.

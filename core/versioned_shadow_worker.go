@@ -715,6 +715,8 @@ type discardShadowTaskResult struct {
 	vmEntryCodeAddress   tcommon.Address
 	vmEntryCodeHash      tcommon.Hash
 	hasVMEntryCodeHash   bool
+	vmExecutionDuration  time.Duration
+	vmRawEnergyUsage     int64
 }
 
 // captureVMEntryCodeFingerprint records the code edge consumed by a speculative
@@ -4757,5 +4759,7 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 		vmEntryCodeAddress:  vmEntryCodeAddress,
 		vmEntryCodeHash:     vmEntryCodeHash,
 		hasVMEntryCodeHash:  hasVMEntryCodeHash,
+		vmExecutionDuration: result.VMExecutionDuration,
+		vmRawEnergyUsage:    result.VMRawEnergyUsage,
 	}
 }

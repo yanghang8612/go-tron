@@ -2,6 +2,7 @@ package actuator
 
 import (
 	"errors"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -194,6 +195,13 @@ type Result struct {
 	EnergyUsed        int64
 	EnergyFee         int64
 	OriginEnergyUsage int64
+	// VMExecutionDuration and VMRawEnergyUsage are process-local telemetry.
+	// They are populated only by VMActuator and are never copied into the
+	// consensus receipt. VMRawEnergyUsage is the interpreter/precompile energy
+	// before the dynamic-energy multiplier; before that feature activates it is
+	// identical to EnergyUsageTotal.
+	VMExecutionDuration time.Duration
+	VMRawEnergyUsage    int64
 	// CallerEnergyLeft and OriginEnergyLeft carry VM-start resource values into
 	// PayEnergyBill. They are execution-only and are never persisted in
 	// TransactionInfo.ResourceReceipt.

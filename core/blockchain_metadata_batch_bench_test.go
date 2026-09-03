@@ -75,7 +75,7 @@ func TestWriteBlockMetadataBatchPreallocatesAndCloses(t *testing.T) {
 		trace:           &contractpb.BlockBalanceTrace{Timestamp: block.Timestamp()},
 		accountBalances: map[tcommon.Address]int64{{0x41}: 7},
 	}
-	if err := chain.writeBlockMetadataBatch(block, bytes.Repeat([]byte{2}, 64<<10), tcommon.Hash{1}, infos, trace, false); err != nil {
+	if _, err := chain.writeBlockMetadataBatch(block, bytes.Repeat([]byte{2}, 64<<10), tcommon.Hash{1}, infos, trace, false); err != nil {
 		t.Fatal(err)
 	}
 	if store.newBatchCalls != 0 || store.newSizedBatchCalls != 1 {
@@ -102,7 +102,7 @@ func TestWriteBlockMetadataBatchStoresCompactTransactionInfos(t *testing.T) {
 		BlockNumber:    7,
 		BlockTimeStamp: block.Timestamp(),
 	}}
-	if err := chain.writeBlockMetadataBatch(block, nil, tcommon.Hash{1}, infos, nil, false); err != nil {
+	if _, err := chain.writeBlockMetadataBatch(block, nil, tcommon.Hash{1}, infos, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	key := make([]byte, len("tib-")+8)
@@ -164,7 +164,7 @@ func BenchmarkWriteBlockMetadataBatch(b *testing.B) {
 	b.SetBytes(int64(len(blockData)))
 	b.ResetTimer()
 	for b.Loop() {
-		if err := chain.writeBlockMetadataBatch(block, blockData, tcommon.Hash{1}, infos, trace, false); err != nil {
+		if _, err := chain.writeBlockMetadataBatch(block, blockData, tcommon.Hash{1}, infos, trace, false); err != nil {
 			b.Fatal(err)
 		}
 	}

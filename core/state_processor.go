@@ -922,10 +922,33 @@ type processBlockOptions struct {
 // Execute phase. It is deliberately passed through processBlockOptions so
 // replay/debug callers pay no allocation and consensus behavior is untouched.
 type processBlockTiming struct {
-	Transactions     time.Duration
-	AccountStateRoot time.Duration
-	AdaptiveEnergy   time.Duration
-	Rewards          time.Duration
+	Transactions       time.Duration
+	VMTransactions     int
+	NativeTransactions int
+	VMExecution        time.Duration
+	VMRawEnergyUsage   int64
+	AccountStateRoot   time.Duration
+	AdaptiveEnergy     time.Duration
+	Rewards            time.Duration
+}
+
+func (t *processBlockTiming) observeTransactionType(contractType corepb.Transaction_Contract_ContractType) {
+	if t == nil {
+		return
+	}
+	if isVMContractType(contractType) {
+		t.VMTransactions++
+	} else {
+		t.NativeTransactions++
+	}
+}
+
+func (t *processBlockTiming) addVMExecution(duration time.Duration, rawEnergy int64) {
+	if t == nil {
+		return
+	}
+	t.VMExecution += duration
+	t.VMRawEnergyUsage += rawEnergy
 }
 
 func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache, txInfoBatch *transactionInfoBatch, collectTxInfos bool, traceTxIndex int, traceTracer vm.Tracer, traceForTxOpt ...func(index int, tx *types.Transaction) vm.Tracer) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
@@ -1156,6 +1179,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 	}
 
 	for i, tx := range transactions {
+		options.timing.observeTransactionType(tx.ContractType())
 		if transferPreexecution != nil {
 			transferPreexecution.validateReadVersion(i, tx, versionedShadow)
 		}
@@ -1407,6 +1431,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					elapsed := time.Since(publishedStarted).Nanoseconds()
 					parallelVMAsyncRetryPublishNanosCounter.Inc(elapsed)
 					parallelVMPublicationNanosCounter.Inc(elapsed)
+					options.timing.addVMExecution(retryResult.vmExecutionDuration, retryResult.vmRawEnergyUsage)
 					continue
 				}
 			}
@@ -1500,6 +1525,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					}
 				}
 				parallelVMPublicationNanosCounter.Inc(time.Since(publishedStarted).Nanoseconds())
+				options.timing.addVMExecution(preResult.vmExecutionDuration, preResult.vmRawEnergyUsage)
 				continue
 			}
 		}
@@ -1559,6 +1585,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		}
 
 		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result, forkPassCache)
+		if isVMContractType(tx.ContractType()) {
+			options.timing.addVMExecution(result.VMExecutionDuration, result.VMRawEnergyUsage)
+		}
 		if vmSenderChainPreexecution != nil {
 			vmSenderChainPreexecution.validateBlockEnergyBoundary(i, dynProps)
 		}

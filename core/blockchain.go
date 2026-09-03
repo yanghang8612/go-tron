@@ -105,12 +105,22 @@ type ApplyStats struct {
 	// successfully executed transaction in the applied block. It is telemetry
 	// only; unlike the duration fields it is a work counter, not part of Total.
 	EnergyUsageTotal int64
+	// VMTransactions and NativeTransactions classify canonical block
+	// transactions by whether they entered TVM. VMExecution is the sum of the
+	// adopted top-level TVM call durations, and VMRawEnergyUsage is their
+	// pre-dynamic-factor execution energy. These fields are process-local
+	// telemetry and never affect receipts or consensus state.
+	VMTransactions     int
+	NativeTransactions int
+	VMExecution        time.Duration
+	VMRawEnergyUsage   int64
 
 	Maintenance       time.Duration
 	StateCommit       time.Duration
 	StateCommitDetail state.CommitStats
 	DPUpdate          time.Duration
 	Persist           time.Duration
+	PersistDetail     PersistStats
 	Hooks             time.Duration
 }
 
@@ -167,6 +177,10 @@ func traceBlockApplied(block *types.Block, stats *applyStats, total time.Duratio
 		"stateCommitAccountTrieWrite", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieWrite),
 		"stateCommitTrieCommit", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieCommit),
 		"stateCommitTrieNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.TrieNodeWrite+stats.StateCommitDetail.TrieNodeFlush),
+		"vmTransactions", stats.VMTransactions,
+		"nativeTransactions", stats.NativeTransactions,
+		"vmExecution", ethcommon.PrettyDuration(stats.VMExecution),
+		"vmRawEnergy", stats.VMRawEnergyUsage,
 		"dpUpdate", ethcommon.PrettyDuration(stats.DPUpdate),
 		"persist", ethcommon.PrettyDuration(stats.Persist),
 		"hooks", ethcommon.PrettyDuration(stats.Hooks),
@@ -1521,6 +1535,10 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	stats.AdaptiveEnergy = processorTiming.AdaptiveEnergy
 	stats.Rewards = processorTiming.Rewards
 	stats.EnergyUsageTotal = transactionInfosEnergyUsageTotal(txInfos)
+	stats.VMTransactions = processorTiming.VMTransactions
+	stats.NativeTransactions = processorTiming.NativeTransactions
+	stats.VMExecution = processorTiming.VMExecution
+	stats.VMRawEnergyUsage = processorTiming.VMRawEnergyUsage
 
 	// Promote CURRENT_TREE to LAST_TREE + index by root + blockNum after
 	// every block, matching java-tron Manager.processBlock. This keeps the
@@ -1813,9 +1831,11 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos, balanceTraceData, !plan.deferTransactionLookup); err != nil {
+	persistDetail, err := bc.writeBlockMetadataBatch(block, blockData, newRoot, txInfos, balanceTraceData, !plan.deferTransactionLookup)
+	if err != nil {
 		return err
 	}
+	stats.PersistDetail.Add(persistDetail)
 	// The block body and TAPOS row above are intentionally retained in the
 	// buffer overlay for in-range BLOCKHASH/TAPOS reads and fork rewind. The
 	// metadata batch just made their identical disk rows durable, so mark them
@@ -1994,40 +2014,46 @@ func blockMetadataBatchSizeHint(block *types.Block, blockData []byte, txInfos []
 	return hint
 }
 
-func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData, writeTransactionLookup bool) error {
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []byte, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData, writeTransactionLookup bool) (PersistStats, error) {
 	batch := bc.db.NewBatchWithSize(blockMetadataBatchSizeHint(block, blockData, txInfos, balanceTrace, writeTransactionLookup))
 	defer batch.Close()
+	// The always-present batch shape is one state-root row, three block rows
+	// (body plus two indexes), one TAPOS row, and one per-block receipt row.
+	stats := PersistStats{MetadataRecords: 6}
 	// The root stays out-of-band so the wire block remains byte-identical to the
 	// java-tron payload.
 	if err := rawdb.WriteBlockStateRoot(batch, block.Hash(), stateRoot); err != nil {
-		return fmt.Errorf("write block state root: %w", err)
+		return PersistStats{}, fmt.Errorf("write block state root: %w", err)
 	}
 	if len(blockData) > 0 {
 		if err := rawdb.WriteBlockEncoded(batch, block, blockData); err != nil {
-			return fmt.Errorf("write block: %w", err)
+			return PersistStats{}, fmt.Errorf("write block: %w", err)
 		}
 	} else if err := rawdb.WriteBlock(batch, block); err != nil {
-		return fmt.Errorf("write block: %w", err)
+		return PersistStats{}, fmt.Errorf("write block: %w", err)
 	}
 	if err := rawdb.WriteTaposRef(batch, block.Number(), block.Hash()); err != nil {
-		return fmt.Errorf("write tapos ref: %w", err)
+		return PersistStats{}, fmt.Errorf("write tapos ref: %w", err)
 	}
 	if err := rawdb.WriteCompactTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
-		return fmt.Errorf("write block tx infos: %w", err)
+		return PersistStats{}, fmt.Errorf("write block tx infos: %w", err)
 	}
 	if writeTransactionLookup && !rawdb.HasAncientTransactionIndex(bc.chaindb, block.Number()) {
 		for _, tx := range block.Transactions() {
 			hash := tx.Hash()
 			if err := rawdb.WriteTransactionIndex(batch, hash[:], block.Number()); err != nil {
-				return fmt.Errorf("write tx index: %w", err)
+				return PersistStats{}, fmt.Errorf("write tx index: %w", err)
 			}
+			stats.MetadataRecords++
+			stats.TransactionLookupRows++
 		}
 	}
 	if balanceTrace != nil {
 		if balanceTrace.trace != nil {
 			if err := rawdb.WriteBlockBalanceTrace(batch, int64(block.Number()), balanceTrace.trace); err != nil {
-				return fmt.Errorf("write block balance trace: %w", err)
+				return PersistStats{}, fmt.Errorf("write block balance trace: %w", err)
 			}
+			stats.MetadataRecords++
 		}
 		addrs := make([]tcommon.Address, 0, len(balanceTrace.accountBalances))
 		for addr := range balanceTrace.accountBalances {
@@ -2036,14 +2062,17 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []by
 		slices.SortFunc(addrs, func(a, b tcommon.Address) int { return bytes.Compare(a[:], b[:]) })
 		for _, addr := range addrs {
 			if err := rawdb.WriteAccountTrace(batch, addr.Bytes(), int64(block.Number()), balanceTrace.accountBalances[addr]); err != nil {
-				return fmt.Errorf("write account trace: %w", err)
+				return PersistStats{}, fmt.Errorf("write account trace: %w", err)
 			}
+			stats.MetadataRecords++
+			stats.TraceAccounts++
 		}
 	}
+	stats.MetadataBytes = uint64(batch.ValueSize())
 	if err := batch.Write(); err != nil {
-		return fmt.Errorf("write block metadata batch: %w", err)
+		return PersistStats{}, fmt.Errorf("write block metadata batch: %w", err)
 	}
-	return nil
+	return stats, nil
 }
 
 // blockMetadataOverlayKeys returns the buffered rows that writeBlockMetadataBatch

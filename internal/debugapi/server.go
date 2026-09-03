@@ -157,25 +157,43 @@ func parseIntDefault(s string, def int) int {
 }
 
 // metricsHandler serves /debug/metrics as an operator-facing JSON snapshot of
-// the process-wide go-ethereum metrics registry. Use ?prefix=ancient/repair/
-// to narrow the dump for alert checks.
+// the process-wide go-ethereum metrics registry. Repeat ?prefix= to select
+// multiple families from one registry snapshot without returning unrelated
+// metrics or taking temporally skewed snapshots.
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
-	prefix := r.URL.Query().Get("prefix")
+	requested := r.URL.Query()["prefix"]
+	prefixes := requested[:0]
+	for _, prefix := range requested {
+		if prefix != "" {
+			prefixes = append(prefixes, prefix)
+		}
+	}
 	all := metrics.DefaultRegistry.GetAll()
 	selected := make(map[string]map[string]interface{}, len(all))
 	for name, values := range all {
-		if prefix == "" || strings.HasPrefix(name, prefix) {
+		matched := len(prefixes) == 0
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(name, prefix) {
+				matched = true
+				break
+			}
+		}
+		if matched {
 			selected[name] = values
 		}
 	}
 	out := struct {
-		Prefix  string                            `json:"prefix,omitempty"`
-		Count   int                               `json:"count"`
-		Metrics map[string]map[string]interface{} `json:"metrics"`
+		Prefix   string                            `json:"prefix,omitempty"`
+		Prefixes []string                          `json:"prefixes,omitempty"`
+		Count    int                               `json:"count"`
+		Metrics  map[string]map[string]interface{} `json:"metrics"`
 	}{
-		Prefix:  prefix,
-		Count:   len(selected),
-		Metrics: selected,
+		Prefixes: prefixes,
+		Count:    len(selected),
+		Metrics:  selected,
+	}
+	if len(prefixes) == 1 {
+		out.Prefix = prefixes[0]
 	}
 
 	w.Header().Set("Content-Type", "application/json")

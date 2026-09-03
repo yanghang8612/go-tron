@@ -25,6 +25,10 @@ type Interpreter struct {
 	// at the end of execution — mirroring java-tron VM.play's energyUsage.
 	factor        int64
 	rawEnergyUsed uint64
+	// rawEnergyUncharged is non-zero only when the current frame exits because
+	// an energy charge failed. ContractState feedback intentionally records the
+	// requested base cost; execution telemetry excludes that unexecuted charge.
+	rawEnergyUncharged uint64
 
 	// opBaseAccum accumulates the current opcode's pre-penalty base cost across
 	// its (possibly multiple) useEnergy calls. The dynamic-energy penalty is
@@ -57,7 +61,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	pc := &stack.pc
 	defer releaseExecutionMemory(mem)
 	defer releaseExecutionStack(stack)
-	parentFactor, parentRawEnergyUsed := in.factor, in.rawEnergyUsed
+	parentFactor, parentRawEnergyUsed, parentRawEnergyUncharged := in.factor, in.rawEnergyUsed, in.rawEnergyUncharged
 	// The return-data buffer is per-frame state: java-tron gives every
 	// Program its own returnDataBuffer, so RETURNDATASIZE is 0 at frame
 	// entry until the frame completes a call of its own (EIP-211). gtron
@@ -69,8 +73,22 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	parentReturnData := in.returnData
 	in.returnData = nil
 	defer func() {
+		if in.tvmConfig.DynamicEnergy {
+			// Each nested Run owns an independent rawEnergyUsed accumulator. Fold
+			// successfully charged base work into the top-level TVM before restoring
+			// the parent frame, so every frame is counted exactly once without
+			// treating a rejected OOE charge as executed work.
+			chargedRawEnergy := in.rawEnergyUsed
+			if in.rawEnergyUncharged >= chargedRawEnergy {
+				chargedRawEnergy = 0
+			} else {
+				chargedRawEnergy -= in.rawEnergyUncharged
+			}
+			in.tvm.addRawEnergyUsage(chargedRawEnergy)
+		}
 		in.factor = parentFactor
 		in.rawEnergyUsed = parentRawEnergyUsed
+		in.rawEnergyUncharged = parentRawEnergyUncharged
 		in.returnData = parentReturnData
 	}()
 
@@ -91,6 +109,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	// energy/energyUsage variables that getEnergyCost writes into.
 	in.factor = types.DynamicEnergyFactorDecimal
 	in.rawEnergyUsed = 0
+	in.rawEnergyUncharged = 0
 	dynamicEnergy := in.tvmConfig.DynamicEnergy
 	if dynamicEnergy {
 		in.factor = updateContractEnergyFactor(in.tvm, contract.Address)
@@ -394,6 +413,10 @@ func (in *Interpreter) useEnergy(contract *Contract, baseCost uint64) bool {
 	if contract.UseEnergy(cost) {
 		return true
 	}
+	// The protocol's ContractState feedback counter includes the requested raw
+	// cost even when the charge fails. Keep that behavior in rawEnergyUsed, but
+	// exclude the unexecuted request from process-local execution telemetry.
+	in.rawEnergyUncharged += baseCost
 	in.energyErr = newOutOfEnergyError(in.currentOp, contract, baseCost, penalty, hasPenalty)
 	return false
 }

@@ -706,6 +706,7 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 		makeTestTriggerTx(1, contract1, storageInput(1)),
 		makeTestTriggerTx(3, contract2, storageInput(2)),
 		makeTestTriggerTx(1, contract1, storageInput(3)),
+		makeTestTransferTx(1, 3, 1_000),
 	}
 	transactionProtos := make([]*corepb.Transaction, len(transactions))
 	for txIndex, tx := range transactions {
@@ -731,7 +732,8 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 		trace, finalBalances := statedb.FinishBalanceTrace()
 		return infos, trace, finalBalances, processErr
 	}
-	serialInfos, serialTrace, serialFinalBalances, err := run(serialState, ethrawdb.NewMemoryDatabase(), processBlockOptions{captureBalanceTrace: true})
+	var serialTiming processBlockTiming
+	serialInfos, serialTrace, serialFinalBalances, err := run(serialState, ethrawdb.NewMemoryDatabase(), processBlockOptions{captureBalanceTrace: true, timing: &serialTiming})
 	if err != nil {
 		t.Fatalf("serial VM process: %v", err)
 	}
@@ -787,9 +789,22 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 		parallelVMPreflightFallbackCounter.Snapshot().Count() +
 		parallelVMPublicNetFallbackCounter.Snapshot().Count() +
 		parallelVMBlockEnergyFallbackCounter.Snapshot().Count()
-	parallelInfos, parallelTrace, parallelFinalBalances, err := run(parallelState, ethrawdb.NewMemoryDatabase(), processBlockOptions{parallelVM: true, captureBalanceTrace: true})
+	var parallelTiming processBlockTiming
+	parallelInfos, parallelTrace, parallelFinalBalances, err := run(parallelState, ethrawdb.NewMemoryDatabase(), processBlockOptions{parallelVM: true, captureBalanceTrace: true, timing: &parallelTiming})
 	if err != nil {
 		t.Fatalf("parallel VM process: %v", err)
+	}
+	if serialTiming.VMTransactions != 3 || serialTiming.NativeTransactions != 1 {
+		t.Fatalf("serial transaction telemetry = %d VM/%d native, want 3/1", serialTiming.VMTransactions, serialTiming.NativeTransactions)
+	}
+	if parallelTiming.VMTransactions != 3 || parallelTiming.NativeTransactions != 1 {
+		t.Fatalf("parallel transaction telemetry = %d VM/%d native, want 3/1", parallelTiming.VMTransactions, parallelTiming.NativeTransactions)
+	}
+	if serialTiming.VMExecution <= 0 || parallelTiming.VMExecution <= 0 {
+		t.Fatalf("VM execution telemetry = serial %s, parallel %s; want both positive", serialTiming.VMExecution, parallelTiming.VMExecution)
+	}
+	if serialTiming.VMRawEnergyUsage <= 0 || parallelTiming.VMRawEnergyUsage != serialTiming.VMRawEnergyUsage {
+		t.Fatalf("VM raw energy telemetry = serial %d, parallel %d; want equal positive canonical totals", serialTiming.VMRawEnergyUsage, parallelTiming.VMRawEnergyUsage)
 	}
 	if blocks := parallelVMBlocksCounter.Snapshot().Count() - blocksBefore; blocks != 1 {
 		t.Fatalf("parallel VM blocks = %d, want 1", blocks)
@@ -1013,7 +1028,8 @@ func TestProcessBlockVMPublisherFallsBackOnStorageConflict(t *testing.T) {
 		)
 		return infos, processErr
 	}
-	serialInfos, err := run(serialState, processBlockOptions{})
+	var serialTiming processBlockTiming
+	serialInfos, err := run(serialState, processBlockOptions{timing: &serialTiming})
 	if err != nil {
 		t.Fatalf("serial VM process: %v", err)
 	}
@@ -1021,7 +1037,8 @@ func TestProcessBlockVMPublisherFallsBackOnStorageConflict(t *testing.T) {
 	conflictsBefore := parallelVMConflictFallbackCounter.Snapshot().Count()
 	serialVerifyCandidatesBefore := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count()
 	serialVerifyMatchesBefore := parallelVMSerialVerifyMatchesCounter.Snapshot().Count()
-	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
+	var parallelTiming processBlockTiming
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true, timing: &parallelTiming})
 	if err != nil {
 		t.Fatalf("parallel VM process: %v", err)
 	}
@@ -1030,6 +1047,18 @@ func TestProcessBlockVMPublisherFallsBackOnStorageConflict(t *testing.T) {
 	}
 	if conflicts := parallelVMConflictFallbackCounter.Snapshot().Count() - conflictsBefore; conflicts != 1 {
 		t.Fatalf("parallel VM storage-conflict fallbacks = %d, want 1", conflicts)
+	}
+	if serialTiming.VMTransactions != 2 || serialTiming.NativeTransactions != 0 ||
+		parallelTiming.VMTransactions != 2 || parallelTiming.NativeTransactions != 0 {
+		t.Fatalf("fallback transaction telemetry = serial %d/%d parallel %d/%d, want 2 VM/0 native each",
+			serialTiming.VMTransactions, serialTiming.NativeTransactions,
+			parallelTiming.VMTransactions, parallelTiming.NativeTransactions)
+	}
+	if serialTiming.VMExecution <= 0 || parallelTiming.VMExecution <= 0 {
+		t.Fatalf("fallback VM execution telemetry = serial %s, parallel %s; want both positive", serialTiming.VMExecution, parallelTiming.VMExecution)
+	}
+	if serialTiming.VMRawEnergyUsage <= 0 || parallelTiming.VMRawEnergyUsage != serialTiming.VMRawEnergyUsage {
+		t.Fatalf("fallback VM raw energy telemetry = serial %d, parallel %d; want equal positive canonical totals", serialTiming.VMRawEnergyUsage, parallelTiming.VMRawEnergyUsage)
 	}
 	if candidates := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count() - serialVerifyCandidatesBefore; candidates != 1 {
 		t.Fatalf("parallel VM boundary serial verification candidates = %d, want first transaction only", candidates)

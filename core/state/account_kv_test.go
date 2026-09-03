@@ -1118,6 +1118,8 @@ func TestAccountKVCommitWithStatsReportsKVWork(t *testing.T) {
 		t.Fatalf("stats counts = accounts:%d kvAccounts:%d kvItems:%d, want accounts=2 kvAccounts=2 kvItems>=3", stats.Accounts, stats.KVAccounts, stats.KVItems)
 	} else if stats.Mutations.KVPutItems != 3 || stats.Mutations.KVDomain(kvdomains.SystemDynamicProperty).Puts != 3 {
 		t.Fatalf("mutation stats = %+v domain=%+v, want 3 SystemDynamicProperty puts", stats.Mutations, stats.Mutations.KVDomain(kvdomains.SystemDynamicProperty))
+	} else if stats.CommitmentUpdates != 5 {
+		t.Fatalf("commitment updates = %d, want 5 unique account/KV latest updates", stats.CommitmentUpdates)
 	}
 }
 

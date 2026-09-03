@@ -18,6 +18,7 @@ from pathlib import Path
 
 METRIC_PREFIXES = (
     "process/",
+    "sync/import/window/",
     "compact/",
     "level/",
     "disk/physical/read/sst/",
@@ -196,6 +197,54 @@ BASE_CACHE_CAPACITY_POINT_METRICS = (BASE_CACHE_CAPACITY_METRIC,) + tuple(
     BASE_CACHE_BUDGET_METRICS.values()
 )
 
+# These gauges are already normalized by the sync reporter over its latest
+# progress window. Capture them as point-in-time workload and phase context;
+# never delta them against the sampler's independent interval.
+SYNC_IMPORT_WINDOW_POINT_METRICS = tuple(
+    "sync/import/window/{}".format(name)
+    for name in (
+        "updated_unix",
+        "elapsed_seconds",
+        "blocks_per_second",
+        "transactions_per_second",
+        "transactions_per_block",
+        "energy_per_second",
+        "energy_per_block",
+        "energy_per_transaction",
+        "vm_transactions_per_second",
+        "native_transactions_per_second",
+        "vm_transactions_per_block",
+        "native_transactions_per_block",
+        "vm_transaction_share",
+        "raw_energy_per_second",
+        "raw_energy_per_vm_transaction",
+        "billed_to_raw_energy_ratio",
+        "vm_execution_milliseconds_per_vm_transaction",
+        "vm_execution_nanoseconds_per_raw_energy",
+        "apply_sample_blocks",
+        "apply_sample_transactions",
+        "apply_sample_coverage_ratio",
+        "apply_milliseconds_per_block",
+        "outside_transaction_milliseconds_per_block",
+        "execute_fixed_milliseconds_per_block",
+        "transaction_milliseconds_per_transaction",
+        "state_commit_milliseconds_per_block",
+        "state_commit_accounts_per_block",
+        "state_commit_kv_accounts_per_block",
+        "state_commit_kv_items_per_block",
+        "state_commit_storage_writes_per_block",
+        "state_commit_kv_writes_per_block",
+        "state_commit_commitment_updates_per_block",
+        "state_commit_nanoseconds_per_commitment_update",
+        "persist_milliseconds_per_block",
+        "persist_metadata_bytes_per_block",
+        "persist_metadata_bytes_per_transaction",
+        "persist_metadata_records_per_block",
+        "persist_transaction_lookup_rows_per_block",
+        "persist_trace_accounts_per_block",
+    )
+)
+
 
 def physical_read_group(output_prefix):
     for group in PHYSICAL_READ_METRIC_GROUPS:
@@ -250,7 +299,16 @@ COUNTER_METRICS = (
     "blockbuffer/commitment_parent/singleflight/waiters/prefetch",
     "blockbuffer/commitment_parent/prefetch/unused_capacity_evicted",
     "blockbuffer/commitment_parent/prefetch/unused_capacity_evicted_bytes",
+    "state/commitment/fold/calls",
+    "state/commitment/fold/input_updates",
+    "state/commitment/fold/resolved_ops",
     "state/commitment/fold/wall_nanos",
+    "state/commitment/fold/errors",
+    "state/commitment/fold/changed",
+    "state/commitment/fold/unchanged",
+    "state/commitment/fold/parallel/calls",
+    "state/commitment/fold/parallel/active_splits",
+    "state/commitment/fold/parallel/workers",
     "state/commitment/pipeline/jobs",
     "state/commitment/pipeline/prefetch_errors",
     "state/commitment/pipeline/prefetch_critical/planned",
@@ -335,7 +393,11 @@ POINT_GAUGE_METRICS = (
     STATE_CODE_CACHE_BYTES_METRIC,
     COLD_COMPACTION_ACTIVE_METRIC,
     "iter/count",
-) + BASE_CACHE_OCCUPANCY_POINT_METRICS + BASE_CACHE_CAPACITY_POINT_METRICS
+) + (
+    BASE_CACHE_OCCUPANCY_POINT_METRICS
+    + BASE_CACHE_CAPACITY_POINT_METRICS
+    + SYNC_IMPORT_WINDOW_POINT_METRICS
+)
 
 GAUGE_METRICS = MONOTONIC_GAUGE_METRICS + POINT_GAUGE_METRICS
 ALL_METRICS = COUNTER_METRICS + GAUGE_METRICS
@@ -349,10 +411,10 @@ def request_json(url, timeout):
         return json.load(response)
 
 
-def with_prefix(url, prefix):
+def with_prefixes(url, prefixes):
     parts = urllib.parse.urlsplit(url)
     query = [(key, value) for key, value in urllib.parse.parse_qsl(parts.query) if key != "prefix"]
-    query.append(("prefix", prefix))
+    query.extend(("prefix", prefix) for prefix in prefixes)
     return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
 
 
@@ -377,10 +439,15 @@ def normalize_metrics(payload):
 
 
 def fetch_metrics(url, timeout):
-    merged = {}
-    for prefix in METRIC_PREFIXES:
-        merged.update(normalize_metrics(request_json(with_prefix(url, prefix), timeout)))
-    return merged
+    # Ask the debug endpoint for every required family in one registry snapshot
+    # so the selected counters share one scrape window. Keep the local filter as
+    # a defensive boundary for unexpected endpoint responses.
+    metrics = normalize_metrics(request_json(with_prefixes(url, METRIC_PREFIXES), timeout))
+    return {
+        name: values
+        for name, values in metrics.items()
+        if name.startswith(METRIC_PREFIXES)
+    }
 
 
 def metric_scalar(values):
@@ -812,7 +879,7 @@ def build_base_cache_analysis(current, previous_metrics, deltas, interval_blocks
     return result
 
 
-def build_row(now, height, current, previous):
+def build_row(now, height, current, previous, sample_window=None):
     previous_metrics = previous.get("metrics", {}) if isinstance(previous, dict) else {}
     if not isinstance(previous_metrics, dict):
         previous_metrics = {}
@@ -863,8 +930,55 @@ def build_row(now, height, current, previous):
     previous_unix = previous.get("unix") if isinstance(previous, dict) else None
     interval = now - float(previous_unix) if isinstance(previous_unix, (int, float)) and now >= previous_unix else None
     previous_height = previous.get("height") if isinstance(previous, dict) else None
+    interval_blocks_estimate = None
+    interval_height_uncertainty = None
+    interval_height_tolerance = None
+    interval_strict = None
+    if sample_window is not None:
+        previous_height_after = previous.get("heightAfter") if isinstance(previous, dict) else None
+        current_height_after = sample_window["heightAfter"]
+        if (
+            isinstance(previous_height_after, int)
+            and not isinstance(previous_height_after, bool)
+            and isinstance(current_height_after, int)
+            and not isinstance(current_height_after, bool)
+            and current_height_after >= previous_height_after
+        ):
+            interval_blocks_estimate = current_height_after - previous_height_after
+        previous_height_span = previous.get("heightSpanBlocks") if isinstance(previous, dict) else None
+        current_height_span = sample_window["heightSpanBlocks"]
+        if (
+            isinstance(previous_height_span, int)
+            and not isinstance(previous_height_span, bool)
+            and previous_height_span >= 0
+            and isinstance(current_height_span, int)
+            and not isinstance(current_height_span, bool)
+            and current_height_span >= 0
+        ):
+            # This is deliberately conservative. The metric snapshot lies
+            # somewhere inside each height bracket, so the sum of both spans
+            # is an upper bound on the interval denominator's uncertainty.
+            interval_height_uncertainty = previous_height_span + current_height_span
+        if interval_blocks_estimate is not None:
+            interval_height_tolerance = max(1.0, interval_blocks_estimate * 0.01)
+        interval_strict = (
+            isinstance(previous, dict)
+            and sample_window["heightBracketValid"]
+            and previous.get("heightBracketValid") is True
+            and same_process
+            and not resets
+            and interval is not None
+            and interval_blocks_estimate is not None
+            and interval_height_uncertainty is not None
+            and interval_height_uncertainty <= interval_height_tolerance
+        )
     interval_blocks = None
-    if height is not None and isinstance(previous_height, int) and height >= previous_height:
+    if sample_window is not None:
+        if interval_strict:
+            # Explicit denominator semantics: compare the height observed by
+            # the wallet call after each metrics scrape.
+            interval_blocks = interval_blocks_estimate
+    elif height is not None and isinstance(previous_height, int) and height >= previous_height:
         interval_blocks = height - previous_height
 
     foreground_total = positive_sum(
@@ -894,6 +1008,7 @@ def build_row(now, height, current, previous):
         deltas.get("chain/freezer/txindex/deferred/error_backoff"),
     )
     interval_nanos = interval * 1_000_000_000 if interval is not None else None
+    fold_input_updates = deltas.get("state/commitment/fold/input_updates")
 
     foreground_depth_ratios = {}
     for bucket in ("depth_5_8", "depth_9_16", "depth_17_32", "depth_33_plus"):
@@ -1001,6 +1116,41 @@ def build_row(now, height, current, previous):
         ),
         "lookaheadQueueHighWaterPerLane": current.get(
             "state/commitment/pipeline/prefetch_lookahead/queue_high_water"
+        ),
+        "commitmentFoldCallsPerBlock": safe_ratio(
+            deltas.get("state/commitment/fold/calls"), interval_blocks
+        ),
+        "commitmentFoldInputUpdatesPerBlock": safe_ratio(
+            fold_input_updates, interval_blocks
+        ),
+        "commitmentFoldResolvedOpsPerBlock": safe_ratio(
+            deltas.get("state/commitment/fold/resolved_ops"), interval_blocks
+        ),
+        "commitmentFoldNanosPerInputUpdate": safe_ratio(
+            deltas.get("state/commitment/fold/wall_nanos"), fold_input_updates
+        ),
+        "commitmentFoldErrorRatio": safe_ratio(
+            deltas.get("state/commitment/fold/errors"),
+            deltas.get("state/commitment/fold/calls"),
+        ),
+        "commitmentDurableReadsPerInputUpdate": safe_ratio(
+            total_durable, fold_input_updates
+        ),
+        "commitmentSegmentPhysicalReadCallsPerInputUpdate": safe_ratio(
+            deltas.get(
+                physical_read_group("commitmentSegmentPhysicalRead")["metrics"]["calls"]
+            ),
+            fold_input_updates,
+        ),
+        "sstRandomReadCallsPerInputUpdate": safe_ratio(
+            deltas.get(SST_FD_ACCESS_METRICS["random"]["calls"]), fold_input_updates
+        ),
+        "sstRandomReadNanosPerInputUpdate": safe_ratio(
+            deltas.get(SST_FD_ACCESS_METRICS["random"]["nanos"]), fold_input_updates
+        ),
+        "pebbleCursorSeekCallsPerInputUpdate": safe_ratio(
+            deltas.get(PEBBLE_COMMITMENT_CURSOR_METRICS["seek_calls"]),
+            fold_input_updates,
         ),
         "durableReadsPerBlock": safe_ratio(total_durable, interval_blocks),
         "freezerAncientReadBytesPerBlock": safe_ratio(
@@ -1120,7 +1270,7 @@ def build_row(now, height, current, previous):
             current, previous_metrics, deltas, interval_blocks, same_process
         )
     )
-    return {
+    row = {
         "timestamp": dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(),
         "unix": now,
         "height": height,
@@ -1134,6 +1284,14 @@ def build_row(now, height, current, previous):
         "delta": deltas,
         "analysis": analysis,
     }
+    if sample_window is not None:
+        row.update(sample_window)
+        row["intervalStrict"] = interval_strict
+        row["intervalBlocksEstimate"] = interval_blocks_estimate
+        row["intervalHeightBasis"] = "heightAfter"
+        row["intervalHeightUncertaintyBlocks"] = interval_height_uncertainty
+        row["intervalHeightToleranceBlocks"] = interval_height_tolerance
+    return row
 
 
 def append_row(path, row):
@@ -1147,15 +1305,45 @@ def append_row(path, row):
 
 
 def sample_once(args, previous):
-    now = time.time()
-    metrics = select_metrics(fetch_metrics(args.metrics_url, args.timeout))
-    height = None
+    scrape_start = time.time()
+    height_before = None
     if args.wallet_url:
         try:
-            height = wallet_height(args.wallet_url, args.timeout)
+            height_before = wallet_height(args.wallet_url, args.timeout)
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-            height = None
-    return build_row(now, height, metrics, previous)
+            height_before = None
+    metrics = select_metrics(fetch_metrics(args.metrics_url, args.timeout))
+    height_after = None
+    if args.wallet_url:
+        try:
+            height_after = wallet_height(args.wallet_url, args.timeout)
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+            height_after = None
+    scrape_end = time.time()
+    height_span = None
+    if isinstance(height_before, int) and isinstance(height_after, int):
+        height_span = height_after - height_before
+    height_bracket_valid = (
+        isinstance(height_span, int) and height_span >= 0 and scrape_end >= scrape_start
+    )
+    # Keep a tight per-scrape signal for operators, but do not require it for a
+    # long interval: intervalStrict applies the relative two-bracket budget.
+    scrape_strict = height_bracket_valid and height_span <= 1
+    sample_window = {
+        "scrapeStartUnix": scrape_start,
+        "scrapeEndUnix": scrape_end,
+        "scrapeSeconds": scrape_end - scrape_start if scrape_end >= scrape_start else None,
+        "heightBefore": height_before,
+        "heightAfter": height_after,
+        "heightSpanBlocks": height_span,
+        "heightBracketValid": height_bracket_valid,
+        "scrapeStrict": scrape_strict,
+    }
+    # Retain the latest observed height for operator visibility. build_row only
+    # uses heightAfter as a denominator when the two bracket spans fit the
+    # interval-relative uncertainty budget.
+    height = height_after if height_after is not None else height_before
+    return build_row(scrape_end, height, metrics, previous, sample_window)
 
 
 def main():

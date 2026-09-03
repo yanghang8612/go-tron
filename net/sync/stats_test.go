@@ -205,6 +205,10 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 		WitnessFlush:       8 * time.Millisecond,
 		BlockStatistics:    9 * time.Millisecond,
 		EnergyUsageTotal:   1_000,
+		VMTransactions:     1,
+		NativeTransactions: 2,
+		VMExecution:        10 * time.Millisecond,
+		VMRawEnergyUsage:   800,
 		Maintenance:        3 * time.Millisecond,
 		StateCommit:        4 * time.Millisecond,
 		StateCommitDetail: state.CommitStats{
@@ -216,11 +220,18 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 			Accounts:              3,
 			KVAccounts:            2,
 			KVItems:               5,
+			CommitmentUpdates:     7,
 			Mutations:             mut1,
 		},
 		DPUpdate: 5 * time.Millisecond,
 		Persist:  6 * time.Millisecond,
-		Hooks:    7 * time.Millisecond,
+		PersistDetail: core.PersistStats{
+			MetadataRecords:       6,
+			MetadataBytes:         100,
+			TransactionLookupRows: 2,
+			TraceAccounts:         3,
+		},
+		Hooks: 7 * time.Millisecond,
 	})
 	s.AddApplyBlock(core.ApplyStats{
 		Validate:           10 * time.Millisecond,
@@ -233,6 +244,10 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 		WitnessFlush:       80 * time.Millisecond,
 		BlockStatistics:    90 * time.Millisecond,
 		EnergyUsageTotal:   20_000,
+		VMTransactions:     10,
+		NativeTransactions: 20,
+		VMExecution:        100 * time.Millisecond,
+		VMRawEnergyUsage:   8_000,
 		Maintenance:        30 * time.Millisecond,
 		StateCommit:        40 * time.Millisecond,
 		StateCommitDetail: state.CommitStats{
@@ -244,11 +259,18 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 			Accounts:              30,
 			KVAccounts:            20,
 			KVItems:               50,
+			CommitmentUpdates:     70,
 			Mutations:             mut2,
 		},
 		DPUpdate: 50 * time.Millisecond,
 		Persist:  60 * time.Millisecond,
-		Hooks:    70 * time.Millisecond,
+		PersistDetail: core.PersistStats{
+			MetadataRecords:       60,
+			MetadataBytes:         1_000,
+			TransactionLookupRows: 20,
+			TraceAccounts:         30,
+		},
+		Hooks: 70 * time.Millisecond,
 	})
 	got := s.CurrentSnapshot().ApplyStats
 	want := core.ApplyStats{
@@ -262,6 +284,10 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 		WitnessFlush:       88 * time.Millisecond,
 		BlockStatistics:    99 * time.Millisecond,
 		EnergyUsageTotal:   21_000,
+		VMTransactions:     11,
+		NativeTransactions: 22,
+		VMExecution:        110 * time.Millisecond,
+		VMRawEnergyUsage:   8_800,
 		Maintenance:        33 * time.Millisecond,
 		StateCommit:        44 * time.Millisecond,
 		StateCommitDetail: state.CommitStats{
@@ -273,6 +299,7 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 			Accounts:              33,
 			KVAccounts:            22,
 			KVItems:               55,
+			CommitmentUpdates:     77,
 			Mutations: state.CommitMutationStats{
 				AccountUpdates: 44,
 				KVPutItems:     22,
@@ -280,7 +307,13 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 		},
 		DPUpdate: 55 * time.Millisecond,
 		Persist:  66 * time.Millisecond,
-		Hooks:    77 * time.Millisecond,
+		PersistDetail: core.PersistStats{
+			MetadataRecords:       66,
+			MetadataBytes:         1_100,
+			TransactionLookupRows: 22,
+			TraceAccounts:         33,
+		},
+		Hooks: 77 * time.Millisecond,
 	}
 	if got != want {
 		t.Fatalf("ApplyStats=%+v, want %+v", got, want)

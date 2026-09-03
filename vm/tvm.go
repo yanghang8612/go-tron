@@ -64,7 +64,12 @@ type TVM struct {
 	internalTxArena     *InternalTransactionArena
 	executionLogArena   *ExecutionLogArena
 	nestedReturns       *nestedReturnBuffers
-	pooled              bool
+	// rawEnergyUsage is process-local execution telemetry. Dynamic-energy
+	// interpreter frames add their pre-factor opcode usage on return; energy
+	// spent outside the interpreter (precompiles and code deposit) is added at
+	// its charge site. It never participates in consensus or receipt building.
+	rawEnergyUsage uint64
+	pooled         bool
 }
 
 // tvmPool keeps the per-contract control plane (TVM + Interpreter) separate
@@ -90,6 +95,22 @@ func (tvm *TVM) RevertLogs(snapshot int) {
 
 func (tvm *TVM) InternalTransactionSnapshot() int {
 	return len(tvm.InternalTransactions)
+}
+
+// RawEnergyUsage returns the VM energy observed before the dynamic-energy
+// multiplier. It is populated when DynamicEnergy is enabled; callers should
+// use billed energy as the pre-activation value.
+func (tvm *TVM) RawEnergyUsage() uint64 {
+	if tvm == nil {
+		return 0
+	}
+	return tvm.rawEnergyUsage
+}
+
+func (tvm *TVM) addRawEnergyUsage(usage uint64) {
+	if tvm != nil && tvm.cfg.DynamicEnergy {
+		tvm.rawEnergyUsage += usage
+	}
 }
 
 func (tvm *TVM) rejectInternalTransactionsFrom(snapshot int) {
@@ -922,6 +943,7 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		tvm.StateDB.RevertToSnapshot(snap)
 		return nil, tcommon.Address{}, 0, ErrOutOfEnergy
 	}
+	tvm.addRawEnergyUsage(depositCost)
 
 	if internal || tvm.cfg.Constantinople {
 		tvm.StateDB.SetCode(contractAddr, ret)

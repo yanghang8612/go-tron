@@ -2,8 +2,11 @@
 
 import ast
 import importlib.util
+import urllib.parse
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("commitment_pread_sample.py")
@@ -29,6 +32,19 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertEqual(MODULE.FREEZER_ANCIENT_READ_METRIC, "ancient/read")
         self.assertIn("ancient/", MODULE.METRIC_PREFIXES)
 
+    def test_sync_energy_context_is_captured_as_point_gauges(self):
+        self.assertIn("sync/import/window/", MODULE.METRIC_PREFIXES)
+        for name in (
+            "sync/import/window/energy_per_second",
+            "sync/import/window/raw_energy_per_second",
+            "sync/import/window/vm_execution_nanoseconds_per_raw_energy",
+            "sync/import/window/state_commit_nanoseconds_per_commitment_update",
+            "sync/import/window/persist_metadata_bytes_per_block",
+        ):
+            self.assertIn(name, MODULE.POINT_GAUGE_METRICS)
+            self.assertNotIn(name, MODULE.COUNTER_METRICS)
+            self.assertNotIn(name, MODULE.MONOTONIC_GAUGE_METRICS)
+
     def test_build_row_derives_interval_read_ratios(self):
         names = MODULE.ALL_METRICS
         previous_metrics = {name: 0 for name in names}
@@ -47,6 +63,11 @@ class CommitmentPreadSampleTest(unittest.TestCase):
                 "blockbuffer/commitment_parent/prefetch/depth_5/useful_hits": 15,
                 "blockbuffer/commitment_parent/prefetch/depth_6_plus/durable_reads": 20,
                 "blockbuffer/commitment_parent/prefetch/depth_6_plus/useful_hits": 5,
+                "state/commitment/fold/calls": 20,
+                "state/commitment/fold/input_updates": 200,
+                "state/commitment/fold/resolved_ops": 300,
+                "state/commitment/fold/wall_nanos": 10_000,
+                "state/commitment/fold/errors": 1,
                 "blockbuffer/commitment_parent/durable_publish_races": 5,
                 "blockbuffer/commitment_parent/singleflight/leaders": 90,
                 "blockbuffer/commitment_parent/singleflight/waiters": 12,
@@ -188,6 +209,16 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertEqual(analysis["finishLookaheadWaitNanosPerBlock"], 50.0)
         self.assertEqual(analysis["criticalQueueHighWaterPerLane"], 3)
         self.assertEqual(analysis["lookaheadQueueHighWaterPerLane"], 5)
+        self.assertEqual(analysis["commitmentFoldCallsPerBlock"], 1.0)
+        self.assertEqual(analysis["commitmentFoldInputUpdatesPerBlock"], 10.0)
+        self.assertEqual(analysis["commitmentFoldResolvedOpsPerBlock"], 15.0)
+        self.assertEqual(analysis["commitmentFoldNanosPerInputUpdate"], 50.0)
+        self.assertEqual(analysis["commitmentFoldErrorRatio"], 0.05)
+        self.assertEqual(analysis["commitmentDurableReadsPerInputUpdate"], 0.5)
+        self.assertEqual(analysis["commitmentSegmentPhysicalReadCallsPerInputUpdate"], 0.2)
+        self.assertEqual(analysis["sstRandomReadCallsPerInputUpdate"], 0.3)
+        self.assertEqual(analysis["sstRandomReadNanosPerInputUpdate"], 60.0)
+        self.assertEqual(analysis["pebbleCursorSeekCallsPerInputUpdate"], 0.5)
         self.assertTrue(analysis["commitmentSegmentPhysicalReadMetricsAvailable"])
         self.assertEqual(analysis["commitmentSegmentPhysicalReadMetricCoverageRatio"], 1.0)
         self.assertEqual(analysis["commitmentSegmentPhysicalReadCallsPerBlock"], 2.0)
@@ -701,11 +732,306 @@ class CommitmentPreadSampleTest(unittest.TestCase):
         self.assertIsNone(row["analysis"]["foregroundExactDepthDurableRatio"]["depth_5"])
         self.assertIsNone(row["analysis"]["baseCacheWindowAdmittedPerBlock"])
 
-    def test_with_prefix_replaces_existing_filter(self):
-        got = MODULE.with_prefix("http://127.0.0.1:6062/debug/metrics?prefix=old/&x=1", "cache/")
-        self.assertIn("prefix=cache%2F", got)
-        self.assertIn("x=1", got)
-        self.assertNotIn("old", got)
+    def test_fetch_metrics_uses_one_multi_prefix_request_and_filters_locally(self):
+        calls = []
+
+        def request(url, timeout):
+            calls.append((url, timeout))
+            return {
+                "metrics": {
+                    "process/start/unix_nano": {"value": 1},
+                    "cache/block/hit": {"count": 2},
+                    "unrelated/metric": {"count": 3},
+                }
+            }
+
+        url = "http://127.0.0.1:6062/debug/metrics?prefix=old/&x=1"
+        with mock.patch.object(MODULE, "request_json", side_effect=request):
+            got = MODULE.fetch_metrics(url, 3.0)
+
+        self.assertEqual(len(calls), 1)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(calls[0][0]).query)
+        self.assertEqual(query["prefix"], list(MODULE.METRIC_PREFIXES))
+        self.assertEqual(query["x"], ["1"])
+        self.assertEqual(calls[0][1], 3.0)
+        self.assertEqual(
+            got,
+            {
+                "process/start/unix_nano": {"value": 1},
+                "cache/block/hit": {"count": 2},
+            },
+        )
+
+    def test_sample_once_brackets_single_scrape_and_marks_strict_interval(self):
+        events = []
+        args = SimpleNamespace(
+            wallet_url="http://wallet", metrics_url="http://metrics", timeout=3.0
+        )
+        process = MODULE.PROCESS_IDENTITY_METRIC
+        durable = "blockbuffer/commitment_parent/durable/reads"
+        prefetch_durable = "blockbuffer/commitment_parent/prefetch/durable_reads"
+        previous = {
+            "unix": 5.0,
+            "height": 90,
+            "heightAfter": 90,
+            "heightSpanBlocks": 0,
+            "heightBracketValid": True,
+            "scrapeStrict": True,
+            "metrics": {process: 7, durable: 5, prefetch_durable: 0},
+        }
+
+        def height(url, timeout):
+            events.append("height")
+            return 100
+
+        def metrics(url, timeout):
+            events.append("metrics")
+            return {
+                process: {"value": 7},
+                durable: {"count": 10},
+                prefetch_durable: {"count": 0},
+            }
+
+        with mock.patch.object(MODULE, "wallet_height", side_effect=height), mock.patch.object(
+            MODULE, "fetch_metrics", side_effect=metrics
+        ), mock.patch.object(MODULE.time, "time", side_effect=(10.0, 12.0)):
+            row = MODULE.sample_once(args, previous)
+
+        self.assertEqual(events, ["height", "metrics", "height"])
+        self.assertEqual(row["scrapeStartUnix"], 10.0)
+        self.assertEqual(row["scrapeEndUnix"], 12.0)
+        self.assertEqual(row["scrapeSeconds"], 2.0)
+        self.assertEqual(row["heightBefore"], 100)
+        self.assertEqual(row["heightAfter"], 100)
+        self.assertEqual(row["heightSpanBlocks"], 0)
+        self.assertTrue(row["heightBracketValid"])
+        self.assertTrue(row["scrapeStrict"])
+        self.assertTrue(row["intervalStrict"])
+        self.assertEqual(row["height"], 100)
+        self.assertEqual(row["intervalBlocksEstimate"], 10)
+        self.assertEqual(row["intervalHeightBasis"], "heightAfter")
+        self.assertEqual(row["intervalHeightUncertaintyBlocks"], 0)
+        self.assertEqual(row["intervalHeightToleranceBlocks"], 1.0)
+        self.assertEqual(row["intervalBlocks"], 10)
+        self.assertEqual(row["analysis"]["durableReadsPerBlock"], 0.5)
+
+    def test_sample_once_fails_closed_when_height_moves_during_scrape(self):
+        args = SimpleNamespace(
+            wallet_url="http://wallet", metrics_url="http://metrics", timeout=3.0
+        )
+        process = MODULE.PROCESS_IDENTITY_METRIC
+        durable = "blockbuffer/commitment_parent/durable/reads"
+        previous = {
+            "unix": 5.0,
+            "height": 90,
+            "heightAfter": 90,
+            "heightSpanBlocks": 0,
+            "heightBracketValid": True,
+            "scrapeStrict": True,
+            "metrics": {process: 7, durable: 5},
+        }
+        current = {process: {"value": 7}, durable: {"count": 10}}
+
+        with mock.patch.object(
+            MODULE, "wallet_height", side_effect=(100, 102)
+        ), mock.patch.object(MODULE, "fetch_metrics", return_value=current), mock.patch.object(
+            MODULE.time, "time", side_effect=(10.0, 12.0)
+        ):
+            row = MODULE.sample_once(args, previous)
+
+        self.assertEqual(row["height"], 102)
+        self.assertEqual(row["heightSpanBlocks"], 2)
+        self.assertFalse(row["scrapeStrict"])
+        self.assertFalse(row["intervalStrict"])
+        self.assertEqual(row["intervalBlocksEstimate"], 12)
+        self.assertEqual(row["intervalHeightUncertaintyBlocks"], 2)
+        self.assertEqual(row["intervalHeightToleranceBlocks"], 1.0)
+        self.assertIsNone(row["intervalBlocks"])
+        self.assertIsNone(row["blocksPerSecond"])
+        self.assertIsNone(row["analysis"]["durableReadsPerBlock"])
+
+    def test_one_block_scrape_span_is_strict_and_usable(self):
+        args = SimpleNamespace(
+            wallet_url="http://wallet", metrics_url="http://metrics", timeout=3.0
+        )
+        process = MODULE.PROCESS_IDENTITY_METRIC
+        previous = {
+            "unix": 5.0,
+            "height": 90,
+            "heightAfter": 90,
+            "heightSpanBlocks": 0,
+            "heightBracketValid": True,
+            "scrapeStrict": True,
+            "metrics": {process: 7},
+        }
+
+        with mock.patch.object(
+            MODULE, "wallet_height", side_effect=(99, 100)
+        ), mock.patch.object(
+            MODULE, "fetch_metrics", return_value={process: {"value": 7}}
+        ), mock.patch.object(MODULE.time, "time", side_effect=(10.0, 12.0)):
+            row = MODULE.sample_once(args, previous)
+
+        self.assertEqual(row["heightSpanBlocks"], 1)
+        self.assertTrue(row["heightBracketValid"])
+        self.assertTrue(row["scrapeStrict"])
+        self.assertEqual(row["intervalBlocksEstimate"], 10)
+        self.assertEqual(row["intervalHeightUncertaintyBlocks"], 1)
+        self.assertEqual(row["intervalHeightToleranceBlocks"], 1.0)
+        self.assertTrue(row["intervalStrict"])
+        self.assertEqual(row["intervalBlocks"], 10)
+
+    def test_relative_budget_accepts_wider_brackets_for_long_interval(self):
+        args = SimpleNamespace(
+            wallet_url="http://wallet", metrics_url="http://metrics", timeout=3.0
+        )
+        process = MODULE.PROCESS_IDENTITY_METRIC
+        previous = {
+            "unix": 5.0,
+            "height": 1_000,
+            "heightAfter": 1_000,
+            "heightSpanBlocks": 2,
+            "heightBracketValid": True,
+            "scrapeStrict": False,
+            "metrics": {process: 7},
+        }
+
+        with mock.patch.object(
+            MODULE, "wallet_height", side_effect=(1_498, 1_500)
+        ), mock.patch.object(
+            MODULE, "fetch_metrics", return_value={process: {"value": 7}}
+        ), mock.patch.object(MODULE.time, "time", side_effect=(10.0, 12.0)):
+            row = MODULE.sample_once(args, previous)
+
+        self.assertEqual(row["heightSpanBlocks"], 2)
+        self.assertTrue(row["heightBracketValid"])
+        self.assertFalse(row["scrapeStrict"])
+        self.assertEqual(row["intervalBlocksEstimate"], 500)
+        self.assertEqual(row["intervalHeightUncertaintyBlocks"], 4)
+        self.assertEqual(row["intervalHeightToleranceBlocks"], 5.0)
+        self.assertTrue(row["intervalStrict"])
+        self.assertEqual(row["intervalBlocks"], 500)
+
+    def test_two_tight_brackets_fail_when_combined_error_exceeds_budget(self):
+        args = SimpleNamespace(
+            wallet_url="http://wallet", metrics_url="http://metrics", timeout=3.0
+        )
+        process = MODULE.PROCESS_IDENTITY_METRIC
+        previous = {
+            "unix": 5.0,
+            "height": 100,
+            "heightAfter": 100,
+            "heightSpanBlocks": 1,
+            "heightBracketValid": True,
+            "scrapeStrict": True,
+            "metrics": {process: 7},
+        }
+
+        with mock.patch.object(
+            MODULE, "wallet_height", side_effect=(199, 200)
+        ), mock.patch.object(
+            MODULE, "fetch_metrics", return_value={process: {"value": 7}}
+        ), mock.patch.object(MODULE.time, "time", side_effect=(10.0, 12.0)):
+            row = MODULE.sample_once(args, previous)
+
+        self.assertTrue(row["scrapeStrict"])
+        self.assertEqual(row["intervalBlocksEstimate"], 100)
+        self.assertEqual(row["intervalHeightUncertaintyBlocks"], 2)
+        self.assertEqual(row["intervalHeightToleranceBlocks"], 1.0)
+        self.assertFalse(row["intervalStrict"])
+        self.assertIsNone(row["intervalBlocks"])
+
+    def test_strict_scrape_still_fails_closed_on_counter_reset(self):
+        args = SimpleNamespace(
+            wallet_url="http://wallet", metrics_url="http://metrics", timeout=3.0
+        )
+        process = MODULE.PROCESS_IDENTITY_METRIC
+        durable = "blockbuffer/commitment_parent/durable/reads"
+        previous = {
+            "unix": 5.0,
+            "height": 90,
+            "heightAfter": 90,
+            "heightSpanBlocks": 0,
+            "heightBracketValid": True,
+            "scrapeStrict": True,
+            "metrics": {process: 7, durable: 10},
+        }
+        current = {process: {"value": 7}, durable: {"count": 3}}
+
+        with mock.patch.object(
+            MODULE, "wallet_height", side_effect=(100, 100)
+        ), mock.patch.object(MODULE, "fetch_metrics", return_value=current), mock.patch.object(
+            MODULE.time, "time", side_effect=(10.0, 12.0)
+        ):
+            row = MODULE.sample_once(args, previous)
+
+        self.assertTrue(row["scrapeStrict"])
+        self.assertFalse(row["intervalStrict"])
+        self.assertEqual(row["status"], "counter-reset")
+        self.assertIn(durable, row["counterResets"])
+        self.assertIsNone(row["delta"][durable])
+        self.assertIsNone(row["intervalBlocks"])
+
+    def test_strict_scrape_still_fails_closed_on_process_restart(self):
+        args = SimpleNamespace(
+            wallet_url="http://wallet", metrics_url="http://metrics", timeout=3.0
+        )
+        process = MODULE.PROCESS_IDENTITY_METRIC
+        durable = "blockbuffer/commitment_parent/durable/reads"
+        previous = {
+            "unix": 5.0,
+            "height": 90,
+            "heightAfter": 90,
+            "heightSpanBlocks": 0,
+            "heightBracketValid": True,
+            "scrapeStrict": True,
+            "metrics": {process: 7, durable: 10},
+        }
+        current = {process: {"value": 8}, durable: {"count": 100}}
+
+        with mock.patch.object(
+            MODULE, "wallet_height", side_effect=(100, 100)
+        ), mock.patch.object(MODULE, "fetch_metrics", return_value=current), mock.patch.object(
+            MODULE.time, "time", side_effect=(10.0, 12.0)
+        ):
+            row = MODULE.sample_once(args, previous)
+
+        self.assertTrue(row["scrapeStrict"])
+        self.assertFalse(row["intervalStrict"])
+        self.assertTrue(row["processRestart"])
+        self.assertIn(process, row["counterResets"])
+        self.assertIsNone(row["delta"][durable])
+        self.assertIsNone(row["intervalBlocks"])
+
+    def test_height_read_failure_keeps_observation_but_marks_scrape_non_strict(self):
+        args = SimpleNamespace(
+            wallet_url="http://wallet", metrics_url="http://metrics", timeout=3.0
+        )
+        process = MODULE.PROCESS_IDENTITY_METRIC
+        previous = {
+            "unix": 5.0,
+            "height": 90,
+            "heightAfter": 90,
+            "heightSpanBlocks": 0,
+            "heightBracketValid": True,
+            "scrapeStrict": True,
+            "metrics": {process: 7},
+        }
+
+        with mock.patch.object(
+            MODULE, "wallet_height", side_effect=(OSError("before"), 100)
+        ), mock.patch.object(
+            MODULE, "fetch_metrics", return_value={process: {"value": 7}}
+        ), mock.patch.object(MODULE.time, "time", side_effect=(10.0, 12.0)):
+            row = MODULE.sample_once(args, previous)
+
+        self.assertIsNone(row["heightBefore"])
+        self.assertEqual(row["heightAfter"], 100)
+        self.assertEqual(row["height"], 100)
+        self.assertIsNone(row["heightSpanBlocks"])
+        self.assertFalse(row["scrapeStrict"])
+        self.assertFalse(row["intervalStrict"])
+        self.assertIsNone(row["intervalBlocks"])
 
 
 if __name__ == "__main__":
