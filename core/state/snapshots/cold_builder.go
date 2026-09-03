@@ -37,7 +37,12 @@ const (
 	// the production 3s/1m catch-up controls this also turns a full build into a
 	// smaller duty-cycle slice.
 	maxForcedBusyBatchDivisor = uint64(4)
-	coldSnapshotDutyCyclePPM  = uint64(1_000_000)
+	// A forced-busy history build targets one part work followed by four parts
+	// importer-only recovery. Production's one-minute catch-up interval clamps
+	// that recovery to 30s..60s; shorter test configurations scale the same
+	// bounds proportionally instead of inheriting wall-clock constants.
+	forcedBusyRecoveryWorkMultiplier = int64(4)
+	coldSnapshotDutyCyclePPM         = uint64(1_000_000)
 )
 
 var ErrCommitmentBranchRotationNotSolidified = errors.New("snapshots: commitment branch rotation boundary is not solidified")
@@ -88,9 +93,10 @@ type Config struct {
 	// CatchupBuildMinInterval rate-limits history collation while sync is
 	// active. One bounded batch may start per interval unless ready adaptive
 	// catch-up below is enabled and its lag threshold is exceeded. A pass forced
-	// through the busy liveness watermark remains rate-limited. Once sync is
-	// inactive the backlog drains immediately; zero preserves the unthrottled
-	// behavior used by offline tooling and tests.
+	// through the busy liveness watermark uses an independently measured recovery
+	// between one-half and one full interval. Once sync is inactive the backlog
+	// drains immediately; zero preserves the unthrottled behavior used by offline
+	// tooling and tests.
 	CatchupBuildMinInterval time.Duration
 	// CatchupUnthrottledLagBlocks bypasses CatchupBuildMinInterval while sync is
 	// active, importer admission is ready, and more than this many complete
@@ -240,8 +246,9 @@ type PassResult struct {
 	HistoryBuildAttempted bool
 	HistoryDebtBlocks     uint64
 	HistoryDebtGrowth     int64
-	// HistoryMinRecovery is the configured importer-only recovery window after
-	// a forced-busy build. It is used for duty-cycle observability.
+	// HistoryMinRecovery is the importer-only recovery window selected after a
+	// forced-busy build. It is used by the next admission and for duty-cycle
+	// observability.
 	HistoryMinRecovery time.Duration
 	LatestBuilt        bool
 	LatestDeferred     bool
@@ -373,11 +380,19 @@ type Stats struct {
 	LastForcedRecovery       time.Duration
 	LastForcedDutyPPM        uint64
 	LastForcedDebtBlocks     uint64
-	LastForcedDebtGrowth     int64
-	DerivedSidecarsDeferred  uint64
-	DerivedSidecarCatchups   uint64
-	EventLogFreezerHandoffs  uint64
-	LastLatestBuildBlock     uint64
+
+	// LastForcedDebtGrowth and the completion/rate fields below are sampled only
+	// between successful forced-busy build completions. Admission and rate-limit
+	// passes never overwrite them.
+	LastForcedDebtGrowth          int64
+	LastForcedCompletionInterval  time.Duration
+	LastForcedGrossRateMilli      uint64
+	LastForcedNetCatchupRateMilli int64
+
+	DerivedSidecarsDeferred uint64
+	DerivedSidecarCatchups  uint64
+	EventLogFreezerHandoffs uint64
+	LastLatestBuildBlock    uint64
 }
 
 type coldRunnerMetrics struct {
@@ -420,10 +435,15 @@ type coldRunnerMetrics struct {
 	lastForcedDutyPPM        *metrics.Gauge
 	lastForcedDebtBlocks     *metrics.Gauge
 	lastForcedDebtGrowth     *metrics.Gauge
-	derivedSidecarsDeferred  *metrics.Gauge
-	derivedSidecarCatchups   *metrics.Gauge
-	eventLogFreezerHandoffs  *metrics.Gauge
-	lastLatestBuildBlock     *metrics.Gauge
+
+	lastForcedCompletionInterval  *metrics.Gauge
+	lastForcedGrossRateMilli      *metrics.Gauge
+	lastForcedNetCatchupRateMilli *metrics.Gauge
+
+	derivedSidecarsDeferred *metrics.Gauge
+	derivedSidecarCatchups  *metrics.Gauge
+	eventLogFreezerHandoffs *metrics.Gauge
+	lastLatestBuildBlock    *metrics.Gauge
 }
 
 func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
@@ -468,10 +488,15 @@ func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 		lastForcedDutyPPM:        metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/duty_cycle_ppm", nil),
 		lastForcedDebtBlocks:     metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/debt_blocks", nil),
 		lastForcedDebtGrowth:     metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/debt_growth_blocks", nil),
-		derivedSidecarsDeferred:  metrics.GetOrRegisterGauge(namespace+"sidecar/deferred/sync_or_resource", nil),
-		derivedSidecarCatchups:   metrics.GetOrRegisterGauge(namespace+"sidecar/catchup/builds", nil),
-		eventLogFreezerHandoffs:  metrics.GetOrRegisterGauge(namespace+"sidecar/event_log/freezer_handoffs", nil),
-		lastLatestBuildBlock:     metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
+
+		lastForcedCompletionInterval:  metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/completion_interval", nil),
+		lastForcedGrossRateMilli:      metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/gross_blocks_per_second_milli", nil),
+		lastForcedNetCatchupRateMilli: metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/net_catchup_blocks_per_second_milli", nil),
+
+		derivedSidecarsDeferred: metrics.GetOrRegisterGauge(namespace+"sidecar/deferred/sync_or_resource", nil),
+		derivedSidecarCatchups:  metrics.GetOrRegisterGauge(namespace+"sidecar/catchup/builds", nil),
+		eventLogFreezerHandoffs: metrics.GetOrRegisterGauge(namespace+"sidecar/event_log/freezer_handoffs", nil),
+		lastLatestBuildBlock:    metrics.GetOrRegisterGauge(namespace+"last/latest_build_block", nil),
 	}
 }
 
@@ -525,6 +550,9 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.lastForcedDutyPPM.Update(coldSnapshotUintGauge(stats.LastForcedDutyPPM))
 	m.lastForcedDebtBlocks.Update(coldSnapshotUintGauge(stats.LastForcedDebtBlocks))
 	m.lastForcedDebtGrowth.Update(stats.LastForcedDebtGrowth)
+	m.lastForcedCompletionInterval.Update(int64(stats.LastForcedCompletionInterval))
+	m.lastForcedGrossRateMilli.Update(coldSnapshotUintGauge(stats.LastForcedGrossRateMilli))
+	m.lastForcedNetCatchupRateMilli.Update(stats.LastForcedNetCatchupRateMilli)
 	m.derivedSidecarsDeferred.Update(coldSnapshotUintGauge(stats.DerivedSidecarsDeferred))
 	m.derivedSidecarCatchups.Update(coldSnapshotUintGauge(stats.DerivedSidecarCatchups))
 	m.eventLogFreezerHandoffs.Update(coldSnapshotUintGauge(stats.EventLogFreezerHandoffs))
@@ -598,6 +626,15 @@ type Runner struct {
 	lastForcedDebtBlocks     atomic.Uint64
 	lastForcedDebtGrowth     atomic.Int64
 	lastForcedBusyAttemptAt  atomic.Int64
+
+	lastForcedAttemptRecovery atomic.Int64
+
+	lastSuccessfulForcedAt        atomic.Int64
+	lastSuccessfulForcedLag       atomic.Uint64
+	lastForcedCompletionInterval  atomic.Int64
+	lastForcedGrossRateMilli      atomic.Uint64
+	lastForcedNetCatchupRateMilli atomic.Int64
+
 	derivedSidecarsDeferred  atomic.Uint64
 	derivedSidecarCatchups   atomic.Uint64
 	eventLogFreezerHandoffs  atomic.Uint64
@@ -847,10 +884,15 @@ func (r *Runner) Snapshot() Stats {
 		LastForcedDutyPPM:        r.lastForcedDutyPPM.Load(),
 		LastForcedDebtBlocks:     r.lastForcedDebtBlocks.Load(),
 		LastForcedDebtGrowth:     r.lastForcedDebtGrowth.Load(),
-		DerivedSidecarsDeferred:  r.derivedSidecarsDeferred.Load(),
-		DerivedSidecarCatchups:   r.derivedSidecarCatchups.Load(),
-		EventLogFreezerHandoffs:  r.eventLogFreezerHandoffs.Load(),
-		LastLatestBuildBlock:     r.lastLatestBuildBlock.Load(),
+
+		LastForcedCompletionInterval:  time.Duration(r.lastForcedCompletionInterval.Load()),
+		LastForcedGrossRateMilli:      r.lastForcedGrossRateMilli.Load(),
+		LastForcedNetCatchupRateMilli: r.lastForcedNetCatchupRateMilli.Load(),
+
+		DerivedSidecarsDeferred: r.derivedSidecarsDeferred.Load(),
+		DerivedSidecarCatchups:  r.derivedSidecarCatchups.Load(),
+		EventLogFreezerHandoffs: r.eventLogFreezerHandoffs.Load(),
+		LastLatestBuildBlock:    r.lastLatestBuildBlock.Load(),
 	}
 }
 
@@ -932,16 +974,20 @@ func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 			result.LatestCommitmentBaseBuilt = built && syncCommitmentCandidate && r.lastLatestBuildBlock.Load() == latestBlockBefore
 		}
 	}
+	if err == nil && result.Built && result.HistoryForcedBusy {
+		// Base the next forced admission on work which actually completed. Keeping
+		// this assignment after compaction prevents a slow merge from being hidden
+		// behind the ordinary history-build duration.
+		result.HistoryMinRecovery = r.forcedBusyHistoryRecovery(forcedBusyHistoryWorkDuration(result))
+	}
 	finishedAt := time.Now()
 	if err != nil && result.HistoryForcedBusy && result.HistoryBuildAttempted {
 		// Failed forced-busy work consumed the same importer resources as a
 		// successful build. Start a fresh recovery window at failure completion;
 		// using the admission timestamp would allow a long failed build to retry
 		// immediately and recreate the original near-continuous duty cycle.
-		recovery := result.HistoryMinRecovery
-		if r.cfg.CatchupBuildMinInterval > recovery {
-			recovery = r.cfg.CatchupBuildMinInterval
-		}
+		recovery := r.forcedBusyHistoryRecovery(0)
+		result.HistoryMinRecovery = recovery
 		result.extendHistoryRetryDeadline(finishedAt, recovery)
 	}
 	result.refreshHistoryRetry(finishedAt)
@@ -1157,7 +1203,10 @@ func (r *Runner) onePass() (PassResult, error) {
 						result.HistoryForcedBusy = true
 						result.HistoryDebtBlocks = readyBlocks
 						result.HistoryDebtGrowth = coldSnapshotSignedDelta(readyBlocks, r.lastLagBlocks.Load())
-						result.HistoryMinRecovery = r.forcedBusyHistoryRecovery()
+						// Start conservatively. A successful build replaces this with a
+						// duration-derived recovery after all history/compaction work is
+						// measured; a failed attempt keeps the full configured interval.
+						result.HistoryMinRecovery = r.forcedBusyHistoryRecovery(0)
 						batchBlocks = r.forcedBusyHistoryBatchLimit(batchBlocks)
 						batchTxNums = r.forcedBusyHistoryBatchLimit(batchTxNums)
 					}
@@ -1437,6 +1486,12 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		return
 	}
 	elapsed := time.Since(started)
+	if result.HistoryForcedBusy {
+		// The outer pass will refine this with its measured build plus compaction
+		// duration. Most catch-up passes do not compact, so report the adaptive
+		// recovery immediately instead of the conservative pre-build placeholder.
+		result.HistoryMinRecovery = r.forcedBusyHistoryRecovery(elapsed)
+	}
 	blocks := result.ToBlock - result.FromBlock + 1
 	txs := result.ToTxNum - result.FromTxNum + 1
 	backlogBlocks := uint64(0)
@@ -1619,24 +1674,28 @@ func (r *Runner) historyBuildRetryAfter(now time.Time, accelerated, forcedBusy b
 	if accelerated && !forcedBusy {
 		return 0
 	}
+	interval := r.cfg.CatchupBuildMinInterval
 	last := r.lastHistoryBuildAt.Load()
 	if forcedBusy {
-		if attempted := r.lastForcedBusyAttemptAt.Load(); attempted > last {
+		if attempted := r.lastForcedBusyAttemptAt.Load(); attempted >= last && attempted > 0 {
 			last = attempted
+			if recovery := time.Duration(r.lastForcedAttemptRecovery.Load()); recovery > 0 {
+				interval = recovery
+			}
 		}
 	}
 	if last <= 0 {
 		return 0
 	}
 	elapsed := now.Sub(time.Unix(0, last))
-	if elapsed >= r.cfg.CatchupBuildMinInterval {
+	if elapsed >= interval {
 		return 0
 	}
-	retryAfter := r.cfg.CatchupBuildMinInterval - elapsed
+	retryAfter := interval - elapsed
 	// A wall-clock correction must not turn a bounded recovery window into an
 	// arbitrarily long defer.
-	if retryAfter > r.cfg.CatchupBuildMinInterval {
-		return r.cfg.CatchupBuildMinInterval
+	if retryAfter > interval {
+		return interval
 	}
 	return retryAfter
 }
@@ -1659,18 +1718,42 @@ func (r *Runner) forcedBusyHistoryBatchLimit(configured uint64) uint64 {
 	return limited
 }
 
-func (r *Runner) forcedBusyHistoryRecovery() time.Duration {
+func (r *Runner) forcedBusyHistoryRecovery(work time.Duration) time.Duration {
 	if r == nil {
 		return 0
 	}
-	recovery := r.cfg.CatchupBuildMinInterval
-	if r.cfg.HeavyWorkGate != nil && r.cfg.CatchupHeavyWorkCooldown > recovery {
-		recovery = r.cfg.CatchupHeavyWorkCooldown
+	maxRecovery := r.cfg.CatchupBuildMinInterval
+	if r.cfg.HeavyWorkGate != nil && r.cfg.CatchupHeavyWorkCooldown > maxRecovery {
+		maxRecovery = r.cfg.CatchupHeavyWorkCooldown
 	}
-	if recovery < 0 {
+	if maxRecovery <= 0 {
 		return 0
 	}
+	minRecovery := maxRecovery / 2
+	if minRecovery <= 0 {
+		minRecovery = maxRecovery
+	}
+	if work <= 0 {
+		return maxRecovery
+	}
+	recovery := maxRecovery
+	if work <= time.Duration(math.MaxInt64/forcedBusyRecoveryWorkMultiplier) {
+		recovery = work * time.Duration(forcedBusyRecoveryWorkMultiplier)
+	}
+	if recovery < minRecovery {
+		return minRecovery
+	}
+	if recovery > maxRecovery {
+		return maxRecovery
+	}
 	return recovery
+}
+
+func forcedBusyHistoryWorkDuration(result PassResult) time.Duration {
+	if result.BuildDuration >= time.Duration(math.MaxInt64)-result.CompactionDuration {
+		return time.Duration(math.MaxInt64)
+	}
+	return result.BuildDuration + result.CompactionDuration
 }
 
 func coldSnapshotDutyPPM(work, recovery time.Duration) uint64 {
@@ -2346,6 +2429,17 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	if passErr != nil {
 		r.passErrors.Add(1)
 	}
+	publishedBlock := r.lastPublishedBlock.Load()
+	if result.PublishedBlock > 0 {
+		publishedBlock = result.PublishedBlock
+	}
+	if result.Built {
+		publishedBlock = result.ToBlock
+	}
+	lagBlocks := uint64(0)
+	if result.EligibleCutoffBlock > publishedBlock {
+		lagBlocks = result.EligibleCutoffBlock - publishedBlock
+	}
 	if result.HistoryAdmissionChecked {
 		r.admissionChecks.Add(1)
 		if result.HistoryAdmissionReady {
@@ -2356,11 +2450,10 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	}
 	if result.HistoryForcedBusy {
 		r.forcedBusyPasses.Add(1)
-		r.lastForcedDebtBlocks.Store(result.HistoryDebtBlocks)
-		r.lastForcedDebtGrowth.Store(result.HistoryDebtGrowth)
 		if result.HistoryBuildAttempted {
 			r.forcedBusyAttempts.Add(1)
 			r.lastForcedBusyAttemptAt.Store(completedAt.UnixNano())
+			r.lastForcedAttemptRecovery.Store(int64(result.HistoryMinRecovery))
 		}
 	}
 	if result.Built {
@@ -2376,7 +2469,14 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 			r.lastForcedBatchBlocks.Store(result.HistoryBatchBlocks)
 			r.lastForcedBatchTxNums.Store(result.HistoryBatchTxNums)
 			r.lastForcedRecovery.Store(int64(result.HistoryMinRecovery))
-			r.lastForcedDutyPPM.Store(coldSnapshotDutyPPM(result.BuildDuration, result.HistoryMinRecovery))
+			r.lastForcedDutyPPM.Store(coldSnapshotDutyPPM(forcedBusyHistoryWorkDuration(result), result.HistoryMinRecovery))
+			r.recordSuccessfulForcedBuild(result.HistoryBatchBlocks, lagBlocks, completedAt)
+		} else {
+			// A ready or ordinary build may retire substantial debt between two
+			// forced passes. Invalidate the completion anchor so that work is not
+			// incorrectly attributed to the next forced batch's gross/net rates.
+			r.lastSuccessfulForcedAt.Store(0)
+			r.lastSuccessfulForcedLag.Store(0)
 		}
 	}
 	if result.Compaction.Merged {
@@ -2410,17 +2510,6 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	if builtBytes > 0 {
 		r.bytesBuilt.Add(builtBytes)
 	}
-	publishedBlock := r.lastPublishedBlock.Load()
-	if result.PublishedBlock > 0 {
-		publishedBlock = result.PublishedBlock
-	}
-	if result.Built {
-		publishedBlock = result.ToBlock
-	}
-	lagBlocks := uint64(0)
-	if result.EligibleCutoffBlock > publishedBlock {
-		lagBlocks = result.EligibleCutoffBlock - publishedBlock
-	}
 	visibleTxEnd := r.lastVisibleTxEnd.Load()
 	if result.PreviousVisibleTx > 0 {
 		visibleTxEnd = result.PreviousVisibleTx
@@ -2452,6 +2541,64 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	r.lastCompactionMerges.Store(uint64(result.Compaction.MergePasses))
 	r.lastLatestDuration.Store(int64(result.LatestDuration))
 	r.updateMetrics()
+}
+
+func (r *Runner) recordSuccessfulForcedBuild(batchBlocks, lagBlocks uint64, completedAt time.Time) {
+	if r == nil {
+		return
+	}
+	previousAt := r.lastSuccessfulForcedAt.Load()
+	previousLag := r.lastSuccessfulForcedLag.Load()
+	r.lastForcedDebtBlocks.Store(lagBlocks)
+	if previousAt <= 0 {
+		r.lastForcedDebtGrowth.Store(0)
+		r.lastForcedCompletionInterval.Store(0)
+		r.lastForcedGrossRateMilli.Store(0)
+		r.lastForcedNetCatchupRateMilli.Store(0)
+	}
+	if previousAt > 0 {
+		interval := completedAt.Sub(time.Unix(0, previousAt))
+		if interval > 0 {
+			lagDelta := coldSnapshotSignedDelta(lagBlocks, previousLag)
+			r.lastForcedDebtGrowth.Store(lagDelta)
+			r.lastForcedCompletionInterval.Store(int64(interval))
+			r.lastForcedGrossRateMilli.Store(coldSnapshotUnsignedRateMilli(batchBlocks, interval))
+			r.lastForcedNetCatchupRateMilli.Store(coldSnapshotSignedRateMilli(-lagDelta, interval))
+		}
+	}
+	r.lastSuccessfulForcedLag.Store(lagBlocks)
+	r.lastSuccessfulForcedAt.Store(completedAt.UnixNano())
+}
+
+func coldSnapshotUnsignedRateMilli(items uint64, elapsed time.Duration) uint64 {
+	if items == 0 || elapsed <= 0 {
+		return 0
+	}
+	rate := float64(items) * 1_000 / elapsed.Seconds()
+	if math.IsNaN(rate) || rate <= 0 {
+		return 0
+	}
+	if math.IsInf(rate, 1) || rate >= float64(math.MaxUint64) {
+		return math.MaxUint64
+	}
+	return uint64(math.Round(rate))
+}
+
+func coldSnapshotSignedRateMilli(items int64, elapsed time.Duration) int64 {
+	if items == 0 || elapsed <= 0 {
+		return 0
+	}
+	rate := float64(items) * 1_000 / elapsed.Seconds()
+	if math.IsNaN(rate) {
+		return 0
+	}
+	if math.IsInf(rate, 1) || rate >= float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	if math.IsInf(rate, -1) || rate <= float64(math.MinInt64) {
+		return math.MinInt64
+	}
+	return int64(math.Round(rate))
 }
 
 func (r *Runner) updateMetrics() {

@@ -832,8 +832,8 @@ func TestColdBuilderForcedBusyCatchupAdaptsBatchAndRecovery(t *testing.T) {
 	if first.HistoryAccelerated {
 		t.Fatalf("first forced-busy pass = %+v, accelerated must describe only ready unthrottled builds", first)
 	}
-	if first.HistoryMinRecovery != 80*time.Millisecond {
-		t.Fatalf("first forced-busy recovery = %s, want 80ms", first.HistoryMinRecovery)
+	if first.HistoryMinRecovery < 40*time.Millisecond || first.HistoryMinRecovery > 80*time.Millisecond {
+		t.Fatalf("first forced-busy recovery = %s, want adaptive range [40ms,80ms]", first.HistoryMinRecovery)
 	}
 
 	limited, err := runner.OnePass()
@@ -875,8 +875,9 @@ func TestColdBuilderForcedBusyCatchupAdaptsBatchAndRecovery(t *testing.T) {
 		stats.AdmissionChecks != 4 || stats.AdmissionBusy != 3 || stats.AdmissionReady != 1 ||
 		stats.HistoryRateLimitedSync != 1 || stats.LastBatchBlocks != 8 || stats.LastBatchTxNums != 8 ||
 		stats.LastForcedBatchBlocks != 2 || stats.LastForcedBatchTxNums != 2 ||
-		stats.LastForcedRecovery != 80*time.Millisecond || stats.LastForcedDutyPPM == 0 || stats.LastForcedDutyPPM > coldSnapshotDutyCyclePPM ||
-		stats.LastForcedDebtBlocks != 10 || stats.LastForcedDebtGrowth != 0 {
+		stats.LastForcedRecovery < 40*time.Millisecond || stats.LastForcedRecovery > 80*time.Millisecond || stats.LastForcedDutyPPM == 0 || stats.LastForcedDutyPPM > coldSnapshotDutyCyclePPM ||
+		stats.LastForcedDebtBlocks != 8 || stats.LastForcedDebtGrowth != -2 || stats.LastForcedCompletionInterval <= 0 ||
+		stats.LastForcedGrossRateMilli == 0 || stats.LastForcedNetCatchupRateMilli <= 0 {
 		t.Fatalf("forced-busy stats = %+v", stats)
 	}
 	for suffix, want := range map[string]int64{
@@ -891,14 +892,143 @@ func TestColdBuilderForcedBusyCatchupAdaptsBatchAndRecovery(t *testing.T) {
 		"lastpass/history/batch/txnums":               8,
 		"history/forced_busy/last/batch/blocks":       2,
 		"history/forced_busy/last/batch/txnums":       2,
-		"history/forced_busy/last/recovery":           int64(80 * time.Millisecond),
-		"history/forced_busy/last/debt_blocks":        10,
-		"history/forced_busy/last/debt_growth_blocks": 0,
+		"history/forced_busy/last/debt_blocks":        8,
+		"history/forced_busy/last/debt_growth_blocks": -2,
 	} {
 		assertColdRunnerGauge(t, namespace+suffix, want)
 	}
 	if got := coldRunnerGaugeValue(t, namespace+"history/forced_busy/last/duty_cycle_ppm"); got <= 0 || got > int64(coldSnapshotDutyCyclePPM) {
 		t.Fatalf("forced-busy duty-cycle gauge = %d", got)
+	}
+	if got := coldRunnerGaugeValue(t, namespace+"history/forced_busy/last/recovery"); got < int64(40*time.Millisecond) || got > int64(80*time.Millisecond) {
+		t.Fatalf("forced-busy recovery gauge = %s, want adaptive range [40ms,80ms]", time.Duration(got))
+	}
+	for _, suffix := range []string{
+		"history/forced_busy/last/completion_interval",
+		"history/forced_busy/last/gross_blocks_per_second_milli",
+		"history/forced_busy/last/net_catchup_blocks_per_second_milli",
+	} {
+		if got := coldRunnerGaugeValue(t, namespace+suffix); got <= 0 {
+			t.Fatalf("forced-busy gauge %s = %d, want positive", suffix, got)
+		}
+	}
+}
+
+func TestForcedBusyHistoryRecoveryTargetsDutyAndScalesBounds(t *testing.T) {
+	production := &Runner{cfg: Config{CatchupBuildMinInterval: time.Minute}}
+	for _, tc := range []struct {
+		name string
+		work time.Duration
+		want time.Duration
+	}{
+		{name: "unknown starts conservatively", work: 0, want: time.Minute},
+		{name: "fast clamps to half interval", work: time.Second, want: 30 * time.Second},
+		{name: "targets twenty percent duty", work: 10 * time.Second, want: 40 * time.Second},
+		{name: "slow clamps to full interval", work: 20 * time.Second, want: time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := production.forcedBusyHistoryRecovery(tc.work); got != tc.want {
+				t.Fatalf("recovery(%s) = %s, want %s", tc.work, got, tc.want)
+			}
+		})
+	}
+
+	scaled := &Runner{cfg: Config{CatchupBuildMinInterval: 80 * time.Millisecond}}
+	if got := scaled.forcedBusyHistoryRecovery(time.Millisecond); got != 40*time.Millisecond {
+		t.Fatalf("scaled minimum recovery = %s, want 40ms", got)
+	}
+	if got := scaled.forcedBusyHistoryRecovery(15 * time.Millisecond); got != 60*time.Millisecond {
+		t.Fatalf("scaled target recovery = %s, want 60ms", got)
+	}
+	if got := scaled.forcedBusyHistoryRecovery(30 * time.Millisecond); got != 80*time.Millisecond {
+		t.Fatalf("scaled maximum recovery = %s, want 80ms", got)
+	}
+	if got := forcedBusyHistoryWorkDuration(PassResult{BuildDuration: 5 * time.Second, CompactionDuration: 2 * time.Second}); got != 7*time.Second {
+		t.Fatalf("forced busy heavy duration = %s, want build plus compaction", got)
+	}
+}
+
+func TestColdBuilderForcedBusyRetryUsesIndependentCompletionRecovery(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	runner := &Runner{
+		chain: &coldBuilderChain{syncRemaining: 1_000, syncRemainingOK: true},
+		cfg:   Config{CatchupBuildMinInterval: 80 * time.Millisecond},
+	}
+	runner.lastHistoryBuildAt.Store(now.Add(-50 * time.Millisecond).UnixNano())
+	runner.lastForcedBusyAttemptAt.Store(now.Add(-50 * time.Millisecond).UnixNano())
+	runner.lastForcedAttemptRecovery.Store(int64(40 * time.Millisecond))
+
+	if got := runner.historyBuildRetryAfter(now, false, true); got != 0 {
+		t.Fatalf("forced retry after adaptive recovery = %s, want ready", got)
+	}
+	if got := runner.historyBuildRetryAfter(now, false, false); got != 30*time.Millisecond {
+		t.Fatalf("ordinary retry = %s, want unchanged 80ms interval (30ms remaining)", got)
+	}
+
+	runner.lastForcedBusyAttemptAt.Store(now.Add(-20 * time.Millisecond).UnixNano())
+	if got := runner.historyBuildRetryAfter(now, false, true); got != 20*time.Millisecond {
+		t.Fatalf("forced retry from completion = %s, want 20ms", got)
+	}
+
+	// A newer ready/non-forced build retains the ordinary interval; an older
+	// forced sample must not shorten recovery for work it did not measure.
+	runner.lastHistoryBuildAt.Store(now.Add(-20 * time.Millisecond).UnixNano())
+	runner.lastForcedBusyAttemptAt.Store(now.Add(-50 * time.Millisecond).UnixNano())
+	if got := runner.historyBuildRetryAfter(now, false, true); got != 60*time.Millisecond {
+		t.Fatalf("forced retry after newer ordinary build = %s, want ordinary 80ms interval (60ms remaining)", got)
+	}
+}
+
+func TestSuccessfulForcedBuildMetricsIgnoreDeferredPasses(t *testing.T) {
+	namespace := normalizeColdSnapshotMetricNamespace("test/state/snapshot/cold/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterColdRunnerMetricNamespace(namespace) })
+	runner := NewRunner(nil, Config{MetricsNamespace: namespace})
+	firstAt := time.Unix(2_000, 0)
+	runner.recordSuccessfulForcedBuild(10, 100, firstAt)
+
+	// A busy classification which performs no build must not replace the last
+	// successful debt sample with its short eligibility-check delta.
+	runner.recordPass(PassResult{
+		HistoryForcedBusy:  true,
+		HistoryDeferred:    true,
+		HistoryRateLimited: true,
+		HistoryDebtBlocks:  999,
+		HistoryDebtGrowth:  777,
+	}, time.Now(), nil)
+	if stats := runner.Snapshot(); stats.LastForcedDebtBlocks != 100 || stats.LastForcedDebtGrowth != 0 || stats.LastForcedCompletionInterval != 0 {
+		t.Fatalf("deferred pass polluted successful forced sample: %+v", stats)
+	}
+
+	runner.recordSuccessfulForcedBuild(20, 70, firstAt.Add(10*time.Second))
+	runner.updateMetrics()
+	stats := runner.Snapshot()
+	if stats.LastForcedDebtBlocks != 70 || stats.LastForcedDebtGrowth != -30 || stats.LastForcedCompletionInterval != 10*time.Second ||
+		stats.LastForcedGrossRateMilli != 2_000 || stats.LastForcedNetCatchupRateMilli != 3_000 {
+		t.Fatalf("successful forced completion stats = %+v", stats)
+	}
+	for suffix, want := range map[string]int64{
+		"history/forced_busy/last/debt_blocks":                         70,
+		"history/forced_busy/last/debt_growth_blocks":                  -30,
+		"history/forced_busy/last/completion_interval":                 int64(10 * time.Second),
+		"history/forced_busy/last/gross_blocks_per_second_milli":       2_000,
+		"history/forced_busy/last/net_catchup_blocks_per_second_milli": 3_000,
+	} {
+		assertColdRunnerGauge(t, namespace+suffix, want)
+	}
+
+	// A ready/ordinary success between forced passes owns its own debt
+	// reduction. The next forced completion starts a fresh sample instead of
+	// claiming that intervening progress as its net catch-up rate.
+	runner.recordPass(PassResult{
+		Built:              true,
+		HistoryBatchBlocks: 50,
+		ToBlock:            50,
+	}, firstAt.Add(15*time.Second), nil)
+	runner.recordSuccessfulForcedBuild(20, 10, firstAt.Add(20*time.Second))
+	stats = runner.Snapshot()
+	if stats.LastForcedDebtBlocks != 10 || stats.LastForcedDebtGrowth != 0 || stats.LastForcedCompletionInterval != 0 ||
+		stats.LastForcedGrossRateMilli != 0 || stats.LastForcedNetCatchupRateMilli != 0 {
+		t.Fatalf("forced metrics crossed an intervening ordinary build: %+v", stats)
 	}
 }
 
@@ -948,6 +1078,9 @@ func TestColdBuilderForcedBusyFailurePreservesAdmissionAndRecovery(t *testing.T)
 	}
 	if stats := runner.Snapshot(); stats.ForcedBusyAttempts != 1 || stats.ForcedBusyBuilds != 0 || stats.PassErrors != 1 {
 		t.Fatalf("stats after failed forced-busy attempt = %+v", stats)
+	}
+	if got := time.Duration(runner.lastForcedAttemptRecovery.Load()); got != 80*time.Millisecond {
+		t.Fatalf("failed forced-busy attempt recovery = %s, want conservative 80ms", got)
 	}
 
 	db.fail.Store(false)
@@ -3700,6 +3833,9 @@ func unregisterColdRunnerMetricNamespace(namespace string) {
 		"history/forced_busy/last/duty_cycle_ppm",
 		"history/forced_busy/last/debt_blocks",
 		"history/forced_busy/last/debt_growth_blocks",
+		"history/forced_busy/last/completion_interval",
+		"history/forced_busy/last/gross_blocks_per_second_milli",
+		"history/forced_busy/last/net_catchup_blocks_per_second_milli",
 		"sidecar/deferred/sync_or_resource",
 		"sidecar/catchup/builds",
 		"sidecar/event_log/freezer_handoffs",

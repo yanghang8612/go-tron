@@ -32,9 +32,11 @@ type auditAncientBodyStore struct {
 type auditTransactionIndexMaintenanceStore struct {
 	FreezerStore
 	body       []byte
+	bodyFor    func(uint64) []byte
 	coverage   uint64
 	v2Coverage uint64
 	dir        string
+	published  atomic.Bool
 	merge      bool
 	mergeCalls atomic.Uint64
 	mergeBlock bool
@@ -44,6 +46,9 @@ type auditTransactionIndexMaintenanceStore struct {
 
 func (s *auditTransactionIndexMaintenanceStore) Ancient(kind string, number uint64) ([]byte, error) {
 	if kind == rawdbAncientBlocks && number < s.v2Coverage {
+		if s.bodyFor != nil {
+			return s.bodyFor(number), nil
+		}
 		return s.body, nil
 	}
 	return s.FreezerStore.Ancient(kind, number)
@@ -59,6 +64,7 @@ func (s *auditTransactionIndexMaintenanceStore) TransactionIndexCoverage() uint6
 
 func (s *auditTransactionIndexMaintenanceStore) PublishTransactionIndexRun(result rawdbfreezer.TransactionIndexBuildResult) error {
 	s.coverage = result.EndBlock
+	s.published.Store(true)
 	return nil
 }
 
@@ -198,7 +204,9 @@ type auditPruneBatchDB struct {
 	writes  int
 	failAt  int
 	failErr error
+	before  func(int)
 	after   func(int)
+	sync    func() error
 }
 
 type auditPruneBatch struct {
@@ -229,6 +237,9 @@ func (b *auditPruneBatch) ValueSize() int {
 
 func (b *auditPruneBatch) Write() error {
 	b.db.writes++
+	if b.db.before != nil {
+		b.db.before(b.db.writes)
+	}
 	if b.db.writes == b.db.failAt {
 		return b.db.failErr
 	}
@@ -239,6 +250,32 @@ func (b *auditPruneBatch) Write() error {
 		b.db.after(b.db.writes)
 	}
 	return nil
+}
+
+func (db *auditPruneBatchDB) SyncKeyValue() error {
+	if db.sync != nil {
+		return db.sync()
+	}
+	if syncer, ok := db.KeyValueStore.(interface{ SyncKeyValue() error }); ok {
+		return syncer.SyncKeyValue()
+	}
+	return nil
+}
+
+func auditTransactionBlockBytes(number uint64) []byte {
+	block := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(number),
+		}},
+		Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{
+			Timestamp: int64(number + 1),
+		}}},
+	})
+	body, err := block.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	return body
 }
 
 func newAuditPublishedTransactionIndex(t *testing.T) (*Runner, *fakeChain, *rawdbfreezer.Freezer, []common.Hash) {
@@ -385,6 +422,222 @@ func TestTransactionIndexPruneDurationIncludesDurableStageSync(t *testing.T) {
 	}
 	if elapsed := r.Snapshot().TransactionIndexPruneDuration; elapsed < syncDelay {
 		t.Fatalf("prune duration=%s, want at least durable sync delay %s", elapsed, syncDelay)
+	}
+}
+
+func TestTransactionIndexActiveMaintenanceBuildsAndPrunesUnderOneLease(t *testing.T) {
+	chain := newFakeChain()
+	store := &auditTransactionIndexMaintenanceStore{
+		FreezerStore: wrapFreezer(newFreezer(t)),
+		bodyFor:      auditTransactionBlockBytes,
+		v2Coverage:   4,
+		dir:          t.TempDir(),
+	}
+	db := &auditPruneBatchDB{KeyValueStore: chain.db}
+	chain.db = db
+	db.before = func(write int) {
+		if !store.published.Load() || store.coverage != 4 {
+			t.Fatalf("delete batch %d ran before immutable publication: published=%t coverage=%d", write, store.published.Load(), store.coverage)
+		}
+	}
+	db.sync = func() error {
+		progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageFreezerTxIndexPrune)
+		if err != nil || !ok || progress != 4 {
+			t.Fatalf("durability sync preceded prune stage: progress=%d ok=%t err=%v", progress, ok, err)
+		}
+		return nil
+	}
+	var syncing atomic.Bool
+	syncing.Store(true)
+	namespace := "test/tx-index-active-build-prune/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	r := New(chain, store, Config{
+		Enabled:                    true,
+		V2Enabled:                  true,
+		V2SegmentBlocks:            4,
+		TransactionIndexEnabled:    true,
+		TransactionIndexPrefixBits: 8,
+		SyncActive:                 syncing.Load,
+		MetricsNamespace:           namespace,
+	})
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+		t.Fatalf("active build+prune changed=%t err=%v", changed, err)
+	}
+	progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageFreezerTxIndexPrune)
+	if err != nil || !ok || progress != 4 {
+		t.Fatalf("active build+prune progress=%d ok=%t err=%v", progress, ok, err)
+	}
+	stats := r.Snapshot()
+	if stats.TransactionIndexCoverage != 4 || stats.TransactionIndexPruned != 4 || stats.TransactionIndexDebtBlocks != 0 ||
+		stats.TransactionIndexRowsArchived != 4 || stats.TransactionIndexRowsPruned != 4 || stats.TransactionIndexBlocksPruned != 4 ||
+		stats.TransactionIndexMaintenanceAdmitted != 1 {
+		t.Fatalf("active build+prune stats=%+v", stats)
+	}
+}
+
+func TestTransactionIndexBuildPruneFailureResumesFromPublishedCoverage(t *testing.T) {
+	chain := newFakeChain()
+	store := &auditTransactionIndexMaintenanceStore{
+		FreezerStore: wrapFreezer(newFreezer(t)),
+		bodyFor:      auditTransactionBlockBytes,
+		v2Coverage:   4,
+		dir:          t.TempDir(),
+	}
+	injected := errors.New("injected hot-index delete failure")
+	db := &auditPruneBatchDB{KeyValueStore: chain.db, failAt: 1, failErr: injected}
+	chain.db = db
+	db.before = func(int) {
+		if !store.published.Load() {
+			t.Fatal("hot-index delete ran before immutable publication")
+		}
+	}
+	var syncing atomic.Bool
+	syncing.Store(true)
+	config := Config{
+		Enabled:                    true,
+		V2Enabled:                  true,
+		V2SegmentBlocks:            4,
+		TransactionIndexEnabled:    true,
+		TransactionIndexPrefixBits: 8,
+		SyncActive:                 syncing.Load,
+		MetricsNamespace:           "test/tx-index-build-prune-failure/",
+	}
+	unregisterRunnerMetricNamespace(config.MetricsNamespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(config.MetricsNamespace) })
+	r := New(chain, store, config)
+	if changed, err := r.MaintainTransactionIndexOnce(); !changed || !errors.Is(err, injected) {
+		t.Fatalf("failed build+prune changed=%t err=%v", changed, err)
+	}
+	if store.coverage != 4 {
+		t.Fatalf("immutable coverage=%d after prune failure, want 4", store.coverage)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageFreezerTxIndexPrune); err != nil || (ok && progress != 0) {
+		t.Fatalf("failed prune advanced stage=%d ok=%t err=%v", progress, ok, err)
+	}
+	if stats := r.Snapshot(); stats.TransactionIndexErrors != 1 || stats.TransactionIndexDebtBlocks != 4 {
+		t.Fatalf("failed build+prune stats=%+v", stats)
+	}
+
+	// Restarting observes the published coverage and performs only the
+	// idempotent prune; it must not try to republish the immutable run.
+	db.failAt = 0
+	db.before = nil
+	store.published.Store(false)
+	r = New(chain, store, config)
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+		t.Fatalf("resumed prune changed=%t err=%v", changed, err)
+	}
+	if store.published.Load() {
+		t.Fatal("resume unexpectedly republished immutable transaction index")
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageFreezerTxIndexPrune); err != nil || !ok || progress != 4 {
+		t.Fatalf("resumed prune stage=%d ok=%t err=%v", progress, ok, err)
+	}
+}
+
+func TestTransactionIndexBuildPruneCancellationLeavesRetryableDebt(t *testing.T) {
+	chain := newFakeChain()
+	store := &auditTransactionIndexMaintenanceStore{
+		FreezerStore: wrapFreezer(newFreezer(t)),
+		bodyFor:      auditTransactionBlockBytes,
+		v2Coverage:   4,
+		dir:          t.TempDir(),
+	}
+	db := &auditPruneBatchDB{KeyValueStore: chain.db}
+	chain.db = db
+	ctx, cancel := context.WithCancel(context.Background())
+	db.after = func(int) { cancel() }
+	r := New(chain, store, Config{
+		Enabled:                    true,
+		V2Enabled:                  true,
+		V2SegmentBlocks:            4,
+		TransactionIndexEnabled:    true,
+		TransactionIndexPrefixBits: 8,
+	})
+	if changed, err := r.maintainTransactionIndexOnceContext(ctx); !changed || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled build+prune changed=%t err=%v", changed, err)
+	}
+	if store.coverage != 4 {
+		t.Fatalf("immutable coverage=%d after cancellation, want 4", store.coverage)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageFreezerTxIndexPrune); err != nil || (ok && progress != 0) {
+		t.Fatalf("canceled prune advanced stage=%d ok=%t err=%v", progress, ok, err)
+	}
+	db.after = nil
+	if changed, err := r.maintainTransactionIndexOnceContext(context.Background()); err != nil || !changed {
+		t.Fatalf("retry canceled prune changed=%t err=%v", changed, err)
+	}
+	if progress, ok, err := rawdb.ReadStageProgress(db, rawdb.StageFreezerTxIndexPrune); err != nil || !ok || progress != 4 {
+		t.Fatalf("retry canceled prune stage=%d ok=%t err=%v", progress, ok, err)
+	}
+}
+
+func TestCompactV2ScheduledSkipsDirectLayoutWithoutPollutingMetrics(t *testing.T) {
+	fz := wrapFreezer(newFreezer(t))
+	namespace := "test/direct-v2-scheduled-skip/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	r := New(nil, fz, Config{
+		Enabled:                    true,
+		V2Enabled:                  true,
+		DirectV2:                   true,
+		V2FrameBlocks:              2,
+		V2SegmentBlocks:            4,
+		SyncActive:                 func() bool { return true },
+		CatchupMaintenanceInterval: time.Hour,
+		MetricsNamespace:           namespace,
+	})
+	r.v2LastBatchSegments.Store(1)
+	r.v2LastBatchDuration.Store(int64(time.Second))
+	r.updateMetrics()
+	if compacted, err := r.compactV2Scheduled(); err != nil || compacted != 0 {
+		t.Fatalf("scheduled direct V2 compaction=%d err=%v", compacted, err)
+	}
+	stats := r.Snapshot()
+	if stats.V2CatchupDeferred != 0 || stats.V2ResourceDeferred != 0 || stats.V2LastBatchSegments != 1 || stats.V2LastBatchDuration != time.Second {
+		t.Fatalf("scheduled direct V2 stats=%+v", stats)
+	}
+	if got := runnerGaugeValue(t, namespace+"v2/batch/segments"); got != 1 {
+		t.Fatalf("scheduled direct V2 batch segments metric=%d, want 1", got)
+	}
+	if got := runnerGaugeValue(t, namespace+"v2/batch/duration"); got != int64(time.Second) {
+		t.Fatalf("scheduled direct V2 batch duration metric=%d, want %d", got, time.Second)
+	}
+
+	// DirectV2 is also the publication kill switch. Once the data layout is
+	// immutable-only, disabling future direct publication must not send the
+	// legacy promoter through an otherwise useless active-sync admission.
+	r.cfg.DirectV2 = false
+	if compacted, err := r.compactV2Scheduled(); err != nil || compacted != 0 {
+		t.Fatalf("scheduled direct V2 compaction with kill switch=%d err=%v", compacted, err)
+	}
+	if admittedAt := r.lastV2CatchupMaintenance.Load(); admittedAt != 0 {
+		t.Fatalf("direct-layout kill switch consumed legacy catch-up admission at %d", admittedAt)
+	}
+}
+
+func TestCompactV2NoopPreservesLastSuccessfulBatchMetrics(t *testing.T) {
+	fz := wrapFreezer(newFreezer(t))
+	namespace := "test/legacy-v2-noop-metrics/"
+	unregisterRunnerMetricNamespace(namespace)
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+	r := New(nil, fz, Config{Enabled: true, V2Enabled: true, V2FrameBlocks: 2, V2SegmentBlocks: 4, MetricsNamespace: namespace})
+	r.v2LastBatchSegments.Store(3)
+	r.v2LastBatchDuration.Store(int64(2 * time.Second))
+	r.updateMetrics()
+	if compacted, err := r.compactV2OnceContext(context.Background()); err != nil || compacted != 0 {
+		t.Fatalf("legacy V2 no-op=%d err=%v", compacted, err)
+	}
+	stats := r.Snapshot()
+	if stats.V2LastBatchSegments != 3 || stats.V2LastBatchDuration != 2*time.Second {
+		t.Fatalf("legacy V2 no-op reset successful batch stats=%+v", stats)
+	}
+	if got := runnerGaugeValue(t, namespace+"v2/batch/segments"); got != 3 {
+		t.Fatalf("legacy V2 no-op batch segments metric=%d, want 3", got)
+	}
+	if got := runnerGaugeValue(t, namespace+"v2/batch/duration"); got != int64(2*time.Second) {
+		t.Fatalf("legacy V2 no-op batch duration metric=%d, want %d", got, 2*time.Second)
 	}
 }
 

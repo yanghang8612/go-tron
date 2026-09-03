@@ -1620,9 +1620,9 @@ func TestDirectV2DefersTransactionIndexWithoutBlockingActiveSync(t *testing.T) {
 	}
 
 	syncing.Store(false)
-	// Each bounded range is published before its matching hot-index prune, so
-	// two 4-block V2 segments require build/prune/build/prune maintenance.
-	for pass := 0; pass < 4; pass++ {
+	// Each admitted maintenance publishes one bounded immutable range and then
+	// prunes its matching hot-index rows, so the two V2 segments need two passes.
+	for pass := 0; pass < 2; pass++ {
 		if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
 			t.Fatalf("idle index catch-up pass %d changed=%v err=%v", pass, changed, err)
 		}

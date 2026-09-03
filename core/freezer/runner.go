@@ -1130,8 +1130,6 @@ func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
 	coverage := compactor.V2Coverage()
 	target := head / segmentBlocks * segmentBlocks
 	if target <= coverage {
-		r.v2LastBatchSegments.Store(0)
-		r.v2LastBatchDuration.Store(0)
 		return 0, nil
 	}
 	backlogBlocks := target - coverage
@@ -1194,6 +1192,14 @@ func (r *Runner) compactV2OnceContext(ctx context.Context) (uint64, error) {
 }
 
 func (r *Runner) compactV2Scheduled() (uint64, error) {
+	// A direct layout publishes complete V2 segments in OnePass. Running the
+	// legacy V1-to-V2 promoter afterwards cannot make progress, but it would
+	// still consume active-sync admission and pollute the deferred counters.
+	if compactor, ok := r.freezer.(V2Compactor); ok && r.cfg.V2Enabled {
+		if appender, ok := r.freezer.(V2DirectAppender); ok && appender.CanAppendV2Direct(compactor.V2Coverage()) {
+			return 0, nil
+		}
+	}
 	if last := r.lastV2Promotion.Load(); last > 0 && time.Since(time.Unix(0, last)) < r.cfg.Interval {
 		return 0, nil
 	}
@@ -1206,8 +1212,9 @@ func (r *Runner) compactV2Scheduled() (uint64, error) {
 }
 
 // MaintainTransactionIndexOnce performs one bounded, crash-resumable action:
-// prune one published quantum, merge one balanced run pair, or publish one
-// newly V2-covered quantum. Publication always precedes hot-row deletion.
+// prune one published quantum, merge one balanced run pair, or publish and
+// prune one newly V2-covered quantum. Publication always precedes hot-row
+// deletion, whose durable stage advances only after the deletes complete.
 func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 	if err := r.checkStopping(); err != nil {
 		return false, err
@@ -1224,9 +1231,11 @@ func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
 	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(lease.ctx), errHeavyMaintenanceDeferred) {
 		// Admission already succeeded; a later sync transition is an interrupted
 		// admitted attempt, not a second pre-admission deferral. Keep the two
-		// populations mutually exclusive for scheduler diagnostics.
+		// populations mutually exclusive for scheduler diagnostics. Preserve a
+		// successful immutable publication even when its same-lease hot prune was
+		// canceled; the next pass will repay that retryable debt first.
 		r.recordTransactionIndexSyncDeferred()
-		return false, nil
+		return changed, nil
 	}
 	if err != nil {
 		r.lastTxIndexMaintenanceError.Store(time.Now().UnixNano())
@@ -1295,7 +1304,17 @@ func (r *Runner) maintainTransactionIndexOnceContext(ctx context.Context) (bool,
 	if coverage >= v2Coverage {
 		return false, nil
 	}
-	return r.ensureTransactionIndexCoverageContext(ctx, r.transactionIndexMaintenanceEnd(coverage, v2Coverage))
+	target := r.transactionIndexMaintenanceEnd(coverage, v2Coverage)
+	changed, err := r.ensureTransactionIndexCoverageContext(ctx, target)
+	if err != nil || !changed {
+		return changed, err
+	}
+	// Repay the hot-row debt created by this immutable publication under the
+	// same admitted lease. If deletion or its final stage sync fails, coverage
+	// remains readable from the immutable run and the unchanged prune cursor
+	// makes the next pass retry the idempotent deletes.
+	_, err = r.pruneTransactionIndexDebtContext(ctx, target)
+	return changed, err
 }
 
 func (r *Runner) transactionIndexMaintenanceEnd(start, limit uint64) uint64 {
