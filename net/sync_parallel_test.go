@@ -269,7 +269,7 @@ func TestSyncServiceRestoresHalfExecutedSessionOnStart(t *testing.T) {
 	restarted.mu.Lock()
 	restarted.initSessionLocked(time.Now())
 	buffered := len(restarted.blockBuffer)
-	target := restarted.targetHeadNum
+	target := restarted.targetHeadNum.Load()
 	path2 := restarted.blockPath[block2.Number()]
 	restarted.mu.Unlock()
 
@@ -361,7 +361,7 @@ func TestSyncServiceStartupPrunesMalformedStagedBodyTail(t *testing.T) {
 	restarted.mu.Lock()
 	restarted.initSessionLocked(time.Now())
 	buffered := len(restarted.blockBuffer)
-	target := restarted.targetHeadNum
+	target := restarted.targetHeadNum.Load()
 	path1 := restarted.blockPath[block1.Number()]
 	_, path2 := restarted.blockPath[block2.Number()]
 	_, path3 := restarted.blockPath[block3.Number()]

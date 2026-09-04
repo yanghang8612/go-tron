@@ -135,7 +135,7 @@ func recoverUsageWithHarden(oldUsage, lastTime, now int64, harden bool) int64 {
 func calculateGlobalResourceLimitV1(frozen, totalLimit, totalWeight int64, harden bool) int64 {
 	weight := frozen / trxPrecision
 	if !harden {
-		return int64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
+		return tcommon.JavaDoubleToInt64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
 	}
 	return bigMulDivInt64(weight, totalLimit, totalWeight)
 }
@@ -143,7 +143,7 @@ func calculateGlobalResourceLimitV1(frozen, totalLimit, totalWeight int64, harde
 func calculateGlobalResourceLimitV2(frozen, totalLimit, totalWeight int64, harden bool) int64 {
 	if !harden {
 		weight := float64(frozen) / float64(trxPrecision)
-		return int64(weight * (float64(totalLimit) / float64(totalWeight)))
+		return tcommon.JavaDoubleToInt64(weight * (float64(totalLimit) / float64(totalWeight)))
 	}
 	denominator := new(big.Int).Mul(big.NewInt(trxPrecision), big.NewInt(totalWeight))
 	return bigMulDivBigInt64(big.NewInt(frozen), big.NewInt(totalLimit), denominator)

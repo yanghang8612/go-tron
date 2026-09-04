@@ -2,9 +2,9 @@ package core
 
 import (
 	"fmt"
-	"math"
 	"math/big"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
 )
@@ -128,7 +128,7 @@ func increase(lastUsage, usage, lastTime, now, windowSize int64) int64 {
 		if lastTime+windowSize > now {
 			delta := now - lastTime
 			decay := float64(windowSize-delta) / float64(windowSize)
-			averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+			averageLastUsage = tcommon.JavaMathRoundToInt64(float64(averageLastUsage) * decay)
 		} else {
 			averageLastUsage = 0
 		}
@@ -152,7 +152,7 @@ func increaseHardened(lastUsage, usage, lastTime, now, windowSize int64) int64 {
 		if lastTime+windowSize > now {
 			delta := now - lastTime
 			decay := float64(windowSize-delta) / float64(windowSize)
-			averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+			averageLastUsage = tcommon.JavaMathRoundToInt64(float64(averageLastUsage) * decay)
 		} else {
 			averageLastUsage = 0
 		}

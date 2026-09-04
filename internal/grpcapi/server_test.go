@@ -56,6 +56,7 @@ type testBackend struct {
 	paramsErr               error
 	contract                *contractpb.SmartContract
 	contractErr             error
+	constantResult          *tronapi.TriggerResult
 	witnesses               []*tronapi.WitnessInfo
 	nextMaint               int64
 	nextMaintErr            error
@@ -106,10 +107,10 @@ func (b *testBackend) GetContractAt(addr common.Address, blockNum uint64) (*cont
 	return b.contract, nil
 }
 func (b *testBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
-	return nil, nil
+	return b.constantResult, nil
 }
 func (b *testBackend) TriggerConstantContractAt(owner, contract common.Address, data []byte, energyLimit int64, blockNum uint64) (*tronapi.TriggerResult, error) {
-	return nil, nil
+	return b.constantResult, nil
 }
 func (b *testBackend) GetTransactionByID(h common.Hash) (*corepb.Transaction, error) {
 	if b.txErr != nil {
@@ -555,6 +556,24 @@ func newTestClient(t *testing.T, backend tronapi.Backend) apipb.WalletClient {
 	}
 	t.Cleanup(func() { conn.Close() })
 	return apipb.NewWalletClient(conn)
+}
+
+func TestTriggerConstantContractCarriesEnergyPenalty(t *testing.T) {
+	client := newTestClient(t, &testBackend{constantResult: &tronapi.TriggerResult{
+		Result:        []byte{0x01},
+		EnergyUsed:    123,
+		EnergyPenalty: 17,
+	}})
+	resp, err := client.TriggerConstantContract(context.Background(), &contractpb.TriggerSmartContract{
+		OwnerAddress:    []byte{0x41, 0x01},
+		ContractAddress: []byte{0x41, 0x02},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetEnergyUsed() != 123 || resp.GetEnergyPenalty() != 17 || len(resp.GetConstantResult()) != 1 || !bytes.Equal(resp.GetConstantResult()[0], []byte{0x01}) {
+		t.Fatalf("constant result = %+v, want energy=123 penalty=17 result=01", resp)
+	}
 }
 
 func TestGetNowBlock_NoBlock(t *testing.T) {

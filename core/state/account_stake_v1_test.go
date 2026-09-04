@@ -351,13 +351,13 @@ func TestAccountStakeV1TypedMutationSemantics(t *testing.T) {
 	sdb.FreezeV1TronPower(addr, 10, 30)
 	sdb.FreezeV1TronPower(addr, 5, 20)
 	account = sdb.GetAccount(addr)
-	if account.V1TronPowerFrozen() != 15 || account.V1TronPowerExpireTime() != 30 {
-		t.Fatalf("merged tron-power = amount %d expiry %d, want 15/30", account.V1TronPowerFrozen(), account.V1TronPowerExpireTime())
+	if account.V1TronPowerFrozen() != 15 || account.V1TronPowerExpireTime() != 20 {
+		t.Fatalf("merged tron-power = amount %d expiry %d, want 15/20", account.V1TronPowerFrozen(), account.V1TronPowerExpireTime())
 	}
-	if got := sdb.UnfreezeV1TronPower(addr, 29); got != 0 {
+	if got := sdb.UnfreezeV1TronPower(addr, 19); got != 0 {
 		t.Fatalf("premature tron-power refund = %d, want 0", got)
 	}
-	if got := sdb.UnfreezeV1TronPower(addr, 30); got != 15 {
+	if got := sdb.UnfreezeV1TronPower(addr, 20); got != 15 {
 		t.Fatalf("tron-power refund = %d, want 15", got)
 	}
 	if got := sdb.GetAccount(addr); got == nil || got.Proto().TronPower != nil {

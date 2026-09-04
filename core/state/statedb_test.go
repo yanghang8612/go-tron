@@ -96,7 +96,13 @@ func TestStateDBBalanceTraceRecordsAndRevertsSnapshots(t *testing.T) {
 	sdb.GetOrCreateAccount(from)
 	sdb.AddBalance(from, 1000)
 
+	if sdb.BalanceTraceActive() {
+		t.Fatal("new StateDB unexpectedly has an active balance trace")
+	}
 	sdb.BeginBalanceTrace(7, []byte{0xaa}, 1234)
+	if !sdb.BalanceTraceActive() {
+		t.Fatal("BeginBalanceTrace did not activate balance trace")
+	}
 	sdb.BeginBalanceTraceTransaction([]byte{0x01}, "TransferContract")
 	if err := sdb.SubBalance(from, 100); err != nil {
 		t.Fatal(err)
@@ -117,6 +123,9 @@ func TestStateDBBalanceTraceRecordsAndRevertsSnapshots(t *testing.T) {
 	copied.Operation[0].Amount = 999
 
 	trace, balances := sdb.FinishBalanceTrace()
+	if sdb.BalanceTraceActive() {
+		t.Fatal("FinishBalanceTrace left balance trace active")
+	}
 	if trace == nil {
 		t.Fatal("FinishBalanceTrace returned nil trace")
 	}

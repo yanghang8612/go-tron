@@ -50,6 +50,49 @@ func TestTransactionAccessRecorderCaptureReadSetSurvivesReset(t *testing.T) {
 	}
 }
 
+func TestTransactionAccessRecorderSwapRestoresStateAndDynamicOwners(t *testing.T) {
+	sdb := newTestStateDB(t)
+	dp := sdb.DynamicProperties()
+	var outer, nested TransactionAccessRecorder
+	outer.Reset(8)
+	nested.Reset(8)
+
+	if previous := sdb.SwapTransactionAccessRecorder(&outer); previous != nil {
+		t.Fatalf("initial StateDB recorder = %p, want nil", previous)
+	}
+	if previous := dp.SwapTransactionAccessRecorder(&outer); previous != nil {
+		t.Fatalf("initial DynamicProperties recorder = %p, want nil", previous)
+	}
+	if previous := sdb.SwapTransactionAccessRecorder(&nested); previous != &outer {
+		t.Fatalf("nested StateDB previous recorder = %p, want %p", previous, &outer)
+	}
+	if previous := dp.SwapTransactionAccessRecorder(&nested); previous != &outer {
+		t.Fatalf("nested DynamicProperties previous recorder = %p, want %p", previous, &outer)
+	}
+	if previous := sdb.SwapTransactionAccessRecorder(&outer); previous != &nested {
+		t.Fatalf("restored StateDB previous recorder = %p, want %p", previous, &nested)
+	}
+	if previous := dp.SwapTransactionAccessRecorder(&outer); previous != &nested {
+		t.Fatalf("restored DynamicProperties previous recorder = %p, want %p", previous, &nested)
+	}
+
+	addr := tcommon.BytesToAddress(append([]byte{0x41}, make([]byte, 20)...))
+	_ = sdb.GetBalance(addr)
+	_, _ = dp.Get("transaction_fee")
+	reads := outer.CaptureReadSet()
+	seenBalance, seenDynamic := false, false
+	for _, read := range reads.Reads {
+		seenBalance = seenBalance || (read.Key.Kind == TransactionAccessAccountField &&
+			read.Key.Address == addr && read.Key.AccountField == TransactionAccountFieldBalance)
+		seenDynamic = seenDynamic || (read.Key.Kind == TransactionAccessDynamicInt && read.Key.LogicalKey == "transaction_fee")
+	}
+	if !seenBalance || !seenDynamic {
+		t.Fatalf("restored outer recorder reads = %+v, want balance and dynamic property", reads.Reads)
+	}
+	sdb.SetTransactionAccessRecorder(nil)
+	dp.SetTransactionAccessRecorder(nil)
+}
+
 func TestTransactionAccessRecorderResetBlockDropsRawKVInterns(t *testing.T) {
 	var recorder TransactionAccessRecorder
 	recorder.Reset(4)

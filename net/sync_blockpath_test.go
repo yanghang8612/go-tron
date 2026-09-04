@@ -200,7 +200,7 @@ func TestLocalImportBatchCanExceedWireFetchBatch(t *testing.T) {
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	last := seedBufferedSyncRange(t, ss, bc.CurrentBlock().Hash(), 1, limit)
-	ss.targetHeadNum = last.Number()
+	ss.targetHeadNum.Store(last.Number())
 	batch := ss.popBufferedSyncBatchLocked(time.Now())
 	ss.mu.Unlock()
 
@@ -223,7 +223,7 @@ func TestDrainBufferedBlocksImportsLocalChunkLargerThanWireFetch(t *testing.T) {
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	last := seedBufferedSyncRange(t, ss, bc.CurrentBlock().Hash(), 1, limit)
-	ss.targetHeadNum = last.Number()
+	ss.targetHeadNum.Store(last.Number())
 	ss.mu.Unlock()
 	ss.drainBufferedBlocksOnce()
 
@@ -243,7 +243,7 @@ func TestDrainBufferedBlocksImportsMultipleChunks(t *testing.T) {
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	last := seedBufferedSyncRange(t, ss, bc.CurrentBlock().Hash(), 1, maxSyncImportBatch+3)
-	ss.targetHeadNum = last.Number()
+	ss.targetHeadNum.Store(last.Number())
 	ss.mu.Unlock()
 
 	ss.drainBufferedBlocksOnce()

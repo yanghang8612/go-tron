@@ -37,6 +37,7 @@ func TestReleaseTVMDetachesResultsAndClearsExecutionState(t *testing.T) {
 	first := NewTVM(nil, nil, tcommon.Address{0x41, 1}, 7, 9, tcommon.Address{0x41, 2}, 3, TVMConfig{})
 	first.Depth = 5
 	first.Nonce = 11
+	first.EnergyPenaltyTotal = 12
 	first.Logs = []Log{{Data: []byte("stable-log")}}
 	first.InternalTransactions = []*corepb.InternalTransaction{{Hash: []byte("stable-internal")}}
 	first.newContracts = map[tcommon.Address]bool{{0x41, 3}: true}
@@ -51,9 +52,9 @@ func TestReleaseTVMDetachesResultsAndClearsExecutionState(t *testing.T) {
 
 	second := NewTVM(nil, nil, tcommon.Address{0x41, 5}, 13, 15, tcommon.Address{0x41, 6}, 17, TVMConfig{})
 	defer ReleaseTVM(second)
-	if second.Depth != 0 || second.Nonce != 0 || len(second.Logs) != 0 || len(second.InternalTransactions) != 0 {
-		t.Fatalf("borrowed TVM retained execution state: depth=%d nonce=%d logs=%d internal=%d",
-			second.Depth, second.Nonce, len(second.Logs), len(second.InternalTransactions))
+	if second.Depth != 0 || second.Nonce != 0 || second.EnergyPenaltyTotal != 0 || len(second.Logs) != 0 || len(second.InternalTransactions) != 0 {
+		t.Fatalf("borrowed TVM retained execution state: depth=%d nonce=%d penalty=%d logs=%d internal=%d",
+			second.Depth, second.Nonce, second.EnergyPenaltyTotal, len(second.Logs), len(second.InternalTransactions))
 	}
 	if second.newContracts != nil || len(second.internalTxHashStack) != 0 {
 		t.Fatalf("borrowed TVM retained private scratch: contracts=%d hashStack=%d",

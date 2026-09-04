@@ -160,6 +160,23 @@ func TestExchangePowNonStrictOffTableUsesStrict(t *testing.T) {
 	}
 }
 
+// Java's primitive double-to-long conversion is part of the pre-hardened
+// exchange consensus formula: NaN narrows to zero and +Infinity saturates at
+// Long.MAX_VALUE. Go's raw conversion is implementation-dependent at both
+// boundaries, so lock the processor itself (not only the shared helper).
+func TestExchangeProcessorUsesJavaDoubleNarrowing(t *testing.T) {
+	p := newExchangeProcessor(false)
+	if got := p.exchangeToSupply(0, 0); got != 0 {
+		t.Fatalf("NaN issued supply: got %d, want Java zero", got)
+	}
+
+	p = newExchangeProcessor(false)
+	p.supply = 1
+	if got := p.exchangeFromSupply(1, 1); got != math.MaxInt64 {
+		t.Fatalf("infinite exchange balance: got %d, want Java Long.MAX_VALUE", got)
+	}
+}
+
 // TestRatToFloat64CorrectRoundingMatchesJava is the A-2 regression. java
 // SafeExchangeProcessor uses BigDecimal.doubleValue() (a single, correctly
 // rounded conversion). The old ratToFloat64 used big.Float.SetPrec(64) first,

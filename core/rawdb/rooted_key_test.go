@@ -121,3 +121,36 @@ func TestLookupRootedStateKeyRuntimeDerivedAndHistoryStayFlat(t *testing.T) {
 		})
 	}
 }
+
+func TestIsProtectedStateMutationKeyIncludesTypedAndDerivedMirrors(t *testing.T) {
+	owner := common.BytesToAddress([]byte{
+		0x41, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
+		0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d,
+		0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54,
+	})
+	for _, key := range [][]byte{
+		dynPropKey("latest_block_header_number"),
+		codeKey(owner.Bytes()),
+		accountKey(owner.Bytes()),
+		stateKVLatestKey(owner, 0, kvdomains.SystemReward, []byte("reward")),
+		storageKey(owner.Bytes(), common.Hash{31: 1}.Bytes()),
+		[]byte("state-tx-range-v1-row"),
+		[]byte("sync-staged-block-v1-row"),
+		[]byte("b-row"),
+		[]byte("tx-row"),
+		[]byte("ti-row"),
+		[]byte("execution-safety-incident-v1"),
+		totalTransactionCountKey,
+		balanceTraceKey(12),
+		accountTraceKey(owner.Bytes(), 12),
+	} {
+		if !IsProtectedStateMutationKey(key) {
+			t.Fatalf("state mutation key %x was not protected", key)
+		}
+	}
+	for _, key := range [][]byte{[]byte("application-owned")} {
+		if IsProtectedStateMutationKey(key) {
+			t.Fatalf("non-state raw key %x was protected", key)
+		}
+	}
+}

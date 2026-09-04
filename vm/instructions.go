@@ -7,6 +7,7 @@ import (
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // --- Arithmetic ---
@@ -949,55 +950,79 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		return nil, ErrExecutionReverted
 	}
 
-	// java-tron Program.suicide (Program.java:457) calls withdrawRewardAndCancelVote
-	// unconditionally at the top when allow_tvm_vote is active; suicide2 (547) runs
-	// it only AFTER its owner==obtainer early-return (543), i.e. for a distinct
-	// obtainer. So the old path always cancels votes; the new (restriction) path
-	// cancels only when owner != obtainer. It settles the contract's voter reward,
-	// CANCELs its votes (so the next maintenance fold removes them from the
-	// witnesses it voted for — else the witness vote tally drifts above the true
-	// voter sum and the standby-reward voteSum diverges) and rolls allowance into
-	// balance. Must precede the balance read so the inherited balance includes it.
-	if interpreter.tvmConfig.Vote && (oldSuicide || address != contract.Address) {
-		tvmWithdrawRewardAndCancelVote(interpreter.tvm, contract.Address)
-	}
-
-	interpreter.tvm.Nonce++
-	balance := interpreter.tvm.StateDB.GetBalance(contract.Address)
-	var tokenInfo map[string]int64
-	if account := interpreter.tvm.StateDB.GetAccount(contract.Address); account != nil {
-		if assets := account.Proto().GetAssetV2(); len(assets) > 0 {
-			tokenInfo = make(map[string]int64, len(assets))
-			for tokenID, amount := range assets {
-				if amount != 0 {
+	addSuicideInternal := func(value int64) *corepb.InternalTransaction {
+		interpreter.tvm.Nonce++
+		var tokenInfo map[string]int64
+		if account := interpreter.tvm.StateDB.GetAccount(contract.Address); account != nil {
+			if assets := account.Proto().GetAssetV2(); len(assets) > 0 {
+				tokenInfo = make(map[string]int64, len(assets))
+				for tokenID, amount := range assets {
+					// java passes the complete getAssetMapV2() to the suicide
+					// InternalTransaction, including explicit zero balances left by
+					// earlier transferAllToken calls. Those entries are observable in
+					// TransactionInfo even though they move no value.
 					tokenInfo[tokenID] = amount
 				}
 			}
 		}
+		return interpreter.tvm.addInternalTransactionWithTokenInfo(contract.Address, address, value, nil, "suicide", tokenInfo)
 	}
-	suicideIT := interpreter.tvm.addInternalTransactionWithTokenInfo(contract.Address, address, balance, nil, "suicide", tokenInfo)
-	if oldSuicide && sameOldSuicideAddress {
-		blackhole := interpreter.tvm.blackholeAddress()
-		if balance > 0 {
-			if err := interpreter.tvm.StateDB.SubBalance(contract.Address, balance); err != nil {
+
+	var balance int64
+	var suicideIT *corepb.InternalTransaction
+	if oldSuicide {
+		// Program.suicide settles reward before reading the balance and before
+		// constructing/hash-caching the internal transaction. Its recorded value
+		// and identity therefore both include the allowance.
+		if interpreter.tvmConfig.Vote {
+			if err := tvmWithdrawRewardAndCancelVote(interpreter.tvm, contract.Address); err != nil {
 				return nil, err
 			}
-			if interpreter.tvmConfig.TransferTrc10 {
-				interpreter.tvm.StateDB.AddBalance(blackhole, balance)
+		}
+		balance = interpreter.tvm.StateDB.GetBalance(contract.Address)
+		suicideIT = addSuicideInternal(balance)
+	} else {
+		// Program.suicide2 deliberately constructs and hashes the record from the
+		// PRE-reward balance, then returns immediately for owner==obtainer. For a
+		// distinct beneficiary it settles reward afterward and setValue changes
+		// only the protobuf value, not the already-cached identity hash.
+		balance = interpreter.tvm.StateDB.GetBalance(contract.Address)
+		suicideIT = addSuicideInternal(balance)
+		if address == contract.Address {
+			return nil, nil
+		}
+		if interpreter.tvmConfig.Vote {
+			if err := tvmWithdrawRewardAndCancelVote(interpreter.tvm, contract.Address); err != nil {
+				return nil, err
+			}
+			balance = interpreter.tvm.StateDB.GetBalance(contract.Address)
+			setInternalTransactionValue(suicideIT, balance)
+		}
+	}
+	if oldSuicide && sameOldSuicideAddress {
+		blackhole := interpreter.tvm.blackholeAddress()
+		// Program.suicide invokes RepositoryImpl.addBalance unconditionally on
+		// this branch. Besides the ordinary positive-balance zeroing, that keeps
+		// zero-account creation and signed/overflow failure behaviour identical
+		// for imported or malformed state.
+		if err := interpreter.tvm.addBalanceLikeJava(contract.Address, -balance); err != nil {
+			return nil, err
+		}
+		if interpreter.tvmConfig.TransferTrc10 {
+			if err := interpreter.tvm.addBalanceLikeJava(blackhole, balance); err != nil {
+				return nil, err
 			}
 		}
 		if interpreter.tvmConfig.TransferTrc10 {
 			interpreter.tvm.StateDB.TransferAllTRC10Balance(contract.Address, blackhole)
 		}
 	} else if address != contract.Address {
-		if balance > 0 {
-			// java-tron Program.suicide (Program.java:483) and suicide2 (555)
-			// call createAccountIfNotExist before transferring to a non-existent
-			// obtainer; the call is gated by allowTvmSolidity059 inside the
-			// helper. Mirror that here so SUICIDE-with-balance auto-create
-			// stamps create_time and (when AllowMultiSign is on) default
-			// permissions, matching RepositoryImpl.createNormalAccount.
-			interpreter.tvm.maybeCreateNormalAccountForValueTransfer(address)
+		// java-tron Program.suicide (Program.java:483) and suicide2 (555)
+		// call createAccountIfNotExist before MUtil.transfer even when balance is
+		// zero. Under Solidity059 that account creation is therefore observable;
+		// it also ensures a following transferAllToken has a target account.
+		interpreter.tvm.maybeCreateNormalAccountForValueTransfer(address)
+		if balance != 0 {
 			// MUtil.transfer validates the beneficiary even though StateDB's
 			// AddBalance would implicitly create it. Before Solidity059 a missing
 			// beneficiary therefore fails SELFDESTRUCT. Constantinople changed
@@ -1006,18 +1031,28 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			switch {
 			case !interpreter.tvm.StateDB.AccountExists(address):
 				transferFailure = "Validate InternalTransfer error, no ToAccount. And not allowed to create an account in a smartContract."
+			case balance < 0:
+				transferFailure = "Amount must be greater than or equals 0."
 			case interpreter.tvm.StateDB.GetBalance(address) > math.MaxInt64-balance:
 				transferFailure = "long overflow"
 			}
 			if transferFailure != "" {
 				return nil, newSelfDestructTransferError(interpreter.tvmConfig.Constantinople, transferFailure)
 			}
-			interpreter.tvm.StateDB.AddBalance(address, balance)
-			if err := interpreter.tvm.StateDB.SubBalance(contract.Address, balance); err != nil {
+			if err := interpreter.tvm.addBalanceLikeJava(address, balance); err != nil {
+				return nil, err
+			}
+			if err := interpreter.tvm.addBalanceLikeJava(contract.Address, -balance); err != nil {
 				return nil, err
 			}
 		}
 		if interpreter.tvmConfig.TransferTrc10 {
+			// With a zero balance MUtil.transfer returns before validation. In the
+			// pre-Solidity059 era transferAllToken then dereferenced a missing
+			// beneficiary and VM.play normalised the NPE to UNKNOWN.
+			if !interpreter.tvm.StateDB.AccountExists(address) {
+				return nil, errSelfDestructMissingTokenBeneficiary
+			}
 			interpreter.tvm.StateDB.TransferAllTRC10Balance(contract.Address, address)
 		}
 	}
@@ -1035,9 +1070,13 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			if address == contract.Address {
 				inheritor = interpreter.tvm.blackholeAddress()
 			}
-			interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, inheritor)
+			if err := interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, inheritor); err != nil {
+				return nil, err
+			}
 		} else if address != contract.Address {
-			interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, address)
+			if err := interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, address); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if interpreter.tvmConfig.StakingV2 {

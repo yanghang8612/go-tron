@@ -367,6 +367,7 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 		cfg.Tracer = fileTracer
 	}
 	evm := vm.NewTVM(statedbCopy, dp, owner, block.Number(), block.Timestamp(), tcommon.Address{}, 1, cfg)
+	defer vm.ReleaseTVM(evm)
 	// BLOCKHASH/CHAINID need chain data; route through the ancient-aware
 	// lookup so constant calls see the same hashes as block execution.
 	evm.SetDB(b.chain.vmKV(b.chain.buffer))
@@ -380,14 +381,16 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 
 	if vmErr != nil {
 		return &tronapi.TriggerResult{
-			Result:     ret,
-			EnergyUsed: energyUsed,
+			Result:        ret,
+			EnergyUsed:    energyUsed,
+			EnergyPenalty: int64(evm.EnergyPenaltyTotal),
 		}, vmErr
 	}
 
 	return &tronapi.TriggerResult{
-		Result:     ret,
-		EnergyUsed: energyUsed,
+		Result:        ret,
+		EnergyUsed:    energyUsed,
+		EnergyPenalty: int64(evm.EnergyPenaltyTotal),
 	}, nil
 }
 

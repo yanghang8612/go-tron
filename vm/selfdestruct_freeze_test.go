@@ -49,6 +49,7 @@ func TestSelfDestructReleasesFrozenV1WeightToObtainer(t *testing.T) {
 	contractAddr := tcommon.Address{0x41, 0x11}
 	obtainer := tcommon.Address{0x41, 0x22}
 	statedb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	statedb.CreateAccount(obtainer, corepb.AccountType_Normal)
 	statedb.AddBalance(contractAddr, energyAmount+bandwidthAmount)
 
 	baseEnergyWeight := dp.TotalEnergyWeight()
@@ -124,13 +125,14 @@ func TestSelfDestructToSelfRoutesFrozenBalanceToBlackhole(t *testing.T) {
 	}
 }
 
-// TestSelfDestructWithoutFrozenDoesNotMaterializeObtainer guards the scope of
-// the freeze-transfer port: a contract with no frozen resources self-destructs
-// to a fresh obtainer with allow_tvm_freeze on. java's addBalance(inheritor, 0)
-// is a no-op on the already-existing inheritor, so go-tron must not GetOrCreate
-// a bare obtainer account here (which would diverge from pre-19.5M behavior).
-func TestSelfDestructWithoutFrozenDoesNotMaterializeObtainer(t *testing.T) {
-	tvm, statedb, dp := newTestTVMForCreate(t, TVMConfig{Freeze: true, TransferTrc10: true},
+// TestSelfDestructWithoutFrozenMaterializesObtainer locks the subtle
+// RepositoryImpl.addBalance ordering in java's V1 inheritance helper. A
+// missing account is created before addBalance's value==0 return, so a
+// zero-frozen pre-Solidity059 SELFDESTRUCT with allow_tvm_freeze still leaves a
+// bare obtainer account. TransferTrc10 is off here because the older
+// transferAllToken path would dereference the missing account first.
+func TestSelfDestructWithoutFrozenMaterializesObtainer(t *testing.T) {
+	tvm, statedb, dp := newTestTVMForCreate(t, TVMConfig{Freeze: true},
 		func(dp *state.DynamicProperties) {
 			dp.SetLatestBlockHeaderTimestamp(1_000_000)
 		})
@@ -156,8 +158,34 @@ func TestSelfDestructWithoutFrozenDoesNotMaterializeObtainer(t *testing.T) {
 	if dp.TotalNetWeight() != baseNetWeight {
 		t.Fatalf("net weight changed with nothing frozen: got %d, want %d", dp.TotalNetWeight(), baseNetWeight)
 	}
-	if statedb.AccountExists(obtainer) {
-		t.Fatal("zero-credit inheritor must not be materialized by the freeze transfer")
+	if !statedb.AccountExists(obtainer) {
+		t.Fatal("zero-credit inheritor must be materialized by RepositoryImpl.addBalance")
+	}
+}
+
+func TestSelfDestructV1InheritanceAppliesSignedFrozenSum(t *testing.T) {
+	const negativeFrozen = int64(-3 * tvmTRXPrecision)
+	tvm, statedb, dp := newTestTVMForCreate(t, TVMConfig{Freeze: true}, nil)
+	contractAddr := tcommon.Address{0x41, 0x71}
+	obtainer := tcommon.Address{0x41, 0x72}
+	statedb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	statedb.CreateAccount(obtainer, corepb.AccountType_Normal)
+	statedb.AddBalance(obtainer, 10*tvmTRXPrecision)
+	statedb.FreezeV1Energy(contractAddr, negativeFrozen, 0)
+
+	baseEnergyWeight := dp.TotalEnergyWeight()
+	stack := newStack()
+	word := addressToUint256(obtainer)
+	stack.push(&word)
+	contract := NewContract(tcommon.Address{0x41, 0x73}, contractAddr, 0, 100_000)
+	if _, err := opSelfDestruct(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opSelfDestruct: %v", err)
+	}
+	if got, want := statedb.GetBalance(obtainer), int64(7*tvmTRXPrecision); got != want {
+		t.Fatalf("obtainer signed frozen credit: got %d, want %d", got, want)
+	}
+	if got, want := dp.TotalEnergyWeight(), baseEnergyWeight+3; got != want {
+		t.Fatalf("energy weight after negative release: got %d, want %d", got, want)
 	}
 }
 
@@ -176,6 +204,7 @@ func TestSelfDestructRestrictionClearsOwnerFreezeInPlace(t *testing.T) {
 	contractAddr := tcommon.Address{0x41, 0x11}
 	obtainer := tcommon.Address{0x41, 0x22}
 	statedb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	statedb.CreateAccount(obtainer, corepb.AccountType_Normal)
 	statedb.AddBalance(contractAddr, energyAmount)
 
 	baseEnergyWeight := dp.TotalEnergyWeight()

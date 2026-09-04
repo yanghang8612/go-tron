@@ -81,26 +81,21 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 	// and the receiver keeps its full recovered usage. The caller's
 	// SubAcquiredDelegatedFrozenV2 already clamps the balance to 0 (== setAcquired(0)).
 	if acquiredV2 >= unDelegateBalance && totalFrozen > 0 && recovered > 0 {
-		maxTransfer := int64(0)
-		if totalWeight > 0 {
-			if tvmForm {
-				// java UnDelegateResourceProcessor: (ub/TRX) * limit / weight (left-to-right).
-				maxTransfer = int64(float64(unDelegateBalance) / float64(params.TRXPrecision) * float64(totalLimit) / float64(totalWeight))
-			} else {
-				// java UnDelegateResourceActuator: (ub/TRX) * (limit/weight) (grouped ratio).
-				maxTransfer = int64(float64(unDelegateBalance) / float64(params.TRXPrecision) * (float64(totalLimit) / float64(totalWeight)))
-			}
+		var maxTransfer int64
+		if tvmForm {
+			// java UnDelegateResourceProcessor: (ub/TRX) * limit / weight (left-to-right).
+			maxTransfer = tcommon.JavaDoubleToInt64(float64(unDelegateBalance) / float64(params.TRXPrecision) * float64(totalLimit) / float64(totalWeight))
+		} else {
+			// java UnDelegateResourceActuator: (ub/TRX) * (limit/weight) (grouped ratio).
+			maxTransfer = tcommon.JavaDoubleToInt64(float64(unDelegateBalance) / float64(params.TRXPrecision) * (float64(totalLimit) / float64(totalWeight)))
 		}
-		transfer = int64(float64(recovered) * (float64(unDelegateBalance) / float64(totalFrozen)))
+		transfer = tcommon.JavaDoubleToInt64(float64(recovered) * (float64(unDelegateBalance) / float64(totalFrozen)))
 		if transfer > maxTransfer {
 			transfer = maxTransfer
 		}
 	}
 
 	newUsage := recovered - transfer
-	if newUsage < 0 {
-		newUsage = 0
-	}
 	writeResState(statedb, receiver, resource, newUsage, newRaw, newOpt, now)
 	return transfer, newRaw, newOpt
 }
@@ -225,10 +220,7 @@ func AvailableFrozenV2ForDelegation(statedb *state.StateDB, dp *state.DynamicPro
 // ResourceProcessor.increase (mirrored by computeResourceIncrease); java never
 // applies big.Int / harden to this product, so neither must go.
 func resourceUsageToFrozenBalance(usage, totalLimit, totalWeight int64) int64 {
-	if usage <= 0 || totalLimit <= 0 || totalWeight <= 0 {
-		return 0
-	}
-	return int64(float64(usage) * float64(params.TRXPrecision) * (float64(totalWeight) / float64(totalLimit)))
+	return tcommon.JavaDoubleToInt64(float64(usage) * float64(params.TRXPrecision) * (float64(totalWeight) / float64(totalLimit)))
 }
 
 func totalBandwidthFrozen(acct *types.Account) int64 {

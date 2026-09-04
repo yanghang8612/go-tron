@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"bytes"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
 
@@ -43,17 +45,27 @@ import (
 // caller deduplicates, mirroring voteMap's merge). The returned slice is a
 // reordering of that same set.
 func javaHashMapOrder(entries []tcommon.Address) []tcommon.Address {
+	out, _ := javaHashMapOrderChecked(entries)
+	return out
+}
+
+// javaHashMapOrderChecked additionally reports whether every tree-bin
+// comparison was reproducible. Java falls back to process-specific
+// System.identityHashCode only for an exact spread-hash collision after
+// treeification. The deterministic order returned on that boundary exists only
+// to keep this helper total; consensus callers must reject when ok is false.
+func javaHashMapOrderChecked(entries []tcommon.Address) (out []tcommon.Address, ok bool) {
 	n := len(entries)
 	if n <= 1 {
-		out := make([]tcommon.Address, n)
+		out = make([]tcommon.Address, n)
 		copy(out, entries)
-		return out
+		return out, true
 	}
 	hm := newJavaHashMap()
 	for i := range entries {
 		hm.put(entries[i])
 	}
-	return hm.iterationOrder()
+	return hm.iterationOrder(), !hm.identityHashTie
 }
 
 const (
@@ -104,10 +116,11 @@ type jhmNode struct {
 }
 
 type javaHashMap struct {
-	tab       []*jhmNode
-	cap       int
-	size      int
-	threshold int
+	tab             []*jhmNode
+	cap             int
+	size            int
+	threshold       int
+	identityHashTie bool
 }
 
 func newJavaHashMap() *javaHashMap { return &javaHashMap{} }
@@ -234,8 +247,8 @@ func (m *javaHashMap) treeifyBin(index int) {
 }
 
 // treeify mirrors TreeNode.treeify: insert each bin node (in next-chain order)
-// into a red-black tree comparing by hash (tie-break only on equal hash, which
-// never happens for distinct witness addresses), then moveRootToFront.
+// into a red-black tree comparing by hash (with the checked identity-hash
+// boundary on an exact collision), then moveRootToFront.
 func (m *javaHashMap) treeify(head *jhmNode, index int) {
 	var root *jhmNode
 	x := head
@@ -258,7 +271,7 @@ func (m *javaHashMap) treeify(head *jhmNode, index int) {
 				} else if ph < h {
 					dir = 1
 				} else {
-					dir = jhmTieBreak(k, p.key)
+					dir = m.jhmTieBreak(k, p.key)
 				}
 				xp := p
 				if dir <= 0 {
@@ -303,7 +316,7 @@ func (m *javaHashMap) putTreeVal(index int, head *jhmNode, h int32, key tcommon.
 		} else if p.key == key {
 			return p
 		} else {
-			dir = jhmTieBreak(key, p.key)
+			dir = m.jhmTieBreak(key, p.key)
 		}
 		xp := p
 		if dir <= 0 {
@@ -404,14 +417,18 @@ func (m *javaHashMap) untreeify(head *jhmNode) *jhmNode {
 	return hd
 }
 
-// jhmTieBreak stands in for TreeNode.tieBreakOrder, reached only when two keys
-// have the EXACT same 32-bit spread hash. For distinct registered-witness
-// addresses (the only inputs the vote opcode accepts) this is unreachable; java's
-// tieBreakOrder falls back to System.identityHashCode there, which is not
-// reproducible, so we make the collision explicit rather than silently diverge.
-func jhmTieBreak(a, b tcommon.Address) int {
-	panic("javaHashMapOrder: two witness addresses produced identical 32-bit HashMap spread hashes; " +
-		"java HashMap would tie-break via System.identityHashCode, which is not reproducible")
+// jhmTieBreak stands in for TreeNode.tieBreakOrder. ByteString is not
+// Comparable, so distinct keys with the exact same spread hash fall through to
+// System.identityHashCode. That value is process-specific even between two Java
+// nodes. Record the unreproducible boundary and use byte order only to complete
+// the in-memory simulation without a process-killing panic; the checked caller
+// rejects the VM operation rather than publishing this fallback order.
+func (m *javaHashMap) jhmTieBreak(a, b tcommon.Address) int {
+	m.identityHashTie = true
+	if bytes.Compare(a[:], b[:]) <= 0 {
+		return -1
+	}
+	return 1
 }
 
 func (m *javaHashMap) moveRootToFront(index int, root *jhmNode) {

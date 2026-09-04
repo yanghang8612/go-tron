@@ -5,6 +5,8 @@ import (
 	"container/heap"
 	"encoding/binary"
 	"errors"
+	"maps"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 var senderChainPreexecutionBenchmarkSink *discardShadowPreexecution
@@ -252,8 +255,8 @@ func TestDiscardShadowRetryWriteCaptureProjectsReadHierarchy(t *testing.T) {
 	if !recorderOnly {
 		t.Fatal("account-only retry projection should use recorder fast path")
 	}
-	if !fullTransactions[1] || fullTransactions[2] || !fullTransactions[3] {
-		t.Fatalf("full capture transactions = %v, want tx 1 and 3", fullTransactions)
+	if !fullTransactions[1] || !fullTransactions[2] || !fullTransactions[3] {
+		t.Fatalf("full capture transactions = %v, want every publication candidate tx 1, 2, and 3", fullTransactions)
 	}
 	tests := []struct {
 		key  state.TransactionAccessKey
@@ -271,6 +274,21 @@ func TestDiscardShadowRetryWriteCaptureProjectsReadHierarchy(t *testing.T) {
 		if got := include(test.key); got != test.want {
 			t.Fatalf("include(%+v) = %t, want %t", test.key, got, test.want)
 		}
+	}
+}
+
+func TestDiscardShadowRetryWriteCaptureCoversUnretainedAsyncSuffix(t *testing.T) {
+	source := &discardShadowPreexecution{
+		// The first sender task was retained as an insufficient-balance result;
+		// the block-start worker stopped before tx 2. A canonical credit can make
+		// an async incarnation of both tasks publishable later in the block.
+		results:      []discardShadowTaskResult{{txIndex: 1, err: errors.New("insufficient balance")}},
+		senderTaskOK: []bool{false, true, true},
+		senderNext:   []int{-1, 2, -1},
+	}
+	_, fullTransactions, _ := newDiscardShadowRetryWriteCapture(source, 3)
+	if fullTransactions[0] || !fullTransactions[1] || !fullTransactions[2] {
+		t.Fatalf("async suffix full captures = %v, want tx 1 and 2", fullTransactions)
 	}
 }
 
@@ -1116,6 +1134,22 @@ func TestClassifyDiscardShadowApplyUnsupported(t *testing.T) {
 	if got := classifyDiscardShadowApplyUnsupported(writes); got != want {
 		t.Fatalf("unsupported classes = %#x, want %#x", got, want)
 	}
+
+	mixed := state.TransactionWriteSet{
+		{Kind: state.TransactionAccessAccount, Address: testProcessorAddr(1)}: {},
+		{Kind: state.TransactionAccessKind(0xff)}:                             {},
+	}
+	want = discardShadowApplyUnsupportedAccount | discardShadowApplyUnsupportedOther
+	if got := classifyDiscardShadowApplyUnsupported(mixed); got != want {
+		t.Fatalf("mixed known/unknown unsupported classes = %#x, want %#x", got, want)
+	}
+
+	supportedButRejected := state.TransactionWriteSet{
+		{Kind: state.TransactionAccessStorage, Address: testProcessorAddr(1)}: {},
+	}
+	if got := classifyDiscardShadowApplyUnsupported(supportedButRejected); got != discardShadowApplyUnsupportedOther {
+		t.Fatalf("supported-family validation rejection = %#x, want other", got)
+	}
 }
 
 func TestDiscardShadowWorkerMatchesAndRevertsTransfer(t *testing.T) {
@@ -1263,6 +1297,16 @@ func TestVersionedShadowValidatesFrozenWorkerReadVersions(t *testing.T) {
 		t.Fatalf("ordinary stale read accepted: %+v", decision)
 	}
 
+	writeOnly := discardShadowTaskResult{writes: state.TransactionWriteSet{
+		key: {Exists: true, Value: make([]byte, 8)},
+	}}
+	if decision := clean.validateBlockStartReadSet(1, nil, writeOnly); !decision.publishable || decision.readConflict {
+		t.Fatalf("write-only path without predecessor rejected: %+v", decision)
+	}
+	if decision := conflicted.validateBlockStartReadSet(1, nil, writeOnly); decision.publishable || !decision.readConflict {
+		t.Fatalf("write-only stale post-image accepted: %+v", decision)
+	}
+
 	delta := base()
 	delta.versions[deltaKey] = 0
 	validDelta := discardShadowTaskResult{
@@ -1309,6 +1353,46 @@ func TestVersionedShadowValidatesFrozenWorkerReadVersions(t *testing.T) {
 	stale.lastSenderTx[owner] = 1
 	if decision := stale.validateBlockStartReadSet(2, makeTestTransferTx(1, 2, 1), forwardedResult); decision.publishable || !decision.readConflict || !decision.sender {
 		t.Fatalf("intervening sender-chain writer accepted: %+v", decision)
+	}
+}
+
+func TestTransferBalanceOracleUsesCanonicalBoundary(t *testing.T) {
+	statedb := newTestState(t)
+	owner := testProcessorAddr(1)
+	recipient := testProcessorAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 10_000_000)
+	statedb.CreateAccount(recipient, corepb.AccountType_Normal)
+	statedb.AddBalance(recipient, 500)
+	tx := makeTestTransferTx(1, 2, 1_000)
+	balanceWrite := func(value int64) state.TransactionWriteValue {
+		var encoded [8]byte
+		binary.BigEndian.PutUint64(encoded[:], uint64(value))
+		return state.TransactionWriteValue{Exists: true, Value: encoded[:]}
+	}
+	result := &discardShadowTaskResult{
+		info: &corepb.TransactionInfo{Fee: 30},
+		writes: state.TransactionWriteSet{
+			{Kind: state.TransactionAccessAccountField, Address: owner, AccountField: state.TransactionAccountFieldBalance}:     balanceWrite(9_998_970),
+			{Kind: state.TransactionAccessAccountField, Address: recipient, AccountField: state.TransactionAccountFieldBalance}: balanceWrite(1_500),
+		},
+	}
+	if ok, err := validateTransferBalancePostImages(statedb, tx, result, discardShadowRunConfig{}, 0); !ok || err != nil {
+		t.Fatalf("canonical transfer balance post-images rejected: ok=%t err=%v", ok, err)
+	}
+	result.writes[state.TransactionAccessKey{
+		Kind: state.TransactionAccessAccountField, Address: recipient, AccountField: state.TransactionAccountFieldBalance,
+	}] = balanceWrite(1_499)
+	if ok, err := validateTransferBalancePostImages(statedb, tx, result, discardShadowRunConfig{}, 0); ok || !errors.Is(err, errSpeculativePublicationAudit) {
+		t.Fatalf("stale recipient balance post-image result: ok=%t err=%v", ok, err)
+	}
+	fallbacksBefore := parallelTransferBalanceOracleFallbacksCounter.Snapshot().Count()
+	freshTx := makeTestTransferTx(1, 3, 1_000)
+	if ok, err := validateTransferBalancePostImages(statedb, freshTx, result, discardShadowRunConfig{}, 0); ok || err != nil {
+		t.Fatalf("fresh-recipient balance oracle result: ok=%t err=%v", ok, err)
+	}
+	if fallbacks := parallelTransferBalanceOracleFallbacksCounter.Snapshot().Count() - fallbacksBefore; fallbacks != 1 {
+		t.Fatalf("fresh-recipient balance-oracle fallbacks = %d, want 1", fallbacks)
 	}
 }
 
@@ -1535,6 +1619,586 @@ func TestVMSenderChainReadinessAllowsEnergyReceipt(t *testing.T) {
 	}
 }
 
+func TestTransferCanonicalBoundarySerialVerificationRejectsStaleRecipientWrite(t *testing.T) {
+	base := newTestState(t)
+	owner := testProcessorAddr(1)
+	recipient := testProcessorAddr(2)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.CreateAccount(recipient, corepb.AccountType_Normal)
+	base.AddBalance(owner, 1_000_000)
+	base.AddBalance(recipient, 50_000)
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := makeTestTransferTx(1, 2, 4_455)
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(discardShadowSampleInterval), Timestamp: 3_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	cfg := discardShadowRunConfig{
+		block:                   block,
+		db:                      ethrawdb.NewMemoryDatabase(),
+		transactions:            []*types.Transaction{tx},
+		energyLimitForkBlockNum: params.DefaultBlockNumForEnergyLimit,
+		captureBalanceTrace:     true,
+		retainInfos:             true,
+	}
+	shadow := prepareTransferExecutionBlock(base, base.DynamicProperties(), block.Number(), false)
+	if shadow == nil {
+		t.Fatal("missing sampled transfer execution base")
+	}
+	pre := shadow.preexecuteTransfers(cfg)
+	if pre == nil || len(pre.results) != 1 || !preexecutedTransferReady(&pre.results[0]) {
+		t.Fatalf("transfer preexecution unavailable: %+v", pre)
+	}
+	result := &pre.results[0]
+	override, admitted := overridePublicNetReservation(result, base.DynamicProperties())
+	if !admitted {
+		t.Fatal("public-net reservation was not admitted")
+	}
+	defer override.restore()
+
+	commitment := func() tcommon.Hash {
+		copyState, copyErr := base.Copy()
+		if copyErr != nil {
+			t.Fatal(copyErr)
+		}
+		root, commitErr := copyState.Commit()
+		if commitErr != nil {
+			t.Fatal(commitErr)
+		}
+		return root
+	}
+	dynamicSnapshot := func() (map[string]int64, map[string]string) {
+		copyDP := base.DynamicProperties().Copy()
+		ints := copyDP.All()
+		strings := make(map[string]string, len(copyDP.StringKeys()))
+		for _, key := range copyDP.StringKeys() {
+			value, _ := copyDP.GetString(key)
+			strings[key] = value
+		}
+		return ints, strings
+	}
+	rootBefore := commitment()
+	intsBefore, stringsBefore := dynamicSnapshot()
+	journalBefore := base.DomainChangeJournalMark()
+
+	var outerRecorder state.TransactionAccessRecorder
+	outerRecorder.Reset(16)
+	base.SetTransactionAccessRecorder(&outerRecorder)
+	base.DynamicProperties().SetTransactionAccessRecorder(&outerRecorder)
+	verification := verifyTransferResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
+	if !verification.matched() {
+		t.Fatalf("matching transfer boundary result was rejected: %+v", verification)
+	}
+	if verification.canonical == nil || verification.canonical == result {
+		t.Fatal("Transfer oracle did not retain an independently executed canonical result")
+	}
+	canonicalWrites := cloneTransactionWriteSet(verification.canonical.writes)
+	canonicalReads := cloneTransactionReadSet(verification.canonical.reads)
+	canonicalInfo := proto.Clone(verification.canonical.info).(*corepb.TransactionInfo)
+	canonicalTrace := proto.Clone(verification.canonical.balanceTrace).(*contractpb.TransactionBalanceTrace)
+	sourceWrites := cloneTransactionWriteSet(result.writes)
+	sourceReads := cloneTransactionReadSet(result.reads)
+	sourceInfo := proto.Clone(result.info).(*corepb.TransactionInfo)
+	sourceTrace := proto.Clone(result.balanceTrace).(*contractpb.TransactionBalanceTrace)
+	for key, value := range result.writes {
+		if len(value.Value) == 0 {
+			continue
+		}
+		value.Value[0] ^= 0xff
+		result.writes[key] = value
+		break
+	}
+	result.reads.Unsupported = !result.reads.Unsupported
+	result.info.Fee++
+	result.balanceTrace.TransactionIdentifier[0] ^= 0xff
+	if !state.EqualTransactionWriteSets(verification.canonical.writes, canonicalWrites) ||
+		!reflect.DeepEqual(verification.canonical.reads, canonicalReads) ||
+		!proto.Equal(verification.canonical.info, canonicalInfo) ||
+		!proto.Equal(verification.canonical.balanceTrace, canonicalTrace) {
+		t.Fatal("speculative source mutation escaped into the authoritative serial result")
+	}
+	result.writes = sourceWrites
+	result.reads = sourceReads
+	result.info = sourceInfo
+	result.balanceTrace = sourceTrace
+	_ = base.GetBalance(owner)
+	_, _ = base.DynamicProperties().Get("transaction_fee")
+	outerReads := outerRecorder.CaptureReadSet()
+	seenOwnerBalance, seenTransactionFee := false, false
+	for _, read := range outerReads.Reads {
+		seenOwnerBalance = seenOwnerBalance || (read.Key.Kind == state.TransactionAccessAccountField &&
+			read.Key.Address == owner && read.Key.AccountField == state.TransactionAccountFieldBalance)
+		seenTransactionFee = seenTransactionFee || (read.Key.Kind == state.TransactionAccessDynamicInt && read.Key.LogicalKey == "transaction_fee")
+	}
+	if !seenOwnerBalance || !seenTransactionFee {
+		t.Fatalf("boundary oracle did not restore outer recorder: %+v", outerReads.Reads)
+	}
+	base.SetTransactionAccessRecorder(nil)
+	base.DynamicProperties().SetTransactionAccessRecorder(nil)
+	rootAfter := commitment()
+	intsAfter, stringsAfter := dynamicSnapshot()
+	if rootAfter != rootBefore {
+		t.Fatalf("Transfer oracle changed commitment root: before=%x after=%x", rootBefore, rootAfter)
+	}
+	if !maps.Equal(intsBefore, intsAfter) || !maps.Equal(stringsBefore, stringsAfter) {
+		t.Fatalf("Transfer oracle changed dynamic properties")
+	}
+	if journalAfter := base.DomainChangeJournalMark(); journalAfter != journalBefore {
+		t.Fatalf("Transfer oracle changed domain journal mark: before=%d after=%d", journalBefore, journalAfter)
+	}
+	if base.BalanceTraceActive() {
+		t.Fatal("temporary Transfer oracle balance trace escaped its scope")
+	}
+
+	// The same ownership guarantees must hold when authoritative execution
+	// rejects before producing a receipt/WriteSet.
+	failingCfg := cfg
+	failingCfg.transactions = []*types.Transaction{makeTestTransferTx(1, 2, 2_000_000)}
+	outerRecorder.Reset(16)
+	base.SetTransactionAccessRecorder(&outerRecorder)
+	base.DynamicProperties().SetTransactionAccessRecorder(&outerRecorder)
+	failedVerification := verifyTransferResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, failingCfg)
+	if failedVerification.err == nil || failedVerification.matched() {
+		t.Fatalf("insufficient-balance boundary execution unexpectedly succeeded: %+v", failedVerification)
+	}
+	_ = base.GetBalance(owner)
+	_, _ = base.DynamicProperties().Get("transaction_fee")
+	failedReads := outerRecorder.CaptureReadSet()
+	seenOwnerBalance, seenTransactionFee = false, false
+	for _, read := range failedReads.Reads {
+		seenOwnerBalance = seenOwnerBalance || (read.Key.Kind == state.TransactionAccessAccountField &&
+			read.Key.Address == owner && read.Key.AccountField == state.TransactionAccountFieldBalance)
+		seenTransactionFee = seenTransactionFee || (read.Key.Kind == state.TransactionAccessDynamicInt && read.Key.LogicalKey == "transaction_fee")
+	}
+	if !seenOwnerBalance || !seenTransactionFee {
+		t.Fatalf("failed boundary oracle did not restore outer recorder: %+v", failedReads.Reads)
+	}
+	base.SetTransactionAccessRecorder(nil)
+	base.DynamicProperties().SetTransactionAccessRecorder(nil)
+	if failedRoot := commitment(); failedRoot != rootBefore {
+		t.Fatalf("failed Transfer oracle changed commitment root: before=%x after=%x", rootBefore, failedRoot)
+	}
+	if base.BalanceTraceActive() {
+		t.Fatal("failed Transfer oracle leaked temporary balance trace")
+	}
+
+	// A production history-enabled block already contains earlier canonical
+	// transactions. The in-place oracle must preserve that recorder exactly.
+	priorID := []byte{0xaa}
+	base.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
+	base.AppendBalanceTraceTransaction(&contractpb.TransactionBalanceTrace{
+		TransactionIdentifier: priorID,
+		Type:                  "TransferContract",
+		Status:                "SUCCESS",
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			Address: recipient.Bytes(),
+			Amount:  1,
+		}},
+	})
+	verification = verifyTransferResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
+	if !verification.matched() {
+		t.Fatalf("active-trace transfer boundary result was rejected: %+v", verification)
+	}
+	if !base.BalanceTraceActive() || base.CopyLastBalanceTraceTransaction(priorID) == nil {
+		t.Fatal("Transfer oracle replaced or truncated the canonical balance trace")
+	}
+	base.ClearBalanceTrace()
+
+	// Model the original dangerous trust boundary: a worker computes a wrong
+	// fee and a self-consistent sender post-image. The fast balance oracle alone
+	// accepts that pair; the authoritative boundary execution must reject both.
+	ownerKey := state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		Address:      owner,
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	originalOwnerWrite, ownerWriteFound := result.writes[ownerKey]
+	if !ownerWriteFound || len(originalOwnerWrite.Value) != 8 {
+		t.Fatalf("transfer result has no encoded owner balance: %+v", result.writes)
+	}
+	originalFee := result.info.Fee
+	result.info.Fee += 30
+	wrongOwnerWrite := originalOwnerWrite
+	wrongOwnerWrite.Value = append([]byte(nil), originalOwnerWrite.Value...)
+	binary.BigEndian.PutUint64(wrongOwnerWrite.Value, binary.BigEndian.Uint64(wrongOwnerWrite.Value)-30)
+	result.writes[ownerKey] = wrongOwnerWrite
+	if ok, err := validateTransferBalancePostImages(base, tx, result, cfg, 0); !ok || err != nil {
+		t.Fatalf("self-consistent wrong fee did not reach the independent serial oracle: ok=%t err=%v", ok, err)
+	}
+	verification = verifyTransferResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
+	if verification.matched() || verification.infoMatch || verification.writeMatch || verification.err != nil {
+		t.Fatalf("self-consistent wrong fee was not rejected by boundary execution: %+v", verification)
+	}
+	if canonical, err := validateTransferResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg, nil); canonical != nil || !errors.Is(err, errSpeculativePublicationAudit) {
+		t.Fatalf("Transfer serial-oracle mismatch did not open safety path: canonical=%+v err=%v", canonical, err)
+	}
+	result.info.Fee = originalFee
+	result.writes[ownerKey] = originalOwnerWrite
+
+	originalReads := cloneTransactionReadSet(result.reads)
+	if len(result.reads.Reads) == 0 {
+		t.Fatal("transfer result has no reads to audit")
+	}
+	result.reads.Reads = result.reads.Reads[1:]
+	verification = verifyTransferResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
+	if !verification.matched() || verification.readMatch || !verification.infoMatch || !verification.writeMatch ||
+		!verification.balanceMatch || verification.err != nil {
+		t.Fatalf("omitted speculative read affected authoritative serial admission: %+v", verification)
+	}
+	result.reads = originalReads
+
+	mutated := false
+	for key, value := range result.writes {
+		if key.Address != recipient || len(value.Value) == 0 {
+			continue
+		}
+		value.Value = append([]byte(nil), value.Value...)
+		value.Value[len(value.Value)-1] ^= 1
+		result.writes[key] = value
+		mutated = true
+		break
+	}
+	if !mutated {
+		t.Fatalf("transfer result has no recipient write: %+v", result.writes)
+	}
+
+	verification = verifyTransferResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
+	if verification.matched() || verification.writeMatch || !verification.infoMatch || verification.err != nil {
+		t.Fatalf("stale recipient write was not isolated as a boundary mismatch: %+v", verification)
+	}
+}
+
+func TestTransferCanonicalBoundaryDetectsUnjournaledCommutativeLeak(t *testing.T) {
+	base := newTestState(t)
+	owner := testProcessorAddr(1)
+	recipient := testProcessorAddr(2)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.CreateAccount(recipient, corepb.AccountType_Normal)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.AddBalance(owner, 1_000_000_000)
+	base.AddBalance(recipient, 1_000_000)
+	base.AddBalance(params.BlackholeAddress, 100)
+	dynProps := base.DynamicProperties()
+	// Force paid bandwidth through the legacy Blackhole balance delta. This
+	// is the consensus path where a leaked direct-oracle increment followed by
+	// publication of the commutative delta would otherwise double-charge.
+	dynProps.Set("free_net_limit", 0)
+	dynProps.SetPublicNetLimit(0)
+	dynProps.Set("total_net_limit", 0)
+	dynProps.Set("transaction_fee", 2)
+	dynProps.SetAllowBlackHoleOptimization(false)
+	dynProps.SetAllowTransactionFeePool(false)
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := makeTestTransferTx(1, 2, 123_456)
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(discardShadowSampleInterval), Timestamp: 3_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	cfg := discardShadowRunConfig{
+		block:                   block,
+		db:                      ethrawdb.NewMemoryDatabase(),
+		transactions:            []*types.Transaction{tx},
+		energyLimitForkBlockNum: params.DefaultBlockNumForEnergyLimit,
+		retainInfos:             true,
+	}
+	shadow := prepareTransferExecutionBlock(base, dynProps, block.Number(), false)
+	if shadow == nil {
+		t.Fatal("missing sampled transfer execution base")
+	}
+	pre := shadow.preexecuteTransfers(cfg)
+	if pre == nil || len(pre.results) != 1 || !preexecutedTransferReady(&pre.results[0]) {
+		t.Fatalf("transfer preexecution unavailable: %+v", pre)
+	}
+	result := &pre.results[0]
+	blackholeKey := state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		Address:      params.BlackholeAddress,
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	if write, ok := result.writes[blackholeKey]; !ok || !write.Commutative {
+		t.Fatalf("paid bandwidth did not produce a commutative Blackhole delta: %+v", result.writes)
+	}
+	override, admitted := overridePublicNetReservation(result, dynProps)
+	if !admitted {
+		t.Fatal("public-net reservation was not admitted")
+	}
+	defer override.restore()
+
+	journalBefore := base.DomainChangeJournalMark()
+	blackholeBefore := base.GetBalance(params.BlackholeAddress)
+	restoreMismatchesBefore := parallelTransferSerialVerifyRestoreMismatchCounter.Snapshot().Count()
+	cfg.canonicalOraclePostExecutionTestHook = func(family string, statedb *state.StateDB, _ *state.DynamicProperties) {
+		if family != "Transfer" {
+			t.Fatalf("oracle family = %q, want Transfer", family)
+		}
+		account := statedb.GetAccount(params.BlackholeAddress)
+		if account == nil {
+			t.Fatal("missing Blackhole account in fault hook")
+		}
+		// Deliberately violate StateDB ownership to model the exact class the
+		// absolute-value restoration seal guards: this mutates the cached
+		// account without appending a journal entry.
+		account.SetBalance(account.Balance() + 1)
+	}
+	canonical, err := validateTransferResultAtCanonicalBoundary(base, dynProps, 0, result, cfg, nil)
+	if canonical != nil || !errors.Is(err, errSpeculativePublicationAudit) || !errors.Is(err, errCanonicalOracleRestoration) {
+		t.Fatalf("unjournaled oracle leak was not rejected: canonical=%+v err=%v", canonical, err)
+	}
+	if got := parallelTransferSerialVerifyRestoreMismatchCounter.Snapshot().Count() - restoreMismatchesBefore; got != 1 {
+		t.Fatalf("Transfer restoration mismatches = %d, want 1", got)
+	}
+	if got := base.DomainChangeJournalMark(); got != journalBefore {
+		t.Fatalf("fault injection unexpectedly changed journal mark: got %d want %d", got, journalBefore)
+	}
+	if got := base.GetBalance(params.BlackholeAddress); got != blackholeBefore {
+		t.Fatalf("unjournaled leak was detected but not self-cleaned: got %d want %d", got, blackholeBefore)
+	}
+}
+
+func TestVMCanonicalBoundaryCleansDirectAndIsolatedLeaks(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(false)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x8e)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.AddBalance(params.BlackholeAddress, 100)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	base.SetCode(contractAddr, []byte{0x60, 0x01, 0x60, 0x02, 0x01, 0x50, 0x00})
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	tx.Proto().RawData.FeeLimit = 10_000_000
+	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	cfg := discardShadowRunConfig{
+		block:                   block,
+		db:                      ethrawdb.NewMemoryDatabase(),
+		transactions:            []*types.Transaction{tx},
+		energyLimitForkBlockNum: params.DefaultBlockNumForEnergyLimit,
+		retainInfos:             true,
+	}
+	shadow := prepareTransferExecutionBlock(base, dynProps, block.Number(), false)
+	if shadow == nil {
+		t.Fatal("missing sampled VM execution base")
+	}
+	pre := shadow.preexecuteVMSenderChains(cfg, false)
+	if pre == nil || len(pre.results) != 1 || !preexecutedResultReady(&pre.results[0]) {
+		t.Fatalf("VM preexecution unavailable: %+v", pre)
+	}
+	result := &pre.results[0]
+	blackholeKey := state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		Address:      params.BlackholeAddress,
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	if write, ok := result.writes[blackholeKey]; !ok || !write.Commutative {
+		t.Fatalf("VM energy settlement did not produce a commutative Blackhole delta: %+v", result.writes)
+	}
+	override, admitted := overridePublicNetReservation(result, dynProps)
+	if !admitted {
+		t.Fatal("public-net reservation was not admitted")
+	}
+	defer override.restore()
+
+	journalBefore := base.DomainChangeJournalMark()
+	blackholeBefore := base.GetBalance(params.BlackholeAddress)
+	totalNetWeightBefore := dynProps.TotalNetWeight()
+	restoreMismatchesBefore := parallelVMSerialVerifyRestoreMismatchCounter.Snapshot().Count()
+	cfg.canonicalOraclePostExecutionTestHook = func(family string, _ *state.StateDB, oracleDP *state.DynamicProperties) {
+		if family != "VM" {
+			t.Fatalf("oracle family = %q, want VM", family)
+		}
+		// Exercise the independent DP guard with a normal journaled mutation
+		// outside the candidate's commutative carrier. SnapshotChanged must make
+		// the leak observable and the outer snapshot must remove it.
+		oracleDP.SetTotalNetWeight(oracleDP.TotalNetWeight() + 1)
+	}
+	canonical, err := validateVMResultAtCanonicalBoundary(base, dynProps, 0, result, cfg)
+	if canonical != nil || !errors.Is(err, errSpeculativePublicationAudit) || !errors.Is(err, errCanonicalOracleRestoration) {
+		t.Fatalf("journaled VM oracle leak was not rejected: canonical=%+v err=%v", canonical, err)
+	}
+	if got := parallelVMSerialVerifyRestoreMismatchCounter.Snapshot().Count() - restoreMismatchesBefore; got != 1 {
+		t.Fatalf("VM restoration mismatches = %d, want 1", got)
+	}
+	if got := base.DomainChangeJournalMark(); got != journalBefore {
+		t.Fatalf("VM fault injection unexpectedly changed journal mark: got %d want %d", got, journalBefore)
+	}
+	if got := base.GetBalance(params.BlackholeAddress); got != blackholeBefore {
+		t.Fatalf("VM dynamic-property fault changed Blackhole balance: got %d want %d", got, blackholeBefore)
+	}
+	if got := dynProps.TotalNetWeight(); got != totalNetWeightBefore {
+		t.Fatalf("journaled VM dynamic-property leak was detected but not rolled back: got %d want %d", got, totalNetWeightBefore)
+	}
+
+	// Now model a StateDB.Copy ownership regression. The isolated oracle has
+	// already executed on its copy when this hook mutates the original cached
+	// account without journaling. Its own guard must detect and repair the leak,
+	// and VM admission must stop before the direct oracle starts.
+	restoreMismatchesBefore = parallelVMSerialVerifyRestoreMismatchCounter.Snapshot().Count()
+	cfg.canonicalOraclePostExecutionTestHook = func(string, *state.StateDB, *state.DynamicProperties) {
+		t.Fatal("direct VM oracle ran after isolated restoration failure")
+	}
+	cfg.canonicalIsolatedOraclePostExecutionTestHook = func(statedb *state.StateDB, _ *state.DynamicProperties) {
+		account := statedb.GetAccount(params.BlackholeAddress)
+		if account == nil {
+			t.Fatal("missing Blackhole account in isolated VM fault hook")
+		}
+		account.SetBalance(account.Balance() + 1)
+	}
+	canonical, err = validateVMResultAtCanonicalBoundary(base, dynProps, 0, result, cfg)
+	if canonical != nil || !errors.Is(err, errSpeculativePublicationAudit) || !errors.Is(err, errCanonicalOracleRestoration) {
+		t.Fatalf("isolated-copy VM oracle leak was not rejected: canonical=%+v err=%v", canonical, err)
+	}
+	if got := parallelVMSerialVerifyRestoreMismatchCounter.Snapshot().Count() - restoreMismatchesBefore; got != 1 {
+		t.Fatalf("isolated VM restoration mismatches = %d, want 1", got)
+	}
+	if got := base.DomainChangeJournalMark(); got != journalBefore {
+		t.Fatalf("isolated VM fault changed journal mark: got %d want %d", got, journalBefore)
+	}
+	if got := base.GetBalance(params.BlackholeAddress); got != blackholeBefore {
+		t.Fatalf("isolated-copy leak was detected but not self-cleaned: got %d want %d", got, blackholeBefore)
+	}
+	if got := dynProps.TotalNetWeight(); got != totalNetWeightBefore {
+		t.Fatalf("isolated VM fault changed dynamic properties: got %d want %d", got, totalNetWeightBefore)
+	}
+}
+
+func TestCloneTransactionWriteSetOwnsAsyncHandoffMapAndValues(t *testing.T) {
+	key := state.TransactionAccessKey{Kind: state.TransactionAccessAccountField, Address: testProcessorAddr(1)}
+	original := state.TransactionWriteSet{key: {Exists: true, Value: []byte("canonical")}}
+	handoff := cloneTransactionWriteSet(original)
+	value := handoff[key]
+	value.Value[0] = 'X'
+	handoff[key] = value
+	delete(handoff, key)
+
+	if got := string(original[key].Value); got != "canonical" {
+		t.Fatalf("handoff mutation changed worker-owned value: %q", got)
+	}
+	if len(original) != 1 {
+		t.Fatalf("handoff mutation changed worker-owned map length: %d", len(original))
+	}
+}
+
+func TestCanonicalPublicationWriteSetAuditFailsClosed(t *testing.T) {
+	key := state.TransactionAccessKey{Kind: state.TransactionAccessAccountField, Address: testProcessorAddr(1)}
+	expected := state.TransactionWriteSet{key: {Exists: true, Value: []byte("expected")}}
+	versioned := &versionedAccessShadow{
+		transactionWritesOK:  []bool{true},
+		transactionWriteSets: []state.TransactionWriteSet{cloneTransactionWriteSet(expected)},
+	}
+	if err := validateCanonicalPublicationWriteSet("Transfer", 0, expected, versioned); err != nil {
+		t.Fatalf("matching publication audit failed: %v", err)
+	}
+	versioned.transactionWriteSets[0][key] = state.TransactionWriteValue{Exists: true, Value: []byte("stale")}
+	if err := validateCanonicalPublicationWriteSet("Transfer", 0, expected, versioned); err == nil {
+		t.Fatal("publication mismatch was accepted")
+	}
+	versioned.transactionWritesOK[0] = false
+	if err := validateCanonicalPublicationWriteSet("VM", 0, expected, versioned); err == nil {
+		t.Fatal("missing canonical capture was accepted")
+	}
+
+	if err := validatePublishedRetryAudit("Transfer", discardShadowSenderRetryStats{
+		publish: discardShadowAsyncPublishStats{published: 1, writeMatches: 1},
+	}); err != nil {
+		t.Fatalf("matching retry audit failed: %v", err)
+	}
+	if err := validatePublishedRetryAudit("VM", discardShadowSenderRetryStats{
+		publish: discardShadowAsyncPublishStats{published: 1, writeMismatches: 1},
+	}); err == nil {
+		t.Fatal("retry post-publication mismatch was accepted")
+	}
+}
+
+func TestBoundaryOracleCrossCheckRequiresAllConsumedOutputs(t *testing.T) {
+	key := state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		Address:      testProcessorAddr(1),
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	base := &discardShadowTaskResult{
+		info: &corepb.TransactionInfo{Fee: 7, InternalTransactions: []*corepb.InternalTransaction{{
+			Hash: []byte{0x01}, Note: []byte("call"),
+		}}},
+		writes:       state.TransactionWriteSet{key: {Exists: true, Value: make([]byte, 8)}},
+		reads:        state.TransactionReadSet{Reads: []state.TransactionRead{{Key: key, Mode: state.TransactionAccessRead}}},
+		balanceTrace: &contractpb.TransactionBalanceTrace{TransactionIdentifier: []byte{1}},
+	}
+	clone := func() *discardShadowTaskResult {
+		return &discardShadowTaskResult{
+			info:         proto.Clone(base.info).(*corepb.TransactionInfo),
+			writes:       cloneTransactionWriteSet(base.writes),
+			reads:        cloneTransactionReadSet(base.reads),
+			balanceTrace: proto.Clone(base.balanceTrace).(*contractpb.TransactionBalanceTrace),
+		}
+	}
+	if check := compareBoundaryCanonicalResults(base, clone()); !check.matched() || !check.readMatch {
+		t.Fatalf("equal canonical results rejected: %+v", check)
+	}
+	readDifferent := clone()
+	readDifferent.reads.Reads = nil
+	if check := compareBoundaryCanonicalResults(base, readDifferent); !check.matched() || check.readMatch {
+		t.Fatalf("diagnostic-only read difference misclassified: %+v", check)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*discardShadowTaskResult)
+	}{
+		{name: "info", mutate: func(result *discardShadowTaskResult) { result.info.Fee++ }},
+		{name: "internal_transaction", mutate: func(result *discardShadowTaskResult) {
+			result.info.InternalTransactions[0].Note[0]++
+		}},
+		{name: "writes", mutate: func(result *discardShadowTaskResult) {
+			value := result.writes[key]
+			value.Value[7] = 1
+			result.writes[key] = value
+		}},
+		{name: "balance_trace", mutate: func(result *discardShadowTaskResult) {
+			result.balanceTrace.TransactionIdentifier[0]++
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			other := clone()
+			test.mutate(other)
+			if check := compareBoundaryCanonicalResults(base, other); check.matched() {
+				t.Fatalf("%s mismatch accepted: %+v", test.name, check)
+			}
+		})
+	}
+	if check := compareBoundaryCanonicalResults(base, nil); check.err == nil || check.matched() {
+		t.Fatalf("missing independent result accepted: %+v", check)
+	}
+}
+
 func TestVMCanonicalBoundarySerialVerificationRejectsMutatedStorageWrite(t *testing.T) {
 	base := newTestState(t)
 	dynProps := base.DynamicProperties()
@@ -1591,10 +2255,66 @@ func TestVMCanonicalBoundarySerialVerificationRejectsMutatedStorageWrite(t *test
 	}
 	defer override.restore()
 
+	commitment := func() tcommon.Hash {
+		copyState, copyErr := base.Copy()
+		if copyErr != nil {
+			t.Fatal(copyErr)
+		}
+		root, commitErr := copyState.Commit()
+		if commitErr != nil {
+			t.Fatal(commitErr)
+		}
+		return root
+	}
+	rootBefore := commitment()
+	intsBefore := base.DynamicProperties().All()
+	stringsBefore := make(map[string]string, len(base.DynamicProperties().StringKeys()))
+	for _, key := range base.DynamicProperties().StringKeys() {
+		stringsBefore[key], _ = base.DynamicProperties().GetString(key)
+	}
+	journalBefore := base.DomainChangeJournalMark()
+	var outerRecorder state.TransactionAccessRecorder
+	outerRecorder.Reset(32)
+	base.SetTransactionAccessRecorder(&outerRecorder)
+	base.DynamicProperties().SetTransactionAccessRecorder(&outerRecorder)
 	verification := verifyVMResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
 	if !verification.matched() {
 		t.Fatalf("matching VM boundary result was rejected: %+v", verification)
 	}
+	if verification.crossCheck == nil || !verification.crossCheck.matched() {
+		t.Fatalf("VM isolated/direct cross-check missing: %+v", verification.crossCheck)
+	}
+	_ = base.GetBalance(owner)
+	if reads := outerRecorder.CaptureReadSet(); len(reads.Reads) == 0 {
+		t.Fatal("VM direct oracle did not restore the outer recorder")
+	}
+	base.SetTransactionAccessRecorder(nil)
+	base.DynamicProperties().SetTransactionAccessRecorder(nil)
+	if rootAfter := commitment(); rootAfter != rootBefore {
+		t.Fatalf("VM direct oracle changed commitment: before=%x after=%x", rootBefore, rootAfter)
+	}
+	if journalAfter := base.DomainChangeJournalMark(); journalAfter != journalBefore {
+		t.Fatalf("VM direct oracle changed domain journal: before=%d after=%d", journalBefore, journalAfter)
+	}
+	if !maps.Equal(intsBefore, base.DynamicProperties().All()) {
+		t.Fatal("VM direct oracle changed integer dynamic properties")
+	}
+	stringsAfter := make(map[string]string, len(base.DynamicProperties().StringKeys()))
+	for _, key := range base.DynamicProperties().StringKeys() {
+		stringsAfter[key], _ = base.DynamicProperties().GetString(key)
+	}
+	if !maps.Equal(stringsBefore, stringsAfter) {
+		t.Fatal("VM direct oracle changed string dynamic properties")
+	}
+	if got := base.GetState(contractAddr, tcommon.Hash{}); got != (tcommon.Hash{}) {
+		t.Fatalf("VM direct oracle left storage behind: %x", got)
+	}
+	result.balanceTrace = &contractpb.TransactionBalanceTrace{TransactionIdentifier: []byte("unexpected")}
+	verification = verifyVMResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
+	if verification.matched() || verification.balanceMatch || !verification.infoMatch || !verification.writeMatch || verification.err != nil {
+		t.Fatalf("trace-disabled oracle admitted an unauthenticated trace: %+v", verification)
+	}
+	result.balanceTrace = nil
 	storageKey := state.TransactionAccessKey{
 		Kind: state.TransactionAccessStorage, Address: contractAddr, StorageKey: tcommon.Hash{},
 	}
@@ -1609,6 +2329,9 @@ func TestVMCanonicalBoundarySerialVerificationRejectsMutatedStorageWrite(t *test
 	verification = verifyVMResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg)
 	if verification.matched() || verification.writeMatch || !verification.infoMatch || verification.err != nil {
 		t.Fatalf("mutated storage write was not isolated as a boundary mismatch: %+v", verification)
+	}
+	if canonical, err := validateVMResultAtCanonicalBoundary(base, base.DynamicProperties(), 0, result, cfg); canonical != nil || !errors.Is(err, errSpeculativePublicationAudit) {
+		t.Fatalf("VM serial-oracle mismatch did not open safety path: canonical=%+v err=%v", canonical, err)
 	}
 }
 
@@ -1701,9 +2424,10 @@ func TestVMCanonicalBoundarySerialOracleRejectionIsObservable(t *testing.T) {
 	logVMSerialOracleRejection(discardShadowRunConfig{
 		block:        block,
 		transactions: []*types.Transaction{tx},
-	}, 0, vmBoundarySerialVerification{
+	}, 0, boundarySerialVerification{
 		infoMatch:    true,
 		writeMatch:   false,
+		readMatch:    true,
 		balanceMatch: true,
 		err:          errors.New("injected oracle failure"),
 	})
@@ -1716,8 +2440,9 @@ func TestVMCanonicalBoundarySerialOracleRejectionIsObservable(t *testing.T) {
 		"txIndex=0",
 		"infoMatch=true",
 		"writeSetMatch=false",
+		"readSetMatch=true",
 		"balanceTraceMatch=true",
-		"action=serial-fallback",
+		"action=block-rollback-persistent-serial-circuit",
 		"injected oracle failure",
 	} {
 		if !strings.Contains(output, want) {
@@ -1967,6 +2692,7 @@ func TestPublicNetWriteOverrideMatchesSerialWritePresence(t *testing.T) {
 	result.publicNet.StartUsage = 200
 	result.publicNet.StartTime = 10
 	result.publicNet.RecoveredUsage = 200
+	result.writes[usageKey] = encodeInt(300)
 	dynProps.SetPublicNetTime(9)
 	override, admitted = overridePublicNetReservation(result, dynProps)
 	if !admitted {
@@ -1978,6 +2704,156 @@ func TestPublicNetWriteOverrideMatchesSerialWritePresence(t *testing.T) {
 	override.restore()
 	if _, timeWritten := result.writes[timeKey]; timeWritten {
 		t.Fatal("restore retained a time key absent from the worker result")
+	}
+}
+
+func TestPublicNetWriteOverrideRejectsMalformedRetainedWriteSet(t *testing.T) {
+	usageKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_usage"}
+	timeKey := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "public_net_time"}
+	encodeInt := func(value int64) state.TransactionWriteValue {
+		encoded := make([]byte, 8)
+		binary.BigEndian.PutUint64(encoded, uint64(value))
+		return state.TransactionWriteValue{Exists: true, Value: encoded}
+	}
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetPublicNetLimit(1_000)
+	dynProps.SetPublicNetUsage(50)
+	dynProps.SetPublicNetTime(5)
+	base := discardShadowTaskResult{
+		publicNetValid: true,
+		publicNet: state.PublicNetReservation{
+			StartUsage: 50, StartTime: 5, RecoveredUsage: 50, ResourceTime: 10, Delta: 100, Limit: 1_000,
+		},
+	}
+	tests := []struct {
+		name   string
+		dp     *state.DynamicProperties
+		writes state.TransactionWriteSet
+	}{
+		{name: "nil dynamic properties", writes: state.TransactionWriteSet{usageKey: encodeInt(150), timeKey: encodeInt(10)}},
+		{name: "missing usage", dp: dynProps, writes: state.TransactionWriteSet{timeKey: encodeInt(10)}},
+		{name: "short usage", dp: dynProps, writes: state.TransactionWriteSet{usageKey: {Exists: true, Value: []byte{1}}, timeKey: encodeInt(10)}},
+		{name: "commutative usage", dp: dynProps, writes: state.TransactionWriteSet{usageKey: {Exists: true, Commutative: true, Value: make([]byte, 8)}, timeKey: encodeInt(10)}},
+		{name: "short time", dp: dynProps, writes: state.TransactionWriteSet{usageKey: encodeInt(150), timeKey: {Exists: true, Value: []byte{1}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := base
+			result.writes = tt.writes
+			before := cloneTransactionWriteSet(result.writes)
+			override, admitted := overridePublicNetReservation(&result, tt.dp)
+			if admitted {
+				t.Fatal("malformed retained WriteSet was admitted")
+			}
+			if !override.reservation {
+				t.Fatal("rejected result did not retain reservation classification")
+			}
+			if !state.EqualTransactionWriteSets(result.writes, before) {
+				t.Fatal("rejected override mutated the retained WriteSet")
+			}
+		})
+	}
+}
+
+func TestCanonicalPublicationSealRejectsConsumedPayloadMutation(t *testing.T) {
+	key := state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		Address:      testProcessorAddr(1),
+		AccountField: state.TransactionAccountFieldBalance,
+	}
+	base := discardShadowTaskResult{
+		writes: state.TransactionWriteSet{key: {Exists: true, Value: make([]byte, 8)}},
+		reads: state.TransactionReadSet{Reads: []state.TransactionRead{{
+			Key: key, Mode: state.TransactionAccessRead,
+		}}},
+		info: &corepb.TransactionInfo{Fee: 7},
+		balanceTrace: &contractpb.TransactionBalanceTrace{
+			TransactionIdentifier: []byte("tx"),
+		},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*discardShadowTaskResult)
+	}{
+		{name: "info", mutate: func(result *discardShadowTaskResult) {
+			result.info.Fee++
+		}},
+		{name: "balance trace", mutate: func(result *discardShadowTaskResult) {
+			result.balanceTrace.TransactionIdentifier[0] ^= 1
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := base
+			result.writes = cloneTransactionWriteSet(base.writes)
+			result.reads = cloneTransactionReadSet(base.reads)
+			result.info = proto.Clone(base.info).(*corepb.TransactionInfo)
+			result.balanceTrace = proto.Clone(base.balanceTrace).(*contractpb.TransactionBalanceTrace)
+			canonical := result
+			canonical.writes = cloneTransactionWriteSet(result.writes)
+			canonical.reads = cloneTransactionReadSet(result.reads)
+			canonical.info = proto.Clone(result.info).(*corepb.TransactionInfo)
+			canonical.balanceTrace = proto.Clone(result.balanceTrace).(*contractpb.TransactionBalanceTrace)
+			seal, err := newCanonicalPublicationWriteSeal("Transfer", &result, &canonical)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.mutate(&result)
+			if err := seal.validateSource("test", &result); !errors.Is(err, errSpeculativePublicationAudit) {
+				t.Fatalf("mutation error = %v, want speculative safety sentinel", err)
+			}
+			if seal.info.GetFee() != 7 || string(seal.balanceTrace.GetTransactionIdentifier()) != "tx" || seal.reads.Unsupported {
+				t.Fatal("source mutation escaped into the private publication seal")
+			}
+		})
+	}
+
+	result := base
+	result.writes = cloneTransactionWriteSet(base.writes)
+	result.reads = cloneTransactionReadSet(base.reads)
+	result.info = proto.Clone(base.info).(*corepb.TransactionInfo)
+	result.balanceTrace = proto.Clone(base.balanceTrace).(*contractpb.TransactionBalanceTrace)
+	canonical := result
+	canonical.writes = cloneTransactionWriteSet(result.writes)
+	canonical.reads = cloneTransactionReadSet(result.reads)
+	canonical.info = proto.Clone(result.info).(*corepb.TransactionInfo)
+	canonical.balanceTrace = proto.Clone(result.balanceTrace).(*contractpb.TransactionBalanceTrace)
+	seal, err := newCanonicalPublicationWriteSeal("Transfer", &result, &canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.reads.Unsupported = true
+	result.reads.Reads = nil
+	if err := seal.validateSource("test", &result); err != nil {
+		t.Fatalf("unused speculative read mutation rejected canonical payload: %v", err)
+	}
+	if seal.reads.Unsupported || len(seal.reads.Reads) != 1 {
+		t.Fatal("speculative read mutation escaped into the canonical serial read carrier")
+	}
+}
+
+func TestCanonicalReadSetComparisonIgnoresOnlySchedulerMetadata(t *testing.T) {
+	first := state.TransactionAccessKey{Kind: state.TransactionAccessAccountField, Address: testProcessorAddr(1), AccountField: state.TransactionAccountFieldBalance}
+	second := state.TransactionAccessKey{Kind: state.TransactionAccessDynamicInt, LogicalKey: "transaction_fee"}
+	canonical := state.TransactionReadSet{Reads: []state.TransactionRead{
+		{Key: first, Mode: state.TransactionAccessRead},
+		{Key: second, Mode: state.TransactionAccessCommutativeRead},
+	}}
+	scheduled := state.TransactionReadSet{Reads: []state.TransactionRead{
+		{Key: second, Mode: state.TransactionAccessCommutativeRead, ExpectedWriter: 3, HasExpectedWriter: true},
+		{Key: first, Mode: state.TransactionAccessRead, ExpectedWriter: 1, HasExpectedWriter: true},
+	}}
+	if !equalTransactionReadSetAccesses(canonical, scheduled) {
+		t.Fatal("scheduler metadata or order changed canonical read-set semantics")
+	}
+	scheduled.Reads = scheduled.Reads[:1]
+	if equalTransactionReadSetAccesses(canonical, scheduled) {
+		t.Fatal("missing read was accepted as canonical-equivalent")
+	}
+	scheduled = cloneTransactionReadSet(canonical)
+	scheduled.Unsupported = true
+	if equalTransactionReadSetAccesses(canonical, scheduled) {
+		t.Fatal("unsupported read-set marker was ignored")
 	}
 }
 

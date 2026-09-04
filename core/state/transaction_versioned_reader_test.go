@@ -68,6 +68,14 @@ func TestTransactionVersionedReaderOverlaysAccountAndKV(t *testing.T) {
 	if got, exists, err := sdb.GetAccountKV(addr, kvdomains.SystemReward, []byte("reward")); err != nil || !exists || string(got) != "shared" {
 		t.Fatalf("versioned account KV = %q exists=%v err=%v", got, exists, err)
 	}
+	owned, exists, err := sdb.GetAccountKV(addr, kvdomains.SystemReward, []byte("reward"))
+	if err != nil || !exists {
+		t.Fatalf("owned versioned account KV exists=%v err=%v", exists, err)
+	}
+	owned[0] = 'X'
+	if got, _, _ := sdb.GetAccountKV(addr, kvdomains.SystemReward, []byte("reward")); string(got) != "shared" {
+		t.Fatalf("public GetAccountKV mutation changed shared version: %q", got)
+	}
 	if got, exists, err := sdb.GetAccountKV(addr, kvdomains.SystemReward, []byte("deleted")); err != nil || exists || got != nil {
 		t.Fatalf("versioned tombstone = %q exists=%v err=%v", got, exists, err)
 	}

@@ -17,6 +17,7 @@ func TestInternalTransactionArenaReusesAndClearsRecords(t *testing.T) {
 	tvm.SetInternalTransactionArena(arena)
 	first := tvm.addInternalTransactionWithTokenInfo(caller, target, 7, []byte{1}, "call", map[string]int64{"1000001": 9})
 	first.Rejected = true
+	first.Extra = "must-not-leak"
 	firstHashStorage := &first.Hash[0]
 	if len(first.CallValueInfo) != 2 {
 		t.Fatalf("first call values = %d, want 2", len(first.CallValueInfo))
@@ -24,7 +25,7 @@ func TestInternalTransactionArenaReusesAndClearsRecords(t *testing.T) {
 
 	arena.Reset()
 	tvm.SetInternalTransactionArena(arena)
-	second := tvm.addInternalTransaction(caller, target, 3, []byte{2}, "call", 0, 0)
+	second := tvm.addInternalTransactionWithoutReceiver(caller, 3, []byte{2}, "voteWitness")
 	if second != first {
 		t.Fatal("arena did not reuse the protobuf record")
 	}
@@ -33,6 +34,9 @@ func TestInternalTransactionArenaReusesAndClearsRecords(t *testing.T) {
 	}
 	if second.Rejected {
 		t.Fatal("reused record retained rejected flag")
+	}
+	if second.Extra != "" || len(second.TransferToAddress) != 0 {
+		t.Fatalf("reused record retained variable fields: extra=%q receiver=%x", second.Extra, second.TransferToAddress)
 	}
 	if len(second.CallValueInfo) != 1 || second.CallValueInfo[0].TokenId != "" || second.CallValueInfo[0].CallValue != 3 {
 		t.Fatalf("reused call values = %+v, want one base value", second.CallValueInfo)

@@ -1,13 +1,16 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -50,6 +53,11 @@ const (
 )
 
 var (
+	mainnetCreateTransferFailureRepairCounter   = metrics.NewRegisteredCounter("core/mainnet_state_repair/create_transfer_failure", nil)
+	mainnetParallelVMMissedPaymentRepairCounter = metrics.NewRegisteredCounter("core/mainnet_state_repair/parallel_vm_missed_payment", nil)
+	mainnetCOSTMissedRewardRepairCounter        = metrics.NewRegisteredCounter("core/mainnet_state_repair/cost_missed_reward", nil)
+	mainnetWINKMissingCodeRepairCounter         = metrics.NewRegisteredCounter("core/mainnet_state_repair/wink_missing_runtime", nil)
+
 	mainnetCreateTransferFailureRepairBlockID = tcommon.HexToHash("0000000000c60856f9bd889435bb483b5c66709a508550c78c72c4c0db2aaab2")
 	mainnetCreateTransferFailurePayer         = tcommon.Address{
 		0x41, 0x1e, 0x03, 0xe4, 0x33, 0xaa, 0x39, 0xf4, 0xee, 0x45, 0xc6,
@@ -243,6 +251,59 @@ func repairMainnetWINKMissingRuntimeCode(statedb *state.StateDB, blockNum uint64
 		runtimeOffset:    mainnetWINKRuntimeOffset,
 		runtimeSize:      mainnetWINKRuntimeSize,
 	})
+}
+
+// applyMainnetLegacyStateRepairs makes every one-off state surgery observable
+// and asks the production block path to durably disqualify the datadir. A node
+// that activates any repair may continue serially for recovery purposes, but
+// it did not perform a clean replay and must never pass the speculative
+// execution release gate. Exact pre-images in each repair keep this wrapper
+// inert for a fixed replay.
+func applyMainnetLegacyStateRepairs(
+	statedb *state.StateDB,
+	blockNum uint64,
+	blockID tcommon.Hash,
+	hook func(rawdb.ExecutionSafetyIncident) error,
+) (bool, error) {
+	activated := false
+	record := func(name string, kind rawdb.ExecutionSafetyIncidentKind, counter interface{ Inc(int64) }) error {
+		activated = true
+		counter.Inc(1)
+		log.Error("Legacy mainnet state repair activated",
+			"repair", name,
+			"block", blockNum,
+			"hash", blockID,
+			"releaseEligible", false,
+			"action", "rebuild-from-trusted-pre-divergence-state",
+		)
+		if hook != nil {
+			if err := hook(rawdb.ExecutionSafetyIncident{Kind: kind, BlockNum: blockNum, BlockHash: blockID}); err != nil {
+				return fmt.Errorf("persist %s activation: %w", name, err)
+			}
+		}
+		return nil
+	}
+	if repairMainnetCreateTransferFailureOvercharge(statedb, blockNum, blockID) {
+		if err := record("create-transfer-failure-overcharge", rawdb.ExecutionSafetyIncidentCreateTransferRepair, mainnetCreateTransferFailureRepairCounter); err != nil {
+			return true, err
+		}
+	}
+	if repairMainnetParallelVMMissedPayment(statedb, blockNum, blockID) {
+		if err := record("parallel-vm-missed-payment", rawdb.ExecutionSafetyIncidentParallelVMRepair, mainnetParallelVMMissedPaymentRepairCounter); err != nil {
+			return true, err
+		}
+	}
+	if repairMainnetCOSTMissedReward(statedb, blockNum, blockID) {
+		if err := record("cost-missed-reward", rawdb.ExecutionSafetyIncidentCOSTRepair, mainnetCOSTMissedRewardRepairCounter); err != nil {
+			return true, err
+		}
+	}
+	if repairMainnetWINKMissingRuntimeCode(statedb, blockNum, blockID) {
+		if err := record("wink-missing-runtime", rawdb.ExecutionSafetyIncidentWINKCodeRepair, mainnetWINKMissingCodeRepairCounter); err != nil {
+			return true, err
+		}
+	}
+	return activated, nil
 }
 
 // ApplyTransaction executes a single transaction against the given state.
@@ -628,9 +689,10 @@ func (p *transactionInfoBatchPool) release(batch *transactionInfoBatch) {
 	}
 }
 
-// buildTransactionInfo constructs an independently owned TransactionInfo.
-// processBlock uses transactionInfoSlot.build with a block-sized slot array;
-// standalone callers retain the same ownership through one dedicated slot.
+// buildTransactionInfo constructs a TransactionInfo. processBlock uses
+// transactionInfoSlot.build with a block-sized slot array whose log and
+// internal-transaction arenas remain owned until metadata serialization has
+// completed; standalone callers keep their supplied immutable result payloads.
 func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64, supportTransactionFeePool bool) *corepb.TransactionInfo {
 	return new(transactionInfoSlot).build(tx, result, blockNum, blockTime, supportTransactionFeePool)
 }
@@ -649,12 +711,13 @@ func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.R
 	// balance-paid bill in SUN (proto field 2). The split between
 	// EnergyUsed/EnergyFee is set by actuator.PayEnergyBill.
 	slot.receipt = corepb.ResourceReceipt{
-		EnergyUsage:       result.EnergyUsed,
-		EnergyFee:         result.EnergyFee,
-		OriginEnergyUsage: result.OriginEnergyUsage,
-		EnergyUsageTotal:  result.EnergyUsageTotal,
-		NetUsage:          result.NetUsage,
-		NetFee:            result.NetFee,
+		EnergyUsage:        result.EnergyUsed,
+		EnergyFee:          result.EnergyFee,
+		OriginEnergyUsage:  result.OriginEnergyUsage,
+		EnergyUsageTotal:   result.EnergyUsageTotal,
+		NetUsage:           result.NetUsage,
+		NetFee:             result.NetFee,
+		EnergyPenaltyTotal: result.EnergyPenaltyTotal,
 	}
 	info := &slot.info
 	*info = corepb.TransactionInfo{
@@ -739,6 +802,16 @@ func (slot *transactionInfoSlot) build(tx *types.Transaction, result *actuator.R
 	}
 	if len(slot.logPointers) > 0 {
 		info.Log = slot.logPointers[:len(slot.logPointers):len(slot.logPointers)]
+	}
+	// java-tron persists ProgramResult.internalTransactions in TransactionInfo
+	// only when its node-local saveInternalTx option is enabled. The execution
+	// arena is owned by this
+	// transactionInfoSlot and the batch is not recycled until synchronous or
+	// asynchronous metadata serialization completes, so no deep copy is needed
+	// on the canonical hot path. Cap the view to prevent append from reaching
+	// arena-owned spare entries.
+	if len(result.InternalTransactions) > 0 {
+		info.InternalTransactions = result.InternalTransactions[:len(result.InternalTransactions):len(result.InternalTransactions)]
 	}
 	if result.ContractRet > 1 {
 		info.Result = corepb.TransactionInfo_FAILED
@@ -916,7 +989,24 @@ type processBlockOptions struct {
 	captureBalanceTrace           bool
 	minParallelTransferCandidates int
 	timing                        *processBlockTiming
+	// Test-only hooks exercise both sides of the publication mutation boundary.
+	// Production always leaves them nil.
+	speculativePreOracleTestHook   func(family string, txIndex int, result *discardShadowTaskResult)
+	speculativePostOracleTestHook  func(family string, txIndex int, result *discardShadowTaskResult)
+	speculativePreApplyTestHook    func(family string, txIndex int, writes state.TransactionWriteSet)
+	speculativePostApplyTestHook   func(family string, txIndex int, writes state.TransactionWriteSet)
+	legacyStateRepairHook          func(rawdb.ExecutionSafetyIncident) error
+	saveInternalTx                 bool
+	saveFeaturedInternalTx         bool
+	saveCancelAllUnfreezeV2Details bool
 }
+
+// errSpeculativePublicationAudit marks a publication attempt that cannot
+// safely continue, including a post-preflight apply failure or an invariant
+// discovered after canonical state was touched. The processBlock snapshot
+// rolls that attempt back; BlockChain then opens its sticky safety circuit and
+// retries the complete block with both speculative publishers disabled.
+var errSpeculativePublicationAudit = errors.New("speculative publication safety audit failed")
 
 // processBlockTiming contains nested, diagnostic-only slices of applyBlock's
 // Execute phase. It is deliberately passed through processBlockOptions so
@@ -975,10 +1065,17 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			dynProps.CommitSnapshot(dpSnap)
 		}
 	}()
-	repairMainnetCreateTransferFailureOvercharge(statedb, block.Number(), block.Hash())
-	repairMainnetParallelVMMissedPayment(statedb, block.Number(), block.Hash())
-	repairMainnetCOSTMissedReward(statedb, block.Number(), block.Hash())
-	repairMainnetWINKMissingRuntimeCode(statedb, block.Number(), block.Hash())
+	repairActivated, repairErr := applyMainnetLegacyStateRepairs(statedb, block.Number(), block.Hash(), options.legacyStateRepairHook)
+	if repairErr != nil {
+		return nil, tcommon.Hash{}, repairErr
+	}
+	if repairActivated {
+		// A legacy-corrupted pre-image is incompatible with a clean rollout.
+		// Even recovery execution in this process must remain serial from the
+		// repair boundary onward.
+		options.parallelTransfers = false
+		options.parallelVM = false
+	}
 
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)
@@ -1121,8 +1218,8 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			}
 			if discardShadow.sampled {
 				versionedShadow.EnableWriteSetCapture(len(transactions))
-			} else if senderRetry != nil {
-				include, fullTransactions, recorderOnly := newDiscardShadowRetryWriteCapture(senderRetry.source, len(transactions))
+			} else if transferPreexecution != nil {
+				include, fullTransactions, recorderOnly := newDiscardShadowRetryWriteCapture(transferPreexecution, len(transactions))
 				versionedShadow.EnableWriteSetCaptureFiltered(len(transactions), include, fullTransactions, recorderOnly)
 			}
 			if (senderRetry != nil && senderRetry.async) || (vmSenderRetry != nil && vmSenderRetry.async) {
@@ -1227,30 +1324,87 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					parallelTransferRetryPreflightFallbackCounter.Inc(1)
 					parallelTransferPreflightFallbackCounter.Inc(1)
 				default:
-					publishedStarted := time.Now()
-					versionedShadow.recorder.RestoreReadSet(retryResult.reads)
-					publishErr := statedb.ApplyTransactionWriteSetRecorded(retryResult.writes, dynProps, transactionDB, &versionedShadow.recorder)
-					publicNetOverride.restore()
-					if publishErr != nil {
+					if options.speculativePreOracleTestHook != nil {
+						options.speculativePreOracleTestHook("Transfer", i, retryResult)
+					}
+					balanceMatch, balanceErr := validateTransferBalancePostImages(statedb, tx, retryResult, discardCfg, i)
+					if balanceErr != nil {
+						publicNetOverride.restore()
 						parallelTransferRetryErrorsCounter.Inc(1)
 						parallelTransferErrorsCounter.Inc(1)
-						return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish async sender retry: %w", i, publishErr)
+						return nil, tcommon.Hash{}, balanceErr
 					}
+					if !balanceMatch {
+						publicNetOverride.restore()
+						break
+					}
+					canonicalResult, oracleErr := validateTransferResultAtCanonicalBoundary(statedb, dynProps, i, retryResult, discardCfg, versionedShadow)
+					if oracleErr != nil {
+						publicNetOverride.restore()
+						parallelTransferRetryErrorsCounter.Inc(1)
+						parallelTransferErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, oracleErr
+					}
+					writeSeal, sealErr := newCanonicalPublicationWriteSeal("Transfer", retryResult, canonicalResult)
+					if sealErr != nil {
+						publicNetOverride.restore()
+						parallelTransferRetryErrorsCounter.Inc(1)
+						parallelTransferErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, sealErr
+					}
+					if options.speculativePostOracleTestHook != nil {
+						options.speculativePostOracleTestHook("Transfer", i, retryResult)
+					}
+					if options.speculativePreApplyTestHook != nil {
+						options.speculativePreApplyTestHook("Transfer", i, retryResult.writes)
+					}
+					if err := writeSeal.validateSource("before apply", retryResult); err != nil {
+						publicNetOverride.restore()
+						parallelTransferRetryErrorsCounter.Inc(1)
+						parallelTransferErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, err
+					}
+					publishedStarted := time.Now()
+					versionedShadow.recorder.RestoreReadSet(writeSeal.reads)
+					publishErr := statedb.ApplyTransactionWriteSetRecorded(writeSeal.writes, dynProps, transactionDB, &versionedShadow.recorder)
+					if publishErr != nil {
+						publicNetOverride.restore()
+						parallelTransferRetryErrorsCounter.Inc(1)
+						parallelTransferErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish async sender retry: %v", errSpeculativePublicationAudit, i, publishErr)
+					}
+					if options.speculativePostApplyTestHook != nil {
+						options.speculativePostApplyTestHook("Transfer", i, retryResult.writes)
+					}
+					if err := writeSeal.validateSource("after apply", retryResult); err != nil {
+						publicNetOverride.restore()
+						parallelTransferRetryErrorsCounter.Inc(1)
+						parallelTransferErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, err
+					}
+					writeSeal.markMatched()
 					statedb.FinalizeTransaction()
-					statedb.AppendBalanceTraceTransaction(retryResult.balanceTrace)
+					statedb.AppendBalanceTraceTransaction(writeSeal.balanceTrace)
 					if collectTxInfos {
-						txInfos[i] = retryResult.info
+						txInfos[i] = writeSeal.info
 					}
 					txHash := tx.Hash()
 					if len(discardCfg.canonicalBalanceTraces) == len(transactions) {
 						discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
 					}
 					versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
-					transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(retryResult.writes))
-					if err := flushDomainChanges(i, domainChangeMark); err != nil {
+					if err := validateCanonicalPublicationWriteSet("Transfer", i, writeSeal.writes, versionedShadow); err != nil {
+						publicNetOverride.restore()
 						parallelTransferRetryErrorsCounter.Inc(1)
 						parallelTransferErrorsCounter.Inc(1)
 						return nil, tcommon.Hash{}, err
+					}
+					publicNetOverride.restore()
+					transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(writeSeal.writes))
+					if err := flushDomainChanges(i, domainChangeMark); err != nil {
+						parallelTransferRetryErrorsCounter.Inc(1)
+						parallelTransferErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, fmt.Errorf("%w: publish async Transfer domain changes: %v", errSpeculativePublicationAudit, err)
 					}
 					senderRetry.markPublished(i)
 					parallelTransferRetryPublishedCounter.Inc(1)
@@ -1298,28 +1452,79 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					parallelTransferPreflightFallbackCounter.Inc(1)
 					break
 				}
-				publishedStarted := time.Now()
-				versionedShadow.recorder.RestoreReadSet(preResult.reads)
-				publishErr := statedb.ApplyTransactionWriteSetRecorded(preResult.writes, dynProps, transactionDB, &versionedShadow.recorder)
-				publicNetOverride.restore()
-				if publishErr != nil {
-					parallelTransferErrorsCounter.Inc(1)
-					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed transfer: %w", i, publishErr)
+				if options.speculativePreOracleTestHook != nil {
+					options.speculativePreOracleTestHook("Transfer", i, preResult)
 				}
+				balanceMatch, balanceErr := validateTransferBalancePostImages(statedb, tx, preResult, discardCfg, i)
+				if balanceErr != nil {
+					publicNetOverride.restore()
+					parallelTransferErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, balanceErr
+				}
+				if !balanceMatch {
+					publicNetOverride.restore()
+					break
+				}
+				canonicalResult, oracleErr := validateTransferResultAtCanonicalBoundary(statedb, dynProps, i, preResult, discardCfg, versionedShadow)
+				if oracleErr != nil {
+					publicNetOverride.restore()
+					parallelTransferErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, oracleErr
+				}
+				writeSeal, sealErr := newCanonicalPublicationWriteSeal("Transfer", preResult, canonicalResult)
+				if sealErr != nil {
+					publicNetOverride.restore()
+					parallelTransferErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, sealErr
+				}
+				if options.speculativePostOracleTestHook != nil {
+					options.speculativePostOracleTestHook("Transfer", i, preResult)
+				}
+				if options.speculativePreApplyTestHook != nil {
+					options.speculativePreApplyTestHook("Transfer", i, preResult.writes)
+				}
+				if err := writeSeal.validateSource("before apply", preResult); err != nil {
+					publicNetOverride.restore()
+					parallelTransferErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, err
+				}
+				publishedStarted := time.Now()
+				versionedShadow.recorder.RestoreReadSet(writeSeal.reads)
+				publishErr := statedb.ApplyTransactionWriteSetRecorded(writeSeal.writes, dynProps, transactionDB, &versionedShadow.recorder)
+				if publishErr != nil {
+					publicNetOverride.restore()
+					parallelTransferErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish pre-executed transfer: %v", errSpeculativePublicationAudit, i, publishErr)
+				}
+				if options.speculativePostApplyTestHook != nil {
+					options.speculativePostApplyTestHook("Transfer", i, preResult.writes)
+				}
+				if err := writeSeal.validateSource("after apply", preResult); err != nil {
+					publicNetOverride.restore()
+					parallelTransferErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, err
+				}
+				writeSeal.markMatched()
 				statedb.FinalizeTransaction()
-				statedb.AppendBalanceTraceTransaction(preResult.balanceTrace)
+				statedb.AppendBalanceTraceTransaction(writeSeal.balanceTrace)
 				if collectTxInfos {
-					txInfos[i] = preResult.info
+					txInfos[i] = writeSeal.info
 				}
 				txHash := tx.Hash()
 				if len(discardCfg.canonicalBalanceTraces) == len(transactions) {
 					discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
 				}
 				versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
-				transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(preResult.writes))
-				if err := flushDomainChanges(i, domainChangeMark); err != nil {
+				if err := validateCanonicalPublicationWriteSet("Transfer", i, writeSeal.writes, versionedShadow); err != nil {
+					publicNetOverride.restore()
 					parallelTransferErrorsCounter.Inc(1)
 					return nil, tcommon.Hash{}, err
+				}
+				publicNetOverride.restore()
+				transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(writeSeal.writes))
+				if err := flushDomainChanges(i, domainChangeMark); err != nil {
+					parallelTransferErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, fmt.Errorf("%w: publish Transfer domain changes: %v", errSpeculativePublicationAudit, err)
 				}
 				parallelTransferPublishedCounter.Inc(1)
 				if preResult.senderVersioned {
@@ -1372,45 +1577,85 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 						parallelVMPreflightFallbackCounter.Inc(1)
 						break
 					}
+					if options.speculativePreOracleTestHook != nil {
+						options.speculativePreOracleTestHook("VM", i, retryResult)
+					}
 					// Retry publication must pass the same independent serial oracle as
 					// block-start publication. Read-version validation proves only the
 					// dependencies the worker recorded; it cannot prove that an omitted
 					// read or a shared bad execution base did not affect the result.
-					if !validateVMResultAtCanonicalBoundary(statedb, dynProps, i, retryResult, discardCfg) {
+					canonicalResult, oracleErr := validateVMResultAtCanonicalBoundary(statedb, dynProps, i, retryResult, discardCfg)
+					if oracleErr != nil {
 						publicNetOverride.restore()
-						parallelVMAsyncRetryPublishPreflightCounter.Inc(1)
-						parallelVMPreflightFallbackCounter.Inc(1)
-						break
-					}
-					publishedStarted := time.Now()
-					versionedShadow.recorder.RestoreReadSet(retryResult.reads)
-					publishErr := statedb.ApplyTransactionWriteSetRecorded(retryResult.writes, dynProps, transactionDB, &versionedShadow.recorder)
-					publicNetOverride.restore()
-					if publishErr != nil {
 						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
 						parallelVMErrorsCounter.Inc(1)
-						return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish async VM sender retry: %w", i, publishErr)
+						return nil, tcommon.Hash{}, oracleErr
 					}
+					writeSeal, sealErr := newCanonicalPublicationWriteSeal("VM", retryResult, canonicalResult)
+					if sealErr != nil {
+						publicNetOverride.restore()
+						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
+						parallelVMErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, sealErr
+					}
+					if options.speculativePostOracleTestHook != nil {
+						options.speculativePostOracleTestHook("VM", i, retryResult)
+					}
+					if options.speculativePreApplyTestHook != nil {
+						options.speculativePreApplyTestHook("VM", i, retryResult.writes)
+					}
+					if err := writeSeal.validateSource("before apply", retryResult); err != nil {
+						publicNetOverride.restore()
+						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
+						parallelVMErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, err
+					}
+					publishedStarted := time.Now()
+					versionedShadow.recorder.RestoreReadSet(writeSeal.reads)
+					publishErr := statedb.ApplyTransactionWriteSetRecorded(writeSeal.writes, dynProps, transactionDB, &versionedShadow.recorder)
+					if publishErr != nil {
+						publicNetOverride.restore()
+						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
+						parallelVMErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish async VM sender retry: %v", errSpeculativePublicationAudit, i, publishErr)
+					}
+					if options.speculativePostApplyTestHook != nil {
+						options.speculativePostApplyTestHook("VM", i, retryResult.writes)
+					}
+					if err := writeSeal.validateSource("after apply", retryResult); err != nil {
+						publicNetOverride.restore()
+						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
+						parallelVMErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, err
+					}
+					writeSeal.markMatched()
 					statedb.FinalizeTransaction()
-					statedb.AppendBalanceTraceTransaction(retryResult.balanceTrace)
+					statedb.AppendBalanceTraceTransaction(writeSeal.balanceTrace)
 					if collectTxInfos {
-						txInfos[i] = retryResult.info
+						txInfos[i] = writeSeal.info
 					}
 					txHash := tx.Hash()
 					if len(discardCfg.canonicalBalanceTraces) == len(transactions) {
 						discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
 					}
 					versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
-					transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(retryResult.writes))
-					if err := flushDomainChanges(i, domainChangeMark); err != nil {
+					if err := validateCanonicalPublicationWriteSet("VM", i, writeSeal.writes, versionedShadow); err != nil {
+						publicNetOverride.restore()
 						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
 						parallelVMErrorsCounter.Inc(1)
 						return nil, tcommon.Hash{}, err
 					}
+					publicNetOverride.restore()
+					transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(writeSeal.writes))
+					if err := flushDomainChanges(i, domainChangeMark); err != nil {
+						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
+						parallelVMErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, fmt.Errorf("%w: publish async VM domain changes: %v", errSpeculativePublicationAudit, err)
+					}
 					if dynProps.BlockEnergyUsage() != blockEnergyBaseline {
 						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
 						parallelVMErrorsCounter.Inc(1)
-						return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish async VM retry changed block energy before settlement", i)
+						return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish async VM retry changed block energy before settlement", errSpeculativePublicationAudit, i)
 					}
 					if blockEnergyExpected != blockEnergyBaseline {
 						dynProps.SetBlockEnergyUsage(blockEnergyExpected)
@@ -1467,42 +1712,78 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					parallelVMPublicNetFallbackCounter.Inc(1)
 					break
 				}
-				if !validateVMResultAtCanonicalBoundary(statedb, dynProps, i, preResult, discardCfg) {
-					publicNetOverride.restore()
-					parallelVMPreflightFallbackCounter.Inc(1)
-					break
-				}
 				if err := statedb.ValidateTransactionWriteSetApply(preResult.writes, dynProps, transactionDB); err != nil {
 					publicNetOverride.restore()
 					parallelVMPreflightFallbackCounter.Inc(1)
 					break
 				}
-				publishedStarted := time.Now()
-				versionedShadow.recorder.RestoreReadSet(preResult.reads)
-				publishErr := statedb.ApplyTransactionWriteSetRecorded(preResult.writes, dynProps, transactionDB, &versionedShadow.recorder)
-				publicNetOverride.restore()
-				if publishErr != nil {
-					parallelVMErrorsCounter.Inc(1)
-					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed VM: %w", i, publishErr)
+				if options.speculativePreOracleTestHook != nil {
+					options.speculativePreOracleTestHook("VM", i, preResult)
 				}
+				canonicalResult, oracleErr := validateVMResultAtCanonicalBoundary(statedb, dynProps, i, preResult, discardCfg)
+				if oracleErr != nil {
+					publicNetOverride.restore()
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, oracleErr
+				}
+				writeSeal, sealErr := newCanonicalPublicationWriteSeal("VM", preResult, canonicalResult)
+				if sealErr != nil {
+					publicNetOverride.restore()
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, sealErr
+				}
+				if options.speculativePostOracleTestHook != nil {
+					options.speculativePostOracleTestHook("VM", i, preResult)
+				}
+				if options.speculativePreApplyTestHook != nil {
+					options.speculativePreApplyTestHook("VM", i, preResult.writes)
+				}
+				if err := writeSeal.validateSource("before apply", preResult); err != nil {
+					publicNetOverride.restore()
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, err
+				}
+				publishedStarted := time.Now()
+				versionedShadow.recorder.RestoreReadSet(writeSeal.reads)
+				publishErr := statedb.ApplyTransactionWriteSetRecorded(writeSeal.writes, dynProps, transactionDB, &versionedShadow.recorder)
+				if publishErr != nil {
+					publicNetOverride.restore()
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish pre-executed VM: %v", errSpeculativePublicationAudit, i, publishErr)
+				}
+				if options.speculativePostApplyTestHook != nil {
+					options.speculativePostApplyTestHook("VM", i, preResult.writes)
+				}
+				if err := writeSeal.validateSource("after apply", preResult); err != nil {
+					publicNetOverride.restore()
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, err
+				}
+				writeSeal.markMatched()
 				statedb.FinalizeTransaction()
-				statedb.AppendBalanceTraceTransaction(preResult.balanceTrace)
+				statedb.AppendBalanceTraceTransaction(writeSeal.balanceTrace)
 				if collectTxInfos {
-					txInfos[i] = preResult.info
+					txInfos[i] = writeSeal.info
 				}
 				txHash := tx.Hash()
 				if len(discardCfg.canonicalBalanceTraces) == len(transactions) {
 					discardCfg.canonicalBalanceTraces[i] = statedb.CopyLastBalanceTraceTransaction(txHash.Bytes())
 				}
 				versionedShadow.ObserveTransaction(i, tx, statedb, dynProps, domainChangeMark)
-				transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(preResult.writes))
-				if err := flushDomainChanges(i, domainChangeMark); err != nil {
+				if err := validateCanonicalPublicationWriteSet("VM", i, writeSeal.writes, versionedShadow); err != nil {
+					publicNetOverride.restore()
 					parallelVMErrorsCounter.Inc(1)
 					return nil, tcommon.Hash{}, err
 				}
+				publicNetOverride.restore()
+				transferShadow.Observe(tx, statedb, domainChangeMark, transactionWriteSetChangesDynamic(writeSeal.writes))
+				if err := flushDomainChanges(i, domainChangeMark); err != nil {
+					parallelVMErrorsCounter.Inc(1)
+					return nil, tcommon.Hash{}, fmt.Errorf("%w: publish VM domain changes: %v", errSpeculativePublicationAudit, err)
+				}
 				if dynProps.BlockEnergyUsage() != blockEnergyBaseline {
 					parallelVMErrorsCounter.Inc(1)
-					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed VM changed block energy before settlement", i)
+					return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish pre-executed VM changed block energy before settlement", errSpeculativePublicationAudit, i)
 				}
 				if blockEnergyExpected != dynProps.BlockEnergyUsage() {
 					dynProps.SetBlockEnergyUsage(blockEnergyExpected)
@@ -1510,7 +1791,7 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 				vmSenderChainPreexecution.validateBlockEnergyBoundary(i, dynProps)
 				if !vmSenderChainPreexecution.blockEnergyBoundaryMatched(i) {
 					parallelVMErrorsCounter.Inc(1)
-					return nil, tcommon.Hash{}, fmt.Errorf("tx %d publish pre-executed VM block energy mismatch", i)
+					return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish pre-executed VM block energy mismatch", errSpeculativePublicationAudit, i)
 				}
 				vmSenderChainPreexecution.markPublished(i)
 				parallelVMPublishedCounter.Inc(1)
@@ -1602,7 +1883,10 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		_ = discardShadow.finishVMSenderChains(vmSenderChainPreexecution, versionedShadow, discardCfg)
 	}
 	if senderRetry != nil {
-		_ = senderRetry.finish(versionedShadow, discardCfg)
+		stats := senderRetry.finish(versionedShadow, discardCfg)
+		if err := validatePublishedRetryAudit("Transfer", stats); err != nil {
+			return nil, tcommon.Hash{}, err
+		}
 	}
 	if vmSenderRetry != nil {
 		stats := vmSenderRetry.finish(versionedShadow, discardCfg)
@@ -1610,6 +1894,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			recordVMAsyncSenderRetryStats(stats)
 		} else {
 			recordVMSenderRetryStats(stats)
+		}
+		if err := validatePublishedRetryAudit("VM", stats); err != nil {
+			return nil, tcommon.Hash{}, err
 		}
 	}
 	if discardShadow != nil && discardShadow.sampled {
@@ -1667,8 +1954,50 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		transferShadow.Publish()
 		versionedShadow.Publish(statedb, dynProps)
 	}
+	filterTransactionInfoInternalTransactions(txInfos, options.saveInternalTx, options.saveFeaturedInternalTx, options.saveCancelAllUnfreezeV2Details)
 
 	return txInfos, javaAccountStateRoot, nil
+}
+
+// filterTransactionInfoInternalTransactions mirrors java-tron's
+// TransactionUtil.newTransactionInfo node-local vm.save* filtering. It runs
+// after every speculative/serial parity audit so the oracles always compare the
+// complete ProgramResult, then narrows only the persisted API receipt view.
+func filterTransactionInfoInternalTransactions(infos []*corepb.TransactionInfo, saveInternal, saveFeatured, saveCancelDetails bool) {
+	for _, info := range infos {
+		if info == nil || len(info.InternalTransactions) == 0 {
+			continue
+		}
+		if !saveInternal {
+			info.InternalTransactions = nil
+			continue
+		}
+		if !saveFeatured {
+			kept := info.InternalTransactions[:0]
+			for _, internal := range info.InternalTransactions {
+				if internal == nil {
+					continue
+				}
+				note := internal.Note
+				if bytes.Equal(note, []byte("call")) || bytes.Equal(note, []byte("create")) || bytes.Equal(note, []byte("suicide")) {
+					kept = append(kept, internal)
+				}
+			}
+			if len(kept) == 0 {
+				info.InternalTransactions = nil
+			} else {
+				info.InternalTransactions = kept[:len(kept):len(kept)]
+			}
+			continue
+		}
+		if !saveCancelDetails {
+			for _, internal := range info.InternalTransactions {
+				if internal != nil && bytes.Equal(internal.Note, []byte("cancelAllUnfreezeV2")) {
+					internal.Extra = ""
+				}
+			}
+		}
+	}
 }
 
 func countPlainTransferCandidates(transactions []*types.Transaction) int {

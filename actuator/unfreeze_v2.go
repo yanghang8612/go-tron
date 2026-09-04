@@ -69,7 +69,10 @@ func (a *UnfreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 
 	withdrawReward(ctx.DB, ctx.State, ctx.DynProps, ownerAddr)
 	withdrawnExpired := ctx.State.RemoveExpiredUnfreezeV2(ownerAddr, ctx.PrevBlockTime)
-	if withdrawnExpired > 0 {
+	// Java's embedded unfreezeExpire helper always assigns balance+wrappingSum;
+	// it does not reuse the standalone withdrawal validator. Preserve malformed
+	// negative sums as well as ordinary positive withdrawals.
+	if withdrawnExpired != 0 {
 		ctx.State.AddBalance(ownerAddr, withdrawnExpired)
 	}
 
@@ -160,7 +163,7 @@ func updateVotesAfterUnfreezeV2(ctx *Context, ownerAddr common.Address, resource
 	}
 	newVotes := make([]*corepb.Vote, 0, len(votes))
 	for _, v := range votes {
-		newVoteCount := int64(float64(v.VoteCount) / float64(totalVotes) * float64(ownedTronPower) / float64(params.TRXPrecision))
+		newVoteCount := common.JavaDoubleToInt64(float64(v.VoteCount) / float64(totalVotes) * float64(ownedTronPower) / float64(params.TRXPrecision))
 		if newVoteCount > 0 {
 			newVotes = append(newVotes, &corepb.Vote{
 				VoteAddress: v.VoteAddress,

@@ -1036,7 +1036,7 @@ func (s *isolationStubBackend) TriggerConstantContractAt(owner, contract common.
 	if s.constantAtErr != nil {
 		return nil, s.constantAtErr
 	}
-	return &tronapi.TriggerResult{Result: []byte("bound"), EnergyUsed: 99}, nil
+	return &tronapi.TriggerResult{Result: []byte("bound"), EnergyUsed: 99, EnergyPenalty: 17}, nil
 }
 
 func (s *isolationStubBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
@@ -2007,12 +2007,13 @@ func assertConstantExecutionUsesBound(t *testing.T, prefix string, stub *isolati
 	}
 	var trigger struct {
 		EnergyUsed     int64    `json:"energy_used"`
+		EnergyPenalty  int64    `json:"energy_penalty"`
 		ConstantResult []string `json:"constant_result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&trigger); err != nil {
 		t.Fatal(err)
 	}
-	if trigger.EnergyUsed != 99 || len(trigger.ConstantResult) != 1 || trigger.ConstantResult[0] != "626f756e64" {
+	if trigger.EnergyUsed != 99 || trigger.EnergyPenalty != 17 || len(trigger.ConstantResult) != 1 || trigger.ConstantResult[0] != "626f756e64" {
 		t.Fatalf("trigger response = %+v, want bound result/energy", trigger)
 	}
 	if stub.constantAtBlock != wantBlock {

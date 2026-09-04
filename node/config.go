@@ -32,6 +32,12 @@ type Config struct {
 	SyncETLBufferMiB uint64
 	SyncETLBatchMiB  uint64
 
+	// VM receipt persistence mirrors java-tron's node-local vm.save* options.
+	// These do not affect block execution or consensus state.
+	SaveInternalTx                 bool
+	SaveFeaturedInternalTx         bool
+	SaveCancelAllUnfreezeV2Details bool
+
 	// NetworkID matches the value java-tron peers send in HelloMessage. Defaults
 	// to 1 (libp2p default). Mainnet/Nile should override via params.
 	NetworkID int32

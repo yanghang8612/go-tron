@@ -1,10 +1,39 @@
 package state
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
 )
+
+// TestDynamicPropertiesCopyFieldPolicy is deliberately exhaustive. The
+// isolated canonical VM oracle depends on DynamicProperties.Copy remaining an
+// exact value snapshot while dropping rollback history and recorder ownership.
+// A newly added field must therefore receive an explicit copy/reset policy.
+func TestDynamicPropertiesCopyFieldPolicy(t *testing.T) {
+	policies := map[string]string{
+		"props":                 "deep-copy",
+		"dirty":                 "deep-copy",
+		"stringProps":           "deep-copy",
+		"stringDirty":           "deep-copy",
+		"latestBlockHeaderHash": "copy",
+		"hashDirty":             "copy",
+		"transactionAccess":     "reset-recorder",
+		"journal":               "reset-history",
+		"snapshots":             "reset-history",
+	}
+	typ := reflect.TypeOf(DynamicProperties{})
+	if len(policies) != typ.NumField() {
+		t.Fatalf("DynamicProperties copy policy covers %d fields, struct has %d", len(policies), typ.NumField())
+	}
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i).Name
+		if policies[field] == "" {
+			t.Fatalf("DynamicProperties field %q has no copy policy", field)
+		}
+	}
+}
 
 func TestDynamicPropertiesSnapshotNestedRollback(t *testing.T) {
 	dp := NewDynamicProperties()
@@ -188,14 +217,51 @@ func TestDynamicPropertiesCopyIsIndependentAndLazilyMutable(t *testing.T) {
 	dp := NewDynamicProperties()
 	dp.Set("copy_int", 1)
 	dp.SetString("copy_string", "one")
+	dp.SetLatestBlockHeaderHash(common.Hash{0x11})
+	sourceSnapshot := dp.Snapshot()
+	dp.Set("copy_journal_int", 7)
+	dp.SetString("copy_journal_string", "seven")
+	dp.SetLatestBlockHeaderHash(common.Hash{0x22})
+	var recorder TransactionAccessRecorder
+	dp.SetTransactionAccessRecorder(&recorder)
 	cp := dp.Copy()
+	if cp.transactionAccess != nil || len(cp.journal) != 0 || len(cp.snapshots) != 0 {
+		t.Fatalf("copy retained recorder or rollback history: recorder=%p journal=%d snapshots=%d",
+			cp.transactionAccess, len(cp.journal), len(cp.snapshots))
+	}
+	if cp.latestBlockHeaderHash != (common.Hash{0x22}) || !cp.hashDirty {
+		t.Fatalf("copy hash state = %x dirty=%v, want 22/true", cp.latestBlockHeaderHash, cp.hashDirty)
+	}
+	if !reflect.DeepEqual(cp.props, dp.props) || !reflect.DeepEqual(cp.dirty, dp.dirty) ||
+		!reflect.DeepEqual(cp.stringProps, dp.stringProps) || !reflect.DeepEqual(cp.stringDirty, dp.stringDirty) {
+		t.Fatal("copy omitted a dynamic-property value or dirty map")
+	}
+	delete(cp.dirty, "copy_int")
+	delete(cp.stringDirty, "copy_string")
+	if _, ok := dp.dirty["copy_int"]; !ok {
+		t.Fatal("copy integer dirty map aliases source")
+	}
+	if _, ok := dp.stringDirty["copy_string"]; !ok {
+		t.Fatal("copy string dirty map aliases source")
+	}
 	cp.Set("copy_int", 2)
 	cp.SetString("copy_string", "two")
+	cp.SetLatestBlockHeaderHash(common.Hash{0x33})
 	if got, _ := dp.Get("copy_int"); got != 1 {
 		t.Fatalf("source int after copy mutation = %d, want 1", got)
 	}
 	if got, _ := dp.GetString("copy_string"); got != "one" {
 		t.Fatalf("source string after copy mutation = %q, want one", got)
+	}
+	if got := dp.LatestBlockHeaderHash(); got != (common.Hash{0x22}) {
+		t.Fatalf("source hash after copy mutation = %x, want 22", got)
+	}
+	dp.RevertToSnapshot(sourceSnapshot)
+	if got, ok := cp.Get("copy_journal_int"); !ok || got != 7 {
+		t.Fatalf("copy changed after source rollback = %d ok=%v, want 7/true", got, ok)
+	}
+	if got := cp.LatestBlockHeaderHash(); got != (common.Hash{0x33}) {
+		t.Fatalf("copy hash after source rollback = %x, want 33", got)
 	}
 
 	// Copy deliberately keeps empty maps nil. Public mutators must lazily make

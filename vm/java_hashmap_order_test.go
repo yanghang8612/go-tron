@@ -97,6 +97,56 @@ func TestJavaHashMapOrderMatchesGolden(t *testing.T) {
 	t.Logf("SV-2 golden: %d cases, %d with out!=in", cases, reordered)
 }
 
+func javaIdentityTieWitnesses(t *testing.T) []tcommon.Address {
+	t.Helper()
+	hexAddresses := []string{
+		"41000000000000000000000000000000000000001f",
+		"410000000000000000000000000000000000000100",
+		"41000000000000000000000000000000000000005f",
+		"41000000000000000000000000000000000000009f",
+		"4100000000000000000000000000000000000000df",
+		"410000000000000000000000000000000000000140",
+		"410000000000000000000000000000000000000180",
+		"4100000000000000000000000000000000000001c0",
+		"410000000000000000000000000000000000000221",
+		"410000000000000000000000000000000000000261",
+		"4100000000000000000000000000000000000002a1",
+	}
+	out := make([]tcommon.Address, 0, len(hexAddresses))
+	for _, encoded := range hexAddresses {
+		raw, err := hex.DecodeString(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var addr tcommon.Address
+		copy(addr[:], raw)
+		out = append(out, addr)
+	}
+	return out
+}
+
+func TestJavaHashMapOrderExactTreeHashCollisionFailsClosed(t *testing.T) {
+	entries := javaIdentityTieWitnesses(t)
+	firstHash := javaHashSpread(byteStringHashCode(entries[0][:]))
+	secondHash := javaHashSpread(byteStringHashCode(entries[1][:]))
+	if firstHash != secondHash {
+		t.Fatalf("fixture lost exact spread collision: %08x != %08x", uint32(firstHash), uint32(secondHash))
+	}
+	for i, addr := range entries {
+		h := javaHashSpread(byteStringHashCode(addr[:]))
+		if uint32(h)&63 != uint32(firstHash)&63 {
+			t.Fatalf("fixture %d is outside shared 64-bin bucket", i)
+		}
+	}
+	order, reproducible := javaHashMapOrderChecked(entries)
+	if reproducible {
+		t.Fatal("treeified exact-hash collision must report System.identityHashCode ambiguity")
+	}
+	if len(order) != len(entries) {
+		t.Fatalf("fallback order length: got %d, want %d", len(order), len(entries))
+	}
+}
+
 func addrsEqual(a, b []tcommon.Address) bool {
 	if len(a) != len(b) {
 		return false

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -251,8 +252,9 @@ type StateDB struct {
 	// RepositoryImpl that commits transient storage to its parent only on
 	// success and discards it on revert. The whole map is cleared at every
 	// FinalizeTransaction — the EIP-1153 end-of-transaction discard. Lazily
-	// allocated on first SetTransientState; left nil on a fresh or Copy()'d
-	// StateDB so a constant-call sees empty transient storage.
+	// allocated on first SetTransientState. Copy owns an exact private clone;
+	// ordinary transaction-boundary copies observe the expected empty map, while
+	// a deliberate mid-transaction diagnostic cannot silently lose TSTORE state.
 	transientStorage map[transientStorageKey]tcommon.Hash
 
 	// domainChangeNoJournal mirrors block-final writes that intentionally
@@ -310,12 +312,23 @@ type StateDB struct {
 // access recorder. Passing nil disables capture. The recorder never changes
 // state values, journal entries, snapshots, or commit behavior.
 func (s *StateDB) SetTransactionAccessRecorder(recorder *TransactionAccessRecorder) {
-	if s != nil {
-		s.transactionAccess = recorder
-		if s.journal != nil {
-			s.journal.transactionAccess = recorder
-		}
+	s.SwapTransactionAccessRecorder(recorder)
+}
+
+// SwapTransactionAccessRecorder installs recorder and returns the previous
+// transaction-scoped recorder. Nested rollback-only execution uses this to
+// restore recorder ownership on every success and error exit without exposing
+// the recorder field itself.
+func (s *StateDB) SwapTransactionAccessRecorder(recorder *TransactionAccessRecorder) *TransactionAccessRecorder {
+	if s == nil {
+		return nil
 	}
+	previous := s.transactionAccess
+	s.transactionAccess = recorder
+	if s.journal != nil {
+		s.journal.transactionAccess = recorder
+	}
+	return previous
 }
 
 // CommitStats breaks StateDB.Commit wall-clock time into the write phases that
@@ -1449,6 +1462,24 @@ func (s *StateDB) ClearV2Freeze(addr tcommon.Address) {
 
 // --- V1 Stake (Stake 1.0) StateDB methods ---
 
+// GetFreezeV1BandwidthCount returns the number of legacy bandwidth-frozen
+// entries stored for addr. FreezeBalanceProcessor validates this exact protobuf
+// cardinality before either BANDWIDTH or ENERGY freezes: java-tron accepts only
+// zero or one entry and rejects malformed/migrated accounts with any other
+// count. The fast materializer probes indexes 0 and 1 on every transaction so
+// speculative execution depends on the same physical rows even when the value
+// was cached by an earlier transaction.
+func (s *StateDB) GetFreezeV1BandwidthCount(addr tcommon.Address) (int, error) {
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
+	if obj == nil {
+		return 0, nil
+	}
+	if err := s.materializeAccountFrozenBandwidthFast(obj); err != nil {
+		return 0, err
+	}
+	return len(obj.account.FrozenBandwidthList()), nil
+}
+
 func (s *StateDB) FreezeV1Bandwidth(addr tcommon.Address, amount, expireTimeMs int64) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
@@ -1486,7 +1517,11 @@ func (s *StateDB) FreezeV1Energy(addr tcommon.Address, amount, expireTimeMs int6
 		return
 	}
 	_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
-		obj.account.AddFrozenEnergy(amount, expireTimeMs)
+		// java-tron FreezeBalanceActuator/FreezeBalanceProcessor accumulate the
+		// amount but set the slot expiry to this freeze's newly calculated time
+		// unconditionally. Taking max(expiry) diverges when frozen duration is
+		// shortened or imported state carries a later timestamp.
+		obj.account.SetFrozenEnergy(obj.account.FrozenEnergyAmount()+amount, expireTimeMs)
 	})
 }
 
@@ -2130,6 +2165,34 @@ func (s *StateDB) GetFreezeV1ExpireTime(addr tcommon.Address, resourceType int64
 	return 0
 }
 
+// GetFreezeV1BalanceAndExpire returns the exact V1 slot observed by java-tron's
+// Program.freezeExpireTime: bandwidth uses only Frozen[0] (not the maximum over
+// malformed extra rows), while energy uses frozen_balance_for_energy.
+func (s *StateDB) GetFreezeV1BalanceAndExpire(addr tcommon.Address, resourceType int64) (int64, int64) {
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
+	if obj == nil {
+		return 0, 0
+	}
+	switch resourceType {
+	case 0:
+		if err := s.materializeAccountFrozenBandwidthFast(obj); err != nil {
+			return 0, 0
+		}
+		frozen := obj.account.FrozenBandwidthList()
+		if len(frozen) == 0 || frozen[0] == nil {
+			return 0, 0
+		}
+		return frozen[0].FrozenBalance, frozen[0].ExpireTime
+	case 1:
+		if err := s.materializeAccountResource(obj); err != nil {
+			return 0, 0
+		}
+		return obj.account.FrozenEnergyAmount(), obj.account.FrozenEnergyExpireTime()
+	default:
+		return 0, 0
+	}
+}
+
 // frozenV2WeightWithDelegated returns the V2 stake weight (in TRX) for a
 // resource on this account, mirroring java AccountCapsule
 // getFrozenV2BalanceWithDelegated for BANDWIDTH/ENERGY (frozen + outgoing
@@ -2160,19 +2223,42 @@ func (s *StateDB) frozenV2WeightWithDelegated(addr tcommon.Address, resource cor
 // mutation via tvmAddResourceWeight. Returns (total expired, per-resource weight
 // delta in TRX units).
 func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address, now int64) (int64, map[corepb.ResourceCode]int64) {
+	expired, weightDeltas, _ := s.CancelAllUnfreezeV2Detailed(addr, now)
+	return expired, weightDeltas
+}
+
+// CancelAllUnfreezeV2Detailed is the VM-facing form of CancelAllUnfreezeV2.
+// cancelledByResource preserves the exact unexpired SUN totals that java's
+// CancelAllUnfreezeV2Processor returns for optional internal-transaction Extra
+// serialization; weight deltas are independently rounded in whole TRX.
+func (s *StateDB) CancelAllUnfreezeV2Detailed(addr tcommon.Address, now int64) (int64, map[corepb.ResourceCode]int64, map[corepb.ResourceCode]int64) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 	rows, err := s.accountUnfrozenV2Rows(obj)
 	if err != nil || len(rows) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 	var withdrawExpire int64
 	weightDeltas := make(map[corepb.ResourceCode]int64, 3)
+	cancelledByResource := make(map[corepb.ResourceCode]int64, 3)
 	for _, row := range rows {
 		u := row.entry
 		if u.UnfreezeExpireTime > now {
+			cancelledByResource[u.Type] += u.UnfreezeAmount
+			// Java's CancelAllUnfreezeV2Processor records an unknown enum in
+			// its result map, but updateFrozenInfoAndTotalResourceWeight takes
+			// the switch default and does not create a FrozenV2 entry. This is
+			// relevant for forward/unknown protobuf values: clearing the queue
+			// must not silently turn one into a new resource row.
+			switch u.Type {
+			case corepb.ResourceCode_BANDWIDTH,
+				corepb.ResourceCode_ENERGY,
+				corepb.ResourceCode_TRON_POWER:
+			default:
+				continue
+			}
 			// Refreeze and record the global resource weight delta for the caller.
 			oldWeight := s.frozenV2WeightWithDelegated(addr, u.Type)
 			_ = s.addAccountFrozenV2(obj, u.Type, u.UnfreezeAmount)
@@ -2183,7 +2269,7 @@ func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address, now int64) (int64, m
 		}
 	}
 	_ = s.clearAccountUnfrozenV2(obj)
-	return withdrawExpire, weightDeltas
+	return withdrawExpire, weightDeltas, cancelledByResource
 }
 
 // applyResourceWeight adds delta to dp's matching total_*_weight, mirroring java
@@ -3282,11 +3368,16 @@ func (s *StateDB) HasSelfDestructed(addr tcommon.Address) bool {
 	return obj.selfDestructed
 }
 
-// Copy creates a deep copy of the StateDB for read-only execution.
+// Copy creates an independently mutable, point-in-time copy of account,
+// witness, persistent-storage, transient-storage, and version-overlay state.
 //
 // NOTE: the journal is NOT copied — `cp.journal` is a fresh empty journal.
-// Production uses Copy only for read-only VM execution (eth_call /
-// debug_traceCall snapshots), where temporal history capture is not invoked.
+// The copied values and materialization caches nevertheless describe the exact
+// source state at this boundary. This is required both by read-only RPC calls
+// and by the canonical-boundary serial oracle, which executes and reverts on
+// the copy without being allowed to rehydrate an older shared latest row.
+// DynamicProperties remains a separately-owned execution component; callers
+// that execute against a copy must install dynProps.Copy() before mutation.
 func (s *StateDB) Copy() (*StateDB, error) {
 	// CommitScope can retain several committed-but-not-yet-flushed latest-domain
 	// batches. A read-only copy must share those read views; falling back to the
@@ -3365,20 +3456,33 @@ func (s *StateDB) newCopyBase(accountHint int) *StateDB {
 	for addr := range s.dirtyWitnesses {
 		dirtyWitnesses[addr] = struct{}{}
 	}
+	txFinalizeDirty := make(map[tcommon.Address]struct{}, len(s.txFinalizeDirty))
+	for addr := range s.txFinalizeDirty {
+		txFinalizeDirty[addr] = struct{}{}
+	}
 	return &StateDB{
-		db:           s.db,
-		dbErr:        s.dbErr,
-		stateObjects: make(map[tcommon.Address]*stateObject, accountHint),
+		db:                                 s.db,
+		dbErr:                              s.dbErr,
+		stateObjects:                       make(map[tcommon.Address]*stateObject, accountHint),
+		transactionVersionedReader:         s.transactionVersionedReader,
+		transactionVersionedTxIndex:        s.transactionVersionedTxIndex,
+		transactionVersionedHydrated:       maps.Clone(s.transactionVersionedHydrated),
+		transactionVersionedMissing:        maps.Clone(s.transactionVersionedMissing),
+		transactionVersionedStorageChecked: maps.Clone(s.transactionVersionedStorageChecked),
 		// Witness updates are cached outside stateObjects and are flushed only
 		// after transaction execution. Copies used by speculative workers and
 		// the canonical-boundary oracle must therefore retain the exact in-memory
 		// witness view instead of rehydrating an older durable capsule.
-		witnesses:               witnesses,
-		dirtyWitnesses:          dirtyWitnesses,
-		standbyWitnessVersion:   s.standbyWitnessVersion,
-		txFinalizeDirty:         make(map[tcommon.Address]struct{}),
+		witnesses:             witnesses,
+		dirtyWitnesses:        dirtyWitnesses,
+		standbyWitnessVersion: s.standbyWitnessVersion,
+		// A copy may be taken after SetState/SELFDESTRUCT but before the
+		// transaction boundary. Preserve the address set so zero-row existence
+		// and account deletion semantics remain identical on the copy.
+		txFinalizeDirty:         txFinalizeDirty,
 		dirtyObjects:            make(map[tcommon.Address]struct{}, accountHint),
 		journal:                 newJournal(),
+		transientStorage:        maps.Clone(s.transientStorage),
 		dynProps:                s.dynProps,
 		originRoot:              s.originRoot,
 		accountKVIndexStore:     s.accountKVIndexStore,
@@ -3401,6 +3505,10 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 	if obj.contractMeta != nil {
 		metaCopy = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
 	}
+	var permissionPointCopy *corepb.Permission
+	if obj.accountPermissionPoint != nil {
+		permissionPointCopy = proto.Clone(obj.accountPermissionPoint).(*corepb.Permission)
+	}
 	var kvDirtyCopy map[string]kvEntry
 	if len(obj.kvDirty) != 0 {
 		kvDirtyCopy = make(map[string]kvEntry, len(obj.kvDirty))
@@ -3416,6 +3524,9 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		}
 		if v.prev != nil {
 			ec.prev = append([]byte{}, v.prev...)
+		}
+		if v.wrapped != nil {
+			ec.wrapped = append([]byte{}, v.wrapped...)
 		}
 		kvDirtyCopy[k] = ec
 	}
@@ -3433,26 +3544,53 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 	}
 	newObj := acquireStateObject()
 	*newObj = stateObject{
-		address:                  addr,
-		dirty:                    obj.dirty,
-		accountDirty:             obj.accountDirty,
-		deleted:                  obj.deleted,
-		created:                  obj.created,
-		code:                     append([]byte{}, obj.code...),
-		codeHash:                 obj.codeHash,
-		codeDirty:                obj.codeDirty,
-		contractMeta:             metaCopy,
-		contractMetaDirty:        obj.contractMetaDirty,
-		storage:                  storageCopy,
-		storageHighWater:         storageEntries,
-		dirtyStorage:             dirtyStorageCopy,
-		dirtyStorageHighWater:    len(obj.dirtyStorage),
-		selfDestructed:           obj.selfDestructed,
-		accountKVRoot:            obj.accountKVRoot,
-		accountKVGeneration:      obj.accountKVGeneration,
-		accountKVGenerationDirty: obj.accountKVGenerationDirty,
-		kvDirty:                  kvDirtyCopy,
-		kvDirtyHighWater:         len(obj.kvDirty),
+		address:                       addr,
+		dirty:                         obj.dirty,
+		accountDirty:                  obj.accountDirty,
+		accountMapsLoaded:             obj.accountMapsLoaded,
+		accountPermissionsLoaded:      obj.accountPermissionsLoaded,
+		accountPermissionPoint:        permissionPointCopy,
+		accountPermissionPointID:      obj.accountPermissionPointID,
+		accountPermissionPointLoaded:  obj.accountPermissionPointLoaded,
+		witnessPermissionSigner:       obj.witnessPermissionSigner,
+		witnessPermissionSignerLoaded: obj.witnessPermissionSignerLoaded,
+		accountVotesLoaded:            obj.accountVotesLoaded,
+		accountStakeV2Loaded:          obj.accountStakeV2Loaded,
+		accountFrozenSupplyLoaded:     obj.accountFrozenSupplyLoaded,
+		accountResourceLoaded:         obj.accountResourceLoaded,
+		accountFrozenBandwidthLoaded:  obj.accountFrozenBandwidthLoaded,
+		accountTronPowerLoaded:        obj.accountTronPowerLoaded,
+		trc10PointDomain:              obj.trc10PointDomain,
+		trc10PointKey:                 obj.trc10PointKey,
+		trc10PointValue:               obj.trc10PointValue,
+		trc10PointExists:              obj.trc10PointExists,
+		trc10PointLoaded:              obj.trc10PointLoaded,
+		accountFrozenV2PointLoaded:    obj.accountFrozenV2PointLoaded,
+		accountFrozenV2PointExists:    obj.accountFrozenV2PointExists,
+		accountFrozenV2PointAmounts:   obj.accountFrozenV2PointAmounts,
+		deleted:                       obj.deleted,
+		created:                       obj.created,
+		code:                          append([]byte{}, obj.code...),
+		codeHash:                      obj.codeHash,
+		codeDirty:                     obj.codeDirty,
+		contractMeta:                  metaCopy,
+		contractMetaDirty:             obj.contractMetaDirty,
+		contractRuntime:               obj.contractRuntime,
+		contractRuntimeLoaded:         obj.contractRuntimeLoaded,
+		contractRuntimeExists:         obj.contractRuntimeExists,
+		storageKeyPrefix:              obj.storageKeyPrefix,
+		storageKeyLayoutCached:        obj.storageKeyLayoutCached,
+		storageKeyHashSlot:            obj.storageKeyHashSlot,
+		storage:                       storageCopy,
+		storageHighWater:              storageEntries,
+		dirtyStorage:                  dirtyStorageCopy,
+		dirtyStorageHighWater:         len(obj.dirtyStorage),
+		selfDestructed:                obj.selfDestructed,
+		accountKVRoot:                 obj.accountKVRoot,
+		accountKVGeneration:           obj.accountKVGeneration,
+		accountKVGenerationDirty:      obj.accountKVGenerationDirty,
+		kvDirty:                       kvDirtyCopy,
+		kvDirtyHighWater:              len(obj.kvDirty),
 	}
 	if obj.account != nil {
 		newObj.account = obj.account.Copy()
@@ -4550,7 +4688,11 @@ func (s *StateDB) AddDelegatedFrozenV2(addr tcommon.Address, resourceType corepb
 	}
 }
 
-// SubDelegatedFrozenV2 subtracts from the delegated (outgoing) frozen balance for a resource.
+// SubDelegatedFrozenV2 subtracts from the delegated (outgoing) frozen balance
+// using Java long arithmetic. Do not clamp: both java-tron undelegation paths
+// call AccountCapsule.addDelegatedFrozenV2BalanceFor*(-amount). The per-pair
+// record can survive a contract suicide/re-create while the account aggregate
+// is reset, in which case Java deliberately persists a negative aggregate.
 func (s *StateDB) SubDelegatedFrozenV2(addr tcommon.Address, resourceType corepb.ResourceCode, amount int64) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
@@ -4558,19 +4700,11 @@ func (s *StateDB) SubDelegatedFrozenV2(addr tcommon.Address, resourceType corepb
 	}
 	if resourceType == corepb.ResourceCode_BANDWIDTH {
 		s.journalAccount(addr, obj)
-		v := obj.account.DelegatedFrozenV2BalanceForBandwidth() - amount
-		if v < 0 {
-			v = 0
-		}
-		obj.account.SetDelegatedFrozenV2BalanceForBandwidth(v)
+		obj.account.SetDelegatedFrozenV2BalanceForBandwidth(obj.account.DelegatedFrozenV2BalanceForBandwidth() - amount)
 		obj.markDirty()
 	} else {
 		_ = s.mutateAccountResource(obj, func(_ *corepb.Account_AccountResource) {
-			v := obj.account.DelegatedFrozenV2BalanceForEnergy() - amount
-			if v < 0 {
-				v = 0
-			}
-			obj.account.SetDelegatedFrozenV2BalanceForEnergy(v)
+			obj.account.SetDelegatedFrozenV2BalanceForEnergy(obj.account.DelegatedFrozenV2BalanceForEnergy() - amount)
 		})
 	}
 }

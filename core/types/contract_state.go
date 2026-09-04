@@ -3,6 +3,7 @@ package types
 import (
 	"math"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/internal/math/strictmath"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -114,7 +115,7 @@ func (c *ContractState) CatchUpToCycle(newCycle, threshold, increaseFactor, maxF
 	if c.pb.EnergyUsage > threshold {
 		lastCycle++
 		increasePercent := 1.0 + float64(increaseFactor)/float64(precision)
-		raw := int64(float64(c.pb.EnergyFactor+precision)*increasePercent) - precision
+		raw := tcommon.JavaDoubleToInt64(float64(c.pb.EnergyFactor+precision)*increasePercent) - precision
 		if raw > maxFactor {
 			raw = maxFactor
 		}
@@ -137,7 +138,7 @@ func (c *ContractState) CatchUpToCycle(newCycle, threshold, increaseFactor, maxF
 	} else {
 		decreasePercent = math.Pow(base, float64(cycleCount))
 	}
-	raw := int64(float64(c.pb.EnergyFactor+precision)*decreasePercent) - precision
+	raw := tcommon.JavaDoubleToInt64(float64(c.pb.EnergyFactor+precision)*decreasePercent) - precision
 	if raw < 0 {
 		raw = 0
 	}

@@ -1160,7 +1160,7 @@ func TestSolidity_RewardBrokerageQueriesSurfaceBackendError(t *testing.T) {
 func TestSolidity_TriggerConstantContractUsesSolidBoundArchivePath(t *testing.T) {
 	backend := &solidTestBackend{
 		solidNum:   91,
-		constantAt: &tronapi.TriggerResult{Result: []byte("bound"), EnergyUsed: 123},
+		constantAt: &tronapi.TriggerResult{Result: []byte("bound"), EnergyUsed: 123, EnergyPenalty: 17},
 	}
 	client := newSolidityClient(t, backend)
 
@@ -1172,7 +1172,7 @@ func TestSolidity_TriggerConstantContractUsesSolidBoundArchivePath(t *testing.T)
 	if err != nil {
 		t.Fatalf("TriggerConstantContract: %v", err)
 	}
-	if resp.GetEnergyUsed() != 123 || len(resp.GetConstantResult()) != 1 || string(resp.GetConstantResult()[0]) != "bound" {
+	if resp.GetEnergyUsed() != 123 || resp.GetEnergyPenalty() != 17 || len(resp.GetConstantResult()) != 1 || string(resp.GetConstantResult()[0]) != "bound" {
 		t.Fatalf("TriggerConstantContract = %+v, want solid-bound sentinel", resp)
 	}
 	if backend.lastConstantAt != 91 {

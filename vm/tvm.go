@@ -3,6 +3,7 @@ package vm
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -56,6 +57,10 @@ type TVM struct {
 	BlackholeAddress     tcommon.Address
 	Logs                 []Log // accumulated log events from this execution
 	InternalTransactions []*corepb.InternalTransaction
+	// EnergyPenaltyTotal is the sum of dynamic-energy surcharge units actually
+	// accepted by Contract.UseEnergy across every frame in this transaction.
+	// Failed charges are excluded, matching java-tron ProgramResult.
+	EnergyPenaltyTotal uint64
 
 	cfg                 TVMConfig
 	interpreter         *Interpreter
@@ -199,7 +204,16 @@ func (tvm *TVM) addInternalTransaction(caller, transferTo tcommon.Address, value
 	if tokenID > 0 {
 		tokenInfo = map[string]int64{strconv.FormatInt(tokenID, 10): tokenValue}
 	}
-	return tvm.addInternalTransactionWithTokenInfo(caller, transferTo, value, data, note, tokenInfo)
+	return tvm.addInternalTransactionBytes(caller, transferTo[:], value, data, note, tokenInfo)
+}
+
+// addInternalTransactionWithoutReceiver constructs the featured VOTEWITNESS
+// record. java-tron passes a null transferAddress for that opcode; its
+// InternalTransaction constructor canonicalizes null to an empty byte array.
+// A zero-valued 21-byte TRON address is observably different in both the wire
+// message and the internal-transaction identity hash.
+func (tvm *TVM) addInternalTransactionWithoutReceiver(caller tcommon.Address, value int64, data []byte, note string) *corepb.InternalTransaction {
+	return tvm.addInternalTransactionBytes(caller, nil, value, data, note, nil)
 }
 
 // internalTransactionRecord keeps the protobuf message, its mandatory value,
@@ -287,6 +301,10 @@ func (tvm *TVM) SetInternalTransactionArena(arena *InternalTransactionArena) {
 }
 
 func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.Address, value int64, data []byte, note string, tokenInfo map[string]int64) *corepb.InternalTransaction {
+	return tvm.addInternalTransactionBytes(caller, transferTo[:], value, data, note, tokenInfo)
+}
+
+func (tvm *TVM) addInternalTransactionBytes(caller tcommon.Address, transferTo []byte, value int64, data []byte, note string, tokenInfo map[string]int64) *corepb.InternalTransaction {
 	// java-tron's identity is keccak(parent || receive || data || value ||
 	// nonce). Absorb the fields directly: the former concatenation allocated
 	// one data-sized buffer, then append(nonce) allocated and copied it again.
@@ -295,8 +313,8 @@ func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.A
 	// The protobuf owns these bytes, but the four immutable fields can share a
 	// single backing allocation. Full-slice expressions cap each field at its
 	// own length so a future append cannot overwrite the adjacent field.
-	const addressBytes = tcommon.AddressLength
-	identitySize := tcommon.HashLength + 2*addressBytes + len(note)
+	const callerAddressBytes = tcommon.AddressLength
+	identitySize := tcommon.HashLength + callerAddressBytes + len(transferTo) + len(note)
 	var (
 		record        *internalTransactionRecord
 		identityBytes []byte
@@ -312,11 +330,11 @@ func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.A
 	hashBytes := identityBytes[off : off+tcommon.HashLength : off+tcommon.HashLength]
 	off += tcommon.HashLength
 	copy(identityBytes[off:], caller[:])
-	callerBytes := identityBytes[off : off+addressBytes : off+addressBytes]
-	off += addressBytes
-	copy(identityBytes[off:], transferTo[:])
-	transferBytes := identityBytes[off : off+addressBytes : off+addressBytes]
-	off += addressBytes
+	callerBytes := identityBytes[off : off+callerAddressBytes : off+callerAddressBytes]
+	off += callerAddressBytes
+	copy(identityBytes[off:], transferTo)
+	transferBytes := identityBytes[off : off+len(transferTo) : off+len(transferTo)]
+	off += len(transferTo)
 	copy(identityBytes[off:], note)
 	noteBytes := identityBytes[off : off+len(note) : off+len(note)]
 
@@ -489,6 +507,33 @@ func (tvm *TVM) maybeCreateNormalAccountForValueTransfer(addr tcommon.Address) {
 	}
 }
 
+// addBalanceLikeJava mirrors RepositoryImpl.addBalance for TVM paths that can
+// reach the repository method without a preceding contract validator. The
+// repository creates a missing plain account even for a zero delta, rejects a
+// debit larger than the current balance, and uses Math.addExact for the final
+// signed addition. Most ordinary transfer paths validate these conditions
+// first; SELFDESTRUCT's same-beneficiary and frozen-inheritance legs do not.
+func (tvm *TVM) addBalanceLikeJava(addr tcommon.Address, value int64) error {
+	if !tvm.StateDB.AccountExists(addr) {
+		tvm.StateDB.CreateAccount(addr, corepb.AccountType_Normal)
+	}
+	balance := tvm.StateDB.GetBalance(addr)
+	if value == 0 {
+		return nil
+	}
+	// Deliberately use int64 negation here. Java's `-value` has the same
+	// two's-complement wrap for Long.MIN_VALUE before this comparison.
+	if value < 0 && balance < -value {
+		return fmt.Errorf("%x insufficient balance", addr.Bytes())
+	}
+	if (value > 0 && balance > math.MaxInt64-value) ||
+		(value < 0 && balance < math.MinInt64-value) {
+		return errors.New("long overflow")
+	}
+	tvm.StateDB.AddBalance(addr, value)
+	return nil
+}
+
 // validateAndPrepareTRXEndowment mirrors java-tron Program.callToAddress's
 // value-transfer validation. Before allow_tvm_solidity059, a missing ordinary
 // recipient is a validation failure rather than an implicitly-created empty
@@ -571,10 +616,10 @@ func (tvm *TVM) validatePrecompileEndowment(addr tcommon.Address, value int64) e
 //
 // Omitting this release is what drifted go-tron's total_energy_weight above
 // java-tron's and over-billed contract-origin energy at Nile block 19,716,962.
-func (tvm *TVM) transferDelegatedResourceToInheritor(owner, inheritor tcommon.Address) {
+func (tvm *TVM) transferDelegatedResourceToInheritor(owner, inheritor tcommon.Address) error {
 	ownerAccount := tvm.StateDB.GetAccount(owner)
 	if ownerAccount == nil {
-		return
+		return nil
 	}
 
 	var frozenBalanceForBandwidth int64
@@ -587,20 +632,19 @@ func (tvm *TVM) transferDelegatedResourceToInheritor(owner, inheritor tcommon.Ad
 	// discardable Repository (see StateDB.AddResourceWeightJournaled).
 	tvm.StateDB.AddResourceWeightJournaled(tvm.DynProps, corepb.ResourceCode_BANDWIDTH, -frozenBalanceForBandwidth/tvmTRXPrecision)
 	tvm.StateDB.AddResourceWeightJournaled(tvm.DynProps, corepb.ResourceCode_ENERGY, -frozenBalanceForEnergy/tvmTRXPrecision)
-	// java unconditionally calls repo.addBalance(inheritor, sum), but in the
-	// suicide flow the inheritor always pre-exists (createAccountIfNotExist for
-	// the obtainer, genesis for the blackhole), so addBalance(inheritor, 0) is a
-	// no-op. Guard on a positive credit so a zero-frozen contract (the common
-	// case) does not spuriously materialise a bare inheritor account here —
-	// go-tron's AddBalance would GetOrCreate it — keeping this change scoped to
-	// the weight release.
-	if sum := frozenBalanceForBandwidth + frozenBalanceForEnergy; sum > 0 {
-		tvm.StateDB.AddBalance(inheritor, sum)
+	// RepositoryImpl.addBalance creates a missing account before its value==0
+	// early return, so this call is observable even for a zero frozen sum on a
+	// pre-Solidity059 path. It also applies signed imported/malformed values and
+	// can fail on an insufficient debit; do not reduce this to a positive-only
+	// credit.
+	if err := tvm.addBalanceLikeJava(inheritor, frozenBalanceForBandwidth+frozenBalanceForEnergy); err != nil {
+		return err
 	}
 
 	if tvm.cfg.SelfdestructRestrict {
 		tvm.StateDB.ClearV1Freeze(owner)
 	}
+	return nil
 }
 
 // transferFrozenV2BalanceToInheritor mirrors java-tron

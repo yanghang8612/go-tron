@@ -79,6 +79,29 @@ func TestTransferUsageFromReceiver_CapByMaxUsage(t *testing.T) {
 	}
 }
 
+func TestTransferUsageFromReceiverZeroWeightUsesJavaInfinityCast(t *testing.T) {
+	statedb := setupStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.Set("total_net_limit", 43_200_000_000)
+	dp.SetTotalNetWeight(0)
+	receiver := makeTestAddr(0x22)
+	seedAccount(statedb, receiver, 0)
+	statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, 100*trxPrecisionTest)
+	statedb.SetNetUsage(receiver, 500)
+	statedb.SetLatestConsumeTime(receiver, 10)
+
+	transfer, _, _ := delegation.TransferUsageFromReceiver(statedb, dp, receiver,
+		corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, 10, false)
+	// Java computes a positive numerator / 0.0 = +Infinity, casts that cap to
+	// Long.MAX_VALUE, then keeps the smaller pro-rata transfer (500*40/100).
+	if transfer != 200 {
+		t.Fatalf("transfer: got %d, want 200", transfer)
+	}
+	if got := statedb.GetNetUsage(receiver); got != 300 {
+		t.Fatalf("receiver usage: got %d, want 300", got)
+	}
+}
+
 func TestTransferUsageFromReceiver_NoUsage(t *testing.T) {
 	statedb := setupStateDB(t)
 	dp := state.NewDynamicProperties()

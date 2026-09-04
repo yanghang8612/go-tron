@@ -5,6 +5,7 @@ import (
 	"container/heap"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -247,9 +248,18 @@ var (
 	parallelVMSerialVerifyMatchesCounter              = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/matches", nil)
 	parallelVMSerialVerifyInfoMismatchCounter         = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/info_mismatches", nil)
 	parallelVMSerialVerifyWriteMismatchCounter        = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/write_set_mismatches", nil)
+	parallelVMSerialVerifyReadDifferenceCounter       = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/read_set_differences", nil)
 	parallelVMSerialVerifyBalanceMismatchCounter      = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/balance_trace_mismatches", nil)
+	parallelVMSerialVerifyRestoreMismatchCounter      = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/restore_mismatches", nil)
 	parallelVMSerialVerifyErrorsCounter               = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/errors", nil)
 	parallelVMSerialVerifyNanosCounter                = metrics.NewRegisteredCounter("core/parallel_vm/serial_verify/nanos", nil)
+	parallelVMDualOracleCandidatesCounter             = metrics.NewRegisteredCounter("core/parallel_vm/dual_oracle/candidates", nil)
+	parallelVMDualOracleMatchesCounter                = metrics.NewRegisteredCounter("core/parallel_vm/dual_oracle/matches", nil)
+	parallelVMDualOracleInfoMismatchCounter           = metrics.NewRegisteredCounter("core/parallel_vm/dual_oracle/info_mismatches", nil)
+	parallelVMDualOracleWriteMismatchCounter          = metrics.NewRegisteredCounter("core/parallel_vm/dual_oracle/write_set_mismatches", nil)
+	parallelVMDualOracleReadDifferenceCounter         = metrics.NewRegisteredCounter("core/parallel_vm/dual_oracle/read_set_differences", nil)
+	parallelVMDualOracleBalanceMismatchCounter        = metrics.NewRegisteredCounter("core/parallel_vm/dual_oracle/balance_trace_mismatches", nil)
+	parallelVMDualOracleErrorsCounter                 = metrics.NewRegisteredCounter("core/parallel_vm/dual_oracle/errors", nil)
 	parallelVMChainCandidatesCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/sender_chain/candidates", nil)
 	parallelVMChainPublishedCounter                   = metrics.NewRegisteredCounter("core/parallel_vm/sender_chain/published", nil)
 	parallelVMChainPredFallbackCounter                = metrics.NewRegisteredCounter("core/parallel_vm/sender_chain/fallback/predecessor", nil)
@@ -418,6 +428,41 @@ var (
 	discardShadowMismatchAddressCounter               = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/contract_address", nil)
 	discardShadowMismatchIdentityCounter              = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/identity", nil)
 	discardShadowMismatchOtherFieldCounter            = metrics.NewRegisteredCounter("core/versioned_shadow/discard_worker/mismatch_field/other", nil)
+)
+
+var (
+	parallelExecutionSafetyFallbackCounter             = metrics.NewRegisteredCounter("core/speculative_execution/safety_fallbacks", nil)
+	parallelExecutionSafetyDisabledGauge               = metrics.NewRegisteredGauge("core/speculative_execution/safety_disabled", nil)
+	parallelExecutionSafetyPersistedGauge              = metrics.NewRegisteredGauge("core/speculative_execution/safety_persisted", nil)
+	parallelExecutionSafetyPersistErrorsCounter        = metrics.NewRegisteredCounter("core/speculative_execution/safety_persist_errors", nil)
+	parallelTransferSerialVerifyCandidatesCounter      = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/candidates", nil)
+	parallelTransferSerialVerifyMatchesCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/matches", nil)
+	parallelTransferSerialVerifyInfoMismatchCounter    = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/info_mismatches", nil)
+	parallelTransferSerialVerifyWriteMismatchCounter   = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/write_set_mismatches", nil)
+	parallelTransferSerialVerifyReadDifferenceCounter  = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/read_set_differences", nil)
+	parallelTransferSerialVerifyBalanceMismatchCounter = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/balance_trace_mismatches", nil)
+	parallelTransferSerialVerifyRestoreMismatchCounter = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/restore_mismatches", nil)
+	parallelTransferSerialVerifyErrorsCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/errors", nil)
+	parallelTransferSerialVerifyNanosCounter           = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/nanos", nil)
+	parallelTransferBalanceOracleCandidatesCounter     = metrics.NewRegisteredCounter("core/parallel_transfer/balance_oracle/candidates", nil)
+	parallelTransferBalanceOracleMatchesCounter        = metrics.NewRegisteredCounter("core/parallel_transfer/balance_oracle/matches", nil)
+	parallelTransferBalanceOracleFallbacksCounter      = metrics.NewRegisteredCounter("core/parallel_transfer/balance_oracle/fallbacks", nil)
+	parallelTransferBalanceOracleMismatchesCounter     = metrics.NewRegisteredCounter("core/parallel_transfer/balance_oracle/mismatches", nil)
+	parallelTransferBalanceOracleErrorsCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/balance_oracle/errors", nil)
+	parallelTransferPublishAuditCandidatesCounter      = metrics.NewRegisteredCounter("core/parallel_transfer/publish_audit/candidates", nil)
+	parallelTransferPublishAuditMatchesCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/publish_audit/matches", nil)
+	parallelTransferPublishAuditMismatchesCounter      = metrics.NewRegisteredCounter("core/parallel_transfer/publish_audit/mismatches", nil)
+	parallelTransferPublishAuditErrorsCounter          = metrics.NewRegisteredCounter("core/parallel_transfer/publish_audit/errors", nil)
+	parallelTransferWriteSealCandidatesCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/write_seal/candidates", nil)
+	parallelTransferWriteSealMatchesCounter            = metrics.NewRegisteredCounter("core/parallel_transfer/write_seal/matches", nil)
+	parallelTransferWriteSealMismatchesCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/write_seal/mismatches", nil)
+	parallelVMPublishAuditCandidatesCounter            = metrics.NewRegisteredCounter("core/parallel_vm/publish_audit/candidates", nil)
+	parallelVMPublishAuditMatchesCounter               = metrics.NewRegisteredCounter("core/parallel_vm/publish_audit/matches", nil)
+	parallelVMPublishAuditMismatchesCounter            = metrics.NewRegisteredCounter("core/parallel_vm/publish_audit/mismatches", nil)
+	parallelVMPublishAuditErrorsCounter                = metrics.NewRegisteredCounter("core/parallel_vm/publish_audit/errors", nil)
+	parallelVMWriteSealCandidatesCounter               = metrics.NewRegisteredCounter("core/parallel_vm/write_seal/candidates", nil)
+	parallelVMWriteSealMatchesCounter                  = metrics.NewRegisteredCounter("core/parallel_vm/write_seal/matches", nil)
+	parallelVMWriteSealMismatchesCounter               = metrics.NewRegisteredCounter("core/parallel_vm/write_seal/mismatches", nil)
 )
 
 var (
@@ -1210,6 +1255,24 @@ func classifyDiscardShadowApplyUnsupported(writes state.TransactionWriteSet) dis
 			default:
 				unsupported |= discardShadowApplyUnsupportedField
 			}
+		case state.TransactionAccessWitness,
+			state.TransactionAccessStorage,
+			state.TransactionAccessCode,
+			state.TransactionAccessContractMetadata,
+			state.TransactionAccessAccountKV,
+			state.TransactionAccessTransientStorage,
+			state.TransactionAccessDynamicInt,
+			state.TransactionAccessDynamicString,
+			state.TransactionAccessDynamicHash,
+			state.TransactionAccessRawKV:
+			// These families are implemented by the applier. If validation
+			// rejected an otherwise supported value, the final zero-mask fallback
+			// below attributes it to Other.
+		default:
+			// Preserve unknown-kind evidence even when the same WriteSet also
+			// contains a separately classified unsupported family. Without this
+			// branch, a future enum value could be hidden by an Account/reset bit.
+			unsupported |= discardShadowApplyUnsupportedOther
 		}
 	}
 	if unsupported == 0 {
@@ -1396,6 +1459,12 @@ type discardShadowRunConfig struct {
 	canonicalWriteSets      []state.TransactionWriteSet
 	captureBalanceTrace     bool
 	retainInfos             bool
+	// Test-only fault injection runs after the direct canonical oracle has
+	// reverted its nested transaction. Production always leaves it nil.
+	canonicalOraclePostExecutionTestHook func(string, *state.StateDB, *state.DynamicProperties)
+	// Test-only fault injection against the original canonical state after the
+	// isolated full-copy oracle returns. It models a newly aliased Copy field.
+	canonicalIsolatedOraclePostExecutionTestHook func(*state.StateDB, *state.DynamicProperties)
 }
 
 type discardShadowRunStats struct {
@@ -1549,15 +1618,27 @@ func newDiscardShadowRetryWriteCapture(source *discardShadowPreexecution, transa
 	}
 	fullTransactions := make([]bool, transactionCount)
 	recorderOnly := true
+	// An async incarnation may execute a suffix member that block-start
+	// preexecution never retained (for example, an initially unfunded sender
+	// whose first transfer becomes valid after an earlier canonical credit).
+	// Every schedulable sender task is therefore a possible publication carrier
+	// and requires an exact post-apply capture.
+	for txIndex, scheduled := range source.senderTaskOK {
+		if scheduled && txIndex < len(fullTransactions) {
+			fullTransactions[txIndex] = true
+		}
+	}
 	for _, result := range source.results {
 		txIndex := result.txIndex
-		if txIndex < 0 || txIndex >= transactionCount || txIndex >= len(source.senderNext) ||
-			(!result.senderVersioned && source.senderNext[txIndex] < 0) {
+		if txIndex < 0 || txIndex >= transactionCount {
 			continue
 		}
-		// Any member of a retryable sender chain can become the canonical
-		// carrier, so retain its complete WriteSet for post-publication audit.
+		// Observe-only sources may not populate senderTaskOK, so retained
+		// block-start results independently remain exact publication candidates.
 		fullTransactions[txIndex] = true
+		if txIndex >= len(source.senderNext) || (!result.senderVersioned && source.senderNext[txIndex] < 0) {
+			continue
+		}
 		for _, read := range result.reads.Reads {
 			if read.Mode&(state.TransactionAccessRead|state.TransactionAccessCommutativeRead) == 0 {
 				continue
@@ -1673,6 +1754,63 @@ func installSenderChainWrites(versions *versionedAccessShadow, writes state.Tran
 	for key := range writes {
 		versions.installRecordedWrite(key, txIndex)
 	}
+}
+
+// cloneTransactionWriteSet transfers ownership of a speculative result across
+// a goroutine or publication boundary. In particular, public-net rebasing
+// temporarily mutates the map, so a shallow copy would race with an async
+// worker that still owns or iterates it.
+func cloneTransactionWriteSet(writes state.TransactionWriteSet) state.TransactionWriteSet {
+	if writes == nil {
+		return nil
+	}
+	cloned := make(state.TransactionWriteSet, len(writes))
+	for key, value := range writes {
+		value.Value = append([]byte(nil), value.Value...)
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneTransactionReadSet(reads state.TransactionReadSet) state.TransactionReadSet {
+	return state.TransactionReadSet{
+		Reads:       append([]state.TransactionRead(nil), reads.Reads...),
+		Unsupported: reads.Unsupported,
+	}
+}
+
+// equalTransactionReadSetAccesses compares the execution-observable portion
+// of two read sets. ExpectedWriter is scheduler metadata added after a worker
+// consumes an earlier publication; the canonical serial oracle intentionally
+// has no such annotation. Ordering is likewise a recorder implementation
+// detail. The key/mode relation and Unsupported flag are the complete set of
+// inputs whose omission could make version validation unsound.
+func equalTransactionReadSetAccesses(left, right state.TransactionReadSet) bool {
+	if left.Unsupported != right.Unsupported || len(left.Reads) != len(right.Reads) {
+		return false
+	}
+	// Recorder capture guarantees one row per key. Enforce that invariant on
+	// both untrusted and canonical carriers, then perform an order-independent
+	// one-to-one match without allocating per-publication maps. Read sets are
+	// small for Transfer and VM publication is intentionally sparse, so the
+	// quadratic worst case is cheaper than two heap maps on every candidate.
+	for index, leftRead := range left.Reads {
+		for previous := 0; previous < index; previous++ {
+			if left.Reads[previous].Key == leftRead.Key || right.Reads[previous].Key == right.Reads[index].Key {
+				return false
+			}
+		}
+		matched := false
+		for _, rightRead := range right.Reads {
+			if rightRead.Key == leftRead.Key && rightRead.Mode == leftRead.Mode {
+				matched = true
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 // advanceSenderChain installs one already-verified post-image into the private
@@ -2605,17 +2743,24 @@ func (retry *discardShadowSenderRetry) launchAsyncRetryRequest(runner *discardSh
 				}
 			}
 			result.retryCompletionNanos = time.Since(started).Nanoseconds()
+			ready := retry.resultReady(&result)
+			current := ready && retry.asyncTaskCurrent(task)
+			if current {
+				installSenderChainWrites(&forwarded, result.writes, task.txIndex)
+			}
+			// The event owns its WriteSet. This remains safe even if later code is
+			// refactored to inspect the worker result after the handoff.
 			resultCopy := result
+			resultCopy.writes = cloneTransactionWriteSet(result.writes)
 			events <- discardShadowAsyncRetryEvent{result: &resultCopy}
-			if !retry.resultReady(&result) {
+			if !ready {
 				dropped += int64(len(request.tasks) - taskIndex - 1)
 				break
 			}
-			if !retry.asyncTaskCurrent(task) {
+			if !current {
 				superseded += int64(len(request.tasks) - taskIndex - 1)
 				break
 			}
-			installSenderChainWrites(&forwarded, result.writes, task.txIndex)
 		}
 		events <- discardShadowAsyncRetryEvent{
 			runner: runner, done: true, nanos: time.Since(started).Nanoseconds(), rawMisses: request.frozenRaw.misses,
@@ -2976,8 +3121,16 @@ func (retry *discardShadowSenderRetry) markPublished(txIndex int) {
 }
 
 func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, cfg discardShadowRunConfig) discardShadowSenderRetryStats {
-	if retry == nil || versioned == nil || len(cfg.canonicalInfos) != len(cfg.transactions) {
+	if retry == nil {
 		return discardShadowSenderRetryStats{}
+	}
+	if versioned == nil || len(cfg.canonicalInfos) != len(cfg.transactions) {
+		retry.stats.errors++
+		if retry.async {
+			retry.stats.actualErrors++
+			retry.stats.actualFinishErrors++
+		}
+		return retry.stats
 	}
 	if retry.async {
 		retry.drainAsyncEvents(len(cfg.transactions), true)
@@ -3156,6 +3309,141 @@ func (retry *discardShadowSenderRetry) finish(versioned *versionedAccessShadow, 
 	return retry.stats
 }
 
+// validatePublishedRetryAudit is the final fail-closed guard after canonical
+// publication. The independent boundary oracle is the admission authority;
+// this audit additionally proves that every publication was observable in the
+// canonical transaction WriteSet captured after apply. Missing audit input is
+// intentionally indistinguishable from a mismatch here: neither is safe to
+// commit.
+func validatePublishedRetryAudit(family string, stats discardShadowSenderRetryStats) error {
+	published := stats.publish.published
+	if published == 0 || (stats.publish.writeMatches == published && stats.publish.writeMismatches == 0) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s speculative publication audit failed: published=%d write_matches=%d write_mismatches=%d",
+		errSpeculativePublicationAudit,
+		family, published, stats.publish.writeMatches, stats.publish.writeMismatches)
+}
+
+// canonicalPublicationWriteSeal owns the complete publication payload produced
+// by the boundary serial oracle. Canonical apply and receipt/trace publication
+// consume that independently executed result directly; the speculative result
+// is retained only as an untrusted comparison source. Rechecking it before and
+// after apply makes ownership violations observable without cloning attacker-
+// controlled consumed fields into the canonical publication path. Worker read
+// metadata is not rechecked here because publication uses only canonical.reads.
+type canonicalPublicationWriteSeal struct {
+	family       string
+	writes       state.TransactionWriteSet
+	reads        state.TransactionReadSet
+	info         *corepb.TransactionInfo
+	balanceTrace *contractpb.TransactionBalanceTrace
+	matches      interface{ Inc(int64) }
+	mismatches   interface{ Inc(int64) }
+}
+
+func newCanonicalPublicationWriteSeal(family string, source, canonical *discardShadowTaskResult) (*canonicalPublicationWriteSeal, error) {
+	var candidates, matches, mismatches interface{ Inc(int64) }
+	switch family {
+	case "Transfer":
+		candidates = parallelTransferWriteSealCandidatesCounter
+		matches = parallelTransferWriteSealMatchesCounter
+		mismatches = parallelTransferWriteSealMismatchesCounter
+	case "VM":
+		candidates = parallelVMWriteSealCandidatesCounter
+		matches = parallelVMWriteSealMatchesCounter
+		mismatches = parallelVMWriteSealMismatchesCounter
+	default:
+		return nil, fmt.Errorf("%w: unknown speculative publication family %q", errSpeculativePublicationAudit, family)
+	}
+	if source == nil || canonical == nil {
+		return nil, fmt.Errorf("%w: %s speculative or canonical publication result is nil", errSpeculativePublicationAudit, family)
+	}
+	candidates.Inc(1)
+	seal := &canonicalPublicationWriteSeal{
+		family:       family,
+		writes:       canonical.writes,
+		reads:        canonical.reads,
+		info:         canonical.info,
+		balanceTrace: canonical.balanceTrace,
+		matches:      matches, mismatches: mismatches,
+	}
+	if err := seal.validateSource("at admission", source); err != nil {
+		return nil, err
+	}
+	return seal, nil
+}
+
+func (seal *canonicalPublicationWriteSeal) validateSource(stage string, source *discardShadowTaskResult) error {
+	writesMatch := seal != nil && source != nil && state.EqualTransactionWriteSets(seal.writes, source.writes)
+	infoMatch := seal != nil && source != nil && proto.Equal(seal.info, source.info)
+	traceMatch := seal != nil && source != nil && proto.Equal(seal.balanceTrace, source.balanceTrace)
+	if writesMatch && infoMatch && traceMatch {
+		return nil
+	}
+	if seal != nil && seal.mismatches != nil {
+		seal.mismatches.Inc(1)
+	}
+	family := "unknown"
+	if seal != nil {
+		family = seal.family
+	}
+	return fmt.Errorf("%w: %s consumed speculative publication payload changed %s: writes=%t info=%t balance_trace=%t",
+		errSpeculativePublicationAudit, family, stage, writesMatch, infoMatch, traceMatch)
+}
+
+func (seal *canonicalPublicationWriteSeal) markMatched() {
+	if seal != nil && seal.matches != nil {
+		seal.matches.Inc(1)
+	}
+}
+
+// validateCanonicalPublicationWriteSet runs immediately after ObserveTransaction
+// materializes the actual canonical post-images produced by the generic
+// WriteSet applier. It is deliberately fail-closed: a missing/full-capture
+// failure is not weaker evidence than an explicit mismatch.
+func validateCanonicalPublicationWriteSet(family string, txIndex int, expected state.TransactionWriteSet, versioned *versionedAccessShadow) error {
+	var candidates, matches, mismatches, auditErrors interface{ Inc(int64) }
+	switch family {
+	case "Transfer":
+		candidates = parallelTransferPublishAuditCandidatesCounter
+		matches = parallelTransferPublishAuditMatchesCounter
+		mismatches = parallelTransferPublishAuditMismatchesCounter
+		auditErrors = parallelTransferPublishAuditErrorsCounter
+	case "VM":
+		candidates = parallelVMPublishAuditCandidatesCounter
+		matches = parallelVMPublishAuditMatchesCounter
+		mismatches = parallelVMPublishAuditMismatchesCounter
+		auditErrors = parallelVMPublishAuditErrorsCounter
+	default:
+		return fmt.Errorf("%w: unknown speculative publication family %q", errSpeculativePublicationAudit, family)
+	}
+	candidates.Inc(1)
+	if versioned == nil || txIndex < 0 || txIndex >= len(versioned.transactionWritesOK) ||
+		!versioned.transactionWritesOK[txIndex] || txIndex >= len(versioned.transactionWriteSets) {
+		auditErrors.Inc(1)
+		return fmt.Errorf("%w: %s speculative publication audit unavailable at tx %d", errSpeculativePublicationAudit, family, txIndex)
+	}
+	actual := versioned.transactionWriteSets[txIndex]
+	if !state.EqualTransactionWriteSets(expected, actual) {
+		mismatches.Inc(1)
+		var expectedKinds, actualKinds uint64
+		for key := range expected {
+			expectedKinds |= uint64(1) << key.Kind
+		}
+		for key := range actual {
+			actualKinds |= uint64(1) << key.Kind
+		}
+		fullCapture := versioned.writeCaptureInclude == nil ||
+			(txIndex < len(versioned.writeCaptureFull) && versioned.writeCaptureFull[txIndex])
+		return fmt.Errorf("%w: %s speculative publication audit mismatch at tx %d: expected_writes=%d actual_writes=%d expected_kinds=%#x actual_kinds=%#x full_capture=%t",
+			errSpeculativePublicationAudit,
+			family, txIndex, len(expected), len(actual), expectedKinds, actualKinds, fullCapture)
+	}
+	matches.Inc(1)
+	return nil
+}
+
 func recordVMSenderRetryStats(stats discardShadowSenderRetryStats) {
 	parallelVMRetryBlocksCounter.Inc(1)
 	parallelVMRetryAttemptsCounter.Inc(stats.attempts)
@@ -3306,6 +3594,22 @@ func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, t
 			}
 		}
 	}
+	// A write whose pre-image was not reported as a read is not necessarily a
+	// blind write. StateDB may already have the account object cached, in which
+	// case a read-modify-write can reach the journal without passing through a
+	// getter that records the logical read again. Treat every non-commutative
+	// write as an implicit read dependency unless the recorder already supplied
+	// one. This is deliberately conservative: a genuinely blind replacement
+	// falls back to serial execution after any predecessor writer, while a stale
+	// cached post-image can never overwrite that predecessor.
+	for key, value := range result.writes {
+		if value.Commutative || transactionReadSetCoversKey(result.reads, key) {
+			continue
+		}
+		if _, exists := versioned.typedPreviousVersion(key, txIndex); exists {
+			decision.readConflict = true
+		}
+	}
 	decision.barrier = versioned.lastBarrierTx >= 0 &&
 		(!result.hasSettledPrefix || versioned.lastBarrierTx > result.settledPrefix)
 	if tx != nil && tx.Contract() != nil {
@@ -3324,6 +3628,15 @@ func (versioned *versionedAccessShadow) validateBlockStartReadSet(txIndex int, t
 	}
 	decision.publishable = !decision.unsupported && !decision.readConflict && !decision.deltaInvalid && !decision.sender && !decision.barrier
 	return decision
+}
+
+func transactionReadSetCoversKey(reads state.TransactionReadSet, key state.TransactionAccessKey) bool {
+	for _, read := range reads.Reads {
+		if read.Key == key && read.Mode&(state.TransactionAccessRead|state.TransactionAccessCommutativeRead) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func isPublicNetReservationKey(key state.TransactionAccessKey) bool {
@@ -3374,6 +3687,13 @@ type publicNetWriteOverride struct {
 func overridePublicNetReservation(result *discardShadowTaskResult, dynProps *state.DynamicProperties) (publicNetWriteOverride, bool) {
 	if result == nil || !result.publicNetValid {
 		return publicNetWriteOverride{}, true
+	}
+	// publicNetValid describes the worker-owned result at capture time. Treat
+	// the retained WriteSet as untrusted again at the publication boundary:
+	// async ownership bugs or a future projection rewrite must fall back to
+	// serial execution, never turn a short/missing value into a PutUint64 panic.
+	if dynProps == nil || !validatePublicNetReservation(result.publicNet, result.writes, dynProps) {
+		return publicNetWriteOverride{reservation: true}, false
 	}
 	reservation := result.publicNet
 	publicLimit := dynProps.PublicNetLimit()
@@ -3618,46 +3938,278 @@ func preexecutedResultReady(result *discardShadowTaskResult) bool {
 	return preexecutedResultValidForReadValidation(result) && !result.contractRetMismatch
 }
 
-type vmBoundarySerialVerification struct {
+type boundarySerialVerification struct {
 	infoMatch    bool
 	writeMatch   bool
+	readMatch    bool
+	balanceMatch bool
+	canonical    *discardShadowTaskResult
+	crossCheck   *boundaryOracleCrossCheck
+	err          error
+}
+
+func (verification boundarySerialVerification) matched() bool {
+	return verification.err == nil && verification.canonical != nil && verification.infoMatch &&
+		verification.writeMatch && verification.balanceMatch &&
+		(verification.crossCheck == nil || verification.crossCheck.matched())
+}
+
+// boundaryOracleCrossCheck compares two independently executed canonical
+// results. Read-set differences are diagnostic because the in-place result's
+// read carrier becomes the publication seal; every consumed output must match.
+type boundaryOracleCrossCheck struct {
+	infoMatch    bool
+	writeMatch   bool
+	readMatch    bool
 	balanceMatch bool
 	err          error
 }
 
-func (verification vmBoundarySerialVerification) matched() bool {
-	return verification.err == nil && verification.infoMatch && verification.writeMatch && verification.balanceMatch
+var errCanonicalOracleRestoration = errors.New("canonical oracle did not restore canonical state")
+
+// canonicalCommutativePostImage is the absolute canonical value behind a
+// publication delta. WriteSets intentionally carry only the delta for these
+// paths, so the ordinary post-apply audit cannot by itself prove that the
+// in-place serial oracle rolled its temporary increment back before apply.
+type canonicalCommutativePostImage struct {
+	exists bool
+	value  int64
 }
 
-// verifyVMResultAtCanonicalBoundary runs the authoritative transaction path on
-// an isolated full copy of the exact canonical pre-transaction state. The VM
-// publication cohorts deliberately pay this canary cost so their
-// post-publication audit is not limited to reapplying and comparing the
-// worker's own WriteSet. A full Copy is required here: using the optimized
-// block-execution copy would make the oracle share the speculative worker's
-// cache-omission failure modes and could turn a common bad base into a false
-// match.
+func captureCanonicalCommutativePostImages(statedb *state.StateDB, dynProps *state.DynamicProperties, writes state.TransactionWriteSet) (map[state.TransactionAccessKey]canonicalCommutativePostImage, error) {
+	if statedb == nil || dynProps == nil {
+		return nil, errors.New("missing canonical state for oracle restoration seal")
+	}
+	previousStateRecorder := statedb.SwapTransactionAccessRecorder(nil)
+	previousDPRecorder := dynProps.SwapTransactionAccessRecorder(nil)
+	defer func() {
+		statedb.SwapTransactionAccessRecorder(previousStateRecorder)
+		dynProps.SwapTransactionAccessRecorder(previousDPRecorder)
+	}()
+
+	var postImages map[state.TransactionAccessKey]canonicalCommutativePostImage
+	for key, write := range writes {
+		if !write.Commutative {
+			continue
+		}
+		if postImages == nil {
+			postImages = make(map[state.TransactionAccessKey]canonicalCommutativePostImage, 2)
+		}
+		switch key.Kind {
+		case state.TransactionAccessAccountField:
+			if key.AccountField != state.TransactionAccountFieldBalance {
+				return nil, fmt.Errorf("commutative oracle restoration account field %d is unsupported", key.AccountField)
+			}
+			postImages[key] = canonicalCommutativePostImage{
+				exists: statedb.AccountExists(key.Address),
+				value:  statedb.GetBalance(key.Address),
+			}
+		case state.TransactionAccessDynamicInt:
+			value, exists := dynProps.Get(key.LogicalKey)
+			postImages[key] = canonicalCommutativePostImage{exists: exists, value: value}
+		default:
+			return nil, fmt.Errorf("commutative oracle restoration kind %d is unsupported", key.Kind)
+		}
+	}
+	return postImages, nil
+}
+
+func equalCanonicalCommutativePostImages(left, right map[state.TransactionAccessKey]canonicalCommutativePostImage) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		if rightValue, ok := right[key]; !ok || rightValue != leftValue {
+			return false
+		}
+	}
+	return true
+}
+
+// restoreUnjournaledCanonicalCommutativePostImages repairs the only public
+// cached-object mutation that can bypass StateDB's journal: callers may obtain
+// an Account wrapper and mutate its protobuf balance directly. The direct
+// oracle's outer snapshot below already reverts every mutation made through
+// StateDB/DynamicProperties APIs. This narrow repair exists solely so a
+// detected ownership violation cannot poison a direct processBlock caller
+// before the typed safety error reaches its outer circuit breaker.
+//
+// Dynamic properties and account existence have no equivalent public
+// unjournaled mutation API. Refuse to synthesize a repair for those shapes;
+// leaving the error fail-closed is safer than guessing how an impossible state
+// transition occurred.
+func restoreUnjournaledCanonicalCommutativePostImages(statedb *state.StateDB, dynProps *state.DynamicProperties, expected map[state.TransactionAccessKey]canonicalCommutativePostImage) error {
+	current, err := captureCanonicalCommutativePostImages(statedb, dynProps, transactionWriteSetForCanonicalCommutativePostImages(expected))
+	if err != nil {
+		return err
+	}
+	if equalCanonicalCommutativePostImages(expected, current) {
+		return nil
+	}
+	for key, want := range expected {
+		got, ok := current[key]
+		if !ok || got == want {
+			continue
+		}
+		if key.Kind != state.TransactionAccessAccountField || key.AccountField != state.TransactionAccountFieldBalance || !want.exists || !got.exists {
+			return fmt.Errorf("unrepairable canonical commutative post-image key=%+v before=%+v after=%+v", key, want, got)
+		}
+		account := statedb.GetAccount(key.Address)
+		if account == nil {
+			return fmt.Errorf("missing account while restoring canonical commutative balance %s", key.Address.Hex())
+		}
+		// Intentionally bypass the journal just as the ownership violation did.
+		// Adding a journal entry here would make an enclosing block rollback
+		// restore the leaked value instead of the canonical pre-oracle value.
+		account.SetBalance(want.value)
+	}
+	restored, err := captureCanonicalCommutativePostImages(statedb, dynProps, transactionWriteSetForCanonicalCommutativePostImages(expected))
+	if err != nil {
+		return err
+	}
+	if !equalCanonicalCommutativePostImages(expected, restored) {
+		return fmt.Errorf("canonical commutative post-images remain changed after repair")
+	}
+	return nil
+}
+
+func transactionWriteSetForCanonicalCommutativePostImages(images map[state.TransactionAccessKey]canonicalCommutativePostImage) state.TransactionWriteSet {
+	if len(images) == 0 {
+		return nil
+	}
+	writes := make(state.TransactionWriteSet, len(images))
+	for key := range images {
+		writes[key] = state.TransactionWriteValue{Commutative: true}
+	}
+	return writes
+}
+
+type canonicalOracleRestorationGuard struct {
+	statedb       *state.StateDB
+	dynProps      *state.DynamicProperties
+	commutative   map[state.TransactionAccessKey]canonicalCommutativePostImage
+	journalBefore int
+	stateSnapshot int
+	dpSnapshot    int
+	active        bool
+}
+
+func beginCanonicalOracleRestorationGuard(statedb *state.StateDB, dynProps *state.DynamicProperties, writes state.TransactionWriteSet) (*canonicalOracleRestorationGuard, error) {
+	commutative, err := captureCanonicalCommutativePostImages(statedb, dynProps, writes)
+	if err != nil {
+		return nil, err
+	}
+	guard := &canonicalOracleRestorationGuard{
+		statedb:       statedb,
+		dynProps:      dynProps,
+		commutative:   commutative,
+		journalBefore: statedb.DomainChangeJournalMark(),
+		stateSnapshot: statedb.Snapshot(),
+		dpSnapshot:    dynProps.Snapshot(),
+		active:        true,
+	}
+	return guard, nil
+}
+
+func (guard *canonicalOracleRestorationGuard) revert() {
+	if guard == nil || !guard.active {
+		return
+	}
+	guard.statedb.RevertToSnapshot(guard.stateSnapshot)
+	guard.dynProps.RevertToSnapshot(guard.dpSnapshot)
+	guard.active = false
+}
+
+// verifyAndRevert observes the live canonical state before restoring the outer
+// guard. It is shared by the isolated-copy and direct oracles: a future shallow
+// field in StateDB.Copy must fail exactly like a broken nested direct rollback,
+// rather than contaminating the baseline consumed by the second oracle.
+func (guard *canonicalOracleRestorationGuard) verifyAndRevert(family string, priorErr error) error {
+	if guard == nil || !guard.active {
+		return fmt.Errorf("%w: %s restoration guard is inactive: prior_err=%v", errCanonicalOracleRestoration, family, priorErr)
+	}
+	restoreAfter, captureErr := captureCanonicalCommutativePostImages(guard.statedb, guard.dynProps, transactionWriteSetForCanonicalCommutativePostImages(guard.commutative))
+	journalAfter := guard.statedb.DomainChangeJournalMark()
+	dpChanged := guard.dynProps.SnapshotChanged(guard.dpSnapshot)
+	commutativeMatch := equalCanonicalCommutativePostImages(guard.commutative, restoreAfter)
+	restoreMismatch := captureErr != nil || journalAfter != guard.journalBefore || dpChanged || !commutativeMatch
+	guard.revert()
+	if !restoreMismatch {
+		return priorErr
+	}
+	cleanupErr := restoreUnjournaledCanonicalCommutativePostImages(guard.statedb, guard.dynProps, guard.commutative)
+	if cleanupJournal := guard.statedb.DomainChangeJournalMark(); cleanupJournal != guard.journalBefore {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("canonical journal remained changed after outer rollback: %d/%d", guard.journalBefore, cleanupJournal))
+	}
+	return fmt.Errorf("%w: %s journal=%d/%d dynamic_changed=%t commutative=%t capture_err=%v cleanup_err=%v prior_err=%v",
+		errCanonicalOracleRestoration, family, guard.journalBefore, journalAfter,
+		dpChanged, commutativeMatch, captureErr, cleanupErr, priorErr)
+}
+
+func (check boundaryOracleCrossCheck) matched() bool {
+	return check.err == nil && check.infoMatch && check.writeMatch && check.balanceMatch
+}
+
+func compareBoundaryCanonicalResults(isolated, direct *discardShadowTaskResult) boundaryOracleCrossCheck {
+	if isolated == nil || direct == nil {
+		return boundaryOracleCrossCheck{err: errors.New("missing independent canonical result")}
+	}
+	return boundaryOracleCrossCheck{
+		infoMatch:    proto.Equal(isolated.info, direct.info),
+		writeMatch:   state.EqualTransactionWriteSets(isolated.writes, direct.writes),
+		readMatch:    equalTransactionReadSetAccesses(isolated.reads, direct.reads),
+		balanceMatch: proto.Equal(isolated.balanceTrace, direct.balanceTrace),
+	}
+}
+
+// verifyResultAtCanonicalBoundary runs the authoritative transaction path on
+// an isolated full copy of the exact canonical pre-transaction state. VM
+// publication cohorts deliberately pay this cost so their post-publication
+// audit is not limited to reapplying and comparing the worker's own WriteSet.
+// A full Copy is required for VM: using the optimized block-execution copy
+// would make the oracle share the speculative worker's cache-omission failure
+// modes and could turn a common bad base into a false match.
 // The caller must install any ordered public-net override before invoking this
 // function, making the worker and serial WriteSets directly comparable.
-func verifyVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig) vmBoundarySerialVerification {
-	verification := vmBoundarySerialVerification{balanceMatch: !cfg.captureBalanceTrace}
+func verifyResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig, ready func(*discardShadowTaskResult) bool) boundarySerialVerification {
+	verification := boundarySerialVerification{}
 	if statedb == nil || dynProps == nil || cfg.block == nil || result == nil || txIndex < 0 || txIndex >= len(cfg.transactions) {
-		verification.err = errors.New("missing VM boundary verification input")
+		verification.err = errors.New("missing boundary verification input")
 		return verification
 	}
+	if ready == nil {
+		verification.err = errors.New("missing boundary verification readiness policy")
+		return verification
+	}
+	guard, err := beginCanonicalOracleRestorationGuard(statedb, dynProps, result.writes)
+	if err != nil {
+		verification.err = fmt.Errorf("%w: VM isolated pre-execution seal: %v", errCanonicalOracleRestoration, err)
+		return verification
+	}
+	defer guard.revert()
 	boundaryState, err := statedb.Copy()
 	if err != nil {
 		verification.err = err
-		return verification
+	} else {
+		boundaryState.SetDynamicProperties(dynProps.Copy())
+		if cfg.captureBalanceTrace {
+			blockHash := cfg.block.Hash()
+			boundaryState.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
+		}
+		verification = verifyResultOnBoundaryState(boundaryState, boundaryState.DynamicProperties(), txIndex, result, cfg, ready)
+		if cfg.canonicalIsolatedOraclePostExecutionTestHook != nil {
+			cfg.canonicalIsolatedOraclePostExecutionTestHook(statedb, dynProps)
+		}
 	}
-	boundaryState.SetDynamicProperties(dynProps.Copy())
-	if cfg.captureBalanceTrace {
-		blockHash := cfg.block.Hash()
-		boundaryState.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
-	}
+	verification.err = guard.verifyAndRevert("VM isolated", verification.err)
+	return verification
+}
+
+func verifyResultOnBoundaryState(boundaryState *state.StateDB, boundaryDP *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig, ready func(*discardShadowTaskResult) bool) boundarySerialVerification {
+	verification := boundarySerialVerification{}
 	worker := discardShadowWorker{
 		state:     boundaryState,
-		dynProps:  boundaryState.DynamicProperties(),
+		dynProps:  boundaryDP,
 		db:        discardKVOverlay{parent: cfg.db},
 		forkCache: forks.NewVersionPassCache().BlockScope(),
 	}
@@ -3667,7 +4219,7 @@ func verifyVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.D
 	verifyCfg.canonicalWriteSets = nil
 	verifyCfg.retainInfos = true
 	serialResult := worker.execute(txIndex, verifyCfg)
-	if !preexecutedResultReady(&serialResult) {
+	if !ready(&serialResult) {
 		if serialResult.err != nil {
 			verification.err = serialResult.err
 		} else if serialResult.writeSetErr != nil {
@@ -3675,31 +4227,133 @@ func verifyVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.D
 		} else if serialResult.applyErr != nil {
 			verification.err = serialResult.applyErr
 		} else {
-			verification.err = errors.New("canonical-boundary VM verification result is unavailable")
+			verification.err = errors.New("canonical-boundary verification result is unavailable")
 		}
 		return verification
 	}
 	verification.infoMatch = compareDiscardShadowInfo(result.info, serialResult.info) == 0
 	verification.writeMatch = state.EqualTransactionWriteSets(result.writes, serialResult.writes)
-	if cfg.captureBalanceTrace {
-		verification.balanceMatch = proto.Equal(result.balanceTrace, serialResult.balanceTrace)
-	}
+	verification.readMatch = equalTransactionReadSetAccesses(result.reads, serialResult.reads)
+	// Compare the carrier unconditionally. When tracing is disabled both sides
+	// must be nil; accepting a stray trace merely because the feature is off
+	// would leave an unauthenticated payload for a future caller with an active
+	// recorder.
+	verification.balanceMatch = proto.Equal(result.balanceTrace, serialResult.balanceTrace)
+	verification.canonical = &serialResult
 	return verification
+}
+
+// verifyResultDirectAtCanonicalBoundary executes the authoritative transaction
+// against the original canonical StateDB under worker.execute's nested state
+// and dynamic-property snapshots. All raw writes stay in the private overlay.
+func verifyResultDirectAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig, ready func(*discardShadowTaskResult) bool, family string) boundarySerialVerification {
+	verification := boundarySerialVerification{}
+	if statedb == nil || dynProps == nil || cfg.block == nil || result == nil || txIndex < 0 || txIndex >= len(cfg.transactions) {
+		verification.err = fmt.Errorf("missing %s boundary verification input", family)
+		return verification
+	}
+	if ready == nil {
+		verification.err = fmt.Errorf("missing %s boundary verification readiness policy", family)
+		return verification
+	}
+	guard, err := beginCanonicalOracleRestorationGuard(statedb, dynProps, result.writes)
+	if err != nil {
+		verification.err = fmt.Errorf("%w: %s pre-execution seal: %v", errCanonicalOracleRestoration, family, err)
+		return verification
+	}
+	defer guard.revert()
+	// Normal history-enabled block processing already owns the canonical
+	// recorder. Direct processBlock callers (including replay/audit tools) may
+	// request trace comparison without first installing one. Give the oracle a
+	// private block recorder only in that case. worker.execute's nested snapshot
+	// removes its transaction before return; ClearBalanceTrace then removes the
+	// temporary block recorder without touching canonical history.
+	temporaryBalanceTrace := cfg.captureBalanceTrace && !statedb.BalanceTraceActive()
+	if temporaryBalanceTrace {
+		blockHash := cfg.block.Hash()
+		statedb.BeginBalanceTrace(int64(cfg.block.Number()), blockHash.Bytes(), cfg.block.Timestamp())
+		defer statedb.ClearBalanceTrace()
+	}
+	verification = verifyResultOnBoundaryState(statedb, dynProps, txIndex, result, cfg, ready)
+	if cfg.canonicalOraclePostExecutionTestHook != nil {
+		cfg.canonicalOraclePostExecutionTestHook(family, statedb, dynProps)
+	}
+	verification.err = guard.verifyAndRevert(family, verification.err)
+	return verification
+}
+
+// verifyVMResultAtCanonicalBoundary requires two serial executions with
+// different state acquisition paths. The isolated full Copy protects the live
+// canonical view from complex VM mutation, while the direct nested execution
+// prevents a shared Copy/copyStateObject omission from becoming a false match.
+// Only the direct result is returned for publication.
+func verifyVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig) boundarySerialVerification {
+	isolated := verifyResultAtCanonicalBoundary(statedb, dynProps, txIndex, result, cfg, preexecutedResultReady)
+	if isolated.err != nil || isolated.canonical == nil {
+		isolated.crossCheck = &boundaryOracleCrossCheck{err: errors.New("isolated VM canonical result unavailable")}
+		return isolated
+	}
+	direct := verifyResultDirectAtCanonicalBoundary(statedb, dynProps, txIndex, result, cfg, preexecutedResultReady, "VM")
+	check := compareBoundaryCanonicalResults(isolated.canonical, direct.canonical)
+	if direct.err != nil {
+		check.err = fmt.Errorf("direct VM canonical result unavailable: %w", direct.err)
+	} else if !check.matched() {
+		check.err = fmt.Errorf("VM isolated/direct canonical results disagree: info=%t writes=%t balance_trace=%t",
+			check.infoMatch, check.writeMatch, check.balanceMatch)
+		direct.err = check.err
+	}
+	direct.crossCheck = &check
+	return direct
+}
+
+// verifyTransferResultAtCanonicalBoundary executes the authoritative plain
+// transfer directly against the canonical StateDB under the worker's nested
+// state/dynamic-property snapshots. execute reverts both snapshots before it
+// returns, including balance-trace state, so this is a zero-copy serial oracle:
+// it shares neither the speculative worker's block-start base nor the
+// prohibitively expensive per-publication full StateDB copy.
+func verifyTransferResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig) boundarySerialVerification {
+	return verifyResultDirectAtCanonicalBoundary(statedb, dynProps, txIndex, result, cfg, preexecutedTransferReady, "Transfer")
 }
 
 // validateVMResultAtCanonicalBoundary is the single fail-closed admission gate
 // shared by every canonical VM publisher. Keeping metrics and the match policy
 // here prevents a new publication cohort from accidentally omitting part of
 // the serial-oracle contract.
-func validateVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig) bool {
+func validateVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig) (*discardShadowTaskResult, error) {
 	parallelVMSerialVerifyCandidatesCounter.Inc(1)
+	parallelVMDualOracleCandidatesCounter.Inc(1)
 	started := time.Now()
 	verification := verifyVMResultAtCanonicalBoundary(statedb, dynProps, txIndex, result, cfg)
 	parallelVMSerialVerifyNanosCounter.Inc(time.Since(started).Nanoseconds())
+	if verification.crossCheck == nil {
+		parallelVMDualOracleErrorsCounter.Inc(1)
+	} else {
+		if !verification.crossCheck.infoMatch {
+			parallelVMDualOracleInfoMismatchCounter.Inc(1)
+		}
+		if !verification.crossCheck.writeMatch {
+			parallelVMDualOracleWriteMismatchCounter.Inc(1)
+		}
+		if !verification.crossCheck.readMatch {
+			parallelVMDualOracleReadDifferenceCounter.Inc(1)
+		}
+		if !verification.crossCheck.balanceMatch {
+			parallelVMDualOracleBalanceMismatchCounter.Inc(1)
+		}
+		if verification.crossCheck.err != nil {
+			parallelVMDualOracleErrorsCounter.Inc(1)
+		} else if verification.crossCheck.matched() {
+			parallelVMDualOracleMatchesCounter.Inc(1)
+		}
+	}
 	if verification.err != nil {
+		if errors.Is(verification.err, errCanonicalOracleRestoration) {
+			parallelVMSerialVerifyRestoreMismatchCounter.Inc(1)
+		}
 		parallelVMSerialVerifyErrorsCounter.Inc(1)
 		logVMSerialOracleRejection(cfg, txIndex, verification)
-		return false
+		return nil, fmt.Errorf("%w: VM serial oracle error at tx %d: %w", errSpeculativePublicationAudit, txIndex, verification.err)
 	}
 	if !verification.infoMatch {
 		parallelVMSerialVerifyInfoMismatchCounter.Inc(1)
@@ -3707,18 +4361,168 @@ func validateVMResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state
 	if !verification.writeMatch {
 		parallelVMSerialVerifyWriteMismatchCounter.Inc(1)
 	}
+	if !verification.readMatch {
+		parallelVMSerialVerifyReadDifferenceCounter.Inc(1)
+	}
 	if !verification.balanceMatch {
 		parallelVMSerialVerifyBalanceMismatchCounter.Inc(1)
 	}
 	if !verification.matched() {
 		logVMSerialOracleRejection(cfg, txIndex, verification)
-		return false
+		return nil, fmt.Errorf("%w: VM serial oracle mismatch at tx %d: info=%t writes=%t balance_trace=%t",
+			errSpeculativePublicationAudit, txIndex, verification.infoMatch, verification.writeMatch, verification.balanceMatch)
 	}
 	parallelVMSerialVerifyMatchesCounter.Inc(1)
-	return true
+	return verification.canonical, nil
 }
 
-func logVMSerialOracleRejection(cfg discardShadowRunConfig, txIndex int, verification vmBoundarySerialVerification) {
+// validateTransferResultAtCanonicalBoundary is the independent zero-copy
+// serial oracle for every Transfer publication. The in-place execution owns a
+// private recorder and detaches it on return, so this gate always reinstalls
+// the canonical transaction recorder before its caller applies or serially
+// falls back.
+func validateTransferResultAtCanonicalBoundary(statedb *state.StateDB, dynProps *state.DynamicProperties, txIndex int, result *discardShadowTaskResult, cfg discardShadowRunConfig, versioned *versionedAccessShadow) (*discardShadowTaskResult, error) {
+	parallelTransferSerialVerifyCandidatesCounter.Inc(1)
+	started := time.Now()
+	verification := verifyTransferResultAtCanonicalBoundary(statedb, dynProps, txIndex, result, cfg)
+	parallelTransferSerialVerifyNanosCounter.Inc(time.Since(started).Nanoseconds())
+	if versioned != nil && statedb != nil && dynProps != nil {
+		versioned.BeginTransaction(txIndex, statedb, dynProps)
+	}
+	if verification.err != nil {
+		if errors.Is(verification.err, errCanonicalOracleRestoration) {
+			parallelTransferSerialVerifyRestoreMismatchCounter.Inc(1)
+		}
+		parallelTransferSerialVerifyErrorsCounter.Inc(1)
+		logSerialOracleRejection("Transfer", cfg, txIndex, verification)
+		return nil, fmt.Errorf("%w: Transfer serial oracle error at tx %d: %w", errSpeculativePublicationAudit, txIndex, verification.err)
+	}
+	if !verification.infoMatch {
+		parallelTransferSerialVerifyInfoMismatchCounter.Inc(1)
+	}
+	if !verification.writeMatch {
+		parallelTransferSerialVerifyWriteMismatchCounter.Inc(1)
+	}
+	if !verification.readMatch {
+		parallelTransferSerialVerifyReadDifferenceCounter.Inc(1)
+	}
+	if !verification.balanceMatch {
+		parallelTransferSerialVerifyBalanceMismatchCounter.Inc(1)
+	}
+	if !verification.matched() {
+		logSerialOracleRejection("Transfer", cfg, txIndex, verification)
+		return nil, fmt.Errorf("%w: Transfer serial oracle mismatch at tx %d: info=%t writes=%t balance_trace=%t",
+			errSpeculativePublicationAudit, txIndex, verification.infoMatch, verification.writeMatch, verification.balanceMatch)
+	}
+	parallelTransferSerialVerifyMatchesCounter.Inc(1)
+	return verification.canonical, nil
+}
+
+// validateTransferBalancePostImages independently derives the two consensus-
+// critical TRX balance post-images from the exact canonical boundary. Unlike a
+// full StateDB copy and transaction replay this is constant work, so it can be
+// required for every plain-transfer publication. Fresh-recipient creation has
+// wider account semantics and deliberately falls back to the serial path.
+func validateTransferBalancePostImages(statedb *state.StateDB, tx *types.Transaction, result *discardShadowTaskResult, cfg discardShadowRunConfig, txIndex int) (bool, error) {
+	parallelTransferBalanceOracleCandidatesCounter.Inc(1)
+	reject := func(reason string, oracleErr error) (bool, error) {
+		if oracleErr != nil {
+			parallelTransferBalanceOracleErrorsCounter.Inc(1)
+		} else {
+			parallelTransferBalanceOracleMismatchesCounter.Inc(1)
+		}
+		var blockNumber uint64
+		var txHash tcommon.Hash
+		if cfg.block != nil {
+			blockNumber = cfg.block.Number()
+		}
+		if tx != nil {
+			txHash = tx.Hash()
+		}
+		log.Warn("Speculative Transfer result rejected by balance oracle",
+			"block", blockNumber,
+			"txIndex", txIndex,
+			"tx", txHash,
+			"reason", reason,
+			"err", oracleErr,
+			"action", "block-rollback-persistent-serial-circuit",
+		)
+		return false, fmt.Errorf("%w: Transfer balance oracle rejected tx %d: %s: %v", errSpeculativePublicationAudit, txIndex, reason, oracleErr)
+	}
+	if statedb == nil || tx == nil || result == nil || result.info == nil {
+		return reject("missing-input", errors.New("missing balance oracle input"))
+	}
+	decoded, err := tx.DecodedContract()
+	if err != nil {
+		return reject("decode-contract", err)
+	}
+	transfer, ok := decoded.(*contractpb.TransferContract)
+	if !ok {
+		return reject("not-plain-transfer", errors.New("unexpected transfer contract type"))
+	}
+	if len(transfer.OwnerAddress) != tcommon.AddressLength || len(transfer.ToAddress) != tcommon.AddressLength || transfer.Amount <= 0 {
+		return reject("invalid-contract", errors.New("invalid transfer address or amount"))
+	}
+	owner := tcommon.BytesToAddress(transfer.OwnerAddress)
+	recipient := tcommon.BytesToAddress(transfer.ToAddress)
+	if !statedb.Exist(recipient) {
+		// Account creation carries a full account envelope and account-create
+		// fee semantics. It is expected traffic, not an oracle mismatch; keep it
+		// on the authoritative serial path without emitting a warning per tx.
+		parallelTransferBalanceOracleFallbacksCounter.Inc(1)
+		return false, nil
+	}
+	// Before blackhole optimization, bandwidth/memo/multisig fees may be
+	// credited to the chain-specific Blackhole account. If either transfer
+	// participant aliases that settlement sink, its final balance is not the
+	// simple owner-before-debit / recipient-before-plus-amount pair below. The
+	// exact split also depends on independently forked fee-pool routing. Keep
+	// this valid but protocol-special transaction on the authoritative serial
+	// path instead of treating the extra settlement credit as corruption.
+	blackhole := statedb.BlackholeAddress()
+	if owner == blackhole || recipient == blackhole {
+		parallelTransferBalanceOracleFallbacksCounter.Inc(1)
+		return false, nil
+	}
+	if owner == recipient || !statedb.Exist(owner) {
+		return reject("invalid-account", errors.New("missing or aliased transfer account"))
+	}
+	fee := result.info.GetFee()
+	if fee < 0 || transfer.Amount > (1<<63-1)-fee {
+		return reject("invalid-fee", errors.New("negative or overflowing transfer fee"))
+	}
+	debit := transfer.Amount + fee
+	ownerBefore := statedb.GetBalance(owner)
+	recipientBefore := statedb.GetBalance(recipient)
+	if ownerBefore < debit || recipientBefore > (1<<63-1)-transfer.Amount {
+		return reject("balance-overflow", errors.New("invalid canonical balance arithmetic"))
+	}
+	ownerAfter, ownerOK := transferBalancePostImage(result.writes, owner)
+	recipientAfter, recipientOK := transferBalancePostImage(result.writes, recipient)
+	if !ownerOK || !recipientOK || ownerAfter != ownerBefore-debit || recipientAfter != recipientBefore+transfer.Amount {
+		return reject("post-image-mismatch", nil)
+	}
+	parallelTransferBalanceOracleMatchesCounter.Inc(1)
+	return true, nil
+}
+
+func transferBalancePostImage(writes state.TransactionWriteSet, address tcommon.Address) (int64, bool) {
+	value, ok := writes[state.TransactionAccessKey{
+		Kind:         state.TransactionAccessAccountField,
+		Address:      address,
+		AccountField: state.TransactionAccountFieldBalance,
+	}]
+	if !ok || !value.Exists || value.Commutative || len(value.Value) != 8 {
+		return 0, false
+	}
+	return int64(binary.BigEndian.Uint64(value.Value)), true
+}
+
+func logVMSerialOracleRejection(cfg discardShadowRunConfig, txIndex int, verification boundarySerialVerification) {
+	logSerialOracleRejection("VM", cfg, txIndex, verification)
+}
+
+func logSerialOracleRejection(family string, cfg discardShadowRunConfig, txIndex int, verification boundarySerialVerification) {
 	var (
 		blockNumber uint64
 		txHash      tcommon.Hash
@@ -3729,20 +4533,25 @@ func logVMSerialOracleRejection(cfg discardShadowRunConfig, txIndex int, verific
 	if txIndex >= 0 && txIndex < len(cfg.transactions) && cfg.transactions[txIndex] != nil {
 		txHash = cfg.transactions[txIndex].Hash()
 	}
-	// This is deliberately a warning rather than an error: the candidate has
-	// not mutated canonical state and the caller immediately runs the normal
-	// serial path. It is nevertheless unexpected and must be visible without a
-	// metrics scraper because any non-zero mismatch invalidates the VM rollout
-	// gate.
-	log.Warn("Speculative VM result rejected by canonical serial oracle",
+	// The candidate has not mutated canonical state, but the mismatch is a
+	// release-disqualifying invariant failure. The caller rolls back the block,
+	// persists the safety marker, and retries with both publishers disabled.
+	message := "Speculative Transfer result rejected by canonical serial oracle"
+	if family == "VM" {
+		message = "Speculative VM result rejected by canonical serial oracle"
+	}
+	log.Warn(message,
+		"family", family,
 		"block", blockNumber,
 		"txIndex", txIndex,
 		"tx", txHash,
 		"infoMatch", verification.infoMatch,
 		"writeSetMatch", verification.writeMatch,
+		"readSetMatch", verification.readMatch,
 		"balanceTraceMatch", verification.balanceMatch,
+		"dualOracle", verification.crossCheck,
 		"err", verification.err,
-		"action", "serial-fallback",
+		"action", "block-rollback-persistent-serial-circuit",
 	)
 }
 
@@ -4093,8 +4902,6 @@ func (shadow *discardShadowBlock) finishSenderChains(pre *discardShadowPreexecut
 			stats.applyMismatches++
 		case !resultReady:
 			stats.readinessRejected++
-		default:
-			break
 		}
 		if !resultReady {
 			stats.errors++
@@ -4527,14 +5334,11 @@ func verifyOrderedApplyState(publisher *state.StateDB, results []discardShadowTa
 		}
 		publisher.FinalizeTransaction()
 		applied, known, err := publisher.CaptureTransactionWriteSet(journalMark, &recorder, dynProps)
-		switch {
-		case err != nil || !known:
+		if err != nil || !known {
 			stats.errors++
-			break
-		case !state.EqualTransactionWriteSets(applied, result.writes):
+		} else if !state.EqualTransactionWriteSets(applied, result.writes) {
 			stats.mismatches++
-			break
-		default:
+		} else {
 			stats.matches++
 			continue
 		}
@@ -4597,8 +5401,12 @@ func (worker *discardShadowWorker) execute(txIndex int, cfg discardShadowRunConf
 	dpSnapshot := worker.dynProps.Snapshot()
 	journalMark := worker.state.DomainChangeJournalMark()
 	worker.recorder.Reset(64)
-	worker.state.SetTransactionAccessRecorder(&worker.recorder)
-	worker.dynProps.SetTransactionAccessRecorder(&worker.recorder)
+	previousStateRecorder := worker.state.SwapTransactionAccessRecorder(&worker.recorder)
+	previousDPRecorder := worker.dynProps.SwapTransactionAccessRecorder(&worker.recorder)
+	defer func() {
+		worker.state.SwapTransactionAccessRecorder(previousStateRecorder)
+		worker.dynProps.SwapTransactionAccessRecorder(previousDPRecorder)
+	}()
 	worker.db.reset()
 	worker.infoSlot.internalTxArena.Reset()
 	worker.infoSlot.executionLogArena.Reset()

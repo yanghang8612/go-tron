@@ -9,6 +9,8 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"strconv"
+	"strings"
 
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -16,6 +18,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
+	troncrypto "github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -251,6 +254,70 @@ func javaResourceCodeV1(v *uint256.Int) int64 {
 	return int64(int32(v.Uint64()))
 }
 
+// featuredInternalResourceName mirrors Program.convertResourceToString. It is
+// deliberately based on DataWord.intValue() (signed low 32 bits), even for the
+// V2 opcodes whose processor validation parses the full word as an exact byte.
+// The note is created before validation, so an invalid V2 word can still carry
+// a suffix derived from its truncated intValue.
+func featuredInternalResourceName(v *uint256.Int) string {
+	switch javaResourceCodeV1(v) {
+	case 0:
+		return "Bandwidth"
+	case 1:
+		return "Energy"
+	case 2:
+		return "TronPower"
+	default:
+		return "UnknownType"
+	}
+}
+
+func rejectInternalTransaction(tx *corepb.InternalTransaction) {
+	if tx != nil {
+		tx.Rejected = true
+	}
+}
+
+// setInternalTransactionValue changes the persisted value without recomputing
+// the hash. That is intentional: java constructs (and hashes) UNFREEZE / reward
+// records with value zero, then calls InternalTransaction.setValue on success;
+// its already-cached identity remains based on the original zero value.
+func setInternalTransactionValue(tx *corepb.InternalTransaction, value int64) {
+	if tx != nil && len(tx.CallValueInfo) > 0 && tx.CallValueInfo[0] != nil {
+		tx.CallValueInfo[0].CallValue = value
+	}
+}
+
+func featuredVoteExtra(votes []*corepb.Vote) string {
+	var b strings.Builder
+	b.WriteString(`{"votes":[`)
+	for i, vote := range votes {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"vote_address":"`)
+		b.WriteString(troncrypto.AddressToBase58(tcommon.BytesToAddress(vote.VoteAddress)))
+		b.WriteString(`","vote_count":`)
+		b.WriteString(strconv.FormatInt(vote.VoteCount, 10))
+		b.WriteByte('}')
+	}
+	b.WriteString(`]}`)
+	return b.String()
+}
+
+func featuredCancelAllUnfreezeV2Extra(cancelled map[corepb.ResourceCode]int64) string {
+	var b strings.Builder
+	b.Grow(64)
+	b.WriteString(`{"BANDWIDTH":`)
+	b.WriteString(strconv.FormatInt(cancelled[corepb.ResourceCode_BANDWIDTH], 10))
+	b.WriteString(`,"ENERGY":`)
+	b.WriteString(strconv.FormatInt(cancelled[corepb.ResourceCode_ENERGY], 10))
+	b.WriteString(`,"TRON_POWER":`)
+	b.WriteString(strconv.FormatInt(cancelled[corepb.ResourceCode_TRON_POWER], 10))
+	b.WriteByte('}')
+	return b.String()
+}
+
 // ── 0xD5 FREEZE ───────────────────────────────────────────────────────────────
 // Stack: receiverAddr, amount, resourceType → success
 // resourceType: 0=BANDWIDTH, 1=ENERGY
@@ -262,16 +329,6 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 	resourceWord := stack.pop()
 	amountWord := stack.pop()
 	receiverWord := stack.pop()
-
-	// SV-3: java OperationActions.freezeAction calls program.freeze() only when
-	// allowTvmFreezeV2 is NOT active (else it pushes 0 without calling freeze);
-	// freeze() then increaseNonce() once up front (Program.java:1920), before its
-	// own validate/execute, so the nonce advances even on a validate failure. The
-	// nonce feeds a subsequent CREATE address, so mirror the +1 here (gated on the
-	// same !StakingV2 condition) before any push-0 early return.
-	if !in.tvm.cfg.StakingV2 {
-		in.tvm.Nonce++
-	}
 
 	// A (truncation): java Program.freeze parses the amount via
 	// frozenBalance.sValue().longValueExact() (Program.java:1935), which throws
@@ -301,17 +358,44 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 		}
 	}
 
+	// java charges the complete opcode energy before OperationActions invokes
+	// Program.freeze. Only after that succeeds does freeze increment the nonce
+	// and create its featured internal transaction. Under Stake V2 the action
+	// pushes zero without calling Program.freeze at all.
+	var internalTx *corepb.InternalTransaction
+	if !in.tvm.cfg.StakingV2 {
+		in.tvm.Nonce++
+		internalTx = in.tvm.addInternalTransaction(caller, receiver, int64(amountWord.Uint64()), nil,
+			"freezeFor"+featuredInternalResourceName(&resourceWord), 0, 0)
+	}
+
 	// !amountOK is evaluated before the `< tvmTRXPrecision` comparison so a
 	// rejected (out-of-range) amount never uses a bogus parsed value.
 	if in.tvm.cfg.StakingV2 || !amountOK || amount < tvmTRXPrecision || (resourceType != 0 && resourceType != 1) {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
-	if err := in.tvm.StateDB.SubBalance(caller, amount); err != nil {
+	// FreezeBalanceProcessor validates the owner's V1 bandwidth frozen-list
+	// cardinality for both resource types before mutating anything. Although
+	// normal java-tron state has at most one entry, imported/legacy state with
+	// multiple entries must be rejected rather than silently merged.
+	frozenCount, err := in.tvm.StateDB.GetFreezeV1BandwidthCount(caller)
+	if err != nil || (frozenCount != 0 && frozenCount != 1) {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
-
+	// FreezeBalanceProcessor validates owner balance before it creates a missing
+	// delegated receiver in the child repository. Keep this non-mutating check
+	// separate from the execute-time debit below: moving only SubBalance after
+	// receiver validation would leave a newly created account behind when the
+	// owner is underfunded.
+	if in.tvm.StateDB.GetBalance(caller) < amount {
+		rejectInternalTransaction(internalTx)
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 	durationDays := int64(3)
 	if in.tvm.DynProps != nil && in.tvm.DynProps.MinFrozenTime() > 0 {
 		durationDays = in.tvm.DynProps.MinFrozenTime()
@@ -328,10 +412,19 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 	if delegated {
 		recvAccount := in.tvm.StateDB.GetAccount(receiver)
 		if recvAccount != nil && recvAccount.Type() == corepb.AccountType_Contract {
-			in.tvm.StateDB.AddBalance(caller, amount)
+			rejectInternalTransaction(internalTx)
 			stack.push(uint256.NewInt(0))
 			return nil, nil
 		}
+	}
+	// Java completes the receiver validation (and any normal-account creation)
+	// in the child repository before FreezeBalanceProcessor.execute deducts the
+	// owner balance. In particular, a contract receiver rejects without a
+	// transient debit/refund pair leaking into BlockBalanceTrace.
+	if err := in.tvm.StateDB.SubBalance(caller, amount); err != nil {
+		rejectInternalTransaction(internalTx)
+		stack.push(uint256.NewInt(0))
+		return nil, nil
 	}
 	switch resourceType {
 	case 0:
@@ -387,6 +480,8 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 	resourceType := javaResourceCodeV1(&resourceWord)
 	caller := contract.Address
 	receiver := uint256ToAddress(&receiverWord)
+	internalTx := in.tvm.addInternalTransaction(caller, receiver, 0, nil,
+		"unfreezeFor"+featuredInternalResourceName(&resourceWord), 0, 0)
 	nowMs := tvmLatestBlockHeaderTimestamp(in.tvm)
 
 	var unfrozen int64
@@ -394,12 +489,14 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 	if delegated {
 		dr := in.tvm.StateDB.ReadDelegatedResourceLegacy(caller, receiver)
 		if dr == nil {
+			rejectInternalTransaction(internalTx)
 			stack.push(uint256.NewInt(0))
 			return nil, nil
 		}
 		switch resourceType {
 		case 0:
 			if dr.FrozenBalanceForBandwidth <= 0 || dr.ExpireTimeForBandwidth > nowMs {
+				rejectInternalTransaction(internalTx)
 				stack.push(uint256.NewInt(0))
 				return nil, nil
 			}
@@ -409,6 +506,7 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 			in.tvm.StateDB.UnfreezeV1DelegatedBandwidth(caller, receiver, unfrozen)
 		case 1:
 			if dr.FrozenBalanceForEnergy <= 0 || dr.ExpireTimeForEnergy > nowMs {
+				rejectInternalTransaction(internalTx)
 				stack.push(uint256.NewInt(0))
 				return nil, nil
 			}
@@ -417,39 +515,63 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 			dr.ExpireTimeForEnergy = 0
 			in.tvm.StateDB.UnfreezeV1DelegatedEnergy(caller, receiver, unfrozen)
 		default:
+			rejectInternalTransaction(internalTx)
 			stack.push(uint256.NewInt(0))
 			return nil, nil
 		}
-		if dr.FrozenBalanceForBandwidth == 0 && dr.FrozenBalanceForEnergy == 0 {
-			_ = in.tvm.StateDB.DeleteDelegatedResourceLegacy(caller, receiver)
-		} else {
-			_ = in.tvm.StateDB.WriteDelegatedResourceLegacy(caller, receiver, dr)
-		}
+		// java UnfreezeBalanceProcessor always updateDelegatedResource after
+		// zeroing the selected balance. It deliberately preserves an all-zero
+		// capsule; deleting it changes the rooted delegation state and wallet
+		// query result even though a later unfreeze still rejects.
+		_ = in.tvm.StateDB.WriteDelegatedResourceLegacy(caller, receiver, dr)
 	} else {
 		switch resourceType {
 		case 0:
+			// UnfreezeBalanceProcessor validates BANDWIDTH by row presence and
+			// expiry only; it does not require the expired rows' wrapping balance
+			// sum to be positive. Synthetic/imported zero or negative rows still
+			// make the processor succeed and are removed by execute.
+			account := in.tvm.StateDB.GetAccount(caller)
+			hasExpired := false
+			if account != nil && len(account.FrozenBandwidthList()) > 0 {
+				for _, frozen := range account.FrozenBandwidthList() {
+					if frozen != nil && frozen.ExpireTime <= nowMs {
+						hasExpired = true
+						break
+					}
+				}
+			}
+			if !hasExpired {
+				rejectInternalTransaction(internalTx)
+				stack.push(uint256.NewInt(0))
+				return nil, nil
+			}
 			unfrozen = in.tvm.StateDB.UnfreezeV1Bandwidth(caller, nowMs)
 		case 1:
+			account := in.tvm.StateDB.GetAccount(caller)
+			if account == nil || account.FrozenEnergyAmount() <= 0 || account.FrozenEnergyExpireTime() > nowMs {
+				rejectInternalTransaction(internalTx)
+				stack.push(uint256.NewInt(0))
+				return nil, nil
+			}
 			unfrozen = in.tvm.StateDB.UnfreezeV1Energy(caller, nowMs)
 		default:
+			rejectInternalTransaction(internalTx)
 			stack.push(uint256.NewInt(0))
 			return nil, nil
 		}
 	}
-	if unfrozen > 0 {
+	setInternalTransactionValue(internalTx, unfrozen)
+	if unfrozen != 0 {
 		in.tvm.StateDB.AddBalance(caller, unfrozen)
-		if resourceType == 0 {
-			tvmAddResourceWeight(in.tvm, corepb.ResourceCode_BANDWIDTH, -unfrozen/tvmTRXPrecision)
-		} else {
-			tvmAddResourceWeight(in.tvm, corepb.ResourceCode_ENERGY, -unfrozen/tvmTRXPrecision)
-		}
-		_ = updateTVMVotesAfterUnfreezeV1(in.tvm, caller)
 	}
-	result := uint256.NewInt(0)
-	if unfrozen > 0 {
-		result.SetOne()
+	if resourceType == 0 {
+		tvmAddResourceWeight(in.tvm, corepb.ResourceCode_BANDWIDTH, -unfrozen/tvmTRXPrecision)
+	} else {
+		tvmAddResourceWeight(in.tvm, corepb.ResourceCode_ENERGY, -unfrozen/tvmTRXPrecision)
 	}
-	stack.push(result)
+	_ = updateTVMVotesAfterUnfreezeV1(in.tvm, caller)
+	stack.push(uint256.NewInt(1))
 	return nil, nil
 }
 
@@ -467,13 +589,19 @@ func opFreezeExpireTime(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 		if dr := in.tvm.StateDB.ReadDelegatedResourceLegacy(contract.Address, addr); dr != nil {
 			switch resourceType {
 			case 0:
-				expireMs = dr.ExpireTimeForBandwidth
+				if dr.FrozenBalanceForBandwidth != 0 {
+					expireMs = dr.ExpireTimeForBandwidth
+				}
 			case 1:
-				expireMs = dr.ExpireTimeForEnergy
+				if dr.FrozenBalanceForEnergy != 0 {
+					expireMs = dr.ExpireTimeForEnergy
+				}
 			}
 		}
 	} else {
-		expireMs = in.tvm.StateDB.GetFreezeV1ExpireTime(addr, resourceType)
+		if balance, expiry := in.tvm.StateDB.GetFreezeV1BalanceAndExpire(addr, resourceType); balance != 0 {
+			expireMs = expiry
+		}
 	}
 	result := uint256.NewInt(0)
 	result.SetUint64(uint64(expireMs / 1000))
@@ -518,6 +646,7 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 	// after the energy cost is charged but BEFORE the memory length-word check and
 	// validate, so the nonce advances even when the vote reverts or pushes 0.
 	in.tvm.Nonce++
+	internalTx := in.tvm.addInternalTransactionWithoutReceiver(contract.Address, 0, nil, "voteWitness")
 
 	// java OperationActions.voteWitnessAction reads the four stack words via
 	// DataWord.intValueSafe() (clamps a >4-byte or sign-negative word to
@@ -540,21 +669,15 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 		return nil, errVoteWitnessMemoryLength
 	}
 	if n != amountN {
-		stack.push(uint256.NewInt(0))
-		return nil, nil
-	}
-	if n < 0 || n > 30 {
+		// java returns false before entering the try/catch that rejects this
+		// record. The resulting featured internal transaction is intentionally
+		// unrejected even though the opcode pushes zero.
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 
 	caller := contract.Address
-
-	const maxInt64 = int64(^uint64(0) >> 1)
-
-	voteSums := make(map[tcommon.Address]int64, n)
-	voteOrder := make([]tcommon.Address, 0, n)
-	var totalVotes int64
+	parsedVotes := make([]*corepb.Vote, 0, n)
 	for i := int64(0); i < n; i++ {
 		wBytes := mem.getPtr(wBase+32+i*32, 32)
 		aBytes := mem.getPtr(aBase+32+i*32, 32)
@@ -564,12 +687,43 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 			copy(witnessAddr[1:], wBytes[12:32])
 			witnessAddr[0] = 0x41
 		}
-		if in.tvm.StateDB.GetWitness(witnessAddr) == nil {
+		amount, ok := int64ExactFromWord(aBytes)
+		if !ok {
+			rejectInternalTransaction(internalTx)
 			stack.push(uint256.NewInt(0))
 			return nil, nil
 		}
-		amount, ok := int64ExactFromWord(aBytes)
-		if !ok || amount < 0 {
+		parsedVotes = append(parsedVotes, &corepb.Vote{
+			VoteAddress: witnessAddr.Bytes(),
+			VoteCount:   amount,
+		})
+	}
+	if internalTx != nil {
+		// Program sets Extra after parsing the complete arrays but before the
+		// processor validates the 30-vote limit or executes witness/power checks.
+		internalTx.Extra = featuredVoteExtra(parsedVotes)
+	}
+	if n > 30 {
+		rejectInternalTransaction(internalTx)
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+
+	const maxInt64 = int64(^uint64(0) >> 1)
+
+	voteSums := make(map[tcommon.Address]int64, n)
+	voteOrder := make([]tcommon.Address, 0, n)
+	var totalVotes int64
+	for _, vote := range parsedVotes {
+		witnessAddr := tcommon.BytesToAddress(vote.VoteAddress)
+		if in.tvm.StateDB.GetWitness(witnessAddr) == nil {
+			rejectInternalTransaction(internalTx)
+			stack.push(uint256.NewInt(0))
+			return nil, nil
+		}
+		amount := vote.VoteCount
+		if amount < 0 {
+			rejectInternalTransaction(internalTx)
 			stack.push(uint256.NewInt(0))
 			return nil, nil
 		}
@@ -577,6 +731,7 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 			continue
 		}
 		if totalVotes > maxInt64-amount {
+			rejectInternalTransaction(internalTx)
 			stack.push(uint256.NewInt(0))
 			return nil, nil
 		}
@@ -585,12 +740,14 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 			voteOrder = append(voteOrder, witnessAddr)
 		}
 		if voteSums[witnessAddr] > maxInt64-amount {
+			rejectInternalTransaction(internalTx)
 			stack.push(uint256.NewInt(0))
 			return nil, nil
 		}
 		voteSums[witnessAddr] += amount
 	}
 	if totalVotes > 0 && totalVotes > maxInt64/tvmTRXPrecision {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -601,6 +758,7 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 		tronPower = in.tvm.StateDB.GetLegacyTronPower(caller)
 	}
 	if totalVotes*tvmTRXPrecision > tronPower {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -611,7 +769,11 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 	// first-seen insertion order we accumulated in voteOrder — is what gets
 	// protobuf-serialized into state, so reorder to the java HashMap iteration
 	// order before writing or the state root diverges.
-	hashOrder := javaHashMapOrder(voteOrder)
+	hashOrder, reproducible := javaHashMapOrderChecked(voteOrder)
+	if !reproducible {
+		rejectInternalTransaction(internalTx)
+		return nil, ErrUnreproducibleJavaHashMapOrder
+	}
 	votes := make([]*corepb.Vote, 0, len(hashOrder))
 	for _, witnessAddr := range hashOrder {
 		votes = append(votes, &corepb.Vote{
@@ -623,6 +785,7 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 	tvmWithdrawReward(in.tvm, caller)
 	oldVotes := in.tvm.StateDB.GetVotes(caller)
 	if err := recordTVMPendingVotes(in.tvm, caller, oldVotes, votes); err != nil {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -919,7 +1082,7 @@ func updateTVMVotesAfterUnfreezeV2(tvm *TVM, owner tcommon.Address, resource cor
 	}
 	newVotes := make([]*corepb.Vote, 0, len(votes))
 	for _, vote := range votes {
-		newVoteCount := int64(float64(vote.VoteCount) / float64(totalVotes) * float64(ownedTronPower) / float64(tvmTRXPrecision))
+		newVoteCount := tcommon.JavaDoubleToInt64(float64(vote.VoteCount) / float64(totalVotes) * float64(ownedTronPower) / float64(tvmTRXPrecision))
 		if newVoteCount > 0 {
 			newVotes = append(newVotes, &corepb.Vote{
 				VoteAddress: append([]byte(nil), vote.VoteAddress...),
@@ -970,33 +1133,42 @@ func opWithdrawReward(_ *uint64, in *Interpreter, contract *Contract, _ *Memory,
 	// unconditionally (before validate/execute), so the nonce advances even on the
 	// genesis-witness / no-reward push-0 paths.
 	in.tvm.Nonce++
+	internalTx := in.tvm.addInternalTransaction(caller, caller, 0, nil, "withdrawReward", 0, 0)
 	if isTVMGenesisWitness(in.tvm, caller) {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 	withdrawable := tvmQueryReward(in.tvm, caller)
-	const maxInt64 = int64(^uint64(0) >> 1)
 	// java Program.withdrawReward runs execute()+commit() UNCONDITIONALLY (only a
 	// validate/execute exception skips them): the reward cycle bookkeeping
 	// (beginCycle/endCycle advance + the cycle-vote snapshot) is settled even when
 	// the net reward is 0. go must settle too — skipping tvmWithdrawReward on
 	// withdrawable==0 left beginCycle stale, diverging the contract's later reward
 	// computation (a re-claim/compound loop with 0 pending reward is common). The
-	// only non-settle path is the balance+reward int64 overflow (java's execute
-	// throws -> the child repository is never committed).
-	if withdrawable > 0 && in.tvm.StateDB.GetBalance(caller) > maxInt64-withdrawable {
+	// only non-settle path is checked balance+allowance addition overflow or
+	// underflow (java's Math.addExact throws -> the child repository is never
+	// committed). Java performs that addition before its allowance<=0 return, so
+	// malformed negative allowance still has to take the underflow branch.
+	balance := in.tvm.StateDB.GetBalance(caller)
+	if (withdrawable > 0 && balance > math.MaxInt64-withdrawable) ||
+		(withdrawable < 0 && balance < math.MinInt64-withdrawable) {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 	tvmWithdrawReward(in.tvm, caller)
 	allowance := in.tvm.StateDB.GetAllowance(caller)
+	withdrawn := int64(0)
 	if allowance > 0 {
 		in.tvm.StateDB.AddBalance(caller, allowance)
 		in.tvm.StateDB.SetAllowance(caller, 0)
 		in.tvm.StateDB.SetLatestWithdrawTime(caller, in.tvm.Timestamp)
+		withdrawn = allowance
 	}
+	setInternalTransactionValue(internalTx, withdrawn)
 	result := uint256.NewInt(0)
-	result.SetUint64(uint64(allowance))
+	result.SetUint64(uint64(withdrawn))
 	stack.push(result)
 	return nil, nil
 }
@@ -1011,7 +1183,7 @@ func opWithdrawReward(_ *uint64, in *Interpreter, contract *Contract, _ *Memory,
 // destroyed account's votes vanish from the account store (voter sum) but stay in
 // the witness vote tally (it was only ever added by the fold, never removed),
 // drifting tally above voter-sum and corrupting the standby-reward voteSum.
-func tvmWithdrawRewardAndCancelVote(tvm *TVM, owner tcommon.Address) {
+func tvmWithdrawRewardAndCancelVote(tvm *TVM, owner tcommon.Address) error {
 	tvmWithdrawReward(tvm, owner)
 	if votes := tvm.StateDB.GetVotes(owner); len(votes) > 0 {
 		// recordTVMPendingVotes preserves an existing record's epoch-start OldVotes
@@ -1022,11 +1194,17 @@ func tvmWithdrawRewardAndCancelVote(tvm *TVM, owner tcommon.Address) {
 		tvm.StateDB.SetOldTronPower(owner, 0)
 	}
 	allowance := tvm.StateDB.GetAllowance(owner)
+	balance := tvm.StateDB.GetBalance(owner)
+	if (allowance > 0 && balance > math.MaxInt64-allowance) ||
+		(allowance < 0 && balance < math.MinInt64-allowance) {
+		return ErrSelfDestructBalanceAllowanceOverflow
+	}
 	if allowance != 0 {
 		tvm.StateDB.AddBalance(owner, allowance)
 	}
 	tvm.StateDB.SetAllowance(owner, 0)
 	tvm.StateDB.SetLatestWithdrawTime(owner, tvm.Timestamp)
+	return nil
 }
 
 func isTVMGenesisWitness(tvm *TVM, addr tcommon.Address) bool {
@@ -1191,18 +1369,26 @@ func opFreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory
 	// SV-3: java freezeBalanceV2() increaseNonce() once up front
 	// (Program.java:2020), unconditionally, feeding a later CREATE address.
 	in.tvm.Nonce++
+	internalTx := in.tvm.addInternalTransaction(caller, caller, int64(amountWord.Uint64()), nil,
+		"freezeBalanceV2For"+featuredInternalResourceName(&resourceWord), 0, 0)
 
 	if !amountOK || amount < tvmTRXPrecision || !validTVMStakeV2Resource(in.tvm, resource) {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
-	}
-	if in.tvm.DynProps != nil && in.tvm.DynProps.AllowNewResourceModel() {
-		in.tvm.StateDB.InitializeOldTronPowerIfNeeded(caller)
 	}
 	oldWeight := tvmFrozenV2WithDelegatedWeight(in.tvm.StateDB, caller, resource)
 	if err := in.tvm.StateDB.SubBalance(caller, amount); err != nil {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
+	}
+	// Java performs the complete FreezeBalanceV2Processor.validate (including
+	// balance sufficiency) before execute initializes old_tron_power. Keep that
+	// initialization behind the successful debit so an opcode that pushes zero
+	// cannot leave a resource-model marker behind.
+	if in.tvm.DynProps != nil && in.tvm.DynProps.AllowNewResourceModel() {
+		in.tvm.StateDB.InitializeOldTronPowerIfNeeded(caller)
 	}
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)
 	newWeight := tvmFrozenV2WithDelegatedWeight(in.tvm.StateDB, caller, resource)
@@ -1233,24 +1419,29 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 	// SV-3: java unfreezeBalanceV2() increaseNonce() once up front
 	// (Program.java:2051), unconditionally (before validate/execute).
 	in.tvm.Nonce++
+	internalTx := in.tvm.addInternalTransaction(caller, caller, int64(amountWord.Uint64()), nil,
+		"unfreezeBalanceV2For"+featuredInternalResourceName(&resourceWord), 0, 0)
 
 	if !amountOK || amount <= 0 || !validTVMStakeV2Resource(in.tvm, resource) || tvmUnfreezingV2Count(in.tvm.StateDB.GetAccount(caller), now) >= 32 {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 	frozen := in.tvm.StateDB.GetFrozenV2Amount(caller, resource)
 	if amount > frozen {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 	tvmWithdrawReward(in.tvm, caller)
 	withdrawnExpired := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, now)
-	if withdrawnExpired > 0 {
+	// UnfreezeBalanceV2Processor.unfreezeExpire always assigns
+	// balance+wrappingSum before continuing. Unlike the standalone withdrawal
+	// processor, it does not reject a malformed negative expired amount. Preserve
+	// that signed Java-long result; gating this on >0 cleared the rows while
+	// leaving the balance unchanged.
+	if withdrawnExpired != 0 {
 		in.tvm.StateDB.AddBalance(caller, withdrawnExpired)
-		// SV-3: java increaseNonce() a SECOND time when execute() returns an
-		// expired-withdrawal balance > 0 (the withdrawExpireUnfreezeWhileUnfreezing
-		// internalTx, Program.java:2066-2069).
-		in.tvm.Nonce++
 	}
 	if in.tvm.DynProps != nil && in.tvm.DynProps.AllowNewResourceModel() {
 		in.tvm.StateDB.InitializeOldTronPowerIfNeeded(caller)
@@ -1266,11 +1457,19 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 	expireMs := now + delayDays*86400_000
 	in.tvm.StateDB.AddUnfreezeV2(caller, resource, amount, expireMs)
 	if err := updateTVMVotesAfterUnfreezeV2(in.tvm, caller, resource); err != nil {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 	if in.tvm.DynProps != nil && in.tvm.DynProps.AllowNewResourceModel() {
 		in.tvm.StateDB.InvalidateOldTronPower(caller)
+	}
+	if withdrawnExpired > 0 {
+		// Program creates this only after the processor completed and its child
+		// repository committed successfully.
+		in.tvm.Nonce++
+		in.tvm.addInternalTransaction(caller, caller, withdrawnExpired, nil,
+			"withdrawExpireUnfreezeWhileUnfreezing", 0, 0)
 	}
 	stack.push(uint256.NewInt(1))
 	return nil, nil
@@ -1293,13 +1492,20 @@ func opCancelAllUnfreezeV2(_ *uint64, in *Interpreter, contract *Contract, _ *Me
 	// SV-3: java cancelAllUnfreezeV2Action() increaseNonce() once up front
 	// (Program.java:2118), unconditionally (before validate/execute).
 	in.tvm.Nonce++
+	internalTx := in.tvm.addInternalTransaction(contract.Address, contract.Address, 0, nil,
+		"cancelAllUnfreezeV2", 0, 0)
+	if !in.tvm.StateDB.AccountExists(contract.Address) {
+		rejectInternalTransaction(internalTx)
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 	// CancelAllUnfreezeV2 refreezes unexpired entries and returns the per-resource
 	// total_*_weight deltas + the expired total (which java/actuator add to the
 	// balance). Apply the weight deltas to the LIVE dp (tvm.DynProps) through the
 	// journaled path so a frame revert rolls them back — the StateDB's own dp is
 	// the empty genesis default in production, and a freeze-then-revert must not
 	// leak the weight (same class as the 27,405,576 FREEZE/UNFREEZE leak fix).
-	expired, weightDeltas := in.tvm.StateDB.CancelAllUnfreezeV2(contract.Address, now)
+	expired, weightDeltas, cancelled := in.tvm.StateDB.CancelAllUnfreezeV2Detailed(contract.Address, now)
 	for _, res := range []corepb.ResourceCode{
 		corepb.ResourceCode_BANDWIDTH,
 		corepb.ResourceCode_ENERGY,
@@ -1315,7 +1521,13 @@ func opCancelAllUnfreezeV2(_ *uint64, in *Interpreter, contract *Contract, _ *Me
 		// result is > 0 (the withdrawExpireUnfreezeWhileCanceling internalTx,
 		// Program.java:2131-2134).
 		in.tvm.Nonce++
+		in.tvm.addInternalTransaction(contract.Address, contract.Address, expired, nil,
+			"withdrawExpireUnfreezeWhileCanceling", 0, 0)
 	}
+	// Java conditionally copies this exact fixed-order JSON into TransactionInfo
+	// when saveCancelAllUnfreezeV2Details is enabled. Keep the execution result
+	// complete; the node-local receipt filter removes it unless that option is on.
+	internalTx.Extra = featuredCancelAllUnfreezeV2Extra(cancelled)
 	// java OperationActions.cancelAllUnfreezeV2Action pushes ONE/ZERO for
 	// success/failure (Program.cancelAllUnfreezeV2Action returns boolean), NOT
 	// the cancelled amount. The processor succeeds whenever the account exists,
@@ -1332,10 +1544,37 @@ func opWithdrawExpireUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ 
 	// SV-3: java withdrawExpireUnfreeze() increaseNonce() once up front
 	// (Program.java:2087), unconditionally (before validate/execute).
 	in.tvm.Nonce++
-	released := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, tvmLatestBlockHeaderTimestamp(in.tvm))
-	if released > 0 {
-		in.tvm.StateDB.AddBalance(caller, released)
+	internalTx := in.tvm.addInternalTransaction(caller, caller, 0, nil, "withdrawExpireUnfreeze", 0, 0)
+	account := in.tvm.StateDB.GetAccount(caller)
+	if account == nil {
+		rejectInternalTransaction(internalTx)
+		stack.push(uint256.NewInt(0))
+		return nil, nil
 	}
+	now := tvmLatestBlockHeaderTimestamp(in.tvm)
+	var released int64
+	for _, entry := range account.UnfrozenV2() {
+		if entry.UnfreezeExpireTime <= now {
+			// Java LongStream.sum uses wrapping long addition here, then validate
+			// rejects a negative total before its checked balance addition.
+			released += entry.UnfreezeAmount
+		}
+	}
+	if released < 0 || (released > 0 && in.tvm.StateDB.GetBalance(caller) > math.MaxInt64-released) {
+		rejectInternalTransaction(internalTx)
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+	// WithdrawExpireUnfreezeProcessor.execute returns immediately when the
+	// expired sum is zero. In particular, malformed zero-valued expired rows are
+	// retained rather than silently removed.
+	if released == 0 {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+	released = in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, now)
+	in.tvm.StateDB.AddBalance(caller, released)
+	setInternalTransactionValue(internalTx, released)
 	result := uint256.NewInt(0)
 	result.SetUint64(uint64(released))
 	stack.push(result)
@@ -1353,19 +1592,28 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	// (Program.java:2162), unconditionally (before validate/execute), so the nonce
 	// advances even when the amount fails validation below.
 	in.tvm.Nonce++
+	caller := contract.Address
+	receiver := uint256ToAddress(&receiverWord)
+	internalTx := in.tvm.addInternalTransaction(caller, receiver, int64(amountWord.Uint64()), nil,
+		"delegateResourceOf"+featuredInternalResourceName(&resourceWord), 0, 0)
 	amount, ok := uint256ToInt64Exact(&amountWord)
 	if !ok || amount < tvmTRXPrecision {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 	resource := tvmResourceV2FromWord(&resourceWord)
-	receiver := uint256ToAddress(&receiverWord)
-	caller := contract.Address
+	if in.tvm.DynProps == nil || !in.tvm.DynProps.AllowDelegateResource() {
+		rejectInternalTransaction(internalTx)
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 
 	// java DelegateResourceProcessor.validate rejects any resourceType except
 	// BANDWIDTH/ENERGY (its switch default throws "valid [BANDWIDTH、ENERGY]");
 	// TRON_POWER is NOT delegatable. go must push 0 too rather than delegating it.
 	if resource != corepb.ResourceCode_BANDWIDTH && resource != corepb.ResourceCode_ENERGY {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1380,6 +1628,7 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	// use AvailableFrozenV2ForDelegation (the F1 helper the actuator uses), NOT
 	// delegatableFrozenV2 (the F2 helper that correctly backs the precompile).
 	if amount > delegation.AvailableFrozenV2ForDelegation(in.tvm.StateDB, stakingDynamicProperties(in.tvm), caller, resource, stakingNowSlot(in.tvm)) {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1392,6 +1641,7 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	// java receiverCapsule.getType() == Contract.
 	recvAccount := in.tvm.StateDB.GetAccount(receiver)
 	if receiver == caller || recvAccount == nil || recvAccount.Type() == corepb.AccountType_Contract {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1415,6 +1665,7 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 		indexTimestamp = in.tvm.DynProps.LatestBlockHeaderTimestamp()
 	}
 	if err := tvmWriteDelegateRecord(in.tvm.StateDB, caller, receiver, resource, amount, indexTimestamp); err != nil {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1453,20 +1704,29 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	// SV-3: java unDelegateResource() increaseNonce() once up front
 	// (Program.java:2196), unconditionally (before validate/execute).
 	in.tvm.Nonce++
+	caller := contract.Address
+	receiver := uint256ToAddress(&receiverWord)
+	internalTx := in.tvm.addInternalTransaction(caller, receiver, int64(amountWord.Uint64()), nil,
+		"unDelegateResourceOf"+featuredInternalResourceName(&resourceWord), 0, 0)
 	amount, ok := uint256ToInt64Exact(&amountWord)
 	if !ok || amount <= 0 {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 	resource := tvmResourceV2FromWord(&resourceWord)
-	receiver := uint256ToAddress(&receiverWord)
-	caller := contract.Address
+	if in.tvm.DynProps == nil || !in.tvm.DynProps.AllowDelegateResource() {
+		rejectInternalTransaction(internalTx)
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 
 	// java UnDelegateResourceProcessor.validate switch rejects any resourceType
 	// except BANDWIDTH/ENERGY (default throws "valid [BANDWIDTH、ENERGY]"). go must
 	// push 0 too — otherwise a non-Energy/Bandwidth code would fall into the
 	// FrozenBalanceForEnergy branch below.
 	if resource != corepb.ResourceCode_BANDWIDTH && resource != corepb.ResourceCode_ENERGY {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1480,6 +1740,7 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	// had delegated the amount to some other receiver.
 	dr := in.tvm.StateDB.ReadDelegatedResourceV2(caller, receiver, false)
 	if dr == nil {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1490,6 +1751,7 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 		recorded = dr.FrozenBalanceForEnergy
 	}
 	if amount > recorded {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1516,6 +1778,7 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	// Mirrors actuator UnDelegateResourceActuator.Execute / java
 	// UnDelegateResourceProcessor.execute.
 	if err := tvmReduceDelegateRecord(in.tvm.StateDB, caller, receiver, resource, amount); err != nil {
+		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1524,9 +1787,10 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 }
 
 // tvmReduceDelegateRecord subtracts `amount` from the owner→receiver UNLOCKED
-// DelegatedResourceV2 record. When both resource legs reach zero the record and
-// the owner's delegation-index entry are removed. Mirrors actuator
-// UnDelegateResourceActuator.Execute and java UnDelegateResourceProcessor.
+// DelegatedResourceV2 record. java's VM-native UnDelegateResourceProcessor
+// always writes the capsule back, including the all-zero value, and deletes the
+// directional indexes when both resource legs are exactly zero. This differs
+// from the transaction actuator path and must remain opcode-specific.
 func tvmReduceDelegateRecord(sdb *state.StateDB, owner, receiver tcommon.Address, resource corepb.ResourceCode, amount int64) error {
 	dr := sdb.ReadDelegatedResourceV2(owner, receiver, false)
 	if dr == nil {
@@ -1537,16 +1801,13 @@ func tvmReduceDelegateRecord(sdb *state.StateDB, owner, receiver tcommon.Address
 	} else {
 		dr.FrozenBalanceForEnergy -= amount
 	}
-	if dr.FrozenBalanceForBandwidth <= 0 && dr.FrozenBalanceForEnergy <= 0 {
-		if err := sdb.DeleteDelegatedResourceV2(owner, receiver, false); err != nil {
-			return err
-		}
-	} else if err := sdb.WriteDelegatedResourceV2(owner, receiver, false, dr); err != nil {
+	if err := sdb.WriteDelegatedResourceV2(owner, receiver, false, dr); err != nil {
 		return err
 	}
-	// Remove the index entry only when no record remains for this pair.
-	if sdb.ReadDelegatedResourceV2(owner, receiver, false) == nil &&
-		sdb.ReadDelegatedResourceV2(owner, receiver, true) == nil {
+	// RepositoryImpl commits the empty-address index capsules as deletes. Java
+	// does this based only on the unlocked record and does not retain the index
+	// merely because a separately locked record for the pair exists.
+	if dr.FrozenBalanceForBandwidth == 0 && dr.FrozenBalanceForEnergy == 0 {
 		return sdb.WriteDrAccountIndexUnDelegate(true, owner[:], receiver[:])
 	}
 	return nil

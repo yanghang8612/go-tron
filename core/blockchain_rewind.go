@@ -519,7 +519,7 @@ func subtractPendingVoterReward(acc *cycleRewardAccumulator, statedb *state.Stat
 		return nil
 	}
 	brokerage := statedb.ReadCycleBrokerage(cycle, addr.Bytes())
-	brokerageAmount := int64((float64(brokerage) / 100.0) * float64(amount))
+	brokerageAmount := tcommon.JavaDoubleToInt64((float64(brokerage) / 100.0) * float64(amount))
 	return subtractPendingCycleReward(acc, addr, amount-brokerageAmount)
 }
 
@@ -529,11 +529,11 @@ func subtractPendingStandbyRewards(acc *cycleRewardAccumulator, set *standbyWitn
 	}
 	eachVotePay := float64(totalPay) / float64(set.voteSum)
 	for _, witness := range set.witnesses {
-		pay := int64(float64(witness.votes) * eachVotePay)
+		pay := tcommon.JavaDoubleToInt64(float64(witness.votes) * eachVotePay)
 		if pay <= 0 {
 			continue
 		}
-		brokerageAmount := int64((float64(witness.brokerage) / 100.0) * float64(pay))
+		brokerageAmount := tcommon.JavaDoubleToInt64((float64(witness.brokerage) / 100.0) * float64(pay))
 		if err := subtractPendingCycleReward(acc, witness.addr, pay-brokerageAmount); err != nil {
 			return err
 		}

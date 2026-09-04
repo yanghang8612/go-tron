@@ -374,7 +374,9 @@ func TestSelfDestructCancelsVotes(t *testing.T) {
 	// beginCycle > currentCycle (10) -> tvmWithdrawReward returns early (no reward math).
 	_ = statedb.WriteBeginCycle(contract.Bytes(), 11)
 
-	tvmWithdrawRewardAndCancelVote(tvm, contract)
+	if err := tvmWithdrawRewardAndCancelVote(tvm, contract); err != nil {
+		t.Fatalf("withdrawRewardAndCancelVote: %v", err)
+	}
 
 	if vs := statedb.GetVotes(contract); len(vs) != 0 {
 		t.Fatalf("persistent votes not cleared on suicide: %v", vs)
@@ -406,7 +408,9 @@ func TestSelfDestructNoVotesNoRecord(t *testing.T) {
 	statedb.AddBalance(contract, 50)
 	_ = statedb.WriteBeginCycle(contract.Bytes(), 11)
 
-	tvmWithdrawRewardAndCancelVote(tvm, contract)
+	if err := tvmWithdrawRewardAndCancelVote(tvm, contract); err != nil {
+		t.Fatalf("withdrawRewardAndCancelVote: %v", err)
+	}
 
 	if rec := statedb.ReadVotes(contract); rec != nil {
 		t.Fatalf("no votes -> no cancellation record, got %v", rec)

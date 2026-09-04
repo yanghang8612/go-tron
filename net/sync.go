@@ -120,7 +120,7 @@ type SyncService struct {
 	// one peer at a time may refill that anti-starvation strip until the buffer
 	// drains below the low-water mark.
 	fetchBackpressured bool
-	targetHeadNum      uint64
+	targetHeadNum      atomic.Uint64
 	// syncedTipNum is the drain cursor: the highest block this session has
 	// popped for import. Under async-commit depth>2 the committed CurrentBlock
 	// lags the applied tip by up to the pipeline depth, so popping from
@@ -604,7 +604,7 @@ func (ss *SyncService) Status() SyncStatus {
 		Active:              ss.syncing,
 		Paused:              paused,
 		SyncPeerCount:       len(ss.peers),
-		TargetHead:          ss.targetHeadNum,
+		TargetHead:          ss.targetHeadNum.Load(),
 		AppliedTip:          ss.syncedTipNum,
 		SessionBlocks:       stats.TotalBlocks,
 		SessionTransactions: stats.TotalTxs,
@@ -876,7 +876,7 @@ func readSyncPipelineProgressHeadRecoveryEvidence(db ethdb.KeyValueStore) (syncd
 }
 
 func (a syncSessionStartupApplier) RestoreInventoryTarget(inventoryFloor uint64) {
-	a.service.targetHeadNum = a.service.restoreSyncInventoryTarget(inventoryFloor)
+	a.service.targetHeadNum.Store(a.service.restoreSyncInventoryTarget(inventoryFloor))
 }
 
 func (a syncSessionStartupApplier) DeleteImportedBodies(through uint64) syncdl.ImportedStagedBodyCleanup {
@@ -1275,7 +1275,7 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pr
 	if db == nil {
 		return syncdl.StagedBodyRestoreResult{NextExpected: start}
 	}
-	result := syncdl.RestoreStagedBodies(start, limit, ss.targetHeadNum, ss.blockBuffer, ss.bufferedHash, &ss.blockPath, func(start uint64, fn func(rawdb.SyncStagedBlockRow) (bool, error)) error {
+	result := syncdl.RestoreStagedBodies(start, limit, ss.targetHeadNum.Load(), ss.blockBuffer, ss.bufferedHash, &ss.blockPath, func(start uint64, fn func(rawdb.SyncStagedBlockRow) (bool, error)) error {
 		return rawdb.IterateSyncStagedBlocksFrom(db, start, fn)
 	})
 	ss.bufferedBytes += result.RestoredBytes
@@ -1294,7 +1294,7 @@ type syncStagedBodyRestoreSettlementApplier struct {
 }
 
 func (a syncStagedBodyRestoreSettlementApplier) SetStagedBodyRestoreTargetHead(targetHead uint64) {
-	a.service.targetHeadNum = targetHead
+	a.service.targetHeadNum.Store(targetHead)
 }
 
 func (a syncStagedBodyRestoreSettlementApplier) PruneStaleStagedBodyTail(from uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool) {
@@ -1583,7 +1583,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	}
 	inventorySession := syncdl.ApplyChainInventorySessionRun(syncdl.ChainInventorySessionRunInput{
 		Inventory: syncdl.ChainInventoryInput{
-			CurrentTarget:  ss.targetHeadNum,
+			CurrentTarget:  ss.targetHeadNum.Load(),
 			MaxTarget:      maxTarget,
 			ExistingQueued: len(ps.fetchList),
 			RemainNum:      inv.RemainNum,
@@ -2845,7 +2845,7 @@ func (a *syncChainInventoryApplier) UpdateInventoryProgress(remainNum int64, tar
 	if hasTarget {
 		a.peerState.lastInventoryNum = target.Window.Max
 		a.peerState.minFetchNum = target.Window.Min
-		a.service.targetHeadNum = target.Target
+		a.service.targetHeadNum.Store(target.Target)
 		if a.peerState.minFetchNum > 0 {
 			for hash, num := range a.peerState.requestedHashes {
 				if num < a.peerState.minFetchNum {
@@ -3407,7 +3407,7 @@ func (a syncImportedBatchProgressApplier) WriteImportedSyncProgressAndReady(dele
 	if head.Number() != lastDeleted.Number || head.Hash() != lastDeleted.Hash {
 		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
 	}
-	ready := syncdl.PlanStagedBodyReadyProgress(db, head.Number()+1, a.service.targetHeadNum)
+	ready := syncdl.PlanStagedBodyReadyProgress(db, head.Number()+1, a.service.targetHeadNum.Load())
 	readyRow, readyOK := ready.ReadyStageProgress()
 	if !readyOK {
 		return rawdb.SyncImportProgressWriteResult{}, syncdl.StagedBodyReadyProgressRefresh{}, false
@@ -3533,9 +3533,9 @@ func (ss *SyncService) stageSyncBodyID(id types.BlockID, block *types.Block, raw
 	}
 	var result syncdl.StagedBodyAcceptance
 	if block != nil {
-		result = syncdl.AcceptStagedBody(db, block, raw, head.Number()+1, ss.targetHeadNum)
+		result = syncdl.AcceptStagedBody(db, block, raw, head.Number()+1, ss.targetHeadNum.Load())
 	} else {
-		result = syncdl.AcceptStagedBodyRaw(db, id, raw, head.Number()+1, ss.targetHeadNum)
+		result = syncdl.AcceptStagedBodyRaw(db, id, raw, head.Number()+1, ss.targetHeadNum.Load())
 	}
 	if result.Write.StageError != nil {
 		syncLog.Warn("Persist sync staged block failed", "number", id.Num, "hash", id.Hash, "err", result.Write.StageError)
@@ -3565,7 +3565,7 @@ func (ss *SyncService) writeSyncBodiesReadyProgress() syncdl.StagedBodyReadyProg
 	if head == nil {
 		return syncdl.StagedBodyReadyProgressRefresh{}
 	}
-	refresh := syncdl.RefreshStagedBodyReadyProgress(db, head.Number()+1, ss.targetHeadNum)
+	refresh := syncdl.RefreshStagedBodyReadyProgress(db, head.Number()+1, ss.targetHeadNum.Load())
 	ss.logSyncBodiesReadyRefresh(refresh)
 	return refresh
 }
@@ -3594,7 +3594,7 @@ func (ss *SyncService) deleteImportedSyncBodiesThrough(head uint64) syncdl.Impor
 	if current == nil {
 		return syncdl.ImportedStagedBodyCleanup{}
 	}
-	result := syncdl.DeleteImportedStagedBodiesThrough(db, head, current.Number()+1, ss.targetHeadNum)
+	result := syncdl.DeleteImportedStagedBodiesThrough(db, head, current.Number()+1, ss.targetHeadNum.Load())
 	if result.DeleteError != nil {
 		syncLog.Warn("Delete imported sync staged blocks failed", "head", head, "err", result.DeleteError)
 		return result
@@ -3615,7 +3615,7 @@ func (ss *SyncService) deleteStaleSyncBodiesFrom(blockNum uint64, lastRestoredNu
 	if head == nil {
 		return
 	}
-	result := syncdl.PruneStaleStagedBodyTail(db, blockNum, lastRestoredNum, lastRestoredHash, haveLastRestored, head.Number()+1, ss.targetHeadNum)
+	result := syncdl.PruneStaleStagedBodyTail(db, blockNum, lastRestoredNum, lastRestoredHash, haveLastRestored, head.Number()+1, ss.targetHeadNum.Load())
 	if result.PruneError != nil {
 		syncLog.Warn("Prune stale sync staged blocks failed", "from", blockNum, "err", result.PruneError)
 		return
@@ -3688,7 +3688,7 @@ func (ss *SyncService) sessionProgressLocked() syncdl.SessionProgress {
 	progress := syncdl.SessionProgress{
 		Syncing:        ss.syncing,
 		Paused:         ss.pause.Paused(),
-		TargetHead:     ss.targetHeadNum,
+		TargetHead:     ss.targetHeadNum.Load(),
 		RetryListLen:   len(ss.retryList),
 		BlockBufferLen: len(ss.blockBuffer),
 	}
@@ -4066,7 +4066,7 @@ func (a syncSessionResetApplier) ClearBlockTracking() {
 }
 
 func (a syncSessionResetApplier) ClearTarget() {
-	a.service.targetHeadNum = 0
+	a.service.targetHeadNum.Store(0)
 }
 
 func (a syncSessionResetApplier) ResetBufferWait() {

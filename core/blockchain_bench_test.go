@@ -93,19 +93,31 @@ func buildTransferChain(numAccounts, numBlocks, txPerBlock int) (*params.Genesis
 //
 //	go test ./core -run '^$' -bench BenchmarkInsertBlocksTransfers -benchtime=4x -cpuprofile /tmp/insert.prof
 func BenchmarkInsertBlocksTransfers(b *testing.B) {
-	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, false, false)
+	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, false, false, false)
 }
-func BenchmarkInsertBlocksTransfersSeqFold(b *testing.B) { benchInsertBlocks(b, 1<<30, false, false) }
+func BenchmarkInsertBlocksTransfersSeqFold(b *testing.B) {
+	benchInsertBlocks(b, 1<<30, false, false, false)
+}
 func BenchmarkInsertBlocksTransfersAsyncSerial(b *testing.B) {
 	b.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
-	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, true, false)
+	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, true, false, false)
 }
 func BenchmarkInsertBlocksTransfersAsyncOrdered(b *testing.B) {
 	b.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
-	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, true, true)
+	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, true, true, false)
 }
 
-func benchInsertBlocks(b *testing.B, foldMinOps int, async, ordered bool) {
+// BenchmarkInsertBlocksTransfersParallel exercises the complete production
+// admission path, including the exact balance oracle, canonical-boundary
+// serial verification, immutable publication-payload seal and post-publication audit on
+// every publication. Keep this paired with BenchmarkInsertBlocksTransfers so
+// correctness hardening cannot silently make the opt-in execution mode
+// operationally unusable.
+func BenchmarkInsertBlocksTransfersParallel(b *testing.B) {
+	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, false, false, true)
+}
+
+func benchInsertBlocks(b *testing.B, foldMinOps int, async, ordered, parallelTransfers bool) {
 	prev := statedomains.ParallelFoldMinOps
 	statedomains.ParallelFoldMinOps = foldMinOps
 	defer func() { statedomains.ParallelFoldMinOps = prev }()
@@ -125,6 +137,7 @@ func benchInsertBlocks(b *testing.B, foldMinOps int, async, ordered bool) {
 		if err != nil {
 			b.Fatal(err)
 		}
+		bc.SetParallelTransferExecution(parallelTransfers)
 		bc.orderedCommitPipeline = ordered
 		bc.SetAsyncCommit(async)
 		b.StartTimer()

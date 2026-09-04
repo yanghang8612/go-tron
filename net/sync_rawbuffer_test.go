@@ -193,7 +193,7 @@ func TestDecodedBufferCommitIsolatesMalformedBodyWithoutSkippingSuffix(t *testin
 	ss.mu.Lock()
 	ss.ensureSessionMapsLocked()
 	ss.syncing = true
-	ss.targetHeadNum = 3
+	ss.targetHeadNum.Store(3)
 	for _, entry := range []syncdl.BufferedBlock{
 		{Raw: raw1, Num: 1, Hash: block1.Hash()},
 		{Raw: raw2, Num: 2, Hash: block2.Hash()},

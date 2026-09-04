@@ -185,6 +185,7 @@ func TestTransferExecute_ReusesAndClearsResultSink(t *testing.T) {
 	sink := &Result{
 		Fee:                    99,
 		EnergyUsageTotal:       88,
+		EnergyPenaltyTotal:     87,
 		CancelUnfreezeV2Amount: map[string]int64{"BANDWIDTH": 77},
 		ContractResult:         []byte{1, 2, 3},
 		Logs:                   []vm.Log{{}},

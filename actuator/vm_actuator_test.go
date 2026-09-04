@@ -438,6 +438,49 @@ func TestVMActuatorTriggerExecute(t *testing.T) {
 	t.Logf("Trigger energy total: %d", result.EnergyUsageTotal)
 }
 
+func TestVMActuatorTriggerExecuteCarriesDynamicEnergyPenalty(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+	code := []byte{
+		byte(vm.PUSH1), 0x42,
+		byte(vm.PUSH1), 0x00,
+		byte(vm.MSTORE),
+		byte(vm.STOP),
+	}
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner[:],
+		ContractAddress: contractAddr[:],
+	}
+
+	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 10_000_000)
+	enableVM(ctx)
+	ctx.DynProps.SetAllowDynamicEnergy(true)
+	ctx.DynProps.SetCurrentCycleNumber(10)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, 100_000_000)
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner[:],
+		ContractAddress: contractAddr[:],
+	})
+	ctx.State.SetCode(contractAddr, code)
+	contractState := types.NewContractState(10)
+	contractState.SetEnergyFactor(5_000) // effective multiplier 1.5x
+	if err := ctx.State.WriteContractState(contractAddr, contractState); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := new(VMActuator).Execute(ctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.EnergyPenaltyTotal <= 0 {
+		t.Fatalf("dynamic energy penalty total = %d, want positive", result.EnergyPenaltyTotal)
+	}
+	if result.EnergyPenaltyTotal >= result.EnergyUsageTotal {
+		t.Fatalf("penalty/total = %d/%d, want penalty smaller than total", result.EnergyPenaltyTotal, result.EnergyUsageTotal)
+	}
+}
+
 func TestVMActuatorCreateExecute_ExtendedResult(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 

@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"strconv"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/internal/math/strictmath"
 )
 
@@ -58,7 +59,7 @@ func (p *exchangeProcessor) pow(a, b float64) float64 {
 func (p *exchangeProcessor) exchangeToSupply(balance, quant int64) int64 {
 	newBalance := balance + quant
 	issued := -float64(p.supply) * (1.0 - p.pow(1.0+float64(quant)/float64(newBalance), 0.0005))
-	out := int64(issued)
+	out := common.JavaDoubleToInt64(issued)
 	p.supply += out
 	return out
 }
@@ -68,7 +69,7 @@ func (p *exchangeProcessor) exchangeToSupply(balance, quant int64) int64 {
 func (p *exchangeProcessor) exchangeFromSupply(balance, supplyQuant int64) int64 {
 	p.supply -= supplyQuant
 	exchangeBalance := float64(balance) * (p.pow(1.0+float64(supplyQuant)/float64(p.supply), 2000.0) - 1.0)
-	return int64(exchangeBalance)
+	return common.JavaDoubleToInt64(exchangeBalance)
 }
 
 // exchange computes the buy-side payout for selling `sellTokenQuant` of the

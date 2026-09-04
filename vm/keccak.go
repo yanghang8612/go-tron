@@ -27,17 +27,15 @@ type keccakState interface {
 type vmKeccak struct {
 	keccakState
 	digest     [tcommon.HashLength]byte
-	address    [tcommon.AddressLength]byte
 	valueNonce [16]byte
 }
 
-func internalTransactionHash(parent []byte, transferTo tcommon.Address, includeReceiver bool, data []byte, value int64, nonce uint64) (out tcommon.Hash) {
+func internalTransactionHash(parent, transferTo []byte, includeReceiver bool, data []byte, value int64, nonce uint64) (out tcommon.Hash) {
 	h := vmKeccakPool.Get().(*vmKeccak)
 	h.Reset()
 	_, _ = h.Write(parent)
 	if includeReceiver {
-		copy(h.address[:], transferTo[:])
-		_, _ = h.Write(h.address[:])
+		_, _ = h.Write(transferTo)
 	}
 	_, _ = h.Write(data)
 	binary.BigEndian.PutUint64(h.valueNonce[:8], uint64(value))

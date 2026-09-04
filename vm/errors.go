@@ -53,6 +53,26 @@ var (
 	// fails validation. VM.play spends all remaining energy and records UNKNOWN
 	// with the byte-exact message "transfer failure".
 	ErrSelfDestructTransferFailure = errors.New("transfer failure")
+	// ErrSelfDestructBalanceAllowanceOverflow mirrors Program.
+	// withdrawRewardAndCancelVote's checked balance+allowance addition. The
+	// BytecodeExecutionException is raised before SELFDESTRUCT records its
+	// internal transaction or deletion and consumes the transaction's remaining
+	// energy through the ordinary UNKNOWN error path.
+	ErrSelfDestructBalanceAllowanceOverflow = errors.New("Suicide: balance and allowance out of long range.") //nolint:staticcheck // Match java-tron's byte-exact VM error.
+	// ErrUnreproducibleJavaHashMapOrder is a fail-closed compatibility guard for
+	// VOTEWITNESS. Once java.util.HashMap treeifies a bin, two distinct
+	// ByteString keys with the same 32-bit spread hash are ordered by
+	// System.identityHashCode, which is process-specific and therefore cannot be
+	// reproduced deterministically across Java or Go nodes. Returning an error
+	// rejects/stops an incompatible block instead of panicking the Go process or
+	// silently committing a guessed vote order.
+	ErrUnreproducibleJavaHashMapOrder = errors.New("unreproducible java HashMap identity-hash tie in VOTEWITNESS")
+	// errSelfDestructMissingTokenBeneficiary mirrors the uncaught
+	// NullPointerException from MUtil.transferAllToken when TRC10 support is on,
+	// the SELFDESTRUCT balance is zero, and a pre-Solidity059 beneficiary does
+	// not exist. VM.play normalises that message-less exception to this text and
+	// records UNKNOWN after spending all energy.
+	errSelfDestructMissingTokenBeneficiary = errors.New("Unknown Exception") //nolint:staticcheck // Match java-tron's byte-exact VM error.
 	// ErrPrecompileTransferFailure mirrors java-tron
 	// Program.callToPrecompiledAddress's BytecodeExecutionException("transfer
 	// failure"): a TRX endowment on a precompile-targeted CALL whose
@@ -243,7 +263,9 @@ func isFatalVMError(err error) bool {
 // aborts the currently executing Program; ordinary constructor failures are
 // still represented by CREATE pushing zero.
 func shouldPropagateCreateError(err error) bool {
-	return isFatalVMError(err) || errors.Is(err, ErrLegacyCreateEmptyCode)
+	return isFatalVMError(err) ||
+		errors.Is(err, ErrLegacyCreateEmptyCode) ||
+		errors.Is(err, ErrUnreproducibleJavaHashMapOrder)
 }
 
 func isTransferFailure(err error) bool {
@@ -259,6 +281,7 @@ func shouldPropagateCallError(err error) bool {
 		errors.Is(err, ErrPrecompileUnknown) ||
 		errors.Is(err, ErrPrecompileTransferFailure) ||
 		errors.Is(err, ErrValidateForSmartContract) ||
+		errors.Is(err, ErrUnreproducibleJavaHashMapOrder) ||
 		isTransferFailure(err)
 }
 

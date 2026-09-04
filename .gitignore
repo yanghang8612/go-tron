@@ -23,5 +23,9 @@ Thumbs.db
 # Go
 vendor/
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Protobuf generated (committed intentionally)
 # proto/**/*.pb.go

@@ -3,6 +3,7 @@ package vm
 import (
 	"crypto/sha256"
 	"math"
+	"math/big"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -1322,7 +1323,7 @@ func (c *checkUnDelegateResource) Run(tvm *TVM, _ tcommon.Address, input []byte,
 		return encodeInt64Words(0, amount, restoreSeconds), cost, nil
 	}
 
-	clean := int64(float64(amount) * (float64(resourceLimit-usage) / float64(resourceLimit)))
+	clean := tcommon.JavaDoubleToInt64(float64(amount) * (float64(resourceLimit-usage) / float64(resourceLimit)))
 	return encodeInt64Words(clean, amount-clean, restoreSeconds), cost, nil
 }
 
@@ -1523,8 +1524,9 @@ func resourceUsageBalanceAndRestoreSeconds(tvm *TVM, addr tcommon.Address, resTy
 		return 0, 0
 	}
 	restoreSeconds := (lastTime + window - now) * params.BlockProducedInterval / 1000
-	recovered := recoverStakingUsage(usage, lastTime, now, window)
-	balance := stakingUsageToBalance(recovered, totalWeight, totalLimit)
+	harden := dp.AllowHardenResourceCalculation()
+	recovered := recoverStakingUsageWithHarden(usage, lastTime, now, window, harden)
+	balance := stakingUsageToBalanceWithHarden(recovered, totalWeight, totalLimit, harden)
 	return balance, restoreSeconds
 }
 
@@ -1623,14 +1625,14 @@ func stakingWindowSizeSlots(acc *types.Account, resType corepb.ResourceCode) int
 
 // recoverStakingUsage mirrors java RepositoryImpl.recover/increase (the VM-side
 // Repository getter behind the checkUnDelegateResource / resourceUsage /
-// totalAcquiredResource precompiles). That getter is UNCONDITIONALLY primitive
-// long — `divideCeil(lastUsage*precision, windowSize)` (precision=1_000_000, which
-// silently overflows int64 for large usage), decay, then usage*windowSize/precision.
-// It has NO AllowHardenResourceCalculation gate: unlike chainbase ResourceProcessor
-// .increase, RepositoryImpl.increase never widens to BigInteger, so go must keep
-// the int64-overflow/double-precision behavior on this VM read path regardless of
-// the harden flag.
+// totalAcquiredResource precompiles). The no-flag wrapper is retained for
+// legacy-focused unit tests; production calls recoverStakingUsageWithHarden
+// using allow_harden_resource_calculation from rooted dynamic properties.
 func recoverStakingUsage(oldUsage, lastTime, now, windowSize int64) int64 {
+	return recoverStakingUsageWithHarden(oldUsage, lastTime, now, windowSize, false)
+}
+
+func recoverStakingUsageWithHarden(oldUsage, lastTime, now, windowSize int64, harden bool) int64 {
 	if oldUsage <= 0 {
 		return 0
 	}
@@ -1638,25 +1640,49 @@ func recoverStakingUsage(oldUsage, lastTime, now, windowSize int64) int64 {
 	if elapsed >= windowSize {
 		return 0
 	}
-	if elapsed <= 0 {
-		return oldUsage
+	var averageLastUsage int64
+	if harden {
+		averageLastUsage = divideCeilStakingBig(
+			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(resourcePrecisionForStaking)),
+			big.NewInt(windowSize),
+		)
+	} else {
+		// int64 arithmetic to match Java long overflow before proposal #95.
+		averageLastUsage = divideCeilInt64(oldUsage*resourcePrecisionForStaking, windowSize)
 	}
-	remaining := windowSize - elapsed
-	// int64 arithmetic to match java's `long` overflow semantics exactly.
-	averageLastUsage := divideCeilInt64(oldUsage*resourcePrecisionForStaking, windowSize)
-	decay := float64(remaining) / float64(windowSize)
-	averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+	if lastTime != now {
+		if lastTime+windowSize > now {
+			delta := now - lastTime
+			decay := float64(windowSize-delta) / float64(windowSize)
+			averageLastUsage = tcommon.JavaMathRoundToInt64(float64(averageLastUsage) * decay)
+		} else {
+			averageLastUsage = 0
+		}
+	}
+	if harden {
+		result := new(big.Int).Mul(big.NewInt(averageLastUsage), big.NewInt(windowSize))
+		result.Quo(result, big.NewInt(resourcePrecisionForStaking))
+		return tcommon.BigInt64Exact(result, "staking precompile resource usage")
+	}
 	return averageLastUsage * windowSize / resourcePrecisionForStaking
 }
 
 // stakingUsageToBalance mirrors java RepositoryImpl.getAccount{Energy,Net}Usage
-// BalanceAndRestoreSeconds's lossy-double conversion: (long)((double)usage *
-// totalWeight / totalLimit * TRX_PRECISION). UNGATED — no harden/BigInteger.
+// BalanceAndRestoreSeconds conversion. The legacy branch uses Java's saturating
+// double-to-long cast; proposal #95 widens the complete product/division to
+// BigInteger and applies longValueExact to the quotient.
 func stakingUsageToBalance(usage, totalWeight, totalLimit int64) int64 {
-	if usage <= 0 || totalWeight <= 0 || totalLimit <= 0 {
-		return 0
+	return stakingUsageToBalanceWithHarden(usage, totalWeight, totalLimit, false)
+}
+
+func stakingUsageToBalanceWithHarden(usage, totalWeight, totalLimit int64, harden bool) int64 {
+	if harden {
+		result := new(big.Int).Mul(big.NewInt(usage), big.NewInt(totalWeight))
+		result.Mul(result, big.NewInt(trxPrecision))
+		result.Quo(result, big.NewInt(totalLimit))
+		return tcommon.BigInt64Exact(result, "staking precompile usage balance")
 	}
-	return int64(float64(usage) * float64(totalWeight) / float64(totalLimit) * float64(trxPrecision))
+	return tcommon.JavaDoubleToInt64(float64(usage) * float64(totalWeight) / float64(totalLimit) * float64(trxPrecision))
 }
 
 const resourcePrecisionForStaking = int64(1_000_000)
@@ -1670,6 +1696,14 @@ func divideCeilInt64(numerator, denominator int64) int64 {
 		result++
 	}
 	return result
+}
+
+func divideCeilStakingBig(numerator, denominator *big.Int) int64 {
+	quotient, remainder := new(big.Int).QuoRem(numerator, denominator, new(big.Int))
+	if remainder.Sign() > 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return tcommon.BigInt64Exact(quotient, "staking precompile divideCeil")
 }
 
 func encodeInt64Words(values ...int64) []byte {

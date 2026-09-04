@@ -531,6 +531,9 @@ func (api *API) handleTriggerConstantContract(w http.ResponseWriter, r *http.Req
 	}
 	if result != nil {
 		resp["energy_used"] = result.EnergyUsed
+		if result.EnergyPenalty != 0 {
+			resp["energy_penalty"] = result.EnergyPenalty
+		}
 		if len(result.Result) > 0 {
 			resp["constant_result"] = []string{hex.EncodeToString(result.Result)}
 		}
@@ -693,6 +696,9 @@ func (api *API) triggerSmartContract(w http.ResponseWriter, r *http.Request) {
 	}
 	if triggerResult != nil {
 		resp["energy_used"] = triggerResult.EnergyUsed
+		if triggerResult.EnergyPenalty != 0 {
+			resp["energy_penalty"] = triggerResult.EnergyPenalty
+		}
 		if len(triggerResult.Result) > 0 {
 			resp["constant_result"] = []string{hex.EncodeToString(triggerResult.Result)}
 		}

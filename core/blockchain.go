@@ -342,12 +342,44 @@ type BlockChain struct {
 	asyncCommit       bool
 	parallelTransfers bool
 	parallelVM        bool
-	commitDepth       int // resolved at NewBlockChain (GTRON_ASYNC_COMMIT_DEPTH), ≥2
-	commitQueue       chan *commitJob
-	commitPending     *flushBarrier
-	commitWorkerWg    sync.WaitGroup
-	commitClosed      bool
-	commitErr         atomic.Pointer[error]
+	// Node-local TransactionInfo persistence flags. All default to false,
+	// preserving gtron's historical receipt shape and matching java-tron's
+	// vm.save* defaults; operators may opt in to richer internal records.
+	saveInternalTx                 bool
+	saveFeaturedInternalTx         bool
+	saveCancelAllUnfreezeV2Details bool
+	// speculativeSafetyDisabled is a sticky circuit breaker. Every transition
+	// is persisted outside consensus state, and NewBlockChain restores it across
+	// restarts so a tainted datadir cannot silently resume publication.
+	// A post-publication invariant failure rolls the attempted block back,
+	// opens this circuit, and retries that block through the serial path. It is
+	// intentionally not reset by the CLI setters: operator inspection/restart
+	// is required before speculative publication may resume.
+	speculativeSafetyDisabled atomic.Bool
+	// speculativeSafetyPersistenceErr is an even stronger fail-closed latch:
+	// if the durable incident marker cannot be written, this process must never
+	// attempt another block insertion. Without durable evidence a serial retry
+	// or a later in-process call could otherwise hide the storage failure.
+	speculativeSafetyPersistenceErr atomic.Pointer[error]
+	// speculativeSafetyTestHook injects a pre-process failure for the
+	// block-level rollback/retry test. Production leaves it nil.
+	speculativeSafetyTestHook func(*types.Block, processBlockOptions) error
+	// Test-only hooks inject ownership corruption after oracle admission,
+	// immediately before oracle admission, immediately before apply, and at the
+	// real post-apply audit boundary. Production leaves all four nil.
+	speculativePreOracleTestHook  func(string, int, *discardShadowTaskResult)
+	speculativePostOracleTestHook func(string, int, *discardShadowTaskResult)
+	speculativePreApplyTestHook   func(string, int, state.TransactionWriteSet)
+	speculativePostApplyTestHook  func(string, int, state.TransactionWriteSet)
+	// rangeExecutorAbortTestHook injects a cleanup failure after Abort performs
+	// its real cleanup. Production leaves it nil.
+	rangeExecutorAbortTestHook func() error
+	commitDepth                int // resolved at NewBlockChain (GTRON_ASYNC_COMMIT_DEPTH), ≥2
+	commitQueue                chan *commitJob
+	commitPending              *flushBarrier
+	commitWorkerWg             sync.WaitGroup
+	commitClosed               bool
+	commitErr                  atomic.Pointer[error]
 	// commitPipelineEpoch changes whenever canonical commitment state is
 	// rewound. The scheduler observes it before accepting the first new-branch
 	// job and re-seeds its persistent lane roots from the rewound store.
@@ -411,6 +443,16 @@ func (bc *BlockChain) SetParallelVMExecution(enabled bool) {
 	} else {
 		parallelVMEnabledGauge.Update(0)
 	}
+}
+
+// SetInternalTransactionPersistence configures the node-local TransactionInfo
+// view. Program execution still records every internal operation so speculative
+// and serial oracles compare complete results; filtering happens only after all
+// execution audits and before metadata persistence.
+func (bc *BlockChain) SetInternalTransactionPersistence(saveInternal, saveFeatured, saveCancelDetails bool) {
+	bc.saveInternalTx = saveInternal
+	bc.saveFeaturedInternalTx = saveFeatured
+	bc.saveCancelAllUnfreezeV2Details = saveCancelDetails
 }
 
 // headerSigPrewarmer returns the consensus engine as a headerSignaturePrewarmer
@@ -582,9 +624,23 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		proposalCache:         newProposalScanCache(),
 		versionPassCache:      forks.NewVersionPassCache(),
 	}
+	persistedSafetyIncident, hasPersistedSafetyIncident, err := rawdb.ReadExecutionSafetyIncident(db)
+	if err != nil {
+		return nil, fmt.Errorf("load execution safety incident: %w", err)
+	}
+	if hasPersistedSafetyIncident {
+		bc.speculativeSafetyDisabled.Store(true)
+		parallelExecutionSafetyDisabledGauge.Update(1)
+		parallelExecutionSafetyPersistedGauge.Update(1)
+		log.Error("Persisted execution safety incident keeps speculative execution disabled",
+			"kind", persistedSafetyIncident.Kind.String(),
+			"block", persistedSafetyIncident.BlockNum,
+			"hash", persistedSafetyIncident.BlockHash,
+			"action", "rebuild-from-trusted-pre-divergence-state",
+		)
+	}
 	bc.stateForkStatsStore.cache = bc.forkStatsCache
 	bc.stateForkController = forks.NewForkControllerFromStore(&bc.stateForkStatsStore)
-	var err error
 	bc.cycleRewards, err = newCycleRewardAccumulator(buffer)
 	if err != nil {
 		return nil, fmt.Errorf("load cycle reward pending accumulator: %w", err)
@@ -1102,6 +1158,9 @@ func (bc *BlockChain) insertBlockLockedWithExecutor(block *types.Block, executor
 	if bc.closed.Load() {
 		return ErrBlockChainClosed
 	}
+	if errPtr := bc.speculativeSafetyPersistenceErr.Load(); errPtr != nil {
+		return fmt.Errorf("execution safety incident persistence previously failed: %w", *errPtr)
+	}
 	// Fork-detection runs against the range-local tip, not bc.CurrentBlock().
 	// With async commit off they are identical (executor.tip() defaults to
 	// bc.CurrentBlock() and the foreground advances currentBlock synchronously);
@@ -1178,12 +1237,97 @@ func (bc *BlockChain) insertBlockLockedWithExecutor(block *types.Block, executor
 	}
 	if err := executor.Apply(block); err != nil {
 		bc.khaosDB.RemoveBlk(block.Hash())
-		if abortErr := executor.Abort(); abortErr != nil {
-			return fmt.Errorf("%w; abort range executor: %v", err, abortErr)
+		opened, markerErr := bc.openSpeculativeSafetyCircuit(block, err)
+		abortErr := executor.Abort()
+		if markerErr != nil {
+			if abortErr != nil {
+				return fmt.Errorf("persist speculative safety incident for block %d: %w; abort range executor: %w; original execution error: %w", block.Number(), markerErr, abortErr, err)
+			}
+			return fmt.Errorf("persist speculative safety incident for block %d: %w; original execution error: %w", block.Number(), markerErr, err)
+		}
+		if abortErr != nil {
+			return fmt.Errorf("%w; abort range executor: %w", err, abortErr)
+		}
+		if opened {
+			return bc.insertBlockLockedWithExecutor(block, executor)
 		}
 		return err
 	}
 	return nil
+}
+
+// persistExecutionSafetyIncident writes restart-stable evidence before any
+// serial recovery is allowed to continue.
+func (bc *BlockChain) persistExecutionSafetyIncident(incident rawdb.ExecutionSafetyIncident) error {
+	if bc == nil || bc.db == nil {
+		return errors.New("nil blockchain execution safety incident store")
+	}
+	if err := rawdb.WriteExecutionSafetyIncident(bc.db, incident); err != nil {
+		return err
+	}
+	parallelExecutionSafetyPersistedGauge.Update(1)
+	return nil
+}
+
+// failClosedOnSafetyPersistenceError permanently stops block insertion in the
+// current process. A storage failure means the restart-stable circuit cannot
+// be proven durable, so continuing (even serially) is unsafe.
+func (bc *BlockChain) failClosedOnSafetyPersistenceError(err error) {
+	if bc == nil || err == nil {
+		return
+	}
+	errCopy := err
+	if !bc.speculativeSafetyPersistenceErr.CompareAndSwap(nil, &errCopy) {
+		return
+	}
+	bc.speculativeSafetyDisabled.Store(true)
+	parallelExecutionSafetyDisabledGauge.Update(1)
+	parallelExecutionSafetyPersistErrorsCounter.Inc(1)
+	log.Error("Execution safety incident persistence failed; block insertion permanently stopped",
+		"err", err,
+		"action", "repair-storage-and-rebuild-from-trusted-pre-divergence-state",
+	)
+}
+
+func (bc *BlockChain) activateLegacyStateRepairSafetyCircuit(incident rawdb.ExecutionSafetyIncident) error {
+	if err := bc.persistExecutionSafetyIncident(incident); err != nil {
+		bc.failClosedOnSafetyPersistenceError(err)
+		return err
+	}
+	bc.speculativeSafetyDisabled.Store(true)
+	parallelExecutionSafetyDisabledGauge.Update(1)
+	return nil
+}
+
+// openSpeculativeSafetyCircuit is the single transition used by both linear
+// extension and fork replay. A publication invariant may fail on either path;
+// treating reorg application as a separate error-only path would leave the
+// node rewound at the LCA instead of retrying the exact block serially.
+func (bc *BlockChain) openSpeculativeSafetyCircuit(block *types.Block, err error) (bool, error) {
+	if bc == nil || block == nil || !errors.Is(err, errSpeculativePublicationAudit) || bc.speculativeSafetyDisabled.Load() {
+		return false, nil
+	}
+	incident := rawdb.ExecutionSafetyIncident{
+		Kind:      rawdb.ExecutionSafetyIncidentSpeculativePublication,
+		BlockNum:  block.Number(),
+		BlockHash: block.Hash(),
+	}
+	if persistErr := bc.persistExecutionSafetyIncident(incident); persistErr != nil {
+		bc.failClosedOnSafetyPersistenceError(persistErr)
+		return false, persistErr
+	}
+	if !bc.speculativeSafetyDisabled.CompareAndSwap(false, true) {
+		return false, nil
+	}
+	parallelExecutionSafetyFallbackCounter.Inc(1)
+	parallelExecutionSafetyDisabledGauge.Update(1)
+	log.Error("Speculative execution safety circuit opened; retrying block serially",
+		"block", block.Number(),
+		"hash", block.Hash(),
+		"err", err,
+		"action", "serial-retry-sticky-disable",
+	)
+	return true, nil
 }
 
 // applyBlock executes, commits, and persists a single block on top of the
@@ -1506,19 +1650,30 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
 	}
 	processorOptions := processBlockOptions{
-		parallelTransfers:   bc.parallelTransfers,
-		parallelVM:          bc.parallelVM,
-		captureBalanceTrace: balanceTraceEnabled,
+		parallelTransfers:              bc.parallelTransfers && !bc.speculativeSafetyDisabled.Load(),
+		parallelVM:                     bc.parallelVM && !bc.speculativeSafetyDisabled.Load(),
+		captureBalanceTrace:            balanceTraceEnabled,
+		speculativePostOracleTestHook:  bc.speculativePostOracleTestHook,
+		speculativePreOracleTestHook:   bc.speculativePreOracleTestHook,
+		speculativePreApplyTestHook:    bc.speculativePreApplyTestHook,
+		speculativePostApplyTestHook:   bc.speculativePostApplyTestHook,
+		legacyStateRepairHook:          bc.activateLegacyStateRepairSafetyCircuit,
+		saveInternalTx:                 bc.saveInternalTx,
+		saveFeaturedInternalTx:         bc.saveFeaturedInternalTx,
+		saveCancelAllUnfreezeV2Details: bc.saveCancelAllUnfreezeV2Details,
 	}
 	processorTiming := processBlockTiming{}
 	processorOptions.timing = &processorTiming
 	if plan.deferTransactionLookup {
 		processorOptions.minParallelTransferCandidates = syncParallelTransferMinCandidates
 	}
-	if accountStateRootEnabled {
+	if bc.speculativeSafetyTestHook != nil {
+		err = bc.speculativeSafetyTestHook(block, processorOptions)
+	}
+	if err == nil && accountStateRootEnabled {
 		parentRoot := current.AccountStateRoot()
 		txInfos, javaAccountStateRoot, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processorOptions)
-	} else {
+	} else if err == nil {
 		txInfos, _, err = processBlockWithOptions(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache, plan.txInfoBatch, true, -1, nil, processorOptions)
 	}
 	if statedb.StandbyWitnessVersion() != standbyWitnessVersion {
@@ -2476,14 +2631,49 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	for i, kb := range newBranch {
 		reversed[len(newBranch)-1-i] = kb.block
 	}
+	removeNewBranch := func() {
+		for _, kb := range newBranch {
+			bc.khaosDB.RemoveBlk(kb.block.Hash())
+		}
+	}
 	forkExecutor := newCanonicalRangeExecutor(bc, true)
 	if len(reversed) > 0 {
 		for _, b := range reversed {
-			if err := forkExecutor.Apply(b); err != nil {
-				// Remove orphaned new-branch blocks from KhaosDB.
-				for _, kb := range newBranch {
-					bc.khaosDB.RemoveBlk(kb.block.Hash())
+			applyErr := forkExecutor.Apply(b)
+			openedSafetyCircuit := false
+			if applyErr != nil {
+				var markerErr error
+				openedSafetyCircuit, markerErr = bc.openSpeculativeSafetyCircuit(b, applyErr)
+				if markerErr != nil {
+					removeNewBranch()
+					forkExecutor.Reset()
+					return fmt.Errorf("persist speculative safety incident for fork block %d: %w; original execution error: %v", b.Number(), markerErr, applyErr)
 				}
+			}
+			if openedSafetyCircuit {
+				// The failed block's StateDB/buffer snapshots have already rolled it
+				// back. Settle the successfully re-applied prefix before opening a
+				// fresh executor at its canonical root; its tx-range allocator has
+				// consumed the failed ordinal and cannot safely retry in place.
+				if bc.asyncCommit {
+					bc.WaitForCommitSettled()
+					if errPtr := bc.commitErr.Load(); errPtr != nil {
+						removeNewBranch()
+						forkExecutor.Reset()
+						return fmt.Errorf("apply fork block %d: %w; async commit failed before serial retry: %v", b.Number(), applyErr, *errPtr)
+					}
+				}
+				if closeErr := forkExecutor.Close(); closeErr != nil {
+					removeNewBranch()
+					forkExecutor.Reset()
+					return fmt.Errorf("apply fork block %d: %w; settle prefix before serial retry: %v", b.Number(), applyErr, closeErr)
+				}
+				forkExecutor = newCanonicalRangeExecutor(bc, true)
+				applyErr = forkExecutor.Apply(b)
+			}
+			if applyErr != nil {
+				// Remove orphaned new-branch blocks from KhaosDB.
+				removeNewBranch()
 				if bc.asyncCommit {
 					bc.WaitForCommitSettled()
 					// A concurrent worker commit failure may be the root cause of
@@ -2491,11 +2681,11 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 					// real reason rather than a downstream symptom.
 					if errPtr := bc.commitErr.Load(); errPtr != nil {
 						forkExecutor.Reset()
-						return fmt.Errorf("apply fork block %d: %w; async commit failed: %v", b.Number(), err, *errPtr)
+						return fmt.Errorf("apply fork block %d: %w; async commit failed: %v", b.Number(), applyErr, *errPtr)
 					}
 				}
 				forkExecutor.Reset()
-				return fmt.Errorf("apply fork block %d: %w", b.Number(), err)
+				return fmt.Errorf("apply fork block %d: %w", b.Number(), applyErr)
 			}
 		}
 	}

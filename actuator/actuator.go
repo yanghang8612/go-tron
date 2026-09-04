@@ -185,16 +185,21 @@ func (ctx *Context) EffectiveGenesisHash() common.Hash {
 //     split applies.
 //   - EnergyFee:        balance-paid portion of the energy bill in SUN
 //     (proto field 2). Set by PayEnergyBill.
+//   - EnergyPenaltyTotal: dynamic-energy surcharge units actually consumed by
+//     successful VM charges (proto field 8). Set by VMActuator from the shared
+//     TVM transaction accumulator; it is informational and already included in
+//     EnergyUsageTotal.
 //   - Fee:              total transaction fee in SUN. Sum of EnergyFee plus
 //     any actuator-specific fees (asset issue, exchange
 //     create, etc.). Bandwidth NetFee is *not* included
 //     here — it's added in buildTransactionInfo.
 type Result struct {
-	Fee               int64
-	EnergyUsageTotal  int64
-	EnergyUsed        int64
-	EnergyFee         int64
-	OriginEnergyUsage int64
+	Fee                int64
+	EnergyUsageTotal   int64
+	EnergyPenaltyTotal int64
+	EnergyUsed         int64
+	EnergyFee          int64
+	OriginEnergyUsage  int64
 	// VMExecutionDuration and VMRawEnergyUsage are process-local telemetry.
 	// They are populated only by VMActuator and are never copied into the
 	// consensus receipt. VMRawEnergyUsage is the interpreter/precompile energy

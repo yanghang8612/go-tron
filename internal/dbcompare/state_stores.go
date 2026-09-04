@@ -24,6 +24,7 @@ import (
 )
 
 type byteLookup func(key []byte) (value []byte, present bool, err error)
+type byteLookupFactory func(worker int) (byteLookup, error)
 type protoLookup func(key []byte, java proto.Message) (gtron proto.Message, present bool, err error)
 type byteValueComparator func(key, java, gtron []byte) (equal bool, detail string, err error)
 type byteRowClassifier func(key []byte) string
@@ -92,6 +93,18 @@ func (c *comparer) compareByteStoreParallelDetailed(
 	compare byteValueComparator,
 	classify byteRowClassifier,
 ) error {
+	return c.compareByteStoreParallelDetailedWithLookupFactory(name, scope, java, func(int) (byteLookup, error) {
+		return lookup, nil
+	}, compare, classify)
+}
+
+func (c *comparer) compareByteStoreParallelDetailedWithLookupFactory(
+	name, scope string,
+	java ethdb.KeyValueStore,
+	newLookup byteLookupFactory,
+	compare byteValueComparator,
+	classify byteRowClassifier,
+) error {
 	r := StoreResult{Name: name, Scope: scope, Present: java != nil}
 	defer c.trackStore(&r)()
 	if classify != nil {
@@ -114,6 +127,17 @@ func (c *comparer) compareByteStoreParallelDetailed(
 	}
 
 	workers := c.workerCount()
+	workerLookups := make([]byteLookup, workers)
+	for worker := range workers {
+		lookup, err := newLookup(worker)
+		if err != nil {
+			return fmt.Errorf("create %s comparison worker %d: %w", name, worker, err)
+		}
+		if lookup == nil {
+			return fmt.Errorf("create %s comparison worker %d: nil lookup", name, worker)
+		}
+		workerLookups[worker] = lookup
+	}
 	batchSize := workers * 256
 	stage := fmt.Sprintf("comparing java rows (workers=%d)", workers)
 	c.emitProgress(ProgressEvent{Phase: "info", Store: name, Detail: fmt.Sprintf("byte-store parallel workers=%d batch_size=%d", workers, batchSize)})
@@ -123,7 +147,8 @@ func (c *comparer) compareByteStoreParallelDetailed(
 	results := make(chan byteComparisonResult, batchSize)
 	var workersWG sync.WaitGroup
 	workersWG.Add(workers)
-	for range workers {
+	for worker := range workers {
+		lookup := workerLookups[worker]
 		go func() {
 			defer workersWG.Done()
 			for job := range jobs {
@@ -448,10 +473,6 @@ func (c *comparer) compareDelegatedResourceIndexes(sdb *state.StateDB, java ethd
 }
 
 func (c *comparer) compareDelegation(gtron ethdb.KeyValueStore, sdb *state.StateDB, java ethdb.KeyValueStore) error {
-	// Hydrate the shared system account before workers begin. Subsequent
-	// GetAccountKV calls only read the cached envelope and immutable latest
-	// state, avoiding concurrent cache population inside StateDB.
-	_ = sdb.GetAccount(tcommon.SystemAccountAddress)
 	pendingCycle, pendingRewards, pendingPresent, err := rawdb.ReadCycleRewardPending(gtron)
 	if err != nil {
 		return fmt.Errorf("read pending cycle rewards: %w", err)
@@ -460,69 +481,81 @@ func (c *comparer) compareDelegation(gtron ethdb.KeyValueStore, sdb *state.State
 	if err != nil {
 		return err
 	}
-	return c.compareByteStoreParallelDetailed("delegation", "state", java, func(key []byte) ([]byte, bool, error) {
-		category := delegationRowCategory(key)
-		var cycle int64
-		var addr []byte
-		if category == "reward" || category == "brokerage" || category == "account-vote" {
-			var suffix string
-			var err error
-			cycle, addr, suffix, err = parseDelegationCycleKey(key)
+	newDelegationLookup := func(workerState *state.StateDB) byteLookup {
+		return func(key []byte) ([]byte, bool, error) {
+			category := delegationRowCategory(key)
+			var cycle int64
+			var addr []byte
+			if category == "reward" || category == "brokerage" || category == "account-vote" {
+				var suffix string
+				var err error
+				cycle, addr, suffix, err = parseDelegationCycleKey(key)
+				if err != nil {
+					return nil, false, err
+				}
+				if suffix != category {
+					return nil, false, fmt.Errorf("delegation category %q does not match suffix %q", category, suffix)
+				}
+			}
+			if category == "account-vote" {
+				return workerState.ReadCycleAccountVoteStrict(cycle, addr)
+			}
+			if category == "brokerage" && cycle == -1 {
+				brokerage, ok := currentBrokerage[tcommon.BytesToAddress(addr)]
+				if !ok {
+					return nil, false, fmt.Errorf("current brokerage row was not preloaded")
+				}
+				var encoded [4]byte
+				binary.BigEndian.PutUint32(encoded[:], uint32(int32(brokerage)))
+				return encoded[:], true, nil
+			}
+			logical, err := delegationLogicalKey(key)
 			if err != nil {
 				return nil, false, err
 			}
-			if suffix != category {
-				return nil, false, fmt.Errorf("delegation category %q does not match suffix %q", category, suffix)
+			value, present, err := workerState.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, logical)
+			if err != nil {
+				return value, present, err
 			}
-		}
-		if category == "account-vote" {
-			return sdb.ReadCycleAccountVoteStrict(cycle, addr)
-		}
-		if category == "brokerage" && cycle == -1 {
-			brokerage, ok := currentBrokerage[tcommon.BytesToAddress(addr)]
-			if !ok {
-				return nil, false, fmt.Errorf("current brokerage row was not preloaded")
+			if category == "reward" && pendingPresent && cycle == pendingCycle {
+				if present && len(value) != 8 {
+					return value, true, nil
+				}
+				base := decodeBigEndianInt64(value, present)
+				pending := pendingRewards[tcommon.BytesToAddress(addr)]
+				if present || pending != 0 {
+					var encoded [8]byte
+					binary.BigEndian.PutUint64(encoded[:], uint64(base+pending))
+					return encoded[:], true, nil
+				}
 			}
-			var encoded [4]byte
-			binary.BigEndian.PutUint32(encoded[:], uint32(int32(brokerage)))
-			return encoded[:], true, nil
-		}
-		logical, err := delegationLogicalKey(key)
-		if err != nil {
-			return nil, false, err
-		}
-		value, present, err := sdb.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, logical)
-		if err != nil {
-			return value, present, err
-		}
-		if category == "reward" && pendingPresent && cycle == pendingCycle {
-			if present && len(value) != 8 {
-				return value, true, nil
+			if present {
+				return value, present, err
 			}
-			base := decodeBigEndianInt64(value, present)
-			pending := pendingRewards[tcommon.BytesToAddress(addr)]
-			if present || pending != 0 {
-				var encoded [8]byte
-				binary.BigEndian.PutUint64(encoded[:], uint64(base+pending))
+			// java-tron may materialize getter defaults while go-tron leaves the
+			// equivalent state row absent. Return the encoded defaults so the normal
+			// byte comparison still reports non-default Java values as differences.
+			switch delegationRowCategory(key) {
+			case "reward":
+				return make([]byte, 8), true, nil
+			case "brokerage":
+				var encoded [4]byte
+				binary.BigEndian.PutUint32(encoded[:], uint32(rawdb.DefaultBrokerage))
 				return encoded[:], true, nil
+			default:
+				return nil, false, nil
 			}
 		}
-		if present {
-			return value, present, err
+	}
+	return c.compareByteStoreParallelDetailedWithLookupFactory("delegation", "state", java, func(int) (byteLookup, error) {
+		// StateDB intentionally has execution-goroutine-confined lazy caches. Give
+		// each comparison worker an independent view while sharing the concurrent
+		// durable store underneath it.
+		workerState, err := state.New(tcommon.Hash{}, state.NewDatabase(rawdb.WrapKeyValueStore(gtron)))
+		if err != nil {
+			return nil, err
 		}
-		// java-tron may materialize getter defaults while go-tron leaves the
-		// equivalent state row absent. Return the encoded defaults so the normal
-		// byte comparison still reports non-default Java values as differences.
-		switch delegationRowCategory(key) {
-		case "reward":
-			return make([]byte, 8), true, nil
-		case "brokerage":
-			var encoded [4]byte
-			binary.BigEndian.PutUint32(encoded[:], uint32(rawdb.DefaultBrokerage))
-			return encoded[:], true, nil
-		default:
-			return nil, false, nil
-		}
+		return newDelegationLookup(workerState), nil
 	}, compareDelegationValue, delegationRowCategory)
 }
 

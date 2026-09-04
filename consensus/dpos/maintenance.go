@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus"
 	"github.com/tronprotocol/go-tron/params"
 )
@@ -90,7 +91,7 @@ func distributeLegacyStandby(chain consensus.ChainHeaderWriter, sorted []Witness
 		return
 	}
 	for _, w := range standby {
-		pay := int64(float64(w.Votes) * (float64(totalPay) / float64(voteSum)))
+		pay := tcommon.JavaDoubleToInt64(float64(w.Votes) * (float64(totalPay) / float64(voteSum)))
 		if pay > 0 {
 			chain.AddAllowance(w.Address, pay)
 		}

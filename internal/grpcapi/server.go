@@ -1360,6 +1360,7 @@ func (s *Server) TriggerContract(_ context.Context, in *contractpb.TriggerSmartC
 	ext := txToExtention(tx)
 	if result != nil {
 		ext.EnergyUsed = result.EnergyUsed
+		ext.EnergyPenalty = result.EnergyPenalty
 		if len(result.Result) > 0 {
 			ext.ConstantResult = [][]byte{result.Result}
 		}
@@ -1382,6 +1383,7 @@ func (s *Server) TriggerConstantContract(_ context.Context, in *contractpb.Trigg
 	ext := &apipb.TransactionExtention{Result: ret}
 	if result != nil {
 		ext.EnergyUsed = result.EnergyUsed
+		ext.EnergyPenalty = result.EnergyPenalty
 		if len(result.Result) > 0 {
 			ext.ConstantResult = [][]byte{result.Result}
 		}

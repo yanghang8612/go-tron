@@ -1,8 +1,11 @@
 package vm
 
 import (
+	"math"
+	"math/big"
 	"testing"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -83,8 +86,8 @@ func TestEnergyWindow_RecoveryDivergesOnWindow(t *testing.T) {
 // precision-averaging recovery (RepositoryImpl.increase / getUsage, precision=
 // 1_000_000), which go-tron's settle path already ports as core.increase (see
 // core/energy_adaptive.go and core/resource.go). This VM-getter recovery is now
-// UNCONDITIONALLY primitive-long (no harden/BigInteger), matching RepositoryImpl
-// which — unlike chainbase ResourceProcessor.increase — has no harden gate at all.
+// primitive-long branch before allow_harden_resource_calculation. The hardened
+// RepositoryImpl branch is covered separately below.
 // A plain `oldUsage * remaining / windowSize` truncate would drift ~1 unit per
 // recovered block (a free-vs-burn bandwidth fork on every resourceUsage /
 // checkUnDelegateResource / delegatableResource precompile call).
@@ -111,5 +114,45 @@ func TestRecoverStakingUsage_MatchesSettlePath(t *testing.T) {
 					tc.oldUsage, tc.lastTime, tc.now, tc.windowSize, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestStakingUsageRecoveryHardenedMatchesBigInteger(t *testing.T) {
+	const (
+		oldUsage = int64(92_233_720_368_547_758)
+		window   = int64(28_800)
+	)
+	got := recoverStakingUsageWithHarden(oldUsage, 0, 1, window, true)
+	average := new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(resourcePrecisionForStaking))
+	q, r := new(big.Int).QuoRem(average, big.NewInt(window), new(big.Int))
+	if r.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	// The one-slot decay uses double/round in Java in both modes. Use the
+	// implementation under test for that isolated narrowing, then independently
+	// verify the overflow-sensitive final BigInteger multiply/divide.
+	decayed := tcommon.JavaDoubleToInt64(math.Round(float64(q.Int64()) * float64(window-1) / float64(window)))
+	wantBig := new(big.Int).Mul(big.NewInt(decayed), big.NewInt(window))
+	wantBig.Quo(wantBig, big.NewInt(resourcePrecisionForStaking))
+	if got != wantBig.Int64() {
+		t.Fatalf("hardened recovered usage: got %d, want %d", got, wantBig.Int64())
+	}
+	if legacy := recoverStakingUsage(oldUsage, 0, 1, window); legacy == got {
+		t.Fatalf("test lacks overflow sensitivity: legacy=%d hardened=%d", legacy, got)
+	}
+}
+
+func TestStakingUsageToBalanceHardenGate(t *testing.T) {
+	const (
+		usage       = int64(66_233_476_601_315)
+		totalWeight = int64(780_285_509)
+		totalLimit  = int64(816_320_281_630)
+		wantExact   = int64(63_309_736_589_542_764)
+	)
+	if got := stakingUsageToBalanceWithHarden(usage, totalWeight, totalLimit, true); got != wantExact {
+		t.Fatalf("hardened usage balance: got %d, want %d", got, wantExact)
+	}
+	if legacy := stakingUsageToBalance(usage, totalWeight, totalLimit); legacy == wantExact {
+		t.Fatalf("test lacks double-rounding sensitivity: legacy=%d exact=%d", legacy, wantExact)
 	}
 }

@@ -79,6 +79,42 @@ func LookupRootedStateKey(key []byte) (RootedStateKey, bool) {
 	return RootedStateKey{}, false
 }
 
+// IsProtectedStateMutationKey reports raw keys whose bytes are owned by the
+// typed/rooted state model or its derived physical mirrors. A speculative
+// TransactionWriteSet must never publish one of these through RawKV, even when
+// no typed alias is present: doing so bypasses logical ownership and cached
+// StateDB post-images.
+func IsProtectedStateMutationKey(key []byte) bool {
+	if _, rooted := LookupRootedStateKey(key); rooted {
+		return true
+	}
+	// Every recognized rawdb family is node/state infrastructure rather than a
+	// transaction-owned application namespace. In particular, state tx ranges,
+	// staged bodies, block/receipt indexes and the sticky safety marker must not
+	// be writable through a speculative transaction RawKV carrier.
+	if ClassifyPhysicalKeyString(string(key)) != PhysicalKeyFamilyOther {
+		return true
+	}
+	// The low-cardinality write-amplification classifier intentionally groups
+	// only hot families. The inspection registry is the complete catalog of
+	// rawdb-owned singleton/prefix namespaces, including history traces, PBFT,
+	// checkpoint and snapshot sidecars. Those are derived rather than rooted,
+	// but a transaction still must not forge or delete them through RawKV.
+	for _, keyspace := range inspectSingletons {
+		if bytes.Equal(key, keyspace.key) {
+			return true
+		}
+	}
+	for _, keyspace := range inspectPrefixes {
+		if bytes.HasPrefix(key, keyspace.prefix) {
+			return true
+		}
+	}
+	return bytes.HasPrefix(key, accountPrefix) ||
+		bytes.HasPrefix(key, codePrefix) ||
+		bytes.HasPrefix(key, dynPropPrefix)
+}
+
 func rooted(owner common.Address, domain kvdomains.KVDomain, key []byte) RootedStateKey {
 	return RootedStateKey{Owner: owner, Domain: domain, Key: append([]byte(nil), key...)}
 }

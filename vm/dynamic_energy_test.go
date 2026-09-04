@@ -152,6 +152,9 @@ func TestInterpreter_DynamicEnergyPenaltyCharged(t *testing.T) {
 	if used != 12 {
 		t.Fatalf("energy charged: got %d, want 12 (9 base + 3 penalty)", used)
 	}
+	if got := tvm.EnergyPenaltyTotal; got != 3 {
+		t.Fatalf("energy penalty total: got %d, want 3", got)
+	}
 
 	// ContractState.EnergyUsage should accumulate only the base 9.
 	updated := stateDB.ReadContractState(addr)
@@ -317,6 +320,25 @@ func TestUseEnergy_DynamicPenaltySingleFloorAcrossChunks(t *testing.T) {
 	if used := uint64(1_000_000) - contract.Energy; used != 9 {
 		t.Fatalf("two base-3 chunks at 1.5x: charged %d, want 9 (single floor); old per-chunk gave 8", used)
 	}
+	if got := tvm.EnergyPenaltyTotal; got != 3 {
+		t.Fatalf("two base-3 chunks penalty: got %d, want 3", got)
+	}
+}
+
+func TestUseEnergy_DynamicPenaltyExcludesRejectedCharge(t *testing.T) {
+	tvm, _, _ := newTestTVMWithDB(t)
+	in := tvm.interpreter
+	in.tvmConfig.DynamicEnergy = true
+	in.factor = 20_000 // 2x: base 3 needs 6 total and carries 3 penalty.
+	in.opBaseAccum = 0
+
+	contract := NewContract(tcommon.Address{}, tcommon.Address{0x41, 0x01}, 0, 5)
+	if in.useEnergy(contract, 3) {
+		t.Fatal("charge unexpectedly fit within the energy limit")
+	}
+	if got := tvm.EnergyPenaltyTotal; got != 0 {
+		t.Fatalf("rejected dynamic-energy charge added penalty: got %d, want 0", got)
+	}
 }
 
 func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
@@ -365,10 +387,9 @@ func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
 		if used != wantCharged {
 			t.Errorf("MSTORE energy charged: got %d, want %d", used, wantCharged)
 		}
-		// Also check that rawEnergyUsed was correctly accumulated in
-		// ContractState.EnergyUsage (written at STOP).
-		_ = wantRaw // confirmed by wantCharged derivation; state verified below
-		_ = wantRaw
+		if got := tvm.EnergyPenaltyTotal; got != wantCharged-wantRaw {
+			t.Errorf("MSTORE penalty total: got %d, want %d", got, wantCharged-wantRaw)
+		}
 	})
 
 	t.Run("CODECOPY_word_cost", func(t *testing.T) {
@@ -397,9 +418,13 @@ func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
 		// CODECOPY: mem=3, copy=3 → 6 raw → scaled(6) = 9
 		// STOP: 0
 		wantCharged := uint64(3)*scaled(3) + scaled(6)
+		wantRaw := uint64(3*3 + 6)
 		used := uint64(100_000) - contract.Energy
 		if used != wantCharged {
 			t.Errorf("CODECOPY energy charged: got %d, want %d", used, wantCharged)
+		}
+		if got := tvm.EnergyPenaltyTotal; got != wantCharged-wantRaw {
+			t.Errorf("CODECOPY penalty total: got %d, want %d", got, wantCharged-wantRaw)
 		}
 	})
 
@@ -433,6 +458,9 @@ func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
 		if used := uint64(100_000) - contract.Energy; used != 15 {
 			t.Errorf("no-penalty MSTORE: got %d, want 15", used)
 		}
+		if got := tvm.EnergyPenaltyTotal; got != 0 {
+			t.Errorf("disabled dynamic-energy penalty total: got %d, want 0", got)
+		}
 	})
 
 	t.Run("MLOAD_memory_expansion_with_factor", func(t *testing.T) {
@@ -456,9 +484,13 @@ func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
 
 		// PUSH1@3 scaled + MLOAD mem=9 scaled.
 		wantCharged := scaled(3) + scaled(9)
+		wantRaw := uint64(3 + 9)
 		used := uint64(100_000) - contract.Energy
 		if used != wantCharged {
 			t.Errorf("MLOAD energy charged: got %d, want %d", used, wantCharged)
+		}
+		if got := tvm.EnergyPenaltyTotal; got != wantCharged-wantRaw {
+			t.Errorf("MLOAD penalty total: got %d, want %d", got, wantCharged-wantRaw)
 		}
 	})
 }

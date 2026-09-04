@@ -1,7 +1,6 @@
 package actuator
 
 import (
-	"math"
 	"math/big"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -39,7 +38,7 @@ func computeEnergyIncrease(rawWindow int64, optimized bool, lastUsage, usage, la
 		if lastTime+oldWindowSize > now {
 			delta := now - lastTime
 			decay := float64(oldWindowSize-delta) / float64(oldWindowSize)
-			averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+			averageLastUsage = common.JavaMathRoundToInt64(float64(averageLastUsage) * decay)
 		} else {
 			averageLastUsage = 0
 		}

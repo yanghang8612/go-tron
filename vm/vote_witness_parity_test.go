@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -134,6 +135,46 @@ func TestVoteWitnessMergeOrderMatchesJavaHashMap(t *testing.T) {
 			t.Fatalf("vote order mismatch at %d:\n got =%s\n want=%s (java HashMap entrySet order)",
 				i, addrsHex(gotOrder), addrsHex(want))
 		}
+	}
+}
+
+func TestVoteWitnessIdentityHashTieStopsInsteadOfPanickingOrGuessing(t *testing.T) {
+	tvm, statedb, _ := newVoteParityTVM(t)
+	caller := voteParityAddr(0xB0)
+	statedb.CreateAccount(caller, corepb.AccountType_Normal)
+	statedb.FreezeV1Bandwidth(caller, 100*tvmTRXPrecision, tvm.Timestamp+1)
+	witnesses := javaIdentityTieWitnesses(t)
+	for _, witness := range witnesses {
+		statedb.PutWitness(witness, "w")
+	}
+
+	n := len(witnesses)
+	mem := newMemory()
+	mem.set32(0, uint256.NewInt(uint64(n)))
+	for i, witness := range witnesses {
+		witnessWordAt(mem, uint64(32+i*32), witness)
+	}
+	amountBase := uint64(32 + n*32)
+	mem.set32(amountBase, uint256.NewInt(uint64(n)))
+	for i := range witnesses {
+		mem.set32(amountBase+uint64(32+i*32), uint256.NewInt(1))
+	}
+
+	_, err := callVoteWitness(t, tvm, caller, mem,
+		uint256.NewInt(0), uint256.NewInt(uint64(n)),
+		uint256.NewInt(amountBase), uint256.NewInt(uint64(n)), 1_000_000)
+	if !errors.Is(err, ErrUnreproducibleJavaHashMapOrder) {
+		t.Fatalf("voteWitness error: got %v, want fail-closed identity-hash guard", err)
+	}
+	if len(statedb.GetVotes(caller)) != 0 {
+		t.Fatal("ambiguous Java HashMap order must not publish guessed vote state")
+	}
+	if len(tvm.InternalTransactions) != 1 || !tvm.InternalTransactions[0].Rejected {
+		t.Fatalf("ambiguous vote internal transaction: got %+v, want one rejected record", tvm.InternalTransactions)
+	}
+	if !shouldPropagateCallError(ErrUnreproducibleJavaHashMapOrder) ||
+		!shouldPropagateCreateError(ErrUnreproducibleJavaHashMapOrder) {
+		t.Fatal("identity-hash ambiguity must escape nested CALL and CREATE frames to stop block import")
 	}
 }
 

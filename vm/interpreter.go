@@ -411,6 +411,7 @@ func (in *Interpreter) useEnergy(contract *Contract, baseCost uint64) bool {
 		cost += penalty
 	}
 	if contract.UseEnergy(cost) {
+		in.tvm.EnergyPenaltyTotal += penalty
 		return true
 	}
 	// The protocol's ContractState feedback counter includes the requested raw

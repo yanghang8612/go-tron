@@ -464,7 +464,7 @@ func calcAccountEnergyLimitFromFrozen(frozen int64, dp *state.DynamicProperties)
 		// arithmetic failure when the result is out of range.
 		return bigMulDivInt64(weight, totalLimit, totalWeight)
 	}
-	return int64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
+	return common.JavaDoubleToInt64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
 }
 
 const resourcePrecisionForEnergy = int64(1_000_000)

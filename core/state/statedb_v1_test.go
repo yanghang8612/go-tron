@@ -79,6 +79,37 @@ func TestFreezeV1Energy(t *testing.T) {
 	if got := obj.account.FrozenEnergyExpireTime(); got != 4_000_000 {
 		t.Fatalf("expire time: want 4000000, got %d", got)
 	}
+
+	// java AccountCapsule.setFrozenForEnergy overwrites the expiry even when
+	// the next calculated timestamp is earlier (for example after a duration
+	// configuration change or when replaying imported state).
+	sdb.FreezeV1Energy(addr, 25, 2_000_000)
+	obj = sdb.getStateObject(addr)
+	if got := obj.account.FrozenEnergyAmount(); got != 525 {
+		t.Fatalf("frozen energy after earlier expiry: want 525, got %d", got)
+	}
+	if got := obj.account.FrozenEnergyExpireTime(); got != 2_000_000 {
+		t.Fatalf("overwritten expire time: want 2000000, got %d", got)
+	}
+}
+
+func TestFreezeV1TronPowerOverwritesExpiry(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x33)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+
+	sdb.FreezeV1TronPower(addr, 400, 4_000_000)
+	sdb.FreezeV1TronPower(addr, 25, 2_000_000)
+	account := sdb.GetAccount(addr)
+	if account == nil {
+		t.Fatal("account missing")
+	}
+	if got := account.V1TronPowerFrozen(); got != 425 {
+		t.Fatalf("frozen tron power: want 425, got %d", got)
+	}
+	if got := account.V1TronPowerExpireTime(); got != 2_000_000 {
+		t.Fatalf("overwritten expire time: want 2000000, got %d", got)
+	}
 }
 
 func TestUnfreezeV1Energy_NotExpired(t *testing.T) {

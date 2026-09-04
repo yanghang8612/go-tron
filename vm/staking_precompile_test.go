@@ -133,6 +133,41 @@ func TestStakingV2AvailableUnfreezeCountsOnlyUnexpired(t *testing.T) {
 	}
 }
 
+func TestResourceUsageBalanceUsesHardenDynamicProperty(t *testing.T) {
+	tvm, statedb, dp := newStakeParityTVM(t)
+	addr := stakingPrecompileAddr(0x03)
+	statedb.CreateAccount(addr, corepb.AccountType_Normal)
+	const (
+		usage       = int64(66_233_476_601_315)
+		totalWeight = int64(780_285_509)
+		totalLimit  = int64(816_320_281_630)
+	)
+	statedb.SetNetUsage(addr, usage)
+	statedb.SetLatestConsumeTime(addr, 0)
+	dp.Set("total_net_limit", totalLimit)
+	dp.SetTotalNetWeight(totalWeight)
+	tvm.HeadSlot = 0
+	tvm.HasHeadSlot = true
+
+	legacyUsage := recoverStakingUsageWithHarden(usage, 0, 0, int64(28_800), false)
+	wantLegacy := stakingUsageToBalanceWithHarden(legacyUsage, totalWeight, totalLimit, false)
+	gotLegacy, _ := resourceUsageBalanceAndRestoreSeconds(tvm, addr, corepb.ResourceCode_BANDWIDTH)
+	if gotLegacy != wantLegacy {
+		t.Fatalf("legacy balance: got %d, want %d", gotLegacy, wantLegacy)
+	}
+
+	dp.SetAllowHardenResourceCalculation(true)
+	hardenedUsage := recoverStakingUsageWithHarden(usage, 0, 0, int64(28_800), true)
+	wantHardened := stakingUsageToBalanceWithHarden(hardenedUsage, totalWeight, totalLimit, true)
+	gotHardened, _ := resourceUsageBalanceAndRestoreSeconds(tvm, addr, corepb.ResourceCode_BANDWIDTH)
+	if gotHardened != wantHardened {
+		t.Fatalf("hardened balance: got %d, want %d", gotHardened, wantHardened)
+	}
+	if gotLegacy == gotHardened {
+		t.Fatalf("test lacks harden sensitivity: both modes returned %d", gotLegacy)
+	}
+}
+
 func TestStakingV2ResourceV2ReadsDelegatedPairBuckets(t *testing.T) {
 	tvm, _, _ := newTestTVMWithDB(t)
 	statedb := tvm.StateDB

@@ -311,6 +311,7 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	energyUsed := energyLimit - energyLeft
 
 	result.EnergyUsageTotal = int64(energyUsed)
+	result.EnergyPenaltyTotal = int64(evm.EnergyPenaltyTotal)
 	result.VMRawEnergyUsage = int64(energyUsed)
 	if cfg.DynamicEnergy {
 		result.VMRawEnergyUsage = int64(evm.RawEnergyUsage())
@@ -416,6 +417,7 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	energyUsed := energyLimit - energyLeft
 
 	result.EnergyUsageTotal = int64(energyUsed)
+	result.EnergyPenaltyTotal = int64(evm.EnergyPenaltyTotal)
 	result.VMRawEnergyUsage = int64(energyUsed)
 	if cfg.DynamicEnergy {
 		result.VMRawEnergyUsage = int64(evm.RawEnergyUsage())

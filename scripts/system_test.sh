@@ -20,11 +20,22 @@ SR_P2P=19888
 NODE_P2P=19889
 SR_JRPC=18545
 NODE_JRPC=18546
+SR_PPROF=16062
+NODE_PPROF=16063
 SR_PID=""
 NODE_PID=""
 PASS=0
 FAIL=0
 SKIP=0
+PARALLEL_EXECUTION="${GTRON_SYSTEM_TEST_PARALLEL_EXECUTION:-0}"
+# Keep these arrays non-empty: Bash 3.2 treats an empty-array expansion as an
+# unbound variable under `set -u`.
+SR_EXEC_ARGS=(--exec.parallel-transfers=false --exec.parallel-vm=false)
+NODE_EXEC_ARGS=(--exec.parallel-transfers=false --exec.parallel-vm=false)
+if [ "$PARALLEL_EXECUTION" = "1" ]; then
+    SR_EXEC_ARGS=(--exec.parallel-transfers --exec.parallel-vm --pprof.port "$SR_PPROF")
+    NODE_EXEC_ARGS=(--exec.parallel-transfers --exec.parallel-vm --pprof.port "$NODE_PPROF")
+fi
 
 # Fixed witness key for reproducibility
 WITNESS_KEY="c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4"
@@ -35,14 +46,9 @@ echo "  go-tron System Test"
 echo "================================"
 echo ""
 
-if [ ! -f "$GTRON" ]; then
-    echo "Building gtron..."
-    (cd "$BASEDIR" && go build -o build/bin/gtron ./cmd/gtron/)
-fi
-if [ ! -f "$TXSIGN" ]; then
-    echo "Building txsign..."
-    (cd "$BASEDIR" && go build -o build/bin/txsign ./cmd/txsign/)
-fi
+echo "Building gtron and txsign from the current workspace..."
+(cd "$BASEDIR" && go build -o build/bin/gtron ./cmd/gtron/)
+(cd "$BASEDIR" && go build -o build/bin/txsign ./cmd/txsign/)
 echo "Binaries ready."
 echo ""
 
@@ -251,6 +257,7 @@ echo "=== Starting SR node (dev mode) ==="
     --http.port "$SR_HTTP" \
     --jsonrpc.port "$SR_JRPC" \
     --grpc.port 0 \
+    "${SR_EXEC_ARGS[@]}" \
     > "$TMPDIR/sr.log" 2>&1 &
 SR_PID=$!
 echo "SR PID=$SR_PID"
@@ -373,6 +380,7 @@ echo "  Recipient address: $RECIPIENT_ADDR"
 
 # Step 1: Build unsigned transfer transaction via API
 TRANSFER_AMOUNT=1000000
+EXPECTED_RECIPIENT_BALANCE=$TRANSFER_AMOUNT
 echo "  Building transfer: $TRANSFER_AMOUNT sun to $RECIPIENT_ADDR"
 UNSIGNED_TX=$(http_post $SR_HTTP "/wallet/createtransaction" "{
     \"owner_address\": \"$WITNESS_ADDR\",
@@ -439,6 +447,35 @@ if [ "$NEW_WITNESS_BALANCE" -lt "$WITNESS_BALANCE" ] 2>/dev/null; then
 else
     echo "  FAIL: witness balance did not decrease (before=$WITNESS_BALANCE, after=$NEW_WITNESS_BALANCE)"
     FAIL=$((FAIL + 1))
+fi
+
+if [ "$PARALLEL_EXECUTION" = "1" ]; then
+    echo ""
+    echo "--- Parallel Transfer publication safety gate ---"
+    PARALLEL_UNSIGNED=$(http_post $SR_HTTP "/wallet/createtransaction" "{
+        \"owner_address\": \"$WITNESS_ADDR\",
+        \"to_address\": \"$RECIPIENT_ADDR\",
+        \"amount\": 1
+    }")
+    PARALLEL_SIGNED=$(echo "$PARALLEL_UNSIGNED" | "$TXSIGN" "$WITNESS_KEY" 2>&1) || true
+    PARALLEL_BCAST=$(http_post $SR_HTTP "/wallet/broadcasttransaction" "$PARALLEL_SIGNED")
+    check "parallel existing-recipient transfer broadcast succeeds" "$PARALLEL_BCAST" '"result":true'
+    CURRENT_BLOCK=$(json_field "d.get('block_header',{}).get('raw_data',{}).get('number',0)" "$(http_get $SR_HTTP /wallet/getnowblock)" || echo "0")
+    wait_for_block $SR_HTTP $((CURRENT_BLOCK + 2)) "SR"
+    RESULT=$(http_post $SR_HTTP "/wallet/getaccount" "{\"address\": \"$RECIPIENT_ADDR\"}")
+    PARALLEL_RECV_BALANCE=$(json_field "d.get('balance',0)" "$RESULT" || echo "0")
+    EXPECTED_RECIPIENT_BALANCE=$((TRANSFER_AMOUNT + 1))
+    check_eq "parallel existing-recipient transfer applied" "$PARALLEL_RECV_BALANCE" "$EXPECTED_RECIPIENT_BALANCE"
+    if GATE_OUTPUT=$(python3 -B "$BASEDIR/scripts/dev/parallel_execution_release_gate.py" \
+        --metrics-url "http://127.0.0.1:$SR_PPROF/debug/pprof/metrics" \
+        --min-transfer-publications 1 2>&1); then
+        echo "  PASS: $GATE_OUTPUT"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: parallel execution release gate"
+        echo "$GATE_OUTPUT" | sed 's/^/    /'
+        FAIL=$((FAIL + 1))
+    fi
 fi
 
 # ─────────────────────────────────────────────────────────────────
@@ -528,6 +565,7 @@ echo "Starting regular node (relay/sync only — no --witness flag)..."
     --jsonrpc.port "$NODE_JRPC" \
     --grpc.port 0 \
     --seednode "localhost:$SR_P2P" \
+    "${NODE_EXEC_ARGS[@]}" \
     > "$TMPDIR/node.log" 2>&1 &
 NODE_PID=$!
 echo "Node PID=$NODE_PID"
@@ -572,7 +610,7 @@ echo "--- Cross-node account consistency ---"
 RESULT=$(http_post $NODE_HTTP "/wallet/getaccount" "{\"address\": \"$RECIPIENT_ADDR\"}")
 NODE_RECV_BALANCE=$(json_field "d.get('balance',0)" "$RESULT" || echo "0")
 echo "  Recipient balance on node: $NODE_RECV_BALANCE"
-check_eq "recipient balance consistent across nodes" "$NODE_RECV_BALANCE" "$TRANSFER_AMOUNT"
+check_eq "recipient balance consistent across nodes" "$NODE_RECV_BALANCE" "$EXPECTED_RECIPIENT_BALANCE"
 
 # Witness account on node
 RESULT=$(http_post $NODE_HTTP "/wallet/getaccount" "{\"address\": \"$WITNESS_ADDR\"}")

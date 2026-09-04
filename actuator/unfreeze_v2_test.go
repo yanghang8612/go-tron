@@ -115,6 +115,40 @@ func TestUnfreezeV2Execute(t *testing.T) {
 	}
 }
 
+func TestUnfreezeV2ExecuteAppliesNegativeExpiredSum(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(0x23)
+	seedAccount(statedb, owner, 10_000_000)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 2_000_000)
+	statedb.AddUnfreezeV2(owner, corepb.ResourceCode_ENERGY, -3_000_000, 99_999)
+
+	tx := makeUnfreezeV2Tx(0x23, 1_000_000, corepb.ResourceCode_BANDWIDTH)
+	dp := state.NewDynamicProperties()
+	dp.SetUnfreezeDelayDays(14)
+	ctx := &Context{
+		State:         statedb,
+		DynProps:      dp,
+		Tx:            tx,
+		BlockTime:     100_000,
+		PrevBlockTime: 100_000,
+		BlockNumber:   1,
+	}
+
+	result, err := (&UnfreezeBalanceV2Actuator{}).Execute(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.WithdrawExpireAmount != -3_000_000 {
+		t.Fatalf("withdraw_expire_amount: got %d, want -3000000", result.WithdrawExpireAmount)
+	}
+	if got := statedb.GetBalance(owner); got != 7_000_000 {
+		t.Fatalf("balance: got %d, want 7000000", got)
+	}
+	if got := statedb.UnfreezeV2Count(owner); got != 1 {
+		t.Fatalf("unfreeze queue: got %d, want only the new row", got)
+	}
+}
+
 // TestUnfreezeV2_TronPower_Validate: TRON_POWER unfreeze is accepted once StakingV2
 // (= AllowNewResourceModel, same proposal #62) is active.
 func TestUnfreezeV2_TronPower_Validate(t *testing.T) {

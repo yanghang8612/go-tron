@@ -528,6 +528,9 @@ func TestWriteCompactTransactionInfosByBlockStripsIDsWithoutMutatingInput(t *tes
 	txID := bytes.Repeat([]byte{0x04}, common.HashLength)
 	infos := []*corepb.TransactionInfo{{
 		Id: txID, Fee: 400, BlockNumber: 5, BlockTimeStamp: 15_000,
+		InternalTransactions: []*corepb.InternalTransaction{{
+			Hash: []byte{0x77}, Note: []byte("call"),
+		}},
 	}}
 	full, err := proto.Marshal(&corepb.TransactionRet{
 		BlockNumber: 5, BlockTimeStamp: 15_000, Transactioninfo: infos,
@@ -543,6 +546,9 @@ func TestWriteCompactTransactionInfosByBlockStripsIDsWithoutMutatingInput(t *tes
 	}
 	if infos[0].BlockNumber != 5 || infos[0].BlockTimeStamp != 15_000 {
 		t.Fatalf("input TransactionInfo block metadata = %d/%d, want unchanged 5/15000", infos[0].BlockNumber, infos[0].BlockTimeStamp)
+	}
+	if len(infos[0].InternalTransactions) != 1 || infos[0].InternalTransactions[0].Hash[0] != 0x77 {
+		t.Fatalf("input internal transactions changed: %+v", infos[0].InternalTransactions)
 	}
 	data, err := db.Get(txInfoBlockKey(5))
 	if err != nil {
@@ -563,6 +569,9 @@ func TestWriteCompactTransactionInfosByBlockStripsIDsWithoutMutatingInput(t *tes
 	if err != nil || !ok || len(stored) != 1 || len(stored[0].Id) != 0 || stored[0].Fee != 400 ||
 		stored[0].BlockNumber != 5 || stored[0].BlockTimeStamp != 15_000 {
 		t.Fatalf("decoded compact TransactionRet = %+v/%v/%v, want restored block metadata and empty ID", stored, ok, err)
+	}
+	if len(stored[0].InternalTransactions) != 1 || !proto.Equal(stored[0].InternalTransactions[0], infos[0].InternalTransactions[0]) {
+		t.Fatalf("decoded internal transactions = %+v, want %+v", stored[0].InternalTransactions, infos[0].InternalTransactions)
 	}
 }
 

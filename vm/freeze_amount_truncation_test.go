@@ -55,6 +55,66 @@ func callFreeze(t *testing.T, tvm *TVM, owner, receiver tcommon.Address, amount 
 	return ret.Uint64()
 }
 
+func callUnfreezeV1(t *testing.T, tvm *TVM, owner, receiver tcommon.Address, resource int64) uint64 {
+	t.Helper()
+	stack := newStack()
+	recv := addressWord(receiver)
+	stack.push(&recv)
+	stack.push(uint256.NewInt(uint64(resource)))
+	contract := NewContract(owner, owner, 0, 5_000_000)
+	if _, err := opUnfreeze(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opUnfreeze error: %v", err)
+	}
+	result := stack.pop()
+	return result.Uint64()
+}
+
+// UnfreezeBalanceProcessor validates self BANDWIDTH by row count and expiry,
+// not by the frozen amount. Zero and malformed negative expired rows therefore
+// still commit: Java removes them, applies the wrapping signed sum to balance
+// and total weight, backfills that value into the internal transaction, and
+// returns true.
+func TestUnfreezeV1BandwidthNonPositiveExpiredRowsStillSucceed(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		frozen        int64
+		wantBalance   int64
+		wantWeight    int64
+		wantStoredVal int64
+	}{
+		{name: "zero", frozen: 0, wantBalance: 10 * tvmTRXPrecision, wantWeight: 0, wantStoredVal: 0},
+		{name: "negative", frozen: -3 * tvmTRXPrecision, wantBalance: 7 * tvmTRXPrecision, wantWeight: 3, wantStoredVal: -3 * tvmTRXPrecision},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tvm, statedb, dp := newFreezeV1TVM(t)
+			root := featuredRoot()
+			tvm.RootTxID = root
+			owner := freezeAmtAddr(0x20)
+			statedb.CreateAccount(owner, corepb.AccountType_Normal)
+			statedb.AddBalance(owner, 10*tvmTRXPrecision)
+			statedb.FreezeV1Bandwidth(owner, tc.frozen, dp.LatestBlockHeaderTimestamp()-1)
+
+			if got := callUnfreezeV1(t, tvm, owner, owner, 0); got != 1 {
+				t.Fatalf("unfreeze result: got %d, want 1", got)
+			}
+			if got := statedb.GetBalance(owner); got != tc.wantBalance {
+				t.Fatalf("balance: got %d, want %d", got, tc.wantBalance)
+			}
+			if got := dp.TotalNetWeight(); got != tc.wantWeight {
+				t.Fatalf("total net weight: got %d, want %d", got, tc.wantWeight)
+			}
+			if count, err := statedb.GetFreezeV1BandwidthCount(owner); err != nil || count != 0 {
+				t.Fatalf("frozen row count: got %d, err=%v, want 0", count, err)
+			}
+			if len(tvm.InternalTransactions) != 1 {
+				t.Fatalf("internal transactions: got %d, want 1", len(tvm.InternalTransactions))
+			}
+			assertFeaturedInternal(t, tvm.InternalTransactions[0], root, owner, owner[:],
+				"unfreezeForBandwidth", 0, tc.wantStoredVal, 1, false, "")
+		})
+	}
+}
+
 // TestFreezeAmountTruncationPushesZero is the A gate for the legacy FREEZE amount.
 // frozenBalance = 2^64 + 5*TRX has low-64-bits == 5*TRX, so the old
 // int64(amountWord.Uint64()) truncated it to a VALID 5-TRX freeze and mutated
@@ -100,6 +160,109 @@ func TestFreezeAmountNormalUnchanged(t *testing.T) {
 	}
 	if got := dp.TotalEnergyWeight(); got != 10 {
 		t.Fatalf("energy weight after 10-TRX freeze: got %d, want 10", got)
+	}
+}
+
+// FreezeBalanceProcessor uses AccountCapsule.setFrozenForEnergy: balance is
+// accumulated, but expiry is replaced with this operation's calculated value
+// even if an imported/older slot carries a later timestamp.
+func TestFreezeV1EnergyOverwritesLaterExpiry(t *testing.T) {
+	tvm, statedb, dp := newFreezeV1TVM(t)
+	owner := freezeAmtAddr(0x0f)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 100*tvmTRXPrecision)
+	wantExpiry := dp.LatestBlockHeaderTimestamp() + 3*86_400_000
+	statedb.FreezeV1Energy(owner, 5*tvmTRXPrecision, wantExpiry+86_400_000)
+
+	if got := callFreeze(t, tvm, owner, owner, uint256.NewInt(uint64(tvmTRXPrecision)), 1); got != 1 {
+		t.Fatalf("freeze result: got %d, want 1", got)
+	}
+	account := statedb.GetAccount(owner)
+	if got := account.FrozenEnergyAmount(); got != 6*tvmTRXPrecision {
+		t.Fatalf("frozen energy: got %d, want %d", got, 6*tvmTRXPrecision)
+	}
+	if got := account.FrozenEnergyExpireTime(); got != wantExpiry {
+		t.Fatalf("energy expiry: got %d, want %d", got, wantExpiry)
+	}
+}
+
+// java FreezeBalanceProcessor rejects an owner whose legacy bandwidth Frozen
+// repeated field has any cardinality other than zero or one, even when the
+// requested resource is ENERGY. The old Go path skipped that validation and
+// proceeded to debit balance and mutate stake state.
+func TestFreezeV1RejectsMultipleBandwidthFrozenEntries(t *testing.T) {
+	tvm, statedb, dp := newFreezeV1TVM(t)
+	owner := freezeAmtAddr(0x0c)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	startBalance := int64(100) * tvmTRXPrecision
+	statedb.AddBalance(owner, startBalance)
+
+	// Seed the otherwise-impossible legacy/imported shape after materializing
+	// the split V1 field, so the VM observes exactly two protobuf entries.
+	statedb.FreezeV1Bandwidth(owner, tvmTRXPrecision, 11)
+	account := statedb.GetAccount(owner)
+	account.Proto().Frozen = append([]*corepb.Account_Frozen(nil), account.Proto().Frozen...)
+	account.Proto().Frozen = append(account.Proto().Frozen, &corepb.Account_Frozen{
+		FrozenBalance: 2 * tvmTRXPrecision,
+		ExpireTime:    22,
+	})
+	wantFrozen := len(account.Proto().Frozen)
+	weightBefore := dp.TotalEnergyWeight()
+
+	if got := callFreeze(t, tvm, owner, owner, uint256.NewInt(uint64(tvmTRXPrecision)), 1 /* ENERGY */); got != 0 {
+		t.Fatalf("freeze with two V1 bandwidth rows: got %d, want rejection 0", got)
+	}
+	if got := statedb.GetBalance(owner); got != startBalance {
+		t.Fatalf("rejected freeze mutated balance: got %d, want %d", got, startBalance)
+	}
+	if got := len(statedb.GetAccount(owner).Proto().Frozen); got != wantFrozen {
+		t.Fatalf("rejected freeze mutated frozen rows: got %d, want %d", got, wantFrozen)
+	}
+	if got := dp.TotalEnergyWeight(); got != weightBefore {
+		t.Fatalf("rejected freeze mutated energy weight: got %d, want %d", got, weightBefore)
+	}
+	if got := tvm.InternalTransactions; len(got) != 1 || !got[0].Rejected {
+		t.Fatalf("featured internal transaction = %+v, want one rejected record", got)
+	}
+}
+
+func TestFreezeV1ContractReceiverRejectsWithoutBalanceTrace(t *testing.T) {
+	tvm, statedb, _ := newFreezeV1TVM(t)
+	owner := freezeAmtAddr(0x0d)
+	receiver := freezeAmtAddr(0x0e)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver, corepb.AccountType_Contract)
+	startBalance := int64(100) * tvmTRXPrecision
+	statedb.AddBalance(owner, startBalance)
+
+	txID := []byte{0xaa}
+	statedb.BeginBalanceTrace(1, []byte{0xbb}, 1_000_000)
+	statedb.BeginBalanceTraceTransaction(txID, "TriggerSmartContract")
+	if got := callFreeze(t, tvm, owner, receiver, uint256.NewInt(uint64(tvmTRXPrecision)), 1); got != 0 {
+		t.Fatalf("freeze to contract receiver: got %d, want rejection 0", got)
+	}
+	statedb.EndBalanceTraceTransaction("")
+
+	if got := statedb.GetBalance(owner); got != startBalance {
+		t.Fatalf("rejected freeze mutated balance: got %d, want %d", got, startBalance)
+	}
+	if trace := statedb.CopyLastBalanceTraceTransaction(txID); trace != nil {
+		t.Fatalf("receiver validation leaked debit/refund trace: %+v", trace.Operation)
+	}
+}
+
+func TestFreezeV1InsufficientBalanceDoesNotCreateReceiver(t *testing.T) {
+	tvm, statedb, _ := newFreezeV1TVM(t)
+	owner := freezeAmtAddr(0x0f)
+	receiver := freezeAmtAddr(0x10)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, tvmTRXPrecision-1)
+
+	if got := callFreeze(t, tvm, owner, receiver, uint256.NewInt(uint64(tvmTRXPrecision)), 1); got != 0 {
+		t.Fatalf("underfunded delegated freeze: got %d, want rejection 0", got)
+	}
+	if statedb.AccountExists(receiver) {
+		t.Fatal("underfunded freeze created the delegated receiver before balance validation")
 	}
 }
 
@@ -217,6 +380,34 @@ func TestFreezeBalanceV2AmountTruncationPushesZero(t *testing.T) {
 	}
 	if got := dp.TotalEnergyWeight(); got != weightBefore {
 		t.Fatalf("energy weight mutated by rejected freezeV2: got %d", got)
+	}
+}
+
+func TestFreezeBalanceV2InsufficientBalanceDoesNotInitializeOldTronPower(t *testing.T) {
+	tvm, statedb, dp := newFreezeV2AmountTVM(t)
+	dp.SetAllowNewResourceModel(true)
+	owner := freezeAmtAddr(0x0d)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, tvmTRXPrecision)
+	// Give initialization an observable non-zero legacy snapshot. Java must not
+	// execute it because validation fails on the requested balance first.
+	statedb.FreezeV1Energy(owner, 5*tvmTRXPrecision, 2_000_000)
+
+	if got := callFreezeV2(t, tvm, owner, uint256.NewInt(uint64(2*tvmTRXPrecision)), corepb.ResourceCode_ENERGY); got != 0 {
+		t.Fatalf("insufficient-balance freezeV2: got %d, want 0", got)
+	}
+	account := statedb.GetAccount(owner)
+	if got := account.OldTronPower(); got != 0 {
+		t.Fatalf("rejected freezeV2 initialized old_tron_power: got %d, want 0", got)
+	}
+	if got := statedb.GetBalance(owner); got != tvmTRXPrecision {
+		t.Fatalf("rejected freezeV2 mutated balance: got %d", got)
+	}
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != 0 {
+		t.Fatalf("rejected freezeV2 created V2 stake: got %d", got)
+	}
+	if got := tvm.InternalTransactions; len(got) != 1 || !got[0].Rejected {
+		t.Fatalf("featured internal transaction = %+v, want one rejected record", got)
 	}
 }
 

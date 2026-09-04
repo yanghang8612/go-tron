@@ -15,8 +15,8 @@ import (
 
 // newStakeParityTVM builds a TVM wired for the Stake-2.0 VM opcodes
 // (DELEGATERESOURCE / UNDELEGATERESOURCE / CANCELALLUNFREEZEV2). DynProps is
-// seeded so SupportUnfreezeDelay()/SupportCancelAllUnfreezeV2() return true,
-// matching the java VM native-contract gate (proposal #70/#71).
+// seeded so SupportUnfreezeDelay()/SupportCancelAllUnfreezeV2()/supportDR()
+// return true, matching the java VM native-contract gates.
 func newStakeParityTVM(t *testing.T) (*TVM, *state.StateDB, *state.DynamicProperties) {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
@@ -28,6 +28,7 @@ func newStakeParityTVM(t *testing.T) (*TVM, *state.StateDB, *state.DynamicProper
 	dp := state.NewDynamicProperties()
 	dp.SetUnfreezeDelayDays(14)
 	dp.SetAllowCancelAllUnfreezeV2(true)
+	dp.SetAllowDelegateResource(true)
 	statedb.SetDynamicProperties(dp)
 	tvm := NewTVM(statedb, dp, tcommon.Address{}, 1, 1_000_000, tcommon.Address{}, 1,
 		TVMConfig{StakingV2: true})
@@ -220,9 +221,8 @@ func TestDelegateResourceUsesUsageAdjustedAvailable(t *testing.T) {
 
 // TestUnDelegateOpcodeReadsPerPairRecord locks the second half of F-1: the VM
 // UNDELEGATERESOURCE opcode must validate against and decrement the per-pair
-// record (not the aggregate), and remove the record + index when it hits zero.
-// Mirrors java UnDelegateResourceProcessor.execute and go actuator
-// UnDelegateResourceActuator.Execute.
+// record (not the aggregate). At zero, java's VM processor preserves the empty
+// resource capsule while RepositoryImpl deletes its empty-address indexes.
 func TestUnDelegateOpcodeReadsPerPairRecord(t *testing.T) {
 	tvm, statedb, _ := newStakeParityTVM(t)
 	owner := stakeAddr(0x11)
@@ -244,12 +244,13 @@ func TestUnDelegateOpcodeReadsPerPairRecord(t *testing.T) {
 		t.Fatalf("owner frozen after partial undelegate: got %d, want %d", got, 75*tvmTRXPrecision)
 	}
 
-	// Remaining undelegate empties the record -> record + index deleted.
+	// Remaining undelegate empties the record -> zero capsule retained, index deleted.
 	if ret := callUnDelegateResource(t, tvm, owner, receiver, corepb.ResourceCode_ENERGY, 25*tvmTRXPrecision); ret != 1 {
 		t.Fatalf("final undelegate result: got %d, want 1", ret)
 	}
-	if dr := statedb.ReadDelegatedResourceV2(owner, receiver, false); dr != nil {
-		t.Fatalf("per-pair record should be deleted at zero, got %+v", dr)
+	if dr := statedb.ReadDelegatedResourceV2(owner, receiver, false); dr == nil ||
+		dr.FrozenBalanceForBandwidth != 0 || dr.FrozenBalanceForEnergy != 0 {
+		t.Fatalf("per-pair zero record should be retained, got %+v", dr)
 	}
 	if idx := statedb.ReadDrAccountIndexEntry(rawdb.DrAccIdxV2From, owner[:], receiver[:]); idx != nil {
 		t.Fatalf("delegation index should be empty, got %+v", idx)
@@ -291,6 +292,41 @@ func TestUnDelegateOpcodeCrossReceiverIsolation(t *testing.T) {
 	// The valid receiver2 record is untouched.
 	if dr := statedb.ReadDelegatedResourceV2(owner, receiver2, false); dr == nil || dr.FrozenBalanceForEnergy != 40*tvmTRXPrecision {
 		t.Fatalf("receiver2 record disturbed: %+v", dr)
+	}
+}
+
+// Java subtracts the undelegated amount directly from the owner's aggregate;
+// it does not clamp to zero. This shape can arise when an owner contract's
+// per-pair record survives suicide/re-creation but the recreated account starts
+// with a zero aggregate.
+func TestUnDelegateOpcodePreservesNegativeOwnerAggregate(t *testing.T) {
+	tvm, statedb, dp := newStakeParityTVM(t)
+	owner := stakeAddr(0x25)
+	receiver := stakeAddr(0x26)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver, corepb.AccountType_Normal)
+	dp.SetTotalEnergyWeight(1)
+	dp.SetTotalEnergyCurrentLimit(1)
+	statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_ENERGY, 2*tvmTRXPrecision)
+	if err := statedb.WriteDelegatedResourceV2(owner, receiver, false, &rawdb.DelegatedResource{
+		From:                   owner,
+		To:                     receiver,
+		FrozenBalanceForEnergy: 2 * tvmTRXPrecision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := callUnDelegateResource(t, tvm, owner, receiver, corepb.ResourceCode_ENERGY, tvmTRXPrecision); got != 1 {
+		t.Fatalf("undelegate result: got %d, want 1", got)
+	}
+	if got := statedb.GetDelegatedFrozenV2(owner, corepb.ResourceCode_ENERGY); got != -tvmTRXPrecision {
+		t.Fatalf("owner delegated aggregate: got %d, want %d", got, -tvmTRXPrecision)
+	}
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != tvmTRXPrecision {
+		t.Fatalf("owner returned frozen amount: got %d, want %d", got, int64(tvmTRXPrecision))
+	}
+	if dr := statedb.ReadDelegatedResourceV2(owner, receiver, false); dr == nil || dr.FrozenBalanceForEnergy != tvmTRXPrecision {
+		t.Fatalf("per-pair record after undelegate: %+v", dr)
 	}
 }
 
@@ -494,6 +530,67 @@ func TestCancelAllUnfreezeV2OpcodeWithdrawsExpiredAndUsesHeaderTimestamp(t *test
 	}
 	if got := statedb.UnfreezeV2Count(owner); got != 0 {
 		t.Fatalf("unfreeze queue not cleared: got %d", got)
+	}
+}
+
+// Java's CancelAllUnfreezeV2Processor clears an unexpired entry carrying an
+// unknown protobuf enum, but its resource switch takes the default branch and
+// does not refreeze it. The local split account layout must not manufacture a
+// FrozenV2 row for a future/unknown resource code.
+func TestCancelAllUnfreezeV2UnknownResourceDoesNotCreateFrozenRow(t *testing.T) {
+	tvm, statedb, dp := newStakeParityTVM(t)
+	owner := stakeAddr(0x32)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+
+	const headerNow = int64(1_000_000)
+	dp.SetLatestBlockHeaderTimestamp(headerNow)
+	unknown := corepb.ResourceCode(99)
+	statedb.AddUnfreezeV2(owner, unknown, 7*tvmTRXPrecision, headerNow+1)
+
+	stack := newStack()
+	contract := NewContract(owner, owner, 0, 1_000_000)
+	if _, err := opCancelAllUnfreezeV2(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opCancelAllUnfreezeV2 error: %v", err)
+	}
+	result := stack.pop()
+	if got := result.Uint64(); got != 1 {
+		t.Fatalf("opcode return: got %d, want 1", got)
+	}
+	if got := statedb.GetFrozenV2Amount(owner, unknown); got != 0 {
+		t.Fatalf("unknown resource was refrozen: got %d, want 0", got)
+	}
+	if got := statedb.UnfreezeV2Count(owner); got != 0 {
+		t.Fatalf("unfreeze queue not cleared: got %d", got)
+	}
+}
+
+// UnfreezeBalanceV2Processor.unfreezeExpire removes every expired row and
+// assigns balance+sum without requiring the sum to be positive. This differs
+// deliberately from standalone WITHDRAWEXPIREUNFREEZE validation. A malformed
+// negative row therefore decreases the Java account balance while the main
+// unfreeze operation still succeeds.
+func TestUnfreezeBalanceV2AppliesNegativeExpiredSum(t *testing.T) {
+	tvm, statedb, dp := newStakeParityTVM(t)
+	owner := stakeAddr(0x33)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 10*tvmTRXPrecision)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, 2*tvmTRXPrecision)
+
+	const headerNow = int64(1_000_000)
+	dp.SetLatestBlockHeaderTimestamp(headerNow)
+	statedb.AddUnfreezeV2(owner, corepb.ResourceCode_ENERGY, -3*tvmTRXPrecision, headerNow-1)
+
+	if got := callUnfreezeV2(t, tvm, owner, uint256.NewInt(uint64(tvmTRXPrecision)), corepb.ResourceCode_ENERGY); got != 1 {
+		t.Fatalf("unfreeze result: got %d, want 1", got)
+	}
+	if got := statedb.GetBalance(owner); got != 7*tvmTRXPrecision {
+		t.Fatalf("balance: got %d, want %d", got, 7*tvmTRXPrecision)
+	}
+	if got := statedb.UnfreezeV2Count(owner); got != 1 {
+		t.Fatalf("unfreeze queue: got %d, want only the newly-created row", got)
+	}
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != tvmTRXPrecision {
+		t.Fatalf("remaining frozen energy: got %d, want %d", got, int64(tvmTRXPrecision))
 	}
 }
 

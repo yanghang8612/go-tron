@@ -108,7 +108,7 @@ func TestSyncServiceRestoresInventoryTargetProgress(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
-	got := ss.targetHeadNum
+	got := ss.targetHeadNum.Load()
 	ss.mu.Unlock()
 
 	if got != 500 {
@@ -125,7 +125,7 @@ func TestSyncServiceRepairsImplausiblePersistedInventoryTarget(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	ss.mu.Unlock()
 	if target != bc.CurrentBlock().Number() {
 		t.Fatalf("restored poisoned target = %d, want current head %d", target, bc.CurrentBlock().Number())
@@ -263,7 +263,7 @@ func TestSyncServiceIgnoresStaleInventoryTargetProgress(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
-	got := ss.targetHeadNum
+	got := ss.targetHeadNum.Load()
 	ss.mu.Unlock()
 
 	if got != 10 {
@@ -285,7 +285,7 @@ func TestSyncServiceRestoresStagedBodiesOnSessionStart(t *testing.T) {
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	buffered := len(ss.blockBuffer)
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	ss.mu.Unlock()
 	if buffered != 2 || target != 2 {
 		t.Fatalf("restored staged bodies buffered=%d target=%d, want 2/2", buffered, target)
@@ -323,7 +323,7 @@ func TestSyncServiceRestoresHalfDownloadedSessionOnStart(t *testing.T) {
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	buffered := len(ss.blockBuffer)
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	remain := ss.estimatedRemainLocked()
 	path1 := ss.blockPath[block1.Number()]
 	path2 := ss.blockPath[block2.Number()]
@@ -353,7 +353,7 @@ func TestSyncServiceRestoresHalfDownloadedSessionOnStart(t *testing.T) {
 		t.Fatalf("head after half-download drain = %v, want block2 %x", got, block2.Hash())
 	}
 	ss.mu.Lock()
-	target = ss.targetHeadNum
+	target = ss.targetHeadNum.Load()
 	remain = ss.estimatedRemainLocked()
 	syncing := ss.syncing
 	buffered = len(ss.blockBuffer)
@@ -393,7 +393,7 @@ func TestSyncServiceStartupCleanupRefreshesReadyAfterImportedBodyDelete(t *testi
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	buffered := len(ss.blockBuffer)
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	path3 := ss.blockPath[block3.Number()]
 	path4 := ss.blockPath[block4.Number()]
 	ss.mu.Unlock()
@@ -435,7 +435,7 @@ func TestSyncServiceRepairsUnboundBodiesReadyOnSessionStart(t *testing.T) {
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	buffered := len(ss.blockBuffer)
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	ss.mu.Unlock()
 
 	if buffered != 2 || target != block2.Number() {
@@ -472,7 +472,7 @@ func TestSyncServiceRepairsBodiesReadyHashMismatchOnSessionStart(t *testing.T) {
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	buffered := len(ss.blockBuffer)
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	path1 := ss.blockPath[block1.Number()]
 	path2 := ss.blockPath[block2.Number()]
 	ss.mu.Unlock()
@@ -515,7 +515,7 @@ func TestSyncServiceDropsGappedStagedBodyTailOnSessionStart(t *testing.T) {
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	buffered := len(ss.blockBuffer)
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	ss.mu.Unlock()
 	if buffered != 1 || target != 2 {
 		t.Fatalf("restored staged bodies buffered=%d target=%d, want 1/2", buffered, target)
@@ -589,7 +589,7 @@ func TestSyncServiceDropsMissingFirstStagedBodyProgressOnSessionStart(t *testing
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	buffered := len(ss.blockBuffer)
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	ss.mu.Unlock()
 	if buffered != 0 || target != 1 {
 		t.Fatalf("restored staged bodies buffered=%d target=%d, want 0/1", buffered, target)
@@ -930,7 +930,7 @@ func TestSyncServiceRestartsHalfExecutedPipelineWithNextStagedBody(t *testing.T)
 	ss.initSessionLocked(time.Now())
 	ss.syncing = true
 	buffered := len(ss.blockBuffer)
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	path2 := ss.blockPath[block2.Number()]
 	ss.mu.Unlock()
 
@@ -985,7 +985,7 @@ func TestSyncServiceRestartsHalfCommittedPipelineWithNextStagedBody(t *testing.T
 	ss.initSessionLocked(time.Now())
 	ss.syncing = true
 	buffered := len(ss.blockBuffer)
-	target := ss.targetHeadNum
+	target := ss.targetHeadNum.Load()
 	path2 := ss.blockPath[block2.Number()]
 	ss.mu.Unlock()
 

@@ -510,12 +510,12 @@ func TestReportCalendarProgressEmitsDueWindows(t *testing.T) {
 	stats.InitSession(boundary.Add(-2 * time.Hour))
 	stats.ObserveSpeed(boundary.Add(-30*time.Minute), 300, 5*time.Minute, time.Hour)
 	ss := &SyncService{
-		stats:         stats,
-		pause:         tsync.NewPauseGate(),
-		syncing:       true,
-		syncedTipNum:  90,
-		targetHeadNum: 100,
+		stats:        stats,
+		pause:        tsync.NewPauseGate(),
+		syncing:      true,
+		syncedTipNum: 90,
 	}
+	ss.targetHeadNum.Store(100)
 	ss.reportCalendarProgress(boundary)
 
 	out := buf.String()
@@ -545,12 +545,12 @@ func TestReportCalendarProgressSuppressesWarmupETA(t *testing.T) {
 	stats.InitSession(boundary.Add(-5 * time.Minute))
 	stats.ObserveSpeed(boundary, 300, 5*time.Minute, time.Hour)
 	ss := &SyncService{
-		stats:         stats,
-		pause:         tsync.NewPauseGate(),
-		syncing:       true,
-		syncedTipNum:  90,
-		targetHeadNum: 100,
+		stats:        stats,
+		pause:        tsync.NewPauseGate(),
+		syncing:      true,
+		syncedTipNum: 90,
 	}
+	ss.targetHeadNum.Store(100)
 	ss.reportCalendarProgress(boundary)
 
 	for _, line := range strings.Split(buf.String(), "\n") {

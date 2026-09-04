@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 )
 
@@ -29,4 +30,32 @@ func BigInt64Exact(v *big.Int, operation string) int64 {
 func ArithmeticOverflowFromPanic(v any) (error, bool) {
 	err, ok := v.(*ArithmeticOverflowError)
 	return err, ok
+}
+
+// JavaDoubleToInt64 mirrors Java's narrowing primitive conversion from double
+// to long (JLS 5.1.3): NaN becomes zero, finite/out-of-range values and
+// infinities saturate to the nearest endpoint, and in-range values truncate
+// toward zero. Go deliberately leaves an out-of-range float-to-int conversion
+// implementation-dependent, so consensus math must not use a raw cast there.
+func JavaDoubleToInt64(v float64) int64 {
+	if math.IsNaN(v) {
+		return 0
+	}
+	// float64(math.MaxInt64) rounds to exactly 2^63, the first value outside
+	// int64. The preceding representable float is in range and converts safely.
+	if v >= float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	if v <= float64(math.MinInt64) {
+		return math.MinInt64
+	}
+	return int64(v)
+}
+
+// JavaMathRoundToInt64 mirrors Math.round(double) / StrictMath.round(double).
+// Java rounds by floor(v+0.5), so negative half ties move toward positive
+// infinity (Math.round(-1.5) == -1), unlike Go's math.Round which moves ties
+// away from zero. The final narrowing also applies Java's NaN/endpoint rules.
+func JavaMathRoundToInt64(v float64) int64 {
+	return JavaDoubleToInt64(math.Floor(v + 0.5))
 }

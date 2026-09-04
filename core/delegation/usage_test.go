@@ -1,6 +1,7 @@
 package delegation
 
 import (
+	"math"
 	"math/big"
 	"testing"
 
@@ -38,5 +39,14 @@ func TestResourceUsageToFrozenBalance_AlwaysPlainDouble(t *testing.T) {
 	exact.Quo(exact, big.NewInt(totalLimit))
 	if exact.Int64() == got {
 		t.Fatalf("test ineffective: big.Int and double agree (%d); pick a diverging triple", got)
+	}
+}
+
+func TestResourceUsageToFrozenBalanceJavaDoubleSaturation(t *testing.T) {
+	if got := resourceUsageToFrozenBalance(1, 0, 1); got != math.MaxInt64 {
+		t.Fatalf("positive/zero limit: got %d, want MaxInt64", got)
+	}
+	if got := resourceUsageToFrozenBalance(0, 0, 0); got != 0 {
+		t.Fatalf("zero/zero limit: got %d, want Java NaN cast 0", got)
 	}
 }

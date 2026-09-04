@@ -39,6 +39,9 @@ func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
 		syncAsyncCommitFlag,
 		execParallelTransfersFlag,
 		execParallelVMFlag,
+		vmSaveInternalTxFlag,
+		vmSaveFeaturedInternalTxFlag,
+		vmSaveCancelAllUnfreezeV2DetailsFlag,
 	}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
 	for _, f := range app.Flags {
@@ -91,6 +94,22 @@ func TestMakeConfigSyncImportBatchDefault(t *testing.T) {
 	cfg := makeConfig(makeNodeConfigFlagSet(t, nil))
 	if cfg.SyncImportBatch != tsync.MaxImportBatch {
 		t.Fatalf("SyncImportBatch default = %d, want %d", cfg.SyncImportBatch, tsync.MaxImportBatch)
+	}
+}
+
+func TestMakeConfigVMInternalTransactionPersistence(t *testing.T) {
+	cfg := makeConfig(makeNodeConfigFlagSet(t, nil))
+	if cfg.SaveInternalTx || cfg.SaveFeaturedInternalTx || cfg.SaveCancelAllUnfreezeV2Details {
+		t.Fatalf("default VM internal transaction config = %+v", cfg)
+	}
+
+	cfg = makeConfig(makeNodeConfigFlagSet(t, []string{
+		"--vm.save-internal-tx",
+		"--vm.save-featured-internal-tx",
+		"--vm.save-cancel-all-unfreeze-v2-details",
+	}))
+	if !cfg.SaveInternalTx || !cfg.SaveFeaturedInternalTx || !cfg.SaveCancelAllUnfreezeV2Details {
+		t.Fatalf("overridden VM internal transaction config = %+v", cfg)
 	}
 }
 

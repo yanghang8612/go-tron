@@ -36,6 +36,10 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	if err := WriteHistoryPruneMode(db, "archive"); err != nil {
 		t.Fatal(err)
 	}
+	incident := ExecutionSafetyIncident{Kind: ExecutionSafetyIncidentSpeculativePublication, BlockNum: 7, BlockHash: common.Hash{0x77}}
+	if err := WriteExecutionSafetyIncident(db, incident); err != nil {
+		t.Fatal(err)
+	}
 	hash := stateChangePostingHash([]byte("latest"))
 	posting, err := encodeStateChangePosting([]uint64{9})
 	if err != nil {
@@ -89,6 +93,9 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	}
 	if mode, ok, err := ReadHistoryPruneMode(db); err != nil || !ok || mode != "archive" {
 		t.Fatalf("history prune mode should survive reset: mode=%q ok=%v err=%v", mode, ok, err)
+	}
+	if got, ok, err := ReadExecutionSafetyIncident(db); err != nil || !ok || got != incident {
+		t.Fatalf("execution safety incident should survive reset: got=%+v ok=%v err=%v", got, ok, err)
 	}
 	if _, ok, err := ReadSyncStagedBlock(db, staged.Number()); err != nil || ok {
 		t.Fatalf("sync staged block survived reset: ok=%v err=%v", ok, err)

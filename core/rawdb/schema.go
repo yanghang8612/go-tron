@@ -101,6 +101,7 @@ func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 	case strings.HasPrefix(key, "ti-"), strings.HasPrefix(key, "tib-"):
 		return PhysicalKeyFamilyTransactionHistory
 	case key == "LastBlock", key == "LastSolidBlock", key == "total-tx-count",
+		key == "execution-safety-incident-v1",
 		strings.HasPrefix(key, "bh-"), strings.HasPrefix(key, "bnh-"),
 		strings.HasPrefix(key, "bsr-"), strings.HasPrefix(key, "tps-"),
 		strings.HasPrefix(key, stageProgressPrefixString):
@@ -123,10 +124,11 @@ const (
 )
 
 var (
-	headBlockKey             = []byte("LastBlock")
-	headSolidBlockKey        = []byte("LastSolidBlock")
-	totalTransactionCountKey = []byte("total-tx-count")
-	historyPruneModeKey      = []byte("history-prune-mode-v1")
+	headBlockKey               = []byte("LastBlock")
+	headSolidBlockKey          = []byte("LastSolidBlock")
+	totalTransactionCountKey   = []byte("total-tx-count")
+	historyPruneModeKey        = []byte("history-prune-mode-v1")
+	executionSafetyIncidentKey = []byte("execution-safety-incident-v1")
 
 	// genesisStateRootKey holds the post-genesis state root. java-tron does
 	// not put account_state_root on the genesis block header (we mirror that

@@ -72,7 +72,7 @@ func TestRecoverStalledFetchFinishesDrainedCompletedSession(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.syncing = true
-	ss.targetHeadNum = bc.CurrentBlock().Number()
+	ss.targetHeadNum.Store(bc.CurrentBlock().Number())
 	ps, added := ss.addPeerStateLocked(peer)
 	if !added || ps == nil {
 		ss.mu.Unlock()

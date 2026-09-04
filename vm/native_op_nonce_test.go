@@ -38,6 +38,7 @@ func newNonceTVM(t *testing.T, cfg TVMConfig) (*TVM, *state.StateDB, *state.Dyna
 	dp.SetCurrentCycleNumber(10)
 	dp.SetNewRewardAlgorithmEffectiveCycle(0)
 	dp.SetAllowCancelAllUnfreezeV2(true)
+	dp.SetAllowDelegateResource(true)
 	statedb.SetDynamicProperties(dp)
 	tvm := NewTVM(statedb, dp, tcommon.Address{}, 1, 1_000_000, tcommon.Address{}, 1, cfg)
 	tvm.SetDB(diskdb)

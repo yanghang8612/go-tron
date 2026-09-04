@@ -626,6 +626,7 @@ func (s *SolidityServer) TriggerConstantContract(_ context.Context, in *contract
 	if result != nil {
 		ext.ConstantResult = [][]byte{result.Result}
 		ext.EnergyUsed = result.EnergyUsed
+		ext.EnergyPenalty = result.EnergyPenalty
 	}
 	if err != nil {
 		ext.Result.Message = []byte(err.Error())

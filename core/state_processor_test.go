@@ -2,7 +2,11 @@ package core
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"math/big"
+	"math/rand"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -24,6 +28,133 @@ import (
 )
 
 var transactionInfoBenchmarkSink *corepb.TransactionInfo
+
+// TestActuatorResultFieldPolicy is deliberately exhaustive. TransactionInfo is
+// a consensus-adjacent persisted carrier consumed by RPC, replay diagnostics,
+// and the parallel publication oracle. A new actuator.Result field must be
+// explicitly classified here so it cannot silently disappear from the receipt
+// path like InternalTransactions once did.
+func TestActuatorResultFieldPolicy(t *testing.T) {
+	policies := map[string]string{
+		"Fee":                           "transaction-info",
+		"EnergyUsageTotal":              "resource-receipt",
+		"EnergyPenaltyTotal":            "resource-receipt",
+		"EnergyUsed":                    "resource-receipt",
+		"EnergyFee":                     "resource-receipt-and-packing-fee",
+		"OriginEnergyUsage":             "resource-receipt",
+		"VMExecutionDuration":           "execution-only-telemetry",
+		"VMRawEnergyUsage":              "execution-only-telemetry",
+		"CallerEnergyLeft":              "execution-only",
+		"OriginEnergyLeft":              "execution-only",
+		"HasCallerEnergyLeft":           "execution-only",
+		"HasOriginEnergyLeft":           "execution-only",
+		"energyPreCharges":              "execution-only",
+		"NetUsage":                      "resource-receipt",
+		"NetFee":                        "resource-receipt-and-transaction-info",
+		"NetFeeForBandwidth":            "packing-fee-policy",
+		"AssetIssueID":                  "transaction-info-and-result",
+		"WithdrawAmount":                "transaction-info-and-result",
+		"UnfreezeAmount":                "transaction-info-and-result",
+		"WithdrawExpireAmount":          "transaction-info-and-result",
+		"CancelUnfreezeV2Amount":        "transaction-info-and-result",
+		"ExchangeReceivedAmount":        "transaction-info-and-result",
+		"ExchangeInjectAnotherAmount":   "transaction-info-and-result",
+		"ExchangeWithdrawAnotherAmount": "transaction-info-and-result",
+		"ShieldedTransactionFee":        "transaction-info-and-result",
+		"ExchangeID":                    "transaction-info-and-result",
+		"OrderID":                       "transaction-info-and-result",
+		"OrderDetails":                  "transaction-info-and-result",
+		"ContractResult":                "transaction-info",
+		"ContractResultPresent":         "transaction-info-presence",
+		"ContractAddress":               "transaction-info",
+		"contractAddress":               "result-owned-address-storage",
+		"Logs":                          "transaction-info",
+		"InternalTransactions":          "transaction-info",
+		"ContractRet":                   "resource-receipt-and-status",
+		"ResMessage":                    "transaction-info-on-failure",
+	}
+	typ := reflect.TypeOf(actuator.Result{})
+	if len(policies) != typ.NumField() {
+		t.Fatalf("actuator.Result policy covers %d fields, struct has %d", len(policies), typ.NumField())
+	}
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i).Name
+		if policies[field] == "" {
+			t.Fatalf("actuator.Result field %q has no receipt policy", field)
+		}
+	}
+}
+
+// TestPersistedReceiptFieldPolicy complements the Go result policy with the
+// wire schema. Upstream can add receipt fields without changing actuator.Result;
+// requiring an explicit policy here prevents a generated-protobuf update from
+// silently creating another always-zero persisted field.
+func TestPersistedReceiptFieldPolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		message  proto.Message
+		policies map[string]string
+	}{
+		{
+			name:    "TransactionInfo",
+			message: &corepb.TransactionInfo{},
+			policies: map[string]string{
+				"id":                               "transaction-hash",
+				"fee":                              "actuator-fee-plus-net-fee",
+				"blockNumber":                      "block-context",
+				"blockTimeStamp":                   "block-context",
+				"contractResult":                   "actuator-result",
+				"contract_address":                 "actuator-result",
+				"receipt":                          "resource-receipt",
+				"log":                              "actuator-result",
+				"result":                           "derived-status",
+				"resMessage":                       "actuator-result-on-failure",
+				"assetIssueID":                     "actuator-result",
+				"withdraw_amount":                  "actuator-result",
+				"unfreeze_amount":                  "actuator-result",
+				"internal_transactions":            "actuator-result",
+				"exchange_received_amount":         "actuator-result",
+				"exchange_inject_another_amount":   "actuator-result",
+				"exchange_withdraw_another_amount": "actuator-result",
+				"exchange_id":                      "actuator-result",
+				"shielded_transaction_fee":         "actuator-result",
+				"orderId":                          "actuator-result",
+				"orderDetails":                     "actuator-result",
+				"packingFee":                       "derived-fee-pool-policy",
+				"withdraw_expire_amount":           "actuator-result",
+				"cancel_unfreezeV2_amount":         "actuator-result",
+			},
+		},
+		{
+			name:    "ResourceReceipt",
+			message: &corepb.ResourceReceipt{},
+			policies: map[string]string{
+				"energy_usage":         "actuator-result",
+				"energy_fee":           "actuator-result",
+				"origin_energy_usage":  "actuator-result",
+				"energy_usage_total":   "actuator-result",
+				"net_usage":            "bandwidth-result",
+				"net_fee":              "bandwidth-result",
+				"result":               "vm-contract-ret",
+				"energy_penalty_total": "actuator-result",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fields := test.message.ProtoReflect().Descriptor().Fields()
+			if len(test.policies) != fields.Len() {
+				t.Fatalf("policy covers %d fields, wire message has %d", len(test.policies), fields.Len())
+			}
+			for i := 0; i < fields.Len(); i++ {
+				name := string(fields.Get(i).Name())
+				if test.policies[name] == "" {
+					t.Fatalf("wire field %q has no persisted receipt policy", name)
+				}
+			}
+		})
+	}
+}
 
 func BenchmarkTransactionInfoLogBuild(b *testing.B) {
 	contractAddr := testProcessorAddr(2)
@@ -172,6 +303,89 @@ func TestRepairMainnetCreateTransferFailureOvercharge(t *testing.T) {
 	}
 	if got := badHashState.GetBalance(mainnetCreateTransferFailurePayer); got != mainnetCreateTransferFailureBadBalance {
 		t.Fatalf("non-canonical block changed balance to %d", got)
+	}
+}
+
+func TestApplyMainnetLegacyStateRepairsIsObservableAndIdempotent(t *testing.T) {
+	statedb := newTestState(t)
+	statedb.CreateAccount(mainnetCreateTransferFailurePayer, corepb.AccountType_Normal)
+	statedb.AddBalance(mainnetCreateTransferFailurePayer, mainnetCreateTransferFailureBadBalance)
+
+	createBefore := mainnetCreateTransferFailureRepairCounter.Snapshot().Count()
+	vmBefore := mainnetParallelVMMissedPaymentRepairCounter.Snapshot().Count()
+	costBefore := mainnetCOSTMissedRewardRepairCounter.Snapshot().Count()
+	winkBefore := mainnetWINKMissingCodeRepairCounter.Snapshot().Count()
+
+	var incidents []tronrawdb.ExecutionSafetyIncident
+	activated, err := applyMainnetLegacyStateRepairs(
+		statedb,
+		mainnetCreateTransferFailureRepairBlock,
+		mainnetCreateTransferFailureRepairBlockID,
+		func(incident tronrawdb.ExecutionSafetyIncident) error {
+			incidents = append(incidents, incident)
+			return nil
+		},
+	)
+	if err != nil || !activated {
+		t.Fatalf("apply repair: activated=%t err=%v", activated, err)
+	}
+	wantIncident := tronrawdb.ExecutionSafetyIncident{
+		Kind:      tronrawdb.ExecutionSafetyIncidentCreateTransferRepair,
+		BlockNum:  mainnetCreateTransferFailureRepairBlock,
+		BlockHash: mainnetCreateTransferFailureRepairBlockID,
+	}
+	if len(incidents) != 1 || incidents[0] != wantIncident {
+		t.Fatalf("repair incidents = %+v, want [%+v]", incidents, wantIncident)
+	}
+	if got := statedb.GetBalance(mainnetCreateTransferFailurePayer); got != mainnetCreateTransferFailureCanonicalBalance {
+		t.Fatalf("repaired balance = %d, want %d", got, mainnetCreateTransferFailureCanonicalBalance)
+	}
+	if got := mainnetCreateTransferFailureRepairCounter.Snapshot().Count() - createBefore; got != 1 {
+		t.Fatalf("create-transfer repair metric delta = %d, want 1", got)
+	}
+	if got := mainnetParallelVMMissedPaymentRepairCounter.Snapshot().Count() - vmBefore; got != 0 {
+		t.Fatalf("parallel-VM repair metric delta = %d, want 0", got)
+	}
+	if got := mainnetCOSTMissedRewardRepairCounter.Snapshot().Count() - costBefore; got != 0 {
+		t.Fatalf("COST repair metric delta = %d, want 0", got)
+	}
+	if got := mainnetWINKMissingCodeRepairCounter.Snapshot().Count() - winkBefore; got != 0 {
+		t.Fatalf("WINK repair metric delta = %d, want 0", got)
+	}
+
+	activated, err = applyMainnetLegacyStateRepairs(
+		statedb,
+		mainnetCreateTransferFailureRepairBlock,
+		mainnetCreateTransferFailureRepairBlockID,
+		func(incident tronrawdb.ExecutionSafetyIncident) error {
+			incidents = append(incidents, incident)
+			return nil
+		},
+	)
+	if err != nil || activated {
+		t.Fatalf("reapply repair: activated=%t err=%v", activated, err)
+	}
+	if len(incidents) != 1 {
+		t.Fatalf("idempotent repair emitted %d incidents, want 1", len(incidents))
+	}
+	if got := mainnetCreateTransferFailureRepairCounter.Snapshot().Count() - createBefore; got != 1 {
+		t.Fatalf("idempotent repair metric delta = %d, want 1", got)
+	}
+}
+
+func TestApplyMainnetLegacyStateRepairsPropagatesMarkerFailure(t *testing.T) {
+	statedb := newTestState(t)
+	statedb.CreateAccount(mainnetCreateTransferFailurePayer, corepb.AccountType_Normal)
+	statedb.AddBalance(mainnetCreateTransferFailurePayer, mainnetCreateTransferFailureBadBalance)
+	wantErr := errors.New("persist marker boom")
+	activated, err := applyMainnetLegacyStateRepairs(
+		statedb,
+		mainnetCreateTransferFailureRepairBlock,
+		mainnetCreateTransferFailureRepairBlockID,
+		func(tronrawdb.ExecutionSafetyIncident) error { return wantErr },
+	)
+	if !activated || !errors.Is(err, wantErr) {
+		t.Fatalf("repair marker failure: activated=%t err=%v, want true/%v", activated, err, wantErr)
 	}
 }
 
@@ -530,6 +744,678 @@ func TestProcessBlockParallelTransfersMatchesSerial(t *testing.T) {
 	}
 }
 
+// Block 22,097,772 first exposed the production failure shape: two funded
+// sender chains each paid the same recipient more than once, and an async
+// retry published a stale recipient post-image. The lost 4,455 SUN was only
+// observed 26,087 blocks later when that recipient spent its full balance.
+func TestProcessBlockParallelTransfersPreservesBlock22097772SharedRecipient(t *testing.T) {
+	mustAddress := func(encoded string) tcommon.Address {
+		address := tcommon.BytesToAddress(tcommon.FromHex(encoded))
+		if !address.ValidPrefix() || address.Hex() != encoded {
+			t.Fatalf("invalid test address %q", encoded)
+		}
+		return address
+	}
+	fundingSource := mustAddress("41733f5f424de3a0ec4c928d10507fb1461be119a5")
+	firstSender := mustAddress("4117fe31d8d3dfc39742e2e755d5be115e291b7f46")
+	secondSender := mustAddress("41718bd518333befb2b1c0d6414324039852a666ba")
+	sharedRecipient := mustAddress("419f45f2203271e3f9131cf1bb31deb46f60fa9986")
+	fillerAddress := func(txIndex int, recipient bool) tcommon.Address {
+		var address tcommon.Address
+		address[0] = tcommon.AddressPrefixMainnet
+		if recipient {
+			address[1] = 0xfd
+		} else {
+			address[1] = 0xfe
+		}
+		address[19] = byte(txIndex >> 8)
+		address[20] = byte(txIndex)
+		return address
+	}
+	makeTransfer := func(from, to tcommon.Address, amount int64) *types.Transaction {
+		parameter, err := anypb.New(&contractpb.TransferContract{
+			OwnerAddress: from.Bytes(), ToAddress: to.Bytes(), Amount: amount,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return types.NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type: corepb.Transaction_Contract_TransferContract, Parameter: parameter,
+			}},
+		}})
+	}
+	const transactionCount = 148
+	transactions := make([]*types.Transaction, transactionCount)
+	for txIndex := range transactions {
+		transactions[txIndex] = makeTransfer(fillerAddress(txIndex, false), fillerAddress(txIndex, true), 1)
+	}
+	// Exact positions, addresses and amounts from mainnet block 22,097,772.
+	// The corresponding tx IDs are ab96600f (fund sender 1), 7d6788fb and
+	// acb8d8b7 (sender 1), c0cf8ecf (fund sender 2), and ab5aea80/f4e588a5
+	// (sender 2). Keeping the intervening independent work preserves the real
+	// async-retry scheduling window instead of compressing the six transfers.
+	transactions[0] = makeTransfer(fundingSource, firstSender, 450_060)
+	transactions[25] = makeTransfer(firstSender, sharedRecipient, 445_561)
+	transactions[58] = makeTransfer(firstSender, sharedRecipient, 4_455)
+	transactions[69] = makeTransfer(fundingSource, secondSender, 337_545)
+	transactions[87] = makeTransfer(secondSender, sharedRecipient, 334_171)
+	transactions[129] = makeTransfer(secondSender, sharedRecipient, 3_342)
+
+	newBase := func() *state.StateDB {
+		base := newTestState(t)
+		for _, address := range []tcommon.Address{fundingSource, firstSender, secondSender, sharedRecipient} {
+			base.CreateAccount(address, corepb.AccountType_Normal)
+		}
+		base.AddBalance(fundingSource, 1_000_000)
+		base.AddBalance(firstSender, 2)
+		base.AddBalance(secondSender, 2)
+		base.AddBalance(sharedRecipient, 12_084_877_502)
+		for txIndex := range transactionCount {
+			if txIndex == 0 || txIndex == 25 || txIndex == 58 || txIndex == 69 || txIndex == 87 || txIndex == 129 {
+				continue
+			}
+			owner := fillerAddress(txIndex, false)
+			recipient := fillerAddress(txIndex, true)
+			base.CreateAccount(owner, corepb.AccountType_Normal)
+			base.AddBalance(owner, 1_000_000)
+			base.CreateAccount(recipient, corepb.AccountType_Normal)
+		}
+		if _, err := base.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		return base
+	}
+	transactionProtos := make([]*corepb.Transaction, len(transactions))
+	for txIndex, tx := range transactions {
+		transactionProtos[txIndex] = tx.Proto()
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: 22_097_772, Timestamp: 3_000,
+		}},
+		Transactions: transactionProtos,
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+
+	serialState := newBase()
+	serialInfos, err := run(serialState, processBlockOptions{captureBalanceTrace: true})
+	if err != nil {
+		t.Fatalf("serial process: %v", err)
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := serialState.GetBalance(sharedRecipient); got != 12_085_665_031 {
+		t.Fatalf("serial recipient balance = %d, want 12085665031", got)
+	}
+
+	balanceOracleBefore := parallelTransferBalanceOracleCandidatesCounter.Snapshot().Count()
+	balanceOracleMatchesBefore := parallelTransferBalanceOracleMatchesCounter.Snapshot().Count()
+	serialVerifyBefore := parallelTransferSerialVerifyCandidatesCounter.Snapshot().Count()
+	serialVerifyMatchesBefore := parallelTransferSerialVerifyMatchesCounter.Snapshot().Count()
+	serialVerifyInfoMismatchBefore := parallelTransferSerialVerifyInfoMismatchCounter.Snapshot().Count()
+	serialVerifyWriteMismatchBefore := parallelTransferSerialVerifyWriteMismatchCounter.Snapshot().Count()
+	serialVerifyBalanceMismatchBefore := parallelTransferSerialVerifyBalanceMismatchCounter.Snapshot().Count()
+	serialVerifyErrorsBefore := parallelTransferSerialVerifyErrorsCounter.Snapshot().Count()
+	publishedBefore := parallelTransferPublishedCounter.Snapshot().Count()
+	writeSealCandidatesBefore := parallelTransferWriteSealCandidatesCounter.Snapshot().Count()
+	writeSealMatchesBefore := parallelTransferWriteSealMatchesCounter.Snapshot().Count()
+	writeSealMismatchesBefore := parallelTransferWriteSealMismatchesCounter.Snapshot().Count()
+	publishAuditBefore := parallelTransferPublishAuditCandidatesCounter.Snapshot().Count()
+	publishAuditMatchesBefore := parallelTransferPublishAuditMatchesCounter.Snapshot().Count()
+	publishAuditMismatchesBefore := parallelTransferPublishAuditMismatchesCounter.Snapshot().Count()
+	publishAuditErrorsBefore := parallelTransferPublishAuditErrorsCounter.Snapshot().Count()
+	for iteration := 0; iteration < 32; iteration++ {
+		parallelState := newBase()
+		parallelInfos, processErr := run(parallelState, processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
+		if processErr != nil {
+			t.Fatalf("iteration %d parallel process: %v", iteration, processErr)
+		}
+		for txIndex := range serialInfos {
+			if !proto.Equal(serialInfos[txIndex], parallelInfos[txIndex]) {
+				t.Fatalf("iteration %d tx %d info mismatch\nserial=%v\nparallel=%v", iteration, txIndex, serialInfos[txIndex], parallelInfos[txIndex])
+			}
+		}
+		if got := parallelState.GetBalance(sharedRecipient); got != 12_085_665_031 {
+			t.Fatalf("iteration %d recipient balance = %d, want 12085665031", iteration, got)
+		}
+		parallelRoot, commitErr := parallelState.Commit()
+		if commitErr != nil {
+			t.Fatal(commitErr)
+		}
+		if parallelRoot != serialRoot {
+			t.Fatalf("iteration %d state roots differ: serial=%x parallel=%x", iteration, serialRoot, parallelRoot)
+		}
+	}
+	balanceCandidates := parallelTransferBalanceOracleCandidatesCounter.Snapshot().Count() - balanceOracleBefore
+	balanceMatches := parallelTransferBalanceOracleMatchesCounter.Snapshot().Count() - balanceOracleMatchesBefore
+	if balanceCandidates == 0 || balanceMatches != balanceCandidates {
+		t.Fatalf("historical transfer balance oracle candidates/matches = %d/%d, want non-zero equality", balanceCandidates, balanceMatches)
+	}
+	serialCandidates := parallelTransferSerialVerifyCandidatesCounter.Snapshot().Count() - serialVerifyBefore
+	serialMatches := parallelTransferSerialVerifyMatchesCounter.Snapshot().Count() - serialVerifyMatchesBefore
+	if serialCandidates == 0 || serialMatches != serialCandidates {
+		t.Fatalf("historical transfer serial oracle candidates/matches = %d/%d mismatches(info/write/balance)=%d/%d/%d errors=%d",
+			serialCandidates,
+			serialMatches,
+			parallelTransferSerialVerifyInfoMismatchCounter.Snapshot().Count()-serialVerifyInfoMismatchBefore,
+			parallelTransferSerialVerifyWriteMismatchCounter.Snapshot().Count()-serialVerifyWriteMismatchBefore,
+			parallelTransferSerialVerifyBalanceMismatchCounter.Snapshot().Count()-serialVerifyBalanceMismatchBefore,
+			parallelTransferSerialVerifyErrorsCounter.Snapshot().Count()-serialVerifyErrorsBefore,
+		)
+	}
+	published := parallelTransferPublishedCounter.Snapshot().Count() - publishedBefore
+	sealCandidates := parallelTransferWriteSealCandidatesCounter.Snapshot().Count() - writeSealCandidatesBefore
+	sealMatches := parallelTransferWriteSealMatchesCounter.Snapshot().Count() - writeSealMatchesBefore
+	if sealCandidates == 0 || sealCandidates != sealMatches || sealMatches != published {
+		t.Fatalf("historical transfer WriteSet seals candidates/matches/published = %d/%d/%d, want non-zero equality", sealCandidates, sealMatches, published)
+	}
+	if sealMismatches := parallelTransferWriteSealMismatchesCounter.Snapshot().Count() - writeSealMismatchesBefore; sealMismatches != 0 {
+		t.Fatalf("historical transfer WriteSet seal mismatches = %d, want 0", sealMismatches)
+	}
+	audited := parallelTransferPublishAuditCandidatesCounter.Snapshot().Count() - publishAuditBefore
+	matches := parallelTransferPublishAuditMatchesCounter.Snapshot().Count() - publishAuditMatchesBefore
+	if audited == 0 || matches != audited {
+		t.Fatalf("historical transfer publication audits candidates/matches = %d/%d, want non-zero equality", audited, matches)
+	}
+	if mismatches := parallelTransferPublishAuditMismatchesCounter.Snapshot().Count() - publishAuditMismatchesBefore; mismatches != 0 {
+		t.Fatalf("historical transfer publication audit mismatches = %d, want 0", mismatches)
+	}
+	if auditErrors := parallelTransferPublishAuditErrorsCounter.Snapshot().Count() - publishAuditErrorsBefore; auditErrors != 0 {
+		t.Fatalf("historical transfer publication audit errors = %d, want 0", auditErrors)
+	}
+}
+
+func TestProcessBlockParallelTransferToBlackholeFallsBackSerially(t *testing.T) {
+	owner := testProcessorAddr(0x31)
+	blackhole := params.BlackholeAddress
+	parameter, err := anypb.New(&contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    blackhole.Bytes(),
+		Amount:       1_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := types.NewTransactionFromPB(&corepb.Transaction{RawData: &corepb.TransactionRaw{
+		Expiration: 60_000,
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TransferContract,
+			Parameter: parameter,
+		}},
+	}})
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, Timestamp: 3_000}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	newBase := func() *state.StateDB {
+		base := newTestState(t)
+		base.CreateAccount(owner, corepb.AccountType_Normal)
+		base.AddBalance(owner, 1_000_000)
+		base.CreateAccount(blackhole, corepb.AccountType_Normal)
+		// Force paid bandwidth through the legacy Blackhole settlement route.
+		base.DynamicProperties().Set("free_net_limit", 0)
+		base.DynamicProperties().Set("public_net_limit", 0)
+		base.DynamicProperties().Set("total_net_limit", 0)
+		base.DynamicProperties().Set("transaction_fee", 1)
+		base.DynamicProperties().SetAllowBlackHoleOptimization(false)
+		base.DynamicProperties().SetAllowTransactionFeePool(false)
+		if _, commitErr := base.Commit(); commitErr != nil {
+			t.Fatal(commitErr)
+		}
+		return base
+	}
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+
+	serialState := newBase()
+	serialInfos, err := run(serialState, processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial process: %v", err)
+	}
+	fee := serialInfos[0].GetFee()
+	if fee <= 0 {
+		t.Fatalf("serial fee = %d, want paid bandwidth", fee)
+	}
+	if got := serialState.GetBalance(blackhole); got != 1_000+fee {
+		t.Fatalf("serial Blackhole balance = %d, want %d", got, 1_000+fee)
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	candidatesBefore := parallelTransferBalanceOracleCandidatesCounter.Snapshot().Count()
+	fallbacksBefore := parallelTransferBalanceOracleFallbacksCounter.Snapshot().Count()
+	mismatchesBefore := parallelTransferBalanceOracleMismatchesCounter.Snapshot().Count()
+	errorsBefore := parallelTransferBalanceOracleErrorsCounter.Snapshot().Count()
+	publishedBefore := parallelTransferPublishedCounter.Snapshot().Count()
+	encodeBalance := func(value int64) []byte {
+		encoded := make([]byte, 8)
+		binary.BigEndian.PutUint64(encoded, uint64(value))
+		return encoded
+	}
+	oracleState := newBase()
+	oracleResult := &discardShadowTaskResult{
+		info: &corepb.TransactionInfo{Fee: fee},
+		writes: state.TransactionWriteSet{
+			{Kind: state.TransactionAccessAccountField, Address: owner, AccountField: state.TransactionAccountFieldBalance}: {
+				Exists: true, Value: encodeBalance(1_000_000 - 1_000 - fee),
+			},
+			{Kind: state.TransactionAccessAccountField, Address: blackhole, AccountField: state.TransactionAccountFieldBalance}: {
+				Exists: true, Value: encodeBalance(1_000 + fee),
+			},
+		},
+	}
+	if matched, oracleErr := validateTransferBalancePostImages(
+		oracleState, tx, oracleResult,
+		discardShadowRunConfig{block: block, transactions: []*types.Transaction{tx}}, 0,
+	); oracleErr != nil || matched {
+		t.Fatalf("Blackhole balance oracle result = %t,%v, want false,nil fallback", matched, oracleErr)
+	}
+	parallelState := newBase()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true})
+	if err != nil {
+		t.Fatalf("parallel process: %v", err)
+	}
+	if !proto.Equal(serialInfos[0], parallelInfos[0]) {
+		t.Fatalf("transaction info mismatch\nserial=%v\nparallel=%v", serialInfos[0], parallelInfos[0])
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parallelRoot != serialRoot {
+		t.Fatalf("state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+	if got := parallelTransferBalanceOracleCandidatesCounter.Snapshot().Count() - candidatesBefore; got != 1 {
+		t.Fatalf("balance oracle candidates = %d, want 1", got)
+	}
+	if got := parallelTransferBalanceOracleFallbacksCounter.Snapshot().Count() - fallbacksBefore; got != 1 {
+		t.Fatalf("balance oracle protocol-account fallbacks = %d, want 1", got)
+	}
+	if got := parallelTransferBalanceOracleMismatchesCounter.Snapshot().Count() - mismatchesBefore; got != 0 {
+		t.Fatalf("balance oracle mismatches = %d, want 0", got)
+	}
+	if got := parallelTransferBalanceOracleErrorsCounter.Snapshot().Count() - errorsBefore; got != 0 {
+		t.Fatalf("balance oracle errors = %d, want 0", got)
+	}
+	if got := parallelTransferPublishedCounter.Snapshot().Count() - publishedBefore; got != 0 {
+		t.Fatalf("Blackhole transfer publications = %d, want 0", got)
+	}
+}
+
+func TestProcessBlockParallelTransferFeeRoutingDifferential(t *testing.T) {
+	for testIndex, tc := range []struct {
+		name                string
+		blackholeOptimized  bool
+		transactionFeePool  bool
+		wantBlackholeFee    bool
+		wantBandwidthInPool bool
+	}{
+		{name: "legacy-blackhole", wantBlackholeFee: true},
+		{name: "burn", blackholeOptimized: true},
+		{name: "legacy-blackhole-with-fee-pool", transactionFeePool: true, wantBlackholeFee: true, wantBandwidthInPool: true},
+		{name: "burn-with-fee-pool", blackholeOptimized: true, transactionFeePool: true, wantBandwidthInPool: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newBase := func() *state.StateDB {
+				base := newTestState(t)
+				for _, id := range []byte{1, 2} {
+					base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+				}
+				base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+				base.AddBalance(testProcessorAddr(1), 1_000_000_000)
+				base.AddBalance(testProcessorAddr(2), 1_000_000)
+				base.AddBalance(params.BlackholeAddress, 100)
+				dp := base.DynamicProperties()
+				// Force paid bandwidth while also charging memo and multisig fees.
+				// These three components cover every settlement destination used by
+				// a successful existing-recipient Transfer.
+				dp.Set("free_net_limit", 0)
+				dp.SetPublicNetLimit(0)
+				dp.Set("transaction_fee", 2)
+				dp.SetAllowMultiSign(true)
+				dp.SetMultiSignFee(11)
+				dp.SetMemoFee(13)
+				dp.SetAllowBlackHoleOptimization(tc.blackholeOptimized)
+				dp.SetAllowTransactionFeePool(tc.transactionFeePool)
+				if _, err := base.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				return base
+			}
+
+			tx := makeTestTransferTx(1, 2, 123_456)
+			tx.Proto().Signature = [][]byte{make([]byte, 65), make([]byte, 65)}
+			tx.Proto().RawData.Data = []byte("parallel-fee-routing")
+			block := types.NewBlockFromPB(&corepb.Block{
+				BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+					Number: int64(101 + testIndex), Timestamp: 3_000,
+				}},
+				Transactions: []*corepb.Transaction{tx.Proto()},
+			})
+			run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, *contractpb.BlockBalanceTrace, map[tcommon.Address]int64, error) {
+				statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
+				infos, _, processErr := processBlockWithOptions(
+					statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+					params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+					nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+					options,
+				)
+				trace, finalBalances := statedb.FinishBalanceTrace()
+				return infos, trace, finalBalances, processErr
+			}
+
+			publishedBefore := parallelTransferPublishedCounter.Snapshot().Count()
+			balanceMatchesBefore := parallelTransferBalanceOracleMatchesCounter.Snapshot().Count()
+			balanceFallbacksBefore := parallelTransferBalanceOracleFallbacksCounter.Snapshot().Count()
+			serialMatchesBefore := parallelTransferSerialVerifyMatchesCounter.Snapshot().Count()
+			base := newBase()
+			serialState, err := base.Copy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+			parallelState, err := base.Copy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+			serialInfos, serialTrace, serialBalances, err := run(serialState, processBlockOptions{captureBalanceTrace: true})
+			if err != nil {
+				t.Fatalf("serial process: %v", err)
+			}
+			parallelInfos, parallelTrace, parallelBalances, err := run(parallelState, processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
+			if err != nil {
+				t.Fatalf("parallel process: %v", err)
+			}
+			if len(serialInfos) != 1 || len(parallelInfos) != 1 || !proto.Equal(serialInfos[0], parallelInfos[0]) {
+				t.Fatalf("transaction info mismatch\nserial=%v\nparallel=%v", serialInfos, parallelInfos)
+			}
+			if !proto.Equal(serialTrace, parallelTrace) {
+				t.Fatalf("block balance trace mismatch\nserial=%v\nparallel=%v", serialTrace, parallelTrace)
+			}
+			if len(serialBalances) != len(parallelBalances) {
+				t.Fatalf("final balance count serial=%d parallel=%d", len(serialBalances), len(parallelBalances))
+			}
+			for address, serialBalance := range serialBalances {
+				if parallelBalance, ok := parallelBalances[address]; !ok || parallelBalance != serialBalance {
+					t.Fatalf("final balance %s serial=%d parallel=%d present=%t", address.Hex(), serialBalance, parallelBalance, ok)
+				}
+			}
+			serialRoot, err := serialState.Commit()
+			if err != nil {
+				t.Fatal(err)
+			}
+			parallelRoot, err := parallelState.Commit()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parallelRoot != serialRoot {
+				t.Fatalf("state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+			}
+
+			info := parallelInfos[0]
+			if info.GetFee() <= 24 {
+				t.Fatalf("total fee = %d, want paid bandwidth plus 24 memo/multisig", info.GetFee())
+			}
+			bandwidthFee := info.GetFee() - 24
+			if got := parallelState.GetBalance(testProcessorAddr(1)); got != 1_000_000_000-123_456-info.GetFee() {
+				t.Fatalf("owner balance = %d", got)
+			}
+			if got := parallelState.GetBalance(testProcessorAddr(2)); got != 1_000_000+123_456 {
+				t.Fatalf("recipient balance = %d", got)
+			}
+			wantBlackhole := int64(100)
+			if tc.wantBlackholeFee {
+				wantBlackhole += 24
+				if !tc.wantBandwidthInPool {
+					wantBlackhole += bandwidthFee
+				}
+			}
+			if got := parallelState.GetBalance(params.BlackholeAddress); got != wantBlackhole {
+				t.Fatalf("Blackhole balance = %d, want %d", got, wantBlackhole)
+			}
+			wantPool := int64(0)
+			if tc.wantBandwidthInPool {
+				wantPool = bandwidthFee
+			}
+			if got := parallelState.DynamicProperties().TransactionFeePool(); got != wantPool {
+				t.Fatalf("transaction fee pool = %d, want %d", got, wantPool)
+			}
+			wantBurned := int64(0)
+			if tc.blackholeOptimized {
+				wantBurned = 24
+				if !tc.wantBandwidthInPool {
+					wantBurned += bandwidthFee
+				}
+			}
+			if got := parallelState.DynamicProperties().BurnTrxAmount(); got != wantBurned {
+				t.Fatalf("burned TRX = %d, want %d", got, wantBurned)
+			}
+			if got := parallelTransferPublishedCounter.Snapshot().Count() - publishedBefore; got != 1 {
+				t.Fatalf("published transfers = %d, want 1", got)
+			}
+			if got := parallelTransferBalanceOracleMatchesCounter.Snapshot().Count() - balanceMatchesBefore; got != 1 {
+				t.Fatalf("balance-oracle matches = %d, want 1", got)
+			}
+			if got := parallelTransferBalanceOracleFallbacksCounter.Snapshot().Count() - balanceFallbacksBefore; got != 0 {
+				t.Fatalf("balance-oracle fallbacks = %d, want 0", got)
+			}
+			if got := parallelTransferSerialVerifyMatchesCounter.Snapshot().Count() - serialMatchesBefore; got != 1 {
+				t.Fatalf("serial-oracle matches = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestProcessBlockParallelTransfersRandomizedDifferential(t *testing.T) {
+	const (
+		seedCount        = 16
+		transactionCount = 96
+	)
+	newBase := func(seed int64) *state.StateDB {
+		base := newTestState(t)
+		for id := byte(1); id <= 60; id++ {
+			base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
+			base.AddBalance(testProcessorAddr(id), 1_000_000_000)
+		}
+		// Two sender suffixes are invalid on the block-start view and become
+		// executable only after the first sender funds them. This is the shape
+		// that exercises the async incarnation path rather than only independent
+		// block-start publications.
+		base.AddBalance(testProcessorAddr(2), -999_999_999)
+		base.AddBalance(testProcessorAddr(3), -999_999_999)
+		base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+		dp := base.DynamicProperties()
+		dp.Set("free_net_limit", 1_000_000_000)
+		if seed%3 == 0 {
+			// Exhaust the global free-bandwidth pool part-way through the block;
+			// later candidates must fall back to canonical paid bandwidth.
+			dp.SetPublicNetLimit(5_000)
+		} else {
+			dp.SetPublicNetLimit(1_000_000_000)
+		}
+		dp.SetPublicNetUsage(seed % 97)
+		dp.SetPublicNetTime(0)
+		dp.Set("transaction_fee", 1)
+		dp.SetAllowBlackHoleOptimization(true)
+		dp.SetAllowTransactionFeePool(false)
+		if _, err := base.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		return base
+	}
+	makeTransaction := func(seed int64, txIndex int, from, to byte, amount int64) *types.Transaction {
+		tx := makeTestTransferTx(from, to, amount)
+		tx.Proto().RawData.Expiration = 60_000 + seed*1_000 + int64(txIndex)
+		return tx
+	}
+
+	publishedBefore := parallelTransferPublishedCounter.Snapshot().Count()
+	retryExecutedBefore := discardShadowRetryActualExecutedCounter.Snapshot().Count()
+	rebasedBefore := parallelTransferPublicNetRebasedCounter.Snapshot().Count()
+	limitFallbackBefore := parallelTransferPublicNetLimitFallbackCounter.Snapshot().Count()
+	balanceCandidatesBefore := parallelTransferBalanceOracleCandidatesCounter.Snapshot().Count()
+	balanceMatchesBefore := parallelTransferBalanceOracleMatchesCounter.Snapshot().Count()
+	balanceFallbacksBefore := parallelTransferBalanceOracleFallbacksCounter.Snapshot().Count()
+	balanceMismatchesBefore := parallelTransferBalanceOracleMismatchesCounter.Snapshot().Count()
+	balanceErrorsBefore := parallelTransferBalanceOracleErrorsCounter.Snapshot().Count()
+	serialCandidatesBefore := parallelTransferSerialVerifyCandidatesCounter.Snapshot().Count()
+	serialMatchesBefore := parallelTransferSerialVerifyMatchesCounter.Snapshot().Count()
+
+	for seed := int64(1); seed <= seedCount; seed++ {
+		seed := seed
+		t.Run("seed-"+string(rune('A'+seed-1)), func(t *testing.T) {
+			rng := rand.New(rand.NewSource(seed))
+			transactions := make([]*types.Transaction, transactionCount)
+			transactions[0] = makeTransaction(seed, 0, 1, 2, 20_000_000)
+			transactions[1] = makeTransaction(seed, 1, 1, 3, 20_000_000)
+			for txIndex := 2; txIndex < 90; txIndex++ {
+				owner := byte(10 + rng.Intn(30))
+				recipient := byte(41 + rng.Intn(19))
+				if txIndex%4 == 0 {
+					recipient = 4 // deliberately hot shared recipient
+				}
+				transactions[txIndex] = makeTransaction(seed, txIndex, owner, recipient, int64(1+rng.Intn(10_000)))
+			}
+			transactions[90] = makeTransaction(seed, 90, 2, 4, 7_000_000)
+			transactions[91] = makeTransaction(seed, 91, 3, 4, 8_000_000)
+			transactions[92] = makeTransaction(seed, 92, 2, 4, 6_000_000)
+			transactions[93] = makeTransaction(seed, 93, 3, 5, 5_000_000)
+			transactions[94] = makeTransaction(seed, 94, 12, 4, int64(1+rng.Intn(10_000)))
+			transactions[95] = makeTransaction(seed, 95, 2, 6, 1_000_000)
+
+			transactionProtos := make([]*corepb.Transaction, len(transactions))
+			for txIndex, tx := range transactions {
+				transactionProtos[txIndex] = tx.Proto()
+			}
+			blockNumber := uint64(10_000 + seed*2)
+			if blockNumber%discardShadowSampleInterval == 0 {
+				blockNumber++
+			}
+			block := types.NewBlockFromPB(&corepb.Block{
+				BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+					Number: int64(blockNumber), Timestamp: 3_000,
+				}},
+				Transactions: transactionProtos,
+			})
+			run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, *contractpb.BlockBalanceTrace, map[tcommon.Address]int64, error) {
+				statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
+				infos, _, processErr := processBlockWithOptions(
+					statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+					params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+					nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+					options,
+				)
+				trace, finalBalances := statedb.FinishBalanceTrace()
+				return infos, trace, finalBalances, processErr
+			}
+
+			base := newBase(seed)
+			serialState, err := base.Copy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+			parallelState, err := base.Copy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+			serialInfos, serialTrace, serialBalances, err := run(serialState, processBlockOptions{captureBalanceTrace: true})
+			if err != nil {
+				t.Fatalf("serial process: %v", err)
+			}
+			parallelInfos, parallelTrace, parallelBalances, err := run(parallelState, processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
+			if err != nil {
+				t.Fatalf("parallel process: %v", err)
+			}
+			if len(serialInfos) != len(parallelInfos) {
+				t.Fatalf("transaction-info count serial=%d parallel=%d", len(serialInfos), len(parallelInfos))
+			}
+			for txIndex := range serialInfos {
+				if !proto.Equal(serialInfos[txIndex], parallelInfos[txIndex]) {
+					t.Fatalf("tx %d info mismatch\nserial=%v\nparallel=%v", txIndex, serialInfos[txIndex], parallelInfos[txIndex])
+				}
+			}
+			if !proto.Equal(serialTrace, parallelTrace) {
+				t.Fatalf("block balance trace mismatch\nserial=%v\nparallel=%v", serialTrace, parallelTrace)
+			}
+			if len(serialBalances) != len(parallelBalances) {
+				t.Fatalf("final balance count serial=%d parallel=%d", len(serialBalances), len(parallelBalances))
+			}
+			for address, serialBalance := range serialBalances {
+				if parallelBalance, ok := parallelBalances[address]; !ok || parallelBalance != serialBalance {
+					t.Fatalf("final balance %s serial=%d parallel=%d present=%t", address.Hex(), serialBalance, parallelBalance, ok)
+				}
+			}
+			serialRoot, err := serialState.Commit()
+			if err != nil {
+				t.Fatal(err)
+			}
+			parallelRoot, err := parallelState.Commit()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parallelRoot != serialRoot {
+				t.Fatalf("state roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+			}
+		})
+	}
+
+	published := parallelTransferPublishedCounter.Snapshot().Count() - publishedBefore
+	if published == 0 {
+		t.Fatal("randomized differential matrix did not publish a Transfer")
+	}
+	if executed := discardShadowRetryActualExecutedCounter.Snapshot().Count() - retryExecutedBefore; executed == 0 {
+		t.Fatal("randomized differential matrix did not execute an async sender retry")
+	}
+	if rebased := parallelTransferPublicNetRebasedCounter.Snapshot().Count() - rebasedBefore; rebased == 0 {
+		t.Fatal("randomized differential matrix did not exercise public-net rebasing")
+	}
+	if fallbacks := parallelTransferPublicNetLimitFallbackCounter.Snapshot().Count() - limitFallbackBefore; fallbacks == 0 {
+		t.Fatal("randomized differential matrix did not exercise public-net exhaustion fallback")
+	}
+	balanceCandidates := parallelTransferBalanceOracleCandidatesCounter.Snapshot().Count() - balanceCandidatesBefore
+	balanceMatches := parallelTransferBalanceOracleMatchesCounter.Snapshot().Count() - balanceMatchesBefore
+	balanceFallbacks := parallelTransferBalanceOracleFallbacksCounter.Snapshot().Count() - balanceFallbacksBefore
+	if mismatches := parallelTransferBalanceOracleMismatchesCounter.Snapshot().Count() - balanceMismatchesBefore; mismatches != 0 {
+		t.Fatalf("randomized balance-oracle mismatches = %d", mismatches)
+	}
+	if oracleErrors := parallelTransferBalanceOracleErrorsCounter.Snapshot().Count() - balanceErrorsBefore; oracleErrors != 0 {
+		t.Fatalf("randomized balance-oracle errors = %d", oracleErrors)
+	}
+	if balanceCandidates != balanceMatches+balanceFallbacks || balanceMatches != published {
+		t.Fatalf("randomized balance oracle candidates/matches/fallbacks/published = %d/%d/%d/%d", balanceCandidates, balanceMatches, balanceFallbacks, published)
+	}
+	serialCandidates := parallelTransferSerialVerifyCandidatesCounter.Snapshot().Count() - serialCandidatesBefore
+	serialMatches := parallelTransferSerialVerifyMatchesCounter.Snapshot().Count() - serialMatchesBefore
+	if serialCandidates != published || serialMatches != published {
+		t.Fatalf("randomized serial verification candidates/matches/published = %d/%d/%d", serialCandidates, serialMatches, published)
+	}
+}
+
 func TestProcessBlockParallelTransfersPreservesRepeatedRecipientBalance(t *testing.T) {
 	base := newTestState(t)
 	for _, id := range []byte{1, 2, 3} {
@@ -696,6 +1582,21 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 		t.Fatal(err)
 	}
 	transferOnlyState.SetDynamicProperties(base.DynamicProperties().Copy())
+	corruptState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	corruptState.SetDynamicProperties(base.DynamicProperties().Copy())
+	preApplyCorruptState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	preApplyCorruptState.SetDynamicProperties(base.DynamicProperties().Copy())
+	payloadCorruptState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadCorruptState.SetDynamicProperties(base.DynamicProperties().Copy())
 
 	storageInput := func(value byte) []byte {
 		input := make([]byte, tcommon.HashLength)
@@ -736,6 +1637,111 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	serialInfos, serialTrace, serialFinalBalances, err := run(serialState, ethrawdb.NewMemoryDatabase(), processBlockOptions{captureBalanceTrace: true, timing: &serialTiming})
 	if err != nil {
 		t.Fatalf("serial VM process: %v", err)
+	}
+	var preApplyCorruptions int
+	_, _, _, err = run(preApplyCorruptState, ethrawdb.NewMemoryDatabase(), processBlockOptions{
+		parallelVM:          true,
+		captureBalanceTrace: true,
+		speculativePreApplyTestHook: func(family string, txIndex int, writes state.TransactionWriteSet) {
+			if family != "VM" || txIndex != 0 {
+				return
+			}
+			for key, value := range writes {
+				if key.Kind != state.TransactionAccessStorage || len(value.Value) != tcommon.HashLength {
+					continue
+				}
+				value.Value = append([]byte(nil), value.Value...)
+				value.Value[len(value.Value)-1] ^= 1
+				writes[key] = value
+				preApplyCorruptions++
+				return
+			}
+		},
+	})
+	if !errors.Is(err, errSpeculativePublicationAudit) {
+		t.Fatalf("valid VM pre-apply mutation error = %v, want speculative safety sentinel", err)
+	}
+	if preApplyCorruptions != 1 {
+		t.Fatalf("VM pre-apply corruptions = %d, want 1", preApplyCorruptions)
+	}
+	if _, exists := preApplyCorruptState.GetStateWithExist(contract1, tcommon.Hash{}); exists {
+		t.Fatal("validly mutated VM attempt left storage behind after block rollback")
+	}
+	for _, address := range []tcommon.Address{owner1, owner2, contract1, contract2, params.BlackholeAddress} {
+		if got, want := preApplyCorruptState.GetBalance(address), base.GetBalance(address); got != want {
+			t.Fatalf("validly mutated VM attempt balance %s = %d, want rolled-back %d", address.Hex(), got, want)
+		}
+	}
+	if got, want := preApplyCorruptState.DynamicProperties().BlockEnergyUsage(), base.DynamicProperties().BlockEnergyUsage(); got != want {
+		t.Fatalf("validly mutated VM attempt block energy = %d, want rolled-back %d", got, want)
+	}
+	var payloadCorruptions int
+	_, _, _, err = run(payloadCorruptState, ethrawdb.NewMemoryDatabase(), processBlockOptions{
+		parallelVM:          true,
+		captureBalanceTrace: true,
+		speculativePostOracleTestHook: func(family string, txIndex int, result *discardShadowTaskResult) {
+			if family != "VM" || txIndex != 0 || result == nil {
+				return
+			}
+			if result.info == nil || result.balanceTrace == nil {
+				t.Fatal("published VM fixture did not retain info and balance trace")
+			}
+			result.info.Fee++
+			result.balanceTrace.TransactionIdentifier[0] ^= 1
+			result.reads.Unsupported = !result.reads.Unsupported
+			payloadCorruptions++
+		},
+	})
+	if !errors.Is(err, errSpeculativePublicationAudit) {
+		t.Fatalf("mutated VM payload error = %v, want speculative safety sentinel", err)
+	}
+	if payloadCorruptions != 1 {
+		t.Fatalf("VM payload corruptions = %d, want 1", payloadCorruptions)
+	}
+	if _, exists := payloadCorruptState.GetStateWithExist(contract1, tcommon.Hash{}); exists {
+		t.Fatal("mutated VM payload attempt left storage behind after block rollback")
+	}
+	for _, address := range []tcommon.Address{owner1, owner2, contract1, contract2, params.BlackholeAddress} {
+		if got, want := payloadCorruptState.GetBalance(address), base.GetBalance(address); got != want {
+			t.Fatalf("mutated VM payload attempt balance %s = %d, want rolled-back %d", address.Hex(), got, want)
+		}
+	}
+	if got, want := payloadCorruptState.DynamicProperties().BlockEnergyUsage(), base.DynamicProperties().BlockEnergyUsage(); got != want {
+		t.Fatalf("mutated VM payload attempt block energy = %d, want rolled-back %d", got, want)
+	}
+	var postApplyCorruptions int
+	_, _, _, err = run(corruptState, ethrawdb.NewMemoryDatabase(), processBlockOptions{
+		parallelVM:          true,
+		captureBalanceTrace: true,
+		speculativePostApplyTestHook: func(family string, txIndex int, writes state.TransactionWriteSet) {
+			if family != "VM" || txIndex != 0 {
+				return
+			}
+			for key := range writes {
+				if key.Kind == state.TransactionAccessStorage {
+					delete(writes, key)
+					postApplyCorruptions++
+					return
+				}
+			}
+		},
+	})
+	if !errors.Is(err, errSpeculativePublicationAudit) {
+		t.Fatalf("corrupted VM post-apply audit error = %v, want speculative safety sentinel", err)
+	}
+	if postApplyCorruptions != 1 {
+		t.Fatalf("VM post-apply corruptions = %d, want 1", postApplyCorruptions)
+	}
+	if _, exists := corruptState.GetStateWithExist(contract1, tcommon.Hash{}); exists {
+		t.Fatal("corrupted VM attempt left storage behind after block rollback")
+	}
+	for _, address := range []tcommon.Address{owner1, owner2, contract1, contract2, params.BlackholeAddress} {
+		if got, want := corruptState.GetBalance(address), base.GetBalance(address); got != want {
+			t.Fatalf("corrupted VM attempt balance %s = %d, want rolled-back %d", address.Hex(), got, want)
+		}
+	}
+	if got, want := corruptState.DynamicProperties().BlockEnergyUsage(), base.DynamicProperties().BlockEnergyUsage(); got != want {
+		t.Fatalf("corrupted VM attempt block energy = %d, want rolled-back %d", got, want)
 	}
 	vmPublishedWithTransferOnlyBefore := parallelVMPublishedCounter.Snapshot().Count()
 	transferOnlyInfos, transferOnlyTrace, transferOnlyFinalBalances, err := run(transferOnlyState, ethrawdb.NewMemoryDatabase(), processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
@@ -783,6 +1789,15 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	serialVerifyWriteMismatchesBefore := parallelVMSerialVerifyWriteMismatchCounter.Snapshot().Count()
 	serialVerifyBalanceMismatchesBefore := parallelVMSerialVerifyBalanceMismatchCounter.Snapshot().Count()
 	serialVerifyErrorsBefore := parallelVMSerialVerifyErrorsCounter.Snapshot().Count()
+	dualOracleCandidatesBefore := parallelVMDualOracleCandidatesCounter.Snapshot().Count()
+	dualOracleMatchesBefore := parallelVMDualOracleMatchesCounter.Snapshot().Count()
+	dualOracleInfoMismatchesBefore := parallelVMDualOracleInfoMismatchCounter.Snapshot().Count()
+	dualOracleWriteMismatchesBefore := parallelVMDualOracleWriteMismatchCounter.Snapshot().Count()
+	dualOracleBalanceMismatchesBefore := parallelVMDualOracleBalanceMismatchCounter.Snapshot().Count()
+	dualOracleErrorsBefore := parallelVMDualOracleErrorsCounter.Snapshot().Count()
+	writeSealCandidatesBefore := parallelVMWriteSealCandidatesCounter.Snapshot().Count()
+	writeSealMatchesBefore := parallelVMWriteSealMatchesCounter.Snapshot().Count()
+	writeSealMismatchesBefore := parallelVMWriteSealMismatchesCounter.Snapshot().Count()
 	errorsBefore := parallelVMErrorsCounter.Snapshot().Count()
 	fallbacksBefore := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
 		parallelVMConflictFallbackCounter.Snapshot().Count() +
@@ -882,6 +1897,33 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	if failures := parallelVMSerialVerifyErrorsCounter.Snapshot().Count() - serialVerifyErrorsBefore; failures != 0 {
 		t.Fatalf("parallel VM boundary serial verification errors = %d, want 0", failures)
 	}
+	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualOracleCandidatesBefore; candidates != 3 {
+		t.Fatalf("parallel VM dual-oracle candidates = %d, want 3", candidates)
+	}
+	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualOracleMatchesBefore; matches != 3 {
+		t.Fatalf("parallel VM dual-oracle matches = %d, want 3", matches)
+	}
+	if mismatches := parallelVMDualOracleInfoMismatchCounter.Snapshot().Count() - dualOracleInfoMismatchesBefore; mismatches != 0 {
+		t.Fatalf("parallel VM dual-oracle info mismatches = %d, want 0", mismatches)
+	}
+	if mismatches := parallelVMDualOracleWriteMismatchCounter.Snapshot().Count() - dualOracleWriteMismatchesBefore; mismatches != 0 {
+		t.Fatalf("parallel VM dual-oracle write mismatches = %d, want 0", mismatches)
+	}
+	if mismatches := parallelVMDualOracleBalanceMismatchCounter.Snapshot().Count() - dualOracleBalanceMismatchesBefore; mismatches != 0 {
+		t.Fatalf("parallel VM dual-oracle balance mismatches = %d, want 0", mismatches)
+	}
+	if failures := parallelVMDualOracleErrorsCounter.Snapshot().Count() - dualOracleErrorsBefore; failures != 0 {
+		t.Fatalf("parallel VM dual-oracle errors = %d, want 0", failures)
+	}
+	if candidates := parallelVMWriteSealCandidatesCounter.Snapshot().Count() - writeSealCandidatesBefore; candidates != 3 {
+		t.Fatalf("parallel VM WriteSet seal candidates = %d, want 3", candidates)
+	}
+	if matches := parallelVMWriteSealMatchesCounter.Snapshot().Count() - writeSealMatchesBefore; matches != 3 {
+		t.Fatalf("parallel VM WriteSet seal matches = %d, want 3", matches)
+	}
+	if mismatches := parallelVMWriteSealMismatchesCounter.Snapshot().Count() - writeSealMismatchesBefore; mismatches != 0 {
+		t.Fatalf("parallel VM WriteSet seal mismatches = %d, want 0", mismatches)
+	}
 	fallbacksAfter := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
 		parallelVMConflictFallbackCounter.Snapshot().Count() +
 		parallelVMPreflightFallbackCounter.Snapshot().Count() +
@@ -954,6 +1996,881 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	}
 	if serialRoot != transferOnlyRoot {
 		t.Fatalf("Transfer-only state root differs: serial=%x transfer-only=%x", serialRoot, transferOnlyRoot)
+	}
+}
+
+func TestProcessBlockPublishesVMInternalCreate(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetAllowMultiSign(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner := testProcessorAddr(1)
+	parent := testProcessorAddr(0x8a)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.CreateAccount(parent, corepb.AccountType_Contract)
+	base.SetContract(parent, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: parent.Bytes(),
+	})
+	// The child constructor returns one STOP byte as its runtime. The parent
+	// copies that constructor from its own code, CREATEs the child, discards the
+	// returned address and stops. A successful publication must therefore carry
+	// one fresh account envelope, code and contract metadata plus a LOG payload
+	// and the internal CREATE record in addition to ordinary resource settlement.
+	// The child address is also derived independently from java-tron's root-
+	// tx/nonce formula below and its complete canonical post-state is checked
+	// directly.
+	childInit := []byte{
+		0x60, 0x01, 0x60, 0x0c, 0x60, 0x00, 0x39,
+		0x60, 0x01, 0x60, 0x00, 0xf3,
+		0x00,
+	}
+	parentCode := []byte{
+		0x60, byte(len(childInit)), 0x60, 0x00, 0x60, 0x00, 0x39,
+		0x60, byte(len(childInit)), 0x60, 0x00, 0x60, 0x00, 0xf0, 0x50,
+		0x60, 0x01, 0x60, 0x00, 0x52,
+		0x60, 0x20, 0x60, 0x00, 0xa0,
+		0x00,
+	}
+	parentCode[3] = byte(len(parentCode))
+	base.SetCode(parent, append(parentCode, childInit...))
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	tx := makeTestTriggerTx(1, parent, nil)
+	tx.Proto().RawData.FeeLimit = 10_000_000
+	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{saveInternalTx: true})
+	if err != nil {
+		t.Fatalf("serial internal CREATE: %v", err)
+	}
+	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	dualCandidatesBefore := parallelVMDualOracleCandidatesCounter.Snapshot().Count()
+	dualMatchesBefore := parallelVMDualOracleMatchesCounter.Snapshot().Count()
+	dualErrorsBefore := parallelVMDualOracleErrorsCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true, saveInternalTx: true})
+	if err != nil {
+		t.Fatalf("parallel internal CREATE: %v", err)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 1 {
+		t.Fatalf("internal CREATE VM publications = %d, want 1", published)
+	}
+	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualCandidatesBefore; candidates != 1 {
+		t.Fatalf("internal CREATE dual-oracle candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualMatchesBefore; matches != 1 {
+		t.Fatalf("internal CREATE dual-oracle matches = %d, want 1", matches)
+	}
+	if failures := parallelVMDualOracleErrorsCounter.Snapshot().Count() - dualErrorsBefore; failures != 0 {
+		t.Fatalf("internal CREATE dual-oracle errors = %d, want 0", failures)
+	}
+	if len(serialInfos) != 1 || len(parallelInfos) != 1 || !proto.Equal(serialInfos[0], parallelInfos[0]) {
+		t.Fatalf("internal CREATE receipt mismatch\nserial=%v\nparallel=%v", serialInfos, parallelInfos)
+	}
+	if logs := serialInfos[0].GetLog(); len(logs) != 1 || len(logs[0].GetData()) != tcommon.HashLength || logs[0].GetData()[tcommon.HashLength-1] != 1 {
+		t.Fatalf("internal CREATE log = %v, want one 32-byte ...01 payload", logs)
+	}
+	var createSeed [tcommon.HashLength + 8]byte
+	txHash := tx.Hash()
+	copy(createSeed[:tcommon.HashLength], txHash[:])
+	binary.BigEndian.PutUint64(createSeed[tcommon.HashLength:], 0)
+	childHash := tcommon.Keccak256(createSeed[:])
+	var child tcommon.Address
+	child[0] = 0x41
+	copy(child[1:], childHash[12:])
+	for name, infos := range map[string][]*corepb.TransactionInfo{"serial": serialInfos, "parallel": parallelInfos} {
+		internal := infos[0].GetInternalTransactions()
+		if len(internal) != 1 || string(internal[0].GetNote()) != "create" || internal[0].GetRejected() ||
+			!bytes.Equal(internal[0].GetCallerAddress(), parent.Bytes()) ||
+			!bytes.Equal(internal[0].GetTransferToAddress(), child.Bytes()) || len(internal[0].GetHash()) != tcommon.HashLength {
+			t.Fatalf("%s internal CREATE record = %+v", name, internal)
+		}
+	}
+	for name, statedb := range map[string]*state.StateDB{"serial": serialState, "parallel": parallelState} {
+		if !statedb.AccountExists(child) {
+			t.Fatalf("%s child account is absent", name)
+		}
+		if code := statedb.GetCode(child); !bytes.Equal(code, []byte{0x00}) {
+			t.Fatalf("%s child code = %x, want STOP", name, code)
+		}
+		metadata := statedb.GetContract(child)
+		if metadata == nil || !bytes.Equal(metadata.GetContractAddress(), child.Bytes()) {
+			t.Fatalf("%s child metadata = %v", name, metadata)
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("internal CREATE roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
+func TestProcessBlockPublishesVMCallTokenAccountKV(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetAllowTvmTransferTrc10(true)
+	dynProps.SetAllowMultiSign(true)
+	dynProps.SetAllowSameTokenName(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	const tokenID = int64(1_000_001)
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x8f)
+	recipient := testProcessorAddr(0x90)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	base.CreateAccount(recipient, corepb.AccountType_Normal)
+	base.SetTRC10Balance(contractAddr, tokenID, 100)
+	base.SetTRC10Balance(recipient, tokenID, 10)
+	// retSize, retOffset, inSize, inOffset, tokenID, tokenValue, recipient,
+	// forwarded energy; CALLTOKEN; POP; STOP. The successful nested token
+	// transfer writes two AccountAssetV2 AccountKV rows, a state family that
+	// must be carried by the canonical publication seal rather than inferred
+	// from the compact account envelope.
+	code := []byte{
+		byte(vm.PUSH1), 0x00,
+		byte(vm.PUSH1), 0x00,
+		byte(vm.PUSH1), 0x00,
+		byte(vm.PUSH1), 0x00,
+		byte(vm.PUSH3), 0x0f, 0x42, 0x41,
+		byte(vm.PUSH1), 0x07,
+		byte(vm.PUSH20),
+	}
+	code = append(code, recipient[1:]...)
+	code = append(code,
+		byte(vm.PUSH2), 0xff, 0xff,
+		byte(vm.CALLTOKEN), byte(vm.POP), byte(vm.STOP),
+	)
+	base.SetCode(contractAddr, code)
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	tx.Proto().RawData.FeeLimit = 10_000_000
+	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial VM CALLTOKEN: %v", err)
+	}
+
+	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	dualCandidatesBefore := parallelVMDualOracleCandidatesCounter.Snapshot().Count()
+	dualMatchesBefore := parallelVMDualOracleMatchesCounter.Snapshot().Count()
+	dualInfoMismatchBefore := parallelVMDualOracleInfoMismatchCounter.Snapshot().Count()
+	dualWriteMismatchBefore := parallelVMDualOracleWriteMismatchCounter.Snapshot().Count()
+	dualBalanceMismatchBefore := parallelVMDualOracleBalanceMismatchCounter.Snapshot().Count()
+	dualErrorsBefore := parallelVMDualOracleErrorsCounter.Snapshot().Count()
+	sealCandidatesBefore := parallelVMWriteSealCandidatesCounter.Snapshot().Count()
+	sealMatchesBefore := parallelVMWriteSealMatchesCounter.Snapshot().Count()
+	sealMismatchesBefore := parallelVMWriteSealMismatchesCounter.Snapshot().Count()
+	auditCandidatesBefore := parallelVMPublishAuditCandidatesCounter.Snapshot().Count()
+	auditMatchesBefore := parallelVMPublishAuditMatchesCounter.Snapshot().Count()
+	auditMismatchesBefore := parallelVMPublishAuditMismatchesCounter.Snapshot().Count()
+	auditErrorsBefore := parallelVMPublishAuditErrorsCounter.Snapshot().Count()
+	fallbacksBefore := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
+		parallelVMConflictFallbackCounter.Snapshot().Count() +
+		parallelVMPreflightFallbackCounter.Snapshot().Count() +
+		parallelVMPublicNetFallbackCounter.Snapshot().Count() +
+		parallelVMBlockEnergyFallbackCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
+	if err != nil {
+		t.Fatalf("parallel VM CALLTOKEN: %v", err)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 1 {
+		t.Fatalf("CALLTOKEN VM publications = %d, want 1", published)
+	}
+	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualCandidatesBefore; candidates != 1 {
+		t.Fatalf("CALLTOKEN dual-oracle candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualMatchesBefore; matches != 1 {
+		t.Fatalf("CALLTOKEN dual-oracle matches = %d, want 1", matches)
+	}
+	if failures := parallelVMDualOracleInfoMismatchCounter.Snapshot().Count() - dualInfoMismatchBefore +
+		parallelVMDualOracleWriteMismatchCounter.Snapshot().Count() - dualWriteMismatchBefore +
+		parallelVMDualOracleBalanceMismatchCounter.Snapshot().Count() - dualBalanceMismatchBefore +
+		parallelVMDualOracleErrorsCounter.Snapshot().Count() - dualErrorsBefore; failures != 0 {
+		t.Fatalf("CALLTOKEN dual-oracle mismatches/errors = %d, want 0", failures)
+	}
+	if candidates := parallelVMWriteSealCandidatesCounter.Snapshot().Count() - sealCandidatesBefore; candidates != 1 {
+		t.Fatalf("CALLTOKEN write-seal candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMWriteSealMatchesCounter.Snapshot().Count() - sealMatchesBefore; matches != 1 {
+		t.Fatalf("CALLTOKEN write-seal matches = %d, want 1", matches)
+	}
+	if mismatches := parallelVMWriteSealMismatchesCounter.Snapshot().Count() - sealMismatchesBefore; mismatches != 0 {
+		t.Fatalf("CALLTOKEN write-seal mismatches = %d, want 0", mismatches)
+	}
+	if candidates := parallelVMPublishAuditCandidatesCounter.Snapshot().Count() - auditCandidatesBefore; candidates != 1 {
+		t.Fatalf("CALLTOKEN publish-audit candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMPublishAuditMatchesCounter.Snapshot().Count() - auditMatchesBefore; matches != 1 {
+		t.Fatalf("CALLTOKEN publish-audit matches = %d, want 1", matches)
+	}
+	if failures := parallelVMPublishAuditMismatchesCounter.Snapshot().Count() - auditMismatchesBefore +
+		parallelVMPublishAuditErrorsCounter.Snapshot().Count() - auditErrorsBefore; failures != 0 {
+		t.Fatalf("CALLTOKEN publish-audit mismatches/errors = %d, want 0", failures)
+	}
+	fallbacksAfter := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
+		parallelVMConflictFallbackCounter.Snapshot().Count() +
+		parallelVMPreflightFallbackCounter.Snapshot().Count() +
+		parallelVMPublicNetFallbackCounter.Snapshot().Count() +
+		parallelVMBlockEnergyFallbackCounter.Snapshot().Count()
+	if fallbacks := fallbacksAfter - fallbacksBefore; fallbacks != 0 {
+		t.Fatalf("CALLTOKEN VM fallbacks = %d, want 0", fallbacks)
+	}
+	if len(serialInfos) != 1 || len(parallelInfos) != 1 || !proto.Equal(serialInfos[0], parallelInfos[0]) {
+		t.Fatalf("CALLTOKEN receipt mismatch\nserial=%v\nparallel=%v", serialInfos, parallelInfos)
+	}
+	for name, statedb := range map[string]*state.StateDB{"serial": serialState, "parallel": parallelState} {
+		if got := statedb.GetTRC10Balance(contractAddr, tokenID); got != 93 {
+			t.Fatalf("%s contract TRC10 balance = %d, want 93", name, got)
+		}
+		if got := statedb.GetTRC10Balance(recipient, tokenID); got != 17 {
+			t.Fatalf("%s recipient TRC10 balance = %d, want 17", name, got)
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("CALLTOKEN roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
+func TestProcessBlockPublishesVMFreezeResourceAccountKV(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetAllowTvmFreeze(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x91)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.AddBalance(contractAddr, 2_000_000)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	// Freeze 1 TRX of the contract's own balance for energy. The mutable
+	// resource payload is split into exact AccountKV rows; publication must carry
+	// those rows together with the balance and total-energy-weight post-images.
+	code := []byte{byte(vm.PUSH20)}
+	code = append(code, contractAddr[1:]...)
+	code = append(code,
+		byte(vm.PUSH3), 0x0f, 0x42, 0x40,
+		byte(vm.PUSH1), 0x01,
+		byte(vm.FREEZE), byte(vm.POP), byte(vm.STOP),
+	)
+	base.SetCode(contractAddr, code)
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	tx.Proto().RawData.FeeLimit = 10_000_000
+	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial VM FREEZE: %v", err)
+	}
+	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	dualCandidatesBefore := parallelVMDualOracleCandidatesCounter.Snapshot().Count()
+	dualMatchesBefore := parallelVMDualOracleMatchesCounter.Snapshot().Count()
+	dualInfoMismatchBefore := parallelVMDualOracleInfoMismatchCounter.Snapshot().Count()
+	dualWriteMismatchBefore := parallelVMDualOracleWriteMismatchCounter.Snapshot().Count()
+	dualBalanceMismatchBefore := parallelVMDualOracleBalanceMismatchCounter.Snapshot().Count()
+	dualErrorsBefore := parallelVMDualOracleErrorsCounter.Snapshot().Count()
+	sealCandidatesBefore := parallelVMWriteSealCandidatesCounter.Snapshot().Count()
+	sealMatchesBefore := parallelVMWriteSealMatchesCounter.Snapshot().Count()
+	sealMismatchesBefore := parallelVMWriteSealMismatchesCounter.Snapshot().Count()
+	auditCandidatesBefore := parallelVMPublishAuditCandidatesCounter.Snapshot().Count()
+	auditMatchesBefore := parallelVMPublishAuditMatchesCounter.Snapshot().Count()
+	auditMismatchesBefore := parallelVMPublishAuditMismatchesCounter.Snapshot().Count()
+	auditErrorsBefore := parallelVMPublishAuditErrorsCounter.Snapshot().Count()
+	fallbacksBefore := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
+		parallelVMConflictFallbackCounter.Snapshot().Count() +
+		parallelVMPreflightFallbackCounter.Snapshot().Count() +
+		parallelVMPublicNetFallbackCounter.Snapshot().Count() +
+		parallelVMBlockEnergyFallbackCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
+	if err != nil {
+		t.Fatalf("parallel VM FREEZE: %v", err)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 1 {
+		t.Fatalf("FREEZE VM publications = %d, want 1", published)
+	}
+	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualCandidatesBefore; candidates != 1 {
+		t.Fatalf("FREEZE dual-oracle candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualMatchesBefore; matches != 1 {
+		t.Fatalf("FREEZE dual-oracle matches = %d, want 1", matches)
+	}
+	if failures := parallelVMDualOracleInfoMismatchCounter.Snapshot().Count() - dualInfoMismatchBefore +
+		parallelVMDualOracleWriteMismatchCounter.Snapshot().Count() - dualWriteMismatchBefore +
+		parallelVMDualOracleBalanceMismatchCounter.Snapshot().Count() - dualBalanceMismatchBefore +
+		parallelVMDualOracleErrorsCounter.Snapshot().Count() - dualErrorsBefore; failures != 0 {
+		t.Fatalf("FREEZE dual-oracle mismatches/errors = %d, want 0", failures)
+	}
+	if candidates := parallelVMWriteSealCandidatesCounter.Snapshot().Count() - sealCandidatesBefore; candidates != 1 {
+		t.Fatalf("FREEZE write-seal candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMWriteSealMatchesCounter.Snapshot().Count() - sealMatchesBefore; matches != 1 {
+		t.Fatalf("FREEZE write-seal matches = %d, want 1", matches)
+	}
+	if mismatches := parallelVMWriteSealMismatchesCounter.Snapshot().Count() - sealMismatchesBefore; mismatches != 0 {
+		t.Fatalf("FREEZE write-seal mismatches = %d, want 0", mismatches)
+	}
+	if candidates := parallelVMPublishAuditCandidatesCounter.Snapshot().Count() - auditCandidatesBefore; candidates != 1 {
+		t.Fatalf("FREEZE publish-audit candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMPublishAuditMatchesCounter.Snapshot().Count() - auditMatchesBefore; matches != 1 {
+		t.Fatalf("FREEZE publish-audit matches = %d, want 1", matches)
+	}
+	if failures := parallelVMPublishAuditMismatchesCounter.Snapshot().Count() - auditMismatchesBefore +
+		parallelVMPublishAuditErrorsCounter.Snapshot().Count() - auditErrorsBefore; failures != 0 {
+		t.Fatalf("FREEZE publish-audit mismatches/errors = %d, want 0", failures)
+	}
+	fallbacksAfter := parallelVMUnavailableFallbackCounter.Snapshot().Count() +
+		parallelVMConflictFallbackCounter.Snapshot().Count() +
+		parallelVMPreflightFallbackCounter.Snapshot().Count() +
+		parallelVMPublicNetFallbackCounter.Snapshot().Count() +
+		parallelVMBlockEnergyFallbackCounter.Snapshot().Count()
+	if fallbacks := fallbacksAfter - fallbacksBefore; fallbacks != 0 {
+		t.Fatalf("FREEZE VM fallbacks = %d, want 0", fallbacks)
+	}
+	if len(serialInfos) != 1 || len(parallelInfos) != 1 || !proto.Equal(serialInfos[0], parallelInfos[0]) {
+		t.Fatalf("FREEZE receipt mismatch\nserial=%v\nparallel=%v", serialInfos, parallelInfos)
+	}
+	for name, statedb := range map[string]*state.StateDB{"serial": serialState, "parallel": parallelState} {
+		if got := statedb.GetBalance(contractAddr); got != 1_000_000 {
+			t.Fatalf("%s contract balance = %d, want 1000000", name, got)
+		}
+		frozen, freezeErr := statedb.GetAccountFrozenEnergyV1(contractAddr)
+		if freezeErr != nil || frozen != 1_000_000 {
+			t.Fatalf("%s frozen energy = %d, err=%v, want 1000000", name, frozen, freezeErr)
+		}
+		if got := statedb.DynamicProperties().TotalEnergyWeight(); got != 1 {
+			t.Fatalf("%s total energy weight = %d, want 1", name, got)
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("FREEZE roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
+func TestProcessBlockVMFreezeSharedWeightSerializesConflict(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetAllowTvmFreeze(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+
+	owners := []byte{1, 2}
+	contracts := []tcommon.Address{testProcessorAddr(0x92), testProcessorAddr(0x93)}
+	transactions := make([]*corepb.Transaction, len(contracts))
+	for index, contractAddr := range contracts {
+		owner := testProcessorAddr(owners[index])
+		base.CreateAccount(owner, corepb.AccountType_Normal)
+		base.AddBalance(owner, 100_000_000)
+		base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+		base.AddBalance(contractAddr, 2_000_000)
+		base.SetContract(contractAddr, &contractpb.SmartContract{
+			OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+		})
+		code := []byte{byte(vm.PUSH20)}
+		code = append(code, contractAddr[1:]...)
+		code = append(code,
+			byte(vm.PUSH3), 0x0f, 0x42, 0x40,
+			byte(vm.PUSH1), 0x01,
+			byte(vm.FREEZE), byte(vm.POP), byte(vm.STOP),
+		)
+		base.SetCode(contractAddr, code)
+		tx := makeTestTriggerTx(owners[index], contractAddr, nil)
+		tx.Proto().RawData.FeeLimit = 10_000_000
+		tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+		transactions[index] = tx.Proto()
+	}
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: transactions,
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial shared-weight FREEZE: %v", err)
+	}
+	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	conflictBefore := parallelVMConflictFallbackCounter.Snapshot().Count()
+	dualCandidatesBefore := parallelVMDualOracleCandidatesCounter.Snapshot().Count()
+	dualMatchesBefore := parallelVMDualOracleMatchesCounter.Snapshot().Count()
+	dualErrorsBefore := parallelVMDualOracleErrorsCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
+	if err != nil {
+		t.Fatalf("parallel shared-weight FREEZE: %v", err)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 1 {
+		t.Fatalf("shared-weight FREEZE publications = %d, want 1", published)
+	}
+	if conflicts := parallelVMConflictFallbackCounter.Snapshot().Count() - conflictBefore; conflicts != 1 {
+		t.Fatalf("shared-weight FREEZE conflict fallbacks = %d, want 1", conflicts)
+	}
+	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualCandidatesBefore; candidates != 1 {
+		t.Fatalf("shared-weight FREEZE dual-oracle candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualMatchesBefore; matches != 1 {
+		t.Fatalf("shared-weight FREEZE dual-oracle matches = %d, want 1", matches)
+	}
+	if failures := parallelVMDualOracleErrorsCounter.Snapshot().Count() - dualErrorsBefore; failures != 0 {
+		t.Fatalf("shared-weight FREEZE dual-oracle errors = %d, want 0", failures)
+	}
+	if len(serialInfos) != len(parallelInfos) {
+		t.Fatalf("shared-weight FREEZE info count serial=%d parallel=%d", len(serialInfos), len(parallelInfos))
+	}
+	for index := range serialInfos {
+		if !proto.Equal(serialInfos[index], parallelInfos[index]) {
+			t.Fatalf("shared-weight FREEZE tx %d receipt mismatch\nserial=%v\nparallel=%v", index, serialInfos[index], parallelInfos[index])
+		}
+	}
+	for name, statedb := range map[string]*state.StateDB{"serial": serialState, "parallel": parallelState} {
+		if got := statedb.DynamicProperties().TotalEnergyWeight(); got != 2 {
+			t.Fatalf("%s total energy weight = %d, want 2", name, got)
+		}
+		for _, contractAddr := range contracts {
+			if got := statedb.GetBalance(contractAddr); got != 1_000_000 {
+				t.Fatalf("%s contract %s balance = %d, want 1000000", name, contractAddr.Hex(), got)
+			}
+			frozen, freezeErr := statedb.GetAccountFrozenEnergyV1(contractAddr)
+			if freezeErr != nil || frozen != 1_000_000 {
+				t.Fatalf("%s contract %s frozen energy = %d, err=%v, want 1000000", name, contractAddr.Hex(), frozen, freezeErr)
+			}
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("shared-weight FREEZE roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
+func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetAllowTvmVote(true)
+	dynProps.SetCurrentCycleNumber(10)
+	dynProps.SetNewRewardAlgorithmEffectiveCycle(0)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x8b)
+	witness := testProcessorAddr(0x8c)
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.AddBalance(contractAddr, 1_000)
+	base.SetAllowance(contractAddr, 50)
+	base.SetVotes(contractAddr, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 100}})
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	// WITHDRAWREWARD; POP; STOP. This writes exact account scalar fields and
+	// reward-cursor/account-vote AccountKV rows from inside TVM execution.
+	base.SetCode(contractAddr, []byte{0xd9, 0x50, 0x00})
+	if err := base.WriteBeginCycle(contractAddr.Bytes(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteWitnessVI(0, witness.Bytes(), new(big.Int)); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.WriteWitnessVI(9, witness.Bytes(), big.NewInt(3_000_000_000_000_000_000)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	tx.Proto().RawData.FeeLimit = 10_000_000
+	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial VM reward withdrawal: %v", err)
+	}
+	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	unavailableBefore := parallelVMUnavailableFallbackCounter.Snapshot().Count()
+	conflictBefore := parallelVMConflictFallbackCounter.Snapshot().Count()
+	preflightBefore := parallelVMPreflightFallbackCounter.Snapshot().Count()
+	publicNetBefore := parallelVMPublicNetFallbackCounter.Snapshot().Count()
+	blockEnergyBefore := parallelVMBlockEnergyFallbackCounter.Snapshot().Count()
+	dualCandidatesBefore := parallelVMDualOracleCandidatesCounter.Snapshot().Count()
+	dualMatchesBefore := parallelVMDualOracleMatchesCounter.Snapshot().Count()
+	dualErrorsBefore := parallelVMDualOracleErrorsCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
+	if err != nil {
+		t.Fatalf("parallel VM reward withdrawal: %v", err)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 0 {
+		t.Fatalf("VM reward withdrawal publications = %d, want 0; fallback unavailable/conflict/preflight/public-net/energy=%d/%d/%d/%d/%d",
+			published,
+			parallelVMUnavailableFallbackCounter.Snapshot().Count()-unavailableBefore,
+			parallelVMConflictFallbackCounter.Snapshot().Count()-conflictBefore,
+			parallelVMPreflightFallbackCounter.Snapshot().Count()-preflightBefore,
+			parallelVMPublicNetFallbackCounter.Snapshot().Count()-publicNetBefore,
+			parallelVMBlockEnergyFallbackCounter.Snapshot().Count()-blockEnergyBefore)
+	}
+	if fallbacks := parallelVMConflictFallbackCounter.Snapshot().Count() - conflictBefore; fallbacks != 1 {
+		t.Fatalf("VM reward withdrawal version-gate fallbacks = %d, want 1", fallbacks)
+	}
+	if otherFallbacks := parallelVMUnavailableFallbackCounter.Snapshot().Count() - unavailableBefore +
+		parallelVMPreflightFallbackCounter.Snapshot().Count() - preflightBefore +
+		parallelVMPublicNetFallbackCounter.Snapshot().Count() - publicNetBefore +
+		parallelVMBlockEnergyFallbackCounter.Snapshot().Count() - blockEnergyBefore; otherFallbacks != 0 {
+		t.Fatalf("VM reward withdrawal other fallbacks = %d, want 0", otherFallbacks)
+	}
+	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualCandidatesBefore; candidates != 0 {
+		t.Fatalf("VM reward withdrawal dual-oracle candidates = %d, want 0 before admission", candidates)
+	}
+	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualMatchesBefore; matches != 0 {
+		t.Fatalf("VM reward withdrawal dual-oracle matches = %d, want 0 before admission", matches)
+	}
+	if failures := parallelVMDualOracleErrorsCounter.Snapshot().Count() - dualErrorsBefore; failures != 0 {
+		t.Fatalf("VM reward withdrawal dual-oracle errors = %d, want 0", failures)
+	}
+	if len(serialInfos) != 1 || len(parallelInfos) != 1 || !proto.Equal(serialInfos[0], parallelInfos[0]) {
+		t.Fatalf("VM reward withdrawal receipt mismatch\nserial=%v\nparallel=%v", serialInfos, parallelInfos)
+	}
+	for name, statedb := range map[string]*state.StateDB{"serial": serialState, "parallel": parallelState} {
+		if got := statedb.GetBalance(contractAddr); got != 1_350 {
+			t.Fatalf("%s contract balance = %d, want 1350", name, got)
+		}
+		if got := statedb.GetAllowance(contractAddr); got != 0 {
+			t.Fatalf("%s contract allowance = %d, want 0", name, got)
+		}
+		if got := statedb.GetLatestWithdrawTime(contractAddr); got != block.Timestamp() {
+			t.Fatalf("%s latest withdraw time = %d, want %d", name, got, block.Timestamp())
+		}
+		if got := statedb.ReadBeginCycle(contractAddr.Bytes()); got != 10 {
+			t.Fatalf("%s begin cycle = %d, want 10", name, got)
+		}
+		if got := statedb.ReadEndCycle(contractAddr.Bytes()); got != 11 {
+			t.Fatalf("%s end cycle = %d, want 11", name, got)
+		}
+		if vote := statedb.ReadCycleAccountVote(10, contractAddr.Bytes()); vote == nil {
+			t.Fatalf("%s cycle account-vote snapshot is absent", name)
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("VM reward withdrawal roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+}
+
+func TestProcessBlockVMSelfDestructFallsBackBeforeOracle(t *testing.T) {
+	base := newTestState(t)
+	dynProps := base.DynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowBlackHoleOptimization(true)
+	dynProps.SetLatestBlockHeaderTimestamp(30_000)
+	passVersion3_6_5(base, 27)
+
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x8d)
+	beneficiary := testProcessorAddr(0x8e)
+	// Before allow_tvm_energy_adjustment, java-tron compares only the first
+	// 20 bytes of the 21-byte TRON address when deciding whether SELFDESTRUCT
+	// targets the contract itself. testProcessorAddr normally differs only in
+	// byte 20, so make the beneficiary distinct inside that legacy comparison
+	// range; otherwise this fixture exercises the blackhole self-target path.
+	beneficiary[19] = 0x8e
+	base.CreateAccount(owner, corepb.AccountType_Normal)
+	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+	base.CreateAccount(beneficiary, corepb.AccountType_Normal)
+	base.AddBalance(beneficiary, 10)
+	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	base.AddBalance(contractAddr, 7_777)
+	base.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
+	})
+	code := append([]byte{0x73}, beneficiary[1:]...)
+	base.SetCode(contractAddr, append(code, 0xff))
+	if _, err := base.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	serialState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
+	parallelState, err := base.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
+
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	tx.Proto().RawData.FeeLimit = 10_000_000
+	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
+		}},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+		infos, _, processErr := processBlockWithOptions(
+			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
+			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
+			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
+			options,
+		)
+		return infos, processErr
+	}
+	serialInfos, err := run(serialState, processBlockOptions{})
+	if err != nil {
+		t.Fatalf("serial VM selfdestruct: %v", err)
+	}
+	publishedBefore := parallelVMPublishedCounter.Snapshot().Count()
+	unavailableBefore := parallelVMUnavailableFallbackCounter.Snapshot().Count()
+	dualCandidatesBefore := parallelVMDualOracleCandidatesCounter.Snapshot().Count()
+	dualMatchesBefore := parallelVMDualOracleMatchesCounter.Snapshot().Count()
+	dualErrorsBefore := parallelVMDualOracleErrorsCounter.Snapshot().Count()
+	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
+	if err != nil {
+		t.Fatalf("parallel VM selfdestruct fallback: %v", err)
+	}
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 0 {
+		t.Fatalf("VM selfdestruct publications = %d, want 0", published)
+	}
+	if fallbacks := parallelVMUnavailableFallbackCounter.Snapshot().Count() - unavailableBefore; fallbacks != 1 {
+		t.Fatalf("VM selfdestruct unavailable fallbacks = %d, want 1", fallbacks)
+	}
+	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualCandidatesBefore; candidates != 0 {
+		t.Fatalf("VM selfdestruct dual-oracle candidates = %d, want 0 before admission", candidates)
+	}
+	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualMatchesBefore; matches != 0 {
+		t.Fatalf("VM selfdestruct dual-oracle matches = %d, want 0 before admission", matches)
+	}
+	if failures := parallelVMDualOracleErrorsCounter.Snapshot().Count() - dualErrorsBefore; failures != 0 {
+		t.Fatalf("VM selfdestruct dual-oracle errors = %d, want 0", failures)
+	}
+	if len(serialInfos) != 1 || len(parallelInfos) != 1 || !proto.Equal(serialInfos[0], parallelInfos[0]) {
+		t.Fatalf("VM selfdestruct receipt mismatch\nserial=%v\nparallel=%v", serialInfos, parallelInfos)
+	}
+	for name, statedb := range map[string]*state.StateDB{"serial": serialState, "parallel": parallelState} {
+		if statedb.AccountExists(contractAddr) {
+			t.Fatalf("%s selfdestructed contract still exists", name)
+		}
+		if got := statedb.GetBalance(beneficiary); got != 7_787 {
+			t.Fatalf("%s beneficiary balance = %d, want 7787", name, got)
+		}
+		if got := statedb.GetBalance(params.BlackholeAddress); got != 0 {
+			t.Fatalf("%s blackhole balance = %d, want 0 for distinct beneficiary", name, got)
+		}
+	}
+	serialRoot, err := serialState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelRoot, err := parallelState.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serialRoot != parallelRoot {
+		t.Fatalf("VM selfdestruct roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
 	}
 }
 
@@ -1111,6 +3028,10 @@ func TestProcessBlockVMPublisherRetainsCachedCodeAfterHotPrune(t *testing.T) {
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
+	dynProps.SetAllowDynamicEnergy(true)
+	dynProps.SetCurrentCycleNumber(10)
+	dynProps.SetDynamicEnergyIncreaseFactor(2_000)
+	dynProps.SetDynamicEnergyMaxFactor(10_000)
 	dynProps.SetAllowBlackHoleOptimization(true)
 	dynProps.SetLatestBlockHeaderTimestamp(30_000)
 	passVersion3_6_5(base, 27)
@@ -1126,6 +3047,11 @@ func TestProcessBlockVMPublisherRetainsCachedCodeAfterHotPrune(t *testing.T) {
 	})
 	code := []byte{0x60, 0x01, 0x60, 0x02, 0x01, 0x50, 0x00}
 	base.SetCode(contractAddr, code)
+	contractState := types.NewContractState(10)
+	contractState.SetEnergyFactor(5_000)
+	if err := base.WriteContractState(contractAddr, contractState); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := base.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -1186,6 +3112,9 @@ func TestProcessBlockVMPublisherRetainsCachedCodeAfterHotPrune(t *testing.T) {
 	}
 	if serialInfos[0].GetReceipt().GetEnergyUsageTotal() == 0 {
 		t.Fatal("serial contract execution consumed no energy")
+	}
+	if serialInfos[0].GetReceipt().GetEnergyPenaltyTotal() == 0 {
+		t.Fatal("serial contract execution omitted its dynamic-energy penalty")
 	}
 	if !proto.Equal(serialInfos[0], parallelInfos[0]) {
 		t.Fatalf("cached-code VM info mismatch\nserial=%v\nparallel=%v", serialInfos[0], parallelInfos[0])
@@ -1311,6 +3240,12 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 	serialVerifyCandidatesBefore := parallelVMSerialVerifyCandidatesCounter.Snapshot().Count()
 	serialVerifyMatchesBefore := parallelVMSerialVerifyMatchesCounter.Snapshot().Count()
 	serialVerifyErrorsBefore := parallelVMSerialVerifyErrorsCounter.Snapshot().Count()
+	dualOracleCandidatesBefore := parallelVMDualOracleCandidatesCounter.Snapshot().Count()
+	dualOracleMatchesBefore := parallelVMDualOracleMatchesCounter.Snapshot().Count()
+	dualOracleInfoMismatchesBefore := parallelVMDualOracleInfoMismatchCounter.Snapshot().Count()
+	dualOracleWriteMismatchesBefore := parallelVMDualOracleWriteMismatchCounter.Snapshot().Count()
+	dualOracleBalanceMismatchesBefore := parallelVMDualOracleBalanceMismatchCounter.Snapshot().Count()
+	dualOracleErrorsBefore := parallelVMDualOracleErrorsCounter.Snapshot().Count()
 	mismatchesBefore := parallelVMAsyncRetryInfoMismatchCounter.Snapshot().Count() +
 		parallelVMAsyncRetryWriteMismatchCounter.Snapshot().Count() +
 		parallelVMAsyncRetryBalanceMismatchCounter.Snapshot().Count()
@@ -1403,6 +3338,24 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 	}
 	if failures := parallelVMSerialVerifyErrorsCounter.Snapshot().Count() - serialVerifyErrorsBefore; failures != 0 {
 		t.Fatalf("async VM retry boundary serial verification errors = %d, want 0", failures)
+	}
+	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualOracleCandidatesBefore; candidates != 1 {
+		t.Fatalf("async VM retry dual-oracle candidates = %d, want 1", candidates)
+	}
+	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualOracleMatchesBefore; matches != 1 {
+		t.Fatalf("async VM retry dual-oracle matches = %d, want 1", matches)
+	}
+	if mismatches := parallelVMDualOracleInfoMismatchCounter.Snapshot().Count() - dualOracleInfoMismatchesBefore; mismatches != 0 {
+		t.Fatalf("async VM retry dual-oracle info mismatches = %d, want 0", mismatches)
+	}
+	if mismatches := parallelVMDualOracleWriteMismatchCounter.Snapshot().Count() - dualOracleWriteMismatchesBefore; mismatches != 0 {
+		t.Fatalf("async VM retry dual-oracle write mismatches = %d, want 0", mismatches)
+	}
+	if mismatches := parallelVMDualOracleBalanceMismatchCounter.Snapshot().Count() - dualOracleBalanceMismatchesBefore; mismatches != 0 {
+		t.Fatalf("async VM retry dual-oracle balance mismatches = %d, want 0", mismatches)
+	}
+	if failures := parallelVMDualOracleErrorsCounter.Snapshot().Count() - dualOracleErrorsBefore; failures != 0 {
+		t.Fatalf("async VM retry dual-oracle errors = %d, want 0", failures)
 	}
 	if published := parallelVMPublishedCounter.Snapshot().Count() - vmPublishedBefore; published != 1 {
 		t.Fatalf("VM publications = %d, want 1 async retry descendant", published)
@@ -1803,6 +3756,9 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	}
 	retryCandidatesBefore := parallelTransferRetryCandidatesCounter.Snapshot().Count()
 	retryPublishedBefore := parallelTransferRetryPublishedCounter.Snapshot().Count()
+	allPublishedBefore := parallelTransferPublishedCounter.Snapshot().Count()
+	serialVerifyBefore := parallelTransferSerialVerifyCandidatesCounter.Snapshot().Count()
+	serialVerifyMatchesBefore := parallelTransferSerialVerifyMatchesCounter.Snapshot().Count()
 	publishedBefore := discardShadowRetryActualPublishedCounter.Snapshot().Count()
 	writeMatchesBefore := discardShadowRetryActualPublishedWriteOKCounter.Snapshot().Count()
 	writeMismatchesBefore := discardShadowRetryActualPublishedWriteMismatchCounter.Snapshot().Count()
@@ -1833,6 +3789,12 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	if published := parallelTransferRetryPublishedCounter.Snapshot().Count() - retryPublishedBefore; published != 1 {
 		t.Fatalf("async retry publications = %d, want 1", published)
 	}
+	serialCandidates := parallelTransferSerialVerifyCandidatesCounter.Snapshot().Count() - serialVerifyBefore
+	serialMatches := parallelTransferSerialVerifyMatchesCounter.Snapshot().Count() - serialVerifyMatchesBefore
+	allPublished := parallelTransferPublishedCounter.Snapshot().Count() - allPublishedBefore
+	if allPublished < 1 || serialCandidates != allPublished || serialMatches != allPublished {
+		t.Fatalf("async block transfer publications/serial candidates/matches = %d/%d/%d, want equal non-zero counts", allPublished, serialCandidates, serialMatches)
+	}
 	if published := discardShadowRetryActualPublishedCounter.Snapshot().Count() - publishedBefore; published != 1 {
 		t.Fatalf("async retry published results = %d, want 1", published)
 	}
@@ -1855,8 +3817,11 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 		if fullCaptured != int64(len(transactions)) || filteredCaptured != 0 {
 			t.Fatalf("sampled write capture full/filtered = %d/%d, want %d/0", fullCaptured, filteredCaptured, len(transactions))
 		}
-	} else if fullCaptured != 3 || filteredCaptured != int64(len(transactions)-3) {
-		t.Fatalf("ordinary write capture full/filtered = %d/%d, want 3/%d", fullCaptured, filteredCaptured, len(transactions)-3)
+	} else if fullCaptured != int64(len(transactions)) || filteredCaptured != 0 {
+		// Every transaction in this fixture is a plain-transfer publication
+		// candidate. Production publication now requires a complete canonical
+		// WriteSet capture for the immediate fail-closed apply audit.
+		t.Fatalf("ordinary write capture full/filtered = %d/%d, want %d/0", fullCaptured, filteredCaptured, len(transactions))
 	}
 	if cells := versionedShadowWriteCaptureCellsCounter.Snapshot().Count() - captureCellsBefore; cells <= 0 {
 		t.Fatalf("write capture cells = %d, want > 0", cells)
@@ -1874,8 +3839,8 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	if nanos := versionedShadowWriteCaptureNanosCounter.Snapshot().Count() - captureNanosBefore; fullNanos+filteredNanos != nanos {
 		t.Fatalf("write capture full/filtered nanos = %d/%d, total %d", fullNanos, filteredNanos, nanos)
 	}
-	if blockNumber%discardShadowSampleInterval == 0 && (filteredCells != 0 || filteredNanos != 0) {
-		t.Fatalf("sampled filtered write capture cells/nanos = %d/%d, want 0/0", filteredCells, filteredNanos)
+	if filteredCaptured == 0 && (filteredCells != 0 || filteredNanos != 0) {
+		t.Fatalf("zero filtered captures produced cells/nanos = %d/%d", filteredCells, filteredNanos)
 	}
 	recorderTransactions := versionedShadowWriteCaptureRecorderTransactionsCounter.Snapshot().Count() - captureRecorderTransactionsBefore
 	recorderNanos := versionedShadowWriteCaptureRecorderNanosCounter.Snapshot().Count() - captureRecorderNanosBefore
@@ -1892,8 +3857,8 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	if blockNumber%discardShadowSampleInterval == 0 && filteredEmpty != 0 {
 		t.Fatalf("sampled filtered empty captures = %d, want 0", filteredEmpty)
 	}
-	if blockNumber%discardShadowSampleInterval != 0 && filteredEmpty == 0 {
-		t.Fatal("ordinary filtered empty captures = 0, want > 0")
+	if filteredCaptured == 0 && filteredEmpty != 0 {
+		t.Fatalf("zero filtered captures produced %d empty captures", filteredEmpty)
 	}
 	if unsupported := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count() - captureUnsupportedBefore; unsupported != 0 {
 		t.Fatalf("write capture unsupported = %d, want 0", unsupported)
@@ -2981,6 +4946,7 @@ func TestBuildTransactionInfo_VMReceiptAndLogShapeMatchesJavaTron(t *testing.T) 
 	tx := makeTestTriggerTx(1, contractAddr, []byte{0x12, 0x34})
 	result := &actuator.Result{
 		ContractRet:           int32(corepb.Transaction_Result_SUCCESS),
+		EnergyPenaltyTotal:    19,
 		ContractResultPresent: true,
 		ContractResult:        []byte{0xab},
 		ContractAddress:       contractAddr.Bytes(),
@@ -3004,6 +4970,9 @@ func TestBuildTransactionInfo_VMReceiptAndLogShapeMatchesJavaTron(t *testing.T) 
 	if got := info.Receipt.Result; got != corepb.Transaction_Result_SUCCESS {
 		t.Fatalf("receipt result: got %s, want SUCCESS", got)
 	}
+	if got := info.Receipt.EnergyPenaltyTotal; got != 19 {
+		t.Fatalf("receipt energy penalty total: got %d, want 19", got)
+	}
 	if len(info.ContractResult) != 1 || string(info.ContractResult[0]) != string([]byte{0xab}) {
 		t.Fatalf("contractResult: got %x, want ab", info.ContractResult)
 	}
@@ -3020,8 +4989,151 @@ func TestBuildTransactionInfo_VMReceiptAndLogShapeMatchesJavaTron(t *testing.T) 
 	if len(info.Log[0].Topics) != 1 || string(info.Log[0].Topics[0]) != string([]byte{0x01}) {
 		t.Fatalf("log topics: got %x, want 01", info.Log[0].Topics)
 	}
-	if len(info.InternalTransactions) != 0 {
-		t.Fatalf("internal_transactions: got %d, want omitted by default", len(info.InternalTransactions))
+	if len(info.InternalTransactions) != 1 || !proto.Equal(info.InternalTransactions[0], result.InternalTransactions[0]) {
+		t.Fatalf("internal_transactions: got %+v, want exact VM result", info.InternalTransactions)
+	}
+	if cap(info.InternalTransactions) != len(info.InternalTransactions) {
+		t.Fatal("internal transaction view exposes arena spare capacity")
+	}
+}
+
+func TestFilterTransactionInfoInternalTransactionsMatchesJavaConfig(t *testing.T) {
+	makeInfo := func() []*corepb.TransactionInfo {
+		return []*corepb.TransactionInfo{{
+			InternalTransactions: []*corepb.InternalTransaction{
+				{Note: []byte("call")},
+				{Note: []byte("freezeForEnergy")},
+				{Note: []byte("cancelAllUnfreezeV2"), Extra: `{"BANDWIDTH":1,"ENERGY":2,"TRON_POWER":3}`},
+				{Note: []byte("suicide")},
+			},
+		}}
+	}
+
+	t.Run("disabled", func(t *testing.T) {
+		infos := makeInfo()
+		filterTransactionInfoInternalTransactions(infos, false, true, true)
+		if infos[0].InternalTransactions != nil {
+			t.Fatalf("disabled persistence retained %+v", infos[0].InternalTransactions)
+		}
+	})
+
+	t.Run("basic_only", func(t *testing.T) {
+		infos := makeInfo()
+		filterTransactionInfoInternalTransactions(infos, true, false, true)
+		got := infos[0].InternalTransactions
+		if len(got) != 2 || string(got[0].Note) != "call" || string(got[1].Note) != "suicide" {
+			t.Fatalf("basic filter = %+v, want call/suicide", got)
+		}
+		if cap(got) != len(got) {
+			t.Fatalf("basic filtered view exposes spare capacity: len=%d cap=%d", len(got), cap(got))
+		}
+	})
+
+	t.Run("featured_without_cancel_details", func(t *testing.T) {
+		infos := makeInfo()
+		filterTransactionInfoInternalTransactions(infos, true, true, false)
+		got := infos[0].InternalTransactions
+		if len(got) != 4 || got[2].Extra != "" {
+			t.Fatalf("featured filter = %+v, want all records and empty cancel Extra", got)
+		}
+	})
+
+	t.Run("featured_with_cancel_details", func(t *testing.T) {
+		infos := makeInfo()
+		filterTransactionInfoInternalTransactions(infos, true, true, true)
+		got := infos[0].InternalTransactions
+		if len(got) != 4 || got[2].Extra != `{"BANDWIDTH":1,"ENERGY":2,"TRON_POWER":3}` {
+			t.Fatalf("featured detailed filter = %+v", got)
+		}
+	})
+}
+
+func TestBuildTransactionInfoMapsEveryActuatorCarrier(t *testing.T) {
+	contractAddr := testProcessorAddr(2)
+	tx := makeTestTriggerTx(1, contractAddr, []byte{0x12})
+	internal := &corepb.InternalTransaction{Hash: []byte{0x44}, Note: []byte("call")}
+	detail := &corepb.MarketOrderDetail{
+		MakerOrderId:     []byte{0x51},
+		TakerOrderId:     []byte{0x52},
+		FillSellQuantity: 53,
+		FillBuyQuantity:  54,
+	}
+	result := &actuator.Result{
+		Fee:                           101,
+		EnergyUsageTotal:              4,
+		EnergyPenaltyTotal:            8,
+		EnergyUsed:                    1,
+		EnergyFee:                     2,
+		OriginEnergyUsage:             3,
+		NetUsage:                      5,
+		NetFee:                        6,
+		NetFeeForBandwidth:            true,
+		AssetIssueID:                  "7",
+		WithdrawAmount:                15,
+		UnfreezeAmount:                16,
+		WithdrawExpireAmount:          28,
+		CancelUnfreezeV2Amount:        map[string]int64{"ENERGY": 29},
+		ExchangeReceivedAmount:        18,
+		ExchangeInjectAnotherAmount:   19,
+		ExchangeWithdrawAnotherAmount: 20,
+		ShieldedTransactionFee:        22,
+		ExchangeID:                    21,
+		OrderID:                       []byte{0x25},
+		OrderDetails:                  []*corepb.MarketOrderDetail{detail},
+		ContractResult:                []byte{0xaa},
+		ContractResultPresent:         true,
+		ContractAddress:               contractAddr.Bytes(),
+		Logs: []vm.Log{{
+			Address: contractAddr,
+			Data:    []byte{0xbb},
+			Topics:  [][]byte{{0xcc}},
+		}},
+		InternalTransactions: []*corepb.InternalTransaction{internal},
+		ContractRet:          int32(corepb.Transaction_Result_REVERT),
+		ResMessage:           []byte("failed"),
+	}
+	hash := tx.Hash()
+	want := &corepb.TransactionInfo{
+		Id:              hash[:],
+		Fee:             107,
+		BlockNumber:     30,
+		BlockTimeStamp:  31,
+		ContractResult:  [][]byte{{0xaa}},
+		ContractAddress: contractAddr.Bytes(),
+		Receipt: &corepb.ResourceReceipt{
+			EnergyUsage:        1,
+			EnergyFee:          2,
+			OriginEnergyUsage:  3,
+			EnergyUsageTotal:   4,
+			NetUsage:           5,
+			NetFee:             6,
+			Result:             corepb.Transaction_Result_REVERT,
+			EnergyPenaltyTotal: 8,
+		},
+		Log: []*corepb.TransactionInfo_Log{{
+			Address: contractAddr.Bytes()[1:],
+			Data:    []byte{0xbb},
+			Topics:  [][]byte{{0xcc}},
+		}},
+		Result:                        corepb.TransactionInfo_FAILED,
+		ResMessage:                    []byte("failed"),
+		AssetIssueID:                  "7",
+		WithdrawAmount:                15,
+		UnfreezeAmount:                16,
+		InternalTransactions:          []*corepb.InternalTransaction{internal},
+		ExchangeReceivedAmount:        18,
+		ExchangeInjectAnotherAmount:   19,
+		ExchangeWithdrawAnotherAmount: 20,
+		ExchangeId:                    21,
+		ShieldedTransactionFee:        22,
+		OrderId:                       []byte{0x25},
+		OrderDetails:                  []*corepb.MarketOrderDetail{detail},
+		PackingFee:                    8,
+		WithdrawExpireAmount:          28,
+		CancelUnfreezeV2Amount:        map[string]int64{"ENERGY": 29},
+	}
+	if got := buildTransactionInfo(tx, result, 30, 31, true); !proto.Equal(got, want) {
+		t.Fatalf("transaction info mapping mismatch:\n got: %v\nwant: %v", got, want)
 	}
 }
 
@@ -3039,7 +5151,7 @@ func TestTransactionInfoSlotReuseClearsVariableFields(t *testing.T) {
 		InternalTransactions: []*corepb.InternalTransaction{{Note: []byte("a")}},
 	}
 	info := slot.build(tx, first, 1, 3000, false)
-	if len(info.Log) != 2 || info.InternalTransactions != nil {
+	if len(info.Log) != 2 || len(info.InternalTransactions) != 1 || string(info.InternalTransactions[0].Note) != "a" {
 		t.Fatalf("first build shape: logs=%d internal=%v", len(info.Log), info.InternalTransactions)
 	}
 
@@ -3064,19 +5176,31 @@ func TestTransactionInfoSlotReuseClearsVariableFields(t *testing.T) {
 	if !bytes.Equal(info.Log[0].Address, nonMainnet[:]) {
 		t.Fatalf("non-mainnet log address = %x, want %x", info.Log[0].Address, nonMainnet)
 	}
-	if info.InternalTransactions != nil {
-		t.Fatalf("third build internal transactions = %+v, want omitted", info.InternalTransactions)
+	if len(info.InternalTransactions) != 1 || string(info.InternalTransactions[0].Note) != "b" {
+		t.Fatalf("third build internal transactions = %+v, want b", info.InternalTransactions)
 	}
-	if cap(info.Log) != len(info.Log) {
+	if cap(info.Log) != len(info.Log) || cap(info.InternalTransactions) != len(info.InternalTransactions) {
 		t.Fatal("receipt repeated fields expose spare reusable capacity")
 	}
 }
 
-func TestTransactionInfoLogSlotsDoNotAlias(t *testing.T) {
+func TestTransactionInfoVariableFieldsDoNotAliasAcrossSlots(t *testing.T) {
 	tx := makeTestTriggerTx(1, testProcessorAddr(2), nil)
 	results := [2]*actuator.Result{
-		{ContractRet: int32(corepb.Transaction_Result_SUCCESS), Logs: []vm.Log{{Address: testProcessorAddr(2), Topics: [][]byte{{0x01}}}}},
-		{ContractRet: int32(corepb.Transaction_Result_SUCCESS), Logs: []vm.Log{{Address: testProcessorAddr(3), Topics: [][]byte{{0x02}}}}},
+		{
+			ContractRet: int32(corepb.Transaction_Result_SUCCESS),
+			Logs:        []vm.Log{{Address: testProcessorAddr(2), Topics: [][]byte{{0x01}}}},
+			InternalTransactions: []*corepb.InternalTransaction{{
+				Hash: []byte{0x11}, Note: []byte("first"),
+			}},
+		},
+		{
+			ContractRet: int32(corepb.Transaction_Result_SUCCESS),
+			Logs:        []vm.Log{{Address: testProcessorAddr(3), Topics: [][]byte{{0x02}}}},
+			InternalTransactions: []*corepb.InternalTransaction{{
+				Hash: []byte{0x22}, Note: []byte("second"),
+			}},
+		},
 	}
 	slots := make([]transactionInfoSlot, 2)
 	first := slots[0].build(tx, results[0], 1, 3000, false)
@@ -3085,6 +5209,11 @@ func TestTransactionInfoLogSlotsDoNotAlias(t *testing.T) {
 	first.Log[0].Address[0] ^= 0xff
 	if !bytes.Equal(second.Log[0].Address, secondAddress) {
 		t.Fatal("receipt log address buffers alias across transaction slots")
+	}
+	secondInternalHash := append([]byte(nil), second.InternalTransactions[0].Hash...)
+	first.InternalTransactions[0].Hash[0] ^= 0xff
+	if !bytes.Equal(second.InternalTransactions[0].Hash, secondInternalHash) {
+		t.Fatal("receipt internal transactions alias across transaction slots")
 	}
 }
 

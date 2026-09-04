@@ -1,9 +1,15 @@
 package core
 
 import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -138,6 +144,661 @@ func TestBlockChainInsertBlock(t *testing.T) {
 	stored := rawdb.ReadBlock(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), 1)
 	if stored == nil {
 		t.Fatal("block 1 not stored")
+	}
+}
+
+func TestBlockChainSpeculativeSafetyCircuitRetriesBlockSerially(t *testing.T) {
+	for _, asyncCommit := range []bool{false, true} {
+		asyncCommit := asyncCommit
+		name := "sync-commit"
+		if asyncCommit {
+			name = "async-commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			diskdb := ethrawdb.NewMemoryDatabase()
+			genesis := &params.Genesis{
+				Config:    params.MainnetChainConfig,
+				Timestamp: 0,
+				Accounts: []params.GenesisAccount{
+					{Address: testCoreAddr(1), Balance: 1_000_000},
+				},
+			}
+			_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = bc.Close() })
+			bc.SetAsyncCommit(asyncCommit)
+			bc.SetParallelTransferExecution(true)
+			bc.SetParallelVMExecution(true)
+			failedAttemptRawKey := []byte("speculative-safety-failed-attempt")
+
+			var attempts [3]int
+			bc.speculativeSafetyTestHook = func(block *types.Block, options processBlockOptions) error {
+				attempts[block.Number()]++
+				if block.Number() == 1 {
+					if !options.parallelTransfers || !options.parallelVM {
+						t.Fatalf("block 1 options = %+v, want both speculative publishers", options)
+					}
+					return nil
+				}
+				if attempts[2] == 1 {
+					if !options.parallelTransfers || !options.parallelVM {
+						t.Fatalf("first block 2 attempt options = %+v, want both speculative publishers", options)
+					}
+					if err := bc.buffer.Put(failedAttemptRawKey, []byte("must-be-discarded")); err != nil {
+						t.Fatalf("stage failed-attempt raw write: %v", err)
+					}
+					return fmt.Errorf("%w: injected", errSpeculativePublicationAudit)
+				}
+				if options.parallelTransfers || options.parallelVM {
+					t.Fatalf("retry options = %+v, want serial execution", options)
+				}
+				if exists, err := bc.buffer.Has(failedAttemptRawKey); err != nil || exists {
+					t.Fatalf("failed-attempt raw write survived into serial retry: exists=%t err=%v", exists, err)
+				}
+				return nil
+			}
+			block1 := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+				Number: 1, Timestamp: 3_000, ParentHash: genesisHash.Bytes(),
+			}}})
+			block2 := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+				Number: 2, Timestamp: 6_000, ParentHash: block1.Hash().Bytes(),
+			}}})
+			if err := bc.InsertBlocks([]*types.Block{block1, block2}); err != nil {
+				t.Fatalf("insert range with serial safety retry: %v", err)
+			}
+			if attempts != [3]int{0, 1, 2} {
+				t.Fatalf("execution attempts = %v, want block 1 once and block 2 speculative plus serial retry", attempts)
+			}
+			if !bc.speculativeSafetyDisabled.Load() {
+				t.Fatal("speculative safety circuit did not remain open")
+			}
+			if bc.CurrentBlock().Hash() != block2.Hash() {
+				t.Fatalf("current block = %x, want %x", bc.CurrentBlock().Hash(), block2.Hash())
+			}
+			bc.WaitForCommitSettled()
+			if exists, err := diskdb.Has(failedAttemptRawKey); err != nil || exists {
+				t.Fatalf("failed-attempt raw write reached durable DB: exists=%t err=%v", exists, err)
+			}
+			incident, ok, err := rawdb.ReadExecutionSafetyIncident(diskdb)
+			if err != nil || !ok || incident.Kind != rawdb.ExecutionSafetyIncidentSpeculativePublication ||
+				incident.BlockNum != block2.Number() || incident.BlockHash != block2.Hash() {
+				t.Fatalf("persisted safety incident = %+v,%t,%v", incident, ok, err)
+			}
+			reopened, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+			if err != nil {
+				t.Fatalf("reopen marked datadir: %v", err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			if !reopened.speculativeSafetyDisabled.Load() {
+				t.Fatal("persisted safety incident did not restore circuit after restart")
+			}
+		})
+	}
+}
+
+type executionSafetyMarkerFailStore struct {
+	ethdb.Database
+	putErr  error
+	syncErr error
+	syncs   int
+}
+
+func (s *executionSafetyMarkerFailStore) Put(key, value []byte) error {
+	if string(key) == "execution-safety-incident-v1" && s.putErr != nil {
+		return s.putErr
+	}
+	return s.Database.Put(key, value)
+}
+
+func (s *executionSafetyMarkerFailStore) SyncKeyValue() error {
+	s.syncs++
+	return s.syncErr
+}
+
+func TestBlockChainSpeculativeSafetyCircuitRequiresDurableMarker(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		putErr           error
+		syncErr          error
+		markerMayBeRead  bool
+		wantDurableSyncs int
+	}{
+		{name: "put-failure", putErr: errors.New("marker write boom")},
+		{name: "sync-failure", syncErr: errors.New("marker sync boom"), markerMayBeRead: true, wantDurableSyncs: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := ethrawdb.NewMemoryDatabase()
+			diskdb := &executionSafetyMarkerFailStore{Database: base, putErr: tc.putErr, syncErr: tc.syncErr}
+			wantErr := tc.putErr
+			if wantErr == nil {
+				wantErr = tc.syncErr
+			}
+			genesis := &params.Genesis{
+				Config:    params.MainnetChainConfig,
+				Timestamp: 0,
+				Accounts:  []params.GenesisAccount{{Address: testCoreAddr(1), Balance: 1_000_000}},
+			}
+			_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = bc.Close() })
+			bc.SetParallelTransferExecution(true)
+			persistErrorsBefore := parallelExecutionSafetyPersistErrorsCounter.Snapshot().Count()
+			attempts := 0
+			bc.speculativeSafetyTestHook = func(*types.Block, processBlockOptions) error {
+				attempts++
+				return fmt.Errorf("%w: injected", errSpeculativePublicationAudit)
+			}
+			block := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+				Number: 1, Timestamp: 3_000, ParentHash: genesisHash.Bytes(),
+			}}})
+			err = bc.InsertBlock(block)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("insert marker failure = %v, want %v", err, wantErr)
+			}
+			if !bc.speculativeSafetyDisabled.Load() {
+				t.Fatal("marker persistence failure did not disable speculative execution in memory")
+			}
+			latchedErr := bc.speculativeSafetyPersistenceErr.Load()
+			if latchedErr == nil || !errors.Is(*latchedErr, wantErr) {
+				t.Fatalf("persistence failure latch = %v, want %v", latchedErr, wantErr)
+			}
+			if bc.CurrentBlock().Number() != 0 {
+				t.Fatalf("head advanced to %d after marker failure", bc.CurrentBlock().Number())
+			}
+			incident, ok, readErr := rawdb.ReadExecutionSafetyIncident(base)
+			if readErr != nil || ok != tc.markerMayBeRead {
+				t.Fatalf("marker after failed persistence: ok=%t err=%v, want ok=%t", ok, readErr, tc.markerMayBeRead)
+			}
+			if ok && (incident.Kind != rawdb.ExecutionSafetyIncidentSpeculativePublication || incident.BlockHash != block.Hash()) {
+				t.Fatalf("partially durable marker = %+v, want block %s", incident, block.Hash())
+			}
+			if diskdb.syncs != tc.wantDurableSyncs {
+				t.Fatalf("durability syncs = %d, want %d", diskdb.syncs, tc.wantDurableSyncs)
+			}
+			if attempts != 1 {
+				t.Fatalf("first insertion attempts = %d, want 1", attempts)
+			}
+			err = bc.InsertBlock(block)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("second insert after marker failure = %v, want %v", err, wantErr)
+			}
+			if attempts != 1 {
+				t.Fatalf("second insertion re-entered execution: attempts=%d, want 1", attempts)
+			}
+			if got := parallelExecutionSafetyPersistErrorsCounter.Snapshot().Count() - persistErrorsBefore; got != 1 {
+				t.Fatalf("safety persistence error counter delta = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestBlockChainSpeculativeSafetyIncidentPersistsBeforeAbortFailure(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts:  []params.GenesisAccount{{Address: testCoreAddr(1), Balance: 1_000_000}},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bc.Close() })
+	bc.SetParallelTransferExecution(true)
+	bc.speculativeSafetyTestHook = func(*types.Block, processBlockOptions) error {
+		return fmt.Errorf("%w: injected", errSpeculativePublicationAudit)
+	}
+	wantAbortErr := errors.New("abort cleanup boom")
+	bc.rangeExecutorAbortTestHook = func() error { return wantAbortErr }
+	block := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Number: 1, Timestamp: 3_000, ParentHash: genesisHash.Bytes(),
+	}}})
+	err = bc.InsertBlocks([]*types.Block{block})
+	if !errors.Is(err, wantAbortErr) || !errors.Is(err, errSpeculativePublicationAudit) {
+		t.Fatalf("abort failure = %v, want abort and speculative errors", err)
+	}
+	if !bc.speculativeSafetyDisabled.Load() {
+		t.Fatal("abort failure lost in-memory safety circuit")
+	}
+	incident, ok, readErr := rawdb.ReadExecutionSafetyIncident(diskdb)
+	if readErr != nil || !ok || incident.Kind != rawdb.ExecutionSafetyIncidentSpeculativePublication || incident.BlockHash != block.Hash() {
+		t.Fatalf("abort-failure safety incident = %+v,%t,%v", incident, ok, readErr)
+	}
+	if bc.CurrentBlock().Number() != 0 {
+		t.Fatalf("head advanced to %d after abort failure", bc.CurrentBlock().Number())
+	}
+}
+
+func TestNewBlockChainRejectsMalformedExecutionSafetyMarker(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{Config: params.MainnetChainConfig}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	if err := diskdb.Put([]byte("execution-safety-incident-v1"), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig); err == nil ||
+		!strings.Contains(err.Error(), "execution safety incident") {
+		t.Fatalf("malformed marker startup error = %v", err)
+	}
+}
+
+func TestBlockChainSpeculativeSafetyCircuitRetriesForkReplaySerially(t *testing.T) {
+	for _, asyncCommit := range []bool{false, true} {
+		asyncCommit := asyncCommit
+		name := "sync-commit"
+		if asyncCommit {
+			name = "async-commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			diskdb := ethrawdb.NewMemoryDatabase()
+			genesis := &params.Genesis{
+				Config:    params.MainnetChainConfig,
+				Timestamp: 0,
+				Accounts: []params.GenesisAccount{{
+					Address: testCoreAddr(1), Balance: 1_000_000,
+				}},
+			}
+			_, _, err := SetupGenesisBlock(diskdb, genesis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = bc.Close() })
+			bc.SetAsyncCommit(asyncCommit)
+
+			makeBlock := func(number int64, timestamp int64, parent *types.Block) *types.Block {
+				return types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+					Number: number, Timestamp: timestamp, ParentHash: parent.Hash().Bytes(),
+				}}})
+			}
+			genesisBlock := bc.CurrentBlock()
+			a1 := makeBlock(1, 3_000, genesisBlock)
+			a2 := makeBlock(2, 6_000, a1)
+			for _, block := range []*types.Block{a1, a2} {
+				if err := bc.InsertBlock(block); err != nil {
+					t.Fatalf("insert canonical A%d: %v", block.Number(), err)
+				}
+			}
+			b1 := makeBlock(1, 3_001, genesisBlock)
+			b2 := makeBlock(2, 6_001, b1)
+			b3 := makeBlock(3, 9_001, b2)
+			for _, block := range []*types.Block{b1, b2} {
+				if err := bc.InsertBlock(block); err != nil {
+					t.Fatalf("insert competing B%d: %v", block.Number(), err)
+				}
+			}
+
+			bc.SetParallelTransferExecution(true)
+			bc.SetParallelVMExecution(true)
+			attempts := make(map[tcommon.Hash][]processBlockOptions)
+			bc.speculativeSafetyTestHook = func(block *types.Block, options processBlockOptions) error {
+				attempts[block.Hash()] = append(attempts[block.Hash()], options)
+				if block.Hash() == b2.Hash() && len(attempts[block.Hash()]) == 1 {
+					if !options.parallelTransfers || !options.parallelVM {
+						t.Fatalf("first fork replay options = %+v, want both speculative publishers", options)
+					}
+					return fmt.Errorf("%w: injected fork replay", errSpeculativePublicationAudit)
+				}
+				if block.Hash() == b2.Hash() && (options.parallelTransfers || options.parallelVM) {
+					t.Fatalf("fork retry options = %+v, want serial execution", options)
+				}
+				return nil
+			}
+			if err := bc.InsertBlock(b3); err != nil {
+				t.Fatalf("switch fork with serial safety retry: %v", err)
+			}
+			if got := len(attempts[b2.Hash()]); got != 2 {
+				t.Fatalf("fork block B2 attempts = %d, want speculative plus serial", got)
+			}
+			if got := attempts[b3.Hash()]; len(got) != 1 || got[0].parallelTransfers || got[0].parallelVM {
+				t.Fatalf("fork suffix B3 options = %+v, want one serial attempt", got)
+			}
+			if !bc.speculativeSafetyDisabled.Load() {
+				t.Fatal("fork replay publication failure did not open the sticky circuit")
+			}
+			if bc.CurrentBlock().Hash() != b3.Hash() {
+				t.Fatalf("current block = %x, want fork tip %x", bc.CurrentBlock().Hash(), b3.Hash())
+			}
+		})
+	}
+}
+
+func TestBlockChainSpeculativeSafetyCircuitWaitsForInflightAsyncPrefix(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: testCoreAddr(1), Balance: 1_000_000},
+		},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc.SetAsyncCommit(true)
+	bc.SetParallelTransferExecution(true)
+	bc.SetParallelVMExecution(true)
+
+	foldStarted := make(chan struct{})
+	releaseFold := make(chan struct{})
+	SetCommitFoldHookForTest(func(blockNum uint64) error {
+		if blockNum == 1 {
+			close(foldStarted)
+			<-releaseFold
+		}
+		return nil
+	})
+	t.Cleanup(func() {
+		SetCommitFoldHookForTest(nil)
+		_ = bc.Close()
+	})
+
+	var attempts [3]int
+	injected := make(chan struct{})
+	bc.speculativeSafetyTestHook = func(block *types.Block, options processBlockOptions) error {
+		attempts[block.Number()]++
+		if block.Number() == 2 && attempts[2] == 1 {
+			select {
+			case <-foldStarted:
+			case <-time.After(5 * time.Second):
+				return errors.New("block 1 async fold did not become in-flight")
+			}
+			close(injected)
+			return fmt.Errorf("%w: injected with prefix in flight", errSpeculativePublicationAudit)
+		}
+		if block.Number() == 2 && (options.parallelTransfers || options.parallelVM) {
+			return fmt.Errorf("block 2 retry options = %+v, want serial execution", options)
+		}
+		return nil
+	}
+	block1 := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Number: 1, Timestamp: 3_000, ParentHash: genesisHash.Bytes(),
+	}}})
+	block2 := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Number: 2, Timestamp: 6_000, ParentHash: block1.Hash().Bytes(),
+	}}})
+	done := make(chan error, 1)
+	go func() { done <- bc.InsertBlocks([]*types.Block{block1, block2}) }()
+
+	select {
+	case <-injected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("block 2 speculative failure was not injected")
+	}
+	close(releaseFold)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("insert range with in-flight prefix: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serial safety retry deadlocked behind in-flight async prefix")
+	}
+	if attempts != [3]int{0, 1, 2} {
+		t.Fatalf("execution attempts = %v, want block 1 once and block 2 twice", attempts)
+	}
+	if bc.CurrentBlock().Hash() != block2.Hash() {
+		t.Fatalf("current block = %x, want %x", bc.CurrentBlock().Hash(), block2.Hash())
+	}
+}
+
+func TestBlockChainPostApplyMismatchRollsBackAndRetriesRealTransferPath(t *testing.T) {
+	for _, asyncCommit := range []bool{false, true} {
+		asyncCommit := asyncCommit
+		name := "sync-commit"
+		if asyncCommit {
+			name = "async-commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			diskdb := ethrawdb.NewMemoryDatabase()
+			genesis := &params.Genesis{
+				Config:    params.MainnetChainConfig,
+				Timestamp: 0,
+				Accounts: []params.GenesisAccount{
+					{Address: testCoreAddr(1), Balance: 1_000_000},
+					{Address: testCoreAddr(2), Balance: 10},
+				},
+			}
+			_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = bc.Close() })
+			bc.SetAsyncCommit(asyncCommit)
+			bc.SetParallelTransferExecution(true)
+
+			var corruptions int
+			bc.speculativePostApplyTestHook = func(family string, txIndex int, writes state.TransactionWriteSet) {
+				if family != "Transfer" || txIndex != 0 {
+					return
+				}
+				corruptions++
+				delete(writes, state.TransactionAccessKey{
+					Kind:         state.TransactionAccessAccountField,
+					Address:      testCoreAddr(2),
+					AccountField: state.TransactionAccountFieldBalance,
+				})
+			}
+			tx := makeTestTransferTx(1, 2, 100)
+			block := types.NewBlockFromPB(&corepb.Block{
+				BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+					Number: 1, Timestamp: 3_000, ParentHash: genesisHash.Bytes(),
+				}},
+				Transactions: []*corepb.Transaction{tx.Proto()},
+			})
+			if err := bc.InsertBlocks([]*types.Block{block}); err != nil {
+				t.Fatalf("insert after real post-apply mismatch: %v", err)
+			}
+			if corruptions != 1 {
+				t.Fatalf("post-apply corruptions = %d, want one speculative attempt", corruptions)
+			}
+			if !bc.speculativeSafetyDisabled.Load() {
+				t.Fatal("real post-apply mismatch did not open the safety circuit")
+			}
+			statedb, err := bc.openCurrentState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := statedb.GetBalance(testCoreAddr(2)); got != 110 {
+				t.Fatalf("recipient balance after rollback+serial retry = %d, want 110", got)
+			}
+		})
+	}
+}
+
+func TestBlockChainPreOracleMismatchPersistsCircuitAndRetriesSerially(t *testing.T) {
+	for _, asyncCommit := range []bool{false, true} {
+		asyncCommit := asyncCommit
+		name := "sync-commit"
+		if asyncCommit {
+			name = "async-commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			diskdb := ethrawdb.NewMemoryDatabase()
+			genesis := &params.Genesis{
+				Config:    params.MainnetChainConfig,
+				Timestamp: 0,
+				Accounts: []params.GenesisAccount{
+					{Address: testCoreAddr(1), Balance: 1_000_000},
+					{Address: testCoreAddr(2), Balance: 10},
+				},
+			}
+			_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = bc.Close() })
+			bc.SetAsyncCommit(asyncCommit)
+			bc.SetParallelTransferExecution(true)
+
+			var corruptions int
+			bc.speculativePreOracleTestHook = func(family string, txIndex int, result *discardShadowTaskResult) {
+				if family != "Transfer" || txIndex != 0 {
+					return
+				}
+				corruptions++
+				key := state.TransactionAccessKey{
+					Kind:         state.TransactionAccessAccountField,
+					Address:      testCoreAddr(2),
+					AccountField: state.TransactionAccountFieldBalance,
+				}
+				value := result.writes[key]
+				value.Value = binary.BigEndian.AppendUint64(nil, binary.BigEndian.Uint64(value.Value)+1)
+				result.writes[key] = value
+			}
+			tx := makeTestTransferTx(1, 2, 100)
+			block := types.NewBlockFromPB(&corepb.Block{
+				BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+					Number: 1, Timestamp: 3_000, ParentHash: genesisHash.Bytes(),
+				}},
+				Transactions: []*corepb.Transaction{tx.Proto()},
+			})
+			if err := bc.InsertBlocks([]*types.Block{block}); err != nil {
+				t.Fatalf("insert after pre-oracle mismatch: %v", err)
+			}
+			if corruptions != 1 {
+				t.Fatalf("pre-oracle corruptions = %d, want one speculative attempt", corruptions)
+			}
+			if !bc.speculativeSafetyDisabled.Load() {
+				t.Fatal("pre-oracle mismatch did not open safety circuit")
+			}
+			incident, ok, err := rawdb.ReadExecutionSafetyIncident(diskdb)
+			if err != nil || !ok || incident.Kind != rawdb.ExecutionSafetyIncidentSpeculativePublication || incident.BlockHash != block.Hash() {
+				t.Fatalf("pre-oracle safety incident = %+v,%t,%v", incident, ok, err)
+			}
+			statedb, err := bc.openCurrentState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := statedb.GetBalance(testCoreAddr(2)); got != 110 {
+				t.Fatalf("recipient balance after pre-oracle rollback+retry = %d, want 110", got)
+			}
+		})
+	}
+}
+
+func TestBlockChainPreApplyMutationRollsBackAndRetriesRealTransferPath(t *testing.T) {
+	testBlockChainPreApplyMutationRollsBackAndRetriesRealTransferPath(t, func(writes state.TransactionWriteSet) {
+		key := state.TransactionAccessKey{
+			Kind:         state.TransactionAccessAccountField,
+			Address:      testCoreAddr(2),
+			AccountField: state.TransactionAccountFieldBalance,
+		}
+		value := writes[key]
+		value.Value = []byte{0xff}
+		writes[key] = value
+	})
+}
+
+func TestBlockChainValidPreApplyMutationIsRejectedByWriteSeal(t *testing.T) {
+	testBlockChainPreApplyMutationRollsBackAndRetriesRealTransferPath(t, func(writes state.TransactionWriteSet) {
+		key := state.TransactionAccessKey{
+			Kind:         state.TransactionAccessAccountField,
+			Address:      testCoreAddr(2),
+			AccountField: state.TransactionAccountFieldBalance,
+		}
+		value := writes[key]
+		mutated := binary.BigEndian.Uint64(value.Value) + 1
+		value.Value = binary.BigEndian.AppendUint64(nil, mutated)
+		writes[key] = value
+	})
+}
+
+func testBlockChainPreApplyMutationRollsBackAndRetriesRealTransferPath(t *testing.T, mutate func(state.TransactionWriteSet)) {
+	t.Helper()
+	for _, asyncCommit := range []bool{false, true} {
+		asyncCommit := asyncCommit
+		name := "sync-commit"
+		if asyncCommit {
+			name = "async-commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			diskdb := ethrawdb.NewMemoryDatabase()
+			genesis := &params.Genesis{
+				Config: params.MainnetChainConfig,
+				Accounts: []params.GenesisAccount{
+					{Address: testCoreAddr(1), Balance: 1_000_000},
+					{Address: testCoreAddr(2), Balance: 10},
+				},
+			}
+			_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = bc.Close() })
+			bc.SetAsyncCommit(asyncCommit)
+			bc.SetParallelTransferExecution(true)
+
+			var corruptions int
+			bc.speculativePreApplyTestHook = func(family string, txIndex int, writes state.TransactionWriteSet) {
+				if family != "Transfer" || txIndex != 0 {
+					return
+				}
+				corruptions++
+				mutate(writes)
+			}
+			tx := makeTestTransferTx(1, 2, 100)
+			block := types.NewBlockFromPB(&corepb.Block{
+				BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+					Number: 1, Timestamp: 3_000, ParentHash: genesisHash.Bytes(),
+				}},
+				Transactions: []*corepb.Transaction{tx.Proto()},
+			})
+			if err := bc.InsertBlocks([]*types.Block{block}); err != nil {
+				t.Fatalf("insert after pre-apply mutation: %v", err)
+			}
+			if corruptions != 1 {
+				t.Fatalf("pre-apply corruptions = %d, want one speculative attempt", corruptions)
+			}
+			if !bc.speculativeSafetyDisabled.Load() {
+				t.Fatal("pre-apply publication failure did not open the safety circuit")
+			}
+			statedb, err := bc.openCurrentState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := statedb.GetBalance(testCoreAddr(2)); got != 110 {
+				t.Fatalf("recipient balance after pre-apply rollback+serial retry = %d, want 110", got)
+			}
+		})
 	}
 }
 

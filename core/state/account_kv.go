@@ -1359,7 +1359,11 @@ func (s *StateDB) setAccountKVLatestView(reader statedomains.LatestReader, itera
 func (s *StateDB) readAccountKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	s.recordAccountKVRead(owner, domain, key)
 	if value, exists, ok := s.readTransactionVersionedAccountKV(owner, domain, key); ok {
-		return value, exists, nil
+		// This is the owning read path. The block-local version carrier is
+		// shared with async retry workers, so never expose its backing bytes to
+		// a public caller. readAccountKVLatestForDecoding has a separate,
+		// explicitly borrowed fast path.
+		return append([]byte(nil), value...), exists, nil
 	}
 	if s != nil && s.accountKVLatestReader != nil {
 		if reader, ok := s.accountKVLatestReader.(accountKVLatestGenerationReader); ok {

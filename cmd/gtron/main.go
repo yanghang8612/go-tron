@@ -382,13 +382,28 @@ var (
 	}
 	execParallelTransfersFlag = &cli.BoolFlag{
 		Name:    "exec.parallel-transfers",
-		Usage:   "Pre-execute plain transfers, validate typed read versions, publish in block order, and replay conflicts serially",
+		Usage:   "Pre-execute plain transfers, require exact balance/read-version admission, canonical-boundary serial verification, and post-apply audit, publish in block order, and replay conflicts serially",
 		EnvVars: []string{"GTRON_EXEC_PARALLEL_TRANSFERS"},
 	}
 	execParallelVMFlag = &cli.BoolFlag{
 		Name:    "exec.parallel-vm",
 		Usage:   "Enable sparse speculative VM publication with canonical-boundary serial verification and serial fallback",
 		EnvVars: []string{"GTRON_EXEC_PARALLEL_VM"},
+	}
+	vmSaveInternalTxFlag = &cli.BoolFlag{
+		Name:    "vm.save-internal-tx",
+		Usage:   "Persist VM internal transactions in TransactionInfo (java-tron vm.saveInternalTx)",
+		EnvVars: []string{"GTRON_VM_SAVE_INTERNAL_TX"},
+	}
+	vmSaveFeaturedInternalTxFlag = &cli.BoolFlag{
+		Name:    "vm.save-featured-internal-tx",
+		Usage:   "Also persist native freeze/vote/reward/delegation internal transactions",
+		EnvVars: []string{"GTRON_VM_SAVE_FEATURED_INTERNAL_TX"},
+	}
+	vmSaveCancelAllUnfreezeV2DetailsFlag = &cli.BoolFlag{
+		Name:    "vm.save-cancel-all-unfreeze-v2-details",
+		Usage:   "Persist CANCELALLUNFREEZEV2 per-resource amounts in internal-transaction Extra",
+		EnvVars: []string{"GTRON_VM_SAVE_CANCEL_ALL_UNFREEZE_V2_DETAILS"},
 	}
 	syncStopAtFlag = &cli.Uint64Flag{
 		Name:  "sync.stop-at",
@@ -478,6 +493,9 @@ var app = &cli.App{
 		syncAsyncCommitFlag,
 		execParallelTransfersFlag,
 		execParallelVMFlag,
+		vmSaveInternalTxFlag,
+		vmSaveFeaturedInternalTxFlag,
+		vmSaveCancelAllUnfreezeV2DetailsFlag,
 		syncStopAtFlag,
 	},
 	Before: func(ctx *cli.Context) error {
@@ -811,13 +829,25 @@ func gtron(ctx *cli.Context) error {
 		return fmt.Errorf("create blockchain: %w", err)
 	}
 	bc.SetCommitmentBranchCacheSize(commitmentCacheMiB * 1024 * 1024)
+	bc.SetInternalTransactionPersistence(cfg.SaveInternalTx, cfg.SaveFeaturedInternalTx, cfg.SaveCancelAllUnfreezeV2Details)
+	log.Info("VM internal transaction persistence configured",
+		"saveInternalTx", cfg.SaveInternalTx,
+		"saveFeaturedInternalTx", cfg.SaveFeaturedInternalTx,
+		"saveCancelAllUnfreezeV2Details", cfg.SaveCancelAllUnfreezeV2Details,
+	)
+	if cfg.SaveFeaturedInternalTx && !cfg.SaveInternalTx {
+		log.Warn("VM featured internal transactions are ineffective unless internal transactions are enabled")
+	}
+	if cfg.SaveCancelAllUnfreezeV2Details && (!cfg.SaveInternalTx || !cfg.SaveFeaturedInternalTx) {
+		log.Warn("VM cancel-all-unfreeze details are ineffective unless internal and featured internal transactions are both enabled")
+	}
 	if ctx.Bool(execParallelTransfersFlag.Name) {
 		bc.SetParallelTransferExecution(true)
-		log.Info("Parallel Transfer execution enabled", "workers", 4)
+		log.Info("Parallel Transfer execution enabled", "workers", 4, "balanceOracle", true, "serialOracle", "every-publication-zero-copy", "publishAudit", true, "serialRetryCircuit", true)
 	}
 	parallelVMEnabled := ctx.Bool(execParallelVMFlag.Name)
 	bc.SetParallelVMExecution(parallelVMEnabled)
-	log.Info("Speculative VM publication configured", "enabled", parallelVMEnabled, "workers", 4, "serialOracle", true)
+	log.Info("Speculative VM publication configured", "enabled", parallelVMEnabled, "workers", 4, "serialOracle", true, "publishAudit", true, "serialRetryCircuit", true)
 	if commitmentCacheMiB > 0 {
 		log.Info("Commitment and flat-latest base-read cache enabled", "cacheMiB", commitmentCacheMiB)
 	} else {

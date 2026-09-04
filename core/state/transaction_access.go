@@ -62,6 +62,10 @@ const (
 	TransactionAccessDynamicHash
 	TransactionAccessAccountField
 	TransactionAccessRawKV
+	// TransactionAccessKindCount is an exhaustive-switch/test sentinel, not a
+	// logical state kind. New kinds must be inserted before it and explicitly
+	// classified by recorder, schema, applier, versioning, and metrics tests.
+	TransactionAccessKindCount
 )
 
 // TransactionAccountField follows Erigon's per-account path model, adapted to
@@ -84,6 +88,10 @@ const (
 	TransactionAccountFieldLatestConsumeFreeTime
 	TransactionAccountFieldNetWindow
 	TransactionAccountFieldFrozenResource
+	// TransactionAccountFieldCount is an exhaustive-switch/test sentinel, not
+	// an addressable account field. New fields must be inserted before it and
+	// explicitly classified as publishable or read-only.
+	TransactionAccountFieldCount
 )
 
 // TransactionAccountFieldKey is kept smaller than TransactionAccessKey so hot
@@ -810,9 +818,19 @@ func (s *StateDB) recordAccountKVPrefixRead(owner tcommon.Address) {
 // SetTransactionAccessRecorder installs the same transaction-scoped recorder
 // used by StateDB. Passing nil disables capture.
 func (dp *DynamicProperties) SetTransactionAccessRecorder(recorder *TransactionAccessRecorder) {
-	if dp != nil {
-		dp.transactionAccess = recorder
+	dp.SwapTransactionAccessRecorder(recorder)
+}
+
+// SwapTransactionAccessRecorder installs recorder and returns the previous
+// transaction-scoped recorder so nested execution can restore ownership on
+// every exit.
+func (dp *DynamicProperties) SwapTransactionAccessRecorder(recorder *TransactionAccessRecorder) *TransactionAccessRecorder {
+	if dp == nil {
+		return nil
 	}
+	previous := dp.transactionAccess
+	dp.transactionAccess = recorder
+	return previous
 }
 
 // RecordPublicNetReservation retains the limit-checked free-bandwidth update

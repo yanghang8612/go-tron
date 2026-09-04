@@ -157,7 +157,7 @@ func oldRewardSum(store SnapshotReader, votes []VoteEntry, begin, end int64) int
 				continue
 			}
 			voteRate := float64(v.Count) / float64(totalVote)
-			reward += int64(voteRate * float64(totalReward))
+			reward += tcommon.JavaDoubleToInt64(voteRate * float64(totalReward))
 		}
 	}
 	return reward

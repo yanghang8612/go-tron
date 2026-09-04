@@ -415,6 +415,11 @@ func (e *canonicalRangeExecutor) Abort() error {
 	e.txRanges = nil
 	e.tipBlock = nil
 	e.lastDynProps = nil
+	if e.bc != nil && e.bc.rangeExecutorAbortTestHook != nil {
+		if hookErr := e.bc.rangeExecutorAbortTestHook(); err == nil {
+			err = hookErr
+		}
+	}
 	return err
 }
 

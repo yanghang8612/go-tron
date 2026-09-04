@@ -634,9 +634,10 @@ func (s *StateDB) addAccountTronPower(obj *stateObject, amount, expireTimeMs int
 		entry = &corepb.Account_Frozen{}
 	}
 	entry.FrozenBalance += amount
-	if expireTimeMs > entry.ExpireTime {
-		entry.ExpireTime = expireTimeMs
-	}
+	// FreezeBalanceActuator calls AccountCapsule.setFrozenForTronPower with
+	// this operation's expiry. It overwrites, rather than max-merges, the old
+	// timestamp while accumulating the balance.
+	entry.ExpireTime = expireTimeMs
 	return s.writeAccountTronPower(obj, entry)
 }
 

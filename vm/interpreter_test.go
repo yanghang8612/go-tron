@@ -1253,14 +1253,17 @@ func TestSelfDestructSelfTransfersToBlackholeBeforeRestriction(t *testing.T) {
 		t.Fatalf("internal transactions: got %d, want 1", len(evm.InternalTransactions))
 	}
 	values := evm.InternalTransactions[0].CallValueInfo
-	if len(values) != 2 {
-		t.Fatalf("callValueInfo length: got %d, want 2", len(values))
+	if len(values) != 3 {
+		t.Fatalf("callValueInfo length: got %d, want 3", len(values))
 	}
 	if got := values[0].CallValue; got != 1_000 {
 		t.Fatalf("trx callValueInfo: got %d, want 1000", got)
 	}
 	if values[1].TokenId != "1000017" || values[1].CallValue != 7 {
 		t.Fatalf("token callValueInfo: got token=%q value=%d, want 1000017/7", values[1].TokenId, values[1].CallValue)
+	}
+	if values[2].TokenId != "1000018" || values[2].CallValue != 0 {
+		t.Fatalf("zero token callValueInfo: got token=%q value=%d, want 1000018/0", values[2].TokenId, values[2].CallValue)
 	}
 	if !evm.StateDB.AccountExists(contractAddr) {
 		t.Fatal("contract account should remain visible until transaction commit")

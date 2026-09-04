@@ -159,6 +159,14 @@ func (s *StateDB) BeginBalanceTrace(blockNum int64, blockHash []byte, timestamp 
 	s.balanceTrace = newBalanceTraceRecorder(blockNum, blockHash, timestamp)
 }
 
+// BalanceTraceActive reports whether this StateDB currently owns a block-level
+// balance-trace recorder. It lets nested, rollback-only execution install a
+// temporary recorder without replacing a canonical recorder that already
+// contains earlier transactions from the block.
+func (s *StateDB) BalanceTraceActive() bool {
+	return s != nil && s.balanceTrace != nil
+}
+
 // ClearBalanceTrace discards any in-progress balance trace capture.
 func (s *StateDB) ClearBalanceTrace() {
 	s.balanceTrace = nil

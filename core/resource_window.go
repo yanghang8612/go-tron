@@ -1,7 +1,6 @@
 package core
 
 import (
-	"math"
 	"math/big"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -42,7 +41,7 @@ func computeResourceIncrease(rawWindow int64, optimized bool, lastUsage, usage, 
 		if lastTime+oldWindowSize > now {
 			delta := now - lastTime
 			decay := float64(oldWindowSize-delta) / float64(oldWindowSize)
-			averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+			averageLastUsage = tcommon.JavaMathRoundToInt64(float64(averageLastUsage) * decay)
 		} else {
 			averageLastUsage = 0
 		}

@@ -49,8 +49,9 @@ type SyncInfo struct {
 }
 
 type TriggerResult struct {
-	Result     []byte `json:"result"`
-	EnergyUsed int64  `json:"energy_used"`
+	Result        []byte `json:"result"`
+	EnergyUsed    int64  `json:"energy_used"`
+	EnergyPenalty int64  `json:"energy_penalty"`
 }
 
 type AccountResource struct {

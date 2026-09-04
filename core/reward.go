@@ -45,7 +45,7 @@ func payBlockRewardWithBrokerage(db kvReadWriter, statedb *state.StateDB, dp *st
 	//   double brokerageRate = (double) brokerage / 100;
 	//   long brokerageAmount = (long) (brokerageRate * value);
 	brokerageRate := float64(brokerage) / 100.0
-	brokerageAmount := int64(brokerageRate * float64(amount))
+	brokerageAmount := tcommon.JavaDoubleToInt64(brokerageRate * float64(amount))
 	voterAmount := amount - brokerageAmount
 
 	if voterAmount > 0 {
@@ -184,12 +184,12 @@ func payStandbyWitnessWithSet(db kvReadWriter, statedb *state.StateDB, dp *state
 	eachVotePay := float64(totalPay) / float64(set.voteSum)
 	voterDeltas := make(map[tcommon.Address]int64, len(set.witnesses))
 	for _, v := range set.witnesses {
-		pay := int64(float64(v.votes) * eachVotePay)
+		pay := tcommon.JavaDoubleToInt64(float64(v.votes) * eachVotePay)
 		if pay <= 0 {
 			continue
 		}
 		brokerageRate := float64(v.brokerage) / 100.0
-		brokerageAmount := int64(brokerageRate * float64(pay))
+		brokerageAmount := tcommon.JavaDoubleToInt64(brokerageRate * float64(pay))
 		voterAmount := pay - brokerageAmount
 		if voterAmount > 0 {
 			voterDeltas[v.addr] += voterAmount
