@@ -341,6 +341,33 @@ func TestUseEnergy_DynamicPenaltyExcludesRejectedCharge(t *testing.T) {
 	}
 }
 
+func TestUseEnergy_DynamicPenaltyRollsBackEarlierChunksWhenOpcodeRejected(t *testing.T) {
+	tvm, _, _ := newTestTVMWithDB(t)
+	in := tvm.interpreter
+	in.tvmConfig.DynamicEnergy = true
+	in.factor = 15_000 // 1.5x: each base-100 chunk needs 150 energy.
+	in.opBaseAccum = 0
+	in.opPenaltyCharged = 0
+	tvm.EnergyPenaltyTotal = 7 // penalty from an already completed opcode/frame.
+
+	contract := NewContract(tcommon.Address{}, tcommon.Address{0x41, 0x01}, 0, 250)
+	if !in.useEnergy(contract, 100) {
+		t.Fatal("first opcode chunk unexpectedly ran out of energy")
+	}
+	if got := tvm.EnergyPenaltyTotal; got != 57 {
+		t.Fatalf("total with provisional first-chunk penalty = %d, want 57", got)
+	}
+	if in.useEnergy(contract, 100) {
+		t.Fatal("second opcode chunk unexpectedly fit within the energy limit")
+	}
+	if got := tvm.EnergyPenaltyTotal; got != 7 {
+		t.Fatalf("rejected multi-chunk opcode penalty total = %d, want prior 7", got)
+	}
+	if got := contract.Energy; got != 100 {
+		t.Fatalf("earlier admitted base+penalty charge left %d energy, want 100", got)
+	}
+}
+
 func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
 	// Factor 5000 → effective multiplier 15000/10000 = 1.5×.
 	// All arithmetic below is verified against java-tron's VM.play formula:

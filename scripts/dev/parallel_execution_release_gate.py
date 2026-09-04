@@ -79,6 +79,13 @@ def audit_metrics(
         if value is not None and value != 0:
             issues.append(f"{name}={value}, want 0")
 
+    safety_qualified = read("core/speculative_execution/safety_qualified")
+    if safety_qualified is not None and safety_qualified != 1:
+        issues.append(
+            "core/speculative_execution/safety_qualified="
+            f"{safety_qualified}, want 1 (rebuild from genesis with a safety-aware binary)"
+        )
+
     # Worker and canonical serial execution can legitimately materialize
     # different cache/system-account reads. These are diagnostic only because
     # the canonical read set and result are the sole publication payload.

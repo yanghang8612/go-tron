@@ -434,6 +434,7 @@ var (
 	parallelExecutionSafetyFallbackCounter             = metrics.NewRegisteredCounter("core/speculative_execution/safety_fallbacks", nil)
 	parallelExecutionSafetyDisabledGauge               = metrics.NewRegisteredGauge("core/speculative_execution/safety_disabled", nil)
 	parallelExecutionSafetyPersistedGauge              = metrics.NewRegisteredGauge("core/speculative_execution/safety_persisted", nil)
+	parallelExecutionSafetyQualifiedGauge              = metrics.NewRegisteredGauge("core/speculative_execution/safety_qualified", nil)
 	parallelExecutionSafetyPersistErrorsCounter        = metrics.NewRegisteredCounter("core/speculative_execution/safety_persist_errors", nil)
 	parallelTransferSerialVerifyCandidatesCounter      = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/candidates", nil)
 	parallelTransferSerialVerifyMatchesCounter         = metrics.NewRegisteredCounter("core/parallel_transfer/serial_verify/matches", nil)

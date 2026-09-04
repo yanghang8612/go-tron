@@ -1657,8 +1657,11 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 						parallelVMErrorsCounter.Inc(1)
 						return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish async VM retry changed block energy before settlement", errSpeculativePublicationAudit, i)
 					}
-					if blockEnergyExpected != blockEnergyBaseline {
-						dynProps.SetBlockEnergyUsage(blockEnergyExpected)
+					accumulateBlockEnergyUsageFromReceipt(dynProps, statedb, prevBlockTime, writeSeal.info.GetReceipt(), forkPassCache)
+					if dynProps.BlockEnergyUsage() != blockEnergyExpected {
+						parallelVMAsyncRetryPublishErrorsCounter.Inc(1)
+						parallelVMErrorsCounter.Inc(1)
+						return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish async VM retry block energy mismatch: got %d want %d", errSpeculativePublicationAudit, i, dynProps.BlockEnergyUsage(), blockEnergyExpected)
 					}
 					vmSenderRetry.markPublished(i)
 					parallelVMAsyncRetryPublishedCounter.Inc(1)
@@ -1785,13 +1788,11 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 					parallelVMErrorsCounter.Inc(1)
 					return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish pre-executed VM changed block energy before settlement", errSpeculativePublicationAudit, i)
 				}
-				if blockEnergyExpected != dynProps.BlockEnergyUsage() {
-					dynProps.SetBlockEnergyUsage(blockEnergyExpected)
-				}
+				accumulateBlockEnergyUsageFromReceipt(dynProps, statedb, prevBlockTime, writeSeal.info.GetReceipt(), forkPassCache)
 				vmSenderChainPreexecution.validateBlockEnergyBoundary(i, dynProps)
 				if !vmSenderChainPreexecution.blockEnergyBoundaryMatched(i) {
 					parallelVMErrorsCounter.Inc(1)
-					return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish pre-executed VM block energy mismatch", errSpeculativePublicationAudit, i)
+					return nil, tcommon.Hash{}, fmt.Errorf("%w: tx %d publish pre-executed VM block energy mismatch: got %d want %d", errSpeculativePublicationAudit, i, dynProps.BlockEnergyUsage(), blockEnergyExpected)
 				}
 				vmSenderChainPreexecution.markPublished(i)
 				parallelVMPublishedCounter.Inc(1)

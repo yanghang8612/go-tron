@@ -274,7 +274,7 @@ func TestBlockChainSpeculativeSafetyCircuitRequiresDurableMarker(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := ethrawdb.NewMemoryDatabase()
-			diskdb := &executionSafetyMarkerFailStore{Database: base, putErr: tc.putErr, syncErr: tc.syncErr}
+			diskdb := &executionSafetyMarkerFailStore{Database: base}
 			wantErr := tc.putErr
 			if wantErr == nil {
 				wantErr = tc.syncErr
@@ -293,6 +293,11 @@ func TestBlockChainSpeculativeSafetyCircuitRequiresDurableMarker(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = bc.Close() })
+			// Qualification is persisted during clean early-height startup. Arm the
+			// injected failure only for the incident write this test exercises.
+			diskdb.putErr = tc.putErr
+			diskdb.syncErr = tc.syncErr
+			diskdb.syncs = 0
 			bc.SetParallelTransferExecution(true)
 			persistErrorsBefore := parallelExecutionSafetyPersistErrorsCounter.Snapshot().Count()
 			attempts := 0
@@ -397,6 +402,96 @@ func TestNewBlockChainRejectsMalformedExecutionSafetyMarker(t *testing.T) {
 	if _, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig); err == nil ||
 		!strings.Contains(err.Error(), "execution safety incident") {
 		t.Fatalf("malformed marker startup error = %v", err)
+	}
+}
+
+func TestNewBlockChainRejectsMalformedExecutionSafetyQualification(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, &params.Genesis{Config: params.MainnetChainConfig}); err != nil {
+		t.Fatal(err)
+	}
+	if err := diskdb.Put([]byte("execution-safety-qualified-v1"), []byte{2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig); err == nil ||
+		!strings.Contains(err.Error(), "execution safety qualification") {
+		t.Fatalf("malformed qualification startup error = %v", err)
+	}
+}
+
+func TestBlockChainHistoricalDatadirRequiresExecutionSafetyQualification(t *testing.T) {
+	makeHistoricalDB := func(t *testing.T, qualified bool) ethdb.Database {
+		t.Helper()
+		diskdb := ethrawdb.NewMemoryDatabase()
+		if _, _, err := SetupGenesisBlock(diskdb, &params.Genesis{Config: params.MainnetChainConfig}); err != nil {
+			t.Fatal(err)
+		}
+		head := blockchainStartupBlock(mainnetCreateTransferFailureRepairBlock)
+		if err := rawdb.WriteBlock(diskdb, head); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteBlockStateRoot(diskdb, head.Hash(), rawdb.ReadGenesisStateRoot(diskdb)); err != nil {
+			t.Fatal(err)
+		}
+		rawdb.WriteHeadBlockHash(diskdb, head.Hash())
+		if qualified {
+			if err := rawdb.WriteExecutionSafetyQualification(diskdb); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return diskdb
+	}
+
+	t.Run("missing qualification refuses and persists", func(t *testing.T) {
+		diskdb := makeHistoricalDB(t, false)
+		bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = bc.Close() })
+		bc.SetParallelTransferExecution(true)
+		bc.SetParallelVMExecution(true)
+		if bc.parallelTransfers || bc.parallelVM || !bc.speculativeSafetyDisabled.Load() {
+			t.Fatalf("historical datadir rollout state = transfer:%t VM:%t disabled:%t, want false,false,true",
+				bc.parallelTransfers, bc.parallelVM, bc.speculativeSafetyDisabled.Load())
+		}
+		incident, ok, err := rawdb.ReadExecutionSafetyIncident(diskdb)
+		if err != nil || !ok || incident.Kind != rawdb.ExecutionSafetyIncidentHistoricalRepairUnknown ||
+			incident.BlockNum != mainnetCreateTransferFailureRepairBlock || incident.BlockHash != bc.CurrentBlock().Hash() {
+			t.Fatalf("historical qualification incident = %+v,%t,%v", incident, ok, err)
+		}
+	})
+
+	t.Run("qualification admits", func(t *testing.T) {
+		diskdb := makeHistoricalDB(t, true)
+		bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = bc.Close() })
+		bc.SetParallelTransferExecution(true)
+		bc.SetParallelVMExecution(true)
+		if !bc.parallelTransfers || !bc.parallelVM || bc.speculativeSafetyDisabled.Load() {
+			t.Fatalf("qualified datadir rollout state = transfer:%t VM:%t disabled:%t, want true,true,false",
+				bc.parallelTransfers, bc.parallelVM, bc.speculativeSafetyDisabled.Load())
+		}
+	})
+}
+
+func TestNewBlockChainPersistsExecutionSafetyQualificationBeforeRepairRange(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, &params.Genesis{Config: params.MainnetChainConfig}); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bc.Close() })
+	qualified, err := rawdb.ReadExecutionSafetyQualification(diskdb)
+	if err != nil || !qualified || !bc.speculativeSafetyQualified {
+		t.Fatalf("fresh datadir qualification = persisted:%t in-memory:%t err:%v, want true,true,nil",
+			qualified, bc.speculativeSafetyQualified, err)
 	}
 }
 

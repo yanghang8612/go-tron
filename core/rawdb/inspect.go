@@ -56,6 +56,7 @@ var inspectSingletons = []inspectKeyspace{
 	{name: "total-transaction-count", pattern: "=total-tx-count", key: totalTransactionCountKey},
 	{name: "history-prune-mode", pattern: "=history-prune-mode-v1", key: historyPruneModeKey},
 	{name: "execution-safety-incident", pattern: "=execution-safety-incident-v1", key: executionSafetyIncidentKey},
+	{name: "execution-safety-qualified", pattern: "=execution-safety-qualified-v1", key: executionSafetyQualifiedKey},
 	{name: "legacy-state-schema-version", pattern: "=state-schema-version", key: []byte("state-schema-version")},
 	{name: "genesis-state-root", pattern: "=genesis-state-root", key: genesisStateRootKey},
 	{name: "witness-schedule", pattern: "=ws", key: witnessScheduleKey},

@@ -842,12 +842,15 @@ func gtron(ctx *cli.Context) error {
 		log.Warn("VM cancel-all-unfreeze details are ineffective unless internal and featured internal transactions are both enabled")
 	}
 	if ctx.Bool(execParallelTransfersFlag.Name) {
-		bc.SetParallelTransferExecution(true)
-		log.Info("Parallel Transfer execution enabled", "workers", 4, "balanceOracle", true, "serialOracle", "every-publication-zero-copy", "publishAudit", true, "serialRetryCircuit", true)
+		if bc.SetParallelTransferExecution(true) {
+			log.Info("Parallel Transfer execution enabled", "workers", 4, "balanceOracle", true, "serialOracle", "every-publication-zero-copy", "publishAudit", true, "serialRetryCircuit", true)
+		} else {
+			log.Warn("Parallel Transfer execution requested but refused by execution safety qualification")
+		}
 	}
-	parallelVMEnabled := ctx.Bool(execParallelVMFlag.Name)
-	bc.SetParallelVMExecution(parallelVMEnabled)
-	log.Info("Speculative VM publication configured", "enabled", parallelVMEnabled, "workers", 4, "serialOracle", true, "publishAudit", true, "serialRetryCircuit", true)
+	parallelVMRequested := ctx.Bool(execParallelVMFlag.Name)
+	parallelVMEnabled := bc.SetParallelVMExecution(parallelVMRequested)
+	log.Info("Speculative VM publication configured", "requested", parallelVMRequested, "enabled", parallelVMEnabled, "workers", 4, "serialOracle", true, "publishAudit", true, "serialRetryCircuit", true)
 	if commitmentCacheMiB > 0 {
 		log.Info("Commitment and flat-latest base-read cache enabled", "cacheMiB", commitmentCacheMiB)
 	} else {

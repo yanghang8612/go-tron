@@ -818,6 +818,12 @@ func TestApplyTransactionWriteSetRejectsOrderSensitivePhysicalAliases(t *testing
 			},
 		},
 		{
+			name: "protected_execution_qualification_raw",
+			writes: TransactionWriteSet{
+				{Kind: TransactionAccessRawKV, LogicalKey: "execution-safety-qualified-v1"}: {Exists: true, Value: []byte("forge")},
+			},
+		},
+		{
 			name: "protected_block_body_raw",
 			writes: TransactionWriteSet{
 				{Kind: TransactionAccessRawKV, LogicalKey: "b-protected"}: {Exists: true, Value: []byte("block")},

@@ -140,6 +140,7 @@ func TestIsProtectedStateMutationKeyIncludesTypedAndDerivedMirrors(t *testing.T)
 		[]byte("tx-row"),
 		[]byte("ti-row"),
 		[]byte("execution-safety-incident-v1"),
+		[]byte("execution-safety-qualified-v1"),
 		totalTransactionCountKey,
 		balanceTraceKey(12),
 		accountTraceKey(owner.Bytes(), 12),

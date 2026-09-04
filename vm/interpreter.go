@@ -36,6 +36,13 @@ type Interpreter struct {
 	// whole op cost — matching java VM.play, which computes one
 	// `energy*factor/DECIMAL - energy` over the full op cost. Reset per op.
 	opBaseAccum uint64
+	// opPenaltyCharged tracks surcharge already admitted for the current
+	// opcode. Some handlers discover their total base cost in multiple chunks
+	// (static cost, memory growth, copy words, ...). If a later chunk is
+	// rejected, java-tron rejects the one full-op charge and reports no partial
+	// EnergyPenaltyTotal. Roll back only this frame/op's earlier surcharge;
+	// penalties from completed opcodes and nested frames remain intact.
+	opPenaltyCharged uint64
 }
 
 // NewInterpreter creates a new interpreter.
@@ -62,6 +69,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	defer releaseExecutionMemory(mem)
 	defer releaseExecutionStack(stack)
 	parentFactor, parentRawEnergyUsed, parentRawEnergyUncharged := in.factor, in.rawEnergyUsed, in.rawEnergyUncharged
+	parentOpBaseAccum, parentOpPenaltyCharged := in.opBaseAccum, in.opPenaltyCharged
 	// The return-data buffer is per-frame state: java-tron gives every
 	// Program its own returnDataBuffer, so RETURNDATASIZE is 0 at frame
 	// entry until the frame completes a call of its own (EIP-211). gtron
@@ -89,6 +97,8 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		in.factor = parentFactor
 		in.rawEnergyUsed = parentRawEnergyUsed
 		in.rawEnergyUncharged = parentRawEnergyUncharged
+		in.opBaseAccum = parentOpBaseAccum
+		in.opPenaltyCharged = parentOpPenaltyCharged
 		in.returnData = parentReturnData
 	}()
 
@@ -110,6 +120,8 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	in.factor = types.DynamicEnergyFactorDecimal
 	in.rawEnergyUsed = 0
 	in.rawEnergyUncharged = 0
+	in.opBaseAccum = 0
+	in.opPenaltyCharged = 0
 	dynamicEnergy := in.tvmConfig.DynamicEnergy
 	if dynamicEnergy {
 		in.factor = updateContractEnergyFactor(in.tvm, contract.Address)
@@ -144,6 +156,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 				in.currentOp = op
 				in.energyErr = nil
 				in.opBaseAccum = 0
+				in.opPenaltyCharged = 0
 				pcStart := *pc
 				energyBefore := contract.Energy
 				opErr := newInvalidOpCodeError(op)
@@ -163,6 +176,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		// Per-op base accumulator for the single-floor dynamic-energy penalty.
 		if dynamicEnergy {
 			in.opBaseAccum = 0
+			in.opPenaltyCharged = 0
 		}
 
 		// Remaining energy before this opcode's charges; the tracer reports it as
@@ -412,7 +426,22 @@ func (in *Interpreter) useEnergy(contract *Contract, baseCost uint64) bool {
 	}
 	if contract.UseEnergy(cost) {
 		in.tvm.EnergyPenaltyTotal += penalty
+		in.opPenaltyCharged += penalty
 		return true
+	}
+	// A multi-part opcode is one java-tron energy charge. Earlier chunks may
+	// have fit even though the final full cost does not. They still contribute
+	// to total energy burned on the OOE path, but their provisional dynamic
+	// surcharge must not leak into the receipt.
+	if in.opPenaltyCharged > 0 {
+		if in.tvm.EnergyPenaltyTotal >= in.opPenaltyCharged {
+			in.tvm.EnergyPenaltyTotal -= in.opPenaltyCharged
+		} else {
+			// Defensive fail-closed accounting: this should be unreachable because
+			// every increment above is paired with this interpreter-local counter.
+			in.tvm.EnergyPenaltyTotal = 0
+		}
+		in.opPenaltyCharged = 0
 	}
 	// The protocol's ContractState feedback counter includes the requested raw
 	// cost even when the charge fails. Keep that behavior in rawEnergyUsed, but

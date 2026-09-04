@@ -40,6 +40,9 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	if err := WriteExecutionSafetyIncident(db, incident); err != nil {
 		t.Fatal(err)
 	}
+	if err := WriteExecutionSafetyQualification(db); err != nil {
+		t.Fatal(err)
+	}
 	hash := stateChangePostingHash([]byte("latest"))
 	posting, err := encodeStateChangePosting([]uint64{9})
 	if err != nil {
@@ -96,6 +99,9 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	}
 	if got, ok, err := ReadExecutionSafetyIncident(db); err != nil || !ok || got != incident {
 		t.Fatalf("execution safety incident should survive reset: got=%+v ok=%v err=%v", got, ok, err)
+	}
+	if qualified, err := ReadExecutionSafetyQualification(db); err != nil || !qualified {
+		t.Fatalf("execution safety qualification should survive reset: qualified=%v err=%v", qualified, err)
 	}
 	if _, ok, err := ReadSyncStagedBlock(db, staged.Number()); err != nil || ok {
 		t.Fatalf("sync staged block survived reset: ok=%v err=%v", ok, err)

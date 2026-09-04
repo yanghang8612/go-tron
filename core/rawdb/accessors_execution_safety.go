@@ -12,6 +12,7 @@ import (
 const (
 	executionSafetyIncidentEncodingVersion = byte(1)
 	executionSafetyIncidentEncodedSize     = 1 + 1 + 8 + common.HashLength
+	executionSafetyQualificationVersion    = byte(1)
 )
 
 // ExecutionSafetyIncidentKind identifies the event that permanently
@@ -25,10 +26,11 @@ const (
 	ExecutionSafetyIncidentParallelVMRepair
 	ExecutionSafetyIncidentCOSTRepair
 	ExecutionSafetyIncidentWINKCodeRepair
+	ExecutionSafetyIncidentHistoricalRepairUnknown
 )
 
 func (k ExecutionSafetyIncidentKind) valid() bool {
-	return k >= ExecutionSafetyIncidentSpeculativePublication && k <= ExecutionSafetyIncidentWINKCodeRepair
+	return k >= ExecutionSafetyIncidentSpeculativePublication && k <= ExecutionSafetyIncidentHistoricalRepairUnknown
 }
 
 func (k ExecutionSafetyIncidentKind) String() string {
@@ -43,9 +45,55 @@ func (k ExecutionSafetyIncidentKind) String() string {
 		return "cost-missed-reward-repair"
 	case ExecutionSafetyIncidentWINKCodeRepair:
 		return "wink-missing-runtime-repair"
+	case ExecutionSafetyIncidentHistoricalRepairUnknown:
+		return "historical-repair-status-unknown"
 	default:
 		return fmt.Sprintf("unknown-%d", byte(k))
 	}
+}
+
+// WriteExecutionSafetyQualification records that a safety-aware binary saw
+// this datadir before the first known mainnet repair height. Any repair that
+// subsequently activates persists the stronger incident marker, which always
+// takes precedence. The marker is node-local rollout evidence, not consensus
+// state.
+func WriteExecutionSafetyQualification(db ethdb.KeyValueWriter) error {
+	if db == nil {
+		return errors.New("rawdb: nil execution safety qualification writer")
+	}
+	if err := db.Put(executionSafetyQualifiedKey, []byte{executionSafetyQualificationVersion}); err != nil {
+		return fmt.Errorf("rawdb: write execution safety qualification: %w", err)
+	}
+	if syncer, ok := db.(interface{ SyncKeyValue() error }); ok {
+		if err := syncer.SyncKeyValue(); err != nil {
+			return fmt.Errorf("rawdb: sync execution safety qualification: %w", err)
+		}
+	}
+	return nil
+}
+
+// ReadExecutionSafetyQualification reads the fail-closed rollout credential.
+// Corrupt or unknown encodings are errors rather than absence so startup
+// cannot silently reinterpret damaged local metadata as safe.
+func ReadExecutionSafetyQualification(db ethdb.KeyValueReader) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	exists, err := db.Has(executionSafetyQualifiedKey)
+	if err != nil {
+		return false, fmt.Errorf("rawdb: read execution safety qualification presence: %w", err)
+	}
+	if !exists {
+		return false, nil
+	}
+	encoded, err := db.Get(executionSafetyQualifiedKey)
+	if err != nil {
+		return false, fmt.Errorf("rawdb: read execution safety qualification: %w", err)
+	}
+	if len(encoded) != 1 || encoded[0] != executionSafetyQualificationVersion {
+		return false, fmt.Errorf("rawdb: malformed execution safety qualification %x", encoded)
+	}
+	return true, nil
 }
 
 // ExecutionSafetyIncident is node-local rollout evidence. It is deliberately

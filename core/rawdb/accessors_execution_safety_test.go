@@ -89,6 +89,10 @@ func TestExecutionSafetyIncidentPersistsAcrossPebbleReopen(t *testing.T) {
 		_ = db.Close()
 		t.Fatal(err)
 	}
+	if err := WriteExecutionSafetyQualification(db); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -101,5 +105,35 @@ func TestExecutionSafetyIncidentPersistsAcrossPebbleReopen(t *testing.T) {
 	got, ok, err := ReadExecutionSafetyIncident(reopened)
 	if err != nil || !ok || got != want {
 		t.Fatalf("reopened marker = %+v,%t,%v, want %+v,true,nil", got, ok, err, want)
+	}
+	if qualified, err := ReadExecutionSafetyQualification(reopened); err != nil || !qualified {
+		t.Fatalf("reopened qualification = %t,%v, want true,nil", qualified, err)
+	}
+}
+
+func TestExecutionSafetyQualificationRoundTripAndFailsClosed(t *testing.T) {
+	base := NewMemoryDatabase()
+	store := &executionSafetySyncStore{KeyValueStore: base}
+	if qualified, err := ReadExecutionSafetyQualification(store); err != nil || qualified {
+		t.Fatalf("missing qualification = %t,%v, want false,nil", qualified, err)
+	}
+	if err := WriteExecutionSafetyQualification(store); err != nil {
+		t.Fatal(err)
+	}
+	if store.syncs != 1 {
+		t.Fatalf("qualification durability syncs = %d, want 1", store.syncs)
+	}
+	if qualified, err := ReadExecutionSafetyQualification(store); err != nil || !qualified {
+		t.Fatalf("qualification = %t,%v, want true,nil", qualified, err)
+	}
+
+	for _, malformed := range [][]byte{nil, {0}, {2}, {1, 1}} {
+		db := NewMemoryDatabase()
+		if err := db.Put(executionSafetyQualifiedKey, malformed); err != nil {
+			t.Fatal(err)
+		}
+		if qualified, err := ReadExecutionSafetyQualification(db); err == nil || qualified {
+			t.Fatalf("malformed qualification %x = %t,%v, want false,error", malformed, qualified, err)
+		}
 	}
 }

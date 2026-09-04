@@ -2918,6 +2918,22 @@ func TestVMBlockEnergyBoundaryProjectionMatchesSerialAccumulator(t *testing.T) {
 		finishStats.blockEnergyMatches != 1 || finishStats.blockEnergyMismatches != 0 || finishStats.blockEnergyMissing != 0 {
 		t.Fatalf("VM block-energy finish stats = %+v", finishStats)
 	}
+
+	// The publication-side value must be recomputed from the sealed canonical
+	// receipt. A corrupted speculative expectation must fail the audit instead
+	// of being assigned into DynamicProperties and then compared to itself.
+	dynProps.SetBlockEnergyUsage(40)
+	pre.blockEnergy[0] = discardShadowBlockEnergyProjection{
+		observed: true,
+		baseline: 40,
+		expected: 1_041,
+	}
+	accumulateBlockEnergyUsageFromReceipt(dynProps, stats, 0, pre.results[0].info.GetReceipt(), nil)
+	pre.validateBlockEnergyBoundary(0, dynProps)
+	if pre.blockEnergy[0].match || dynProps.BlockEnergyUsage() != 1_040 {
+		t.Fatalf("corrupt projection audit = %+v, canonical=%d; want mismatch at independently accumulated 1040",
+			pre.blockEnergy[0], dynProps.BlockEnergyUsage())
+	}
 }
 
 func TestSenderChainAdvanceForwardsRawKV(t *testing.T) {

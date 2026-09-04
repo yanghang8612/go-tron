@@ -356,6 +356,11 @@ type BlockChain struct {
 	// intentionally not reset by the CLI setters: operator inspection/restart
 	// is required before speculative publication may resume.
 	speculativeSafetyDisabled atomic.Bool
+	// speculativeSafetyQualified proves that this mainnet datadir was opened by
+	// a safety-aware binary before the first known historical repair height.
+	// Existing datadirs already beyond that boundary without the credential are
+	// serial-safe, but must never enter a speculative rollout.
+	speculativeSafetyQualified bool
 	// speculativeSafetyPersistenceErr is an even stronger fail-closed latch:
 	// if the durable incident marker cannot be written, this process must never
 	// attempt another block insertion. Without durable evidence a serial retry
@@ -421,28 +426,34 @@ func (bc *BlockChain) SetEngine(eng consensus.Engine) {
 // SetParallelTransferExecution enables Erigon-style block-start pre-execution,
 // typed read-version validation, ordered WriteSet publication, and serial
 // fallback for plain TransferContract transactions. It is an operational
-// execution strategy and never changes consensus or wire configuration.
-func (bc *BlockChain) SetParallelTransferExecution(enabled bool) {
-	bc.parallelTransfers = enabled
-	if enabled {
+// execution strategy and never changes consensus or wire configuration. The
+// return value reports whether safety qualification made the request effective.
+func (bc *BlockChain) SetParallelTransferExecution(enabled bool) bool {
+	effective := enabled && bc.admitSpeculativeExecution("parallel transfer")
+	bc.parallelTransfers = effective
+	if effective {
 		parallelTransferEnabledGauge.Update(1)
 	} else {
 		parallelTransferEnabledGauge.Update(0)
 	}
+	return effective
 }
 
 // SetParallelVMExecution enables the sparse speculative Trigger/Create smart
 // contract publication cohorts. Every candidate is re-executed through the
 // authoritative serial path at its canonical transaction boundary before its
 // retained post-images may be published. This remains a separate operational
-// opt-in from plain TransferContract publication.
-func (bc *BlockChain) SetParallelVMExecution(enabled bool) {
-	bc.parallelVM = enabled
-	if enabled {
+// opt-in from plain TransferContract publication. The return value reports
+// whether safety qualification made the request effective.
+func (bc *BlockChain) SetParallelVMExecution(enabled bool) bool {
+	effective := enabled && bc.admitSpeculativeExecution("parallel VM")
+	bc.parallelVM = effective
+	if effective {
 		parallelVMEnabledGauge.Update(1)
 	} else {
 		parallelVMEnabledGauge.Update(0)
 	}
+	return effective
 }
 
 // SetInternalTransactionPersistence configures the node-local TransactionInfo
@@ -678,6 +689,33 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	}
 	bc.currentBlock.Store(head)
 	bc.archiveHead.Store(head)
+	qualified, err := rawdb.ReadExecutionSafetyQualification(db)
+	if err != nil {
+		return nil, fmt.Errorf("load execution safety qualification: %w", err)
+	}
+	// The historical repairs are mainnet-specific. For mainnet, a datadir first
+	// seen before the earliest affected block gets a durable rollout credential;
+	// an already-advanced datadir without one remains intentionally unqualified.
+	if !isMainnetExecutionSafetyConfig(config) {
+		qualified = true
+	} else if !qualified && !hasPersistedSafetyIncident && head.Number() < mainnetCreateTransferFailureRepairBlock {
+		if err := rawdb.WriteExecutionSafetyQualification(db); err != nil {
+			return nil, fmt.Errorf("persist execution safety qualification: %w", err)
+		}
+		qualified = true
+	}
+	bc.speculativeSafetyQualified = qualified
+	if qualified {
+		parallelExecutionSafetyQualifiedGauge.Update(1)
+	} else {
+		parallelExecutionSafetyQualifiedGauge.Update(0)
+		log.Warn("Historical mainnet datadir is not qualified for speculative execution",
+			"head", head.Number(),
+			"hash", head.Hash(),
+			"serialExecution", "available",
+			"parallelEnableAction", "refuse-and-persist-incident",
+		)
+	}
 	if err := bc.ensureCanonicalStageHead(head); err != nil {
 		return nil, err
 	}
@@ -1267,6 +1305,43 @@ func (bc *BlockChain) persistExecutionSafetyIncident(incident rawdb.ExecutionSaf
 	}
 	parallelExecutionSafetyPersistedGauge.Update(1)
 	return nil
+}
+
+func isMainnetExecutionSafetyConfig(config *params.ChainConfig) bool {
+	return config != nil && config.ChainID == params.MainnetChainConfig.ChainID && config.P2PVersion == params.MainnetNetworkID
+}
+
+// admitSpeculativeExecution turns the CLI's operational request into an
+// effective enablement. Old mainnet datadirs cannot prove whether they crossed
+// the known repair blocks with a safe binary, so the first enable attempt
+// records a restart-stable incident and refuses publication. Serial execution
+// remains available.
+func (bc *BlockChain) admitSpeculativeExecution(mode string) bool {
+	if bc == nil || bc.speculativeSafetyDisabled.Load() {
+		return false
+	}
+	if bc.speculativeSafetyQualified {
+		return true
+	}
+	head := bc.CurrentBlock()
+	incident := rawdb.ExecutionSafetyIncident{Kind: rawdb.ExecutionSafetyIncidentHistoricalRepairUnknown}
+	if head != nil {
+		incident.BlockNum = head.Number()
+		incident.BlockHash = head.Hash()
+	}
+	if err := bc.persistExecutionSafetyIncident(incident); err != nil {
+		bc.failClosedOnSafetyPersistenceError(err)
+		return false
+	}
+	bc.speculativeSafetyDisabled.Store(true)
+	parallelExecutionSafetyDisabledGauge.Update(1)
+	log.Error("Speculative execution refused for unqualified historical datadir",
+		"mode", mode,
+		"block", incident.BlockNum,
+		"hash", incident.BlockHash,
+		"action", "continue-serially-or-rebuild-from-genesis-with-safety-aware-binary",
+	)
+	return false
 }
 
 // failClosedOnSafetyPersistenceError permanently stops block insertion in the

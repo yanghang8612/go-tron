@@ -413,6 +413,7 @@ All mismatch/error counters must remain zero:
 - `core/parallel_vm/publish_audit/*`
 - `core/speculative_execution/safety_fallbacks`
 - `core/speculative_execution/safety_persisted`
+- `core/speculative_execution/safety_qualified`
 - `core/speculative_execution/safety_persist_errors`
 - `core/parallel_transfer/errors`
 - `core/parallel_transfer/sender_retry/errors`
@@ -427,6 +428,15 @@ requires the metrics to exist but does not require zero.
 `core/speculative_execution/safety_disabled` must remain `0`. A value of `1`
 means the process already rolled back a speculative attempt and is running the
 serial fallback circuit.
+
+`core/speculative_execution/safety_qualified` must be `1`. A mainnet datadir
+opened by this code before the first known historical repair height receives a
+forced-WAL local credential (`execution-safety-qualified-v1`). A datadir first
+seen after that height without this credential cannot prove that it crossed the
+legacy repair range cleanly: parallel enablement is refused and a
+`historical-repair-status-unknown` incident is persisted. Serial sync remains
+available; speculative testing requires a rebuild from genesis with a
+safety-aware binary.
 
 `core/speculative_execution/safety_persisted` must also remain `0`. Every
 publication-safety failure and every legacy mainnet repair writes a forced-WAL

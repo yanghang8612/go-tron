@@ -4,6 +4,7 @@ import (
 	"github.com/tronprotocol/go-tron/actuator"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // blockEnergyUsageForkVersion is VERSION_3_6_5 — the SR version after which
@@ -29,7 +30,22 @@ func accumulateBlockEnergyUsage(dp *state.DynamicProperties, forkStats forks.For
 	if dp == nil || result == nil {
 		return
 	}
-	delta := blockEnergyUsageDelta(dp, forkStats, prevBlockTime, result.EnergyUsageTotal, result.EnergyUsed, result.OriginEnergyUsage, forkPassCache)
+	accumulateBlockEnergyUsageValues(dp, forkStats, prevBlockTime, result.EnergyUsageTotal, result.EnergyUsed, result.OriginEnergyUsage, forkPassCache)
+}
+
+// accumulateBlockEnergyUsageFromReceipt is the canonical publication path for
+// a sealed VM oracle receipt. Keeping this as an accumulator (rather than
+// assigning a speculative projection) makes the subsequent expected-value
+// comparison a real audit boundary.
+func accumulateBlockEnergyUsageFromReceipt(dp *state.DynamicProperties, forkStats forks.ForkStatsReader, prevBlockTime int64, receipt *corepb.ResourceReceipt, forkPassCache *forks.VersionPassCache) {
+	if dp == nil || receipt == nil {
+		return
+	}
+	accumulateBlockEnergyUsageValues(dp, forkStats, prevBlockTime, receipt.GetEnergyUsageTotal(), receipt.GetEnergyUsage(), receipt.GetOriginEnergyUsage(), forkPassCache)
+}
+
+func accumulateBlockEnergyUsageValues(dp *state.DynamicProperties, forkStats forks.ForkStatsReader, prevBlockTime, energyUsageTotal, energyUsed, originEnergyUsage int64, forkPassCache *forks.VersionPassCache) {
+	delta := blockEnergyUsageDelta(dp, forkStats, prevBlockTime, energyUsageTotal, energyUsed, originEnergyUsage, forkPassCache)
 	if delta <= 0 {
 		return
 	}

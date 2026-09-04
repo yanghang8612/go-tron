@@ -70,6 +70,7 @@ def clean_metrics():
     metrics = {name: {"count": 0} for name in names}
     metrics["core/speculative_execution/safety_disabled"] = {"value": 0}
     metrics["core/speculative_execution/safety_persisted"] = {"value": 0}
+    metrics["core/speculative_execution/safety_qualified"] = {"value": 1}
     metrics["core/parallel_transfer/enabled"] = {"value": 1}
     metrics["core/parallel_vm/enabled"] = {"value": 0}
     metrics["core/parallel_transfer/balance_oracle/candidates"]["count"] = 10
@@ -96,6 +97,12 @@ class ParallelExecutionReleaseGateTest(unittest.TestCase):
         issues = GATE.audit_metrics(metrics)
         self.assertTrue(any("safety_disabled=1" in issue for issue in issues))
         self.assertTrue(any("publish_audit/mismatches=1" in issue for issue in issues))
+
+    def test_rejects_unqualified_historical_datadir(self):
+        metrics = clean_metrics()
+        metrics["core/speculative_execution/safety_qualified"]["value"] = 0
+        issues = GATE.audit_metrics(metrics)
+        self.assertTrue(any("safety_qualified=0" in issue for issue in issues))
 
     def test_rejects_legacy_state_repair_activation(self):
         metrics = clean_metrics()
