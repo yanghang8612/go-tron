@@ -3431,7 +3431,11 @@ func (s *StateDB) CopyBlockExecutionBase() (*StateDB, error) {
 		if _, exists := cp.stateObjects[addr]; exists {
 			continue
 		}
-		if !s.copyCachedCodeStateObjectInto(cp, addr, obj) {
+		copiedCode, err := s.copyCachedCodeStateObjectInto(cp, addr, obj)
+		if err != nil {
+			return nil, fmt.Errorf("copy cached contract code %s: %w", addr.Hex(), err)
+		}
+		if !copiedCode {
 			continue
 		}
 		copied++
@@ -3625,9 +3629,9 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 // needed to execute already-loaded immutable bytecode. Storage and account-KV
 // caches remain lazy; copying those potentially large read caches would undo
 // the purpose of CopyBlockExecutionBase.
-func (s *StateDB) copyCachedCodeStateObjectInto(cp *StateDB, addr tcommon.Address, obj *stateObject) bool {
+func (s *StateDB) copyCachedCodeStateObjectInto(cp *StateDB, addr tcommon.Address, obj *stateObject) (bool, error) {
 	if cp == nil || obj == nil || obj.account == nil || len(obj.code) == 0 {
-		return false
+		return false, nil
 	}
 	var metaCopy *contractpb.SmartContract
 	if obj.contractMeta != nil {
@@ -3635,17 +3639,21 @@ func (s *StateDB) copyCachedCodeStateObjectInto(cp *StateDB, addr tcommon.Addres
 	}
 	data, err := obj.account.Marshal()
 	if err != nil {
-		return false
+		return false, fmt.Errorf("marshal account: %w", err)
 	}
 	account, err := types.UnmarshalAccount(data)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("unmarshal account: %w", err)
+	}
+	accountProto, err := account.MarshalStorageCoreV4()
+	if err != nil {
+		return false, fmt.Errorf("marshal storage-core-v4 account: %w", err)
 	}
 	newObj := acquireStateObject()
 	*newObj = stateObject{
 		address:                  addr,
 		account:                  account,
-		code:                     obj.code,
+		code:                     bytes.Clone(obj.code),
 		codeHash:                 obj.codeHash,
 		contractMeta:             metaCopy,
 		selfDestructed:           obj.selfDestructed,
@@ -3653,10 +3661,10 @@ func (s *StateDB) copyCachedCodeStateObjectInto(cp *StateDB, addr tcommon.Addres
 		accountKVGeneration:      obj.accountKVGeneration,
 		accountKVGenerationDirty: false,
 		dirtySet:                 cp.dirtyObjects,
+		accountProto:             accountProto,
 	}
-	newObj.accountProto, _ = account.MarshalStorageCoreV4()
 	cp.stateObjects[addr] = newObj
-	return true
+	return true, nil
 }
 
 type accountCommitPlan struct {

@@ -204,6 +204,51 @@ func TestStateCodeCacheSharesColdHitAcrossStateDBLifecycle(t *testing.T) {
 	}
 }
 
+func TestStateCodeCachePromotesStrictExecutionObjectHitForOracle(t *testing.T) {
+	code, hash := cacheTestCode(0x79, 256)
+	disk := ethrawdb.NewMemoryDatabase()
+	db := NewDatabaseWithConfig(disk, DatabaseConfig{CodeCacheSizeBytes: 4096})
+	t.Cleanup(func() { _ = db.Close() })
+	addr := tcommon.Address{0x41, 0x07, 0x09}
+
+	// Model a block-start execution copy which retained immutable code before
+	// the hot row became temporarily unavailable. A successful strict worker
+	// read must promote those hash-verified bytes to the Database-owned cache so
+	// the independently acquired serial oracle sees the identical code.
+	source := stateDBWithCodeHash(db, addr, hash)
+	source.stateObjects[addr].code = append([]byte(nil), code...)
+	worker, err := source.CopyBlockExecutionBase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := worker.GetCodeStrict(addr); err != nil || !bytes.Equal(got, code) {
+		t.Fatalf("worker strict object hit = %x, err %v", got, err)
+	}
+
+	oracle := stateDBWithCodeHash(db, addr, hash)
+	got, err := oracle.GetCodeStrict(addr)
+	if err != nil || !bytes.Equal(got, code) {
+		t.Fatalf("oracle shared-cache hit = %x, err %v", got, err)
+	}
+}
+
+func TestStateCodeStrictRejectsCorruptExecutionObjectCode(t *testing.T) {
+	code, hash := cacheTestCode(0x7a, 128)
+	db := NewDatabaseWithConfig(ethrawdb.NewMemoryDatabase(), DatabaseConfig{CodeCacheSizeBytes: 4096})
+	t.Cleanup(func() { _ = db.Close() })
+	addr := tcommon.Address{0x41, 0x07, 0x0a}
+	sdb := stateDBWithCodeHash(db, addr, hash)
+	sdb.stateObjects[addr].code = append([]byte(nil), code...)
+	sdb.stateObjects[addr].code[0] ^= 0xff
+
+	if got, err := sdb.GetCodeStrict(addr); err == nil || got != nil {
+		t.Fatalf("corrupt strict object hit = %x, err %v", got, err)
+	}
+	if _, ok := db.codeCache.get(hash); ok {
+		t.Fatal("corrupt object code populated shared cache")
+	}
+}
+
 type failingCodeDatabase struct {
 	ethdb.Database
 	err error

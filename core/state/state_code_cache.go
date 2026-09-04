@@ -101,6 +101,16 @@ func (c *stateCodeCache) admit(hash tcommon.Hash, code []byte) bool {
 		stateCodeCacheRejectCounter.Inc(1)
 		return false
 	}
+	return c.admitVerified(hash, code)
+}
+
+// admitVerified retains code after the caller has already checked its
+// content-addressed hash. Strict state reads use this path so verification and
+// cache admission never hash the same bytecode twice.
+func (c *stateCodeCache) admitVerified(hash tcommon.Hash, code []byte) bool {
+	if c == nil || hash == (tcommon.Hash{}) || len(code) == 0 {
+		return false
+	}
 	charge := int64(len(code)) + codeCacheEntryOverhead
 	if charge > c.maxBytes {
 		return false

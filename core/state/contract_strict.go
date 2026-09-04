@@ -3,11 +3,23 @@ package state
 import (
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/types"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+)
+
+var (
+	stateCodeStrictObjectHitCounter      = metrics.NewRegisteredCounter("state/code_strict/source/object", nil)
+	stateCodeStrictObjectPromoteCounter  = metrics.NewRegisteredCounter("state/code_strict/object_promotions", nil)
+	stateCodeStrictSharedCacheHitCounter = metrics.NewRegisteredCounter("state/code_strict/source/shared_cache", nil)
+	stateCodeStrictHotHitCounter         = metrics.NewRegisteredCounter("state/code_strict/source/hot", nil)
+	stateCodeStrictHotMissCounter        = metrics.NewRegisteredCounter("state/code_strict/hot_misses", nil)
+	stateCodeStrictColdHitCounter        = metrics.NewRegisteredCounter("state/code_strict/source/cold", nil)
+	stateCodeStrictFinalMissCounter      = metrics.NewRegisteredCounter("state/code_strict/final_misses", nil)
+	stateCodeStrictErrorCounter          = metrics.NewRegisteredCounter("state/code_strict/errors", nil)
 )
 
 // GetStateStrict is the archive/query counterpart of GetState. It preserves
@@ -71,11 +83,24 @@ func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 	if obj == nil || obj.deleted {
 		return nil, nil
 	}
-	if obj.code != nil || obj.codeDirty || obj.codeHash == (tcommon.Hash{}) {
+	if obj.code != nil {
+		if obj.codeHash != (tcommon.Hash{}) && tcommon.Keccak256(obj.code) != obj.codeHash {
+			stateCodeCacheRejectCounter.Inc(1)
+			stateCodeStrictErrorCounter.Inc(1)
+			return nil, fmt.Errorf("cached contract runtime code hash mismatch contract=%s codeHash=%s", addr.Hex(), obj.codeHash.Hex())
+		}
+		stateCodeStrictObjectHitCounter.Inc(1)
+		if store := s.getStateCodeStore(); store != nil && s.admitVerifiedStateCode(obj.codeHash, obj.code, store) {
+			stateCodeStrictObjectPromoteCounter.Inc(1)
+		}
 		return obj.code, nil
+	}
+	if obj.codeDirty || obj.codeHash == (tcommon.Hash{}) {
+		return nil, nil
 	}
 	code, ok, err := s.readStateCodeStrict(obj.codeHash)
 	if err != nil {
+		stateCodeStrictErrorCounter.Inc(1)
 		return nil, err
 	}
 	if ok {
@@ -84,15 +109,23 @@ func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 	}
 	if s.codeColdHistory != nil {
 		if code, ok, err := s.codeColdHistory.GetCodeAtOrBefore(obj.codeHash, s.codeColdTxNum); err != nil {
+			stateCodeStrictErrorCounter.Inc(1)
 			return nil, err
 		} else if ok && len(code) > 0 {
+			if tcommon.Keccak256(code) != obj.codeHash {
+				stateCodeCacheRejectCounter.Inc(1)
+				stateCodeStrictErrorCounter.Inc(1)
+				return nil, fmt.Errorf("cold contract runtime code hash mismatch contract=%s codeHash=%s", addr.Hex(), obj.codeHash.Hex())
+			}
+			stateCodeStrictColdHitCounter.Inc(1)
 			obj.code = append([]byte(nil), code...)
 			if store := s.getStateCodeStore(); store != nil {
-				s.admitStateCode(obj.codeHash, obj.code, store)
+				s.admitVerifiedStateCode(obj.codeHash, obj.code, store)
 			}
 			return obj.code, nil
 		}
 	}
+	stateCodeStrictFinalMissCounter.Inc(1)
 	return nil, nil
 }
 

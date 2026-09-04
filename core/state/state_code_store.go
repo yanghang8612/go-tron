@@ -2,6 +2,7 @@ package state
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -114,20 +115,34 @@ func (s *StateDB) readStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 	if code, ok := s.cachedStateCode(hash, store); ok {
+		stateCodeStrictSharedCacheHitCounter.Inc(1)
 		return code, true, nil
 	}
 	if strict, ok := store.(stateCodeStrictReader); ok {
 		code, found, err := strict.ReadStateCodeStrict(hash)
 		if err == nil && found {
-			s.admitStateCode(hash, code, store)
+			if tcommon.Keccak256(code) != hash {
+				stateCodeCacheRejectCounter.Inc(1)
+				return nil, false, fmt.Errorf("state code hash mismatch codeHash=%s", hash.Hex())
+			}
+			stateCodeStrictHotHitCounter.Inc(1)
+			s.admitVerifiedStateCode(hash, code, store)
+		} else if err == nil {
+			stateCodeStrictHotMissCounter.Inc(1)
 		}
 		return code, found, err
 	}
 	code := store.ReadStateCode(hash)
 	if len(code) == 0 {
+		stateCodeStrictHotMissCounter.Inc(1)
 		return nil, false, nil
 	}
-	s.admitStateCode(hash, code, store)
+	if tcommon.Keccak256(code) != hash {
+		stateCodeCacheRejectCounter.Inc(1)
+		return nil, false, fmt.Errorf("state code hash mismatch codeHash=%s", hash.Hex())
+	}
+	stateCodeStrictHotHitCounter.Inc(1)
+	s.admitVerifiedStateCode(hash, code, store)
 	return append([]byte(nil), code...), true, nil
 }
 
@@ -152,12 +167,22 @@ func (s *StateDB) cachedStateCode(hash tcommon.Hash, store stateCodeStore) ([]by
 	return s.db.codeCache.get(hash)
 }
 
-func (s *StateDB) admitStateCode(hash tcommon.Hash, code []byte, store stateCodeStore) {
+func (s *StateDB) admitStateCode(hash tcommon.Hash, code []byte, store stateCodeStore) bool {
 	if s == nil || s.db == nil || s.db.codeCache == nil {
-		return
+		return false
 	}
 	if _, ok := store.(rawDBStateCodeStore); !ok {
-		return
+		return false
 	}
-	s.db.codeCache.admit(hash, code)
+	return s.db.codeCache.admit(hash, code)
+}
+
+func (s *StateDB) admitVerifiedStateCode(hash tcommon.Hash, code []byte, store stateCodeStore) bool {
+	if s == nil || s.db == nil || s.db.codeCache == nil {
+		return false
+	}
+	if _, ok := store.(rawDBStateCodeStore); !ok {
+		return false
+	}
+	return s.db.codeCache.admitVerified(hash, code)
 }

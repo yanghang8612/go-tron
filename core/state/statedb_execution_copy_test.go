@@ -421,8 +421,13 @@ func TestStateDBCopyBlockExecutionBaseRetainsCachedContractCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cp.GetCode(contract); !bytes.Equal(got, code) {
+	got := cp.GetCode(contract)
+	if !bytes.Equal(got, code) {
 		t.Fatalf("execution-copy code = %x, want cached %x", got, code)
+	}
+	got[0] ^= 0xff
+	if source := sdb.GetCode(contract); !bytes.Equal(source, code) {
+		t.Fatalf("execution-copy mutation changed source code: %x", source)
 	}
 }
 
