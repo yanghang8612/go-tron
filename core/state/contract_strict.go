@@ -84,10 +84,12 @@ func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 		return nil, nil
 	}
 	if obj.code != nil {
-		if obj.codeHash != (tcommon.Hash{}) && tcommon.Keccak256(obj.code) != obj.codeHash {
-			stateCodeCacheRejectCounter.Inc(1)
-			stateCodeStrictErrorCounter.Inc(1)
-			return nil, fmt.Errorf("cached contract runtime code hash mismatch contract=%s codeHash=%s", addr.Hex(), obj.codeHash.Hex())
+		if obj.codeHash != (tcommon.Hash{}) {
+			if actualHash := tcommon.Keccak256(obj.code); actualHash != obj.codeHash {
+				stateCodeCacheRejectCounter.Inc(1)
+				stateCodeStrictErrorCounter.Inc(1)
+				return nil, fmt.Errorf("cached contract runtime code hash mismatch contract=%s codeHash=%s actualHash=%s codeLen=%d codeDirty=%t", addr.Hex(), obj.codeHash.Hex(), actualHash.Hex(), len(obj.code), obj.codeDirty)
+			}
 		}
 		stateCodeStrictObjectHitCounter.Inc(1)
 		if store := s.getStateCodeStore(); store != nil && s.admitVerifiedStateCode(obj.codeHash, obj.code, store) {
@@ -112,10 +114,10 @@ func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 			stateCodeStrictErrorCounter.Inc(1)
 			return nil, err
 		} else if ok && len(code) > 0 {
-			if tcommon.Keccak256(code) != obj.codeHash {
+			if actualHash := tcommon.Keccak256(code); actualHash != obj.codeHash {
 				stateCodeCacheRejectCounter.Inc(1)
 				stateCodeStrictErrorCounter.Inc(1)
-				return nil, fmt.Errorf("cold contract runtime code hash mismatch contract=%s codeHash=%s", addr.Hex(), obj.codeHash.Hex())
+				return nil, fmt.Errorf("cold contract runtime code hash mismatch contract=%s codeHash=%s actualHash=%s codeLen=%d", addr.Hex(), obj.codeHash.Hex(), actualHash.Hex(), len(code))
 			}
 			stateCodeStrictColdHitCounter.Inc(1)
 			obj.code = append([]byte(nil), code...)

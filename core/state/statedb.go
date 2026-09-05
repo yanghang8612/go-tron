@@ -3547,6 +3547,8 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		dirtyStorageCopy = make(map[tcommon.Hash]storageOrigin, len(obj.dirtyStorage))
 	}
 	newObj := acquireStateObject()
+	// Clone code without changing nil (not loaded) into a non-nil empty
+	// slice, which code readers treat as an authoritative cached value.
 	*newObj = stateObject{
 		address:                       addr,
 		dirty:                         obj.dirty,
@@ -3574,7 +3576,7 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		accountFrozenV2PointAmounts:   obj.accountFrozenV2PointAmounts,
 		deleted:                       obj.deleted,
 		created:                       obj.created,
-		code:                          append([]byte{}, obj.code...),
+		code:                          bytes.Clone(obj.code),
 		codeHash:                      obj.codeHash,
 		codeDirty:                     obj.codeDirty,
 		contractMeta:                  metaCopy,

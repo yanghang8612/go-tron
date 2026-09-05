@@ -121,9 +121,9 @@ func (s *StateDB) readStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
 	if strict, ok := store.(stateCodeStrictReader); ok {
 		code, found, err := strict.ReadStateCodeStrict(hash)
 		if err == nil && found {
-			if tcommon.Keccak256(code) != hash {
+			if actualHash := tcommon.Keccak256(code); actualHash != hash {
 				stateCodeCacheRejectCounter.Inc(1)
-				return nil, false, fmt.Errorf("state code hash mismatch codeHash=%s", hash.Hex())
+				return nil, false, fmt.Errorf("state code hash mismatch codeHash=%s actualHash=%s codeLen=%d", hash.Hex(), actualHash.Hex(), len(code))
 			}
 			stateCodeStrictHotHitCounter.Inc(1)
 			s.admitVerifiedStateCode(hash, code, store)
@@ -137,9 +137,9 @@ func (s *StateDB) readStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
 		stateCodeStrictHotMissCounter.Inc(1)
 		return nil, false, nil
 	}
-	if tcommon.Keccak256(code) != hash {
+	if actualHash := tcommon.Keccak256(code); actualHash != hash {
 		stateCodeCacheRejectCounter.Inc(1)
-		return nil, false, fmt.Errorf("state code hash mismatch codeHash=%s", hash.Hex())
+		return nil, false, fmt.Errorf("state code hash mismatch codeHash=%s actualHash=%s codeLen=%d", hash.Hex(), actualHash.Hex(), len(code))
 	}
 	stateCodeStrictHotHitCounter.Inc(1)
 	s.admitVerifiedStateCode(hash, code, store)

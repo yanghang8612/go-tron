@@ -3,7 +3,9 @@ package state
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -234,18 +236,35 @@ func TestStateCodeCachePromotesStrictExecutionObjectHitForOracle(t *testing.T) {
 
 func TestStateCodeStrictRejectsCorruptExecutionObjectCode(t *testing.T) {
 	code, hash := cacheTestCode(0x7a, 128)
-	db := NewDatabaseWithConfig(ethrawdb.NewMemoryDatabase(), DatabaseConfig{CodeCacheSizeBytes: 4096})
-	t.Cleanup(func() { _ = db.Close() })
 	addr := tcommon.Address{0x41, 0x07, 0x0a}
-	sdb := stateDBWithCodeHash(db, addr, hash)
-	sdb.stateObjects[addr].code = append([]byte(nil), code...)
-	sdb.stateObjects[addr].code[0] ^= 0xff
+	code[0] ^= 0xff
+	for name, corruptCode := range map[string][]byte{
+		"changed_bytes": code,
+		"cached_empty":  {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := NewDatabaseWithConfig(ethrawdb.NewMemoryDatabase(), DatabaseConfig{CodeCacheSizeBytes: 4096})
+			t.Cleanup(func() { _ = db.Close() })
+			sdb := stateDBWithCodeHash(db, addr, hash)
+			sdb.stateObjects[addr].code = corruptCode
 
-	if got, err := sdb.GetCodeStrict(addr); err == nil || got != nil {
-		t.Fatalf("corrupt strict object hit = %x, err %v", got, err)
-	}
-	if _, ok := db.codeCache.get(hash); ok {
-		t.Fatal("corrupt object code populated shared cache")
+			got, err := sdb.GetCodeStrict(addr)
+			if err == nil || got != nil {
+				t.Fatalf("corrupt strict object hit = %x, err %v", got, err)
+			}
+			for _, field := range []string{
+				"contract=" + addr.Hex(), "codeHash=" + hash.Hex(),
+				"actualHash=" + tcommon.Keccak256(corruptCode).Hex(),
+				fmt.Sprintf("codeLen=%d", len(corruptCode)), "codeDirty=false",
+			} {
+				if !strings.Contains(err.Error(), field) {
+					t.Errorf("mismatch error %q missing diagnostic %q", err, field)
+				}
+			}
+			if _, ok := db.codeCache.get(hash); ok {
+				t.Fatal("corrupt object code populated shared cache")
+			}
+		})
 	}
 }
 
