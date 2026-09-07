@@ -452,6 +452,7 @@ var app = &cli.App{
 		historyEnabledFlag,
 		historyBlockDedupFlag,
 		historyCompressionFormatFlag,
+		historyCatchupModeFlag,
 		historyPressureHotFlag,
 		historyPressureFreeFlag,
 		historyBuildMinFreeFlag,
@@ -626,6 +627,11 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	historyCatchupMode, err := runtimeHistoryCatchupMode(ctx)
+	if err != nil {
+		return err
+	}
+	log.Info("History catch-up scheduling configured", "mode", historyCatchupMode)
 	rawdb.SetStateHistoryBlockDedup(ctx.Bool(historyBlockDedupFlag.Name))
 	log.Info("Hot history block dedup configured", "enabled", ctx.Bool(historyBlockDedupFlag.Name))
 	if err := validateSyncImportBatch(cfg.SyncImportBatch); err != nil {
@@ -1231,6 +1237,7 @@ func gtron(ctx *cli.Context) error {
 				HistoryWindow:               prunePolicy.HistoryWindow,
 				ETL:                         snapshotETL,
 				CatchupBuildMinInterval:     snapshotCatchupBuildInterval,
+				HistoryCatchupMode:          historyCatchupMode,
 				CatchupUnthrottledLagBlocks: prunePolicy.HistoryWindow,
 				CatchupHeavyWorkCooldown:    snapshotCatchupHeavyWorkCooldown,
 				HeavyWorkGate:               heavyWorkGate,

@@ -98,6 +98,8 @@ type Config struct {
 	// drains immediately; zero preserves the unthrottled behavior used by offline
 	// tooling and tests.
 	CatchupBuildMinInterval time.Duration
+	// Throughput is explicitly opted into; balanced preserves existing scheduling.
+	HistoryCatchupMode HistoryCatchupMode
 	// CatchupUnthrottledLagBlocks bypasses CatchupBuildMinInterval while sync is
 	// active, importer admission is ready, and more than this many complete
 	// hot-history blocks are ready to be published. Each build remains bounded by
@@ -263,9 +265,12 @@ type PassResult struct {
 	// HistoryMinRecovery is the importer-only recovery window selected after a
 	// forced-busy build. It is used by the next admission and for duty-cycle
 	// observability.
-	HistoryMinRecovery time.Duration
-	LatestBuilt        bool
-	LatestDeferred     bool
+	HistoryMinRecovery         time.Duration
+	HistoryMaintenanceDuration time.Duration
+	historyCompletionPending   bool
+	historyMaintenanceID       uint64
+	LatestBuilt                bool
+	LatestDeferred             bool
 	// LatestCommitmentBaseBuilt distinguishes the sync-time root/branch-only
 	// rotation from a full latest-dataset build for logs and operators.
 	LatestCommitmentBaseBuilt bool
@@ -373,6 +378,7 @@ type Stats struct {
 	// LastBuildDuration is the duration of the most recent successful history
 	// build, not the eligibility-check latency of a later deferred pass.
 	LastBuildDuration        time.Duration
+	LastMaintenanceDuration  time.Duration
 	LastCompactionDuration   time.Duration
 	LastCompactionMerges     uint64
 	LastLatestDuration       time.Duration
@@ -446,6 +452,7 @@ type coldRunnerMetrics struct {
 	lastForcedBatchBlocks    *metrics.Gauge
 	lastForcedBatchTxNums    *metrics.Gauge
 	lastForcedRecovery       *metrics.Gauge
+	lastMaintenanceDuration  *metrics.Gauge
 	lastForcedDutyPPM        *metrics.Gauge
 	lastForcedDebtBlocks     *metrics.Gauge
 	lastForcedDebtGrowth     *metrics.Gauge
@@ -499,6 +506,7 @@ func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 		lastForcedBatchBlocks:    metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/batch/blocks", nil),
 		lastForcedBatchTxNums:    metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/batch/txnums", nil),
 		lastForcedRecovery:       metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/recovery", nil),
+		lastMaintenanceDuration:  metrics.GetOrRegisterGauge(namespace+"lastpass/maintenance/duration", nil),
 		lastForcedDutyPPM:        metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/duty_cycle_ppm", nil),
 		lastForcedDebtBlocks:     metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/debt_blocks", nil),
 		lastForcedDebtGrowth:     metrics.GetOrRegisterGauge(namespace+"history/forced_busy/last/debt_growth_blocks", nil),
@@ -561,6 +569,7 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.lastForcedBatchBlocks.Update(coldSnapshotUintGauge(stats.LastForcedBatchBlocks))
 	m.lastForcedBatchTxNums.Update(coldSnapshotUintGauge(stats.LastForcedBatchTxNums))
 	m.lastForcedRecovery.Update(int64(stats.LastForcedRecovery))
+	m.lastMaintenanceDuration.Update(int64(stats.LastMaintenanceDuration))
 	m.lastForcedDutyPPM.Update(coldSnapshotUintGauge(stats.LastForcedDutyPPM))
 	m.lastForcedDebtBlocks.Update(coldSnapshotUintGauge(stats.LastForcedDebtBlocks))
 	m.lastForcedDebtGrowth.Update(stats.LastForcedDebtGrowth)
@@ -642,6 +651,11 @@ type Runner struct {
 	lastForcedBusyAttemptAt  atomic.Int64
 
 	lastForcedAttemptRecovery atomic.Int64
+	historyNotBefore          atomic.Int64
+	lastMaintenanceDuration   atomic.Int64
+	maintenanceSerial         uint64 // guarded by passMu
+	completedMaintenanceID    uint64 // guarded by passMu
+	pendingMaintenanceID      uint64 // guarded by passMu; blocks new passes during outer work
 
 	lastSuccessfulForcedAt        atomic.Int64
 	lastSuccessfulForcedLag       atomic.Uint64
@@ -677,6 +691,9 @@ func NewRunner(chain ChainSource, cfg Config) *Runner {
 }
 
 func (c Config) applyDefaults() Config {
+	if c.HistoryCatchupMode == "" {
+		c.HistoryCatchupMode = HistoryCatchupBalanced
+	}
 	if c.HistoryDataset == "" {
 		c.HistoryDataset = SegmentDatasetStateDomainChange
 	}
@@ -708,6 +725,9 @@ func (c Config) applyDefaults() Config {
 func (c Config) validate() error {
 	if !c.Enabled {
 		return nil
+	}
+	if _, err := ParseHistoryCatchupMode(string(c.HistoryCatchupMode)); err != nil {
+		return err
 	}
 	if c.Dir == "" {
 		return errors.New("snapshots: cold builder directory is empty")
@@ -876,6 +896,7 @@ func (r *Runner) Snapshot() Stats {
 		LastToTxNum:              r.lastToTxNum.Load(),
 		LastPassDuration:         time.Duration(r.lastPassDuration.Load()),
 		LastBuildDuration:        time.Duration(r.lastBuildDuration.Load()),
+		LastMaintenanceDuration:  time.Duration(r.lastMaintenanceDuration.Load()),
 		LastCompactionDuration:   time.Duration(r.lastCompactionDuration.Load()),
 		LastCompactionMerges:     r.lastCompactionMerges.Load(),
 		LastLatestDuration:       time.Duration(r.lastLatestDuration.Load()),
@@ -927,6 +948,10 @@ func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 // or when a failed space probe permits only validation of existing coverage.
 // It must not reenter this runner. A callback failure stops later work.
 func (r *Runner) OnePassWithMaintenanceContext(ctx context.Context, beforeMerge func(context.Context, PassResult) error) (PassResult, error) {
+	return r.onePassWithMaintenanceContext(ctx, beforeMerge, false)
+}
+
+func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge func(context.Context, PassResult) error, deferCompletion bool) (PassResult, error) {
 	if r == nil {
 		return PassResult{}, nil
 	}
@@ -940,6 +965,9 @@ func (r *Runner) OnePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	defer r.passMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return PassResult{}, err
+	}
+	if r.pendingMaintenanceID != 0 {
+		return PassResult{}, ErrHistoryMaintenancePending
 	}
 
 	start := time.Now()
@@ -1026,7 +1054,7 @@ func (r *Runner) OnePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 			result.LatestCommitmentBaseBuilt = built && syncCommitmentCandidate && r.lastLatestBuildBlock.Load() == latestBlockBefore
 		}
 	}
-	if err == nil && result.Built && result.HistoryForcedBusy {
+	if !r.throughputCatchup() && err == nil && result.Built && result.HistoryForcedBusy {
 		// Base the next forced admission on work which actually completed. Keeping
 		// this assignment after compaction prevents a slow merge from being hidden
 		// behind the ordinary history-build duration.
@@ -1036,7 +1064,7 @@ func (r *Runner) OnePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 		}
 	}
 	finishedAt := time.Now()
-	if err != nil && result.HistoryForcedBusy && result.HistoryBuildAttempted {
+	if !r.throughputCatchup() && err != nil && result.HistoryForcedBusy && result.HistoryBuildAttempted {
 		// Failed forced-busy work consumed the same importer resources as a
 		// successful build. Start a fresh recovery window at failure completion;
 		// using the admission timestamp would allow a long failed build to retry
@@ -1045,8 +1073,20 @@ func (r *Runner) OnePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 		result.HistoryMinRecovery = recovery
 		result.extendHistoryRetryDeadline(finishedAt, recovery)
 	}
+	if r.throughputCatchup() && result.HistoryBuildAttempted {
+		r.maintenanceSerial++
+		result.historyMaintenanceID = r.maintenanceSerial
+		result.historyCompletionPending = true
+		if deferCompletion {
+			r.pendingMaintenanceID = result.historyMaintenanceID
+		}
+		r.applyThroughputRecovery(&result, start, finishedAt, err)
+	}
 	result.refreshHistoryRetry(finishedAt)
 	r.recordPass(result, start, err)
+	if !deferCompletion {
+		r.completeHistoryMaintenance(&result, start, time.Now(), err)
+	}
 	return result, err
 }
 
@@ -1284,7 +1324,7 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 			}
 		}
 	}
-	if pressured {
+	if pressured && !r.throughputCatchup() {
 		batchBlocks = min(batchBlocks, pressureHistoryBatchLimit(r.cfg.BatchBlocks))
 		if batchTxNums > 0 {
 			batchTxNums = min(batchTxNums, pressureHistoryBatchLimit(r.cfg.BatchTxNums))
@@ -1572,7 +1612,9 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		// duration. Most catch-up passes do not compact, so report the adaptive
 		// recovery immediately instead of the conservative pre-build placeholder.
 		result.HistoryMinRecovery = r.forcedBusyHistoryRecovery(elapsed)
-		if result.HistoryPressureActive {
+		if r.throughputCatchup() {
+			result.HistoryMinRecovery = r.throughputRecovery(elapsed, false)
+		} else if result.HistoryPressureActive {
 			result.HistoryMinRecovery = r.pressureHistoryRecovery(elapsed)
 		}
 	}
@@ -1615,6 +1657,9 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 	}
 	if result.HistoryForcedBusy {
 		ctx = append(ctx, "dutyCyclePPM", coldSnapshotDutyPPM(elapsed, result.HistoryMinRecovery))
+		if r.throughputCatchup() {
+			ctx = append(ctx, "recoveryProvisional", true)
+		}
 	}
 	previousLag := r.lastLagBlocks.Load()
 	previousAt := r.lastHistoryBuildAt.Load()
@@ -1743,6 +1788,11 @@ func (r *Runner) historyBuildAccelerated(readyBlocks uint64) bool {
 }
 
 func (r *Runner) historyBuildRetryAfter(now time.Time, accelerated, forcedBusy bool) time.Duration {
+	if r.throughputCatchup() {
+		if deadline := r.historyNotBefore.Load(); deadline > now.UnixNano() {
+			return time.Unix(0, deadline).Sub(now)
+		}
+	}
 	if r == nil || r.cfg.CatchupBuildMinInterval <= 0 {
 		return 0
 	}
@@ -1785,6 +1835,9 @@ func (r *Runner) historyBuildRetryAfter(now time.Time, accelerated, forcedBusy b
 }
 
 func (r *Runner) forcedBusyHistoryBatchLimit(configured uint64) uint64 {
+	if r.throughputCatchup() {
+		return configured
+	}
 	if r == nil || configured <= 1 || r.cfg.CatchupBuildMinInterval <= 0 || r.cfg.CatchupHeavyWorkCooldown <= 0 {
 		return configured
 	}
@@ -2558,7 +2611,9 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 			r.lastForcedBatchTxNums.Store(result.HistoryBatchTxNums)
 			r.lastForcedRecovery.Store(int64(result.HistoryMinRecovery))
 			r.lastForcedDutyPPM.Store(coldSnapshotDutyPPM(forcedBusyHistoryWorkDuration(result), result.HistoryMinRecovery))
-			r.recordSuccessfulForcedBuild(result.HistoryBatchBlocks, lagBlocks, completedAt)
+			if !r.throughputCatchup() {
+				r.recordSuccessfulForcedBuild(result.HistoryBatchBlocks, lagBlocks, completedAt)
+			}
 		} else {
 			// A ready or ordinary build may retire substantial debt between two
 			// forced passes. Invalidate the completion anchor so that work is not

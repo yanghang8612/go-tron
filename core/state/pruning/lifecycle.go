@@ -224,19 +224,23 @@ func (l *SnapshotLifecycle) notifyPassComplete() {
 	}
 }
 
-func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
+func (l *SnapshotLifecycle) OnePass() (out SnapshotLifecyclePass, passErr error) {
 	if l == nil {
 		return SnapshotLifecyclePass{}, nil
 	}
 	started := time.Now()
-	var out SnapshotLifecyclePass
+	defer func() {
+		if l.builder != nil {
+			l.builder.CompleteHistoryMaintenance(&out.Snapshot, started, passErr)
+		}
+	}()
 	var stopErr error
 	prunedBeforeMerge := false
 	if l.builder != nil {
 		if err := l.builder.PreflightCatalog(); err != nil {
 			return out, err
 		}
-		result, err := l.builder.OnePassWithMaintenanceContext(l.ctx, func(ctx context.Context, published snapshots.PassResult) error {
+		result, err := l.builder.OnePassWithDeferredMaintenanceContext(l.ctx, func(ctx context.Context, published snapshots.PassResult) error {
 			if err := l.pruner.RecordTrustedSnapshotSegments(published.Segments); err != nil {
 				return err
 			}
@@ -385,6 +389,14 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 	}
 	if stopErr != nil {
 		return out, stopErr
+	}
+	if err := l.ctx.Err(); err != nil {
+		return out, err
+	}
+	if l.builder != nil {
+		// Complete before publishing the full-pass hook. The error-safe defer
+		// remains installed, and duplicate completion is an explicit no-op.
+		l.builder.CompleteHistoryMaintenance(&out.Snapshot, started, nil)
 	}
 	latestBlock := uint64(0)
 	if l.builder != nil {
