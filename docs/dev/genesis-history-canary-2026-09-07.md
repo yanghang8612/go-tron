@@ -124,3 +124,9 @@ python3 build/benchmarks/20260907-genesis-canary/capture_via_gateway.py verify \
 2043、2044、2045 的三个固定 block hash 在余额查询前后匹配，三项 RPC hex 与精确 SUN 余额全部与裁剪前一致。该账户在 2044 与 2045 的两次已证明变化，加上 2045 已在原生产热裁剪前沿以内，完成了本次选定账户的冷热历史余额读取回归。它没有扩大为全部历史字段或后期巨大委托数据的验收。
 
 原 baseline SHA256 在复验后仍为 `b998c2320892c23e2cf6fddb02fcc1e6304ef5c6ad9cdfeac3297211fa260f4f`，未修改原基线。此次只执行只读 RPC/metrics 和本地结果存档，没有启动/停止节点、修改服务器文件或触发额外 compaction。
+
+## 切换吞吐调度并重启后的复验：通过
+
+主执行者将原生 Sapling release 切至 `876480f8`，在 13:34:59 UTC 以 throughput 模式沿现有数据库恢复同步。最初 13:35:27 的尝试因进程启动后 `hot_pruned` gauge 尚为零被明确拒绝为 not ready，未将其计为通过，也没有修改基线。
+
+待实际维护完成后，于 **2026-09-07T13:37:12.743639Z** 再次复验，exit 0；[原始结果](../../build/benchmarks/20260907-genesis-canary/capture-20260907T133703Z/verification.json) 和 [全部请求/响应](../../build/benchmarks/20260907-genesis-canary/capture-20260907T133703Z/requests.json) 均保留。此时 `published=pruned=167500`、solidified=1,875,186、head=1,876,319，新进程标识 `1788788099969088273`。12 次只读请求、13,866 B response，三个旧块哈希及三项精确余额再次与原热基线一致。这证明本样本在本轮重启后的冷历史读取保持一致，不扩大原有单账户验收范围。

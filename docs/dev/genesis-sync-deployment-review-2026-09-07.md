@@ -8,7 +8,7 @@
 
 - `core/genesis.go:91–113,310–344` 的创世状态仍通过 `StateDB.Commit` 写入，内部状态根独立保存为 GenesisStateRoot。主网创世区块头不包含这个内部根，V5 编码不会因此改变主网 genesis BlockID。`core/state/statedb.go:3941–4035,4351` 的普通提交使用相同 V5 编码路径。
 - `core/state/snapshots/latest_segment.go:1729` 对不存在的清单返回空视图；`cold_builder.go:2785` 在 solidified 为 0 时不要求旧历史 stage。`cmd/gtron/main.go:663` 只有显式开启 `snapshot.bootstrap` 才执行远端快照 bootstrap。空库不必携带旧 manifest，也不应开启 snapshot reset/bootstrap 来弥补不存在的问题。
-- 新 snap/archive 默认保留 65,536 块热重复历史（`params/config.go:77`）。冷化目标受 solidified、Finish 和完整 StateTxRange 约束（`cold_builder.go:1142` 起），从实际第一条热历史开始构建。深度追赶阶段通常允许积累 4 倍窗口，持续繁忙时上限 8 倍窗口；字节压力可提前触发。开始同步后短时间没有冷文件是正常现象，不能仅据此判断冷化停滞。
+- 新 snap/archive 默认保留 65,536 块热重复历史（`params/config.go:77`）。冷化目标受 solidified、Finish 和完整 StateTxRange 约束（`cold_builder.go:1142` 起），从实际第一条热历史开始构建。深度追赶阶段通常在 4 倍窗口水位触发，持续繁忙时在 8 倍窗口触发强制批次；这是启动工作水位，并非积压硬上限，字节压力可提前触发。开始同步后短时间没有冷文件是正常现象，持续净处理速度则必须另行实测。
 - 有效冷覆盖发布后先裁剪对应热历史再做较重合并（`core/state/pruning/lifecycle.go:239` 附近）；没有冷覆盖不能凭空间压力删除权威历史。保留全部历史查询依赖新二进制、热状态和冷文件共同完整。
 
 已有定向测试覆盖 MainnetGenesis HashByteEqual、创世 rooted dynamic properties 确定性、已有库 SetupGenesis 不修改最新状态，以及 V5 热/冷历史、CodeHash 和重组恢复精确内部根/编码。独立审阅未发现具体反例；这不等于已经完成全主网交易和 Sapling 的历史重放。V5 内部根与旧 V4 不同，产生新数据后不能回滚到不认识 V5 的旧二进制。
