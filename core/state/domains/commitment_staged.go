@@ -58,6 +58,11 @@ type rawdbBranchStore struct {
 	parentSession              pointread.CommitmentParentSession
 	parentPrefetchBase         int
 	parentFallbackPrefetchBase int
+	// A partitioned ordered fold gives each group of four second-nibble
+	// children its own foreground cursor and decoder arena.
+	partitionedParent bool
+	partitionArenas   *[commitmentPartitionCount + 1]*[]byte
+	parentReadPermits chan struct{}
 	// Each persistent prefetch lane exclusively owns one path scratch region.
 	// Keeping it on the fold store prevents the interface call from forcing a
 	// fresh pathLen-byte heap object for every block/lane plan.
@@ -113,15 +118,24 @@ var branchLeafKeyArenaPool = sync.Pool{
 }
 
 func (s *rawdbBranchStore) borrowLeafKeyArenas() {
-	for i := range s.leafKeyArenas {
+	arenas := s.leafKeyArenas[:]
+	if s.partitionedParent {
+		s.partitionArenas = new([commitmentPartitionCount + 1]*[]byte)
+		arenas = s.partitionArenas[:]
+	}
+	for i := range arenas {
 		arena := branchLeafKeyArenaPool.Get().(*[]byte)
 		*arena = (*arena)[:0]
-		s.leafKeyArenas[i] = arena
+		arenas[i] = arena
 	}
 }
 
 func (s *rawdbBranchStore) returnLeafKeyArenas() {
-	for i, arena := range s.leafKeyArenas {
+	arenas := s.leafKeyArenas[:]
+	if s.partitionArenas != nil {
+		arenas = s.partitionArenas[:]
+	}
+	for i, arena := range arenas {
 		if arena == nil {
 			continue
 		}
@@ -131,8 +145,39 @@ func (s *rawdbBranchStore) returnLeafKeyArenas() {
 			*arena = (*arena)[:0]
 		}
 		branchLeafKeyArenaPool.Put(arena)
-		s.leafKeyArenas[i] = nil
+		arenas[i] = nil
 	}
+	s.partitionArenas = nil
+}
+
+func (s *rawdbBranchStore) parentReaderCount() int {
+	if s.partitionedParent {
+		return commitmentPartitionCount + 1
+	}
+	return maxFoldNibbles + 1
+}
+
+func (s *rawdbBranchStore) parentReader(prefix []byte) int {
+	if s.partitionedParent {
+		if len(prefix) >= 2 && prefix[0] < maxFoldNibbles && prefix[1] < maxFoldNibbles {
+			return int(prefix[0])*commitmentPartitionsPerNibble + int(prefix[1])/commitmentChildrenPerPartition
+		}
+		return commitmentPartitionCount
+	}
+	if len(prefix) > 0 && prefix[0] < maxFoldNibbles {
+		return int(prefix[0])
+	}
+	return maxFoldNibbles
+}
+
+func (s *rawdbBranchStore) parentLeafArena(reader int) *[]byte {
+	if s.partitionArenas != nil {
+		return s.partitionArenas[reader]
+	}
+	if reader < len(s.leafKeyArenas) {
+		return s.leafKeyArenas[reader]
+	}
+	return nil
 }
 
 var branchEncodingSlicesPool = sync.Pool{
@@ -380,11 +425,8 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
 	decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
 	decodeView.dst = dst
-	reader := maxFoldNibbles // root branch has no first-nibble owner
-	if len(prefix) > 0 && prefix[0] < maxFoldNibbles {
-		reader = int(prefix[0])
-	}
-	decodeView.arena = s.leafKeyArenas[reader]
+	reader := s.parentReader(prefix)
+	decodeView.arena = s.parentLeafArena(reader)
 	decodeView.tombstone = false
 	decodeView.allowTombstone = s.hasBaseline()
 	var found bool
@@ -422,10 +464,10 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 	if s.hasFrozenKeyspace {
 		decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
 		decodeView.dst = dst
-		decodeView.arena = s.leafKeyArenas[reader]
+		decodeView.arena = s.parentLeafArena(reader)
 		decodeView.tombstone = false
 		decodeView.allowTombstone = true
-		fallbackReader := reader + maxFoldNibbles + 1
+		fallbackReader := reader + s.parentReaderCount()
 		var found bool
 		var err error
 		if s.parentSession != nil {
@@ -459,10 +501,10 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 	if s.legacyFallback {
 		decodeView := branchDecodeViewPool.Get().(*branchDecodeView)
 		decodeView.dst = dst
-		decodeView.arena = s.leafKeyArenas[reader]
+		decodeView.arena = s.parentLeafArena(reader)
 		decodeView.tombstone = false
 		decodeView.allowTombstone = false
-		fallbackReader := reader + maxFoldNibbles + 1
+		fallbackReader := reader + s.parentReaderCount()
 		var found bool
 		var err error
 		legacy := rawdb.LegacyCommitmentBranchKeyspace()
@@ -498,19 +540,19 @@ func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, 
 		return ok, err
 	}
 	commitmentBranchColdHitCounter.Inc(1)
-	if err := decodeBranchDataIntoArena(encoded, dst, s.leafKeyArenas[reader]); err != nil {
+	if err := decodeBranchDataIntoArena(encoded, dst, s.parentLeafArena(reader)); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 // prefetchParentLane predicts the first branch outside the fixed commitment
-// cache trunk for every distinct path in one ordered lane. Ops are already
+// cache trunk for every distinct path in one ordered lane. Paths are already
 // sorted by full hash, so equal prefixes are contiguous and deduplicate without
 // a map or heap allocation. The read-ahead does not decode values: the normal
 // fold remains the sole authority for branch kinds and mutations.
-func (s *rawdbBranchStore) prefetchParentLane(nb uint8, ops []op, depth int) error {
-	_, _, err := s.prefetchParentLaneLimited(nb, ops, depth, 0)
+func (s *rawdbBranchStore) prefetchParentLane(nb uint8, paths []common.Hash, depth int) error {
+	_, _, err := s.prefetchParentLaneLimited(nb, paths, depth, 0)
 	return err
 }
 
@@ -521,7 +563,7 @@ func (s *rawdbBranchStore) prefetchParentLane(nb uint8, ops []op, depth int) err
 type commitmentParentPrefetchPlan struct {
 	store        *rawdbBranchStore
 	prefetch     pointread.CommitmentParentPrefetchSession
-	ops          []op
+	paths        []common.Hash
 	nb           uint8
 	depth        int
 	limit        int
@@ -533,7 +575,7 @@ type commitmentParentPrefetchPlan struct {
 	done         bool
 }
 
-func newCommitmentParentPrefetchPlan(s *rawdbBranchStore, nb uint8, ops []op, depth, limit int) commitmentParentPrefetchPlan {
+func newCommitmentParentPrefetchPlan(s *rawdbBranchStore, nb uint8, paths []common.Hash, depth, limit int) commitmentParentPrefetchPlan {
 	prefetch, _ := s.parentSession.(pointread.CommitmentParentPrefetchSession)
 	if depth > pathLen {
 		depth = pathLen
@@ -541,11 +583,11 @@ func newCommitmentParentPrefetchPlan(s *rawdbBranchStore, nb uint8, ops []op, de
 	return commitmentParentPrefetchPlan{
 		store:    s,
 		prefetch: prefetch,
-		ops:      ops,
+		paths:    paths,
 		nb:       nb,
 		depth:    depth,
 		limit:    limit,
-		done:     prefetch == nil || len(ops) == 0 || depth <= 0,
+		done:     prefetch == nil || len(paths) == 0 || depth <= 0,
 	}
 }
 
@@ -558,15 +600,15 @@ func (p *commitmentParentPrefetchPlan) step() (done bool, err error) {
 		return true, nil
 	}
 	current := &p.store.parentPrefetchPaths[p.nb]
-	for p.next < len(p.ops) {
+	for p.next < len(p.paths) {
 		i := p.next
 		p.next++
-		if pathNibble(p.ops[i].path, 0) != p.nb {
+		if pathNibble(p.paths[i], 0) != p.nb {
 			p.done = true
-			return true, fmt.Errorf("domains: commitment prefetch lane %d received path in lane %d", p.nb, pathNibble(p.ops[i].path, 0))
+			return true, fmt.Errorf("domains: commitment prefetch lane %d received path in lane %d", p.nb, pathNibble(p.paths[i], 0))
 		}
 		for d := 0; d < p.depth; d++ {
-			current[d] = pathNibble(p.ops[i].path, d)
+			current[d] = pathNibble(p.paths[i], d)
 		}
 		same := p.havePrevious
 		for d := 0; same && d < p.depth; d++ {
@@ -609,8 +651,8 @@ func (p *commitmentParentPrefetchPlan) step() (done bool, err error) {
 // lookahead. A non-positive limit preserves the unbounded critical-level
 // behavior. The count is in logical prefixes; legacy/frozen fallback probes do
 // not consume a second unit.
-func (s *rawdbBranchStore) prefetchParentLaneLimited(nb uint8, ops []op, depth, limit int) (int, bool, error) {
-	plan := newCommitmentParentPrefetchPlan(s, nb, ops, depth, limit)
+func (s *rawdbBranchStore) prefetchParentLaneLimited(nb uint8, paths []common.Hash, depth, limit int) (int, bool, error) {
+	plan := newCommitmentParentPrefetchPlan(s, nb, paths, depth, limit)
 	for !plan.done {
 		if _, err := plan.step(); err != nil {
 			return plan.planned, false, err
@@ -628,7 +670,7 @@ func (s *rawdbBranchStore) supportsParentPrefetch() bool {
 }
 
 func (s *rawdbBranchStore) beginParentRead() error {
-	const ordinaryReaders = maxFoldNibbles + 1
+	ordinaryReaders := s.parentReaderCount()
 	hasFallback := s.legacyFallback || s.hasFrozenKeyspace
 	readers := ordinaryReaders
 	if hasFallback {
@@ -652,6 +694,9 @@ func (s *rawdbBranchStore) beginParentRead() error {
 		return err
 	}
 	if session != nil {
+		if budget, ok := session.(pointread.CommitmentParentReadBudget); ok {
+			budget.SetCommitmentParentReadBudget(s.parentReadPermits)
+		}
 		s.parentSession = session
 		s.borrowLeafKeyArenas()
 		return nil

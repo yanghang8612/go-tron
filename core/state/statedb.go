@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -659,6 +660,7 @@ func (scope *CommitScope) detachLatestView() {
 		return
 	}
 	if scope.state.accountKVLatestReader == scope.latestReader {
+		scope.state.clearLegacyDelegationCache()
 		scope.state.accountKVLatestReader = nil
 	}
 	if scope.state.accountKVLatestIterator == scope.latestReader {
@@ -815,6 +817,17 @@ func (s *StateDB) SetAccountKVIndexStore(store interface {
 	ethdb.KeyValueWriter
 	ethdb.Iteratee
 }) {
+	// Canonical range execution rebinds its same blockbuffer before every
+	// block. That pointer still names the same live view, whose writes already
+	// invalidate affected cache rows; discarding here would defeat cross-block
+	// residency. Value wrappers are conservatively treated as new views, and
+	// must not reach interface equality because they may be non-comparable.
+	storeType := reflect.TypeOf(store)
+	sameView := storeType != nil && storeType.Kind() == reflect.Pointer &&
+		reflect.TypeOf(s.accountKVIndexStore) == storeType && s.accountKVIndexStore == store
+	if !sameView {
+		s.clearLegacyDelegationCache()
+	}
 	s.accountKVIndexStore = store
 }
 
@@ -3925,12 +3938,16 @@ func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, e
 	return appendAccountLatestObject(nil, obj, flatRoot)
 }
 
-func accountLatestObjectEncodedSize(obj *stateObject) (encodedSize, accountProtoSize int, exists bool, err error) {
+func accountLatestObjectEncodedSize(obj *stateObject, flatRoot bool) (encodedSize, accountProtoSize int, exists bool, err error) {
 	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
 		return 0, 0, false, nil
 	}
+	accountKVRoot := obj.accountKVRoot
+	if flatRoot {
+		accountKVRoot = EmptyKVRoot
+	}
 	if obj.accountProto != nil && types.IsAccountStorageCoreV4(obj.accountProto) {
-		return stateAccountV2EncodedSize(StateAccountVersion, obj.accountProto, obj.accountKVGeneration), len(obj.accountProto), true, nil
+		return stateAccountV5EncodedSize(obj.accountProto, accountKVRoot, obj.accountKVGeneration, obj.codeHash), len(obj.accountProto), true, nil
 	}
 	// A cached non-native core is an internal invariant violation. Re-encode the
 	// authoritative in-memory account rather than copying it into rooted state.
@@ -3948,9 +3965,10 @@ func accountLatestObjectEncodedSize(obj *stateObject) (encodedSize, accountProto
 		if marshalErr != nil {
 			return 0, 0, false, marshalErr
 		}
-		return stateAccountV2EncodedSize(StateAccountVersion, accBytes, obj.accountKVGeneration), len(accBytes), true, nil
+		return stateAccountV5EncodedSize(accBytes, accountKVRoot, obj.accountKVGeneration, obj.codeHash), len(accBytes), true, nil
 	}
-	return stateAccountV2EncodedSizeFromProtoSize(StateAccountVersion, accountProtoSize, obj.accountKVGeneration), accountProtoSize, true, nil
+	reference := obj.codeHash != (tcommon.Hash{}) && bytes.Equal(obj.account.Proto().CodeHash, obj.codeHash[:])
+	return stateAccountV5EncodedSizeFromCoreSize(accountProtoSize, accountKVRoot, obj.accountKVGeneration, obj.codeHash, reference), accountProtoSize, true, nil
 }
 
 func appendAccountLatestObject(dst []byte, obj *stateObject, flatRoot bool) ([]byte, bool, error) {
@@ -4001,7 +4019,8 @@ func appendAccountLatestObjectPrepared(dst []byte, obj *stateObject, flatRoot bo
 	if flatRoot {
 		accountKVRoot = EmptyKVRoot
 	}
-	dst = appendStateAccountV2StorageCorePrefix(dst, StateAccountVersion, accountProtoSize, obj.accountKVGeneration)
+	reference := obj.codeHash != (tcommon.Hash{}) && bytes.Equal(obj.account.Proto().CodeHash, obj.codeHash[:])
+	dst = appendStateAccountV5Prefix(dst, accountProtoSize, accountKVRoot, obj.accountKVGeneration, obj.codeHash, reference)
 	protoStart := len(dst)
 	var err error
 	dst, err = obj.account.AppendStorageCoreV4(dst)
@@ -4012,7 +4031,7 @@ func appendAccountLatestObjectPrepared(dst []byte, obj *stateObject, flatRoot bo
 	if protoEnd-protoStart != accountProtoSize {
 		return dst, false, fmt.Errorf("account storage core size changed during commit: encoded %d, want %d", protoEnd-protoStart, accountProtoSize)
 	}
-	dst = appendStateAccountV2StorageCoreTrailer(dst, accountKVRoot, obj.accountKVGeneration, obj.codeHash)
+	dst = appendStateAccountV5Trailer(dst, accountKVRoot, obj.accountKVGeneration, obj.codeHash, reference)
 	obj.accountProto = dst[protoStart:protoEnd:protoEnd]
 	obj.accountProtoLoaded = false
 	return dst, true, nil
@@ -4110,7 +4129,7 @@ func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRo
 		if plan == nil || plan.deleteAccount || !plan.accountLatestDirty {
 			continue
 		}
-		size, protoSize, exists, err := accountLatestObjectEncodedSize(plan.obj)
+		size, protoSize, exists, err := accountLatestObjectEncodedSize(plan.obj, flatRoot)
 		if err != nil {
 			return err
 		}

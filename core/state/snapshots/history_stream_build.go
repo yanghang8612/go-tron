@@ -44,6 +44,13 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDB(db ethdb.Iteratee, dir st
 }
 
 func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, dir string, ref SegmentRef, cfg DomainCfg, opts etl.Options, blockRange *stateDomainChangeHistoryBlockRange) (result stateDomainChangeHistoryBuildResult, err error) {
+	return buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContext(context.Background(), db, dir, ref, cfg, opts, blockRange)
+}
+
+func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContext(ctx context.Context, db ethdb.Iteratee, dir string, ref SegmentRef, cfg DomainCfg, opts etl.Options, blockRange *stateDomainChangeHistoryBlockRange) (result stateDomainChangeHistoryBuildResult, err error) {
+	if err := contextError(ctx); err != nil {
+		return result, err
+	}
 	if ref.Kind == "" {
 		ref.Kind = SegmentHistory
 	}
@@ -75,19 +82,30 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		return result, err
 	}
 	defer v6Build.Close()
+	format := os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT")
+	var compressionPolicy historyCompressionPolicy
 	if err := iterateStateDomainChangeHistoryChanges(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, func(change *rawdb.StateDomainChange) (bool, error) {
 		if change == nil {
 			return false, errors.New("snapshots: nil state-domain-change history key")
+		}
+		if format == "auto" {
+			compressionPolicy.Observe(change)
 		}
 		return true, v6Build.CollectKey(change)
 	}); err != nil {
 		return result, fmt.Errorf("snapshots: collect V6 state-domain history keys: %w", err)
 	}
-	if err := v6Build.FinishDictionary(); err != nil {
+	if err := v6Build.FinishDictionaryContext(ctx); err != nil {
 		return result, err
 	}
 	result.keyETL = v6Build.keyStats
-	segmentTmp, err := createStateDomainChangeHistoryTemp(dir, ref.Path, CompressHistorySegments)
+	if format == "auto" {
+		format = "2"
+		if compressionPolicy.RecommendCDC() {
+			format = "3"
+		}
+	}
+	segmentTmp, err := createStateDomainChangeHistoryTempFormat(ctx, dir, ref.Path, CompressHistorySegments, format)
 	if err != nil {
 		return result, err
 	}
@@ -180,7 +198,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 			return result, err
 		}
 		recordWriter = newStateDomainChangeHistoryRecordWriterV6(segmentTmp, indexTmp, v6Build, ref, recordCount, recordOffset)
-		result.recordETL, err = recordCollector.Load(recordWriter)
+		result.recordETL, err = loadHistoryETLContext(ctx, recordCollector, recordWriter)
 		if err != nil {
 			return result, fmt.Errorf("snapshots: sort fallback state-domain-change history records: %w", err)
 		}
@@ -196,7 +214,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 	if err := writeStateDomainChangeBinaryHeaderCount(indexTmp, recordWriter.indexWritten); err != nil {
 		return result, err
 	}
-	indexTmp, indexTmpName, err = rewriteStateDomainChangeBinaryIndexV7(indexTmp, indexTmpName)
+	indexTmp, indexTmpName, err = rewriteStateDomainChangeBinaryIndexV7Context(ctx, indexTmp, indexTmpName)
 	if err != nil {
 		return result, err
 	}
@@ -214,11 +232,11 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 		}
 	}()
 
-	segmentRef, err = segmentTmp.Finalize(ref, true)
+	segmentRef, err = segmentTmp.FinalizeContext(ctx, ref, true)
 	if err != nil {
 		return result, err
 	}
-	indexRef, accessorRef, result.accessorETL, err = finalizeStateDomainChangeBinaryCompanionsV6(dir, segmentRef, indexTmp, indexTmpName, v6Build, recordCount)
+	indexRef, accessorRef, result.accessorETL, err = finalizeStateDomainChangeBinaryCompanionsV6Context(ctx, dir, segmentRef, indexTmp, indexTmpName, v6Build, recordCount)
 	if err != nil {
 		return result, err
 	}

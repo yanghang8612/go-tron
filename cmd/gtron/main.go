@@ -450,6 +450,11 @@ var app = &cli.App{
 		logModuleFlag,
 		pruneModeFlag,
 		historyEnabledFlag,
+		historyBlockDedupFlag,
+		historyCompressionFormatFlag,
+		historyPressureHotFlag,
+		historyPressureFreeFlag,
+		historyBuildMinFreeFlag,
 		snapshotBootstrapFlag,
 		snapshotDirFlag,
 		snapshotURLFlag,
@@ -497,6 +502,9 @@ var app = &cli.App{
 		vmSaveFeaturedInternalTxFlag,
 		vmSaveCancelAllUnfreezeV2DetailsFlag,
 		syncStopAtFlag,
+		syncReplayStoredToFlag,
+		syncReplayAuditFlag,
+		syncReplayCPUProfileFlag,
 	},
 	Before: func(ctx *cli.Context) error {
 		if err := log.SetupWithOptions(log.SetupOptions{
@@ -599,6 +607,9 @@ func initCmd(ctx *cli.Context) error {
 }
 
 func gtron(ctx *cli.Context) error {
+	if err := validateStoredReplayOptions(ctx); err != nil {
+		return err
+	}
 	cfg := makeConfig(ctx)
 	if err := validateMetricsConfig(cfg); err != nil {
 		return err
@@ -611,10 +622,16 @@ func gtron(ctx *cli.Context) error {
 		return err
 	}
 	snapshotETL = applyRuntimeSnapshotETLDefaults(snapshotETL)
+	historyCompressionFormat, err := applyRuntimeHistoryCompression(ctx)
+	if err != nil {
+		return err
+	}
+	rawdb.SetStateHistoryBlockDedup(ctx.Bool(historyBlockDedupFlag.Name))
+	log.Info("Hot history block dedup configured", "enabled", ctx.Bool(historyBlockDedupFlag.Name))
 	if err := validateSyncImportBatch(cfg.SyncImportBatch); err != nil {
 		return err
 	}
-	log.Info("Cold snapshot compression enabled", "history", true, "latest", true)
+	log.Info("Cold snapshot compression enabled", "history", true, "latest", true, "historyFormat", historyCompressionFormat)
 	dbPath := chainDataDir(cfg.DataDir)
 
 	// In dev mode, parse witness key early so we can build the genesis with it
@@ -658,15 +675,18 @@ func gtron(ctx *cli.Context) error {
 	}
 	var ancientStore *rawdbfreezer.Freezer
 	var storesCloseOnce sync.Once
+	var storesCloseErr error
 	closeStores := func() {
 		storesCloseOnce.Do(func() {
 			if ancientStore != nil {
 				if err := closeRuntimeStore("ancient database", ancientStore.Close); err != nil {
+					storesCloseErr = errors.Join(storesCloseErr, err)
 					log.Error("Ancient database close failed", "err", err)
 				}
 				ancientStore = nil
 			}
 			if err := closeRuntimeStore("chaindata", db.Close); err != nil {
+				storesCloseErr = errors.Join(storesCloseErr, err)
 				log.Error("Chaindata close failed", "err", err)
 			}
 		})
@@ -917,6 +937,12 @@ func gtron(ctx *cli.Context) error {
 			"visibleTxEnd", manifest.VisibleTxEnd,
 			"segments", len(manifest.Segments))
 	}
+	if ctx.IsSet(syncReplayStoredToFlag.Name) {
+		return runStoredReplay(ctx, bc, chainConfig.HistoryEnabled, func() error {
+			closeStores()
+			return storesCloseErr
+		})
+	}
 	apiServer := tronapi.NewServer(backend, cfg.HTTPPort)
 	jrpcServer := jsonrpc.NewServer(backend, cfg.JSONRPCPort)
 	grpcServer := grpcapi.NewServer(backend, fmt.Sprintf(":%d", cfg.GRPCPort))
@@ -1130,6 +1156,16 @@ func gtron(ctx *cli.Context) error {
 		syncHistoryBuildAdmission := newSyncImporterMaintenanceAdmission(30 * time.Second)
 		historyMode := chainConfig.EffectiveHistoryMode()
 		coldStateSnapshotsEnabled := (historyMode == params.HistoryModeSnap || historyMode == params.HistoryModeArchive) && chainConfig.HistoryEnabled
+		var pressureProbe func(context.Context) (statesnapshots.HistoryPressure, error)
+		var pressureLimits historyPressureLimits
+		if coldStateSnapshotsEnabled {
+			probe, limits, err := makeRuntimeHistoryPressure(ctx, db, dbPath, stateSnapshotDir, snapshotETL.TempDir)
+			if err != nil {
+				closeStores()
+				return err
+			}
+			pressureProbe, pressureLimits = probe.read, limits
+		}
 		buildDerivedSnapshots := historyMode == params.HistoryModeSnap
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
 		var syncEventLogTargetBlock func() (uint64, bool)
@@ -1198,6 +1234,11 @@ func gtron(ctx *cli.Context) error {
 				CatchupUnthrottledLagBlocks: prunePolicy.HistoryWindow,
 				CatchupHeavyWorkCooldown:    snapshotCatchupHeavyWorkCooldown,
 				HeavyWorkGate:               heavyWorkGate,
+				HistoryPressureProbe:        pressureProbe,
+				HistoryPressureHotBytes:     pressureLimits.hot,
+				HistoryPressureFreeBytes:    pressureLimits.free,
+				MinHistoryBuildFreeBytes:    pressureLimits.minimum,
+				MaxCompactionPasses:         1,
 				BuildSectionBlooms:          buildDerivedSnapshots,
 				BuildBalanceTraces:          buildDerivedSnapshots,
 				BuildEventLogs:              buildDerivedSnapshots,
@@ -1281,6 +1322,10 @@ func gtron(ctx *cli.Context) error {
 			"deferHistoryBuildWhileSyncing", shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
 			"maxDeferredHistoryBlocks", maxDeferredHistoryBlocks,
 			"maxBusyDeferredHistoryBlocks", maxBusyDeferredColdHistoryBlocks(maxDeferredHistoryBlocks),
+			"historyPressureHotBytes", pressureLimits.hot,
+			"historyPressureFreeBytes", pressureLimits.free,
+			"historyBuildMinFreeBytes", pressureLimits.minimum,
+			"maxCompactionPasses", 1,
 			"syncBuildRequiresImporterCapacity", true,
 			"deferDerivedSidecarsWhileSyncing", buildDerivedSnapshots,
 			"buildEventLogsWhileSyncing", buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,

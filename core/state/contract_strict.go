@@ -14,6 +14,8 @@ import (
 var (
 	stateCodeStrictObjectHitCounter      = metrics.NewRegisteredCounter("state/code_strict/source/object", nil)
 	stateCodeStrictObjectPromoteCounter  = metrics.NewRegisteredCounter("state/code_strict/object_promotions", nil)
+	stateCodeStrictObjectVerifiedCounter = metrics.NewRegisteredCounter("state/code_strict/object_verified_matches", nil)
+	stateCodeStrictObjectHashCounter     = metrics.NewRegisteredCounter("state/code_strict/object_hash_checks", nil)
 	stateCodeStrictSharedCacheHitCounter = metrics.NewRegisteredCounter("state/code_strict/source/shared_cache", nil)
 	stateCodeStrictHotHitCounter         = metrics.NewRegisteredCounter("state/code_strict/source/hot", nil)
 	stateCodeStrictHotMissCounter        = metrics.NewRegisteredCounter("state/code_strict/hot_misses", nil)
@@ -84,10 +86,18 @@ func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 		return nil, nil
 	}
 	if obj.code != nil {
-		if obj.codeHash != (tcommon.Hash{}) && tcommon.Keccak256(obj.code) != obj.codeHash {
-			stateCodeCacheRejectCounter.Inc(1)
-			stateCodeStrictErrorCounter.Inc(1)
-			return nil, fmt.Errorf("cached contract runtime code hash mismatch contract=%s codeHash=%s", addr.Hex(), obj.codeHash.Hex())
+		if s.matchesCachedStateCode(obj.codeHash, obj.code) {
+			stateCodeStrictObjectVerifiedCounter.Inc(1)
+			stateCodeStrictObjectHitCounter.Inc(1)
+			return obj.code, nil
+		}
+		if obj.codeHash != (tcommon.Hash{}) {
+			stateCodeStrictObjectHashCounter.Inc(1)
+			if tcommon.Keccak256(obj.code) != obj.codeHash {
+				stateCodeCacheRejectCounter.Inc(1)
+				stateCodeStrictErrorCounter.Inc(1)
+				return nil, fmt.Errorf("cached contract runtime code hash mismatch contract=%s codeHash=%s", addr.Hex(), obj.codeHash.Hex())
+			}
 		}
 		stateCodeStrictObjectHitCounter.Inc(1)
 		if store := s.getStateCodeStore(); store != nil && s.admitVerifiedStateCode(obj.codeHash, obj.code, store) {

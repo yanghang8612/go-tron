@@ -213,6 +213,11 @@ func TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries(t *testing.
 		"cmd/gtron/db_cmd.go": {
 			"dbSeedBalanceTraceReplayFromSnapshot": {},
 		},
+		"cmd/gtron/replay_stored.go": {
+			// Offline replay must audit newly executed hot receipts; falling
+			// back to immutable input receipts would certify the wrong result.
+			"storedReplayReceiptsDigest": {},
+		},
 		"core/balance_trace_backfill.go": {
 			"BackfillBalanceTracesByReplay":   {},
 			"collectReplayedBalanceTraceRows": {},
@@ -389,6 +394,12 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 		},
 		"cmd/gtron/db_cmd.go": {
 			"ReadBlockHashByNumber":       {},
+			"ReadBlockHashByNumberStrict": {},
+		},
+		// Offline maintenance deliberately requires canonical head/solid hashes
+		// in hot metadata before opening mutation handles. It does not serve an
+		// archive query or start a cold-reader/node lifecycle.
+		"cmd/gtron/db_offline_preflight.go": {
 			"ReadBlockHashByNumberStrict": {},
 		},
 		"core/balance_trace_backfill.go": {

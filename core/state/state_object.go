@@ -201,6 +201,9 @@ type stateObject struct {
 	// kvDirty holds pending generic-KV writes keyed by string(domainBE2||key).
 	kvDirty          map[string]kvEntry
 	kvDirtyHighWater int
+	// Only the system account uses this bounded, private decoded index cache.
+	// It is derived from encoded KV, invalidated by mutations, and not copied.
+	legacyDelegation *legacyDelegationCache
 
 	// dirtySet is a back-pointer to the owning StateDB's dirtyObjects set. It is
 	// set when the object enters the cache (getStateObject / GetOrCreateAccount /
@@ -271,6 +274,7 @@ func clearStateObjectForReuse(obj *stateObject) bool {
 	obj.releaseStorage()
 	obj.releaseDirtyStorage()
 	obj.releaseKVDirty()
+	obj.legacyDelegation = nil
 	if obj.wrapperEscaped {
 		return false
 	}
@@ -444,6 +448,7 @@ func (s *stateObject) ensureKVDirty() {
 }
 
 func (s *stateObject) setKVDirty(mapKey string, entry kvEntry) {
+	s.invalidateLegacyDelegation(mapKey)
 	s.ensureKVDirty()
 	s.kvDirty[mapKey] = entry
 	if len(s.kvDirty) > s.kvDirtyHighWater {

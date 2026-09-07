@@ -28,7 +28,10 @@ var (
 	commitmentFoldNodeHashMultiRoundCounter = metrics.NewRegisteredCounter(
 		"state/commitment/fold/node_hash_multi_round", nil,
 	)
+	commitmentPipelinePartitionsGauge       = metrics.NewRegisteredGauge("state/commitment/pipeline/partitions", nil)
+	commitmentPipelineReadConcurrencyGauge  = metrics.NewRegisteredGauge("state/commitment/pipeline/read_concurrency", nil)
 	commitmentPipelineEnabledGauge          = metrics.NewRegisteredGauge("state/commitment/pipeline/enabled", nil)
+	commitmentPipelinePrefetchOverlapGauge  = metrics.NewRegisteredGauge("state/commitment/pipeline/prefetch_overlap", nil)
 	commitmentPipelineJobsCounter           = metrics.NewRegisteredCounter("state/commitment/pipeline/jobs", nil)
 	commitmentPipelineErrorsCounter         = metrics.NewRegisteredCounter("state/commitment/pipeline/errors", nil)
 	commitmentPipelinePrefetchErrorsCounter = metrics.NewRegisteredCounter("state/commitment/pipeline/prefetch_errors", nil)

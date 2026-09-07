@@ -2,6 +2,8 @@ package snapshots
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -104,5 +106,69 @@ func TestMigrateHistoryV7ResumesAtTrioBoundaries(t *testing.T) {
 	}
 	if noop.AlreadyCurrent != 2 || noop.MigratedTrios != 0 || noop.RemainingTrios != 0 {
 		t.Fatalf("idempotent result = %+v", noop)
+	}
+}
+
+func TestMigrateHistoryV7CDCIsIdempotent(t *testing.T) {
+	t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", "3")
+	dir := t.TempDir()
+	change := binaryStateDomainChange(1, 1, 1, "large")
+	change.PrevExists = true
+	change.Prev = bytes.Repeat([]byte("full arbitrary retained history\x00"), 20000)
+	refs := writeCompactionStateDomainChangeSegment(t, dir, 1, 1, change)
+	if err := PublishManifest(dir, NewManifest(1, 1, refs)); err != nil {
+		t.Fatal(err)
+	}
+	first, err := MigrateHistoryV7(dir, HistoryV7MigrationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.MigratedTrios != 1 || first.RemainingTrios != 0 {
+		t.Fatalf("first %+v", first)
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprints := map[string][32]byte{}
+	for _, ref := range manifest.Segments {
+		data, err := os.ReadFile(filepath.Join(dir, ref.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fingerprints[ref.Path] = sha256.Sum256(data)
+	}
+	for _, format := range []string{"3", "auto"} {
+		t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", format)
+		next, err := MigrateHistoryV7(dir, HistoryV7MigrationOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next.AlreadyCurrent != 1 || next.MigratedTrios != 0 || next.RemainingTrios != 0 || next.RetiredBytesAdded != 0 {
+			t.Fatalf("repeat %s %+v", format, next)
+		}
+		for path, want := range fingerprints {
+			data, err := os.ReadFile(filepath.Join(dir, path))
+			if err != nil || sha256.Sum256(data) != want {
+				t.Fatalf("active file changed: %s %v", path, err)
+			}
+		}
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	if err := mgr.IterateStateDomainChanges(1, 1, func(got *rawdb.StateDomainChange) (bool, error) {
+		count++
+		if !bytes.Equal(got.Prev, change.Prev) || got.PrevExists != change.PrevExists {
+			t.Fatal("migration preimage differs")
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("records %d", count)
 	}
 }

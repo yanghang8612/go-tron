@@ -663,9 +663,26 @@ func inspectHistorySpaceHeaders(dir string, trio historySpaceTrio) (historySpace
 		return out, err
 	}
 	if string(compressedHeader[:8]) == compressedBlockMagic {
+		// CDC references share physical anchors, so the fixed-block sample's
+		// compressed-length sum is not a valid denominator. Reject before any
+		// zero reserved-header fields can be mistaken for an empty history.
+		if binary.BigEndian.Uint32(compressedHeader[8:12]) == compressedBlockCDCVersion {
+			return out, fmt.Errorf("snapshots: history-space fixed-block compression projections are unsupported for CDC v3 history %q", trio.history.Path)
+		}
 		out.historyCompressed = true
 		out.historyBlocks = binary.BigEndian.Uint64(compressedHeader[24:32])
 		out.historyLogical = binary.BigEndian.Uint64(compressedHeader[32:40])
+		if binary.BigEndian.Uint32(compressedHeader[8:12]) == compressedBlockFooterVersion {
+			stat, err := history.Stat()
+			if err != nil {
+				return out, err
+			}
+			info, err := readCompressedBlockFooterInfo(history, uint64(stat.Size()), compressedHeader[:])
+			if err != nil {
+				return out, err
+			}
+			out.historyBlocks, out.historyLogical = info.blockCount, info.uncSize
+		}
 	} else {
 		stat, err := history.Stat()
 		if err != nil {
@@ -982,6 +999,9 @@ func sampleHistorySpaceCompression(ctx context.Context, dir string, ref SegmentR
 		return 0, 0, nil, dictionary, fmt.Errorf("inspect compressed history %s: %w", ref.Path, err)
 	}
 	defer r.Close()
+	if r.cdc != nil {
+		return 0, 0, nil, dictionary, fmt.Errorf("snapshots: history-space fixed-block compression projections are unsupported for CDC v3 history %q", ref.Path)
+	}
 	result := make(map[uint64]uint64, len(historySpaceBlockSizes))
 	if len(r.table) == 0 {
 		return 0, 0, result, dictionary, nil

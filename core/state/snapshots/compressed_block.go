@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -10,6 +11,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 
@@ -151,18 +153,19 @@ func releaseStateDomainChangeHistoryBlockTable(table *[]cbBlock) {
 // a time into a temp file, and assembles the final file on Finish. Peak memory is
 // one uncompressed block plus the in-memory block table (~32 bytes per block).
 type compressedBlockWriter struct {
-	enc       *zstd.Encoder
-	blockSize int
-	tmp       *os.File
-	tmpWriter *bufio.Writer
-	tmpName   string
-	table     []cbBlock
-	buf       []byte
-	encoded   []byte
-	bufRecs   int
-	uncTotal  uint64
-	compTotal uint64
-	recCount  uint64
+	enc            *zstd.Encoder
+	blockSize      int
+	tmp            *os.File
+	tmpWriter      *bufio.Writer
+	tmpName        string
+	table          []cbBlock
+	buf            []byte
+	encoded        []byte
+	bufRecs        int
+	uncTotal       uint64
+	compTotal      uint64
+	recCount       uint64
+	footerMetadata *snapshotMetadataWriter
 }
 
 type snapshotFileMetadata struct {
@@ -480,6 +483,7 @@ func writeCompressedBlockHeaderAndTable(out io.Writer, blockSize int, recCount, 
 // decompresses each block exactly once). Concurrent callers are serialized on mu
 // and always receive a private copy, so the reader is safe to share.
 type compressedBlockReader struct {
+	cdc       *cdcReader
 	f         *os.File
 	dec       *zstd.Decoder
 	blockSize int
@@ -541,6 +545,24 @@ func openCompressedBlockReaderWithCacheLimit(path string, cacheLimit int) (*comp
 	if string(hdr[:8]) != compressedBlockMagic {
 		_ = f.Close()
 		return nil, errors.New("snapshots: bad compressed-block magic")
+	}
+	if binary.BigEndian.Uint32(hdr[8:12]) == compressedBlockCDCVersion {
+		cdc, err := openCDCReader(f, fileSize, hdr)
+		if err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+		return &compressedBlockReader{f: f, dec: dec, uncSize: cdc.logical, fileSize: fileSize, cdc: cdc}, nil
+	}
+	if binary.BigEndian.Uint32(hdr[8:12]) == compressedBlockFooterVersion {
+		layout, err := readCompressedBlockFooterLayout(f, fileSize, hdr)
+		if err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+		return &compressedBlockReader{f: f, dec: dec, blockSize: layout.blockSize,
+			recCount: layout.recCount, uncSize: layout.uncSize, dataOff: compressedBlockHeaderSize,
+			fileSize: fileSize, table: layout.table, cacheLimit: cacheLimit}, nil
 	}
 	if ver := binary.BigEndian.Uint32(hdr[8:12]); ver != compressedBlockVersion {
 		_ = f.Close()
@@ -615,6 +637,10 @@ func compressedBlockTableLen(blockCount uint64) (uint64, error) {
 }
 
 func validateCompressedBlockTable(table []cbBlock, recCount, uncSize, dataOff, fileSize uint64) error {
+	return validateCompressedBlockPhysicalTable(table, recCount, uncSize, dataOff, fileSize, false)
+}
+
+func validateCompressedBlockPhysicalTable(table []cbBlock, recCount, uncSize, dataOff, fileSize uint64, prefixAtEnd bool) error {
 	if len(table) == 0 {
 		if recCount != 0 || uncSize != 0 {
 			return fmt.Errorf("snapshots: empty compressed-block table with records=%d uncompressed=%d", recCount, uncSize)
@@ -644,7 +670,7 @@ func validateCompressedBlockTable(table []cbBlock, recCount, uncSize, dataOff, f
 		if block.uncompressedStart >= uncSize {
 			return fmt.Errorf("snapshots: compressed-block uncompressed offset %d outside size %d", block.uncompressedStart, uncSize)
 		}
-		if block.compressedStart != expectedCompStart {
+		if (!prefixAtEnd || i != 0) && block.compressedStart != expectedCompStart {
 			return fmt.Errorf("snapshots: compressed-block entry %d compressed offset %d, want %d", i, block.compressedStart, expectedCompStart)
 		}
 		if block.compressedLen == 0 {
@@ -667,8 +693,16 @@ func validateCompressedBlockTable(table []cbBlock, recCount, uncSize, dataOff, f
 		if recordsOverflow {
 			return fmt.Errorf("snapshots: compressed-block record count overflows")
 		}
-		expectedCompStart = compEnd
+		if !prefixAtEnd || i != 0 {
+			expectedCompStart = compEnd
+		}
 		prevUncStart = block.uncompressedStart
+	}
+	if prefixAtEnd {
+		if expectedCompStart != table[0].compressedStart {
+			return errors.New("snapshots: footer body does not end at retained prefix")
+		}
+		expectedCompStart += table[0].compressedLen // range overflow was checked above
 	}
 	physicalEnd, overflow := checkedAdd(dataOff, expectedCompStart)
 	if overflow || physicalEnd != fileSize {
@@ -773,6 +807,13 @@ func (r *compressedBlockReader) blockBytes(i int) ([]byte, error) {
 // at offset to the end of its block. The caller decodes one self-delimiting
 // record from the head of the returned slice. Used for keyed point lookups.
 func (r *compressedBlockReader) RecordTailAt(offset uint64) ([]byte, error) {
+	if r.cdc != nil {
+		data, start, err := r.cdc.BlockAt(offset)
+		if err != nil {
+			return nil, err
+		}
+		return data[offset-start:], nil
+	}
 	if offset >= r.uncSize {
 		return nil, fmt.Errorf("snapshots: compressed-block offset %d >= size %d", offset, r.uncSize)
 	}
@@ -800,6 +841,9 @@ func (r *compressedBlockReader) RecordTailAt(offset uint64) ([]byte, error) {
 // over a compressed segment unchanged: store the segment's plain bytes through
 // compressBlobToFile, then hand the reader this ReadAt and the logical size.
 func (r *compressedBlockReader) ReadAt(p []byte, off int64) (int, error) {
+	if r.cdc != nil {
+		return r.cdc.ReadAt(p, off)
+	}
 	if off < 0 {
 		return 0, errors.New("snapshots: negative compressed-block read offset")
 	}
@@ -849,6 +893,9 @@ func (r *compressedBlockReader) readAtLocked(p []byte, uoff uint64) (int, error)
 func (r *compressedBlockReader) ReadRecordFrameAt(offset uint64, scratch []byte) (payload []byte, next uint64, borrowed bool, err error) {
 	if r == nil {
 		return scratch, 0, false, errors.New("snapshots: nil compressed-block record reader")
+	}
+	if r.cdc != nil {
+		return r.cdc.ReadRecordFrameAt(offset, scratch)
 	}
 	if offset > r.uncSize || r.uncSize-offset < 4 {
 		return scratch, 0, false, io.ErrUnexpectedEOF
@@ -916,6 +963,20 @@ func decompressBlockBlob(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	version := binary.BigEndian.Uint32(data[8:12])
+	if version == compressedBlockCDCVersion {
+		return decompressCDCBlob(data)
+	}
+	if version == compressedBlockFooterVersion {
+		layout, err := readCompressedBlockFooterLayout(bytes.NewReader(data), uint64(len(data)), data[:compressedBlockHeaderSize])
+		if err != nil {
+			return nil, err
+		}
+		return decodeCompressedBlockBlob(data, dec, layout.table, layout.uncSize, compressedBlockHeaderSize)
+	}
+	if version != compressedBlockVersion {
+		return nil, fmt.Errorf("snapshots: unsupported compressed-block version %d", version)
+	}
 	blockCount := binary.BigEndian.Uint64(data[24:32])
 	uncSize := binary.BigEndian.Uint64(data[32:40])
 	dataOff := binary.BigEndian.Uint64(data[40:48])
@@ -943,6 +1004,10 @@ func decompressBlockBlob(data []byte) ([]byte, error) {
 	if err := validateCompressedBlockTable(table, binary.BigEndian.Uint64(data[16:24]), uncSize, dataOff, uint64(len(data))); err != nil {
 		return nil, err
 	}
+	return decodeCompressedBlockBlob(data, dec, table, uncSize, dataOff)
+}
+
+func decodeCompressedBlockBlob(data []byte, dec *zstd.Decoder, table []cbBlock, uncSize, dataOff uint64) ([]byte, error) {
 	if uncSize > compressedBlockMaxAlloc() {
 		return nil, fmt.Errorf("snapshots: compressed-block uncompressed size %d exceeds allocation limit", uncSize)
 	}
@@ -983,6 +1048,23 @@ func compressBlobToFile(dir, path string, blob []byte, chunkSize int) error {
 	if chunkSize <= 0 {
 		chunkSize = 16384
 	}
+	footer, err := historyCompressionFooterEnabled()
+	if err != nil {
+		return err
+	}
+	if footer {
+		// The footer publishes the temporary inode with rename. Keep it on the
+		// destination filesystem even when a history tier is mounted elsewhere.
+		stream, err := newHistoryCompressedStream(context.Background(), filepath.Dir(path), chunkSize, 1)
+		if err != nil {
+			return err
+		}
+		defer stream.Abort()
+		if _, err := stream.Write(blob); err != nil {
+			return err
+		}
+		return stream.Finish(path)
+	}
 	w, err := newCompressedBlockWriter(dir, 1)
 	if err != nil {
 		return err
@@ -1005,8 +1087,9 @@ func compressBlobToFile(dir, path string, blob []byte, chunkSize int) error {
 
 // historyCompressionConcurrency follows Erigon's ordered page-compression
 // worker model while reserving CPU for block execution and Pebble compaction.
-// Four encoders are enough to hide this short stage without scaling memory or
-// scheduler pressure with a large host-wide CPU count.
+// Keep the automatic limit independent of a large host-wide CPU count. V3
+// uses this budget for bounded parallel anchors as well as large-input cuts;
+// increasing the budget must be justified by end-to-end stage measurements.
 func historyCompressionConcurrency(procs int) int {
 	if procs < 1 {
 		return 1
@@ -1232,17 +1315,26 @@ type compressedBlockStreamWriter struct {
 	parallel  *orderedCompressionPipeline
 	logical   uint64
 	bodyStart bool
+	footer    bool
 	closed    bool
 }
 
 func newCompressedBlockStreamWriter(dir string, chunkSize, workers int) (*compressedBlockStreamWriter, error) {
+	footer, err := historyCompressionFooterEnabled()
+	if err != nil {
+		return nil, err
+	}
+	return newCompressedBlockStreamWriterWithFooter(dir, chunkSize, workers, footer)
+}
+
+func newCompressedBlockStreamWriterWithFooter(dir string, chunkSize, workers int, footer bool) (*compressedBlockStreamWriter, error) {
 	if chunkSize <= 0 {
 		chunkSize = 16384
 	}
 	if workers < 1 {
 		workers = 1
 	}
-	body, err := newCompressedBlockWriter(dir, 1)
+	body, err := newCompressedBlockStreamBody(dir, footer)
 	if err != nil {
 		return nil, err
 	}
@@ -1252,6 +1344,7 @@ func newCompressedBlockStreamWriter(dir string, chunkSize, workers int) (*compre
 		chunkSize: chunkSize,
 		workers:   workers,
 		body:      body,
+		footer:    footer,
 		first:     acquireStateDomainChangeHistoryCompressionChunk(chunkSize),
 	}, nil
 }
@@ -1388,6 +1481,9 @@ func (w *compressedBlockStreamWriter) finishContext(ctx context.Context, path st
 	releaseStateDomainChangeHistoryCompressionChunk(&w.chunk, w.chunkSize)
 	defer releaseStateDomainChangeHistoryCompressionChunk(&first, w.chunkSize)
 	defer releaseStateDomainChangeHistoryEncodedChunk(&body.encoded, w.chunkSize)
+	if w.footer {
+		return body.finishWithFooterContext(ctx, path, first, metadata)
+	}
 	return body.finishWithPrefixMetadataContext(ctx, path, first, metadata)
 }
 
@@ -1396,7 +1492,7 @@ func (w *compressedBlockStreamWriter) Reset() error {
 		return errors.New("snapshots: compressed stream writer is closed")
 	}
 	w.abortBody()
-	body, err := newCompressedBlockWriter(w.dir, 1)
+	body, err := newCompressedBlockStreamBody(w.dir, w.footer)
 	if err != nil {
 		w.closed = true
 		return err
@@ -1441,6 +1537,9 @@ func (w *compressedBlockStreamWriter) abortBody() {
 // that block's uncompressed start. Used for sequential range iteration: the
 // caller walks records across blocks, calling BlockAt(start+len(block)) next.
 func (r *compressedBlockReader) BlockAt(offset uint64) ([]byte, uint64, error) {
+	if r.cdc != nil {
+		return r.cdc.BlockAt(offset)
+	}
 	if offset >= r.uncSize {
 		return nil, 0, fmt.Errorf("snapshots: compressed-block offset %d >= size %d", offset, r.uncSize)
 	}

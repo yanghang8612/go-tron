@@ -5,6 +5,16 @@ package pointread
 
 import "github.com/ethereum/go-ethereum/ethdb"
 
+// BatchPrefetcher warms exact keys without promising a consistent state view.
+// visit is called once per key in an unspecified order, synchronously, with
+// callback-scoped read-only bytes. Returning an error stops the remaining work.
+// This interface is for hints only; canonical reads must still use the current
+// overlay and generation. Callers bound the batch and retain its keys until
+// the method returns.
+type BatchPrefetcher interface {
+	PrefetchBatch(keys [][]byte, visit func(int, []byte, bool, error) error) error
+}
+
 // View holds a storage engine's read-side lifecycle lease across a burst of
 // exact-key lookups. Implementations invoke fn synchronously; value is valid
 // only until fn returns. Get is safe for concurrent use unless an engine
@@ -122,6 +132,14 @@ type CommitmentParentSession interface {
 // The returned bool reports whether the key existed in that cut.
 type CommitmentParentPrefetchSession interface {
 	PrefetchKeyParts(reader int, first, second []byte) (bool, error)
+}
+
+// CommitmentParentReadBudget is configured before a session starts reading.
+// A shared, non-nil channel bounds durable cursor reads across all sessions of
+// one pipeline; overlays, cache hits and singleflight followers use no permit.
+// The owner must keep the channel open until every session has closed.
+type CommitmentParentReadBudget interface {
+	SetCommitmentParentReadBudget(permits chan struct{})
 }
 
 // CommitmentParentSessioner is discovered structurally by rawdb. Unsupported

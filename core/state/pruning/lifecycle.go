@@ -18,8 +18,8 @@ var errRetiredPruneDeferredForCatchup = errors.New("pruning: retired-file verifi
 var errStateChangeIndexPruneDeferredForCatchup = errors.New("pruning: state-change index sweep deferred for sync catch-up")
 
 // SnapshotLifecycleConfig wires the Erigon-style cold/hot lifecycle together:
-// build and publish cold history files, compact old history files, then prune
-// hot data covered by the visible snapshot view.
+// build and publish cold history files, prune verified covered hot data, then
+// perform optional merges and dependent maintenance.
 type SnapshotLifecycleConfig struct {
 	Snapshot          snapshots.Config
 	Pruner            PrunerConfig
@@ -111,6 +111,9 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 
 	var builder *snapshots.Runner
 	if cfg.Snapshot.Enabled {
+		if cfg.Snapshot.MaxCompactionPasses == 0 {
+			cfg.Snapshot.MaxCompactionPasses = 1
+		}
 		builder = snapshots.NewRunner(snapshotChainSource{chain: chain}, cfg.Snapshot)
 	}
 	return &SnapshotLifecycle{
@@ -228,11 +231,31 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 	started := time.Now()
 	var out SnapshotLifecyclePass
 	var stopErr error
+	prunedBeforeMerge := false
 	if l.builder != nil {
 		if err := l.builder.PreflightCatalog(); err != nil {
 			return out, err
 		}
-		result, err := l.builder.OnePassContext(l.ctx)
+		result, err := l.builder.OnePassWithMaintenanceContext(l.ctx, func(ctx context.Context, published snapshots.PassResult) error {
+			if err := l.pruner.RecordTrustedSnapshotSegments(published.Segments); err != nil {
+				return err
+			}
+			// Respect an occupied heavy-work lease. Deliberate importer yielding
+			// must not indefinitely strand an already published cold prefix; the
+			// normal pruner still enforces every coverage and sync-policy gate.
+			if published.HistoryGateDeferred {
+				return nil
+			}
+			coveredAhead := l.pruner != nil && published.PublishedBlock > l.pruner.lastDomainChangePrunedThrough.Load()
+			out.PruneDeferred = l.deferPruneOnHistory && published.HistoryDeferred && l.pruner != nil && l.pruner.syncActive() && !coveredAhead && !published.HistorySpaceDeferred
+			if l.pruner == nil || out.PruneDeferred {
+				return nil
+			}
+			prunedBeforeMerge = true
+			var err error
+			out.Prune, err = l.pruner.PrunePassContext(ctx)
+			return err
+		})
 		// Preserve admission and retry metadata even when an admitted history
 		// build fails. Forced-busy work may already have consumed significant
 		// importer resources, so the loop must honor its recovery deadline rather
@@ -252,16 +275,15 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 		if result.HistoryGateDeferred {
 			return out, nil
 		}
-		out.PruneDeferred = l.deferPruneOnHistory && result.HistoryDeferred && l.pruner != nil && l.pruner.syncActive()
 	}
-	if l.chainFreezerBuild != nil {
+	if l.chainFreezerBuild != nil && !out.Snapshot.HistorySpaceDeferred {
 		result, err := l.chainFreezerBuild()
 		if err != nil {
 			return out, err
 		}
 		out.ChainFreezerBuild = result
 	}
-	if l.pruner != nil && !out.PruneDeferred {
+	if l.pruner != nil && !prunedBeforeMerge && !out.PruneDeferred {
 		stats, err := l.pruner.PrunePassContext(l.ctx)
 		if err != nil {
 			return out, err

@@ -3,6 +3,8 @@ package domains
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,6 +37,8 @@ type OrderedCommitmentResult struct {
 // after all returned result channels have completed.
 type OrderedCommitmentPipeline struct {
 	base           *rawdbBranchStore
+	partitioned    *commitmentPartitionPipeline
+	readPermits    chan struct{}
 	lanes          [maxFoldNibbles]chan orderedCommitmentLaneTask
 	prefetchLanes  [maxFoldNibbles]chan orderedCommitmentPrefetchTask
 	prefetchQueued [maxFoldNibbles]atomic.Int64
@@ -44,6 +48,10 @@ type OrderedCommitmentPipeline struct {
 	closed         atomic.Bool
 	inflight       atomic.Int64
 	closeOnce      sync.Once
+	// Immutable for this pipeline. The opt-in permits authoritative reads to
+	// overlap the first prefetch level, using the parent session's per-key
+	// singleflight instead of waiting for every predicted row in the lane.
+	prefetchOverlap bool
 }
 
 type orderedCommitmentLaneTask struct {
@@ -59,7 +67,7 @@ type orderedCommitmentPrefetchTask struct {
 	depth          int
 	lookaheadDepth int
 	lookaheadLimit int
-	ops            []op
+	paths          []common.Hash
 	enqueuedAt     time.Time
 }
 
@@ -76,17 +84,21 @@ type orderedCommitmentPrefetchResult struct {
 }
 
 type orderedCommitmentJob struct {
-	store        *rawdbBranchStore
-	root         BranchData
-	ops          *[]op
-	stats        *commitmentFoldStats
-	siblingStats commitmentSiblingFoldStats
-	activeSplits int
-	changed      atomic.Bool
-	err          atomic.Pointer[error]
-	done         sync.WaitGroup
-	result       chan OrderedCommitmentResult
-	prefetch     [maxFoldNibbles]orderedCommitmentPrefetchResult
+	store         *rawdbBranchStore
+	partitions    *commitmentPartitionJob
+	completed     chan struct{}
+	finalRoot     common.Hash
+	root          BranchData
+	ops           *[]op
+	prefetchPaths *[]common.Hash
+	stats         *commitmentFoldStats
+	siblingStats  commitmentSiblingFoldStats
+	activeSplits  int
+	changed       atomic.Bool
+	err           atomic.Pointer[error]
+	done          sync.WaitGroup
+	result        chan OrderedCommitmentResult
+	prefetch      [maxFoldNibbles]orderedCommitmentPrefetchResult
 }
 
 // CommitmentParentPrefetchDepth is the first trie level outside the cache's
@@ -153,14 +165,56 @@ func NewOrderedCommitmentPipelineWithRepair(db CommitmentDB, repair CommitmentSn
 		return nil, errors.New("domains: commitment root row missing")
 	}
 
-	p := &OrderedCommitmentPipeline{base: store}
+	p := &OrderedCommitmentPipeline{
+		base:            store,
+		prefetchOverlap: os.Getenv("GTRON_COMMITMENT_PREFETCH_OVERLAP") == "1",
+	}
+	if p.prefetchOverlap {
+		commitmentPipelinePrefetchOverlapGauge.Update(1)
+	} else {
+		commitmentPipelinePrefetchOverlapGauge.Update(0)
+	}
+	partitionMode := os.Getenv("GTRON_COMMITMENT_PARTITIONS")
+	if partitionMode != "" && partitionMode != "16" && partitionMode != "64" {
+		return nil, fmt.Errorf("domains: invalid GTRON_COMMITMENT_PARTITIONS %q (want 16 or 64)", partitionMode)
+	}
+	if partitionMode == "64" {
+		// Logical ownership and physical I/O concurrency are independent. Share
+		// the former 16+16 upper bound across all partition jobs; cached/overlay
+		// reads and singleflight followers remain unconstrained.
+		limit := 32
+		if value := os.Getenv("GTRON_COMMITMENT_READ_CONCURRENCY"); value != "" {
+			var err error
+			limit, err = strconv.Atoi(value)
+			if err != nil || limit < 0 || limit > 80 {
+				return nil, fmt.Errorf("domains: invalid GTRON_COMMITMENT_READ_CONCURRENCY %q (want 0..80)", value)
+			}
+		}
+		if limit > 0 {
+			p.readPermits = make(chan struct{}, limit)
+		}
+		roots, err := commitmentPartitionRoots(store, &root)
+		if err != nil {
+			return nil, err
+		}
+		p.startPartitions(&roots)
+		p.partitioned.initialRoot = storedRoot
+	}
+	commitmentPipelineReadConcurrencyGauge.Update(int64(cap(p.readPermits)))
+	if p.partitioned != nil {
+		commitmentPipelinePartitionsGauge.Update(64)
+	} else {
+		commitmentPipelinePartitionsGauge.Update(16)
+	}
 	for nb := range p.lanes {
-		p.lanes[nb] = make(chan orderedCommitmentLaneTask, 16)
+		if p.partitioned == nil {
+			p.lanes[nb] = make(chan orderedCommitmentLaneTask, 16)
+			var laneRoot BranchData
+			copyCommitmentLane(&laneRoot, &root, uint8(nb))
+			p.laneWG.Add(1)
+			go p.runLane(uint8(nb), laneRoot, p.lanes[nb])
+		}
 		p.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 16)
-		var laneRoot BranchData
-		copyCommitmentLane(&laneRoot, &root, uint8(nb))
-		p.laneWG.Add(1)
-		go p.runLane(uint8(nb), laneRoot, p.lanes[nb])
 		p.prefetchWG.Add(1)
 		go p.runPrefetchLane(uint8(nb), p.prefetchLanes[nb])
 	}
@@ -208,6 +262,16 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 	if ops != nil {
 		stats.resolvedOps = uint64(len(*ops))
 	}
+	if p.partitioned != nil {
+		job.completed = make(chan struct{})
+		if ops == nil || len(*ops) == 0 {
+			p.submitEmptyPartitions(job)
+			return job.result
+		}
+		job.partitions = commitmentPartitionJobPool.Get().(*commitmentPartitionJob)
+		job.store.partitionedParent = true
+		job.store.parentReadPermits = p.readPermits
+	}
 	job.store.readParentBranches = true
 	if err := job.store.beginParentRead(); err != nil {
 		p.setFailed(err)
@@ -243,8 +307,9 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 	// Start one read-ahead stream per active lane before queueing the foreground
 	// work. With async commit depth >1 these goroutines warm the next block's
 	// first non-trunk branches while the persistent lane owners finish its
-	// predecessor. Every stream owns separate snapshot cursors and is joined by
-	// its lane before the session can close.
+	// predecessor. Every stream owns separate snapshot cursors and is joined
+	// before the session can close. Overlap mode joins only matching durable reads
+	// on the foreground path, rather than the entire predicted prefix list.
 	prefetchDepth := CommitmentParentPrefetchDepth
 	commitmentPipelinePrefetchDepthGauge.Update(int64(prefetchDepth))
 	lookaheadDepth := 0
@@ -253,12 +318,25 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 	}
 	commitmentPipelinePrefetchLookaheadDepthGauge.Update(int64(lookaheadDepth))
 	commitmentPipelinePrefetchLookaheadLimitGauge.Update(int64(CommitmentParentPrefetchLookaheadLimitPerLane))
-	if prefetchDepth > 0 && job.store.supportsParentPrefetch() {
+	if prefetchDepth > 0 && job.store.supportsParentPrefetch() && ops != nil {
+		// Fold descent compacts deletes in ops in place. Both prefetch levels
+		// require a separate immutable path image, even with the lane barrier
+		// enabled, because child lookahead already overlaps that compaction.
+		paths := commitmentPrefetchPathsPool.Get().(*[]common.Hash)
+		if cap(*paths) < len(*ops) {
+			*paths = make([]common.Hash, len(*ops))
+		} else {
+			*paths = (*paths)[:len(*ops)]
+		}
+		for i := range *ops {
+			(*paths)[i] = (*ops)[i].path
+		}
+		job.prefetchPaths = paths
 		for nb := range p.lanes {
 			if counts[nb] == 0 {
 				continue
 			}
-			group := (*ops)[starts[nb] : starts[nb]+counts[nb]]
+			group := (*job.prefetchPaths)[starts[nb] : starts[nb]+counts[nb]]
 			result := &job.prefetch[nb]
 			result.active = true
 			result.critical.Add(1)
@@ -270,11 +348,17 @@ func (p *OrderedCommitmentPipeline) Submit(db CommitmentDB, updates []rawdb.Stat
 				depth:          prefetchDepth,
 				lookaheadDepth: CommitmentParentPrefetchLookaheadDepth,
 				lookaheadLimit: CommitmentParentPrefetchLookaheadLimitPerLane,
-				ops:            group,
+				paths:          group,
 			})
 		}
 	}
 
+	if p.partitioned != nil {
+		p.partitioned.previous = job
+		p.submitPartitions(job)
+		go p.finishJob(job)
+		return job.result
+	}
 	job.done.Add(maxFoldNibbles)
 	observeCommitmentPipelineSubmit(p.inflight.Add(1))
 	for nb := range p.lanes {
@@ -295,7 +379,7 @@ func (p *OrderedCommitmentPipeline) runLane(nb uint8, root BranchData, tasks <-c
 	var path [pathLen]byte
 	for task := range tasks {
 		job := task.job
-		if prefetched := &job.prefetch[nb]; prefetched.active {
+		if prefetched := &job.prefetch[nb]; prefetched.active && !p.prefetchOverlap {
 			started := time.Now()
 			prefetched.critical.Wait()
 			commitmentPipelinePrefetchCriticalWaitCallsCounter.Inc(1)
@@ -449,7 +533,7 @@ func (p *OrderedCommitmentPipeline) runCriticalPrefetch(
 	// valid fold fail; the authoritative foreground cursor retries any branch
 	// it actually needs and reports the error through the normal pipeline.
 	criticalStarted := time.Now()
-	planned, _, err := task.store.prefetchParentLaneLimited(task.nb, task.ops, task.depth, 0)
+	planned, _, err := task.store.prefetchParentLaneLimited(task.nb, task.paths, task.depth, 0)
 	commitmentPipelinePrefetchCriticalPlannedCounter.Inc(int64(planned))
 	commitmentPipelinePrefetchCriticalWallNanosCounter.Inc(time.Since(criticalStarted).Nanoseconds())
 	task.result.critical.Done()
@@ -467,7 +551,7 @@ func (p *OrderedCommitmentPipeline) runCriticalPrefetch(
 		plan: newCommitmentParentPrefetchPlan(
 			task.store,
 			task.nb,
-			task.ops,
+			task.paths,
 			task.depth+task.lookaheadDepth,
 			task.lookaheadLimit,
 		),
@@ -488,9 +572,16 @@ func (p *OrderedCommitmentPipeline) finishLookaheadPrefetch(task *orderedCommitm
 
 func (p *OrderedCommitmentPipeline) finishJob(job *orderedCommitmentJob) {
 	job.done.Wait()
-	// Lookahead is allowed to overlap the authoritative fold, but its cursors
-	// still belong to this snapshot-scoped session and must finish before close.
+	// Both prefetch levels may overlap the authoritative fold. Their cursors,
+	// key scratch and ops still belong to this job and must finish before close
+	// or pool reuse. Per-key singleflight only joins reads, not session lifetime.
 	waitForOrderedCommitmentLookahead(job)
+	if job.partitions != nil && job.loadError() == nil {
+		if err := p.composePartitions(job); err != nil {
+			job.setError(err)
+			p.setFailed(err)
+		}
+	}
 	for nb := range job.siblingStats {
 		job.stats.merge(&job.siblingStats[nb])
 	}
@@ -554,7 +645,22 @@ func waitForOrderedCommitmentLookahead(job *orderedCommitmentJob) {
 	commitmentPipelinePrefetchFinishLookaheadWaitNanosCounter.Inc(time.Since(started).Nanoseconds())
 }
 
+var commitmentPrefetchPathsPool = sync.Pool{New: func() any { return new([]common.Hash) }}
+
 func (p *OrderedCommitmentPipeline) finishJobResult(job *orderedCommitmentJob, root common.Hash, err error) {
+	if job.partitions != nil {
+		returnCommitmentPartitionJob(job.partitions)
+		job.partitions = nil
+	}
+	if job.prefetchPaths != nil {
+		// Hashes contain no pointers; all readers have joined before reuse.
+		*job.prefetchPaths = (*job.prefetchPaths)[:0]
+		// Avoid retaining an exceptional block's large scratch in the pool.
+		if cap(*job.prefetchPaths) <= 64*1024 {
+			commitmentPrefetchPathsPool.Put(job.prefetchPaths)
+		}
+		job.prefetchPaths = nil
+	}
 	if job.ops != nil {
 		returnOpsBuf(job.ops)
 		job.ops = nil
@@ -564,6 +670,10 @@ func (p *OrderedCommitmentPipeline) finishJobResult(job *orderedCommitmentJob, r
 		commitmentPipelineErrorsCounter.Inc(1)
 	}
 	commitmentPipelineInflightGauge.Update(p.inflight.Add(-1))
+	job.finalRoot = root
+	if job.completed != nil {
+		close(job.completed)
+	}
 	job.result <- OrderedCommitmentResult{Root: root, Err: err}
 	close(job.result)
 }
@@ -621,7 +731,14 @@ func (p *OrderedCommitmentPipeline) Close() {
 	p.closeOnce.Do(func() {
 		p.closed.Store(true)
 		for _, lane := range p.lanes {
-			close(lane)
+			if lane != nil {
+				close(lane)
+			}
+		}
+		if p.partitioned != nil {
+			for _, lane := range p.partitioned.lanes {
+				close(lane)
+			}
 		}
 		for _, lane := range p.prefetchLanes {
 			close(lane)

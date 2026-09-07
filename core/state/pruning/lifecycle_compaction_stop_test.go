@@ -101,8 +101,12 @@ func TestSnapshotLifecycleStopCancelsHistoryCompaction(t *testing.T) {
 	}
 	t.Logf("Stop canceled and joined history compaction in %s", time.Since(started))
 	after, err := os.ReadFile(filepath.Join(dir, snapshots.ManifestFile))
-	if err != nil || !bytes.Equal(before, after) {
-		t.Fatalf("shutdown published compaction/prune progress: %v", err)
+	if err != nil || bytes.Equal(before, after) {
+		t.Fatalf("covered prune should finish before compaction starts: %v", err)
+	}
+	manifest, err := snapshots.LoadManifest(dir)
+	if err != nil || len(manifest.Segments) != len(refs) || manifest.Progress == nil || manifest.Progress.HotPruneTxNum != 4 {
+		t.Fatalf("canceled merge must retain original cold refs and completed prune: manifest=%+v err=%v", manifest, err)
 	}
 	for _, ref := range refs {
 		if _, err := os.Stat(filepath.Join(dir, ref.Path)); err != nil {
@@ -110,8 +114,20 @@ func TestSnapshotLifecycleStopCancelsHistoryCompaction(t *testing.T) {
 		}
 	}
 	for _, block := range []uint64{1, 2} {
-		if _, ok, err := rawdb.ReadStateDomainChange(db, block, 1); err != nil || !ok {
-			t.Fatalf("shutdown pruned hot row block=%d: ok=%v err=%v", block, ok, err)
+		if _, ok, err := rawdb.ReadStateDomainChange(db, block, 1); err != nil || ok {
+			t.Fatalf("covered row should already be pruned block=%d: ok=%v err=%v", block, ok, err)
 		}
+	}
+	cfg, _ := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetStateDomainChange)
+	var records int
+	for _, ref := range manifest.Segments {
+		if ref.Kind == snapshots.SegmentHistory {
+			if err := cfg.IterateHistoryRange(dir, manifest, ref, 1, 4, func(*rawdb.StateDomainChange) (bool, error) { records++; return true, nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if records != 2 {
+		t.Fatalf("cold history after canceled merge has %d records", records)
 	}
 }

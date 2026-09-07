@@ -20,8 +20,11 @@ const (
 	// 17 foreground readers (16 nibble lanes + root) plus 16 independent
 	// read-ahead readers. A rotating branch generation doubles both sets for its
 	// frozen/legacy fallback keyspace.
-	defaultCommitmentParentReaders   = 33
-	maxPooledCommitmentParentReaders = 66
+	defaultCommitmentParentReaders = 33
+	// 64 foreground partitions + root, doubled for fallback, plus the two
+	// existing sets of 16 prefetch readers. Larger tool-only sessions still
+	// release their scratch instead of growing the pool without a bound.
+	maxPooledCommitmentParentReaders = 162
 )
 
 var splitReadKeyPool = sync.Pool{
@@ -126,18 +129,31 @@ type commitmentParentReadSession struct {
 	// older block while other nibbles of that block are still folding; the same
 	// nibble in the next block must see those writes without seeing its own or a
 	// newer block's layer.
-	inflight     []*layer
-	cache        *baseReadCache
-	cacheVersion uint64
-	snapshot     pointread.Snapshot
-	cursors      []pointread.Cursor
-	readContexts []*commitmentParentReadContext
-	flights      commitmentParentReadFlights
+	inflight           []*layer
+	cache              *baseReadCache
+	cacheVersion       uint64
+	snapshot           pointread.Snapshot
+	cursors            []pointread.Cursor
+	readContexts       []*commitmentParentReadContext
+	flights            commitmentParentReadFlights
+	durableReadPermits chan struct{}
 	// keyScratch is split into one 128-byte region per cursor/reader. The
 	// CommitmentParentSession contract gives each reader index one exclusive
 	// worker, so split-key assembly needs neither a lock nor a sync.Pool trip on
 	// every branch lookup.
 	keyScratch *[]byte
+}
+
+func (s *commitmentParentReadSession) SetCommitmentParentReadBudget(permits chan struct{}) {
+	s.durableReadPermits = permits
+}
+
+func (s *commitmentParentReadSession) readDurable(cursor pointread.Cursor, key []byte, fn func([]byte) error) (bool, error) {
+	if s.durableReadPermits != nil {
+		s.durableReadPermits <- struct{}{}
+		defer func() { <-s.durableReadPermits }()
+	}
+	return cursor.View(key, fn)
 }
 
 // commitmentParentReadContext owns the callback state for one session reader.
@@ -660,7 +676,7 @@ func (s *commitmentParentReadSession) leadCommitmentParentPrefetch(
 	ctx.cacheable = cacheable
 	ctx.prefetch = true
 	ctx.flight = call
-	found, err = cursor.View(key, ctx.callback)
+	found, err = s.readDurable(cursor, key, ctx.callback)
 	ctx.flight = nil
 	if found {
 		ctx.prefetchHits++
@@ -836,7 +852,7 @@ func (s *commitmentParentReadSession) leadCommitmentParentView(
 	ctx.cacheable = cacheable
 	ctx.fn = fn
 	ctx.flight = call
-	found, err = cursor.View(key, ctx.callback)
+	found, err = s.readDurable(cursor, key, ctx.callback)
 	ctx.flight = nil
 	callbackErr := ctx.callbackErr
 	if found {

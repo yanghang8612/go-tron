@@ -26,8 +26,15 @@ type pointReadMetrics struct {
 // adding one pointer to every reserved cursor (normally 33 per fold).
 var commitmentPointReadMetrics = newPointReadMetrics("")
 
+// Unbounded exact-key cursors serve state prefetch batches. Keep their I/O
+// separate so adding read-ahead cannot contaminate commitment comparisons.
+var statePrefetchPointReadMetrics = newPointReadMetricsWithPrefix("blockbuffer/state_prefetch/pebble/")
+
 func newPointReadMetrics(namespace string) *pointReadMetrics {
-	prefix := namespace + "blockbuffer/commitment_parent/pebble/"
+	return newPointReadMetricsWithPrefix(namespace + "blockbuffer/commitment_parent/pebble/")
+}
+
+func newPointReadMetricsWithPrefix(prefix string) *pointReadMetrics {
 	return &pointReadMetrics{
 		cursors:          metrics.GetOrRegisterCounter(prefix+"cursors", nil),
 		seekCalls:        metrics.GetOrRegisterCounter(prefix+"seek_calls", nil),

@@ -8,7 +8,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/golang/snappy"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -401,7 +400,7 @@ func borrowStateDomainChangeBlockPayload(data []byte) ([]byte, *[]byte, error) {
 	} else {
 		*pooled = (*pooled)[:decodedLen]
 	}
-	decoded, err := snappy.Decode(*pooled, payload)
+	decoded, err := decodeCompressedStateChangeBlock(*pooled, payload, data[len(stateDomainChangeBlockEnvelopeMagic)])
 	if err != nil {
 		releaseBorrowedStateDomainChangeBlockPayload(pooled)
 		return nil, nil, fmt.Errorf("rawdb: decode compressed state domain change block: %w", err)

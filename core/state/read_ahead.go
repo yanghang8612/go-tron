@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"runtime"
 	"strconv"
 	"sync"
@@ -21,6 +22,7 @@ const (
 	defaultStateReadAheadQueueBytes  = 16 << 20
 	maxTransferAssetPrefetchRows     = 128
 	maxStateReadAheadWorkers         = 4
+	maxStateReadAheadPlanRows        = 4096
 )
 
 var (
@@ -307,8 +309,10 @@ func (p *StateReadAhead) worker() {
 }
 
 type stateReadAheadTarget struct {
-	address  tcommon.Address
-	contract bool
+	address     tcommon.Address
+	contract    bool
+	owner       bool
+	permissions []int32
 }
 
 type stateReadAheadTransferAsset struct {
@@ -334,35 +338,66 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 			assetAccounts[transfer.to] = struct{}{}
 		}
 	}
-	envelopes := make(map[tcommon.Address]StateAccountV3, len(targets))
+	// Stage one resolves account generations. Stage two groups all predictable
+	// subrows into a deduplicated physical read plan. Hints may observe an old
+	// generation, but canonical access still reopens the current envelope.
+	accounts := rawdb.NewStatePrefetchPlan(maxStateReadAheadPlanRows)
+	byID := make(map[int]stateReadAheadTarget, len(targets))
 	for _, target := range targets {
-		if job.epoch != p.epoch.Load() {
-			return false
-		}
-		encoded, ok, err := rawdb.PrefetchStateAccountLatest(p.db, target.address)
-		p.recordRow(ok, err)
-		_, assetAccount := assetAccounts[target.address]
-		if err != nil || !ok || (!target.contract && !assetAccount) {
-			continue
-		}
-		envelope, err := DecodeStateAccountV2(encoded)
-		if err != nil {
-			p.recordError()
-			continue
-		}
-		envelopes[target.address] = *envelope
-		if !target.contract {
-			continue
-		}
-		_, ok, err = rawdb.PrefetchStateKVLatest(p.db, target.address, envelope.AccountKVGeneration, kvdomains.ContractMetadata, contractMetaKVKey)
-		p.recordRow(ok, err)
-		if envelope.CodeHash != (tcommon.Hash{}) {
-			_, ok, err = rawdb.PrefetchStateCode(p.db, envelope.CodeHash)
-			p.recordRow(ok, err)
+		if id := accounts.AddAccount(target.address); id >= 0 {
+			byID[id] = target
 		}
 	}
-	if len(assetTransfers) == 0 {
-		return true
+	generations := make(map[tcommon.Address]uint64, len(targets))
+	rows := rawdb.NewStatePrefetchPlan(maxStateReadAheadPlanRows)
+	stale := errors.New("state read-ahead epoch changed")
+	err := accounts.Execute(p.db, func(id int, encoded []byte, ok bool, err error) error {
+		if job.epoch != p.epoch.Load() {
+			return stale
+		}
+		p.recordRow(ok, err)
+		target := byID[id]
+		_, assetAccount := assetAccounts[target.address]
+		if err != nil || !ok || (!target.contract && !target.owner && len(target.permissions) == 0 && !assetAccount) {
+			return nil
+		}
+		envelope, err := splitStateAccountV3(encoded)
+		if err != nil {
+			p.recordError()
+			return nil
+		}
+		generation := envelope.accountKVGeneration
+		generations[target.address] = generation
+		for _, permission := range target.permissions {
+			var key []byte
+			switch permission {
+			case 0:
+				key = accountOwnerPermissionKey
+			case 1:
+				key = accountWitnessPermissionKey
+			default:
+				if permission < 2 {
+					continue
+				}
+				key = accountActivePermissionKey(permission)
+			}
+			rows.AddKV(target.address, generation, kvdomains.AccountPermissionAux, key)
+		}
+		if target.owner {
+			rows.AddKV(target.address, generation, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
+			rows.AddKV(target.address, generation, kvdomains.AccountResourceAux, accountResourceKey)
+		}
+		if target.contract {
+			rows.AddKV(target.address, generation, kvdomains.ContractMetadata, contractMetaKVKey)
+			rows.AddCode(tcommon.BytesToHash(envelope.codeHash))
+		}
+		return nil
+	})
+	if errors.Is(err, stale) {
+		return false
+	}
+	if err != nil {
+		p.recordError()
 	}
 	// TransferAsset reads predictable point rows after opening the owner and
 	// recipient account envelopes. Warm both legacy name-keyed rows and, for a
@@ -371,11 +406,11 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 	// prefetch merely admits an unused immutable cache entry.
 	seenKV := make(map[stateReadAheadKVTarget]struct{}, len(assetTransfers)*8)
 	prefetchKV := func(address tcommon.Address, domain kvdomains.KVDomain, key []byte) {
-		envelope, ok := envelopes[address]
+		generation, ok := generations[address]
 		if !ok {
 			return
 		}
-		target := stateReadAheadKVTarget{address: address, generation: envelope.AccountKVGeneration, domain: domain, key: string(key)}
+		target := stateReadAheadKVTarget{address: address, generation: generation, domain: domain, key: string(key)}
 		if _, exists := seenKV[target]; exists {
 			return
 		}
@@ -383,8 +418,7 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 			return
 		}
 		seenKV[target] = struct{}{}
-		_, present, err := rawdb.PrefetchStateKVLatest(p.db, address, envelope.AccountKVGeneration, domain, key)
-		p.recordRow(present, err)
+		rows.AddKV(address, generation, domain, key)
 	}
 	for _, transfer := range assetTransfers {
 		legacyMeta := assetBytesKey(assetLegacyTag, transfer.assetName)
@@ -408,7 +442,20 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 		prefetchKV(transfer.owner, kvdomains.AccountFreeAssetNetUsageV2, []byte(tokenKey))
 		prefetchKV(transfer.owner, kvdomains.AccountAssetOperationTimeV2, []byte(tokenKey))
 	}
-	return true
+	err = rows.Execute(p.db, func(_ int, _ []byte, present bool, err error) error {
+		if job.epoch != p.epoch.Load() {
+			return stale
+		}
+		p.recordRow(present, err)
+		return nil
+	})
+	if errors.Is(err, stale) {
+		return false
+	}
+	if err != nil {
+		p.recordError()
+	}
+	return job.epoch == p.epoch.Load()
 }
 
 func (p *StateReadAhead) recordRow(present bool, err error) {
@@ -458,6 +505,9 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 
 	witness := block.WitnessAddress()
 	add(witness[:], false)
+	if i, ok := index[witness]; ok {
+		targets[i].permissions = append(targets[i].permissions, 1)
+	}
 	for _, tx := range transactions {
 		message, err := tx.DecodedContract()
 		if err != nil || message == nil {
@@ -465,6 +515,20 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 		}
 		if owner, _, err := tx.ContractOwnerAddress(); err == nil {
 			add(owner, false)
+			if i, ok := index[tcommon.BytesToAddress(owner)]; ok {
+				targets[i].owner = true
+				permission := tx.Contract().GetPermissionId()
+				seen := false
+				for _, id := range targets[i].permissions {
+					if id == permission {
+						seen = true
+						break
+					}
+				}
+				if !seen {
+					targets[i].permissions = append(targets[i].permissions, permission)
+				}
+			}
 		}
 		if value, ok := message.(interface{ GetToAddress() []byte }); ok {
 			add(value.GetToAddress(), false)

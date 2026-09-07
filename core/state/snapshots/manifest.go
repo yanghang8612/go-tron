@@ -142,11 +142,7 @@ func NewManifestForChain(visibleTxStart, visibleTxEnd uint64, segments []Segment
 }
 
 func LoadManifest(dir string) (*Manifest, error) {
-	data, err := os.ReadFile(filepath.Join(dir, ManifestFile))
-	if err != nil {
-		return nil, err
-	}
-	return decodeManifest(data)
+	return loadManifestFile(dir, false)
 }
 
 func decodeManifest(data []byte) (*Manifest, error) {
@@ -175,14 +171,7 @@ func decodeProductionManifest(data []byte) (*Manifest, error) {
 }
 
 func LoadProductionManifest(dir string) (*Manifest, error) {
-	manifest, err := LoadManifest(dir)
-	if err != nil {
-		return nil, err
-	}
-	if err := manifest.ValidateProduction(); err != nil {
-		return nil, err
-	}
-	return manifest, nil
+	return loadManifestFile(dir, true)
 }
 
 func PublishManifest(dir string, manifest *Manifest) error {
@@ -250,18 +239,22 @@ func (m *Manifest) Validate() error {
 	if err := validateChainIdentity(m.Chain); err != nil {
 		return err
 	}
-	seenPath := make(map[string]struct{}, len(m.Segments))
+	// Reuse the duplicate-path index for companion validation. Scanning the
+	// entire catalog for each history/index/accessor triple is quadratic in
+	// the number of cold segments and competes with import on every load.
+	seenPath := make(map[string]*SegmentRef, len(m.Segments))
 	byFamily := make(map[segmentFamily][]SegmentRef)
-	for _, seg := range m.Segments {
-		if err := validateActiveSegment(seg, m.VisibleTxStart, m.VisibleTxEnd); err != nil {
+	for i := range m.Segments {
+		seg := &m.Segments[i]
+		if err := validateActiveSegment(*seg, m.VisibleTxStart, m.VisibleTxEnd); err != nil {
 			return err
 		}
 		if _, dup := seenPath[seg.Path]; dup {
 			return fmt.Errorf("snapshots: duplicate segment path %q", seg.Path)
 		}
-		seenPath[seg.Path] = struct{}{}
+		seenPath[seg.Path] = seg
 		fam := segmentFamily{dataset: seg.normalizedDataset(), domain: seg.Domain, kind: seg.Kind}
-		byFamily[fam] = append(byFamily[fam], seg)
+		byFamily[fam] = append(byFamily[fam], *seg)
 	}
 	for family, segments := range byFamily {
 		sort.Slice(segments, func(i, j int) bool {
@@ -284,7 +277,7 @@ func (m *Manifest) Validate() error {
 			return err
 		}
 	}
-	if err := validateHistoryBinaryCompanionTriples(m); err != nil {
+	if err := validateHistoryBinaryCompanionTriples(m, seenPath); err != nil {
 		return err
 	}
 	if err := validateLatestBinaryCompanionTriples(m); err != nil {
@@ -428,26 +421,35 @@ func validateHexHash(field, value string) error {
 	return nil
 }
 
-func validateHistoryBinaryCompanionTriples(manifest *Manifest) error {
+func validateHistoryBinaryCompanionTriples(manifest *Manifest, byPath map[string]*SegmentRef) error {
 	if manifest == nil {
 		return nil
 	}
 	historyByCompanion := make(map[string]struct{})
 	registry := DefaultDomainRegistry()
+	// Duplicate paths have already failed Validate. Retain every identity
+	// predicate of DomainCfg.historyCompanionRef, including the legacy zero
+	// aggregation-step normalization; a matching filename alone is not proof.
+	companion := func(cfg DomainCfg, history SegmentRef, kind SegmentKind, path string) (*SegmentRef, bool) {
+		ref := byPath[path]
+		return ref, path != "" && ref != nil && ref.normalizedDataset() == cfg.Dataset &&
+			ref.Kind == kind && ref.FromTxNum == history.FromTxNum && ref.ToTxNum == history.ToTxNum &&
+			ref.effectiveAggregationSteps() == history.effectiveAggregationSteps()
+	}
 	for _, ref := range manifest.Segments {
 		cfg, ok := registry.ConfigForRef(ref)
 		if !ok || ref.Kind != SegmentHistory || !cfg.IsHistoryBinarySegmentPath(ref.Path) {
 			continue
 		}
 		if cfg.HasHistoryInvertedIndex {
-			idxRef, ok := cfg.HistoryIndexRef(manifest, ref)
+			idxRef, ok := companion(cfg, ref, SegmentInverted, cfg.HistoryIndexPathFor(ref.Path))
 			if !ok {
 				return fmt.Errorf("snapshots: binary %s history %q missing required index %q", cfg.Dataset, ref.Path, cfg.HistoryIndexPathFor(ref.Path))
 			}
 			historyByCompanion[idxRef.Path] = struct{}{}
 		}
 		if cfg.HasHistoryAccessor {
-			accessorRef, ok := cfg.HistoryAccessorRef(manifest, ref)
+			accessorRef, ok := companion(cfg, ref, SegmentAccessor, cfg.HistoryAccessorPathFor(ref.Path))
 			if !ok {
 				return fmt.Errorf("snapshots: binary %s history %q missing required accessor %q", cfg.Dataset, ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
 			}

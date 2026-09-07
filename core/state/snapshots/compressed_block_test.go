@@ -430,6 +430,7 @@ func TestHistoryCompressionConcurrency(t *testing.T) {
 }
 
 func TestCompressedBlockStreamWriterEquivalent(t *testing.T) {
+	t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", "1") // legacy physical-layout/copy contract
 	const chunkSize = 16 << 10
 	for _, size := range []int{0, 1, chunkSize - 1, chunkSize, chunkSize + 1, (stateDomainChangeHistoryBlockTableCapacity+1)*chunkSize + 731} {
 		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
@@ -582,6 +583,7 @@ func TestCompressedBlockStreamWriterReusesEncodedScratch(t *testing.T) {
 }
 
 func TestCompressedHistoryTempAbortRemovesScratch(t *testing.T) {
+	t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", "1")
 	dir := t.TempDir()
 	tmp, err := createStateDomainChangeHistoryTemp(dir, "history/abort.seg", true)
 	if err != nil {
@@ -591,7 +593,7 @@ func TestCompressedHistoryTempAbortRemovesScratch(t *testing.T) {
 		t.Fatal(err)
 	}
 	finalScratch := tmp.tmpName
-	bodyScratch := tmp.compressed.body.tmpName
+	bodyScratch := tmp.compressed.(*compressedBlockStreamWriter).body.tmpName
 	tmp.Close()
 	for _, path := range []string{finalScratch, bodyScratch} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {

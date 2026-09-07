@@ -2285,8 +2285,15 @@ func validateEventLogIndexCompanions(manifest *Manifest) error {
 	}
 	eventRefs := eventLogRefs(manifest)
 	indexRefs := eventLogIndexRefs(manifest)
+	// Index ranges and event ranges are sorted. Retain the earliest event that
+	// can cover the next index instead of rescanning the catalog's entire prefix
+	// for every index. An event spanning several indexes stays at the cursor.
+	start := 0
 	for _, indexRef := range indexRefs {
-		if !eventLogRangeCoveredByRefs(eventRefs, indexRef.FromTxNum, indexRef.ToTxNum) {
+		for start < len(eventRefs) && eventRefs[start].ToTxNum < indexRef.FromTxNum {
+			start++
+		}
+		if !eventLogRangeCoveredByRefs(eventRefs[start:], indexRef.FromTxNum, indexRef.ToTxNum) {
 			return fmt.Errorf("snapshots: event-log-index segment %q has no continuous event-log coverage for block range [%d,%d]",
 				indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
 		}

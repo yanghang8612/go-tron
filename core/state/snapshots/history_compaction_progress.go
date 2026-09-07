@@ -14,6 +14,14 @@ import (
 
 const historyCompactionProgressInterval = 30 * time.Second
 
+// These count records consumed by the compressed V6 merge stream, including
+// work in a merge later canceled before publication. Updates are batched per
+// source so the record loop does not perform atomic metric operations.
+var (
+	historyCompactionV6BorrowedRecords = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"compaction/v6_stream/borrowed_records", nil)
+	historyCompactionV6CopiedRecords   = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"compaction/v6_stream/copied_records", nil)
+)
+
 const (
 	historyCompactionPhaseIdle int64 = iota
 	historyCompactionPhaseValidate

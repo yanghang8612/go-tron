@@ -84,6 +84,8 @@ func dbCommand() *cli.Command {
 			dbMigrateTxIndexCommand(),
 			dbDropBalanceTracesCommand(),
 			dbCompactStateHistoryCommand(),
+			dbReclaimEmptyHistoryCommand(),
+			dbOfflineHistoryCommand(),
 			{
 				Name:  "rebuild-tx-indexes",
 				Usage: "Rebuild transaction lookups and per-block receipt rows from retained blocks",

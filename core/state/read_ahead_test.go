@@ -81,8 +81,8 @@ func TestStateReadAheadWarmsCanonicalAccountAndContractReads(t *testing.T) {
 	defer prefetcher.Close()
 
 	readsAfterWarmup := base.gets.Load()
-	if readsAfterWarmup != 6 {
-		t.Fatalf("durable warmup reads = %d, want 4 deduplicated accounts + metadata + code", readsAfterWarmup)
+	if readsAfterWarmup != 10 {
+		t.Fatalf("durable warmup reads = %d, want 4 accounts + metadata + code + 4 permission/resource rows", readsAfterWarmup)
 	}
 	for _, addr := range []tcommon.Address{owner, to, contract, witness} {
 		if _, ok, err := rawdb.ReadStateAccountLatestNoCopy(buffer, addr); err != nil || !ok {
@@ -100,7 +100,7 @@ func TestStateReadAheadWarmsCanonicalAccountAndContractReads(t *testing.T) {
 	}
 
 	stats := prefetcher.Stats()
-	if stats.EnqueuedBlocks != 1 || stats.ProcessedBlocks != 1 || stats.Rows != 6 || stats.Present != 6 || stats.Missing != 0 || stats.QueuedBytes != 0 || stats.Errors != 0 {
+	if stats.EnqueuedBlocks != 1 || stats.ProcessedBlocks != 1 || stats.Rows != 10 || stats.Present != 6 || stats.Missing != 4 || stats.QueuedBytes != 0 || stats.Errors != 0 {
 		t.Fatalf("stats = %+v", stats)
 	}
 }
@@ -158,8 +158,8 @@ func TestStateReadAheadWarmsTransferAssetPointReads(t *testing.T) {
 	defer prefetcher.Close()
 
 	readsAfterWarmup := base.gets.Load()
-	if readsAfterWarmup != 10 {
-		t.Fatalf("durable warmup reads = %d, want 4 account rows + 6 TransferAsset point rows", readsAfterWarmup)
+	if readsAfterWarmup != 14 {
+		t.Fatalf("durable warmup reads = %d, want 4 accounts + 6 asset rows + 4 permission/resource rows", readsAfterWarmup)
 	}
 	for _, row := range rows {
 		if _, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, row.address, generation, row.domain, row.key); err != nil || !ok {
@@ -170,7 +170,7 @@ func TestStateReadAheadWarmsTransferAssetPointReads(t *testing.T) {
 		t.Fatalf("canonical TransferAsset reads reached durable base after warmup: before=%d after=%d", readsAfterWarmup, got)
 	}
 	stats := prefetcher.Stats()
-	if stats.Rows != 10 || stats.Present != 10 || stats.Missing != 0 || stats.Errors != 0 {
+	if stats.Rows != 14 || stats.Present != 10 || stats.Missing != 4 || stats.Errors != 0 {
 		t.Fatalf("stats = %+v", stats)
 	}
 }

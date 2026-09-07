@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -259,11 +260,19 @@ func (s *StateDB) ReadDrAccountIndexLegacy(account []byte) *corepb.DelegatedReso
 }
 
 func (s *StateDB) ReadDrAccountIndexLegacyStrict(account []byte) (*corepb.DelegatedResourceAccountIndex, bool, error) {
-	return s.readDrAccountIndexByKeyStrict(rawdb.DrAccountIndexLegacyStateKey(account), "dr account index legacy")
+	data, ok, err := s.readSystemDelegationWithError(rawdb.DrAccountIndexLegacyStateKey(account))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	rec, err := statecodec.UnmarshalDelegationIndex(data)
+	if err != nil {
+		return nil, true, fmt.Errorf("decode dr account index legacy: %w", err)
+	}
+	return rec, true, nil
 }
 
 func (s *StateDB) writeDrAccountIndexLegacy(account []byte, rec *corepb.DelegatedResourceAccountIndex) error {
-	data, err := statecodec.Marshal(rec)
+	data, err := statecodec.MarshalDelegationIndex(rec)
 	if err != nil {
 		return fmt.Errorf("dr account index: marshal legacy: %w", err)
 	}
@@ -278,6 +287,39 @@ func (s *StateDB) WriteDrAccountIndexLegacyDelegate(from, to []byte) error {
 	if len(from) == 0 || len(to) == 0 {
 		return fmt.Errorf("dr account index: empty address (from=%d to=%d)", len(from), len(to))
 	}
+	if err := s.Error(); err != nil {
+		return err
+	}
+	// The legacy implementation reads both records before either write. For
+	// self-edges, the second independent image overwrites the first; retain that
+	// exact behavior instead of aliasing a single cached message.
+	if bytes.Equal(from, to) || s.transactionVersionedReader != nil {
+		legacyDelegationBypasses.Inc(1)
+		return s.writeDrAccountIndexLegacyDelegateUncached(from, to)
+	}
+	fromEntry, fromExists, err := s.loadLegacyDelegation(from)
+	if err != nil {
+		return err
+	}
+	toEntry, toExists, err := s.loadLegacyDelegation(to)
+	if err != nil {
+		return err
+	}
+	if !fromExists || !legacyDelegationContains(fromEntry.record.ToAccounts, fromEntry.toSet, to) {
+		if err := s.changeLegacyDelegation(fromEntry, to, false, false); err != nil {
+			return err
+		}
+	} else {
+		legacyDelegationNoops.Inc(1)
+	}
+	if !toExists || !legacyDelegationContains(toEntry.record.FromAccounts, toEntry.fromSet, from) {
+		return s.changeLegacyDelegation(toEntry, from, true, false)
+	}
+	legacyDelegationNoops.Inc(1)
+	return s.Error()
+}
+
+func (s *StateDB) writeDrAccountIndexLegacyDelegateUncached(from, to []byte) error {
 	fromRec, _, err := s.ReadDrAccountIndexLegacyStrict(from)
 	if err != nil {
 		return err
@@ -305,6 +347,36 @@ func (s *StateDB) WriteDrAccountIndexLegacyUnDelegate(from, to []byte) error {
 	if len(from) == 0 || len(to) == 0 {
 		return fmt.Errorf("dr account index: empty address")
 	}
+	if err := s.Error(); err != nil {
+		return err
+	}
+	if bytes.Equal(from, to) || s.transactionVersionedReader != nil {
+		legacyDelegationBypasses.Inc(1)
+		return s.writeDrAccountIndexLegacyUnDelegateUncached(from, to)
+	}
+	fromEntry, fromExists, err := s.loadLegacyDelegation(from)
+	if err != nil {
+		return err
+	}
+	toEntry, toExists, err := s.loadLegacyDelegation(to)
+	if err != nil {
+		return err
+	}
+	if fromExists && legacyDelegationContains(fromEntry.record.ToAccounts, fromEntry.toSet, to) {
+		if err := s.changeLegacyDelegation(fromEntry, to, false, true); err != nil {
+			return err
+		}
+	} else {
+		legacyDelegationNoops.Inc(1)
+	}
+	if toExists && legacyDelegationContains(toEntry.record.FromAccounts, toEntry.fromSet, from) {
+		return s.changeLegacyDelegation(toEntry, from, true, true)
+	}
+	legacyDelegationNoops.Inc(1)
+	return s.Error()
+}
+
+func (s *StateDB) writeDrAccountIndexLegacyUnDelegateUncached(from, to []byte) error {
 	fromRec, _, err := s.ReadDrAccountIndexLegacyStrict(from)
 	if err != nil {
 		return err

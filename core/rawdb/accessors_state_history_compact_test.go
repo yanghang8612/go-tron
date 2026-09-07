@@ -5,6 +5,30 @@ import (
 	"testing"
 )
 
+func TestStateHistoryBlockRangeBounds(t *testing.T) {
+	start, end, err := StateHistoryBlockRangeBounds(7, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []uint64{6, 7, 8, 9, 10} {
+		for _, seq := range []uint64{0, 1, ^uint64(0)} {
+			key := stateChangeSetKey(n, seq)
+			inside := bytes.Compare(key, start) >= 0 && bytes.Compare(key, end) < 0
+			if inside != (n >= 7 && n <= 9) {
+				t.Fatalf("block=%d seq=%d inside=%t", n, seq, inside)
+			}
+		}
+	}
+	if _, _, err := StateHistoryBlockRangeBounds(9, 7); err == nil {
+		t.Fatal("inverted range accepted")
+	}
+	start, end, err = StateHistoryBlockRangeBounds(^uint64(0), ^uint64(0))
+	last := stateChangeSetKey(^uint64(0), ^uint64(0))
+	if err != nil || bytes.Compare(start, last) > 0 || bytes.Compare(last, end) >= 0 {
+		t.Fatal("maximum block overflow")
+	}
+}
+
 func TestStateHistoryKeyspaceBounds(t *testing.T) {
 	changeSetStart, changeSetLimit := StateHistoryKeyspaceBounds()
 	for _, tc := range []struct {

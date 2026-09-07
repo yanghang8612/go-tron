@@ -1352,6 +1352,7 @@ func (s *StateDB) setAccountKVLatestView(reader statedomains.LatestReader, itera
 	if s == nil {
 		return
 	}
+	s.clearLegacyDelegationCache()
 	s.accountKVLatestReader = reader
 	s.accountKVLatestIterator = iterator
 }
@@ -2039,6 +2040,7 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 	if obj == nil {
 		return nil
 	}
+	obj.legacyDelegation = nil
 	s.journalAccount(owner, obj)
 	s.recordAccountKVGenerationWrite(owner)
 	prevDirty := make(map[string]kvEntry, len(obj.kvDirty))

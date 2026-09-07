@@ -2,7 +2,6 @@ package snapshots
 
 import (
 	"bytes"
-	"encoding/binary"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -349,7 +348,14 @@ func TestCompressedHistorySegmentSelfCheckCatchesCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dataOff := binary.BigEndian.Uint64(data[40:48])
+	raw, err := openCompressedBlockReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataOff := raw.dataOff + raw.table[0].compressedStart
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for i := dataOff; i < dataOff+64 && i < uint64(len(data)); i++ {
 		data[i] = 0
 	}
@@ -403,22 +409,16 @@ func TestValidateTrustedBuiltHistorySegmentBindsWriterFactsAndSamplesBody(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	blockCount := binary.BigEndian.Uint64(data[24:32])
-	target := logicalSize / 2
-	var targetBlock uint64
-	for i := uint64(1); i < blockCount; i++ {
-		off := compressedBlockHeaderSize + i*compressedBlockTableEntry
-		if binary.BigEndian.Uint64(data[off:off+8]) > target {
-			break
-		}
-		targetBlock = i
+	raw, err := openCompressedBlockReader(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	entry := compressedBlockHeaderSize + targetBlock*compressedBlockTableEntry
-	dataOffset := binary.BigEndian.Uint64(data[40:48])
-	compressedStart := binary.BigEndian.Uint64(data[entry+8 : entry+16])
-	compressedLen := binary.BigEndian.Uint64(data[entry+16 : entry+24])
-	start := dataOffset + compressedStart
-	end := start + compressedLen
+	block := raw.table[raw.findBlock(logicalSize/2)]
+	start := raw.dataOff + block.compressedStart
+	end := start + block.compressedLen
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if end > start+64 {
 		end = start + 64
 	}

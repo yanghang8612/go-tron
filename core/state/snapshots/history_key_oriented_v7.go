@@ -9,7 +9,6 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
-	"os"
 	"sort"
 	"sync"
 
@@ -198,7 +197,7 @@ func encodeStateDomainChangeBinaryAccessorV7PostingList(fromTxNum uint64, postin
 // writeStateDomainChangeBinaryAccessorV7PostingFrames publishes one key's
 // already encoded frames from bounded scratch storage. Only the small frame
 // directory remains resident even for an exceptionally hot key.
-func writeStateDomainChangeBinaryAccessorV7PostingFrames(dst io.Writer, scratch *os.File, frames []stateDomainChangeBinaryAccessorV7Frame) (uint64, uint32, error) {
+func writeStateDomainChangeBinaryAccessorV7PostingFrames(dst io.Writer, scratch *historyPostingScratch, frames []stateDomainChangeBinaryAccessorV7Frame) (uint64, uint32, error) {
 	if dst == nil || scratch == nil || len(frames) == 0 {
 		return 0, 0, errors.New("snapshots: invalid V7 posting frame writer")
 	}
@@ -214,14 +213,14 @@ func writeStateDomainChangeBinaryAccessorV7PostingFrames(dst io.Writer, scratch 
 	if count > math.MaxUint32 {
 		return 0, 0, errors.New("snapshots: V7 key posting count exceeds uint32")
 	}
-	if _, err := scratch.Seek(0, io.SeekStart); err != nil {
-		return 0, 0, err
+	if dataLen != scratch.size {
+		return 0, 0, errors.New("snapshots: V7 posting scratch length mismatch")
 	}
 	if len(frames) == 1 {
 		if _, err := dst.Write([]byte{stateDomainChangeBinaryAccessorV7Single}); err != nil {
 			return 0, 0, err
 		}
-		if _, err := io.CopyN(dst, scratch, int64(dataLen)); err != nil {
+		if _, err := scratch.WriteTo(dst); err != nil {
 			return 0, 0, err
 		}
 		var sum [4]byte
@@ -251,7 +250,7 @@ func writeStateDomainChangeBinaryAccessorV7PostingFrames(dst io.Writer, scratch 
 	if _, err := dst.Write(prefix); err != nil {
 		return 0, 0, err
 	}
-	if _, err := io.CopyN(dst, scratch, int64(dataLen)); err != nil {
+	if _, err := scratch.WriteTo(dst); err != nil {
 		return 0, 0, err
 	}
 	return dataStart + dataLen, uint32(count), nil

@@ -6,25 +6,28 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 // StateAccountVersion is the flat account-latest envelope version written by
-// this build. Version 4 stores a slim, explicitly encoded account core; its six TRC10
+// this build. Version 5 elides the default KV root and zero/duplicated code hash,
+// retaining the exact version-4 account core. Its six TRC10
 // maps, Owner/Witness/Active permissions, votes, Stake V1/V2 fields, frozen
 // supply, and AccountResource live in account-local KV domains.
-// Databases must be built from genesis by this codec; older protobuf-backed
-// account envelopes are deliberately rejected.
-const StateAccountVersion uint64 = 4
+// Version 4 envelopes remain explicitly readable; older protobuf-backed
+// envelopes are rejected. This is an internal storage version, not a wire format.
+const StateAccountVersion uint64 = 5
 
-// EmptyKVRoot is retained in the account envelope for compatibility with older
-// in-process callers. Flat-state commits write this value instead of rebuilding
-// per-account KV tries.
+const stateAccountVersionV4 uint64 = 4
+
+// EmptyKVRoot remains the logical root exposed to in-process callers. Version 5
+// encodes this common value implicitly; flat commits do not rebuild KV tries.
 var EmptyKVRoot = tcommon.Hash(ethtypes.EmptyRootHash)
 
 // StateAccountV3 is the internal, versioned, RLP-encoded value stored in the
 // flat account latest domain. It never leaks onto the wire, into blocks or
 // transactions, or into RPC responses. AccountProto is a historical field name:
-// v3 contains protobuf while v4 contains the internal non-protobuf core codec.
+// v3 contained protobuf; v4 and v5 retain the same internal non-protobuf core.
 type StateAccountV3 struct {
 	Version             uint64
 	AccountProto        []byte
@@ -112,6 +115,9 @@ func appendStateAccountV2StorageCoreTrailer(dst []byte, accountKVRoot tcommon.Ha
 }
 
 func appendStateAccountV2Fields(dst []byte, version uint64, accountProto []byte, accountKVRoot tcommon.Hash, accountKVGeneration uint64, codeHash tcommon.Hash) []byte {
+	if version == StateAccountVersion {
+		return appendStateAccountV5Fields(dst, accountProto, accountKVRoot, accountKVGeneration, codeHash)
+	}
 	contentSize := stateAccountV2ContentSize(version, accountProto, accountKVGeneration)
 	encodedSize := int(rlp.ListSize(uint64(contentSize)))
 	if cap(dst)-len(dst) < encodedSize {
@@ -165,7 +171,7 @@ func encodedSizeLen(size int) int {
 }
 
 // DecodeStateAccountV3 parses the current flat account-latest envelope. The
-// source name is retained for API stability, but only version 4 is accepted.
+// source name is retained for API stability. Explicit versions 4 and 5 are read.
 func DecodeStateAccountV3(data []byte) (*StateAccountV3, error) {
 	v := new(StateAccountV3)
 	if err := decodeStateAccountV3Into(data, v); err != nil {
@@ -197,6 +203,9 @@ func splitStateAccountV3(data []byte) (borrowedStateAccountV3Fields, error) {
 	if err != nil {
 		return fields, fmt.Errorf("decode StateAccountV3 version: %w", err)
 	}
+	if fields.version != StateAccountVersion && fields.version != stateAccountVersionV4 {
+		return fields, fmt.Errorf("unsupported StateAccountV3 version %d (want 4 or %d)", fields.version, StateAccountVersion)
+	}
 	fields.accountProto, content, err = rlp.SplitString(content)
 	if err != nil {
 		return fields, fmt.Errorf("decode StateAccountV3 account: %w", err)
@@ -205,7 +214,9 @@ func splitStateAccountV3(data []byte) (borrowedStateAccountV3Fields, error) {
 	if err != nil {
 		return fields, fmt.Errorf("decode StateAccountV3 account root: %w", err)
 	}
-	if len(fields.accountKVRoot) != tcommon.HashLength {
+	if fields.version == StateAccountVersion && len(fields.accountKVRoot) == 0 {
+		fields.accountKVRoot = EmptyKVRoot[:]
+	} else if len(fields.accountKVRoot) != tcommon.HashLength {
 		return fields, fmt.Errorf("decode StateAccountV3 account root: got %d bytes, want %d", len(fields.accountKVRoot), tcommon.HashLength)
 	}
 	fields.accountKVGeneration, content, err = rlp.SplitUint64(content)
@@ -216,14 +227,20 @@ func splitStateAccountV3(data []byte) (borrowedStateAccountV3Fields, error) {
 	if err != nil {
 		return fields, fmt.Errorf("decode StateAccountV3 code hash: %w", err)
 	}
-	if len(fields.codeHash) != tcommon.HashLength {
+	if fields.version == StateAccountVersion && len(fields.codeHash) == 0 {
+		// A nil slice restores the zero hash without allocating.
+	} else if fields.version == StateAccountVersion && len(fields.codeHash) == 1 && fields.codeHash[0] == stateAccountV5EmptyCodeHashReference {
+		fields.codeHash = stateAccountV5EmptyCodeHash[:]
+	} else if fields.version == StateAccountVersion && len(fields.codeHash) == 1 && fields.codeHash[0] == stateAccountV5CoreCodeHashReference {
+		fields.codeHash, err = types.AccountStorageCoreV4CodeHash(fields.accountProto)
+		if err != nil || len(fields.codeHash) != tcommon.HashLength {
+			return fields, fmt.Errorf("decode StateAccountV5 core code hash reference: invalid canonical 32-byte core hash (%v)", err)
+		}
+	} else if len(fields.codeHash) != tcommon.HashLength {
 		return fields, fmt.Errorf("decode StateAccountV3 code hash: got %d bytes, want %d", len(fields.codeHash), tcommon.HashLength)
 	}
 	if len(content) != 0 {
 		return fields, fmt.Errorf("decode StateAccountV3: too many list elements")
-	}
-	if fields.version != StateAccountVersion {
-		return fields, fmt.Errorf("unsupported StateAccountV3 version %d (want %d)", fields.version, StateAccountVersion)
 	}
 	return fields, nil
 }

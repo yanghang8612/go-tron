@@ -62,6 +62,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -216,6 +217,14 @@ type Options struct {
 	// L0StopWritesThreshold is the number of L0 files at which Pebble starts
 	// stalling foreground writes. Default: 64 (Pebble upstream is 12).
 	L0StopWritesThreshold int
+
+	// DisableAutomaticCompactions is for offline maintenance only. Flushes and
+	// explicit Compact calls remain enabled; this is not a disk-space limit.
+	DisableAutomaticCompactions bool
+
+	// MaxConcurrentCompactions overrides the quota-aware default when positive.
+	// Offline maintenance should use 1. Zero preserves the normal default.
+	MaxConcurrentCompactions int
 }
 
 // DefaultOptions returns the tuning go-tron applies to its main chaindata DB
@@ -320,7 +329,8 @@ type Database struct {
 	writeDelayCount     atomic.Int64 // Total number of write stall counts
 	writeDelayTime      atomic.Int64 // Total time spent in write stalls
 
-	writeOptions *pebble.WriteOptions
+	writeOptions    *pebble.WriteOptions
+	boundedPointGet bool
 }
 
 // pointReadView holds Database's lifecycle read lock across a short burst of
@@ -361,7 +371,11 @@ type keyValueSnapshot struct {
 }
 
 type pointReadCursor struct {
-	iter *pebble.Iterator
+	iter                                   *pebble.Iterator
+	unbounded                              bool
+	getSnapshot                            *pebble.Snapshot
+	prefix                                 []byte
+	getCalls, getHits, getErrors, getNanos uint64
 }
 
 var _ pointread.Viewer = (*Database)(nil)
@@ -412,9 +426,9 @@ func (v *pointReadView) Close() error {
 }
 
 // NewPointReadSnapshot exposes Pebble's MVCC snapshot through the narrow
-// optional pointread interface. One cursor is created per independently sorted
-// commitment stream, avoiding DB.Get's search setup and closer allocation for
-// every cold branch.
+// optional pointread interface. Each independently owned commitment stream can
+// reuse an iterator, or use lazy level-by-level Get when explicitly configured
+// for an LSM with overlapping versions. Both read the same pinned sequence.
 func (d *Database) NewPointReadSnapshot() (pointread.Snapshot, error) {
 	return d.newPointReadSnapshot(0)
 }
@@ -530,6 +544,11 @@ func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
 		lower = append([]byte(nil), prefix...)
 		upper = upperBound(lower)
 	}
+	if s.db.boundedPointGet && len(prefix) != 0 {
+		cursor.getSnapshot = s.snapshot
+		cursor.prefix = lower
+		return cursor, nil
+	}
 	iter, err := s.snapshot.NewIter(&pebble.IterOptions{
 		LowerBound: lower,
 		UpperBound: upper,
@@ -539,6 +558,7 @@ func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
 		return nil, err
 	}
 	cursor.iter = iter
+	cursor.unbounded = len(prefix) == 0
 	return cursor, nil
 }
 
@@ -584,6 +604,9 @@ func (s *pointReadSnapshot) Close() error {
 }
 
 func (c *pointReadCursor) View(key []byte, fn func(value []byte) error) (bool, error) {
+	if c != nil && c.getSnapshot != nil {
+		return c.viewGet(key, fn)
+	}
 	if c == nil || c.iter == nil {
 		return false, pebble.ErrClosed
 	}
@@ -600,10 +623,20 @@ func (c *pointReadCursor) View(key []byte, fn func(value []byte) error) (bool, e
 }
 
 func (c *pointReadCursor) Close() error {
+	if c != nil && c.getSnapshot != nil {
+		commitmentPointGetMetrics.observe(c)
+		c.getSnapshot = nil
+		c.prefix = nil
+		return nil
+	}
 	if c == nil || c.iter == nil {
 		return nil
 	}
-	commitmentPointReadMetrics.observe(c.iter.Stats(), c.iter.Metrics())
+	if c.unbounded {
+		statePrefetchPointReadMetrics.observe(c.iter.Stats(), c.iter.Metrics())
+	} else {
+		commitmentPointReadMetrics.observe(c.iter.Stats(), c.iter.Metrics())
+	}
 	err := c.iter.Close()
 	c.iter = nil
 	return err
@@ -681,6 +714,13 @@ func (l panicLogger) Fatalf(format string, args ...interface{}) {
 // go-tron-specific deviations from go-ethereum's upstream defaults; pass
 // DefaultOptions() unless you know why you're picking different values.
 func New(file string, cache int, handles int, namespace string, readonly bool, tune Options) (*Database, error) {
+	if tune.MaxConcurrentCompactions < 0 {
+		return nil, fmt.Errorf("invalid max concurrent compactions %d", tune.MaxConcurrentCompactions)
+	}
+	pointMode := os.Getenv("GTRON_PEBBLE_BOUNDED_POINT_READ")
+	if pointMode != "" && pointMode != "iterator" && pointMode != "get" {
+		return nil, fmt.Errorf("invalid GTRON_PEBBLE_BOUNDED_POINT_READ %q (want iterator or get)", pointMode)
+	}
 	// Ensure we have some minimal caching and file guarantees
 	if cache < minCache {
 		cache = minCache
@@ -713,6 +753,9 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		tune.L0StopWritesThreshold = defaults.L0StopWritesThreshold
 	}
 	logger := log.New("database", file)
+	if pointMode == "get" {
+		logger.Info("Using snapshot Get for bounded point reads")
+	}
 	logger.Info("Allocated cache and file handles",
 		"cache", common.StorageSize(cache*1024*1024),
 		"handles", handles,
@@ -753,10 +796,11 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		memTableSize = maxMemTableSize - 1
 	}
 	db := &Database{
-		fn:        file,
-		log:       logger,
-		quitChan:  make(chan chan error),
-		namespace: namespace,
+		boundedPointGet: pointMode == "get",
+		fn:              file,
+		log:             logger,
+		quitChan:        make(chan chan error),
+		namespace:       namespace,
 
 		// Use asynchronous write mode by default. Otherwise, the overhead of frequent fsync
 		// operations can be significant, especially on platforms with slow fsync performance
@@ -848,6 +892,10 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	// either L0 read amplification or total debt becomes substantial.
 	opt.Experimental.L0CompactionConcurrency = l0CompactionConcurrency
 	opt.Experimental.CompactionDebtConcurrency = compactionDebtConcurrency
+	opt.DisableAutomaticCompactions = tune.DisableAutomaticCompactions
+	if tune.MaxConcurrentCompactions > 0 {
+		opt.MaxConcurrentCompactions = func() int { return tune.MaxConcurrentCompactions }
+	}
 
 	// Open the db and recover any potential corruptions
 	innerDB, err := pebble.Open(file, opt)

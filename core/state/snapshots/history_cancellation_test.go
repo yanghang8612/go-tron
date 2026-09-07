@@ -255,6 +255,7 @@ func TestHistoryIndexRewriteCancellationKeepsInputOpen(t *testing.T) {
 }
 
 func TestHistoryCompressedFinalizationCancelsDuringAssembly(t *testing.T) {
+	t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", "1") // legacy physical-layout/copy contract
 	dir := t.TempDir()
 	tmp, err := createStateDomainChangeHistoryTemp(dir, "history/test.seg", true)
 	if err != nil {

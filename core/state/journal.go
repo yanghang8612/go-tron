@@ -296,6 +296,7 @@ func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tc
 	if e.hadEntry {
 		obj.setKVDirty(e.mapKey, e.prevEntry)
 	} else {
+		obj.invalidateLegacyDelegation(e.mapKey)
 		delete(obj.kvDirty, e.mapKey)
 	}
 	if domain, _, ok := splitKVCompositeKeyView([]byte(e.mapKey)); ok {
@@ -321,6 +322,7 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		return
 	}
 	obj.accountKVRoot = e.prevRoot
+	obj.legacyDelegation = nil
 	obj.accountKVGeneration = e.prevGeneration
 	obj.accountKVGenerationDirty = e.prevGenerationDirty
 	obj.releaseKVDirty()

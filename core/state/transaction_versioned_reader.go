@@ -22,6 +22,7 @@ func (s *StateDB) SetTransactionVersionedValueReader(reader TransactionVersioned
 	if s == nil {
 		return
 	}
+	s.clearLegacyDelegationCache()
 	s.transactionVersionedReader = reader
 	s.transactionVersionedTxIndex = txIndex
 	if reader == nil {

@@ -650,49 +650,14 @@ func compactStateDomainChangeBinaryHistoryRunContext(ctx context.Context, dir st
 }
 
 func collectStateDomainChangeBinaryCompactionSources(ctx context.Context, dir string, selection historyCompactionSelection, progress *historyCompactionProgress) ([]stateDomainChangeBinaryCompactionSource, error) {
-	sources := make([]stateDomainChangeBinaryCompactionSource, 0, len(selection.candidates))
-	for candidateIndex, candidate := range selection.candidates {
-		if err := contextError(ctx); err != nil {
-			return nil, err
-		}
-		idxRef, ok := historyCompactionCompanion(candidate, SegmentInverted)
-		if !ok {
-			return nil, fmt.Errorf("snapshots: state-domain-change history %q missing index companion", candidate.history.Path)
-		}
-		accessorRef, ok := historyCompactionCompanion(candidate, SegmentAccessor)
-		if !ok {
-			return nil, fmt.Errorf("snapshots: state-domain-change history %q missing accessor companion", candidate.history.Path)
-		}
-		// History is the canonical merge input; index and accessor files are
-		// derived sidecars which the output rebuilds from that history stream.
-		// Match Erigon's merge path by checking immutable object identity plus
-		// companion headers here instead of randomly reading every history record
-		// through both old sidecars before every merge. The sequential payload copy
-		// below still decodes and validates every source record, while snapshot
-		// installation and hot pruning retain the full cross-file coverage proof.
-		if err := checkStateDomainChangeBinaryCompactionSource(ctx, dir, candidate.history, idxRef, accessorRef); err != nil {
-			return nil, err
-		}
-		segmentFile, segmentHeader, segmentSize, err := openStateDomainChangeBinarySegmentReader(dir, candidate.history)
-		if err != nil {
-			return nil, err
-		}
-		txRangeCount, recordOffset, err := stateDomainChangeBinaryTxRangeTableBoundsAt(segmentFile, segmentSize, candidate.history, segmentHeader)
-		_ = segmentFile.Close()
-		if err != nil {
-			return nil, err
-		}
-		sources = append(sources, stateDomainChangeBinaryCompactionSource{
-			history:       candidate.history,
-			accessor:      accessorRef,
-			segmentHeader: segmentHeader,
-			segmentSize:   segmentSize,
-			txRangeCount:  txRangeCount,
-			recordOffset:  recordOffset,
-		})
-		progress.setSourcesProcessed(uint64(candidateIndex + 1))
+	workers, err := historyCompactionSourceWorkers()
+	if err != nil {
+		return nil, err
 	}
-	return sources, nil
+	return collectHistorySourcesOrdered(ctx, selection.candidates, workers,
+		func(ctx context.Context, candidate historyCompactionCandidate) (stateDomainChangeBinaryCompactionSource, error) {
+			return readHistoryCompactionSource(ctx, dir, candidate)
+		}, func(count uint64) { progress.setSourcesProcessed(count) })
 }
 
 func checkStateDomainChangeBinaryCompactionSource(ctx context.Context, dir string, historyRef, indexRef, accessorRef SegmentRef) error {
@@ -764,11 +729,19 @@ type stateDomainChangeHistoryTemp struct {
 	dir        string
 	tmpName    string
 	raw        *os.File
-	compressed *compressedBlockStreamWriter
+	compressed historyCompressedStream
 	finalized  bool
 }
 
 func createStateDomainChangeHistoryTemp(dir, relPath string, compress bool) (*stateDomainChangeHistoryTemp, error) {
+	return createStateDomainChangeHistoryTempContext(context.Background(), dir, relPath, compress)
+}
+
+func createStateDomainChangeHistoryTempContext(ctx context.Context, dir, relPath string, compress bool) (*stateDomainChangeHistoryTemp, error) {
+	return createStateDomainChangeHistoryTempFormat(ctx, dir, relPath, compress, os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT"))
+}
+
+func createStateDomainChangeHistoryTempFormat(ctx context.Context, dir, relPath string, compress bool, format string) (*stateDomainChangeHistoryTemp, error) {
 	if !compress {
 		raw, tmpName, err := createStateDomainChangeBinaryTempFile(dir, relPath)
 		if err != nil {
@@ -789,7 +762,7 @@ func createStateDomainChangeHistoryTemp(dir, relPath string, compress bool) (*st
 		_ = os.Remove(tmpName)
 		return nil, err
 	}
-	stream, err := newCompressedBlockStreamWriter(filepath.Dir(abs), historyCompressChunkSize, historyCompressionConcurrency(runtime.GOMAXPROCS(0)))
+	stream, err := newHistoryCompressedStreamFormat(ctx, filepath.Dir(abs), historyCompressChunkSize, historyCompressionConcurrency(runtime.GOMAXPROCS(0)), format)
 	if err != nil {
 		_ = os.Remove(tmpName)
 		return nil, err
@@ -971,7 +944,11 @@ func writeCompactedStateDomainChangeBinaryFiles(ctx context.Context, dir string,
 	if err := v6Build.FinishDictionaryContext(ctx); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	tmp, err := createStateDomainChangeHistoryTemp(dir, ref.Path, CompressHistorySegments)
+	format, err := historyMergeCompressionFormat(dir, sources)
+	if err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	tmp, err := createStateDomainChangeHistoryTempFormat(ctx, dir, ref.Path, CompressHistorySegments, format)
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
@@ -982,7 +959,16 @@ func writeCompactedStateDomainChangeBinaryFiles(ctx context.Context, dir string,
 			return
 		}
 		for _, output := range outputs {
-			if output.Path != "" {
+			// Deterministic one-trio rewrites may reproduce an active source
+			// path. Failure cleanup never owns those pre-existing artifacts.
+			activeInput := false
+			for _, candidate := range selection.candidates {
+				activeInput = activeInput || output.Path == candidate.history.Path
+				for _, companion := range candidate.companions {
+					activeInput = activeInput || output.Path == companion.Path
+				}
+			}
+			if output.Path != "" && !activeInput {
 				_ = os.Remove(filepath.Join(dir, output.Path))
 			}
 		}
@@ -1345,7 +1331,7 @@ func copyStateDomainChangeBinarySegmentPayload(ctx context.Context, dir string, 
 		rangeReader       historySegmentReader
 		rangeCursor       *stateDomainChangeTxRangeCursor
 	)
-	if header.version == stateDomainChangeBinaryVersionV5 {
+	if header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6 {
 		if contextual, ok := reader.(*stateDomainChangeHistoryReader); ok {
 			compressedRecords, _ = contextual.historySegmentReader.(*compressedBlockReader)
 		}
@@ -1378,8 +1364,13 @@ func copyStateDomainChangeBinarySegmentPayload(ctx context.Context, dir string, 
 	offset := recordOffset
 	var v5Payloads [2][]byte
 	var v5Changes [2]rawdb.StateDomainChange
-	var compressedV5Scratch []byte
-	var compressedV5Change rawdb.StateDomainChange
+	var compressedScratch []byte
+	var compressedChange rawdb.StateDomainChange
+	var v6Borrowed, v6Copied int64
+	defer func() {
+		historyCompactionV6BorrowedRecords.Inc(v6Borrowed)
+		historyCompactionV6CopiedRecords.Inc(v6Copied)
+	}()
 	var v6Payload []byte
 	var v6Change rawdb.StateDomainChange
 	for recordIndex := uint64(0); recordIndex < header.count; recordIndex++ {
@@ -1396,22 +1387,47 @@ func copyStateDomainChangeBinarySegmentPayload(ctx context.Context, dir string, 
 		if compressedRecords != nil {
 			var payload []byte
 			var borrowed bool
-			payload, next, borrowed, err = compressedRecords.ReadRecordFrameAt(offset, compressedV5Scratch)
+			var sourceKeyID uint32
+			payload, next, borrowed, err = compressedRecords.ReadRecordFrameAt(offset, compressedScratch)
 			if err == nil {
 				if !borrowed {
-					compressedV5Scratch = payload
+					compressedScratch = payload
 				}
-				err = decodeStateDomainChangeRecordV5Into(&compressedV5Change, payload)
+				if header.version == stateDomainChangeBinaryVersionV6 {
+					sourceKeyID, err = decodeStateDomainChangeRecordV6Into(payload, &compressedChange)
+					if err == nil && uint64(sourceKeyID) >= uint64(len(v6KeyRemap)) {
+						err = errors.New("snapshots: V6 history key id outside source remap")
+					}
+				} else {
+					err = decodeStateDomainChangeRecordV5Into(&compressedChange, payload)
+				}
 			}
 			if err == nil {
 				var row *rawdb.StateTxRange
-				row, err = rangeCursor.txRangeForTxNum(compressedV5Change.TxNum)
+				// The independent range reader must not evict the record block:
+				// compressedChange.Prev may still borrow that block's bytes.
+				row, err = rangeCursor.txRangeForTxNum(compressedChange.TxNum)
 				if err == nil {
-					err = hydrateStateDomainChangeBinaryRecordV5FromRange(row, recordIndex, &compressedV5Change)
+					err = hydrateStateDomainChangeBinaryRecordV5FromRange(row, recordIndex, &compressedChange)
 				}
 			}
-			change = &compressedV5Change
-			borrowedV5 = true
+			change = &compressedChange
+			if header.version == stateDomainChangeBinaryVersionV6 {
+				if err == nil {
+					// Consume before the next read reuses the decoded block. The
+					// writer retains scalar order state, never the borrowed row.
+					err = dst.WriteBorrowedV6Change(change, v6KeyRemap[sourceKeyID])
+					if err == nil {
+						if borrowed {
+							v6Borrowed++
+						} else {
+							v6Copied++
+						}
+					}
+				}
+			} else {
+				borrowedV5 = true
+			}
 		} else if header.version == stateDomainChangeBinaryVersionV6 {
 			var sourceKeyID uint32
 			v6Payload, sourceKeyID, next, err = readStateDomainChangeBinaryRecordV6FrameInto(reader, offset, logicalSize, recordIndex, v6Payload, &v6Change)
@@ -1564,7 +1580,14 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 		// Current accessors are rebuilt deterministically below; byte-identical output proves their
 		// complete structure and semantics in one gate. Legacy layouts retain the
 		// standalone structural scan before their older coverage algorithms.
-		if err := CheckStateDomainChangeAccessorSegmentContext(ctx, dir, accessorRef); err != nil {
+		checkAccessor := CheckStateDomainChangeAccessorSegmentContext
+		if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+			// The joint gate above already authenticated this exact ref's size and
+			// physical SHA. Keep V7's complete layout scan: the sequential tuple
+			// cursor does not independently prove every posting-byte boundary.
+			checkAccessor = checkStateDomainChangeBinaryAccessorLayoutContext
+		}
+		if err := checkAccessor(ctx, dir, accessorRef); err != nil {
 			return err
 		}
 	}
@@ -1939,10 +1962,20 @@ func syncAndCloseStateDomainChangeBinaryTemp(file *os.File) error {
 }
 
 func publishStateDomainChangeBinaryTemp(tmpName, finalAbs string) error {
+	return publishStateDomainChangeBinaryTempWithDirSync(tmpName, finalAbs, syncSnapshotDir)
+}
+
+func publishStateDomainChangeBinaryTempWithDirSync(tmpName, finalAbs string, syncDir func(string) error) error {
 	if err := os.MkdirAll(filepath.Dir(finalAbs), 0o755); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, finalAbs)
+	if err := os.Rename(tmpName, finalAbs); err != nil {
+		return err
+	}
+	// The final immutable name must be durable before a caller can publish a
+	// manifest or prune a hot preimage. If directory sync fails, the rename
+	// already happened: retain the target for recovery and return the failure.
+	return syncDir(filepath.Dir(finalAbs))
 }
 
 func stateDomainChangeBinaryFileMetadata(path string) (uint64, string, error) {

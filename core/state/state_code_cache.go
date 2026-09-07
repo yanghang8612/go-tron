@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"container/list"
 	"sync"
 	"sync/atomic"
@@ -90,6 +91,30 @@ func (c *stateCodeCache) get(hash tcommon.Hash) ([]byte, bool) {
 	return code, true
 }
 
+// matches verifies an object-owned slice against the cache's private, already
+// hash-verified bytes. Comparing every byte preserves strict corruption
+// detection even when a caller has mutated a previously returned object slice.
+// No cache-owned slice escapes, and eviction/close never mutate its backing.
+func (c *stateCodeCache) matches(hash tcommon.Hash, code []byte) bool {
+	if c == nil || hash == (tcommon.Hash{}) || len(code) == 0 {
+		return false
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return false
+	}
+	elem := c.entries[hash]
+	if elem == nil {
+		c.mu.Unlock()
+		return false
+	}
+	c.lru.MoveToFront(elem)
+	canonical := elem.Value.(*stateCodeCacheEntry).code
+	c.mu.Unlock()
+	return bytes.Equal(code, canonical)
+}
+
 // admit retains only non-empty positive results whose bytes match their
 // content-addressed key. A malformed durable/cold row keeps its pre-existing
 // read behavior, but is not allowed to poison later reads through the cache.
@@ -115,8 +140,20 @@ func (c *stateCodeCache) admitVerified(hash tcommon.Hash, code []byte) bool {
 	if charge > c.maxBytes {
 		return false
 	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return false
+	}
+	if elem := c.entries[hash]; elem != nil {
+		c.lru.MoveToFront(elem)
+		c.mu.Unlock()
+		return false
+	}
+	c.mu.Unlock()
+	// Object hits normally already reside in the cache. Copy only on a miss,
+	// outside the mutex, then recheck for concurrent admission or close.
 	owned := append([]byte(nil), code...)
-
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()

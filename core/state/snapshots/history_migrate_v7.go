@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -118,9 +119,9 @@ func MigrateHistoryV7(dir string, opts HistoryV7MigrationOptions) (*HistoryV7Mig
 			return result, fmt.Errorf("snapshots: rewrite history trio %q: %w", candidate.history.Path, err)
 		}
 		if _, err := NewAggregator(dir).Integrate(selection.fromTxNum, selection.toTxNum, refs); err != nil {
-			for _, ref := range refs {
-				_ = os.Remove(filepath.Join(dir, ref.Path))
-			}
+			// Manifest rename may already have committed before a directory-sync
+			// error. Retain every immutable output on publication uncertainty;
+			// deleting it could delete an active (or identical source) artifact.
 			return result, fmt.Errorf("snapshots: publish rewritten history trio %q: %w", candidate.history.Path, err)
 		}
 		oldBytes := historyCandidateBytes(candidate)
@@ -223,8 +224,8 @@ func historyUsesCurrentCompression(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var magic [8]byte
-	_, readErr := io.ReadFull(file, magic[:])
+	var header [16]byte
+	_, readErr := io.ReadFull(file, header[:])
 	closeErr := file.Close()
 	if readErr != nil {
 		return false, readErr
@@ -232,7 +233,7 @@ func historyUsesCurrentCompression(path string) (bool, error) {
 	if closeErr != nil {
 		return false, closeErr
 	}
-	if string(magic[:]) != compressedBlockMagic {
+	if string(header[:8]) != compressedBlockMagic {
 		return false, nil
 	}
 	reader, err := openCompressedBlockReaderWithCacheLimit(path, 1)
@@ -240,6 +241,34 @@ func historyUsesCurrentCompression(path string) (bool, error) {
 		return false, err
 	}
 	defer reader.Close()
+	version := binary.BigEndian.Uint32(header[8:12])
+	format := os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT")
+	switch format {
+	case "3":
+		return reader.cdc != nil, nil
+	case "auto":
+		if reader.cdc != nil {
+			return true, nil
+		}
+		if version != compressedBlockFooterVersion {
+			return false, nil
+		}
+	case "2":
+		if version != compressedBlockFooterVersion {
+			return false, nil
+		}
+	case "1":
+		if version != 1 {
+			return false, nil
+		}
+	case "":
+		// Preserve pre-CDC callers' existing V1/V2 acceptance semantics.
+		if reader.cdc != nil {
+			return false, nil
+		}
+	default:
+		return false, fmt.Errorf("snapshots: invalid history compression format %q", format)
+	}
 	if len(reader.table) <= 1 {
 		return reader.uncSize <= uint64(historyCompressChunkSize), nil
 	}

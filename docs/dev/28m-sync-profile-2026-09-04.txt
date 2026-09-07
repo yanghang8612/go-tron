@@ -1,0 +1,37 @@
+28M sync profile: source fingerprint and CPU summary
+Reviewed: 2026-09-05
+No new online sample was taken. CPU percentages below are cumulative and overlap.
+
+a7fd4e3ee4d707be0a366608bb0c097f4a5344fb2b7a278494ed029e40dce162  /private/tmp/gtron-cpu.pb.gz  (118568 bytes)
+1802029ad724f116105d0405e085e1a6e292be36c033727c41a10db917b8b794  /private/tmp/gtron-metrics-before.json  (114795 bytes)
+bde6663fcec37d20c2a241797ff47dbdb83e3cf5ac76b9bfd8132dbc1e67bb7c  /private/tmp/gtron-metrics-after.json  (114775 bytes)
+0bb7d70b5afeebb6835ae5b5931b73af2366b6b9be0ef7a7c79765782a372064  /private/tmp/gtron-goroutines.txt  (116759 bytes)
+
+Reproduction command: go tool pprof -top -cum -nodecount=0 /private/tmp/gtron-cpu.pb.gz
+
+File: gtron
+Build ID: 44b3f5d79658e12cae3cf4be746b52586dabe196
+Type: cpu
+Time: 2026-09-04 10:04:06 CST
+Duration: 20.13s, Total samples = 37.81s (187.81%)
+Selected cumulative rows (parent/child times overlap):
+  CPU seconds    CPU percent    Function
+       13.06s         34.54%    github.com/tronprotocol/go-tron/core.applyTransactionWithScratch
+        9.73s         25.73%    github.com/tronprotocol/go-tron/actuator.(*FreezeBalanceActuator).Execute
+        9.69s         25.63%    github.com/tronprotocol/go-tron/core/state.(*StateDB).WriteDrAccountIndexLegacyDelegate
+        5.45s         14.41%    github.com/tronprotocol/go-tron/core/state.(*StateDB).ReadDrAccountIndexLegacyStrict
+        5.39s         14.26%    github.com/tronprotocol/go-tron/core/state/statecodec.Unmarshal
+        4.37s         11.56%    runtime.gcBgMarkWorker
+        4.36s         11.53%    runtime.gcBgMarkWorker.func2
+        4.22s         11.16%    github.com/tronprotocol/go-tron/core/state.(*StateDB).writeDrAccountIndexLegacy
+        4.19s         11.08%    runtime.memmove
+        1.18s          3.12%    github.com/tronprotocol/go-tron/actuator.(*VMActuator).Execute
+        1.06s          2.80%    github.com/tronprotocol/go-tron/vm.(*Interpreter).Run
+
+Metrics interpretation:
+Before/after heights: 28,241,861 / 28,242,065.
+sync/import/window gauges are separate approximately 33-second windows, not counter deltas.
+Window throughput: 10.74-12.62 blocks/s; transaction wall: 70.0-84.3 ms/block.
+Commitment counter delta: 208 fold jobs; 89,491 branch seeks; fold wall 5.703 s (27.42 ms/job).
+Enqueue backpressure increment: 0.
+No independent execution trace for this exact profile window was located.

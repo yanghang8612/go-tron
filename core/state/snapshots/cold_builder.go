@@ -157,6 +157,16 @@ type Config struct {
 	// through an adaptive smaller batch and minimum importer recovery interval
 	// rather than a full busy build.
 	SyncBuildReady func() bool
+	// HistoryPressureProbe must be a bounded, concurrency-safe cached probe.
+	// Missing measurements do not imply zero bytes. Thresholds are scheduling
+	// signals, not a bound on write amplification or a filesystem space guard.
+	HistoryPressureProbe     func(context.Context) (HistoryPressure, error)
+	HistoryPressureHotBytes  uint64
+	HistoryPressureFreeBytes uint64
+	MinHistoryBuildFreeBytes uint64
+	// MaxCompactionPasses bounds merges in a lifecycle pass. Zero retains the
+	// standalone runner's historical drain behavior; production sets one.
+	MaxCompactionPasses uint64
 	// DeferDerivedSidecarsWhileSyncing lets bounded state-history compression
 	// continue during an active sync without also materializing EventLog,
 	// balance-trace, or section-bloom sidecars. Those rebuildable datasets are
@@ -216,10 +226,14 @@ type Config struct {
 
 // PassResult describes a single cold snapshot builder pass.
 type PassResult struct {
-	Built              bool
-	HistoryDeferred    bool
-	HistoryRateLimited bool
-	HistoryAccelerated bool
+	HistoryPressure       HistoryPressure
+	HistoryPressureActive bool
+	HistorySpaceDeferred  bool
+	BeforeMergeDuration   time.Duration
+	Built                 bool
+	HistoryDeferred       bool
+	HistoryRateLimited    bool
+	HistoryAccelerated    bool
 	// HistoryForcedBusy reports that the busy liveness watermark admitted this
 	// pass even though SyncBuildReady still reported a busy importer. Such passes
 	// use a smaller batch and a recovery interval, but retain the normal atomic
@@ -904,6 +918,15 @@ func (r *Runner) OnePass() (PassResult, error) {
 }
 
 func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
+	return r.OnePassWithMaintenanceContext(ctx, nil)
+}
+
+// OnePassWithMaintenanceContext lets the ordered lifecycle validate and prune
+// covered hot history before a potentially expensive merge or latest build.
+// The callback runs once under the runner's pass lock after history work succeeds,
+// or when a failed space probe permits only validation of existing coverage.
+// It must not reenter this runner. A callback failure stops later work.
+func (r *Runner) OnePassWithMaintenanceContext(ctx context.Context, beforeMerge func(context.Context, PassResult) error) (PassResult, error) {
 	if r == nil {
 		return PassResult{}, nil
 	}
@@ -922,12 +945,30 @@ func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 	start := time.Now()
 	result := PassResult{}
 	var err error
+	pressure, err := r.readHistoryPressure(ctx)
+	if err != nil {
+		// A probe failure forbids new output, but already published coverage
+		// can still be validated and reclaimed by the ordered lifecycle. Never
+		// start this work after parent cancellation; preserve both failures.
+		result.HistoryDeferred = true
+		result.HistorySpaceDeferred = true
+		result.extendHistoryRetryDeadline(time.Now(), r.cfg.Interval)
+		if ctx.Err() == nil && beforeMerge != nil {
+			phaseStart := time.Now()
+			err = errors.Join(err, beforeMerge(ctx, result))
+			result.BeforeMergeDuration = coldSnapshotPhaseDuration(phaseStart)
+		}
+		result.refreshHistoryRetry(time.Now())
+		r.recordPass(result, start, err)
+		return result, err
+	}
+	spaceDeferred := r.historySpaceDeferred(pressure)
 	// Direct V2 receipt publication is hard-bound to event-log coverage. Give
 	// an existing event-log gap first admission to the shared heavy-work gate;
 	// otherwise a successful history build installs a cooldown before the
 	// dependent sidecar can ever run while continuous sync keeps history ready.
 	syncCriticalAttempted := false
-	if err == nil && r.syncActive() && r.syncEventLogCatchupEnabled() {
+	if err == nil && !spaceDeferred && r.syncActive() && r.syncEventLogCatchupEnabled() {
 		syncCriticalAttempted, err = r.derivedSidecarCatchupPass(&result)
 		if err == nil {
 			err = ctx.Err()
@@ -937,13 +978,24 @@ func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 	if err == nil && !syncCriticalAttempted {
 		historyPassRan = true
 		phaseStart := time.Now()
-		result, err = r.onePass()
+		result, err = r.onePassWithPressure(pressure)
 		result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
 		if err == nil {
 			err = ctx.Err()
 		}
 	}
-	if err == nil && historyPassRan && !result.HistoryDeferred {
+	result.HistoryPressure = pressure
+	result.HistoryPressureActive = r.historyPressureActive(pressure)
+	result.HistorySpaceDeferred = spaceDeferred
+	if err == nil && beforeMerge != nil {
+		phaseStart := time.Now()
+		err = beforeMerge(ctx, result)
+		result.BeforeMergeDuration = coldSnapshotPhaseDuration(phaseStart)
+		if err == nil {
+			err = ctx.Err()
+		}
+	}
+	if err == nil && !spaceDeferred && historyPassRan && !result.HistoryDeferred {
 		phaseStart := time.Now()
 		result.Compaction, err = r.compactHistory(ctx, result.HistoryNeedsCatchup())
 		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
@@ -954,13 +1006,13 @@ func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 	// Once history has no bounded batch to publish, independently fill the
 	// remaining rebuildable sidecar gaps. Sync-critical event-log work already
 	// ran above and must not execute twice in one lifecycle pass.
-	if err == nil && historyPassRan && !result.Built && !result.HistoryDeferred {
+	if err == nil && !spaceDeferred && historyPassRan && !result.Built && !result.HistoryDeferred {
 		_, err = r.derivedSidecarCatchupPass(&result)
 		if err == nil {
 			err = ctx.Err()
 		}
 	}
-	if err == nil {
+	if err == nil && !spaceDeferred {
 		phaseStart := time.Now()
 		latestBlockBefore := r.lastLatestBuildBlock.Load()
 		syncCommitmentCandidate := r.cfg.DeferLatestBuildWhileSyncing && r.cfg.BuildCommitmentBranchBaseWhileSyncing && r.syncActive()
@@ -979,6 +1031,9 @@ func (r *Runner) OnePassContext(ctx context.Context) (PassResult, error) {
 		// this assignment after compaction prevents a slow merge from being hidden
 		// behind the ordinary history-build duration.
 		result.HistoryMinRecovery = r.forcedBusyHistoryRecovery(forcedBusyHistoryWorkDuration(result))
+		if result.HistoryPressureActive {
+			result.HistoryMinRecovery = r.pressureHistoryRecovery(forcedBusyHistoryWorkDuration(result))
+		}
 	}
 	finishedAt := time.Now()
 	if err != nil && result.HistoryForcedBusy && result.HistoryBuildAttempted {
@@ -1081,6 +1136,10 @@ func (r *Runner) PublishCatalogIfManifestChanged() (bool, error) {
 }
 
 func (r *Runner) onePass() (PassResult, error) {
+	return r.onePassWithPressure(HistoryPressure{})
+}
+
+func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, error) {
 	if !r.cfg.Enabled {
 		return PassResult{}, nil
 	}
@@ -1167,7 +1226,18 @@ func (r *Runner) onePass() (PassResult, error) {
 		return result, nil
 	}
 	readyBlocks := cutoffBlock - startBlock + 1
+	if r.historySpaceDeferred(pressure) {
+		result.HistoryDeferred = true
+		result.HistorySpaceDeferred = true
+		result.extendHistoryRetryDeadline(time.Now(), r.cfg.Interval)
+		return result, nil
+	}
 	result.HistoryAccelerated = r.historyBuildAccelerated(readyBlocks)
+	pressured := r.historyPressureActive(pressure)
+	result.HistoryPressureActive = pressured
+	if pressured && r.syncActive() {
+		result.HistoryAccelerated = true
+	}
 	batchBlocks := r.cfg.BatchBlocks
 	batchTxNums := r.cfg.BatchTxNums
 	if r.cfg.DeferHistoryBuildWhileSyncing {
@@ -1177,7 +1247,7 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 		if source, ok := r.chain.(syncRemainingSource); ok {
 			if remaining, active := source.SyncRemainingBlocks(); active && remaining > r.cfg.HistoryWindow {
-				if readyBlocks <= maxDeferred {
+				if readyBlocks <= maxDeferred && !pressured {
 					result.HistoryDeferred = true
 					return result, nil
 				}
@@ -1192,7 +1262,7 @@ func (r *Runner) onePass() (PassResult, error) {
 						// Accelerated means an actually unthrottled ready build, not
 						// merely a large lag candidate which a busy importer rejected.
 						result.HistoryAccelerated = false
-						if readyBlocks <= maxBusyDeferred {
+						if readyBlocks <= maxBusyDeferred && !pressured {
 							result.HistoryDeferred = true
 							return result, nil
 						}
@@ -1212,6 +1282,12 @@ func (r *Runner) onePass() (PassResult, error) {
 					}
 				}
 			}
+		}
+	}
+	if pressured {
+		batchBlocks = min(batchBlocks, pressureHistoryBatchLimit(r.cfg.BatchBlocks))
+		if batchTxNums > 0 {
+			batchTxNums = min(batchTxNums, pressureHistoryBatchLimit(r.cfg.BatchTxNums))
 		}
 	}
 	retryCheckedAt := time.Now()
@@ -1318,6 +1394,11 @@ func (r *Runner) onePass() (PassResult, error) {
 		"backlogBlocks", backlogBlocks,
 		"accelerated", result.HistoryAccelerated,
 		"forcedBusy", result.HistoryForcedBusy,
+		"historyPressure", pressured,
+		"hotHistoryBytes", pressure.HotHistoryBytes,
+		"hotHistoryBytesAvailable", pressure.HotHistoryBytesAvailable,
+		"freeBytes", pressure.FreeBytes,
+		"freeBytesAvailable", pressure.FreeBytesAvailable,
 		"minRecovery", result.HistoryMinRecovery,
 	}
 	if result.HistoryAccelerated {
@@ -1491,6 +1572,9 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		// duration. Most catch-up passes do not compact, so report the adaptive
 		// recovery immediately instead of the conservative pre-build placeholder.
 		result.HistoryMinRecovery = r.forcedBusyHistoryRecovery(elapsed)
+		if result.HistoryPressureActive {
+			result.HistoryMinRecovery = r.pressureHistoryRecovery(elapsed)
+		}
 	}
 	blocks := result.ToBlock - result.FromBlock + 1
 	txs := result.ToTxNum - result.FromTxNum + 1
@@ -1750,10 +1834,14 @@ func (r *Runner) forcedBusyHistoryRecovery(work time.Duration) time.Duration {
 }
 
 func forcedBusyHistoryWorkDuration(result PassResult) time.Duration {
-	if result.BuildDuration >= time.Duration(math.MaxInt64)-result.CompactionDuration {
-		return time.Duration(math.MaxInt64)
+	var total time.Duration
+	for _, duration := range []time.Duration{result.BuildDuration, result.BeforeMergeDuration, result.CompactionDuration} {
+		if duration > time.Duration(math.MaxInt64)-total {
+			return time.Duration(math.MaxInt64)
+		}
+		total += duration
 	}
-	return result.BuildDuration + result.CompactionDuration
+	return total
 }
 
 func coldSnapshotDutyPPM(work, recovery time.Duration) uint64 {
@@ -2638,7 +2726,7 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (HistoryCo
 			return total, nil
 		}
 		mergeHistoryCompactionResult(&total, result)
-		if !drain {
+		if !drain || r.cfg.MaxCompactionPasses > 0 && uint64(total.MergePasses) >= r.cfg.MaxCompactionPasses {
 			return total, nil
 		}
 	}

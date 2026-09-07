@@ -192,10 +192,10 @@ func TestCommitmentParentLanePrefetchesDistinctFirstNonTrunkPrefixes(t *testing.
 		parentPrefetchBase:         40,
 		parentFallbackPrefetchBase: -1,
 	}
-	ops := []op{
-		{path: common.Hash{0x12, 0x34, 0x50}},
-		{path: common.Hash{0x12, 0x34, 0x5f}}, // same first five nibbles
-		{path: common.Hash{0x12, 0x34, 0x60}},
+	ops := []common.Hash{
+		{0x12, 0x34, 0x50},
+		{0x12, 0x34, 0x5f}, // same first five nibbles
+		{0x12, 0x34, 0x60},
 	}
 	if err := store.prefetchParentLane(1, ops, 5); err != nil {
 		t.Fatal(err)
@@ -225,10 +225,10 @@ func TestCommitmentParentLaneLookaheadIsBounded(t *testing.T) {
 		parentPrefetchBase:         40,
 		parentFallbackPrefetchBase: -1,
 	}
-	ops := []op{
-		{path: common.Hash{0x12, 0x34, 0x50}},
-		{path: common.Hash{0x12, 0x34, 0x60}},
-		{path: common.Hash{0x12, 0x34, 0x70}},
+	ops := []common.Hash{
+		{0x12, 0x34, 0x50},
+		{0x12, 0x34, 0x60},
+		{0x12, 0x34, 0x70},
 	}
 	planned, capped, err := store.prefetchParentLaneLimited(1, ops, 6, 2)
 	if err != nil {
@@ -247,13 +247,13 @@ func TestCommitmentParentLaneLookaheadIsBounded(t *testing.T) {
 
 func BenchmarkCommitmentParentLanePrefetchPlan(b *testing.B) {
 	const opCount = 1024
-	ops := make([]op, opCount)
+	ops := make([]common.Hash, opCount)
 	for i := range ops {
 		prefix := i / 4 // four adjacent ops share each predicted depth-five row
-		ops[i].path[0] = 0x10 | byte(prefix>>12)
-		ops[i].path[1] = byte(prefix >> 4)
-		ops[i].path[2] = byte(prefix << 4)
-		ops[i].path[common.HashLength-1] = byte(i)
+		ops[i][0] = 0x10 | byte(prefix>>12)
+		ops[i][1] = byte(prefix >> 4)
+		ops[i][2] = byte(prefix << 4)
+		ops[i][common.HashLength-1] = byte(i)
 	}
 	session := new(countingCommitmentParentSession)
 	store := &rawdbBranchStore{
@@ -277,13 +277,13 @@ func BenchmarkCommitmentParentLaneBoundedLookaheadPlan(b *testing.B) {
 		opCount = 1024
 		limit   = 16
 	)
-	ops := make([]op, opCount)
+	ops := make([]common.Hash, opCount)
 	for i := range ops {
 		prefix := i / 4
-		ops[i].path[0] = 0x10 | byte(prefix>>12)
-		ops[i].path[1] = byte(prefix >> 4)
-		ops[i].path[2] = byte(prefix << 4)
-		ops[i].path[common.HashLength-1] = byte(i)
+		ops[i][0] = 0x10 | byte(prefix>>12)
+		ops[i][1] = byte(prefix >> 4)
+		ops[i][2] = byte(prefix << 4)
+		ops[i][common.HashLength-1] = byte(i)
 	}
 	session := new(countingCommitmentParentSession)
 	store := &rawdbBranchStore{
@@ -349,11 +349,11 @@ func TestOrderedCommitmentPrefetchCriticalPreemptsLookaheadBetweenReads(t *testi
 	secondSession := &controlledCommitmentParentSession{job: "second", events: events}
 	firstStore := newControlledCommitmentPrefetchStore(firstSession)
 	secondStore := newControlledCommitmentPrefetchStore(secondSession)
-	firstOps := []op{
-		{path: common.Hash{0x12, 0x30}},
-		{path: common.Hash{0x12, 0x40}},
+	firstOps := []common.Hash{
+		{0x12, 0x30},
+		{0x12, 0x40},
 	}
-	secondOps := []op{{path: common.Hash{0x15, 0x60}}}
+	secondOps := []common.Hash{{0x15, 0x60}}
 
 	pipeline := new(OrderedCommitmentPipeline)
 	pipeline.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 4)
@@ -363,7 +363,7 @@ func TestOrderedCommitmentPrefetchCriticalPreemptsLookaheadBetweenReads(t *testi
 	first := newOrderedCommitmentPrefetchResultForTest()
 	pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
 		store: firstStore, result: first, nb: nb, depth: 2,
-		lookaheadDepth: 1, lookaheadLimit: 16, ops: firstOps,
+		lookaheadDepth: 1, lookaheadLimit: 16, paths: firstOps,
 	})
 	waitForCommitmentPrefetchGroup(t, &first.critical)
 	select {
@@ -387,7 +387,7 @@ func TestOrderedCommitmentPrefetchCriticalPreemptsLookaheadBetweenReads(t *testi
 	second := newOrderedCommitmentPrefetchResultForTest()
 	pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
 		store: secondStore, result: second, nb: nb, depth: 2,
-		lookaheadDepth: 1, lookaheadLimit: 16, ops: secondOps,
+		lookaheadDepth: 1, lookaheadLimit: 16, paths: secondOps,
 	})
 	close(releaseLookahead)
 	waitForCommitmentPrefetchGroup(t, &second.critical)
@@ -435,7 +435,7 @@ func TestOrderedCommitmentPrefetchErrorReleasesWaitersAndWorkerContinues(t *test
 				job: "failing", errDepth: tc.errDepth, err: wantErr,
 			})
 			succeeding := newControlledCommitmentPrefetchStore(&controlledCommitmentParentSession{job: "succeeding"})
-			ops := []op{{path: common.Hash{0x12, 0x30}}}
+			ops := []common.Hash{{0x12, 0x30}}
 
 			pipeline := new(OrderedCommitmentPipeline)
 			pipeline.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 2)
@@ -446,14 +446,14 @@ func TestOrderedCommitmentPrefetchErrorReleasesWaitersAndWorkerContinues(t *test
 			failed := newOrderedCommitmentPrefetchResultForTest()
 			pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
 				store: failing, result: failed, nb: nb, depth: 2,
-				lookaheadDepth: 1, lookaheadLimit: 16, ops: ops,
+				lookaheadDepth: 1, lookaheadLimit: 16, paths: ops,
 			})
 			waitForCommitmentPrefetchGroup(t, &failed.critical)
 			waitForCommitmentPrefetchGroup(t, &failed.done)
 
 			succeeded := newOrderedCommitmentPrefetchResultForTest()
 			pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
-				store: succeeding, result: succeeded, nb: nb, depth: 2, ops: ops,
+				store: succeeding, result: succeeded, nb: nb, depth: 2, paths: ops,
 			})
 			close(pipeline.prefetchLanes[nb])
 			waitForCommitmentPrefetchGroup(t, &succeeded.critical)
@@ -474,7 +474,7 @@ func TestOrderedCommitmentPrefetchClosedInputDrainsQueuedCriticalAndLookahead(t 
 		job: "blocking", blockDepth: 2, started: criticalStarted, release: releaseCritical,
 	})
 	queued := newControlledCommitmentPrefetchStore(&controlledCommitmentParentSession{job: "queued"})
-	ops := []op{{path: common.Hash{0x12, 0x30}}}
+	ops := []common.Hash{{0x12, 0x30}}
 	pipeline := new(OrderedCommitmentPipeline)
 	pipeline.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 2)
 	pipeline.prefetchWG.Add(1)
@@ -483,7 +483,7 @@ func TestOrderedCommitmentPrefetchClosedInputDrainsQueuedCriticalAndLookahead(t 
 	first := newOrderedCommitmentPrefetchResultForTest()
 	pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
 		store: blocking, result: first, nb: nb, depth: 2,
-		lookaheadDepth: 1, lookaheadLimit: 16, ops: ops,
+		lookaheadDepth: 1, lookaheadLimit: 16, paths: ops,
 	})
 	select {
 	case <-criticalStarted:
@@ -493,7 +493,7 @@ func TestOrderedCommitmentPrefetchClosedInputDrainsQueuedCriticalAndLookahead(t 
 	second := newOrderedCommitmentPrefetchResultForTest()
 	pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
 		store: queued, result: second, nb: nb, depth: 2,
-		lookaheadDepth: 1, lookaheadLimit: 16, ops: ops,
+		lookaheadDepth: 1, lookaheadLimit: 16, paths: ops,
 	})
 	close(pipeline.prefetchLanes[nb])
 	close(releaseCritical)
@@ -535,7 +535,7 @@ func TestWaitForOrderedCommitmentLookaheadMeasuresAndGatesFinish(t *testing.T) {
 func BenchmarkOrderedCommitmentPrefetchPriorityScheduler(b *testing.B) {
 	const nb = uint8(1)
 	store := newControlledCommitmentPrefetchStore(&countingCommitmentParentSession{})
-	ops := []op{{path: common.Hash{0x12, 0x30}}}
+	ops := []common.Hash{{0x12, 0x30}}
 	pipeline := new(OrderedCommitmentPipeline)
 	pipeline.prefetchLanes[nb] = make(chan orderedCommitmentPrefetchTask, 16)
 	pipeline.prefetchWG.Add(1)
@@ -549,7 +549,7 @@ func BenchmarkOrderedCommitmentPrefetchPriorityScheduler(b *testing.B) {
 		result.done.Add(1)
 		pipeline.enqueuePrefetch(nb, orderedCommitmentPrefetchTask{
 			store: store, result: &result, nb: nb, depth: 2,
-			lookaheadDepth: 1, lookaheadLimit: 1, ops: ops,
+			lookaheadDepth: 1, lookaheadLimit: 1, paths: ops,
 		})
 		result.done.Wait()
 	}
@@ -559,6 +559,7 @@ func BenchmarkOrderedCommitmentPrefetchPriorityScheduler(b *testing.B) {
 }
 
 func TestOrderedCommitmentPipelinePrefetchPreservesPebbleRoot(t *testing.T) {
+	t.Setenv("GTRON_COMMITMENT_PREFETCH_OVERLAP", "0")
 	seed := buildRandomPuts(rand.New(rand.NewSource(8282)), 2_048)
 	referenceDB := rawdb.NewMemoryDatabase()
 	pebbleDB, err := rawdb.NewPebbleDB(t.TempDir(), 64, 64)

@@ -122,10 +122,11 @@ type Server struct {
 	quit          chan struct{}
 	stopOnce      sync.Once
 	wg            sync.WaitGroup
-	maintainCh    chan struct{} // signals the maintain loop to reconnect now
-	maintainMu    sync.Mutex    // serializes reconnect rounds and candidate rotation
-	maintainPos   int           // next peerCandidates index considered by maintainPeers
-	dialLimiter   *dialLimiter  // per-addr outbound dial throttle; nil ⇒ disabled
+	connWG        sync.WaitGroup // connection setup and OnPeerConnected; admission guarded by mu
+	maintainCh    chan struct{}  // signals the maintain loop to reconnect now
+	maintainMu    sync.Mutex     // serializes reconnect rounds and candidate rotation
+	maintainPos   int            // next peerCandidates index considered by maintainPeers
+	dialLimiter   *dialLimiter   // per-addr outbound dial throttle; nil ⇒ disabled
 	peerCacheMu   sync.Mutex
 	cachedPeers   []string // most recently successful first; bounded by maxPersistedPeers
 	rejectedPeers map[string]time.Time
@@ -230,7 +231,9 @@ func (s *Server) Start() error {
 
 // Stop shuts down the server and disconnects all peers. Safe to call multiple times.
 func (s *Server) Stop() error {
+	s.mu.Lock()
 	s.stopOnce.Do(func() { close(s.quit) })
+	s.mu.Unlock()
 	if s.listener != nil {
 		s.listener.Close()
 	}
@@ -239,6 +242,11 @@ func (s *Server) Stop() error {
 	if s.config.Discovery != nil {
 		s.config.Discovery.Stop()
 	}
+	// Outbound reconnect goroutines are not owned by accept/maintainLoop.
+	// Join admitted handshakes and application callbacks before taking the peer
+	// snapshot, so none can access chain storage after Server.Stop returns.
+	// Closing quit under mu prevents any later connWG.Add from racing Wait.
+	s.connWG.Wait()
 
 	// Snapshot peers and clear map before stopping to avoid deadlock:
 	// p.Stop() waits for readLoop which calls removePeer which needs the lock.
@@ -319,6 +327,11 @@ func (s *Server) Peers() []*Peer {
 // dial throttle: returns errDialThrottled (a sentinel callers may swallow) if
 // a dial to addr was started in the past DialThrottleInterval.
 func (s *Server) AddPeer(addr string) error {
+	select {
+	case <-s.quit:
+		return net.ErrClosed
+	default:
+	}
 	// Discovery reports the same reachable nodes repeatedly. Avoid a TCP dial
 	// and libp2p handshake when the exact endpoint is already connected or the
 	// peer set is full; addPeerConn repeats both checks to close the race with a
@@ -443,6 +456,14 @@ func (s *Server) acceptLoop() {
 func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	// Capacity + dedup + per-IP cap check BEFORE expensive handshake.
 	s.mu.Lock()
+	select {
+	case <-s.quit:
+		s.mu.Unlock()
+		return net.ErrClosed
+	default:
+	}
+	s.connWG.Add(1)
+	defer s.connWG.Done()
 	if len(s.peers) >= s.peerLimitForAddrLocked(id) {
 		s.mu.Unlock()
 		return errPeerCapacity
@@ -473,6 +494,12 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 
 	// Re-check capacity/dedup/per-IP under lock (another peer may have joined meanwhile).
 	s.mu.Lock()
+	select {
+	case <-s.quit:
+		s.mu.Unlock()
+		return net.ErrClosed
+	default:
+	}
 	if len(s.peers) >= s.peerLimitForAddrLocked(id) {
 		s.mu.Unlock()
 		_ = writePostHandshakeDisconnect(conn, p2ppb.DisconnectReason_TOO_MANY_PEERS)

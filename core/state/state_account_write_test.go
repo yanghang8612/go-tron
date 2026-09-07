@@ -21,7 +21,7 @@ func TestAppendAccountLatestObjectPreparedOwnsProtoInFinalArena(t *testing.T) {
 		t.Fatal(err)
 	}
 	obj.accountProto = nil
-	encodedSize, protoSize, exists, err := accountLatestObjectEncodedSize(obj)
+	encodedSize, protoSize, exists, err := accountLatestObjectEncodedSize(obj, true)
 	if err != nil || !exists {
 		t.Fatalf("size: exists=%v err=%v", exists, err)
 	}
@@ -53,7 +53,7 @@ func TestAppendAccountLatestObjectPreparedMinimumV4Core(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encodedSize, protoSize, exists, err := accountLatestObjectEncodedSize(obj)
+	encodedSize, protoSize, exists, err := accountLatestObjectEncodedSize(obj, true)
 	if err != nil || !exists || protoSize != len(wantProto) {
 		t.Fatalf("size fallback = encoded:%d proto:%d exists:%v cache:%x err:%v", encodedSize, protoSize, exists, obj.accountProto, err)
 	}

@@ -363,7 +363,7 @@ func WriteStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 		return err
 	}
 	uncompressedBytes := rawBuffer.Len()
-	data, compressed := encodeStateDomainChangeBlockStorage(rawBuffer.Bytes())
+	data, compressed := encodeStateDomainChangeBlockStorageForChanges(rawBuffer.Bytes(), changes)
 	if compressed && rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
 		stateChangeBlockRawBufferPool.Put(rawBuffer)
 	}
@@ -416,7 +416,7 @@ func decodeStateDomainChangeBlockStorage(data []byte) ([]byte, error) {
 	if err != nil || !compressed {
 		return payload, err
 	}
-	decoded, err := snappy.Decode(nil, payload)
+	decoded, err := decodeCompressedStateChangeBlock(nil, payload, data[len(stateDomainChangeBlockEnvelopeMagic)])
 	if err != nil {
 		return nil, fmt.Errorf("rawdb: decode compressed state domain change block: %w", err)
 	}
@@ -431,11 +431,19 @@ func stateDomainChangeBlockCompressionPayload(data []byte) (payload []byte, deco
 		return nil, 0, false, fmt.Errorf("rawdb: truncated state domain change block compression envelope")
 	}
 	version := data[len(stateDomainChangeBlockEnvelopeMagic)]
-	if version != stateDomainChangeBlockSnappyVersion {
+	if version != stateDomainChangeBlockSnappyVersion && version != stateDomainChangeBlockChunksVersion {
 		return nil, 0, false, fmt.Errorf("rawdb: unsupported state domain change block compression version %d", version)
 	}
 	payload = data[len(stateDomainChangeBlockEnvelopeMagic)+1:]
-	decodedLen, err = snappy.DecodedLen(payload)
+	if version == stateDomainChangeBlockChunksVersion {
+		v, n := binary.Uvarint(payload)
+		if n <= 0 || v > stateDomainChangeBlockMaxDecodedBytes {
+			return nil, 0, false, fmt.Errorf("rawdb: compressed state domain change block decoded size invalid or exceeds limit")
+		}
+		decodedLen = int(v)
+	} else {
+		decodedLen, err = snappy.DecodedLen(payload)
+	}
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("rawdb: decode compressed state domain change block length: %w", err)
 	}
@@ -560,7 +568,7 @@ func decodePersistedStateDomainChangeBlock(data []byte, blockNum uint64) ([]*Sta
 		} else {
 			*pooled = (*pooled)[:decodedLen]
 		}
-		decoded, err = snappy.Decode(*pooled, payload)
+		decoded, err = decodeCompressedStateChangeBlock(*pooled, payload, data[len(stateDomainChangeBlockEnvelopeMagic)])
 		if err != nil {
 			if cap(*pooled) <= stateDomainChangeBlockPooledBufferMax {
 				*pooled = (*pooled)[:0]

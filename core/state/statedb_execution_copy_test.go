@@ -44,6 +44,7 @@ func TestStateObjectCopyFieldPolicy(t *testing.T) {
 		"selfDestructed": "copy", "accountKVRoot": "copy",
 		"accountKVGeneration": "copy", "accountKVGenerationDirty": "copy",
 		"kvDirty": "deep-copy", "kvDirtyHighWater": "recompute", "dirtySet": "rebind",
+		"legacyDelegation": "reset-private-derived-cache",
 	}
 	typ := reflect.TypeOf(stateObject{})
 	if len(policies) != typ.NumField() {

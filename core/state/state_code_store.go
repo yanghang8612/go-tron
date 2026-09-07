@@ -167,6 +167,16 @@ func (s *StateDB) cachedStateCode(hash tcommon.Hash, store stateCodeStore) ([]by
 	return s.db.codeCache.get(hash)
 }
 
+func (s *StateDB) matchesCachedStateCode(hash tcommon.Hash, code []byte) bool {
+	if s == nil || s.db == nil || s.db.codeCache == nil {
+		return false
+	}
+	if _, ok := s.getStateCodeStore().(rawDBStateCodeStore); !ok {
+		return false
+	}
+	return s.db.codeCache.matches(hash, code)
+}
+
 func (s *StateDB) admitStateCode(hash tcommon.Hash, code []byte, store stateCodeStore) bool {
 	if s == nil || s.db == nil || s.db.codeCache == nil {
 		return false
