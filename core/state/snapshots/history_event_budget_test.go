@@ -54,7 +54,7 @@ func historyEventBudgetFixture(t *testing.T) (*Runner, *coldBuilderChain, []byte
 	cfg.HistoryCatchupMode = HistoryCatchupThroughput
 	cfg.BuildEventLogsWhileSyncing = true
 	cfg.SyncEventLogCatchupBlocks = 65536
-	cfg.SyncEventLogTargetBlock = func() (uint64, bool) { return 4, true }
+	cfg.SyncEventLogTargetBlock = func() (uint64, bool, bool) { return 4, true, false }
 	cfg.HistoryLoadProbe = func() maintenance.StoragePressure {
 		return maintenance.StoragePressure{Available: true, SampledAt: time.Now(),
 			L0CompactionThreshold: 8, L0StopWritesThreshold: 64,

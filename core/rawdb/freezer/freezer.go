@@ -760,8 +760,34 @@ func (f *Freezer) CanAppendV2Direct(start uint64) bool {
 	return f.canAppendV2DirectLocked(start)
 }
 
+// TryDirectV2AppendStatus observes the direct-append layout without waiting for
+// a running migration. observed=false means that a writer owns the layout;
+// optional maintenance must defer, not interpret this as a non-direct layout.
+// Required queries and append validation retain their blocking semantics.
+func (f *Freezer) TryDirectV2AppendStatus() (coverage uint64, canAppend, observed bool) {
+	if f == nil || f.readonly {
+		return 0, false, true
+	}
+	if !f.writeLock.TryRLock() {
+		return 0, false, false
+	}
+	defer f.writeLock.RUnlock()
+	if !f.v2Mu.TryRLock() {
+		return 0, false, false
+	}
+	defer f.v2Mu.RUnlock()
+	if f.v2 != nil {
+		coverage = f.v2.coverage
+	}
+	return coverage, f.canAppendV2DirectWithCoverageLocked(coverage, coverage), true
+}
+
 func (f *Freezer) canAppendV2DirectLocked(start uint64) bool {
-	if f.head.Load() != start || f.V2Coverage() != start {
+	return f.canAppendV2DirectWithCoverageLocked(start, f.V2Coverage())
+}
+
+func (f *Freezer) canAppendV2DirectWithCoverageLocked(start, coverage uint64) bool {
+	if f.head.Load() != start || coverage != start {
 		return false
 	}
 	for _, table := range f.tables {

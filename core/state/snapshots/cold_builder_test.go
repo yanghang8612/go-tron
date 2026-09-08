@@ -1397,7 +1397,7 @@ func TestColdBuilderKeepsRequiredEventLogCoverageMovingDuringSync(t *testing.T) 
 	targetBlock := uint64(2)
 	cfg.BuildEventLogsWhileSyncing = true
 	cfg.SyncEventLogCatchupBlocks = 2
-	cfg.SyncEventLogTargetBlock = func() (uint64, bool) { return targetBlock, true }
+	cfg.SyncEventLogTargetBlock = func() (uint64, bool, bool) { return targetBlock, true, false }
 	cfg.HeavyWorkGate = maintenance.NewHeavyWorkGateWithCooldown(time.Hour)
 	cfg.CatchupHeavyWorkCooldown = time.Hour
 	runner = NewRunner(chain, cfg)

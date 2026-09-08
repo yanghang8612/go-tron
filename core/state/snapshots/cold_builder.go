@@ -198,7 +198,9 @@ type Config struct {
 	// freezer advance hook wakes the lifecycle after consuming the prepared
 	// segment, producing an explicit sidecar -> freezer handoff instead of letting
 	// consecutive event-log builds monopolize the shared heavy-work gate.
-	SyncEventLogTargetBlock func() (uint64, bool)
+	// deferred means the target could not be observed without waiting for a
+	// running freezer writer. It must defer the pass, rather than remove the cap.
+	SyncEventLogTargetBlock func() (target uint64, valid, deferred bool)
 	// BuildSectionBlooms builds full-section cold section-bloom sidecars once
 	// the state-history cutoff has fully covered the source block section.
 	BuildSectionBlooms bool
@@ -1434,10 +1436,7 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquire()
 	}
 	if !admitted {
-		result.HistoryDeferred = true
-		result.HistoryGateDeferred = true
-		now := time.Now()
-		result.extendHistoryRetryDeadline(now, r.cfg.HeavyWorkGate.CooldownRemaining())
+		r.deferHistoryForHeavyWork(&result)
 		return result, nil
 	}
 	defer releaseHeavyWork()
@@ -2279,6 +2278,11 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 		return false, err
 	}
 	result.DerivedSidecarsPending = plan.pending()
+	if plan.targetDeferred {
+		result.DerivedSidecarsDeferred = true
+		r.deferHistoryForHeavyWork(result)
+		return true, nil
+	}
 	// Reconcile the manifest-first/stage-second publication boundary even when
 	// another sidecar family is still blocked on incomplete hot source rows.
 	if err := r.reconcileEventLogBuildStage(manifest); err != nil {
@@ -2324,8 +2328,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 	}
 	if !admitted {
 		result.DerivedSidecarsDeferred = true
-		now := time.Now()
-		result.extendHistoryRetryDeadline(now, r.cfg.HeavyWorkGate.CooldownRemaining())
+		r.deferHistoryForHeavyWork(result)
 		return syncCriticalEventLog, nil
 	}
 	defer release()
@@ -2428,7 +2431,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 	}
 	result.DerivedSidecarsPending = nextPlan.pending()
 	result.EventLogFreezerHandoff = syncCriticalEventLog && result.EventLogBuilt &&
-		plan.eventTargetCapped && nextPlan.event == nil
+		plan.eventTargetCapped && !nextPlan.targetDeferred && nextPlan.event == nil
 	coldSnapshotLog.Info("Derived cold sidecar catch-up published",
 		"publishedHistoryBlock", publishedBlock,
 		"syncCriticalEventLog", syncCriticalEventLog,
@@ -2448,10 +2451,11 @@ type coldSidecarCatchupPlan struct {
 	event             *coldSidecarBlockRange
 	section           *coldSidecarBlockRange
 	eventTargetCapped bool
+	targetDeferred    bool
 }
 
 func (p coldSidecarCatchupPlan) pending() bool {
-	return p.balance != nil || p.event != nil || p.section != nil
+	return p.targetDeferred || p.balance != nil || p.event != nil || p.section != nil
 }
 
 func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock uint64) (coldSidecarCatchupPlan, error) {
@@ -2473,7 +2477,12 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 			}
 			batchBlocks = r.adaptiveEventBatchLimit(batchBlocks)
 			if r.cfg.SyncEventLogTargetBlock != nil {
-				if target, ok := r.cfg.SyncEventLogTargetBlock(); ok && target < eventTargetBlock {
+				target, ok, deferred := r.cfg.SyncEventLogTargetBlock()
+				if deferred {
+					plan.targetDeferred = true
+					return plan, nil
+				}
+				if ok && target < eventTargetBlock {
 					eventTargetBlock = target
 					plan.eventTargetCapped = true
 				}

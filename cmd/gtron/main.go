@@ -1178,20 +1178,10 @@ func gtron(ctx *cli.Context) error {
 		}
 		buildDerivedSnapshots := historyMode == params.HistoryModeSnap
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
-		var syncEventLogTargetBlock func() (uint64, bool)
+		var syncEventLogTargetBlock func() (uint64, bool, bool)
 		if buildDerivedSnapshots && freezerCfg.Enabled && freezerCfg.V2Enabled && freezerCfg.DirectV2 &&
 			freezerCfg.ExternalizeV2ReceiptLogs && ancientStore != nil && freezerCfg.V2SegmentBlocks > 0 {
-			syncEventLogTargetBlock = func() (uint64, bool) {
-				coverage := ancientStore.V2Coverage()
-				if !ancientStore.CanAppendV2Direct(coverage) ||
-					(freezerCfg.V2PromotionAllowed != nil && !freezerCfg.V2PromotionAllowed()) {
-					return 0, false
-				}
-				if coverage > ^uint64(0)-freezerCfg.V2SegmentBlocks {
-					return ^uint64(0), true
-				}
-				return coverage + freezerCfg.V2SegmentBlocks - 1, true
-			}
+			syncEventLogTargetBlock = makeSyncEventLogTargetBlock(ancientStore, freezerCfg.V2SegmentBlocks, freezerCfg.V2PromotionAllowed)
 		}
 		var chainLookupPrune statepruning.ChainLookupPruneFunc
 		var sectionBloomPrune statepruning.SectionBloomPruneFunc
