@@ -94,3 +94,35 @@ Go 1.25.5、linux/amd64、`CGO_ENABLED=1 -tags sapling` 的 maintenance、Pebble
 共享 `/data` 剩余 **2,896,028,327,936 B，约 2.63 TiB**，使用率 62%，空间保护检查通过。运行中目录并非原子快照；数据仍在增长，此次不能声称“数据库已缩小”。全历史主网最终容量与 20M 以后表现尚未验证。
 
 本地 HTTP 原始窗口位于 `build/benchmarks/20260908-history-budget/{pre-deploy-window,post-deploy-window,post-deploy-window-2}/`，独立后处理在同目录 `deploy-comparison.json` 与 `post-deploy-findings.md`；服务器资源原始数据与汇总位于 `/var/tmp/gtron-history-budget-20260908/post-resources.jsonl`、`post-resource-summary.json`。
+
+## 最终补丁部署
+
+追加提交 **`946af2f536c41129113e6b9c9e15811203393656`** 已推送、由服务器 fast-forward 拉取并原生构建。最终源树全仓测试再次通过（54 个有测试的包、13 个无测试的包、0 失败）；相关整包与定向 race 通过。真实迁移持锁回归验证 64 块 × 3 表在锁忙时快速返回未知，释放后完成迁移并逐条核对 192 条 Ancient 数据；另外验证 1 小时生命周期 ticker 下无需外部 RequestPass，也能由 3 秒重试自动继续发布。
+
+服务器 Go 1.25.5、CGO/Sapling 原生的 core、maintenance、rawdb/freezer、Pebble、snapshots、pruning、CLI **7 个包全部通过**，随后构建成功。最终二进制 SHA-256 为 `2bdb3af76b33f2c3112c67b71a55f3e496f435bc5d8fe344094bd10dc053c5e8`。
+
+北京时间 **10:51:43** 正常切换为 PID **24158**，续接高度 **7,436,330**，metrics 身份 **`1788835903081823017`**。发布目录为 `/data/gtron/releases/20260908-history-readiness-946af2f5/`；原生构建、配置备份和切换日志为 `/var/tmp/gtron-history-readiness-20260908/`。仍沿用同一 datadir 和所有原端口、保护配置。
+
+**10:53:30** 固定历史查询再次通过，验证时 head **7,437,451**，published/pruned **5,287,258**，新进程身份一致。原始请求与响应路径记录在本地 `build/benchmarks/20260908-history-budget/final-canary.log`。
+
+## 最终线上验收：包含一次正文转换
+
+北京时间 **10:56:26–11:06:40**，同一进程两段五分钟采样共 42 点，中间约 13 秒间隔，按跨窗口首尾计算 **614.017 秒**：
+
+| 指标 | 结果 |
+| --- | ---: |
+| head 推进 | 22,353 块，**36.40 块/秒** |
+| 冷发布 / 热裁剪推进 | 31,268 块，**50.92 块/秒** |
+| head − published 距离 | 2,145,649 → 2,136,734，**缩小 8,915 块** |
+| cold / prune / lifecycle 错误增量 | 全部 0 |
+| history merge | 4 次，共 60 个来源 |
+
+42 点 published 与 pruned 均一致。仅含后半周期的第二窗口也净缩小 **4,108 块**，并非只取正文转换前有利的区间。区间末仍有约 **207 万块额外未冷化范围**（扣除正常热窗口的近似量），因此结论是“当前负荷下已观察到净追赶”，不是“积压已清空或长期解决”。这也不是同输入 A/B；不能把不同高度的 import 速度直接相减归因，或据此保证 20M 后同步性能。
+
+正文让行期间，published 从 **11:00:41–11:03:25** 约 164 秒停在 5,314,257，但 cold pass **90 → 142**、资源延期 **8 → 59**，负荷与设备指标持续刷新。期间 pprof 直接抓到 freezer 在 `MigrateV2/writeV2SegmentProfile/Zstd` 构建范围 **5,242,880–5,308,416**，而 SnapshotLifecycle 在 select 等待重试，没有等待布局读锁。日志 **11:03:12.573** 记录 `Freezer: pass frozen blocks=65536`，其后冷发布恢复。共享门的整段让行仍存在，非阻塞规划修复确实生效。
+
+**11:06:00**，正文转换后固定历史 canary 仍匹配，head 7,463,948，published/pruned 5,324,551，新进程身份一致。最终日志检查未见本次进程存储模块 WARN/ERROR/CRIT，主网 active/running；Nile 和部署服务保持 inactive，维护锁与空间保护保持原配置。
+
+北京时间 **11:08:42** 最后一次目录实测：chaindata **98,097,897,472 B（91.36 GiB，70.97%）**，state-snapshots **25,865,961,472 B（24.09 GiB，18.71%）**，ancient **14,263,521,280 B（13.28 GiB，10.32%）**，节点合计 **138,227,384,320 B（128.73 GiB）**。共享 `/data` 剩余 **2,892,253,368,320 B（2.63 TiB）**，空间保护检查通过。此轮改善调度与追赶，并未证明整个数据库体积下降。
+
+最终原始证据为本地 `final-window/`、`final-cycle-window/`、`final-cycle-goroutines.txt`、`final-combined-endpoints.json`、`final-cycle-canary.log`；服务器最终日志选段为 `/var/tmp/gtron-history-readiness-20260908/post-storage-selected.log`。目录均相对于本报告前述本地 benchmark 根目录，服务器日志没有声称已完整下载。
