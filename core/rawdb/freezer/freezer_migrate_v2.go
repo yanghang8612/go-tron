@@ -28,6 +28,10 @@ type V2MigrationOptions struct {
 	SegmentBlocks uint64
 	FrameBlocks   uint32
 	MaxSegments   uint64
+	// CompressionWorkers bounds independent frame encoders; zero uses the CPU
+	// default (at most eight), and one preserves the serial writer. Source,
+	// transforms, verification and durable publication remain ordered.
+	CompressionWorkers int
 	// TimeBudget is a soft wall-clock limit. It is checked only between fully
 	// published segments, so a segment that has started is either committed
 	// through its fsync/publication boundary or rolled back by the existing
@@ -350,7 +354,7 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				return f.transformV2MigrationRecord(options, kind, number, data, sourceReader)
 			}
 			unpublished = append(unpublished, path)
-			if err := writeV2TableSegment(path, kind, start, count, options.FrameBlocks, readForWrite, readExpected); err != nil {
+			if err := writeV2TableSegmentWithWorkers(path, kind, start, count, options.FrameBlocks, readForWrite, readExpected, options.CompressionWorkers); err != nil {
 				cleanupUnpublished()
 				return result, fmt.Errorf("write ancient V2 %s segment %d: %w", kind, start, err)
 			}

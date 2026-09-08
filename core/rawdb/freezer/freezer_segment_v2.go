@@ -738,16 +738,33 @@ func writeV2Segment(path string, start, count uint64, frameBlocks uint32, read f
 }
 
 func writeV2TableSegment(path, kind string, start, count uint64, frameBlocks uint32, read, dictionaryRead func(uint64) ([]byte, error)) error {
+	return writeV2TableSegmentWithWorkers(path, kind, start, count, frameBlocks, read, dictionaryRead, 0)
+}
+
+func writeV2TableSegmentWithWorkers(path, kind string, start, count uint64, frameBlocks uint32, read, dictionaryRead func(uint64) ([]byte, error), workers int) error {
+	if workers <= 0 {
+		workers = v2CompressionWorkers()
+	}
+	workers = min(workers, 8)
 	if kind == "bodies" {
 		if dictionaryRead == nil {
 			return errors.New("ancient V2: bodies writer requires a side-effect-free dictionary reader")
 		}
-		return writeV2SegmentProfile(path, start, count, frameBlocks, v2CodecBodiesTrainedDict, zstd.SpeedBetterCompression, read, dictionaryRead)
+		return writeV2SegmentProfileWithWorkers(path, start, count, frameBlocks, v2CodecBodiesTrainedDict, zstd.SpeedBetterCompression, read, dictionaryRead, workers)
 	}
-	return writeV2Segment(path, start, count, frameBlocks, read)
+	if kind == "state_roots" {
+		// These rows are normally empty or one hash. Multiple encoder
+		// workspaces cost more than compressing the tiny table serially.
+		workers = 1
+	}
+	return writeV2SegmentProfileWithWorkers(path, start, count, frameBlocks, v2CodecDefault, zstd.SpeedDefault, read, nil, workers)
 }
 
 func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read, dictionaryRead func(uint64) ([]byte, error)) error {
+	return writeV2SegmentProfileWithWorkers(path, start, count, frameBlocks, codec, level, read, dictionaryRead, v2CompressionWorkers())
+}
+
+func writeV2SegmentProfileWithWorkers(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read, dictionaryRead func(uint64) ([]byte, error), workers int) error {
 	if count == 0 || frameBlocks == 0 {
 		return errors.New("ancient V2: empty segment dimensions")
 	}
@@ -856,46 +873,76 @@ func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec 
 	if _, err := file.Seek(int64(dataOffset), io.SeekStart); err != nil {
 		return err
 	}
+	writeEncodedFrame := func(frame v2EncodedFrame) error {
+		position, err := file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		if _, err := file.Write(frame.compressed); err != nil {
+			return err
+		}
+		frames = append(frames, v2FrameEntry{
+			firstRecord:     frame.first,
+			records:         frame.records,
+			compressedStart: uint64(position),
+			compressedLen:   uint64(len(frame.compressed)),
+			uncompressedLen: frame.rawBytes,
+			checksum:        frame.checksum,
+		})
+		return nil
+	}
 	writeFrame := func(first uint64, records uint32, useDictionary bool) error {
 		activeEncoder := encoder
 		if useDictionary {
 			activeEncoder = dictionaryEncoder
 		}
-		compressed := activeEncoder.EncodeAll(buffer, nil)
-		position, err := file.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return err
-		}
-		if _, err := file.Write(compressed); err != nil {
-			return err
-		}
-		frames = append(frames, v2FrameEntry{
-			firstRecord:     first,
-			records:         records,
-			compressedStart: uint64(position),
-			compressedLen:   uint64(len(compressed)),
-			uncompressedLen: uint64(len(buffer)),
-			checksum:        crc32.Checksum(compressed, v2CRC),
-		})
-		return nil
+		return writeEncodedFrame(encodeV2Frame(activeEncoder, v2RawFrame{first: first, records: records, data: buffer}))
 	}
 	if err := writeFrame(first, records, codec == v2CodecBodiesTrainedDict); err != nil {
 		return err
 	}
 	if len(dictionary) != 0 {
 		// The bootstrap encoder is no longer needed once the independent first
-		// frame is durable in the temporary file. Releasing it keeps a bodies
-		// migration to one live Better-compression encoder at a time.
+		// frame is written to the temporary file. Release its workspace before
+		// starting the dictionary encoders used by the bounded frame pipeline.
 		encoder.Close()
 		encoder = nil
 	}
-	for written < count {
-		first, records, err = readFrame()
-		if err != nil {
+	remainingFrames := frameCount - 1
+	workers = min(workers, int(remainingFrames))
+	if workers > 1 {
+		activeEncoder := encoder
+		if len(dictionary) != 0 {
+			activeEncoder = dictionaryEncoder
+		}
+		newEncoder := func() (*zstd.Encoder, error) {
+			opts := []zstd.EOption{zstd.WithEncoderLevel(level), zstd.WithEncoderConcurrency(1)}
+			if codec == v2CodecBodiesRawDict {
+				opts = append(opts, zstd.WithEncoderDictRaw(v2DictionaryID(start), dictionary))
+			} else if codec == v2CodecBodiesTrainedDict {
+				opts = append(opts, zstd.WithEncoderDict(dictionary))
+			}
+			return zstd.NewWriter(nil, opts...)
+		}
+		readNextFrame := func(reusable []byte) (v2RawFrame, error) {
+			// Source/Transform/ETL remain sequential. Ownership of this frame's
+			// buffer passes to the encoder until its ordered write completes.
+			buffer = reusable[:0]
+			first, records, err := readFrame()
+			return v2RawFrame{first: first, records: records, data: buffer}, err
+		}
+		if err := writeV2FramePipeline(workers, remainingFrames, activeEncoder, newEncoder, readNextFrame, writeEncodedFrame); err != nil {
 			return err
 		}
-		if err := writeFrame(first, records, len(dictionary) != 0); err != nil {
-			return err
+	} else {
+		for written < count {
+			first, records, err = readFrame()
+			if err != nil {
+				return err
+			}
+			if err := writeFrame(first, records, len(dictionary) != 0); err != nil {
+				return err
+			}
 		}
 	}
 	table := make([]byte, len(frames)*v2FrameEntrySize)

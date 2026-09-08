@@ -11,7 +11,10 @@ import (
 
 // These are scheduling targets, not a promise that a legal complete block or
 // an in-flight filesystem operation can be interrupted at a precise boundary.
-const historyLoadRetry = 5 * time.Second
+const (
+	historyLoadRetry        = 5 * time.Second
+	historyCPUBurstRecovery = 250 * time.Millisecond
+)
 
 type historyWorkSample struct {
 	blocks, txnums, bytes uint64
@@ -46,7 +49,7 @@ func (r *Runner) initHistoryLoadMetrics() {
 		r.historyLoad.syncSeenAt = time.Now()
 	}
 	r.historyLoad.metrics = make(map[string]*metrics.Gauge)
-	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "block_limit", "txnum_limit", "recovery_cost", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery"} {
+	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery"} {
 		r.historyLoad.metrics[name] = metrics.GetOrRegisterGauge(strings.TrimRight(r.cfg.MetricsNamespace, "/")+"/history/budget/"+name, nil)
 	}
 }
@@ -124,6 +127,7 @@ func (r *Runner) refreshHistoryLoad(now time.Time) {
 	s.metric("level", int64(s.level))
 	s.metric("hard", boolGauge(s.hard))
 	s.metric("duty_ppm", int64(s.dutyPPM()))
+	s.metric("cpu_burst", boolGauge(s.cpuBurstReady(now)))
 	s.metric("device_known", boolGauge(p.DeviceAvailable && freshHistoryLoad(p.DeviceSampledAt, now)))
 	s.metric("device_busy_ppm", coldSnapshotUintGauge(p.DeviceBusyPPM))
 	s.metric("device_queue_milli", coldSnapshotUintGauge(p.DeviceQueueMilli))
@@ -144,6 +148,12 @@ func boolGauge(value bool) int64 {
 }
 
 func (s *historyLoadState) dutyPPM() uint64 {
+	if s.cpuBurstReady(time.Now()) {
+		if s.level == 3 {
+			return 900_000
+		}
+		return 800_000
+	}
 	switch s.level {
 	case 3:
 		return 600_000
@@ -152,6 +162,27 @@ func (s *historyLoadState) dutyPPM() uint64 {
 	default:
 		return 200_000
 	}
+}
+
+// A high device busy percentage alone does not mean an SSD is saturated.
+// Sustained low latency plus fresh engine headroom permits CPU pipelines to
+// keep working instead of sleeping for multiples of their complete wall time.
+// This remains an admission target, not a guarantee about in-flight I/O.
+func (s *historyLoadState) cpuBurstReady(now time.Time) bool {
+	p := s.sample
+	return s.level >= 2 && !s.hard && p.Available && freshHistoryLoad(p.SampledAt, now) &&
+		!p.HardLimitReached(now) && p.DeviceAvailable && freshHistoryLoad(p.DeviceSampledAt, now) &&
+		p.DeviceAwait >= 0 && p.DeviceAwait <= 2*time.Millisecond
+}
+
+// Preserve a deliberately long configured pause. The normal three-second
+// catch-up floor predates parallel CPU work and must not dominate small jobs.
+func (r *Runner) historyLeaseCooldown() time.Duration {
+	cooldown := r.cfg.CatchupHeavyWorkCooldown
+	if r.throughputCatchup() && cooldown > 0 && cooldown <= 3*time.Second && r.historyLoad.cpuBurstReady(time.Now()) {
+		return min(cooldown, historyCPUBurstRecovery)
+	}
+	return cooldown
 }
 
 func (s *historyLoadState) targets() (time.Duration, uint64) {

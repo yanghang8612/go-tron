@@ -58,6 +58,17 @@ hot-only `ChainDB` constructors, cold archive reader boundaries, state latest
 and as-of raw readers, event-log cold boundaries, and snapshot transaction-info
 publisher strictness.
 
+The September 2026 parallel event builder adds one explicit raw-reader
+boundary in `event_log_chain_identity.go`. It accepts only `*ChainDB`, so
+ancient and hot reads follow the same route as `ReadBlockStrict`. The first
+pass decodes and validates the requested block number and transaction infos;
+a cache hit on the second pass requires the complete raw body's SHA-256 to
+match, and still strictly reads and validates receipt counts and IDs. This
+bounded, per-build cache avoids a second protobuf decode/hash pass. It is not
+an API raw reader or permission to bypass decoded validation elsewhere. The
+event coverage audit follows the internal worker-configurable builder which
+now owns the existing coverage check.
+
 Runtime chain-freezer accessor point and range reads must validate the decoded
 row they land on before returning a table payload. This keeps a format-valid
 but stale offset sidecar from returning block `N+1` data for a block `N`

@@ -24,6 +24,13 @@ import (
 const stateDomainChangeV6DictionaryCacheBlocks = 64
 const stateDomainChangeV6KeyTableMaxBytes = 512 << 20
 
+// This is only an exact build-time prefilter. ETL remains authoritative for
+// sorting and deduplicating keys across cache resets. Both owned key bytes and
+// entry count are bounded; the Go map's metadata is additional to the byte cap.
+const stateDomainChangeV6KeyDedupMaxBytes = 16 << 20
+const stateDomainChangeV6KeyDedupMaxEntries = 1 << 16
+const stateDomainChangeV6KeyDedupTrialKeys = 4096
+
 type stateDomainChangeV6DictionaryBlock struct {
 	firstKey []byte
 	offset   uint64
@@ -32,21 +39,26 @@ type stateDomainChangeV6DictionaryBlock struct {
 }
 
 type stateDomainChangeV6Build struct {
-	opts             etl.Options
-	keys             *etl.Collector
-	postings         *etl.Collector
-	dictionary       *os.File
-	dictName         string
-	blocks           []stateDomainChangeV6DictionaryBlock
-	keyCount         uint32
-	keyStats         etl.Stats
-	cache            map[int][][]byte
-	cacheOrder       []int
-	keyScratch       []byte
-	keyTable         []byte
-	keyMask          uint64
-	keyHashSeed      maphash.Seed
-	dictionaryDigest [sha256.Size]byte
+	opts              etl.Options
+	keys              *etl.Collector
+	postings          *etl.Collector
+	dictionary        *os.File
+	dictName          string
+	blocks            []stateDomainChangeV6DictionaryBlock
+	keyCount          uint32
+	keyStats          etl.Stats
+	cache             map[int][][]byte
+	cacheOrder        []int
+	keyScratch        []byte
+	keyDedup          map[string]struct{}
+	keyDedupBytes     int
+	keyDedupTrial     int
+	keyDedupTrialHits int
+	keyDedupDisabled  bool
+	keyTable          []byte
+	keyMask           uint64
+	keyHashSeed       maphash.Seed
+	dictionaryDigest  [sha256.Size]byte
 }
 
 func newStateDomainChangeV6Build(opts etl.Options, dir, base string) (*stateDomainChangeV6Build, error) {
@@ -84,6 +96,8 @@ func (b *stateDomainChangeV6Build) Close() {
 	if b == nil {
 		return
 	}
+	b.keyDedup = nil
+	b.keyDedupBytes = 0
 	if b.keys != nil {
 		_ = b.keys.Close()
 	}
@@ -116,9 +130,54 @@ func (b *stateDomainChangeV6Build) CollectLogicalKey(logicalKey []byte) error {
 	if len(logicalKey) > math.MaxUint16 {
 		return fmt.Errorf("snapshots: V6 logical key length %d exceeds uint16", len(logicalKey))
 	}
-	return b.keys.PutEncoded(len(logicalKey), 0, func(key, _ []byte) {
+	if !b.keyDedupDisabled {
+		if _, exists := b.keyDedup[string(logicalKey)]; exists {
+			b.observeKeyDedup(true)
+			return nil
+		}
+	}
+	if err := b.keys.PutEncoded(len(logicalKey), 0, func(key, _ []byte) {
 		copy(key, logicalKey)
-	})
+	}); err != nil {
+		return err
+	}
+	if b.keyDedupDisabled {
+		return nil
+	}
+	b.observeKeyDedup(false)
+	if b.keyDedupDisabled {
+		return nil
+	}
+	// Cache only successfully accepted keys. In particular, a failed spill must
+	// not cause a subsequent retry to skip a key which ETL did not accept.
+	if b.keyDedup == nil {
+		b.keyDedup = make(map[string]struct{})
+	} else if len(b.keyDedup) >= stateDomainChangeV6KeyDedupMaxEntries || len(logicalKey) > stateDomainChangeV6KeyDedupMaxBytes-b.keyDedupBytes {
+		clear(b.keyDedup)
+		b.keyDedupBytes = 0
+	}
+	b.keyDedup[string(logicalKey)] = struct{}{}
+	b.keyDedupBytes += len(logicalKey)
+	return nil
+}
+
+func (b *stateDomainChangeV6Build) observeKeyDedup(hit bool) {
+	if b.keyDedupTrial >= stateDomainChangeV6KeyDedupTrialKeys {
+		return
+	}
+	b.keyDedupTrial++
+	if hit {
+		b.keyDedupTrialHits++
+	}
+	// Unique-heavy inputs should not pay for a second key copy and map
+	// insertion for the entire segment. Keep the cache only if the initial
+	// bounded trial avoided at least one ETL row per sixteen probes. This is an
+	// efficiency decision; ETL still deduplicates every accepted input key.
+	if b.keyDedupTrial == stateDomainChangeV6KeyDedupTrialKeys && b.keyDedupTrialHits*16 < b.keyDedupTrial {
+		b.keyDedup = nil
+		b.keyDedupBytes = 0
+		b.keyDedupDisabled = true
+	}
 }
 
 type stateDomainChangeV6DictionaryWriter struct {
@@ -230,6 +289,8 @@ func (b *stateDomainChangeV6Build) FinishDictionaryContext(ctx context.Context) 
 	b.keyStats = stats
 	_ = b.keys.Close()
 	b.keys = nil
+	b.keyDedup = nil
+	b.keyDedupBytes = 0
 	return b.buildKeyTable(ctx)
 }
 

@@ -47,6 +47,22 @@ const (
 
 var eventLogV3LookupV2Magic = [8]byte{'g', 't', 'e', 'v', 'l', 'i', '3', '\n'}
 
+// A regenerated protobuf with new known fields must keep those fields. The
+// current three-field schema can project without cloning dictionary/payload
+// bytes; otherwise retain the original generic projection as the oracle.
+var eventLogPayloadProjectionKnownSchema = (&corepb.TransactionInfo_Log{}).ProtoReflect().Descriptor().Fields().Len() == 3
+
+func eventLogPayloadProjection(log *corepb.TransactionInfo_Log) *corepb.TransactionInfo_Log {
+	if !eventLogPayloadProjectionKnownSchema {
+		out := proto.Clone(log).(*corepb.TransactionInfo_Log)
+		out.Address, out.Topics = nil, nil
+		return out
+	}
+	out := &corepb.TransactionInfo_Log{Data: log.GetData()}
+	out.ProtoReflect().SetUnknown(log.ProtoReflect().GetUnknown())
+	return out
+}
+
 var (
 	eventLogV4ValidationRunsCounter        = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/runs", nil)
 	eventLogV4ValidationRowsCounter        = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"event_log_v4/validation/rows", nil)
@@ -169,7 +185,8 @@ type eventLogV3LookupV2Record struct {
 }
 
 type eventLogV3ChainReader struct {
-	chain *rawdb.ChainDB
+	chain      *rawdb.ChainDB
+	identities *eventLogChainIdentityCache
 }
 
 func (r eventLogV3ChainReader) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
@@ -187,27 +204,15 @@ func (r eventLogV3ChainReader) IterateEventLogs(fromBlock, toBlock uint64, filte
 		return fmt.Errorf("snapshots: V4 chain event-log range [%d,%d] is inverted", fromBlock, toBlock)
 	}
 	for blockNum := fromBlock; ; blockNum++ {
-		block, ok, err := rawdb.ReadBlockStrict(r.chain, blockNum)
+		identity, infos, err := r.readBlock(blockNum)
 		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("snapshots: missing block %d during V3 event-log build", blockNum)
-		}
-		blockHash := block.Hash()
-		txs := block.Transactions()
-		infos, _, err := rawdb.ReadTransactionInfosByBlockStrict(r.chain, blockNum)
-		if err != nil {
-			return err
-		}
-		if err := rawdb.ValidateTransactionInfosForBlock(blockNum, txs, infos, "V4 event-log segment build"); err != nil {
 			return err
 		}
 		logIndex := uint64(0)
 		for txIndex, info := range infos {
 			txHash := common.Hash{}
-			if txIndex < len(txs) {
-				txHash = txs[txIndex].Hash()
+			if txIndex < len(identity.transactions) {
+				txHash = identity.transactions[txIndex]
 			} else if len(info.Id) == common.HashLength {
 				copy(txHash[:], info.Id)
 			}
@@ -216,7 +221,7 @@ func (r eventLogV3ChainReader) IterateEventLogs(fromBlock, toBlock uint64, filte
 					continue
 				}
 				address := eventLogAddress(log.GetAddress())
-				row := EventLog{BlockNum: blockNum, TxIndex: uint64(txIndex), LogIndex: logIndex, TxHash: txHash, BlockHash: blockHash, Address: address, Log: log}
+				row := EventLog{BlockNum: blockNum, TxIndex: uint64(txIndex), LogIndex: logIndex, TxHash: txHash, BlockHash: identity.blockHash, Address: address, Log: log}
 				logIndex++
 				if !eventLogAddressMatches(filter, address) || !eventLogTopicsMatch(filter.Topics, log.GetTopics()) {
 					continue
@@ -237,7 +242,7 @@ func BuildEventLogV4SegmentFromChain(chain *rawdb.ChainDB, dir, relPath string, 
 	if chain == nil {
 		return SegmentRef{}, errors.New("snapshots: nil chain database")
 	}
-	return BuildEventLogV4SegmentFromReader(eventLogV3ChainReader{chain: chain}, dir, relPath, fromBlock, toBlock)
+	return BuildEventLogV4SegmentFromReader(eventLogV3ChainReader{chain: chain, identities: newEventLogChainIdentityCache()}, dir, relPath, fromBlock, toBlock)
 }
 
 type EventLogV4PhysicalStats struct {
@@ -432,6 +437,10 @@ func (b *eventLogV3LookupBuild) length() uint64 {
 // range without opening chaindata. It performs two passes over the pinned
 // reader so large protobuf payloads are never retained in memory.
 func BuildEventLogV4SegmentFromReader(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
+	return buildEventLogV4SegmentFromReaderWorkers(reader, dir, relPath, fromBlock, toBlock, eventLogPayloadWorkers())
+}
+
+func buildEventLogV4SegmentFromReaderWorkers(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64, workers int) (SegmentRef, error) {
 	if reader == nil {
 		return SegmentRef{}, errors.New("snapshots: nil V3 event log reader")
 	}
@@ -498,7 +507,7 @@ func BuildEventLogV4SegmentFromReader(reader rawdb.EventLogReader, dir, relPath 
 	}
 	defer func() { _ = payloadData.Close(); _ = os.Remove(payloadName) }()
 
-	rowFrames, payloadFrames, addressPostings, topicPostings, err := writeEventLogV3Frames(reader, fromBlock, toBlock, rowCount, blockIDs, txHashes, addressIDs, topicIDs, rowData, payloadData)
+	rowFrames, payloadFrames, addressPostings, topicPostings, err := writeEventLogV3Frames(reader, fromBlock, toBlock, rowCount, blockIDs, txHashes, addressIDs, topicIDs, rowData, payloadData, workers)
 	if err != nil {
 		return SegmentRef{}, err
 	}
@@ -634,10 +643,14 @@ func validateEventLogV3SourceRow(row EventLog, fromBlock, toBlock uint64) error 
 }
 
 type eventLogV3PayloadWriter struct {
-	file   *os.File
-	buf    []byte
-	frames []eventLogV3Frame
-	rows   uint32
+	file     *os.File
+	buf      []byte
+	frames   []eventLogV3Frame
+	rows     uint32
+	workers  int
+	pipeline *cdcCompressionPipeline
+	pending  []eventLogPayloadPending
+	encode   cdcEncodeFunc
 }
 
 func (w *eventLogV3PayloadWriter) add(firstRow uint64, raw []byte) (frame, offset uint64, err error) {
@@ -659,6 +672,10 @@ func (w *eventLogV3PayloadWriter) flush(firstRow uint64) error {
 	if w.rows == 0 {
 		return nil
 	}
+	return w.flushCompressed(firstRow)
+}
+
+func (w *eventLogV3PayloadWriter) flushSerial(firstRow uint64) error {
 	enc, _, err := cbCodec()
 	if err != nil {
 		return err
@@ -680,10 +697,11 @@ func (w *eventLogV3PayloadWriter) flush(firstRow uint64) error {
 	return nil
 }
 
-func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, wantRows uint64, blockIDs map[uint64]uint64, txHashes []common.Hash, addressIDs, topicIDs map[string]uint64, rowData, payloadData *os.File) ([]eventLogV3Frame, []eventLogV3Frame, map[string][]uint64, map[string][]uint64, error) {
+func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, wantRows uint64, blockIDs map[uint64]uint64, txHashes []common.Hash, addressIDs, topicIDs map[string]uint64, rowData, payloadData *os.File, workers int) ([]eventLogV3Frame, []eventLogV3Frame, map[string][]uint64, map[string][]uint64, error) {
 	var rowFrames []eventLogV3Frame
 	rowBuf := make([]eventLogV3Row, 0, eventLogV3RowFrameRows)
-	payload := &eventLogV3PayloadWriter{file: payloadData, buf: make([]byte, 0, eventLogV3PayloadTarget)}
+	payload := newEventLogV3PayloadWriter(payloadData, workers)
+	defer payload.close()
 	addressPostings := make(map[string][]uint64, len(addressIDs))
 	topicPostings := make(map[string][]uint64)
 	var rowIndex uint64
@@ -727,9 +745,10 @@ func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, want
 		if !ok {
 			return false, fmt.Errorf("snapshots: missing V3 address dictionary entry %x", row.Address)
 		}
-		logCopy := proto.Clone(row.Log).(*corepb.TransactionInfo_Log)
-		logCopy.Address = nil
-		logCopy.Topics = nil
+		// The payload projection keeps data and unknown fields. Copying address,
+		// topics and data through proto.Clone only to discard the dictionaries
+		// wastes allocation and CPU for every log. Marshal does not mutate them.
+		logCopy := eventLogPayloadProjection(row.Log)
 		raw, err := proto.Marshal(logCopy)
 		if err != nil {
 			return false, err
@@ -774,6 +793,9 @@ func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, want
 		return nil, nil, nil, nil, err
 	}
 	if err := payload.flush(rowIndex - uint64(payload.rows)); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := payload.drain(); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	return rowFrames, payload.frames, addressPostings, topicPostings, nil

@@ -43,7 +43,11 @@ func (r *Runner) throughputRecovery(work time.Duration, failed bool) time.Durati
 	if budget < float64(math.MaxInt64) {
 		recovery = time.Duration(budget)
 	}
-	recovery = max(recovery, 3*time.Second, r.cfg.CatchupHeavyWorkCooldown)
+	minimum := max(3*time.Second, r.cfg.CatchupHeavyWorkCooldown)
+	if r.historyLoad.cpuBurstReady(time.Now()) && r.cfg.CatchupHeavyWorkCooldown <= 3*time.Second {
+		minimum = historyCPUBurstRecovery
+	}
+	recovery = max(recovery, minimum)
 	if failed {
 		recovery = max(recovery, time.Minute, r.cfg.CatchupBuildMinInterval)
 	}

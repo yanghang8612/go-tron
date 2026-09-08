@@ -64,6 +64,12 @@ func TestNoUnexpectedProductionRawFreezerReadReferences(t *testing.T) {
 		"core/blockbuffer/buffer.go": {
 			"ReadBlockRawStrict": {},
 		},
+		// The two-pass cold event builder accepts only *ChainDB, decodes and
+		// validates the first body, then authenticates byte-identical bodies
+		// before reusing transaction hashes. It cannot consume unchecked bytes.
+		"core/state/snapshots/event_log_chain_identity.go": {
+			"ReadBlockRawStrict": {},
+		},
 	})
 	if len(offenders) > 0 {
 		t.Fatalf("production code must route raw freezer reads through the freezer adapter boundary:\n%s", strings.Join(offenders, "\n"))
@@ -1283,7 +1289,7 @@ func TestProductionEventLogCoverageChecksStayOnAuditedBoundaries(t *testing.T) {
 			"EventLogRangeCoveredForFilter":             {},
 		},
 		"core/state/snapshots/event_log_segment_v3.go": {
-			"BuildEventLogV4SegmentFromReader": {},
+			"buildEventLogV4SegmentFromReaderWorkers": {},
 		},
 	})
 	if len(offenders) > 0 {

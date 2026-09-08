@@ -1431,7 +1431,7 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	var releaseHeavyWork func()
 	var admitted bool
 	if (result.HistoryAccelerated || result.HistoryForcedBusy) && r.cfg.CatchupHeavyWorkCooldown > 0 {
-		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquireWithCooldown(r.cfg.CatchupHeavyWorkCooldown)
+		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquireWithCooldown(r.historyLeaseCooldown())
 	} else {
 		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquire()
 	}
@@ -2322,7 +2322,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 	var release func()
 	var admitted bool
 	if r.cfg.CatchupHeavyWorkCooldown > 0 {
-		release, admitted = r.cfg.HeavyWorkGate.TryAcquireWithCooldown(r.cfg.CatchupHeavyWorkCooldown)
+		release, admitted = r.cfg.HeavyWorkGate.TryAcquireWithCooldown(r.historyLeaseCooldown())
 	} else {
 		release, admitted = r.cfg.HeavyWorkGate.TryAcquire()
 	}
