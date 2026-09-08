@@ -514,7 +514,7 @@ func (l *SnapshotLifecycle) loop() {
 				return
 			}
 			l.logPassFailure(reason, err, time.Now())
-			if after := result.Snapshot.HistoryRetryRemaining(time.Now()); after > 0 {
+			if after := result.Snapshot.MaintenanceRetryRemaining(time.Now()); after > 0 {
 				scheduleRetry(after)
 			}
 			return
@@ -526,7 +526,7 @@ func (l *SnapshotLifecycle) loop() {
 		// remains instead of sleeping for a full maintenance interval.
 		if result.Snapshot.NeedsCatchup() {
 			l.RequestPass()
-		} else if after := result.Snapshot.HistoryRetryRemaining(time.Now()); after > 0 {
+		} else if after := result.Snapshot.MaintenanceRetryRemaining(time.Now()); after > 0 {
 			scheduleRetry(after)
 		}
 	}

@@ -13,11 +13,34 @@ import (
 // deferral and retries on its normal cadence instead of adding an invisible
 // queue behind another long-running maintenance task.
 type HeavyWorkGate struct {
-	token         chan struct{}
-	cooldown      time.Duration
-	cooldownAfter time.Duration
-	nextAllowed   atomic.Int64
-	now           func() time.Time
+	token          chan struct{}
+	cooldown       time.Duration
+	cooldownAfter  time.Duration
+	nextAllowed    atomic.Int64
+	admissionCheck atomic.Pointer[heavyWorkAdmission]
+	now            func() time.Time
+}
+
+type heavyWorkAdmission struct {
+	check func() bool
+}
+
+// SetAdmissionCheck installs an optional process-wide pressure check. The check
+// runs after the gate is exclusively owned, must be bounded and concurrency
+// safe with its data sources, and must not reenter this gate. Returning false
+// rejects the acquisition without starting a cooldown. A nil check restores
+// ordinary gate behavior. Replacing a check is safe during an acquisition; an
+// already running check may finish with the previously installed callback.
+// This is protection at admission, not a limit on I/O already in flight.
+func (g *HeavyWorkGate) SetAdmissionCheck(check func() bool) {
+	if g == nil {
+		return
+	}
+	if check == nil {
+		g.admissionCheck.Store(nil)
+		return
+	}
+	g.admissionCheck.Store(&heavyWorkAdmission{check: check})
 }
 
 // NewHeavyWorkGate constructs an idle process-wide maintenance gate.
@@ -87,6 +110,10 @@ func (g *HeavyWorkGate) tryAcquire(recoveryCooldown time.Duration) (release func
 		// Recheck after owning the token. A release may have installed a
 		// cooldown between the optimistic timestamp check and admission.
 		if g.coolingDown(g.currentTime()) {
+			<-g.token
+			return nil, false
+		}
+		if admission := g.admissionCheck.Load(); admission != nil && !admission.check() {
 			<-g.token
 			return nil, false
 		}

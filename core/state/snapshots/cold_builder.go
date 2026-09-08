@@ -100,6 +100,10 @@ type Config struct {
 	CatchupBuildMinInterval time.Duration
 	// Throughput is explicitly opted into; balanced preserves existing scheduling.
 	HistoryCatchupMode HistoryCatchupMode
+	// HistoryLoadProbe reports fresh engine/device pressure without scanning
+	// application rows. Throughput uses it to size online work by observed
+	// density; hard write pressure also protects all other cold build paths.
+	HistoryLoadProbe func() maintenance.StoragePressure
 	// CatchupUnthrottledLagBlocks bypasses CatchupBuildMinInterval while sync is
 	// active, importer admission is ready, and more than this many complete
 	// hot-history blocks are ready to be published. Each build remains bounded by
@@ -267,6 +271,11 @@ type PassResult struct {
 	// observability.
 	HistoryMinRecovery         time.Duration
 	HistoryMaintenanceDuration time.Duration
+	HistoryRecoveryCost        time.Duration
+	HistoryLoadDeferred        bool
+	HistoryEventAttempted      bool
+	historyWasSyncing          bool
+	historyEventBatchBlocks    uint64
 	historyCompletionPending   bool
 	historyMaintenanceID       uint64
 	LatestBuilt                bool
@@ -656,6 +665,8 @@ type Runner struct {
 	maintenanceSerial         uint64 // guarded by passMu
 	completedMaintenanceID    uint64 // guarded by passMu
 	pendingMaintenanceID      uint64 // guarded by passMu; blocks new passes during outer work
+	historyLoad               historyLoadState
+	compactionBudget          historyCompactionBudgetState
 
 	lastSuccessfulForcedAt        atomic.Int64
 	lastSuccessfulForcedLag       atomic.Uint64
@@ -686,6 +697,7 @@ func NewRunner(chain ChainSource, cfg Config) *Runner {
 		ctx:     ctx,
 		cancel:  cancel,
 	}
+	runner.initHistoryLoadMetrics()
 	runner.updateMetrics()
 	return runner
 }
@@ -971,6 +983,7 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	}
 
 	start := time.Now()
+	r.refreshHistoryLoad(start)
 	result := PassResult{}
 	var err error
 	pressure, err := r.readHistoryPressure(ctx)
@@ -991,13 +1004,17 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 		return result, err
 	}
 	spaceDeferred := r.historySpaceDeferred(pressure)
+	prioritizeMerge := !spaceDeferred && r.shouldPrioritizePendingCompaction(time.Now())
 	// Direct V2 receipt publication is hard-bound to event-log coverage. Give
 	// an existing event-log gap first admission to the shared heavy-work gate;
 	// otherwise a successful history build installs a cooldown before the
 	// dependent sidecar can ever run while continuous sync keeps history ready.
 	syncCriticalAttempted := false
-	if err == nil && !spaceDeferred && r.syncActive() && r.syncEventLogCatchupEnabled() {
+	if err == nil && !spaceDeferred && !prioritizeMerge && !r.historyLoad.hard && r.historySyncBudgetActive() && r.syncEventLogCatchupEnabled() {
 		syncCriticalAttempted, err = r.derivedSidecarCatchupPass(&result)
+		// Preserve an already admitted sidecar pass even if sync status changed
+		// while planning it. A later history result must not overwrite its work.
+		syncCriticalAttempted = syncCriticalAttempted || result.HistoryEventAttempted || result.DerivedSidecarCatchup
 		if err == nil {
 			err = ctx.Err()
 		}
@@ -1005,9 +1022,24 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	historyPassRan := false
 	if err == nil && !syncCriticalAttempted {
 		historyPassRan = true
-		phaseStart := time.Now()
-		result, err = r.onePassWithPressure(pressure)
-		result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
+		if prioritizeMerge {
+			// Give one due merge a turn even when a cheap history batch would
+			// win the shared gate at every three-second wake. Covered pruning
+			// still runs before the merge. This is only a wake hint: the stored
+			// history admission deadline remains untouched.
+			result.HistoryDeferred, result.HistoryRateLimited = true, true
+			result.EligibleCutoffBlock = r.lastEligibleCutoff.Load()
+			result.PublishedBlock = r.lastPublishedBlock.Load()
+			result.extendHistoryRetryDeadline(time.Now(), 3*time.Second)
+			if deadline := r.historyNotBefore.Load(); deadline > result.HistoryRetryDeadline.UnixNano() {
+				result.HistoryRetryDeadline = time.Unix(0, deadline)
+				result.refreshHistoryRetry(time.Now())
+			}
+		} else {
+			phaseStart := time.Now()
+			result, err = r.onePassWithPressure(pressure)
+			result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
+		}
 		if err == nil {
 			err = ctx.Err()
 		}
@@ -1023,10 +1055,11 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 			err = ctx.Err()
 		}
 	}
-	if err == nil && !spaceDeferred && historyPassRan && !result.HistoryDeferred {
+	if err == nil && !spaceDeferred && (historyPassRan || result.HistoryRateLimited) && (!result.HistoryDeferred || result.HistoryRateLimited) && !result.HistoryLoadDeferred {
 		phaseStart := time.Now()
 		result.Compaction, err = r.compactHistory(ctx, result.HistoryNeedsCatchup())
 		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
+		r.recordCompactionBudget(result.Compaction)
 		if err == nil {
 			err = ctx.Err()
 		}
@@ -1040,7 +1073,9 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 			err = ctx.Err()
 		}
 	}
-	if err == nil && !spaceDeferred {
+	if r.cfg.DeferLatestBuildWhileSyncing && r.throughputCatchup() && r.historySyncBudgetActive() {
+		result.LatestDeferred = true
+	} else if err == nil && !spaceDeferred && !r.historyLoad.hard {
 		phaseStart := time.Now()
 		latestBlockBefore := r.lastLatestBuildBlock.Load()
 		syncCommitmentCandidate := r.cfg.DeferLatestBuildWhileSyncing && r.cfg.BuildCommitmentBranchBaseWhileSyncing && r.syncActive()
@@ -1073,7 +1108,7 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 		result.HistoryMinRecovery = recovery
 		result.extendHistoryRetryDeadline(finishedAt, recovery)
 	}
-	if r.throughputCatchup() && result.HistoryBuildAttempted {
+	if r.throughputCatchup() && (result.HistoryBuildAttempted || result.HistoryEventAttempted) {
 		r.maintenanceSerial++
 		result.historyMaintenanceID = r.maintenanceSerial
 		result.historyCompletionPending = true
@@ -1272,6 +1307,9 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 		result.extendHistoryRetryDeadline(time.Now(), r.cfg.Interval)
 		return result, nil
 	}
+	if r.deferHistoryForLoad(&result) {
+		return result, nil
+	}
 	result.HistoryAccelerated = r.historyBuildAccelerated(readyBlocks)
 	pressured := r.historyPressureActive(pressure)
 	result.HistoryPressureActive = pressured
@@ -1330,6 +1368,7 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 			batchTxNums = min(batchTxNums, pressureHistoryBatchLimit(r.cfg.BatchTxNums))
 		}
 	}
+	batchBlocks, batchTxNums = r.adaptiveHistoryBatchLimits(batchBlocks, batchTxNums)
 	retryCheckedAt := time.Now()
 	if retryAfter := r.historyBuildRetryAfter(retryCheckedAt, result.HistoryAccelerated, result.HistoryForcedBusy); retryAfter > 0 {
 		result.HistoryDeferred = true
@@ -1403,6 +1442,7 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	}
 	defer releaseHeavyWork()
 	result.HistoryBuildAttempted = true
+	result.historyWasSyncing = r.historySyncBudgetActive()
 	result.HistoryBatchBlocks = cutoffBlock - startBlock + 1
 	result.HistoryBatchTxNums = toTxNum - fromTxNum + 1
 
@@ -1482,7 +1522,7 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	buildProgress.SetPhase("prepare-derived")
 	aggregator := NewAggregator(r.cfg.Dir)
 	buildDerivedSidecars := true
-	syncActive := r.syncActive()
+	syncActive := r.historySyncBudgetActive()
 	if r.cfg.DeferDerivedSidecarsWhileSyncing && syncActive && r.derivedSidecarsConfigured() {
 		buildDerivedSidecars = false
 		result.DerivedSidecarsDeferred = true
@@ -2217,7 +2257,7 @@ func (r *Runner) syncEventLogCatchupEnabled() bool {
 // active manifest coverage is its restart-safe cursor. The boolean reports
 // that a sync-critical event-log gap claimed this lifecycle pass, including a
 // gate deferral, so the caller does not let history take the same admission.
-func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (bool, error) {
+func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, passErr error) {
 	if r == nil || result == nil || !r.cfg.Enabled || !r.derivedSidecarsConfigured() {
 		return false, nil
 	}
@@ -2247,7 +2287,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (bool, error) {
 	if !result.DerivedSidecarsPending {
 		return false, nil
 	}
-	syncActive := r.syncActive()
+	syncActive := r.historySyncBudgetActive()
 	syncCriticalEventLog := syncActive && r.syncEventLogCatchupEnabled() && plan.event != nil
 	if syncActive {
 		// Balance traces and section blooms are optional for direct V2 receipt
@@ -2263,6 +2303,17 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (bool, error) {
 		}
 		plan.balance = nil
 		plan.section = nil
+	}
+	if r.deferHistoryForLoad(result) {
+		result.DerivedSidecarsDeferred = true
+		return syncCriticalEventLog, nil
+	}
+	if r.throughputCatchup() {
+		if deadline := r.historyNotBefore.Load(); deadline > time.Now().UnixNano() {
+			result.HistoryDeferred, result.HistoryRateLimited, result.DerivedSidecarsDeferred = true, true, true
+			result.extendHistoryRetryDeadline(time.Now(), time.Until(time.Unix(0, deadline)))
+			return syncCriticalEventLog, nil
+		}
 	}
 	var release func()
 	var admitted bool
@@ -2280,6 +2331,12 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (bool, error) {
 	defer release()
 
 	started := time.Now()
+	if plan.event != nil && r.throughputCatchup() {
+		result.HistoryEventAttempted = true
+		result.historyWasSyncing = syncActive
+		result.historyEventBatchBlocks = plan.event.to - plan.event.from + 1
+		defer func() { result.DerivedSidecarDuration = coldSnapshotPhaseDuration(started) }()
+	}
 	if syncCriticalEventLog {
 		coldSnapshotLog.Info("Sync-critical event-log catch-up started",
 			"fromBlock", plan.event.from,
@@ -2410,10 +2467,11 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 	if r.cfg.BuildEventLogs {
 		batchBlocks := r.cfg.BatchBlocks
 		eventTargetBlock := publishedBlock
-		if r.syncActive() && r.syncEventLogCatchupEnabled() {
+		if r.historySyncBudgetActive() && r.syncEventLogCatchupEnabled() {
 			if r.cfg.SyncEventLogCatchupBlocks > 0 {
 				batchBlocks = r.cfg.SyncEventLogCatchupBlocks
 			}
+			batchBlocks = r.adaptiveEventBatchLimit(batchBlocks)
 			if r.cfg.SyncEventLogTargetBlock != nil {
 				if target, ok := r.cfg.SyncEventLogTargetBlock(); ok && target < eventTargetBlock {
 					eventTargetBlock = target
@@ -2751,42 +2809,6 @@ func (r *Runner) updateMetrics() {
 	r.metrics.update(r.Snapshot())
 }
 
-func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (HistoryCompactionResult, error) {
-	if r == nil || !r.cfg.Enabled {
-		return HistoryCompactionResult{}, nil
-	}
-	cfg := CompactionConfig{
-		MaxSteps:       r.cfg.CompactMaxSteps,
-		DeleteObsolete: !r.cfg.RetainObsoleteSegments,
-	}
-	drain := true
-	if catchingUp {
-		// Erigon builds every ready base step before its merge loop. Preserve our
-		// smaller build/publish/prune boundary, but defer intermediate 2/4/... step
-		// rewrites until a full frozen span is available.
-		cfg.MinSteps = r.cfg.CompactMaxSteps
-		drain = false
-	}
-
-	var total HistoryCompactionResult
-	for {
-		if err := contextError(ctx); err != nil {
-			return total, err
-		}
-		result, err := CompactHistoryDomainContext(ctx, r.cfg.Dir, r.cfg.HistoryDataset, cfg)
-		if err != nil {
-			return total, err
-		}
-		if !result.Merged {
-			return total, nil
-		}
-		mergeHistoryCompactionResult(&total, result)
-		if !drain || r.cfg.MaxCompactionPasses > 0 && uint64(total.MergePasses) >= r.cfg.MaxCompactionPasses {
-			return total, nil
-		}
-	}
-}
-
 func mergeHistoryCompactionResult(total *HistoryCompactionResult, next HistoryCompactionResult) {
 	if total == nil || !next.Merged {
 		return
@@ -2805,6 +2827,10 @@ func mergeHistoryCompactionResult(total *HistoryCompactionResult, next HistoryCo
 		total.AggregationSteps += next.AggregationSteps
 	}
 	total.SegmentsMerged += next.SegmentsMerged
+	total.InputBytes = saturatingHistoryBudgetSum(total.InputBytes, next.InputBytes)
+	total.InputLogicalBytes = saturatingHistoryBudgetSum(total.InputLogicalBytes, next.InputLogicalBytes)
+	total.InputRecords = saturatingHistoryBudgetSum(total.InputRecords, next.InputRecords)
+	total.InputSources = saturatingHistoryBudgetSum(total.InputSources, next.InputSources)
 	total.Segments = append(total.Segments, next.Segments...)
 }
 
@@ -3127,7 +3153,7 @@ func (r *Runner) loop() {
 			}
 			return
 		}
-		if after := result.HistoryRetryRemaining(time.Now()); after > 0 {
+		if after := result.MaintenanceRetryRemaining(time.Now()); after > 0 {
 			scheduleRetry(after)
 		}
 	}

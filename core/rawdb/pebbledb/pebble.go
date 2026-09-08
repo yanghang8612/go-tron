@@ -329,8 +329,9 @@ type Database struct {
 	writeDelayCount     atomic.Int64 // Total number of write stall counts
 	writeDelayTime      atomic.Int64 // Total time spent in write stalls
 
-	writeOptions    *pebble.WriteOptions
-	boundedPointGet bool
+	writeOptions       *pebble.WriteOptions
+	boundedPointGet    bool
+	pressureThresholds storagePressureThresholds
 }
 
 // pointReadView holds Database's lifecycle read lock across a short burst of
@@ -903,6 +904,11 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		return nil, err
 	}
 	db.db = innerDB
+	db.pressureThresholds = storagePressureThresholds{
+		l0Compaction: opt.L0CompactionThreshold,
+		l0StopWrites: opt.L0StopWritesThreshold,
+		memTableStop: opt.MemTableStopWritesThreshold,
+	}
 
 	db.compTimeMeter = metrics.GetOrRegisterMeter(namespace+"compact/time", nil)
 	db.compReadMeter = metrics.GetOrRegisterMeter(namespace+"compact/input", nil)

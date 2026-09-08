@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -23,6 +24,14 @@ type CompactionConfig struct {
 	// the same leaves through every geometric level.
 	MinSteps       uint64
 	DeleteObsolete bool
+	// BusyLeafOnly coalesces original leaves once, without rewriting earlier
+	// merge outputs. Budgets count physical history plus companion bytes,
+	// uncompressed history body bytes, and canonical records independently.
+	BusyLeafOnly         bool
+	MaxInputBytes        uint64
+	MaxInputLogicalBytes uint64
+	MaxInputRecords      uint64
+	MaxSources           uint64
 }
 
 // HistoryCompactionResult describes a registered history-domain compaction pass.
@@ -30,13 +39,24 @@ type HistoryCompactionResult struct {
 	Merged bool
 	// MergePasses is one for CompactHistoryDomain. Runner summaries may drain
 	// multiple ready ranges and aggregate every emitted output for work metrics.
-	MergePasses      int
-	Dataset          SegmentDataset
-	FromTxNum        uint64
-	ToTxNum          uint64
-	AggregationSteps uint64
-	SegmentsMerged   int
-	Segments         []SegmentRef
+	MergePasses       int
+	Dataset           SegmentDataset
+	FromTxNum         uint64
+	ToTxNum           uint64
+	AggregationSteps  uint64
+	SegmentsMerged    int
+	Segments          []SegmentRef
+	Deferred          bool
+	DeferReason       string
+	InputBytes        uint64
+	InputLogicalBytes uint64
+	InputRecords      uint64
+	InputSources      uint64
+	Recovery          time.Duration
+	RetryAfter        time.Duration
+	// RetryDeadline schedules only another optional merge opportunity. It must
+	// never replace or shorten the deadline for new history publication.
+	RetryDeadline time.Time
 }
 
 type historyCompactionCandidate struct {
@@ -45,10 +65,13 @@ type historyCompactionCandidate struct {
 }
 
 type historyCompactionSelection struct {
-	candidates       []historyCompactionCandidate
-	fromTxNum        uint64
-	toTxNum          uint64
-	aggregationSteps uint64
+	candidates        []historyCompactionCandidate
+	fromTxNum         uint64
+	toTxNum           uint64
+	aggregationSteps  uint64
+	inputBytes        uint64
+	inputLogicalBytes uint64
+	inputRecords      uint64
 }
 
 // CompactHistoryDomain merges the frontmost continuous run of binary history
@@ -96,9 +119,37 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	if historyCfg.CompactHistoryContext == nil && historyCfg.CompactHistory == nil && (historyCfg.OpenHistory == nil || historyCfg.WriteHistory == nil) {
 		return HistoryCompactionResult{}, fmt.Errorf("snapshots: history domain %s missing compaction codec", historyCfg.Dataset)
 	}
-	selection, ok := selectHistoryCompactionRunAtLeast(manifest, historyCfg, minSteps, maxSteps)
+	var selection historyCompactionSelection
+	if cfg.BusyLeafOnly {
+		selection, ok, err = selectBudgetedHistoryCompactionLeaves(ctx, historyCompactionCandidates(manifest, historyCfg), cfg,
+			func(candidate historyCompactionCandidate) (historyCompactionInputCost, error) {
+				return readHistoryCompactionInputCost(ctx, dir, candidate)
+			})
+		if err != nil {
+			return HistoryCompactionResult{}, err
+		}
+	} else {
+		selection, ok = selectHistoryCompactionRunAtLeast(manifest, historyCfg, minSteps, maxSteps)
+	}
 	if !ok {
-		return HistoryCompactionResult{Dataset: historyCfg.Dataset}, nil
+		return HistoryCompactionResult{Dataset: historyCfg.Dataset, Deferred: cfg.BusyLeafOnly, DeferReason: historyCompactionNoSelectionReason(cfg)}, nil
+	}
+	if !cfg.BusyLeafOnly && (cfg.MaxInputBytes > 0 || cfg.MaxInputLogicalBytes > 0 || cfg.MaxInputRecords > 0 || cfg.MaxSources > 0) {
+		for _, candidate := range selection.candidates {
+			cost, err := readHistoryCompactionInputCost(ctx, dir, candidate)
+			if err != nil {
+				return HistoryCompactionResult{}, err
+			}
+			if cost.bytes > math.MaxUint64-selection.inputBytes || cost.logicalBytes > math.MaxUint64-selection.inputLogicalBytes || cost.records > math.MaxUint64-selection.inputRecords {
+				return HistoryCompactionResult{}, errors.New("snapshots: compaction input cost overflows")
+			}
+			selection.inputBytes += cost.bytes
+			selection.inputLogicalBytes += cost.logicalBytes
+			selection.inputRecords += cost.records
+		}
+		if !historyCompactionWithinBudget(cfg, selection.inputBytes, selection.inputLogicalBytes, selection.inputRecords, uint64(len(selection.candidates))) {
+			return HistoryCompactionResult{Dataset: historyCfg.Dataset, Deferred: true, DeferReason: "input-budget", InputBytes: selection.inputBytes, InputLogicalBytes: selection.inputLogicalBytes, InputRecords: selection.inputRecords, InputSources: uint64(len(selection.candidates))}, nil
+		}
 	}
 
 	var refs []SegmentRef
@@ -153,14 +204,18 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	}
 
 	result := HistoryCompactionResult{
-		Merged:           true,
-		MergePasses:      1,
-		Dataset:          historyCfg.Dataset,
-		FromTxNum:        selection.fromTxNum,
-		ToTxNum:          selection.toTxNum,
-		AggregationSteps: selection.aggregationSteps,
-		SegmentsMerged:   len(selection.candidates),
-		Segments:         refs,
+		Merged:            true,
+		MergePasses:       1,
+		Dataset:           historyCfg.Dataset,
+		FromTxNum:         selection.fromTxNum,
+		ToTxNum:           selection.toTxNum,
+		AggregationSteps:  selection.aggregationSteps,
+		SegmentsMerged:    len(selection.candidates),
+		Segments:          refs,
+		InputBytes:        selection.inputBytes,
+		InputLogicalBytes: selection.inputLogicalBytes,
+		InputRecords:      selection.inputRecords,
+		InputSources:      uint64(len(selection.candidates)),
 	}
 	if cfg.DeleteObsolete {
 		if err := deleteObsoleteHistoryCompactionFiles(dir, selection.candidates, refs); err != nil {

@@ -1143,6 +1143,10 @@ func gtron(ctx *cli.Context) error {
 	balanceTracePruneLifecycleWired := false
 	retiredPruneLifecycleWired := false
 	heavyWorkGate := maintenance.NewHeavyWorkGateWithCooldownAfter(heavyWorkRecoveryCooldown, heavyWorkCooldownMinDuration)
+	historyLoadProbe := makeRuntimeHistoryLoad(db, dbPath)
+	heavyWorkGate.SetAdmissionCheck(func() bool {
+		return !historyLoadProbe().HardLimitReached(time.Now())
+	})
 	var domainLifecycle *statepruning.SnapshotLifecycle
 	var chainFreezerSnapshotBuild statepruning.ChainFreezerBuildFunc
 	if shouldEnableChainFreezerSnapshotBuilder(chainConfig, ancientStore != nil, freezerCfg.Enabled) {
@@ -1238,6 +1242,7 @@ func gtron(ctx *cli.Context) error {
 				ETL:                         snapshotETL,
 				CatchupBuildMinInterval:     snapshotCatchupBuildInterval,
 				HistoryCatchupMode:          historyCatchupMode,
+				HistoryLoadProbe:            historyLoadProbe,
 				CatchupUnthrottledLagBlocks: prunePolicy.HistoryWindow,
 				CatchupHeavyWorkCooldown:    snapshotCatchupHeavyWorkCooldown,
 				HeavyWorkGate:               heavyWorkGate,

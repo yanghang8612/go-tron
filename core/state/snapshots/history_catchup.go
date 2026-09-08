@@ -33,9 +33,15 @@ func (r *Runner) throughputCatchup() bool {
 }
 
 func (r *Runner) throughputRecovery(work time.Duration, failed bool) time.Duration {
+	// Target history duty (not total device duty). An oversized complete block
+	// retains its real recovery cost even when it cannot be split further.
+	// Only optional merge cost is excluded; clipping expensive ordinary work
+	// would silently raise online history duty when density increases.
+	duty := r.historyLoad.dutyPPM()
+	budget := float64(max(time.Duration(0), work)) * float64(1_000_000-duty) / float64(duty)
 	recovery := time.Duration(math.MaxInt64)
-	if work <= time.Duration(math.MaxInt64/forcedBusyRecoveryWorkMultiplier) {
-		recovery = max(time.Duration(0), work) * time.Duration(forcedBusyRecoveryWorkMultiplier)
+	if budget < float64(math.MaxInt64) {
+		recovery = time.Duration(budget)
 	}
 	recovery = max(recovery, 3*time.Second, r.cfg.CatchupHeavyWorkCooldown)
 	if failed {
@@ -55,27 +61,34 @@ func historyRecoveryDeadline(now time.Time, after time.Duration) time.Time {
 }
 
 func (r *Runner) applyThroughputRecovery(result *PassResult, started, completed time.Time, passErr error) {
-	if !r.throughputCatchup() || !result.HistoryBuildAttempted {
+	if !r.throughputCatchup() || (!result.HistoryBuildAttempted && !result.HistoryEventAttempted) {
 		return
 	}
 	work := max(time.Duration(0), completed.Sub(started))
 	result.HistoryMaintenanceDuration = work
-	if !result.HistoryForcedBusy && passErr == nil {
+	// Optional merges have an independent gated admission/recovery budget.
+	result.HistoryRecoveryCost = max(time.Duration(0), work-result.CompactionDuration)
+	r.historyLoad.metric("recovery_cost", int64(result.HistoryRecoveryCost))
+	if !result.HistoryForcedBusy && !result.historyWasSyncing && !r.syncActive() && passErr == nil {
 		return
 	}
-	recovery := r.throughputRecovery(work, passErr != nil)
+	recovery := r.throughputRecovery(result.HistoryRecoveryCost, passErr != nil)
 	result.HistoryMinRecovery = recovery
 	deadline := historyRecoveryDeadline(completed, recovery)
-	for old := r.historyNotBefore.Load(); deadline.UnixNano() > old; old = r.historyNotBefore.Load() {
-		if r.historyNotBefore.CompareAndSwap(old, deadline.UnixNano()) {
-			break
-		}
-	}
+	r.extendHistoryNotBefore(deadline)
 	deadline = time.Unix(0, r.historyNotBefore.Load())
 	if deadline.After(result.HistoryRetryDeadline) {
 		result.HistoryRetryDeadline = deadline
 	}
 	result.refreshHistoryRetry(completed)
+}
+
+func (r *Runner) extendHistoryNotBefore(deadline time.Time) {
+	for old := r.historyNotBefore.Load(); deadline.UnixNano() > old; old = r.historyNotBefore.Load() {
+		if r.historyNotBefore.CompareAndSwap(old, deadline.UnixNano()) {
+			return
+		}
+	}
 }
 
 // OnePassWithDeferredMaintenanceContext is for an ordered lifecycle which has
@@ -112,6 +125,10 @@ func (r *Runner) completeHistoryMaintenance(result *PassResult, started, complet
 	r.pendingMaintenanceID = 0
 	r.completedMaintenanceID = result.historyMaintenanceID
 	r.applyThroughputRecovery(result, started, completed, passErr)
+	// Completed construction remains a density observation even when a later
+	// prune/catalog operation fails. Successful frontier accounting stays below.
+	r.recordHistoryWork(result)
+	r.recordEventWork(result)
 	r.lastMaintenanceDuration.Store(int64(result.HistoryMaintenanceDuration))
 	if result.Built {
 		r.lastHistoryBuildAt.Store(completed.UnixNano())
@@ -141,5 +158,6 @@ func (r *Runner) completeHistoryMaintenance(result *PassResult, started, complet
 	coldSnapshotLog.Info("History throughput maintenance completed",
 		"publishedBlock", result.PublishedBlock, "blocks", result.HistoryBatchBlocks,
 		"work", result.HistoryMaintenanceDuration, "recovery", result.HistoryMinRecovery,
+		"recoveryCost", result.HistoryRecoveryCost, "mergeWork", result.CompactionDuration, "budgetLevel", r.historyLoad.level,
 		"retryAt", result.HistoryRetryDeadline, "failed", passErr != nil)
 }

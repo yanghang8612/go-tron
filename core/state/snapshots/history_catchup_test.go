@@ -112,7 +112,7 @@ func TestThroughputFailureAfterPublicationKeepsDeadlineAcrossAdmissionChanges(t 
 	}
 }
 
-func TestThroughputDeferredCompletionUsesWholeCostOnce(t *testing.T) {
+func TestThroughputDeferredCompletionAccountsNonMergeCostOnce(t *testing.T) {
 	for _, failed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "success", true: "failed"}[failed], func(t *testing.T) {
 			r := throughputFixture(t)
@@ -133,7 +133,7 @@ func TestThroughputDeferredCompletionUsesWholeCostOnce(t *testing.T) {
 			copyBefore := result
 			r.CompleteHistoryMaintenance(&result, time.Now().Add(-20*time.Second), outerErr)
 			stats := r.Snapshot()
-			if result.historyCompletionPending || result.HistoryMaintenanceDuration < 20*time.Second || result.HistoryMinRecovery < 80*time.Second || stats.LastMaintenanceDuration < 20*time.Second || stats.ForcedBusyBuilds != 1 || stats.SegmentsBuilt != 1 {
+			if result.historyCompletionPending || result.HistoryMaintenanceDuration < 20*time.Second || result.HistoryMinRecovery < 79*time.Second || stats.LastMaintenanceDuration < 20*time.Second || stats.ForcedBusyBuilds != 1 || stats.SegmentsBuilt != 1 {
 				t.Fatalf("outer cost/counts: %+v %+v", result, stats)
 			}
 			if (r.lastSuccessfulForcedAt.Load() == 0) != failed {
