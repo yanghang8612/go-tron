@@ -245,7 +245,7 @@ func TestBusyHistoryCompactionOwnsGateUntilPublication(t *testing.T) {
 	defer gtronlog.SetDefault(previous)
 	checked := 0
 	gtronlog.SetDefault(gtronlog.NewLogger(historyCancelLogHandler{
-		Handler: slog.NewTextHandler(io.Discard, nil),
+		Handler: slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		onRecord: func(record slog.Record) {
 			if record.Message != "History cold snapshot compaction started" && record.Message != "History cold snapshot compaction completed" {
 				return

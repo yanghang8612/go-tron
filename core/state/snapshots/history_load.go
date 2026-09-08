@@ -74,6 +74,7 @@ func (r *Runner) refreshHistoryLoad(now time.Time) {
 	s := &r.historyLoad
 	p := r.cfg.HistoryLoadProbe()
 	s.sample = p
+	previousHard := s.hard
 	s.hard = p.HardLimitReached(now)
 	previousLevel := s.level
 	if !p.Available || !freshHistoryLoad(p.SampledAt, now) {
@@ -133,8 +134,14 @@ func (r *Runner) refreshHistoryLoad(now time.Time) {
 	s.metric("device_queue_milli", coldSnapshotUintGauge(p.DeviceQueueMilli))
 	s.metric("device_await", int64(p.DeviceAwait))
 	s.metric("compaction_debt", coldSnapshotUintGauge(p.CompactionDebt))
-	if previousLevel != s.level {
-		coldSnapshotLog.Info("History storage budget changed", "level", s.level, "hard", s.hard,
+	if previousLevel != s.level || previousHard != s.hard {
+		// Healthy/recovering oscillation is ordinary batch tuning. Pressure,
+		// unknown observations and hard-limit edges remain visible at Info.
+		logBudget := coldSnapshotLog.Debug
+		if previousLevel < 2 || s.level < 2 || previousHard != s.hard {
+			logBudget = coldSnapshotLog.Info
+		}
+		logBudget("History storage budget changed", "level", s.level, "hard", s.hard,
 			"dutyPPM", s.dutyPPM(), "l0Sublevels", p.L0Sublevels, "compactionDebt", p.CompactionDebt,
 			"deviceKnown", p.DeviceAvailable, "deviceQueueMilli", p.DeviceQueueMilli, "deviceAwait", p.DeviceAwait)
 	}

@@ -1480,7 +1480,7 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 		"freeBytesAvailable", pressure.FreeBytesAvailable,
 		"minRecovery", result.HistoryMinRecovery,
 	}
-	if result.HistoryAccelerated {
+	if result.HistoryAccelerated || result.HistoryForcedBusy {
 		coldSnapshotLog.Debug("History cold snapshot build started", buildLogContext...)
 	} else {
 		coldSnapshotLog.Info("History cold snapshot build started", buildLogContext...)
@@ -1734,9 +1734,9 @@ func coldSnapshotPublishLogDecision(r *Runner, result PassResult, now time.Time)
 	if r == nil {
 		return true, 0
 	}
-	// Normal cadence passes and the final catch-up publication are rare and
-	// operationally important, so always keep them at Info.
-	if !result.HistoryAccelerated || result.EligibleCutoffBlock <= result.PublishedBlock {
+	// Both idle acceleration and busy throughput can publish every few seconds.
+	// Keep normal cadence and the final catch-up publication visible immediately.
+	if (!result.HistoryAccelerated && !result.HistoryForcedBusy) || result.EligibleCutoffBlock <= result.PublishedBlock {
 		r.lastHistoryPublishLogAt.Store(now.UnixNano())
 		return true, r.historyPublishSuppressed.Swap(0)
 	}

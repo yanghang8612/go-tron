@@ -68,7 +68,7 @@ func TestRunnerPrioritizesPendingMergeAfterSafePrune(t *testing.T) {
 	previous := gtronlog.Root()
 	defer gtronlog.SetDefault(previous)
 	gtronlog.SetDefault(gtronlog.NewLogger(historyCancelLogHandler{
-		Handler: slog.NewTextHandler(io.Discard, nil),
+		Handler: slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		onRecord: func(record slog.Record) {
 			switch record.Message {
 			case "History cold snapshot compaction started":

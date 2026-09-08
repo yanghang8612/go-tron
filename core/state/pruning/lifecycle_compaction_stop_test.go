@@ -73,7 +73,7 @@ func TestSnapshotLifecycleStopCancelsHistoryCompaction(t *testing.T) {
 	previous := gtronlog.Root()
 	defer gtronlog.SetDefault(previous)
 	gtronlog.SetDefault(gtronlog.NewLogger(lifecycleCompactionStopHandler{
-		Handler: slog.NewTextHandler(io.Discard, nil),
+		Handler: slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		onCopy: func() {
 			once.Do(func() { close(entered) })
 			<-lifecycle.ctx.Done()

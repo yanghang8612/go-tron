@@ -63,7 +63,7 @@ func TestCompactHistoryCancellationPreservesManifestAndInputs(t *testing.T) {
 			defer gtronlog.SetDefault(previous)
 			var reached atomic.Bool
 			gtronlog.SetDefault(gtronlog.NewLogger(historyCancelLogHandler{
-				Handler: slog.NewTextHandler(io.Discard, nil),
+				Handler: slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
 				onRecord: func(record slog.Record) {
 					match := phase == "before-manifest" && record.Message == "History cold snapshot compaction completed"
 					if record.Message == "History cold snapshot compaction phase started" {

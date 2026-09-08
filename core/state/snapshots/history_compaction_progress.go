@@ -111,7 +111,7 @@ func newHistoryCompactionProgressWithMetrics(dataset SegmentDataset, fromTx, toT
 	p.metrics.sourcesTotal.Update(coldSnapshotUintGauge(p.sourcesTotal.Load()))
 	p.metrics.elapsed.Update(0)
 	p.metrics.remapRows.Update(0)
-	coldSnapshotLog.Info("History cold snapshot compaction started",
+	coldSnapshotLog.Debug("History cold snapshot compaction started",
 		"dataset", dataset,
 		"fromTx", fromTx,
 		"toTx", toTx,
@@ -149,7 +149,7 @@ func (p *historyCompactionProgress) setPhase(phase int64) {
 	p.metrics.phase.Update(phase)
 	p.metrics.sourcesProcessed.Update(0)
 	p.metrics.elapsed.Update(time.Since(p.started).Nanoseconds())
-	coldSnapshotLog.Info("History cold snapshot compaction phase started",
+	coldSnapshotLog.Debug("History cold snapshot compaction phase started",
 		"dataset", p.dataset,
 		"phase", historyCompactionPhaseName(phase),
 		"fromTx", p.fromTx,

@@ -249,24 +249,32 @@ func TestColdSnapshotETAKeepsSubCentPrecisionAndBoundsOverflow(t *testing.T) {
 	}
 }
 
-func TestColdSnapshotPublishInfoIsSampledDuringAcceleratedCatchup(t *testing.T) {
-	runner := &Runner{}
-	result := PassResult{HistoryAccelerated: true, PublishedBlock: 50, EligibleCutoffBlock: 100}
-	base := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+func TestColdSnapshotPublishInfoIsSampledDuringCatchup(t *testing.T) {
+	for name, result := range map[string]PassResult{
+		"accelerated": {HistoryAccelerated: true},
+		"forced-busy": {HistoryForcedBusy: true},
+		"both":        {HistoryAccelerated: true, HistoryForcedBusy: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner := &Runner{}
+			result.PublishedBlock, result.EligibleCutoffBlock = 50, 100
+			base := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
 
-	if info, suppressed := coldSnapshotPublishLogDecision(runner, result, base); !info || suppressed != 0 {
-		t.Fatalf("first publication = info %t suppressed %d, want true/0", info, suppressed)
-	}
-	if info, _ := coldSnapshotPublishLogDecision(runner, result, base.Add(time.Second)); info {
-		t.Fatal("accelerated publication inside sampling window logged at Info")
-	}
-	if info, suppressed := coldSnapshotPublishLogDecision(runner, result, base.Add(coldSnapshotPublishLogInterval)); !info || suppressed != 1 {
-		t.Fatalf("sampled publication = info %t suppressed %d, want true/1", info, suppressed)
-	}
+			if info, suppressed := coldSnapshotPublishLogDecision(runner, result, base); !info || suppressed != 0 {
+				t.Fatalf("first publication = info %t suppressed %d, want true/0", info, suppressed)
+			}
+			if info, _ := coldSnapshotPublishLogDecision(runner, result, base.Add(time.Second)); info {
+				t.Fatal("catch-up publication inside sampling window logged at Info")
+			}
+			if info, suppressed := coldSnapshotPublishLogDecision(runner, result, base.Add(coldSnapshotPublishLogInterval)); !info || suppressed != 1 {
+				t.Fatalf("sampled publication = info %t suppressed %d, want true/1", info, suppressed)
+			}
 
-	result.PublishedBlock = result.EligibleCutoffBlock
-	if info, suppressed := coldSnapshotPublishLogDecision(runner, result, base.Add(coldSnapshotPublishLogInterval+time.Second)); !info || suppressed != 0 {
-		t.Fatalf("final catch-up publication = info %t suppressed %d, want true/0", info, suppressed)
+			result.PublishedBlock = result.EligibleCutoffBlock
+			if info, suppressed := coldSnapshotPublishLogDecision(runner, result, base.Add(coldSnapshotPublishLogInterval+time.Second)); !info || suppressed != 0 {
+				t.Fatalf("final catch-up publication = info %t suppressed %d, want true/0", info, suppressed)
+			}
+		})
 	}
 }
 

@@ -159,9 +159,18 @@ func (r *Runner) completeHistoryMaintenance(result *PassResult, started, complet
 		}
 	}
 	r.updateMetrics()
-	coldSnapshotLog.Info("History throughput maintenance completed",
+	ctx := []any{
 		"publishedBlock", result.PublishedBlock, "blocks", result.HistoryBatchBlocks,
 		"work", result.HistoryMaintenanceDuration, "recovery", result.HistoryMinRecovery,
 		"recoveryCost", result.HistoryRecoveryCost, "mergeWork", result.CompactionDuration, "budgetLevel", r.historyLoad.level,
-		"retryAt", result.HistoryRetryDeadline, "failed", passErr != nil)
+		"retryAt", result.HistoryRetryDeadline, "failed", passErr != nil,
+	}
+	if errors.Is(passErr, context.Canceled) || errors.Is(passErr, context.DeadlineExceeded) {
+		coldSnapshotLog.Info("History throughput maintenance canceled", append(ctx, "err", passErr)...)
+	} else if passErr != nil {
+		coldSnapshotLog.Warn("History throughput maintenance failed", append(ctx, "err", passErr)...)
+	} else {
+		// The sampled publication already reports normal progress at Info.
+		coldSnapshotLog.Debug("History throughput maintenance completed", ctx...)
+	}
 }
