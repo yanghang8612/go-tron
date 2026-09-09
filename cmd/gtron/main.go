@@ -1405,6 +1405,7 @@ func gtron(ctx *cli.Context) error {
 	if ancientStore != nil && freezerCfg.Enabled {
 		freezerCfg.SyncActive = syncService.IsSyncing
 		freezerCfg.HeavyWorkGate = heavyWorkGate
+		freezerCfg.TransactionIndexLoadProbe = historyLoadProbe
 		freezerRunner = chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
 		if freezerRunner != nil {
 			syncService.AddSyncCompleteHook(freezerRunner.RequestPass)

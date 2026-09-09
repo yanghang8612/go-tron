@@ -19,6 +19,8 @@ type HeavyWorkGate struct {
 	nextAllowed    atomic.Int64
 	admissionCheck atomic.Pointer[heavyWorkAdmission]
 	now            func() time.Time
+	reservationMu  sync.Mutex
+	reservation    *HeavyWorkReservation
 }
 
 type heavyWorkAdmission struct {
@@ -101,7 +103,29 @@ func (g *HeavyWorkGate) TryAcquireWithCooldown(cooldown time.Duration) (release 
 }
 
 func (g *HeavyWorkGate) tryAcquire(recoveryCooldown time.Duration) (release func(), ok bool) {
+	return g.tryAcquireReserved(recoveryCooldown, nil)
+}
+
+func (g *HeavyWorkGate) tryAcquireReserved(recoveryCooldown time.Duration, owner *HeavyWorkReservation) (release func(), ok bool) {
+	if !g.reservationMu.TryLock() {
+		return nil, false
+	}
+	locked := true
+	defer func() {
+		if locked {
+			g.reservationMu.Unlock()
+		}
+	}()
 	now := g.currentTime()
+	if g.reservation != nil && !now.Before(g.reservation.expires) {
+		g.reservation = nil
+	}
+	if owner != nil && g.reservation != owner {
+		return nil, false
+	}
+	if g.reservation != nil && g.reservation != owner {
+		return nil, false
+	}
 	if g.coolingDown(now) {
 		return nil, false
 	}
@@ -113,6 +137,9 @@ func (g *HeavyWorkGate) tryAcquire(recoveryCooldown time.Duration) (release func
 			<-g.token
 			return nil, false
 		}
+		g.reservation = nil
+		g.reservationMu.Unlock()
+		locked = false
 		if admission := g.admissionCheck.Load(); admission != nil && !admission.check() {
 			<-g.token
 			return nil, false

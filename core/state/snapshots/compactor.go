@@ -315,6 +315,9 @@ func selectAlignedHistoryCompactionRunAtLeast(candidates []historyCompactionCand
 }
 
 func historyCompactionCandidates(manifest *Manifest, cfg DomainCfg) []historyCompactionCandidate {
+	// This local view never escapes or indexes an externally mutable object in
+	// place. One path index replaces two catalog scans per history segment.
+	manifest = manifestLookupView(manifest)
 	out := make([]historyCompactionCandidate, 0)
 	for _, ref := range manifest.Segments {
 		if ref.normalizedDataset() != cfg.Dataset || ref.Kind != SegmentHistory || !cfg.IsHistoryBinarySegmentPath(ref.Path) {

@@ -80,6 +80,8 @@ type Manifest struct {
 	Progress       *Progress      `json:"progress,omitempty"`
 	Segments       []SegmentRef   `json:"segments"`
 	Retired        []SegmentRef   `json:"retired,omitempty"`
+
+	lookup *manifestLookup // private immutable read views only; excluded from JSON
 }
 
 type ChainIdentity struct {
@@ -196,7 +198,9 @@ func PublishManifest(dir string, manifest *Manifest) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(manifest, "", "  ")
+	// Every publication is reread for byte-identity cache checks. Compact JSON
+	// reduces both that input and serialization work without changing its schema.
+	data, err := json.Marshal(manifest)
 	if err != nil {
 		return err
 	}
@@ -357,6 +361,7 @@ func cloneManifest(in *Manifest) *Manifest {
 		return nil
 	}
 	out := *in
+	out.lookup = nil // a detached public copy may be mutated independently
 	if in.Chain != nil {
 		chain := *in.Chain
 		out.Chain = &chain

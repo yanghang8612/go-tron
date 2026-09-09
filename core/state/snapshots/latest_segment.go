@@ -1175,7 +1175,7 @@ func OpenManagerWithChainVerificationCache(dir string, verificationCache *ChainF
 	}
 	return &Manager{
 		dir:                    dir,
-		manifest:               manifest,
+		manifest:               manifestLookupView(manifest),
 		manifestInfo:           info,
 		cache:                  make(map[string]*LatestSegment),
 		chainVerificationCache: verificationCache,
@@ -1191,7 +1191,7 @@ func OpenPinnedManager(dir string, manifest *Manifest) (*Manager, error) {
 	}
 	return &Manager{
 		dir:                    dir,
-		manifest:               cloneManifest(manifest),
+		manifest:               manifestLookupView(cloneManifest(manifest)),
 		pinned:                 true,
 		cache:                  make(map[string]*LatestSegment),
 		chainVerificationCache: NewChainFreezerVerificationCache(dir),
@@ -1203,18 +1203,7 @@ func (m *Manager) Manifest() *Manifest {
 	if err != nil || manifest == nil {
 		return nil
 	}
-	cp := *manifest
-	if manifest.Progress != nil {
-		progress := *manifest.Progress
-		cp.Progress = &progress
-	}
-	if manifest.Chain != nil {
-		chain := *manifest.Chain
-		cp.Chain = &chain
-	}
-	cp.Segments = append([]SegmentRef(nil), manifest.Segments...)
-	cp.Retired = append([]SegmentRef(nil), manifest.Retired...)
-	return &cp
+	return cloneManifest(manifest)
 }
 
 // HotPrunedThroughBlock reports the inclusive authoritative hot-history prune
@@ -1717,6 +1706,7 @@ func (m *Manager) currentManifest() (*Manifest, error) {
 		manifest = m.manifest
 	} else {
 		m.setManifestLocked(manifest, manifestInfo)
+		manifest = m.manifest
 	}
 	m.mu.Unlock()
 	return manifest, nil
@@ -1762,7 +1752,7 @@ func sameManifestFile(a, b os.FileInfo) bool {
 }
 
 func (m *Manager) setManifestLocked(manifest *Manifest, info os.FileInfo) {
-	m.manifest = manifest
+	m.manifest = manifestLookupView(manifest)
 	m.manifestInfo = info
 	m.pruneInactiveLatestCacheLocked()
 }

@@ -32,6 +32,12 @@ type V2MigrationOptions struct {
 	// default (at most eight), and one preserves the serial writer. Source,
 	// transforms, verification and durable publication remain ordered.
 	CompressionWorkers int
+	// PreparationWorkers explicitly opts into parallel Transform calls over
+	// owned input records. Zero/one retain serial Source/Transform semantics;
+	// Source itself always runs on the caller goroutine. Callers opting in must
+	// make Transform safe for independent concurrent record numbers. Batches
+	// are bounded by both records and input allocation; publication stays ordered.
+	PreparationWorkers int
 	// TimeBudget is a soft wall-clock limit. It is checked only between fully
 	// published segments, so a segment that has started is either committed
 	// through its fsync/publication boundary or rolled back by the existing
@@ -51,6 +57,7 @@ type V2MigrationOptions struct {
 	// Transform optionally rewrites a row before compression. body is the
 	// corresponding source bodies row when kind == "tx_infos", and nil for other
 	// tables. It must be deterministic because verification invokes it again.
+	// It runs concurrently only when PreparationWorkers is explicitly above one.
 	Transform func(kind string, number uint64, data, body []byte) ([]byte, error)
 	// TransactionIndexEntries enables fused immutable transaction-index
 	// construction. It is called while the bodies V1 row is already in memory,
@@ -304,15 +311,42 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				}
 				return data, nil
 			}
-			readForWrite := func(number uint64) ([]byte, error) {
-				if err := options.Context.Err(); err != nil {
-					return nil, err
-				}
+			readPrepared := func(number uint64) ([]byte, error) {
 				data, err := readSource(number)
 				if err != nil {
 					return nil, err
 				}
-				data, err = f.transformV2MigrationRecord(options, kind, number, data, sourceReader)
+				return f.transformV2MigrationRecord(options, kind, number, data, sourceReader)
+			}
+			if options.PreparationWorkers > 1 && options.Transform != nil && kind != "state_roots" {
+				prepared := newV2PreparedReader(options.Context, start, count, options.PreparationWorkers,
+					func(number uint64) ([]byte, []byte, error) {
+						data, err := readSource(number)
+						if err != nil {
+							return nil, nil, err
+						}
+						// Copy before any other source read: even bodies and receipts
+						// may share one borrowed source buffer.
+						data = bytes.Clone(data)
+						var body []byte
+						if kind == "tx_infos" {
+							body, err = sourceReader("bodies", number)
+							if err != nil {
+								return nil, nil, err
+							}
+							body = bytes.Clone(body)
+						}
+						return data, body, nil
+					}, func(number uint64, data, body []byte) ([]byte, error) {
+						return options.Transform(kind, number, data, body)
+					})
+				readPrepared = prepared.Read
+			}
+			readForWrite := func(number uint64) ([]byte, error) {
+				if err := options.Context.Err(); err != nil {
+					return nil, err
+				}
+				data, err := readPrepared(number)
 				if err != nil {
 					return nil, err
 				}
@@ -599,6 +633,8 @@ func (f *Freezer) transformV2MigrationRecord(options V2MigrationOptions, kind st
 	}
 	var body []byte
 	if kind == "tx_infos" {
+		// Source implementations may reuse a buffer across table kinds.
+		data = bytes.Clone(data)
 		var err error
 		body, err = readSource("bodies", number)
 		if err != nil {

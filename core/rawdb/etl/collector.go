@@ -252,7 +252,7 @@ func (c *Collector) LoadInterruptible(writer ethdb.KeyValueWriter, interrupted f
 	}
 	inMemory := len(c.runFiles) == 0
 	if !inMemory {
-		if err := c.spillBuffer(); err != nil {
+		if err := c.spillBufferInterruptible(interrupted); err != nil {
 			return c.stats, err
 		}
 	}
@@ -329,10 +329,14 @@ func (c *Collector) append(e entry) error {
 }
 
 func (c *Collector) spillBuffer() error {
+	return c.spillBufferInterruptible(nil)
+}
+
+func (c *Collector) spillBufferInterruptible(interrupted func() bool) error {
 	if len(c.rows) == 0 {
 		return nil
 	}
-	order, err := sortedEntryOrder(c.rows)
+	order, err := sortedEntryOrderInterruptible(c.rows, interrupted)
 	if err != nil {
 		return err
 	}
@@ -345,6 +349,7 @@ func (c *Collector) spillBuffer() error {
 	tmpName := tmp.Name()
 	ok := false
 	defer func() {
+		_ = tmp.Close()
 		if !ok {
 			_ = os.Remove(tmpName)
 		}
@@ -360,7 +365,11 @@ func (c *Collector) spillBuffer() error {
 		_ = tmp.Close()
 		return err
 	}
-	for _, row := range *order {
+	for i, row := range *order {
+		if i&4095 == 0 && interrupted != nil && interrupted() {
+			_ = tmp.Close()
+			return ErrLoadInterrupted
+		}
 		e := c.rows[row]
 		if err := writeRunEntry(w, e); err != nil {
 			_ = tmp.Close()
@@ -554,7 +563,7 @@ func (c *Collector) loadRows(applier *applier, interrupted func() bool) error {
 	if len(c.rows) == 0 {
 		return nil
 	}
-	order, err := sortedEntryOrder(c.rows)
+	order, err := sortedEntryOrderInterruptible(c.rows, interrupted)
 	if err != nil {
 		return err
 	}
@@ -593,6 +602,10 @@ func (c *Collector) loadRows(applier *applier, interrupted func() bool) error {
 // used by snapshot accessors. Equal-key rows retain sequence ordering so the
 // collector's latest-operation collapse contract is unchanged.
 func sortedEntryOrder(entries []entry) (*[]uint32, error) {
+	return sortedEntryOrderInterruptible(entries, nil)
+}
+
+func sortedEntryOrderInterruptible(entries []entry, interrupted func() bool) (*[]uint32, error) {
 	if uint64(len(entries)) > uint64(^uint32(0)) {
 		return nil, fmt.Errorf("etl: entry count %d exceeds compact sort order", len(entries))
 	}
@@ -603,10 +616,18 @@ func sortedEntryOrder(entries []entry) (*[]uint32, error) {
 		*order = (*order)[:len(entries)]
 	}
 	for i := range entries {
+		if i&4095 == 0 && interrupted != nil && interrupted() {
+			releaseEntryOrder(&order)
+			return nil, ErrLoadInterrupted
+		}
 		(*order)[i] = uint32(i)
 	}
 	if len(entries) < radixEntryOrderMin {
 		sortEntryOrderComparison(*order, entries)
+		if interrupted != nil && interrupted() {
+			releaseEntryOrder(&order)
+			return nil, ErrLoadInterrupted
+		}
 		return order, nil
 	}
 	scratch := collectorOrderScratchPool.Get().(*[]uint32)
@@ -615,8 +636,12 @@ func sortedEntryOrder(entries []entry) (*[]uint32, error) {
 	} else {
 		*scratch = (*scratch)[:len(entries)]
 	}
-	radixSortEntryOrder(*order, *scratch, entries)
+	_, err := radixSortEntryOrderWorkers(*order, *scratch, entries, entryOrderRange{hi: len(entries)}, radixEntryOrderWorkers(len(entries)), interrupted)
 	releaseEntryOrderBuffer(scratch, collectorOrderScratchPool.Put)
+	if err != nil {
+		releaseEntryOrder(&order)
+		return nil, err
+	}
 	return order, nil
 }
 
@@ -646,9 +671,9 @@ type entryOrderRange struct {
 // zero represents end-of-key and therefore sorts before every byte value,
 // preserving bytes.Compare's prefix ordering. Small partitions fall back to
 // pdqsort; all-equal terminal partitions need only order their sequence.
-func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
+func radixSortEntryOrderWorkers(order, scratch []uint32, entries []entry, initial entryOrderRange, workers int, interrupted func() bool) (int, error) {
 	stackBuffer := collectorRadixRangePool.Get().(*[]entryOrderRange)
-	stack := append((*stackBuffer)[:0], entryOrderRange{hi: len(order)})
+	stack := append((*stackBuffer)[:0], initial)
 	defer func() {
 		*stackBuffer = stack[:0]
 		if cap(*stackBuffer) <= collectorRadixRangePoolMaxCapacity {
@@ -656,10 +681,16 @@ func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
 		}
 	}()
 	for len(stack) > 0 {
+		if interrupted != nil && interrupted() {
+			return 0, ErrLoadInterrupted
+		}
 		last := len(stack) - 1
 		current := stack[last]
 		stack = stack[:last]
 		for {
+			if interrupted != nil && interrupted() {
+				return 0, ErrLoadInterrupted
+			}
 			length := current.hi - current.lo
 			if length < 2 {
 				break
@@ -671,7 +702,10 @@ func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
 			var counts [257]int
 			nonEmpty := 0
 			onlyBucket := 0
-			for _, row := range order[current.lo:current.hi] {
+			for i, row := range order[current.lo:current.hi] {
+				if i&4095 == 0 && interrupted != nil && interrupted() {
+					return 0, ErrLoadInterrupted
+				}
 				key := entries[row].key
 				bucket := 0
 				if current.depth < len(key) {
@@ -697,7 +731,10 @@ func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
 					})
 					break
 				}
-				current.depth = sharedEntryKeyPrefixDepth(order[current.lo:current.hi], entries, current.depth+1)
+				current.depth = sharedEntryKeyPrefixDepthInterruptible(order[current.lo:current.hi], entries, current.depth+1, interrupted)
+				if current.depth < 0 {
+					return 0, ErrLoadInterrupted
+				}
 				continue
 			}
 
@@ -708,7 +745,10 @@ func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
 				next += count
 			}
 			positions := starts
-			for _, row := range order[current.lo:current.hi] {
+			for i, row := range order[current.lo:current.hi] {
+				if i&4095 == 0 && interrupted != nil && interrupted() {
+					return 0, ErrLoadInterrupted
+				}
 				key := entries[row].key
 				bucket := 0
 				if current.depth < len(key) {
@@ -741,9 +781,18 @@ func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
 					})
 				}
 			}
+			if workers > 1 {
+				if groups := groupRadixEntryRanges(stack, workers); len(groups) > 1 {
+					return len(groups), runParallelRadixEntryRanges(order, scratch, entries, groups, interrupted)
+				}
+			}
 			break
 		}
 	}
+	if interrupted != nil && interrupted() {
+		return 0, ErrLoadInterrupted
+	}
+	return 0, nil
 }
 
 // sharedEntryKeyPrefixDepth skips a range's common continuation after the
@@ -752,32 +801,38 @@ func radixSortEntryOrder(order, scratch []uint32, entries []entry) {
 // longer prefix triggers the full range scan. Eight-byte comparisons avoid
 // revisiting long encoded accessor prefixes one byte and one full pass at a
 // time.
-func sharedEntryKeyPrefixDepth(order []uint32, entries []entry, start int) int {
+func sharedEntryKeyPrefixDepthInterruptible(order []uint32, entries []entry, start int, interrupted func() bool) int {
 	if len(order) < 2 {
 		return start
 	}
 	reference := entries[order[0]].key
-	depth := commonKeyPrefixDepth(reference, entries[order[len(order)-1]].key, start, len(reference))
-	if depth == start {
-		return start
+	depth := commonKeyPrefixDepthInterruptible(reference, entries[order[len(order)-1]].key, start, len(reference), interrupted)
+	if depth <= start {
+		return depth
 	}
-	depth = commonKeyPrefixDepth(reference, entries[order[len(order)/2]].key, start, depth)
-	if depth == start {
-		return start
+	depth = commonKeyPrefixDepthInterruptible(reference, entries[order[len(order)/2]].key, start, depth, interrupted)
+	if depth <= start {
+		return depth
 	}
-	for _, row := range order[1:] {
-		depth = commonKeyPrefixDepth(reference, entries[row].key, start, depth)
-		if depth == start {
-			return start
+	for i, row := range order[1:] {
+		if i&255 == 0 && interrupted != nil && interrupted() {
+			return -1
+		}
+		depth = commonKeyPrefixDepthInterruptible(reference, entries[row].key, start, depth, interrupted)
+		if depth <= start {
+			return depth
 		}
 	}
 	return depth
 }
 
-func commonKeyPrefixDepth(left, right []byte, start, limit int) int {
+func commonKeyPrefixDepthInterruptible(left, right []byte, start, limit int, interrupted func() bool) int {
 	limit = min(limit, len(right))
 	index := start
 	for index+8 <= limit {
+		if (index-start)&4095 == 0 && interrupted != nil && interrupted() {
+			return -1
+		}
 		difference := binary.LittleEndian.Uint64(left[index:index+8]) ^ binary.LittleEndian.Uint64(right[index:index+8])
 		if difference != 0 {
 			return index + bits.TrailingZeros64(difference)/8

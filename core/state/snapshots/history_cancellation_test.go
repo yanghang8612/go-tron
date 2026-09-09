@@ -187,9 +187,16 @@ func TestHistoryV6BuildCancelsDuringETL(t *testing.T) {
 					if got := build.keys.Stats().SpilledRuns > 0; got != spill {
 						t.Fatalf("dictionary spilled=%v, want %v", got, spill)
 					}
-					err = build.FinishDictionaryContext(historyCancelAfterChecks(t, 6))
-					if build.keyCount == 0 || build.keys == nil {
-						t.Fatal("did not cancel in the middle of dictionary ETL")
+					parent, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					// Observe actual dictionary output, not the number of stop
+					// checks made by sorting or disk-run preparation beforehand.
+					ctx := &historyCancelCheckContext{Context: parent, cancel: cancel, check: func() bool {
+						return build.keyCount >= records/2
+					}}
+					err = build.FinishDictionaryContext(ctx)
+					if build.keyCount < records/2 || build.keyCount >= records || build.keys == nil {
+						t.Fatalf("did not cancel in the middle of dictionary ETL: keys=%d", build.keyCount)
 					}
 				} else {
 					if err := build.FinishDictionary(); err != nil {
@@ -203,9 +210,21 @@ func TestHistoryV6BuildCancelsDuringETL(t *testing.T) {
 					if got := build.postings.Stats().SpilledRuns > 0; got != spill {
 						t.Fatalf("postings spilled=%v, want %v", got, spill)
 					}
-					_, _, err = build.BuildAccessorContext(historyCancelAfterChecks(t, 6), dir, SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: 1, ToTxNum: records, Path: "history/test.kv"}, records)
-					if build.postings == nil {
-						t.Fatal("did not cancel before posting ETL completed")
+					parent, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					var appliedAtCancel uint64
+					ctx := &historyCancelCheckContext{Context: parent, cancel: cancel, check: func() bool {
+						// Interrupted loads restore their statistics, so retain the
+						// observed output progress at the cancellation boundary.
+						if applied := build.postings.Stats().Applied; applied >= records/2 {
+							appliedAtCancel = applied
+							return true
+						}
+						return false
+					}}
+					_, _, err = build.BuildAccessorContext(ctx, dir, SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccessor, FromTxNum: 1, ToTxNum: records, Path: "history/test.kv"}, records)
+					if appliedAtCancel < records/2 || appliedAtCancel >= records || build.postings == nil {
+						t.Fatalf("did not cancel in the middle of posting ETL: applied=%d", appliedAtCancel)
 					}
 				}
 				if !errors.Is(err, context.Canceled) {

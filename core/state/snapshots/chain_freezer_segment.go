@@ -1047,6 +1047,14 @@ func chainFreezerRefs(manifest *Manifest) []SegmentRef {
 	if manifest == nil {
 		return nil
 	}
+	if manifest.lookup != nil {
+		refs := make([]SegmentRef, len(manifest.lookup.freezer))
+		for i, row := range manifest.lookup.freezer {
+			refs[i] = manifest.Segments[row]
+		}
+		// Callers may reorder the returned slice; never expose index storage.
+		return refs
+	}
 	refs := make([]SegmentRef, 0)
 	for _, ref := range manifest.Segments {
 		if ref.Kind != SegmentChainFreezer || ref.normalizedDataset() != SegmentDatasetChainFreezer {
@@ -1055,15 +1063,19 @@ func chainFreezerRefs(manifest *Manifest) []SegmentRef {
 		refs = append(refs, ref)
 	}
 	sort.Slice(refs, func(i, j int) bool {
-		if refs[i].ToTxNum != refs[j].ToTxNum {
-			return refs[i].ToTxNum > refs[j].ToTxNum
-		}
-		if refs[i].FromTxNum != refs[j].FromTxNum {
-			return refs[i].FromTxNum > refs[j].FromTxNum
-		}
-		return refs[i].Path < refs[j].Path
+		return chainFreezerRefLess(refs[i], refs[j])
 	})
 	return refs
+}
+
+func chainFreezerRefLess(a, b SegmentRef) bool {
+	if a.ToTxNum != b.ToTxNum {
+		return a.ToTxNum > b.ToTxNum
+	}
+	if a.FromTxNum != b.FromTxNum {
+		return a.FromTxNum > b.FromTxNum
+	}
+	return a.Path < b.Path
 }
 
 func writeChainFreezerHeader(w io.Writer, fromBlock, toBlock, count uint64) error {

@@ -618,20 +618,13 @@ func (cfg DomainCfg) HistoryAccessorRef(manifest *Manifest, historyRef SegmentRe
 }
 
 func (cfg DomainCfg) historyCompanionRef(manifest *Manifest, historyRef SegmentRef, kind SegmentKind, wantPath string) (SegmentRef, bool) {
-	if manifest == nil || wantPath == "" {
-		return SegmentRef{}, false
-	}
-	for _, ref := range manifest.Segments {
-		if ref.normalizedDataset() == cfg.Dataset &&
+	return findManifestRef(manifest, wantPath, func(ref SegmentRef) bool {
+		return ref.normalizedDataset() == cfg.Dataset &&
 			ref.Kind == kind &&
 			ref.FromTxNum == historyRef.FromTxNum &&
 			ref.ToTxNum == historyRef.ToTxNum &&
-			ref.effectiveAggregationSteps() == historyRef.effectiveAggregationSteps() &&
-			ref.Path == wantPath {
-			return ref, true
-		}
-	}
-	return SegmentRef{}, false
+			ref.effectiveAggregationSteps() == historyRef.effectiveAggregationSteps()
+	})
 }
 
 type TxRange struct {
