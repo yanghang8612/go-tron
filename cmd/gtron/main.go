@@ -1144,6 +1144,7 @@ func gtron(ctx *cli.Context) error {
 	retiredPruneLifecycleWired := false
 	heavyWorkGate := maintenance.NewHeavyWorkGateWithCooldownAfter(heavyWorkRecoveryCooldown, heavyWorkCooldownMinDuration)
 	historyLoadProbe := makeRuntimeHistoryLoad(db, dbPath)
+	historyParallelReady := makeRuntimeHistoryParallelReady()
 	heavyWorkGate.SetAdmissionCheck(func() bool {
 		return !historyLoadProbe().HardLimitReached(time.Now())
 	})
@@ -1233,6 +1234,7 @@ func gtron(ctx *cli.Context) error {
 				CatchupBuildMinInterval:     snapshotCatchupBuildInterval,
 				HistoryCatchupMode:          historyCatchupMode,
 				HistoryLoadProbe:            historyLoadProbe,
+				ParallelHistoryEventReady:   historyParallelReady,
 				CatchupUnthrottledLagBlocks: prunePolicy.HistoryWindow,
 				CatchupHeavyWorkCooldown:    snapshotCatchupHeavyWorkCooldown,
 				HeavyWorkGate:               heavyWorkGate,

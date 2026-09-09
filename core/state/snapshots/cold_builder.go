@@ -104,6 +104,11 @@ type Config struct {
 	// application rows. Throughput uses it to size online work by observed
 	// density; hard write pressure also protects all other cold build paths.
 	HistoryLoadProbe func() maintenance.StoragePressure
+	// ParallelHistoryEventReady permits two independent builders only when a
+	// bounded, concurrency-safe probe observes fresh CPU and memory headroom.
+	// Nil preserves serial construction. Storage, sync and shared-lease checks
+	// apply independently; this callback never grants maintenance admission.
+	ParallelHistoryEventReady func() bool
 	// CatchupUnthrottledLagBlocks bypasses CatchupBuildMinInterval while sync is
 	// active, importer admission is ready, and more than this many complete
 	// hot-history blocks are ready to be published. Each build remains bounded by
@@ -271,8 +276,11 @@ type PassResult struct {
 	// before the first potentially expensive history read. It remains set when a
 	// later build/publish/stage operation fails.
 	HistoryBuildAttempted bool
-	HistoryDebtBlocks     uint64
-	HistoryDebtGrowth     int64
+	// HistoryEventParallel describes the last admitted build topology. Individual
+	// history/event durations overlap; BuildDuration remains their actual wall time.
+	HistoryEventParallel bool
+	HistoryDebtBlocks    uint64
+	HistoryDebtGrowth    int64
 	// HistoryMinRecovery is the importer-only recovery window selected after a
 	// forced-busy build. It is used by the next admission and for duty-cycle
 	// observability.
@@ -673,6 +681,7 @@ type Runner struct {
 	completedMaintenanceID    uint64 // guarded by passMu
 	pendingMaintenanceID      uint64 // guarded by passMu; blocks new passes during outer work
 	historyLoad               historyLoadState
+	historyEventMetrics       historyEventBuildMetrics
 	compactionBudget          historyCompactionBudgetState
 
 	lastSuccessfulForcedAt        atomic.Int64
@@ -696,13 +705,14 @@ func NewRunner(chain ChainSource, cfg Config) *Runner {
 	cfg = cfg.applyDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	runner := &Runner{
-		chain:   chain,
-		cfg:     cfg,
-		metrics: newColdRunnerMetrics(cfg.MetricsNamespace),
-		quit:    make(chan struct{}),
-		done:    make(chan struct{}),
-		ctx:     ctx,
-		cancel:  cancel,
+		chain:               chain,
+		cfg:                 cfg,
+		metrics:             newColdRunnerMetrics(cfg.MetricsNamespace),
+		historyEventMetrics: newHistoryEventBuildMetrics(cfg.MetricsNamespace),
+		quit:                make(chan struct{}),
+		done:                make(chan struct{}),
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 	runner.initHistoryLoadMetrics()
 	runner.updateMetrics()
@@ -1044,7 +1054,7 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 			}
 		} else {
 			phaseStart := time.Now()
-			result, err = r.onePassWithPressure(pressure)
+			result, err = r.onePassWithPressureContext(ctx, pressure)
 			result.BuildDuration = coldSnapshotPhaseDuration(phaseStart)
 		}
 		if err == nil {
@@ -1222,6 +1232,13 @@ func (r *Runner) onePass() (PassResult, error) {
 }
 
 func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, error) {
+	return r.onePassWithPressureContext(context.Background(), pressure)
+}
+
+func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure HistoryPressure) (PassResult, error) {
+	if err := ctx.Err(); err != nil {
+		return PassResult{}, err
+	}
 	if !r.cfg.Enabled {
 		return PassResult{}, nil
 	}
@@ -1435,6 +1452,9 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	if fromTxNum > toTxNum {
 		return result, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	var releaseHeavyWork func()
 	var admitted bool
 	if (result.HistoryAccelerated || result.HistoryForcedBusy) && r.cfg.CatchupHeavyWorkCooldown > 0 {
@@ -1461,6 +1481,35 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	}
 
 	var refs []SegmentRef
+	buildDerivedSidecars, buildEventLogs := false, false
+	var chainDB *rawdb.ChainDB
+	planDerived := func(syncActive bool) (derived, events bool) {
+		derived = !(r.cfg.DeferDerivedSidecarsWhileSyncing && syncActive && r.derivedSidecarsConfigured())
+		events = r.cfg.BuildEventLogs && (derived || (syncActive && r.syncEventLogCatchupEnabled()))
+		return derived, events
+	}
+	prepareDerived := func(derived, events bool) error {
+		buildDerivedSidecars, buildEventLogs = derived, events
+		if !derived {
+			result.DerivedSidecarsDeferred = true
+			result.DerivedSidecarsPending = true
+		}
+		if (derived && r.cfg.BuildBalanceTraces) || events {
+			var err error
+			chainDB, err = r.derivedIndexChainDB()
+			return err
+		}
+		return nil
+	}
+	buildHistory := func() ([]SegmentRef, error) {
+		if historyCfg.BuildHistoryBlockRange != nil {
+			return historyCfg.BuildHistoryBlockRange(db, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, historyCfg.HistoryPath(fromTxNum, toTxNum))
+		}
+		return historyCfg.BuildHistory(db, r.cfg.Dir, fromTxNum, toTxNum, historyCfg.HistoryPath(fromTxNum, toTxNum))
+	}
+	buildEvents := func() ([]SegmentRef, error) {
+		return buildEventLogPairFromChain(chainDB, r.cfg.Dir, startBlock, cutoffBlock, EventLogBuildOptions{Version: r.cfg.EventLogVersion, ETL: r.cfg.ETL})
+	}
 	historyBuildStarted := time.Now()
 	buildBlocks := cutoffBlock - startBlock + 1
 	buildTxs := toTxNum - fromTxNum + 1
@@ -1494,11 +1543,28 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	}
 	buildProgress := startColdSnapshotBuildProgress(r.cfg.HistoryDataset, fromTxNum, toTxNum, startBlock, cutoffBlock, result.EligibleCutoffBlock, 0)
 	defer buildProgress.Stop()
-	if historyCfg.BuildHistoryBlockRange != nil {
-		refs, err = historyCfg.BuildHistoryBlockRange(db, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, historyCfg.HistoryPath(fromTxNum, toTxNum))
+	var historyOutput, eventOutput coldSnapshotBuildOutput
+	plannedDerived, plannedEvents := planDerived(r.historySyncBudgetActive())
+	if r.parallelHistoryEventReady(plannedEvents, plannedDerived, time.Now()) {
+		// Only an admitted pair plans derived work before history. Serial work
+		// retains its post-history sync observation and does not require a
+		// ChainDB when history fails or yields no output.
+		if err := prepareDerived(plannedDerived, plannedEvents); err != nil {
+			return result, err
+		}
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		result.HistoryEventParallel = true
+		buildProgress.SetPhase("history+event-log")
+		historyOutput, eventOutput, err = buildHistoryEventFiles(ctx, buildHistory, buildEvents)
 	} else {
-		refs, err = historyCfg.BuildHistory(db, r.cfg.Dir, fromTxNum, toTxNum, historyCfg.HistoryPath(fromTxNum, toTxNum))
+		historyOutput = buildColdSnapshotFiles(buildHistory)
+		err = errors.Join(historyOutput.err, ctx.Err())
 	}
+	refs = historyOutput.refs
+	result.HistoryDuration = historyOutput.duration
+	result.EventLogDuration = eventOutput.duration
 	if err != nil {
 		coldSnapshotLog.Warn("History cold snapshot build failed",
 			"dataset", r.cfg.HistoryDataset,
@@ -1513,7 +1579,6 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	if len(refs) == 0 {
 		return result, nil
 	}
-	result.HistoryDuration = time.Since(historyBuildStarted)
 	historyRefs := len(refs)
 	historyBytes := segmentRefsSize(refs)
 	coldSnapshotLog.Debug("History cold snapshot history files built",
@@ -1526,26 +1591,13 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 		"bytes", historyBytes,
 		"elapsed", result.HistoryDuration.Round(time.Millisecond))
 	buildProgress.SetPhase("prepare-derived")
-	aggregator := NewAggregator(r.cfg.Dir)
-	buildDerivedSidecars := true
-	syncActive := r.historySyncBudgetActive()
-	if r.cfg.DeferDerivedSidecarsWhileSyncing && syncActive && r.derivedSidecarsConfigured() {
-		buildDerivedSidecars = false
-		result.DerivedSidecarsDeferred = true
-		result.DerivedSidecarsPending = true
-	}
-	// When V2 receipts externalize logs, a new history range must carry its
-	// event-log sidecar in the same admitted lease. Older event gaps are drained
-	// before history admission by OnePassContext; keeping the new boundary
-	// aligned avoids alternating history/event leases forever near the tip.
-	buildEventLogs := r.cfg.BuildEventLogs && (buildDerivedSidecars || (syncActive && r.syncEventLogCatchupEnabled()))
-	var chainDB *rawdb.ChainDB
-	if (buildDerivedSidecars && r.cfg.BuildBalanceTraces) || buildEventLogs {
-		chainDB, err = r.derivedIndexChainDB()
-		if err != nil {
+	if !result.HistoryEventParallel {
+		derived, events := planDerived(r.historySyncBudgetActive())
+		if err := prepareDerived(derived, events); err != nil {
 			return result, err
 		}
 	}
+	aggregator := NewAggregator(r.cfg.Dir)
 	balanceTraceBuilt := false
 	if buildDerivedSidecars && r.cfg.BuildBalanceTraces {
 		buildProgress.SetPhase("balance-trace")
@@ -1563,12 +1615,18 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	eventLogBuilt := false
 	var eventLogRef, eventLogIndexRef SegmentRef
 	if buildEventLogs {
-		buildProgress.SetPhase("event-log")
-		eventLogStarted := time.Now()
-		eventRefs, err := buildEventLogPairFromChain(chainDB, r.cfg.Dir, startBlock, cutoffBlock, EventLogBuildOptions{Version: r.cfg.EventLogVersion, ETL: r.cfg.ETL})
-		if err != nil {
-			return result, err
+		if !result.HistoryEventParallel {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
+			buildProgress.SetPhase("event-log")
+			eventOutput = buildColdSnapshotFiles(buildEvents)
+			result.EventLogDuration = eventOutput.duration
+			if eventOutput.err != nil {
+				return result, eventOutput.err
+			}
 		}
+		eventRefs := eventOutput.refs
 		eventLogRef, eventLogIndexRef, err = eventLogBuildCompanions(eventRefs)
 		if err != nil {
 			return result, err
@@ -1578,7 +1636,6 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 		// Existing adjacent indexes remain active in the manifest; rebuilding a
 		// chain-wide index on every catch-up step makes historical sync quadratic.
 		eventLogBuilt = true
-		result.EventLogDuration = coldSnapshotPhaseDuration(eventLogStarted)
 	}
 	sectionBloomBuilt := false
 	if buildDerivedSidecars && r.cfg.BuildSectionBlooms {
@@ -1593,6 +1650,11 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 			sectionBloomBuilt = true
 		}
 		result.SectionBloomDuration = coldSnapshotPhaseDuration(sectionBloomStarted)
+	}
+	// Existing builders finish their bounded work before returning cancellation.
+	// Never publish after observing parent cancellation, even if both files exist.
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
 	buildProgress.SetPhase("publish")
 	publishStarted := time.Now()
@@ -1691,6 +1753,7 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		"txs", txs,
 		"totalBytes", totalBytes,
 		"historyElapsed", result.HistoryDuration.Round(time.Millisecond),
+		"historyEventParallel", result.HistoryEventParallel,
 		"eventLogElapsed", result.EventLogDuration.Round(time.Millisecond),
 		"publishElapsed", result.PublishDuration.Round(time.Millisecond),
 		"elapsed", elapsed.Round(time.Millisecond),
@@ -2641,6 +2704,7 @@ func nextSectionBloomCatchupRange(manifest *Manifest, cutoffBlock uint64) (coldS
 }
 
 func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
+	r.historyEventMetrics.record(result)
 	completedAt := time.Now()
 	r.passesCompleted.Add(1)
 	if passErr != nil {
