@@ -125,12 +125,12 @@ func TestDirectV2PreparationRejectsBadRecordWithoutPublishing(t *testing.T) {
 	}
 }
 
-// Both configurations use the same protobuf corpus, dictionary and frame
+// All configurations use the same protobuf corpus, dictionary and frame
 // compression workers. This measures preparation parallelism within complete
 // three-table migration (including verification/fsync/manifest), not Pebble I/O.
 func BenchmarkDirectV2PreparedMigration(b *testing.B) {
 	chain := newDirectV2PreparedFixture(b, 1024, 48)
-	for _, workers := range []int{1, 4} {
+	for _, workers := range []int{1, 4, 8} {
 		b.Run(fmt.Sprintf("workers_%d", workers), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
