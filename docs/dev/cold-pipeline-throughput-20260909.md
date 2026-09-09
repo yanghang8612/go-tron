@@ -108,11 +108,11 @@ ETL 基准不含收集、spill I/O、merge、Pebble 写入；新单 worker 随�
 
 原始全仓结果保留在 [full-test.txt](../../build/benchmarks/20260909-cold-pipeline/full-test.txt)，完整 snapshots 复验见 [snapshots-final-package.log](../../build/benchmarks/20260909-cold-pipeline/snapshots-final-package.log)，取消验证见 [etl-cancellation-race.log](../../build/benchmarks/20260909-cold-pipeline/etl-cancellation-race.log)。这里记录的是首轮通过的 53 包加失败包修正后的完整复验，未把首轮末尾的 `FAIL` 改写成单次全仓命令通过。
 
-服务器使用 sapling 构建标签完成七个相关包原生测试：`core/freezer`（9.612s）、`core/rawdb/freezer`（8.291s）、`core/rawdb/etl`（2.468s）、`core/maintenance`（0.004s）、`core/state/snapshots`（38.404s）、`core/state/pruning`（9.058s）、`cmd/gtron`（21.011s），全部通过；原生构建退出码为 0。这些验证仍不能证明固定磁盘最终可容纳全部主网历史。
+首版部署前，服务器使用 sapling 构建标签完成七个相关包原生测试：`core/freezer`（9.612s）、`core/rawdb/freezer`（8.291s）、`core/rawdb/etl`（2.468s）、`core/maintenance`（0.004s）、`core/state/snapshots`（38.404s）、`core/state/pruning`（9.058s）、`cmd/gtron`（21.011s），全部通过；原生构建退出码为 0。这些验证仍不能证明固定磁盘最终可容纳全部主网历史。
 
-## 部署身份与已完成的在线查询
+## 首版部署身份与已完成的在线查询
 
-状态：**已上线 `3c2ac2e387c5f8b84c18bc4889b18a0e0f839fa2`**。部署与原生验证证据见 [deployment-verification.json](../../build/benchmarks/20260909-cold-pipeline/deployment-verification.json)。服务器命令结果经 JumpServer 转录保存，精确进程启动标识另由 HTTP metrics 读取；本文未把转录的原生测试摘要描述成原始 stdout。
+首版 **`3c2ac2e387c5f8b84c18bc4889b18a0e0f839fa2` 已完成部署及以下观测，随后由文末的 `849a336b` 替换**。首版部署与原生验证证据见 [deployment-verification.json](../../build/benchmarks/20260909-cold-pipeline/deployment-verification.json)。服务器命令结果经 JumpServer 转录保存，精确进程启动标识另由 HTTP metrics 读取；本文未把转录的原生测试摘要描述成原始 stdout。
 
 | 部署项 | 已核对结果 |
 |---|---|
@@ -125,6 +125,8 @@ ETL 基准不含收集、spill I/O、merge、Pebble 写入；新单 worker 随�
 | 部署退出码 | 0 |
 
 北京时间 **10:59:59.827** 的早期历史查询 canary 通过，见 [genesis-canary.log](../../build/benchmarks/20260909-cold-pipeline/genesis-canary.log)：在同一新进程标识下，对预先选定账户的 2,043、2,044、2,045 高度区块 hash 与余额序列完成裁剪后核验；当时状态 published/pruned 均已达到 13,150,035。该证据只覆盖**一个账户的标量余额个例**，不能代替全部历史域或全库完整性验证。
+
+北京时间 **11:34:55.699**，首版还通过了新增冷正文与索引查询 canary，原始结果已单独保存在 [first-release-cold-verification.json](../../build/benchmarks/20260909-cold-pipeline/first-release-cold-verification.json)，避免被后续版本验证覆盖。正文选取 13,107,200、13,139,968、13,172,735，索引选取 2,646,016、2,650,112、2,654,207，逐一对比部署前保存的完整区块 RPC 对象，以及各块首笔交易的收据；**6 块、6 个所选收据全部一致**。当时正文 coverage 为 13,238,272，索引 coverage/pruned 为 4,464,640，覆盖均已越过相应选点，进程标识仍为首版。结果保留的是脚本比较通过摘要及部署前基线，没有另存比较时的全部 RPC 响应；该证据不覆盖每块全部收据或全库数据。
 
 ## 首版 3c2ac2e3 的部分在线窗口
 
@@ -145,13 +147,15 @@ ETL 基准不含收集、spill I/O、merge、Pebble 写入；新单 worker 随�
 
 首尾 state published/pruned 一致；中间 37 个点相等，一个点（11:06:08）显示 pruned 比 published 高 793 块，随后再次相等。指标读取和更新并非一个原子快照，保留此差异，不将其截为零，也不单凭该点认定裁剪越过持久化覆盖。
 
-在这 38 个点中，cold、prune、正文 V2、交易索引 errors，以及 prune checksum failed、lifecycle pass failures/recoveries 的增量均为 **0**。范围仅限所采相关子系统；全量独立快照中仍有 shadow sender-chain 的既有诊断计数，不能写成全进程所有错误计数为零，也不能跨 PID 相减。此部分窗口未形成可对齐的完整 CPU/RSS/磁盘资源验收结果，不将旧资源窗口数值套用到新进程。
+在这 38 个点中，cold、prune、正文 V2、交易索引 errors，以及 prune checksum failed、lifecycle pass failures/recoveries 的增量均为 **0**。范围仅限所采相关子系统；全量独立快照中仍有 shadow sender-chain 的既有诊断计数，不能写成全进程所有错误计数为零，也不能跨 PID 相减。
+
+服务器独立资源采样完整保留 **41 点、600.014 秒**，北京时间 **11:00:34.962—11:10:34.977**，与上述网关前沿采样的 38 点不是同一份记录。服务器摘要报告 PID 23970 的 `/proc` 启动 ticks 始终一致、无采样错误或警告；平均 CPU **3.70 / 16 核**，最大 RSS **13.06 GiB**，共享 `nvme1n1` busy **76.27%**、await **1.134 ms**、平均队列 **2.99**，读 **145.97 MiB/s**、写 **91.58 MiB/s**，文件系统 available **2,708,190,732,288 字节**。见 [first-release-resources-summary.json](../../build/benchmarks/20260909-cold-pipeline/first-release-resources-summary.json)：该文件是服务器可见 JSON 的转录，本地没有原始资源计数副本，未将其描述为独立重算。完整资源记录不能补齐网关缺失的三个前沿点。旧资源窗口仅两分钟，进程重启、缓存、高度与负载不同；重启后的较低 RSS 不证明永久内存降幅，共享盘指标和可用空间也不能全部归因于 gtron，更不能当作数据库大小或压缩率。
 
 前几个短子窗口的状态速率曾先低于、随后高于 head；最终应以上述完整可用范围为准，不能挑选局部区间证明持续回退或持续追平。旧进程与首版处于不同高度、缓存和 I/O 条件，此处是实际观察，仍不是严格同输入主网 A/B，更不是全部优化的最终线上验收。
 
 ## 第二补丁：分离索引自身等待与共享 gate 恢复期
 
-**状态：本地实现与相关测试完成，尚未部署，尚未线上验证。** 上述部署身份和 38 点数据仍只归属于首版 `3c2ac2e3`；第二补丁部署后须以新的二进制、进程身份和独立窗口追加验证，不能把两版混为一次验收。
+**状态：`849a336bf970f3f6c82927efa1c9b85760ed3b0b` 已部署，原生测试、构建及查询 canary 已通过，完整十分钟前沿窗口已采集并复核。** 上述首版部署身份、38 点前沿和独立资源数据仍只归属于 `3c2ac2e3`，不与第二补丁混为一次验收。完整采集通过不等于所有积压已经解决。
 
 首版在健康索引小批完成后，为共享 gate 安装至少 3 秒恢复期。约 0.3 秒的短批也会让其他需要 gate 的状态/正文工作共同等待。这是源码可确认的额外门控等待，值得消除；首版窗口还受到区块负载、合并和资源争用等条件影响，**不能把这一点认定为状态速率波动的唯一原因**。
 
@@ -159,4 +163,56 @@ ETL 基准不含收集、spill I/O、merge、Pebble 写入；新单 worker 随�
 
 **索引自身的等待没有缩短**：10% / 20% 工作占空比仍分别按至少 `9T` / `4T`，且至少等待 3 秒。改变的是其他维护任务何时能够竞争空闲 gate，未放大索引小批、取消共享互斥或削弱发布后才能删除的约束。
 
-第二补丁相关包复验通过：`core/freezer` 28.515s、`core/maintenance` 1.041s、`core/state/snapshots` 69.208s、`core/state/pruning` 25.565s，命令为 `go test ./core/freezer ./core/maintenance ./core/state/snapshots ./core/state/pruning -count=1 -timeout=300s`，输出见 [measured-recovery-packages.txt](../../build/benchmarks/20260909-txindex-budget/measured-recovery-packages.txt)。最终定向 race 命令 `go test -race ./core/maintenance ./core/freezer -run 'TestHeavyWork|TestTransactionIndex(SmallBatch|ReleaseRechecks|FailedBatch|Budget|ProgressLog)' -count=1 -timeout=120s` 通过（maintenance 2.029s、freezer 6.385s），覆盖真实构建错误回退、释放时压力复查、短批恢复、预约、并发与日志行为。该补丁的服务器原生验证及线上新窗口仍待访问恢复后完成。
+第二补丁相关包复验通过：`core/freezer` 28.515s、`core/maintenance` 1.041s、`core/state/snapshots` 69.208s、`core/state/pruning` 25.565s，命令为 `go test ./core/freezer ./core/maintenance ./core/state/snapshots ./core/state/pruning -count=1 -timeout=300s`，输出见 [measured-recovery-packages.txt](../../build/benchmarks/20260909-txindex-budget/measured-recovery-packages.txt)。最终定向 race 命令 `go test -race ./core/maintenance ./core/freezer -run 'TestHeavyWork|TestTransactionIndex(SmallBatch|ReleaseRechecks|FailedBatch|Budget|ProgressLog)' -count=1 -timeout=120s` 通过（maintenance 2.029s、freezer 6.385s），覆盖真实构建错误回退、释放时压力复查、短批恢复、预约、并发与日志行为。
+
+代理恢复后，服务器 sapling 七包原生复验全部通过：`core/freezer` 9.899s、`core/rawdb/freezer` 7.847s、`core/rawdb/etl` 2.360s、`core/maintenance` 0.004s、`core/state/snapshots` 32.537s、`core/state/pruning` 8.737s、`cmd/gtron` 26.993s；`native-tests.exit`、`native-build.exit` 与 `deploy.exit` 均为 0。部署事实见 [final-deployment-verification.json](../../build/benchmarks/20260909-cold-pipeline/final-deployment-verification.json)，同样区分服务器 UI 转录与 HTTP 原始指标证据。
+
+| 第二补丁部署项 | 已核对结果 |
+|---|---|
+| 切换开始，北京时间 UTC+8 | 2026-09-09 11:44:50.261 |
+| 旧进程停止 / 新进程启动 | 11:44:58.129 / 11:44:58.416（毫秒四舍五入） |
+| PID | 旧 23970 → 新 **2048** |
+| `process/start` 纳秒标识 | **1788925498428703604** |
+| 运行文件 | `/data/gtron/releases/20260909-cold-recovery-849a336b/gtron` |
+| 实际 `/proc/2048/exe` SHA-256 | `4ddacac314d42a9878312b0b32ede371fba4099973ba211b95d2f675657739b0` |
+| systemd | `MainPID=2048`，`ActiveState=active`，`ExecMainStatus=0` |
+
+旧服务停止结果为 `success`、`ExecMainStatus=0`、`inactive/dead`。新进程的精确纳秒标识与保留的 [final-start-metrics.json](../../build/benchmarks/20260909-cold-pipeline/final-start-metrics.json) 一致；SHA-256 为 64 位十六进制，来自实际运行文件。
+
+北京时间 **11:46:03.928**，第二补丁再次通过与首版相同基线的 **6 个完整区块对象及各块首笔收据**比较，见 [final-cold-canary.log](../../build/benchmarks/20260909-cold-pipeline/final-cold-canary.log)；正文 coverage 为 13,303,808，索引 coverage/pruned 为 4,694,016。同秒 **11:46:03.750** 的 [final-genesis-canary.log](../../build/benchmarks/20260909-cold-pipeline/final-genesis-canary.log) 也通过一个账户在 2,043—2,045 高度的 hash/标量余额核验，当时 state published/pruned 均为 13,345,556。两项结果均属于新进程 `1788925498428703604`；测试范围与首版相同，不能外推全库完整性。
+
+## 第二补丁的完整十分钟前沿窗口
+
+北京时间 **11:47:35.690—11:57:35.693**，完成 **41 / 41 点**、客户端单调时钟跨度 **599.980 秒**，始终为进程 `1788925498428703604`。原始 [final-window/summary.json](../../build/benchmarks/20260909-cold-pipeline/final-window/summary.json) 为 `complete`、`accepted_window=true`。分析器结果见 [independent-analysis.json](../../build/benchmarks/20260909-cold-pipeline/final-window/independent-analysis.json)；另以独立算式逐份读取 41 份 raw JSON，核对 observations 映射、进程身份、首尾、所有前沿及分析器列出的累计计数，结果见 [independent-recheck.json](../../build/benchmarks/20260909-cold-pipeline/final-window/independent-recheck.json)。未发现映射差异、前沿或累计计数回退；curl stderr 均为空。
+
+| 前沿或积压，单位：块 | 窗口开始 | 窗口结束 | 增量 |
+|---|---:|---:|---:|
+| 同步 head | 13,989,247 | 14,025,853 | +36,606 |
+| 状态 published / pruned | 13,357,730 | 13,402,414 | +44,684 |
+| `head − state published` | 631,517 | 623,439 | **−8,078** |
+| 扣除正常 65,536 块热窗口后的状态积压 | 565,981 | 557,903 | **−8,078** |
+| 正文 V2 coverage | 13,303,808 | 13,369,344 | +65,536 |
+| index coverage / pruned | 4,759,552 | 4,825,088 | +65,536 |
+| `正文 V2 coverage − index pruned` | 8,544,256 | 8,544,256 | **0** |
+
+状态 published/pruned 平均 **74.48 块/秒**，head **61.01 块/秒**，真实状态净追赶 **13.46 块/秒**。这证明状态积压在该完整窗口中收敛；尚有 623,439 块 head 差值，其中 65,536 块为正常热保留范围，不能称已追平。原始 summary 的 `net_catchup` 使用滞后的 eligible cutoff，对应差值减少 8,233 块；本文使用当前 head 的 **8,078 块**，没有混用两者。
+
+正文完成一个 65,536 块整段；发布后记录的准备 worker 为 **4**，该次 batch duration 为 **74.510 秒**。发布前 17 个采样点没有 preparation workers 指标，不能把缺失记为零。这验证了并行准备路径在线被采用及整段成功推进，但单段和 last-batch 指标不是同输入的线上提速对照。正文窗口均速 **109.23 块/秒**来自离散整段发布，不能当作长期稳定能力。
+
+索引完成 **8 个 8,192 块小批**，新增发布并删除 **5,087,421 条索引行**，也是 **109.23 块/秒**。正文与索引恰好同时增加 65,536 块，因此本窗索引债务**持平，未减少**。完成计费的索引工作耗时累计增加 **16.596 秒**，约占窗口 **2.77%**；这是维护任务墙钟工作时间，既不是 CPU 利用率，也不说明每一瞬间都达到 20% 占空比。
+
+索引在 **11:48:50** 和 **11:54:35** 的样本中分别出现 `work + recovery = 300 秒`。按 `transaction_index_budget.go` 的完成逻辑，准入后若完成时不再满足健康条件，则将该索引自身的下次机会退到至少本批开始后五分钟；**共享 gate 的恢复仍按配置默认 15 秒处理，未被索引持有 300 秒**。两次均没有相应索引错误计数增加，符合完成健康复查失败的回退路径。附近状态指标中的 compaction debt 上涨并超过 2 GiB，可作为候选压力旁证；完成时的索引探针、内部上涨次数及瞬时 L0/stall/新鲜度未导出，不能唯一归因于 compaction debt。`budget/healthy=1` 在准入时记录，也不能证明完成时仍健康。
+
+第一次五分钟回退后，**11:53:50** 已再次观察到索引 admitted 与 coverage 推进。第二次截止在本窗之后；另一个同进程的 [final-end-metrics.json](../../build/benchmarks/20260909-cold-pipeline/final-end-metrics.json) 已显示 admitted 17→18、coverage/pruned 4,825,088→4,833,280，recovery 回到 **12.864 秒**，证明其后也恢复工作。这是窗口外的离散核验，未计入上表和十分钟速率。
+
+状态发布并非没有受其他冷化工作影响：**11:50:35.692—11:52:05.692** 的可见点中 published 约 **90 秒不变**，期间 head 增加 5,674 块、正文 coverage 增加 65,536 块，状态 resource deferrals 增加 28。11:52:20 再次观察到状态推进。该时间关联支持正文工作与状态工作仍有资源竞争的判断，但仅凭采样不能确定全部停顿时长和唯一原因，不能宣称对同步或状态冷化零干扰。
+
+41 点中，cold/prune/body/index errors、prune checksum failed、lifecycle pass failures/recoveries/failure active 均为 **0**。状态 published/pruned 在 38 点相等；另三点（11:47:50、11:50:20、11:57:20）pruned 分别高于 published **859、1,070、1,207 块**，下一点均再次相等。这些 gauge 非原子且更新时机不同，保留差异；不能将其抹去，也不能单凭这些点认定热删除越过持久化覆盖。
+
+部署后服务器日志保存于 `/var/tmp/gtron-cold-recovery-20260909/post-deploy-log.txt`：从本次部署 offset 11,767,676 读取至 11,830,623，共 149 行，4 MiB 上限未截断，行首 `ERROR`、`CRIT`、`panic:`、`fatal error:` 的匹配为空。该检查来自服务器 UI 结果，未覆盖全部 WARN 分类，也不代表全进程所有诊断计数为零。窗口后同进程全量指标中的 `core/parallel_transfer` 与 `core/parallel_vm` 各 `/errors` 为零；shadow 诊断域仍须单独解释。
+
+独立服务器资源窗口为 **11:47:00.881—11:57:00.883**，41 点、600.002 秒；服务器摘要接受该资源采样，同 PID/start ticks、无错误或警告。见 [final-resources-summary.json](../../build/benchmarks/20260909-cold-pipeline/final-resources-summary.json)：进程平均 CPU **3.89 / 16 核**、最大 RSS **12.60 GiB**，共享盘 busy **77.29%**、await **1.052 ms**、平均队列 **3.16**，读 **118.25 MiB/s**、写 **87.29 MiB/s**。CPU 仍有余量，但这些数据没有证明本轮明显提高了整机 CPU 占用。该摘要来自服务器 UI 转录，本地未独立重算资源原始计数；窗口与前沿采样相差约 35 秒，共享盘还包括 MySQL 等其他进程。可用空间在此资源窗增加约 **0.796 GiB**，不能直接称为 gtron 净回收量。
+
+北京时间 **11:58:15.466** 完成的在线 `du` 见 [final-db-size.json](../../build/benchmarks/20260909-cold-pipeline/final-db-size.json)：`chaindata` **85.33 GiB（28.57%）**、`state-snapshots` **141.24 GiB（47.29%）**、`ancient` **72.08 GiB（24.13%）**，三目录合计 **298.64 GiB**。这是运行中依次扫描的占用，不是原子快照或全部 datadir 文件总量。与旧基线三目录合计相比增加 **10.26 GiB**，跨越不同高度、时段和两版进程，不能归因于最终十分钟，也不能把同步中总量增长解释为冷化失效或据此计算压缩率。
+
+本窗确认了状态积压下降、正文并行路径完成发布、索引按健康和压力条件继续工作；**索引债务没有在本窗下降，状态仍有积压，正文发布也伴随可见等待**。旧基线、首版和最终版的高度、输入、缓存与资源负载不同，不能把状态速率 68.17→74.48 块/秒直接解释为代码带来的固定百分比收益，更不能推断 20M 以后表现、全库压缩率或固定磁盘最终容量已经得到验证。
