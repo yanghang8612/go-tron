@@ -17,8 +17,9 @@ func directV2PreparationWorkers() int {
 // are read once for the receipt pass and shared by its validation and compact
 // transform; previously validation and transform each read/decode the body.
 // Calls for different record numbers may run concurrently. The migration
-// joins workers before dictionary sampling, verification and the next table,
-// so the per-number hashes are complete before state-root reads begin.
+// starts this pipeline after dictionary sampling and joins workers before
+// verification and the next table, so per-number hashes are complete before
+// state-root reads begin.
 func directV2Transform(ctx context.Context, start uint64, hashes []tcommon.Hash, externalize bool) func(string, uint64, []byte, []byte) ([]byte, error) {
 	compact := rawdb.CompactAncientV2Record
 	if externalize {

@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -41,6 +42,19 @@ func ExternalizeTransactionInfoLogs(data []byte) ([]byte, uint64, error) {
 	if err := proto.Unmarshal(data, &ret); err != nil {
 		return nil, 0, fmt.Errorf("rawdb: decode transaction ret for log externalization: %w", err)
 	}
+	return externalizeDecodedTransactionInfoLogs(data, &ret)
+}
+
+// externalizeDecodedTransactionInfoLogs consumes an exclusively owned decoded
+// row. Keep data as the wire-preserving fallback for logless or larger output;
+// the decoded message must describe these exact (possibly ID-stripped) bytes.
+func externalizeDecodedTransactionInfoLogs(data []byte, ret *corepb.TransactionRet) ([]byte, uint64, error) {
+	if len(data) == 0 {
+		return nil, 0, errors.New("rawdb: cannot externalize empty transaction ret")
+	}
+	if bytes.HasPrefix(data, []byte(transactionRetEnvelopeMagic)) {
+		return nil, 0, errors.New("rawdb: transaction ret is already enveloped")
+	}
 	var logCount uint64
 	for index, info := range ret.Transactioninfo {
 		if info == nil {
@@ -59,7 +73,7 @@ func ExternalizeTransactionInfoLogs(data []byte) ([]byte, uint64, error) {
 	if logCount == 0 {
 		return data, 0, nil
 	}
-	payload, err := proto.Marshal(&ret)
+	payload, err := proto.Marshal(ret)
 	if err != nil {
 		return nil, 0, fmt.Errorf("rawdb: encode transaction ret after log externalization: %w", err)
 	}
@@ -190,9 +204,19 @@ func hydrateExternalTransactionInfoLogs(db *ChainDB, blockNum uint64, infos []*c
 // archive. Keeping the order stable makes the envelope's payload the smallest
 // canonical protobuf representation.
 func CompactAncientV2RecordWithExternalLogs(kind string, number uint64, data, body []byte) ([]byte, error) {
-	compact, err := CompactAncientV2Record(kind, number, data, body)
-	if err != nil || kind != ancientTxInfos {
-		return compact, err
+	if kind != ancientTxInfos {
+		return data, nil
+	}
+	// Both identity checks use the same wire-derived transaction hashes. Do not
+	// replace them with typed transaction hashes: exceptional protobuf wire
+	// encodings need not hash to the same bytes after decoding and re-encoding.
+	hashes, err := transactionHashesFromBlockWire(body)
+	if err != nil {
+		return data, nil
+	}
+	compact, _, _, err := compactTransactionInfoIDsForHashes(data, hashes)
+	if err != nil {
+		compact = data
 	}
 	// Genesis is allowed to have no TransactionRet coverage. Preserve the
 	// ancient empty row; there are no logs to externalize or hydrate.
@@ -203,10 +227,14 @@ func CompactAncientV2RecordWithExternalLogs(kind string, number uint64, data, bo
 	// rows instead of rejecting a migration. Apply the same rule here: only
 	// split a receipt from its logs after re-verifying its ordinal identity
 	// against the canonical body. Any unusual row stays self-contained.
-	if !transactionInfoLogsMatchBody(number, compact, body) {
+	var ret corepb.TransactionRet
+	if err := proto.Unmarshal(compact, &ret); err != nil || !transactionInfoLogsMatchHashes(number, &ret, hashes) {
 		return compact, nil
 	}
-	external, _, err := ExternalizeTransactionInfoLogs(compact)
+	// Decode the compact result, not the original row: wire compaction preserves
+	// unusual ID fields unchanged when it cannot prove the ordinal identity.
+	// Reuse this owned graph for externalization instead of decoding it again.
+	external, _, err := externalizeDecodedTransactionInfoLogs(compact, &ret)
 	return external, err
 }
 
@@ -216,7 +244,14 @@ func transactionInfoLogsMatchBody(number uint64, data, body []byte) bool {
 		return false
 	}
 	var ret corepb.TransactionRet
-	if err := proto.Unmarshal(data, &ret); err != nil || !transactionInfoBlockNumberMatches(ret.BlockNumber, number) {
+	if err := proto.Unmarshal(data, &ret); err != nil {
+		return false
+	}
+	return transactionInfoLogsMatchHashes(number, &ret, hashes)
+}
+
+func transactionInfoLogsMatchHashes(number uint64, ret *corepb.TransactionRet, hashes [][sha256.Size]byte) bool {
+	if !transactionInfoBlockNumberMatches(ret.BlockNumber, number) {
 		return false
 	}
 	if number == 0 && len(ret.Transactioninfo) == 0 {

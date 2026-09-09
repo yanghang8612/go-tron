@@ -16,16 +16,23 @@ type transactionIndexBoundedContextKey struct{}
 type transactionIndexQuietContextKey struct{}
 
 type transactionIndexBudget struct {
-	mu               sync.Mutex
-	retry, notBefore time.Time
-	lastSample       time.Time
-	lastDebt         uint64
-	lastStalls       uint64
-	debtRises        int
-	reservation      *maintenance.HeavyWorkReservation
-	totalWork        time.Duration
-	lastProgressLog  time.Time
-	suppressedLogs   uint64
+	mu                sync.Mutex
+	retry, notBefore  time.Time // retry may inspect pressure before work is allowed
+	conservativeUntil time.Time // unknown/hard completion does not become a soft retry
+	pressureRecheck   time.Time
+	pressure          transactionIndexPressureState
+	clock             func() time.Time
+	reservation       *maintenance.HeavyWorkReservation
+	totalWork         time.Duration
+	lastProgressLog   time.Time
+	suppressedLogs    uint64
+}
+
+func (b *transactionIndexBudget) now() time.Time {
+	if b.clock != nil {
+		return b.clock()
+	}
+	return time.Now()
 }
 
 func (r *Runner) resetTransactionIndexBudget() {
@@ -34,6 +41,8 @@ func (r *Runner) resetTransactionIndexBudget() {
 	defer b.mu.Unlock()
 	b.cancelReservation()
 	b.retry = time.Time{}
+	b.pressureRecheck = time.Time{}
+	r.recordTransactionIndexWait(b.now(), txIndexWaitNone)
 }
 
 func (r *Runner) transactionIndexRetryDeadline() time.Time {
@@ -63,26 +72,8 @@ func freshTransactionIndexSample(sample, now time.Time) bool {
 	return !sample.IsZero() && age >= -time.Second && age <= 15*time.Second
 }
 
-// Require both engine and device headroom. A busy SSD with low latency is not
-// treated as saturated; stalls, L0 pressure and sustained compaction debt growth
-// use the same conservative signals as history maintenance.
 func (b *transactionIndexBudget) healthy(p maintenance.StoragePressure, now time.Time) bool {
-	if !p.Available || !freshTransactionIndexSample(p.SampledAt, now) {
-		return false
-	}
-	newStall := !b.lastSample.IsZero() && p.StallCount > b.lastStalls
-	if b.lastSample.IsZero() || p.SampledAt.Sub(b.lastSample) >= 5*time.Second || p.SampledAt.Before(b.lastSample) {
-		if !b.lastSample.IsZero() && p.CompactionDebt > b.lastDebt {
-			b.debtRises++
-		} else {
-			b.debtRises = 0
-		}
-		b.lastSample, b.lastStalls, b.lastDebt = p.SampledAt, p.StallCount, p.CompactionDebt
-	}
-	return !newStall && !p.HardLimitReached(now) &&
-		!(p.L0CompactionThreshold > 0 && p.L0Sublevels >= p.L0CompactionThreshold && p.L0Sublevels-p.L0CompactionThreshold >= p.L0CompactionThreshold) &&
-		!(b.debtRises >= 2 && p.CompactionDebt >= 2<<30) &&
-		p.DeviceAvailable && freshTransactionIndexSample(p.DeviceSampledAt, now) && p.DeviceAwait >= 0 && p.DeviceAwait <= 2*time.Millisecond
+	return b.pressure.assess(p, now) == txIndexHealthHealthy
 }
 
 func (r *Runner) transactionIndexBudgetMetric(name string, value int64) {
@@ -109,55 +100,84 @@ func (r *Runner) transactionIndexCandidate() (debt uint64, valid bool) {
 	return end - pruned, true
 }
 
-func (r *Runner) deferTransactionIndexBudget(now time.Time, wait time.Duration, reason heavyMaintenanceDeferral) {
+func (r *Runner) deferTransactionIndexBudget(now time.Time, wait time.Duration, reason heavyMaintenanceDeferral, waitReason transactionIndexWaitReason) {
 	r.txIndexBudget.retry = now.Add(max(transactionIndexRecovery, wait))
+	r.recordTransactionIndexWait(now, waitReason)
 	r.recordHeavyMaintenanceDeferred(heavyMaintenanceTxIndex, reason)
+}
+
+func (r *Runner) deferTransactionIndexPressure(now time.Time, delay time.Duration, reason transactionIndexWaitReason) {
+	b := &r.txIndexBudget
+	// Explicit requests must not keep moving an already scheduled observation
+	// farther into the future. These are probe opportunities, not work permits.
+	if !b.pressureRecheck.After(now) {
+		b.pressureRecheck = now.Add(delay)
+	}
+	r.deferTransactionIndexBudget(now, b.pressureRecheck.Sub(now), heavyMaintenanceDeferredResource, reason)
 }
 
 func (r *Runner) beginTransactionIndexBudget() (*heavyMaintenanceLease, bool) {
 	b := &r.txIndexBudget
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	now := time.Now()
+	now := b.now()
 	if failed := r.lastTxIndexMaintenanceError.Load(); failed > 0 && r.cfg.HeavyMaintenanceErrorBackoff > 0 {
 		if remaining := time.Unix(0, failed).Add(r.cfg.HeavyMaintenanceErrorBackoff).Sub(now); remaining > 0 {
 			b.cancelReservation()
-			r.deferTransactionIndexBudget(now, remaining, heavyMaintenanceDeferredErrorBackoff)
+			r.deferTransactionIndexBudget(now, max(remaining, b.notBefore.Sub(now)), heavyMaintenanceDeferredErrorBackoff, txIndexWaitError)
 			return nil, false
 		}
 	}
 	if remaining := r.startedAt.Add(r.cfg.HeavyMaintenanceStartupDelay).Sub(now); remaining > 0 {
 		b.cancelReservation()
-		r.deferTransactionIndexBudget(now, remaining, heavyMaintenanceDeferredCatchup)
+		r.deferTransactionIndexBudget(now, remaining, heavyMaintenanceDeferredCatchup, txIndexWaitStartup)
 		return nil, false
 	}
 	debt, valid := r.transactionIndexCandidate()
 	if valid && debt == 0 {
 		b.cancelReservation()
 		b.retry = time.Time{}
+		b.pressureRecheck = time.Time{}
+		r.recordTransactionIndexWait(now, txIndexWaitNone)
 		return nil, false
 	}
 	p := r.cfg.TransactionIndexLoadProbe()
-	healthy := b.healthy(p, now)
+	checkedAt := b.now()
+	reason := b.pressure.assess(p, checkedAt)
+	healthy := reason == txIndexHealthHealthy
+	r.recordTransactionIndexHealth("admission", reason, p, checkedAt)
 	if !healthy || !valid {
 		b.cancelReservation()
 	}
-	r.transactionIndexBudgetMetric("healthy", boolGaugeValue(healthy))
-	if p.HardLimitReached(now) {
-		r.deferTransactionIndexBudget(now, 30*time.Second, heavyMaintenanceDeferredResource)
+	if reason.hard() {
+		r.deferTransactionIndexPressure(now, transactionIndexHardRecheck, txIndexWaitHard)
 		return nil, false
 	}
-	deadline := b.notBefore
-	if !healthy {
+	if reason.unknown() || !valid {
 		if last := r.lastTxIndexCatchupMaintenance.Load(); last > 0 {
-			deadline = maxTime(deadline, time.Unix(0, last).Add(r.cfg.CatchupMaintenanceInterval))
+			b.conservativeUntil = maxTime(b.conservativeUntil, time.Unix(0, last).Add(r.cfg.CatchupMaintenanceInterval))
 		}
 	}
-	if now.Before(deadline) {
-		b.cancelReservation()
-		r.deferTransactionIndexBudget(now, deadline.Sub(now), heavyMaintenanceDeferredCatchup)
+	if reason.soft() {
+		r.deferTransactionIndexPressure(now, transactionIndexPressureRecheck, txIndexWaitSoft)
 		return nil, false
 	}
+	deadline := maxTime(b.notBefore, b.conservativeUntil)
+	if now.Before(deadline) {
+		b.cancelReservation()
+		if reason.unknown() {
+			r.deferTransactionIndexPressure(now, transactionIndexHardRecheck, txIndexWaitConservative)
+		} else {
+			b.pressureRecheck = time.Time{}
+			waitReason := txIndexWaitWork
+			if b.conservativeUntil.After(b.notBefore) {
+				waitReason = txIndexWaitConservative
+			}
+			r.deferTransactionIndexBudget(now, deadline.Sub(now), heavyMaintenanceDeferredCatchup, waitReason)
+		}
+		return nil, false
+	}
+	b.pressureRecheck = time.Time{}
 	var release func()
 	var ok bool
 	// Default to conservative recovery until the complete batch has finished
@@ -191,13 +211,15 @@ func (r *Runner) beginTransactionIndexBudget() (*heavyMaintenanceLease, bool) {
 		} else if healthy && valid && !b.reservation.Active() {
 			b.reservation = r.cfg.HeavyWorkGate.ReserveNext(10 * time.Second)
 		}
-		r.deferTransactionIndexBudget(now, wait, heavyMaintenanceDeferredResource)
+		r.deferTransactionIndexBudget(now, wait, heavyMaintenanceDeferredResource, txIndexWaitGate)
 		return nil, false
 	}
 	b.cancelReservation()
 	r.lastTxIndexCatchupMaintenance.Store(now.UnixNano())
 	r.txIndexMaintenanceAdmitted.Add(1)
 	r.updateMetrics()
+	b.retry = time.Time{}
+	r.recordTransactionIndexWait(now, txIndexWaitNone)
 	// One leaf owns the gate. Debt affects its duty target, never its atomic
 	// range or the amount of work that can run without giving other jobs a turn.
 	duty := uint64(100_000)
@@ -207,23 +229,63 @@ func (r *Runner) beginTransactionIndexBudget() (*heavyMaintenanceLease, bool) {
 	r.transactionIndexBudgetMetric("duty_ppm", int64(duty))
 	ctx := context.WithValue(r.pauseCtx, transactionIndexBoundedContextKey{}, true)
 	ctx = context.WithValue(ctx, transactionIndexQuietContextKey{}, healthy && valid)
+	var once sync.Once
 	return &heavyMaintenanceLease{ctx: ctx, release: func() {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		completed := time.Now()
-		work := completed.Sub(now)
-		b.totalWork += work
-		wait := transactionIndexWorkRecovery(work, duty)
-		healthyAtRelease = healthy && valid && r.lastTxIndexMaintenanceError.Load() == 0 && b.healthy(r.cfg.TransactionIndexLoadProbe(), completed)
-		if !healthyAtRelease {
-			wait = max(wait, now.Add(r.cfg.CatchupMaintenanceInterval).Sub(completed))
-		}
-		b.notBefore = completed.Add(wait)
-		b.retry = b.notBefore
-		r.transactionIndexBudgetMetric("last_work_duration", int64(work))
-		r.transactionIndexBudgetMetric("total_work_duration", int64(b.totalWork))
-		r.transactionIndexBudgetMetric("recovery_duration", int64(wait))
-		release()
+		once.Do(func() {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			// Even an exceptional completion probe must not leak the gate token.
+			defer release()
+			completed := b.now()
+			endPressure := maintenance.StoragePressure{}
+			endReason := txIndexHealthWorkError
+			failed := r.lastTxIndexMaintenanceError.Load()
+			if failed == 0 {
+				endPressure = r.cfg.TransactionIndexLoadProbe()
+				completed = b.now()
+				endReason = b.pressure.assess(endPressure, completed)
+				if !valid {
+					endReason = txIndexHealthCandidateUnknown
+				}
+			}
+			// Charge the final health probe too, and assess freshness after it
+			// returns rather than against a timestamp from before a slow read.
+			work := max(0, completed.Sub(now))
+			b.totalWork += work
+			b.notBefore = completed.Add(transactionIndexWorkRecovery(work, duty))
+			healthyAtRelease = healthy && valid && endReason == txIndexHealthHealthy
+			r.recordTransactionIndexHealth("completion", endReason, endPressure, completed)
+			if reason.unknown() || !valid || endReason.unknown() || endReason.hard() || failed > 0 {
+				b.conservativeUntil = maxTime(b.conservativeUntil, now.Add(r.cfg.CatchupMaintenanceInterval))
+			}
+			b.retry = maxTime(b.notBefore, b.conservativeUntil)
+			waitReason := txIndexWaitWork
+			if b.conservativeUntil.After(b.notBefore) {
+				waitReason = txIndexWaitConservative
+			}
+			switch {
+			case failed > 0 && r.cfg.HeavyMaintenanceErrorBackoff > 0:
+				b.retry = maxTime(b.retry, time.Unix(0, failed).Add(r.cfg.HeavyMaintenanceErrorBackoff))
+				waitReason = txIndexWaitError
+			case endReason.soft():
+				b.pressureRecheck = completed.Add(transactionIndexPressureRecheck)
+				b.retry, waitReason = b.pressureRecheck, txIndexWaitSoft
+			case endReason.unknown() || endReason.hard():
+				b.pressureRecheck = completed.Add(transactionIndexHardRecheck)
+				b.retry, waitReason = b.pressureRecheck, txIndexWaitConservative
+				if endReason.hard() {
+					waitReason = txIndexWaitHard
+				}
+			default:
+				b.pressureRecheck = time.Time{}
+			}
+			r.transactionIndexBudgetMetric("last_work_duration", int64(work))
+			r.transactionIndexBudgetMetric("total_work_duration", int64(b.totalWork))
+			// Preserve the old duration gauge as the effective work floor. The
+			// separately named wait metrics describe the earlier probe timer.
+			r.transactionIndexBudgetMetric("recovery_duration", int64(max(0, maxTime(b.notBefore, b.conservativeUntil).Sub(completed))))
+			r.recordTransactionIndexWait(completed, waitReason)
+		})
 	}}, true
 }
 

@@ -815,10 +815,6 @@ func writeV2SegmentProfileWithWorkers(path string, start, count uint64, frameBlo
 		}
 		return first, records, nil
 	}
-	first, records, err := readFrame()
-	if err != nil {
-		return err
-	}
 	var (
 		dictionary         []byte
 		dictionaryChecksum uint32
@@ -836,6 +832,13 @@ func writeV2SegmentProfileWithWorkers(path string, start, count uint64, frameBlo
 			// codec for only those segments.
 			codec = v2CodecBodiesRawDict
 		}
+	}
+	// Training invokes the serial source/transform independently. Finish it
+	// before readFrame can start the prepared reader's background producer.
+	// The raw-dictionary fallback still uses the unchanged first frame below.
+	first, records, err := readFrame()
+	if err != nil {
+		return err
 	}
 	if codec == v2CodecBodiesRawDict {
 		dictionaryLen := len(buffer)
@@ -925,8 +928,8 @@ func writeV2SegmentProfileWithWorkers(path string, start, count uint64, frameBlo
 			return zstd.NewWriter(nil, opts...)
 		}
 		readNextFrame := func(reusable []byte) (v2RawFrame, error) {
-			// Source/Transform/ETL remain sequential. Ownership of this frame's
-			// buffer passes to the encoder until its ordered write completes.
+			// Prepared-record delivery and ETL remain ordered. Ownership of this
+			// frame's buffer passes to its encoder until the ordered write completes.
 			buffer = reusable[:0]
 			first, records, err := readFrame()
 			return v2RawFrame{first: first, records: records, data: buffer}, err

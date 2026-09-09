@@ -46,8 +46,11 @@ func TestTransactionIndexBudgetReplacesFixedCapAndRetainsUnknownFallback(t *test
 	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || changed {
 		t.Fatalf("unknown engine/device was accelerated: %t/%v", changed, err)
 	}
-	if wait := time.Until(r.txIndexBudget.retry); wait < 4*time.Minute {
-		t.Fatalf("unknown sample lost conservative interval: %s", wait)
+	if wait := time.Until(r.txIndexBudget.conservativeUntil); wait < 4*time.Minute {
+		t.Fatalf("unknown sample lost conservative work interval: %s", wait)
+	}
+	if wait := time.Until(r.txIndexBudget.retry); wait > transactionIndexHardRecheck {
+		t.Fatalf("unknown sample did not schedule a bounded observation: %s", wait)
 	}
 }
 
@@ -305,8 +308,11 @@ func TestTransactionIndexReleaseRechecksPressureBeforeReducingGlobalRecovery(t *
 			if remaining := gate.CooldownRemaining(); remaining < 5*time.Second || remaining > 7*time.Second {
 				t.Fatalf("completion pressure lost configured default: %s", remaining)
 			}
-			if wait := time.Until(r.transactionIndexRetryDeadline()); wait < 4*time.Minute {
-				t.Fatalf("completion pressure removed conservative index wait: %s", wait)
+			if wait := time.Until(r.txIndexBudget.conservativeUntil); wait < 4*time.Minute {
+				t.Fatalf("completion pressure removed conservative index work wait: %s", wait)
+			}
+			if wait := time.Until(r.transactionIndexRetryDeadline()); wait > transactionIndexHardRecheck {
+				t.Fatalf("completion pressure did not schedule a bounded observation: %s", wait)
 			}
 		})
 	}

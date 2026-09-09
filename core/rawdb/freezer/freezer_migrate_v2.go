@@ -29,14 +29,16 @@ type V2MigrationOptions struct {
 	FrameBlocks   uint32
 	MaxSegments   uint64
 	// CompressionWorkers bounds independent frame encoders; zero uses the CPU
-	// default (at most eight), and one preserves the serial writer. Source,
-	// transforms, verification and durable publication remain ordered.
+	// default (at most eight), and one preserves the serial frame encoder. Source
+	// reads and record delivery remain ordered; PreparationWorkers controls CPU
+	// transforms. Verification and durable publication follow the joined writer.
 	CompressionWorkers int
 	// PreparationWorkers explicitly opts into parallel Transform calls over
 	// owned input records. Zero/one retain serial Source/Transform semantics;
-	// Source itself always runs on the caller goroutine. Callers opting in must
-	// make Transform safe for independent concurrent record numbers. Batches
-	// are bounded by both records and input allocation; publication stays ordered.
+	// Source remains serial, on a dedicated producer when preparing in parallel.
+	// Callers opting in must make Transform safe for independent concurrent record
+	// numbers. In-flight records and input allocations are bounded; publication
+	// stays ordered and all producer/workers join before verification or return.
 	PreparationWorkers int
 	// TimeBudget is a soft wall-clock limit. It is checked only between fully
 	// published segments, so a segment that has started is either committed
@@ -318,8 +320,9 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				}
 				return f.transformV2MigrationRecord(options, kind, number, data, sourceReader)
 			}
+			var prepared *v2PreparedReader
 			if options.PreparationWorkers > 1 && options.Transform != nil && kind != "state_roots" {
-				prepared := newV2PreparedReader(options.Context, start, count, options.PreparationWorkers,
+				prepared = newV2PreparedReader(options.Context, start, count, options.PreparationWorkers,
 					func(number uint64) ([]byte, []byte, error) {
 						data, err := readSource(number)
 						if err != nil {
@@ -388,9 +391,18 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				return f.transformV2MigrationRecord(options, kind, number, data, sourceReader)
 			}
 			unpublished = append(unpublished, path)
-			if err := writeV2TableSegmentWithWorkers(path, kind, start, count, options.FrameBlocks, readForWrite, readExpected, options.CompressionWorkers); err != nil {
+			writeErr := func() error {
+				if prepared != nil {
+					// Writer errors (including frame/ETL/fsync failures) may leave
+					// prefetched work. Join it before verification, file cleanup or
+					// any subsequent table can use the same Source/Transform.
+					defer prepared.Close()
+				}
+				return writeV2TableSegmentWithWorkers(path, kind, start, count, options.FrameBlocks, readForWrite, readExpected, options.CompressionWorkers)
+			}()
+			if writeErr != nil {
 				cleanupUnpublished()
-				return result, fmt.Errorf("write ancient V2 %s segment %d: %w", kind, start, err)
+				return result, fmt.Errorf("write ancient V2 %s segment %d: %w", kind, start, writeErr)
 			}
 			if err := verifyV2Segment(options.Context, path, kind, start, count, readExpected); err != nil {
 				cleanupUnpublished()
