@@ -160,12 +160,22 @@ func (r *Runner) beginTransactionIndexBudget() (*heavyMaintenanceLease, bool) {
 	}
 	var release func()
 	var ok bool
+	// Default to conservative recovery until the complete batch has finished
+	// and its pressure sample has been checked again. The gate measures this
+	// lease directly, so the first unusually large leaf cannot be underestimated.
+	healthyAtRelease := false
+	recoveryPolicy := func(held, defaultCooldown time.Duration) time.Duration {
+		if healthyAtRelease {
+			return min(transactionIndexRecovery, held)
+		}
+		return defaultCooldown
+	}
 	if healthy && valid {
 		if b.reservation.Active() {
-			release, ok = b.reservation.TryAcquire(transactionIndexRecovery)
+			release, ok = b.reservation.TryAcquireWithReleaseCooldown(recoveryPolicy)
 		} else {
 			b.cancelReservation()
-			release, ok = r.cfg.HeavyWorkGate.TryAcquireWithCooldown(transactionIndexRecovery)
+			release, ok = r.cfg.HeavyWorkGate.TryAcquireWithReleaseCooldown(recoveryPolicy)
 		}
 	} else {
 		release, ok = r.cfg.HeavyWorkGate.TryAcquire()
@@ -204,7 +214,8 @@ func (r *Runner) beginTransactionIndexBudget() (*heavyMaintenanceLease, bool) {
 		work := completed.Sub(now)
 		b.totalWork += work
 		wait := transactionIndexWorkRecovery(work, duty)
-		if !healthy || !b.healthy(r.cfg.TransactionIndexLoadProbe(), completed) {
+		healthyAtRelease = healthy && valid && r.lastTxIndexMaintenanceError.Load() == 0 && b.healthy(r.cfg.TransactionIndexLoadProbe(), completed)
+		if !healthyAtRelease {
 			wait = max(wait, now.Add(r.cfg.CatchupMaintenanceInterval).Sub(completed))
 		}
 		b.notBefore = completed.Add(wait)

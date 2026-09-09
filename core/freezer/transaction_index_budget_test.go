@@ -247,3 +247,80 @@ func TestTransactionIndexProgressLogSamplesHealthyQuantaAndPreservesIdle(t *test
 		t.Fatal("healthy bounded context did not choose quiet detail logging")
 	}
 }
+
+func TestTransactionIndexSmallBatchYieldsGateBeforeItsOwnRetry(t *testing.T) {
+	r, store := newTransactionBudgetFixture(t)
+	chain := r.chain.(*fakeChain)
+	chain.db = &auditSyncDelayDB{KeyValueStore: chain.db, delay: 40 * time.Millisecond}
+	gate := maintenance.NewHeavyWorkGateWithCooldown(15 * time.Second)
+	r.cfg.HeavyWorkGate = gate
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+		t.Fatalf("bounded batch = %t/%v", changed, err)
+	}
+	remaining := gate.CooldownRemaining()
+	work := r.txIndexBudget.totalWork
+	if remaining <= 0 || remaining > min(3*time.Second, work+100*time.Millisecond) {
+		t.Fatalf("small batch held global recovery=%s after work=%s", remaining, work)
+	}
+	if remaining >= time.Until(r.transactionIndexRetryDeadline()) {
+		t.Fatal("index retained the entire importer-only recovery as its next gate turn")
+	}
+	time.Sleep(remaining + 25*time.Millisecond)
+	next, ok := gate.TryAcquireWithCooldown(0)
+	if !ok {
+		t.Fatal("other maintenance cannot run after measured recovery")
+	}
+	next()
+	if changed, err := r.MaintainTransactionIndexOnce(); err != nil || changed || store.coverage != 8192 {
+		t.Fatalf("shorter global pause removed index's own retry budget: %t/%v coverage=%d", changed, err, store.coverage)
+	}
+}
+
+func TestTransactionIndexReleaseRechecksPressureBeforeReducingGlobalRecovery(t *testing.T) {
+	for _, mode := range []string{"unknown", "stalled", "stale_device"} {
+		t.Run(mode, func(t *testing.T) {
+			r, _ := newTransactionBudgetFixture(t)
+			gate := maintenance.NewHeavyWorkGateWithCooldown(7 * time.Second)
+			r.cfg.HeavyWorkGate = gate
+			calls := 0
+			r.cfg.TransactionIndexLoadProbe = func() maintenance.StoragePressure {
+				calls++
+				p := healthyTransactionIndexPressure()
+				if calls == 1 {
+					return p
+				}
+				switch mode {
+				case "unknown":
+					return maintenance.StoragePressure{}
+				case "stalled":
+					p.WriteStalled = true
+				case "stale_device":
+					p.DeviceSampledAt = p.DeviceSampledAt.Add(-time.Minute)
+				}
+				return p
+			}
+			if changed, err := r.MaintainTransactionIndexOnce(); err != nil || !changed {
+				t.Fatalf("batch = %t/%v", changed, err)
+			}
+			if remaining := gate.CooldownRemaining(); remaining < 5*time.Second || remaining > 7*time.Second {
+				t.Fatalf("completion pressure lost configured default: %s", remaining)
+			}
+			if wait := time.Until(r.transactionIndexRetryDeadline()); wait < 4*time.Minute {
+				t.Fatalf("completion pressure removed conservative index wait: %s", wait)
+			}
+		})
+	}
+}
+
+func TestTransactionIndexFailedBatchKeepsDefaultGlobalRecovery(t *testing.T) {
+	r, store := newTransactionBudgetFixture(t)
+	store.body = []byte{0xff} // Real body decode fails after healthy admission.
+	gate := maintenance.NewHeavyWorkGateWithCooldown(7 * time.Second)
+	r.cfg.HeavyWorkGate = gate
+	if changed, err := r.MaintainTransactionIndexOnce(); err == nil || changed {
+		t.Fatalf("malformed body accepted: %t/%v", changed, err)
+	}
+	if remaining := gate.CooldownRemaining(); remaining < 5*time.Second || remaining > 7*time.Second {
+		t.Fatalf("failed batch received accelerated global recovery: %s", remaining)
+	}
+}

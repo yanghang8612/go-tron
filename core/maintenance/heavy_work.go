@@ -102,11 +102,33 @@ func (g *HeavyWorkGate) TryAcquireWithCooldown(cooldown time.Duration) (release 
 	return g.tryAcquire(cooldown)
 }
 
+// ReleaseCooldownPolicy chooses recovery from this lease's measured hold time
+// and the gate's configured default. It must be pure, bounded and must not
+// reenter the gate. Negative results are treated as zero. If it panics, release
+// propagates the panic after installing the default cooldown and returning the
+// token, so a failed policy cannot permanently block maintenance.
+type ReleaseCooldownPolicy func(held, defaultCooldown time.Duration) time.Duration
+
+// TryAcquireWithReleaseCooldown changes only the recovery installed by this
+// lease. Existing cooldowns, active owners and pressure admission still apply.
+// The normal minimum-work threshold remains in effect after a successful
+// policy evaluation. A nil policy keeps the configured default behavior.
+func (g *HeavyWorkGate) TryAcquireWithReleaseCooldown(policy ReleaseCooldownPolicy) (release func(), ok bool) {
+	if g == nil {
+		return func() {}, true
+	}
+	return g.tryAcquireReservedPolicy(g.cooldown, nil, policy)
+}
+
 func (g *HeavyWorkGate) tryAcquire(recoveryCooldown time.Duration) (release func(), ok bool) {
 	return g.tryAcquireReserved(recoveryCooldown, nil)
 }
 
 func (g *HeavyWorkGate) tryAcquireReserved(recoveryCooldown time.Duration, owner *HeavyWorkReservation) (release func(), ok bool) {
+	return g.tryAcquireReservedPolicy(recoveryCooldown, owner, nil)
+}
+
+func (g *HeavyWorkGate) tryAcquireReservedPolicy(recoveryCooldown time.Duration, owner *HeavyWorkReservation, policy ReleaseCooldownPolicy) (release func(), ok bool) {
 	if !g.reservationMu.TryLock() {
 		return nil, false
 	}
@@ -148,11 +170,26 @@ func (g *HeavyWorkGate) tryAcquireReserved(recoveryCooldown time.Duration, owner
 		var once sync.Once
 		return func() {
 			once.Do(func() {
+				defer func() { <-g.token }()
 				now := g.currentTime()
-				if recoveryCooldown > 0 && now.Sub(acquiredAt) >= g.cooldownAfter {
-					g.nextAllowed.Store(now.Add(recoveryCooldown).UnixNano())
+				held := max(0, now.Sub(acquiredAt))
+				if policy == nil {
+					if recoveryCooldown > 0 && held >= g.cooldownAfter {
+						g.nextAllowed.Store(now.Add(recoveryCooldown).UnixNano())
+					}
+					return
 				}
-				<-g.token
+				// The token remains exclusively held while replacing this lease's
+				// fallback with its measured recovery. This cannot shorten another
+				// lease's cooldown: admission already waited for it to expire.
+				if g.cooldown > 0 {
+					g.nextAllowed.Store(now.Add(g.cooldown).UnixNano())
+				}
+				cooldown := max(0, policy(held, g.cooldown))
+				if held < g.cooldownAfter {
+					cooldown = 0
+				}
+				g.nextAllowed.Store(now.Add(cooldown).UnixNano())
 			})
 		}, true
 	default:

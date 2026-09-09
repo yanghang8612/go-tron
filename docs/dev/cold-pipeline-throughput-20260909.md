@@ -106,12 +106,57 @@ ETL 基准不含收集、spill I/O、merge、Pebble 写入；新单 worker 随�
 
 全仓执行 `go test ./... -count=1 -timeout 300s`：53 个有测试包通过、13 个包无测试，仅 snapshots 包的两项字典取消测试失败。原因是测试硬编码第六次 `ctx.Err()` 取消，新增排序中断检查令取消提前发生。测试改为实际处理达到 4,096 条时取消，同时要求少于 8,192 条、collector 尚存、错误为 `context.Canceled` 且关闭后无文件残留；没有削弱生产取消或文件清理。字典/访问器与内存/落盘四种组合的定向 race 已通过（2.565s），完整 snapshots 包复验通过（56.158s）。最终共有 54 个有测试包通过，另有 13 个包无测试。热数据读取路径审计已通过。
 
-原始全仓结果保留在 [full-test.txt](../../build/benchmarks/20260909-cold-pipeline/full-test.txt)，取消验证见 [etl-cancellation-race.log](../../build/benchmarks/20260909-cold-pipeline/etl-cancellation-race.log)。服务器原生验证和部署后查询尚待完成；这些测试也不证明固定磁盘最终可容纳全部主网历史。
+原始全仓结果保留在 [full-test.txt](../../build/benchmarks/20260909-cold-pipeline/full-test.txt)，完整 snapshots 复验见 [snapshots-final-package.log](../../build/benchmarks/20260909-cold-pipeline/snapshots-final-package.log)，取消验证见 [etl-cancellation-race.log](../../build/benchmarks/20260909-cold-pipeline/etl-cancellation-race.log)。这里记录的是首轮通过的 53 包加失败包修正后的完整复验，未把首轮末尾的 `FAIL` 改写成单次全仓命令通过。
 
-## 部署与新进程在线结果（待填写）
+服务器使用 sapling 构建标签完成七个相关包原生测试：`core/freezer`（9.612s）、`core/rawdb/freezer`（8.291s）、`core/rawdb/etl`（2.468s）、`core/maintenance`（0.004s）、`core/state/snapshots`（38.404s）、`core/state/pruning`（9.058s）、`cmd/gtron`（21.011s），全部通过；原生构建退出码为 0。这些验证仍不能证明固定磁盘最终可容纳全部主网历史。
 
-状态：**尚未上线**。
+## 部署身份与已完成的在线查询
 
-待记录提交/二进制身份、部署时间、最终测试结果和连续新进程窗口。在线评估应分别比较 head、state published/pruned、正文 V2 coverage、index coverage/pruned 的真实前沿增量，并结合相同窗口 CPU、RSS、共享盘 I/O、错误及历史查询结果。
+状态：**已上线 `3c2ac2e387c5f8b84c18bc4889b18a0e0f839fa2`**。部署与原生验证证据见 [deployment-verification.json](../../build/benchmarks/20260909-cold-pipeline/deployment-verification.json)。服务器命令结果经 JumpServer 转录保存，精确进程启动标识另由 HTTP metrics 读取；本文未把转录的原生测试摘要描述成原始 stdout。
 
-应检查 `head − state published` 和 `正文 V2 coverage − index pruned` 是否实际收敛，避免仅凭某批 last-rate gauge 或单个整段发布断言追平。上线前后处在不同区块高度、缓存和外部 I/O 条件下，连续窗口可证明实际运行表现，仍不是严格同输入主网 A/B。
+| 部署项 | 已核对结果 |
+|---|---|
+| 切换开始，北京时间 UTC+8 | 2026-09-09 10:57:51.350 |
+| 旧进程停止 / 新进程启动 | 10:58:02.057 / 10:58:02.285 |
+| PID | 旧 2332 → 新 **23970** |
+| `process/start` 纳秒标识 | **1788922682298445556** |
+| 运行文件 | `/data/gtron/releases/20260909-cold-pipeline-3c2ac2e3/gtron` |
+| 二进制 SHA-256 | `3c23a6b4870b156dd765581e949172b4ade6189d9ebbdf375ff03c11a20f4850` |
+| 部署退出码 | 0 |
+
+北京时间 **10:59:59.827** 的早期历史查询 canary 通过，见 [genesis-canary.log](../../build/benchmarks/20260909-cold-pipeline/genesis-canary.log)：在同一新进程标识下，对预先选定账户的 2,043、2,044、2,045 高度区块 hash 与余额序列完成裁剪后核验；当时状态 published/pruned 均已达到 13,150,035。该证据只覆盖**一个账户的标量余额个例**，不能代替全部历史域或全库完整性验证。
+
+## 首版 3c2ac2e3 的部分在线窗口
+
+首版观测保留了 **38 / 41 个预定样本**，北京时间 **11:00:23.164—11:09:38.184**，客户端单调时钟跨度 **555.606 秒**。读取下一个样本（index 38）时 curl 超时，采集终止；随后检查发现本机 `127.0.0.1:1088` SOCKS 代理停止监听，curl 连接被拒绝、`lsof` 无 listener，浏览器显示 `ERR_PROXY_CONNECTION_FAILED`。这证明后续远程访问路径受阻，**不能据此认定服务器或 gtron 故障**。
+
+原始 [summary.json](../../build/benchmarks/20260909-cold-pipeline/post-window/summary.json) 为 `capture_failed`、`accepted_window=false`，保留这些状态；这不是完成并验收的十分钟窗口。另由 [independent-analysis.json](../../build/benchmarks/20260909-cold-pipeline/post-window/independent-analysis.json) 对已有点核算，且独立逐份读取 raw JSON 复核：38 个样本均属于进程 `1788922682298445556`，与 observations 中的前沿一致，所采前沿均无回退。
+
+| 前沿或积压，单位：块 | 首个成功样本 | 最后成功样本 | 部分窗口增量 |
+|---|---:|---:|---:|
+| head | 13,827,820 | 13,859,928 | +32,108 |
+| state published / pruned | 13,152,765 | 13,183,443 | +30,678 |
+| `head − state published` | 675,055 | 676,485 | **+1,430** |
+| 正文 V2 coverage | 13,107,200 | 13,107,200 | **0** |
+| index coverage / pruned | 2,777,088 | 3,555,328 | +778,240 |
+| `正文 V2 coverage − index pruned` | 10,330,112 | 9,551,872 | **−778,240** |
+
+已有点覆盖的窗口中，head 约 **57.79 块/秒**，state published/pruned 约 **55.22 块/秒**，状态相对 head 的净追赶为 **−2.57 块/秒**：索引债务确实减少，但状态积压并未在该部分窗口整体收敛。索引完成 95 个 8,192 块小批，发布及裁剪约 **1,400.70 块/秒**。正文覆盖没有推进，因此这段数据**不能验证正文准备并行的线上吞吐收益**，也不能据此把未发布整段等同于后台完全没有工作。
+
+首尾 state published/pruned 一致；中间 37 个点相等，一个点（11:06:08）显示 pruned 比 published 高 793 块，随后再次相等。指标读取和更新并非一个原子快照，保留此差异，不将其截为零，也不单凭该点认定裁剪越过持久化覆盖。
+
+在这 38 个点中，cold、prune、正文 V2、交易索引 errors，以及 prune checksum failed、lifecycle pass failures/recoveries 的增量均为 **0**。范围仅限所采相关子系统；全量独立快照中仍有 shadow sender-chain 的既有诊断计数，不能写成全进程所有错误计数为零，也不能跨 PID 相减。此部分窗口未形成可对齐的完整 CPU/RSS/磁盘资源验收结果，不将旧资源窗口数值套用到新进程。
+
+前几个短子窗口的状态速率曾先低于、随后高于 head；最终应以上述完整可用范围为准，不能挑选局部区间证明持续回退或持续追平。旧进程与首版处于不同高度、缓存和 I/O 条件，此处是实际观察，仍不是严格同输入主网 A/B，更不是全部优化的最终线上验收。
+
+## 第二补丁：分离索引自身等待与共享 gate 恢复期
+
+**状态：本地实现与相关测试完成，尚未部署，尚未线上验证。** 上述部署身份和 38 点数据仍只归属于首版 `3c2ac2e3`；第二补丁部署后须以新的二进制、进程身份和独立窗口追加验证，不能把两版混为一次验收。
+
+首版在健康索引小批完成后，为共享 gate 安装至少 3 秒恢复期。约 0.3 秒的短批也会让其他需要 gate 的状态/正文工作共同等待。这是源码可确认的额外门控等待，值得消除；首版窗口还受到区块负载、合并和资源争用等条件影响，**不能把这一点认定为状态速率波动的唯一原因**。
+
+第二补丁在 lease 释放时，用 gate 实际测得的持有时间决定共享恢复期：仅当准入及完成时均健康、资格有效且本批没有错误时，采用 `min(3 秒, 实际持有时间)`。完成时观测未知、失去健康条件或本批出错，则回到 gate 的默认恢复策略（生产默认 15 秒）；gate 原有最小工作时长阈值继续生效。预约获得的 lease 与普通 lease 使用相同逻辑，已有活跃 lease、既有 cooldown 和准入压力检查不能被绕过；释放策略异常时也会归还 token 并保留默认恢复，避免锁住全部维护。
+
+**索引自身的等待没有缩短**：10% / 20% 工作占空比仍分别按至少 `9T` / `4T`，且至少等待 3 秒。改变的是其他维护任务何时能够竞争空闲 gate，未放大索引小批、取消共享互斥或削弱发布后才能删除的约束。
+
+第二补丁相关包复验通过：`core/freezer` 28.515s、`core/maintenance` 1.041s、`core/state/snapshots` 69.208s、`core/state/pruning` 25.565s，命令为 `go test ./core/freezer ./core/maintenance ./core/state/snapshots ./core/state/pruning -count=1 -timeout=300s`，输出见 [measured-recovery-packages.txt](../../build/benchmarks/20260909-txindex-budget/measured-recovery-packages.txt)。最终定向 race 命令 `go test -race ./core/maintenance ./core/freezer -run 'TestHeavyWork|TestTransactionIndex(SmallBatch|ReleaseRechecks|FailedBatch|Budget|ProgressLog)' -count=1 -timeout=120s` 通过（maintenance 2.029s、freezer 6.385s），覆盖真实构建错误回退、释放时压力复查、短批恢复、预约、并发与日志行为。该补丁的服务器原生验证及线上新窗口仍待访问恢复后完成。
