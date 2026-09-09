@@ -27,6 +27,7 @@ func cachedManifestFixture(n int) *Manifest {
 
 func TestManifestCacheDetachedViews(t *testing.T) {
 	t.Setenv("GTRON_SNAPSHOT_MANIFEST_CACHE", "1")
+	t.Setenv(manifestCacheBudgetEnv, "")
 	dir := t.TempDir()
 	if err := PublishManifest(dir, cachedManifestFixture(4)); err != nil {
 		t.Fatal(err)
@@ -69,6 +70,7 @@ func TestManifestCacheDetachedViews(t *testing.T) {
 
 func TestManifestCacheAuthenticatesCurrentBytes(t *testing.T) {
 	t.Setenv("GTRON_SNAPSHOT_MANIFEST_CACHE", "1")
+	t.Setenv(manifestCacheBudgetEnv, "")
 	dir := t.TempDir()
 	if err := PublishManifest(dir, cachedManifestFixture(2)); err != nil {
 		t.Fatal(err)
@@ -119,6 +121,7 @@ func TestManifestCacheAuthenticatesCurrentBytes(t *testing.T) {
 
 func TestManifestCacheKeepsProductionValidation(t *testing.T) {
 	t.Setenv("GTRON_SNAPSHOT_MANIFEST_CACHE", "1")
+	t.Setenv(manifestCacheBudgetEnv, "")
 	dir := t.TempDir()
 	m := NewManifest(100, 150, []SegmentRef{{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 100, ToTxNum: 150, Path: "history/state-domain-change-100-150.json"}})
 	if err := PublishManifest(dir, m); err != nil {
@@ -142,7 +145,7 @@ func TestManifestCachePreservesEmptyArrays(t *testing.T) {
 			t.Fatal(err)
 		}
 		for range 2 {
-			got, err := cache.decodeOwned([]byte(raw), false, manifestCacheMaxBytes)
+			got, err := cache.decodeOwned([]byte(raw), false, manifestCacheDefaultBytes)
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("empty slice shape changed: %v", err)
 			}
@@ -160,7 +163,7 @@ func TestManifestCacheBudgetAndDisable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cache.decodeOwned(bytes.Clone(raw), true, manifestCacheMaxBytes); err != nil {
+	if _, err := cache.decodeOwned(bytes.Clone(raw), true, manifestCacheDefaultBytes); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
@@ -170,6 +173,7 @@ func TestManifestCacheBudgetAndDisable(t *testing.T) {
 		}
 	}
 	t.Setenv("GTRON_SNAPSHOT_MANIFEST_CACHE", "1")
+	t.Setenv(manifestCacheBudgetEnv, "")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ManifestFile), raw, 0o600); err != nil {
 		t.Fatal(err)
@@ -196,6 +200,7 @@ func TestManifestCacheBudgetAndDisable(t *testing.T) {
 
 func TestManifestCacheConcurrentPublication(t *testing.T) {
 	t.Setenv("GTRON_SNAPSHOT_MANIFEST_CACHE", "1")
+	t.Setenv(manifestCacheBudgetEnv, "")
 	dir := t.TempDir()
 	if err := PublishManifest(dir, cachedManifestFixture(12)); err != nil {
 		t.Fatal(err)
@@ -242,6 +247,7 @@ func TestManifestCacheConcurrentPublication(t *testing.T) {
 
 func TestManifestCacheDoesNotCacheSegmentVerification(t *testing.T) {
 	t.Setenv("GTRON_SNAPSHOT_MANIFEST_CACHE", "1")
+	t.Setenv(manifestCacheBudgetEnv, "")
 	dir := t.TempDir()
 	refs := writeCompactionStateDomainChangeSegment(t, dir, 1, 1, binaryStateDomainChange(1, 1, 1, "original"))
 	if err := PublishManifest(dir, NewManifest(1, 1, refs)); err != nil {
@@ -270,6 +276,7 @@ func benchmarkManifestCacheModes(b *testing.B, dir string, workloads []string) {
 			for _, mode := range []string{"0", "1"} {
 				b.Run("cache="+mode, func(b *testing.B) {
 					b.Setenv("GTRON_SNAPSHOT_MANIFEST_CACHE", mode)
+					b.Setenv(manifestCacheBudgetEnv, "")
 					if _, err := LoadProductionManifest(dir); err != nil {
 						b.Fatal(err)
 					}

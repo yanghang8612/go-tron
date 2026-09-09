@@ -240,10 +240,16 @@ func (l *SnapshotLifecycle) OnePass() (out SnapshotLifecyclePass, passErr error)
 		if err := l.builder.PreflightCatalog(); err != nil {
 			return out, err
 		}
+		var beforeMergeMetadata time.Duration
 		result, err := l.builder.OnePassWithDeferredMaintenanceContext(l.ctx, func(ctx context.Context, published snapshots.PassResult) error {
+			metadataStarted := time.Now()
 			if err := l.pruner.RecordTrustedSnapshotSegments(published.Segments); err != nil {
 				return err
 			}
+			// The trusted path checks active refs and file identities; it does
+			// not re-read segment content. Content verification in PrunePass
+			// stays in the row-work estimate, including after a restart.
+			beforeMergeMetadata += time.Since(metadataStarted)
 			// Respect an occupied heavy-work lease. Deliberate importer yielding
 			// must not indefinitely strand an already published cold prefix; the
 			// normal pruner still enforces every coverage and sync-policy gate.
@@ -258,8 +264,14 @@ func (l *SnapshotLifecycle) OnePass() (out SnapshotLifecyclePass, passErr error)
 			prunedBeforeMerge = true
 			var err error
 			out.Prune, err = l.pruner.PrunePassContext(ctx)
+			if err == nil {
+				beforeMergeMetadata += out.Prune.HistoryMetadataDuration
+			}
 			return err
 		})
+		if err == nil {
+			result.BeforeMergeMetadataDuration = beforeMergeMetadata
+		}
 		// Preserve admission and retry metadata even when an admitted history
 		// build fails. Forced-busy work may already have consumed significant
 		// importer resources, so the loop must honor its recovery deadline rather

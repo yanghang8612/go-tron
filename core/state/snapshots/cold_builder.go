@@ -238,10 +238,15 @@ type PassResult struct {
 	HistoryPressureActive bool
 	HistorySpaceDeferred  bool
 	BeforeMergeDuration   time.Duration
-	Built                 bool
-	HistoryDeferred       bool
-	HistoryRateLimited    bool
-	HistoryAccelerated    bool
+	// Metadata durations identify measured manifest/catalogue operations which
+	// do not scale with this batch's rows. They affect density estimation only;
+	// complete maintenance, including these operations, still earns recovery.
+	HistoryMetadataDuration     time.Duration
+	BeforeMergeMetadataDuration time.Duration
+	Built                       bool
+	HistoryDeferred             bool
+	HistoryRateLimited          bool
+	HistoryAccelerated          bool
 	// HistoryForcedBusy reports that the busy liveness watermark admitted this
 	// pass even though SyncBuildReady still reported a busy importer. Such passes
 	// use a smaller batch and a recovery interval, but retain the normal atomic
@@ -1263,11 +1268,13 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 		return PassResult{}, fmt.Errorf("snapshots: state tx range for block %d is inverted", cutoffBlock)
 	}
 
+	metadataStarted := time.Now()
 	productionManifest, err := loadOptionalProductionManifest(r.cfg.Dir)
 	if err != nil {
 		return PassResult{}, err
 	}
 	visibleEnd, err := coldSnapshotVisibleTxEndFromManifest(productionManifest, r.cfg.HistoryDataset)
+	result.HistoryMetadataDuration = coldSnapshotPhaseDuration(metadataStarted)
 	if err != nil {
 		return PassResult{}, err
 	}
@@ -1589,7 +1596,9 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	}
 	buildProgress.SetPhase("publish")
 	publishStarted := time.Now()
+	metadataStarted = time.Now()
 	manifest, err := aggregator.integrateWithManifest(fromTxNum, toTxNum, refs, productionManifest)
+	result.HistoryMetadataDuration += coldSnapshotPhaseDuration(metadataStarted)
 	if err != nil {
 		return result, err
 	}

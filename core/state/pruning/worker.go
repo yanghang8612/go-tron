@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -52,6 +53,10 @@ type Stats struct {
 	DomainChangeStartBlock       uint64
 	DomainChangePrunedThrough    uint64
 	DomainChangePrunedThroughTx  uint64
+	// HistoryMetadataDuration covers manifest planning/progress work only.
+	// Lazy content verification, hot row reads/deletes and every batch flush
+	// remain outside it and therefore in the adaptive per-row work estimate.
+	HistoryMetadataDuration time.Duration
 }
 
 const maxPruneBatchValueSize = 32 << 20
@@ -195,7 +200,9 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 			coverageDone()
 		}
 	}()
+	metadataStarted := time.Now()
 	coverage, err := w.newSnapshotStateDomainChangeCoverageGate(coverageCtx)
+	stats.HistoryMetadataDuration += time.Since(metadataStarted)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -208,7 +215,9 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 		return Stats{}, err
 	}
 	historyStore, flushHistory := newPruneBatchStore(w.DB)
+	metadataStarted = time.Now()
 	hotPruneStartBlock, err := w.hotHistoryPruneStartBlock()
+	stats.HistoryMetadataDuration += time.Since(metadataStarted)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -254,8 +263,11 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	stats.DomainChangePrunedThrough = hotStats.MaxDeletedHistoryBlock
 	stats.DomainChangePrunedThroughTx = hotStats.MaxDeletedHistoryBlockTx
 	if hotStats.MaxDeletedHistoryBlockTx != 0 && w.SnapshotDir != "" {
-		if err := snapshots.UpdateHotPruneProgress(w.SnapshotDir, hotStats.MaxDeletedHistoryBlock, hotStats.MaxDeletedHistoryBlockTx); err != nil {
-			return Stats{}, err
+		metadataStarted = time.Now()
+		progressErr := snapshots.UpdateHotPruneProgress(w.SnapshotDir, hotStats.MaxDeletedHistoryBlock, hotStats.MaxDeletedHistoryBlockTx)
+		stats.HistoryMetadataDuration += time.Since(metadataStarted)
+		if progressErr != nil {
+			return Stats{}, progressErr
 		}
 		if err := newRawDBStageProgressStore(w.DB).Write(rawdb.StageSnapshotHotPrune, hotStats.MaxDeletedHistoryBlockTx); err != nil {
 			return Stats{}, fmt.Errorf("pruning: write snapshot/hot-prune stage progress: %w", err)

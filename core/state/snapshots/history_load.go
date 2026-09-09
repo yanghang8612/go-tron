@@ -49,7 +49,7 @@ func (r *Runner) initHistoryLoadMetrics() {
 		r.historyLoad.syncSeenAt = time.Now()
 	}
 	r.historyLoad.metrics = make(map[string]*metrics.Gauge)
-	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery"} {
+	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "density_work", "density_metadata_work", "density_total_work", "density_measurement", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery"} {
 		r.historyLoad.metrics[name] = metrics.GetOrRegisterGauge(strings.TrimRight(r.cfg.MetricsNamespace, "/")+"/history/budget/"+name, nil)
 	}
 }
@@ -227,6 +227,11 @@ func (s *historyLoadState) batchLimit(configured, previous uint64, sample histor
 	if sample.bytes > 0 {
 		ratio = min(ratio, float64(targetBytes)/float64(sample.bytes))
 	}
+	// Measured cheap rows do not establish storage headroom. Unknown samples
+	// may shrink a known batch but must not use excluded metadata to grow it.
+	if s.level == 0 || s.hard {
+		ratio = min(ratio, 1)
+	}
 	// Shrink immediately on a density jump; enlarge only 25% per completed
 	// batch. The block and txnum bounds apply together before reading history.
 	capacityRatio := ratio
@@ -308,8 +313,13 @@ func (r *Runner) recordHistoryWork(result *PassResult) {
 		return
 	}
 	r.historyLoad.historyFailureBlocks, r.historyLoad.historyFailureTxNums = 0, 0
+	work, metadata, measurement := historyDensityWork(result)
 	r.historyLoad.history = historyWorkSample{blocks: result.HistoryBatchBlocks, txnums: result.HistoryBatchTxNums,
-		bytes: segmentRefsSize(result.Segments), work: result.BuildDuration + result.BeforeMergeDuration}
+		bytes: segmentRefsSize(result.Segments), work: work}
+	r.historyLoad.metric("density_work", int64(work))
+	r.historyLoad.metric("density_metadata_work", int64(metadata))
+	r.historyLoad.metric("density_total_work", int64(historyWorkDurationSum(result.BuildDuration, result.BeforeMergeDuration)))
+	r.historyLoad.metric("density_measurement", measurement)
 }
 
 func (r *Runner) recordEventWork(result *PassResult) {
