@@ -178,6 +178,9 @@ func (l *SnapshotLifecycle) Stop() error {
 	}
 	l.once.Do(func() {
 		l.cancel()
+		if l.builder != nil {
+			l.builder.CancelBusyHistoryObservation()
+		}
 		close(l.quit)
 	})
 	<-l.done
@@ -227,6 +230,11 @@ func (l *SnapshotLifecycle) notifyPassComplete() {
 func (l *SnapshotLifecycle) OnePass() (out SnapshotLifecyclePass, passErr error) {
 	if l == nil {
 		return SnapshotLifecyclePass{}, nil
+	}
+	if l.builder != nil {
+		// Preflight may fail before the runner is entered. A fresh full pass
+		// must invalidate any observation left by the preceding pass first.
+		l.builder.CancelBusyHistoryObservation()
 	}
 	started := time.Now()
 	defer func() {
@@ -484,7 +492,52 @@ func snapshotLifecyclePassLogContext(pass SnapshotLifecyclePass, latestBlock uin
 }
 
 func (l *SnapshotLifecycle) loop() {
+	var observer busyHistoryResourceObserver
+	if l.builder != nil {
+		observer = l.builder
+	}
+	l.runLoop(l.OnePass, observer)
+}
+
+// Keep the full ordered pass separate from the short resource observation. The
+// latter must never run preflight, manifest verification, pruning or a freezer.
+type busyHistoryResourceObserver interface {
+	CancelBusyHistoryObservation()
+	ObserveBusyHistoryResources(context.Context) (wake bool, retryAfter time.Duration)
+}
+
+func (l *SnapshotLifecycle) runLoop(pass func() (SnapshotLifecyclePass, error), observer busyHistoryResourceObserver) {
 	defer close(l.done)
+	var ticks <-chan time.Time
+	var observationTimer *time.Timer
+	var observation <-chan time.Time
+	cancelObservation := func() {
+		if observationTimer != nil && !observationTimer.Stop() {
+			select {
+			case <-observationTimer.C:
+			default:
+			}
+		}
+		observation = nil
+	}
+	scheduleObservation := func(after time.Duration) {
+		cancelObservation()
+		if after <= 0 {
+			return
+		}
+		if observationTimer == nil {
+			observationTimer = time.NewTimer(after)
+		} else {
+			observationTimer.Reset(after)
+		}
+		observation = observationTimer.C
+	}
+	defer func() {
+		cancelObservation()
+		if observer != nil {
+			observer.CancelBusyHistoryObservation()
+		}
+	}()
 	var retryTimer *time.Timer
 	var retry <-chan time.Time
 	cancelRetry := func() {
@@ -519,9 +572,23 @@ func (l *SnapshotLifecycle) loop() {
 		}
 	}()
 	runPass := func(reason string) {
+		cancelObservation()
+		// A ticker/retry and an already queued observation wake share this
+		// pass. Requests arriving during the pass still schedule its successor.
+		select {
+		case <-l.wake:
+		default:
+		}
+		select {
+		case <-ticks:
+		default:
+		}
 		cancelRetry()
-		result, err := l.OnePass()
+		result, err := pass()
 		if err != nil {
+			if observer != nil {
+				observer.CancelBusyHistoryObservation()
+			}
 			if errors.Is(err, context.Canceled) && l.ctx.Err() != nil {
 				return
 			}
@@ -532,6 +599,9 @@ func (l *SnapshotLifecycle) loop() {
 			return
 		}
 		l.logPassRecovery(time.Now())
+		if observer != nil && result.Snapshot.HistoryBusyResourceDeferred {
+			scheduleObservation(snapshots.BusyHistoryObservationInterval)
+		}
 		// Erigon's background aggregator drains every ready immutable step in
 		// one run. Preserve go-tron's smaller build/publish/prune transaction
 		// boundary, but coalesce an immediate next pass while verified lag
@@ -544,6 +614,7 @@ func (l *SnapshotLifecycle) loop() {
 	}
 	runPass("initial")
 	ticker := time.NewTicker(l.interval)
+	ticks = ticker.C
 	defer ticker.Stop()
 	for {
 		// A pass can take longer than the shutdown request. Do not let its
@@ -555,13 +626,24 @@ func (l *SnapshotLifecycle) loop() {
 		default:
 		}
 		select {
-		case <-ticker.C:
+		case <-ticks:
 			runPass("interval")
 		case <-l.wake:
 			runPass("requested")
 		case <-retry:
 			retry = nil
 			runPass("resource-retry")
+		case <-observation:
+			observation = nil
+			wake, after := observer.ObserveBusyHistoryResources(l.ctx)
+			if l.ctx.Err() != nil {
+				continue
+			}
+			if wake {
+				l.RequestPass()
+			} else if after > 0 {
+				scheduleObservation(after)
+			}
 		case <-l.quit:
 			return
 		}

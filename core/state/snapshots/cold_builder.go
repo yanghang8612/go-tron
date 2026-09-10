@@ -268,6 +268,11 @@ type PassResult struct {
 	// soft and busy watermarks. It is a policy decision, not a heavy-work lease:
 	// a deadline or the shared gate can still defer this candidate.
 	HistoryBusyResourceReady bool
+	// HistoryBusyResourceDeferred requests only an independent resource
+	// observation after BusyHistoryObservationInterval, never a full pass or a
+	// replacement for an existing maintenance recovery deadline.
+	HistoryBusyResourceDeferred bool
+	historyBusyObservationID    uint64
 	// HistoryAdmissionChecked and HistoryAdmissionReady expose the importer
 	// capacity decision independently from the busy-watermark override.
 	HistoryAdmissionChecked bool
@@ -695,15 +700,19 @@ type Runner struct {
 	lastForcedDebtGrowth     atomic.Int64
 	lastForcedBusyAttemptAt  atomic.Int64
 
-	lastForcedAttemptRecovery atomic.Int64
-	historyNotBefore          atomic.Int64
-	lastMaintenanceDuration   atomic.Int64
-	maintenanceSerial         uint64 // guarded by passMu
-	completedMaintenanceID    uint64 // guarded by passMu
-	pendingMaintenanceID      uint64 // guarded by passMu; blocks new passes during outer work
-	historyLoad               historyLoadState
-	historyEventMetrics       historyEventBuildMetrics
-	compactionBudget          historyCompactionBudgetState
+	lastForcedAttemptRecovery     atomic.Int64
+	historyNotBefore              atomic.Int64
+	lastMaintenanceDuration       atomic.Int64
+	maintenanceSerial             uint64 // guarded by passMu
+	completedMaintenanceID        uint64 // guarded by passMu
+	pendingMaintenanceID          uint64 // guarded by passMu; blocks new passes during outer work
+	historyLoad                   historyLoadState
+	historyEventMetrics           historyEventBuildMetrics
+	busyHistoryObservationPending atomic.Uint64 // generation; zero means canceled/consumed
+	busyHistoryObservationSerial  uint64        // guarded by passMu
+	nextBusyHistoryObservation    time.Time     // guarded by passMu; observation cadence only
+	busyHistoryObservationMetrics busyHistoryObservationMetrics
+	compactionBudget              historyCompactionBudgetState
 
 	lastSuccessfulForcedAt        atomic.Int64
 	lastSuccessfulForcedLag       atomic.Uint64
@@ -726,14 +735,15 @@ func NewRunner(chain ChainSource, cfg Config) *Runner {
 	cfg = cfg.applyDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	runner := &Runner{
-		chain:               chain,
-		cfg:                 cfg,
-		metrics:             newColdRunnerMetrics(cfg.MetricsNamespace),
-		historyEventMetrics: newHistoryEventBuildMetrics(cfg.MetricsNamespace),
-		quit:                make(chan struct{}),
-		done:                make(chan struct{}),
-		ctx:                 ctx,
-		cancel:              cancel,
+		chain:                         chain,
+		cfg:                           cfg,
+		metrics:                       newColdRunnerMetrics(cfg.MetricsNamespace),
+		historyEventMetrics:           newHistoryEventBuildMetrics(cfg.MetricsNamespace),
+		busyHistoryObservationMetrics: newBusyHistoryObservationMetrics(cfg.MetricsNamespace),
+		quit:                          make(chan struct{}),
+		done:                          make(chan struct{}),
+		ctx:                           ctx,
+		cancel:                        cancel,
 	}
 	runner.initHistoryLoadMetrics()
 	runner.updateMetrics()
@@ -905,6 +915,7 @@ func (r *Runner) Stop() error {
 	if r == nil {
 		return nil
 	}
+	r.CancelBusyHistoryObservation()
 	r.stopOnce.Do(func() {
 		if r.cancel != nil {
 			r.cancel()
@@ -1007,6 +1018,7 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	if r == nil {
 		return PassResult{}, nil
 	}
+	r.CancelBusyHistoryObservation()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1015,6 +1027,9 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	}
 	r.passMu.Lock()
 	defer r.passMu.Unlock()
+	// Another full pass may have armed a new generation while this caller
+	// waited for the lock after its early cancellation.
+	r.CancelBusyHistoryObservation()
 	if err := ctx.Err(); err != nil {
 		return PassResult{}, err
 	}
@@ -1161,6 +1176,9 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	r.recordPass(result, start, err)
 	if !deferCompletion {
 		r.completeHistoryMaintenance(&result, start, time.Now(), err)
+	}
+	if err != nil {
+		r.cancelResultBusyHistoryObservation(&result)
 	}
 	return result, err
 }
@@ -1393,6 +1411,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 							result.HistoryBusyResourceReady = r.busyHistoryBuildReady(time.Now())
 							if !result.HistoryBusyResourceReady {
 								result.HistoryDeferred = true
+								r.armBusyHistoryObservation(&result, time.Now())
 								return result, nil
 							}
 						}
@@ -3227,6 +3246,33 @@ func (r *Runner) commitmentBranchBasePassContext(ctx context.Context, db Aggrega
 func (r *Runner) loop() {
 	defer close(r.done)
 	catchup := make(chan struct{}, 1)
+	var observationTimer *time.Timer
+	var observation <-chan time.Time
+	cancelObservation := func() {
+		if observationTimer != nil && !observationTimer.Stop() {
+			select {
+			case <-observationTimer.C:
+			default:
+			}
+		}
+		observation = nil
+	}
+	scheduleObservation := func(after time.Duration) {
+		cancelObservation()
+		if after <= 0 {
+			return
+		}
+		if observationTimer == nil {
+			observationTimer = time.NewTimer(after)
+		} else {
+			observationTimer.Reset(after)
+		}
+		observation = observationTimer.C
+	}
+	defer func() {
+		cancelObservation()
+		r.CancelBusyHistoryObservation()
+	}()
 	var retryTimer *time.Timer
 	var retry <-chan time.Time
 	cancelRetry := func() {
@@ -3261,6 +3307,9 @@ func (r *Runner) loop() {
 		}
 	}()
 	scheduleCatchup := func(result PassResult, err error) {
+		if err == nil && result.HistoryBusyResourceDeferred {
+			scheduleObservation(BusyHistoryObservationInterval)
+		}
 		if err == nil && result.NeedsCatchup() {
 			cancelRetry()
 			select {
@@ -3320,9 +3369,24 @@ func (r *Runner) loop() {
 		case <-catchup:
 		case <-retry:
 			retry = nil
+		case <-observation:
+			observation = nil
+			wake, after := r.ObserveBusyHistoryResources(r.ctx)
+			if wake {
+				select {
+				case catchup <- struct{}{}:
+				default:
+				}
+			} else if after > 0 {
+				scheduleObservation(after)
+			}
+			continue
 		case <-r.quit:
 			return
 		}
+		cancelObservation()
+		// A normal tick and a queued observation wake share this full pass.
+		coalesceColdHistoryWakeups(catchup, ticker.C)
 		cancelRetry()
 		result, err := r.OnePassContext(r.ctx)
 		if err != nil {
@@ -3353,6 +3417,19 @@ func (r *Runner) loop() {
 			coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
 		}
 		scheduleCatchup(result, err)
+	}
+}
+
+// Consume only wakeups already due when a full pass begins. A tick which
+// arrives during the pass remains available for the next admission check.
+func coalesceColdHistoryWakeups(catchup <-chan struct{}, ticks <-chan time.Time) {
+	select {
+	case <-catchup:
+	default:
+	}
+	select {
+	case <-ticks:
+	default:
 	}
 }
 

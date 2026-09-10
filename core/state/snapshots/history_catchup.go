@@ -112,6 +112,9 @@ func (r *Runner) CompleteHistoryMaintenance(result *PassResult, started time.Tim
 	}
 	r.passMu.Lock()
 	defer r.passMu.Unlock()
+	if passErr != nil {
+		r.cancelResultBusyHistoryObservation(result)
+	}
 	r.completeHistoryMaintenance(result, started, time.Now(), passErr)
 }
 
