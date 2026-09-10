@@ -170,7 +170,7 @@ type PublicNetReservation struct {
 // Canonical execution installs one recorder on StateDB and DynamicProperties,
 // resets it at the transaction boundary, and removes it before advancing. The
 // map retains bounded buckets across transactions; arbitrary account-KV keys
-// are copied only on the first unique access in a transaction.
+// are copied on the first unique access and when its access mode is upgraded.
 type TransactionAccessRecorder struct {
 	accesses             map[TransactionAccessKey]TransactionAccessMode
 	accounts             map[tcommon.Address]TransactionAccessMode
@@ -635,11 +635,15 @@ func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domai
 	}
 	if previous, ok := r.accesses[lookup]; ok {
 		next := previous | mode
+		if next == previous {
+			return
+		}
+		// A map assignment can replace the stored key even for an existing
+		// entry. Own the bytes before updating its mode; otherwise caller
+		// scratch would replace the stable string retained by the first read.
+		lookup.LogicalKey = string(logicalKey)
 		r.accesses[lookup] = next
 		if firstWrite(previous, next) {
-			// The lookup string may borrow caller scratch. The retained write key
-			// must own its logical key independently of that scratch lifetime.
-			lookup.LogicalKey = string(logicalKey)
 			r.writeKeys = append(r.writeKeys, lookup)
 			if r.captureWritesEnabled && r.captureWriteInclude != nil && r.captureWriteInclude(lookup) {
 				r.captureWriteKeys = append(r.captureWriteKeys, lookup)
@@ -647,8 +651,8 @@ func (r *TransactionAccessRecorder) recordAccountKV(owner tcommon.Address, domai
 		}
 		return
 	}
-	// The caller may lend stack/scratch bytes. Own the key only for the first
-	// unique access; the borrowed lookup above makes repeats allocation-free.
+	// The caller may lend stack/scratch bytes. Own every stored key; unchanged
+	// repeated accesses above only look it up and remain allocation-free.
 	lookup.LogicalKey = string(logicalKey)
 	r.accesses[lookup] = mode
 	r.appendWriteKey(lookup, 0, mode)

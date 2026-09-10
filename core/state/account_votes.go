@@ -33,7 +33,19 @@ func clearAccountVotesProto(pb *corepb.Account) {
 }
 
 func (s *StateDB) materializeAccountVotes(obj *stateObject) (err error) {
-	if obj == nil || obj.account == nil || obj.accountVotesLoaded {
+	if obj == nil || obj.account == nil {
+		return nil
+	}
+	if obj.accountVotesLoaded {
+		// The decoded votes survive transaction boundaries and StateDB copies.
+		// Re-record every bounded slot, including absent ones, so a predecessor
+		// vote insertion, update, or namespace reset invalidates a cached read.
+		if s.transactionAccess != nil {
+			s.recordAccountFieldRead(obj.address, TransactionAccountFieldExistence)
+			for index := uint32(0); index < uint32(params.MaxVoteNumber); index++ {
+				s.recordAccountKVRead(obj.address, kvdomains.AccountVotesAux, s.accountUint32Key(index))
+			}
+		}
 		return nil
 	}
 	defer func() {

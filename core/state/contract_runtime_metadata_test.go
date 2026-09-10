@@ -1,21 +1,20 @@
 package state
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
-var (
-	contractRuntimeBenchmarkMeta ContractRuntimeMetadata
-	contractRuntimeBenchmarkPB   *contractpb.SmartContract
-)
+var contractRuntimeBenchmarkMeta ContractRuntimeMetadata
 
 func contractRuntimeFixture(t testing.TB) (tcommon.Address, []byte, *contractpb.SmartContract) {
 	t.Helper()
@@ -90,7 +89,31 @@ func TestDecodeContractRuntimeMetadataMatchesWireEdgeCases(t *testing.T) {
 	}
 }
 
-func TestContractRuntimeUsesWireCacheWithoutMaterializingABI(t *testing.T) {
+func TestDecodeContractRuntimeMetadataMatchesNative(t *testing.T) {
+	addr, _, fixture := contractRuntimeFixture(t)
+	for _, input := range []*contractpb.SmartContract{
+		{}, fixture,
+		{OriginAddress: bytes.Repeat([]byte{0x75}, tcommon.AddressLength+4),
+			TrxHash: bytes.Repeat([]byte{0x76}, tcommon.HashLength+8),
+			Version: -1, ConsumeUserResourcePercent: -7, OriginEnergyLimit: -9},
+	} {
+		data, err := statecodec.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := decodeContractRuntimeMetadata(addr, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, _ := contractRuntimeMetadataFromProto(addr, input)
+		clear(data) // The state cache must not retain the codec's borrowed slices.
+		if got != want {
+			t.Fatalf("native runtime metadata = %+v, want %+v", got, want)
+		}
+	}
+}
+
+func TestContractRuntimeUsesNativeCacheWithoutMaterializingABI(t *testing.T) {
 	addr, _, meta := contractRuntimeFixture(t)
 	sdb := newTestStateDB(t)
 	sdb.CreateAccount(addr, corepb.AccountType_Contract)
@@ -126,48 +149,129 @@ func TestContractRuntimeUsesWireCacheWithoutMaterializingABI(t *testing.T) {
 		t.Fatal("storage row key materialized full SmartContract")
 	}
 
-	snapshot := reloaded.Snapshot()
-	changed := proto.Clone(meta).(*contractpb.SmartContract)
-	changed.Version = 0
-	changed.ConsumeUserResourcePercent = 88
-	changedBytes, err := proto.Marshal(changed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reloaded.SetAccountKV(addr, kvdomains.ContractMetadata, contractMetaKVKey, changedBytes); err != nil {
-		t.Fatal(err)
-	}
-	changedRuntime, ok := reloaded.ContractRuntime(addr)
-	if !ok || changedRuntime.Version != 0 || changedRuntime.ConsumeUserResourcePercent != 88 {
-		t.Fatalf("runtime metadata after generic write = %+v ok=%v", changedRuntime, ok)
-	}
-	reloaded.RevertToSnapshot(snapshot)
-	reverted, ok := reloaded.ContractRuntime(addr)
-	if !ok || reverted != want {
-		t.Fatalf("runtime metadata after revert = %+v ok=%v, want %+v", reverted, ok, want)
+	for _, encoding := range []struct {
+		name    string
+		marshal func(proto.Message) ([]byte, error)
+	}{{"native", statecodec.Marshal}, {"protobuf", proto.Marshal}} {
+		t.Run(encoding.name, func(t *testing.T) {
+			snapshot := reloaded.Snapshot()
+			changed := proto.Clone(meta).(*contractpb.SmartContract)
+			changed.Version = 0
+			changed.ConsumeUserResourcePercent = 88
+			changedBytes, err := encoding.marshal(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := reloaded.SetAccountKV(addr, kvdomains.ContractMetadata, contractMetaKVKey, changedBytes); err != nil {
+				t.Fatal(err)
+			}
+			changedRuntime, ok := reloaded.ContractRuntime(addr)
+			if !ok || changedRuntime.Version != 0 || changedRuntime.ConsumeUserResourcePercent != 88 {
+				t.Fatalf("runtime metadata after generic write = %+v ok=%v", changedRuntime, ok)
+			}
+			reloaded.RevertToSnapshot(snapshot)
+			reverted, ok := reloaded.ContractRuntime(addr)
+			if !ok || reverted != want {
+				t.Fatalf("runtime metadata after revert = %+v ok=%v, want %+v", reverted, ok, want)
+			}
+		})
 	}
 }
 
 func BenchmarkDecodeContractRuntimeMetadata(b *testing.B) {
-	addr, data, _ := contractRuntimeFixture(b)
-	b.Run("protobuf", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			meta := new(contractpb.SmartContract)
-			if err := proto.Unmarshal(data, meta); err != nil {
-				b.Fatal(err)
+	for _, entries := range []int{0, 8, 64} {
+		addr, input := contractRuntimeBenchmarkFixture(b, entries)
+		for _, native := range []bool{true, false} {
+			encoding, marshal, unmarshal := "protobuf", proto.Marshal, proto.Unmarshal
+			if native {
+				encoding, marshal, unmarshal = "native", statecodec.Marshal, statecodec.Unmarshal
 			}
-			contractRuntimeBenchmarkPB = meta
-		}
-	})
-	b.Run("runtime", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			meta, err := decodeContractRuntimeMetadata(addr, data)
+			data, err := marshal(input)
 			if err != nil {
 				b.Fatal(err)
 			}
-			contractRuntimeBenchmarkMeta = meta
+			b.Run(fmt.Sprintf("%s/entries=%d", encoding, entries), func(b *testing.B) {
+				b.Run("full", func(b *testing.B) {
+					b.ReportAllocs()
+					b.SetBytes(int64(len(data)))
+					for b.Loop() {
+						meta := new(contractpb.SmartContract)
+						if err := unmarshal(data, meta); err != nil {
+							b.Fatal(err)
+						}
+						contractRuntimeBenchmarkMeta, _ = contractRuntimeMetadataFromProto(addr, meta)
+					}
+				})
+				b.Run("runtime", func(b *testing.B) {
+					b.ReportAllocs()
+					b.SetBytes(int64(len(data)))
+					for b.Loop() {
+						meta, err := decodeContractRuntimeMetadata(addr, data)
+						if err != nil {
+							b.Fatal(err)
+						}
+						contractRuntimeBenchmarkMeta = meta
+					}
+				})
+			})
 		}
-	})
+	}
+}
+
+func contractRuntimeBenchmarkFixture(t testing.TB, entries int) (tcommon.Address, *contractpb.SmartContract) {
+	t.Helper()
+	addr, _, input := contractRuntimeFixture(t)
+	if entries == 0 {
+		return addr, &contractpb.SmartContract{}
+	}
+	input.Abi.Entrys = input.Abi.Entrys[:entries]
+	for _, entry := range input.Abi.Entrys {
+		entry.Type = contractpb.SmartContract_ABI_Entry_Function
+		entry.StateMutability = contractpb.SmartContract_ABI_Entry_View
+		entry.Inputs = []*contractpb.SmartContract_ABI_Entry_Param{{Name: "to", Type: "address"}, {Name: "amount", Type: "uint256"}}
+		entry.Outputs = []*contractpb.SmartContract_ABI_Entry_Param{{Name: "success", Type: "bool"}}
+	}
+	return addr, input
+}
+
+// Each iteration opens a fresh StateDB over the committed native rows, so it
+// includes first-read account/KV work and never measures the runtime cache hit.
+// This uses the in-memory database and does not represent production disk I/O.
+func BenchmarkContractRuntimeNativeFirstRead(b *testing.B) {
+	for _, entries := range []int{0, 8, 64} {
+		addr, input := contractRuntimeBenchmarkFixture(b, entries)
+		sdb := newTestStateDB(b)
+		sdb.CreateAccount(addr, corepb.AccountType_Contract)
+		sdb.SetContract(addr, input)
+		root, err := sdb.Commit()
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			for _, full := range []bool{true, false} {
+				name := "runtime"
+				if full {
+					name = "GetContract"
+				}
+				b.Run(name, func(b *testing.B) {
+					b.ReportAllocs()
+					for b.Loop() {
+						fresh, err := New(root, sdb.db)
+						if err != nil {
+							b.Fatal(err)
+						}
+						var ok bool
+						if full {
+							contractRuntimeBenchmarkMeta, ok = contractRuntimeMetadataFromProto(addr, fresh.GetContract(addr))
+						} else {
+							contractRuntimeBenchmarkMeta, ok = fresh.ContractRuntime(addr)
+						}
+						if !ok {
+							b.Fatal("committed native metadata missing")
+						}
+					}
+				})
+			}
+		})
+	}
 }

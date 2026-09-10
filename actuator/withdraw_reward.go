@@ -29,8 +29,7 @@ func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.Dynami
 	currentCycle := dp.CurrentCycleNumber()
 	beginCycle := statedb.ReadBeginCycle(addr.Bytes())
 	endCycle := statedb.ReadEndCycle(addr.Bytes())
-	acct := statedb.GetAccount(addr)
-	if acct == nil || beginCycle > currentCycle {
+	if beginCycle > currentCycle || !statedb.Exist(addr) {
 		return
 	}
 
@@ -42,14 +41,25 @@ func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.Dynami
 		}
 	}
 
+	currentVotes := voteEntriesFromVotes(statedb.GetVotes(addr))
+	if statedb.Error() != nil {
+		return
+	}
 	// java-tron's accountStore.get returns a detached AccountCapsule. Later
 	// adjustAllowance calls read and write a different capsule, so the
 	// account-vote row saved at the end contains the allowance from before this
-	// settlement. StateDB returns a mutable cached account instead; serialize it
-	// now so AddAllowance below cannot leak the newly paid reward into the
-	// historical snapshot.
-	currentVotes := voteEntriesFromAccount(acct)
-	accountVoteSnapshot := marshalAccountVote(acct)
+	// settlement. Only voters with current votes write a snapshot; hydrate their
+	// complete account and serialize it before either AddAllowance below so the
+	// newly paid reward cannot leak into the historical snapshot. Early returns
+	// and accounts without current votes never need unrelated auxiliary domains.
+	var accountVoteSnapshot []byte
+	if len(currentVotes) != 0 {
+		acct := statedb.GetAccount(addr)
+		if acct == nil {
+			return
+		}
+		accountVoteSnapshot = marshalAccountVote(acct)
+	}
 
 	// Finalize the most-recent recorded-but-not-yet-settled cycle.
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
@@ -89,8 +99,7 @@ func queryReward(db BufferedKVStore, statedb *state.StateDB, dp *state.DynamicPr
 	if dp == nil || statedb == nil || !dp.ChangeDelegation() {
 		return 0
 	}
-	acct := statedb.GetAccount(addr)
-	if acct == nil {
+	if !statedb.Exist(addr) {
 		return 0
 	}
 	allowance := statedb.GetAllowance(addr)
@@ -111,7 +120,10 @@ func queryReward(db BufferedKVStore, statedb *state.StateDB, dp *state.DynamicPr
 	}
 	endCycle = currentCycle
 
-	currentVotes := voteEntriesFromAccount(acct)
+	currentVotes := voteEntriesFromVotes(statedb.GetVotes(addr))
+	if statedb.Error() != nil {
+		return 0
+	}
 	if len(currentVotes) == 0 {
 		return pending + allowance
 	}
@@ -121,13 +133,8 @@ func queryReward(db BufferedKVStore, statedb *state.StateDB, dp *state.DynamicPr
 	return pending + allowance
 }
 
-// voteEntriesFromAccount converts an account's protobuf vote list into
-// reward.VoteEntry slice.
-func voteEntriesFromAccount(acct *types.Account) []reward.VoteEntry {
-	if acct == nil {
-		return nil
-	}
-	pb := acct.Votes()
+// voteEntriesFromVotes converts a protobuf vote list into reward.VoteEntry slice.
+func voteEntriesFromVotes(pb []*corepb.Vote) []reward.VoteEntry {
 	out := make([]reward.VoteEntry, 0, len(pb))
 	for _, v := range pb {
 		out = append(out, reward.VoteEntry{

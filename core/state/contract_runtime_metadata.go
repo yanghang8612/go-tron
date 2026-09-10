@@ -41,15 +41,22 @@ func contractRuntimeMetadataFromProto(addr tcommon.Address, meta *contractpb.Sma
 
 // decodeContractRuntimeMetadata scans only the scalar runtime fields and the
 // transaction hash used by java-tron's storage-key layout. ABI, bytecode and
-// other length-delimited fields are skipped without allocating.
+// other unused fields are not materialized. Native rows still validate every
+// field, including the complete ABI graph, without allocating on valid input.
 func decodeContractRuntimeMetadata(addr tcommon.Address, data []byte) (ContractRuntimeMetadata, error) {
 	if statecodec.IsNative(data) {
-		meta := new(contractpb.SmartContract)
-		if err := statecodec.Unmarshal(data, meta); err != nil {
+		fields, err := statecodec.ReadContractRuntime(data)
+		if err != nil {
 			return ContractRuntimeMetadata{}, err
 		}
-		decoded, _ := contractRuntimeMetadataFromProto(addr, meta)
-		return decoded, nil
+		meta := ContractRuntimeMetadata{
+			OriginAddress:              tcommon.BytesToAddress(fields.OriginAddress),
+			ConsumeUserResourcePercent: fields.ConsumeUserResourcePercent,
+			OriginEnergyLimit:          fields.OriginEnergyLimit,
+			Version:                    fields.Version,
+		}
+		meta.storageKeyPrefix, meta.storageKeyHashSlot = javaStorageKeyLayoutFields(addr, fields.TrxHash, fields.Version)
+		return meta, nil
 	}
 	var (
 		meta    ContractRuntimeMetadata
