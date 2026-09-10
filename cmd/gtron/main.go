@@ -1239,6 +1239,7 @@ func gtron(ctx *cli.Context) error {
 				HistoryCatchupMode:          historyCatchupMode,
 				HistoryLoadProbe:            historyLoadProbe,
 				ParallelHistoryEventReady:   historyParallelReady,
+				BusyHistoryBuildReady:       historyParallelReady,
 				CatchupUnthrottledLagBlocks: prunePolicy.HistoryWindow,
 				CatchupHeavyWorkCooldown:    snapshotCatchupHeavyWorkCooldown,
 				HeavyWorkGate:               heavyWorkGate,

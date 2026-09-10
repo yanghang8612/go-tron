@@ -168,6 +168,12 @@ type Config struct {
 	// through an adaptive smaller batch and minimum importer recovery interval
 	// rather than a full busy build.
 	SyncBuildReady func() bool
+	// BusyHistoryBuildReady reports fresh CPU, runtime and memory headroom for
+	// throughput history between the soft and busy watermarks. Nil preserves
+	// importer-only admission. This opportunity still requires fresh low-latency
+	// storage and a shared heavy-work lease, and uses the forced-busy batch and
+	// complete recovery budget; it never makes the importer ready or unthrottled.
+	BusyHistoryBuildReady func() bool
 	// HistoryPressureProbe must be a bounded, concurrency-safe cached probe.
 	// Missing measurements do not imply zero bytes. Thresholds are scheduling
 	// signals, not a bound on write amplification or a filesystem space guard.
@@ -252,11 +258,16 @@ type PassResult struct {
 	HistoryDeferred             bool
 	HistoryRateLimited          bool
 	HistoryAccelerated          bool
-	// HistoryForcedBusy reports that the busy liveness watermark admitted this
-	// pass even though SyncBuildReady still reported a busy importer. Such passes
-	// use a smaller batch and a recovery interval, but retain the normal atomic
-	// history publication path.
+	// HistoryForcedBusy selects bounded work and recovery despite a busy
+	// importer, admitted by the liveness watermark, hot-storage pressure, or
+	// throughput resource headroom. It never selects ready/unthrottled work.
+	// Throughput adapts both range limits by observed density; balanced retains
+	// its smaller forced batch. Atomic history publication is unchanged.
 	HistoryForcedBusy bool
+	// HistoryBusyResourceReady identifies the resource opportunity between the
+	// soft and busy watermarks. It is a policy decision, not a heavy-work lease:
+	// a deadline or the shared gate can still defer this candidate.
+	HistoryBusyResourceReady bool
 	// HistoryAdmissionChecked and HistoryAdmissionReady expose the importer
 	// capacity decision independently from the busy-watermark override.
 	HistoryAdmissionChecked bool
@@ -416,6 +427,8 @@ type Stats struct {
 	AdmissionChecks          uint64
 	AdmissionReady           uint64
 	AdmissionBusy            uint64
+	BusyResourceAttempts     uint64
+	BusyResourceBuilds       uint64
 	HistoryGateDeferred      uint64
 	LastBatchBlocks          uint64
 	LastBatchTxNums          uint64
@@ -470,6 +483,8 @@ type coldRunnerMetrics struct {
 	admissionChecks          *metrics.Gauge
 	admissionReady           *metrics.Gauge
 	admissionBusy            *metrics.Gauge
+	busyResourceAttempts     *metrics.Gauge
+	busyResourceBuilds       *metrics.Gauge
 	historyGateDeferred      *metrics.Gauge
 	lastBatchBlocks          *metrics.Gauge
 	lastBatchTxNums          *metrics.Gauge
@@ -524,6 +539,8 @@ func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 		admissionChecks:          metrics.GetOrRegisterGauge(namespace+"history/admission/checks", nil),
 		admissionReady:           metrics.GetOrRegisterGauge(namespace+"history/admission/ready", nil),
 		admissionBusy:            metrics.GetOrRegisterGauge(namespace+"history/admission/busy", nil),
+		busyResourceAttempts:     metrics.GetOrRegisterGauge(namespace+"history/admission/busy_resource/attempts", nil),
+		busyResourceBuilds:       metrics.GetOrRegisterGauge(namespace+"history/admission/busy_resource/builds", nil),
 		historyGateDeferred:      metrics.GetOrRegisterGauge(namespace+"history/deferred/resource", nil),
 		lastBatchBlocks:          metrics.GetOrRegisterGauge(namespace+"lastpass/history/batch/blocks", nil),
 		lastBatchTxNums:          metrics.GetOrRegisterGauge(namespace+"lastpass/history/batch/txnums", nil),
@@ -587,6 +604,8 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.admissionChecks.Update(coldSnapshotUintGauge(stats.AdmissionChecks))
 	m.admissionReady.Update(coldSnapshotUintGauge(stats.AdmissionReady))
 	m.admissionBusy.Update(coldSnapshotUintGauge(stats.AdmissionBusy))
+	m.busyResourceAttempts.Update(coldSnapshotUintGauge(stats.BusyResourceAttempts))
+	m.busyResourceBuilds.Update(coldSnapshotUintGauge(stats.BusyResourceBuilds))
 	m.historyGateDeferred.Update(coldSnapshotUintGauge(stats.HistoryGateDeferred))
 	m.lastBatchBlocks.Update(coldSnapshotUintGauge(stats.LastBatchBlocks))
 	m.lastBatchTxNums.Update(coldSnapshotUintGauge(stats.LastBatchTxNums))
@@ -663,6 +682,8 @@ type Runner struct {
 	admissionChecks          atomic.Uint64
 	admissionReady           atomic.Uint64
 	admissionBusy            atomic.Uint64
+	busyResourceAttempts     atomic.Uint64
+	busyResourceBuilds       atomic.Uint64
 	historyGateDeferred      atomic.Uint64
 	lastBatchBlocks          atomic.Uint64
 	lastBatchTxNums          atomic.Uint64
@@ -939,6 +960,8 @@ func (r *Runner) Snapshot() Stats {
 		AdmissionChecks:          r.admissionChecks.Load(),
 		AdmissionReady:           r.admissionReady.Load(),
 		AdmissionBusy:            r.admissionBusy.Load(),
+		BusyResourceAttempts:     r.busyResourceAttempts.Load(),
+		BusyResourceBuilds:       r.busyResourceBuilds.Load(),
 		HistoryGateDeferred:      r.historyGateDeferred.Load(),
 		LastBatchBlocks:          r.lastBatchBlocks.Load(),
 		LastBatchTxNums:          r.lastBatchTxNums.Load(),
@@ -1367,13 +1390,16 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 						// merely a large lag candidate which a busy importer rejected.
 						result.HistoryAccelerated = false
 						if readyBlocks <= maxBusyDeferred && !pressured {
-							result.HistoryDeferred = true
-							return result, nil
+							result.HistoryBusyResourceReady = r.busyHistoryBuildReady(time.Now())
+							if !result.HistoryBusyResourceReady {
+								result.HistoryDeferred = true
+								return result, nil
+							}
 						}
-						// The liveness watermark guarantees positive progress, but a busy
-						// importer must not inherit the unthrottled full-batch path.
-						// Select a smaller complete-block range and install a minimum
-						// recovery window after successful publication.
+						// Both the liveness fallback and a resource opportunity use
+						// bounded busy work. In particular, the latter must retain the
+						// measured recovery instead of using ready acceleration or
+						// falling back to the fixed ordinary build interval.
 						result.HistoryForcedBusy = true
 						result.HistoryDebtBlocks = readyBlocks
 						result.HistoryDebtGrowth = coldSnapshotSignedDelta(readyBlocks, r.lastLagBlocks.Load())
@@ -1529,6 +1555,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		"backlogBlocks", backlogBlocks,
 		"accelerated", result.HistoryAccelerated,
 		"forcedBusy", result.HistoryForcedBusy,
+		"busyResourceReady", result.HistoryBusyResourceReady,
 		"historyPressure", pressured,
 		"hotHistoryBytes", pressure.HotHistoryBytes,
 		"hotHistoryBytesAvailable", pressure.HotHistoryBytesAvailable,
@@ -1764,6 +1791,7 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		"backlogBlocks", backlogBlocks,
 		"accelerated", result.HistoryAccelerated,
 		"forcedBusy", result.HistoryForcedBusy,
+		"busyResourceReady", result.HistoryBusyResourceReady,
 		"minRecovery", result.HistoryMinRecovery,
 	}
 	if result.HistoryForcedBusy {
@@ -2735,6 +2763,12 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 			r.forcedBusyAttempts.Add(1)
 			r.lastForcedBusyAttemptAt.Store(completedAt.UnixNano())
 			r.lastForcedAttemptRecovery.Store(int64(result.HistoryMinRecovery))
+		}
+	}
+	if result.HistoryBusyResourceReady && result.HistoryBuildAttempted {
+		r.busyResourceAttempts.Add(1)
+		if result.Built {
+			r.busyResourceBuilds.Add(1)
 		}
 	}
 	if result.Built {
