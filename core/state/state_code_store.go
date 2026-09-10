@@ -97,6 +97,10 @@ func (s *StateDB) SetStateCodeReader(reader ethdb.KeyValueReader) {
 }
 
 func (s *StateDB) readStateCode(hash tcommon.Hash) []byte {
+	return s.readStateCodeWithContext(hash, stateCodeDiagnosticContext{state: s, source: "cache_admission_hot"})
+}
+
+func (s *StateDB) readStateCodeWithContext(hash tcommon.Hash, diagnostic stateCodeDiagnosticContext) []byte {
 	store := s.getStateCodeStore()
 	if store == nil {
 		return nil
@@ -105,11 +109,15 @@ func (s *StateDB) readStateCode(hash tcommon.Hash) []byte {
 		return code
 	}
 	code := store.ReadStateCode(hash)
-	s.admitStateCode(hash, code, store)
+	s.admitStateCode(hash, code, store, diagnostic)
 	return code
 }
 
 func (s *StateDB) readStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
+	return s.readStateCodeStrictWithContext(hash, stateCodeDiagnosticContext{state: s, source: "strict_hot"})
+}
+
+func (s *StateDB) readStateCodeStrictWithContext(hash tcommon.Hash, diagnostic stateCodeDiagnosticContext) ([]byte, bool, error) {
 	store := s.getStateCodeStore()
 	if store == nil {
 		return nil, false, nil
@@ -121,8 +129,9 @@ func (s *StateDB) readStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
 	if strict, ok := store.(stateCodeStrictReader); ok {
 		code, found, err := strict.ReadStateCodeStrict(hash)
 		if err == nil && found {
-			if tcommon.Keccak256(code) != hash {
+			if actual := tcommon.Keccak256(code); actual != hash {
 				stateCodeCacheRejectCounter.Inc(1)
+				diagnostic.report(hash, actual, len(code))
 				return nil, false, fmt.Errorf("state code hash mismatch codeHash=%s", hash.Hex())
 			}
 			stateCodeStrictHotHitCounter.Inc(1)
@@ -137,8 +146,9 @@ func (s *StateDB) readStateCodeStrict(hash tcommon.Hash) ([]byte, bool, error) {
 		stateCodeStrictHotMissCounter.Inc(1)
 		return nil, false, nil
 	}
-	if tcommon.Keccak256(code) != hash {
+	if actual := tcommon.Keccak256(code); actual != hash {
 		stateCodeCacheRejectCounter.Inc(1)
+		diagnostic.report(hash, actual, len(code))
 		return nil, false, fmt.Errorf("state code hash mismatch codeHash=%s", hash.Hex())
 	}
 	stateCodeStrictHotHitCounter.Inc(1)
@@ -177,14 +187,14 @@ func (s *StateDB) matchesCachedStateCode(hash tcommon.Hash, code []byte) bool {
 	return s.db.codeCache.matches(hash, code)
 }
 
-func (s *StateDB) admitStateCode(hash tcommon.Hash, code []byte, store stateCodeStore) bool {
+func (s *StateDB) admitStateCode(hash tcommon.Hash, code []byte, store stateCodeStore, diagnostic stateCodeDiagnosticContext) bool {
 	if s == nil || s.db == nil || s.db.codeCache == nil {
 		return false
 	}
 	if _, ok := store.(rawDBStateCodeStore); !ok {
 		return false
 	}
-	return s.db.codeCache.admit(hash, code)
+	return s.db.codeCache.admitWithContext(hash, code, diagnostic)
 }
 
 func (s *StateDB) admitVerifiedStateCode(hash tcommon.Hash, code []byte, store stateCodeStore) bool {

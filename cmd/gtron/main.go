@@ -1143,8 +1143,12 @@ func gtron(ctx *cli.Context) error {
 	balanceTracePruneLifecycleWired := false
 	retiredPruneLifecycleWired := false
 	heavyWorkGate := maintenance.NewHeavyWorkGateWithCooldownAfter(heavyWorkRecoveryCooldown, heavyWorkCooldownMinDuration)
-	historyLoadProbe := makeRuntimeHistoryLoad(db, dbPath)
-	historyParallelReady := makeRuntimeHistoryParallelReady()
+	historyResources := newRuntimeHistoryResources(db, dbPath)
+	// Register before consumers: node shutdown stops them before the sampler,
+	// and failed startup unwinds the sampler before the stores are closed.
+	stack.RegisterLifecycle(historyResources)
+	historyLoadProbe := historyResources.sampleLoad
+	historyParallelReady := historyResources.parallelReady
 	heavyWorkGate.SetAdmissionCheck(func() bool {
 		return !historyLoadProbe().HardLimitReached(time.Now())
 	})

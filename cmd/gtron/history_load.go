@@ -39,7 +39,8 @@ type historyDeviceObservation struct {
 
 // runtimeHistoryLoadProbe observes the device that contains the data directory.
 // Its counters include competing processes; spare CPU does not imply spare I/O.
-// Sampling is lazy and bounded: no background work or database iteration starts.
+// Reads are bounded and cached for five seconds. The node resource sampler keeps
+// this baseline current independently of maintenance admission calls.
 type runtimeHistoryLoadProbe struct {
 	mu          sync.Mutex
 	engine      historyStoragePressureReader
@@ -52,13 +53,19 @@ type runtimeHistoryLoadProbe struct {
 	cached      maintenance.StoragePressure
 }
 
-func makeRuntimeHistoryLoad(db any, path string) func() maintenance.StoragePressure {
+func newRuntimeHistoryLoadProbe(db any, path string) *runtimeHistoryLoadProbe {
 	engine, _ := db.(historyStoragePressureReader)
 	p := &runtimeHistoryLoadProbe{
 		engine: engine, path: path, now: time.Now,
 		locate: historyDataDevice, read: readHistoryDiskstats,
 	}
-	return p.sample
+	return p
+}
+
+func (p *runtimeHistoryLoadProbe) reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lastAttempt, p.previous, p.cached = time.Time{}, nil, maintenance.StoragePressure{}
 }
 
 func (p *runtimeHistoryLoadProbe) sample() maintenance.StoragePressure {

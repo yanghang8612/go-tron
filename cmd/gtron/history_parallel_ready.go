@@ -40,7 +40,8 @@ type historyParallelObservation struct {
 }
 
 // This is an additional admission hint, never a replacement for the shared I/O
-// gate. Lazy reads of bounded proc/cgroup files start no background goroutine.
+// gate. The node resource sampler refreshes its bounded proc/cgroup observations
+// even when storage admission short-circuits the parallel-readiness callback.
 type runtimeHistoryParallelProbe struct {
 	mu          sync.Mutex
 	now         func() time.Time
@@ -54,14 +55,23 @@ type runtimeHistoryParallelProbe struct {
 	metrics     map[string]*metrics.Gauge
 }
 
-func makeRuntimeHistoryParallelReady() func() bool {
+func newRuntimeHistoryParallelProbe() *runtimeHistoryParallelProbe {
 	p := &runtimeHistoryParallelProbe{now: time.Now, read: readRuntimeHistoryParallel,
 		gomax: func() int { return runtime.GOMAXPROCS(0) }, numCPU: runtime.NumCPU,
 		metrics: make(map[string]*metrics.Gauge)}
 	for _, name := range []string{"known", "idle_ppm", "idle_cores_milli", "memory_available_bytes", "ready"} {
 		p.metrics[name] = metrics.GetOrRegisterGauge("state/snapshot/cold/history/parallel/runtime/"+name, nil)
 	}
-	return p.ready
+	return p
+}
+
+func (p *runtimeHistoryParallelProbe) reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lastAttempt, p.previous, p.known, p.idlePPM = time.Time{}, nil, false, 0
+	for _, gauge := range p.metrics {
+		gauge.Update(0)
+	}
 }
 
 func (p *runtimeHistoryParallelProbe) ready() bool {
@@ -75,6 +85,10 @@ func (p *runtimeHistoryParallelProbe) ready() bool {
 		p.previous = nil
 		current, err := p.read()
 		finished := p.now()
+		// Start the cache interval at completion, matching current.at. Otherwise
+		// a faster next read can produce a <5s pair despite waiting 5s since the
+		// previous attempt began, repeatedly discarding fresh idle evidence.
+		p.lastAttempt = finished
 		// An unexpectedly slow or backwards observation is not fresh capacity.
 		if err == nil && finished.Sub(now) >= 0 && finished.Sub(now) <= time.Second {
 			current.at = finished

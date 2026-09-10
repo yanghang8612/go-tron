@@ -153,6 +153,13 @@ var (
 	}
 )
 
+// These session-local diagnostics are aggregated once at session Close.
+var (
+	commitmentParentCacheNoResidentCounter         = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/cache/miss/no_resident", nil)
+	commitmentParentCacheResidentNewerCounter      = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/cache/miss/resident_newer", nil)
+	commitmentParentCacheFillVersionChangedCounter = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/cache/fill/version_changed", nil)
+)
+
 var (
 	commitmentParentDurablePublishRaceCounter            = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable_publish_races", nil)
 	commitmentParentPrefetchPublishRaceCounter           = metrics.NewRegisteredCounter("blockbuffer/commitment_parent/durable_publish_races/prefetch", nil)

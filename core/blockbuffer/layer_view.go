@@ -210,6 +210,14 @@ type commitmentParentReadContext struct {
 	flightWaitNanos        uint64
 	flightForegroundWait   uint64
 	flightPrefetchWait     uint64
+
+	// Miss counters describe existing cache probes, including retry and shared
+	// result rechecks, not unique keys or logical requests. Disabled caches are
+	// excluded. Fill rejection counts only otherwise-cacheable results whose
+	// existing global-version check fails, whether present or missing.
+	cacheNoResident         uint64
+	cacheResidentNewer      uint64
+	cacheFillVersionChanged uint64
 }
 
 func newCommitmentParentReadContext() any {
@@ -243,6 +251,9 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.flightShared = false
 		ctx.overlayResolved = 0
 		ctx.cacheResolved = 0
+		ctx.cacheNoResident = 0
+		ctx.cacheResidentNewer = 0
+		ctx.cacheFillVersionChanged = 0
 		ctx.durableReads = 0
 		ctx.durableHits = 0
 		ctx.trunkCached = 0
@@ -277,9 +288,38 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 	}
 }
 
+// recordCacheMiss classifies a failed probe using its existing cacheable
+// result. A configured cache returns cacheable=false only for a resident entry
+// newer than the session snapshot. It does not perform another lookup.
+func (ctx *commitmentParentReadContext) recordCacheMiss(cacheable bool) {
+	if ctx.session.cache == nil {
+		return
+	}
+	if cacheable {
+		ctx.cacheNoResident++
+	} else {
+		ctx.cacheResidentNewer++
+	}
+}
+
+// cacheFillAllowed preserves the original global-version fill guard and counts
+// only its rejection branch. The per-key epoch/probation/capacity checks remain
+// inside the cache and are not represented by this counter.
+func (ctx *commitmentParentReadContext) cacheFillAllowed(cacheable bool) bool {
+	if !cacheable {
+		return false
+	}
+	s := ctx.session
+	if s.cache.version.Load() != s.cacheVersion {
+		ctx.cacheFillVersionChanged++
+		return false
+	}
+	return true
+}
+
 func (ctx *commitmentParentReadContext) consume(value []byte) error {
 	s := ctx.session
-	if ctx.cacheable && s.cache.version.Load() == s.cacheVersion {
+	if ctx.cacheFillAllowed(ctx.cacheable) {
 		if ctx.prefetch {
 			s.cache.prefetchIfEpoch(ctx.key, value, ctx.epoch)
 		} else {
@@ -584,6 +624,7 @@ func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []b
 			}
 			return present, nil
 		}
+		ctx.recordCacheMiss(cacheable)
 		cursor := s.cursors[reader]
 		if cursor == nil {
 			var err error
@@ -628,7 +669,8 @@ func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []b
 				found = present
 				return
 			}
-			if canStore && s.cache.version.Load() == s.cacheVersion {
+			ctx.recordCacheMiss(canStore)
+			if ctx.cacheFillAllowed(canStore) {
 				if found {
 					s.cache.prefetchIfEpoch(key, value, epoch)
 				} else {
@@ -681,7 +723,7 @@ func (s *commitmentParentReadSession) leadCommitmentParentPrefetch(
 	if found {
 		ctx.prefetchHits++
 	}
-	if err == nil && !found && cacheable && s.cache.version.Load() == s.cacheVersion {
+	if err == nil && !found && ctx.cacheFillAllowed(cacheable) {
 		s.cache.prefetchMissingIfEpoch(key, cacheEpoch)
 	}
 	if err != nil {
@@ -738,6 +780,7 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 			}
 			return present, err
 		}
+		ctx.recordCacheMiss(cacheable)
 		cursor := s.cursors[reader]
 		if cursor == nil {
 			var err error
@@ -791,7 +834,8 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 				}
 				return
 			}
-			if canStore && s.cache.version.Load() == s.cacheVersion {
+			ctx.recordCacheMiss(canStore)
+			if ctx.cacheFillAllowed(canStore) {
 				if found {
 					s.cache.storeIfEpoch(key, value, epoch)
 				} else {
@@ -858,7 +902,7 @@ func (s *commitmentParentReadSession) leadCommitmentParentView(
 	if found {
 		ctx.durableHits++
 	}
-	if err == nil && !found && cacheable && s.cache.version.Load() == s.cacheVersion {
+	if err == nil && !found && ctx.cacheFillAllowed(cacheable) {
 		s.cache.setMissingIfEpoch(key, cacheEpoch)
 	}
 	if err != nil {
@@ -900,6 +944,7 @@ func (s *commitmentParentReadSession) Close() error {
 	cache := s.cache
 	s.cache = nil
 	var overlayResolved, cacheResolved, durableReads, durableHits, trunkCached, trunkDurable, windowCached uint64
+	var cacheNoResident, cacheResidentNewer, cacheFillVersionChanged uint64
 	var prefetchPlanned, prefetchOverlay, prefetchCache, prefetchDurable, prefetchHits uint64
 	var depthCached, depthDurable [4]uint64
 	var exactDepthCached, exactDepthDurable [4]uint64
@@ -910,6 +955,9 @@ func (s *commitmentParentReadSession) Close() error {
 	for _, ctx := range s.readContexts {
 		overlayResolved += ctx.overlayResolved
 		cacheResolved += ctx.cacheResolved
+		cacheNoResident += ctx.cacheNoResident
+		cacheResidentNewer += ctx.cacheResidentNewer
+		cacheFillVersionChanged += ctx.cacheFillVersionChanged
 		durableReads += ctx.durableReads
 		durableHits += ctx.durableHits
 		trunkCached += ctx.trunkCached
@@ -946,6 +994,9 @@ func (s *commitmentParentReadSession) Close() error {
 	}
 	commitmentParentOverlayResolvedCounter.Inc(int64(overlayResolved))
 	commitmentParentCacheResolvedCounter.Inc(int64(cacheResolved))
+	commitmentParentCacheNoResidentCounter.Inc(int64(cacheNoResident))
+	commitmentParentCacheResidentNewerCounter.Inc(int64(cacheResidentNewer))
+	commitmentParentCacheFillVersionChangedCounter.Inc(int64(cacheFillVersionChanged))
 	commitmentParentDurableReadsCounter.Inc(int64(durableReads))
 	commitmentParentDurableHitsCounter.Inc(int64(durableHits))
 	commitmentParentTrunkCacheCounter.Inc(int64(trunkCached))

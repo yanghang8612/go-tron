@@ -93,9 +93,10 @@ func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 		}
 		if obj.codeHash != (tcommon.Hash{}) {
 			stateCodeStrictObjectHashCounter.Inc(1)
-			if tcommon.Keccak256(obj.code) != obj.codeHash {
+			if actual := tcommon.Keccak256(obj.code); actual != obj.codeHash {
 				stateCodeCacheRejectCounter.Inc(1)
 				stateCodeStrictErrorCounter.Inc(1)
+				stateCodeDiagnosticContext{state: s, address: addr, addressKnown: true, source: "strict_object"}.report(obj.codeHash, actual, len(obj.code))
 				return nil, fmt.Errorf("cached contract runtime code hash mismatch contract=%s codeHash=%s", addr.Hex(), obj.codeHash.Hex())
 			}
 		}
@@ -108,7 +109,7 @@ func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 	if obj.codeDirty || obj.codeHash == (tcommon.Hash{}) {
 		return nil, nil
 	}
-	code, ok, err := s.readStateCodeStrict(obj.codeHash)
+	code, ok, err := s.readStateCodeStrictWithContext(obj.codeHash, stateCodeDiagnosticContext{state: s, address: addr, addressKnown: true, source: "strict_hot"})
 	if err != nil {
 		stateCodeStrictErrorCounter.Inc(1)
 		return nil, err
@@ -122,9 +123,10 @@ func (s *StateDB) GetCodeStrict(addr tcommon.Address) ([]byte, error) {
 			stateCodeStrictErrorCounter.Inc(1)
 			return nil, err
 		} else if ok && len(code) > 0 {
-			if tcommon.Keccak256(code) != obj.codeHash {
+			if actual := tcommon.Keccak256(code); actual != obj.codeHash {
 				stateCodeCacheRejectCounter.Inc(1)
 				stateCodeStrictErrorCounter.Inc(1)
+				stateCodeDiagnosticContext{state: s, address: addr, addressKnown: true, source: "strict_cold"}.report(obj.codeHash, actual, len(code))
 				return nil, fmt.Errorf("cold contract runtime code hash mismatch contract=%s codeHash=%s", addr.Hex(), obj.codeHash.Hex())
 			}
 			stateCodeStrictColdHitCounter.Inc(1)

@@ -119,11 +119,16 @@ func (c *stateCodeCache) matches(hash tcommon.Hash, code []byte) bool {
 // content-addressed key. A malformed durable/cold row keeps its pre-existing
 // read behavior, but is not allowed to poison later reads through the cache.
 func (c *stateCodeCache) admit(hash tcommon.Hash, code []byte) bool {
+	return c.admitWithContext(hash, code, stateCodeDiagnosticContext{source: "cache_admission"})
+}
+
+func (c *stateCodeCache) admitWithContext(hash tcommon.Hash, code []byte, diagnostic stateCodeDiagnosticContext) bool {
 	if c == nil || hash == (tcommon.Hash{}) || len(code) == 0 {
 		return false
 	}
-	if tcommon.Keccak256(code) != hash {
+	if actual := tcommon.Keccak256(code); actual != hash {
 		stateCodeCacheRejectCounter.Inc(1)
+		diagnostic.report(hash, actual, len(code))
 		return false
 	}
 	return c.admitVerified(hash, code)

@@ -128,6 +128,27 @@ func TestHistoryParallelProbeScopeRollbackAndSlowRead(t *testing.T) {
 	}
 }
 
+func TestHistoryParallelProbeCachesFromReadCompletion(t *testing.T) {
+	now, reads := time.Unix(1000, 0), 0
+	p := &runtimeHistoryParallelProbe{now: func() time.Time { return now }, gomax: func() int { return 16 }, numCPU: func() int { return 16 },
+		read: func() (historyParallelObservation, error) {
+			reads++
+			if reads == 1 {
+				now = now.Add(400 * time.Millisecond)
+			}
+			return historyParallelTestObservation(uint64(reads * 100)), nil
+		}}
+	p.ready()
+	now = now.Add(4600 * time.Millisecond) // 5s since start, only 4.6s since completion.
+	if p.ready() || reads != 1 {
+		t.Fatal("read began too early to form a valid pair with the previous completion")
+	}
+	now = now.Add(400 * time.Millisecond)
+	if !p.ready() || reads != 2 {
+		t.Fatal("read-time jitter discarded a valid five-second pair")
+	}
+}
+
 func TestHistoryParallelProbeConcurrentReads(t *testing.T) {
 	now, calls := time.Unix(1000, 0), 0
 	p := &runtimeHistoryParallelProbe{now: func() time.Time { return now }, gomax: func() int { return 16 }, numCPU: func() int { return 16 },
