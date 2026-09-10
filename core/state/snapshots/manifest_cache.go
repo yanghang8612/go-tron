@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/ethereum/go-ethereum/metrics"
@@ -21,16 +22,19 @@ const (
 )
 
 var (
-	loadedManifestCache         manifestDecodeCache
-	manifestCacheHits           = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/hits", nil)
-	manifestCacheMisses         = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/misses", nil)
-	manifestCacheBypasses       = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/bypasses", nil)
-	manifestCacheResident       = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/resident_bytes", nil)
-	manifestCacheBudget         = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/budget_bytes", nil)
-	manifestCacheCandidate      = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/candidate_charge_bytes", nil)
-	manifestCacheHeadroom       = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/headroom_bytes", nil)
-	manifestCacheRejections     = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/rejections/budget", nil)
-	manifestCacheRejectedCharge = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/last_rejection_charge_bytes", nil)
+	loadedManifestCache              manifestDecodeCache
+	manifestCacheHits                = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/hits", nil)
+	manifestCacheMisses              = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/misses", nil)
+	manifestCacheBypasses            = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/bypasses", nil)
+	manifestCacheResident            = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/resident_bytes", nil)
+	manifestCacheBudget              = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/budget_bytes", nil)
+	manifestCacheCandidate           = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/candidate_charge_bytes", nil)
+	manifestCacheHeadroom            = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/headroom_bytes", nil)
+	manifestCacheRejections          = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/rejections/budget", nil)
+	manifestCacheRejectedCharge      = metrics.GetOrRegisterGauge(defaultColdSnapshotMetrics+"manifest_cache/last_rejection_charge_bytes", nil)
+	manifestCachePublicationSeeds    = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/publication_seeds", nil)
+	manifestCachePublicationHits     = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/publication_hits", nil)
+	manifestCachePublicationBypasses = metrics.GetOrRegisterCounter(defaultColdSnapshotMetrics+"manifest_cache/publication_bypasses", nil)
 )
 
 // The cache stores metadata validation only. Segment-file authentication and
@@ -42,6 +46,7 @@ type manifestDecodeCache struct {
 	productionErr error
 	charge        uint64
 	budget        uint64
+	publication   bool
 }
 
 // A budget of zero disables the cache. Parse both settings even when disabled,
@@ -109,6 +114,9 @@ func (c *manifestDecodeCache) decodeOwned(data []byte, production bool, budget u
 	c.resizeLocked(budget)
 	if c.manifest != nil && bytes.Equal(data, c.data) {
 		manifestCacheHits.Inc(1)
+		if c.publication {
+			manifestCachePublicationHits.Inc(1)
+		}
 		manifestCacheCandidate.Update(int64(c.charge))
 		if production && c.productionErr != nil {
 			return nil, c.productionErr
@@ -125,6 +133,58 @@ func (c *manifestDecodeCache) decodeOwned(data []byte, production bool, budget u
 		return nil, err
 	}
 	productionErr := m.ValidateProduction()
+	c.retainDecodedLocked(data, m, productionErr, false)
+	if production && productionErr != nil {
+		return nil, productionErr
+	}
+	return m, nil
+}
+
+// A successful local publisher already normalized, sorted and validated m and
+// encoded these exact bytes. Remember that result so the first subsequent load
+// need not decode and validate it again. Reads still authenticate the complete
+// current file bytes; another process may replace the file at any time.
+//
+// Cache configuration cannot turn a completed durable publication into an
+// error. Invalid settings bypass this optimization; loaders retain their normal
+// configuration error. A JSON string with invalid UTF-8 is also left to the
+// decoder because encoding/json replaces it, potentially changing validation.
+func rememberPublishedManifest(data []byte, m *Manifest) {
+	budget, err := manifestCacheConfiguredBudget()
+	if err != nil {
+		manifestCachePublicationBypasses.Inc(1)
+		return
+	}
+	loadedManifestCache.retainPublished(data, m, budget)
+}
+
+func (c *manifestDecodeCache) retainPublished(data []byte, m *Manifest, budget uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.resizeLocked(budget)
+	// An idempotent progress publication, or a reader that won the race after
+	// rename, may already have populated these exact bytes. Keep its detached
+	// entry rather than cloning the whole catalog again.
+	if c.manifest != nil && bytes.Equal(data, c.data) {
+		manifestCachePublicationBypasses.Inc(1)
+		return
+	}
+	c.clearLocked()
+	manifestCacheCandidate.Update(0)
+	if budget == 0 || !manifestStringsValidUTF8(m) {
+		manifestCachePublicationBypasses.Inc(1)
+		return
+	}
+	// PublishManifest permits base-valid legacy JSON history. Keep its distinct
+	// production validation error exactly as a normal decode-cache miss does.
+	if c.retainDecodedLocked(data, m, m.ValidateProduction(), true) {
+		manifestCachePublicationSeeds.Inc(1)
+	} else {
+		manifestCachePublicationBypasses.Inc(1)
+	}
+}
+
+func (c *manifestDecodeCache) retainDecodedLocked(data []byte, m *Manifest, productionErr error, publication bool) bool {
 	// The retained clone allocates exactly len elements, not the spare capacity
 	// of encoding/json's growable slices. Calculate that exact container charge
 	// before allocating the private copy; the caller keeps its decoded view.
@@ -133,20 +193,61 @@ func (c *manifestDecodeCache) decodeOwned(data []byte, production bool, budget u
 	compact.Retired = compact.Retired[:len(compact.Retired):len(compact.Retired)]
 	charge := manifestCacheCharge(data, &compact)
 	manifestCacheCandidate.Update(manifestCacheMetricBytes(charge))
-	if charge <= budget {
+	if charge <= c.budget {
 		owned := cloneDecodedManifest(m)
+		if publication {
+			// The public publisher retains its mutable containers. Strings are
+			// immutable but may be small substrings of arbitrarily large caller
+			// buffers: clone them too so the resident charge bounds what we own.
+			clonePublishedManifestStrings(owned)
+			// Retired is omitempty, unlike Segments. Its empty-array input is
+			// absent in the encoded JSON and decodes back to nil.
+			if len(owned.Retired) == 0 {
+				owned.Retired = nil
+			}
+		}
 		c.data, c.manifest, c.productionErr, c.charge = data, owned, productionErr, charge
+		c.publication = publication
 		manifestCacheResident.Update(int64(charge))
-		manifestCacheHeadroom.Update(int64(budget - charge))
+		manifestCacheHeadroom.Update(int64(c.budget - charge))
+		return true
 	} else {
 		manifestCacheBypasses.Inc(1)
 		manifestCacheRejections.Inc(1)
 		manifestCacheRejectedCharge.Update(manifestCacheMetricBytes(charge))
 	}
-	if production && productionErr != nil {
-		return nil, productionErr
+	return false
+}
+
+func manifestStringsValidUTF8(m *Manifest) bool {
+	if m.Chain != nil && (!utf8.ValidString(m.Chain.GenesisHash) || !utf8.ValidString(m.Chain.ForkConfigHash)) {
+		return false
 	}
-	return m, nil
+	for _, refs := range [][]SegmentRef{m.Segments, m.Retired} {
+		for _, ref := range refs {
+			if !utf8.ValidString(string(ref.Dataset)) || !utf8.ValidString(string(ref.Kind)) ||
+				!utf8.ValidString(ref.Path) || !utf8.ValidString(ref.Checksum) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func clonePublishedManifestStrings(m *Manifest) {
+	if m.Chain != nil {
+		m.Chain.GenesisHash = strings.Clone(m.Chain.GenesisHash)
+		m.Chain.ForkConfigHash = strings.Clone(m.Chain.ForkConfigHash)
+	}
+	for _, refs := range [][]SegmentRef{m.Segments, m.Retired} {
+		for i := range refs {
+			ref := &refs[i]
+			ref.Dataset = SegmentDataset(strings.Clone(string(ref.Dataset)))
+			ref.Kind = SegmentKind(strings.Clone(string(ref.Kind)))
+			ref.Path = strings.Clone(ref.Path)
+			ref.Checksum = strings.Clone(ref.Checksum)
+		}
+	}
 }
 
 func (c *manifestDecodeCache) resizeLocked(budget uint64) {
@@ -173,6 +274,7 @@ func (c *manifestDecodeCache) clear() {
 
 func (c *manifestDecodeCache) clearLocked() {
 	c.data, c.manifest, c.productionErr, c.charge = nil, nil, nil, 0
+	c.publication = false
 	manifestCacheResident.Update(0)
 	manifestCacheHeadroom.Update(manifestCacheMetricBytes(c.budget))
 }

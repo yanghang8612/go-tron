@@ -1198,7 +1198,7 @@ func (b *Buffer) setBaseReadCacheSize(sizeBytes, trunkDepth int, flushAdmissionP
 	// afterwards so reconfiguration (including disabling the cache) cannot leave
 	// process gauges describing the retired cache's capacity and budgets.
 	if current != nil {
-		publishBaseReadCacheMetrics(current.stats())
+		current.publishMetrics()
 	} else {
 		publishBaseReadCacheMetrics(baseReadCacheStats{})
 	}

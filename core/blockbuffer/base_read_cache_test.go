@@ -1143,7 +1143,7 @@ func TestBaseReadCache_RepeatedHitsAccumulateBoundedClockCredit(t *testing.T) {
 		}
 	}
 	entry := s.entries[string(keys[0])]
-	if got := entry.references.Load(); got != baseReadCacheMaxReferenceCredit {
+	if got := entry.references.Load() & baseReadCacheReferenceCreditMask; got != baseReadCacheMaxReferenceCredit {
 		t.Fatalf("reference credit = %d, want saturated %d", got, baseReadCacheMaxReferenceCredit)
 	}
 

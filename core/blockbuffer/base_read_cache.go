@@ -164,6 +164,9 @@ type baseReadCache struct {
 	// published after its Pebble snapshot.
 	version                atomic.Uint64
 	metricsPublishSequence atomic.Uint64
+	// Serialize only low-frequency sampling+publication so an older snapshot
+	// cannot overwrite this owner's newer cumulative diagnostics.
+	metricsPublishMu sync.Mutex
 }
 
 type baseReadCacheShard struct {
@@ -220,6 +223,9 @@ type baseReadCacheShard struct {
 	windowPromotions       uint16
 	windowAdmissionShift   uint8
 	windowHitEvents        atomic.Uint32
+	// Diagnostic totals use the existing writer lock and survive clear. They
+	// are published with occupancy rather than adding per-read global atomics.
+	diagnostics [baseReadCacheDiagnosticDepths]baseReadCacheDepthDiagnostics
 }
 
 // baseReadCacheEpoch identifies one key's direct-mapped invalidation slot and
@@ -258,9 +264,10 @@ type baseReadCacheEntry struct {
 	// callback-scoped reads instead hold RLock through consumption and leave it
 	// false, allowing a same-capacity refresh to reuse the bytes in place.
 	exposed atomic.Bool
-	// references stores a small saturating CLOCK credit in its low bits and the
-	// direct-read-ahead marker in its high bit. Eviction consumes only credit;
-	// the first ordinary cache hit consumes the marker for usefulness metrics.
+	// references stores CLOCK credit, resident-lifetime reference-source bits,
+	// a depth-6/7 diagnostic bucket and the direct-read-ahead marker. Only the
+	// explicit low-bit credit mask influences eviction. Keeping diagnostic bits
+	// here preserves the 80-byte entry/slab size without parsing keys on eviction.
 	references atomic.Uint32
 	// keyCapacity records the private key allocation size across shorter-key
 	// reuse. It occupies existing alignment padding, so the entry remains in the
@@ -272,14 +279,17 @@ type baseReadCacheEntry struct {
 	nextFree *baseReadCacheEntry
 }
 
-func (e *baseReadCacheEntry) reference() {
+func (e *baseReadCacheEntry) reference(source uint32) {
 	for {
 		state := e.references.Load()
-		credit := state &^ baseReadCachePrefetchedReference
-		if credit >= baseReadCacheMaxReferenceCredit {
+		next := state | source
+		if state&baseReadCacheReferenceCreditMask < baseReadCacheMaxReferenceCredit {
+			next++
+		}
+		if next == state {
 			return
 		}
-		if e.references.CompareAndSwap(state, state+1) {
+		if e.references.CompareAndSwap(state, next) {
 			return
 		}
 	}
@@ -288,7 +298,7 @@ func (e *baseReadCacheEntry) reference() {
 func (e *baseReadCacheEntry) consumeReference() bool {
 	for {
 		state := e.references.Load()
-		credit := state &^ baseReadCachePrefetchedReference
+		credit := state & baseReadCacheReferenceCreditMask
 		if credit == 0 {
 			return false
 		}
@@ -444,7 +454,11 @@ func (c *baseReadCache) getWithEpochMode(key []byte, recordUseful bool) ([]byte,
 	s.mu.RLock()
 	e, ok := s.entries[string(key)]
 	if ok {
-		e.reference()
+		source := baseReadCacheReferencePrefetch
+		if recordUseful {
+			source = baseReadCacheReferenceForeground
+		}
+		e.reference(source)
 		if recordUseful {
 			e.recordUsefulPrefetch()
 		}
@@ -474,7 +488,7 @@ func (c *baseReadCache) getAtVersion(key []byte, maxVersion uint64) (value []byt
 	e, ok := s.entries[string(key)]
 	if ok {
 		if e.version <= maxVersion {
-			e.reference()
+			e.reference(baseReadCacheReferenceForeground)
 			e.recordUsefulPrefetch()
 			value := e.value
 			if value != nil {
@@ -507,7 +521,7 @@ func (c *baseReadCache) probeAtVersionForPrefetch(key []byte, maxVersion uint64)
 	e, ok := s.entries[string(key)]
 	if ok {
 		if e.version <= maxVersion {
-			e.reference()
+			e.reference(baseReadCacheReferencePrefetch)
 			present = e.value != nil
 			s.mu.RUnlock()
 			return true, present, baseReadCacheEpoch{}, false
@@ -536,7 +550,7 @@ func (c *baseReadCache) viewWithEpoch(key []byte, fn func(value []byte, stable b
 	s.mu.RLock()
 	e, ok := s.entries[string(key)]
 	if ok {
-		e.reference()
+		e.reference(baseReadCacheReferenceForeground)
 		e.recordUsefulPrefetch()
 		if e.value == nil {
 			s.mu.RUnlock()
@@ -568,7 +582,7 @@ func (c *baseReadCache) viewAtVersion(key []byte, maxVersion uint64, fn func(val
 	e, ok := s.entries[string(key)]
 	if ok {
 		if e.version <= maxVersion {
-			e.reference()
+			e.reference(baseReadCacheReferenceForeground)
 			usefulPrefetch = e.recordUsefulPrefetch()
 			if usefulPrefetch {
 				commitmentParentPrefetchUsefulCounter.Inc(1)
@@ -658,7 +672,9 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 	if c == nil {
 		return value, false
 	}
-	other := c.isOtherKeyBytes(key)
+	depth, commitment := c.commitmentKeyDepthBytes(key)
+	other := c.flushAdmissionPrefix != "" && !commitment
+	diagnosticDepth := baseReadCacheDiagnosticDepth(depth, commitment)
 	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	s := &c.shards[baseReadCacheShardIndex(key)]
 	if charge > s.limit {
@@ -667,6 +683,7 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 
 	s.mu.Lock()
 	if c.invalidations[epoch.slot].Load() != epoch.value {
+		s.recordDiagnosticReason(diagnosticDepth, baseReadCacheDiagnosticEpochRejected)
 		s.mu.Unlock()
 		return value, false
 	}
@@ -683,7 +700,11 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 				commitmentParentForegroundPublishRaceCounter.Inc(1)
 			}
 		}
-		current.reference()
+		source := baseReadCacheReferenceForeground
+		if force {
+			source = baseReadCacheReferencePrefetch
+		}
+		current.reference(source)
 		value := current.value
 		if expose && value != nil {
 			current.exposed.Store(true)
@@ -699,16 +720,18 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 			// value in the bounded window. If it is evicted untouched, a later
 			// sighting can enter the main CLOCK directly; a second observation
 			// already present in probation skips the window altogether.
-			if s.admit(key, false) {
+			if s.admitWithDiagnostics(key, false, diagnosticDepth) {
 				window = false
 			} else if s.admitWindowFirstRead() {
 				window = true
 			} else {
+				s.recordDiagnosticReason(diagnosticDepth, baseReadCacheDiagnosticWindowBypassed)
 				baseReadCacheWindowAdmissionBypassedCounter.Inc(1)
 				s.mu.Unlock()
 				return value, false
 			}
-		} else if !s.admit(key, other) {
+		} else if !s.admitWithDiagnostics(key, other, diagnosticDepth) {
+			s.recordDiagnosticReason(diagnosticDepth, baseReadCacheDiagnosticProbationRejected)
 			s.mu.Unlock()
 			return value, false
 		}
@@ -720,7 +743,8 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 		// if it no longer fits, fall back to ordinary probation without weakening
 		// the trunk's hard byte bound.
 		trunk = false
-		if !s.admit(key, other) {
+		if !s.admitWithDiagnostics(key, other, diagnosticDepth) {
+			s.recordDiagnosticReason(diagnosticDepth, baseReadCacheDiagnosticProbationRejected)
 			s.recycleEntry(entry)
 			s.mu.Unlock()
 			return value, false
@@ -729,6 +753,7 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 	if window && entry.charge > s.windowLimit {
 		// Recycled backing may be larger than the requested value. Retain the
 		// first-sighting fingerprint, but never exceed the hard window bound.
+		s.recordDiagnosticReason(diagnosticDepth, baseReadCacheDiagnosticWindowCapacityRejected)
 		s.recycleEntry(entry)
 		s.mu.Unlock()
 		return value, false
@@ -736,9 +761,11 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 	entry.nonCommitment = other
 	entry.trunk = trunk
 	entry.window = window
+	references := uint32(diagnosticDepth) << baseReadCacheDiagnosticDepthShift
 	if force {
-		entry.references.Store(baseReadCachePrefetchedReference)
+		references |= baseReadCachePrefetchedReference
 	}
+	entry.references.Store(references)
 	if expose && entry.value != nil {
 		entry.exposed.Store(true)
 	}
@@ -807,8 +834,10 @@ func (c *baseReadCache) setFlushedAt(key string, value []byte, shard uint32) {
 func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, value []byte) {
 	charge := len(key) + len(value) + baseReadCacheEntryOverhead
 	old, cached := s.entries[key]
-	_, commitment := c.commitmentKeyDepthString(key)
+	depth, commitment := c.commitmentKeyDepthString(key)
+	diagnosticDepth := baseReadCacheDiagnosticDepth(depth, commitment)
 	if !cached && charge <= s.limit && commitment && s.admitObservedString(key, false) {
+		s.recordDiagnosticReason(diagnosticDepth, baseReadCacheDiagnosticFlushAdmission)
 		// The first durable read already paid for this value and established
 		// frequency evidence. The successful canonical flush supplies the
 		// second observation and a newer immutable value, so retain it now
@@ -816,6 +845,7 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		// complete admission. Clone the layer-owned key/value: sibling batches
 		// may share large arenas which are released after layer promotion.
 		entry := s.acquireEntryString(key, value, false, c.version.Load())
+		entry.references.Store(uint32(diagnosticDepth) << baseReadCacheDiagnosticDepthShift)
 		entry.nonCommitment = false
 		s.entries[entry.key] = entry
 		s.queue = append(s.queue, entry)
@@ -830,7 +860,7 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 			// promotion credit, but leave it in the window until its FIFO token is
 			// consumed. Appending a main token here would give one recyclable entry
 			// two queue owners and make later invalidation unsafe.
-			old.reference()
+			old.reference(baseReadCacheReferenceFlush)
 			s.forgetAdmissionString(old.key, false)
 		}
 		// Preserve the stable entry and its CLOCK queue pointer. This is a value
@@ -1175,7 +1205,7 @@ func (c *baseReadCache) clear() {
 	// empty resident set immediately so an unwind/rebuild cannot leave stale
 	// occupancy indefinitely when no later commitment session is opened.
 	c.metricsPublishSequence.Store(0)
-	publishBaseReadCacheMetrics(c.stats())
+	c.publishMetrics()
 }
 
 func baseReadCacheInvalidationSlots(sizeBytes int) int {
@@ -1496,12 +1526,14 @@ func (s *baseReadCacheShard) evictWindowOne() bool {
 			continue
 		}
 		if entry.consumeReference() {
+			s.recordDiagnosticOutcome(entry, baseReadCacheDiagnosticWindowPromoted)
 			s.promoteWindowEntry(entry)
 			s.observeWindowOutcome(true)
 			baseReadCacheWindowPromotedCounter.Inc(1)
 			return true
 		}
 		delete(s.entries, entry.key)
+		s.recordDiagnosticOutcome(entry, baseReadCacheDiagnosticWindowEvicted)
 		s.used -= entry.charge
 		s.windowUsed -= entry.charge
 		s.windowEntries--
@@ -1540,6 +1572,7 @@ func (s *baseReadCacheShard) evictOne(other bool) bool {
 				return true
 			}
 			delete(s.entries, entry.key)
+			s.recordDiagnosticOutcome(entry, baseReadCacheDiagnosticTailEvicted)
 			s.used -= entry.charge
 			if entry.nonCommitment {
 				s.nonCommitmentUsed -= entry.charge
@@ -1658,6 +1691,7 @@ type baseReadCacheStats struct {
 	capacity         int64
 	budgets          [3]int64
 	windowAdmissions int64
+	diagnostics      [baseReadCacheDiagnosticDepths]baseReadCacheDepthDiagnostics
 }
 
 const (
@@ -1710,6 +1744,7 @@ func addBaseReadCacheShardStats(stats *baseReadCacheStats, s *baseReadCacheShard
 	stats.budgets[1] += int64(s.windowLimit)
 	stats.budgets[2] += int64(s.nonCommitmentLimit)
 	stats.windowAdmissions += int64(s.windowAdmissions)
+	addBaseReadCacheDiagnostics(&stats.diagnostics, &s.diagnostics)
 }
 
 // tryStats is the fold-close variant. A flush promotion can hold one shard's
@@ -1741,6 +1776,7 @@ func publishBaseReadCacheMetrics(stats baseReadCacheStats) {
 		baseReadCacheBudgetGauges[tier].Update(stats.budgets[tier])
 	}
 	baseReadCacheWindowAdmittedGauge.Update(stats.windowAdmissions)
+	publishBaseReadCacheDiagnostics(stats.diagnostics)
 }
 
 func (c *baseReadCache) maybePublishMetrics() {
@@ -1751,14 +1787,27 @@ func (c *baseReadCache) maybePublishMetrics() {
 	if (sequence-1)%baseReadCacheMetricsPublishInterval != 0 {
 		return
 	}
+	if !c.metricsPublishMu.TryLock() {
+		c.metricsPublishSequence.Store(0)
+		return
+	}
+	defer c.metricsPublishMu.Unlock()
 	stats, ok := c.tryStats()
 	if !ok {
 		// Retry on the next close rather than waiting another full interval.
-		// Concurrent closes may cause an extra harmless publication.
 		c.metricsPublishSequence.Store(0)
 		return
 	}
 	publishBaseReadCacheMetrics(stats)
+}
+
+// Clear/reconfiguration already run outside the read path and publish even if
+// a concurrent close is sampling. Take the lock before sampling, not only when
+// writing gauges, to preserve same-owner cumulative ordering.
+func (c *baseReadCache) publishMetrics() {
+	c.metricsPublishMu.Lock()
+	defer c.metricsPublishMu.Unlock()
+	publishBaseReadCacheMetrics(c.stats())
 }
 
 func baseReadCacheShardIndex(key []byte) uint32 {

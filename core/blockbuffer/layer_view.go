@@ -218,6 +218,7 @@ type commitmentParentReadContext struct {
 	cacheNoResident         uint64
 	cacheResidentNewer      uint64
 	cacheFillVersionChanged uint64
+	cacheDeepNoResident     [baseReadCacheDiagnosticDepths][2]uint64
 }
 
 func newCommitmentParentReadContext() any {
@@ -254,6 +255,7 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 		ctx.cacheNoResident = 0
 		ctx.cacheResidentNewer = 0
 		ctx.cacheFillVersionChanged = 0
+		ctx.cacheDeepNoResident = [baseReadCacheDiagnosticDepths][2]uint64{}
 		ctx.durableReads = 0
 		ctx.durableHits = 0
 		ctx.trunkCached = 0
@@ -291,12 +293,19 @@ func returnCommitmentParentReadContexts(contexts []*commitmentParentReadContext)
 // recordCacheMiss classifies a failed probe using its existing cacheable
 // result. A configured cache returns cacheable=false only for a resident entry
 // newer than the session snapshot. It does not perform another lookup.
-func (ctx *commitmentParentReadContext) recordCacheMiss(cacheable bool) {
+func (ctx *commitmentParentReadContext) recordCacheMiss(cacheable bool, depth int, prefetch bool) {
 	if ctx.session.cache == nil {
 		return
 	}
 	if cacheable {
 		ctx.cacheNoResident++
+		if depth >= 6 && depth <= 7 {
+			source := 0
+			if prefetch {
+				source = 1
+			}
+			ctx.cacheDeepNoResident[depth-6][source]++
+		}
 	} else {
 		ctx.cacheResidentNewer++
 	}
@@ -596,7 +605,8 @@ func (s *commitmentParentReadSession) PrefetchKeyParts(reader int, first, second
 func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []byte) (bool, error) {
 	ctx := s.readContexts[reader]
 	ctx.prefetchPlanned++
-	prefetchDepth := commitmentParentPrefetchDepthBucket(len(key) - len(keyPrefix))
+	depth := len(key) - len(keyPrefix)
+	prefetchDepth := commitmentParentPrefetchDepthBucket(depth)
 	if prefetchDepth >= 0 {
 		ctx.prefetchDepthPlanned[prefetchDepth]++
 	}
@@ -624,7 +634,7 @@ func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []b
 			}
 			return present, nil
 		}
-		ctx.recordCacheMiss(cacheable)
+		ctx.recordCacheMiss(cacheable, depth, true)
 		cursor := s.cursors[reader]
 		if cursor == nil {
 			var err error
@@ -669,7 +679,7 @@ func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []b
 				found = present
 				return
 			}
-			ctx.recordCacheMiss(canStore)
+			ctx.recordCacheMiss(canStore, depth, true)
 			if ctx.cacheFillAllowed(canStore) {
 				if found {
 					s.cache.prefetchIfEpoch(key, value, epoch)
@@ -780,7 +790,7 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 			}
 			return present, err
 		}
-		ctx.recordCacheMiss(cacheable)
+		ctx.recordCacheMiss(cacheable, depth, false)
 		cursor := s.cursors[reader]
 		if cursor == nil {
 			var err error
@@ -834,7 +844,7 @@ func (s *commitmentParentReadSession) view(reader int, keyPrefix, key []byte, fn
 				}
 				return
 			}
-			ctx.recordCacheMiss(canStore)
+			ctx.recordCacheMiss(canStore, depth, false)
 			if ctx.cacheFillAllowed(canStore) {
 				if found {
 					s.cache.storeIfEpoch(key, value, epoch)
@@ -945,6 +955,7 @@ func (s *commitmentParentReadSession) Close() error {
 	s.cache = nil
 	var overlayResolved, cacheResolved, durableReads, durableHits, trunkCached, trunkDurable, windowCached uint64
 	var cacheNoResident, cacheResidentNewer, cacheFillVersionChanged uint64
+	var cacheDeepNoResident [baseReadCacheDiagnosticDepths][2]uint64
 	var prefetchPlanned, prefetchOverlay, prefetchCache, prefetchDurable, prefetchHits uint64
 	var depthCached, depthDurable [4]uint64
 	var exactDepthCached, exactDepthDurable [4]uint64
@@ -957,6 +968,11 @@ func (s *commitmentParentReadSession) Close() error {
 		cacheResolved += ctx.cacheResolved
 		cacheNoResident += ctx.cacheNoResident
 		cacheResidentNewer += ctx.cacheResidentNewer
+		for depth := range cacheDeepNoResident {
+			for source := range cacheDeepNoResident[depth] {
+				cacheDeepNoResident[depth][source] += ctx.cacheDeepNoResident[depth][source]
+			}
+		}
 		cacheFillVersionChanged += ctx.cacheFillVersionChanged
 		durableReads += ctx.durableReads
 		durableHits += ctx.durableHits
@@ -997,6 +1013,11 @@ func (s *commitmentParentReadSession) Close() error {
 	commitmentParentCacheNoResidentCounter.Inc(int64(cacheNoResident))
 	commitmentParentCacheResidentNewerCounter.Inc(int64(cacheResidentNewer))
 	commitmentParentCacheFillVersionChangedCounter.Inc(int64(cacheFillVersionChanged))
+	for depth := range cacheDeepNoResident {
+		for source, count := range cacheDeepNoResident[depth] {
+			commitmentParentDeepNoResidentCounters[depth][source].Inc(int64(count))
+		}
+	}
 	commitmentParentDurableReadsCounter.Inc(int64(durableReads))
 	commitmentParentDurableHitsCounter.Inc(int64(durableHits))
 	commitmentParentTrunkCacheCounter.Inc(int64(trunkCached))

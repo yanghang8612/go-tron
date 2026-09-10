@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -3143,15 +3144,12 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 
 	owner := testProcessorAddr(1)
 	funder := testProcessorAddr(3)
-	churnOwner := testProcessorAddr(5)
-	churnRecipient := testProcessorAddr(6)
 	contractAddr := testProcessorAddr(0x80)
-	for _, address := range []tcommon.Address{owner, funder, churnOwner, churnRecipient, params.BlackholeAddress} {
+	for _, address := range []tcommon.Address{owner, funder, params.BlackholeAddress} {
 		base.CreateAccount(address, corepb.AccountType_Normal)
 	}
 	base.AddBalance(owner, 100_000_000)
 	base.AddBalance(funder, 100_000_000)
-	base.AddBalance(churnOwner, 100_000_000)
 	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
 	base.SetContract(contractAddr, &contractpb.SmartContract{
 		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
@@ -3176,14 +3174,8 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 		makeTestTriggerTx(1, contractAddr, []byte{0x01}),
 		makeTestTransferTx(3, 1, 2_000_000),
 		makeTestTriggerTx(1, contractAddr, []byte{0x02}),
+		makeTestTriggerTx(1, contractAddr, []byte{0x03}),
 	}
-	// The conflict at tx 2 launches a two-result sender suffix. Unrelated
-	// canonical work gives its descendant a deterministic opportunity to finish
-	// before its own boundary without introducing any wait in production code.
-	for range 256 {
-		transactions = append(transactions, makeTestTransferTx(5, 6, 1))
-	}
-	transactions = append(transactions, makeTestTriggerTx(1, contractAddr, []byte{0x03}))
 	transactionProtos := make([]*corepb.Transaction, len(transactions))
 	for txIndex, tx := range transactions {
 		if tx.ContractType() == corepb.Transaction_Contract_TriggerSmartContract {
@@ -3198,12 +3190,12 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 		}},
 		Transactions: transactionProtos,
 	})
-	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+	run := func(statedb *state.StateDB, options processBlockOptions, traceForTx ...func(int, *types.Transaction) vm.Tracer) ([]*corepb.TransactionInfo, error) {
 		infos, _, processErr := processBlockWithOptions(
 			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
 			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
 			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
-			options,
+			options, traceForTx...,
 		)
 		return infos, processErr
 	}
@@ -3250,10 +3242,29 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 		parallelVMAsyncRetryWriteMismatchCounter.Snapshot().Count() +
 		parallelVMAsyncRetryBalanceMismatchCounter.Snapshot().Count()
 	vmPublishedBefore := parallelVMPublishedCounter.Snapshot().Count()
-	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
-	if err != nil {
-		t.Fatalf("parallel VM retry process: %v", err)
-	}
+	var parallelInfos []*corepb.TransactionInfo
+	synctest.Test(t, func(t *testing.T) {
+		waits := 0
+		var processErr error
+		parallelInfos, processErr = run(parallelState, processBlockOptions{parallelVM: true}, func(txIndex int, _ *types.Transaction) vm.Tracer {
+			if txIndex == 2 {
+				// observeBoundary has launched the conflicting sender suffix and
+				// already declined publication of tx 2. Let that worker finish
+				// before canonical execution advances to the descendant's boundary.
+				// Its two results and done event fit the buffered event channel;
+				// no production wait or amount of unrelated CPU work is needed.
+				synctest.Wait()
+				waits++
+			}
+			return nil
+		})
+		if processErr != nil {
+			t.Fatalf("parallel VM retry process: %v", processErr)
+		}
+		if waits != 1 {
+			t.Fatalf("canonical conflict-boundary waits = %d, want 1", waits)
+		}
+	})
 	if blocks := parallelVMAsyncRetryBlocksCounter.Snapshot().Count() - blocksBefore; blocks != 1 {
 		t.Fatalf("async VM retry blocks = %d, want 1", blocks)
 	}
@@ -3277,7 +3288,10 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 	validated := parallelVMAsyncRetryValidatedCounter.Snapshot().Count() - validatedBefore
 	recovered := parallelVMAsyncRetryRecoveredCounter.Snapshot().Count() - recoveredBefore
 	if candidates != 1 || validated != 0 || recovered != 0 {
-		t.Fatalf("async VM retry candidates=%d validated=%d recovered=%d, want 1/0/0 for a published result", candidates, validated, recovered)
+		t.Fatalf("async VM retry candidates=%d validated=%d recovered=%d, want 1/0/0 for a published result (ready=%d late=%d stale=%d)", candidates, validated, recovered,
+			parallelVMAsyncRetryReadyCounter.Snapshot().Count()-readyBefore,
+			parallelVMAsyncRetryLateCounter.Snapshot().Count()-lateBefore,
+			parallelVMAsyncRetryStaleCounter.Snapshot().Count()-staleBefore)
 	}
 	if failures := parallelVMAsyncRetryErrorsCounter.Snapshot().Count() - errorsBefore; failures != 0 {
 		t.Fatalf("async VM retry errors = %d, want 0", failures)

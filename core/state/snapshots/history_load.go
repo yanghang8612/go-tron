@@ -16,6 +16,40 @@ const (
 	historyCPUBurstRecovery = 250 * time.Millisecond
 )
 
+type historyLoadReason uint16
+
+// These bit values are exposed by history/budget/reason_bits. Keep existing
+// assignments stable when adding reasons. Pressure and recovery reasons are
+// separate: level 1 can persist after every instantaneous pressure has cleared.
+const (
+	historyLoadReasonHard historyLoadReason = 1 << iota
+	historyLoadReasonNewStall
+	historyLoadReasonDevicePressure
+	historyLoadReasonL0Pressure
+	historyLoadReasonDebtGrowth
+	historyLoadReasonEngineUnavailable
+	historyLoadReasonEngineStale
+	historyLoadReasonRecoverySamples
+	historyLoadReasonPressureHysteresis
+	historyLoadReasonDeviceUnknown
+)
+
+var historyLoadReasonMetrics = [...]struct {
+	bit  historyLoadReason
+	name string
+}{
+	{historyLoadReasonHard, "hard"},
+	{historyLoadReasonNewStall, "new_stall"},
+	{historyLoadReasonDevicePressure, "device_pressure"},
+	{historyLoadReasonL0Pressure, "l0_pressure"},
+	{historyLoadReasonDebtGrowth, "debt_growth"},
+	{historyLoadReasonEngineUnavailable, "engine_unavailable"},
+	{historyLoadReasonEngineStale, "engine_stale"},
+	{historyLoadReasonRecoverySamples, "recovery_samples"},
+	{historyLoadReasonPressureHysteresis, "pressure_hysteresis"},
+	{historyLoadReasonDeviceUnknown, "device_unknown"},
+}
+
 type historyWorkSample struct {
 	blocks, txnums, bytes uint64
 	work                  time.Duration
@@ -27,6 +61,7 @@ type historyWorkSample struct {
 type historyLoadState struct {
 	sample               maintenance.StoragePressure
 	lastAccepted         time.Time
+	acceptedSequence     uint64 // Accepted engine observations, including resets.
 	syncSeenAt           time.Time
 	lastDebt             uint64
 	lastStalls           uint64
@@ -34,12 +69,14 @@ type historyLoadState struct {
 	good                 int
 	level                int // 0 unknown, 1 pressured, 2 recovering, 3 healthy
 	hard                 bool
+	reasons              historyLoadReason
 	history              historyWorkSample
 	event                historyWorkSample
 	historyFailureBlocks uint64
 	historyFailureTxNums uint64
 	eventFailureBlocks   uint64
 	metrics              map[string]*metrics.Gauge
+	reasonEntries        [len(historyLoadReasonMetrics)]*metrics.Counter
 }
 
 func (r *Runner) initHistoryLoadMetrics() {
@@ -49,8 +86,12 @@ func (r *Runner) initHistoryLoadMetrics() {
 		r.historyLoad.syncSeenAt = time.Now()
 	}
 	r.historyLoad.metrics = make(map[string]*metrics.Gauge)
-	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "density_work", "density_metadata_work", "density_total_work", "density_measurement", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery"} {
+	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "density_work", "density_metadata_work", "density_total_work", "density_measurement", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery",
+		"reason_bits", "l0_sublevels", "l0_compaction_threshold", "l0_stop_writes_threshold", "debt_rises", "good", "sample_accepted", "accepted_sequence", "accepted_sample_unix_nano"} {
 		r.historyLoad.metrics[name] = metrics.GetOrRegisterGauge(strings.TrimRight(r.cfg.MetricsNamespace, "/")+"/history/budget/"+name, nil)
+	}
+	for i, reason := range historyLoadReasonMetrics {
+		r.historyLoad.reasonEntries[i] = metrics.GetOrRegisterCounter(strings.TrimRight(r.cfg.MetricsNamespace, "/")+"/history/budget/reason/"+reason.name+"/entered", nil)
 	}
 }
 
@@ -58,6 +99,20 @@ func (s *historyLoadState) metric(name string, value int64) {
 	if gauge := s.metrics[name]; gauge != nil {
 		gauge.Update(value)
 	}
+}
+
+func (s *historyLoadState) recordReasons(reasons historyLoadReason) {
+	// Count activations, not refresh calls or elapsed time. Reusing an engine
+	// observation cannot inflate a persistent reason's count, but pressure
+	// arriving between accepted observations remains immediately observable.
+	entered := reasons &^ s.reasons
+	for i, reason := range historyLoadReasonMetrics {
+		if entered&reason.bit != 0 && s.reasonEntries[i] != nil {
+			s.reasonEntries[i].Inc(1)
+		}
+	}
+	s.reasons = reasons
+	s.metric("reason_bits", int64(reasons))
 }
 
 func freshHistoryLoad(sampled, now time.Time) bool {
@@ -77,8 +132,16 @@ func (r *Runner) refreshHistoryLoad(now time.Time) {
 	previousHard := s.hard
 	s.hard = p.HardLimitReached(now)
 	previousLevel := s.level
+	var reasons historyLoadReason
+	accepted := false
 	if !p.Available || !freshHistoryLoad(p.SampledAt, now) {
 		s.level, s.good, s.debtRises = 0, 0, 0
+		if !p.Available {
+			reasons |= historyLoadReasonEngineUnavailable
+		} else {
+			// Includes missing timestamps and observations too far in the future.
+			reasons |= historyLoadReasonEngineStale
+		}
 	} else {
 		newSample := s.lastAccepted.IsZero() || p.SampledAt.Sub(s.lastAccepted) >= 5*time.Second
 		reset := p.SampledAt.Before(s.lastAccepted) || p.StallCount < s.lastStalls
@@ -96,13 +159,28 @@ func (r *Runner) refreshHistoryLoad(now time.Time) {
 		}
 		deviceKnown := p.DeviceAvailable && freshHistoryLoad(p.DeviceSampledAt, now)
 		devicePressure := deviceKnown && p.DeviceBusyPPM >= 950_000 && p.DeviceQueueMilli >= 2_000 && p.DeviceAwait >= 5*time.Millisecond
-		soft := s.hard || newStall || devicePressure ||
-			p.L0CompactionThreshold > 0 && p.L0Sublevels >= p.L0CompactionThreshold && p.L0Sublevels-p.L0CompactionThreshold >= p.L0CompactionThreshold ||
-			s.debtRises >= 2 && p.CompactionDebt >= 2<<30
+		l0Pressure := p.L0CompactionThreshold > 0 && p.L0Sublevels >= p.L0CompactionThreshold && p.L0Sublevels-p.L0CompactionThreshold >= p.L0CompactionThreshold
+		debtPressure := s.debtRises >= 2 && p.CompactionDebt >= 2<<30
+		soft := s.hard || newStall || devicePressure || l0Pressure || debtPressure
 		low := (p.L0CompactionThreshold <= 0 || p.L0Sublevels < p.L0CompactionThreshold) &&
 			(s.lastAccepted.IsZero() || p.CompactionDebt <= s.lastDebt)
 		if soft {
 			s.level, s.good = 1, 0
+			if s.hard {
+				reasons |= historyLoadReasonHard
+			}
+			if newStall {
+				reasons |= historyLoadReasonNewStall
+			}
+			if devicePressure {
+				reasons |= historyLoadReasonDevicePressure
+			}
+			if l0Pressure {
+				reasons |= historyLoadReasonL0Pressure
+			}
+			if debtPressure {
+				reasons |= historyLoadReasonDebtGrowth
+			}
 		} else {
 			if newSample {
 				if low {
@@ -116,15 +194,25 @@ func (r *Runner) refreshHistoryLoad(now time.Time) {
 			s.level = 2
 			if previousLevel == 1 && s.good < 2 {
 				s.level = 1
+				reasons |= historyLoadReasonPressureHysteresis
 			}
 			if s.good >= 3 && deviceKnown {
 				s.level = 3
 			}
+			if s.good < 3 {
+				reasons |= historyLoadReasonRecoverySamples
+			}
+			if !deviceKnown {
+				reasons |= historyLoadReasonDeviceUnknown
+			}
 		}
 		if newSample {
 			s.lastAccepted, s.lastDebt, s.lastStalls = p.SampledAt, p.CompactionDebt, p.StallCount
+			s.acceptedSequence++
+			accepted = true
 		}
 	}
+	s.recordReasons(reasons)
 	s.metric("level", int64(s.level))
 	s.metric("hard", boolGauge(s.hard))
 	s.metric("duty_ppm", int64(s.dutyPPM()))
@@ -134,6 +222,18 @@ func (r *Runner) refreshHistoryLoad(now time.Time) {
 	s.metric("device_queue_milli", coldSnapshotUintGauge(p.DeviceQueueMilli))
 	s.metric("device_await", int64(p.DeviceAwait))
 	s.metric("compaction_debt", coldSnapshotUintGauge(p.CompactionDebt))
+	s.metric("l0_sublevels", int64(p.L0Sublevels))
+	s.metric("l0_compaction_threshold", int64(p.L0CompactionThreshold))
+	s.metric("l0_stop_writes_threshold", int64(p.L0StopWritesThreshold))
+	s.metric("debt_rises", int64(s.debtRises))
+	s.metric("good", int64(s.good))
+	s.metric("sample_accepted", boolGauge(accepted))
+	s.metric("accepted_sequence", coldSnapshotUintGauge(s.acceptedSequence))
+	acceptedAt := int64(0)
+	if !s.lastAccepted.IsZero() {
+		acceptedAt = s.lastAccepted.UnixNano()
+	}
+	s.metric("accepted_sample_unix_nano", acceptedAt)
 	if previousLevel != s.level || previousHard != s.hard {
 		// Healthy/recovering oscillation is ordinary batch tuning. Pressure,
 		// unknown observations and hard-limit edges remain visible at Info.
@@ -143,7 +243,9 @@ func (r *Runner) refreshHistoryLoad(now time.Time) {
 		}
 		logBudget("History storage budget changed", "level", s.level, "hard", s.hard,
 			"dutyPPM", s.dutyPPM(), "l0Sublevels", p.L0Sublevels, "compactionDebt", p.CompactionDebt,
-			"deviceKnown", p.DeviceAvailable, "deviceQueueMilli", p.DeviceQueueMilli, "deviceAwait", p.DeviceAwait)
+			"deviceKnown", p.DeviceAvailable, "deviceQueueMilli", p.DeviceQueueMilli, "deviceAwait", p.DeviceAwait,
+			"reasonBits", uint16(reasons), "debtRises", s.debtRises, "good", s.good,
+			"acceptedSequence", s.acceptedSequence, "acceptedSample", s.lastAccepted)
 	}
 }
 
