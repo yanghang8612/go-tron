@@ -3587,7 +3587,7 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		accountFrozenV2PointAmounts:   obj.accountFrozenV2PointAmounts,
 		deleted:                       obj.deleted,
 		created:                       obj.created,
-		code:                          append([]byte{}, obj.code...),
+		code:                          bytes.Clone(obj.code), // preserve nil for lazy, unchanged bytecode
 		codeHash:                      obj.codeHash,
 		codeDirty:                     obj.codeDirty,
 		contractMeta:                  metaCopy,
