@@ -60,6 +60,71 @@ Go 1.25.5、GOMAXPROCS=1、交错计时中，普通 Get 14.29 → 15.61 ns（+1.
 
 ## 验证与发布
 
-候选源码固定为 `500b61273cbf0d175624cb1ff114b39ba409a37a`。全仓运行除一项依赖后台就绪时机的异步 VM 测试外全部通过；该测试现改用 testing/synctest 与既有 trace 回调确定等待，删除 256 笔无关延时交易，保留全部发布、oracle、receipt 与 root 断言。GOMAXPROCS=1/2 各 100 次和 race 20 次通过；最终 core 全包正在复验。状态副本 race、manifest race、blockbuffer race 已通过，新增 lint 为 0。服务器原生构建及同进程复采结果将在后续补录，线上当前仍为 `19eda11f`。
+候选源码固定为 `500b61273cbf0d175624cb1ff114b39ba409a37a`。全仓运行除一项依赖后台就绪时机的异步 VM 测试外全部通过；该测试现改用 testing/synctest 与既有 trace 回调确定等待，删除 256 笔无关延时交易，保留全部发布、oracle、receipt 与 root 断言。GOMAXPROCS=1/2 各 100 次和 race 20 次通过；最终 core 全包已通过（150.890 秒）。状态副本 race、manifest race、blockbuffer race 已通过，新增 lint 为 0。服务器已于 15:57:39 完成原生准备：Go 1.25.5 / Linux amd64 / CGO_ENABLED=1 / tags=sapling，六包定向测试均通过，Sapling 可用性及 Pedersen probe 通过。源码固定 `500b61273cbf0d175624cb1ff114b39ba409a37a`，脚本提交 `71bcf9d34cc9b6f4d4ce7f06223c12f400e53dd1`，脚本 SHA-256 `9707c0c1394edf5ee0f86b81cb1618b1718e246c2ed28269c97a884402ab0560`；候选 binary SHA-256 `134ea2b22c83a0f0ea5d2d77e1784ead27c556a0fa9f97e2c2c9880c9a19ba87`。GitHub [PR #3](https://github.com/yanghang8612/go-tron/pull/3) 待审查，本轮不绕过主分支审查规则。服务于 15:59:57 启动新进程 PID 22527，start_ticks `4476169123`，metrics identity `1789027197720109146`；运行 binary 与候选 SHA-256 完全一致，激活记录为 active，初始健康检测 head 22,651,576→22,651,589。运行路径为 `/data/gtron/releases/20260910-history-metadata/gtron`。保护状态和除既有 ExecStart 路径外的配置对比通过。
+
+切换窗口保留 25 组请求证据：两类请求各 5 次 502，最后旧成功请求起点为 15:59:43.531，首个新成功请求起点为 16:00:07.737；这些请求起点界限不能当作精确服务停机时长。metrics 在 16:01:48.967 另有一次下载超时（已收到 133,816 bytes），Wallet 同期成功，未将其并入 502 窗口。
+
+固定账户在区块 2043/2044/2045 的哈希与余额于部署前 15:41:15 和部署后 16:02:23 两次校验均一致，每次 12 次只读请求。该探针只覆盖一个账户的历史余额，不代表全库或所有历史域。后续十分钟稳态采样单独保存为 after，不与重启 Counter 混算。
 
 原始初始采样、哈希事件字段转录、修复前失败回归与修复后结果保存在 `build/benchmarks/20260910-history-metadata/`。manifest 同输入基准在 `build/benchmarks/20260910-manifest-publication-cache/`。服务器身份已确认：原 binary 为 `/data/gtron/releases/20260910-history-readiness/gtron`，SHA-256 `c84fee73d08425cdf189467129e9382f76fddb0f733fa788d1dc44dd23ac1915`，监听端口与空间保护正常。
+
+
+## 上线后十分钟结果
+
+稳定窗口为北京时间 16:02:09.571–16:12:07.252，实际跨度 597.674 秒，38/41 份 metrics 有效、41/41 份 Wallet 成功；metrics-023、038、039 因 15 秒传输超时排除，原始部分响应与错误保留。有效点最大间隔 43.064 秒，全窗精确进程 identity 一致，已检查的累计计数无回退；起终点均有效，因此区块增量仍可计算。Gauge 的期间峰值和原因点数不能覆盖缺失时段。
+
+| 指标 | 部署前五分钟 | 部署后十分钟 | 部署后后半段 |
+| --- | ---: | ---: | ---: |
+| head 块/秒 | 33.628 | 28.055 | 27.515 |
+| 状态发布/裁剪 块/秒 | 24.585 | 8.600 | 17.218 |
+| head-state 差距变化 | +2,715 | +11,628 | +3,074 |
+
+结束时 head=22,669,786，状态发布与裁剪均为 22,078,751，差距 591,035 块，其中超过 65,536 常规窗口的距离为 525,499 块。body/index 均为 22,020,096，本窗口未跨归档段，距 head 649,690 块；这些层次有重叠，不能相加为总积压。末次 Wallet 仍处于深度同步，29 peers、8 sync peers、bufferedBlocks=2,466、fetchBackpressured=false，距 peer head 约 6,345 万块。
+
+不能宣称已经实现净追赶，也不能把块速下降直接归因为本轮修改：Wallet 同进程窗口的交易密度由 52.736 升至 66.193 笔/块（+25.5%），TPS 1,778.34→1,850.69（+4.1%）。平均 CPU 3.332→2.931 核，每块 CPU 99.083→104.467 ms，每块分配 8.690→6.657 MB；负载、归档活跃阶段和重启后的缓存状态均不同，这些不是受控 A/B 效果。
+
+代码哈希拒绝、strict error、存储错误计数在稳定窗口均无新增，进程末值的 hash rejection/strict error 仍为 0。预执行 shadow 错误仍有增长：VM sender-chain 总错误 +26，其 readiness/result/apply_unsupported 子项分别 +18/+5/+3；这些为嵌套预执行结果，不能与 sender-chain +11 再相加，也不能当作 canonical 区块执行失败总数。
+
+## 归档暂停的实际原因
+
+前半段并非死锁：唯一冷归档生命周期 goroutine 位于 `SnapshotLifecycle.loop` 的 select 等待；预算接受序列约每分钟更新，随后恢复发布也与原有门槛精确吻合。
+
+1. `maxDeferredColdHistoryBlocks` 与 `maxBusyDeferredColdHistoryBlocks` 将 busy 水位设为 65,536×4×2=524,288 块。`SyncBuildReady=false` 且可归档 readyBlocks 不超过此值时，runner 返回 HistoryDeferred，由生命周期分钟 ticker 再检查。`parallel/runtime/ready=1` 只代表资源就绪，不能替代 importer 的 admission ready；本窗口 importer admission 持续 busy。
+2. 初始归档已在同步繁忙门槛接管前推进至 22,073,611。after0 的可归档 lag 为 512,554，低于 busy 水位，因此前几分钟同步继续、归档暂缓是原策略。
+3. 首次恢复点 after25：当时 eligible cutoff=22,597,990，减去旧发布水位 22,073,611，得到 524,379，刚超过 524,288；forced-busy 随即发布 2,853 块至 22,076,464。after33 再发布 2,287 块，窗口总计 5,140。
+4. 恢复还受动态预算限制。after26 的实际预算为 level1、20% duty、reason_bits=16（压缩债务连续增长），recovery_cost=6.987318069 秒，恢复时间 27.949272276 秒，精确等于 cost×(1−0.2)/0.2。这里是 throughput 动态预算公式，不能误称额外固定 20% 下限；后续观测即使恢复为 80%，也不会追溯缩短已经安装的 deadline。
+
+`forced_busy/last/debt_blocks` 是那批发布后的 lag，不能拿它与水位比较而断言“未达门槛却启动”。完整请求边界、原始文件哈希、源码位置与算术见 `build/benchmarks/20260910-history-metadata/scheduling-analysis.{json,md}`。
+
+## CPU profile 的解释边界
+
+上线后 profile 为 16:05:19 起 30.14 秒、76.58 CPU 秒，前后 identity 一致。Commitment pipeline 去重范围 32.40 CPU 秒（42.31%）、Pebble 去重范围 30.82 秒（40.25%）、前台 apply 20.96 秒（27.37%），它们相互嵌套，不能相加。durable commitment read 为 16.88 秒（22.04%），点读取仍是重要成本。
+
+该 profile 正好处于冷归档暂缓期，SnapshotLifecycle、manifest load/publish/decode/seed 均没有 CPU 样本；前台写热 history rows 仍有 0.60 秒。故“decode=0”及总 CPU 下降不能作为 manifest 优化的线上收益证明。可确认的是同输入组件基准改善，以及新版本真实发布后的 seed 命中；要量化生产节省，应对相同归档阶段和处理量再做对照。
+
+
+## 新增诊断结果与下一步
+
+预算原因 entered 增量：debt_growth +2、recovery_samples +2、pressure_hysteresis +1；硬限制、write stall、device/L0 压力、engine unknown/stale 均无新增。38 个有效点中 reason16 为6点、reason128为27点、reason384为4点、无原因1点，这是观测点分布，不是时间占比。L0 sublevels 为3–5，低于8的compaction阈值；观测的压缩债务约1.84–4.99 GiB。accepted age 中位30.86秒、最大58.18秒，接受序列 +12，主要按分钟刷新；不能把保留值解释成实时设备压力。
+
+Manifest 在十分钟内 seeds +4、publication_hits +45、decode misses +0、预算拒绝 +0，末值 resident 102.48 MiB / 256 MiB。末值 miss=1 来自启动期。真实四次预填充后读路径继续命中，但45次命中不能当作省掉45次解码。
+
+深度6/7的62个owner累计Gauge逐点均无回退，事件摘要如下。来源集合记录驻留期间的引用，不是命中率或唯一key数。
+
+| 事件 | 深度6 | 深度7 |
+| --- | ---: | ---: |
+| window 晋升次数 | 1,156,313 | 772,866 |
+| 晋升中含 foreground reference | 0.6103% | 0.8633% |
+| tail 容量淘汰次数 | 3,868,788 | 2,386,381 |
+| tail 淘汰中含 foreground reference | 37.0494% | 5.6295% |
+| foreground no_resident 次数 | 2,907,163 | 2,442,145 |
+
+深度7晋升的99.1367%为flush-only，预取相关计数为0；深度6晋升中flush-only 652,123、prefetch-only 329,363、prefetch+flush 167,770。两深度实际 probation、epoch、window-capacity 准入拒绝均为0，window sampling拒绝分别869/724。准入拒绝为0与驻留后容量淘汰很多并不矛盾；含foreground历史的淘汰也不能证明未来必然重读。
+
+后续优先顺序：
+
+1. 对 importer-busy 准入、水位与动态恢复安排做同输入回放，评估在持续同步中允许有界后台工作能否减少周期性积压；保留存储/内存保护，以前台TPS、净归档速度和压缩债务共同验收。
+2. 在固定缓存预算与版本规则下，针对深度7的flush主导晋升、深度6曾被前台读取的tail淘汰做有界key再读距离抽样及回放，再决定调整晋升保护，现有计数不足以直接支持扩容。
+3. 在有真实冷归档发布的阶段量化manifest节省，按发布量与元数据规模归一化；当前CPU profile不承担这项因果结论。
+
+最终现场核验保持PID22527及同一binary，空间保护通过，/data可用约2.50 TB，MemoryLimit仍40 GiB，P2P/API/pprof/metrics监听符合既有布局。原始采样、失败响应、所有分析及验证日志保存在 `build/benchmarks/20260910-history-metadata/`，服务器原生与激活证据保存在本轮release目录。
