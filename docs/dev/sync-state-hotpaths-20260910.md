@@ -1,6 +1,6 @@
 # 线上采样驱动的状态读取优化（2026-09-10）
 
-第一批改动完成：native 合约运行时读取不再构造 ABI 对象图；奖励查询和无需完整快照的结算分支不再物化无关账户字段。另修复了投票缓存的交易读取依赖，以及 recorder 重复记录时临时 key 的生命周期问题。当前结果是本地实现与验证，尚未部署线上，尚无新版主网 blocks/s、RSS 或后台发布债务数据。
+第一批改动完成：native 合约运行时读取不再构造 ABI 对象图；奖励查询和无需完整快照的结算分支不再物化无关账户字段。另修复了投票缓存的交易读取依赖，以及 recorder 重复记录时临时 key 的生命周期问题。本文记录本地实现与验证；后续已通过 GitHub 提交部署主网，Linux 版本、线上采样及回退信息见[发布报告](sync-state-hotpaths-deployment-20260910.md)。
 
 依据：[线上同步采样](sync-performance-sampling-20260910.md)。该窗口前台导入持续忙碌，ContractRuntime、GetAccount 引发的辅助字段扫描出现在 CPU 栈中。本轮修改集中于这些已有证据的路径。
 
@@ -73,7 +73,7 @@
 - `CGO_ENABLED=1 GOFLAGS=-tags=sapling scripts/system_test.sh`：79 passed、0 failed、0 skipped，两个临时节点已由脚本清理。
 - 初次全仓 lint 输出 158 项，但工具默认每个 linter 最多输出 50 项、相同文本最多 3 项，因此不是全量计数。后续取消这两项输出上限，当前扫描报告 1,893 条：errcheck 1,623、govet 4、ineffassign 5、staticcheck 126、unused 135；其中 1,014 条位于测试文件。它们是检查条目，不等于已证实的独立缺陷。包含所有未跟踪新 Go 文件的补丁增量 lint 为 0 issues；该结果也不能代替对全仓清单的逐条基线比对。全仓 lint 未通过。
 
-本轮未执行真实主网区间 A/B replay 或部署后采样。后续上线时，应保留版本与回退信息，在相同类型区块窗口复采 CPU、导入 blocks/s、alloc rate、state/history debt，确认局部优化能转成端到端收益。
+本轮未执行真实主网区间的同输入 A/B replay。部署后的版本、回退信息及 CPU、blocks/s、alloc rate、state/history debt 复采结果已记录在[发布报告](sync-state-hotpaths-deployment-20260910.md)，仍不将局部微基准收益直接当作端到端提升。
 
 ## 可复核证据
 
