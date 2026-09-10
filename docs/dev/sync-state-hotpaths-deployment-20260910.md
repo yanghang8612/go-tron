@@ -8,7 +8,7 @@
 - 运维脚本提交：`b22b553c2a271398cde3b4846bcf3e2490c88d93`，位于 `ops/deploy-state-hotpaths-20260910`。生产代码与运维脚本分别固定提交。
 - 服务器从 GitHub fetch 后将源码快进到生产提交，再用该提交的 `git archive` 建立独立构建目录。没有通过直接传包发布生产源码。
 - 新 release：`/data/gtron/releases/20260910-state-hotpaths`。
-- 新二进制 SHA-256：`081b4e6f60aeb348775c436d1e6821bd2cd6466858809116be381395c2758b944`。
+- 新二进制 SHA-256：`081b4e6f60aeb348775c436d1e6821bd2cd646858809116be381395c2758b944`。
 - 新 PID：`19704`，proc start_ticks：`4474232475`；metrics 进程标识：`1789007831235993682`。
 - 旧 release：`/data/gtron/releases/20260909-parallel-history-event-9059eb7f/gtron`，SHA-256：`2d3f9707c176c3e15b30d492d676e8594b483200a9569912b649ef7407bf4991`，完整保留。
 

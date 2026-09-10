@@ -12,7 +12,7 @@
 | 启动时间 | 2026-09-10 10:37:11 北京时间；截至末次指标约 3 小时 36 分钟 |
 | 进程 | PID 19704；start_ticks=4474232475；指标 process/start/unix_nano=1789007831235993682 |
 | 二进制 | `/data/gtron/releases/20260910-state-hotpaths/gtron` |
-| SHA256 | `081b4e6f60aeb348775c436d1e6821bd2cd6466858809116be381395c2758b944` |
+| SHA256 | `081b4e6f60aeb348775c436d1e6821bd2cd646858809116be381395c2758b944` |
 | 最新导入高度 | metrics head=22,457,996；Wallet 独立请求 currentBlock=22,458,012 |
 | 同步状态 | active=true，paused=false；30 个连接、8 个同步 peer |
 | 网络同步距离 | Wallet targetHead=86,116,265，remaining=63,658,253 块 |

@@ -30,7 +30,7 @@ RELEASE = Path('/data/gtron/releases/20260910-history-readiness')
 SOURCE = RELEASE / 'source'
 BINARY = RELEASE / 'gtron'
 OLD_EXE = '/data/gtron/releases/20260910-state-hotpaths/gtron'
-OLD_SHA = '081b4e6f60aeb348775c436d1e6821bd2cd6466858809116be381395c2758b944'
+OLD_SHA = '081b4e6f60aeb348775c436d1e6821bd2cd646858809116be381395c2758b944'
 OLD_PID = 19704
 BASE_PREFIX = '4c25c69b22ef50c665b49a26e0501026cb0f0a2c'
 RELEASE_KIND = 'history-readiness-git-20260910'
@@ -297,6 +297,7 @@ def resolve_commit(ref):
 
 
 def validate_revision(revision, script_revision):
+    require(re.fullmatch(r'[0-9a-f]{64}', OLD_SHA), 'invalid rollback SHA-256 pin')
     require(isinstance(revision, str) and re.fullmatch(r'[0-9a-f]{40}', revision),
             'prepare --revision must be an exact 40-character lowercase commit SHA')
     require(resolve_commit(revision) == revision, 'revision does not resolve exactly')
