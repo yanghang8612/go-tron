@@ -228,12 +228,18 @@ func TestDecodedBufferCommitIsolatesMalformedBodyWithoutSkippingSuffix(t *testin
 	_, has1 := ss.blockBuffer[1]
 	_, has2 := ss.blockBuffer[2]
 	_, has3 := ss.blockBuffer[3]
+	_, owns1 := ss.importingHash[block1.Hash()]
+	_, owns2 := ss.importingHash[block2.Hash()]
+	_, owns3 := ss.importingHash[block3.Hash()]
 	next := ss.nextDrainBlockLocked()
 	tip := ss.syncedTipNum
 	retries := append([]types.BlockID(nil), ss.retryList...)
 	ss.mu.Unlock()
 	if has1 || has2 || !has3 || tip != 1 || next != 2 {
 		t.Fatalf("buffer has1/2/3=%v/%v/%v tip=%d next=%d, want false/false/true tip1 next2", has1, has2, has3, tip, next)
+	}
+	if !owns1 || owns2 || owns3 {
+		t.Fatalf("import ownership prefix/bad/suffix=%v/%v/%v, want true/false/false", owns1, owns2, owns3)
 	}
 	if len(peek.Buffered) != 1 || len(peek.Blocks) != 1 || len(retries) != 1 || retries[0] != block2.ID() {
 		t.Fatalf("committed prefix/retries = %d/%d/%+v, want block1 and retry block2", len(peek.Buffered), len(peek.Blocks), retries)

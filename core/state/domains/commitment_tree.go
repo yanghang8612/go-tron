@@ -365,18 +365,18 @@ func (b *BranchData) encodingLayout() (uint32, int) {
 	childBits := atomic.LoadUint32(&b.childMask)
 	pathMask := uint16(atomic.LoadUint32(&b.leafPathMask))
 	mask := uint16(childBits)
-	// Every present child contributes its kind byte and 32-byte hash. Only leaf
-	// children need variable-length accounting on top of that fixed cost.
+	// Every present child contributes its kind byte and 32-byte hash. Path
+	// leaves add a fixed-width path; only legacy leaves need a per-key walk.
+	// Current rooted state uses path leaves, so their size can be counted
+	// without visiting each child again before the encoding pass.
+	leafMask := mask &^ uint16(childBits>>16)
 	size := 2 + (1+common.HashLength)*bits.OnesCount16(mask)
-	for remaining := mask &^ uint16(childBits>>16); remaining != 0; remaining &= remaining - 1 {
+	size += common.HashLength * bits.OnesCount16(leafMask&pathMask)
+	for remaining := leafMask &^ pathMask; remaining != 0; remaining &= remaining - 1 {
 		i := uint8(bits.TrailingZeros16(remaining))
 		c := &b.children[i]
 		// The fixed cost above already includes the value hash.
-		if pathMask&(1<<i) != 0 {
-			size += common.HashLength
-		} else {
-			size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey)
-		}
+		size += uvarintEncodedLen(uint64(len(c.leafKey))) + len(c.leafKey)
 	}
 	return childBits, size
 }
@@ -495,7 +495,9 @@ func decodeBranchDataIntoArena(data []byte, dst *BranchData, arena *[]byte) erro
 	// those slices safely because the arena is never mutated. This replaces up
 	// to 16 tiny allocations per decoded branch without retaining the
 	// hash-dominated encoded Pebble value.
-	leafMask := dst.leafMask()
+	// Path leaves contain owned fixed-width hashes and no leaf-key backing.
+	// Exclude them before both passes, including the common path-only branch.
+	leafMask := dst.leafMask() &^ uint16(atomic.LoadUint32(&dst.leafPathMask))
 	totalLeafKeyBytes := 0
 	for remaining := leafMask; remaining != 0; remaining &= remaining - 1 {
 		i := bits.TrailingZeros16(remaining)

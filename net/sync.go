@@ -106,11 +106,17 @@ type SyncService struct {
 	// rather than mutating the shared package global from a defer.
 	fetchTimeout time.Duration
 
-	peers         map[string]*syncPeerState
-	requested     map[tcommon.Hash]string
-	retryList     []types.BlockID
-	blockBuffer   map[uint64]syncdl.BufferedBlock
-	bufferedHash  map[tcommon.Hash]struct{}
+	peers        map[string]*syncPeerState
+	requested    map[tcommon.Hash]string
+	retryList    []types.BlockID
+	blockBuffer  map[uint64]syncdl.BufferedBlock
+	bufferedHash map[tcommon.Hash]struct{}
+	// importingHash belongs to the sole local drain, not to a peer session.
+	// A decoded batch releases its raw buffer before execution; retain exact
+	// hash ownership until the insertion session's final commit barrier. Peer
+	// failover may reset the network session while that batch is still running.
+	// Values contain heights only, never raw bodies or decoded object graphs.
+	importingHash map[tcommon.Hash]uint64
 	blockPath     syncdl.BlockPath
 	bufferedBytes int64
 	// fetchBackpressured is a service-wide hysteresis gate. The older per-ID
@@ -221,6 +227,13 @@ var (
 	signatureLookaheadPendingCounter          = metrics.NewRegisteredCounter("sync/signature_lookahead/pending_at_import", nil)
 	signatureLookaheadLeadNanosCounter        = metrics.NewRegisteredCounter("sync/signature_lookahead/lead_nanos", nil)
 	signatureLookaheadOverlapNanosCounter     = metrics.NewRegisteredCounter("sync/signature_lookahead/overlap_after_import_start_nanos", nil)
+	// Duplicate counters count observations at each filter, not unique blocks
+	// or requests sent on the wire; repeated scheduler checks can count again.
+	importOwnedBlocksGauge          = metrics.NewRegisteredGauge("sync/import/owned_blocks", nil)
+	importDuplicateInventoryCounter = metrics.NewRegisteredCounter("sync/import/duplicate_inventory", nil)
+	importDuplicateFetchCounter     = metrics.NewRegisteredCounter("sync/import/duplicate_fetch", nil)
+	importDuplicateBodyCounter      = metrics.NewRegisteredCounter("sync/import/duplicate_body", nil)
+	importRestoredDuplicatesCounter = metrics.NewRegisteredCounter("sync/import/restored_duplicates", nil)
 )
 
 // chainStatusAdapter adapts *core.BlockChain to tsync.ChainStatus by adding
@@ -1622,6 +1635,10 @@ func (r syncInventoryCandidateFactReader) HasBufferedInventoryBlock(id types.Blo
 	if r.service == nil {
 		return false
 	}
+	if _, ok := r.service.importingHash[id.Hash]; ok {
+		importDuplicateInventoryCounter.Inc(1)
+		return true
+	}
 	_, ok := r.service.bufferedHash[id.Hash]
 	return ok
 }
@@ -1837,6 +1854,10 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState, effectiveTipNum u
 }
 
 func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
+	if _, ok := ss.importingHash[bid.Hash]; ok {
+		importDuplicateFetchCounter.Inc(1)
+		return true
+	}
 	if ss.blockPath.Conflicts(bid) {
 		return true
 	}
@@ -2125,6 +2146,10 @@ func (a *syncSignatureLookahead) discard() {
 }
 
 func (ss *SyncService) drainBufferedBlocksOnce() {
+	// Only this drain owns decoded imports. Finish below joins async commitment
+	// before returning, including paused/failed sessions; peer resets must not
+	// release the hashes while the off-lock executor still owns the batch.
+	defer ss.releaseImportingBlocks()
 	var out []outboundSyncRequest
 	// One drain may consume several small local import chunks. Reuse one
 	// canonical executor across all of them so synchronous sync avoids reopening
@@ -2619,6 +2644,8 @@ func (a syncStagedBodyDrainApplier) PopBufferedBatch(next uint64, limit int) syn
 // durably remove only a malformed row, release the decoded prefix, and leave
 // the untouched suffix reserved in the buffer. The malformed ID is put back
 // on the global retry queue after its path reservation is released.
+// The decoded prefix transfers hash ownership to the drain until its final
+// insertion barrier; releasing raw storage must not make it fetchable again.
 func (ss *SyncService) commitDecodedBufferedBatch(batch *syncdl.BufferedBatch, decode syncdl.BufferedBatchDecodeResult, now time.Time) (*p2p.Peer, error) {
 	if ss == nil || batch == nil {
 		return nil, fmt.Errorf("sync: cannot commit nil decoded buffer batch")
@@ -2685,8 +2712,13 @@ func (ss *SyncService) commitDecodedBufferedBatch(batch *syncdl.BufferedBatch, d
 		}
 	}
 	for i := 0; i < prefix; i++ {
+		if ss.importingHash == nil {
+			ss.importingHash = make(map[tcommon.Hash]uint64)
+		}
+		ss.importingHash[batch.Buffered[i].Hash] = batch.Buffered[i].Num
 		release(batch.Buffered[i], true)
 	}
+	importOwnedBlocksGauge.Update(int64(len(ss.importingHash)))
 	if prefix > 0 {
 		if popped := batch.Buffered[prefix-1].Num; popped > ss.syncedTipNum {
 			ss.syncedTipNum = popped
@@ -2711,6 +2743,40 @@ func (ss *SyncService) commitDecodedBufferedBatch(batch *syncdl.BufferedBatch, d
 	}
 	batch.Buffered = batch.Buffered[:prefix]
 	return badPeer, nil
+}
+
+// releaseImportingBlocks runs after the insertion session has settled. A peer
+// reset/restart can restore staged rows while the previous off-lock batch is
+// executing. Remove only restored entries that exactly match an imported
+// canonical block; preserve failed imports and competing hashes for recovery.
+// This visits at most the current drain's hashes, never the runahead buffer.
+func (ss *SyncService) releaseImportingBlocks() {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	for hash, number := range ss.importingHash {
+		buffered, ok := ss.blockBuffer[number]
+		if !ok || buffered.Hash != hash || ss.chain == nil {
+			continue
+		}
+		head := ss.chain.CurrentBlock()
+		if head == nil || number > head.Number() {
+			continue
+		}
+		canonical, ok := ss.chain.BlockIDByNumber(number)
+		if !ok || canonical.Hash != hash {
+			continue
+		}
+		delete(ss.blockBuffer, number)
+		delete(ss.bufferedHash, hash)
+		if ss.blockPath[number] == hash {
+			ss.blockPath.Release(number)
+		}
+		ss.bufferedBytes -= int64(len(buffered.Raw))
+		ss.bufferWait.End(number, time.Now())
+		importRestoredDuplicatesCounter.Inc(1)
+	}
+	ss.importingHash = nil
+	importOwnedBlocksGauge.Update(0)
 }
 
 type syncIdleDrainApplier struct {
@@ -3070,6 +3136,10 @@ func (r syncFetchedBlockBufferFactReader) ExistingFetchedBlock(number uint64) (s
 func (r syncFetchedBlockBufferFactReader) HasFetchedBlockHash(hash tcommon.Hash) bool {
 	if r.service == nil {
 		return false
+	}
+	if _, ok := r.service.importingHash[hash]; ok {
+		importDuplicateBodyCounter.Inc(1)
+		return true
 	}
 	_, ok := r.service.bufferedHash[hash]
 	return ok

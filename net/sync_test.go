@@ -52,7 +52,12 @@ func TestSyncServiceStopDefersStagedBodyCleanupUntilDrainStops(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
+	batch := ss.runStagedBodyDrainLocked(time.Now()).Batch
 	ss.mu.Unlock()
+	decode := syncdl.DecodeBufferedBatch(&batch)
+	if _, err := ss.commitDecodedBufferedBatch(&batch, decode, time.Now()); err != nil {
+		t.Fatalf("commit decoded test batch: %v", err)
+	}
 	ss.drainMu.Lock()
 	ss.draining = true
 	ss.drainMu.Unlock()
@@ -79,12 +84,19 @@ func TestSyncServiceStopDefersStagedBodyCleanupUntilDrainStops(t *testing.T) {
 	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || !ok {
 		t.Fatalf("staged block while drain active ok=%v err=%v, want retained", ok, err)
 	}
+	ss.mu.Lock()
+	_, stillOwned := ss.importingHash[block.Hash()]
+	ss.mu.Unlock()
+	if !stillOwned {
+		t.Fatal("Stop quiesce released ownership before the active drain settled")
+	}
 	select {
 	case <-stopped:
 		t.Fatal("Stop returned before the active drain exited")
 	default:
 	}
 
+	ss.releaseImportingBlocks() // The simulated import barrier has settled.
 	ss.drainMu.Lock()
 	ss.draining = false
 	ss.drainCond.Broadcast()
