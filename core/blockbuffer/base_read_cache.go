@@ -150,6 +150,8 @@ const baseReadCacheMetricsPublishInterval = uint64(64)
 type baseReadCache struct {
 	shards        [baseReadCacheShardCount]baseReadCacheShard
 	invalidations []atomic.Uint64
+	reuse         *baseReadCacheReuseObserver
+	reuseOwnerID  uint64
 	// flushAdmissionPrefix narrows read-before-write admission to a schema
 	// whose successful canonical writes are expected to be read again soon.
 	// Ordinary write-only metadata never pays the full-key probation hash.
@@ -172,6 +174,7 @@ type baseReadCache struct {
 type baseReadCacheShard struct {
 	mu      sync.RWMutex
 	entries map[string]*baseReadCacheEntry
+	reuse   *baseReadCacheReuseShard
 	// queue is the commitment/default CLOCK. nonCommitmentQueue is enabled only
 	// when a flush-admission prefix configures the production namespace split.
 	// The entry map and invalidation/version lifecycle remain shared; probation
@@ -333,7 +336,7 @@ func newBaseReadCacheWithTrunk(sizeBytes, trunkDepth int, flushAdmissionPrefix .
 	if sizeBytes <= 0 {
 		return nil
 	}
-	c := &baseReadCache{trunkDepth: trunkDepth}
+	c := &baseReadCache{trunkDepth: trunkDepth, reuse: newBaseReadCacheReuseObserver(), reuseOwnerID: baseReadCacheReuseOwnerSequence.Add(1)}
 	if len(flushAdmissionPrefix) > 0 {
 		c.flushAdmissionPrefix = flushAdmissionPrefix[0]
 	}
@@ -341,6 +344,9 @@ func newBaseReadCacheWithTrunk(sizeBytes, trunkDepth int, flushAdmissionPrefix .
 	perShard := sizeBytes / baseReadCacheShardCount
 	remainder := sizeBytes % baseReadCacheShardCount
 	for i := range c.shards {
+		if c.reuse != nil {
+			c.shards[i].reuse = &c.reuse.shards[i]
+		}
 		c.shards[i].limit = perShard
 		if i < remainder {
 			c.shards[i].limit++
@@ -850,6 +856,7 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		s.entries[entry.key] = entry
 		s.queue = append(s.queue, entry)
 		s.used += entry.charge
+		s.observeReuseAdmission(entry, baseReadCacheReuseFlushAdmission)
 		s.evict()
 		return
 	}
@@ -915,6 +922,7 @@ func (c *baseReadCache) setFlushedLocked(s *baseReadCacheShard, key string, valu
 		s.evict()
 	} else {
 		if cached {
+			s.censorReuseKey(key, baseReadCacheReuseOversized)
 			delete(s.entries, key)
 			s.used -= old.charge
 			if old.trunk {
@@ -1130,6 +1138,7 @@ func (c *baseReadCache) delStringAt(key string, shard uint32) {
 // delStringLocked removes one resident value and its admission history. The
 // caller owns s.mu and has already advanced the key's invalidation epoch.
 func (c *baseReadCache) delStringLocked(s *baseReadCacheShard, key string) {
+	s.censorReuseKey(key, baseReadCacheReuseDeleted)
 	other := c.isOtherKeyString(key)
 	if old, ok := s.entries[key]; ok {
 		other = old.nonCommitment
@@ -1169,6 +1178,7 @@ func (c *baseReadCache) clear() {
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
+		s.clearReuseSamples()
 		clear(s.entries)
 		clear(s.queue)
 		s.queue = s.queue[:0]
@@ -1440,6 +1450,7 @@ func (s *baseReadCacheShard) promoteWindowEntry(entry *baseReadCacheEntry) {
 	s.windowUsed -= entry.charge
 	s.windowEntries--
 	s.queue = append(s.queue, entry)
+	s.observeReuseAdmission(entry, baseReadCacheReuseWindowFlush)
 	s.forgetAdmissionString(entry.key, false)
 }
 
@@ -1534,6 +1545,7 @@ func (s *baseReadCacheShard) evictWindowOne() bool {
 		}
 		delete(s.entries, entry.key)
 		s.recordDiagnosticOutcome(entry, baseReadCacheDiagnosticWindowEvicted)
+		s.completeReuseCapacity(entry)
 		s.used -= entry.charge
 		s.windowUsed -= entry.charge
 		s.windowEntries--
@@ -1573,6 +1585,7 @@ func (s *baseReadCacheShard) evictOne(other bool) bool {
 			}
 			delete(s.entries, entry.key)
 			s.recordDiagnosticOutcome(entry, baseReadCacheDiagnosticTailEvicted)
+			s.completeReuseCapacity(entry)
 			s.used -= entry.charge
 			if entry.nonCommitment {
 				s.nonCommitmentUsed -= entry.charge
@@ -1692,6 +1705,7 @@ type baseReadCacheStats struct {
 	budgets          [3]int64
 	windowAdmissions int64
 	diagnostics      [baseReadCacheDiagnosticDepths]baseReadCacheDepthDiagnostics
+	reuse            baseReadCacheReuseStats
 }
 
 const (
@@ -1710,6 +1724,7 @@ func (c *baseReadCache) stats() baseReadCacheStats {
 	if c == nil {
 		return stats
 	}
+	stats.reuse.ownerID, stats.reuse.enabled = c.reuseOwnerID, c.reuse != nil
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.RLock()
@@ -1745,6 +1760,7 @@ func addBaseReadCacheShardStats(stats *baseReadCacheStats, s *baseReadCacheShard
 	stats.budgets[2] += int64(s.nonCommitmentLimit)
 	stats.windowAdmissions += int64(s.windowAdmissions)
 	addBaseReadCacheDiagnostics(&stats.diagnostics, &s.diagnostics)
+	addBaseReadCacheReuseShardStats(&stats.reuse, s)
 }
 
 // tryStats is the fold-close variant. A flush promotion can hold one shard's
@@ -1755,6 +1771,7 @@ func (c *baseReadCache) tryStats() (baseReadCacheStats, bool) {
 	if c == nil {
 		return stats, true
 	}
+	stats.reuse.ownerID, stats.reuse.enabled = c.reuseOwnerID, c.reuse != nil
 	for i := range c.shards {
 		s := &c.shards[i]
 		if !s.mu.TryRLock() {
@@ -1777,6 +1794,7 @@ func publishBaseReadCacheMetrics(stats baseReadCacheStats) {
 	}
 	baseReadCacheWindowAdmittedGauge.Update(stats.windowAdmissions)
 	publishBaseReadCacheDiagnostics(stats.diagnostics)
+	publishBaseReadCacheReuseMetrics(stats.reuse)
 }
 
 func (c *baseReadCache) maybePublishMetrics() {
