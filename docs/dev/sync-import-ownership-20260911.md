@@ -42,7 +42,7 @@ Go 1.25.5、darwin/arm64、GOMAXPROCS=2，固定相同输入、旧源码 overlay
 
 源码 `54c46b7fe1dd2b0521e50ab7dd1e4983e27c7cde` 与发布脚本提交 `8cca882dc9e27767ca3d1e520d46e403ef083d47` 已正常推送 GitHub master。服务器 Git 1.8.3.1 首次仅更新 FETCH_HEAD，发布前校验中止；随后使用不带强制标记的显式远端分支 refspec 拉取，通过原有版本校验。服务器保留原 checkout，在隔离 release 中用 Go 1.25.5 linux/amd64、CGO_ENABLED=1、tags=sapling 完成原生 affected/targeted 测试、Sapling 探针和构建。targeted 命令中的 cmd/gtron 没有匹配测试，不能计入额外覆盖。
 
-北京时间 2026-09-11 10:04:01 激活检查通过：新 PID `2754`，精确进程启动标识 `1789092225326376992`，检查期间高度 `24,969,358→24,969,402`。release 为 `/data/gtron/releases/20260911-sync-import-ownership`，二进制 SHA-256 为 `0876e36b2053d7e0b8588b82fe3ee68e382548ffc5ef774782a216f443f990`。激活脚本校验仅执行文件路径变化，配置、资源预算、守护与 hold 状态保持一致；旧 release 保留作为回滚文件。监听确认 mainnet P2P 18890、Wallet 8090、RPC 8545、gRPC 50051、loopback pprof 6062/metrics 6071。发布身份与服务器检查采用终端结果转录，明确区别于本地保存的原始 HTTP 采样。
+北京时间 2026-09-11 10:04:01 激活检查通过：新 PID `2754`，精确进程启动标识 `1789092225326376992`，检查期间高度 `24,969,358→24,969,402`。release 为 `/data/gtron/releases/20260911-sync-import-ownership`，二进制 SHA-256 为 `0876e36b2053d7e0b8588b82fe3e3ee68e382548ffc5ef774782a216f443f990`。激活脚本校验仅执行文件路径变化，配置、资源预算、守护与 hold 状态保持一致；旧 release 保留作为回滚文件。监听确认 mainnet P2P 18890、Wallet 8090、RPC 8545、gRPC 50051、loopback pprof 6062/metrics 6071。发布身份与服务器检查采用终端结果转录，明确区别于本地保存的原始 HTTP 采样。
 
 部署前完整六分钟基线为 13/13 metrics、13/13 Wallet，精确旧进程标识 `1789034123099447636`：41.63 块/秒、2,661.25 TPS，缓存 65,173→65,558 块，raw 字节增加 9,556,255（约 25.94 KiB/s）；每导入 1000 块，缓存净增约 25.71 块。状态归档距离增加 1,357 块但后半段下降 2,031；body/index 仍保持同数量级。部分指标点 pruned 比 published 稍前，是非原子观测，分别保留原值，不强行视作始终相等。
 

@@ -30,7 +30,7 @@ RELEASE = Path('/data/gtron/releases/20260911-commitment-cache-observation')
 SOURCE = RELEASE / 'source'
 BINARY = RELEASE / 'gtron'
 OLD_EXE = '/data/gtron/releases/20260911-sync-import-ownership/gtron'
-OLD_SHA = '0876e36b2053d7e0b8588b82fe3ee68e382548ffc5ef774782a216f443f990'
+OLD_SHA = '0876e36b2053d7e0b8588b82fe3e3ee68e382548ffc5ef774782a216f443f990'
 OLD_PID = 2754
 BASE_PREFIX = '54c46b7fe1dd2b0521e50ab7dd1e4983e27c7cde'
 # The isolated release may be newer than the intentionally unchanged checkout.
