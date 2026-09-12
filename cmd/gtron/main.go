@@ -608,6 +608,10 @@ func initCmd(ctx *cli.Context) error {
 }
 
 func gtron(ctx *cli.Context) error {
+	postingPrune, err := postingPruneEnabled(os.Getenv("GTRON_POSTING_PRUNE"))
+	if err != nil {
+		return err
+	}
 	if err := validateStoredReplayOptions(ctx); err != nil {
 		return err
 	}
@@ -767,6 +771,10 @@ func gtron(ctx *cli.Context) error {
 	if err := applyHistoryConfig(ctx, chainConfig); err != nil {
 		closeStores()
 		return err
+	}
+	if postingPrune && (!shouldEnableDomainStatePruner(chainConfig) || chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap || !chainConfig.HistoryEnabled) {
+		closeStores()
+		return errors.New("GTRON_POSTING_PRUNE requires snap mode with history enabled")
 	}
 	if err := ensureHistoryPruneModeLocked(db, chainConfig.EffectiveHistoryMode()); err != nil {
 		closeStores()
@@ -1228,6 +1236,10 @@ func gtron(ctx *cli.Context) error {
 			SnapshotDir:   stateSnapshotDir,
 			HeavyWorkGate: heavyWorkGate,
 		}
+		var fullIndexPrune statepruning.StateChangeIndexPruneFunc = stateChangeIndexPruner.OnePass
+		if postingPrune {
+			fullIndexPrune = nil
+		}
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
 				Dir:                         stateSnapshotDir,
@@ -1285,7 +1297,7 @@ func gtron(ctx *cli.Context) error {
 			ChainLookupPrune:      chainLookupPrune,
 			SectionBloomPrune:     sectionBloomPrune,
 			BalanceTracePrune:     balanceTracePrune,
-			StateChangeIndexPrune: stateChangeIndexPruner.OnePass,
+			StateChangeIndexPrune: fullIndexPrune,
 			// Retired-file deletion verifies the complete active manifest first.
 			// Keep that CPU/IO-heavy safety gate off the historical import path;
 			// AddSyncCompleteHook below wakes the lifecycle as soon as sync ends.
@@ -1305,6 +1317,15 @@ func gtron(ctx *cli.Context) error {
 			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)
+		if postingPrune {
+			stack.RegisterLifecycle(statepruning.NewPostingPruneWorker(statepruning.PostingPruneWorkerConfig{
+				Boundary:      domainLifecycle.PostingPruneBoundary,
+				Chunk:         runtimePostingPruneChunk(bc),
+				LoadProbe:     historyLoadProbe,
+				HeavyWorkGate: heavyWorkGate,
+			}))
+			log.Info("Bounded posting-only pruning enabled", "interval", time.Second, "scanRows", 4096, "scanBytes", 1<<20, "deleteLogicalBytes", 256<<10, "scanDuration", 10*time.Millisecond)
+		}
 		syncService.AddSyncCompleteHook(domainLifecycle.RequestPass)
 		chainLookupPruneLifecycleWired = chainLookupPrune != nil
 		sectionBloomPruneLifecycleWired = sectionBloomPrune != nil
@@ -1317,7 +1338,8 @@ func gtron(ctx *cli.Context) error {
 			"chainLookupPrune", chainLookupPrune != nil,
 			"sectionBloomPrune", sectionBloomPrune != nil,
 			"balanceTracePrune", balanceTracePrune != nil,
-			"stateChangeIndexPrune", true,
+			"stateChangeIndexPrune", fullIndexPrune != nil,
+			"postingChunkPrune", postingPrune,
 			"retiredPrune", true,
 			"dataset", historyDataset,
 			"historyWindow", prunePolicy.HistoryWindow,

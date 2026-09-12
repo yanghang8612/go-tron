@@ -145,6 +145,7 @@ type Pruner struct {
 	lastSolidifiedBlock               atomic.Uint64
 	lastDomainChangeStartBlock        atomic.Uint64
 	lastDomainChangePrunedThrough     atomic.Uint64
+	postingPruneBoundary              atomic.Pointer[PostingPruneBoundary]
 	lastDomainChangePrunedThroughTx   atomic.Uint64
 	lastPassDuration                  atomic.Int64
 	lastColdPruneProgressLogAt        atomic.Int64
@@ -654,6 +655,13 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 	if err != nil {
 		return Stats{}, err
 	}
+	// The generic hot pruner also supports stores without a Finish row. Posting
+	// reclamation requires a durable, hash-bound Finish before granting work.
+	postingProofAvailable := false
+	if p.cfg.Policy.Mode == ModeSnap && p.cfg.SnapshotDir != "" && pruneHeadHasHash {
+		finished, exists, verifyErr := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(p.chain.DB(), rawdb.StageFinish, p.canonicalBlockHash)
+		postingProofAvailable = verifyErr == nil && exists && finished >= pruneHead
+	}
 	stats, err = Worker{
 		DB:          p.chain.DB(),
 		Policy:      p.cfg.Policy,
@@ -691,6 +699,12 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		p.lastDomainChangeStartBlock.Store(stats.DomainChangeStartBlock)
 		p.lastDomainChangePrunedThrough.Store(stats.DomainChangePrunedThrough)
 		p.lastDomainChangePrunedThroughTx.Store(stats.DomainChangePrunedThroughTx)
+		if postingProofAvailable && stats.DomainChangePrunedThroughTx > 0 {
+			p.postingPruneBoundary.Store(&PostingPruneBoundary{
+				PrunedThrough: stats.DomainChangePrunedThrough,
+				ProofHead:     pruneHead, ProofHash: pruneHeadHash,
+			})
+		}
 	}
 	if stats.DeletedTxRanges != 0 || stats.DeletedDomainChangeBlocks != 0 || stats.DeletedCommitmentCheckpoints != 0 || stats.DeletedStateCodeRows != 0 {
 		elapsed := time.Since(start)

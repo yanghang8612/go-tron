@@ -172,6 +172,17 @@ func (l *SnapshotLifecycle) Start() error {
 	return nil
 }
 
+// PostingPruneBoundary returns only a successful hot-prune permission observed
+// in this process. It avoids reloading the full manifest for each small chunk.
+func (l *SnapshotLifecycle) PostingPruneBoundary() PostingPruneBoundary {
+	if l != nil && l.pruner != nil {
+		if boundary := l.pruner.postingPruneBoundary.Load(); boundary != nil {
+			return *boundary
+		}
+	}
+	return PostingPruneBoundary{}
+}
+
 func (l *SnapshotLifecycle) Stop() error {
 	if l == nil {
 		return nil
