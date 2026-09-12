@@ -20,7 +20,8 @@ the sweep's fixed canonical H hash. Locks in order stateHistoryIndexMu -> chainm
 serialize chunks with indexing and rewinds. The index mutex is tried without
 waiting; the chain mutex registers a waiter, so the importer can hand it over
 at a block boundary. Instantaneous TryLock on both mutexes produced zero chunks
-in the initial online observations despite repeated gate admission. Both remain
+in the initial online observations and only one successful chunk in the full
+ten-minute window despite repeated gate admission. Both remain
 held through batch submission. Chain-lock waiting is not cancellable mid-wait;
 context is checked immediately after acquisition, so a canceled worker does no
 scan or write. Stop joins that wait. Slow holders can exceed a block interval,

@@ -2,8 +2,9 @@
 
 1. Add a bounded posting-only rawdb chunk with exclusive in-memory cursor and
    failure/budget/read-equivalence tests.
-2. Add a nonblocking chain wrapper binding cold permission, durable stages and
-   canonical hashes under index/chain locks; test rewind and writer exclusion.
+2. Add a chain wrapper binding cold permission, durable stages and canonical
+   hashes, with opportunistic index admission and queued chain-lock handoff;
+   test rewind, writer exclusion and cancellation after a queued wait.
 3. Publish successful snap hot-prune permission atomically. Wire an opt-in
    lifecycle with pressure admission, bounded metrics, cancellation and no
    competing full sweep. Test progress, invalidation and stop behavior.
