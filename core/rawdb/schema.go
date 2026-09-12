@@ -66,6 +66,52 @@ func PhysicalKeyFamilyName(family PhysicalKeyFamily) string {
 	}
 }
 
+// PhysicalSpaceRange describes one fixed key range selected for SST space
+// observation. Start and End delimit a half-open logical family range. Pebble's
+// EstimateDiskUsage treats End as inclusive and counts overlapping data blocks,
+// so the resulting byte estimates are conservative and not strictly additive.
+// These selected families do not cover every rawdb or legacy keyspace.
+type PhysicalSpaceRange struct {
+	Name       string
+	Start, End []byte
+}
+
+// DiskSpaceObservationRanges returns independently owned bounds for the twelve
+// primary hot database families. Keeping the prefixes here makes the physical
+// layout a schema concern; collectors must not reconstruct it themselves.
+func DiskSpaceObservationRanges() []PhysicalSpaceRange {
+	groups := [...]struct {
+		name   string
+		prefix []byte
+	}{
+		{"account_latest", stateAccountLatestPrefix},
+		{"account_kv_latest", stateKVLatestPrefix},
+		{"kv_generation", stateKVGenerationPrefix},
+		{"state_code", stateCodePrefix},
+		// Includes legacy branches, generation-specific deltas, commitment
+		// domain rows, and the base/rotation/engine singleton markers.
+		{"commitment", []byte("state-commitment-")},
+		{"state_changeset", stateChangeSetPrefix},
+		// Includes posting and key-directory rows, but not "state-changeset-".
+		{"state_change_index", []byte("state-change-")},
+		{"state_tx_range", stateTxRangePrefix},
+		{"staged_body", syncStagedBlockPrefix},
+		{"block_body", blockPrefix},
+		{"transaction_index", txPrefix},
+		// The existing "ti-" and "tib-" receipt families share [ti, tj).
+		{"transaction_receipts", []byte("ti")},
+	}
+	ranges := make([]PhysicalSpaceRange, len(groups))
+	for i, group := range groups {
+		ranges[i] = PhysicalSpaceRange{
+			Name:  group.name,
+			Start: append([]byte(nil), group.prefix...),
+			End:   prefixUpperBound(group.prefix),
+		}
+	}
+	return ranges
+}
+
 // ClassifyPhysicalKeyString assigns a rawdb key to one stable storage family.
 // String input lets blockbuffer classify its already-owned immutable map keys
 // without allocating []byte wrappers on the flush path.

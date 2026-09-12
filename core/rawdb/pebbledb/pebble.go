@@ -225,6 +225,12 @@ type Options struct {
 	// MaxConcurrentCompactions overrides the quota-aware default when positive.
 	// Offline maintenance should use 1. Zero preserves the normal default.
 	MaxConcurrentCompactions int
+
+	// DiskSpaceRanges enables optional serial SST range estimates. Empty
+	// disables the worker. Estimates use metadata/index blocks, not value
+	// scans; there is no hard per-call IO/time bound. Read-only opens ignore
+	// this option. Rawdb supplies a fixed schema-owned selection when enabled.
+	DiskSpaceRanges []DiskSpaceRange
 }
 
 // DefaultOptions returns the tuning go-tron applies to its main chaindata DB
@@ -332,6 +338,8 @@ type Database struct {
 	writeOptions       *pebble.WriteOptions
 	boundedPointGet    bool
 	pressureThresholds storagePressureThresholds
+	engineSpace        *engineSpaceMetrics
+	diskSpace          *diskSpaceObserver
 }
 
 // pointReadView holds Database's lifecycle read lock across a short burst of
@@ -715,6 +723,13 @@ func (l panicLogger) Fatalf(format string, args ...interface{}) {
 // go-tron-specific deviations from go-ethereum's upstream defaults; pass
 // DefaultOptions() unless you know why you're picking different values.
 func New(file string, cache int, handles int, namespace string, readonly bool, tune Options) (*Database, error) {
+	if readonly {
+		tune.DiskSpaceRanges = nil
+	}
+	spaceRanges, err := copyDiskSpaceRanges(tune.DiskSpaceRanges)
+	if err != nil {
+		return nil, err
+	}
 	if tune.MaxConcurrentCompactions < 0 {
 		return nil, fmt.Errorf("invalid max concurrent compactions %d", tune.MaxConcurrentCompactions)
 	}
@@ -935,6 +950,11 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	db.liveCompGauge = metrics.GetOrRegisterGauge(namespace+"compact/live/count", nil)
 	db.liveCompSizeGauge = metrics.GetOrRegisterGauge(namespace+"compact/live/size", nil)
 	db.liveIterGauge = metrics.GetOrRegisterGauge(namespace+"iter/count", nil)
+	if acquireSpaceMetrics(db) {
+		db.engineSpace = newEngineSpaceMetrics(namespace)
+		db.diskSpace = newDiskSpaceObserver(namespace, spaceRanges, db.db.EstimateDiskUsage)
+		db.diskSpace.start()
+	}
 
 	// Start up the metrics gathering and return
 	go db.meter(metricsGatheringInterval, namespace)
@@ -951,6 +971,9 @@ func (d *Database) Close() error {
 		return nil
 	}
 	d.closed = true
+	if d.diskSpace != nil {
+		d.diskSpace.stop()
+	}
 	if d.quitChan != nil {
 		errc := make(chan error)
 		d.quitChan <- errc
@@ -959,7 +982,9 @@ func (d *Database) Close() error {
 		}
 		d.quitChan = nil
 	}
-	return d.db.Close()
+	err := d.db.Close()
+	releaseSpaceMetrics(d)
+	return err
 }
 
 // Has retrieves if a key is present in the key-value store.
@@ -1259,6 +1284,7 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 		d.compReadMeter.Mark(compReads[i%2] - compReads[(i-1)%2])
 		d.compWriteMeter.Mark(compWrites[i%2] - compWrites[(i-1)%2])
 		d.diskSizeGauge.Update(int64(stats.DiskSpaceUsage()))
+		d.engineSpace.update(stats)
 		d.diskReadMeter.Mark(0) // pebble doesn't track non-compaction reads
 		d.diskWriteMeter.Mark(nWrites[i%2] - nWrites[(i-1)%2])
 

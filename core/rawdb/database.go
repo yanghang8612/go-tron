@@ -30,7 +30,7 @@ type PebbleOptions = pebbledb.Options
 // MemTableStopWritesThreshold=8, the per-level TargetFileSize ramp, bloom
 // filters, and the metrics surface — matches the upstream go-ethereum wrapper.
 func NewPebbleDB(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
-	return pebbledb.New(path, cache, handles, "", false, pebbledb.DefaultOptions())
+	return NewPebbleDBWithOptions(path, cache, handles, pebbledb.DefaultOptions())
 }
 
 // DefaultPebbleOptions returns the production defaults used by NewPebbleDB.
@@ -41,6 +41,11 @@ func DefaultPebbleOptions() PebbleOptions {
 // NewPebbleDBWithOptions opens a Pebble database with explicit cache, handle,
 // and low-level Pebble tuning values.
 func NewPebbleDBWithOptions(path string, cache int, handles int, tune PebbleOptions) (ethdb.KeyValueStore, error) {
+	var err error
+	tune, err = withDiskSpaceObservation(tune)
+	if err != nil {
+		return nil, err
+	}
 	return pebbledb.New(path, cache, handles, "", false, tune)
 }
 
