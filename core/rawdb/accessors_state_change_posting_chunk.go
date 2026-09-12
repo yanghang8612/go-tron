@@ -42,6 +42,11 @@ type StateChangePostingPruneChunkResult struct {
 	BytesScanned    uint64
 	RowsDeleted     uint64
 	BytesDeleted    uint64
+	// Durations include attempted work on errors. Scan includes iterator
+	// creation/release and batch construction; Write measures batch.Write only.
+	// Neither is a latency bound or a count of device I/O.
+	ScanDuration  time.Duration
+	WriteDuration time.Duration
 }
 
 // Even noncanonical-but-decodable uvarints use at most ten bytes each: one
@@ -80,6 +85,12 @@ func PruneStaleStateChangePostingChunkContext(ctx context.Context, db ethdb.KeyV
 		return result, errors.New("rawdb: invalid posting prune exclusive cursor")
 	}
 	started := time.Now()
+	scanning := true
+	defer func() {
+		if scanning {
+			result.ScanDuration = time.Since(started)
+		}
+	}()
 	nextCursor := bytes.Clone(resumeKeyExclusive)
 	var deletedRows, deletedBytes uint64
 	var complete, stoppedByBudget bool
@@ -146,7 +157,12 @@ func PruneStaleStateChangePostingChunkContext(ctx context.Context, db ethdb.KeyV
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if err := batch.Write(); err != nil {
+	result.ScanDuration = time.Since(started)
+	scanning = false
+	writeStarted := time.Now()
+	writeErr := batch.Write()
+	result.WriteDuration = time.Since(writeStarted)
+	if err := writeErr; err != nil {
 		return result, err
 	}
 	result.NextCursor = nextCursor

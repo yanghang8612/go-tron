@@ -5,6 +5,59 @@ import (
 	"time"
 )
 
+func TestHeavyWorkGateCanTryAcquireIsOnlyAHint(t *testing.T) {
+	var unlimited *HeavyWorkGate
+	if !unlimited.CanTryAcquire() {
+		t.Fatal("nil gate rejected the hint")
+	}
+	now := time.Unix(10_000, 0)
+	g := NewHeavyWorkGateWithCooldownAfter(15*time.Second, 250*time.Millisecond)
+	g.now = func() time.Time { return now }
+	checks := 0
+	g.SetAdmissionCheck(func() bool { checks++; return false })
+	for i := 0; i < 5; i++ {
+		if !g.CanTryAcquire() {
+			t.Fatal("empty gate hint created a lease/cooldown")
+		}
+		now = now.Add(time.Minute)
+	}
+	if checks != 0 || g.CooldownRemaining() != 0 || len(g.token) != 0 {
+		t.Fatal("hint performed admission or changed scheduling state")
+	}
+	if _, ok := g.TryAcquire(); ok || checks != 1 {
+		t.Fatal("positive hint bypassed real pressure admission")
+	}
+	g.SetAdmissionCheck(nil)
+	release, ok := g.TryAcquire()
+	if !ok || g.CanTryAcquire() {
+		t.Fatal("hint ignored an intervening owner")
+	}
+	now = now.Add(time.Second)
+	release()
+	if g.CanTryAcquire() {
+		t.Fatal("hint ignored recovery")
+	}
+	now = now.Add(15 * time.Second)
+	if !g.CanTryAcquire() {
+		t.Fatal("hint did not observe elapsed recovery")
+	}
+	g.reservationMu.Lock()
+	ready := g.CanTryAcquire()
+	g.reservationMu.Unlock()
+	if ready {
+		t.Fatal("hint waited for or ignored the reservation mutex")
+	}
+	r := g.ReserveNext(time.Second)
+	if r == nil || g.CanTryAcquire() {
+		t.Fatal("hint ignored a reservation")
+	}
+	saved := g.reservation
+	now = now.Add(2 * time.Second)
+	if !g.CanTryAcquire() || g.reservation != saved {
+		t.Fatal("hint failed to ignore expired reservation without consuming it")
+	}
+}
+
 func TestHeavyWorkGateIsNonBlockingAndReleaseIsIdempotent(t *testing.T) {
 	gate := NewHeavyWorkGate()
 	release, ok := gate.TryAcquire()

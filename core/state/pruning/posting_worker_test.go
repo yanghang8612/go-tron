@@ -39,6 +39,45 @@ func runPostingWorkerTestChunk(t *testing.T, w *PostingPruneWorker) {
 	}
 }
 
+func TestPostingPruneWorkerRecordsFailedAndDeferredPhases(t *testing.T) {
+	boom := errors.New("injected submit failure")
+	calls := 0
+	w := NewPostingPruneWorker(postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(100, 1) },
+		func(context.Context, PostingPruneBoundary, common.Hash, []byte, rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+			calls++
+			switch calls {
+			case 1:
+				return PostingPruneChunkOutcome{Timings: PostingPruneTimings{ChainWait: 20, ChainHeld: 12, Admission: 2, Proof: 3, GateHeld: 10},
+					Result: rawdb.StateChangePostingPruneChunkResult{RowsScanned: 2, ScanDuration: 4, WriteDuration: 3}}, boom
+			case 2:
+				return PostingPruneChunkOutcome{Timings: PostingPruneTimings{ChainWait: 5, ChainHeld: 2, Admission: 1}, PressureDeferred: true}, nil
+			default:
+				return PostingPruneChunkOutcome{Timings: PostingPruneTimings{ChainWait: 8, ChainHeld: 3, Admission: 2}, GateDeferred: true}, nil
+			}
+		}))
+	t.Cleanup(func() { _ = w.Stop() })
+	if err := w.runChunk(context.Background()); !errors.Is(err, boom) {
+		t.Fatalf("failed callback=%v", err)
+	}
+	runPostingWorkerTestChunk(t, w)
+	runPostingWorkerTestChunk(t, w)
+	if w.counts["callbacks"] != 3 || w.counts["errors"] != 1 || w.counts["deferred/pressure"] != 1 || w.counts["deferred/gate"] != 1 || w.counts["deferred/chain"] != 0 || w.counts["chunks"] != 0 || len(w.cursor) != 0 {
+		t.Fatalf("deferral accounting changed cursor or counts: %+v", w.counts)
+	}
+	for name, want := range map[string]int64{
+		"phase/chain_wait/last_ns": 8, "phase/chain_wait/max_ns": 20, "phase/chain_wait/total_ns": 33,
+		"phase/chain_held/total_ns": 17, "phase/admission/total_ns": 5,
+		"phase/proof/last_ns": 0, "phase/proof/total_ns": 3,
+		"phase/scan/last_ns": 0, "phase/scan/max_ns": 4, "phase/scan/total_ns": 4,
+		"phase/write/last_ns": 0, "phase/write/max_ns": 3, "phase/write/total_ns": 3,
+		"phase/gate_held/last_ns": 0, "phase/gate_held/total_ns": 10,
+	} {
+		if got := w.gauges[name].Snapshot().Value(); got != want {
+			t.Errorf("%s=%d want %d", name, got, want)
+		}
+	}
+}
+
 func TestPostingPruneWorkerKeepsFixedTargetCursorAndFailures(t *testing.T) {
 	boundary := postingWorkerTestBoundary(100, 1)
 	fixed := boundary
@@ -318,9 +357,10 @@ func TestPostingPruneWorkerBusyGateDoesNotCallChunk(t *testing.T) {
 	cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(100, 1) },
 		func(context.Context, PostingPruneBoundary, common.Hash, []byte, rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
 			calls++
-			if unexpectedRelease, acquired := gate.TryAcquire(); acquired {
-				unexpectedRelease()
-				t.Error("chunk did not own maintenance gate")
+			if release, acquired := gate.TryAcquire(); !acquired {
+				t.Error("worker retained a lease while calling the locking callback")
+			} else {
+				defer release() // The real core adapter acquires after its locks.
 			}
 			return PostingPruneChunkOutcome{}, nil
 		})
@@ -346,17 +386,24 @@ func TestPostingPruneWorkerBusyGateDoesNotCallChunk(t *testing.T) {
 func TestPostingPruneWorkerStopCancelsAndJoinsInflight(t *testing.T) {
 	entered, canceled, leave := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
+	gate := maintenance.NewHeavyWorkGate()
 	cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(100, 1) },
 		func(ctx context.Context, _ PostingPruneBoundary, _ common.Hash, _ []byte, _ rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
 			if calls.Add(1) != 1 {
 				return PostingPruneChunkOutcome{}, errors.New("unexpected second chunk")
 			}
+			release, ok := gate.TryAcquire()
+			if !ok {
+				return PostingPruneChunkOutcome{}, errors.New("cannot acquire callback lease")
+			}
+			defer release()
 			close(entered)
 			<-ctx.Done()
 			close(canceled)
 			<-leave
 			return PostingPruneChunkOutcome{Result: rawdb.StateChangePostingPruneChunkResult{RowsScanned: 7}}, ctx.Err()
 		})
+	cfg.HeavyWorkGate = gate
 	w := NewPostingPruneWorker(cfg)
 	defer func() {
 		select {

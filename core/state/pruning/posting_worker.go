@@ -21,13 +21,25 @@ type PostingPruneBoundary struct {
 	ProofHash     common.Hash
 }
 
-type PostingPruneChunkOutcome struct {
-	Result          rawdb.StateChangePostingPruneChunkResult
-	Anchor          common.Hash
-	Deferred        bool
-	BoundaryChanged bool
+// PostingPruneTimings describes the core callback, including failed attempts.
+// Held phases overlap their admission/proof/scan/write children; do not sum all
+// phases as exclusive wall time. The worker publishes after the callback exits.
+type PostingPruneTimings struct {
+	ChainWait, ChainHeld, Admission, Proof, GateHeld time.Duration
 }
 
+type PostingPruneChunkOutcome struct {
+	Result           rawdb.StateChangePostingPruneChunkResult
+	Anchor           common.Hash
+	Deferred         bool
+	BoundaryChanged  bool
+	PressureDeferred bool
+	GateDeferred     bool
+	Timings          PostingPruneTimings
+}
+
+// PostingPruneChunkFunc must reacquire resource admission after owning its
+// writer locks. The worker's CanTryAcquire check is only a scheduling hint.
 type PostingPruneChunkFunc func(context.Context, PostingPruneBoundary, common.Hash, []byte, rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error)
 
 type PostingPruneWorkerConfig struct {
@@ -76,9 +88,16 @@ func NewPostingPruneWorker(cfg PostingPruneWorkerConfig) *PostingPruneWorker {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &PostingPruneWorker{cfg: cfg, ctx: ctx, cancel: cancel, done: make(chan struct{}), gauges: make(map[string]*metrics.Gauge), counts: make(map[string]uint64)}
-	for _, name := range []string{"enabled", "chunks", "sweeps", "errors", "deferred/boundary", "deferred/pressure", "deferred/gate", "deferred/chain", "resets", "scanned/rows", "scanned/bytes", "deleted/rows", "deleted/bytes", "target/block", "completed/block", "last/duration_ns", "max/duration_ns", "last/scanned_rows", "last/deleted_bytes"} {
+	for _, name := range []string{"enabled", "chunks", "sweeps", "errors", "deferred/boundary", "deferred/pressure", "deferred/gate", "deferred/chain", "resets", "scanned/rows", "scanned/bytes", "deleted/rows", "deleted/bytes", "target/block", "completed/block", "last/duration_ns", "max/duration_ns", "last/scanned_rows", "last/deleted_bytes", "callbacks"} {
 		w.gauges[name] = metrics.GetOrRegisterGauge(normalizePrunerMetricNamespace(cfg.MetricsNamespace)+name, nil)
 		w.gauges[name].Update(0)
+	}
+	for _, phase := range postingPrunePhases {
+		for _, kind := range []string{"last_ns", "max_ns", "total_ns"} {
+			name := "phase/" + phase + "/" + kind
+			w.gauges[name] = metrics.GetOrRegisterGauge(normalizePrunerMetricNamespace(cfg.MetricsNamespace)+name, nil)
+			w.gauges[name].Update(0)
+		}
 	}
 	return w
 }
@@ -140,7 +159,9 @@ func (w *PostingPruneWorker) add(name string, n uint64) {
 	w.gauges[name].Update(prunerUintGauge(w.counts[name]))
 }
 
-func postingPrunePressureReady(p maintenance.StoragePressure, now time.Time) bool {
+// PostingPrunePressureReady is shared by the scheduling precheck and the
+// locked admission callback. Both apply exactly the same thresholds.
+func PostingPrunePressureReady(p maintenance.StoragePressure, now time.Time) bool {
 	fresh := func(t time.Time) bool {
 		age := now.Sub(t)
 		return !t.IsZero() && age >= -time.Second && age <= 15*time.Second
@@ -190,19 +211,19 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 		w.target = boundary
 		w.gauges["target/block"].Update(prunerUintGauge(boundary.PrunedThrough))
 	}
-	if !postingPrunePressureReady(w.cfg.LoadProbe(), time.Now()) {
+	if !PostingPrunePressureReady(w.cfg.LoadProbe(), time.Now()) {
 		w.add("deferred/pressure", 1)
 		return nil
 	}
-	release, ok := w.cfg.HeavyWorkGate.TryAcquire()
-	if !ok {
+	if !w.cfg.HeavyWorkGate.CanTryAcquire() {
 		w.add("deferred/gate", 1)
 		return nil
 	}
-	defer release()
 	started := time.Now()
 	out, err := w.cfg.Chunk(ctx, w.target, w.anchor, w.cursor, w.cfg.Limits)
 	elapsed := time.Since(started)
+	w.add("callbacks", 1)
+	w.recordPhases(out)
 	w.gauges["last/duration_ns"].Update(int64(elapsed))
 	if uint64(elapsed) > w.counts["max/duration_ns"] {
 		w.counts["max/duration_ns"] = uint64(elapsed)
@@ -217,6 +238,14 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 			w.add("errors", 1)
 		}
 		return err
+	}
+	if out.PressureDeferred {
+		w.add("deferred/pressure", 1)
+		return nil
+	}
+	if out.GateDeferred {
+		w.add("deferred/gate", 1)
+		return nil
 	}
 	if out.BoundaryChanged {
 		w.rejected = w.target
@@ -244,4 +273,21 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 		w.clearSweep()
 	}
 	return nil
+}
+
+var postingPrunePhases = [...]string{"chain_wait", "chain_held", "admission", "proof", "gate_held", "scan", "write"}
+
+func (w *PostingPruneWorker) recordPhases(out PostingPruneChunkOutcome) {
+	values := [...]time.Duration{out.Timings.ChainWait, out.Timings.ChainHeld, out.Timings.Admission,
+		out.Timings.Proof, out.Timings.GateHeld, out.Result.ScanDuration, out.Result.WriteDuration}
+	for i, phase := range postingPrunePhases {
+		value := uint64(max(0, values[i]))
+		prefix := "phase/" + phase + "/"
+		w.gauges[prefix+"last_ns"].Update(prunerUintGauge(value))
+		w.add(prefix+"total_ns", value)
+		if value > w.counts[prefix+"max_ns"] {
+			w.counts[prefix+"max_ns"] = value
+			w.gauges[prefix+"max_ns"].Update(prunerUintGauge(value))
+		}
+	}
 }

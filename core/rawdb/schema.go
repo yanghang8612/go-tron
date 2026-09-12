@@ -841,6 +841,15 @@ func stateChangeSetBlockPrefix(blockNum uint64) []byte {
 	return k
 }
 
+// stateChangeSetPackedDeleteRange encloses the exact seq=0 keys at both ends.
+// Appending zero is the immediate lexicographic successor of the final exact
+// key. Unlike using lastBlock+1, this neither overflows nor includes repair rows
+// or malformed extensions of the final key. The caller must have scanned every
+// intervening physical key and rejected ranges containing any such rows.
+func stateChangeSetPackedDeleteRange(firstBlock, lastBlock uint64) (start, end []byte) {
+	return stateChangeSetKey(firstBlock, 0), append(stateChangeSetKey(lastBlock, 0), 0)
+}
+
 func stateCommitmentDomainKey(logicalKey []byte) []byte {
 	return append(append([]byte{}, stateCommitmentDomainPrefix...), logicalKey...)
 }

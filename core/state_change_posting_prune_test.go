@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -359,6 +361,163 @@ type postingPruneGuardCallResult struct {
 	chunk  rawdb.StateChangePostingPruneChunkResult
 	anchor common.Hash
 	err    error
+	timing StateChangePostingPruneTimings
+}
+
+func TestStateChangePostingPruneGuardAdmissionAfterQueuedLock(t *testing.T) {
+	for _, mode := range []string{"success", "gate-lost", "pressure-changed", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newPostingPruneGuardFixture(t)
+			gate := maintenance.NewHeavyWorkGate()
+			if !gate.CanTryAcquire() {
+				t.Fatal("initial gate hint rejected")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var calls atomic.Int32
+			var pressureReady atomic.Bool
+			pressureReady.Store(true)
+			admit := func() (func(), bool) {
+				calls.Add(1)
+				if f.bc.chainmu.TryLock() {
+					f.bc.chainmu.Unlock()
+					t.Error("admission ran without chain lock")
+				}
+				if f.bc.stateHistoryIndexMu.TryLock() {
+					f.bc.stateHistoryIndexMu.Unlock()
+					t.Error("admission ran without index lock")
+				}
+				if !pressureReady.Load() {
+					return nil, false
+				}
+				return gate.TryAcquire()
+			}
+			writes := 0
+			f.db.beforeWrite = func() error {
+				writes++
+				if gate.CanTryAcquire() {
+					t.Error("lease ended before batch write")
+				}
+				return nil
+			}
+			done := make(chan postingPruneGuardCallResult, 1)
+			f.bc.chainmu.Lock()
+			unlocked, joined := false, false
+			var otherRelease func()
+			defer func() {
+				cancel()
+				if !unlocked {
+					f.bc.chainmu.Unlock()
+				}
+				if otherRelease != nil {
+					otherRelease()
+				}
+				if !joined {
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Error("admission waiter leaked")
+					}
+				}
+			}()
+			awaitPostingPruneGuardWaiter(t, f, done, func() {
+				go func() {
+					chunk, anchor, timing, err := f.bc.PruneStateChangePostingChunkWithAdmission(ctx, 2, 4, f.blocks[4].Hash(), common.Hash{}, nil, postingPruneGuardLimits(), admit)
+					done <- postingPruneGuardCallResult{chunk: chunk, anchor: anchor, err: err, timing: timing}
+				}()
+			})
+			if calls.Load() != 0 {
+				t.Fatal("admission acquired a lease before the chain handoff")
+			}
+			var ok bool
+			otherRelease, ok = gate.TryAcquire()
+			if !ok {
+				t.Fatal("queued chain waiter prevented other maintenance admission")
+			}
+			// The gate owner may itself need chainmu. The posting waiter must not
+			// wait for that owner while holding chainmu; it must decline immediately.
+			if mode != "gate-lost" {
+				otherRelease()
+				otherRelease = nil
+			}
+			if mode == "pressure-changed" {
+				pressureReady.Store(false)
+			}
+			if mode == "canceled" {
+				cancel()
+			}
+			f.bc.chainmu.Unlock()
+			unlocked = true
+			var out postingPruneGuardCallResult
+			select {
+			case out = <-done:
+				joined = true
+			case <-time.After(5 * time.Second):
+				t.Fatal("gate owner and chain waiter failed to make progress")
+			}
+			if out.timing.ChainWait <= 0 || out.timing.ChainHeld <= 0 {
+				t.Fatalf("missing lock timing: %+v", out.timing)
+			}
+			if mode == "success" {
+				if out.err != nil || out.chunk.RowsDeleted != 2 || writes != 1 || out.timing.GateHeld <= 0 || out.timing.Proof <= 0 || out.chunk.ScanDuration <= 0 || out.chunk.WriteDuration <= 0 {
+					t.Fatalf("successful observed chunk=%+v writes=%d", out, writes)
+				}
+			} else {
+				want := ErrStateChangePostingPruneDeferred
+				if mode == "canceled" {
+					want = context.Canceled
+					if calls.Load() != 0 {
+						t.Fatal("canceled waiter performed admission")
+					}
+				}
+				if !errors.Is(out.err, want) || out.chunk.RowsScanned != 0 || out.chunk.RowsDeleted != 0 || writes != 0 || out.timing.Proof != 0 || out.timing.GateHeld != 0 || out.chunk.ScanDuration != 0 || out.chunk.WriteDuration != 0 || len(postingPruneGuardRows(t, f.db)) != 3 {
+					t.Fatalf("rejected observed chunk=%+v writes=%d", out, writes)
+				}
+			}
+			if otherRelease != nil {
+				otherRelease()
+				otherRelease = nil
+			}
+			if !gate.CanTryAcquire() || !f.bc.stateHistoryIndexMu.TryLock() {
+				t.Fatal("admission leaked gate or index lock")
+			}
+			f.bc.stateHistoryIndexMu.Unlock()
+			if err := f.bc.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestStateChangePostingPruneGuardObservedFailureReleasesLease(t *testing.T) {
+	for _, mode := range []string{"proof-read", "write", "missing-admission", "missing-lease"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newPostingPruneGuardFixture(t)
+			gate := maintenance.NewHeavyWorkGate()
+			boom := errors.New("injected observed failure")
+			admit := StateChangePostingPruneAdmission(gate.TryAcquire)
+			switch mode {
+			case "proof-read":
+				f.db.readErr = boom
+			case "write":
+				f.db.beforeWrite = func() error { return boom }
+			case "missing-admission":
+				admit = nil
+			case "missing-lease":
+				admit = func() (func(), bool) { return nil, true }
+			}
+			out, _, timing, err := f.bc.PruneStateChangePostingChunkWithAdmission(context.Background(), 2, 4, f.blocks[4].Hash(), common.Hash{}, nil, postingPruneGuardLimits(), admit)
+			if err == nil || out.RowsDeleted != 0 || len(out.NextCursor) != 0 || !gate.CanTryAcquire() {
+				t.Fatalf("failure leaked progress/lease: out=%+v timing=%+v err=%v", out, timing, err)
+			}
+			if mode == "proof-read" && (!errors.Is(err, boom) || timing.Proof <= 0 || timing.GateHeld <= 0 || out.ScanDuration != 0 || out.WriteDuration != 0) {
+				t.Fatalf("proof failure timing=%+v chunk=%+v err=%v", timing, out, err)
+			}
+			if mode == "write" && (!errors.Is(err, boom) || out.ScanDuration <= 0 || out.WriteDuration <= 0 || timing.GateHeld <= 0) {
+				t.Fatalf("write failure timing=%+v chunk=%+v err=%v", timing, out, err)
+			}
+		})
+	}
 }
 
 // The caller holds chainmu. Ownership of the outer mutex establishes that the

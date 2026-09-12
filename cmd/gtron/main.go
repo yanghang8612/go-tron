@@ -612,6 +612,10 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	historyRangePrune, err := historyRangePruneEnabled(os.Getenv("GTRON_HISTORY_RANGE_PRUNE"))
+	if err != nil {
+		return err
+	}
 	if err := validateStoredReplayOptions(ctx); err != nil {
 		return err
 	}
@@ -775,6 +779,10 @@ func gtron(ctx *cli.Context) error {
 	if postingPrune && (!shouldEnableDomainStatePruner(chainConfig) || chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap || !chainConfig.HistoryEnabled) {
 		closeStores()
 		return errors.New("GTRON_POSTING_PRUNE requires snap mode with history enabled")
+	}
+	if historyRangePrune && (!shouldEnableDomainStatePruner(chainConfig) || chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap || !chainConfig.HistoryEnabled) {
+		closeStores()
+		return errors.New("GTRON_HISTORY_RANGE_PRUNE requires snap mode with history enabled")
 	}
 	if err := ensureHistoryPruneModeLocked(db, chainConfig.EffectiveHistoryMode()); err != nil {
 		closeStores()
@@ -1158,7 +1166,7 @@ func gtron(ctx *cli.Context) error {
 	historyLoadProbe := historyResources.sampleLoad
 	historyParallelReady := historyResources.parallelReady
 	heavyWorkGate.SetAdmissionCheck(func() bool {
-		return !historyLoadProbe().HardLimitReached(time.Now())
+		return !historyResources.enginePressure().HardLimitReached(time.Now())
 	})
 	var domainLifecycle *statepruning.SnapshotLifecycle
 	var chainFreezerSnapshotBuild statepruning.ChainFreezerBuildFunc
@@ -1288,6 +1296,7 @@ func gtron(ctx *cli.Context) error {
 				SyncEventLogTargetBlock:          syncEventLogTargetBlock,
 			},
 			Pruner: statepruning.PrunerConfig{
+				HistoryRangePrune:               historyRangePrune,
 				Policy:                          prunePolicy,
 				SnapshotDir:                     stateSnapshotDir,
 				MaxSyncLag:                      domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
@@ -1320,7 +1329,7 @@ func gtron(ctx *cli.Context) error {
 		if postingPrune {
 			stack.RegisterLifecycle(statepruning.NewPostingPruneWorker(statepruning.PostingPruneWorkerConfig{
 				Boundary:      domainLifecycle.PostingPruneBoundary,
-				Chunk:         runtimePostingPruneChunk(bc),
+				Chunk:         runtimePostingPruneChunk(bc, heavyWorkGate, historyResources.postingPressure),
 				LoadProbe:     historyLoadProbe,
 				HeavyWorkGate: heavyWorkGate,
 			}))
@@ -1340,6 +1349,7 @@ func gtron(ctx *cli.Context) error {
 			"balanceTracePrune", balanceTracePrune != nil,
 			"stateChangeIndexPrune", fullIndexPrune != nil,
 			"postingChunkPrune", postingPrune,
+			"historyRangePrune", historyRangePrune,
 			"retiredPrune", true,
 			"dataset", historyDataset,
 			"historyWindow", prunePolicy.HistoryWindow,

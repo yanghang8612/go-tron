@@ -26,6 +26,14 @@ type Worker struct {
 	MaxBlocks   int
 	SnapshotDir string
 
+	// HistoryRangePrune changes only the expression of already-authorized hot
+	// history deletes. Cold coverage and progress publication remain unchanged.
+	HistoryRangePrune bool
+	// HistoryRangeGuard optionally admits the range scan and its batch flush
+	// under the live writer locks. Busy admission retains the original point
+	// deletion path. Proof failures must return an error, never busy admission.
+	HistoryRangeGuard func(context.Context, uint64, func() error) (bool, error)
+
 	// ShouldDeferStateCodePrune skips the optional full CodeDomain reference
 	// scan when it returns true at the stage boundary. Hot code is immutable and
 	// remains authoritative while retained; a later pass scans every hot code
@@ -57,9 +65,19 @@ type Stats struct {
 	// Lazy content verification, hot row reads/deletes and every batch flush
 	// remain outside it and therefore in the adaptive per-row work estimate.
 	HistoryMetadataDuration time.Duration
+	// HistoryDeletes counts accepted logical deletes from a completely
+	// successful pass. It is not reclaimed filesystem space.
+	HistoryDeletes               rawdb.StateDomainChangeDeleteStats
+	HistoryRangeFallbackBlocks   uint64
+	HistoryRangeGuardDuration    time.Duration
+	HistoryRangeGuardMaxDuration time.Duration
 }
 
 const maxPruneBatchValueSize = 32 << 20
+
+// Limit each optional critical section independently of the adaptive pass size.
+// This bounds rows, not individual storage call latency or unusually large packs.
+const maxHistoryRangeGuardBlocks = 256
 
 // pruneBatchStore keeps scans on the committed store while directing writes to
 // bounded batches. Pruning is idempotent and advances progress only after all
@@ -69,6 +87,17 @@ type pruneBatchStore struct {
 	ethdb.KeyValueReader
 	ethdb.KeyValueWriter
 	ethdb.Iteratee
+}
+
+// Expose range deletion only for the opted-in hot-history phase. Promoting it
+// on every prune store would change capability-based behavior in other phases.
+type rangePruneBatchStore struct {
+	pruneBatchStore
+	deleteRange func([]byte, []byte) error
+}
+
+func (s rangePruneBatchStore) DeleteRange(start, end []byte) error {
+	return s.deleteRange(start, end)
 }
 
 // GetWithPresence preserves the atomic point-read capability of the committed
@@ -99,6 +128,10 @@ func newPruneBatchStore(store Store) (Store, func() error) {
 }
 
 func newPruneBatchStoreWithLimit(store Store, limit int) (Store, func() error) {
+	return newPruneBatchStoreWithRanges(store, limit, false)
+}
+
+func newPruneBatchStoreWithRanges(store Store, limit int, ranges bool) (Store, func() error) {
 	batcher, ok := store.(ethdb.Batcher)
 	if !ok {
 		return store, func() error { return nil }
@@ -107,11 +140,15 @@ func newPruneBatchStoreWithLimit(store Store, limit int) (Store, func() error) {
 		batch: batcher.NewBatch(),
 		limit: limit,
 	}
-	return pruneBatchStore{
+	wrapped := pruneBatchStore{
 		KeyValueReader: store,
 		KeyValueWriter: writer,
 		Iteratee:       store,
-	}, writer.Flush
+	}
+	if ranges {
+		return rangePruneBatchStore{pruneBatchStore: wrapped, deleteRange: writer.DeleteRange}, writer.Flush
+	}
+	return wrapped, writer.Flush
 }
 
 type boundedPruneBatchWriter struct {
@@ -131,6 +168,13 @@ func (w *boundedPruneBatchWriter) Delete(key []byte) error {
 		return err
 	}
 	return w.batch.Delete(key)
+}
+
+func (w *boundedPruneBatchWriter) DeleteRange(start, end []byte) error {
+	if err := w.flushBefore(len(start) + len(end)); err != nil {
+		return err
+	}
+	return w.batch.DeleteRange(start, end)
 }
 
 func (w *boundedPruneBatchWriter) flushBefore(nextSize int) error {
@@ -214,7 +258,68 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	if err != nil {
 		return Stats{}, err
 	}
-	historyStore, flushHistory := newPruneBatchStore(w.DB)
+	var historyDeletes rawdb.StateDomainChangeDeleteStats
+	historyStore, flushHistory := newPruneBatchStoreWithRanges(w.DB, maxPruneBatchValueSize, w.HistoryRangePrune)
+	if w.HistoryRangePrune {
+		if w.Policy.Mode != ModeSnap || w.SnapshotDir == "" {
+			return Stats{}, errors.New("pruning: history range pruning requires snap mode with cold snapshots")
+		}
+		if w.HistoryRangeGuard == nil {
+			return Stats{}, errors.New("pruning: history range pruning requires a writer guard")
+		}
+		historyCfg.DeleteHotHistoryBlocks = func(store rawdb.StateKVLatestStore, blocks []uint64) error {
+			for len(blocks) > 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				n := min(len(blocks), maxHistoryRangeGuardBlocks)
+				part := blocks[:n]
+				admitted, err := w.HistoryRangeGuard(ctx, part[n-1], func() error {
+					started := time.Now()
+					defer func() {
+						elapsed := time.Since(started)
+						stats.HistoryRangeGuardDuration += elapsed
+						stats.HistoryRangeGuardMaxDuration = max(stats.HistoryRangeGuardMaxDuration, elapsed)
+					}()
+					deleted, err := rawdb.DeleteStateDomainChangeBlocksWithOptions(store, part, rawdb.StateDomainChangeDeleteOptions{EnableRangeDelete: true})
+					if err != nil {
+						return err
+					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if err := flushHistory(); err != nil {
+						return err
+					}
+					historyDeletes.RangeRuns += deleted.RangeRuns
+					historyDeletes.RangeRows += deleted.RangeRows
+					historyDeletes.RangeBytes += deleted.RangeBytes
+					historyDeletes.PointRows += deleted.PointRows
+					historyDeletes.PointBytes += deleted.PointBytes
+					return nil
+				})
+				if err != nil {
+					return err
+				}
+				if !admitted {
+					// Busy admission is not permission for a range. Preserve the
+					// pre-existing key-only point path without new value reads.
+					if err := rawdb.DeleteStateDomainChangeBlocks(store, part); err != nil {
+						return err
+					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if err := flushHistory(); err != nil {
+						return err
+					}
+					stats.HistoryRangeFallbackBlocks += uint64(n)
+				}
+				blocks = blocks[n:]
+			}
+			return nil
+		}
+	}
 	metadataStarted = time.Now()
 	hotPruneStartBlock, err := w.hotHistoryPruneStartBlock()
 	stats.HistoryMetadataDuration += time.Since(metadataStarted)
@@ -258,6 +363,7 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	if err := flushHistory(); err != nil {
 		return Stats{}, fmt.Errorf("pruning: flush hot history delete batch: %w", err)
 	}
+	stats.HistoryDeletes = historyDeletes
 	stats.DeletedTxRanges = hotStats.DeletedTxRanges
 	stats.DeletedDomainChangeBlocks = hotStats.DeletedHistoryBlocks
 	stats.DomainChangePrunedThrough = hotStats.MaxDeletedHistoryBlock

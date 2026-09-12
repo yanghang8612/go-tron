@@ -87,6 +87,25 @@ func (g *HeavyWorkGate) TryAcquire() (release func(), ok bool) {
 	return g.tryAcquire(g.cooldown)
 }
 
+// CanTryAcquire is a non-binding, non-blocking scheduling hint for ordinary
+// contenders. It does not call admission checks, consume a reservation, own a
+// lease or start recovery. Callers must still TryAcquire before doing work:
+// another owner, reservation or pressure change may intervene after this read.
+func (g *HeavyWorkGate) CanTryAcquire() bool {
+	if g == nil {
+		return true
+	}
+	if !g.reservationMu.TryLock() {
+		return false
+	}
+	defer g.reservationMu.Unlock()
+	now := g.currentTime()
+	if g.reservation != nil && now.Before(g.reservation.expires) {
+		return false
+	}
+	return !g.coolingDown(now) && len(g.token) == 0
+}
+
 // TryAcquireWithCooldown is TryAcquire with a per-lease recovery window. It
 // is intended for bounded catch-up work whose backlog is large enough to use a
 // shorter recovery window than ordinary background maintenance. The override

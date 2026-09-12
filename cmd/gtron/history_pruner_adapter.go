@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -167,4 +169,11 @@ func (a *domainPrunerChainSource) CompleteCommitmentBranchRotation(rotation rawd
 		return nil
 	}
 	return a.chain.CompleteCommitmentBranchRotation(rotation, mgr)
+}
+
+func (a *domainPrunerChainSource) TryWithStateDomainChangePruneGuard(ctx context.Context, through, proofHead uint64, proofHash common.Hash, work func() error) (bool, error) {
+	if a == nil || a.prunerChainSource == nil || a.chain == nil {
+		return false, errors.New("state domain change prune: unavailable chain adapter")
+	}
+	return a.chain.TryWithStateDomainChangePruneGuard(ctx, through, proofHead, proofHash, work)
 }

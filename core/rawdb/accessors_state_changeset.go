@@ -1176,6 +1176,10 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 		}
 		return nil
 	}
+	return deleteStateDomainChangeBlocksScan(db, blockNums, indexedHead, staged, nil)
+}
+
+func deleteStateDomainChangeBlocksScan(db stateKVLatestStore, blockNums []uint64, indexedHead uint64, staged bool, deletes *stateDomainChangeRangeDeleter) error {
 	var start [8]byte
 	binary.BigEndian.PutUint64(start[:], blockNums[0])
 	it := db.NewIterator(stateChangeSetPrefix, start[:])
@@ -1222,6 +1226,11 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 	for it.Next() {
 		key := it.Key()
 		if !bytes.HasPrefix(key, stateChangeSetPrefix) || len(key) != len(stateChangeSetPrefix)+16 {
+			if deletes != nil {
+				if err := deletes.flushRun(); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		blockNum := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix):])
@@ -1232,16 +1241,31 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 			break
 		}
 		if blockNums[blockIndex] != blockNum {
+			if deletes != nil {
+				if err := deletes.flushRun(); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		if staged && blockNum <= indexedHead {
 			// Packed index frames are immutable and cleaned by the ordered sweep.
 			// Delete the authoritative physical row directly without decoding every
 			// change solely to discover that no posting point-read is required.
-			if err := db.Delete(key); err != nil {
+			if deletes != nil {
+				seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
+				if err := deletes.indexedRow(key, blockNum, seq, len(it.Value())); err != nil {
+					return err
+				}
+			} else if err := db.Delete(key); err != nil {
 				return err
 			}
 			continue
+		}
+		if deletes != nil {
+			if err := deletes.flushRun(); err != nil {
+				return err
+			}
 		}
 		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
 		value := it.Value()
@@ -1261,7 +1285,11 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 				// KeyValueWriter.Delete must consume/copy the iterator key before
 				// returning. This matches the point-scan delete path and avoids
 				// retaining one copied key per history row.
-				if err := db.Delete(key); err != nil {
+				if deletes != nil {
+					if err := deletes.pointRow(key, len(value)); err != nil {
+						return err
+					}
+				} else if err := db.Delete(key); err != nil {
 					return err
 				}
 				continue
@@ -1285,7 +1313,11 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 				return err
 			}
 		}
-		if err := db.Delete(key); err != nil {
+		if deletes != nil {
+			if err := deletes.pointRow(key, len(value)); err != nil {
+				return err
+			}
+		} else if err := db.Delete(key); err != nil {
 			return err
 		}
 	}

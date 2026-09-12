@@ -60,6 +60,10 @@ type chainDBSource interface {
 	ChainDB() *rawdb.ChainDB
 }
 
+type historyRangePruneGuardSource interface {
+	TryWithStateDomainChangePruneGuard(context.Context, uint64, uint64, common.Hash, func() error) (bool, error)
+}
+
 type PrunerConfig struct {
 	Policy Policy
 
@@ -78,12 +82,19 @@ type PrunerConfig struct {
 	// reference. Hot-history pruning still runs to bound the large changeset
 	// backlog, and the sync-complete lifecycle wake resumes code reclamation.
 	DeferStateCodePruneWhileSyncing bool
+	// HistoryRangePrune opts into bounded ranges for already cold-covered history.
+	HistoryRangePrune bool
 	// MetricsNamespace prefixes production prune gauges. Tests may override it
 	// to isolate process-global metric registrations.
 	MetricsNamespace string
 }
 
 type PrunerStats struct {
+	HistoryRangePruneEnabled           bool
+	HistoryDeletes                     rawdb.StateDomainChangeDeleteStats
+	HistoryRangeFallbackBlocks         uint64
+	HistoryRangeGuardDuration          time.Duration
+	HistoryRangeGuardMaxDuration       time.Duration
 	Passes                             uint64
 	Errors                             uint64
 	SkippedCatchup                     uint64
@@ -133,6 +144,14 @@ type Pruner struct {
 	errors                            atomic.Uint64
 	deletedTxRanges                   atomic.Uint64
 	deletedDomainChangeBlocks         atomic.Uint64
+	historyRangeRuns                  atomic.Uint64
+	historyRangeRows                  atomic.Uint64
+	historyRangeBytes                 atomic.Uint64
+	historyPointRows                  atomic.Uint64
+	historyPointBytes                 atomic.Uint64
+	historyRangeFallbackBlocks        atomic.Uint64
+	historyRangeGuardDuration         atomic.Int64
+	historyRangeGuardMaxDuration      atomic.Int64
 	deletedCommitmentCheckpoints      atomic.Uint64
 	deletedStateCodeRows              atomic.Uint64
 	deferredStateCodePrune            atomic.Uint64
@@ -153,6 +172,15 @@ type Pruner struct {
 }
 
 type prunerMetrics struct {
+	historyRangeEnabled                *metrics.Gauge
+	historyRangeRuns                   *metrics.Gauge
+	historyRangeRows                   *metrics.Gauge
+	historyRangeBytes                  *metrics.Gauge
+	historyPointRows                   *metrics.Gauge
+	historyPointBytes                  *metrics.Gauge
+	historyRangeFallbackBlocks         *metrics.Gauge
+	historyRangeGuardDuration          *metrics.Gauge
+	historyRangeGuardMaxDuration       *metrics.Gauge
 	passes                             *metrics.Gauge
 	errors                             *metrics.Gauge
 	skippedCatchup                     *metrics.Gauge
@@ -191,6 +219,15 @@ type prunerMetrics struct {
 func newPrunerMetrics(namespace string) prunerMetrics {
 	namespace = normalizePrunerMetricNamespace(namespace)
 	return prunerMetrics{
+		historyRangeEnabled:                metrics.GetOrRegisterGauge(namespace+"history/delete/range/enabled", nil),
+		historyRangeFallbackBlocks:         metrics.GetOrRegisterGauge(namespace+"history/delete/range/fallback_blocks", nil),
+		historyRangeGuardDuration:          metrics.GetOrRegisterGauge(namespace+"history/delete/range/work/total_ns", nil),
+		historyRangeGuardMaxDuration:       metrics.GetOrRegisterGauge(namespace+"history/delete/range/work/max_ns", nil),
+		historyRangeRuns:                   metrics.GetOrRegisterGauge(namespace+"history/delete/range/runs", nil),
+		historyRangeRows:                   metrics.GetOrRegisterGauge(namespace+"history/delete/range/rows", nil),
+		historyRangeBytes:                  metrics.GetOrRegisterGauge(namespace+"history/delete/range/logical_bytes", nil),
+		historyPointRows:                   metrics.GetOrRegisterGauge(namespace+"history/delete/point/rows", nil),
+		historyPointBytes:                  metrics.GetOrRegisterGauge(namespace+"history/delete/point/logical_bytes", nil),
 		passes:                             metrics.GetOrRegisterGauge(namespace+"passes", nil),
 		errors:                             metrics.GetOrRegisterGauge(namespace+"errors", nil),
 		skippedCatchup:                     metrics.GetOrRegisterGauge(namespace+"skipped/catchup", nil),
@@ -238,6 +275,19 @@ func normalizePrunerMetricNamespace(namespace string) string {
 }
 
 func (m prunerMetrics) update(stats PrunerStats) {
+	var enabled int64
+	if stats.HistoryRangePruneEnabled {
+		enabled = 1
+	}
+	m.historyRangeEnabled.Update(enabled)
+	m.historyRangeRuns.Update(prunerUintGauge(stats.HistoryDeletes.RangeRuns))
+	m.historyRangeRows.Update(prunerUintGauge(stats.HistoryDeletes.RangeRows))
+	m.historyRangeBytes.Update(prunerUintGauge(stats.HistoryDeletes.RangeBytes))
+	m.historyPointRows.Update(prunerUintGauge(stats.HistoryDeletes.PointRows))
+	m.historyPointBytes.Update(prunerUintGauge(stats.HistoryDeletes.PointBytes))
+	m.historyRangeFallbackBlocks.Update(prunerUintGauge(stats.HistoryRangeFallbackBlocks))
+	m.historyRangeGuardDuration.Update(int64(stats.HistoryRangeGuardDuration))
+	m.historyRangeGuardMaxDuration.Update(int64(stats.HistoryRangeGuardMaxDuration))
 	m.passes.Update(prunerUintGauge(stats.Passes))
 	m.errors.Update(prunerUintGauge(stats.Errors))
 	m.skippedCatchup.Update(prunerUintGauge(stats.SkippedCatchup))
@@ -381,6 +431,14 @@ func (p *Pruner) Stats() PrunerStats {
 	}
 	verification := p.coverageVerificationCache.Stats()
 	return PrunerStats{
+		HistoryRangePruneEnabled:     p.cfg.HistoryRangePrune,
+		HistoryRangeFallbackBlocks:   p.historyRangeFallbackBlocks.Load(),
+		HistoryRangeGuardDuration:    time.Duration(p.historyRangeGuardDuration.Load()),
+		HistoryRangeGuardMaxDuration: time.Duration(p.historyRangeGuardMaxDuration.Load()),
+		HistoryDeletes: rawdb.StateDomainChangeDeleteStats{
+			RangeRuns: p.historyRangeRuns.Load(), RangeRows: p.historyRangeRows.Load(),
+			RangeBytes: p.historyRangeBytes.Load(), PointRows: p.historyPointRows.Load(), PointBytes: p.historyPointBytes.Load(),
+		},
 		Passes:                             p.passes.Load(),
 		Errors:                             p.errors.Load(),
 		DeletedTxRanges:                    p.deletedTxRanges.Load(),
@@ -662,11 +720,23 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		finished, exists, verifyErr := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(p.chain.DB(), rawdb.StageFinish, p.canonicalBlockHash)
 		postingProofAvailable = verifyErr == nil && exists && finished >= pruneHead
 	}
+	var rangeGuard func(context.Context, uint64, func() error) (bool, error)
+	if p.cfg.HistoryRangePrune {
+		source, ok := p.chain.(historyRangePruneGuardSource)
+		if !ok || !pruneHeadHasHash || !postingProofAvailable {
+			return Stats{}, errors.New("pruning: history range pruning requires a live writer guard and durable canonical proof")
+		}
+		rangeGuard = func(ctx context.Context, through uint64, work func() error) (bool, error) {
+			return source.TryWithStateDomainChangePruneGuard(ctx, through, pruneHead, pruneHeadHash, work)
+		}
+	}
 	stats, err = Worker{
-		DB:          p.chain.DB(),
-		Policy:      p.cfg.Policy,
-		MaxBlocks:   p.cfg.BatchSize,
-		SnapshotDir: p.cfg.SnapshotDir,
+		DB:                p.chain.DB(),
+		Policy:            p.cfg.Policy,
+		MaxBlocks:         p.cfg.BatchSize,
+		SnapshotDir:       p.cfg.SnapshotDir,
+		HistoryRangePrune: p.cfg.HistoryRangePrune,
+		HistoryRangeGuard: rangeGuard,
 		ShouldDeferStateCodePrune: func() bool {
 			return p.cfg.DeferStateCodePruneWhileSyncing && p.syncActive()
 		},
@@ -689,6 +759,18 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 	p.passes.Add(1)
 	p.deletedTxRanges.Add(uint64(stats.DeletedTxRanges))
 	p.deletedDomainChangeBlocks.Add(uint64(stats.DeletedDomainChangeBlocks))
+	p.historyRangeRuns.Add(stats.HistoryDeletes.RangeRuns)
+	p.historyRangeRows.Add(stats.HistoryDeletes.RangeRows)
+	p.historyRangeBytes.Add(stats.HistoryDeletes.RangeBytes)
+	p.historyPointRows.Add(stats.HistoryDeletes.PointRows)
+	p.historyPointBytes.Add(stats.HistoryDeletes.PointBytes)
+	p.historyRangeFallbackBlocks.Add(stats.HistoryRangeFallbackBlocks)
+	p.historyRangeGuardDuration.Add(int64(stats.HistoryRangeGuardDuration))
+	for old := p.historyRangeGuardMaxDuration.Load(); int64(stats.HistoryRangeGuardMaxDuration) > old; old = p.historyRangeGuardMaxDuration.Load() {
+		if p.historyRangeGuardMaxDuration.CompareAndSwap(old, int64(stats.HistoryRangeGuardMaxDuration)) {
+			break
+		}
+	}
 	p.deletedCommitmentCheckpoints.Add(uint64(stats.DeletedCommitmentCheckpoints))
 	p.deletedStateCodeRows.Add(uint64(stats.DeletedStateCodeRows))
 	if stats.StateCodePruneDeferred {
