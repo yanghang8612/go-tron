@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -155,16 +156,13 @@ func TestStateChangePostingPruneGuardSuccessAndNewerWriter(t *testing.T) {
 }
 
 func TestStateChangePostingPruneGuardDefersWithoutMutation(t *testing.T) {
-	for _, name := range []string{"index-lock", "chain-lock", "closed", "head", "solidified", "missing-finish", "missing-index", "finish-behind-proof", "index-behind-H"} {
+	for _, name := range []string{"index-lock", "closed", "head", "solidified", "missing-finish", "missing-index", "finish-behind-proof", "index-behind-H"} {
 		t.Run(name, func(t *testing.T) {
 			f := newPostingPruneGuardFixture(t)
 			switch name {
 			case "index-lock":
 				f.bc.stateHistoryIndexMu.Lock()
 				defer f.bc.stateHistoryIndexMu.Unlock()
-			case "chain-lock":
-				f.bc.chainmu.Lock()
-				defer f.bc.chainmu.Unlock()
 			case "closed":
 				f.bc.closed.Store(true)
 				defer f.bc.closed.Store(false)
@@ -352,6 +350,114 @@ func TestStateChangePostingPruneGuardInvalidProof(t *testing.T) {
 			result, _, err := f.bc.PruneStateChangePostingChunk(context.Background(), proof.h, proof.head, proof.hash, common.Hash{}, nil, postingPruneGuardLimits())
 			if err == nil || result.RowsScanned != 0 || errors.Is(err, ErrStateChangePostingPruneDeferred) {
 				t.Fatalf("invalid proof chunk=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
+type postingPruneGuardCallResult struct {
+	chunk  rawdb.StateChangePostingPruneChunkResult
+	anchor common.Hash
+	err    error
+}
+
+// The caller holds chainmu. Ownership of the outer mutex establishes that the
+// worker passed the initial context check and is now entering/waiting for the
+// chain lock. The probe itself can briefly make the outer TryLock fail; retry
+// only that completed admission instead of depending on a scheduling sleep.
+func awaitPostingPruneGuardWaiter(t *testing.T, f postingPruneGuardFixture, done chan postingPruneGuardCallResult, start func()) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	start()
+	for {
+		if !f.bc.stateHistoryIndexMu.TryLock() {
+			return
+		}
+		f.bc.stateHistoryIndexMu.Unlock()
+		select {
+		case out := <-done:
+			if !errors.Is(out.err, ErrStateChangePostingPruneDeferred) {
+				done <- out // Preserve the result for the caller's cleanup.
+				t.Fatalf("call returned before acquiring the held chain lock: %v", out.err)
+			}
+			start()
+		case <-deadline.C:
+			t.Fatal("prune did not reach the held chain lock")
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
+func TestStateChangePostingPruneGuardQueuedHandoffAndCancellation(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("canceled=%v", canceled), func(t *testing.T) {
+			f := newPostingPruneGuardFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			writes := 0
+			f.db.beforeWrite = func() error { writes++; return nil }
+			done := make(chan postingPruneGuardCallResult, 1)
+			f.bc.chainmu.Lock()
+			released, joined := false, false
+			defer func() {
+				cancel()
+				if !released {
+					f.bc.chainmu.Unlock()
+				}
+				if !joined {
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Error("queued prune did not exit during cleanup")
+					}
+				}
+			}()
+			awaitPostingPruneGuardWaiter(t, f, done, func() {
+				go func() {
+					chunk, anchor, err := f.prune(ctx, common.Hash{}, nil, postingPruneGuardLimits())
+					done <- postingPruneGuardCallResult{chunk: chunk, anchor: anchor, err: err}
+				}()
+			})
+			if canceled {
+				cancel()
+			}
+			// The existing holder finishes. The admitted waiter must take this
+			// boundary instead of returning the former immediate chain deferral.
+			f.bc.chainmu.Unlock()
+			released = true
+			var out postingPruneGuardCallResult
+			select {
+			case out = <-done:
+				joined = true
+			case <-time.After(5 * time.Second):
+				t.Fatal("queued prune did not finish after the holder released")
+			}
+			if canceled {
+				if !errors.Is(out.err, context.Canceled) || out.chunk.RowsScanned != 0 || out.chunk.RowsDeleted != 0 || out.chunk.Complete || out.anchor != (common.Hash{}) || writes != 0 || len(postingPruneGuardRows(t, f.db)) != 3 {
+					t.Fatalf("canceled waiter=%+v writes=%d", out, writes)
+				}
+			} else if out.err != nil || out.chunk.RowsDeleted != 2 || !out.chunk.Complete || out.anchor != f.blocks[2].Hash() || writes != 1 || len(postingPruneGuardRows(t, f.db)) != 1 {
+				t.Fatalf("queued waiter=%+v writes=%d", out, writes)
+			}
+			if !f.bc.stateHistoryIndexMu.TryLock() {
+				t.Fatal("queued call leaked the index lock")
+			}
+			f.bc.stateHistoryIndexMu.Unlock()
+			if !f.bc.chainmu.TryLock() {
+				t.Fatal("queued call leaked the chain lock")
+			}
+			f.bc.chainmu.Unlock()
+			closed := make(chan error, 1)
+			go func() { closed <- f.bc.Close() }()
+			select {
+			case err := <-closed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Close did not finish after the queued call")
 			}
 		})
 	}

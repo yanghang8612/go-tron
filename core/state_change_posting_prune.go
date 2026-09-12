@@ -12,7 +12,7 @@ import (
 
 var (
 	// ErrStateChangePostingPruneDeferred leaves the caller's in-memory traversal
-	// unchanged while a writer owns the locks or the required prefix is unavailable.
+	// unchanged while the index builder owns its lock or the required prefix is unavailable.
 	ErrStateChangePostingPruneDeferred = errors.New("state-change posting prune deferred")
 	// ErrStateChangePostingPruneBoundaryChanged invalidates the current traversal
 	// and its hot-prune permission. A fresh permission is required before retrying.
@@ -35,7 +35,12 @@ var (
 // held through the chunk's batch write. Existing async commits/flushes may keep
 // writing strictly beyond the verified durable prefix; those immutable frame
 // keys cannot replace the <= prunedThrough frames considered for deletion.
-// Limits bound work between rows, not the latency of an individual DB call.
+// The index lock is acquired opportunistically. The chain lock queues behind
+// existing holders, so per-block import can hand it off without a maintenance
+// timer having to hit the tiny unlock/relock interval. Waiting has no hard
+// timeout: cancellation is checked immediately after acquisition, and shutdown
+// may need to wait for an existing holder to finish. Limits bound work between
+// rows, not lock-wait time or the latency of an individual DB call.
 func (bc *BlockChain) PruneStateChangePostingChunk(ctx context.Context, prunedThrough, proofHead uint64, proofHash, anchor common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits) (rawdb.StateChangePostingPruneChunkResult, common.Hash, error) {
 	result := rawdb.StateChangePostingPruneChunkResult{NextCursor: bytes.Clone(cursor)}
 	if ctx == nil {
@@ -57,9 +62,7 @@ func (bc *BlockChain) PruneStateChangePostingChunk(ctx context.Context, prunedTh
 		return result, anchor, ErrStateChangePostingPruneDeferred
 	}
 	defer bc.stateHistoryIndexMu.Unlock()
-	if !bc.chainmu.TryLock() {
-		return result, anchor, ErrStateChangePostingPruneDeferred
-	}
+	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return result, anchor, err

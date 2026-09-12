@@ -16,9 +16,16 @@ worker never polls the approximately 35 MB manifest on its one-second cadence.
 Startup waits for a new successful hot prune; an existing manifest alone does
 not authorize a sweep. Every chunk checks the permission's proof hash, durable
 Finish and StateHistoryIndex hashes/watermarks, current head/solidification and
-the sweep's fixed canonical H hash. Nonblocking locks in order
-stateHistoryIndexMu -> chainmu serialize chunks with indexing and rewinds.
-Both remain held through batch submission. Offline restore/reset still requires
+the sweep's fixed canonical H hash. Locks in order stateHistoryIndexMu -> chainmu
+serialize chunks with indexing and rewinds. The index mutex is tried without
+waiting; the chain mutex registers a waiter, so the importer can hand it over
+at a block boundary. Instantaneous TryLock on both mutexes produced zero chunks
+in the initial online observations despite repeated gate admission. Both remain
+held through batch submission. Chain-lock waiting is not cancellable mid-wait;
+context is checked immediately after acquisition, so a canceled worker does no
+scan or write. Stop joins that wait. Slow holders can exceed a block interval,
+and the total callback metric includes waiting; it is not exact lock-held time.
+Offline restore/reset still requires
 stopping the node. Ordinary writers append above the verified prefix.
 
 Each chunk owns and releases its iterator before submitting one delete batch.
@@ -42,6 +49,7 @@ the known obsolete-table accounting defect constrain space interpretation.
 
 Validation covers exact/prefix/as-of reads before/after actual Pebble compaction,
 mixed frames, bounded progress, cancellation and ambiguous writes, chain proof
-failures and concurrency, worker lifecycle/admission and restart. Deployment
+failures and concurrency, queued handoff and canceled waiters, worker
+lifecycle/admission and restart. Deployment
 pins source and binary, preserves observer flags and rollback, and samples
 canonical agreement, sync/backlogs, stalls, compaction and logical cleanup.
